@@ -182,15 +182,13 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
             }
         }
     }
-    // @PLN25 E2a.2 — give each nullable struct-typed field the synthetic
-    // `__nullable<T>` enum BEFORE the unit-variant discriminant pass + the
-    // layout loop below, so the synthetic enum is registered and laid out like
-    // any hand-written enum.  Scaffolding (vertical-slice landing): gated and
-    // non-stdlib-only while the construct/access glue (E2a.3/4) is built — see
-    // the fn doc.
-    if std::env::var("LOFT_E2_SYNTH").is_ok() {
-        synth_nullable_struct_fields(data, database, lexer);
-    }
+    // @PLN25 E2 — register the synthetic `__nullable<T>` enums + (gated) rewrite
+    // embedded struct fields, BEFORE the unit-variant discriminant pass + the
+    // layout loop below, so each synthetic enum is registered and laid out like
+    // any hand-written enum.  Called unconditionally: the registration sweep
+    // inside is a no-op when no `__nullable<>` enum exists (gate off), and the
+    // field-rewrite arm is gated internally.
+    synth_nullable_struct_fields(data, database, lexer);
     // Start from 0 (not start_def) so struct-enum variants defined in earlier
     // default library files are processed when later files trigger fill_all.
     // The has_type guard prevents double-processing.  Fixes S14 (PROBLEMS #80).
@@ -345,48 +343,64 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
 /// synthetic enum is registered (`register_enum_db`) and laid out like any
 /// hand-written enum.
 ///
-/// SCAFFOLDING (vertical-slice landing): gated behind `LOFT_E2_SYNTH` and
-/// limited to non-stdlib sources while the construct/access glue (E2a.3/4) is
-/// built — a plain `Row{…}` literal / `b.item.id` still lowers as a struct, so
-/// flipping the field type tree-wide before the glue exists would break every
-/// nullable-struct-field program.  Lifts to always-on, tree-wide once the glue
-/// lands.
+/// Two arms with DIFFERENT maturity (called unconditionally; each arm gated):
+/// - **Embedded-field rewrite** (`item: Row` → `__nullable<Row>`) — gated on
+///   `LOFT_E2_FIELDS`, non-stdlib only.  Immature: a plain `b.item.id` read does
+///   not auto-unwrap the enum, so flipping struct fields tree-wide breaks field
+///   reads across the stdlib + libraries.
+/// - **Registration sweep** — unconditional; lays out every `__nullable<S>`
+///   enum the VECTOR-element path (`e2_nullable_elem`, gated on `LOFT_E2_SYNTH`)
+///   created at parse time.  A no-op when none exist (gate off).
 fn synth_nullable_struct_fields(data: &mut Data, database: &mut Stores, lexer: &mut Lexer) {
-    for host in 0..data.definitions() {
-        // Stdlib stays untouched while this is scaffolding; synthetic hosts
-        // (tuples, fn-ref, and our own `__nullable<T>` variants) are skipped so
-        // the rewrite never recurses into generated layouts.
-        if data.def(host).source == crate::data::STD_SOURCE || data.def(host).synthetic.is_some() {
-            continue;
-        }
-        if !(matches!(data.def_type(host), DefType::Struct)
-            || (matches!(data.def_type(host), DefType::EnumValue) && data.attributes(host) > 0))
-        {
-            continue;
-        }
-        for a_nr in 0..data.attributes(host) {
-            // Skip the per-variant `constant` markers and `not null` fields.
-            if data.def(host).attributes[a_nr].constant || !data.attr_nullable(host, a_nr) {
-                continue;
-            }
-            // Rewrite an EMBEDDED non-vector struct field `item: Row` → the
-            // synthetic `__nullable<Row>` enum.  A field VECTOR `items: vector<Row>`
-            // is rewritten at the vector-type chokepoint (`sub_type` `vector` arm),
-            // so by here its content is already the enum — not a `Reference` — and
-            // falls through.  Keyed collections, primitives, fn-refs out of scope.
-            let Type::Reference(struct_d, _) = data.attr_type(host, a_nr) else {
-                continue;
-            };
-            if data.def_type(struct_d) != DefType::Struct || data.def(struct_d).synthetic.is_some()
+    // @PLN25 — embedded NON-vector struct-field nullability (`item: Row` →
+    // `__nullable<Row>`) is DEFERRED behind an opt-in (`LOFT_E2_FIELDS`): unlike
+    // the nullable-SEQUENCE work (`vector<S>` elements, shipped default-on), the
+    // field access/construct glue is incomplete — a plain `b.item.id` read does
+    // not auto-unwrap the enum, so flipping every struct field tree-wide breaks
+    // field reads across the stdlib + libraries.  The registration loop below
+    // (which lays out the `__nullable<S>` enums the VECTOR path creates) always
+    // runs.  Trigger to lift this: the field read/construct auto-unwrap glue.
+    if std::env::var("LOFT_E2_FIELDS").is_ok() {
+        for host in 0..data.definitions() {
+            // Stdlib stays dense (this arm is immature); synthetic hosts (tuples,
+            // fn-ref, and our own `__nullable<T>` variants) are skipped so the
+            // rewrite never recurses into generated layouts.
+            if data.def(host).source == crate::data::STD_SOURCE
+                || data.def(host).synthetic.is_some()
             {
                 continue;
             }
-            let syn = data.nullable_enum_for(lexer, struct_d);
-            if data.def(syn).known_type == u16::MAX {
-                register_enum_db(data, database, syn);
+            if !(matches!(data.def_type(host), DefType::Struct)
+                || (matches!(data.def_type(host), DefType::EnumValue) && data.attributes(host) > 0))
+            {
+                continue;
             }
-            data.definitions[host as usize].attributes[a_nr].typedef =
-                Type::Enum(syn, true, Deps::none());
+            for a_nr in 0..data.attributes(host) {
+                // Skip the per-variant `constant` markers and `not null` fields.
+                if data.def(host).attributes[a_nr].constant || !data.attr_nullable(host, a_nr) {
+                    continue;
+                }
+                // Rewrite an EMBEDDED non-vector struct field `item: Row` → the
+                // synthetic `__nullable<Row>` enum.  A field VECTOR `items:
+                // vector<Row>` is rewritten at the vector-type chokepoint
+                // (`sub_type` `vector` arm), so by here its content is already
+                // the enum — not a `Reference` — and falls through.  Keyed
+                // collections, primitives, fn-refs out of scope.
+                let Type::Reference(struct_d, _) = data.attr_type(host, a_nr) else {
+                    continue;
+                };
+                if data.def_type(struct_d) != DefType::Struct
+                    || data.def(struct_d).synthetic.is_some()
+                {
+                    continue;
+                }
+                let syn = data.nullable_enum_for(lexer, struct_d);
+                if data.def(syn).known_type == u16::MAX {
+                    register_enum_db(data, database, syn);
+                }
+                data.definitions[host as usize].attributes[a_nr].typedef =
+                    Type::Enum(syn, true, Deps::none());
+            }
         }
     }
     // E2a.5b — register any synthetic `__nullable<>` enum the LOCAL/param
@@ -441,7 +455,24 @@ pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
     // programs are byte-identical.  The parser already resolves each usage
     // to the correct per-library `d_nr` (and hence `known_type`); this only
     // makes the database table tolerate the shared bare name.
-    let reg_name = if database.has_type(&data.def(d_nr).name) {
+    // @PLN25 — synthetic `__nullable<S>` enums all name their variants `Null` /
+    // `Some`, but `Some` carries a DIFFERENT payload per `S`, so they cannot share
+    // one structure-table entry (and `Null` would `Double structure type` the
+    // moment a second `__nullable<>` enum exists).  Register each under its
+    // parent-enum-qualified name (`__nullable<Row>::Some`) so the flat DB type
+    // table stays collision-free.  Variant lookup keys on the bare name + parent
+    // enum (`database.enum_value` below) and runtime discriminants, so this
+    // changes only the structure-table key, not resolution.
+    let synth_variant_name = if data.def_type(d_nr) == DefType::EnumValue {
+        let parent = data.def(d_nr).parent;
+        (data.def(parent).synthetic.is_some() && data.def(parent).name.starts_with("__nullable<"))
+            .then(|| format!("{}::{}", data.def(parent).name, data.def(d_nr).name))
+    } else {
+        None
+    };
+    let reg_name = if let Some(name) = synth_variant_name {
+        name
+    } else if database.has_type(&data.def(d_nr).name) {
         data.qualified_type_name(d_nr)
     } else {
         data.def(d_nr).name.clone()

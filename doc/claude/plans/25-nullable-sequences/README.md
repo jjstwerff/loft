@@ -65,15 +65,44 @@ default-on (gate removed), per the project standard.  The remaining work, in fin
    `tests/plan25_e2_generics.rs`.  (Surfaced two PRE-EXISTING, out-of-scope main bugs, both
    baseline-confirmed and filed: @P394 bare no-payload enum-variant value leaks a store;
    @P395 a generic over a tuple element reads garbage / fails native.)
-3. **Inferred comprehension** `v = [for … { S{…} }]` (no annotation) — edge; the declared
-   form is done. *(S)*
-4. **GATE REMOVAL + stdlib/libs fallout** — flip default-on, lift the non-stdlib restriction
-   (`source == STD_SOURCE` guards in `typedef.rs` + `parser/vectors.rs`); the stdlib's ~17
-   and `lib/`'s ~8 `vector<Struct>` usages must all work rewritten.  De-risk first by flipping
-   the gate on for the stdlib in a throwaway probe to surface the fallout list. *(L — the real
-   remaining chunk; integration risk, not unknowns.)*  Then graduate the gated probes to
-   `tests/scripts/25-nullable-sequences.loft` (runs both backends without the flag) and delete
-   the gate + the env checks.
+3. **Inferred comprehension** `v = [for … { S{…} }]` (no annotation) — FIXED.
+   `parse_vector_for` peeks the comprehension body for a leading struct-literal `{ S{…} }`
+   and sets the block's expected type to `__nullable<S>`, mirroring the inferred-literal PEEK;
+   the element then matches the declared form.  Both backends gate-on.
+
+4. **GATE REMOVAL — BLOCKED on the inline-element access glue (the default-on trigger).**
+   Surfaced by flipping the gate tree-wide (the de-risk probe, done 2026-06-16): vector-element
+   nullability is validated + hardened in ISOLATION, but applying it to the whole corpus breaks
+   **~107 tests** because the inline-nullable-element **access glue is incomplete in every
+   NON-direct path**.  Direct `v[i].field` reads work (the probes); these do not:
+   - **par over `vector<struct>`** (≈44 `threading_chars`) — the worker reads elements at the
+     dense offset, ignoring the discriminant → **wrong results** (`par_struct_to_bool_t4`: 5≠2).
+   - **`vec[i]` into a local, then field-access / mutate** — `sh_c = vec[i]; sh_c.f[i]=x`
+     leaves `sh_c` typed `__nullable<S>` and the nested-lvalue path does not unwrap
+     (`moros_map`: "`sh_c` cannot change type from `__nullable<Chunk>` to Hex").
+   - **`+= [elem]` of an already-nullable element** — the append type-check sees `Reference`
+     vs `Enum` of the same `__nullable<S>` and mis-fires "would lose precision" (partially
+     fixed: the `Enum`==`Enum` arm; the `Reference`-vs-`Enum` shape remains).
+   - **ref-param `&v[i]`, casts, forward-refs, native element reads** (≈76 `issues`, 6 `native`,
+     4 `slot_v2`) — every path that computes an element offset directly needs the disc-aware
+     (unwrap) layout.
+
+   **Root (one mechanism, many symptoms):** the `disc@0 + shifted-payload` inline layout is
+   only honoured by the direct-access interpreter path; par-worker codegen, native element
+   access, ref-param-to-element, cast, and element-into-local mutation each read it as dense.
+   **Trigger to ship default-on:** build the disc-aware element-access/mutation glue across
+   those paths.  This is the "L integration" the plan flagged — multi-subsystem, not a flip.
+
+   When the glue lands: lift the `source == STD_SOURCE` + `LOFT_E2_SYNTH` guards
+   (`typedef.rs`, `parser/expressions.rs::e2_nullable_elem`, `parser/vectors.rs` ×2), graduate
+   the gated probes to `tests/scripts/25-nullable-sequences.loft`, delete the env checks.
+
+   **Hardened this session (gate-inert, keepable):** the `__nullable<>` variant-name collision
+   fix (two such enums → `Double structure type Null`; now enum-qualified structure keys), the
+   append `Enum`==`Enum` acceptance arm, the inferred-comprehension peek, generics, and the
+   embedded-record leak.  Embedded NON-vector struct-field nullability (`item: Row`) is split
+   onto its own opt-in `LOFT_E2_FIELDS` (more immature than the sequence path — its field-read
+   auto-unwrap glue is also unbuilt).
 
 Full gate-on behaviour matrix, the closed-vs-open catalogue, and per-site mechanics:
 [embedded-record-null.md](embedded-record-null.md) (§ E2 — Known gaps; § RESUME POINT).

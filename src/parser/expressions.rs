@@ -1919,8 +1919,11 @@ use a separate collection or add after the loop"
     /// at the ONE chokepoint where every inline `vector<S>` element resolves
     /// (`sub_type`'s `vector` arm, definitions.rs), so locals / params / returns /
     /// fields / nested all rewrite consistently.  **Default = nullable;** the
-    /// caller skips this for an `S not null` element (E3 dense opt-out).  Gated
-    /// (`LOFT_E2_SYNTH`) + non-stdlib, inert otherwise → default path byte-identical.
+    /// caller skips this for an `S not null` element (E3 dense opt-out).  Gated on
+    /// `LOFT_E2_SYNTH` — the inline-element ACCESS glue (par workers, native
+    /// element reads, ref-params, casts, element-into-local mutation) is
+    /// incomplete, so default-on breaks ~107 tree-wide tests (plan25 § Default-on
+    /// trigger).  Stdlib excluded so the gated state never rewrites stdlib types.
     /// Creates the def ONLY — `fill_all` does the `register_enum_db` + layout in the
     /// correct order (registering mid-parse corrupts the shared enum: the
     /// `known_type != MAX` guard in fill_database then suppresses the correct

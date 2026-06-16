@@ -32,6 +32,9 @@ fn nullable_struct_field_is_byte_identical_to_a_hand_enum() {
     // multi-threaded-mutation hazard we avoid here.
     unsafe {
         std::env::set_var("LOFT_E2_SYNTH", "1");
+        // Embedded NON-vector struct-field nullability (`Box.item`) is gated on
+        // its own opt-in now (more immature than the vector-element path).
+        std::env::set_var("LOFT_E2_FIELDS", "1");
     }
     // Parse a real FILE (source = MAIN_SOURCE) rather than `parse_str` (which
     // leaves source at 0 = STD_SOURCE, which the scaffolding pass skips).
@@ -66,7 +69,11 @@ fn nullable_struct_field_is_byte_identical_to_a_hand_enum() {
     // variant must have the same field offsets and overall size.
     let db = &p.database;
     assert!(db.has_type("__nullable<Row>"), "enum type registered");
-    let some = db.name("Some");
+    // The synthetic `Some` / `Null` variants register their DB structure under a
+    // parent-enum-qualified key (`__nullable<Row>::Some`) so that two
+    // `__nullable<S>` enums never collide on the bare name in the flat type table
+    // (@PLN25 variant-name fix).  The qualifier does not change the layout.
+    let some = db.name("__nullable<Row>::Some");
     let hsome = db.name("HSome");
     assert_ne!(some, u16::MAX, "synthetic Some variant registered");
     assert_ne!(hsome, u16::MAX, "hand HSome variant registered");
@@ -94,5 +101,6 @@ fn nullable_struct_field_is_byte_identical_to_a_hand_enum() {
 
     unsafe {
         std::env::remove_var("LOFT_E2_SYNTH");
+        std::env::remove_var("LOFT_E2_FIELDS");
     }
 }

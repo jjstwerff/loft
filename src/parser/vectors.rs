@@ -2021,6 +2021,16 @@ impl Parser {
             && *t_e == *in_e
         {
             *in_t = Type::Enum(*t_e, true, Deps::none());
+        } else if let (Type::Enum(t_e, true, _), Type::Enum(in_e, true, _)) = (&t, &*in_t)
+            && *t_e == *in_e
+        {
+            // @PLN25 E2 — the appended element ALREADY is the vector's nullable
+            // enum (`result += [sa_sp]` where `sa_sp: __nullable<S>` and the
+            // vector is `vector<__nullable<S>>`).  No conversion is needed — store
+            // it as-is; the generic `convert` below does not recognise
+            // enum→same-enum and would fire the spurious "would lose precision"
+            // diagnostic.  Mirrors the `Reference`-to-same-enum arm above for the
+            // case where the element is typed as the enum directly.
         } else if matches!(&*in_t, Type::Enum(syn, true, _) if self.data.def(*syn).name.starts_with("__nullable<"))
             && matches!(t, Type::Null)
         {
