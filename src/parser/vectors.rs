@@ -1373,8 +1373,22 @@ impl Parser {
         let in_loop = self.in_loop;
         self.in_loop = true;
         // Parse body as an expression-returning block: [for n in range { expr }]
+        // @PLN25 — when the DECLARED element type is the synthetic `__nullable<S>`
+        // enum (a `v: vector<S> = [for … { S{…} }]`, rewritten at the vector-type
+        // chokepoint), pass it as the block's expected type so the body's `S{…}`
+        // builds the `Some` variant (via parse_block's enum-hint) instead of a
+        // bare `S` that then mismatches the rewritten vector type.  Other element
+        // types keep `Unknown` — no behaviour change for non-nullable
+        // comprehensions.
+        let body_expected = if matches!(&*in_t, Type::Enum(e, true, _)
+            if self.data.def(*e).name.starts_with("__nullable<"))
+        {
+            in_t.clone()
+        } else {
+            Type::Unknown(0)
+        };
         let mut body = Value::Null;
-        let body_type = self.parse_block("for", &mut body, &Type::Unknown(0));
+        let body_type = self.parse_block("for", &mut body, &body_expected);
         // #319 — a struct-literal body returns `Rewritten(Reference(...))`.
         // The wrapper is a parse-internal marker, not an element type:
         // leaking it into the vector's element type broke every later
