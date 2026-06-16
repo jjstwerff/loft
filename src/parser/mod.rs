@@ -4225,6 +4225,20 @@ impl Parser {
                 }
             }
         }
+        // @PLN25 E2 — `!nullable` (a `__nullable<S>` value in boolean position)
+        // means "is absent" (discriminant 0): no struct operator overload
+        // matches, so lower it directly (mirrors the `== null` is-null lowering).
+        // The common shape is `!v[oob]` ("out-of-bounds is null").
+        if op == "Not"
+            && types.len() == 1
+            && let Type::Enum(syn, true, _) = &types[0]
+            && self.data.def(*syn).name.starts_with("__nullable<")
+        {
+            let get_enum = self.cl("OpGetEnum", &[list[0].clone(), Value::Int(0)]);
+            let disc = self.cl("OpConvIntFromEnum", &[get_enum]);
+            *code = self.cl("OpEqInt", &[disc, Value::Int(0)]);
+            return Type::Boolean;
+        }
         // generic-specific error message for operators on T.
         let generic_name = types.iter().find_map(|t| self.generic_type_name(t));
         if let Some(tv_name) = generic_name {

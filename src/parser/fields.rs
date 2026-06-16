@@ -236,24 +236,35 @@ impl Parser {
             }
             if self.first_pass && self.lexer.has_token("(") {
                 self.skip_remaining_args();
-            } else if !self.first_pass {
-                // For polymorphic enums, this field may be in a struct (not the enum itself).
-                if let Type::Enum(enum_d_nr, true, _) = &t
-                    && let Some((found_d_nr, found_fnr)) =
-                        self.find_poly_enum_field(*enum_d_nr, &field)
-                {
-                    let dep = t.depend();
-                    t = self.data.attr_type(found_d_nr, found_fnr);
-                    for on in dep {
-                        t = t.depending(on);
-                    }
-                    if let Value::Var(nr) = code {
-                        t = t.depending(*nr);
-                    }
+            } else if let Type::Enum(enum_d_nr, true, _) = &t
+                && let Some((found_d_nr, found_fnr)) = self.find_poly_enum_field(*enum_d_nr, &field)
+            {
+                // For polymorphic enums (incl. @PLN25 `__nullable<S>`), this field
+                // lives in a VARIANT struct, not the enum itself.  Resolve in BOTH
+                // passes: the first pass needs the field TYPE so the receiver var
+                // is not left as `Var(receiver)` and then re-typed to the field
+                // type by `change_var` (the bug behind `for o in v { f(o.items) }`
+                // → "o cannot change type to vector<…>").  `get_field` (which needs
+                // the layout's `known_type`, assigned in `fill_all`) emits only in
+                // the second pass.
+                let dep = t.depend();
+                t = self.data.attr_type(found_d_nr, found_fnr);
+                for on in dep {
+                    t = t.depending(on);
+                }
+                if let Value::Var(nr) = code {
+                    t = t.depending(*nr);
+                }
+                if self.first_pass {
+                    // Type-only: leave a non-Var placeholder so the caller's
+                    // `change_var` does not re-type the receiver.
+                    *code = Value::Null;
+                } else {
                     *code = self.get_field(found_d_nr, found_fnr, code.clone());
                     self.data.attr_used(found_d_nr, found_fnr);
-                    return t;
                 }
+                return t;
+            } else if !self.first_pass {
                 // map/filter/reduce as method syntax on vectors:
                 // v.map(fn) → map(v, fn)
                 // Unwrap &vector<T> so map/filter/reduce work on ref params.

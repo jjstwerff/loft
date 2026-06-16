@@ -1929,7 +1929,11 @@ use a separate collection or add after the loop"
     /// `known_type != MAX` guard in fill_database then suppresses the correct
     /// in-order registration → `id × 512` reads).
     pub(crate) fn e2_nullable_elem(&mut self, elem: Type) -> Type {
-        if self.data.source == crate::data::STD_SOURCE || std::env::var("LOFT_E2_SYNTH").is_err() {
+        // The native stdlib (STD_SOURCE) keeps DENSE `vector<S>`: its `#rust` /
+        // native function bodies write the dense struct ABI (e.g. `fields()` →
+        // `vector<JsonField>`), which an E2 wrap would desync.  E2 applies ABOVE
+        // the native layer — user files + libraries.
+        if self.data.source == crate::data::STD_SOURCE {
             return elem;
         }
         let Type::Reference(struct_d, _) = &elem else {
