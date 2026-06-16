@@ -302,6 +302,42 @@ per-type arms (Spacial was missing until last week).
 3. Validation: the narrow-width script corpus (p184 family, 292
    three-state boolean), both backends.
 
+**Design notes — matrix gathered 2026-06-16 (not yet built).**
+
+Two axes, NOT one — the consolidation must keep them distinct:
+- **Stack / register null** (what `conv_*_from_null`, `state/codegen.rs::emit_typed_null`,
+  `generation/mod.rs::default_native_value` produce): `i64::MIN` (int/char/bool/enum),
+  `f64::NAN` / `f32::NAN`, `STRING_NULL` (`"\0"`), DbRef sentinel `{u16::MAX,0,0}`.
+- **Stored / field null** (the per-width `store.rs` set/get transforms, all decoding to
+  the stack form `i32::MIN`/`i64::MIN`):
+
+  | Parts / width | stored null | non-null encode (write) | decode (read) |
+  |---|---|---|---|
+  | `Int` i32 (4) / `Long` i64 (8) | the MIN value itself | raw | raw; `rec==0`→MIN |
+  | `Short` u16 (2, `+1`) | `0u16` | `val-min+1` | `read+min-1`; `0`→`i32::MIN` |
+  | `ShortRaw` u16 (2, direct) | `u16::MAX` | `val-min` | `read+min`; `u16::MAX`→`i32::MIN` |
+  | `Byte` u8 (1) | `255` (write only) | `val-min` | `read+min` — **does NOT decode 255** |
+
+  *Verified `store.rs:1836-1975`.*
+
+**Load-bearing RISK to settle first (matrix-first before any build):** `set_byte`
+writes `255` for `i32::MIN`, but `get_byte` returns `read+min` unconditionally — it
+never maps `255` back to `i32::MIN` the way `get_short`/`get_i16_raw` decode their
+sentinels. So a nullable `Byte` field's null may not round-trip (reads as `min+255`),
+UNLESS a separate path gates it or nullable bytes never reach `get_byte`. This
+set/get drift is exactly H6's thesis ("symmetric conventions re-implemented per width
+have drifted"); resolve it with a boundary matrix (nullable u8 field/vector, both
+backends) BEFORE designing the `Encoding` enum — the table must encode the *correct*
+symmetric transform, not enshrine the current asymmetry.
+
+Sketch: `enum NullEnc { I32Min, I64Min, ShortPlus1, RawMax, ByteMax, FloatNan,
+SingleNan, TextNull, DbRefRec0, DbRefSentinel }` with `null_stored()/encode()/decode()`;
+`sentinel(tp)->NullEnc` beside `IntegerSpec::byte_width`. Convert one consumer family
+at a time behind `debug_assert_eq!(table_derived, hardcoded)` cross-checks.
+Consumers: `store.rs` set_*/get_*, `fill.rs` conv_*_from_null, `state/codegen.rs::
+emit_typed_null`, `generation/mod.rs::default_native_value`, `database/structures.rs::
+set_default_value`, `database/types.rs` byte/short/short_raw/int.
+
 ---
 
 ## H7 — Hand-maintained IR codecs (F9)
