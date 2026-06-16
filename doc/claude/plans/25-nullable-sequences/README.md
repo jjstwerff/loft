@@ -40,9 +40,10 @@ bodies, comprehensions.
 **The gate (`LOFT_E2_SYNTH`) is the marker that E2 is not yet finished** — "finished" means
 default-on (gate removed), per the project standard.  The remaining work, in finishing order:
 
-1. **The leak (Sev 5)** — confirm or dismiss: nulling a present heap-payload element does not
-   free the old payload; the store-leak check did NOT flag it, so it may be intra-store or
-   none.  Run a targeted heap-accounting probe BEFORE treating it as real. *(S)*
+1. **The free-on-null leak (Sev 5) — CONFIRMED, needs the fix.**  `vec[i] = null` on a present
+   heap-payload element orphans ~1 record/null (intra-store; store grew 53→2053 over 2000 churns
+   via `store_memory()`).  Free the element's prior `Some` claims before the null/convert store —
+   a `remove_claims`-then-disc-0 op, or copy-from-a-zero temp. *(M, both backends)*
 2. **Generics** — `vector<T>` (generic element); `__nullable<T>` can't be synthesised until
    `T` is concrete.  Decide: instantiate-time rewrite, or exclude generics. *(M, design)*
 3. **Inferred comprehension** `v = [for … { S{…} }]` (no annotation) — edge; the declared

@@ -377,12 +377,19 @@ others not made the two representations collide.  **Fixed by two moves:**
   backends: a struct with both a dense `vector<Row not null>` and a nullable `vector<Row>` field
   coexist.  **The ONE remaining open gap-matrix probe is `match` above.**
 
-### Sev 5 — MEMORY (suspected, UNCONFIRMED)
-- **Free-on-null leak — not reproduced.**  Nulling a present heap-payload element (`OpSetEnum`
-  disc-0) leaves the old `tag` text unreferenced, so a leak was *expected* — but the store-leak check
-  did **not** flag it (`15`, `18`).  Any leak is therefore intra-store (below the per-store detector),
-  or there is none.  **Correction:** the E2a.5 commit/§ overclaimed this as a confirmed leak; it needs
-  a targeted heap-accounting probe before being treated as real.
+### Sev 5 — MEMORY [CONFIRMED 2026-06-16 via `store_memory()` accounting]
+- **Free-on-null leak — REAL, ~1 orphaned record per `vec[i] = null` on a present heap-payload
+  element.**  Heap-accounting probe (`/tmp/p_e3/leak.loft` — churn `v[0]=Row{…text…}; v[0]=null` in a
+  loop, `store_memory()` before/after): the `main_vector<__nullable<Row>>` store grew **53 records
+  (50 churns) → 2053 records (2050 churns)** — exactly +1 record/churn, `data` 0.01→0.10 MB.  The
+  store-leak check missed it because it tracks unfreed STORES; this is INTRA-store (the orphaned text
+  is reclaimed only when the whole store is freed at scope/program exit), so a long-lived churned
+  nullable vector grows unbounded.  *Root:* `OpSetEnum` disc-0 (null-literal path) and the
+  `handle_field`-style convert (runtime-source path) write the element WITHOUT freeing its prior `Some`
+  payload — unlike `do_copy_record`, which `remove_claims`-frees first.  *Fix (M, both backends):* free
+  the element's claims before the null/convert store — a `remove_claims`-then-disc-0 op (no standalone
+  parser op exists; add one, or copy-from-a-zero temp which reuses `do_copy_record`'s free).  **Needed
+  before default-on.**
 
 ### Cross-cutting — the remaining work to FINISH (default-on)
 The feature is gated `LOFT_E2_SYNTH` + a non-stdlib restriction (`source == STD_SOURCE` guards in
