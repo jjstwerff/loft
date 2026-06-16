@@ -235,14 +235,59 @@ default-on (gate removed), per the project standard.  The remaining work, in fin
        `sub_nr` to be a STRUCT with the key field at top level; the synth ENUM has `t` only inside
        `Some`, so the index machinery can't see the key.  Real fix = teach the hash/sorted/index
        key-extraction to read the key through the `Some` payload (hash-subsystem work, both backends).
-     - **A4 — `"…" as vector<S>` / `vector<S>.parse(json)` into nullable structs — ROOTED, SUBSYSTEM**
-       (11-vectors: passes A2, then `len(parsed)==0`).  The cast routes through the native JSON
-       walker (`parse_string` → `n_struct_from_jsonvalue` / `json_parse_into_stores`), which
-       materialises DENSE `S` records from the type schema.  With the vector element rewritten to
-       `__nullable<S>`, the walker neither sets the `Some` discriminant nor writes at the reordered
-       payload offsets → the elements don't match the nullable stride → empty/garbage vector.  Real
-       fix = make the JSON walker build `Some`-wrapped records for a `__nullable<S>` element
-       (native-parse-subsystem work, both backends).
+     - **A4 — `"…" as vector<S>` / `vector<S>.parse(json)` into nullable structs — LOCALIZED
+       2026-06-17 (boundary matrix; the earlier mechanism here was WRONG on two counts).**  A 7-cell
+       gate-on `--interpret` matrix + `introspect` (scalar control, present-only, null-mid/lead/all,
+       struct-field-vector, nested) showed:
+       1. **Wrong walker named.**  The `as vector<S>` cast lowers to **`OpCastVectorFromText`** →
+          `state/io.rs db_from_text` → `database/format.rs parse` →
+          **`database/structures.rs::walk_parsed_into`** — NOT `parse_string` /
+          `n_struct_from_jsonvalue` (that walker serves `Struct.parse(JsonValue)`).
+       2. **False premise "the vector element is rewritten to `__nullable<S>`".**  Gate-on, the cast
+          target is dense `vector<ref(S)>` (introspect: `vector<ref(Item)>`, db_tp 66), byte-identical
+          to gate-off — the rewrite fires ONLY for INFERRED literals (`vectors.rs:1387/1667`,
+          `is_unknown()`), not the cast target nor an annotated local.  A dense ref-vector cannot even
+          originate a null element (`v[0]=null` is a silent no-op), and `walk_parsed_into`'s
+          `Parsed::Null` arm (structures.rs:522) just `set_default_value`s the dense struct → the
+          `null(oob)` corruption (counted in `len`, `==null` false, fields read OOB).
+       So A4 is **two gate-inert parts, not one**: **(a)** route the cast / `.parse` target element
+       through `e2_nullable_elem` so gate-on it becomes `vector<__nullable<S>>` (matching inferred
+       literals — matrix-verified to interoperate: a `__nullable<S>` vector PRESERVES its null across
+       a `vector<S>` param and an annotated assignment); **(b)** teach `walk_parsed_into` to build the
+       `Some` variant for a `Parsed::Object` and the null variant (disc 0) for `Parsed::Null` when the
+       element type is a synth `__nullable<S>` enum (mirror the literal Some-build in
+       `vectors.rs::parse_item`).  Everything downstream of a `__nullable<S>` vector already works, so
+       the blast radius is the cast-type site + the one walker arm.
+       **Part (b) is fully designed** (set Some-disc + reuse the existing enum-variant fill: map a plain
+       JSON object to the `Some` variant; `Parsed::Null` already lands disc-0 via `set_default_value`).
+       **Part (a) is ALREADY DONE — RESOLVED 2026-06-17, after a STALE-BINARY false trail.**  The
+       earlier "cast stays dense `vector<ref(S)>`" reading was an artifact of a STALE `target/release/loft`
+       (built from an earlier point in the 56-commit branch).  Rebuilt from current source + instrumented
+       (`LOFT_TRACE_E2`, since reverted), `introspect` shows `as vector<S>` resolves to
+       `v:vector<ref(__nullable<S>)>` (db_tp nullable, `GetVectorNullable` stride 16) and emits
+       `OpCastVectorFromText(text, <nullable-kt>)`.  **Lesson logged** (engineering-rigor § calibration):
+       ALWAYS rebuild the lens before trusting a matrix cell — every cell from the stale binary was void.
+       JSON `null` already deserialises correctly (disc 0 via `set_default_value`): `[null,null]` → len 2,
+       both `==null`.
+       **The remaining bug IS Part (b), now pinpointed.**  A present JSON object reaching
+       `walk_parsed_into` with element type `__nullable<S>` (an Enum) hits the `Parts::Enum` arm, whose
+       tag extraction rejects a plain multi-field object → `Err(mismatch)` → the `?` in the array loop
+       ABORTS the parse at that element.  Fully consistent with the fresh matrix: `[{a},{b}]`→len 0,
+       `[null,{b}]`→len 1 (null kept, `{b}` aborts), `[null,null]`→len 2.  Fix = in the `Parts::Enum` arm,
+       detect a synth `__nullable<S>` and map a plain object / `Constructor` to the `Some` variant (set
+       disc 2, recurse into the Some `EnumValue` payload — reuse the existing variant-fill path at
+       structures.rs:629-639).
+       **TWO things to verify WITH the fix (do NOT assume):**
+       (i) **gate-inertness** — `introspect` shows the cast resolves to `__nullable<S>` even GATE-OFF
+       (`LOFT_E2_SYNTH` unset).  If real, shipped `text as vector<Struct>` is already rewriting and (until
+       Part b) dropping present objects — a potential shipped regression.  But the `11-vectors` gate-off
+       suite passes `text as vector<Item>`, so either the leak is real-and-untested or this probe differs
+       from the suite's form (package context / struct shape).  RECONCILE before claiming a bug.
+       (ii) re-run the WHOLE matrix on a FRESH binary, BOTH backends — the stale-binary episode voided
+       every earlier cell.
+       **Sibling found, OUT of A4:**
+       nested `vector<vector<S>>` via JSON deserialises to an EMPTY outer vector (present OR null) — a
+       distinct unimplemented seam, routed separately.
      - p143 (nested-vector struct return) and p379 (cross-lib same-name) did NOT reproduce from the
        named-literal cells (c4/c5 pass) — they need their real shapes; likely further distinct seams.
 
