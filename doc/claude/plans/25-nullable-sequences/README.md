@@ -100,12 +100,30 @@ default-on (gate removed), per the project standard.  The remaining work, in fin
 
    **Trajectory (full-tree flip, gaps applied):** 107 → 81 (gaps 1-3) → 30 (stdlib dense) → **25**
    (after the `!nullable` is-null operator + the field-vector-in-arg first-pass re-type fix).
-   The remaining **25 are a LONG TAIL of distinct per-axis script/lib issues**, each needing its
-   own seam:
-   - **method dispatch on a nullable receiver** — `v[i].method()` routes through `field()`'s
-     fn-ref path, NOT the gap-2 call coercion (06-structs `points[0].value()`);
-   - **nested-vector struct return** (p143), native-codegen edges (p171, p310), cross-lib
-     same-name struct (p379), moros/glb + wasm library suites, several `tests/scripts/*.loft`.
+   Two more access seams then **FIXED** (gate-inert, committed 32393141):
+   - **method dispatch on a nullable receiver** (`v[i].method()`) — `field()` now unwraps the
+     `__nullable<S>` receiver to dense `S` (gap-2 offset-ref) when the access is a method call
+     (trailing `(`) or the name isn't a `Some` data field.
+   - **transparent format** — `{v[i]}` rendered `Some {…}`; the runtime formatter now renders a
+     synthetic `__nullable<S>` as the dense `S` (present) or `null` (absent).
+
+   **THE DEEPER BLOCKER (06-structs root, traced 2026-06-16): synth-enum known_type is STALE vs
+   the codegen database.**  `[Area{…}; 4]` in a complex multi-type program builds with element
+   size/stride **8** (`OpPreAllocVector(map,2,8)`, `OpGetVectorNullable(map,8,…)`), corrupting
+   `map[0]`.  Traced: `in_t = Enum(608=__nullable<Area>)` ✓, `def(608).known_type() = 64` ✓, but
+   `database.size(64) = 8` — index 64 holds `i_parse_errors` by codegen time.  `register_enum_db`
+   assigns the synth enum's `known_type` from `database.enumerate()` (next-free index) during one
+   `fill_all`, but `data.reset()` between passes preserves `Stores` while the index that synth
+   enum landed on is occupied by a different type in the final codegen database — a TWO-PASS /
+   database-index consistency bug (the class #397's H5 attr-count assert guards).  Works in
+   isolation; breaks once enough other types exist.  This is NOT another access seam — it's a
+   **synthesis-stability** fix (where/how `__nullable<S>` registers so its db index is consistent
+   across passes), with regression risk against the original "id × 512" registration-timing fix.
+   Likely the shared root of a CLUSTER of the remaining failures (any inferred nullable vector in
+   a multi-type program).
+
+   Other residual: nested-vector struct return (p143), native-codegen edges (p171, p310),
+   cross-lib same-name struct (p379), moros/glb + wasm suites.
 
    **Re-gated** (`LOFT_E2_SYNTH` restored on the 3 rewrite sites) so the monthly release branch
    stays green while this tail closes — all access-glue fixes above are **gate-inert** (only fire
