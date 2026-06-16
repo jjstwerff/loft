@@ -359,8 +359,12 @@ others not made the two representations collide.  **Fixed by two moves:**
   declared form is done).
 
 ### Sev 4 — PARSE gaps
-- **`match v[i] { null => … }`** does not parse (`Expect token }`). (`14`)  A `null` pattern arm on a
-  nullable element isn't recognised.
+- **[FIXED 2026-06-16] `match v[i] { null => … }`** was a parse error (`Expect token }`). (`14`)  A
+  `null` keyword arm now matches the absent state (disc 0) — added at the arm-loop top (before the
+  `has_identifier` variant path), scoped to the synth `__nullable<` enum, lowered to `discs:[0]`; it
+  also marks the vestigial `Null` variant covered so `null` + `Some{…}` is exhaustive without `_`.
+  Verified both backends (`null` / `Some{id,tag}` / `_` arms).  *Minor follow-up:* a transparent
+  `Row{…}` arm (struct name) isn't accepted — use `Some{…}` or `_`.
 - **[FIXED 2026-06-16] `v += [null]`** was rejected: `cannot store null elements in a
   vector<__nullable<Row>>`. (`07`)  `parse_item` (vectors.rs) now special-cases a `null` element when
   the declared element type is a `__nullable<S>` enum: emit an empty construction (OpNewRecord

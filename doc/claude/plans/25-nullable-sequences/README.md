@@ -24,13 +24,14 @@ regression.
 
 *E2 — embedded-record null (struct stored INLINE in a vector element / struct field, via a
 synthesised `__nullable<S>` enum), gated `LOFT_E2_SYNTH`, off by default → suite
-byte-identical.*  Of the 24-case gap matrix gate-on, **23 pass on BOTH backends.**  Done:
-struct fields + the inline `== null` discriminant test; `vec[i] = null` (discriminant-0
-store) and `vec[i] = <expression source>` (present/null convert); `??` coalesce on an
-inline-null element; `v += [null]`; the **`not null` dense ELEMENT opt-out (E3)** — the
-cost escape hatch; the rewrite **unified to ONE chokepoint** (vector-type resolution, so
-local / param / return / field / nested all agree); and **all four construction-propagation
-forms** — nested `vector<vector<S>>`, inferred `v = [S{…}]`, return bodies, comprehensions.
+byte-identical.*  **All 24 gap-matrix probes pass on BOTH backends.**  Done: struct fields +
+the inline `== null` discriminant test; `vec[i] = null` (discriminant-0 store) and
+`vec[i] = <expression source>` (present/null convert); `??` coalesce on an inline-null
+element; `v += [null]`; `match v[i] { null => … }`; the **`not null` dense ELEMENT opt-out
+(E3)** — the cost escape hatch; the rewrite **unified to ONE chokepoint** (vector-type
+resolution, so local / param / return / field / nested all agree); and **all four
+construction-propagation forms** — nested `vector<vector<S>>`, inferred `v = [S{…}]`, return
+bodies, comprehensions.
 
 > **Branch:** `2026-07-mac` (rebased onto `main` + #393; all commits pushed).
 
@@ -39,16 +40,14 @@ forms** — nested `vector<vector<S>>`, inferred `v = [S{…}]`, return bodies, 
 **The gate (`LOFT_E2_SYNTH`) is the marker that E2 is not yet finished** — "finished" means
 default-on (gate removed), per the project standard.  The remaining work, in finishing order:
 
-1. **`match v[i] { null => … }`** — the ONE failing gap-matrix probe (Sev 4 parse): a `null`
-   pattern arm on a nullable element isn't recognised. *(M)*
-2. **The leak (Sev 5)** — confirm or dismiss: nulling a present heap-payload element does not
+1. **The leak (Sev 5)** — confirm or dismiss: nulling a present heap-payload element does not
    free the old payload; the store-leak check did NOT flag it, so it may be intra-store or
    none.  Run a targeted heap-accounting probe BEFORE treating it as real. *(S)*
-3. **Generics** — `vector<T>` (generic element); `__nullable<T>` can't be synthesised until
+2. **Generics** — `vector<T>` (generic element); `__nullable<T>` can't be synthesised until
    `T` is concrete.  Decide: instantiate-time rewrite, or exclude generics. *(M, design)*
-4. **Inferred comprehension** `v = [for … { S{…} }]` (no annotation) — edge; the declared
+3. **Inferred comprehension** `v = [for … { S{…} }]` (no annotation) — edge; the declared
    form is done. *(S)*
-5. **GATE REMOVAL + stdlib/libs fallout** — flip default-on, lift the non-stdlib restriction
+4. **GATE REMOVAL + stdlib/libs fallout** — flip default-on, lift the non-stdlib restriction
    (`source == STD_SOURCE` guards in `typedef.rs` + `parser/vectors.rs`); the stdlib's ~17
    and `lib/`'s ~8 `vector<Struct>` usages must all work rewritten.  De-risk first by flipping
    the gate on for the stdlib in a throwaway probe to surface the fallout list. *(L — the real
