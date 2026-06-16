@@ -154,6 +154,15 @@ install-artifacts: check-targets all
 	cargo build --release --lib --no-default-features --features mmap,random,threading --target-dir target/install-lib
 
 install:
+	# #398 — preflight: this target writes to root-owned /usr/local/{bin,share}.
+	# Verify we can actually elevate BEFORE the long build + any copying, so a
+	# rights problem fails early and clearly instead of a raw mid-install `sudo`
+	# error (or a half-done install).
+	@sudo true || { \
+		echo "ERROR: 'make install' needs root to write /usr/local/{bin,share}/loft."; \
+		echo "Re-run where you can elevate (e.g. as a sudoer, or 'sudo make install')."; \
+		exit 1; \
+	}
 	$(AS_USER) $(MAKE) --no-print-directory install-artifacts
 	sudo install -d /usr/local/share/loft/deps
 	sudo install -d /usr/local/share/loft/wasm32-wasip2/deps
@@ -165,7 +174,13 @@ install:
 	sudo install -m 644 target/install-lib/release/libloft.rlib /usr/local/share/loft/
 	sudo rm -f /usr/local/share/loft/deps/*.rlib /usr/local/share/loft/deps/*.so
 	sudo cp target/install-lib/release/deps/*.rlib /usr/local/share/loft/deps/
-	sudo cp target/install-lib/release/deps/*.so /usr/local/share/loft/deps/ 2>/dev/null || true
+	# #398 — only copy the optional dep `.so`s when they actually exist, and fail
+	# LOUDLY on a real copy error (the old `2>/dev/null || true` swallowed a
+	# permission-denied along with the harmless no-such-file case).
+	@if ls target/install-lib/release/deps/*.so >/dev/null 2>&1; then \
+		sudo cp target/install-lib/release/deps/*.so /usr/local/share/loft/deps/ || { \
+			echo "ERROR: failed to install dependency .so files (rights?)."; exit 1; }; \
+	fi
 	sudo install -m 644 target/wasm32-wasip2/release/libloft.rlib /usr/local/share/loft/wasm32-wasip2/
 	sudo rm -f /usr/local/share/loft/wasm32-wasip2/deps/*.rlib
 	sudo cp target/wasm32-wasip2/release/deps/*.rlib /usr/local/share/loft/wasm32-wasip2/deps/
@@ -183,9 +198,28 @@ install:
 	# idempotent, source-mode-independent, covers the deps rlibs, the .sos, and
 	# both wasm deps/ trees.
 	sudo chmod -R a+rX /usr/local/share/loft
-	@if ! cmp -s target/release/loft /usr/local/bin/loft; then \
-		sudo install -m 755 target/release/loft /usr/local/bin/loft; \
-	fi
+	# #398 — install the binary UNCONDITIONALLY (was: skip when byte-identical via
+	# `cmp`).  The stdlib above is replaced on every install, so a conditional
+	# binary copy could pair a NEW stdlib with an OLDER installed binary that can't
+	# parse it (e.g. new `#pure` / `#rust"..."` syntax) — a silently broken install.
+	# Binary + stdlib now land together from this one `make install` (the same `all`
+	# build), as one unit.
+	sudo install -m 755 target/release/loft /usr/local/bin/loft
+	# #398 — post-install smoke gate: the installed binary MUST parse + run the
+	# installed stdlib.  Run a trivial program through the INSTALLED pair; a
+	# parse/load failure (the binary<->stdlib mismatch symptom) fails `make install`
+	# loudly rather than shipping a bricked toolchain the user has to hand-repair.
+	@smoke="$${TMPDIR:-/tmp}/loft-install-smoke.loft"; \
+	printf 'fn main() {\n    println("loft install smoke ok")\n}\n' > "$$smoke"; \
+	if ! /usr/local/bin/loft --interpret "$$smoke" >/dev/null 2>"$$smoke.err"; then \
+		echo "ERROR: 'make install' left a broken binary<->stdlib pair —"; \
+		echo "the installed loft cannot run the installed stdlib:"; \
+		sed 's/^/    /' "$$smoke.err"; \
+		echo "Fix: rebuild + reinstall as one unit:  make all && make install"; \
+		rm -f "$$smoke" "$$smoke.err"; exit 1; \
+	fi; \
+	rm -f "$$smoke" "$$smoke.err"; \
+	echo "install: post-install smoke OK (installed loft runs the installed stdlib)"
 uninstall:
 	sudo rm -f /usr/local/bin/loft
 	sudo rm -rf /usr/local/share/loft
