@@ -532,6 +532,7 @@ impl Parser {
         to: &Value,
         val: &Value,
         f_type: &Type,
+        src_tp: &Type,
         op: &str,
     ) -> Value {
         // Intercept `h[key] = null` → remove the key from hash/index/sorted
@@ -669,6 +670,65 @@ impl Parser {
             return self.cl(
                 "OpSetEnum",
                 &[to.clone(), Value::Int(0), Value::Enum(0, u16::MAX)],
+            );
+        }
+        // @PLN25 E2 — `inline_nullable = <expression source of type S>`: a nullable
+        // `__nullable<S>` field / vector element assigned from an EXPRESSION whose
+        // type is `Reference(S)` (a call / variable, possibly the null sentinel).
+        // `copy_ref` → `OpCopyRecord` would copy S's flat layout (`id@0,tag@8`) into
+        // the packed `Some` element (`disc@0,tag@4,id@8`) — garbage on a present
+        // source, and `allocation.rs:560` OOB on a null source (no store to read).
+        // Instead: when the source is present, build the `Some` variant (disc 2 +
+        // per-field copy at the Some offsets); when null, set discriminant 0.  This
+        // is `handle_field`'s null-source convert lifted to the `[i] = expr` / field
+        // store site.  A literal `S{…}` already built `Some` in `parse_var`, so its
+        // `src_tp` is the enum (not `Reference(S)`) and it does not reach here.
+        if op == "="
+            && !self.first_pass
+            && !matches!(to, Value::Var(_))
+            && let Type::Enum(syn, true, _) = f_type
+            && self.data.def(*syn).name.starts_with("__nullable<")
+            && let Type::Reference(src_d, _) = src_tp
+            && self.data.def(*syn).name == format!("__nullable<{}>", self.data.def(*src_d).name())
+        {
+            let syn = *syn;
+            let src_d = *src_d;
+            let some_d = self.data.variant_of(syn, "Some");
+            // Payload field pairs (index-in-S, index-in-Some) — `Some` copied S's
+            // fields verbatim, so they share names; offsets differ (Some reserves
+            // the discriminant at 0), resolved per-field by get/set_field.
+            let pairs: Vec<(usize, usize)> = (0..self.data.attributes(src_d))
+                .filter(|&f| !self.data.def(src_d).attributes[f].constant)
+                .filter_map(|f| {
+                    let nm = self.data.attr_name(src_d, f);
+                    let in_some = self.data.attr(some_d, &nm);
+                    (in_some != usize::MAX).then_some((f, in_some))
+                })
+                .collect();
+            let src_var = self.vars.work_refs(src_tp, &mut self.lexer);
+            let mut present = vec![self.cl(
+                "OpSetEnum",
+                &[to.clone(), Value::Int(0), Value::Enum(2, u16::MAX)],
+            )];
+            for (f_in_src, f_in_some) in pairs {
+                let read = self.get_field(src_d, f_in_src, Value::Var(src_var));
+                present.push(self.set_field_no_check(some_d, f_in_some, 0, to.clone(), read));
+            }
+            // null branch — set discriminant 0 (the element may already hold a
+            // `Some`; unlike the construction path it is not freshly zero-inited).
+            let null_set = self.cl(
+                "OpSetEnum",
+                &[to.clone(), Value::Int(0), Value::Enum(0, u16::MAX)],
+            );
+            let is_null = self.cl("OpRefIsNull", &[Value::Var(src_var)]);
+            let not_null = self.cl("OpNot", &[is_null]);
+            return v_block(
+                vec![
+                    v_set(src_var, val.clone()),
+                    v_if(not_null, Value::Insert(present), null_set),
+                ],
+                Type::Void,
+                "nullable_elem_convert",
             );
         }
         if matches!(f_type, Type::Enum(_, true, _) | Type::Reference(_, _))

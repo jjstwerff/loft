@@ -1861,7 +1861,7 @@ use a separate collection or add after the loop"
             );
         }
         if !matches!(code, Value::Insert(_)) {
-            *code = self.towards_set(to, code, f_type, &op[0..1]);
+            *code = self.towards_set(to, code, f_type, &s_type, &op[0..1]);
             // Plan-22 phase 02d-iii.e — wrap a first-set boxed-
             // scalar write with the cell-allocation preamble.
             // No-op for any other LHS shape (subsequent sets,

@@ -310,23 +310,24 @@ not durable).  The **gate-off** note tells you whether the same program behaves 
 flag *off* (a pre-existing `main` behaviour) versus only under the synthesis (a plan-internal
 artefact).  Unless a row says otherwise it is **gated** — flag off ⇒ byte-identical to today.
 
-### Sev 1 — CRASH, and it reproduces on `main` (gate-OFF)
+### Sev 1 — CRASH [FIXED 2026-06-16] — was on `main` (gate-OFF) AND gate-on
 - **`vec[i] = <runtime-null source>` → `allocation.rs:560` OOB on BOTH backends, BOTH field and
-  local, GATE-OFF too.**  Repro (`10`, `16`): `v: vector<Row> = […]; v[0] = maybe(false)` with
-  `fn maybe(b: boolean) -> Row { if b { Row{…} } else { null } }`.  This is the ORIGINAL E2 target
-  crash — `OpCopyRecord` derefs the null source's store `65535`.  E2 retired it for the embedded
-  NON-vector field (`Box{item: maybe(false)}`, via `handle_field`'s per-field convert), but the
-  **vector-element store path** (`towards_set` → `copy_ref` → `OpCopyRecord`) still has it.  Because
-  it reproduces gate-OFF it is a **pre-existing `main` crash**, not a plan artefact — the fix is the
-  E2 "vector-element convert" (lift `handle_field`'s present/null branch to the `vec[i] = expr`
-  store site).  *Candidate GitHub issue if not fixed as part of E2.*
+  local.**  Repro (`10`, `16`): `v: vector<Row> = […]; v[0] = maybe(false)` with
+  `fn maybe(b: boolean) -> Row { if b { Row{…} } else { null } }`.  The ORIGINAL E2 target crash —
+  `OpCopyRecord` derefs the null source's store `65535`.  **Fixed in TWO places:**
+  - **gate-OFF (pre-existing `main` crash):** `OpCopyRecord` null-source guard (commit `c111dd9b`,
+    interp `io.rs` + native `codegen_runtime.rs`) — a null source no-ops instead of crashing (a
+    non-nullable inline element has no null encoding); regression `tests/scripts/25-…loft`.
+  - **gate-ON (correct nullable semantics):** the **vector-element convert** in `towards_set`
+    (`collections.rs`) — `handle_field`'s present/null branch lifted to the `[i]=expr` / field store:
+    present source → build `Some` (disc 2 + per-field copy), null source → discriminant 0.  Verified
+    both backends: `v[0]=maybe(false)` → `==null` true, neighbour intact.
 
 ### Sev 2 — SILENT WRONG (corruption-class; gate-on only)
-- **`vec[i] = <present runtime source>` reads garbage.** (`17`)  `v[0] = maybe(true)` (returns
-  `Row{id:9}`) then `v[0].id` → `4` gate-ON; gate-OFF → `9` (correct).  Same root as the crash:
-  `copy_ref`/`OpCopyRecord` copies `Row`'s layout (`id@0,tag@8`) into an element that now expects the
-  `Some` layout (`disc@0,tag@4,id@8`).  Only an EXPRESSION source is wrong — the literal
-  `vec[i] = Row{…}` builds `Some` directly and is fine.
+- **[FIXED 2026-06-16] `vec[i] = <present runtime source>` read garbage.** (`17`)  `v[0] = maybe(true)`
+  (returns `Row{id:9}`) then `v[0].id` → `4` gate-ON (gate-OFF → `9`).  Same root as the Sev-1 crash:
+  `copy_ref`/`OpCopyRecord` copied `Row`'s layout (`id@0,tag@8`) into an element expecting the `Some`
+  layout (`disc@0,tag@4,id@8`).  Fixed by the same vector-element convert — `v[0].id` → `9` now.
 - **`vec[i] ?? default` ignores an inline-null element.** (`08`)  `v[0]=null; v[0] ?? Row{id:99}` →
   returns the stale `id=1`, not the default.  `??` tests the variable/handle sentinel, not the inline
   discriminant.
