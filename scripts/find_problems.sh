@@ -54,11 +54,14 @@ REPO_TAG=$(printf '%s' "$REPO_ROOT" | cksum | cut -d' ' -f1)
 # else temp_dir()), and rustc/rust-lld put their link intermediates under
 # TMPDIR — both default to /tmp, which on this box is a ~7.5G tmpfs.  Parallel
 # native compiles then exhaust it and the linker dies with SIGBUS (signal 7),
-# manifesting as flaky, unrelated test failures.  Redirect both to a
-# disk-backed dir under target/ (persistent, so the content-hash native cache
-# survives run-to-run).  std::env::temp_dir() honours TMPDIR on Unix, so this
-# one var also moves every `temp_dir()` user (cross_mode/exit_codes/html_wasm).
-LOFT_TEST_SCRATCH="$REPO_ROOT/target/test-scratch"
+# manifesting as flaky, unrelated test failures.  Redirect both to a disk-backed
+# dir, per-checkout (persistent, so the content-hash native cache survives
+# run-to-run).  std::env::temp_dir() honours TMPDIR on Unix, so this one var also
+# moves every `temp_dir()` user (cross_mode/exit_codes/html_wasm).  MUST live
+# OUTSIDE the repo: a `target/`-relative TMPDIR breaks the package/registry tests
+# (they build fixtures in temp_dir and package/extract them — anything under
+# `target/` is excluded, so loft.toml goes missing).  /var/tmp is disk-backed.
+LOFT_TEST_SCRATCH="/var/tmp/loft-test-scratch-$REPO_TAG"
 mkdir -p "$LOFT_TEST_SCRATCH"
 export TMPDIR="$LOFT_TEST_SCRATCH"
 export LOFT_TMPDIR="$LOFT_TEST_SCRATCH"
