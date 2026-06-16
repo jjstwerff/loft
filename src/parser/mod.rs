@@ -1838,10 +1838,54 @@ impl Parser {
     /// unresolvable type variable, etc.) — caller falls back to the
     /// existing first-pass-Unknown path.
     ///
-    /// Pure read of the generic template's already-populated `returned`
-    /// field plus the type-substitution helper.  No state mutation;
-    /// safe to call multiple times.
-    fn predict_generic_return_type(&self, name: &str, types: &[Type]) -> Type {
+    /// #395 — route a monomorph's concrete `Type::Tuple` return through the
+    /// synthetic `__tuple<…>` struct, exactly as `parser/definitions.rs`'s
+    /// `needs_tuple_rewrite` (~line 897) does for a normally-parsed tuple return.
+    /// A generic TEMPLATE deliberately defers that rewrite ("`T` resolves later")
+    /// and nothing re-applied it once `T` was concrete — so the copied body returns
+    /// a DbRef (the template compiled `T` as a `Reference` dummy) while the declared
+    /// return stayed `Tuple`, and the caller read the DbRef inline as garbage
+    /// (interp) / mismatched the Rust tuple ABI (native E0308).  Both the first-pass
+    /// prediction and the second-pass instantiation route through HERE so the
+    /// receiving variable's type agrees across passes.  Wide (>8 B) or
+    /// lifetime-bearing tuples are rewritten; an 8-byte pure-value tuple and
+    /// fn-element tuples keep their existing ABI (mirrors the deferral predicate).
+    fn tuple_return_rewrite(&mut self, returned: Type, from_type_var: bool) -> Type {
+        // Only the `-> T` shape needs this.  When the template return type IS the
+        // bare type variable, the body delivers T as a DbRef (the template compiled
+        // T as a `Reference` dummy), so a tuple substitution must wrap it in the
+        // synthetic struct.  A return type that is a LITERAL tuple in the signature
+        // (e.g. `-> (integer, integer)`) is constructed BY VALUE in the body and
+        // correctly uses the bare-tuple ABI — rewriting it would break the
+        // value-tuple generic returns (p329/p330/p240/plan17).
+        if !from_type_var {
+            return returned;
+        }
+        let Type::Tuple(elems) = &returned else {
+            return returned;
+        };
+        let wide = u32::from(crate::variables::size(
+            &returned,
+            &crate::data::Context::Argument,
+        )) > 8;
+        let has_fn = elems.iter().any(|e| matches!(e, Type::Function(_, _, _)));
+        if elems.iter().any(crate::data::has_lifetime_concern) || (wide && !has_fn) {
+            let elems_clone = elems.clone();
+            let synth = self.data.tuple_def(&mut self.lexer, &elems_clone);
+            Type::Reference(synth, crate::data::Deps::none())
+        } else {
+            returned
+        }
+    }
+
+    /// Reads the generic template's already-populated `returned` field, applies
+    /// the type substitution, then routes a concrete tuple return through the
+    /// synthetic `__tuple` struct (see [`tuple_return_rewrite`]) so the predicted
+    /// type matches what `try_generic_instantiation` later produces (else the
+    /// receiving variable would "change type" between passes — #395).  Registers
+    /// the synthetic struct on first encounter (idempotent via `tuple_def`);
+    /// otherwise side-effect-free and safe to call repeatedly.
+    fn predict_generic_return_type(&mut self, name: &str, types: &[Type]) -> Type {
         let generic_name = format!("n_{name}");
         let g_nr = self.data.def_nr(&generic_name);
         if g_nr == u32::MAX || self.data.def(g_nr).def_type() != DefType::Generic {
@@ -1863,7 +1907,11 @@ impl Parser {
             return Type::Unknown(0);
         }
         let tmpl_returned = self.data.definitions[g_nr as usize].returned.clone();
-        let predicted = Self::substitute_type(tmpl_returned, tv_nr, &concrete);
+        let from_tv = matches!(&tmpl_returned, Type::Reference(d, _) if *d == tv_nr);
+        let predicted = self.tuple_return_rewrite(
+            Self::substitute_type(tmpl_returned, tv_nr, &concrete),
+            from_tv,
+        );
         // Trace point: predicted return type for first-pass type
         // inference of generic call sites.  Used during plan-17 (A)
         // debugging.  Enable with `LOFT_TRACE=generic`.
@@ -1951,7 +1999,14 @@ impl Parser {
         let tmpl_vars = self.data.definitions[g_nr as usize].variables.clone();
         let tmpl_pos = self.data.definitions[g_nr as usize].position.clone();
         let new_code = Self::substitute_type_in_value(tmpl_code, tv_nr, &concrete, &self.data);
-        let new_returned = Self::substitute_type(tmpl_returned, tv_nr, &concrete);
+        // `from_tv` computed on the PRE-substitution template return, identically to
+        // `predict_generic_return_type`, so the second-pass instantiated return type
+        // matches the first-pass prediction (the cross-pass H5 contract).
+        let from_tv = matches!(&tmpl_returned, Type::Reference(d, _) if *d == tv_nr);
+        let new_returned = self.tuple_return_rewrite(
+            Self::substitute_type(tmpl_returned, tv_nr, &concrete),
+            from_tv,
+        );
         // Register the new definition.
         let d_nr = self.data.add_def(&mangled, &tmpl_pos, DefType::Function);
         for a in &tmpl_attrs {
