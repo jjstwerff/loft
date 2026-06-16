@@ -80,6 +80,28 @@ writing and the `n9_generated_fill_matches_src` test enforces byte-exact match.
 - **Pre-eval extension:** `needs_pre_eval` now covers `Value::Insert` and `Value::Iter`;
   `collect_pre_evals_inner` handles `Value::Return`.
 
+### Native→interpreter fallback, and `LOFT_REQUIRE_NATIVE` (efficiency-work aid)
+
+A default `loft <file>` run prefers native but **degrades to the interpreter** rather
+than failing when native is genuinely unavailable.  This keeps loft turnkey on a box
+without a working toolchain, but it can silently mask a performance regression — a
+program you *think* runs native is quietly interpreting.  There are exactly two places
+native can degrade (both in `src/main.rs::main`):
+
+| Where | Trigger | Default behaviour |
+|---|---|---|
+| **Auto-native library loop** | a `use`d `compile = "native"` library whose cdylib won't build (`Err`) or is being edited (`Ok(None)` dev-interpret) | the library interprets; `Err` warns, dev-interpret is silent |
+| **Main-program `'native` block** | `rustc` absent / mismatched / a stale-rlib toolchain failure on a cache miss | warns, then runs the program on the interpreter |
+
+Set **`LOFT_REQUIRE_NATIVE=1`** (the inverse of `LOFT_NO_NATIVE_LIBS`) to turn **every**
+one of those fallbacks into a **hard error that names the reason**, so a performance run
+can never silently interpret.  Off by default — the warn-and-interpret behaviour above
+is unchanged.  Enforced at one chokepoint per location: the library loop, and a single
+post-`'native`-block check (each fallback records *why* in `native_fallback_reason`; the
+chokepoint reports it, and a catch-all `unwrap_or` still errors loudly if a future
+fallback forgets to record one).  `--check` runs are exempt (they report parse status,
+not execution).  Guards: `tests/n3_use_native.rs::require_native_*`.
+
 ### Architecture
 
 The generated code uses these loft library types (already public):

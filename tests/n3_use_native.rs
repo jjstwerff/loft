@@ -160,3 +160,119 @@ fn mixed_library_dispatches_native_and_interprets_rest() {
     let _ = std::fs::remove_dir_all(&tmp);
     let _ = std::fs::remove_dir_all(native_auto);
 }
+
+/// `LOFT_REQUIRE_NATIVE` (the crawler / efficiency-work aid): a native→interpreter
+/// fallback that is a warning-and-continue by default becomes a HARD ERROR naming the
+/// reason, so a performance run can never silently run slow interpreted code.  This
+/// guards the **library** chokepoint: `LOFT_FORCE_NATIVE_BUILD_FAIL` deterministically
+/// drives the auto-native build to `Err` (no `rustc` needed), so the test runs
+/// everywhere.  Both arms are asserted from the SAME forced failure:
+///  * default (no env)  → exit 0, the library interprets, correct output;
+///  * `LOFT_REQUIRE_NATIVE=1` → exit ≠ 0, no program output, the reason on stderr.
+#[test]
+fn require_native_turns_library_fallback_into_an_error() {
+    let pid = std::process::id();
+    let tmp = std::env::temp_dir().join(format!("loft_n3_require_{pid}"));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+    let prog = tmp.join("main.loft");
+    std::fs::write(
+        &prog,
+        "use mathnative;\n\
+         fn main() {\n\
+         \x20   println(\"{double(21)}\");\n\
+         }\n",
+    )
+    .unwrap();
+
+    let run = |require: bool| {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_loft"));
+        c.arg("--lib")
+            .arg("tests/lib")
+            .arg(&prog)
+            .env("LOFT_NO_CACHE", "1")
+            .env("LOFT_FORCE_NATIVE_BUILD_FAIL", "1");
+        if require {
+            c.env("LOFT_REQUIRE_NATIVE", "1");
+        }
+        c.output().expect("run the loft binary")
+    };
+
+    // Default: the forced build failure warns and the library interprets — the
+    // program still runs and produces the right answer (the fallback is benign).
+    let def = run(false);
+    let def_stdout = String::from_utf8_lossy(&def.stdout);
+    let def_stderr = String::from_utf8_lossy(&def.stderr);
+    assert!(
+        def.status.success(),
+        "default fallback should still run.\nstdout:\n{def_stdout}\nstderr:\n{def_stderr}"
+    );
+    assert_eq!(
+        def_stdout, "42\n",
+        "interpreted fallback should produce 21*2=42"
+    );
+
+    // Strict: the same forced failure is now a hard error — no program output, a
+    // non-zero exit, and the reason (the env var + the failing library) on stderr.
+    let strict = run(true);
+    let strict_stdout = String::from_utf8_lossy(&strict.stdout);
+    let strict_stderr = String::from_utf8_lossy(&strict.stderr);
+    assert!(
+        !strict.status.success(),
+        "LOFT_REQUIRE_NATIVE must turn the fallback into a non-zero exit.\nstdout:\n{strict_stdout}\nstderr:\n{strict_stderr}"
+    );
+    assert!(
+        !strict_stdout.contains("42"),
+        "strict mode must refuse to run the interpreted fallback (saw program output)"
+    );
+    assert!(
+        strict_stderr.contains("LOFT_REQUIRE_NATIVE")
+            && strict_stderr.contains("could not compile native"),
+        "strict error must name the env var and the reason.\nstderr:\n{strict_stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Guards the **main-program** chokepoint of `LOFT_REQUIRE_NATIVE`.  Forces a native
+/// fallback by hiding `rustc` (empty `PATH`) on a cache-bypassed `--native` run; under
+/// the env var that must be a hard error naming the missing toolchain, not a silent
+/// degrade to the interpreter.  Skipped on Windows where the `PATH` model + binary
+/// resolution differ enough that an empty `PATH` is not a clean way to hide `rustc`.
+#[test]
+#[cfg(not(target_os = "windows"))]
+fn require_native_errors_when_rustc_is_absent() {
+    let pid = std::process::id();
+    let tmp = std::env::temp_dir().join(format!("loft_n3_norustc_{pid}"));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+    let prog = tmp.join("main.loft");
+    std::fs::write(&prog, "fn main() {\n    print(\"ran\")\n}\n").unwrap();
+
+    // Empty PATH ⇒ `rustc` (invoked by bare name) is NotFound; loft itself runs
+    // because it is launched by absolute path.  Cache bypass forces a compile attempt.
+    let out = Command::new(env!("CARGO_BIN_EXE_loft"))
+        .arg("--native")
+        .arg(&prog)
+        .env("PATH", "")
+        .env("LOFT_NATIVE_NO_CACHE", "1")
+        .env("LOFT_REQUIRE_NATIVE", "1")
+        .output()
+        .expect("run the loft binary");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "LOFT_REQUIRE_NATIVE must error when rustc is absent.\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        !stdout.contains("ran"),
+        "strict mode must not fall through to the interpreter (saw program output)"
+    );
+    assert!(
+        stderr.contains("LOFT_REQUIRE_NATIVE"),
+        "strict error must name the env var.\nstderr:\n{stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
