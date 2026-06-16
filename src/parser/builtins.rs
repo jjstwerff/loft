@@ -152,6 +152,7 @@ impl Parser {
     pub(crate) fn parse_parallel_worker_fn(
         &mut self,
         first_id: &str,
+        elem_tp: &Type,
     ) -> (u32, Type, Vec<Value>, Vec<Type>) {
         // Resolve function name: try n_<name> first (user function convention).
         let d_nr = {
@@ -223,6 +224,59 @@ impl Parser {
         }
         self.data.def_used(d_nr);
         let ret_type = self.data.def(d_nr).returned().clone();
+        // @PLN25 E2 gap 3 — par over `vector<__nullable<S>>` whose worker takes a
+        // dense `S`: the dispatcher hands the worker a ref to the element START
+        // (the discriminant @0), but the worker reads dense-`S` offsets, so it
+        // reads the disc.  Synthesize a thin wrapper
+        // `__par_nullable_w(e: __nullable<S>) -> ret { worker(<e payload>) }` and
+        // use IT as the worker func; the body applies the SAME payload offset-ref
+        // coercion as a normal `worker(v[i])` call (gap 2).  Only the no-extra-arg
+        // form (the common `worker(x)`); extras fall through to the dense path.
+        if !self.first_pass
+            && extra_vals.is_empty()
+            && let Type::Enum(enum_d, true, _) = elem_tp
+            && self.data.attributes(d_nr) > 0
+            && let Type::Reference(struct_d, _) =
+                self.data.def(d_nr).attributes()[0].typedef.clone()
+            && self.data.def(*enum_d).name
+                == format!("__nullable<{}>", self.data.def(struct_d).name())
+            && self.data.attributes(struct_d) > 0
+        {
+            let enum_d = *enum_d;
+            let pos = self.lexer.pos().clone();
+            let wname = format!("__par_nullable_w_{}_{}_{first_id}", pos.line, pos.pos);
+            let w_d_nr = self
+                .data
+                .add_def(&wname, &pos, crate::data::DefType::Function);
+            let _ = self
+                .data
+                .add_attribute(&mut self.lexer, w_d_nr, "e", elem_tp.clone());
+            self.data.set_returned(w_d_nr, ret_type.clone());
+            let mut wvars = crate::variables::Function::new(&wname, &pos.file);
+            let e_var = wvars.add_variable("e", elem_tp, &mut self.lexer);
+            wvars.become_argument(e_var);
+            wvars.defined(e_var);
+            let some_d = self.data.variant_of(enum_d, "Some");
+            let first = self.data.attr_name(struct_d, 0);
+            let off = self
+                .database
+                .position(self.data.def(some_d).known_type(), &first);
+            let coerced = self.get_val(
+                &Type::Reference(struct_d, crate::data::Deps::none()),
+                false,
+                u32::from(off),
+                Value::Var(e_var),
+                u32::MAX,
+            );
+            let body = crate::data::v_block(
+                vec![Value::Return(Box::new(Value::Call(d_nr, vec![coerced])))],
+                ret_type.clone(),
+                "nullable_par_wrapper",
+            );
+            self.data.definitions[w_d_nr as usize].code = body;
+            self.data.definitions[w_d_nr as usize].variables = wvars;
+            return (w_d_nr, ret_type, extra_vals, extra_types);
+        }
         // S23: generator functions (return type iterator<T>) cannot be par() workers.
         // Worker threads do not have access to the main thread's coroutines table.
         // Return u32::MAX + Unknown in both passes so build_parallel_for_ir doesn't
@@ -280,7 +334,7 @@ impl Parser {
             (u32::MAX, Type::Unknown(0), Vec::new(), Vec::new())
         } else {
             // ── Form 1: func(a, extra...) ─────────────────────────────────────
-            self.parse_parallel_worker_fn(&first_id)
+            self.parse_parallel_worker_fn(&first_id, elem_tp)
         }
     }
 
