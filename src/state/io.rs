@@ -1363,6 +1363,17 @@ impl State {
             let _ = free_source;
             return;
         }
+        // @PLN25 — a NULL source (the `store_nr == u16::MAX` sentinel) has no
+        // store to read; copying from it is meaningless.  `store(&data)` below
+        // would index `allocations[65535]` and panic (`allocation.rs:560` OOB).
+        // This guards the pre-existing `main` crash on `vec[i] = <runtime-null>`
+        // into a non-nullable inline element (where there is no null encoding) —
+        // leave the destination unchanged rather than crash.  (For a NULLABLE
+        // `__nullable<S>` element the parser emits the discriminant-0 store, not
+        // OpCopyRecord, so this path is the can't-represent-null fallback.)
+        if data.store_nr == u16::MAX {
+            return;
+        }
         if std::env::var("LOFT_TRACE_CR").is_ok() {
             let src_w = if data.rec != 0 {
                 self.database.store(&data).get_int(data.rec, data.pos)
