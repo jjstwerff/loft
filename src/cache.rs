@@ -451,6 +451,47 @@ pub fn loft_ffi_fingerprint() -> u64 {
         .unwrap_or_else(loft_build_fingerprint)
 }
 
+/// #274 — fingerprint of the RUSTFLAGS this loft build used (`LOFT_BUILD_RUSTFLAGS`,
+/// stamped by `build.rs`).  A package's native rlib bundles shared transitive deps
+/// (e.g. `libloading`) whose SVH must match loft's own copy at the consumer link, and
+/// that SVH depends on RUSTFLAGS — which `loft_ffi_fingerprint` does NOT capture.  So
+/// a graphics rlib built by a `-g` loft, reused by a no-`-g` loft (loft-ffi source
+/// unchanged), links a `-g` `libloading` against loft's no-`-g` copy: same
+/// `StableCrateId`, different SVH, "colliding StableCrateId" at link.  Folding this
+/// into the native-artifact cache key invalidates on a flag change while preserving
+/// the cross-profile sharing the loft-ffi key was chosen for (same flags → shared).
+/// `DefaultHasher` is seeded with fixed keys, so the value is stable across runs.
+#[must_use]
+pub fn rustflags_fingerprint() -> u64 {
+    rustflags_fp_of(env!("LOFT_BUILD_RUSTFLAGS"))
+}
+
+/// Pure core of [`rustflags_fingerprint`] (takes the flag string so it is testable).
+fn rustflags_fp_of(flags: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    flags.hash(&mut h);
+    h.finish()
+}
+
+/// #274 — the native-artifact cache key: `loft_ffi_fingerprint` (the published C-ABI
+/// the cdylib links) combined with [`rustflags_fingerprint`] (the flags that fix the
+/// rlib's shared-dep SVH).  `.max(1)` keeps it out of the `fp == 0`
+/// match-anything sentinel in [`native_artifact_fingerprint_matches`].
+#[must_use]
+pub fn native_artifact_cache_key() -> u64 {
+    combine_native_cache_key(loft_ffi_fingerprint(), rustflags_fingerprint())
+}
+
+/// Pure core of [`native_artifact_cache_key`] (testable without the build-time env).
+fn combine_native_cache_key(ffi_fp: u64, rustflags_fp: u64) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    ffi_fp.hash(&mut h);
+    rustflags_fp.hash(&mut h);
+    h.finish().max(1)
+}
+
 /// @PLN11 Arc N / N0 — path of a native artifact's build-fingerprint sidecar.
 fn fp_sidecar(profile_dir: &std::path::Path) -> std::path::PathBuf {
     profile_dir.join(".loft-build-fp")
@@ -842,6 +883,47 @@ mod tests {
             srcs.iter()
                 .any(|(n, c)| n == "01_code.loft" && !c.is_empty())
         );
+    }
+
+    // #274 — the native-artifact cache key MUST change when the RUSTFLAGS that fix a
+    // shared transitive dep's SVH change; otherwise a package rlib built by a `-g`
+    // loft is reused by a no-`-g` loft and its bundled `libloading` collides with
+    // loft's copy at the consumer link ("colliding StableCrateId").  Guards the pure
+    // cores so a regression is caught without an end-to-end native build.
+    #[test]
+    fn native_cache_key_is_rustflags_sensitive() {
+        // Different flags → different rustflags fingerprint.
+        assert_ne!(
+            rustflags_fp_of("-g"),
+            rustflags_fp_of(""),
+            "a flag change must change the rustflags fingerprint"
+        );
+        assert_eq!(
+            rustflags_fp_of("-g"),
+            rustflags_fp_of("-g"),
+            "the fingerprint must be deterministic"
+        );
+        // …and that propagates through the combined cache key.
+        let ffi = 0xABCD_1234_5678_9ABC;
+        assert_ne!(
+            combine_native_cache_key(ffi, rustflags_fp_of("-g")),
+            combine_native_cache_key(ffi, rustflags_fp_of("")),
+            "the cache key must change when RUSTFLAGS change (same loft-ffi)"
+        );
+        // A loft-ffi change still changes the key (the original dimension is kept).
+        assert_ne!(
+            combine_native_cache_key(ffi, rustflags_fp_of("-g")),
+            combine_native_cache_key(ffi ^ 1, rustflags_fp_of("-g")),
+            "the cache key must still track the loft-ffi fingerprint"
+        );
+        // Never 0 — that is the `native_artifact_fingerprint_matches` match-anything
+        // sentinel; the key tripping it would silently reuse any stale rlib.
+        assert_ne!(
+            combine_native_cache_key(0, 0),
+            0,
+            "key must avoid the 0 sentinel"
+        );
+        assert_ne!(native_artifact_cache_key(), 0);
     }
 
     #[test]

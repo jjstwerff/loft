@@ -688,12 +688,16 @@ pub(crate) fn add_native_extern_flags(
         // rebuild-native-cdylibs` before loft's ABI changed).  Without the
         // fingerprint check the stale rlib is linked as-is → the "generated
         // rust-code error".  `auto_build_native` re-checks + re-stamps the sidecar.
+        // #274 — key on the SAME `native_artifact_cache_key` that `auto_build_native`
+        // stamps with (loft-ffi ABI + RUSTFLAGS), so this link-time gate agrees with
+        // the build-time stamp: a flag-divergent rlib (whose shared `libloading` would
+        // collide with loft's copy) reads as stale here and is rebuilt.
         let profile_dir = rlib_path
             .parent()
             .unwrap_or_else(|| std::path::Path::new("."));
         let stale = !loft::cache::native_artifact_fingerprint_matches(
             profile_dir,
-            loft::cache::loft_build_fingerprint(),
+            loft::cache::native_artifact_cache_key(),
         );
         if target.is_none() && (!rlib_path.exists() || stale) {
             let stem = crate_name.replace('-', "_");
