@@ -10,6 +10,30 @@ use super::{
 // Variable resolution, struct construction, and object parsing.
 
 impl Parser {
+    /// @P387 / @P383 — the user-facing argument types of a fn used as a
+    /// first-class `fn` value.  Excludes the SYNTHETIC return buffer the fn-ref
+    /// dispatch injects: `__work_ret` / `__retbuf` while still `__`-prefixed, AND
+    /// the @PLAN59 signature-time `__retbuf` after it's renamed to the returned
+    /// local's name (the return type's deps still name that attr).  Without this
+    /// a value-returning fn mis-types as `fn(integer, S) -> S` and can't be used
+    /// as a `fn` value.
+    fn fn_ref_arg_types(&self, fn_d_nr: u32) -> Vec<Type> {
+        let n_args = self.data.attributes(fn_d_nr);
+        // The fn-ref TYPE is the VISIBLE parameters only.  Synthetic
+        // return-buffers (struct/vector `__retbuf`, the text work-buffer) are
+        // marked `hidden`, so excluding by `hidden` drops exactly them — and,
+        // unlike the old "in the return deps" test, KEEPS a genuinely-returned
+        // parameter (`fn f(s: text) -> text { s }` has `s` in its return deps
+        // but `s` is a real, non-hidden arg — @P387 case 2).
+        (0..n_args)
+            .filter(|&a| {
+                !self.data.def(fn_d_nr).attributes()[a].hidden
+                    && !self.data.attr_name(fn_d_nr, a).starts_with("__")
+            })
+            .map(|a| self.data.attr_type(fn_d_nr, a))
+            .collect()
+    }
+
     /// @PLN22 Phase 1 — true if `tp` denotes an enum, either directly
     /// (`Type::Enum`) or via a `Type::Reference` to an enum def.  Used to seed
     /// the expected-enum context for bare value-position variant resolution
@@ -170,10 +194,9 @@ impl Parser {
                     self.var_usages(index_var, true);
                     *code = Value::Int(fn_d_nr as i32);
                     self.data.def_used(fn_d_nr);
-                    let n_args = self.data.attributes(fn_d_nr);
-                    let arg_types: Vec<Type> = (0..n_args)
-                        .map(|a| self.data.attr_type(fn_d_nr, a))
-                        .collect();
+                    // A forward-declared value-returning fn re-resolved on pass 2
+                    // reaches here; same buffer-exclusion as the bare-name path.
+                    let arg_types = self.fn_ref_arg_types(fn_d_nr);
                     let ret_type = self.data.def(fn_d_nr).returned().clone();
                     return Type::Function(
                         arg_types,
@@ -393,10 +416,7 @@ impl Parser {
                 } else {
                     *code = Value::Int(fn_d_nr as i32);
                     self.data.def_used(fn_d_nr);
-                    let n_args = self.data.attributes(fn_d_nr);
-                    let arg_types: Vec<Type> = (0..n_args)
-                        .map(|a| self.data.attr_type(fn_d_nr, a))
-                        .collect();
+                    let arg_types = self.fn_ref_arg_types(fn_d_nr);
                     let ret_type = self.data.def(fn_d_nr).returned().clone();
                     t = Type::Function(arg_types, Box::new(ret_type), crate::data::Deps::none());
                 }
@@ -1634,13 +1654,54 @@ impl Parser {
             self.create_var(&format!("{name}#index"), &in_type)
         };
         let mut ls = Vec::new();
+        // @P384: for a real-collection slice `col[lo..hi]` a negative bound counts
+        // FROM THE END — mirroring single-index `col[-1]`.  Normalize BOTH bounds to
+        // absolute positions ONCE, before the loop, so the loop walks absolute indices
+        // and the break test compares like with like.  Without this the loop walked the
+        // raw bound and leaned on per-element from-end inside `OpGetVectorNullable`,
+        // which only worked when start and end sat on the same side of zero
+        // (`v[-3..-1]` ok, but `v[2..-1]` broke immediately and `v[-2..]` wrapped past
+        // zero).  Bare ranges (`data == Null`, e.g. `for i in a..b`) keep literal-counter
+        // semantics and are left untouched (pre stays empty → init is the plain reset).
+        let mut pre: Vec<Value> = Vec::new();
+        let (start_bound, end_bound) = if *data == Value::Null {
+            (expr.clone(), till.clone())
+        } else {
+            let len_var = self.create_unique("slice_len", &I32);
+            pre.push(v_set(
+                len_var,
+                self.cl("OpLengthVector", std::slice::from_ref(data)),
+            ));
+            let from_var = self.create_unique("slice_from", &in_type);
+            let till_var = self.create_unique("slice_till", &in_type);
+            for (bound_var, raw) in [(from_var, expr.clone()), (till_var, till.clone())] {
+                // bound_var = raw;  if bound_var < 0 { bound_var = bound_var + len }
+                pre.push(v_set(bound_var, raw));
+                let neg = self.conv_op(
+                    "<",
+                    Value::Var(bound_var),
+                    Value::Int(0),
+                    in_type.clone(),
+                    I32.clone(),
+                );
+                let plus_len = self.conv_op(
+                    "+",
+                    Value::Var(bound_var),
+                    Value::Var(len_var),
+                    in_type.clone(),
+                    I32.clone(),
+                );
+                pre.push(v_set(bound_var, v_if(neg, plus_len, Value::Var(bound_var))));
+            }
+            (Value::Var(from_var), Value::Var(till_var))
+        };
         let test = if reverse {
             if incl {
                 ls.push(v_set(
                     ivar,
                     v_if(
                         self.single_op("!", Value::Var(ivar), in_type.clone()),
-                        till,
+                        end_bound.clone(),
                         self.conv_op(
                             "-",
                             Value::Var(ivar),
@@ -1653,7 +1714,7 @@ impl Parser {
             } else {
                 ls.push(v_if(
                     self.single_op("!", Value::Var(ivar), in_type.clone()),
-                    v_set(ivar, till),
+                    v_set(ivar, end_bound.clone()),
                     Value::Null,
                 ));
                 ls.push(v_set(
@@ -1670,7 +1731,7 @@ impl Parser {
             self.conv_op(
                 "<",
                 Value::Var(ivar),
-                expr.clone(),
+                start_bound.clone(),
                 in_type.clone(),
                 till_tp,
             )
@@ -1679,7 +1740,7 @@ impl Parser {
                 ivar,
                 v_if(
                     self.single_op("!", Value::Var(ivar), in_type.clone()),
-                    expr.clone(),
+                    start_bound.clone(),
                     self.conv_op(
                         "+",
                         Value::Var(ivar),
@@ -1691,7 +1752,7 @@ impl Parser {
             ));
             self.conv_op(
                 if incl { "<" } else { "<=" },
-                till,
+                end_bound.clone(),
                 Value::Var(ivar),
                 till_tp,
                 in_type.clone(),
@@ -1699,9 +1760,22 @@ impl Parser {
         };
         ls.push(v_if(test, Value::Break(0), Value::Null));
         ls.push(Value::Var(ivar));
+        let init = {
+            let null_set = v_set(ivar, self.null(&in_type));
+            if pre.is_empty() {
+                null_set
+            } else {
+                // `Insert` splices its statements at the enclosing scope (no `{}`),
+                // so the loop counter and the slice_len/from/till bounds stay visible
+                // to the sibling loop body — a `Block` would scope the `let`s away
+                // from native codegen.
+                pre.push(null_set);
+                Value::Insert(pre)
+            }
+        };
         *expr = Value::Iter(
             u16::MAX,
-            Box::new(v_set(ivar, self.null(&in_type))),
+            Box::new(init),
             Box::new(v_block(ls, in_type.clone(), "Iter range")),
             Box::new(Value::Null),
         );

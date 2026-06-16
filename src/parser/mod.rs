@@ -6266,7 +6266,11 @@ impl Parser {
     }
 
     fn var_usages(&mut self, vnr: u16, plus: bool) {
-        if vnr == u16::MAX {
+        // @P387 — a captured-var number can arrive from a DIFFERENT var table
+        // (a capturing lambda passed as a fn-value records its captures, which
+        // the outer call then marks): such a number is out of range here.  Skip
+        // it rather than index OOB — consistent with the `u16::MAX` guard.
+        if vnr == u16::MAX || vnr >= self.vars.count() {
             return;
         }
         if plus {

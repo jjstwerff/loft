@@ -3258,6 +3258,13 @@ impl Parser {
                         n,
                         Type::RefVar(Box::new(Type::Text(Deps::none()))),
                     );
+                    // @P387 zero-cost: mark the work-buffer HIDDEN so it rides the
+                    // same adaptive hidden-return-buffer dispatch struct/vector use
+                    // (`fn_call_ref` pushes one per hidden buf — 0 for a fn with no
+                    // promotable local).  This replaces the static `cref_work_buf`
+                    // injection and keeps the buffer out of the fn-ref TYPE without
+                    // the deps-based exclusion that wrongly dropped returned params.
+                    self.data.definitions[self.context as usize].attributes[a].hidden = true;
                     self.vars.become_argument(*v);
                     dep.push(a as u16);
                     self.vars
@@ -3304,6 +3311,14 @@ impl Parser {
             // pass; the second-pass `__closure` injection (if any)
             // happens later in parse_lambda so the trailing position is
             // preserved.
+            // Only LAMBDAS carry a `RefVar(Text)` work-buffer: their fn-ref
+            // dispatch (control.rs) is the ONE text path that hands the callee a
+            // caller-owned buffer.  Named/literal text fns return owned text (no
+            // buffer) — giving them one (the reverted @P387 option A) broke par
+            // workers (#273) and the markdown viewer, because not every call site
+            // injects the buffer.  Zero-cost @P387: the fn-ref dispatch no longer
+            // injects a text buffer (see `text_fn_ref_owned` below), so even a
+            // named text fn works as a fn-value without one.
             let is_lambda = self
                 .data
                 .def(self.context)
@@ -3321,6 +3336,9 @@ impl Parser {
                     "__work_ret",
                     work_tp.clone(),
                 );
+                // @P387 zero-cost: hidden like the text_return buffer above, so the
+                // runtime fn-ref dispatch pushes it adaptively (no static injection).
+                self.data.definitions[self.context as usize].attributes[a].hidden = true;
                 let v = self.create_var("__work_ret", &work_tp);
                 if v != u16::MAX {
                     self.vars.become_argument(v);

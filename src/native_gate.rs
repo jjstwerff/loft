@@ -159,6 +159,12 @@ pub enum BridgeAttrKind {
 #[must_use]
 pub fn classify_bridge_attr(a: &crate::data::Attribute, ret_text: bool) -> Option<BridgeAttrKind> {
     if a.hidden {
+        // @P387: a text-returning fn's work-buffer is now `hidden` too (so it rides
+        // the adaptive fn-ref dispatch like struct/vector return buffers).  It still
+        // bridges as `WorkText` — the bridge owns a local `String` — NOT a heap dest.
+        if crate::native_lib::is_text_work_buffer(&a.typedef) {
+            return ret_text.then_some(BridgeAttrKind::WorkText);
+        }
         // @PLAN59: every heap-kind hidden destination (Reference / Vector /
         // struct-Enum) is bridge-allocatable the same way — the wrapper's
         // HiddenDest arm resolves the store type via `hidden_dest_type_id`,

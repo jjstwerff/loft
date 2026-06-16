@@ -453,6 +453,37 @@ impl State {
             "fn_call_ref: d_nr={d_nr} out of range (fn_positions.len={})",
             self.fn_positions.len()
         );
+        // @P387 zero-cost: the parser injects exactly ONE text work-buffer for a
+        // text-returning fn-ref call (it can't know the runtime target).  A callee
+        // with no text-buffer slot — a literal/forward body, or one that returns a
+        // parameter directly — would mis-read that spurious DbRef as its closure
+        // and crash.  Pop it so the frame matches the actual callee; a callee that
+        // DOES build into a buffer keeps it.  Interpreter-only — native delivers
+        // text owned, so it never threads this buffer.
+        let (fn_var, arg_size) = {
+            let mut fv = fn_var;
+            let mut asz = arg_size;
+            // The work-buffer occupies one STEPPED DbRef span (16B under 8-byte
+            // alignment, not the raw 12) — pop exactly that.
+            let buf_span = self.stack_step(size_ref()) as u16;
+            if !self.data_ptr.is_null() && asz >= buf_span {
+                // SAFETY: data_ptr is valid throughout execution (same pattern as
+                // the hidden-buffer loop below and the call-stack snapshot path).
+                let def = unsafe { &*self.data_ptr }.def(d_nr as u32);
+                let returns_text = matches!(def.returned(), crate::data::Type::Text(_));
+                let has_text_buf = def.attributes().iter().any(|a| {
+                    a.hidden
+                        && matches!(&a.typedef,
+                            crate::data::Type::RefVar(t) if matches!(**t, crate::data::Type::Text(_)))
+                });
+                if returns_text && !has_text_buf {
+                    self.stack_pos -= u32::from(buf_span);
+                    fv -= buf_span;
+                    asz -= buf_span;
+                }
+            }
+            (fv, asz)
+        };
         // PLAN51 V-c interp — when the callee was promoted by `ref_return`
         // (parser/control.rs:3175) it has hidden Reference / Vector /
         // struct-Enum attribute(s) appended to its signature, but the
