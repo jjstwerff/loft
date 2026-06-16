@@ -3291,30 +3291,18 @@ impl Parser {
                      (alias_d_nr={alias}) — only 1/2/4/8 are supported \
                      by the OpGet* family"
                 );
-                if s == 1 {
-                    // #334: see the OpSetByteNullable note — nullable byte
-                    // STRUCT FIELDS decode the reserved 256th code to null.
-                    // Vector elements (alias-less forced_size(1)) keep the
-                    // raw direct encoding — their stride/value contract is
-                    // the narrow-vector one, not the field-sentinel one.
-                    let byte_vec = alias == u32::MAX && spec.forced_size.is_some();
-                    let op = if nullable && !byte_vec {
-                        "OpGetByteNullable"
-                    } else {
-                        "OpGetByte"
-                    };
-                    self.cl(op, &[code, p, Value::Int(spec.min)])
-                } else if s == 2 && narrow_vec {
-                    // narrow vector element, direct encoding.
-                    self.cl("OpGetShortRaw", &[code, p, Value::Int(spec.min)])
-                } else if s == 2 {
-                    // Struct field with u16/i16 alias OR bounds-heuristic
-                    // landing at 2 bytes: legacy `Parts::Short` `+1` encoding.
-                    self.cl("OpGetShort", &[code, p, Value::Int(spec.min)])
-                } else if s == 4 {
-                    self.cl("OpGetInt4", &[code, p])
+                // H4-medium: the op KIND comes from the ONE width→op home
+                // (`NarrowIntKind::of`), so this READ op and the matching WRITE
+                // op in `set_field_check` cannot drift.  A nullable byte STRUCT
+                // FIELD decodes the reserved 256th code to null (`ByteNullable`);
+                // a narrow-vector element keeps the raw direct encoding (its
+                // stride/value contract is the narrow-vector one, not the
+                // field-sentinel one) — `narrow_vec` selects that.
+                let kind = crate::data::NarrowIntKind::of(s, nullable, narrow_vec);
+                if kind.takes_min() {
+                    self.cl(kind.get_op(), &[code, p, Value::Int(spec.min)])
                 } else {
-                    self.cl("OpGetInt", &[code, p])
+                    self.cl(kind.get_op(), &[code, p])
                 }
             }
             Type::Enum(_, false, _) => self.cl("OpGetEnum", &[code, p]),
@@ -3774,25 +3762,18 @@ impl Parser {
                         self.data.def(d_nr).attributes()[f_nr].name.clone()
                     },
                 );
-                if s == 1 {
-                    // #334: a NULLABLE byte field reserves the 256th code as
-                    // the null sentinel (255 distinct values) — the Nullable
-                    // op pair translates integer null ↔ the sentinel.
-                    // `not null` fields keep the full range via the raw op.
-                    let op = if f_nr != usize::MAX && self.data.attr_nullable(d_nr, f_nr) {
-                        "OpSetByteNullable"
-                    } else {
-                        "OpSetByte"
-                    };
-                    self.cl(op, &[ref_code, pos_val, m, val_code])
-                } else if s == 2 && narrow_vec {
-                    self.cl("OpSetShortRaw", &[ref_code, pos_val, m, val_code])
-                } else if s == 2 {
-                    self.cl("OpSetShort", &[ref_code, pos_val, m, val_code])
-                } else if s == 4 {
-                    self.cl("OpSetInt4", &[ref_code, pos_val, val_code])
+                // H4-medium: same width→op home (`NarrowIntKind::of`) as the
+                // READ in `get_val`, so the write op matches the read op for the
+                // field.  A NULLABLE byte STRUCT FIELD reserves the 256th code as
+                // the null sentinel (the Nullable op pair translates null ↔ the
+                // sentinel); `not null` fields and narrow-vector elements keep the
+                // raw op.
+                let nullable = f_nr != usize::MAX && self.data.attr_nullable(d_nr, f_nr);
+                let kind = crate::data::NarrowIntKind::of(s, nullable, narrow_vec);
+                if kind.takes_min() {
+                    self.cl(kind.set_op(), &[ref_code, pos_val, m, val_code])
                 } else {
-                    self.cl("OpSetInt", &[ref_code, pos_val, val_code])
+                    self.cl(kind.set_op(), &[ref_code, pos_val, val_code])
                 }
             }
             Type::Vector(ref content, _)

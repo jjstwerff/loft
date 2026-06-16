@@ -263,6 +263,87 @@ impl IntegerSpec {
     }
 }
 
+/// The narrow-integer storage op KIND a field of a resolved storage width uses —
+/// the ONE home for the width→op decision (H4-medium).  Both the READ (`get_val`
+/// → `OpGet*`) and the WRITE (`set_field_check` → `OpSet*`) emitters derive their
+/// op from `NarrowIntKind::of`, so a field's read op and write op can't drift to
+/// mismatched widths/encodings — the H6-class hazard one level up (a `Byte` write
+/// decoded under a `Short` read).  Width itself comes from the single
+/// `IntegerSpec::range_to_width`/`byte_width` home; this maps that width (+ the
+/// nullable / narrow-vector context) to the matched `OpGet*`/`OpSet*` pair.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum NarrowIntKind {
+    /// 1-byte raw — `not null`, or a narrow-vector element.
+    Byte,
+    /// 1-byte with the reserved 255 null sentinel — a nullable struct field.
+    ByteNullable,
+    /// 2-byte direct encoding — a narrow-vector element (raw, no `+1`).
+    ShortRaw,
+    /// 2-byte `+1` sentinel encoding — a struct field.
+    Short,
+    /// 4-byte raw.
+    Int4,
+    /// 8-byte raw — the wide default.
+    Int,
+}
+
+impl NarrowIntKind {
+    /// Map a resolved storage `width` (1/2/4/8) to its op kind.  `nullable` = the
+    /// field reserves a null sentinel (a nullable struct field — NOT a
+    /// narrow-vector element); `narrow_vec` = a direct-encoded narrow-vector
+    /// element (raw, no `+1`/sentinel translation).
+    #[must_use]
+    pub fn of(width: u8, nullable: bool, narrow_vec: bool) -> Self {
+        match width {
+            1 if nullable && !narrow_vec => NarrowIntKind::ByteNullable,
+            1 => NarrowIntKind::Byte,
+            2 if narrow_vec => NarrowIntKind::ShortRaw,
+            2 => NarrowIntKind::Short,
+            4 => NarrowIntKind::Int4,
+            _ => NarrowIntKind::Int,
+        }
+    }
+
+    /// The `OpGet*` op name for this kind.
+    #[must_use]
+    pub fn get_op(self) -> &'static str {
+        match self {
+            NarrowIntKind::Byte => "OpGetByte",
+            NarrowIntKind::ByteNullable => "OpGetByteNullable",
+            NarrowIntKind::ShortRaw => "OpGetShortRaw",
+            NarrowIntKind::Short => "OpGetShort",
+            NarrowIntKind::Int4 => "OpGetInt4",
+            NarrowIntKind::Int => "OpGetInt",
+        }
+    }
+
+    /// The `OpSet*` op name for this kind — the matched write twin of [`Self::get_op`].
+    #[must_use]
+    pub fn set_op(self) -> &'static str {
+        match self {
+            NarrowIntKind::Byte => "OpSetByte",
+            NarrowIntKind::ByteNullable => "OpSetByteNullable",
+            NarrowIntKind::ShortRaw => "OpSetShortRaw",
+            NarrowIntKind::Short => "OpSetShort",
+            NarrowIntKind::Int4 => "OpSetInt4",
+            NarrowIntKind::Int => "OpSetInt",
+        }
+    }
+
+    /// True when the 1/2-byte ops take a trailing `min` arg; the 4/8-byte ops
+    /// (`Int4`/`Int`) do not.
+    #[must_use]
+    pub fn takes_min(self) -> bool {
+        matches!(
+            self,
+            NarrowIntKind::Byte
+                | NarrowIntKind::ByteNullable
+                | NarrowIntKind::ShortRaw
+                | NarrowIntKind::Short
+        )
+    }
+}
+
 impl Debug for IntegerSpec {
     /// Matches the `Integer(min, max, not_null)` tuple shape so the
     /// `Display for Type` fallback (`format!("{self:?}").to_lowercase()`)
