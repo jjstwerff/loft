@@ -1384,6 +1384,37 @@ impl Parser {
             if self.data.def(*e).name.starts_with("__nullable<"))
         {
             in_t.clone()
+        } else if in_t.is_unknown()
+            && self.data.source != crate::data::STD_SOURCE
+            && std::env::var("LOFT_E2_SYNTH").is_ok()
+        {
+            // @PLN25 — INFERRED comprehension (no element annotation): peek the
+            // body for a leading struct-literal `{ S{…} }` and default the
+            // element to `__nullable<S>`, mirroring the inferred-literal PEEK in
+            // `parse_vector`.  The body then builds `Some` (parse_block enum-hint)
+            // and `*in_t` becomes the enum below — so the result matches every
+            // DECLARED `vector<S>` (now `vector<__nullable<S>>`).  Without it an
+            // inferred `v = [for … { S{…} }]` stayed dense `vector<S>`: `v[i] =
+            // null` was a silent no-op and passing `v` to a `vector<S>` parameter
+            // mismatched.  A PEEK only (reverted); a body whose first token is not
+            // a struct literal (multi-statement, scalar) stays dense.
+            let link = self.lexer.link();
+            let mut peeked = Type::Unknown(0);
+            self.lexer.has_token("{");
+            if let Some(name) = self.lexer.has_identifier()
+                && self.lexer.peek_token("{")
+            {
+                let d = self.data.def_nr(&name);
+                if d != u32::MAX
+                    && self.data.def_type(d) == DefType::Struct
+                    && self.data.def(d).synthetic.is_none()
+                {
+                    let syn = self.data.nullable_enum_for(&mut self.lexer, d);
+                    peeked = Type::Enum(syn, true, Deps::none());
+                }
+            }
+            self.lexer.revert(link);
+            peeked
         } else {
             Type::Unknown(0)
         };
