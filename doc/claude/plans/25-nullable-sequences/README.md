@@ -10,50 +10,54 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**P1 (Foundation) + P2 (Surface) + the P3 slice fix (loft#384) SHIPPED and verified on
-both backends; the P3 field-default arm is the next concrete work.** A `vector<T>` can
-now be null (absent), distinct from empty `[]`: the runtime is null-safe (P1), `v ==
-null` / `v != null` / `return null` work (P2), and a slice resolves negative bounds
-from the end and clamps into range so it never runs off an edge (P3, loft#384 — finding
-8). The reverse-slice ordering bug surfaced during that work was fixed in the same
-session (finding 11). **Element-level null for simple-typed vectors** (the real core of
-"nullable sequences") is now fixed too: a `vector<integer|boolean|float|text>` element
-can be the inner typed null, iteration no longer breaks at a null element (length-based
-termination), and `float == null` is detected via an is-nan check (finding 12). What
-remains: **reference** vector elements (`vr[i] = null` — interp no-op + native codegen
-crash; not "simple-typed"), the field-default arm (finding 9, declined-pending-decision —
-empty default is correct/ergonomic), then hardening (P4).
+**Core SHIPPED + default-on.  E2 (embedded-record null) is GATED but functionally
+near-complete; what remains is the gate flip (default-on) + a few edges.**
 
-Promoted from the design discussion on loft#384 (negative-slice silent-empty / wrap-around
-garbage) and loft#387 (text fn-ref buffer family). The invariant was validated against a
-boundary matrix and three subsystem maps; the representation decision is pinned. **This
-plan intersects the H6 stability hotspot** — it is the vector-axis reconciliation of the
-scattered null-sentinel matrix, not adjacent to it.
+*Shipped, default-on, verified both backends:* a `vector<T>` can be null (absent),
+distinct from empty `[]` — runtime null-safe (P1); `v == null` / `!= null` / `return null`
+(P2); slice resolves negative bounds from-end and clamps so it never runs off an edge,
+with reverse-slice fixed (P3, loft#384); **simple-typed element null** (int/bool/float/text
+— typed inner null, length-based iteration past a null, `float == null` via is-nan);
+**E1** nullable enum VARIABLE null.  Plus a pre-existing `main` crash fixed ungated: the
+`OpCopyRecord` null-source guard (`vec[i] = <runtime-null>`), with a `tests/scripts`
+regression.
+
+*E2 — embedded-record null (struct stored INLINE in a vector element / struct field, via a
+synthesised `__nullable<S>` enum), gated `LOFT_E2_SYNTH`, off by default → suite
+byte-identical.*  Of the 24-case gap matrix gate-on, **23 pass on BOTH backends.**  Done:
+struct fields + the inline `== null` discriminant test; `vec[i] = null` (discriminant-0
+store) and `vec[i] = <expression source>` (present/null convert); `??` coalesce on an
+inline-null element; `v += [null]`; the **`not null` dense ELEMENT opt-out (E3)** — the
+cost escape hatch; the rewrite **unified to ONE chokepoint** (vector-type resolution, so
+local / param / return / field / nested all agree); and **all four construction-propagation
+forms** — nested `vector<vector<S>>`, inferred `v = [S{…}]`, return bodies, comprehensions.
+
+> **Branch:** `2026-07-mac` (rebased onto `main` + #393; all commits pushed).
 
 ## RESUME HERE (next action)
 
-**Shipped + green on `2026-07-mac` (all pushed):** slice from-end+clamp (loft#384, findings
-8/11) + reverse-slice; simple-typed vector ELEMENT null (finding 12 — int/bool/float/text);
-**E1** = nullable enum VARIABLE null on both backends. loft#384's commit carries `Fixes #384`
-(closes on merge to `main`; `fixed-pending-merge` until then).
+**The gate (`LOFT_E2_SYNTH`) is the marker that E2 is not yet finished** — "finished" means
+default-on (gate removed), per the project standard.  The remaining work, in finishing order:
 
-**Next: E2a.3 — construction coercion** (the load-bearing transparency glue). **E2a.1
-(synthesis helper) + E2a.2 (field-type rewrite hook) are DONE + verified**, gated behind
-`LOFT_E2_SYNTH` (default-off → suite byte-identical), and **Probe 1 passes** (the synthetic
-`__nullable<Row>` is byte-identical to a hand-written enum). **E2a.3 (literal construct) + E2a.4 (`==null` + default-init) + the null-SOURCE convert are
-DONE on BOTH backends** (gated): `Box{item:Row{…}}` and `Box{item: maybe(true/false)}` both
-round-trip — present reads `id`/`tag` + `==null` false, null source `==null` true (the original
-`allocation.rs:560` case). `null = discriminant 0`, `Row{…}`/present-source → the `Some`
-variant, `== null` tests `disc == 0`. **Remaining before the gate comes off:** **vector
-elements (E2a.5)** (`vector<Row>` element null/iterate via the same synthetic enum), then
-graduate the probes to `tests/scripts/` and delete the gate (the green-without-flag
-vertical-slice commit). Detail + hooks in
-[embedded-record-null.md § RESUME POINT](embedded-record-null.md#resume-point--start-e2a-here-standalone-read-this-section-cold). It is **fully specified and staged** in
-[embedded-record-null.md § RESUME POINT](embedded-record-null.md#resume-point--start-e2a-here-standalone-read-this-section-cold)
-— read that section cold; it has the Step-0 result, the `nullable_enum_for` recipe, the
-transparency-glue crux, the entry points, and why the first green commit must be a vertical
-slice (synth+wire+construct+access for one field), not E2a.1 alone. The field-default arm
-(finding 9) is subsumed by E2 (a nullable field defaults to the `Null` variant).
+1. **`match v[i] { null => … }`** — the ONE failing gap-matrix probe (Sev 4 parse): a `null`
+   pattern arm on a nullable element isn't recognised. *(M)*
+2. **The leak (Sev 5)** — confirm or dismiss: nulling a present heap-payload element does not
+   free the old payload; the store-leak check did NOT flag it, so it may be intra-store or
+   none.  Run a targeted heap-accounting probe BEFORE treating it as real. *(S)*
+3. **Generics** — `vector<T>` (generic element); `__nullable<T>` can't be synthesised until
+   `T` is concrete.  Decide: instantiate-time rewrite, or exclude generics. *(M, design)*
+4. **Inferred comprehension** `v = [for … { S{…} }]` (no annotation) — edge; the declared
+   form is done. *(S)*
+5. **GATE REMOVAL + stdlib/libs fallout** — flip default-on, lift the non-stdlib restriction
+   (`source == STD_SOURCE` guards in `typedef.rs` + `parser/vectors.rs`); the stdlib's ~17
+   and `lib/`'s ~8 `vector<Struct>` usages must all work rewritten.  De-risk first by flipping
+   the gate on for the stdlib in a throwaway probe to surface the fallout list. *(L — the real
+   remaining chunk; integration risk, not unknowns.)*  Then graduate the gated probes to
+   `tests/scripts/25-nullable-sequences.loft` (runs both backends without the flag) and delete
+   the gate + the env checks.
+
+Full gate-on behaviour matrix, the closed-vs-open catalogue, and per-site mechanics:
+[embedded-record-null.md](embedded-record-null.md) (§ E2 — Known gaps; § RESUME POINT).
 
 ## Goal
 

@@ -338,29 +338,25 @@ artefact).  Unless a row says otherwise it is **gated** — flag off ⇒ byte-id
   (the pre-null value) — no crash, no sentinel.  Arguably UB (reading a null element) but it silently
   hands back the old value rather than raising.
 
-### Sev 3 — TYPE-SYSTEM gaps (one root: rewritten vs un-rewritten `vector<Row>` collide)
-Only annotated locals, params, and struct fields are rewritten to `vector<__nullable<Row>>`.  Every
-OTHER `vector<Row>` site stays un-rewritten, so the two representations meet and clash:
-- **Inferred local** `vi = [Row{…}]` (no annotation): not rewritten → `vi[i]=null` no-op + store-leak
-  warning (interp), `E0308` (native). (`01`)
-- **Return type** `fn f() -> vector<Row>`: not rewritten → `v: vector<Row> = f()` errors
-  `cannot change type vector<__nullable<Row>> → vector<Row>`. (`02`)  **Spiked 2026-06-16 and
-  reverted:** hooking `e2_nullable_vec_local` at the return-type `parse_type_full` *does* rewrite the
-  declared return type, but then the BODY's tail literal `[Row{…}]` still builds plain `vector<Row>`
-  and `convert(... , vector<__nullable<Row>>)` fails at `control.rs:650` (`on return from block`).
-  The body would have to be CONSTRUCTED against the rewritten return type — `parse_block` threading
-  `result` into the tail expression — a behaviour change to a very central fn.  So returns are NOT a
-  clean hook; they are part of the construction-propagation substrate below.
-- **Comprehension** `[for i in … { Row{…} }]`: element inference yields un-rewritten `vector<Row>` →
-  same type-change error when bound to a rewritten local. (`04`)
-- **Nested** `vector<vector<Row>>`: the INNER element is not rewritten → `vv[0][0]=null` no-op + leak
-  (interp), `E0308` (native). (`09`)
-- *Root + routing:* the rewrite is keyed to specific declared-type PARSE SITES (local, param), not a
-  single representation decision, AND the body/tail construction of a rewritten type must adopt the
-  rewritten element (the return spike proved this).  Fixing the class means deciding the
-  representation ONCE where the element type is resolved AND propagating it into construction (so
-  inferred / return / comprehension / nested all agree) — the substrate question deferred from
-  E2a.5b.  Until then, a rewritten `vector<Row>` cannot interoperate with any un-rewritten one.
+### Sev 3 — TYPE-SYSTEM / construction-propagation [ALL FOUR CLOSED 2026-06-16, both backends]
+*Root:* `vector<S>` and `vector<__nullable<S>>` are different layouts, so some sites rewriting and
+others not made the two representations collide.  **Fixed by two moves:**
+- **Unify the rewrite at ONE chokepoint** — the vector-type-resolution arm (`sub_type`,
+  definitions.rs).  Every DECLARED `vector<S>` (local / param / **return** / field / **nested**
+  inner) now resolves to `vector<__nullable<S>>` consistently; the per-site hooks are gone.  This
+  alone closed **nested** (`09` — the chokepoint fires on the inner `vector<S>`).
+- **Construction-propagation** — build `Some` wherever a literal lacks a declared element type:
+  - **Inferred** (`v = [S{…}]`) + **return body** (`{ [S{…}] }`) (`01`, `02`): in `parse_vector`,
+    when `var_tp` is Unknown, PEEK the first item; if it is a struct literal `S{…}`, default the
+    element to `__nullable<S>` (the items then build `Some`).  Peek-only, gated, fires solely for an
+    inferred struct-literal vector — `[1.0]`/`[1,2]`, index exprs, declared + `not null` vectors are
+    untouched.  *(A first attempt threaded the result via `read_target_type` in parse_block — reverted:
+    un-gated + broadly read, it mis-typed a `vector<single>`-returning fn's inner literals/indices.)*
+  - **Comprehension** (`[for … { S{…} }]`) (`04`): `parse_vector_for` parsed the body with `Unknown`;
+    now passes the declared `__nullable<S>` `in_t` as the body's expected type so the `S{…}` tail
+    builds `Some` via parse_block's enum-hint.  Non-enum comprehensions keep `Unknown`.
+- *Still open (edge):* **inferred comprehension** `v = [for … { S{…} }]` with no annotation (the
+  declared form is done).
 
 ### Sev 4 — PARSE gaps
 - **`match v[i] { null => … }`** does not parse (`Expect token }`). (`14`)  A `null` pattern arm on a
@@ -371,8 +367,11 @@ OTHER `vector<Row>` site stays un-rewritten, so the two representations meet and
   zero-inits the element to discriminant 0 = the Null variant) instead of the convert/diagnostic.
   Verified both backends — `v += [null]` and a mixed literal `[Row{…}, null, Row{…}]` (`07b`); normal
   appends + gate-off unaffected.
-- **`vector<Row not null>`** rejected: `Expect token >`. (`11`)  The `not null` element opt-out
-  (E2a.6 / E3) isn't parsed yet.
+- **[FIXED 2026-06-16 — E3] `vector<Row not null>`** was rejected: `Expect token >`. (`11`)  The
+  `not null` after a NAMED element is now consumed at the vector-type-resolution arm and the element
+  SKIPS synthesis — a dense inline struct (no discriminant), the cost escape hatch.  Verified both
+  backends: a struct with both a dense `vector<Row not null>` and a nullable `vector<Row>` field
+  coexist.  **The ONE remaining open gap-matrix probe is `match` above.**
 
 ### Sev 5 — MEMORY (suspected, UNCONFIRMED)
 - **Free-on-null leak — not reproduced.**  Nulling a present heap-payload element (`OpSetEnum`
@@ -381,18 +380,25 @@ OTHER `vector<Row>` site stays un-rewritten, so the two representations meet and
   or there is none.  **Correction:** the E2a.5 commit/§ overclaimed this as a confirmed leak; it needs
   a targeted heap-accounting probe before being treated as real.
 
-### Cross-cutting
-- **Whole feature gated** behind `LOFT_E2_SYNTH` + a non-stdlib restriction.  E2-close step: remove
-  the gate, graduate the gated probes to `tests/scripts/25-nullable-sequences.loft`, confirm green
-  WITHOUT the flag.
+### Cross-cutting — the remaining work to FINISH (default-on)
+The feature is gated `LOFT_E2_SYNTH` + a non-stdlib restriction (`source == STD_SOURCE` guards in
+`typedef.rs` + `parser/vectors.rs`).  Per the project standard, **off-by-default ≠ finished** — the
+gate is the marker.  Remaining, in finishing order: (1) **`match v[i] { null => }`** parse (the ONE
+open probe); (2) **the leak** — confirm/dismiss via a heap-accounting probe; (3) **generics**
+`vector<T>` — `__nullable<T>` needs `T` concrete (instantiate-time or exclude); (4) **inferred
+comprehension** edge; (5) **GATE REMOVAL + stdlib/libs fallout** — flip default-on, lift the
+non-stdlib restriction (~17 stdlib + ~8 lib `vector<Struct>` must work rewritten; de-risk by flipping
+the gate on for the stdlib in a throwaway probe first), graduate the gated probes to
+`tests/scripts/25-nullable-sequences.loft`, delete the gate, confirm green WITHOUT the flag.
 
-### What DOES work (gate-on, both backends — the contrast)
-Struct field / annotated local / param `vector<Row>`: literal construct, element `.field` read,
-`[i]=null` (LITERAL null), `==null` / `!=null`, reassign (literal), iterate, **slice preserves
-null-ness** (`05`), **whole-vector copy preserves null-ness** (`06`), empty-literal + append (`03`);
-embedded NON-vector field `b.item` null / reassign / `==null` (`12`).  The common thread of the gaps:
-everything driven by a **runtime/expression source** (not a literal) or an **un-rewritten peer type**
-is unhandled; everything literal-and-rewritten works.
+### What works now (gate-on, both backends)
+**23 of the 24 gap-matrix probes pass** (only `match` open).  Struct field / local / param / **return**
+/ **inferred** / **nested** / **comprehension** `vector<Row>`: construct, `.field` read, `[i]=null`
+(literal AND runtime source), `==null`/`!=null`, reassign, iterate, slice + whole-vector copy preserve
+null-ness, `v += [null]`, `?? default`; the **`not null` dense opt-out**; embedded non-vector field
+`b.item`.  The earlier "only literal-and-rewritten works" limitation is gone — the chokepoint
+unification + construction-propagation + the runtime-source convert closed the runtime/expression and
+un-rewritten-peer families.
 
 ## RESUME POINT — start E2a here (standalone; read this section cold)
 
