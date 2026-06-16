@@ -606,6 +606,16 @@ impl Parser {
     /// attribute count changed between passes is a silent contract break.  Post the
     /// @PLAN59 arity cascade (signatures freeze at declaration) this is an
     /// INVARIANT — a firing assert is a real cross-pass bug, not noise.
+    ///
+    /// This attribute-count check is the COMPLETE H5 validation: the H5 spec's other
+    /// named residual — work-ref (`__ref_N`) counter equality per fn — was dissolved
+    /// by H1 (@PLAN59), exactly as the spec's item 3 ("re-evaluate after H1") foresaw.
+    /// `work_refs()` now fires zero times across the whole debug corpus, and the
+    /// counter's value in a stored table is unconditionally reset to 0 by
+    /// `Function::append` at store time, so a work-ref-counter assert here would be
+    /// permanently vacuous.  The one failure mode it could ever have caught — a
+    /// cross-pass `__ref_N` name shift making `ref_return` add a spurious attr — IS
+    /// caught here, because that spurious attr is itself an attribute-count divergence.
     #[cfg(debug_assertions)]
     fn assert_pass2_def_attr_stable(&self, pass1_attr_counts: &[usize]) {
         debug_assert_eq!(

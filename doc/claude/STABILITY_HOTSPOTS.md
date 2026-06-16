@@ -248,18 +248,32 @@ lambda naming, attr re-finding by name all depend on it, and the parser
 is not re-entrant beyond two passes (the #339 third-pass experiment
 segfaulted on half-migrated variable tables).
 
-**Mitigation (S now, mostly dissolved by H1)**
+**Mitigation (S now, mostly dissolved by H1) — DONE 2026-06-16**
 
-1. (S) Document the contract at the `first_pass` flag declaration
+1. (S) ✅ Document the contract at the `first_pass` flag declaration
    (`parser/mod.rs`) — what must be deterministic, what is re-found by
-   name, why a third pass is unsound.  Done as part of this document's
-   landing if nowhere better.
-2. (S) `debug_assert` the contract where it's cheap: attribute COUNT per
-   def equal at end of both passes (post-H1 this becomes an invariant
-   rather than an aspiration); work-ref counter equality per fn.
-3. H1 removes the only known source of cross-pass signature divergence;
-   after it lands, re-evaluate whether anything still relies on name
-   stability beyond lambdas.
+   name, why a third pass is unsound.
+2. (S) ✅ `debug_assert` the contract where it's cheap: attribute COUNT per
+   def equal at end of both passes — landed 961e6c27 (`assert_pass2_def_attr_stable`),
+   silent across the 270-script debug corpus.  Post-H1 this is an invariant,
+   not an aspiration.
+   The other named residual — **work-ref (`__ref_N`) counter equality per fn** —
+   was NOT added, by design, after item 3's re-evaluation below.
+3. ✅ **Re-evaluation done (item 3 fired post-H1).** H1 (@PLAN59) removed the
+   only known source of cross-pass signature divergence; probing the question
+   "does anything still rely on name stability beyond lambdas?" settled it:
+   - `work_refs()` (the `__ref_N` incrementer) fires **zero** times across the
+     whole debug corpus, both passes — H1's signature-time `__retbuf` dissolved
+     the per-call-site work-ref temporaries that used to need a pass-stable name.
+   - A stored-table work-ref-counter assert is **permanently vacuous** anyway:
+     `Function::append` unconditionally resets the stored `work_ref` to 0 at
+     store time, so both passes read 0 regardless of corpus.
+   - The one failure mode such an assert could ever have caught — a cross-pass
+     `__ref_N` name shift making `ref_return` add a spurious attr — is **already
+     caught by the attr-count assert** (the spurious attr IS a count divergence).
+   So the attr-count assert is the complete H5 validation; **lambda naming**
+   remains the only live name-stability consumer (and is exercised directly by
+   the corpus, unlike `__ref_N`).
 
 ---
 
