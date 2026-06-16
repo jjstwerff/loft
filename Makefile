@@ -164,6 +164,12 @@ install:
 		exit 1; \
 	}
 	$(AS_USER) $(MAKE) --no-print-directory install-artifacts
+	# #398 follow-up — also refresh the source-tree native cdylibs (lib/*/native,
+	# tests/lib/*/native) against the just-built loft, so `make rebuild-native-cdylibs`
+	# is no longer a required SEPARATE step after install (stale cdylibs left from an
+	# older loft would mismatch its ABI at native link).  Runs as the user (no sudo);
+	# the loft + wasm rebuilds it shares with install-artifacts are cargo no-ops here.
+	$(AS_USER) $(MAKE) --no-print-directory rebuild-native-cdylibs
 	sudo install -d /usr/local/share/loft/deps
 	sudo install -d /usr/local/share/loft/wasm32-wasip2/deps
 	# Prune first: `cp -r` MERGES, so a stdlib file removed/renamed upstream would
