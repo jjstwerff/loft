@@ -10,8 +10,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**Core SHIPPED + default-on.  E2 (embedded-record null) is GATED but functionally
-near-complete; what remains is the gate flip (default-on) + a few edges.**
+**Core SHIPPED + default-on.  E2 (embedded-record null) is GATED.  The CONCEPTUAL core works
+gate-on — construct/read/field/method/format/null/OOB/plain-for/par(no-extra-arg), and the deep
+06-structs synthesis desync is fixed (commits 996f566d, 7c03a1c0).  But default-on still has a
+BROAD, HETEROGENEOUS tail (~24 failures: struct-vector append, inline-anon-struct literals,
+extra-arg par dispatcher, native codegen, wasm, cross-lib, graphics consumers) — each its own
+seam, multi-session to close, NOT a single shared root.  See item 4 for the precise inventory.**
 
 *Shipped, default-on, verified both backends:* a `vector<T>` can be null (absent),
 distinct from empty `[]` — runtime null-safe (P1); `v == null` / `!= null` / `return null`
@@ -107,30 +111,51 @@ default-on (gate removed), per the project standard.  The remaining work, in fin
    - **transparent format** — `{v[i]}` rendered `Some {…}`; the runtime formatter now renders a
      synthetic `__nullable<S>` as the dense `S` (present) or `null` (absent).
 
-   **THE DEEPER BLOCKER (06-structs root, traced 2026-06-16): synth-enum known_type is STALE vs
-   the codegen database.**  `[Area{…}; 4]` in a complex multi-type program builds with element
-   size/stride **8** (`OpPreAllocVector(map,2,8)`, `OpGetVectorNullable(map,8,…)`), corrupting
-   `map[0]`.  Traced: `in_t = Enum(608=__nullable<Area>)` ✓, `def(608).known_type() = 64` ✓, but
-   `database.size(64) = 8` — index 64 holds `i_parse_errors` by codegen time.  `register_enum_db`
-   assigns the synth enum's `known_type` from `database.enumerate()` (next-free index) during one
-   `fill_all`, but `data.reset()` between passes preserves `Stores` while the index that synth
-   enum landed on is occupied by a different type in the final codegen database — a TWO-PASS /
-   database-index consistency bug (the class #397's H5 attr-count assert guards).  Works in
-   isolation; breaks once enough other types exist.  This is NOT another access seam — it's a
-   **synthesis-stability** fix (where/how `__nullable<S>` registers so its db index is consistent
-   across passes), with regression risk against the original "id × 512" registration-timing fix.
-   Likely the shared root of a CLUSTER of the remaining failures (any inferred nullable vector in
-   a multi-type program).
+   **THE 06-structs ROOT — SOLVED 2026-06-16 (commit 996f566d).**  The earlier
+   "stale `known_type` / db-index" theory was WRONG (the layout was self-consistent; `Area` is
+   genuinely `u16+u8+u8+u8` = 8 B, so stride 8 is correct).  The real root: `nullable_enum_for`
+   copied only each field's **type** into the `Some` variant, dropping **`alias_d_nr`**.  Codegen
+   distinguishes a struct field from a bare narrow-vector element by `alias_d_nr != MAX`; the
+   alias-less synth field looked like a narrow-vector element, so it stored RAW (`OpSetShortRaw`,
+   no `+1`) while the DB typed it nullable — reads/format applied the `-1` decode to a raw value
+   (`u16 1234 → 1233`; `0 → null sentinel`).  **Fix:** carry `alias_d_nr`/`nullable`/`mutable`/
+   `init` so the `Some` payload is byte-identical to a dense `S` and uses the same `OpSet*`/`OpGet*`
+   encoding.  `tests/scripts/06-structs.loft` passes gate-on.
+   - **(also fixed, 996f566d) OOB disc read** — `OpGetEnum` lacked the `rec == 0` null-record
+     guard that `OpGetInt`/`OpGetCharacter` have, so an out-of-bounds `vector<__nullable<S>>`
+     element (`get_vector` returns `rec:0`) read a garbage disc byte and tested as PRESENT, not
+     absent — `!v[oob]` was false.  Fixed in the `#rust` annotation + regenerated `fill.rs`.
+   - **(fixed, 7c03a1c0) par() over a nullable vector** — the worker did not resolve in pass 1
+     (`parse_parallel_worker_method` built the method name from `__nullable<S>` instead of dense
+     `S`), so `fn_d_nr=MAX` → `build_parallel_for_ir` emitted `Null` not `Value::Parallel`, and the
+     block parser's `;`-exemption (keys on `Parallel`) fired a spurious "Expect token ;" on the
+     statement AFTER the loop.  Fix: resolve on the dense `S` in BOTH passes; the gap-3 wrapper is
+     now a shared `synth_nullable_par_wrapper` used by both worker forms that mirrors the worker's
+     params 1.. (the `ref_return` hidden out-param), so method / primitive-return / struct-return
+     par all work.  **Still open: par with USER EXTRA args** (`worker(a, extra)`) — the dispatcher's
+     extra-arg marshalling collides with the wrapper's mirrored params (stack underflow `8<12`);
+     blocks `threading` + `script_threading`.
 
-   Other residual: nested-vector struct return (p143), native-codegen edges (p171, p310),
-   cross-lib same-name struct (p379), moros/glb + wasm suites.
+   **REMAINING TAIL (default-on, ~24 failures) — heterogeneous, each its own E2 seam** (no shared
+   root; the matrix's "one class" applied only to the original scalar-unwrap gaps):
+   - **extra-arg par dispatcher** (threading, script_threading) — see above.
+   - **struct-vector append/mutation** (11-vectors: "struct [var] append value=4").
+   - **inline anonymous-struct vector literal** (12-collections: `[{t:"One",v:1}]` →
+     `Unknown field i_parse_errors.t`; element type mis-resolves to `i_parse_errors`).
+   - other wrap suites (dir, last, parser_debug, loft_suite, wasm_dir, libraries, library_suite).
+   - native-codegen edges (native_dir/scripts/library_suite, p171, p310).
+   - nested-vector struct return (p143), cross-lib same-name struct (p379), leak p150.
+   - graphics/engine/wasm consumers (kernel_port, moros_glb, moros_editor_html, wasm_library_suite).
+   - gap (4) `e = null` on a nullable LOCAL (rare).
+   *(`imaging_fixture_png_roundtrip` is #397's, not E2 — owned by another stream.)*
 
    **Re-gated** (`LOFT_E2_SYNTH` restored on the 3 rewrite sites) so the monthly release branch
-   stays green while this tail closes — all access-glue fixes above are **gate-inert** (only fire
-   for `__nullable<>` types, which exist only gate-on).  To finish default-on: close the long tail
-   (method-dispatch seam first — highest leverage), then lift `LOFT_E2_SYNTH` on the 3 sites
-   (keep the `STD_SOURCE` exclusion), graduate the gated probes to
-   `tests/scripts/25-nullable-sequences.loft`.
+   stays green while this tail closes — all fixes above are **gate-inert** (fire only for
+   `__nullable<>` types, which exist only gate-on; full `wrap`/`issues`/`leak` suites green gated).
+   To finish default-on: close the tail seam-by-seam, then lift `LOFT_E2_SYNTH` on the 3 sites
+   (keep the `STD_SOURCE` exclusion) and graduate the gated probes to
+   `tests/scripts/25-nullable-sequences.loft`.  Honest scope note: the tail is broad and
+   heterogeneous (native + wasm + dispatcher + cross-lib), i.e. multi-session, not a single root.
 
    **Not E2** (excluded by the matrix): par over a struct with a TEXT field is garbage on BOTH
    backends gate-off — a pre-existing text+par heap bug.
