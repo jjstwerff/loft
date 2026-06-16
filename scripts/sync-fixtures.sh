@@ -91,8 +91,17 @@ EOF
 #   is not yet in the published loft-ffi-build 0.2.0; the Cargo.toml's own
 #   comment carries the story).  The next loft-ffi-build publish lifts the
 #   patch — drop this line then.
+#
+# - imaging/tests/14-image.loft, imaging/tests/15-regression.loft — local
+#   path-anchoring fix: the upstream tag prefixes test data paths with `tests/`,
+#   which assumed a package-root cwd, but `loft test` anchors relative paths at
+#   the test file's own dir (source_dir), so the prefix is dropped to the bare
+#   name.  Re-syncing would clobber the fix.  Drop these lines when
+#   loft-libs-graphics ships an imaging tag carrying the corrected paths.
 LOCAL_PATCHES=$(cat <<'EOF'
 imaging/native/Cargo.toml
+imaging/tests/14-image.loft
+imaging/tests/15-regression.loft
 hex_world/tests/hex_world.loft
 hex_world/README.md
 hex_world/src/hex_world.loft

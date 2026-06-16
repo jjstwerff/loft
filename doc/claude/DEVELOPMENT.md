@@ -37,8 +37,11 @@ Rules:
 - Pushing commits is OK by default — unless there's an open PR on the branch
   that the push would disturb.  For a long-lived working branch with no open
   PR, push freely after each green-CI commit so the remote stays in sync.
-  When the branch has an open PR, do NOT push without an explicit user
-  instruction (force-pushes / rebases / unexpected commits disrupt review).
+  When the branch has an open PR, do NOT push without the user's explicit
+  consent (force-pushes / rebases / unexpected commits disrupt review) — the
+  one exception is a fix for a blocking failure (red CI, a broken build, a
+  failing required check), which you may push without asking, because it
+  unblocks the PR rather than disrupting review (it cannot merge while red).
   Check `gh pr list --head <branch>` before pushing if uncertain.
 - **Never create a branch unless the user explicitly says "create a branch".**
   Do not create branches as part of a workflow, sprint start, or task planning.
@@ -940,8 +943,10 @@ see [Validation Against CODE.md](#validation-against-codemd) for the exception p
 Pushing commits is OK by default once the local gate is clean (so the remote
 stays in sync without the user having to ask each time).  Opening a PR
 remains gated by an explicit user instruction.  When the branch already has
-an open PR, do NOT push without explicit ask — force-pushes / rebases /
-surprise commits disrupt review-in-progress.
+an open PR, do NOT push without the user's explicit consent — force-pushes /
+rebases / surprise commits disrupt review-in-progress.  The one exception is a
+fix for a blocking failure (red CI, a broken build, a failing required check):
+push it without asking, because it unblocks the PR rather than disrupting it.
 
 ```bash
 # OK by default after green local gate (no open PR):

@@ -1,0 +1,13 @@
+[package]
+name    = "loft-native-scalar"
+version = "0.1.0"
+edition = "2021"
+license = "LGPL-3.0-or-later"
+
+# cdylib (the C-ABI artifact `--native` links + the interpreter dlopens) + rlib
+# (the rlib-path fallback for platforms where the C-ABI path is off).  No
+# dependencies: a no-arg scalar return is plain C ABI, so neither loft-ffi nor a
+# build-script register list is needed — which is exactly what keeps this
+# fixture cheap to build in CI.
+[lib]
+crate-type = ["cdylib", "rlib"]

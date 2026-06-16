@@ -619,6 +619,26 @@ pub(crate) fn rlibs_in_dir(
     map
 }
 
+/// Whether the host-native backend links `#native` packages by C-ABI (their
+/// cdylib `.so`) instead of as Rust rlibs — see NATIVE.md § Resolution: separate
+/// the API id from the Rust part.  Both the codegen (`Output::native_cabi`) and
+/// the linker flags below read this, so they always agree on a given host.
+///
+/// @PLN26 phase 4 — the C-ABI path (import-library linking + DLL staged beside
+/// the binary on Windows, an RPATH'd `.so` elsewhere) is now the default on
+/// EVERY host.  Windows was the last holdout; its arm was verified green in the
+/// focused CI (`win-cdylib.yml` job `win-cdylib-cabi`, `LOFT_NATIVE_CABI=1`,
+/// `native_crate_package_links_and_runs_via_cabi` PASS on `windows-latest`)
+/// before this flip.  `LOFT_NATIVE_CABI=0` remains an escape hatch that forces
+/// the legacy rlib link on any host should the C-ABI path regress; `=1` is now a
+/// no-op (it already matches the default).
+#[must_use]
+pub(crate) fn native_cabi_enabled() -> bool {
+    // The C-ABI path is the default on every host; only `LOFT_NATIVE_CABI=0`
+    // opts back into the legacy rlib link (the escape hatch).
+    !matches!(std::env::var("LOFT_NATIVE_CABI").ok().as_deref(), Some("0"))
+}
+
 /// PKG.4/PKG.5: add `--extern` flags to a rustc command for native package rlibs.
 /// When `target` is `Some("wasm32-wasip2")`, looks for WASM rlibs in `prebuilt/wasm32-wasip2/`;
 /// otherwise looks for native rlibs in `native/target/release/`.
@@ -640,6 +660,89 @@ pub(crate) fn add_native_extern_flags(
     let loft_rlibs = loft_deps_dir.map(rlibs_in_dir).unwrap_or_default();
 
     for (crate_name, pkg_dir) in &data.native_packages {
+        // Host-native C-ABI link (NATIVE.md § Resolution: separate the API id
+        // from the Rust part).  Link the package's cdylib `.so` by C-ABI instead
+        // of its rlib via `--extern`: the `.so` seals the package's whole Rust
+        // crate graph (its own `loft_ffi` copy included), so no `-L dependency=`
+        // or per-crate pinning is needed and the shared-dep `StableCrateId`
+        // collision class is gone by construction.  Native target only — wasm
+        // cross-compiles the package to an rlib (the branch below).
+        if target.is_none() && native_cabi_enabled() {
+            // @PLN26 phase 0.4 — resolve the `.so` exactly as the interpreter does
+            // (`resolve_native_lib`): a host-triple prebuilt (ABI-gated on
+            // `loft_ffi_fingerprint`) wins over a source build, a missing declared
+            // system lib is terminal, else auto-build (freshness keyed on the
+            // loft-ffi ABI, so the `.so` survives loft rebuilds).  The shared
+            // resolver keeps native-compile and interpret on the SAME `.so` and
+            // adds the prebuilt + missing-syslib handling the hand-rolled path lacked.
+            // @PLN26 phase 0.4b — the cdylib is named after the `[library] native`
+            // stem, which can differ from the crate name; read it from the manifest
+            // (the SAME stem the interpreter resolves with) and fall back to the
+            // crate name only when absent.  This keeps native-compile and interpret
+            // on one `.so` even when `[lib] name` ≠ `crate_name`.
+            let stem = crate::manifest::read_manifest(&format!("{pkg_dir}/loft.toml"))
+                .and_then(|m| m.native)
+                .unwrap_or_else(|| crate_name.replace('-', "_"));
+            let Some(so) = crate::extensions::resolve_native_lib(pkg_dir, &stem) else {
+                // Unresolvable (missing system lib / build failed) — the resolver
+                // already printed an actionable message.  Skip; the link then fails
+                // loudly on the undefined symbol rather than silently mis-linking.
+                continue;
+            };
+            let so_path = std::path::PathBuf::from(&so);
+            if let Some(so_dir) = so_path.parent() {
+                // `-l dylib=<name>` derived from the RESOLVED file (strip the `lib`
+                // prefix + extension) so a prebuilt or non-`lib<stem>` cdylib links.
+                let libname = so_path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .map_or(stem.as_str(), |s| s.strip_prefix("lib").unwrap_or(s));
+                cmd.arg("-L").arg(format!("native={}", so_dir.display()));
+                cmd.arg("-l").arg(format!("dylib={libname}"));
+                if cfg!(windows) {
+                    // @PLN26 phase 4 — Windows links a DLL through its IMPORT
+                    // LIBRARY, and there is NO RPATH: the MSVC linker rejects
+                    // `-Wl,-rpath`, and the loader finds the DLL beside the `.exe`
+                    // / on `PATH` — so the DLL is staged beside the binary at run
+                    // time (`stage_native_dlls`), the Windows form of the
+                    // `$ORIGIN` rpath used below.
+                    //
+                    // Naming bridge: a Rust cdylib's import lib is `<stem>.dll.lib`,
+                    // but `-l dylib=<stem>` makes MSVC link.exe open `<stem>.lib`
+                    // (verified: `LNK1181: cannot open input file
+                    // 'loft_native_scalar.lib'`).  Copy `<stem>.dll.lib` →
+                    // `<stem>.lib` beside it so the `-l dylib=` above resolves —
+                    // both are import libs for the same DLL, identical content.
+                    let dll_lib = so_dir.join(format!("{libname}.dll.lib"));
+                    let plain_lib = so_dir.join(format!("{libname}.lib"));
+                    if dll_lib.exists() && !plain_lib.exists() {
+                        let _ = std::fs::copy(&dll_lib, &plain_lib);
+                    }
+                    // Disallow-the-unverifiable-loudly: if NEITHER import-lib name
+                    // is present the link would die on an opaque `LNK1181`, so name
+                    // it rather than mis-link.
+                    if !plain_lib.exists() && !dll_lib.exists() {
+                        eprintln!(
+                            "loft: native package `{crate_name}` cdylib at {} has no import \
+                             library (`{libname}.dll.lib` / `{libname}.lib`) — Windows links a \
+                             DLL through its import lib, not the DLL directly (@PLN26 phase 4).  \
+                             Rebuild the package's cdylib with a toolchain that emits one.",
+                            so_dir.display()
+                        );
+                    }
+                } else {
+                    // @PLN26 phase 0.1 — two RPATH entries: the build/prebuilt dir
+                    // (run-from-build-tree: tests, dev) AND `$ORIGIN` (an installed
+                    // binary that ships the `.so` beside it — `make install` copies
+                    // it next to the binary).  `$ORIGIN` is passed literally; the
+                    // dynamic loader expands it at run time.  Windows has no RPATH
+                    // (the arm above); it stages the DLL beside the binary instead.
+                    cmd.arg(format!("-Clink-arg=-Wl,-rpath,{}", so_dir.display()));
+                    cmd.arg("-Clink-arg=-Wl,-rpath,$ORIGIN");
+                }
+            }
+            continue;
+        }
         // Look for the compiled rlib in the package's native crate output.
         let rlib_name = format!("lib{}.rlib", crate_name.replace('-', "_"));
         // P244-windows fix #2 (2026-05-12): use single-segment joins,
@@ -703,6 +806,23 @@ pub(crate) fn add_native_extern_flags(
             let stem = crate_name.replace('-', "_");
             let _ = crate::extensions::auto_build_native(pkg_dir, &stem);
         }
+        // @PLN26 phase 3 — a wasm target (`target.is_some()`) can't auto-build the
+        // package rlib (no host cross-compile) and can't use the C-ABI `.so` path
+        // (wasm links statically).  A missing wasm rlib means the package has no
+        // wasm build at all, so the compile would die on a bare E0463 "can't find
+        // crate".  Per "disallow the unverifiable loudly", emit a clear signal
+        // instead.  (The StableCrateId collision the C-ABI path fixes is UNREALIZED
+        // for wasm: it needs two colliding wasm rlibs, and no native package
+        // compiles to wasm today — so wasm stays on the rlib path, see § Open work.)
+        if target.is_some() && !rlib_path.exists() {
+            eprintln!(
+                "loft: native package `{crate_name}` has no {} build (no prebuilt or \
+                 cross-built rlib) — compiling a program that uses native packages to wasm \
+                 is not supported yet (@PLN26 phase 3, loft-lang/plans#26).  Ship a prebuilt \
+                 rlib for the package, or run with --interpret.",
+                target.unwrap_or("wasm32-wasip2")
+            );
+        }
         if rlib_path.exists() {
             let extern_name = crate_name.replace('-', "_");
             cmd.arg("--extern")
@@ -741,6 +861,34 @@ pub(crate) fn add_native_extern_flags(
             if let Some(profile_dir) = rlib_path.parent() {
                 for nd in build_script_native_lib_dirs(profile_dir) {
                     cmd.arg("-L").arg(format!("native={}", nd.display()));
+                }
+            }
+        }
+    }
+}
+
+/// @PLN26 phase 4 — stage every native-package DLL beside a just-built Windows
+/// binary so it loads at run time.  Windows has no RPATH, so the loader finds a
+/// linked DLL beside the `.exe` / on `PATH`; copying it next to the binary is the
+/// Windows form of the `$ORIGIN` rpath the ELF link embeds (`add_native_extern_flags`).
+/// No-op off Windows and when the C-ABI path is disabled (the rlib path links the
+/// package statically, so there is nothing to stage).  Resolves the DLL with the
+/// same `resolve_native_lib` the link used, so run-time and link-time agree on the
+/// file.  Best-effort: a failed copy leaves the loader's normal search to find it.
+pub(crate) fn stage_native_dlls(exe_dir: &std::path::Path, data: &crate::data::Data) {
+    if !cfg!(windows) || !native_cabi_enabled() {
+        return;
+    }
+    for (crate_name, pkg_dir) in &data.native_packages {
+        let stem = crate::manifest::read_manifest(&format!("{pkg_dir}/loft.toml"))
+            .and_then(|m| m.native)
+            .unwrap_or_else(|| crate_name.replace('-', "_"));
+        if let Some(so) = crate::extensions::resolve_native_lib(pkg_dir, &stem) {
+            let so_path = std::path::PathBuf::from(&so);
+            if let Some(name) = so_path.file_name() {
+                let dest = exe_dir.join(name);
+                if dest != so_path {
+                    let _ = std::fs::copy(&so_path, &dest);
                 }
             }
         }

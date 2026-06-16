@@ -116,6 +116,40 @@ built. The cheap prototype is where the design gets **pinned**, not merely confi
 
 ---
 
+## Write the doc before the code — the failure-paths are where the invariant surfaces
+
+The design doc is **not** after-the-fact write-up. Writing it is the **generative act
+that surfaces the invariant and the requirements** — cheaply, before code commits you to
+an unstated one. Enumerating the **failure paths** (every way it breaks) and naming
+**what must hold across the boundary** (the requirements) is exactly where the
+load-bearing invariant becomes *nameable* (step 1 below). Code-first skips that
+enumeration: you silently adopt the **narrowest invariant you happened to see** and then
+discover the real one by **whack-a-mole** — each patch fixes one case and reveals the
+next the prose never listed. The doc is the cheapest place to find the right invariant;
+code is the most expensive place to discover it was the wrong one.
+
+Earned. A native-link `StableCrateId` collision was "fixed" by **build-identity keying**
+— rebuild the package so its shared deps *match* the consumer's — coded before the design
+was written down. It fixed `libloading` (a flags mismatch), then `log` collided (a
+*profile* mismatch), and the next would have been build-script reproducibility: a symptom
+chased one collision at a time. The load-bearing invariant — *keep the **API identity**
+(the C-ABI contract) separate from the **Rust part** (the package's private internals),
+so the latter never enters the consumer's link* — only became visible once the **failure
+paths were written down** and the two identities were named on the page. *Matching* is
+whack-a-mole; the doc made *separation* legible, and writing it first would have skipped
+the dead-end build entirely.
+
+So for a load-bearing design: **write the doc first** — the failure paths, the
+cross-boundary requirements, the candidate invariant — *then* code. Not a full spec; the
+minimum that forces you to enumerate how it breaks and what must hold. The enumeration is
+the instrument: the class you cannot see from the desk is legible the moment you are
+forced to list its members. (This sits *before* step 1 — it is how you reach a nameable
+invariant — and complements *the other half*: when you cannot state the invariant, plot a
+concrete instance of the answer *or* write the failure paths down; both make the
+construction legible.)
+
+---
+
 ## The protocol
 
 Run it when a design is **load-bearing** — an algorithm that will carry weight (a core

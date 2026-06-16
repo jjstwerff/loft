@@ -18,6 +18,36 @@ use std::collections::HashSet;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
+/// RAII process-cwd guard for the duration of one program's execution.
+///
+/// loft's `file()` resolves a relative path against `source_dir`
+/// (`Stores::resolve_path`), but a native crate's raw `std::fs` resolves against
+/// the process cwd — so the two diverge when cwd ≠ source_dir (e.g. `loft test`
+/// runs from the package root while a test file lives in `tests/`, breaking
+/// imaging's `load_png`/`save_png`).  `enter_source_dir` chdir's to `source_dir`
+/// for the run so native I/O anchors where loft's does; the guard restores the
+/// original cwd on drop, so the NEXT serially-run test file's parse/compile is
+/// unaffected.  Gated on `program_relative` so a `#cwd` program (which anchors
+/// loft I/O at the cwd) keeps native I/O at the cwd too.
+struct CwdGuard(Option<std::path::PathBuf>);
+impl Drop for CwdGuard {
+    fn drop(&mut self) {
+        if let Some(prev) = self.0.take() {
+            let _ = std::env::set_current_dir(prev);
+        }
+    }
+}
+fn enter_source_dir(source_dir: &str, program_relative: bool) -> CwdGuard {
+    if program_relative
+        && !source_dir.is_empty()
+        && let Ok(prev) = std::env::current_dir()
+        && std::env::set_current_dir(source_dir).is_ok()
+    {
+        return CwdGuard(Some(prev));
+    }
+    CwdGuard(None)
+}
+
 /// Run all zero-parameter functions in `.loft` files under `root_dir` as tests.
 /// Supports `@ARGS`, `@EXPECT_ERROR`, and `@EXPECT_FAIL` file annotations.
 /// Returns 0 if all pass, 1 if any fail.
@@ -803,6 +833,8 @@ pub(crate) fn run_tests(
                     let gen_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         let mut buf: Vec<u8> = Vec::new();
                         let mut out = generation::Output::new(&native_data, &native_db);
+                        // Host-native backend: C-ABI cdylib link (NATIVE.md § Resolution).
+                        out.native_cabi = native_utils::native_cabi_enabled();
                         out.output_native_reachable(&mut buf, start_def, end_def, &entry_defs)
                             .expect("native codegen write");
                         // output_native_reachable emits fn main() when n_main
@@ -951,6 +983,40 @@ pub(crate) fn run_tests(
                                 cmd.arg("--extern")
                                     .arg(format!("loft={}", ld.join("libloft.rlib").display()));
                                 cmd.arg("-L").arg(native_utils::deps_dir_of(ld));
+                                // Propagate `-L native=` for every build-script
+                                // `OUT_DIR` that bundles a native lib — the G2
+                                // mitigation main.rs already has on the standalone
+                                // path.  windows-targets ships `windows.0.XX.0.lib`
+                                // inside its OUT_DIR; without these the Windows link
+                                // fails `LNK1181: cannot open input file
+                                // 'windows.0.XX.0.lib'`.  Native packages that pull
+                                // windows-targets via their OWN deps masked this (the
+                                // rlib branch of `add_native_extern_flags` harvests
+                                // the PACKAGE's OUT_DIRs), but a dependency-free
+                                // `[native] crate` package brings none — so the test
+                                // path needs loft's own OUT_DIRs too.
+                                for out_dir in native_utils::build_script_native_lib_dirs(ld) {
+                                    cmd.arg("-L").arg(format!("native={}", out_dir.display()));
+                                }
+                                // The C-ABI native consumer names `loft_ffi` types
+                                // (LoftStore/LoftRef/LoftStr) in its `extern "C"`
+                                // decls, so loft's own `loft_ffi` rlib must be on
+                                // the command (mirrors the standalone native
+                                // compile in main.rs).
+                                if let Ok(rd) = std::fs::read_dir(native_utils::deps_dir_of(ld)) {
+                                    for e in rd.flatten() {
+                                        let name = e.file_name().to_string_lossy().to_string();
+                                        if name.starts_with("libloft_ffi-")
+                                            && std::path::Path::new(&name)
+                                                .extension()
+                                                .is_some_and(|ext| ext.eq_ignore_ascii_case("rlib"))
+                                        {
+                                            cmd.arg("--extern")
+                                                .arg(format!("loft_ffi={}", e.path().display()));
+                                            break;
+                                        }
+                                    }
+                                }
                             }
                             // LibCI: link each package's `#native` crate so tests
                             // for native-backed libraries (graphics, crypto, …)
@@ -987,11 +1053,30 @@ pub(crate) fn run_tests(
                                 let stderr_msg = compile_result.as_ref().ok().map_or_else(
                                     || "rustc not found".to_string(),
                                     |o| {
-                                        String::from_utf8_lossy(&o.stderr)
+                                        let s = String::from_utf8_lossy(&o.stderr);
+                                        let err = s
                                             .lines()
                                             .find(|l| l.starts_with("error"))
-                                            .unwrap_or("(unknown)")
-                                            .to_string()
+                                            .unwrap_or("(unknown)");
+                                        // Append linker-detail lines (LNK####, "cannot
+                                        // open input file", undefined symbol) so a
+                                        // Windows link failure NAMES the missing file
+                                        // instead of just "exit code: 1181" — the first
+                                        // `error:` line alone hid the cause.
+                                        let detail: Vec<&str> = s
+                                            .lines()
+                                            .filter(|l| {
+                                                l.contains("LNK")
+                                                    || l.contains("cannot open")
+                                                    || l.contains("undefined")
+                                            })
+                                            .take(4)
+                                            .collect();
+                                        if detail.is_empty() {
+                                            err.to_string()
+                                        } else {
+                                            format!("{err} | {}", detail.join(" | "))
+                                        }
                                     },
                                 );
                                 let _ = std::fs::remove_file(&binary);
@@ -1021,11 +1106,26 @@ pub(crate) fn run_tests(
                             // (which anchors at the test file's dir).  Mirrors the
                             // standalone `--native` run path in main.rs; an
                             // explicit user `LOFT_SOURCE_DIR` wins.
+                            // @PLN26 phase 4 — stage native-package DLLs beside the
+                            // test binary on Windows (no RPATH there); mirrors the
+                            // standalone run path in main.rs.  No-op off Windows /
+                            // on the rlib path.
+                            if let Some(dir) = binary.parent() {
+                                native_utils::stage_native_dlls(dir, &native_data);
+                            }
                             let mut run_cmd = std::process::Command::new(&binary);
                             if std::env::var("LOFT_SOURCE_DIR").is_err()
                                 && let Some(dir) = std::path::Path::new(&abs_file).parent()
                             {
                                 run_cmd.env("LOFT_SOURCE_DIR", dir);
+                            }
+                            // Run the native test binary with cwd = source_dir so its
+                            // raw `std::fs` (e.g. imaging's load_png/save_png) anchors
+                            // where its loft `file()` does — the test codegen always
+                            // sets `program_relative = true`.  Mirrors the in-process
+                            // interpreter guard above + the standalone path in main.rs.
+                            if let Some(dir) = std::path::Path::new(&abs_file).parent() {
+                                run_cmd.current_dir(dir);
                             }
                             let run_ok = run_cmd.status().map(|s| s.success()).unwrap_or(false);
                             if run_ok {
@@ -1049,6 +1149,10 @@ pub(crate) fn run_tests(
                 }
             } else {
                 // ── Interpreter mode ──────────────────────────────────────────
+                // Anchor native file I/O at the program's source_dir for the
+                // duration of this file's tests; the guard restores the cwd
+                // afterwards so the next file's parse/compile is unaffected.
+                let _cwd = enter_source_dir(&clean_db.source_dir, clean_db.program_relative);
                 for (_, fn_name) in &test_fns {
                     // Per-function @IGNORE: skip without running.
                     if ann.ignore_fn.contains(fn_name.as_str()) {
