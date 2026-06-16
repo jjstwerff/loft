@@ -1432,6 +1432,61 @@ impl Parser {
             if self.lexer.peek_token("}") {
                 break;
             }
+            // @PLN25 — a `null` pattern arm on a nullable inline enum element
+            // (`match vr[i] { null => …, Some{…} => …/_ => … }`) matches the ABSENT
+            // state: discriminant 0.  The synthetic `__nullable<S>` enum represents
+            // null as disc 0 (not a produced variant), and `disc_expr` already reads
+            // the discriminant, so this arm is just `discs == [0]`.  Scoped to the
+            // synth enum (a regular enum's null is the variable store_nr sentinel,
+            // not an inline disc — E1).  `null` is a keyword, not an identifier, so
+            // it must be matched before the `has_identifier()` variant path below.
+            if valid_enum
+                && e_nr != u32::MAX
+                && self.data.def(e_nr).name.starts_with("__nullable<")
+                && self.lexer.has_token("null")
+            {
+                self.expect_match_arm_arrow();
+                let arm_write_state = self.vars.save_and_clear_write_state();
+                self.vars.clear_write_state();
+                let mut arm_body = Value::Null;
+                let arm_type = if self.lexer.peek_token("{") {
+                    self.parse_block("match_arm", &mut arm_body, &Type::Unknown(0))
+                } else {
+                    self.expression(&mut arm_body)
+                };
+                self.vars.restore_write_state(&arm_write_state);
+                if result_type == Type::Void || result_type == Type::Null {
+                    result_type = arm_type.clone();
+                } else if !self.first_pass
+                    && arm_type != Type::Void
+                    && arm_type != Type::Null
+                    && !match_arm_types_unify(&result_type, &arm_type)
+                {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "cannot unify: {} and {}",
+                        result_type.name(&self.data),
+                        arm_type.name(&self.data)
+                    );
+                }
+                // A `null` arm (disc 0) covers the synth enum's `Null` variant for
+                // exhaustiveness — disc 1 (the vestigial `Null` variant) is never
+                // produced (null is disc 0), so `null` + `Some` IS exhaustive.
+                let null_variant = self.data.variant_of(e_nr, "Null");
+                if null_variant != u32::MAX {
+                    covered.insert(null_variant);
+                }
+                arms.push(EnumArm {
+                    discs: vec![0],
+                    code: arm_body,
+                    tp: arm_type,
+                    guard: None,
+                    bindings: Vec::new(),
+                });
+                self.lexer.has_token(","); // optional trailing comma
+                continue;
+            }
             let Some(first_ident) = self.lexer.has_identifier() else {
                 if !self.first_pass {
                     diagnostic!(
