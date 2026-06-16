@@ -8,6 +8,50 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > **Tracker:** `@PLN25` ([loft-lang/plans#25](https://github.com/loft-lang/plans/issues/25),
 > `status:active`). **Branch:** `2026-07-mac` (all phases below committed + pushed there).
 
+## Decision (2026-06-17) — finish to FULL coherence; no escape hatch; one final PR
+
+**Resolved — this supersedes the "keep-vs-drop" ultimatum recorded below.**  E2 ships **only**
+when it is fully coherent (every seam green on BOTH backends), and the gate (`LOFT_E2_SYNTH`)
+flips exactly once, at the very end.  There is **no "gated, documented known-limitation" / "just
+use an enum" carve-out** — that escape hatch IS the inconsistency this plan exists to remove.  A
+third-party programmer or AI must never meet "null works for `vector<int>` but not `vector<Item>`".
+
+- **Driver = third-party coherence, not the author's need or delivery speed.**  The author uses
+  loft directly (and would reach for an enum); the point is that *other* users / AI never bump
+  into the asymmetry.  **Effort and time are explicitly NOT the constraint — a multi-session,
+  even multi-year, grind is acceptable.**  Weigh each seam by the coherence it delivers, never by
+  effort saved; do not propose de-scoping.
+- **Not "just consistency over enums."**  Enums cover *hand-constructed* data; they do NOT cover
+  *deserialised* data — a JSON `null` in a typed array has no faithful enum target (which
+  variant?).  That is the load-bearing use case (JSON / CSV / nullable DB rows).
+- **Working model.**  One dedicated stream owns this.  Every change stays **gate-inert** (fires
+  only for `__nullable<>` synth types, which exist only gate-on) so the monthly release branch
+  stays green for the parallel feature/fix agents.  **No PR until E2 is done** — work accumulates
+  on `2026-07-mac` and reaches `main` via a single final PR.
+
+**Canonical incoherence probe** — the case the plan is measured against.  Identical on shipped
+`main` (gate-off) AND gate-on, because the JSON-walker seam **A4** is unbuilt:
+
+```loft
+struct Item { name: text, value: integer }
+items = `[ {{"name":"a","value":1}}, null, {{"name":"c","value":3}} ]` as vector<Item>;
+//  len(items)        == 3
+//  items[1] == null  -> false       (claims it is NOT null)
+//  items[1].value    -> null(oob)   (field read returns the OOB sentinel)
+```
+
+The `null` becomes a slot counted in `len` that reports `!= null` yet returns garbage on field
+access — a silent corruption: `for x in items { if x == null {…} else { x.value } }` skips the
+guard, then detonates.  **E2 is "done" when this yields a real, null-safe absent element on both
+backends with the gate removed.**  (Scalars already pass: `[1, null, 3] as vector<integer>`
+imports the null correctly — that exact asymmetry is what E2 closes.)
+
+> **Stopgap (deferred — not doing it now).**  A loud error on `null` → non-nullable `vector<S>`
+> would stop the silent corruption on `main`, but it is a gate-off behaviour change and we are
+> taking **no interim PR**, so it folds into the final landing (and is moot once A4 preserves the
+> null).  Revisit only if the silent corruption shipping in monthly releases becomes a concern
+> before E2 is done.
+
 ## Status
 
 **Core SHIPPED + default-on.  E2 (embedded-record null) is GATED.  The CONCEPTUAL core works
@@ -210,10 +254,12 @@ default-on (gate removed), per the project standard.  The remaining work, in fin
      subsystem changes, not one-site patches.  And those are only the rungs visible SO FAR in two
      suites; the broader tail (native codegen, wasm, cross-lib, graphics consumers) sits behind its
      own subsystems.  **Conclusion: E2 default-on has NO chokepoint and is genuinely multi-session,
-     subsystem-by-subsystem.**  This is the concrete evidence for the keep-vs-drop decision on the
-     plan (the standing ultimatum).  A1+A2 are kept regardless (verified gate-off byte-green, both
-     backends).  Recommended next: treat A3 (hash key-extraction) and A4 (JSON walker) as their own
-     sized seams under Step 1's successor, or re-scope E2 to "gated, documented known-limitation".
+     subsystem-by-subsystem.**  **DECISION (2026-06-17, see § Decision at top): the keep-vs-drop
+     ultimatum is RESOLVED → keep + finish; de-scoping to a "gated, documented known-limitation" is
+     REJECTED (that carve-out is itself the inconsistency E2 removes).**  A1+A2 are kept regardless
+     (verified gate-off byte-green, both backends).  Next: grind A3 (hash key-extraction) and A4
+     (JSON walker) — and the rungs behind them — each to FULL coherence on both backends, no
+     documented carve-out; flip the gate only when the canonical probe (§ Decision) passes.
    - **Step 2 — Cluster B: extra-arg par dispatcher** (threading, script_threading).  Single
      mechanism: `synth_nullable_par_wrapper` bails on user extra args (the `extra_vals.is_empty()`
      guard, builtins.rs:277) because the dispatcher's extra-arg marshalling assumes the ORIGINAL
@@ -279,7 +325,7 @@ instead of a silent-empty or corrupted vector.
 
 - **Effort:** H (multi-backend: interpreter + native + wasm; ~15 re-assertion sites).
 - **Design:** ~ (invariant validated + phases defined; per-phase cell expectations TBD).
-- **Last touched:** 2026-06-16
+- **Last touched:** 2026-06-17
 
 ## The invariant (the one rule)
 
