@@ -245,15 +245,37 @@ machinery survey.
     correctly (`remove_claims` on disc-0 frees nothing, `copy_block` + `copy_claims` rebuild);
     full iteration past a null element yields `len` elements; nulling element 0 (the variant-0 /
     `>= 0` guard edge) and null-all both round-trip.  Probes: `/tmp/p_e2a5/matrix*.loft`.
-  - **LOCAL / param `vr: vector<Row>` — STILL OPEN** (the last E2a.5 gap).  A function-local /
+  - **LOCAL / param `vr: vector<Row>` — STILL OPEN (E2a.5b).  Attempted 2026-06-16; reverted to
+    the clean no-op state.  Localized to ONE substrate blocker — see below.**  A function-local /
     param `vector<Row>` is NOT rewritten — the synth pass runs over DEFS (struct/enum-value
     attributes), not local variable types — so `vr[1] = null` is the un-rewritten *same* bug
     (no-op on interp, `E0308` on native, confirmed `/tmp/p_e2a5/local.loft`).  The fix is a
-    PARSE-time element rewrite where the local's `vector<Row>` type is resolved (gated), so
-    pass-2's index IR + the literal construction see `vector<__nullable<Row>>`; the def-side
-    `fill_all` hook is too late for locals.  This is a distinct slice with its own design
-    questions (which declaration forms — annotated vs inferred; params; construction
-    propagation), NOT a one-liner — scope as E2a.5b before starting.
+    PARSE-time element rewrite where the local's `vector<Row>` type is resolved.
+
+    **What the E2a.5b probe established (all on the fresh binary — beware build staleness, every
+    test MUST follow a build that prints `Compiling loft`):**
+    - A parse-time helper that rewrites the local's annotated type `vector<Row>` →
+      `vector<__nullable<Row>>` (hooked right after `parse_type_full(u32::MAX,…)` in
+      `parse_assign`, gated + `source != STD_SOURCE`, reusing `nullable_enum_for` +
+      `register_enum_db`) is INERT gate-off and DOES rewrite gate-on.  `fill_all`'s layout loop
+      lays out the synth enum (created during the body parse, before `fill_all` runs).
+    - With the type rewritten, the **`Some` redirect fires** (`parse_single` propagates the enum
+      into `parent_tp` via `enum_context`, objects.rs:127 builds `Some`) — construction emits the
+      correct Some layout (`disc@0=2, tag@4, id@8`, stride 16), and **`vr[i] = null` works**
+      (discriminant-0 store; `vr[i] == null` → true).
+    - **THE BLOCKER — a read-side db-type divergence.**  `vr[i].id` reads garbage (`512`) because
+      the LOCAL element read derefs with the enum **handle** db-type while the FIELD read uses the
+      inline-**value** db-type: `b.items[i].id` → `OpGetField(elem, 0, 64)` (works) vs
+      `vr[i].id` → `OpGetField(elem, 0, 66)` (derefs a non-pointer).  A hand-written
+      `vector<E>` big-enum literal (`E{Has{id,tag},Non}`) reads fine, so the path EXISTS — the
+      synth-enum local diverges from it in the `.field`-on-enum-element deref-type resolution
+      (`fields.rs::field` → `get_field`, mod.rs:2981; the 64/65/66 inline-value / vector / handle
+      db-type model).  Reconciling that is a substrate change — route it, do not blind-patch.
+    - **Construction propagation is NOT the blocker** (it was the doc's feared risk): the literal
+      `[Row{…}]` builds `Some` correctly once the type is rewritten.  Annotated locals work for
+      construct + null; only the field-read deref-type blocks.  Inferred locals (`vr = [Row{…}]`)
+      and params were not attempted (construction-precedes-type / param-site rewrite).
+    This is a distinct slice (substrate db-type model), NOT a one-liner — keep as E2a.5b.
   *Verify (when done):* Probe 3 (`vr[i]=null` clean both backends) ✅, Probe 4 (slice/copy preserve
   null-ness — pending), Probe 5 (`vr[i].id` at the post-discriminant offset on native) ✅.
 - **E2a.6 — `not null` opt-out.** *Do:* `Row not null` field/element skips synthesis (plain
