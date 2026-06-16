@@ -101,8 +101,17 @@ shorter + robust.  Search honestly and find none → the length is essential, ac
 alarm (ship accreted brittleness), or **obey it blindly** — compress
 genuinely-distinct cases under a false invariant, which is itself brittleness
 (question 6, *wider than the domain*), breaking when the cases assert their real
-differences.  (A deliberate, measured fast-path is the remaining exception:
-brittle-but-faster by intent.)
+differences.  And over-breadth has a **second face**: a unifying rule genuinely **true**
+of every case yet rewritten across every *producer* to fix a fault that lives in one
+*consumer* path — over-reach by **blast radius, not falsehood** (no falsifying probe
+fires; the re-assertion count can be N=1, so the countable tell below stays silent too).
+The check there is **informational** — look for a special circumstance in the
+implementation context (a consumer/runtime that already holds the per-case info) that
+lets the broken path adapt while producers stay untouched (@P387: a true "every text fn
+carries one hidden return buffer" when the fn-ref dispatch already adapted per-callee → an
+order-of-magnitude smaller targeted fix).  Universal stays the right default; special
+circumstances still occur and must be looked for.  (A deliberate, measured fast-path is
+the remaining exception: brittle-but-faster by intent.)
 
 **The countable form — read the tell off the design, not the keyboard.**  "Longer
 than expected" is a feeling mid-build; its precise, **prospective** form is a number

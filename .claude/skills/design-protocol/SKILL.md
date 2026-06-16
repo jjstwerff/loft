@@ -162,9 +162,12 @@ not a space to explore — see *The other half*). Not reflexively (see *Keep it 
    divergence (most often *bigger / more mechanisms than predicted*) is an **alarm, not
    a verdict**. Route it to the search: is the extra length *accidental* (N mechanisms
    for one family — a missed invariant; find it and the code collapses back toward the
-   prediction) or *essential* (genuinely N families, no invariant to find; the surprise
-   just taught you a domain axis you couldn't see — record it)? No metric decides this;
-   only understanding whether the cases share a deeper structure.
+   prediction), *essential* (genuinely N families, no invariant to find; the surprise
+   just taught you a domain axis you couldn't see — record it), or *over-broad* (the
+   rule is **correct** but rewrites more producers than the defect touches — a consumer
+   already holds the per-case info, so narrow it to the broken path instead of
+   normalising every producer)? No metric decides this; only understanding whether the
+   cases share a deeper structure.
 
 **The alarm gates the *decision*, it does not merely log.** Whichever step trips, the
 fired alarm routes to the search *before* the approach is chosen. "Thread the fix
@@ -185,6 +188,19 @@ The probe is what distinguishes them: it tells you whether the cases *actually* 
 the invariant. Under-unification is caught by counting sites; over-unification by
 trying to falsify the unifying claim.
 
+But over-unification has a **second face a falsifying probe misses**: a unifying claim
+that is **true** — every case really fits — yet applied **wider than the defect**. A
+correct universal rule rewritten across every *producer* to repair a fault that lives in
+one *consumer* path is over-reach by **blast radius, not falsehood**; no probe fires,
+because the claim holds, and the re-assertion count can be **N = 1** (one place adds it
+to all), so step 2 stays silent too. The check here is **informational, not
+falsifying** — before committing the universal form, look for a **special circumstance**
+in the implementation context (a consumer / runtime that already holds the per-case
+information) that lets the broken path *adapt* while the producers stay untouched. The
+*correct* universal story is exactly what suppresses that look; the cue to run it is the
+scope ballooning past the size of the failing domain — universal stays the right default,
+but special circumstances still occur and have to be looked for, not assumed away.
+
 ---
 
 ## Keep it light — the procedure must not consume the judgment it serves
@@ -197,6 +213,16 @@ mechanisms (it accretes as bulk, then as runtime cost). This is **robustness by
 subtraction**: the deep reason *the shorter version is usually the more robust one* —
 correctness-by-construction from a single nameable invariant, won by removing cases,
 not guarding them.
+
+The tell has an **earlier, more visceral form than final length — the implementation
+*stutters*.** When the build fights you (you reach for a workaround to make the chosen
+mechanism fit, the scope grows *again* mid-build, you are on the third re-read of code
+that still won't sit right), that friction is the approach working *against the grain* —
+a solution that fits the domain rides the existing structure and goes smoothly. **Route
+the stutter to the search** (the over-broad check above — is a special circumstance being
+fought?), **not to pushing harder.** Reading the stutter as *"this is just hard"* rather
+than *"the frame is wrong"* is the characteristic miss: the friction WAS the signal, and
+it fires before the length does.
 
 But the tell says **look**, not what you will find — sometimes length is **essential**
 (genuinely N families, or an invariant deliberately spelled out so it is explicit
