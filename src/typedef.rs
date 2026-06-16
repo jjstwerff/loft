@@ -396,6 +396,21 @@ fn synth_nullable_struct_fields(data: &mut Data, database: &mut Stores, lexer: &
             };
         }
     }
+    // E2a.5b — register any synthetic `__nullable<>` enum the LOCAL/param
+    // parse-time rewrite (expressions.rs `e2_nullable_vec_local`) created but the
+    // field loop above did not reach (no struct field references it).  Doing the
+    // `register_enum_db` HERE — in `fill_all`, before the layout loop — instead of
+    // mid-body-parse is what keeps the discriminant db-type laid out correctly;
+    // registering it during parsing corrupts every read of the shared enum.
+    for d in 0..data.definitions() {
+        if matches!(data.def_type(d), DefType::Enum)
+            && data.def(d).synthetic.is_some()
+            && data.def(d).known_type == u16::MAX
+            && data.def(d).name.starts_with("__nullable<")
+        {
+            register_enum_db(data, database, d);
+        }
+    }
 }
 
 /// Register an enum's database type and its variant entries, and stamp each

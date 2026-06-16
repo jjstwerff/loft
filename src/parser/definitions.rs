@@ -1245,6 +1245,11 @@ impl Parser {
                     constant = true;
                 }
                 if let Some(tp) = self.parse_type_full(self.data.def_nr(fn_name), false) {
+                    // @PLN25 E2a.5b — a `vector<Struct>` PARAM gets the same
+                    // nullable-element rewrite as a local (gated/inert otherwise),
+                    // so a rewritten-local arg type-matches and `rs[i] = null`
+                    // works in the body.  Applied before the `&`-reference wrap.
+                    let tp = self.e2_nullable_vec_local(tp);
                     if reference {
                         Type::RefVar(Box::new(tp))
                     } else {

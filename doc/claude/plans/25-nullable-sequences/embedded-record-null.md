@@ -245,37 +245,36 @@ machinery survey.
     correctly (`remove_claims` on disc-0 frees nothing, `copy_block` + `copy_claims` rebuild);
     full iteration past a null element yields `len` elements; nulling element 0 (the variant-0 /
     `>= 0` guard edge) and null-all both round-trip.  Probes: `/tmp/p_e2a5/matrix*.loft`.
-  - **LOCAL / param `vr: vector<Row>` — STILL OPEN (E2a.5b).  Attempted 2026-06-16; reverted to
-    the clean no-op state.  Localized to ONE substrate blocker — see below.**  A function-local /
-    param `vector<Row>` is NOT rewritten — the synth pass runs over DEFS (struct/enum-value
-    attributes), not local variable types — so `vr[1] = null` is the un-rewritten *same* bug
-    (no-op on interp, `E0308` on native, confirmed `/tmp/p_e2a5/local.loft`).  The fix is a
-    PARSE-time element rewrite where the local's `vector<Row>` type is resolved.
-
-    **What the E2a.5b probe established (all on the fresh binary — beware build staleness, every
-    test MUST follow a build that prints `Compiling loft`):**
-    - A parse-time helper that rewrites the local's annotated type `vector<Row>` →
-      `vector<__nullable<Row>>` (hooked right after `parse_type_full(u32::MAX,…)` in
-      `parse_assign`, gated + `source != STD_SOURCE`, reusing `nullable_enum_for` +
-      `register_enum_db`) is INERT gate-off and DOES rewrite gate-on.  `fill_all`'s layout loop
-      lays out the synth enum (created during the body parse, before `fill_all` runs).
-    - With the type rewritten, the **`Some` redirect fires** (`parse_single` propagates the enum
-      into `parent_tp` via `enum_context`, objects.rs:127 builds `Some`) — construction emits the
-      correct Some layout (`disc@0=2, tag@4, id@8`, stride 16), and **`vr[i] = null` works**
-      (discriminant-0 store; `vr[i] == null` → true).
-    - **THE BLOCKER — a read-side db-type divergence.**  `vr[i].id` reads garbage (`512`) because
-      the LOCAL element read derefs with the enum **handle** db-type while the FIELD read uses the
-      inline-**value** db-type: `b.items[i].id` → `OpGetField(elem, 0, 64)` (works) vs
-      `vr[i].id` → `OpGetField(elem, 0, 66)` (derefs a non-pointer).  A hand-written
-      `vector<E>` big-enum literal (`E{Has{id,tag},Non}`) reads fine, so the path EXISTS — the
-      synth-enum local diverges from it in the `.field`-on-enum-element deref-type resolution
-      (`fields.rs::field` → `get_field`, mod.rs:2981; the 64/65/66 inline-value / vector / handle
-      db-type model).  Reconciling that is a substrate change — route it, do not blind-patch.
-    - **Construction propagation is NOT the blocker** (it was the doc's feared risk): the literal
-      `[Row{…}]` builds `Some` correctly once the type is rewritten.  Annotated locals work for
-      construct + null; only the field-read deref-type blocks.  Inferred locals (`vr = [Row{…}]`)
-      and params were not attempted (construction-precedes-type / param-site rewrite).
-    This is a distinct slice (substrate db-type model), NOT a one-liner — keep as E2a.5b.
+  - **LOCAL / param `vr: vector<Row>` — ANNOTATED LOCALS + PARAMS DONE (both backends, 2026-06-16);
+    INFERRED locals remain.**  A `vector<Struct>` LOCAL/param is rewritten to
+    `vector<__nullable<Struct>>` at PARSE time so the body's index / construct / `== null` IR
+    matches the field representation.  `e2_nullable_vec_local` (expressions.rs) is hooked at the
+    annotated-local site (`parse_assign`, after `parse_type_full(u32::MAX,…)`) and the param site
+    (`parse_arguments`, definitions.rs); gated + `source != STD_SOURCE`, INERT otherwise.
+    - **THE ROOT CAUSE was registration TIMING, not the deref-type** (the 64-vs-66 was a red
+      herring — `get_type(Enum) = def.known_type()` is deterministic, and 64/66 were just
+      different per-program db-type *numbers*).  The helper first called `register_enum_db`
+      **mid-body-parse**; that lays the shared `__nullable<Row>` enum out wrong AND — via the
+      `known_type != MAX` guard in `fill_database` (typedef.rs) — SUPPRESSES the field pass's
+      correct in-`fill_all` registration.  Result: every read of the shared enum returned
+      `id × 512` (a wrong-layout read), corrupting **field + local alike** when both coexist (the
+      shared-medium failure mode — two parts each correct alone, corrupting each other through the
+      memoised enum + its db registration).  **Fix:** the helper now only *creates* the def
+      (`nullable_enum_for`); a scan at the end of `synth_nullable_struct_fields` does the
+      `register_enum_db` for every synthetic `__nullable<>` enum (field- or local-created), in
+      `fill_all`, in the correct order.
+    - **Construction propagation was NEVER the blocker** (the doc's feared risk): the literal
+      `[Row{…}]` builds `Some` correctly once the type is rewritten — `parse_single`'s
+      `enum_context` propagates the enum into `parent_tp`, objects.rs:127 redirects to `Some`.
+    - *Verified BOTH backends, gate-on* (`/tmp/p_e2a5/local_matrix.loft`, `param_only.loft`):
+      read, `vr[i]=null` → `==null`, `!=null`, neighbour-intact, null element 0 (variant-0 edge),
+      reassign a genuinely-nulled element (rebuilds `Some`), iteration; a `vector<Row>` **param**
+      `rs[0]=null` + readback.  Gate-off inert; field matrix + suite unaffected.
+    - **STILL OPEN — INFERRED locals** (`vr = [Row{…}]`, no annotation): not rewritten (no type
+      site to hook — the literal is parsed before the var type is known), so `vr[i]=null` is the
+      un-rewritten case (no-op interp / `E0308` native, pre-existing).  Needs the
+      construction-precedes-type handling (retroactively re-type the inferred local + its already-
+      built elements) — a distinct slice.
   *Verify (when done):* Probe 3 (`vr[i]=null` clean both backends) ✅, Probe 4 (slice/copy preserve
   null-ness — pending), Probe 5 (`vr[i].id` at the post-discriminant offset on native) ✅.
 - **E2a.6 — `not null` opt-out.** *Do:* `Row not null` field/element skips synthesis (plain
@@ -406,14 +405,16 @@ was already retired by the representation + the compile rejection; this complete
   `Row` (`id@0,tag@8`) into the packed `Some` (`disc@0,tag@4,id@8`), hence the per-field copy.
 
 **STILL OPEN:**
-1. **Vector elements (E2a.5) — STRUCT-FIELD case DONE; LOCAL/param case OPEN.** Struct-FIELD
-   `vector<Row>` content is rewritten to `vector<__nullable<Row>>`; literal construction +
-   element read, **`vr[i] = null` (discriminant-0 store in `towards_set`), `== null`, reassign,
-   and iteration all work on BOTH backends** (gate on) — and the embedded-field `bx.item = null`
-   sibling fell out of the same chokepoint.  *Remaining:* the LOCAL/param `vr: vector<Row>` case
-   (E2a.5b — a PARSE-time element rewrite, a distinct slice; confirmed still no-op/`E0308` via
-   `/tmp/p_e2a5/local.loft`), plus the present-payload free-on-null leak.  Detail in the E2a.5
-   step above.
+1. **Vector elements (E2a.5) — STRUCT-FIELD + ANNOTATED-LOCAL + PARAM all DONE; INFERRED locals
+   open.** Struct-FIELD `vector<Row>` and now **annotated LOCALS (`vr: vector<Row> = …`) and
+   `vector<Row>` PARAMS** are rewritten to `vector<__nullable<Row>>`; construction, element read,
+   **`vr[i] = null` (discriminant-0 store in `towards_set`), `== null`, reassign, and iteration
+   all work on BOTH backends** (gate on) — and the embedded-field `bx.item = null` sibling fell out
+   of the same chokepoint.  The local/param rewrite's root bug was registration TIMING (registering
+   the synth enum mid-parse corrupts the shared layout → `id × 512`); fixed by deferring
+   `register_enum_db` to a `fill_all` scan.  *Remaining:* **INFERRED locals** (`vr = [Row{…}]`, no
+   annotation — construction-precedes-type), plus the present-payload free-on-null leak.  Detail in
+   the E2a.5 step above.
 2. **Gate removal + .loft regressions** — graduate the gated probes to
    `tests/scripts/25-nullable-sequences.loft` (which runs both backends without the env flag)
    in the final green-without-flag commit; delete `LOFT_E2_SYNTH` + the non-stdlib restriction.

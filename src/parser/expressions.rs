@@ -1914,6 +1914,42 @@ use a separate collection or add after the loop"
         Type::Void
     }
 
+    /// @PLN25 E2a.5b — rewrite a nullable `vector<Struct>` LOCAL / param element
+    /// type to the synthetic `__nullable<Struct>` enum at PARSE time, so the
+    /// index / construct / `== null` IR emitted during the body parse matches the
+    /// field-side representation (`vr[i] = null` → discriminant-0 store).  The
+    /// def-side `synth_nullable_struct_fields` pass is too late for a local — its
+    /// index IR is already emitted.  Gated (`LOFT_E2_SYNTH`) + non-stdlib, inert
+    /// otherwise, so the default path is byte-identical.  Creates the def only;
+    /// `fill_all` does the `register_enum_db` + layout in the correct order
+    /// (registering it here, mid-parse, corrupts the shared enum — see below).
+    pub(crate) fn e2_nullable_vec_local(&mut self, tp: Type) -> Type {
+        if self.data.source == crate::data::STD_SOURCE || std::env::var("LOFT_E2_SYNTH").is_err() {
+            return tp;
+        }
+        let Type::Vector(content, deps) = &tp else {
+            return tp;
+        };
+        let Type::Reference(struct_d, _) = &**content else {
+            return tp;
+        };
+        let struct_d = *struct_d;
+        if self.data.def_type(struct_d) != crate::data::DefType::Struct
+            || self.data.def(struct_d).synthetic.is_some()
+        {
+            return tp;
+        }
+        let deps = deps.clone();
+        // Create the def ONLY — `fill_all` (synth_nullable_struct_fields) does the
+        // `register_enum_db` + layout, in the correct order.  Registering the
+        // discriminant db-type here, mid-body-parse, lays the enum out wrong AND
+        // (via the `known_type != MAX` guard in fill_database) suppresses the
+        // field pass's correct registration — corrupting EVERY read of the shared
+        // `__nullable<Row>` (`id × 512`, field + local alike).
+        let syn = self.data.nullable_enum_for(&mut self.lexer, struct_d);
+        Type::Vector(Box::new(Type::Enum(syn, true, Deps::none())), deps)
+    }
+
     // <assign> ::= <operators> [ '=' | '+=' | '-=' | '*=' | '%=' | '/=' <operators> ]
     #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_assign(&mut self, code: &mut Value) -> Type {
@@ -1937,6 +1973,7 @@ use a separate collection or add after the loop"
             if let Some(tp) = self.parse_type_full(u32::MAX, false)
                 && self.lexer.peek_token("=")
             {
+                let tp = self.e2_nullable_vec_local(tp);
                 self.change_var_type(*v_nr, &tp);
                 f_type = tp;
                 got_annotation = true;
