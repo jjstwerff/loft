@@ -3258,6 +3258,13 @@ impl Parser {
                         n,
                         Type::RefVar(Box::new(Type::Text(Deps::none()))),
                     );
+                    // @P387 zero-cost: mark the work-buffer HIDDEN so it rides the
+                    // same adaptive hidden-return-buffer dispatch struct/vector use
+                    // (`fn_call_ref` pushes one per hidden buf — 0 for a fn with no
+                    // promotable local).  This replaces the static `cref_work_buf`
+                    // injection and keeps the buffer out of the fn-ref TYPE without
+                    // the deps-based exclusion that wrongly dropped returned params.
+                    self.data.definitions[self.context as usize].attributes[a].hidden = true;
                     self.vars.become_argument(*v);
                     dep.push(a as u16);
                     self.vars
@@ -3304,18 +3311,24 @@ impl Parser {
             // pass; the second-pass `__closure` injection (if any)
             // happens later in parse_lambda so the trailing position is
             // preserved.
-            // @P387 — normalize every text-returning fn (not just lambdas) to
-            // carry one `RefVar(Text)` work-buffer so a named text fn used as a
-            // fn-value has a slot for the dispatch-injected buffer.  Text uses
-            // this `__work_ret` mechanism, NOT @PLAN59's `__retbuf` (which covers
-            // only Reference/Vector/Enum returns) — so unlike struct/vector
-            // fn-refs (zero-cost via `__retbuf`), text still needs this.  Making
-            // text zero-cost too would mean extending `__retbuf` to text returns.
+            // Only LAMBDAS carry a `RefVar(Text)` work-buffer: their fn-ref
+            // dispatch (control.rs) is the ONE text path that hands the callee a
+            // caller-owned buffer.  Named/literal text fns return owned text (no
+            // buffer) — giving them one (the reverted @P387 option A) broke par
+            // workers (#273) and the markdown viewer, because not every call site
+            // injects the buffer.  Zero-cost @P387: the fn-ref dispatch no longer
+            // injects a text buffer (see `text_fn_ref_owned` below), so even a
+            // named text fn works as a fn-value without one.
+            let is_lambda = self
+                .data
+                .def(self.context)
+                .name()
+                .starts_with("n___lambda_");
             let has_work_buf =
                 self.data.def(self.context).attributes().iter().any(
                     |a| matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_))),
                 );
-            if self.first_pass && !has_work_buf {
+            if self.first_pass && is_lambda && !has_work_buf {
                 let work_tp = Type::RefVar(Box::new(Type::Text(Deps::none())));
                 let a = self.data.add_attribute(
                     &mut self.lexer,
@@ -3323,6 +3336,9 @@ impl Parser {
                     "__work_ret",
                     work_tp.clone(),
                 );
+                // @P387 zero-cost: hidden like the text_return buffer above, so the
+                // runtime fn-ref dispatch pushes it adaptively (no static injection).
+                self.data.definitions[self.context as usize].attributes[a].hidden = true;
                 let v = self.create_var("__work_ret", &work_tp);
                 if v != u16::MAX {
                     self.vars.become_argument(v);

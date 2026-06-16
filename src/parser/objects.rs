@@ -19,13 +19,15 @@ impl Parser {
     /// as a `fn` value.
     fn fn_ref_arg_types(&self, fn_d_nr: u32) -> Vec<Type> {
         let n_args = self.data.attributes(fn_d_nr);
-        let buf_deps: Vec<u16> = match self.data.def(fn_d_nr).returned() {
-            Type::Text(d) | Type::Reference(_, d) | Type::Vector(_, d) => d.to_vec(),
-            _ => Vec::new(),
-        };
+        // The fn-ref TYPE is the VISIBLE parameters only.  Synthetic
+        // return-buffers (struct/vector `__retbuf`, the text work-buffer) are
+        // marked `hidden`, so excluding by `hidden` drops exactly them — and,
+        // unlike the old "in the return deps" test, KEEPS a genuinely-returned
+        // parameter (`fn f(s: text) -> text { s }` has `s` in its return deps
+        // but `s` is a real, non-hidden arg — @P387 case 2).
         (0..n_args)
             .filter(|&a| {
-                !buf_deps.contains(&(a as u16))
+                !self.data.def(fn_d_nr).attributes()[a as usize].hidden
                     && !self.data.attr_name(fn_d_nr, a).starts_with("__")
             })
             .map(|a| self.data.attr_type(fn_d_nr, a))

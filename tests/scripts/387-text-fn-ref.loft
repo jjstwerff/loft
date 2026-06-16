@@ -15,9 +15,13 @@ fn run_s(f: fn(integer) -> S, x: integer) -> S { f(x) }
 fn run_v(f: fn(integer) -> vector<integer>, x: integer) -> vector<integer> { f(x) }
 
 fn main() {
-  // #387 — text fns as fn-values (literal body = the SIGSEGV case; formatting
-  // body = the arity-leak case; via a local; direct call alongside the fn-ref).
+  // #387 — text fns as fn-values, all body shapes.  A literal body has NO
+  // promotable local (0 work-buffers); a format/local body carries one.  The
+  // fn-ref dispatch is adaptive: the interpreter pops the spuriously-injected
+  // work-buffer for a no-buffer callee (literal / forward / param-return), so
+  // every shape dispatches correctly on both backends.
   assert(run_t(mk_lit, 1) == "z", "lit: {run_t(mk_lit, 1)}");
+  assert(mk_lit(0) == "z", "lit direct: {mk_lit(0)}");
   assert(run_t(mk_fmt, 1) == "v1", "fmt: {run_t(mk_fmt, 1)}");
   g = mk_fmt;
   assert(run_t(g, 7) == "v7", "local: {run_t(g, 7)}");
