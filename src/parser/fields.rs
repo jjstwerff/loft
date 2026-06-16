@@ -617,9 +617,12 @@ impl Parser {
                 elm_type = Type::Character;
             }
         } else if let Type::Hash(el, keys, _) | Type::Spacial(el, keys, _) = &t {
+            // @PLN25 E2 — key fields live in the `Some` variant when the element was
+            // rewritten to `__nullable<S>`; resolve names against the key-bearing def.
+            let el = crate::typedef::key_bearing_def(&self.data, *el);
             let mut key_types = Vec::new();
             for k in keys {
-                key_types.push(self.data.attr_type(*el, self.data.attr(*el, k)).clone());
+                key_types.push(self.data.attr_type(el, self.data.attr(el, k)).clone());
             }
             self.parse_key(code, &t, &key_types);
             // @P285 — a keyed-collection lookup RESULT is nullable (an absent
@@ -631,9 +634,10 @@ impl Parser {
             self.expr_not_null = false;
             self.expr_not_null_name.clear();
         } else if let Type::Sorted(el, keys, _) | Type::Index(el, keys, _) = &t {
+            let el = crate::typedef::key_bearing_def(&self.data, *el);
             let mut key_types = Vec::new();
             for (k, _) in keys {
-                key_types.push(self.data.attr_type(*el, self.data.attr(*el, k)).clone());
+                key_types.push(self.data.attr_type(el, self.data.attr(el, k)).clone());
             }
             self.parse_key(code, &t, &key_types);
             // @P285 — see the Hash/Spacial arm above; the lookup result is nullable.

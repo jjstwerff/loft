@@ -1694,6 +1694,15 @@ impl Parser {
                     }
                     "hash" => {
                         self.parse_fields(false, &mut fields);
+                        // @PLN25 E2 — a `hash<S[k]>` that shares records with a sibling
+                        // `vector<S>` (the `other_indexes` "two views, one record set"
+                        // pattern) MUST agree on the element layout.  E2 rewrites the
+                        // `vector` arm to `__nullable<S>` (Some-wrapped records), so the
+                        // hash content has to be the SAME synthetic enum or its key
+                        // extraction reads the key field at the dense offset of a
+                        // Some-wrapped record → wrong key → miss.  Mirror the vector arm.
+                        let elem = self.e2_nullable_elem(tp);
+                        let sub_nr = self.data.type_def_nr(&elem);
                         self.data.set_referenced(sub_nr, on_d, Value::Null);
                         let mut f = Vec::new();
                         for (field, _) in fields {

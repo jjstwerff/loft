@@ -571,7 +571,8 @@ pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
                         fill_database(data, database, c_nr);
                         c_tp = data.def(c_nr).known_type;
                     }
-                    set_mutable(data, c_nr, &key_fields);
+                    let kd = key_bearing_def(data, c_nr);
+                    set_mutable(data, kd, &key_fields);
                     database.hash(c_tp, &key_fields)
                 }
                 Type::Index(c_nr, key_fields, _) => {
@@ -713,6 +714,22 @@ pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
     if !groups.is_empty() {
         database.types[s_type as usize].field_groups.extend(groups);
     }
+}
+
+/// @PLN25 E2 — the key-bearing struct for a keyed collection.  When the element
+/// was rewritten to the synthetic `__nullable<S>` enum (E2), its key field(s) live
+/// inside the `Some` variant, not at the enum's top level, so key-field name lookups
+/// must resolve against `Some` (whose payload offsets match the Some-wrapped records
+/// the collection shares with its sibling vector).  A non-synthetic content def is
+/// returned unchanged — gate-inert.
+pub(crate) fn key_bearing_def(data: &Data, c_nr: u32) -> u32 {
+    if data.def_type(c_nr) == DefType::Enum && data.def(c_nr).name.starts_with("__nullable<") {
+        let some = data.variant_of(c_nr, "Some");
+        if some != u32::MAX {
+            return some;
+        }
+    }
+    c_nr
 }
 
 fn set_mutable(data: &mut Data, on_d: u32, fields: &[String]) {
