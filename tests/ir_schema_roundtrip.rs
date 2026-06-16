@@ -240,3 +240,73 @@ fn stdlib_load_compares_equal_to_fresh() {
         reference.definitions()
     );
 }
+
+/// H7-short (STABILITY_ROADMAP) — the IR codec round-trip over the **tests/scripts/
+/// corpus**, not just the stdlib.  User programs exercise `Value`/`Type` shapes the
+/// stdlib doesn't (every language feature has a script here), so this is the broader
+/// gate: parse each script on top of the cached stdlib, then round-trip every script
+/// def's `Type` (returned + attr typedefs), `Value` body, and `Attribute`.  A new
+/// `Value`/`Type` variant with a silent codec gap fails here loudly — the tripwire
+/// that fires "the moment the next variant lands".  Seeded with the cached stdlib
+/// (cloned per script) so the stdlib parses once, not once-per-script.
+#[test]
+fn tests_scripts_round_trip() {
+    let (stdlib_data, stdlib_db) = cached_default();
+    let stdlib_defs = stdlib_data.definitions();
+
+    let mut scripts: Vec<std::path::PathBuf> = std::fs::read_dir("tests/scripts")
+        .expect("tests/scripts")
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "loft"))
+        .collect();
+    scripts.sort();
+
+    let mut scripts_checked = 0usize;
+    let mut defs_checked = 0usize;
+    for script in &scripts {
+        let mut p = loft::parser::Parser::new();
+        p.data = stdlib_data.clone();
+        p.database = stdlib_db.clone();
+        // Skip scripts that don't parse clean (error-path / lib-dependent fixtures):
+        // their IR is intentionally malformed or incomplete, not a codec target.
+        if !p.parse(&script.to_string_lossy(), false) {
+            continue;
+        }
+        scripts_checked += 1;
+        for d_nr in stdlib_defs..p.data.definitions() {
+            let def = p.data.def(d_nr);
+            let loc = format!("{}::{}", script.display(), def.name);
+            for ty in
+                std::iter::once(&def.returned).chain(def.attributes.iter().map(|a| &a.typedef))
+            {
+                let json = type_to_json(ty);
+                let back = type_from_json(&json)
+                    .unwrap_or_else(|e| panic!("type decode failed in {loc}: {json}: {e:?}"));
+                assert_eq!(&back, ty, "type round-trip mismatch in {loc}: {json}");
+            }
+            let vj = value_to_json(&def.code);
+            let vb = value_from_json(&vj)
+                .unwrap_or_else(|e| panic!("value decode failed in {loc}: {e:?}"));
+            assert_eq!(vb, def.code, "value round-trip mismatch in {loc}");
+            for attr in &def.attributes {
+                let aj = attribute_to_json(attr);
+                let ab = attribute_from_json(&aj)
+                    .unwrap_or_else(|e| panic!("attr decode failed in {loc}.{}: {e:?}", attr.name));
+                assert_eq!(
+                    attribute_to_json(&ab),
+                    aj,
+                    "attr re-encode drift in {loc}.{}",
+                    attr.name
+                );
+            }
+            defs_checked += 1;
+        }
+    }
+    assert!(
+        scripts_checked > 100,
+        "expected many scripts to parse clean, got {scripts_checked}"
+    );
+    eprintln!(
+        "tests_scripts_round_trip: {scripts_checked} scripts, {defs_checked} script-defs round-tripped"
+    );
+}
