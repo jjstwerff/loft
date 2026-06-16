@@ -314,6 +314,13 @@ fn emit_program(data: &Data, stores: &Stores, entry: &[u32]) -> String {
     let mut buf: Vec<u8> = Vec::new();
     {
         let mut out = Output::new(data, stores);
+        // @PLN26 phase 2 — a cdylib that calls a `[native] crate` package emits
+        // that package's fns as C-ABI `extern "C"` decls naming `loft_ffi::Loft*`,
+        // its `.so` linked (sealing the package's whole Rust crate graph), exactly
+        // as the executable native path does.  The SAME `native_cabi_enabled()`
+        // gate drives the matching link flags in `build_shared_cdylib`, so codegen
+        // and link never disagree.  No-op when the library uses no native package.
+        out.native_cabi = native_cabi_link_enabled();
         // Only the exported functions + their transitive deps (header + init + the
         // reachable subset) — exactly what a `--native` binary emits from `n_main`,
         // so unreachable operator stubs never surface.
@@ -805,6 +812,90 @@ pub fn platform_cdylib_name(stem: &str) -> String {
     }
 }
 
+/// @PLN26 — whether a cdylib links `[native] crate` packages by C-ABI (their
+/// `.so`) rather than as Rust rlibs.  The library-crate twin of
+/// `native_utils::native_cabi_enabled` (the binary-crate copy the executable path
+/// reads): both read the ONE env gate, so the cdylib's codegen + link agree with
+/// the executable's on a given host.  `LOFT_NATIVE_CABI=0` forces the legacy rlib
+/// link (the escape hatch); the C-ABI path is the default on every host.
+fn native_cabi_link_enabled() -> bool {
+    !matches!(std::env::var("LOFT_NATIVE_CABI").ok().as_deref(), Some("0"))
+}
+
+/// @PLN26 phase 2 — the rustc link flags for ONE native package's resolved cdylib
+/// `.so`: `-L native=<dir>` + `-l dylib=<name>` + an RPATH (the build/prebuilt
+/// dir and `$ORIGIN` for an installed binary shipping the `.so` beside it).  On
+/// Windows a DLL links through its import library and there is no RPATH, so this
+/// bridges `<stem>.dll.lib` → `<stem>.lib` and the loader finds the staged DLL
+/// beside the binary instead.
+///
+/// Returns empty when the `.so` can't be resolved ([`crate::extensions::resolve_native_lib`]
+/// already printed why) — the link then fails loudly on the undefined symbol
+/// rather than silently mis-linking.  The `.so` seals the package's whole Rust
+/// crate graph (its own `loft_ffi` + `loft_register_v1` included), so no
+/// `-L dependency=` / per-crate pinning is needed and two packages no longer
+/// collide on `loft_register_v1`.
+///
+/// Mirrors the C-ABI branch of `native_utils::add_native_extern_flags` (the
+/// executable path); kept separate because that helper lives in the binary crate
+/// and this builder lives in the library crate.
+fn native_pkg_cabi_link_args(crate_name: &str, pkg_dir: &str) -> Vec<String> {
+    // The cdylib is named after the `[library] native` stem, which can differ
+    // from the crate name; read it from the manifest (the SAME stem the
+    // interpreter resolves with), falling back to the crate name when absent.
+    let stem = crate::manifest::read_manifest(&format!("{pkg_dir}/loft.toml"))
+        .and_then(|m| m.native)
+        .unwrap_or_else(|| crate_name.replace('-', "_"));
+    let Some(so) = crate::extensions::resolve_native_lib(pkg_dir, &stem) else {
+        return Vec::new();
+    };
+    let so_path = std::path::PathBuf::from(&so);
+    let Some(so_dir) = so_path.parent() else {
+        return Vec::new();
+    };
+    // `-l dylib=<name>` derived from the RESOLVED file (strip `lib` prefix +
+    // extension) so a prebuilt or non-`lib<stem>` cdylib links.
+    let libname = so_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map_or(stem.as_str(), |s| s.strip_prefix("lib").unwrap_or(s));
+    let mut args = vec![
+        "-L".to_string(),
+        format!("native={}", so_dir.display()),
+        "-l".to_string(),
+        format!("dylib={libname}"),
+    ];
+    if cfg!(windows) {
+        // Naming bridge: a Rust cdylib's import lib is `<stem>.dll.lib`, but
+        // `-l dylib=<stem>` makes MSVC link.exe open `<stem>.lib`.  Copy
+        // `<stem>.dll.lib` → `<stem>.lib` beside it (identical content) so the
+        // `-l dylib=` resolves.
+        let dll_lib = so_dir.join(format!("{libname}.dll.lib"));
+        let plain_lib = so_dir.join(format!("{libname}.lib"));
+        if dll_lib.exists() && !plain_lib.exists() {
+            let _ = std::fs::copy(&dll_lib, &plain_lib);
+        }
+        // Disallow-the-unverifiable-loudly: with NEITHER import-lib name present
+        // the link dies on an opaque `LNK1181`, so name it rather than mis-link.
+        if !plain_lib.exists() && !dll_lib.exists() {
+            eprintln!(
+                "loft: native package `{crate_name}` cdylib at {} has no import \
+                 library (`{libname}.dll.lib` / `{libname}.lib`) — Windows links a \
+                 DLL through its import lib (@PLN26 phase 4); rebuild the package's \
+                 cdylib with a toolchain that emits one.",
+                so_dir.display()
+            );
+        }
+    } else {
+        // Two RPATH entries: the build/prebuilt dir (run-from-build-tree) AND
+        // `$ORIGIN` (an installed binary shipping the `.so` beside it).  `$ORIGIN`
+        // is literal; the dynamic loader expands it at run time.
+        args.push(format!("-Clink-arg=-Wl,-rpath,{}", so_dir.display()));
+        args.push("-Clink-arg=-Wl,-rpath,$ORIGIN".to_string());
+    }
+    args
+}
+
 /// @PLN11 Arc N / N3 — generate **and compile** the shared-store cdylib for
 /// `export_set` into `out_dir`, returning the built cdylib path.  This is the
 /// production build step `use <lib>` runs after `byte_code`: it locates the
@@ -868,31 +959,54 @@ pub fn build_shared_cdylib(
         args.push(format!("{name}={}", path.display()));
     }
     // @PLN26 phase 2 — a shared-store library cdylib that USES a `[native] crate`
-    // package is NOT yet verified on the native-compile path: no consumer exercises
-    // it today (the EXECUTABLE C-ABI path is verified; this one is not).  Per the
-    // plan goal "disallow the unverifiable loudly", refuse this combination and fall
-    // back to interpret with a clear signal — rather than ship a silent, untested
-    // link — so the FIRST real consumer tells us to build + verify the designed
-    // C-ABI support (recorded in detail in @PLN26 phase 2: set `native_cabi` on the
-    // Output in `emit_program`, then link each dep `.so` here via `resolve_native_lib`
-    // + `-L native`/`-l dylib`/RPATH + the `loft_ffi` extern, mirroring the
-    // executable path — which also lifts the duplicate-`loft_register_v1` 2-package
-    // limit).  Until a consumer triggers that work, this is a deliberate, loud gap.
+    // package links that package by C-ABI, exactly as the executable native path
+    // does: its `.so` (sealing the package's whole Rust crate graph — its own
+    // `loft_ffi` + `loft_register_v1` included) via `-L native`/`-l dylib`/RPATH,
+    // and its fns as `extern "C"` decls naming `loft_ffi::Loft*` (codegen gated on
+    // the SAME `native_cabi_link_enabled()` consulted by `emit_program`, so codegen
+    // and link can't disagree).  The sealed `.so` is why two native packages no
+    // longer collide on `loft_register_v1` — the old 2-package limit is lifted.
     if !data.native_packages.is_empty() {
-        let names: Vec<&str> = data
-            .native_packages
-            .iter()
-            .map(|(c, _)| c.as_str())
-            .collect();
-        eprintln!(
-            "loft: a library compiled to a shared-store cdylib that uses `[native] crate` \
-             package(s) {names:?} is not yet supported on the native path (@PLN26 phase 2 — \
-             unverified); interpreting it instead.  See loft-lang/plans#26 (the C-ABI design \
-             is recorded there) to prioritise proper support."
-        );
-        return Err(
-            "shared-store cdylib + native package not yet supported (@PLN26 phase 2)".to_string(),
-        );
+        // The legacy rlib link (LOFT_NATIVE_CABI=0) CAN'T link a native package
+        // into a cdylib: pulling the package rlib in brings a SECOND `loft_ffi`
+        // rlib (duplicate `loft_register_v1`, two `StableCrateId`s) — unlinkable.
+        // Refuse THAT combo loudly and fall back to interpret (codegen emitted
+        // `extern crate <pkg>` for it, which has no matching `--extern` anyway).
+        if !native_cabi_link_enabled() {
+            let names: Vec<&str> = data
+                .native_packages
+                .iter()
+                .map(|(c, _)| c.as_str())
+                .collect();
+            eprintln!(
+                "loft: a shared-store cdylib using `[native] crate` package(s) {names:?} \
+                 needs the C-ABI link path, but LOFT_NATIVE_CABI=0 forces the legacy rlib \
+                 link (which cannot take two `loft_ffi` rlibs into one cdylib); interpreting \
+                 it instead.  Unset LOFT_NATIVE_CABI to use the C-ABI path."
+            );
+            return Err(
+                "shared-store cdylib + native package needs the C-ABI path (LOFT_NATIVE_CABI=0 set)"
+                    .to_string(),
+            );
+        }
+        // The C-ABI decls name `loft_ffi::LoftStore`/`LoftRef`/`LoftStr`; loft's
+        // own `loft_ffi` rlib must be on the command (the package `.so` is C-ABI,
+        // so this is the only `loft_ffi` the cdylib's Rust code names).  Mirrors
+        // the standalone native compile in main.rs.
+        if let Some(name) = std::fs::read_dir(&deps).ok().and_then(|rd| {
+            rd.flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .find(|n| n.starts_with("libloft_ffi-") && has_rlib_ext(n))
+        }) {
+            args.push("--extern".to_string());
+            args.push(format!("loft_ffi={}", deps.join(name).display()));
+        }
+        // Link each native package's resolved cdylib `.so` (the same `-L native`
+        // / `-l dylib` / RPATH the executable path emits) so the cdylib's
+        // `extern "C"` calls resolve at link time and the `.so` loads at run time.
+        for (crate_name, pkg_dir) in &data.native_packages {
+            args.extend(native_pkg_cabi_link_args(crate_name, pkg_dir));
+        }
     }
     // Windows MSVC: add the build-script `-L` dirs holding native import libs
     // (`windows.0.48.5.lib` etc.) or the link fails LNK1181.  No-op off Windows.
