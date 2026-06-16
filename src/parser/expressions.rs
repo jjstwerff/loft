@@ -1932,8 +1932,10 @@ use a separate collection or add after the loop"
         // The native stdlib (STD_SOURCE) keeps DENSE `vector<S>`: its `#rust` /
         // native function bodies write the dense struct ABI (e.g. `fields()` →
         // `vector<JsonField>`), which an E2 wrap would desync.  E2 applies ABOVE
-        // the native layer — user files + libraries.
-        if self.data.source == crate::data::STD_SOURCE {
+        // the native layer — user files + libraries.  Still gated on
+        // `LOFT_E2_SYNTH` while the default-on access-glue long tail closes
+        // (plan25 § Default-on trigger) — the release branch stays green.
+        if self.data.source == crate::data::STD_SOURCE || std::env::var("LOFT_E2_SYNTH").is_err() {
             return elem;
         }
         let Type::Reference(struct_d, _) = &elem else {

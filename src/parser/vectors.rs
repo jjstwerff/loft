@@ -1384,7 +1384,10 @@ impl Parser {
             if self.data.def(*e).name.starts_with("__nullable<"))
         {
             in_t.clone()
-        } else if in_t.is_unknown() && self.data.source != crate::data::STD_SOURCE {
+        } else if in_t.is_unknown()
+            && self.data.source != crate::data::STD_SOURCE
+            && std::env::var("LOFT_E2_SYNTH").is_ok()
+        {
             // @PLN25 — INFERRED comprehension (no element annotation): peek the
             // body for a leading struct-literal `{ S{…} }` and default the
             // element to `__nullable<S>`, mirroring the inferred-literal PEEK in
@@ -1663,8 +1666,12 @@ impl Parser {
         // site now resolves to (the construction half of the representation).  A
         // PEEK only (reverted); fires solely for an inferred struct-literal vector,
         // so `[1.0]` / `[1,2]`, index expressions, and `not null` / declared vectors
-        // are untouched.  Native stdlib (STD_SOURCE) stays dense.
-        if assign_tp.is_unknown() && self.data.source != crate::data::STD_SOURCE {
+        // are untouched.  Native stdlib (STD_SOURCE) stays dense; gated while the
+        // default-on long tail closes.
+        if assign_tp.is_unknown()
+            && self.data.source != crate::data::STD_SOURCE
+            && std::env::var("LOFT_E2_SYNTH").is_ok()
+        {
             let link = self.lexer.link();
             if let Some(name) = self.lexer.has_identifier()
                 && self.lexer.peek_token("{")

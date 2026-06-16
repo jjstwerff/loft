@@ -86,16 +86,36 @@ default-on (gate removed), per the project standard.  The remaining work, in fin
      byte-identical, so coerce via an **offset-ref reinterpret** (point at the payload, the same
      shift `find_poly_enum_field` uses) at `can_convert` + the call-arg lowering.  *No re-pack.*
    - **(3) par worker element read** — reads offset 0 (the `Some` discriminant) → e.g. 3×2=6
-     instead of 60.  Same offset-ref fix at the par-worker element seam.
-   - **(4) `e = null` on a nullable LOCAL** — "cannot change type from `__nullable<P>` to null"
-     (the `v[i] = null` element form already works; the local-reassign form does not).
+     instead of 60.  **FIXED**: synthesize a `__par_nullable_w(e: __nullable<S>){ w(<payload>) }`
+     wrapper worker (builtins.rs), mirroring the destructure-wrapper pattern; the body reuses the
+     gap-2 offset-ref.  Both backends.
+   - **(4) `e = null` on a nullable LOCAL** — "cannot change type from `__nullable<P>` to null".
+     Still open (rare; `v[i] = null` element form works).
+
+   **DEFAULT-ON DESIGN (decided): E2 applies ABOVE the native stdlib.**  The flip surfaced that
+   native `#rust` functions write the DENSE struct ABI (`fields()` → `vector<JsonField>`), which
+   an E2 wrap desyncs (empty reads).  So **`STD_SOURCE` keeps dense `vector<S>`**; the rewrite
+   applies to user files + libraries.  This cut the tree-wide fallout from ~50 (JSON / `code!`
+   clusters all parse_str = STD_SOURCE).
+
+   **Trajectory (full-tree flip, gaps applied):** 107 → 81 (gaps 1-3) → 30 (stdlib dense) → **25**
+   (after the `!nullable` is-null operator + the field-vector-in-arg first-pass re-type fix).
+   The remaining **25 are a LONG TAIL of distinct per-axis script/lib issues**, each needing its
+   own seam:
+   - **method dispatch on a nullable receiver** — `v[i].method()` routes through `field()`'s
+     fn-ref path, NOT the gap-2 call coercion (06-structs `points[0].value()`);
+   - **nested-vector struct return** (p143), native-codegen edges (p171, p310), cross-lib
+     same-name struct (p379), moros/glb + wasm library suites, several `tests/scripts/*.loft`.
+
+   **Re-gated** (`LOFT_E2_SYNTH` restored on the 3 rewrite sites) so the monthly release branch
+   stays green while this tail closes — all access-glue fixes above are **gate-inert** (only fire
+   for `__nullable<>` types, which exist only gate-on).  To finish default-on: close the long tail
+   (method-dispatch seam first — highest leverage), then lift `LOFT_E2_SYNTH` on the 3 sites
+   (keep the `STD_SOURCE` exclusion), graduate the gated probes to
+   `tests/scripts/25-nullable-sequences.loft`.
 
    **Not E2** (excluded by the matrix): par over a struct with a TEXT field is garbage on BOTH
    backends gate-off — a pre-existing text+par heap bug.
-
-   When all four land: lift the `source == STD_SOURCE` + `LOFT_E2_SYNTH` guards
-   (`typedef.rs`, `parser/expressions.rs::e2_nullable_elem`, `parser/vectors.rs` ×2), graduate
-   the gated probes to `tests/scripts/25-nullable-sequences.loft`, delete the env checks.
 
    **Hardened this session (gate-inert, keepable):** the `__nullable<>` variant-name collision
    fix (two such enums → `Double structure type Null`; now enum-qualified structure keys), the
