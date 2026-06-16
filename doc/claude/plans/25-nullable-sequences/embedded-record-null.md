@@ -235,11 +235,11 @@ machinery survey.
     inline `== null` (operators.rs `enum_null`) reads.  Inert with the gate off (no `__nullable<`
     enums exist).  **The matrix proved the bug was NOT vector-specific:** the embedded struct
     field `bx.item = null` (CELL B) is the SAME mechanism through the SAME chokepoint — also a
-    no-op/`E0308` before, also fixed by the one branch.  *Leak:* nulling a present element/field
-    that carries a heap payload (text / nested vector) does NOT free that payload (the bare
-    `OpSetEnum` skips the `remove_claims` that `do_copy_record` does on reassign) — leaks until
-    the host is freed.  A leak, not corruption; freeing needs a `remove_claims(to, tp)`-style op
-    at the chokepoint (no standalone parser op exists yet) — follow-up.
+    no-op/`E0308` before, also fixed by the one branch.  *Leak (SUSPECTED, NOT reproduced — see § E2 Known gaps Sev 5):* the bare
+    `OpSetEnum` disc-0 skips the `remove_claims` that `do_copy_record` does on reassign, so a present
+    element/field's heap payload (text / nested vector) was *expected* to leak — but the store-leak
+    check did not flag it (`/tmp/p_gaps/15`, `18`).  Treat as intra-store-or-none until a targeted
+    heap-accounting probe confirms; if real, freeing needs a `remove_claims(to, tp)`-style op.
   - **`vr[i] == null`, `vr[i] = Row{…}` reassign, iteration — VERIFIED green (both backends).**
     Reassigning a *genuinely*-nulled element back to a value rebuilds the `Some` payload
     correctly (`remove_claims` on disc-0 frees nothing, `copy_block` + `copy_claims` rebuild);
@@ -301,6 +301,82 @@ to re-scope (the "reuse, don't build" premise would be weaker than the design as
 inline struct fields/elements at compile time and raise a clean recoverable error on a
 runtime-null source — keeps the `allocation.rs:560` OOB / native codegen crash from shipping
 while the representation work proceeds.
+
+## E2 — Known gaps: what does NOT work (gate-on)
+
+Empirically catalogued **2026-06-16** (HEAD `e036941e`) with `LOFT_E2_SYNTH=1`, every case run on
+**BOTH** backends; probes saved in `/tmp/p_gaps/*.loft` (regenerate from this section — `/tmp` is
+not durable).  The **gate-off** note tells you whether the same program behaves this way with the
+flag *off* (a pre-existing `main` behaviour) versus only under the synthesis (a plan-internal
+artefact).  Unless a row says otherwise it is **gated** — flag off ⇒ byte-identical to today.
+
+### Sev 1 — CRASH, and it reproduces on `main` (gate-OFF)
+- **`vec[i] = <runtime-null source>` → `allocation.rs:560` OOB on BOTH backends, BOTH field and
+  local, GATE-OFF too.**  Repro (`10`, `16`): `v: vector<Row> = […]; v[0] = maybe(false)` with
+  `fn maybe(b: boolean) -> Row { if b { Row{…} } else { null } }`.  This is the ORIGINAL E2 target
+  crash — `OpCopyRecord` derefs the null source's store `65535`.  E2 retired it for the embedded
+  NON-vector field (`Box{item: maybe(false)}`, via `handle_field`'s per-field convert), but the
+  **vector-element store path** (`towards_set` → `copy_ref` → `OpCopyRecord`) still has it.  Because
+  it reproduces gate-OFF it is a **pre-existing `main` crash**, not a plan artefact — the fix is the
+  E2 "vector-element convert" (lift `handle_field`'s present/null branch to the `vec[i] = expr`
+  store site).  *Candidate GitHub issue if not fixed as part of E2.*
+
+### Sev 2 — SILENT WRONG (corruption-class; gate-on only)
+- **`vec[i] = <present runtime source>` reads garbage.** (`17`)  `v[0] = maybe(true)` (returns
+  `Row{id:9}`) then `v[0].id` → `4` gate-ON; gate-OFF → `9` (correct).  Same root as the crash:
+  `copy_ref`/`OpCopyRecord` copies `Row`'s layout (`id@0,tag@8`) into an element that now expects the
+  `Some` layout (`disc@0,tag@4,id@8`).  Only an EXPRESSION source is wrong — the literal
+  `vec[i] = Row{…}` builds `Some` directly and is fine.
+- **`vec[i] ?? default` ignores an inline-null element.** (`08`)  `v[0]=null; v[0] ?? Row{id:99}` →
+  returns the stale `id=1`, not the default.  `??` tests the variable/handle sentinel, not the inline
+  discriminant.
+- **Reading a field of a NULLED element returns stale bytes.** (`13`)  `v[0]=null; v[0].id` → `1`
+  (the pre-null value) — no crash, no sentinel.  Arguably UB (reading a null element) but it silently
+  hands back the old value rather than raising.
+
+### Sev 3 — TYPE-SYSTEM gaps (one root: rewritten vs un-rewritten `vector<Row>` collide)
+Only annotated locals, params, and struct fields are rewritten to `vector<__nullable<Row>>`.  Every
+OTHER `vector<Row>` site stays un-rewritten, so the two representations meet and clash:
+- **Inferred local** `vi = [Row{…}]` (no annotation): not rewritten → `vi[i]=null` no-op + store-leak
+  warning (interp), `E0308` (native). (`01`)
+- **Return type** `fn f() -> vector<Row>`: not rewritten → `v: vector<Row> = f()` errors
+  `cannot change type vector<__nullable<Row>> → vector<Row>`. (`02`)
+- **Comprehension** `[for i in … { Row{…} }]`: element inference yields un-rewritten `vector<Row>` →
+  same type-change error when bound to a rewritten local. (`04`)
+- **Nested** `vector<vector<Row>>`: the INNER element is not rewritten → `vv[0][0]=null` no-op + leak
+  (interp), `E0308` (native). (`09`)
+- *Root + routing:* the rewrite is keyed to two specific PARSE SITES, not a single representation
+  decision.  Fixing the class means deciding the representation ONCE where the element type is
+  resolved (so inferred/return/comprehension/nested all agree) — the substrate question deferred from
+  E2a.5b.  Until then, a rewritten `vector<Row>` cannot interoperate with any un-rewritten one.
+
+### Sev 4 — PARSE gaps
+- **`match v[i] { null => … }`** does not parse (`Expect token }`). (`14`)  A `null` pattern arm on a
+  nullable element isn't recognised.
+- **`v += [null]`** rejected: `cannot store null elements in a vector<__nullable<Row>>`. (`07`)  The
+  literal-append path has no synth-enum null case.
+- **`vector<Row not null>`** rejected: `Expect token >`. (`11`)  The `not null` element opt-out
+  (E2a.6 / E3) isn't parsed yet.
+
+### Sev 5 — MEMORY (suspected, UNCONFIRMED)
+- **Free-on-null leak — not reproduced.**  Nulling a present heap-payload element (`OpSetEnum`
+  disc-0) leaves the old `tag` text unreferenced, so a leak was *expected* — but the store-leak check
+  did **not** flag it (`15`, `18`).  Any leak is therefore intra-store (below the per-store detector),
+  or there is none.  **Correction:** the E2a.5 commit/§ overclaimed this as a confirmed leak; it needs
+  a targeted heap-accounting probe before being treated as real.
+
+### Cross-cutting
+- **Whole feature gated** behind `LOFT_E2_SYNTH` + a non-stdlib restriction.  E2-close step: remove
+  the gate, graduate the gated probes to `tests/scripts/25-nullable-sequences.loft`, confirm green
+  WITHOUT the flag.
+
+### What DOES work (gate-on, both backends — the contrast)
+Struct field / annotated local / param `vector<Row>`: literal construct, element `.field` read,
+`[i]=null` (LITERAL null), `==null` / `!=null`, reassign (literal), iterate, **slice preserves
+null-ness** (`05`), **whole-vector copy preserves null-ness** (`06`), empty-literal + append (`03`);
+embedded NON-vector field `b.item` null / reassign / `==null` (`12`).  The common thread of the gaps:
+everything driven by a **runtime/expression source** (not a literal) or an **un-rewritten peer type**
+is unhandled; everything literal-and-rewritten works.
 
 ## RESUME POINT — start E2a here (standalone; read this section cold)
 
