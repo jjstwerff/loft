@@ -1,0 +1,39 @@
+// @PLN25 — reassigning an inline struct-enum element frees the OLD variant's
+// heap payload (`remove_claims` gained the symmetric `Parts::Enum` arm).  This
+// script guards CORRECTNESS across all three backends (interp / native / wasm):
+// the free zeroes the prior payload's field pointers in place, so the value
+// written immediately after must still read back correctly — a regression
+// where the free clobbered a still-needed field would surface as a wrong tag
+// or a spurious Empty here.  (The leak itself — record-count stability — is
+// pinned by `tests/leak.rs::pln25_inline_struct_enum_payload_free`, since an
+// intra-store leak is invisible to the script suite's store-level gate.)
+
+enum Maybe { Has { s: text }, Empty }
+
+fn read(v: vector<Maybe>) -> text {
+  match v[0] {
+    Has { s } => s,
+    Empty => "<empty>"
+  }
+}
+
+fn test() {
+  v: vector<Maybe> = [Empty];
+  // Churn Has -> Empty -> Has, overwriting a present payload each lap.
+  for i in 0..40 {
+    v[0] = Has { s: "lap-payload-{i}" };
+    v[0] = Empty;
+    v[0] = Has { s: "lap-payload-{i}" };
+  }
+  assert(read(v) == "lap-payload-39", "after churn: {read(v)}");
+
+  // Overwrite a present payload directly with another present payload.
+  v[0] = Has { s: "second" };
+  assert(read(v) == "second", "direct overwrite: {read(v)}");
+
+  // Final null leaves a clean Empty (no dangling payload read).
+  v[0] = Empty;
+  assert(read(v) == "<empty>", "final empty: {read(v)}");
+
+  print("ok\n");
+}

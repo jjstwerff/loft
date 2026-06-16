@@ -1830,6 +1830,26 @@ impl Stores {
                 }
                 self.store_mut(rec).set_u32_raw(rec.rec, rec.pos, 0);
             }
+            Parts::Enum(values) => {
+                // @PLN25 — symmetric with `copy_claims`' `Parts::Enum` arm
+                // (this fn previously fell through to the no-op `_` arm for an
+                // enum tp).  Free the LIVE variant's nested heap claims of an
+                // inline enum.  `get_byte(.., -1)` shifts so stored byte 1 =
+                // variant 0; a null/absent inline enum reads NEGATIVE (stored
+                // 0 → -1, an absent rec → i32::MIN) and owns no payload — skip
+                // rather than index `values` OOB.  Without this arm, overwriting
+                // an inline `__nullable<S>` element/field (`vr[i] = null`, the
+                // present↔null convert) leaked the prior `Some` payload (a text
+                // / nested vector) until the host store was freed.
+                let e_nr = self.store(rec).get_byte(rec.rec, rec.pos, -1);
+                if e_nr >= 0 && (e_nr as usize) < values.len() {
+                    let tp = values[e_nr as usize].0;
+                    // Skip simple (payload-less) variants — `u16::MAX` marks them.
+                    if tp != u16::MAX {
+                        self.remove_claims(rec, tp);
+                    }
+                }
+            }
             _ => {}
         }
     }

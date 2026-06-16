@@ -658,19 +658,28 @@ impl Parser {
         // reads exactly that (operators.rs `enum_null`).  Inert with the synthesis
         // gate off — no `__nullable<` enums exist, so the name check never matches.
         //
-        // NOTE: this does not free the prior element's heap payload (a present
-        // `Some` carrying a text / nested vector) — that leaks until the host is
-        // freed.  A leak, not corruption; tracked in embedded-record-null.md.
+        // A present `Some` carrying heap payload (text / nested vector) is freed
+        // first via `OpClearKeyed` (→ `remove_claims`), which reads the
+        // discriminant and no-ops on an already-null / payload-less element — so
+        // it is safe regardless of prior state.  Without it the old payload leaks
+        // until the host store is freed (@PLN25 E2 leak, was tracked in
+        // embedded-record-null.md).
         if op == "="
             && matches!(val.unspan(), Value::Null)
             && let Type::Enum(syn, true, _) = f_type
             && self.data.def(*syn).name.starts_with("__nullable<")
             && !matches!(to, Value::Var(_))
         {
-            return self.cl(
+            let set_null = self.cl(
                 "OpSetEnum",
                 &[to.clone(), Value::Int(0), Value::Enum(0, u16::MAX)],
             );
+            let kt = self.data.def(*syn).known_type();
+            if !self.first_pass && kt != u16::MAX {
+                let free = self.cl("OpClearKeyed", &[to.clone(), Value::Int(i32::from(kt))]);
+                return v_block(vec![free, set_null], Type::Void, "nullable_elem_set_null");
+            }
+            return set_null;
         }
         // @PLN25 E2 — `inline_nullable = <expression source of type S>`: a nullable
         // `__nullable<S>` field / vector element assigned from an EXPRESSION whose
@@ -722,14 +731,21 @@ impl Parser {
             );
             let is_null = self.cl("OpRefIsNull", &[Value::Var(src_var)]);
             let not_null = self.cl("OpNot", &[is_null]);
-            return v_block(
-                vec![
-                    v_set(src_var, val.clone()),
-                    v_if(not_null, Value::Insert(present), null_set),
-                ],
-                Type::Void,
-                "nullable_elem_convert",
-            );
+            // Free the element's prior `Some` payload before overwriting it with
+            // either the new `Some` or null — both branches below clobber the
+            // inline slot in place, so without this the old heap payload (text /
+            // nested vector) leaks.  `remove_claims` no-ops on an already-null
+            // element, so it is safe even on first assignment.  Free FIRST: the
+            // source (a plain `Reference(S)` value) cannot alias this enum-typed
+            // inline slot, so clearing it does not disturb the source read.
+            let kt = self.data.def(syn).known_type();
+            let mut body = Vec::with_capacity(3);
+            if kt != u16::MAX {
+                body.push(self.cl("OpClearKeyed", &[to.clone(), Value::Int(i32::from(kt))]));
+            }
+            body.push(v_set(src_var, val.clone()));
+            body.push(v_if(not_null, Value::Insert(present), null_set));
+            return v_block(body, Type::Void, "nullable_elem_convert");
         }
         if matches!(f_type, Type::Enum(_, true, _) | Type::Reference(_, _))
             && op == "="

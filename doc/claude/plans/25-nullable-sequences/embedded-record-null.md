@@ -377,25 +377,31 @@ others not made the two representations collide.  **Fixed by two moves:**
   backends: a struct with both a dense `vector<Row not null>` and a nullable `vector<Row>` field
   coexist.  **The ONE remaining open gap-matrix probe is `match` above.**
 
-### Sev 5 — MEMORY [CONFIRMED 2026-06-16 via `store_memory()` accounting]
-- **Free-on-null leak — REAL, ~1 orphaned record per `vec[i] = null` on a present heap-payload
-  element.**  Heap-accounting probe (`/tmp/p_e3/leak.loft` — churn `v[0]=Row{…text…}; v[0]=null` in a
-  loop, `store_memory()` before/after): the `main_vector<__nullable<Row>>` store grew **53 records
-  (50 churns) → 2053 records (2050 churns)** — exactly +1 record/churn, `data` 0.01→0.10 MB.  The
-  store-leak check missed it because it tracks unfreed STORES; this is INTRA-store (the orphaned text
-  is reclaimed only when the whole store is freed at scope/program exit), so a long-lived churned
-  nullable vector grows unbounded.  *Root:* `OpSetEnum` disc-0 (null-literal path) and the
-  `handle_field`-style convert (runtime-source path) write the element WITHOUT freeing its prior `Some`
-  payload — unlike `do_copy_record`, which `remove_claims`-frees first.  *Fix (M, both backends):* free
-  the element's claims before the null/convert store — a `remove_claims`-then-disc-0 op (no standalone
-  parser op exists; add one, or copy-from-a-zero temp which reuses `do_copy_record`'s free).  **Needed
-  before default-on.**
+### Sev 5 — MEMORY [CONFIRMED 2026-06-16, then FIXED 2026-06-16]
+- **Free-on-null leak — FIXED.**  Confirmed via heap-accounting probe (`/tmp/p_e3/leak.loft` — churn
+  `v[0]=Row{…text…}; v[0]=null` in a loop, `store_memory()` before/after): pre-fix the
+  `main_vector<__nullable<Row>>` store grew **53 (50 churns) → 2053 (2050 churns)** — +1 record/churn.
+  Store-level leak check missed it (it tracks unfreed STORES; this is INTRA-store — the orphaned text
+  is reclaimed only at store free), so a long-lived churned nullable vector grew unbounded.
+  *Root (GENERAL, not E2-specific):* `remove_claims` had no `Parts::Enum` arm — it fell through to the
+  no-op `_`, so freeing an inline enum never freed its live variant's heap payload.  This leaked for
+  EVERY inline struct-enum with a text / nested-vector field on overwrite, default-on, since before E2
+  (baseline `vector<Maybe{Has{text},Empty}>` grew 52→2052 over 2000 churns).  The E2 paths
+  (`OpSetEnum` disc-0, the convert) then compounded it by also not freeing before the in-place write.
+  *Fix:* (1) the symmetric `Parts::Enum` arm in `remove_claims` (allocation.rs, twin of
+  `copy_claims`'s arm — reads disc via `get_byte(.., -1)`, recurses into the live variant, no-ops on
+  null/payload-less); (2) an `OpClearKeyed`-free (`→ remove_claims`) emitted before the two E2
+  overwrite paths in `towards_set` (null-literal + present↔null convert).  Reused the existing
+  `OpClearKeyed` op (already wired interp + native) rather than adding a new op.  Verified leak-flat
+  (3 records constant) AND value-correct on BOTH backends.  Regressions:
+  `tests/leak.rs::pln25_inline_struct_enum_payload_free` (gate-off record count) +
+  `tests/scripts/389-inline-enum-payload-free.loft` (cross-backend correctness).
 
 ### Cross-cutting — the remaining work to FINISH (default-on)
 The feature is gated `LOFT_E2_SYNTH` + a non-stdlib restriction (`source == STD_SOURCE` guards in
 `typedef.rs` + `parser/vectors.rs`).  Per the project standard, **off-by-default ≠ finished** — the
-gate is the marker.  Remaining, in finishing order: (1) **`match v[i] { null => }`** parse (the ONE
-open probe); (2) **the leak** — confirm/dismiss via a heap-accounting probe; (3) **generics**
+gate is the marker.  Remaining, in finishing order: ~~(1) `match v[i] { null => }` parse~~ DONE
+(control.rs null-arm); ~~(2) the leak~~ FIXED (see Sev 5 above); (3) **generics**
 `vector<T>` — `__nullable<T>` needs `T` concrete (instantiate-time or exclude); (4) **inferred
 comprehension** edge; (5) **GATE REMOVAL + stdlib/libs fallout** — flip default-on, lift the
 non-stdlib restriction (~17 stdlib + ~8 lib `vector<Struct>` must work rewritten; de-risk by flipping

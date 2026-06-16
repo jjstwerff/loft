@@ -40,10 +40,16 @@ bodies, comprehensions.
 **The gate (`LOFT_E2_SYNTH`) is the marker that E2 is not yet finished** — "finished" means
 default-on (gate removed), per the project standard.  The remaining work, in finishing order:
 
-1. **The free-on-null leak (Sev 5) — CONFIRMED, needs the fix.**  `vec[i] = null` on a present
-   heap-payload element orphans ~1 record/null (intra-store; store grew 53→2053 over 2000 churns
-   via `store_memory()`).  Free the element's prior `Some` claims before the null/convert store —
-   a `remove_claims`-then-disc-0 op, or copy-from-a-zero temp. *(M, both backends)*
+1. **The free-on-null leak (Sev 5) — FIXED.**  Root cause was GENERAL, not E2-specific:
+   `remove_claims` had no `Parts::Enum` arm (it fell through to the no-op `_`), so freeing an
+   inline enum NEVER freed its live variant's heap payload — every inline struct-enum with a
+   text / nested-vector field leaked it on overwrite, default-on, since before E2 (baseline
+   confirmed: a `vector<Maybe{Has{text},Empty}>` grew 52→2052 over 2000 churns; fixed holds at
+   2).  Fix = the symmetric `Parts::Enum` arm (allocation.rs, twin of `copy_claims`' arm) +
+   an `OpClearKeyed`-free emitted before the two E2 overwrite paths in `towards_set`
+   (null-literal, present↔null convert).  Verified leak-flat + value-correct on BOTH backends.
+   Regressions: `tests/leak.rs::pln25_inline_struct_enum_payload_free` (gate-off record-count)
+   + `tests/scripts/389-inline-enum-payload-free.loft` (cross-backend correctness).
 2. **Generics** — `vector<T>` (generic element); `__nullable<T>` can't be synthesised until
    `T` is concrete.  Decide: instantiate-time rewrite, or exclude generics. *(M, design)*
 3. **Inferred comprehension** `v = [for … { S{…} }]` (no annotation) — edge; the declared
