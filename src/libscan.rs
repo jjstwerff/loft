@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 //! Tier-0 lazy auto-`use`: a lightweight pre-scan of a loft source file for
-//! `lib::…` references (lib_plans/future/03-lazy-stdlib).
+//! `lib::…` references (lib_plans/59-lazy-stdlib).
 //!
 //! The parser loads explicit `use lib;` libraries at the TOP of each pass,
 //! before any definition is created — which is the only place a library can be

@@ -30,7 +30,7 @@
 //!
 //! `"package": "loft"` entries cover the loft binary itself —
 //! same schema; same classifier.  See
-//! [`lib-plan 30 § Phase 30.4`](../doc/claude/lib_plans/future/30-loft-distribution/README.md)
+//! [`lib-plan 30 § Phase 30.4`](../doc/claude/lib_plans/78-loft-distribution/README.md)
 //! for the binary-side flow.
 
 #![cfg(feature = "registry")]

@@ -212,7 +212,7 @@ pub struct Store {
     /// `<path>.dmeta` sidecar atomically.  Cleared (left `None`) on
     /// every non-durable constructor (`new`, `open`, `clone_locked*`,
     /// `borrow_locked_*`, `new_freed_sentinel`).  See
-    /// `doc/claude/plans/future/38-loft-store-durable/`.
+    /// `doc/claude/plans/43-loft-store-durable/`.
     #[cfg_attr(not(feature = "mmap"), allow(dead_code))]
     durable_meta_path: Option<std::path::PathBuf>,
     /// @PLAN38 phase 01 — durability-mode tier on this store.  Tracks
@@ -2113,7 +2113,7 @@ unsafe impl Send for Store {}
 // signature + tier + CRCs.  The main store file is bit-for-bit identical to
 // a legacy (non-durable) store — durability is a metadata layer, not a
 // payload-layout change.  See
-// `doc/claude/plans/future/38-loft-store-durable/00-foundation.md`.
+// `doc/claude/plans/43-loft-store-durable/00-foundation.md`.
 //
 // Phase-01 reach: nothing inside the `loft` binary calls these yet (the
 // training-port consumer that drives @PLAN38 lives in another repo and

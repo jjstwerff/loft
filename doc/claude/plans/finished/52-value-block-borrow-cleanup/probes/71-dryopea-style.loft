@@ -1,6 +1,6 @@
 // Probe 71 — Cluster V real-library extraction: dryopea-style consumer
 //
-// dryopea (the sci-fi tower-defence game project; see plans/future/46-dryopea)
+// dryopea (the sci-fi tower-defence game project; see plans/49-dryopea)
 // uses extensive map/struct/JSON-cast machinery.  Its JSON parsing and
 // schema-validation paths will eventually need text fallback patterns —
 // e.g., reading a config field with a default when the JSON omits it.
