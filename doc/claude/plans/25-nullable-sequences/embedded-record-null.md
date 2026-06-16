@@ -328,9 +328,12 @@ artefact).  Unless a row says otherwise it is **gated** — flag off ⇒ byte-id
   (returns `Row{id:9}`) then `v[0].id` → `4` gate-ON (gate-OFF → `9`).  Same root as the Sev-1 crash:
   `copy_ref`/`OpCopyRecord` copied `Row`'s layout (`id@0,tag@8`) into an element expecting the `Some`
   layout (`disc@0,tag@4,id@8`).  Fixed by the same vector-element convert — `v[0].id` → `9` now.
-- **`vec[i] ?? default` ignores an inline-null element.** (`08`)  `v[0]=null; v[0] ?? Row{id:99}` →
-  returns the stale `id=1`, not the default.  `??` tests the variable/handle sentinel, not the inline
-  discriminant.
+- **[FIXED 2026-06-16] `vec[i] ?? default` ignored an inline-null element.** (`08`)  `v[0]=null;
+  v[0] ?? Row{id:99}` returned the stale `id=1`, not the default — `??` tested the `.rec`/handle
+  sentinel (`OpConvBoolFromRef`), not the inline discriminant.  Fixed: `build_null_coalesce_default`'s
+  `null_check_builder` (operators.rs) now forks the `Enum(_,true,_)` arm on the `__nullable<` name and
+  tests `discriminant != 0` (mirrors the E2a.4 `== null` lowering).  Verified both backends — null →
+  default (`99`), present → keep the element (`1`).
 - **Reading a field of a NULLED element returns stale bytes.** (`13`)  `v[0]=null; v[0].id` → `1`
   (the pre-null value) — no crash, no sentinel.  Arguably UB (reading a null element) but it silently
   hands back the old value rather than raising.

@@ -1349,6 +1349,19 @@ impl Parser {
                 let mut nc = Value::TupleGet(*v, 0);
                 this.convert(&mut nc, &first_tp, &Type::Boolean);
                 nc
+            } else if let Type::Enum(syn, true, _) = lhs_type
+                && this.data.def(*syn).name.starts_with("__nullable<")
+            {
+                // @PLN25 E2 — a synthetic `__nullable<S>` enum backs an INLINE
+                // field / vector element (no DbRef slot), so null is discriminant 0
+                // — NOT the `.rec`/store_nr sentinel that `OpConvBoolFromRef` below
+                // tests (it would misread the inline value).  The builder produces
+                // "is NOT null" (v_if true → keep lhs), so test discriminant != 0.
+                // Mirrors the E2a.4 `== null` lowering (`enum_null`).
+                let get_enum = this.cl("OpGetEnum", &[src.clone(), Value::Int(0)]);
+                let disc = this.cl("OpConvIntFromEnum", &[get_enum]);
+                let is_null = this.cl("OpEqInt", &[disc, Value::Int(0)]);
+                this.cl("OpNot", &[is_null])
             } else if matches!(
                 lhs_type,
                 Type::Reference(_, _)
