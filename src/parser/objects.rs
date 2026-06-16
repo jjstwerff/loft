@@ -27,7 +27,7 @@ impl Parser {
         // but `s` is a real, non-hidden arg — @P387 case 2).
         (0..n_args)
             .filter(|&a| {
-                !self.data.def(fn_d_nr).attributes()[a as usize].hidden
+                !self.data.def(fn_d_nr).attributes()[a].hidden
                     && !self.data.attr_name(fn_d_nr, a).starts_with("__")
             })
             .map(|a| self.data.attr_type(fn_d_nr, a))

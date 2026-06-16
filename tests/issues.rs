@@ -1273,11 +1273,10 @@ fn test() {
 /// (`const` was read as the field name, then the real field choked).
 #[test]
 fn p386_const_struct_field_one_clear_error() {
-    code!("struct Cell { const c_color: integer, height: integer }")
-        .error(
-            "const struct fields are not yet supported (planned — @PLAN33); \
+    code!("struct Cell { const c_color: integer, height: integer }").error(
+        "const struct fields are not yet supported (planned — @PLAN33); \
              remove `const` for now at p386_const_struct_field_one_clear_error:1:28",
-        );
+    );
 }
 
 // ── P139 regression guards ──────────────────────────────────────────────────
