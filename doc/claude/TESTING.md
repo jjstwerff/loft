@@ -272,7 +272,7 @@ Family today:
 
 Future matrices follow the same shape (coroutine validation
 is active under `plans/finished/16-coroutine-validation/`; match
-validation pending in `plans/future/18-match-validation/`).  Closure validation
+validation pending in `plans/29-match-validation/`).  Closure validation
 shipped as `plans/finished/15-closure-validation/` 2026-05-12;
 22 cells in `tests/closure_matrix.rs` plus 5 leak guards in
 `tests/leak.rs::p15_phase0[345]_*_no_leak`.
@@ -314,8 +314,8 @@ cells.
 
 For the per-plan matrix definitions and bug-discovery records, see:
 
-- [`plans/finished/14-tuple-validation/`](plans/finished/14-tuple-validation/) (closed 2026-05-11)
-- [`plans/finished/17-template-validation/`](plans/finished/17-template-validation/) (closed 2026-05-09)
+- [`plans/finished/14-tuple-validation/`](plans/finished/14-tuple-validation) (closed 2026-05-11)
+- [`plans/finished/17-template-validation/`](plans/finished/17-template-validation) (closed 2026-05-09)
 
 ---
 
@@ -652,7 +652,7 @@ T4 harness subprocess isolation shipped via `.config/nextest.toml`'s
 nextest escalates SIGTERM → SIGKILL on a hung test process,
 localizing the hang to ONE test binary; other test binaries
 continue.  Full closure record at
-[`plans/finished/49-execution-timeout/`](plans/finished/49-execution-timeout/).
+[`plans/finished/49-execution-timeout/`](plans/finished/49-execution-timeout).
 
 ---
 

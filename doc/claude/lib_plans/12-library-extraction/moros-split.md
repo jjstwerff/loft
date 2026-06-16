@@ -44,8 +44,8 @@ for dryopea's build-order walls + rock faces), `lib/overland.loft`
 spawn, editor/UI/render stay in `moros_*`.  Preserve the existing
 sparse Cell/Chunk shape (TTT v5 + audience demo) alongside the hex
 additions (they share addressing — Open Q #10).  Unblocks dryopea
-([@PLAN46](../../plans/future/46-dryopea/README.md)) AND
-bumper-airplanes ([@PLAN50](../../plans/future/50-bumper-airplanes/README.md))
+([@PLAN46](../../plans/49-dryopea/README.md)) AND
+bumper-airplanes ([@PLAN50](../../plans/51-bumper-airplanes/README.md))
 — see [§ Cross-project consumers](#cross-project-consumers--moros--dryopea--bumper-airplanes)
 for the shared-substrate argument.  Phase 7a is described as
 "monorepo-internal" because no user-visible behaviour changes, but
@@ -222,7 +222,7 @@ Sketch of v1 fields (extracted from current moros_map save/load):
 
 **Per-consumer overlays.**  Bumper extrudes `palette[i].extrude`
 strings into 3D pillars / cliffs; dryopea reads `palette[i].height_band`
-for slope generation (paired with [lib-plan 20 terrain-heightmap](../future/20-terrain-heightmap/README.md));
+for slope generation (paired with [lib-plan 20 terrain-heightmap](../71-terrain-heightmap/README.md));
 moros reads the existing flat fields.  Unknown overlay fields are
 preserved on round-trip (forward-compat).
 
@@ -236,7 +236,7 @@ MapFile.  Keeps the MapFile shape stable across all three games.
 Chunk extractions + cleanup; each follows the
 [per-chunk template](REFERENCE.md#per-chunk-extraction-template).  6w
 needs `world` complete (7a) + green CI (6.5); 7b needs graphics +
-world published; 7c is greenfield ([@PLAN46](../../plans/future/46-dryopea/README.md));
+world published; 7c is greenfield ([@PLAN46](../../plans/49-dryopea/README.md));
 8 adds `audience_crystal` package `tests/` and updates
 [PACKAGES.md](../../PACKAGES.md) to the monorepo-free state.
 
@@ -249,10 +249,10 @@ ships:
 
 | Sub-arc | Driving slot / design | Verify |
 |---|---|---|
-| Editor rename + L1-L2 of universal-editor extraction | [`lib_plans/future/24-universal-editor/`](../future/24-universal-editor/README.md) L0 (architecture spike + naming) + L1 (`hex_grid`) + L2 (`hex_map`) | `lib/moros_editor/`'s name reflects its cross-game scope; the L0 naming decision is what unblocks the rename |
-| Physics primitives | [`lib_plans/future/26-physics-2body/`](../future/26-physics-2body/README.md) Phase 1 (types + sphere-vs-AABB step) | `lib/moros_sim/collide.loft` items migrated into `lib/physics_2body/`; moros tests green using the new package |
+| Editor rename + L1-L2 of universal-editor extraction | [`lib_plans/73-universal-editor/`](../73-universal-editor/README.md) L0 (architecture spike + naming) + L1 (`hex_grid`) + L2 (`hex_map`) | `lib/moros_editor/`'s name reflects its cross-game scope; the L0 naming decision is what unblocks the rename |
+| Physics primitives | [`lib_plans/75-physics-2body/`](../75-physics-2body/README.md) Phase 1 (types + sphere-vs-AABB step) | `lib/moros_sim/collide.loft` items migrated into `lib/physics_2body/`; moros tests green using the new package |
 | MapFile schema | Inline design in Phase 7a above | `world::load_mapfile()` + `world::save_mapfile()` are the only entry points; `MAPFILE.md` documents v1 |
-| Particles slot | [`lib_plans/future/27-particles/`](../future/27-particles/README.md) Phases 1–2 (trail + burst types) | Slot READMEs exist; PLAN50 / dryopea use the slot's API in their (still-stalled) design docs |
+| Particles slot | [`lib_plans/76-particles/`](../76-particles/README.md) Phases 1–2 (trail + burst types) | Slot READMEs exist; PLAN50 / dryopea use the slot's API in their (still-stalled) design docs |
 | Broadcast QoS | [`lib_plans/future/08-server/` § Gap 8](../future/08-server/README.md#gap-8--per-recipient-broadcast-qos-sight--rate-lod--forecast) — `BroadcastTopology` + sight + rate-LOD + forecast | `lib/server/src/broadcast.loft` exposes the topology API; PLAN50 wires through it |
 
 Each row is independently sized in its own slot; this table is the

@@ -382,7 +382,7 @@ single time, however often you read the name later (`name = read_line()` prompts
 once).
 
 Current limits, with their planned fixes in
-[plans/12-repl-and-introspection/](plans/12-repl-and-introspection/):
+[plans/12-repl-and-introspection/](plans/12-repl-and-introspection):
 
 - For a long session the REPL still **re-runs the accumulated bindings** (now all
   side-effect-free literals) each time you observe a value, so cost grows with
@@ -398,5 +398,5 @@ Current limits, with their planned fixes in
 
 - [LOFT.md](LOFT.md) — the language the REPL evaluates.
 - [STDLIB.md](STDLIB.md) — the functions available in every session.
-- [plans/12-repl-and-introspection/](plans/12-repl-and-introspection/) — the
+- [plans/12-repl-and-introspection/](plans/12-repl-and-introspection) — the
   design and per-phase notes for this work.

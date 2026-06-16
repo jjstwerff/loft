@@ -337,7 +337,7 @@ effort is golden tests and the CLI argv parser.
   handlers on top of the same introspect module.
 - **Editor / IDE integration** — would expose introspect via the
   language server protocol; tracked separately in
-  `doc/claude/lib_plans/future/09-lsp/README.md`.
+  `doc/claude/lib_plans/63-lsp/README.md`.
 - **Trace mode** — emitting per-step execution trace is
   `LOFT_LOG=full`'s job; introspection covers static dumps only.
 - **Profiling output** — flame graphs, opcode-count histograms

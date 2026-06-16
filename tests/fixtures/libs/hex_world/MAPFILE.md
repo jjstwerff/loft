@@ -6,9 +6,9 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # MapFile schema — cross-project contract
 
 Three consumer projects load MapFile JSON: **moros** (RPG, author +
-runtime), **dryopea** ([@PLAN46](../../doc/claude/plans/future/46-dryopea/README.md),
+runtime), **dryopea** ([@PLAN46](../../doc/claude/plans/49-dryopea/README.md),
 sci-fi tower-defence — loads moros-authored maps), and
-**bumper-airplanes** ([@PLAN50](../../doc/claude/plans/future/50-bumper-airplanes/README.md),
+**bumper-airplanes** ([@PLAN50](../../doc/claude/plans/51-bumper-airplanes/README.md),
 audience demo — extrudes a moros-authored MapFile into 3D).
 
 This document is the **cross-project contract**: the schema the three
@@ -122,7 +122,7 @@ logic at load time:
 | Consumer | Overlay |
 |---|---|
 | **moros** | Authoritative — reads everything, including its own spawn/NPC state. |
-| **dryopea** | Reads hex grid + materials.  Extends via [lib-plan 20 terrain-heightmap](../../doc/claude/lib_plans/future/20-terrain-heightmap/README.md): the `md_slope` / `md_drop` fields on `MaterialDef` drive the Eikonal solver that computes hex heights from painted slope (replaces hand-set `h_height` for natural terrain). |
+| **dryopea** | Reads hex grid + materials.  Extends via [lib-plan 20 terrain-heightmap](../../doc/claude/lib_plans/71-terrain-heightmap/README.md): the `md_slope` / `md_drop` fields on `MaterialDef` drive the Eikonal solver that computes hex heights from painted slope (replaces hand-set `h_height` for natural terrain). |
 | **bumper-airplanes** | Reads hex grid + materials.  Extrudes per `md_extrude` strings into 3D pillars / cliffs / ramps (`wall`, `wall_high`, `hill`, etc.).  Target bumpers live in a sibling `targets.json` keyed to the same hex coords (PLAN50 Open Q #6). |
 
 Overlay fields are **opt-in** and have sensible defaults — moros maps
@@ -161,11 +161,11 @@ is the moros_map loft code.
 
 - [lib_plans/12 § Phase 7a](../../doc/claude/lib_plans/12-library-extraction/README.md#phase-7a--moros-world-split-cross-project-unlock-appears-monorepo-internal)
   — drives the eventual move.
-- [lib_plans/future/20 terrain-heightmap](../../doc/claude/lib_plans/future/20-terrain-heightmap/README.md)
+- [lib_plans/future/20 terrain-heightmap](../../doc/claude/lib_plans/71-terrain-heightmap/README.md)
   — adds `md_slope` + `md_drop` to `MaterialDef`.
-- [lib_plans/future/24 universal-editor](../../doc/claude/lib_plans/future/24-universal-editor/README.md)
+- [lib_plans/future/24 universal-editor](../../doc/claude/lib_plans/73-universal-editor/README.md)
   — the editor that AUTHORS these files.
-- [@PLAN46 dryopea](../../doc/claude/plans/future/46-dryopea/README.md)
+- [@PLAN46 dryopea](../../doc/claude/plans/49-dryopea/README.md)
   — consumes MapFile + lib-plan 20 height-field overlay.
-- [@PLAN50 bumper-airplanes](../../doc/claude/plans/future/50-bumper-airplanes/README.md)
+- [@PLAN50 bumper-airplanes](../../doc/claude/plans/51-bumper-airplanes/README.md)
   — consumes MapFile + extrudes via `md_extrude` palette field.

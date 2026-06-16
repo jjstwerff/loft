@@ -129,7 +129,7 @@ is the inverse.  No JSON parsing on the hot path for world data.
 
 **Per-blob session id** (`u32` in the 5-byte blob header
 `[type:u8] [session:u32] [...payload...]` — see [TTT v5 wire
-spec](../future/32-tic-tac-toe/README.md#tic-tac-toe-v5--binary-world-stream--many-clients--reconnect-catch-up--sluggish-tempo)
+spec](../39-tic-tac-toe/README.md#tic-tac-toe-v5--binary-world-stream--many-clients--reconnect-catch-up--sluggish-tempo)
 for the validated format).  Mostly useful when starting a new
 client:
 the server splits the initial `world_snapshot` into one blob per
@@ -295,7 +295,7 @@ active player (excluding the recipient) and broadcasts an
 drives the **Jump to active** box's flash.
 
 The 1-second steady heartbeat is the validated cadence in
-[TTT v5](../future/32-tic-tac-toe/README.md#tic-tac-toe-v5--binary-world-stream--many-clients--reconnect-catch-up--sluggish-tempo).
+[TTT v5](../39-tic-tac-toe/README.md#tic-tac-toe-v5--binary-world-stream--many-clients--reconnect-catch-up--sluggish-tempo).
 Per-change signalling was rejected as overwhelming during busy
 periods; tick-rate signalling (10 Hz) was rejected as wasting
 bandwidth in quiet moments.  One every second feels like a
@@ -367,7 +367,7 @@ all tiers, no dropped clients, no failed sends.
 throughput.**  Per-client connect latency degrades super-linearly, so all
 30 clients took ~3.7 minutes to connect — a real concern for a meetup
 where ~30 phones connect at once.  Root cause is the
-[Polled-only single-threaded loop](../future/32-tic-tac-toe/README.md):
+[Polled-only single-threaded loop](../39-tic-tac-toe/README.md):
 the loop is too busy to promptly `accept()` new sockets because each
 iteration does O(N) per-client polling + a **synchronous O(cells)
 `replay_world_to` on every connect** + a periodic O(cells) `world_save`,
@@ -560,7 +560,7 @@ The durable fix: separate socket I/O from the simulation loop using OS
 readiness multiplexing.  This is the model `lib/server` already designs
 toward in [§ Multi-threading model](../../lib_plans/future/08-server/README.md#multi-threading-model)
 (tokio runtime + thread pool); the shipped server is the "polled-only"
-subset noted in [TTT v5](../future/32-tic-tac-toe/README.md).  What's
+subset noted in [TTT v5](../39-tic-tac-toe/README.md).  What's
 needed:
 
 - **B1 — a dedicated reactor thread** in the native layer owns the listen
@@ -582,7 +582,7 @@ needed:
   view."
 - **B3 — reactor serves the connect snapshot itself.**  The loft loop
   publishes the world as an atomically-swapped `Arc<blob>` (or an mmap'd
-  buffer — composes with [@PLAN38 durable loft-store](../future/38-loft-store-durable/README.md)).
+  buffer — composes with [@PLN43 durable loft-store](../43-loft-store-durable/README.md)).
   On accept the reactor completes the WS handshake *and* ships the
   snapshot with one buffered `writev` / large `SO_SNDBUF`, never touching
   the sim loop.  Replay latency leaves the hot path entirely.
@@ -765,7 +765,7 @@ mid-log-append" — a partial 9-byte record at the tail of
 header) and the partial record is discarded, but the previous
 records replay cleanly.
 
-What this design does NOT yet do, and that @PLAN38 picks up:
+What this design does NOT yet do, and that @PLN43 picks up:
 
 - **Per-record CRC** — a torn write inside a 9-byte record
   could write garbage that passes the size check.  CRC at the
@@ -873,5 +873,5 @@ similar) that:
 - [`03-projector-view.md`](03-projector-view.md) — the second
   subscriber type
 - `lib/server/src/server.loft` — shipped multi-client WS API
-- [`../../../lib_plans/future/08-server/`](../../lib_plans/future/08-server/) —
+- [`../../../lib_plans/future/08-server/`](../../lib_plans/future/08-server) —
   upstream library work this phase sharpens

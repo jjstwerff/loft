@@ -174,7 +174,7 @@ phase 05 wires existing functions to new command names.
 ## Out of scope
 
 - **`:debug` / breakpoints** — DAP-style stepping is a separate
-  feature tracked in `doc/claude/lib_plans/future/09-lsp/README.md` (LSP.3 / NDB.0).
+  feature tracked in `doc/claude/lib_plans/63-lsp/README.md` (LSP.3 / NDB.0).
 - **`:save` / `:load` of a session to disk** — deferred to
   phase 06 cleanup if there's user demand.
 - **Tab completion** of fn names, locals, struct fields — useful

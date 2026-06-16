@@ -101,10 +101,10 @@ PLAN_PATTERN = re.compile(
     r"plan-(?P<num>[0-9]+)"
     # Only migrate when NOT followed by `-`.  Compound words like
     # `pre-plan-07-phase-4-step-4.8` shouldn't become
-    # `pre-@PLAN07-phase-4-step-4.8` — the scanner would treat the
-    # whole `@PLAN07-phase-4-step-4.8` as a single sub-phase tag,
+    # `pre-@PLAN07-phase-4-step-4.8` — the scanner would treat the  <!--noindex-->
+    # whole `@PLAN07-phase-4-step-4.8` as a single sub-phase tag,  <!--noindex-->
     # which collides with the actual phase-tag convention
-    # (`@PLAN07-04` style, not `@PLAN07-phase-4`).
+    # (`@PLAN07-04` style, not `@PLAN07-phase-4`).  <!--noindex-->  (illustrative example, not a live ref)
     r"(?![-0-9a-zA-Z])"
 )
 

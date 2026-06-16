@@ -182,7 +182,7 @@ just bounds the gather).
 ## 7. moros consumer (Phase C, sketch)
 
 The per-hex **height field** this meshing reads is computed upstream by
-[lib-plan 20 — terrain height-map](../future/20-terrain-heightmap/README.md)
+[lib-plan 20 — terrain height-map](../71-terrain-heightmap/README.md)
 (slope-based generation from a drainage seed) — also the input for the
 **dryopea** tower-defence consumer.  gridmesh meshes whatever height field
 it's handed.
@@ -248,7 +248,7 @@ the global `build_hex_meshes`.  Axial `HexLayout` is implemented here.
    incremental crystal logic gated by `tests/scripts/133` (incremental==full,
    both backends); the demo's visual render is the human smoke step.
 8. **(later) moros Phase C** — own sub-plan.  Its height-field INPUT is
-   produced by [lib-plan 20 — terrain height-map](../future/20-terrain-heightmap/README.md)
+   produced by [lib-plan 20 — terrain height-map](../71-terrain-heightmap/README.md)
    (slope-based generation; gridmesh meshes the field it computes).
 
 ### Tuning surface — mechanism vs policy (design rule, 2026-05-21)

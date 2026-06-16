@@ -22,7 +22,7 @@ game from. Its defining constraint is also its defining strength —
 That is not a compromise versus an "everything in WASM" playground — it is the *only*
 model that can build real games:
 
-| | server-backed IDE (this plan, M5e) | serverless WASM playground ([`07-web-ide`](../../lib_plans/future/07-web-ide/README.md)) |
+| | server-backed IDE (this plan, M5e) | serverless WASM playground ([`07-web-ide`](../../lib_plans/62-web-ide/README.md)) |
 |---|---|---|
 | Runs the game | **native OpenGL window, full GPU, native speed** | sandboxed canvas, no native GPU, no threads-of-note |
 | Filesystem | the real project on disk (assets, `lib/`, `tests/`) | IndexedDB only; no real FS |
@@ -41,7 +41,7 @@ the browser" falls out of "the game runs natively," it is not a limitation we ac
 This is [`live-prototyping`](../../GOALS.md) made literal: **a Rust main loop + loft over
 one shared store, editing a single function and seeing it in the running game** — the IDE
 is the seat you drive that loop from. See [LAVITION.md](../../LAVITION.md) (the engine) and
-[`10-game-client`](../../lib_plans/future/10-game-client/README.md) / [`02-graphics`](../../lib_plans/future/02-graphics/README.md)
+[`10-game-client`](../../lib_plans/64-game-client/README.md) / [`02-graphics`](../../lib_plans/58-graphics/README.md)
 (the OpenGL runtime the game window uses).
 
 ## The invariant (extends the protocol invariant to the whole workspace)
@@ -163,7 +163,7 @@ drop into the debugger on it).
 
 The editor starts minimal (a line-numbered editable pane) and graduates to CodeMirror 6
 with the loft grammar — the editor polish, hover, and squiggle work is already specced in
-[`14-viewer-lsp-bridge/05-browser-editor`](../../lib_plans/future/14-viewer-lsp-bridge/05-browser-editor.md);
+[`14-viewer-lsp-bridge/05-browser-editor`](../../lib_plans/66-viewer-lsp-bridge/05-browser-editor.md);
 M5e consumes it rather than re-specifying it.
 
 ## Build slices (incremental — each independently usable)
@@ -263,7 +263,7 @@ behind them (almost always already shipped), and a test in the `tests/rpc.rs` sh
    game over the shared store (per-fn interpret on the compiled baseline, N9/C71); a
    breakpoint in game logic pauses the game and drops the same variables panel in the
    browser. *The full live-prototyping loop: edit → see it in the running game → breakpoint
-   it.* Engine: the graphics runtime ([`02-graphics`](../../lib_plans/future/02-graphics/README.md)) +
+   it.* Engine: the graphics runtime ([`02-graphics`](../../lib_plans/58-graphics/README.md)) +
    shared-store per-fn dispatch (N9/C71) — this slice is where the IDE *becomes the engine
    editor*.
    - **6a — the game-process layer LANDED (2026-06-10).** `launchGame {file}` spawns the
@@ -523,11 +523,11 @@ native / graphics tooling.)*
 |---|---|---|
 | Transport | the `--rpc` `handle()` driver (`src/rpc.rs`); loft's socket stack (`server` lib / multiplayer) | WS framing of the same messages |
 | Shell | plan-35 viewer (`/tree`, `/file`, `/static`) | toolbar, panels, gutter |
-| Editor polish | [`14-bridge/05`](../../lib_plans/future/14-viewer-lsp-bridge/05-browser-editor.md) (squiggles, hover, CodeMirror) | wiring to `diagnostics` events |
+| Editor polish | [`14-bridge/05`](../../lib_plans/66-viewer-lsp-bridge/05-browser-editor.md) (squiggles, hover, CodeMirror) | wiring to `diagnostics` events |
 | Debug | the entire @PLN16 A–F engine + protocol | UI only |
 | Compile / test | `ReplSession::load_program`, `test_runner::run_tests` | structured `diagnostics` / `testResult` events |
-| Game + hot-swap | [`02-graphics`](../../lib_plans/future/02-graphics/README.md) OpenGL host, N9/C71 per-fn dispatch, the one shared store | `launchGame` / `reload` messages |
-| Language intelligence (go-to-def, completion) | [`09-lsp`](../../lib_plans/future/09-lsp/README.md) `loft-lsp` | later; not v1 |
+| Game + hot-swap | [`02-graphics`](../../lib_plans/58-graphics/README.md) OpenGL host, N9/C71 per-fn dispatch, the one shared store | `launchGame` / `reload` messages |
+| Language intelligence (go-to-def, completion) | [`09-lsp`](../../lib_plans/63-lsp/README.md) `loft-lsp` | later; not v1 |
 
 ## Safety
 
@@ -556,14 +556,14 @@ native / graphics tooling.)*
 
 ## What this is NOT (boundaries)
 
-- **Not [`07-web-ide`](../../lib_plans/future/07-web-ide/README.md)** — that is the
+- **Not [`07-web-ide`](../../lib_plans/62-web-ide/README.md)** — that is the
   serverless WASM playground (a different product; see the table up top). M5e never runs
   the interpreter in the browser.
 - **Not a scene / asset editor yet** — visual scene editing is
-  [`13-scriptable-scenes`](../../lib_plans/future/13-scriptable-scenes/README.md); M5e edits
+  [`13-scriptable-scenes`](../../lib_plans/65-scriptable-scenes/README.md); M5e edits
   *code* and drives the game, it does not yet place entities visually.
 - **Not language intelligence** — completion, go-to-def, refactor are
-  [`09-lsp`](../../lib_plans/future/09-lsp/README.md); M5e ships diagnostics (free from the
+  [`09-lsp`](../../lib_plans/63-lsp/README.md); M5e ships diagnostics (free from the
   compiler) and leaves the rest to the LSP surface.
 
 ## Cross-references
@@ -574,8 +574,8 @@ native / graphics tooling.)*
   agent surface, both over the one protocol.
 - [LAVITION.md](../../LAVITION.md) / [GOALS.md](../../GOALS.md) — the engine and the
   live-prototyping purpose this IDE is the seat for.
-- [`02-graphics`](../../lib_plans/future/02-graphics/README.md),
-  [`10-game-client`](../../lib_plans/future/10-game-client/README.md) — the native OpenGL
+- [`02-graphics`](../../lib_plans/58-graphics/README.md),
+  [`10-game-client`](../../lib_plans/64-game-client/README.md) — the native OpenGL
   game runtime the **Game ▶** surface launches.
-- [`14-viewer-lsp-bridge`](../../lib_plans/future/14-viewer-lsp-bridge/README.md) — the
+- [`14-viewer-lsp-bridge`](../../lib_plans/66-viewer-lsp-bridge/README.md) — the
   viewer-shell + local-sidecar pattern and the browser-editor polish M5e consumes.

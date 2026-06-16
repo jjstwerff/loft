@@ -42,7 +42,7 @@ See `src/store.rs` module docs for memory layout, signed size headers, and
 free-block allocation.  See `src/keys.rs` module docs for `DbRef`, `Str`,
 `Key`, and `Content` types.
 
-### Durable stores (`Store::open_durable`) — @PLAN38
+### Durable stores (`Store::open_durable`) — @PLN43
 
 A durable store is a normal mmap-backed `Store` plus a 40-byte `.dmeta`
 sidecar file alongside the main store file.  The sidecar holds a signature
@@ -60,7 +60,7 @@ Three tiers are planned; phase 01 (the first PR slice on the
 
 | Tier | Mode | Hot-path cost | Loss bound | Consumer |
 |---|---|---|---|---|
-| 1 | `IntegrityOnly` | None (only msync on clean drop) | Everything since last clean drop | `personal/training` port (initial), `@PLAN37` indexer (when phase 08 lands) |
+| 1 | `IntegrityOnly` | None (only msync on clean drop) | Everything since last clean drop | `personal/training` port (initial), `@PLN42` indexer (when phase 08 lands) |
 | 2 | `SnapshotEvery(interval)` (planned, phase 02) | One msync per interval | One interval | TTT v5 multiplayer (`plans/future/32-…`) |
 | 3 | `WAL` (planned, phase 03) | fsync per record, amortised by group-commit window | Zero for committed writes | @PLN6 audience demo |
 
@@ -89,7 +89,7 @@ This is what makes Tier 1 cheap.  Do not use Tier 1 for data that cannot
 be re-derived from authoritative sources; use Tier 2 or Tier 3 instead.
 
 Full design + implementation history:
-[`doc/claude/plans/future/38-loft-store-durable/`](plans/future/38-loft-store-durable/README.md).
+[`doc/claude/plans/43-loft-store-durable/`](plans/43-loft-store-durable/README.md).
 
 ---
 
@@ -211,7 +211,7 @@ and before any runtime store.  Populated during `byte_code()` and
 | 1 | **Constant store** (read-only data) | `State::new()` |
 | 2+ | Runtime stores (structs, vectors) | `OpDatabase` at runtime |
 
-**What lives in `CONST_STORE`** (@PLAN28 Phase A, 2026):
+**What lives in `CONST_STORE`** (@PLN82 Phase A, 2026):
 
 - **Vector constants** — file-scope `QUAD = [1, 2, 3];` is built as
   a vector record in `CONST_STORE` during `byte_code()`.  Each
@@ -257,7 +257,7 @@ for `State.const_refs`'s role in `OpConstRef` dispatch.
 For deferred follow-ups (mmap-backed cache file; WASM
 pre-compiled stdlib including `CONST_STORE` as static bytes via
 `include_bytes!`) see
-[`plans/deferred/28-const-store/`](plans/deferred/28-const-store/) §
+[`plans/82-const-store/`](plans/82-const-store) §
 Memory-mapped + WASM fast startup.
 
 ### Store Locking via `Stores`

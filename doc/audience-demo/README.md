@@ -11,7 +11,7 @@ each paint event over WebSocket to a shared loft server.  Every other
 connected client sees the paint appear in their hex grid in real time.
 
 Part of the @PLN6 audience-driven generative-art demo
-(see [`doc/claude/plans/6-audience-generative-art/`](../claude/plans/6-audience-generative-art/)
+(see [`doc/claude/plans/6-audience-generative-art/`](../claude/plans/6-audience-generative-art)
 for the development plan).
 
 ## Try it (static-only — no server)

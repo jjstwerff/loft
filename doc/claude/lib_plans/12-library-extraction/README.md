@@ -285,7 +285,7 @@ moros extraction work plus the closure ritual.
 After 7a + 6.5 + 6t: Phase **6w** (extract `loft-libs-world`), then
 **7p** (rename + design new cross-cutting slots), **7b** (move moros
 libraries into the existing `moros` project), **7c** (bootstrap
-`dryopea` — [@PLAN46](../../plans/future/46-dryopea/README.md)),
+`dryopea` — [@PLAN46](../../plans/49-dryopea/README.md)),
 **8** (final monorepo cleanup + `audience_crystal` test dir).
 
 `6w` extracts `lib/world` (now subsuming MapFile schema + the
@@ -301,11 +301,11 @@ gated on 6t-Tier-2 (gold-image regression must live in
 
 Three game consumers drive the library catalog: **moros** (single-
 player RPG, `lib/moros_*` packages), **dryopea**
-([@PLAN46](../../plans/future/46-dryopea/README.md), sci-fi tower-
+([@PLAN46](../../plans/49-dryopea/README.md), sci-fi tower-
 defence / free-build; depends on `lib_plans/20-terrain-heightmap` +
 `lib_plans/19-gridmesh` Phase C; reuses `lib/server` + `lib/web`),
 and **bumper-airplanes**
-([@PLAN50](../../plans/future/50-bumper-airplanes/README.md),
+([@PLAN50](../../plans/51-bumper-airplanes/README.md),
 audience demo on `origin/bumper_plane`; loads dryopea-authored
 MapFiles; proposes `lib/physics_2body`).
 
@@ -370,7 +370,7 @@ distance, send discrete events as forecasts").  Dryopea's planet
 multiplayer + co-op base defence wants the same shape.  Belongs in
 `lib/server` (or as a thin layer in `lib/game_protocol`) — not in
 PLAN50 application code.  Add as an `## Open work` row in
-[`../future/08-server/`](../future/08-server/).
+[`../future/08-server/`](../future/08-server).
 
 **6. Particles are a near-certain duplicate.**  Bumper has smoke
 trails + score confetti.  Dryopea wants explosions + scramble-rocket
@@ -382,11 +382,11 @@ point-burst particles, two flavours — is cheap to design once.
 
 | Slot | Status | Why | Blocks |
 |---|---|---|---|
-| [`lib_plans/future/26-physics-2body/`](../future/26-physics-2body/README.md) | **FILED** 2026-05-28 | Shared collision + integrator API for moros / dryopea / bumper | PLAN50 sub-arc 4; dryopea phase 4 (vehicle); Phase 7b clean moros migration |
-| [`lib_plans/future/27-particles/`](../future/27-particles/README.md) | **FILED** 2026-05-28 | Shared trails + point-burst particles for dryopea + bumper | PLAN50 phase 3 (trails); dryopea phase TBD (explosions) |
+| [`lib_plans/75-physics-2body/`](../75-physics-2body/README.md) | **FILED** 2026-05-28 | Shared collision + integrator API for moros / dryopea / bumper | PLAN50 sub-arc 4; dryopea phase 4 (vehicle); Phase 7b clean moros migration |
+| [`lib_plans/76-particles/`](../76-particles/README.md) | **FILED** 2026-05-28 | Shared trails + point-burst particles for dryopea + bumper | PLAN50 phase 3 (trails); dryopea phase TBD (explosions) |
 | MapFile schema in `lib/world/` (covered by Phase 7a) | DESIGNED below | Cross-project contract; today buried in `lib/moros_map` | Phase 6w (`loft-libs-world` extraction) |
 | [`lib_plans/future/08-server/` § Gap 8](../future/08-server/README.md#gap-8--per-recipient-broadcast-qos-sight--rate-lod--forecast) — broadcast QoS layer | **FILED** 2026-05-28 | Sight + rate-LOD + forecast pattern from PLAN50 phase 7; reused by dryopea | dryopea multiplayer; Phase 6r (re-clean already-extracted `loft-libs-net`) |
-| Editor rename — `lib/moros_editor` → `world_editor` family (covered by [`lib_plans/future/24-universal-editor/`](../future/24-universal-editor/README.md) L1-L5) | EXISTING SLOT | Editor authors maps for three games, not just moros | Phase 7b moros migration (rename **before** moros leaves) |
+| Editor rename — `lib/moros_editor` → `world_editor` family (covered by [`lib_plans/73-universal-editor/`](../73-universal-editor/README.md) L1-L5) | EXISTING SLOT | Editor authors maps for three games, not just moros | Phase 7b moros migration (rename **before** moros leaves) |
 
 The two new `lib_plans/` slots (26, 27) carry their own API
 sketches + phase breakdowns + open questions; the editor rename
@@ -417,9 +417,9 @@ with ≥1 minor release of soak between consecutive chunks.
 | 3.5c | Dry-run libs with consumers | 3.5b | superseded — core/net extracted for real |
 | 3.6 | Stdlib drain (Image→imaging, `escape_html`→`html`, path helpers→`02_files`) | 1c | **partial** — `escape_html`→`lib/html/` DONE 2026-05-27 (Image/Pixel already in `lib/imaging`); `02_images.loft`→`02_files.loft` rename DONE 2026-05-28; path-helper consolidation (`dir`/`basename`/`join(text,text)`/`resolve` move from `03_text.loft` → `02_files.loft`) remains |
 | 4 | Extract `loft-libs-core` (arguments, random, crypto) | 1–3 + 3.5 | **SHIPPED (A+B)** — Stage A 2026-05-24; Stage B (monorepo `lib/{arguments,random,crypto}/` removed) by 2026-05-28 |
-| 5 | Extract `loft-libs-graphics` (graphics, imaging, gridmesh, shapes) | 4 + [`../02-graphics/`](../02-graphics/) | **SHIPPED (A+B)** — Stage A: shapes 0.2.0 (2026-05-28), gridmesh 0.1.1 (2026-05-31), graphics 0.1.0 + imaging 0.1.0 (registry PR #7 merged 2026-05-31 17:48 UTC); Stage B SHIPPED via 5b row below. |
+| 5 | Extract `loft-libs-graphics` (graphics, imaging, gridmesh, shapes) | 4 + [`../02-graphics/`](../02-graphics) | **SHIPPED (A+B)** — Stage A: shapes 0.2.0 (2026-05-28), gridmesh 0.1.1 (2026-05-31), graphics 0.1.0 + imaging 0.1.0 (registry PR #7 merged 2026-05-31 17:48 UTC); Stage B SHIPPED via 5b row below. |
 | 5b | `loft-libs-graphics` Stage B — remove monorepo `lib/{shapes,gridmesh,graphics,imaging}/`; migrate consumers (`lib/moros_*` + `lib/audience_crystal` + `tools/audience-demo`) to registry-version deps | 5 + 6.6 + 6.12 | **SHIPPED** 2026-05-31 (doc-updates commits `408686d` consumer migration + `93ce34a` monorepo cleanup + `21af961` fmt).  Both prerequisites cleared earlier in the session: (1) `loft-ffi-macros 0.1.0` published to crates.io 15:59 UTC; (2) graphics warning sweep complete (148→0 unique source warnings + bind-local + len-guard restructure pattern documented).  Stage A tarballs prepared via `loft package` + pushed to chunk repo + GitHub releases at `graphics-v0.1.0` / `imaging-v0.1.0`; registry PR #7 (`https://github.com/loft-lang/registry/pull/7`) merged after all 3 validator gates green.  Imaging Stage A ships interpreter + native only — wasm bridge deferred pending a `loft-host-ffi` crate publish (no current `--html` consumer affected; follow-up listed at the bottom).  Consumer migration: 4 loft.tomls swapped from path-deps to `">=0.1"`; loft.lock files pinned to registry SHA + version; sibling moros_* deps stay path-resolved (Phase 7-series).  Monorepo cleanup: 93 tracked + 2235 untracked artifact files removed across the 4 dirs; `src/wasm.rs::BUNDLED_LIB_FILES` repointed to `tests/fixtures/libs/{graphics,shapes}/src/*.loft`; `tests/extraction_hygiene.rs::FORBIDDEN_LIBRARY_SYMBOLS_MANUAL` gained 57 graphics + imaging native symbols; `scripts/sync-fixtures.sh` PINNED_REFS extended + per-(chunk, ref) clone bug fixed.  Surfaced @P390 (self-slice-assign drops element values; worked around in `draw_bezier` with temp local).  Verified: `cargo fmt --check` + `cargo clippy --all-targets -D warnings` + full nextest suite (`find_problems.sh --bg`) + extraction_hygiene 4/4 all green. |
-| 6 | Extract `loft-libs-net` (server, web, game_protocol) | 4 + [`../08-server/`](../08-server/) | **SHIPPED (A+B)** — Stage A 2026-05-24/31; Stage B 2026-05-31 (monorepo `lib/web/` + `lib/server/` + `lib/game_protocol/` removed) |
+| 6 | Extract `loft-libs-net` (server, web, game_protocol) | 4 + [`../08-server/`](../08-server) | **SHIPPED (A+B)** — Stage A 2026-05-24/31; Stage B 2026-05-31 (monorepo `lib/web/` + `lib/server/` + `lib/game_protocol/` removed) |
 | 6b | `loft-libs-net` Stage B — remove monorepo `lib/web/` + `lib/server/` + `lib/game_protocol/`; migrate `tools/audience-demo*` + `tools/viewer` + `lib/audience_crystal` to registry-version deps (audience_crystal has a `loft.toml`; the `tools/` scripts rely on 6.6 auto-install) | 6 + 6.6 + 6.12 + 6b-prep (native build from registry) | **SHIPPED** 2026-05-31.  Native-build redirect (`extensions::native_target_root` shared helper drives both `auto_build_native`'s cargo invocation + `native_utils::add_native_extern_flags`'s rlib lookup) lets registry-installed cdylibs build into `~/.loft/build-cache/<pkg>-<ver>/`.  Script relocation: `lib/game_protocol/examples/` → `tests/integration/multiplayer/`; `lib/server/tests/server.loft` → `tests/integration/p244_smoke.loft`; `tests/integration/loft.toml` + `loft.lock` pin web/server/game_protocol from registry.  Consumer loft.tomls added: `tools/audience-demo/`, `tools/audience-demo-50/`, `tools/viewer/`.  `extraction_hygiene::manifest_native_functions_cover_drained_libraries` updated — web's 19 symbols pinned in `FORBIDDEN_LIBRARY_SYMBOLS_MANUAL`.  v5_t5_world_tick_and_decay `#[ignore]`'d pending Phase 6w (extract `loft-libs-world`).  All 49 wrap + 22 doc-hygiene + multiplayer v2 (3) + v3 (2) + v5 (4 + 1 ignored) + p244 codegen_emitter + extraction_hygiene (4) tests green |
 | 6.5 | Green CI across every chunk + registry repo (canonical `library-ci.yml`); subsumes parked tasks #61/#62/#63 | 4–6 | **DONE (chunk side)** — all three chunks on canonical YAML + at least one patch release published: `loft-libs-core` (PR #2 2026-05-30); `loft-libs-net` v0.1.1 (PRs #2 + #3 + registry #5, 2026-05-31); `loft-libs-graphics` gridmesh 0.1.1 (PR #1 + registry #6, 2026-05-31).  Remaining: registry `pr-validate.yml` already aligned (registry #4 multi-package homepage fix merged 2026-05-31); macOS / Windows matrix expansion is the only chunk-CI delta still on the to-do list (currently Linux-only by design until a Linux baseline soaks) |
 | 6.6 | Auto-install on `use` — parser auto-installs from registry when an unresolved `use X;` matches a name in the signed index; one-line announcement on cold cache, silent on cache hit; works WITHOUT a `loft.toml` (script mode) and WITH one (project mode); offline opt-out via `LOFT_OFFLINE=1`/`--offline`/`LOFT_NO_AUTO_INSTALL=1`.  Plus three companion CLIs: `loft pin <script>` (sidecar lockfile), walk-up `loft.toml` detection (project-mode resolution), `loft list-installed` (cache query helper) | 3 (registry MVP), 6.5 | **SHIPPED** 2026-05-31 (libraries7 commits `449d8eb` auto-install + `5702633` pin sidecar + `d0fb2f9` walk-up + `d949379` list-installed).  Resolution chain: user_installed → sidecar_lockfile → project_lockfile (walk-up) → registry_installed (cwd lockfile, script-mode fallback) → auto_install → flat fallbacks.  Design at [registry-resolution.md § Phase 6.6](registry-resolution.md#phase-66--auto-install-on-use-proposed-2026-05-31); harvest into PACKAGES.md § Auto-install behaviour deferred to Phase 6.13 |
@@ -438,7 +438,7 @@ with ≥1 minor release of soak between consecutive chunks.
 | 7a | Split moros: shared spatial primitives → `lib/world/` (cross-project unlock — feeds dryopea + bumper + moros; subsumes MapFile schema promotion) | 4 | **partial** — `lib/world/` shipped (sparse 32x32 model + save/load, smoke test green); `lib/wall.loft` + `lib/overland.loft` folded into `lib/world/src/` 2026-05-28; remaining: `pub` markers + moros migration + MapFile schema doc |
 | 7p | Cross-cutting primitives extracted before moros leaves: `lib/moros_editor` → `lib/world_editor` rename + `lib_plans/NN-physics-2body` + `lib_plans/NN-particles` slots filed; sequencing matters more than effort | 7a | **OPEN** — XS (rename) + M (new slot designs) |
 | 7b | Move moros libraries into the existing `moros` project | 5 + 6w + 7a + 7p | OPEN — MH |
-| 7c | Bootstrap `dryopea` project | [@PLAN46](../../plans/future/46-dryopea/README.md) | OPEN — S |
+| 7c | Bootstrap `dryopea` project | [@PLAN46](../../plans/49-dryopea/README.md) | OPEN — S |
 | 8 | Final monorepo cleanup + `audience_crystal` test dir | 7b | OPEN — S |
 
 Phase 7a is monorepo-internal (no user-visible change) and can land
@@ -476,7 +476,7 @@ the docs above are for OPEN phases only.
   path, per-chunk extraction template, open questions.
 - [PACKAGES.md § Open work](../../PACKAGES.md#open-work) — registry +
   format infrastructure (prerequisite).
-- Sibling library plans: [`../02-graphics/`](../02-graphics/),
-  [`../08-server/`](../08-server/), [`../21-datetime/`](../21-datetime/);
-  game plan [@PLAN46 dryopea](../../plans/future/46-dryopea/README.md).
+- Sibling library plans: [`../02-graphics/`](../02-graphics),
+  [`../08-server/`](../08-server), [`../21-datetime/`](../21-datetime);
+  game plan [@PLAN46 dryopea](../../plans/49-dryopea/README.md).
 - [ROADMAP.md](../../ROADMAP.md) — PKG.EXTRACT milestone placement.

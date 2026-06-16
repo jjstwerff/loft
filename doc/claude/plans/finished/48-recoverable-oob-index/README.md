@@ -155,11 +155,11 @@ the fix is at the read/assign site, not the free-emission site.
 
 ## Cross-arc dependencies
 
-- [plan-21 retire-scratch](../../finished/21-retire-scratch/) — text values were
+- [plan-21 retire-scratch](../21-retire-scratch) — text values were
   `Str` views into `Stores::scratch`; this plan touched the same text-lifetime
   surface (item A) but did not depend on retiring scratch.  Scratch is now retired
   (PR #277; plan closed 2026-06-06).
-- [plan-42 warning-quality](../../future/42-warning-quality/) — the runtime `Warn`
+- [plan-42 warning-quality](../../46-warning-quality) — the runtime `Warn`
   on OOB + the existing compile-time undefended-index warning are the same
   observability surface; keep the messages consistent.
 

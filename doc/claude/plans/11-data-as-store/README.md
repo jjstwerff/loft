@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# @PLN11 — `Data` as a store (IR mirrors the `--native` data model)  ·  [loft-lang/plans#11](https://github.com/loft-lang/plans/issues/11)  ·  *(was `@PLAN54`)*
+# @PLN11 — `Data` as a store (IR mirrors the `--native` data model)  ·  [loft-lang/plans#11](https://github.com/loft-lang/plans/issues/11)  ·  *(was `@PLN52`)*
 
 ## Status — FINISHED (2026-06-05)
 
@@ -246,7 +246,7 @@ cache; and the cross-mode byte-identical equivalence harness.
 | **N2 — native dispatch + lean interface load** *(all common types PROVEN, both directions)* | The headline: an interpreted script calling a compiled user library over the shared store.  **Scalar slice + store-touching across ALL common types (scalars, vectors, structs, text, plain+data enums — both directions) landed** — 13 green end-to-end tests in `tests/n2_cdylib.rs`.  **Scalar:** `generate_cdylib_lib_rs` + a `loft_<name>(scalars) -> ret` wrapper that is **ABI-identical to a hand-written scalar `#native` symbol**, so it reuses the existing dispatch wholesale (`OpStaticCall` → `load_all` → `wire_native_fns` dlsym) — `double(21) → 42`.  **Store-touching:** an auto-generated cdylib links libloft, so the bridge **shares the caller's `*mut Stores` by pointer** (zero-marshalling, *not* the `LoftStore` handle): `generate_shared_cdylib_lib_rs` + `LibArg` uniform slot + `shared_store_dispatch`/`wire_shared_native_fns` — `vec_sum([10,20,30]) → 60` (non-scalar arg, raw `DbRef` crosses unchanged) and `range_vec(4) → [0,1,2,3]→6` (vector **return** — native allocates in the shared store via the hidden `ref_return` destination the bridge wrapper allocates itself; the `DbRef` is valid back in the interpreter).  Structs/text/enums + keyed `sorted` cross too (`point_sum`, `make_point`, `str_len`, `shout`, `dir_code`/`dir_from`, `area`/`make_rect`, `sum_values`); **schema agreement is proven** — an identically-defined struct gets the same type id + field offsets in the separate library and script `Data`.  Fixed a latent `loft_register_v1` guard bug (per-library `uses_v1`, preserving #119).  **Lean interface DONE (source form):** `generate_interface` emits the library's type defs + `#native` decls as loft source; a script using only it dispatches (`lean_interface_drives_shared_dispatch`) — no manual redefinition.  **Remaining → routed to [`NATIVE.md` § N9](../../NATIVE.md#n9--native-library-shared-store-dispatch-c71)** (closures `__closure`; `generate_interface` aggregate names `sorted<Item[k]>`; D2a binary schema interface; `hash`/`index`/`spacial` coverage — all enhancements on a graceful core).  Auto-deriving the dispatch from `use <lib>` is N3 (core proven). | a script using a native lib dispatches to its compiled subgraph, interprets the rest; output byte-identical to the all-interpreted run (Goal D) | 🔄 (all common types + lean interface done) | M |
 | **N3 — native/interpret decision policy** *(core mechanism PROVEN)* | Make the native-vs-interpret choice **automatic and invisible** (Goal F): a stable/published dependency → native; a library under active edit → interpret (no `rustc` per save) — the **dev-interpret fallback**.  No user annotation, no flag.  **Core landed (in-process):** `native_lib::mark_native_exports(data, candidates)` sets `def.native = "loft_shared_<name>"` on a *normal* library function's shared-store-dispatchable subset — so `byte_code` routes its calls through `OpStaticCall`, the stub registers, and `wire_shared_native_fns` wires the bridge after the auto-built cdylib loads; `output_native_library` emits the cdylib with **no `main` bootstrap** even when the consuming script's `n_main` shares the `Data`.  `auto_native_marks_and_dispatches_normal_library_fn`: `double(21) → 42` with **no `#native` decl anywhere** — the in-process shape of `use <lib>`.  **Phase A DONE (2026-06-04) — the headline works on the real binary:** `[library] compile = "native"` opt-in (`manifest.rs`) → `Parser::pending_native_compile` (`apply_manifest_side_effects`) → `main.rs` marks (`mark_library_native`) + builds (`build_shared_cdylib` into `<pkg>/native-auto/`) + loads + `wire_shared_native_fns`; `tests/n3_use_native.rs` runs `use mathnative;` through the binary and gets `42/7/120` from an auto-built cdylib.  **Partial Phase B landed:** the silent per-function gate-split (a `CallRef`/`parallel` function interprets while the rest dispatches native), the synthetic-exclusion fix (dispatch targets = top-level user-named public fns), and cdylib caching (rebuild only when the source changes or the loft-build fingerprint moves).  **Critical path (re-derived via the rigor discipline) — COMPLETE:** ✅ **Step 1** parity instrument (the gate — native ≡ interpreted byte-for-byte; `tests/n3_parity.rs`, store-touching corpus) → ✅ **Step 2** decide native/interpret *before* `byte_code` so a build failure silently interprets (build-before-mark) → ✅ **Step 3** default-native (the opt-in is dropped; `use <lib>` is native, `LOFT_NO_NATIVE_LIBS` is the escape) → ✅ **Step 4** dev-interpret-on-edit (edit → interpret the new code with no `rustc`; settle → rebuild → native).  See § Landing sequence.  *Open: option-3 background build → routed to [`NATIVE.md` § N9](../../NATIVE.md#n9--native-library-shared-store-dispatch-c71); F1 nextest reliability (§ Discovered follow-ups; F2 interdependent-libs ✅ fixed).* | editing a library re-interprets it (fast loop); a stable dep links its cached artifact; the programmer never declares an execution mode | ✅ (Steps 1–4 done; the C71 model is live end-to-end) | M |
 | **N4 — compilability gate + silent interpret fallback** *(re-scoped 2026-06-04; gate analysis 🔄 done)* | **Gate analysis landed — `src/native_gate.rs::native_compilable(data) -> HashSet<u32>`**: the maximal native subgraph, computed by a transitive, **exhaustive** (no `_` arm — Goal-F-safe: an un-native-able construct can never silently slip through) `Value`-tree walk.  **Empirical finding (the de-risk made real):** the `--native` backend already emits *everything* — structs, enums, vectors, **generics, closures** — so the denylist is just the concurrency constructs `parallel{}` / `par_for` / `yield` (`emit.rs` writes a non-code comment for those; `NATIVE_SKIP`/`SCRIPTS_NATIVE_SKIP` are both empty).  The "generics/closures research problem" was a **phantom** — measured **461/461 stdlib functions native-compilable (100%)**.  The gate is transitive (native iff the fn *and all `Call` callees* are native) so the subgraph is **closed** → the boundary is only ever interpret→native (`OpStaticCall`); `CallRef` is conservatively excluded (dynamic callee unprovable).  Tests: `walk_classifies_leaves_and_denylist`, `walk_finds_nested_denylist_construct`, `stdlib_is_mostly_native_compilable`.  **Remaining → routed to [`NATIVE.md` § N9](../../NATIVE.md#n9--native-library-shared-store-dispatch-c71)** (gate-driven dispatch tail — select the subgraph from `native_compilable`; making concurrency itself native is the only later optional item, and it is tiny). | gate: the native subgraph excludes exactly the concurrency users; library runs native where compilable, interprets where not, no user-visible error | 🔄 | gate **done** · dispatch (with N2) S–M |
-| **N5 — mixed-boundary soundness + parity** *(woven through, per C71 guardrails)* | Extend the sanitizer (Miri / ASan / `stack_align_guard`, esp. macOS-ARM alignment) + the differential sweep to the **interp-script + native-lib** combination (A/D); extend `LOFT_STORE_GUARD` to the mixed path (E).  **Not a trailing phase** — a coverage leg lands *alongside* each of N1–N4 as its surface appears.  **Landed (2026-06-05) — D + E legs on `tests/n3_parity.rs`:** `assert_three_mode_parity` now (a) runs a broadened store-touching corpus (BOTH `Shape` enum variants → enum-tag discrimination crosses the boundary, both directions) interp≡mixed≡native, **positively controlled** by the reference-output anchor (rules out "parity holds but all three wrong"); (b) arms `LOFT_STORE_GUARD` on all three runs so the confinement detector runs over the script AND the library's codegen-time scope analysis.  **A leg is sanitizer-blind by construction** — ASan sees interpreter targets only, the `stack_align_guard` sweep can't see spawned binaries (ci.yml `guard` job), Miri can't `dlopen` a cdylib at all; so the *only* runtime soundness signal the mixed path has is the differential parity (a cross-boundary corruption diverges), and the one real A-leg extension — **ASan-on-cdylib** (nightly, propagate `-Zsanitizer` into `build_shared_cdylib`) — is **routed out to the sanitizer plan [@PLAN56 § S9](../future/56-sanitizer-coverage-expansion/README.md) (2026-06-05)**, its canonical Goal-A home.  **E-leg is positively controlled:** arming `LOFT_STORE_GUARD` arms the live **Plan-57 Phase-4 guard** (`reclaim_unfreed_eligible == 0` assertion — the `[store-guard]` eprintln is superseded by it), which a fire trips into a panic caught by `r.success`.  Proven falsifiable by `watermark.rs::phase4_goal_e_guard_is_falsifiable` (a `LOFT_STORE_GUARD_INJECT` fault makes an 11× reassign program panic; silent without it) — so the corpus-silence is non-vacuous.  See § Discovered follow-ups F5. | the mixed run agrees byte-for-byte with all-interp **and** all-native (D); zero sanitizer fires across the mixed boundary (A); `LOFT_STORE_GUARD` silent on the mixed path (E) | ✅ in-plan (D + E landed; A-leg routed to @PLAN56 § S9) | M (continuous) |
+| **N5 — mixed-boundary soundness + parity** *(woven through, per C71 guardrails)* | Extend the sanitizer (Miri / ASan / `stack_align_guard`, esp. macOS-ARM alignment) + the differential sweep to the **interp-script + native-lib** combination (A/D); extend `LOFT_STORE_GUARD` to the mixed path (E).  **Not a trailing phase** — a coverage leg lands *alongside* each of N1–N4 as its surface appears.  **Landed (2026-06-05) — D + E legs on `tests/n3_parity.rs`:** `assert_three_mode_parity` now (a) runs a broadened store-touching corpus (BOTH `Shape` enum variants → enum-tag discrimination crosses the boundary, both directions) interp≡mixed≡native, **positively controlled** by the reference-output anchor (rules out "parity holds but all three wrong"); (b) arms `LOFT_STORE_GUARD` on all three runs so the confinement detector runs over the script AND the library's codegen-time scope analysis.  **A leg is sanitizer-blind by construction** — ASan sees interpreter targets only, the `stack_align_guard` sweep can't see spawned binaries (ci.yml `guard` job), Miri can't `dlopen` a cdylib at all; so the *only* runtime soundness signal the mixed path has is the differential parity (a cross-boundary corruption diverges), and the one real A-leg extension — **ASan-on-cdylib** (nightly, propagate `-Zsanitizer` into `build_shared_cdylib`) — is **routed out to the sanitizer plan [@PLN54 § S9](../54-sanitizer-coverage-expansion/README.md) (2026-06-05)**, its canonical Goal-A home.  **E-leg is positively controlled:** arming `LOFT_STORE_GUARD` arms the live **Plan-57 Phase-4 guard** (`reclaim_unfreed_eligible == 0` assertion — the `[store-guard]` eprintln is superseded by it), which a fire trips into a panic caught by `r.success`.  Proven falsifiable by `watermark.rs::phase4_goal_e_guard_is_falsifiable` (a `LOFT_STORE_GUARD_INJECT` fault makes an 11× reassign program panic; silent without it) — so the corpus-silence is non-vacuous.  See § Discovered follow-ups F5. | the mixed run agrees byte-for-byte with all-interp **and** all-native (D); zero sanitizer fires across the mixed boundary (A); `LOFT_STORE_GUARD` silent on the mixed path (E) | ✅ in-plan (D + E landed; A-leg routed to @PLN54 § S9) | M (continuous) |
 
 **Sequencing.**  N0 first (correctness + unblocks; small, dev-facing) → N1 + N2 are
 the core mechanism (cache + dispatch) → N3 makes it invisible (F).  **N5 is woven
@@ -745,18 +745,18 @@ developer-vs-customer framing).  Tracked as a future arc, **not here**.
 - **Arc A0** (typed field cursor, commit `a07ed8d`) — landed as `RecordCursor`/`RecordCursorMut` wrapping `Store`'s raw primitives.  That cursor form has since been superseded by the typed handle layer (see § Arc A0 — handle layer below); `src/data_store.rs` is now the accessor seam, not a bare cursor.
 - **Arc A** (IR store schema, commit `ed21b3e`) — landed as `tools/ir_schema/` (hybrid generate-extract pipeline) + `src/ir_schema_gen.rs` (generated, checked-in).  The full IR is registered via `register_ir_schema(db: &mut Stores) -> IrSchemaIds`; every struct/enum is in the schema; `db.finish()` computes all field positions, record sizes, and discriminants including the 34-variant `Node` enum size.
 - **Typed handle layer** (`src/data_store.rs`, commit `9d860c5`) — minimum accessor seam: `Value`/`ValuesVector` thin `DbRef` handles with `ValueType` enum covering the IR-walker's current match surface.  Three tests pass (NdCall round-trip, NdBlock round-trip, layout guard).  Fmt-clean, clippy-0.
-- **Arc B fork-cleanup (prerequisite, done)** — removed the dead shells-only `ir_schema::register_ir_schema` + its consts/tests, leaving exactly one schema registration (`ir_schema_gen`).  The @PLAN28 JSON codec stays (interim — arc B's traversal skeleton + `compare_data` oracle); its 30 lib tests + 6 round-trip tests still pass.
+- **Arc B fork-cleanup (prerequisite, done)** — removed the dead shells-only `ir_schema::register_ir_schema` + its consts/tests, leaving exactly one schema registration (`ir_schema_gen`).  The @PLN82 JSON codec stays (interim — arc B's traversal skeleton + `compare_data` oracle); its 30 lib tests + 6 round-trip tests still pass.
 - **Arc B write path (in-progress)** — both recursive IR enums now materialize fully. `src/data_store.rs` is the write/layout authority: per-variant `Node` writers + generic typed field accessors (`field_int`/`set_field_int`, …float/single/bool/str, `field_vec`/`field_recvec`, `set_discriminant`), `ValueType`/`value_type` over all 34 `Node` variants and `TypeKind`/`type_kind` over all 24 `TypeT` variants, plus a **generic non-`Node` struct-vector layer** (`Record` + `RecVector`, stride-parameterised) — built on the probed fact that **every IR vector is inline `Parts::Vector`, never a linked `Array`**, so one handle serves `vector<Key>`/`vector<TypeT>`/`vector<integer>`/`vector<SortKey>`/`vector<NameRef>`.  `src/ir_store.rs` materializes **all 34 `Node` variants** (`materialize_node`, now an exhaustive match — no deferred arm) **and all 24 `TypeT` variants** (`materialize_type`, with `IntegerSpec` inline + `SortKey`/`NameRef`/`integer` dep lists + box-of-one recursion).  Every baked discriminant + offset + stride is pinned by the `baked_layout_mirrors_loft_schema` guard (probed from the real schema, not guessed; inline sub-struct offsets verified as base + relative).  `Attribute`, `LinkedFieldGroup`, the full `Block`, and the top-level structs `Variable`/`Function` (via the `variables/mod.rs` snapshot seam) + `Definition` (23 fields, inlining `Position` + `Function`) + `Data` now materialize.  **`ir_store::materialize_data(&Data) -> DbRef` is the capstone entry point — the entire native `Data` writes into a store, exercised on the real `default/` stdlib** (`materialize_whole_stdlib_smoke`: every definition name, attribute count, and variable count round-trips through the store).  **Arc B's write path is complete.**  18 lib tests green; whole 438-test lib suite green; fmt-clean, clippy-0.
 
   Finding (fixed): `Store::claim` reuses freed blocks without zeroing, so a freshly-pushed vector element carried garbage in its unwritten vector-header sub-fields, and the next nested push dereferenced a junk record id (SIGSEGV deep in the real-stdlib walk).  Added `Store::zero_range`; `ValuesVector::push`/`RecVector::push` now clear each new element (mirrors the generated `--native` code that zeroes vector-header slots, `codegen_runtime.rs:1481`).
 
   **Remaining (arc C territory):** a store→native **read** path so the materialized store can be validated bit-for-bit by `compare_data` against a fresh parse.  ✅ **Done** — `src/ir_read.rs` (`read_value`/`read_type`/`read_data`) + the `Function.names`/`inline_refs` schema growth make `compare_data` green on the whole stdlib (see the arc C bullets below).  Arcs D/E remain open; arc C's bulk read-site migration remains.
 
-- **Arc C read path (in-progress)** — `src/ir_read.rs` is the store→native reader, the exact inverse of `ir_store.rs`.  **`read_value(&Stores, Node) -> Value`** rebuilds all 34 `Node` variants and **`read_type(&Stores, Record) -> Type`** rebuilds all 24 `TypeT` variants, plus every sub-struct reachable from them (`Block`, `ParForBody`, `Position`, `Key`, `IntegerSpec`, `vector<SortKey>`/`vector<NameRef>` key lists, `vector<integer>` dep lists).  Box-of-one `vector<…>` fields read back as `Box<Value>`/`Box<Type>`; N-element vectors as `Vec`.  `Block.name` (`&'static str`) is reconstructed via a bounded `Box::leak`, mirroring the @PLAN28 JSON decoder (open question 2).  Validated by **`native → store → native` round-trips asserted with the IR's own derived `PartialEq`** — a stronger oracle than the JSON re-encode, and needing no JSON.  7 round-trip tests (all `Value` leaves + recursive/box-of-one/Block/Loop/Span/ParFor/Keys/FnRef variants; all 24 `Type` variants + nested recursion; an explicit `forced_size` check since `IntegerSpec`'s `PartialEq` ignores it).  445-test lib suite green; fmt-clean, clippy-0.
+- **Arc C read path (in-progress)** — `src/ir_read.rs` is the store→native reader, the exact inverse of `ir_store.rs`.  **`read_value(&Stores, Node) -> Value`** rebuilds all 34 `Node` variants and **`read_type(&Stores, Record) -> Type`** rebuilds all 24 `TypeT` variants, plus every sub-struct reachable from them (`Block`, `ParForBody`, `Position`, `Key`, `IntegerSpec`, `vector<SortKey>`/`vector<NameRef>` key lists, `vector<integer>` dep lists).  Box-of-one `vector<…>` fields read back as `Box<Value>`/`Box<Type>`; N-element vectors as `Vec`.  `Block.name` (`&'static str`) is reconstructed via a bounded `Box::leak`, mirroring the @PLN82 JSON decoder (open question 2).  Validated by **`native → store → native` round-trips asserted with the IR's own derived `PartialEq`** — a stronger oracle than the JSON re-encode, and needing no JSON.  7 round-trip tests (all `Value` leaves + recursive/box-of-one/Block/Loop/Span/ParFor/Keys/FnRef variants; all 24 `Type` variants + nested recursion; an explicit `forced_size` check since `IntegerSpec`'s `PartialEq` ignores it).  445-test lib suite green; fmt-clean, clippy-0.
 
-- **Arc C Definition/Data reader (complete)** — `src/ir_read.rs` now also has **`read_data(&Stores, DbRef) -> Data`** (the inverse of `materialize_data`) plus `read_definition` / `read_attribute` / `read_field_group` / `read_function`, the inline-`Position`/`Function` readers, `def_type` / `purity` integer-code inverses, and `Vec<u32>`/`Vec<String>`/`Vec<u16>` list readers.  Derived state is reset exactly as the @PLAN28 JSON loader does (`attr_names` rebuilt from the attribute list; `code_position`/`code_length`/`const_ref` recomputed by the compile pass; `Data::rebuild_indices` re-derives the lookup maps).  Two whole-stdlib capstones, both green on the real `default/`: (1) `read_whole_stdlib_round_trips_except_var_names` — **every** definition's non-variable fields round-trip **bit-for-bit** (`definition_to_json` equality with the variable block blanked) and the per-variable nine codegen-read fields round-trip exactly; (2) `read_stdlib_type_level_defs_full_compare_data_green` — the **full** `compare_data` oracle (including the variable block) is green for all 50+ type-level defs (empty variable tables).  447-test lib suite green; fmt-clean, clippy-0.
+- **Arc C Definition/Data reader (complete)** — `src/ir_read.rs` now also has **`read_data(&Stores, DbRef) -> Data`** (the inverse of `materialize_data`) plus `read_definition` / `read_attribute` / `read_field_group` / `read_function`, the inline-`Position`/`Function` readers, `def_type` / `purity` integer-code inverses, and `Vec<u32>`/`Vec<String>`/`Vec<u16>` list readers.  Derived state is reset exactly as the @PLN82 JSON loader does (`attr_names` rebuilt from the attribute list; `code_position`/`code_length`/`const_ref` recomputed by the compile pass; `Data::rebuild_indices` re-derives the lookup maps).  Two whole-stdlib capstones, both green on the real `default/`: (1) `read_whole_stdlib_round_trips_except_var_names` — **every** definition's non-variable fields round-trip **bit-for-bit** (`definition_to_json` equality with the variable block blanked) and the per-variable nine codegen-read fields round-trip exactly; (2) `read_stdlib_type_level_defs_full_compare_data_green` — the **full** `compare_data` oracle (including the variable block) is green for all 50+ type-level defs (empty variable tables).  447-test lib suite green; fmt-clean, clippy-0.
 
-  **Finding (confirmed, now resolved) — `Function.names` / `inline_ref_vars` were not reconstructible; the store schema grew to hold them.**  The plan's earlier note ("rebuildable from the variable list on load") did **not** hold: `names` is pruned on scope exit (a finished function's `names` map is a *subset* of its variable list — scope-removed entries are gone — so the var list can't faithfully rebuild it), and `inline_ref_vars` is compile-derived (`insert_inline_ref` during scope analysis), absent from the nine stored per-`Variable` fields entirely.  Both are needed for the **mmap end goal**: the @PLAN28 snapshot seam (`variables/mod.rs`) is explicit that codegen **reads** `names` + `inline_ref_vars` on the load path, so a mmap'd `Data` is unusable without them.
+  **Finding (confirmed, now resolved) — `Function.names` / `inline_ref_vars` were not reconstructible; the store schema grew to hold them.**  The plan's earlier note ("rebuildable from the variable list on load") did **not** hold: `names` is pruned on scope exit (a finished function's `names` map is a *subset* of its variable list — scope-removed entries are gone — so the var list can't faithfully rebuild it), and `inline_ref_vars` is compile-derived (`insert_inline_ref` during scope analysis), absent from the nine stored per-`Variable` fields entirely.  Both are needed for the **mmap end goal**: the @PLN82 snapshot seam (`variables/mod.rs`) is explicit that codegen **reads** `names` + `inline_ref_vars` on the load path, so a mmap'd `Data` is unusable without them.
 
 - **Arc C schema-growth pass (complete)** — `Function` in `tools/ir_schema/ir.loft` gained `names: vector<NameNr>` (`struct NameNr { name: text, nr: integer }`) and `inline_refs: vector<integer>`; `extract.py` learned the new `NameNr` type; `ir_schema_gen.rs` was regenerated.  The growth shifted the inlined-`Function` tail of `Definition` by +8 bytes (`Function` 12→20; `DEFINITION_STRIDE` 142→150; `DEF_MUTATED_CAPTURES`…`DEF_PUB_VISIBLE` +8) and added `FN_NAMES`/`FN_INLINE_REFS` + the `NameNr` consts — all probed from the regenerated schema and pinned by the `baked_layout_mirrors_loft_schema` guard.  `ir_store::write_function` now writes both vectors; `ir_read::read_function` reads them (no more best-effort reconstruction).  **Result:** `read_whole_stdlib_compare_data_green` — the full `compare_data` oracle on the entire real stdlib — is green; `read_stdlib_function_variables_round_trip` confirms 20+ populated function variable tables re-encode identically.  447-test lib suite green; fmt-clean, clippy-0.
 
@@ -787,12 +787,12 @@ accessors.  With this, **the whole-codebase `Definition` read seam is complete**
 
 `ir_store::materialize_data_at(stores, root, data)` (a thin variant of `materialize_data` that writes into a caller-provided root record) lets the IR materialize **directly into a file-backed store** (`Store::open(path)`).  The regression test `ir_read::tests::mmap_file_round_trip_stdlib` proves the whole loop on the real stdlib: materialize → file-backed store → drop (mmap flush) → reopen via `Store::open` (mmap) → `read_data` rebuilds the native `Data`, with **no re-parse and no schema registration** (the reader walks the mapped bytes through baked offsets; `DbRef` is store-relative so the root is rebuilt against the reopened store's slot; the whole IR — records, inline vectors, interned strings — lives in one store, so one file captures everything).  The result is bit-for-bit identical to a fresh parse (`compare_data`).
 
-**Measured (`bench_stdlib_load_mmap_vs_parse`, warm page cache, 25 iters):** producing the native stdlib `Data` via `parse_dir` is **11.4 ms** median; via `Store::open` + `read_data` it is **0.92 ms** median — **~12.4×** (12.6× min).  Store file ≈ **6.9 MiB**.  This is *with* the full native rebuild (`read_data` allocates the `Vec`/`Box`/`String` graph); the speedup comes from skipping lexing + two-pass parsing + type resolution + scope analysis.  Both paths still run codegen→bytecode afterward (unchanged), and @PLAN28 measured parse as ~14.7 ms of the ~17 ms cold-start, so this attacks the dominant chunk.  The representation migration (zero-copy reads, § Incremental migration) removes even the ~0.9 ms rebuild later — but the rebuild path is already a large win, confirming the risk posture that "the store layout is good enough to build on" (Q5).
+**Measured (`bench_stdlib_load_mmap_vs_parse`, warm page cache, 25 iters):** producing the native stdlib `Data` via `parse_dir` is **11.4 ms** median; via `Store::open` + `read_data` it is **0.92 ms** median — **~12.4×** (12.6× min).  Store file ≈ **6.9 MiB**.  This is *with* the full native rebuild (`read_data` allocates the `Vec`/`Box`/`String` graph); the speedup comes from skipping lexing + two-pass parsing + type resolution + scope analysis.  Both paths still run codegen→bytecode afterward (unchanged), and @PLN82 measured parse as ~14.7 ms of the ~17 ms cold-start, so this attacks the dominant chunk.  The representation migration (zero-copy reads, § Incremental migration) removes even the ~0.9 ms rebuild later — but the rebuild path is already a large win, confirming the risk posture that "the store layout is good enough to build on" (Q5).
 
 Still open in arc D: wiring this into the real startup path — the bundle cache key + drift detection (Q4), the locked-mmap mutability split (Q1), and the `caller_index` rebuild (Q3).
 
 Original note: This is the **mmap end-goal** that
-[@PLAN28 startup-cache](../deferred/28-const-store/STARTUP_CACHE_PLAN.md)
+[@PLN82 startup-cache](../82-const-store/STARTUP_CACHE_PLAN.md)
 named but deferred: rework the compiler's in-memory IR (`Data` and the
 `Value` / `Type` / `Definition` / `Function` graph) so it lives in a
 `Stores` instance addressed by `DbRef` — **the same representation
@@ -801,19 +801,19 @@ native Rust `Vec<Definition>` / `Box<Value>` / `String`.  Once the IR
 is store-backed, `Store::open(path)` (which already mmaps, zero-copy —
 `src/store.rs`) loads a precompiled `Data` with **no rebuild step**,
 collapsing cold-start parse time (~14.7 ms of the ~17 ms baseline,
-measured in @PLAN28 Step 0) to a page-fault.
+measured in @PLN82 Step 0) to a page-fault.
 
 Large and invasive — touches the ~940 `data.def(...)` read sites and
 every `match value { Value::Call(..) }` in parser / codegen / scope
-analysis / native generation.  **Not** required for @PLAN28's cold-start
+analysis / native generation.  **Not** required for @PLN82's cold-start
 win (a rebuild-on-load snapshot gets that); required for the
 *zero-rebuild, mmap-the-shipped-file* model.
 
-**Now promoted to next (2026-06-01).**  @PLAN28 proved by measurement that
+**Now promoted to next (2026-06-01).**  @PLN82 proved by measurement that
 a JSON snapshot **cannot** beat the parser — both deserialize text into the
-same heap graph (~15–24 ms load ≈ ~11–23 ms parse; see @PLAN28 § Step 3).
+same heap graph (~15–24 ms load ≈ ~11–23 ms parse; see @PLN82 § Step 3).
 So the cold-start goal is unreachable by any serialization format and falls
-to *this* plan's zero-copy mmap.  @PLAN28 did not ship the cold-start win,
+to *this* plan's zero-copy mmap.  @PLN82 did not ship the cold-start win,
 but it shipped the **reusable foundation** this plan needs:
 
 - the exhaustive `Data` / `Value` / `Type` / `Definition` / `Function`
@@ -844,7 +844,7 @@ its own right, not just the cold-start enabler.
 
 **Standalone upside — a functional serialise/inspect layer that *converges*
 on the database's own JSON (2026-06-01).**  Independent of the cold-start
-goal, @PLAN28's codec already gives a rich, working **serialise / deserialise
+goal, @PLN82's codec already gives a rich, working **serialise / deserialise
 / compare** layer over the IR and the store schema (`ir_schema::*_to_json` /
 `*_from_json`, `database::snapshot::schema_to_json`, `compare_data`,
 `LOFT_DUMP_SNAPSHOT`), proven lossless on the real stdlib — immediately useful
@@ -861,7 +861,7 @@ There are two distinct JSON producers today:
 | `Stores::show_json` (`src/database/format.rs:69`) | **store records** via `DbRef` + `tp` | the database type schema | the database's native record-JSON |
 | `ir_schema::data_to_json` + `database::snapshot::schema_to_json` | the **native** `Data` / `Vec<Definition>` / `Box<Value>` graph (+ `Stores.types` as native structs) | hand-rolled per-type walks | tagged objects `{"k":…}` |
 
-The @PLAN28 codec is a *hand-rolled walk over native Rust IR* — it does **not**
+The @PLN82 codec is a *hand-rolled walk over native Rust IR* — it does **not**
 emit the same bytes as `show_json`, because the IR does not yet live in store
 records.  **The convergence is exactly arc B:** once the IR is materialised
 into store records (arc A schema + B write), `Stores::show_json` walks the IR
@@ -869,7 +869,7 @@ into store records (arc A schema + B write), `Stores::show_json` walks the IR
 serialiser.
 
 **Decision (user, 2026-06-02) — the JSON codec is bootstrap scaffolding, slated
-to go.**  The @PLAN28 JSON layer (`ir_schema::*_to_json` / `*_from_json` /
+to go.**  The @PLN82 JSON layer (`ir_schema::*_to_json` / `*_from_json` /
 `compare_data` / `LOFT_DUMP_SNAPSHOT`) "was useful to get the wagon rolling but
 [is] not for the final goal."  It earns its keep *now* — exhaustive native-IR
 walk reused as arc B's traversal skeleton (just swap the JSON sink for a
@@ -915,7 +915,7 @@ libs on demand.  Two reasons, both permanent:
 2. **The loft source is the better representation of a library's state anyway.**
    For distributing / versioning / inspecting a library, the `.loft` source —
    not a serialized IR image — is the right artifact.  And there is **no
-   efficiency case** for a serialized per-library form: @PLAN28 already
+   efficiency case** for a serialized per-library form: @PLN82 already
    established that (de)serialization is not faster than parsing natural loft
    source (~15–24 ms load ≈ ~11–23 ms parse — see § Status).  So a per-library
    IR cache would be a worse, harder-to-relocate stand-in for something the
@@ -925,7 +925,7 @@ Caching the **whole bundle** (core + the script's sorted lib-set) sidesteps both
 — every index inside one image is internally consistent, no relocation anywhere.
 Closed in the decision register: [DESIGN_DECISIONS.md § C70](../../DESIGN_DECISIONS.md#c70--no-per-library-ir-snapshot--cache).
 
-**Interim stop-gap (precedes this plan):** @PLAN28 Step 2 ships a
+**Interim stop-gap (precedes this plan):** @PLN82 Step 2 ships a
 **whole-stdlib / whole-bundle JSON snapshot** (loft's own database JSON,
 not serde — user-accepted 2026-05-31) that rebuilds native `Data` on
 load.  Second-class (JSON is re-parsed, not mmap'd) but delivers the
@@ -939,9 +939,9 @@ brand-new `use` combination, but a library **cannot cleanly write its own IR**
 (global indices need name-based relocation into an arbitrary prefix — the
 brittlest part of the stop-gap, optimizing the least-common case), and the
 `.loft` **source is the better representation of a library's state anyway** (see
-§ What gets cached).  So neither @PLAN28 nor this plan does per-library: both
+§ What gets cached).  So neither @PLN82 nor this plan does per-library: both
 operate on the **whole bundle as one image** with absolute, internally-
-consistent indices — no relocation anywhere.  @PLAN28 builds the stop-gap
+consistent indices — no relocation anywhere.  @PLN82 builds the stop-gap
 format-agnostic so this plan swaps the bundle encoder underneath without
 touching startup wiring.
 
@@ -996,7 +996,7 @@ Mirroring `--native` rather than inventing a third format buys:
   `borrowed` + `locked` (`src/store.rs:309`); a store-backed `Data`
   inherits that with no new persistence code.
 - **Position-independent records.**  `DbRef { store_nr, rec, pos }` is
-  offset-based (verified in the @PLAN28 audit), so a mapped store is
+  offset-based (verified in the @PLN82 audit), so a mapped store is
   valid at any base address — the precondition for mmap.  (Global
   *def_nr* indices are a separate axis, handled by whole-prefix
   snapshotting above.)
@@ -1171,9 +1171,9 @@ seam).  The two compose; neither alone is the deliverable.
 |---|---|---|
 | **A0** — typed `Store` field cursor | A `Record` / `RecordMut` wrapper over `Store`'s raw `get_int`/`set_int`/`addr::<T>` primitives: named, bounds-checked, typed field reads/writes so no IR accessor does `(rec, fld)` offset arithmetic directly.  Pure-additive precondition for A/C; ships value standalone (safer `--native` + fill.rs reads). | **Done** (cursor `a07ed8d`, superseded by the typed handle layer `src/data_store.rs` in commit `9d860c5`); see § Arc A0 — handle layer |
 | **A** — IR store schema | **Extract** the `init(db)` schema-registration block `--native` already generates for the IR transcription (§ Arc A reference / § What the generated Rust gives us) — not hand-design.  The compiler resolves all offsets/widths/discriminants; arc A captures that block (topo-ordered, finding 3) as the schema artifact, after deciding finding 2 (box-of-one `vector<Self>` vs a wrapper record for single recursive children). | **Done** (commit `ed21b3e`) — `tools/ir_schema/` pipeline + `src/ir_schema_gen.rs` generated and checked in; see § Arc A reference |
-| **B** — write path | Materialize a parsed native `Data` into store records (validates the schema).  **Greenfield, not "largely done":** @PLAN28 shipped a *JSON* snapshot (native-side, `LOFT_DUMP_SNAPSHOT` → `data_to_json`), **not** a store-format one.  Reuses `ir_schema::data_to_json`'s exhaustive native-IR walk as the traversal skeleton (JSON sink → `data_store`-handle store-writer sink) + `compare_data` as the equivalence oracle.  **Write path COMPLETE:** `src/ir_store.rs` materializes the **entire** native `Data` — all 34 Node + 24 TypeT variants, every struct (`Attribute`/`Variable`/`Function`/`Definition`/`Block`/`LinkedFieldGroup`/`Data`), via the generic `Record`/`RecVector` layer — through `materialize_data(&Data) -> DbRef`, exercised on the real stdlib (`materialize_whole_stdlib_smoke`).  All offsets/strides guard-pinned; `Store::zero_range` clears reused element memory.  **Remaining (→ arc C):** a store→native read path for bit-for-bit `compare_data` validation (smoke test currently validates structure: names + per-def attribute/variable counts). | Write path done — whole `Data` materializes on real stdlib; `compare_data` equivalence needs the arc C read path |
+| **B** — write path | Materialize a parsed native `Data` into store records (validates the schema).  **Greenfield, not "largely done":** @PLN82 shipped a *JSON* snapshot (native-side, `LOFT_DUMP_SNAPSHOT` → `data_to_json`), **not** a store-format one.  Reuses `ir_schema::data_to_json`'s exhaustive native-IR walk as the traversal skeleton (JSON sink → `data_store`-handle store-writer sink) + `compare_data` as the equivalence oracle.  **Write path COMPLETE:** `src/ir_store.rs` materializes the **entire** native `Data` — all 34 Node + 24 TypeT variants, every struct (`Attribute`/`Variable`/`Function`/`Definition`/`Block`/`LinkedFieldGroup`/`Data`), via the generic `Record`/`RecVector` layer — through `materialize_data(&Data) -> DbRef`, exercised on the real stdlib (`materialize_whole_stdlib_smoke`).  All offsets/strides guard-pinned; `Store::zero_range` clears reused element memory.  **Remaining (→ arc C):** a store→native read path for bit-for-bit `compare_data` validation (smoke test currently validates structure: names + per-def attribute/variable counts). | Write path done — whole `Data` materializes on real stdlib; `compare_data` equivalence needs the arc C read path |
 | **C** — read accessors | `data.def(dnr)` + `value` / `type` matching read from the store instead of `Vec`/`Box`.  The ~940-site migration — **done incrementally via the accessor seam, never at once** (see § Incremental migration).  Minimum seam (`src/data_store.rs` handle layer) + the full **store→native reader** (`src/ir_read.rs` — `read_value`/`read_type`/`read_data` over all 34 Node + 24 TypeT variants + every struct) landed, and the schema grew to hold `Function.names`/`inline_refs` so the whole real stdlib round-trips **fully bit-for-bit** (`compare_data` green).  Bulk read-site migration: the **whole-codebase `Definition` read seam is complete** — `state/` (~120 sites, M1a) + `generation/` (~345, M1b) + `parser/`+`compile.rs` (~430, M1c).  Remainder: `state/codegen.rs` `Value`/`Type` walk (handle dispatch — the 451 matches), then per-subsystem representation swap. | In-progress — lossless reader done; `Definition` read seam complete (M1a+M1b+M1c) |
-| **D** — mmap load | `Data::open(path)` → `Store::open` → live IR, zero rebuild.  Wire into the startup path behind the bundle cache key. | **Cold-start cache (G1) shipped, opt-in.**  Probe (~12× vs `parse_dir`) + **D1** (`save`/`open`) + **D2a** (schema cached via the `Bundle` root — @PLAN28 schema-rebuild wall resolved) + **D2b** (`main.rs` env-gated `LOFT_STDLIB_CACHE` wiring; cold saves the keyed `.store` bundle, warm mmaps it & skips parsing `default/`; off/cold/warm output byte-identical via `tests/d2b_stdlib_cache.rs`) all landed.  Remaining (arc E): per-bundle key for `use`d libs + drift Q4, mutability Q1 (locked mmap), `caller_index` Q3. |
+| **D** — mmap load | `Data::open(path)` → `Store::open` → live IR, zero rebuild.  Wire into the startup path behind the bundle cache key. | **Cold-start cache (G1) shipped, opt-in.**  Probe (~12× vs `parse_dir`) + **D1** (`save`/`open`) + **D2a** (schema cached via the `Bundle` root — @PLN82 schema-rebuild wall resolved) + **D2b** (`main.rs` env-gated `LOFT_STDLIB_CACHE` wiring; cold saves the keyed `.store` bundle, warm mmaps it & skips parsing `default/`; off/cold/warm output byte-identical via `tests/d2b_stdlib_cache.rs`) all landed.  Remaining (arc E): per-bundle key for `use`d libs + drift Q4, mutability Q1 (locked mmap), `caller_index` Q3. |
 | **E** — bundle snapshots | Core `stdlib.store` (shared) + per-script bundle snapshot (core + sorted lib-set), each keyed for drift. | **Whole-program cache landed (opt-in).**  Robustness ✅ (atomic temp+rename write; `Store::is_store_file` pre-check + graceful reparse on a corrupt/foreign file).  **Whole-program cache ✅** — `LOFT_PROGRAM_CACHE` caches the *entire* parsed program (stdlib + lazily-loaded libs + user file) keyed on the script path, validated by a **drift manifest** of every parsed source's content hash; a warm run mmaps it and **skips ALL parsing** (589 defs in ~2.8 ms).  The lazy-auto-`use` boundary is sidestepped by caching the whole program rather than core+libs.  `tests/arc_e_program_cache.rs`: off/cold/warm identical, edit→drift→reparse.  Open: E2 mutability Q1 (locked mmap — only needed for the zero-copy G2 path) / `caller_index` Q3. |
 
 ## Phase ordering
@@ -1184,7 +1184,7 @@ seam).  The two compose; neither alone is the deliverable.
    `src/ir_schema_gen.rs` register the full IR schema.  Finding 2 (box-of-one
    `vector<Self>` for recursive single-child) resolved in the transcription.
 2. **B (write)** — native `Data` → store.  Testable artifact; validates A
-   before touching read sites.  Greenfield (@PLAN28 shipped JSON, not a
+   before touching read sites.  Greenfield (@PLN82 shipped JSON, not a
    store-format snapshot — see arc B row); reuses `data_to_json`'s walk as the
    traversal skeleton + `compare_data` as the oracle.  Prerequisite (module
    fork, below) ✅ done.  **Write path ✅ done:** `ir_store::materialize_data`
@@ -1210,8 +1210,8 @@ up (step 1) before arc B built on top of it:
 | Module | `register_ir_schema` | Role | Disposition |
 |---|---|---|---|
 | `src/ir_schema_gen.rs` (arc A, generated) | `-> IrSchemaIds` | the **complete** store schema (all fields/variants/offsets, `db.finish()`) | **keep** — this is arc A's deliverable |
-| `src/ir_schema.rs` (@PLAN28) | `-> usize` | **shells-only** schema (S1 rung, no fields wired); only its own test (`ir_schema.rs:1541`) calls it | **dead — delete** the shells-only register; its job is done by `ir_schema_gen` |
-| `src/ir_schema.rs` (@PLAN28) | — | the **JSON codec** (`*_to_json`/`*_from_json`/`compare_data`) | **interim — keep until arc B lands**, then retire (see § Standalone upside decision); reused as arc B's traversal skeleton + oracle meanwhile |
+| `src/ir_schema.rs` (@PLN82) | `-> usize` | **shells-only** schema (S1 rung, no fields wired); only its own test (`ir_schema.rs:1541`) calls it | **dead — delete** the shells-only register; its job is done by `ir_schema_gen` |
+| `src/ir_schema.rs` (@PLN82) | — | the **JSON codec** (`*_to_json`/`*_from_json`/`compare_data`) | **interim — keep until arc B lands**, then retire (see § Standalone upside decision); reused as arc B's traversal skeleton + oracle meanwhile |
 
 Concretely, before arc B:
 
@@ -1351,13 +1351,13 @@ its representation can be swapped without touching that subsystem again.
    is `Data` truly store-backed; only now does mmap (arc D) become
    zero-copy for *reads*, not just load.
 
-**Why this is safe the same way @PLAN28's ladder is:** each step is
+**Why this is safe the same way @PLN82's ladder is:** each step is
 additive (the seam adds methods, doesn't remove fields), off the
 critical path until proven (dual-backing runs both representations and
 can assert they agree), and reversible (revert one subsystem's swap
 without touching others).  A per-subsystem **equivalence assertion**
 (native read == store read, behind a debug flag) is the analogue of
-@PLAN28 S3's bytecode gate.
+@PLN82 S3's bytecode gate.
 
 **Plan shape:** the seam is one small plan; each subsystem swap is its
 own follow-up plan (or `## Open work` row if it stays small).  None of
@@ -1373,7 +1373,7 @@ single seam-conversion-of-one-subsystem, or a single subsystem's
 representation swap — sized so it completes and merges as a unit.  The
 dual-backing + equivalence assertion exist precisely so each such PR is
 independently mergeable without the rest of the arc.  This same
-finish-before-continue rule governs @PLAN28's S1–S5 rungs.
+finish-before-continue rule governs @PLN82's S1–S5 rungs.
 
 ## Migration step plan — native `Data` → store-backed reads (small steps)
 
@@ -1427,7 +1427,7 @@ exercising the store on the real startup path.  G2's M0 harness is the
 prerequisite for every swap; M3/M4 (the `Value`/`Type` walk, ~451+ matches) is
 the dominant cost and is deliberately the most finely sliced.
 
-> ⚠ **D2 blocker (confirmed 2026-06-02 — the @PLAN28 wall) — schema rebuild
+> ⚠ **D2 blocker (confirmed 2026-06-02 — the @PLN82 wall) — schema rebuild
 > from a loaded `Data`.**  `Data::open` rebuilds the native `Data` (proven, 12×),
 > but a program needs the **database type schema** (`Stores.types`, the record
 > layouts indexed by `known_type`) too.  That schema is built **during parse**
@@ -1466,7 +1466,7 @@ the dominant cost and is deliberately the most finely sliced.
 3. **`OnceLock` caller-index.**  `Data.caller_index` is a derived cache —
    rebuilt on load, never stored.
 4. **Bundle drift detection.**  A mmap'd bundle must be rejected if the
-   inputs changed — reuse + extend the @PLAN28 `stdlib_cache_key`
+   inputs changed — reuse + extend the @PLN82 `stdlib_cache_key`
    (version + build-id + feature set) with the sorted lib list and lib
    content hashes.
 5. **Store-read vs `Vec`-index perf — cost AND a locality upside (user,
@@ -1518,15 +1518,15 @@ the dominant cost and is deliberately the most finely sliced.
 
 ## Cross-arc dependencies
 
-- **[@PLAN28 startup-cache](../deferred/28-const-store/STARTUP_CACHE_PLAN.md)**
-  — direct predecessor.  @PLAN28's rebuild-on-load snapshot delivers the
-  cold-start win first; this plan removes the rebuild.  @PLAN28 shipped a
+- **[@PLN82 startup-cache](../82-const-store/STARTUP_CACHE_PLAN.md)**
+  — direct predecessor.  @PLN82's rebuild-on-load snapshot delivers the
+  cold-start win first; this plan removes the rebuild.  @PLN82 shipped a
   **JSON** snapshot (native-side), **not** the store struct-enum format — so
   arc B is greenfield, not "mostly done"; what carries over is the JSON codec's
   IR walk (as arc B's skeleton) and `compare_data` (as its oracle), both interim
   (§ Standalone upside decision).  serde is forbidden project-wide (CODE.md) —
   this plan uses the store format, consistent with that.
-- **[@PLAN38 loft-store-durable](../38-loft-store-durable/)** — shares the
+- **[@PLN43 loft-store-durable](../38-loft-store-durable)** — shares the
   `Store::open_durable` / persistence surface; coordinate the on-disk
   store format so the IR store and durable user stores stay compatible.
 - **NATIVE.md / `src/generation/`** — source of the struct-enum
@@ -1555,7 +1555,7 @@ next; enter self-hosting through this keyhole, not head-on:
 
 | Rung | Effort | Permanent contribution to self-hosting |
 |---|---|---|
-| @PLAN28 JSON stop-gap | days | proves loft data *can* hold the IR; ships the whole-bundle cold-start win (per-library JSON considered + deferred as too brittle) |
+| @PLN82 JSON stop-gap | days | proves loft data *can* hold the IR; ships the whole-bundle cold-start win (per-library JSON considered + deferred as too brittle) |
 | **@PLN11 (this)** | L | the store-backed IR schema + read accessors — the first *permanent* self-hosting foundation |
 | full loft-in-loft | multi-quarter | the destination |
 
@@ -1584,7 +1584,7 @@ rewrite — it only makes the eventual decision cheaper and better-informed.
   § `output_init`.
 - [DATABASE.md](../../DATABASE.md) — `Stores`, `Store`, `DbRef`,
   word-addressed records, CONST_STORE.
-- [@PLAN28 STARTUP_CACHE_PLAN.md](../deferred/28-const-store/STARTUP_CACHE_PLAN.md)
+- [@PLN82 STARTUP_CACHE_PLAN.md](../82-const-store/STARTUP_CACHE_PLAN.md)
   — the cold-start cache; its "Architecture C — Data *is* the store" is
   this plan's seed.
 - `src/store.rs::Store::open` — the mmap entry point this plan loads

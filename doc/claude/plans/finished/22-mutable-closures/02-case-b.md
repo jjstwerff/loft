@@ -158,4 +158,4 @@ fn test() {
 - [DISCUSSION § Snippet 2](DISCUSSION.md) — paper-trace of case B classification.
 - `src/parser/vectors.rs::synthesize_closure_record` — closure synthesis (the lowering hook).
 - `src/database/mod.rs::Parts::ChildRec` — the cascade primitive @PLAN15 phase 03/04 verified.
-- [@PLAN23 EVENT_LOOP](../../future/23-event-loop/README.md) — downstream consumer waiting on case B.
+- [@PLN32 EVENT_LOOP](../../32-event-loop/README.md) — downstream consumer waiting on case B.

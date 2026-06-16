@@ -6,7 +6,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # Audience demo — dev workspace
 
 Two loft servers + a README documenting the local development
-workflow.  The **client** lives at [`doc/audience-demo/`](../../doc/audience-demo/)
+workflow.  The **client** lives at [`doc/audience-demo/`](../../doc/audience-demo)
 because that's the GitHub Pages publish root (see
 `.github/workflows/release.yml` → `publish_dir: ./doc`).
 
@@ -137,8 +137,8 @@ test).
 
 ## Related
 
-- [`doc/audience-demo/`](../../doc/audience-demo/) — the deployable
+- [`doc/audience-demo/`](../../doc/audience-demo) — the deployable
   client (this is what GitHub Pages serves)
-- [`doc/claude/plans/6-audience-generative-art/`](../../doc/claude/plans/6-audience-generative-art/)
+- [`doc/claude/plans/6-audience-generative-art/`](../../doc/claude/plans/6-audience-generative-art)
   — full development plan
-- [`lib/server/`](../../lib/server/) — the WebSocket library
+- [`lib/server/`](../../lib/server) — the WebSocket library

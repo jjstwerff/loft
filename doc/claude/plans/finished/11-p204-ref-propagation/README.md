@@ -94,7 +94,7 @@ a known-but-broken site (vs. new emitter / new infrastructure).
 
 - [PROBLEMS.md § 204](../../../PROBLEMS.md#204-tail-expression-return-of-inner-helper-call-discarded)
   — symptom + reproducer + closure narrative
-- [`../09-native-runtime-rewrite/`](../09-native-runtime-rewrite/) —
+- [`../09-native-runtime-rewrite/`](../09-native-runtime-rewrite) —
   parent native-runtime arc; explicitly out-of-scope for @PLAN09
   because the fix is parser/IR-side, not codegen-emitter
 - `src/generation/pre_eval.rs::detect_ref_tail_capture` — the

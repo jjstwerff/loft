@@ -7,7 +7,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 **Status:** **Shipped 2026-05-13**.  Moved to `plans/finished/22-mutable-closures/`.
 Drivers (see [§ Drivers](#drivers)): TTT v6 server retrofit
-([@PLAN32 § v6](../../future/32-tic-tac-toe/README.md#tic-tac-toe-v6--ergonomic-retrofit-using-writable-closures))
+([@PLN39 § v6](../../39-tic-tac-toe/README.md#tic-tac-toe-v6--ergonomic-retrofit-using-writable-closures))
 + @PLN6 audience-demo server (loft code projected to the
 audience as part of the "loft snippet highlights" beats —
 visible code structure is part of the spectacle).  Companion
@@ -33,7 +33,7 @@ concrete consumers with a soft deadline:
   `tick_counter`).  Writable closures drop the `.inner`
   ceremony at every access — ~10% fewer characters and one
   fewer mental indirection.
-- **Plan-36 audience-generative-art demo** ([plans/6-audience-generative-art/](../../future/6-audience-generative-art/))
+- **Plan-36 audience-generative-art demo** ([plans/6-audience-generative-art/](../../future/6-audience-generative-art))
   is the more time-pressured driver.  The talk frames itself as
   an "art show with loft footnotes" — small loft snippets
   projected to the audience.  Server code with `state.inner.X`
@@ -502,7 +502,7 @@ This spec sits on the dependency stack for first-game ship:
 |---|---|---|
 | 1 | [@P213 v4](../../../PROBLEMS.md#213-typefunction-storage-layout-limit--full-design-for-the-proper-fix) — closures-in-struct-fields layout | None (separate plan) |
 | 2 | This spec — implicit-by-body classifier with cases A/B/C/D | @P213 v4 |
-| 3 | EventLoop core ([EVENT_LOOP.md](../../future/23-event-loop/README.md)) | This spec |
+| 3 | EventLoop core ([EVENT_LOOP.md](../../32-event-loop/README.md)) | This spec |
 | 4 | First playable single-player game | Phase 2 |
 | 5 | First multiplayer game | Phase 3 |
 
@@ -519,9 +519,9 @@ layout-widening); @PLAN22 phase 2 dependency is met.
 - [DESIGN_DECISIONS.md § C38](../../../DESIGN_DECISIONS.md#c38--closure-capture-is-copy-at-definition)
   — the closed-by-decision entry this spec evolves; long-term
   direction note recorded 2026-05-04.
-- [EVENT_LOOP.md](../../future/23-event-loop/README.md) — the spec waiting on
+- [EVENT_LOOP.md](../../32-event-loop/README.md) — the spec waiting on
   novice-fit closures.
-- [EVENT_LOOP_DISCUSSION.md § Novice-readiness](../../future/23-event-loop/DISCUSSION.md#novice-readiness-evaluation-2026-05-05--pivot-trigger)
+- [EVENT_LOOP_DISCUSSION.md § Novice-readiness](../../32-event-loop/DISCUSSION.md#novice-readiness-evaluation-2026-05-05--pivot-trigger)
   — the evaluation that prompted this work.
 - [LIFETIME.md](../../../LIFETIME.md) — dep tracking, scope-based
   freeing, Reference<T> semantics.

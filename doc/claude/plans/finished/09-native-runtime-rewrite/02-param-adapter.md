@@ -1,14 +1,14 @@
 # Phase 02 — Parameter adaptation
 
 **Status:** SUPERSEDED (2026-05-02) — folded into
-[@PLAN12 phase 05](../../deferred/12-codegen-simplifications/05-narrow-int-cast-split.md).
+[@PLN80 phase 05](../../80-codegen-simplifications/05-narrow-int-cast-split.md).
 
 Phase 02's main scope (split `narrow_int_cast`'s dual role) is
-preserved verbatim in @PLAN12 phase 05.  Phase 02 was demoted by
+preserved verbatim in @PLN80 phase 05.  Phase 02 was demoted by
 @PLAN09 phase 00a as a @P200 prerequisite (@P200's actual fix
 landed via phase 10 step 10.3's `IntCompareEmitter`, which
 didn't need the split); the residual simplification value remains
-and moves to @PLAN12 to ship as a post-@PLAN09 follow-up.
+and moves to @PLN80 to ship as a post-@PLAN09 follow-up.
 
 The "Status reassessment" block below + the original phase 02
 plan body are kept as historical context.  Plan-12 phase 05 is

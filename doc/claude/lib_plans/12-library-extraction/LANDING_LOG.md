@@ -561,7 +561,7 @@ not in the original feature commits):
 - **`744535c`** — fmt + clippy --all-targets cleanup + tests/registry_e2e.rs
   `lock_path: None` in 4× `InstallOptions` blocks + `doc/claude/PROBLEMS.md`
   @P389 row's `../lib_plans/12-...` broken link → `lib_plans/12-...` +
-  `doc/claude/ROADMAP.md` row for `lib_plans/future/30-loft-distribution`
+  `doc/claude/ROADMAP.md` row for `lib_plans/78-loft-distribution`
   (the plan existed on disk but never appeared in ROADMAP) + wasm
   cross-build fix (`src/extensions.rs::native_target_root` gates
   `registry_index::cache_dir()` behind `feature = "registry"`,

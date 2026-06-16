@@ -69,7 +69,7 @@ regression: [`tests/scripts/292-pln17-three-state-boolean.loft`](../../../../tes
 
 An *omitted* field defaults to the zero value on construction (`S{}` → bool false / int 0)
 but to null on `parse` — and this construction-vs-parse asymmetry affects integer too.
-Left to its own investigation (binary-I/O validation, [plans/future/43](../future/43-binary-io-validation/README.md)).
+Left to its own investigation (binary-I/O validation, [plans/future/43](../47-binary-io-validation/README.md)).
 
 ## See also
 

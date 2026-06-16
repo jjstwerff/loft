@@ -104,9 +104,9 @@ callers can exist).  The dispatcher census that gated it is complete:
 plain calls, par lanes (+ runtime witness-free), entry invocations
 (REPL capture), and the cdylib shared bridge (runtime type-name ids)
 all speak the uniform ABI.  Full matrix green —
-[plans/59-return-abi](plans/59-return-abi/README.md) records the three
+[plans/55-return-abi](plans/55-return-abi/README.md) records the three
 rounds, every probe, and the phase-2 cleanups.  Originally: plan opened —
-[plans/59-return-abi](plans/59-return-abi/README.md) (@PLAN59).  Phase 0
+[plans/55-return-abi](plans/55-return-abi/README.md) (@PLN55).  Phase 0
 SHIPPED: the H1 census probe caught a LIVE #339 sibling (vector-literal
 tails promote late too; 7-line caller-first repro panicked on main) — the
 retrofit now covers all three heap-buffer kinds, regression in
@@ -168,7 +168,7 @@ five corpora: never decides alone; a debug sentinel guards the claim);
 `check_ref_leaks` pools the decoded note instead of dropping it (its
 false `___clos_1` leak report is gone).  Regression:
 `tests/scripts/297-closure-factory-explicit-return.loft`.  Full record +
-residuals found en route (armed-lib-debug baseline redness; @PLAN59
+residuals found en route (armed-lib-debug baseline redness; @PLN55
 growth assert on two lib fns): DEPS_INVENTORY § Status.
 
 ---
@@ -259,7 +259,7 @@ segfaulted on half-migrated variable tables).
    not an aspiration.
    The other named residual — **work-ref (`__ref_N`) counter equality per fn** —
    was NOT added, by design, after item 3's re-evaluation below.
-3. ✅ **Re-evaluation done (item 3 fired post-H1).** H1 (@PLAN59) removed the
+3. ✅ **Re-evaluation done (item 3 fired post-H1).** H1 (@PLN55) removed the
    only known source of cross-pass signature divergence; probing the question
    "does anything still rely on name stability beyond lambdas?" settled it:
    - `work_refs()` (the `__ref_N` incrementer) fires **zero** times across the
@@ -420,4 +420,4 @@ in the ref_return comment.  Regression:
 `tests/scripts/298-multi-return-site-ref-buffer.loft`.  H5's load
 mostly dissolved with H1 (the contract is now documented + the assert
 enforces its hardest clause).  Full history:
-[plans/59-return-abi](plans/59-return-abi/README.md).
+[plans/55-return-abi](plans/55-return-abi/README.md).

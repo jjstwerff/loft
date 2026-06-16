@@ -523,7 +523,7 @@ where a vector's length word lives**.  This family (`@P311`, `@P313`, `@P314`,
 
 | Lever | What it does | Use when |
 |---|---|---|
-| `LOFT_STORE_GUARD=1` | Reports each block-confined vector store that is scoped (and freed) later than the block it is confined to — the lifetime model under-freeing (Goal E).  Read-only, off by default.  Confinement is the least-common-ancestor of every reference's scope-path, with escape exclusions (return/yield/break, block-result, tuple-element, dep-aliasing) and loop-internal reuse excluded — adversarially hardened by `plans/future/57-vector-store-watermark/probes/cluster-I/`. | "Does a program hold more heap than the source implies?"  Drive the store-lifetime fix until it is silent corpus-wide, then promote to a `debug_assertions` assert.  See [GOALS.md Goal E](GOALS.md#goal-e--predictable-memory-the-programmers-model-is-the-truth). |
+| `LOFT_STORE_GUARD=1` | Reports each block-confined vector store that is scoped (and freed) later than the block it is confined to — the lifetime model under-freeing (Goal E).  Read-only, off by default.  Confinement is the least-common-ancestor of every reference's scope-path, with escape exclusions (return/yield/break, block-result, tuple-element, dep-aliasing) and loop-internal reuse excluded — adversarially hardened by `plans/2-vector-store-watermark/probes/cluster-I/`. | "Does a program hold more heap than the source implies?"  Drive the store-lifetime fix until it is silent corpus-wide, then promote to a `debug_assertions` assert.  See [GOALS.md Goal E](GOALS.md#goal-e--predictable-memory-the-programmers-model-is-the-truth). |
 | `LOFT_LOG=zero_claim` (or `LOFT_ZERO_CLAIM=1`) | Zeroes every freshly-claimed record's payload, so a read-before-write / stale read returns a deterministic `0` instead of arena garbage. | A result is **non-deterministic** run-to-run.  If `zero_claim` makes it deterministic-and-correct → a read-before-write (fix: zero that record at its claim site).  If it stays non-deterministic → NOT a claimed-slack read (rule it out; suspect a deep-copy logic bug or addresses-as-data). |
 | `LOFT_LOG=poison_free` | Overwrites a store's buffer with `0xDEADBEEF` on free. | Suspected use-after-free of a *whole store*.  No effect ⇒ not a freed-store UAF. |
 | `LOFT_STORES=log` | Per-alloc/free trace (`+ alloc #N`, `- free #N`). | Find a `free` then `alloc` of the same store while a `DbRef` is still live.  Note: a store is logged under the var name at *free* time, which may differ from its *alloc* name. |
@@ -624,7 +624,7 @@ runner will pick it up automatically.
 
 ## Tracker-tag indexer (`make index` + `./scripts/idx`)
 
-The tracker-tag indexer (@PLAN37) maintains
+The tracker-tag indexer (@PLN42) maintains
 `index/tags.json`, a structured map of every `@P-id` /
 `@PLAN-id` reference in the tree (plus the `legacy:`
 bare-name forms during the migration).  Replaces
@@ -670,7 +670,7 @@ erode trust faster than stale index data does).
 | `tools/indexer/ARCHITECTURE.md` | Design notes |
 | `scripts/idx` | CLI query wrapper |
 | `index/tags.json` | Output (gitignored) |
-| `doc/claude/plans/future/37-tracker-index/` | Plan + per-phase docs |
+| `doc/claude/plans/42-tracker-index/` | Plan + per-phase docs |
 
 ---
 
@@ -744,7 +744,7 @@ Open `http://localhost:8765/` in a browser.
 | `/file/<path>` | File view.  `.md` files render via `lib/markdown` (full subset: ATX + setext headings with GH-slug ids, lists with continuation merging, GFM tables with alignment, fenced code, inline formatting, links with relative-path resolution + title attribute, images via `/raw/`, autolinks `<https://…>` / `<email>`, `@P-id` / `@PLAN-id` autolinks, blockquotes, task lists, strikethrough, backslash escapes).  Other files render line-numbered with `<a id="L42">` anchors. |
 | `/diff/<path>` | Per-file unified diff vs `main` with hunk colouring (green +, red −, blue hunk header). |
 | `/commit/<sha>` | Commit message + per-file diffs via the same hunk-coloured renderer.  Last 20 commits captured. |
-| `/tag/<bare>` | Every tracker-tag reference for a P-id or PLAN-id (e.g., `/tag/P259` lists all references to `@P259` and `legacy:P259`).  Reads `index/tags.json` built by `make index` (@PLAN37). |
+| `/tag/<bare>` | Every tracker-tag reference for a P-id or PLAN-id (e.g., `/tag/P259` lists all references to `@P259` and `legacy:P259`).  Reads `index/tags.json` built by `make index` (@PLN42). |
 | `/tree/<path>` | Directory listing; sub-dirs are clickable. |
 | `/raw/<path>` | Raw file bytes (`text/plain`).  Used by markdown to serve relative image refs. |
 
@@ -762,7 +762,7 @@ hides — only "Rendered" stays.
 | Server + routes + page templates | `tools/viewer/src/main.loft` | Loft script — HTTP server via `lib/server`, route dispatch, dashboard / tag-page / commit-page / diff-page / file-page rendering |
 | Markdown rendering | `lib/markdown/` | Standalone loft library — single-file `src/markdown.loft`, comprehensive `tests/01-render.loft` |
 | Git state | `tools/viewer/state/*.json` + `state/diffs/*.diff` + `state/commits/*.diff` | Filled by `tools/viewer/refresh.sh` (uses `git` + `jq`) |
-| Tracker-tag index | `index/tags.json` | Filled by `make index` (@PLAN37) |
+| Tracker-tag index | `index/tags.json` | Filled by `make index` (@PLN42) |
 | Static CSS | embedded in `main.loft::BASE_CSS` | Light + dark via `prefers-color-scheme` |
 
 ### Dependencies

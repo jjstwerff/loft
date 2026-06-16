@@ -82,7 +82,7 @@ path only; local tuples fine; the `parallel {}` bug = a *write*-to-parent-local
 corruption, **not** reads — which P245 already fixed and `tests/scripts/81` guards)
 and which edges a naive fix would corrupt.  **Keep the probes** — they become
 permanent regression landmarks
-(`plans/future/57-vector-store-watermark/probes/`).  The *fix* still happens (don't
+(`plans/2-vector-store-watermark/probes/`).  The *fix* still happens (don't
 file — see [CLAUDE.md § Bug-filing policy](../../../CLAUDE.md#bug-filing-policy--mandatory));
 you just characterise the region first.  This lowers the bar to probe-first vs
 fix-from-one-repro.
@@ -231,7 +231,7 @@ not hide them.**
 So instead of reverting, **preserve the attempt as a diff pinned to the exact
 build hash, inside the plan** (`experiments/<name>.diff` + a `.md` with
 `git checkout <hash> && git apply <diff>`, what it does, and the *real* lessons —
-see [`57-vector-store-watermark/experiments/`](future/57-vector-store-watermark/experiments/)).
+see [`57-vector-store-watermark/experiments/`](2-vector-store-watermark/experiments)).
 A future session re-applies it verbatim and studies the live behaviour rather than
 re-deriving from a degraded copy.  Don't ship a known-broken or oracle-fooling
 state to `main`; the diff is the durable, re-appliable record, and the working
@@ -496,7 +496,7 @@ shared with closing (Steps 4-6 are identical).
 
 Partial defers (some phases shipped, others paused) grow a
 SHIPPED / DEFERRED Status table at the top of the plan README.
-Canonical shapes: @PLAN28, @PLAN12.
+Canonical shapes: @PLN82, @PLN80.
 
 If remaining phases have no concrete trigger, the design moves to
 [`../DESIGN_DECISIONS.md`](../DESIGN_DECISIONS.md), not
@@ -685,7 +685,7 @@ single source of truth.
 Why: per-phase status changes every time a phase ships or is
 deferred.  Mirroring it on ROADMAP doubled the edit cost and
 created a recurring drift surface (manual audit 2026-05-09 caught
-@PLAN14 phase 08 deferral missing, @PLAN07 phase 1 status stale).
+@PLAN14 phase 08 deferral missing, @PLN28 phase 1 status stale).
 ROADMAP's job is "which plans exist + how big + what blocks them";
 the plan README's job is "where it stands today."
 

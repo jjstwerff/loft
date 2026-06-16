@@ -85,12 +85,12 @@ bind-indexed-lookup-to-a-local-first pattern for hash mutation.)
 - `src/engine_host/` in the loft crate (phase 02 needs deep `State` access;
   extraction into the lavition repo is a later, mechanical move).
 - **Loop:** drain (budgeted) → tick when due (drift-free `last += INTERVAL`) →
-  flush output → idle backoff — the @PLAN50 `probe_server` loop, in Rust.
+  flush output → idle backoff — the @PLN51 `probe_server` loop, in Rust.
 - **Pump v1:** the WS listener (reusing `src/serve.rs`'s frame/handshake code)
   on a pump thread, **non-blocking reads with the peek pattern** (the phase-00
   fix, native from day one), feeding an mpsc the loop drains.
 - **Classes v1:** events only — the audience server is pure events; conflation
-  slots + bulk accumulation land when the consumer (@PLAN50 / assets) arrives,
+  slots + bulk accumulation land when the consumer (@PLN51 / assets) arrives,
   per wire-schema-as-data registration (table present from day one, one row).
 - **Dispatch v1:** parse+compile the program once (diagnostics-checked), run
   `main` once; main calls the kernel library's `run(on_event, on_tick, port)`

@@ -8,14 +8,14 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 ## Status
 
 **CLOSED** — 2026-05-31.  All deliverables shipped.  Remaining Wave-2
-sanitizer-coverage items (not owned by @PLAN55) routed to
-[@PLAN56](../../future/56-sanitizer-coverage-expansion/README.md).
+sanitizer-coverage items (not owned by @PLN53) routed to
+[@PLN54](../../54-sanitizer-coverage-expansion/README.md).
 
 | Wave | Status |
 |---|---|
 | **Wave 1** — clusters 1-5 fixed + V2-aligned-stack production default + sanitizer CI stack (per-PR guard + nightly Miri/ASan/toolchain-matrix + sticky-comment reporter) | ✅ **SHIPPED** — PR #235 (aligned default + sanitizer engine) + PR #236 (V1 removal + CI stack) |
 | **Wave 2 kickoff** — cargo-fuzz engine (`fuzz/`) with `store_alloc` + `vector_collection` direct structure targets; found 4 real latent bugs (headlined: OOB read in `vector::remove_vector`); per-PR ASan gate; cluster-3/4/5 regression guards; Miri curated set grown 1→4 tests; ASan gate fixed to use explicit nightly toolchain | ✅ **SHIPPED** — PR #237 |
-| **Spun off** — program-level fuzzing → @PLAN55 (`plans/future/55-program-level-fuzzing/`); remaining sanitizer-coverage items → @PLAN56 (`plans/future/56-sanitizer-coverage-expansion/`) | — |
+| **Spun off** — program-level fuzzing → @PLN53 (`plans/53-program-level-fuzzing/`); remaining sanitizer-coverage items → @PLN54 (`plans/54-sanitizer-coverage-expansion/`) | — |
 
 **Closure summary:**
 - Sanitizer CI (nightly Miri + per-PR ASan guard + per-PR `stack_align_guard`) is live on `main`.
@@ -23,8 +23,8 @@ sanitizer-coverage items (not owned by @PLAN55) routed to
 - Curated Miri set covers p213 + clusters 3/4/5 (4 tests); locks the hard-UB fixes.
 - `fuzz/` cargo-fuzz crate exists with two direct structure targets.
 - dogfood/standard suite stays green; no new regressions.
-- Wave-2 coverage items not fuzzing-related continue in @PLAN56 (macOS-ARM leg, TSan, LSan triage, native-ASan, MSan, failure-notifier, growing Miri set).
-- `LOFT_POISON` keystone (W2-3) moved to @PLAN56; @PLAN55 F4 remains blocked on it.
+- Wave-2 coverage items not fuzzing-related continue in @PLN54 (macOS-ARM leg, TSan, LSan triage, native-ASan, MSan, failure-notifier, growing Miri set).
+- `LOFT_POISON` keystone (W2-3) moved to @PLN54; @PLN53 F4 remains blocked on it.
 
 *Historical note:* PLAN52 was the founding hard dependency (its cluster I was the
 dominant noise that would have drowned out any other sanitizer finding).  PLAN52
@@ -73,8 +73,8 @@ code paths.
 
 | Plan | Status | Clusters | Probes | Root |
 |---|---|---|---|---|
-| [@PLAN51 hidden-buffer-aliasing](../../finished/51-hidden-buffer-aliasing/README.md) | closed 2026-05-29 | 5 | 62 | `Reference` / heap-buffer borrows freed under the consumer |
-| [@PLAN52 value-block-borrow-cleanup](../../finished/52-value-block-borrow-cleanup/README.md) | active | 7 | 84 (33 still failing interpret) | Text borrows from `_ncc_N` value-blocks; self-described "6th cluster of the PLAN51 family" |
+| [@PLAN51 hidden-buffer-aliasing](../51-hidden-buffer-aliasing/README.md) | closed 2026-05-29 | 5 | 62 | `Reference` / heap-buffer borrows freed under the consumer |
+| [@PLAN52 value-block-borrow-cleanup](../52-value-block-borrow-cleanup/README.md) | active | 7 | 84 (33 still failing interpret) | Text borrows from `_ncc_N` value-blocks; self-described "6th cluster of the PLAN51 family" |
 | Successor (hypothetical) | — | unknown | — | Likely a 7th/8th expression of the same pattern; will keep recurring until detected mechanically |
 
 **What's actually broken on `main` today:**
@@ -181,7 +181,7 @@ gets one row + its own `cluster-<id>-<slug>.md` doc.
 | **3** ✅ | **Store-aliasing reborrow in cross-store copy** — mutably borrowing the same store twice in `get_disjoint_mut`-precursor code → aliasing `&mut`.  **FIX LANDED 2026-05-31** (PR #236; `get_disjoint_mut`). | Aliasing UB | Interpret + native | **Miri** | `cluster-0-tooling-decision.md` § Progress |
 | **4** ✅ | **Uninitialised padding in fn-ref slot read** — reading a fn-ref slot as `[u8;20]` reads the 4-byte alignment padding as initialised bytes (uninit UB).  **FIX LANDED 2026-05-31** (PR #236; `MaybeUninit` for the fn-ref read). | Uninit UB | Interpret | **Miri** | `cluster-0-tooling-decision.md` § Progress |
 | **5** ✅ | **`free_text` leak** — `free_text` called `String::clear` + `shrink_to_fit` without deallocating the buffer; the String was then dropped without a heap free → leak.  **FIX LANDED 2026-05-31** (PR #236; `clear` before `shrink_to_fit` removes the leak). | Memory leak | Interpret | **Miri** (leak check) | `cluster-0-tooling-decision.md` § Progress |
-| **(PLAN52-I)** | `??`-on-text value-block returns a `Str` borrowing into block-local `_ncc_N`, freed before the consumer reads → heap-use-after-free at the consumer's `copy_nonoverlapping`.  **Owned by [@PLAN52](../../finished/52-value-block-borrow-cleanup/README.md) cluster I — confirmed here under ASan; CLOSED by PLAN52 (#230).** | Heap-UAF (silent corruption; masked on x86-64 rustc 1.95) | Interpret | **ASan** (Miri couldn't reach it — masked behind cluster 1's compile-stage abort) | PLAN52 `cluster I` |
+| **(PLAN52-I)** | `??`-on-text value-block returns a `Str` borrowing into block-local `_ncc_N`, freed before the consumer reads → heap-use-after-free at the consumer's `copy_nonoverlapping`.  **Owned by [@PLAN52](../52-value-block-borrow-cleanup/README.md) cluster I — confirmed here under ASan; CLOSED by PLAN52 (#230).** | Heap-UAF (silent corruption; masked on x86-64 rustc 1.95) | Interpret | **ASan** (Miri couldn't reach it — masked behind cluster 1's compile-stage abort) | PLAN52 `cluster I` |
 
 **Wave 1 complete.**  All five PLAN53-owned clusters fixed; PLAN52-I owned and
 closed by PLAN52 (#230).  The Miri curated gate (single `p213` test) was
@@ -262,7 +262,7 @@ For the homegrown cluster-2 (eval-stack alignment) work the "sanitizer
 invocation" was: run under `LOFT_ALIGN=1 LOFT_SLOT_V2=drive loft --interpret`,
 one probe per subprocess under `LOFT_TIMEOUT`.  **Those flags are now gone**
 (V2 is the only layout; `LOFT_ALIGN`/`LOFT_SLOT_V2` were removed in PR #236).
-The probes in [`probes/`](probes/) record the historical mechanism; the
+The probes in [`probes/`](probes) record the historical mechanism; the
 "flag-OFF PASS / aligned FAIL" distinction no longer applies — all probes pass
 on production.  The run script [`probes/run.sh`](probes/run.sh) still works as
 a regression smoke-check (all 35 probes must pass with no flags).
@@ -327,8 +327,8 @@ Wave-1 final state and Wave-2 gaps.
 | Miri ignore annotations (`#[cfg_attr(miri, ignore)]`) | Partially in tree | Mark FFI-heavy tests Miri cannot run; curated set covers `p213`; rest still open |
 | `#[cfg(not(miri))]` gate on `crash_report::install` | **Missing** | Lets the loft *binary* run under Miri (`libc::sigemptyset` is unshimmed); only needed for binary-under-Miri, not `cargo miri test` |
 | **`LOFT_POISON=1` arena poison-on-free** (store-record + stack-slot fill on free) | **Missing — recommended Wave-2 keystone** | Makes store-internal use-after-free (the @P377/@P378 dangling-`DbRef` family) detectable on any rustc — the blind spot Miri/ASan/Valgrind all share |
-| Differential generator (random valid loft → interpret vs native diff, run under sanitizer) | **Spun off to @PLAN55** | Mine the interpret↔native divergence family + masked UB at scale; reuses `cross_mode!` — see [55-program-level-fuzzing/](../../future/55-program-level-fuzzing/README.md) |
-| `cargo-fuzz` target (`fuzz_target!` + `arbitrary`, ASan) — program-level | **Spun off to @PLAN55** | Coverage-guided fuzzing of parse → byte_code → execute; stresses parser/compiler/stack on unseen programs — see [55-program-level-fuzzing/](../../future/55-program-level-fuzzing/README.md) |
+| Differential generator (random valid loft → interpret vs native diff, run under sanitizer) | **Spun off to @PLN53** | Mine the interpret↔native divergence family + masked UB at scale; reuses `cross_mode!` — see [55-program-level-fuzzing/](../../53-program-level-fuzzing/README.md) |
+| `cargo-fuzz` target (`fuzz_target!` + `arbitrary`, ASan) — program-level | **Spun off to @PLN53** | Coverage-guided fuzzing of parse → byte_code → execute; stresses parser/compiler/stack on unseen programs — see [55-program-level-fuzzing/](../../53-program-level-fuzzing/README.md) |
 | Structure-aware fuzz target for database collections (vector/hash/tree/radix + store allocator) | **Missing** | Direct fuzz target: clean Rust APIs, documented invariants (DATABASE.md), ASan oracle in place |
 | ASan / Valgrind custom-allocator annotations (`__asan_poison_memory_region` / `VALGRIND_MALLOCLIKE_BLOCK`) | **Missing** | Teach the *external* tools about the loft arena (alternative to the homegrown `LOFT_POISON` lane) |
 | Valgrind Memcheck (informational lane) | Available upstream — not wired | Uninitialised-read detection on the full native binary with no rebuild; complements ASan |
@@ -336,7 +336,7 @@ Wave-1 final state and Wave-2 gaps.
 | **macOS-ARM nightly leg** | **Missing** | macOS-ARM is where @P383 surfaced; the ubuntu-only nightly would not have caught it |
 | **Native-backend ASan** | **Missing** | ASan currently instruments only the in-process interpreter; the `--native` codegen runtime is uninstrumented |
 | **MSan (MemorySanitizer)** | **Missing** | Uninitialised-read detection corpus-wide; painful setup (needs instrumented std); lower priority |
-| **OSS-Fuzz onboarding** | **Spun off to @PLAN55** | Scale-up from nightly time-box to sustained coverage-guided fuzzing — see [55-program-level-fuzzing/](../../future/55-program-level-fuzzing/README.md) |
+| **OSS-Fuzz onboarding** | **Spun off to @PLN53** | Scale-up from nightly time-box to sustained coverage-guided fuzzing — see [55-program-level-fuzzing/](../../53-program-level-fuzzing/README.md) |
 | **Failure→issue notifier for the nightly** | **Missing** | Opens/updates a deduped GitHub issue on nightly failure; avoids silent red nightly going unnoticed (per-job conclusions hidden behind `continue-on-error`) |
 
 Wave-2 tools are part of this plan's continued output.  Moving the
@@ -375,8 +375,8 @@ addresses the categories it cannot yet see.  Priorities, in order:
    on unseen programs; seeds from the ~2000 existing `.loft` tests.  Expect an
    initial robustness/panic-triage wave (malformed input surfaces `unwrap`/panic
    paths first).  Cross-references Case-finding strategy lanes 4-5 above (expand
-   there, don't duplicate).  **Spun off to @PLAN55 — see
-   [`plans/future/55-program-level-fuzzing/`](../../future/55-program-level-fuzzing/README.md).**
+   there, don't duplicate).  **Spun off to @PLN53 — see
+   [`plans/53-program-level-fuzzing/`](../../53-program-level-fuzzing/README.md).**
 
 5. **`LOFT_POISON=1` arena poison-on-free keystone.**  Already described in
    Case-finding strategy lane 3; still **missing**.  Fills freed store records
@@ -388,8 +388,8 @@ addresses the categories it cannot yet see.  Priorities, in order:
 6. **Differential fuzzing (interpret ≡ native ≡ wasm).**  Fold fuzzing into
    Goal D (cross-backend parity): the same program-level fuzzer from item 4, run
    on all three backends, flags output divergence as a finding.  Reuses
-   `cross_mode!` infrastructure.  **Spun off to @PLAN55 (F3) — see
-   [`plans/future/55-program-level-fuzzing/`](../../future/55-program-level-fuzzing/README.md).**
+   `cross_mode!` infrastructure.  **Spun off to @PLN53 (F3) — see
+   [`plans/53-program-level-fuzzing/`](../../53-program-level-fuzzing/README.md).**
 
 7. **Grow the Miri curated set** beyond the single `p213` test.  Add the
    cluster 1-5 reproducers + representative text/fn-ref/par shapes so the Miri
@@ -405,8 +405,8 @@ addresses the categories it cannot yet see.  Priorities, in order:
 
 10. **OSS-Fuzz onboarding.**  A nightly time-box is the start; OSS-Fuzz is the
     scale-up for genuinely sustained, coverage-guided fuzzing with a much larger
-    budget than CI allows.  **Spun off to @PLAN55 (F5) — see
-    [`plans/future/55-program-level-fuzzing/`](../../future/55-program-level-fuzzing/README.md).**
+    budget than CI allows.  **Spun off to @PLN53 (F5) — see
+    [`plans/53-program-level-fuzzing/`](../../53-program-level-fuzzing/README.md).**
 
 11. **MSan (MemorySanitizer) corpus-wide.**  Uninitialised-read detection beyond
     what Miri covers; lower priority (setup requires a fully instrumented std).
@@ -432,7 +432,7 @@ Wave 1 is complete.  The table below covers Wave 2 steps.
 | **W2-2** | **ThreadSanitizer job** — add a `tsan` job to `miri.yml` running the parallel/threading suite under `RUSTFLAGS=-Zsanitizer=thread` | TSan job green on `main`; any races found catalogued or fixed | 1-2 sessions | MEDIUM (TSan setup) |
 | **W2-3** | **`LOFT_POISON=1` keystone** — implement arena poison-on-free for store records + stack slots | `LOFT_POISON=1 cargo test` green; @P377/@P378-class reads produce sentinel-value panics rather than silent stale data | 1-2 sessions | MEDIUM |
 | **W2-4** | **Database collections fuzz target** (structure-aware, under ASan) | `cargo fuzz run db_collections` runs 10 min with no ASan finding | 2-3 sessions | LOW-MEDIUM |
-| **W2-5** | ~~**Program-level loft-source fuzz**~~ — **spun off to @PLAN55** ([`plans/future/55-program-level-fuzzing/`](../../future/55-program-level-fuzzing/README.md)) | Tracked in @PLAN55 | — | — |
+| **W2-5** | ~~**Program-level loft-source fuzz**~~ — **spun off to @PLN53** ([`plans/53-program-level-fuzzing/`](../../53-program-level-fuzzing/README.md)) | Tracked in @PLN53 | — | — |
 | **W2-6** | **Grow the Miri curated set** | Cluster 1-5 reproducers + par shapes in the Miri job; job runtime ≤ 20 min | 1 session | LOW |
 | **W2-final** | **Close the plan** — move to `plans/finished/` | All Wave-2 items done or explicitly deferred with a one-line reason; sanitizer CI green; `make ci` green | 1 session | none |
 
@@ -496,10 +496,10 @@ Two plan-specific notes:
 
 ## See also
 
-- [`plans/future/55-program-level-fuzzing/`](../../future/55-program-level-fuzzing/README.md) — spinoff plan; owns program-level loft-source fuzzing, schema-coupled collection fuzzing (tree/hash/sorted via real programs), differential fuzzing, and OSS-Fuzz onboarding (Wave-2 items #4, #6, #10).
-- [`plans/future/56-sanitizer-coverage-expansion/`](../../future/56-sanitizer-coverage-expansion/README.md) — successor plan; owns remaining Wave-2 sanitizer-coverage items (macOS-ARM leg, TSan, LSan triage, native-ASan, growing Miri set, MSan, failure-notifier, `LOFT_POISON` keystone).
+- [`plans/53-program-level-fuzzing/`](../../53-program-level-fuzzing/README.md) — spinoff plan; owns program-level loft-source fuzzing, schema-coupled collection fuzzing (tree/hash/sorted via real programs), differential fuzzing, and OSS-Fuzz onboarding (Wave-2 items #4, #6, #10).
+- [`plans/54-sanitizer-coverage-expansion/`](../../54-sanitizer-coverage-expansion/README.md) — successor plan; owns remaining Wave-2 sanitizer-coverage items (macOS-ARM leg, TSan, LSan triage, native-ASan, growing Miri set, MSan, failure-notifier, `LOFT_POISON` keystone).
 - [`plans/finished/52-value-block-borrow-cleanup/`](../52-value-block-borrow-cleanup/README.md) — founding hard dependency (now satisfied, closed via PR #230); the cluster-I heap-UAF was the dominant noise that had to be removed before this plan's sweep was meaningful.
-- [`plans/finished/51-hidden-buffer-aliasing/`](../51-hidden-buffer-aliasing/) — sibling investigation; canonical layout reference for cluster docs and probe organisation.
+- [`plans/finished/51-hidden-buffer-aliasing/`](../51-hidden-buffer-aliasing) — sibling investigation; canonical layout reference for cluster docs and probe organisation.
 - [`doc/claude/PROBLEMS.md`](../../../PROBLEMS.md) §@P383 — the trigger incident; the failure mode this plan's CI lever would have caught months earlier.
 - [`doc/claude/TESTING.md`](../../../TESTING.md) — sanitizer-CI documentation (shipped D-final, PR #236).
 - [`.github/workflows/ci.yml`](../../../../../.github/workflows/ci.yml) — per-PR `stack_align_guard` job + nightly-status sticky-comment reporter (shipped).

@@ -96,10 +96,10 @@ byte-identical stdout** asserted by the `cross_mode!` harness.
   destination for any future CLOSED rows from this matrix
 - [`../14-tuple-validation/00-matrix.md`](../14-tuple-validation/00-matrix.md)
   — peer matrix (donor template for cross_mode + matrix style)
-- [`../15-closure-validation/`](../15-closure-validation/)
+- [`../15-closure-validation/`](../15-closure-validation)
   (SHIPPED 2026-05-12)
-  / [`../../16-coroutine-validation/`](../../16-coroutine-validation/)
-  / [`../../future/18-match-validation/`](../../future/18-match-validation/)
+  / [`../../16-coroutine-validation/`](../../16-coroutine-validation)
+  / [`../../future/18-match-validation/`](../../29-match-validation)
   — peer matrix plans following the same shape
 - `tests/template_matrix.rs` — the 26 PASS cells + harness wiring
 - `default/01_code.loft` — stdlib interfaces (Ordered / Equatable /

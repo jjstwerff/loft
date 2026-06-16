@@ -343,7 +343,7 @@ You've seen the language surface.  Pick one of:
   worker on 4 threads.  See [STDLIB.md § Parallel] and
   `examples/structs.loft` for a starter.
 - **Set up your editor** — see
-  [editors/vscode/](../editors/vscode/) for the VS Code extension
+  [editors/vscode/](../editors/vscode) for the VS Code extension
   with syntax highlighting + snippets.  TextMate grammar at
   [syntaxes/loft.tmLanguage.json](../syntaxes/loft.tmLanguage.json)
   works in Sublime Text and any TextMate-compatible editor.

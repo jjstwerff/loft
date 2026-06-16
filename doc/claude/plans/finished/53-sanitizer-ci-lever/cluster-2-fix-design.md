@@ -383,7 +383,7 @@ driven.  Rollback: `git reset --hard origin/plan-53-sanitizer-ci-lever`
 
 ## Stage B mechanism findings — per sub-cluster (2026-05-30)
 
-After the [`probes/`](probes/) suite landed (35 probes, all 27 aligned-mode
+After the [`probes/`](probes) suite landed (35 probes, all 27 aligned-mode
 failures reproduced), each sub-cluster's minimal reproducer was run through the
 `stack_align_guard` release binary
 (`cargo build --release --bin loft --features stack_align_guard`, then

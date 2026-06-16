@@ -1297,20 +1297,20 @@ and the library-extraction arc.
 | **PKG.7** — `loft.lock` reproducible builds | **SHIPPED 2026-05-24** — `src/lockfile.rs` (= R2). |
 | **PKG.SIGN** — Ed25519 trust root | **SHIPPED + MERGED 2026-06-14** — PR #371: three independent keys in `registry_keys.rs`, `scripts/registry-sign.sh` review-then-sign tool, live index signed ([REGISTRY_BOOTSTRAP.md](REGISTRY_BOOTSTRAP.md)).  Fully active once a loft **release** ships the embedded keys. |
 | **PKG.PREBUILT** (@PLN21) — native prebuilts, no rustc to *use* a lib | **Producer SHIPPED, distribution glue OPEN.** `loft build-native` + the 4-OS `prebuild-native.yml` build cdylibs; consumer `fetch_prebuilt` loads a host-matching one.  Remaining: wire workflow artifacts → `index.json binaries[<triple>]`, the submit-CI gates, and a manylinux glibc baseline.  Scoped to **hand-written** native libs (auto-compiled libs are loft-build-locked — [plans/21](plans/21-prebuilt-native-libs/README.md)). |
-| **PKG.EXTRACT** — move `lib/*/` to per-family GitHub repos | **In progress.** Libraries already live in `loft-lang/loft-libs-*` + published; the prerequisite arc (drain library `#native` code out of the compiler crate) is active — [`lib_plans/12-library-extraction/`](lib_plans/12-library-extraction/). |
+| **PKG.EXTRACT** — move `lib/*/` to per-family GitHub repos | **In progress.** Libraries already live in `loft-lang/loft-libs-*` + published; the prerequisite arc (drain library `#native` code out of the compiler crate) is active — [`lib_plans/12-library-extraction/`](lib_plans/12-library-extraction). |
 | **PKG.STUB** — generated API stubs + `loft api` | **SHIPPED** (stubs on install/update/pin, `loft api [name]`, `tests/api_discovery.rs`).  Remaining: parser-walk upgrade shared with [API_SURFACE.md](API_SURFACE.md) `api-lint`. |
 
 **Remaining, in order:**
 1. **Cut a loft release** — activates the embedded trust root (PKG.SIGN); until then deployed loft has an empty trust root and ignores signatures.
 2. **Prebuilt distribution glue** (PKG.PREBUILT) — on a library tag, the producer attaches per-triple cdylibs to the GitHub release (`gh release upload`), then the registry `index.json` gains a `binaries[<triple>] = {url, sha256, loft_ffi_fp}` entry (signed via `registry-sign.sh`); add the submit-CI gates + a manylinux glibc baseline.  See [plans/21 § Phase 4b / Open](plans/21-prebuilt-native-libs/README.md).
-3. **PKG.EXTRACT** — continue draining the compiler crate + per-library moves via [`lib_plans/12-library-extraction/`](lib_plans/12-library-extraction/).
+3. **PKG.EXTRACT** — continue draining the compiler crate + per-library moves via [`lib_plans/12-library-extraction/`](lib_plans/12-library-extraction).
 
 ---
 
 ## See also
-- [lib_plans/12-library-extraction/](lib_plans/12-library-extraction/) — moving `lib/*/` packages into external chunk repos (extraction/migration planning)
-- [OPENGL.md](lib_plans/future/02-graphics/README.md) — OpenGL rendering design
-- [OPENGL_IMPL.md](lib_plans/future/02-graphics/IMPLEMENTATION.md) — Step-by-step OpenGL implementation
+- [lib_plans/12-library-extraction/](lib_plans/12-library-extraction) — moving `lib/*/` packages into external chunk repos (extraction/migration planning)
+- [OPENGL.md](lib_plans/58-graphics/README.md) — OpenGL rendering design
+- [OPENGL_IMPL.md](lib_plans/58-graphics/IMPLEMENTATION.md) — Step-by-step OpenGL implementation
 - [WASM.md](WASM.md) — WASM architecture overview
 - [WASM.md](WASM.md) — Virtual filesystem bridge steps
 
@@ -1931,7 +1931,7 @@ but may reduce their Maintainer workload to match the team capacity.
 
 - [PKG_REGISTRY.md](PKG_REGISTRY.md) — file format, install flow, version resolution, implementation
 - [Library Package Format](#library-package-format) — package format + native extension design
-- [lib_plans/12-library-extraction/](lib_plans/12-library-extraction/) — extraction/migration of `lib/*/` into external repos
+- [lib_plans/12-library-extraction/](lib_plans/12-library-extraction) — extraction/migration of `lib/*/` into external repos
 
 ---
 
@@ -1947,7 +1947,7 @@ per-family external GitHub repos — the library inventory, the
 stdlib-vs-library boundary, chunk topology + dependency graph, the
 per-chunk extraction template, release workflow, current state, the
 shipped-libraries catalog, and the open migration questions — lives in
-[`lib_plans/12-library-extraction/`](lib_plans/12-library-extraction/)
+[`lib_plans/12-library-extraction/`](lib_plans/12-library-extraction)
 (see its [REFERENCE.md](lib_plans/12-library-extraction/REFERENCE.md) for
 the durable "how it works" reference and [README.md](lib_plans/12-library-extraction/README.md)
 for current status).

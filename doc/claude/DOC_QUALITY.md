@@ -122,7 +122,7 @@ examples are paraphrased from real comments (file named at the time of writing).
 ### A. Plan tags and dates — `git blame` already has them
 
 ```rust
-// @PLAN12 phase 3.5a (2026-05-24) — …
+// @PLN80 phase 3.5a (2026-05-24) — …
 /// Plan-22 phase 02c (2026-05-12): override the alignment …
 // @PLAN52 cluster I iteration 2 (2026-05-30): honor skip_free …
 ```
@@ -135,7 +135,7 @@ line.
 **Stamp vs pointer — the one distinction this doc turns on.** The rule is about
 the dead *stamp*, not about all references:
 
-- **Dead stamp — remove it:** `@PLAN12 phase 3.5a (2026-05-24) — …`, a bare prefix
+- **Dead stamp — remove it:** `@PLN80 phase 3.5a (2026-05-24) — …`, a bare prefix
   that records which plan and when, with nothing to open. Following it tells you
   only when the line was written.
 - **Live pointer — keep it:** a link to a doc, issue, or plan that *explains* why

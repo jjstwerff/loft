@@ -122,10 +122,10 @@ principle to extract once the registry exists):
 | `web` | Web utilities | **EXTRACTED** (loft-libs-net 0.1.0) |
 | `server` | HTTP server | **EXTRACTED** (loft-libs-net 0.1.0) |
 | `game_protocol` | Multiplayer protocol | **EXTRACTED** (loft-libs-net 0.1.0) |
-| `time` | Date/time over epoch-ms ([`../21-datetime/`](../21-datetime/)) | Early — pure-loft; `loft-libs-core` |
+| `time` | Date/time over epoch-ms ([`../21-datetime/`](../21-datetime)) | Early — pure-loft; `loft-libs-core` |
 | `markdown` | Markdown parser / formatter | Early — pure-loft |
 | `imaging` | Image manipulation | Mid — `loft-libs-graphics`; native ABI closed (@P321c), browser-WASM open |
-| `graphics` | OpenGL / 2D drawing | Mid — `loft-libs-graphics`; coordinate with [`../02-graphics/`](../02-graphics/) |
+| `graphics` | OpenGL / 2D drawing | Mid — `loft-libs-graphics`; coordinate with [`../02-graphics/`](../02-graphics) |
 | `world` | Shared world model (sparse Cell/Chunk/World; expands per Phase 7a) | Mid — TTT v5, audience demo, moros, dryopea |
 | `moros_editor` / `moros_map` / `moros_render` / `moros_sim` / `moros_ui` | Moros game libraries (game-specific after the Phase-7a world split) | Late — into the `moros` project (Phase 7b) |
 | `audience_crystal` | Audience-demo crystal mesh-gen prototype | **Stays in monorepo** (paired with the audience demo; Phase 8 adds package `tests/` so it joins the CI gates) |
@@ -188,9 +188,9 @@ the cap.**  New libraries join an existing chunk by family fit.
 | Chunk repo | Packages | Rationale |
 |---|---|---|
 | `loft-libs-core` | `arguments`, `random`, `crypto`, `time` (+ future stdlib drains: `json` / `html` / `fs`) | Small, stable, no graphics deps — extract first.  `time`'s companion built-in `DateTime` is a language PRIMITIVE in the compiler crate, not library code. |
-| `loft-libs-graphics` | `graphics`, `imaging`, `gridmesh`, `shapes` | Graphics stack + `#native` crates; coordinate with [`../02-graphics/`](../02-graphics/) |
-| `loft-libs-net` | `server`, `web`, `game_protocol` | HTTP / multiplayer; coordinate with [`../08-server/`](../08-server/) |
-| `loft-libs-world` | `world` (Phase-7a-expanded: hex addressing, wall geometry, groups, height; folds in `lib/wall.loft`) | Shared spatial primitives for TTT v5, audience demo, moros, dryopea ([@PLAN46](../../plans/future/46-dryopea/README.md)) |
+| `loft-libs-graphics` | `graphics`, `imaging`, `gridmesh`, `shapes` | Graphics stack + `#native` crates; coordinate with [`../02-graphics/`](../02-graphics) |
+| `loft-libs-net` | `server`, `web`, `game_protocol` | HTTP / multiplayer; coordinate with [`../08-server/`](../08-server) |
+| `loft-libs-world` | `world` (Phase-7a-expanded: hex addressing, wall geometry, groups, height; folds in `lib/wall.loft`) | Shared spatial primitives for TTT v5, audience demo, moros, dryopea ([@PLAN46](../../plans/49-dryopea/README.md)) |
 
 **Game / application repos** (host game-specific libraries AND the
 playable game; registry-publish optional):
@@ -200,7 +200,7 @@ playable game; registry-publish optional):
   `moros_sim`, `moros_ui` + the game executable.  Depends on
   `loft-libs-graphics` + `loft-libs-world`.  Per-library tarballs may
   still publish, but the homepage is the moros repo.
-- **`dryopea`** *(new project — [@PLAN46](../../plans/future/46-dryopea/README.md))*:
+- **`dryopea`** *(new project — [@PLAN46](../../plans/49-dryopea/README.md))*:
   dryopea-specific libraries + game, with `loft-libs-world` from the
   registry.
 

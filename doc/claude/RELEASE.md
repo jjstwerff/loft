@@ -633,8 +633,8 @@ platform:
 
 For each release, the relevant per-item plans hold their own
 landing procedures (e.g. for 0.8.5: SH.1, SH.2, DX.1, DX.3 in
-[`plans/future/27-developer-experience/`](plans/future/27-developer-experience/);
-NDB.0 in [`plans/future/25-native-debug/`](plans/future/25-native-debug/)).
+[`plans/36-developer-experience/`](plans/36-developer-experience);
+NDB.0 in [`plans/34-native-debug/`](plans/34-native-debug)).
 The cross-cutting work for ANY release is:
 
 - [ ] All per-item landing procedures in the release's plans

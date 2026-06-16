@@ -217,7 +217,7 @@ under the interpreter or `cargo test --test issues`).
 > a raw width — applied to the args/locals boundary in the coroutine
 > create/yield/restore path.
 >
-> **Probes authored (pass 1):** [`probes/2a-*.loft`](probes/) +
+> **Probes authored (pass 1):** [`probes/2a-*.loft`](probes) +
 > [`probes/run.sh`](probes/run.sh) + [`probes/README.md`](probes/README.md).
 > `2a-01-gen-arg-single-yield.loft` is the minimal deterministic
 > reproducer (FAIL aligned, PASS flag-off).  References `2a-02`/`2a-03`

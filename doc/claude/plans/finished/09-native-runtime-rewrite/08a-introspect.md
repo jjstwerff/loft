@@ -151,7 +151,7 @@ fixes?** Mixed.
   handling.
 - Phase 02 (param adapter): NO — demoted by 00a.  @P200's actual
   fix didn't need the param-narrowing split.  Phase 02 is
-  preserved in @PLAN12 phase 05 as a pure simplification.
+  preserved in @PLN80 phase 05 as a pure simplification.
 - Phase 03 (parallel-for emitter): YES — phase 06 mirrored the
   `ParallelForEmitter` shape for queue variants.  Without
   phase 03, phase 06 would have duplicated 95 lines of dispatch
@@ -220,7 +220,7 @@ plan; the actual @P200 fix didn't need them).
 - `mod.rs` — registry + `EmitCtx` + dispatch
 - `default.rs` — fall-through emitter
 - `forwarding_smoke.rs` — runtime smoke test (slated for
-  retirement in @PLAN12 phase 02)
+  retirement in @PLN80 phase 02)
 - `parallel.rs` — for-par + queue + buf-rename emitters
 - `key_ops.rs` — OpGetRecord + OpIterate
 - `int_compare.rs` — OpEqInt / OpNeInt / OpLtInt / OpLeInt
@@ -230,7 +230,7 @@ file.  Clean extension surface.
 
 ### 5. What didn't get done
 
-- Phase 02 (param adapter) — DEMOTED then SUPERSEDED → @PLAN12
+- Phase 02 (param adapter) — DEMOTED then SUPERSEDED → @PLN80
   phase 05.  Preserved as a follow-up.
 - Phase 02a — superseded with phase 02.
 - Phase 05 (file emitter, original write-side scope) — folded

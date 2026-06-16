@@ -329,9 +329,9 @@ the export model documented above.
 - [WASM.md](WASM.md) — WASM runtime architecture (VFS, host
   bridges, threading, frame yield mechanics — the layer this
   pipeline produces output for)
-- [`lib_plans/future/02-graphics/README.md`](lib_plans/future/02-graphics/README.md) — graphics library design
+- [`lib_plans/58-graphics/README.md`](lib_plans/58-graphics/README.md) — graphics library design
   (the GL functions imported by the HTML bridge)
-- [`lib_plans/future/05-game-infra/README.md`](lib_plans/future/05-game-infra/README.md) — game infrastructure
+- [`lib_plans/61-game-infra/README.md`](lib_plans/61-game-infra/README.md) — game infrastructure
   (sprites, tilemap, etc., consumed by HTML-exported games)
 - `plans/finished/31-html-export/README.md` — closure record
   (commits, evidence, historical 10-step build sequence

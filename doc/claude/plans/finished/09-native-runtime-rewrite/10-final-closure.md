@@ -51,7 +51,7 @@ each ship a coherent commit.
 ## Out of scope (handled separately)
 
 **@P204** is NOT closed by phase 10 or @PLAN09.  @P204 has its own
-plan at [`plans/11-p204-ref-propagation/`](../11-p204-ref-propagation/).
+plan at [`plans/11-p204-ref-propagation/`](../11-p204-ref-propagation).
 @P204's two failing native tests (`85_yield_resume`,
 `87_store_leaks`) BLOCK PR-readiness — they will not be
 @EXPECT_FAIL'd to "make the count match" (see

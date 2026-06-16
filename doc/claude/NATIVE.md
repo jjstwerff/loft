@@ -238,7 +238,7 @@ impl OpEmitter for Emitter {
 
 (Plan-09 originally shipped a shared `forwarding_smoke.rs` file
 covering 9 forwarded Op names as a registry-dispatch smoke test;
-@PLAN12 phase 02 retired it once 5 production custom emitters
+@PLN80 phase 02 retired it once 5 production custom emitters
 proved the dispatch path was exercised end-to-end.  The recipe
 above is the residual pattern — write a one-shot forwarding
 emitter inline when adding a new Op, verify byte-identical
@@ -263,7 +263,7 @@ a raw match falls through to the `_ =>` arm even when the
 unspanned value matches.
 
 Plan-11 closed @P204 by fixing one such walker
-(`detect_ref_tail_capture`); @PLAN12 phase 01 generalised the
+(`detect_ref_tail_capture`); @PLN80 phase 01 generalised the
 audit and patched 16 walker sites across 3 files (`pre_eval.rs`,
 `emit.rs`, `coroutine.rs`).  Findings: all latent — no in-tree
 miscompile reproducer, byte-identical baseline preserved — but

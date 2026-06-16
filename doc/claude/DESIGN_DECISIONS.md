@@ -113,7 +113,7 @@ Case D ("aliased mutating") was decommissioned 2026-05-13: the
 cell + auto-Reference machinery from phases 02-03 already gives
 shared-state semantics, so no rejection was needed.  Design lives
 in the closed plan README:
-[plans/finished/22-mutable-closures/](plans/finished/22-mutable-closures/)
+[plans/finished/22-mutable-closures/](plans/finished/22-mutable-closures)
 — Case D's major finding sits in its phase file, and the
 alternatives considered are in `DISCUSSION.md` alongside.
 
@@ -513,7 +513,7 @@ behaviour has held for years without complaint.
 The 2026-05-11 evaluation of the C66 framework against the
 day-to-day loft-development workflow surfaced four corollaries
 that bind the abstract C66 rule to the developer experience.
-All four are tracked under @PLAN07 phase 4:
+All four are tracked under @PLN28 phase 4:
 
 1. **Format strings are observability, never raise** — every
    `{...}` interpolation auto-swaps to its Nullable peer at
@@ -531,7 +531,7 @@ All four are tracked under @PLAN07 phase 4:
    vector) BEFORE landing.  A noisy warning gets disabled
    within a session and the safety net evaporates; the skip
    list is a release blocker, not a follow-up.  See
-   `plans/future/07-error-messages/04-runtime-error-kinds.md
+   `plans/28-error-messages/04-runtime-error-kinds.md
    § Easy-proof skip list — REQUIRED for 4e.2`.
 
 3. **State snapshot at fault site is the next-highest-leverage
@@ -849,7 +849,7 @@ combination doesn't pay a full parse on first run?
 - **The loft source is the better representation of a library's state.**  For
   distributing / versioning / inspecting a library, the `.loft` source — not a
   serialized IR image — is the right artifact.  And there is **no efficiency
-  case** for a serialized per-library form: @PLAN28 established by measurement
+  case** for a serialized per-library form: @PLN82 established by measurement
   that JSON (de)serialization is **not** faster than parsing natural loft
   source (both deserialize text into the same heap graph; ~15–24 ms load ≈
   ~11–23 ms parse).  A per-library IR cache would be a worse, harder-to-relocate
@@ -881,7 +881,7 @@ Pointer from the source:
 > *Build-plan seed:* the engine-host design exploration —
 > [plans/18-engine-host/ENGINE_HOST.md](plans/18-engine-host/ENGINE_HOST.md) (tier model per
 > LAVITION § Execution granularity, entry-gate probes, the main-loop IO contract,
-> dogfood prior art from @PLN6 / @PLAN50).
+> dogfood prior art from @PLN6 / @PLN51).
 
 **Question.** As loft matures toward the lavition engine deployment model, what is
 the correct execution model for the combination of stable libraries and the user's

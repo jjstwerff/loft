@@ -74,5 +74,5 @@ shim) would arrive as separate plan slots and reuse the pattern.
 
 - [PACKAGES.md § Wasm bridges](../../../PACKAGES.md#wasm-bridges-library-owned---html-extensions) — design reference.
 - [PROBLEMS.md @P321](../../../PROBLEMS.md) — the bug that triggered this plan (browser-WASM dimension); now FIXED.
-- [`../../12-library-extraction/`](../../12-library-extraction/) — sibling drain of compiler-crate library code on the non-wasm side.
+- [`../../12-library-extraction/`](../../12-library-extraction) — sibling drain of compiler-crate library code on the non-wasm side.
 - `lib/imaging/loft.toml` + `lib/imaging/wasm/{Cargo.toml,src/lib.rs,host.js}` — the canonical implementation.

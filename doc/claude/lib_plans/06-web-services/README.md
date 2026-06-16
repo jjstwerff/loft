@@ -55,7 +55,7 @@ or otherwise), and acts on them.  Common shapes:
   promotion).
 - Game-client multiplayer protocol — see
   `GAME_CLIENT_LIB.md` and the EVENT_LOOP plan
-  ([../../plans/future/23-event-loop/](../../plans/future/23-event-loop/)).
+  ([../../plans/32-event-loop/](../../plans/32-event-loop)).
 - WASM HTTP fetch in the browser — currently routed through
   the host's `fetch()` via the W1.x bridge; would inherit
   this design's `HttpResponse` shape but uses a different

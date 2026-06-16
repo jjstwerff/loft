@@ -362,7 +362,7 @@ source, that is a **loft bug** — never "harmless", never worked around in docs
 **Check.**
 - `LOFT_STORE_GUARD=1` is **silent across the corpus** — no block-scoped vector
   store is freed later than the block it belongs to. (Detector shipped; see
-  [plans/future/57-vector-store-watermark/fix-design-store-lifetime.md](plans/future/57-vector-store-watermark/fix-design-store-lifetime.md).)
+  [plans/2-vector-store-watermark/fix-design-store-lifetime.md](plans/2-vector-store-watermark/fix-design-store-lifetime.md).)
 - That guard is promoted to a `#[cfg(debug_assertions)]` assertion, so the rule
   cannot quietly regain exceptions as new code lands — the guard *forbids* the
   drift, it does not merely report it.
@@ -643,12 +643,12 @@ obligations.
 - [CLAUDE.md](../../CLAUDE.md) § "Development cadence — the dogfood loop" — Goal C.
 - [plans/finished/53-sanitizer-ci-lever/](plans/finished/53-sanitizer-ci-lever/README.md)
   — Goal A: the sanitizer lever and the stack-alignment work.
-- [plans/future/55-program-level-fuzzing/](plans/future/55-program-level-fuzzing/README.md)
+- [plans/53-program-level-fuzzing/](plans/53-program-level-fuzzing/README.md)
   — Goals A/D: program-level fuzzing feeds both the UB sweep and the cross-backend
   differential.
-- [plans/future/56-sanitizer-coverage-expansion/](plans/future/56-sanitizer-coverage-expansion/README.md)
+- [plans/54-sanitizer-coverage-expansion/](plans/54-sanitizer-coverage-expansion/README.md)
   — Goal A continuing: remaining sanitizer-coverage items.
-- [plans/future/57-vector-store-watermark/fix-design-store-lifetime.md](plans/future/57-vector-store-watermark/fix-design-store-lifetime.md)
+- [plans/2-vector-store-watermark/fix-design-store-lifetime.md](plans/2-vector-store-watermark/fix-design-store-lifetime.md)
   — **Goal E**: the predictable-memory fix design + `LOFT_STORE_GUARD` detector
   (free a vector store at its scope, decoupled from the slot).
 - [lib_plans/12-library-extraction/](lib_plans/12-library-extraction/README.md) — Goal B's structure floor: the package-ecosystem extraction.

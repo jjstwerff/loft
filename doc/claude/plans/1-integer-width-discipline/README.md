@@ -36,7 +36,7 @@ implicit — it requires `as i32`** — now holds across the whole toolchain.
   → `use lib::(a, b)` — tracked separately, not a width-discipline item.)
 - **P4 (@P368b divide-by-zero warning on a named-constant divisor) — routed out**
   as a standalone warning-quality follow-up (`@P368b`); never part of the width
-  discipline.  See [42-warning-quality](../future/42-warning-quality/README.md).
+  discipline.  See [42-warning-quality](../46-warning-quality/README.md).
 
 ## Goal
 
@@ -113,7 +113,7 @@ run a graphics gold test, and let each `auto-marshal: unsupported signature (…
 name any still-missing arm; iterate to zero.
 
 **This is the LAST time arms are hand-written.**  [FFI.1 / FFI.3
-(lib_plans/future/05-game-infra)](../../lib_plans/future/05-game-infra/README.md)
+(lib_plans/61-game-infra)](../../lib_plans/61-game-infra/README.md)
 — § "Design decision (2026-05-27)" — generate this dispatch per-library from each
 native fn's real signature (direct typed calls, no central match), deleting the
 hand-arms.  P1b is the one-time unblock; FFI.1/FFI.3 remove the recurrence.
