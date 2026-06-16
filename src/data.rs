@@ -178,10 +178,25 @@ impl IntegerSpec {
         if let Some(n) = self.forced_size {
             return n.get();
         }
-        let range = self.range();
-        // #334: a nullable narrow field reserves one code as the null
-        // sentinel, so the width must hold range + 1 codes when nullable.
-        let codes = if nullable { range + 1 } else { range };
+        self.range_to_width(nullable)
+    }
+
+    /// Map the value RANGE to a narrow storage width (1/2/8 bytes), reserving
+    /// one extra code for the null sentinel when `nullable`.
+    ///
+    /// The ONE home for the range→width fact (H6).  Both [`Self::byte_width`]
+    /// (after `forced_size`) and `Type::size` derive from it, so a nullable
+    /// narrow field's WRITE width (`Type::size`, used by `set_field_check`)
+    /// cannot drift from its READ width (`byte_width`, used by `get_val`).
+    /// That drift silently corrupted a nullable FULL-range narrow field's null:
+    /// the two sites disagreed at `range == 256`/`257`, so the write stored the
+    /// 1-byte `255` sentinel into a field the read decoded as a 2-byte Short →
+    /// null read back as `max-1`.
+    #[must_use]
+    pub fn range_to_width(&self, nullable: bool) -> u8 {
+        // #334: a nullable narrow field reserves one code as the null sentinel,
+        // so it must hold `distinct + 1` codes; `range()` is the distinct count.
+        let codes = self.range() + i64::from(nullable);
         if codes <= 256 {
             1
         } else if codes <= 65536 {
@@ -1405,17 +1420,13 @@ impl Type {
 
     #[must_use]
     pub fn size(&self, nullable: bool) -> u8 {
-        if let Type::Integer(IntegerSpec { min, max, .. }) = self {
-            let c_min = i64::from(*min);
-            let c_max = i64::from(*max);
-            if c_max - c_min < 256 || (nullable && c_max - c_min == 256) {
-                1
-            } else if c_max - c_min < 65536 || (nullable && c_max - c_min == 65536) {
-                2
-            } else {
-                // Phase 2c: integer is stored as 8-byte i64 by default.
-                8
-            }
+        if let Type::Integer(spec) = self {
+            // H6: derive from the ONE range→width home so the field WRITE width
+            // (this, via `set_field_check`) cannot drift from the READ width
+            // (`IntegerSpec::byte_width`, via `get_val`).  Honours the value
+            // range only — `forced_size` is handled by the callers (they check
+            // the alias size before reaching here), matching the prior contract.
+            spec.range_to_width(nullable)
         } else {
             0
         }

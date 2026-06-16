@@ -320,15 +320,31 @@ Two axes, NOT one — the consolidation must keep them distinct:
 
   *Verified `store.rs:1836-1975`.*
 
-**Load-bearing RISK to settle first (matrix-first before any build):** `set_byte`
-writes `255` for `i32::MIN`, but `get_byte` returns `read+min` unconditionally — it
-never maps `255` back to `i32::MIN` the way `get_short`/`get_i16_raw` decode their
-sentinels. So a nullable `Byte` field's null may not round-trip (reads as `min+255`),
-UNLESS a separate path gates it or nullable bytes never reach `get_byte`. This
-set/get drift is exactly H6's thesis ("symmetric conventions re-implemented per width
-have drifted"); resolve it with a boundary matrix (nullable u8 field/vector, both
-backends) BEFORE designing the `Encoding` enum — the table must encode the *correct*
-symmetric transform, not enshrine the current asymmetry.
+**Load-bearing RISK — SETTLED 2026-06-17 (matrix-first), and it was NOT the
+asymmetry the design note hypothesized.** The note read the raw `get_byte`
+accessor and concluded null never round-trips. But the nullable consumers
+`get_byte_nullable`/`set_byte_nullable` (and the Short/ShortRaw twins) are a
+**correct symmetric pair** (`raw 255 ⇔ null` for every `min`), confirmed by a
+`min × range-fullness × container × backend` matrix that round-tripped null for
+*every representable* case on both backends. There is **no encode/decode
+asymmetry to repair** — so the `NullEnc` encode/decode table would have
+*enshrined a phantom risk*.
+
+The matrix surfaced the REAL latent bug on a different axis — **range-fullness,
+not `min`**: a NULLABLE narrow-integer field with the FULL code range
+(`max-min == 255`/`65535`) read its null back as `max-1`. Root: the storage
+width was computed in **two disagreeing places** — `IntegerSpec::byte_width`
+(read, via `get_val`) correctly reserved a sentinel code, but `Type::size`
+(write + allocation, via `set_field_check`/`typedef.rs`) did **not** for the
+nullable full range, so the field was under-allocated to 1 byte (Byte) and the
+write stored the 1-byte `255` sentinel into a field the read decoded as a 2-byte
+Short. THIS is H6's thesis realised (one width-fact, two drifted copies) — fixed
+by the proportionate chokepoint move: a single **`IntegerSpec::range_to_width`**
+home that both `byte_width` and `Type::size` derive from (commit pending).
+Regression: `tests/scripts/389-h6-nullable-full-range-narrow.loft` (both
+backends). The matrix prevented building the table to fix the wrong thing — the
+remaining `NullEnc` consolidation below is now an optional, lower-risk cleanup
+(the per-width pairs already agree), not a load-bearing fix.
 
 Sketch: `enum NullEnc { I32Min, I64Min, ShortPlus1, RawMax, ByteMax, FloatNan,
 SingleNan, TextNull, DbRefRec0, DbRefSentinel }` with `null_stored()/encode()/decode()`;
