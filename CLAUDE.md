@@ -61,8 +61,11 @@ regex collides with `2P259`, `P2590`, and prose):
 - **P-issues**: `@P259`, `@P229b`, `@P262`.
 - **Plans (canonical)**: `@PLN3` = a [`loft-lang/plans`](https://github.com/loft-lang/plans)
   issue (the cross-ecosystem plan id = its issue number).
-- **Plan dirs + phases (legacy/local)**: `@PLAN22`, `@PLAN35-01`, `@PLAN22-2d-iii.a` — point at
-  the design dir `plans/<NN>/`.
+- **Plan dirs + phases (legacy/local, being migrated)**: `@PLAN22`, `@PLAN35-01`,
+  `@PLAN22-2d-iii.a` — point at the design dir `plans/<NN>/`.  Active + future local dirs are
+  migrating to `@PLN` issues under **@PLN27**; `finished/` keeps its `@PLAN<NN>` refs.  File a
+  NEW plan as a `loft-lang/plans` issue, not a dir — with a required `status:*` + `subject:*`
+  label (every plan carries exactly one of each).
 
 Bare-name forms (`P259`, `plan-22 phase 03`) still work in prose; the indexer tracks both. <!--noindex-->
 
@@ -163,8 +166,10 @@ must be releasable. All changes land on a feature branch and reach `main` only v
    branch first.
 2. **Pushing is OK by default — unless an open PR on the branch would be disturbed.** Push freely
    after green CI on a long-lived branch with no open PR (the user wants commits visible without
-   asking). With an open PR, do NOT push without explicit instruction — force-pushes, rebases, or
-   surprise commits disrupt review. Check `gh pr list --head <branch>` if unsure.
+   asking). With an open PR, do NOT push without the user's explicit consent — force-pushes,
+   rebases, or surprise commits disrupt review — **except a fix for a blocking failure** (red CI, a
+   broken build, a failing required check): a push that *unblocks* the PR is allowed without asking,
+   because the PR cannot merge while it is red anyway. Check `gh pr list --head <branch>` if unsure.
 3. **Never create a branch or open a PR unless the user explicitly asks** ("create PR", "open a
    PR", "merge", "switch to a new branch"). "fix X" / "implement Y" is NOT a PR instruction; a
    prior "open a PR" does not authorise the next one. When in doubt, summarise what's ready and ask.

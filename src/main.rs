@@ -5502,6 +5502,12 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
             // resolve by d_nr so the renamed def stays consistent).
             p.data.namespace_colliding_native_fns();
             let mut out = generation::Output::new(&p.data, &state.database);
+            // Host-native backend: link each `#native` package's cdylib by C-ABI
+            // (`extern "C"` decls + `.so`), not its rlib — see NATIVE.md
+            // § Resolution: separate the API id from the Rust part.  The shared
+            // `native_cabi_enabled()` keeps codegen and the linker flags in sync
+            // (off on Windows, which stays on the rlib path).
+            out.native_cabi = native_utils::native_cabi_enabled();
             let result = if native_release {
                 let main_nr = p.data.def_nr("n_main");
                 let entry_defs: Vec<u32> = if main_nr < end_def {
@@ -5994,12 +6000,27 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
             println!("ok {abs_file} {}", artifact.display());
             return;
         }
+        // @PLN26 phase 4 — Windows has no RPATH, so a C-ABI-linked native-package
+        // DLL must sit beside the binary that loads it; stage it there before the
+        // spawn (no-op off Windows / on the rlib path).
+        if let Some(dir) = binary.parent() {
+            native_utils::stage_native_dlls(dir, &p.data);
+        }
         // @PLN18 08-S2 — live-dispatch handoff: the spawned binary's bootstrap
         // re-parses the same sources, so hand it the resolved paths the driver
         // already knows.  Inert unless the binary runs under LOFT_LIVE_FLIP=1;
         // explicit user-set values win.
         let mut cmd = std::process::Command::new(&binary);
         cmd.args(&user_args);
+        // @PLN26 follow-up — run the native binary with cwd = source_dir so its
+        // raw `std::fs` anchors where its loft `file()` does (the binary bakes
+        // `program_relative` + reads source_dir from LOFT_SOURCE_DIR).  Mirrors
+        // the interpreter chdir above; gated on the same `program_relative`.
+        if state.database.program_relative
+            && let Some(dir) = std::path::Path::new(&abs_file).parent()
+        {
+            cmd.current_dir(dir);
+        }
         // The artifact anchors relative paths at its OWN dir (the
         // standalone-bundle rule) — in driver mode that is the cache/tmp
         // dir, not the program's.  Hand the source anchor down so file I/O
@@ -6092,6 +6113,16 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
             std::process::exit(1);
         }
         return;
+    }
+    // @PLN26 follow-up — anchor native file I/O at source_dir: chdir so a native
+    // crate's raw `std::fs` resolves a relative path the SAME way loft's
+    // `resolve_path` (which joins source_dir) does.  Gated on `program_relative`
+    // so a `#cwd` program keeps both at the cwd.  Done here — after parse +
+    // native-lib resolution (those ran against the invocation cwd), before user
+    // execution; no restore needed (the process exits after the run).  The
+    // --native path uses `Command::current_dir` on the spawn instead.
+    if state.database.program_relative && !state.database.source_dir.is_empty() {
+        let _ = std::env::set_current_dir(&state.database.source_dir);
     }
     if main_nr == u32::MAX && !dump_only {
         // No main() — execute each zero-parameter user `test_*()` function

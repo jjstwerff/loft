@@ -41,6 +41,9 @@
 //! side's concern — the kernel passes payloads through verbatim).
 
 use std::cell::RefCell;
+// VecDeque / keys::Str are used only in the native (non-wasm) engine-host
+// paths, so they read as unused in wasm / feature-restricted builds.
+#[allow(unused_imports)]
 use std::collections::VecDeque;
 #[cfg(not(target_arch = "wasm32"))]
 use std::hash::{BuildHasher, Hash, Hasher};
@@ -52,9 +55,11 @@ use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::time::{Duration, Instant};
 
 use crate::database::Stores;
+#[allow(unused_imports)]
 use crate::keys::{DbRef, Str};
 
 /// One pumped event: connect (0), message (1), disconnect (2).
+#[allow(dead_code)] // @PLN18 phase-05a UDP state-sync scaffolding
 struct Event {
     cid: i64,
     kind: i64,
@@ -80,6 +85,7 @@ struct UdpPath {
 /// One inbound conflation slot: the newest `S:` datagram from this peer for
 /// one `(msg_id, key)`.  Latest-value semantics — a higher seq overwrites, a
 /// stale seq is dropped.
+#[allow(dead_code)] // @PLN18 phase-05a UDP state-sync scaffolding
 struct SyncSlot {
     /// The `msg_id` parsed from the datagram's payload (`-1` = unframed).
     msg_id: i64,
@@ -134,12 +140,14 @@ thread_local! {
 }
 
 /// The leading `<digits>:` of a wire message, or `-1` when unframed.
+#[allow(dead_code)] // @PLN18 phase-05a UDP state-sync scaffolding
 fn msg_id_of(msg: &str) -> i64 {
     msg.split_once(':')
         .and_then(|(id, _)| id.parse::<i64>().ok())
         .unwrap_or(-1)
 }
 
+#[allow(dead_code)] // @PLN18 phase-05a UDP state-sync scaffolding
 fn is_sync_msg(msg: &str) -> bool {
     let id = msg_id_of(msg);
     id >= 0 && SYNC_IDS.with(|s| s.borrow().contains_key(&id))
@@ -147,6 +155,7 @@ fn is_sync_msg(msg: &str) -> bool {
 
 /// The conflation key for a payload: the first comma-field after the kind
 /// for keyed kinds ("2:7,x,y" → "7"), "" for unkeyed/unframed ones.
+#[allow(dead_code)] // @PLN18 phase-05a UDP state-sync scaffolding
 fn sync_key_of(payload: &str) -> String {
     let id = msg_id_of(payload);
     let keyed = id >= 0 && SYNC_IDS.with(|s| s.borrow().get(&id).copied().unwrap_or(false));
@@ -161,6 +170,7 @@ fn sync_key_of(payload: &str) -> String {
 /// seq overwrites, a stale/reordered seq is discarded.  Shared by both roles
 /// (the listener's per-client slots and the connector's server slots) — the
 /// queue machinery must never fork between them.
+#[allow(dead_code)] // @PLN18 phase-05a UDP state-sync scaffolding
 fn find_or_create_slot<'a>(
     slots: &'a mut Vec<SyncSlot>,
     payload: &str,
@@ -194,6 +204,7 @@ fn find_or_create_slot<'a>(
 /// ordered and lossless, so the arrival order IS the seq — continue the
 /// slot's space, so a later datagram (the sender counts its sync sends
 /// across BOTH carriers) still reads as newer.
+#[allow(dead_code)] // @PLN18 phase-05a UDP state-sync scaffolding
 fn conflate_ws(slots: &mut Vec<SyncSlot>, payload: &str) {
     if let Some(slot) = find_or_create_slot(slots, payload) {
         slot.seq += 1;
@@ -203,6 +214,7 @@ fn conflate_ws(slots: &mut Vec<SyncSlot>, payload: &str) {
     }
 }
 
+#[allow(dead_code)] // @PLN18 phase-05a UDP state-sync scaffolding
 fn conflate_slot(slots: &mut Vec<SyncSlot>, seq: i64, payload: &str) {
     let Some(slot) = find_or_create_slot(slots, payload) else {
         return;

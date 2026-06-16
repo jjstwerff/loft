@@ -181,9 +181,17 @@ jobs:
       - name: Cache cargo registry and build
         uses: actions/cache@v4
         with:
+          # `registry/src` + `git/checkouts` are EXCLUDED: they are the *extracted*
+          # crate / git sources, regenerated on demand from `registry/cache/*.crate`
+          # and `git/db`.  Caching them doubles the small-file work (restore writes
+          # them, save re-reads them), and small NTFS files are the Windows tar long
+          # pole — dropping them halves it.  cargo re-extracts on first use (a write
+          # the build does anyway when they are absent), so it is a net win on
+          # Windows and neutral elsewhere.
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
             ~/.loft/build-cache
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}

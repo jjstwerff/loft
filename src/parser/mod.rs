@@ -738,23 +738,43 @@ impl Parser {
     /// and left the symbol unmapped — which later surfaces as a `todo!()`
     /// stub in the `--native` output and a runtime panic.
     ///
-    /// Walk every definition once more: if it has a `#native` symbol not in
-    /// the map and exactly one native package is registered, bind the symbol
-    /// to that package.  With multiple packages we conservatively skip — the
-    /// original per-manifest passes have already matched the first-seen
-    /// symbols to their owners.
+    /// Walk every definition once more and bind each `#native` symbol still
+    /// missing from the map to the native package that OWNS its definition:
+    /// the registered package whose directory is a prefix of the def's source
+    /// file (longest prefix wins, for nested packages).  Ownership-by-path is
+    /// the same invariant the per-manifest pass enforces, run once at the end
+    /// when every def exists, so it covers ANY number of native packages.
+    /// (The earlier `len() == 1` shortcut silently skipped programs using two
+    /// native packages — e.g. `graphics` + `random` — leaving BOTH unmapped:
+    /// the interpreter still dispatched them via `def.native` + dlopen, but
+    /// `--native` rejected the first reachable call with a P269 compile error.)
     fn backfill_native_symbol_crates(&mut self) {
-        if self.data.native_packages.len() != 1 {
+        if self.data.native_packages.is_empty() {
             return;
         }
-        let rust_crate = self.data.native_packages[0].0.replace('-', "_");
+        let mut binds: Vec<(String, String)> = Vec::new();
         for d_nr in 0..self.data.definitions() {
-            let sym = self.data.def(d_nr).native().to_string();
-            if !sym.is_empty() && !self.data.native_symbol_crates.contains_key(&sym) {
-                self.data
-                    .native_symbol_crates
-                    .insert(sym, rust_crate.clone());
+            let def = self.data.def(d_nr);
+            let sym = def.native();
+            if sym.is_empty() || self.data.native_symbol_crates.contains_key(sym) {
+                continue;
             }
+            let sym = sym.to_string();
+            let file = def.position().file.clone();
+            // Owner = the registered native package whose dir is the longest
+            // prefix of this def's source file.
+            if let Some((crate_name, _)) = self
+                .data
+                .native_packages
+                .iter()
+                .filter(|(_, pkg_dir)| file.starts_with(pkg_dir.as_str()))
+                .max_by_key(|(_, pkg_dir)| pkg_dir.len())
+            {
+                binds.push((sym, crate_name.replace('-', "_")));
+            }
+        }
+        for (sym, rust_crate) in binds {
+            self.data.native_symbol_crates.insert(sym, rust_crate);
         }
     }
 
@@ -7185,5 +7205,106 @@ pub(crate) fn rename(op: &str) -> &str {
         "~" => "BitNot",
         "+=" => "Append",
         _ => op,
+    }
+}
+
+#[cfg(test)]
+mod p269_native_backfill_tests {
+    use super::*;
+
+    /// P269 regression — with MORE THAN ONE native package registered,
+    /// `backfill_native_symbol_crates` must still bind each unmapped `#native`
+    /// symbol to its owning package (the registered package whose directory is a
+    /// prefix of the def's source file).  The old `len() != 1` guard bailed and
+    /// left them unmapped → a `--native` P269 compile error on a symbol the
+    /// interpreter dispatched fine.  Two native packages (`imaging` +
+    /// `p269_native_b`); we then clear the map to reproduce the crawler
+    /// precondition (imaging's `#native` symbols left unbound by the per-manifest
+    /// pass, which runs before the package source is parsed) so backfill is their
+    /// only binding site.
+    #[test]
+    fn backfill_binds_symbols_under_multiple_native_packages() {
+        let sep = crate::platform::sep_str();
+        let mut p = Parser::new();
+        p.parse_dir("default", true, true).unwrap();
+        p.lib_dirs = vec![
+            format!("tests{sep}lib"),
+            format!("tests{sep}fixtures{sep}libs"),
+        ];
+        p.parse(
+            &format!("tests{sep}lib{sep}p269_two_native_pkgs_main.loft"),
+            false,
+        );
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "unexpected parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+
+        // The bug trigger: more than one registered native package.
+        assert!(
+            p.data.native_packages.len() >= 2,
+            "expected >= 2 native packages (imaging + p269_native_b), got {:?}",
+            p.data.native_packages
+        );
+
+        // Collect imaging's #native symbols FROM the parsed defs (those whose
+        // source lives under imaging's package dir), so the test never hardcodes
+        // a library `n_*` symbol in src/ — the @PLAN12 extraction-hygiene gate
+        // forbids that, since imaging is an extracted library.
+        let imaging_dir = p
+            .data
+            .native_packages
+            .iter()
+            .find(|(c, _)| c == "loft-imaging")
+            .map(|(_, d)| d.clone())
+            .expect("imaging registered as a native package");
+        let imaging_syms: Vec<String> = (0..p.data.definitions())
+            .map(|d| p.data.def(d))
+            .filter(|def| {
+                !def.native().is_empty() && def.position().file.starts_with(imaging_dir.as_str())
+            })
+            .map(|def| def.native().to_string())
+            .collect();
+        assert!(
+            !imaging_syms.is_empty(),
+            "expected imaging to contribute #native symbols"
+        );
+
+        // Reproduce the precondition the crawler hit: those symbols are not yet
+        // bound, so backfill is the only place they can bind.
+        p.data.native_symbol_crates.clear();
+        p.backfill_native_symbol_crates();
+
+        for sym in &imaging_syms {
+            assert_eq!(
+                p.data.native_symbol_crates.get(sym).map(String::as_str),
+                Some("loft_imaging"),
+                "{sym} not bound to loft_imaging after backfill - map={:?}",
+                p.data.native_symbol_crates
+            );
+        }
+    }
+
+    /// @PLN26 phase 1 — two native packages exporting the SAME `#native` symbol
+    /// must be detected: the C-ABI flat namespace (and the interpreter's
+    /// symbol-keyed `BRIDGE_REGISTRY`) can't disambiguate them, so native
+    /// codegen rejects the program with a `compile_error!`.  Parse a consumer of
+    /// collide_a + collide_b (both export `collide_shared`) and check the
+    /// detector reports it.
+    #[test]
+    fn native_symbol_collision_across_packages_detected() {
+        let sep = crate::platform::sep_str();
+        let mut p = Parser::new();
+        p.parse_dir("default", true, true).unwrap();
+        p.lib_dirs = vec![format!("tests{sep}lib")];
+        p.parse(&format!("tests{sep}lib{sep}collide_main.loft"), false);
+        let collisions = p.data.native_symbol_collisions();
+        assert!(
+            collisions
+                .iter()
+                .any(|(sym, srcs)| sym == "collide_shared" && srcs.len() >= 2),
+            "expected a `collide_shared` collision across >= 2 sources, got {collisions:?}"
+        );
     }
 }
