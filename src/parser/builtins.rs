@@ -81,9 +81,25 @@ impl Parser {
         self.lexer.token("(");
         self.lexer.token(")");
 
-        // Resolve the method on the element type.
-        let type_name = match elem_tp {
-            Type::Reference(d, _) | Type::Enum(d, _, _) => self.data.def(*d).name().to_string(),
+        // Resolve the method on the element type.  @PLN25 E2 — a
+        // `__nullable<S>` element resolves the method on the DENSE `S`
+        // (`t_<len>S_<method>`), not the synthetic enum: the worker takes a
+        // dense `S`, and (second pass) a `__par_nullable_w` wrapper adapts the
+        // disc-prefixed element to it.  Resolving the dense name in BOTH passes
+        // keeps `fn_d_nr != MAX` in pass 1 so `build_parallel_for_ir` emits a
+        // `Value::Parallel` (not `Null`) — the block parser's `;`-exemption
+        // keys on that, so an unresolved nullable worker otherwise tripped a
+        // spurious "Expect token ;" on the statement after the loop.
+        let (type_name, nullable_ctx) = match elem_tp {
+            Type::Enum(d, _, _) if self.data.def(*d).name().starts_with("__nullable<") => {
+                let nm = self.data.def(*d).name().to_string();
+                let sname = nm["__nullable<".len()..nm.len() - 1].to_string();
+                let struct_d = self.data.def_nr(&sname);
+                (sname, Some((*d, struct_d)))
+            }
+            Type::Reference(d, _) | Type::Enum(d, _, _) => {
+                (self.data.def(*d).name().to_string(), None)
+            }
             _ => {
                 if !self.first_pass {
                     diagnostic!(
@@ -141,6 +157,26 @@ impl Parser {
                 );
             }
             return (u32::MAX, Type::Unknown(0));
+        }
+        // @PLN25 E2 — for a `__nullable<S>` element, wrap the dense-`S` method
+        // in `__par_nullable_w` so the disc-prefixed element coerces to a
+        // `ref(S)` at the payload offset (gap 2) before dispatch.  First pass
+        // returns the raw method d_nr (so the `;`-exemption fires); the wrapper
+        // is synthesized only in the second pass, like the `worker(a)` form.
+        if let Some((enum_d, struct_d)) = nullable_ctx
+            && !self.first_pass
+            && struct_d != u32::MAX
+            && self.data.attributes(struct_d) > 0
+        {
+            let w = self.synth_nullable_par_wrapper(
+                elem_tp,
+                enum_d,
+                struct_d,
+                d_nr,
+                &ret_type,
+                &method_name,
+            );
+            return (w, ret_type);
         }
         (d_nr, ret_type)
     }
@@ -228,10 +264,15 @@ impl Parser {
         // dense `S`: the dispatcher hands the worker a ref to the element START
         // (the discriminant @0), but the worker reads dense-`S` offsets, so it
         // reads the disc.  Synthesize a thin wrapper
-        // `__par_nullable_w(e: __nullable<S>) -> ret { worker(<e payload>) }` and
-        // use IT as the worker func; the body applies the SAME payload offset-ref
-        // coercion as a normal `worker(v[i])` call (gap 2).  Only the no-extra-arg
-        // form (the common `worker(x)`); extras fall through to the dense path.
+        // `__par_nullable_w(e: __nullable<S>, ..hidden) -> ret {
+        // worker(<e payload>, ..hidden) }` and use IT as the worker func; the
+        // body applies the SAME payload offset-ref coercion as a normal
+        // `worker(v[i])` call (gap 2) and forwards the worker's params 1.. (the
+        // `ref_return` hidden out-param for struct/text returns).  User EXTRA
+        // context args (`worker(a, extra)`) are NOT yet supported over a
+        // nullable vector — the par dispatcher's extra-arg marshalling collides
+        // with the wrapper's mirrored param layout (stack underflow); those
+        // fall through to the dense path for now.
         if !self.first_pass
             && extra_vals.is_empty()
             && let Type::Enum(enum_d, true, _) = elem_tp
@@ -243,38 +284,8 @@ impl Parser {
             && self.data.attributes(struct_d) > 0
         {
             let enum_d = *enum_d;
-            let pos = self.lexer.pos().clone();
-            let wname = format!("__par_nullable_w_{}_{}_{first_id}", pos.line, pos.pos);
             let w_d_nr = self
-                .data
-                .add_def(&wname, &pos, crate::data::DefType::Function);
-            let _ = self
-                .data
-                .add_attribute(&mut self.lexer, w_d_nr, "e", elem_tp.clone());
-            self.data.set_returned(w_d_nr, ret_type.clone());
-            let mut wvars = crate::variables::Function::new(&wname, &pos.file);
-            let e_var = wvars.add_variable("e", elem_tp, &mut self.lexer);
-            wvars.become_argument(e_var);
-            wvars.defined(e_var);
-            let some_d = self.data.variant_of(enum_d, "Some");
-            let first = self.data.attr_name(struct_d, 0);
-            let off = self
-                .database
-                .position(self.data.def(some_d).known_type(), &first);
-            let coerced = self.get_val(
-                &Type::Reference(struct_d, crate::data::Deps::none()),
-                false,
-                u32::from(off),
-                Value::Var(e_var),
-                u32::MAX,
-            );
-            let body = crate::data::v_block(
-                vec![Value::Return(Box::new(Value::Call(d_nr, vec![coerced])))],
-                ret_type.clone(),
-                "nullable_par_wrapper",
-            );
-            self.data.definitions[w_d_nr as usize].code = body;
-            self.data.definitions[w_d_nr as usize].variables = wvars;
+                .synth_nullable_par_wrapper(elem_tp, enum_d, struct_d, d_nr, &ret_type, first_id);
             return (w_d_nr, ret_type, extra_vals, extra_types);
         }
         // S23: generator functions (return type iterator<T>) cannot be par() workers.
@@ -294,6 +305,79 @@ impl Parser {
             return (u32::MAX, Type::Unknown(0), extra_vals, extra_types);
         }
         (d_nr, ret_type, extra_vals, extra_types)
+    }
+
+    /// @PLN25 E2 — synthesize `__par_nullable_w(e: __nullable<S>) -> ret {
+    /// worker(<e Some-payload offset-coerced to ref(S)>) }`: the par wrapper
+    /// that adapts a worker taking a dense `S` to a `vector<__nullable<S>>`
+    /// element (whose element ref points at the discriminant @0).  Applies the
+    /// SAME payload offset-ref coercion a normal `worker(v[i])` call does
+    /// (gap 2).  Shared by both worker forms (`worker(a)` and `a.method()`).
+    /// Returns the wrapper's def_nr.
+    pub(crate) fn synth_nullable_par_wrapper(
+        &mut self,
+        elem_tp: &Type,
+        enum_d: u32,
+        struct_d: u32,
+        worker_d_nr: u32,
+        ret_type: &Type,
+        label: &str,
+    ) -> u32 {
+        let pos = self.lexer.pos().clone();
+        let wname = format!("__par_nullable_w_{}_{}_{label}", pos.line, pos.pos);
+        let w_d_nr = self
+            .data
+            .add_def(&wname, &pos, crate::data::DefType::Function);
+        let _ = self
+            .data
+            .add_attribute(&mut self.lexer, w_d_nr, "e", elem_tp.clone());
+        self.data.set_returned(w_d_nr, ret_type.clone());
+        let mut wvars = crate::variables::Function::new(&wname, &pos.file);
+        let e_var = wvars.add_variable("e", elem_tp, &mut self.lexer);
+        wvars.become_argument(e_var);
+        wvars.defined(e_var);
+        let some_d = self.data.variant_of(enum_d, "Some");
+        let first = self.data.attr_name(struct_d, 0);
+        let off = self
+            .database
+            .position(self.data.def(some_d).known_type(), &first);
+        let coerced = self.get_val(
+            &Type::Reference(struct_d, crate::data::Deps::none()),
+            false,
+            u32::from(off),
+            Value::Var(e_var),
+            u32::MAX,
+        );
+        // Mirror the worker's params 1.. onto the wrapper and forward them.  A
+        // struct/text-returning worker carries a hidden `ref_return` out-param
+        // (added during its own parse); the par dispatcher supplies it when it
+        // calls the worker, so the wrapper — which the dispatcher now calls in
+        // its place — must accept and forward it, or `generate_call` panics
+        // "Too few parameters".  Param 0 (the dense `S`) is replaced by the
+        // coerced Some-payload ref.
+        let mut call_args = vec![coerced];
+        let worker_attrs = self.data.attributes(worker_d_nr);
+        for i in 1..worker_attrs {
+            let pname = self.data.attr_name(worker_d_nr, i);
+            let ptype = self.data.def(worker_d_nr).attributes()[i]
+                .typedef
+                .clone();
+            let _ = self
+                .data
+                .add_attribute(&mut self.lexer, w_d_nr, &pname, ptype.clone());
+            let pvar = wvars.add_variable(&pname, &ptype, &mut self.lexer);
+            wvars.become_argument(pvar);
+            wvars.defined(pvar);
+            call_args.push(Value::Var(pvar));
+        }
+        let body = crate::data::v_block(
+            vec![Value::Return(Box::new(Value::Call(worker_d_nr, call_args)))],
+            ret_type.clone(),
+            "nullable_par_wrapper",
+        );
+        self.data.definitions[w_d_nr as usize].code = body;
+        self.data.definitions[w_d_nr as usize].variables = wvars;
+        w_d_nr
     }
 
     pub(crate) fn parse_parallel_worker(
