@@ -28,6 +28,31 @@ fn test() {
     slice_bounds();
     element_null();
     enum_null();
+    vec_elem_null_source_no_crash();
+}
+
+// @PLN25 — storing a runtime-null source into a non-nullable inline struct
+// element (vector element OR embedded field) must NOT crash.  Was a hard
+// `allocation.rs:560` OOB on BOTH backends: `OpCopyRecord` dereferenced the
+// `store_nr == u16::MAX` null sentinel's (absent) store.  Guarded in both
+// OpCopyRecord implementations.  A non-nullable element has no null encoding,
+// so the store is a no-op (the element keeps its prior value); the regression
+// only pins crash-freedom + that neighbours are untouched (the band-aid's
+// value semantics change once the gated E2 representation lands).
+struct NRow { id: integer, tag: text }
+struct NBag { items: vector<NRow> }
+fn maybe_row(b: boolean) -> NRow { if b { NRow { id: 9, tag: "z" } } else { null } }
+
+fn vec_elem_null_source_no_crash() {
+    // vector element
+    v: vector<NRow> = [NRow { id: 1, tag: "a" }, NRow { id: 2, tag: "b" }];
+    v[0] = maybe_row(false);   // must not crash (was allocation.rs:560)
+    assert(v[1].id == 2, "neighbour vector element intact after null-source store");
+
+    // embedded struct field reached through a vector
+    b = NBag { items: [NRow { id: 3, tag: "c" }, NRow { id: 4, tag: "d" }] };
+    b.items[0] = maybe_row(false);   // must not crash
+    assert(b.items[1].id == 4, "neighbour field-vector element intact after null-source store");
 }
 
 enum Shape { Circle { r: integer }, Square { s: integer } }
