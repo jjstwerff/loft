@@ -1368,6 +1368,36 @@ impl Parser {
                 return true;
             }
         }
+        // @PLN25 E2 — the REVERSE coercion: a `__nullable<S>` value flows into a
+        // dense `S` slot (`f(v[i])` where `fn f(r: S)`; gap 2 of the access-glue
+        // matrix).  The `Some` payload region is byte-identical to dense `S`, so
+        // reinterpret via a sub-ref at the payload offset (the same shift
+        // `find_poly_enum_field` uses for `e.field`) — no re-pack.  A runtime-null
+        // element reads the zero payload, matching dense-null behaviour.
+        if let (Type::Enum(enum_d, true, _), Type::Reference(struct_d, _)) = (is_type, should)
+            && self.data.def(*enum_d).name
+                == format!("__nullable<{}>", self.data.def(*struct_d).name())
+        {
+            if !self.first_pass {
+                let enum_d = *enum_d;
+                let struct_d = *struct_d;
+                let some_d = self.data.variant_of(enum_d, "Some");
+                if some_d != u32::MAX && self.data.attributes(struct_d) > 0 {
+                    let first = self.data.attr_name(struct_d, 0);
+                    let off = self
+                        .database
+                        .position(self.data.def(some_d).known_type(), &first);
+                    *code = self.get_val(
+                        &Type::Reference(struct_d, crate::data::Deps::none()),
+                        false,
+                        u32::from(off),
+                        code.clone(),
+                        u32::MAX,
+                    );
+                }
+            }
+            return true;
+        }
         if let Type::RefVar(ref_tp) = is_type
             && self.convert(code, ref_tp, should)
         {
@@ -1604,6 +1634,14 @@ impl Parser {
             }
             if let (Type::Reference(r_nr, _), Type::Enum(e_nr, true, _)) = (test_type, should)
                 && e_nr == r_nr
+            {
+                return true;
+            }
+            // @PLN25 E2 — a `__nullable<S>` value is accepted into a dense `S`
+            // slot; `convert` emits the payload sub-ref (gap 2).
+            if let (Type::Enum(enum_d, true, _), Type::Reference(struct_d, _)) = (test_type, should)
+                && self.data.def(*enum_d).name
+                    == format!("__nullable<{}>", self.data.def(*struct_d).name())
             {
                 return true;
             }
