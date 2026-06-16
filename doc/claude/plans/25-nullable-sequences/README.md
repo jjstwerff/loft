@@ -70,30 +70,30 @@ default-on (gate removed), per the project standard.  The remaining work, in fin
    and sets the block's expected type to `__nullable<S>`, mirroring the inferred-literal PEEK;
    the element then matches the declared form.  Both backends gate-on.
 
-4. **GATE REMOVAL — BLOCKED on the inline-element access glue (the default-on trigger).**
-   Surfaced by flipping the gate tree-wide (the de-risk probe, done 2026-06-16): vector-element
-   nullability is validated + hardened in ISOLATION, but applying it to the whole corpus breaks
-   **~107 tests** because the inline-nullable-element **access glue is incomplete in every
-   NON-direct path**.  Direct `v[i].field` reads work (the probes); these do not:
-   - **par over `vector<struct>`** (≈44 `threading_chars`) — the worker reads elements at the
-     dense offset, ignoring the discriminant → **wrong results** (`par_struct_to_bool_t4`: 5≠2).
-   - **`vec[i]` into a local, then field-access / mutate** — `sh_c = vec[i]; sh_c.f[i]=x`
-     leaves `sh_c` typed `__nullable<S>` and the nested-lvalue path does not unwrap
-     (`moros_map`: "`sh_c` cannot change type from `__nullable<Chunk>` to Hex").
-   - **`+= [elem]` of an already-nullable element** — the append type-check sees `Reference`
-     vs `Enum` of the same `__nullable<S>` and mis-fires "would lose precision" (partially
-     fixed: the `Enum`==`Enum` arm; the `Reference`-vs-`Enum` shape remains).
-   - **ref-param `&v[i]`, casts, forward-refs, native element reads** (≈76 `issues`, 6 `native`,
-     4 `slot_v2`) — every path that computes an element offset directly needs the disc-aware
-     (unwrap) layout.
+4. **GATE REMOVAL — the inline-element auto-unwrap glue (default-on trigger), IN PROGRESS.**
+   A boundary matrix (`scripts/probe-matrix`, scalar `struct P{v}`, gate-on vs gate-off, hand-
+   computed `@EXPECT` + failing control) collapsed the apparent "~107 scattered failures" to a
+   **narrow class: ~4 unwrap gaps sharing ONE root** — a `__nullable<S>` value consumed where the
+   dense `S` is expected, with the unwrap not applied.  What ALREADY works gate-on: direct
+   `v[i].field`, text fields, `e = v[i]; e.field` (local), whole-vector arg/return, ALL null
+   semantics (`= null` / `== null` / `+= [null]`), ALL mutation/append (incl. `+= [nullable_elem]`),
+   nested-vector elements, `len()`.  The gaps:
+   - **(1) field access on a loop variable** `for x in v { x.field }` — **FIXED**: `for_type`
+     kept the `__nullable<S>` element in `Enum` form (not `Reference`) so field access hits the
+     `find_poly_enum_field` unwrap (control.rs).
+   - **(2) fn-call coercion** `f(v[i])` / `f(local)` / `f(loopvar)` → `fn f(r: S)` — "expected
+     P, got `__nullable<P>`".  Fix = `__nullable<S>` and the `Some` payload region are
+     byte-identical, so coerce via an **offset-ref reinterpret** (point at the payload, the same
+     shift `find_poly_enum_field` uses) at `can_convert` + the call-arg lowering.  *No re-pack.*
+   - **(3) par worker element read** — reads offset 0 (the `Some` discriminant) → e.g. 3×2=6
+     instead of 60.  Same offset-ref fix at the par-worker element seam.
+   - **(4) `e = null` on a nullable LOCAL** — "cannot change type from `__nullable<P>` to null"
+     (the `v[i] = null` element form already works; the local-reassign form does not).
 
-   **Root (one mechanism, many symptoms):** the `disc@0 + shifted-payload` inline layout is
-   only honoured by the direct-access interpreter path; par-worker codegen, native element
-   access, ref-param-to-element, cast, and element-into-local mutation each read it as dense.
-   **Trigger to ship default-on:** build the disc-aware element-access/mutation glue across
-   those paths.  This is the "L integration" the plan flagged — multi-subsystem, not a flip.
+   **Not E2** (excluded by the matrix): par over a struct with a TEXT field is garbage on BOTH
+   backends gate-off — a pre-existing text+par heap bug.
 
-   When the glue lands: lift the `source == STD_SOURCE` + `LOFT_E2_SYNTH` guards
+   When all four land: lift the `source == STD_SOURCE` + `LOFT_E2_SYNTH` guards
    (`typedef.rs`, `parser/expressions.rs::e2_nullable_elem`, `parser/vectors.rs` ×2), graduate
    the gated probes to `tests/scripts/25-nullable-sequences.loft`, delete the env checks.
 

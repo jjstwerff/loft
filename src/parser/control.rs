@@ -3272,7 +3272,16 @@ impl Parser {
         }
         if let Type::Vector(t_nr, dep) = &in_type {
             let mut t = *t_nr.clone();
-            if let Type::Enum(nr, true, _) = t {
+            if let Type::Enum(nr, true, _) = t
+                && !self.data.def(nr).name.starts_with("__nullable<")
+            {
+                // @PLN25 E2 — keep a synthetic `__nullable<S>` element in `Enum`
+                // form for the loop variable: field access on `Type::Enum(.., true)`
+                // unwraps to the `Some` variant via `find_poly_enum_field`
+                // (fields.rs), whereas `Reference(enum_def)` does not (the enum
+                // itself has no payload field) → "Unknown field __nullable<S>.f".
+                // Hand-written struct-enums keep the Reference conversion (variant
+                // field-access resolves against the variant def, not the parent).
                 t = Type::Reference(nr, Deps::none());
             }
             // P189b: vector elements that are tuples live as inline bytes
