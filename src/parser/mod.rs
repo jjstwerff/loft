@@ -157,7 +157,11 @@ pub struct Parser {
     // tables persist across passes BY NAME (pass 2 re-finds rather than
     // re-creates) — the parser is therefore NOT re-entrant beyond two
     // passes: a third pass leaves tables half-migrated (verified by the
-    // #339 third-pass experiment, which segfaulted).
+    // #339 third-pass experiment, which segfaulted).  The "attr counts cannot
+    // change in pass 2" claim above is now ENFORCED (not just asserted at the
+    // `ref_return` growth site) by `assert_pass2_def_attr_stable` — a per-def
+    // count snapshot compared end-of-pass-1 vs end-of-pass-2 in debug/armed
+    // builds, so any future cross-pass divergence fails loud (H5).
     first_pass: bool,
     /// Set by `parse_in_range` when `rev(collection)` (without a `..` range) is parsed.
     /// Consumed by `fill_iter` to add the reverse bit (64) into the `on` byte of OpIterate/OpStep.
@@ -556,6 +560,16 @@ impl Parser {
         self.fn_lambdas.clear();
         self.parse_file();
         self.resolve_deferred_unknowns();
+        // H5 — two-pass name-stability contract: snapshot every def's attribute
+        // count at the end of pass 1.  `data.reset()` between passes preserves
+        // `definitions`, so def numbers are stable and pass 2 must reproduce these
+        // counts exactly.  Post-arity-cascade (signatures freeze at declaration)
+        // this is an INVARIANT, not an aspiration — a divergence is a real
+        // cross-pass bug, asserted below after pass 2.
+        #[cfg(debug_assertions)]
+        let pass1_attr_counts: Vec<usize> = (0..self.data.definitions.len())
+            .map(|d| self.data.attributes(d as u32))
+            .collect();
         let lvl = self.lexer.diagnostics().level();
         if lvl != Level::Error && lvl != Level::Fatal {
             self.first_pass = false;
@@ -571,6 +585,8 @@ impl Parser {
             self.lexer.switch(filename);
             self.parse_file();
             self.resolve_deferred_unknowns();
+            #[cfg(debug_assertions)]
+            self.assert_pass2_def_attr_stable(&pass1_attr_counts);
         }
         self.backfill_native_symbol_crates();
         // Plan-07 phase 4h — emit `not null` field-reminder hints
@@ -581,6 +597,34 @@ impl Parser {
         }
         self.diagnostics.fill(self.lexer.diagnostics());
         self.diagnostics.is_empty()
+    }
+
+    /// H5 (two-pass name-stability contract): assert pass 2 reproduced pass 1's
+    /// per-def attribute counts exactly.  The parser is not re-entrant beyond two
+    /// passes (the #339 third-pass experiment segfaulted on half-migrated variable
+    /// tables) and pass 2 re-finds synthesized names by position, so a def whose
+    /// attribute count changed between passes is a silent contract break.  Post the
+    /// @PLAN59 arity cascade (signatures freeze at declaration) this is an
+    /// INVARIANT — a firing assert is a real cross-pass bug, not noise.
+    #[cfg(debug_assertions)]
+    fn assert_pass2_def_attr_stable(&self, pass1_attr_counts: &[usize]) {
+        debug_assert_eq!(
+            pass1_attr_counts.len(),
+            self.data.definitions.len(),
+            "H5: definition COUNT diverged across passes (pass1={}, pass2={})",
+            pass1_attr_counts.len(),
+            self.data.definitions.len(),
+        );
+        for (d, &c1) in pass1_attr_counts.iter().enumerate() {
+            let c2 = self.data.attributes(d as u32);
+            debug_assert_eq!(
+                c1,
+                c2,
+                "H5 two-pass contract: def `{}` (#{d}) attribute count diverged across \
+                 passes (pass1={c1}, pass2={c2})",
+                self.data.def(d as u32).name(),
+            );
+        }
     }
 
     /// Plan-07 phase 4h — walk user struct definitions and emit
