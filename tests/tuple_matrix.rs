@@ -716,3 +716,51 @@ cross_mode!(
     }
     "#
 );
+
+// ── #395 — generic function instantiated over a TUPLE element type ───────────
+//
+// A generic template defers the tuple-return rewrite ("T resolves later");
+// `try_generic_instantiation` must re-apply it so the monomorph returns
+// `Reference(__tuple)`, not a bare `Tuple`.  Before the fix: interp read the
+// return DbRef inline as garbage (`34359738371 2`), and native either failed
+// to compile (E0308) or emitted an invalid identifier `t_..__tuple<int,int>_..`.
+// The `assert`s make this a real correctness guard, not just interp==native.
+
+cross_mode!(
+    p395_generic_over_tuple_pair,
+    r#"
+    fn first<T>(v: vector<T>) -> T { v[0] }
+    fn test() {
+        v: vector<(integer, integer)> = [(3, 4), (5, 6)];
+        t = first(v);
+        print("{t.0} {t.1}\n");
+        assert(t.0 == 3 && t.1 == 4, "p395 generic over (integer, integer)");
+    }
+    "#
+);
+
+cross_mode!(
+    p395_generic_over_tuple_triple,
+    r#"
+    fn first<T>(v: vector<T>) -> T { v[0] }
+    fn test() {
+        v: vector<(integer, integer, integer)> = [(3, 4, 5)];
+        t = first(v);
+        print("{t.0} {t.1} {t.2}\n");
+        assert(t.0 == 3 && t.1 == 4 && t.2 == 5, "p395 generic over 3-tuple");
+    }
+    "#
+);
+
+cross_mode!(
+    p395_generic_over_tuple_text_mixed,
+    r#"
+    fn first<T>(v: vector<T>) -> T { v[0] }
+    fn test() {
+        v: vector<(text, integer)> = [("ab", 7)];
+        t = first(v);
+        print("{t.0} {t.1}\n");
+        assert(t.0 == "ab" && t.1 == 7, "p395 generic over (text, integer)");
+    }
+    "#
+);

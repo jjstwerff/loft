@@ -157,7 +157,11 @@ pub struct Parser {
     // tables persist across passes BY NAME (pass 2 re-finds rather than
     // re-creates) — the parser is therefore NOT re-entrant beyond two
     // passes: a third pass leaves tables half-migrated (verified by the
-    // #339 third-pass experiment, which segfaulted).
+    // #339 third-pass experiment, which segfaulted).  The "attr counts cannot
+    // change in pass 2" claim above is now ENFORCED (not just asserted at the
+    // `ref_return` growth site) by `assert_pass2_def_attr_stable` — a per-def
+    // count snapshot compared end-of-pass-1 vs end-of-pass-2 in debug/armed
+    // builds, so any future cross-pass divergence fails loud (H5).
     first_pass: bool,
     /// Set by `parse_in_range` when `rev(collection)` (without a `..` range) is parsed.
     /// Consumed by `fill_iter` to add the reverse bit (64) into the `on` byte of OpIterate/OpStep.
@@ -556,6 +560,16 @@ impl Parser {
         self.fn_lambdas.clear();
         self.parse_file();
         self.resolve_deferred_unknowns();
+        // H5 — two-pass name-stability contract: snapshot every def's attribute
+        // count at the end of pass 1.  `data.reset()` between passes preserves
+        // `definitions`, so def numbers are stable and pass 2 must reproduce these
+        // counts exactly.  Post-arity-cascade (signatures freeze at declaration)
+        // this is an INVARIANT, not an aspiration — a divergence is a real
+        // cross-pass bug, asserted below after pass 2.
+        #[cfg(debug_assertions)]
+        let pass1_attr_counts: Vec<usize> = (0..self.data.definitions.len())
+            .map(|d| self.data.attributes(d as u32))
+            .collect();
         let lvl = self.lexer.diagnostics().level();
         if lvl != Level::Error && lvl != Level::Fatal {
             self.first_pass = false;
@@ -571,6 +585,8 @@ impl Parser {
             self.lexer.switch(filename);
             self.parse_file();
             self.resolve_deferred_unknowns();
+            #[cfg(debug_assertions)]
+            self.assert_pass2_def_attr_stable(&pass1_attr_counts);
         }
         self.backfill_native_symbol_crates();
         // Plan-07 phase 4h — emit `not null` field-reminder hints
@@ -581,6 +597,44 @@ impl Parser {
         }
         self.diagnostics.fill(self.lexer.diagnostics());
         self.diagnostics.is_empty()
+    }
+
+    /// H5 (two-pass name-stability contract): assert pass 2 reproduced pass 1's
+    /// per-def attribute counts exactly.  The parser is not re-entrant beyond two
+    /// passes (the #339 third-pass experiment segfaulted on half-migrated variable
+    /// tables) and pass 2 re-finds synthesized names by position, so a def whose
+    /// attribute count changed between passes is a silent contract break.  Post the
+    /// @PLAN59 arity cascade (signatures freeze at declaration) this is an
+    /// INVARIANT — a firing assert is a real cross-pass bug, not noise.
+    ///
+    /// This attribute-count check is the COMPLETE H5 validation: the H5 spec's other
+    /// named residual — work-ref (`__ref_N`) counter equality per fn — was dissolved
+    /// by H1 (@PLAN59), exactly as the spec's item 3 ("re-evaluate after H1") foresaw.
+    /// `work_refs()` now fires zero times across the whole debug corpus, and the
+    /// counter's value in a stored table is unconditionally reset to 0 by
+    /// `Function::append` at store time, so a work-ref-counter assert here would be
+    /// permanently vacuous.  The one failure mode it could ever have caught — a
+    /// cross-pass `__ref_N` name shift making `ref_return` add a spurious attr — IS
+    /// caught here, because that spurious attr is itself an attribute-count divergence.
+    #[cfg(debug_assertions)]
+    fn assert_pass2_def_attr_stable(&self, pass1_attr_counts: &[usize]) {
+        debug_assert_eq!(
+            pass1_attr_counts.len(),
+            self.data.definitions.len(),
+            "H5: definition COUNT diverged across passes (pass1={}, pass2={})",
+            pass1_attr_counts.len(),
+            self.data.definitions.len(),
+        );
+        for (d, &c1) in pass1_attr_counts.iter().enumerate() {
+            let c2 = self.data.attributes(d as u32);
+            debug_assert_eq!(
+                c1,
+                c2,
+                "H5 two-pass contract: def `{}` (#{d}) attribute count diverged across \
+                 passes (pass1={c1}, pass2={c2})",
+                self.data.def(d as u32).name(),
+            );
+        }
     }
 
     /// Plan-07 phase 4h — walk user struct definitions and emit
@@ -1804,10 +1858,54 @@ impl Parser {
     /// unresolvable type variable, etc.) — caller falls back to the
     /// existing first-pass-Unknown path.
     ///
-    /// Pure read of the generic template's already-populated `returned`
-    /// field plus the type-substitution helper.  No state mutation;
-    /// safe to call multiple times.
-    fn predict_generic_return_type(&self, name: &str, types: &[Type]) -> Type {
+    /// #395 — route a monomorph's concrete `Type::Tuple` return through the
+    /// synthetic `__tuple<…>` struct, exactly as `parser/definitions.rs`'s
+    /// `needs_tuple_rewrite` (~line 897) does for a normally-parsed tuple return.
+    /// A generic TEMPLATE deliberately defers that rewrite ("`T` resolves later")
+    /// and nothing re-applied it once `T` was concrete — so the copied body returns
+    /// a DbRef (the template compiled `T` as a `Reference` dummy) while the declared
+    /// return stayed `Tuple`, and the caller read the DbRef inline as garbage
+    /// (interp) / mismatched the Rust tuple ABI (native E0308).  Both the first-pass
+    /// prediction and the second-pass instantiation route through HERE so the
+    /// receiving variable's type agrees across passes.  Wide (>8 B) or
+    /// lifetime-bearing tuples are rewritten; an 8-byte pure-value tuple and
+    /// fn-element tuples keep their existing ABI (mirrors the deferral predicate).
+    fn tuple_return_rewrite(&mut self, returned: Type, from_type_var: bool) -> Type {
+        // Only the `-> T` shape needs this.  When the template return type IS the
+        // bare type variable, the body delivers T as a DbRef (the template compiled
+        // T as a `Reference` dummy), so a tuple substitution must wrap it in the
+        // synthetic struct.  A return type that is a LITERAL tuple in the signature
+        // (e.g. `-> (integer, integer)`) is constructed BY VALUE in the body and
+        // correctly uses the bare-tuple ABI — rewriting it would break the
+        // value-tuple generic returns (p329/p330/p240/plan17).
+        if !from_type_var {
+            return returned;
+        }
+        let Type::Tuple(elems) = &returned else {
+            return returned;
+        };
+        let wide = u32::from(crate::variables::size(
+            &returned,
+            &crate::data::Context::Argument,
+        )) > 8;
+        let has_fn = elems.iter().any(|e| matches!(e, Type::Function(_, _, _)));
+        if elems.iter().any(crate::data::has_lifetime_concern) || (wide && !has_fn) {
+            let elems_clone = elems.clone();
+            let synth = self.data.tuple_def(&mut self.lexer, &elems_clone);
+            Type::Reference(synth, crate::data::Deps::none())
+        } else {
+            returned
+        }
+    }
+
+    /// Reads the generic template's already-populated `returned` field, applies
+    /// the type substitution, then routes a concrete tuple return through the
+    /// synthetic `__tuple` struct (see [`tuple_return_rewrite`]) so the predicted
+    /// type matches what `try_generic_instantiation` later produces (else the
+    /// receiving variable would "change type" between passes — #395).  Registers
+    /// the synthetic struct on first encounter (idempotent via `tuple_def`);
+    /// otherwise side-effect-free and safe to call repeatedly.
+    fn predict_generic_return_type(&mut self, name: &str, types: &[Type]) -> Type {
         let generic_name = format!("n_{name}");
         let g_nr = self.data.def_nr(&generic_name);
         if g_nr == u32::MAX || self.data.def(g_nr).def_type() != DefType::Generic {
@@ -1829,7 +1927,11 @@ impl Parser {
             return Type::Unknown(0);
         }
         let tmpl_returned = self.data.definitions[g_nr as usize].returned.clone();
-        let predicted = Self::substitute_type(tmpl_returned, tv_nr, &concrete);
+        let from_tv = matches!(&tmpl_returned, Type::Reference(d, _) if *d == tv_nr);
+        let predicted = self.tuple_return_rewrite(
+            Self::substitute_type(tmpl_returned, tv_nr, &concrete),
+            from_tv,
+        );
         // Trace point: predicted return type for first-pass type
         // inference of generic call sites.  Used during plan-17 (A)
         // debugging.  Enable with `LOFT_TRACE=generic`.
@@ -1917,7 +2019,14 @@ impl Parser {
         let tmpl_vars = self.data.definitions[g_nr as usize].variables.clone();
         let tmpl_pos = self.data.definitions[g_nr as usize].position.clone();
         let new_code = Self::substitute_type_in_value(tmpl_code, tv_nr, &concrete, &self.data);
-        let new_returned = Self::substitute_type(tmpl_returned, tv_nr, &concrete);
+        // `from_tv` computed on the PRE-substitution template return, identically to
+        // `predict_generic_return_type`, so the second-pass instantiated return type
+        // matches the first-pass prediction (the cross-pass H5 contract).
+        let from_tv = matches!(&tmpl_returned, Type::Reference(d, _) if *d == tv_nr);
+        let new_returned = self.tuple_return_rewrite(
+            Self::substitute_type(tmpl_returned, tv_nr, &concrete),
+            from_tv,
+        );
         // Register the new definition.
         let d_nr = self.data.add_def(&mangled, &tmpl_pos, DefType::Function);
         for a in &tmpl_attrs {

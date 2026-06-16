@@ -421,16 +421,39 @@ fn scrub_generated_crate_refs(src: &[u8]) -> Vec<u8> {
 #[must_use]
 pub fn disambiguated_fn_ident(dups: &HashSet<String>, def: &crate::data::Definition) -> String {
     let name = def.name();
-    if !dups.contains(name) {
+    let base = if dups.contains(name) {
+        // FNV-1a over the defining file path — deterministic across runs.
+        let mut h: u32 = 0x811c_9dc5;
+        for b in def.position().file.bytes() {
+            h ^= u32::from(b);
+            h = h.wrapping_mul(0x0100_0193);
+        }
+        format!("{name}_m{h:08x}")
+    } else {
+        name.to_string()
+    };
+    rust_fn_ident(&base)
+}
+
+/// Flatten a loft def name into a valid Rust identifier.  Most names already are
+/// (`n_foo`, `t_4Pair_first`), but a generic instantiated over a TUPLE carries the
+/// synthetic tuple struct's schema name verbatim — `t_24__tuple<integer,integer>_first`
+/// — and `<`, `>`, `,`, and spaces are not valid in a Rust identifier (#395).  Every
+/// emission of a fn name (definition AND every call) routes through `fn_ident`, so
+/// flattening at this one chokepoint keeps the definition and its callers in sync.
+fn rust_fn_ident(name: &str) -> String {
+    if name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
         return name.to_string();
     }
-    // FNV-1a over the defining file path — deterministic across runs.
-    let mut h: u32 = 0x811c_9dc5;
-    for b in def.position().file.bytes() {
-        h ^= u32::from(b);
-        h = h.wrapping_mul(0x0100_0193);
-    }
-    format!("{name}_m{h:08x}")
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 /// Use this to drive Rust code generation from a compiled loft program.

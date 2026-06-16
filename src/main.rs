@@ -4846,6 +4846,16 @@ fn main() {
     // reference (a library run native ≡ run interpreted) and a manual escape hatch.
     let native_libs_off = std::env::var_os("LOFT_NO_NATIVE_LIBS").is_some();
     let force_build_fail = std::env::var_os("LOFT_FORCE_NATIVE_BUILD_FAIL").is_some();
+    // Crawler / efficiency aid (`LOFT_REQUIRE_NATIVE=1`, the inverse of
+    // `LOFT_NO_NATIVE_LIBS`): turn every native→interpreter fallback below into a
+    // HARD ERROR that names the reason, so a performance run can never silently run
+    // slow interpreted code.  Off by default — the normal warn-and-interpret
+    // fallbacks are unchanged.  Enforced at two points (the only places native can
+    // degrade to interpretation): the auto-native library loop just below, and the
+    // main-program chokepoint past the `'native` block.
+    let native_required = std::env::var("LOFT_REQUIRE_NATIVE")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
     let pending_native = if native_libs_off {
         p.pending_native_compile.clear();
         Vec::new()
@@ -4883,11 +4893,28 @@ fn main() {
                 // marking, no warning (this is the intended fast path while you iterate).
                 // Do NOT cache the program: a warm load would replay this interpreted
                 // image and the "rebuild once editing settles" check would never fire.
+                if native_required {
+                    eprintln!(
+                        "loft: LOFT_REQUIRE_NATIVE is set, but library '{pkg_dir}' is being \
+                         edited (dev-interpret) and would run interpreted, not native. \
+                         Let its cdylib build (stop editing it), or unset LOFT_REQUIRE_NATIVE."
+                    );
+                    std::process::exit(1);
+                }
                 any_dev_interpret = true;
             }
             Err(e) => {
                 // Silent interpret-fallback (Step 2 invariant): warn, do NOT mark,
                 // do NOT exit — the library's calls stay ordinary interpreted calls.
+                // Under LOFT_REQUIRE_NATIVE this becomes a hard error instead.
+                if native_required {
+                    eprintln!(
+                        "loft: LOFT_REQUIRE_NATIVE is set, but library '{pkg_dir}' could not \
+                         compile native ({e}); refusing to fall back to the interpreter. \
+                         Fix the library build, or unset LOFT_REQUIRE_NATIVE."
+                    );
+                    std::process::exit(1);
+                }
                 eprintln!(
                     "loft: library '{pkg_dir}' could not compile native ({e}); interpreting it"
                 );
@@ -5470,6 +5497,12 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
     // `rustc --version` probe would tax every run with a ~18 ms process spawn
     // for nothing.  The `'native` label lets the lazy check fall back to the
     // interpreter when rustc is genuinely absent on a cache miss.
+    //
+    // Each fallback `break 'native` below records WHY in `native_fallback_reason`
+    // so the chokepoint past the block can report it (warning by default, hard
+    // error under `LOFT_REQUIRE_NATIVE`).  `None` after the block means native
+    // either ran (and `return`ed) or was never requested.
+    let mut native_fallback_reason: Option<String> = None;
     'native: {
         if !(native_mode || native_emit.is_some()) {
             break 'native;
@@ -5687,6 +5720,9 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
                     "Warning: native compilation unavailable ({reason}); falling \
                      back to interpreter mode. Rebuild loft to restore native."
                 );
+                native_fallback_reason = Some(format!(
+                    "native compilation unavailable ({reason}); rebuild loft"
+                ));
                 let _ = std::fs::remove_file(&emit_path);
                 break 'native;
             }
@@ -5803,11 +5839,13 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
                     // probe used to fire; doing it here means a warm cache hit
                     // never pays for a `rustc --version` spawn.
                     eprintln!("Warning: rustc not found, falling back to interpreter mode");
+                    native_fallback_reason = Some("rustc not found".to_string());
                     let _ = std::fs::remove_file(&emit_path);
                     break 'native;
                 }
                 Err(e) => {
                     eprintln!("Warning: rustc check failed ({e}), falling back to interpreter");
+                    native_fallback_reason = Some(format!("rustc could not be launched ({e})"));
                     let _ = std::fs::remove_file(&emit_path);
                     break 'native;
                 }
@@ -5846,6 +5884,11 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
                     "Warning: native toolchain not usable here (cached build stale \
                      after a rustc update, or loft's runtime library unavailable); \
                      falling back to interpreter mode. Rebuild loft to restore native."
+                );
+                native_fallback_reason = Some(
+                    "native toolchain not usable here (cached build stale after a rustc \
+                     update, or loft's runtime library unavailable); rebuild loft"
+                        .to_string(),
                 );
                 let _ = std::fs::remove_file(&emit_path);
                 break 'native;
@@ -6066,6 +6109,27 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
     if check_only {
         println!("ok {abs_file}");
         return;
+    }
+
+    // Crawler / efficiency aid (`LOFT_REQUIRE_NATIVE`): reaching here with native ON
+    // means a fallback above broke out of `'native` — native success `return`s at the
+    // end of that block, and `--interpret`/`--bytecode`/the test paths set
+    // `native_mode = false`, so `native_mode` still true here is exactly "native was
+    // wanted but we're about to interpret".  Under the env var that is a hard error
+    // (the per-site warning already named the reason for the default warn path).  The
+    // `unwrap_or` is a catch-all so a future fallback that forgets to record a reason
+    // still errors loudly rather than degrading silently.
+    if native_required && native_mode {
+        let reason = native_fallback_reason
+            .as_deref()
+            .unwrap_or("native execution did not occur (reason not recorded)");
+        eprintln!(
+            "loft: LOFT_REQUIRE_NATIVE is set, but native execution was unavailable \
+             ({reason}); refusing to fall back to the interpreter. \
+             Fix the toolchain (e.g. `cargo build --release --lib --bin loft`), \
+             or unset LOFT_REQUIRE_NATIVE to allow interpreter fallback."
+        );
+        std::process::exit(1);
     }
 
     // Initialize the runtime logger

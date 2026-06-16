@@ -944,9 +944,15 @@ impl Parser {
             ];
             self.object_init(&mut list, variant_nr, 0, &Value::Var(w), &HashSet::new());
             list.push(Value::Var(w));
-            // The LHS owns the store (empty dep); the work-ref is skip_free
-            // (same store, no double-free).
-            self.vars.set_skip_free(w);
+            // #394 — `w` is a NORMAL work-ref (freed at scope end), NOT skip_free.
+            // A `skip_free` here assumed the consumer ALIASES w's store (the `x = B`
+            // case, where the assignment transfers ownership to the LHS).  But every
+            // DEEP-COPY consumer — a vector literal/element, a struct field, a fn
+            // arg, a nested vector — copies the record and orphans w, so skip_free
+            // leaked w's store (bounded, one per construction site).  Aligning with
+            // the struct-construct path (`parse_object`, also a plain work-ref): the
+            // ownership-transfer logic already claims w for the alias / return
+            // consumers, and copy consumers free it at scope end — no double-free.
             *code = v_block(
                 list,
                 Type::Enum(enum_nr, true, crate::data::Deps::none()),

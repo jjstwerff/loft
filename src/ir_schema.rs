@@ -449,7 +449,11 @@ fn write_value(out: &mut String, v: &Value) {
             let _ = write!(out, "{{\"k\":\"Int\",\"n\":{n}}}");
         }
         Value::Long(n) => {
-            let _ = write!(out, "{{\"k\":\"Long\",\"n\":{n}}}");
+            // i64 as a STRING, not a JSON number: a JSON number decodes through
+            // f64 (53-bit mantissa) and silently loses precision beyond 2^53 — a
+            // `Long` of 2^53+1 came back as 2^53 (caught by the tests/scripts IR
+            // round-trip).  A quoted integer preserves every bit.
+            let _ = write!(out, "{{\"k\":\"Long\",\"n\":\"{n}\"}}");
         }
         Value::Float(f) => {
             let _ = write!(out, "{{\"k\":\"Float\",\"f\":{f}}}");
@@ -672,10 +676,16 @@ pub fn value_from_json(src: &str) -> Result<Value, TypeDecodeError> {
 }
 
 fn as_i64(p: &Parsed) -> Result<i64, TypeDecodeError> {
-    if let Parsed::Number(n) = p {
-        Ok(*n as i64)
-    } else {
-        Err(TypeDecodeError::Shape("expected number".into()))
+    match p {
+        // i64 is now encoded as a quoted string to survive >2^53 (see the
+        // `Value::Long` encoder).  Accept the legacy bare-number form too, so
+        // snapshots written before this change still decode (small i64 fields
+        // like `type_nr` also reach here as bare numbers and stay exact).
+        Parsed::Str(s) => s
+            .parse::<i64>()
+            .map_err(|_| TypeDecodeError::Shape("expected an i64 string".into())),
+        Parsed::Number(n) => Ok(*n as i64),
+        _ => Err(TypeDecodeError::Shape("expected number".into())),
     }
 }
 

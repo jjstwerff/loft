@@ -1367,3 +1367,46 @@ pub fn test() {
         leaks.join(", ")
     );
 }
+
+/// #394 — a bare (no-field) unit variant of a MIXED struct-enum materialises a
+/// store-resident record (`emit_variant_value`); that temp must be freed when a
+/// DEEP-COPY consumer (vector literal/element, struct field, fn arg, nested vector)
+/// copies the record rather than aliasing it.  Before the fix the temp was
+/// `skip_free` (only correct for the alias `x = B` case), so every copy consumer
+/// leaked one store per construction site.  Each shape also reads the variant back
+/// via `match`, so the fix can't pass by simply never building the record.
+#[test]
+fn p394_bare_unit_variant_no_leak_across_consumers() {
+    // `leaks_for` + assert (not `run_leak_check_str`, which only warns) so a
+    // regression HARD-fails CI rather than printing a stderr warning.
+    let leaks = leaks_for(
+        r#"
+enum Sigil { Glyph { s: text }, Blank }
+fn describe(e: Sigil) -> text { match e { Glyph { s } => "G", Blank => "X" } }
+pub fn test() {
+  // vector literal + element-assign in a loop (the filed repro)
+  v: vector<Sigil> = [Blank];
+  for i in 0..3 { v[0] = Glyph { s: "x-{i}" }; v[0] = Blank; }
+  assert(describe(v[0]) == "X", "vec elem");
+  // struct field
+  w = Holder { m: Blank };
+  assert(describe(w.m) == "X", "struct field");
+  // function argument
+  assert(describe(Blank) == "X", "fn arg");
+  // struct-in-vector (nested deep copy)
+  vw: vector<Holder> = [Holder { m: Blank }];
+  assert(describe(vw[0].m) == "X", "struct-in-vec");
+  // alias-transfer consumers must stay correct (and not double-free)
+  x: Sigil = Blank;
+  assert(describe(x) == "X", "plain var");
+}
+struct Holder { m: Sigil }
+"#,
+    );
+    assert!(
+        leaks.is_empty(),
+        "#394 bare unit variant leaked {} store(s): {}",
+        leaks.len(),
+        leaks.join(", ")
+    );
+}

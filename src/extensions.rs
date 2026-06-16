@@ -2412,7 +2412,10 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
     // per build profile and so cross-invalidated this shared cache on every CI
     // run).  This key is identical across debug/release/test, so all loft builds
     // in a job share the cache; it still flips on a real loft-ffi change.
-    let fp = crate::cache::loft_ffi_fingerprint();
+    // #274 — key on loft-ffi AND the RUSTFLAGS that fix shared-dep SVH, so a flag
+    // change (e.g. `-g` ↔ not) rebuilds rather than reusing an rlib whose bundled
+    // `libloading` would collide with loft's copy at the consumer link.
+    let fp = crate::cache::native_artifact_cache_key();
     let find_existing = || {
         for root in &search_roots {
             for profile in ["release", "debug"] {
