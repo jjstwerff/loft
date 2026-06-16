@@ -601,6 +601,9 @@ impl Parser {
             return false;
         };
         self.vars = Function::new(&fn_name, &self.lexer.pos().file);
+        // @PLN25 E2 — clear any type-var from a previous function before parsing
+        // this one; set below if this function is generic.
+        self.cur_type_var = u32::MAX;
         if !self.default && !is_lower(&fn_name) && !is_op(&fn_name) {
             diagnostic!(
                 self.lexer,
@@ -662,6 +665,12 @@ impl Parser {
                     .add_def(&type_var_name, self.lexer.pos(), DefType::Struct);
                 self.data
                     .set_returned(tv_nr, Type::Reference(tv_nr, crate::data::Deps::none()));
+            }
+            // @PLN25 E2 — record the type-var def_nr (valid in both passes: the
+            // stub was just added in the first pass, already exists in the
+            // second) so `e2_nullable_elem` leaves a generic `vector<T>` dense.
+            if is_generic {
+                self.cur_type_var = self.data.def_nr(&type_var_name);
             }
             if !self.parse_arguments(&fn_name, &mut arguments) {
                 return true;

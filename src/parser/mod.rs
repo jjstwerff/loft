@@ -226,6 +226,13 @@ pub struct Parser {
     /// Variable number of the __closure parameter inside a lambda body (second pass).
     /// `u16::MAX` when not inside a capturing lambda.
     pub(crate) closure_param: u16,
+    /// @PLN25 E2 — def_nr of the generic type-variable stub (`T`) currently in
+    /// scope while parsing a `fn f<T>(…)` signature/body; `u32::MAX` outside a
+    /// generic function.  Consulted ONLY by `e2_nullable_elem` so a generic
+    /// `vector<T>` is NOT rewritten to `vector<__nullable<T>>` (T is opaque at
+    /// definition time — nullability is decided at instantiation by whatever
+    /// concrete element type the caller's vector carries).  Reset per function.
+    pub(crate) cur_type_var: u32,
     // maps fn-ref variable numbers to their closure record work variable numbers.
     pub(crate) closure_vars: std::collections::HashMap<u16, u16>,
     // last closure work variable created by emit_lambda_code (transient).
@@ -488,6 +495,7 @@ impl Parser {
             captured_names: Vec::new(),
             fn_lambdas: std::collections::HashMap::new(),
             closure_param: u16::MAX,
+            cur_type_var: u32::MAX,
             closure_vars: std::collections::HashMap::new(),
             last_closure_work_var: u16::MAX,
             last_closure_alloc: None,
@@ -2049,11 +2057,21 @@ impl Parser {
         let mangled = if type_nr == u32::MAX {
             format!("n_{name}")
         } else {
-            format!(
-                "t_{}{}_{name}",
-                self.data.def(type_nr).name().len(),
-                self.data.def(type_nr).name()
-            )
+            // @PLN25 E2 — this mangled name becomes a Rust function identifier in
+            // native codegen.  A concrete element type whose NAME carries angle
+            // brackets / commas (synthetic wrappers — `__nullable<Row>`,
+            // `__tuple<…>`) would emit `fn t_15__nullable<Row>_count(…)`, which
+            // rustc parses as a chained comparison.  Flatten those to
+            // identifier-safe chars.  The replacement is 1:1 (each bracket/comma
+            // → one `_`), so the LEN prefix that `original_name` /
+            // `find_method_receivers` parse back stays correct.  Plain names
+            // (user structs, `vector`) contain none of these and are unchanged.
+            let safe = self
+                .data
+                .def(type_nr)
+                .name()
+                .replace(['<', '>', ',', ' '], "_");
+            format!("t_{}{}_{name}", safe.len(), safe)
         };
         // Return existing instantiation if already created.
         let existing = self.data.def_nr(&mangled);

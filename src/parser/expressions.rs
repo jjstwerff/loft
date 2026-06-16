@@ -1933,6 +1933,17 @@ use a separate collection or add after the loop"
             return elem;
         };
         let struct_d = *struct_d;
+        // @PLN25 E2 — a generic `vector<T>` must stay dense: `T` is an opaque
+        // type-variable stub (registered as a `DefType::Struct` so `parse_type`
+        // resolves it), not a real struct, and nullability is decided at
+        // instantiation by whatever concrete element type the caller's vector
+        // carries (monomorphization substitutes T's bound type directly — see
+        // `substitute_type`).  Rewriting here would bury T inside `__nullable<T>`
+        // and break the "T appears in the first parameter" check + the return
+        // type unification.
+        if struct_d == self.cur_type_var {
+            return elem;
+        }
         if self.data.def_type(struct_d) != crate::data::DefType::Struct
             || self.data.def(struct_d).synthetic.is_some()
         {

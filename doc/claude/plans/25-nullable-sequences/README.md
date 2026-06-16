@@ -50,8 +50,21 @@ default-on (gate removed), per the project standard.  The remaining work, in fin
    (null-literal, present↔null convert).  Verified leak-flat + value-correct on BOTH backends.
    Regressions: `tests/leak.rs::pln25_inline_struct_enum_payload_free` (gate-off record-count)
    + `tests/scripts/389-inline-enum-payload-free.loft` (cross-backend correctness).
-2. **Generics** — `vector<T>` (generic element); `__nullable<T>` can't be synthesised until
-   `T` is concrete.  Decide: instantiate-time rewrite, or exclude generics. *(M, design)*
+2. **Generics** — `vector<T>` (generic element) — FIXED.  Design chosen: the generic
+   parameter stays DENSE and carries whatever element type the caller's vector holds —
+   nullability is decided at INSTANTIATION (monomorphization substitutes `T`'s bound type
+   directly; the caller's `vector<Row>` is already `vector<__nullable<Row>>`, so `T` binds to
+   the nullable element and the generic is a transparent passthrough).  Two fixes: (a)
+   `e2_nullable_elem` skips the active type-var stub (`Parser::cur_type_var`) so `vector<T>`
+   is NOT rewritten — else `T` is buried in `__nullable<T>` and the first-param/return checks
+   fail; (b) the monomorph-name mangle (mod.rs) flattens `<>,` → `_` (length-preserving) so a
+   `t_15__nullable<Row>_count` def becomes a valid Rust identifier — native codegen emits the
+   name verbatim, and rustc was parsing `<Row>` as a chained comparison.  Validated across 8
+   shapes (return-T / non-T / nested / local `vector<T>` / multi-instantiation / `not null` /
+   bounded scalar / null-through-generic) × both backends.  Regression:
+   `tests/plan25_e2_generics.rs`.  (Surfaced two PRE-EXISTING, out-of-scope main bugs, both
+   baseline-confirmed and filed: @P394 bare no-payload enum-variant value leaks a store;
+   @P395 a generic over a tuple element reads garbage / fails native.)
 3. **Inferred comprehension** `v = [for … { S{…} }]` (no annotation) — edge; the declared
    form is done. *(S)*
 4. **GATE REMOVAL + stdlib/libs fallout** — flip default-on, lift the non-stdlib restriction

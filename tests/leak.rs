@@ -1426,7 +1426,7 @@ fn report_records(report: &str) -> u64 {
 /// @PLN25 — reassigning an inline struct-enum element must free the OLD
 /// variant's heap payload.  `remove_claims` had no `Parts::Enum` arm (it fell
 /// through to the no-op `_`), so overwriting an inline `enum { Has{text},
-/// Empty }` element orphaned the prior `Has`'s text on every churn — one
+/// Gone{n} }` element orphaned the prior `Has`'s text on every churn — one
 /// leaked record per iteration, reclaimed only when the whole store is freed.
 /// That makes it an INTRA-store leak the store-level gate (`check_store_leaks`)
 /// cannot see, so this pins the total record count flat instead.  Pre-fix this
@@ -1440,14 +1440,17 @@ fn pln25_inline_struct_enum_payload_free() {
     let (data, db) = cached_default();
     p.data = data;
     p.database = db;
+    // Both variants carry a payload: a BARE no-field variant value leaks a
+    // store on construction (a separate, pre-existing bug) which would add
+    // stray records and muddy this record-count assertion.
     p.parse_str(
         r#"
-enum Maybe { Has { s: text }, Empty }
+enum Maybe { Has { s: text }, Gone { n: integer } }
 pub fn test() {
-  v: vector<Maybe> = [Empty];
+  v: vector<Maybe> = [Gone { n: 0 }];
   for i in 0..500 {
     v[0] = Has { s: "payload-distinct-text-{i}" };
-    v[0] = Empty;
+    v[0] = Gone { n: i };
   }
 }
 "#,
