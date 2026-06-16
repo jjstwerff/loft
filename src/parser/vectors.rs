@@ -1930,14 +1930,29 @@ impl Parser {
             },
             Deps::frame(parent_tp.depend()),
         );
-        let elm = self.create_unique(
-            "elm",
-            if let Type::Reference(_, _) = assign_tp {
-                assign_tp
-            } else {
-                &was
-            },
-        );
+        // @PLN25 E2 — an ANONYMOUS `{ … }` element against a nullable synth enum
+        // `__nullable<S>` has no struct name to drive the transparent-construction
+        // path (objects.rs:151, which keys on `S{` matching `__nullable<S>`), so it
+        // falls to `parse_block`'s `Reference(r)` record-scan.  Type the element var
+        // as the `Some` variant so that scan builds the present payload (the
+        // discriminant defaults present via object_init), exactly as the NAMED
+        // `S{ … }` path does.  Without this the var falls back to `was`
+        // (`Reference(type_def_nr(parent_tp.content))`) and mis-resolves to an
+        // arbitrary def → "Unknown field <wrong-def>.<field>".  Gate-inert: a
+        // `__nullable<>` enum only exists when the E2 rewrite is active.
+        let elm_tp = if let Type::Reference(_, _) = assign_tp {
+            assign_tp.clone()
+        } else if let Type::Enum(syn, true, _) = assign_tp
+            && self.data.def(*syn).name.starts_with("__nullable<")
+        {
+            Type::Reference(
+                self.data.variant_of(*syn, "Some"),
+                Deps::frame(parent_tp.depend()),
+            )
+        } else {
+            was
+        };
+        let elm = self.create_unique("elm", &elm_tp);
         if vec != u16::MAX {
             self.vars.depend(elm, vec);
         }
@@ -2035,6 +2050,60 @@ impl Parser {
             // reject `null` → the synthetic enum and fire the "cannot store"
             // diagnostic.
             p = Value::Insert(Vec::new());
+            t = in_t.clone();
+        } else if !self.first_pass
+            && let Type::Enum(syn, true, _) = &*in_t
+            && let Type::Reference(s_d, _) = &t
+            && self.data.def(*syn).name == format!("__nullable<{}>", self.data.def(*s_d).name())
+            && !matches!(p, Value::Insert(_))
+        {
+            // @PLN25 E2 — store a DENSE struct value `S` into a
+            // `vector<__nullable<S>>` element (`v += [p]`, `v += [make()]`).  The
+            // `Some` payload is laid out INDEPENDENTLY from dense `S` (the packer
+            // reorders fields around the discriminant), so the generic-convert
+            // fallthrough's raw `OpCopyRecord` writes fields at the wrong offsets
+            // and never sets the discriminant → garbage reads.  Build `Some`
+            // field-by-field instead, exactly as a `S{ … }` literal element does:
+            // set the discriminant present, then copy each payload field from
+            // `S`'s dense offset to its `Some` offset via get_field/set_field (both
+            // type/alias aware).  A non-Var source is stashed once so each field
+            // read does not re-evaluate it.  Gate-inert: `__nullable<>` exists only
+            // when the E2 rewrite is active.
+            let syn = *syn;
+            let s_d = *s_d;
+            let some_d = self.data.variant_of(syn, "Some");
+            let mut steps = Vec::new();
+            let src = if matches!(p, Value::Var(_)) {
+                p.clone()
+            } else {
+                let tmp = self.create_unique("nbl_src", &t);
+                steps.push(v_set(tmp, p.clone()));
+                Value::Var(tmp)
+            };
+            let known = self.data.def(some_d).known_type();
+            for aid in 0..self.data.attributes(some_d) {
+                let nm = self.data.attr_name(some_d, aid);
+                let off = self.database.position(known, &nm);
+                if self.data.def(some_d).attributes()[aid].constant {
+                    // The discriminant attribute — set it to the `Some` value
+                    // (`Enum(2, MAX)`); OpNewRecord zero-inits it to 0 (absent).
+                    let disc = self.data.attr_value(some_d, aid);
+                    let s = self.cl(
+                        "OpSetEnum",
+                        &[Value::Var(elm), Value::Int(i32::from(off)), disc],
+                    );
+                    steps.push(s);
+                    continue;
+                }
+                let s_aid = self.data.attr(s_d, &nm);
+                if s_aid == usize::MAX {
+                    continue;
+                }
+                let read = self.get_field(s_d, s_aid, src.clone());
+                let s = self.set_field(some_d, aid, 0, Value::Var(elm), read);
+                steps.push(s);
+            }
+            p = Value::Insert(steps);
             t = in_t.clone();
         } else if !self.convert(&mut p, &t, in_t) {
             if declared {

@@ -359,9 +359,7 @@ impl Parser {
         let worker_attrs = self.data.attributes(worker_d_nr);
         for i in 1..worker_attrs {
             let pname = self.data.attr_name(worker_d_nr, i);
-            let ptype = self.data.def(worker_d_nr).attributes()[i]
-                .typedef
-                .clone();
+            let ptype = self.data.def(worker_d_nr).attributes()[i].typedef.clone();
             let _ = self
                 .data
                 .add_attribute(&mut self.lexer, w_d_nr, &pname, ptype.clone());

@@ -12,10 +12,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 **Core SHIPPED + default-on.  E2 (embedded-record null) is GATED.  The CONCEPTUAL core works
 gate-on — construct/read/field/method/format/null/OOB/plain-for/par(no-extra-arg), and the deep
-06-structs synthesis desync is fixed (commits 996f566d, 7c03a1c0).  But default-on still has a
-BROAD, HETEROGENEOUS tail (~24 failures: struct-vector append, inline-anon-struct literals,
-extra-arg par dispatcher, native codegen, wasm, cross-lib, graphics consumers) — each its own
-seam, multi-session to close, NOT a single shared root.  See item 4 for the precise inventory.**
+06-structs synthesis desync is fixed (commits 996f566d, 7c03a1c0).  Default-on still has a broad
+tail (~24 raw failures), now reorganized into ~3 mechanism clusters + singletons + downstream
+consumers, with a falsification-first 6-step execution plan (item 4): Step 1 probes whether the
+four parse-path suites share ONE root in `nullable_enum_for`'s struct→enum keying — if so, one
+chokepoint fix collapses most of the tail.  See item 4 for the full plan.**
 
 *Shipped, default-on, verified both backends:* a `vector<T>` can be null (absent),
 distinct from empty `[]` — runtime null-safe (P1); `v == null` / `!= null` / `return null`
@@ -136,17 +137,114 @@ default-on (gate removed), per the project standard.  The remaining work, in fin
      extra-arg marshalling collides with the wrapper's mirrored params (stack underflow `8<12`);
      blocks `threading` + `script_threading`.
 
-   **REMAINING TAIL (default-on, ~24 failures) — heterogeneous, each its own E2 seam** (no shared
-   root; the matrix's "one class" applied only to the original scalar-unwrap gaps):
-   - **extra-arg par dispatcher** (threading, script_threading) — see above.
-   - **struct-vector append/mutation** (11-vectors: "struct [var] append value=4").
-   - **inline anonymous-struct vector literal** (12-collections: `[{t:"One",v:1}]` →
-     `Unknown field i_parse_errors.t`; element type mis-resolves to `i_parse_errors`).
-   - other wrap suites (dir, last, parser_debug, loft_suite, wasm_dir, libraries, library_suite).
-   - native-codegen edges (native_dir/scripts/library_suite, p171, p310).
-   - nested-vector struct return (p143), cross-lib same-name struct (p379), leak p150.
-   - graphics/engine/wasm consumers (kernel_port, moros_glb, moros_editor_html, wasm_library_suite).
-   - gap (4) `e = null` on a nullable LOCAL (rare).
+   **REMAINING TAIL → EXECUTION PLAN (default-on, ~24 raw failures).**  The earlier
+   "heterogeneous, no shared root" read was over-pessimistic: four of the failing suites all run
+   through the SAME element-type-resolution chokepoint (`e2_nullable_elem` → `nullable_enum_for`,
+   expressions.rs:1940 / data.rs:3651), and the big graphics/engine consumers almost certainly
+   fail DOWNSTREAM of them.  So the ~24 raw failures collapse to ~3 mechanism clusters + a few
+   singletons + downstream-verification targets.  Each step is matrix-first (gate-on probe in
+   external `/tmp` scratch, hand-computed `@EXPECT` + a failing control cell, fix at the
+   chokepoint, verify BOTH backends, graduate the probe into
+   `tests/scripts/25-nullable-sequences.loft`).
+
+   - **Step 1 — Cluster A: element-type resolution (highest leverage + the falsification).**  ONE
+     boundary matrix gate-on over the CONSTRUCTION-PATH axis: `{named-struct literal,
+     anonymous-struct literal, += append, return body, cross-lib same-name struct}` ×
+     `{construct, read-back}`.  This directly tests whether 11-vectors (struct append),
+     12-collections (`[{t:"One",v:1}]` → mis-resolves to `i_parse_errors`), p143 (nested-vector
+     struct return) and p379 (cross-lib same-name struct) share ONE root in `nullable_enum_for`'s
+     struct→enum keying.  The `i_parse_errors` mis-resolution points at anon-struct synthetic-name
+     keying (collision / unstable synth name).  If they share the root, one chokepoint fix closes
+     all four suites + likely the graphics consumers; if not, the matrix shows the real boundary
+     and the cluster splits — but KNOWN, not guessed.
+
+     **STEP 1 RESULT (2026-06-16) — the shared-root hypothesis is REFUTED; Cluster A is a STACK of
+     independent seams, not one chokepoint.**  A 7-cell construction-path matrix (named-literal-local
+     / anon-literal-field / append-var / append-literal / return / nested-return / wrong-assert
+     control), hand-computed `@EXPECT` + a verified-red control, on `--interpret` with the gate
+     hard-flipped (the `LOFT_E2_SYNTH` ENV path is inert — only a source flip enables the rewrite;
+     irrelevant to shipping, which is correctly off-by-default).  Findings:
+     - **A1 — anon-struct-literal element resolution — FIXED** (commit pending).  `unique_elm_var`
+       (vectors.rs) only honoured a `Reference` `assign_tp`; for a `__nullable<S>` ENUM element it
+       fell back to `Reference(type_def_nr(parent_tp.content))`, which mis-resolved to an arbitrary
+       def → "Unknown field i_parse_errors.a".  Named `S{ … }` literals dodge this via the
+       name-driven transparent path (objects.rs:151); an anon `{ … }` has no name, so it relies on
+       the element var's type to hit `parse_block`'s record-scan.  Fix: type the element var as the
+       `Some` variant (`Reference(variant_of(syn,"Some"))`) so the scan builds the present payload.
+     - **A2 — append/store of a DENSE struct VARIABLE into `vector<__nullable<S>>` — FIXED** (commit
+       pending; both backends).  `v += [p]` emitted a raw `OpCopyRecord(dense-S → Some-slot)`: no
+       discriminant set, and the `Some` payload is laid out INDEPENDENTLY from dense `S` (the packer
+       reorders fields around the disc — e.g. dense `P` = `a@0,b@8`, `Some` = `disc@0,b@4,a@8`), so
+       the copy writes every field to the wrong offset → garbage reads (`v[1].a == 4`).  The literal
+       append (c3b) works because it builds `Some` field-by-field.  Fix (parse_item, vectors.rs):
+       for a dense `Reference(S)` source into a `__nullable<S>` element, build `Some` field-by-field
+       via get_field/set_field (type/alias aware) + set the disc present — exactly as a literal does;
+       non-Var sources stashed once.
+     - **A3 — `hash<S[k]>` index over a nullable vector — ROOTED, SUBSYSTEM (not a contained fix)**
+       (12-collections: passes A1, then `c.lookup["Three"]` reads `null`).  In `struct Counting {
+       entries: vector<Count>, lookup: hash<Count[t]> }` the hash indexes the SAME records as the
+       vector by key field `t`.  E2 rewrites only the `vector` arm (definitions.rs:1722) → `entries`
+       is `vector<__nullable<Count>>` but `lookup` stays `hash<Count[t]>` (dense); the hash's
+       key-extraction reads `t` at the DENSE offset while the shared record is `Some`-wrapped
+       (reordered payload) → wrong key → miss → null.  Rewriting the `hash` arm to
+       `hash<__nullable<Count>[t]>` does NOT fix it: `Type::Hash(sub_nr, [key_names], …)` expects
+       `sub_nr` to be a STRUCT with the key field at top level; the synth ENUM has `t` only inside
+       `Some`, so the index machinery can't see the key.  Real fix = teach the hash/sorted/index
+       key-extraction to read the key through the `Some` payload (hash-subsystem work, both backends).
+     - **A4 — `"…" as vector<S>` / `vector<S>.parse(json)` into nullable structs — ROOTED, SUBSYSTEM**
+       (11-vectors: passes A2, then `len(parsed)==0`).  The cast routes through the native JSON
+       walker (`parse_string` → `n_struct_from_jsonvalue` / `json_parse_into_stores`), which
+       materialises DENSE `S` records from the type schema.  With the vector element rewritten to
+       `__nullable<S>`, the walker neither sets the `Some` discriminant nor writes at the reordered
+       payload offsets → the elements don't match the nullable stride → empty/garbage vector.  Real
+       fix = make the JSON walker build `Some`-wrapped records for a `__nullable<S>` element
+       (native-parse-subsystem work, both backends).
+     - p143 (nested-vector struct return) and p379 (cross-lib same-name) did NOT reproduce from the
+       named-literal cells (c4/c5 pass) — they need their real shapes; likely further distinct seams.
+
+     **Scoping VERDICT (the Step-1 deliverable):** "fix the one chokepoint" does NOT apply — there is
+     no shared root, and each suite is a LADDER (A1→A3 in 12-collections, A2→A4 in 11-vectors).  The
+     first two rungs (A1, A2) were contained PARSER fixes and are landed + gate-inert.  The next two
+     rungs (A3, A4) are SUBSYSTEM seams — the hash/sorted/index key-extraction and the native JSON
+     walker each have to be made `Some`-aware — i.e. real, independently-verified, both-backend
+     subsystem changes, not one-site patches.  And those are only the rungs visible SO FAR in two
+     suites; the broader tail (native codegen, wasm, cross-lib, graphics consumers) sits behind its
+     own subsystems.  **Conclusion: E2 default-on has NO chokepoint and is genuinely multi-session,
+     subsystem-by-subsystem.**  This is the concrete evidence for the keep-vs-drop decision on the
+     plan (the standing ultimatum).  A1+A2 are kept regardless (verified gate-off byte-green, both
+     backends).  Recommended next: treat A3 (hash key-extraction) and A4 (JSON walker) as their own
+     sized seams under Step 1's successor, or re-scope E2 to "gated, documented known-limitation".
+   - **Step 2 — Cluster B: extra-arg par dispatcher** (threading, script_threading).  Single
+     mechanism: `synth_nullable_par_wrapper` bails on user extra args (the `extra_vals.is_empty()`
+     guard, builtins.rs:277) because the dispatcher's extra-arg marshalling assumes the ORIGINAL
+     worker arity, not the wrapper's mirrored-param layout (stack underflow `8<12`).  Fix: extend
+     the wrapper to accept+forward the extra args as real params and align the dispatcher arity
+     (`build_parallel_for_ir`).  Self-contained.
+   - **Step 3 — Cluster C: native codegen of `__nullable<>` types** (native_dir/scripts/
+     library_suite, p171, p310).  Hypothesis: same family as the already-fixed generics mangle
+     (`<>,`→`_`) — a synth-enum name leaking into a generated Rust identifier/type.  Probe: build
+     one native repro, read the emitted Rust, find where `__nullable<S>` survives un-mangled; fix
+     at the codegen name chokepoint.  Gated behind Step 1 (parse must be correct first).
+   - **Step 4 — Singletons.**  gap (4) `e = null` on a nullable LOCAL (the var-type-change check
+     rejects `__nullable<P>`→null — small, localized); leak p150 (free path); residual wasm.
+     Each independent and small.
+   - **Step 5 — Re-verify consumers, triage residue.**  Re-run the graphics/engine/wasm consumers
+     (kernel_port, moros_glb, moros_editor_html, wasm_library_suite) + the wrap suites (dir, last,
+     parser_debug, loft_suite, libraries, library_suite) gate-on.  Expect most to go green from
+     Steps 1-3; triage ONLY the residue — that is the honest count of truly-independent seams.
+   - **Step 6 — Flip the gate + close.**  Drop `&& std::env::var("LOFT_E2_SYNTH").is_ok()` in
+     `e2_rewrite_enabled` (expressions.rs:1937 — KEEP the `STD_SOURCE` dense-stdlib exclusion:
+     native `#rust` writes the dense struct ABI).  Full `make ci` both backends.  Graduate all
+     gated probes into `tests/scripts/25-nullable-sequences.loft`.  Then fold in the deferred P3
+     `default_native_value` Vector arm (nullable field → null default, own matrix + `not null`
+     opt-in — the last non-E2 open item).  Set plan status SHIPPED, close item 5.
+
+   **Order rationale:** Step 1 first = highest leverage (one fix → 4 suites + consumers) AND it
+   falsifies the heterogeneity assumption cheaply, in the first probe; Step 2 is independent and
+   cheap; Step 3 depends on parse being correct; the gate flip is strictly last (the one
+   irreversible ship action).  **Load-bearing risk:** the whole plan hinges on Step 1's matrix
+   confirming the shared root — if the four parse seams are genuinely distinct, effort roughly
+   doubles and Step 5's residue grows, but that surfaces in the FIRST probe.
    *(`imaging_fixture_png_roundtrip` is #397's, not E2 — owned by another stream.)*
 
    **Re-gated** (`LOFT_E2_SYNTH` restored on the 3 rewrite sites) so the monthly release branch
@@ -181,7 +279,7 @@ instead of a silent-empty or corrupted vector.
 
 - **Effort:** H (multi-backend: interpreter + native + wasm; ~15 re-assertion sites).
 - **Design:** ~ (invariant validated + phases defined; per-phase cell expectations TBD).
-- **Last touched:** 2026-06-15
+- **Last touched:** 2026-06-16
 
 ## The invariant (the one rule)
 
