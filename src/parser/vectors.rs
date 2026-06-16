@@ -1948,6 +1948,17 @@ impl Parser {
             && *t_e == *in_e
         {
             *in_t = Type::Enum(*t_e, true, Deps::none());
+        } else if matches!(&*in_t, Type::Enum(syn, true, _) if self.data.def(*syn).name.starts_with("__nullable<"))
+            && matches!(t, Type::Null)
+        {
+            // @PLN25 E2 — a `null` element in a `vector<__nullable<S>>` (e.g.
+            // `v += [null]`): the appended element is the Null variant
+            // (discriminant 0).  OpNewRecord zero-inits the element to disc 0, so
+            // emit an empty construction; the generic convert would otherwise
+            // reject `null` → the synthetic enum and fire the "cannot store"
+            // diagnostic.
+            p = Value::Insert(Vec::new());
+            t = in_t.clone();
         } else if !self.convert(&mut p, &t, in_t) {
             if declared {
                 // @P315 — the element type is DECLARED (typed local / struct

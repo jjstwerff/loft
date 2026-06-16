@@ -344,21 +344,33 @@ OTHER `vector<Row>` site stays un-rewritten, so the two representations meet and
 - **Inferred local** `vi = [Row{…}]` (no annotation): not rewritten → `vi[i]=null` no-op + store-leak
   warning (interp), `E0308` (native). (`01`)
 - **Return type** `fn f() -> vector<Row>`: not rewritten → `v: vector<Row> = f()` errors
-  `cannot change type vector<__nullable<Row>> → vector<Row>`. (`02`)
+  `cannot change type vector<__nullable<Row>> → vector<Row>`. (`02`)  **Spiked 2026-06-16 and
+  reverted:** hooking `e2_nullable_vec_local` at the return-type `parse_type_full` *does* rewrite the
+  declared return type, but then the BODY's tail literal `[Row{…}]` still builds plain `vector<Row>`
+  and `convert(... , vector<__nullable<Row>>)` fails at `control.rs:650` (`on return from block`).
+  The body would have to be CONSTRUCTED against the rewritten return type — `parse_block` threading
+  `result` into the tail expression — a behaviour change to a very central fn.  So returns are NOT a
+  clean hook; they are part of the construction-propagation substrate below.
 - **Comprehension** `[for i in … { Row{…} }]`: element inference yields un-rewritten `vector<Row>` →
   same type-change error when bound to a rewritten local. (`04`)
 - **Nested** `vector<vector<Row>>`: the INNER element is not rewritten → `vv[0][0]=null` no-op + leak
   (interp), `E0308` (native). (`09`)
-- *Root + routing:* the rewrite is keyed to two specific PARSE SITES, not a single representation
-  decision.  Fixing the class means deciding the representation ONCE where the element type is
-  resolved (so inferred/return/comprehension/nested all agree) — the substrate question deferred from
+- *Root + routing:* the rewrite is keyed to specific declared-type PARSE SITES (local, param), not a
+  single representation decision, AND the body/tail construction of a rewritten type must adopt the
+  rewritten element (the return spike proved this).  Fixing the class means deciding the
+  representation ONCE where the element type is resolved AND propagating it into construction (so
+  inferred / return / comprehension / nested all agree) — the substrate question deferred from
   E2a.5b.  Until then, a rewritten `vector<Row>` cannot interoperate with any un-rewritten one.
 
 ### Sev 4 — PARSE gaps
 - **`match v[i] { null => … }`** does not parse (`Expect token }`). (`14`)  A `null` pattern arm on a
   nullable element isn't recognised.
-- **`v += [null]`** rejected: `cannot store null elements in a vector<__nullable<Row>>`. (`07`)  The
-  literal-append path has no synth-enum null case.
+- **[FIXED 2026-06-16] `v += [null]`** was rejected: `cannot store null elements in a
+  vector<__nullable<Row>>`. (`07`)  `parse_item` (vectors.rs) now special-cases a `null` element when
+  the declared element type is a `__nullable<S>` enum: emit an empty construction (OpNewRecord
+  zero-inits the element to discriminant 0 = the Null variant) instead of the convert/diagnostic.
+  Verified both backends — `v += [null]` and a mixed literal `[Row{…}, null, Row{…}]` (`07b`); normal
+  appends + gate-off unaffected.
 - **`vector<Row not null>`** rejected: `Expect token >`. (`11`)  The `not null` element opt-out
   (E2a.6 / E3) isn't parsed yet.
 
