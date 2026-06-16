@@ -828,6 +828,32 @@ impl ShowDb<'_> {
                         self.write_jsonvalue(s, indent);
                         return;
                     }
+                    // @PLN25 E2 — a synthetic `__nullable<S>` enum formats
+                    // TRANSPARENTLY: a present element renders as the dense `S`
+                    // (no `Some` variant tag), an absent one as `null`.  Without
+                    // this, `{v[i]}` showed `Some {…}` instead of the struct.
+                    if self.stores.types[self.known_type as usize]
+                        .name
+                        .starts_with("__nullable<")
+                    {
+                        let v = self.store().get_byte(self.rec, self.pos, 0);
+                        if v <= 0 {
+                            s.push_str("null");
+                        } else if (v as usize - 1) < vals.len() {
+                            let tp_nr = vals[v as usize - 1].0;
+                            if tp_nr != u16::MAX
+                                && let Parts::EnumValue(_, st) =
+                                    &self.stores.types[tp_nr as usize].parts
+                            {
+                                if self.loft {
+                                    let ename = &self.stores.types[self.known_type as usize].name;
+                                    s.push_str(&ename["__nullable<".len()..ename.len() - 1]);
+                                }
+                                self.write_struct(s, st, indent);
+                            }
+                        }
+                        return;
+                    }
                     let v = self.store().get_byte(self.rec, self.pos, 0);
                     let enum_val = if v <= 0 {
                         "null"

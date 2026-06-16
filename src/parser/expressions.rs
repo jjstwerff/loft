@@ -1928,14 +1928,19 @@ use a separate collection or add after the loop"
     /// correct order (registering mid-parse corrupts the shared enum: the
     /// `known_type != MAX` guard in fill_database then suppresses the correct
     /// in-order registration → `id × 512` reads).
+    /// @PLN25 — whether the E2 vector-element rewrite (`vector<S>` →
+    /// `vector<__nullable<S>>`) is active for the CURRENT source.  The native
+    /// stdlib (`STD_SOURCE`) always stays DENSE: its `#rust` bodies write the
+    /// dense struct ABI (e.g. `fields()` → `vector<JsonField>`), which an E2 wrap
+    /// would desync.  E2 applies ABOVE the native layer — user files + libraries.
+    /// THE default-on switch lives here (one place): drop the source check / add
+    /// an `LOFT_E2_SYNTH` env gate to re-gate.
+    pub(crate) fn e2_rewrite_enabled(&self) -> bool {
+        self.data.source != crate::data::STD_SOURCE && std::env::var("LOFT_E2_SYNTH").is_ok()
+    }
+
     pub(crate) fn e2_nullable_elem(&mut self, elem: Type) -> Type {
-        // The native stdlib (STD_SOURCE) keeps DENSE `vector<S>`: its `#rust` /
-        // native function bodies write the dense struct ABI (e.g. `fields()` →
-        // `vector<JsonField>`), which an E2 wrap would desync.  E2 applies ABOVE
-        // the native layer — user files + libraries.  Still gated on
-        // `LOFT_E2_SYNTH` while the default-on access-glue long tail closes
-        // (plan25 § Default-on trigger) — the release branch stays green.
-        if self.data.source == crate::data::STD_SOURCE || std::env::var("LOFT_E2_SYNTH").is_err() {
+        if !self.e2_rewrite_enabled() {
             return elem;
         }
         let Type::Reference(struct_d, _) = &elem else {

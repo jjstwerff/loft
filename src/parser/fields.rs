@@ -82,6 +82,47 @@ impl Parser {
         if let Type::RefVar(tp) = t {
             t = *tp;
         }
+        // @PLN25 E2 — a METHOD CALL or an S-level field access on a `__nullable<S>`
+        // receiver (`v[i].method()` / `v[i].struct_method`): unwrap the receiver to
+        // dense `S` (the payload offset-ref, gap 2) so the normal `Reference(S)`
+        // field/method dispatch below resolves it.  Two cases:
+        //  - a trailing `(` is a method call — `find_poly_enum_field` matches the
+        //    method's fn-ref entry copied into `Some` and would read it as a FIELD
+        //    (→ "Field access not supported on type fn …"); unwrap takes precedence;
+        //  - no `Some`-variant field of that name — an S-level access; unwrap.
+        // A plain DATA field of `Some` (no `(`) resolves via `find_poly_enum_field`
+        // below and is left untouched here.
+        if let Type::Enum(enum_d, true, _) = &t
+            && self.data.def(*enum_d).name.starts_with("__nullable<")
+            && (self.lexer.peek_token("(") || self.find_poly_enum_field(*enum_d, &field).is_none())
+        {
+            let enum_d = *enum_d;
+            let ename = self.data.def(enum_d).name.clone();
+            let sname = ename["__nullable<".len()..ename.len() - 1].to_string();
+            let struct_d = self.data.def_nr(&sname);
+            if struct_d != u32::MAX && self.data.attributes(struct_d) > 0 {
+                if !self.first_pass {
+                    let some_d = self.data.variant_of(enum_d, "Some");
+                    let first = self.data.attr_name(struct_d, 0);
+                    let off = self
+                        .database
+                        .position(self.data.def(some_d).known_type(), &first);
+                    *code = self.get_val(
+                        &Type::Reference(struct_d, crate::data::Deps::none()),
+                        false,
+                        u32::from(off),
+                        code.clone(),
+                        u32::MAX,
+                    );
+                }
+                let dep = t.depend();
+                let mut new_t = Type::Reference(struct_d, crate::data::Deps::none());
+                for on in dep {
+                    new_t = new_t.depending(on);
+                }
+                t = new_t;
+            }
+        }
         let dnr = self.data.type_def_nr(&t);
         if matches!(t, Type::Vector(_, _)) && self.vector_operations(code, &field, e_size) {
             return Type::Void;
