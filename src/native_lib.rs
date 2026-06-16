@@ -627,6 +627,37 @@ pub(crate) fn is_text_work_buffer(t: &Type) -> bool {
     matches!(t, Type::RefVar(inner) if matches!(**inner, Type::Text(_)))
 }
 
+/// Candidate `(rlib-lookup-dir, deps-dir)` pairs for a loft binary at `exe_dir`,
+/// most authoritative first.  The dev/test layout looks beside the exe (`deps/`,
+/// then the uplifted `<profile>/`); the INSTALLED layout (`<prefix>/bin/loft`)
+/// keeps `libloft.rlib` + its deps under `<prefix>/share/loft/` — where `make
+/// install` puts them, NOT next to the binary.  Without the share candidates the
+/// installed loft can fingerprint its rlib (`cache::loft_rlib_path` has the same
+/// fallback) but cannot LOCATE it to link a library's cdylib → "libloft.rlib not
+/// found for this build".  Keep aligned with `cache::loft_rlib_path` (#304).
+fn rlib_search_dirs(exe_dir: &std::path::Path) -> Vec<(std::path::PathBuf, std::path::PathBuf)> {
+    // Dependency rlibs live in `<profile>/deps/`.  Real binary run: `exe_dir` is
+    // `<profile>`, so `deps/` is its child.  Integration test: `exe_dir` already IS
+    // `.../deps`.  Either way the returned link-search dir is that `deps/`.
+    let dev_deps = if exe_dir.file_name().is_some_and(|n| n == "deps") {
+        exe_dir.to_path_buf()
+    } else {
+        exe_dir.join("deps")
+    };
+    let mut out = vec![
+        (dev_deps.clone(), dev_deps.clone()),
+        (exe_dir.to_path_buf(), dev_deps.clone()),
+    ];
+    if exe_dir.file_name().is_some_and(|n| n == "bin")
+        && let Some(prefix) = exe_dir.parent()
+    {
+        let share = prefix.join("share").join("loft");
+        out.push((share.join("deps"), share.join("deps")));
+        out.push((share.clone(), share.join("deps")));
+    }
+    out
+}
+
 /// @PLN11 Arc N / N3 — locate the running build's `libloft.rlib` + its sibling
 /// `deps/` directory, for linking an auto-generated cdylib against the **same**
 /// libloft this process links (so `Stores`/`DbRef`/`LibArg` are ABI-identical).
@@ -643,24 +674,15 @@ pub(crate) fn is_text_work_buffer(t: &Type) -> bool {
 #[must_use]
 pub fn find_loft_rlib() -> Option<(std::path::PathBuf, std::path::PathBuf)> {
     let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
-    // Dependency rlibs always live in `<target>/<profile>/deps/`.  In a real binary
-    // run `exe_dir` is `<target>/<profile>` (so `deps/` is its child); in an
-    // integration test `exe_dir` already *is* `.../deps`.  The link-search dir we
-    // return is that `deps/` either way, so feature-dep rlibs (random/png/…) resolve.
-    let deps = if exe_dir.file_name().is_some_and(|n| n == "deps") {
-        exe_dir.clone()
-    } else {
-        exe_dir.join("deps")
-    };
-    // Find `libloft.rlib` (unhashed, in `<profile>/`) or the newest hashed
-    // `libloft-<hash>.rlib` (in `deps/`); prefer the deps dir.
-    for dir in [&deps, &exe_dir] {
+    // Find `libloft.rlib` (unhashed) or the newest hashed `libloft-<hash>.rlib`,
+    // returning the matching `deps/` dir as the link-search path.
+    for (dir, deps_dir) in &rlib_search_dirs(&exe_dir) {
         if !dir.is_dir() {
             continue;
         }
         let exact = dir.join("libloft.rlib");
         if exact.exists() {
-            return Some((exact, deps.clone()));
+            return Some((exact, deps_dir.clone()));
         }
         let hashed = std::fs::read_dir(dir)
             .ok()
@@ -674,7 +696,7 @@ pub fn find_loft_rlib() -> Option<(std::path::PathBuf, std::path::PathBuf)> {
             .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())
             .map(|e| e.path());
         if let Some(rlib) = hashed {
-            return Some((rlib, deps.clone()));
+            return Some((rlib, deps_dir.clone()));
         }
     }
     None
@@ -1181,5 +1203,57 @@ mod toolchain_hint_tests {
         // A real type error must pass through untouched so its diagnostics show.
         let stderr = "error[E0308]: mismatched types\n  expected `i32`, found `&str`";
         assert!(toolchain_failure_hint(stderr).is_none());
+    }
+}
+
+#[cfg(test)]
+mod rlib_search_tests {
+    use super::rlib_search_dirs;
+    use std::path::{Path, PathBuf};
+
+    /// #398 follow-up — the INSTALLED layout (`<prefix>/bin/loft`) must search
+    /// `<prefix>/share/loft/` for libloft.rlib, else a normal library's cdylib link
+    /// fails "libloft.rlib not found for this build" (the bin/ dir holds no rlib).
+    #[test]
+    fn installed_bin_layout_searches_share_loft() {
+        let dirs = rlib_search_dirs(Path::new("/usr/local/bin"));
+        let share = PathBuf::from("/usr/local/share/loft");
+        assert!(
+            dirs.iter()
+                .any(|(d, deps)| *d == share && *deps == share.join("deps")),
+            "install layout must search <prefix>/share/loft with its deps/: {dirs:?}"
+        );
+        assert!(
+            dirs.iter().any(|(d, _)| *d == share.join("deps")),
+            "install layout must also search <prefix>/share/loft/deps: {dirs:?}"
+        );
+    }
+
+    /// The dev/test layout (exe in `<profile>/`) keeps the existing behaviour:
+    /// `deps/` first, then the uplifted `<profile>/`, and NO share/ candidate.
+    #[test]
+    fn dev_layout_unchanged_no_share() {
+        let dirs = rlib_search_dirs(Path::new("target/release"));
+        assert_eq!(dirs[0].0, PathBuf::from("target/release/deps"));
+        assert_eq!(dirs[1].0, PathBuf::from("target/release"));
+        assert!(
+            !dirs
+                .iter()
+                .any(|(d, _)| d.to_string_lossy().contains("share/loft")),
+            "a dev exe must not gain a share/ candidate: {dirs:?}"
+        );
+        // every dev candidate links the same deps/ search dir
+        assert!(
+            dirs.iter()
+                .all(|(_, deps)| *deps == PathBuf::from("target/release/deps"))
+        );
+    }
+
+    /// Integration-test layout: exe already in `.../deps` → deps dir is itself.
+    #[test]
+    fn deps_dir_exe_uses_itself() {
+        let dirs = rlib_search_dirs(Path::new("target/release/deps"));
+        assert_eq!(dirs[0].0, PathBuf::from("target/release/deps"));
+        assert_eq!(dirs[0].1, PathBuf::from("target/release/deps"));
     }
 }
