@@ -1245,11 +1245,9 @@ impl Parser {
                     constant = true;
                 }
                 if let Some(tp) = self.parse_type_full(self.data.def_nr(fn_name), false) {
-                    // @PLN25 E2a.5b — a `vector<Struct>` PARAM gets the same
-                    // nullable-element rewrite as a local (gated/inert otherwise),
-                    // so a rewritten-local arg type-matches and `rs[i] = null`
-                    // works in the body.  Applied before the `&`-reference wrap.
-                    let tp = self.e2_nullable_vec_local(tp);
+                    // @PLN25 E2/E3 — a `vector<Struct>` PARAM is already rewritten by
+                    // the vector-type-resolution chokepoint (`sub_type` `vector` arm),
+                    // so no per-site hook here.
                     if reference {
                         Type::RefVar(Box::new(tp))
                     } else {
@@ -1695,8 +1693,26 @@ impl Parser {
                         Type::Hash(sub_nr, f, crate::data::Deps::none())
                     }
                     "vector" => {
+                        // @PLN25 E2/E3 — the ONE chokepoint where every inline
+                        // `vector<S>` element type resolves (local / param / return /
+                        // field / nested all reach here).  Default = nullable: rewrite
+                        // a struct element `Reference(S)` to the synthetic
+                        // `__nullable<S>` enum.  A `not null` after a NAMED element
+                        // (`vector<Row not null>`) is the dense opt-out — consume it
+                        // and skip the rewrite, leaving the bare inline struct.
+                        // (Scalar elements consume their own `not null` in the type
+                        // parse above, so this fires only for a named element.)
+                        let elem_not_null = self.lexer.has_keyword("not");
+                        if elem_not_null {
+                            self.lexer.token("null");
+                        }
                         self.lexer.closing_angle();
-                        Type::Vector(Box::new(tp), crate::data::Deps::none())
+                        let elem = if elem_not_null {
+                            tp
+                        } else {
+                            self.e2_nullable_elem(tp)
+                        };
+                        Type::Vector(Box::new(elem), crate::data::Deps::none())
                     }
                     "sorted" => {
                         self.parse_fields(true, &mut fields);

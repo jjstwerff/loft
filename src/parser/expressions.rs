@@ -1914,40 +1914,32 @@ use a separate collection or add after the loop"
         Type::Void
     }
 
-    /// @PLN25 E2a.5b — rewrite a nullable `vector<Struct>` LOCAL / param element
-    /// type to the synthetic `__nullable<Struct>` enum at PARSE time, so the
-    /// index / construct / `== null` IR emitted during the body parse matches the
-    /// field-side representation (`vr[i] = null` → discriminant-0 store).  The
-    /// def-side `synth_nullable_struct_fields` pass is too late for a local — its
-    /// index IR is already emitted.  Gated (`LOFT_E2_SYNTH`) + non-stdlib, inert
-    /// otherwise, so the default path is byte-identical.  Creates the def only;
-    /// `fill_all` does the `register_enum_db` + layout in the correct order
-    /// (registering it here, mid-parse, corrupts the shared enum — see below).
-    pub(crate) fn e2_nullable_vec_local(&mut self, tp: Type) -> Type {
+    /// @PLN25 E2/E3 — rewrite a nullable struct ELEMENT type `Reference(S)` to the
+    /// synthetic `__nullable<S>` enum (the inline nullable representation).  Called
+    /// at the ONE chokepoint where every inline `vector<S>` element resolves
+    /// (`sub_type`'s `vector` arm, definitions.rs), so locals / params / returns /
+    /// fields / nested all rewrite consistently.  **Default = nullable;** the
+    /// caller skips this for an `S not null` element (E3 dense opt-out).  Gated
+    /// (`LOFT_E2_SYNTH`) + non-stdlib, inert otherwise → default path byte-identical.
+    /// Creates the def ONLY — `fill_all` does the `register_enum_db` + layout in the
+    /// correct order (registering mid-parse corrupts the shared enum: the
+    /// `known_type != MAX` guard in fill_database then suppresses the correct
+    /// in-order registration → `id × 512` reads).
+    pub(crate) fn e2_nullable_elem(&mut self, elem: Type) -> Type {
         if self.data.source == crate::data::STD_SOURCE || std::env::var("LOFT_E2_SYNTH").is_err() {
-            return tp;
+            return elem;
         }
-        let Type::Vector(content, deps) = &tp else {
-            return tp;
-        };
-        let Type::Reference(struct_d, _) = &**content else {
-            return tp;
+        let Type::Reference(struct_d, _) = &elem else {
+            return elem;
         };
         let struct_d = *struct_d;
         if self.data.def_type(struct_d) != crate::data::DefType::Struct
             || self.data.def(struct_d).synthetic.is_some()
         {
-            return tp;
+            return elem;
         }
-        let deps = deps.clone();
-        // Create the def ONLY — `fill_all` (synth_nullable_struct_fields) does the
-        // `register_enum_db` + layout, in the correct order.  Registering the
-        // discriminant db-type here, mid-body-parse, lays the enum out wrong AND
-        // (via the `known_type != MAX` guard in fill_database) suppresses the
-        // field pass's correct registration — corrupting EVERY read of the shared
-        // `__nullable<Row>` (`id × 512`, field + local alike).
         let syn = self.data.nullable_enum_for(&mut self.lexer, struct_d);
-        Type::Vector(Box::new(Type::Enum(syn, true, Deps::none())), deps)
+        Type::Enum(syn, true, Deps::none())
     }
 
     // <assign> ::= <operators> [ '=' | '+=' | '-=' | '*=' | '%=' | '/=' <operators> ]
@@ -1973,7 +1965,10 @@ use a separate collection or add after the loop"
             if let Some(tp) = self.parse_type_full(u32::MAX, false)
                 && self.lexer.peek_token("=")
             {
-                let tp = self.e2_nullable_vec_local(tp);
+                // @PLN25 E2/E3 — the nullable-element rewrite now happens at the
+                // vector-type-resolution chokepoint (definitions.rs `sub_type`
+                // `vector` arm), so a `vector<S>` annotation already arrives
+                // rewritten; no per-site hook here.
                 self.change_var_type(*v_nr, &tp);
                 f_type = tp;
                 got_annotation = true;
