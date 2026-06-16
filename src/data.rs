@@ -3856,14 +3856,38 @@ impl Data {
         );
         self.set_attr_value(sv, e_attr, Value::Enum(2, u16::MAX));
         // Copy struct_d's payload fields after the discriminant, in order.
-        let fields: Vec<(String, Type)> = self
+        // Carry the layout/encoding-bearing metadata (`alias_d_nr`,
+        // `nullable`, `mutable`, `init`), not just the type: a `u16`/`u8`
+        // field stores via the aliased narrow-integer encoding (`OpSetShort`
+        // `+1`), and the codegen distinguishes a struct field from a bare
+        // narrow-vector element by `alias_d_nr != MAX`.  Dropping the alias
+        // here made the `Some` payload field look like a narrow-vector
+        // element, so it stored RAW (`OpSetShortRaw`) while the database typed
+        // it nullable — reads/format then applied the `-1` decode to a raw
+        // value (`1234` → `1233`).  Copying the alias keeps the `Some` payload
+        // byte-identical to a dense `S`.
+        let fields: Vec<(String, Type, u32, bool, bool, bool)> = self
             .def(struct_d)
             .attributes
             .iter()
-            .map(|a| (a.name.clone(), a.typedef.clone()))
+            .map(|a| {
+                (
+                    a.name.clone(),
+                    a.typedef.clone(),
+                    a.alias_d_nr,
+                    a.nullable,
+                    a.mutable,
+                    a.init,
+                )
+            })
             .collect();
-        for (fname, ftype) in fields {
-            self.add_attribute(lexer, sv, &fname, ftype);
+        for (fname, ftype, alias_d_nr, nullable, mutable, init) in fields {
+            let ai = self.add_attribute(lexer, sv, &fname, ftype);
+            let attr = &mut self.definitions[sv as usize].attributes[ai];
+            attr.alias_d_nr = alias_d_nr;
+            attr.nullable = nullable;
+            attr.mutable = mutable;
+            attr.init = init;
         }
 
         self.mark_synthetic(e, "@PLN25 nullable-enum for embedded struct field");

@@ -134,7 +134,20 @@ pub fn actual_types_deferred(
             DefType::Struct => {
                 copy_unknown_fields(data, d);
             }
-            DefType::Enum => register_enum_db(data, database, d),
+            DefType::Enum => {
+                // @PLN25 — a synthetic `__nullable<S>` enum's `Some` variant carries
+                // S's fields, so its DB layout depends on S already being resolved.
+                // Registering it HERE (before the struct layout loop) `enumerate`s
+                // it at an index whose size is computed before S, so in a multi-type
+                // program the enum's inline size is wrong (disc-only, 8 B) and
+                // `vector<__nullable<S>>` construction/reads use the wrong stride.
+                // Leave these to `synth_nullable_struct_fields` in `fill_all`, which
+                // runs AFTER the struct-resolution order is established.
+                if !(data.def(d).synthetic.is_some() && data.def(d).name.starts_with("__nullable<"))
+                {
+                    register_enum_db(data, database, d);
+                }
+            }
             DefType::EnumValue if data.attributes(d) > 0 => {
                 copy_unknown_fields(data, d);
             }
