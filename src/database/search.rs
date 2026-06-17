@@ -64,6 +64,10 @@ impl Stores {
     #[allow(dead_code)]
     pub(super) fn field_content(&self, rec: &DbRef, db: u16, key: u16) -> Content {
         let store = self.store(rec);
+        // For a synth `__nullable<S>` element (@PLN25 E2) the key field lives in
+        // the `Some` payload, not at the enum's top level; resolve through it so
+        // the field number + position match what `determine_keys` baked.
+        let db = self.key_owner(db);
         if let Parts::Struct(fields) | Parts::EnumValue(_, fields) = &self.types[db as usize].parts
         {
             let f = &fields[key as usize];

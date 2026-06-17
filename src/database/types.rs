@@ -425,12 +425,40 @@ impl Stores {
         }
     }
 
+    /// The type whose fields carry a keyed collection's key fields.
+    ///
+    /// Normally this is the element type itself. For a synthetic
+    /// `__nullable<S>` element (@PLN25 E2 — a `vector<S>`/`hash<S[k]>` element
+    /// rewritten so it can be null), the key fields live in the `Some`
+    /// variant's payload, NOT at the enum's top level (offset 0 is the
+    /// discriminant). Returning the `Some` variant here lets every
+    /// key-resolution site — `hash`/`sorted`/`index` name→number resolution,
+    /// `determine_keys`, `field_content` — read the key through the same
+    /// payload, so the resolved field numbers and byte offsets agree across
+    /// build time and run time. For any other element type, return it
+    /// unchanged.
+    pub(super) fn key_owner(&self, content: u16) -> u16 {
+        let name = &self.types[content as usize].name;
+        if name.starts_with("__nullable<") {
+            // Resolve the `Some` variant by its db name rather than the enum's
+            // variant list: during type build the variant list can still hold a
+            // `u16::MAX` placeholder for `Some`, but the structure is registered
+            // in `names` as soon as it is built (`__nullable<S>::Some`).
+            let some_name = format!("{name}::Some");
+            if let Some(&nr) = self.names.get(&some_name) {
+                return nr;
+            }
+        }
+        content
+    }
+
     pub(super) fn determine_keys(&mut self) {
         for t_nr in 0..self.types.len() {
             match self.types[t_nr].parts.clone() {
                 Parts::Hash(c, key_fields) => {
+                    let owner = self.key_owner(c);
                     if let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
-                        &self.types[c as usize].parts.clone()
+                        &self.types[owner as usize].parts.clone()
                     {
                         self.types[t_nr].keys.clear();
                         for key_field in key_fields {
@@ -446,8 +474,9 @@ impl Stores {
                 Parts::Ordered(c, key_fields)
                 | Parts::Sorted(c, key_fields)
                 | Parts::Index(c, key_fields, _) => {
+                    let owner = self.key_owner(c);
                     if let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
-                        &self.types[c as usize].parts.clone()
+                        &self.types[owner as usize].parts.clone()
                     {
                         self.types[t_nr].keys.clear();
                         for (key_field, asc) in &key_fields {
@@ -1018,10 +1047,14 @@ impl Stores {
     }
 
     pub fn hash(&mut self, content: u16, key: &[String]) -> u16 {
+        // Display name uses `content` (e.g. `hash<__nullable<Count>[t]>`), but
+        // key fields resolve against `key_owner` — the `Some` payload for a
+        // synth nullable element (@PLN25 E2).
+        let owner = self.key_owner(content);
         let mut name = "hash<".to_string() + &self.types[content as usize].name + "[";
         let mut key_nrs = Vec::new();
         if let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
-            &self.types[content as usize].parts
+            &self.types[owner as usize].parts
         {
             for (k_nr, k) in key.iter().enumerate() {
                 if k_nr > 0 {
@@ -1264,9 +1297,10 @@ impl Stores {
         key: &[(String, bool)],
         name: &mut String,
     ) -> Vec<(u16, bool)> {
+        let owner = self.key_owner(content);
         let mut key_nrs = Vec::new();
         if let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
-            &self.types[content as usize].parts
+            &self.types[owner as usize].parts
         {
             for (k_nr, (k, asc)) in key.iter().enumerate() {
                 if k_nr > 0 {

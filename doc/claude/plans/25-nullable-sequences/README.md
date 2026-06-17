@@ -73,7 +73,7 @@ method dispatch · transparent format · the 06-structs alias-copy root · OOB d
 | Seam | Size | Status |
 |---|---|---|
 | ~~**A4(b)** — JSON walker builds `Some` for a present object~~ | — | **FIXED** 2026-06-17 — gate-off-nullable was cache contamination (no leak); 1 walker arm; both backends + regression |
-| **A3** — hash/sorted/index key-extraction through the `Some` payload | M (subsystem) | rooted, not started |
+| **A3** — `hash<__nullable<S>>` (key-extraction + field construct/read + lookup unwrap + native) | M (subsystem, ≥4 rungs) | rung 1 (key-resolution chokepoint) FIXED; rungs 2–4 open (substrate) |
 | **gap 2** — fn-call coercion `f(v[i])` via offset-ref reinterpret | S | designed, not landed |
 | **gap 4** — `e = null` on a nullable LOCAL | XS | open |
 | **Step 2** — par with USER EXTRA args (dispatcher arity) | S, self-contained | open |
@@ -85,9 +85,11 @@ method dispatch · transparent format · the 06-structs alias-copy root · OOB d
 **How far, honestly:** ~5 known seams + one native/wasm backend pass + an unknown consumer-residue
 triage, then the flip.  Step 5's residue is the only part that cannot be sized yet — that is *why*
 Step 5 exists (re-run the consumers gate-on; triage only what does not go green from Steps 1–3).
-**A4(b) is landed** (2026-06-17) — the canonical incoherence probe (JSON null-in-array) is now
-coherent gate-on, both backends.  Next concrete move: **A3** (hash/sorted/index key-extraction
-through the `Some` payload) — the next open Cluster-A rung (12-collections), a subsystem seam.
+**A4(b) is landed** (2026-06-17); **A3 rung 1** (key-resolution chokepoint, `key_owner`) is landed
+(2026-06-17, gate-inert) — but A3 proved to be ≥4 substrate rungs (see Step-1 A3).  Next concrete
+move: **A3 rung 2** — a `hash<__nullable<S>>` FIELD reads a garbage `store_nr` on fresh construct
+(the `OpDatabase`/GetField ref-build for a synth-enum hash field); reproduces with a lone hash
+field, no insert.
 
 ## Status
 
@@ -261,17 +263,42 @@ default-on (gate removed), per the project standard.  The remaining work, in fin
        for a dense `Reference(S)` source into a `__nullable<S>` element, build `Some` field-by-field
        via get_field/set_field (type/alias aware) + set the disc present — exactly as a literal does;
        non-Var sources stashed once.
-     - **A3 — `hash<S[k]>` index over a nullable vector — ROOTED, SUBSYSTEM (not a contained fix)**
-       (12-collections: passes A1, then `c.lookup["Three"]` reads `null`).  In `struct Counting {
-       entries: vector<Count>, lookup: hash<Count[t]> }` the hash indexes the SAME records as the
-       vector by key field `t`.  E2 rewrites only the `vector` arm (definitions.rs:1722) → `entries`
-       is `vector<__nullable<Count>>` but `lookup` stays `hash<Count[t]>` (dense); the hash's
-       key-extraction reads `t` at the DENSE offset while the shared record is `Some`-wrapped
-       (reordered payload) → wrong key → miss → null.  Rewriting the `hash` arm to
-       `hash<__nullable<Count>[t]>` does NOT fix it: `Type::Hash(sub_nr, [key_names], …)` expects
-       `sub_nr` to be a STRUCT with the key field at top level; the synth ENUM has `t` only inside
-       `Some`, so the index machinery can't see the key.  Real fix = teach the hash/sorted/index
-       key-extraction to read the key through the `Some` payload (hash-subsystem work, both backends).
+     - **A3 — `hash<S[k]>` over a nullable element — RE-MATRIXED 2026-06-17 (cache-clean, gate-on);
+       it is a STACK of ≥4 substrate rungs, of which rung 1 is now FIXED.**  `struct Counting {
+       entries: vector<Count>, lookup: hash<Count[t]> }` — gate-on BOTH `entries` and `lookup` are
+       rewritten to the synth enum (`vector<__nullable<Count>>` / `hash<__nullable<Count>[t]>`; the
+       `hash` arm at definitions.rs already mirrors the `vector` arm via `e2_nullable_elem`).  The
+       earlier "reads null" symptom was superseded — the matrix (gate-on, `LOFT_NO_CACHE=1`) shows
+       four independent rungs:
+       - **Rung 1 — key fields LOST → empty key spec — FIXED (commit pending; gate-inert).**  Three
+         resolution sites (`Stores::hash` build, `create_key` for sorted/index, `determine_keys`, and
+         the runtime `field_content`) all guard on `Parts::Struct | EnumValue` for the element type and
+         silently SKIP `Parts::Enum`, so the synth-enum hash resolved to `hash<__nullable<Count>[]>`
+         (NO keys → garbage bucket).  Fix = a `Stores::key_owner(content)` chokepoint: for a synth
+         `__nullable<S>` element it returns the `Some` variant's `EnumValue` (resolved by db name
+         `__nullable<S>::Some`, since the enum's variant LIST still holds a `u16::MAX` placeholder at
+         build time), which the existing guards already accept — so the key field numbers + byte
+         positions agree across build (`hash`/`create_key`) and run (`determine_keys`/`field_content`).
+         Plus a build-ORDER fix (typedef.rs `Type::Hash` arm): force-build the `Some` variant
+         (`key_bearing_def` → `fill_database`) BEFORE `database.hash` resolves keys, else `Some` is
+         registered after the hash type and the key spec still comes out empty.  Result: the hash type
+         is now `hash<__nullable<Count>[t]>` (key present).  Gate-off byte-green (2397/2398; only the
+         pre-existing non-E2 `kernel_port`).
+       - **Rung 2 — reading a `hash<__nullable<S>>` FIELD yields a garbage `store_nr` → `hash::find`
+         panics (`stores[store_nr]` OOB) — OPEN, substrate.**  Reproduces with a LONE hash field
+         (`struct Box { lookup: hash<Count[t]> }`), on a FRESH `Box{}` with NO insert, field at offset
+         0 — so it is neither key-extraction nor vector-coexistence: the synth-enum hash field is not
+         constructed/read with a valid container ref gate-on.  PRE-EXISTING (independent of rung 1).
+         `OpGetField(c, off, <hashtype>)` → `OpGetRecord` → `find(data,…)` where `data.store_nr` is
+         garbage.  Next A3 step: the `OpDatabase` struct-construction / collection-field init / GetField
+         ref-build for a synth-enum hash field.
+       - **Rung 3 — `c.lookup[k].field` PARSE error** (`Unknown field __nullable<Count>.v`): the lookup
+         RESULT is `__nullable<Count>`, and field access on it isn't auto-unwrapped — the same
+         field-access-on-nullable seam A4 solved for vector elements, here for a hash-lookup result.
+       - **Rung 4 — native codegen** emits `Content::Long("Three" as i64)` for a TEXT key (E0606) —
+         the synth-enum key path mis-types a text key as integer in generated Rust.
+       So A3 = rung 1 (FIXED, the key-resolution chokepoint) + rungs 2–4 (each its own substrate fix:
+       hash-field construct/read, lookup-result field unwrap, native key codegen), both backends.
      - **A4 — `"…" as vector<S>` / `vector<S>.parse(json)` into nullable structs — LOCALIZED
        2026-06-17 (boundary matrix; the earlier mechanism here was WRONG on two counts).**  A 7-cell
        gate-on `--interpret` matrix + `introspect` (scalar control, present-only, null-mid/lead/all,

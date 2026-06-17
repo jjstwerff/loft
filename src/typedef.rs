@@ -572,6 +572,14 @@ pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
                         c_tp = data.def(c_nr).known_type;
                     }
                     let kd = key_bearing_def(data, c_nr);
+                    // @PLN25 E2 — for a synth `__nullable<S>` element the keys live
+                    // in the `Some` variant; build its db structure FIRST so
+                    // `database.hash` can resolve the key fields through it (else
+                    // the `Some` structure is registered after the hash type and
+                    // the key spec comes out empty → no keys → bad hash).
+                    if data.def(kd).known_type == u16::MAX {
+                        fill_database(data, database, kd);
+                    }
                     set_mutable(data, kd, &key_fields);
                     database.hash(c_tp, &key_fields)
                 }
