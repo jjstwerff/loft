@@ -52,6 +52,40 @@ imports the null correctly — that exact asymmetry is what E2 closes.)
 > null).  Revisit only if the silent corruption shipping in monthly releases becomes a concern
 > before E2 is done.
 
+## Distance to consistency (seam ledger, 2026-06-17)
+
+"Consistent" = the gate flip (Step 6: drop `LOFT_E2_SYNTH`, default-on).  The **conceptual core
+is done** — gate-on, a `vector<__nullable<S>>` already constructs, reads, does field/method/format,
+null/OOB, plain-`for`, and basic `par`.  What remains is **not conceptual**: each subsystem has to
+be made `Some`-aware on BOTH backends.  As established (§ Step-1 verdict), there is **no single
+chokepoint** — this is a known, bounded, seam-by-seam tail.
+
+This table is the scannable index; the mechanics for each row live in § RESUME HERE.
+
+**Done + gate-inert (the bulk):** free-on-null leak · generics · inferred comprehension · A1
+(anon-literal resolution) · A2 (dense-var append) · loop-var field access · par worker read ·
+method dispatch · transparent format · the 06-structs alias-copy root · OOB disc guard · basic par.
+
+**Open — the actual distance, in finishing order:**
+
+| Seam | Size | Status |
+|---|---|---|
+| **A4(b)** — JSON walker builds `Some` for a present object | S — nearly there | designed; 1 walker arm + reconcile the gate-off-nullable question |
+| **A3** — hash/sorted/index key-extraction through the `Some` payload | M (subsystem) | rooted, not started |
+| **gap 2** — fn-call coercion `f(v[i])` via offset-ref reinterpret | S | designed, not landed |
+| **gap 4** — `e = null` on a nullable LOCAL | XS | open |
+| **Step 2** — par with USER EXTRA args (dispatcher arity) | S, self-contained | open |
+| **Step 3** — native codegen of `__nullable<>` (name-mangle family) | M, whole backend | gated behind Step 1 |
+| residual **wasm** + p143 / p379 (unconfirmed parser shapes) | unknown | not probed |
+| **Step 5** — re-verify graphics/engine consumers, triage residue | the one genuinely-unknown count | not run gate-on since recent fixes |
+| **Step 6** — flip gate, graduate probes, fold P3 field-default arm, close | XS | last, irreversible |
+
+**How far, honestly:** ~6 known seams + one native/wasm backend pass + an unknown consumer-residue
+triage, then the flip.  Step 5's residue is the only part that cannot be sized yet — that is *why*
+Step 5 exists (re-run the consumers gate-on; triage only what does not go green from Steps 1–3).
+Next concrete move is the small one: land **A4(b)** (reconcile the gate-off-nullable question
+first), which verifies the canonical incoherence probe (JSON null-in-array) end-to-end.
+
 ## Status
 
 **Core SHIPPED + default-on.  E2 (embedded-record null) is GATED.  The CONCEPTUAL core works
