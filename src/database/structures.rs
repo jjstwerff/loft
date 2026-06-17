@@ -592,7 +592,22 @@ impl Stores {
                 //     `Tag { … }` shape from the Lenient parser)
                 //   - `Object([("Tag", _, body)])` — the legacy collapsed shape,
                 //     still accepted so older `{"Tag":{…}}` dumps keep loading
+                // @PLN25 E2 (A4): a synthetic `__nullable<S>` enum (a `vector<S>`
+                // element rewritten so it can be null — see `Data::nullable_enum_for`)
+                // deserialises a bare JSON object as the PRESENT case: the object
+                // holds S's fields directly, not a variant tag.  Route it to the
+                // `Some` variant with the whole object as the payload.  `null` is
+                // already handled above (Parsed::Null → `set_default_value` → the
+                // absent disc 0).  Without this a present struct object falls to the
+                // `_` mismatch arm and the `?` in the array loop aborts the whole
+                // parse, dropping every present element (`[{…},null]` → len 0).
+                let synth_nullable = self.types[tp as usize].name.starts_with("__nullable<");
                 let (name, payload) = match parsed {
+                    crate::json::Parsed::Object(_) | crate::json::Parsed::Constructor(..)
+                        if synth_nullable =>
+                    {
+                        ("Some", Some(parsed))
+                    }
                     crate::json::Parsed::Str(s) | crate::json::Parsed::Ident(s) => {
                         (s.as_str(), None)
                     }

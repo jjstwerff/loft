@@ -29,8 +29,10 @@ third-party programmer or AI must never meet "null works for `vector<int>` but n
   stays green for the parallel feature/fix agents.  **No PR until E2 is done** — work accumulates
   on `2026-07-mac` and reaches `main` via a single final PR.
 
-**Canonical incoherence probe** — the case the plan is measured against.  Identical on shipped
-`main` (gate-off) AND gate-on, because the JSON-walker seam **A4** is unbuilt:
+**Canonical incoherence probe** — the case the plan is measured against.  **Now COHERENT gate-on**
+(seam **A4** built, 2026-06-17): `len 3`, `items[1] == null` is true, the present objects keep their
+fields, both backends.  Still incoherent on shipped `main` (gate-off) until the gate is removed
+(Step 6) — that final flip is what makes it the default:
 
 ```loft
 struct Item { name: text, value: integer }
@@ -70,7 +72,7 @@ method dispatch · transparent format · the 06-structs alias-copy root · OOB d
 
 | Seam | Size | Status |
 |---|---|---|
-| **A4(b)** — JSON walker builds `Some` for a present object | S — nearly there | designed; 1 walker arm + reconcile the gate-off-nullable question |
+| ~~**A4(b)** — JSON walker builds `Some` for a present object~~ | — | **FIXED** 2026-06-17 — gate-off-nullable was cache contamination (no leak); 1 walker arm; both backends + regression |
 | **A3** — hash/sorted/index key-extraction through the `Some` payload | M (subsystem) | rooted, not started |
 | **gap 2** — fn-call coercion `f(v[i])` via offset-ref reinterpret | S | designed, not landed |
 | **gap 4** — `e = null` on a nullable LOCAL | XS | open |
@@ -80,11 +82,12 @@ method dispatch · transparent format · the 06-structs alias-copy root · OOB d
 | **Step 5** — re-verify graphics/engine consumers, triage residue | the one genuinely-unknown count | not run gate-on since recent fixes |
 | **Step 6** — flip gate, graduate probes, fold P3 field-default arm, close | XS | last, irreversible |
 
-**How far, honestly:** ~6 known seams + one native/wasm backend pass + an unknown consumer-residue
+**How far, honestly:** ~5 known seams + one native/wasm backend pass + an unknown consumer-residue
 triage, then the flip.  Step 5's residue is the only part that cannot be sized yet — that is *why*
 Step 5 exists (re-run the consumers gate-on; triage only what does not go green from Steps 1–3).
-Next concrete move is the small one: land **A4(b)** (reconcile the gate-off-nullable question
-first), which verifies the canonical incoherence probe (JSON null-in-array) end-to-end.
+**A4(b) is landed** (2026-06-17) — the canonical incoherence probe (JSON null-in-array) is now
+coherent gate-on, both backends.  Next concrete move: **A3** (hash/sorted/index key-extraction
+through the `Some` payload) — the next open Cluster-A rung (12-collections), a subsystem seam.
 
 ## Status
 
@@ -303,22 +306,33 @@ default-on (gate removed), per the project standard.  The remaining work, in fin
        ALWAYS rebuild the lens before trusting a matrix cell — every cell from the stale binary was void.
        JSON `null` already deserialises correctly (disc 0 via `set_default_value`): `[null,null]` → len 2,
        both `==null`.
-       **The remaining bug IS Part (b), now pinpointed.**  A present JSON object reaching
-       `walk_parsed_into` with element type `__nullable<S>` (an Enum) hits the `Parts::Enum` arm, whose
-       tag extraction rejects a plain multi-field object → `Err(mismatch)` → the `?` in the array loop
-       ABORTS the parse at that element.  Fully consistent with the fresh matrix: `[{a},{b}]`→len 0,
-       `[null,{b}]`→len 1 (null kept, `{b}` aborts), `[null,null]`→len 2.  Fix = in the `Parts::Enum` arm,
-       detect a synth `__nullable<S>` and map a plain object / `Constructor` to the `Some` variant (set
-       disc 2, recurse into the Some `EnumValue` payload — reuse the existing variant-fill path at
-       structures.rs:629-639).
-       **TWO things to verify WITH the fix (do NOT assume):**
-       (i) **gate-inertness** — `introspect` shows the cast resolves to `__nullable<S>` even GATE-OFF
-       (`LOFT_E2_SYNTH` unset).  If real, shipped `text as vector<Struct>` is already rewriting and (until
-       Part b) dropping present objects — a potential shipped regression.  But the `11-vectors` gate-off
-       suite passes `text as vector<Item>`, so either the leak is real-and-untested or this probe differs
-       from the suite's form (package context / struct shape).  RECONCILE before claiming a bug.
-       (ii) re-run the WHOLE matrix on a FRESH binary, BOTH backends — the stale-binary episode voided
-       every earlier cell.
+       **Part (b) — FIXED 2026-06-17 (commit pending; both backends).**  A present JSON object reaching
+       `walk_parsed_into` with element type `__nullable<S>` (an Enum) hit the `Parts::Enum` arm, whose
+       tag extraction rejected a plain multi-field object → `Err(mismatch)` → the `?` in the array loop
+       ABORTED the parse at that element.  Fix (structures.rs `Parts::Enum` arm): detect a synth
+       `__nullable<S>` by `self.types[tp].name.starts_with("__nullable<")` and route a bare
+       `Object`/`Constructor` to the `Some` variant — `("Some", Some(parsed))` reuses the existing
+       variant-fill machinery (find `Some`, set its disc, recurse the payload `EnumValue`).  `null` was
+       already correct (`Parsed::Null` → `set_default_value` → absent disc 0).  Verified on the
+       null-POSITION axis × both backends gate-on: `[{a},null,{c}]`→len 3 (`a/1`, absent, `c/3`),
+       `[null,{b}]`→len 2, `[null,null,null]`→len 3 all-absent, `[{a},{b}]`→len 2 all-present.
+       Regression: `tests/plan25_e2_json.rs` (4 tests, interpret + `--native`).
+       **verify (i) RESOLVED — there is NO gate leak and NO shipped regression; it was CACHE
+       CONTAMINATION.**  The earlier "cast resolves to `__nullable<S>` even gate-off" reading (and the
+       "backtick form differs from plain") were artifacts of the warm program cache (`~/.cache/loft/
+       program-<hash>.store`, @PLN11 G2/M6): its key hashes SOURCE CONTENT, not `LOFT_E2_SYNTH`, so a
+       gate-off run and a gate-on run of the same file share one cache slot and stomp each other
+       (last-writer-wins) — and a warm hit skips parsing entirely (`e2_nullable_elem` never called).  On
+       a cache-clean binary (`LOFT_NO_CACHE=1`) the gate is correct and form-independent: gate-off →
+       dense `vector<ref(Item)>` (db_tp 66, stride 12) for BOTH the plain-string and backtick forms;
+       gate-on → `vector<ref(__nullable<Item>)>` (db_tp 69, stride 16) for both.  `11-vectors` passes
+       gate-off because it is dense (and has no nulls).  Since `__nullable<>` is synth machinery that
+       exists ONLY gate-on, `main` cannot produce it — branch-internal, nothing to file.
+       **CALIBRATION LESSON (logged, engineering-rigor § calibration — twin of the stale-binary trap):**
+       when probing E2 gate states, ALWAYS pass `LOFT_NO_CACHE=1`.  The warm cache key omits the gate
+       env, so without it gate-off/gate-on runs of one file silently serve each other's stale bundle —
+       every cross-gate matrix cell is void.  (Harmless for shipping: the gate will not exist once
+       Step 6 removes it.)
        **Sibling found, OUT of A4:**
        nested `vector<vector<S>>` via JSON deserialises to an EMPTY outer vector (present OR null) — a
        distinct unimplemented seam, routed separately.
