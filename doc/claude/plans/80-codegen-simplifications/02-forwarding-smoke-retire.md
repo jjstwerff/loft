@@ -11,7 +11,7 @@
 ## Why retire
 
 Phase 00 of @PLAN09 introduced
-`src/generation/ops/forwarding_smoke.rs` containing
+the since-retired `src/generation/ops/forwarding_smoke.rs`, which contained
 `ForwardingEmitter` — a no-op emitter that just delegates to
 `DefaultEmitter::emit`.  9 Op names were registered to it as a
 runtime smoke test proving the dispatch path fires.
@@ -38,7 +38,7 @@ The 9 forwarding entries are now:
 ### Step 2.1 — Identify the affected sites
 
 ```bash
-cat src/generation/ops/forwarding_smoke.rs   # the emitter + name list
+cat src/generation/ops/forwarding_smoke.rs   # the emitter + name list (file since retired)
 grep -n "FORWARDING_OP_NAMES\|ForwardingEmitter\|forwarding_smoke" \
     src/generation/ops/mod.rs tests/codegen_emitter.rs
 ```
@@ -57,7 +57,7 @@ to be in the registry (vs. falling through to `DefaultEmitter`):
 
 ```bash
 # Check if any test or code path explicitly looks up these names:
-for name in $(grep -oE '"Op[A-Z][a-zA-Z]+"' src/generation/ops/forwarding_smoke.rs); do
+for name in $(grep -oE '"Op[A-Z][a-zA-Z]+"' src/generation/ops/forwarding_smoke.rs); do # forwarding_smoke.rs since retired
     grep -rn "$name" src/ tests/ default/ | grep -v "forwarding_smoke" | head -5
 done
 ```
@@ -74,7 +74,7 @@ Edit `src/generation/ops/mod.rs::build_registry` to delete the
 ### Step 2.4 — Remove the file
 
 ```bash
-git rm src/generation/ops/forwarding_smoke.rs
+git rm src/generation/ops/forwarding_smoke.rs   # retired here
 ```
 
 Update `src/generation/ops/mod.rs` to remove the
@@ -131,7 +131,7 @@ its purpose and was retired post-@PLAN09.
 
 ```bash
 # File doesn't exist
-[ ! -f src/generation/ops/forwarding_smoke.rs ]
+[ ! -f src/generation/ops/forwarding_smoke.rs ]   # removed
 
 # Module declaration removed
 ! grep -q "pub mod forwarding_smoke" src/generation/ops/mod.rs
