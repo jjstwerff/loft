@@ -449,16 +449,39 @@ Two DISTINCT defects fall out:
    narrow-VECTOR element path (`Byte`/`ShortRaw`, raw) is excluded via
    `nullable && !narrow_vec`.
 
-2. **A SEPARATE 2-byte not-null bug (newly found, scope TBD).**  A `not null`
-   `u16`/`i16` field cannot hold its max (`65535`/`32767` → null): the 2-byte field
-   path uses the `Short` (`+1`) encoding which reserves a null code even when the
-   field is not-null (the 1-byte `Byte` op does NOT — that's why not-null `u8`/`i8`
-   are full-range).  Distinct mechanism from `usable_min`/`max`; needs a raw 2-byte
-   not-null path.  Decision pending: fix in this pass (A) or as a follow-up (B).
+2. **A SEPARATE 2-byte not-null bug (fixed in the same pass).**  A `not null`
+   `u16`/`i16` field could not hold its max (`65535`/`32767` → null): the 2-byte
+   field path used the `Short` (`+1`) encoding which reserves a null code even when
+   the field is not-null (the 1-byte `Byte` op does NOT — that's why not-null
+   `u8`/`i8` were already full-range).  Fixed with a new `NarrowIntKind::ShortFull`
+   / `OpGetShortFull` (`store::get_short_full`: direct `read + min`, NO sentinel),
+   the 2-byte twin of `Byte`; the write reuses `OpSetShortRaw`.
 
-**Resolved 2026-06-17:** not-null `u8`/`i8` keep the full native range; nullable is
-symmetric for signed (`-127..=127`, `-32767..=32767`); the all-ones byte is the one
-uniform sentinel, only `min` shifts.
+**DONE 2026-06-17 (`4a632251`).**  All of the above LANDED + full suite green, both
+backends:
+- `IntegerSpec::usable_min`/`usable_max` (the one width/range home) wired at the
+  read op, write op, and the literal range-check (`int_value_fits`, gained a
+  `narrow_field` flag — a field STORE reserves the sentinel; a param/return/cast is
+  a full-width register value, so `f(65535)` to a `u16` param stays legal; function
+  params can't be `not null`).
+- Field nullability is stamped onto the stored `IntegerSpec.not_null` at attribute
+  registration (the alias path left it at the default), so the range-check reads
+  the right bounds.
+- `OpGetShortFull` added end-to-end (`default/01_code.loft` `#rust` template →
+  `fill.rs` regenerated via `make fill` → native via the template).
+- `lib/code.loft` `cur_arg: u8` → `u8 not null` (the `255` "no arg" sentinel is a
+  meaningful value, not the null encoding).
+- Regression `tests/scripts/389-narrow-alias-ranges.loft`.
+
+Final shape: not-null keeps the full native range; nullable is symmetric for signed
+(`-127..=127`, `-32767..=32767`) and top-trimmed for unsigned (`0..=254`,
+`0..=65534`); the all-ones byte is the one uniform sentinel, only `min` shifts.
+
+**Open follow-up (separate, pre-existing): the inline `Struct{..}.x` byte-field
+read crashes/fails on native** (the pre-eval/hoisting path emits the byte op as an
+unresolved call) — it predates this work (breaks plain `OpGetByte` too) and is
+NOT specific to narrow-int storage; the regression test reads via a local to avoid
+it.  Worth a focused fix (native pre-eval `#rust`-op inlining for hoisted args).
 
 ---
 
