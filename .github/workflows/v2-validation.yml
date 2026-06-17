@@ -1,6 +1,6 @@
 # @PLAN53 — V2 validation: the aligned-stack-layout (V2) test matrix that must
 # pass before flipping V2 to the production default.  Goals + exit criteria:
-# doc/claude/plans/future/53-sanitizer-ci-lever/TESTING.md.
+# doc/claude/plans/finished/53-sanitizer-ci-lever/TESTING.md.
 #
 # HEAVY + SLOW (3-OS full suite under V2 + the guard sweep + Miri-under-V2) and
 # therefore ON DEMAND ONLY — never `pull_request`, and run AFTER a green

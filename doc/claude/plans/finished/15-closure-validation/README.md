@@ -178,9 +178,9 @@ Each cell `(C, D)` has one of:
 - [LOFT.md § Closures](../../../LOFT.md) — language reference.
 - [loft-write skill § Higher-order functions](../../../../../.claude/skills/loft-write/SKILL.md)
   — capture semantics summary.
-- [@PLAN14 phase 03](../../finished/14-tuple-validation/03-closures.md) — tuple
+- [@PLAN14 phase 03](../14-tuple-validation/03-closures.md) — tuple
   cells with closure elements; closure-in-tuple is the D5 cell here.
-- [@PLAN14 README](../../finished/14-tuple-validation/README.md) — same matrix
+- [@PLAN14 README](../14-tuple-validation/README.md) — same matrix
   template and cross-mode contract.
 - `src/data.rs::Type::Function` — definition.
 - `src/scopes.rs:578` — tuple/closure scope-exit gate (T1.8c

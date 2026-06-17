@@ -182,7 +182,7 @@ Two fixture catalogues use this harness:
 - `tests/strings.rs` — string-scope regressions (2 fixtures).
 - `tests/slot_v2_baseline.rs` — the **Phase 0 fixture catalogue from
   @PLAN04** (see
-  [`plans/finished/04-slot-assignment-redesign/`](plans/finished/04-slot-assignment-redesign/)).
+  [`plans/finished/04-slot-assignment-redesign/`](plans/finished/04-slot-assignment-redesign)).
   Every fixture locks one specific placement decision; the file now
   runs as a structural regression guard against V1's output and a
   correctness gate for V2's shadow validator.

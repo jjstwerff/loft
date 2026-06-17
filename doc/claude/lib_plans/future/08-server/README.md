@@ -1094,7 +1094,7 @@ module, and broadcasting the new state.
 **Addition:** `game_loop.loft` — a new source file in `server/src/` providing
 a server-side fixed-timestep loop.
 
-> **Superseded by [EVENT_LOOP.md](../../../plans/future/23-event-loop/README.md).**  The
+> **Superseded by [EVENT_LOOP.md](../../../plans/32-event-loop/README.md).**  The
 > `GameLoop` / `run_game_loop` design below was never
 > implemented.  The canonical loop API is now EventLoop's
 > `el::run` (frame-driven, with a programmer-supplied
@@ -1103,7 +1103,7 @@ a server-side fixed-timestep loop.
 > same priority lanes handle player input, world tick, and
 > ambient work.  Kernel-multiplexed source polling (epoll /
 > kqueue / IOCP) is recorded as future work in
-> [EVENT_LOOP_DISCUSSION.md](../../../plans/future/23-event-loop/DISCUSSION.md) but
+> [EVENT_LOOP_DISCUSSION.md](../../../plans/32-event-loop/DISCUSSION.md) but
 > doesn't ship as a separate API; the existing `el::run` is
 > the one entry point for both shapes.  The sketch below is
 > retained for design history only.
@@ -1291,7 +1291,7 @@ which depends on the coroutine design (COROUTINE.md).
 Naïve "send the world state to every client every tick" scales as
 `O(N²)`: each tick costs N broadcasts of N peer poses.  At 30 Hz with
 20 audience-demo clients that's 12 000 frames/sec just for pose sync.
-[@PLAN50 bumper-airplanes](../../../plans/future/50-bumper-airplanes/README.md)
+[@PLAN50 bumper-airplanes](../../../plans/51-bumper-airplanes/README.md)
 proves out a substantially better pattern with three layered filters,
 all server-side, all driven by recipient-vs-peer spatial relationship:
 

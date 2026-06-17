@@ -102,7 +102,7 @@ server program.
 Transport-latency delta is **not** asserted: on loopback it is µs-noise; the
 win (no retransmit stalls, no head-of-line blocking, discard-stale) is a
 wifi/LAN property — measured when a native client exists (phase 04 extends
-the @PLAN50 probe targets with a loss% axis).
+the @PLN51 probe targets with a loss% axis).
 
 ## Build findings
 

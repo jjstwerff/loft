@@ -127,7 +127,7 @@ Each opens its own sub-phase only when prioritised
   C54.D — closed-by-decision (no Rust-style literal suffixes)
 - [`../../CHANGELOG_TECHNICAL.md`](../../../CHANGELOG_TECHNICAL.md)
   — per-phase shipped manifest
-- [`../02-narrow-collection-elements/`](../02-narrow-collection-elements/)
+- [`../02-narrow-collection-elements/`](../02-narrow-collection-elements)
   — sibling plan that addressed the narrow-vector storage gap
   surfaced post-@PLAN01
 - `src/data.rs::IntegerSpec` — the named-struct carrier replacing

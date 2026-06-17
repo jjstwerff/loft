@@ -83,7 +83,7 @@ pub struct Manifest {
     /// registration callback onto `globalThis.LOFT_WASM_EXTENSIONS`
     /// (see `lib/imaging/wasm/host.js` for the canonical shape).
     pub wasm_bridge_host_js: Option<String>,
-    /// `[triggers] enabled = true` (lib_plans/future/03-lazy-stdlib) — opt this
+    /// `[triggers] enabled = true` (lib_plans/59-lazy-stdlib) — opt this
     /// library into lazy auto-load, making `use <pkg>;` optional.  This is the
     /// ONLY trigger metadata: when set, loft DERIVES the actual trigger surface
     /// (the `<pkg>::` namespace, the library's public text-methods, any public

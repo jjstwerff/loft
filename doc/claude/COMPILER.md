@@ -819,7 +819,7 @@ Calls `database.finish()` to compute final field byte offsets for all record typ
 
 ---
 
-## Function calling convention — the heap-return buffer (@PLAN59)
+## Function calling convention — the heap-return buffer (@PLN55)
 
 Every BODY-carrying plain fn returning `Reference` / `Vector` /
 struct-`Enum` carries one hidden attribute `__retbuf` (typed as the
@@ -847,7 +847,7 @@ signature parse — **arity is a pure function of the declaration**.
   templates (specialisations never promote), lambdas (in-place growth;
   invoked via fn-ref dispatch, no earlier caller can exist).
 
-Design + probe history: `plans/59-return-abi/README.md`.
+Design + probe history: `plans/55-return-abi/README.md`.
 
 ---
 

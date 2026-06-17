@@ -533,7 +533,7 @@ pub fn integrate(b: Body, force: Vec3, dt: float) -> Body
 pub fn resolve_collision(a: Body, b: Body, c: const Collision) -> (Body, Body)
 ```
 
-Plan slot: [`lib_plans/future/26-physics-2body/`](lib_plans/future/26-physics-2body/).
+Plan slot: [`lib_plans/75-physics-2body/`](lib_plans/75-physics-2body).
 
 ### `particles` — emission + lifetime + sync state
 
@@ -567,7 +567,7 @@ pub fn emitter_emit_point(e: ParticleEmitter, pos: Vec3, vel: Vec3, color: integ
 pub fn emitter_particles(e: const ParticleEmitter) -> vector<RenderablePoint>
 ```
 
-Plan slot: [`lib_plans/future/27-particles/`](lib_plans/future/27-particles/).
+Plan slot: [`lib_plans/76-particles/`](lib_plans/76-particles).
 
 ### `input` — abstract input state + key bindings
 
@@ -898,7 +898,7 @@ where SEO is genuinely broken without it.
   BSP "world" expectations.
 - `walls` data (currently folded into `lib/world/`): split out as
   `hex_walls` matching the `hex_world` pairing.
-- `lib_plans/future/24-universal-editor/` plan: keep the design content,
+- `lib_plans/73-universal-editor/` plan: keep the design content,
   retitle to reference lavition as the engine the plan delivers.
 - 6 residual `lav` / `Lavition` references in the loft tree (pre-rename
   leftovers): keep — they reference the original codename for the
@@ -918,10 +918,10 @@ where SEO is genuinely broken without it.
 
 - [`lavition/lavition`](https://github.com/lavition/lavition) — engine
   meta-repo with design vision + roadmap pointer.
-- [`lib_plans/future/24-universal-editor/`](lib_plans/future/24-universal-editor/)
+- [`lib_plans/73-universal-editor/`](lib_plans/73-universal-editor)
   — the original design plan for the universal editor (predates the
   lavition brand; design content still authoritative).
-- [`lib_plans/12-library-extraction/`](lib_plans/12-library-extraction/)
+- [`lib_plans/12-library-extraction/`](lib_plans/12-library-extraction)
   — the multi-phase plan for getting libraries into `loft-lang/loft-libs-*`
   (the substrate lavition consumes).
 - [`PACKAGES.md`](PACKAGES.md) + [`PKG_REGISTRY.md`](PKG_REGISTRY.md)

@@ -5,7 +5,7 @@
 //! every run.
 //!
 //! Measured (native `--release`, see
-//! `doc/claude/plans/deferred/28-const-store/STARTUP_CACHE_PLAN.md`):
+//! `doc/claude/plans/82-const-store/STARTUP_CACHE_PLAN.md`):
 //! parsing `default/` is ~90 % of cold-start (~15 ms) while bytecode
 //! generation is ~0.5 ms.  So the win is to cache the parser's output
 //! (`Data`) keyed on the stdlib content, restore it, and re-run the

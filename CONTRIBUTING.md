@@ -33,7 +33,7 @@ loft source. The most useful filters:
 - A bug fix should add a **regression test** (`tests/scripts/*.loft` for
   cross-backend behaviour) and reference the issue in the commit — `Fixes #NNN`
   auto-closes it.
-- Deeper architecture + conventions live under [`doc/claude/`](doc/claude/); how
+- Deeper architecture + conventions live under [`doc/claude/`](doc/claude); how
   bugs/issues are tracked is [`doc/claude/ISSUE_TRACKING.md`](doc/claude/ISSUE_TRACKING.md).
 
 loft is developed by building real consumers (the games **moros** / **dryopea** on

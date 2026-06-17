@@ -102,7 +102,7 @@ Trade-off matrix:
 | Migration cost (later) | Server reads/writes same JSON shape | n/a |
 
 The MVP buys us the per-library extraction work (Phase 4-8 in
-[`lib_plans/12-library-extraction/`](lib_plans/12-library-extraction/))
+[`lib_plans/12-library-extraction/`](lib_plans/12-library-extraction))
 without funding a service.
 
 ---
@@ -873,11 +873,11 @@ ECOSYSTEM bootstrap:
    — generate Ed25519 keypair offline, embed pubkey in
    `src/registry_keys.rs`, create `loft-lang/registry` repo, ship
    CI templates from
-   [registry_ci_template/](registry_ci_template/), seed empty
+   [registry_ci_template/](registry_ci_template), seed empty
    `index.json`.
 2. Loft minor release with the embedded trust root.
 3. First publish (R10) — typically `crypto` from
-   [`lib_plans/12-library-extraction/`](lib_plans/12-library-extraction/)
+   [`lib_plans/12-library-extraction/`](lib_plans/12-library-extraction)
    Phase 4.
 4. R10.5 key-rotation drill before any real compromise.
 
@@ -979,7 +979,7 @@ These need decisions before implementation starts.
 - [PACKAGES.md](PACKAGES.md) — package format reference; this doc
   is the registry-specific draft of that doc's "Open work" PKG.REG
   bullet.
-- [lib_plans/12-library-extraction/](lib_plans/12-library-extraction/) —
+- [lib_plans/12-library-extraction/](lib_plans/12-library-extraction) —
   consumer of PKG.REG.  Phases 4-8 unblock when PKG.REG ships.
 - [STDLIB.md § Logging](STDLIB.md) — `loft install` should log via
   the same machinery; useful for `--verbose` output.

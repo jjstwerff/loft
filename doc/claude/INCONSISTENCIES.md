@@ -220,9 +220,9 @@ contributor writing `cell.c_color = 0;` gets no compiler help.
 **Advice:** Extend `const` to struct fields as a write-once-at-
 construction modifier.  Purely static check, zero runtime cost,
 no schema change.  Design + sequencing in
-[plans/future/33-const-fields/README.md](plans/future/33-const-fields/README.md).
+[plans/40-const-fields/README.md](plans/40-const-fields/README.md).
 
-**Plan (2026-05-11):** Documented as @PLAN33 (future).  Not
+**Plan (2026-05-11):** Documented as @PLN40 (future).  Not
 yet implemented; the gap is currently silent (the parser
 accepts mutable fields with names that look like they should be
 const).  No regression guard yet — none possible until the
@@ -244,7 +244,7 @@ _All fixed — see CHANGELOG.md._
 _All documented + regression-guarded — see the Resolved-as-design-point table below._
 
 ### Low (cosmetic or minor)
-- [33. `const` Applies to Locals and Parameters but Not Fields](#33-const-applies-to-locals-and-parameters-but-not-fields) — open; resolution path in [plans/future/33-const-fields/](plans/future/33-const-fields/README.md)
+- [33. `const` Applies to Locals and Parameters but Not Fields](#33-const-applies-to-locals-and-parameters-but-not-fields) — open; resolution path in [plans/40-const-fields/](plans/40-const-fields/README.md)
 _Other Low items: documented + regression-guarded — see the Resolved-as-design-point table below._
 
 ### Resolved as design point (documented + regression-guarded)

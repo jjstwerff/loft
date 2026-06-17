@@ -194,8 +194,8 @@ Step 2 was the contract's proving ground: the agent can drive a full debug sessi
   this protocol with the workspace layer and builds the browser surface on it.
 - [REPL.md](../../REPL.md) — the `(dbg)` prompt whose capabilities this protocol mirrors
   message-for-message.
-- [lib_plans/future/14-viewer-lsp-bridge/](../../lib_plans/future/14-viewer-lsp-bridge/README.md)
+- [lib_plans/66-viewer-lsp-bridge/](../../lib_plans/66-viewer-lsp-bridge/README.md)
   — the "viewer + local sidecar" pattern this reuses; the browser client is the same
   shape with the debugger as the sidecar.
-- [lib_plans/future/09-lsp/](../../lib_plans/future/09-lsp/README.md) — `loft-dap` (the
+- [lib_plans/63-lsp/](../../lib_plans/63-lsp/README.md) — `loft-dap` (the
   future DAP translation) is scoped alongside the loft-lsp server there.

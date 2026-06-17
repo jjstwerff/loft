@@ -1,8 +1,8 @@
 # Phase 02a — Introspection: after param adapter
 
 **Status:** SUPERSEDED (2026-05-02) — phase 02 SUPERSEDED by
-@PLAN12 phase 05.  Plan-12 will run its own introspection cadence
-under @PLAN12's phase structure if needed.  Phase 05a + the
+@PLN80 phase 05.  Plan-12 will run its own introspection cadence
+under @PLN80's phase structure if needed.  Phase 05a + the
 @PLAN09 retrospective (08a equivalent in phase 10 step 10.6)
 absorbed the substantive lessons; 02a's specific trigger (phase
 02 DONE) is now never going to fire.

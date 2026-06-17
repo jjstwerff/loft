@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 //! Derive lazy-load trigger details from a library's public loft source
-//! (lib_plans/future/03-lazy-stdlib).
+//! (lib_plans/59-lazy-stdlib).
 //!
 //! A library opts into lazy auto-load with `[triggers] enabled = true` in its
 //! `loft.toml` — that is the author's WHOLE declaration.  The concrete trigger

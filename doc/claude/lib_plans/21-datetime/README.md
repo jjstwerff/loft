@@ -198,7 +198,7 @@ and `tests/docs/32-time.loft` (monorepo docs).  Verified 2026-05-25,
 
 **The WASM library gate now exists** — `tests/html_wasm.rs::wasm_library_suite`
 (added 2026-05-25), closing the gap that
-[`../12-library-extraction/`](../12-library-extraction/) § WASM gate
+[`../12-library-extraction/`](../12-library-extraction) § WASM gate
 flagged.  It iterates `lib/*/tests/*.loft`, and for each test that
 declares a `fn main()` (the wasm entry point) runs it under **Node**
 (browser `feature="wasm"` via `--html`) and **wasmtime** (`wasm32-wasip2`)
@@ -266,7 +266,7 @@ three-backend `time` gate already covers it with no extra parity path.  The
   The only core piece is the *general* `to_text(self, spec)` format hook
   (arc F), which is type-agnostic and serves every library, not a
   DateTime primitive.
-- **lib_plans/future/03-lazy-stdlib** — if `lib/time` ever grows a
+- **lib_plans/59-lazy-stdlib** — if `lib/time` ever grows a
   native bridge, it inherits the lazy-load trigger pattern; the
   pure-loft design avoids needing it.
 

@@ -16,7 +16,7 @@ investigated yet (observed ~12 Hz, design target 30 Hz); the
 protocol shape is sound regardless.  Rate-LOD bands (15 Hz mid,
 7.5 Hz outer) deferred to v2.
 
-See [`../../doc/claude/plans/future/50-bumper-airplanes/00a-network-probe.md`](../../doc/claude/plans/future/50-bumper-airplanes/00a-network-probe.md)
+See [`../../doc/claude/plans/51-bumper-airplanes/00a-network-probe.md`](../../doc/claude/plans/51-bumper-airplanes/00a-network-probe.md)
 for the full design of the production-grade probe.  This MVP
 intentionally covers only the v1 must-pass behaviours; it is
 the *first* validation step, not the only one.
@@ -129,7 +129,7 @@ The two important behaviours:
 
 ## What this proves
 
-The protocol design from [README.md § Wire protocol](../../doc/claude/plans/future/50-bumper-airplanes/README.md#wire-protocol--message-kinds-v1)
+The protocol design from [README.md § Wire protocol](../../doc/claude/plans/51-bumper-airplanes/README.md#wire-protocol--message-kinds-v1)
 maps cleanly onto `lib/server`'s existing event-pump pattern:
 no new native functions, no new lib API surface — `srv.send_to(cid, msg)`
 is exactly what per-recipient sight filtering needs.

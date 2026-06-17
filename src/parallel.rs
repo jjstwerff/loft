@@ -816,26 +816,15 @@ pub fn run_parallel_queue_ref(
     // dispenser's final value is one-past-the-last-index, so the
     // parent's allocations vec must reach that length.
     let high_water = dispenser.load(std::sync::atomic::Ordering::Relaxed) as usize;
-    while stores.allocations.len() < high_water {
-        stores.allocations.push(crate::store::Store::new(100));
-    }
+    stores.grow_allocations_to(high_water);
     for (batch, mut worker_stores) in batches {
-        for &slot_nr in &worker_stores.worker_allocated_indices {
-            // Worker may have allocated and then freed the slot mid-
-            // call (e.g. via FreeRef on an intermediate temp).  Swap
-            // unconditionally — `revive_record_chain` below decides
-            // which slots stay active.  Skipped indices owned by
-            // OTHER workers are never in *this* worker's
-            // allocated_indices, so cross-thread swaps don't happen.
-            if (slot_nr as usize) < worker_stores.allocations.len()
-                && (slot_nr as usize) < stores.allocations.len()
-            {
-                std::mem::swap(
-                    &mut stores.allocations[slot_nr as usize],
-                    &mut worker_stores.allocations[slot_nr as usize],
-                );
-            }
-        }
+        // Swap each slot this worker allocated back into the parent.  A worker
+        // may have allocated then freed a slot mid-call (e.g. FreeRef on an
+        // intermediate temp); the swap is unconditional and `revive_record_chain`
+        // below decides which slots stay active.  Store isolation (no
+        // cross-thread slot aliasing) is the invariant enforced ONCE in
+        // `Stores::swap_in_worker_slots` — each worker lists only its own indices.
+        stores.swap_in_worker_slots(&mut worker_stores);
         for (i, src_ref) in batch {
             refs[i] = src_ref;
         }

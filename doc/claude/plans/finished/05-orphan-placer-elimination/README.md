@@ -48,7 +48,7 @@ P178 + P185 closed in the same arc.  No regressions on the
 
 ## Sibling plans
 
-- [`../04-slot-assignment-redesign/`](../04-slot-assignment-redesign/) —
+- [`../04-slot-assignment-redesign/`](../04-slot-assignment-redesign) —
   parent plan that scoped V2 (retracted as replacement for V1) and
   produced the SPEC.md / walkthroughs.md / 00a-audit.md design
   archive @PLAN05 leaned on.

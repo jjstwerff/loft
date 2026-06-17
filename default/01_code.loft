@@ -858,9 +858,9 @@ fn OpSetFloat(v1: reference, fld: const u16, val: float);
 fn OpSetByte(v1: reference, fld: const u16, min: const i16, val: integer);
 #rust"{{let db = @v1; let v = @val; stores.store_mut(&db).set_byte(db.rec, db.pos + u32::from(@fld), i32::from(@min), v as i32);}}"
 fn OpSetByteNullable(v1: reference, fld: const u16, min: const i16, val: integer);
-#rust"{{let db = @v1; let v = if @val == i64::MIN {{ i32::MIN }} else {{ @val as i32 }}; stores.store_mut(&db).set_byte(db.rec, db.pos + u32::from(@fld), i32::from(@min), v);}}"
+#rust"{{let db = @v1; let v = if @val == i64::MIN {{ i32::MIN }} else {{ @val as i32 }}; stores.set_byte_nullable(&db, db.pos + u32::from(@fld), i32::from(@min), v);}}"
 fn OpSetShort(v1: reference, fld: const u16, min: const i16, val: integer);
-#rust"{{let db = @v1; let v = if @val == i64::MIN {{ i32::MIN }} else {{ @val as i32 }}; stores.store_mut(&db).set_short(db.rec, db.pos + u32::from(@fld), i32::from(@min), v);}}"
+#rust"{{let db = @v1; let v = if @val == i64::MIN {{ i32::MIN }} else {{ @val as i32 }}; stores.set_short_nullable(&db, db.pos + u32::from(@fld), i32::from(@min), v);}}"
 // 4-byte integer field read/write (post-2c `integer size(4)` subtypes).
 // Raw i32 storage with i32::MIN as the null sentinel; the stack value
 // stays i64 (widen on load, narrow on store).
@@ -879,6 +879,13 @@ fn OpGetShortRaw(v1: reference, fld: const u16, min: const i16) -> integer;
 #rust"{{let db = @v1; let r = stores.store(&db).get_i16_raw(db.rec, db.pos + u32::from(@fld), i32::from(@min)); if r == i32::MIN {{ i64::MIN }} else {{ i64::from(r) }}}}"
 fn OpSetShortRaw(v1: reference, fld: const u16, min: const i16, val: integer);
 #rust"{{let db = @v1; let v = if @val == i64::MIN {{ i32::MIN }} else {{ @val as i32 }}; stores.store_mut(&db).set_i16_raw(db.rec, db.pos + u32::from(@fld), i32::from(@min), v);}}"
+// NOT-NULL `u16`/`i16` struct fields: direct `(val - min)` encoding with NO null
+// sentinel, so the full 65536-value range round-trips (`OpGetShort`'s `+1` and
+// `OpGetShortRaw`'s `u16::MAX` both swallow the max value as null).  The write
+// reuses `OpSetShortRaw` (same `(val - min)` store); only the read differs
+// (no sentinel decode).  Nullable `u16`/`i16` fields stay on `OpGetShort`.
+fn OpGetShortFull(v1: reference, fld: const u16, min: const i16) -> integer;
+#rust"{{let db = @v1; i64::from(stores.store(&db).get_short_full(db.rec, db.pos + u32::from(@fld), i32::from(@min)))}}"
 fn OpSetText(v1: reference, fld: const u16, val: text);
 #rust"{{let db = @v1; let s_val = @val.to_string(); let store = stores.store_mut(&db); let s_pos = store.set_str(&s_val); store.set_u32_raw(db.rec, db.pos + u32::from(@fld), s_pos);}}"
 // --- Collections ---

@@ -449,7 +449,7 @@ Mutating filesystem operations return a `FileResult` enum:
 | `mkdir_all(path: text) -> FileResult` | Creates a directory and all missing parents. |
 | `set_file_size(self: File, size: long) -> FileResult` | Truncates or extends a file to exactly `size` bytes. |
 
-### Durable stores (`@PLAN38`)
+### Durable stores (`@PLN43`)
 
 A "durable store" is a regular on-disk file plus a 40-byte `.dmeta`
 sidecar holding signature + tier + CRC32 over the main file + a
@@ -490,9 +490,9 @@ re-derived; Tiers 2 (snapshots) and 3 (WAL) are planned for that
 case but not yet shipped.
 
 Full design + format spec:
-[`doc/claude/plans/future/38-loft-store-durable/`](plans/future/38-loft-store-durable/README.md).
+[`doc/claude/plans/43-loft-store-durable/`](plans/43-loft-store-durable/README.md).
 
-### Path-backed hash storage (`@PLAN38`)
+### Path-backed hash storage (`@PLN43`)
 
 `store_persist_bind(h, path)` re-roots the Store backing a hash at a
 file path so mutations are durable via mmap without an explicit save
@@ -822,23 +822,23 @@ for i in 0..3 { println(items[order[i]]) }
 ## Open work
 
 Stdlib gaps surfaced by dogfood usage (the @PLAN35 viewer,
-@PLAN37 tag indexer, lib/markdown extraction).  Each row
+@PLN42 tag indexer, lib/markdown extraction).  Each row
 names where it bit, the proposed shape, and rough effort.
 XS = single-line/single-fn change; S = focused half-day fix.
 
 | Item | Where it bit | Shape | Effort |
 |---|---|---|---|
-| `vector.sort()` (text added 2026-05-18); `vector.sort_by(fn)` deferred | scan.loft (3 sites), viewer's plan-bucket sort, activity feed date sort | Pre-existing `sort(v)` builtin extended to dispatch on text element type via `vector::sort_text_vector` (lexicographic, sorts u32 string offsets by what they point at).  `sort_by(fn)` for user types still open — needs callback-passing infrastructure.  Replaces the `sorted<T[K]>` set-as-sort-proxy pattern for text. | **`sort()` text-element shipped (@PLAN37 phase 10.8)**; `sort_by(fn)` open. |
+| `vector.sort()` (text added 2026-05-18); `vector.sort_by(fn)` deferred | scan.loft (3 sites), viewer's plan-bucket sort, activity feed date sort | Pre-existing `sort(v)` builtin extended to dispatch on text element type via `vector::sort_text_vector` (lexicographic, sorts u32 string offsets by what they point at).  `sort_by(fn)` for user types still open — needs callback-passing infrastructure.  Replaces the `sorted<T[K]>` set-as-sort-proxy pattern for text. | **`sort()` text-element shipped (@PLN42 phase 10.8)**; `sort_by(fn)` open. |
 | JSON emission helpers | scan.loft has 80+ lines of manual `json_escape` + per-row format-string emission + comma management.  viewer reads via `value.field("x").as_text()` — no symmetric write API. | `to_json(value) -> text` for primitives + `JsonBuilder` for nested structures.  Mirror of the existing `json_parse` + `JsonValue` read API. | S–M |
-| ~~Path helpers — stdlib `path` module~~ — shipped 2026-05-18 as text methods | scan.loft, viewer, lib/markdown each rolled their own `dir_of` / `basename` / `resolve_relative` | Pure-loft as four text methods in `default/03_text.loft`: `p.dir()`, `p.basename()`, `p.join(other)`, `p.resolve(target)`.  Module-prefix style (`path::dir(p)`) couldn't ship — loft uses self-type method dispatch, not module namespaces.  `file().path` `./<name>` normalisation deferred to a follow-up. | **Shipped (@PLAN37 phase 10.9)** |
-| ~~`text.split(text)`~~ — shipped 2026-05-18 as `text.split_text(text)` | scan.loft's link extractor walks char-by-char to find `](` (only `text.split(char)` exists today) | Renamed from `split` to `split_text` because loft doesn't allow fn overloading by non-self parameter type — `split(text, character)` and `split(text, text)` collide on the name `split`.  Underlying overloading limitation deserves its own follow-up (file when a second consumer hits it). | **Shipped (@PLAN37 phase 10.4)** |
-| ~~`text.starts_with_at(pos, prefix)`~~ — shipped 2026-05-18 | scan.loft's @PLAN matcher does `line[i+1]=='P' && line[i+2]=='L' && …` instead of `line.starts_with_at(i, "PLAN")` | Sugar over the existing slice + comparison.  Pure-loft body in `default/03_text.loft`; works in both backends. | **Shipped (@PLAN37 phase 10.5)** |
-| ~~`hash.contains(key) -> boolean`~~ — **deferred (not XS)** | scan.loft uses `vector<text>` + linear `set_contains` for valid_pids/valid_plans because `hash<T[K]>` isn't ergonomic as a "set of text" | The XS pitch assumed a simple sugar method.  Reality: `hash<T[K]>` keys are typed per-instance, so a generic `contains()` needs parser-level typed-dispatch — M+ work, not XS.  Use `h[key] != null` or `if h[key] { … }` idiom (established pattern in `tests/scripts/32-collections-regressions.loft`).  The deeper "set of text without wrapper struct" gap is a bigger language feature; defer until a second consumer asks for the sugar. | **Wontfix unless a 2nd consumer demands it** (@PLAN37 phase 10.6 deferral) |
-| ~~`text::escape_html(s)`~~ — shipped 2026-05-18 | viewer's main.loft rolled its own `escape(s)` for HTML output | Pure-loft.  Escapes the standard 5 entities (`&`, `<`, `>`, `"`, `'`) safely for both element bodies and attribute values.  **Drained out of the default stdlib into `lib/html/` (lib_plans/12 Phase 3.6, 2026-05-27) — now opt-in via `use html;`.** | **Shipped (@PLAN37 phase 10.7); moved to `lib/html`** |
+| ~~Path helpers — stdlib `path` module~~ — shipped 2026-05-18 as text methods | scan.loft, viewer, lib/markdown each rolled their own `dir_of` / `basename` / `resolve_relative` | Pure-loft as four text methods in `default/03_text.loft`: `p.dir()`, `p.basename()`, `p.join(other)`, `p.resolve(target)`.  Module-prefix style (`path::dir(p)`) couldn't ship — loft uses self-type method dispatch, not module namespaces.  `file().path` `./<name>` normalisation deferred to a follow-up. | **Shipped (@PLN42 phase 10.9)** |
+| ~~`text.split(text)`~~ — shipped 2026-05-18 as `text.split_text(text)` | scan.loft's link extractor walks char-by-char to find `](` (only `text.split(char)` exists today) | Renamed from `split` to `split_text` because loft doesn't allow fn overloading by non-self parameter type — `split(text, character)` and `split(text, text)` collide on the name `split`.  Underlying overloading limitation deserves its own follow-up (file when a second consumer hits it). | **Shipped (@PLN42 phase 10.4)** |
+| ~~`text.starts_with_at(pos, prefix)`~~ — shipped 2026-05-18 | scan.loft's @PLAN matcher does `line[i+1]=='P' && line[i+2]=='L' && …` instead of `line.starts_with_at(i, "PLAN")` | Sugar over the existing slice + comparison.  Pure-loft body in `default/03_text.loft`; works in both backends. | **Shipped (@PLN42 phase 10.5)** |
+| ~~`hash.contains(key) -> boolean`~~ — **deferred (not XS)** | scan.loft uses `vector<text>` + linear `set_contains` for valid_pids/valid_plans because `hash<T[K]>` isn't ergonomic as a "set of text" | The XS pitch assumed a simple sugar method.  Reality: `hash<T[K]>` keys are typed per-instance, so a generic `contains()` needs parser-level typed-dispatch — M+ work, not XS.  Use `h[key] != null` or `if h[key] { … }` idiom (established pattern in `tests/scripts/32-collections-regressions.loft`).  The deeper "set of text without wrapper struct" gap is a bigger language feature; defer until a second consumer asks for the sugar. | **Wontfix unless a 2nd consumer demands it** (@PLN42 phase 10.6 deferral) |
+| ~~`text::escape_html(s)`~~ — shipped 2026-05-18 | viewer's main.loft rolled its own `escape(s)` for HTML output | Pure-loft.  Escapes the standard 5 entities (`&`, `<`, `>`, `"`, `'`) safely for both element bodies and attribute values.  **Drained out of the default stdlib into `lib/html/` (lib_plans/12 Phase 3.6, 2026-05-27) — now opt-in via `use html;`.** | **Shipped (@PLN42 phase 10.7); moved to `lib/html`** |
 | `args() -> vector<text>` builtin | scan.loft uses env var `LOFT_INDEX_BUCKETED` as a CLI-arg workaround; viewer doesn't support args at all | Add the builtin that returns the program's invocation args. | XS |
 
 Driver doc: see the "Loft gaps surfaced" section in
-[`plans/future/37-tracker-index/07-loft-native-scanner.md`](plans/future/37-tracker-index/07-loft-native-scanner.md)
+[`plans/42-tracker-index/07-loft-native-scanner.md`](plans/42-tracker-index/07-loft-native-scanner.md)
 for the consumer-side narrative.
 
 ## See also

@@ -26,7 +26,7 @@ the other. Two evaluations, recorded 2026-06-10.
 The governing question for the whole note: **can a Rust main loop carry this richness
 (tick simulation, interest management, traffic classes, interpolation, forecasting)
 without recompiling the host every time a feature is added?** Yes — and the existence
-proof is already in-house: **@PLAN50 built ALL of its richness without touching a line
+proof is already in-house: **@PLN51 built ALL of its richness without touching a line
 of Rust.** Sight-range filtering, edge-triggered EXIT, seq numbers, the 30 Hz tick
 body, Hermite interpolation, bounce forecasting — every one landed as loft code over
 `lib/server`'s `poll_event()` pump; the pump's native half never changed.
@@ -67,7 +67,7 @@ native libraries from the registry, not as edits to the host binary. The kernel'
 recompile cadence becomes engine-release cadence, not feature cadence. The discipline
 that keeps it true: when a feature seems to need kernel code, ask *"mechanics or
 meaning?"* — meaning goes to loft, new mechanics go to a library, and only a genuinely
-new queue/loop primitive touches the kernel. (@PLAN50's open ~12 Hz pump finding is
+new queue/loop primitive touches the kernel. (@PLN51's open ~12 Hz pump finding is
 the boundary working as intended: a **mechanics** fix, made once in `lib/server`'s
 native half, inherited by every loft program on top.)
 
@@ -140,7 +140,7 @@ blocking** (every short event queued behind the big read) and its dual, **handli
 load whenever its bytes happen to finish** (blowing the frame budget mid-frame). The
 contract has two halves: *interleave on the wire, accumulate-then-publish at the loop*.
 
-**Three traffic classes, three drain rules** (the third surfaced by @PLAN50's pose
+**Three traffic classes, three drain rules** (the third surfaced by @PLN51's pose
 sync — see Prior art):
 
 | Class | Examples | Delivery | Drain rule at the tick |
@@ -189,7 +189,7 @@ does everywhere else.
 
 A is the classic game pattern and the cheapest first step; B is what asset streaming
 grows into. Prior art in-house: the serve WS already frames; `--html` shipped a chunked
-asset topology (@PLAN12's asset chunk).
+asset topology (@PLN80's asset chunk).
 
 ### The one semantic decision to settle before the protocol freezes
 
@@ -219,14 +219,14 @@ dependent-event contract, and whether remote-server patching is a near-term requ
 
 ---
 
-## Prior art in-house (evaluated 2026-06-10): @PLN6 runs the drain; @PLAN50 runs the WHOLE loop
+## Prior art in-house (evaluated 2026-06-10): @PLN6 runs the drain; @PLN51 runs the WHOLE loop
 
 Two dogfood projects already prototype this design in pure loft — the second more
 completely than the first.
 
-### @PLAN50 bumper-airplanes — the complete main-loop shape + measured findings
+### @PLN51 bumper-airplanes — the complete main-loop shape + measured findings
 
-[`plans/future/50-bumper-airplanes/`](../future/50-bumper-airplanes/00a-network-probe.md)
+[`plans/51-bumper-airplanes/`](../51-bumper-airplanes/00a-network-probe.md)
 + `tools/audience-demo-50/` (working MVP tests). `probe_server.loft`'s main loop **is**
 this note's loop contract, verbatim:
 
@@ -422,7 +422,7 @@ lane changes.
 ## Coverage — is this rich enough for most multiplayer games? (evaluated 2026-06-10)
 
 **Yes for most; the residue reduces to one primitive + one transport.** Covered by
-construction: party/audience, turn-based (events + @PLAN38 durable stores), co-op
+construction: party/audience, turn-based (events + @PLN43 durable stores), co-op
 (one-kernel → host-as-server falls out), MMO-lite/persistent (interest mgmt +
 rate-LOD + durable stores + lenient migration), spectator/replay (the projector IS an
 unfiltered spectator; deterministic tick + event log ≈ replay).
@@ -476,7 +476,7 @@ eventual browser-side unreliable frontend); **(2) no async runtime** — a nonbl
 small and auditable, `quinn`/QUIC is the heavier fallback if congestion control
 outgrows a token bucket; **(3) deterministic netcode tests** — the in-process
 loopback channel gains loss/reorder/duplicate injection, so the reliability layer is
-tested without a network, and @PLAN50's probe targets extend with a loss% axis.
+tested without a network, and @PLN51's probe targets extend with a loss% axis.
 
 ### Broadcast bulk: measured, never assumed (user-directed 2026-06-10)
 

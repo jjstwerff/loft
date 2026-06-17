@@ -104,9 +104,9 @@ callers can exist).  The dispatcher census that gated it is complete:
 plain calls, par lanes (+ runtime witness-free), entry invocations
 (REPL capture), and the cdylib shared bridge (runtime type-name ids)
 all speak the uniform ABI.  Full matrix green —
-[plans/59-return-abi](plans/59-return-abi/README.md) records the three
+[plans/55-return-abi](plans/55-return-abi/README.md) records the three
 rounds, every probe, and the phase-2 cleanups.  Originally: plan opened —
-[plans/59-return-abi](plans/59-return-abi/README.md) (@PLAN59).  Phase 0
+[plans/55-return-abi](plans/55-return-abi/README.md) (@PLN55).  Phase 0
 SHIPPED: the H1 census probe caught a LIVE #339 sibling (vector-literal
 tails promote late too; 7-line caller-first repro panicked on main) — the
 retrofit now covers all three heap-buffer kinds, regression in
@@ -168,7 +168,7 @@ five corpora: never decides alone; a debug sentinel guards the claim);
 `check_ref_leaks` pools the decoded note instead of dropping it (its
 false `___clos_1` leak report is gone).  Regression:
 `tests/scripts/297-closure-factory-explicit-return.loft`.  Full record +
-residuals found en route (armed-lib-debug baseline redness; @PLAN59
+residuals found en route (armed-lib-debug baseline redness; @PLN55
 growth assert on two lib fns): DEPS_INVENTORY § Status.
 
 ---
@@ -202,6 +202,41 @@ found in pass 3.
    walk as a debug-assert cross-check for one release
    (`debug_assert_eq!(carried, derived)`) — drift between them is a
    found bug, exactly like the pass-3 unifications.
+   - **Design-protocol pass 1 (2026-06-17) — over-reach caught BEFORE coding.**
+     Classifying the analyses falsified the framing of this step: `guard_escapes(node,
+     target)`, `reclaim_safe(code, vars, st)`, `confine_reassign_safe(code, local)` and
+     `store_confinement` are all **contextual** — a *(code region × target)* query
+     ("does X hold for target WITHIN this code"), NOT a re-derivation of a per-var fact.
+     So they are the genuinely-shape-local questions of point 3, not carriable per-var
+     state, and "convert the analysis to carried data" would over-unify a contextual
+     query under a per-var flag (`guard_escapes` as a single per-var bool loses the
+     code-region the query is scoped to).  The carriable per-var *category* (point 1)
+     is already largely carried: `captured` + `caller_hidden_buf` on the Variable
+     struct, owned/borrowed-view via `Type::is_heap_owned` + the `Deps` borrow set.
+     The actionable H3 residual is therefore NARROWER than "carry-convert the
+     analyses": probe each contextual analysis's BODY for whether it *re-derives* a
+     per-var ownership fact inline (vs only asking a shape-local escape/placement
+     question), and have only that inline re-derivation read the carried category —
+     the analyses themselves stay walks.
+   - **Design-protocol pass 2 (2026-06-17) — the body probe, on the two CORE
+     free-placement analyses (`reclaim_safe`, `store_confinement`): no inline
+     ownership re-derivation found.**  Both READ carried per-var facts
+     (`is_argument`/`is_captured`/`is_skip_free`/`tp().depend()`/`name`) and call
+     genuinely-contextual sub-queries (`guard_escapes`, `holder_retained`,
+     `confine_reassign_safe`, `recover_backer`).  So this hotspot's premise — "every
+     analysis re-asserts what construction already knew" — is **over-stated**: the
+     analyses READ what construction knew (the facts ARE carried, on the variable
+     table + `Type`/`Deps`), and what remains is the **inherent shape-locality** of
+     free-placement (escape / retention / confinement-span genuinely depend on code
+     structure, not on a carryable per-var attribute).  **Conclusion: H3's "carry the
+     facts" mitigation (points 1–2) is largely already realised; there is no open L
+     carry-conversion.**  The real residual pain the evidence (#316/#323) points at is
+     the COMPLEXITY of the contextual placement walks (each new construct's shape must
+     be handled) — which carrying cannot remove; it is managed by the cross-check
+     corpus (plan-57 probes, watermark guard), not by an ownership refactor.  Residual
+     verification (not yet done): confirm the remaining analyses (`free_vars`,
+     `guard_refs`, `store_lifetime_guard`) also only-read; if so, H3 closes as
+     "premise over-stated, facts already carried."
 3. The walker keystones (`Value::any_node` family) stay as the mechanism
    for the residual genuinely-shape-local questions (tail position,
    dominance).
@@ -259,7 +294,7 @@ segfaulted on half-migrated variable tables).
    not an aspiration.
    The other named residual — **work-ref (`__ref_N`) counter equality per fn** —
    was NOT added, by design, after item 3's re-evaluation below.
-3. ✅ **Re-evaluation done (item 3 fired post-H1).** H1 (@PLAN59) removed the
+3. ✅ **Re-evaluation done (item 3 fired post-H1).** H1 (@PLN55) removed the
    only known source of cross-pass signature divergence; probing the question
    "does anything still rely on name stability beyond lambdas?" settled it:
    - `work_refs()` (the `__ref_N` incrementer) fires **zero** times across the
@@ -320,15 +355,31 @@ Two axes, NOT one — the consolidation must keep them distinct:
 
   *Verified `store.rs:1836-1975`.*
 
-**Load-bearing RISK to settle first (matrix-first before any build):** `set_byte`
-writes `255` for `i32::MIN`, but `get_byte` returns `read+min` unconditionally — it
-never maps `255` back to `i32::MIN` the way `get_short`/`get_i16_raw` decode their
-sentinels. So a nullable `Byte` field's null may not round-trip (reads as `min+255`),
-UNLESS a separate path gates it or nullable bytes never reach `get_byte`. This
-set/get drift is exactly H6's thesis ("symmetric conventions re-implemented per width
-have drifted"); resolve it with a boundary matrix (nullable u8 field/vector, both
-backends) BEFORE designing the `Encoding` enum — the table must encode the *correct*
-symmetric transform, not enshrine the current asymmetry.
+**Load-bearing RISK — SETTLED 2026-06-17 (matrix-first), and it was NOT the
+asymmetry the design note hypothesized.** The note read the raw `get_byte`
+accessor and concluded null never round-trips. But the nullable consumers
+`get_byte_nullable`/`set_byte_nullable` (and the Short/ShortRaw twins) are a
+**correct symmetric pair** (`raw 255 ⇔ null` for every `min`), confirmed by a
+`min × range-fullness × container × backend` matrix that round-tripped null for
+*every representable* case on both backends. There is **no encode/decode
+asymmetry to repair** — so the `NullEnc` encode/decode table would have
+*enshrined a phantom risk*.
+
+The matrix surfaced the REAL latent bug on a different axis — **range-fullness,
+not `min`**: a NULLABLE narrow-integer field with the FULL code range
+(`max-min == 255`/`65535`) read its null back as `max-1`. Root: the storage
+width was computed in **two disagreeing places** — `IntegerSpec::byte_width`
+(read, via `get_val`) correctly reserved a sentinel code, but `Type::size`
+(write + allocation, via `set_field_check`/`typedef.rs`) did **not** for the
+nullable full range, so the field was under-allocated to 1 byte (Byte) and the
+write stored the 1-byte `255` sentinel into a field the read decoded as a 2-byte
+Short. THIS is H6's thesis realised (one width-fact, two drifted copies) — fixed
+by the proportionate chokepoint move: a single **`IntegerSpec::range_to_width`**
+home that both `byte_width` and `Type::size` derive from (commit pending).
+Regression: `tests/scripts/389-h6-nullable-full-range-narrow.loft` (both
+backends). The matrix prevented building the table to fix the wrong thing — the
+remaining `NullEnc` consolidation below is now an optional, lower-risk cleanup
+(the per-width pairs already agree), not a load-bearing fix.
 
 Sketch: `enum NullEnc { I32Min, I64Min, ShortPlus1, RawMax, ByteMax, FloatNan,
 SingleNan, TextNull, DbRefRec0, DbRefSentinel }` with `null_stored()/encode()/decode()`;
@@ -337,6 +388,159 @@ at a time behind `debug_assert_eq!(table_derived, hardcoded)` cross-checks.
 Consumers: `store.rs` set_*/get_*, `fill.rs` conv_*_from_null, `state/codegen.rs::
 emit_typed_null`, `generation/mod.rs::default_native_value`, `database/structures.rs::
 set_default_value`, `database/types.rs` byte/short/short_raw/int.
+
+**Design decision — narrow fixed-width ints are MEMORY-ALLOCATION types; null is
+the ALL-ONES byte, and nullability only shifts the `min` offset (2026-06-17).**
+
+For the `forced_size` aliases (`u8`/`i8`/`u16`/`i16`) the storage width is FIXED —
+a `u8` is one byte, always, nullable or not; storage NEVER widens for nullability.
+The design is chosen for **rustc-codegen simplicity**, not for matching the value
+range a reader expects from the type's name:
+
+- **Null is stored as the all-ones byte** (`255` for 1-byte, `65535` for 2-byte),
+  uniformly for EVERY narrow type.  So in generated Rust, storing and testing null
+  is ONE type-independent instruction — `byte == all-ones → null` — directly in
+  memory, no per-type branch.  *(`set_byte`: `val == i32::MIN → 255`.)*
+- **A non-null value decodes as `read + min`**; `min` is the only thing that
+  varies — by type AND by nullability.  The usable values map to bytes
+  `0..=254` (1-byte) so the all-ones byte is never a real value.  Decoded, the
+  all-ones byte is always exactly `max+1` — one past the usable range, so the user
+  can never produce it: the sentinel is invisible.
+
+| alias | not-null `min` / range | nullable `min` / range | all-ones byte decodes to |
+|---|---|---|---|
+| `u8`  | `0`   `0..=255`        | `0`    `0..=254`        | `255` = max+1 → null |
+| `i8`  | `-128` `-128..=127`   | `-127` `-127..=127`    | `128` = max+1 → null |
+| `u16` | `0`   `0..=65535`     | `0`    `0..=65534`     | `65535` = max+1 → null |
+| `i16` | `-32768` `-32768..=32767` | `-32767` `-32767..=32767` | `32768` = max+1 → null |
+
+Nullable sacrifices ONE edge value, and which edge is the user-invisible part that
+keeps the useful range: **unsigned drops the TOP** (`min` stays `0`, `max-=1`),
+**signed drops the BOTTOM** (`max` stays, `min+=1`) — so a not-null `i8` is the
+original Rust `-128..=127` and a nullable `i8` is `-127..=127`, differing only in
+whether `-128` is available.
+
+**Probed BASELINE — the full matrix on the interpreter (2026-06-17).**  Each cell
+stores an edge value into a struct field and reads it back:
+
+| field | edge values → read back |
+|---|---|
+| `u8` nullable  | `255`→**null** ✗ · `254`✓ `0`✓ `null`✓ |
+| `i8` nullable  | `127`→**null** ✗ · `-128`✓ `-127`✓ `null`✓ |
+| `u16` nullable | `65535`→**null** ✗ · `65534`✓ `null`✓ |
+| `i16` nullable | `32767`→**null** ✗ · `-32768`✓ `null`✓ |
+| `u8` **not-null**  | `255`✓ `0`✓ — full range, correct |
+| `i8` **not-null**  | `-128`✓ `127`✓ — full range, correct |
+| `u16` **not-null** | `65535`→**null** ✗ |
+| `i16` **not-null** | `-32768`✓ `32767`→**null** ✗ |
+
+Two DISTINCT defects fall out:
+
+1. **The nullable-sentinel design (this section).**  Today the sacrificed value is
+   silently stored as null instead of being out of range, and for SIGNED types the
+   sacrificed end is the TOP (`127`/`32767`) — the opposite of the design's
+   symmetric `-127..=127` / `-32767..=32767`.  Fix = the staged
+   `IntegerSpec::usable_min`/`usable_max` (in `data.rs`): not-null → full native
+   range; nullable → signed `min+1`, unsigned `max-1`.  Wire it at the THREE
+   `spec.min`/`spec.max` consumers — read op min (`parser/mod.rs:3303`), write op
+   min (`:3724`/`:3771`), literal range-check (`:1248`) — all deriving from the one
+   method so the read/write/check cannot drift.  The runtime `get_byte`/`set_byte`
+   DON'T change (already take `min`; null is already the all-ones byte); the
+   narrow-VECTOR element path (`Byte`/`ShortRaw`, raw) is excluded via
+   `nullable && !narrow_vec`.
+
+2. **A SEPARATE 2-byte not-null bug (fixed in the same pass).**  A `not null`
+   `u16`/`i16` field could not hold its max (`65535`/`32767` → null): the 2-byte
+   field path used the `Short` (`+1`) encoding which reserves a null code even when
+   the field is not-null (the 1-byte `Byte` op does NOT — that's why not-null
+   `u8`/`i8` were already full-range).  Fixed with a new `NarrowIntKind::ShortFull`
+   / `OpGetShortFull` (`store::get_short_full`: direct `read + min`, NO sentinel),
+   the 2-byte twin of `Byte`; the write reuses `OpSetShortRaw`.
+
+**DONE 2026-06-17 (`4a632251`).**  All of the above LANDED + full suite green, both
+backends:
+- `IntegerSpec::usable_min`/`usable_max` (the one width/range home) wired at the
+  read op, write op, and the literal range-check (`int_value_fits`, gained a
+  `narrow_field` flag — a field STORE reserves the sentinel; a param/return/cast is
+  a full-width register value, so `f(65535)` to a `u16` param stays legal; function
+  params can't be `not null`).  *(The `narrow_field` flag was later REVERTED in
+  `ea4a74fe` — see "Developer communication" below — when it proved too coarse
+  for struct-init; the same behaviour is now a store-only sentinel check.  The
+  `usable_min`/`usable_max` home is unchanged.)*
+- Field nullability is stamped onto the stored `IntegerSpec.not_null` at attribute
+  registration (the alias path left it at the default), so the range-check reads
+  the right bounds.
+- `OpGetShortFull` added end-to-end (`default/01_code.loft` `#rust` template →
+  `fill.rs` regenerated via `make fill` → native via the template).
+- `lib/code.loft` `cur_arg: u8` → `u8 not null` (the `255` "no arg" sentinel is a
+  meaningful value, not the null encoding).
+- Regression `tests/scripts/389-narrow-alias-ranges.loft`.
+
+Final shape: not-null keeps the full native range; nullable is symmetric for signed
+(`-127..=127`, `-32767..=32767`) and top-trimmed for unsigned (`0..=254`,
+`0..=65534`); the all-ones byte is the one uniform sentinel, only `min` shifts.
+
+**Follow-up DONE (`f6f660f8`): the inline `Struct{..}.x` byte-field read on
+native.**  The pre-eval/hoisting path (`generation/dispatch.rs`) hoisted a
+store-mutating call arg into a `_harg_*` temp and emitted the CALL form
+`OpGetByteNullable(cell, _harg, …)` for ANY `Value::Call` — including inline
+`#rust` ops (byte/short field reads), which have no callable fn, so native
+compilation failed with "not found in scope".  It predated this work (broke plain
+`OpGetByte` too) and was NOT narrow-int-specific.  Fixed by gating that path on
+`def_fn.rust().is_empty()`: only true user-fn / `codegen_runtime` Op-stub calls
+take the call-form hoist; inline `#rust` ops fall through to the normal emit, which
+inlines the template (its own `let db = @v1; …` sequences the mutating arg before
+the read borrow).  Regression `tests/scripts/inline-construct-narrow-read.loft`
+(both backends, all four narrow widths × nullable/not-null/null).
+
+**Developer communication — DONE (`ea4a74fe` compile-time, `1b8a3792` runtime).**
+A narrow sentinel is invisible to the user (§ design), so a value that *lands* on
+it must be SURFACED, not silently nulled.  Two touch-points, each targeted (never
+pervasive):
+
+- **Compile-time, for literals.**  Storing the sacrificed value into a nullable
+  narrow field is a compile error that names the cause:
+  *"255 is reserved as the null sentinel of a nullable u8 (usable 0..=254); declare
+  the field `not null` for the full range, or cast with `as u8`"* — applied at BOTH
+  field-store sites (`obj.x = 255` in `expressions.rs`, `U8N { x: 255 }` in
+  `objects.rs`).  Wiring it to the struct-init site closed a **silent-store
+  regression**: the `4a632251` `narrow_field` flag on `int_value_fits` was too
+  coarse — struct-init goes through `convert` (full bounds), so `U8N { x: 255 }`
+  slipped past and stored null.  The flag is **reverted**: `int_value_fits` is back
+  to the plain full-range TYPE-fit (so `f(65535)` to a `u16` param stays legal —
+  params/casts are full-width registers, no storage sentinel), and the sentinel
+  reservation is now a **store-only** check (`Parser::nullable_sentinel_hint`)
+  applied at exactly the two field-store sites.  Regression
+  `tests/scripts/389-narrow-sentinel-rejected.loft` (`@EXPECT_ERROR`).
+- **Runtime, dev-only, for computed values.**  A non-null value computed at runtime
+  (e.g. `f() as u8 == 255`) can still collide; the nullable set ops route through
+  `Stores::set_byte_nullable` / `set_short_nullable`, which detect the collision and
+  log a rate-limited `Warn` (*"value 255 written to a nullable narrow field collides
+  with the null sentinel and reads back as null (usable 0..=254); declare … `not
+  null` …"*).  loft's logger IS the dev-vs-shipped switch, for free: the interpreter
+  attaches it at default `Warn` → the dev sees it in `.loft/log.txt`; a shipped
+  game runs with no dev logger / a production config → suppressed, the
+  `logger.is_none()` guard collapsing that path to one `Option` check per write;
+  rate-limited (keyed on field offset → 1000 colliding writes = 5 warnings, then
+  suppressed).  Behaviour is UNCHANGED — the value still stores the sentinel; only
+  the diagnostic is added.  Regression
+  `tests/scripts/389-narrow-runtime-collision.loft` (both backends).
+
+**Narrow-VECTOR consistency — DONE.**  Narrow-vector elements now reach their FULL
+range, consistent with the not-null field path: `vector<u16>` holds `65535` and
+`vector<i16>` holds `32767`, matching `vector<u8>` holding `255`.  Root: the vector
+storage `Parts::ShortRaw` is ALWAYS non-nullable (`narrow_vector_content` /
+`vectors.rs` build it with `nullable = false`), but its read `get_i16_raw` still
+decoded `u16::MAX → null` — corrupting ALL five read sites (runtime access,
+serialization `io.rs`, format ×2, `types.rs`).  The proportionate chokepoint fix:
+`get_i16_raw` now delegates to `get_short_full` (no sentinel), so every path is
+full-range at once and the two functions can't drift (H6 thesis).  The write twin
+`set_i16_raw` keeps its `i32::MIN → u16::MAX` clamp as an underflow guard — narrow
+vectors store concrete values, never null, exactly like `vector<u8>`/`Byte`.
+Regression `tests/scripts/389-narrow-vector-full-range.loft` (both backends).
+
+**Open follow-up (separate, pre-existing).**  The 4-/8-byte `i32`/`integer` types
+use a `MIN`-sentinel (a not-null `i32` doesn't reclaim `i32::MIN`).
 
 ---
 
@@ -420,4 +624,4 @@ in the ref_return comment.  Regression:
 `tests/scripts/298-multi-return-site-ref-buffer.loft`.  H5's load
 mostly dissolved with H1 (the contract is now documented + the assert
 enforces its hardest clause).  Full history:
-[plans/59-return-abi](plans/59-return-abi/README.md).
+[plans/55-return-abi](plans/55-return-abi/README.md).

@@ -56,7 +56,7 @@ v6 — or new `tests/multiplayer_v6.rs`).
 
 ### Plan-36 audience-demo retrofit
 
-Plan-36 ([plans/6-audience-generative-art/](../../future/6-audience-generative-art/))
+Plan-36 ([plans/6-audience-generative-art/](../../future/6-audience-generative-art))
 hasn't shipped its server yet.  Phase 06 ships the server using
 writable closures from day one.  Loft snippets projected to the
 audience read `state.X` instead of `state.inner.X` — the
@@ -84,8 +84,8 @@ is production-ready for the lib/server use cases.
 - **CAVEATS.md** — remove the "closure capture is by-value /
   no mutation" caveat row (now spec'd via @PLAN22).
 - **`git mv plans/22-mutable-closures plans/finished/22-mutable-closures`**.
-- Update incoming references (TESTING.md, ROADMAP.md, @PLAN23
-  EVENT_LOOP, @PLAN32 TTT v6 row, @PLN6 audience-demo).
+- Update incoming references (TESTING.md, ROADMAP.md, @PLN32
+  EVENT_LOOP, @PLN39 TTT v6 row, @PLN6 audience-demo).
 
 ## Test surface
 
@@ -147,7 +147,7 @@ should report:
 | Risk | Mitigation |
 |---|---|
 | Audit task pulls in scope creep — annotating every default/ fn is hours of work | Time-box: tighten only fns called on captured args in @PLAN22's matrix cells.  Other defaults stay `Unknown` (still correct, just over-conservative).  Full audit deferred to a separate ROADMAP item if it surfaces as a real cost. |
-| TTT v6 retrofit surfaces multiplayer-protocol bugs unrelated to closures | File as separate P-issues; don't block phase 06 closeout.  TTT v6 ships when v5's tests pass against v6 + writable-closure semantics; the protocol-correctness work belongs to @PLAN32. |
+| TTT v6 retrofit surfaces multiplayer-protocol bugs unrelated to closures | File as separate P-issues; don't block phase 06 closeout.  TTT v6 ships when v5's tests pass against v6 + writable-closure semantics; the protocol-correctness work belongs to @PLN39. |
 | Plan-36 retrofit competes with @PLN6's own scoping work | Plan-36 hasn't shipped its server.  Phase 06 ships the FIRST server cut.  Plan-36's later work builds on it.  Coordinated via plans/6-audience-generative-art README. |
 | Doc closeout lands while ROADMAP cross-refs are stale | `scripts/check_doc_drift.sh` runs in CI; any stale refs surface immediately. |
 
@@ -155,6 +155,6 @@ should report:
 
 - [README § Drivers](README.md#drivers) — TTT v6 + @PLN6 motivation.
 - [README § Verification](README.md#verification) — original verification list (subset of phase 06's).
-- [@PLAN32 TTT § v6](../../future/32-tic-tac-toe/README.md#tic-tac-toe-v6--ergonomic-retrofit-using-writable-closures) — driver.
-- [@PLN6 audience demo](../../future/6-audience-generative-art/) — driver.
+- [@PLN39 TTT § v6](../../39-tic-tac-toe/README.md#tic-tac-toe-v6--ergonomic-retrofit-using-writable-closures) — driver.
+- [@PLN6 audience demo](../../future/6-audience-generative-art) — driver.
 - [@PLAN15 phase 06](../15-closure-validation/00-matrix.md) — closeout pattern.

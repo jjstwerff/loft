@@ -1231,7 +1231,11 @@ impl Parser {
     }
 
     /// @PLAN48 P2: literal exemption — true when `code` is a constant integer that
-    /// provably fits `dst`'s range, so `x: i32 = 5` / `f(5)` stay legal without `as`.
+    /// provably fits `dst`'s full declared range, so `x: i32 = 5` / `f(5)` /
+    /// `f(65535)` to a `u16` param stay legal without `as`.  This is the TYPE-fit
+    /// question (a full-width register value); the narrower nullable-narrow-FIELD
+    /// sentinel reservation is a separate, store-only check
+    /// ([`Self::nullable_sentinel_hint`]) applied at the field-store sites.
     fn int_value_fits(&self, code: &Value, dst: &Type) -> bool {
         let Type::Integer(spec) = dst else {
             return false;
@@ -1246,6 +1250,43 @@ impl Parser {
             },
         };
         n >= i64::from(spec.min) && n <= i64::from(spec.max)
+    }
+
+    /// When a literal stored into a NULLABLE narrow field fits the type's full
+    /// range but lands on the reserved null sentinel (out of the usable range),
+    /// return a hint explaining WHY — e.g. `255` in a nullable `u8`.  This tells
+    /// the developer the value is the null encoding, not just "too big", and
+    /// points at `not null` for the full range.  `None` for the ordinary
+    /// out-of-range case (a generic narrowing message fits that).
+    fn nullable_sentinel_hint(&self, code: &Value, dst: &Type, dst_name: &str) -> Option<String> {
+        let Type::Integer(spec) = dst else {
+            return None;
+        };
+        if spec.not_null {
+            return None;
+        }
+        let n = match code.unspan() {
+            Value::Int(n) => i64::from(*n),
+            Value::Long(n) => *n,
+            other => match crate::const_eval::const_eval(other, &self.data) {
+                Some(Value::Int(n)) => i64::from(n),
+                Some(Value::Long(n)) => n,
+                _ => return None,
+            },
+        };
+        let fits_full = n >= i64::from(spec.usable_min(false)) && n <= spec.usable_max(false);
+        let fits_usable = n >= i64::from(spec.usable_min(true)) && n <= spec.usable_max(true);
+        if fits_full && !fits_usable {
+            Some(format!(
+                "{n} is reserved as the null sentinel of a nullable {dst_name} \
+                 (usable {}..={}); declare the field `not null` for the full range, \
+                 or cast with `as {dst_name}`",
+                spec.usable_min(true),
+                spec.usable_max(true),
+            ))
+        } else {
+            None
+        }
     }
 
     fn convert(&mut self, code: &mut Value, is_type: &Type, should: &Type) -> bool {
@@ -3291,30 +3332,25 @@ impl Parser {
                      (alias_d_nr={alias}) — only 1/2/4/8 are supported \
                      by the OpGet* family"
                 );
-                if s == 1 {
-                    // #334: see the OpSetByteNullable note — nullable byte
-                    // STRUCT FIELDS decode the reserved 256th code to null.
-                    // Vector elements (alias-less forced_size(1)) keep the
-                    // raw direct encoding — their stride/value contract is
-                    // the narrow-vector one, not the field-sentinel one.
-                    let byte_vec = alias == u32::MAX && spec.forced_size.is_some();
-                    let op = if nullable && !byte_vec {
-                        "OpGetByteNullable"
-                    } else {
-                        "OpGetByte"
-                    };
-                    self.cl(op, &[code, p, Value::Int(spec.min)])
-                } else if s == 2 && narrow_vec {
-                    // narrow vector element, direct encoding.
-                    self.cl("OpGetShortRaw", &[code, p, Value::Int(spec.min)])
-                } else if s == 2 {
-                    // Struct field with u16/i16 alias OR bounds-heuristic
-                    // landing at 2 bytes: legacy `Parts::Short` `+1` encoding.
-                    self.cl("OpGetShort", &[code, p, Value::Int(spec.min)])
-                } else if s == 4 {
-                    self.cl("OpGetInt4", &[code, p])
+                // H4-medium: the op KIND comes from the ONE width→op home
+                // (`NarrowIntKind::of`), so this READ op and the matching WRITE
+                // op in `set_field_check` cannot drift.  A nullable byte STRUCT
+                // FIELD decodes the reserved 256th code to null (`ByteNullable`);
+                // a narrow-vector element keeps the raw direct encoding (its
+                // stride/value contract is the narrow-vector one, not the
+                // field-sentinel one) — `narrow_vec` selects that.
+                let kind = crate::data::NarrowIntKind::of(s, nullable, narrow_vec);
+                if kind.takes_min() {
+                    // H6: a nullable narrow FIELD reserves the all-ones code for
+                    // null, so its usable range (and the `min` the read decodes
+                    // against) shrinks by one edge — `usable_min` is the one home
+                    // shared with the write op + range-check.  Narrow-VECTOR
+                    // elements use the raw path (no field sentinel), so they keep
+                    // the full `min`.
+                    let mn = spec.usable_min(nullable && !narrow_vec);
+                    self.cl(kind.get_op(), &[code, p, Value::Int(mn)])
                 } else {
-                    self.cl("OpGetInt", &[code, p])
+                    self.cl(kind.get_op(), &[code, p])
                 }
             }
             Type::Enum(_, false, _) => self.cl("OpGetEnum", &[code, p]),
@@ -3732,8 +3768,6 @@ impl Parser {
         };
         let set_op = match tp {
             Type::Integer(ref spec) => {
-                let IntegerSpec { min, .. } = *spec;
-                let m = Value::Int(min);
                 // Post-2c: honor size(N) on the alias recorded during field
                 // parsing; fall back to the limit()-based heuristic.
                 let alias_nr = if f_nr == usize::MAX {
@@ -3774,25 +3808,23 @@ impl Parser {
                         self.data.def(d_nr).attributes()[f_nr].name.clone()
                     },
                 );
-                if s == 1 {
-                    // #334: a NULLABLE byte field reserves the 256th code as
-                    // the null sentinel (255 distinct values) — the Nullable
-                    // op pair translates integer null ↔ the sentinel.
-                    // `not null` fields keep the full range via the raw op.
-                    let op = if f_nr != usize::MAX && self.data.attr_nullable(d_nr, f_nr) {
-                        "OpSetByteNullable"
-                    } else {
-                        "OpSetByte"
-                    };
-                    self.cl(op, &[ref_code, pos_val, m, val_code])
-                } else if s == 2 && narrow_vec {
-                    self.cl("OpSetShortRaw", &[ref_code, pos_val, m, val_code])
-                } else if s == 2 {
-                    self.cl("OpSetShort", &[ref_code, pos_val, m, val_code])
-                } else if s == 4 {
-                    self.cl("OpSetInt4", &[ref_code, pos_val, val_code])
+                // H4-medium: same width→op home (`NarrowIntKind::of`) as the
+                // READ in `get_val`, so the write op matches the read op for the
+                // field.  A NULLABLE byte STRUCT FIELD reserves the 256th code as
+                // the null sentinel (the Nullable op pair translates null ↔ the
+                // sentinel); `not null` fields and narrow-vector elements keep the
+                // raw op.
+                let nullable = f_nr != usize::MAX && self.data.attr_nullable(d_nr, f_nr);
+                let kind = crate::data::NarrowIntKind::of(s, nullable, narrow_vec);
+                // H6: the WRITE op encodes against the same `usable_min` the READ
+                // op (`get_val`) decodes against — a nullable narrow field reserves
+                // the all-ones code for null, shrinking the usable range by one
+                // edge; narrow-VECTOR elements keep the full `min` (raw path).
+                let m = Value::Int(spec.usable_min(nullable && !narrow_vec));
+                if kind.takes_min() {
+                    self.cl(kind.set_op(), &[ref_code, pos_val, m, val_code])
                 } else {
-                    self.cl("OpSetInt", &[ref_code, pos_val, val_code])
+                    self.cl(kind.set_op(), &[ref_code, pos_val, val_code])
                 }
             }
             Type::Vector(ref content, _)

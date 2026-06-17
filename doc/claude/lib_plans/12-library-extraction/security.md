@@ -11,7 +11,7 @@ Part of [@PLAN12 library extraction](README.md).  Covers
 the loft-binary classifier that fail/warns by severity.  Same
 schema covers `"package": "loft"` advisories for the
 non-drainable stdlib floor.  Pairs with
-[lib-plan 30 § Phase 30.4](../future/30-loft-distribution/README.md)
+[lib-plan 30 § Phase 30.4](../78-loft-distribution/README.md)
 for the binary-side trust chain.
 
 Also covers the **verify-on-recompile** verification-timing
@@ -337,7 +337,7 @@ error: loft 0.8.4 was yanked for a security vulnerability
 ```
 
 The `loft self-update` referenced in the fix line is shipped
-by [`lib_plans/future/30-loft-distribution/`](../future/30-loft-distribution/README.md)
+by [`lib_plans/78-loft-distribution/`](../78-loft-distribution/README.md)
 — Phase 6.7 produces the advisory, Phase 30 provides the
 mechanical fix path.  Both halves are required to make the
 trust chain useful for the binary; 6.7 alone surfaces the

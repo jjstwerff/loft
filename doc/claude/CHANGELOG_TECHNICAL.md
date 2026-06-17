@@ -653,7 +653,7 @@ Full diagnosis in PROBLEMS.md @P321c.  `imaging` stays in `LIB_PKGS_NATIVE_SKIP`
 ### @P274 closed 2026-05-14 — heap-typed tail return + text-concat type-dispatch
 
 Two coordinated codegen + parser fixes for native-only crashes
-that surfaced when @PLAN37 viewer added the
+that surfaced when @PLN42 viewer added the
 `render_md_table_row` / `parse_md_row` / `find_table_headers`
 helper trio (commit 89fd2767).
 
@@ -858,7 +858,7 @@ The 61 broken markdown links surfaced by phase 09's
 - After cleanup: 0 broken, 245 targets, 1267 links.
 
 The phase 09 follow-up section in
-`plans/future/37-tracker-index/09-backlinks.md` is updated to
+`plans/42-tracker-index/09-backlinks.md` is updated to
 mark this closed.
 
 ---

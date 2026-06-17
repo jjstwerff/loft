@@ -192,7 +192,7 @@ wide to combine with other work.
       debug-assertions=true) are globally red at baseline
       (`check_ref_leaks` false positives on plain `File` locals, then a
       freed-store use inside `ir_store::write_definition`) — the override
-      that ships them off is load-bearing; and the @PLAN59 growth assert
+      that ships them off is load-bearing; and the @PLN55 growth assert
       tripped on `n_map_from_json` / `n_glb_pos_min` (lib fns) in armed
       builds — FIXED 2026-06-12: the assert's claim was too broad
       (pass-1 multi-return-site growth is sound and pass-stable; only

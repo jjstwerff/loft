@@ -81,7 +81,7 @@ entire PLAN52 family included.  Therefore:
 - A persistent precompiled-stdlib cache would help generally but is
   **off this plan's critical path** and carries a Miri-provenance
   caveat (mmap-reinterpret is Miri-hostile) — filed as
-  [@PLAN54 stdlib-fast-start](../../future/54-stdlib-fast-start/README.md).
+  [@PLN52 stdlib-fast-start](../../52-stdlib-fast-start/README.md).
 
 ## rustc baseline (per close-criterion 5)
 
@@ -114,7 +114,7 @@ entire PLAN52 family included.  Therefore:
 
 ## Open for Stage A2
 
-- Decide cluster 2's (A)/(B)/(C) fix with the @PLAN38 layout owner,
+- Decide cluster 2's (A)/(B)/(C) fix with the @PLN43 layout owner,
   then re-run Miri to peel the next execution-phase finding.
 - Full ASan sweep over `tests/` (not just the one probe) to
   enumerate the rest of the cluster catalogue.

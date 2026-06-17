@@ -687,6 +687,34 @@ impl WorkerStores {
 }
 
 impl Stores {
+    /// H8 — grow `allocations` to `high_water` slots (the `par` dispenser's
+    /// one-past-last index) so every worker-allocated slot has a parent slot to
+    /// swap into.  Paired with [`Self::swap_in_worker_slots`]; the two are the
+    /// ONE home for the `par` worker-slot swap-back (the memory-safety-critical
+    /// "swap dance" — previously inline in `parallel.rs`).
+    pub(crate) fn grow_allocations_to(&mut self, high_water: usize) {
+        while self.allocations.len() < high_water {
+            self.allocations.push(crate::store::Store::new(100));
+        }
+    }
+
+    /// H8 — swap each store slot `worker` allocated (`worker_allocated_indices`)
+    /// into this parent by index, after a `par` worker batch joins.
+    ///
+    /// Store isolation — the load-bearing `par` memory-safety invariant — holds
+    /// for ONE reason expressed HERE: each worker lists ONLY the slots it itself
+    /// allocated, and the bounds guard skips out-of-range indices, so no two
+    /// threads' slots ever alias through this swap.  Call [`Self::grow_allocations_to`]
+    /// the dispenser high-water mark first, so every listed slot has a parent home.
+    pub(crate) fn swap_in_worker_slots(&mut self, worker: &mut Stores) {
+        for &slot_nr in &worker.worker_allocated_indices {
+            let i = slot_nr as usize;
+            if i < worker.allocations.len() && i < self.allocations.len() {
+                std::mem::swap(&mut self.allocations[i], &mut worker.allocations[i]);
+            }
+        }
+    }
+
     /// @PLN16.J — begin recording structural changes (claims / frees) on every heap
     /// store, for the debugger's edit journal.  Off by default (one branch on the cold
     /// alloc paths); turn on only for the duration of an edit, then drain with
@@ -1191,6 +1219,63 @@ impl Stores {
             && let Ok(mut lg) = logger.lock()
         {
             lg.log_runtime_kind(&kind, None);
+        }
+    }
+
+    /// Nullable narrow-FIELD store with a dev-only sentinel-collision warning.
+    ///
+    /// `OpSetByteNullable` reserves the all-ones byte (255) for null, so a
+    /// NON-null value that encodes onto it (`val - min == 255`) reads back as
+    /// null — silent data loss the compile-time check can only catch for
+    /// literals.  This logs a `Warn` through the attached logger, which is
+    /// rate-limited + level-filtered: it points the developer at the field
+    /// DURING development (interpreter, default `Warn`) and is silent in a
+    /// shipped game (no dev logger attached, or a production config).  Behaviour
+    /// is unchanged — the value still stores as the sentinel; only the
+    /// diagnostic is added.  `val` is `i32::MIN` for an intentional null.
+    pub fn set_byte_nullable(&mut self, db: &DbRef, pos: u32, min: i32, val: i32) {
+        self.warn_narrow_sentinel(val, min, 0xFF, pos);
+        self.store_mut(db).set_byte(db.rec, pos, min, val);
+    }
+
+    /// 2-byte twin of [`Self::set_byte_nullable`]: the all-ones code is 65535.
+    pub fn set_short_nullable(&mut self, db: &DbRef, pos: u32, min: i32, val: i32) {
+        self.warn_narrow_sentinel(val, min, 0xFFFF, pos);
+        self.store_mut(db).set_short(db.rec, pos, min, val);
+    }
+
+    /// Emit the dev-only warning when a non-null `val` encodes onto the all-ones
+    /// null sentinel of a nullable narrow field.  The `logger.is_none()` guard
+    /// collapses the shipped-game path to a single `Option` check; the rate
+    /// limiter keys on the field offset (`pos`), so a loop writing one field
+    /// warns once, not per iteration.
+    fn warn_narrow_sentinel(&mut self, val: i32, min: i32, all_ones: i32, pos: u32) {
+        // The stored byte/short is `(val - min) as uN`; it collides with the
+        // all-ones sentinel when its low N bytes are all-ones.  MASK before
+        // comparing — for a SIGNED type the sacrificed value is the bottom edge
+        // (nullable i8 `-128`, i16 `-32768`), whose `val - min` is `-1`, not
+        // `0xFF`/`0xFFFF`; `-1 & all_ones == all_ones` catches it, a bare `==`
+        // does not.  (`val == i32::MIN` is the intentional-null short-circuit.)
+        if self.logger.is_none()
+            || val == i32::MIN
+            || (val.wrapping_sub(min) & all_ones) != all_ones
+        {
+            return;
+        }
+        if let Some(logger) = &self.logger
+            && let Ok(mut lg) = logger.lock()
+        {
+            let usable_hi = i64::from(min) + i64::from(all_ones) - 1;
+            lg.log(
+                crate::logger::Severity::Warn,
+                "nullable-narrow-field",
+                pos,
+                &format!(
+                    "value {val} written to a nullable narrow field collides with the null \
+                     sentinel and reads back as null (usable {min}..={usable_hi}); declare the \
+                     field `not null`, or keep values within the usable range"
+                ),
+            );
         }
     }
 

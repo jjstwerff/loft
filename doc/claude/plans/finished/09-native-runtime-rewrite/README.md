@@ -24,7 +24,7 @@ directory remain as historical archaeology.
 | @P200 | phase 10 step 10.3 — `IntCompareEmitter` widens both operands of `OpEqInt` / `OpNeInt` / `OpLtInt` / `OpLeInt` to i64 | PROBLEMS.md § 200 |
 | @P202 | phase 06 — `n_parallel_queue*` runtime fns + emitters in `src/codegen_runtime.rs` + `src/generation/ops/parallel.rs` | PROBLEMS.md § 202 |
 | @P203 | phase 00 step 0.7b — let-bind-on-repeat in `DefaultTemplateEmitter` (auto-detects repeated placeholders, binds once) | PROBLEMS.md § 203 |
-| @P204 | @PLAN11 — unspan walker fix in `detect_ref_tail_capture` | [`../11-p204-ref-propagation/`](../11-p204-ref-propagation/) |
+| @P204 | @PLAN11 — unspan walker fix in `detect_ref_tail_capture` | [`../11-p204-ref-propagation/`](../11-p204-ref-propagation) |
 | @P205 | phase 07 — `stores.scratch` routing for bounded-generic text returns at TWO `emit.rs` sites (Value::Return wrap + block-tail wrap_result) | PROBLEMS.md § 205 |
 
 ### Native suite progression
@@ -44,7 +44,7 @@ directory remain as historical archaeology.
 | 00 | Scaffold | [00-scaffold.md](00-scaffold.md) | DONE — closes @P203 (let-bind-on-repeat in `DefaultTemplateEmitter`) |
 | 00a | Introspection: after scaffold | [00a-introspect.md](00a-introspect.md) | DONE |
 | 01 | ABI consolidation | [01-abi-consolidation.md](01-abi-consolidation.md) | DONE — deletes `LEGACY_STORES_FNS` hardcoded list |
-| 02 | Param adapter | [02-param-adapter.md](02-param-adapter.md) | **SUPERSEDED** by @PLAN12 phase 05 (no longer @P200 prereq) |
+| 02 | Param adapter | [02-param-adapter.md](02-param-adapter.md) | **SUPERSEDED** by @PLN80 phase 05 (no longer @P200 prereq) |
 | 02a | Introspection: after param adapter | [02a-introspect.md](02a-introspect.md) | SUPERSEDED (02 superseded; trigger never fires) |
 | 03 | Parallel-for emitter | [03-parallel-emitter.md](03-parallel-emitter.md) | DONE — collapsed 95-line `dispatch.rs:850-944` |
 | 04 | Key-keyed Op emitter | [04-key-ops.md](04-key-ops.md) | DONE |
@@ -59,7 +59,7 @@ directory remain as historical archaeology.
 
 9 phases shipped (00, 00a, 01, 03, 04, 06, 07, 09, 10) of the 14
 originally listed; 5 phases consolidated/superseded (02 + 02a →
-@PLAN12; 05 + 05a + 08 + 08a folded into phase 10).
+@PLN80; 05 + 05a + 08 + 08a folded into phase 10).
 
 ## Why each P-issue resolved when prior attempts failed
 
@@ -80,15 +80,15 @@ were deep.  Plan-09's simplifications dissolved the blockers:
 
 @P204 (tail-expression return discarded) is parser/scope-analysis
 side, not codegen-template — out of @PLAN09 scope.  Sibling plan
-at [`../11-p204-ref-propagation/`](../11-p204-ref-propagation/)
+at [`../11-p204-ref-propagation/`](../11-p204-ref-propagation)
 shipped 2026-05-02 PR #197.
 
-### Follow-up @PLAN12
+### Follow-up @PLN80
 
 Plan-09's audit (2026-05-02) surfaced residual simplifications
 worth doing for future development that were out of @PLAN09's
 bug-fix focus.  Captured in
-[`../../deferred/12-codegen-simplifications/`](../../deferred/12-codegen-simplifications/):
+[`../../deferred/12-codegen-simplifications/`](../../80-codegen-simplifications):
 
 - **Tier 1** (correctness + cleanup): walker-audit (Span-miss
   bugs in `pre_eval.rs` — same pattern as @PLAN11) + retire
@@ -96,7 +96,7 @@ bug-fix focus.  Captured in
 - **Tier 2** (structural cleanup): migrate ~22 `dispatch.rs`
   special-case match arms to custom emitters + split
   `narrow_int_cast` dual role.
-- **Tier 3** (deep refactor, deferred to @PLAN13): unify
+- **Tier 3** (deep refactor, deferred to @PLN81): unify
   `#rust"…"` template path with the registered emitter path —
   ~200 Ops migrate.
 
@@ -129,9 +129,9 @@ full closure narrative.
   narratives (@P200 / @P202 / @P203 / @P205); @P204 in @PLAN11
 - [`../../CHANGELOG_TECHNICAL.md`](../../../CHANGELOG_TECHNICAL.md) —
   per-phase shipped manifest under "@PLAN09 phase NN" entries
-- [`../11-p204-ref-propagation/`](../11-p204-ref-propagation/) —
+- [`../11-p204-ref-propagation/`](../11-p204-ref-propagation) —
   sibling plan that closed the parser-side @P204
-- [`../../deferred/12-codegen-simplifications/`](../../deferred/12-codegen-simplifications/)
+- [`../../deferred/12-codegen-simplifications/`](../../80-codegen-simplifications)
   — follow-up simplifications surfaced by @PLAN09's audit
 - `src/generation/ops/` — per-Op emitter implementations
   (IntCompareEmitter, ParallelQueueEmitter, ParallelBufRenameEmitter, …)
@@ -141,7 +141,7 @@ full closure narrative.
   routing fix from phase 07
 - `src/generation/pre_eval.rs::detect_ref_tail_capture` — sibling
   walker that needed the same Span-handling fix as @PLAN11
-  (captured for @PLAN12 Tier 1)
+  (captured for @PLN80 Tier 1)
 - `tests/codegen_emitter.rs` — regression-test net (`p200_*`,
   `p202_*`, `p203_*`, `p205_*` pins)
 - `scripts/p09_fast_gate.sh` — fast structural gate used during

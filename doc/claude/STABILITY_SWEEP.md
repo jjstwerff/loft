@@ -356,7 +356,7 @@ binary).  Peeling the onion, 279/291 corpus files failing → **12**:
   traces): for a FORWARD callee the site's type is Unknown in pass 1,
   so `ref_return` never runs there at all — ALL growth happens
   pass-2-first, and a caller parsed earlier in pass 2 keeps the
-  signature arity.  F1 (two-pass determinism) × @PLAN59.
+  signature arity.  F1 (two-pass determinism) × @PLN55.
   **A per-site pre-provision fix was tried and REVERTED (2026-06-12)**:
   counting syntactic return sites in pass 1 and pre-adding
   `__retbuf2…N` fixed the 2-level cell — but the matrix's next cell

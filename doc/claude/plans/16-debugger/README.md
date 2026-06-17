@@ -479,7 +479,7 @@ M5d (the condition reuses **E**).
   [PROTOCOL.md](PROTOCOL.md): one message per `(dbg)` capability, no UI-only or
   agent-only message, the server a thin serialiser over the engine. The browser surface
   (M5b) is then "the same protocol with a UI," reusing the viewer
-  ([14-viewer-lsp-bridge](../../lib_plans/future/14-viewer-lsp-bridge/README.md)'s
+  ([14-viewer-lsp-bridge](../../lib_plans/66-viewer-lsp-bridge/README.md)'s
   local-sidecar pattern) for the shell.
 
   *Phasing.* (1) **rich breakpoints — LANDED (2026-06-09).** A unified `BreakSpec`
@@ -515,7 +515,7 @@ M5d (the condition reuses **E**).
   shows debug state, and sends intents. That is not a limitation but the *enabler*: a real
   game (GPU, native speed, the whole filesystem, the real test suite, breakpoints in the
   running game, hot-swap a function over the shared store) is impossible in a serverless
-  WASM sandbox ([`07-web-ide`](../../lib_plans/future/07-web-ide/README.md), a separate
+  WASM sandbox ([`07-web-ide`](../../lib_plans/62-web-ide/README.md), a separate
   product) and natural once the engine is local. It **extends the protocol** with a
   workspace layer (`listFiles`/`readFile`/`writeFile`/`compile`/`runTests`/`runSuite`/
   `launchGame`/`reload`), same one-message-⇄-one-method invariant, reusing the plan-35
@@ -657,8 +657,8 @@ load-bearing.
 - [@PLN14 store-resident REPL session](../14-store-resident-repl-session/README.md)
   + [CONVERGENCE.md](../14-store-resident-repl-session/CONVERGENCE.md) — the frame
   environment model.
-- [lib_plans/future/09-lsp/](../../lib_plans/future/09-lsp/README.md) — `loft-dap`
-  (LSP.3) protocol; [plans/future/25-native-debug/](../future/25-native-debug/README.md)
+- [lib_plans/63-lsp/](../../lib_plans/63-lsp/README.md) — `loft-dap`
+  (LSP.3) protocol; [plans/34-native-debug/](../34-native-debug/README.md)
   — the native-mode complement.
 - **Tracker:** [`loft-lang/plans#16`](https://github.com/loft-lang/plans/issues/16);
   labels `plan` · `subject:loft` · `status:active`.

@@ -242,7 +242,7 @@ is on `main`) or a deliberate trigger-file bump on the candidate branch; not
   validation + the rustc-green baseline.
 - [`cluster-2-S4-progress.md`](cluster-2-S4-progress.md) — the S4 (eval-TOS
   alignment) implementation state + the three hard-won process rules.
-- [`probes/`](probes/) — the cluster-2 probe suite + `run_guard.sh` (the
+- [`probes/`](probes) — the cluster-2 probe suite + `run_guard.sh` (the
   homegrown guard runner) + `run.sh`.
 - [`.github/workflows/miri.yml`](../../../../../.github/workflows/miri.yml) —
   the hard-UB Miri gate shipped at D-final.

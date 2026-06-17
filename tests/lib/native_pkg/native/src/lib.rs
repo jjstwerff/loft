@@ -40,7 +40,9 @@ pub extern "C" fn loft_ext_vec_sum(data_ptr: *const i64, data_count: u32) -> i64
     data.iter().sum::<i64>() as i64
 }
 
-/// Interpreter wrapper — extracts vector from LoftStore + LoftRef.
+// Interpreter wrapper — extracts vector from LoftStore + LoftRef.  A plain
+// comment, not `///`: rustdoc can't attach docs to a macro INVOCATION (the
+// wrapper item only exists after `vec_wrapper!` expands), so a `///` here warns.
 loft_ffi::vec_wrapper!(n_ext_vec_sum, loft_ext_vec_sum(data: vec<i64>) -> i64);
 
 // ── Pattern 3: Vector<f32> as input (single-precision) ───────────────

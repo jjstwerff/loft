@@ -2270,6 +2270,17 @@ impl Parser {
             );
         }
         if self.first_pass {
+            // H6: stamp the field's nullability onto its integer spec so the
+            // STORED attribute type is self-describing.  The alias path
+            // (`u8 not null`) otherwise leaves `not_null` at the alias default
+            // (`false`), and the literal range-check (`int_value_fits`) reads the
+            // usable bounds off `not_null` — so a NOT-NULL `u8` field must report
+            // `not_null:true` or its `255` would be wrongly rejected.  `nullable`
+            // here is exactly what `set_attr_nullable` records, so the spec flag
+            // and the attribute flag cannot disagree.
+            if let Type::Integer(ref mut spec) = a_type {
+                spec.not_null = !nullable;
+            }
             let a = self
                 .data
                 .add_attribute(&mut self.lexer, d_nr, a_name, a_type);

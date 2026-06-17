@@ -70,7 +70,7 @@ view-build`, not auto-rebuilt.  This means it keeps working
 even when loft itself is mid-refactor.  Update the binary by
 running `make view-build` against a known-good loft commit.
 
-See [plans/finished/35-branch-review-viewer/](./README.md)
+See [plans/finished/35-branch-review-viewer/](README.md)
 for the full design.
 ```
 
@@ -138,7 +138,7 @@ add a one-line entry to the closed section pointing at
 ### Retrofit — proof of concept
 
 Use the viewer to review the next plan the user picks up
-(@PLAN07 phase 5 finishing items, or whatever's next).
+(@PLN28 phase 5 finishing items, or whatever's next).
 Specifically:
 
 1. Open the dashboard.

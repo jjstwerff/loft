@@ -25,7 +25,7 @@ language](https://github.com/loft-lang/loft) in Visual Studio Code.
 
 A full-featured Language Server (diagnostics, completion,
 go-to-definition, hover) is planned for a future release —
-see [`lib_plans/future/09-lsp/`](../../doc/claude/lib_plans/future/09-lsp/README.md).
+see [`lib_plans/63-lsp/`](../../doc/claude/lib_plans/63-lsp/README.md).
 
 ## Configuration
 
@@ -128,7 +128,7 @@ terminal named "Loft".
 ## Contributing
 
 The grammar is hand-written JSON.  See
-[`plans/future/27-developer-experience/` § SH.1](../../doc/claude/plans/future/27-developer-experience/README.md)
+[`plans/36-developer-experience/` § SH.1](../../doc/claude/plans/36-developer-experience/README.md)
 for the authoritative scope-name table; updates to either
 should be mirrored.
 

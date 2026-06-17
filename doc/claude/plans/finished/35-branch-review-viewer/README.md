@@ -259,11 +259,11 @@ Layout:
    Building games?
      ▸ lib/graphics/examples/25-brick-buster.loft
      ▸ Brick Buster gallery (live in-browser)
-     ▸ plans/future/23-event-loop  (where games are headed)
+     ▸ plans/32-event-loop  (where games are headed)
 
    Servers + multiplayer?
      ▸ lib/server (HTTP + WebSocket)
-     ▸ plans/future/32-tic-tac-toe (TTT v5 multiplayer)
+     ▸ plans/39-tic-tac-toe (TTT v5 multiplayer)
      ▸ plans/finished/22-mutable-closures (closures power
        writable server state)
 
@@ -271,7 +271,7 @@ Layout:
      ▸ doc/learn-loft.md (the syntax tour)
      ▸ DESIGN_DECISIONS.md (closed-by-decision register)
      ▸ INCONSISTENCIES.md (known asymmetries we live with)
-     ▸ plans/future/07-error-messages (UX of compiler errors)
+     ▸ plans/28-error-messages (UX of compiler errors)
 
      Compiler internals?
      ▸ COMPILER.md / INTERMEDIATE.md / NATIVE.md
@@ -590,13 +590,13 @@ freshness target.
   is the first non-test consumer.
 - [`lib_plans/future/08-server/README.md`](../../../lib_plans/future/08-server/README.md)
   — server-lib roadmap; viewer surfaces specific feature gaps.
-- [`lib_plans/future/01-regex/README.md`](../../../lib_plans/future/01-regex/README.md)
+- [`lib_plans/57-regex/README.md`](../../../lib_plans/57-regex/README.md)
   — regex would simplify markdown parsing; not blocking.
 - [`DEBUG.md`](../../../DEBUG.md) — gets the user-facing usage
   section in phase 07.
 - [`CLAUDE.md`](../../../../../CLAUDE.md) — gets the
   `make view` entry under § Key commands in phase 07.
-- [`lib_plans/future/14-viewer-lsp-bridge/README.md`](../../../lib_plans/future/14-viewer-lsp-bridge/README.md)
+- [`lib_plans/66-viewer-lsp-bridge/README.md`](../../../lib_plans/66-viewer-lsp-bridge/README.md)
   — extends the viewer with multi-language LSP code intelligence
   (rust-analyzer / loft-lsp / jdtls).  The viewer is the host;
   plan-14 is the new capability.  Designed 2026-05-13 in response

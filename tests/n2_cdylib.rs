@@ -271,6 +271,92 @@ fn generated_cdylib_compiles_and_exports_scalar_symbol() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// @PLN26 phase 2 — a shared-store cdylib that calls a `[native] crate` package's
+/// fn emits the **C-ABI** path: an `extern "C"` block with a `#[link_name]`'d
+/// `__cabi_<sym>` decl (the package's `.so` is linked by `build_shared_cdylib`),
+/// NOT `extern crate <pkg>` (the legacy rlib path that can't take two `loft_ffi`
+/// rlibs into one cdylib).  Source-level (no rustc): proves the codegen half —
+/// that `emit_program` turns `native_cabi` on for a cdylib — deterministically
+/// and without a native build.  The link half + the live cdylib→native call are
+/// covered by the integration path (a no-native-of-its-own library that `use`s a
+/// `[native] crate` package, dispatched as a cdylib).
+#[test]
+fn shared_cdylib_with_native_package_emits_cabi_extern() {
+    // The C-ABI path is the default on every host; only `LOFT_NATIVE_CABI=0`
+    // forces the legacy rlib link (and then `build_shared_cdylib` refuses the
+    // combination).  Skip under that escape hatch so the env can't flip the
+    // asserted path.
+    if std::env::var("LOFT_NATIVE_CABI").as_deref() == Ok("0") {
+        println!("skip: LOFT_NATIVE_CABI=0 forces the legacy rlib path");
+        return;
+    }
+    let _lock = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    let (data, db) = cached_default();
+    let mut p = loft::parser::Parser::new();
+    p.data = data;
+    p.database = db;
+    // A body-less `#native` fn (the package symbol) + a shared-store-dispatchable
+    // pub fn (vector arg + return) that calls it, so the native is reachable and
+    // emitted into the cdylib.
+    p.parse_str(
+        "fn gl_clear(c: integer);\n\
+         #native \"loft_gl_clear\"\n\
+         \n\
+         pub fn clear_grid(grid: vector<integer>, c: integer) -> vector<integer> {\n\
+         \x20 gl_clear(c);\n\
+         \x20 grid\n\
+         }\n",
+        "lib",
+        false,
+    );
+    loft::scopes::check(&mut p.data);
+    // Register the symbol's package exactly as a `[native] crate` manifest would
+    // (`parse_str` reads source, not a manifest): a non-empty `native_packages`
+    // plus the symbol→crate mapping the codegen consults.
+    p.data
+        .native_packages
+        .push(("loft-gl-native".to_string(), "/nonexistent/gl".to_string()));
+    p.data
+        .native_symbol_crates
+        .insert("loft_gl_clear".to_string(), "loft_gl_native".to_string());
+
+    let shared = loft::native_gate::shared_store_dispatchable(&p.data);
+    let fn_nr = p.data.def_nr("n_clear_grid");
+    assert!(
+        shared.contains(&fn_nr),
+        "clear_grid should be shared-store-dispatchable"
+    );
+    let export: std::collections::HashSet<u32> = std::iter::once(fn_nr).collect();
+
+    let mut state = loft::state::State::new(p.database);
+    loft::compile::byte_code(&mut state, &mut p.data);
+    let src = loft::native_lib::generate_shared_cdylib_lib_rs(&p.data, &state.database, &export);
+
+    // C-ABI path: an `extern "C"` block, the symbol declared under a `__cabi_`
+    // alias bound by `#[link_name]` (so it never shadows the wrapper fn).
+    assert!(
+        src.contains("unsafe extern \"C\""),
+        "expected an extern \"C\" block (the C-ABI native path):\n{src}"
+    );
+    assert!(
+        src.contains("#[link_name = \"loft_gl_clear\"]"),
+        "expected a #[link_name] decl for the native package symbol"
+    );
+    assert!(
+        src.contains("__cabi_loft_gl_clear"),
+        "expected the __cabi_-aliased native symbol"
+    );
+    // NOT the legacy rlib path (which would bring a second `loft_ffi` rlib into
+    // the cdylib → duplicate `loft_register_v1`, unlinkable).
+    assert!(
+        !src.contains("extern crate loft_gl_native"),
+        "must NOT take the rlib `extern crate` path under the C-ABI default"
+    );
+}
+
 /// Run a SCRIPT that declares `native_decl` (a `#native "loft_…"` import of a
 /// cdylib symbol) and calls it from `main`, dispatching into `so`.  Panics if the
 /// dispatch fails (stub panic) or the assert in `source` fails.

@@ -30,7 +30,7 @@ a trigger; "when 3+ template-path bugs accumulate" is.
 | Situation | Outcome |
 |---|---|
 | All phases shipped | **Close** — `status:finished`, close the issue |
-| Some phases shipped, others paused with concrete trigger | **Partial defer** — `status:future`, issue stays open; Status table grows SHIPPED / DEFERRED rows.  Canonical: @PLAN28, @PLAN12. |
+| Some phases shipped, others paused with concrete trigger | **Partial defer** — `status:future`, issue stays open; Status table grows SHIPPED / DEFERRED rows.  Canonical: @PLN82, @PLN80. |
 | No phases shipped, all paused with concrete trigger | **Full defer** — `status:future`, issue stays open |
 | Some phases shipped, others abandoned without trigger | Close the shipped portion as above; remaining design moves to `DESIGN_DECISIONS.md` |
 | Waiting on a date or "appetite" with no concrete signal | Keep `status:future` (date-bound) or move design to `DESIGN_DECISIONS.md` (appetite-bound).  Don't defer. |
@@ -78,7 +78,7 @@ cross-links.
 
 For partial defers, the plan README also keeps **full design
 content for deferred phases** alongside the closure-record for
-shipped ones — see @PLAN28's Phase B + Phase C sections as the
+shipped ones — see @PLN82's Phase B + Phase C sections as the
 canonical shape.
 
 ## Steps 4-6 — Common to close + defer

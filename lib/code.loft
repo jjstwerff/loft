@@ -84,7 +84,9 @@ pub struct Code {
   // Start positions of blocks, if and loop statements.
   code: vector < Value >,
   cur_def: i32,
-  cur_arg: u8
+  // not null: `255` is a meaningful sentinel ("no current arg"), not the
+  // null-encoding — a nullable `u8` would reject `255` (its usable range is 0..=254).
+  cur_arg: u8 not null
 }
 
 pub fn get_type(self: Code, name: text) -> u16 {

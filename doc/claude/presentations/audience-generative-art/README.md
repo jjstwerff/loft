@@ -8,7 +8,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 ## Status
 
 Open.  Scoped 2026-05-09.  Sibling **development plan** at
-[`../../plans/6-audience-generative-art/`](../../plans/6-audience-generative-art/)
+[`../../plans/6-audience-generative-art/`](../../plans/6-audience-generative-art)
 owns the engineering work (server, projector view, generation
 script, hosting).  This file owns the **presentation work** (talk
 shape, slides, audience-participation flow, presenter notes).
@@ -45,7 +45,7 @@ everyone in the room participates from their phone or laptop.
 Spectacle is the **emergent collaborative patterns**, not any
 single person's contribution.
 
-(Full design: see the [development plan](../../plans/6-audience-generative-art/)
+(Full design: see the [development plan](../../plans/6-audience-generative-art)
 including the three-view roles, the chunked world data layout,
 the dual JSON-events + binary-blobs protocol, and the design
 decisions log.)
@@ -113,7 +113,7 @@ the most subsystems.
 ## Slides + supporting materials
 
 To be produced as siblings of this README (mirrors the
-[`../par/`](../par/) precedent):
+[`../par/`](../par) precedent):
 
 | Artifact | Purpose |
 |---|---|
@@ -170,12 +170,12 @@ phase 5 readiness.
 | Conference WiFi unreliable | Server on presenter's laptop + phone hotspot; mitigation in development plan's hosting phase |
 
 (Engineering risks — server, generation, auto-camera — live in the
-[development plan's risks section](../../plans/6-audience-generative-art/).)
+[development plan's risks section](../../plans/6-audience-generative-art).)
 
 ## See also
 
-- [`../../plans/6-audience-generative-art/`](../../plans/6-audience-generative-art/) —
+- [`../../plans/6-audience-generative-art/`](../../plans/6-audience-generative-art) —
   sibling development plan (engineering work + sub-arcs + cross-
   arc dependencies)
-- [`../par/`](../par/) — reference for slide-deck file layout +
+- [`../par/`](../par) — reference for slide-deck file layout +
   presenter script structure

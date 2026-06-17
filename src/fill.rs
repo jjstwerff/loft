@@ -216,6 +216,7 @@ pub const OPERATORS: &[fn(&mut State)] = &[
     set_int4,
     get_short_raw,
     set_short_raw,
+    get_short_full,
     set_text,
     var_vector,
     tag_fault,
@@ -1666,8 +1667,7 @@ fn set_byte_nullable(s: &mut State) {
             v_val as i32
         };
         s.database
-            .store_mut(&db)
-            .set_byte(db.rec, db.pos + u32::from(v_fld), i32::from(v_min), v);
+            .set_byte_nullable(&db, db.pos + u32::from(v_fld), i32::from(v_min), v);
     }
 }
 
@@ -1684,8 +1684,7 @@ fn set_short(s: &mut State) {
             v_val as i32
         };
         s.database
-            .store_mut(&db)
-            .set_short(db.rec, db.pos + u32::from(v_fld), i32::from(v_min), v);
+            .set_short_nullable(&db, db.pos + u32::from(v_fld), i32::from(v_min), v);
     }
 }
 
@@ -1762,6 +1761,21 @@ fn set_short_raw(s: &mut State) {
             v,
         );
     }
+}
+
+fn get_short_full(s: &mut State) {
+    let v_fld = s.code::<u16>();
+    let v_min = s.code::<i16>();
+    let v_v1 = *s.get_stack::<DbRef>();
+    let new_value = {
+        let db = v_v1;
+        i64::from(s.database.store(&db).get_short_full(
+            db.rec,
+            db.pos + u32::from(v_fld),
+            i32::from(v_min),
+        ))
+    };
+    s.put_stack(new_value);
 }
 
 fn set_text(s: &mut State) {

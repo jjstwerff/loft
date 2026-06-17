@@ -95,6 +95,6 @@ archaeology.  For everyday work on slot assignment, read
   allocator + V2 shadow validator reference (where you should
   be reading if you want to know how slot assignment works
   today)
-- [`finished/05-orphan-placer-elimination/`](../05-orphan-placer-elimination/) — companion plan that deleted `place_orphaned_vars`
+- [`finished/05-orphan-placer-elimination/`](../05-orphan-placer-elimination) — companion plan that deleted `place_orphaned_vars`
 - CHANGELOG_TECHNICAL.md — opcode-table changes (`OpText`
   deletion, `OpReserveFrame` consolidation)

@@ -3,7 +3,7 @@
 //
 // hex_world — sparse 32x32-chunk world data model shared by TTT v5
 // (lib/game_protocol/examples/v5_*) and the audience-generative-art
-// demo (plans/future/6-audience-generative-art/).
+// demo (plans/6-audience-generative-art/).
 //
 // Renamed from `world` 2026-06-01 (LAVITION W.1) — the hex_ prefix
 // disambiguates from voxel/tile/BSP "world" expectations and matches

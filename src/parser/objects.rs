@@ -2333,20 +2333,30 @@ impl Parser {
             // pass-1 mustn't emit errors pass-2 will naturally
             // resolve).  `set_field_no_check` still runs so codegen
             // stays consistent with pass-2.
-            if (!self.first_pass || !exp_tp.is_unknown()) && !self.convert(value, exp_tp, &td) {
-                // Plan-07 phase 6 (partial) — name the value side first
-                // ("cannot assign <got> to <expected>"), the field-type
-                // side last.  Old shape "Cannot write {field_type} on
-                // field {S}.{f}:{value_type}" used a colon that read
-                // as "field declared as <value_type>" — backwards.
-                diagnostic!(
-                    self.lexer,
-                    Level::Error,
-                    "Cannot assign {} to field {}.{field} of type {}",
-                    exp_tp.show(&self.data, &self.vars),
-                    self.data.def(td_nr).name(),
-                    td.show(&self.data, &self.vars)
-                );
+            if !self.first_pass || !exp_tp.is_unknown() {
+                // A FIELD STORE: a literal that fits the type but lands on the
+                // reserved null sentinel of a nullable narrow field is rejected
+                // here too (not just on `obj.f = …`), so `U8N { x: 255 }` doesn't
+                // silently store null.  The sentinel reservation is store-only —
+                // it is NOT applied to the `convert` type-fit (params/casts).
+                let dst_name = self.int_type_name(&td);
+                if let Some(hint) = self.nullable_sentinel_hint(value, &td, &dst_name) {
+                    diagnostic!(self.lexer, Level::Error, "{hint}");
+                } else if !self.convert(value, exp_tp, &td) {
+                    // Plan-07 phase 6 (partial) — name the value side first
+                    // ("cannot assign <got> to <expected>"), the field-type
+                    // side last.  Old shape "Cannot write {field_type} on
+                    // field {S}.{f}:{value_type}" used a colon that read
+                    // as "field declared as <value_type>" — backwards.
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Cannot assign {} to field {}.{field} of type {}",
+                        exp_tp.show(&self.data, &self.vars),
+                        self.data.def(td_nr).name(),
+                        td.show(&self.data, &self.vars)
+                    );
+                }
             }
             list.push(self.set_field_no_check(td_nr, nr, 0, code.clone(), value.clone()));
         }

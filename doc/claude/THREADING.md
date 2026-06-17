@@ -506,7 +506,7 @@ loop).
 - [INTERNALS.md](INTERNALS.md) — `src/parallel.rs`, `src/state/`, store cloning for workers
 - [STDLIB.md](STDLIB.md) — `par(...)` parallel for-loop user-facing API
 - [PLANNING.md](PLANNING.md) — A1 (parallel workers: extra args + text/ref returns)
-- [plans/finished/06-typed-par/](plans/finished/06-typed-par/) — closure record for the typed-par redesign (closed 2026-05-09)
+- [plans/finished/06-typed-par/](plans/finished/06-typed-par) — closure record for the typed-par redesign (closed 2026-05-09)
 - See `par_light(...)` and thread safety sections below
 
 ---

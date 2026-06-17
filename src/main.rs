@@ -2007,7 +2007,7 @@ fn publish_package(pkg_path: &std::path::Path, dry_run: bool) -> i32 {
         println!("  }},");
     }
     // Tier-1 trigger surface — derived from the package source at publish time
-    // (lib_plans/future/03-lazy-stdlib), so a CONSUMER's resolver can map
+    // (lib_plans/59-lazy-stdlib), so a CONSUMER's resolver can map
     // `obj.method()` to this package without the source.  Emitted only when the
     // package opts in via `[triggers] enabled`; nothing is hand-listed.
     if manifest.trigger_enabled {
@@ -6009,7 +6009,7 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
         // PLAN51 — also preserve when `LOFT_KEEP_NATIVE_RS=1` is set,
         // so probe runs that panic in the generated Rust leave the file
         // readable for post-mortem inspection.  Used by the Cluster V
-        // (native-only) investigation in plans/future/51-hidden-buffer-
+        // (native-only) investigation in plans/finished/51-hidden-buffer-
         // aliasing/cluster-V-native-only.md.
         let keep_rs = std::env::var("LOFT_KEEP_NATIVE_RS").is_ok();
         if !native_debug && !keep_rs {

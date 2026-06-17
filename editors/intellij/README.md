@@ -64,7 +64,7 @@ grammar file.
 This is the syntax-highlighting + file-extension-recognition
 layer only.  No completion, no go-to-definition, no diagnostics,
 no run buttons — those need a Language Server (planned for 0.8.6
-per [`lib_plans/future/09-lsp/`](../../doc/claude/lib_plans/future/09-lsp/README.md))
+per [`lib_plans/63-lsp/`](../../doc/claude/lib_plans/63-lsp/README.md))
 or a JetBrains-specific plugin.
 
 ## Licence

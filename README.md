@@ -86,10 +86,10 @@ Pre-built binaries on the [Releases](https://github.com/loft-lang/loft/releases)
 
 - **[Learn loft in 30 minutes](doc/learn-loft.md)** — guided tour
   with runnable code blocks for every concept.
-- **[`examples/`](examples/)** — seven self-contained `.loft` files
+- **[`examples/`](examples)** — seven self-contained `.loft` files
   covering hello-world, fibonacci, fizzbuzz, structs, collections,
   pattern matching, and file I/O.  Each runs standalone.
-- **[VS Code extension](editors/vscode/)** — syntax highlighting +
+- **[VS Code extension](editors/vscode)** — syntax highlighting +
   snippets for `.loft` files.  TextMate grammar at
   [`syntaxes/loft.tmLanguage.json`](syntaxes/loft.tmLanguage.json)
   works in any TextMate-compatible editor (Sublime Text, etc.).

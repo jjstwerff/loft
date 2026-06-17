@@ -235,7 +235,7 @@ pub struct State {
 pub type Call = fn(&mut Stores, &mut DbRef);
 ```
 
-**`const_refs`** (@PLAN28 Phase A, 2026): one entry per definition;
+**`const_refs`** (@PLN82 Phase A, 2026): one entry per definition;
 zero for non-constant defs, populated for vector constants whose
 records were pre-built into `CONST_STORE` (store 1) during
 `byte_code()`.  `OpConstRef(d_nr)` indexes into this vector.
