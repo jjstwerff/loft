@@ -687,7 +687,17 @@ impl Parser {
             // so that field access and range-query for-loops resolve fields against the
             // variant struct (not the parent enum), and for_type() can map the element type.
             if matches!(ret, Type::Enum(_, true, _)) {
-                Type::Reference(*d_nr, crate::data::Deps::none())
+                // @PLN25 E2 — a synth `__nullable<S>` element keeps its `Enum`
+                // type (here `d_nr` IS the enum, not a variant), exactly as a
+                // `vector<__nullable<S>>` element does, so the field-access
+                // unwrap in `field()` resolves S's fields through `Some` and a
+                // `lookup[k] == null` test works. Converting it to `Reference`
+                // would point at the enum (no payload fields) → "Unknown field".
+                if self.data.def(*d_nr).name.starts_with("__nullable<") {
+                    ret
+                } else {
+                    Type::Reference(*d_nr, crate::data::Deps::none())
+                }
             } else {
                 ret
             }

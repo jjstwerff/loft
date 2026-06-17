@@ -293,9 +293,14 @@ impl Stores {
         match &self.types[db as usize].parts {
             Parts::Vector(_) | Parts::Array(_) => vec![0],
             Parts::Sorted(c, key) | Parts::Ordered(c, key) | Parts::Index(c, key, _) => {
+                // @PLN25 E2 — for a synth `__nullable<S>` element the key fields
+                // live in the `Some` payload; resolve through `key_owner` so the
+                // returned key TYPES match what `read_key` must pop (else an empty
+                // list leaves the key on the stack and the next ref read is junk).
+                let owner = self.key_owner(*c);
                 let mut res = Vec::new();
                 if let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
-                    &self.types[*c as usize].parts
+                    &self.types[owner as usize].parts
                 {
                     for (k, _) in key {
                         res.push(fields[*k as usize].content);
@@ -304,9 +309,10 @@ impl Stores {
                 res
             }
             Parts::Hash(c, key) => {
+                let owner = self.key_owner(*c);
                 let mut res = Vec::new();
                 if let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
-                    &self.types[*c as usize].parts
+                    &self.types[owner as usize].parts
                 {
                     for k in key {
                         res.push(fields[*k as usize].content);
