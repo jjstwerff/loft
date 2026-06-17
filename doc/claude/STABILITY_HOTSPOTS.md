@@ -389,6 +389,55 @@ Consumers: `store.rs` set_*/get_*, `fill.rs` conv_*_from_null, `state/codegen.rs
 emit_typed_null`, `generation/mod.rs::default_native_value`, `database/structures.rs::
 set_default_value`, `database/types.rs` byte/short/short_raw/int.
 
+**Design decision — narrow fixed-width ints are MEMORY-ALLOCATION types: the
+byte width is the invariant; the value range bends to fit the null sentinel
+(2026-06-17).**
+
+For the `forced_size` aliases (`u8`/`i8`/`u16`/`i16`), the storage width is
+FIXED — a `u8` is one byte, always, nullable or not — and nullability is paid for
+by reserving ONE code as the null sentinel WITHIN that width, shrinking the usable
+value range by one.  It is **never** paid for by widening the storage.  (The
+landed `range_to_width(+nullable)` widen-to-fit rule applies only to un-annotated
+`integer limit(min,max)` ranges, which carry no size promise.)  The point is the
+**predictable in-store layout**, not matching the value range a reader expects
+from the type's name — a nullable `u8` is `0..=254`, on purpose.
+
+| alias | not-null usable range | nullable usable range | null sentinel | width |
+|---|---|---|---|---|
+| `u8`  | `0..=255` (full byte)   | `0..=254`             | `255` (top)     | 1 |
+| `i8`  | `-128..=127` (Rust)     | `-127..=127`          | `-128` (bottom) | 1 |
+| `u16` | `0..=65535`             | `0..=65534`           | `65535` (top)   | 2 |
+| `i16` | `-32768..=32767`        | `-32767..=32767`      | `-32768` (bottom)| 2 |
+
+Unsigned reserves the TOP code, signed the BOTTOM — so a **not-null `i8` keeps the
+original Rust `-128..=127`**, and only a *nullable* `i8` gives up `-128` for null.
+
+**Implementation gap — the landed H6 fix did NOT cover the alias path.**  The
+`range_to_width` chokepoint fixed only the un-annotated `limit(...)` heuristic
+(widen when the range fills the byte).  The aliases still carry a non-nullability-
+aware range: `IntegerSpec::u8()` is `0..=255` and `i8()` is `-128..=127` with
+`not_null:false`.  **Probe-confirmed today, both backends** (`/tmp` probe, the
+389-regression idiom):
+
+- `u8 254` ✓, `u8 null` ✓, **`u8 255` reads back as null** — the nullable `u8`'s
+  top code already IS the sentinel, so its real usable range is `0..=254`.  The
+  spec just over-advertises `255`.  (Matches the design: trim the nullable max.)
+- **`i8 127` reads back as null** — NOT `-128`.  The `ByteNullable` encode
+  (`val - min`, min `-128`) maps `127 → 255 = stored sentinel`, so today the signed
+  sentinel sits at the TOP (`127`).  The design wants it at the BOTTOM
+  (`-128 = i8::MIN`, matching the `i32::MIN`/`i64::MIN` signed-null convention) so a
+  nullable `i8` is `-127..=127`.  → `i8` needs the encode **re-based** (sentinel at
+  the min-encoded code), not just the range trimmed.
+
+Fix shape: make the alias's USABLE bounds depend on `not_null` (full byte when
+`not_null` — `i8` keeps Rust `-128..=127`; one code reserved when nullable —
+`u8`→`0..=254`, `i8`→`-127..=127`), AND move the signed `ByteNullable` sentinel to
+the bottom so the reserved code is `i8::MIN`.  One fact (which code is null, and
+therefore which value is unrepresentable when nullable) per width, the same
+principle as `range_to_width` extended to the forced-size path.  Open question to
+confirm: not-null `u8` full `0..=255` (table above, by the not-null-keeps-full
+principle `i8` makes explicit) vs `u8` always `0..=254`.
+
 ---
 
 ## H7 — Hand-maintained IR codecs (F9)
