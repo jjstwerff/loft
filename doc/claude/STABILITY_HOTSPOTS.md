@@ -420,24 +420,45 @@ keeps the useful range: **unsigned drops the TOP** (`min` stays `0`, `max-=1`),
 original Rust `-128..=127` and a nullable `i8` is `-127..=127`, differing only in
 whether `-128` is available.
 
-**Implementation gap — the landed H6 fix did NOT cover the alias path.**  The
-`range_to_width` chokepoint fixed only the un-annotated `limit(...)` heuristic
-(widen when the range fills the byte).  The aliases carry a non-nullability-aware
-range: `IntegerSpec::u8()` is `0..=255`, `i8()` is `-128..=127`, `not_null:false`.
-**Probe-confirmed today, both backends** (`/tmp` probe, the 389-regression idiom):
-nullable `u8 255` and nullable `i8 127` both read back as **null** — the spec
-over-advertises one value, because the all-ones byte (`255`) decodes (with the
-not-null `min`) to a value the spec still claims is usable.
+**Probed BASELINE — the full matrix on the interpreter (2026-06-17).**  Each cell
+stores an edge value into a struct field and reads it back:
 
-**Fix is a single compile-time site — the runtime `get_byte`/`set_byte` DON'T
-change** (they already take `min` as a parameter; null is already the all-ones
-byte).  Make the alias's effective `[min, max]` depend on `not_null` + signedness:
-not-null → full native range; nullable → signed `min+1` (drop `-128`), unsigned
-`max-1` (drop top).  One fact — *which `min`/`max` the codegen emits for a nullable
-narrow field* — replacing the over-advertised range.  No encode re-base, no signed
-sentinel move; the all-ones-byte null is already uniform.  **Resolved 2026-06-17:
-not-null `u8` reclaims the full `0..=255`; nullable `i8` is `-127..=127`** (table
-final).
+| field | edge values → read back |
+|---|---|
+| `u8` nullable  | `255`→**null** ✗ · `254`✓ `0`✓ `null`✓ |
+| `i8` nullable  | `127`→**null** ✗ · `-128`✓ `-127`✓ `null`✓ |
+| `u16` nullable | `65535`→**null** ✗ · `65534`✓ `null`✓ |
+| `i16` nullable | `32767`→**null** ✗ · `-32768`✓ `null`✓ |
+| `u8` **not-null**  | `255`✓ `0`✓ — full range, correct |
+| `i8` **not-null**  | `-128`✓ `127`✓ — full range, correct |
+| `u16` **not-null** | `65535`→**null** ✗ |
+| `i16` **not-null** | `-32768`✓ `32767`→**null** ✗ |
+
+Two DISTINCT defects fall out:
+
+1. **The nullable-sentinel design (this section).**  Today the sacrificed value is
+   silently stored as null instead of being out of range, and for SIGNED types the
+   sacrificed end is the TOP (`127`/`32767`) — the opposite of the design's
+   symmetric `-127..=127` / `-32767..=32767`.  Fix = the staged
+   `IntegerSpec::usable_min`/`usable_max` (in `data.rs`): not-null → full native
+   range; nullable → signed `min+1`, unsigned `max-1`.  Wire it at the THREE
+   `spec.min`/`spec.max` consumers — read op min (`parser/mod.rs:3303`), write op
+   min (`:3724`/`:3771`), literal range-check (`:1248`) — all deriving from the one
+   method so the read/write/check cannot drift.  The runtime `get_byte`/`set_byte`
+   DON'T change (already take `min`; null is already the all-ones byte); the
+   narrow-VECTOR element path (`Byte`/`ShortRaw`, raw) is excluded via
+   `nullable && !narrow_vec`.
+
+2. **A SEPARATE 2-byte not-null bug (newly found, scope TBD).**  A `not null`
+   `u16`/`i16` field cannot hold its max (`65535`/`32767` → null): the 2-byte field
+   path uses the `Short` (`+1`) encoding which reserves a null code even when the
+   field is not-null (the 1-byte `Byte` op does NOT — that's why not-null `u8`/`i8`
+   are full-range).  Distinct mechanism from `usable_min`/`max`; needs a raw 2-byte
+   not-null path.  Decision pending: fix in this pass (A) or as a follow-up (B).
+
+**Resolved 2026-06-17:** not-null `u8`/`i8` keep the full native range; nullable is
+symmetric for signed (`-127..=127`, `-32767..=32767`); the all-ones byte is the one
+uniform sentinel, only `min` shifts.
 
 ---
 
