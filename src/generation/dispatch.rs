@@ -308,7 +308,16 @@ impl Output<'_> {
         }
         // Hoist call arguments that mutate stores into temporaries to prevent
         // double-mutable-borrow of `stores` in the call expression.
+        //
+        // ONLY for ops emitted as an actual CALL — a user fn or a `codegen_runtime`
+        // Op stub (`rust().is_empty()`).  An inline `#rust` op (non-empty template,
+        // e.g. a byte/short field read like `OpGetByteNullable`) has NO callable
+        // fn: emitting `OpGetByteNullable(cell, _harg, …)` is unresolved.  Those
+        // fall through to the normal emit, which inlines the `#rust` body — whose
+        // own `let db = @v1; …` sequences the mutating arg before the read borrow,
+        // so no double-borrow (and the receiver was already pre-eval-hoisted).
         if let Value::Call(call_dnr, args) = to.unspan()
+            && self.data.def(*call_dnr).rust().is_empty()
             && args
                 .iter()
                 .any(|a| contains_op_database(IrNode::Native(a), self.data))
