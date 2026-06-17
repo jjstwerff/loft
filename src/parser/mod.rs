@@ -1232,7 +1232,14 @@ impl Parser {
 
     /// @PLAN48 P2: literal exemption — true when `code` is a constant integer that
     /// provably fits `dst`'s range, so `x: i32 = 5` / `f(5)` stay legal without `as`.
-    fn int_value_fits(&self, code: &Value, dst: &Type) -> bool {
+    ///
+    /// `narrow_field` = the target is a NARROW-STORED field/element (a struct field
+    /// store), which reserves the all-ones code for null when nullable — so the
+    /// literal must fit the USABLE range (`255` in a nullable `u8` is out of range,
+    /// not silently null).  A param/return/cast (`narrow_field == false`) is a
+    /// full-width register value with no storage sentinel, so it uses the full
+    /// declared range — `f(65535)` to a `u16` param stays legal.
+    fn int_value_fits(&self, code: &Value, dst: &Type, narrow_field: bool) -> bool {
         let Type::Integer(spec) = dst else {
             return false;
         };
@@ -1245,7 +1252,8 @@ impl Parser {
                 _ => return false,
             },
         };
-        n >= i64::from(spec.min) && n <= i64::from(spec.max)
+        let nullable_storage = narrow_field && !spec.not_null;
+        n >= i64::from(spec.usable_min(nullable_storage)) && n <= spec.usable_max(nullable_storage)
     }
 
     fn convert(&mut self, code: &mut Value, is_type: &Type, should: &Type) -> bool {
@@ -1257,7 +1265,7 @@ impl Parser {
         // `validate_convert` (which still sees integer/i32 as can_convert-compatible).
         if !self.first_pass
             && Self::is_narrowing_int(is_type, should)
-            && !self.int_value_fits(code, should)
+            && !self.int_value_fits(code, should, false)
         {
             let src = self.int_type_name(is_type);
             let dst = self.int_type_name(should);
@@ -3300,7 +3308,14 @@ impl Parser {
                 // field-sentinel one) — `narrow_vec` selects that.
                 let kind = crate::data::NarrowIntKind::of(s, nullable, narrow_vec);
                 if kind.takes_min() {
-                    self.cl(kind.get_op(), &[code, p, Value::Int(spec.min)])
+                    // H6: a nullable narrow FIELD reserves the all-ones code for
+                    // null, so its usable range (and the `min` the read decodes
+                    // against) shrinks by one edge — `usable_min` is the one home
+                    // shared with the write op + range-check.  Narrow-VECTOR
+                    // elements use the raw path (no field sentinel), so they keep
+                    // the full `min`.
+                    let mn = spec.usable_min(nullable && !narrow_vec);
+                    self.cl(kind.get_op(), &[code, p, Value::Int(mn)])
                 } else {
                     self.cl(kind.get_op(), &[code, p])
                 }
@@ -3720,8 +3735,6 @@ impl Parser {
         };
         let set_op = match tp {
             Type::Integer(ref spec) => {
-                let IntegerSpec { min, .. } = *spec;
-                let m = Value::Int(min);
                 // Post-2c: honor size(N) on the alias recorded during field
                 // parsing; fall back to the limit()-based heuristic.
                 let alias_nr = if f_nr == usize::MAX {
@@ -3770,6 +3783,11 @@ impl Parser {
                 // raw op.
                 let nullable = f_nr != usize::MAX && self.data.attr_nullable(d_nr, f_nr);
                 let kind = crate::data::NarrowIntKind::of(s, nullable, narrow_vec);
+                // H6: the WRITE op encodes against the same `usable_min` the READ
+                // op (`get_val`) decodes against — a nullable narrow field reserves
+                // the all-ones code for null, shrinking the usable range by one
+                // edge; narrow-VECTOR elements keep the full `min` (raw path).
+                let m = Value::Int(spec.usable_min(nullable && !narrow_vec));
                 if kind.takes_min() {
                     self.cl(kind.set_op(), &[ref_code, pos_val, m, val_code])
                 } else {

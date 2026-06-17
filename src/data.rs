@@ -206,6 +206,60 @@ impl IntegerSpec {
         }
     }
 
+    /// Usable LOWER bound for a field/element of this spec at the given
+    /// nullability — the ONE home for the nullable-narrow range fact, so the read
+    /// op's `min`, the write op's `min`, and the literal range-check cannot drift.
+    ///
+    /// Null is stored as the all-ones byte (`255`/`65535`), uniformly for every
+    /// narrow type — one type-independent store/test in generated Rust.  A value
+    /// decodes as `read + min`.  When a NULLABLE narrow field's range exactly
+    /// FILLS its storage width, the all-ones byte would otherwise be a real value,
+    /// so the field sacrifices ONE edge: SIGNED drops the BOTTOM (`min+1`, keeping
+    /// the positive range — so a nullable `i8` is `-127..=127`); UNSIGNED keeps
+    /// `min` and drops the top via [`Self::usable_max`].  Not-null specs, and any
+    /// range that does not fill its width, use the full declared bounds.
+    #[must_use]
+    pub fn usable_min(&self, nullable: bool) -> i32 {
+        if self.reserves_narrow_sentinel(nullable) && self.min < 0 {
+            self.min + 1
+        } else {
+            self.min
+        }
+    }
+
+    /// Usable UPPER bound — the [`Self::usable_min`] companion.  A nullable narrow
+    /// UNSIGNED spec whose range fills its width drops the TOP code (`max-1`, so a
+    /// nullable `u8` is `0..=254`); signed keeps `max`.
+    #[must_use]
+    pub fn usable_max(&self, nullable: bool) -> i64 {
+        if self.reserves_narrow_sentinel(nullable) && self.min >= 0 {
+            i64::from(self.max) - 1
+        } else {
+            i64::from(self.max)
+        }
+    }
+
+    /// True when a nullable field of this spec must sacrifice one edge value: its
+    /// value range exactly fills its 1- or 2-byte width, so the all-ones null byte
+    /// would otherwise BE a usable value.  (Wider 4/8-byte ints reserve
+    /// `i32::MIN`/`i64::MIN` for null, outside this narrow mechanism; an
+    /// un-annotated `limit(...)` whose range does not fill the width already has a
+    /// spare code and needs no sacrifice.)
+    fn reserves_narrow_sentinel(&self, nullable: bool) -> bool {
+        if !nullable {
+            return false;
+        }
+        // Only a FIXED-width (`forced_size`) field can't widen to make room — an
+        // un-annotated `limit(...)` instead widens via `range_to_width(+nullable)`,
+        // so it never reaches here needing a sacrifice.  Reduce iff the range fills
+        // the fixed 1- or 2-byte width (256 / 65536 codes).
+        match self.forced_size.map(NonZeroU8::get) {
+            Some(1) => self.range() == 256,
+            Some(2) => self.range() == 65_536,
+            _ => false,
+        }
+    }
+
     /// element stride for narrow vectors, matching
     /// what `typedef.rs::fill_database`'s Vector arm registers.
     /// Returns `Some(n)` for the direct-encoded widths:
@@ -279,8 +333,13 @@ pub enum NarrowIntKind {
     ByteNullable,
     /// 2-byte direct encoding — a narrow-vector element (raw, no `+1`).
     ShortRaw,
-    /// 2-byte `+1` sentinel encoding — a struct field.
+    /// 2-byte `+1` sentinel encoding — a NULLABLE struct field (reserves `0`).
     Short,
+    /// 2-byte direct encoding, NO sentinel — a NOT-NULL struct field, so the
+    /// full 65536-value range round-trips (`Short`'s `+1` and `ShortRaw`'s
+    /// `u16::MAX` both swallow the max as null).  Read via `OpGetShortFull`; the
+    /// write reuses `OpSetShortRaw` (same `(val - min)` store).
+    ShortFull,
     /// 4-byte raw.
     Int4,
     /// 8-byte raw — the wide default.
@@ -298,7 +357,8 @@ impl NarrowIntKind {
             1 if nullable && !narrow_vec => NarrowIntKind::ByteNullable,
             1 => NarrowIntKind::Byte,
             2 if narrow_vec => NarrowIntKind::ShortRaw,
-            2 => NarrowIntKind::Short,
+            2 if nullable => NarrowIntKind::Short,
+            2 => NarrowIntKind::ShortFull,
             4 => NarrowIntKind::Int4,
             _ => NarrowIntKind::Int,
         }
@@ -312,6 +372,7 @@ impl NarrowIntKind {
             NarrowIntKind::ByteNullable => "OpGetByteNullable",
             NarrowIntKind::ShortRaw => "OpGetShortRaw",
             NarrowIntKind::Short => "OpGetShort",
+            NarrowIntKind::ShortFull => "OpGetShortFull",
             NarrowIntKind::Int4 => "OpGetInt4",
             NarrowIntKind::Int => "OpGetInt",
         }
@@ -325,6 +386,9 @@ impl NarrowIntKind {
             NarrowIntKind::ByteNullable => "OpSetByteNullable",
             NarrowIntKind::ShortRaw => "OpSetShortRaw",
             NarrowIntKind::Short => "OpSetShort",
+            // not-null 2-byte reuses the raw `(val - min)` store; only the READ
+            // differs (`OpGetShortFull`, no sentinel decode).
+            NarrowIntKind::ShortFull => "OpSetShortRaw",
             NarrowIntKind::Int4 => "OpSetInt4",
             NarrowIntKind::Int => "OpSetInt",
         }
@@ -340,6 +404,7 @@ impl NarrowIntKind {
                 | NarrowIntKind::ByteNullable
                 | NarrowIntKind::ShortRaw
                 | NarrowIntKind::Short
+                | NarrowIntKind::ShortFull
         )
     }
 }

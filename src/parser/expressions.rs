@@ -1830,7 +1830,7 @@ use a separate collection or add after the loop"
         if op == "="
             && !self.first_pass
             && Self::is_narrowing_int(&s_type, f_type)
-            && !self.int_value_fits(code, f_type)
+            && !self.int_value_fits(code, f_type, true)
         {
             let src = self.int_type_name(&s_type);
             let dst = self.int_type_name(f_type);

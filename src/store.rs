@@ -1947,6 +1947,23 @@ impl Store {
         }
     }
 
+    /// Direct 2-byte read for a NOT-NULL `u16`/`i16` field (`Parts::ShortFull`):
+    /// the full 65536-value range, NO null sentinel — `read + min`
+    /// unconditionally, the 2-byte twin of [`get_byte`](Self::get_byte).  Unlike
+    /// `get_short` (`+1` encoding, reserves `0`) and `get_i16_raw` (reserves
+    /// `u16::MAX`), this reserves nothing, so a not-null `u16` can hold `65535`
+    /// (which both of those swallow as null).  The write reuses `set_i16_raw`
+    /// (`OpSetShortRaw`): `(val - min) as u16`, matching this decode.
+    #[inline]
+    pub fn get_short_full(&self, rec: u32, fld: u32, min: i32) -> i32 {
+        if rec != 0 && self.valid(rec, fld) {
+            let read: u16 = *self.addr(rec, fld);
+            i32::from(read) + min
+        } else {
+            i32::MIN
+        }
+    }
+
     #[inline]
     pub fn get_byte(&self, rec: u32, fld: u32, min: i32) -> i32 {
         if rec != 0 && self.valid(rec, fld) {

@@ -394,6 +394,12 @@ impl Parser {
                 "OpSetShort",
                 &[args[0].clone(), args[1].clone(), args[2].clone(), code],
             ),
+            // not-null 2-byte field write — reuses the raw `(val - min)` store
+            // (the read twin `OpGetShortFull` decodes without a sentinel).
+            "OpGetShortFull" => self.cl(
+                "OpSetShortRaw",
+                &[args[0].clone(), args[1].clone(), args[2].clone(), code],
+            ),
             "OpGetInt4" => self.cl("OpSetInt4", &[args[0].clone(), args[1].clone(), code]),
             "OpGetFloat" => self.cl("OpSetFloat", &[args[0].clone(), args[1].clone(), code]),
             "OpGetSingle" => self.cl("OpSetSingle", &[args[0].clone(), args[1].clone(), code]),
