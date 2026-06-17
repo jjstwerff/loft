@@ -25,6 +25,34 @@ The methodology behind this file (categories, no-time-projections, features-need
 
 ---
 
+## Where we are & the highest-leverage next work (2026-06-17)
+
+The 2026-06 cycle shipped (narrow-int storage + dev-communication, install/native
+hardening, the `@PLN27` plan migration).  The **stability roadmap is drained**
+([STABILITY_ROADMAP.md](STABILITY_ROADMAP.md) — H3/H5/H6/H7/H8 all done) and the
+**bug queue is clean** (the two open GitHub issues are deferred enhancements).  So
+forward work is improvement, not firefighting.  Under the warm feature freeze
+(below), **in-scope** = library enablement + optimisations + stabilisation;
+**gated** = new language features.  Current top picks, by theme — this is a pointer
+digest; the detail lives in the linked homes (no catalogue is duplicated here):
+
+| Theme | High-leverage items | Scope | Home |
+|---|---|---|---|
+| **Performance / startup** (serves live-prototyping) | precompiled-stdlib fast-start (`@PLN52`); const-store Phase B/C (`@PLN82`); the wasm-vs-native gap | in-scope | [PERFORMANCE.md § Open work](PERFORMANCE.md); `@PLN52`/`@PLN82` |
+| **Native robustness** | shared-store dispatch → a C-ABI `LoftStore` handle (gh #389 pt.1 — the recurring `viewer_markdown` cdylib-collision cause) | in-scope (stabilisation) | [NATIVE.md § Open work](NATIVE.md); gh #389 |
+| **Library system** (the dogfood track) | regex (gated on the coroutine native-iterator source), LSP, graphics, game-client, viewer generalisation | in-scope | [lib_plans/README](lib_plans/README.md); the `[libs]` `@PLN` issues |
+| **Friend-readiness / UX** | first-time tutorial, day-to-day ergonomics, IDE editing surface | mixed | ROADMAP § U + § "Near-term focus" below |
+| **Games / engine** (the north star) | engine host (`@PLN18` — Rust main loop + UDP), browser game UI + scriptable scenes, rendering, multiplayer | parallel-agent lane + partly gated | ROADMAP § G; `@PLN18` |
+| **Coroutines** (unlocks regex `match_groups`/`find_all`) | the native iterator source (P327) | gated (language feature) | [COROUTINE.md](COROUTINE.md); PLANNING § CO1 |
+| **Stability instruments** (when reached) | program-level fuzzing (`@PLN53`); sanitizer-coverage expansion (`@PLN54`) | future | STABILITY_ROADMAP step 9; plans 53/54 |
+| **CI / tooling** | docs-only-PR matrix-skip fix (STABILITY_ROADMAP row 11 — risky; validate via a docs-only test PR) | in-scope | STABILITY_ROADMAP row 11 |
+
+The default reading order stays the value-category tables below (S → R → G → F → U
+→ C → Q → N); this digest just surfaces the current top pick across them, and
+[PLANNING.md](PLANNING.md) remains the priority-ordered next-best-pickup backlog.
+
+---
+
 ## Feature freeze — heading into the 2026-07 cycle (added 2026-06-07)
 
 Loft is entering a **warm feature freeze** to stabilise toward a release we can trust.  Scope for this cycle is deliberately narrow:
