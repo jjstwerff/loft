@@ -64,6 +64,29 @@ Naming got a lot less cramped (`@PLN22`):
   `use lib::(a as x, b, c);`.  Multiple names from one library must be
   parenthesised — `use lib::a, b;` is no longer accepted.
 
+### Small integer types hold their full range — and won't silently null
+
+The fixed-width integer types `u8`, `i8`, `u16`, `i16` pin a field to one or two
+bytes; this release makes their ranges predictable and their edges safe.
+
+- **`not null` gives the full native range.**  A `not null u16` now holds the
+  whole `0..=65535` (before, `65535` read back as `null`); a `not null i8` holds
+  `-128..=127` — exactly what the name promises.
+- **A nullable field keeps one value aside for `null`**: `u8` is `0..=254` and
+  `u16` `0..=65534` (the top trimmed), `i8` is `-127..=127` and `i16`
+  `-32767..=32767` (kept symmetric).  Storing that one reserved value used to turn
+  into `null` silently — now it's caught.  A literal is a compile error that tells
+  you the fix (*"255 is reserved as the null sentinel of a nullable u8 (usable
+  0..=254); declare the field `not null` for the full range, or cast with `as
+  u8`"*); a value computed at run time gets a rate-limited warning that points you
+  at the field while developing and stays quiet in a shipped game.
+- **Narrow-element vectors match the fields.**  `vector<u16>` now holds `65535`
+  and `vector<i16>` holds `32767`, just as `vector<u8>` already held `255`.
+
+> Upgrading: if existing code stored the reserved edge value into a *nullable*
+> narrow field (e.g. `255` into a `u8`), it will now flag instead of silently
+> becoming `null` — declare the field `not null` for the full range, or cast.
+
 ### Windowed games without a server — `engine_host::run_local`
 
 The games kernel gains a third way to run, next to the server (`run`) and the
