@@ -202,6 +202,23 @@ found in pass 3.
    walk as a debug-assert cross-check for one release
    (`debug_assert_eq!(carried, derived)`) — drift between them is a
    found bug, exactly like the pass-3 unifications.
+   - **Design-protocol pass 1 (2026-06-17) — over-reach caught BEFORE coding.**
+     Classifying the analyses falsified the framing of this step: `guard_escapes(node,
+     target)`, `reclaim_safe(code, vars, st)`, `confine_reassign_safe(code, local)` and
+     `store_confinement` are all **contextual** — a *(code region × target)* query
+     ("does X hold for target WITHIN this code"), NOT a re-derivation of a per-var fact.
+     So they are the genuinely-shape-local questions of point 3, not carriable per-var
+     state, and "convert the analysis to carried data" would over-unify a contextual
+     query under a per-var flag (`guard_escapes` as a single per-var bool loses the
+     code-region the query is scoped to).  The carriable per-var *category* (point 1)
+     is already largely carried: `captured` + `caller_hidden_buf` on the Variable
+     struct, owned/borrowed-view via `Type::is_heap_owned` + the `Deps` borrow set.
+     The actionable H3 residual is therefore NARROWER than "carry-convert the
+     analyses": probe each contextual analysis's BODY for whether it *re-derives* a
+     per-var ownership fact inline (vs only asking a shape-local escape/placement
+     question), and have only that inline re-derivation read the carried category —
+     the analyses themselves stay walks.  That per-analysis body probe is the real
+     next move (a dedicated round); it was NOT yet done.
 3. The walker keystones (`Value::any_node` family) stay as the mechanism
    for the residual genuinely-shape-local questions (tail position,
    dominance).
