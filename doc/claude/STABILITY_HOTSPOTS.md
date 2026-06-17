@@ -526,13 +526,21 @@ pervasive):
   the diagnostic is added.  Regression
   `tests/scripts/389-narrow-runtime-collision.loft` (both backends).
 
-**Open follow-ups (separate, pre-existing).**  Narrow-VECTOR elements are NOT yet
-consistent with the field path: `vector<u8>` holds the full `0..=255` (the `Byte`
-op, no sentinel) but `vector<u16>` only `0..=65534` (`ShortRaw` reserves
-`u16::MAX`), and a `vector<u16>` can't hold `65535` even though a not-null `u16`
-field now can (apply the not-null/`ShortFull` distinction to vector elements).  And
-the 4-/8-byte `i32`/`integer` types use a `MIN`-sentinel (a not-null `i32` doesn't
-reclaim `i32::MIN`).
+**Narrow-VECTOR consistency — DONE.**  Narrow-vector elements now reach their FULL
+range, consistent with the not-null field path: `vector<u16>` holds `65535` and
+`vector<i16>` holds `32767`, matching `vector<u8>` holding `255`.  Root: the vector
+storage `Parts::ShortRaw` is ALWAYS non-nullable (`narrow_vector_content` /
+`vectors.rs` build it with `nullable = false`), but its read `get_i16_raw` still
+decoded `u16::MAX → null` — corrupting ALL five read sites (runtime access,
+serialization `io.rs`, format ×2, `types.rs`).  The proportionate chokepoint fix:
+`get_i16_raw` now delegates to `get_short_full` (no sentinel), so every path is
+full-range at once and the two functions can't drift (H6 thesis).  The write twin
+`set_i16_raw` keeps its `i32::MIN → u16::MAX` clamp as an underflow guard — narrow
+vectors store concrete values, never null, exactly like `vector<u8>`/`Byte`.
+Regression `tests/scripts/389-narrow-vector-full-range.loft` (both backends).
+
+**Open follow-up (separate, pre-existing).**  The 4-/8-byte `i32`/`integer` types
+use a `MIN`-sentinel (a not-null `i32` doesn't reclaim `i32::MIN`).
 
 ---
 

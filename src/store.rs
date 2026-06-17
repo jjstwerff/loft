@@ -1902,31 +1902,21 @@ impl Store {
         }
     }
 
-    /// direct 2-byte read for `Parts::ShortRaw` vector
-    /// elements, with `min`-shifted encoding mirroring `get_byte`:
-    /// stored value is `(val - min)` as `u16`; returns `read + min`.
-    /// Unlike `get_short` (which applies `+1` encoding with `raw=0`
-    /// null sentinel), direct encoding keeps the raw-byte-copy path
-    /// in `vector_add` valid.  `u16::MAX` (raw) is the null sentinel
-    /// — returned as `i32::MIN`.  For `u16` elements (`min=0`, `max=
-    /// 65535`), values 0..65534 round-trip; 65535 collides with the
-    /// null sentinel (pre-existing limitation shared with `u16`
-    /// struct fields).  For `i16` elements (`min=-32768`), the full
-    /// range -32768..32767 round-trips because `(val - min)` maps
-    /// those into `u16` 0..65535 without hitting the `u16::MAX`
-    /// sentinel.
+    /// Read a `Parts::ShortRaw` narrow-vector element.  ShortRaw is ALWAYS
+    /// non-nullable (`narrow_vector_content` / `vectors.rs` build it with
+    /// `nullable = false`), so it reserves NO sentinel — the full 2-byte range,
+    /// identical to [`get_short_full`](Self::get_short_full) /
+    /// [`get_byte`](Self::get_byte) (`read + min`; stored as `(val - min) as u16`
+    /// by `set_i16_raw`, the raw-byte-copy path `vector_add` relies on).
+    ///
+    /// H6: it used to decode `u16::MAX → null`, which silently nulled a
+    /// `vector<u16>`'s `65535` / `vector<i16>`'s `32767` — inconsistent with
+    /// `vector<u8>` holding the full `0..=255` via `Byte`.  The write twin
+    /// `set_i16_raw` keeps its `i32::MIN → u16::MAX` clamp purely as an underflow
+    /// guard; narrow vectors store concrete values, never null (like `vector<u8>`).
     #[inline]
     pub fn get_i16_raw(&self, rec: u32, fld: u32, min: i32) -> i32 {
-        if rec != 0 && self.valid(rec, fld) {
-            let read: u16 = *self.addr(rec, fld);
-            if read == u16::MAX {
-                i32::MIN
-            } else {
-                i32::from(read) + min
-            }
-        } else {
-            i32::MIN
-        }
+        self.get_short_full(rec, fld, min)
     }
 
     /// direct 2-byte write for `Parts::ShortRaw` vector
@@ -1950,10 +1940,11 @@ impl Store {
     /// Direct 2-byte read for a NOT-NULL `u16`/`i16` field (`Parts::ShortFull`):
     /// the full 65536-value range, NO null sentinel — `read + min`
     /// unconditionally, the 2-byte twin of [`get_byte`](Self::get_byte).  Unlike
-    /// `get_short` (`+1` encoding, reserves `0`) and `get_i16_raw` (reserves
-    /// `u16::MAX`), this reserves nothing, so a not-null `u16` can hold `65535`
-    /// (which both of those swallow as null).  The write reuses `set_i16_raw`
-    /// (`OpSetShortRaw`): `(val - min) as u16`, matching this decode.
+    /// `get_short` (`+1` encoding, reserves `0`, swallows `65535` as null), this
+    /// reserves nothing, so a not-null `u16` can hold `65535`.  The `ShortRaw`
+    /// narrow-vector read `get_i16_raw` now delegates here (same full-range
+    /// decode).  The write reuses `set_i16_raw` (`OpSetShortRaw`): `(val - min)
+    /// as u16`, matching this decode.
     #[inline]
     pub fn get_short_full(&self, rec: u32, fld: u32, min: i32) -> i32 {
         if rec != 0 && self.valid(rec, fld) {
