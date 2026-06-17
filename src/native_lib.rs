@@ -1359,7 +1359,7 @@ mod rlib_search_tests {
         // every dev candidate links the same deps/ search dir
         assert!(
             dirs.iter()
-                .all(|(_, deps)| *deps == PathBuf::from("target/release/deps"))
+                .all(|(_, deps)| deps.as_path() == std::path::Path::new("target/release/deps"))
         );
     }
 
