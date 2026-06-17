@@ -848,6 +848,23 @@ fn collect_scope_hoists(code: &Value) -> std::collections::HashSet<u16> {
     hoist
 }
 
+/// The native-Rust DEFAULT-INIT literal for a variable / return of type `tp` —
+/// the placeholder a `let mut var_x: T = …;` gets before its real assignment
+/// (and the value emitted for an explicit `var = null`, `dispatch.rs`).
+///
+/// This is the default-INIT contract, DISTINCT from the live NULL sentinel that
+/// `emit_typed_null` (`state/codegen.rs`) pushes on the bytecode stack
+/// (H4 — keep the two in step; do NOT assume they're interchangeable):
+/// - For bool / text / reference / collection types the default-init IS the
+///   null storage form (`255u8` / `STRING_NULL` / the `{u16::MAX,0,8}` DbRef),
+///   so it coincides with the null.
+/// - For SCALARS (`Integer`, `Character`, `Float`, `Single`) it is the ZERO
+///   default (`0` / `0.0`), NOT the null sentinel (`i64::MIN` / `NaN`).  Safe
+///   because a live scalar null never flows through here: the live-null path
+///   emits the sentinel on BOTH backends (verified — a `null`-returning
+///   `integer`/`float` fn reads back as the sentinel on interp AND native), and
+///   `floatvar = null` is type-rejected.  Do NOT route a live scalar null
+///   through this — it would diverge from `emit_typed_null`.
 pub(super) fn default_native_value(tp: &Type) -> String {
     match tp {
         Type::Float => "0.0_f64".into(),

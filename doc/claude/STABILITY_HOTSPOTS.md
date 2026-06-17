@@ -273,6 +273,31 @@ bytecode also walks.
   before H1/H3 — they shrink exactly the semantics that would need
   porting.
 
+**Design-protocol finding (2026-06-17) — H4-medium RESOLVED.**  Of the three (M)
+candidates only the GET→SET table was a genuine duplication, and it shipped
+(`NarrowIntKind::of`, `9153e132`).  The other two are NOT clean merges (premise
+over-stated, like H3):
+
+- **Free-op family — already single-homed.**  `scopes.rs` is the one SELECTION
+  site (type → `OpFreeText` / `OpFreeRef` / `OpFreeRefIfDistinct`, inserted into
+  the shared IR both backends consume) and `pre_eval::free_op_var` is the one
+  RECOGNIZER (de-duped in the pass-3 work).  No per-backend free-op table exists
+  to merge.
+- **Null-init — different facts, not a duplication.**  `emit_typed_null` (the
+  live NULL sentinel on the bytecode stack) and `default_native_value` (the
+  native default-INIT placeholder) encode different things.  PROBED: the
+  live-null path emits the sentinel on BOTH backends (a `null`-returning
+  `integer` / `float` fn round-trips identically interp-vs-native), and
+  `default_native_value`'s scalar `0` / `0.0` are unreachable as live nulls
+  (`floatvar = null` is type-rejected).  Merging them would conflate
+  null-sentinel with default-init — the H6-`NullEnc`-phantom mistake avoided.
+  The one real residual — `default_native_value`'s undocumented, conflated
+  contract — is fixed by a doc comment naming the contract + its relationship to
+  `emit_typed_null`.
+
+The standing discipline (every lowering-semantics change lands a `cross_mode!`
+cell / `tests/scripts/` file) remains the live guard against future drift.
+
 ---
 
 ## H5 — The two-pass name-stability contract
