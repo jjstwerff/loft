@@ -110,7 +110,7 @@ last commit where it existed is `864dafe^`.  Recover it with:
 
 ```
 git show 864dafe^:src/cache.rs
-git show 864dafe^:src/compile.rs   # byte_code_with_cache integration
+git show 864dafe^:src/compile.rs   # byte_code_with_cache integration (since retired)
 ```
 
 What it actually did (corrects the one-liner in the @PLN82 README):
@@ -132,7 +132,7 @@ What it actually did (corrects the one-liner in the @PLN82 README):
    user file** as source — `default/*.loft` was never hashed.  That is
    the retirement bug to fix.
 4. **Cache file** sat beside the script: `foo.loft` → `foo.loftc`.
-5. **On a hit, `byte_code_with_cache` skipped** the per-function
+5. **On a hit, the former `byte_code_with_cache` skipped** the per-function
    `def_code()` codegen loop **and** `build_const_vectors()`;
    `native::init` + `register_native_stubs` always ran.
 
@@ -323,7 +323,7 @@ Cache file beside the script (`<file>.loftc`).
 
 **Implementation.**
 - Re-add `src/cache.rs` + `pub mod cache;` in `src/lib.rs`; re-add the
-  `byte_code_with_cache` wrapper in `src/compile.rs`.
+  the since-retired `byte_code_with_cache` wrapper in `src/compile.rs`.
 - Collect the `default/` bytes once in `parse_dir` (already reading
   them) and thread into the key — avoid a second disk read.
 - Wire into the `--interpret` path in `src/main.rs` near the existing
