@@ -87,9 +87,10 @@ triage, then the flip.  Step 5's residue is the only part that cannot be sized y
 Step 5 exists (re-run the consumers gate-on; triage only what does not go green from Steps 1–3).
 **A4(b) is landed** (2026-06-17); **A3 rung 1** (key-resolution chokepoint, `key_owner`) is landed
 (2026-06-17, gate-inert) — but A3 proved to be ≥4 substrate rungs (see Step-1 A3).  Next concrete
-move: **A3 rung 2** — a `hash<__nullable<S>>` FIELD reads a garbage `store_nr` on fresh construct
-(the `OpDatabase`/GetField ref-build for a synth-enum hash field); reproduces with a lone hash
-field, no insert.
+move: **A3 rung 2** — a struct with a `hash<__nullable<S>>` field has its constructed var VALID right
+after `OpDatabase` but corrupted to garbage (`store_nr 2→4`) before first read; same bytecode/frame
+as the clean gate-off build, so type-driven and subtle.  Next: a per-op trace of the constructed var
+to catch the exact write (reproduces with a lone hash field, no insert).
 
 ## Status
 
@@ -284,14 +285,21 @@ default-on (gate removed), per the project standard.  The remaining work, in fin
          registered after the hash type and the key spec still comes out empty.  Result: the hash type
          is now `hash<__nullable<Count>[t]>` (key present).  Gate-off byte-green (2397/2398; only the
          pre-existing non-E2 `kernel_port`).
-       - **Rung 2 — reading a `hash<__nullable<S>>` FIELD yields a garbage `store_nr` → `hash::find`
-         panics (`stores[store_nr]` OOB) — OPEN, substrate.**  Reproduces with a LONE hash field
-         (`struct Box { lookup: hash<Count[t]> }`), on a FRESH `Box{}` with NO insert, field at offset
-         0 — so it is neither key-extraction nor vector-coexistence: the synth-enum hash field is not
-         constructed/read with a valid container ref gate-on.  PRE-EXISTING (independent of rung 1).
-         `OpGetField(c, off, <hashtype>)` → `OpGetRecord` → `find(data,…)` where `data.store_nr` is
-         garbage.  Next A3 step: the `OpDatabase` struct-construction / collection-field init / GetField
-         ref-build for a synth-enum hash field.
+       - **Rung 2 — a struct holding a `hash<__nullable<S>>` field has its CONSTRUCTED ref corrupted
+         before first read → `hash::find` panics (`stores[store_nr]` OOB) — OPEN, substrate, sharply
+         localized 2026-06-17.**  Reproduces with a LONE hash field (`struct Box { lookup:
+         hash<Count[t]> }`), a FRESH `Box{}`, NO insert, field at offset 0 — so it is neither
+         key-extraction (rung 1) nor vector-coexistence.  Instrumented finding: the var is VALID
+         immediately after `OpDatabase` (`(store_nr 2, rec 1, pos 8)`), but reads back GARBAGE at the
+         first field access (`store_nr 2→4`, rec/pos clobbered with varying junk).  The bytecode,
+         frame size, and slot layout are BYTE-IDENTICAL to the gate-off build (which runs clean), and
+         the only memory writes between construct and read — `set_default_value` and the `Box{}`
+         field-init `OpSetInt4` — BOTH correctly write a 4-byte `0` to the hash claim (no bad recursion
+         into the synth enum; structures.rs:938 Hash arm is right).  So the corruption is purely
+         type-driven (db_tp 66/68 synth vs 65/66 dense) and subtle — the next step is a per-op trace of
+         the constructed var to catch the exact write that flips `store_nr 2→4`.  E2-internal: a
+         `hash`/`sorted`/`index` whose element is an ENUM only arises from E2's synth rewrite (a normal
+         keyed collection is over a STRUCT), so this is NOT a `main` bug to file.
        - **Rung 3 — `c.lookup[k].field` PARSE error** (`Unknown field __nullable<Count>.v`): the lookup
          RESULT is `__nullable<Count>`, and field access on it isn't auto-unwrapped — the same
          field-access-on-nullable seam A4 solved for vector elements, here for a hash-lookup result.
