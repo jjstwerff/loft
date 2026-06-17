@@ -316,10 +316,23 @@ impl Function {
         }
     }
 
-    /// The `names` map entries (name → var_nr), for the snapshot encoder.
+    /// The `names` map entries (name → var_nr), for the snapshot encoder, in a
+    /// STABLE total order (by `var_nr`, then name).
+    ///
+    /// `self.names` is a `HashMap`, so iterating it raw yields a run-to-run
+    /// varying order — which made the serialized variable-name list, and thus the
+    /// cached `Data` (the store codec) AND the JSON codec, **non-reproducible**:
+    /// two names sharing a `var_nr` (a text param and its `__tp_` first-mutation
+    /// promotion shadow) flipped order between runs, so a fresh parse and a
+    /// store/JSON round-trip of the same program disagreed.  Sorting here is the
+    /// chokepoint — both codecs encode from this, so both become deterministic.
+    /// The order is non-load-bearing (debug symbols, looked up by name), so the
+    /// sort is free of behaviour change.
     #[must_use]
     pub(crate) fn snapshot_names(&self) -> Vec<(&str, u16)> {
-        self.names.iter().map(|(k, &v)| (k.as_str(), v)).collect()
+        let mut out: Vec<(&str, u16)> = self.names.iter().map(|(k, &v)| (k.as_str(), v)).collect();
+        out.sort_unstable_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(b.0)));
+        out
     }
 
     /// The `inline_ref_vars` set, for the snapshot encoder.

@@ -310,3 +310,51 @@ fn tests_scripts_round_trip() {
         "tests_scripts_round_trip: {scripts_checked} scripts, {defs_checked} script-defs round-tripped"
     );
 }
+
+/// H7 — the STORE codec (`ir_store::materialize_data` → `ir_read::read_data`),
+/// the path the **startup cache** uses, round-trips the whole stdlib + every
+/// `tests/scripts/` program's `Data` exactly.
+///
+/// The tests above cover the JSON codec (`*_to_json`/`*_from_json`).  The store
+/// codec is the SECOND, higher-stakes hand-written codec H7 names — a silent
+/// field gap there makes the cache read garbage — yet it was round-trip-tested
+/// on only ONE hand-written program (`g2_ir_check`).  This widens that to the
+/// corpus: a new `Value`/`Type` variant (or a dropped field) that the store
+/// codec mishandles fails here loudly, localized by the `DataDiff`.
+#[test]
+fn corpus_store_codec_round_trips() {
+    let (stdlib_data, stdlib_db) = cached_default();
+    // The stdlib itself first (the bulk of the variants).
+    if let Err(diff) = loft::ir_read::ir_roundtrip_check(&stdlib_data) {
+        panic!("stdlib store-codec round-trip mismatch: {diff:?}");
+    }
+    let mut scripts: Vec<std::path::PathBuf> = std::fs::read_dir("tests/scripts")
+        .expect("tests/scripts")
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "loft"))
+        .collect();
+    scripts.sort();
+    let mut checked = 0usize;
+    for script in &scripts {
+        let mut p = loft::parser::Parser::new();
+        p.data = stdlib_data.clone();
+        p.database = stdlib_db.clone();
+        // Skip scripts that don't parse clean (error-path / lib-dependent
+        // fixtures) — same gate as `tests_scripts_round_trip`.
+        if !p.parse(&script.to_string_lossy(), false) {
+            continue;
+        }
+        if let Err(diff) = loft::ir_read::ir_roundtrip_check(&p.data) {
+            panic!(
+                "store-codec round-trip mismatch in {}: {diff:?}",
+                script.display()
+            );
+        }
+        checked += 1;
+    }
+    assert!(
+        checked > 100,
+        "expected many scripts to parse clean, got {checked}"
+    );
+    eprintln!("corpus_store_codec_round_trips: {checked} scripts store-round-tripped");
+}
