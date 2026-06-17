@@ -34,15 +34,28 @@ hardening, the `@PLN27` plan migration).  The **stability roadmap is drained**
 forward work is improvement, not firefighting.  Under the warm feature freeze
 (below), **in-scope** = library enablement + optimisations + stabilisation;
 **gated** = new language features.  Current top picks, by theme — this is a pointer
-digest; the detail lives in the linked homes (no catalogue is duplicated here):
+digest; the detail lives in the linked homes (no catalogue is duplicated here).
 
-| Theme | High-leverage items | Scope | Home |
+**✅ Much of each theme's FOUNDATION already ships** — the items below are
+increments on top, not greenfield.  Already working today (verified 2026-06-17
+against the CHANGELOG + `lib/` + the test suite): the **engine host** run modes
+(`run` / `run_local` windowed-no-server / `run_client` / `post` / `stop`); the
+**REPL** (`loft repl`) and **`loft introspect`**; the **program cache** (on by
+default — the headline startup win); the **library system** with toolchain-free
+installs and ~12 working libs (`graphics`, `imaging`, `gridmesh`, `shapes`,
+`input`, `server`, `web`, `html`, `markdown`, `game_protocol`, `world`, `time`);
+**const-store Phase A** (heap-backed `CONST_STORE`); **native-package C-ABI
+linking** (`@PLN26`); plus the branch-review viewer / tracker index / markdown
+renderer.  So *windowed graphics + a multiplayer protocol + a REPL* are present
+now — what's open below is the increments.
+
+| Theme | Open increment (the part NOT yet shipped) | Scope | Home |
 |---|---|---|---|
 | **Performance / startup** (serves live-prototyping) | precompiled-stdlib fast-start (`@PLN52`); const-store Phase B/C (`@PLN82`); the wasm-vs-native gap | in-scope | [PERFORMANCE.md § Open work](PERFORMANCE.md); `@PLN52`/`@PLN82` |
 | **Native robustness** | shared-store dispatch → a C-ABI `LoftStore` handle (gh #389 pt.1 — the recurring `viewer_markdown` cdylib-collision cause) | in-scope (stabilisation) | [NATIVE.md § Open work](NATIVE.md); gh #389 |
-| **Library system** (the dogfood track) | regex (gated on the coroutine native-iterator source), LSP, graphics, game-client, viewer generalisation | in-scope | [lib_plans/README](lib_plans/README.md); the `[libs]` `@PLN` issues |
-| **Friend-readiness / UX** | first-time tutorial, day-to-day ergonomics, IDE editing surface | mixed | ROADMAP § U + § "Near-term focus" below |
-| **Games / engine** (the north star) | engine host (`@PLN18` — Rust main loop + UDP), browser game UI + scriptable scenes, rendering, multiplayer | parallel-agent lane + partly gated | ROADMAP § G; `@PLN18` |
+| **Library system** (the dogfood track) | regex (gated on the coroutine source), LSP, a game-client lib, viewer generalisation — *graphics / imaging / server / markdown / world / game_protocol already ship* | in-scope | [lib_plans/README](lib_plans/README.md); the `[libs]` `@PLN` issues |
+| **Friend-readiness / UX** | first-time tutorial + more day-to-day ergonomics — *REPL / `introspect` / the IDE editor slices already ship* | mixed | ROADMAP § U + § "Near-term focus" below |
+| **Games / engine** (the north star) | the `@PLN18` UDP state-sync channel (05a), scriptable scenes, fuller browser game UI — *the run modes + graphics rendering + the multiplayer protocol already ship* | parallel-agent lane + partly gated | ROADMAP § G; `@PLN18` |
 | **Coroutines** (unlocks regex `match_groups`/`find_all`) | the native iterator source (P327) | gated (language feature) | [COROUTINE.md](COROUTINE.md); PLANNING § CO1 |
 | **Stability instruments** (when reached) | program-level fuzzing (`@PLN53`); sanitizer-coverage expansion (`@PLN54`) | future | STABILITY_ROADMAP step 9; plans 53/54 |
 | **CI / tooling** | docs-only-PR matrix-skip fix (STABILITY_ROADMAP row 11 — risky; validate via a docs-only test PR) | in-scope | STABILITY_ROADMAP row 11 |
