@@ -546,10 +546,13 @@ pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data
     let guard = NATIVE_REGISTRY
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let registry = match guard.as_ref() {
-        Some(r) => r,
-        None => return,
-    };
+    // A `None` registry means NO native cdylib loaded at all — the worst case, not a
+    // skip case: if a library's cdylib failed to load (missing / stale / rebuild
+    // failed) and it was the only one, every one of its stubs is unresolved.  Treat
+    // None as an empty registry so the loop still runs and reports them, instead of
+    // returning early and leaving the failure silent until a mid-run panic.
+    let empty_registry = HashMap::new();
+    let registry = guard.as_ref().unwrap_or(&empty_registry);
 
     let mut sigs = NATIVE_SIGS
         .lock()
@@ -560,6 +563,11 @@ pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let stub_syms = stub_guard.as_ref();
+
+    // Stub symbols whose cdylib never provided them — collected so the failure is
+    // reported LOUDLY at load (below), not left to surface as a generic panic at
+    // first call deep in execution.
+    let mut unresolved: Vec<String> = Vec::new();
 
     for d_nr in 0..data.definitions() {
         let def = data.def(d_nr);
@@ -581,6 +589,10 @@ pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data
         }
 
         if !registry.contains_key(sym) {
+            // Neither the registry nor `try_dlsym` (phase 1) found it: the owning
+            // library's cdylib is missing / stale / failed to rebuild.  The panic
+            // stub stays in place; record the symbol so load-time reporting names it.
+            unresolved.push(sym.clone());
             continue;
         }
 
@@ -601,6 +613,47 @@ pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data
 
         // Replace the stub with the generic auto-marshal dispatcher.
         state.replace_static_fn(sym, native_auto_dispatch);
+    }
+
+    if !unresolved.is_empty() {
+        report_unresolved_natives(data, &unresolved);
+    }
+}
+
+/// Loud load-time diagnostic for `#native` symbols whose cdylib never loaded.
+/// Grouped by the owning crate (via `native_symbol_crates`) so the message names
+/// the library to rebuild, not just orphan symbols.  Non-fatal — a declared but
+/// never-called native must still let the program run, so this warns rather than
+/// aborts; the matching panic stub still fires if the function is actually called,
+/// but the operator has already seen which library to rebuild.
+#[cfg(feature = "native-extensions")]
+fn report_unresolved_natives(data: &crate::data::Data, unresolved: &[String]) {
+    use std::collections::BTreeMap;
+    let mut by_crate: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for sym in unresolved {
+        let krate = data
+            .native_symbol_crates
+            .get(sym)
+            .map_or("<unknown library>", String::as_str);
+        by_crate.entry(krate).or_default().push(sym.as_str());
+    }
+    for (krate, mut syms) in by_crate {
+        syms.sort_unstable();
+        let shown = syms.iter().take(6).copied().collect::<Vec<_>>().join(", ");
+        let more = syms.len().saturating_sub(6);
+        let more_txt = if more > 0 {
+            format!(", +{more} more")
+        } else {
+            String::new()
+        };
+        eprintln!(
+            "loft: native library '{krate}' did not load — {n} of its #native function(s) are \
+             unavailable and will panic if called ({shown}{more_txt}). Its cdylib is missing or \
+             stale (commonly built against a different libloft.rlib / loft-ffi). Rebuild it with \
+             `make rebuild-native-cdylibs` (in the loft tree) or `cargo build --release` in the \
+             library's native/ dir, then re-run.",
+            n = syms.len(),
+        );
     }
 }
 
@@ -2319,11 +2372,7 @@ pub fn resolve_native_lib(pkg_dir: &str, stem: &str) -> Option<String> {
     // decision C3).  Check FIRST and emit an actionable hint, rather than loading
     // a doomed prebuilt or spending ~90s on a build that cannot load.
     if let Some(lib) = first_missing_runtime_lib(pkg_dir) {
-        eprintln!(
-            "loft: native library '{stem}' needs the system library '{lib}', which is not \
-             installed — install it with your OS package manager (building from source would \
-             link the same library and fail identically)."
-        );
+        eprintln!("{}", runtime_lib_missing_diagnostic(stem, &lib));
         return None;
     }
     let filename = platform_lib_name(stem);
@@ -2352,22 +2401,83 @@ pub fn resolve_native_lib(pkg_dir: &str, stem: &str) -> Option<String> {
     auto_build_native(pkg_dir, stem)
 }
 
-/// @PLN21 Phase 3 — the first `[native] runtime-libs` entry the dynamic linker
-/// can't find, if any.  `dlopen` IS the authoritative presence check: a declared
-/// lib that loads is present; one that fails is missing, so the package's cdylib
-/// (prebuilt OR freshly built) could not load.  Empty `runtime-libs` (a
-/// libc-only package) → no check, no cost.
+/// The OS a library NAME targets, inferred from its soname/extension form, or
+/// `None` when it can't be told (extensionless / unrecognised).  Soname matching,
+/// not file-extension parsing: `.so` is matched as a substring because versioned
+/// sonames are `.so.N` (which `Path::extension` would read as "N"), and sonames
+/// are lowercase by platform convention — so case-sensitive substring checks are
+/// correct here.  The single source of truth for runtime-lib platform-scoping.
+#[cfg(feature = "native-extensions")]
+fn lib_name_target_os(lib: &str) -> Option<&'static str> {
+    #[allow(clippy::case_sensitive_file_extension_comparisons)]
+    if lib.contains(".so") {
+        Some("Linux")
+    } else if lib.ends_with(".dylib") {
+        Some("macOS")
+    } else if lib.ends_with(".dll") {
+        Some("Windows")
+    } else {
+        None
+    }
+}
+
+/// The host OS as a display name, for runtime-lib diagnostics + platform-scoping.
+/// Not feature-gated: `runtime_lib_missing_diagnostic` (and thus its call site in
+/// the unconditionally-compiled `resolve_native_lib`) needs it even when
+/// `native-extensions` is off (e.g. the WASM build).
+fn host_os_name() -> &'static str {
+    if cfg!(target_os = "linux") {
+        "Linux"
+    } else if cfg!(target_os = "macos") {
+        "macOS"
+    } else if cfg!(target_os = "windows") {
+        "Windows"
+    } else {
+        "this OS"
+    }
+}
+
+/// @PLN21 Phase 3 — the first host-applicable `[native] runtime-libs` entry the
+/// dynamic linker can't find, if any.  `dlopen` IS the authoritative presence
+/// check: a declared lib that loads is present; one that fails is missing, so the
+/// package's cdylib (prebuilt OR freshly built) could not load.
+///
+/// A runtime-lib named for a DIFFERENT OS than the host (e.g. a Linux `libGL.so.1`
+/// declared by a library used on macOS) is **skipped, not probed**: it can never
+/// load here and is not a host requirement — the host build of the cdylib links
+/// its own platform libraries.  Probing it would wrongly hard-fail the whole
+/// library on every foreign platform.  Only host-applicable (or unclassifiable)
+/// names gate resolution.  Empty `runtime-libs` → no check, no cost.
 #[cfg(feature = "native-extensions")]
 fn first_missing_runtime_lib(pkg_dir: &str) -> Option<String> {
+    let host = host_os_name();
     crate::manifest::read_manifest(&format!("{pkg_dir}/loft.toml"))?
         .runtime_libs
         .into_iter()
+        .filter(|lib| lib_name_target_os(lib).is_none_or(|os| os == host))
         .find(|lib| unsafe { libloading::Library::new(lib) }.is_err())
 }
 
 #[cfg(not(feature = "native-extensions"))]
 fn first_missing_runtime_lib(_pkg_dir: &str) -> Option<String> {
     None
+}
+
+/// Diagnostic for a host-applicable `[native] runtime-libs` entry that could not
+/// be `dlopen`'d — the library is genuinely not installed.  Foreign-OS names are
+/// skipped before this point (see [`first_missing_runtime_lib`]), so they never
+/// reach here and never produce misleading "install it" advice.  Not
+/// feature-gated: its call site in `resolve_native_lib` compiles unconditionally
+/// (the `first_missing_runtime_lib` if-branch is dead but still type-checked when
+/// `native-extensions` is off), so the helper must exist in every build.
+fn runtime_lib_missing_diagnostic(stem: &str, lib: &str) -> String {
+    format!(
+        "loft: native library '{stem}' needs the system library '{lib}', which is not installed \
+         on {host} ({triple}) — install it with your OS package manager (building from source \
+         would link the same library and fail identically).",
+        host = host_os_name(),
+        triple = crate::cache::host_triple(),
+    )
 }
 
 pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
@@ -2775,7 +2885,10 @@ pub mod native_call {
 // actionable guidance.  Pure string-in/string-out, so unit-testable.
 #[cfg(all(test, feature = "native-extensions"))]
 mod dlopen_diag_tests {
-    use super::{build_deps_hint, dlopen_diagnostic, first_missing_runtime_lib};
+    use super::{
+        build_deps_hint, dlopen_diagnostic, first_missing_runtime_lib,
+        runtime_lib_missing_diagnostic,
+    };
 
     fn temp_pkg(name: &str, toml: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("loft_p21_{name}_{}", std::process::id()));
@@ -2784,19 +2897,68 @@ mod dlopen_diag_tests {
         dir
     }
 
+    // A library-name that targets THIS host (so it's probed) and one that targets
+    // another OS (so it's skipped) — derived from the runner's OS so the runtime-
+    // lib tests hold on every CI leg (ubuntu/macos/windows), not just Linux.
+    fn host_and_foreign_lib_names() -> (&'static str, &'static str) {
+        if cfg!(target_os = "macos") {
+            ("libnot-real-skip.dylib", "libnot-real-skip.so.7")
+        } else if cfg!(target_os = "windows") {
+            ("not-real-skip.dll", "libnot-real-skip.so.7")
+        } else {
+            ("libnot-real-skip.so.7", "libnot-real-skip.dylib")
+        }
+    }
+
     #[test]
     fn missing_declared_runtime_lib_is_detected() {
+        // A host-applicable name that isn't installed must be detected.
+        let (host_missing, _) = host_and_foreign_lib_names();
         let dir = temp_pkg(
             "rtlib",
-            "[native]\ncrate = \"x\"\nruntime-libs = \"libnot-real-pln21.so.99\"\n",
+            &format!("[native]\ncrate = \"x\"\nruntime-libs = \"{host_missing}\"\n"),
         );
         assert_eq!(
             first_missing_runtime_lib(dir.to_str().unwrap()).as_deref(),
-            Some("libnot-real-pln21.so.99")
+            Some(host_missing)
         );
         // none declared → no check, no false positive.
         let dir2 = temp_pkg("nort", "[native]\ncrate = \"x\"\n");
         assert!(first_missing_runtime_lib(dir2.to_str().unwrap()).is_none());
+    }
+
+    #[test]
+    fn first_missing_runtime_lib_skips_foreign_platform_names() {
+        // The macOS-on-`libGL.so.1` case: a foreign-OS name can never load here and
+        // is NOT a host requirement, so it is skipped — not treated as missing
+        // (which would wrongly hard-fail the whole library).
+        let (host_missing, foreign) = host_and_foreign_lib_names();
+        let f = temp_pkg(
+            "foreignrt",
+            &format!("[native]\ncrate = \"x\"\nruntime-libs = \"{foreign}\"\n"),
+        );
+        assert!(first_missing_runtime_lib(f.to_str().unwrap()).is_none());
+        // foreign (skipped) + a missing host name (probed) → the host one is still
+        // detected.
+        let mixed = temp_pkg(
+            "mixrt",
+            &format!("[native]\ncrate = \"x\"\nruntime-libs = \"{foreign}, {host_missing}\"\n"),
+        );
+        assert_eq!(
+            first_missing_runtime_lib(mixed.to_str().unwrap()).as_deref(),
+            Some(host_missing)
+        );
+    }
+
+    #[test]
+    fn runtime_lib_diag_keeps_install_advice_for_host_targeted_name() {
+        // A `.so` on Linux is the right format — genuinely not installed.
+        let m = runtime_lib_missing_diagnostic("audio", "libasound.so.2");
+        assert!(
+            m.contains("needs the system library 'libasound.so.2'"),
+            "{m}"
+        );
+        assert!(m.contains("install it with your OS package manager"), "{m}");
     }
 
     #[test]
