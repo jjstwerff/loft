@@ -2897,48 +2897,56 @@ mod dlopen_diag_tests {
         dir
     }
 
+    // A library-name that targets THIS host (so it's probed) and one that targets
+    // another OS (so it's skipped) — derived from the runner's OS so the runtime-
+    // lib tests hold on every CI leg (ubuntu/macos/windows), not just Linux.
+    fn host_and_foreign_lib_names() -> (&'static str, &'static str) {
+        if cfg!(target_os = "macos") {
+            ("libnot-real-skip.dylib", "libnot-real-skip.so.7")
+        } else if cfg!(target_os = "windows") {
+            ("not-real-skip.dll", "libnot-real-skip.so.7")
+        } else {
+            ("libnot-real-skip.so.7", "libnot-real-skip.dylib")
+        }
+    }
+
     #[test]
     fn missing_declared_runtime_lib_is_detected() {
+        // A host-applicable name that isn't installed must be detected.
+        let (host_missing, _) = host_and_foreign_lib_names();
         let dir = temp_pkg(
             "rtlib",
-            "[native]\ncrate = \"x\"\nruntime-libs = \"libnot-real-pln21.so.99\"\n",
+            &format!("[native]\ncrate = \"x\"\nruntime-libs = \"{host_missing}\"\n"),
         );
         assert_eq!(
             first_missing_runtime_lib(dir.to_str().unwrap()).as_deref(),
-            Some("libnot-real-pln21.so.99")
+            Some(host_missing)
         );
         // none declared → no check, no false positive.
         let dir2 = temp_pkg("nort", "[native]\ncrate = \"x\"\n");
         assert!(first_missing_runtime_lib(dir2.to_str().unwrap()).is_none());
     }
 
-    // These run on Linux CI, so the host OS is Linux: a `.dylib`/`.dll` name is
-    // foreign (skipped), a `.so` name is host-applicable.
     #[test]
     fn first_missing_runtime_lib_skips_foreign_platform_names() {
-        // The macOS-on-`libGL.so.1` case, mirrored: a foreign-OS name can never
-        // load here and is NOT a host requirement, so it is skipped — not treated
-        // as missing (which would wrongly hard-fail the whole library).
-        let mac = temp_pkg(
-            "macrt",
-            "[native]\ncrate = \"x\"\nruntime-libs = \"libFoo.dylib\"\n",
+        // The macOS-on-`libGL.so.1` case: a foreign-OS name can never load here and
+        // is NOT a host requirement, so it is skipped — not treated as missing
+        // (which would wrongly hard-fail the whole library).
+        let (host_missing, foreign) = host_and_foreign_lib_names();
+        let f = temp_pkg(
+            "foreignrt",
+            &format!("[native]\ncrate = \"x\"\nruntime-libs = \"{foreign}\"\n"),
         );
-        assert!(first_missing_runtime_lib(mac.to_str().unwrap()).is_none());
-        let win = temp_pkg(
-            "winrt",
-            "[native]\ncrate = \"x\"\nruntime-libs = \"foo.dll\"\n",
-        );
-        assert!(first_missing_runtime_lib(win.to_str().unwrap()).is_none());
-        // A host-applicable (.so) name that's missing is still detected, even when
-        // a foreign name is also declared — the foreign one is skipped, the host
-        // one is probed.
+        assert!(first_missing_runtime_lib(f.to_str().unwrap()).is_none());
+        // foreign (skipped) + a missing host name (probed) → the host one is still
+        // detected.
         let mixed = temp_pkg(
             "mixrt",
-            "[native]\ncrate = \"x\"\nruntime-libs = \"libFoo.dylib, libnot-real-skip.so.7\"\n",
+            &format!("[native]\ncrate = \"x\"\nruntime-libs = \"{foreign}, {host_missing}\"\n"),
         );
         assert_eq!(
             first_missing_runtime_lib(mixed.to_str().unwrap()).as_deref(),
-            Some("libnot-real-skip.so.7")
+            Some(host_missing)
         );
     }
 
