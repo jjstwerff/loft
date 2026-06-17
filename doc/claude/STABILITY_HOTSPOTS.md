@@ -217,8 +217,26 @@ found in pass 3.
      analyses": probe each contextual analysis's BODY for whether it *re-derives* a
      per-var ownership fact inline (vs only asking a shape-local escape/placement
      question), and have only that inline re-derivation read the carried category —
-     the analyses themselves stay walks.  That per-analysis body probe is the real
-     next move (a dedicated round); it was NOT yet done.
+     the analyses themselves stay walks.
+   - **Design-protocol pass 2 (2026-06-17) — the body probe, on the two CORE
+     free-placement analyses (`reclaim_safe`, `store_confinement`): no inline
+     ownership re-derivation found.**  Both READ carried per-var facts
+     (`is_argument`/`is_captured`/`is_skip_free`/`tp().depend()`/`name`) and call
+     genuinely-contextual sub-queries (`guard_escapes`, `holder_retained`,
+     `confine_reassign_safe`, `recover_backer`).  So this hotspot's premise — "every
+     analysis re-asserts what construction already knew" — is **over-stated**: the
+     analyses READ what construction knew (the facts ARE carried, on the variable
+     table + `Type`/`Deps`), and what remains is the **inherent shape-locality** of
+     free-placement (escape / retention / confinement-span genuinely depend on code
+     structure, not on a carryable per-var attribute).  **Conclusion: H3's "carry the
+     facts" mitigation (points 1–2) is largely already realised; there is no open L
+     carry-conversion.**  The real residual pain the evidence (#316/#323) points at is
+     the COMPLEXITY of the contextual placement walks (each new construct's shape must
+     be handled) — which carrying cannot remove; it is managed by the cross-check
+     corpus (plan-57 probes, watermark guard), not by an ownership refactor.  Residual
+     verification (not yet done): confirm the remaining analyses (`free_vars`,
+     `guard_refs`, `store_lifetime_guard`) also only-read; if so, H3 closes as
+     "premise over-stated, facts already carried."
 3. The walker keystones (`Value::any_node` family) stay as the mechanism
    for the residual genuinely-shape-local questions (tail position,
    dominance).
