@@ -1250,7 +1250,16 @@ impl Stores {
     /// limiter keys on the field offset (`pos`), so a loop writing one field
     /// warns once, not per iteration.
     fn warn_narrow_sentinel(&mut self, val: i32, min: i32, all_ones: i32, pos: u32) {
-        if self.logger.is_none() || val == i32::MIN || val.wrapping_sub(min) != all_ones {
+        // The stored byte/short is `(val - min) as uN`; it collides with the
+        // all-ones sentinel when its low N bytes are all-ones.  MASK before
+        // comparing — for a SIGNED type the sacrificed value is the bottom edge
+        // (nullable i8 `-128`, i16 `-32768`), whose `val - min` is `-1`, not
+        // `0xFF`/`0xFFFF`; `-1 & all_ones == all_ones` catches it, a bare `==`
+        // does not.  (`val == i32::MIN` is the intentional-null short-circuit.)
+        if self.logger.is_none()
+            || val == i32::MIN
+            || (val.wrapping_sub(min) & all_ones) != all_ones
+        {
             return;
         }
         if let Some(logger) = &self.logger
