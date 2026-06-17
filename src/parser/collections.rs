@@ -250,6 +250,14 @@ impl Parser {
                 1
             } else if matches!(&yield_tp, Type::Function(_, _, _)) {
                 2
+            } else if matches!(&yield_tp, Type::Float) {
+                // #401 — float yield: native must bit-cast the i64 transport to
+                // f64 (byte_size 8 alone cannot distinguish float from integer).
+                3
+            } else if matches!(&yield_tp, Type::Single) {
+                4 // single: bit-cast the low 32 bits to f32
+            } else if matches!(&yield_tp, Type::Enum(..)) {
+                5 // enum: reinterpret the variant index as u{8*byte_size}, not bool
             } else {
                 0
             };
@@ -1820,9 +1828,18 @@ use #count instead"
             // of the 20-byte fn-ref slot as boolean (SIGBUS on interp,
             // E0600 on native).  Same fix: terminate via the coroutine's
             // own exhausted state.
-            let yield_needs_exhausted_check =
-                matches!(&var_tp, Type::Tuple(_) | Type::Function(_, _, _));
-            if is_coroutine_loop && yield_needs_exhausted_check && gen_var != u16::MAX {
+            // #401 — every coroutine loop terminates via the iterator's own
+            // exhausted state, NOT a value-sentinel.  The value-sentinel path
+            // below (`convert(value, Boolean)` → `OpNot`) only terminates when
+            // the yielded type's null sentinel matches the transport channel's
+            // exhaustion sentinel (`i64::MIN`): true for int/text/ref, but NOT
+            // for `float`/`single` (null = NaN) or `enum` — `coroutine_next`
+            // returns `i64::MIN`, whose f64 bit-pattern is not NaN, so the break
+            // never fires and the loop spins forever (and the interp codegen of
+            // that doomed check hangs).  Originally this used the state check
+            // only for composite yields (Tuple/Function, which have no
+            // single-value sentinel at all); it is correct for every element type.
+            if is_coroutine_loop && gen_var != u16::MAX {
                 let test_exhausted = self.cl("OpCoroutineExhausted", &[Value::Var(gen_var)]);
                 lp.push(v_if(
                     test_exhausted,

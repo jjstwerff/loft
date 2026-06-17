@@ -120,6 +120,39 @@ impl OpEmitter for OpCoroutineNextEmitter {
                 )?;
                 return Ok(());
             }
+            // #401 — scalar yields whose Rust type differs from the i64
+            // transport.  byte_size alone is ambiguous (8 = i64 OR f64, 4 = i32
+            // OR f32, 1 = bool OR u8 enum), so the parser tags these channels.
+            if channel == 3 {
+                // float: the i64 transport holds the f64 bit-pattern.
+                write!(
+                    ctx.w,
+                    "f64::from_bits(loft::codegen_runtime::coroutine_next_i64({gen_code}, stores) as u64)"
+                )?;
+                return Ok(());
+            }
+            if channel == 4 {
+                // single: the low 32 bits hold the f32 bit-pattern.
+                write!(
+                    ctx.w,
+                    "f32::from_bits(loft::codegen_runtime::coroutine_next_i64({gen_code}, stores) as u32)"
+                )?;
+                return Ok(());
+            }
+            if channel == 5 {
+                // enum: the variant index, repr'd as u{8 * byte_size}.
+                let uty = match byte_size {
+                    1 => "u8",
+                    2 => "u16",
+                    4 => "u32",
+                    _ => "u64",
+                };
+                write!(
+                    ctx.w,
+                    "loft::codegen_runtime::coroutine_next_i64({gen_code}, stores) as {uty}"
+                )?;
+                return Ok(());
+            }
             match byte_size {
                 8 => write!(
                     ctx.w,

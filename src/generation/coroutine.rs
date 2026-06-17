@@ -478,6 +478,19 @@ impl Output<'_> {
                 "",
                 "",
             )
+        } else if matches!(yield_tp, Type::Float | Type::Single) {
+            // #401 — float/single yield: store the IEEE bit-pattern via
+            // `to_bits`, NOT a numeric `as i64` (which truncates 1.5 → 1).  The
+            // consumer's tagged channel (3 = f64, 4 = f32) mirrors this with
+            // `from_bits`.  `f64::to_bits` → u64 and `f32::to_bits` → u32 both
+            // zero-extend cleanly through `as i64`.
+            (
+                "    fn next_i64(&mut self, stores: &mut Stores) -> i64 {",
+                "loft::codegen_runtime::COROUTINE_EXHAUSTED",
+                "next_i64",
+                "(",
+                ").to_bits() as i64",
+            )
         } else {
             (
                 "    fn next_i64(&mut self, stores: &mut Stores) -> i64 {",
@@ -915,6 +928,16 @@ impl Output<'_> {
                 ")",
                 "next_dbref",
                 "DbRef { store_nr: u16::MAX, rec: 0, pos: 0 }",
+            )
+        } else if matches!(yield_tp, Type::Float | Type::Single) {
+            // #401 — float/single eager-collect buffer stores the IEEE
+            // bit-pattern (mirror of the consumer's from_bits channel).
+            (
+                "i64",
+                "(",
+                ").to_bits() as i64",
+                "next_i64",
+                "loft::codegen_runtime::COROUTINE_EXHAUSTED",
             )
         } else {
             (
