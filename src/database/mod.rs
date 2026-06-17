@@ -687,6 +687,34 @@ impl WorkerStores {
 }
 
 impl Stores {
+    /// H8 — grow `allocations` to `high_water` slots (the `par` dispenser's
+    /// one-past-last index) so every worker-allocated slot has a parent slot to
+    /// swap into.  Paired with [`Self::swap_in_worker_slots`]; the two are the
+    /// ONE home for the `par` worker-slot swap-back (the memory-safety-critical
+    /// "swap dance" — previously inline in `parallel.rs`).
+    pub(crate) fn grow_allocations_to(&mut self, high_water: usize) {
+        while self.allocations.len() < high_water {
+            self.allocations.push(crate::store::Store::new(100));
+        }
+    }
+
+    /// H8 — swap each store slot `worker` allocated (`worker_allocated_indices`)
+    /// into this parent by index, after a `par` worker batch joins.
+    ///
+    /// Store isolation — the load-bearing `par` memory-safety invariant — holds
+    /// for ONE reason expressed HERE: each worker lists ONLY the slots it itself
+    /// allocated, and the bounds guard skips out-of-range indices, so no two
+    /// threads' slots ever alias through this swap.  Call [`Self::grow_allocations_to`]
+    /// the dispenser high-water mark first, so every listed slot has a parent home.
+    pub(crate) fn swap_in_worker_slots(&mut self, worker: &mut Stores) {
+        for &slot_nr in &worker.worker_allocated_indices {
+            let i = slot_nr as usize;
+            if i < worker.allocations.len() && i < self.allocations.len() {
+                std::mem::swap(&mut self.allocations[i], &mut worker.allocations[i]);
+            }
+        }
+    }
+
     /// @PLN16.J — begin recording structural changes (claims / frees) on every heap
     /// store, for the debugger's edit journal.  Off by default (one branch on the cold
     /// alloc paths); turn on only for the duration of an edit, then drain with
