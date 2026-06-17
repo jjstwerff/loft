@@ -2422,7 +2422,9 @@ fn lib_name_target_os(lib: &str) -> Option<&'static str> {
 }
 
 /// The host OS as a display name, for runtime-lib diagnostics + platform-scoping.
-#[cfg(feature = "native-extensions")]
+/// Not feature-gated: `runtime_lib_missing_diagnostic` (and thus its call site in
+/// the unconditionally-compiled `resolve_native_lib`) needs it even when
+/// `native-extensions` is off (e.g. the WASM build).
 fn host_os_name() -> &'static str {
     if cfg!(target_os = "linux") {
         "Linux"
@@ -2464,8 +2466,10 @@ fn first_missing_runtime_lib(_pkg_dir: &str) -> Option<String> {
 /// Diagnostic for a host-applicable `[native] runtime-libs` entry that could not
 /// be `dlopen`'d — the library is genuinely not installed.  Foreign-OS names are
 /// skipped before this point (see [`first_missing_runtime_lib`]), so they never
-/// reach here and never produce misleading "install it" advice.
-#[cfg(feature = "native-extensions")]
+/// reach here and never produce misleading "install it" advice.  Not
+/// feature-gated: its call site in `resolve_native_lib` compiles unconditionally
+/// (the `first_missing_runtime_lib` if-branch is dead but still type-checked when
+/// `native-extensions` is off), so the helper must exist in every build.
 fn runtime_lib_missing_diagnostic(stem: &str, lib: &str) -> String {
     format!(
         "loft: native library '{stem}' needs the system library '{lib}', which is not installed \
