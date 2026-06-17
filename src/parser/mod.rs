@@ -1231,15 +1231,12 @@ impl Parser {
     }
 
     /// @PLAN48 P2: literal exemption — true when `code` is a constant integer that
-    /// provably fits `dst`'s range, so `x: i32 = 5` / `f(5)` stay legal without `as`.
-    ///
-    /// `narrow_field` = the target is a NARROW-STORED field/element (a struct field
-    /// store), which reserves the all-ones code for null when nullable — so the
-    /// literal must fit the USABLE range (`255` in a nullable `u8` is out of range,
-    /// not silently null).  A param/return/cast (`narrow_field == false`) is a
-    /// full-width register value with no storage sentinel, so it uses the full
-    /// declared range — `f(65535)` to a `u16` param stays legal.
-    fn int_value_fits(&self, code: &Value, dst: &Type, narrow_field: bool) -> bool {
+    /// provably fits `dst`'s full declared range, so `x: i32 = 5` / `f(5)` /
+    /// `f(65535)` to a `u16` param stay legal without `as`.  This is the TYPE-fit
+    /// question (a full-width register value); the narrower nullable-narrow-FIELD
+    /// sentinel reservation is a separate, store-only check
+    /// ([`Self::nullable_sentinel_hint`]) applied at the field-store sites.
+    fn int_value_fits(&self, code: &Value, dst: &Type) -> bool {
         let Type::Integer(spec) = dst else {
             return false;
         };
@@ -1252,8 +1249,44 @@ impl Parser {
                 _ => return false,
             },
         };
-        let nullable_storage = narrow_field && !spec.not_null;
-        n >= i64::from(spec.usable_min(nullable_storage)) && n <= spec.usable_max(nullable_storage)
+        n >= i64::from(spec.min) && n <= i64::from(spec.max)
+    }
+
+    /// When a literal stored into a NULLABLE narrow field fits the type's full
+    /// range but lands on the reserved null sentinel (out of the usable range),
+    /// return a hint explaining WHY — e.g. `255` in a nullable `u8`.  This tells
+    /// the developer the value is the null encoding, not just "too big", and
+    /// points at `not null` for the full range.  `None` for the ordinary
+    /// out-of-range case (a generic narrowing message fits that).
+    fn nullable_sentinel_hint(&self, code: &Value, dst: &Type, dst_name: &str) -> Option<String> {
+        let Type::Integer(spec) = dst else {
+            return None;
+        };
+        if spec.not_null {
+            return None;
+        }
+        let n = match code.unspan() {
+            Value::Int(n) => i64::from(*n),
+            Value::Long(n) => *n,
+            other => match crate::const_eval::const_eval(other, &self.data) {
+                Some(Value::Int(n)) => i64::from(n),
+                Some(Value::Long(n)) => n,
+                _ => return None,
+            },
+        };
+        let fits_full = n >= i64::from(spec.usable_min(false)) && n <= spec.usable_max(false);
+        let fits_usable = n >= i64::from(spec.usable_min(true)) && n <= spec.usable_max(true);
+        if fits_full && !fits_usable {
+            Some(format!(
+                "{n} is reserved as the null sentinel of a nullable {dst_name} \
+                 (usable {}..={}); declare the field `not null` for the full range, \
+                 or cast with `as {dst_name}`",
+                spec.usable_min(true),
+                spec.usable_max(true),
+            ))
+        } else {
+            None
+        }
     }
 
     fn convert(&mut self, code: &mut Value, is_type: &Type, should: &Type) -> bool {
@@ -1265,7 +1298,7 @@ impl Parser {
         // `validate_convert` (which still sees integer/i32 as can_convert-compatible).
         if !self.first_pass
             && Self::is_narrowing_int(is_type, should)
-            && !self.int_value_fits(code, should, false)
+            && !self.int_value_fits(code, should)
         {
             let src = self.int_type_name(is_type);
             let dst = self.int_type_name(should);

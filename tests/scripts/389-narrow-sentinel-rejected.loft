@@ -1,0 +1,16 @@
+// @EXPECT_ERROR: reserved as the null sentinel
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// H6 — storing the sacrificed sentinel value (255) into a NULLABLE narrow field
+// is a COMPILE error, not a silent null, for a struct-literal init too (not just
+// `obj.x = 255`).  The field-store sentinel check lives at BOTH stores
+// (objects.rs struct-init + expressions.rs direct-assign); the message points at
+// `not null` for the full range.  A param/cast is a full-width register and is
+// NOT subject to this — only narrow FIELD stores reserve the sentinel.
+
+struct U8N { x: u8 }
+
+fn main() {
+  b = U8N { x: 255 };
+}
