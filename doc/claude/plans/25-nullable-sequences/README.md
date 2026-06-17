@@ -73,7 +73,7 @@ method dispatch · transparent format · the 06-structs alias-copy root · OOB d
 | Seam | Size | Status |
 |---|---|---|
 | ~~**A4(b)** — JSON walker builds `Some` for a present object~~ | — | **FIXED** 2026-06-17 — gate-off-nullable was cache contamination (no leak); 1 walker arm; both backends + regression |
-| **A3** — `hash<__nullable<S>>` (key-resolution + lookup unwrap + native + anon-literal) | M (subsystem, 5 rungs) | rungs 1–3 FIXED on interpret (gate-inert); rung 4 (native codegen) + rung 5 (anon-literal into hash field) open |
+| **A3** — `hash<__nullable<S>>` (key-resolution + lookup unwrap + anon-literal + for-loop + native) | M (subsystem) | INTERPRET passes 12-collections end-to-end; only rung 4 (native codegen) open |
 | **gap 2** — fn-call coercion `f(v[i])` via offset-ref reinterpret | S | designed, not landed |
 | **gap 4** — `e = null` on a nullable LOCAL | XS | open |
 | **Step 2** — par with USER EXTRA args (dispatcher arity) | S, self-contained | open |
@@ -87,11 +87,11 @@ triage, then the flip.  Step 5's residue is the only part that cannot be sized y
 Step 5 exists (re-run the consumers gate-on; triage only what does not go green from Steps 1–3).
 **A4(b) is landed** (2026-06-17); **A3 rung 1** (key-resolution chokepoint, `key_owner`) is landed
 (2026-06-17, gate-inert) — but A3 proved to be ≥4 substrate rungs (see Step-1 A3).  Next concrete
-move: **A3 rung 4** — native codegen of a `hash<__nullable<S>>` (`--native` panics `find called on
-non-collection type __nullable<S>::Some`: the generated Rust passes the `Some` variant type to `find`
-instead of the hash type).  Then **rung 5** — anon-struct-literal vector into a hash field
-(`hd.h = [ {name:"one"}, … ]`, 12-collections:104, `unexpected ','` gate-on).  Rungs 1–3 (key
-resolution + lookup-result type) are FIXED on the interpreter.
+move: **A3 rung 4** (the LAST A3 rung) — native codegen of a `hash<__nullable<S>>`.  Interpret passes
+12-collections end-to-end; `--native` compiles but panics `find called on non-collection type
+__nullable<S>::Some` — the generated `OpGetRecord` gets the `Some` variant's db number instead of the
+hash type (a native type-numbering divergence, plausibly from rung 1's `fill_database(kd)` reorder).
+Inspect with `--native-emit` + compare the db-construction order to the compile-time registry.
 
 ## Status
 
@@ -303,18 +303,34 @@ default-on (gate removed), per the project standard.  The remaining work, in fin
          (exactly as a `vector<__nullable<S>>` element is typed), so the existing field-access unwrap
          (fields.rs:95) resolves S's fields through `Some`.  `lookup[k].v` + `lookup[k] == null` now
          work on the interpreter.  Regression: `tests/plan25_e2_hash.rs` (interpret).
-       - **Rung 4 — native codegen of a `hash<__nullable<S>>` — OPEN.**  `--native` now panics
-         `find called on non-collection type: __nullable<Count>::Some` (was `Content::Long("Three" as
-         i64)` E0606 before rungs 2–3) — the generated Rust passes the `Some` variant's type to `find`
-         instead of the hash type, and/or mis-types the text key.  Native-codegen work.
-       - **Rung 5 — anon-struct-literal vector into a hash FIELD — OPEN.**  `hd.h = [ {name:"one"},
-         {name:"two"} ]` (12-collections:104) parse-errors gate-on (`unexpected ','`) — the A1
-         anon-literal element-resolution seam, here for a hash-field assignment target (the element is
-         `__nullable<S>`).  Both backends.
-       So A3 = rungs 1–3 (key-resolution chokepoint incl. the missed `get_keys`, + the lookup-result
-         type) FIXED on the interpreter, gate-inert; rungs 4 (native codegen) + 5 (anon-literal into a
-         hash field) OPEN.  E2-internal: a keyed collection over an ENUM only arises from the synth
-         rewrite, so nothing is filed.
+       - **Rung 5 — anon-struct-literal vector into a hash FIELD — FIXED 2026-06-17 (gate-inert).**
+         `hd.h = [ {name:"one"}, {name:"two"} ]` (12-collections:104) parse-errored gate-on
+         (`unexpected ','` / `Unknown field __nullable<Row>.name`).  Root: `unique_elm_var`
+         (vectors.rs) typed the anon element from `assign_tp`, but a keyed-collection field's
+         `content()` is `Reference(__nullable<S>)` (not `Enum(..)`), and the `Type::Reference` arm used
+         it verbatim → the element resolved against the enum.  Fix: a `Reference(__nullable<S>)`
+         assign-tp resolves the anon element against the `Some` variant, same as the `Enum(syn,true)`
+         (vector) arm.
+       - **For-loop over a struct-field nullable vector — FIXED 2026-06-17 (gate-inert).**  `for item
+         in c.entries { item.v }` summed garbage.  Root (collections.rs:313): a struct-field vector that
+         SHARES records with a sibling hash is a LINKED array of 4-byte ref slots, but the for-loop
+         element read upgraded to the deref `OpVectorRefNullable` only for a `Type::Reference` element —
+         a `__nullable<S>` element is `Enum(syn,true)`, so it kept the inline `OpGetVectorNullable(4)`
+         and read the rec-id slot AS the record (every field offset junk).  Fix: take the deref path for
+         a synth-nullable `Enum` element too when the collection `is_linked`.  (An INLINE
+         `vector<__nullable<S>>` local keeps the inline read.)
+       - **Rung 4 — native codegen of a `hash<__nullable<S>>` — OPEN (the last A3 rung).**  Interpret is
+         done; `--native` compiles (rungs 2–3 fixed the key codegen — the text key is now a correct
+         `Content::Str`) but PANICS at runtime: `find called on non-collection type
+         __nullable<Count>::Some`.  The generated `OpGetRecord` is handed the wrong db type number (the
+         `Some` variant, not the hash) — a native-vs-registry type-numbering divergence, plausibly from
+         rung 1's `fill_database(kd)` reordering the db-construction sequence the native emitter
+         replays.  Native-codegen work.
+       **A3 STATUS: gate-on INTERPRET passes `tests/scripts/12-collections.loft` end-to-end (exit 0).**
+         Rungs 1–3 + 5 + the for-loop-deref are FIXED + gate-inert (gate-off suite 2397/2398, only the
+         pre-existing non-E2 `kernel_port`); regressions in `tests/plan25_e2_hash.rs`.  Only rung 4
+         (native codegen) remains.  E2-internal (a keyed collection over an ENUM only arises from the
+         synth rewrite), so nothing is filed.
      - **A4 — `"…" as vector<S>` / `vector<S>.parse(json)` into nullable structs — LOCALIZED
        2026-06-17 (boundary matrix; the earlier mechanism here was WRONG on two counts).**  A 7-cell
        gate-on `--interpret` matrix + `introspect` (scalar control, present-only, null-mid/lead/all,

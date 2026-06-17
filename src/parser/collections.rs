@@ -306,7 +306,19 @@ impl Parser {
                         "OpGetVectorNullable",
                         &[code.clone(), Value::Int(i32::from(size)), i.clone()],
                     );
-                    if let Type::Reference(_, _) = *vtp.clone() {
+                    // @PLN25 E2 — a `__nullable<S>` element is `Enum(synth,true)`,
+                    // not `Reference`, but in a LINKED collection (an array of
+                    // ref slots — e.g. a struct-field vector that shares records
+                    // with a sibling hash) it is stored as a 4-byte rec-ref, so
+                    // the element read must DEREF via `OpVectorRefNullable` just
+                    // like a `Reference` element does.  Without this it keeps the
+                    // inline `OpGetVectorNullable(size=4)` and reads the rec-id
+                    // slot AS the record → every field offset is junk.  An INLINE
+                    // `vector<__nullable<S>>` (not linked) keeps the inline read.
+                    let elem_ref_like = matches!(&**vtp, Type::Reference(_, _))
+                        || matches!(&**vtp, Type::Enum(d, true, _)
+                            if self.data.def(*d).name.starts_with("__nullable<"));
+                    if elem_ref_like {
                         if self.database.is_linked(db_tp) {
                             ref_expr = self.cl("OpVectorRefNullable", &[code.clone(), i.clone()]);
                         }

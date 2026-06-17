@@ -1940,8 +1940,21 @@ impl Parser {
         // (`Reference(type_def_nr(parent_tp.content))`) and mis-resolves to an
         // arbitrary def → "Unknown field <wrong-def>.<field>".  Gate-inert: a
         // `__nullable<>` enum only exists when the E2 rewrite is active.
-        let elm_tp = if let Type::Reference(_, _) = assign_tp {
-            assign_tp.clone()
+        let elm_tp = if let Type::Reference(rd, _) = assign_tp {
+            // @PLN25 E2 — a keyed-collection field's `content()` is
+            // `Reference(__nullable<S>)` (not `Enum(..)`), so an anon `{ … }`
+            // element assigned to a `hash`/`sorted`/`index` field must resolve
+            // against the `Some` variant too — same as the `Enum(syn,true)`
+            // (vector-element) case below.  Without this it points at the enum
+            // and `.field` fails ("Unknown field __nullable<S>.field").
+            if self.data.def(*rd).name.starts_with("__nullable<") {
+                Type::Reference(
+                    self.data.variant_of(*rd, "Some"),
+                    Deps::frame(parent_tp.depend()),
+                )
+            } else {
+                assign_tp.clone()
+            }
         } else if let Type::Enum(syn, true, _) = assign_tp
             && self.data.def(*syn).name.starts_with("__nullable<")
         {

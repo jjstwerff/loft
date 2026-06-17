@@ -78,6 +78,37 @@ fn hash_over_nullable_vector_lookup_and_field_access() {
     );
 }
 
+const SRC_ANON_FORLOOP: &str = "\
+struct Count { t: text, v: integer }
+struct Counting { entries: vector<Count>, lookup: hash<Count[t]> }
+fn fill(c: Counting) {
+  c.entries = [ {t:\"One\",v:1}, {t:\"Two\",v:2}, {t:\"Three\",v:3}, {t:\"Four\",v:4} ]
+}
+fn main() {
+  c = Counting { };
+  fill(c);
+  add = 0;
+  for item in c.entries { add += item.v; }
+  print(\"add={add} three={c.lookup[\\\"Three\\\"].v}\\n\");
+}
+";
+
+#[test]
+fn anon_literal_into_hash_field_and_forloop_over_shared_array() {
+    // Rung 5: anon `{ … }` literals into a hash field (the element resolves
+    // against the `Some` variant, not the enum). For-loop deref: iterating the
+    // struct-field nullable vector — stored as a LINKED array of ref slots that
+    // shares records with the hash — must DEREF each element (OpVectorRefNullable)
+    // before reading `item.v`, not read the rec-id slot as the record inline.
+    let path = probe("anon_forloop", SRC_ANON_FORLOOP);
+    let (ok, out) = run_interp(&path);
+    assert!(ok, "interpret run failed; stdout={out:?}");
+    assert!(
+        out.contains("add=10 three=3"),
+        "for-loop over shared nullable array / anon-literal hash field wrong; got {out:?}"
+    );
+}
+
 #[test]
 fn lone_nullable_hash_field_constructs_and_misses_cleanly() {
     // A lone hash field on a fresh struct (no insert): the missing-key lookup
