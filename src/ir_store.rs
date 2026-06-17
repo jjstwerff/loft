@@ -1235,6 +1235,107 @@ mod tests {
         assert_eq!(e1.field_int(&stores, ds::KEY_POSITION), 42);
     }
 
+    /// H7 — EXHAUSTIVE: every `Value` variant survives the STORE codec
+    /// (`materialize_node` → `read_value`), the path the startup cache uses.
+    ///
+    /// The per-shape tests above check the WRITE side (materialized fields) for
+    /// ~29 variants; this checks the full write→read round-trip for ALL 34,
+    /// including the 5 the per-shape tests miss (`Insert`/`BreakWith`/`TuplePut`/
+    /// `Yield`/`Parallel`) and the rare ones the program corpus can't exercise
+    /// (`Yield` is coroutine 1.1+).  The `samples.len() == 34` guard is the
+    /// explicit "a new variant must be added here" reminder the F9 schema macro
+    /// would automate — until then, a dropped field or a new variant fails here
+    /// loudly instead of corrupting the cache silently.
+    #[test]
+    fn materialize_all_variants_round_trip() {
+        use crate::ir_read::read_value;
+        let block = || Block {
+            name: "b",
+            operators: vec![Value::Int(1), Value::Null],
+            result: Type::Boolean,
+            scope: 2,
+            var_size: 8,
+        };
+        let parfor = || ParForBody {
+            input: Value::Var(0),
+            x_var: 1,
+            r_var: 2,
+            worker: Value::Call(3, vec![Value::Int(1)]),
+            threads: Value::Int(4),
+            body: Value::Set(0, Box::new(Value::Var(1))),
+            stitch_id: 7,
+        };
+        let samples: Vec<Value> = vec![
+            Value::Null,
+            Value::Line(3),
+            Value::Span(Box::new((
+                Position {
+                    file: "f.loft".to_string(),
+                    line: 12,
+                    pos: 4,
+                },
+                Value::Int(9),
+            ))),
+            Value::Int(42),
+            Value::Enum(5, 6),
+            Value::Boolean(true),
+            Value::Float(2.5),
+            Value::Long(99),
+            Value::Single(1.5),
+            Value::Text("hi".into()),
+            Value::Call(7, vec![Value::Var(0)]),
+            Value::CallRef(3, vec![Value::Int(1)]),
+            Value::Block(Box::new(block())),
+            Value::Insert(vec![Value::Null, Value::Int(2)]),
+            Value::Var(7),
+            Value::Set(1, Box::new(Value::Int(2))),
+            Value::Return(Box::new(Value::Var(0))),
+            Value::Break(2),
+            Value::BreakWith(1, Box::new(Value::Int(3))),
+            Value::Continue(1),
+            Value::If(
+                Box::new(Value::Boolean(true)),
+                Box::new(Value::Int(1)),
+                Box::new(Value::Int(2)),
+            ),
+            Value::Loop(Box::new(block())),
+            Value::Drop(Box::new(Value::Var(0))),
+            Value::Iter(
+                1,
+                Box::new(Value::Var(0)),
+                Box::new(Value::Var(1)),
+                Box::new(Value::Int(0)),
+            ),
+            Value::Keys(vec![Key {
+                type_nr: 3,
+                position: 7,
+            }]),
+            Value::Tuple(vec![Value::Int(1), Value::Text("a".into())]),
+            Value::TupleGet(0, 1),
+            Value::TuplePut(0, 1, Box::new(Value::Int(2))),
+            Value::Yield(Box::new(Value::Var(0))),
+            Value::FnRef(2, 1, Box::new(Type::Boolean)),
+            Value::FnRefDnr(4),
+            Value::Parallel(vec![Value::Int(1)]),
+            Value::ParFor(Box::new(parfor())),
+            Value::RawExpr("x".into()),
+        ];
+        assert_eq!(
+            samples.len(),
+            34,
+            "every Value variant must appear here (add the new one)"
+        );
+        for v in &samples {
+            let mut stores = Stores::new();
+            let _ids = register_ir_schema(&mut stores);
+            let root = root_vector(&mut stores);
+            materialize_node(&mut stores, root, v);
+            let node = root.get(0, &stores);
+            let back = read_value(&stores, node);
+            assert_eq!(&back, v, "store-codec round-trip mismatch for {v:?}");
+        }
+    }
+
     /// A standalone host record whose offset-0 field is the root
     /// `vector<TypeT>` the type materializer writes into.
     fn root_type_vector(stores: &mut Stores) -> RecVector {
