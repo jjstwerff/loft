@@ -463,7 +463,10 @@ backends:
   read op, write op, and the literal range-check (`int_value_fits`, gained a
   `narrow_field` flag — a field STORE reserves the sentinel; a param/return/cast is
   a full-width register value, so `f(65535)` to a `u16` param stays legal; function
-  params can't be `not null`).
+  params can't be `not null`).  *(The `narrow_field` flag was later REVERTED in
+  `ea4a74fe` — see "Developer communication" below — when it proved too coarse
+  for struct-init; the same behaviour is now a store-only sentinel check.  The
+  `usable_min`/`usable_max` home is unchanged.)*
 - Field nullability is stamped onto the stored `IntegerSpec.not_null` at attribute
   registration (the alias path left it at the default), so the range-check reads
   the right bounds.
@@ -477,11 +480,59 @@ Final shape: not-null keeps the full native range; nullable is symmetric for sig
 (`-127..=127`, `-32767..=32767`) and top-trimmed for unsigned (`0..=254`,
 `0..=65534`); the all-ones byte is the one uniform sentinel, only `min` shifts.
 
-**Open follow-up (separate, pre-existing): the inline `Struct{..}.x` byte-field
-read crashes/fails on native** (the pre-eval/hoisting path emits the byte op as an
-unresolved call) — it predates this work (breaks plain `OpGetByte` too) and is
-NOT specific to narrow-int storage; the regression test reads via a local to avoid
-it.  Worth a focused fix (native pre-eval `#rust`-op inlining for hoisted args).
+**Follow-up DONE (`f6f660f8`): the inline `Struct{..}.x` byte-field read on
+native.**  The pre-eval/hoisting path (`generation/dispatch.rs`) hoisted a
+store-mutating call arg into a `_harg_*` temp and emitted the CALL form
+`OpGetByteNullable(cell, _harg, …)` for ANY `Value::Call` — including inline
+`#rust` ops (byte/short field reads), which have no callable fn, so native
+compilation failed with "not found in scope".  It predated this work (broke plain
+`OpGetByte` too) and was NOT narrow-int-specific.  Fixed by gating that path on
+`def_fn.rust().is_empty()`: only true user-fn / `codegen_runtime` Op-stub calls
+take the call-form hoist; inline `#rust` ops fall through to the normal emit, which
+inlines the template (its own `let db = @v1; …` sequences the mutating arg before
+the read borrow).  Regression `tests/scripts/inline-construct-narrow-read.loft`
+(both backends, all four narrow widths × nullable/not-null/null).
+
+**Developer communication — DONE (`ea4a74fe` compile-time, `1b8a3792` runtime).**
+A narrow sentinel is invisible to the user (§ design), so a value that *lands* on
+it must be SURFACED, not silently nulled.  Two touch-points, each targeted (never
+pervasive):
+
+- **Compile-time, for literals.**  Storing the sacrificed value into a nullable
+  narrow field is a compile error that names the cause:
+  *"255 is reserved as the null sentinel of a nullable u8 (usable 0..=254); declare
+  the field `not null` for the full range, or cast with `as u8`"* — applied at BOTH
+  field-store sites (`obj.x = 255` in `expressions.rs`, `U8N { x: 255 }` in
+  `objects.rs`).  Wiring it to the struct-init site closed a **silent-store
+  regression**: the `4a632251` `narrow_field` flag on `int_value_fits` was too
+  coarse — struct-init goes through `convert` (full bounds), so `U8N { x: 255 }`
+  slipped past and stored null.  The flag is **reverted**: `int_value_fits` is back
+  to the plain full-range TYPE-fit (so `f(65535)` to a `u16` param stays legal —
+  params/casts are full-width registers, no storage sentinel), and the sentinel
+  reservation is now a **store-only** check (`Parser::nullable_sentinel_hint`)
+  applied at exactly the two field-store sites.  Regression
+  `tests/scripts/389-narrow-sentinel-rejected.loft` (`@EXPECT_ERROR`).
+- **Runtime, dev-only, for computed values.**  A non-null value computed at runtime
+  (e.g. `f() as u8 == 255`) can still collide; the nullable set ops route through
+  `Stores::set_byte_nullable` / `set_short_nullable`, which detect the collision and
+  log a rate-limited `Warn` (*"value 255 written to a nullable narrow field collides
+  with the null sentinel and reads back as null (usable 0..=254); declare … `not
+  null` …"*).  loft's logger IS the dev-vs-shipped switch, for free: the interpreter
+  attaches it at default `Warn` → the dev sees it in `.loft/log.txt`; a shipped
+  game runs with no dev logger / a production config → suppressed, the
+  `logger.is_none()` guard collapsing that path to one `Option` check per write;
+  rate-limited (keyed on field offset → 1000 colliding writes = 5 warnings, then
+  suppressed).  Behaviour is UNCHANGED — the value still stores the sentinel; only
+  the diagnostic is added.  Regression
+  `tests/scripts/389-narrow-runtime-collision.loft` (both backends).
+
+**Open follow-ups (separate, pre-existing).**  Narrow-VECTOR elements are NOT yet
+consistent with the field path: `vector<u8>` holds the full `0..=255` (the `Byte`
+op, no sentinel) but `vector<u16>` only `0..=65534` (`ShortRaw` reserves
+`u16::MAX`), and a `vector<u16>` can't hold `65535` even though a not-null `u16`
+field now can (apply the not-null/`ShortFull` distinction to vector elements).  And
+the 4-/8-byte `i32`/`integer` types use a `MIN`-sentinel (a not-null `i32` doesn't
+reclaim `i32::MIN`).
 
 ---
 
