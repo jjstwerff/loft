@@ -1667,8 +1667,7 @@ fn set_byte_nullable(s: &mut State) {
             v_val as i32
         };
         s.database
-            .store_mut(&db)
-            .set_byte(db.rec, db.pos + u32::from(v_fld), i32::from(v_min), v);
+            .set_byte_nullable(&db, db.pos + u32::from(v_fld), i32::from(v_min), v);
     }
 }
 
@@ -1685,8 +1684,7 @@ fn set_short(s: &mut State) {
             v_val as i32
         };
         s.database
-            .store_mut(&db)
-            .set_short(db.rec, db.pos + u32::from(v_fld), i32::from(v_min), v);
+            .set_short_nullable(&db, db.pos + u32::from(v_fld), i32::from(v_min), v);
     }
 }
 

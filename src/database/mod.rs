@@ -1222,6 +1222,54 @@ impl Stores {
         }
     }
 
+    /// Nullable narrow-FIELD store with a dev-only sentinel-collision warning.
+    ///
+    /// `OpSetByteNullable` reserves the all-ones byte (255) for null, so a
+    /// NON-null value that encodes onto it (`val - min == 255`) reads back as
+    /// null — silent data loss the compile-time check can only catch for
+    /// literals.  This logs a `Warn` through the attached logger, which is
+    /// rate-limited + level-filtered: it points the developer at the field
+    /// DURING development (interpreter, default `Warn`) and is silent in a
+    /// shipped game (no dev logger attached, or a production config).  Behaviour
+    /// is unchanged — the value still stores as the sentinel; only the
+    /// diagnostic is added.  `val` is `i32::MIN` for an intentional null.
+    pub fn set_byte_nullable(&mut self, db: &DbRef, pos: u32, min: i32, val: i32) {
+        self.warn_narrow_sentinel(val, min, 0xFF, pos);
+        self.store_mut(db).set_byte(db.rec, pos, min, val);
+    }
+
+    /// 2-byte twin of [`Self::set_byte_nullable`]: the all-ones code is 65535.
+    pub fn set_short_nullable(&mut self, db: &DbRef, pos: u32, min: i32, val: i32) {
+        self.warn_narrow_sentinel(val, min, 0xFFFF, pos);
+        self.store_mut(db).set_short(db.rec, pos, min, val);
+    }
+
+    /// Emit the dev-only warning when a non-null `val` encodes onto the all-ones
+    /// null sentinel of a nullable narrow field.  The `logger.is_none()` guard
+    /// collapses the shipped-game path to a single `Option` check; the rate
+    /// limiter keys on the field offset (`pos`), so a loop writing one field
+    /// warns once, not per iteration.
+    fn warn_narrow_sentinel(&mut self, val: i32, min: i32, all_ones: i32, pos: u32) {
+        if self.logger.is_none() || val == i32::MIN || val.wrapping_sub(min) != all_ones {
+            return;
+        }
+        if let Some(logger) = &self.logger
+            && let Ok(mut lg) = logger.lock()
+        {
+            let usable_hi = i64::from(min) + i64::from(all_ones) - 1;
+            lg.log(
+                crate::logger::Severity::Warn,
+                "nullable-narrow-field",
+                pos,
+                &format!(
+                    "value {val} written to a nullable narrow field collides with the null \
+                     sentinel and reads back as null (usable {min}..={usable_hi}); declare the \
+                     field `not null`, or keep values within the usable range"
+                ),
+            );
+        }
+    }
+
     /// Plan-07 phase 4e.3 — set the next-format-render fault tag.
     /// Called by `OpTagFault(kind_id)` which 4e.1 emits IMMEDIATELY
     /// before each fault-prone Nullable peer in format-string
