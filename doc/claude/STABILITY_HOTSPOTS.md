@@ -389,54 +389,55 @@ Consumers: `store.rs` set_*/get_*, `fill.rs` conv_*_from_null, `state/codegen.rs
 emit_typed_null`, `generation/mod.rs::default_native_value`, `database/structures.rs::
 set_default_value`, `database/types.rs` byte/short/short_raw/int.
 
-**Design decision — narrow fixed-width ints are MEMORY-ALLOCATION types: the
-byte width is the invariant; the value range bends to fit the null sentinel
-(2026-06-17).**
+**Design decision — narrow fixed-width ints are MEMORY-ALLOCATION types; null is
+the ALL-ONES byte, and nullability only shifts the `min` offset (2026-06-17).**
 
-For the `forced_size` aliases (`u8`/`i8`/`u16`/`i16`), the storage width is
-FIXED — a `u8` is one byte, always, nullable or not — and nullability is paid for
-by reserving ONE code as the null sentinel WITHIN that width, shrinking the usable
-value range by one.  It is **never** paid for by widening the storage.  (The
-landed `range_to_width(+nullable)` widen-to-fit rule applies only to un-annotated
-`integer limit(min,max)` ranges, which carry no size promise.)  The point is the
-**predictable in-store layout**, not matching the value range a reader expects
-from the type's name — a nullable `u8` is `0..=254`, on purpose.
+For the `forced_size` aliases (`u8`/`i8`/`u16`/`i16`) the storage width is FIXED —
+a `u8` is one byte, always, nullable or not; storage NEVER widens for nullability.
+The design is chosen for **rustc-codegen simplicity**, not for matching the value
+range a reader expects from the type's name:
 
-| alias | not-null usable range | nullable usable range | null sentinel | width |
-|---|---|---|---|---|
-| `u8`  | `0..=255` (full byte)   | `0..=254`             | `255` (top)     | 1 |
-| `i8`  | `-128..=127` (Rust)     | `-127..=127`          | `-128` (bottom) | 1 |
-| `u16` | `0..=65535`             | `0..=65534`           | `65535` (top)   | 2 |
-| `i16` | `-32768..=32767`        | `-32767..=32767`      | `-32768` (bottom)| 2 |
+- **Null is stored as the all-ones byte** (`255` for 1-byte, `65535` for 2-byte),
+  uniformly for EVERY narrow type.  So in generated Rust, storing and testing null
+  is ONE type-independent instruction — `byte == all-ones → null` — directly in
+  memory, no per-type branch.  *(`set_byte`: `val == i32::MIN → 255`.)*
+- **A non-null value decodes as `read + min`**; `min` is the only thing that
+  varies — by type AND by nullability.  The usable values map to bytes
+  `0..=254` (1-byte) so the all-ones byte is never a real value.  Decoded, the
+  all-ones byte is always exactly `max+1` — one past the usable range, so the user
+  can never produce it: the sentinel is invisible.
 
-Unsigned reserves the TOP code, signed the BOTTOM — so a **not-null `i8` keeps the
-original Rust `-128..=127`**, and only a *nullable* `i8` gives up `-128` for null.
+| alias | not-null `min` / range | nullable `min` / range | all-ones byte decodes to |
+|---|---|---|---|
+| `u8`  | `0`   `0..=255`        | `0`    `0..=254`        | `255` = max+1 → null |
+| `i8`  | `-128` `-128..=127`   | `-127` `-127..=127`    | `128` = max+1 → null |
+| `u16` | `0`   `0..=65535`     | `0`    `0..=65534`     | `65535` = max+1 → null |
+| `i16` | `-32768` `-32768..=32767` | `-32767` `-32767..=32767` | `32768` = max+1 → null |
+
+Nullable sacrifices ONE edge value, and which edge is the user-invisible part that
+keeps the useful range: **unsigned drops the TOP** (`min` stays `0`, `max-=1`),
+**signed drops the BOTTOM** (`max` stays, `min+=1`) — so a not-null `i8` is the
+original Rust `-128..=127` and a nullable `i8` is `-127..=127`, differing only in
+whether `-128` is available.
 
 **Implementation gap — the landed H6 fix did NOT cover the alias path.**  The
 `range_to_width` chokepoint fixed only the un-annotated `limit(...)` heuristic
-(widen when the range fills the byte).  The aliases still carry a non-nullability-
-aware range: `IntegerSpec::u8()` is `0..=255` and `i8()` is `-128..=127` with
-`not_null:false`.  **Probe-confirmed today, both backends** (`/tmp` probe, the
-389-regression idiom):
+(widen when the range fills the byte).  The aliases carry a non-nullability-aware
+range: `IntegerSpec::u8()` is `0..=255`, `i8()` is `-128..=127`, `not_null:false`.
+**Probe-confirmed today, both backends** (`/tmp` probe, the 389-regression idiom):
+nullable `u8 255` and nullable `i8 127` both read back as **null** — the spec
+over-advertises one value, because the all-ones byte (`255`) decodes (with the
+not-null `min`) to a value the spec still claims is usable.
 
-- `u8 254` ✓, `u8 null` ✓, **`u8 255` reads back as null** — the nullable `u8`'s
-  top code already IS the sentinel, so its real usable range is `0..=254`.  The
-  spec just over-advertises `255`.  (Matches the design: trim the nullable max.)
-- **`i8 127` reads back as null** — NOT `-128`.  The `ByteNullable` encode
-  (`val - min`, min `-128`) maps `127 → 255 = stored sentinel`, so today the signed
-  sentinel sits at the TOP (`127`).  The design wants it at the BOTTOM
-  (`-128 = i8::MIN`, matching the `i32::MIN`/`i64::MIN` signed-null convention) so a
-  nullable `i8` is `-127..=127`.  → `i8` needs the encode **re-based** (sentinel at
-  the min-encoded code), not just the range trimmed.
-
-Fix shape: make the alias's USABLE bounds depend on `not_null` (full byte when
-`not_null` — `i8` keeps Rust `-128..=127`; one code reserved when nullable —
-`u8`→`0..=254`, `i8`→`-127..=127`), AND move the signed `ByteNullable` sentinel to
-the bottom so the reserved code is `i8::MIN`.  One fact (which code is null, and
-therefore which value is unrepresentable when nullable) per width, the same
-principle as `range_to_width` extended to the forced-size path.  Open question to
-confirm: not-null `u8` full `0..=255` (table above, by the not-null-keeps-full
-principle `i8` makes explicit) vs `u8` always `0..=254`.
+**Fix is a single compile-time site — the runtime `get_byte`/`set_byte` DON'T
+change** (they already take `min` as a parameter; null is already the all-ones
+byte).  Make the alias's effective `[min, max]` depend on `not_null` + signedness:
+not-null → full native range; nullable → signed `min+1` (drop `-128`), unsigned
+`max-1` (drop top).  One fact — *which `min`/`max` the codegen emits for a nullable
+narrow field* — replacing the over-advertised range.  No encode re-base, no signed
+sentinel move; the all-ones-byte null is already uniform.  **Resolved 2026-06-17:
+not-null `u8` reclaims the full `0..=255`; nullable `i8` is `-127..=127`** (table
+final).
 
 ---
 
