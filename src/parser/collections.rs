@@ -1757,6 +1757,27 @@ use #count instead"
             } else {
                 u16::MAX
             };
+            // #403 — a value-element vector for-loop cannot read the OOB null back
+            // from the loop var (a boolean's 1-byte slot truncates the i64::MIN
+            // null, and `false` is itself a valid element), so capture the element
+            // REF the read wraps (`OpGetVectorNullable`) for a ref-null termination.
+            let elem_ref: Option<Value> =
+                if matches!(&var_tp, Type::Boolean) && matches!(in_type, Type::Vector(_, _)) {
+                    // `iter_next` for a vector is a block `[Set(#index, +1), <read>]`;
+                    // the read is `OpGet*(OpGetVectorNullable(vec, size, #index), ..)`
+                    // — pull the wrapped OpGetVectorNullable (the read's first arg).
+                    let read = match iter_next.unspan() {
+                        Value::Block(bl) => bl.operators.last().map(Value::unspan),
+                        other => Some(other),
+                    };
+                    if let Some(Value::Call(_, args)) = read {
+                        args.first().cloned()
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
             let for_next = v_set(for_var, iter_next);
             self.vars.loop_var(for_var);
             let in_loop = self.in_loop;
@@ -1857,6 +1878,19 @@ use #count instead"
                 let dnr = Value::FnRefDnr(for_var);
                 let in_bounds = self.cl("OpLtInt", &[Value::Int(0), dnr]);
                 let test_for = self.cl("OpNot", &[in_bounds]);
+                lp.push(v_if(
+                    test_for,
+                    v_block(vec![Value::Break(0)], Type::Void, "break"),
+                    Value::Null,
+                ));
+            } else if let Some(ref_expr) = elem_ref {
+                // #403 — boolean vector: the value-sentinel termination breaks on a
+                // real `false`.  Terminate on the element REF's null instead — the
+                // `OpGetVectorNullable` the read wraps returns a null DbRef one past
+                // the last item, which `OpConvBoolFromRef` maps to false → break,
+                // while a real `false`/`true` ref is non-null → keep iterating.
+                let test_for = self.cl("OpConvBoolFromRef", &[ref_expr]);
+                let test_for = self.cl("OpNot", &[test_for]);
                 lp.push(v_if(
                     test_for,
                     v_block(vec![Value::Break(0)], Type::Void, "break"),
