@@ -87,11 +87,11 @@ triage, then the flip.  Step 5's residue is the only part that cannot be sized y
 Step 5 exists (re-run the consumers gate-on; triage only what does not go green from Steps 1–3).
 **A4(b) is landed** (2026-06-17); **A3 rung 1** (key-resolution chokepoint, `key_owner`) is landed
 (2026-06-17, gate-inert) — but A3 proved to be ≥4 substrate rungs (see Step-1 A3).  Next concrete
-move: **A3 rung 4** (the LAST A3 rung) — native codegen of a `hash<__nullable<S>>`.  Interpret passes
-12-collections end-to-end; `--native` compiles but panics `find called on non-collection type
-__nullable<S>::Some` — the generated `OpGetRecord` gets the `Some` variant's db number instead of the
-hash type (a native type-numbering divergence, plausibly from rung 1's `fill_database(kd)` reorder).
-Inspect with `--native-emit` + compare the db-construction order to the compile-time registry.
+move: **A3 rung 4** (the LAST A3 rung) — native codegen of a `hash<__nullable<S>>`, now FULLY
+root-caused (see Step-1 A3 rung 4).  The fix is a focused codegen/type-registry change: build the
+synth enum's `Some`/`Null` variant structures EAGERLY at enum creation so their tids precede any
+consuming struct (and drop the `fill_database(kd)` hack), then re-validate ALL E2 gate-on suites on
+both backends.  High blast radius — a dedicated session, not a tail-end edit.
 
 ## Status
 
@@ -319,13 +319,29 @@ default-on (gate removed), per the project standard.  The remaining work, in fin
          and read the rec-id slot AS the record (every field offset junk).  Fix: take the deref path for
          a synth-nullable `Enum` element too when the collection `is_linked`.  (An INLINE
          `vector<__nullable<S>>` local keeps the inline read.)
-       - **Rung 4 — native codegen of a `hash<__nullable<S>>` — OPEN (the last A3 rung).**  Interpret is
-         done; `--native` compiles (rungs 2–3 fixed the key codegen — the text key is now a correct
-         `Content::Str`) but PANICS at runtime: `find called on non-collection type
-         __nullable<Count>::Some`.  The generated `OpGetRecord` is handed the wrong db type number (the
-         `Some` variant, not the hash) — a native-vs-registry type-numbering divergence, plausibly from
-         rung 1's `fill_database(kd)` reordering the db-construction sequence the native emitter
-         replays.  Native-codegen work.
+       - **Rung 4 — native codegen of a `hash<__nullable<S>>` — OPEN (the last A3 rung); FULLY
+         ROOT-CAUSED 2026-06-18, deferred as high-blast-radius.**  Interpret is done; `--native`
+         compiles (rungs 2–3 fixed the key codegen — the text key is a correct `Content::Str`) but
+         PANICS: `find called on non-collection type __nullable<Count>::Some`.  Mechanism (confirmed by
+         reading the emitted Rust + `src/generation/mod.rs`):
+         - native codegen labels every type `t{compile_tid}` and REQUIRES the generated `db.*` calls to
+           reproduce those tids in creation order (interning is first-call-wins).
+         - a keyed-collection type that is a STRUCT FIELD (@P296, `field_keyed`) is created INLINE
+           during the struct's field emission (`let hash_lookup = db.hash(t64,…)`) and EXCLUDED from the
+           tid-ordered `bare_io` flush — correct ONLY when the hash's compile-tid is reachable at that
+           point (all lower-tid types already created).
+         - rung 1's `fill_database(kd)` gives the `Some` variant a LOWER tid (68) than the hash (69),
+           but `Some`/`Null` are variant STRUCTURES emitted as `type_defs` AFTER `Counting` (their tids
+           68/70 > 66), while the hash is created DURING `Counting`.  So native interns hash=68 then
+           Some=69 — SWAPPED vs compile-time (Some=68, hash=69).  The baked `OpGetRecord(69)` then
+           resolves to `Some`.  Neither emitting the hash via `bare_io` nor deferring it helps: `Some`
+           (68) simply is not created when `Counting`'s fields emit.
+         - **The only correct fix: `Some`/`Null` must get tids BEFORE any struct that uses such a hash**
+           (build the synth enum's variant structures EAGERLY at enum creation, not lazily during the
+           hash typedef — which also removes the `fill_database(kd)` hack).  That shifts many tids and
+           must be validated across EVERY E2 gate-on test (11-vectors, the `plan25_e2_*` suites, the
+           consumers), and has a build-order dependency (`S` before `Some`).  A focused native/codegen
+           session, NOT a tail-end change — deferred deliberately rather than rushed.
        **A3 STATUS: gate-on INTERPRET passes `tests/scripts/12-collections.loft` end-to-end (exit 0).**
          Rungs 1–3 + 5 + the for-loop-deref are FIXED + gate-inert (gate-off suite 2397/2398, only the
          pre-existing non-E2 `kernel_port`); regressions in `tests/plan25_e2_hash.rs`.  Only rung 4
