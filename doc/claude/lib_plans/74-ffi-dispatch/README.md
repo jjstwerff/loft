@@ -88,6 +88,37 @@ the bridge is the fix.)
 `dispatch_call` + `ArgT`/`ArgVal` arms in loft → remove vestigial stubs → consolidate +
 fix the ~15 stale FFI docs.
 
+### Update 2026-06-18 — ALL 7 native libraries migrated
+
+All seven now use `#[loft_native]` + `generate_register_from_loft_with_bridges`, built
++ test-green against the local bridge infra via path deps:
+
+| Lib | Tests | Notes |
+|---|---|---|
+| loft-libs-core/regex | 8/8 | source-scan; `match_groups`/`replace` work via bridge |
+| loft-libs-core/random | 11/11 | **#306** warning on `rand_indices` (vector return) |
+| loft-libs-core/crypto | 24/24 | manifest→source-scan; 22 natives |
+| loft-libs-net/web | 9/9 | manifest→source-scan; 19 natives |
+| loft-libs-net/server | 1/1 | hand-written register→generated; already had `#native` |
+| loft-libs-graphics/imaging | 10/10 | deps repointed; **#306** on PNG vector returns |
+| loft-libs-graphics/graphics | 67/67 | selective — hand-written register kept for the dual-ABI raw-ptr `loft_gl_*` / `vec_wrapper!` fns (the auto-generator's bare-ident + blanket-bridge assumptions break on remapped symbols) |
+
+Learnings: the compiler **rejects a redundant explicit `#native "n_<fn>"`** when the
+symbol equals `n_<fnname>` (must be bare); a manifest lib's migration = add `#native`
+to each `.loft` decl + drop `loft.toml [native.functions]`.
+
+**Remaining (all gated on publishing `loft-ffi 0.1.1` + `loft-ffi-build 0.2.1`** so the
+path deps become version deps): re-publish each lib, migrate the 2 test fixtures
+(`native_pkg`/`native_scalar_pkg`), delete `dispatch_call` + `ArgT`/`ArgVal`, remove the
+vestigial monorepo `lib/*/native` stubs, fix the stale docs.
+
+**Separate bridge bug — #306:** `dispatch_via_bridge` / `bridge_push_ref` mishandles a
+vector/ref return (a stack-record ref treated as an owned heap store); the `#306` free
+guard catches it (warning only, no corruption, correct values) on every vector/ref-
+returning native (`random.rand_indices`, `imaging` PNG). Fix before relying on bridge
+ref-returns in anger.  (Also flagged: `test_runner.rs` calls `wire_native_fns` but not
+`wire_shared_native_fns` — latent gap for shared-store auto-natives under `loft test`.)
+
 ## Goal
 
 `--interpret`'s call into a `#native` function dispatches through ONE
