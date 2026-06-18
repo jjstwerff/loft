@@ -1398,6 +1398,25 @@ impl Parser {
             }
             return true;
         }
+        // @PLN25 E2 — a synth `__nullable<S>` value used as a BOOLEAN (a condition
+        // or bool arg, e.g. `if hash[k]` / `assert(hash[k])`) coerces to its
+        // truthiness = "is present" = discriminant != 0.  Read the disc directly
+        // (`OpGetEnum` @ offset 0, which has the rec==0 null-record guard, so an
+        // ABSENT lookup result — rec 0 — reads disc 0 = not present), mirroring the
+        // inline branch of `null_check_builder`.  Without this the raw nullable
+        // DbRef reaches the bool context and native emits `(DbRef) as u8` (E0605);
+        // a dense `Reference` lookup gets `OpConvBoolFromRef` on the same path.
+        if let (Type::Enum(enum_d, true, _), Type::Boolean) = (is_type, should)
+            && self.data.def(*enum_d).name.starts_with("__nullable<")
+        {
+            if !self.first_pass {
+                let get_enum = self.cl("OpGetEnum", &[code.clone(), Value::Int(0)]);
+                let disc = self.cl("OpConvIntFromEnum", &[get_enum]);
+                let is_null = self.cl("OpEqInt", &[disc, Value::Int(0)]);
+                *code = self.cl("OpNot", &[is_null]);
+            }
+            return true;
+        }
         if let Type::RefVar(ref_tp) = is_type
             && self.convert(code, ref_tp, should)
         {

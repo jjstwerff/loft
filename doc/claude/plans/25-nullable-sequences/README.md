@@ -73,7 +73,7 @@ method dispatch · transparent format · the 06-structs alias-copy root · OOB d
 | Seam | Size | Status |
 |---|---|---|
 | ~~**A4(b)** — JSON walker builds `Some` for a present object~~ | — | **FIXED** 2026-06-17 — gate-off-nullable was cache contamination (no leak); 1 walker arm; both backends + regression |
-| **A3** — `hash<__nullable<S>>` (key-resolution + lookup unwrap + anon-literal + for-loop + native) | M (subsystem) | INTERPRET passes 12-collections end-to-end; only rung 4 (native codegen) open |
+| ~~**A3** — `hash<__nullable<S>>` (key-resolution + lookup unwrap + anon-literal + for-loop + native)~~ | — | **DONE** — 12-collections passes gate-on on BOTH backends (rungs 1–5 + for-loop + native); regressions both backends |
 | **gap 2** — fn-call coercion `f(v[i])` via offset-ref reinterpret | S | designed, not landed |
 | **gap 4** — `e = null` on a nullable LOCAL | XS | open |
 | **Step 2** — par with USER EXTRA args (dispatcher arity) | S, self-contained | open |
@@ -87,11 +87,11 @@ triage, then the flip.  Step 5's residue is the only part that cannot be sized y
 Step 5 exists (re-run the consumers gate-on; triage only what does not go green from Steps 1–3).
 **A4(b) is landed** (2026-06-17); **A3 rung 1** (key-resolution chokepoint, `key_owner`) is landed
 (2026-06-17, gate-inert) — but A3 proved to be ≥4 substrate rungs (see Step-1 A3).  Next concrete
-move: **A3 rung 4** (the LAST A3 rung) — native codegen of a `hash<__nullable<S>>`, now FULLY
-root-caused (see Step-1 A3 rung 4).  The fix is a focused codegen/type-registry change: build the
-synth enum's `Some`/`Null` variant structures EAGERLY at enum creation so their tids precede any
-consuming struct (and drop the `fill_database(kd)` hack), then re-validate ALL E2 gate-on suites on
-both backends.  High blast radius — a dedicated session, not a tail-end edit.
+move: **A3 is DONE** (both backends).  Next E2 work, per the seam ledger: **Step 2** — par with USER
+EXTRA args (self-contained) — and **Step 3** — native codegen of `__nullable<>` more broadly (the
+separate pre-existing `06-structs` native forward-ref, an E0425 `cannot find value t<N>` from a
+synth-nullable-variant field-type, is the first concrete probe there).  Then gap 4 (`e = null` on a
+nullable local) + Step 5 consumer triage + the Step-6 gate flip.
 
 ## Status
 
@@ -319,34 +319,37 @@ default-on (gate removed), per the project standard.  The remaining work, in fin
          and read the rec-id slot AS the record (every field offset junk).  Fix: take the deref path for
          a synth-nullable `Enum` element too when the collection `is_linked`.  (An INLINE
          `vector<__nullable<S>>` local keeps the inline read.)
-       - **Rung 4 — native codegen of a `hash<__nullable<S>>` — OPEN (the last A3 rung); FULLY
-         ROOT-CAUSED 2026-06-18, deferred as high-blast-radius.**  Interpret is done; `--native`
-         compiles (rungs 2–3 fixed the key codegen — the text key is a correct `Content::Str`) but
-         PANICS: `find called on non-collection type __nullable<Count>::Some`.  Mechanism (confirmed by
-         reading the emitted Rust + `src/generation/mod.rs`):
-         - native codegen labels every type `t{compile_tid}` and REQUIRES the generated `db.*` calls to
-           reproduce those tids in creation order (interning is first-call-wins).
-         - a keyed-collection type that is a STRUCT FIELD (@P296, `field_keyed`) is created INLINE
-           during the struct's field emission (`let hash_lookup = db.hash(t64,…)`) and EXCLUDED from the
-           tid-ordered `bare_io` flush — correct ONLY when the hash's compile-tid is reachable at that
-           point (all lower-tid types already created).
-         - rung 1's `fill_database(kd)` gives the `Some` variant a LOWER tid (68) than the hash (69),
-           but `Some`/`Null` are variant STRUCTURES emitted as `type_defs` AFTER `Counting` (their tids
-           68/70 > 66), while the hash is created DURING `Counting`.  So native interns hash=68 then
-           Some=69 — SWAPPED vs compile-time (Some=68, hash=69).  The baked `OpGetRecord(69)` then
-           resolves to `Some`.  Neither emitting the hash via `bare_io` nor deferring it helps: `Some`
-           (68) simply is not created when `Counting`'s fields emit.
-         - **The only correct fix: `Some`/`Null` must get tids BEFORE any struct that uses such a hash**
-           (build the synth enum's variant structures EAGERLY at enum creation, not lazily during the
-           hash typedef — which also removes the `fill_database(kd)` hack).  That shifts many tids and
-           must be validated across EVERY E2 gate-on test (11-vectors, the `plan25_e2_*` suites, the
-           consumers), and has a build-order dependency (`S` before `Some`).  A focused native/codegen
-           session, NOT a tail-end change — deferred deliberately rather than rushed.
-       **A3 STATUS: gate-on INTERPRET passes `tests/scripts/12-collections.loft` end-to-end (exit 0).**
-         Rungs 1–3 + 5 + the for-loop-deref are FIXED + gate-inert (gate-off suite 2397/2398, only the
-         pre-existing non-E2 `kernel_port`); regressions in `tests/plan25_e2_hash.rs`.  Only rung 4
-         (native codegen) remains.  E2-internal (a keyed collection over an ENUM only arises from the
-         synth rewrite), so nothing is filed.
+       - **Rung 4 — native codegen of a `hash<__nullable<S>>` — FIXED 2026-06-18 (both backends).**
+         Mechanism (confirmed by reading the emitted Rust + `src/generation/mod.rs`): native labels
+         every type `t{compile_tid}` and REQUIRES the generated `db.*` calls to reproduce those tids in
+         creation order (interning is first-call-wins).  A keyed-collection STRUCT FIELD (@P296,
+         `field_keyed`) is created INLINE during the struct's field emission and excluded from the
+         tid-ordered `bare_io` flush — correct only when the hash's compile-tid is reachable then.
+         Lazily building `Some`/`Null` during the hash typedef gave them tids AFTER the struct, so
+         native interned hash↔Some swapped and the baked `OpGetRecord(hash_tid)` resolved to `Some` →
+         `find called on non-collection type`.  **Fix (two parts):**
+         - (typedef.rs `fill_all`) build each synth `__nullable<S>` enum's `Null` + `Some` variant
+           STRUCTURES right AFTER their wrapped struct `S` in the layout loop — so `S`'s field types are
+           created first (no native forward-ref) yet the variants precede any later struct that holds a
+           `hash<__nullable<S>>` field.  Both backends now agree on tids (interpret is tid-agnostic;
+           native replays them).
+         - (mod.rs `convert`) a `__nullable<S>` value used as a BOOLEAN (`if hash[k]` / `assert(hash[k])`)
+           coerces to its present-check (disc != 0 via `OpGetEnum` @ 0, which has the rec==0 guard) —
+           else the raw nullable DbRef reached the bool context and native emitted `(DbRef) as u8`
+           (E0605).
+         Validated: `12-collections` passes gate-on on BOTH backends (exit 0); all `plan25_e2_*` gate-on
+         suites pass; gate-off byte-green (2400/2401, only `kernel_port`).  Regression extended to
+         `--native` in `tests/plan25_e2_hash.rs`.
+         **Separate, PRE-EXISTING (not this work): `06-structs` native gate-on** fails an E0425
+         `cannot find value t<N>` — a synth-nullable-variant field-type forward-ref distinct from the
+         hash type-id swap (fails identically with AND without the eager-variant build; 06-structs
+         native gate-on was never validated).  Routed as its own native-codegen item.
+       **A3 STATUS: DONE — `tests/scripts/12-collections.loft` passes gate-on end-to-end on BOTH
+         backends (interp + native, exit 0).**  Rungs 1–5 + the for-loop-deref FIXED + gate-inert
+         (gate-off suite 2400/2401, only the pre-existing non-E2 `kernel_port`); regressions in
+         `tests/plan25_e2_hash.rs` (both backends).  E2-internal (a keyed collection over an ENUM only
+         arises from the synth rewrite), so nothing is filed.  (Out-of-A3 follow-up: the separate
+         pre-existing `06-structs` native forward-ref noted under rung 4.)
      - **A4 — `"…" as vector<S>` / `vector<S>.parse(json)` into nullable structs — LOCALIZED
        2026-06-17 (boundary matrix; the earlier mechanism here was WRONG on two counts).**  A 7-cell
        gate-on `--interpret` matrix + `introspect` (scalar control, present-only, null-mid/lead/all,

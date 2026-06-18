@@ -288,6 +288,31 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
             && data.def(d_nr).known_type == u16::MAX
         {
             fill_database(data, database, d_nr);
+            // @PLN25 E2 — right after building a struct `S`, build its synthetic
+            // `__nullable<S>` enum's `Null` + `Some` variant STRUCTURES (if that
+            // enum exists), so they take type-ids that follow `S` (and its field
+            // types) but PRECEDE any later struct that holds a `hash<__nullable<S>>`
+            // field.  Native codegen creates a keyed-collection struct field INLINE
+            // and relies on its tid being reachable when the struct emits; building
+            // the variants lazily (during that struct's hash field) gives `Some` a
+            // tid AFTER the struct, so native interns hash<->Some swapped and a
+            // baked `OpGetRecord(hash_tid)` resolves to `Some` → `find called on
+            // non-collection type` at runtime.  Building them here (after `S`, not
+            // up-front) keeps `S`'s field types created first (no native forward-
+            // ref) yet still ahead of consumers.  Gate-inert: `__nullable<>` enums
+            // exist only gate-on.
+            if matches!(data.def_type(d_nr), DefType::Struct) {
+                let syn_name = format!("__nullable<{}>", data.def(d_nr).name());
+                let syn = data.def_nr(&syn_name);
+                if syn != u32::MAX && data.def(syn).known_type != u16::MAX {
+                    for variant in ["Null", "Some"] {
+                        let v = data.variant_of(syn, variant);
+                        if v != u32::MAX && data.def(v).known_type == u16::MAX {
+                            fill_database(data, database, v);
+                        }
+                    }
+                }
+            }
         }
     }
     // P191 — pre-register database types for local-var keyed
@@ -573,10 +598,12 @@ pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
                     }
                     let kd = key_bearing_def(data, c_nr);
                     // @PLN25 E2 — for a synth `__nullable<S>` element the keys live
-                    // in the `Some` variant; build its db structure FIRST so
-                    // `database.hash` can resolve the key fields through it (else
-                    // the `Some` structure is registered after the hash type and
-                    // the key spec comes out empty → no keys → bad hash).
+                    // in the `Some` variant, which is built up-front by the
+                    // eager-variant pass in `fill_all` (so `database.hash` resolves
+                    // the key fields through it AND the hash's tid lands after
+                    // `Some` for native codegen).  Safety net: if a hash is reached
+                    // before that pass has run, build `Some` now so key resolution
+                    // still succeeds (idempotent — a no-op once the pass has run).
                     if data.def(kd).known_type == u16::MAX {
                         fill_database(data, database, kd);
                     }

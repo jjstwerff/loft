@@ -17,9 +17,11 @@
 //!    `Type::Enum(_, true)` (like a vector element) so `lookup[k].field`
 //!    auto-unwraps through `Some` instead of erroring `Unknown field`.
 //!
-//! Interpreter-only for now: the `--native` codegen of a `hash<__nullable<S>>`
-//! is rung 4, still open (see the plan README), so do NOT add `--native` here
-//! until it lands.
+//! Both backends: the `--native` codegen of a `hash<__nullable<S>>` is fixed
+//! (rung 4 — the synth enum's `Some`/`Null` variant structures are built
+//! up-front so their type-ids precede the consuming struct, matching the order
+//! the native emitter replays; plus `__nullable<S>`-as-bool coerces to its
+//! present-check). `--native` runs are skipped when `rustc` is unavailable.
 //!
 //! `LOFT_NO_CACHE=1` is mandatory: the warm program cache keys on source, NOT
 //! on `LOFT_E2_SYNTH`, so a cached gate-off bundle would mask the rewrite.
@@ -27,10 +29,10 @@
 use std::path::Path;
 use std::process::Command;
 
-/// Run the loft binary on `prog`, interpreter backend, gate-on, cache-off.
-fn run_interp(prog: &Path) -> (bool, String) {
+/// Run the loft binary on `prog`, gate-on, cache-off, with extra `args`.
+fn run(args: &[&str], prog: &Path) -> (bool, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_loft"))
-        .arg("--interpret")
+        .args(args)
         .arg(prog)
         .env("LOFT_NO_CACHE", "1")
         .env("LOFT_E2_SYNTH", "1")
@@ -40,6 +42,27 @@ fn run_interp(prog: &Path) -> (bool, String) {
         out.status.success(),
         String::from_utf8_lossy(&out.stdout).into_owned(),
     )
+}
+
+fn rustc_available() -> bool {
+    Command::new("rustc").arg("--version").output().is_ok()
+}
+
+/// Assert `want` appears in stdout on the interpreter AND (when rustc is
+/// present) on `--native` — the keyed-collection-over-nullable path must agree
+/// across backends.
+fn assert_both(prog: &Path, want: &str) {
+    let (ok, out) = run(&["--interpret"], prog);
+    assert!(ok, "interpret run failed; stdout={out:?}");
+    assert!(
+        out.contains(want),
+        "interpret missing {want:?}; got {out:?}"
+    );
+    if rustc_available() {
+        let (ok, out) = run(&["--native"], prog);
+        assert!(ok, "native run failed; stdout={out:?}");
+        assert!(out.contains(want), "native missing {want:?}; got {out:?}");
+    }
 }
 
 fn probe(name: &str, body: &str) -> std::path::PathBuf {
@@ -67,15 +90,9 @@ fn main() {
 
 #[test]
 fn hash_over_nullable_vector_lookup_and_field_access() {
-    let path = probe("counting", SRC);
-    let (ok, out) = run_interp(&path);
-    assert!(ok, "interpret run failed; stdout={out:?}");
     // len preserved; key extraction finds the shared Some-wrapped records by
     // the `t` field through the Some payload; field access unwraps to S.
-    assert!(
-        out.contains("len=3 three=3 one=1 missing=true"),
-        "hash lookup over nullable vector wrong; got {out:?}"
-    );
+    assert_both(&probe("counting", SRC), "len=3 three=3 one=1 missing=true");
 }
 
 const SRC_ANON_FORLOOP: &str = "\
@@ -100,13 +117,7 @@ fn anon_literal_into_hash_field_and_forloop_over_shared_array() {
     // struct-field nullable vector — stored as a LINKED array of ref slots that
     // shares records with the hash — must DEREF each element (OpVectorRefNullable)
     // before reading `item.v`, not read the rec-id slot as the record inline.
-    let path = probe("anon_forloop", SRC_ANON_FORLOOP);
-    let (ok, out) = run_interp(&path);
-    assert!(ok, "interpret run failed; stdout={out:?}");
-    assert!(
-        out.contains("add=10 three=3"),
-        "for-loop over shared nullable array / anon-literal hash field wrong; got {out:?}"
-    );
+    assert_both(&probe("anon_forloop", SRC_ANON_FORLOOP), "add=10 three=3");
 }
 
 #[test]
@@ -122,10 +133,5 @@ fn lone_nullable_hash_field_constructs_and_misses_cleanly() {
            print(\"missing={c.lookup[\\\"x\\\"] == null}\\n\");\n\
          }\n",
     );
-    let (ok, out) = run_interp(&path);
-    assert!(ok, "interpret run failed; stdout={out:?}");
-    assert!(
-        out.contains("missing=true"),
-        "lone nullable hash field lookup wrong; got {out:?}"
-    );
+    assert_both(&path, "missing=true");
 }
