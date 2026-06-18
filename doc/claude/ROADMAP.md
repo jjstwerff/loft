@@ -53,10 +53,10 @@ now — what's open below is the increments.
 |---|---|---|---|
 | **Performance / startup** (serves live-prototyping) | precompiled-stdlib fast-start (`@PLN52`); const-store Phase B/C (`@PLN82`); the wasm-vs-native gap | in-scope | [PERFORMANCE.md § Open work](PERFORMANCE.md); `@PLN52`/`@PLN82` |
 | **Native robustness** | shared-store dispatch → a C-ABI `LoftStore` handle (gh #389 pt.1 — the recurring `viewer_markdown` cdylib-collision cause) | in-scope (stabilisation) | [NATIVE.md § Open work](NATIVE.md); gh #389 |
-| **Library system** (the dogfood track) | regex (gated on the coroutine source), LSP, a game-client lib, viewer generalisation — *graphics / imaging / server / markdown / world / game_protocol already ship* | in-scope | [lib_plans/README](lib_plans/README.md); the `[libs]` `@PLN` issues |
+| **Library system** (the dogfood track) | LSP, a game-client lib, viewer generalisation, regex `match_groups`/`replace` — *graphics / imaging / server / markdown / world / game_protocol / **regex** (v0.1.0: matches/find/split) already ship* | in-scope | [lib_plans/README](lib_plans/README.md); the `[libs]` `@PLN` issues |
 | **Friend-readiness / UX** | first-time tutorial + more day-to-day ergonomics — *REPL / `introspect` / the IDE editor slices already ship* | mixed | ROADMAP § U + § "Near-term focus" below |
 | **Games / engine** (the north star) | the `@PLN18` UDP state-sync channel (05a), scriptable scenes, fuller browser game UI — *the run modes + graphics rendering + the multiplayer protocol already ship* | parallel-agent lane + partly gated | ROADMAP § G; `@PLN18` |
-| **Coroutines** (unlocks regex `match_groups`/`find_all`) | the native iterator source (P327) | gated (language feature) | [COROUTINE.md](COROUTINE.md); PLANNING § CO1 |
+| **Coroutines** (native iterator *sources* — Rust fns yielding into `iterator<T>`) | the native iterator source (P327) | gated (language feature) | [COROUTINE.md](COROUTINE.md); PLANNING § CO1 |
 | **Stability instruments** (when reached) | program-level fuzzing (`@PLN53`); sanitizer-coverage expansion (`@PLN54`) | future | STABILITY_ROADMAP step 9; plans 53/54 |
 | **CI / tooling** | docs-only-PR matrix-skip fix (STABILITY_ROADMAP row 11 — risky; validate via a docs-only test PR) | in-scope | STABILITY_ROADMAP row 11 |
 
@@ -220,7 +220,7 @@ Unblocks 2+ downstream plans.  Lattice points in the dependency graph.
 | LSP.1 | `loft-lsp` MVP — diagnostics + outline + hover | M | ✓ | lib_plans/63-lsp/README.md |
 | LSP-CLIENT | `loft-lsp-bridge` sidecar + viewer code intelligence — rust-analyzer / loft-lsp / jdtls | L | ✓ | lib_plans/66-viewer-lsp-bridge/README.md |
 | (cross) | Lazy stdlib loading — trigger-based pay-for-what-you-use | M | ✓ | lib_plans/59-lazy-stdlib/README.md |
-| **REGEX.0** | `lib/regex/` MVP — `#native` cdylib bridge to Rust `regex` crate (future/paused 2026-05-20, unblocks @PLN42 phase 07 scan.loft consolidation + check_doc_drift.sh port) | S | ✓ | lib_plans/57-regex/README.md |
+| **REGEX.0** | regex MVP — `#native` cdylib bridge to Rust `regex` crate.  **SHIPPED as `regex` v0.1.0** (loft-libs-core/regex; matches/find/split).  Next: `match_groups` + `replace` (unblocks @PLN42 phase 07 scan.loft + check_doc_drift.sh ports) | S | ✓ | lib_plans/57-regex/README.md |
 | **TIME.1** | `DateTime` value type (i64 epoch-ms, JS-`Date`-aligned) + built-in `{dt:…}` formatting + pure-loft `lib/time` operations — unblocks the `training` app's date-indexed B8–B10 routines; broadly useful Data/ETL gap | H | ~ | lib_plans/21-datetime/README.md |
 | **GFX.PORTABLE** | Make the `Renderer`/`Scene` layer the complete backend-portable rendering contract (portable shaders, scene-level custom materials + render-target/post-process passes; no script reaches raw `gl_*`) — prerequisite for a native GPU backend (wgpu → Vulkan/Metal) and thus native Android/iOS | H | ~ | lib_plans/72-renderer-backend-boundary/README.md |
 
@@ -407,7 +407,7 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | [PACKAGES.md § Open work](PACKAGES.md#open-work) | S-M | — | PKG.7 + PKG.REG (format itself already shipped) |
 | [`lib_plans/12-library-extraction/`](lib_plans/12-library-extraction) | L | **PACKAGES.md § Open work PKG.REG** | Multi-release execution arc |
 | [`lib_plans/59-lazy-stdlib/`](lib_plans/59-lazy-stdlib) | M | — | Foundational — REGEX Phase 3 (lazy-load wire-up) is downstream consumer |
-| [`lib_plans/57-regex/`](lib_plans/57-regex) | S (Phase 0) / MH (Phase 1+) | — | **Future/paused 2026-05-20** (was Active 2026-05-18, no phase work started).  Phase 0 = cdylib bridge MVP; Phase 1+ = pure-loft NFA.  Unblocks @PLN42 phase 07 scan.loft + check_doc_drift.sh ports |
+| [`lib_plans/57-regex/`](lib_plans/57-regex) | S (Phase 0) / MH (Phase 1+) | — | **Phase 0 SHIPPED** (`regex` v0.1.0 at loft-libs-core/regex; matches/find/split).  Next: match_groups/replace.  Phase 1+ (pure-loft NFA) future.  Unblocks @PLN42 phase 07 scan.loft + check_doc_drift.sh ports |
 | [`plans/43-loft-store-durable/`](plans/43-loft-store-durable) | M | cooperates with **plans/42-tracker-index/07** + **plans/39-tic-tac-toe** + **plans/6-audience-generative-art** | Three-tier opt-in durability for loft mmap stores: IntegrityOnly (indexer), SnapshotEvery (TTT v5 sessions), WAL (audience demo).  Index is cheap test bed; game servers are critical consumers |
 | [`lib_plans/67-process/`](lib_plans/67-process) | M | — | `lib/process/` subprocess primitive — closes the indexer / viewer bash-wrapper dependency (dogfood-driven by @PLN42 + @PLAN35) |
 | [`lib_plans/68-fs-watch/`](lib_plans/68-fs-watch) | M | — | `lib/fs_watch/` file-event watcher — prerequisite for @PLN42 phase 07a WebSocket-push daemon (inotify on Linux, kqueue on macOS, ReadDirectoryChangesW on Windows) |
