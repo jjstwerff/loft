@@ -978,12 +978,22 @@ fn dispatch_via_bridge(
     }
     args.reverse();
 
-    // The store the bridge sees: the first ref arg's store (so ref/vector
-    // params and allocating returns resolve correctly), else store 0.
-    let store_nr = args
+    // The store the bridge allocates in: the first ref arg's store (so ref/
+    // vector params and an allocating return resolve there), else — for a
+    // ref/vector RETURN with no ref arg to derive from — a fresh heap store via
+    // `stores.null()`, exactly as `dispatch_call`'s ref-return arms do.  The
+    // old `unwrap_or(0)` fallback put an owned return vector in store 0 (the
+    // stack store), so freeing it on scope exit tripped the #306 guard (a
+    // stack-record ref treated as an owned heap store) — e.g. `rand_indices`
+    // and imaging's PNG loaders, which return a vector with no ref argument.
+    let ref_arg_store = args
         .iter()
-        .find_map(|v| (v.tag == LoftTag::Ref).then(|| v.as_ref().store_nr))
-        .unwrap_or(0);
+        .find_map(|v| (v.tag == LoftTag::Ref).then(|| v.as_ref().store_nr));
+    let store_nr = match ref_arg_store {
+        Some(s) => s,
+        None if matches!(sig.ret, Some(ArgT::Ref | ArgT::Vec)) => stores.null().store_nr,
+        None => 0,
+    };
     let ls = make_loft_store(stores, store_nr);
 
     // CURRENT_STORES must be live for the bridge's ffi_claim/resize callbacks.

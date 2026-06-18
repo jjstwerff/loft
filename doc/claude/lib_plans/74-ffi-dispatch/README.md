@@ -112,12 +112,16 @@ path deps become version deps): re-publish each lib, migrate the 2 test fixtures
 (`native_pkg`/`native_scalar_pkg`), delete `dispatch_call` + `ArgT`/`ArgVal`, remove the
 vestigial monorepo `lib/*/native` stubs, fix the stale docs.
 
-**Separate bridge bug — #306:** `dispatch_via_bridge` / `bridge_push_ref` mishandles a
-vector/ref return (a stack-record ref treated as an owned heap store); the `#306` free
-guard catches it (warning only, no corruption, correct values) on every vector/ref-
-returning native (`random.rand_indices`, `imaging` PNG). Fix before relying on bridge
-ref-returns in anger.  (Also flagged: `test_runner.rs` calls `wire_native_fns` but not
-`wire_shared_native_fns` — latent gap for shared-store auto-natives under `loft test`.)
+**Bridge bug #306 — FIXED 2026-06-18:** `dispatch_via_bridge` allocated a vector/ref
+return in store 0 (the *stack* store) whenever the native had no ref argument to derive
+the store from, so freeing the owned return on scope exit tripped the `#306` guard (a
+stack-record ref treated as an owned heap store) — `random.rand_indices`, `imaging` PNG
+(warning only, no corruption, correct values). Fixed by mirroring `dispatch_call`'s
+ref-return arms: a ref/vector return with no ref arg now derives its store from
+`stores.null()` (a fresh heap store). Verified #306-clean + test-green on both
+(random 11/11, imaging 10/10).  (Still open: `test_runner.rs` calls `wire_native_fns`
+but not `wire_shared_native_fns` — latent gap for shared-store auto-natives under
+`loft test`.)
 
 ## Goal
 
