@@ -79,12 +79,17 @@ coroutine walking `match_start`/`match_end`.
 
 ## What's still missing
 
-Relative to the design below, v0.1.0 ships only locate + split:
+Relative to the design below, v0.1.0 ships only locate + split.  **`match_groups`
+and `replace` were deferred pending a working coroutine/iterator substrate (group
+and match iteration); that substrate is now in place** — 2026-06-18 the
+`iterator<text>` (incl. empty/optional groups) and `iterator<Match>` (struct-yield)
+shapes were verified on both backends, so the two are UNBLOCKED (see "Next
+increment").
 
 | Missing | Notes |
 |---|---|
-| **Capture groups** (`match_groups`) | No sub-match extraction — the source flags this as "the next increment (capture-group spans)".  The biggest functional hole. |
-| **`replace` / `replace_all`** | No substitution (the design's `re.replace(line, "$1 -> $2")`).  The other half of the "next increment". |
+| **Capture groups** (`match_groups`) | No sub-match extraction.  Was deferred pending working coroutines (it yields groups as `iterator<text>`); **unblocked 2026-06-18 — buildable now**.  The biggest functional hole. |
+| **`replace` / `replace_all`** | No substitution (the design's `re.replace(line, "$1 -> $2")`).  Literal form is a one-shot native; the callback/streaming form needed coroutines — **now unblocked**. |
 | **`Regex` / `Match` struct surface** | The design's compile-once `re: Regex = regex(...)` handle and the `Match` struct (`groups`/`names`/`start`/`end`, destructured in a `match` arm) are NOT shipped — v0.1.0 is inline-pattern + cache only. |
 | **`find` returns START only** | `match_end` exists internally (drives `split`) but is not exposed; callers get no whole-match text or end offset. |
 | **Named groups / lookaround / flags** | The PCRE-parity feature table below is the Rust crate's capability, but only reachable once the `Match`/group surface lands. |
@@ -92,10 +97,23 @@ Relative to the design below, v0.1.0 ships only locate + split:
 | **Lazy-loading polish (Phase 3)** | Auto-use triggers are wired (work today), but the full `default/lazy/*.loft` integration is blocked on `lib_plans/59-lazy-stdlib`. |
 | **README under-documents** | The package README's API table lists only `matches`/`find` — it omits `split`/`regex_find`/`regex_split` that the loft source exports (a doc fix in the lib repo). |
 
-**Next increment (smallest useful step):** add `match_groups` + `replace`/`replace_all`
-on the existing cdylib — both are thin wrappers over the Rust crate's `captures`
-/ `replace_all`, and `match_groups` needs a `Match`-ish return (a tuple, or a small
-struct of group spans).  No new infrastructure: the cache + ABI already exist.
+**Next increment — now UNBLOCKED (smallest useful step):** `match_groups` +
+`replace`/`replace_all` on the existing cdylib.  The coroutine substrate they waited
+on is in place (this session's float/single/enum + manual-`next` coroutine fixes;
+`iterator<text>` and `iterator<Match>` verified on both backends).  Concrete shape:
+
+- **`match_groups(pattern, input) -> iterator<text>`** — add native span primitives
+  (`n_group_count` / `n_group_start(i)` / `n_group_end(i)` over the Rust crate's
+  `captures`), then a loft coroutine that `yield`s `input[start(i)..end(i)]` for
+  `i in 0..count` — exactly the `split_iter` shape that already ships.  (Optionally
+  `find_all -> iterator<Match>` for whole-match iteration, same pattern.)
+- **`replace_all(pattern, input, repl) -> text`** — a one-shot native wrapping the
+  Rust crate's `replace_all` (no coroutine); a callback/streaming variant is the part
+  that uses coroutines, now available.
+
+No new interpreter infrastructure: the pattern cache + the i64/text ABI + the
+coroutine channel all exist.  Ships as `regex` v0.2.0 from `loft-libs-core` (cdylib
+rebuild + registry publish + trigger update).
 
 ---
 
