@@ -246,21 +246,9 @@ impl Parser {
             // reconstructs the tuple.  `tuple_kinds` is the SAME decision the
             // producer's `is_tuple_into` makes, so the two ends agree.
             let tkinds = crate::coroutine_layout::tuple_kinds(&yield_tp);
-            let channel_tag: i32 = if tkinds.is_some() {
-                1
-            } else if matches!(&yield_tp, Type::Function(_, _, _)) {
-                2
-            } else if matches!(&yield_tp, Type::Float) {
-                // #401 — float yield: native must bit-cast the i64 transport to
-                // f64 (byte_size 8 alone cannot distinguish float from integer).
-                3
-            } else if matches!(&yield_tp, Type::Single) {
-                4 // single: bit-cast the low 32 bits to f32
-            } else if matches!(&yield_tp, Type::Enum(..)) {
-                5 // enum: reinterpret the variant index as u{8*byte_size}, not bool
-            } else {
-                0
-            };
+            // #401 — one shared home for the channel decision (float/single/enum
+            // need their own tags); see `coroutine_layout::channel_tag`.
+            let channel_tag = crate::coroutine_layout::channel_tag(&yield_tp);
             let value_size: i32 = (channel_tag << 8) | byte_size;
             let mut call_args = vec![Value::Var(gen_var), Value::Int(value_size)];
             if let Some(kinds) = &tkinds {

@@ -37,9 +37,13 @@
 //! | **Y4** tuple     | FIX:04 | FIX:04 (gated on T1.8a) | FIX:04 | FIX:04 | CLOSED:CO1.4-deferred |
 //! | **Y5** closure   | FIX:05 (depends on @PLAN15) | FIX:05 | FIX:05 | FIX:05 | CLOSED:CO1.4-deferred |
 //! | **Y6** vector    | CLOSED:non-goal | CLOSED:non-goal | CLOSED:non-goal | CLOSED:non-goal | CLOSED:CO1.4-deferred |
-//! | **Y7** float     | PASS:y7_x1 (#401) | untested | untested | untested | CLOSED:CO1.4-deferred |
-//! | **Y8** single    | PASS:y8_x1 (#401) | untested | untested | untested | CLOSED:CO1.4-deferred |
-//! | **Y9** enum      | PASS:y9_x1 (#401) | untested | untested | untested | CLOSED:CO1.4-deferred |
+//! | **Y7** float     | PASS:y7_x1 | PASS:y7_x2 | ok¹ | ok¹ | CLOSED:CO1.4-deferred |
+//! | **Y8** single    | PASS:y8_x1 | PASS:y8_x2 | ok¹ | ok¹ | CLOSED:CO1.4-deferred |
+//! | **Y9** enum      | PASS:y9_x1 | PASS:y9_x2 | ok¹ | ok¹ | CLOSED:CO1.4-deferred |
+//!
+//! ¹ float/single/enum × X3 (higher-order) and X4 (comprehension) verified on
+//!   both backends via the full type×context grid (2026-06-18, #401); no
+//!   dedicated `cross_mode` cell yet.
 //!
 //! Each `body` must declare `fn test() { … }` (the entry point) and
 //! any helper fns at file scope; the harness appends
@@ -542,6 +546,54 @@ cross_mode!(
         print("{count}\n");
         assert(count == 2, "y9_x1 enum for-loop count");
         assert(last == Color.Blue, "y9_x1 enum for-loop last value");
+    }
+    "#
+);
+
+// X2 — manual `next()`.  #401 follow-up: the manual-next codegen path
+// (control.rs) duplicated the channel decision and dropped float/single/enum,
+// so `let a: f64 = next(g)` was native E0308.  Now both paths share
+// `coroutine_layout::channel_tag`.
+
+cross_mode!(
+    y7_x2_float_manual_next,
+    r#"
+    fn vals() -> iterator<float> { yield 1.5; yield 2.5; }
+    fn test() {
+        g = vals();
+        a = next(g);
+        b = next(g);
+        print("{a} {b}\n");
+        assert(a == 1.5 && b == 2.5, "y7_x2 float manual next");
+    }
+    "#
+);
+
+cross_mode!(
+    y8_x2_single_manual_next,
+    r#"
+    fn vals() -> iterator<single> { yield 1.5 as single; yield 2.5 as single; }
+    fn test() {
+        g = vals();
+        a = next(g);
+        b = next(g);
+        print("{a} {b}\n");
+        assert(a == (1.5 as single) && b == (2.5 as single), "y8_x2 single manual next");
+    }
+    "#
+);
+
+cross_mode!(
+    y9_x2_enum_manual_next,
+    r#"
+    enum Color { Red, Green, Blue }
+    fn vals() -> iterator<Color> { yield Color.Red; yield Color.Blue; }
+    fn test() {
+        g = vals();
+        a = next(g);
+        b = next(g);
+        print("{a == Color.Red} {b == Color.Blue}\n");
+        assert(a == Color.Red && b == Color.Blue, "y9_x2 enum manual next");
     }
     "#
 );
