@@ -583,6 +583,33 @@ Example: when investigating why a dead-assignment warning stopped firing, adding
 `eprintln!` to `in_use` and `track_write` immediately revealed an extra `uses` increment
 from a captured variable re-read, and the backtrace pointed to the exact `parse_var` call.
 
+### When interp codegen is opaque or hangs — read the native-generated Rust
+
+`LOFT_LOG=static` shows the bytecode, but a *codegen* bug (wrong channel, missing
+cast, a termination test that never fires) is usually easier to see as Rust than as
+bytecode — and if codegen itself loops, there is no complete bytecode to read.
+
+`loft --check <file>` runs the **native** backend, which emits readable Rust and stops
+at the `rustc` diagnostics. The generated source persists at `loft_native_*.rs` in the
+build temp dir (`$LOFT_TMPDIR`, default the system temp; the path is printed in any
+`E0xxx`). It encodes the same for-loop / yield / dispatch logic the interpreter
+compiles to bytecode, but as named-variable Rust — so a type mismatch, a wrong
+sentinel, or a doomed loop condition is visible directly.
+
+Reach for this especially when a process **hangs**: `gdb` attach (`ptrace_scope`) and
+`perf` (`perf_event_paranoid=4`) are both blocked in this sandbox, so you cannot
+backtrace or sample a live hang. The generated Rust — or env-gated counter-panics
+(§ above) — is the substitute.
+
+Worked example (#401): an `iterator<float>` for-loop hung the interpreter at codegen.
+The native `.rs` showed the loop as `let var_x: f64 = coroutine_next_i64(..); if
+!var_x.is_nan() { … } break;` — a NaN value-sentinel termination reading an i64
+channel — which exposed the root (the value-sentinel only terminates when the
+element type's null sentinel matches the i64 transport's) in one read, after gdb/perf
+and hand-placed counters had all stalled. Confirm the mechanism this way **before**
+editing: a "fix" applied to a hypothesis (there, a guessed return-type change) was a
+no-op that cost a rebuild.
+
 ---
 
 ## Debugging a Scope Analysis Bug
