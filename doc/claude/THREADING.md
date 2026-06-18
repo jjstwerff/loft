@@ -144,7 +144,7 @@ Pops (reverse declaration order): `func`, `threads`, `return_size`, `element_siz
 | `fn <name>` resolves to a `DefType::Function` | `parse_fn_ref` | `"'{name}' is not a function"` |
 | First `parallel_for` arg is `Type::Function` | `parse_parallel_for` | `"first argument must be a function reference (use fn <name>)"` |
 | Second arg is `Type::Vector` | `parse_parallel_for` | `"second argument must be a vector"` |
-| Worker return type is primitive | `parse_parallel_for` | `"worker return type '…' must be integer, long, float, or boolean"` |
+| Worker return type is primitive | `parse_parallel_for` | `"worker return type '…' must be integer, float, or boolean"` |
 | Extra arg count matches worker | `parse_parallel_for` | `"wrong number of extra arguments"` |
 
 ---
@@ -195,7 +195,7 @@ for b#index in 0..par_len {
 
 ### Supported return types
 
-`integer`, `long`, `float`, `single`, `boolean`, inline `enum`, `text`, and `struct`/reference types.
+`integer`, `float`, `single`, `boolean`, inline `enum`, `text`, and `struct`/reference types.
 Extra context arguments are forwarded to workers: `par(b = scale(a, mult), N)`.
 Struct returns use deep-copy (`copy_block` + `copy_claims`) to transfer worker-created
 data inline into the result vector; field access on the loop variable works directly.

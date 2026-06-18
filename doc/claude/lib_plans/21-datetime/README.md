@@ -229,7 +229,7 @@ three-backend `time` gate already covers it with no extra parity path.  The
 
 1. **Distinct `Type::DateTime` vs a tagged `Integer`?**  Locked to
    *distinct* by the user, but confirm the storage/codegen route:
-   reuse the long-integer storage path (`i64`, `i64::MIN` null) and add
+   reuse the i64 integer storage path (`i64`, `i64::MIN` null) and add
    only the static-type identity + format-default + operator rules,
    rather than a wholly new storage class.
 2. **Literals in source, or constructor-only?**  Likely

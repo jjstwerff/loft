@@ -50,7 +50,7 @@ Rules for all Rust and loft code in this project.
 
 ## Null Sentinels
 
-- Integer null: `i32::MIN`. Long null: `i64::MIN`. Float null: `f64::NAN`. Reference null: `store_nr == 0 && rec == 0`.
+- Integer null: `i64::MIN` for a full-width `integer`; narrow integer aliases use the minimum of their storage width (`i32::MIN` for an `i32`-backed field). Float null: `f64::NAN`. Reference null: `store_nr == 0 && rec == 0`.
 - All arithmetic operations must propagate null (if either operand is null, result is null).
 - Never use `0` as a sentinel for integers or references in new code.
 

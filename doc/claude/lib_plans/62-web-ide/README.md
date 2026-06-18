@@ -393,7 +393,7 @@ test('runtime output captured', async () => {
 **JS deliverables**:
 - `ide/src/loft-language.js` — `StreamLanguage.define()` tokenizer for Loft:
   - Keywords: `fn if else for in return const pub use struct enum boolean true false`
-  - Types: `integer long float boolean text vector`
+  - Types: `integer float boolean text vector`
   - Operators, string literals (with `{...}` interpolation spans), line comments `//`
   - Block comments `/* */`
 - `ide/src/editor.js` — CodeMirror 6 instance:

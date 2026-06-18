@@ -939,7 +939,7 @@ companion to `assert()` that is also elided in release mode.
 
 **A2.4 — `--debug` flag with per-type runtime safety logging** (`src/fill.rs`, `src/native.rs`):
 When `stores.run_mode == Debug`, emit `warn` log entries for silent-null conditions:
-integer/long overflow, shift out-of-range, null field dereference, vector OOB.
+integer overflow, shift out-of-range, null field dereference, vector OOB.
 *Tests:* a deliberate overflow under `--debug` produces a `WARN` entry at the correct file:line.
 
 **Effort:** Medium (logger.rs, native.rs, fill.rs; see LOGGER.md for full design)
@@ -2508,7 +2508,7 @@ calling any `json_*` function raises a compile-time error:
 ### H3  `from_json` codegen — scalar struct fields
 **Sources:** [WEB_SERVICES.md](lib_plans/06-web-services/HTTP_CLIENT.md) § Approach B, Phase 2
 **Description:** For each `#json`-annotated struct whose fields are all primitive types
-(`text`, `integer`, `long`, `float`, `single`, `boolean`, `character`), the compiler
+(`text`, `integer`, `float`, `single`, `boolean`, `character`), the compiler
 synthesises a `from_json(body: text) -> T` function.  The result is a normal callable
 fn-ref: `User.from_json` can be passed to `map` without any special syntax.
 **Fix path:**
@@ -2521,7 +2521,6 @@ After H2 is in place, extend the `#json` synthesis pass (H1 Step 2) to also emit
 |-----------|---------------|
 | `text` | `json_text(body, "field_name")` |
 | `integer` | `json_int(body, "field_name")` |
-| `long` | `json_long(body, "field_name")` |
 | `float` / `single` | `json_float(body, "field_name")` |
 | `boolean` | `json_bool(body, "field_name")` |
 | `character` | first char of `json_text(body, "field_name")` |

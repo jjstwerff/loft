@@ -214,9 +214,9 @@ runs identically on every platform — one-and-done.
 
 ### Helpers still missing
 
-- **`file.mtime() -> long`** — dir-mtime read for `plans_recent`'s
+- **`file.mtime() -> integer`** — dir-mtime read for `plans_recent`'s
   60-day filter.  scan.sh currently uses `stat -c %Y` / `stat -f %m` with
-  a `|| echo 0` fallback.  Loft has `file.size: long` but no mtime
+  a `|| echo 0` fallback.  Loft has `file.size: integer` but no mtime
   accessor today.  Small native fn following the same shape as
   `os_directory_native()` — ~10 lines in `src/database/format.rs` +
   one-line declaration in `default/02_images.loft`.  Can ship
@@ -397,7 +397,7 @@ JSON sample:
 }
 ```
 
-#### D. `file.mtime() -> long` native primitive
+#### D. `file.mtime() -> integer` native primitive
 
 ```rust
 // src/database/format.rs:
@@ -420,7 +420,7 @@ impl Stores {
 
 ```loft
 // default/02_images.loft, alongside file primitives:
-pub fn mtime(self: File) -> long;
+pub fn mtime(self: File) -> integer;
 #rust"Stores::os_mtime_native(&self.path)"
 #impure(host_io)
 ```
@@ -766,7 +766,7 @@ green throughout):
 | A.5 | Pre-flight: golden `tests/golden/tags.json` baseline + `normalize_path` helper + parser-sanity smoke assertions (P1 + P2 + P4 from Pre-flight section above).  Required before B; ~45 min combined. | XS | new `parity_check` test passes against the captured golden; backslash assertion passes on Linux; severity-prefix assertion passes |
 | B | `emit_problems_open` in scan.loft + emit when `LOFT_INDEX_BUCKETED=1` | S | spot-check JSON shape against bash output; bash side stays canonical; `parity_check` for `.problems_open` slice |
 | C | `emit_problems_recent` in scan.loft using `ymd_days_ago(30)` | S | same |
-| D | `file.mtime() -> long` native (new helper) + declaration | XS | smoke test on any file |
+| D | `file.mtime() -> integer` native (new helper) + declaration | XS | smoke test on any file |
 | E | `emit_plans_active` / `_future` / `_deferred` / `lib_plans_future` (the four no-date buckets) | S | shape check |
 | F | `emit_plans_recent` using `file.mtime()` + `ymd_days_ago(60)` | S | shape check |
 | G | Summary stats line | XS | textual match against bash output |

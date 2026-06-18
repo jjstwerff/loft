@@ -604,8 +604,7 @@ are currently silent (null propagation, overflow, OOB returns).
 | Type | Condition | Default | Debug | Production | Release |
 |---|---|---|---|---|---|
 | `integer` | arithmetic overflow | null (silent) | `warn` log | null (silent) | null (silent) |
-| `integer` | shift out of [0,32) | null (silent) | `warn` log | null (silent) | null (silent) |
-| `long` | arithmetic overflow | null (silent) | `warn` log | null (silent) | null (silent) |
+| `integer` | shift out of [0,64) | null (silent) | `warn` log | null (silent) | null (silent) |
 | `float` | NaN result from non-NaN inputs | NaN (silent) | `warn` log | NaN (silent) | NaN (silent) |
 | reference | field access on null ref | null (silent) | `warn` log | null (silent) | null (silent) |
 | `vector<T>` | index OOB on non-empty vector | null (silent) | `warn` log | null (silent) | null (silent) |

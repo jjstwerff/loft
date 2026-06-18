@@ -23,7 +23,7 @@ Decisions to *not* fix something live in
 
 | # | Issue | Severity | Status |
 |---|-------|----------|--------|
-| P54 | `json_items` returns opaque `vector<text>`; `MyStruct.parse(text)` silently zeroes on malformed input | High | **Steps 4 + 5 + 6 + Q1 schema-side COMPLETE 2026-04-14 (single-walker design)**.  Step 4: arena materialiser.  Step 5: `Type.parse(JsonValue)` lowers to one IR call to `n_struct_from_jsonvalue(arg, struct_kt)` regardless of struct shape.  The runtime walker uses `stores.types[struct_kt].parts` to dispatch on each declared field type — primitive (text / integer / long / float / boolean) extracts with inline Q1 schema-side type-mismatch checks, nested struct recurses on the embedded sub-struct DbRef, JsonValue-typed fields byte-copy verbatim, and `vector<T>` fields iterate the JArray + recurse per element (struct elements call back into the walker).  Step 6: auto-wrap form — text arguments to `Struct.parse(text)` route through `json_parse` internally so legacy code keeps compiling.  All 25 P54 + Q1 acceptance tests green.  Boolean allocator-corruption fix carried forward (`database(elem_size.max(2))` for handle stores).  **All JSON natives ship natively as of 2026-04-14 (commit `7a2329e` cleared `NATIVE_SKIP` and `SCRIPTS_NATIVE_SKIP`)** — `n_json_parse`, `n_json_array`, `n_json_object`, `n_to_json`, `n_to_json_pretty`, `n_kind`, `n_keys`, `n_fields`, `n_has_field`, `n_struct_from_jsonvalue`, etc. all dispatch through `src/native.rs` and run through `cargo nextest run --release --test native` cleanly.  The user-facing typed-impl refactor (making `MyStruct.parse(text)` enforce text-must-be-JSON typing at compile time instead of routing through the runtime auto-wrap) remains an optional follow-up — orthogonal to the JSON correctness work.  `p54_struct_parse_rejects_plain_text` was deleted (tested a rejected design decision). |
+| P54 | `json_items` returns opaque `vector<text>`; `MyStruct.parse(text)` silently zeroes on malformed input | High | **Steps 4 + 5 + 6 + Q1 schema-side COMPLETE 2026-04-14 (single-walker design)**.  Step 4: arena materialiser.  Step 5: `Type.parse(JsonValue)` lowers to one IR call to `n_struct_from_jsonvalue(arg, struct_kt)` regardless of struct shape.  The runtime walker uses `stores.types[struct_kt].parts` to dispatch on each declared field type — primitive (text / integer / float / boolean) extracts with inline Q1 schema-side type-mismatch checks, nested struct recurses on the embedded sub-struct DbRef, JsonValue-typed fields byte-copy verbatim, and `vector<T>` fields iterate the JArray + recurse per element (struct elements call back into the walker).  Step 6: auto-wrap form — text arguments to `Struct.parse(text)` route through `json_parse` internally so legacy code keeps compiling.  All 25 P54 + Q1 acceptance tests green.  Boolean allocator-corruption fix carried forward (`database(elem_size.max(2))` for handle stores).  **All JSON natives ship natively as of 2026-04-14 (commit `7a2329e` cleared `NATIVE_SKIP` and `SCRIPTS_NATIVE_SKIP`)** — `n_json_parse`, `n_json_array`, `n_json_object`, `n_to_json`, `n_to_json_pretty`, `n_kind`, `n_keys`, `n_fields`, `n_has_field`, `n_struct_from_jsonvalue`, etc. all dispatch through `src/native.rs` and run through `cargo nextest run --release --test native` cleanly.  The user-facing typed-impl refactor (making `MyStruct.parse(text)` enforce text-must-be-JSON typing at compile time instead of routing through the runtime auto-wrap) remains an optional follow-up — orthogonal to the JSON correctness work.  `p54_struct_parse_rejects_plain_text` was deleted (tested a rejected design decision). |
 | Q1 | `json_errors()` reports byte offset only — no path, no line:column, no context snippet | Medium | **Q1 COMPLETE 2026-04-14** — parser side: RFC 6901 path + line:column + context snippet with caret, all 5 `p54_err_*` acceptance tests green; 8 unit tests in `src/json::tests`; 6 `q1_*` tests for state-clearing.  Schema side: kind checks live inline in the unified `n_struct_from_jsonvalue` walker — primitive fields receiving a wrong JSON variant (and not `JNull`, which signals "absent field" and stays silent) push a `"<Struct>.<field>: expected <KKind>, got <KKind>"` diagnostic to `json_errors()`.  Symmetric across direct fields and `vector<struct>` element fields (same walker code path).  6 `q1_schema_side_*` tests covering type-mismatch, missing-field-silent, clean-parse, vector-element mismatch, text-receiving-number, boolean-receiving-string. |
 | Q2 | No free-form object iteration / key listing / quick `kind(v)` peek | Medium | **Q2 COMPLETE 2026-04-14**: `kind` + `has_field` + `keys` + `fields` all shipped with real JObject walks.  `keys` returns field names in insertion order; `fields` returns name + value pairs with full deep-copy (primitives and container values preserved).  See § Q2 below |
 | Q3 | No `to_json(v)` serialiser — reads but can't write or round-trip | Medium | **JsonValue side complete 2026-04-14, T.to_json() complete 2026-05-07.**  JsonValue: `to_json` walks all six variants (primitives, empty containers, non-empty containers, nested containers) — full tree serialisation.  `to_json_pretty` adds 2-space indent + one-element-per-line for non-empty containers (empty stay `[]` / `{}`; `"k": v` with single space after colon).  `T.to_json()` / `T.to_json_pretty()` for any user struct ship via the parser-side intercept in `src/parser/fields.rs::field()` lowering to `n_struct_to_json(self_ref, struct_kt)` — which delegates to `Stores::show_json` reusing the existing `ShowDb` schema walker (`json: true` flag flips text → JSON-escaped, field names → quoted, struct-enum variants → `{"VariantName": …}`, JsonValue fields → semantic subtree).  See § Q3 below |
@@ -123,7 +123,7 @@ pub fn item(self: JsonValue, index: integer) -> JsonValue;
 pub fn len(self: JsonValue) -> integer;
 pub fn as_text(self: JsonValue) -> text;
 pub fn as_number(self: JsonValue) -> float;
-pub fn as_long(self: JsonValue) -> long;
+pub fn as_long(self: JsonValue) -> integer;
 pub fn as_bool(self: JsonValue) -> boolean;
 ```
 
@@ -366,8 +366,8 @@ field-level zeroing; this spells out the replacement):
 |---|---|---|
 | `text` | `JString`        | value |
 | `text` | anything else    | null text + diagnostic |
-| `integer` / `long` | `JNumber` (integral) | value |
-| `integer` / `long` | `JNumber` (fractional) | null + diagnostic (lossy cast) |
+| `integer` | `JNumber` (integral) | value |
+| `integer` | `JNumber` (fractional) | null + diagnostic (lossy cast) |
 | `float` | `JNumber` | value |
 | `boolean` | `JBool` | value |
 | `T` (nested struct) | `JObject` | recurse `T.parse(subtree)` |
@@ -887,7 +887,7 @@ inspection).  Move escape-sequence repros to standalone
 | Field type | Serialisation |
 |---|---|
 | `text` | `JString` |
-| `integer` / `long` | `JNumber` (integral) |
+| `integer` | `JNumber` (integral) |
 | `float` | `JNumber`; `NaN` / `inf` → JSON `null` + diagnostic |
 | `boolean` | `JBool` |
 | `T` (nested struct) | `JObject` (recurse) |

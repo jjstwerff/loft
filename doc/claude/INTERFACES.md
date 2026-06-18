@@ -418,7 +418,7 @@ interface Printable {
 }
 ```
 
-Built-in types (`integer`, `long`, `float`) automatically satisfy `Ordered`,
+Built-in types (`integer`, `float`) automatically satisfy `Ordered`,
 `Equatable`, `Addable`, and `Numeric` via their existing operator definitions.
 `text` satisfies `Ordered` and `Equatable`. No extra declarations are needed.
 

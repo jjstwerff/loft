@@ -53,7 +53,7 @@ in VS Code, Sublime Text, GitHub, and any editor that supports TextMate grammars
 | `true`, `false` | `constant.language.boolean` |
 | `null` | `constant.language.null` |
 | `assert`, `debug_assert`, `panic`, `sizeof` | `keyword.other` |
-| `integer`, `boolean`, `float`, `single`, `long`, `character`, `text` | `support.type` |
+| `integer`, `boolean`, `float`, `single`, `character`, `text` | `support.type` |
 | `vector`, `sorted`, `hash`, `index` | `support.type.collection` |
 | `not null` (two-word modifier) | `storage.modifier` |
 | `CamelCase` identifiers | `entity.name.type` |

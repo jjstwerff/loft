@@ -241,7 +241,7 @@ struct MsgPlayerLeft   { player_id: text }
 struct MsgReady        { ready: boolean }
 
 // Game lifecycle
-struct MsgGameStart { tick: integer, seed: long, initial_state: text }
+struct MsgGameStart { tick: integer, seed: integer, initial_state: text }
 struct MsgGameOver  { winner_id: text, tick: integer, scores: text }
 
 // In-game
@@ -250,8 +250,8 @@ struct MsgStateFull  { tick: integer, state: text }
 struct MsgStateDelta { from_tick: integer, to_tick: integer, delta: text }
 
 // Utility
-struct MsgPing     { client_time: long }               // ticks() microseconds
-struct MsgPong     { client_time: long, server_time: long }
+struct MsgPing     { client_time: integer }            // ticks() microseconds
+struct MsgPong     { client_time: integer, server_time: integer }
 struct MsgChat     { player_id: text, message: text }
 
 // WASM loading
@@ -371,7 +371,7 @@ pub fn run_loop(
 pub fn stop_loop()
 
 // Current monotonic time in microseconds (wraps native high-res clock).
-pub fn now_us() -> long
+pub fn now_us() -> integer
 ```
 
 ### Loop internals (implemented in loft)
@@ -544,7 +544,7 @@ struct PingTracker {
 
 struct PingRecord {
     seq:      integer,
-    sent_at:  long,    // now_us() when ping was sent
+    sent_at:  integer, // now_us() when ping was sent
 }
 
 // Send a ping and record it.
@@ -554,7 +554,7 @@ pub fn ping_send(client: &WsClient, tracker: &PingTracker)
 pub fn ping_receive(tracker: &PingTracker, msg: MsgPong)
 
 // Prune ping records older than timeout_us microseconds (mark as lost).
-pub fn ping_prune(tracker: &PingTracker, timeout_us: long)
+pub fn ping_prune(tracker: &PingTracker, timeout_us: integer)
 
 // Returns a human-readable latency summary.
 pub fn ping_summary(tracker: PingTracker) -> text

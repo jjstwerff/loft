@@ -550,7 +550,7 @@ This is a verification task that may yield no changes if the separation is alrea
 
 **Affected workloads:** any consumer that does `local = src_vec[a..b]`
 or `s.v = src_vec[a..b]` on a vector of primitive elements (i32, u8,
-single, float, long, character).  Discovered alongside @P287 on
+single, float, integer, character).  Discovered alongside @P287 on
 2026-05-20 when the audience-demo projector wanted a heat-field ring
 buffer trim.
 **Expected gain:** roughly 5–10× on primitive-typed slice copies of
@@ -580,7 +580,7 @@ goes through the same record-system path used by struct-typed
 vector inserts (where the per-element allocator overhead is
 unavoidable because each record has its own fields and deps).
 
-For PRIMITIVE element types (i32, u8, single, float, long, character)
+For PRIMITIVE element types (i32, u8, single, float, integer, character)
 the record allocator is entirely unnecessary — the destination is
 just a contiguous byte buffer of `len * sizeof(elem)` bytes.  The
 existing `OpAppendVector` (whole-vector replace) already uses
@@ -689,8 +689,7 @@ For a `Local` variable of loft type `vector<T>`, generate Rust type:
 
 | loft type | Rust direct type |
 |---|---|
-| `vector<integer>` | `Vec<i32>` |
-| `vector<long>` | `Vec<i64>` |
+| `vector<integer>` | `Vec<i64>` |
 | `vector<float>` | `Vec<f64>` |
 | `vector<text>` | `Vec<String>` |
 | `index<integer, T>` (local hash) | `HashMap<i32, T>` |
@@ -2129,14 +2128,14 @@ An expression is **const-evaluable** when it contains only:
 
 | Node type | Example | Const? |
 |---|---|---|
-| Integer / long / float / single literal | `42`, `3.14`, `100l` | Yes |
+| Integer / float / single literal | `42`, `3.14`, `1.0f` | Yes |
 | Boolean literal | `true`, `false` | Yes |
 | Character literal | `'A'` | Yes |
 | Text literal (no interpolation) | `"hello"` | Yes — but only for text table (O8.4) |
 | Arithmetic on const operands | `2 * 3`, `n + 1` where `n` is const | Yes |
 | Comparison on const operands | `x > 0` where `x` is const | Yes |
 | Unary ops on const operands | `-x`, `!b` where operand is const | Yes |
-| `as` cast between numeric types | `42 as long`, `3.14 as integer` | Yes |
+| `as` cast between numeric types | `42 as single`, `3.14 as integer` | Yes |
 | File-scope `UPPER_CASE` constants | `PI`, `MAX_SIZE` | Yes |
 | Conditional with const condition | `if true { 1 } else { 2 }` → `1` | Yes |
 | Null literal | `null` | Yes (folds to sentinel) |
@@ -2289,9 +2288,9 @@ Null sentinels differ by type:
 
 | Type | Null sentinel | Byte representation |
 |---|---|---|
-| `integer` | `i32::MIN` (`-2147483648`) | `0x00000080` (little-endian) |
+| `integer` | `i64::MIN` | `0x0000000000000080` (little-endian) |
 | `integer not null` | N/A (0 is valid) | — |
-| `long` | `i64::MIN` | `0x0000000000000080` |
+| narrow `i32` integer | `i32::MIN` (`-2147483648`) | `0x00000080` |
 | `float` | `NaN` | `0x000000000000F87F` |
 | `single` | `NaN (f32)` | `0x0000C07F` |
 | `boolean` | `false` | `0x00` |
@@ -2320,7 +2319,7 @@ qualify; a constant initialised from a function call does not.
 
 ### O8.1 — Bulk primitive vector literals
 
-**Applies to:** `vector<integer>`, `vector<long>`, `vector<float>`,
+**Applies to:** `vector<integer>`, `vector<float>`,
 `vector<single>` where ALL elements are const-evaluable (see
 [Constant folding](#constant-folding) — includes literals, arithmetic
 on literals, file-scope constants, and casts).
@@ -2353,7 +2352,7 @@ Examples that qualify:
 [1, 2, 3, 4, 5]              // bare literals
 [2*3, 4+1, 10/2]             // arithmetic folds to [6, 5, 5]
 [PI, PI*2, PI*3]              // constant references fold
-[1 as long, 2 as long]       // casts fold
+[1 as single, 2 as single]   // casts fold
 [0; 1000]                     // already optimised via OpAppendCopy
 ```
 
@@ -2457,8 +2456,7 @@ record.  Use it as a first step, then patch only non-zero sentinels.
 **Approach:**
 1. After `OpDatabase` allocates the record, emit `OpZeroFill(ref)` once
 2. Only emit explicit `OpSetX` for fields with non-zero null sentinels:
-   - `integer` (nullable): `i32::MIN` is `0x00000080`, not zero → explicit
-   - `long` (nullable): `i64::MIN` → explicit
+   - `integer` (nullable): `i64::MIN` (narrow `i32` fields use `i32::MIN`, `0x00000080`), not zero → explicit
    - `float`: NaN → explicit
    - `single`: NaN → explicit
    - Fields with `default(expr)` or `= expr` → explicit
@@ -2593,7 +2591,7 @@ alignment.
 
 `OpInitVector` bulk-copies bytes starting at offset 8 (past the length
 header).  Elements are at `8 + i * elem_size`.  For 4-byte integers this
-is always 4-byte aligned.  For 8-byte longs/floats this is always 8-byte
+is always 4-byte aligned.  For 8-byte integers/floats this is always 8-byte
 aligned (because the header is 8 bytes).
 
 **Risk:** None for primitive vectors — alignment is inherent.  For O8.2
@@ -2666,8 +2664,7 @@ a zero-byte null sentinel:
 - `character` null = `'\0'` = `0` ✓
 - `vector`/`sorted`/`hash`/`index` null = `0` (null pointer) ✓
 - `reference` null = `0` ✓
-- `integer` null = `i32::MIN` = `0x00000080` ✗
-- `long` null = `i64::MIN` ✗
+- `integer` null = `i64::MIN` (narrow `i32` fields = `i32::MIN` = `0x00000080`) ✗
 - `float` null = `NaN` ✗
 - `single` null = `NaN` ✗
 - `text` null = null pointer = `0` ✓

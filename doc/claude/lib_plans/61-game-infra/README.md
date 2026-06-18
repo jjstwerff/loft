@@ -427,8 +427,8 @@ extern "C" fn bridge_my_func(state: &mut State) {
 
 | Loft type | Rust ABI | Pop/Push |
 |---|---|---|
-| `integer` | `i32` | `pop_int` / `push_int` |
-| `long` | `i64` | `pop_long` / `push_long` |
+| `integer` (plain, i64) | `i64` | `pop_long` / `push_long` |
+| narrow int (`i32`/`u8`/…) | `i32` | `pop_int` / `push_int` |
 | `float` | `f64` | `pop_float` / `push_float` |
 | `single` | `f32` | `pop_single` / `push_single` |
 | `boolean` | `bool` | `pop_bool` / `push_bool` |

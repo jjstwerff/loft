@@ -20,11 +20,11 @@ modifier.  Closes the locals-vs-fields asymmetry surfaced in
 ```loft
 struct Token {
   const id:    integer not null,    // set once at construction
-  const issued_at: long not null,
+  const issued_at: integer not null,
   payload:     text                 // mutable, as today
 }
 
-t = Token { id: 42, issued_at: 1_000_000l, payload: "" };
+t = Token { id: 42, issued_at: 1_000_000, payload: "" };
 t.payload = "hello";        // OK
 t.id = 99;                  // ERROR: cannot reassign const field 'id'
 ```

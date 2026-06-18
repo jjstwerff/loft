@@ -115,8 +115,9 @@ before 1.0 to keep the fix from silently regressing.
 
 Shipped on branch `int_migrate`.  `integer` is i64 end-to-end
 (stack, struct fields, arithmetic) across all three backends.
-`long` keyword deprecation-warns and aliases `integer`; the `l`
-literal suffix is deprecated-warned and silently dropped.
+The `long` keyword and the `l` literal suffix were removed; writing
+`long` now fails with "Undefined type long", and an `l`-suffixed
+literal no longer parses.  Use `integer` (i64) and plain literals.
 
 **Post-migration caveats — scheduled for 0.9.0 but kept open**:
 

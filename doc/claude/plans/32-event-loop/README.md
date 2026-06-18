@@ -801,7 +801,7 @@ struct EventLoop {
     queue_high:      vector<EventEntry>,
     queue_normal:    vector<EventEntry>,
     queue_low:       vector<EventEntry>,
-    frame_budget_us: long,
+    frame_budget_us: integer,
     running:         boolean,
 }
 
@@ -826,7 +826,7 @@ the duplicate-detection diagnostic.
 
 ```loft
 // Build a loop with the given frame budget (microseconds).
-pub fn new(frame_budget_us: long) -> EventLoop;
+pub fn new(frame_budget_us: integer) -> EventLoop;
 
 // Bidirectional handler registration — tier 1, the default.
 // Name = fully-qualified recv-type name; encoding derived from R.
