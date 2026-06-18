@@ -1473,11 +1473,15 @@ fn get_byte(s: &mut State) {
     let v_v1 = *s.get_stack::<DbRef>();
     let new_value = {
         let db = v_v1;
-        i64::from(s.database.store(&db).get_byte(
-            db.rec,
-            db.pos + u32::from(v_fld),
-            i32::from(v_min),
-        ))
+        if db.rec == 0 {
+            i64::MIN
+        } else {
+            i64::from(s.database.store(&db).get_byte(
+                db.rec,
+                db.pos + u32::from(v_fld),
+                i32::from(v_min),
+            ))
+        }
     };
     s.put_stack(new_value);
 }

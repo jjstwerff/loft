@@ -169,6 +169,29 @@ fn production_mode_panic_sets_had_fatal() {
     );
 }
 
+// ── #403 — for-loop over a byte-size-1 element vector ─────────────────────────
+// A `vector<u8>`/`<i8>` for-loop hung forever: the loop's value-sentinel
+// termination never saw the out-of-bounds null because `OpGetByte` returned the
+// raw byte, not the `i64::MIN` null sentinel.  Fixed by returning `i64::MIN` at
+// the `rec == 0` null DbRef (the element read one past the last item), mirroring
+// OpGetShortRaw.  A regression would HANG this test (caught by CI timeout) or
+// trip the inner asserts (→ had_fatal).
+#[test]
+fn issue_403_narrow_vector_for_loop_terminates() {
+    let src = "fn test() { \
+        a: vector<u8> = [10, 20, 30]; ca = 0; sa = 0; for y in a { ca = ca + 1; sa = sa + y; } \
+        assert(ca == 3, \"u8 count\"); assert(sa == 60, \"u8 sum\"); \
+        b: vector<i8> = [4, 5, 6]; cb = 0; for y in b { cb = cb + 1; } assert(cb == 3, \"i8 count\"); \
+    }";
+    let (mut state, data) = compile_for_production(src);
+    attach_production_logger(&mut state);
+    state.execute("test", &data);
+    assert!(
+        !state.database.had_fatal,
+        "#403: vector<u8>/<i8> for-loop must terminate with correct counts"
+    );
+}
+
 // assert(false, ...) in production mode: had_fatal becomes true.
 #[test]
 fn production_mode_assert_false_sets_had_fatal() {

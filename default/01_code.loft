@@ -823,7 +823,13 @@ fn OpGetSingle(v1: reference, fld: const u16) -> single;
 fn OpGetFloat(v1: reference, fld: const u16) -> float;
 #rust"{{let db = @v1; stores.store(&db).get_float(db.rec, db.pos + u32::from(@fld))}}"
 fn OpGetByte(v1: reference, fld: const u16, min: const i16) -> integer;
-#rust"{{let db = @v1; i64::from(stores.store(&db).get_byte(db.rec, db.pos + u32::from(@fld), i32::from(@min)))}}"
+// #403 — a read at the null DbRef (`rec == 0`, e.g. the OOB element a for-loop
+// reads one past the last vector item) returns the `i64::MIN` null sentinel,
+// mirroring OpGetShortRaw.  A byte's 255 sentinel is ambiguous with a valid
+// value, so the OOB null is detected by `rec == 0`, not by the value — without
+// this the loop's value-sentinel termination never fires for `vector<u8/i8>`
+// and the loop spins forever.
+#rust"{{let db = @v1; if db.rec == 0 {{ i64::MIN }} else {{ i64::from(stores.store(&db).get_byte(db.rec, db.pos + u32::from(@fld), i32::from(@min))) }}}}"
 // #334 — NULLABLE byte fields reserve the byte's 256th code as the null
 // sentinel (a nullable u8 holds 255 distinct values, 0..=254; LOFT.md
 // § integer widths).  The parser emits this pair instead of the raw
