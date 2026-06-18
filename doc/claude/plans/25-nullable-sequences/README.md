@@ -87,11 +87,13 @@ triage, then the flip.  Step 5's residue is the only part that cannot be sized y
 Step 5 exists (re-run the consumers gate-on; triage only what does not go green from Steps 1–3).
 **A4(b) is landed** (2026-06-17); **A3 rung 1** (key-resolution chokepoint, `key_owner`) is landed
 (2026-06-17, gate-inert) — but A3 proved to be ≥4 substrate rungs (see Step-1 A3).  Next concrete
-move: **A3 is DONE** (both backends); **Step 3 started** — `06-structs` native gate-on FIXED (the
-method-attribute leak, see rung 4 note).  Next E2 work, per the seam ledger: continue **Step 3** —
-re-run the native consumers / `native_dir` / `library_suite` / p171 / p310 gate-on to surface the
-remaining `__nullable<>` native-codegen seams; **Step 2** — par with USER EXTRA args (self-contained);
-**gap 4** (`e = null` on a nullable local); then Step 5 consumer triage + the Step-6 gate flip.
+move: **A3 done**; **Step 3 + Step 5 sweep done** — the gate-on native tail is now MAPPED into
+clusters F/C/K/N (see Step 5 § Gate-on native sweep).  Next concrete target: **Cluster F** (field
+access iterating a nullable HASH) as a TWO-PART unit — `for_type` Hash arm → `Enum` (control.rs:3259,
+localized) PLUS the hash-iteration runtime element read (the SIGSEGV the parser-only change exposes);
+land both together with a both-backend regression.  Then **Cluster C** (gap 2 coercion), **Cluster K**
+(literal into a hash field), **Cluster N** (keyed/par native panics), **Step 2** (par extra-args),
+**gap 4**, and the Step-6 flip.
 
 ## Status
 
@@ -458,6 +460,29 @@ default-on (gate removed), per the project standard.  The remaining work, in fin
      (kernel_port, moros_glb, moros_editor_html, wasm_library_suite) + the wrap suites (dir, last,
      parser_debug, loft_suite, libraries, library_suite) gate-on.  Expect most to go green from
      Steps 1-3; triage ONLY the residue — that is the honest count of truly-independent seams.
+
+     **GATE-ON NATIVE SWEEP (2026-06-18) — the tail map.**  Ran every `tests/scripts/*.loft` gate-on
+     on `--native`.  The failures cluster (raw-sweep `aborting due to N errors` on the EXPECT-error
+     suites — 35/36/72/74/101/102/… — are likely false positives the test harness handles; the real
+     E2 seams are the `__nullable`-mentioning + runtime-panic ones):
+     - **Cluster F — field access on a loop var iterating a HASH** (`Unknown field __nullable<X>.f`:
+       131, 134, repro_p290b, repro_p376).  ROOTED 2026-06-18: `for_type`'s Hash/Sorted/Index arm
+       (control.rs:3259) returns `Reference(dnr)` for a synth `__nullable<S>` element, but the
+       field-access unwrap needs `Enum(.., true)` (as the vector arm already keeps).  Making it
+       `Enum` unblocks the PARSE but exposes a RUNTIME crash in the hash-iteration element read (the
+       `fill_iter on=4` hash-scratch path with a Some-wrapped element) — so this is a TWO-PART seam
+       (for_type + hash-iteration runtime read), to land as a unit, not a half-fix (parser-only would
+       turn a clean parse error into a SIGSEGV).
+     - **Cluster C — fn-arg / return coercion of `__nullable<S>` → dense `S`** (`expected S, got
+       __nullable<S>`: 100-enhancements `set_p160`, 55-stack-trace return).  This is the README's
+       gap 2 (offset-ref reinterpret at `can_convert` + the call-arg / return lowering).
+     - **Cluster K — named/anon struct literal into a hash FIELD** (`cannot store S elements in
+       vector<__nullable<S>>`: surfaced building `Bag { items: [Pair{…}] }`).  A construction-path
+       coercion (sibling of A1/A2, here for a keyed-collection field initialiser).
+     - **Cluster N — native runtime panics (~13)**: keyed-local reassign/return/clear (119/120/122),
+       keyed-return-buffer (137), the plan-51/52 keyed consumers (149/151/157), par (22/22c), and
+       forward-ref/empty-braces (371/373) — assorted keyed/par/ownership native-codegen seams.
+     Method-attribute leak (the earlier Step-3 win) is FIXED; these are the next seams.
    - **Step 6 — Flip the gate + close.**  Drop `&& std::env::var("LOFT_E2_SYNTH").is_ok()` in
      `e2_rewrite_enabled` (expressions.rs:1937 — KEEP the `STD_SOURCE` dense-stdlib exclusion:
      native `#rust` writes the dense struct ABI).  Full `make ci` both backends.  Graduate all
