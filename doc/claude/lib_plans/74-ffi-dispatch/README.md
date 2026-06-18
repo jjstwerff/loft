@@ -112,6 +112,34 @@ path deps become version deps): re-publish each lib, migrate the 2 test fixtures
 (`native_pkg`/`native_scalar_pkg`), delete `dispatch_call` + `ArgT`/`ArgVal`, remove the
 vestigial monorepo `lib/*/native` stubs, fix the stale docs.
 
+### Update 2026-06-18 (b) — fixtures + stubs DONE; arm-deletion still blocked by the registry cache
+
+- **Both in-repo cdylib fixtures migrated to bridges.**  `native_pkg`
+  (`tests/lib/native_pkg/native`) now writes its `n_ext_*` impls as `#[loft_native]`
+  store-reading fns (vector args via `LoftStore::vector_len`/`vector_data_ptr`, replacing the
+  `vec_wrapper!` + raw `loft_ext_*` pair) and registers the generated bridges under the loft
+  `#native "loft_ext_*"` symbols (alongside the raw `loft_register_v1` ptrs the A7.2.4/A7.2.5
+  dlsym-priority + guard tests still need).  `native_scalar_pkg` gained a `build.rs`
+  (`generate_register_from_loft_with_bridges`) + loft-ffi/loft-ffi-macros deps and a
+  `#[loft_native]` `n_native_answer`.  Both `native_loader` (15/15) and the
+  `native_scalar_pkg`/imaging both-backend tests pass *through the bridge*.
+- **Vestigial monorepo stubs removed**: `lib/{imaging,web,server}/native` (untracked dirs
+  holding only `Cargo.lock` + `target/`, no `Cargo.toml`/`src`) deleted.  **`lib/graphics/native`
+  KEPT** — the `Makefile` (`make play`/`editor`/`dist`) still `cd`s into it.
+- **The `dispatch_call` / `ArgT` / `ArgVal` arm-deletion is STILL BLOCKED — reverted.**  Deleting
+  the legacy fallback and routing `native_auto_dispatch` through the bridge only makes the full
+  suite go RED: the **registry-install cache** `~/.loft/registry/` holds pre-bridge cdylibs for
+  several published libs (`server-0.1.1`/`-0.1.2`, `web-0.1.1`, `crypto-0.1.0`, `random-0.1.0` —
+  `loft_register_v1` raw ptrs, NO `loft_register_bridges_v1`).  Tests that resolve a lib from the
+  registry (e.g. `engine_host_audience` → `server`'s `n_tcp_listen`; the multiplayer + viewer
+  fixtures) then panic "native symbol has no marshal bridge".  The migrated sources exist in the
+  external `loft-libs-*` repos, but the *published* versions are pre-bridge, and refreshing the
+  `~/.loft/registry` cache is out of bounds (sandbox-denied: outside the project; also masks the
+  real fix).  So the documented prerequisite stands and is now precise: **the arm-deletion needs
+  the bridge-capable libs RE-PUBLISHED** (+ their registry copies re-fetched/rebuilt), not just
+  the in-repo fixtures migrated.  `src/extensions.rs` left at its dual-path state (bridge preferred,
+  legacy fallback retained); suite green (2391/0).
+
 **Bridge bug #306 — FIXED 2026-06-18:** `dispatch_via_bridge` allocated a vector/ref
 return in store 0 (the *stack* store) whenever the native had no ref argument to derive
 the store from, so freeing the owned return on scope exit tripped the `#306` guard (a
