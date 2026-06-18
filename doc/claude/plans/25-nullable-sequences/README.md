@@ -87,11 +87,11 @@ triage, then the flip.  Step 5's residue is the only part that cannot be sized y
 Step 5 exists (re-run the consumers gate-on; triage only what does not go green from Steps 1–3).
 **A4(b) is landed** (2026-06-17); **A3 rung 1** (key-resolution chokepoint, `key_owner`) is landed
 (2026-06-17, gate-inert) — but A3 proved to be ≥4 substrate rungs (see Step-1 A3).  Next concrete
-move: **A3 is DONE** (both backends).  Next E2 work, per the seam ledger: **Step 2** — par with USER
-EXTRA args (self-contained) — and **Step 3** — native codegen of `__nullable<>` more broadly (the
-separate pre-existing `06-structs` native forward-ref, an E0425 `cannot find value t<N>` from a
-synth-nullable-variant field-type, is the first concrete probe there).  Then gap 4 (`e = null` on a
-nullable local) + Step 5 consumer triage + the Step-6 gate flip.
+move: **A3 is DONE** (both backends); **Step 3 started** — `06-structs` native gate-on FIXED (the
+method-attribute leak, see rung 4 note).  Next E2 work, per the seam ledger: continue **Step 3** —
+re-run the native consumers / `native_dir` / `library_suite` / p171 / p310 gate-on to surface the
+remaining `__nullable<>` native-codegen seams; **Step 2** — par with USER EXTRA args (self-contained);
+**gap 4** (`e = null` on a nullable local); then Step 5 consumer triage + the Step-6 gate flip.
 
 ## Status
 
@@ -340,10 +340,19 @@ default-on (gate removed), per the project standard.  The remaining work, in fin
          Validated: `12-collections` passes gate-on on BOTH backends (exit 0); all `plan25_e2_*` gate-on
          suites pass; gate-off byte-green (2400/2401, only `kernel_port`).  Regression extended to
          `--native` in `tests/plan25_e2_hash.rs`.
-         **Separate, PRE-EXISTING (not this work): `06-structs` native gate-on** fails an E0425
-         `cannot find value t<N>` — a synth-nullable-variant field-type forward-ref distinct from the
-         hash type-id swap (fails identically with AND without the eager-variant build; 06-structs
-         native gate-on was never validated).  Routed as its own native-codegen item.
+         **`06-structs` native gate-on — FIXED 2026-06-18 (a method-attribute leak, the first Step-3
+         win).**  It failed E0425 `cannot find value t<N>` (identically with AND without the
+         eager-variant build, so NOT the hash type-id swap; 06-structs native gate-on had never been
+         validated).  Root: a method `fn m(self: S)` is registered as a `Type::Routine` ATTRIBUTE on
+         `S` (gate-independent; the dense layout omits it and `--native` skips it).  `nullable_enum_for`
+         copied ALL of `S`'s attributes — INCLUDING the method — into the `Some` variant; building
+         `Some`'s db structure then resolved that `Routine`'s `known_type`, which made the DENSE `S`'s
+         method attribute look like a concrete field, so `--native` emitted `db.field(S, "m", t<N>)`
+         for a type it never declares.  Fix: `nullable_enum_for` copies only DATA fields —
+         `.filter(|a| !matches!(a.typedef, Type::Routine(_)))` (a declared fn-ref data field is
+         `Type::Function`, kept).  Minimal repro `[P{x}].val()` + 06-structs now pass gate-on on BOTH
+         backends; regression `tests/plan25_e2_hash.rs::method_on_nullable_vector_element_native`.
+         Gate-inert (`nullable_enum_for` runs only gate-on).
        **A3 STATUS: DONE — `tests/scripts/12-collections.loft` passes gate-on end-to-end on BOTH
          backends (interp + native, exit 0).**  Rungs 1–5 + the for-loop-deref FIXED + gate-inert
          (gate-off suite 2400/2401, only the pre-existing non-E2 `kernel_port`); regressions in

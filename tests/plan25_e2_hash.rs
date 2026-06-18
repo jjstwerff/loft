@@ -135,3 +135,23 @@ fn lone_nullable_hash_field_constructs_and_misses_cleanly() {
     );
     assert_both(&path, "missing=true");
 }
+
+#[test]
+fn method_on_nullable_vector_element_native() {
+    // A struct method (`fn val(self: P)`) registers `val` as a Routine ATTRIBUTE
+    // on `P`. When `P` is nullable-wrapped (`vector<__nullable<P>>`),
+    // `nullable_enum_for` must NOT copy that method attribute into the `Some`
+    // variant — else `--native` emits a `db.field(P, "val", t<N>)` for a type it
+    // never declares (E0425). Calling the method through the nullable element
+    // must work on both backends.
+    let path = probe(
+        "method",
+        "struct P { x: integer }\n\
+         fn val(self: P) -> integer { self.x * 10 }\n\
+         fn main() {\n  \
+           ps = [ P{x:1}, P{x:2} ];\n  \
+           print(\"v0={ps[0].val()} v1={ps[1].val()}\\n\");\n\
+         }\n",
+    );
+    assert_both(&path, "v0=10 v1=20");
+}

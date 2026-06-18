@@ -3866,10 +3866,19 @@ impl Data {
         // it nullable — reads/format then applied the `-1` decode to a raw
         // value (`1234` → `1233`).  Copying the alias keeps the `Some` payload
         // byte-identical to a dense `S`.
+        // Copy only DATA fields.  A method `fn m(self: S)` is registered as a
+        // `Type::Routine` ATTRIBUTE on `S` (not a data field — the dense struct's
+        // layout omits it, and `--native` skips it during field emission).  If it
+        // were copied into `Some`, building `Some`'s db structure would resolve
+        // that `Routine`'s `known_type`, which then makes the DENSE `S`'s method
+        // attribute look like a concrete field — so `--native` emits a
+        // `db.field(S, "m", t<N>)` referencing a type it never declares (E0425).
+        // (A declared fn-ref DATA field is `Type::Function`, kept.)
         let fields: Vec<(String, Type, u32, bool, bool, bool)> = self
             .def(struct_d)
             .attributes
             .iter()
+            .filter(|a| !matches!(a.typedef, Type::Routine(_)))
             .map(|a| {
                 (
                     a.name.clone(),
