@@ -46,6 +46,48 @@ widen, bool/float, text→`(*const u8, usize)`, `LoftRef`, `LoftStore`-first,
 (legacy raw-ptr arms still run).  F3–F5 open.  Inspected 2026-05-27; the two
 load-bearing facts below are confirmed against the tree.
 
+## Migration state (2026-06-18) — full inventory + the publish blocker
+
+Re-audited for a "migrate every loft-lang library to bridges, delete the legacy
+arms" pass.  Two findings reframe the "F4 rollout shipped" status above:
+
+**1. The bridge infra was never published.**  `generate_register_from_loft_with_bridges`,
+the `#[loft_native]` macro, and `LoftValue`/`LoftBridgeFn` live ONLY in the local loft
+repo crates (`loft-ffi 0.1.1`, `loft-ffi-build 0.2.1`, `loft-ffi-macros 0.1.0`).
+crates.io has only `loft-ffi-build 0.1.0`/`0.2.0` — **neither** has `_with_bridges`.
+So **no external library can build with bridges**, and `imaging`'s "migrated" state in
+`loft-libs-graphics` is non-buildable against published crates.  This is why F4 stalled
+at the monorepo (path-dep) libs and the legacy arms remain the only working path.
+⇒ **Prerequisite for the whole pass: publish the bridge-capable `loft-ffi` /
+`loft-ffi-build` / `loft-ffi-macros` to crates.io.**
+
+**2. Only 7 native libraries exist** (every other loft-lang lib is pure-loft → no FFI):
+
+| Repo | Lib | FFI now | Action |
+|---|---|---|---|
+| loft-libs-core | crypto | manifest (`generate_register_invocation`) | → bridges (+ manifest→source-scan) |
+| loft-libs-core | **regex** | legacy → **MIGRATED (proof below)** | publish infra, path→version |
+| loft-libs-core | random | legacy source-scan | → bridges |
+| loft-libs-net | web | manifest | → bridges |
+| loft-libs-net | server | hand-written register (no build.rs) | → bridges |
+| loft-libs-graphics | graphics | hand-written, dual-ABI raw_gl | → bridges (selective) |
+| loft-libs-graphics | imaging | `_with_bridges` (unbuildable vs published) | publish infra → buildable |
+
+Plus: monorepo `lib/*/native` are vestigial stubs (no `lib.rs`) → delete; 2 test
+fixtures (`native_pkg`, `native_scalar_pkg`) → migrate.
+
+**Recipe (per source-scan lib), proven on `regex`:** add `loft-ffi-macros` dep,
+`#[loft_native]` on each `n_*`, `build.rs` → `generate_register_from_loft_with_bridges`.
+`regex` migrated against the local infra (path deps); with the legacy arms REVERTED
+from loft, all 8 regex tests pass on `--interpret` through the bridge — including the
+new `match_groups` `(text,text,integer)` and `replace` `(text,text,text)` signatures
+that have NO arm.  (Two arms wrongly hand-added to `extensions.rs` were reverted —
+the bridge is the fix.)
+
+**Order:** publish infra → migrate the 6 libs + 2 fixtures (re-publish each) → delete
+`dispatch_call` + `ArgT`/`ArgVal` arms in loft → remove vestigial stubs → consolidate +
+fix the ~15 stale FFI docs.
+
 ## Goal
 
 `--interpret`'s call into a `#native` function dispatches through ONE
