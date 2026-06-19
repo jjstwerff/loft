@@ -1368,19 +1368,14 @@ impl Parser {
                 return true;
             }
         }
-        // @PLN25 E2 — the REVERSE coercion: a `__nullable<S>` value flows into a
-        // dense `S` slot (`f(v[i])` where `fn f(r: S)`; gap 2 of the access-glue
-        // matrix).  KNOWN-INCOMPLETE: this reinterprets via a sub-ref at the
-        // payload offset, which is only correct when the `Some` payload happens to
-        // be a shifted dense `S`.  It is NOT — the packer reorders fields around
-        // the discriminant (proven 2026-06-19: dense `a@0,c@8,b@16,d@20` vs Some
-        // `disc@0,b@4,a@8,c@16,d@24`), so reordered text/char fields read null
-        // (silent corruption).  The correct unwrap is a FIELD-BY-FIELD copy into a
-        // fresh dense temp; a scalar-only prototype works on both backends, but the
-        // heap-field copy hit a store free-list corruption in `set_str` (the dense
-        // temp's store) that needs a lifetime-correct deep copy against the
-        // DATABASE/LIFETIME machinery — tracked as the remaining gap-2 seam in the
-        // plan README.  Left wrong-but-non-crashing (gate-off-inert) until then.
+        // @PLN25 E2 (gap 2) — the REVERSE coercion: a `__nullable<S>` value flows
+        // into a dense `S` slot (`f(v[i])` where `fn f(r: S)`, a `??` result, a
+        // dense-local assign, a return).  The `Some` payload is packed
+        // INDEPENDENTLY from dense `S` (the packer reorders fields around the
+        // discriminant), so a sub-ref reinterpret reads reordered fields at the
+        // wrong offset (silent corruption).  Unwrap via the runtime op
+        // `OpNullableToDense`, which builds a fresh dense `S` by copying each field
+        // from its `Some` offset to its dense offset and deep-copying heap fields.
         if let (Type::Enum(enum_d, true, _), Type::Reference(struct_d, _)) = (is_type, should)
             && self.data.def(*enum_d).name
                 == format!("__nullable<{}>", self.data.def(*struct_d).name())
@@ -1389,17 +1384,12 @@ impl Parser {
                 let enum_d = *enum_d;
                 let struct_d = *struct_d;
                 let some_d = self.data.variant_of(enum_d, "Some");
-                if some_d != u32::MAX && self.data.attributes(struct_d) > 0 {
-                    let first = self.data.attr_name(struct_d, 0);
-                    let off = self
-                        .database
-                        .position(self.data.def(some_d).known_type(), &first);
-                    *code = self.get_val(
-                        &Type::Reference(struct_d, crate::data::Deps::none()),
-                        false,
-                        u32::from(off),
-                        code.clone(),
-                        u32::MAX,
+                if some_d != u32::MAX {
+                    let struct_kt = i32::from(self.data.def(struct_d).known_type());
+                    let some_kt = i32::from(self.data.def(some_d).known_type());
+                    *code = self.cl(
+                        "OpNullableToDense",
+                        &[code.clone(), Value::Int(struct_kt), Value::Int(some_kt)],
                     );
                 }
             }
