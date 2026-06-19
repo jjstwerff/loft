@@ -599,9 +599,109 @@ fn skip_ws(bytes: &[u8], mut i: usize) -> usize {
     i
 }
 
+/// Serialise a [`Parsed`] tree back to compact JSON text — the inverse of
+/// [`parse`].  CLI commands that emit `--json` (e.g. `loft search --json`) build
+/// a `Parsed` value and render it here instead of hand-assembling JSON strings.
+/// Object key order is preserved and strings are escaped per RFC 8259.  A
+/// `Constructor` type tag (lenient input only) serialises as its bare body
+/// object, since JSON has no tag syntax.
+#[must_use]
+pub fn to_json_string(value: &Parsed) -> String {
+    let mut out = String::new();
+    write_json(&mut out, value);
+    out
+}
+
+fn write_json(out: &mut String, value: &Parsed) {
+    use std::fmt::Write as _;
+    match value {
+        Parsed::Null => out.push_str("null"),
+        Parsed::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        Parsed::Number(n) => {
+            // Whole, in-range values render without a trailing `.0` so a round
+            // trip through `parse` reproduces the same text.  2^53 is the
+            // largest integer an f64 represents exactly.
+            if n.is_finite() && n.fract() == 0.0 && n.abs() < 9_007_199_254_740_992.0 {
+                let _ = write!(out, "{}", *n as i64);
+            } else {
+                let _ = write!(out, "{n}");
+            }
+        }
+        Parsed::Str(s) | Parsed::Ident(s) => write_json_string(out, s),
+        Parsed::Array(items) => {
+            out.push('[');
+            for (idx, item) in items.iter().enumerate() {
+                if idx > 0 {
+                    out.push(',');
+                }
+                write_json(out, item);
+            }
+            out.push(']');
+        }
+        Parsed::Object(entries) => {
+            out.push('{');
+            for (idx, (key, _offset, val)) in entries.iter().enumerate() {
+                if idx > 0 {
+                    out.push(',');
+                }
+                write_json_string(out, key);
+                out.push(':');
+                write_json(out, val);
+            }
+            out.push('}');
+        }
+        Parsed::Constructor(_tag, _offset, body) => write_json(out, body),
+    }
+}
+
+fn write_json_string(out: &mut String, s: &str) {
+    use std::fmt::Write as _;
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The serializer is correct iff the existing parser reads its output back
+    /// to the same text.  Compare *strings*, not trees: `Parsed::Object` carries
+    /// byte offsets that differ between a built tree and a parsed one.
+    #[test]
+    fn to_json_string_round_trips_through_parse() {
+        let sample = Parsed::Array(vec![Parsed::Object(vec![
+            ("name".to_string(), 0, Parsed::Str("regex".to_string())),
+            ("version".to_string(), 0, Parsed::Str("0.2.0".to_string())),
+            (
+                "description".to_string(),
+                0,
+                Parsed::Str("Regular \"expr\"\nwith\ttabs".to_string()),
+            ),
+            (
+                "categories".to_string(),
+                0,
+                Parsed::Array(vec![Parsed::Str("text".to_string())]),
+            ),
+            ("auto_use".to_string(), 0, Parsed::Bool(true)),
+            ("count".to_string(), 0, Parsed::Number(42.0)),
+            ("homepage".to_string(), 0, Parsed::Null),
+        ])]);
+        let s = to_json_string(&sample);
+        assert_eq!(to_json_string(&parse(&s).unwrap()), s);
+    }
 
     #[test]
     fn primitives() {

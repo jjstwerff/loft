@@ -772,11 +772,76 @@ pub fn render_catalog(index: &RegistryIndex) -> String {
     out
 }
 
+/// Rank the packages matching `query` for `loft search`.  `query` is matched
+/// case-insensitively (lowercase it before calling) against the package name,
+/// description, and categories; results are ordered **exact-name → name-prefix
+/// → name/description/category substring**, alphabetical within each tier.  An
+/// empty query returns every package alphabetically (the full listing).
+#[must_use]
+pub fn rank_hits<'a>(index: &'a RegistryIndex, query: &str) -> Vec<&'a Package> {
+    let mut scored: Vec<(u8, &Package)> = Vec::new();
+    for pkg in index.packages.values() {
+        let name = pkg.name.to_ascii_lowercase();
+        let tier = if query.is_empty() {
+            3
+        } else if name == query {
+            0
+        } else if name.starts_with(query) {
+            1
+        } else if name.contains(query)
+            || pkg
+                .description
+                .as_deref()
+                .unwrap_or("")
+                .to_ascii_lowercase()
+                .contains(query)
+            || pkg
+                .categories
+                .iter()
+                .any(|c| c.to_ascii_lowercase().contains(query))
+        {
+            2
+        } else {
+            continue;
+        };
+        scored.push((tier, pkg));
+    }
+    scored.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.name.cmp(&b.1.name)));
+    scored.into_iter().map(|(_, pkg)| pkg).collect()
+}
+
 // ── Tests ─────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rank_hits_orders_exact_prefix_then_description() {
+        use std::collections::BTreeMap;
+        let mk = |name: &str, desc: &str| Package {
+            name: name.to_string(),
+            description: Some(desc.to_string()),
+            homepage: None,
+            categories: Vec::new(),
+            yanked: Vec::new(),
+            versions: BTreeMap::new(),
+        };
+        let mut packages = BTreeMap::new();
+        packages.insert("stringy".to_string(), mk("stringy", "text manipulation")); // desc hit
+        packages.insert("text".to_string(), mk("text", "string ops")); // exact
+        packages.insert("text_utils".to_string(), mk("text_utils", "helpers")); // prefix
+        let index = RegistryIndex {
+            schema_version: 1,
+            updated: String::new(),
+            packages,
+        };
+        let ranked: Vec<&str> = rank_hits(&index, "text")
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
+        assert_eq!(ranked, ["text", "text_utils", "stringy"]);
+    }
 
     const SAMPLE: &str = r#"{
         "schema_version": 1,

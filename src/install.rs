@@ -25,7 +25,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::lockfile::{self, LockFile, LockedPackage, SCHEMA_VERSION};
-use crate::registry_index::{self, FetchedIndex, RegistryIndex, Version, extract_tarball};
+use crate::registry_index::{self, RegistryIndex, Version, extract_tarball};
 use crate::registry_signing::{self, VerifyResult};
 
 /// Knobs the CLI surface passes through.  Mirrors the flags in
@@ -255,43 +255,109 @@ struct ResolvedPackage {
     version: Version,
 }
 
-fn load_index(opts: &InstallOptions) -> Result<RegistryIndex, String> {
+/// The parsed index plus the one signal a read-only discovery command needs:
+/// whether a network fetch was attempted and FAILED, so the index was served
+/// from a possibly-stale cache as a fallback.  Distinct from a fresh cache hit
+/// or explicit `--offline` (neither means "unreachable").
+pub struct LoadedIndex {
+    pub index: RegistryIndex,
+    pub stale_fallback: bool,
+}
+
+/// Fetch, verify, and parse the registry index — the single loader every
+/// registry-reading command shares (`install`, `search`, `info`, `update`,
+/// `pin`).  Honours `LOFT_REGISTRY_URL`; serves the cached
+/// `~/.loft/registry/index.json` when it is fresh (1-hour TTL) or when
+/// `opts.offline`, otherwise re-fetches and re-caches.  Signature outcomes are
+/// surfaced per `opts.allow_unsigned` (see `verify_or_explain`).
+///
+/// A failed network fetch is a hard error here (the install path wants fresh
+/// data); read-only commands that prefer a stale cache over failing use
+/// [`load_index_reporting`].
+///
+/// # Errors
+/// Returns `Err` when the index cannot be fetched or read, fails signature
+/// verification (subject to `opts.allow_unsigned`), or is not valid JSON.
+pub fn load_index(opts: &InstallOptions) -> Result<RegistryIndex, String> {
+    load_index_inner(opts, false).map(|l| l.index)
+}
+
+/// Like [`load_index`], but reports cache-vs-fresh AND, when the network fetch
+/// fails, falls back to a usable cached index instead of erroring (with
+/// `stale_fallback = true`).  Used by `loft search` / `loft info` so discovery
+/// still works when the registry is unreachable.
+///
+/// # Errors
+/// Returns `Err` when a network fetch fails and there is no cached index to
+/// fall back to, or the index fails signature verification or parsing.
+pub fn load_index_reporting(opts: &InstallOptions) -> Result<LoadedIndex, String> {
+    load_index_inner(opts, true)
+}
+
+fn load_index_inner(
+    opts: &InstallOptions,
+    fallback_on_fetch_failure: bool,
+) -> Result<LoadedIndex, String> {
     let url = registry_index::registry_url();
     let (idx_path, sig_path, _) = registry_index::index_paths();
-    let content_bytes: Vec<u8> = if opts.offline {
-        std::fs::read(&idx_path).map_err(|e| {
+    let (content_bytes, stale_fallback): (Vec<u8>, bool) = if opts.offline {
+        let content = std::fs::read(&idx_path).map_err(|e| {
             format!(
                 "offline mode: no cached index ({}): {e}",
                 idx_path.display()
             )
-        })?
+        })?;
+        (content, false)
     } else if opts.refresh || index_stale(&idx_path) {
-        let fetched: FetchedIndex = registry_index::fetch_index(&url)?;
-        // Atomic-ish cache update.
-        if let Some(parent) = idx_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+        match registry_index::fetch_index(&url) {
+            Ok(fetched) => {
+                // Atomic-ish cache update.
+                if let Some(parent) = idx_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                std::fs::write(&idx_path, &fetched.content)
+                    .map_err(|e| format!("cache index: {e}"))?;
+                if !fetched.signature.is_empty() {
+                    let _ = std::fs::write(&sig_path, &fetched.signature);
+                }
+                // Verify signature unless explicitly waived.
+                let sig_bytes = if fetched.signature.is_empty() {
+                    std::fs::read(&sig_path).unwrap_or_default()
+                } else {
+                    fetched.signature.clone()
+                };
+                verify_or_explain(&fetched.content, &sig_bytes, opts)?;
+                (fetched.content, false)
+            }
+            Err(fetch_err) => {
+                // The fetch failed.  Discovery commands fall back to a cached
+                // index if one exists; the install path surfaces the error.
+                let cached = fallback_on_fetch_failure
+                    .then(|| std::fs::read(&idx_path).ok())
+                    .flatten();
+                match cached {
+                    Some(content) => {
+                        let sig = std::fs::read(&sig_path).unwrap_or_default();
+                        verify_or_explain(&content, &sig, opts)?;
+                        (content, true)
+                    }
+                    None => return Err(fetch_err),
+                }
+            }
         }
-        std::fs::write(&idx_path, &fetched.content).map_err(|e| format!("cache index: {e}"))?;
-        if !fetched.signature.is_empty() {
-            let _ = std::fs::write(&sig_path, &fetched.signature);
-        }
-        // Verify signature unless explicitly waived.
-        let sig_bytes = if fetched.signature.is_empty() {
-            std::fs::read(&sig_path).unwrap_or_default()
-        } else {
-            fetched.signature.clone()
-        };
-        verify_or_explain(&fetched.content, &sig_bytes, opts)?;
-        fetched.content
     } else {
         let sig = std::fs::read(&sig_path).unwrap_or_default();
         let content = std::fs::read(&idx_path).map_err(|e| format!("read cached index: {e}"))?;
         verify_or_explain(&content, &sig, opts)?;
-        content
+        (content, false)
     };
     let text = std::str::from_utf8(&content_bytes)
         .map_err(|e| format!("index is not valid UTF-8: {e}"))?;
-    registry_index::parse_index(text)
+    let index = registry_index::parse_index(text)?;
+    Ok(LoadedIndex {
+        index,
+        stale_fallback,
+    })
 }
 
 fn verify_or_explain(content: &[u8], sig: &[u8], opts: &InstallOptions) -> Result<(), String> {
