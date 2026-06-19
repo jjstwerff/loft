@@ -95,11 +95,16 @@ keyed construction over nullable (parse_vector content-normalize + transparent-c
 cluster (119/120/122/126/127/128/291/32 + 131/134) both backends; the gate-on interpret divergence
 set dropped 21 → ~11.  **gap 2 unwrap primitive DONE** (`OpNullableToDense`, commit `bfc60f9d`, both
 backends — fixes 150-interp; the value-boundary `__nullable<S>`→dense `S` field-copy that the layout
-proof showed was required).  **gap-2 ROUTING C3 + 151 DONE** (commit `c05ff61c`, both backends —
-dense-local assign + `??`-to-dense; interpret divergences now 9).  **Remaining = gap-2 routing tail**
-(150 native return-boundary `a.depth=null`, `&S`-arg 100, return-WRAP 55, single-element `+=`
-store_persist, by-value-arg leak), **interface delegation** (86), **par/forward-ref** (22/22c/40/371),
-**gap 4**, then the Step-6 flip.
+proof showed was required).  **gap-2 ROUTING — value boundaries DONE both backends:** dense-local
+assign C3 (`c05ff61c`); return-boundary via-a-local + direct-`??` (`ed20f61d`, `b399059c` — the
+ref-return dispatch materialises a Var/Block/If-sourced `OpNullableToDense` tail into the return
+buffer; a plain `v[i]` index tail stays the default direct-return).  151 + coalret + qret + ret all
+green.  **Remaining gap-2 routing tail:** 150's pick_mid MID-BODY `return t[i] ?? d` (RetSite::
+MidReturn — a materialise attempt mis-read fields, reverted), `&S`-arg 100 (copy-IN/OUT), return-WRAP
+55 (dense `vector<S>` from native `stack_trace()` → nullable), single-element `+=` store_persist
+(RHS-as-Some), by-value-arg leak, 149 (deep nested-lookup consumer).  Then **interface delegation**
+(86), **par/forward-ref** (22/22c/40/371), **gap 4**, then the Step-6 flip.  Interpret divergences
+hold at 9 (the return fixes were native-only for already-interp-passing 150/151).
 
 ## Status
 
