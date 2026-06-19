@@ -4685,13 +4685,11 @@ impl Parser {
                     // fn-ref.  `tuple_kinds` is the shared gate so the consumer
                     // and the generator's producer never diverge.
                     let tkinds = crate::coroutine_layout::tuple_kinds(&yield_tp);
-                    let channel_tag: i32 = if tkinds.is_some() {
-                        1
-                    } else if matches!(&yield_tp, Type::Function(_, _, _)) {
-                        2
-                    } else {
-                        0
-                    };
+                    // #401 — shared channel decision (float/single/enum get their
+                    // own tags); the for-loop path uses the same helper, so manual
+                    // `next()` no longer diverges (it dropped float/single/enum →
+                    // native E0308 on `let var: f64 = coroutine_next_i64(..)`).
+                    let channel_tag = crate::coroutine_layout::channel_tag(&yield_tp);
                     let value_size: i32 = (channel_tag << 8) | byte_size;
                     let op = self.data.def_nr("OpCoroutineNext");
                     let mut args = list.to_vec();

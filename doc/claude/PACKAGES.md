@@ -600,8 +600,8 @@ values to C-ABI calls without per-function glue code.
 
 | Loft type | ArgT | C-ABI type |
 |-----------|------|-----------|
-| `integer` / `character` | `I32` | `i32` |
-| `long` | `I64` | `i64` |
+| `integer` (plain, no `size(N)`) | `I64` | `i64` |
+| `character` / narrow int (`i8`/`u8`/`i16`/`u16`/`i32`) | `I32` | `i32` |
 | `float` | `F64` | `f64` |
 | `single` | `F32` | `f32` |
 | `boolean` | `Bool` | `bool` |

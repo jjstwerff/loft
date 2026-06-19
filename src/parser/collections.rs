@@ -246,13 +246,9 @@ impl Parser {
             // reconstructs the tuple.  `tuple_kinds` is the SAME decision the
             // producer's `is_tuple_into` makes, so the two ends agree.
             let tkinds = crate::coroutine_layout::tuple_kinds(&yield_tp);
-            let channel_tag: i32 = if tkinds.is_some() {
-                1
-            } else if matches!(&yield_tp, Type::Function(_, _, _)) {
-                2
-            } else {
-                0
-            };
+            // #401 — one shared home for the channel decision (float/single/enum
+            // need their own tags); see `coroutine_layout::channel_tag`.
+            let channel_tag = crate::coroutine_layout::channel_tag(&yield_tp);
             let value_size: i32 = (channel_tag << 8) | byte_size;
             let mut call_args = vec![Value::Var(gen_var), Value::Int(value_size)];
             if let Some(kinds) = &tkinds {
@@ -1761,6 +1757,27 @@ use #count instead"
             } else {
                 u16::MAX
             };
+            // #403 — a value-element vector for-loop cannot read the OOB null back
+            // from the loop var (a boolean's 1-byte slot truncates the i64::MIN
+            // null, and `false` is itself a valid element), so capture the element
+            // REF the read wraps (`OpGetVectorNullable`) for a ref-null termination.
+            let elem_ref: Option<Value> =
+                if matches!(&var_tp, Type::Boolean) && matches!(in_type, Type::Vector(_, _)) {
+                    // `iter_next` for a vector is a block `[Set(#index, +1), <read>]`;
+                    // the read is `OpGet*(OpGetVectorNullable(vec, size, #index), ..)`
+                    // — pull the wrapped OpGetVectorNullable (the read's first arg).
+                    let read = match iter_next.unspan() {
+                        Value::Block(bl) => bl.operators.last().map(Value::unspan),
+                        other => Some(other),
+                    };
+                    if let Some(Value::Call(_, args)) = read {
+                        args.first().cloned()
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
             let for_next = v_set(for_var, iter_next);
             self.vars.loop_var(for_var);
             let in_loop = self.in_loop;
@@ -1820,9 +1837,18 @@ use #count instead"
             // of the 20-byte fn-ref slot as boolean (SIGBUS on interp,
             // E0600 on native).  Same fix: terminate via the coroutine's
             // own exhausted state.
-            let yield_needs_exhausted_check =
-                matches!(&var_tp, Type::Tuple(_) | Type::Function(_, _, _));
-            if is_coroutine_loop && yield_needs_exhausted_check && gen_var != u16::MAX {
+            // #401 — every coroutine loop terminates via the iterator's own
+            // exhausted state, NOT a value-sentinel.  The value-sentinel path
+            // below (`convert(value, Boolean)` → `OpNot`) only terminates when
+            // the yielded type's null sentinel matches the transport channel's
+            // exhaustion sentinel (`i64::MIN`): true for int/text/ref, but NOT
+            // for `float`/`single` (null = NaN) or `enum` — `coroutine_next`
+            // returns `i64::MIN`, whose f64 bit-pattern is not NaN, so the break
+            // never fires and the loop spins forever (and the interp codegen of
+            // that doomed check hangs).  Originally this used the state check
+            // only for composite yields (Tuple/Function, which have no
+            // single-value sentinel at all); it is correct for every element type.
+            if is_coroutine_loop && gen_var != u16::MAX {
                 let test_exhausted = self.cl("OpCoroutineExhausted", &[Value::Var(gen_var)]);
                 lp.push(v_if(
                     test_exhausted,
@@ -1852,6 +1878,19 @@ use #count instead"
                 let dnr = Value::FnRefDnr(for_var);
                 let in_bounds = self.cl("OpLtInt", &[Value::Int(0), dnr]);
                 let test_for = self.cl("OpNot", &[in_bounds]);
+                lp.push(v_if(
+                    test_for,
+                    v_block(vec![Value::Break(0)], Type::Void, "break"),
+                    Value::Null,
+                ));
+            } else if let Some(ref_expr) = elem_ref {
+                // #403 — boolean vector: the value-sentinel termination breaks on a
+                // real `false`.  Terminate on the element REF's null instead — the
+                // `OpGetVectorNullable` the read wraps returns a null DbRef one past
+                // the last item, which `OpConvBoolFromRef` maps to false → break,
+                // while a real `false`/`true` ref is non-null → keep iterating.
+                let test_for = self.cl("OpConvBoolFromRef", &[ref_expr]);
+                let test_for = self.cl("OpNot", &[test_for]);
                 lp.push(v_if(
                     test_for,
                     v_block(vec![Value::Break(0)], Type::Void, "break"),

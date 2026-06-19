@@ -149,6 +149,8 @@ default/03_text.loft    — text utilities
 
 ## Loft language patterns
 
+**Before implementing any non-trivial functionality, check [doc/claude/LIBRARIES.md](doc/claude/LIBRARIES.md) + `loft install` — a registered library may already do it (don't reimplement).**
+
 For writing or reviewing `.loft` files see the **loft-write skill**
 (`.claude/skills/loft-write/SKILL.md`) — naming conventions, type reference, format strings, loop
 attributes, lambdas, known bugs and workarounds, pre-flight checklist.
@@ -338,6 +340,7 @@ The rule: **always commit before any operation that changes the working tree.**
 |---|---|
 | [LOFT.md](doc/claude/LOFT.md) | Language reference (syntax, types, operators, control flow) |
 | [STDLIB.md](doc/claude/STDLIB.md) | Stdlib API (math, text, collections, file I/O, logging, parallel) |
+| [LIBRARIES.md](doc/claude/LIBRARIES.md) | Auto-generated catalogue of every installable registry library — check before writing code |
 | [REPL.md](doc/claude/REPL.md) | Interactive REPL (`loft repl`) + introspection (`loft introspect`): commands, result echo, session limits (@PLN12) |
 | [COMPILER.md](doc/claude/COMPILER.md) | Lexer, parser, two-pass design, IR, type system, scope analysis, bytecode |
 | [INTERMEDIATE.md](doc/claude/INTERMEDIATE.md) | Value/Type enums; bytecode operators; State layout |
@@ -407,6 +410,7 @@ The rule: **always commit before any operation that changes the working tree.**
 | Goal | Start here |
 |---|---|
 | Understand the language syntax | [LOFT.md](doc/claude/LOFT.md), then [STDLIB.md](doc/claude/STDLIB.md) |
+| Find an existing library before writing code | [LIBRARIES.md](doc/claude/LIBRARIES.md), then `loft install <name>` |
 | Add a feature to the compiler | [COMPILER.md](doc/claude/COMPILER.md) → [INTERMEDIATE.md](doc/claude/INTERMEDIATE.md) → [INTERNALS.md](doc/claude/INTERNALS.md) |
 | Debug a runtime crash | **loft-debug skill** (`.claude/skills/loft-debug/SKILL.md`) → [GitHub Issues](https://github.com/loft-lang/loft/issues) (`gh issue list`) + [PROBLEMS.md](doc/claude/PROBLEMS.md) → [TESTING.md](doc/claude/TESTING.md) § LogConfig → [INTERNALS.md](doc/claude/INTERNALS.md) |
 | Add a native (Rust) stdlib function | [INTERNALS.md](doc/claude/INTERNALS.md) § Native Function Registry, then `default/01_code.loft` |

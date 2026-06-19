@@ -18,20 +18,34 @@ earlier note).
 
 ## Status
 
-**F1 + F2 + F3 SHIPPED; F4 ROLLOUT SHIPPED 2026-05-27.**  All four monorepo
-native libs — **imaging, web, server, graphics** — now dispatch through
-generated `#[loft_native]` bridges (`extensions.rs` `BRIDGE_REGISTRY` +
-`dispatch_via_bridge`), each runtime-verified via the env-gated probe.
-graphics was selective (hand-written register + dual-ABI: only the registered
-interpret fns annotated; the raw-ptr `loft_gl_*` direct-native + `vec_wrapper!`
-fns keep the legacy arms).  **The arm DELETION is deferred** (the remaining F4
-step): `tests/lib/*/native` fixtures and the already-published external libs
-(`loft-libs-core`/`-net`) still register raw pointers with no bridges, so the
-legacy `dispatch_call` is retained as their fallback until they migrate
-(Phase 6r / [`../../12-library-extraction/`](../12-library-extraction/README.md)).
-**F5 SHIPPED** — PACKAGES.md `## Function binding model` rewritten to the
-`#[loft_native]` + source-scan + bridge pattern with a complete 3-fn example.
-The plan's only remaining work is the trigger-gated arm deletion (Phase 6r).
+**COMPLETE — the legacy marshaller is deleted (2026-06-19).**  `--interpret`
+dispatches every `#native` cdylib call through its generated `#[loft_native]`
+bridge (`extensions.rs` `dispatch_via_bridge`); a symbol with no bridge panics
+with an actionable "rebuild against the bridge-capable loft-ffi" message.  All
+seven loft-lang native libraries are re-published to the registry with bridges
+(regex 0.2.0, random 0.2.1, crypto 0.3.1, web 0.2.0, server 0.2.0, imaging
+0.2.0, graphics 0.3.0), and both in-repo cdylib fixtures (`native_pkg`,
+`native_scalar_pkg`) are bridge-migrated.
+
+**Deleted from `src/extensions.rs`** (1129-line net removal): the ~98-arm
+`dispatch_call`, the `ArgVal` enum, `first_ref_store`, `get_native_fn_raw`, and
+the local `LoftStr`/`LoftRef` `#[repr(C)]` mirrors (the bridge path uses
+`loft_ffi::LoftStr`/`LoftRef`).  **Kept**: `dispatch_via_bridge`,
+`bridge_push_ref`/`_str`, `get_bridge`, `BRIDGE_REGISTRY`, the `ArgT` enum +
+`compute_sig`/`NativeSig` (the bridge marshal reads them), `LoftStore` +
+`make_loft_store`, the shared-store path, and the #306 ref-return store-derivation
+fix.  `native_gate.rs` is unchanged — its classification feeds the bridge/shared
+paths, never the deleted arms.
+
+The dead **scalar-slice** dispatch path (`native_lib::generate_cdylib_lib_rs`, a
+zero-registration raw-ptr cdylib generator with no production caller) went with
+the marshaller: its three `tests/n2_cdylib.rs` dispatch tests are removed (the
+scalar codegen is still compile-tested; production dispatch is the shared-store
+bridge; the #119 registry-priority guard stays covered by `tests/native_loader.rs`).
+
+**Earlier phases:** F1 + F2 + F3 + F4-rollout + F5 SHIPPED 2026-05-27 (transport,
+the `#[loft_native]` macro, per-library bridges, PACKAGES.md doc).  The arm
+deletion was blocked until the libraries were re-published with bridges.
 
 F3 = one-library proof: `lib/imaging`'s `n_load_png`/`n_save_png`;
 `loft-ffi-build` emits the `loft_register_bridges!` list; additive —
@@ -45,6 +59,111 @@ widen, bool/float, text→`(*const u8, usize)`, `LoftRef`, `LoftStore`-first,
 `LoftStr`/`LoftRef`/void returns).  Both additive — no interpreter wiring yet
 (legacy raw-ptr arms still run).  F3–F5 open.  Inspected 2026-05-27; the two
 load-bearing facts below are confirmed against the tree.
+
+## Migration state (2026-06-18) — full inventory + the publish blocker
+
+Re-audited for a "migrate every loft-lang library to bridges, delete the legacy
+arms" pass.  Two findings reframe the "F4 rollout shipped" status above:
+
+**1. The bridge infra was never published.**  `generate_register_from_loft_with_bridges`,
+the `#[loft_native]` macro, and `LoftValue`/`LoftBridgeFn` live ONLY in the local loft
+repo crates (`loft-ffi 0.1.1`, `loft-ffi-build 0.2.1`, `loft-ffi-macros 0.1.0`).
+crates.io has only `loft-ffi-build 0.1.0`/`0.2.0` — **neither** has `_with_bridges`.
+So **no external library can build with bridges**, and `imaging`'s "migrated" state in
+`loft-libs-graphics` is non-buildable against published crates.  This is why F4 stalled
+at the monorepo (path-dep) libs and the legacy arms remain the only working path.
+⇒ **Prerequisite for the whole pass: publish the bridge-capable `loft-ffi` /
+`loft-ffi-build` / `loft-ffi-macros` to crates.io.**
+
+**2. Only 7 native libraries exist** (every other loft-lang lib is pure-loft → no FFI):
+
+| Repo | Lib | FFI now | Action |
+|---|---|---|---|
+| loft-libs-core | crypto | manifest (`generate_register_invocation`) | → bridges (+ manifest→source-scan) |
+| loft-libs-core | **regex** | legacy → **MIGRATED (proof below)** | publish infra, path→version |
+| loft-libs-core | random | legacy source-scan | → bridges |
+| loft-libs-net | web | manifest | → bridges |
+| loft-libs-net | server | hand-written register (no build.rs) | → bridges |
+| loft-libs-graphics | graphics | hand-written, dual-ABI raw_gl | → bridges (selective) |
+| loft-libs-graphics | imaging | `_with_bridges` (unbuildable vs published) | publish infra → buildable |
+
+Plus: monorepo `lib/*/native` are vestigial stubs (no `lib.rs`) → delete; 2 test
+fixtures (`native_pkg`, `native_scalar_pkg`) → migrate.
+
+**Recipe (per source-scan lib), proven on `regex`:** add `loft-ffi-macros` dep,
+`#[loft_native]` on each `n_*`, `build.rs` → `generate_register_from_loft_with_bridges`.
+`regex` migrated against the local infra (path deps); with the legacy arms REVERTED
+from loft, all 8 regex tests pass on `--interpret` through the bridge — including the
+new `match_groups` `(text,text,integer)` and `replace` `(text,text,text)` signatures
+that have NO arm.  (Two arms wrongly hand-added to `extensions.rs` were reverted —
+the bridge is the fix.)
+
+**Order:** publish infra → migrate the 6 libs + 2 fixtures (re-publish each) → delete
+`dispatch_call` + `ArgT`/`ArgVal` arms in loft → remove vestigial stubs → consolidate +
+fix the ~15 stale FFI docs.
+
+### Update 2026-06-18 — ALL 7 native libraries migrated
+
+All seven now use `#[loft_native]` + `generate_register_from_loft_with_bridges`, built
++ test-green against the local bridge infra via path deps:
+
+| Lib | Tests | Notes |
+|---|---|---|
+| loft-libs-core/regex | 8/8 | source-scan; `match_groups`/`replace` work via bridge |
+| loft-libs-core/random | 11/11 | **#306** warning on `rand_indices` (vector return) |
+| loft-libs-core/crypto | 24/24 | manifest→source-scan; 22 natives |
+| loft-libs-net/web | 9/9 | manifest→source-scan; 19 natives |
+| loft-libs-net/server | 1/1 | hand-written register→generated; already had `#native` |
+| loft-libs-graphics/imaging | 10/10 | deps repointed; **#306** on PNG vector returns |
+| loft-libs-graphics/graphics | 67/67 | selective — hand-written register kept for the dual-ABI raw-ptr `loft_gl_*` / `vec_wrapper!` fns (the auto-generator's bare-ident + blanket-bridge assumptions break on remapped symbols) |
+
+Learnings: the compiler **rejects a redundant explicit `#native "n_<fn>"`** when the
+symbol equals `n_<fnname>` (must be bare); a manifest lib's migration = add `#native`
+to each `.loft` decl + drop `loft.toml [native.functions]`.
+
+**Remaining (all gated on publishing `loft-ffi 0.1.1` + `loft-ffi-build 0.2.1`** so the
+path deps become version deps): re-publish each lib, migrate the 2 test fixtures
+(`native_pkg`/`native_scalar_pkg`), delete `dispatch_call` + `ArgT`/`ArgVal`, remove the
+vestigial monorepo `lib/*/native` stubs, fix the stale docs.
+
+### Update 2026-06-18 (b) — fixtures + stubs DONE; arm-deletion still blocked by the registry cache
+
+- **Both in-repo cdylib fixtures migrated to bridges.**  `native_pkg`
+  (`tests/lib/native_pkg/native`) now writes its `n_ext_*` impls as `#[loft_native]`
+  store-reading fns (vector args via `LoftStore::vector_len`/`vector_data_ptr`, replacing the
+  `vec_wrapper!` + raw `loft_ext_*` pair) and registers the generated bridges under the loft
+  `#native "loft_ext_*"` symbols (alongside the raw `loft_register_v1` ptrs the A7.2.4/A7.2.5
+  dlsym-priority + guard tests still need).  `native_scalar_pkg` gained a `build.rs`
+  (`generate_register_from_loft_with_bridges`) + loft-ffi/loft-ffi-macros deps and a
+  `#[loft_native]` `n_native_answer`.  Both `native_loader` (15/15) and the
+  `native_scalar_pkg`/imaging both-backend tests pass *through the bridge*.
+- **Vestigial monorepo stubs removed**: `lib/{imaging,web,server}/native` (untracked dirs
+  holding only `Cargo.lock` + `target/`, no `Cargo.toml`/`src`) deleted.  **`lib/graphics/native`
+  KEPT** — the `Makefile` (`make play`/`editor`/`dist`) still `cd`s into it.
+- **The `dispatch_call` / `ArgT` / `ArgVal` arm-deletion is STILL BLOCKED — reverted.**  Deleting
+  the legacy fallback and routing `native_auto_dispatch` through the bridge only makes the full
+  suite go RED: the **registry-install cache** `~/.loft/registry/` holds pre-bridge cdylibs for
+  several published libs (`server-0.1.1`/`-0.1.2`, `web-0.1.1`, `crypto-0.1.0`, `random-0.1.0` —
+  `loft_register_v1` raw ptrs, NO `loft_register_bridges_v1`).  Tests that resolve a lib from the
+  registry (e.g. `engine_host_audience` → `server`'s `n_tcp_listen`; the multiplayer + viewer
+  fixtures) then panic "native symbol has no marshal bridge".  The migrated sources exist in the
+  external `loft-libs-*` repos, but the *published* versions are pre-bridge, and refreshing the
+  `~/.loft/registry` cache is out of bounds (sandbox-denied: outside the project; also masks the
+  real fix).  So the documented prerequisite stands and is now precise: **the arm-deletion needs
+  the bridge-capable libs RE-PUBLISHED** (+ their registry copies re-fetched/rebuilt), not just
+  the in-repo fixtures migrated.  `src/extensions.rs` left at its dual-path state (bridge preferred,
+  legacy fallback retained); suite green (2391/0).
+
+**Bridge bug #306 — FIXED 2026-06-18:** `dispatch_via_bridge` allocated a vector/ref
+return in store 0 (the *stack* store) whenever the native had no ref argument to derive
+the store from, so freeing the owned return on scope exit tripped the `#306` guard (a
+stack-record ref treated as an owned heap store) — `random.rand_indices`, `imaging` PNG
+(warning only, no corruption, correct values). Fixed by mirroring `dispatch_call`'s
+ref-return arms: a ref/vector return with no ref arg now derives its store from
+`stores.null()` (a fresh heap store). Verified #306-clean + test-green on both
+(random 11/11, imaging 10/10).  (Still open: `test_runner.rs` calls `wire_native_fns`
+but not `wire_shared_native_fns` — latent gap for shared-store auto-natives under
+`loft test`.)
 
 ## Goal
 

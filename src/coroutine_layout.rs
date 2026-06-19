@@ -136,9 +136,62 @@ pub fn tuple_kinds(tp: &Type) -> Option<Vec<YieldSlot>> {
     elems.iter().map(YieldSlot::classify).collect()
 }
 
+/// The native value-transport channel tag for a coroutine yield of `tp`.
+///
+/// ONE home for this decision: every coroutine *consumer* — the for-loop
+/// (`parser/collections.rs`), manual `next()` (`parser/control.rs`) — and the
+/// native producer/consumer emitters dispatch on it, so they must never
+/// diverge (a duplicated copy that missed float/single/enum was #401's
+/// manual-`next` E0308).  Packed into `value_size` as `(channel_tag << 8) |
+/// byte_size`; the interpreter masks the tag off, native reads both bytes.
+///   - `0` — legacy per-byte-size channel (i64 / i32 / bool / text / dbref)
+///   - `1` — unified `next_into` (tuple)        - `2` — unified `next_into` (fn-ref)
+///   - `3` — `f64::from_bits` (float)           - `4` — `f32::from_bits` (single)
+///   - `5` — enum-as-`u{8·byte_size}` (NON-nullable only; a nullable enum is a
+///     DbRef, so it stays on channel 0 → `next_dbref`)
+///
+/// 3/4/5 exist because these types' Rust value differs from the i64 transport,
+/// which `byte_size` alone cannot distinguish (8 = i64 or f64, 4 = i32 or f32,
+/// 1 = bool or u8 enum).
+#[must_use]
+pub fn channel_tag(tp: &Type) -> i32 {
+    if tuple_kinds(tp).is_some() {
+        1
+    } else if matches!(tp, Type::Function(_, _, _)) {
+        2
+    } else if matches!(tp, Type::Float) {
+        3
+    } else if matches!(tp, Type::Single) {
+        4
+    } else if matches!(tp, Type::Enum(_, false, _)) {
+        // Non-nullable enum = the variant index as uN.  A NULLABLE enum is a
+        // DbRef (same null repr as Reference), so it must NOT come here — it
+        // falls through to channel 0 / next_dbref.
+        5
+    } else {
+        0
+    }
+}
+
 /// Total `i64` transport slots a kind list occupies (the `[i64; N]` buffer
 /// size both ends allocate / write).
 #[must_use]
 pub fn slot_count(kinds: &[YieldSlot]) -> usize {
     kinds.iter().map(|k| k.width()).sum()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn channel_tag_distinguishes_float_kinds_from_same_size_scalars() {
+        // #401 — float/single get their own native channels (`from_bits`); the
+        // other scalars must stay on channel 0.  This is exactly the distinction
+        // `byte_size` alone cannot make (8 = i64 or f64, 1 = bool or u8 enum).
+        assert_eq!(channel_tag(&Type::Float), 3);
+        assert_eq!(channel_tag(&Type::Single), 4);
+        assert_eq!(channel_tag(&Type::Boolean), 0);
+        assert_eq!(channel_tag(&Type::Character), 0);
+    }
 }

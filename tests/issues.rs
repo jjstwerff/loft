@@ -169,6 +169,37 @@ fn production_mode_panic_sets_had_fatal() {
     );
 }
 
+// ── #403 — for-loop over a byte-size-1 element vector ─────────────────────────
+// A `vector<u8>`/`<i8>` for-loop hung forever: the loop's value-sentinel
+// termination never saw the out-of-bounds null because `OpGetByte` returned the
+// raw byte, not the `i64::MIN` null sentinel.  Fixed by returning `i64::MIN` at
+// the `rec == 0` null DbRef (the element read one past the last item), mirroring
+// OpGetShortRaw.  `vector<boolean>` additionally stopped at the first `false`; it
+// now terminates on the element ref's null (OpConvBoolFromRef), not the value.
+// A regression would HANG this test (caught by CI timeout) or trip the asserts.
+#[test]
+fn issue_403_narrow_vector_for_loop_terminates() {
+    let src = "fn test() { \
+        a: vector<u8> = [10, 20, 30]; ca = 0; sa = 0; for ya in a { ca = ca + 1; sa = sa + ya; } \
+        assert(ca == 3, \"u8 count\"); assert(sa == 60, \"u8 sum\"); \
+        b: vector<i8> = [4, 5, 6]; cb = 0; sb = 0; for yb in b { cb = cb + 1; sb = sb + yb; } \
+        assert(cb == 3, \"i8 count\"); assert(sb == 15, \"i8 sum\"); \
+        c: vector<boolean> = [true, false, true]; cc = 0; tc = 0; \
+        for yc in c { cc = cc + 1; if yc { tc = tc + 1; } } \
+        assert(cc == 3, \"bool count\"); assert(tc == 2, \"bool trues\"); \
+        d: vector<boolean> = [false, false]; fd = 0; \
+        for yd in d { if yd { fd = fd - 1; } else { fd = fd + 1; } } \
+        assert(fd == 2, \"all-false must not stop early\"); \
+    }";
+    let (mut state, data) = compile_for_production(src);
+    attach_production_logger(&mut state);
+    state.execute("test", &data);
+    assert!(
+        !state.database.had_fatal,
+        "#403: vector<u8>/<i8> for-loop must terminate with correct counts"
+    );
+}
+
 // assert(false, ...) in production mode: had_fatal becomes true.
 #[test]
 fn production_mode_assert_false_sets_had_fatal() {

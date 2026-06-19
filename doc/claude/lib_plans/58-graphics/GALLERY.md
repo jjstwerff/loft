@@ -238,7 +238,7 @@ pub struct Renderer {
   shadow_size: integer not null,
   mesh_vaos: vector<integer>,
   mesh_counts: vector<integer>,
-  start_time: long not null
+  start_time: integer not null
 }
 
 // Create renderer with window (native) or canvas (WebGL).

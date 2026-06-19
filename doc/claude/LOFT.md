@@ -530,7 +530,6 @@ for e in user#errors { log_warn(e); }
 | Kind             | Syntax examples                     |
 |------------------|-------------------------------------|
 | Integer          | `42`, `0xff`, `0b1010`, `0o17`      |
-| Long             | `10l`, `42l`                        |
 | Float            | `3.14`, `1.0`                       |
 | Single           | `1.0f`, `0.5f`                      |
 | Character        | `'a'`, `'😊'`                       |
@@ -1487,7 +1486,7 @@ single       ::= '!' single | '-' single | '(' expr ')' | block | '[' vector_lit
                | 'if' expr block [ 'else' ( single | block ) ]
                | 'for' ident 'in' range_expr [ 'if' expr ] block
                | CamelIdent [ '{' field_init { ',' field_init } '}' ]
-               | ident | integer | long | float | single | string | character
+               | ident | integer | float | single | string | character
                | 'true' | 'false' | 'null'
 range_expr   ::= expr '..' [ '=' ] expr   // exclusive or inclusive end
                | expr '..'                 // open-ended

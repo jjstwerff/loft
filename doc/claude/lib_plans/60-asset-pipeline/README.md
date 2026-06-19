@@ -333,7 +333,7 @@ if br_mus_use_files {
     br_mus_played += 1;
     br_mus_song = (br_mus_song + 1) % MUSIC_TRACKS;
     br_mus_resting = true;
-    br_mus_t = br_mus_t + 3.0f + (((br_now / 23l) as integer) % 5) as single;
+    br_mus_t = br_mus_t + 3.0f + (((br_now / 23) as integer) % 5) as single;
   }
 } else {
   // ... existing note-by-note sequencer (unchanged) ...

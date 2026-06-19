@@ -37,6 +37,13 @@
 //! | **Y4** tuple     | FIX:04 | FIX:04 (gated on T1.8a) | FIX:04 | FIX:04 | CLOSED:CO1.4-deferred |
 //! | **Y5** closure   | FIX:05 (depends on @PLAN15) | FIX:05 | FIX:05 | FIX:05 | CLOSED:CO1.4-deferred |
 //! | **Y6** vector    | CLOSED:non-goal | CLOSED:non-goal | CLOSED:non-goal | CLOSED:non-goal | CLOSED:CO1.4-deferred |
+//! | **Y7** float     | PASS:y7_x1 | PASS:y7_x2 | ok¹ | ok¹ | CLOSED:CO1.4-deferred |
+//! | **Y8** single    | PASS:y8_x1 | PASS:y8_x2 | ok¹ | ok¹ | CLOSED:CO1.4-deferred |
+//! | **Y9** enum      | PASS:y9_x1 | PASS:y9_x2 | ok¹ | ok¹ | CLOSED:CO1.4-deferred |
+//!
+//! ¹ float/single/enum × X3 (higher-order) and X4 (comprehension) verified on
+//!   both backends via the full type×context grid (2026-06-18, #401); no
+//!   dedicated `cross_mode` cell yet.
 //!
 //! Each `body` must declare `fn test() { … }` (the entry point) and
 //! any helper fns at file scope; the harness appends
@@ -485,6 +492,108 @@ cross_mode!(
         result = f(5);
         print("{result}\n");
         assert(result == 105, "y5_x2 closure manual next (capturing)");
+    }
+    "#
+);
+
+// ── #401 — Y7/Y8/Y9 (float / single / enum) × X1 ──────────────────────────
+//
+// These element types were absent from the frozen matrix above.  Their null
+// sentinel (NaN for float/single, the enum sentinel) differs from the i64
+// transport's exhaustion sentinel, so the value-sentinel termination path
+// (`convert(value, Boolean)` → `OpNot`) never fired: the interp codegen of the
+// doomed check spun forever (12+ min hang), and native mis-typed the i64
+// channel as f64 (E0308).  Fixed by routing EVERY coroutine loop through the
+// state-based `OpCoroutineExhausted`, plus tagged native value channels
+// (3 = f64::from_bits, 4 = f32::from_bits, 5 = enum-as-uN) with matching
+// producer `to_bits` writes.  See gh #401.
+
+cross_mode!(
+    y7_x1_float_for_loop,
+    r#"
+    fn vals() -> iterator<float> { yield 1.5; yield 2.5; yield 3.0; }
+    fn test() {
+        sum = 0.0;
+        for v in vals() { sum = sum + v; }
+        print("{sum}\n");
+        assert(sum == 7.0, "y7_x1 float for-loop sum");
+    }
+    "#
+);
+
+cross_mode!(
+    y8_x1_single_for_loop,
+    r#"
+    fn vals() -> iterator<single> { yield 1.5 as single; yield 2.5 as single; }
+    fn test() {
+        sum = 0.0 as single;
+        for v in vals() { sum = sum + v; }
+        print("{sum}\n");
+        assert(sum == (4.0 as single), "y8_x1 single for-loop sum");
+    }
+    "#
+);
+
+cross_mode!(
+    y9_x1_enum_for_loop,
+    r#"
+    enum Color { Red, Green, Blue }
+    fn vals() -> iterator<Color> { yield Color.Red; yield Color.Blue; }
+    fn test() {
+        count = 0;
+        last = Color.Red;
+        for v in vals() { count = count + 1; last = v; }
+        print("{count}\n");
+        assert(count == 2, "y9_x1 enum for-loop count");
+        assert(last == Color.Blue, "y9_x1 enum for-loop last value");
+    }
+    "#
+);
+
+// X2 — manual `next()`.  #401 follow-up: the manual-next codegen path
+// (control.rs) duplicated the channel decision and dropped float/single/enum,
+// so `let a: f64 = next(g)` was native E0308.  Now both paths share
+// `coroutine_layout::channel_tag`.
+
+cross_mode!(
+    y7_x2_float_manual_next,
+    r#"
+    fn vals() -> iterator<float> { yield 1.5; yield 2.5; }
+    fn test() {
+        g = vals();
+        a = next(g);
+        b = next(g);
+        print("{a} {b}\n");
+        assert(a == 1.5 && b == 2.5, "y7_x2 float manual next");
+    }
+    "#
+);
+
+cross_mode!(
+    y8_x2_single_manual_next,
+    r#"
+    fn vals() -> iterator<single> { yield 1.5 as single; yield 2.5 as single; }
+    fn test() {
+        g = vals();
+        a = next(g);
+        b = next(g);
+        print("{a} {b}\n");
+        assert(a == (1.5 as single) && b == (2.5 as single), "y8_x2 single manual next");
+    }
+    "#
+);
+
+cross_mode!(
+    y9_x2_enum_manual_next,
+    r#"
+    enum Color { Red, Green, Blue }
+    fn vals() -> iterator<Color> { yield Color.Red; yield Color.Blue; }
+    fn test() {
+        g = vals();
+        a = next(g);
+        b = next(g);
+        print("{a == Color.Red} {b == Color.Blue}\n");
+        assert(a == Color.Red && b == Color.Blue, "y9_x2 enum manual next");
     }
     "#
 );

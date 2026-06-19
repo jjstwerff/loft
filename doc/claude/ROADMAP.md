@@ -25,6 +25,69 @@ The methodology behind this file (categories, no-time-projections, features-need
 
 ---
 
+## Where we are & the highest-leverage next work (2026-06-17)
+
+> **Update 2026-06-19 — FFI bridge migration done; the next leverage is frictionless library REUSE.**
+> Plan-74 is **COMPLETE**: all 7 loft-lang native libraries migrated to `#[loft_native]` generated
+> bridges + re-published to the registry (signed, merged); the legacy ~98-arm interpreter marshaller
+> is deleted (bridge-only dispatch); the `#306` bridge ref-return bug is fixed.  Libraries are now
+> **discoverable in-repo** — auto-generated [LIBRARIES.md](LIBRARIES.md) + CLAUDE.md hooks + a CI
+> staleness gate + a registry `validate.py` docs gate (rejects a package with missing/incorrect docs).
+> The remaining bottleneck is **reuse friction** — agents reimplement libraries they can't find or
+> can't use without ceremony — so the top next picks are:
+>
+> 1. **`loft search` CLI** (effort S) — the advertised-but-unimplemented registry discovery command;
+>    closes the discovery loop *outside* the loft repo (any project, not just this one).  Spec:
+>    [PACKAGES/PKG_REGISTRY](PKG_REGISTRY.md) § Open work — `loft search`.
+> 2. **Lazy auto-use** ([lib_plans/59-lazy-stdlib](lib_plans/59-lazy-stdlib)) — auto-load a registered
+>    library on first use of its trigger method (`line.matches(p)` with no `use`); the registry
+>    triggers + the catalogue are the substrate.  The purest live-prototyping win, and `loft search`
+>    is its discoverable front door.
+>
+> Alternatives if pivoting: **stability instruments** (`@PLN53`/`@PLN54` — fuzzing/sanitizer, the
+> roadmap below) or the **`@PLN18` engine host** (the north star, but the parallel gaming lane — a
+> deliberate hand-off, not an unprompted pickup).  (The 2026-06-17 digest below predates this — the
+> "Library system" row's `regex match_groups/replace` is now SHIPPED as regex v0.2.0.)
+
+The 2026-06 cycle shipped (narrow-int storage + dev-communication, install/native
+hardening, the `@PLN27` plan migration).  The **stability roadmap is drained**
+([STABILITY_ROADMAP.md](STABILITY_ROADMAP.md) — H3/H5/H6/H7/H8 all done) and the
+**bug queue is clean** (the two open GitHub issues are deferred enhancements).  So
+forward work is improvement, not firefighting.  Under the warm feature freeze
+(below), **in-scope** = library enablement + optimisations + stabilisation;
+**gated** = new language features.  Current top picks, by theme — this is a pointer
+digest; the detail lives in the linked homes (no catalogue is duplicated here).
+
+**✅ Much of each theme's FOUNDATION already ships** — the items below are
+increments on top, not greenfield.  Already working today (verified 2026-06-17
+against the CHANGELOG + `lib/` + the test suite): the **engine host** run modes
+(`run` / `run_local` windowed-no-server / `run_client` / `post` / `stop`); the
+**REPL** (`loft repl`) and **`loft introspect`**; the **program cache** (on by
+default — the headline startup win); the **library system** with toolchain-free
+installs and ~12 working libs (`graphics`, `imaging`, `gridmesh`, `shapes`,
+`input`, `server`, `web`, `html`, `markdown`, `game_protocol`, `world`, `time`);
+**const-store Phase A** (heap-backed `CONST_STORE`); **native-package C-ABI
+linking** (`@PLN26`); plus the branch-review viewer / tracker index / markdown
+renderer.  So *windowed graphics + a multiplayer protocol + a REPL* are present
+now — what's open below is the increments.
+
+| Theme | Open increment (the part NOT yet shipped) | Scope | Home |
+|---|---|---|---|
+| **Performance / startup** (serves live-prototyping) | precompiled-stdlib fast-start (`@PLN52`); const-store Phase B/C (`@PLN82`); the wasm-vs-native gap | in-scope | [PERFORMANCE.md § Open work](PERFORMANCE.md); `@PLN52`/`@PLN82` |
+| **Native robustness** | shared-store dispatch → a C-ABI `LoftStore` handle (gh #389 pt.1 — the recurring `viewer_markdown` cdylib-collision cause) | in-scope (stabilisation) | [NATIVE.md § Open work](NATIVE.md); gh #389 |
+| **Library system** (the dogfood track) | LSP, a game-client lib, viewer generalisation, regex `match_groups`/`replace` — *graphics / imaging / server / markdown / world / game_protocol / **regex** (v0.1.0: matches/find/split) already ship* | in-scope | [lib_plans/README](lib_plans/README.md); the `[libs]` `@PLN` issues |
+| **Friend-readiness / UX** | first-time tutorial + more day-to-day ergonomics — *REPL / `introspect` / the IDE editor slices already ship* | mixed | ROADMAP § U + § "Near-term focus" below |
+| **Games / engine** (the north star) | the `@PLN18` UDP state-sync channel (05a), scriptable scenes, fuller browser game UI — *the run modes + graphics rendering + the multiplayer protocol already ship* | parallel-agent lane + partly gated | ROADMAP § G; `@PLN18` |
+| **Coroutines** (native iterator *sources* — Rust fns yielding into `iterator<T>`) | the native iterator source (P327) | gated (language feature) | [COROUTINE.md](COROUTINE.md); PLANNING § CO1 |
+| **Stability instruments** (when reached) | program-level fuzzing (`@PLN53`); sanitizer-coverage expansion (`@PLN54`) | future | STABILITY_ROADMAP step 9; plans 53/54 |
+| **CI / tooling** | docs-only-PR matrix-skip fix (STABILITY_ROADMAP row 11 — risky; validate via a docs-only test PR) | in-scope | STABILITY_ROADMAP row 11 |
+
+The default reading order stays the value-category tables below (S → R → G → F → U
+→ C → Q → N); this digest just surfaces the current top pick across them, and
+[PLANNING.md](PLANNING.md) remains the priority-ordered next-best-pickup backlog.
+
+---
+
 ## Feature freeze — heading into the 2026-07 cycle (added 2026-06-07)
 
 Loft is entering a **warm feature freeze** to stabilise toward a release we can trust.  Scope for this cycle is deliberately narrow:
@@ -179,7 +242,7 @@ Unblocks 2+ downstream plans.  Lattice points in the dependency graph.
 | LSP.1 | `loft-lsp` MVP — diagnostics + outline + hover | M | ✓ | lib_plans/63-lsp/README.md |
 | LSP-CLIENT | `loft-lsp-bridge` sidecar + viewer code intelligence — rust-analyzer / loft-lsp / jdtls | L | ✓ | lib_plans/66-viewer-lsp-bridge/README.md |
 | (cross) | Lazy stdlib loading — trigger-based pay-for-what-you-use | M | ✓ | lib_plans/59-lazy-stdlib/README.md |
-| **REGEX.0** | `lib/regex/` MVP — `#native` cdylib bridge to Rust `regex` crate (future/paused 2026-05-20, unblocks @PLN42 phase 07 scan.loft consolidation + check_doc_drift.sh port) | S | ✓ | lib_plans/57-regex/README.md |
+| **REGEX.0** | regex MVP — `#native` cdylib bridge to Rust `regex` crate.  **SHIPPED as `regex` v0.1.0** (loft-libs-core/regex; matches/find/split).  Next: `match_groups` + `replace` (unblocks @PLN42 phase 07 scan.loft + check_doc_drift.sh ports) | S | ✓ | lib_plans/57-regex/README.md |
 | **TIME.1** | `DateTime` value type (i64 epoch-ms, JS-`Date`-aligned) + built-in `{dt:…}` formatting + pure-loft `lib/time` operations — unblocks the `training` app's date-indexed B8–B10 routines; broadly useful Data/ETL gap | H | ~ | lib_plans/21-datetime/README.md |
 | **GFX.PORTABLE** | Make the `Renderer`/`Scene` layer the complete backend-portable rendering contract (portable shaders, scene-level custom materials + render-target/post-process passes; no script reaches raw `gl_*`) — prerequisite for a native GPU backend (wgpu → Vulkan/Metal) and thus native Android/iOS | H | ~ | lib_plans/72-renderer-backend-boundary/README.md |
 
@@ -366,7 +429,7 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | [PACKAGES.md § Open work](PACKAGES.md#open-work) | S-M | — | PKG.7 + PKG.REG (format itself already shipped) |
 | [`lib_plans/12-library-extraction/`](lib_plans/12-library-extraction) | L | **PACKAGES.md § Open work PKG.REG** | Multi-release execution arc |
 | [`lib_plans/59-lazy-stdlib/`](lib_plans/59-lazy-stdlib) | M | — | Foundational — REGEX Phase 3 (lazy-load wire-up) is downstream consumer |
-| [`lib_plans/57-regex/`](lib_plans/57-regex) | S (Phase 0) / MH (Phase 1+) | — | **Future/paused 2026-05-20** (was Active 2026-05-18, no phase work started).  Phase 0 = cdylib bridge MVP; Phase 1+ = pure-loft NFA.  Unblocks @PLN42 phase 07 scan.loft + check_doc_drift.sh ports |
+| [`lib_plans/57-regex/`](lib_plans/57-regex) | S (Phase 0) / MH (Phase 1+) | — | **Phase 0 SHIPPED** (`regex` v0.1.0 at loft-libs-core/regex; matches/find/split).  Next: match_groups/replace.  Phase 1+ (pure-loft NFA) future.  Unblocks @PLN42 phase 07 scan.loft + check_doc_drift.sh ports |
 | [`plans/43-loft-store-durable/`](plans/43-loft-store-durable) | M | cooperates with **plans/42-tracker-index/07** + **plans/39-tic-tac-toe** + **plans/6-audience-generative-art** | Three-tier opt-in durability for loft mmap stores: IntegrityOnly (indexer), SnapshotEvery (TTT v5 sessions), WAL (audience demo).  Index is cheap test bed; game servers are critical consumers |
 | [`lib_plans/67-process/`](lib_plans/67-process) | M | — | `lib/process/` subprocess primitive — closes the indexer / viewer bash-wrapper dependency (dogfood-driven by @PLN42 + @PLAN35) |
 | [`lib_plans/68-fs-watch/`](lib_plans/68-fs-watch) | M | — | `lib/fs_watch/` file-event watcher — prerequisite for @PLN42 phase 07a WebSocket-push daemon (inotify on Linux, kqueue on macOS, ReadDirectoryChangesW on Windows) |

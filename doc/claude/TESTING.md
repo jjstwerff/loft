@@ -1164,10 +1164,10 @@ tests/scripts/
   11-vectors.loft          literals, append, slice, iteration, removal, #index/#first/#count
   12-collections.loft      sorted, index, hash — lookup, ordered iteration, range queries
   13-map-filter-reduce.loft  map, filter, reduce higher-order functions
-  14-formatting.loft       format specifiers: integers, floats, booleans, text, long, single
+  14-formatting.loft       format specifiers: integers, floats, booleans, text, single
   15-random.loft           rand, rand_seed, rand_indices — range, reproducibility
   16-time.loft             time-related operations
-  17-min-max-clamp.loft    min, max, clamp for integer, long, single, float; null
+  17-min-max-clamp.loft    min, max, clamp for integer, single, float; null
   18-math-functions.loft   exp, ln, log2, log10 for single and float; null
   19-files.loft            text file I/O: lines(), move/delete, path safety
   20-binary.loft           binary file I/O: typed reads/writes, endianness
@@ -1236,7 +1236,6 @@ The following behaviours differ from what one might naively expect:
 | ~~`for r in sorted if cond { r#remove; }` with large N gives silently wrong results~~ **FIXED 2026-03-14** (PROBLEMS #33 — no actual bug; test confirmed passing) | — |
 | ~~`for r in index_var { r#remove; }` with large N panics "Unknown record"~~ **FIXED 2026-03-14** (PROBLEMS #35 — `fill_iter` loop_db_tp and `state::remove` both fixed) | — |
 | ~~`for i in 0..N { idx[i, name] = null; }` leaves 1 record behind (large N)~~ **FIXED 2026-03-14** (PROBLEMS #34 — `tree::remove` now always updates root pointer even when last element removed) | — |
-| `long` is a reserved type keyword — `long = "..."` fails with "Not implemented operation = for type null" | Use a different variable name (e.g. `alphabet`, `longstr`) |
 
 ---
 

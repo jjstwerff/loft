@@ -136,7 +136,6 @@ This allows inline format expressions like `"result: {value:>10}"` to be tokenis
 | `0xaf` | `Integer(0xaf, false)` |
 | `0b1010` | `Integer(10, false)` |
 | `0o17` | `Integer(15, false)` |
-| `123l` | `Long(123)` |
 | `1.5` | `Float(1.5)` |
 | `1.5f` | `Single(1.5)` |
 | `1e2` | `Float(100.0)` |
@@ -351,7 +350,7 @@ Handles the innermost syntactic unit:
 | `fn` identifier | Compile-time function reference → `Value::Int(d_nr)` (see below) |
 | identifier | Variable, function call, type constructor, or method |
 | `$` | Current record reference (inside struct field defaults) |
-| integer / long / float / single | Literal |
+| integer / float / single | Literal |
 | string | Format-string expression |
 | character | Character literal as integer |
 | `true` / `false` / `null` | Literal boolean / null |
@@ -439,7 +438,7 @@ above). The old `parse_append_vector` path (used for non-RefVar vectors) is unch
 ### Type parsing — `parse_type`
 
 Converts a type identifier into a `Type` enum value. Handles:
-- Built-in types: `integer`, `long`, `float`, `single`, `boolean`, `text`, `character`, `reference`
+- Built-in types: `integer`, `float`, `single`, `boolean`, `text`, `character`, `reference`
 - Generic containers: `vector<T>`, `sorted<T[key]>`, `index<T[key]>`, `hash<T[key]>`
 - User-defined structs and enums by name lookup
 - `&T` reference types
@@ -673,14 +672,14 @@ which:
 1. Parses the worker call expression (either `fn(elem)` or `elem.method()`) via
    `parse_parallel_worker` to extract `(fn_d_nr, return_type)`.
 2. Infers `elem_size` from the element type's Stores byte size.
-3. Infers `return_size` from the primitive return type (1 for bool, 4 for int/single,
-   8 for float/long).
+3. Infers `return_size` from the primitive return type (1 for bool, 4 for single,
+   8 for float and full-width integer).
 4. Rewrites the loop into:
    - `par_results = parallel_for(input, elem_size, return_size, threads, fn_d_nr)`
    - A conventional for-loop over the result vector that binds `b` to each element.
 
 The worker function must take a single `const` reference argument of the element type
-and return one primitive value (integer, float, single, long, or boolean). Text and
+and return one primitive value (integer, float, single, or boolean). Text and
 reference return types are not yet supported.
 
 The native function `n_parallel_for` in `native.rs` calls `run_parallel_raw` in
@@ -722,9 +721,8 @@ Carries the static type of a `Value`. Key variants:
 | `Unknown(u32)` | Not yet resolved (first pass, or pending inference) |
 | `Null` | The null/absent value |
 | `Void` | No return value |
-| `Integer(min, max)` | Bounded integer; min/max drive storage size (1/2/4 bytes) |
+| `Integer(min, max)` | Bounded integer; min/max drive storage size (1/2/4/8 bytes; default `integer` is i64) |
 | `Boolean` | True/false |
-| `Long` | 64-bit integer |
 | `Float` | 64-bit float |
 | `Single` | 32-bit float |
 | `Character` | Unicode code point (stored as `Int`) |
@@ -811,7 +809,7 @@ For a struct or enum definition, calls `Stores` methods to build the runtime typ
 - `db.structure(name, parent)` — creates a record type.
 - `db.field(s, name, type_id)` — adds a field.
 - `db.enumerate(name)` + `db.value(e, variant, ...)` — creates an enum type.
-- Field sizes (1/2/4 bytes for integers; 4 for references/vectors; 8 for long/float) are determined by `Type::size`.
+- Field sizes (1/2/4/8 bytes for integers; 4 for references/vectors; 8 for float) are determined by `Type::size`.
 
 ### `fill_all`
 

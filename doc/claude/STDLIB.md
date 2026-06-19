@@ -37,8 +37,7 @@ The primitive types built into loft.
 | Type        | Size   | Description |
 |-------------|--------|-------------|
 | `boolean`   | 1 byte | True or false value. |
-| `integer`   | 4 bytes | 32-bit signed integer. |
-| `long`      | 8 bytes | 64-bit signed integer. Use when values exceed ~2 billion. |
+| `integer`   | 8 bytes | 64-bit signed integer. |
 | `single`    | 4 bytes | 32-bit floating-point. Good for graphics and performance-sensitive math. |
 | `float`     | 8 bytes | 64-bit floating-point. Use when precision matters. |
 | `text`      | —      | UTF-8 string. |
@@ -62,7 +61,7 @@ Use the sized subtypes in struct fields to reduce memory usage. They behave as `
 
 Functions for numeric computation. All trigonometric functions work in radians.
 
-In the tables below, **N** = `integer | long | single | float` for general functions, and **F** = `single | float` for float-only functions. Use `single` for speed, `float` for precision.
+In the tables below, **N** = `integer | single | float` for general functions, and **F** = `single | float` for float-only functions. Use `single` for speed, `float` for precision.
 
 ### Constants
 
@@ -71,7 +70,7 @@ In the tables below, **N** = `integer | long | single | float` for general funct
 | `PI` | 3.14159… | Ratio of a circle's circumference to its diameter. |
 | `E`  | 2.71828… | Euler's number, base of natural logarithms. |
 
-### General (N = integer | long | single | float)
+### General (N = integer | single | float)
 
 | Function | Description |
 |----------|-------------|
@@ -316,7 +315,7 @@ filesystem).
 | `Format.BigEndian`    | Binary mode, most-significant byte first. |
 | `Format.Directory`    | Represents a directory path. |
 
-**`File`**: A handle to a filesystem entry. Fields: `path: text`, `size: long`, `format: Format`.
+**`File`**: A handle to a filesystem entry. Fields: `path: text`, `size: integer`, `format: Format`.
 
 ### Opening Files
 
@@ -347,7 +346,7 @@ Binary mode must be activated before reading or writing raw data. Use `f.format 
 | `big_endian(self: File)` | Switches the file to big-endian binary mode. |
 | `write_bin(self: File, v: reference)` | Writes a struct value as raw binary data. File must be in binary mode first. |
 | `read(self: File, v: reference)` | Reads binary data into a struct value. File must be in binary mode first. |
-| `seek(self: File, pos: long)` | Moves the read/write position to `pos` bytes from the start. |
+| `seek(self: File, pos: integer)` | Moves the read/write position to `pos` bytes from the start. |
 
 **Binary attribute operators on `f: File`:**
 
@@ -358,10 +357,10 @@ Binary mode must be activated before reading or writing raw data. Use `f.format 
 | `s.field = f#read` | **LHS-inferred** — width comes from `s.field`'s declared type; symmetric with `f += s.field`. No `as T` needed. |
 | `f#read(n) as T` | Legacy explicit form — reads exactly `n` bytes and interprets as `T`. `n` MUST match `T`'s storage width or the runtime panics. |
 | `f#read(n) as text` | Reads exactly `n` bytes (or fewer at EOF) as a UTF-8 string. The `(n)` is REQUIRED for text — variable-width types have no inferable count. |
-| `f#size` | Returns the current file size in bytes as `long`. |
+| `f#size` | Returns the current file size in bytes as `integer`. |
 | `f#index` | Returns the byte offset where the last read started (the `current` field). |
 | `f#next` | Returns the current byte position (after last read). |
-| `f#next = pos` | Seeks the file to `pos` (long). Only works after the file has been opened by a prior read or write. |
+| `f#next = pos` | Seeks the file to `pos` (integer). Only works after the file has been opened by a prior read or write. |
 | `f#exists` | Returns `true` if the file or directory exists (format ≠ `Format.NotExists`). |
 | `f#format` | Reads the `Format` enum value of `f`.  **Avoid on binary files** — accessing `.format` on a file with unrecognized magic panics in `src/database/io.rs:276`.  Use `exists(path)` instead for existence checks. |
 | `f#format = Format.X` | Sets the format of `f`. |
@@ -447,7 +446,7 @@ Mutating filesystem operations return a `FileResult` enum:
 | `move(from: text, to: text) -> FileResult` | Renames or relocates a file within the project. |
 | `mkdir(path: text) -> FileResult` | Creates a single directory level. |
 | `mkdir_all(path: text) -> FileResult` | Creates a directory and all missing parents. |
-| `set_file_size(self: File, size: long) -> FileResult` | Truncates or extends a file to exactly `size` bytes. |
+| `set_file_size(self: File, size: integer) -> FileResult` | Truncates or extends a file to exactly `size` bytes. |
 
 ### Durable stores (`@PLN43`)
 
@@ -726,7 +725,7 @@ Two worker call forms:
 | Form 1 | `func(a)` | Global function called with the loop element |
 | Form 2 | `a.method()` | Method on the element type |
 
-Supported return types: `integer`, `long`, `float`, `single`, `boolean`, inline `enum`, `text`.
+Supported return types: `integer`, `float`, `single`, `boolean`, inline `enum`, `text`.
 Extra context arguments are forwarded: `par(b=scale(a, mult), N)`.
 Input must be a `vector<T>`.
 
@@ -760,7 +759,7 @@ fn main() {
 - No nested parallelism.
 
 **Limitations:**
-- Float/long result accumulation in the loop body: if `b` is float/long, using it in arithmetic with a pre-declared float/long variable can trigger a first-pass type-inference conflict. Workaround: use `b` only in boolean comparisons or cast (`sum += b as integer`).
+- Float/integer result accumulation in the loop body: if `b` is float/integer, using it in arithmetic with a pre-declared float/integer variable can trigger a first-pass type-inference conflict. Workaround: use `b` only in boolean comparisons or cast (`sum += b as integer`).
 - Implementation: `src/parallel.rs`; see [THREADING.md](THREADING.md) for internals.
 
 ---
@@ -806,7 +805,7 @@ when reproducibility matters.
 | Function | Description |
 |----------|-------------|
 | `rand(lo: integer, hi: integer) -> integer` | Returns a uniformly distributed random integer in `[lo, hi]` (inclusive). Returns null if `lo > hi` or either bound is null. |
-| `rand_seed(seed: long)` | Seeds the thread-local RNG. Same seed always produces the same sequence. |
+| `rand_seed(seed: integer)` | Seeds the thread-local RNG. Same seed always produces the same sequence. |
 | `rand_indices(n: integer) -> vector<integer>` | Returns a vector of `n` integers `[0, 1, ..., n-1]` in a random order. Empty when `n ≤ 0`. Useful for random iteration or sampling without replacement. |
 
 **Example — pick 3 distinct items at random:**

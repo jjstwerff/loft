@@ -2,23 +2,32 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-# `lib/regex/` — regex library
+# `regex` library — `loft-lang/loft-libs-core/regex`
 
-> **Status: Future — paused 2026-05-20** (was Active 2026-05-18 →
-> 2026-05-20).  Demoted back to `future/` without any phase work
-> started — no current appetite to pick it up.  The driver is still
-> live (PR-212's cross-OS portability fight with `tools/indexer/scan.sh`
-> made it the cheapest unblocker for two pending loft-port arcs), so
-> this stays a real commitment to finish, not a deferral; promote it
-> back into "Current" when there's room and intent.  Phase 0 ships the
-> MVP via a thin `#native` cdylib bridge to the Rust `regex` crate;
-> phases 1+ implement the pure-loft NFA engine per the original design
-> below.
+> **Status: Phase 0 SHIPPED as `regex` v0.1.0** (published 2026-05-31);
+> Phases 1–3 remain future.  *(Corrected 2026-06-18 — this doc previously read
+> "Future — paused 2026-05-20, no phase work started," which was stale: Phase 0
+> was in fact built and published.)*
 >
-> Lives as a library, not a language-level literal or match-pattern
-> kind.  Replaces the earlier `r"..."` raw-regex-literal plan and
-> the "regex arm in match" plan that were sketched in
-> LAZY_STDLIB.md.
+> **Location** — the library is NOT in this repo's `lib/`; it lives in its own
+> ecosystem repo
+> [`loft-lang/loft-libs-core/regex`](https://github.com/loft-lang/loft-libs-core/tree/main/regex)
+> and is published to the registry as `regex` v0.1.0 — install with
+> `loft install regex` (category `text`, no deps, `loft >=0.8`).  Auto-use
+> triggers (`matches:text`, `regex_find:text`, `regex_split:text`) are
+> registered, so `line.matches(p)` resolves with no explicit `use regex`.
+>
+> **The shipped surface deliberately diverged from the design below.**  v0.1.0
+> is a minimalist *small-script* tool — three free functions plus their
+> text-method peers (`matches` / `find` / `split`) over a thread-local pattern
+> cache, backed by the Rust `regex` crate.  It does NOT ship the `Regex`/`Match`
+> struct surface, capture groups, or `replace` that the design specifies; those
+> are the unbuilt remainder (see "What's still missing" below).  The original
+> driver (`scan.sh` / `check_doc_drift.sh` portability) is still live.
+>
+> Lives as a library, not a language-level literal or match-pattern kind.
+> Replaces the earlier `r"..."` raw-regex-literal plan and the "regex arm in
+> match" plan that were sketched in LAZY_STDLIB.md.
 
 ---
 
@@ -26,7 +35,7 @@
 
 | Phase | Effort | What ships | Status |
 |---|---|---|---|
-| **0 — `#native` cdylib bridge MVP** | S | `lib/regex/native/` cdylib wrapping the Rust `regex` crate (`Regex::new` / `is_match` / `find` / `find_iter` / `captures` / `replace` / `replace_all`).  ~100 lines wrapper + the cdylib crate.  Same API surface as the pure-loft engine that follows (Phase 1) so consumers migrate transparently when the engine swaps under them.  Reuses the proven `lib/web` / `lib/server` cdylib + `loft_ffi::loft_register!` shape — no new infrastructure needed.  Drops the bash regex dependency for `scan.loft` consolidation and `check_doc_drift.sh` port. | Open |
+| **0 — `#native` cdylib bridge MVP** | S | `lib/regex/native/` cdylib wrapping the Rust `regex` crate (`Regex::new` / `is_match` / `find` / `find_iter` / `captures` / `replace` / `replace_all`).  ~100 lines wrapper + the cdylib crate.  Same API surface as the pure-loft engine that follows (Phase 1) so consumers migrate transparently when the engine swaps under them.  Reuses the proven `lib/web` / `lib/server` cdylib + `loft_ffi::loft_register!` shape — no new infrastructure needed.  Drops the bash regex dependency for `scan.loft` consolidation and `check_doc_drift.sh` port. | ✅ **Shipped v0.1.0** — subset: `matches`/`find`/`split` only (NOT the listed `Regex::new`/`captures`/`replace`/`find_iter`; no `Regex`/`Match` struct).  See "Shipped state" + "What's still missing". |
 | **1 — Pure-loft linear-time NFA** | MH | Thompson / Pike VM in loft.  Handles almost all patterns.  No catastrophic backtracking.  Features requiring unbounded lookaround or backreferences fall through to phase 2.  Replaces the cdylib bridge under the same API.  Self-hosted loft. | Open — design captured below |
 | **2 — Backtracking-engine fallback** | M | Loft-side backtracker for features the linear engine doesn't cover (backrefs, variable-width lookaround).  Opt-in via `regex_bt("...")`.  Step limit configurable to prevent ReDoS. | Open |
 | **3 — Lazy loading integration** | XS | Wire `Regex` / `Match` / `regex(...)` triggers into `default/lazy/*.loft` per [`lib_plans/59-lazy-stdlib/`](../59-lazy-stdlib) — programs that never touch regex pay zero cold-start cost. | Blocked on lib_plans/59-lazy-stdlib landing |
@@ -38,6 +47,73 @@ types live in the loft surface; the cdylib backend (Phase 0) and
 the pure-loft backend (Phase 1) implement the same operations.
 Migrating from Phase 0 to Phase 1 is a single `lib/regex/` build
 flip, not a consumer-code change.
+
+---
+
+## Shipped state (v0.1.0)
+
+Source: [`loft-lang/loft-libs-core/regex`](https://github.com/loft-lang/loft-libs-core/tree/main/regex)
+— `src/regex.loft` (the loft surface) + `native/src/lib.rs` (the bridge) +
+`tests/` + `README.md`.  Registry package `regex` v0.1.0.
+
+**API — two call styles, same operations:**
+
+| Call | Returns | Notes |
+|---|---|---|
+| `regex::matches(pattern, input)` / `input.matches(pattern)` | `boolean` | matches anywhere; invalid pattern → `false` (never raises) |
+| `regex::find(pattern, input)` / `input.regex_find(pattern)` | `integer` | byte offset of the first match's START; `null` on no-match / invalid pattern |
+| `regex::split(pattern, input)` / `input.regex_split(pattern)` | `iterator<text>` | lazy split via the coroutine channel (`yield from split_iter`) |
+
+`find`/`split` wear a `regex_` prefix as methods because the bare names collide
+with stdlib `text.find` / `text.split` (literal ops); `matches` keeps its bare
+name (collision-free on `text`).
+
+**Implementation** — three `#native` symbols (`n_is_match`, `n_match_start`,
+`n_match_end`) wrap the Rust `regex` crate (linear-time, ReDoS-safe); i64 /
+`i64::MIN`-null ABI, text as `(ptr, len)`, same shape as `crypto`/`random`.  A
+thread-local `pattern → Option<Regex>` cache compiles each distinct pattern once
+(invalid cached as `None`; never evicts — fine for a script's handful of literal
+patterns, unbounded for many dynamic ones).  `build.rs` auto-generates the
+`loft_register!` list from the `#native` annotations.  `split` is a loft-side
+coroutine walking `match_start`/`match_end`.
+
+## What's still missing
+
+Relative to the design below, v0.1.0 ships only locate + split.  **`match_groups`
+and `replace` were deferred pending a working coroutine/iterator substrate (group
+and match iteration); that substrate is now in place** — 2026-06-18 the
+`iterator<text>` (incl. empty/optional groups) and `iterator<Match>` (struct-yield)
+shapes were verified on both backends, so the two are UNBLOCKED (see "Next
+increment").
+
+| Missing | Notes |
+|---|---|
+| **Capture groups** (`match_groups`) | No sub-match extraction.  Was deferred pending working coroutines (it yields groups as `iterator<text>`); **unblocked 2026-06-18 — buildable now**.  The biggest functional hole. |
+| **`replace` / `replace_all`** | No substitution (the design's `re.replace(line, "$1 -> $2")`).  Literal form is a one-shot native; the callback/streaming form needed coroutines — **now unblocked**. |
+| **`Regex` / `Match` struct surface** | The design's compile-once `re: Regex = regex(...)` handle and the `Match` struct (`groups`/`names`/`start`/`end`, destructured in a `match` arm) are NOT shipped — v0.1.0 is inline-pattern + cache only. |
+| **`find` returns START only** | `match_end` exists internally (drives `split`) but is not exposed; callers get no whole-match text or end offset. |
+| **Named groups / lookaround / flags** | The PCRE-parity feature table below is the Rust crate's capability, but only reachable once the `Match`/group surface lands. |
+| **Pure-loft NFA (Phase 1)** | Backend is still the Rust-crate cdylib; the self-hosted engine is unbuilt. |
+| **Lazy-loading polish (Phase 3)** | Auto-use triggers are wired (work today), but the full `default/lazy/*.loft` integration is blocked on `lib_plans/59-lazy-stdlib`. |
+| **README under-documents** | The package README's API table lists only `matches`/`find` — it omits `split`/`regex_find`/`regex_split` that the loft source exports (a doc fix in the lib repo). |
+
+**Next increment — now UNBLOCKED (smallest useful step):** `match_groups` +
+`replace`/`replace_all` on the existing cdylib.  The coroutine substrate they waited
+on is in place (this session's float/single/enum + manual-`next` coroutine fixes;
+`iterator<text>` and `iterator<Match>` verified on both backends).  Concrete shape:
+
+- **`match_groups(pattern, input) -> iterator<text>`** — add native span primitives
+  (`n_group_count` / `n_group_start(i)` / `n_group_end(i)` over the Rust crate's
+  `captures`), then a loft coroutine that `yield`s `input[start(i)..end(i)]` for
+  `i in 0..count` — exactly the `split_iter` shape that already ships.  (Optionally
+  `find_all -> iterator<Match>` for whole-match iteration, same pattern.)
+- **`replace_all(pattern, input, repl) -> text`** — a one-shot native wrapping the
+  Rust crate's `replace_all` (no coroutine); a callback/streaming variant is the part
+  that uses coroutines, now available.
+
+No new interpreter infrastructure: the pattern cache + the i64/text ABI + the
+coroutine channel all exist.  Ships as `regex` v0.2.0 from `loft-libs-core` (cdylib
+rebuild + registry publish + trigger update).
 
 ---
 

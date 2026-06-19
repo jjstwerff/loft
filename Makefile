@@ -102,7 +102,7 @@ ifeq ($(shell id -u),0)
 AS_USER := $(if $(SUDO_USER),sudo -u $(SUDO_USER) -H,)
 endif
 
-.PHONY: gate ci-miri all check-targets doctor install install-artifacts uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-package-native-tests test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game crystal-editor play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook
+.PHONY: gate ci-miri all check-targets doctor install install-artifacts uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-package-native-tests test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game crystal-editor play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook libcatalogue
 
 # Print the overview at the top of this file.  Useful when you land on a
 # fresh checkout and want to know what buttons are available without
@@ -1268,6 +1268,16 @@ doc-check:
 
 doc-check-quiet:
 	@scripts/check_doc_drift.sh -q
+
+# Regenerate the agent-facing installable-library catalogue from the LIVE
+# registry: doc/claude/LIBRARIES.md plus the committed snapshot CI generates
+# from (doc/claude/registry-index-snapshot.json).  Run after any registry
+# change so an agent in this repo always sees what's already published — and
+# never reimplements a registered library.  CI runs the same generator in
+# --check mode against the snapshot and fails on drift, so commit both files
+# this writes.
+libcatalogue:
+	@python3 scripts/gen-library-catalogue.py --refresh-snapshot
 
 # QUALITY Tier 4 #12 — the single pre-push gate.
 #

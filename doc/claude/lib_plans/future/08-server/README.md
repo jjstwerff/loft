@@ -1131,7 +1131,7 @@ n_sleep_until_us   target_us → void
 ```loft
 pub fn run_game_loop(loop_cfg: GameLoop, tick_fn: fn(integer)) {
     tick_us    = 1000000 / loop_cfg.tick_rate;
-    max_us     = loop_cfg.max_frame_time * 1000l;
+    max_us     = loop_cfg.max_frame_time * 1000;
     next_us    = ticks();
     tick_count = 0;
     for _ in 0..2147483647 {
@@ -1141,7 +1141,7 @@ pub fn run_game_loop(loop_cfg: GameLoop, tick_fn: fn(integer)) {
         for _ in 0..1000 if ticks() >= next_us {
             tick_fn(tick_count);
             tick_count += 1;
-            next_us    += tick_us as long;
+            next_us    += tick_us;
         }
         sleep_until_us(next_us);
     }
