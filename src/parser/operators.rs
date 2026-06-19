@@ -1326,6 +1326,13 @@ impl Parser {
         let widen_ints = matches!(lhs_type, Type::Integer(_))
             && matches!(rhs_type, Type::Integer(_))
             && *lhs_type != rhs_type;
+        // NB (@PLN25 E2 gap 2): do NOT coalesce a `__nullable<S> ?? dense_S` to dense
+        // here.  It is tempting (it would make `chosen = v[i] ?? mk()` infer dense
+        // `S` and dodge the return-boundary unwrap), but it BREAKS the common
+        // `out += [chosen]` shape — a dense `chosen` then needs a dense→Some WRAP on
+        // every append, which fails in loop/if contexts.  Keep the conservative
+        // `__nullable<S>` result and let each USE site coerce (dense-assign routing,
+        // the ref_return return-boundary unwrap) — that keeps appends nullable→nullable.
         let result_type = if widen_ints {
             crate::data::I64.clone()
         } else {

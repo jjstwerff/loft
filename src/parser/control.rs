@@ -675,7 +675,23 @@ impl Parser {
         // body and variable table; struct-returning specializations work correctly because
         // they return arguments (not locals), so ref_return would be a no-op anyway.
         if self.data.def_type(self.context) != DefType::Generic {
-            if let Type::Text(ls) = t {
+            // @PLN25 E2 (gap 2): the tail was just coerced `__nullable<S>` → dense `S`
+            // via OpNullableToDense (line ~650), so `t` is still the Enum tail type
+            // and the type-keyed branches below (which match `t`) all miss it — the
+            // default epilogue then demotes the fresh-store unwrap to a discarded
+            // statement + `return null` (native returns the null sentinel).  Key off
+            // the dense return type `result` instead: materialise the unwrap tail into
+            // an owned work-ref (copy its result) and promote that — the #306
+            // view-return shape.  Gate-off-inert (no OpNullableToDense exists).
+            if let Type::Reference(td, _) = result
+                && !l.is_empty()
+                && self.tail_is_nullable_unwrap(&l[l.len() - 1])
+            {
+                let last = l.len() - 1;
+                let w = self.materialize_view_return(*td, &mut l[last]);
+                self.ref_return(&[w], l, RetSite::BlockTail);
+                self.nrvo_collapse_tail_set(l, &[w]);
+            } else if let Type::Text(ls) = t {
                 self.text_return(ls);
             } else if let Type::Vector(elm, ls) = t {
                 if ls.is_empty() && !l.is_empty() {
@@ -3641,6 +3657,36 @@ impl Parser {
     /// has two) must stay a plain local, or the outer call's destination
     /// would alias its own argument (the callee's buffer clear then frees
     /// the record the argument still views).
+    /// @PLN25 E2 (gap 2) — is the return body-tail an `OpNullableToDense` unwrap
+    /// (`return <__nullable value>` coerced to dense `S`)?  Such a tail is a Call
+    /// returning a FRESH store with no hidden buffer arg, so the `ref_return`
+    /// dispatch's buffer-chaining branches don't recognise it and the default
+    /// epilogue demotes it to a discarded statement + `return null` (native returns
+    /// the null sentinel).  When this holds, materialise the tail into a work-ref
+    /// (copy the unwrap result into an owned buffer) and promote that — the #306
+    /// view-return shape.  Gate-off-inert (no `OpNullableToDense` exists).
+    fn tail_is_nullable_unwrap(&self, tail: &Value) -> bool {
+        match tail.unspan() {
+            Value::Return(inner) => self.tail_is_nullable_unwrap(inner),
+            Value::Block(bl) => bl
+                .operators
+                .last()
+                .is_some_and(|t| self.tail_is_nullable_unwrap(t)),
+            // Only when the unwrap source is a LOCAL (`OpNullableToDense(Var)`):
+            // `return chosen` where `chosen` is an assigned local hits the buffer
+            // -demote path and needs materialising into the return buffer.  An
+            // unwrap of a direct expression (`return v[i]`, `return x ?? d`) is the
+            // sole body-tail value and the default epilogue returns it directly
+            // (materialising it instead would NRVO-rename the work-ref onto the
+            // caller's buffer and re-`OpDatabase` it → free-list corruption).
+            Value::Call(d, args) => {
+                self.data.def(*d).name() == "OpNullableToDense"
+                    && matches!(args.first().map(Value::unspan), Some(Value::Var(_)))
+            }
+            _ => false,
+        }
+    }
+
     fn site_value_ref(&self, tail: &Value) -> Option<u16> {
         match tail.unspan() {
             Value::Var(v) => Some(*v),

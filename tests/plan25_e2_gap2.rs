@@ -98,3 +98,31 @@ fn nullable_element_to_dense_local_assign() {
     // emits a `stores.*` call) so the unwrap op's arg does not double-borrow.
     assert_both(&probe("dense_assign", SRC_DENSE_ASSIGN), "a=1 b=hi c=7 d=z");
 }
+
+const SRC_RETURN_VIA_LOCAL: &str = "\
+struct M { hp: integer, depth: integer, name: text }
+fn none() -> M { M { hp: 0, depth: 0, name: \"none\" } }
+fn pick(t: vector<M>, i: integer) -> M {
+  chosen = t[i] ?? none();
+  chosen
+}
+fn main() {
+  t: vector<M> = [ M{hp:8, depth:5, name:\"bat\"}, M{hp:3, depth:7, name:\"rat\"} ];
+  a = pick(t, 0);
+  print(\"hp={a.hp} depth={a.depth} name={a.name}\\n\");
+}
+";
+
+#[test]
+fn nullable_unwrap_returned_via_local_var() {
+    // A `??`-unwrapped element assigned to a LOCAL then RETURNED as dense `M`
+    // (with a heap `text` field).  Gate-on, `chosen` is `__nullable<M>` and the
+    // return coerces it via `OpNullableToDense`.  On native the ref-return path
+    // demoted that fresh-store unwrap tail to a discarded statement + `return
+    // null` (caller derefs store 65535 → panic); `ref_return` now materialises a
+    // `Var`-sourced unwrap tail into the return buffer.  Both backends.
+    assert_both(
+        &probe("return_via_local", SRC_RETURN_VIA_LOCAL),
+        "hp=8 depth=5 name=bat",
+    );
+}
