@@ -273,13 +273,26 @@ for a `__nullable<S>`, else 0.
      nested keyed-collection element construction inside a single-payload `Some`.  FIX SITE:
      `_elm_2` handling across `OpDatabase`/`record_new`→`record_finish` for a sorted element
      (compare the WORKING nested-`vector` codegen, which keeps `_elm_2` intact).
-  5. **par over nullable** — PARTLY FIXED (seam 5a, `bbb918d4`): `synth_nullable_par_wrapper`
-     computed the dense-S coercion offset as `position(Some, S's-first-field)` (the old
-     individual-field pattern) → wrong under single-payload; now `position(Some, "payload")`.
-     `22e-par-many-materialise` clean gate-on both backends.  REMAINING: `22c-par-sources`
-     (`hash par: 12` — par over a HASH yields a wrong sum, a deeper par-over-keyed seam) and the
-     USER EXTRA-args bail (`script_threading`, builtins.rs:277 `extra_vals.is_empty()` — extend the
-     wrapper to accept+forward extras + align the dispatcher arity; broader-plan Step 2).
+  5. **par over nullable** — FIXED: payload-offset (5a, `bbb918d4`), keyed/hash-par wrapper (5b,
+     `742fc9c8` — accept `Reference(__nullable<S>)` elem), and EXTRA context args (`b438454d` —
+     dropped the stale `extra_vals.is_empty()` guard; the wrapper already mirrors worker params 1..).
+     22-threading / 22c / 22e clean gate-on both backends.  REMAINING SUB-SEAM (`19-threading`,
+     `dir` aggregate): **struct/text-RETURN par over a nullable element** (`make_doubled(a) ->
+     DoubledScore`).  Repro `/tmp/sp/sret.loft`: gate-off=60, gate-on interp "No elements left on
+     the stack 8 < 12", native "takes 3 arguments but 2 supplied".  ROOT: `synth_nullable_par_wrapper`
+     builds the forwarding `worker(coerced, ..params1..)` from `worker_attrs` AT SYNTH TIME, but a
+     struct-returning worker's hidden `__retbuf` out-param is added LATER by the struct-return
+     lowering — so the wrapper's call OMITS `__retbuf` (call has 1 arg, `make_doubled` then needs 2).
+     The wrapper itself DOES gain a `__retbuf` (lowering sees it returns a struct), so its signature
+     is `(e, __retbuf)` but its body call is `make_doubled(coerced)`.  FIX: forward the wrapper's own
+     `__retbuf` into the tail call (treat the wrapper body as a struct-return tail-call), or
+     synthesize the wrapper AFTER the ref-return lowering so `worker_attrs` already includes it.
+     Pre-existing (struct-return par always routed through the wrapper); revealed once 15-lexer
+     unblocked the `dir` aggregate.
+  - **index<S> coherence** — `index<S>` is kept DENSE (vector/hash/sorted are nullable): rewriting
+    it regresses the multi-key RANGE query (`idx[83..92,"Two"]`, 11-index.loft:48 → "Unknown in
+    expression type __nullable<Elm>" — the range-query path does not unwrap a nullable element).
+    For full coherence, rewrite the index arm too AND teach the range-query access to unwrap.
   Then re-run the engine/wasm consumers (moros_glb, moros_editor_html, wasm_library_suite) gate-on.
 - **The gate flip** — drop `LOFT_E2_SYNTH` in `e2_rewrite_enabled` (KEEP the `STD_SOURCE`
   dense-stdlib exclusion); fold the deferred P3 `default_native_value` Vector arm; graduate the
