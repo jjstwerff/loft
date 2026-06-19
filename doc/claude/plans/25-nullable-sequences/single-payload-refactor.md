@@ -208,13 +208,12 @@ for a `__nullable<S>`, else 0.
      a focused multi-backend matrix-first session.  Likely cleaner: copy-IN/OUT around the call
      (copy payload→tmp dense S, `f(&tmp)`, copy tmp→payload back via `build_some_present`) so no
      view aliasing is needed.  `convert` stays by-value-only (NOTE in mod.rs).
-  2. **dense↔nullable `vector` `+=`** — `vector<__nullable<Point>> != vector<Point>`
-     (tests/docs/17-libraries.loft:82).  ROOT: a SAME-FILE inferred `[S{…}]` literal DOES rewrite
-     to `vector<__nullable<S>>` gate-on (verified), but a CROSS-LIB `::`-qualified literal
-     (`[testlib::Point{…}]`) stays dense — the inferred-literal peek (vectors.rs) doesn't resolve
-     the `::`-qualified struct (@PLN22-namespace-adjacent).  Fix: resolve the qualified name in the
-     peek so it rewrites too; OR make the vector `+=` reconcile a dense `vector<S>` source into a
-     `vector<__nullable<S>>` target (element-wise wrap — the general boundary fix).
+  2. **dense↔nullable `vector` `+=` — FIXED (seam 2, `02b78b74`).**  A CROSS-LIB `::`-qualified
+     inferred literal (`[testlib::Point{…}]`) stayed dense because the inferred-literal peek
+     (vectors.rs) read only `testlib`, missed the `{` (next token was `::`), and skipped the
+     rewrite — while DECLARED `lib::S` sites are nullable, so `v += [lib::S{…}]` mismatched.  The
+     peek now skips past `::` to the struct name (last segment).  17-libraries (the `libraries`
+     wrap aggregate) passes gate-on both backends; gate-off unaffected.
   3. **null-store OOB at structures.rs:43 (record_new) — PARTIALLY FIXED (seam 3a, `51e00466`).**
      `record_new`/`record_finish` now redirect a `__nullable<S>` field-parent through the payload
      (`nullable_field_parent` = key_owner/key_base; E2-validated, gate-off-inert), eliminating the
@@ -223,8 +222,14 @@ for a `__nullable<S>`, else 0.
      NEITHER the enum's field 0 (disc) NOR a collection in `Definition` (Definition.field[0] is a
      `boolean` → `Cannot add to none-structure 'boolean'` at structures.rs:88).  So the CALLER'S
      field index is wrong for this nested cross-lib construction — an upstream codegen field-index
-     bug (Definition is a cross-lib struct).  Pinpoint the OpNewRecord/record_new caller that emits
-     `field=0` here; likely shares the cross-lib root with seam 2.
+     bug (Definition is a cross-lib struct).  RE-CONFIRMED post-3a (instrumented): `record_new
+     (parent=Definition [3a already redirected the enum→payload], field=0) -> tp=boolean` — so even
+     with the parent correctly resolved to dense `Definition`, `field=0` is a SCALAR; the caller's
+     index is wrong (not the nested collection's real position).  Also breaks the `audience_crystal`
+     lib (`Cannot add to none-structure 'integer'`).  NEXT: find the construction-codegen
+     (OpNewRecord) site that emits `field=0` for a nested collection inside a nullable cross-lib
+     element; the index must be the collection field's real position in S.  (NOT shared with seam 2,
+     which was the inferred-literal peek; this is the nested-construction field-index in codegen.)
   4. **wrong value in 15-lexer** — `assertion failed: Incorrect plus` (tests/docs/15-lexer.loft),
      a value divergence (not a crash) gate-on; isolate the differing computation.
   5. **par over nullable** — PARTLY FIXED (seam 5a, `bbb918d4`): `synth_nullable_par_wrapper`
