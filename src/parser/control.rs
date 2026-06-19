@@ -3680,8 +3680,17 @@ impl Parser {
             // (materialising it instead would NRVO-rename the work-ref onto the
             // caller's buffer and re-`OpDatabase` it → free-list corruption).
             Value::Call(d, args) => {
+                // Materialise when the unwrap source is a LOCAL (`Var`) or a
+                // materialised sub-expression (`Block`/`If` — e.g. the `??` ncc
+                // block).  NOT a plain Call/index (`v[i]`): that direct tail is the
+                // sole returnable and the default epilogue returns it correctly;
+                // materialising it would NRVO-rename the work-ref onto the caller's
+                // buffer and re-`OpDatabase` it (free-list corruption).
                 self.data.def(*d).name() == "OpNullableToDense"
-                    && matches!(args.first().map(Value::unspan), Some(Value::Var(_)))
+                    && matches!(
+                        args.first().map(Value::unspan),
+                        Some(Value::Var(_) | Value::Block(_) | Value::If(_, _, _))
+                    )
             }
             _ => false,
         }

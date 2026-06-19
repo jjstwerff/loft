@@ -126,3 +126,28 @@ fn nullable_unwrap_returned_via_local_var() {
         "hp=8 depth=5 name=bat",
     );
 }
+
+const SRC_RETURN_DIRECT_COALESCE: &str = "\
+struct M { hp: integer, depth: integer, name: text }
+fn none() -> M { M { hp: 0, depth: 0, name: \"none\" } }
+fn pick(t: vector<M>, i: integer) -> M { t[i] ?? none() }
+fn main() {
+  t: vector<M> = [ M{hp:8, depth:5, name:\"bat\"} ];
+  a = pick(t, 0);
+  print(\"hp={a.hp} depth={a.depth} name={a.name}\\n\");
+}
+";
+
+#[test]
+fn nullable_unwrap_returned_directly_from_coalesce() {
+    // The body-tail `??`-unwrap returned DIRECTLY (no local): `fn f() -> M { t[i]
+    // ?? none() }`.  The tail is `OpNullableToDense(<?? ncc block>)` — a fresh-store
+    // call whose source is a Block, not a Var.  On native the ref-return demoted it
+    // to `return null` (caller derefs store 65535).  `ref_return` now materialises a
+    // Var-/Block-/If-sourced unwrap tail into the return buffer (a plain `v[i]`
+    // index tail stays the default direct return).  Both backends.
+    assert_both(
+        &probe("return_direct_coalesce", SRC_RETURN_DIRECT_COALESCE),
+        "hp=8 depth=5 name=bat",
+    );
+}
