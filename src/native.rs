@@ -119,6 +119,8 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("t_4text_replace_dest", t_4text_replace_dest),
     ("t_4text_to_lowercase_dest", t_4text_to_lowercase_dest),
     ("t_4text_to_uppercase_dest", t_4text_to_uppercase_dest),
+    // text_from_bytes: owned-text producer (vector<u8> -> text), dest-passing.
+    ("n_text_from_bytes_dest", n_text_from_bytes_dest),
     // @PLN10 — destination-passing variants for the always-non-null text
     // producers; key is the loft def name + `_dest` (the lookup in
     // `gen_text_dest_call` / `try_text_dest_pass`).  Added to
@@ -914,6 +916,21 @@ fn t_4text_byte_at(stores: &mut Stores, stack: &mut DbRef) {
     let v_self = *stores.get::<Str>(stack);
     let new_value = Stores::text_byte_at_native(v_self.str(), v_i);
     stores.put(stack, new_value);
+}
+
+/// Destination-passing variant of `text_from_bytes` — the owned-text producer
+/// path (`is_text_dest_native`).  Decodes the `vector<u8>` argument as UTF-8
+/// and `push_str`s the result straight into the caller's return buffer,
+/// avoiding the legacy scratch (`@PLN10`).  Invalid UTF-8 leaves the buffer
+/// empty (the `String::from_utf8` fallback in `text_from_bytes_native`).
+fn n_text_from_bytes_dest(stores: &mut Stores, stack: &mut DbRef) {
+    let dest = *stores.get::<DbRef>(stack);
+    let v_bytes = *stores.get::<DbRef>(stack);
+    let new_value = stores.text_from_bytes_native(v_bytes);
+    stores
+        .store_mut(&dest)
+        .addr_mut::<String>(dest.rec, dest.pos)
+        .push_str(&new_value);
 }
 
 fn t_4text_starts_with(stores: &mut Stores, stack: &mut DbRef) {
