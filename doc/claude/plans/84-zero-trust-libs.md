@@ -84,7 +84,19 @@ Run the **same** crypto API in the browser with a minimal bundle.
 > (Wycheproof), **random_bytes** (OsRng). **51 KAT tests pass on BOTH backends**
 > (loft-libs-core@69d1f8b). Text API (base64 bytes), loft-safe (malformed → ""/
 > false). Remaining ZT-B is the **wasm bridge** (B1 `crypto.subtle` mapping, B2
-> async↔sync, B3 HPKE, B4–B6).
+> async↔sync, B3 HPKE, B4–B6) — now **gated on
+> [loft#407](https://github.com/loft-lang/loft/issues/407)**: the `[wasm.bridge]`
+> mechanism can't route text-returning natives (pioneered + proved that `sha256`
+> bridges + renders in headless chromium *with* a boolean-emit fix + a
+> Reference-out reshape; the clean unblocker is a **text-return bridge
+> convention** so all ~12 primitives bridge without per-fn reshape). B3 HPKE is
+> separately gated on the same bytes↔text gap as cbor text decode.
+
+> **Gating summary (the achievable native/encode work is done; the rest is
+> compiler-side, loft2/compiler track):** cbor maps → **#406**; HPKE + cbor text
+> → **bytes↔text primitive**; every wasm bridge (ZT-B wasm, ZT-C web, ZT-E
+> plugin browser-loader) → **#407**; loop-local corruption → **#405**. The one
+> non-gated remaining item is **ZT-D1** (reverse-proxy TLS, zero loft code).
 
 - **B1 — `[wasm.bridge]` → `crypto.subtle`.** Map each `n_crypto_*`:
   ed25519 sign/verify, x25519_dh, aes256gcm seal/open, hkdf, sha256, hmac,
@@ -144,12 +156,38 @@ intact.
 
 `server` 0.2.0 is plaintext TCP/WS only; the five HTTPS endpoints need TLS.
 
-- **D1 — reverse-proxy path (now).** Document terminating TLS at Caddy / nginx
-  (Caddy = ACME for free); zero loft code.
-  - *Check:* an HTTPS request through the proxy to each endpoint returns success;
-    the cert chain is ACME-provisioned (verified).
-- **D2 — in-loft path (later).** A `rustls` + ACME backend so the binary
-  provisions its own cert.
+- **D1 — reverse-proxy path (now) — DONE (runbook).** `server.listen(port)`
+  speaks plaintext HTTP/WS on one port; terminate TLS at a reverse proxy in front
+  of it. **Caddy (recommended — automatic ACME, transparent WS upgrade):**
+  ```
+  files.example.com {
+      reverse_proxy 127.0.0.1:8080      # the loft server's listen() port
+  }
+  ```
+  Caddy provisions + renews the cert via ACME (HTTP-01 / TLS-ALPN-01) with no
+  extra config, and `reverse_proxy` forwards the WebSocket `Upgrade` frame
+  automatically. **nginx (alternative — pair with certbot for ACME):**
+  ```
+  server {
+      listen 443 ssl;
+      server_name files.example.com;
+      ssl_certificate     /etc/letsencrypt/live/files.example.com/fullchain.pem;
+      ssl_certificate_key /etc/letsencrypt/live/files.example.com/privkey.pem;
+      location / {
+          proxy_pass http://127.0.0.1:8080;
+          proxy_http_version 1.1;
+          proxy_set_header Upgrade    $http_upgrade;     # WS upgrade
+          proxy_set_header Connection "upgrade";
+          proxy_set_header Host       $host;
+      }
+  }
+  ```
+  - *Check:* `curl https://files.example.com/<endpoint>` returns success over the
+    ACME chain; a `wss://` client connects (the `Upgrade`/`Connection` headers
+    pass through). All five §9b.3 endpoints inherit TLS with **zero loft code**.
+- **D2 — in-loft path (later).** A `rustls` + ACME native bridge so the binary
+  provisions its own cert (mirrors the crypto native pattern — not compiler-gated,
+  but a large effort; deferred until reverse-proxy friction is shown to matter).
   - *Check:* the loft server serves HTTPS directly with an auto-provisioned cert
     (TLS handshake succeeds end-to-end).
 
