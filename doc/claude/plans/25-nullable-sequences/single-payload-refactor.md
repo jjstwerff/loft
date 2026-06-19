@@ -5,10 +5,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # E2 single-payload representation refactor — design
 
-> **Status:** in progress (started 2026-06-19, branch `2026-07-mac`).  All-or-nothing
-> big-bang; land only when F/K/A4 + gap-2 + the gate-on suites are green on BOTH
-> backends, else revert to the pre-refactor commit.  Context: [[pln25-nullable-coherence]]
-> memory + README § RESUME HERE.
+> **Status:** behaviorally COMPLETE (2026-06-19, branch `2026-07-mac`) — every E2 test green
+> on BOTH backends (full suite 2415/2416; the lone fail is the pre-existing environmental
+> `kernel_port`, NOT E2).  Remaining: delete the now-INERT `OpNullableToDense` (dead-code
+> cleanup), then the broader-plan tail (consumer sweep + the gate flip).  Context:
+> [[pln25-nullable-coherence]] memory + README § RESUME HERE.
 
 ## The one invariant (CONFIRMED by construction, not assumed)
 
@@ -167,21 +168,28 @@ for a `__nullable<S>`, else 0.
   (debug) / `grow_words` overflow (release).  Fix: write content-6 defaults 4 bytes wide.
   Pre-existing latent bug; the 4-byte write is correct for every content-6 field.  Full suite
   2412/4 (from 6); construction + `local_assign` + `by_value_arg` gap2 now green.
-- **Step 6 (now active) — return-boundary view-return for the sub-ref unwrap (2 gap2 reds).**
-  `nullable_unwrap_returned_via_local` (`chosen = t[i] ?? none(); chosen`) and
-  `..._directly_from_coalesce` (`return t[i] ?? none()`) return null (`store_nr=u16::MAX` →
-  `allocations[65535]` OOB at allocation.rs:560).  The ref-return routing (control.rs:686
-  + `tail_is_nullable_unwrap`:3613, `materialize_view_return`) detects an `OpNullableToDense`
-  tail and copies it into an owned buffer (#306 view-return); the unwrap is now a sub-ref
-  (`OpGetField`), so the detector misses it and the default epilogue demotes it to `return
-  null`.  FIX (the right shape — copy the viewed S into the return buffer so the result is
-  OWNED, not a dangling view into the caller's container): make `tail_is_nullable_unwrap`
-  recognize the sub-ref unwrap (OpGetField of a `__nullable<S>` at the payload offset, Var/
-  Block/If source) — but the two reds are DIFFERENT shapes (`return Var(chosen)` after a local
-  assign vs `return <If>` direct), so the via-local case needs the materialize keyed off the
-  assigned local's value, not just the tail.  Then DELETE `OpNullableToDense` + its remaining
-  routing (operators.rs `is_struct_returning_call` arm, pre_eval.rs, fill.rs, structures.rs
-  `nullable_to_dense`, default/01_code.loft; `materialize_view_return` SURVIVES for #306).
+- **Step 6 return-boundary view-return — DONE (WIP 4, `3fe8ef40`, both backends).**  The 2 gap2
+  return reds returned null because the ref-return routing detected an `OpNullableToDense` tail;
+  the unwrap is now a sub-ref `OpGetField`.  Fix: `tail_is_nullable_unwrap` now recognizes an
+  `OpGetField` whose SOURCE is a `__nullable<S>` value (`unwrap_source_is_nullable`: a `Var`
+  local, or a materialised `Block`/`If` tail like the `??` ncc block) — `materialize_view_return`
+  then copies the viewed `S` into the return buffer (owned, not a dangling view).  The
+  source-is-nullable check distinguishes it from an ordinary struct-field read; a direct `v[i]`
+  index source is excluded.  gap2 4/4 both backends.
+- **Step 7 layout byte-identity test — DONE (WIP 5, `3241b962`'s sibling).**  `plan25_e2_layout.rs`
+  now asserts the single-payload contract (`Some` carries one inline `payload: Row`, dense Row
+  layout intact, payload fits in `Some`) instead of byte-identity with a hand individual-field enum.
+
+**ALL E2 TESTS GREEN — full suite 2415/2416 (only env `kernel_port`).  Remaining cleanup + ship:**
+- **Delete the inert `OpNullableToDense`** (confirmed zero emitters): the op decl
+  (default/01_code.loft) + `Stores::nullable_to_dense` (structures.rs) + the generated `fill.rs`
+  arm (via `make fill`) + the dead handlers — pre_eval.rs hoisting arm, operators.rs
+  `is_struct_returning_call` arm, the stale comments in control.rs/expressions.rs.
+  `materialize_view_return` SURVIVES (#306 + the new view-return).  Pure dead-code cleanup —
+  the op is never emitted, so this is behavior-preserving; verify with `make fill` + full suite.
+- **Broader @PLN25 tail:** Step 5 consumer sweep (re-run graphics/engine/wasm consumers gate-on,
+  triage residue) → then the gate flip (drop `LOFT_E2_SYNTH`, keep the `STD_SOURCE` exclusion) +
+  fold the deferred P3 `default_native_value` Vector arm + graduate probes + close.
 - **Step 5 — format** (format.rs): render the `payload` struct, not the `Some` field list.
 - **Step 6 — DELETE `OpNullableToDense`** (convert already emits the sub-ref): remove the op
   + its gap2 return-routing built around copy/alloc semantics — control.rs
