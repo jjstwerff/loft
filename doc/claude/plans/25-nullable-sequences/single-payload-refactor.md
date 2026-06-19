@@ -197,13 +197,17 @@ for a `__nullable<S>`, else 0.
   green (2415/2416), so NONE of this affects shipped releases — it is exactly what the gate flip
   would surface.  **FIXED so far:** transparent format (WIP 7).  **RESIDUE (distinct seams):**
   1. **`&S` by-ref arg unwrap** — `expected &P160Item, got __nullable<P160Item>` on `set_p160`
-     (tests/scripts/100-enhancements.loft:140).  ATTEMPTED + REVERTED: a `convert` arm for the
-     `RefVar(Reference(S))` target emitting the payload sub-ref gave interp `px=0` (mutation hit a
-     COPY — the by-ref arg path copies a `Reference` value) and native E0308.  The mutable by-ref
-     needs the unwrap at the call-arg site (gate-off: `n_setp(OpCreateStack(<element sub-ref>), …)`)
-     — wrap `OpCreateStack(OpGetField(<element>, payload, S))` so it stays by-REFERENCE, OR
-     copy-IN/OUT (copy payload→tmp dense S, pass `&tmp`, copy tmp→payload back; reuses
-     `build_some_present`).  Convert stays by-value-only; the `&S` seam lives in the arg path.
+     (tests/scripts/100-enhancements.loft:140).  TWO convert-arm attempts FAILED (both reverted):
+     (a) `RefVar(Reference(S))` → payload sub-ref with `Deps::none()` → interp `px=0` (the by-ref
+     arg path treats a no-deps `Reference` as OWNED and COPIES it; gate-off `__ref_1` is typed
+     `ref(P)["items"]` — a deps-carrying VIEW — which is why it mutates back) + native E0308.
+     (b) Same but carrying the source's deps (to mark it a view) → interp allocation OOB
+     (allocation.rs:650, index 1000, a free-list/coroutine-store reference) + native still E0308.
+     CONCLUSION: this is NOT a `convert` arm — the mutable-by-ref-into-a-nullable-element needs
+     work at the by-ref MACHINERY level (the arg-binding view/copy decision + native `&S` codegen),
+     a focused multi-backend matrix-first session.  Likely cleaner: copy-IN/OUT around the call
+     (copy payload→tmp dense S, `f(&tmp)`, copy tmp→payload back via `build_some_present`) so no
+     view aliasing is needed.  `convert` stays by-value-only (NOTE in mod.rs).
   2. **dense↔nullable `vector` `+=`** — `vector<__nullable<Point>> != vector<Point>`
      (tests/docs/17-libraries.loft:82).  ROOT: a SAME-FILE inferred `[S{…}]` literal DOES rewrite
      to `vector<__nullable<S>>` gate-on (verified), but a CROSS-LIB `::`-qualified literal
