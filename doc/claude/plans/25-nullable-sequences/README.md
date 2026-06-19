@@ -523,10 +523,17 @@ default-on (gate removed), per the project standard.  The remaining work, in fin
          `OpGetVector*`/`s.database.`-vocab templates) so `OpNullableToDense(v[i])` does not
          double-borrow `stores`.  151 passes both backends; regression
          `nullable_element_to_dense_local_assign`.
-       - **Open routing:** (a) **return-BOUNDARY** unwrap on NATIVE (150 `a = pick_local(...)`): now
-         COMPILES (the hoist fix cleared its double-borrow) but reads `a.depth=null` — the returned
-         fresh dense temp loses its data across the native return (lifetime of the temp store on
-         return); interp is correct.  (b) `&S` by-ref arg (100) needs copy-IN/OUT around the call
+       - **Open routing:** (a) **return-BOUNDARY** unwrap on NATIVE (150 `a = pick_local(...)`, repro
+         `/tmp/gap2/coalret.loft`: `chosen = t[i] ?? none(); chosen` returned, M has a `text` field).
+         ROOT CAUSE FOUND (native codegen): when the unwrap is the return-coercion of a LOCAL-VAR
+         return in a ref-return fn, the emitter drops it — `stores.nullable_to_dense(&var_chosen, …)`
+         is emitted as a DISCARDED statement followed by `return DbRef{store_nr: u16::MAX,…}` (a NULL
+         return) → caller derefs store 65535 → panic.  The DIRECT-tail form (`fn f()->S { v[i] }`,
+         repro `/tmp/gap2/ret.loft`) works on native — so the fix is in the native return-statement
+         codegen for a local-var return whose value is an `OpNullableToDense` coercion (wire its
+         result into `var___retbuf` / return it, as the direct-tail path already does).  151 passed
+         because its `M` is scalar-only and took a different (working) path; interp is correct for
+         both.  (b) `&S` by-ref arg (100) needs copy-IN/OUT around the call
          (the unwrap is a copy, so a `&mut` mutation wouldn't propagate) — errors before convert.
          (c) return-WRAP (55, dense `vector<S>` → `vector<__nullable<S>>`) is the opposite direction.
          (d) single-element `h += S{…}` (store_persist) — routing the singleton compiles but the
