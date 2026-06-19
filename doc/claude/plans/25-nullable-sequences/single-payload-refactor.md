@@ -345,7 +345,18 @@ for a `__nullable<S>`, else 0.
     nested `vector<Hex>` does NOT leak; an always-`Hex{}`-return does NOT leak).  CAUTION: a MIXED
     view/owned return (`fn f()->Hex { if … return v[i]; Hex{} }`) leaks `Hex×8` GATE-OFF TOO — a
     SEPARATE pre-existing bug (the view-return/#306 free path), not 149's gate-on leak (different kt).
-    149's gate-on leak needs a focused cross-lib (gridmesh) free-path investigation.
+    REPRODUCED + NARROWED (`/tmp/sp/exact1.loft` — 149's exact structs/fns, NO import; 149 has no
+    `use` despite the name).  149 leaks exactly `Hex×2 PER LOOP ITERATION` (×6 = 12) = the FALLBACK
+    returns `hb`/`hn` = `map_get_hex(... out-of-bounds ...)` → the body-tail `make_hex(0,0)`.
+    `map_get_hex` is a MIXED view/owned-return fn: `return gh_c.ck_hexes[idx]` (a nullable-element
+    VIEW, gate-on) on the hit path + `make_hex(0,0)` (OWNED) on the fallback.  The view path makes
+    the fn VIEW-CLASSIFIED, so the caller never frees the OWNED fallback → it leaks.  Gate-OFF the
+    view is dense and the fn isn't view-classified, so no leak.  ATTEMPTED + REVERTED: materializing
+    the nullable-unwrap VIEW mid-return (mirror block_result's tail branch, control.rs:4305) did NOT
+    fix it — the classification is set by the fn's RETURN-TYPE DEPS (computed earlier), not the
+    return IR, so copying the view to an owned buffer leaves the fn still view-classified.  FIX (focused
+    session): make the return-type-dep classification treat a MIXED view/owned-return fn as OWNED (or
+    materialize at the dep/type level), so the caller frees.  This is the #306 view-return family.
   - **index<S> coherence** — `index<S>` is kept DENSE (vector/hash/sorted are nullable): rewriting
     it regresses the multi-key RANGE query (`idx[83..92,"Two"]`, 11-index.loft:48 → "Unknown in
     expression type __nullable<Elm>" — the range-query path does not unwrap a nullable element).
