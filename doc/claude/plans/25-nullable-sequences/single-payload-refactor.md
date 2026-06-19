@@ -301,9 +301,17 @@ for a `__nullable<S>`, else 0.
     nested-append (interp, op=226) — so the first fn leaves un-freed / dangling nullable-element
     stores that the second's allocation collides with (use-after-free/double-free class).  Native
     is immune (Rust ownership).  Repro: append `fn main(){ test_p314_u8_concat_values();
-    test_p314_u8_concat_from_field(); }` to the file, run `--interpret` gate-on.  FIX SITE: the
-    scope-exit free / dep-tracking for a `__nullable<S>` element whose payload owns a nested
-    collection (LIFETIME.md).  Pre-existing (dense-V cleanup unchanged by this plan's edits).
+    test_p314_u8_concat_from_field(); }` to the file, run `--interpret` gate-on.  NARROWED: the
+    crash is ORDER-SPECIFIC — only `values()` THEN `from_field()` crashes (not the reverse, not
+    either twice), and the crash is OUTSIDE the interpreter ("crash outside interpreter", a Rust
+    SIGSEGV in the store/allocation code, NOT a bytecode op).  So `test_values` (fully DENSE: a
+    local `V` with a nested `vector<u8>`, 3 appends) frees its stores at scope exit, and
+    `test_from_field`'s gate-on construction (`parts: vector<__nullable<V>>`, then `seg.a += […]`
+    at line 39) CLAIMS a reused slot whose free-block state corrupts the store free-list (the
+    LLRB free-tree in store.rs).  Gate-OFF `from_field` is dense (no nullable) so it never hits this.
+    FIX SITE: the store free-list / `claim` reuse path interacting with the gate-on nullable
+    construction's allocation sizes — needs a debug build + free-list instrumentation (cf. the
+    earlier `fl_size` negate-overflow class).  Pre-existing (dense-V cleanup unchanged by this plan).
   - **index<S> coherence** — `index<S>` is kept DENSE (vector/hash/sorted are nullable): rewriting
     it regresses the multi-key RANGE query (`idx[83..92,"Two"]`, 11-index.loft:48 → "Unknown in
     expression type __nullable<Elm>" — the range-query path does not unwrap a nullable element).
