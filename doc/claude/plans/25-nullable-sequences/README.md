@@ -74,7 +74,7 @@ method dispatch · transparent format · the 06-structs alias-copy root · OOB d
 |---|---|---|
 | ~~**A4(b)** — JSON walker builds `Some` for a present object~~ | — | **FIXED** 2026-06-17 — gate-off-nullable was cache contamination (no leak); 1 walker arm; both backends + regression |
 | ~~**A3** — `hash<__nullable<S>>` (key-resolution + lookup unwrap + anon-literal + for-loop + native)~~ | — | **DONE** — 12-collections passes gate-on on BOTH backends (rungs 1–5 + for-loop + native); regressions both backends |
-| **gap 2** — fn-call coercion `f(v[i])` via offset-ref reinterpret | S | designed, not landed |
+| **gap 2** — `__nullable<S>` ↔ dense `S` at value boundaries | M (representation refactor) | **interim copy DONE** (`OpNullableToDense`, all value paths green both backends); **superseded by the single-payload refactor — see RESUME HERE banner** (deletes the copy op; the correct long-term form) |
 | **gap 4** — `e = null` on a nullable LOCAL | XS | open |
 | **Step 2** — par with USER EXTRA args (dispatcher arity) | S, self-contained | open |
 | **Step 3** — native codegen of `__nullable<>` (name-mangle family) | M, whole backend | gated behind Step 1 |
@@ -139,6 +139,56 @@ bodies, comprehensions.
 > **Branch:** `2026-07-mac` (rebased onto `main` + #393; all commits pushed).
 
 ## RESUME HERE (next action)
+
+> ### ⇒ NEXT: the single-payload representation refactor (DECIDED 2026-06-19)
+>
+> **Current tree state:** clean at HEAD `63af849a`, ALL suites green (`plan25_e2_gap2`,
+> `_hash`, `_json`, `_layout` + 150/151 interp).  `OpNullableToDense` is the **interim**
+> copy-op and stays ONLY until the refactor below lands, then it is deleted.
+>
+> **The decision (user: "what is best for the long term loft code, I don't care about speed"):**
+> change the `__nullable<S>` representation so the `Some` variant carries a **single
+> `payload: S` field** (a real struct-enum `Some { payload: S }`) instead of S's fields copied
+> INDIVIDUALLY.  Why: the individual-field form is GAP-FILLED by the packer (reorders the payload
+> away from dense `S`), which is the ENTIRE reason `OpNullableToDense` (a field-copy) exists and
+> why a sub-ref reinterpret reads garbage.  A single struct-typed field keeps S's dense layout
+> (VERIFIED: `db.field(t67,"payload",t65)`, payload@8 = dense S), so **a payload sub-ref IS a valid
+> dense `S` reference** → args/returns/`??`/`&mut`/field-reads all flow on the EXISTING reference +
+> #306 view-return machinery with NO copy and NO new op.  It DELETES machinery instead of adding it,
+> and has NO layout special-case (unlike the rejected `no_gap_fill` packer hack, which also broke
+> the byte-identity test).
+>
+> **This is an ALL-OR-NOTHING big-bang** (~30 load-bearing sites; the representation change breaks
+> them all at once — no green intermediate).  Land ONLY when F/K/A4 + gap-2 + the suite are green on
+> BOTH backends; else revert to `63af849a`.  Migration map (full version with file:lines in the
+> `pln25-nullable-coherence` memory):
+> 1. `nullable_enum_for` (data.rs:3720) → add ONE `payload: S` field, not S's fields.  (The
+>    method-filter comment at 3712 becomes moot — the payload is just dense S, methods and all.)
+> 2. Field access — `find_poly_enum_field` (fields.rs:543) + callers (97, 281) resolve `e.field`
+>    THROUGH `payload` (offset = payload-base + S-field-offset).
+> 3. **THE CRUX — key-position contract.**  `key_owner` (types.rs:440) / `key_bearing_def`
+>    (typedef.rs:760) return the `Some` variant whose DIRECT fields are the keys today; single-
+>    payload sinks keys into `payload`, so `determine_keys` (types.rs:455), `get_keys` /
+>    `field_content` (search.rs:292/65), and keyed codegen (generation/mod.rs:2028) must add the
+>    payload base to EVERY key offset.  Must be right on BOTH backends or keyed collections corrupt
+>    silently — verify F (keyed-set/iter) + K (keyed construction) hard.
+> 4. Construction builds `payload` not individual fields — objects.rs:168/2322, collections.rs:736,
+>    vectors.rs:1956/2099, builtins.rs:339 (the dense→Some per-field copy loops collapse to one
+>    payload write).
+> 5. `format.rs:810` writes the payload struct (not the `Some` field list).
+> 6. `convert` (mod.rs:1336) → sub-ref at the payload offset (dense `S`), replacing the
+>    `OpNullableToDense` emission.
+> 7. DELETE `OpNullableToDense` — default/01_code.loft:1030, structures.rs:1033 `nullable_to_dense`,
+>    fill.rs:239/1920, control.rs:678-691 + `tail_is_nullable_unwrap` (3605), operators.rs:296
+>    `is_struct_returning_call` arm, pre_eval.rs:418.  (`materialize_view_return`/`_return_into`
+>    SURVIVE — still used by genuine #306 views at control.rs:744/4290.)
+> 8. Update `tests/plan25_e2_layout.rs` — the byte-identity assertion changes from "== a hand
+>    `HSome { id, tag }`" to "the `Some.payload` field is a dense `S`" (the stronger, correct
+>    invariant; the old one optimised for matching a *struct-variant* that is itself gap-filled and
+>    never delivered free transparency).
+>
+> Pure name-identity `starts_with("__nullable<")` gates (most of category 3 in the map) survive
+> untouched — they only need the enum to remain recognizable.
 
 **The gate (`LOFT_E2_SYNTH`) is the marker that E2 is not yet finished** — "finished" means
 default-on (gate removed), per the project standard.  The remaining work, in finishing order:
