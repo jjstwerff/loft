@@ -974,35 +974,103 @@ These need decisions before implementation starts.
 
 ---
 
-## Open work — `loft search` (registry discovery)
+## Open work — `loft search` (registry discovery, R8+)
 
-`loft search <query>` is referenced as a shipping command across the docs
-([PACKAGES.md](PACKAGES.md), [LAVITION.md](LAVITION.md), this doc) and the registry
-README, but the CLI implements only `install` / `pin` — **the command does not
-exist**.  Until it does, library discovery is loft-repo-only
-([LIBRARIES.md](LIBRARIES.md)); from any *other* loft project there is no way to find
-a library, so functionality gets reimplemented — the harm the in-repo catalogue + the
-`validate.py` docs gate already addressed on the docs + registry sides.  This is the
-CLI half of that fix.
+`loft search [query]` **exists** (PKG.REG R8: dispatch `src/main.rs:3922`, handler
+`search_registry` `src/main.rs:507`; `loft info <name>` alongside it).  Today it loads +
+verifies the index, filters case-insensitively over name / description / categories, and
+prints one `name <latest> — description` line per hit, sorted alphabetically.  That ships
+the *discovery loop everywhere* goal — from any loft project, not just the loft-repo
+in-repo catalogue ([LIBRARIES.md](LIBRARIES.md)) — but it is the minimal cut.  The work
+below brings it up to the advertised surface and makes it the discoverable front door for
+lazy auto-use ([lib_plans/59-lazy-stdlib](lib_plans/59-lazy-stdlib)).
 
-**Deliver (effort S):** `loft search [query]`
+### Gap — shipped (R8) vs target
 
-- Fetch + signature-verify the index via the **same** code path `loft install` uses
-  (§ `loft install` flow) — reuse it, do not duplicate fetch/verify.  Honour
-  `LOFT_REGISTRY_URL` (mirrors) the way `install` does.
-- No query → list every package: `name <latest> — description  (categories)`.
-- Query → case-insensitive match over name + description + categories; rank
-  exact-name > name-prefix > description-hit.
-- Per hit print: `name <latest>`, the description, `loft install <name>`, and an
-  **auto-use** marker when the latest version declares `triggers`.
-- `--json` for tooling; offline → fall back to the cached
-  `~/.loft/registry/index.json` and say so.
+| Spec clause | R8 today | Step |
+|---|---|---|
+| Reuse install's fetch/verify, **do not duplicate** | reuses, but via a hand-copied `loft_install_load_index` (`src/main.rs:2450`) duplicating private `install::load_index` (`src/install.rs:258`) | S0 |
+| Rank exact-name > name-prefix > description/category | alphabetical only (`hits.sort_by name`) | S1 |
+| Per-hit: `loft install <name>` line + **auto-use** marker when latest declares `triggers` | description line only | S2 |
+| `(categories)` on the listing line | omitted | S2 |
+| `--json` for tooling | absent | S3 |
+| Offline → fall back to cache **and say so** | loader falls back silently; search prints no note | S4 |
+| Discoverable in `--help` | `print_help` lists `install`/`pin`, not `search`/`info` | S5 |
 
-**Why this is the right next slice:** it closes the discovery loop *everywhere*
-(not just the loft repo's in-repo catalogue), reuses the install fetch/verify path,
-and it is the prerequisite that makes the bigger reuse win — lazy auto-use
-([lib_plans/59-lazy-stdlib](lib_plans/59-lazy-stdlib)) — *discoverable* rather than
-magic.
+### Output contract (the human format these steps converge on)
+
+One line per package; a query also gets an install hint beneath each hit:
+
+```
+<name> <latest>[ ⚡auto-use] — <description>  (<cat1>, <cat2>)
+    → loft install <name>          # printed only when there is a query
+```
+
+`⚡auto-use` appears only when the latest non-yanked, non-prerelease version has a
+non-empty `triggers` (`Version.triggers`, `src/registry_index.rs:60`); `(categories)` is
+omitted when empty.  This is the public CLI contract — pin it with the tests below so it
+cannot drift.
+
+### Design — verifiable steps
+
+Effort XS–S total; each step is independently shippable.  Land **S0 first** (it makes the
+spec's "reuse, do not duplicate" true and gives the later steps one place to change);
+**S4 last** (it widens the shared loader's return type, so it carries the most blast
+radius).  Build under `--features registry`.
+
+- **S0 — collapse the duplicate loader.** Make `install::load_index` `pub`
+  (`src/install.rs:258`), point `search_registry` + `package_info` at it, delete
+  `loft_install_load_index` (`src/main.rs:2450`).
+  - *Check:* `grep -c 'fn loft_install_load_index' src/main.rs` → `0`;
+    `cargo test --features registry registry` stays green (install + e2e still pass).
+
+- **S1 — ranking.** Extract a pure `rank_hits(index, query) -> Vec<&Package>` into
+  `registry_index.rs` (exact-name > name-prefix > description/category hit; alphabetical
+  within a tier) and call it from `search_registry`.
+  - *Check:* unit test in `registry_index.rs` over a fixture where query `text` matches a
+    package named `text` (exact), `text_utils` (prefix), and one whose description
+    contains "text" (desc) → asserts that exact ordering.
+
+- **S2 — richer hit line.** Append `(categories)` and the `⚡auto-use` marker (latest
+  version `triggers` non-empty) to the listing line; under a query, print the
+  `→ loft install <name>` hint per hit.  Mirror `render_catalog`'s `writeln!`-into-String
+  style (`src/registry_index.rs:748`).
+  - *Check:* e2e test (mirror `tests/registry_e2e.rs` `FixtureServer`) with one package
+    whose latest version has `triggers` and one without → output contains `⚡auto-use` for
+    the first and not the second, and the `→ loft install` line appears with a query and
+    not for the bare-listing run.
+
+- **S3 — `--json`, through loft's own JSON model.** Parse `--json` in the `search` arm
+  (`src/main.rs:3922`).  Build the result set as a `json::Parsed` tree (`src/json.rs:33`,
+  loft's canonical JSON value) — `Parsed::Array` of `Parsed::Object` with
+  `name / version / description / categories / auto_use / install` — and render it; do
+  **not** hand-roll a string builder, and do **not** use `ir_schema::value_to_json` (that
+  emits the schema-tagged IR dialect `{"k":"Int",…}`, not plain JSON).  The `json` module
+  today only *parses*; add its missing inverse `pub fn to_json_string(p: &Parsed) -> String`
+  there (store-free, the natural home), reusing the string-escape routine the `to_json`
+  native already carries (`src/native.rs:~3872` — lift it to a shared `json::escape_str` if
+  that stays clean).  `--json` is then: build the tree, `println!("{}", json::to_json_string(&tree))`.
+  - *Check (round-trip via the existing parser):* a `json.rs` unit test asserts string-level
+    idempotence — `let s = to_json_string(&sample); assert_eq!(to_json_string(&json::parse(&s).unwrap()), s);`
+    (compare the *strings*, not the trees: `Parsed::Object` carries byte offsets that differ
+    between a built tree and a parsed one).  Plus
+    `target/release/loft search text --json | python3 -m json.tool` exits `0` (this box has `python3`).
+
+- **S4 — offline note.** Widen `load_index` to report cache-vs-fresh (e.g. return
+  `LoadedIndex { index, from_cache: bool }`); when `from_cache` because the fetch failed,
+  `search`/`info` print one stderr line: `registry unreachable — showing cached index`.
+  - *Check:* e2e — prime the cache via a reachable `FixtureServer`, then re-run with
+    `LOFT_REGISTRY_URL` pointed at a dead port → stderr contains `cached`; the reachable
+    run prints no such line.
+
+- **S5 — discoverability.** Add `search` + `info` to `print_help` after the `install` /
+  `pin` lines (`src/main.rs:167`).
+  - *Check:* `target/release/loft --help` lists both `search` and `info`.
+
+**Why this is the right next slice:** it finishes the discovery loop's *surface* (ranking,
+auto-use signposting, machine-readable output) so library reuse is frictionless from any
+project, and it makes lazy auto-use ([lib_plans/59-lazy-stdlib](lib_plans/59-lazy-stdlib))
+*discoverable* rather than magic.
 
 ---
 
