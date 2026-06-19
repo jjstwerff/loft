@@ -5,11 +5,13 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # E2 single-payload representation refactor — design
 
-> **Status:** behaviorally COMPLETE (2026-06-19, branch `2026-07-mac`) — every E2 test green
-> on BOTH backends (full suite 2415/2416; the lone fail is the pre-existing environmental
-> `kernel_port`, NOT E2).  Remaining: delete the now-INERT `OpNullableToDense` (dead-code
-> cleanup), then the broader-plan tail (consumer sweep + the gate flip).  Context:
-> [[pln25-nullable-coherence]] memory + README § RESUME HERE.
+> **Status:** COMPLETE (2026-06-19, branch `2026-07-mac`) — every E2 test green on BOTH
+> backends (full suite 2415/2416; the lone fail is the pre-existing environmental
+> `kernel_port`, NOT E2), clippy + fmt clean.  `OpNullableToDense` and its copy machinery are
+> DELETED (WIP 6, `2022f0b5`) — the value-boundary + return unwrap is a payload sub-ref view.
+> The refactor's own 7 steps are all done.  What remains is the BROADER @PLN25 tail (NOT this
+> refactor): the Step-5 consumer sweep + the gate flip.  Context: [[pln25-nullable-coherence]]
+> memory + README § RESUME HERE.
 
 ## The one invariant (CONFIRMED by construction, not assumed)
 
@@ -180,16 +182,20 @@ for a `__nullable<S>`, else 0.
   now asserts the single-payload contract (`Some` carries one inline `payload: Row`, dense Row
   layout intact, payload fits in `Some`) instead of byte-identity with a hand individual-field enum.
 
-**ALL E2 TESTS GREEN — full suite 2415/2416 (only env `kernel_port`).  Remaining cleanup + ship:**
-- **Delete the inert `OpNullableToDense`** (confirmed zero emitters): the op decl
-  (default/01_code.loft) + `Stores::nullable_to_dense` (structures.rs) + the generated `fill.rs`
-  arm (via `make fill`) + the dead handlers — pre_eval.rs hoisting arm, operators.rs
-  `is_struct_returning_call` arm, the stale comments in control.rs/expressions.rs.
-  `materialize_view_return` SURVIVES (#306 + the new view-return).  Pure dead-code cleanup —
-  the op is never emitted, so this is behavior-preserving; verify with `make fill` + full suite.
-- **Broader @PLN25 tail:** Step 5 consumer sweep (re-run graphics/engine/wasm consumers gate-on,
-  triage residue) → then the gate flip (drop `LOFT_E2_SYNTH`, keep the `STD_SOURCE` exclusion) +
-  fold the deferred P3 `default_native_value` Vector arm + graduate probes + close.
+- **`OpNullableToDense` deletion — DONE (WIP 6, `2022f0b5`).**  Removed the op decl
+  (default/01_code.loft), `Stores::nullable_to_dense` (structures.rs), the generated `fill.rs`
+  dispatch (via `make fill`), and the dead handlers (pre_eval.rs hoisting arm, operators.rs
+  `is_struct_returning_call` arm); stale comments updated.  `materialize_view_return` SURVIVES.
+  Behavior-preserving (zero emitters): full suite 2415/2416, clippy + fmt clean.
+
+**THE REFACTOR IS COMPLETE.**  All E2 tests green both backends.  What remains is the BROADER
+@PLN25 plan (NOT this refactor):
+- **Step 5 consumer sweep** — re-run the graphics/engine/wasm consumers (kernel_port [env],
+  moros_glb, moros_editor_html, wasm_library_suite) + the wrap suites gate-on; triage residue.
+- **The gate flip** — drop `LOFT_E2_SYNTH` in `e2_rewrite_enabled` (KEEP the `STD_SOURCE`
+  dense-stdlib exclusion); fold the deferred P3 `default_native_value` Vector arm; graduate the
+  gated probes into `tests/scripts/25-nullable-sequences.loft`; full `make ci` both backends;
+  set the plan SHIPPED.  This is the single final PR to `main`.
 - **Step 5 — format** (format.rs): render the `payload` struct, not the `Some` field list.
 - **Step 6 — DELETE `OpNullableToDense`** (convert already emits the sub-ref): remove the op
   + its gap2 return-routing built around copy/alloc semantics — control.rs
