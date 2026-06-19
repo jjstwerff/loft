@@ -264,6 +264,15 @@ for a `__nullable<S>`, else 0.
      nested-keyed-collection build, or route the literal's nested-keyed field through the
      empty-then-append path.  Repro `/tmp/sp/lexs.loft` (start=4), `/tmp/sp/lexmid.loft` (SIGSEGV
      with more leading fields — consistent with a backing-record overlap that grows with offset).
+     SMOKING GUN (`LOFT_LOG=fn:main`): `OpNewRecord(payload, ST, 1)` correctly returns the backing
+     slot `ref(2,5,8)` (rec 5), but the subsequent `OpSetInt(_elm_2, 0, 2)` (Possible.length) and
+     `OpFinishRecord(payload, _elm_2, …)` run with `_elm_2 = ref(2,1,8)` — the PARENT `Some` (rec
+     1) — so the element's field writes hit the Some (disc←2, then `token`'s string-ref ←4 lands on
+     `start`, hence start=4).  The element ref `_elm_2` is corrupted between `OpNewRecord` and its
+     writes (only `OpDatabase(_elm_2, 65)` sits between) — a ref-lifecycle / slot-aliasing bug in
+     nested keyed-collection element construction inside a single-payload `Some`.  FIX SITE:
+     `_elm_2` handling across `OpDatabase`/`record_new`→`record_finish` for a sorted element
+     (compare the WORKING nested-`vector` codegen, which keeps `_elm_2` intact).
   5. **par over nullable** — PARTLY FIXED (seam 5a, `bbb918d4`): `synth_nullable_par_wrapper`
      computed the dense-S coercion offset as `position(Some, S's-first-field)` (the old
      individual-field pattern) → wrong under single-payload; now `position(Some, "payload")`.
