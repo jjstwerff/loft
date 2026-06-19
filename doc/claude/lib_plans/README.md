@@ -3,16 +3,16 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Library plans
+# Library plans — LEGACY (absorbed into `plans/`)
 
-Multi-phase library design + implementation initiatives that
-span more than one session.  Each subdirectory holds the
-README (goal + index) plus one markdown file per phase.
-
-> **Migrating to issues (@PLN27).** Like core `plans/`, the canonical home
-> for an active or future library plan is now a
-> [`loft-lang/plans`](https://github.com/loft-lang/plans) issue (`@PLN<n>`);
-> the local dirs here are legacy/transitional and migrating under **@PLN27**.
+> **Closed to new work (2026-06-19).** Library plans are no longer separate.
+> **All new plans — including library work — are flat files under
+> [`../plans/`](../plans/)** (`plans/<n>-<slug>.md`, where `<n>` is the
+> [`loft-lang/plans`](https://github.com/loft-lang/plans) `@PLN<n>` issue
+> number), in the unified numbering there.  This directory is a legacy archive
+> being migrated to `plans/`: an entry that already maps to a `@PLN` issue moves
+> + renumbers to it; one not on gh yet gets an issue created first, then
+> renumbers.  **Do not add new `lib_plans/` dirs.**
 
 **Distinct from `plans/`.**  `plans/` tracks core-language and
 compiler / runtime initiatives (validation matrices, codegen
