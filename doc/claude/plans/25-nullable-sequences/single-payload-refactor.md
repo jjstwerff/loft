@@ -283,12 +283,17 @@ for a `__nullable<S>`, else 0.
      builds the forwarding `worker(coerced, ..params1..)` from `worker_attrs` AT SYNTH TIME, but a
      struct-returning worker's hidden `__retbuf` out-param is added LATER by the struct-return
      lowering — so the wrapper's call OMITS `__retbuf` (call has 1 arg, `make_doubled` then needs 2).
-     The wrapper itself DOES gain a `__retbuf` (lowering sees it returns a struct), so its signature
-     is `(e, __retbuf)` but its body call is `make_doubled(coerced)`.  FIX: forward the wrapper's own
-     `__retbuf` into the tail call (treat the wrapper body as a struct-return tail-call), or
-     synthesize the wrapper AFTER the ref-return lowering so `worker_attrs` already includes it.
-     Pre-existing (struct-return par always routed through the wrapper); revealed once 15-lexer
-     unblocked the `dir` aggregate.
+     The wrapper itself DOES gain a `__retbuf` (lowering sees it returns a struct).  INSTRUMENTED
+     (LOFT_PW): at synth time `worker_attrs=2` and `call_args=2` — so the wrapper FORWARDS `__retbuf`
+     to make_doubled CORRECTLY (`__retbuf` is added in PASS 1, so it is present when the wrapper is
+     synthesized in pass 2).  The defect is therefore the **DISPATCHER→wrapper call**, not the
+     wrapper→worker call: the par dispatcher (`n_parallel_queue_ref` + the per-element worker
+     invocation) passes only `(element)` to the wrapper and OMITS the `__retbuf` buffer it allocates
+     for a struct-return worker (native: wrapper "takes 3 arguments but 2 were supplied"; interp:
+     "8 < 12").  FIX SITE: the par dispatcher's worker-call marshalling — it must pass the
+     per-element return buffer (`__retbuf`) to the WRAPPER just as it would to the bare struct-return
+     worker.  Pre-existing (struct-return par over nullable always routed through the wrapper);
+     revealed once 15-lexer unblocked the `dir` aggregate.
   - **index<S> coherence** — `index<S>` is kept DENSE (vector/hash/sorted are nullable): rewriting
     it regresses the multi-key RANGE query (`idx[83..92,"Two"]`, 11-index.loft:48 → "Unknown in
     expression type __nullable<Elm>" — the range-query path does not unwrap a nullable element).
