@@ -160,6 +160,56 @@ fn main() {
     state.execute_argv("main", &p.data, &[]);
 }
 
+/// loft-lang/loft#409: a `vector<u8>` returned by an FFI bridge (built with
+/// `alloc_vector_from_bytes` — the null-store alloc path the crypto/imaging
+/// libs use) must survive an in-place `+=` by the caller.  Pre-fix the append
+/// rebuilt a fresh EMPTY buffer and dropped the returned elements (len 4 → 1
+/// instead of 5), because the wrapper forwarded the foreign store without
+/// filling its `__retbuf`.  Covers the WRAPPER shape (`fn make { ext_make_bytes }`)
+/// — the real library pattern (a private native + a public loft wrapper).
+#[test]
+fn ffi_returned_vector_survives_in_place_append_409() {
+    let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    // Needs the fixture cdylib (loaded via `--lib`); skip cleanly when absent.
+    if fixture_lib_path().is_none() {
+        eprintln!(
+            "skipping: fixture cdylib not built — run: cd tests/lib/native_pkg/native && cargo build --release"
+        );
+        return;
+    }
+
+    // Invoke the real binary and assert on captured stdout — the loft `assert`
+    // does NOT propagate out of an in-process `execute_argv`, so an in-process
+    // check would pass vacuously (the positive-control trap).
+    let prog = std::env::temp_dir().join("loft_409_ffi_vec_append.loft");
+    std::fs::write(
+        &prog,
+        "use native_pkg;\n\
+         fn make(n: integer) -> vector<u8> { ext_make_bytes(n) }\n\
+         fn main() { v = make(4); v += [99 as u8]; println(\"R={len(v)} {v[0]} {v[4]}\"); }\n",
+    )
+    .expect("write program");
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+        .arg("--lib")
+        .arg("tests/lib/native_pkg")
+        .arg("--interpret")
+        .arg(&prog)
+        .output()
+        .expect("run loft binary");
+    let _ = std::fs::remove_file(&prog);
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // len 4 returned + 1 appended = 5; first byte of [0,1,2,3] survives; appended = 99.
+    assert!(
+        stdout.contains("R=5 0 99"),
+        "loft#409: an FFI-returned vector<u8> must survive an in-place `+=` (expected \
+         `R=5 0 99`); got stdout: {stdout:?}, stderr: {:?}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 // ---------------------------------------------------------------------------
 // A7.2.4: registry takes priority over dlsym — issue #119
 // ---------------------------------------------------------------------------

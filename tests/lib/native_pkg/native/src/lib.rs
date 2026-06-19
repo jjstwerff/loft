@@ -143,6 +143,21 @@ pub unsafe extern "C" fn n_ext_loop_vec_sum(store: LoftStore, vec: LoftRef) -> i
     sum
 }
 
+// ── Pattern 8: Vector<u8> RETURN via the FFI alloc path (#409) ────────
+// The FFI-bridge equivalent of a `vector<u8>`-returning native: builds the
+// bytes [0, 1, 2, …] with `alloc_vector_from_bytes` (the null-store alloc the
+// crypto/imaging libs use for a heap return).  Exercises the path where a
+// returned FFI vector is later mutated in place (`v += …`) by the caller —
+// loft-lang/loft#409, where that `+=` used to drop the returned elements.
+#[loft_native]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_ext_make_bytes(store: LoftStore, n: i64) -> LoftRef {
+    let mut store = store;
+    let len = n.max(0) as u32;
+    let data: Vec<u8> = (0..len).map(|i| (i & 0xff) as u8).collect();
+    unsafe { store.alloc_vector_from_bytes(1, len, data.as_ptr(), data.len()) }
+}
+
 // ── Registration ─────────────────────────────────────────────────────
 // The loft decls bind `#native "loft_ext_*"`, so register the raw `n_ext_*`
 // symbols under those names (`loft_register_v1`, for the dlsym-priority and
@@ -157,6 +172,7 @@ loft_ffi::loft_register! {
     loft_ext_sandwich_sum => n_ext_sandwich_sum,
     loft_ext_struct_vec_len => n_ext_struct_vec_len,
     loft_ext_loop_vec_sum => n_ext_loop_vec_sum,
+    loft_ext_make_bytes => n_ext_make_bytes,
 }
 
 loft_ffi::loft_register_bridges! {
@@ -167,4 +183,5 @@ loft_ffi::loft_register_bridges! {
     "loft_ext_sandwich_sum" => n_ext_sandwich_sum__loft_bridge,
     "loft_ext_struct_vec_len" => n_ext_struct_vec_len__loft_bridge,
     "loft_ext_loop_vec_sum" => n_ext_loop_vec_sum__loft_bridge,
+    "loft_ext_make_bytes" => n_ext_make_bytes__loft_bridge,
 }
