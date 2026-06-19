@@ -899,8 +899,19 @@ impl Stores {
     pub fn set_default_value(&mut self, tp: u16, rec: &DbRef) {
         if tp <= 6 {
             match tp {
-                0 | 6 => {
+                0 => {
                     self.store_mut(rec).set_int(rec.rec, rec.pos, i64::MIN);
+                }
+                6 => {
+                    // Content type 6 is a 4-byte u32-raw field (read via `get_u32_raw`,
+                    // e.g. a `character` codepoint), NOT an 8-byte integer.  The old
+                    // `set_int(i64::MIN)` wrote 8 bytes — its high 4 bytes spilled into
+                    // the NEXT slot, which silently corrupts a tightly-sized record when
+                    // the field is the LAST one (a trailing `character` in a single-payload
+                    // `Some` payload overran the record and clobbered the adjacent free
+                    // block's size header → `fl_size` negate-overflow).  `i64::MIN`'s low 4
+                    // bytes are 0, so write 0 in exactly 4 bytes — same field value, no spill.
+                    self.store_mut(rec).set_i32_raw(rec.rec, rec.pos, 0);
                 }
                 1 => {
                     self.store_mut(rec).set_long(rec.rec, rec.pos, i64::MIN);
