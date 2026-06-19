@@ -1686,11 +1686,14 @@ impl Parser {
                 return Some(match type_name {
                     "index" => {
                         self.parse_fields(true, &mut fields);
-                        Type::Index(
-                            self.data.type_def_nr(&tp),
-                            fields,
-                            crate::data::Deps::none(),
-                        )
+                        // @PLN25 E2 — mirror the hash/vector arms: rewrite the element to
+                        // `__nullable<S>` so a keyed `index<S[k]>` agrees with sibling
+                        // vector/hash views AND its element is constructed via the nullable
+                        // work-ref+finish path (see the `sorted` arm note below).
+                        let elem = self.e2_nullable_elem(tp);
+                        let sub_nr = self.data.type_def_nr(&elem);
+                        self.data.set_referenced(sub_nr, on_d, Value::Null);
+                        Type::Index(sub_nr, fields, crate::data::Deps::none())
                     }
                     "hash" => {
                         self.parse_fields(false, &mut fields);
@@ -1734,6 +1737,17 @@ impl Parser {
                     }
                     "sorted" => {
                         self.parse_fields(true, &mut fields);
+                        // @PLN25 E2 — mirror the hash/vector arms.  A nested `sorted<S[k]>`
+                        // element left DENSE is built directly in its collection slot, but a
+                        // dense-element build inside a single-payload `Some` corrupts the
+                        // enclosing record (the slot ref aliases the parent — 15-lexer's
+                        // `possible: sorted<Possible[…]>` clobbered `SToken.start`).  Rewriting
+                        // to `__nullable<S>` routes element construction through the SAME
+                        // work-ref+finish path the nullable `vector` element uses, which is
+                        // correct, and keeps keyed views layout-consistent with vector/hash.
+                        let elem = self.e2_nullable_elem(tp);
+                        let sub_nr = self.data.type_def_nr(&elem);
+                        self.data.set_referenced(sub_nr, on_d, Value::Null);
                         Type::Sorted(sub_nr, fields, crate::data::Deps::none())
                     }
                     "spacial" => {

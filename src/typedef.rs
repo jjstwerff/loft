@@ -616,7 +616,14 @@ pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
                         fill_database(data, database, c_nr);
                         c_tp = data.def(c_nr).known_type;
                     }
-                    set_mutable_directed(data, c_nr, &key_fields);
+                    // @PLN25 E2 — for a synth `__nullable<S>` element the key fields live in the
+                    // `Some` payload, so resolve the key-bearing def (mirror the hash arm) before
+                    // marking them immutable; `c_nr` (the enum) has no direct key attribute.
+                    let kd = key_bearing_def(data, c_nr);
+                    if data.def(kd).known_type == u16::MAX {
+                        fill_database(data, database, kd);
+                    }
+                    set_mutable_directed(data, kd, &key_fields);
                     database.index(c_tp, &key_fields)
                 }
                 Type::Sorted(c_nr, key_fields, _) => {
@@ -625,7 +632,11 @@ pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
                         fill_database(data, database, c_nr);
                         c_tp = data.def(c_nr).known_type;
                     }
-                    set_mutable_directed(data, c_nr, &key_fields);
+                    let kd = key_bearing_def(data, c_nr);
+                    if data.def(kd).known_type == u16::MAX {
+                        fill_database(data, database, kd);
+                    }
+                    set_mutable_directed(data, kd, &key_fields);
                     database.sorted(c_tp, &key_fields)
                 }
                 Type::Spacial(c_nr, key_fields, _) => {
