@@ -437,7 +437,7 @@ impl Stores {
     /// payload, so the resolved field numbers and byte offsets agree across
     /// build time and run time. For any other element type, return it
     /// unchanged.
-    pub(super) fn key_owner(&self, content: u16) -> u16 {
+    pub(crate) fn key_owner(&self, content: u16) -> u16 {
         let name = &self.types[content as usize].name;
         if name.starts_with("__nullable<") {
             // Resolve the `Some` variant by its db name rather than the enum's

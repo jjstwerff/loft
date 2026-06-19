@@ -1655,6 +1655,19 @@ impl Parser {
         parent_tp: &Type,
     ) -> Type {
         let mut assign_tp = var_tp.content();
+        // @PLN25 E2 — a KEYED collection's `content()` yields `Reference(__nullable<S>)`
+        // (Hash/Sorted/Index wrap the content def in a Reference), but literal-element
+        // construction needs the inline `Enum(.., true)` form so each `S{…}` builds the
+        // `Some` variant (a vector's `content()` already yields `Enum(.., true)` directly,
+        // which is why `vector<S>` fields work but keyed fields hit "cannot store S in
+        // vector<__nullable<S>>").  Normalize so `hash<S[k]> += [S{…}]` and keyed-field
+        // initialisers take the same Some-construction path as a vector.  Inert gate-off
+        // (no content def is ever a `__nullable<` enum).
+        if let Type::Reference(d, dep) = &assign_tp
+            && self.data.def(*d).name.starts_with("__nullable<")
+        {
+            assign_tp = Type::Enum(*d, true, dep.clone());
+        }
         // @PLN25 — INFERRED struct-literal vector default: with no declared element
         // type (`var_tp` Unknown — an inferred local `v = [Row{…}]`, a fn return
         // body `{ [Row{…}] }`, …) and a first item that is a struct literal `S{…}`,

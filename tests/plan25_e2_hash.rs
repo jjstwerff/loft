@@ -165,6 +165,40 @@ fn keyed_set_into_nullable_hash_inserts_iterates_and_looks_up() {
     assert_both(&probe("keyed_set", SRC_KEYED_SET), "sum=60 l1=10 l3=30");
 }
 
+const SRC_LOCAL_KEYED: &str = "\
+struct Ent { ck: integer not null, v: integer not null }
+fn mk() -> hash<Ent[ck]> {
+  r: hash<Ent[ck]> = [];
+  r += [Ent{ck: 1, v: 10}];
+  r += [Ent{ck: 2, v: 20}];
+  r
+}
+fn main() {
+  h = mk();
+  s = 0;
+  for e in h { s += e.v; }
+  print(\"len={len(h)} sum={s} l1={h[1].v} l2={h[2].v}\\n\");
+}
+";
+
+#[test]
+fn typed_local_keyed_append_builds_some_in_place() {
+    // `r: hash<S[k]> = []; r += [S{…}]` on a typed LOCAL (not a struct field):
+    // gate-on the element type is `Enum(__nullable<S>, true)`, but the keyed
+    // element ref `elm` is typed `Reference(Some)`, so the parent type reaching
+    // the transparent-construction site (objects.rs) arrives as `Reference(syn)`,
+    // not `Enum(syn, true)`. Before the fix only the `Enum(.., true)` form was
+    // recognised, so the field path built `Some` in place while the typed-local
+    // path built a dense `S` into a temp and a raw `OpCopyRecord` mis-laid it
+    // into the `Some` record (wrong offsets, no discriminant → null/garbage).
+    // Accepting the `Reference(syn)` form too makes both build `Some` in place;
+    // the returned hash then iterates and looks up correctly across a deep copy.
+    assert_both(
+        &probe("local_keyed", SRC_LOCAL_KEYED),
+        "len=2 sum=30 l1=10 l2=20",
+    );
+}
+
 #[test]
 fn method_on_nullable_vector_element_native() {
     // A struct method (`fn val(self: P)`) registers `val` as a Routine ATTRIBUTE

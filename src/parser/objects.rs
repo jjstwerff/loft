@@ -148,11 +148,24 @@ impl Parser {
         // `S { … }`, build the `Some` variant instead — the discriminant
         // defaults to present via object_init, so `item: Row{…}` maps onto the
         // enum with the user still writing the struct name.
-        if let Type::Enum(syn, true, _) = &*parent_tp
-            && self.data.def(*syn).name == format!("__nullable<{nm}>")
+        // The expected type may arrive either as the inline-nullable `Enum(syn, true)`
+        // (vector elements, declared fields) or as `Reference(syn)` (a keyed
+        // collection's element ref / a typed-local keyed slot, whose `elm` var is
+        // typed `Reference(Some)` and propagates the parent as a Reference).  Accept
+        // both so a typed-LOCAL `hash<S[k]> += [S{…}]` builds `Some` in place, exactly
+        // like the field path — without it the literal builds a dense `S` that a raw
+        // OpCopyRecord then mis-lays into the `Some` record (wrong offsets, no
+        // discriminant → null/garbage reads).  Mirrors `unique_elm_var`, which already
+        // resolves the element through `Some` for both forms.
+        let syn_nullable = match &*parent_tp {
+            Type::Enum(syn, true, _) | Type::Reference(syn, _) => Some(*syn),
+            _ => None,
+        };
+        if let Some(syn) = syn_nullable
+            && self.data.def(syn).name == format!("__nullable<{nm}>")
             && self.lexer.peek_token("{")
         {
-            let some_d = self.data.variant_of(*syn, "Some");
+            let some_d = self.data.variant_of(syn, "Some");
             if some_d != u32::MAX {
                 let tp = self.parse_object(some_d, code);
                 if tp != Type::Unknown(0) {
