@@ -78,3 +78,23 @@ fn nullable_element_to_dense_by_value_arg_field_copy() {
     // null/empty. Both backends.
     assert_both(&probe("by_value", SRC_BY_VALUE), "a=1 b=hello c=7 d=z");
 }
+
+const SRC_DENSE_ASSIGN: &str = "\
+struct S { a: integer, b: text, c: integer not null, d: character }
+fn main() {
+  v: vector<S> = [ S{a:1, b:\"hi\", c:7, d:'z'} ];
+  dd: S = v[0];
+  print(\"a={dd.a} b={dd.b} c={dd.c} d={dd.d}\\n\");
+}
+";
+
+#[test]
+fn nullable_element_to_dense_local_assign() {
+    // A typed dense-`S` local assigned a `__nullable<S>` element (`dd: S = v[0]`).
+    // The var-type-change check would reject "cannot change type from S to
+    // __nullable<S>" (it fires on pass 1); routing through `convert` →
+    // `OpNullableToDense` before `change_var` unwraps the value and retypes the
+    // RHS dense. Native additionally needs the vector-read source HOISTED (it
+    // emits a `stores.*` call) so the unwrap op's arg does not double-borrow.
+    assert_both(&probe("dense_assign", SRC_DENSE_ASSIGN), "a=1 b=hi c=7 d=z");
+}

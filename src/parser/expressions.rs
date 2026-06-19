@@ -1258,6 +1258,21 @@ use a separate collection or add after the loop"
         // any Integer↔Integer assignment is a no-op and needs no early widen.
         let _ = op;
         let _ = f_type;
+        // @PLN25 E2 (gap 2) — a dense-`S` target assigned a `__nullable<S>` value
+        // (`d: S = v[i]`): unwrap the RHS via `convert` (→ `OpNullableToDense`)
+        // BEFORE `change_var`, then retype it as dense `S` so the var-type-change
+        // check accepts (d:S ← S) instead of erroring "cannot change type from S to
+        // __nullable<S>".  Mirrors the C54.A early-convert pattern above; NOT
+        // pass-2-gated because the type error fires on pass 1 too (`convert`
+        // self-guards emission to pass 2 and returns true on both).  Gate-off-inert.
+        let nullable_to_dense_assign = op == "="
+            && matches!(f_type, Type::Reference(struct_d, _)
+                if matches!(&s_type, Type::Enum(syn, true, _)
+                    if self.data.def(*syn).name
+                        == format!("__nullable<{}>", self.data.def(*struct_d).name())));
+        if nullable_to_dense_assign && self.convert(code, &s_type, f_type) {
+            s_type = f_type.clone();
+        }
         self.change_var(to, &s_type);
         // Plan-22 phase 02d-vi — bypass the text-special branch
         // when the LHS is auto-deref'd boxed text.  The general

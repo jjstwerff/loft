@@ -415,6 +415,16 @@ impl Output<'_> {
                 | "OpAppendCopy"
                 | "OpFormatDatabase"
                 | "OpFormatStackDatabase"
+                | "OpNullableToDense"
+                // @PLN25 E2 — vector-element reads emit `stores.vec_get/ref_or_raise`
+                // calls, so when nested as an arg to another stores-using op (e.g.
+                // `OpNullableToDense(v[i])` in a bare assignment) they must be hoisted
+                // into a local first — else `stores.f(&(stores.vec_get(…)))` is a
+                // double mutable borrow (rustc E0499).
+                | "OpGetVector"
+                | "OpGetVectorNullable"
+                | "OpVectorRef"
+                | "OpVectorRefNullable"
         )
     }
 
@@ -426,13 +436,21 @@ impl Output<'_> {
                 // always need pre-eval to avoid double-borrow.
                 if def.rust().is_empty() && *def.code() != Value::Null {
                     true
-                } else if def.rust().contains("stores") {
+                } else if def.rust().contains("stores")
+                    // A `#rust` template written in `s.database.` vocabulary
+                    // rewrites to `stores.` in native code (calls.rs), so it
+                    // double-borrows when nested too — e.g. `OpGetVectorNullable`
+                    // (`…&s.database.allocations`) used as a `OpNullableToDense` arg.
+                    || def.rust().contains("s.database.")
+                {
                     // Template fns that use `stores` can cause double-borrow when nested
                     // inside another stores-using call; treat them as needing pre-eval.
                     true
-                } else if def.rust().is_empty() && Self::op_uses_stores(def.name()) {
+                } else if Self::op_uses_stores(def.name()) {
                     // Native Op functions whose special-case emit code passes `stores`
                     // also cause double-borrow when nested inside other stores-using calls.
+                    // (Not gated on an empty rust template: some such ops — the vector
+                    // reads — carry a template yet still emit a `stores.*` special case.)
                     true
                 } else if def.rust().is_empty()
                     && *def.code() == Value::Null
