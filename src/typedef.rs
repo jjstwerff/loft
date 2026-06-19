@@ -761,7 +761,15 @@ pub(crate) fn key_bearing_def(data: &Data, c_nr: u32) -> u32 {
     if data.def_type(c_nr) == DefType::Enum && data.def(c_nr).name.starts_with("__nullable<") {
         let some = data.variant_of(c_nr, "Some");
         if some != u32::MAX {
-            return some;
+            // Single-payload: the key fields live inside the `Some` variant's inline
+            // `payload` field (a dense `S`), so the key-bearing def is the payload's
+            // struct, not the `Some` variant (whose direct fields are {enum, payload}).
+            let payload_attr = data.attr(some, "payload");
+            if payload_attr != usize::MAX
+                && let Type::Reference(struct_d, _) = data.def(some).attributes()[payload_attr].typedef
+            {
+                return struct_d;
+            }
         }
     }
     c_nr

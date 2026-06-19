@@ -2029,6 +2029,21 @@ impl Parser {
     }
 
     pub(crate) fn parse_object(&mut self, td_nr: u32, code: &mut Value) -> Type {
+        // @PLN25 single-payload: a `__nullable<S>::Some` variant's body uses S's field names,
+        // which live in the inline `payload` field — not `Some`'s direct fields {enum, payload}.
+        // Allocate the `Some` record, set the discriminant present, and parse the body as a
+        // dense `S` directly into the inline `payload` sub-ref.  See single-payload-refactor.md.
+        if self.data.def_type(td_nr) == DefType::EnumValue {
+            let payload_attr = self.data.attr(td_nr, "payload");
+            let parent = self.data.def(td_nr).parent;
+            if payload_attr != usize::MAX
+                && parent != u32::MAX
+                && self.data.def(parent).name.starts_with("__nullable<")
+                && let Type::Reference(struct_d, _) = self.data.attr_type(td_nr, payload_attr)
+            {
+                return self.parse_some_payload_object(parent, td_nr, struct_d, code);
+            }
+        }
         let link = self.lexer.link();
         if !self.lexer.has_token("{") {
             self.lexer.revert(link);
@@ -2175,6 +2190,72 @@ impl Parser {
         }
     }
 
+    /// @PLN25 single-payload — construct a `__nullable<S>::Some` value from an `S{…}` (or
+    /// anonymous `{…}`) literal: allocate the `Some` record, set the discriminant present,
+    /// then parse the body as a dense `S` directly into the inline `payload` sub-ref.  The
+    /// sub-ref is an `OpGetField`, so `parse_object(struct_d, …)` writes the body fields in
+    /// place (its `is_field` path) and defaults the rest — exactly the dense-`S` construction,
+    /// landing verbatim in the payload region.
+    fn parse_some_payload_object(
+        &mut self,
+        syn: u32,
+        some_d: u32,
+        struct_d: u32,
+        code: &mut Value,
+    ) -> Type {
+        // Peek the literal body without consuming it — parse_object(struct_d) consumes `{…}`.
+        let link = self.lexer.link();
+        if !self.lexer.has_token("{") {
+            self.lexer.revert(link);
+            return Type::Unknown(0);
+        }
+        self.lexer.revert(link);
+        let enum_tp = Type::Enum(syn, true, crate::data::Deps::none());
+        if self.first_pass {
+            // Type-only: consume the body so the parser stays aligned.
+            let mut throwaway = Value::Null;
+            self.parse_object(struct_d, &mut throwaway);
+            return enum_tp;
+        }
+        let some_kt = self.data.def(some_d).known_type();
+        let struct_kt = self.data.def(struct_d).known_type();
+        let disc_pos = self.database.position(some_kt, "enum");
+        let payload_pos = self.database.position(some_kt, "payload");
+        // Allocate the `Some` record in a work-ref + set the discriminant present.
+        let ret = self.data.def(some_d).returned().clone();
+        let w = self.vars.work_refs(&ret, &mut self.lexer);
+        let mut list = vec![
+            v_set(w, Value::Null),
+            self.cl("OpDatabase", &[Value::Var(w), Value::Int(i32::from(some_kt))]),
+            self.cl(
+                "OpSetEnum",
+                &[
+                    Value::Var(w),
+                    Value::Int(i32::from(disc_pos)),
+                    Value::Enum(2, u16::MAX),
+                ],
+            ),
+        ];
+        // Parse the body as a dense `S` directly into the inline payload sub-ref.
+        let mut payload_ref = self.cl(
+            "OpGetField",
+            &[
+                Value::Var(w),
+                Value::Int(i32::from(payload_pos)),
+                Value::Int(i32::from(struct_kt)),
+            ],
+        );
+        self.parse_object(struct_d, &mut payload_ref);
+        list.push(payload_ref);
+        list.push(Value::Var(w));
+        *code = v_block(
+            list,
+            Type::Enum(syn, true, crate::data::Deps::frame1(w)),
+            "NullableSome",
+        );
+        enum_tp
+    }
+
     /// Recursively replace `Value::Var(0)` (the record placeholder used in field default
     /// expressions) with the actual record reference from the calling context.
     pub(crate) fn replace_record_ref(mut val: Value, record: &Value) -> Value {
@@ -2318,45 +2399,21 @@ impl Parser {
             && self.data.def(*syn).name == format!("__nullable<{}>", self.data.def(*src_d).name())
         {
             let syn = *syn;
-            let src_d = *src_d;
             let some_d = self.data.variant_of(syn, "Some");
             let enum_kt = i32::from(self.data.def(syn).known_type());
             let item_pos = i32::from(
                 self.database
                     .position(self.data.def(td_nr).known_type(), field),
             );
-            // Payload field pairs (index-in-S, index-in-Some) — Some copied S's
-            // fields verbatim, so they share names; offsets differ (Some reserves
-            // the discriminant at 0), which get_field/set_field resolve per type.
-            let pairs: Vec<(usize, usize)> = (0..self.data.attributes(src_d))
-                .filter(|&f| !self.data.def(src_d).attributes[f].constant)
-                .filter_map(|f| {
-                    let nm = self.data.attr_name(src_d, f);
-                    let in_some = self.data.attr(some_d, &nm);
-                    (in_some != usize::MAX).then_some((f, in_some))
-                })
-                .collect();
             let src_var = self.vars.work_refs(exp_tp, &mut self.lexer);
             list.push(v_set(src_var, value.clone()));
             let field_ref = self.cl(
                 "OpGetField",
                 &[code.clone(), Value::Int(item_pos), Value::Int(enum_kt)],
             );
-            // discriminant 2 = the `Some` variant (Null=1, Some=2; 0 = absent).
-            let mut present = vec![self.cl(
-                "OpSetEnum",
-                &[field_ref.clone(), Value::Int(0), Value::Enum(2, u16::MAX)],
-            )];
-            for (f_in_src, f_in_some) in pairs {
-                let read = self.get_field(src_d, f_in_src, Value::Var(src_var));
-                present.push(self.set_field_no_check(
-                    some_d,
-                    f_in_some,
-                    0,
-                    field_ref.clone(),
-                    read,
-                ));
-            }
+            // Single-payload: set the discriminant present (Null=1, Some=2; 0 = absent)
+            // and copy the whole dense `S` source into the inline `payload` field.
+            let present = self.build_some_present(some_d, field_ref, Value::Var(src_var));
             let is_null = self.cl("OpRefIsNull", &[Value::Var(src_var)]);
             let not_null = self.cl("OpNot", &[is_null]);
             list.push(v_if(not_null, Value::Insert(present), Value::Null));

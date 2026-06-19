@@ -144,24 +144,38 @@ for a `__nullable<S>`, else 0.
   `for_type` already keeps the element `Enum(..,true)`, so loop-var access hits this path.
 - **Step 7 (partial).**  `tests/plan25_nullable_enum.rs` updated to the new contract (green).
 
-**REMAINING (the gate-on big-bang tail — current red tests are the checklist):**
-- **Step 4 — CONSTRUCTION (next, the big one).**  Build `Some{payload: S{…}}` from an
-  `S{…}` literal, not S's fields direct in `Some`.  Sites: objects.rs transparent
-  construction (line ~164: `parse_object(some_d, code)` must instead alloc `Some`, default
-  the disc present via `object_init`, and parse the `{…}` body as a dense S INTO the inline
-  `payload` sub-ref — `parse_object(struct_d, &mut payload_field_ref)`); the `parse_block`
-  enum-hint path (vectors.rs ~1383); vector-literal (vectors.rs ~1956/2099); comprehension;
-  builtins.rs par wrapper (~339); keyed construction (collections.rs ~736).  Fixes the
-  `plan25_e2_gap2/_hash/_generics` reds ("Unknown field Some.id" = construction still
-  targeting Some's direct fields).
+**WIP 2 progress (full suite: 2410 pass / 6 fail, from 18; NO non-E2 regression):**
+- **Step 4 CONSTRUCTION — mostly DONE.**  `plan25_e2_generics`, `_json`, `_hash` (6/6),
+  `_nullable_enum` all GREEN gate-on both backends.  Done: (a) the three dense-value sites
+  (objects.rs handle_field, collections.rs `[i]=expr`, vectors.rs append) now use a shared
+  `Parser::build_some_present(some_d, ref, src)` (mod.rs) — set disc + ONE `set_field` copy
+  of the dense S into `payload`, replacing the per-field loops; (b) named/anon `S{…}` literal
+  via a `parse_object` guard → `parse_some_payload_object` (objects.rs): alloc `Some`, set
+  disc, parse the body as dense S into the inline `payload` sub-ref; (c) the JSON walker
+  (`walk_parsed_into`, structures.rs) recurses a present object into the `payload` sub-record.
+- **Step 2/3 also extended:** `key_bearing_def` (typedef.rs) now returns the inner S (was
+  missing — caused an OOB in `set_mutable`); convert (mod.rs) emits a payload sub-ref via
+  `get_val` (inline struct → sub-ref, NOT a raw `OpGetField` which derefs).
+
+**REMAINING (5 E2 reds — the checklist):**
+- **Step 4 tail — inline-vector-literal + HEAP field overflow (4 gap2 reds).**  ROOT CAUSE
+  FOUND: `parse_some_payload_object` builds a TEMP `Some` (work-ref) and `new_record`
+  (vectors.rs) copies it into the freshly-allocated element slot via `OpCopyRecord`.  That
+  copy runs `remove_claims` on the UNINITIALIZED fresh slot — its garbage discriminant byte
+  makes remove_claims free a garbage heap (text) pointer → store-offset overflow.  Repro:
+  `v: vector<S> = [S{a:1, b:"hi", …}]` with a text field (a no-heap struct WORKS).  hash/json
+  dodge it (keyed/walker build in place).  FIX OPTIONS: build the literal IN-PLACE in the
+  element slot (match the pre-refactor path — best), or zero-init the slot disc before the
+  copy, or make `OpNewRecord` zero-init.  This blocks the 4 `_gap2` value-boundary tests
+  (`local_assign`/`by_value_arg`/`coalesce`/`via_local`), whose structs carry text.
 - **Step 5 — format** (format.rs): render the `payload` struct, not the `Some` field list.
-- **Step 6 — convert + DELETE `OpNullableToDense`** (generation/mod.rs `convert` → payload
-  sub-ref; then remove the op: default/01_code.loft, structures.rs `nullable_to_dense`,
-  fill.rs, control.rs + `tail_is_nullable_unwrap`, operators.rs, pre_eval.rs).  Fixes the
-  remaining `_gap2` reds.  `materialize_view_return` SURVIVES.
-- **Step 7 (rest)** — `tests/plan25_e2_layout.rs` byte-identity assertion → "`Some.payload`
-  is a dense S".
-- **Then** both-backend gate-on verify (F/K/A4/gap-2 suites + canonical probe) → gate flip.
+- **Step 6 — DELETE `OpNullableToDense`** (convert already emits the sub-ref): remove the op
+  + its gap2 return-routing built around copy/alloc semantics — control.rs
+  `tail_is_nullable_unwrap` + return materialization, operators.rs `is_struct_returning_call`
+  arm, pre_eval.rs, fill.rs, structures.rs `nullable_to_dense`, default/01_code.loft.  With a
+  sub-ref the routing is unneeded (flows on existing ref + #306 view-return).
+- **Step 7** — `tests/plan25_e2_layout.rs` byte-identity → "`Some.payload` is a dense S" (1 red).
+- **Then** both-backend gate-on verify + gate flip.
 
 ## Rollback
 

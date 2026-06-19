@@ -642,10 +642,37 @@ impl Stores {
                     v
                 };
                 self.store_mut(to).set_byte(to.rec, to.pos, 0, val);
-                // Variant-with-payload: if the parser gave us an Object
-                // and the variant's EnumValue sub-type exists (size > 1),
-                // recurse into the walker so the payload fields land in
-                // the same slot as the discriminant byte.
+                // @PLN25 single-payload: a synth `__nullable<S>` `Some` variant holds the
+                // object in its inline `payload` dense-`S` field — recurse the body into
+                // the payload sub-record (`to.pos + payload offset`), NOT the `Some` variant
+                // (whose direct fields are {enum, payload}, not S's).
+                if synth_nullable
+                    && name == "Some"
+                    && enum_tp != u16::MAX
+                    && let Some(body) = payload
+                {
+                    let pinfo = if let Parts::Struct(sf) | Parts::EnumValue(_, sf) =
+                        &self.types[enum_tp as usize].parts
+                    {
+                        sf.iter()
+                            .find(|f| f.name == "payload")
+                            .map(|f| (f.content, f.position))
+                    } else {
+                        None
+                    };
+                    if let Some((pcontent, ppos)) = pinfo {
+                        let payload_to = DbRef {
+                            store_nr: to.store_nr,
+                            rec: to.rec,
+                            pos: to.pos + u32::from(ppos),
+                        };
+                        return self
+                            .walk_parsed_into(body, pcontent, rec_tp, field, &payload_to, path, at);
+                    }
+                    return Ok(());
+                }
+                // Variant-with-payload (hand-written struct-enum): recurse so the payload
+                // fields land in the same slot as the discriminant byte.
                 if let Some(body) = payload
                     && enum_tp != u16::MAX
                     && self.types[enum_tp as usize].size > 1

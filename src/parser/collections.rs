@@ -728,28 +728,11 @@ impl Parser {
             && self.data.def(*syn).name == format!("__nullable<{}>", self.data.def(*src_d).name())
         {
             let syn = *syn;
-            let src_d = *src_d;
             let some_d = self.data.variant_of(syn, "Some");
-            // Payload field pairs (index-in-S, index-in-Some) — `Some` copied S's
-            // fields verbatim, so they share names; offsets differ (Some reserves
-            // the discriminant at 0), resolved per-field by get/set_field.
-            let pairs: Vec<(usize, usize)> = (0..self.data.attributes(src_d))
-                .filter(|&f| !self.data.def(src_d).attributes[f].constant)
-                .filter_map(|f| {
-                    let nm = self.data.attr_name(src_d, f);
-                    let in_some = self.data.attr(some_d, &nm);
-                    (in_some != usize::MAX).then_some((f, in_some))
-                })
-                .collect();
             let src_var = self.vars.work_refs(src_tp, &mut self.lexer);
-            let mut present = vec![self.cl(
-                "OpSetEnum",
-                &[to.clone(), Value::Int(0), Value::Enum(2, u16::MAX)],
-            )];
-            for (f_in_src, f_in_some) in pairs {
-                let read = self.get_field(src_d, f_in_src, Value::Var(src_var));
-                present.push(self.set_field_no_check(some_d, f_in_some, 0, to.clone(), read));
-            }
+            // Single-payload: set the discriminant present and copy the whole dense `S`
+            // source into the inline `payload` field (Null=1, Some=2; 0 = absent).
+            let present = self.build_some_present(some_d, to.clone(), Value::Var(src_var));
             // null branch — set discriminant 0 (the element may already hold a
             // `Some`; unlike the construction path it is not freshly zero-inited).
             let null_set = self.cl(

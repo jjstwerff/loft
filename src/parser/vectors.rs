@@ -2083,20 +2083,12 @@ impl Parser {
             && self.data.def(*syn).name == format!("__nullable<{}>", self.data.def(*s_d).name())
             && !matches!(p, Value::Insert(_))
         {
-            // @PLN25 E2 — store a DENSE struct value `S` into a
-            // `vector<__nullable<S>>` element (`v += [p]`, `v += [make()]`).  The
-            // `Some` payload is laid out INDEPENDENTLY from dense `S` (the packer
-            // reorders fields around the discriminant), so the generic-convert
-            // fallthrough's raw `OpCopyRecord` writes fields at the wrong offsets
-            // and never sets the discriminant → garbage reads.  Build `Some`
-            // field-by-field instead, exactly as a `S{ … }` literal element does:
-            // set the discriminant present, then copy each payload field from
-            // `S`'s dense offset to its `Some` offset via get_field/set_field (both
-            // type/alias aware).  A non-Var source is stashed once so each field
-            // read does not re-evaluate it.  Gate-inert: `__nullable<>` exists only
-            // when the E2 rewrite is active.
+            // @PLN25 single-payload — store a DENSE struct value `S` into a
+            // `vector<__nullable<S>>` element (`v += [p]`, `v += [make()]`): set the
+            // discriminant present and copy the whole dense `S` into the inline `payload`
+            // field (one record copy).  A non-Var source is stashed once so it is not
+            // re-evaluated.  Gate-inert: `__nullable<>` exists only when E2 is active.
             let syn = *syn;
-            let s_d = *s_d;
             let some_d = self.data.variant_of(syn, "Some");
             let mut steps = Vec::new();
             let src = if matches!(p, Value::Var(_)) {
@@ -2106,29 +2098,7 @@ impl Parser {
                 steps.push(v_set(tmp, p.clone()));
                 Value::Var(tmp)
             };
-            let known = self.data.def(some_d).known_type();
-            for aid in 0..self.data.attributes(some_d) {
-                let nm = self.data.attr_name(some_d, aid);
-                let off = self.database.position(known, &nm);
-                if self.data.def(some_d).attributes()[aid].constant {
-                    // The discriminant attribute — set it to the `Some` value
-                    // (`Enum(2, MAX)`); OpNewRecord zero-inits it to 0 (absent).
-                    let disc = self.data.attr_value(some_d, aid);
-                    let s = self.cl(
-                        "OpSetEnum",
-                        &[Value::Var(elm), Value::Int(i32::from(off)), disc],
-                    );
-                    steps.push(s);
-                    continue;
-                }
-                let s_aid = self.data.attr(s_d, &nm);
-                if s_aid == usize::MAX {
-                    continue;
-                }
-                let read = self.get_field(s_d, s_aid, src.clone());
-                let s = self.set_field(some_d, aid, 0, Value::Var(elm), read);
-                steps.push(s);
-            }
+            steps.extend(self.build_some_present(some_d, Value::Var(elm), src));
             p = Value::Insert(steps);
             t = in_t.clone();
         } else if !self.convert(&mut p, &t, in_t) {

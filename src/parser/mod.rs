@@ -1368,14 +1368,11 @@ impl Parser {
                 return true;
             }
         }
-        // @PLN25 E2 (gap 2) — the REVERSE coercion: a `__nullable<S>` value flows
+        // @PLN25 single-payload — the REVERSE coercion: a `__nullable<S>` value flows
         // into a dense `S` slot (`f(v[i])` where `fn f(r: S)`, a `??` result, a
-        // dense-local assign, a return).  The `Some` payload is packed
-        // INDEPENDENTLY from dense `S` (the packer reorders fields around the
-        // discriminant), so a sub-ref reinterpret reads reordered fields at the
-        // wrong offset (silent corruption).  Unwrap via the runtime op
-        // `OpNullableToDense`, which builds a fresh dense `S` by copying each field
-        // from its `Some` offset to its dense offset and deep-copying heap fields.
+        // dense-local assign, a return).  The dense `S` IS the `Some` variant's inline
+        // `payload` field, so unwrap by SUB-REFERENCING the payload — the sub-ref is a
+        // valid dense `S` reference (it shares S's offset table), with NO copy.
         if let (Type::Enum(enum_d, true, _), Type::Reference(struct_d, _)) = (is_type, should)
             && self.data.def(*enum_d).name
                 == format!("__nullable<{}>", self.data.def(*struct_d).name())
@@ -1385,11 +1382,20 @@ impl Parser {
                 let struct_d = *struct_d;
                 let some_d = self.data.variant_of(enum_d, "Some");
                 if some_d != u32::MAX {
-                    let struct_kt = i32::from(self.data.def(struct_d).known_type());
-                    let some_kt = i32::from(self.data.def(some_d).known_type());
-                    *code = self.cl(
-                        "OpNullableToDense",
-                        &[code.clone(), Value::Int(struct_kt), Value::Int(some_kt)],
+                    // `get_val` for an INLINE struct field produces a sub-ref (pos+offset),
+                    // not a pointer deref — the same form the field-access unwrap uses
+                    // (fields.rs).  A raw `OpGetField` with the struct type would deref the
+                    // payload bytes as a DbRef → garbage.  The payload IS dense `S`.
+                    let payload_pos = u32::from(
+                        self.database
+                            .position(self.data.def(some_d).known_type(), "payload"),
+                    );
+                    *code = self.get_val(
+                        &Type::Reference(struct_d, crate::data::Deps::none()),
+                        false,
+                        payload_pos,
+                        code.clone(),
+                        u32::MAX,
                     );
                 }
             }
@@ -3812,6 +3818,24 @@ impl Parser {
         val_code: Value,
     ) -> Value {
         self.set_field_check(d_nr, f_nr, d_pos, ref_code, val_code, false)
+    }
+
+    /// @PLN25 single-payload — emit the steps that turn a `Some` record (`some_ref`, type
+    /// `some_d`) into the PRESENT state from a dense-`S` source `src`: set the discriminant
+    /// present (offset 0), then copy the whole dense `S` into the inline `payload` field.
+    /// Single-payload makes `Some = { enum, payload: S }`, so this is ONE record copy (the
+    /// `Reference` arm of `set_field_check` emits the `OpGetField`+`OpCopyRecord`), replacing
+    /// the per-field copy loops the individual-field layout forced.  The caller owns the
+    /// null branch (set the discriminant 0) and any source stashing.
+    pub(crate) fn build_some_present(&mut self, some_d: u32, some_ref: Value, src: Value) -> Vec<Value> {
+        let payload_attr = self.data.attr(some_d, "payload");
+        vec![
+            self.cl(
+                "OpSetEnum",
+                &[some_ref.clone(), Value::Int(0), Value::Enum(2, u16::MAX)],
+            ),
+            self.set_field_no_check(some_d, payload_attr, 0, some_ref, src),
+        ]
     }
 
     fn set_field_check(
