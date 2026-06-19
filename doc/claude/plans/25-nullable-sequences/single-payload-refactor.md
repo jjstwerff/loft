@@ -309,9 +309,22 @@ for a `__nullable<S>`, else 0.
     `test_from_field`'s gate-on construction (`parts: vector<__nullable<V>>`, then `seg.a += […]`
     at line 39) CLAIMS a reused slot whose free-block state corrupts the store free-list (the
     LLRB free-tree in store.rs).  Gate-OFF `from_field` is dense (no nullable) so it never hits this.
-    FIX SITE: the store free-list / `claim` reuse path interacting with the gate-on nullable
-    construction's allocation sizes — needs a debug build + free-list instrumentation (cf. the
-    earlier `fl_size` negate-overflow class).  Pre-existing (dense-V cleanup unchanged by this plan).
+    ROOT-CAUSED (debug build, `RUSTFLAGS=-C debug-assertions=on`): TWO entangled roots.
+    (a) **H5 two-pass def divergence** — `assert_pass2_def_attr_stable` (parser/mod.rs:629) fires
+    gate-on: "definition COUNT diverged across passes (pass1=421, pass2=425)" — the 4 `__nullable<V>`
+    defs (enum + Some + Null + `vector<__nullable<V>>`) are created in PASS 2 but not PASS 1.  This is
+    GENERAL (even a trivial gate-on `vector<V>` program diverges) and usually benign in RELEASE
+    (debug-assert off), but it desyncs the pass-1 layout from the pass-2 def table.
+    (b) **double-free in `remove_claims`** — the actual SIGSEGV: `parts += [seg]` → `OpCopyRecord`
+    (state/io.rs:1337) → `remove_claims` (allocation.rs:1673) frees the temp `seg`; its nested-vector
+    arm calls `vector::length_vector` (vector.rs:323) which reads the backing handle's length, but the
+    handle points at a FREED / invalid record → `valid()` "Unknown record" (store.rs:1629).  So
+    `seg`'s nested `vector<u8>` is freed twice (or its handle dangles after the copy).  Order-specific
+    because `test_values`'s earlier frees set the free-list slot state that makes the stale handle
+    resolve to a non-claimed record.  FIX (focused session): make E2 nullable synthesis PASS-STABLE
+    (synthesize the `__nullable<S>` defs in pass 1 too, so H5 holds) — likely resolves the layout
+    desync behind the double-free; and/or fix the copy-then-free of a nullable element whose payload
+    owns a nested collection so `seg`'s vector isn't double-freed.  Pre-existing (general gate-on).
   - **index<S> coherence** — `index<S>` is kept DENSE (vector/hash/sorted are nullable): rewriting
     it regresses the multi-key RANGE query (`idx[83..92,"Two"]`, 11-index.loft:48 → "Unknown in
     expression type __nullable<Elm>" — the range-query path does not unwrap a nullable element).
