@@ -560,8 +560,23 @@ impl Parser {
         // which finds-or-inserts at runtime (dedup by `value`'s key),
         // uniformly for local / field / `&`-param collections.  (The
         // `coll[key] = null` removal is intercepted earlier in this fn.)
+        //
+        // @PLN25 E2 — gate-on, a keyed collection over a nullable element
+        // (`hash<S[k]>` rewritten to `hash<__nullable<S>[k]>`) has element
+        // type `Enum(__nullable<S>, true)` (the inline-nullable form, see
+        // `index_type`), NOT `Reference(S)`.  Accept it too so the keyed-set
+        // still routes to `OpSetKeyed`: `set_keyed` reads `value`'s key via
+        // the SAME `key_owner`-resolved key descriptors the lookup uses, so
+        // insert and lookup agree.  Without this the set falls through to the
+        // update-only `OpCopyRecord`, which no-ops on the insert-miss and
+        // leaves every lookup returning null.  Inert gate-off (no element
+        // type is ever a `__nullable<` enum).
+        let nullable_elem = matches!(
+            f_type,
+            Type::Enum(e, true, _) if self.data.def(*e).name.starts_with("__nullable<")
+        );
         if op == "="
-            && matches!(f_type, Type::Reference(_, _))
+            && (matches!(f_type, Type::Reference(_, _)) || nullable_elem)
             && let Value::Call(get_nr, get_args) = to.unspan()
             && self.data.def(*get_nr).name() == "OpGetRecord"
             && let Some(Value::Int(db_tp)) = get_args.get(1)

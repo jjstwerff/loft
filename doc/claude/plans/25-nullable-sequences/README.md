@@ -88,12 +88,12 @@ Step 5 exists (re-run the consumers gate-on; triage only what does not go green 
 **A4(b) is landed** (2026-06-17); **A3 rung 1** (key-resolution chokepoint, `key_owner`) is landed
 (2026-06-17, gate-inert) — but A3 proved to be ≥4 substrate rungs (see Step-1 A3).  Next concrete
 move: **A3 done**; **Step 3 + Step 5 sweep done** — the gate-on native tail is now MAPPED into
-clusters F/C/K/N (see Step 5 § Gate-on native sweep).  Next concrete target: **Cluster F** (field
-access iterating a nullable HASH) as a TWO-PART unit — `for_type` Hash arm → `Enum` (control.rs:3259,
-localized) PLUS the hash-iteration runtime element read (the SIGSEGV the parser-only change exposes);
-land both together with a both-backend regression.  Then **Cluster C** (gap 2 coercion), **Cluster K**
-(literal into a hash field), **Cluster N** (keyed/par native panics), **Step 2** (par extra-args),
-**gap 4**, and the Step-6 flip.
+clusters F/C/K/N (see Step 5 § Gate-on native sweep).  **Cluster F done** (2026-06-19, both backends):
+keyed-SET routing (`towards_set` @P305 accepts the synth-nullable enum element → `OpSetKeyed`
+find-or-insert) + `for_type` Hash arm → `Enum(.., true)` (field access unwraps through `Some`); the
+SIGSEGV root was the keyed-set never inserting, NOT a hash-iteration runtime read.  Next concrete
+target: **Cluster C** (gap 2 coercion), then **Cluster K** (literal into a hash field), **Cluster N**
+(keyed/par native panics), **Step 2** (par extra-args), **gap 4**, and the Step-6 flip.
 
 ## Status
 
@@ -465,14 +465,27 @@ default-on (gate removed), per the project standard.  The remaining work, in fin
      on `--native`.  The failures cluster (raw-sweep `aborting due to N errors` on the EXPECT-error
      suites — 35/36/72/74/101/102/… — are likely false positives the test harness handles; the real
      E2 seams are the `__nullable`-mentioning + runtime-panic ones):
-     - **Cluster F — field access on a loop var iterating a HASH** (`Unknown field __nullable<X>.f`:
-       131, 134, repro_p290b, repro_p376).  ROOTED 2026-06-18: `for_type`'s Hash/Sorted/Index arm
-       (control.rs:3259) returns `Reference(dnr)` for a synth `__nullable<S>` element, but the
-       field-access unwrap needs `Enum(.., true)` (as the vector arm already keeps).  Making it
-       `Enum` unblocks the PARSE but exposes a RUNTIME crash in the hash-iteration element read (the
-       `fill_iter on=4` hash-scratch path with a Some-wrapped element) — so this is a TWO-PART seam
-       (for_type + hash-iteration runtime read), to land as a unit, not a half-fix (parser-only would
-       turn a clean parse error into a SIGSEGV).
+     - **Cluster F — keyed-SET insert + field access on a loop var iterating a HASH.**  DONE
+       2026-06-19, both backends (regression `tests/plan25_e2_hash.rs::keyed_set_into_nullable_hash_
+       inserts_iterates_and_looks_up`).  The earlier two-part framing (parser-only change exposes a
+       hash-iteration RUNTIME read crash) was WRONG — instrumenting the SIGSEGV with a no-iteration
+       probe (`hash[k]=S{…}` then a bare lookup) showed the lookup *itself* returned null and the
+       records were never inserted.  Real root, TWO gate-inert seams:
+       (1) **keyed-SET routing** (`towards_set`, collections.rs:567): the @P305 insert-or-replace
+       routing fires only for `matches!(f_type, Type::Reference(_,_))`, but gate-on a keyed
+       collection over a nullable element has `f_type = Enum(__nullable<S>, true)` (the `index_type`
+       rung-3 form), so the set fell through to the UPDATE-only `OpCopyRecord(value, OpGetRecord(…))`
+       — which no-ops on the insert-miss (empty hash) so nothing is ever inserted; every lookup then
+       reads null and *iterating the empty index* is what segfaulted.  Fixed by accepting the
+       synth-nullable enum element too → routes to `OpSetKeyed` (find-or-insert; `set_keyed` reads
+       the key via the SAME `key_owner`-resolved descriptors the lookup uses, so insert and lookup
+       agree).  (2) **for-loop element typing** (`for_type` Hash/Sorted/Index arm, control.rs:3259):
+       now keeps a synth `__nullable<S>` element as `Enum(.., true)` (mirroring the Vector arm) so
+       `e.field` unwraps through `Some`.  With (1) fixed, (2) is no longer a half-fix — the SIGSEGV
+       it previously "exposed" was the empty index, not a runtime-read crash.
+       *Lesson:* a SIGSEGV in iteration was a symptom of an INSERT bug upstream; the no-iteration
+       probe localized it in one run — the `i_parse_errors` disc-value "tell" was a disassembler
+       cosmetic (the working vector path emits the identical `SetEnum(…, val: i_parse_errors)`).
      - **Cluster C — fn-arg / return coercion of `__nullable<S>` → dense `S`** (`expected S, got
        __nullable<S>`: 100-enhancements `set_p160`, 55-stack-trace return).  This is the README's
        gap 2 (offset-ref reinterpret at `can_convert` + the call-arg / return lowering).

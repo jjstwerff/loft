@@ -136,6 +136,35 @@ fn lone_nullable_hash_field_constructs_and_misses_cleanly() {
     assert_both(&path, "missing=true");
 }
 
+const SRC_KEYED_SET: &str = "\
+struct Pair { q: integer, v: integer }
+struct Bag { items: hash<Pair[q]> }
+fn main() {
+  bag = Bag { };
+  bag.items[1] = Pair{q: 1, v: 10};
+  bag.items[2] = Pair{q: 2, v: 20};
+  bag.items[3] = Pair{q: 3, v: 30};
+  s = 0;
+  for e in bag.items { s += e.v; }
+  print(\"sum={s} l1={bag.items[1].v} l3={bag.items[3].v}\\n\");
+}
+";
+
+#[test]
+fn keyed_set_into_nullable_hash_inserts_iterates_and_looks_up() {
+    // `hash[k] = S{…}` keyed-SET into a nullable hash field: gate-on the element
+    // type is `Enum(__nullable<S>, true)`, not `Reference(S)`, so the @P305
+    // insert-or-replace routing in `towards_set` must accept the synth-nullable
+    // enum too — else the set falls through to the UPDATE-only `OpCopyRecord`,
+    // which no-ops on the insert-miss (empty hash), every lookup returns null,
+    // and iterating the empty index segfaults. With the routing fixed the set
+    // reaches `OpSetKeyed` (find-or-insert; `set_keyed` reads the key via the
+    // same `key_owner`-resolved descriptors the lookup uses). The for-loop then
+    // needs `for_type`'s Hash arm to keep the element as `Enum(.., true)` so
+    // `e.v` unwraps through `Some`.
+    assert_both(&probe("keyed_set", SRC_KEYED_SET), "sum=60 l1=10 l3=30");
+}
+
 #[test]
 fn method_on_nullable_vector_element_native() {
     // A struct method (`fn val(self: P)`) registers `val` as a Routine ATTRIBUTE

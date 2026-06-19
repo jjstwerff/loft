@@ -3311,7 +3311,18 @@ impl Parser {
             // can flip the hash arm to `on = 4`.  Without this, for-loop
             // body parsing sees `e` as Type::Null and field access on
             // `e.name` fails with "Unknown type null".
-            Type::Reference(*dnr, dep.clone())
+            //
+            // @PLN25 E2 — a synth `__nullable<S>` element keeps `Enum(.., true)`
+            // so the loop body's field access unwraps through `Some` (mirrors
+            // the Vector arm above and the `index_type` lookup path); without
+            // it `e.field` errors "Unknown field __nullable<S>.field" because
+            // the enum itself carries no payload field.  Inert gate-off (no
+            // keyed element type is ever a `__nullable<` enum).
+            if self.data.def(*dnr).name.starts_with("__nullable<") {
+                Type::Enum(*dnr, true, dep.clone())
+            } else {
+                Type::Reference(*dnr, dep.clone())
+            }
         } else if let Type::Iterator(i_tp, _) = &in_type {
             if **i_tp == Type::Null {
                 I32.clone()
