@@ -828,10 +828,12 @@ impl ShowDb<'_> {
                         self.write_jsonvalue(s, indent);
                         return;
                     }
-                    // @PLN25 E2 — a synthetic `__nullable<S>` enum formats
-                    // TRANSPARENTLY: a present element renders as the dense `S`
-                    // (no `Some` variant tag), an absent one as `null`.  Without
-                    // this, `{v[i]}` showed `Some {…}` instead of the struct.
+                    // @PLN25 single-payload — a synthetic `__nullable<S>` enum formats
+                    // TRANSPARENTLY: a present element renders as the dense `S` (no `Some`
+                    // wrapper), an absent one as `null`.  The dense `S` lives in the `Some`
+                    // variant's inline `payload` field, so render a sub-view at the payload
+                    // offset typed as the dense struct — its own `write` emits the loft type
+                    // name / `{…}` body.  Without this, `{v[i]}` showed `{payload: {…}}`.
                     if self.stores.types[self.known_type as usize]
                         .name
                         .starts_with("__nullable<")
@@ -840,16 +842,27 @@ impl ShowDb<'_> {
                         if v <= 0 {
                             s.push_str("null");
                         } else if (v as usize - 1) < vals.len() {
-                            let tp_nr = vals[v as usize - 1].0;
-                            if tp_nr != u16::MAX
+                            let some_tp = vals[v as usize - 1].0;
+                            if some_tp != u16::MAX
                                 && let Parts::EnumValue(_, st) =
-                                    &self.stores.types[tp_nr as usize].parts
+                                    &self.stores.types[some_tp as usize].parts
+                                && let Some(pf) = st.iter().find(|f| f.name == "payload")
                             {
-                                if self.loft {
-                                    let ename = &self.stores.types[self.known_type as usize].name;
-                                    s.push_str(&ename["__nullable<".len()..ename.len() - 1]);
-                                }
-                                self.write_struct(s, st, indent);
+                                let sub = ShowDb {
+                                    stores: self.stores,
+                                    store: self.store,
+                                    rec: self.rec,
+                                    pos: self.pos + u32::from(pf.position),
+                                    known_type: pf.content,
+                                    pretty: self.pretty,
+                                    json: self.json,
+                                    loft: self.loft,
+                                    dump: self.dump,
+                                    compact: self.compact,
+                                    max_depth: self.max_depth,
+                                    max_elements: self.max_elements,
+                                };
+                                sub.write(s, indent);
                             }
                         }
                         return;
