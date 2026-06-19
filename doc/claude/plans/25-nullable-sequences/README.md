@@ -94,11 +94,12 @@ keyed construction over nullable (parse_vector content-normalize + transparent-c
 `Reference(syn)` shape + native `bare_field_name` key_owner).  Together they cleared the keyed
 cluster (119/120/122/126/127/128/291/32 + 131/134) both backends; the gate-on interpret divergence
 set dropped 21 → ~11.  **gap 2 unwrap primitive DONE** (`OpNullableToDense`, commit `bfc60f9d`, both
-backends — fixes 150; the value-boundary `__nullable<S>`→dense `S` field-copy that the layout proof
-showed was required).  **Remaining = gap-2 ROUTING** (by-value-arg leak, `??`/dense-assign/`&S`-arg
-boundaries that error before convert, return-WRAP 55), **interface delegation** (86),
-**single-element keyed `+=`** (store_persist, XS), **par/forward-ref** (22/22c/40/371), **gap 4**,
-then the Step-6 flip.
+backends — fixes 150-interp; the value-boundary `__nullable<S>`→dense `S` field-copy that the layout
+proof showed was required).  **gap-2 ROUTING C3 + 151 DONE** (commit `c05ff61c`, both backends —
+dense-local assign + `??`-to-dense; interpret divergences now 9).  **Remaining = gap-2 routing tail**
+(150 native return-boundary `a.depth=null`, `&S`-arg 100, return-WRAP 55, single-element `+=`
+store_persist, by-value-arg leak), **interface delegation** (86), **par/forward-ref** (22/22c/40/371),
+**gap 4**, then the Step-6 flip.
 
 ## Status
 
@@ -515,15 +516,25 @@ default-on (gate removed), per the project standard.  The remaining work, in fin
          from the source).  Now correct on both backends; **fixes 150**.  Regression
          `tests/plan25_e2_gap2.rs`.  Earlier parser-level prototypes hit store/lifetime walls (null
          -ref FreeRef, `set_str` free-list corruption) — the database-layer op sidesteps them.
-       - **Open routing:** (a) a by-value arg still LEAKS one dense temp store gate-on (the arg path
-         doesn't route through `copy_ref`'s `0x8000` free-source bit even though
-         `is_struct_returning_call` now flags the op); (b) `x ?? dense_default` (151) — making the
-         `??` result dense compiles but the present branch unwraps to depth=0 (a null-check / branch
-         -temp interaction; reverted, needs care, NOT just a result-type tweak); (c) dense-local
-         assign `d: S = v[i]` (C3) and `&S` by-ref arg (100, needs copy-IN/OUT around the call)
-         error BEFORE reaching convert; (d) return-WRAP (55, dense `vector<S>` → `vector<__nullable
-         <S>>`) is the opposite direction.  Each is its own routing seam on top of the now-working
-         primitive.
+       - **Routing DONE (commit `c05ff61c`, both backends):** dense-local assign `d: S = v[i]` (C3)
+         and `x ?? dense_default` (151) — `parse_assign_op` now runs `convert`→`OpNullableToDense`
+         before `change_var` and retypes the RHS dense (ungated: the type error fires on pass 1 too).
+         Native needed the vector-read source HOISTED (`needs_pre_eval`/`op_uses_stores` now flag
+         `OpGetVector*`/`s.database.`-vocab templates) so `OpNullableToDense(v[i])` does not
+         double-borrow `stores`.  151 passes both backends; regression
+         `nullable_element_to_dense_local_assign`.
+       - **Open routing:** (a) **return-BOUNDARY** unwrap on NATIVE (150 `a = pick_local(...)`): now
+         COMPILES (the hoist fix cleared its double-borrow) but reads `a.depth=null` — the returned
+         fresh dense temp loses its data across the native return (lifetime of the temp store on
+         return); interp is correct.  (b) `&S` by-ref arg (100) needs copy-IN/OUT around the call
+         (the unwrap is a copy, so a `&mut` mutation wouldn't propagate) — errors before convert.
+         (c) return-WRAP (55, dense `vector<S>` → `vector<__nullable<S>>`) is the opposite direction.
+         (d) single-element `h += S{…}` (store_persist) — routing the singleton compiles but the
+         dense literal builds dense-offset fields copied into `Some` at the wrong offsets (`v=null`);
+         needs the RHS literal to construct `Some` (the transparent-construction path, which only
+         fires when the element type reaches the literal parse — it doesn't on the `+=` RHS).
+         (e) a by-value arg still LEAKS one dense temp store gate-on (the arg path skips
+         `copy_ref`'s free-source bit).  Each is its own routing seam on the now-working primitive.
      - **Interface delegation (86):** `__nullable<S>` must satisfy an interface its underlying `S`
        implements (`missing to_label`) — a method/interface call through the wrapper unwraps to `S`.
        Sibling of gap 2 (the method-attribute Step-3 work is the related fix).  Size S–M.
