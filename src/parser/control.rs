@@ -3672,28 +3672,38 @@ impl Parser {
                 .operators
                 .last()
                 .is_some_and(|t| self.tail_is_nullable_unwrap(t)),
-            // Only when the unwrap source is a LOCAL (`OpNullableToDense(Var)`):
-            // `return chosen` where `chosen` is an assigned local hits the buffer
-            // -demote path and needs materialising into the return buffer.  An
-            // unwrap of a direct expression (`return v[i]`, `return x ?? d`) is the
-            // sole body-tail value and the default epilogue returns it directly
-            // (materialising it instead would NRVO-rename the work-ref onto the
-            // caller's buffer and re-`OpDatabase` it → free-list corruption).
+            // Single-payload: the `__nullable<S>` → dense `S` unwrap is now a payload
+            // SUB-REF `OpGetField(<__nullable<S> value>, payload_offset, S_kt)` (the convert
+            // emits it via `get_val`).  Materialise it — copy the viewed `S` into the return
+            // buffer so the result is OWNED, not a dangling view into the caller's container —
+            // ONLY when the unwrap source is a LOCAL (`Var`, e.g. `return chosen`) or a
+            // materialised sub-expression (`Block`/`If`, e.g. `return v[i] ?? d`'s ncc block).
+            // A direct `v[i]` index source is the sole returnable that the default epilogue
+            // returns correctly; materialising it would NRVO-rename the work-ref onto the
+            // caller's buffer and re-`OpDatabase` it → free-list corruption.  The
+            // source-is-`__nullable<S>` check distinguishes the unwrap from an ordinary
+            // struct-field read (whose source is a dense struct, not the synth enum).
             Value::Call(d, args) => {
-                // Materialise when the unwrap source is a LOCAL (`Var`) or a
-                // materialised sub-expression (`Block`/`If` — e.g. the `??` ncc
-                // block).  NOT a plain Call/index (`v[i]`): that direct tail is the
-                // sole returnable and the default epilogue returns it correctly;
-                // materialising it would NRVO-rename the work-ref onto the caller's
-                // buffer and re-`OpDatabase` it (free-list corruption).
-                self.data.def(*d).name() == "OpNullableToDense"
-                    && matches!(
-                        args.first().map(Value::unspan),
-                        Some(Value::Var(_) | Value::Block(_) | Value::If(_, _, _))
-                    )
+                self.data.def(*d).name() == "OpGetField"
+                    && args.first().is_some_and(|s| self.unwrap_source_is_nullable(s))
             }
             _ => false,
         }
+    }
+
+    /// Is `src` a `__nullable<S>` value (the source of a payload-unwrap `OpGetField`)?
+    /// Only a LOCAL (`Var`), a materialised `Block`/`If` tail qualifies — a direct
+    /// index/call source returns `false` so its unwrap is NOT materialised (see
+    /// `tail_is_nullable_unwrap`).  Gate-off-inert (no `__nullable<>` type exists).
+    fn unwrap_source_is_nullable(&self, src: &Value) -> bool {
+        let tp = match src.unspan() {
+            Value::Var(v) => self.vars.tp(*v).clone(),
+            Value::Block(bl) => bl.result.clone(),
+            Value::If(_, t, _) => return self.unwrap_source_is_nullable(t),
+            _ => return false,
+        };
+        matches!(&tp, Type::Enum(d, _, _) | Type::Reference(d, _)
+            if self.data.def(*d).name().starts_with("__nullable<"))
     }
 
     fn site_value_ref(&self, tail: &Value) -> Option<u16> {
