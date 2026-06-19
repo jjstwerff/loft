@@ -211,13 +211,16 @@ for a `__nullable<S>`, else 0.
      the `::`-qualified struct (@PLN22-namespace-adjacent).  Fix: resolve the qualified name in the
      peek so it rewrites too; OR make the vector `+=` reconcile a dense `vector<S>` source into a
      `vector<__nullable<S>>` target (element-wise wrap — the general boundary fix).
-  3. **null-store OOB at structures.rs:43 (record_new)** — `index 65535` in tests/docs/16-parser.loft
-     + lib/audience_crystal.  ROOT (instrumented): `record_new(parent_tp=__nullable<Definition>,
-     field=0)` — a NESTED-collection construction inside a `__nullable<S>` element passes
-     `parent_tp` = the ENUM (field 0 = the disc, no sub-type → `field_type`=MAX → OOB) instead of
-     the payload's dense `S`.  Fix: the construction caller (or `record_new`) must resolve a
-     `__nullable<S>` parent through the payload (dense S + payload base), like `key_owner`/field
-     access — for nested collections/structs inside a nullable element.
+  3. **null-store OOB at structures.rs:43 (record_new) — PARTIALLY FIXED (seam 3a, `51e00466`).**
+     `record_new`/`record_finish` now redirect a `__nullable<S>` field-parent through the payload
+     (`nullable_field_parent` = key_owner/key_base; E2-validated, gate-off-inert), eliminating the
+     structures.rs:43 OOB class.  BUT 16-parser then hits a DEEPER upstream bug: `record_new(parent
+     =__nullable<Definition>, field=0)` is a nested-construction call whose `field=0` matches
+     NEITHER the enum's field 0 (disc) NOR a collection in `Definition` (Definition.field[0] is a
+     `boolean` → `Cannot add to none-structure 'boolean'` at structures.rs:88).  So the CALLER'S
+     field index is wrong for this nested cross-lib construction — an upstream codegen field-index
+     bug (Definition is a cross-lib struct).  Pinpoint the OpNewRecord/record_new caller that emits
+     `field=0` here; likely shares the cross-lib root with seam 2.
   4. **wrong value in 15-lexer** — `assertion failed: Incorrect plus` (tests/docs/15-lexer.loft),
      a value divergence (not a crash) gate-on; isolate the differing computation.
   5. **par with USER EXTRA args** — `script_threading` (the broader-plan Step 2 seam, pre-existing,
