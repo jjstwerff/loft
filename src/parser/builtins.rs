@@ -336,11 +336,13 @@ impl Parser {
         let e_var = wvars.add_variable("e", elem_tp, &mut self.lexer);
         wvars.become_argument(e_var);
         wvars.defined(e_var);
+        // Single-payload: the dense `S` is the `Some` variant's inline `payload` field, so the
+        // offset-ref coercion sub-references `payload` (NOT S's first field, which is no longer
+        // a direct `Some` field) — the same form the field-access unwrap (fields.rs) uses.
         let some_d = self.data.variant_of(enum_d, "Some");
-        let first = self.data.attr_name(struct_d, 0);
         let off = self
             .database
-            .position(self.data.def(some_d).known_type(), &first);
+            .position(self.data.def(some_d).known_type(), "payload");
         let coerced = self.get_val(
             &Type::Reference(struct_d, crate::data::Deps::none()),
             false,
