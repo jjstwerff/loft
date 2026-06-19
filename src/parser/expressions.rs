@@ -2024,6 +2024,16 @@ use a separate collection or add after the loop"
         {
             return elem;
         }
+        // @PLN25 — a STDLIB struct stays DENSE even inside a CONSUMER's collection.  The
+        // stdlib produces/consumes its own structs densely (e.g. `stack_trace()` returns a
+        // dense `vector<StackFrame>`), so rewriting a consumer's `vector<StackFrame>` to
+        // `vector<__nullable<StackFrame>>` desyncs the boundary ("expected
+        // vector<__nullable<StackFrame>>, got vector<StackFrame> on return").  Mirror the
+        // `e2_rewrite_enabled` STD_SOURCE exclusion, but keyed on the STRUCT's source rather
+        // than the current parse source.
+        if self.data.def(struct_d).source == crate::data::STD_SOURCE {
+            return elem;
+        }
         let syn = self.data.nullable_enum_for(&mut self.lexer, struct_d);
         Type::Enum(syn, true, Deps::none())
     }
