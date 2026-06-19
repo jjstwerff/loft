@@ -1,0 +1,601 @@
+{
+  "packages": {
+    "arguments": {
+      "categories": [
+        "cli"
+      ],
+      "description": "CLI argument parsing — positional args + flags + auto-generated --help.",
+      "homepage": "https://github.com/loft-lang/loft-libs-core/tree/main/arguments",
+      "versions": {
+        "0.1.0": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-05-24T15:13:36Z",
+          "sha256": "06334720c0d3dda82e8f095076a1e850b49f33369810330cd30a6ebc192ff899",
+          "size": 4155,
+          "subpath": "arguments",
+          "url": "https://github.com/loft-lang/loft-libs-core/releases/download/arguments-v0.1.0/arguments-0.1.0.tar.gz"
+        },
+        "0.1.1": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-06-14T14:42:30Z",
+          "sha256": "68c59afef2bc05d0d9a17e2bb23ed0369e77073469ef31133112969444681e15",
+          "size": 4865,
+          "subpath": "arguments",
+          "url": "https://github.com/loft-lang/loft-libs-core/releases/download/arguments-v0.1.1/arguments-0.1.1.tar.gz"
+        }
+      },
+      "yanked": []
+    },
+    "crypto": {
+      "categories": [
+        "crypto"
+      ],
+      "description": "Cryptographic primitives — SHA-256, HMAC, base64; Ed25519, X25519, HPKE (RFC 9180), ChaCha20-Poly1305 / XChaCha20-Poly1305 / AES-256-GCM, HKDF, OS CSPRNG.",
+      "homepage": "https://github.com/loft-lang/loft-libs-core/tree/main/crypto",
+      "versions": {
+        "0.1.0": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-05-24T15:13:34Z",
+          "sha256": "0ad0a7b2552f325166aa67e407698411d3757afa1a3421bb2b322eb0cdf8709d",
+          "size": 6944,
+          "subpath": "crypto",
+          "url": "https://github.com/loft-lang/loft-libs-core/releases/download/crypto-v0.1.0/crypto-0.1.0.tar.gz"
+        },
+        "0.2.1": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-06-14T14:42:31Z",
+          "sha256": "eda73e9c59130f89c24c4fff1284a77e7db86a471b83caf517efb940ddba1cef",
+          "size": 9021,
+          "subpath": "crypto",
+          "url": "https://github.com/loft-lang/loft-libs-core/releases/download/crypto-v0.2.1/crypto-0.2.1.tar.gz"
+        },
+        "0.3.1": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-06-18T21:25:56Z",
+          "sha256": "11312d910fb047e95d71e4e8c82a3173289945ec485a184c2bf2d43021ab1e8f",
+          "size": 20742,
+          "subpath": "crypto",
+          "url": "https://github.com/loft-lang/loft-libs-core/releases/download/crypto-v0.3.1/crypto-0.3.1.tar.gz"
+        }
+      },
+      "yanked": []
+    },
+    "game_protocol": {
+      "categories": [
+        "net",
+        "game"
+      ],
+      "description": "Packet framing + ack/retransmit for loft game-networking demos.",
+      "homepage": "https://github.com/loft-lang/loft-libs-net/tree/main/game_protocol",
+      "versions": {
+        "0.1.0": {
+          "deps": {
+            "server": ">=0.1",
+            "web": ">=0.1"
+          },
+          "loft": ">=0.8",
+          "published": "2026-05-24T20:00:00Z",
+          "sha256": "948c73e309beecb8bd6cd07ab030a67c22fe5a84b7510735b851a811ac3ad851",
+          "size": 27939,
+          "subpath": "game_protocol",
+          "url": "https://github.com/loft-lang/loft-libs-net/releases/download/game_protocol-v0.1.0/game_protocol-0.1.0.tar.gz"
+        },
+        "0.1.1": {
+          "deps": {
+            "server": ">=0.1",
+            "web": ">=0.1"
+          },
+          "loft": ">=0.8",
+          "published": "2026-05-31T08:48:00Z",
+          "sha256": "9c11bd55f55bcfdf356e7fc297224a7893be3729e5f5216976d564b526b5ca7a",
+          "size": 22110,
+          "subpath": "game_protocol",
+          "url": "https://github.com/loft-lang/loft-libs-net/releases/download/game_protocol-v0.1.1/game_protocol-0.1.1.tar.gz"
+        },
+        "0.1.2": {
+          "deps": {
+            "server": ">=0.1",
+            "web": ">=0.1"
+          },
+          "loft": ">=0.8",
+          "published": "2026-06-14T14:42:32Z",
+          "sha256": "de63087a7cda78e3121e9a8c08e94b2a3c92ca8d0edc11e88d6719cfc16bef56",
+          "size": 22131,
+          "subpath": "game_protocol",
+          "url": "https://github.com/loft-lang/loft-libs-net/releases/download/game_protocol-v0.1.2/game_protocol-0.1.2.tar.gz"
+        }
+      },
+      "yanked": []
+    },
+    "glb": {
+      "categories": [
+        "graphics",
+        "asset-format"
+      ],
+      "description": "glTF 2.0 binary (.glb) writer — exports Mesh / Scene as a glb file readable by Blender, three.js, gltf-validator.  Standalone (pure-loft, no GPU).",
+      "homepage": "https://github.com/loft-lang/loft-libs-assets/tree/main/glb",
+      "versions": {
+        "0.1.0": {
+          "deps": {
+            "mesh3d": ">=0.1"
+          },
+          "loft": ">=0.8",
+          "published": "2026-05-31T20:55:00Z",
+          "sha256": "5d67363fdf570a781da39ac2609176b013b47d4609074e7a0c3ef5d674cbebe8",
+          "size": 8437,
+          "subpath": "glb",
+          "url": "https://github.com/loft-lang/loft-libs-assets/releases/download/glb-v0.1.0/glb-0.1.0.tar.gz"
+        }
+      },
+      "yanked": []
+    },
+    "graphics": {
+      "categories": [
+        "graphics"
+      ],
+      "description": "2D canvas + 3D rendering for loft (Canvas pixel surface, Mesh / Scene / glTF, OpenGL bindings).",
+      "homepage": "https://github.com/loft-lang/loft-libs-graphics/tree/main/graphics",
+      "versions": {
+        "0.1.0": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-05-31T18:00:00Z",
+          "sha256": "762271f637cbedaff4c3cda73ef9c6da0bcc826b8c81d9bb08eae03a645510db",
+          "size": 88828,
+          "subpath": "graphics",
+          "url": "https://github.com/loft-lang/loft-libs-graphics/releases/download/graphics-v0.1.0/graphics-0.1.0.tar.gz"
+        },
+        "0.2.0": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-06-14T08:47:45Z",
+          "sha256": "284cf0438e72fdba49591f6bfb48a7f5b48c0fea5522ccb3617368c38f4997fb",
+          "size": 90115,
+          "subpath": "graphics",
+          "url": "https://github.com/loft-lang/loft-libs-graphics/releases/download/graphics-v0.2.0/graphics-0.2.0.tar.gz"
+        },
+        "0.2.1": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-06-14T12:53:26Z",
+          "sha256": "5fb0b21fc1cb2fb93f6003379c7c3ed791161cf89e31653a2d05ec4c16516202",
+          "size": 92765,
+          "subpath": "graphics",
+          "url": "https://github.com/loft-lang/loft-libs-graphics/releases/download/graphics-v0.2.1/graphics-0.2.1.tar.gz"
+        },
+        "0.3.0": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-06-18T21:25:56Z",
+          "sha256": "788bb7426a666d04571dbca6f318c35533c7109b384a52d81aa77907a57e5cad",
+          "size": 93060,
+          "subpath": "graphics",
+          "url": "https://github.com/loft-lang/loft-libs-graphics/releases/download/graphics-v0.3.0/graphics-0.3.0.tar.gz"
+        }
+      },
+      "yanked": []
+    },
+    "gridmesh": {
+      "categories": [
+        "graphics",
+        "world"
+      ],
+      "description": "Chunk-local mesh-generation primitives for world-building algorithms.",
+      "homepage": "https://github.com/loft-lang/loft-libs-graphics/tree/main/gridmesh",
+      "versions": {
+        "0.1.0": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-05-24T19:00:00Z",
+          "sha256": "e52cc624cb0b6efcccdc2137e09b015d44a5ab1922fd7bb7944c7611208fcae2",
+          "size": 11929,
+          "subpath": "gridmesh",
+          "url": "https://github.com/loft-lang/loft-libs-graphics/releases/download/gridmesh-v0.1.0/gridmesh-0.1.0.tar.gz"
+        },
+        "0.1.1": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-05-31T09:13:00Z",
+          "sha256": "baedd9c4537a2de34fe5a4b5a026a281aa6037411eb3261e2a97fabc15850e13",
+          "size": 11903,
+          "subpath": "gridmesh",
+          "url": "https://github.com/loft-lang/loft-libs-graphics/releases/download/gridmesh-v0.1.1/gridmesh-0.1.1.tar.gz"
+        }
+      },
+      "yanked": []
+    },
+    "hex_grid": {
+      "categories": [
+        "geometry"
+      ],
+      "description": "Hex-grid geometry — axial/pixel conversion, neighbours, distance, and corner offsets.",
+      "homepage": "https://github.com/loft-lang/loft-libs-world/tree/main/hex_grid",
+      "versions": {
+        "0.1.0": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-06-14T14:42:33Z",
+          "sha256": "f7af3fa54141dcae920666f606c5932252f801d555dd63b0b654d5355f8c1fbd",
+          "size": 3909,
+          "subpath": "hex_grid",
+          "url": "https://github.com/loft-lang/loft-libs-world/releases/download/hex_grid-v0.1.0/hex_grid-0.1.0.tar.gz"
+        }
+      },
+      "yanked": []
+    },
+    "hex_terrain": {
+      "categories": [
+        "world"
+      ],
+      "description": "The OVERLAND terrain layer of the `hex_*` family: a coarse overland hex lattice",
+      "homepage": "https://github.com/loft-lang/loft-libs-world/tree/main/hex_terrain",
+      "versions": {
+        "0.1.0": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-06-14T14:42:33Z",
+          "sha256": "98669010662c92b5d6a26a1d6829e96458fa79c2ed57929568d87f3b78c7249c",
+          "size": 14087,
+          "subpath": "hex_terrain",
+          "url": "https://github.com/loft-lang/loft-libs-world/releases/download/hex_terrain-v0.1.0/hex_terrain-0.1.0.tar.gz"
+        }
+      },
+      "yanked": []
+    },
+    "hex_world": {
+      "categories": [
+        "world"
+      ],
+      "description": "Sparse 32x32-chunk hex-grid world data model — Cell / Chunk / World with binary save/load.",
+      "homepage": "https://github.com/loft-lang/loft-libs-world/tree/main/hex_world",
+      "versions": {
+        "0.1.1": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-06-14T14:42:34Z",
+          "sha256": "72bde5b2a84417d3849833ad3971554c768351c0d87b5900794568a5caaae08b",
+          "size": 18055,
+          "subpath": "hex_world",
+          "url": "https://github.com/loft-lang/loft-libs-world/releases/download/hex_world-v0.1.1/hex_world-0.1.1.tar.gz"
+        }
+      },
+      "yanked": []
+    },
+    "html": {
+      "categories": [
+        "text"
+      ],
+      "description": "HTML escaping helpers for loft.",
+      "homepage": "https://github.com/loft-lang/loft-libs-docs/tree/main/html",
+      "versions": {
+        "0.1.0": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-06-14T14:42:35Z",
+          "sha256": "f060a41166e69b84da1e84949427e03694024e0cc911f8c9a53c644f4ab2a497",
+          "size": 1952,
+          "subpath": "html",
+          "url": "https://github.com/loft-lang/loft-libs-docs/releases/download/html-v0.1.0/html-0.1.0.tar.gz"
+        }
+      },
+      "yanked": []
+    },
+    "imaging": {
+      "categories": [
+        "graphics"
+      ],
+      "description": "PNG load/save + pixel manipulation for loft (Stage A — interpreter + native; wasm bridge deferred pending loft-host-ffi crate).",
+      "homepage": "https://github.com/loft-lang/loft-libs-graphics/tree/main/imaging",
+      "versions": {
+        "0.1.0": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-05-31T18:00:00Z",
+          "sha256": "1eceb3771cfbefed9809b2efec39fd8180bba0336cc959e2e0ed6ddb369cf4ce",
+          "size": 12320,
+          "subpath": "imaging",
+          "url": "https://github.com/loft-lang/loft-libs-graphics/releases/download/imaging-v0.1.0/imaging-0.1.0.tar.gz"
+        },
+        "0.2.0": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-06-18T21:25:56Z",
+          "sha256": "aedc0d06eba2241221e7e9218c01bd2faf0920e13f5aa95c067c44bc5eadfb64",
+          "size": 12489,
+          "subpath": "imaging",
+          "url": "https://github.com/loft-lang/loft-libs-graphics/releases/download/imaging-v0.2.0/imaging-0.2.0.tar.gz"
+        }
+      },
+      "yanked": []
+    },
+    "input": {
+      "categories": [
+        "game"
+      ],
+      "description": "Game input for loft — action/axis bindings resolved to per-tick input state.",
+      "homepage": "https://github.com/loft-lang/loft-libs-game/tree/main/input",
+      "versions": {
+        "0.1.0": {
+          "deps": {
+            "graphics": ">=0.1"
+          },
+          "loft": ">=0.8",
+          "published": "2026-06-14T14:42:36Z",
+          "sha256": "112bfca93ba191fe6ae037059f2f022e9980920d3045fd5f1b7b1f9773af13e1",
+          "size": 6016,
+          "subpath": "input",
+          "url": "https://github.com/loft-lang/loft-libs-game/releases/download/input-v0.1.0/input-0.1.0.tar.gz"
+        }
+      },
+      "yanked": []
+    },
+    "markdown": {
+      "categories": [
+        "text"
+      ],
+      "description": "Markdown-to-HTML rendering for loft — headings, inline spans, slugify, link rewriting.",
+      "homepage": "https://github.com/loft-lang/loft-libs-docs/tree/main/markdown",
+      "versions": {
+        "0.1.0": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-06-14T14:42:37Z",
+          "sha256": "5536baf65642e05fe21c1d7a442e31bcb20de98475bc3ea4a174a952ce8f17bc",
+          "size": 11789,
+          "subpath": "markdown",
+          "url": "https://github.com/loft-lang/loft-libs-docs/releases/download/markdown-v0.1.0/markdown-0.1.0.tar.gz"
+        }
+      },
+      "yanked": []
+    },
+    "mesh3d": {
+      "categories": [
+        "graphics",
+        "geometry"
+      ],
+      "description": "3D geometry primitives — Vec/Mat, Mesh, Scene, Camera, Light.  Standalone (pure-loft, no GPU).",
+      "homepage": "https://github.com/loft-lang/loft-libs-assets/tree/main/mesh3d",
+      "versions": {
+        "0.1.0": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-05-31T20:55:00Z",
+          "sha256": "397533e201a740d11b79698053d27ab972413e0c8a6d26919fc82c40b2fabe29",
+          "size": 7716,
+          "subpath": "mesh3d",
+          "url": "https://github.com/loft-lang/loft-libs-assets/releases/download/mesh3d-v0.1.0/mesh3d-0.1.0.tar.gz"
+        }
+      },
+      "yanked": []
+    },
+    "random": {
+      "categories": [
+        "math",
+        "random"
+      ],
+      "description": "Pseudo-random number generation — PCG-64 thread-local PRNG with rand_seed reproducibility.",
+      "homepage": "https://github.com/loft-lang/loft-libs-core/tree/main/random",
+      "versions": {
+        "0.1.0": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-05-24T15:13:38Z",
+          "sha256": "7599297598bfec378135c90868766ad23046d47c001690a42d79a48d4bb1acaa",
+          "size": 5747,
+          "subpath": "random",
+          "url": "https://github.com/loft-lang/loft-libs-core/releases/download/random-v0.1.0/random-0.1.0.tar.gz"
+        },
+        "0.2.0": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-06-14T14:42:37Z",
+          "sha256": "9a31df281fb91c35547c89f65c32dd0995ff6a68976c544f0d4b0be3b4d8967b",
+          "size": 8292,
+          "subpath": "random",
+          "url": "https://github.com/loft-lang/loft-libs-core/releases/download/random-v0.2.0/random-0.2.0.tar.gz"
+        },
+        "0.2.1": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-06-18T21:25:56Z",
+          "sha256": "11e828c0ec63b2d9d6d9c98fb3a1570e8e5387e78f0970c4b46442c5705b5357",
+          "size": 6441,
+          "subpath": "random",
+          "url": "https://github.com/loft-lang/loft-libs-core/releases/download/random-v0.2.1/random-0.2.1.tar.gz"
+        }
+      },
+      "yanked": []
+    },
+    "regex": {
+      "categories": [
+        "text"
+      ],
+      "description": "Small-script regex: matches / find / split / match_groups / replace, with a thread-local pattern cache.",
+      "homepage": "https://github.com/loft-lang/loft-libs-core/tree/main/regex",
+      "versions": {
+        "0.1.0": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-05-31T22:38:53Z",
+          "sha256": "7ad5a348bec5b98b6f79a4ed3cc5fd72a0ac5fa8b60570e307a61222e01efe6b",
+          "size": 6900,
+          "subpath": "regex",
+          "triggers": [
+            "matches:text",
+            "regex_find:text",
+            "regex_split:text"
+          ],
+          "url": "https://github.com/loft-lang/loft-libs-core/releases/download/regex-v0.1.0/regex-0.1.0.tar.gz"
+        },
+        "0.2.0": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-06-18T21:25:56Z",
+          "sha256": "1752fa6b4c9ab267c77d541e422c28909b23803b2793c0f6bb8516f95b02af7b",
+          "size": 9074,
+          "subpath": "regex",
+          "triggers": [
+            "matches:text",
+            "regex_find:text",
+            "regex_split:text",
+            "regex_match_groups:text",
+            "regex_replace:text",
+            "regex_replace_all:text"
+          ],
+          "url": "https://github.com/loft-lang/loft-libs-core/releases/download/regex-v0.2.0/regex-0.2.0.tar.gz"
+        }
+      },
+      "yanked": []
+    },
+    "server": {
+      "categories": [
+        "net"
+      ],
+      "description": "HTTP + WebSocket server — TCP sockets + tungstenite via cdylib.",
+      "homepage": "https://github.com/loft-lang/loft-libs-net/tree/main/server",
+      "versions": {
+        "0.1.0": {
+          "deps": {
+            "web": ">=0.1"
+          },
+          "loft": ">=0.8",
+          "published": "2026-05-24T20:00:00Z",
+          "sha256": "b28a63d44a655b40f11bf960db8da47313efc6edd63944fb81f3218ada2dfdf5",
+          "size": 16807,
+          "subpath": "server",
+          "url": "https://github.com/loft-lang/loft-libs-net/releases/download/server-v0.1.0/server-0.1.0.tar.gz"
+        },
+        "0.1.1": {
+          "deps": {
+            "web": ">=0.1"
+          },
+          "loft": ">=0.8",
+          "published": "2026-05-31T08:48:00Z",
+          "sha256": "01729ea6efdf600da2e3e1a4937a77baa3a7d20fa50af316726dd294069fa63d",
+          "size": 16815,
+          "subpath": "server",
+          "url": "https://github.com/loft-lang/loft-libs-net/releases/download/server-v0.1.1/server-0.1.1.tar.gz"
+        },
+        "0.1.2": {
+          "deps": {
+            "web": ">=0.1"
+          },
+          "loft": ">=0.8",
+          "published": "2026-06-14T15:59:36Z",
+          "sha256": "14c282d0ef649c027505442ddf3534ff1cbafec467e19015ca2ca9d12cbdb173",
+          "size": 17261,
+          "subpath": "server",
+          "url": "https://github.com/loft-lang/loft-libs-net/releases/download/server-v0.1.2/server-0.1.2.tar.gz"
+        },
+        "0.2.0": {
+          "deps": {
+            "web": ">=0.1"
+          },
+          "loft": ">=0.8",
+          "published": "2026-06-18T21:25:56Z",
+          "sha256": "5cc1b878211d937740e7561fc1406dc61de099c6aabaaa8841d0cb3023856c4e",
+          "size": 17726,
+          "subpath": "server",
+          "url": "https://github.com/loft-lang/loft-libs-net/releases/download/server-v0.2.0/server-0.2.0.tar.gz"
+        }
+      },
+      "yanked": []
+    },
+    "shapes": {
+      "categories": [
+        "geometry"
+      ],
+      "description": "2D geometry primitives — Rect, Circle, overlap tests, clamp.  Pure-loft, no other deps.",
+      "homepage": "https://github.com/loft-lang/loft-libs-graphics/tree/main/shapes",
+      "versions": {
+        "0.1.0": {
+          "deps": {
+            "graphics": ">=0.1"
+          },
+          "loft": ">=0.8",
+          "published": "2026-05-24T19:00:00Z",
+          "sha256": "a6f4d7fedfc1077c4b6817ac92d6493a2e3a6f9a49b2cd1598708107229c23af",
+          "size": 3049,
+          "subpath": "shapes",
+          "url": "https://github.com/loft-lang/loft-libs-graphics/releases/download/shapes-v0.1.0/shapes-0.1.0.tar.gz"
+        },
+        "0.2.0": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-05-24T19:30:00Z",
+          "sha256": "284e8a5c86036911d047d66218751d06ac026b9c07debe7be32c1e51da0bd051",
+          "size": 2510,
+          "subpath": "shapes",
+          "url": "https://github.com/loft-lang/loft-libs-graphics/releases/download/shapes-v0.2.0/shapes-0.2.0.tar.gz"
+        }
+      },
+      "yanked": [
+        "0.1.0"
+      ]
+    },
+    "time": {
+      "categories": [
+        "time",
+        "game"
+      ],
+      "description": "Date/time arithmetic on millisecond-since-epoch integers — proleptic Gregorian, same model as JavaScript Date.  Pure-loft; identical results on interp, --native, WASM.",
+      "homepage": "https://github.com/loft-lang/loft-libs-game/tree/main/time",
+      "versions": {
+        "0.1.0": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-06-01T08:30:00Z",
+          "sha256": "fb078def7f6cd27334ec371eb6c8d8d1120e8bf8d6eae188fead98e3d9f28659",
+          "size": 5937,
+          "subpath": "time",
+          "url": "https://github.com/loft-lang/loft-libs-game/releases/download/time-v0.1.0/time-0.1.0.tar.gz"
+        }
+      },
+      "yanked": []
+    },
+    "web": {
+      "categories": [
+        "net"
+      ],
+      "description": "HTTP client + WebSocket client — ureq + tungstenite via cdylib.",
+      "homepage": "https://github.com/loft-lang/loft-libs-net/tree/main/web",
+      "versions": {
+        "0.1.0": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-05-24T20:00:00Z",
+          "sha256": "28ae4fd0ec4a36faa183b4e12245738375975604746437ac7d8e4985d77d8a58",
+          "size": 22377,
+          "subpath": "web",
+          "url": "https://github.com/loft-lang/loft-libs-net/releases/download/web-v0.1.0/web-0.1.0.tar.gz"
+        },
+        "0.1.1": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-05-31T08:48:00Z",
+          "sha256": "71ab397ee28430070ba7d9a5903b7f3b9c611237c2f4bc67f90bf8779d28f83b",
+          "size": 23415,
+          "subpath": "web",
+          "url": "https://github.com/loft-lang/loft-libs-net/releases/download/web-v0.1.1/web-0.1.1.tar.gz"
+        },
+        "0.2.0": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-06-18T21:25:56Z",
+          "sha256": "e5a46ea562590f389db1d725ab7954f1361474c15201b12c188f0b57438d2494",
+          "size": 23472,
+          "subpath": "web",
+          "url": "https://github.com/loft-lang/loft-libs-net/releases/download/web-v0.2.0/web-0.2.0.tar.gz"
+        }
+      },
+      "yanked": []
+    }
+  },
+  "schema_version": 1,
+  "updated": "2026-06-18T17:22:09Z"
+}
