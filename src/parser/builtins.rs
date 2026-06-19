@@ -267,12 +267,13 @@ impl Parser {
         // `__par_nullable_w(e: __nullable<S>, ..hidden) -> ret {
         // worker(<e payload>, ..hidden) }` and use IT as the worker func; the
         // body applies the SAME payload offset-ref coercion as a normal
-        // `worker(v[i])` call (gap 2) and forwards the worker's params 1.. (the
-        // `ref_return` hidden out-param for struct/text returns).  User EXTRA
-        // context args (`worker(a, extra)`) are NOT yet supported over a
-        // nullable vector — the par dispatcher's extra-arg marshalling collides
-        // with the wrapper's mirrored param layout (stack underflow); those
-        // fall through to the dense path for now.
+        // `worker(v[i])` call (gap 2) and forwards the worker's params 1...  That
+        // mirrored-param forwarding covers BOTH the `ref_return` hidden out-param
+        // (struct/text returns) AND user EXTRA context args (`par(c = scale(a,
+        // mult), …)`): the wrapper accepts `(e, ..worker-params-1..)` and the par
+        // dispatcher supplies the element + the same extra_vals it would pass the
+        // bare worker, so the layouts agree (22-threading "context arg" cases pass
+        // gate-on both backends).
         // The element type is the inline `Enum(__nullable<S>, true)` for a `vector<S>` par, OR
         // `Reference(__nullable<S>)` for a KEYED par (hash/sorted/index): `materialise_keyed_for_par`
         // builds the temp vector with `Reference(content_d)` element refs.  Both need the wrapper
@@ -283,7 +284,6 @@ impl Parser {
             _ => None,
         };
         if !self.first_pass
-            && extra_vals.is_empty()
             && let Some(enum_d) = elem_enum_d
             && self.data.attributes(d_nr) > 0
             && let Type::Reference(struct_d, _) =
