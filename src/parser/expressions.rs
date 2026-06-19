@@ -1951,6 +1951,12 @@ use a separate collection or add after the loop"
     /// THE default-on switch lives here (one place): drop the source check / add
     /// an `LOFT_E2_SYNTH` env gate to re-gate.
     pub(crate) fn e2_rewrite_enabled(&self) -> bool {
+        // @PLN25 — the gate flip (drop `LOFT_E2_SYNTH`, leaving only the STD_SOURCE exclusion) is
+        // PROVEN: with the env removed the full suite is 2404/2416 (only ~8 real gate-on failures
+        // + env-flaky tests; the program-cache failures of the env-set run were spurious — see
+        // single-payload-refactor.md § Step 5).  Gate stays env-guarded until that ~8-failure tail
+        // (moros_map cross-lib type-coercion → p379+store_persist; native keyed-collection scripts;
+        // imaging; wasm; stack_trace) is green, so the branch stays releasable (gate-off 2415/2416).
         self.data.source != crate::data::STD_SOURCE && std::env::var("LOFT_E2_SYNTH").is_ok()
     }
 
