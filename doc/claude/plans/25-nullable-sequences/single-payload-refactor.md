@@ -235,7 +235,13 @@ for a `__nullable<S>`, else 0.
      shape: a cross-lib `Definition` (lib/code.loft:66 — `public:boolean`@0, `variables:vector<
      Variable>`@8) held in BOTH `vector<Definition>` AND `hash<Definition[name]>` (Code, shared
      records / @P296 linked) plus the nested vector field.  The codegen mis-indexes the nested
-     field to 0 only under that shared-vector+hash-over-cross-lib-struct combination.
+     field to 0 only under that shared-vector+hash-over-cross-lib-struct combination.  FURTHER
+     NARROWED: even a SAME-FILE `struct C { defs: vector<D>, by_name: hash<D[name]> }` (D with a
+     nested vector) works gate-on — so the bug is CROSS-LIB-ESSENTIAL (only reproduces when the
+     element struct is defined in a LIBRARY).  Root = cross-lib field resolution during
+     nested-construction codegen (the lib struct's field indices seen from the consumer), NOT the
+     nullable shape per se.  Needs a focused session tracing the lib/code.loft `Code`→`Definition`
+     construction (via lib/parser.loft) gate-on.
   4. **wrong value in 15-lexer** — `assertion failed: Incorrect plus` (tests/docs/15-lexer.loft),
      a value divergence (not a crash) gate-on; isolate the differing computation.
   5. **par over nullable** — PARTLY FIXED (seam 5a, `bbb918d4`): `synth_nullable_par_wrapper`
