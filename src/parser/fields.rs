@@ -97,9 +97,20 @@ impl Parser {
             && (self.lexer.peek_token("(") || self.find_poly_enum_field(*enum_d, &field).is_none())
         {
             let enum_d = *enum_d;
-            let ename = self.data.def(enum_d).name.clone();
-            let sname = ename["__nullable<".len()..ename.len() - 1].to_string();
-            let struct_d = self.data.def_nr(&sname);
+            // Resolve the dense `S` def from the `Some` variant's inline `payload` field
+            // TYPE — NOT by re-parsing the enum name via `def_nr("S")`, which returns
+            // `u16::MAX` for a CROSS-LIB struct (its def is source-qualified), the
+            // `Unknown field __nullable<S>.field` regression for a library struct.
+            let some_d = self.data.variant_of(enum_d, "Some");
+            let payload_attr = self.data.attr(some_d, "payload");
+            let struct_d = if payload_attr != usize::MAX {
+                match self.data.attr_type(some_d, payload_attr) {
+                    Type::Reference(d, _) => d,
+                    _ => u32::MAX,
+                }
+            } else {
+                u32::MAX
+            };
             if struct_d != u32::MAX && self.data.attributes(struct_d) > 0 {
                 if !self.first_pass {
                     // Single-payload form: the dense `S` lives in the `Some` variant's
@@ -107,7 +118,6 @@ impl Parser {
                     // offset.  That sub-ref IS a valid dense `S` (it shares S's offset
                     // table), so the field/method access below re-dispatches on dense `S`
                     // with no copy.
-                    let some_d = self.data.variant_of(enum_d, "Some");
                     let off = self
                         .database
                         .position(self.data.def(some_d).known_type(), "payload");
