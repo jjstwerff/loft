@@ -321,10 +321,20 @@ for a `__nullable<S>`, else 0.
     handle points at a FREED / invalid record → `valid()` "Unknown record" (store.rs:1629).  So
     `seg`'s nested `vector<u8>` is freed twice (or its handle dangles after the copy).  Order-specific
     because `test_values`'s earlier frees set the free-list slot state that makes the stale handle
-    resolve to a non-claimed record.  FIX (focused session): make E2 nullable synthesis PASS-STABLE
-    (synthesize the `__nullable<S>` defs in pass 1 too, so H5 holds) — likely resolves the layout
-    desync behind the double-free; and/or fix the copy-then-free of a nullable element whose payload
-    owns a nested collection so `seg`'s vector isn't double-freed.  Pre-existing (general gate-on).
+    resolve to a non-claimed record.
+    **DEFINITIVE ROOT (confirmed): a use-after-free from a NON-ZEROED reused store block.**
+    `LOFT_ZERO_CLAIM=1` makes u8full PASS — confirming a caller relies on zero-init while `claim`
+    reuses a freed block WITHOUT clearing it (zero-on-claim is debug-only, perf).  The garbage handle
+    `0x36363600` contains byte `0x36`=54 = `test_values`'s `vector<u8>` data (50–54), so the freed
+    record IS values's `d.a`, and `from_field` holds a STALE handle into it (a vector field whose
+    handle was never written).  H5 (the vector<integer>/<T> pass-2 defs) is a SEPARATE BENIGN
+    divergence (u8c2 diverges yet passes) — NOT this crash.  NARROWED: a struct-literal collection
+    field `V{a:[]}` IS zeroed (objects.rs `parse_object_field`:~1960 emits `OpSetInt4(code, pos, 0)`)
+    — so the un-zeroed handle is NOT the literal; it is the `parts += [seg]` COPY / nullable-element /
+    cross-function-reuse path.  REMAINING (one focused probe): which vector field in `from_field`'s
+    structure gets handle=3 (values's freed record) un-zeroed.  FIX OPTIONS: (a) zero that specific
+    construction path; (b) accept zero-on-claim for REUSED blocks (a perf/design decision — the lever
+    already exists, `LOFT_ZERO_CLAIM`, and cleanly fixes it).  Pre-existing (general gate-on).
   - **index<S> coherence** — `index<S>` is kept DENSE (vector/hash/sorted are nullable): rewriting
     it regresses the multi-key RANGE query (`idx[83..92,"Two"]`, 11-index.loft:48 → "Unknown in
     expression type __nullable<Elm>" — the range-query path does not unwrap a nullable element).
