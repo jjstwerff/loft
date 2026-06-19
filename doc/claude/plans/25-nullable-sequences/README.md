@@ -503,16 +503,27 @@ default-on (gate removed), per the project standard.  The remaining work, in fin
        119/120/122 native panics were the SAME bug (the `"?"` key), fixed here too.
      - **Cluster C / gap 2 — `__nullable<S>` ↔ dense `S` coercion at VALUE boundaries.**  STILL
        OPEN; the central remaining seam (100 `set_p160(&S)`, 55 return `vector<__nullable<S>>` ←
-       `vector<S>`, 151 `x ?? default` result, 150 view-return `.name`, 149 field read).  **Design
-       finding 2026-06-19 (matrix-first, layouts read off a concrete `Mix{a:int,b:text,c:int,d:char}`):
-       the `Some` payload is NOT a shifted dense `S` — it is independently packed.**  Dense:
-       `a@0,c@8,b@16,d@20`; Some: `disc@0,b@4,a@8,c@16,d@24`.  So an offset-ref reinterpret is
-       IMPOSSIBLE — every boundary needs a FIELD-BY-FIELD copy (Some-offset → dense-offset to unwrap;
-       dense → Some to wrap, which `nullable_enum_for` already does).  A by-value use (return, `??`,
-       dense-local assign) is a one-way unwrap copy; a `&mut S` arg (100) needs copy-IN before the
-       call and copy-OUT after (the callee mutates a dense temp).  This is a multi-site seam (axes:
-       call-arg by-val/by-ref, return, `??`, assign) — size M, wants its own boundary matrix; do NOT
-       fold into a quick patch.
+       `vector<S>`, 151 `x ?? default` result, 150 view-return `.name`, 149 field read).
+       **Investigation 2026-06-19 (matrix-first):**
+       1. **The existing convert (`mod.rs::convert`, the `Enum(nullable)→Reference(S)` arm) is
+          SILENTLY WRONG, not merely incomplete.**  It reinterprets via a sub-ref at the payload
+          offset, assuming the `Some` payload is a shifted dense `S`.  It is NOT: layouts read off a
+          concrete `S{a:int,b:text,c:int,d:char}` — dense `a@0,c@8,b@16,d@20` vs Some
+          `disc@0,b@4,a@8,c@16,d@24` (the packer reorders fields around the discriminant).  Probe
+          `by_val(v[0])` returns `a=1 b=null c=7 d=` gate-on (the two integers align by luck; the
+          reordered text/char read null).  LEFT IN PLACE (commented KNOWN-INCOMPLETE) — non-crashing,
+          gate-off-inert; the real fix replaces it.
+       2. **The correct unwrap is a FIELD-BY-FIELD copy** (read at Some offset, write at dense
+          offset into a fresh `S` temp).  A scalar-only prototype WORKS both backends
+          (`S{a:int,d:char,c:int}` → `a=1 c=7 d=z`).
+       3. **The blocker is heap fields + lifetime.**  A text/vector field copied with `set_field`
+          aliases the source's heap (handle copy, not deep), and the dense temp's work-ref gets a
+          spurious scope-cleanup `FreeRef` on a still-null ref (rec 0) at the WRONG statement scope
+          → free-list negate-overflow crash; `set_skip_free` does not suppress it.  So gap 2 needs a
+          lifetime-correct deep-field-copy unwrap (LIFETIME.md machinery), not a naive work-ref
+          stash.  Boundaries also still need ROUTING into convert: by-value arg (C1) reaches it;
+          `??` (151), dense-local assign (C3), and `&S` by-ref arg (C1b, needs copy-in/out) error
+          BEFORE convert.  Size M, own investigation plan — do NOT fold into a quick patch.
      - **Interface delegation (86):** `__nullable<S>` must satisfy an interface its underlying `S`
        implements (`missing to_label`) — a method/interface call through the wrapper unwraps to `S`.
        Sibling of gap 2 (the method-attribute Step-3 work is the related fix).  Size S–M.

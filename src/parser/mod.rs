@@ -1370,10 +1370,16 @@ impl Parser {
         }
         // @PLN25 E2 — the REVERSE coercion: a `__nullable<S>` value flows into a
         // dense `S` slot (`f(v[i])` where `fn f(r: S)`; gap 2 of the access-glue
-        // matrix).  The `Some` payload region is byte-identical to dense `S`, so
-        // reinterpret via a sub-ref at the payload offset (the same shift
-        // `find_poly_enum_field` uses for `e.field`) — no re-pack.  A runtime-null
-        // element reads the zero payload, matching dense-null behaviour.
+        // matrix).  KNOWN-INCOMPLETE: this reinterprets via a sub-ref at the
+        // payload offset, which is only correct when the `Some` payload happens to
+        // be a shifted dense `S`.  It is NOT — the packer reorders fields around
+        // the discriminant (proven 2026-06-19: dense `a@0,c@8,b@16,d@20` vs Some
+        // `disc@0,b@4,a@8,c@16,d@24`), so reordered text/char fields read null
+        // (silent corruption).  The correct unwrap is a FIELD-BY-FIELD copy into a
+        // fresh dense temp; a scalar-only prototype works on both backends, but the
+        // heap-field copy needs a lifetime-correct deep copy (a naive work-ref
+        // stash hits a spurious null-ref FreeRef at the wrong scope → free-list
+        // crash).  Tracked as the remaining gap-2 seam in the plan README.
         if let (Type::Enum(enum_d, true, _), Type::Reference(struct_d, _)) = (is_type, should)
             && self.data.def(*enum_d).name
                 == format!("__nullable<{}>", self.data.def(*struct_d).name())
