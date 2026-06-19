@@ -223,9 +223,13 @@ for a `__nullable<S>`, else 0.
      `field=0` here; likely shares the cross-lib root with seam 2.
   4. **wrong value in 15-lexer** — `assertion failed: Incorrect plus` (tests/docs/15-lexer.loft),
      a value divergence (not a crash) gate-on; isolate the differing computation.
-  5. **par with USER EXTRA args** — `script_threading` (the broader-plan Step 2 seam, pre-existing,
-     NOT single-payload): `synth_nullable_par_wrapper` bails on extra args; extend the wrapper +
-     dispatcher arity.
+  5. **par over nullable** — PARTLY FIXED (seam 5a, `bbb918d4`): `synth_nullable_par_wrapper`
+     computed the dense-S coercion offset as `position(Some, S's-first-field)` (the old
+     individual-field pattern) → wrong under single-payload; now `position(Some, "payload")`.
+     `22e-par-many-materialise` clean gate-on both backends.  REMAINING: `22c-par-sources`
+     (`hash par: 12` — par over a HASH yields a wrong sum, a deeper par-over-keyed seam) and the
+     USER EXTRA-args bail (`script_threading`, builtins.rs:277 `extra_vals.is_empty()` — extend the
+     wrapper to accept+forward extras + align the dispatcher arity; broader-plan Step 2).
   Then re-run the engine/wasm consumers (moros_glb, moros_editor_html, wasm_library_suite) gate-on.
 - **The gate flip** — drop `LOFT_E2_SYNTH` in `e2_rewrite_enabled` (KEEP the `STD_SOURCE`
   dense-stdlib exclusion); fold the deferred P3 `default_native_value` Vector arm; graduate the
