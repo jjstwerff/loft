@@ -195,19 +195,18 @@ for a `__nullable<S>`, else 0.
   gate-on it should be byte-identical to gate-off if E2 is transparent.  Most individual script
   tests pass; the aggregates surface a heterogeneous, multi-session residue.  Gate-OFF stays
   green (2415/2416), so NONE of this affects shipped releases — it is exactly what the gate flip
-  would surface.  **FIXED so far:** transparent format (WIP 7).  **RESIDUE (distinct seams):**
-  1. **`&S` by-ref arg unwrap** — `expected &P160Item, got __nullable<P160Item>` on `set_p160`
-     (tests/scripts/100-enhancements.loft:140).  TWO convert-arm attempts FAILED (both reverted):
-     (a) `RefVar(Reference(S))` → payload sub-ref with `Deps::none()` → interp `px=0` (the by-ref
-     arg path treats a no-deps `Reference` as OWNED and COPIES it; gate-off `__ref_1` is typed
-     `ref(P)["items"]` — a deps-carrying VIEW — which is why it mutates back) + native E0308.
-     (b) Same but carrying the source's deps (to mark it a view) → interp allocation OOB
-     (allocation.rs:650, index 1000, a free-list/coroutine-store reference) + native still E0308.
-     CONCLUSION: this is NOT a `convert` arm — the mutable-by-ref-into-a-nullable-element needs
-     work at the by-ref MACHINERY level (the arg-binding view/copy decision + native `&S` codegen),
-     a focused multi-backend matrix-first session.  Likely cleaner: copy-IN/OUT around the call
-     (copy payload→tmp dense S, `f(&tmp)`, copy tmp→payload back via `build_some_present`) so no
-     view aliasing is needed.  `convert` stays by-value-only (NOTE in mod.rs).
+  would surface.  **FIXED so far (8 seams):** transparent format (WIP 7); record_new payload redirect
+  (3a); par-offset (5a); cross-lib inferred literal (seam 2); keyed-par wrapper (seam 5b); `&S`
+  by-ref (seam 1); cross-lib field-access via payload-type resolution; nested-append field-index
+  (seam 3).  Wrap aggregates now passing gate-on: `last`, `libraries`, `library_suite`,
+  `parser_debug` (16-parser).  **RESIDUE (distinct seams):**
+  1. **`&S` by-ref arg unwrap — FIXED (seam 1, `9177b882`).**  A `__nullable<S>` value into a `&S`
+     (`RefVar(Reference(S))`) param now unwraps to the payload sub-ref AND passes it BY-REFERENCE
+     via a work-ref + `OpCreateStack` + `skip_free` (the complex-expression by-ref path in convert,
+     mod.rs:1431).  The two earlier convert arms failed because they let the by-VALUE path copy the
+     sub-ref (px=0) or carried deps that broke the store (alloc OOB); the missing piece was the
+     work-ref+OpCreateStack wrapping.  `set_p160(items[1], 42)` mutates back on BOTH backends;
+     100-enhancements passes gate-on.
   2. **dense↔nullable `vector` `+=` — FIXED (seam 2, `02b78b74`).**  A CROSS-LIB `::`-qualified
      inferred literal (`[testlib::Point{…}]`) stayed dense because the inferred-literal peek
      (vectors.rs) read only `testlib`, missed the `{` (next token was `::`), and skipped the
@@ -242,8 +241,18 @@ for a `__nullable<S>`, else 0.
      nested-construction codegen (the lib struct's field indices seen from the consumer), NOT the
      nullable shape per se.  Needs a focused session tracing the lib/code.loft `Code`→`Definition`
      construction (via lib/parser.loft) gate-on.
-  4. **wrong value in 15-lexer** — `assertion failed: Incorrect plus` (tests/docs/15-lexer.loft),
-     a value divergence (not a crash) gate-on; isolate the differing computation.
+  4. **wrong value in 15-lexer** — `assertion failed: Incorrect plus` (tests/docs/15-lexer.loft).
+     ROOT-CAUSED (minimal repro `/tmp/sp/lexs.loft`): the Lexer's `tokens: hash<SToken[start]>` has
+     a NESTED KEYED collection `possible: sorted<Possible[-length, token]>`.  Constructing a
+     `__nullable<SToken>` element with a NON-EMPTY nested keyed (sorted/hash/index) collection
+     CORRUPTS an EARLIER scalar field of the element (`{start: 43, possible: [{…}]}` → `start` reads
+     `4`; with more leading fields → SIGSEGV).  Empty `possible: []` is fine; a nested `vector<P>`
+     (non-keyed) is fine — only a NON-EMPTY nested KEYED collection triggers it.  NOT the hash key
+     (a `vector<SToken>` corrupts identically) and NOT `record_new` (instrumented: the nested
+     collection is created at the CORRECT offset `d.pos=24`, past `start@16`).  So the fault is the
+     nested **sorted/keyed** collection's INSERT or the element's `OpCopyRecord` deep-copy (literal
+     → element) for a nullable element — a separate deep mechanism in `sorted_new`/`copy_claims`.
+     Needs a focused dig on the keyed-collection insert/copy inside a single-payload `Some`.
   5. **par over nullable** — PARTLY FIXED (seam 5a, `bbb918d4`): `synth_nullable_par_wrapper`
      computed the dense-S coercion offset as `position(Some, S's-first-field)` (the old
      individual-field pattern) → wrong under single-payload; now `position(Some, "payload")`.
