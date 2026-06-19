@@ -335,6 +335,17 @@ for a `__nullable<S>`, else 0.
     structure gets handle=3 (values's freed record) un-zeroed.  FIX OPTIONS: (a) zero that specific
     construction path; (b) accept zero-on-claim for REUSED blocks (a perf/design decision — the lever
     already exists, `LOFT_ZERO_CLAIM`, and cleanly fixes it).  Pre-existing (general gate-on).
+    **FIXED (`836f426e`, option b): zero claimed payloads by default** (`zero_claim` lever flipped to
+    default-on, `LOFT_NO_ZERO_CLAIM` to disable; coalesce path also zeroes).  135 + repros pass both
+    backends with correct results; full suite 2415/2416 gate-OFF (only the environmental kernel_port
+    network failure), E2 suites green — verified no regression.  **But loft_suite now reveals a NEXT
+    gate-on blocker: a store LEAK** — `149-plan51-moros-map-real-lib.loft` leaks `Hex×12` at program
+    exit gate-on (runs CORRECTLY — probes pass — just doesn't free).  Gate-OFF clean, so gate-on-
+    specific + cross-lib (gridmesh Map); NOT minimally reproducible (a same-file `vector<Chunk>` with
+    nested `vector<Hex>` does NOT leak; an always-`Hex{}`-return does NOT leak).  CAUTION: a MIXED
+    view/owned return (`fn f()->Hex { if … return v[i]; Hex{} }`) leaks `Hex×8` GATE-OFF TOO — a
+    SEPARATE pre-existing bug (the view-return/#306 free path), not 149's gate-on leak (different kt).
+    149's gate-on leak needs a focused cross-lib (gridmesh) free-path investigation.
   - **index<S> coherence** — `index<S>` is kept DENSE (vector/hash/sorted are nullable): rewriting
     it regresses the multi-key RANGE query (`idx[83..92,"Two"]`, 11-index.loft:48 → "Unknown in
     expression type __nullable<Elm>" — the range-query path does not unwrap a nullable element).
