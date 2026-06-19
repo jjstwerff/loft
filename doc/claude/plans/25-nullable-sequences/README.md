@@ -93,10 +93,12 @@ clusters F/C/K/N (see Step 5 § Gate-on native sweep).  **Cluster F done** + **C
 keyed construction over nullable (parse_vector content-normalize + transparent-construction
 `Reference(syn)` shape + native `bare_field_name` key_owner).  Together they cleared the keyed
 cluster (119/120/122/126/127/128/291/32 + 131/134) both backends; the gate-on interpret divergence
-set dropped 21 → ~11.  **Remaining = gap 2** (the central seam: `__nullable<S>` ↔ dense `S` field-copy
-at value boundaries — 100/55/151/150/149; layout-proven to need a field copy, size M, own matrix),
-**interface delegation** (86), **single-element keyed `+=`** (store_persist, XS), **par/forward-ref**
-(22/22c/40/371), **gap 4**, then the Step-6 flip.
+set dropped 21 → ~11.  **gap 2 unwrap primitive DONE** (`OpNullableToDense`, commit `bfc60f9d`, both
+backends — fixes 150; the value-boundary `__nullable<S>`→dense `S` field-copy that the layout proof
+showed was required).  **Remaining = gap-2 ROUTING** (by-value-arg leak, `??`/dense-assign/`&S`-arg
+boundaries that error before convert, return-WRAP 55), **interface delegation** (86),
+**single-element keyed `+=`** (store_persist, XS), **par/forward-ref** (22/22c/40/371), **gap 4**,
+then the Step-6 flip.
 
 ## Status
 
@@ -501,29 +503,27 @@ default-on (gate removed), per the project standard.  The remaining work, in fin
        emits `db.hash(t, &["ck"])` not `&["?"]` (a "?" key hashes every record to one bucket →
        dedup-to-1 + missed lookups); (4) `key_owner` is now `pub(crate)` for (3).  Cluster N's
        119/120/122 native panics were the SAME bug (the `"?"` key), fixed here too.
-     - **Cluster C / gap 2 — `__nullable<S>` ↔ dense `S` coercion at VALUE boundaries.**  STILL
-       OPEN; the central remaining seam (100 `set_p160(&S)`, 55 return `vector<__nullable<S>>` ←
-       `vector<S>`, 151 `x ?? default` result, 150 view-return `.name`, 149 field read).
-       **Investigation 2026-06-19 (matrix-first):**
-       1. **The existing convert (`mod.rs::convert`, the `Enum(nullable)→Reference(S)` arm) is
-          SILENTLY WRONG, not merely incomplete.**  It reinterprets via a sub-ref at the payload
-          offset, assuming the `Some` payload is a shifted dense `S`.  It is NOT: layouts read off a
-          concrete `S{a:int,b:text,c:int,d:char}` — dense `a@0,c@8,b@16,d@20` vs Some
-          `disc@0,b@4,a@8,c@16,d@24` (the packer reorders fields around the discriminant).  Probe
-          `by_val(v[0])` returns `a=1 b=null c=7 d=` gate-on (the two integers align by luck; the
-          reordered text/char read null).  LEFT IN PLACE (commented KNOWN-INCOMPLETE) — non-crashing,
-          gate-off-inert; the real fix replaces it.
-       2. **The correct unwrap is a FIELD-BY-FIELD copy** (read at Some offset, write at dense
-          offset into a fresh `S` temp).  A scalar-only prototype WORKS both backends
-          (`S{a:int,d:char,c:int}` → `a=1 c=7 d=z`).
-       3. **The blocker is heap fields + lifetime.**  A text/vector field copied with `set_field`
-          aliases the source's heap (handle copy, not deep), and the dense temp's work-ref gets a
-          spurious scope-cleanup `FreeRef` on a still-null ref (rec 0) at the WRONG statement scope
-          → free-list negate-overflow crash; `set_skip_free` does not suppress it.  So gap 2 needs a
-          lifetime-correct deep-field-copy unwrap (LIFETIME.md machinery), not a naive work-ref
-          stash.  Boundaries also still need ROUTING into convert: by-value arg (C1) reaches it;
-          `??` (151), dense-local assign (C3), and `&S` by-ref arg (C1b, needs copy-in/out) error
-          BEFORE convert.  Size M, own investigation plan — do NOT fold into a quick patch.
+     - **Cluster C / gap 2 — `__nullable<S>` ↔ dense `S` coercion at VALUE boundaries.**  The
+       UNWRAP PRIMITIVE is DONE (2026-06-19, commit `bfc60f9d`, both backends); ROUTING for the
+       remaining boundaries is open.
+       - **The primitive — `OpNullableToDense`** (`Stores::nullable_to_dense`, declared in
+         `default/01_code.loft` with a `#rust` template so one source feeds interp + native).  The
+         old convert arm was SILENTLY WRONG: it sub-ref-reinterpreted the `Some` payload as dense
+         `S`, but the packer reorders fields around the discriminant (dense `a@0,c@8,b@16,d@20` vs
+         Some `disc@0,b@4,a@8,c@16,d@24`), so `by_val(v[0])` read `a=1 b=null c=7 d=`.  The op copies
+         FIELD BY FIELD (scalar bytes Some-offset→dense-offset, then `copy_claims` deep-copies heap
+         from the source).  Now correct on both backends; **fixes 150**.  Regression
+         `tests/plan25_e2_gap2.rs`.  Earlier parser-level prototypes hit store/lifetime walls (null
+         -ref FreeRef, `set_str` free-list corruption) — the database-layer op sidesteps them.
+       - **Open routing:** (a) a by-value arg still LEAKS one dense temp store gate-on (the arg path
+         doesn't route through `copy_ref`'s `0x8000` free-source bit even though
+         `is_struct_returning_call` now flags the op); (b) `x ?? dense_default` (151) — making the
+         `??` result dense compiles but the present branch unwraps to depth=0 (a null-check / branch
+         -temp interaction; reverted, needs care, NOT just a result-type tweak); (c) dense-local
+         assign `d: S = v[i]` (C3) and `&S` by-ref arg (100, needs copy-IN/OUT around the call)
+         error BEFORE reaching convert; (d) return-WRAP (55, dense `vector<S>` → `vector<__nullable
+         <S>>`) is the opposite direction.  Each is its own routing seam on top of the now-working
+         primitive.
      - **Interface delegation (86):** `__nullable<S>` must satisfy an interface its underlying `S`
        implements (`missing to_label`) — a method/interface call through the wrapper unwraps to `S`.
        Sibling of gap 2 (the method-attribute Step-3 work is the related fix).  Size S–M.
