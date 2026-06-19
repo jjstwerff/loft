@@ -1,14 +1,16 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! @PLN25 E2a.2 — Probe 1 (the core design claim): a nullable embedded struct
-//! field, rewritten to the synthetic `__nullable<Row>` enum, is BYTE-IDENTICAL
-//! to a hand-written `enum { Null, Some { … } }`.  If this holds, the existing
-//! enum layout / construct / access / copy machinery carries null for free.
+//! @PLN25 single-payload — Probe 1 (the core design claim): the synthetic
+//! `__nullable<Row>` enum's `Some` variant carries a SINGLE inline `payload`
+//! field whose TYPE is the dense `Row` itself (not Row's fields copied in
+//! individually).  A sub-ref at the payload offset is therefore a VALID dense
+//! `Row` — it shares Row's field-offset table — so the existing dense-struct
+//! layout / construct / access / copy machinery carries null with NO copy.
+//! See plans/25-nullable-sequences/single-payload-refactor.md.
 //!
 //! Single `#[test]` so the `LOFT_E2_SYNTH` gate (read during `fill_all`) is set
-//! with no concurrent parsing in this binary — the rewrite is scaffolding,
-//! default-off, while the construct/access glue (E2a.3/4) is built.
+//! with no concurrent parsing in this binary.
 
 extern crate loft;
 
@@ -19,21 +21,18 @@ const SRC: &str = r#"
 struct Row { id: integer, tag: text }
 struct Box { item: Row }
 
-// Hand-written reference: the exact shape synthesis should reproduce.
-enum HRow { HNull, HSome { id: integer, tag: text } }
-
 fn test() {}
 "#;
 
 #[test]
-fn nullable_struct_field_is_byte_identical_to_a_hand_enum() {
+fn nullable_some_carries_a_dense_row_payload() {
     // SAFETY: this binary holds a single test, so no other thread parses while
     // the gate is set.  Edition-2024 `set_var` is `unsafe` for exactly the
     // multi-threaded-mutation hazard we avoid here.
     unsafe {
         std::env::set_var("LOFT_E2_SYNTH", "1");
         // Embedded NON-vector struct-field nullability (`Box.item`) is gated on
-        // its own opt-in now (more immature than the vector-element path).
+        // its own opt-in (more immature than the vector-element path).
         std::env::set_var("LOFT_E2_FIELDS", "1");
     }
     // Parse a real FILE (source = MAIN_SOURCE) rather than `parse_str` (which
@@ -65,38 +64,50 @@ fn nullable_struct_field_is_byte_identical_to_a_hand_enum() {
         "the synthetic enum is named for the struct"
     );
 
-    // (b) Byte-identity: the synthetic `Some` variant vs the hand `HSome`
-    // variant must have the same field offsets and overall size.
+    // (b) DATA level: the `Some` variant's single data field is `payload`, typed
+    // as the dense `Row` — NOT Row's `id`/`tag` copied in individually.
+    let some_d = p.data.variant_of(syn, "Some");
+    let row_d = p.data.def_nr("Row");
+    assert_ne!(some_d, u32::MAX, "Some variant exists");
+    let payload_attr = p.data.attr(some_d, "payload");
+    assert_ne!(payload_attr, usize::MAX, "Some has a `payload` field");
+    let payload_ty = p.data.attr_type(some_d, payload_attr);
+    assert!(
+        matches!(payload_ty, Type::Reference(d, _) if d == row_d),
+        "payload's type is the dense Row, got {payload_ty:?}"
+    );
+
+    // (c) DB byte layout: discriminant @0, payload rides past it, and the payload
+    // region IS a dense `Row` — Row's own field offsets are intact (a payload
+    // sub-ref reads them verbatim) and the whole dense `Row` fits inside `Some`.
     let db = &p.database;
     assert!(db.has_type("__nullable<Row>"), "enum type registered");
-    // The synthetic `Some` / `Null` variants register their DB structure under a
-    // parent-enum-qualified key (`__nullable<Row>::Some`) so that two
-    // `__nullable<S>` enums never collide on the bare name in the flat type table
-    // (@PLN25 variant-name fix).  The qualifier does not change the layout.
+    // The synthetic variants register under a parent-enum-qualified key
+    // (`__nullable<Row>::Some`) so two `__nullable<S>` enums never collide on the
+    // bare name in the flat type table (@PLN25 variant-name fix).
     let some = db.name("__nullable<Row>::Some");
-    let hsome = db.name("HSome");
+    let row = db.name("Row");
     assert_ne!(some, u16::MAX, "synthetic Some variant registered");
-    assert_ne!(hsome, u16::MAX, "hand HSome variant registered");
+    assert_ne!(row, u16::MAX, "Row structure registered");
 
     // Discriminant at offset 0 (the whole representation hinges on this).
     assert_eq!(db.position(some, "enum"), 0, "synthetic discriminant @0");
-    assert_eq!(db.position(hsome, "enum"), 0, "hand discriminant @0");
+    let payload_pos = db.position(some, "payload");
+    assert_ne!(payload_pos, u16::MAX, "Some has a `payload` field in the DB layout");
+    assert!(payload_pos >= 1, "payload rides PAST the discriminant");
 
-    // Payload offsets ride past the discriminant, identically on both.
-    assert_eq!(
-        db.position(some, "id"),
-        db.position(hsome, "id"),
-        "id offset matches the hand enum"
-    );
-    assert_eq!(
-        db.position(some, "tag"),
-        db.position(hsome, "tag"),
-        "tag offset matches the hand enum"
-    );
-    assert_eq!(
+    // Row's own layout is intact — these are the offsets a payload sub-ref reads.
+    assert_ne!(db.position(row, "id"), u16::MAX, "dense Row.id present");
+    assert_ne!(db.position(row, "tag"), u16::MAX, "dense Row.tag present");
+
+    // The whole dense `Row` payload fits inside the `Some` record at `payload_pos`
+    // — i.e. `Some` is large enough to inline a dense `Row`, so the sub-ref never
+    // runs off the record.
+    assert!(
+        u32::from(payload_pos) + u32::from(db.size(row)) <= u32::from(db.size(some)),
+        "dense Row payload (size {}) fits in Some (size {}) at offset {payload_pos}",
+        db.size(row),
         db.size(some),
-        db.size(hsome),
-        "Some variant size matches the hand enum"
     );
 
     unsafe {
