@@ -3808,20 +3808,30 @@ impl Data {
     pub fn nullable_enum_for(&mut self, lexer: &mut Lexer, struct_d: u32) -> u32 {
         let struct_name = self.def(struct_d).name.clone();
         let name = format!("__nullable<{struct_name}>");
-        if let Some(&nr) = self.def_names.get(&(name.clone(), STD_SOURCE)) {
-            return nr;
-        }
-        if let Some(&nr) = self.def_names.get(&(name.clone(), self.source)) {
+        // @PLN25 + @PLN22 (p379 `two_libs_same_struct_name`): key the synth enum on the
+        // STRUCT's OWN source — NOT a single global `STD_SOURCE` entry.  Two libraries may
+        // each define a struct of the same name (`Chunk`); a global `__nullable<Chunk>` binds
+        // EVERY `vector<Chunk>` to whichever `Chunk` synth'd first, so the OTHER lib's element
+        // resolves to the wrong payload struct — its fields are "not found", and a field WRITE
+        // (`c.field[i] = v`) then collapses to a base-var reassign → "cannot change type from
+        // __nullable<Chunk> to <field-type>".  `(name, struct_source)` uniquely identifies the
+        // struct (a lib cannot define two structs of one name); a consumer that references the
+        // struct (a different `self.source`) resolves to the same synth via the struct's source,
+        // because deps parse before dependents.
+        let struct_source = self.definitions[struct_d as usize].source;
+        if let Some(&nr) = self.def_names.get(&(name.clone(), struct_source)) {
             return nr;
         }
         let pos = lexer.pos().clone();
+        // Create + register the synth under the STRUCT's source (not the current parse source),
+        // so `add_def`'s `(name, source)` registration + dual-definition guard match the lookup
+        // key above, and a `rebuild_indices` (cache-load path) re-derives the SAME key from the
+        // def's `.source`.  Temporarily retarget `self.source` for the one `add_def` call.
+        let saved_source = self.source;
+        self.source = struct_source;
         let e = self.add_def(&name, &pos, DefType::Enum);
-        // Register globally (source 0) so every nullable `struct_d` field across
-        // files resolves to the same synthetic enum (see tuple_def / vector_def).
-        self.def_names
-            .entry((name.clone(), STD_SOURCE))
-            .or_insert(e);
-        self.definitions[e as usize].source = STD_SOURCE;
+        self.source = saved_source;
+        self.definitions[e as usize].source = struct_source;
         // Struct-enum (carries payload) → discriminator type is Enum(e, true).
         // Set directly (not via set_returned): the `Some` variant below would
         // otherwise set it a second time and trip set_returned's once-only guard.

@@ -91,6 +91,14 @@ impl Stores {
         self.names.contains_key(name)
     }
 
+    /// The registered db structure name of a built type id (the reverse of `name`).
+    /// `""` for an out-of-range id.  Used by typedef to derive a synth `__nullable<S>`
+    /// enum's db name from its payload struct's (already-disambiguated) db name.
+    #[must_use]
+    pub fn type_name(&self, id: u16) -> &str {
+        self.types.get(id as usize).map_or("", |t| t.name.as_str())
+    }
+
     #[allow(dead_code)]
     pub fn set_default(&mut self, tp: u16, f: u16, value: Content) {
         if let Parts::Struct(fld) | Parts::EnumValue(_, fld) = &mut self.types[tp as usize].parts {

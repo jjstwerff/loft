@@ -464,7 +464,31 @@ fn synth_nullable_struct_fields(data: &mut Data, database: &mut Stores, lexer: &
 /// @PLN25 nullable-struct-field synthesis (synthetic `__nullable<T>` enums),
 /// so both register identically.
 fn register_enum_db(data: &mut Data, database: &mut Stores, d: u32) {
-    let e_nr = database.enumerate(&data.def(d).name.clone());
+    let mut name = data.def(d).name.clone();
+    // @PLN22 (p379 `two_libs_same_struct_name`): two libraries may each define a struct
+    // of the same name `S`.  `nullable_enum_for` already gives each `S` its own synth
+    // `__nullable<S>` DEF (keyed on the struct's source), but both DEFS share the bare db
+    // name `__nullable<S>`, so their `Null`/`Some` variant structures collide in the flat
+    // db type table ("Double structure type __nullable<S>::Null") and field access binds
+    // to the wrong payload struct.  When the bare name is already a db type (the second
+    // definer), disambiguate by the PAYLOAD struct's QUALIFIED def name — keeping the
+    // `__nullable<` prefix so `nullable_some_variant` still resolves it (a `lib::`-prefixed
+    // `qualified_type_name` would not).  The struct's db name is not laid out yet at this
+    // point (register runs before the struct layout loop), so use the def name, not the db
+    // name.  The first definer keeps the bare name, so non-colliding programs are unchanged.
+    if data.def(d).synthetic.is_some()
+        && name.starts_with("__nullable<")
+        && database.has_type(&name)
+    {
+        let some_v = data.variant_of(d, "Some");
+        let payload_attr = data.attr(some_v, "payload");
+        if payload_attr != usize::MAX
+            && let Type::Reference(sd, _) = data.attr_type(some_v, payload_attr)
+        {
+            name = format!("__nullable<{}>", data.qualified_type_name(sd));
+        }
+    }
+    let e_nr = database.enumerate(&name);
     for a in 0..data.attributes(d) {
         database.value(e_nr, &data.attr_name(d, a), u16::MAX);
         data.set_attr_value(d, a, Value::Enum(a as u8 + 1, e_nr));
@@ -501,10 +525,21 @@ pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
     // table stays collision-free.  Variant lookup keys on the bare name + parent
     // enum (`database.enum_value` below) and runtime discriminants, so this
     // changes only the structure-table key, not resolution.
+    // @PLN22 (p379 `two_libs_same_struct_name`): two libs may define same-named structs `S`, so a
+    // synth `__nullable<S>`'s `Null`/`Some` variant structures need a UNIQUE db name.  Key the
+    // variant on the PARENT enum's DB name (`register_enum_db` already disambiguated it — bare
+    // `__nullable<S>` for the first definer, `__nullable<lib::S>` for the second), NOT the parent's
+    // bare DEF name (shared by both), so the two libs' `__nullable<S>::Null` no longer collide.
     let synth_variant_name = if data.def_type(d_nr) == DefType::EnumValue {
         let parent = data.def(d_nr).parent;
         (data.def(parent).synthetic.is_some() && data.def(parent).name.starts_with("__nullable<"))
-            .then(|| format!("{}::{}", data.def(parent).name, data.def(d_nr).name))
+            .then(|| {
+                format!(
+                    "{}::{}",
+                    database.type_name(data.def(parent).known_type),
+                    data.def(d_nr).name
+                )
+            })
     } else {
         None
     };
