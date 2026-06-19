@@ -163,7 +163,10 @@ Filing is half the loop; closing is the other half.
   the regression test).  The `Fixes #NNN` line closes it when the branch merges to
   `main` — one transition, no ping-pong.  Manual `gh issue close` is reserved for
   **terminal non-fix outcomes** (`by-design` → cite a `DESIGN_DECISIONS.md` `C##`;
-  `duplicate` → cite the canonical issue; `wontfix`).
+  `duplicate` → cite the canonical issue; `wontfix`) — **and the park-and-close of a
+  `deferred` idea** (close-reason *not planned*, keep the `status:deferred` label, point
+  at its design doc + un-defer trigger; reopenable, not terminal — see
+  [§ Parking a deferred idea](#parking-a-deferred-idea--close-it-into-its-design-doc-dont-hoard-it-open)).
 - **A fix needs a regression** — link the `tests/scripts/NNN` / `tests/*.rs` that
   locks it in.  A `fixed-pending-merge` issue with no regression is a re-opening
   waiting to happen.
@@ -199,7 +202,7 @@ the gap explicit — a **bug**: *expected vs observed* (+ a reproducer); an
 | outcome | bug | enhancement | closes? · register |
 |---|---|---|---|
 | implemented / fixed | fixed | implemented | yes, on merge · `fixed-pending-merge` interim |
-| **deferred** | — *(edge: a parked low-sev bug)* | ✓ — **stays open**, parked, un-defer trigger | no · `status:deferred` + DEFERRED.md |
+| **deferred** | — *(edge: a parked low-sev bug)* | ✓ — **parked in its design doc, closed not-planned**, un-defer trigger (reopen on fire) | **yes** (not-planned; keep the `status:deferred` label) · idea → its canonical design doc — see [§ Parking a deferred idea](#parking-a-deferred-idea--close-it-into-its-design-doc-dont-hoard-it-open) |
 | declined | `wontfix` / `by-design` | `rejected` | yes · rejected → DESIGN_DECISIONS.md |
 
 A **bug has 2 terminals** (fixed / declined); an **enhancement 3** (implemented /
@@ -208,6 +211,41 @@ enhancement **links out to a `@PLN` / `plans/<NN>/` lazily** — only when the d
 grows phase-worthy (usually at `status:designed`); no renumber, the issue stays the
 lightweight capture.  Feature requests use the `feature_request` template; the plan /
 ROADMAP carries the design + sequencing.
+
+### Parking a deferred idea — close it into its design doc, don't hoard it open
+
+`deferred` is a **want that can wait** — but a want with no present consumer does not
+belong in the open set, which is the agent's worklist (§ Issue lifecycle).  Left open,
+deferred items grow a tail of "someday" rows that read as work-remaining and never
+shrinks.  So the disposition for a deferred idea is to **move the idea to its canonical
+design doc and close the issue not-planned** — closed ≠ deleted: a closed issue is
+searchable, linkable, and one-click reopenable when its trigger fires.  Three steps, in
+order:
+
+1. **Split active debt from the parkable idea — verify ground truth first.**  A
+   "deferred" row often bundles a present fragility (already manifesting) with a
+   trigger-gated future want, and a sub-item may have quietly shipped since filing.
+   Re-read the code + the design doc before disposing.  *Worked example #389:* its
+   "Part 2" (cdylib + `[native]` linking) had **already shipped** — regression test and
+   all; the issue body was stale — and its "Part 1" (raw `*mut Stores` → a `LoftStore`
+   handle) was **active robustness debt**, not an idea.  Only what is *both*
+   trigger-gated *and* has no present consumer is parkable.
+2. **Re-home the non-parkable parts.**  Active debt goes to its forward-work register —
+   a [STABILITY_HOTSPOTS.md](STABILITY_HOTSPOTS.md) H-entry, a `ROADMAP.md` slot, or an
+   open `status:approved` enhancement — where it stays tracked; it is *not* parked-closed.
+   *#389 Part 1 → hotspot H9.*
+3. **Park the idea + close not-planned.**  Write the design + a **crisp un-defer trigger**
+   into the canonical design doc (the one that already owns the area — `NATIVE.md § Open
+   work`, a plan, `ROADMAP.md`), then `gh issue close --reason "not planned"` with a
+   comment pointing at that anchor and restating the trigger.  **Keep the
+   `status:deferred` label on the closed issue** so the parked-idea bank stays one query
+   away: `gh issue list --state closed --label status:deferred`.  *#388 → NATIVE.md @PLN26
+   ph.1 row; trigger: a consumer must call a symbol two un-renameable packages both export.*
+
+The trigger is what makes this safe rather than lossy: a park **without** a concrete
+"un-defer when X" is how an idea is lost; a park **with** one is just work that hasn't
+been scheduled.  This supersedes the older "deferred stays open" wording — the idea's
+home is its design doc, not an open row.
 
 ### Ripeness — a `status:` is earned by its data, not assigned
 
