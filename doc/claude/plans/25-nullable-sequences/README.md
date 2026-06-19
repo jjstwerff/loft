@@ -88,12 +88,15 @@ Step 5 exists (re-run the consumers gate-on; triage only what does not go green 
 **A4(b) is landed** (2026-06-17); **A3 rung 1** (key-resolution chokepoint, `key_owner`) is landed
 (2026-06-17, gate-inert) — but A3 proved to be ≥4 substrate rungs (see Step-1 A3).  Next concrete
 move: **A3 done**; **Step 3 + Step 5 sweep done** — the gate-on native tail is now MAPPED into
-clusters F/C/K/N (see Step 5 § Gate-on native sweep).  **Cluster F done** (2026-06-19, both backends):
-keyed-SET routing (`towards_set` @P305 accepts the synth-nullable enum element → `OpSetKeyed`
-find-or-insert) + `for_type` Hash arm → `Enum(.., true)` (field access unwraps through `Some`); the
-SIGSEGV root was the keyed-set never inserting, NOT a hash-iteration runtime read.  Next concrete
-target: **Cluster C** (gap 2 coercion), then **Cluster K** (literal into a hash field), **Cluster N**
-(keyed/par native panics), **Step 2** (par extra-args), **gap 4**, and the Step-6 flip.
+clusters F/C/K/N (see Step 5 § Gate-on native sweep).  **Cluster F done** + **Cluster K done**
+(2026-06-19, both backends): F = keyed-SET routing + `for_type` Hash arm → `Enum(.., true)`; K =
+keyed construction over nullable (parse_vector content-normalize + transparent-construction
+`Reference(syn)` shape + native `bare_field_name` key_owner).  Together they cleared the keyed
+cluster (119/120/122/126/127/128/291/32 + 131/134) both backends; the gate-on interpret divergence
+set dropped 21 → ~11.  **Remaining = gap 2** (the central seam: `__nullable<S>` ↔ dense `S` field-copy
+at value boundaries — 100/55/151/150/149; layout-proven to need a field copy, size M, own matrix),
+**interface delegation** (86), **single-element keyed `+=`** (store_persist, XS), **par/forward-ref**
+(22/22c/40/371), **gap 4**, then the Step-6 flip.
 
 ## Status
 
@@ -486,15 +489,38 @@ default-on (gate removed), per the project standard.  The remaining work, in fin
        *Lesson:* a SIGSEGV in iteration was a symptom of an INSERT bug upstream; the no-iteration
        probe localized it in one run — the `i_parse_errors` disc-value "tell" was a disassembler
        cosmetic (the working vector path emits the identical `SetEnum(…, val: i_parse_errors)`).
-     - **Cluster C — fn-arg / return coercion of `__nullable<S>` → dense `S`** (`expected S, got
-       __nullable<S>`: 100-enhancements `set_p160`, 55-stack-trace return).  This is the README's
-       gap 2 (offset-ref reinterpret at `can_convert` + the call-arg / return lowering).
-     - **Cluster K — named/anon struct literal into a hash FIELD** (`cannot store S elements in
-       vector<__nullable<S>>`: surfaced building `Bag { items: [Pair{…}] }`).  A construction-path
-       coercion (sibling of A1/A2, here for a keyed-collection field initialiser).
-     - **Cluster N — native runtime panics (~13)**: keyed-local reassign/return/clear (119/120/122),
-       keyed-return-buffer (137), the plan-51/52 keyed consumers (149/151/157), par (22/22c), and
-       forward-ref/empty-braces (371/373) — assorted keyed/par/ownership native-codegen seams.
+     - **Cluster K — keyed construction over nullable.**  DONE 2026-06-19, both backends
+       (regression `typed_local_keyed_append_builds_some_in_place`).  FOUR gate-inert fixes cleared
+       the whole keyed cluster (119/120/122/126/127/128/291/32): (1) `parse_vector` normalizes a
+       keyed collection's `content()` (`Reference(__nullable<S>)`) to the inline `Enum(.., true)`
+       construction form; (2) the transparent Some-construction (objects.rs) now fires for the
+       `Reference(syn)` parent shape (a typed-LOCAL keyed slot's element ref is `Reference(Some)`),
+       not only `Enum(syn,true)` — without it the field path built `Some` in place while the
+       typed-local path built a dense `S` that a raw `OpCopyRecord` mis-laid into the `Some` record;
+       (3) NATIVE `bare_field_name` routes through `key_owner` so a typed-local keyed collection
+       emits `db.hash(t, &["ck"])` not `&["?"]` (a "?" key hashes every record to one bucket →
+       dedup-to-1 + missed lookups); (4) `key_owner` is now `pub(crate)` for (3).  Cluster N's
+       119/120/122 native panics were the SAME bug (the `"?"` key), fixed here too.
+     - **Cluster C / gap 2 — `__nullable<S>` ↔ dense `S` coercion at VALUE boundaries.**  STILL
+       OPEN; the central remaining seam (100 `set_p160(&S)`, 55 return `vector<__nullable<S>>` ←
+       `vector<S>`, 151 `x ?? default` result, 150 view-return `.name`, 149 field read).  **Design
+       finding 2026-06-19 (matrix-first, layouts read off a concrete `Mix{a:int,b:text,c:int,d:char}`):
+       the `Some` payload is NOT a shifted dense `S` — it is independently packed.**  Dense:
+       `a@0,c@8,b@16,d@20`; Some: `disc@0,b@4,a@8,c@16,d@24`.  So an offset-ref reinterpret is
+       IMPOSSIBLE — every boundary needs a FIELD-BY-FIELD copy (Some-offset → dense-offset to unwrap;
+       dense → Some to wrap, which `nullable_enum_for` already does).  A by-value use (return, `??`,
+       dense-local assign) is a one-way unwrap copy; a `&mut S` arg (100) needs copy-IN before the
+       call and copy-OUT after (the callee mutates a dense temp).  This is a multi-site seam (axes:
+       call-arg by-val/by-ref, return, `??`, assign) — size M, wants its own boundary matrix; do NOT
+       fold into a quick patch.
+     - **Interface delegation (86):** `__nullable<S>` must satisfy an interface its underlying `S`
+       implements (`missing to_label`) — a method/interface call through the wrapper unwraps to `S`.
+       Sibling of gap 2 (the method-attribute Step-3 work is the related fix).  Size S–M.
+     - **store_persist (single-element `h += S{…}`):** the no-bracket keyed `+=` still types the RHS
+       as dense `S` and rejects the type change; needs the same content()-normalization as the
+       bracketed form, on the single-element path.  Size XS.
+     - **Cluster N residue / par (Step 2):** 22/22c/40 (par over nullable), 371 (forward-ref
+       vector<struct>) — remaining native/par seams after the `"?"`-key fix cleared 119/120/122.
      Method-attribute leak (the earlier Step-3 win) is FIXED; these are the next seams.
    - **Step 6 — Flip the gate + close.**  Drop `&& std::env::var("LOFT_E2_SYNTH").is_ok()` in
      `e2_rewrite_enabled` (expressions.rs:1937 — KEEP the `STD_SOURCE` dense-stdlib exclusion:
