@@ -464,12 +464,17 @@ impl Store {
     /// deterministic, reproducible failures.  Read once (cached); zero cost
     /// when off.  See `doc/claude/DEBUG.md` § store-ownership debugging.
     fn zero_claim_enabled() -> bool {
+        // Default ON: a claimed block's PAYLOAD must read as zero.  `claim` reuses freed blocks
+        // WITHOUT clearing them, so a caller that relies on zero-init — e.g. an empty `[]`
+        // collection placeholder (`V{a:[]}` / `parts: vector<T> = []`), which assumes the field/
+        // var handle is already 0 — instead inherits the freed block's STALE bytes.  That stale
+        // collection handle then resolves to a non-claimed record in `remove_claims`/`length_vector`
+        // → a use-after-free SIGSEGV (135-vector-u8-concat gate-on; @PLN25).  Zeroing the payload at
+        // the single claim chokepoint makes the invariant hold for every caller (interpreter only;
+        // native uses Rust ownership and never hits this).  `LOFT_NO_ZERO_CLAIM` disables it for
+        // perf benchmarking only.
         static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        *FLAG.get_or_init(|| {
-            std::env::var("LOFT_ZERO_CLAIM").is_ok()
-                || std::env::var("LOFT_LOG")
-                    .is_ok_and(|v| v.split([',', ':', ' ']).any(|p| p.trim() == "zero_claim"))
-        })
+        *FLAG.get_or_init(|| std::env::var("LOFT_NO_ZERO_CLAIM").is_err())
     }
 
     /// Common tail of every `claim` path: zero the claimed payload when
@@ -521,7 +526,9 @@ impl Store {
                 let result = self.claim_block(pos, size);
                 #[cfg(debug_assertions)]
                 self.fl_validate();
-                return result;
+                // This coalesce path reuses a freed block too — zero its payload like the other
+                // claim paths (it previously returned WITHOUT `finish_claim`, leaking stale bytes).
+                return self.finish_claim(result);
             }
         }
         // Slow path: linear scan (handles size-1 blocks and first-time allocation).
