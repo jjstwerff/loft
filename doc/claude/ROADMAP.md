@@ -27,6 +27,28 @@ The methodology behind this file (categories, no-time-projections, features-need
 
 ## Where we are & the highest-leverage next work (2026-06-17)
 
+> **Update 2026-06-19 — FFI bridge migration done; the next leverage is frictionless library REUSE.**
+> Plan-74 is **COMPLETE**: all 7 loft-lang native libraries migrated to `#[loft_native]` generated
+> bridges + re-published to the registry (signed, merged); the legacy ~98-arm interpreter marshaller
+> is deleted (bridge-only dispatch); the `#306` bridge ref-return bug is fixed.  Libraries are now
+> **discoverable in-repo** — auto-generated [LIBRARIES.md](LIBRARIES.md) + CLAUDE.md hooks + a CI
+> staleness gate + a registry `validate.py` docs gate (rejects a package with missing/incorrect docs).
+> The remaining bottleneck is **reuse friction** — agents reimplement libraries they can't find or
+> can't use without ceremony — so the top next picks are:
+>
+> 1. **`loft search` CLI** (effort S) — the advertised-but-unimplemented registry discovery command;
+>    closes the discovery loop *outside* the loft repo (any project, not just this one).  Spec:
+>    [PACKAGES/PKG_REGISTRY](PKG_REGISTRY.md) § Open work — `loft search`.
+> 2. **Lazy auto-use** ([lib_plans/59-lazy-stdlib](lib_plans/59-lazy-stdlib)) — auto-load a registered
+>    library on first use of its trigger method (`line.matches(p)` with no `use`); the registry
+>    triggers + the catalogue are the substrate.  The purest live-prototyping win, and `loft search`
+>    is its discoverable front door.
+>
+> Alternatives if pivoting: **stability instruments** (`@PLN53`/`@PLN54` — fuzzing/sanitizer, the
+> roadmap below) or the **`@PLN18` engine host** (the north star, but the parallel gaming lane — a
+> deliberate hand-off, not an unprompted pickup).  (The 2026-06-17 digest below predates this — the
+> "Library system" row's `regex match_groups/replace` is now SHIPPED as regex v0.2.0.)
+
 The 2026-06 cycle shipped (narrow-int storage + dev-communication, install/native
 hardening, the `@PLN27` plan migration).  The **stability roadmap is drained**
 ([STABILITY_ROADMAP.md](STABILITY_ROADMAP.md) — H3/H5/H6/H7/H8 all done) and the

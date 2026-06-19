@@ -974,6 +974,38 @@ These need decisions before implementation starts.
 
 ---
 
+## Open work — `loft search` (registry discovery)
+
+`loft search <query>` is referenced as a shipping command across the docs
+([PACKAGES.md](PACKAGES.md), [LAVITION.md](LAVITION.md), this doc) and the registry
+README, but the CLI implements only `install` / `pin` — **the command does not
+exist**.  Until it does, library discovery is loft-repo-only
+([LIBRARIES.md](LIBRARIES.md)); from any *other* loft project there is no way to find
+a library, so functionality gets reimplemented — the harm the in-repo catalogue + the
+`validate.py` docs gate already addressed on the docs + registry sides.  This is the
+CLI half of that fix.
+
+**Deliver (effort S):** `loft search [query]`
+
+- Fetch + signature-verify the index via the **same** code path `loft install` uses
+  (§ `loft install` flow) — reuse it, do not duplicate fetch/verify.  Honour
+  `LOFT_REGISTRY_URL` (mirrors) the way `install` does.
+- No query → list every package: `name <latest> — description  (categories)`.
+- Query → case-insensitive match over name + description + categories; rank
+  exact-name > name-prefix > description-hit.
+- Per hit print: `name <latest>`, the description, `loft install <name>`, and an
+  **auto-use** marker when the latest version declares `triggers`.
+- `--json` for tooling; offline → fall back to the cached
+  `~/.loft/registry/index.json` and say so.
+
+**Why this is the right next slice:** it closes the discovery loop *everywhere*
+(not just the loft repo's in-repo catalogue), reuses the install fetch/verify path,
+and it is the prerequisite that makes the bigger reuse win — lazy auto-use
+([lib_plans/59-lazy-stdlib](lib_plans/59-lazy-stdlib)) — *discoverable* rather than
+magic.
+
+---
+
 ## See also
 
 - [PACKAGES.md](PACKAGES.md) — package format reference; this doc
