@@ -1686,14 +1686,18 @@ impl Parser {
                 return Some(match type_name {
                     "index" => {
                         self.parse_fields(true, &mut fields);
-                        // @PLN25 E2 — mirror the hash/vector arms: rewrite the element to
-                        // `__nullable<S>` so a keyed `index<S[k]>` agrees with sibling
-                        // vector/hash views AND its element is constructed via the nullable
-                        // work-ref+finish path (see the `sorted` arm note below).
-                        let elem = self.e2_nullable_elem(tp);
-                        let sub_nr = self.data.type_def_nr(&elem);
-                        self.data.set_referenced(sub_nr, on_d, Value::Null);
-                        Type::Index(sub_nr, fields, crate::data::Deps::none())
+                        // @PLN25 E2 — `index<S>` stays DENSE for now (NOT rewritten to
+                        // `__nullable<S>` like vector/hash/sorted): the multi-key RANGE query
+                        // (`idx[83..92, "Two"]`, tests/docs/11-index.loft) does not yet unwrap a
+                        // nullable element, so rewriting here regresses it ("Unknown in expression
+                        // type __nullable<Elm>").  index-null coherence is a tracked follow-up —
+                        // see single-payload-refactor.md § Step 5; no consumer needs null-in-index
+                        // yet, so leaving it dense is the safe state.
+                        Type::Index(
+                            self.data.type_def_nr(&tp),
+                            fields,
+                            crate::data::Deps::none(),
+                        )
                     }
                     "hash" => {
                         self.parse_fields(false, &mut fields);
