@@ -230,6 +230,12 @@ for a `__nullable<S>`, else 0.
      (OpNewRecord) site that emits `field=0` for a nested collection inside a nullable cross-lib
      element; the index must be the collection field's real position in S.  (NOT shared with seam 2,
      which was the inferred-literal peek; this is the nested-construction field-index in codegen.)
+     NARROWED (minimal repros): a same-file `[S{flag, items:[…]}]` (scalar@0 + nested vector) AND a
+     `hash<S[k]>` with a nested-vector field BOTH work gate-on — so the bug needs the EXACT `Code`
+     shape: a cross-lib `Definition` (lib/code.loft:66 — `public:boolean`@0, `variables:vector<
+     Variable>`@8) held in BOTH `vector<Definition>` AND `hash<Definition[name]>` (Code, shared
+     records / @P296 linked) plus the nested vector field.  The codegen mis-indexes the nested
+     field to 0 only under that shared-vector+hash-over-cross-lib-struct combination.
   4. **wrong value in 15-lexer** — `assertion failed: Incorrect plus` (tests/docs/15-lexer.loft),
      a value divergence (not a crash) gate-on; isolate the differing computation.
   5. **par over nullable** — PARTLY FIXED (seam 5a, `bbb918d4`): `synth_nullable_par_wrapper`
