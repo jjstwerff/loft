@@ -190,8 +190,31 @@ for a `__nullable<S>`, else 0.
 
 **THE REFACTOR IS COMPLETE.**  All E2 tests green both backends.  What remains is the BROADER
 @PLN25 plan (NOT this refactor):
-- **Step 5 consumer sweep** — re-run the graphics/engine/wasm consumers (kernel_port [env],
-  moros_glb, moros_editor_html, wasm_library_suite) + the wrap suites gate-on; triage residue.
+- **Step 5 consumer sweep — STARTED (gate-on, `LOFT_E2_SYNTH=1 LOFT_NO_CACHE=1`).**  The wrap
+  suite is the broadest consumer (runs the whole script corpus + libs against golden output);
+  gate-on it should be byte-identical to gate-off if E2 is transparent.  Most individual script
+  tests pass; the aggregates surface a heterogeneous, multi-session residue.  Gate-OFF stays
+  green (2415/2416), so NONE of this affects shipped releases — it is exactly what the gate flip
+  would surface.  **FIXED so far:** transparent format (WIP 7).  **RESIDUE (distinct seams):**
+  1. **`&S` by-ref arg unwrap** — `expected &P160Item, got __nullable<P160Item>` on `set_p160`
+     (tests/scripts/100-enhancements.loft:140).  `convert` unwraps `__nullable<S>`→`Reference(S)`
+     (by-value) but not the by-REF (`&S` / `RefVar`) arg form; pass the payload sub-ref there too
+     (a `&mut` mutation would need copy-IN/OUT, but a read-only `&S` is just the sub-ref).
+  2. **dense↔nullable `vector` `+=`** — `vector += other_vec requires equal types
+     (vector<__nullable<Point>> != vector<Point>)` (tests/docs/17-libraries.loft:82).  A rewritten
+     user `vector<__nullable<S>>` meets a NON-rewritten (stdlib/`STD_SOURCE`) dense `vector<S>` at
+     a `+=`; reconcile the boundary (element-wise wrap, or accept the dense→nullable append).
+  3. **null-store OOB at structures.rs:43** — `index out of bounds: len … index is 65535` in
+     tests/docs/16-parser.loft + lib/audience_crystal/tests/*.loft (crystal editor).  A construction
+     or access path yields a `store_nr == u16::MAX` ref that reaches `self.store(rec)`.  Deeper —
+     instrument structures.rs:43 to find the producing op (likely a keyed/nested construction the
+     suite exercises that the targeted tests don't).
+  4. **wrong value in 15-lexer** — `assertion failed: Incorrect plus` (tests/docs/15-lexer.loft),
+     a value divergence (not a crash) gate-on; isolate the differing computation.
+  5. **par with USER EXTRA args** — `script_threading` (the broader-plan Step 2 seam, pre-existing,
+     NOT single-payload): `synth_nullable_par_wrapper` bails on extra args; extend the wrapper +
+     dispatcher arity.
+  Then re-run the engine/wasm consumers (moros_glb, moros_editor_html, wasm_library_suite) gate-on.
 - **The gate flip** — drop `LOFT_E2_SYNTH` in `e2_rewrite_enabled` (KEEP the `STD_SOURCE`
   dense-stdlib exclusion); fold the deferred P3 `default_native_value` Vector arm; graduate the
   gated probes into `tests/scripts/25-nullable-sequences.loft`; full `make ci` both backends;
