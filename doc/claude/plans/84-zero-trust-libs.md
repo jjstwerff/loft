@@ -48,14 +48,15 @@ directly over `vector<u8>`). Full plan + phases C1–C5 in
   malformed → error, never a crash). *Check:* decode the RFC corpus;
   `encode→decode→encode` byte-identity; negative tests reject truncated /
   non-canonical / overlong inputs.
-  **Status: structural decode shipped** (int/negint/bytes/array/bool/null +
-  malformed/non-canonical/trailing rejection), `encode→decode→encode` verified
-  both backends (loft-libs-core@a048e6d). **MAP decode gated on
+  **Status: structural + TEXT decode shipped** (int/negint/bytes/array/bool/null/
+  **text** + malformed/non-canonical/trailing rejection), `encode→decode→encode`
+  byte-identical on both backends (loft-libs-core@5293cb6). Text decode landed via
+  a new stdlib `text_from_bytes(vector<u8>) -> text` primitive (the inverse of
+  `byte_at`, loft@8c46955b). **Only MAP decode remains gated on
   [loft#406](https://github.com/loft-lang/loft/issues/406)** (struct-with-enum-
   fields vector append corrupts the discriminant — loft2's "null struct in
-  vectors" area); **TEXT decode** needs a `text_from_bytes` stdlib primitive
-  (the inverse of `byte_at`). The recursive read for both is already written and
-  lands the moment those clear. (See also [loft#405](https://github.com/loft-lang/loft/issues/405).)
+  vectors" area); the recursive map read is already written and lands the moment
+  #406 clears.
 - **A4 typed path** — `T.to_cbor()` / `parse_cbor<T>` (loft struct ↔ CBOR map,
   int or text keys, canonical). *Check:* struct corpus round-trips; signed-record
   shape stable.
