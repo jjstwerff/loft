@@ -458,7 +458,9 @@ impl Stores {
     /// Resolve the `Some` variant type-nr of a synth `__nullable<S>` element by db name,
     /// or `None` for any other element.  Shared by `key_owner` / `key_base`.
     fn nullable_some_variant(&self, content: u16) -> Option<u16> {
-        let name = &self.types[content as usize].name;
+        // Guard `content == u16::MAX` / out-of-range (an unbuilt or first-pass type id reaches
+        // `key_owner` from `new_record_field_op`); identity-resolve such ids rather than OOB-panic.
+        let name = &self.types.get(content as usize)?.name;
         if name.starts_with("__nullable<") {
             return self.names.get(&format!("{name}::Some")).copied();
         }
