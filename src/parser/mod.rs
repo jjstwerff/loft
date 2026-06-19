@@ -1428,6 +1428,40 @@ impl Parser {
         {
             return true;
         }
+        // @PLN25 single-payload — a `__nullable<S>` value flows into a `&S` (`RefVar(Reference
+        // (S))`) parameter (`fn f(r: &S)` that may MUTATE through `r`).  Unwrap to the payload
+        // sub-ref, then pass it BY-REFERENCE via a work-ref + `OpCreateStack` (with `skip_free`,
+        // since the work-ref holds only a borrowed DbRef into the element, not its own store) —
+        // exactly the complex-expression by-ref path below.  A `&mut` write through the sub-ref
+        // then propagates straight back to the source element's payload.  This must run BEFORE
+        // the `ref_tp.is_equal(is_type)` arm (which fails: `Reference(S)` != `Enum(__nullable<S>)`).
+        if let Type::RefVar(ref_tp) = should
+            && let Type::Reference(struct_d, _) = &**ref_tp
+            && let Type::Enum(enum_d, true, _) = is_type
+            && self.data.def(*enum_d).name
+                == format!("__nullable<{}>", self.data.def(*struct_d).name())
+        {
+            if !self.first_pass {
+                let struct_d = *struct_d;
+                let enum_d = *enum_d;
+                let some_d = self.data.variant_of(enum_d, "Some");
+                if some_d != u32::MAX {
+                    let payload_pos = u32::from(
+                        self.database
+                            .position(self.data.def(some_d).known_type(), "payload"),
+                    );
+                    let dense = Type::Reference(struct_d, Deps::none());
+                    let sub = self.get_val(&dense, false, payload_pos, code.clone(), u32::MAX);
+                    let wv = self.vars.work_refs(&dense, &mut self.lexer);
+                    self.vars.set_skip_free(wv);
+                    *code = Value::Insert(vec![
+                        v_set(wv, sub),
+                        self.cl("OpCreateStack", &[Value::Var(wv)]),
+                    ]);
+                }
+            }
+            return true;
+        }
         if let Type::RefVar(ref_tp) = should
             && ref_tp.is_equal(is_type)
         {
