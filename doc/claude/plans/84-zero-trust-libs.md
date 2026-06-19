@@ -48,6 +48,14 @@ directly over `vector<u8>`). Full plan + phases C1–C5 in
   malformed → error, never a crash). *Check:* decode the RFC corpus;
   `encode→decode→encode` byte-identity; negative tests reject truncated /
   non-canonical / overlong inputs.
+  **Status: structural decode shipped** (int/negint/bytes/array/bool/null +
+  malformed/non-canonical/trailing rejection), `encode→decode→encode` verified
+  both backends (loft-libs-core@a048e6d). **MAP decode gated on
+  [loft#406](https://github.com/loft-lang/loft/issues/406)** (struct-with-enum-
+  fields vector append corrupts the discriminant — loft2's "null struct in
+  vectors" area); **TEXT decode** needs a `text_from_bytes` stdlib primitive
+  (the inverse of `byte_at`). The recursive read for both is already written and
+  lands the moment those clear. (See also [loft#405](https://github.com/loft-lang/loft/issues/405).)
 - **A4 typed path** — `T.to_cbor()` / `parse_cbor<T>` (loft struct ↔ CBOR map,
   int or text keys, canonical). *Check:* struct corpus round-trips; signed-record
   shape stable.
@@ -65,6 +73,18 @@ stability is structural — not proved by a cross-build equality test.
 ## ZT-B — `crypto` wasm-bridge (UPDATE) · home `loft-libs-core/crypto`
 
 Run the **same** crypto API in the browser with a minimal bundle.
+
+> **Status (native primitive suite COMPLETE — the prerequisite B1 didn't list).**
+> The lib shipped with only `sha256`/`hmac`/`base64` AND was **broken against the
+> current loft binary** (legacy `loft_register!` FFI — plan-74 deleted the
+> interpreter marshaller, so even `sha256` panicked "no marshal bridge").
+> Migrated the whole lib to the `#[loft_native]` bridge pattern and added the
+> full native suite over RustCrypto/dalek: **ed25519** (RFC 8032),
+> **x25519_dh** (RFC 7748), **hkdf_sha256** (RFC 5869), **aes256gcm seal/open**
+> (Wycheproof), **random_bytes** (OsRng). **51 KAT tests pass on BOTH backends**
+> (loft-libs-core@69d1f8b). Text API (base64 bytes), loft-safe (malformed → ""/
+> false). Remaining ZT-B is the **wasm bridge** (B1 `crypto.subtle` mapping, B2
+> async↔sync, B3 HPKE, B4–B6).
 
 - **B1 — `[wasm.bridge]` → `crypto.subtle`.** Map each `n_crypto_*`:
   ed25519 sign/verify, x25519_dh, aes256gcm seal/open, hkdf, sha256, hmac,
