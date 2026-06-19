@@ -1679,16 +1679,28 @@ impl Parser {
         // are untouched.  Native stdlib (STD_SOURCE) stays dense.
         if assign_tp.is_unknown() && self.e2_rewrite_enabled() {
             let link = self.lexer.link();
-            if let Some(name) = self.lexer.has_identifier()
-                && self.lexer.peek_token("{")
-            {
-                let d = self.data.def_nr(&name);
-                if d != u32::MAX
-                    && self.data.def_type(d) == DefType::Struct
-                    && self.data.def(d).synthetic.is_none()
+            if let Some(first) = self.lexer.has_identifier() {
+                // A library-qualified struct literal (`lib::S { … }`) reads as TWO
+                // identifiers around `::`; the bare-identifier peek saw only `lib`,
+                // missed the `{`, and left the inferred literal DENSE while DECLARED
+                // `lib::S` sites are nullable — the type mismatch at `v += [lib::S{…}]`.
+                // Skip past `::` to the real struct name (last segment) before the `{`.
+                let struct_name = if self.lexer.has_token("::") {
+                    self.lexer.has_identifier()
+                } else {
+                    Some(first)
+                };
+                if let Some(sname) = struct_name
+                    && self.lexer.peek_token("{")
                 {
-                    let syn = self.data.nullable_enum_for(&mut self.lexer, d);
-                    assign_tp = Type::Enum(syn, true, Deps::none());
+                    let d = self.data.def_nr(&sname);
+                    if d != u32::MAX
+                        && self.data.def_type(d) == DefType::Struct
+                        && self.data.def(d).synthetic.is_none()
+                    {
+                        let syn = self.data.nullable_enum_for(&mut self.lexer, d);
+                        assign_tp = Type::Enum(syn, true, Deps::none());
+                    }
                 }
             }
             self.lexer.revert(link);
