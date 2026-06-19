@@ -4357,9 +4357,31 @@ impl Parser {
                         let ls_own: Vec<u16> = ls.to_vec();
                         self.ref_return(&ls_own, std::slice::from_mut(&mut v), RetSite::MidReturn);
                     }
-                } else if let Type::Enum(_, true, ls) = &t {
-                    let ls_own: Vec<u16> = ls.to_vec();
-                    self.ref_return(&ls_own, std::slice::from_mut(&mut v), RetSite::MidReturn);
+                } else if let Type::Enum(e_d, true, ls) = &t {
+                    // @PLN25 single-payload: a mid-body `return <nullable-element>` whose value is
+                    // coerced to a dense `S` keeps `t` as the synth `__nullable<S>` Enum tail type,
+                    // while the fn's DECLARED return is a dense `Reference(S)`.  The value is a VIEW
+                    // into a local (the unwrapped payload) — left as a view it makes the fn
+                    // VIEW-classified, so a SIBLING OWNED return on another path (a fallback `S{}`)
+                    // is never freed by the caller (149: `map_get_hex` fallback `make_hex(0,0)` × N
+                    // leaks).  Detect it from the TYPES (a `__nullable<S>` Enum tail + dense
+                    // `Reference(S)` declared) — NOT the IR source, so a DIRECT `v[i]` unwrap
+                    // qualifies too — and copy the view into an OWNED buffer so the fn is
+                    // owned-classified.  No `nrvo_collapse_tail_set` (its work-ref→caller-buffer
+                    // rename + re-OpDatabase was the documented direct-`v[i]` free-list-corruption
+                    // hazard, now also defused by zero-on-claim; the plain copy here does not
+                    // rename).  Gated on `__nullable<>` so a real user struct-enum return is
+                    // untouched.
+                    let declared_ret = self.data.def(self.context).returned().clone();
+                    if let Type::Reference(rtd, _) = declared_ret
+                        && self.data.def(*e_d).name().starts_with("__nullable<")
+                    {
+                        let w = self.materialize_view_return(rtd, &mut v);
+                        self.ref_return(&[w], std::slice::from_mut(&mut v), RetSite::MidReturn);
+                    } else {
+                        let ls_own: Vec<u16> = ls.to_vec();
+                        self.ref_return(&ls_own, std::slice::from_mut(&mut v), RetSite::MidReturn);
+                    }
                 } else if let Type::Vector(_, ls) = &t
                     && self.return_buffer().is_some()
                 {
