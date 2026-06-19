@@ -2238,7 +2238,23 @@ impl Parser {
                 // I9-prim: use find_fn which checks both the method-style convention
                 // (t_7integer_OpLt) and the add_op convention (OpLtInt via possible map).
                 let concrete_type = self.data.def(concrete_nr).returned().clone();
-                let found = self.data.find_fn(u16::MAX, &method_suffix, &concrete_type);
+                let mut found = self.data.find_fn(u16::MAX, &method_suffix, &concrete_type);
+                // @PLN25 E2 — a synth `__nullable<S>` delegates method/interface
+                // resolution to its underlying `S` (a method call on a nullable
+                // element unwraps through `Some` to call `S`'s method), so satisfy
+                // the bound against `S`'s methods when the wrapper itself lacks them.
+                // Gate-off-inert (no `__nullable<` type exists).
+                if found == u32::MAX
+                    && let Some(inner) = concrete_name
+                        .strip_prefix("__nullable<")
+                        .and_then(|r| r.strip_suffix('>'))
+                {
+                    let s_nr = self.data.def_nr(inner);
+                    if s_nr != u32::MAX {
+                        let s_type = self.data.def(s_nr).returned().clone();
+                        found = self.data.find_fn(u16::MAX, &method_suffix, &s_type);
+                    }
+                }
                 if found == u32::MAX {
                     let msg = crate::diagnostics::diagnostic_format(
                         Level::Error,
