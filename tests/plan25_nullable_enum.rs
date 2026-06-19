@@ -86,35 +86,34 @@ fn null_variant_is_unit_some_carries_the_struct_payload() {
         "Null variant carries no fields"
     );
 
-    // Some: discriminant `enum` at index 0, then the copied payload id, tag.
+    // Single-payload form: discriminant `enum` at index 0, then ONE inline
+    // `payload` field whose type IS the struct itself (dense `S`) — see
+    // plans/25-nullable-sequences/single-payload-refactor.md.
     let sa = &p.data.def(sv).attributes;
-    assert_eq!(sa.len(), 3, "Some = enum + id + tag");
+    assert_eq!(sa.len(), 2, "Some = enum + payload");
     assert_eq!(sa[0].name, "enum", "discriminant must be the first field");
     assert_eq!(
         sa[0].value,
         Value::Enum(2, u16::MAX),
         "Some discriminant = 2"
     );
-    assert_eq!(sa[1].name, "id", "payload field id copied in order");
-    assert_eq!(sa[2].name, "tag", "payload field tag copied in order");
+    assert_eq!(sa[1].name, "payload", "single inline payload field");
 }
 
 #[test]
 fn payload_field_types_match_the_struct() {
     let (p, row_d, e) = synth();
     let sv = p.data.variant_of(e, "Some");
-    // The Some payload field types are copied verbatim from Row.
-    for (i, src) in p.data.def(row_d).attributes.iter().enumerate() {
-        let copied = &p.data.def(sv).attributes[i + 1]; // +1 skips the discriminant
-        assert_eq!(copied.name, src.name, "field {i} name");
-        assert_eq!(
-            format!("{:?}", copied.typedef),
-            format!("{:?}", src.typedef),
-            "field {} ({}) type copied verbatim",
-            i,
-            src.name
-        );
-    }
+    // Single-payload form: the `Some` variant carries ONE inline `payload` field
+    // whose type IS the struct (`Reference(Row)`), so its dense layout is preserved
+    // and a payload sub-ref is a valid dense `S` reference (no copy at value boundaries).
+    let payload = &p.data.def(sv).attributes[1]; // [0] is the discriminant
+    assert_eq!(payload.name, "payload", "single inline payload field");
+    assert!(
+        matches!(payload.typedef, Type::Reference(d, _) if d == row_d),
+        "payload type must be Reference(Row), got {:?}",
+        payload.typedef
+    );
 }
 
 #[test]

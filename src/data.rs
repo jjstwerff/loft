@@ -3855,49 +3855,21 @@ impl Data {
             Type::Enum(enumerate, false, Deps::none()),
         );
         self.set_attr_value(sv, e_attr, Value::Enum(2, u16::MAX));
-        // Copy struct_d's payload fields after the discriminant, in order.
-        // Carry the layout/encoding-bearing metadata (`alias_d_nr`,
-        // `nullable`, `mutable`, `init`), not just the type: a `u16`/`u8`
-        // field stores via the aliased narrow-integer encoding (`OpSetShort`
-        // `+1`), and the codegen distinguishes a struct field from a bare
-        // narrow-vector element by `alias_d_nr != MAX`.  Dropping the alias
-        // here made the `Some` payload field look like a narrow-vector
-        // element, so it stored RAW (`OpSetShortRaw`) while the database typed
-        // it nullable — reads/format then applied the `-1` decode to a raw
-        // value (`1234` → `1233`).  Copying the alias keeps the `Some` payload
-        // byte-identical to a dense `S`.
-        // Copy only DATA fields.  A method `fn m(self: S)` is registered as a
-        // `Type::Routine` ATTRIBUTE on `S` (not a data field — the dense struct's
-        // layout omits it, and `--native` skips it during field emission).  If it
-        // were copied into `Some`, building `Some`'s db structure would resolve
-        // that `Routine`'s `known_type`, which then makes the DENSE `S`'s method
-        // attribute look like a concrete field — so `--native` emits a
-        // `db.field(S, "m", t<N>)` referencing a type it never declares (E0425).
-        // (A declared fn-ref DATA field is `Type::Function`, kept.)
-        let fields: Vec<(String, Type, u32, bool, bool, bool)> = self
-            .def(struct_d)
-            .attributes
-            .iter()
-            .filter(|a| !matches!(a.typedef, Type::Routine(_)))
-            .map(|a| {
-                (
-                    a.name.clone(),
-                    a.typedef.clone(),
-                    a.alias_d_nr,
-                    a.nullable,
-                    a.mutable,
-                    a.init,
-                )
-            })
-            .collect();
-        for (fname, ftype, alias_d_nr, nullable, mutable, init) in fields {
-            let ai = self.add_attribute(lexer, sv, &fname, ftype);
-            let attr = &mut self.definitions[sv as usize].attributes[ai];
-            attr.alias_d_nr = alias_d_nr;
-            attr.nullable = nullable;
-            attr.mutable = mutable;
-            attr.init = init;
-        }
+        // Single-payload form (see plans/25-nullable-sequences/single-payload-refactor.md):
+        // the `Some` variant carries ONE inline `payload: S` field whose TYPE is `struct_d`
+        // itself — the same struct definition as a standalone `S`.  The layout pass embeds
+        // it after the discriminant, so `payload`'s region keeps S's exact dense field-offset
+        // table (no reorder/gap-fill of S's own fields) and a sub-ref at the payload offset
+        // IS a valid dense `S` reference.  Field access, key resolution, args/returns and
+        // `??` therefore reuse the dense-`S` machinery with no copy and no per-field encode.
+        // A method `fn m(self: S)` is a `Type::Routine` ATTRIBUTE on `S`, not a data field;
+        // it is reached transparently through the payload, so it need not be re-copied here.
+        self.add_attribute(
+            lexer,
+            sv,
+            "payload",
+            Type::Reference(struct_d, Deps::none()),
+        );
 
         self.mark_synthetic(e, "@PLN25 nullable-enum for embedded struct field");
         self.mark_synthetic(nv, "@PLN25 nullable-enum Null variant");

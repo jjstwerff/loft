@@ -102,11 +102,15 @@ impl Parser {
             let struct_d = self.data.def_nr(&sname);
             if struct_d != u32::MAX && self.data.attributes(struct_d) > 0 {
                 if !self.first_pass {
+                    // Single-payload form: the dense `S` lives in the `Some` variant's
+                    // inline `payload` field, so unwrap to a sub-ref at `payload`'s byte
+                    // offset.  That sub-ref IS a valid dense `S` (it shares S's offset
+                    // table), so the field/method access below re-dispatches on dense `S`
+                    // with no copy.
                     let some_d = self.data.variant_of(enum_d, "Some");
-                    let first = self.data.attr_name(struct_d, 0);
                     let off = self
                         .database
-                        .position(self.data.def(some_d).known_type(), &first);
+                        .position(self.data.def(some_d).known_type(), "payload");
                     *code = self.get_val(
                         &Type::Reference(struct_d, crate::data::Deps::none()),
                         false,
