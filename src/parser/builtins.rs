@@ -273,17 +273,25 @@ impl Parser {
         // nullable vector — the par dispatcher's extra-arg marshalling collides
         // with the wrapper's mirrored param layout (stack underflow); those
         // fall through to the dense path for now.
+        // The element type is the inline `Enum(__nullable<S>, true)` for a `vector<S>` par, OR
+        // `Reference(__nullable<S>)` for a KEYED par (hash/sorted/index): `materialise_keyed_for_par`
+        // builds the temp vector with `Reference(content_d)` element refs.  Both need the wrapper
+        // so the worker reads the dense-`S` payload, not the element's discriminant @0.
+        let elem_enum_d = match elem_tp {
+            Type::Enum(d, true, _) => Some(*d),
+            Type::Reference(d, _) if self.data.def(*d).name().starts_with("__nullable<") => Some(*d),
+            _ => None,
+        };
         if !self.first_pass
             && extra_vals.is_empty()
-            && let Type::Enum(enum_d, true, _) = elem_tp
+            && let Some(enum_d) = elem_enum_d
             && self.data.attributes(d_nr) > 0
             && let Type::Reference(struct_d, _) =
                 self.data.def(d_nr).attributes()[0].typedef.clone()
-            && self.data.def(*enum_d).name
+            && self.data.def(enum_d).name
                 == format!("__nullable<{}>", self.data.def(struct_d).name())
             && self.data.attributes(struct_d) > 0
         {
-            let enum_d = *enum_d;
             let w_d_nr = self
                 .synth_nullable_par_wrapper(elem_tp, enum_d, struct_d, d_nr, &ret_type, first_id);
             return (w_d_nr, ret_type, extra_vals, extra_types);
