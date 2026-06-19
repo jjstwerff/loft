@@ -371,9 +371,20 @@ for a `__nullable<S>`, else 0.
   - **index<S> coherence** — `index<S>` is kept DENSE (vector/hash/sorted are nullable): rewriting
     it regresses the multi-key RANGE query (`idx[83..92,"Two"]`, 11-index.loft:48 → "Unknown in
     expression type __nullable<Elm>" — the range-query path does not unwrap a nullable element).
-    For full coherence, rewrite the index arm too AND teach the range-query access to unwrap.
+    **FIXED (`469dbec1`): index<S> rewrites to `__nullable<S>` + the range-query for-loop unwraps**
+    (control.rs nullable-Enum iterable arm).  11-index passes gate-on both backends; dir aggregate green.
   Then re-run the engine/wasm consumers (moros_glb, moros_editor_html, wasm_library_suite) gate-on.
-- **The gate flip** — drop `LOFT_E2_SYNTH` in `e2_rewrite_enabled` (KEEP the `STD_SOURCE`
+- **The gate flip — FLIP-READINESS ASSESSED (full suite gate-on via `LOFT_E2_SYNTH=1`): 2399/2416,
+  17 failures across BROADER subsystems** the consumer aggregates don't cover.  Categorized:
+  - `arc_e_program_cache` ×3 — LIKELY SPURIOUS: the documented cache gotcha (program cache keys on
+    SOURCE, not the gate, so a gate-on run with the env set serves gate-off-cached bundles).  The
+    ACTUAL flip removes the gate entirely → no mismatch; verify with the flip, don't chase via env.
+  - REAL gate-on issues (the flip's tail, per "re-run engine/wasm consumers"): `html_wasm::wasm_library_suite`,
+    `issues::p379_two_libs_same_struct_name` (cross-lib struct name), `native::imaging_fixture_png_roundtrip`
+    + `native::native_scripts`, `store_persist_loft` ×3, `wrap::stack_trace_script`, and a
+    `structures.rs:976` (`set_default_value` Enum arm) panic.  Each needs triage (pre-existing gate-on
+    vs introduced by the index/sorted nullable broadening) + fix.  Only AFTER these are green:
+  drop `LOFT_E2_SYNTH` in `e2_rewrite_enabled` (KEEP the `STD_SOURCE`
   dense-stdlib exclusion); fold the deferred P3 `default_native_value` Vector arm; graduate the
   gated probes into `tests/scripts/25-nullable-sequences.loft`; full `make ci` both backends;
   set the plan SHIPPED.  This is the single final PR to `main`.
