@@ -158,26 +158,30 @@ for a `__nullable<S>`, else 0.
   `get_val` (inline struct → sub-ref, NOT a raw `OpGetField` which derefs).
 
 **REMAINING (5 E2 reds — the checklist):**
-- **Step 4 tail — inline-vector-literal + HEAP field corruption (4 gap2 reds).**  REPRO:
-  `v: vector<S> = [S{a:1, b:"hi", c:7, d:'z'}]` with a TEXT field — a no-heap struct
-  (`{a,c,d}`) WORKS.  hash/json dodge it (keyed/walker build in place / via the walker).
-  **DEBUG-BUILD ROOT (supersedes the earlier `remove_claims` theory, which was WRONG —
-  `remove_claims`/`copy_claims`/`do_copy_record`/`set_text` are all traced as NOT reached
-  before the fault):** `target/debug/loft` panics cleanly at `store.rs:1105` `fl_size` =
-  "attempt to negate with overflow" — the free-list LLRB tree read a free block whose size
-  word is `i32::MIN`, i.e. **a heap write landed in a free block's header during the temp
-  `Some` construction**, BEFORE the text write.  (Release builds it silently → the
-  `0x80000066`-word `grow_words` overflow at store.rs:880.)  HYPOTHESIS to check first: the
-  `Some` record allocated by `OpDatabase(some_kt)` in `parse_some_payload_object` is sized
-  SMALLER than the extent its payload field-writes reach — i.e. the layout pass sizes the
-  `Some.payload` `Reference(struct_d)` field as a 4-byte pointer while the writes treat it
-  as the inline 24-byte dense `S` (a size-vs-write mismatch), so a field write spills past
-  the claimed record into the adjacent free block.  Compare `size(Some)` (debug_layout /
-  introspect) against the payload write offsets; reconcile so the standalone `Some`
-  allocation and the vector-element stride (32 here) agree on the inline payload size.
-  Next-session start: `RUST_BACKTRACE=full target/debug/loft /tmp/sp/direct.loft`, add a
-  one-line trace at `claim`/`grow_words` to name the corrupting op.  Blocks the 4 `_gap2`
-  value-boundary tests (`local_assign`/`by_value_arg`/`coalesce`/`via_local`, all text-carrying).
+- **Step 4 tail — inline-vector-literal + HEAP field corruption — FIXED (WIP 3, `3241b962`).**
+  ROOT (NOT the earlier `remove_claims` theory): `set_default_value` (structures.rs)
+  treated content type 6 (a 4-byte u32-raw field — e.g. a `character` codepoint) like type 0,
+  writing an 8-byte `i64::MIN` via `set_int`.  The extra 4 bytes spilled into the next slot;
+  for a TRAILING character in a tightly-sized single-payload `Some` payload the spill overran
+  the record and clobbered the adjacent free block's size header → `fl_size` negate-overflow
+  (debug) / `grow_words` overflow (release).  Fix: write content-6 defaults 4 bytes wide.
+  Pre-existing latent bug; the 4-byte write is correct for every content-6 field.  Full suite
+  2412/4 (from 6); construction + `local_assign` + `by_value_arg` gap2 now green.
+- **Step 6 (now active) — return-boundary view-return for the sub-ref unwrap (2 gap2 reds).**
+  `nullable_unwrap_returned_via_local` (`chosen = t[i] ?? none(); chosen`) and
+  `..._directly_from_coalesce` (`return t[i] ?? none()`) return null (`store_nr=u16::MAX` →
+  `allocations[65535]` OOB at allocation.rs:560).  The ref-return routing (control.rs:686
+  + `tail_is_nullable_unwrap`:3613, `materialize_view_return`) detects an `OpNullableToDense`
+  tail and copies it into an owned buffer (#306 view-return); the unwrap is now a sub-ref
+  (`OpGetField`), so the detector misses it and the default epilogue demotes it to `return
+  null`.  FIX (the right shape — copy the viewed S into the return buffer so the result is
+  OWNED, not a dangling view into the caller's container): make `tail_is_nullable_unwrap`
+  recognize the sub-ref unwrap (OpGetField of a `__nullable<S>` at the payload offset, Var/
+  Block/If source) — but the two reds are DIFFERENT shapes (`return Var(chosen)` after a local
+  assign vs `return <If>` direct), so the via-local case needs the materialize keyed off the
+  assigned local's value, not just the tail.  Then DELETE `OpNullableToDense` + its remaining
+  routing (operators.rs `is_struct_returning_call` arm, pre_eval.rs, fill.rs, structures.rs
+  `nullable_to_dense`, default/01_code.loft; `materialize_view_return` SURVIVES for #306).
 - **Step 5 — format** (format.rs): render the `payload` struct, not the `Some` field list.
 - **Step 6 — DELETE `OpNullableToDense`** (convert already emits the sub-ref): remove the op
   + its gap2 return-routing built around copy/alloc semantics — control.rs
