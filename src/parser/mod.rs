@@ -1377,9 +1377,10 @@ impl Parser {
         // `disc@0,b@4,a@8,c@16,d@24`), so reordered text/char fields read null
         // (silent corruption).  The correct unwrap is a FIELD-BY-FIELD copy into a
         // fresh dense temp; a scalar-only prototype works on both backends, but the
-        // heap-field copy needs a lifetime-correct deep copy (a naive work-ref
-        // stash hits a spurious null-ref FreeRef at the wrong scope → free-list
-        // crash).  Tracked as the remaining gap-2 seam in the plan README.
+        // heap-field copy hit a store free-list corruption in `set_str` (the dense
+        // temp's store) that needs a lifetime-correct deep copy against the
+        // DATABASE/LIFETIME machinery — tracked as the remaining gap-2 seam in the
+        // plan README.  Left wrong-but-non-crashing (gate-off-inert) until then.
         if let (Type::Enum(enum_d, true, _), Type::Reference(struct_d, _)) = (is_type, should)
             && self.data.def(*enum_d).name
                 == format!("__nullable<{}>", self.data.def(*struct_d).name())
