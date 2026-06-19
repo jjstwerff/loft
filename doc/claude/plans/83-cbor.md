@@ -35,17 +35,34 @@ test-vector / matrix problem, not a "looks right" one.
   drift, so JSON signatures aren't stable.
 - **Compact binary wire** that can freeze.
 
-## Structure
+## Architecture — PURE LOFT (revised 2026-06-19, validated)
 
-Mirrors the crypto `[native]`-crate template, with two deliberate departures:
+**Pivot from the original "wrap `ciborium`" plan** (and from `DEPENDENCIES.md`'s
+suggestion). Investigating the loft-ffi bridge showed: the modern `#[loft_native]` bridge
+can pass `vector<u8>` (via `LoftStore::alloc_vector` / `vector_data_ptr`), but a
+*tree-walking* codec (a `CborValue`/struct → bytes) would force the native side to read
+loft's struct layout by offset — re-introducing the **H9 cross-binary layout-coupling
+hazard** ([STABILITY_HOTSPOTS.md § H9](../STABILITY_HOTSPOTS.md)), which is the wrong risk
+for a signature-bearing security lib.
 
-- `cbor/{loft.toml, src/cbor.loft, native/, tests/}` over the upstream `ciborium` crate.
-- **Modern `#[loft_native]` bridge passing `vector<u8>` directly** — *not* the legacy
-  base64-text-over-C-ABI convention the crypto v0.2 delta still uses (cbor is binary; a
-  base64 round-trip would defeat the point).
-- **No `[wasm.bridge]`, no JS.** `ciborium` is pure Rust → cross-builds to a wasm32 rlib
-  directly. This is the big simplification vs crypto (which needs `crypto.subtle`): cbor is
-  platform-blind for free.
+CBOR's byte format is simple (a major-type byte + length + payload), so the codec is
+written **in pure loft** instead:
+
+- `cbor/{loft.toml, src/cbor.loft, tests/*.loft}` — **no `native/`, no `ciborium`, no
+  bridge.** Just loft.
+- **`native == wasm` for free** — pure loft runs identically on every target, so the
+  master invariant (the signature-stability proof) holds by construction, not by a
+  cross-build equality test.
+- **No external-crate trust surface** — the codec is auditable loft, and loft's memory
+  safety makes a malformed-CBOR decode a *parse error*, not a crash (safer than a C/Rust
+  parser). The mild "don't roll your own serialization" caveat is answered by testing
+  against the RFC 8949 §Appendix-A vector corpus.
+
+**Validated (probe, 2026-06-19):** a pure-loft encoder produced byte-identical RFC 8949
+output for uint (`1000`→`19 03 e8`), text (`"IETF"`), byte string (`h'01020304'`), and
+array (`[1,2,3]`). loft's `vector<u8>` + `+= [x as u8]` + integer arithmetic for the
+big-endian length encode is the whole substrate; the narrow-int check (`as u8` required)
+guards every byte.
 
 ## API surface — parallels loft's existing JSON
 
@@ -74,24 +91,27 @@ null, float64), both paths, canonical mode — enough for signable records/ops/s
 4. **The linchpin:** confirm loft `vector<u8>` ↔ CBOR byte-string marshals cleanly over the
    modern bridge (the whole reason to avoid base64).
 
-## Phases
+## Phases (pure-loft — no native crate, no cross-build)
 
-- **C1 — scaffold** (`loft new cbor --native`, wrap `ciborium`, the byte-vector
-  `#[loft_native]` signature). — S
-- **C2 — dynamic** `CborValue` + `cbor_encode`/`cbor_decode` over `ciborium::value::Value`.
-  — S
-- **C3 — canonical encoding** (recursive map-key sort + shortest-form/definite-length
-  guarantee + RFC 8949 §4.2 test vectors + an encode→decode→encode byte-identity corpus).
-  — **M, the load-bearing part**
-- **C4 — typed path** `T.to_cbor()` / `parse_cbor<T>` reusing loft's struct↔value machinery
-  (parallel to `to_json`), canonical variant. — M
-- **C5 — wasm** cross-build the bridge crate to a wasm32 rlib (no JS bridge) + a
-  **native-vs-wasm byte-equality test** (cross-target determinism = the signature-stability
-  proof). — S
-- **C6 — publish** native + wasm artifacts, registry entry, LIBRARY_CHECKLIST. — S
+- **C1 — skeleton + primitive encoders.** `loft.toml` + `src/cbor.loft` + `tests/`; the
+  `CborValue` enum; canonical encode for uint / negint / byte-string / text-string / bool /
+  null / float64 (shortest-form head). *Check:* RFC 8949 Appendix-A primitive vectors
+  byte-identical. **(core already validated by the probe.)**
+- **C2 — containers + canonical map ordering.** array, map, nesting; **map keys sorted by
+  encoded bytes** (RFC 8949 §4.2). *Check:* container vectors + a key-ordering vector (keys
+  inserted out of order encode sorted). — **the load-bearing part**
+- **C3 — decode** (bytes → `CborValue`) with well-formedness checks (loft-safe: malformed →
+  error, never a crash). *Check:* decode the RFC corpus; `encode→decode→encode`
+  byte-identity; negative tests reject truncated / non-canonical / overlong inputs.
+- **C4 — typed path** `T.to_cbor()` / `parse_cbor<T>`: loft struct ↔ CBOR map (int or text
+  keys), canonical. *Check:* struct corpus round-trips; signed-record shape stable.
+- **C5 — package + publish.** `loft.toml`, registry entry, LIBRARY_CHECKLIST; a guard test
+  asserting `native == wasm` output (trivial for pure loft, but pinned). *Check:*
+  `loft install cbor` works; checklist green.
 
-**Effort ~M.** C3 + C5 carry the risk and are exactly where a signature scheme is brittle,
-so they are test-vector / matrix-driven, not eyeballed.
+**Effort now ~S–M** (smaller than the ciborium-wrap plan — no native crate, no
+cross-build). Risk concentrates in **C2** (canonical map ordering) and **C3** (robust
+decode), both vector / negative-test driven.
 
 ## See also
 
