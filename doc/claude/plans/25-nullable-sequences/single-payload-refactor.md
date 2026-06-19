@@ -374,17 +374,31 @@ for a `__nullable<S>`, else 0.
     **FIXED (`469dbec1`): index<S> rewrites to `__nullable<S>` + the range-query for-loop unwraps**
     (control.rs nullable-Enum iterable arm).  11-index passes gate-on both backends; dir aggregate green.
   Then re-run the engine/wasm consumers (moros_glb, moros_editor_html, wasm_library_suite) gate-on.
-- **The gate flip — FLIP-READINESS ASSESSED (full suite gate-on via `LOFT_E2_SYNTH=1`): 2399/2416,
-  17 failures across BROADER subsystems** the consumer aggregates don't cover.  Categorized:
-  - `arc_e_program_cache` ×3 — LIKELY SPURIOUS: the documented cache gotcha (program cache keys on
-    SOURCE, not the gate, so a gate-on run with the env set serves gate-off-cached bundles).  The
-    ACTUAL flip removes the gate entirely → no mismatch; verify with the flip, don't chase via env.
-  - REAL gate-on issues (the flip's tail, per "re-run engine/wasm consumers"): `html_wasm::wasm_library_suite`,
-    `issues::p379_two_libs_same_struct_name` (cross-lib struct name), `native::imaging_fixture_png_roundtrip`
-    + `native::native_scripts`, `store_persist_loft` ×3, `wrap::stack_trace_script`, and a
-    `structures.rs:976` (`set_default_value` Enum arm) panic.  Each needs triage (pre-existing gate-on
-    vs introduced by the index/sorted nullable broadening) + fix.  Only AFTER these are green:
-  drop `LOFT_E2_SYNTH` in `e2_rewrite_enabled` (KEEP the `STD_SOURCE`
+- **The gate flip — DRIVEN from 2399 → 2409/2416 (actual flip; cache-gotcha failures were spurious
+  and vanished).  3 tail items FIXED + committed (gate re-guarded, branch releasable); 3 remain.**
+  - **FIXED `p379` (`6012147a`)** — synth `__nullable<S>` enum collided across two libs' same-named
+    structs.  `nullable_enum_for` keys the DEF on the STRUCT's source (not `STD_SOURCE`);
+    `register_enum_db` disambiguates the db name via the payload struct's qualified name (+ a
+    `Stores::type_name` reverse accessor).  The "cannot change type" write was the symptom: the
+    second lib's `vector<S>` element bound to the wrong payload struct → field not found → the
+    `c.field[i] = v` write collapsed to a base-var reassign.
+  - **FIXED `store_persist_loft` ×3 (`7b1dc082`)** — `keyed += <single struct>` parsed `S{…}` DENSE.
+    Added a single-element sibling to the `+= [literal]` branch (parse_assign_op) parsing against the
+    nullable element so `new_record` builds `Some` (gated on the nullable element; gate-off P188 untouched).
+  - **FIXED `stack_trace_script` (`618c0b5d`)** — a STDLIB struct (`StackFrame`) used in a consumer's
+    `vector<StackFrame>` was rewritten to nullable, but stdlib `stack_trace()` returns dense.
+    `e2_nullable_elem` now SKIPS a struct whose OWN source is `STD_SOURCE` (stdlib stays dense both sides).
+  - **REMAINING (3)**: (1) `native::native_scripts` — **ROOT LOCATED**: a gate-on nullable INDEX
+    (`index<S>` → `index<__nullable<S>>`) makes `parse_function` call a generic stdlib index fn with
+    `vector<T>`/`vector<integer>` hidden-buffer params (mod.rs:4671) → `vector_def` creates those DEFS
+    in PASS 2 ONLY → the H5 def-count divergence (pass1=421/pass2=425) → corrupted known_types → SEGV
+    (release).  HASH does NOT diverge → index-specific.  Minimal repro: bare `index<IRec[n]> = []`
+    gate-on (a debug-assertions build surfaces H5).  Fix: make the generic-index `vector_def`
+    consistent across passes (or pre-register the index bookkeeping in pass 1).  (2)
+    `native::imaging_fixture_png_roundtrip`, (3) `html_wasm::wasm_library_suite` — both lib-build,
+    not yet debugged.  (The earlier env-set run's `structures.rs:976` panic + `arc_e_program_cache`
+    were cache-gotcha artifacts; gone under the actual flip.)
+  - Only AFTER these 3 are green: drop `LOFT_E2_SYNTH` in `e2_rewrite_enabled` (KEEP the `STD_SOURCE`
   dense-stdlib exclusion); fold the deferred P3 `default_native_value` Vector arm; graduate the
   gated probes into `tests/scripts/25-nullable-sequences.loft`; full `make ci` both backends;
   set the plan SHIPPED.  This is the single final PR to `main`.
