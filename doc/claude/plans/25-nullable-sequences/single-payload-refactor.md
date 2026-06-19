@@ -197,18 +197,27 @@ for a `__nullable<S>`, else 0.
   green (2415/2416), so NONE of this affects shipped releases — it is exactly what the gate flip
   would surface.  **FIXED so far:** transparent format (WIP 7).  **RESIDUE (distinct seams):**
   1. **`&S` by-ref arg unwrap** — `expected &P160Item, got __nullable<P160Item>` on `set_p160`
-     (tests/scripts/100-enhancements.loft:140).  `convert` unwraps `__nullable<S>`→`Reference(S)`
-     (by-value) but not the by-REF (`&S` / `RefVar`) arg form; pass the payload sub-ref there too
-     (a `&mut` mutation would need copy-IN/OUT, but a read-only `&S` is just the sub-ref).
-  2. **dense↔nullable `vector` `+=`** — `vector += other_vec requires equal types
-     (vector<__nullable<Point>> != vector<Point>)` (tests/docs/17-libraries.loft:82).  A rewritten
-     user `vector<__nullable<S>>` meets a NON-rewritten (stdlib/`STD_SOURCE`) dense `vector<S>` at
-     a `+=`; reconcile the boundary (element-wise wrap, or accept the dense→nullable append).
-  3. **null-store OOB at structures.rs:43** — `index out of bounds: len … index is 65535` in
-     tests/docs/16-parser.loft + lib/audience_crystal/tests/*.loft (crystal editor).  A construction
-     or access path yields a `store_nr == u16::MAX` ref that reaches `self.store(rec)`.  Deeper —
-     instrument structures.rs:43 to find the producing op (likely a keyed/nested construction the
-     suite exercises that the targeted tests don't).
+     (tests/scripts/100-enhancements.loft:140).  ATTEMPTED + REVERTED: a `convert` arm for the
+     `RefVar(Reference(S))` target emitting the payload sub-ref gave interp `px=0` (mutation hit a
+     COPY — the by-ref arg path copies a `Reference` value) and native E0308.  The mutable by-ref
+     needs the unwrap at the call-arg site (gate-off: `n_setp(OpCreateStack(<element sub-ref>), …)`)
+     — wrap `OpCreateStack(OpGetField(<element>, payload, S))` so it stays by-REFERENCE, OR
+     copy-IN/OUT (copy payload→tmp dense S, pass `&tmp`, copy tmp→payload back; reuses
+     `build_some_present`).  Convert stays by-value-only; the `&S` seam lives in the arg path.
+  2. **dense↔nullable `vector` `+=`** — `vector<__nullable<Point>> != vector<Point>`
+     (tests/docs/17-libraries.loft:82).  ROOT: a SAME-FILE inferred `[S{…}]` literal DOES rewrite
+     to `vector<__nullable<S>>` gate-on (verified), but a CROSS-LIB `::`-qualified literal
+     (`[testlib::Point{…}]`) stays dense — the inferred-literal peek (vectors.rs) doesn't resolve
+     the `::`-qualified struct (@PLN22-namespace-adjacent).  Fix: resolve the qualified name in the
+     peek so it rewrites too; OR make the vector `+=` reconcile a dense `vector<S>` source into a
+     `vector<__nullable<S>>` target (element-wise wrap — the general boundary fix).
+  3. **null-store OOB at structures.rs:43 (record_new)** — `index 65535` in tests/docs/16-parser.loft
+     + lib/audience_crystal.  ROOT (instrumented): `record_new(parent_tp=__nullable<Definition>,
+     field=0)` — a NESTED-collection construction inside a `__nullable<S>` element passes
+     `parent_tp` = the ENUM (field 0 = the disc, no sub-type → `field_type`=MAX → OOB) instead of
+     the payload's dense `S`.  Fix: the construction caller (or `record_new`) must resolve a
+     `__nullable<S>` parent through the payload (dense S + payload base), like `key_owner`/field
+     access — for nested collections/structs inside a nullable element.
   4. **wrong value in 15-lexer** — `assertion failed: Incorrect plus` (tests/docs/15-lexer.loft),
      a value divergence (not a crash) gate-on; isolate the differing computation.
   5. **par with USER EXTRA args** — `script_threading` (the broader-plan Step 2 seam, pre-existing,

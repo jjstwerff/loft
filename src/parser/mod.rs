@@ -1373,6 +1373,9 @@ impl Parser {
         // dense-local assign, a return).  The dense `S` IS the `Some` variant's inline
         // `payload` field, so unwrap by SUB-REFERENCING the payload — the sub-ref is a
         // valid dense `S` reference (it shares S's offset table), with NO copy.
+        // (NOTE: the by-REF `&S` arg form is NOT handled here — a sub-ref reaches the
+        // arg path as a by-VALUE `Reference` and gets copied, so a `&mut` write would not
+        // propagate.  That seam is handled at the call-arg site, not in `convert`.)
         if let (Type::Enum(enum_d, true, _), Type::Reference(struct_d, _)) = (is_type, should)
             && self.data.def(*enum_d).name
                 == format!("__nullable<{}>", self.data.def(*struct_d).name())
