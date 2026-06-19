@@ -32,7 +32,36 @@ impl Stores {
     # Panics
     When requesting a record on a non-structure
     */
+    /// @PLN25 single-payload — for a FIELD (`field != MAX`) inside a `__nullable<S>` parent,
+    /// redirect to the inline `payload`'s dense `S` (the `key_owner` struct) + add the payload
+    /// base to the record ref, so the field resolves on dense `S` instead of the enum top level
+    /// (whose field 0 is the discriminant).  Returns `(resolved_parent_tp, adjusted_ref)`.
+    /// A `field == MAX` call (creating the element record itself, which IS the enum) and any
+    /// non-nullable parent are returned unchanged.  Shared by `record_new` / `record_finish` so
+    /// the create + finalize halves agree on the type/offset.
+    fn nullable_field_parent(&self, data: &DbRef, parent_tp: u16, field: u16) -> (u16, DbRef) {
+        if field != u16::MAX {
+            let owner = self.key_owner(parent_tp);
+            if owner != parent_tp {
+                let mut adj = *data;
+                adj.pos += u32::from(self.key_base(parent_tp));
+                return (owner, adj);
+            }
+        }
+        (parent_tp, *data)
+    }
+
     pub fn record_new(&mut self, data: &DbRef, parent_tp: u16, field: u16) -> DbRef {
+        // @PLN25 single-payload: when creating a sub-record for a FIELD inside a
+        // `__nullable<S>` element (a nested collection/struct), the field lives in the inline
+        // `payload` (dense S), not at the enum's top level (field 0 there is the discriminant,
+        // which has no sub-structure → `field_type` = MAX → OOB).  Redirect a `__nullable<S>`
+        // parent to the payload's struct + base offset so the field resolution + sub-record
+        // allocation target the dense `S` — the `key_owner` redirect.  Only for `field != MAX`:
+        // a `field == MAX` call creates the element record ITSELF (which IS the enum), so it
+        // must keep `parent_tp`.  Non-nullable parents are unchanged (`key_owner` = identity).
+        let (parent_tp, data_owned) = self.nullable_field_parent(data, parent_tp, field);
+        let data = &data_owned;
         let tp = if field == u16::MAX {
             // This case is when the top level is a data-structure
             parent_tp
@@ -68,6 +97,11 @@ impl Stores {
     When the implementation is not yet written
     */
     pub fn record_finish(&mut self, data: &DbRef, rec: &DbRef, parent_tp: u16, field: u16) {
+        // @PLN25 single-payload: mirror `record_new`'s nullable-field redirect so the
+        // create + finalize halves agree on the type/offset (a FIELD inside a `__nullable<S>`
+        // element resolves on the payload's dense `S`, not the enum top level).
+        let (parent_tp, data_owned) = self.nullable_field_parent(data, parent_tp, field);
+        let data = &data_owned;
         let tp = if field == u16::MAX {
             // This case is when the top level is a data-structure
             parent_tp

@@ -469,7 +469,7 @@ impl Stores {
     /// position of the inline `payload` field, after the discriminant.  `0` for any
     /// non-nullable element (S's fields then sit at the record root).  Alignment-dependent,
     /// so it is read from the built `Some` structure, never hardcoded.
-    fn key_base(&self, content: u16) -> u16 {
+    pub(crate) fn key_base(&self, content: u16) -> u16 {
         if let Some(some_nr) = self.nullable_some_variant(content)
             && let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
                 &self.types[some_nr as usize].parts
