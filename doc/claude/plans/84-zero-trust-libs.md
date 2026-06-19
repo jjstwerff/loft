@@ -84,8 +84,12 @@ Run the **same** crypto API in the browser with a minimal bundle.
 > **x25519_dh** (RFC 7748), **hkdf_sha256** (RFC 5869), **aes256gcm seal/open**
 > (Wycheproof), **random_bytes** (OsRng). **51 KAT tests pass on BOTH backends**
 > (loft-libs-core@69d1f8b). Text API (base64 bytes), loft-safe (malformed → ""/
-> false). Remaining ZT-B is the **wasm bridge** (B1 `crypto.subtle` mapping, B2
-> async↔sync, B3 HPKE, B4–B6) — now **gated on
+> false). **B3 HPKE SHIPPED** — pure-loft RFC 9180 base mode
+> (DHKEM(X25519)/HKDF-SHA256/AES-256-GCM) `hpke_seal_base`/`hpke_open_base`,
+> byte-exact against the official CFRG vector, 8 KAT tests both backends
+> (loft-libs-core@08872d4); added native `hkdf_extract`/`hkdf_expand` + bytes↔
+> base64 helpers. Remaining ZT-B is the **wasm bridge** (B1 `crypto.subtle`
+> mapping, B2 async↔sync, B4–B6) — now **gated on
 > [loft#407](https://github.com/loft-lang/loft/issues/407)**: the `[wasm.bridge]`
 > mechanism can't route text-returning natives (pioneered + proved that `sha256`
 > bridges + renders in headless chromium *with* a boolean-emit fix + a
@@ -93,11 +97,13 @@ Run the **same** crypto API in the browser with a minimal bundle.
 > convention** so all ~12 primitives bridge without per-fn reshape). B3 HPKE is
 > separately gated on the same bytes↔text gap as cbor text decode.
 
-> **Gating summary (the achievable native/encode work is done; the rest is
-> compiler-side, loft2/compiler track):** cbor maps → **#406**; HPKE + cbor text
-> → **bytes↔text primitive**; every wasm bridge (ZT-B wasm, ZT-C web, ZT-E
-> plugin browser-loader) → **#407**; loop-local corruption → **#405**. The one
-> non-gated remaining item is **ZT-D1** (reverse-proxy TLS, zero loft code).
+> **Gating summary (updated):** **DONE** — crypto native suite, HPKE, cbor
+> structural+text decode, the `text_from_bytes` enabler, ZT-D1 TLS runbook;
+> compiler gates `#405` (loop-local) + `#407` (wasm.bridge text-return) **fixed**
+> (`fixed-pending-merge`). **Still gated:** cbor maps → **#406** (loft2); every
+> wasm bridge's local-dev use → **#408** (registry shadows local routes) + the
+> async/dep-resolution gap; vector `+=` after FFI alloc → **#409**. Next
+> non-gated library work: B6 release (needs go-ahead) / ZT-D2 rustls.
 
 - **B1 — `[wasm.bridge]` → `crypto.subtle`.** Map each `n_crypto_*`:
   ed25519 sign/verify, x25519_dh, aes256gcm seal/open, hkdf, sha256, hmac,
