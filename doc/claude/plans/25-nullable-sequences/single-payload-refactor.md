@@ -357,6 +357,17 @@ for a `__nullable<S>`, else 0.
     return IR, so copying the view to an owned buffer leaves the fn still view-classified.  FIX (focused
     session): make the return-type-dep classification treat a MIXED view/owned-return fn as OWNED (or
     materialize at the dep/type level), so the caller frees.  This is the #306 view-return family.
+    **FIXED (`15e42cb6`): materialize the nullable-unwrap mid-return.**  The mid-return Enum branch
+    (control.rs ~4305) now detects a `__nullable<S>` Enum tail + dense `Reference(S)` declared return
+    FROM THE TYPES (so a DIRECT `v[i]` unwrap qualifies — which `tail_is_nullable_unwrap` excluded) and
+    copies the view into an OWNED buffer via `materialize_view_return`, NO `nrvo_collapse` (its
+    rename+re-OpDatabase was the documented direct-`v[i]` corruption, now also defused by zero-on-claim).
+    The fn becomes owned-classified so the caller frees the owned fallback.  149 + repro: no leak, no
+    corruption, BOTH backends; E2 green; gate-on-gated (`__nullable<>` check → gate-off-inert).
+    **NEXT loft_suite gate-on blocker: 184-i333-div-zero (NOT PLN25, NOT mine)** — `@EXPECT_FAIL: divide
+    by zero` flags "now compiles/passes" gate-on.  PRE-EXISTING (simple `5/0` RAISES correctly gate-on;
+    my changes don't touch arithmetic) — a #333 div-zero / defended-path compile difference specific to
+    184, surfaced by the flip but outside the nullable plan's scope.
   - **index<S> coherence** — `index<S>` is kept DENSE (vector/hash/sorted are nullable): rewriting
     it regresses the multi-key RANGE query (`idx[83..92,"Two"]`, 11-index.loft:48 → "Unknown in
     expression type __nullable<Elm>" — the range-query path does not unwrap a nullable element).
