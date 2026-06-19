@@ -85,8 +85,7 @@ impl Stores {
                     } else {
                         panic!(
                             "Unknown key type {} (field {key} of {})",
-                            self.types[content as usize].name,
-                            self.types[db as usize].name,
+                            self.types[content as usize].name, self.types[db as usize].name,
                         )
                     }
                 }

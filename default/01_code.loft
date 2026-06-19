@@ -1037,12 +1037,6 @@ fn OpClaimChildRec(field: reference, src: reference, tp: const u16);
 fn OpRefFromChildRec(field: reference) -> reference[field];
 #rust"s.database.ref_from_child_rec(&@field)"
 #pure
-// @PLN25 E2 (gap 2): unwrap a `__nullable<S>` value (`src`, a Some record) into a
-// fresh dense `S` record (field-by-field, deep-copying heap) — the value-boundary
-// coercion when a nullable element flows where dense S is expected.
-fn OpNullableToDense(src: reference, struct_tp: const u16, some_tp: const u16) -> reference;
-#rust"s.database.nullable_to_dense(&@src, @struct_tp, @some_tp)"
-#pure
 // Get a record from a structure. This operator also reads a dynamic key from stack (not shown here)
 fn OpGetRecord(data: reference, db_tp: const u16, no_keys: const u8) -> reference[data];
 fn OpValidate(data: reference, db_tp: const u16);

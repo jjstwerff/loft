@@ -675,14 +675,13 @@ impl Parser {
         // body and variable table; struct-returning specializations work correctly because
         // they return arguments (not locals), so ref_return would be a no-op anyway.
         if self.data.def_type(self.context) != DefType::Generic {
-            // @PLN25 E2 (gap 2): the tail was just coerced `__nullable<S>` → dense `S`
-            // via OpNullableToDense (line ~650), so `t` is still the Enum tail type
-            // and the type-keyed branches below (which match `t`) all miss it — the
-            // default epilogue then demotes the fresh-store unwrap to a discarded
-            // statement + `return null` (native returns the null sentinel).  Key off
-            // the dense return type `result` instead: materialise the unwrap tail into
-            // an owned work-ref (copy its result) and promote that — the #306
-            // view-return shape.  Gate-off-inert (no OpNullableToDense exists).
+            // @PLN25 single-payload: the tail was just coerced `__nullable<S>` → dense `S`
+            // via a payload sub-ref (`OpGetField`), so `t` is still the Enum tail type and
+            // the type-keyed branches below (which match `t`) all miss it — the default
+            // epilogue then demotes the unwrap to a discarded statement + `return null`
+            // (native returns the null sentinel).  Key off the dense return type `result`
+            // instead: materialise the unwrap tail into an owned work-ref (copy the viewed
+            // `S`) and promote that — the #306 view-return shape.  Gate-off-inert.
             if let Type::Reference(td, _) = result
                 && !l.is_empty()
                 && self.tail_is_nullable_unwrap(&l[l.len() - 1])
@@ -3657,14 +3656,12 @@ impl Parser {
     /// has two) must stay a plain local, or the outer call's destination
     /// would alias its own argument (the callee's buffer clear then frees
     /// the record the argument still views).
-    /// @PLN25 E2 (gap 2) — is the return body-tail an `OpNullableToDense` unwrap
-    /// (`return <__nullable value>` coerced to dense `S`)?  Such a tail is a Call
-    /// returning a FRESH store with no hidden buffer arg, so the `ref_return`
-    /// dispatch's buffer-chaining branches don't recognise it and the default
-    /// epilogue demotes it to a discarded statement + `return null` (native returns
-    /// the null sentinel).  When this holds, materialise the tail into a work-ref
-    /// (copy the unwrap result into an owned buffer) and promote that — the #306
-    /// view-return shape.  Gate-off-inert (no `OpNullableToDense` exists).
+    /// @PLN25 single-payload — is the return body-tail the `__nullable<S>` → dense `S`
+    /// unwrap (now a payload sub-ref `OpGetField`, see `unwrap_source_is_nullable`)?  Such
+    /// a tail's dense type doesn't match the still-`Enum` tail type `t`, so the type-keyed
+    /// `ref_return` branches miss it and the default epilogue demotes it to `return null`.
+    /// When this holds, `materialize_view_return` copies the viewed `S` into an owned buffer
+    /// and promotes that — the #306 view-return shape.  Gate-off-inert.
     fn tail_is_nullable_unwrap(&self, tail: &Value) -> bool {
         match tail.unspan() {
             Value::Return(inner) => self.tail_is_nullable_unwrap(inner),
@@ -3685,7 +3682,9 @@ impl Parser {
             // struct-field read (whose source is a dense struct, not the synth enum).
             Value::Call(d, args) => {
                 self.data.def(*d).name() == "OpGetField"
-                    && args.first().is_some_and(|s| self.unwrap_source_is_nullable(s))
+                    && args
+                        .first()
+                        .is_some_and(|s| self.unwrap_source_is_nullable(s))
             }
             _ => false,
         }

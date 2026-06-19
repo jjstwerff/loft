@@ -766,7 +766,8 @@ pub(crate) fn key_bearing_def(data: &Data, c_nr: u32) -> u32 {
             // struct, not the `Some` variant (whose direct fields are {enum, payload}).
             let payload_attr = data.attr(some, "payload");
             if payload_attr != usize::MAX
-                && let Type::Reference(struct_d, _) = data.def(some).attributes()[payload_attr].typedef
+                && let Type::Reference(struct_d, _) =
+                    data.def(some).attributes()[payload_attr].typedef
             {
                 return struct_d;
             }

@@ -438,24 +438,19 @@ impl Stores {
     /// build time and run time. For any other element type, return it
     /// unchanged.
     pub(crate) fn key_owner(&self, content: u16) -> u16 {
-        let name = &self.types[content as usize].name;
-        if name.starts_with("__nullable<") {
-            // Single-payload form: a synth `__nullable<S>` keeps S's keys inside the
-            // `Some` variant's inline `payload` field (a dense `S`).  The key owner is
-            // therefore the payload's struct itself, so every key resolution indexes S's
-            // own field list (`"a"→0`), exactly like a non-nullable `hash<S[k]>`.  Resolve
-            // the `Some` variant by db name (its variant-list slot can still be a
-            // `u16::MAX` placeholder at build time) and return its `payload` content type.
-            // The byte base of that payload within the `Some` record is `key_base`.
-            if let Some(some_nr) = self.nullable_some_variant(content) {
-                if let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
-                    &self.types[some_nr as usize].parts
-                {
-                    if let Some(f) = fields.iter().find(|f| f.name == "payload") {
-                        return f.content;
-                    }
-                }
-            }
+        // Single-payload form: a synth `__nullable<S>` keeps S's keys inside the `Some`
+        // variant's inline `payload` field (a dense `S`).  The key owner is therefore the
+        // payload's struct itself, so every key resolution indexes S's own field list
+        // (`"a"→0`), exactly like a non-nullable `hash<S[k]>`.  Resolve the `Some` variant by
+        // db name (its variant-list slot can still be a `u16::MAX` placeholder at build time)
+        // and return its `payload` content type.  The byte base of that payload within the
+        // `Some` record is `key_base`.  Non-nullable elements return `content` unchanged.
+        if let Some(some_nr) = self.nullable_some_variant(content)
+            && let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
+                &self.types[some_nr as usize].parts
+            && let Some(f) = fields.iter().find(|f| f.name == "payload")
+        {
+            return f.content;
         }
         content
     }
@@ -475,14 +470,12 @@ impl Stores {
     /// non-nullable element (S's fields then sit at the record root).  Alignment-dependent,
     /// so it is read from the built `Some` structure, never hardcoded.
     fn key_base(&self, content: u16) -> u16 {
-        if let Some(some_nr) = self.nullable_some_variant(content) {
-            if let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
+        if let Some(some_nr) = self.nullable_some_variant(content)
+            && let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
                 &self.types[some_nr as usize].parts
-            {
-                if let Some(f) = fields.iter().find(|f| f.name == "payload") {
-                    return f.position;
-                }
-            }
+            && let Some(f) = fields.iter().find(|f| f.name == "payload")
+        {
+            return f.position;
         }
         0
     }

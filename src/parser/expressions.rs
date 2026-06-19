@@ -1258,8 +1258,8 @@ use a separate collection or add after the loop"
         // any Integer↔Integer assignment is a no-op and needs no early widen.
         let _ = op;
         let _ = f_type;
-        // @PLN25 E2 (gap 2) — a dense-`S` target assigned a `__nullable<S>` value
-        // (`d: S = v[i]`): unwrap the RHS via `convert` (→ `OpNullableToDense`)
+        // @PLN25 single-payload — a dense-`S` target assigned a `__nullable<S>` value
+        // (`d: S = v[i]`): unwrap the RHS via `convert` (→ a payload sub-ref `OpGetField`)
         // BEFORE `change_var`, then retype it as dense `S` so the var-type-change
         // check accepts (d:S ← S) instead of erroring "cannot change type from S to
         // __nullable<S>".  Mirrors the C54.A early-convert pattern above; NOT

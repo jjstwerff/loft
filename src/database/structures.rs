@@ -666,8 +666,15 @@ impl Stores {
                             rec: to.rec,
                             pos: to.pos + u32::from(ppos),
                         };
-                        return self
-                            .walk_parsed_into(body, pcontent, rec_tp, field, &payload_to, path, at);
+                        return self.walk_parsed_into(
+                            body,
+                            pcontent,
+                            rec_tp,
+                            field,
+                            &payload_to,
+                            path,
+                            at,
+                        );
                     }
                     return Ok(());
                 }
@@ -1048,67 +1055,5 @@ impl Stores {
                 len as usize,
             );
         }
-    }
-
-    /// @PLN25 E2 (gap 2) — unwrap a `__nullable<S>` value (`src`, a `Some`
-    /// record) into a FRESH dense `S` record, returning a ref to it (pos 8).
-    ///
-    /// The `Some` payload is packed INDEPENDENTLY from dense `S` — the layout
-    /// packer reorders fields around the discriminant (e.g. dense
-    /// `a@0,c@8,b@16,d@20` vs `Some` `disc@0,b@4,a@8,c@16,d@24`), so a byte copy
-    /// or sub-ref reinterpret reads reordered fields at the wrong offset (silent
-    /// corruption).  Copy FIELD BY FIELD instead: each field's scalar bytes from
-    /// its `Some` offset to its dense offset, then `copy_claims` deep-copies any
-    /// heap part (text / nested vector / child record) from the SOURCE — so the
-    /// dense record owns its own heap and is safe to free independently.  A
-    /// runtime-null / absent source (the `Null` variant, `rec == 0`, or the null
-    /// sentinel) leaves the zeroed dense default, matching dense-null behaviour.
-    ///
-    /// `struct_tp` is the dense `S` runtime type id; `some_tp` is the
-    /// `__nullable<S>::Some` variant id (its field positions are the `Some`
-    /// offsets).  This is the value-boundary coercion the parser routes from
-    /// `convert` (by-value arg, `??` result, dense-local assign, return).
-    pub fn nullable_to_dense(&mut self, src: &DbRef, struct_tp: u16, some_tp: u16) -> DbRef {
-        // Mirror `db_from_text`'s sizing: header word + the struct's words, with
-        // an 8-word floor for small structs.
-        let words = std::cmp::max(8, 1 + u32::from(self.size(struct_tp)).div_ceil(8));
-        let db = self.database(words);
-        let dest = DbRef {
-            store_nr: db.store_nr,
-            rec: db.rec,
-            pos: 8,
-        };
-        self.set_default_value(struct_tp, &dest);
-        if src.store_nr == u16::MAX || src.rec == 0 {
-            return dest;
-        }
-        let fields = match &self.types[struct_tp as usize].parts {
-            Parts::Struct(f) | Parts::EnumValue(_, f) => f.clone(),
-            _ => return dest,
-        };
-        for f in fields {
-            let some_pos = self.position(some_tp, &f.name);
-            if some_pos == u16::MAX {
-                continue;
-            }
-            let src_f = DbRef {
-                store_nr: src.store_nr,
-                rec: src.rec,
-                pos: src.pos + u32::from(some_pos),
-            };
-            let dst_f = DbRef {
-                store_nr: dest.store_nr,
-                rec: dest.rec,
-                pos: dest.pos + u32::from(f.position),
-            };
-            let fsize = u32::from(self.size(f.content));
-            if fsize > 0 {
-                self.copy_block(&src_f, &dst_f, fsize);
-            }
-            // Deep-copy heap fields from the SOURCE, overwriting the just-copied
-            // (aliased) handle with an independently-owned copy.
-            self.copy_claims(&src_f, &dst_f, f.content);
-        }
-        dest
     }
 }

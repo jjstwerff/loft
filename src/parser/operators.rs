@@ -292,13 +292,7 @@ impl Parser {
             Value::Call(fn_nr, _) => {
                 let def = &self.data.def(*fn_nr);
                 // User function with code (not a built-in op)
-                (def.name().starts_with("n_") && *def.code() != Value::Null)
-                    // @PLN25 E2 (gap 2) — OpNullableToDense allocates a FRESH dense
-                    // record (an unowned temporary, like a struct-returning call's
-                    // return value), so a consumer that deep-copies it must set the
-                    // free-source bit to release the temp afterwards — else every
-                    // nullable→dense coercion leaks one store.
-                    || def.name() == "OpNullableToDense"
+                def.name().starts_with("n_") && *def.code() != Value::Null
             }
             // Struct constructor blocks allocate a store too — when assigned
             // to a field, the source store is a temporary that should be freed.

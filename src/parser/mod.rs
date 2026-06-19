@@ -3827,7 +3827,12 @@ impl Parser {
     /// `Reference` arm of `set_field_check` emits the `OpGetField`+`OpCopyRecord`), replacing
     /// the per-field copy loops the individual-field layout forced.  The caller owns the
     /// null branch (set the discriminant 0) and any source stashing.
-    pub(crate) fn build_some_present(&mut self, some_d: u32, some_ref: Value, src: Value) -> Vec<Value> {
+    pub(crate) fn build_some_present(
+        &mut self,
+        some_d: u32,
+        some_ref: Value,
+        src: Value,
+    ) -> Vec<Value> {
         let payload_attr = self.data.attr(some_d, "payload");
         vec![
             self.cl(

@@ -93,7 +93,11 @@ fn nullable_some_carries_a_dense_row_payload() {
     // Discriminant at offset 0 (the whole representation hinges on this).
     assert_eq!(db.position(some, "enum"), 0, "synthetic discriminant @0");
     let payload_pos = db.position(some, "payload");
-    assert_ne!(payload_pos, u16::MAX, "Some has a `payload` field in the DB layout");
+    assert_ne!(
+        payload_pos,
+        u16::MAX,
+        "Some has a `payload` field in the DB layout"
+    );
     assert!(payload_pos >= 1, "payload rides PAST the discriminant");
 
     // Row's own layout is intact — these are the offsets a payload sub-ref reads.

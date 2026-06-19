@@ -2226,7 +2226,10 @@ impl Parser {
         let w = self.vars.work_refs(&ret, &mut self.lexer);
         let mut list = vec![
             v_set(w, Value::Null),
-            self.cl("OpDatabase", &[Value::Var(w), Value::Int(i32::from(some_kt))]),
+            self.cl(
+                "OpDatabase",
+                &[Value::Var(w), Value::Int(i32::from(some_kt))],
+            ),
             self.cl(
                 "OpSetEnum",
                 &[

@@ -237,7 +237,6 @@ pub const OPERATORS: &[fn(&mut State)] = &[
     append_vector,
     claim_child_rec,
     ref_from_child_rec,
-    nullable_to_dense,
     get_record,
     validate,
     hash_add,
@@ -1932,14 +1931,6 @@ fn claim_child_rec(s: &mut State) {
 fn ref_from_child_rec(s: &mut State) {
     let v_field = *s.get_stack::<DbRef>();
     let new_value = s.database.ref_from_child_rec(&v_field);
-    s.put_stack(new_value);
-}
-
-fn nullable_to_dense(s: &mut State) {
-    let v_struct_tp = s.code::<u16>();
-    let v_some_tp = s.code::<u16>();
-    let v_src = *s.get_stack::<DbRef>();
-    let new_value = s.database.nullable_to_dense(&v_src, v_struct_tp, v_some_tp);
     s.put_stack(new_value);
 }
 
