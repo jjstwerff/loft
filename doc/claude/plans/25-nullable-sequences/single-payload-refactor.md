@@ -253,6 +253,17 @@ for a `__nullable<S>`, else 0.
      nested **sorted/keyed** collection's INSERT or the element's `OpCopyRecord` deep-copy (literal
      → element) for a nullable element — a separate deep mechanism in `sorted_new`/`copy_claims`.
      Needs a focused dig on the keyed-collection insert/copy inside a single-payload `Some`.
+     REFINED: the `Some` SIZE is correct (`__nullable<ST>`=20, inline ST=12 — NOT under-sized).
+     REORDER test: writing the nested collection field FIRST then the scalar (`{possible:[…],
+     start:43}`) → start survives — so building the nested KEYED collection CLOBBERS preceding
+     inline bytes that were already written.  In-place construction (empty `possible:[]` then
+     `b.possible += […]`) WORKS; only the WORK-REF + OpCopyRecord path (the `[{…}]` literal) fails.
+     Hypothesis: `sorted_new`/keyed `claim` allocates the collection's BACKING record in the SAME
+     store as the still-unfinalized work-ref `Some` record and OVERLAPS it (a finalized element
+     reserves its space, the work-ref does not).  FIX SITE: work-ref record reservation before the
+     nested-keyed-collection build, or route the literal's nested-keyed field through the
+     empty-then-append path.  Repro `/tmp/sp/lexs.loft` (start=4), `/tmp/sp/lexmid.loft` (SIGSEGV
+     with more leading fields — consistent with a backing-record overlap that grows with offset).
   5. **par over nullable** — PARTLY FIXED (seam 5a, `bbb918d4`): `synth_nullable_par_wrapper`
      computed the dense-S coercion offset as `position(Some, S's-first-field)` (the old
      individual-field pattern) → wrong under single-payload; now `position(Some, "payload")`.
