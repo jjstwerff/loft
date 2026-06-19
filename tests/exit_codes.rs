@@ -62,6 +62,51 @@ fn parse_error_exits_nonzero() {
     );
 }
 
+/// An unresolvable `#native` symbol (no cdylib provides it) must surface a LOUD
+/// diagnostic at LOAD time — naming the symbol and how to rebuild — not stay
+/// silent until a generic panic at first call.  The warning is non-fatal: a
+/// declared-but-never-called native still lets the program run (exit 0), so the
+/// operator learns which library to rebuild without the program being aborted.
+#[test]
+fn unresolved_native_warns_at_load_not_at_call() {
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!(
+        "loft_unresolved_native_{}.loft",
+        std::process::id()
+    ));
+    // The #native is declared but never called: the load-time warning must fire
+    // anyway, and the program must still reach exit 0.
+    std::fs::write(
+        &path,
+        "pub fn ghost_fn(x: integer) -> integer;\n\
+         #native \"loft_ghost_nonexistent_symbol\"\n\n\
+         fn main() { print(\"ran fine\"); }\n",
+    )
+    .expect("write temp file");
+    let out = Command::new(loft_bin())
+        .arg("--interpret")
+        .arg(&path)
+        .current_dir(workspace_root())
+        .output()
+        .expect("failed to invoke loft binary");
+    let _ = std::fs::remove_file(&path);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "uncalled unresolved native must not abort the program; got exit {:?}\nstderr: {stderr}",
+        out.status.code()
+    );
+    assert!(
+        stdout.contains("ran fine"),
+        "program body must still run; stdout: {stdout}"
+    );
+    assert!(
+        stderr.contains("did not load") && stderr.contains("loft_ghost_nonexistent_symbol"),
+        "expected a load-time diagnostic naming the unresolved symbol; stderr: {stderr}"
+    );
+}
+
 // ── P131: Loft CLI forwards script-level arguments (FIXED) ─────────────────
 //
 // `src/main.rs` now treats every token after the script path — including
