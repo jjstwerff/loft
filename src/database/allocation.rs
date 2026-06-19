@@ -188,6 +188,30 @@ impl Stores {
             return;
         }
         let al = db.store_nr;
+        // #405 — a wrong/stale free can carry an out-of-range store_nr (e.g. a
+        // stack-NRVO loop-local's dep slot read on a not-taken branch before it
+        // is initialised). An out-of-range nr is never a live store, so refuse it
+        // loudly rather than panicking the whole runtime (generalises the #306
+        // stack-store guard). Debug builds still trip the debug_assert below so
+        // the wrong-free site surfaces for a codegen root fix.
+        #[cfg(not(debug_assertions))]
+        if al as usize >= self.allocations.len() {
+            // Warn once per process — the wrong-free can recur every loop
+            // iteration, so a per-occurrence print would flood stderr.
+            use std::sync::atomic::{AtomicBool, Ordering};
+            static WARNED: AtomicBool = AtomicBool::new(false);
+            if !WARNED.swap(true, Ordering::Relaxed) {
+                eprintln!(
+                    "loft: BUG (#405): refused free of out-of-range store #{al} \
+                     (allocations.len={}, rec={}, pos={}, var='{name}') — wrong/stale \
+                     ref; further such frees are silently refused this run",
+                    self.allocations.len(),
+                    db.rec,
+                    db.pos,
+                );
+            }
+            return;
+        }
         debug_assert!(al < self.allocations.len() as u16, "Incorrect store");
         // #306 — store 0 is the eval-stack store; freeing it destroys every
         // live frame and lets the allocator recycle slot 0 as a heap store.
