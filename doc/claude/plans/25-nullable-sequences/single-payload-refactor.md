@@ -158,16 +158,26 @@ for a `__nullable<S>`, else 0.
   `get_val` (inline struct → sub-ref, NOT a raw `OpGetField` which derefs).
 
 **REMAINING (5 E2 reds — the checklist):**
-- **Step 4 tail — inline-vector-literal + HEAP field overflow (4 gap2 reds).**  ROOT CAUSE
-  FOUND: `parse_some_payload_object` builds a TEMP `Some` (work-ref) and `new_record`
-  (vectors.rs) copies it into the freshly-allocated element slot via `OpCopyRecord`.  That
-  copy runs `remove_claims` on the UNINITIALIZED fresh slot — its garbage discriminant byte
-  makes remove_claims free a garbage heap (text) pointer → store-offset overflow.  Repro:
-  `v: vector<S> = [S{a:1, b:"hi", …}]` with a text field (a no-heap struct WORKS).  hash/json
-  dodge it (keyed/walker build in place).  FIX OPTIONS: build the literal IN-PLACE in the
-  element slot (match the pre-refactor path — best), or zero-init the slot disc before the
-  copy, or make `OpNewRecord` zero-init.  This blocks the 4 `_gap2` value-boundary tests
-  (`local_assign`/`by_value_arg`/`coalesce`/`via_local`), whose structs carry text.
+- **Step 4 tail — inline-vector-literal + HEAP field corruption (4 gap2 reds).**  REPRO:
+  `v: vector<S> = [S{a:1, b:"hi", c:7, d:'z'}]` with a TEXT field — a no-heap struct
+  (`{a,c,d}`) WORKS.  hash/json dodge it (keyed/walker build in place / via the walker).
+  **DEBUG-BUILD ROOT (supersedes the earlier `remove_claims` theory, which was WRONG —
+  `remove_claims`/`copy_claims`/`do_copy_record`/`set_text` are all traced as NOT reached
+  before the fault):** `target/debug/loft` panics cleanly at `store.rs:1105` `fl_size` =
+  "attempt to negate with overflow" — the free-list LLRB tree read a free block whose size
+  word is `i32::MIN`, i.e. **a heap write landed in a free block's header during the temp
+  `Some` construction**, BEFORE the text write.  (Release builds it silently → the
+  `0x80000066`-word `grow_words` overflow at store.rs:880.)  HYPOTHESIS to check first: the
+  `Some` record allocated by `OpDatabase(some_kt)` in `parse_some_payload_object` is sized
+  SMALLER than the extent its payload field-writes reach — i.e. the layout pass sizes the
+  `Some.payload` `Reference(struct_d)` field as a 4-byte pointer while the writes treat it
+  as the inline 24-byte dense `S` (a size-vs-write mismatch), so a field write spills past
+  the claimed record into the adjacent free block.  Compare `size(Some)` (debug_layout /
+  introspect) against the payload write offsets; reconcile so the standalone `Some`
+  allocation and the vector-element stride (32 here) agree on the inline payload size.
+  Next-session start: `RUST_BACKTRACE=full target/debug/loft /tmp/sp/direct.loft`, add a
+  one-line trace at `claim`/`grow_words` to name the corrupting op.  Blocks the 4 `_gap2`
+  value-boundary tests (`local_assign`/`by_value_arg`/`coalesce`/`via_local`, all text-carrying).
 - **Step 5 — format** (format.rs): render the `payload` struct, not the `Some` field list.
 - **Step 6 — DELETE `OpNullableToDense`** (convert already emits the sub-ref): remove the op
   + its gap2 return-routing built around copy/alloc semantics — control.rs
