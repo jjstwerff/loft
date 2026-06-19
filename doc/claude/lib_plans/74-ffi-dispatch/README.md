@@ -18,20 +18,34 @@ earlier note).
 
 ## Status
 
-**F1 + F2 + F3 SHIPPED; F4 ROLLOUT SHIPPED 2026-05-27.**  All four monorepo
-native libs — **imaging, web, server, graphics** — now dispatch through
-generated `#[loft_native]` bridges (`extensions.rs` `BRIDGE_REGISTRY` +
-`dispatch_via_bridge`), each runtime-verified via the env-gated probe.
-graphics was selective (hand-written register + dual-ABI: only the registered
-interpret fns annotated; the raw-ptr `loft_gl_*` direct-native + `vec_wrapper!`
-fns keep the legacy arms).  **The arm DELETION is deferred** (the remaining F4
-step): `tests/lib/*/native` fixtures and the already-published external libs
-(`loft-libs-core`/`-net`) still register raw pointers with no bridges, so the
-legacy `dispatch_call` is retained as their fallback until they migrate
-(Phase 6r / [`../../12-library-extraction/`](../12-library-extraction/README.md)).
-**F5 SHIPPED** — PACKAGES.md `## Function binding model` rewritten to the
-`#[loft_native]` + source-scan + bridge pattern with a complete 3-fn example.
-The plan's only remaining work is the trigger-gated arm deletion (Phase 6r).
+**COMPLETE — the legacy marshaller is deleted (2026-06-19).**  `--interpret`
+dispatches every `#native` cdylib call through its generated `#[loft_native]`
+bridge (`extensions.rs` `dispatch_via_bridge`); a symbol with no bridge panics
+with an actionable "rebuild against the bridge-capable loft-ffi" message.  All
+seven loft-lang native libraries are re-published to the registry with bridges
+(regex 0.2.0, random 0.2.1, crypto 0.3.1, web 0.2.0, server 0.2.0, imaging
+0.2.0, graphics 0.3.0), and both in-repo cdylib fixtures (`native_pkg`,
+`native_scalar_pkg`) are bridge-migrated.
+
+**Deleted from `src/extensions.rs`** (1129-line net removal): the ~98-arm
+`dispatch_call`, the `ArgVal` enum, `first_ref_store`, `get_native_fn_raw`, and
+the local `LoftStr`/`LoftRef` `#[repr(C)]` mirrors (the bridge path uses
+`loft_ffi::LoftStr`/`LoftRef`).  **Kept**: `dispatch_via_bridge`,
+`bridge_push_ref`/`_str`, `get_bridge`, `BRIDGE_REGISTRY`, the `ArgT` enum +
+`compute_sig`/`NativeSig` (the bridge marshal reads them), `LoftStore` +
+`make_loft_store`, the shared-store path, and the #306 ref-return store-derivation
+fix.  `native_gate.rs` is unchanged — its classification feeds the bridge/shared
+paths, never the deleted arms.
+
+The dead **scalar-slice** dispatch path (`native_lib::generate_cdylib_lib_rs`, a
+zero-registration raw-ptr cdylib generator with no production caller) went with
+the marshaller: its three `tests/n2_cdylib.rs` dispatch tests are removed (the
+scalar codegen is still compile-tested; production dispatch is the shared-store
+bridge; the #119 registry-priority guard stays covered by `tests/native_loader.rs`).
+
+**Earlier phases:** F1 + F2 + F3 + F4-rollout + F5 SHIPPED 2026-05-27 (transport,
+the `#[loft_native]` macro, per-library bridges, PACKAGES.md doc).  The arm
+deletion was blocked until the libraries were re-published with bridges.
 
 F3 = one-library proof: `lib/imaging`'s `n_load_png`/`n_save_png`;
 `loft-ffi-build` emits the `loft_register_bridges!` list; additive —
