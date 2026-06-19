@@ -195,11 +195,13 @@ for a `__nullable<S>`, else 0.
   gate-on it should be byte-identical to gate-off if E2 is transparent.  Most individual script
   tests pass; the aggregates surface a heterogeneous, multi-session residue.  Gate-OFF stays
   green (2415/2416), so NONE of this affects shipped releases — it is exactly what the gate flip
-  would surface.  **FIXED so far (8 seams):** transparent format (WIP 7); record_new payload redirect
-  (3a); par-offset (5a); cross-lib inferred literal (seam 2); keyed-par wrapper (seam 5b); `&S`
+  would surface.  **FIXED so far (11 seams):** transparent format (WIP 7); record_new payload redirect
+  (3a); par-offset (5a); cross-lib inferred literal (seam 2); keyed/hash-par wrapper (seam 5b); `&S`
   by-ref (seam 1); cross-lib field-access via payload-type resolution; nested-append field-index
-  (seam 3).  Wrap aggregates now passing gate-on: `last`, `libraries`, `library_suite`,
-  `parser_debug` (16-parser).  **RESIDUE (distinct seams):**
+  (seam 3); par extra-args; sorted/index element→nullable rewrite (seam 4, 15-lexer); struct-return
+  par hidden-flag.  Wrap aggregates GREEN gate-on: `dir`, `last`, `libraries`, `library_suite`,
+  `parser_debug`, `script_threading`.  Only `loft_suite` still fails (135 interp segfault, below).
+  **RESIDUE (distinct seams):**
   1. **`&S` by-ref arg unwrap — FIXED (seam 1, `9177b882`).**  A `__nullable<S>` value into a `&S`
      (`RefVar(Reference(S))`) param now unwraps to the payload sub-ref AND passes it BY-REFERENCE
      via a work-ref + `OpCreateStack` + `skip_free` (the complex-expression by-ref path in convert,
@@ -285,15 +287,23 @@ for a `__nullable<S>`, else 0.
      lowering — so the wrapper's call OMITS `__retbuf` (call has 1 arg, `make_doubled` then needs 2).
      The wrapper itself DOES gain a `__retbuf` (lowering sees it returns a struct).  INSTRUMENTED
      (LOFT_PW): at synth time `worker_attrs=2` and `call_args=2` — so the wrapper FORWARDS `__retbuf`
-     to make_doubled CORRECTLY (`__retbuf` is added in PASS 1, so it is present when the wrapper is
-     synthesized in pass 2).  The defect is therefore the **DISPATCHER→wrapper call**, not the
-     wrapper→worker call: the par dispatcher (`n_parallel_queue_ref` + the per-element worker
-     invocation) passes only `(element)` to the wrapper and OMITS the `__retbuf` buffer it allocates
-     for a struct-return worker (native: wrapper "takes 3 arguments but 2 were supplied"; interp:
-     "8 < 12").  FIX SITE: the par dispatcher's worker-call marshalling — it must pass the
-     per-element return buffer (`__retbuf`) to the WRAPPER just as it would to the bare struct-return
-     worker.  Pre-existing (struct-return par over nullable always routed through the wrapper);
-     revealed once 15-lexer unblocked the `dir` aggregate.
+     to make_doubled CORRECTLY (`__retbuf` is added in PASS 1, present at synth in pass 2).  ROOT
+     (FIXED, `ba2efb6a`): the wrapper MIRRORS the worker's hidden `__retbuf` param but DROPPED the
+     `hidden` FLAG; the native par codegen (generation/ops/parallel.rs) detects the per-element
+     return buffer to allocate+pass by filtering on `attr.hidden`, so the unhidden mirror was
+     skipped → dispatcher called the wrapper without the buffer ("takes 3 args, 2 supplied"
+     native / "8 < 12" interp).  Copy the hidden flag when mirroring.  19-threading + sret.loft
+     pass gate-on both backends; `dir` aggregate green.
+  - **loft_suite SIGSEGV at 135-vector-u8-concat (gate-on INTERP only; native works)** — a
+    store-lifetime / scope-exit cleanup seam.  `struct V { a: vector<u8> }`; the file's TWO test
+    fns each build a `vector<V>` (→ `vector<__nullable<V>>`) with a nested `vector<u8>`.  EACH fn
+    runs CLEAN alone (both backends); running BOTH in one program segfaults the SECOND at its
+    nested-append (interp, op=226) — so the first fn leaves un-freed / dangling nullable-element
+    stores that the second's allocation collides with (use-after-free/double-free class).  Native
+    is immune (Rust ownership).  Repro: append `fn main(){ test_p314_u8_concat_values();
+    test_p314_u8_concat_from_field(); }` to the file, run `--interpret` gate-on.  FIX SITE: the
+    scope-exit free / dep-tracking for a `__nullable<S>` element whose payload owns a nested
+    collection (LIFETIME.md).  Pre-existing (dense-V cleanup unchanged by this plan's edits).
   - **index<S> coherence** — `index<S>` is kept DENSE (vector/hash/sorted are nullable): rewriting
     it regresses the multi-key RANGE query (`idx[83..92,"Two"]`, 11-index.loft:48 → "Unknown in
     expression type __nullable<Elm>" — the range-query path does not unwrap a nullable element).
