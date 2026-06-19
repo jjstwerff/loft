@@ -528,12 +528,17 @@ default-on (gate removed), per the project standard.  The remaining work, in fin
          ROOT CAUSE FOUND (native codegen): when the unwrap is the return-coercion of a LOCAL-VAR
          return in a ref-return fn, the emitter drops it — `stores.nullable_to_dense(&var_chosen, …)`
          is emitted as a DISCARDED statement followed by `return DbRef{store_nr: u16::MAX,…}` (a NULL
-         return) → caller derefs store 65535 → panic.  The DIRECT-tail form (`fn f()->S { v[i] }`,
-         repro `/tmp/gap2/ret.loft`) works on native — so the fix is in the native return-statement
-         codegen for a local-var return whose value is an `OpNullableToDense` coercion (wire its
-         result into `var___retbuf` / return it, as the direct-tail path already does).  151 passed
-         because its `M` is scalar-only and took a different (working) path; interp is correct for
-         both.  (b) `&S` by-ref arg (100) needs copy-IN/OUT around the call
+         return) → caller derefs store 65535 → panic.  REFINED (the IR, not native, is wrong):
+         ret.loft emits `Return(OpNullableToDense(...))` (returned directly); coalret emits
+         `OpNullableToDense(chosen)` as a bare STATEMENT then `Return(null)`.  `ref_return`
+         (control.rs) demoted the unwrap tail to the buffer-promotion convention (a statement fills
+         the hidden `__retbuf`, then `return null`) — but `OpNullableToDense` ALLOCATES A FRESH store,
+         it does not fill the pre-allocated buffer, so native discards the statement and returns the
+         null sentinel.  FIX (its own change — `ref_return` is subtle 300-line buffer logic, do NOT
+         rush): detect a fresh-allocation (`OpNullableToDense`) body-tail and return it DIRECTLY
+         (`Return(<call>)`) as the single-tail path already does, rather than the buffer convention.
+         151 passed (scalar `M`, working path); interp correct for both (its ref-return takes the
+         last stack value).  (b) `&S` by-ref arg (100) needs copy-IN/OUT around the call
          (the unwrap is a copy, so a `&mut` mutation wouldn't propagate) — errors before convert.
          (c) return-WRAP (55, dense `vector<S>` → `vector<__nullable<S>>`) is the opposite direction.
          (d) single-element `h += S{…}` (store_persist) — routing the singleton compiles but the
