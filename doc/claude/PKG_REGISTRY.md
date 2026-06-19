@@ -981,9 +981,15 @@ These need decisions before implementation starts.
 verifies the index, filters case-insensitively over name / description / categories, and
 prints one `name <latest> — description` line per hit, sorted alphabetically.  That ships
 the *discovery loop everywhere* goal — from any loft project, not just the loft-repo
-in-repo catalogue ([LIBRARIES.md](LIBRARIES.md)) — but it is the minimal cut.  The work
-below brings it up to the advertised surface and makes it the discoverable front door for
-lazy auto-use ([lib_plans/59-lazy-stdlib](lib_plans/59-lazy-stdlib)).
+in-repo catalogue ([LIBRARIES.md](LIBRARIES.md)) — but it is the minimal cut.
+
+**Shipped 2026-06-19 (commit `1a129a92`):** steps S0–S5 below brought it to the advertised
+surface — shared loader, ranking, `⚡auto-use` marker, `--json` (through loft's own JSON
+model), offline cache fallback.  The OPEN work now is **function-level API discovery**
+([§ below](#next--function-level-api-discovery-search-the-callable-surface)): make the
+*function* surface searchable so an agent finds a *capability*, not just a package — and
+the discoverable front door for lazy auto-use
+([lib_plans/59-lazy-stdlib](lib_plans/59-lazy-stdlib)).
 
 ### Gap — shipped (R8) vs target
 
@@ -1011,7 +1017,15 @@ non-empty `triggers` (`Version.triggers`, `src/registry_index.rs:60`); `(categor
 omitted when empty.  This is the public CLI contract — pin it with the tests below so it
 cannot drift.
 
-### Design — verifiable steps
+### Design — verifiable steps (S0–S5 · ✅ SHIPPED 2026-06-19, commit `1a129a92`)
+
+All six landed with regression tests — `rank_hits_orders_exact_prefix_then_description`,
+`to_json_string_round_trips_through_parse` (the parser's inverse `json::to_json_string`),
+and the `load_index_reporting_falls_back_*` e2e; clippy + fmt clean.  Two as-built
+deltas from the plan: S4 was *contained* — `load_index` keeps returning the plain index
+(install path untouched) and a new `load_index_reporting` carries `stale_fallback`, so the
+blast radius stayed off the 8 install callers; and S5 was already present in `--help`
+(only the `--json` mention was added).  The steps below are the record.
 
 Effort XS–S total; each step is independently shippable.  Land **S0 first** (it makes the
 spec's "reuse, do not duplicate" true and gives the later steps one place to change);
@@ -1071,6 +1085,109 @@ radius).  Build under `--features registry`.
 auto-use signposting, machine-readable output) so library reuse is frictionless from any
 project, and it makes lazy auto-use ([lib_plans/59-lazy-stdlib](lib_plans/59-lazy-stdlib))
 *discoverable* rather than magic.
+
+### Next — function-level API discovery (search the callable surface)
+
+S0–S5 search **package** metadata (name / description / categories).  That is too coarse
+for an agent: the real question is *"is there a function that does X, and how do I call
+it?"*  Today a registry package's function-level API is visible **only after you install
+it** (`loft api` / `.loft/api` stubs read the extracted source) — a discover-to-install
+circularity.  This slice breaks it: surface each library's **functions** — signature +
+doc — from any project, without the source, **and** put the **stdlib on the same surface**.
+
+**One mechanism, two feeds, one surface.**  There is already a single API-surface
+extractor — `parse_pkg_api` / `render_pkg_api_text` (`src/documentation.rs:1122`,`:1231`),
+heuristic and *good enough* (it is what `loft api` and the `.loft/api` stubs already use).
+Run that one routine in two feeds and render both identically:
+
+```
+                 ┌─ publish time, over each library's source  → index.json `api` field (auto, CI-verified)
+parse_pkg_api ──>┤
+                 └─ search time, over the binary's embedded default/*.loft → stdlib hits (always present)
+                                          │
+                            loft search / --json  ← one surface; stdlib and libraries the same shape
+```
+
+**The invariant** (the load-bearing claim to hold): *the index's `api` field is a pure,
+CI-verified function of the published source, and the stdlib feeds the same surface from
+the binary's embedded `default/*.loft` — a consumer never extracts from source it does not
+have.*
+
+**S6 — index schema: the `api` field (auto-derived, no hand-crafted data).**  `Version`
+gains `api: Vec<ApiItem>` where `ApiItem = { sig: String, doc: String }` (a **one-line**
+doc summary — full doc stays available via `loft api <pkg>`).  Parse it with the
+nested-object idiom already used for `binaries` (`src/registry_index.rs:290`); it is
+**optional**, so older indexes lacking it default to empty and never error (same as
+`triggers`, `:281`).  It is **emitted automatically** by the publish path — the exact
+mirror of how `triggers` are derived from source and written today
+(`src/main.rs:2055-2069`, `crate::triggers::derive_triggers` `src/triggers.rs:58`): the
+author runs `loft package` and pastes the whole generated entry; **nothing is
+hand-written**.
+
+**S7 — CI is the source of truth.**  The registry's `validate.py` gate 3 already clones
+the tagged source and runs `loft package` to re-check the tarball sha256
+([registry_ci_template/validate.py](registry_ci_template/validate.py)).  Extend that gate
+to **re-derive `api` from source and reject (or overwrite) a mismatch** — so the field is
+a pure function of the code and cannot drift, even though the author pasted it.  This is
+what makes discovery *trustworthy*: an agent never finds a function that no longer exists.
+
+**S8 — stdlib on the same surface.**  The loft binary already embeds `default/*.loft`.
+`loft search` runs the **same** extractor over that embedded source at search time, so
+stdlib functions appear as hits **identical in shape** to library functions — differing
+only in the "how to get it" line ("built in — use directly", no install).  The stdlib API
+therefore lives in the binary (always fresh) and **does not bloat the fetched index**.
+
+**S9 — rich results: tell the agent what it needs.**  A function match is a function-level
+hit carrying the three things needed to act — *what it does* (doc), *how to call it*
+(signature), *how to get it* (install vs built-in).  Group the matching functions under
+their package; `--json` carries them structured.
+
+```
+<pkg> <ver>
+    <signature>
+        <one-line doc>
+    → loft install <pkg>            #   or:  (stdlib — built in, use directly)
+```
+
+`--json` per function: `{ "source": "stdlib"|"registry", "package", "version",
+"signature", "doc", "get" }` — everything an agent needs to decide and call, in one place.
+
+**Decided shape** (the three forks, resolved): functions **grouped under their package**
+(scannable, agent still sees every match) · **one-line doc summary in the index**, full
+doc on demand via `loft api` (keeps the index lean) · **CI re-derives** the `api` field
+(no trusted hand-crafted data) · stdlib extracted **on the fly** from embedded source
+(simple, always current).
+
+**Failure paths** (the generative pass — each is why a property above is load-bearing):
+
+- *Stale / edited `api` field* → S7's CI re-derive rejects the mismatch; the field can
+  only ever equal the source.  (Without S7, discovery becomes confidently wrong — worse
+  than absent.)
+- *Signature drift across versions* → `api` is **per-`Version`**, so each version carries
+  its own surface; an old pin still describes the functions it actually shipped.
+- *stdlib vs library name collision in results* → every hit is tagged `source`
+  (`stdlib`|`registry`); results never merge the two silently.
+- *Index growth* → only a one-line summary per function lives in the index; if the single
+  `index.json` still outgrows a single fetch, split to a per-package `api` file fetched on
+  demand (the only change that dents the "one agnostic fetch" property — defer until
+  measured).
+- *Function with no/cryptic doc* → discoverable by name + signature only; quality is
+  bounded by the library's doc quality, which ties discovery to
+  [LIBRARY_CHECKLIST.md](LIBRARY_CHECKLIST.md) / [DOC_QUALITY.md](DOC_QUALITY.md) /
+  [API_SURFACE.md](API_SURFACE.md) `api-lint`.
+- *Heuristic extractor misses an exotic signature* → it degrades to "no hit / raw
+  signature line", never a wrong call — `good enough` is the right bar for discovery.
+
+**Sequencing & effort:** S6 schema + parse (XS) → S7 publish auto-derive + CI verify (S)
+→ S8 stdlib feed (S) → S9 rich results + `--json` (S).  Builds directly on the shipped
+S0–S5; the client stays agnostic throughout (it only reads the enriched index + the
+embedded stdlib).
+
+**Why this resolves agent data discovery** (per the evaluation that drove it): the
+published ecosystem's *callable* surface becomes visible from any project **without
+installing**, **authoritative** because CI-derived, and **unified with the stdlib** — so
+"what can do X, and how do I call it?" is answered in one place, with the signature to use
+it and the command to get it.
 
 ---
 
