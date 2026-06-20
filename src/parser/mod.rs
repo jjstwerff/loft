@@ -2385,7 +2385,31 @@ impl Parser {
             // Operator name — use as-is for find_fn.
             name
         };
-        let resolved = data.find_fn(u16::MAX, fn_name, &concrete_arg);
+        let mut resolved = data.find_fn(u16::MAX, fn_name, &concrete_arg);
+        // @PLN25 E2 — a bounded-generic method call whose receiver monomorphises to a synth
+        // `__nullable<S>` (a nullable vector element, e.g. `for x in v: vector<T>` where
+        // `T = IfItem` → `__nullable<IfItem>`, then `x.is_valid()`) must resolve to S's CONCRETE
+        // method via the `Some` payload — the nullable enum itself has no methods, so `find_fn`
+        // returns MAX and the parametric bound stub `t_1T_<m>` (emitted `todo!()` in native)
+        // would leak to runtime (86).  Mirror the interface-satisfaction unwrap above: retry
+        // against S.  Gate-off-inert (no `__nullable<` type exists).
+        if resolved == u32::MAX
+            && let Type::Enum(nd, true, _) = &concrete_arg
+            && data.def(*nd).name().starts_with("__nullable<")
+        {
+            let some = data.variant_of(*nd, "Some");
+            let pa = if some == u32::MAX {
+                usize::MAX
+            } else {
+                data.attr(some, "payload")
+            };
+            if pa != usize::MAX
+                && let Type::Reference(s, _) = data.attr_type(some, pa)
+            {
+                let s_type = data.def(s).returned().clone();
+                resolved = data.find_fn(u16::MAX, fn_name, &s_type);
+            }
+        }
         if resolved != u32::MAX && resolved != d_nr {
             resolved
         } else {
