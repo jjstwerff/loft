@@ -159,6 +159,35 @@ while holding `ki`. **Both backends** (interp: aliases last; native: garbage `9`
 This both broadens cluster II and gives it a clean, assertion-bearing probe that
 the eventual fix must turn green.
 
+### Fix-site localized (VERIFIED) + attempt 4 (parser-materialise, failed)
+
+The IR for `a = enc(k0); b = enc(k1)` shows distinct buffers
+(`a = enc(k0, __ref_1)`, `b = enc(k1, __ref_2)`) — yet `a == b` at runtime, so the
+aliasing is at the **physical store** level: `a` adopts `__ref_1`'s store but it is
+not owned/locked, so `enc`'s next call reuses it. The deep-copy that WOULD give a
+call result its own fresh store — `gen_set_first_ref_call_copy`
+(`state/codegen.rs`, the `owned_ref` path ~1612-1689) — is gated
+`Type::Reference | Type::Enum(_,true,_)` (and the inner branch is `Type::Reference`
+ONLY). **A Vector result is excluded, so it never deep-copies.** That is the bug
+site: the Reference deep-copy needs a **Vector analog** (allocate a fresh vector
+store for `v` + copy the returned vector's elements + do NOT free the source, so
+`__ref_N` stays valid for the next call).
+
+**Attempt 4 (reverted):** extend the #410 parser-materialise
+(`expressions.rs::native_vec_elm`) to also fire for user-fn vector returns with a
+visible Reference/Enum param (`__fwd = enc(k0); a = []; a += __fwd`). FAILED — made
+it WORSE (`a=9`, uninitialised garbage): `__fwd` itself is a Vector result that
+aliases `__ref_1` (same exclusion), and freeing `__fwd` releases the store the copy
+then reads. A parser-level copy through an intermediate doesn't help because the
+intermediate has the same bug.
+
+**Conclusion across attempts 1–4** (fn-entry sentinel · Vector witness-guard ·
+witness+free-buffer · parser-materialise): the fix is NOT in scope analysis or the
+parser — it is the **codegen Vector deep-copy** in `gen_set`'s `owned_ref` path,
+mirroring the Reference `OpCopyRecord` path with a vector clone (a fresh owned
+store + element copy, source left intact). Load-bearing; gate on probe 05 (both
+backends) + the leak/suite harness.
+
 ### Fix direction (Stage C — the real one)
 
 This is the **H1 / return-ABI / NRVO-alias** family: a var bound to an
