@@ -13,9 +13,9 @@ Plan id: [@PLN85](https://github.com/loft-lang/plans/issues/85) · investigation
 | Stage | Status |
 |---|---|
 | A — Probe catalogue (extract from the real recent bugs + a real consumer) | ✅ probes 01–04 (evaluation in [recent-bugs.md](recent-bugs.md)); of 3 predicted siblings: #1 latent, #2 closed, #3 LIVE |
-| B — Mechanism investigation (shared-root vs N-independent) | 🟡 **IN PROGRESS** — earlier "verified" slot-init-dominance root was **FALSIFIED** by a Stage-D instrument (the fn-entry null-inits ARE present; the crash is an `OpFreeRef` of a garbage `store_nr`). Real mechanism not yet pinned — see [cluster-II](cluster-II-slot-init-dominance.md) § CORRECTION |
-| C — Fix design | 🔴 reopened — the prior invariant (null-init dominates free) is falsified for this case |
-| D — Implementation | ⏸️ blocked on a correct Stage B |
+| B — Mechanism investigation (shared-root vs N-independent) | ✅ **CLOSED via debugger** — real mechanism: `ki` is a borrowed alias of the NRVO return buffer `__ref_1`; under conditional×unused, scope analysis emits a per-iteration `OpFreeRef(ki)` that double-frees the return buffer via a stack-ref ([cluster-II](cluster-II-slot-init-dominance.md) § CLOSED OUT). NOT the slot-init story. |
+| C — Fix design | 🟡 direction set: NRVO-return-bound local must be **borrowed/skip-free** (the buffer owns the single free) — fix at the ownership-marking chokepoint |
+| D — Implementation | ⏸️ pending C — validate against matrix A–F + leak gates, both backends |
 
 **What triggered this:** the *known* store-lifetime mechanisms are already hardened and
 shipped — H1 (fn-arity freeze), **H2 (typed `Deps` newtype + value-tagged spaces — see

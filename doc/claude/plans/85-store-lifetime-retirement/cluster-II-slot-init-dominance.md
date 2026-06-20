@@ -53,6 +53,41 @@ RETURN-BUFFER-aliasing bug (H1/NRVO family), NOT the `__vdb_1` dep-slot story.
 + what last wrote them; and bisect the boundary (does removing `x += ki` while
 keeping `x` unused still fire?) to confirm the dead-copy link.
 
+### CLOSED OUT (debugger `--rpc`, VERIFIED mechanism)
+
+A breakpoint inside the loop showed the frame's live locals as `__ref_1`, `x`,
+`__vdb_1`, `i` — **never `ki`**: `ki` renders *as* `__ref_1`, confirming **`ki`
+aliases the NRVO return buffer `__ref_1`** (enc materialises its return into the
+caller-passed `__retbuf` = `__ref_1`, and `ki = that`). The `BUG #405` fired
+*between* the line-9 stops → at the inter-iteration `OpFreeRef(ki)`.
+
+**Verified mechanism:** `ki` is a **borrowed alias of the NRVO return buffer**
+`__ref_1`, sharing its store. Under **conditional × unused** (`x = ki` whose
+result `x` is never read), scope analysis mis-classifies `ki` as OWNING and emits
+a **per-iteration `OpFreeRef(ki)`** — which whole-store-frees the stack-alias,
+reading the stack-frame ref's offset as a heap `store_nr` (advancing 8/iter,
+`store_nr = 8·(rec−1)`, > `allocations.len`) → #405 / #306 → SIGSEGV. `__ref_1`
+ALSO frees the same store at fn exit → it is a **double-free of the return buffer
+via a stack-ref**, not a dep-slot-init problem at all.
+
+Evidence chain: matrix (cond×unused boundary) + `free_ref` instrument (OOB
+`store_nr` at one `code_pos`, per-iter) + bytecode (`ki` `PutRef`-assigned from
+`Call(n_enc)`, the return-buffer alias) + debugger (`ki` renders as `__ref_1`).
+
+### Fix direction (Stage C — the real one)
+
+This is the **H1 / return-ABI / NRVO-alias** family: a var bound to an
+NRVO-returning call's result is a **borrowed alias** of the caller-passed return
+buffer; exactly ONE of {the alias `ki`, the buffer `__ref_1`} may free the store.
+Today both do. The fix is to make the NRVO-return-bound local **skip-free / borrowed**
+(the buffer `__ref_1` owns the single free at fn exit) — at the ownership-marking
+chokepoint, so it covers every NRVO-return-aliased local, not the #405 shape.
+Why the **unused** factor flips it: when `x` reads `ki`, ownership transfers into
+`x`'s buffer (the copy), so `ki`'s free is placed correctly; when `x` is dead,
+that transfer is elided but `ki`'s owning-free is (wrongly) kept. Validate the
+fix against the matrix A–F + the @PLN51/leak gates; confirm the #306 co-fire
+closes with it.
+
 ---
 
 ## (FALSIFIED hypothesis — kept as ruled-out record)
