@@ -1346,6 +1346,36 @@ impl Scopes {
         to_scope: u16,
     ) -> Vec<Value> {
         let ret_var = returned_var(expr);
+        // @PLN85 cluster II — when the return is a `match`/`if` whose arms differ,
+        // `returned_var` gives up (`u16::MAX`) and the per-arm buffers get freed at
+        // scope exit even though they are transferred to the caller (the freed-
+        // return bug, #405 / probe 05). Mark the full return-source set do-not-free.
+        // NARROW: only when `returned_var` actually missed (`ret_var == MAX`) AND
+        // the source is a VECTOR buffer — single-var returns keep their existing
+        // (correct) `in_ret` handling, and keyed (`hash`/`sorted`/`index`) / enum
+        // returns are left alone (marking them frees-suppresses buffers that must
+        // be freed → UAF/OOB regressions).
+        if is_return && ret_var == u16::MAX {
+            let mut sources = Vec::new();
+            collect_return_sources(expr, &mut sources);
+            for v in sources {
+                if !matches!(function.tp(v), Type::Vector(_, _)) {
+                    continue;
+                }
+                let deps = function.tp(v).depend().to_vec();
+                if deps.is_empty() {
+                    // Directly-owned terminal: the terminal IS the freed store.
+                    function.set_skip_free(v);
+                } else {
+                    // Borrowing terminal (`_vec_N["__vdb_N"]`): the dep buffer is
+                    // what `get_free_vars` frees. Mark the dep, NOT the borrowing
+                    // terminal (marking the latter makes native skip declaring it).
+                    for d in deps {
+                        function.set_skip_free(d);
+                    }
+                }
+            }
+        }
         let mut ls = self.get_free_vars(function, data, to_scope, tp, ret_var);
         // The B5-L3 wrap (Set(__ret_N, expr); free ops; Return(Var(__ret_N)))
         // must not fire when `expr` is already a `Return` or contains one
@@ -2310,6 +2340,38 @@ fn returned_var(expr: &Value) -> u16 {
         }
         Value::Span(b) => returned_var(&b.1),
         _ => u16::MAX,
+    }
+}
+
+/// @PLN85 cluster II — the SET version of `returned_var`: every terminal var a
+/// return expression can yield, INCLUDING all arms of an `If`/`match` (which
+/// `returned_var` collapses to `u16::MAX` when the arms differ). These are the
+/// function's "return-source" locals — their heap store is transferred to the
+/// caller, so the callee must not free them at scope exit.
+fn collect_return_sources(expr: &Value, out: &mut Vec<u16>) {
+    match expr {
+        Value::Var(v) => {
+            if !out.contains(v) {
+                out.push(*v);
+            }
+        }
+        Value::Block(bl) => {
+            if let Some(last) = bl.operators.last() {
+                collect_return_sources(last, out);
+            }
+        }
+        Value::Return(inner) | Value::Drop(inner) => collect_return_sources(inner, out),
+        Value::Insert(ops) => {
+            if let Some(last) = ops.last() {
+                collect_return_sources(last, out);
+            }
+        }
+        Value::If(_, t, f) => {
+            collect_return_sources(t, out);
+            collect_return_sources(f, out);
+        }
+        Value::Span(b) => collect_return_sources(&b.1, out),
+        _ => {}
     }
 }
 
