@@ -338,6 +338,28 @@ until both are in (native correctness + no leak). This also re-frames the whole
 plan: each fact is a **paired** change (interp `state/codegen.rs` + native
 `src/generation/` + shared `scopes.rs`), and "green-both" means all three.
 
+## 6g. CRITICAL path finding — `block_result`'s vector arm is NOT enc's return path
+
+While executing the owned-return fix (probe 05), an instrument proved a structural
+blocker: the `parser/control.rs` `block_result` **vector return arm** (the
+`} else if let Type::Vector(elm, ls) = t {` at ~line 695, where `ref_return` /
+`native_forwarder` / the #410 materialise live) **fires for ZERO functions** in the
+`a=enc(k0); b=enc(k1)` program (`LOFT_PLN85_DBG` printed nothing for `n_enc` — or
+any fn). So `enc`'s `match`-return is processed by a DIFFERENT, not-yet-located
+return-handling path.
+
+This means several recent fix attempts (the param-return materialise, the
+match-tail `materialize_vector_return_into`) were edited into a path `enc` never
+takes — which is why they never fired. **Before ANY further owned-return fix, the
+real path enc's vector match-return flows through must be found** (candidates: a
+separate explicit/implicit return handler, the `RetSite::MidReturn` path, or
+codegen-side handling that bypasses `block_result`). Trace it with a breadcrumb on
+the function that actually rewrites `enc`'s tail / sets its `OpFreeRef(__vdb_*)`.
+
+Net: the investigation is sound and the fact-map (§ 6e) holds, but the
+*implementation site* for the owned-return path was wrong. The next session's first
+move is path-location, not another edit.
+
 ## 7. Open questions to verify against the implementation
 
 - Exact current contents of `Definition.returned` for `enc`/`mk` (is the dep empty,
