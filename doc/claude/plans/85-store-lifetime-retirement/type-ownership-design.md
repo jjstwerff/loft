@@ -427,6 +427,24 @@ entirely so there is nothing to skip_free or leak. The change is committed as WI
 the branch (suite-clean, both-backends-correct); it is NOT a finished landing until
 Edge B closes (no-leak gate).
 
+**Edge B pinned precisely (instrumented):** the interp leak is exactly **3 vector
+*backing* buffers** (one per call) — `store#9/#11/#13`, `known_type=65535`,
+100-word element-capacity stores (the growable backing `pre_alloc_vector` mints,
+separate from the `kt=68` header). A SINGLE `enc` call is leak-free (0); the leak is
+per-call and only when the result is held. The vector *header* (a/b/c) IS freed by
+`main`, but its backing is not — because `enc` delivers via a transferred LOCAL
+(`__vdb`, skip_free'd) rather than NRVO-moving into `__retbuf`: `free_named` on the
+header does not cascade to the backing for a transferred-local vector, whereas an
+NRVO'd vector (`mk()`, header == caller's `__retbuf`) frees its backing correctly,
+and native's adopt path frees it on both. So Edge B is NOT a free_named bug to patch
+(adding a header→backing cascade there would double-free the NRVO'd common case); it
+is the same missing fact — **deliver the vector match-arms via `__retbuf` (NRVO)**,
+so the result is the caller's buffer with a properly-owned backing and there is no
+transferred local to leak. Path note: `enc`'s match-return does NOT flow through
+`block_result`'s vector arm (verified: zero user `n_` fns reach it) — the NRVO must
+be injected on the match-handling path (or `unify_if_branches_work_refs` extended to
+`_vec_` terminals), which is the precise next-session target.
+
 ## 7. Open questions to verify against the implementation
 
 - Exact current contents of `Definition.returned` for `enc`/`mk` (is the dep empty,
