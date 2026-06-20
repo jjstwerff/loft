@@ -371,6 +371,7 @@ The rule: **always commit before any operation that changes the working tree.**
 | [LIBRARIES.md](doc/claude/LIBRARIES.md) | Auto-generated catalogue of every installable registry library — check before writing code |
 | [REPL.md](doc/claude/REPL.md) | Interactive REPL (`loft repl`) + introspection (`loft introspect`): commands, result echo, session limits (@PLN12) |
 | [COMPILER.md](doc/claude/COMPILER.md) | Lexer, parser, two-pass design, IR, type system, scope analysis, bytecode |
+| [CODEGEN_METHOD.md](doc/claude/CODEGEN_METHOD.md) | **How to do compiler work**: codegen is a mechanical translation from TYPES → bytecode (obvious, no on-the-spot heuristics); build it bottom-up per scale as bytecode→types→code, working-vs-broken bytecode proven first on both backends. The whole of loft moves onto this method, plan by plan |
 | [INTERMEDIATE.md](doc/claude/INTERMEDIATE.md) | Value/Type enums; bytecode operators; State layout |
 | [DATABASE.md](doc/claude/DATABASE.md) | Store allocator, Stores schema, DbRef, vector/tree/hash/radix |
 | [INTERNALS.md](doc/claude/INTERNALS.md) | calc.rs, stack.rs, create.rs, native.rs, ops.rs, png_store.rs, parallel.rs, main.rs, logger.rs |
