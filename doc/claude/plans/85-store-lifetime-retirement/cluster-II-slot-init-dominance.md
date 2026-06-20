@@ -241,6 +241,30 @@ plus the **native generator vector-return-ABI** (on native a SINGLE
 Both are focused, harness-gated efforts. Gates: probe 05 both backends + the full
 suite (audience_crystal 02/03 green, fresh cdylibs).
 
+### Attempt 7 (codegen `gen_set_first_at_tos`) — clean injection point, but the emission is wrong (reverted)
+
+The right injection point IS in codegen, not the `owned_ref` block: `gen_set_first_at_tos`
+dispatches first-assignments and has a Reference-from-has_ref_params-call arm
+(`gen_set_first_ref_call_copy`) but **no Vector-call arm** — a vector call-result
+falls through to a plain adopt. Added a parallel arm + a new
+`gen_set_first_vector_call_copy(v, value)` that (1) allocates v's own fresh owned
+vector store via `gen_set_first_vector_null`, then (2) generates
+`OpAppendVector(v, value, rec_tp)` with `rec_tp = database.content(name_type("main_vector<elm>"))`.
+
+Result: **crashes on interpret** — `index out of bounds: len 71 index 65535` at
+`src/database/structures.rs:380`, surfacing inside `enc`. The `65535` is the null
+sentinel, so either the `rec_tp` computation is wrong (the `name_type` lookup /
+`content()` differs from the parser's `append_elem_tp` = `database.content(vector_of(elm))`)
+or the `gen_set_first_vector_null`-then-`OpAppendVector` store/eval-stack
+choreography is off (the helper is built for `v = null`, not a call follow-up).
+Reverted.
+
+**Remaining detail for the next session:** the injection point + the shape
+(`gen_set_first_vector_call_copy`) are right; the bug is in the emission — pin
+`rec_tp` against the parser's `append_elem_tp` (use `vector_of`, not a `name_type`
+string lookup) and verify the fresh-store + append eval-stack order. Then the
+native generator ABI. Gate on probe 05 both backends + audience_crystal 02/03.
+
 ### Fix direction (Stage C — the real one)
 
 This is the **H1 / return-ABI / NRVO-alias** family: a var bound to an
