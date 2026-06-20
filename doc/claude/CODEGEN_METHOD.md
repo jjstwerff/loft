@@ -13,31 +13,53 @@ this method, one plan at a time.
 
 ## The principle
 
-> **Code-gen is the wrong place for complexity. Any complex work in code
-> generation is a DIAGNOSTIC of a type-system flaw — and the fix is in the type
-> system, never in the codegen.**
+> **Code-gen is the wrong place for the complexity of RE-DERIVING facts. Codegen
+> reads the parse-tree together with the types — and those two, in combination,
+> should INDICATE what to emit. Complex *deduction* in codegen (re-computing a
+> non-local fact the types should already carry) is a DIAGNOSTIC of a type-system
+> flaw; fix the type, not the codegen.**
 
-This is a diagnosis, not a preference:
+Codegen still has logic — it is *allowed* to. It walks the parse-tree, combines
+its shape with the type facts, and emits ops. That local translation work is
+fine and expected. What is NOT fine is codegen *re-deriving a fact* — recomputing,
+per call site, something global like ownership, nullability, or layout that the
+type system should have stated once.
 
-- **Symptom:** codegen that branches, accumulates conditions, or *deduces* the
-  right ops on the spot (e.g. "callee has ref params AND result is X AND not a
-  borrowed view AND …").
-- **Diagnosis:** the type system is missing a fact. Codegen is being forced to
-  re-derive, per site, something the types should already state.
-- **Remedy:** put the fact in the type (compute it once, where it can be reasoned
-  about and verified). The codegen then collapses to a **mechanical, obvious**
-  translation: read one clear type-level signal → emit the corresponding bytecode.
+The diagnosis:
 
-So when you reach for another condition in the generator, **stop** — that urge is
-the signal. Do not make the codegen smarter; make the type carry the decision, and
-the codegen gets *simpler*. The end state is a codegen with no cleverness in it:
-every interesting choice was already made, and recorded, in a type.
+- **Symptom:** codegen that accumulates conditions to *deduce* a non-local fact
+  on the spot (e.g. "callee has ref params AND result is X AND not a borrowed view
+  AND …" to figure out *ownership*). The branchiness is the recomputation, not the
+  translation.
+- **Diagnosis:** the type system is missing that fact, so codegen re-derives it
+  per site (and gets it wrong on the shapes it didn't enumerate).
+- **Remedy:** compute the fact ONCE, carry it on the type, and let codegen *read*
+  it. The generator's logic stays — it just consults a fact instead of
+  reconstructing one.
 
-Why this is the reliability lever: on-the-spot deduction is where bugs hide and
-regressions breed — every new shape needs another condition, and the conditions
-interact combinatorially. A type-driven mechanical codegen is verifiable (the type
-carries the intent), stable (a new shape arrives with the right type, not a new
-branch), and the same on both backends (they translate the same type fact).
+### The balance (do NOT over-correct)
+
+Pushing *everything* into the type system is the opposite error. The type must NOT
+encode a one-to-one map to codegen output — that overburdens the type system and
+merely relocates all the complexity into it. The split is:
+
+- **Types carry the non-local FACTS** — properties that need global reasoning or
+  recur across many sites (ownership/transfer, nullability, layout, capture).
+  Computed once, verifiable.
+- **Codegen carries the LOCAL TRANSLATION** — given the parse-tree node plus those
+  facts, choose and emit the ops. Logic here is fine; it is reading facts, not
+  rebuilding them.
+
+The test for "is this complexity in the right place?": *would this code be a simple
+read if the type carried one more fact?* If yes → the fact belongs in the type. If
+the code is genuinely just translating a clear (tree + facts) signal into ops →
+it belongs in codegen, leave it there.
+
+Why this is the reliability lever: re-derivation is where bugs hide and regressions
+breed — every new shape needs another condition, and the conditions interact
+combinatorially. Facts-in-types + translation-in-codegen is verifiable (the type
+carries the intent), stable (a new shape arrives with the right fact, not a new
+deduction branch), and the same on both backends (they translate the same facts).
 
 ## The method — bytecode → types → code, per scale
 
@@ -59,9 +81,10 @@ For each feature/fix, work the **smallest** case first, in three layers, then gr
      If they don't → **that gap is the type change**, and it lands before the
      codegen change. (A signal that's only derivable by a pile of conditions at the
      call site is the symptom that it should be a type, computed once.)
-3. **Code last (mechanical).**
-   - Implement the codegen that reads the type signal and emits the working
-     bytecode. It should be short and obvious. If it isn't, step 2 isn't done.
+3. **Code last (translation — read facts, don't rebuild them).**
+   - Implement the codegen that reads the type facts together with the parse-tree
+     node and emits the working bytecode. Translation logic is fine; the red flag
+     is codegen *re-deriving* a non-local fact — that fact belongs back in step 2.
 
 Then **validate at this scale on both backends** (correct result · clean exit · no
 leak · suite) and **grow**: minimal → bigger examples → full functions, comparing
