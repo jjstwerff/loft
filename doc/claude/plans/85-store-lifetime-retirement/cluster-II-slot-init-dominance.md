@@ -20,12 +20,38 @@ free + a fully-clean IR re-dump overturned the slot-init-dominance story below:
 
 So the verified facts are only: probe 04 SIGSEGVs on interpret / completes on
 native; the crash is an `OpFreeRef` of a garbage `store_nr`; the fn-entry
-null-inits are present. **The precise var and the mechanism that puts a garbage
-`store_nr` into the freed slot are NOT pinned** — the analysis below
-(slot-init-dominance, half-1/half-2) is a now-FALSIFIED hypothesis kept only as a
-record of what was ruled out. Next step: instrument `free_ref` to print the var +
-the slot's prior writer, and trace how `store_nr 24` reaches it (likely the
-`ki`/`__ref_1` NRVO return-buffer reuse + the `x += ki` copy, not `__vdb_1`).
+null-inits are present. The analysis below (slot-init-dominance, half-1/half-2)
+is a now-FALSIFIED hypothesis kept only as a record of what was ruled out.
+
+### Pinned so far (VERIFIED by instrument + bytecode, Stage B continuing)
+
+- The crashing op is **ONE `OpFreeRef`, at `code_pos 7292`** (`free_ref` →
+  `free` backtrace), firing **per iteration** — i.e. `OpFreeRef(ki)` (the only
+  per-iteration free; the other two frees are fn-exit `__ref_1` / `__vdb_1`).
+- The freed DbRef is **`{store_nr = 8·(rec−1), rec, pos=1}`** with `rec`
+  advancing 1/iter and `store_nr` advancing **8/iter** (24, 32, 40, …) while
+  `allocations.len == 5`. The `×8` cadence = a **stack offset / structured
+  garbage read as a heap `store_nr`** (the #306 "stack-record ref treated as a
+  heap store" shape), NOT a stale-but-valid double-free.
+- `ki` (slot 64) is **`PutRef`-assigned** from the `n_enc` return (bytecode
+  `Call(n_enc)` → `PutRef(var[64])`), i.e. it ALIASES the NRVO return buffer
+  `__ref_1` (enc materialises into the caller-passed `__retbuf`). So `ki` and
+  `__ref_1` name the same store, yet BOTH get an `OpFreeRef` (per-iter `ki` +
+  fn-exit `__ref_1`).
+- Boundary (matrix): fires on **conditional × unused** (`x += ki` whose result
+  `x` is never read); disappears when `x` is read (C/E) or assigned
+  unconditionally (B).
+
+**Working mechanism (HYPOTHESIZED, needs live confirmation):** when `x` is unused
+the `x += ki` copy is dead, so `ki`'s only consumer is dead, and the NRVO-alias
+`ki` is freed per-iteration via a malformed DbRef (the `store_nr` half not a real
+store) — a double-free / stack-ref-as-heap of the return buffer. This is a
+RETURN-BUFFER-aliasing bug (H1/NRVO family), NOT the `__vdb_1` dep-slot story.
+
+**Next step (live inspection — static reads have hit their limit):** `loft debug
+--rpc` breakpoint at the per-iteration `OpFreeRef(ki)`, inspect `ki`'s slot bytes
++ what last wrote them; and bisect the boundary (does removing `x += ki` while
+keeping `x` unused still fire?) to confirm the dead-copy link.
 
 ---
 
