@@ -527,72 +527,129 @@ fn search_registry(query: &str, json: bool) {
     }
     let index = loaded.index;
 
+    // S8 — the stdlib's function-level surface, extracted from the binary's
+    // EMBEDDED `default/*.loft` at search time (one source of truth shared with
+    // the WASM runtime, no disk dependency): stdlib functions appear as hits
+    // identical in shape to a library's, and never bloat the fetched index.
+    let stdlib: Vec<registry_index::ApiItem> = loft::stdlib_sources::STDLIB_SOURCES
+        .iter()
+        .flat_map(|(_, content)| loft::documentation::extract_api_items(content))
+        .collect();
+
     let q = query.to_ascii_lowercase();
-    let hits = registry_index::rank_hits(&index, &q);
+    let results = registry_index::search_results(&index, &stdlib, &q);
 
     if json {
-        let array = loft::json::Parsed::Array(hits.iter().map(|p| search_hit_json(p)).collect());
-        println!("{}", loft::json::to_json_string(&array));
+        println!(
+            "{}",
+            loft::json::to_json_string(&search_results_json(&results))
+        );
         return;
     }
 
-    if hits.is_empty() {
-        println!("No packages match `{query}`.");
+    if results.is_empty() {
+        println!("No packages or functions match `{query}`.");
         return;
     }
     let querying = !q.is_empty();
-    for pkg in hits {
-        let latest = registry_index::find_best_version(pkg, "*", false);
-        let ver = latest.map_or_else(|| "(no stable version)".to_string(), |v| v.semver.clone());
-        let marker = if latest.is_some_and(|v| !v.triggers.is_empty()) {
-            " ⚡auto-use"
+    for r in &results {
+        // S9 — package header (stdlib reads "built in", no version/install).
+        if r.is_stdlib {
+            println!("stdlib (built in)");
         } else {
-            ""
-        };
-        let mut line = format!("{} {ver}{marker}", pkg.name);
-        if let Some(d) = pkg.description.as_deref().filter(|d| !d.is_empty()) {
-            line.push_str(" — ");
-            line.push_str(d);
+            let marker = if r.auto_use { " ⚡auto-use" } else { "" };
+            let mut line = format!("{} {}{marker}", r.name, r.version);
+            if let Some(d) = r.description.as_deref().filter(|d| !d.is_empty()) {
+                line.push_str(" — ");
+                line.push_str(d);
+            }
+            if !r.categories.is_empty() {
+                line.push_str(&format!("  ({})", r.categories.join(", ")));
+            }
+            println!("{line}");
         }
-        if !pkg.categories.is_empty() {
-            line.push_str(&format!("  ({})", pkg.categories.join(", ")));
+        // The matching functions: what it does (doc) + how to call it (sig).
+        for item in &r.fns {
+            println!("    {}", item.sig);
+            if !item.doc.is_empty() {
+                println!("        {}", item.doc);
+            }
         }
-        println!("{line}");
+        // How to get it.
         if querying {
-            println!("    → loft install {}", pkg.name);
+            if r.is_stdlib {
+                println!("    built in — use directly, no install");
+            } else {
+                println!("    → loft install {}", r.name);
+            }
         }
     }
 }
 
-/// Build the `loft search --json` record for one package: name, latest version,
-/// description, categories, the `auto_use` flag (latest declares `triggers`),
-/// and the ready-to-run install command.
+/// One `loft search --json` record (S9): everything an agent needs to decide
+/// and call — `source` (`stdlib`|`registry`), `package`, `version`, `signature`
+/// (null for a metadata-only hit), one-line `doc`, and `get` (the install line,
+/// or "built in" for the stdlib).
 #[cfg(feature = "registry")]
-fn search_hit_json(pkg: &loft::registry_index::Package) -> loft::json::Parsed {
+fn search_record(
+    source: &str,
+    name: &str,
+    version: &str,
+    signature: loft::json::Parsed,
+    doc: loft::json::Parsed,
+    get: &str,
+) -> loft::json::Parsed {
     use loft::json::Parsed;
-    let latest = loft::registry_index::find_best_version(pkg, "*", false);
-    let version = latest.map_or_else(String::new, |v| v.semver.clone());
-    let auto_use = latest.is_some_and(|v| !v.triggers.is_empty());
     Parsed::Object(vec![
-        ("name".to_string(), 0, Parsed::Str(pkg.name.clone())),
-        ("version".to_string(), 0, Parsed::Str(version)),
-        (
-            "description".to_string(),
-            0,
-            pkg.description.clone().map_or(Parsed::Null, Parsed::Str),
-        ),
-        (
-            "categories".to_string(),
-            0,
-            Parsed::Array(pkg.categories.iter().cloned().map(Parsed::Str).collect()),
-        ),
-        ("auto_use".to_string(), 0, Parsed::Bool(auto_use)),
-        (
-            "install".to_string(),
-            0,
-            Parsed::Str(format!("loft install {}", pkg.name)),
-        ),
+        ("source".to_string(), 0, Parsed::Str(source.to_string())),
+        ("package".to_string(), 0, Parsed::Str(name.to_string())),
+        ("version".to_string(), 0, Parsed::Str(version.to_string())),
+        ("signature".to_string(), 0, signature),
+        ("doc".to_string(), 0, doc),
+        ("get".to_string(), 0, Parsed::Str(get.to_string())),
     ])
+}
+
+/// Build the `loft search --json` payload (S9): a FLAT array of function-level
+/// records (see [`search_record`]).  Replaces the S0–S5 per-package shape: each
+/// matching function is its own record carrying its package context; a
+/// metadata-only hit contributes one `signature: null` record (description as
+/// `doc`) so nothing is dropped.
+#[cfg(feature = "registry")]
+fn search_results_json(results: &[loft::registry_index::SearchResult]) -> loft::json::Parsed {
+    use loft::json::Parsed;
+    let mut arr: Vec<Parsed> = Vec::new();
+    for r in results {
+        let source = if r.is_stdlib { "stdlib" } else { "registry" };
+        let get = if r.is_stdlib {
+            "built in — use directly".to_string()
+        } else {
+            format!("loft install {}", r.name)
+        };
+        if r.fns.is_empty() {
+            let doc = r.description.clone().map_or(Parsed::Null, Parsed::Str);
+            arr.push(search_record(
+                source,
+                &r.name,
+                &r.version,
+                Parsed::Null,
+                doc,
+                &get,
+            ));
+        } else {
+            for item in &r.fns {
+                arr.push(search_record(
+                    source,
+                    &r.name,
+                    &r.version,
+                    Parsed::Str(item.sig.clone()),
+                    Parsed::Str(item.doc.clone()),
+                    &get,
+                ));
+            }
+        }
+    }
+    Parsed::Array(arr)
 }
 
 /// PKG.REG R8 — `loft info <name>`: full info for one package.
@@ -2067,6 +2124,46 @@ fn publish_package(pkg_path: &std::path::Path, dry_run: bool) -> i32 {
         let quoted: Vec<String> = triggers.iter().map(|t| format!("\"{t}\"")).collect();
         println!("  \"triggers\": [{}],", quoted.join(", "));
     }
+    // Function-level API surface (S6/S7) — derived from ALL of the package's
+    // `src/*.loft` at publish time (the same `parse_pkg_api` extractor `loft api`
+    // uses), so `loft search` can surface THIS version's functions without the
+    // source.  Emitted automatically (nothing hand-written), the exact mirror of
+    // `triggers`; the registry CI re-derives + verifies it from source (S7), so
+    // the pasted field is a pure function of the code and cannot drift.
+    let mut api_items: Vec<loft::registry_index::ApiItem> = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(pkg_path.join("src")) {
+        let mut srcs: Vec<std::path::PathBuf> = rd
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "loft"))
+            .collect();
+        srcs.sort(); // deterministic order → stable, CI-reproducible `api`
+        for f in srcs {
+            if let Ok(src) = std::fs::read_to_string(&f) {
+                api_items.extend(loft::documentation::extract_api_items(&src));
+            }
+        }
+    }
+    let api_json = loft::json::Parsed::Array(
+        api_items
+            .iter()
+            .map(|item| {
+                loft::json::Parsed::Object(vec![
+                    (
+                        "sig".to_string(),
+                        0,
+                        loft::json::Parsed::Str(item.sig.clone()),
+                    ),
+                    (
+                        "doc".to_string(),
+                        0,
+                        loft::json::Parsed::Str(item.doc.clone()),
+                    ),
+                ])
+            })
+            .collect(),
+    );
+    println!("  \"api\": {},", loft::json::to_json_string(&api_json));
     println!("  \"published\": \"{published}\"");
     println!("}}");
     println!();

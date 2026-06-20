@@ -566,6 +566,7 @@ mod tests {
             provides: vec![],
             triggers: vec![],
             binaries: BTreeMap::new(),
+            api: vec![],
             prerelease: false,
             published: "p".to_string(),
         }
@@ -717,6 +718,7 @@ mod tests {
             provides: vec![],
             triggers: vec![],
             binaries: BTreeMap::new(),
+            api: vec![],
             prerelease: false,
             published: "p".to_string(),
         };

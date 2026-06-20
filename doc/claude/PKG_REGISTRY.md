@@ -1088,6 +1088,22 @@ project, and it makes lazy auto-use ([lib_plans/59-lazy-stdlib](lib_plans/59-laz
 
 ### Next — function-level API discovery (search the callable surface)
 
+> **Shipped 2026-06-20 — S6, S6b, S7-publish, S8, S9.**  `loft search <fn>` surfaces
+> function-level hits (signature + one-line doc + how-to-get) across the index `api` field
+> AND the embedded stdlib, grouped under their package; `--json` carries per-function
+> records `{ source, package, version, signature, doc, get }`.  `Version.api: Vec<ApiItem>`
+> parses optional / default-empty (`registry_index.rs`, like `triggers`); `loft publish`
+> auto-derives it from `src/*.loft` via the same `parse_pkg_api` extractor
+> (`documentation::extract_api_items`); the stdlib feeds from the binary's embedded
+> `default/*.loft` (`stdlib_sources::STDLIB_SOURCES` — one home shared with the WASM runtime,
+> no disk dependency).  `registry_index::search_results` is the pure, tested ranker.
+>
+> **Remaining — S7-CI:** the registry's `validate.py` re-deriving + verifying `api` from
+> source (the no-drift trust gate; without it discovery can be confidently wrong).  Loft-side
+> is ready — `loft publish --dry-run` already emits the field — so this is the registry-repo's
+> adoption: extend `gate_reproducible_build` (which already clones the tagged source + runs
+> `loft`) to compare a re-derived `api`.
+
 S0–S5 search **package** metadata (name / description / categories).  That is too coarse
 for an agent: the real question is *"is there a function that does X, and how do I call
 it?"*  Today a registry package's function-level API is visible **only after you install

@@ -1179,6 +1179,34 @@ fn parse_pkg_api(content: &str) -> Vec<PkgApiSection> {
     sections
 }
 
+/// Flatten [`parse_pkg_api`] over a source file's `content` into the registry's
+/// function-level surface: one [`ApiItem`](crate::registry_index::ApiItem) per
+/// `pub` item — its signature plus a ONE-LINE doc summary (the first non-empty
+/// doc-comment line; the full multi-line doc stays in `loft api`).  This is the
+/// single extractor both feeds run: publish-time over a library's source (→ the
+/// index `api` field) and search-time over the binary's embedded `default/*.loft`
+/// (→ the stdlib surface) — so stdlib and library hits are identical in shape.
+///
+/// Registry-gated: its only callers (`loft search`, `loft publish`) are, and the
+/// `ApiItem` it returns lives in the registry-gated `registry_index`.
+#[cfg(feature = "registry")]
+#[must_use]
+pub fn extract_api_items(content: &str) -> Vec<crate::registry_index::ApiItem> {
+    parse_pkg_api(content)
+        .into_iter()
+        .flat_map(|s| s.items)
+        .filter(|(sig, _)| !sig.is_empty())
+        .map(|(sig, doc_lines)| {
+            let doc = doc_lines
+                .iter()
+                .find(|l| !l.is_empty())
+                .cloned()
+                .unwrap_or_default();
+            crate::registry_index::ApiItem { sig, doc }
+        })
+        .collect()
+}
+
 /// Strip function body from a pub declaration, keeping just the signature.
 fn strip_pub_body(line: &str) -> String {
     // For structs/enums, keep the full first line

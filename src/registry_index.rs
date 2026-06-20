@@ -77,6 +77,15 @@ pub struct Version {
     pub triggers: Vec<String>,
     /// Schema slot — pre-built distribution deferred.
     pub binaries: BTreeMap<String, BinaryEntry>,
+    /// Function-level API surface — one `ApiItem` (signature + one-line doc) per
+    /// `pub` item, derived from THIS version's source at publish time (the same
+    /// `parse_pkg_api` extractor `loft api` uses) so `loft search` can answer a
+    /// consumer's *"is there a function that does X, and how do I call it?"*
+    /// against the callable surface WITHOUT the source.  Optional + per-`Version`
+    /// (an old pin still describes the functions it actually shipped); the
+    /// registry CI re-derives it from source so it cannot drift.  Empty for
+    /// indexes published before this field existed.
+    pub api: Vec<ApiItem>,
     pub prerelease: bool,
     pub published: String,
 }
@@ -92,6 +101,15 @@ pub struct BinaryEntry {
     /// download.  Stored as a string in the index to avoid u64 JSON precision
     /// loss.  `None` (absent) → skip the prebuilt, fall to source build.
     pub loft_ffi_fp: Option<u64>,
+}
+
+/// One function-level API entry: a `pub` item's signature plus a one-line doc
+/// summary.  The full multi-line doc stays available via `loft api <pkg>`; only
+/// this summary lives in the index, keeping it lean.
+#[derive(Debug, Clone)]
+pub struct ApiItem {
+    pub sig: String,
+    pub doc: String,
 }
 
 // ── Parsing ───────────────────────────────────────────────────────
@@ -231,6 +249,7 @@ fn parse_version(pkg_name: &str, semver: &str, val: &Parsed) -> Result<Version, 
     let mut provides: Vec<String> = Vec::new();
     let mut triggers: Vec<String> = Vec::new();
     let mut binaries: BTreeMap<String, BinaryEntry> = BTreeMap::new();
+    let mut api: Vec<ApiItem> = Vec::new();
     let mut prerelease = false;
     let mut published: Option<String> = None;
     for (k, _, v) in fields {
@@ -315,6 +334,24 @@ fn parse_version(pkg_name: &str, semver: &str, val: &Parsed) -> Result<Version, 
                     }
                 }
             }
+            ("api", Parsed::Array(a)) => {
+                for item in a {
+                    if let Parsed::Object(ifields) = item {
+                        let mut sig: Option<String> = None;
+                        let mut doc = String::new();
+                        for (ik, _, iv) in ifields {
+                            match (ik.as_str(), iv) {
+                                ("sig", Parsed::Str(s)) => sig = Some(s.clone()),
+                                ("doc", Parsed::Str(s)) => doc = s.clone(),
+                                _ => {}
+                            }
+                        }
+                        if let Some(sig) = sig {
+                            api.push(ApiItem { sig, doc });
+                        }
+                    }
+                }
+            }
             ("prerelease", Parsed::Bool(b)) => prerelease = *b,
             ("published", Parsed::Str(s)) => published = Some(s.clone()),
             _ => {}
@@ -342,6 +379,7 @@ fn parse_version(pkg_name: &str, semver: &str, val: &Parsed) -> Result<Version, 
         provides,
         triggers,
         binaries,
+        api,
         prerelease,
         published,
     })
@@ -810,6 +848,119 @@ pub fn rank_hits<'a>(index: &'a RegistryIndex, query: &str) -> Vec<&'a Package> 
     scored.into_iter().map(|(_, pkg)| pkg).collect()
 }
 
+/// One function-aware `loft search` result: a package (or the stdlib) plus the
+/// functions of it whose signature or one-line doc matched the query.  `fns` is
+/// empty for a metadata-only hit (the package name / description / category
+/// matched, but no individual function did) or for an empty query (the full
+/// package listing).  `tier` is the ranking bucket (lower = better).
+#[derive(Debug, Clone)]
+pub struct SearchResult {
+    pub name: String,
+    pub version: String,
+    pub is_stdlib: bool,
+    pub description: Option<String>,
+    pub categories: Vec<String>,
+    pub auto_use: bool,
+    pub fns: Vec<ApiItem>,
+    pub tier: u8,
+}
+
+/// A function matches when the (lowercased) query is a substring of its
+/// signature or its one-line doc.
+fn item_matches(item: &ApiItem, q: &str) -> bool {
+    item.sig.to_ascii_lowercase().contains(q) || item.doc.to_ascii_lowercase().contains(q)
+}
+
+/// Function-aware search (S6–S9): rank packages by metadata AND surface the
+/// individual functions matching `query`, across the registry `index` and the
+/// embedded `stdlib` API.  `query` must be lowercased by the caller.  Ordering:
+/// exact-name → name-prefix → **has-matching-function** → description/category
+/// substring; within a tier the stdlib sorts first (built in, no install), then
+/// alphabetical by name.  An empty query lists every package (no functions),
+/// matching the S0–S5 full listing.
+#[must_use]
+pub fn search_results(index: &RegistryIndex, stdlib: &[ApiItem], query: &str) -> Vec<SearchResult> {
+    let mut out: Vec<SearchResult> = Vec::new();
+    // The stdlib is surfaced ONLY by a function match: it has no package name or
+    // description to query, and an empty query lists registry packages.
+    if !query.is_empty() {
+        let fns: Vec<ApiItem> = stdlib
+            .iter()
+            .filter(|a| item_matches(a, query))
+            .cloned()
+            .collect();
+        if !fns.is_empty() {
+            out.push(SearchResult {
+                name: "stdlib".to_string(),
+                version: String::new(),
+                is_stdlib: true,
+                description: None,
+                categories: Vec::new(),
+                auto_use: false,
+                fns,
+                tier: 2,
+            });
+        }
+    }
+    for pkg in index.packages.values() {
+        let name = pkg.name.to_ascii_lowercase();
+        let latest = find_best_version(pkg, "*", false);
+        let fns: Vec<ApiItem> = if query.is_empty() {
+            Vec::new()
+        } else {
+            latest.map_or_else(Vec::new, |v| {
+                v.api
+                    .iter()
+                    .filter(|a| item_matches(a, query))
+                    .cloned()
+                    .collect()
+            })
+        };
+        let meta = !query.is_empty()
+            && (name.contains(query)
+                || pkg
+                    .description
+                    .as_deref()
+                    .unwrap_or("")
+                    .to_ascii_lowercase()
+                    .contains(query)
+                || pkg
+                    .categories
+                    .iter()
+                    .any(|c| c.to_ascii_lowercase().contains(query)));
+        let tier = if query.is_empty() {
+            3
+        } else if name == query {
+            0
+        } else if name.starts_with(query) {
+            1
+        } else if !fns.is_empty() {
+            2
+        } else if meta {
+            3
+        } else {
+            continue;
+        };
+        out.push(SearchResult {
+            name: pkg.name.clone(),
+            version: latest.map_or_else(|| "(no stable version)".to_string(), |v| v.semver.clone()),
+            is_stdlib: false,
+            description: pkg.description.clone(),
+            categories: pkg.categories.clone(),
+            auto_use: latest.is_some_and(|v| !v.triggers.is_empty()),
+            fns,
+            tier,
+        });
+    }
+    out.sort_by(|a, b| {
+        a.tier
+            .cmp(&b.tier)
+            .then_with(|| b.is_stdlib.cmp(&a.is_stdlib))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    out
+}
+
 // ── Tests ─────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1138,5 +1289,112 @@ mod tests {
         let mut bytes = b"hello world".to_vec();
         bytes[0] ^= 0x01;
         assert!(verify_sha256(&bytes, HELLO_WORLD_SHA).is_err());
+    }
+
+    fn ver_api(semver: &str, api: Vec<ApiItem>) -> Version {
+        use std::collections::BTreeMap;
+        Version {
+            semver: semver.to_string(),
+            url: "u".to_string(),
+            sha256: "s".to_string(),
+            size: 1,
+            loft: ">=0.8".to_string(),
+            deps: BTreeMap::new(),
+            conflicts: vec![],
+            replaces: vec![],
+            provides: vec![],
+            triggers: vec![],
+            binaries: BTreeMap::new(),
+            api,
+            prerelease: false,
+            published: "p".to_string(),
+        }
+    }
+
+    #[test]
+    fn search_results_surfaces_functions_stdlib_and_metadata() {
+        use std::collections::BTreeMap;
+        let item = |sig: &str, doc: &str| ApiItem {
+            sig: sig.to_string(),
+            doc: doc.to_string(),
+        };
+        let mut versions = BTreeMap::new();
+        versions.insert(
+            "0.1.0".to_string(),
+            ver_api(
+                "0.1.0",
+                vec![item(
+                    "pub fn sha256(d: vector<u8>) -> text",
+                    "SHA-256 digest",
+                )],
+            ),
+        );
+        let mut packages = BTreeMap::new();
+        packages.insert(
+            "crypto".to_string(),
+            Package {
+                name: "crypto".to_string(),
+                description: Some("hashing".to_string()),
+                homepage: None,
+                categories: vec![],
+                yanked: vec![],
+                versions,
+            },
+        );
+        let index = RegistryIndex {
+            schema_version: 1,
+            updated: String::new(),
+            packages,
+        };
+        let stdlib = vec![item(
+            "pub fn starts_with(self: text, p: text) -> boolean",
+            "prefix test",
+        )];
+
+        // A function INSIDE a registry package is surfaced, grouped under it (tier 2).
+        let r = search_results(&index, &stdlib, "sha256");
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].name, "crypto");
+        assert!(!r[0].is_stdlib);
+        assert_eq!(r[0].fns.len(), 1);
+        assert_eq!(r[0].tier, 2);
+
+        // A stdlib function is surfaced and tagged stdlib.
+        let r = search_results(&index, &stdlib, "starts_with");
+        assert_eq!(r.len(), 1);
+        assert!(r[0].is_stdlib);
+        assert_eq!(r[0].fns.len(), 1);
+
+        // An exact package-name match outranks a function match (tier 0).
+        let r = search_results(&index, &stdlib, "crypto");
+        assert_eq!(r[0].name, "crypto");
+        assert_eq!(r[0].tier, 0);
+
+        // Empty query is the full package listing — no stdlib, no functions.
+        let r = search_results(&index, &stdlib, "");
+        assert_eq!(r.len(), 1);
+        assert!(r[0].fns.is_empty());
+        assert!(!r.iter().any(|x| x.is_stdlib));
+
+        // A miss returns nothing.
+        assert!(search_results(&index, &stdlib, "nonexistent_xyz").is_empty());
+    }
+
+    #[test]
+    fn parse_index_reads_api_field_and_defaults_empty() {
+        let with_api = r#"{"schema_version":1,"updated":"","packages":{"crypto":{"versions":{"0.1.0":{
+            "url":"u","sha256":"s","size":1,"loft":">=0.8","published":"p",
+            "api":[{"sig":"pub fn sha256(d: vector<u8>) -> text","doc":"digest"}]}}}}}"#;
+        let idx = parse_index(with_api).expect("parse with api");
+        let v = &idx.packages["crypto"].versions["0.1.0"];
+        assert_eq!(v.api.len(), 1);
+        assert_eq!(v.api[0].sig, "pub fn sha256(d: vector<u8>) -> text");
+        assert_eq!(v.api[0].doc, "digest");
+
+        // An index WITHOUT `api` (older schema) defaults to empty, never errors.
+        let no_api = r#"{"schema_version":1,"updated":"","packages":{"crypto":{"versions":{"0.1.0":{
+            "url":"u","sha256":"s","size":1,"loft":">=0.8","published":"p"}}}}}"#;
+        let idx2 = parse_index(no_api).expect("parse without api");
+        assert!(idx2.packages["crypto"].versions["0.1.0"].api.is_empty());
     }
 }

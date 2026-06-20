@@ -128,6 +128,7 @@ pub mod triggers;
 pub mod documentation;
 pub mod formatter;
 pub mod migrate_long;
+pub mod stdlib_sources;
 
 #[cfg(feature = "wasm")]
 pub mod wasm;
