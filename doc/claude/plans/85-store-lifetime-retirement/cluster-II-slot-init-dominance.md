@@ -267,6 +267,13 @@ native generator ABI. Gate on probe 05 both backends + audience_crystal 02/03.
 
 ## Stage C — fix design: MOVE / ownership-transfer on heap return (not deep-copy)
 
+> **The full, current Stage-C target now lives in
+> [stage-c-move-convention-design.md](stage-c-move-convention-design.md)** — the
+> move/output-buffer calling convention: invariant, today-vs-correct convention,
+> target interpreter bytecode, types, the validated interp prototype, and the
+> design→validate→build execution plan. The notes below are the earlier
+> formulation that led to it; the design doc supersedes them.
+
 ### The real model (why every copy-based attempt fought the grain)
 
 Attempts 1–7 all tried to **deep-copy** the return into the binding. Copy is the
