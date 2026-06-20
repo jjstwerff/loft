@@ -405,6 +405,28 @@ backends; then close Edge B by NRVO-delivering the vector match-arms into `__ret
 The native brace fix (emit.rs) is independently correct and can land on its own
 once a producer exercises it.
 
+### 6h-update — Edge A CLOSED (narrowing verified), Edge B is the last item
+
+Re-applied with the narrowing (marking gated on `ret_var == u16::MAX` AND per-source
+`Type::Vector`). Verified:
+
+- **probe 05 = `1 3 5` on BOTH backends** (unchanged by the narrowing).
+- **Full suite CLEAN** — all 13 prior regressions gone (p300 hash/sorted/index,
+  p188, p295, leak_cases, native_scripts, plan25_e2_hash, par_struct, audience_crystal
+  library_suite). The only red was `engine_host_kernel` (2 threading tests) which
+  **passes 14/0 in isolation** → flaky, not this change.
+
+So Edge A is closed: the keyed/enum/single-var returns keep their correct handling;
+only vector multi-arm match-returns are touched. **Edge B (the interp-only 3-store
+leak) is now the single remaining item** before probe 05 graduates: `enc` delivers
+via local `_vec_/__vdb` (skip_free'd) rather than NRVO-moving into `__retbuf`, so
+interp orphans the vector backing stores (`kt=65535`) while native's adopt frees
+them. The fix is to NRVO-deliver the vector match-arms into `__retbuf` (extend the
+if-branch unification to vector `_vec_` terminals), eliminating the local buffer
+entirely so there is nothing to skip_free or leak. The change is committed as WIP on
+the branch (suite-clean, both-backends-correct); it is NOT a finished landing until
+Edge B closes (no-leak gate).
+
 ## 7. Open questions to verify against the implementation
 
 - Exact current contents of `Definition.returned` for `enc`/`mk` (is the dep empty,

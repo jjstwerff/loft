@@ -549,7 +549,20 @@ impl Output<'_> {
                     if matches!(returned, Type::Function(_, _, _)) {
                         self.fn_ref_context = true;
                     }
+                    // @PLN85 — a `Block`/`Insert` return value (e.g. a `match` tail
+                    // whose arms declare their own buffers) emits `let …; let …;
+                    // <expr>` statements; `return let …` is invalid Rust and the
+                    // block-local vars are out of scope at the tail (E0425). Wrap
+                    // it as `return { … }` so the block is a value expression with
+                    // its locals correctly scoped.
+                    let block_braces = matches!(val.unspan(), Value::Block(_) | Value::Insert(_));
+                    if block_braces {
+                        write!(w, "{{ ")?;
+                    }
                     self.output_code_inner(w, val)?;
+                    if block_braces {
+                        write!(w, " }}")?;
+                    }
                     self.fn_ref_context = prev_fn_ref_ctx;
                     self.tuple_text_to_string = prev_tuple_text;
                     if outer_owned {
