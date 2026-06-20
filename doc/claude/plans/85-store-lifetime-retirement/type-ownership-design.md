@@ -491,6 +491,32 @@ tempting wrong turns — recorded so the next session does not re-walk them:
   double-handle the NRVO'd common case). A focused interp-lifecycle item, separate
   from the now-shipped parser/codegen correctness.
 
+### 6h-update-3 — Edge B is an interp/native EXECUTION divergence (not a parser fix)
+
+Final, decisive finding after re-running the NRVO materialize end-to-end:
+
+- With the whole-tail NRVO materialize applied, **interp goes FULLY CLEAN** (correct
+  `1 3 5`, no leak) — proof the move-on-return delivery is right.
+- But the **native generator ignores the materialized IR**: enc's native body emits
+  `return <decls + if>` (the raw match) with **no `OpClearVector`/`vector_add`** — and
+  unbraced (`return let mut var__vec_1 …`, E0425). So the parser-level materialize is
+  interp-only-effective; native re-derives the function-body return from the raw
+  structure. That makes the materialize a HARD native regression → reverted.
+- Crucially, the shipped milestone (skip_free, no materialize) is the opposite split:
+  **native is fully clean (no leak)** while **interp leaks** the 3 `kt=65535` vector
+  backing stores — even though both backends run the SAME IR and the SAME `free_named`.
+  So Edge B is not a missing IR transform; it is a genuine **interp-vs-native
+  execution divergence in the vector free path** (native's free of a transferred
+  vector reaches its separate backing store; the interpreter's does not).
+
+So the durable close is one of: **(a)** teach the native generator to consume the
+materialized IR for vector match-returns (then the NRVO interp-clean result lands on
+both), or **(b)** fix the interpreter's vector free to reach the transferred backing
+store the way native already does. Both are dedicated, suite-validated changes —
+NOT a quick edit on top of the clean milestone, which is why this session ships the
+both-backends-correct milestone and leaves Edge B (the interp no-leak gate) as the
+single bounded follow-up.
+
 ---
 
 ## See also
