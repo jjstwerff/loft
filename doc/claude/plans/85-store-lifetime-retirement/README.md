@@ -12,8 +12,8 @@ Plan id: [@PLN85](https://github.com/loft-lang/plans/issues/85) · investigation
 
 | Stage | Status |
 |---|---|
-| A — Probe catalogue (extract from the real recent bugs + a real consumer) | 🟡 just opened — clusters seeded from #405/#406/#409/#410, probes not yet written |
-| B — Mechanism investigation (shared-root vs N-independent) | 🔴 not started |
+| A — Probe catalogue (extract from the real recent bugs + a real consumer) | 🟡 recent-bug evaluation done ([recent-bugs.md](recent-bugs.md)); probes not yet written |
+| B — Mechanism investigation (shared-root vs N-independent) | 🔴 not started — candidate invariant + two fix options already framed by the evaluation |
 | C — Fix design (structural retire **or** named per-mechanism invariants + standing instrument) | ⏸️ pending B |
 | D — Implementation | ⏸️ pending C |
 
@@ -36,19 +36,24 @@ closed on both backends.
 
 ## Central hypothesis (HYPOTHESIZED — Stage B must verify or kill)
 
-The recent bugs may share one root: **a local's runtime value lives in store X while its declared
-dependency/buffer names store Y** — the value-vs-declared-dep desync.
-- #409/#410 — the local borrows a *foreign* (FFI null) store; its `__vdb` buffer stays empty, so
-  in-place `+=` rebuilds the empty buffer and drops the value.
-- #405 — the NRVO hidden-buffer dep slot is *uninitialised* (the dep names a buffer never set up).
-- #406 — a struct-with-enum-fields appended to a vector corrupts the enum discriminant — *may* be
-  a different mechanism (element copy / `copy_claims` for enum-bearing records), or *may* be the
-  same desync seen through the append-copy path.
+Refined by the recent-bug evaluation ([recent-bugs.md](recent-bugs.md)) from "value-vs-dep
+desync" to the broader **slot-initialisation-before-lifetime-op** invariant:
 
-If the desync is the shared root, the structural fix is a single invariant at the
-delivery/assignment chokepoint: **a local's dep buffer must contain the local's current value
-before any in-place mutation.** If #406 proves independent, that splits the class — which is
-itself the Stage B finding. The matrix decides; this prose does not.
+> **Every slot a lifetime operation (free / `copy_claims` / in-place vector rebuild) reads must
+> be initialised — a real store/discriminant or a recognisable sentinel — by EVERY construction
+> path that produces the record.**
+
+All recent bugs fit as *different producers violating this one invariant*: uninitialised dep
+slot (#405), empty dep buffer vs a foreign value (#409/#410), uninitialised enum discriminant
+(#406), dangling cross-iteration slot (@PLN51-II — and **#405 is an uncovered sibling of that
+already-"closed" cluster**). Key structural fact the evaluation verified: **corruption manifests
+concentrated** in `src/database/allocation.rs` (`free_named`, `copy_claims`), while **roots
+scatter** across producer codegen paths — so per-producer fixes (control.rs, expressions.rs) and
+defensive-at-manifestation patches (#405's OOB-refuse) each leave the class open.
+
+**Open for Stage B:** does #406 (enum discriminant in `copy_claims`) belong to this family or a
+distinct record-layout mechanism? And does fix option (A) *manifestation-point sentinel/assert*
+beat (B) *producer chokepoint*? The matrix decides; this prose does not.
 
 ## In-plan vs spinoff policy (default: in-plan)
 
@@ -57,14 +62,14 @@ double-filed (the probes + cluster docs are the record). On closure the rule inv
 residual gets a forward home (PROBLEMS.md / QUALITY.md `## Open work`) citing its cluster doc.
 Full policy: [`_INVESTIGATION_TEMPLATE.md`](../_INVESTIGATION_TEMPLATE.md).
 
-## Cluster catalogue (seeded — to be confirmed/split by probes)
+## Cluster catalogue (seeded — mechanisms verified in [recent-bugs.md](recent-bugs.md); to be confirmed/split by probes)
 
 | ID | Cluster | Severity | Backends | Status of the instance | Doc |
 |---|---|---|---|---|---|
-| I | FFI foreign-store `vector` return delivered to a local; in-place `+=` drops it | high | both | #409 (wrapper) + #410 (direct) FIXED — mechanism cluster open | cluster-I (todo) |
-| II | NRVO loop-local hidden-buffer dep slot uninitialised (conditional assign, unused result, nested loop) | high | both | #405 fixed-pending-merge | cluster-II (todo) |
-| III | enum-discriminant corruption: struct-with-enum-fields appended to a vector | high | both | #406 fixed in #412 — verify shape vs cluster I | cluster-III (todo) |
-| IV | @PLN51 hidden-buffer-aliasing residuals (siblings not re-probed since closure) | tbd | both | re-extract from finished/51 probes | cluster-IV (todo) |
+| I | FFI foreign-store `vector` return delivered to a local; in-place `+=` drops it (local borrows foreign store, dep buffer empty) | high | both | #409 (wrapper) + #410 (direct) FIXED at producer chokepoints — mechanism cluster open | cluster-I (todo) |
+| II | NRVO loop-local hidden-buffer dep slot uninitialised (conditional × **unused** × nested) — **an uncovered sibling of @PLN51 cluster II**; #405's fix is only the manifestation-point OOB-refuse band-aid | high | both | #405 root still open | cluster-II (todo) |
+| III | enum-discriminant corruption: struct-with-enum-fields-from-a-variable appended to a vector; `copy_claims` reads a -1 discriminant | high | both | #406 crash fixed in #412, but **two-enum-field readback still corrupt** — verify same family vs distinct layout mechanism | cluster-III (todo) |
+| IV | @PLN51 hidden-buffer-aliasing residuals (siblings not re-probed since closure) | tbd | both | re-extract from `finished/51` probes | cluster-IV (todo) |
 
 ## Probe suite
 
