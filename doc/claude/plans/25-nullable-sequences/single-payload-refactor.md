@@ -60,12 +60,30 @@ This SUPERSEDES the earlier "full coherence — keyed collections mirror the vec
   `anon_literal_into_hash_field_and_forloop_over_shared_array`).  Gate-OFF all pass (dense); the
   releasable state is preserved.  Scope B un-ignores + fixes all of them.
 
-### Scope A status (landed)
+### Scope A status (landed — `d9772c26`)
 Keyed definition arms + the keyed-only plumbing reverted to `main`'s dense form.  Gate-OFF unchanged
 (2415 pass + the 2 ignored = baseline; the 1 fail is environmental `kernel_port`).  Gate-ON: keyed
 collections are dense — `89-sizeof` and the keyed-clear OOB class are FIXED; the record-sharing tests
 above now fail pending Scope B.  Vector/array nullable work (p379, stack_trace, `set_default_value`
 guard) untouched.
+
+### Scope B status (landed — `1c83fb7c`)
+A keyed HASH sharing records with a nullable vector now works.  Done PARSER-side (one consistent type,
+no DB/find change): `definitions.rs::link_shared_nullable_hash` rewrites a shared hash field's element
+`S` → the sibling's `__nullable<S>` (guarded on `__nullable<` → gate-off-inert, order-independent);
+`structures.rs::record_finish` skips a `Null`/absent record (discriminant ≠ 2) on the sibling keyed
+insert.  B3 (find-level sub-ref) proved UNNECESSARY — the existing `field()` `__nullable<` unwrap
+returns the payload sub-ref.  plan25_e2_hash 7/7 (2 un-ignored + a null-skip regression);
+12/65/69/373/374 pass gate-on BOTH backends; native_scripts gate-on 7→2.  Gate-OFF 2416/2417 (1
+environmental).  Sorted/Index sharing left dense (unexercised; needs index bookkeeping on `Some`).
+
+### Gate-ON flip tail now (5; ALL out-of-scope of the keyed revert)
+`native::native_scripts` (371-forward-ref + 86-interfaces native codegen), `native::imaging_fixture_png_roundtrip`,
+`wrap::loft_suite` (184 stale `@EXPECT_FAIL` div-zero annotation), `exit_codes::moros_glb_cli_end_to_end`
+(NEW to the visible tail but PRE-EXISTING + provably NOT a keyed-revert regression — moros_map has ZERO
+hash/keyed collections; it is a native-shared-store + nullable-vector bug, `field_type` OOB at
+`types.rs:230` inside `loft_shared_n_map_export_glb`, same class as `imaging`).  None block the
+releasable gate-OFF state.
 
 ## The one invariant (CONFIRMED by construction, not assumed)
 
