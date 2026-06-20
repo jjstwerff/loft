@@ -216,6 +216,31 @@ Result:
 consistent aliasing). Probe 05 + the audience_crystal compile-panic are the two
 gates the real fix must clear.
 
+### Attempt 6 follow-up — `compile.rs:306` was a STALE-CDYLIB false alarm; the real blocker is an elusive audience_crystal regression (reverted)
+
+Re-ran with fresh cdylibs (`make rebuild-native-cdylibs`). Findings:
+- **`compile.rs:306` is NOT a compile bug** — it is the "native function not loaded
+  (stale cdylib)" runtime stub. The suite hit it because rebuilding loft changed
+  `libloft.rlib` and the native cdylibs went stale; rebuilding them clears it. So
+  that gate was a false alarm, not something the fix must clear.
+- The materialise **does** fix interpret (probe 05 + simple struct/param repros all
+  pass) **but regresses audience_crystal**: `update_state`'s
+  `parent = assign_cells(snap)` (a `vector<integer>`-returning fn with a struct/
+  Reference param) leaves `parent` with "unknown type" at later `parent[i]` uses,
+  failing tests 02/03 (which passed on baseline). **It does NOT reproduce
+  minimally** — equivalent local-arg, param-arg, and struct-param repros all pass;
+  only the real library trips it. That elusiveness is the verdict: the
+  parser-stage materialise has subtle two-pass type/scope interactions that break
+  real code unpredictably.
+
+**Conclusion:** the parser-stage materialise is the wrong vehicle (works for the
+core repro, fragile on real code). The robust fix is the **codegen Vector
+deep-copy** in `gen_set`'s `owned_ref` path (post-parse, no two-pass fragility),
+plus the **native generator vector-return-ABI** (on native a SINGLE
+`a = enc(k0)` already returns garbage `9` — a deeper, independent generator bug).
+Both are focused, harness-gated efforts. Gates: probe 05 both backends + the full
+suite (audience_crystal 02/03 green, fresh cdylibs).
+
 ### Fix direction (Stage C — the real one)
 
 This is the **H1 / return-ABI / NRVO-alias** family: a var bound to an
