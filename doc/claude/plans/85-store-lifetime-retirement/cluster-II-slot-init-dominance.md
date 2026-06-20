@@ -127,6 +127,38 @@ or the NRVO delivery must assign ownership cleanly), so that exactly one valid
 ~1039-1066 + `parser/control.rs` ref_return), and is a deeper, broad-regression-
 risk change requiring the full validation harness. Reverted attempt 3.
 
+### Real-consumer extraction (cbor) — a MUCH simpler/broader cluster-II trigger
+
+Investigating the cbor library's failing `map` test (loft-libs-core branch `cbor`)
+distilled cluster II to its minimal, common form — probe
+[`05-enum-arg-vector-return-aliasing.loft`](probes/05-enum-arg-vector-return-aliasing.loft):
+
+> **A fn taking an ENUM (payload) arg AND returning a VECTOR, called N times with
+> the results held live, returns all-the-LAST-value** — every held result aliases
+> the same NRVO return buffer.
+
+```loft
+fn enc(c: CV) -> vector<u8> { return match c { CN => [0 as u8], CI { value } => [value as u8] }; }
+k0 = CI{value:1}; k1 = CI{value:3}; k2 = CI{value:5};
+a = enc(k0); b = enc(k1); c = enc(k2);   // a,b,c == 5,5,5 (interp) / garbage (native)
+```
+
+Isolation matrix (all `/tmp`, interp):
+- enum arg + **vector** return, ≥2 held results → **FAIL** (all read last). ← trigger
+- **integer** arg + vector return → pass (the original `mk(1)/mk(3)` control).
+- **vector** arg + vector return → pass.
+- enum arg + **text** return → pass.
+- recursion (self-referential enum) → NOT required (non-recursive `CV` fails too).
+- single held result / one call per loop iteration → pass (only ONE live result).
+
+So this is the SAME root as #405 (NRVO return-buffer aliasing) but a **far simpler
+and more common trigger** — no conditional/unused/nested needed, just
+`a = f(enumval); b = f(enumval)` where `f` returns a vector. It is why cbor maps
+corrupt: `encode(v: CborValue) -> vector<u8>` is called repeatedly in `encode_map`
+while holding `ki`. **Both backends** (interp: aliases last; native: garbage `9`).
+This both broadens cluster II and gives it a clean, assertion-bearing probe that
+the eventual fix must turn green.
+
 ### Fix direction (Stage C — the real one)
 
 This is the **H1 / return-ABI / NRVO-alias** family: a var bound to an

@@ -1,0 +1,39 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN85 cluster II — NRVO return-buffer aliasing, minimal/broad trigger.
+// REAL-CONSUMER EXTRACTION: distilled from the cbor library's encode_map
+// (loft-libs-core, branch cbor), where `encode(v: CborValue) -> vector<u8>` is
+// called repeatedly while holding an earlier result `ki` — every held result
+// aliased the same NRVO return buffer, so a 2-entry map encoded to
+// `[0xa1, 0xF6, 0xF4]` (CNull/CBool garbage) instead of `[0xa1, 0x01, 0x02]`.
+//
+// TRIGGER (pinned by isolation, /tmp probes V1..X3):
+//   a fn taking an ENUM (payload) arg AND returning a VECTOR, called N times
+//   with all results held live -> every result reads the LAST call's value.
+//   NOT triggered by: integer arg, vector arg, text return, or recursion alone.
+//   It is specifically enum-arg + vector-return.
+//
+// STATUS: 🔴 LIVE on main, BOTH backends (interp: all read last value;
+// native: garbage). Same root as #405 (cluster II), far simpler trigger.
+// Do NOT graduate to tests/scripts/ until the cluster-II fix lands.
+
+enum CV { CN, CI { value: integer not null } }
+
+fn enc(c: CV) -> vector<u8> {
+  return match c { CN => [0 as u8], CI { value } => [value as u8] };
+}
+
+fn main() {
+  k0 = CI { value: 1 };
+  k1 = CI { value: 3 };
+  k2 = CI { value: 5 };
+  a = enc(k0);
+  b = enc(k1);
+  c = enc(k2);
+  // EXPECTED 1 3 5 — each result independent.
+  // OBSERVED on main: 5 5 5 (interp) / garbage (native): a aliases the last buffer.
+  assert((a[0] ?? 99) == 1, "a == 1 (got aliased last value)");
+  assert((b[0] ?? 99) == 3, "b == 3");
+  assert((c[0] ?? 99) == 5, "c == 5");
+}
