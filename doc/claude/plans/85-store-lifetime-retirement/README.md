@@ -1,0 +1,97 @@
+<!--
+Copyright (c) 2026 Jurjen Stellingwerff
+SPDX-License-Identifier: LGPL-3.0-or-later
+-->
+
+# 85 — Retire the store-lifetime bug class
+
+Plan id: [@PLN85](https://github.com/loft-lang/plans/issues/85) · investigation-style
+(reading order: Status → Probes → Cluster docs → Roadmap).
+
+## Status
+
+| Stage | Status |
+|---|---|
+| A — Probe catalogue (extract from the real recent bugs + a real consumer) | 🟡 just opened — clusters seeded from #405/#406/#409/#410, probes not yet written |
+| B — Mechanism investigation (shared-root vs N-independent) | 🔴 not started |
+| C — Fix design (structural retire **or** named per-mechanism invariants + standing instrument) | ⏸️ pending B |
+| D — Implementation | ⏸️ pending C |
+
+**What triggered this:** the *known* store-lifetime mechanisms are already hardened and
+shipped — H1 (fn-arity freeze), **H2 (typed `Deps` newtype + value-tagged spaces — see
+[DEPS_INVENTORY.md](../../DEPS_INVENTORY.md))**, H3 (ownership carried, not re-derived), and the
+finished @PLN51 hidden-buffer-aliasing investigation. **Yet the class still produced four
+sev:high bugs this cycle** (#405/#406/#409/#410), in mechanisms the prior work did not cover.
+So the open question is not "apply the known fix" (done) but: *is there a deeper shared root the
+hardening missed, or are these genuinely independent mechanisms?*
+
+## Goal
+
+Ship one of two provable outcomes: **(a)** a structural change that retires the class (a single
+chokepoint/invariant the residual clusters all violate), **or (b)** the verified finding that the
+clusters are independent, with each one's irreducible invariant named + enforced at its own
+chokepoint AND a standing instrument (corpus / sanitizer / fuzz) that keeps the class closed so
+the next cycle stops re-discovering siblings. Either way: a probe suite that proves the class
+closed on both backends.
+
+## Central hypothesis (HYPOTHESIZED — Stage B must verify or kill)
+
+The recent bugs may share one root: **a local's runtime value lives in store X while its declared
+dependency/buffer names store Y** — the value-vs-declared-dep desync.
+- #409/#410 — the local borrows a *foreign* (FFI null) store; its `__vdb` buffer stays empty, so
+  in-place `+=` rebuilds the empty buffer and drops the value.
+- #405 — the NRVO hidden-buffer dep slot is *uninitialised* (the dep names a buffer never set up).
+- #406 — a struct-with-enum-fields appended to a vector corrupts the enum discriminant — *may* be
+  a different mechanism (element copy / `copy_claims` for enum-bearing records), or *may* be the
+  same desync seen through the append-copy path.
+
+If the desync is the shared root, the structural fix is a single invariant at the
+delivery/assignment chokepoint: **a local's dep buffer must contain the local's current value
+before any in-place mutation.** If #406 proves independent, that splits the class — which is
+itself the Stage B finding. The matrix decides; this prose does not.
+
+## In-plan vs spinoff policy (default: in-plan)
+
+Findings during this investigation are fixed in-plan and recorded in the cluster catalogue, not
+double-filed (the probes + cluster docs are the record). On closure the rule inverts: any still-open
+residual gets a forward home (PROBLEMS.md / QUALITY.md `## Open work`) citing its cluster doc.
+Full policy: [`_INVESTIGATION_TEMPLATE.md`](../_INVESTIGATION_TEMPLATE.md).
+
+## Cluster catalogue (seeded — to be confirmed/split by probes)
+
+| ID | Cluster | Severity | Backends | Status of the instance | Doc |
+|---|---|---|---|---|---|
+| I | FFI foreign-store `vector` return delivered to a local; in-place `+=` drops it | high | both | #409 (wrapper) + #410 (direct) FIXED — mechanism cluster open | cluster-I (todo) |
+| II | NRVO loop-local hidden-buffer dep slot uninitialised (conditional assign, unused result, nested loop) | high | both | #405 fixed-pending-merge | cluster-II (todo) |
+| III | enum-discriminant corruption: struct-with-enum-fields appended to a vector | high | both | #406 fixed in #412 — verify shape vs cluster I | cluster-III (todo) |
+| IV | @PLN51 hidden-buffer-aliasing residuals (siblings not re-probed since closure) | tbd | both | re-extract from finished/51 probes | cluster-IV (todo) |
+
+## Probe suite
+
+`probes/` (to be created in Stage A). Per the investigation method: **write probes before reading
+source**, liberally; extract at least one from a REAL consumer (crypto/imaging FFI returns, moros),
+not only the synthetic repros; run every probe on `--interpret` AND `--native` and record the
+matrix. A probe graduates to `tests/scripts/85-*.loft` only when it passes assertions + clean exit +
+no leak (`LOFT_STORES=warn`) + bounded runtime.
+
+| File | Shape | Cluster | Status |
+|---|---|---|---|
+| _(none yet — Stage A)_ | | | |
+
+## Roadmap (next session)
+
+1. **Stage A** — port the four repros (#405/#406/#409/#410) into `probes/` as assertion-bearing
+   `.loft` files; add a real-consumer FFI-return extraction; run both backends; record the matrix.
+2. Pull the @PLN51 probe set forward and re-run for live siblings (cluster IV).
+3. **Stage B** — for each cluster, a `cluster-<id>.md` with a verified-vs-hypothesised table; test
+   the central hypothesis (shared desync root) by checking whether one chokepoint invariant covers
+   I/II and whether III is the same or independent. Instrument (one env-flag trace) rather than
+   theorise when a mechanism resists two reads.
+4. **Stage C/D** — either the chokepoint fix (if shared) or per-mechanism invariants + a standing
+   instrument; graduate probes per cluster as each fix lands.
+
+## Anchors
+
+- Design: [DEPS_INVENTORY.md](../../DEPS_INVENTORY.md) (typed `Deps`, done) · [LIFETIME.md](../../LIFETIME.md) (dep model) · [STABILITY_HOTSPOTS.md](../../STABILITY_HOTSPOTS.md) (H-register) · [STABILITY_METHOD.md](../../STABILITY_METHOD.md)
+- Evidence: loft#405, #406, #409, #410 · finished @PLN51 (`plans/finished/51-hidden-buffer-aliasing/`)
+- Method: `CLAUDE.md` § matrix-first · the `design-protocol` skill (one invariant, or N?)
