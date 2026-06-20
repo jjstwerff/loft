@@ -77,7 +77,20 @@ returns the payload sub-ref.  plan25_e2_hash 7/7 (2 un-ignored + a null-skip reg
 12/65/69/373/374 pass gate-on BOTH backends; native_scripts gate-on 7→2.  Gate-OFF 2416/2417 (1
 environmental).  Sorted/Index sharing left dense (unexercised; needs index bookkeeping on `Some`).
 
-### Gate-ON flip tail now (5; ALL out-of-scope of the keyed revert) — ROOT-CAUSED 2026-06-20
+### ✅ GATE FLIP LANDED (2026-06-20) — nullable-by-default is ON
+The `LOFT_E2_SYNTH` env gate is DROPPED (`e2_rewrite_enabled` = `source != STD_SOURCE`).  Full suite
+**2416/2417** (the lone fail is the pre-existing environmental `kernel_port`, NOT E2); clippy + fmt
+clean; both backends.  The entire flip tail was cleared:
+- **86** FIXED (`9e15cad8`) — bounded-generic method dispatch unwraps a `__nullable<S>` receiver.
+- **371** FIXED (`743727be`) — forward-ref local-vector synth-enum laid out on-demand from the peek.
+- **imaging** FIXED (`3e5d9865`) — native-managed pixel vector declared `not null` (dense).
+- **moros_glb** — was SPURIOUS (program-cache gotcha), passes under the real flip.
+- **184** — div-zero still raises on both backends; the loft_suite `FIXED` line is an informational
+  classification notice (a div-zero fault is recoverable, not a UserPanic/AssertionFailed), NOT a
+  failure.
+Plus Scope A (keyed → dense) + Scope B (shared-nullable record-sharing).  **PLN25 is COMPLETE.**
+
+### Historical: gate-ON flip tail (5; pre-fix) — ROOT-CAUSED 2026-06-20
 None block the releasable gate-OFF state.  Roots:
 - **`native_scripts::371_p375_forward_ref_positions`** — FULLY root-caused (fails BOTH backends, not
   native-only).  A LOCAL `vector<S>` of a FORWARD-referenced struct `S` (declared OR inferred,

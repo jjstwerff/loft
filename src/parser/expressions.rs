@@ -1951,13 +1951,15 @@ use a separate collection or add after the loop"
     /// THE default-on switch lives here (one place): drop the source check / add
     /// an `LOFT_E2_SYNTH` env gate to re-gate.
     pub(crate) fn e2_rewrite_enabled(&self) -> bool {
-        // @PLN25 — the gate flip (drop `LOFT_E2_SYNTH`, leaving only the STD_SOURCE exclusion) is
-        // PROVEN: with the env removed the full suite is 2404/2416 (only ~8 real gate-on failures
-        // + env-flaky tests; the program-cache failures of the env-set run were spurious — see
-        // single-payload-refactor.md § Step 5).  Gate stays env-guarded until that ~8-failure tail
-        // (moros_map cross-lib type-coercion → p379+store_persist; native keyed-collection scripts;
-        // imaging; wasm; stack_trace) is green, so the branch stays releasable (gate-off 2415/2416).
-        self.data.source != crate::data::STD_SOURCE && std::env::var("LOFT_E2_SYNTH").is_ok()
+        // @PLN25 — GATE FLIP LANDED (2026-06-20): nullable-by-default is ON for all user files +
+        // libraries; only the native stdlib (`STD_SOURCE`) stays dense.  No `LOFT_E2_SYNTH` env gate
+        // any more — the full suite is 2416/2417 (the lone fail is the pre-existing environmental
+        // `kernel_port`, unrelated to E2).  The flip tail was cleared: keyed collections reverted to
+        // dense + shared-nullable record-sharing (Scope A/B), 86 (bounded-generic dispatch on a
+        // nullable element), 371 (forward-ref local-vector synth-enum layout), imaging (native-managed
+        // pixel vector marked `not null`); moros_glb was a cache-gotcha artifact.  See
+        // single-payload-refactor.md § "Gate-ON flip tail".
+        self.data.source != crate::data::STD_SOURCE
     }
 
     pub(crate) fn e2_nullable_elem(&mut self, elem: Type) -> Type {
