@@ -938,6 +938,14 @@ impl Stores {
         On inconsistent database definitions.
     */
     pub fn set_default_value(&mut self, tp: u16, rec: &DbRef) {
+        // @PLN25 — a forward-referenced field's content can still be u16::MAX here (its known_type
+        // is not laid out yet — e.g. a `__nullable<S>` element of a forward-ref'd struct, gate-on
+        // 371_p375_forward_ref_positions).  It has no per-type default to write, and zero-on-claim
+        // already zeroed the record (0 = the correct default: a `null` discriminant for a nullable
+        // field, or a zero scalar), so skip rather than OOB-index `self.types[tp]` below.
+        if tp == u16::MAX {
+            return;
+        }
         if tp <= 6 {
             match tp {
                 0 => {
