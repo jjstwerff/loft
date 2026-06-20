@@ -68,17 +68,40 @@ unconditional-free shape at once, retiring the class rather than #405.
 This is the runtime-form of the slot-init-before-lifetime-op invariant from
 [recent-bugs.md](recent-bugs.md) Finding 3, localised to the free path.
 
-## Candidate fix site (Stage C — to confirm by reading the placement code)
+## Localised chokepoint (Stage C — VERIFIED by reading scopes.rs/codegen.rs)
 
-Free placement lives in scope analysis (`src/scopes.rs`); the null-init/sentinel
-ops are emitted in `src/state/codegen.rs` (`gen_set_first_*`, the
-`OpInitRef`/`OpInitRefSentinel`/`OpInitCreateStack` block ~1108-1140). The fix is
-where the two are reconciled: when scope analysis emits a free for a slot at
-scope S, ensure the slot's sentinel-init is emitted at S's entry (dominating the
-free). @PLN51 added `OpInitRefSentinel` for several shapes via
-`OpVarRef→OpFreeRef→OpInitRefSentinel`; the conditional-alloc-in-nested-loop
-shape is the uncovered one — so the fix likely generalises @PLN51's emission
-rather than inventing a new mechanism.
+Two facts pin it:
+
+1. **`__vdb_1`'s slot has no null-init of its own.** `x = null` (x's dep =
+   `[__vdb_1]`) lowers via `codegen.rs::gen_set_first_*` (the
+   `OpInitRef`/`OpInitRefSentinel`/`OpInitCreateStack` block ~1108-1140) to
+   `OpInitCreateStack` — which points *x's* slot at `__vdb_1`'s slot but does
+   NOT write `__vdb_1`'s slot. `__vdb_1`'s only writer is the **conditional**
+   `OpDatabase`; its `OpFreeRef` is unconditional at fn scope.
+2. **`scopes.rs` already owns this exact relation** — the Plan-57 cluster-I pass
+   (`check`, ~298-318): `store_confinement()` decides a `__vdb` is block-confined,
+   then `relocate_null_init()` moves its null-init into that block "so its
+   `first_def` / codegen free live there too." The normal (`#410`) IR shows a
+   `__vdb_1 = null` BEFORE the `OpDatabase`; the #405 IR has **none** — consistent
+   with the null-init being relocated/dropped into the conditional block while the
+   free stayed at fn scope.
+
+**One instrument run disambiguates the fix** (do this first in Stage D — don't
+theorise): add an `eprintln` behind an env flag in `store_confinement` /
+`relocate_null_init` and run probe 04.
+- If `store_confinement` returns `__vdb_1` (confined to the `if` block): the bug
+  is its **loop/dominance guard** — the `if` block sits *inside* the nested
+  loops, which the "non-loop LCA chain" rule (~3979) should already reject; find
+  why it doesn't, and tighten so a `__vdb` whose free is NOT inside the candidate
+  block is never relocated. (Confinement must imply the free is in the block.)
+- If it does NOT fire: the bug is the **codegen gap** — a conditionally-allocated
+  `__vdb` with a fn-scope free needs a dominating `OpInitRefSentinel` at fn entry
+  (generalise @PLN51's `OpVarRef→OpFreeRef→OpInitRefSentinel` emission to this
+  shape).
+
+Either way the enforced invariant is the same (null-init dominates free); the
+instrument picks which of the two homes to fix it in. The #306 co-occurrence
+should fall out of the same fix (the stale slot decoded to a stack-store ref).
 
 ## Stage D (implementation) — validation gates
 
