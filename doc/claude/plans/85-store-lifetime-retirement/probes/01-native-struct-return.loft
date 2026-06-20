@@ -1,0 +1,30 @@
+// @PLN85 probe 01 — DIRECT #native struct (non-vector heap) return.
+//
+// STATUS: read-only baseline RED, but NOT a confirmed #410 sibling — the
+// failure is a *fixture-layout / FFI-gap* contamination, isolated as follows:
+//   - control_loft (pure-loft `ExtBox{v:42}`) reads 42  → loft's struct layout is fine.
+//   - native ext_make_box(42) reads GARBAGE (-412316860415), with set_long AND
+//     set_int, with `null` AND `not null` return → the value the native wrote via
+//     `alloc_record` is not where loft reads a struct field through the bridge-
+//     wrapped reference.
+//
+// ROOT (verified): loft-ffi has NO `alloc_struct` helper. `alloc_record` is a raw
+// word-claim with a vector-oriented `pos=8` convention; it does not lay out a
+// struct record the way loft reads a struct REFERENCE. So a direct `#native`
+// struct/Reference return is currently UNPRODUCIBLE correctly — which is *why*
+// #410's vector-only assignment-side fix sufficed in practice (vectors, via
+// `alloc_vector_from_bytes`, are the only heap return the FFI can produce today).
+//
+// IMPLICATION: the #410 mutation-sibling for non-vector returns is a LATENT
+// hazard, gated on a future `alloc_struct`/struct-return FFI helper. The (b)
+// mutate / (c) append lines below are the test to ACTIVATE once read-only is
+// green via such a helper (or a hand-matched layout).
+use native_pkg;
+fn main() {
+  bl = ExtBox { v: 42 };
+  println("control_loft: v={bl.v} (want 42)");          // 42 — loft layout OK
+  b = ext_make_box(42);
+  println("a_readonly: v={b.v} (want 42)");             // GARBAGE — FFI struct-return layout gap
+  b.v = 99;
+  println("b_mutate: v={b.v} (want 99 — #410 sibling test, blocked on read-only)");
+}

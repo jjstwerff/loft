@@ -77,11 +77,19 @@ Two structural options the evidence already frames, for Stage C:
 Where the same root likely already lives, in confidence order:
 
 1. **Direct `#native` decls returning a Reference/struct or payload-`Enum` (not vector)**
-   — VERIFIED structural gap. The FFI bridge delivers `Reference` + `Enum(_,true,_)` via the
-   same null store (`extensions.rs:329-330`), and #409's return-site fix covers all three, but
-   the #410 assignment-side materialise is **`Type::Vector`-only** (`expressions.rs` `native_vec_elm`
-   gate). So `v = native_returning_struct(); <mutate v>` should hit the same foreign-store-borrow
-   desync #410 fixed for vectors. Untested today — the `native_pkg` fixture only returns vectors.
+   — VERIFIED structural gap (`expressions.rs` `native_vec_elm` materialise is `Type::Vector`-only,
+   while the bridge + #409 cover `Reference`/`Enum` too), **but PROBED to be currently UNREACHABLE**
+   (probe `01-native-struct-return.loft`): a direct `#native` struct return built with the only
+   FFI primitive available (`alloc_record`, a raw word-claim) reads back **garbage** — pure-loft
+   `ExtBox{v:42}` reads 42, the native return reads `-412316860415` with set_long/set_int and
+   null/not-null. ROOT (verified): **loft-ffi has no `alloc_struct` helper**; `alloc_record`'s
+   vector-oriented `pos=8` layout doesn't match how the bridge + loft read a struct *reference*. So
+   structs/References are not producible as a `#native` return today — which is *why* #410's
+   vector-only fix sufficed (vectors are the only FFI-producible heap return). **The #410
+   mutation-sibling is therefore a LATENT hazard, gated on a future `alloc_struct`/struct-return
+   FFI helper** — when that lands, the vector-only materialise will silently not cover it. Two
+   actions fall out: (i) the #410 materialise should generalise beyond `Type::Vector` *before* an
+   `alloc_struct` helper ships; (ii) the struct-return read-back gap is its own FFI finding.
 2. **`copy_claims` for multi-enum-field / ref-bearing / nested structs in ANY collection**
    — VERIFIED live: #406's fix only patched the single-discriminant OOB; its own comment reports
    two-enum-field struct readback is *still corrupt*. The parallel recursive arms
