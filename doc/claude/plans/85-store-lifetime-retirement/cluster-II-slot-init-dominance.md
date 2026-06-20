@@ -74,6 +74,30 @@ Evidence chain: matrix (cond×unused boundary) + `free_ref` instrument (OOB
 `store_nr` at one `code_pos`, per-iter) + bytecode (`ki` `PutRef`-assigned from
 `Call(n_enc)`, the return-buffer alias) + debugger (`ki` renders as `__ref_1`).
 
+### Stage D attempt 2 — witness-guard extension is necessary but NOT sufficient (reverted)
+
+Tried the principled fix: the witness/paired-free block (scan_set ~939) that
+handles `ki`↔`__ref_N` aliasing — incl. the **P378(a) `witness_buffer` handler**
+for an inner-scoped result var adopting an outer buffer — is gated on
+`Type::Reference | Type::Enum`. `ki` is `Type::Vector`, so it was skipped.
+Extending the guard to `Type::Vector` **engaged the path** and the SIGSEGV
+(double-free) became a **store-table-exhaustion panic** instead.
+
+Why it's only half: the `witness_buffer`/`OpFreeRefIfDistinct` logic makes `ki`'s
+per-iteration free **conditional on NOT aliasing** the buffer — and `ki` ALWAYS
+adopts here, so it always skips. But `__ref_N` is fn-scoped (reserved once,
+freed once at fn exit) while it holds a NEW store every iteration → the
+per-iteration stores **leak** → exhaustion. P378(a)'s premise ("the buffer's
+fn-exit free covers it") holds only when the buffer is NOT reused in a loop.
+
+**So the complete fix needs the buffer store freed PER-ITERATION at the witness's
+inner scope**, not just `ki` skipping. I.e. when `witness_buffer` records `v→av`
+with `v` inner-scoped and `av` outer + reused in a loop, `av`'s free (or the
+adopted store's free) must be placed at `v`'s scope, freeing each iteration's
+store with a VALID ref — combined with the Vector-guard extension. Reverted the
+guard-only change (a leak-crash is not a fix). This is a deeper free-PLACEMENT
+change in the witness/reclaim path; matrix A–F + leak gate must gate it.
+
 ### Fix direction (Stage C — the real one)
 
 This is the **H1 / return-ABI / NRVO-alias** family: a var bound to an
