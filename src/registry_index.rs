@@ -865,10 +865,20 @@ pub struct SearchResult {
     pub tier: u8,
 }
 
-/// A function matches when the (lowercased) query is a substring of its
-/// signature or its one-line doc.
+/// Google-like match: EVERY whitespace-separated term of the (already lowercased)
+/// query `q` must appear somewhere in the item's signature or its full doc
+/// paragraph.  So `hash hex` narrows to items mentioning both; an all-whitespace
+/// query matches nothing.
 fn item_matches(item: &ApiItem, q: &str) -> bool {
-    item.sig.to_ascii_lowercase().contains(q) || item.doc.to_ascii_lowercase().contains(q)
+    let hay = format!("{}\n{}", item.sig, item.doc).to_ascii_lowercase();
+    let mut saw_term = false;
+    for term in q.split_whitespace() {
+        saw_term = true;
+        if !hay.contains(term) {
+            return false;
+        }
+    }
+    saw_term
 }
 
 /// Function-aware search (S6–S9): rank packages by metadata AND surface the
@@ -1396,5 +1406,25 @@ mod tests {
             "url":"u","sha256":"s","size":1,"loft":">=0.8","published":"p"}}}}}"#;
         let idx2 = parse_index(no_api).expect("parse without api");
         assert!(idx2.packages["crypto"].versions["0.1.0"].api.is_empty());
+    }
+
+    #[test]
+    fn search_matches_all_query_terms_google_like() {
+        use std::collections::BTreeMap;
+        let stdlib = vec![ApiItem {
+            sig: "pub fn sha256(data: text) -> text".to_string(),
+            doc: "SHA-256 hash of a string.\nReturns a 64-char hex string.".to_string(),
+        }];
+        let index = RegistryIndex {
+            schema_version: 1,
+            updated: String::new(),
+            packages: BTreeMap::new(),
+        };
+        // Both terms present (one per doc line) → hit.
+        assert_eq!(search_results(&index, &stdlib, "hash hex").len(), 1);
+        // One term in the SIG, one in the doc → hit (the haystack is sig + doc).
+        assert_eq!(search_results(&index, &stdlib, "sha256 returns").len(), 1);
+        // Any term absent → no hit (AND-semantics, not OR).
+        assert!(search_results(&index, &stdlib, "hash xml").is_empty());
     }
 }

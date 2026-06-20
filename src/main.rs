@@ -571,8 +571,10 @@ fn search_registry(query: &str, json: bool) {
         // The matching functions: what it does (doc) + how to call it (sig).
         for item in &r.fns {
             println!("    {}", item.sig);
-            if !item.doc.is_empty() {
-                println!("        {}", item.doc);
+            // Display only the first line of the (now full) doc paragraph; the
+            // whole paragraph stays searchable and travels in `--json`.
+            if let Some(summary) = item.doc.lines().next().filter(|l| !l.is_empty()) {
+                println!("        {summary}");
             }
         }
         // How to get it.

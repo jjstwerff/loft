@@ -1181,27 +1181,36 @@ fn parse_pkg_api(content: &str) -> Vec<PkgApiSection> {
 
 /// Flatten [`parse_pkg_api`] over a source file's `content` into the registry's
 /// function-level surface: one [`ApiItem`](crate::registry_index::ApiItem) per
-/// `pub` item — its signature plus a ONE-LINE doc summary (the first non-empty
-/// doc-comment line; the full multi-line doc stays in `loft api`).  This is the
-/// single extractor both feeds run: publish-time over a library's source (→ the
-/// index `api` field) and search-time over the binary's embedded `default/*.loft`
-/// (→ the stdlib surface) — so stdlib and library hits are identical in shape.
+/// `pub` FUNCTION or TYPE (`fn` / `struct` / `enum` / `typedef` / `interface`) —
+/// its signature plus its FULL documentation paragraph (every comment line above
+/// the item, newline-joined), the keyword corpus search matches against.  This is
+/// the single extractor both feeds run: publish-time over a library's source (→
+/// the index `api` field) and search-time over the binary's embedded
+/// `default/*.loft` (→ the stdlib surface) — so stdlib and library hits are
+/// identical in shape.
 ///
-/// Registry-gated: its only callers (`loft search`, `loft publish`) are, and the
-/// `ApiItem` it returns lives in the registry-gated `registry_index`.
+/// `pub const` and other value bindings are excluded: the question search answers
+/// is "what can I CALL or USE", and a constant's inline-comment tail makes a noisy
+/// signature.  Registry-gated: its only callers (`loft search`, `loft publish`)
+/// are, and the `ApiItem` it returns lives in the registry-gated `registry_index`.
 #[cfg(feature = "registry")]
 #[must_use]
 pub fn extract_api_items(content: &str) -> Vec<crate::registry_index::ApiItem> {
     parse_pkg_api(content)
         .into_iter()
         .flat_map(|s| s.items)
-        .filter(|(sig, _)| !sig.is_empty())
+        .filter(|(sig, _)| {
+            sig.starts_with("pub fn ")
+                || sig.starts_with("pub struct ")
+                || sig.starts_with("pub enum ")
+                || sig.starts_with("pub typedef ")
+                || sig.starts_with("pub interface ")
+        })
         .map(|(sig, doc_lines)| {
-            let doc = doc_lines
-                .iter()
-                .find(|l| !l.is_empty())
-                .cloned()
-                .unwrap_or_default();
+            // The FULL paragraph (every `//` line above the item, newline-joined)
+            // is the keyword corpus; the search result displays only its first
+            // line as a summary.
+            let doc = doc_lines.join("\n").trim().to_string();
             crate::registry_index::ApiItem { sig, doc }
         })
         .collect()
@@ -1235,16 +1244,15 @@ pub fn pkg_api_items(pkg_dir: &std::path::Path) -> Vec<crate::registry_index::Ap
 
 /// Strip function body from a pub declaration, keeping just the signature.
 fn strip_pub_body(line: &str) -> String {
-    // For structs/enums, keep the full first line
-    if line.starts_with("pub struct") || line.starts_with("pub enum") {
-        return line.to_string();
-    }
-    // For functions, strip body after `{`
-    if let Some(pos) = line.find('{') {
-        line[..pos].trim().to_string()
-    } else {
-        line.trim_end_matches(';').to_string()
-    }
+    // The signature is the declaration HEAD: everything up to the body `{` (a fn
+    // body or a struct/enum field block), with any trailing ` // …` line comment
+    // and `;` removed — so `pub struct Rect {` → `pub struct Rect`,
+    // `pub fn f() -> t;  // note` → `pub fn f() -> t`.  Only a space-prefixed
+    // ` //` is treated as a comment, so a `//` inside a string (e.g. a URL
+    // default) is left intact.
+    let head = line.split('{').next().unwrap_or(line);
+    let head = head.split(" //").next().unwrap_or(head);
+    head.trim().trim_end_matches(';').trim().to_string()
 }
 
 /// Render an API section page as HTML body content.
@@ -1523,7 +1531,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn extract_api_items_pulls_pub_sig_and_first_doc_line() {
+    fn extract_api_items_pulls_pub_sig_and_full_doc() {
         // The `//` lines directly above a `pub fn` are its doc; the signature is
         // the declaration with the body stripped; non-`pub` items are excluded.
         let src = "\
@@ -1536,6 +1544,37 @@ fn private_helper() {}
         let items = extract_api_items(src);
         assert_eq!(items.len(), 1, "only the pub fn is surfaced");
         assert_eq!(items[0].sig, "pub fn hello(name: text) -> text");
-        assert_eq!(items[0].doc, "A greeting helper.");
+        // S10: the FULL paragraph (both lines), not just the first — the corpus a
+        // keyword search matches against.
+        assert_eq!(items[0].doc, "A greeting helper.\nDetail on a second line.");
+    }
+
+    #[test]
+    fn extract_api_items_gathers_types_and_excludes_consts() {
+        let src = "\
+// An axis-aligned box.
+pub struct Rect { x: integer, y: integer }
+
+// Mathematical tau.
+pub const TAU = 6.28;
+
+// A drawable shape.
+pub enum Shape { Circle, Square }
+";
+        let sigs: Vec<String> = extract_api_items(src).into_iter().map(|i| i.sig).collect();
+        // Types are surfaced with the `{ … }` body stripped to a clean head.
+        assert!(
+            sigs.contains(&"pub struct Rect".to_string()),
+            "struct gathered"
+        );
+        assert!(
+            sigs.contains(&"pub enum Shape".to_string()),
+            "enum gathered"
+        );
+        // A `pub const` value is NOT part of the callable/usable surface.
+        assert!(
+            !sigs.iter().any(|s| s.contains("const")),
+            "const excluded, got {sigs:?}"
+        );
     }
 }

@@ -1216,7 +1216,7 @@ future releases self-populate, and a one-time backfill converts everything alrea
 **The invariant is unchanged** — `api` is a pure, CI-verified function of a version's
 published source, never hand-written, never drifting.
 
-#### S10 — gather functions AND types; match the FULL doc (Google-like)
+#### S10 — gather functions AND types; match the FULL doc (Google-like) — SHIPPED 2026-06-20
 
 Each `api` item today is `{ sig, doc }` with `doc` = the *first* documentation line (a title),
 so search is title-only: "anything about collision?" misses `rects_overlap` unless "collision"
@@ -1295,11 +1295,11 @@ The backfill is the SAME derivation as the forward gate, applied to existing row
 by construction (one extractor, `loft api --json`).  After it merges, registry function-search
 lights up for every shipped library; until then only the stdlib surface returns function hits.
 
-**Sequencing & effort:** S10 widen-doc + types (S — the items are already extracted; keep all
-doc lines, filter to fn/struct/enum, switch matching to AND-of-terms) → S11 port the gate +
-require the field (S, registry repo) → S12 the backfill script + one PR (S, registry repo).
-S10 is a loft-repo slice (extends the `searching` branch); S11 + S12 are registry-repo PRs that
-depend on a loft release carrying `loft api --json`.
+**Sequencing & effort:** S10 widen-doc + types **(SHIPPED on `searching`: full doc paragraph
+as the keyword corpus, AND-of-terms matching, fn/struct/enum/typedef/interface, consts dropped,
+clean type sigs)** → S11 port the gate + require the field (S, registry repo) → S12 the backfill
+script + one PR (S, registry repo).  S11 + S12 are registry-repo PRs that depend on a loft
+release carrying `loft api --json`.
 
 ---
 
