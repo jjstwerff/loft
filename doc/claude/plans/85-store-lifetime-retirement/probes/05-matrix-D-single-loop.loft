@@ -1,0 +1,2 @@
+fn enc(n: integer) -> vector<u8> { b: vector<u8> = []; b += [n as u8]; return b; }
+fn main() { for i in 0..4 { ki = enc(i); if i == 2 { x = ki; } } println("D ok"); }
