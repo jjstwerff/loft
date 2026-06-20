@@ -4183,14 +4183,24 @@ impl Parser {
                 }
             }
             Type::Enum(_, false, _) => self.cl("OpSetEnum", &[ref_code, pos_val, val_code]),
-            Type::Enum(nr, true, _) => self.cl(
-                "OpCopyRecord",
-                &[
-                    val_code,
-                    ref_code,
-                    Value::Int(i32::from(self.data.def(nr).known_type())),
-                ],
-            ),
+            Type::Enum(nr, true, _) => {
+                // A struct-enum field holds an inline record; copy the source enum
+                // into the field AT ITS OFFSET via a field sub-ref — exactly like
+                // the Type::Reference arm above.  Copying into `ref_code` (the
+                // struct base) instead landed a non-first struct-enum field at
+                // offset 0, clobbering field 0 and reading a garbage discriminant
+                // (#406: `Entry { key: a, value: b }` from enum variables).
+                let type_nr = if self.first_pass {
+                    // known_type() is u16::MAX until the enum registers in pass 2;
+                    // emit the placeholder now (codegen re-runs in pass 2), matching
+                    // the Type::Reference arm.
+                    Value::Int(i32::from(u16::MAX))
+                } else {
+                    Value::Int(i32::from(self.data.def(nr).known_type()))
+                };
+                let field_ref = self.cl("OpGetField", &[ref_code, pos_val, type_nr.clone()]);
+                self.cl("OpCopyRecord", &[val_code, field_ref, type_nr])
+            }
             // @PLN17: store the boolean's u8 form (0/1/255) directly, like enum —
             // the old `if val {1} else {0}` forced 0/1 and dropped the null sentinel.
             Type::Boolean => self.cl("OpSetBoolean", &[ref_code, pos_val, val_code]),
