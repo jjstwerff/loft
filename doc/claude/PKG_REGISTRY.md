@@ -1207,6 +1207,100 @@ installing**, **authoritative** because CI-derived, and **unified with the stdli
 "what can do X, and how do I call it?" is answered in one place, with the signature to use
 it and the command to get it.
 
+### Phase 2 — richer data + live deployment (S10–S12)
+
+Phase 1 (S0–S9, shipped) built the mechanism; the gathered data is still thin (one-line
+summaries) and lives only in the binary's stdlib — the **live registry index has 0 of 20
+packages carrying `api`**.  Phase 2 widens the data and gets it into the live index two ways:
+future releases self-populate, and a one-time backfill converts everything already published.
+**The invariant is unchanged** — `api` is a pure, CI-verified function of a version's
+published source, never hand-written, never drifting.
+
+#### S10 — gather functions AND types; match the FULL doc (Google-like)
+
+Each `api` item today is `{ sig, doc }` with `doc` = the *first* documentation line (a title),
+so search is title-only: "anything about collision?" misses `rects_overlap` unless "collision"
+is in its title.  Widen the gathered data to the whole paragraph so search matches ANY keyword
+in the docs.  Per public item:
+
+- **`sig`** — the declaration with the body stripped: `pub fn sha256(data: text) -> text`,
+  `pub struct Rect`, `pub enum Shape`.  **Functions AND types** (`pub fn` / `pub struct` /
+  `pub enum`) — searching `rect` finds both `struct Rect` and `fn rect_circle_overlap`.
+  (`pub const` / values stay out: the question is "what can I CALL or USE", and their
+  inline-comment tails make noisy signatures.  The extractor filters `pub ` items to
+  fn/struct/enum and strips any trailing `// …` from the sig.)
+- **`doc`** — the FULL contiguous documentation paragraph above the item (every `//` line,
+  joined), not just the first.  This is the keyword corpus search matches.
+
+**Distinguishing the doc from other comments** — the rule (already implemented in
+`parse_pkg_api`, made load-bearing here): the doc is the CONTIGUOUS `//` block IMMEDIATELY
+above the `pub` item; a blank line or a code line between a comment and the item severs it
+(that comment is not the doc); `// --- Section ---` decorative headers are section markers
+(they group items + reset the accumulator), never docs; a `#rust "…"` annotation line does not
+sever the doc.  This is "good enough" because the rule is mechanical and the conventions are
+ALREADY followed everywhere (verified: crypto's `// SHA-256 hash …` paragraphs above each fn,
+shapes' `// Axis-aligned bounding box …` above `pub struct Rect`, the `// --- Public API ---`
+markers).  A library wanting better search writes a fuller paragraph; one that writes nothing
+is still found by name + signature.
+
+Data-model change: `ApiItem.doc` holds the full paragraph (the matching corpus); the search
+RESULT still prints the one-line summary (the first sentence) for a clean display; `--json` and
+the index carry the full `doc`.  Matching becomes Google-like: lowercase the query, split into
+terms, and require EVERY term to appear somewhere in `sig`+`doc` (AND-semantics, the search
+default) — so "hash hex" narrows rather than widens.  Cost: the index grows from titles to
+paragraphs — still small (a paragraph per item; the whole index is ~22 KB today), and keyword
+search is the whole point.
+
+#### S11 — forward: every release self-populates the index
+
+Today a library release is MANUAL (verified): the author tags `<pkg>-v<ver>`, runs
+`loft publish` locally, and pastes the entry into a `loft-lang/registry` PR; the registry
+`validate.py` is VALIDATE-ONLY (it never writes `index.json`).  `loft publish` already EMITS
+`api`, so the field is auto-GENERATED — the author never writes it.  The gap is ENFORCEMENT: an
+author who uses `loft package` (the basic entry, no `api`) or hand-edits the row would ship a
+wrong or absent field.
+
+Make `validate.py` the authority.  Its `gate_reproducible_build` already clones the tagged
+source and runs `loft`; extend it (the S7-CI gate, already in this repo's
+`registry_ci_template/validate.py`) so that for every NEW version entry it (1) re-derives `api`
+from the cloned tagged source via `loft api --json`, and (2) REQUIRES the entry's `api` to equal
+it — rejecting a missing, stale, or hand-edited field.  Then every future release carries the
+correct `api` automatically: the author gets it free from `loft publish`, and the gate makes it
+non-optional and proven-against-source.  No registry write-access or bot is needed — the author
+pastes what `loft publish` produced, the gate proves it equals the source.
+
+Deployment (registry repo, one PR): port the template gate into
+`~/workspace/registry/tools/validate.py`; add `api` to `gate_schema`'s required set for new
+entries; keep the `registry` feature in the CI's `cargo build --release --bin loft` so
+`loft api --json` exists.  The loft side (`loft publish` emitting, `loft api --json`) is already
+shipped.  *(Optional convenience: a `--fix` mode that writes the corrected entry, so a wrong
+submission is handed the fix rather than only rejected — not required for correctness.)*
+
+#### S12 — backfill: one-time conversion of every existing lib
+
+S11 only fills FUTURE releases; the ~20 already-published packages (0 with `api`) need a
+one-time conversion.  A script (registry-repo `scripts/backfill-api.py`):
+
+1. For each package's LATEST version in `index.json` (search shows the latest; all-versions is
+   an optional superset), read its tag `<pkg>-v<latest>`.
+2. Clone the package's monorepo at that tag into a tempdir — or, since the six `loft-libs-*`
+   monorepos are checked out locally and freshly released, use the local subdir when its `main`
+   equals the tag (the fast path; fall back to the tag clone when they differ).
+3. `loft api --json <subdir>` → the `api` array.
+4. Write it into that version entry.
+5. Open ONE registry PR with all backfilled entries; the S11 gate verifies each — and PASSES,
+   because they were re-derived from the very source the gate re-clones.
+
+The backfill is the SAME derivation as the forward gate, applied to existing rows — consistent
+by construction (one extractor, `loft api --json`).  After it merges, registry function-search
+lights up for every shipped library; until then only the stdlib surface returns function hits.
+
+**Sequencing & effort:** S10 widen-doc + types (S — the items are already extracted; keep all
+doc lines, filter to fn/struct/enum, switch matching to AND-of-terms) → S11 port the gate +
+require the field (S, registry repo) → S12 the backfill script + one PR (S, registry repo).
+S10 is a loft-repo slice (extends the `searching` branch); S11 + S12 are registry-repo PRs that
+depend on a loft release carrying `loft api --json`.
+
 ---
 
 ## See also
