@@ -77,13 +77,36 @@ returns the payload sub-ref.  plan25_e2_hash 7/7 (2 un-ignored + a null-skip reg
 12/65/69/373/374 pass gate-on BOTH backends; native_scripts gate-on 7→2.  Gate-OFF 2416/2417 (1
 environmental).  Sorted/Index sharing left dense (unexercised; needs index bookkeeping on `Some`).
 
-### Gate-ON flip tail now (5; ALL out-of-scope of the keyed revert)
-`native::native_scripts` (371-forward-ref + 86-interfaces native codegen), `native::imaging_fixture_png_roundtrip`,
-`wrap::loft_suite` (184 stale `@EXPECT_FAIL` div-zero annotation), `exit_codes::moros_glb_cli_end_to_end`
-(NEW to the visible tail but PRE-EXISTING + provably NOT a keyed-revert regression — moros_map has ZERO
-hash/keyed collections; it is a native-shared-store + nullable-vector bug, `field_type` OOB at
-`types.rs:230` inside `loft_shared_n_map_export_glb`, same class as `imaging`).  None block the
-releasable gate-OFF state.
+### Gate-ON flip tail now (5; ALL out-of-scope of the keyed revert) — ROOT-CAUSED 2026-06-20
+None block the releasable gate-OFF state.  Roots:
+- **`native_scripts::371_p375_forward_ref_positions`** — FULLY root-caused (fails BOTH backends, not
+  native-only).  A LOCAL `vector<S>` of a FORWARD-referenced struct `S` (declared OR inferred,
+  `pull(){ v=[Cell{n:8}]; v[0].n }` with `struct Cell` defined AFTER) reads 0.  Mechanism: `S` has NO
+  pass-1 def (`def_nr=MAX`), so the inferred-literal peek (vectors.rs:1696) + the synth
+  `__nullable<S>` enum are created DURING pass-2 body parse; the vector STRIDE is baked then from
+  `database.size(synth)` = **0** (the synth enum — and `S` itself — are not laid out until `fill_all`
+  AFTER body parse).  Non-forward works because `S` is known in pass 1 → synth enum laid out before
+  pass-2 reads its size.  IR proof: forward `OpGetVector(v,0,0)` (stride 0) + the MAX-offset payload
+  sentinel; non-forward `OpGetVector(v,16,0)` + `GetField(elem,0,64)`/`GetField(payload,8,65)`.  FIX
+  (delicate, two-pass): create a forward-ref STUB for `S` in pass 1 from the peek so the synth enum
+  exists + lays out before pass-2 body parse — OR a deferred/re-baked stride.  Parser-stability
+  sensitive (H5 + forward-ref adoption); next-session work.
+- **`native_scripts::86_interfaces`** — native-only (passes interp + native gate-OFF).  Gate-ON the
+  native codegen emits `todo!("native function t_1T_to_label")` — an interface method dispatched on a
+  GENERIC type-var `T` (`t_1T_*`) instead of the concrete `IfItem`.  Interface/generic + nullable
+  native-codegen interaction.
+- **`native::imaging_fixture_png_roundtrip`** — native SIGSEGV gate-on (nullable-vector native codegen).
+- **`exit_codes::moros_glb_cli_end_to_end`** — `field_type` OOB at `types.rs:230` inside the native
+  shared-store fn `loft_shared_n_map_export_glb`; PRE-EXISTING + NOT a keyed regression (moros_map has
+  ZERO keyed collections).  Same native-shared-store + nullable-vector class as `imaging`.
+- **`wrap::loft_suite`** — 184 stale `@EXPECT_FAIL` div-zero annotation; resolves AT the flip
+  (update the annotation when gate-on becomes default — can't pre-fix without breaking gate-off).
+
+**Assessment: the flip is MULTI-SESSION.**  The keyed-collection work (the bulk of @PLN25's recent
+risk) is DONE + releasable.  The remaining tail is 3 deep native-codegen/nullable-vector bugs (371
+two-pass layout, 86 interface-generic, imaging/moros_glb native-shared-store) + 1 flip-time
+annotation — each a focused investigation.  imaging + moros_glb likely share the native-nullable
+root.
 
 ## The one invariant (CONFIRMED by construction, not assumed)
 
