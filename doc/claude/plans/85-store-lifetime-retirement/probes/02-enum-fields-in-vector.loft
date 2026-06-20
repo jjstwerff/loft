@@ -1,0 +1,26 @@
+// @PLN85 probe 02 — sibling #2: struct with enum field(s), variable-sourced,
+// appended to a vector (copy_claims path). #406's crash was fixed in #412, but
+// its own thread reports two-enum-field READBACK is still corrupt. Reachable in
+// pure loft (no FFI gap). Control = direct (non-vector) read.
+enum CV { CInt { value: integer not null } }
+struct E1 { key: CV }
+struct E2 { key: CV, value: CV }
+fn mk(x: integer) -> CV { return CInt { value: x }; }
+fn pay(c: CV) -> integer { match c { CInt { value } => { return value; } } return -1; }
+fn main() {
+  // --- single enum field (the #406 crash repro — should be FIXED on #412) ---
+  a = mk(1);
+  e1 = E1 { key: a };
+  println("1direct: key={pay(e1.key)} (want 1)");
+  v1: vector<E1> = [];
+  v1 += [e1];
+  println("1vector: len={len(v1)} key={pay(v1[0].key)} (want len=1 key=1)");
+
+  // --- TWO enum fields (the still-corrupt case) ---
+  b1 = mk(5); b2 = mk(7);
+  e2 = E2 { key: b1, value: b2 };
+  println("2direct: key={pay(e2.key)} value={pay(e2.value)} (want 5 7)");
+  v2: vector<E2> = [];
+  v2 += [e2];
+  println("2vector: len={len(v2)} key={pay(v2[0].key)} value={pay(v2[0].value)} (want len=1 5 7)");
+}

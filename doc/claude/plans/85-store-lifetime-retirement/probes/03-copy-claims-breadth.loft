@@ -1,0 +1,28 @@
+// @PLN85 probe 03 — copy_claims breadth: field kinds OTHER than the #406 enum,
+// variable-sourced, struct appended to a vector. Tests whether #412 closed only
+// the Enum arm or the whole deep-copy family (vector field, sub-struct field,
+// nested collection). Control = direct (non-vector) read for each.
+struct HasVec { id: integer not null, data: vector<integer> }
+struct Inner { a: integer not null }
+struct HasStruct { id: integer not null, inner: Inner }
+fn main() {
+  // (1) struct with a VECTOR field, appended to a vector
+  hv = HasVec { id: 9, data: [10, 20, 30] };
+  println("1direct: id={hv.id} len={len(hv.data)} d0={hv.data[0]} (want 9 3 10)");
+  vv: vector<HasVec> = [];
+  vv += [hv];
+  println("1vector: id={vv[0].id} len={len(vv[0].data)} d0={vv[0].data[0]} d2={vv[0].data[2]} (want 9 3 10 30)");
+
+  // (2) struct with a SUB-STRUCT field, appended to a vector
+  hs = HasStruct { id: 4, inner: Inner { a: 77 } };
+  println("2direct: id={hs.id} a={hs.inner.a} (want 4 77)");
+  vs: vector<HasStruct> = [];
+  vs += [hs];
+  println("2vector: id={vs[0].id} a={vs[0].inner.a} (want 4 77)");
+
+  // (3) nested collection: vector<vector<integer>> element appended
+  row: vector<integer> = [1, 2, 3];
+  grid: vector<vector<integer>> = [];
+  grid += [row];
+  println("3nested: rows={len(grid)} cols={len(grid[0])} g00={grid[0][0]} g02={grid[0][2]} (want 1 3 1 3)");
+}

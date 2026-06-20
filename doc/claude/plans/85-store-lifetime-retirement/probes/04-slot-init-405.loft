@@ -1,0 +1,24 @@
+// @PLN85 probe 04 — sibling #3, the #405 family: heap local assigned
+// conditionally inside a nested loop, result unused. #405's "fix" (25ce899) was
+// the defensive OOB-refuse (no panic); this tests whether the ROOT (uninit dep
+// slot / cross-iteration dangling) is still live on current main — corruption,
+// store exhaustion, or a leak even without a panic.
+fn enc(n: integer) -> vector<u8> { b: vector<u8> = []; b += [n as u8]; return b; }
+fn main() {
+  // #405 exact repro: conditional × unused × nested
+  for t in 0..2 {
+    for i in 0..2 {
+      ki = enc(i);
+      if i == t { x = ki; }
+    }
+  }
+  // stress: larger loops surface store-table exhaustion if the root leaks stores
+  total = 0;
+  for t in 0..50 {
+    for i in 0..50 {
+      ki = enc(i);
+      if i == t { x = ki; total += len(x); }
+    }
+  }
+  println("405: completed total={total} (want 50)");
+}
