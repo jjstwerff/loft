@@ -1,0 +1,116 @@
+# Rung 0 — minimal single call: a = enc(k0)
+# enum CV { CN, CI { value: integer not null } }
+# fn enc(c: CV) -> vector<u8> { match c { CN => [0 as u8], CI { value } => [value as u8] } }
+# Both backends: BROKEN form -> aliasing/garbage; WORKING form -> correct (a=[1]).
+
+===================== BROKEN: a = enc(k0)  (PutRef adopt) =====================
+   0[0]: return-address  @abs=7174
+   0[8]: ReserveFrame(size=72)
+   3[80]: InitRef(var[8]) var=__ref_1[8]:vector<integer(0, 255)>
+   6[80]: Database(var[8], db_tp=68)
+  11[80]: VarRef(var[8]) -> ref(reference)
+  14[96]: ConstInt(val=0) -> integer
+  23[104]: SetInt4(v1: ref(reference), fld=4, val: integer)
+  26[80]: ReserveFrame(size=16)
+  29[96]: InitCreateStack(var[80], dep_pos=88)
+  34[96]: ConstInt(val=12) -> integer
+  43[104]: SetByte(v1: ref(reference), fld=4, min=0, val: integer)
+  48[80]: InitText(var[24]) var=__work_1[24]:text
+  51[80]: [3] InitRef(var[48]) var=k0[48]:ref(CI)
+  54[80]: Database(var[48], db_tp=67) type=CI 67
+  59[80]: VarRef(var[48]) -> ref(reference) type=CI 67 var=k0[48]:ref(CI)
+  62[96]: ConstInt(val=1) -> integer
+  71[104]: SetInt(v1: ref(reference), fld=8, val: integer)
+  74[80]: VarRef(var[48]) -> ref(reference) type=CI 67 var=k0[48]:ref(CI)
+  77[96]: ConstEnum(val=2) -> i_parse_errors
+  79[104]: SetEnum(v1: ref(reference), fld=0, val: i_parse_errors)
+  82[80]: VarRef(var[48]) -> ref(reference) type=CI 67 var=k0[48]:ref(CI)
+  85[96]: VarVector(var[8]) -> vector type=vector<short<0,true>> 70 var=__ref_1[8]:vector<integer(0, 255)>
+  88[112]: Call(d_nr=602, args_size=32, fn=n_enc)
+ 107[96]: PutRef(var[60], value: ref(reference))
+ 110[80]: ClearText(var[24]) var=__work_1[24]:text
+ 113[80]: ConstText(_value="") -> text
+ 115[96]: VarVector(var[60]) -> vector type=vector<short<0,true>> 70 var=a[60]:vector<integer(0, 255)>["__ref_1"]
+ 118[112]: ConstInt(val=0) -> integer
+ 127[120]: GetVectorNullable(r: vector, size=1, index: integer) -> ref(reference) type=integer 0
+ 130[112]: GetByte(v1: ref(reference), fld=0, min=0) -> integer
+ 135[104]: PutInt(var[72], value: integer)
+ 138[96]: VarInt(var[72]) -> integer var=__ncc_1[72]:integer(0, 255)
+ 141[104]: ConvBoolFromInt(v1: integer) -> boolean
+ 142[104]: GotoFalseWord(jump=:POS151, if_false: boolean)
+ 145[96]: VarInt(var[72]) -> integer var=__ncc_1[72]:integer(0, 255)
+ 148[104]: GotoWord(jump=:POS160)
+ 151[96]: ConstInt(val=9) -> integer
+ 160[104]: ConstInt(val=0) -> integer
+ 169[112]: FormatInt(var[24], val: integer, radix=10, width: integer, token=32, plus=false, note=false, dir=2)
+ 177[96]: VarText(var[24]) -> text var=__work_1[24]:text
+ 180[112]: FreeStack(value=16, discard=32)
+ 184[96]: Call(d_nr=343, args_size=16, fn=n_println)
+ 203[80]: VarRef(var[48]) -> ref(reference) type=CI 67 var=k0[48]:ref(CI)
+ 206[96]: FreeRef(v1: ref(reference)) ; [store-free]
+ 207[80]: FreeText(var[24])
+ 210[80]: VarVector(var[8]) -> vector type=vector<short<0,true>> 70 var=__ref_1[8]:vector<integer(0, 255)>
+ 213[96]: FreeRef(v1: ref(reference)) ; [store-free]
+ 214[80]: Return(ret=0, value=0, discard=80)
+
+===================== WORKING: a: vec=[]; a += enc(k0)  (own + AppendVector copy) =====================
+   0[0]: return-address  @abs=7174
+   0[8]: ReserveFrame(size=88)
+   3[96]: InitRefSentinel(var[60])
+   6[96]: InitRef(var[8]) var=__ref_1[8]:vector<integer(0, 255)>
+   9[96]: Database(var[8], db_tp=68)
+  14[96]: VarRef(var[8]) -> ref(reference)
+  17[112]: ConstInt(val=0) -> integer
+  26[120]: SetInt4(v1: ref(reference), fld=4, val: integer)
+  29[96]: ReserveFrame(size=16)
+  32[112]: InitCreateStack(var[96], dep_pos=104)
+  37[112]: ConstInt(val=12) -> integer
+  46[120]: SetByte(v1: ref(reference), fld=4, min=0, val: integer)
+  51[96]: InitText(var[24]) var=__work_1[24]:text
+  54[96]: [3] InitRef(var[48]) var=k0[48]:ref(CI)
+  57[96]: Database(var[48], db_tp=67) type=CI 67
+  62[96]: VarRef(var[48]) -> ref(reference) type=CI 67 var=k0[48]:ref(CI)
+  65[112]: ConstInt(val=1) -> integer
+  74[120]: SetInt(v1: ref(reference), fld=8, val: integer)
+  77[96]: VarRef(var[48]) -> ref(reference) type=CI 67 var=k0[48]:ref(CI)
+  80[112]: ConstEnum(val=2) -> i_parse_errors
+  82[120]: SetEnum(v1: ref(reference), fld=0, val: i_parse_errors)
+  85[96]: InitRef(var[60]) var=__vdb_1[60]:ref(main_vector<integer(0, 255)>)
+  88[96]: Database(var[60], db_tp=68) type=main_vector<integer(0, 255)> 68
+  93[96]: VarRef(var[60]) -> ref(reference) type=main_vector<integer(0, 255)> 68 var=__vdb_1[60]:ref(main_vector<integer(0, 255)>)
+  96[112]: GetField(v1: ref(reference), fld=0) -> ref(reference) type=vector<byte> 64
+  99[112]: PutRef(var[72], value: ref(reference))
+ 102[96]: VarRef(var[60]) -> ref(reference) type=main_vector<integer(0, 255)> 68 var=__vdb_1[60]:ref(main_vector<integer(0, 255)>)
+ 105[112]: ConstInt(val=0) -> integer
+ 114[120]: SetInt4(v1: ref(reference), fld=0, val: integer)
+ 117[96]: VarVector(var[72]) -> vector type=vector<short<0,true>> 70 var=a[72]:vector<integer(0, 255)>["__ref_1"]
+ 120[112]: VarRef(var[48]) -> ref(reference) type=CI 67 var=k0[48]:ref(CI)
+ 123[128]: VarVector(var[8]) -> vector type=vector<short<0,true>> 70 var=__ref_1[8]:vector<integer(0, 255)>
+ 126[144]: Call(d_nr=602, args_size=32, fn=n_enc)
+ 145[128]: AppendVector(r: vector, other: vector, tp=11) type=integer 0
+ 148[96]: ClearText(var[24]) var=__work_1[24]:text
+ 151[96]: ConstText(_value="") -> text
+ 153[112]: VarVector(var[72]) -> vector type=vector<short<0,true>> 70 var=a[72]:vector<integer(0, 255)>["__ref_1"]
+ 156[128]: ConstInt(val=0) -> integer
+ 165[136]: GetVectorNullable(r: vector, size=1, index: integer) -> ref(reference) type=integer 0
+ 168[128]: GetByte(v1: ref(reference), fld=0, min=0) -> integer
+ 173[120]: PutInt(var[88], value: integer)
+ 176[112]: VarInt(var[88]) -> integer var=__ncc_1[88]:integer(0, 255)
+ 179[120]: ConvBoolFromInt(v1: integer) -> boolean
+ 180[120]: GotoFalseWord(jump=:POS189, if_false: boolean)
+ 183[112]: VarInt(var[88]) -> integer var=__ncc_1[88]:integer(0, 255)
+ 186[120]: GotoWord(jump=:POS198)
+ 189[112]: ConstInt(val=9) -> integer
+ 198[120]: ConstInt(val=0) -> integer
+ 207[128]: FormatInt(var[24], val: integer, radix=10, width: integer, token=32, plus=false, note=false, dir=2)
+ 215[112]: VarText(var[24]) -> text var=__work_1[24]:text
+ 218[128]: FreeStack(value=16, discard=32)
+ 222[112]: Call(d_nr=343, args_size=16, fn=n_println)
+ 241[96]: VarRef(var[48]) -> ref(reference) type=CI 67 var=k0[48]:ref(CI)
+ 244[112]: FreeRef(v1: ref(reference)) ; [store-free]
+ 245[96]: FreeText(var[24])
+ 248[96]: VarVector(var[8]) -> vector type=vector<short<0,true>> 70 var=__ref_1[8]:vector<integer(0, 255)>
+ 251[112]: FreeRef(v1: ref(reference)) ; [store-free]
+ 252[96]: VarRef(var[60]) -> ref(reference) type=main_vector<integer(0, 255)> 68 var=__vdb_1[60]:ref(main_vector<integer(0, 255)>)
+ 255[112]: FreeRef(v1: ref(reference)) ; [store-free]
+ 256[96]: Return(ret=0, value=0, discard=96)
