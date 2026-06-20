@@ -96,9 +96,17 @@ None block the releasable gate-OFF state.  Roots:
   GENERIC type-var `T` (`t_1T_*`) instead of the concrete `IfItem`.  Interface/generic + nullable
   native-codegen interaction.
 - **`native::imaging_fixture_png_roundtrip`** — native SIGSEGV gate-on (nullable-vector native codegen).
-- **`exit_codes::moros_glb_cli_end_to_end`** — `field_type` OOB at `types.rs:230` inside the native
-  shared-store fn `loft_shared_n_map_export_glb`; PRE-EXISTING + NOT a keyed regression (moros_map has
-  ZERO keyed collections).  Same native-shared-store + nullable-vector class as `imaging`.
+- **`exit_codes::moros_glb_cli_end_to_end`** — **SPURIOUS (cache gotcha), NOT a real flip blocker.**
+  Runs CLEAN directly gate-on with `LOFT_NO_CACHE=1` (`wrote …glb`); the find_problems-with-env run
+  reused a gate-off-cached program (the program cache keys on SOURCE, not the gate — documented
+  gotcha).  Under the ACTUAL flip (gate dropped, no cache mismatch) it PASSES — confirmed: the real
+  flip suite is **2413/2417, 4 failures** and moros_glb is GONE.
+
+**TRUE flip tail (gate dropped, 2026-06-20): 4 = imaging + native_scripts(371,86) + loft_suite(184).**
+184 is FLIP-MECHANICAL (the nullable model makes undefended div-zero produce null by design — the
+warning says so; `@EXPECT_FAIL` updates when the gate drops, Option A).  So the real PRE-FLIP CODE work
+is THREE bugs: imaging (real native nullable-vector SIGSEGV — release-only UB, debug build exits 101
+silently), 371 (two-pass parse-order), 86 (native interface-method on a generic type-var → `todo!`).
 - **`wrap::loft_suite`** — 184 stale `@EXPECT_FAIL` div-zero annotation; resolves AT the flip
   (update the annotation when gate-on becomes default — can't pre-fix without breaking gate-off).
 
