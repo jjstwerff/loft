@@ -14,8 +14,8 @@ Plan id: [@PLN85](https://github.com/loft-lang/plans/issues/85) · investigation
 |---|---|
 | A — Probe catalogue (extract from the real recent bugs + a real consumer) | ✅ probes 01–04 (evaluation in [recent-bugs.md](recent-bugs.md)); of 3 predicted siblings: #1 latent, #2 closed, #3 LIVE |
 | B — Mechanism investigation (shared-root vs N-independent) | ✅ **CLOSED via debugger** — real mechanism: `ki` is a borrowed alias of the NRVO return buffer `__ref_1`; under conditional×unused, scope analysis emits a per-iteration `OpFreeRef(ki)` that double-frees the return buffer via a stack-ref ([cluster-II](cluster-II-slot-init-dominance.md) § CLOSED OUT). NOT the slot-init story. |
-| C — Fix design | ✅ **DESIGNED** — MOVE / ownership-transfer on heap return (not deep-copy): the binding owns the returned store, the work-ref relinquishes (no free-on-return). Allocator-verified mechanism + clean-implementation assessment in [cluster-II § Stage C](cluster-II-slot-init-dominance.md). |
-| D — Implementation | 🟡 next — C1 (move) at the scopes.rs work-ref chokepoint for interp, then mirror in the native generator; gates: probe 05 both backends + audience_crystal 02/03 + leak/suite |
+| C — Fix design | ✅ **DESIGNED** — the **move / output-buffer calling convention**: caller allocates the return store per-binding; callee borrows `__retbuf` and never frees it. Full target (invariant · convention · target bytecode · types · prototype + execution plan) in **[stage-c-move-convention-design.md](stage-c-move-convention-design.md)**. Interp target VALIDATED (the `a:vec=[]; a+=enc()` form works); native ABI separately broken. |
+| D — Implementation | 🟡 next — design-validate-then-build (see the Stage-C design § 7): (1) diff broken-vs-correct bytecode = codegen spec; (2) native op-level prototype; (3) emit the target. Gates: minimal case → probe 05 both backends → cbor maps → audience_crystal 02/03 → leak/suite |
 
 **What triggered this:** the *known* store-lifetime mechanisms are already hardened and
 shipped — H1 (fn-arity freeze), **H2 (typed `Deps` newtype + value-tagged spaces — see
