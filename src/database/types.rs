@@ -465,7 +465,7 @@ impl Stores {
 
     /// Resolve the `Some` variant type-nr of a synth `__nullable<S>` element by db name,
     /// or `None` for any other element.  Shared by `key_owner` / `key_base`.
-    fn nullable_some_variant(&self, content: u16) -> Option<u16> {
+    pub(crate) fn nullable_some_variant(&self, content: u16) -> Option<u16> {
         // Guard `content == u16::MAX` / out-of-range (an unbuilt or first-pass type id reaches
         // `key_owner` from `new_record_field_op`); identity-resolve such ids rather than OOB-panic.
         let name = &self.types.get(content as usize)?.name;
@@ -1219,9 +1219,17 @@ impl Stores {
         // bytes apart, corrupting tree::add's writes.
         let int4 = self.int(0, false);
         let bool_c = self.name("boolean");
+        // @PLN25 — a nullable `index<__nullable<S>>` content is the synth enum (`Parts::Enum`, no
+        // field list).  Append the LLRB bookkeeping (#left/#right/#color) — and register the
+        // LinkedFieldGroup that lays them out — on the `Some` VARIANT's record (the shared row
+        // layout), exactly as a dense `index<S>` appends to `S`.  `content` stays the enum for the
+        // index type NAME + `Parts::Index`; `fields()` / `find_index` resolve back through `Some`.
+        // Without this the append/layout/read all miss the `Parts::Enum` content → bookkeeping at
+        // offset 0xFFFF → the `Fld 65543 outside record` OOB on a keyed-clear repopulate.
+        let target = self.nullable_some_variant(content).unwrap_or(content);
         let mut nr = 1;
         if let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
-            &self.types[content as usize].parts
+            &self.types[target as usize].parts
         {
             for f in fields {
                 if f.name.starts_with("#left_") {
@@ -1230,7 +1238,7 @@ impl Stores {
             }
         }
         let left = if let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
-            &mut self.types[content as usize].parts
+            &mut self.types[target as usize].parts
         {
             let left = fields.len();
             fields.push(Field {
@@ -1281,7 +1289,7 @@ impl Stores {
                 &members.iter().map(|&(_, a)| a).collect::<Vec<_>>(),
             );
             let size = crate::data::LinkedFieldGroup::group_size(&members);
-            self.types[content as usize]
+            self.types[target as usize]
                 .field_groups
                 .push(crate::data::LinkedFieldGroup {
                     kind: crate::data::LinkedFieldKind::Index,
