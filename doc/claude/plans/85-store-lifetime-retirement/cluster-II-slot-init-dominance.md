@@ -98,6 +98,35 @@ store with a VALID ref — combined with the Vector-guard extension. Reverted th
 guard-only change (a leak-crash is not a fix). This is a deeper free-PLACEMENT
 change in the witness/reclaim path; matrix A–F + leak gate must gate it.
 
+### Stage D attempt 3 — (a)+(b) free-via-buffer is also wrong; the fix is NOT in scope free-placement (reverted)
+
+Tried (a) [Vector guard] + (b) [free the per-iteration store via the BUFFER's
+ref in the `witness_buffer` branch, since `ki`'s ref is garbage]. Result:
+A/D/F → **#306 "refused to free the stack store (#0)"**, and C/E (previously
+clean) → **a new leak**. Decisive finding:
+
+> **Both `ki` AND `__ref_1` are stack-aliases of the real heap store** — the
+> NRVO retbuf is itself a stack-record ref. So *neither* var can be whole-store-
+> freed: `OpFreeRef(ki)` reads garbage (#405), `OpFreeRef(__ref_1)` hits the
+> stack store (#306). The per-iteration heap store's owner is **at the NRVO
+> return-ABI level** (the store `enc` allocated, delivered via `__retbuf`), not
+> either scope-analysis var.
+
+So the three Stage-D attempts collectively RULE OUT the scope-analysis free-
+placement space:
+1. fn-entry sentinel (half-1) — insufficient (per-iteration, not fn-exit).
+2. Vector witness-guard alone — SIGSEGV → leak/exhaustion (per-iter store unfreed).
+3. (a)+(b) free-via-buffer — #306 (buffer is a stack-ref) + breaks C/E.
+
+**The fix is a RETURN-ABI / NRVO-ownership change**, not a `scopes.rs` free
+tweak: the store `enc` materialises into `__retbuf` must have a single, valid
+owner that frees it per-iteration (the result var must hold the REAL store ref,
+or the NRVO delivery must assign ownership cleanly), so that exactly one valid
+`OpFreeRef` runs per iteration. That lives in the call/return codegen
+(`gen_set_first_ref_call_copy` / the NRVO adoption path, `state/codegen.rs`
+~1039-1066 + `parser/control.rs` ref_return), and is a deeper, broad-regression-
+risk change requiring the full validation harness. Reverted attempt 3.
+
 ### Fix direction (Stage C — the real one)
 
 This is the **H1 / return-ABI / NRVO-alias** family: a var bound to an
