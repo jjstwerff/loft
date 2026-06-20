@@ -239,6 +239,33 @@ Net for the evaluation:
   alias. Needs the return-ownership dep **computed and carried** (the missing
   detail). Then the caller reads it: empty ⇒ adopt, `{Attr(a)}` ⇒ copy.
 
+## 6d. First-step attempt — blocked by the unresolved (`"??"`) dep + the branch thicket
+
+Tried the smallest green-both behavior fix: copy an implicit param-return
+(`fn f(v) -> vector { v }`) into the return buffer (the proven `fwd_copy_409`
+shape), so the result is owned and the caller stops aliasing the arg. It **did not
+fire**, and the reason is the foundational obstacle this whole effort names:
+
+- The implicit-tail return carries a **`"??"` dep, which is `Type::Unknown`**
+  (`data.rs:4644`) — the ownership dep is not merely wrong, it is **UNCOMPUTED**.
+- A non-empty (`"??"`) dep routes the return through the `else` (`ref_return`)
+  branch, NOT the `ls.is_empty()` branch the edit targeted — so the fix never ran.
+- The vector return-handling is a **multi-branch thicket**
+  (`BlockTail` vs `MidReturn`; within `BlockTail`: `ls.is_empty()` work-ref
+  recovery vs native-forwarder vs `else`), and explicit `return v` is yet another
+  path (`MidReturn`). A targeted edit lands in one branch while the case flows
+  through another.
+
+This is exactly the OWNERSHIP_MODEL diagnosis made concrete: the ownership fact is
+**not computed** (renders `Type::Unknown`/`"??"`), and the decision is **scattered
+across duplicated paths**. Conclusion: the genuine first small step is NOT a leaf
+behavior fix — it is **foundational**: *resolve the `"??"`/`Unknown` return dep
+into a real, computed ownership dep, and/or consolidate the return-handling paths
+to one*, so that a single place owns the answer and a leaf fix can land in it.
+That consolidation is itself the first down payment on the beacon (one path, one
+fact). Reverted; no clean green-both behavior fix is reachable until the dep is
+resolved.
+
 ## 7. Open questions to verify against the implementation
 
 - Exact current contents of `Definition.returned` for `enc`/`mk` (is the dep empty,
