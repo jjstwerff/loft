@@ -91,6 +91,14 @@ impl Stores {
         self.names.contains_key(name)
     }
 
+    /// The registered db structure name of a built type id (the reverse of `name`).
+    /// `""` for an out-of-range id.  Used by typedef to derive a synth `__nullable<S>`
+    /// enum's db name from its payload struct's (already-disambiguated) db name.
+    #[must_use]
+    pub fn type_name(&self, id: u16) -> &str {
+        self.types.get(id as usize).map_or("", |t| t.name.as_str())
+    }
+
     #[allow(dead_code)]
     pub fn set_default(&mut self, tp: u16, f: u16, value: Content) {
         if let Parts::Struct(fld) | Parts::EnumValue(_, fld) = &mut self.types[tp as usize].parts {
@@ -285,6 +293,26 @@ impl Stores {
         // self.dump_types();
     }
 
+    /// @PLN25 — lay out a SINGLE synth `__nullable<S>` enum + its `Some` variant on demand
+    /// (positions/sizes), WITHOUT the full `finish()` (which re-runs every type's `finish_type` and
+    /// re-appends keyed-index bookkeeping → corruption at `enum_parent_size`).  Used on-demand for a
+    /// FORWARD-referenced `S` whose synth enum is created during pass-2 body parse, after `fill_all`
+    /// ran (371).  Empty `linked` set is correct here: a `Some` payload is a dense struct, not a
+    /// vector, so no `Vector → Array` promotion applies.
+    pub(crate) fn lay_out_synth(&mut self, enum_kt: u16, some_kt: u16) {
+        let linked: HashSet<u16> = HashSet::new();
+        let mut in_progress: HashSet<usize> = HashSet::new();
+        if some_kt != u16::MAX && (some_kt as usize) < self.types.len() {
+            self.finish_type(&linked, some_kt as usize, &mut in_progress);
+        }
+        if enum_kt != u16::MAX && (enum_kt as usize) < self.types.len() {
+            // `enumerate` seeds the enum at `u16::MAX`; if anything left it sized, reset so
+            // `finish_type` (re)computes size = max(variant sizes) once `Some` is linked.
+            self.types[enum_kt as usize].size = u16::MAX;
+            self.finish_type(&linked, enum_kt as usize, &mut in_progress);
+        }
+    }
+
     pub(super) fn finish_type(
         &mut self,
         linked: &HashSet<u16>,
@@ -425,20 +453,93 @@ impl Stores {
         }
     }
 
+    /// The type whose fields carry a keyed collection's key fields.
+    ///
+    /// Normally this is the element type itself. For a synthetic
+    /// `__nullable<S>` element (@PLN25 E2 — a `vector<S>`/`hash<S[k]>` element
+    /// rewritten so it can be null), the key fields live in the `Some`
+    /// variant's payload, NOT at the enum's top level (offset 0 is the
+    /// discriminant). Returning the `Some` variant here lets every
+    /// key-resolution site — `hash`/`sorted`/`index` name→number resolution,
+    /// `determine_keys`, `field_content` — read the key through the same
+    /// payload, so the resolved field numbers and byte offsets agree across
+    /// build time and run time. For any other element type, return it
+    /// unchanged.
+    pub(crate) fn key_owner(&self, content: u16) -> u16 {
+        // Single-payload form: a synth `__nullable<S>` keeps S's keys inside the `Some`
+        // variant's inline `payload` field (a dense `S`).  The key owner is therefore the
+        // payload's struct itself, so every key resolution indexes S's own field list
+        // (`"a"→0`), exactly like a non-nullable `hash<S[k]>`.  Resolve the `Some` variant by
+        // db name (its variant-list slot can still be a `u16::MAX` placeholder at build time)
+        // and return its `payload` content type.  The byte base of that payload within the
+        // `Some` record is `key_base`.  Non-nullable elements return `content` unchanged.
+        if let Some(some_nr) = self.nullable_some_variant(content)
+            && let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
+                &self.types[some_nr as usize].parts
+            && let Some(f) = fields.iter().find(|f| f.name == "payload")
+        {
+            return f.content;
+        }
+        content
+    }
+
+    /// Resolve the `Some` variant type-nr of a synth `__nullable<S>` element by db name,
+    /// or `None` for any other element.  Shared by `key_owner` / `key_base`.
+    pub(crate) fn nullable_some_variant(&self, content: u16) -> Option<u16> {
+        // Guard `content == u16::MAX` / out-of-range (an unbuilt or first-pass type id reaches
+        // `key_owner` from `new_record_field_op`); identity-resolve such ids rather than OOB-panic.
+        let name = &self.types.get(content as usize)?.name;
+        if name.starts_with("__nullable<") {
+            return self.names.get(&format!("{name}::Some")).copied();
+        }
+        None
+    }
+
+    /// Byte offset of S's fields within a stored `__nullable<S>` (`Some`) record — the
+    /// position of the inline `payload` field, after the discriminant.  `0` for any
+    /// non-nullable element (S's fields then sit at the record root).  Alignment-dependent,
+    /// so it is read from the built `Some` structure, never hardcoded.
+    pub(crate) fn key_base(&self, content: u16) -> u16 {
+        if let Some(some_nr) = self.nullable_some_variant(content)
+            && let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
+                &self.types[some_nr as usize].parts
+            && let Some(f) = fields.iter().find(|f| f.name == "payload")
+        {
+            return f.position;
+        }
+        0
+    }
+
+    /// THE key-position chokepoint.  Resolve key field `k` of a keyed collection's element
+    /// `content` to its `(content_type, absolute_byte_position)` within a stored record.
+    /// Folds `key_owner` (which struct holds the keys) and `key_base` (where that struct
+    /// sits inside the record) so the build path (`determine_keys`) and the runtime read
+    /// path (`field_content`) compute the SAME absolute offset — single-site, so a synth
+    /// `__nullable<S>`'s payload base cannot be added at one and forgotten at the other
+    /// (which would silently corrupt the keyed collection).
+    pub(crate) fn key_field(&self, content: u16, k: u16) -> Option<(u16, u16)> {
+        let owner = self.key_owner(content);
+        let base = self.key_base(content);
+        if let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
+            &self.types[owner as usize].parts
+        {
+            let f = &fields[k as usize];
+            return Some((f.content, base + f.position));
+        }
+        None
+    }
+
     pub(super) fn determine_keys(&mut self) {
         for t_nr in 0..self.types.len() {
             match self.types[t_nr].parts.clone() {
                 Parts::Hash(c, key_fields) => {
-                    if let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
-                        &self.types[c as usize].parts.clone()
-                    {
-                        self.types[t_nr].keys.clear();
-                        for key_field in key_fields {
-                            let fld = &fields[key_field as usize];
-                            let tp = key_type_nr_for_content(fld.content, &self.types);
+                    self.types[t_nr].keys.clear();
+                    for key_field in key_fields {
+                        if let Some((content, position)) = self.key_field(c, key_field) {
+                            let tp = key_type_nr_for_content(content, &self.types);
                             self.types[t_nr].keys.push(crate::keys::Key {
                                 type_nr: tp,
-                                position: fld.position,
+                                position,
                             });
                         }
                     }
@@ -446,19 +547,16 @@ impl Stores {
                 Parts::Ordered(c, key_fields)
                 | Parts::Sorted(c, key_fields)
                 | Parts::Index(c, key_fields, _) => {
-                    if let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
-                        &self.types[c as usize].parts.clone()
-                    {
-                        self.types[t_nr].keys.clear();
-                        for (key_field, asc) in &key_fields {
-                            let fld = &fields[*key_field as usize];
-                            let mut tp = key_type_nr_for_content(fld.content, &self.types);
+                    self.types[t_nr].keys.clear();
+                    for (key_field, asc) in &key_fields {
+                        if let Some((content, position)) = self.key_field(c, *key_field) {
+                            let mut tp = key_type_nr_for_content(content, &self.types);
                             if !asc {
                                 tp = -tp;
                             }
                             self.types[t_nr].keys.push(crate::keys::Key {
                                 type_nr: tp,
-                                position: fld.position,
+                                position,
                             });
                         }
                     }
@@ -1018,10 +1116,14 @@ impl Stores {
     }
 
     pub fn hash(&mut self, content: u16, key: &[String]) -> u16 {
+        // Display name uses `content` (e.g. `hash<__nullable<Count>[t]>`), but
+        // key fields resolve against `key_owner` — the `Some` payload for a
+        // synth nullable element (@PLN25 E2).
+        let owner = self.key_owner(content);
         let mut name = "hash<".to_string() + &self.types[content as usize].name + "[";
         let mut key_nrs = Vec::new();
         if let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
-            &self.types[content as usize].parts
+            &self.types[owner as usize].parts
         {
             for (k_nr, k) in key.iter().enumerate() {
                 if k_nr > 0 {
@@ -1264,9 +1366,10 @@ impl Stores {
         key: &[(String, bool)],
         name: &mut String,
     ) -> Vec<(u16, bool)> {
+        let owner = self.key_owner(content);
         let mut key_nrs = Vec::new();
         if let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
-            &self.types[content as usize].parts
+            &self.types[owner as usize].parts
         {
             for (k_nr, (k, asc)) in key.iter().enumerate() {
                 if k_nr > 0 {

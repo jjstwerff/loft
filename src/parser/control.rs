@@ -675,7 +675,22 @@ impl Parser {
         // body and variable table; struct-returning specializations work correctly because
         // they return arguments (not locals), so ref_return would be a no-op anyway.
         if self.data.def_type(self.context) != DefType::Generic {
-            if let Type::Text(ls) = t {
+            // @PLN25 single-payload: the tail was just coerced `__nullable<S>` → dense `S`
+            // via a payload sub-ref (`OpGetField`), so `t` is still the Enum tail type and
+            // the type-keyed branches below (which match `t`) all miss it — the default
+            // epilogue then demotes the unwrap to a discarded statement + `return null`
+            // (native returns the null sentinel).  Key off the dense return type `result`
+            // instead: materialise the unwrap tail into an owned work-ref (copy the viewed
+            // `S`) and promote that — the #306 view-return shape.  Gate-off-inert.
+            if let Type::Reference(td, _) = result
+                && !l.is_empty()
+                && self.tail_is_nullable_unwrap(&l[l.len() - 1])
+            {
+                let last = l.len() - 1;
+                let w = self.materialize_view_return(*td, &mut l[last]);
+                self.ref_return(&[w], l, RetSite::BlockTail);
+                self.nrvo_collapse_tail_set(l, &[w]);
+            } else if let Type::Text(ls) = t {
                 self.text_return(ls);
             } else if let Type::Vector(elm, ls) = t {
                 if ls.is_empty() && !l.is_empty() {
@@ -1431,6 +1446,61 @@ impl Parser {
         loop {
             if self.lexer.peek_token("}") {
                 break;
+            }
+            // @PLN25 — a `null` pattern arm on a nullable inline enum element
+            // (`match vr[i] { null => …, Some{…} => …/_ => … }`) matches the ABSENT
+            // state: discriminant 0.  The synthetic `__nullable<S>` enum represents
+            // null as disc 0 (not a produced variant), and `disc_expr` already reads
+            // the discriminant, so this arm is just `discs == [0]`.  Scoped to the
+            // synth enum (a regular enum's null is the variable store_nr sentinel,
+            // not an inline disc — E1).  `null` is a keyword, not an identifier, so
+            // it must be matched before the `has_identifier()` variant path below.
+            if valid_enum
+                && e_nr != u32::MAX
+                && self.data.def(e_nr).name.starts_with("__nullable<")
+                && self.lexer.has_token("null")
+            {
+                self.expect_match_arm_arrow();
+                let arm_write_state = self.vars.save_and_clear_write_state();
+                self.vars.clear_write_state();
+                let mut arm_body = Value::Null;
+                let arm_type = if self.lexer.peek_token("{") {
+                    self.parse_block("match_arm", &mut arm_body, &Type::Unknown(0))
+                } else {
+                    self.expression(&mut arm_body)
+                };
+                self.vars.restore_write_state(&arm_write_state);
+                if result_type == Type::Void || result_type == Type::Null {
+                    result_type = arm_type.clone();
+                } else if !self.first_pass
+                    && arm_type != Type::Void
+                    && arm_type != Type::Null
+                    && !match_arm_types_unify(&result_type, &arm_type)
+                {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "cannot unify: {} and {}",
+                        result_type.name(&self.data),
+                        arm_type.name(&self.data)
+                    );
+                }
+                // A `null` arm (disc 0) covers the synth enum's `Null` variant for
+                // exhaustiveness — disc 1 (the vestigial `Null` variant) is never
+                // produced (null is disc 0), so `null` + `Some` IS exhaustive.
+                let null_variant = self.data.variant_of(e_nr, "Null");
+                if null_variant != u32::MAX {
+                    covered.insert(null_variant);
+                }
+                arms.push(EnumArm {
+                    discs: vec![0],
+                    code: arm_body,
+                    tp: arm_type,
+                    guard: None,
+                    bindings: Vec::new(),
+                });
+                self.lexer.has_token(","); // optional trailing comma
+                continue;
             }
             let Some(first_ident) = self.lexer.has_identifier() else {
                 if !self.first_pass {
@@ -3217,7 +3287,16 @@ impl Parser {
         }
         if let Type::Vector(t_nr, dep) = &in_type {
             let mut t = *t_nr.clone();
-            if let Type::Enum(nr, true, _) = t {
+            if let Type::Enum(nr, true, _) = t
+                && !self.data.def(nr).name.starts_with("__nullable<")
+            {
+                // @PLN25 E2 — keep a synthetic `__nullable<S>` element in `Enum`
+                // form for the loop variable: field access on `Type::Enum(.., true)`
+                // unwraps to the `Some` variant via `find_poly_enum_field`
+                // (fields.rs), whereas `Reference(enum_def)` does not (the enum
+                // itself has no payload field) → "Unknown field __nullable<S>.f".
+                // Hand-written struct-enums keep the Reference conversion (variant
+                // field-access resolves against the variant def, not the parent).
                 t = Type::Reference(nr, Deps::none());
             }
             // P189b: vector elements that are tuples live as inline bytes
@@ -3247,7 +3326,18 @@ impl Parser {
             // can flip the hash arm to `on = 4`.  Without this, for-loop
             // body parsing sees `e` as Type::Null and field access on
             // `e.name` fails with "Unknown type null".
-            Type::Reference(*dnr, dep.clone())
+            //
+            // @PLN25 E2 — a synth `__nullable<S>` element keeps `Enum(.., true)`
+            // so the loop body's field access unwraps through `Some` (mirrors
+            // the Vector arm above and the `index_type` lookup path); without
+            // it `e.field` errors "Unknown field __nullable<S>.field" because
+            // the enum itself carries no payload field.  Inert gate-off (no
+            // keyed element type is ever a `__nullable<` enum).
+            if self.data.def(*dnr).name.starts_with("__nullable<") {
+                Type::Enum(*dnr, true, dep.clone())
+            } else {
+                Type::Reference(*dnr, dep.clone())
+            }
         } else if let Type::Iterator(i_tp, _) = &in_type {
             if **i_tp == Type::Null {
                 I32.clone()
@@ -3566,6 +3656,55 @@ impl Parser {
     /// has two) must stay a plain local, or the outer call's destination
     /// would alias its own argument (the callee's buffer clear then frees
     /// the record the argument still views).
+    /// @PLN25 single-payload — is the return body-tail the `__nullable<S>` → dense `S`
+    /// unwrap (now a payload sub-ref `OpGetField`, see `unwrap_source_is_nullable`)?  Such
+    /// a tail's dense type doesn't match the still-`Enum` tail type `t`, so the type-keyed
+    /// `ref_return` branches miss it and the default epilogue demotes it to `return null`.
+    /// When this holds, `materialize_view_return` copies the viewed `S` into an owned buffer
+    /// and promotes that — the #306 view-return shape.  Gate-off-inert.
+    fn tail_is_nullable_unwrap(&self, tail: &Value) -> bool {
+        match tail.unspan() {
+            Value::Return(inner) => self.tail_is_nullable_unwrap(inner),
+            Value::Block(bl) => bl
+                .operators
+                .last()
+                .is_some_and(|t| self.tail_is_nullable_unwrap(t)),
+            // Single-payload: the `__nullable<S>` → dense `S` unwrap is now a payload
+            // SUB-REF `OpGetField(<__nullable<S> value>, payload_offset, S_kt)` (the convert
+            // emits it via `get_val`).  Materialise it — copy the viewed `S` into the return
+            // buffer so the result is OWNED, not a dangling view into the caller's container —
+            // ONLY when the unwrap source is a LOCAL (`Var`, e.g. `return chosen`) or a
+            // materialised sub-expression (`Block`/`If`, e.g. `return v[i] ?? d`'s ncc block).
+            // A direct `v[i]` index source is the sole returnable that the default epilogue
+            // returns correctly; materialising it would NRVO-rename the work-ref onto the
+            // caller's buffer and re-`OpDatabase` it → free-list corruption.  The
+            // source-is-`__nullable<S>` check distinguishes the unwrap from an ordinary
+            // struct-field read (whose source is a dense struct, not the synth enum).
+            Value::Call(d, args) => {
+                self.data.def(*d).name() == "OpGetField"
+                    && args
+                        .first()
+                        .is_some_and(|s| self.unwrap_source_is_nullable(s))
+            }
+            _ => false,
+        }
+    }
+
+    /// Is `src` a `__nullable<S>` value (the source of a payload-unwrap `OpGetField`)?
+    /// Only a LOCAL (`Var`), a materialised `Block`/`If` tail qualifies — a direct
+    /// index/call source returns `false` so its unwrap is NOT materialised (see
+    /// `tail_is_nullable_unwrap`).  Gate-off-inert (no `__nullable<>` type exists).
+    fn unwrap_source_is_nullable(&self, src: &Value) -> bool {
+        let tp = match src.unspan() {
+            Value::Var(v) => self.vars.tp(*v).clone(),
+            Value::Block(bl) => bl.result.clone(),
+            Value::If(_, t, _) => return self.unwrap_source_is_nullable(t),
+            _ => return false,
+        };
+        matches!(&tp, Type::Enum(d, _, _) | Type::Reference(d, _)
+            if self.data.def(*d).name().starts_with("__nullable<"))
+    }
+
     fn site_value_ref(&self, tail: &Value) -> Option<u16> {
         match tail.unspan() {
             Value::Var(v) => Some(*v),
@@ -4218,9 +4357,31 @@ impl Parser {
                         let ls_own: Vec<u16> = ls.to_vec();
                         self.ref_return(&ls_own, std::slice::from_mut(&mut v), RetSite::MidReturn);
                     }
-                } else if let Type::Enum(_, true, ls) = &t {
-                    let ls_own: Vec<u16> = ls.to_vec();
-                    self.ref_return(&ls_own, std::slice::from_mut(&mut v), RetSite::MidReturn);
+                } else if let Type::Enum(e_d, true, ls) = &t {
+                    // @PLN25 single-payload: a mid-body `return <nullable-element>` whose value is
+                    // coerced to a dense `S` keeps `t` as the synth `__nullable<S>` Enum tail type,
+                    // while the fn's DECLARED return is a dense `Reference(S)`.  The value is a VIEW
+                    // into a local (the unwrapped payload) — left as a view it makes the fn
+                    // VIEW-classified, so a SIBLING OWNED return on another path (a fallback `S{}`)
+                    // is never freed by the caller (149: `map_get_hex` fallback `make_hex(0,0)` × N
+                    // leaks).  Detect it from the TYPES (a `__nullable<S>` Enum tail + dense
+                    // `Reference(S)` declared) — NOT the IR source, so a DIRECT `v[i]` unwrap
+                    // qualifies too — and copy the view into an OWNED buffer so the fn is
+                    // owned-classified.  No `nrvo_collapse_tail_set` (its work-ref→caller-buffer
+                    // rename + re-OpDatabase was the documented direct-`v[i]` free-list-corruption
+                    // hazard, now also defused by zero-on-claim; the plain copy here does not
+                    // rename).  Gated on `__nullable<>` so a real user struct-enum return is
+                    // untouched.
+                    let declared_ret = self.data.def(self.context).returned().clone();
+                    if let Type::Reference(rtd, _) = declared_ret
+                        && self.data.def(*e_d).name().starts_with("__nullable<")
+                    {
+                        let w = self.materialize_view_return(rtd, &mut v);
+                        self.ref_return(&[w], std::slice::from_mut(&mut v), RetSite::MidReturn);
+                    } else {
+                        let ls_own: Vec<u16> = ls.to_vec();
+                        self.ref_return(&ls_own, std::slice::from_mut(&mut v), RetSite::MidReturn);
+                    }
                 } else if let Type::Vector(_, ls) = &t
                     && self.return_buffer().is_some()
                 {

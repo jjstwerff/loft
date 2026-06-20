@@ -601,6 +601,9 @@ impl Parser {
             return false;
         };
         self.vars = Function::new(&fn_name, &self.lexer.pos().file);
+        // @PLN25 E2 — clear any type-var from a previous function before parsing
+        // this one; set below if this function is generic.
+        self.cur_type_var = u32::MAX;
         if !self.default && !is_lower(&fn_name) && !is_op(&fn_name) {
             diagnostic!(
                 self.lexer,
@@ -662,6 +665,12 @@ impl Parser {
                     .add_def(&type_var_name, self.lexer.pos(), DefType::Struct);
                 self.data
                     .set_returned(tv_nr, Type::Reference(tv_nr, crate::data::Deps::none()));
+            }
+            // @PLN25 E2 — record the type-var def_nr (valid in both passes: the
+            // stub was just added in the first pass, already exists in the
+            // second) so `e2_nullable_elem` leaves a generic `vector<T>` dense.
+            if is_generic {
+                self.cur_type_var = self.data.def_nr(&type_var_name);
             }
             if !self.parse_arguments(&fn_name, &mut arguments) {
                 return true;
@@ -1245,6 +1254,9 @@ impl Parser {
                     constant = true;
                 }
                 if let Some(tp) = self.parse_type_full(self.data.def_nr(fn_name), false) {
+                    // @PLN25 E2/E3 — a `vector<Struct>` PARAM is already rewritten by
+                    // the vector-type-resolution chokepoint (`sub_type` `vector` arm),
+                    // so no per-site hook here.
                     if reference {
                         Type::RefVar(Box::new(tp))
                     } else {
@@ -1673,6 +1685,14 @@ impl Parser {
                 let mut fields = Vec::new();
                 return Some(match type_name {
                     "index" => {
+                        // @PLN25 — keyed collections (`index`/`hash`/`sorted`) are DENSE:
+                        // nullability is a SEQUENCE concept (`vector`/`array`) only, so a keyed
+                        // element is implicitly `not null` (a key denotes presence).  Accept an
+                        // explicit `not null` in the definition as a no-op.  (Design:
+                        // single-payload-refactor.md § "DESIGN DECISION (2026-06-20)".)
+                        if self.lexer.has_keyword("not") {
+                            self.lexer.token("null");
+                        }
                         self.parse_fields(true, &mut fields);
                         Type::Index(
                             self.data.type_def_nr(&tp),
@@ -1681,6 +1701,10 @@ impl Parser {
                         )
                     }
                     "hash" => {
+                        // Dense (implicitly `not null`) — see the `index` arm.
+                        if self.lexer.has_keyword("not") {
+                            self.lexer.token("null");
+                        }
                         self.parse_fields(false, &mut fields);
                         self.data.set_referenced(sub_nr, on_d, Value::Null);
                         let mut f = Vec::new();
@@ -1690,10 +1714,32 @@ impl Parser {
                         Type::Hash(sub_nr, f, crate::data::Deps::none())
                     }
                     "vector" => {
+                        // @PLN25 E2/E3 — the ONE chokepoint where every inline
+                        // `vector<S>` element type resolves (local / param / return /
+                        // field / nested all reach here).  Default = nullable: rewrite
+                        // a struct element `Reference(S)` to the synthetic
+                        // `__nullable<S>` enum.  A `not null` after a NAMED element
+                        // (`vector<Row not null>`) is the dense opt-out — consume it
+                        // and skip the rewrite, leaving the bare inline struct.
+                        // (Scalar elements consume their own `not null` in the type
+                        // parse above, so this fires only for a named element.)
+                        let elem_not_null = self.lexer.has_keyword("not");
+                        if elem_not_null {
+                            self.lexer.token("null");
+                        }
                         self.lexer.closing_angle();
-                        Type::Vector(Box::new(tp), crate::data::Deps::none())
+                        let elem = if elem_not_null {
+                            tp
+                        } else {
+                            self.e2_nullable_elem(tp)
+                        };
+                        Type::Vector(Box::new(elem), crate::data::Deps::none())
                     }
                     "sorted" => {
+                        // Dense (implicitly `not null`) — see the `index` arm.
+                        if self.lexer.has_keyword("not") {
+                            self.lexer.token("null");
+                        }
                         self.parse_fields(true, &mut fields);
                         Type::Sorted(sub_nr, fields, crate::data::Deps::none())
                     }
@@ -1975,12 +2021,56 @@ impl Parser {
         }
         self.lexer.token("}");
         self.lexer.has_token(";");
+        self.link_shared_nullable_hash(d_nr);
         // #91: check for circular init dependencies (second pass, all fields known).
         if !self.first_pass {
             self.check_circular_init(&init_deps);
         }
         self.context = context;
         true
+    }
+
+    /// @PLN25 Scope B — a keyed HASH field that shares its record set with a sibling NULLABLE
+    /// vector (the `other_indexes` "two views, one record set" pattern, e.g.
+    /// `struct Db { entries: vector<S>, lookup: hash<S[k]> }`) must index the `Some`-wrapped
+    /// records, not dense `S`.  Rewrite such a hash's element from `S` to the sibling's
+    /// `__nullable<S>` enum so the parser type, db storage, lookup type-id, and field-access all
+    /// agree on ONE type: the db link then matches by content, `determine_keys` bakes the key at
+    /// the payload offset, and `c.lookup[k].field` unwraps via the `Some` payload sub-ref — all
+    /// reusing the kept nullable machinery.  Gate-OFF-inert: a dense vector sibling's element is
+    /// `Reference(S)` (not the `Enum`), so nothing matches.  (Sorted/Index sharing is left dense —
+    /// no consumer exercises it and it needs the index bookkeeping on the `Some` variant.)
+    fn link_shared_nullable_hash(&mut self, d_nr: u32) {
+        let n = self.data.definitions[d_nr as usize].attributes.len();
+        // payload struct `S` -> its `__nullable<S>` enum, gathered from nullable vector siblings.
+        let mut nullable_of: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+        for a in 0..n {
+            if let Type::Vector(inner, _) = self.data.attr_type(d_nr, a)
+                && let Type::Enum(nd, true, _) = *inner
+                // ONLY the synth `__nullable<S>` enum — not an arbitrary user struct-enum
+                // element (`vector<Shape>`), whose `variant_of(.., "Some")` would be MAX.
+                && self.data.def(nd).name().starts_with("__nullable<")
+            {
+                let some = self.data.variant_of(nd, "Some");
+                let pa = self.data.attr(some, "payload");
+                if pa != usize::MAX
+                    && let Type::Reference(s, _) = self.data.attr_type(some, pa)
+                {
+                    nullable_of.insert(s, nd);
+                }
+            }
+        }
+        if nullable_of.is_empty() {
+            return;
+        }
+        for a in 0..n {
+            if let Type::Hash(h_elem, keys, deps) = self.data.attr_type(d_nr, a)
+                && let Some(&nd) = nullable_of.get(&h_elem)
+            {
+                self.data.definitions[d_nr as usize].attributes[a].typedef =
+                    Type::Hash(nd, keys, deps);
+            }
+        }
     }
 
     /// I3: parse an `interface` declaration and register it as `DefType::Interface`.

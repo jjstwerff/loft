@@ -23,7 +23,12 @@ pub struct Image {
   name: text,
   width: integer,
   height: integer,
-  data: vector<Pixel>
+  // `not null` (dense) is REQUIRED: the `#native` `n_load_png` bulk-creates this vector with
+  // `alloc_vector_from_bytes(3, …)` (3 contiguous bytes per Pixel) and `n_save_png` reads it back
+  // by raw pointer at the same 3-byte stride.  A native-managed raw-byte vector must keep the dense
+  // element layout the extension assumes — the nullable-by-default wrapping would change the stride
+  // and crash the FFI byte-copy.
+  data: vector<Pixel not null>
 }
 
 // Native function: decode a PNG file into an Image struct.

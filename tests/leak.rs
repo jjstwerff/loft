@@ -1410,3 +1410,67 @@ struct Holder { m: Sigil }
         leaks.join(", ")
     );
 }
+
+/// Pull the total live record count out of a `memory_report()` string
+/// (`"... | records {N} | ..."`).  Returns `u64::MAX` if the field is
+/// absent so a parse miss fails the assertion loudly rather than passing.
+fn report_records(report: &str) -> u64 {
+    report
+        .split("records ")
+        .nth(1)
+        .and_then(|s| s.split([' ', '|']).next())
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(u64::MAX)
+}
+
+/// @PLN25 — reassigning an inline struct-enum element must free the OLD
+/// variant's heap payload.  `remove_claims` had no `Parts::Enum` arm (it fell
+/// through to the no-op `_`), so overwriting an inline `enum { Has{text},
+/// Gone{n} }` element orphaned the prior `Has`'s text on every churn — one
+/// leaked record per iteration, reclaimed only when the whole store is freed.
+/// That makes it an INTRA-store leak the store-level gate (`check_store_leaks`)
+/// cannot see, so this pins the total record count flat instead.  Pre-fix this
+/// reported ~500 records after 500 churns; the symmetric `Parts::Enum` arm
+/// (allocation.rs, twin of `copy_claims`) holds it at a small constant.  Runs
+/// with the @PLN25 synthesis gate OFF — the bug is in plain user enums, not
+/// just the synthesised `__nullable<S>` form.
+#[test]
+fn pln25_inline_struct_enum_payload_free() {
+    let mut p = Parser::new();
+    let (data, db) = cached_default();
+    p.data = data;
+    p.database = db;
+    // Both variants carry a payload: a BARE no-field variant value leaks a
+    // store on construction (a separate, pre-existing bug) which would add
+    // stray records and muddy this record-count assertion.
+    p.parse_str(
+        r#"
+enum Maybe { Has { s: text }, Gone { n: integer } }
+pub fn test() {
+  v: vector<Maybe> = [Gone { n: 0 }];
+  for i in 0..500 {
+    v[0] = Has { s: "payload-distinct-text-{i}" };
+    v[0] = Gone { n: i };
+  }
+}
+"#,
+        "leak_test",
+        false,
+    );
+    assert!(
+        p.diagnostics.is_empty(),
+        "parse errors: {:?}",
+        p.diagnostics.lines()
+    );
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+    state.execute("test", &p.data);
+    let report = state.database.memory_report();
+    let recs = report_records(&report);
+    assert!(
+        recs < 20,
+        "inline struct-enum payload leaked: {recs} live records after 500 churns \
+         (expected a small constant). Report:\n{report}"
+    );
+}

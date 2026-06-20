@@ -306,7 +306,19 @@ impl Parser {
                         "OpGetVectorNullable",
                         &[code.clone(), Value::Int(i32::from(size)), i.clone()],
                     );
-                    if let Type::Reference(_, _) = *vtp.clone() {
+                    // @PLN25 E2 — a `__nullable<S>` element is `Enum(synth,true)`,
+                    // not `Reference`, but in a LINKED collection (an array of
+                    // ref slots — e.g. a struct-field vector that shares records
+                    // with a sibling hash) it is stored as a 4-byte rec-ref, so
+                    // the element read must DEREF via `OpVectorRefNullable` just
+                    // like a `Reference` element does.  Without this it keeps the
+                    // inline `OpGetVectorNullable(size=4)` and reads the rec-id
+                    // slot AS the record → every field offset is junk.  An INLINE
+                    // `vector<__nullable<S>>` (not linked) keeps the inline read.
+                    let elem_ref_like = matches!(&**vtp, Type::Reference(_, _))
+                        || matches!(&**vtp, Type::Enum(d, true, _)
+                            if self.data.def(*d).name.starts_with("__nullable<"));
+                    if elem_ref_like {
                         if self.database.is_linked(db_tp) {
                             ref_expr = self.cl("OpVectorRefNullable", &[code.clone(), i.clone()]);
                         }
@@ -532,6 +544,7 @@ impl Parser {
         to: &Value,
         val: &Value,
         f_type: &Type,
+        src_tp: &Type,
         op: &str,
     ) -> Value {
         // Intercept `h[key] = null` → remove the key from hash/index/sorted
@@ -547,8 +560,23 @@ impl Parser {
         // which finds-or-inserts at runtime (dedup by `value`'s key),
         // uniformly for local / field / `&`-param collections.  (The
         // `coll[key] = null` removal is intercepted earlier in this fn.)
+        //
+        // @PLN25 E2 — gate-on, a keyed collection over a nullable element
+        // (`hash<S[k]>` rewritten to `hash<__nullable<S>[k]>`) has element
+        // type `Enum(__nullable<S>, true)` (the inline-nullable form, see
+        // `index_type`), NOT `Reference(S)`.  Accept it too so the keyed-set
+        // still routes to `OpSetKeyed`: `set_keyed` reads `value`'s key via
+        // the SAME `key_owner`-resolved key descriptors the lookup uses, so
+        // insert and lookup agree.  Without this the set falls through to the
+        // update-only `OpCopyRecord`, which no-ops on the insert-miss and
+        // leaves every lookup returning null.  Inert gate-off (no element
+        // type is ever a `__nullable<` enum).
+        let nullable_elem = matches!(
+            f_type,
+            Type::Enum(e, true, _) if self.data.def(*e).name.starts_with("__nullable<")
+        );
         if op == "="
-            && matches!(f_type, Type::Reference(_, _))
+            && (matches!(f_type, Type::Reference(_, _)) || nullable_elem)
             && let Value::Call(get_nr, get_args) = to.unspan()
             && self.data.def(*get_nr).name() == "OpGetRecord"
             && let Some(Value::Int(db_tp)) = get_args.get(1)
@@ -645,6 +673,89 @@ impl Parser {
                 val.clone()
             };
             return self.cl("OpSetDbRef", &[r, p, v]);
+        }
+        // @PLN25 E2a.5 — `lvalue = null` for a nullable inline struct field /
+        // vector element.  The field/element is a synthetic `__nullable<S>` enum
+        // stored inline, so null is discriminant 0 (NOT the variable store_nr
+        // sentinel — an inline slot has no DbRef of its own).  `copy_ref` would
+        // emit `OpCopyRecord(null, dest, …)`: a silent no-op on the interpreter
+        // (the null source copies nothing) and a hard type error on native
+        // (`OpCopyRecord(cell, (), …)` — `()` where a DbRef is expected).  Write
+        // the discriminant at offset 0 to 0 instead; the inline form of `== null`
+        // reads exactly that (operators.rs `enum_null`).  Inert with the synthesis
+        // gate off — no `__nullable<` enums exist, so the name check never matches.
+        //
+        // A present `Some` carrying heap payload (text / nested vector) is freed
+        // first via `OpClearKeyed` (→ `remove_claims`), which reads the
+        // discriminant and no-ops on an already-null / payload-less element — so
+        // it is safe regardless of prior state.  Without it the old payload leaks
+        // until the host store is freed (@PLN25 E2 leak, was tracked in
+        // embedded-record-null.md).
+        if op == "="
+            && matches!(val.unspan(), Value::Null)
+            && let Type::Enum(syn, true, _) = f_type
+            && self.data.def(*syn).name.starts_with("__nullable<")
+            && !matches!(to, Value::Var(_))
+        {
+            let set_null = self.cl(
+                "OpSetEnum",
+                &[to.clone(), Value::Int(0), Value::Enum(0, u16::MAX)],
+            );
+            let kt = self.data.def(*syn).known_type();
+            if !self.first_pass && kt != u16::MAX {
+                let free = self.cl("OpClearKeyed", &[to.clone(), Value::Int(i32::from(kt))]);
+                return v_block(vec![free, set_null], Type::Void, "nullable_elem_set_null");
+            }
+            return set_null;
+        }
+        // @PLN25 E2 — `inline_nullable = <expression source of type S>`: a nullable
+        // `__nullable<S>` field / vector element assigned from an EXPRESSION whose
+        // type is `Reference(S)` (a call / variable, possibly the null sentinel).
+        // `copy_ref` → `OpCopyRecord` would copy S's flat layout (`id@0,tag@8`) into
+        // the packed `Some` element (`disc@0,tag@4,id@8`) — garbage on a present
+        // source, and `allocation.rs:560` OOB on a null source (no store to read).
+        // Instead: when the source is present, build the `Some` variant (disc 2 +
+        // per-field copy at the Some offsets); when null, set discriminant 0.  This
+        // is `handle_field`'s null-source convert lifted to the `[i] = expr` / field
+        // store site.  A literal `S{…}` already built `Some` in `parse_var`, so its
+        // `src_tp` is the enum (not `Reference(S)`) and it does not reach here.
+        if op == "="
+            && !self.first_pass
+            && !matches!(to, Value::Var(_))
+            && let Type::Enum(syn, true, _) = f_type
+            && self.data.def(*syn).name.starts_with("__nullable<")
+            && let Type::Reference(src_d, _) = src_tp
+            && self.data.def(*syn).name == format!("__nullable<{}>", self.data.def(*src_d).name())
+        {
+            let syn = *syn;
+            let some_d = self.data.variant_of(syn, "Some");
+            let src_var = self.vars.work_refs(src_tp, &mut self.lexer);
+            // Single-payload: set the discriminant present and copy the whole dense `S`
+            // source into the inline `payload` field (Null=1, Some=2; 0 = absent).
+            let present = self.build_some_present(some_d, to.clone(), Value::Var(src_var));
+            // null branch — set discriminant 0 (the element may already hold a
+            // `Some`; unlike the construction path it is not freshly zero-inited).
+            let null_set = self.cl(
+                "OpSetEnum",
+                &[to.clone(), Value::Int(0), Value::Enum(0, u16::MAX)],
+            );
+            let is_null = self.cl("OpRefIsNull", &[Value::Var(src_var)]);
+            let not_null = self.cl("OpNot", &[is_null]);
+            // Free the element's prior `Some` payload before overwriting it with
+            // either the new `Some` or null — both branches below clobber the
+            // inline slot in place, so without this the old heap payload (text /
+            // nested vector) leaks.  `remove_claims` no-ops on an already-null
+            // element, so it is safe even on first assignment.  Free FIRST: the
+            // source (a plain `Reference(S)` value) cannot alias this enum-typed
+            // inline slot, so clearing it does not disturb the source read.
+            let kt = self.data.def(syn).known_type();
+            let mut body = Vec::with_capacity(3);
+            if kt != u16::MAX {
+                body.push(self.cl("OpClearKeyed", &[to.clone(), Value::Int(i32::from(kt))]));
+            }
+            body.push(v_set(src_var, val.clone()));
+            body.push(v_if(not_null, Value::Insert(present), null_set));
+            return v_block(body, Type::Void, "nullable_elem_convert");
         }
         if matches!(f_type, Type::Enum(_, true, _) | Type::Reference(_, _))
             && op == "="
@@ -1623,7 +1734,7 @@ use #count instead"
             let is_coroutine_loop = matches!(&in_type, Type::Iterator(_, _))
                 && !self.first_pass
                 && matches!(expr.unspan(), Value::Call(d, _) if matches!(self.data.def(*d).returned(), Type::Iterator(_, _)));
-            let (_iter_var, pre_var, for_var, if_step, create_iter, iter_next) =
+            let (iter_var, pre_var, for_var, if_step, create_iter, iter_next) =
                 self.parse_for_iter_setup(&id, &in_type, expr);
             let var_tp = self.for_type(&in_type);
             // For vector loops: set_loop stores the temp-copy var; override with the
@@ -1634,7 +1745,7 @@ use #count instead"
                 }
                 // Always restore the original collection expression so that
                 // is_iterated_value() can match field-access forms like `db.items`.
-                self.vars.set_coll_value(orig_coll_expr);
+                self.vars.set_coll_value(orig_coll_expr.clone());
             }
             if !self.first_pass && iter_next == Value::Null {
                 diagnostic!(
@@ -1757,27 +1868,42 @@ use #count instead"
             } else {
                 u16::MAX
             };
-            // #403 — a value-element vector for-loop cannot read the OOB null back
-            // from the loop var (a boolean's 1-byte slot truncates the i64::MIN
-            // null, and `false` is itself a valid element), so capture the element
-            // REF the read wraps (`OpGetVectorNullable`) for a ref-null termination.
-            let elem_ref: Option<Value> =
-                if matches!(&var_tp, Type::Boolean) && matches!(in_type, Type::Vector(_, _)) {
-                    // `iter_next` for a vector is a block `[Set(#index, +1), <read>]`;
-                    // the read is `OpGet*(OpGetVectorNullable(vec, size, #index), ..)`
-                    // — pull the wrapped OpGetVectorNullable (the read's first arg).
-                    let read = match iter_next.unspan() {
-                        Value::Block(bl) => bl.operators.last().map(Value::unspan),
-                        other => Some(other),
-                    };
-                    if let Some(Value::Call(_, args)) = read {
-                        args.first().cloned()
-                    } else {
-                        None
+            // For length-based vector termination below: pull the collection the
+            // element fetch actually reads from (the materialised iteration temp),
+            // not the original collection expression.  Re-reading the original each
+            // iteration would re-run a side-effecting source (`for x in make()`); the
+            // fetch temp is already materialised once, so its length is cheap + stable.
+            let vec_fetch_coll = if matches!(in_type, Type::Vector(_, _)) {
+                fn find_vec_coll(v: &Value, gvn: u32, vrn: u32) -> Option<Value> {
+                    match v {
+                        Value::Call(op, args) if *op == gvn || *op == vrn => args.first().cloned(),
+                        Value::Call(_, args)
+                        | Value::Insert(args)
+                        | Value::Tuple(args)
+                        | Value::Parallel(args) => {
+                            args.iter().find_map(|a| find_vec_coll(a, gvn, vrn))
+                        }
+                        Value::Block(bl) | Value::Loop(bl) => {
+                            bl.operators.iter().find_map(|o| find_vec_coll(o, gvn, vrn))
+                        }
+                        Value::If(c, t, e) => find_vec_coll(c, gvn, vrn)
+                            .or_else(|| find_vec_coll(t, gvn, vrn))
+                            .or_else(|| find_vec_coll(e, gvn, vrn)),
+                        Value::Set(_, x)
+                        | Value::Return(x)
+                        | Value::Drop(x)
+                        | Value::Yield(x)
+                        | Value::BreakWith(_, x) => find_vec_coll(x, gvn, vrn),
+                        Value::Span(b) => find_vec_coll(&b.1, gvn, vrn),
+                        _ => None,
                     }
-                } else {
-                    None
-                };
+                }
+                let gvn = self.data.def_nr("OpGetVectorNullable");
+                let vrn = self.data.def_nr("OpVectorRefNullable");
+                find_vec_coll(&iter_next, gvn, vrn)
+            } else {
+                None
+            };
             let for_next = v_set(for_var, iter_next);
             self.vars.loop_var(for_var);
             let in_loop = self.in_loop;
@@ -1829,7 +1955,7 @@ use #count instead"
             // OpCoroutineExhausted(gen) reads the coroutine status, which
             // CoroutineNext sets to Exhausted on the post-last-yield call.
             // `gen_var` is captured above from `iter_next`'s first arg
-            // (the coroutine path never assigns a slot to `_iter_var`).
+            // (the coroutine path never assigns a slot to the index var).
             //
             // @PLAN16 phase 05 — closures (`Type::Function`) join tuples on
             // this path: a yielded fn-ref has no null sentinel that
@@ -1883,16 +2009,28 @@ use #count instead"
                     v_block(vec![Value::Break(0)], Type::Void, "break"),
                     Value::Null,
                 ));
-            } else if let Some(ref_expr) = elem_ref {
-                // #403 — boolean vector: the value-sentinel termination breaks on a
-                // real `false`.  Terminate on the element REF's null instead — the
-                // `OpGetVectorNullable` the read wraps returns a null DbRef one past
-                // the last item, which `OpConvBoolFromRef` maps to false → break,
-                // while a real `false`/`true` ref is non-null → keep iterating.
-                let test_for = self.cl("OpConvBoolFromRef", &[ref_expr]);
-                let test_for = self.cl("OpNot", &[test_for]);
+            } else if matches!(in_type, Type::Vector(_, _)) {
+                // Length-based termination: yield exactly len(coll) elements,
+                // independent of the element value, so a null ELEMENT (which shares
+                // the OOB null sentinel) no longer ends the loop early.  The length is
+                // re-read EACH iteration (not hoisted) so in-loop `x#remove` — which
+                // shrinks the vector and decrements the index (state/io.rs remove) —
+                // still terminates: when the vector drains, len falls to the index.
+                // Direction-agnostic: forward ends at index == len, reverse ends at
+                // index < 0 (the i32::MIN sentinel the reverse step sets).
+                let coll = vec_fetch_coll
+                    .clone()
+                    .unwrap_or_else(|| orig_coll_expr.clone());
+                let len = self.cl("OpLengthVector", std::slice::from_ref(&coll));
+                let past_end = self.cl("OpLeInt", &[len, Value::Var(iter_var)]);
                 lp.push(v_if(
-                    test_for,
+                    past_end,
+                    v_block(vec![Value::Break(0)], Type::Void, "break"),
+                    Value::Null,
+                ));
+                let before_start = self.cl("OpLtInt", &[Value::Var(iter_var), Value::Int(0)]);
+                lp.push(v_if(
+                    before_start,
                     v_block(vec![Value::Break(0)], Type::Void, "break"),
                     Value::Null,
                 ));

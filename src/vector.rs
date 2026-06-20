@@ -24,6 +24,9 @@ fn checked_vec_cap(count: u32, size: u32) -> u32 {
 
 // TODO change slice to its own vector on updating it
 pub fn insert_vector(db: &DbRef, size: u32, index: i64, stores: &mut [Store]) -> DbRef {
+    if db.is_null() {
+        return DbRef::NULL; // cannot insert into a null (absent) vector
+    }
     let len = length_vector(db, stores);
     let real = if index < 0 {
         index + i64::from(len)
@@ -123,6 +126,12 @@ pub fn pre_alloc_vector(db: &DbRef, count: u32, elem_size: u32, stores: &mut [St
 }
 
 pub fn vector_append(db: &DbRef, size: u32, stores: &mut [Store]) -> DbRef {
+    // Appending to a null (absent) vector is a no-op for now — it must never
+    // index stores[u16::MAX].  Plan-25 Q4: make this a loud error once null is
+    // a first-class vector value (P2/P3); P1 only guarantees no OOB.
+    if db.is_null() {
+        return DbRef::NULL;
+    }
     let store = keys::mut_store(db, stores);
     if db.rec == 0 {
         return DbRef {
@@ -301,7 +310,9 @@ pub fn ordered_finish(sorted: &DbRef, rec: &DbRef, keys: &[Key], stores: &mut [S
 
 #[must_use]
 pub fn length_vector(db: &DbRef, stores: &[Store]) -> u32 {
-    if db.rec == 0 || db.pos == 0 {
+    // A null vector (absent) and an unallocated/empty vector both have length 0;
+    // the null sentinel is checked first so it never indexes stores[u16::MAX].
+    if db.is_null() || db.rec == 0 || db.pos == 0 {
         return 0;
     }
     let store = keys::store(db, stores);
@@ -314,9 +325,11 @@ pub fn length_vector(db: &DbRef, stores: &[Store]) -> u32 {
 }
 
 pub fn clear_vector(db: &DbRef, stores: &mut [Store]) {
-    if db.rec == 0 || db.pos == 0 {
-        // Unallocated (null) vector ref — nothing to clear.  The hidden
-        // return buffer arrives like this on a fn's first delivery.
+    if db.is_null() || db.rec == 0 || db.pos == 0 {
+        // Null (absent) or unallocated/empty vector ref — nothing to clear.
+        // The hidden return buffer arrives unallocated like this on a fn's
+        // first delivery; the null sentinel is checked first so clear() never
+        // indexes stores[u16::MAX].
         return;
     }
     let store = keys::mut_store(db, stores);
@@ -331,6 +344,12 @@ pub fn clear_vector(db: &DbRef, stores: &mut [Store]) {
 
 #[must_use]
 pub fn get_vector(db: &DbRef, size: u32, from: i64, stores: &[Store]) -> DbRef {
+    // Indexing into a null (absent) vector yields the null element, not an OOB
+    // on stores[u16::MAX].  (An out-of-range index on a real vector returns the
+    // same null element below — the two read as the same absent value.)
+    if db.is_null() {
+        return DbRef::NULL;
+    }
     #[cfg(debug_assertions)]
     if db.store_nr != u16::MAX {
         debug_assert!(
@@ -366,6 +385,9 @@ pub fn get_vector(db: &DbRef, size: u32, from: i64, stores: &[Store]) -> DbRef {
 }
 
 pub fn remove_vector(db: &DbRef, size: u32, index: i64, stores: &mut [Store]) -> bool {
+    if db.is_null() {
+        return false; // nothing to remove from a null (absent) vector
+    }
     let len = i64::from(length_vector(db, stores));
     let store = keys::mut_store(db, stores);
     let vec_rec = store.get_u32_raw(db.rec, db.pos);
@@ -722,5 +744,60 @@ pub fn reverse_vector(db: &DbRef, elem_size: u32, stores: &mut [Store]) {
         }
         lo += 1;
         hi -= 1;
+    }
+}
+
+#[cfg(test)]
+mod plan25_null_vector_tests {
+    //! @PLN25 Phase 1: a null vector (`DbRef::NULL`, `store_nr == u16::MAX`) must
+    //! flow through every store accessor WITHOUT indexing `stores[u16::MAX]`.
+    //! Passing an empty `stores` slice proves the `is_null()` guard returns
+    //! before any dereference — a missed guard would panic on the empty slice.
+    use super::{
+        clear_vector, get_vector, insert_vector, length_vector, remove_vector, reverse_vector,
+        sort_vector, vector_append,
+    };
+    use crate::keys::DbRef;
+    use crate::store::Store;
+
+    const NULL: DbRef = DbRef::NULL;
+
+    #[test]
+    fn null_is_distinct_from_empty() {
+        assert!(NULL.is_null());
+        // A valid-but-EMPTY vector lives on a real store (store_nr 0, rec 0) —
+        // length 0 but NOT null.  This is the distinction the feature rests on.
+        assert!(
+            !DbRef {
+                store_nr: 0,
+                rec: 0,
+                pos: 0
+            }
+            .is_null()
+        );
+    }
+
+    #[test]
+    fn length_of_null_is_zero() {
+        assert_eq!(length_vector(&NULL, &[]), 0);
+    }
+
+    #[test]
+    fn index_into_null_yields_null_element() {
+        assert!(get_vector(&NULL, 8, 0, &[]).is_null());
+        assert!(get_vector(&NULL, 8, 5, &[]).is_null());
+        assert!(get_vector(&NULL, 8, -1, &[]).is_null());
+    }
+
+    #[test]
+    fn mutators_on_null_are_safe_noops() {
+        let mut stores: Vec<Store> = vec![];
+        assert!(vector_append(&NULL, 8, &mut stores).is_null());
+        assert!(insert_vector(&NULL, 8, 0, &mut stores).is_null());
+        assert!(!remove_vector(&NULL, 8, 0, &mut stores));
+        clear_vector(&NULL, &mut stores);
+        sort_vector(&NULL, 8, false, &mut stores);
+        reverse_vector(&NULL, 8, &mut stores);
+        // Reaching here = no accessor indexed stores[u16::MAX].
     }
 }

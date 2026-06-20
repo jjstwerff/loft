@@ -5,6 +5,11 @@
 // backends (plan-07 4f.5: the raise is the semantics; IEEE/null behaviour is
 // the defended `?? / != null` path).  Pre-fix the native binary recorded the
 // raise but never checked it: `5 / 0` printed a wrong value and exited 0.
+//
+// @PLN25 note (gate flip): the raise still fires on both backends; the
+// loft_suite harness classifies an undefended div-zero as a RECOVERABLE fault
+// (not a UserPanic/AssertionFailed), so these `@EXPECT_FAIL` functions read as
+// "passed" — an informational `FIXED` notice, NOT a suite failure.
 
 // @EXPECT_FAIL: divide by zero
 fn test_int_div_zero() {

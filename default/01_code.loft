@@ -838,7 +838,12 @@ fn OpGetByte(v1: reference, fld: const u16, min: const i16) -> integer;
 fn OpGetByteNullable(v1: reference, fld: const u16, min: const i16) -> integer;
 #rust"{{let db = @v1; let r = stores.store(&db).get_byte(db.rec, db.pos + u32::from(@fld), i32::from(@min)); if r == i32::from(@min) + 255 {{ i64::MIN }} else {{ i64::from(r) }}}}"
 fn OpGetEnum(v1: reference, fld: const u16) -> enumerate;
-#rust"{{let db = @v1; let r = stores.store(&db).get_byte(db.rec, db.pos + u32::from(@fld), 0); if r < 0 {{ 255u8 }} else {{ r as u8 }}}}"
+// A `rec == 0` ref is the null/absent record — an out-of-bounds vector index
+// (`get_vector` returns `rec: 0`) or an unset slot.  `OpGetInt`/`OpGetCharacter`
+// already guard this; the disc read must too, else it reads a garbage byte from
+// record 0 and an OOB `vector<__nullable<S>>` element reads as a present variant
+// instead of absent.  Disc 0 = absent (variants start at 1).
+#rust"{{let db = @v1; if db.rec == 0 {{ 0u8 }} else {{ let r = stores.store(&db).get_byte(db.rec, db.pos + u32::from(@fld), 0); if r < 0 {{ 255u8 }} else {{ r as u8 }} }}}}"
 fn OpSetEnum(v1: reference, fld: const u16, val: enumerate);
 #rust"{{let db = @v1; let v = @val; stores.store_mut(&db).set_byte(db.rec, db.pos + u32::from(@fld), 0, i32::from(v));}}"
 // @PLN17: boolean field/element storage is byte-stored with the u8 form
@@ -915,6 +920,17 @@ fn OpTagFault(kind: const u8);
 // The length of vectors is written at the start of their allocation.
 fn OpLengthVector(r: vector) -> integer;
 #rust"i64::from(vector::length_vector(&@r, &s.database.allocations))"
+// @PLN25: true when the vector is the null sentinel (absent), tested via
+// store_nr — NOT rec==0, which an empty `[]` also has.  Lowered directly by the
+// `==`/`!=` operator dispatch for `vector == null` / `vector != null`.
+fn OpVectorIsNull(r: vector) -> boolean;
+#rust"@r.store_nr == u16::MAX"
+// @PLN25: true when a reference/enum value is the null sentinel, tested via
+// store_nr — NOT rec==0, which an inline-represented value (e.g. a present enum
+// on the native backend) also carries.  Lowered by the `==`/`!=` dispatch for
+// `enum == null` (OpEqRef's rec==0 test misreads native enums as null).
+fn OpRefIsNull(r: reference) -> boolean;
+#rust"@r.store_nr == u16::MAX"
 // Number of elements in the vector. Use in loop bounds: for i in 0..v.len().
 pub fn len(both: vector) -> integer {
   OpLengthVector(both)

@@ -82,6 +82,61 @@ impl Parser {
         if let Type::RefVar(tp) = t {
             t = *tp;
         }
+        // @PLN25 E2 — a METHOD CALL or an S-level field access on a `__nullable<S>`
+        // receiver (`v[i].method()` / `v[i].struct_method`): unwrap the receiver to
+        // dense `S` (the payload offset-ref, gap 2) so the normal `Reference(S)`
+        // field/method dispatch below resolves it.  Two cases:
+        //  - a trailing `(` is a method call — `find_poly_enum_field` matches the
+        //    method's fn-ref entry copied into `Some` and would read it as a FIELD
+        //    (→ "Field access not supported on type fn …"); unwrap takes precedence;
+        //  - no `Some`-variant field of that name — an S-level access; unwrap.
+        // A plain DATA field of `Some` (no `(`) resolves via `find_poly_enum_field`
+        // below and is left untouched here.
+        if let Type::Enum(enum_d, true, _) = &t
+            && self.data.def(*enum_d).name.starts_with("__nullable<")
+            && (self.lexer.peek_token("(") || self.find_poly_enum_field(*enum_d, &field).is_none())
+        {
+            let enum_d = *enum_d;
+            // Resolve the dense `S` def from the `Some` variant's inline `payload` field
+            // TYPE — NOT by re-parsing the enum name via `def_nr("S")`, which returns
+            // `u16::MAX` for a CROSS-LIB struct (its def is source-qualified), the
+            // `Unknown field __nullable<S>.field` regression for a library struct.
+            let some_d = self.data.variant_of(enum_d, "Some");
+            let payload_attr = self.data.attr(some_d, "payload");
+            let struct_d = if payload_attr == usize::MAX {
+                u32::MAX
+            } else {
+                match self.data.attr_type(some_d, payload_attr) {
+                    Type::Reference(d, _) => d,
+                    _ => u32::MAX,
+                }
+            };
+            if struct_d != u32::MAX && self.data.attributes(struct_d) > 0 {
+                if !self.first_pass {
+                    // Single-payload form: the dense `S` lives in the `Some` variant's
+                    // inline `payload` field, so unwrap to a sub-ref at `payload`'s byte
+                    // offset.  That sub-ref IS a valid dense `S` (it shares S's offset
+                    // table), so the field/method access below re-dispatches on dense `S`
+                    // with no copy.
+                    let off = self
+                        .database
+                        .position(self.data.def(some_d).known_type(), "payload");
+                    *code = self.get_val(
+                        &Type::Reference(struct_d, crate::data::Deps::none()),
+                        false,
+                        u32::from(off),
+                        code.clone(),
+                        u32::MAX,
+                    );
+                }
+                let dep = t.depend();
+                let mut new_t = Type::Reference(struct_d, crate::data::Deps::none());
+                for on in dep {
+                    new_t = new_t.depending(on);
+                }
+                t = new_t;
+            }
+        }
         let dnr = self.data.type_def_nr(&t);
         if matches!(t, Type::Vector(_, _)) && self.vector_operations(code, &field, e_size) {
             return Type::Void;
@@ -236,24 +291,35 @@ impl Parser {
             }
             if self.first_pass && self.lexer.has_token("(") {
                 self.skip_remaining_args();
-            } else if !self.first_pass {
-                // For polymorphic enums, this field may be in a struct (not the enum itself).
-                if let Type::Enum(enum_d_nr, true, _) = &t
-                    && let Some((found_d_nr, found_fnr)) =
-                        self.find_poly_enum_field(*enum_d_nr, &field)
-                {
-                    let dep = t.depend();
-                    t = self.data.attr_type(found_d_nr, found_fnr);
-                    for on in dep {
-                        t = t.depending(on);
-                    }
-                    if let Value::Var(nr) = code {
-                        t = t.depending(*nr);
-                    }
+            } else if let Type::Enum(enum_d_nr, true, _) = &t
+                && let Some((found_d_nr, found_fnr)) = self.find_poly_enum_field(*enum_d_nr, &field)
+            {
+                // For polymorphic enums (incl. @PLN25 `__nullable<S>`), this field
+                // lives in a VARIANT struct, not the enum itself.  Resolve in BOTH
+                // passes: the first pass needs the field TYPE so the receiver var
+                // is not left as `Var(receiver)` and then re-typed to the field
+                // type by `change_var` (the bug behind `for o in v { f(o.items) }`
+                // → "o cannot change type to vector<…>").  `get_field` (which needs
+                // the layout's `known_type`, assigned in `fill_all`) emits only in
+                // the second pass.
+                let dep = t.depend();
+                t = self.data.attr_type(found_d_nr, found_fnr);
+                for on in dep {
+                    t = t.depending(on);
+                }
+                if let Value::Var(nr) = code {
+                    t = t.depending(*nr);
+                }
+                if self.first_pass {
+                    // Type-only: leave a non-Var placeholder so the caller's
+                    // `change_var` does not re-type the receiver.
+                    *code = Value::Null;
+                } else {
                     *code = self.get_field(found_d_nr, found_fnr, code.clone());
                     self.data.attr_used(found_d_nr, found_fnr);
-                    return t;
                 }
+                return t;
+            } else if !self.first_pass {
                 // map/filter/reduce as method syntax on vectors:
                 // v.map(fn) → map(v, fn)
                 // Unwrap &vector<T> so map/filter/reduce work on ref params.
@@ -565,9 +631,12 @@ impl Parser {
                 elm_type = Type::Character;
             }
         } else if let Type::Hash(el, keys, _) | Type::Spacial(el, keys, _) = &t {
+            // @PLN25 E2 — key fields live in the `Some` variant when the element was
+            // rewritten to `__nullable<S>`; resolve names against the key-bearing def.
+            let el = crate::typedef::key_bearing_def(&self.data, *el);
             let mut key_types = Vec::new();
             for k in keys {
-                key_types.push(self.data.attr_type(*el, self.data.attr(*el, k)).clone());
+                key_types.push(self.data.attr_type(el, self.data.attr(el, k)).clone());
             }
             self.parse_key(code, &t, &key_types);
             // @P285 — a keyed-collection lookup RESULT is nullable (an absent
@@ -579,9 +648,10 @@ impl Parser {
             self.expr_not_null = false;
             self.expr_not_null_name.clear();
         } else if let Type::Sorted(el, keys, _) | Type::Index(el, keys, _) = &t {
+            let el = crate::typedef::key_bearing_def(&self.data, *el);
             let mut key_types = Vec::new();
             for (k, _) in keys {
-                key_types.push(self.data.attr_type(*el, self.data.attr(*el, k)).clone());
+                key_types.push(self.data.attr_type(el, self.data.attr(el, k)).clone());
             }
             self.parse_key(code, &t, &key_types);
             // @P285 — see the Hash/Spacial arm above; the lookup result is nullable.
@@ -631,7 +701,17 @@ impl Parser {
             // so that field access and range-query for-loops resolve fields against the
             // variant struct (not the parent enum), and for_type() can map the element type.
             if matches!(ret, Type::Enum(_, true, _)) {
-                Type::Reference(*d_nr, crate::data::Deps::none())
+                // @PLN25 E2 — a synth `__nullable<S>` element keeps its `Enum`
+                // type (here `d_nr` IS the enum, not a variant), exactly as a
+                // `vector<__nullable<S>>` element does, so the field-access
+                // unwrap in `field()` resolves S's fields through `Some` and a
+                // `lookup[k] == null` test works. Converting it to `Reference`
+                // would point at the enum (no payload fields) → "Unknown field".
+                if self.data.def(*d_nr).name.starts_with("__nullable<") {
+                    ret
+                } else {
+                    Type::Reference(*d_nr, crate::data::Deps::none())
+                }
             } else {
                 ret
             }

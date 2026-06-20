@@ -592,6 +592,14 @@ pub fn OpCopyRecord(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, to: DbRef
         let _ = tp;
         return;
     }
+    // @PLN25 — mirror `state/io.rs::do_copy_record`: a NULL source
+    // (`store_nr == u16::MAX`) has no store to read; `store(&data)` would index
+    // `allocations[65535]` and panic (`allocation.rs:560`).  Guards the
+    // pre-existing crash on `vec[i] = <runtime-null>` into a non-nullable inline
+    // element — leave the destination unchanged rather than crash.
+    if data.store_nr == u16::MAX {
+        return;
+    }
     // mirror `state/io.rs::copy_record`'s tag handling and
     // cleanup.  The bytecode form masks the high bit of `tp` before
     // indexing into `stores.types` (0x8000 marks "free source after

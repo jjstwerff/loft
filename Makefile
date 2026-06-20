@@ -292,16 +292,31 @@ rebuild-native-cdylibs:
 	  echo "      (stale target/wasm32-wasip2/ present; run: rustup target add wasm32-wasip2)"; \
 	fi
 
+# Disk-backed scratch for native/wasm test compiles — keeps rustc/rust-lld link
+# intermediates AND the loft native binary cache off the /tmp tmpfs (a ~7.5G RAM
+# disk on some boxes), which parallel compiles otherwise exhaust → rust-lld dies
+# with SIGBUS, surfacing as flaky, unrelated failures.  TMPDIR also redirects
+# every std::env::temp_dir() user (cross_mode / exit_codes / html_wasm), and
+# scratch_dir() falls back to TMPDIR when LOFT_TMPDIR is unset.  Mirrors the same
+# redirect in scripts/find_problems.sh.  MUST be OUTSIDE the repo: a
+# `target/`-relative TMPDIR breaks the package/registry tests (they build
+# fixtures in temp_dir then package/extract — anything under `target/` is
+# excluded, so loft.toml goes missing).  /var/tmp is disk-backed.
+TEST_SCRATCH := /var/tmp/loft-test-scratch-$(shell printf '%s' "$(CURDIR)" | cksum | cut -d' ' -f1)
+TEST_ENV := TMPDIR=$(TEST_SCRATCH) LOFT_TMPDIR=$(TEST_SCRATCH)
+
 test: clippy rebuild-native-cdylibs
 	-rm -f tests/generated/*
 	-rm -f tests/dumps/*.txt
+	mkdir -p $(TEST_SCRATCH)
 	# --release: the loft bytecode interpreter is ~1800x slower in debug
 	# mode (debug Rust running an interpreter loop). Release mode keeps
 	# the full test suite under a minute instead of 30+ minutes.
-	RUST_BACKTRACE=1 cargo test --release -- --nocapture --test-threads=1 >> result.txt 2>&1
+	$(TEST_ENV) RUST_BACKTRACE=1 cargo test --release -- --nocapture --test-threads=1 >> result.txt 2>&1
 
 quick: rebuild-native-cdylibs
-	RUST_BACKTRACE=1 cargo test --release -- --nocapture --test-threads=1 > result.txt 2>&1
+	mkdir -p $(TEST_SCRATCH)
+	$(TEST_ENV) RUST_BACKTRACE=1 cargo test --release -- --nocapture --test-threads=1 > result.txt 2>&1
 
 # make iter TEST=<filter> [TFILE=<test_binary>] [PROFILE=release]
 #
@@ -1217,6 +1232,7 @@ ci:
 	# is heavy enough that local devs run `make gallery` separately when
 	# touching the wasm bundle.  Other dev-only suites (test-packages,
 	# test-gl-smoke, test-gl-golden) live in `make ci-full`.
+	mkdir -p $(TEST_SCRATCH) && export $(TEST_ENV) && \
 	$(MAKE) rebuild-native-cdylibs >> result.txt 2>&1 && \
 	cargo fmt -- --check >> result.txt 2>&1 && \
 	cargo clippy -- -D warnings >> result.txt 2>&1 && \

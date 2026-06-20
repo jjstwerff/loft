@@ -3791,6 +3791,102 @@ impl Data {
         d
     }
 
+    /// @PLN25 E2a.1 — synthesize (once per struct) the nullable-enum type that
+    /// backs a nullable embedded struct field / vector element: a 2-variant
+    /// enum `{ Null, Some<fields-of struct_d> }`.  A nullable inline `Row` is
+    /// byte-identical to this enum (discriminant at offset 0, `0` = absent), so
+    /// the existing enum layout / construct / access / copy machinery carries
+    /// null for free — see
+    /// doc/claude/plans/25-nullable-sequences/embedded-record-null.md.
+    ///
+    /// Mirrors `parse_enum_values`' first-pass calls exactly — the parent's
+    /// per-variant `constant` attributes, each variant's `enum` discriminant at
+    /// offset 0, and the `Some` payload copied from `struct_d` — so the
+    /// synthesized layout equals a hand-written `enum { Null, Some { … } }` by
+    /// construction.  Idempotent + globally registered (source 0) like
+    /// [`tuple_def`].
+    pub fn nullable_enum_for(&mut self, lexer: &mut Lexer, struct_d: u32) -> u32 {
+        let struct_name = self.def(struct_d).name.clone();
+        let name = format!("__nullable<{struct_name}>");
+        // @PLN25 + @PLN22 (p379 `two_libs_same_struct_name`): key the synth enum on the
+        // STRUCT's OWN source — NOT a single global `STD_SOURCE` entry.  Two libraries may
+        // each define a struct of the same name (`Chunk`); a global `__nullable<Chunk>` binds
+        // EVERY `vector<Chunk>` to whichever `Chunk` synth'd first, so the OTHER lib's element
+        // resolves to the wrong payload struct — its fields are "not found", and a field WRITE
+        // (`c.field[i] = v`) then collapses to a base-var reassign → "cannot change type from
+        // __nullable<Chunk> to <field-type>".  `(name, struct_source)` uniquely identifies the
+        // struct (a lib cannot define two structs of one name); a consumer that references the
+        // struct (a different `self.source`) resolves to the same synth via the struct's source,
+        // because deps parse before dependents.
+        let struct_source = self.definitions[struct_d as usize].source;
+        if let Some(&nr) = self.def_names.get(&(name.clone(), struct_source)) {
+            return nr;
+        }
+        let pos = lexer.pos().clone();
+        // Create + register the synth under the STRUCT's source (not the current parse source),
+        // so `add_def`'s `(name, source)` registration + dual-definition guard match the lookup
+        // key above, and a `rebuild_indices` (cache-load path) re-derives the SAME key from the
+        // def's `.source`.  Temporarily retarget `self.source` for the one `add_def` call.
+        let saved_source = self.source;
+        self.source = struct_source;
+        let e = self.add_def(&name, &pos, DefType::Enum);
+        self.source = saved_source;
+        self.definitions[e as usize].source = struct_source;
+        // Struct-enum (carries payload) → discriminator type is Enum(e, true).
+        // Set directly (not via set_returned): the `Some` variant below would
+        // otherwise set it a second time and trip set_returned's once-only guard.
+        self.definitions[e as usize].returned = Type::Enum(e, true, Deps::none());
+        let enumerate = self.def_nr("enumerate");
+
+        // Variant 0 — `Null` (unit, no payload).  nr = 0 ⇒ discriminant value 1
+        // (enum values start at 1; `0` = absent).  A unit variant carries no
+        // `enum` attribute of its own (matches `parse_enum_values`); its
+        // discriminant rides the `Some` variant's offset-0 slot.
+        let nv = self.add_def("Null", &pos, DefType::EnumValue);
+        self.definitions[nv as usize].parent = e;
+        self.set_returned(nv, Type::Enum(e, true, Deps::none()));
+        let null_attr = self.add_attribute(lexer, e, "Null", Type::Enum(e, true, Deps::none()));
+        self.definitions[e as usize].attributes[null_attr].constant = true;
+        self.set_attr_value(e, null_attr, Value::Enum(1, u16::MAX));
+
+        // Variant 1 — `Some` carrying struct_d's fields.  nr = 1 ⇒ discriminant 2.
+        let sv = self.add_def("Some", &pos, DefType::EnumValue);
+        self.definitions[sv as usize].parent = e;
+        self.set_returned(sv, Type::Enum(e, true, Deps::none()));
+        let some_attr = self.add_attribute(lexer, e, "Some", Type::Enum(e, true, Deps::none()));
+        self.definitions[e as usize].attributes[some_attr].constant = true;
+        self.set_attr_value(e, some_attr, Value::Enum(2, u16::MAX));
+        // Discriminant at offset 0 — the layout pass keys on `fields[0].name ==
+        // "enum"` to reserve offset 0 and pack the payload after it.
+        let e_attr = self.add_attribute(
+            lexer,
+            sv,
+            "enum",
+            Type::Enum(enumerate, false, Deps::none()),
+        );
+        self.set_attr_value(sv, e_attr, Value::Enum(2, u16::MAX));
+        // Single-payload form (see plans/25-nullable-sequences/single-payload-refactor.md):
+        // the `Some` variant carries ONE inline `payload: S` field whose TYPE is `struct_d`
+        // itself — the same struct definition as a standalone `S`.  The layout pass embeds
+        // it after the discriminant, so `payload`'s region keeps S's exact dense field-offset
+        // table (no reorder/gap-fill of S's own fields) and a sub-ref at the payload offset
+        // IS a valid dense `S` reference.  Field access, key resolution, args/returns and
+        // `??` therefore reuse the dense-`S` machinery with no copy and no per-field encode.
+        // A method `fn m(self: S)` is a `Type::Routine` ATTRIBUTE on `S`, not a data field;
+        // it is reached transparently through the payload, so it need not be re-copied here.
+        self.add_attribute(
+            lexer,
+            sv,
+            "payload",
+            Type::Reference(struct_d, Deps::none()),
+        );
+
+        self.mark_synthetic(e, "@PLN25 nullable-enum for embedded struct field");
+        self.mark_synthetic(nv, "@PLN25 nullable-enum Null variant");
+        self.mark_synthetic(sv, "@PLN25 nullable-enum Some variant");
+        e
+    }
+
     /// Plan-06 phase 4d.C step 1 — register the synthetic struct
     /// definition that backs `Type::Function` storage.  Mirrors
     /// [`tuple_def`]: idempotent, globally registered (source 0),

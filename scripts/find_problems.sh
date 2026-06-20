@@ -46,7 +46,25 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/sccache_env.sh"
 
 # Per-checkout tag: stable for a given working tree, distinct across trees.
-REPO_TAG=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd | cksum | cut -d' ' -f1)
+REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+REPO_TAG=$(printf '%s' "$REPO_ROOT" | cksum | cut -d' ' -f1)
+
+# Keep native/wasm compiles OFF a small /tmp tmpfs.  The native test harness
+# writes generated `.rs` + cached binaries via `scratch_dir()` (LOFT_TMPDIR,
+# else temp_dir()), and rustc/rust-lld put their link intermediates under
+# TMPDIR — both default to /tmp, which on this box is a ~7.5G tmpfs.  Parallel
+# native compiles then exhaust it and the linker dies with SIGBUS (signal 7),
+# manifesting as flaky, unrelated test failures.  Redirect both to a disk-backed
+# dir, per-checkout (persistent, so the content-hash native cache survives
+# run-to-run).  std::env::temp_dir() honours TMPDIR on Unix, so this one var also
+# moves every `temp_dir()` user (cross_mode/exit_codes/html_wasm).  MUST live
+# OUTSIDE the repo: a `target/`-relative TMPDIR breaks the package/registry tests
+# (they build fixtures in temp_dir and package/extract them — anything under
+# `target/` is excluded, so loft.toml goes missing).  /var/tmp is disk-backed.
+LOFT_TEST_SCRATCH="/var/tmp/loft-test-scratch-$REPO_TAG"
+mkdir -p "$LOFT_TEST_SCRATCH"
+export TMPDIR="$LOFT_TEST_SCRATCH"
+export LOFT_TMPDIR="$LOFT_TEST_SCRATCH"
 LOG_DEFAULT=/tmp/loft_test.$REPO_TAG.log
 OUT_DEFAULT=/tmp/loft_problems.$REPO_TAG.txt
 OUT_STABLE=/tmp/loft_problems.txt
@@ -162,6 +180,10 @@ rebuild_native_cdylibs() {
   # 2. Test fixture cdylibs under tests/lib/*/native/
   while IFS= read -r manifest; do
     [[ -f "$manifest" ]] || continue
+    # Skip git-ignored manifests: orphaned generated fixtures left over from old
+    # runs (e.g. tests/test_native_pkg/ from a prior plugin-ABI) are not part of
+    # the tracked build and may no longer compile against the current tree.
+    git -C "$repo_root" check-ignore -q "$manifest" 2>/dev/null && continue
     any_src_cdylib=1
     local dir
     dir=$(dirname "$manifest")

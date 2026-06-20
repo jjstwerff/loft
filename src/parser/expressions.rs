@@ -1258,6 +1258,21 @@ use a separate collection or add after the loop"
         // any Integer↔Integer assignment is a no-op and needs no early widen.
         let _ = op;
         let _ = f_type;
+        // @PLN25 single-payload — a dense-`S` target assigned a `__nullable<S>` value
+        // (`d: S = v[i]`): unwrap the RHS via `convert` (→ a payload sub-ref `OpGetField`)
+        // BEFORE `change_var`, then retype it as dense `S` so the var-type-change
+        // check accepts (d:S ← S) instead of erroring "cannot change type from S to
+        // __nullable<S>".  Mirrors the C54.A early-convert pattern above; NOT
+        // pass-2-gated because the type error fires on pass 1 too (`convert`
+        // self-guards emission to pass 2 and returns true on both).  Gate-off-inert.
+        let nullable_to_dense_assign = op == "="
+            && matches!(f_type, Type::Reference(struct_d, _)
+                if matches!(&s_type, Type::Enum(syn, true, _)
+                    if self.data.def(*syn).name
+                        == format!("__nullable<{}>", self.data.def(*struct_d).name())));
+        if nullable_to_dense_assign && self.convert(code, &s_type, f_type) {
+            s_type = f_type.clone();
+        }
         self.change_var(to, &s_type);
         // Plan-22 phase 02d-vi — bypass the text-special branch
         // when the LHS is auto-deref'd boxed text.  The general
@@ -1861,7 +1876,7 @@ use a separate collection or add after the loop"
             );
         }
         if !matches!(code, Value::Insert(_)) {
-            *code = self.towards_set(to, code, f_type, &op[0..1]);
+            *code = self.towards_set(to, code, f_type, &s_type, &op[0..1]);
             // Plan-22 phase 02d-iii.e — wrap a first-set boxed-
             // scalar write with the cell-allocation preamble.
             // No-op for any other LHS shape (subsequent sets,
@@ -1914,6 +1929,77 @@ use a separate collection or add after the loop"
         Type::Void
     }
 
+    /// @PLN25 E2/E3 — rewrite a nullable struct ELEMENT type `Reference(S)` to the
+    /// synthetic `__nullable<S>` enum (the inline nullable representation).  Called
+    /// at the ONE chokepoint where every inline `vector<S>` element resolves
+    /// (`sub_type`'s `vector` arm, definitions.rs), so locals / params / returns /
+    /// fields / nested all rewrite consistently.  **Default = nullable;** the
+    /// caller skips this for an `S not null` element (E3 dense opt-out).  Gated on
+    /// `LOFT_E2_SYNTH` — the inline-element ACCESS glue (par workers, native
+    /// element reads, ref-params, casts, element-into-local mutation) is
+    /// incomplete, so default-on breaks ~107 tree-wide tests (plan25 § Default-on
+    /// trigger).  Stdlib excluded so the gated state never rewrites stdlib types.
+    /// Creates the def ONLY — `fill_all` does the `register_enum_db` + layout in the
+    /// correct order (registering mid-parse corrupts the shared enum: the
+    /// `known_type != MAX` guard in fill_database then suppresses the correct
+    /// in-order registration → `id × 512` reads).
+    /// @PLN25 — whether the E2 vector-element rewrite (`vector<S>` →
+    /// `vector<__nullable<S>>`) is active for the CURRENT source.  The native
+    /// stdlib (`STD_SOURCE`) always stays DENSE: its `#rust` bodies write the
+    /// dense struct ABI (e.g. `fields()` → `vector<JsonField>`), which an E2 wrap
+    /// would desync.  E2 applies ABOVE the native layer — user files + libraries.
+    /// THE default-on switch lives here (one place): drop the source check / add
+    /// an `LOFT_E2_SYNTH` env gate to re-gate.
+    pub(crate) fn e2_rewrite_enabled(&self) -> bool {
+        // @PLN25 — GATE FLIP LANDED (2026-06-20): nullable-by-default is ON for all user files +
+        // libraries; only the native stdlib (`STD_SOURCE`) stays dense.  No `LOFT_E2_SYNTH` env gate
+        // any more — the full suite is 2416/2417 (the lone fail is the pre-existing environmental
+        // `kernel_port`, unrelated to E2).  The flip tail was cleared: keyed collections reverted to
+        // dense + shared-nullable record-sharing (Scope A/B), 86 (bounded-generic dispatch on a
+        // nullable element), 371 (forward-ref local-vector synth-enum layout), imaging (native-managed
+        // pixel vector marked `not null`); moros_glb was a cache-gotcha artifact.  See
+        // single-payload-refactor.md § "Gate-ON flip tail".
+        self.data.source != crate::data::STD_SOURCE
+    }
+
+    pub(crate) fn e2_nullable_elem(&mut self, elem: Type) -> Type {
+        if !self.e2_rewrite_enabled() {
+            return elem;
+        }
+        let Type::Reference(struct_d, _) = &elem else {
+            return elem;
+        };
+        let struct_d = *struct_d;
+        // @PLN25 E2 — a generic `vector<T>` must stay dense: `T` is an opaque
+        // type-variable stub (registered as a `DefType::Struct` so `parse_type`
+        // resolves it), not a real struct, and nullability is decided at
+        // instantiation by whatever concrete element type the caller's vector
+        // carries (monomorphization substitutes T's bound type directly — see
+        // `substitute_type`).  Rewriting here would bury T inside `__nullable<T>`
+        // and break the "T appears in the first parameter" check + the return
+        // type unification.
+        if struct_d == self.cur_type_var {
+            return elem;
+        }
+        if self.data.def_type(struct_d) != crate::data::DefType::Struct
+            || self.data.def(struct_d).synthetic.is_some()
+        {
+            return elem;
+        }
+        // @PLN25 — a STDLIB struct stays DENSE even inside a CONSUMER's collection.  The
+        // stdlib produces/consumes its own structs densely (e.g. `stack_trace()` returns a
+        // dense `vector<StackFrame>`), so rewriting a consumer's `vector<StackFrame>` to
+        // `vector<__nullable<StackFrame>>` desyncs the boundary ("expected
+        // vector<__nullable<StackFrame>>, got vector<StackFrame> on return").  Mirror the
+        // `e2_rewrite_enabled` STD_SOURCE exclusion, but keyed on the STRUCT's source rather
+        // than the current parse source.
+        if self.data.def(struct_d).source == crate::data::STD_SOURCE {
+            return elem;
+        }
+        let syn = self.data.nullable_enum_for(&mut self.lexer, struct_d);
+        Type::Enum(syn, true, Deps::none())
+    }
+
     // <assign> ::= <operators> [ '=' | '+=' | '-=' | '*=' | '%=' | '/=' <operators> ]
     #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_assign(&mut self, code: &mut Value) -> Type {
@@ -1937,6 +2023,10 @@ use a separate collection or add after the loop"
             if let Some(tp) = self.parse_type_full(u32::MAX, false)
                 && self.lexer.peek_token("=")
             {
+                // @PLN25 E2/E3 — the nullable-element rewrite now happens at the
+                // vector-type-resolution chokepoint (definitions.rs `sub_type`
+                // `vector` arm), so a `vector<S>` annotation already arrives
+                // rewritten; no per-site hook here.
                 self.change_var_type(*v_nr, &tp);
                 f_type = tp;
                 got_annotation = true;

@@ -415,6 +415,15 @@ impl Output<'_> {
                 | "OpAppendCopy"
                 | "OpFormatDatabase"
                 | "OpFormatStackDatabase"
+                // @PLN25 E2 — vector-element reads emit `stores.vec_get/ref_or_raise`
+                // calls, so when nested as an arg to another stores-using op (e.g. a
+                // `__nullable<S>` element read fed to a `stores.*` template) they must be
+                // hoisted into a local first — else `stores.f(&(stores.vec_get(…)))` is a
+                // double mutable borrow (rustc E0499).
+                | "OpGetVector"
+                | "OpGetVectorNullable"
+                | "OpVectorRef"
+                | "OpVectorRefNullable"
         )
     }
 
@@ -426,13 +435,22 @@ impl Output<'_> {
                 // always need pre-eval to avoid double-borrow.
                 if def.rust().is_empty() && *def.code() != Value::Null {
                     true
-                } else if def.rust().contains("stores") {
+                } else if def.rust().contains("stores")
+                    // A `#rust` template written in `s.database.` vocabulary
+                    // rewrites to `stores.` in native code (calls.rs), so it
+                    // double-borrows when nested too — e.g. `OpGetVectorNullable`
+                    // (`…&s.database.allocations`) nested as an arg to another
+                    // `stores.*` template.
+                    || def.rust().contains("s.database.")
+                {
                     // Template fns that use `stores` can cause double-borrow when nested
                     // inside another stores-using call; treat them as needing pre-eval.
                     true
-                } else if def.rust().is_empty() && Self::op_uses_stores(def.name()) {
+                } else if Self::op_uses_stores(def.name()) {
                     // Native Op functions whose special-case emit code passes `stores`
                     // also cause double-borrow when nested inside other stores-using calls.
+                    // (Not gated on an empty rust template: some such ops — the vector
+                    // reads — carry a template yet still emit a `stores.*` special case.)
                     true
                 } else if def.rust().is_empty()
                     && *def.code() == Value::Null
@@ -845,7 +863,7 @@ impl Output<'_> {
                         return None;
                     }
                     let callee_ret = self.data.def(*d_nr).returned();
-                    if !Self::heap_shape_matches(callee_ret, target_type) {
+                    if !self.heap_shape_matches(callee_ret, target_type) {
                         return None;
                     }
                     return Some((i, ret_idx));
@@ -867,7 +885,7 @@ impl Output<'_> {
                     if !self.is_void_value(other)
                         && self
                             .infer_type(IrNode::Native(other))
-                            .is_some_and(|t| Self::heap_shape_matches(&t, target_type)) =>
+                            .is_some_and(|t| self.heap_shape_matches(&t, target_type)) =>
                 {
                     return Some((i, ret_idx));
                 }
@@ -877,11 +895,22 @@ impl Output<'_> {
         None
     }
 
-    fn heap_shape_matches(callee_ret: &Type, block_result: &Type) -> bool {
+    fn heap_shape_matches(&self, callee_ret: &Type, block_result: &Type) -> bool {
         match (callee_ret, block_result) {
             (Type::Reference(d1, _), Type::Reference(d2, _)) => d1 == d2,
             (Type::Vector(d1, _), Type::Vector(d2, _)) => d1 == d2,
             (Type::Enum(d1, true, _), Type::Enum(d2, true, _)) => d1 == d2,
+            // A nullable-enum target also accepts a value of ONE OF ITS VARIANTS:
+            // the tail `if cond { Variant{..} } else { null }` infers to the
+            // variant's ref/enum type (e.g. `Circle`), whose parent def is the
+            // enum (`Shape`).  Without this the tail capture misses, the present
+            // value is dropped, and the native fn always returns the null sentinel.
+            (Type::Reference(d1, _) | Type::Enum(d1, _, _), Type::Enum(d2, true, _)) => {
+                // `parent()` is `u32::MAX` for a non-variant def; guard so a
+                // parentless ref never spuriously matches a `u32::MAX` target.
+                let parent = self.data.def(*d1).parent();
+                d1 == d2 || (parent != u32::MAX && parent == *d2)
+            }
             _ => false,
         }
     }

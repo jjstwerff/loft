@@ -1373,8 +1373,50 @@ impl Parser {
         let in_loop = self.in_loop;
         self.in_loop = true;
         // Parse body as an expression-returning block: [for n in range { expr }]
+        // @PLN25 — when the DECLARED element type is the synthetic `__nullable<S>`
+        // enum (a `v: vector<S> = [for … { S{…} }]`, rewritten at the vector-type
+        // chokepoint), pass it as the block's expected type so the body's `S{…}`
+        // builds the `Some` variant (via parse_block's enum-hint) instead of a
+        // bare `S` that then mismatches the rewritten vector type.  Other element
+        // types keep `Unknown` — no behaviour change for non-nullable
+        // comprehensions.
+        let body_expected = if matches!(&*in_t, Type::Enum(e, true, _)
+            if self.data.def(*e).name.starts_with("__nullable<"))
+        {
+            in_t.clone()
+        } else if in_t.is_unknown() && self.e2_rewrite_enabled() {
+            // @PLN25 — INFERRED comprehension (no element annotation): peek the
+            // body for a leading struct-literal `{ S{…} }` and default the
+            // element to `__nullable<S>`, mirroring the inferred-literal PEEK in
+            // `parse_vector`.  The body then builds `Some` (parse_block enum-hint)
+            // and `*in_t` becomes the enum below — so the result matches every
+            // DECLARED `vector<S>` (now `vector<__nullable<S>>`).  Without it an
+            // inferred `v = [for … { S{…} }]` stayed dense `vector<S>`: `v[i] =
+            // null` was a silent no-op and passing `v` to a `vector<S>` parameter
+            // mismatched.  A PEEK only (reverted); a body whose first token is not
+            // a struct literal (multi-statement, scalar) stays dense.
+            let link = self.lexer.link();
+            let mut peeked = Type::Unknown(0);
+            self.lexer.has_token("{");
+            if let Some(name) = self.lexer.has_identifier()
+                && self.lexer.peek_token("{")
+            {
+                let d = self.data.def_nr(&name);
+                if d != u32::MAX
+                    && self.data.def_type(d) == DefType::Struct
+                    && self.data.def(d).synthetic.is_none()
+                {
+                    let syn = self.data.nullable_enum_for(&mut self.lexer, d);
+                    peeked = Type::Enum(syn, true, Deps::none());
+                }
+            }
+            self.lexer.revert(link);
+            peeked
+        } else {
+            Type::Unknown(0)
+        };
         let mut body = Value::Null;
-        let body_type = self.parse_block("for", &mut body, &Type::Unknown(0));
+        let body_type = self.parse_block("for", &mut body, &body_expected);
         // #319 — a struct-literal body returns `Rewritten(Reference(...))`.
         // The wrapper is a parse-internal marker, not an element type:
         // leaking it into the vector's element type broke every later
@@ -1612,7 +1654,69 @@ impl Parser {
         val: &mut Value,
         parent_tp: &Type,
     ) -> Type {
-        let assign_tp = var_tp.content();
+        let mut assign_tp = var_tp.content();
+        // @PLN25 E2 — a KEYED collection's `content()` yields `Reference(__nullable<S>)`
+        // (Hash/Sorted/Index wrap the content def in a Reference), but literal-element
+        // construction needs the inline `Enum(.., true)` form so each `S{…}` builds the
+        // `Some` variant (a vector's `content()` already yields `Enum(.., true)` directly,
+        // which is why `vector<S>` fields work but keyed fields hit "cannot store S in
+        // vector<__nullable<S>>").  Normalize so `hash<S[k]> += [S{…}]` and keyed-field
+        // initialisers take the same Some-construction path as a vector.  Inert gate-off
+        // (no content def is ever a `__nullable<` enum).
+        if let Type::Reference(d, dep) = &assign_tp
+            && self.data.def(*d).name.starts_with("__nullable<")
+        {
+            assign_tp = Type::Enum(*d, true, dep.clone());
+        }
+        // @PLN25 — INFERRED struct-literal vector default: with no declared element
+        // type (`var_tp` Unknown — an inferred local `v = [Row{…}]`, a fn return
+        // body `{ [Row{…}] }`, …) and a first item that is a struct literal `S{…}`,
+        // default the element to the synthetic `__nullable<S>` enum so the elements
+        // build `Some` — matching the `vector<__nullable<S>>` that every DECLARED
+        // site now resolves to (the construction half of the representation).  A
+        // PEEK only (reverted); fires solely for an inferred struct-literal vector,
+        // so `[1.0]` / `[1,2]`, index expressions, and `not null` / declared vectors
+        // are untouched.  Native stdlib (STD_SOURCE) stays dense.
+        if assign_tp.is_unknown() && self.e2_rewrite_enabled() {
+            let link = self.lexer.link();
+            if let Some(first) = self.lexer.has_identifier() {
+                // A library-qualified struct literal (`lib::S { … }`) reads as TWO
+                // identifiers around `::`; the bare-identifier peek saw only `lib`,
+                // missed the `{`, and left the inferred literal DENSE while DECLARED
+                // `lib::S` sites are nullable — the type mismatch at `v += [lib::S{…}]`.
+                // Skip past `::` to the real struct name (last segment) before the `{`.
+                let struct_name = if self.lexer.has_token("::") {
+                    self.lexer.has_identifier()
+                } else {
+                    Some(first)
+                };
+                if let Some(sname) = struct_name
+                    && self.lexer.peek_token("{")
+                {
+                    let d = self.data.def_nr(&sname);
+                    if d != u32::MAX
+                        && self.data.def_type(d) == DefType::Struct
+                        && self.data.def(d).synthetic.is_none()
+                    {
+                        let syn = self.data.nullable_enum_for(&mut self.lexer, d);
+                        // @PLN25 — for a FORWARD-referenced struct `S` the synth `__nullable<S>`
+                        // enum is first created HERE in pass-2 body parse, after `fill_all` ran, so
+                        // it is unregistered.  Lay it out NOW (this is the EARLIEST site — before
+                        // both the construction and the read bake their payload offset / element
+                        // stride) so they bake correct values (371).  No-op once registered.
+                        if !self.first_pass {
+                            crate::typedef::register_and_lay_out_synth(
+                                &mut self.data,
+                                &mut self.database,
+                                syn,
+                            );
+                        }
+                        assign_tp = Type::Enum(syn, true, Deps::none());
+                    }
+                }
+            }
+            self.lexer.revert(link);
+        }
         // @P315 — `declared` is true when the element type comes from a typed
         // target (typed local / struct field), false when it is inferred from
         // an untyped literal.  A declared element type must NOT be silently
@@ -1863,14 +1967,42 @@ impl Parser {
             },
             Deps::frame(parent_tp.depend()),
         );
-        let elm = self.create_unique(
-            "elm",
-            if let Type::Reference(_, _) = assign_tp {
-                assign_tp
+        // @PLN25 E2 — an ANONYMOUS `{ … }` element against a nullable synth enum
+        // `__nullable<S>` has no struct name to drive the transparent-construction
+        // path (objects.rs:151, which keys on `S{` matching `__nullable<S>`), so it
+        // falls to `parse_block`'s `Reference(r)` record-scan.  Type the element var
+        // as the `Some` variant so that scan builds the present payload (the
+        // discriminant defaults present via object_init), exactly as the NAMED
+        // `S{ … }` path does.  Without this the var falls back to `was`
+        // (`Reference(type_def_nr(parent_tp.content))`) and mis-resolves to an
+        // arbitrary def → "Unknown field <wrong-def>.<field>".  Gate-inert: a
+        // `__nullable<>` enum only exists when the E2 rewrite is active.
+        let elm_tp = if let Type::Reference(rd, _) = assign_tp {
+            // @PLN25 E2 — a keyed-collection field's `content()` is
+            // `Reference(__nullable<S>)` (not `Enum(..)`), so an anon `{ … }`
+            // element assigned to a `hash`/`sorted`/`index` field must resolve
+            // against the `Some` variant too — same as the `Enum(syn,true)`
+            // (vector-element) case below.  Without this it points at the enum
+            // and `.field` fails ("Unknown field __nullable<S>.field").
+            if self.data.def(*rd).name.starts_with("__nullable<") {
+                Type::Reference(
+                    self.data.variant_of(*rd, "Some"),
+                    Deps::frame(parent_tp.depend()),
+                )
             } else {
-                &was
-            },
-        );
+                assign_tp.clone()
+            }
+        } else if let Type::Enum(syn, true, _) = assign_tp
+            && self.data.def(*syn).name.starts_with("__nullable<")
+        {
+            Type::Reference(
+                self.data.variant_of(*syn, "Some"),
+                Deps::frame(parent_tp.depend()),
+            )
+        } else {
+            was
+        };
+        let elm = self.create_unique("elm", &elm_tp);
         if vec != u16::MAX {
             self.vars.depend(elm, vec);
         }
@@ -1948,6 +2080,51 @@ impl Parser {
             && *t_e == *in_e
         {
             *in_t = Type::Enum(*t_e, true, Deps::none());
+        } else if let (Type::Enum(t_e, true, _), Type::Enum(in_e, true, _)) = (&t, &*in_t)
+            && *t_e == *in_e
+        {
+            // @PLN25 E2 — the appended element ALREADY is the vector's nullable
+            // enum (`result += [sa_sp]` where `sa_sp: __nullable<S>` and the
+            // vector is `vector<__nullable<S>>`).  No conversion is needed — store
+            // it as-is; the generic `convert` below does not recognise
+            // enum→same-enum and would fire the spurious "would lose precision"
+            // diagnostic.  Mirrors the `Reference`-to-same-enum arm above for the
+            // case where the element is typed as the enum directly.
+        } else if matches!(&*in_t, Type::Enum(syn, true, _) if self.data.def(*syn).name.starts_with("__nullable<"))
+            && matches!(t, Type::Null)
+        {
+            // @PLN25 E2 — a `null` element in a `vector<__nullable<S>>` (e.g.
+            // `v += [null]`): the appended element is the Null variant
+            // (discriminant 0).  OpNewRecord zero-inits the element to disc 0, so
+            // emit an empty construction; the generic convert would otherwise
+            // reject `null` → the synthetic enum and fire the "cannot store"
+            // diagnostic.
+            p = Value::Insert(Vec::new());
+            t = in_t.clone();
+        } else if !self.first_pass
+            && let Type::Enum(syn, true, _) = &*in_t
+            && let Type::Reference(s_d, _) = &t
+            && self.data.def(*syn).name == format!("__nullable<{}>", self.data.def(*s_d).name())
+            && !matches!(p, Value::Insert(_))
+        {
+            // @PLN25 single-payload — store a DENSE struct value `S` into a
+            // `vector<__nullable<S>>` element (`v += [p]`, `v += [make()]`): set the
+            // discriminant present and copy the whole dense `S` into the inline `payload`
+            // field (one record copy).  A non-Var source is stashed once so it is not
+            // re-evaluated.  Gate-inert: `__nullable<>` exists only when E2 is active.
+            let syn = *syn;
+            let some_d = self.data.variant_of(syn, "Some");
+            let mut steps = Vec::new();
+            let src = if matches!(p, Value::Var(_)) {
+                p.clone()
+            } else {
+                let tmp = self.create_unique("nbl_src", &t);
+                steps.push(v_set(tmp, p.clone()));
+                Value::Var(tmp)
+            };
+            steps.extend(self.build_some_present(some_d, Value::Var(elm), src));
+            p = Value::Insert(steps);
+            t = in_t.clone();
         } else if !self.convert(&mut p, &t, in_t) {
             if declared {
                 // @P315 — the element type is DECLARED (typed local / struct
@@ -2042,6 +2219,13 @@ impl Parser {
     pub(crate) fn new_record_field_op(&mut self, val: &Value, parent_tp: &Type, op: &str) -> Value {
         if let Value::Call(_, ps) = val.unspan() {
             let parent = self.data.def(self.data.type_def_nr(parent_tp)).known_type();
+            // @PLN25 single-payload: appending to a NESTED collection field of a `__nullable<S>`
+            // element (`b.items += […]` where `b` is a nullable element) — the field-access
+            // unwrap already made `ps[0]` the dense-`S` payload sub-ref and `ps[1]` its
+            // S-relative offset, so resolve the field number against the payload's `S`, NOT the
+            // enum (`field_nr(enum, S_offset)` = 0 → `OpNewRecord(field=0)` = the wrong field).
+            // `key_owner` maps a synth `__nullable<S>` to its payload struct; identity otherwise.
+            let parent = self.database.key_owner(parent);
             let field_nr = if let Value::Int(pos) = ps[1] {
                 self.database.field_nr(parent, pos)
             } else {

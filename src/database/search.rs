@@ -64,38 +64,28 @@ impl Stores {
     #[allow(dead_code)]
     pub(super) fn field_content(&self, rec: &DbRef, db: u16, key: u16) -> Content {
         let store = self.store(rec);
-        if let Parts::Struct(fields) | Parts::EnumValue(_, fields) = &self.types[db as usize].parts
-        {
-            let f = &fields[key as usize];
-            return match f.content {
-                0 => Content::Long(store.get_int(rec.rec, rec.pos + u32::from(f.position))),
-                6 => Content::Long(i64::from(
-                    store.get_u32_raw(rec.rec, rec.pos + u32::from(f.position)),
-                )),
-                1 => Content::Long(store.get_long(rec.rec, rec.pos + u32::from(f.position))),
-                2 => Content::Single(store.get_single(rec.rec, rec.pos + u32::from(f.position))),
-                3 => Content::Float(store.get_float(rec.rec, rec.pos + u32::from(f.position))),
-                4 => Content::Long(i64::from(store.get_byte(
-                    rec.rec,
-                    rec.pos + u32::from(f.position),
-                    0,
-                ))),
+        // Resolve key field `key` to its (content type, absolute byte position) via the
+        // SAME `key_field` chokepoint `determine_keys` bakes from — so a synth
+        // `__nullable<S>` element's payload base is added identically here and there.
+        if let Some((content, position)) = self.key_field(db, key) {
+            let pos = rec.pos + u32::from(position);
+            return match content {
+                0 => Content::Long(store.get_int(rec.rec, pos)),
+                6 => Content::Long(i64::from(store.get_u32_raw(rec.rec, pos))),
+                1 => Content::Long(store.get_long(rec.rec, pos)),
+                2 => Content::Single(store.get_single(rec.rec, pos)),
+                3 => Content::Float(store.get_float(rec.rec, pos)),
+                4 => Content::Long(i64::from(store.get_byte(rec.rec, pos, 0))),
                 5 => Content::Str(crate::keys::Str::new(
-                    store.get_str(store.get_u32_raw(rec.rec, rec.pos + u32::from(f.position))),
+                    store.get_str(store.get_u32_raw(rec.rec, pos)),
                 )),
                 _ => {
-                    if let Parts::Enum(_) = self.types[f.content as usize].parts {
-                        Content::Long(i64::from(store.get_byte(
-                            rec.rec,
-                            rec.pos + u32::from(f.position),
-                            0,
-                        )))
+                    if let Parts::Enum(_) = self.types[content as usize].parts {
+                        Content::Long(i64::from(store.get_byte(rec.rec, pos, 0)))
                     } else {
                         panic!(
-                            "Unknown key type {} of {}.{}",
-                            self.types[f.content as usize].name,
-                            self.types[db as usize].name,
-                            f.name
+                            "Unknown key type {} (field {key} of {})",
+                            self.types[content as usize].name, self.types[db as usize].name,
                         )
                     }
                 }
@@ -289,27 +279,17 @@ impl Stores {
         match &self.types[db as usize].parts {
             Parts::Vector(_) | Parts::Array(_) => vec![0],
             Parts::Sorted(c, key) | Parts::Ordered(c, key) | Parts::Index(c, key, _) => {
-                let mut res = Vec::new();
-                if let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
-                    &self.types[*c as usize].parts
-                {
-                    for (k, _) in key {
-                        res.push(fields[*k as usize].content);
-                    }
-                }
-                res
+                // Key content TYPES (for `read_key` to pop the right widths).  Route through
+                // the `key_field` chokepoint so a synth `__nullable<S>` element resolves the
+                // key inside the `Some` payload, matching what `determine_keys` baked.
+                key.iter()
+                    .filter_map(|(k, _)| self.key_field(*c, *k).map(|(content, _)| content))
+                    .collect()
             }
-            Parts::Hash(c, key) => {
-                let mut res = Vec::new();
-                if let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
-                    &self.types[*c as usize].parts
-                {
-                    for k in key {
-                        res.push(fields[*k as usize].content);
-                    }
-                }
-                res
-            }
+            Parts::Hash(c, key) => key
+                .iter()
+                .filter_map(|k| self.key_field(*c, *k).map(|(content, _)| content))
+                .collect(),
             _ => Vec::new(),
         }
     }

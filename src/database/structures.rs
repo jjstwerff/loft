@@ -32,7 +32,41 @@ impl Stores {
     # Panics
     When requesting a record on a non-structure
     */
+    /// @PLN25 single-payload — for a FIELD (`field != MAX`) inside a `__nullable<S>` parent,
+    /// redirect to the inline `payload`'s dense `S` (the `key_owner` struct) + add the payload
+    /// base to the record ref, so the field resolves on dense `S` instead of the enum top level
+    /// (whose field 0 is the discriminant).  Returns `(resolved_parent_tp, adjusted_ref)`.
+    /// A `field == MAX` call (creating the element record itself, which IS the enum) and any
+    /// non-nullable parent are returned unchanged.  Shared by `record_new` / `record_finish` so
+    /// the create + finalize halves agree on the type/offset.
+    fn nullable_field_parent(&self, data: &DbRef, parent_tp: u16, field: u16) -> (u16, DbRef) {
+        if field != u16::MAX {
+            let owner = self.key_owner(parent_tp);
+            if owner != parent_tp {
+                let mut adj = *data;
+                adj.pos += u32::from(self.key_base(parent_tp));
+                return (owner, adj);
+            }
+        }
+        (parent_tp, *data)
+    }
+
+    /// Create a fresh record for a collection element / nullable field and return its `DbRef`.
+    ///
+    /// # Panics
+    /// Panics on an unsupported `parent_tp`/`field` parts kind (an internal invariant
+    /// violation — the parser only emits `OpNewRecord` for collection/struct field types).
     pub fn record_new(&mut self, data: &DbRef, parent_tp: u16, field: u16) -> DbRef {
+        // @PLN25 single-payload: when creating a sub-record for a FIELD inside a
+        // `__nullable<S>` element (a nested collection/struct), the field lives in the inline
+        // `payload` (dense S), not at the enum's top level (field 0 there is the discriminant,
+        // which has no sub-structure → `field_type` = MAX → OOB).  Redirect a `__nullable<S>`
+        // parent to the payload's struct + base offset so the field resolution + sub-record
+        // allocation target the dense `S` — the `key_owner` redirect.  Only for `field != MAX`:
+        // a `field == MAX` call creates the element record ITSELF (which IS the enum), so it
+        // must keep `parent_tp`.  Non-nullable parents are unchanged (`key_owner` = identity).
+        let (parent_tp, data_owned) = self.nullable_field_parent(data, parent_tp, field);
+        let data = &data_owned;
         let tp = if field == u16::MAX {
             // This case is when the top level is a data-structure
             parent_tp
@@ -68,6 +102,11 @@ impl Stores {
     When the implementation is not yet written
     */
     pub fn record_finish(&mut self, data: &DbRef, rec: &DbRef, parent_tp: u16, field: u16) {
+        // @PLN25 single-payload: mirror `record_new`'s nullable-field redirect so the
+        // create + finalize halves agree on the type/offset (a FIELD inside a `__nullable<S>`
+        // element resolves on the payload's dense `S`, not the enum top level).
+        let (parent_tp, data_owned) = self.nullable_field_parent(data, parent_tp, field);
+        let data = &data_owned;
         let tp = if field == u16::MAX {
             // This case is when the top level is a data-structure
             parent_tp
@@ -84,10 +123,27 @@ impl Stores {
             let o = &f.other_indexes;
             if !o.is_empty() && o[0] != u16::MAX {
                 for fld_nr in o {
+                    let sibling_content = fields[*fld_nr as usize].content;
+                    // @PLN25 Scope B — a keyed index over a shared NULLABLE array indexes only
+                    // the non-null records: when the sibling keyed element is `__nullable<S>`
+                    // and this record is the `Null` variant (discriminant 1 at byte offset 0),
+                    // skip the keyed insert.  The null stays in the vector (the primary insert
+                    // at the top of this fn) but is unreachable by key and cannot collide with a
+                    // real empty/zero-key element.  Inert for dense (non-nullable) keyed elements.
+                    // Index ONLY a `Some` record (discriminant 2).  A null element is either
+                    // the zeroed/absent slot (discriminant 0) or the explicit `Null` variant
+                    // (discriminant 1); both are skipped.
+                    if self
+                        .nullable_some_variant(self.content(sibling_content))
+                        .is_some()
+                        && self.store(rec).get_byte(rec.rec, rec.pos, 0) != 2
+                    {
+                        continue;
+                    }
                     let o = self.field_ref(data, parent_tp, *fld_nr);
                     // Secondary index for a sibling field — index-only, never
                     // delete the displaced record (the primary collection owns it).
-                    self.insert_record(&o, rec, fields[*fld_nr as usize].content, true);
+                    self.insert_record(&o, rec, sibling_content, true);
                 }
             }
         }
@@ -592,7 +648,22 @@ impl Stores {
                 //     `Tag { … }` shape from the Lenient parser)
                 //   - `Object([("Tag", _, body)])` — the legacy collapsed shape,
                 //     still accepted so older `{"Tag":{…}}` dumps keep loading
+                // @PLN25 E2 (A4): a synthetic `__nullable<S>` enum (a `vector<S>`
+                // element rewritten so it can be null — see `Data::nullable_enum_for`)
+                // deserialises a bare JSON object as the PRESENT case: the object
+                // holds S's fields directly, not a variant tag.  Route it to the
+                // `Some` variant with the whole object as the payload.  `null` is
+                // already handled above (Parsed::Null → `set_default_value` → the
+                // absent disc 0).  Without this a present struct object falls to the
+                // `_` mismatch arm and the `?` in the array loop aborts the whole
+                // parse, dropping every present element (`[{…},null]` → len 0).
+                let synth_nullable = self.types[tp as usize].name.starts_with("__nullable<");
                 let (name, payload) = match parsed {
+                    crate::json::Parsed::Object(_) | crate::json::Parsed::Constructor(..)
+                        if synth_nullable =>
+                    {
+                        ("Some", Some(parsed))
+                    }
                     crate::json::Parsed::Str(s) | crate::json::Parsed::Ident(s) => {
                         (s.as_str(), None)
                     }
@@ -627,10 +698,44 @@ impl Stores {
                     v
                 };
                 self.store_mut(to).set_byte(to.rec, to.pos, 0, val);
-                // Variant-with-payload: if the parser gave us an Object
-                // and the variant's EnumValue sub-type exists (size > 1),
-                // recurse into the walker so the payload fields land in
-                // the same slot as the discriminant byte.
+                // @PLN25 single-payload: a synth `__nullable<S>` `Some` variant holds the
+                // object in its inline `payload` dense-`S` field — recurse the body into
+                // the payload sub-record (`to.pos + payload offset`), NOT the `Some` variant
+                // (whose direct fields are {enum, payload}, not S's).
+                if synth_nullable
+                    && name == "Some"
+                    && enum_tp != u16::MAX
+                    && let Some(body) = payload
+                {
+                    let pinfo = if let Parts::Struct(sf) | Parts::EnumValue(_, sf) =
+                        &self.types[enum_tp as usize].parts
+                    {
+                        sf.iter()
+                            .find(|f| f.name == "payload")
+                            .map(|f| (f.content, f.position))
+                    } else {
+                        None
+                    };
+                    if let Some((pcontent, ppos)) = pinfo {
+                        let payload_to = DbRef {
+                            store_nr: to.store_nr,
+                            rec: to.rec,
+                            pos: to.pos + u32::from(ppos),
+                        };
+                        return self.walk_parsed_into(
+                            body,
+                            pcontent,
+                            rec_tp,
+                            field,
+                            &payload_to,
+                            path,
+                            at,
+                        );
+                    }
+                    return Ok(());
+                }
+                // Variant-with-payload (hand-written struct-enum): recurse so the payload
+                // fields land in the same slot as the discriminant byte.
                 if let Some(body) = payload
                     && enum_tp != u16::MAX
                     && self.types[enum_tp as usize].size > 1
@@ -855,10 +960,29 @@ impl Stores {
         On inconsistent database definitions.
     */
     pub fn set_default_value(&mut self, tp: u16, rec: &DbRef) {
+        // @PLN25 — a forward-referenced field's content can still be u16::MAX here (its known_type
+        // is not laid out yet — e.g. a `__nullable<S>` element of a forward-ref'd struct, gate-on
+        // 371_p375_forward_ref_positions).  It has no per-type default to write, and zero-on-claim
+        // already zeroed the record (0 = the correct default: a `null` discriminant for a nullable
+        // field, or a zero scalar), so skip rather than OOB-index `self.types[tp]` below.
+        if tp == u16::MAX {
+            return;
+        }
         if tp <= 6 {
             match tp {
-                0 | 6 => {
+                0 => {
                     self.store_mut(rec).set_int(rec.rec, rec.pos, i64::MIN);
+                }
+                6 => {
+                    // Content type 6 is a 4-byte u32-raw field (read via `get_u32_raw`,
+                    // e.g. a `character` codepoint), NOT an 8-byte integer.  The old
+                    // `set_int(i64::MIN)` wrote 8 bytes — its high 4 bytes spilled into
+                    // the NEXT slot, which silently corrupts a tightly-sized record when
+                    // the field is the LAST one (a trailing `character` in a single-payload
+                    // `Some` payload overran the record and clobbered the adjacent free
+                    // block's size header → `fl_size` negate-overflow).  `i64::MIN`'s low 4
+                    // bytes are 0, so write 0 in exactly 4 bytes — same field value, no spill.
+                    self.store_mut(rec).set_i32_raw(rec.rec, rec.pos, 0);
                 }
                 1 => {
                     self.store_mut(rec).set_long(rec.rec, rec.pos, i64::MIN);

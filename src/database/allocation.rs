@@ -1470,10 +1470,18 @@ impl Stores {
             Parts::Index(_, _, _) => self.copy_claims_index_body(rec, to, tp),
             Parts::Enum(values) => {
                 let e_nr = self.store(rec).get_byte(rec.rec, rec.pos, -1);
-                let tp = values[e_nr as usize].0;
-                // Do not copy claims on simple enumerate types.
-                if tp != u16::MAX {
-                    self.copy_claims(rec, to, tp);
+                // @PLN25 — `get_byte(.., -1)` applies a -1 shift, so a valid variant is
+                // `e_nr` in `0..values.len()` (stored byte 1 = variant 0).  A null/absent
+                // inline enum reads NEGATIVE here (stored 0 → -1, an absent source rec →
+                // i32::MIN) and carries no payload claims; skip rather than index `values`
+                // out of bounds (matches `validate_claims`'s `>= 0` arm).  Covers
+                // `vr[i] = null` and whole-vector copy of a null element.
+                if e_nr >= 0 && (e_nr as usize) < values.len() {
+                    let tp = values[e_nr as usize].0;
+                    // Do not copy claims on simple enumerate types.
+                    if tp != u16::MAX {
+                        self.copy_claims(rec, to, tp);
+                    }
                 }
             }
             _ => {}
@@ -1821,6 +1829,26 @@ impl Stores {
                     self.store_mut(rec).delete(node);
                 }
                 self.store_mut(rec).set_u32_raw(rec.rec, rec.pos, 0);
+            }
+            Parts::Enum(values) => {
+                // @PLN25 — symmetric with `copy_claims`' `Parts::Enum` arm
+                // (this fn previously fell through to the no-op `_` arm for an
+                // enum tp).  Free the LIVE variant's nested heap claims of an
+                // inline enum.  `get_byte(.., -1)` shifts so stored byte 1 =
+                // variant 0; a null/absent inline enum reads NEGATIVE (stored
+                // 0 → -1, an absent rec → i32::MIN) and owns no payload — skip
+                // rather than index `values` OOB.  Without this arm, overwriting
+                // an inline `__nullable<S>` element/field (`vr[i] = null`, the
+                // present↔null convert) leaked the prior `Some` payload (a text
+                // / nested vector) until the host store was freed.
+                let e_nr = self.store(rec).get_byte(rec.rec, rec.pos, -1);
+                if e_nr >= 0 && (e_nr as usize) < values.len() {
+                    let tp = values[e_nr as usize].0;
+                    // Skip simple (payload-less) variants — `u16::MAX` marks them.
+                    if tp != u16::MAX {
+                        self.remove_claims(rec, tp);
+                    }
+                }
             }
             _ => {}
         }

@@ -226,6 +226,13 @@ pub struct Parser {
     /// Variable number of the __closure parameter inside a lambda body (second pass).
     /// `u16::MAX` when not inside a capturing lambda.
     pub(crate) closure_param: u16,
+    /// @PLN25 E2 — def_nr of the generic type-variable stub (`T`) currently in
+    /// scope while parsing a `fn f<T>(…)` signature/body; `u32::MAX` outside a
+    /// generic function.  Consulted ONLY by `e2_nullable_elem` so a generic
+    /// `vector<T>` is NOT rewritten to `vector<__nullable<T>>` (T is opaque at
+    /// definition time — nullability is decided at instantiation by whatever
+    /// concrete element type the caller's vector carries).  Reset per function.
+    pub(crate) cur_type_var: u32,
     // maps fn-ref variable numbers to their closure record work variable numbers.
     pub(crate) closure_vars: std::collections::HashMap<u16, u16>,
     // last closure work variable created by emit_lambda_code (transient).
@@ -488,6 +495,7 @@ impl Parser {
             captured_names: Vec::new(),
             fn_lambdas: std::collections::HashMap::new(),
             closure_param: u16::MAX,
+            cur_type_var: u32::MAX,
             closure_vars: std::collections::HashMap::new(),
             last_closure_work_var: u16::MAX,
             last_closure_alloc: None,
@@ -1351,10 +1359,107 @@ impl Parser {
                     return true;
                 }
             }
+            // @PLN25 — a nullable struct SOURCE (`Reference(S)`, possibly the null
+            // sentinel) flows into a synthetic `__nullable<S>` field.  Accept it here;
+            // `handle_field` emits the wrap (null → discriminant 0, present → `Some`).
+            if self.data.def(*enum_tp).name
+                == format!("__nullable<{}>", self.data.def(*ref_tp).name())
+            {
+                return true;
+            }
+        }
+        // @PLN25 single-payload — the REVERSE coercion: a `__nullable<S>` value flows
+        // into a dense `S` slot (`f(v[i])` where `fn f(r: S)`, a `??` result, a
+        // dense-local assign, a return).  The dense `S` IS the `Some` variant's inline
+        // `payload` field, so unwrap by SUB-REFERENCING the payload — the sub-ref is a
+        // valid dense `S` reference (it shares S's offset table), with NO copy.
+        // (NOTE: the by-REF `&S` arg form is NOT handled here — a sub-ref reaches the
+        // arg path as a by-VALUE `Reference` and gets copied, so a `&mut` write would not
+        // propagate.  That seam is handled at the call-arg site, not in `convert`.)
+        if let (Type::Enum(enum_d, true, _), Type::Reference(struct_d, _)) = (is_type, should)
+            && self.data.def(*enum_d).name
+                == format!("__nullable<{}>", self.data.def(*struct_d).name())
+        {
+            if !self.first_pass {
+                let enum_d = *enum_d;
+                let struct_d = *struct_d;
+                let some_d = self.data.variant_of(enum_d, "Some");
+                if some_d != u32::MAX {
+                    // `get_val` for an INLINE struct field produces a sub-ref (pos+offset),
+                    // not a pointer deref — the same form the field-access unwrap uses
+                    // (fields.rs).  A raw `OpGetField` with the struct type would deref the
+                    // payload bytes as a DbRef → garbage.  The payload IS dense `S`.
+                    let payload_pos = u32::from(
+                        self.database
+                            .position(self.data.def(some_d).known_type(), "payload"),
+                    );
+                    *code = self.get_val(
+                        &Type::Reference(struct_d, crate::data::Deps::none()),
+                        false,
+                        payload_pos,
+                        code.clone(),
+                        u32::MAX,
+                    );
+                }
+            }
+            return true;
+        }
+        // @PLN25 E2 — a synth `__nullable<S>` value used as a BOOLEAN (a condition
+        // or bool arg, e.g. `if hash[k]` / `assert(hash[k])`) coerces to its
+        // truthiness = "is present" = discriminant != 0.  Read the disc directly
+        // (`OpGetEnum` @ offset 0, which has the rec==0 null-record guard, so an
+        // ABSENT lookup result — rec 0 — reads disc 0 = not present), mirroring the
+        // inline branch of `null_check_builder`.  Without this the raw nullable
+        // DbRef reaches the bool context and native emits `(DbRef) as u8` (E0605);
+        // a dense `Reference` lookup gets `OpConvBoolFromRef` on the same path.
+        if let (Type::Enum(enum_d, true, _), Type::Boolean) = (is_type, should)
+            && self.data.def(*enum_d).name.starts_with("__nullable<")
+        {
+            if !self.first_pass {
+                let get_enum = self.cl("OpGetEnum", &[code.clone(), Value::Int(0)]);
+                let disc = self.cl("OpConvIntFromEnum", &[get_enum]);
+                let is_null = self.cl("OpEqInt", &[disc, Value::Int(0)]);
+                *code = self.cl("OpNot", &[is_null]);
+            }
+            return true;
         }
         if let Type::RefVar(ref_tp) = is_type
             && self.convert(code, ref_tp, should)
         {
+            return true;
+        }
+        // @PLN25 single-payload — a `__nullable<S>` value flows into a `&S` (`RefVar(Reference
+        // (S))`) parameter (`fn f(r: &S)` that may MUTATE through `r`).  Unwrap to the payload
+        // sub-ref, then pass it BY-REFERENCE via a work-ref + `OpCreateStack` (with `skip_free`,
+        // since the work-ref holds only a borrowed DbRef into the element, not its own store) —
+        // exactly the complex-expression by-ref path below.  A `&mut` write through the sub-ref
+        // then propagates straight back to the source element's payload.  This must run BEFORE
+        // the `ref_tp.is_equal(is_type)` arm (which fails: `Reference(S)` != `Enum(__nullable<S>)`).
+        if let Type::RefVar(ref_tp) = should
+            && let Type::Reference(struct_d, _) = &**ref_tp
+            && let Type::Enum(enum_d, true, _) = is_type
+            && self.data.def(*enum_d).name
+                == format!("__nullable<{}>", self.data.def(*struct_d).name())
+        {
+            if !self.first_pass {
+                let struct_d = *struct_d;
+                let enum_d = *enum_d;
+                let some_d = self.data.variant_of(enum_d, "Some");
+                if some_d != u32::MAX {
+                    let payload_pos = u32::from(
+                        self.database
+                            .position(self.data.def(some_d).known_type(), "payload"),
+                    );
+                    let dense = Type::Reference(struct_d, Deps::none());
+                    let sub = self.get_val(&dense, false, payload_pos, code.clone(), u32::MAX);
+                    let wv = self.vars.work_refs(&dense, &mut self.lexer);
+                    self.vars.set_skip_free(wv);
+                    *code = Value::Insert(vec![
+                        v_set(wv, sub),
+                        self.cl("OpCreateStack", &[Value::Var(wv)]),
+                    ]);
+                }
+            }
             return true;
         }
         if let Type::RefVar(ref_tp) = should
@@ -1450,6 +1555,14 @@ impl Parser {
                 return true;
             }
             check_type = &e;
+        }
+        // @PLN25: a null literal returned/assigned where a vector is expected becomes
+        // the null sentinel (store_nr=u16::MAX), reusing the reference sentinel producer
+        // — distinct from an empty `[]` (a valid store with length 0).
+        if *is_type == Type::Null && matches!(should, Type::Vector(_, _)) {
+            let sentinel_nr = self.data.def_nr("OpNullRefSentinel");
+            *code = Value::Call(sentinel_nr, vec![]);
+            return true;
         }
         for &dnr in self.data.get_possible("OpConv", &self.lexer) {
             if self.data.def(dnr).name().ends_with("FromNull") {
@@ -1580,6 +1693,14 @@ impl Parser {
             }
             if let (Type::Reference(r_nr, _), Type::Enum(e_nr, true, _)) = (test_type, should)
                 && e_nr == r_nr
+            {
+                return true;
+            }
+            // @PLN25 E2 — a `__nullable<S>` value is accepted into a dense `S`
+            // slot; `convert` emits the payload sub-ref (gap 2).
+            if let (Type::Enum(enum_d, true, _), Type::Reference(struct_d, _)) = (test_type, should)
+                && self.data.def(*enum_d).name
+                    == format!("__nullable<{}>", self.data.def(*struct_d).name())
             {
                 return true;
             }
@@ -2033,11 +2154,21 @@ impl Parser {
         let mangled = if type_nr == u32::MAX {
             format!("n_{name}")
         } else {
-            format!(
-                "t_{}{}_{name}",
-                self.data.def(type_nr).name().len(),
-                self.data.def(type_nr).name()
-            )
+            // @PLN25 E2 — this mangled name becomes a Rust function identifier in
+            // native codegen.  A concrete element type whose NAME carries angle
+            // brackets / commas (synthetic wrappers — `__nullable<Row>`,
+            // `__tuple<…>`) would emit `fn t_15__nullable<Row>_count(…)`, which
+            // rustc parses as a chained comparison.  Flatten those to
+            // identifier-safe chars.  The replacement is 1:1 (each bracket/comma
+            // → one `_`), so the LEN prefix that `original_name` /
+            // `find_method_receivers` parse back stays correct.  Plain names
+            // (user structs, `vector`) contain none of these and are unchanged.
+            let safe = self
+                .data
+                .def(type_nr)
+                .name()
+                .replace(['<', '>', ',', ' '], "_");
+            format!("t_{}{}_{name}", safe.len(), safe)
         };
         // Return existing instantiation if already created.
         let existing = self.data.def_nr(&mangled);
@@ -2150,7 +2281,23 @@ impl Parser {
                 // I9-prim: use find_fn which checks both the method-style convention
                 // (t_7integer_OpLt) and the add_op convention (OpLtInt via possible map).
                 let concrete_type = self.data.def(concrete_nr).returned().clone();
-                let found = self.data.find_fn(u16::MAX, &method_suffix, &concrete_type);
+                let mut found = self.data.find_fn(u16::MAX, &method_suffix, &concrete_type);
+                // @PLN25 E2 — a synth `__nullable<S>` delegates method/interface
+                // resolution to its underlying `S` (a method call on a nullable
+                // element unwraps through `Some` to call `S`'s method), so satisfy
+                // the bound against `S`'s methods when the wrapper itself lacks them.
+                // Gate-off-inert (no `__nullable<` type exists).
+                if found == u32::MAX
+                    && let Some(inner) = concrete_name
+                        .strip_prefix("__nullable<")
+                        .and_then(|r| r.strip_suffix('>'))
+                {
+                    let s_nr = self.data.def_nr(inner);
+                    if s_nr != u32::MAX {
+                        let s_type = self.data.def(s_nr).returned().clone();
+                        found = self.data.find_fn(u16::MAX, &method_suffix, &s_type);
+                    }
+                }
                 if found == u32::MAX {
                     let msg = crate::diagnostics::diagnostic_format(
                         Level::Error,
@@ -2238,7 +2385,31 @@ impl Parser {
             // Operator name — use as-is for find_fn.
             name
         };
-        let resolved = data.find_fn(u16::MAX, fn_name, &concrete_arg);
+        let mut resolved = data.find_fn(u16::MAX, fn_name, &concrete_arg);
+        // @PLN25 E2 — a bounded-generic method call whose receiver monomorphises to a synth
+        // `__nullable<S>` (a nullable vector element, e.g. `for x in v: vector<T>` where
+        // `T = IfItem` → `__nullable<IfItem>`, then `x.is_valid()`) must resolve to S's CONCRETE
+        // method via the `Some` payload — the nullable enum itself has no methods, so `find_fn`
+        // returns MAX and the parametric bound stub `t_1T_<m>` (emitted `todo!()` in native)
+        // would leak to runtime (86).  Mirror the interface-satisfaction unwrap above: retry
+        // against S.  Gate-off-inert (no `__nullable<` type exists).
+        if resolved == u32::MAX
+            && let Type::Enum(nd, true, _) = &concrete_arg
+            && data.def(*nd).name().starts_with("__nullable<")
+        {
+            let some = data.variant_of(*nd, "Some");
+            let pa = if some == u32::MAX {
+                usize::MAX
+            } else {
+                data.attr(some, "payload")
+            };
+            if pa != usize::MAX
+                && let Type::Reference(s, _) = data.attr_type(some, pa)
+            {
+                let s_type = data.def(s).returned().clone();
+                resolved = data.find_fn(u16::MAX, fn_name, &s_type);
+            }
+        }
         if resolved != u32::MAX && resolved != d_nr {
             resolved
         } else {
@@ -3710,6 +3881,29 @@ impl Parser {
         self.set_field_check(d_nr, f_nr, d_pos, ref_code, val_code, false)
     }
 
+    /// @PLN25 single-payload — emit the steps that turn a `Some` record (`some_ref`, type
+    /// `some_d`) into the PRESENT state from a dense-`S` source `src`: set the discriminant
+    /// present (offset 0), then copy the whole dense `S` into the inline `payload` field.
+    /// Single-payload makes `Some = { enum, payload: S }`, so this is ONE record copy (the
+    /// `Reference` arm of `set_field_check` emits the `OpGetField`+`OpCopyRecord`), replacing
+    /// the per-field copy loops the individual-field layout forced.  The caller owns the
+    /// null branch (set the discriminant 0) and any source stashing.
+    pub(crate) fn build_some_present(
+        &mut self,
+        some_d: u32,
+        some_ref: Value,
+        src: Value,
+    ) -> Vec<Value> {
+        let payload_attr = self.data.attr(some_d, "payload");
+        vec![
+            self.cl(
+                "OpSetEnum",
+                &[some_ref.clone(), Value::Int(0), Value::Enum(2, u16::MAX)],
+            ),
+            self.set_field_no_check(some_d, payload_attr, 0, some_ref, src),
+        ]
+    }
+
     fn set_field_check(
         &mut self,
         d_nr: u32,
@@ -3989,14 +4183,24 @@ impl Parser {
                 }
             }
             Type::Enum(_, false, _) => self.cl("OpSetEnum", &[ref_code, pos_val, val_code]),
-            Type::Enum(nr, true, _) => self.cl(
-                "OpCopyRecord",
-                &[
-                    val_code,
-                    ref_code,
-                    Value::Int(i32::from(self.data.def(nr).known_type())),
-                ],
-            ),
+            Type::Enum(nr, true, _) => {
+                // A struct-enum field holds an inline record; copy the source enum
+                // into the field AT ITS OFFSET via a field sub-ref — exactly like
+                // the Type::Reference arm above.  Copying into `ref_code` (the
+                // struct base) instead landed a non-first struct-enum field at
+                // offset 0, clobbering field 0 and reading a garbage discriminant
+                // (#406: `Entry { key: a, value: b }` from enum variables).
+                let type_nr = if self.first_pass {
+                    // known_type() is u16::MAX until the enum registers in pass 2;
+                    // emit the placeholder now (codegen re-runs in pass 2), matching
+                    // the Type::Reference arm.
+                    Value::Int(i32::from(u16::MAX))
+                } else {
+                    Value::Int(i32::from(self.data.def(nr).known_type()))
+                };
+                let field_ref = self.cl("OpGetField", &[ref_code, pos_val, type_nr.clone()]);
+                self.cl("OpCopyRecord", &[val_code, field_ref, type_nr])
+            }
             // @PLN17: store the boolean's u8 form (0/1/255) directly, like enum —
             // the old `if val {1} else {0}` forced 0/1 and dropped the null sentinel.
             Type::Boolean => self.cl("OpSetBoolean", &[ref_code, pos_val, val_code]),
@@ -4152,6 +4356,20 @@ impl Parser {
                     return tp;
                 }
             }
+        }
+        // @PLN25 E2 — `!nullable` (a `__nullable<S>` value in boolean position)
+        // means "is absent" (discriminant 0): no struct operator overload
+        // matches, so lower it directly (mirrors the `== null` is-null lowering).
+        // The common shape is `!v[oob]` ("out-of-bounds is null").
+        if op == "Not"
+            && types.len() == 1
+            && let Type::Enum(syn, true, _) = &types[0]
+            && self.data.def(*syn).name.starts_with("__nullable<")
+        {
+            let get_enum = self.cl("OpGetEnum", &[list[0].clone(), Value::Int(0)]);
+            let disc = self.cl("OpConvIntFromEnum", &[get_enum]);
+            *code = self.cl("OpEqInt", &[disc, Value::Int(0)]);
+            return Type::Boolean;
         }
         // generic-specific error message for operators on T.
         let generic_name = types.iter().find_map(|t| self.generic_type_name(t));

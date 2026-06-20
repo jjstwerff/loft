@@ -142,6 +142,37 @@ impl Parser {
             }
             return Type::Unknown(0);
         }
+        // @PLN25 E2a.3 — transparent construction: when the expected type is a
+        // synthetic nullable-struct enum `__nullable<S>` (propagated into
+        // `parent_tp` by parse_single) and the literal is the underlying struct
+        // `S { … }`, build the `Some` variant instead — the discriminant
+        // defaults to present via object_init, so `item: Row{…}` maps onto the
+        // enum with the user still writing the struct name.
+        // The expected type may arrive either as the inline-nullable `Enum(syn, true)`
+        // (vector elements, declared fields) or as `Reference(syn)` (a keyed
+        // collection's element ref / a typed-local keyed slot, whose `elm` var is
+        // typed `Reference(Some)` and propagates the parent as a Reference).  Accept
+        // both so a typed-LOCAL `hash<S[k]> += [S{…}]` builds `Some` in place, exactly
+        // like the field path — without it the literal builds a dense `S` that a raw
+        // OpCopyRecord then mis-lays into the `Some` record (wrong offsets, no
+        // discriminant → null/garbage reads).  Mirrors `unique_elm_var`, which already
+        // resolves the element through `Some` for both forms.
+        let syn_nullable = match &*parent_tp {
+            Type::Enum(syn, true, _) | Type::Reference(syn, _) => Some(*syn),
+            _ => None,
+        };
+        if let Some(syn) = syn_nullable
+            && self.data.def(syn).name == format!("__nullable<{nm}>")
+            && self.lexer.peek_token("{")
+        {
+            let some_d = self.data.variant_of(syn, "Some");
+            if some_d != u32::MAX {
+                let tp = self.parse_object(some_d, code);
+                if tp != Type::Unknown(0) {
+                    return tp;
+                }
+            }
+        }
         let mut t = self.parse_constant_value(code, source, &nm, name_pos, qualifier_enum);
         if t != Type::Null {
             return t;
@@ -1618,6 +1649,43 @@ impl Parser {
         Type::Null
     }
 
+    /// Resolve one slice bound to a valid `[0, len]` index: a negative bound
+    /// counts from the end (`b + len`), an inclusive end is shifted to its
+    /// exclusive form (`b + 1`) so a single clamp path serves both, and the
+    /// result is clamped into range.  This keeps a vector slice's iteration
+    /// endpoints in bounds so it never runs off either side — see loft#384.
+    /// `len_var` must already hold `OpLengthVector(base)`; `bound` should be a
+    /// `Var` so the duplicated reads below cost nothing and re-run no effects.
+    fn slice_clamp_bound(&mut self, bound: Value, len_var: u16, inclusive_end: bool) -> Value {
+        // from-end: (b < 0) ? b + len : b
+        let is_neg = self.conv_op("<", bound.clone(), Value::Int(0), I32.clone(), I32.clone());
+        let add_len = self.conv_op(
+            "+",
+            bound.clone(),
+            Value::Var(len_var),
+            I32.clone(),
+            I32.clone(),
+        );
+        let resolved = v_if(is_neg, add_len, bound);
+        let resolved = if inclusive_end {
+            self.conv_op("+", resolved, Value::Int(1), I32.clone(), I32.clone())
+        } else {
+            resolved
+        };
+        // clamp high to len: (len < r) ? len : r   (loft has `<`/`<=`, not `>`)
+        let gt_len = self.conv_op(
+            "<",
+            Value::Var(len_var),
+            resolved.clone(),
+            I32.clone(),
+            I32.clone(),
+        );
+        let hi = v_if(gt_len, Value::Var(len_var), resolved);
+        // clamp low: (r < 0) ? 0 : r
+        let lt_zero = self.conv_op("<", hi.clone(), Value::Int(0), I32.clone(), I32.clone());
+        v_if(lt_zero, Value::Int(0), hi)
+    }
+
     // range ::= rev(<expr> '..' ['='] <expr>) | <expr> [ '..' ['='] <expr> ]
     #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_in_range_body(
@@ -1628,11 +1696,11 @@ impl Parser {
         in_type: Type,
         reverse: bool,
     ) -> Type {
-        let incl = self.lexer.has_token("=");
+        let mut incl = self.lexer.has_token("=");
         // O8.5: capture range bounds for const-unroll detection.
         self.last_range_from = Some(expr.clone());
         let mut till = Value::Null;
-        let till_tp = if self.lexer.peek_token("]") {
+        let mut till_tp = if self.lexer.peek_token("]") {
             till = if *data == Value::Null {
                 Value::Int(i32::MAX)
             } else {
@@ -1654,60 +1722,54 @@ impl Parser {
         } else {
             self.last_range_till = Some(till.clone());
         }
+        // loft#384: a vector slice (`data` present, not a pure `0..n` range) must
+        // resolve negative bounds from the end and clamp into `[0, len]`, else the
+        // iteration endpoints run off an edge: a negative end breaks immediately
+        // (silent empty), a negative start wraps past the end, and an over-range
+        // end reads OOB nulls/garbage in raw iteration.  Both bounds are bound to
+        // temps (evaluated once) and clamped; the slice then runs as a plain
+        // exclusive range, so pure ranges keep their raw bounds untouched.
+        let mut iter_prelude = Vec::new();
+        if *data != Value::Null {
+            let len_var = self.create_unique("slice_len", &I32);
+            let lo_var = self.create_unique("slice_lo", &I32);
+            let hi_var = self.create_unique("slice_hi", &I32);
+            iter_prelude.push(v_set(
+                len_var,
+                self.cl("OpLengthVector", std::slice::from_ref(data)),
+            ));
+            iter_prelude.push(v_set(lo_var, expr.clone()));
+            let lo = self.slice_clamp_bound(Value::Var(lo_var), len_var, false);
+            iter_prelude.push(v_set(lo_var, lo));
+            iter_prelude.push(v_set(hi_var, till.clone()));
+            let hi = self.slice_clamp_bound(Value::Var(hi_var), len_var, incl);
+            iter_prelude.push(v_set(hi_var, hi));
+            *expr = Value::Var(lo_var);
+            till = Value::Var(hi_var);
+            till_tp = I32.clone();
+            incl = false;
+        }
         let ivar = if name == "$" {
             self.create_unique("index", &in_type.clone())
         } else {
             self.create_var(&format!("{name}#index"), &in_type)
         };
         let mut ls = Vec::new();
-        // @P384: for a real-collection slice `col[lo..hi]` a negative bound counts
-        // FROM THE END — mirroring single-index `col[-1]`.  Normalize BOTH bounds to
-        // absolute positions ONCE, before the loop, so the loop walks absolute indices
-        // and the break test compares like with like.  Without this the loop walked the
-        // raw bound and leaned on per-element from-end inside `OpGetVectorNullable`,
-        // which only worked when start and end sat on the same side of zero
-        // (`v[-3..-1]` ok, but `v[2..-1]` broke immediately and `v[-2..]` wrapped past
-        // zero).  Bare ranges (`data == Null`, e.g. `for i in a..b`) keep literal-counter
-        // semantics and are left untouched (pre stays empty → init is the plain reset).
-        let mut pre: Vec<Value> = Vec::new();
-        let (start_bound, end_bound) = if *data == Value::Null {
-            (expr.clone(), till.clone())
-        } else {
-            let len_var = self.create_unique("slice_len", &I32);
-            pre.push(v_set(
-                len_var,
-                self.cl("OpLengthVector", std::slice::from_ref(data)),
-            ));
-            let from_var = self.create_unique("slice_from", &in_type);
-            let till_var = self.create_unique("slice_till", &in_type);
-            for (bound_var, raw) in [(from_var, expr.clone()), (till_var, till.clone())] {
-                // bound_var = raw;  if bound_var < 0 { bound_var = bound_var + len }
-                pre.push(v_set(bound_var, raw));
-                let neg = self.conv_op(
-                    "<",
-                    Value::Var(bound_var),
-                    Value::Int(0),
-                    in_type.clone(),
-                    I32.clone(),
-                );
-                let plus_len = self.conv_op(
-                    "+",
-                    Value::Var(bound_var),
-                    Value::Var(len_var),
-                    in_type.clone(),
-                    I32.clone(),
-                );
-                pre.push(v_set(bound_var, v_if(neg, plus_len, Value::Var(bound_var))));
-            }
-            (Value::Var(from_var), Value::Var(till_var))
-        };
-        let test = if reverse {
+        // A `rev(...)` wrapping a slice subscript (`rev(v[2..5])`) arrives via the
+        // reverse_iterator flag: the inner subscript parse never sees the `rev`
+        // token, so `reverse` (the param) is false here.  Honour the flag for the
+        // loop direction and consume it.  The closing `)` for that form is consumed
+        // by the enclosing `parse_in_range`, so only the `rev(range)` param drives
+        // the `token(")")` below — leave that gated on `reverse`.
+        let want_reverse = reverse || self.reverse_iterator;
+        self.reverse_iterator = false;
+        let test = if want_reverse {
             if incl {
                 ls.push(v_set(
                     ivar,
                     v_if(
                         self.single_op("!", Value::Var(ivar), in_type.clone()),
-                        end_bound.clone(),
+                        till,
                         self.conv_op(
                             "-",
                             Value::Var(ivar),
@@ -1720,7 +1782,7 @@ impl Parser {
             } else {
                 ls.push(v_if(
                     self.single_op("!", Value::Var(ivar), in_type.clone()),
-                    v_set(ivar, end_bound.clone()),
+                    v_set(ivar, till),
                     Value::Null,
                 ));
                 ls.push(v_set(
@@ -1737,7 +1799,7 @@ impl Parser {
             self.conv_op(
                 "<",
                 Value::Var(ivar),
-                start_bound.clone(),
+                expr.clone(),
                 in_type.clone(),
                 till_tp,
             )
@@ -1746,7 +1808,7 @@ impl Parser {
                 ivar,
                 v_if(
                     self.single_op("!", Value::Var(ivar), in_type.clone()),
-                    start_bound.clone(),
+                    expr.clone(),
                     self.conv_op(
                         "+",
                         Value::Var(ivar),
@@ -1758,7 +1820,7 @@ impl Parser {
             ));
             self.conv_op(
                 if incl { "<" } else { "<=" },
-                end_bound.clone(),
+                till,
                 Value::Var(ivar),
                 till_tp,
                 in_type.clone(),
@@ -1766,22 +1828,23 @@ impl Parser {
         };
         ls.push(v_if(test, Value::Break(0), Value::Null));
         ls.push(Value::Var(ivar));
-        let init = {
-            let null_set = v_set(ivar, self.null(&in_type));
-            if pre.is_empty() {
-                null_set
-            } else {
-                // `Insert` splices its statements at the enclosing scope (no `{}`),
-                // so the loop counter and the slice_len/from/till bounds stay visible
-                // to the sibling loop body — a `Block` would scope the `let`s away
-                // from native codegen.
-                pre.push(null_set);
-                Value::Insert(pre)
-            }
+        // The loop init runs once before iteration.  For a slice it carries the
+        // bound-clamp prelude (len/lo/hi temps) ahead of the iterator-var reset;
+        // `iterator()` keeps this init slot (it drops only `extra_init`), so the
+        // clamp is emitted on both the for-loop and the materialisation paths.
+        let init_ivar = v_set(ivar, self.null(&in_type));
+        let iter_init = if iter_prelude.is_empty() {
+            init_ivar
+        } else {
+            // `Insert` is a flat statement sequence, NOT a scoped block: the clamp
+            // temps must live across the loop body, so they cannot sit in a nested
+            // block scope (its slots are reclaimed on block exit — two-zone design).
+            iter_prelude.push(init_ivar);
+            Value::Insert(iter_prelude)
         };
         *expr = Value::Iter(
             u16::MAX,
-            Box::new(init),
+            Box::new(iter_init),
             Box::new(v_block(ls, in_type.clone(), "Iter range")),
             Box::new(Value::Null),
         );
@@ -1966,6 +2029,21 @@ impl Parser {
     }
 
     pub(crate) fn parse_object(&mut self, td_nr: u32, code: &mut Value) -> Type {
+        // @PLN25 single-payload: a `__nullable<S>::Some` variant's body uses S's field names,
+        // which live in the inline `payload` field — not `Some`'s direct fields {enum, payload}.
+        // Allocate the `Some` record, set the discriminant present, and parse the body as a
+        // dense `S` directly into the inline `payload` sub-ref.  See single-payload-refactor.md.
+        if self.data.def_type(td_nr) == DefType::EnumValue {
+            let payload_attr = self.data.attr(td_nr, "payload");
+            let parent = self.data.def(td_nr).parent;
+            if payload_attr != usize::MAX
+                && parent != u32::MAX
+                && self.data.def(parent).name.starts_with("__nullable<")
+                && let Type::Reference(struct_d, _) = self.data.attr_type(td_nr, payload_attr)
+            {
+                return self.parse_some_payload_object(parent, td_nr, struct_d, code);
+            }
+        }
         let link = self.lexer.link();
         if !self.lexer.has_token("{") {
             self.lexer.revert(link);
@@ -2112,6 +2190,75 @@ impl Parser {
         }
     }
 
+    /// @PLN25 single-payload — construct a `__nullable<S>::Some` value from an `S{…}` (or
+    /// anonymous `{…}`) literal: allocate the `Some` record, set the discriminant present,
+    /// then parse the body as a dense `S` directly into the inline `payload` sub-ref.  The
+    /// sub-ref is an `OpGetField`, so `parse_object(struct_d, …)` writes the body fields in
+    /// place (its `is_field` path) and defaults the rest — exactly the dense-`S` construction,
+    /// landing verbatim in the payload region.
+    fn parse_some_payload_object(
+        &mut self,
+        syn: u32,
+        some_d: u32,
+        struct_d: u32,
+        code: &mut Value,
+    ) -> Type {
+        // Peek the literal body without consuming it — parse_object(struct_d) consumes `{…}`.
+        let link = self.lexer.link();
+        if !self.lexer.has_token("{") {
+            self.lexer.revert(link);
+            return Type::Unknown(0);
+        }
+        self.lexer.revert(link);
+        let enum_tp = Type::Enum(syn, true, crate::data::Deps::none());
+        if self.first_pass {
+            // Type-only: consume the body so the parser stays aligned.
+            let mut throwaway = Value::Null;
+            self.parse_object(struct_d, &mut throwaway);
+            return enum_tp;
+        }
+        let some_kt = self.data.def(some_d).known_type();
+        let struct_kt = self.data.def(struct_d).known_type();
+        let disc_pos = self.database.position(some_kt, "enum");
+        let payload_pos = self.database.position(some_kt, "payload");
+        // Allocate the `Some` record in a work-ref + set the discriminant present.
+        let ret = self.data.def(some_d).returned().clone();
+        let w = self.vars.work_refs(&ret, &mut self.lexer);
+        let mut list = vec![
+            v_set(w, Value::Null),
+            self.cl(
+                "OpDatabase",
+                &[Value::Var(w), Value::Int(i32::from(some_kt))],
+            ),
+            self.cl(
+                "OpSetEnum",
+                &[
+                    Value::Var(w),
+                    Value::Int(i32::from(disc_pos)),
+                    Value::Enum(2, u16::MAX),
+                ],
+            ),
+        ];
+        // Parse the body as a dense `S` directly into the inline payload sub-ref.
+        let mut payload_ref = self.cl(
+            "OpGetField",
+            &[
+                Value::Var(w),
+                Value::Int(i32::from(payload_pos)),
+                Value::Int(i32::from(struct_kt)),
+            ],
+        );
+        self.parse_object(struct_d, &mut payload_ref);
+        list.push(payload_ref);
+        list.push(Value::Var(w));
+        *code = v_block(
+            list,
+            Type::Enum(syn, true, crate::data::Deps::frame1(w)),
+            "NullableSome",
+        );
+        enum_tp
+    }
+
     /// Recursively replace `Value::Var(0)` (the record placeholder used in field default
     /// expressions) with the actual record reference from the calling context.
     pub(crate) fn replace_record_ref(mut val: Value, record: &Value) -> Value {
@@ -2142,6 +2289,15 @@ impl Parser {
             if found_fields.contains(&nm)
                 || matches!(tp, Type::Routine(_))
                 || self.data.def(td_nr).attributes()[aid].constant
+            {
+                continue;
+            }
+            // @PLN25 E2a.4 — a synthetic nullable-struct enum field omitted from the
+            // literal is left at its zero-init (discriminant 0 = null) by
+            // OpDatabase/set_default_value.  The Reference-recursion / to_default paths
+            // below would write inner-struct field defaults over the inline enum bytes
+            // and corrupt the record; "absent" is exactly discriminant 0, so skip it.
+            if matches!(&tp, Type::Enum(e, true, _) if self.data.def(*e).name.starts_with("__nullable<"))
             {
                 continue;
             }
@@ -2231,6 +2387,41 @@ impl Parser {
     ) {
         let nr = self.data.attr(td_nr, field);
         let td = self.data.attr_type(td_nr, nr);
+        // @PLN25 — null-source convert: a nullable struct SOURCE (a call / variable
+        // of type `Reference(S)`, possibly the null sentinel) assigned to a synthetic
+        // `__nullable<S>` field.  Build the `Some` variant from the source when
+        // present (discriminant 2 + per-field copy at the Some offsets); leave the
+        // zero-init (discriminant 0 = null) when the source is null — NEVER
+        // OpCopyRecord a null source (the crash the representation retires).  An
+        // inline `S{…}` literal already took the Some-construction path in parse_var,
+        // so this fires only for an expression source.
+        if !self.first_pass
+            && let Type::Enum(syn, true, _) = &td
+            && self.data.def(*syn).name.starts_with("__nullable<")
+            && let Type::Reference(src_d, _) = exp_tp
+            && self.data.def(*syn).name == format!("__nullable<{}>", self.data.def(*src_d).name())
+        {
+            let syn = *syn;
+            let some_d = self.data.variant_of(syn, "Some");
+            let enum_kt = i32::from(self.data.def(syn).known_type());
+            let item_pos = i32::from(
+                self.database
+                    .position(self.data.def(td_nr).known_type(), field),
+            );
+            let src_var = self.vars.work_refs(exp_tp, &mut self.lexer);
+            list.push(v_set(src_var, value.clone()));
+            let field_ref = self.cl(
+                "OpGetField",
+                &[code.clone(), Value::Int(item_pos), Value::Int(enum_kt)],
+            );
+            // Single-payload: set the discriminant present (Null=1, Some=2; 0 = absent)
+            // and copy the whole dense `S` source into the inline `payload` field.
+            let present = self.build_some_present(some_d, field_ref, Value::Var(src_var));
+            let is_null = self.cl("OpRefIsNull", &[Value::Var(src_var)]);
+            let not_null = self.cl("OpNot", &[is_null]);
+            list.push(v_if(not_null, Value::Insert(present), Value::Null));
+            return;
+        }
         if matches!(
             td,
             Type::Vector(_, _)

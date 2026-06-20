@@ -1,0 +1,556 @@
+<!--
+Copyright (c) 2026 Jurjen Stellingwerff
+SPDX-License-Identifier: LGPL-3.0-or-later
+-->
+
+# E2 single-payload representation refactor — design
+
+> **Status:** COMPLETE (2026-06-19, branch `2026-07-mac`) — every E2 test green on BOTH
+> backends (full suite 2415/2416; the lone fail is the pre-existing environmental
+> `kernel_port`, NOT E2), clippy + fmt clean.  `OpNullableToDense` and its copy machinery are
+> DELETED (WIP 6, `2022f0b5`) — the value-boundary + return unwrap is a payload sub-ref view.
+> The refactor's own 7 steps are all done.  What remains is the BROADER @PLN25 tail (NOT this
+> refactor): the Step-5 consumer sweep + the gate flip.  Context: [[pln25-nullable-coherence]]
+> memory + README § RESUME HERE.
+
+## DESIGN DECISION (2026-06-20): nullability is a SEQUENCE concept — keyed collections stay DENSE
+
+> **Nullability applies to sequences (`vector`/`array`) ONLY.  Keyed collections
+> (`hash`/`sorted`/`index`/`spacial`) are always dense — implicitly `not null`.**
+
+This SUPERSEDES the earlier "full coherence — keyed collections mirror the vector arm to
+`__nullable<S>`" approach.  The rule:
+
+1. **`vector<S>` / `array<S>` — nullable by default** → element `__nullable<S>`, with `not null`
+   as the dense opt-out.  A `null` is a valid, addressable slot.  (`array` is the *linked* form a
+   vector is promoted to when its records are shared with a keyed index — `finish_type`'s
+   `Vector → Array` promotion; it is equally nullable-capable.)
+
+2. **`hash`/`sorted`/`index`/`spacial`<S[k]> — DENSE, implicitly `not null`.**  `not null` is
+   *accepted* in their definitions (`hash<S not null [k]>`) but is the implicit default, so it is a
+   no-op.  Their record format is UNCHANGED from pre-PLN25.  Rationale: a key denotes presence — you
+   cannot look up an absent element, so a keyed element is never null.
+
+3. **A keyed index over a shared nullable array indexes only the NON-NULL (`Some`) records.**  In
+   the "two views, one record set" / `other_indexes` pattern (a combined/multi-key index as a
+   secondary view over a `vector`→`array` of nullable records), null slots stay in the array,
+   addressable by position, but are NOT inserted into the key index → unreachable by key.  The index
+   skips `Null` discriminants at index-build time.
+
+**Consequences (this is the active work):**
+- **REVERT the keyed→nullable rewrites** — `definitions.rs` `index`/`hash`/`sorted` arms back to
+  dense (`Type::Index/Hash/Sorted(type_def_nr(&tp), …)`).  Supersedes `fbfdea93` (sorted/index→nullable)
+  and `0bd59608` (hash→nullable).  With keyed content never a `__nullable<` enum, the downstream
+  keyed-nullable plumbing (`key_owner`/`key_base`→Some, `fields()`/`find_index`→Some, `database.index`
+  target, the index range-query nullable for-loop arm, the keyed `+= <single struct>` branch) goes
+  INERT (all guarded on `__nullable<` content) and can be cleaned up.
+- **The keyed-nullable bug class is DELETED, not fixed.**  native_scripts keyed-clear (`69211de2`),
+  index coherence (`469dbec1`), store_persist keyed `+=` (`7b1dc082`) were all solving a problem this
+  design removes — their keyed-specific parts revert.
+- **The vector/array nullable work STAYS:** p379 (`6012147a`, synth-enum collision via vector fields),
+  stack_trace (`618c0b5d`, stdlib struct dense inside a consumer vector), set_default_value MAX guard
+  (`d045e1ed`).
+- **Forward (REQUIRED — "Scope B"):** the record-sharing read path — a dense keyed index reading keys
+  from a *shared* nullable array's `Some`-wrapped records (at the payload offset) and skipping `Null`
+  at index-build.  A STANDALONE keyed collection (`hash<S[k]> = […]`) builds its own dense records and
+  needs nothing, BUT the `struct { entries: vector<S>, lookup: hash<S[k]> }` record-sharing pattern is
+  COMMON in the suite — gate-on it fails after Scope A until Scope B lands: `tests/scripts/`
+  `12-collections`, `65-hash-edge-cases`, `69-empty-comprehension-hash`, `374-vector-hash-sibling-dup-key`,
+  plus the 2 `#[ignore]`-d `plan25_e2_hash.rs` tests (`hash_over_nullable_vector_lookup_and_field_access`,
+  `anon_literal_into_hash_field_and_forloop_over_shared_array`).  Gate-OFF all pass (dense); the
+  releasable state is preserved.  Scope B un-ignores + fixes all of them.
+
+### Scope A status (landed — `d9772c26`)
+Keyed definition arms + the keyed-only plumbing reverted to `main`'s dense form.  Gate-OFF unchanged
+(2415 pass + the 2 ignored = baseline; the 1 fail is environmental `kernel_port`).  Gate-ON: keyed
+collections are dense — `89-sizeof` and the keyed-clear OOB class are FIXED; the record-sharing tests
+above now fail pending Scope B.  Vector/array nullable work (p379, stack_trace, `set_default_value`
+guard) untouched.
+
+### Scope B status (landed — `1c83fb7c`)
+A keyed HASH sharing records with a nullable vector now works.  Done PARSER-side (one consistent type,
+no DB/find change): `definitions.rs::link_shared_nullable_hash` rewrites a shared hash field's element
+`S` → the sibling's `__nullable<S>` (guarded on `__nullable<` → gate-off-inert, order-independent);
+`structures.rs::record_finish` skips a `Null`/absent record (discriminant ≠ 2) on the sibling keyed
+insert.  B3 (find-level sub-ref) proved UNNECESSARY — the existing `field()` `__nullable<` unwrap
+returns the payload sub-ref.  plan25_e2_hash 7/7 (2 un-ignored + a null-skip regression);
+12/65/69/373/374 pass gate-on BOTH backends; native_scripts gate-on 7→2.  Gate-OFF 2416/2417 (1
+environmental).  Sorted/Index sharing left dense (unexercised; needs index bookkeeping on `Some`).
+
+### ✅ GATE FLIP LANDED (2026-06-20) — nullable-by-default is ON
+The `LOFT_E2_SYNTH` env gate is DROPPED (`e2_rewrite_enabled` = `source != STD_SOURCE`).  Full suite
+**2416/2417** (the lone fail is the pre-existing environmental `kernel_port`, NOT E2); clippy + fmt
+clean; both backends.  The entire flip tail was cleared:
+- **86** FIXED (`9e15cad8`) — bounded-generic method dispatch unwraps a `__nullable<S>` receiver.
+- **371** FIXED (`743727be`) — forward-ref local-vector synth-enum laid out on-demand from the peek.
+- **imaging** FIXED (`3e5d9865`) — native-managed pixel vector declared `not null` (dense).
+- **moros_glb** — was SPURIOUS (program-cache gotcha), passes under the real flip.
+- **184** — div-zero still raises on both backends; the loft_suite `FIXED` line is an informational
+  classification notice (a div-zero fault is recoverable, not a UserPanic/AssertionFailed), NOT a
+  failure.
+Plus Scope A (keyed → dense) + Scope B (shared-nullable record-sharing).  **PLN25 is COMPLETE.**
+
+### Historical: gate-ON flip tail (5; pre-fix) — ROOT-CAUSED 2026-06-20
+None block the releasable gate-OFF state.  Roots:
+- **`native_scripts::371_p375_forward_ref_positions`** — FULLY root-caused (fails BOTH backends, not
+  native-only).  A LOCAL `vector<S>` of a FORWARD-referenced struct `S` (declared OR inferred,
+  `pull(){ v=[Cell{n:8}]; v[0].n }` with `struct Cell` defined AFTER) reads 0.  Mechanism: `S` has NO
+  pass-1 def (`def_nr=MAX`), so the inferred-literal peek (vectors.rs:1696) + the synth
+  `__nullable<S>` enum are created DURING pass-2 body parse; the vector STRIDE is baked then from
+  `database.size(synth)` = **0** (the synth enum — and `S` itself — are not laid out until `fill_all`
+  AFTER body parse).  Non-forward works because `S` is known in pass 1 → synth enum laid out before
+  pass-2 reads its size.  IR proof: forward `OpGetVector(v,0,0)` (stride 0) + the MAX-offset payload
+  sentinel; non-forward `OpGetVector(v,16,0)` + `GetField(elem,0,64)`/`GetField(payload,8,65)`.  FIX
+  (delicate, two-pass): create a forward-ref STUB for `S` in pass 1 from the peek so the synth enum
+  exists + lays out before pass-2 body parse — OR a deferred/re-baked stride.  Parser-stability
+  sensitive (H5 + forward-ref adoption); next-session work.
+- **`native_scripts::86_interfaces`** — native-only (passes interp + native gate-OFF).  Gate-ON the
+  native codegen emits `todo!("native function t_1T_to_label")` — an interface method dispatched on a
+  GENERIC type-var `T` (`t_1T_*`) instead of the concrete `IfItem`.  Interface/generic + nullable
+  native-codegen interaction.
+- **`native::imaging_fixture_png_roundtrip`** — native SIGSEGV gate-on (nullable-vector native codegen).
+- **`exit_codes::moros_glb_cli_end_to_end`** — **SPURIOUS (cache gotcha), NOT a real flip blocker.**
+  Runs CLEAN directly gate-on with `LOFT_NO_CACHE=1` (`wrote …glb`); the find_problems-with-env run
+  reused a gate-off-cached program (the program cache keys on SOURCE, not the gate — documented
+  gotcha).  Under the ACTUAL flip (gate dropped, no cache mismatch) it PASSES — confirmed: the real
+  flip suite is **2413/2417, 4 failures** and moros_glb is GONE.
+
+**TRUE flip tail (gate dropped): WAS 4, NOW 2 code bugs + 1 flip-mechanical.**  Progress 2026-06-20:
+- **86 FIXED (`9e15cad8`)** — `re_resolve_call` (mod.rs) now unwraps a `__nullable<S>` receiver to S's
+  concrete method (mirroring the interface-satisfaction unwrap at mod.rs:2290).  A bounded-generic
+  `for x in v: vector<T>` then `x.method()` (T→IfItem → element `__nullable<IfItem>`) was resolving to
+  the parametric stub `t_1T_<m>` (native `todo!()`) instead of `t_6IfItem_<m>`.  Both backends green.
+- **184 FLIP-MECHANICAL** — the nullable model makes undefended div-zero produce null by design (the
+  warning says so); `@EXPECT_FAIL` updates when the gate drops (Option A).  Not a code fix.
+- **REMAINING (2 code bugs):**
+  - **371** — a LOCAL `vector<S>` of a FORWARD-ref struct: the synth `__nullable<S>` enum is created
+    during pass-2 body parse, AFTER `fill_all`'s registration, so it is unregistered when the
+    construction + read bake their offsets/strides.  **2026-06-20 attempt (reverted) — TWO of the
+    three sub-problems SOLVED, one remains:**
+    (a) PAYLOAD OFFSET ✓ — an on-demand `register_and_lay_out_synth` called from the inferred-literal
+    PEEK (vectors.rs, the EARLIEST site — before both the construction and the read bake) made the
+    `OpGetField`/`OpSetInt` payload offset bake correctly as **8** (was MAX); proven in the IR.
+    (b) `Some` variant SIZE ✓ — a TARGETED `lay_out_synth` (`finish_type` on just the `Some`+enum, NOT
+    the full `finish()` which corrupts keyed bookkeeping at types.rs:1756) laid the `Some` out at 16.
+    (c) ENUM SIZE ✗ (the blocker) — the synth ENUM's size stays **0** → the vector STRIDE + the
+    `OpCopyRecord` element size stay 0 → the element is never copied → `v[0].field == 0`.  Root: the
+    piecemeal `register_enum_db` + `fill_database(variants)` sequence does NOT propagate the `Some`
+    variant's db type into the enum's `Parts::Enum` variant CONTENT (stays MAX), so `finish_type`'s
+    enum-size = max(variant sizes) can't see the 16.  The canonical link is `fill_database`'s
+    EnumValue arm (typedef.rs:591-594, `database.enum_value(enum_tp, name, known_type)`) but in the
+    on-demand order it didn't take.  NEXT: replicate `fill_all`'s exact synth-enum layout order, or
+    find why `enum_value` doesn't update `Parts::Enum` here.
+  - **imaging** — native cdylib FFI: the `loft_imaging` extension SIGSEGVs gate-on even when freshly
+    rebuilt (the FFI boundary doesn't account for the `__nullable<S>` element layout of image-pixel
+    vectors).  Hardest item.
+- **`wrap::loft_suite`** — 184 stale `@EXPECT_FAIL` div-zero annotation; resolves AT the flip
+  (update the annotation when gate-on becomes default — can't pre-fix without breaking gate-off).
+
+**Assessment: the flip is MULTI-SESSION.**  The keyed-collection work (the bulk of @PLN25's recent
+risk) is DONE + releasable.  The remaining tail is 3 deep native-codegen/nullable-vector bugs (371
+two-pass layout, 86 interface-generic, imaging/moros_glb native-shared-store) + 1 flip-time
+annotation — each a focused investigation.  imaging + moros_glb likely share the native-nullable
+root.
+
+## The one invariant (CONFIRMED by construction, not assumed)
+
+> **`__nullable<S>`'s `Some` variant carries a single inline `payload: S` field whose type
+> IS the same struct definition as a standalone `S`.  Therefore a DbRef at
+> `some_record + payload_offset` shares S's exact field-offset table and IS a valid dense
+> `S` reference — every operation defined on dense `S` works on it verbatim, with no copy
+> and no per-field translation.**
+
+This replaces the old form where `nullable_enum_for` copied S's fields *individually* into
+`Some` (a 5-field packed struct: `disc, a, b, c, d`).  The packer gap-fills the 1-byte
+discriminant's alignment slack and reorders the payload (dense `a@0,c@8,b@16,d@20` vs Some
+`disc@0,b@4,a@8,c@16,d@24`), so a sub-ref read garbage and a field-by-field copy
+(`OpNullableToDense`) was forced.  A single struct-typed field keeps S's own packing, so
+the copy is unnecessary.
+
+### Constructive evidence (the protocol's "plot the answer" step)
+
+Hand-written `enum Maybe { Null, Some { payload: S } }` over
+`struct S { a: integer, b: text, c: integer, d: boolean }`, via `loft introspect`:
+
+```
+t65 = structure("S")           : a@0(int), b(text), c(int), d(bool)
+t67 = structure("Some", 2)     : enum=disc@0 ,  payload: t65        ← payload's TYPE is t65
+match Some { payload }          → OpGetField(e, 8, 65)              ; payload@8, type 65 (=S)
+payload.a                       → OpGetInt(payload, 0)              ; offset 0 in the SAME S def
+```
+
+`payload` is **inline-embedded** at offset 8 (after the disc byte, padded to S's 8-byte
+alignment) and its type is literally `t65` — there is no separate "Some payload" layout, so
+field offsets are identical *by shared definition*, not by coincidence.  The payload base
+(8 here) is **alignment-dependent** (an S whose max align is 4 → payload@4); it must be
+*computed* from the built `Some` structure, never hardcoded.
+
+## Re-assertion sites and the N→1 collapse (protocol step 2)
+
+The whole key system already funnels through ONE redirect, `Stores::key_owner(content)`
+(`src/database/types.rs:440`).  Today it returns the `Some` *variant*, whose **direct**
+fields are S's (individually copied), so a key field's `position` is already absolute
+within the record.  Single-payload makes `Some`'s direct fields `{enum, payload}` and sinks
+the keys into `payload`, so two things change at the redirect:
+
+1. **`key_owner(__nullable<S>)` returns the inner `S` struct** (the payload's content type),
+   not the `Some` variant — so every *name→index* and *index→field* resolution indexes S's
+   own field list (`"a"→0`), exactly as a non-nullable `hash<S[k]>` does.
+2. **Key byte-positions gain a base offset.**  A key field's `position` is now S-relative,
+   but the stored record is the `Some` record, so the absolute offset is
+   `Some.payload.position + S_field.position`.
+
+Site inventory (all currently route through `key_owner`):
+
+| Site | File | Role | Needs base? |
+|---|---|---|---|
+| `key_owner` | types.rs:440 | the redirect | — (change target to inner S) |
+| `hash` / `create_key` / `field_name` | types.rs:1049/1294/1097 | build: name→index | no (indices only) |
+| `determine_keys` | types.rs:455 | build: index→`keys[].position` | **YES** |
+| `field_content` | search.rs:65 | runtime: read key bytes at `rec.pos+position` | **YES** |
+| `get_keys` | search.rs:292 | runtime: key content TYPES (for `read_key`) | no (types only) |
+| `bare_field_name` | generation/mod.rs:2035 | native codegen: key NAME | no (names only) |
+
+**The brittleness = the two `YES` sites** (`determine_keys` build vs `field_content`
+runtime) computing the same absolute position *independently*: if base is added at one and
+not the other, build-time and run-time offsets drift → **silent keyed-collection
+corruption** (no crash, wrong bucket / wrong compare).  **Collapse: one chokepoint**
+`key_field(content, k) -> (content_type, abs_position)` that does `key_owner` + `key_base` +
+the field lookup; `determine_keys`, `field_content`, and `get_keys` all route through it, so
+the base-math is asserted **once**.  `key_base(content)` returns `Some.payload`'s position
+for a `__nullable<S>`, else 0.
+
+## Failure paths (write them down — this is where the invariant earns its keep)
+
+1. **Payload base hardcoded to 8** → corrupts any S whose max alignment < 8 (payload@4).
+   *Guard:* `key_base` computes it from the built `Some` structure.
+2. **Base added at build but not runtime read (or vice-versa)** → keyed lookup reads the
+   wrong bytes; insert and find disagree silently.  *Guard:* the single `key_field`
+   chokepoint (above).
+3. **`key_owner` still returns the `Some` variant** → `fields[k]` indexes `{enum,payload}`,
+   so `k=0` hits the discriminant; every keyed read is junk.  *Guard:* change the redirect
+   target + a `hash<S[k]>`-over-nullable regression on BOTH backends (Cluster F/K suites).
+4. **Native tid ordering** (the rung-4 hazard): `Some`/`Null` structures must be interned in
+   the same creation order on both backends, or native bakes a swapped type-id.  *Guard:*
+   keep the existing `fill_all` eager-variant build; re-run the native hash suite.
+5. **`payload: S` field built as a separate-record reference, not inline** → a sub-ref no
+   longer lands inside the `Some` record.  *Guard:* the introspect layout check above
+   (`OpGetField(e, 8, 65)` = inline sub-ref) re-run on a *synth* `__nullable<S>` gate-on.
+
+## Implementation order (dependency-first; line numbers approximate post-rebase)
+
+1. **Layout** — `nullable_enum_for` (data.rs:3808): replace the per-field copy loop
+   (3877-3900) with ONE `payload` attribute typed `Reference(struct_d)`.  Verify a *synth*
+   `__nullable<S>` introspects to `Some{enum@0, payload@base:S}` gate-on.
+2. **Key contract** — `key_owner` → inner S; add `key_base`; add the `key_field` chokepoint;
+   route `determine_keys` / `field_content` / `get_keys` through it.  (The build sites
+   `hash`/`create_key` keep using `key_owner`; they only need indices.)
+3. **Field access** — `find_poly_enum_field` (fields.rs:543) + callers (97/281): resolve
+   `e.field` through `payload` (payload base + S-field offset).
+4. **Construction** — build `payload` not individual fields: objects.rs, collections.rs,
+   vectors.rs, builtins.rs (the dense→Some per-field copy loops collapse to one payload
+   write / a sub-ref + dense build).
+5. **Format** — format.rs: render the payload struct, not the `Some` field list.
+6. **convert / unwrap deletion** — `convert` (generation/mod.rs) emits a payload sub-ref
+   (dense S) instead of `OpNullableToDense`; then DELETE `OpNullableToDense`
+   (default/01_code.loft, structures.rs `nullable_to_dense`, fill.rs, control.rs +
+   `tail_is_nullable_unwrap`, operators.rs `is_struct_returning_call` arm, pre_eval.rs).
+   `materialize_view_return` SURVIVES (genuine #306 views).
+7. **Test** — update `tests/plan25_e2_layout.rs`: byte-identity assertion becomes "`Some.payload`
+   is a dense `S`" (the stronger, correct invariant).
+
+## Verify (both backends, gate-on)
+
+- The gate-on suites: `plan25_e2_gap2`, `_hash`, `_json`, `_layout`, `_generics` + 150/151.
+- Clusters F (keyed set/iter) + K (keyed construction) — the silent-corruption surface.
+- The canonical incoherence probe (`[{…}, null, {…}] as vector<Item>` → len 3, real absent).
+- Full `make ci` both backends before considering the gate flip (separate, later step).
+
+## Progress (RESUME HERE)
+
+**Done + verified (Steps 1-3 + part of 7):**
+- **Step 1 — layout.**  `nullable_enum_for` (data.rs) emits ONE `payload: Reference(struct_d)`
+  attribute instead of the per-field copy.  VERIFIED two ways: (a) introspect of a *synth*
+  `__nullable<S>` gate-on → `Some{enum@0, payload: t65}` where t65 is dense S (inline,
+  byte-identical to the hand-written probe); (b) `tests/plan25_nullable_enum.rs` def-level
+  contract (`Some` = `{enum, payload:Reference(Row)}`) — updated + green.
+- **Step 2 — key contract.**  `key_owner(__nullable<S>)` now returns the inner S struct;
+  added `nullable_some_variant`, `key_base`, and the `key_field(content,k)->(type,abs_pos)`
+  chokepoint (types.rs).  `determine_keys` (build) + `field_content` (runtime read) +
+  `get_keys` (types) all route through `key_field`, so the payload base is added single-site.
+  GATE-OFF SAFE: for non-nullable elements `key_owner`=identity, `key_base`=0, so `key_field`
+  is behaviourally identical — confirmed by the full suite (no non-nullable keyed-collection
+  regression; 2398 pass, the 17 reds are all gate-on E2 + the pre-existing `kernel_port`).
+- **Step 3 — field access.**  The `__nullable<S>` unwrap (fields.rs path-1) now forms the
+  dense-S sub-ref at the `payload` offset (`position(Some,"payload")`), not S's first field.
+  `for_type` already keeps the element `Enum(..,true)`, so loop-var access hits this path.
+- **Step 7 (partial).**  `tests/plan25_nullable_enum.rs` updated to the new contract (green).
+
+**WIP 2 progress (full suite: 2410 pass / 6 fail, from 18; NO non-E2 regression):**
+- **Step 4 CONSTRUCTION — mostly DONE.**  `plan25_e2_generics`, `_json`, `_hash` (6/6),
+  `_nullable_enum` all GREEN gate-on both backends.  Done: (a) the three dense-value sites
+  (objects.rs handle_field, collections.rs `[i]=expr`, vectors.rs append) now use a shared
+  `Parser::build_some_present(some_d, ref, src)` (mod.rs) — set disc + ONE `set_field` copy
+  of the dense S into `payload`, replacing the per-field loops; (b) named/anon `S{…}` literal
+  via a `parse_object` guard → `parse_some_payload_object` (objects.rs): alloc `Some`, set
+  disc, parse the body as dense S into the inline `payload` sub-ref; (c) the JSON walker
+  (`walk_parsed_into`, structures.rs) recurses a present object into the `payload` sub-record.
+- **Step 2/3 also extended:** `key_bearing_def` (typedef.rs) now returns the inner S (was
+  missing — caused an OOB in `set_mutable`); convert (mod.rs) emits a payload sub-ref via
+  `get_val` (inline struct → sub-ref, NOT a raw `OpGetField` which derefs).
+
+**REMAINING (5 E2 reds — the checklist):**
+- **Step 4 tail — inline-vector-literal + HEAP field corruption — FIXED (WIP 3, `3241b962`).**
+  ROOT (NOT the earlier `remove_claims` theory): `set_default_value` (structures.rs)
+  treated content type 6 (a 4-byte u32-raw field — e.g. a `character` codepoint) like type 0,
+  writing an 8-byte `i64::MIN` via `set_int`.  The extra 4 bytes spilled into the next slot;
+  for a TRAILING character in a tightly-sized single-payload `Some` payload the spill overran
+  the record and clobbered the adjacent free block's size header → `fl_size` negate-overflow
+  (debug) / `grow_words` overflow (release).  Fix: write content-6 defaults 4 bytes wide.
+  Pre-existing latent bug; the 4-byte write is correct for every content-6 field.  Full suite
+  2412/4 (from 6); construction + `local_assign` + `by_value_arg` gap2 now green.
+- **Step 6 return-boundary view-return — DONE (WIP 4, `3fe8ef40`, both backends).**  The 2 gap2
+  return reds returned null because the ref-return routing detected an `OpNullableToDense` tail;
+  the unwrap is now a sub-ref `OpGetField`.  Fix: `tail_is_nullable_unwrap` now recognizes an
+  `OpGetField` whose SOURCE is a `__nullable<S>` value (`unwrap_source_is_nullable`: a `Var`
+  local, or a materialised `Block`/`If` tail like the `??` ncc block) — `materialize_view_return`
+  then copies the viewed `S` into the return buffer (owned, not a dangling view).  The
+  source-is-nullable check distinguishes it from an ordinary struct-field read; a direct `v[i]`
+  index source is excluded.  gap2 4/4 both backends.
+- **Step 7 layout byte-identity test — DONE (WIP 5, `3241b962`'s sibling).**  `plan25_e2_layout.rs`
+  now asserts the single-payload contract (`Some` carries one inline `payload: Row`, dense Row
+  layout intact, payload fits in `Some`) instead of byte-identity with a hand individual-field enum.
+
+- **`OpNullableToDense` deletion — DONE (WIP 6, `2022f0b5`).**  Removed the op decl
+  (default/01_code.loft), `Stores::nullable_to_dense` (structures.rs), the generated `fill.rs`
+  dispatch (via `make fill`), and the dead handlers (pre_eval.rs hoisting arm, operators.rs
+  `is_struct_returning_call` arm); stale comments updated.  `materialize_view_return` SURVIVES.
+  Behavior-preserving (zero emitters): full suite 2415/2416, clippy + fmt clean.
+
+**THE REFACTOR IS COMPLETE.**  All E2 tests green both backends.  What remains is the BROADER
+@PLN25 plan (NOT this refactor):
+- **Step 5 consumer sweep — STARTED (gate-on, `LOFT_E2_SYNTH=1 LOFT_NO_CACHE=1`).**  The wrap
+  suite is the broadest consumer (runs the whole script corpus + libs against golden output);
+  gate-on it should be byte-identical to gate-off if E2 is transparent.  Most individual script
+  tests pass; the aggregates surface a heterogeneous, multi-session residue.  Gate-OFF stays
+  green (2415/2416), so NONE of this affects shipped releases — it is exactly what the gate flip
+  would surface.  **FIXED so far (11 seams):** transparent format (WIP 7); record_new payload redirect
+  (3a); par-offset (5a); cross-lib inferred literal (seam 2); keyed/hash-par wrapper (seam 5b); `&S`
+  by-ref (seam 1); cross-lib field-access via payload-type resolution; nested-append field-index
+  (seam 3); par extra-args; sorted/index element→nullable rewrite (seam 4, 15-lexer); struct-return
+  par hidden-flag.  Wrap aggregates GREEN gate-on: `dir`, `last`, `libraries`, `library_suite`,
+  `parser_debug`, `script_threading`.  Only `loft_suite` still fails (135 interp segfault, below).
+  **RESIDUE (distinct seams):**
+  1. **`&S` by-ref arg unwrap — FIXED (seam 1, `9177b882`).**  A `__nullable<S>` value into a `&S`
+     (`RefVar(Reference(S))`) param now unwraps to the payload sub-ref AND passes it BY-REFERENCE
+     via a work-ref + `OpCreateStack` + `skip_free` (the complex-expression by-ref path in convert,
+     mod.rs:1431).  The two earlier convert arms failed because they let the by-VALUE path copy the
+     sub-ref (px=0) or carried deps that broke the store (alloc OOB); the missing piece was the
+     work-ref+OpCreateStack wrapping.  `set_p160(items[1], 42)` mutates back on BOTH backends;
+     100-enhancements passes gate-on.
+  2. **dense↔nullable `vector` `+=` — FIXED (seam 2, `02b78b74`).**  A CROSS-LIB `::`-qualified
+     inferred literal (`[testlib::Point{…}]`) stayed dense because the inferred-literal peek
+     (vectors.rs) read only `testlib`, missed the `{` (next token was `::`), and skipped the
+     rewrite — while DECLARED `lib::S` sites are nullable, so `v += [lib::S{…}]` mismatched.  The
+     peek now skips past `::` to the struct name (last segment).  17-libraries (the `libraries`
+     wrap aggregate) passes gate-on both backends; gate-off unaffected.
+  3. **null-store OOB at structures.rs:43 (record_new) — PARTIALLY FIXED (seam 3a, `51e00466`).**
+     `record_new`/`record_finish` now redirect a `__nullable<S>` field-parent through the payload
+     (`nullable_field_parent` = key_owner/key_base; E2-validated, gate-off-inert), eliminating the
+     structures.rs:43 OOB class.  BUT 16-parser then hits a DEEPER upstream bug: `record_new(parent
+     =__nullable<Definition>, field=0)` is a nested-construction call whose `field=0` matches
+     NEITHER the enum's field 0 (disc) NOR a collection in `Definition` (Definition.field[0] is a
+     `boolean` → `Cannot add to none-structure 'boolean'` at structures.rs:88).  So the CALLER'S
+     field index is wrong for this nested cross-lib construction — an upstream codegen field-index
+     bug (Definition is a cross-lib struct).  RE-CONFIRMED post-3a (instrumented): `record_new
+     (parent=Definition [3a already redirected the enum→payload], field=0) -> tp=boolean` — so even
+     with the parent correctly resolved to dense `Definition`, `field=0` is a SCALAR; the caller's
+     index is wrong (not the nested collection's real position).  Also breaks the `audience_crystal`
+     lib (`Cannot add to none-structure 'integer'`).  NEXT: find the construction-codegen
+     (OpNewRecord) site that emits `field=0` for a nested collection inside a nullable cross-lib
+     element; the index must be the collection field's real position in S.  (NOT shared with seam 2,
+     which was the inferred-literal peek; this is the nested-construction field-index in codegen.)
+     NARROWED (minimal repros): a same-file `[S{flag, items:[…]}]` (scalar@0 + nested vector) AND a
+     `hash<S[k]>` with a nested-vector field BOTH work gate-on — so the bug needs the EXACT `Code`
+     shape: a cross-lib `Definition` (lib/code.loft:66 — `public:boolean`@0, `variables:vector<
+     Variable>`@8) held in BOTH `vector<Definition>` AND `hash<Definition[name]>` (Code, shared
+     records / @P296 linked) plus the nested vector field.  The codegen mis-indexes the nested
+     field to 0 only under that shared-vector+hash-over-cross-lib-struct combination.  FURTHER
+     NARROWED: even a SAME-FILE `struct C { defs: vector<D>, by_name: hash<D[name]> }` (D with a
+     nested vector) works gate-on — so the bug is CROSS-LIB-ESSENTIAL (only reproduces when the
+     element struct is defined in a LIBRARY).  Root = cross-lib field resolution during
+     nested-construction codegen (the lib struct's field indices seen from the consumer), NOT the
+     nullable shape per se.  Needs a focused session tracing the lib/code.loft `Code`→`Definition`
+     construction (via lib/parser.loft) gate-on.
+  4. **wrong value in 15-lexer** — `assertion failed: Incorrect plus` (tests/docs/15-lexer.loft).
+     ROOT-CAUSED (minimal repro `/tmp/sp/lexs.loft`): the Lexer's `tokens: hash<SToken[start]>` has
+     a NESTED KEYED collection `possible: sorted<Possible[-length, token]>`.  Constructing a
+     `__nullable<SToken>` element with a NON-EMPTY nested keyed (sorted/hash/index) collection
+     CORRUPTS an EARLIER scalar field of the element (`{start: 43, possible: [{…}]}` → `start` reads
+     `4`; with more leading fields → SIGSEGV).  Empty `possible: []` is fine; a nested `vector<P>`
+     (non-keyed) is fine — only a NON-EMPTY nested KEYED collection triggers it.  NOT the hash key
+     (a `vector<SToken>` corrupts identically) and NOT `record_new` (instrumented: the nested
+     collection is created at the CORRECT offset `d.pos=24`, past `start@16`).  So the fault is the
+     nested **sorted/keyed** collection's INSERT or the element's `OpCopyRecord` deep-copy (literal
+     → element) for a nullable element — a separate deep mechanism in `sorted_new`/`copy_claims`.
+     Needs a focused dig on the keyed-collection insert/copy inside a single-payload `Some`.
+     REFINED: the `Some` SIZE is correct (`__nullable<ST>`=20, inline ST=12 — NOT under-sized).
+     REORDER test: writing the nested collection field FIRST then the scalar (`{possible:[…],
+     start:43}`) → start survives — so building the nested KEYED collection CLOBBERS preceding
+     inline bytes that were already written.  In-place construction (empty `possible:[]` then
+     `b.possible += […]`) WORKS; only the WORK-REF + OpCopyRecord path (the `[{…}]` literal) fails.
+     Hypothesis: `sorted_new`/keyed `claim` allocates the collection's BACKING record in the SAME
+     store as the still-unfinalized work-ref `Some` record and OVERLAPS it (a finalized element
+     reserves its space, the work-ref does not).  FIX SITE: work-ref record reservation before the
+     nested-keyed-collection build, or route the literal's nested-keyed field through the
+     empty-then-append path.  Repro `/tmp/sp/lexs.loft` (start=4), `/tmp/sp/lexmid.loft` (SIGSEGV
+     with more leading fields — consistent with a backing-record overlap that grows with offset).
+     SMOKING GUN (`LOFT_LOG=fn:main`): `OpNewRecord(payload, ST, 1)` correctly returns the backing
+     slot `ref(2,5,8)` (rec 5), but the subsequent `OpSetInt(_elm_2, 0, 2)` (Possible.length) and
+     `OpFinishRecord(payload, _elm_2, …)` run with `_elm_2 = ref(2,1,8)` — the PARENT `Some` (rec
+     1) — so the element's field writes hit the Some (disc←2, then `token`'s string-ref ←4 lands on
+     `start`, hence start=4).  The element ref `_elm_2` is corrupted between `OpNewRecord` and its
+     writes (only `OpDatabase(_elm_2, 65)` sits between) — a ref-lifecycle / slot-aliasing bug in
+     nested keyed-collection element construction inside a single-payload `Some`.  FIX SITE:
+     `_elm_2` handling across `OpDatabase`/`record_new`→`record_finish` for a sorted element
+     (compare the WORKING nested-`vector` codegen, which keeps `_elm_2` intact).
+  5. **par over nullable** — FIXED: payload-offset (5a, `bbb918d4`), keyed/hash-par wrapper (5b,
+     `742fc9c8` — accept `Reference(__nullable<S>)` elem), and EXTRA context args (`b438454d` —
+     dropped the stale `extra_vals.is_empty()` guard; the wrapper already mirrors worker params 1..).
+     22-threading / 22c / 22e clean gate-on both backends.  REMAINING SUB-SEAM (`19-threading`,
+     `dir` aggregate): **struct/text-RETURN par over a nullable element** (`make_doubled(a) ->
+     DoubledScore`).  Repro `/tmp/sp/sret.loft`: gate-off=60, gate-on interp "No elements left on
+     the stack 8 < 12", native "takes 3 arguments but 2 supplied".  ROOT: `synth_nullable_par_wrapper`
+     builds the forwarding `worker(coerced, ..params1..)` from `worker_attrs` AT SYNTH TIME, but a
+     struct-returning worker's hidden `__retbuf` out-param is added LATER by the struct-return
+     lowering — so the wrapper's call OMITS `__retbuf` (call has 1 arg, `make_doubled` then needs 2).
+     The wrapper itself DOES gain a `__retbuf` (lowering sees it returns a struct).  INSTRUMENTED
+     (LOFT_PW): at synth time `worker_attrs=2` and `call_args=2` — so the wrapper FORWARDS `__retbuf`
+     to make_doubled CORRECTLY (`__retbuf` is added in PASS 1, present at synth in pass 2).  ROOT
+     (FIXED, `ba2efb6a`): the wrapper MIRRORS the worker's hidden `__retbuf` param but DROPPED the
+     `hidden` FLAG; the native par codegen (generation/ops/parallel.rs) detects the per-element
+     return buffer to allocate+pass by filtering on `attr.hidden`, so the unhidden mirror was
+     skipped → dispatcher called the wrapper without the buffer ("takes 3 args, 2 supplied"
+     native / "8 < 12" interp).  Copy the hidden flag when mirroring.  19-threading + sret.loft
+     pass gate-on both backends; `dir` aggregate green.
+  - **loft_suite SIGSEGV at 135-vector-u8-concat (gate-on INTERP only; native works)** — a
+    store-lifetime / scope-exit cleanup seam.  `struct V { a: vector<u8> }`; the file's TWO test
+    fns each build a `vector<V>` (→ `vector<__nullable<V>>`) with a nested `vector<u8>`.  EACH fn
+    runs CLEAN alone (both backends); running BOTH in one program segfaults the SECOND at its
+    nested-append (interp, op=226) — so the first fn leaves un-freed / dangling nullable-element
+    stores that the second's allocation collides with (use-after-free/double-free class).  Native
+    is immune (Rust ownership).  Repro: append `fn main(){ test_p314_u8_concat_values();
+    test_p314_u8_concat_from_field(); }` to the file, run `--interpret` gate-on.  NARROWED: the
+    crash is ORDER-SPECIFIC — only `values()` THEN `from_field()` crashes (not the reverse, not
+    either twice), and the crash is OUTSIDE the interpreter ("crash outside interpreter", a Rust
+    SIGSEGV in the store/allocation code, NOT a bytecode op).  So `test_values` (fully DENSE: a
+    local `V` with a nested `vector<u8>`, 3 appends) frees its stores at scope exit, and
+    `test_from_field`'s gate-on construction (`parts: vector<__nullable<V>>`, then `seg.a += […]`
+    at line 39) CLAIMS a reused slot whose free-block state corrupts the store free-list (the
+    LLRB free-tree in store.rs).  Gate-OFF `from_field` is dense (no nullable) so it never hits this.
+    ROOT-CAUSED (debug build, `RUSTFLAGS=-C debug-assertions=on`): TWO entangled roots.
+    (a) **H5 two-pass def divergence** — `assert_pass2_def_attr_stable` (parser/mod.rs:629) fires
+    gate-on: "definition COUNT diverged across passes (pass1=421, pass2=425)" — the 4 `__nullable<V>`
+    defs (enum + Some + Null + `vector<__nullable<V>>`) are created in PASS 2 but not PASS 1.  This is
+    GENERAL (even a trivial gate-on `vector<V>` program diverges) and usually benign in RELEASE
+    (debug-assert off), but it desyncs the pass-1 layout from the pass-2 def table.
+    (b) **double-free in `remove_claims`** — the actual SIGSEGV: `parts += [seg]` → `OpCopyRecord`
+    (state/io.rs:1337) → `remove_claims` (allocation.rs:1673) frees the temp `seg`; its nested-vector
+    arm calls `vector::length_vector` (vector.rs:323) which reads the backing handle's length, but the
+    handle points at a FREED / invalid record → `valid()` "Unknown record" (store.rs:1629).  So
+    `seg`'s nested `vector<u8>` is freed twice (or its handle dangles after the copy).  Order-specific
+    because `test_values`'s earlier frees set the free-list slot state that makes the stale handle
+    resolve to a non-claimed record.
+    **DEFINITIVE ROOT (confirmed): a use-after-free from a NON-ZEROED reused store block.**
+    `LOFT_ZERO_CLAIM=1` makes u8full PASS — confirming a caller relies on zero-init while `claim`
+    reuses a freed block WITHOUT clearing it (zero-on-claim is debug-only, perf).  The garbage handle
+    `0x36363600` contains byte `0x36`=54 = `test_values`'s `vector<u8>` data (50–54), so the freed
+    record IS values's `d.a`, and `from_field` holds a STALE handle into it (a vector field whose
+    handle was never written).  H5 (the vector<integer>/<T> pass-2 defs) is a SEPARATE BENIGN
+    divergence (u8c2 diverges yet passes) — NOT this crash.  NARROWED: a struct-literal collection
+    field `V{a:[]}` IS zeroed (objects.rs `parse_object_field`:~1960 emits `OpSetInt4(code, pos, 0)`)
+    — so the un-zeroed handle is NOT the literal; it is the `parts += [seg]` COPY / nullable-element /
+    cross-function-reuse path.  REMAINING (one focused probe): which vector field in `from_field`'s
+    structure gets handle=3 (values's freed record) un-zeroed.  FIX OPTIONS: (a) zero that specific
+    construction path; (b) accept zero-on-claim for REUSED blocks (a perf/design decision — the lever
+    already exists, `LOFT_ZERO_CLAIM`, and cleanly fixes it).  Pre-existing (general gate-on).
+    **FIXED (`836f426e`, option b): zero claimed payloads by default** (`zero_claim` lever flipped to
+    default-on, `LOFT_NO_ZERO_CLAIM` to disable; coalesce path also zeroes).  135 + repros pass both
+    backends with correct results; full suite 2415/2416 gate-OFF (only the environmental kernel_port
+    network failure), E2 suites green — verified no regression.  **But loft_suite now reveals a NEXT
+    gate-on blocker: a store LEAK** — `149-plan51-moros-map-real-lib.loft` leaks `Hex×12` at program
+    exit gate-on (runs CORRECTLY — probes pass — just doesn't free).  Gate-OFF clean, so gate-on-
+    specific + cross-lib (gridmesh Map); NOT minimally reproducible (a same-file `vector<Chunk>` with
+    nested `vector<Hex>` does NOT leak; an always-`Hex{}`-return does NOT leak).  CAUTION: a MIXED
+    view/owned return (`fn f()->Hex { if … return v[i]; Hex{} }`) leaks `Hex×8` GATE-OFF TOO — a
+    SEPARATE pre-existing bug (the view-return/#306 free path), not 149's gate-on leak (different kt).
+    REPRODUCED + NARROWED (`/tmp/sp/exact1.loft` — 149's exact structs/fns, NO import; 149 has no
+    `use` despite the name).  149 leaks exactly `Hex×2 PER LOOP ITERATION` (×6 = 12) = the FALLBACK
+    returns `hb`/`hn` = `map_get_hex(... out-of-bounds ...)` → the body-tail `make_hex(0,0)`.
+    `map_get_hex` is a MIXED view/owned-return fn: `return gh_c.ck_hexes[idx]` (a nullable-element
+    VIEW, gate-on) on the hit path + `make_hex(0,0)` (OWNED) on the fallback.  The view path makes
+    the fn VIEW-CLASSIFIED, so the caller never frees the OWNED fallback → it leaks.  Gate-OFF the
+    view is dense and the fn isn't view-classified, so no leak.  ATTEMPTED + REVERTED: materializing
+    the nullable-unwrap VIEW mid-return (mirror block_result's tail branch, control.rs:4305) did NOT
+    fix it — the classification is set by the fn's RETURN-TYPE DEPS (computed earlier), not the
+    return IR, so copying the view to an owned buffer leaves the fn still view-classified.  FIX (focused
+    session): make the return-type-dep classification treat a MIXED view/owned-return fn as OWNED (or
+    materialize at the dep/type level), so the caller frees.  This is the #306 view-return family.
+    **FIXED (`15e42cb6`): materialize the nullable-unwrap mid-return.**  The mid-return Enum branch
+    (control.rs ~4305) now detects a `__nullable<S>` Enum tail + dense `Reference(S)` declared return
+    FROM THE TYPES (so a DIRECT `v[i]` unwrap qualifies — which `tail_is_nullable_unwrap` excluded) and
+    copies the view into an OWNED buffer via `materialize_view_return`, NO `nrvo_collapse` (its
+    rename+re-OpDatabase was the documented direct-`v[i]` corruption, now also defused by zero-on-claim).
+    The fn becomes owned-classified so the caller frees the owned fallback.  149 + repro: no leak, no
+    corruption, BOTH backends; E2 green; gate-on-gated (`__nullable<>` check → gate-off-inert).
+    **NEXT loft_suite gate-on blocker: 184-i333-div-zero (NOT PLN25, NOT mine)** — `@EXPECT_FAIL: divide
+    by zero` flags "now compiles/passes" gate-on.  PRE-EXISTING (simple `5/0` RAISES correctly gate-on;
+    my changes don't touch arithmetic) — a #333 div-zero / defended-path compile difference specific to
+    184, surfaced by the flip but outside the nullable plan's scope.
+  - **index<S> coherence** — `index<S>` is kept DENSE (vector/hash/sorted are nullable): rewriting
+    it regresses the multi-key RANGE query (`idx[83..92,"Two"]`, 11-index.loft:48 → "Unknown in
+    expression type __nullable<Elm>" — the range-query path does not unwrap a nullable element).
+    **FIXED (`469dbec1`): index<S> rewrites to `__nullable<S>` + the range-query for-loop unwraps**
+    (control.rs nullable-Enum iterable arm).  11-index passes gate-on both backends; dir aggregate green.
+  Then re-run the engine/wasm consumers (moros_glb, moros_editor_html, wasm_library_suite) gate-on.
+- **The gate flip — DRIVEN from 2399 → 2409/2416 (actual flip; cache-gotcha failures were spurious
+  and vanished).  3 tail items FIXED + committed (gate re-guarded, branch releasable); 3 remain.**
+  - **FIXED `p379` (`6012147a`)** — synth `__nullable<S>` enum collided across two libs' same-named
+    structs.  `nullable_enum_for` keys the DEF on the STRUCT's source (not `STD_SOURCE`);
+    `register_enum_db` disambiguates the db name via the payload struct's qualified name (+ a
+    `Stores::type_name` reverse accessor).  The "cannot change type" write was the symptom: the
+    second lib's `vector<S>` element bound to the wrong payload struct → field not found → the
+    `c.field[i] = v` write collapsed to a base-var reassign.
+  - **FIXED `store_persist_loft` ×3 (`7b1dc082`)** — `keyed += <single struct>` parsed `S{…}` DENSE.
+    Added a single-element sibling to the `+= [literal]` branch (parse_assign_op) parsing against the
+    nullable element so `new_record` builds `Some` (gated on the nullable element; gate-off P188 untouched).
+  - **FIXED `stack_trace_script` (`618c0b5d`)** — a STDLIB struct (`StackFrame`) used in a consumer's
+    `vector<StackFrame>` was rewritten to nullable, but stdlib `stack_trace()` returns dense.
+    `e2_nullable_elem` now SKIPS a struct whose OWN source is `STD_SOURCE` (stdlib stays dense both sides).
+  - **REMAINING (3)**: (1) `native::native_scripts` — **ROOT LOCATED**: a gate-on nullable INDEX
+    (`index<S>` → `index<__nullable<S>>`) makes `parse_function` call a generic stdlib index fn with
+    `vector<T>`/`vector<integer>` hidden-buffer params (mod.rs:4671) → `vector_def` creates those DEFS
+    in PASS 2 ONLY → the H5 def-count divergence (pass1=421/pass2=425) → corrupted known_types → SEGV
+    (release).  HASH does NOT diverge → index-specific.  Minimal repro: bare `index<IRec[n]> = []`
+    gate-on (a debug-assertions build surfaces H5).  Fix: make the generic-index `vector_def`
+    consistent across passes (or pre-register the index bookkeeping in pass 1).  (2)
+    `native::imaging_fixture_png_roundtrip`, (3) `html_wasm::wasm_library_suite` — both lib-build,
+    not yet debugged.  (The earlier env-set run's `structures.rs:976` panic + `arc_e_program_cache`
+    were cache-gotcha artifacts; gone under the actual flip.)
+  - Only AFTER these 3 are green: drop `LOFT_E2_SYNTH` in `e2_rewrite_enabled` (KEEP the `STD_SOURCE`
+  dense-stdlib exclusion); fold the deferred P3 `default_native_value` Vector arm; graduate the
+  gated probes into `tests/scripts/25-nullable-sequences.loft`; full `make ci` both backends;
+  set the plan SHIPPED.  This is the single final PR to `main`.
+- **Step 5 — format** (format.rs): render the `payload` struct, not the `Some` field list.
+- **Step 6 — DELETE `OpNullableToDense`** (convert already emits the sub-ref): remove the op
+  + its gap2 return-routing built around copy/alloc semantics — control.rs
+  `tail_is_nullable_unwrap` + return materialization, operators.rs `is_struct_returning_call`
+  arm, pre_eval.rs, fill.rs, structures.rs `nullable_to_dense`, default/01_code.loft.  With a
+  sub-ref the routing is unneeded (flows on existing ref + #306 view-return).
+- **Step 7** — `tests/plan25_e2_layout.rs` byte-identity → "`Some.payload` is a dense S" (1 red).
+- **Then** both-backend gate-on verify + gate flip.
+
+## Rollback
+
+Pre-refactor clean state: branch tip `9a4e97ce` (before the first refactor commit).  Big-bang
+has no green intermediate; if F/K/A4/gap-2/suite are not all green on both backends, revert.

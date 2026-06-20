@@ -221,6 +221,8 @@ pub const OPERATORS: &[fn(&mut State)] = &[
     var_vector,
     tag_fault,
     length_vector,
+    vector_is_null,
+    ref_is_null,
     length_sorted,
     clear_vector,
     get_vector,
@@ -1510,11 +1512,15 @@ fn get_enum(s: &mut State) {
     let v_v1 = *s.get_stack::<DbRef>();
     let new_value = {
         let db = v_v1;
-        let r = s
-            .database
-            .store(&db)
-            .get_byte(db.rec, db.pos + u32::from(v_fld), 0);
-        if r < 0 { 255u8 } else { r as u8 }
+        if db.rec == 0 {
+            0u8
+        } else {
+            let r = s
+                .database
+                .store(&db)
+                .get_byte(db.rec, db.pos + u32::from(v_fld), 0);
+            if r < 0 { 255u8 } else { r as u8 }
+        }
     };
     s.put_stack(new_value);
 }
@@ -1809,6 +1815,18 @@ fn tag_fault(s: &mut State) {
 fn length_vector(s: &mut State) {
     let v_r = *s.get_stack::<DbRef>();
     let new_value = i64::from(vector::length_vector(&v_r, &s.database.allocations));
+    s.put_stack(new_value);
+}
+
+fn vector_is_null(s: &mut State) {
+    let v_r = *s.get_stack::<DbRef>();
+    let new_value = v_r.store_nr == u16::MAX;
+    s.put_stack(new_value);
+}
+
+fn ref_is_null(s: &mut State) {
+    let v_r = *s.get_stack::<DbRef>();
+    let new_value = v_r.store_nr == u16::MAX;
     s.put_stack(new_value);
 }
 

@@ -1320,6 +1320,13 @@ impl Parser {
         let widen_ints = matches!(lhs_type, Type::Integer(_))
             && matches!(rhs_type, Type::Integer(_))
             && *lhs_type != rhs_type;
+        // NB (@PLN25 E2 gap 2): do NOT coalesce a `__nullable<S> ?? dense_S` to dense
+        // here.  It is tempting (it would make `chosen = v[i] ?? mk()` infer dense
+        // `S` and dodge the return-boundary unwrap), but it BREAKS the common
+        // `out += [chosen]` shape — a dense `chosen` then needs a dense→Some WRAP on
+        // every append, which fails in loop/if contexts.  Keep the conservative
+        // `__nullable<S>` result and let each USE site coerce (dense-assign routing,
+        // the ref_return return-boundary unwrap) — that keeps appends nullable→nullable.
         let result_type = if widen_ints {
             crate::data::I64.clone()
         } else {
@@ -1349,6 +1356,19 @@ impl Parser {
                 let mut nc = Value::TupleGet(*v, 0);
                 this.convert(&mut nc, &first_tp, &Type::Boolean);
                 nc
+            } else if let Type::Enum(syn, true, _) = lhs_type
+                && this.data.def(*syn).name.starts_with("__nullable<")
+            {
+                // @PLN25 E2 — a synthetic `__nullable<S>` enum backs an INLINE
+                // field / vector element (no DbRef slot), so null is discriminant 0
+                // — NOT the `.rec`/store_nr sentinel that `OpConvBoolFromRef` below
+                // tests (it would misread the inline value).  The builder produces
+                // "is NOT null" (v_if true → keep lhs), so test discriminant != 0.
+                // Mirrors the E2a.4 `== null` lowering (`enum_null`).
+                let get_enum = this.cl("OpGetEnum", &[src.clone(), Value::Int(0)]);
+                let disc = this.cl("OpConvIntFromEnum", &[get_enum]);
+                let is_null = this.cl("OpEqInt", &[disc, Value::Int(0)]);
+                this.cl("OpNot", &[is_null])
             } else if matches!(
                 lhs_type,
                 Type::Reference(_, _)
@@ -1545,7 +1565,99 @@ impl Parser {
                 }
             }
             self.expr_not_null = false;
-            if operator == ">" {
+            let vec_null = (operator == "==" || operator == "!=")
+                && ((matches!(*ctp, Type::Vector(_, _)) && second_type == Type::Null)
+                    || (*ctp == Type::Null && matches!(second_type, Type::Vector(_, _))));
+            // A float/single null is the NaN sentinel, and NaN compares unequal to
+            // everything (including itself), so `f == null` can't go through OpEq —
+            // it would always be false.  Test validity instead: convert(float, bool)
+            // is `!is_nan` (= non-null), so `== null` is its negation.
+            let float_null = (operator == "==" || operator == "!=")
+                && ((matches!(*ctp, Type::Float | Type::Single) && second_type == Type::Null)
+                    || (*ctp == Type::Null && matches!(second_type, Type::Float | Type::Single)));
+            // A nullable enum variable holds the reference null sentinel
+            // (`store_nr==u16::MAX`), exactly like a struct reference.  Its `== null`
+            // must test that sentinel via OpEqRef — the default path reads the
+            // discriminant (`OpGetEnum`), which derefs the absent record and OOB-crashes.
+            let enum_null = (operator == "==" || operator == "!=")
+                && ((matches!(*ctp, Type::Enum(_, _, _)) && second_type == Type::Null)
+                    || (*ctp == Type::Null && matches!(second_type, Type::Enum(_, _, _))));
+            if vec_null {
+                // @PLN25: `vector == null` / `vector != null` tests the null
+                // sentinel (store_nr == u16::MAX) via OpVectorIsNull — NOT eq_ref,
+                // whose rec==0 null test would also match an empty `[]`.
+                if !self.first_pass {
+                    let vec_code = if matches!(*ctp, Type::Vector(_, _)) {
+                        code.clone()
+                    } else {
+                        second_code
+                    };
+                    let is_null = self.cl("OpVectorIsNull", &[vec_code]);
+                    *code = if operator == "==" {
+                        is_null
+                    } else {
+                        self.cl("OpNot", &[is_null])
+                    };
+                }
+                *ctp = Type::Boolean;
+            } else if float_null {
+                if !self.first_pass {
+                    let (f_code, f_tp) = if *ctp == Type::Null {
+                        (second_code, second_type.clone())
+                    } else {
+                        (code.clone(), ctp.clone())
+                    };
+                    // convert(float, boolean) = !is_nan = "is non-null".
+                    let mut valid = f_code;
+                    self.convert(&mut valid, &f_tp, &Type::Boolean);
+                    *code = if operator == "==" {
+                        self.cl("OpNot", &[valid])
+                    } else {
+                        valid
+                    };
+                }
+                *ctp = Type::Boolean;
+            } else if enum_null {
+                if !self.first_pass {
+                    let (e_code, e_def) = if *ctp == Type::Null {
+                        let d = match &second_type {
+                            Type::Enum(d, _, _) => *d,
+                            _ => u32::MAX,
+                        };
+                        (second_code, d)
+                    } else {
+                        let d = match &*ctp {
+                            Type::Enum(d, _, _) => *d,
+                            _ => u32::MAX,
+                        };
+                        (code.clone(), d)
+                    };
+                    // @PLN25 E2a.4 — a synthetic `__nullable<S>` enum backs an INLINE
+                    // struct field / vector element (no DbRef slot), so null is
+                    // discriminant 0 — read it directly (OpGetEnum @ offset 0), NEVER
+                    // OpRefIsNull, whose store_nr sentinel test would deref the absent
+                    // record and OOB-crash.  A user enum VARIABLE is a DbRef whose null
+                    // IS the store_nr sentinel (E1) — keep OpRefIsNull for it.
+                    let inline =
+                        e_def != u32::MAX && self.data.def(e_def).name.starts_with("__nullable<");
+                    let is_null = if inline {
+                        let get_enum = self.cl("OpGetEnum", &[e_code, Value::Int(0)]);
+                        let disc = self.cl("OpConvIntFromEnum", &[get_enum]);
+                        self.cl("OpEqInt", &[disc, Value::Int(0)])
+                    } else {
+                        // Test the null sentinel via store_nr (OpRefIsNull), NOT OpEqRef's
+                        // rec==0: a present enum is inline-represented on native and carries
+                        // rec==0, which rec==0 would misread as null.
+                        self.cl("OpRefIsNull", &[e_code])
+                    };
+                    *code = if operator == "==" {
+                        is_null
+                    } else {
+                        self.cl("OpNot", &[is_null])
+                    };
+                }
+                *ctp = Type::Boolean;
+            } else if operator == ">" {
                 *ctp = self.call_op(
                     code,
                     "<",
