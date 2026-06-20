@@ -31,3 +31,13 @@ pub fn ext_loop_vec_sum(data: vector<integer>) -> integer not null;
 // Pattern 8: vector<u8> RETURN via the FFI alloc path (loft-lang/loft#409)
 pub fn ext_make_bytes(n: integer) -> vector<u8>;
 #native "loft_ext_make_bytes"
+
+// Pattern 9: STRUCT (non-vector heap) RETURN via the FFI alloc_record path.
+// @PLN85 sibling probe of #409/#410: a DIRECT `#native` decl returning a
+// struct/Reference goes through the SAME null-store foreign return as the
+// vector case, but the #410 assignment-side materialise is vector-ONLY — so a
+// caller that mutates or appends this struct may hit the same foreign-store-
+// borrow desync (value in the foreign store, the local's dep buffer empty).
+pub struct ExtBox { v: integer not null }
+pub fn ext_make_box(v: integer) -> ExtBox not null;
+#native "loft_ext_make_box"

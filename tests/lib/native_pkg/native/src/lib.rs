@@ -158,6 +158,22 @@ pub unsafe extern "C" fn n_ext_make_bytes(store: LoftStore, n: i64) -> LoftRef {
     unsafe { store.alloc_vector_from_bytes(1, len, data.as_ptr(), data.len()) }
 }
 
+// Pattern 9: STRUCT (non-vector heap) RETURN via alloc_record (@PLN85).
+// `ExtBox { v: integer }` — one i64 field.  alloc_record(2) = 1 word header
+// (pos=8) + 1 word for the field; write the field at (rec, pos, offset 0).
+// Returns a foreign null-store reference exactly like the vector path; the
+// probe checks whether a caller mutating / appending it corrupts (the #410
+// foreign-store-borrow desync, which the vector-only assignment-side fix does
+// not cover for a struct return).
+#[loft_native]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_ext_make_box(store: LoftStore, v: i64) -> LoftRef {
+    let mut store = store;
+    let rec = unsafe { store.alloc_record(2) };
+    unsafe { store.set_int(rec.rec, rec.pos, 0, v as i32) };
+    rec
+}
+
 // ── Registration ─────────────────────────────────────────────────────
 // The loft decls bind `#native "loft_ext_*"`, so register the raw `n_ext_*`
 // symbols under those names (`loft_register_v1`, for the dlsym-priority and
@@ -173,6 +189,7 @@ loft_ffi::loft_register! {
     loft_ext_struct_vec_len => n_ext_struct_vec_len,
     loft_ext_loop_vec_sum => n_ext_loop_vec_sum,
     loft_ext_make_bytes => n_ext_make_bytes,
+    loft_ext_make_box => n_ext_make_box,
 }
 
 loft_ffi::loft_register_bridges! {
@@ -184,4 +201,5 @@ loft_ffi::loft_register_bridges! {
     "loft_ext_struct_vec_len" => n_ext_struct_vec_len__loft_bridge,
     "loft_ext_loop_vec_sum" => n_ext_loop_vec_sum__loft_bridge,
     "loft_ext_make_bytes" => n_ext_make_bytes__loft_bridge,
+    "loft_ext_make_box" => n_ext_make_box__loft_bridge,
 }

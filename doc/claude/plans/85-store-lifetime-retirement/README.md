@@ -81,7 +81,7 @@ no leak (`LOFT_STORES=warn`) + bounded runtime.
 
 | File | Shape | Cluster | Status |
 |---|---|---|---|
-| _(none yet — Stage A)_ | | | |
+| `01-native-struct-return.loft` | direct `#native` struct (non-vector heap) return + read/mutate | I (sibling) | read-only RED but **NOT a confirmed sibling** — isolated to an FFI-layout gap (no `alloc_struct` helper; `alloc_record` doesn't lay out a loft-readable struct ref). Sibling #1 is **latent/unreachable**, gated on a future struct-return helper — see [recent-bugs.md](recent-bugs.md) |
 
 ## Roadmap (next session)
 
