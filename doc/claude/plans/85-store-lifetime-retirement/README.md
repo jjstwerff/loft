@@ -12,10 +12,10 @@ Plan id: [@PLN85](https://github.com/loft-lang/plans/issues/85) · investigation
 
 | Stage | Status |
 |---|---|
-| A — Probe catalogue (extract from the real recent bugs + a real consumer) | 🟡 recent-bug evaluation done ([recent-bugs.md](recent-bugs.md)); probes not yet written |
-| B — Mechanism investigation (shared-root vs N-independent) | 🔴 not started — candidate invariant + two fix options already framed by the evaluation |
-| C — Fix design (structural retire **or** named per-mechanism invariants + standing instrument) | ⏸️ pending B |
-| D — Implementation | ⏸️ pending C |
+| A — Probe catalogue (extract from the real recent bugs + a real consumer) | ✅ probes 01–04 (evaluation in [recent-bugs.md](recent-bugs.md)); of 3 predicted siblings: #1 latent, #2 closed, #3 LIVE |
+| B — Mechanism investigation (shared-root vs N-independent) | ✅ for the live cluster — #405 root VERIFIED ([cluster-II](cluster-II-slot-init-dominance.md)): slot null-init/free scope mismatch |
+| C — Fix design | ✅ invariant named: **a slot's null-init must dominate its free** (chokepoint = reconcile free-placement with sentinel-init emission) |
+| D — Implementation | 🟡 next — load-bearing free-path codegen/scope change; gates in [cluster-II](cluster-II-slot-init-dominance.md) |
 
 **What triggered this:** the *known* store-lifetime mechanisms are already hardened and
 shipped — H1 (fn-arity freeze), **H2 (typed `Deps` newtype + value-tagged spaces — see
