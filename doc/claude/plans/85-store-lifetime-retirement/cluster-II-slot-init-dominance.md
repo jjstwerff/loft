@@ -354,6 +354,44 @@ if C1's reuse-vs-escape discrimination proves brittle.
 Validate against matrix A–F + the @PLN51/leak gates; confirm the #306 co-fire
 closes with it.
 
+### Attempt 8 — C1 via match-arm unification: DIRECTION PROVEN on interp, but 3 gaps (reverted)
+
+Pinned the free-on-return precisely with an allocator instrument (`LOFT_PLN85_OWN`)
++ a `free_ref` code_pos trace: the per-call `FREE #8` is the CALLEE freeing its own
+return buffer. The callee's `match`-arm buffers (`__vdb_N`, terminal `_vec_N`) are
+NOT unified into one return work-ref, so none is marked `in_ret`, and the taken
+arm — the return value — is freed at fn exit (`a=enc(k0); b=enc(k1)` then collide).
+A SIMPLE `return [literal]` (`mk`) works because its single buffer IS `in_ret`.
+
+Fix attempted: extend `unify_if_branches_work_refs` (control.rs) +
+`returned_var` (scopes.rs) to (a) unify past a value-less `else null` catch-all
+(`branch_is_null`), (b) recognise `__vdb_`/`_vec_` arm buffers as unifiable
+work-refs, (c) co-unify the `_vec_`↔`__vdb` dep pair, (d) mark absorbed vars
+skip-free.
+
+Result — **the move direction is CONFIRMED**: the simple 2-arm **implicit-return**
+match (`fn enc(c) -> vec { match c {...} }`, the cbor encode shape) **unified into
+the `__retbuf` buffer and works on interp** (`a=1 b=3 c=5`; IR verified: one
+`__vdb_1`, wrapped in `return {...}`, no double-free). But three gaps remain:
+1. **Native breaks** — the unified IR fails native codegen (E0425, 12 errors): the
+   absorbed `__vdb_2`/`_vec_2` is left dangling for the generator (skip-free +
+   substitution isn't enough; the var must be fully elided or the generator taught
+   the unified shape). C1 must be mirrored in `src/generation/`.
+2. **Heterogeneous N-arm** — cbor's real `encode` is a 7-arm match whose arms
+   return `head()` CALLS, `{buf; …}` blocks, and nested ifs — not uniform
+   `_vec_N`. The pairwise-equal unifier doesn't reduce them; needs a recursive
+   collect-all-terminals + unify-to-one (and the call-return arms are themselves
+   `__ref_N` work-refs to fold in). So cbor maps still fail.
+3. **Explicit `return match`** (probe 05 / x1b) isn't reached — the unify call is
+   gated on a bare `If` tail; an explicit `return` makes the tail `Return(If)`.
+   Unwrap `Return` at the call site (control.rs:644).
+
+Reverted (native regression). Net: Stage-C's move model is **empirically
+validated** (simple match return transfers ownership correctly once unified);
+landing it fully = the unifier generalised to heterogeneous N-arm + explicit
+return, AND the native generator taught the unified/absorbed shape. The three gaps
+above are the concrete checklist.
+
 ---
 
 ## (FALSIFIED hypothesis — kept as ruled-out record)
