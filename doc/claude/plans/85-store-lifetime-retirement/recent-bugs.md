@@ -72,6 +72,33 @@ Two structural options the evidence already frames, for Stage C:
   *why* (A) may be the realistic retire-the-class move: you can't dedup the producers,
   but you can make the consumer reject any producer that violates the invariant.
 
+## Suspected sibling sites (predicted by the hypothesis — NOT yet probed)
+
+Where the same root likely already lives, in confidence order:
+
+1. **Direct `#native` decls returning a Reference/struct or payload-`Enum` (not vector)**
+   — VERIFIED structural gap. The FFI bridge delivers `Reference` + `Enum(_,true,_)` via the
+   same null store (`extensions.rs:329-330`), and #409's return-site fix covers all three, but
+   the #410 assignment-side materialise is **`Type::Vector`-only** (`expressions.rs` `native_vec_elm`
+   gate). So `v = native_returning_struct(); <mutate v>` should hit the same foreign-store-borrow
+   desync #410 fixed for vectors. Untested today — the `native_pkg` fixture only returns vectors.
+2. **`copy_claims` for multi-enum-field / ref-bearing / nested structs in ANY collection**
+   — VERIFIED live: #406's fix only patched the single-discriminant OOB; its own comment reports
+   two-enum-field struct readback is *still corrupt*. The parallel recursive arms
+   (`copy_claims_seq_vector` / `_array_body` / `_hash_body` / `_index_body`, all `get_u32_raw` +
+   recurse) extend the "variable-sourced field slot read as garbage" shape to
+   `vector<struct-with-ref-fields>` and `hash/index/sorted<struct-with-enum>`, not just
+   `vector<struct-with-enum>`.
+3. **Other slot-init paths leaving a hidden-buffer/dep slot live across a reuse boundary**
+   — HYPOTHESIZED. #405 is plan-51 cluster II's uncovered (conditional × unused × nested) corner;
+   siblings likely in match-arm assignment, early-return, and par-lane shapes where the
+   `init_create_stack` content-init is skipped on one path (the `OpInitRefSentinel` invariant not
+   applied there).
+4. **Manifestation guards are inconsistent** — #405's defensive OOB-refuse covers only
+   `free_named`; `copy_claims` (#406) and the in-place vector rebuild (#409/#410) have no
+   equivalent, so the same uninitialised-slot read elsewhere still corrupts/panics. Finding 3's
+   option (A) sentinel must cover all three consumers, not just free.
+
 ## Stage A probe targets (derived)
 
 Port as assertion-bearing probes, both backends: #405 (+ its (conditional×unused×nested)
