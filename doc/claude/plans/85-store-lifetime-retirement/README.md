@@ -67,7 +67,7 @@ Full policy: [`_INVESTIGATION_TEMPLATE.md`](../_INVESTIGATION_TEMPLATE.md).
 | ID | Cluster | Severity | Backends | Status of the instance | Doc |
 |---|---|---|---|---|---|
 | I | FFI foreign-store `vector` return delivered to a local; in-place `+=` drops it (local borrows foreign store, dep buffer empty) | high | both | #409 (wrapper) + #410 (direct) FIXED at producer chokepoints — mechanism cluster open | cluster-I (todo) |
-| II | NRVO loop-local hidden-buffer dep slot uninitialised (conditional × **unused** × nested) — **an uncovered sibling of @PLN51 cluster II**; #405's fix is only the manifestation-point OOB-refuse band-aid | high | **interp SIGSEGV / native completes** | 🔴 **LIVE on main** (probe 04): root unfixed, segfaults on interpret + co-occurring #306-class corruption. THE live cluster. | cluster-II (todo) |
+| II | NRVO loop-local hidden-buffer dep slot uninitialised (conditional × **unused** × nested) — **an uncovered sibling of @PLN51 cluster II**; #405's fix is only the manifestation-point OOB-refuse band-aid | high | **interp SIGSEGV / native completes** | 🔴 **LIVE on main** (probe 04): root unfixed, segfaults on interpret + co-occurring #306-class corruption. THE live cluster. | [cluster-II](cluster-II-slot-init-dominance.md) |
 | III | enum-discriminant corruption: struct-with-enum-fields-from-a-variable appended to a vector; `copy_claims` reads a -1 discriminant | high | both | ✅ **CLOSED on main** (probes 02/03): #412 fixed the enum shape; `copy_claims` breadth (vector/sub-struct fields, nested) verified clean | — |
 | IV | @PLN51 hidden-buffer-aliasing residuals (siblings not re-probed since closure) | tbd | both | re-extract from `finished/51` probes | cluster-IV (todo) |
 
