@@ -51,9 +51,11 @@ concentrated** in `src/database/allocation.rs` (`free_named`, `copy_claims`), wh
 scatter** across producer codegen paths — so per-producer fixes (control.rs, expressions.rs) and
 defensive-at-manifestation patches (#405's OOB-refuse) each leave the class open.
 
-**Open for Stage B:** does #406 (enum discriminant in `copy_claims`) belong to this family or a
-distinct record-layout mechanism? And does fix option (A) *manifestation-point sentinel/assert*
-beat (B) *producer chokepoint*? The matrix decides; this prose does not.
+**Stage-B update:** this slot-init framing was **FALSIFIED for the live cluster II** — its real
+mechanism is an **NRVO return-buffer double-free** (`ki` borrows `__ref_1`; debugger-verified), not
+a producer slot-init gap. The clusters are turning out *independent*, not one shared root:
+#1 latent FFI gap, #2 copy_claims (closed by #412), #3=II NRVO-alias ownership. So the plan is
+trending toward outcome (b) — per-mechanism invariants — over a single chokepoint.
 
 ## In-plan vs spinoff policy (default: in-plan)
 
@@ -67,7 +69,7 @@ Full policy: [`_INVESTIGATION_TEMPLATE.md`](../_INVESTIGATION_TEMPLATE.md).
 | ID | Cluster | Severity | Backends | Status of the instance | Doc |
 |---|---|---|---|---|---|
 | I | FFI foreign-store `vector` return delivered to a local; in-place `+=` drops it (local borrows foreign store, dep buffer empty) | high | both | #409 (wrapper) + #410 (direct) FIXED at producer chokepoints — mechanism cluster open | cluster-I (todo) |
-| II | NRVO loop-local hidden-buffer dep slot uninitialised (conditional × **unused** × nested) — **an uncovered sibling of @PLN51 cluster II**; #405's fix is only the manifestation-point OOB-refuse band-aid | high | **interp SIGSEGV / native completes** | 🔴 **LIVE on main** (probe 04): root unfixed, segfaults on interpret + co-occurring #306-class corruption. THE live cluster. | [cluster-II](cluster-II-slot-init-dominance.md) |
+| II | **NRVO return-buffer double-free** (was mis-described as a dep-slot init bug): `ki` aliases the NRVO buffer `__ref_1`; under conditional × **unused**, scope analysis emits a per-iteration `OpFreeRef(ki)` that whole-store-frees the stack-alias (#405/#306) while `__ref_1` also frees it at fn exit | high | **interp SIGSEGV / native completes** | 🔴 **LIVE on main** (probe 04); mechanism VERIFIED via debugger. THE live cluster. | [cluster-II](cluster-II-slot-init-dominance.md) § CLOSED OUT |
 | III | enum-discriminant corruption: struct-with-enum-fields-from-a-variable appended to a vector; `copy_claims` reads a -1 discriminant | high | both | ✅ **CLOSED on main** (probes 02/03): #412 fixed the enum shape; `copy_claims` breadth (vector/sub-struct fields, nested) verified clean | — |
 | IV | @PLN51 hidden-buffer-aliasing residuals (siblings not re-probed since closure) | tbd | both | re-extract from `finished/51` probes | cluster-IV (todo) |
 
@@ -84,7 +86,7 @@ no leak (`LOFT_STORES=warn`) + bounded runtime.
 | `01-native-struct-return.loft` | direct `#native` struct (non-vector heap) return + read/mutate | I (sibling) | read-only RED but **NOT a confirmed sibling** — isolated to an FFI-layout gap (no `alloc_struct` helper; `alloc_record` doesn't lay out a loft-readable struct ref). Sibling #1 is **latent/unreachable**, gated on a future struct-return helper — see [recent-bugs.md](recent-bugs.md) |
 | `02-enum-fields-in-vector.loft` | struct w/ 1 & 2 variable-sourced enum fields, appended to a vector | III (#406) | ✅ **PASS on current main** — #412 fully closed the #406 shape (the "still corrupt" in its thread was the pre-merge WIP). Control (direct read) proves non-vacuous. |
 | `03-copy-claims-breadth.loft` | struct w/ vector field, sub-struct field; nested `vector<vector>` appended | II/III breadth | ✅ **PASS** — `copy_claims` deep-copies these field kinds correctly; sibling #2 (copy_claims family) closed for reachable shapes |
-| `04-slot-init-405.loft` | heap local conditional × unused × nested loop (#405 shape) | II (#405) | 🔴 **LIVE — interpret SIGSEGV on current main.** #405's merged fix is only the OOB-*refuse* band-aid; the root (uninit dep slot / cross-iter dangling) is unfixed and escalates to a segfault, with a co-occurring #306-class "stack-store-as-heap" corruption. **native completes (interp/native divergence).** Can't graduate while it crashes. |
+| `04-slot-init-405.loft` | heap local conditional × unused × nested loop (#405 shape) | II (#405) | 🔴 **LIVE — interpret SIGSEGV on current main.** VERIFIED (debugger): `OpFreeRef(ki)` double-frees the NRVO return-buffer alias `__ref_1` via a stack-ref (store_nr=8·(rec−1) > len → #405/#306). native completes. Can't graduate while it crashes. (filename predates the corrected mechanism.) |
 
 ## Roadmap (next session)
 
