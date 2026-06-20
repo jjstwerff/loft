@@ -3,10 +3,35 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Cluster II — slot null-init must dominate its free (the #405 root)
+# Cluster II — the #405 live crash (root NOT yet verified)
 
-The LIVE cluster (probe `04`). Root cause **VERIFIED from the IR** — this is the
-shared root the class-retirement fix targets, not the #405 instance.
+The LIVE cluster (probe `04`). **⚠️ CORRECTION (instrument falsified the earlier
+"verified" root).** While starting Stage D, a backtrace instrument on the bogus
+free + a fully-clean IR re-dump overturned the slot-init-dominance story below:
+
+- The failing free is **`OpFreeRef` via `free_ref`** (a plain `OpFreeRef`, the
+  per-iteration `OpFreeRef(ki)`), of an **out-of-range store `#24`** while
+  `allocations.len==5` — i.e. a garbage `store_nr`, not a double-free of a valid
+  store.
+- **`__vdb_1` AND `__ref_1` ARE null-init'd at fn entry** in the clean IR
+  (`__vdb_1 = null` / `__ref_1 = null` as the first two ops of `main`). So the
+  "no scope-entry sentinel-init" claim below is **FALSE**, and a half-1
+  fn-entry-sentinel attempt (verified to prepend the init) did **not** fix it.
+
+So the verified facts are only: probe 04 SIGSEGVs on interpret / completes on
+native; the crash is an `OpFreeRef` of a garbage `store_nr`; the fn-entry
+null-inits are present. **The precise var and the mechanism that puts a garbage
+`store_nr` into the freed slot are NOT pinned** — the analysis below
+(slot-init-dominance, half-1/half-2) is a now-FALSIFIED hypothesis kept only as a
+record of what was ruled out. Next step: instrument `free_ref` to print the var +
+the slot's prior writer, and trace how `store_nr 24` reaches it (likely the
+`ki`/`__ref_1` NRVO return-buffer reuse + the `x += ki` copy, not `__vdb_1`).
+
+---
+
+## (FALSIFIED hypothesis — kept as ruled-out record)
+
+~~Root cause VERIFIED from the IR — this is the shared root.~~ Overturned above.
 
 ## Status
 

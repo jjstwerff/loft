@@ -13,9 +13,9 @@ Plan id: [@PLN85](https://github.com/loft-lang/plans/issues/85) · investigation
 | Stage | Status |
 |---|---|
 | A — Probe catalogue (extract from the real recent bugs + a real consumer) | ✅ probes 01–04 (evaluation in [recent-bugs.md](recent-bugs.md)); of 3 predicted siblings: #1 latent, #2 closed, #3 LIVE |
-| B — Mechanism investigation (shared-root vs N-independent) | ✅ for the live cluster — #405 root VERIFIED ([cluster-II](cluster-II-slot-init-dominance.md)): slot null-init/free scope mismatch |
-| C — Fix design | ✅ invariant named: **a slot's null-init must dominate its free** (chokepoint = reconcile free-placement with sentinel-init emission) |
-| D — Implementation | 🟡 next — load-bearing free-path codegen/scope change; gates in [cluster-II](cluster-II-slot-init-dominance.md) |
+| B — Mechanism investigation (shared-root vs N-independent) | 🟡 **IN PROGRESS** — earlier "verified" slot-init-dominance root was **FALSIFIED** by a Stage-D instrument (the fn-entry null-inits ARE present; the crash is an `OpFreeRef` of a garbage `store_nr`). Real mechanism not yet pinned — see [cluster-II](cluster-II-slot-init-dominance.md) § CORRECTION |
+| C — Fix design | 🔴 reopened — the prior invariant (null-init dominates free) is falsified for this case |
+| D — Implementation | ⏸️ blocked on a correct Stage B |
 
 **What triggered this:** the *known* store-lifetime mechanisms are already hardened and
 shipped — H1 (fn-arity freeze), **H2 (typed `Deps` newtype + value-tagged spaces — see
