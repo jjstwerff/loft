@@ -169,6 +169,45 @@ What the minimal change does NOT include (deferred to later rungs):
 This keeps the first change tiny and additive: one set-valued traversal + existing
 `set_skip_free`, no new type field, no caller edit, no var rewriting.
 
+### TESTED (the codegen is the test) — interp: ENOUGH; native: needs a function-scoped return buffer
+
+Implemented the minimal change and observed the bytecode:
+`collect_return_sources(expr)` (set version of `returned_var`, `If`/`match` →
+union of arm terminals) + `set_skip_free` on each source's BACKING BUFFER, with the
+owned-vs-borrowing distinction the validator flagged:
+
+- **directly-owned terminal** (`dep.is_empty()`) → mark the terminal itself (it IS
+  the freed store; a multi-arm owned return would otherwise free it → UAF).
+- **borrowing terminal** (`_vec_N["__vdb_N"]`) → mark the DEP (`__vdb_N`, the
+  work-ref `get_free_vars` actually frees), NOT the terminal — marking the terminal
+  makes the native generator skip *declaring* it (`E0425 var__vec_N not in scope`).
+
+Result:
+
+- **INTERP — ENOUGH.** `enc`'s two `OpFreeRef(__vdb_*)` disappear (verified in the
+  IR; the return wraps as `return {…}`). Rung 0 (the *direct* `a=enc(k0);
+  b=enc(k1); c=enc(k2)`) → `1 3 5`. Probe 05 passes. audience_crystal 02/03 no
+  regression. The minimal type-fact change, alone, fixes the interpreter.
+- **NATIVE — NOT enough.** Same IR fails to compile: `E0425 cannot find value
+  var__vec_1` — the return now yields **arm-scoped** `_vec_N` vars, and Rust needs
+  the returned value to come from a var that is **in scope at the return** (a
+  function-scoped buffer). So the previously-"separable" arm-unification question
+  is **answered: native REQUIRES it; interp does not** (the interpreter is
+  slot-based, no lexical scope). The reverted attempt-8 unification broke native by
+  *rewriting* vars; the correct native step is to materialize every arm's result
+  into ONE function-scoped buffer (the `__retbuf`, exactly as cbor's head-call arms
+  already do via `one_buffer_chain`) so the return is `return __retbuf` — no
+  arm-scoped var, no rewrite.
+
+**So rung 0 splits cleanly into two sub-steps, both now specified:**
+1. **interp (callee return-source skip_free)** — the minimal change above; proven.
+2. **native (arm → `__retbuf` materialization)** — make simple-literal arms write
+   the function's `__retbuf` like the head-call arms do, so the return references
+   one in-scope buffer. Then both backends emit the proven form.
+
+(The change is reverted on the branch — it breaks native *compile*, so it can't
+land until sub-step 2 lands with it.)
+
 ## 7. Open questions to verify against the implementation
 
 - Exact current contents of `Definition.returned` for `enc`/`mk` (is the dep empty,
