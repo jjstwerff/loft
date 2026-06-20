@@ -5,6 +5,13 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Nightly FULL run.  The per-PR Windows leg runs a focused subset (the
+  # Test step drops the OS-agnostic interpreter/compiler-logic suites — see
+  # there); push-to-main and this schedule run the WHOLE matrix on every OS,
+  # so the full Windows suite is exercised daily and on every merge.  03:00
+  # UTC keeps it clear of the 04:00 miri nightly.
+  schedule:
+    - cron: '0 3 * * *'
 
 # A new push to the same PR/branch obsoletes the running matrix — cancel it
 # instead of letting both compete for runners (three stacked full runs in one
@@ -199,22 +206,55 @@ jobs:
       # the multiplayer server never starts).  Re-extracting from scratch each
       # run works on every OS and costs only the small-tarball unpack — the
       # build-cache above is where the real time is.
-      - name: Cache cargo registry and build
+      # `registry/src` + `git/checkouts` are EXCLUDED: they are the *extracted*
+      # crate / git sources, regenerated on demand from `registry/cache/*.crate`
+      # and `git/db`.  Caching them doubles the small-file work (restore writes
+      # them, save re-reads them), and small NTFS files are the Windows tar long
+      # pole — dropping them halves it.  cargo re-extracts on first use (a write
+      # the build does anyway when they are absent), so it is a net win on
+      # Windows and neutral elsewhere.
+      #
+      # Two variants, split by OS, because `target/` behaves opposite ways:
+      #
+      #   - non-Windows: keep `target/` — ext4 compresses it cheaply (~50s
+      #     save) and a warm restore skips the dep recompile.
+      #   - Windows: DROP `target/`.  Measured at ~4.5 GB; the GitHub cache
+      #     budget is 10 GB/repo and the key is unique-per-run (`run_id`), so
+      #     3 OSes × ~4.5 GB blows the cap every run → the entries LRU-evict
+      #     before they can ever be restored (confirmed: the Windows leg hits
+      #     a full cache MISS every run, i.e. caching was effectively dead).
+      #     On top of that, compressing the millions of small NTFS files in
+      #     `target/` costs ~9 min on the save step EVERY run, hit or miss.
+      #     Dropping `target/` removes that 9-min tax AND shrinks the Windows
+      #     cache to a few hundred MB (registry + cdylib build-cache), small
+      #     enough to survive eviction and actually restore warm — which is
+      #     what makes the expensive native cdylibs (`~/.loft/build-cache`)
+      #     persist.  The trade is a cold dep recompile (~9 min) each Windows
+      #     run; net Windows wall-clock still drops sharply (~30m → ~13m) once
+      #     paired with the focused PR test set below.
+      - name: Cache cargo registry and build (non-Windows — keeps target/)
+        if: runner.os != 'Windows'
         uses: actions/cache@v4
         with:
-          # `registry/src` + `git/checkouts` are EXCLUDED: they are the *extracted*
-          # crate / git sources, regenerated on demand from `registry/cache/*.crate`
-          # and `git/db`.  Caching them doubles the small-file work (restore writes
-          # them, save re-reads them), and small NTFS files are the Windows tar long
-          # pole — dropping them halves it.  cargo re-extracts on first use (a write
-          # the build does anyway when they are absent), so it is a net win on
-          # Windows and neutral elsewhere.
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             ~/.loft/build-cache
             target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
+            ${{ runner.os }}-cargo-
+      - name: Cache cargo registry and build (Windows — drops target/, see above)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/.loft/build-cache
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
           restore-keys: |
             ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
@@ -318,10 +358,36 @@ jobs:
         # HTTP smoke test whose interpreted viewer gets starved by this suite's
         # parallel native-build load (empty response under contention), so it runs
         # ISOLATED in the `viewer-smoke` job where it's reliable.
+        #
+        # Windows PULL-REQUEST runs a FOCUSED subset.  The OS-agnostic
+        # interpreter/compiler-logic suites (parsing, types, slots/IR, the
+        # cross-mode language matrices, string/format/diagnostics) behave
+        # identically on every OS, so the Linux + macOS legs already cover
+        # them per-PR; re-running them on the ~3×-slower Windows runner buys
+        # no Windows-specific signal.  They are NOT skipped on Windows
+        # forever — every push-to-main and the nightly schedule run the full
+        # set on Windows too.  KEPT on Windows PRs: every suite touching a
+        # Windows-divergent surface — native/FFI link & cdylib load,
+        # filesystem/paths/store-durability, process spawn, networking/server,
+        # wasm/html, threading.  Edit the drop-list to retune the trade.
         shell: bash
-        run: >
-          cargo nextest run --profile ci
-          -E 'not binary(index_hygiene) and not binary(viewer_markdown)'
+        env:
+          GH_EVENT: ${{ github.event_name }}
+        run: |
+          BASE="not binary(index_hygiene) and not binary(viewer_markdown)"
+          FILTER="$BASE"
+          if [ "$RUNNER_OS" = "Windows" ] && [ "$GH_EVENT" = "pull_request" ]; then
+            for b in issues expressions expressions_auto_convert parse_errors \
+                     parser_statement parse_str tuple_matrix coroutine_matrix \
+                     closure_matrix mut_closure_matrix template_matrix \
+                     slot_v2_baseline slots frame_vars spans_on_ir \
+                     strings format error_messages data_structures; do
+              FILTER="$FILTER and not binary($b)"
+            done
+            echo "Windows PR — focused subset (OS-agnostic logic suites deferred to push-to-main + nightly)"
+          fi
+          echo "nextest filter: $FILTER"
+          cargo nextest run --profile ci -E "$FILTER"
 
       # A test that passed only on retry (`retries = 1` in the ci profile) is
       # a FINDING, not noise: the retry converted an intermittent real bug
