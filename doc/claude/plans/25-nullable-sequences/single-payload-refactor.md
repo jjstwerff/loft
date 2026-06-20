@@ -13,6 +13,60 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > refactor): the Step-5 consumer sweep + the gate flip.  Context: [[pln25-nullable-coherence]]
 > memory + README § RESUME HERE.
 
+## DESIGN DECISION (2026-06-20): nullability is a SEQUENCE concept — keyed collections stay DENSE
+
+> **Nullability applies to sequences (`vector`/`array`) ONLY.  Keyed collections
+> (`hash`/`sorted`/`index`/`spacial`) are always dense — implicitly `not null`.**
+
+This SUPERSEDES the earlier "full coherence — keyed collections mirror the vector arm to
+`__nullable<S>`" approach.  The rule:
+
+1. **`vector<S>` / `array<S>` — nullable by default** → element `__nullable<S>`, with `not null`
+   as the dense opt-out.  A `null` is a valid, addressable slot.  (`array` is the *linked* form a
+   vector is promoted to when its records are shared with a keyed index — `finish_type`'s
+   `Vector → Array` promotion; it is equally nullable-capable.)
+
+2. **`hash`/`sorted`/`index`/`spacial`<S[k]> — DENSE, implicitly `not null`.**  `not null` is
+   *accepted* in their definitions (`hash<S not null [k]>`) but is the implicit default, so it is a
+   no-op.  Their record format is UNCHANGED from pre-PLN25.  Rationale: a key denotes presence — you
+   cannot look up an absent element, so a keyed element is never null.
+
+3. **A keyed index over a shared nullable array indexes only the NON-NULL (`Some`) records.**  In
+   the "two views, one record set" / `other_indexes` pattern (a combined/multi-key index as a
+   secondary view over a `vector`→`array` of nullable records), null slots stay in the array,
+   addressable by position, but are NOT inserted into the key index → unreachable by key.  The index
+   skips `Null` discriminants at index-build time.
+
+**Consequences (this is the active work):**
+- **REVERT the keyed→nullable rewrites** — `definitions.rs` `index`/`hash`/`sorted` arms back to
+  dense (`Type::Index/Hash/Sorted(type_def_nr(&tp), …)`).  Supersedes `fbfdea93` (sorted/index→nullable)
+  and `0bd59608` (hash→nullable).  With keyed content never a `__nullable<` enum, the downstream
+  keyed-nullable plumbing (`key_owner`/`key_base`→Some, `fields()`/`find_index`→Some, `database.index`
+  target, the index range-query nullable for-loop arm, the keyed `+= <single struct>` branch) goes
+  INERT (all guarded on `__nullable<` content) and can be cleaned up.
+- **The keyed-nullable bug class is DELETED, not fixed.**  native_scripts keyed-clear (`69211de2`),
+  index coherence (`469dbec1`), store_persist keyed `+=` (`7b1dc082`) were all solving a problem this
+  design removes — their keyed-specific parts revert.
+- **The vector/array nullable work STAYS:** p379 (`6012147a`, synth-enum collision via vector fields),
+  stack_trace (`618c0b5d`, stdlib struct dense inside a consumer vector), set_default_value MAX guard
+  (`d045e1ed`).
+- **Forward (REQUIRED — "Scope B"):** the record-sharing read path — a dense keyed index reading keys
+  from a *shared* nullable array's `Some`-wrapped records (at the payload offset) and skipping `Null`
+  at index-build.  A STANDALONE keyed collection (`hash<S[k]> = […]`) builds its own dense records and
+  needs nothing, BUT the `struct { entries: vector<S>, lookup: hash<S[k]> }` record-sharing pattern is
+  COMMON in the suite — gate-on it fails after Scope A until Scope B lands: `tests/scripts/`
+  `12-collections`, `65-hash-edge-cases`, `69-empty-comprehension-hash`, `374-vector-hash-sibling-dup-key`,
+  plus the 2 `#[ignore]`-d `plan25_e2_hash.rs` tests (`hash_over_nullable_vector_lookup_and_field_access`,
+  `anon_literal_into_hash_field_and_forloop_over_shared_array`).  Gate-OFF all pass (dense); the
+  releasable state is preserved.  Scope B un-ignores + fixes all of them.
+
+### Scope A status (landed)
+Keyed definition arms + the keyed-only plumbing reverted to `main`'s dense form.  Gate-OFF unchanged
+(2415 pass + the 2 ignored = baseline; the 1 fail is environmental `kernel_port`).  Gate-ON: keyed
+collections are dense — `89-sizeof` and the keyed-clear OOB class are FIXED; the record-sharing tests
+above now fail pending Scope B.  Vector/array nullable work (p379, stack_trace, `set_default_value`
+guard) untouched.
+
 ## The one invariant (CONFIRMED by construction, not assumed)
 
 > **`__nullable<S>`'s `Some` variant carries a single inline `payload: S` field whose type

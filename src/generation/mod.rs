@@ -2040,16 +2040,6 @@ extern crate loft;"
     /// Resolve a struct's field name by field_nr — needed for
     /// Sorted/Hash/Index key-string emission at bare-type level.
     fn bare_field_name(&self, c: u16, k: u16) -> String {
-        // @PLN25 E2 — a keyed collection over a synth `__nullable<S>` element keeps its
-        // key fields in the `Some` variant, not on the enum wrapper, so resolve `c`
-        // through `key_owner` (the same redirect `determine_keys` uses to bake the key
-        // positions).  Without it `c` is the `Parts::Enum` wrapper, this falls to the
-        // `"?"` branch, and `db.hash`/`db.sorted`/`db.index` register an UNRESOLVED key
-        // → every record hashes to the same bucket (dedup to one entry) and lookups
-        // miss.  The key field numbers in `keys` are already Some-variant-relative
-        // (see `determine_keys`), so they index the resolved owner directly.  Inert
-        // gate-off (no content is ever a `__nullable<` enum).
-        let c = self.stores.key_owner(c);
         if let crate::database::Parts::Struct(ref fields)
         | crate::database::Parts::EnumValue(_, ref fields) = self.stores.types[c as usize].parts
         {

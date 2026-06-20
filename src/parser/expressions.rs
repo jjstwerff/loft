@@ -1001,46 +1001,6 @@ use a separate collection or add after the loop"
             *code = Value::Insert(all_steps);
             return Type::Void;
         }
-        // @PLN25 E2 — `keyed += <single elem>` (no brackets, e.g. `h += Entry{…}`) where the
-        // element is a gate-on `__nullable<S>`: mirror the `+= [literal]` branch above for ONE
-        // element, parsing it AGAINST the nullable element type so `new_record` builds `Some`.
-        // Without this, the generic RHS parse below + the P188 single-push branch parse `S{…}`
-        // as DENSE `S`, which no longer equals `__nullable<S>` → "cannot change type from
-        // hash<__nullable<S>> to S" (store_persist `h += Entry{…}`).  Gate-off the element is
-        // dense, `elm_is_nullable` is false, and P188 handles it unchanged.
-        if op == "+="
-            && var_nr != u16::MAX
-            && matches!(
-                f_type,
-                Type::Sorted(_, _, _)
-                    | Type::Hash(_, _, _)
-                    | Type::Index(_, _, _)
-                    | Type::Spacial(_, _, _)
-            )
-        {
-            let elm_tp = f_type.content();
-            let elm_is_nullable = matches!(&elm_tp,
-                Type::Enum(e, true, _) | Type::Reference(e, _)
-                    if self.data.def(*e).name.starts_with("__nullable<"));
-            if elm_is_nullable {
-                let elm = self.unique_elm_var(&lhs_parent_tp, &elm_tp, var_nr);
-                let mut item = Value::Var(elm);
-                let mut item_parent = Type::Null;
-                let _ = self.parse_operators(&elm_tp, &mut item, &mut item_parent, 0);
-                if !self.first_pass {
-                    let steps = self.new_record(
-                        &mut Value::Var(var_nr),
-                        f_type,
-                        elm,
-                        var_nr,
-                        &[item],
-                        &elm_tp,
-                    );
-                    *code = Value::Insert(steps);
-                }
-                return Type::Void;
-            }
-        }
         // Hint the RHS that the destination has this type — `f#read`
         // (no parens, no cast) picks it up so `s.field = f#read` matches
         // the symmetry of `f += s.field` (which already takes the field's

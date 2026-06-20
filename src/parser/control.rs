@@ -3353,18 +3353,6 @@ impl Parser {
                 return self.data.def(next_d_nr).returned().clone();
             }
             in_type.clone()
-        } else if let Type::Enum(d, true, _) = &in_type
-            && self.data.def(*d).name().starts_with("__nullable<")
-        {
-            // @PLN25 E2 — a multi-key RANGE query over an `index<__nullable<S>>` /
-            // `sorted<__nullable<S>>` (`for v in idx[lo..hi, key] { … }`) yields the nullable
-            // ELEMENT type (`index_type` keeps the `Enum` so `v.field` unwraps via `Some`).
-            // Gate-off the element is a dense `Reference(S)` and matches the arm above; gate-on
-            // it is the synth `__nullable<S>` Enum, which had no for-loop arm → "Unknown in
-            // expression type".  Mirror the Reference arm: the loop var IS the nullable element,
-            // and `v.field` unwraps in `field()` (the runtime range iteration yields the same
-            // element records, now Some-wrapped).
-            in_type.clone()
         } else if !self.first_pass {
             diagnostic!(
                 self.lexer,

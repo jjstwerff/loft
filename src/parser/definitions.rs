@@ -1685,26 +1685,27 @@ impl Parser {
                 let mut fields = Vec::new();
                 return Some(match type_name {
                     "index" => {
+                        // @PLN25 — keyed collections (`index`/`hash`/`sorted`) are DENSE:
+                        // nullability is a SEQUENCE concept (`vector`/`array`) only, so a keyed
+                        // element is implicitly `not null` (a key denotes presence).  Accept an
+                        // explicit `not null` in the definition as a no-op.  (Design:
+                        // single-payload-refactor.md § "DESIGN DECISION (2026-06-20)".)
+                        if self.lexer.has_keyword("not") {
+                            self.lexer.token("null");
+                        }
                         self.parse_fields(true, &mut fields);
-                        // @PLN25 E2 — rewrite the element to `__nullable<S>` (full coherence with
-                        // vector/hash/sorted).  The multi-key RANGE query must unwrap the nullable
-                        // element on read (fields.rs index-access path).
-                        let elem = self.e2_nullable_elem(tp);
-                        let sub_nr = self.data.type_def_nr(&elem);
-                        self.data.set_referenced(sub_nr, on_d, Value::Null);
-                        Type::Index(sub_nr, fields, crate::data::Deps::none())
+                        Type::Index(
+                            self.data.type_def_nr(&tp),
+                            fields,
+                            crate::data::Deps::none(),
+                        )
                     }
                     "hash" => {
+                        // Dense (implicitly `not null`) — see the `index` arm.
+                        if self.lexer.has_keyword("not") {
+                            self.lexer.token("null");
+                        }
                         self.parse_fields(false, &mut fields);
-                        // @PLN25 E2 — a `hash<S[k]>` that shares records with a sibling
-                        // `vector<S>` (the `other_indexes` "two views, one record set"
-                        // pattern) MUST agree on the element layout.  E2 rewrites the
-                        // `vector` arm to `__nullable<S>` (Some-wrapped records), so the
-                        // hash content has to be the SAME synthetic enum or its key
-                        // extraction reads the key field at the dense offset of a
-                        // Some-wrapped record → wrong key → miss.  Mirror the vector arm.
-                        let elem = self.e2_nullable_elem(tp);
-                        let sub_nr = self.data.type_def_nr(&elem);
                         self.data.set_referenced(sub_nr, on_d, Value::Null);
                         let mut f = Vec::new();
                         for (field, _) in fields {
@@ -1735,18 +1736,11 @@ impl Parser {
                         Type::Vector(Box::new(elem), crate::data::Deps::none())
                     }
                     "sorted" => {
+                        // Dense (implicitly `not null`) — see the `index` arm.
+                        if self.lexer.has_keyword("not") {
+                            self.lexer.token("null");
+                        }
                         self.parse_fields(true, &mut fields);
-                        // @PLN25 E2 — mirror the hash/vector arms.  A nested `sorted<S[k]>`
-                        // element left DENSE is built directly in its collection slot, but a
-                        // dense-element build inside a single-payload `Some` corrupts the
-                        // enclosing record (the slot ref aliases the parent — 15-lexer's
-                        // `possible: sorted<Possible[…]>` clobbered `SToken.start`).  Rewriting
-                        // to `__nullable<S>` routes element construction through the SAME
-                        // work-ref+finish path the nullable `vector` element uses, which is
-                        // correct, and keeps keyed views layout-consistent with vector/hash.
-                        let elem = self.e2_nullable_elem(tp);
-                        let sub_nr = self.data.type_def_nr(&elem);
-                        self.data.set_referenced(sub_nr, on_d, Value::Null);
                         Type::Sorted(sub_nr, fields, crate::data::Deps::none())
                     }
                     "spacial" => {

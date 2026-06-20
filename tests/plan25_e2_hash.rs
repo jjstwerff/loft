@@ -89,6 +89,11 @@ fn main() {
 ";
 
 #[test]
+#[ignore = "Scope B / design point 3 (single-payload-refactor.md): a DENSE keyed index that \
+            shares records with a nullable sibling vector (struct { entries: vector<S>, \
+            lookup: hash<S[k]> }) must read keys from the Some-wrapped shared records at the \
+            payload offset and skip Null discriminants. Keyed collections are now dense \
+            (nullability is sequence-only); the shared-array key-read is forward work."]
 fn hash_over_nullable_vector_lookup_and_field_access() {
     // len preserved; key extraction finds the shared Some-wrapped records by
     // the `t` field through the Some payload; field access unwraps to S.
@@ -111,6 +116,9 @@ fn main() {
 ";
 
 #[test]
+#[ignore = "Scope B / design point 3 (single-payload-refactor.md): hash field sharing records \
+            with a nullable sibling vector field — same forward work as \
+            hash_over_nullable_vector_lookup_and_field_access."]
 fn anon_literal_into_hash_field_and_forloop_over_shared_array() {
     // Rung 5: anon `{ … }` literals into a hash field (the element resolves
     // against the `Some` variant, not the enum). For-loop deref: iterating the

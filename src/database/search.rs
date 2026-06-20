@@ -44,13 +44,6 @@ impl Stores {
     #[must_use]
     pub fn fields(&self, tp: u16) -> u16 {
         if let Parts::Index(c, _, f) = self.types[tp as usize].parts {
-            // @PLN25 — nullable `index<__nullable<S>>`: the content `c` is the synth enum
-            // (`Parts::Enum`, no field list); the LLRB bookkeeping (#left/#right/#color) lives
-            // on the `Some` variant's record (where `database.index` appended it).  Resolve
-            // through `Some` so the bookkeeping offset is read from the actual stored struct;
-            // else `c` (the enum) misses both arms below → `u16::MAX` → `tree::add` writes at
-            // 0xFFFF (the `Fld 65543 outside record` OOB on a keyed-clear repopulate).
-            let c = self.nullable_some_variant(c).unwrap_or(c);
             if let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
                 &self.types[c as usize].parts
             {
@@ -244,9 +237,6 @@ impl Stores {
         db: u16,
         key: &[Content],
     ) -> DbRef {
-        // @PLN25 — nullable `index<__nullable<S>>`: `rec_nr` is the synth enum (`Parts::Enum`);
-        // resolve to the `Some` variant where the LLRB bookkeeping lives (mirrors `fields()`).
-        let rec_nr = self.nullable_some_variant(rec_nr).unwrap_or(rec_nr);
         let left = if let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
             &self.types[rec_nr as usize].parts
         {
