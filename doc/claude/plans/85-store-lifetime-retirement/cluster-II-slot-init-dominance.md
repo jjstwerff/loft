@@ -265,18 +265,93 @@ Reverted.
 string lookup) and verify the fresh-store + append eval-stack order. Then the
 native generator ABI. Gate on probe 05 both backends + audience_crystal 02/03.
 
-### Fix direction (Stage C — the real one)
+## Stage C — fix design: MOVE / ownership-transfer on heap return (not deep-copy)
 
-This is the **H1 / return-ABI / NRVO-alias** family: a var bound to an
-NRVO-returning call's result is a **borrowed alias** of the caller-passed return
-buffer; exactly ONE of {the alias `ki`, the buffer `__ref_1`} may free the store.
-Today both do. The fix is to make the NRVO-return-bound local **skip-free / borrowed**
-(the buffer `__ref_1` owns the single free at fn exit) — at the ownership-marking
-chokepoint, so it covers every NRVO-return-aliased local, not the #405 shape.
-Why the **unused** factor flips it: when `x` reads `ki`, ownership transfers into
-`x`'s buffer (the copy), so `ki`'s free is placed correctly; when `x` is dead,
-that transfer is elided but `ki`'s owning-free is (wrongly) kept. Validate the
-fix against the matrix A–F + the @PLN51/leak gates; confirm the #306 co-fire
+### The real model (why every copy-based attempt fought the grain)
+
+Attempts 1–7 all tried to **deep-copy** the return into the binding. Copy is the
+wrong primitive. Other languages get `a = f(); b = f()` right two ways, both of
+which share one invariant — **each binding owns a DISTINCT heap object; no
+per-call-site buffer is reused while a result is live**:
+
+- **Move semantics** (Rust, C++11, Swift): the return value is *moved* into the
+  binding — single owner transfers from callee to caller; the old owner
+  relinquishes. Zero copy.
+- **GC** (Java, Go, Python, JS): each call returns a reference to a *fresh*
+  object; the collector frees by reachability. Aliasing is harmless.
+- **NRVO done right** (C++): the elided return is constructed directly into the
+  *caller variable's own* storage — and `a`/`b` have distinct storage.
+
+loft is manual single-owner (store + deps + `OpFreeRef` + the per-store
+`free_bits` liveness bitmap), so it must follow **move**. Its bug is the
+**work-ref reuse optimization**: one `__ref_N` buffer per call site, reused across
+calls, sound ONLY when the result is consumed immediately.
+
+### VERIFIED mechanism (allocator instrument, `LOFT_PLN85_OWN`)
+
+For `a = enc(k0); b = enc(k1); c = enc(k2)`, the alloc/free trace is, per call:
+`ALLOC #8` (return buffer) + `ALLOC #9` (internal) → **`FREE #9, FREE #8`** →
+next call `ALLOC #8` (REUSED). So the return store `#8` is **freed the instant
+`enc` returns**, then handed to the next call. `a` keeps pointing at `#8`, which
+is now `b`'s. That is the entire bug: **the return store is FREED-on-return
+instead of MOVED to the binding.** (Confirms #405 too: same free-on-return, made
+visible there by the stack-ref garbage.)
+
+### The fix — apply the ownership model loft already has
+
+The binding must **own** the returned store; the work-ref must **relinquish** it
+(no free-on-return). Concretely, ONE of:
+
+- **(C1) Move / ownership transfer.** On `a = <heap-returning call>`, suppress the
+  post-return free of the work-ref's store and re-root ownership on `a` (give `a`
+  the dep + scope-exit `OpFreeRef`; the store's `free_bit` stays CLEAR so
+  `find_free_slot` cannot recycle it for the next call). The work-ref's own
+  `OpFreeRef` becomes a no-op (already moved). Zero copy. This is the H3
+  "ownership carried, not re-derived" rule applied to the return path.
+- **(C2) NRVO into the binding's slot.** Drop the shared work-ref for a return
+  bound to a fresh local: have the callee materialize into `a`'s own storage
+  (known at the call site for `a = f(...)`). Distinct storage by construction;
+  also zero copy. Bigger ABI change but removes the work-ref hazard class
+  entirely.
+
+Deep-copy (C3, attempts 5–7) is the conservative fallback the Reference path uses
+(safe when the return may alias a caller arg); correct but wasteful, and it hit
+the `rec_tp`/store-alloc complexity precisely because copy is the wrong primitive.
+
+### Can we implement it cleanly? — YES, with caveats
+
+The enabling machinery already exists and is clean:
+- **Per-store liveness** is an explicit bitmap (`free_bits` + `find_free_slot`,
+  `allocation.rs`): keeping the adopted store's bit CLEAR is exactly "don't
+  recycle it" — no new infrastructure.
+- **Ownership = deps + free responsibility** already exists; the Reference path
+  already transfers/owns. C1 applies the same to vector (and any heap) returns.
+
+The work is **localized to the return-bind chokepoint** (suppress the
+post-return work-ref free + re-root the dep on the binding), not scattered. The
+caveats that make it a *focused* effort rather than a one-liner:
+1. **Find the single free site.** The `FREE #8` per call is an `OpFreeRef`
+   (`name=''`, via `free_ref`) of the work-ref/return buffer — pin whether it is
+   the caller's per-call work-ref free or `enc`'s return cleanup, and suppress
+   exactly that one (the existing `paired_witness`/`witness_buffer` + `is_work_ref`
+   logic in `scopes.rs` is the place).
+2. **Don't regress the immediate-consume case.** When the result IS consumed at
+   once (one live result), today's reuse is fine and must stay (no per-call leak).
+   The transfer only needs to fire when the result *escapes into a live binding*.
+3. **Borrowed-view safety.** When the return aliases a caller arg (the
+   `is_borrowed_view` case the Reference path guards), a move would steal the
+   arg's store — keep the conservative copy/no-free there.
+4. **Native ABI in lockstep.** On native a SINGLE `a = enc(k0)` already returns
+   garbage `9` — the generator never transfers ownership either. C1/C2 must be
+   mirrored in `src/generation/` or the interp/native divergence persists.
+
+**Recommended path:** C1 (move) for the interpreter first — suppress the
+free-on-return + re-root the dep at the `scopes.rs` work-ref chokepoint — gated on
+probe 05 + audience_crystal 02/03 + the leak/suite harness; then mirror in the
+native generator. C2 is the cleaner end-state but a larger ABI change; do it only
+if C1's reuse-vs-escape discrimination proves brittle.
+
+Validate against matrix A–F + the @PLN51/leak gates; confirm the #306 co-fire
 closes with it.
 
 ---
