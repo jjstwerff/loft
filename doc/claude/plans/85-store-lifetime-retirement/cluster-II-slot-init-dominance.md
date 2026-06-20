@@ -392,6 +392,42 @@ landing it fully = the unifier generalised to heterogeneous N-arm + explicit
 return, AND the native generator taught the unified/absorbed shape. The three gaps
 above are the concrete checklist.
 
+### Attempt 9 — scoping the full fix re-diagnosed cbor as a DIFFERENT mechanism
+
+Dumping cbor's real `encode` IR overturned the "gap 2 = generalise the unifier"
+plan: cbor's `encode` arms **already unify into `__ref_3` (the `__retbuf`)** via
+the `one_buffer_chain` / `one_buffer_vec_copy` lowering (head-call arms write the
+buffer directly; `buf` arms `OpAppendVector` into it). So the callee side is
+correct — attempt-8's match-arm unification (which fixed the SIMPLE literal `enc`)
+does not apply to cbor at all.
+
+And the cbor map bug is **not** the held-results aliasing the probes model:
+- `encode(CMap{ ONE entry })` is ALREADY corrupt (`[a1, F6, F4]`) — a single
+  entry has no two-live-results to alias.
+- `k = encode(es[0].key); v = encode(es[0].value)` (two calls, results held) is
+  CLEAN (`7, 9`).
+- The corruption appears only in `encode_map`'s FULL structure: `buf = head(5,n)`
+  + `ki = encode(...)` + the nested `for j` `byte_lt(encode(...), ki)` + the
+  `buf += ki` / `buf += encode(value)` appends, all live together.
+
+So the live cbor bug is a **multi-live-heap-value interaction in `encode_map`**
+(several `vector<u8>` results — `buf`, `ki`, the `byte_lt` operands, the value
+encode — held + appended across nested loops), a store-lifetime mechanism distinct
+from BOTH the simple-match callee-free (cluster II, attempt-8) AND the simple
+held-results aliasing (probe 05). It has not been reduced to a minimal repro.
+
+**Conclusion of the implementation arc (attempts 1–9):** "the full fix" is not one
+change — it is at least three distinct mechanisms (simple-match callee-free-on-
+return · the `encode_map` multi-live-value interaction · the native return-ABI that
+never transfers ownership), each load-bearing, each needing its own minimal repro +
+both-backend validation. Stage C's move model is the right *model* and is validated
+for the simplest case, but landing the class is a dedicated multi-step return-ABI
+project, not a tail-end change — 9 attempts (this arc) + earlier ones all regressed
+or were partial. **Pragmatic ship path for the cbor consumer:** the owned-buffer
+workaround in `encode_map` (materialise each `encode()` result into an owned
+`vector<u8>` before the next call / append) sidesteps the interaction without the
+loft fix; verified on `/tmp/wa.loft` (interp).
+
 ---
 
 ## (FALSIFIED hypothesis — kept as ruled-out record)
