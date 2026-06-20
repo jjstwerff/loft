@@ -123,6 +123,52 @@ The rung-0 bytecode must FALL OUT of the fact, not be coaxed:
 4. Then grow the rungs (probe 05 → multi-arm → nested-loop → full functions), each
    gated both backends + leak + suite.
 
+## 6b. The MINIMAL change (rung 0) — just the callee return-source fact
+
+The full §2–4 design (return `Deps` = owned vs borrows-attr, read by BOTH sides) is
+the end state. But rung 0 (`a = enc(k0); b = enc(k1)`) needs only a fraction of it,
+because **enc's return is OWNED** — so the caller's *existing* adopt is already
+correct; the only thing wrong is that the **callee frees what it transfers out**.
+So the minimal delta is callee-side only:
+
+> **Compute the function's "return-source set" — the locals whose heap store is
+> transferred out as the return — correctly for EVERY return shape, and mark each
+> "do not free at scope exit." The only gap vs today is `match`/`if`.**
+
+Concretely, the smallest realization:
+
+- **Representation — reuse `skip_free`, add NO new type field.** A return-source
+  local is exactly one that must not be freed at scope exit, which is what
+  `skip_free` already means and what `get_free_vars`'s existing
+  `(owns || work_ref) && !skip_free` gate already consumes. So the change is: mark
+  each return-source `skip_free`.
+- **Computation — extend the return-tail analysis from a single var to a SET.**
+  Today `returned_var(e)` yields one `u16` and returns `u16::MAX` for an `If`/`match`
+  whose arms differ (→ nothing marked → arm buffers freed). Minimal change: over
+  the return expression, collect the terminal buffer of each path — for `Var` /
+  `Block` / `Insert` / `Span` the terminal; **for `If`/`match`, the UNION of all
+  arms' terminals** (the one missing case). `set_skip_free` each.
+- **Consumption — unchanged.** `get_free_vars` already skips `skip_free` locals.
+  No edit there. The callee stops freeing `__vdb_1`/`__vdb_2`; the caller's existing
+  `PutRef` adopt now binds a LIVE store; the second call allocates a distinct store
+  (the live one isn't recycled) → `a`,`b` distinct.
+
+What the minimal change does NOT include (deferred to later rungs):
+
+- **The caller-side `Deps` read (adopt-vs-COPY).** Needed only when a function
+  returns a BORROW of a param (`return v`); rung 0's return is owned → adopt. Add
+  when a rung exercises a borrowed return.
+- **Arm unification into one buffer.** Whether the callee must materialize all arms
+  into a single buffer (so the caller adopts a consistent store) is a *codegen*
+  question for the bytecode rung, separable from this type fact. Attempt 8's native
+  E0425 came from rewriting/unifying vars (dangling refs), NOT from the `skip_free`
+  marks — so the minimal change deliberately marks-without-rewriting, and the
+  rung-0 bytecode work settles whether unification is additionally required. Verify
+  empirically (open question below), don't assume.
+
+This keeps the first change tiny and additive: one set-valued traversal + existing
+`set_skip_free`, no new type field, no caller edit, no var rewriting.
+
 ## 7. Open questions to verify against the implementation
 
 - Exact current contents of `Definition.returned` for `enc`/`mk` (is the dep empty,
