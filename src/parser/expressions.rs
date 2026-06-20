@@ -1139,6 +1139,73 @@ use a separate collection or add after the loop"
             self.materialize_iterator(code, &iter_tp, to, &lhs_parent_tp, var_nr, op);
             return Type::Void;
         }
+        // #410 — a DIRECT `#native`-decl call returning a vector delivers a
+        // FOREIGN-store value: the FFI bridge wraps the return into the
+        // return-only null store (`extensions.rs::bridge_push_ref`).  Bound
+        // to a local with a plain `Set`, the local BORROWS that foreign
+        // store and never gets its own `__vdb` buffer — so the first
+        // in-place `+=` runs `vector_db` (build_vector_list /
+        // operators.rs), which allocates a FRESH EMPTY buffer and repoints
+        // the local, silently DROPPING the returned elements (len 4 → 1).
+        // #409 fixed the loft-WRAPPER shape at the return site; a direct
+        // call has no wrapper, so materialise HERE at the assignment: mint
+        // the local's own `vector_db` buffer and COPY the foreign return
+        // into it (the clear+append delivery the @P390 / @P287 paths use),
+        // so by the `+=` the local is shaped like any owned vector and
+        // appends in place.  A `#native` decl is `code()==Null &&
+        // !native().is_empty()`; an empty `native()` is a builtin op (e.g.
+        // `split`), whose vector return is already owned (data.rs::
+        // native_symbol_collisions draws the same line).
+        let native_vec_elm: Option<Type> = if !self.first_pass
+            && op == "="
+            && var_nr != u16::MAX
+            && !self.vars.is_argument(var_nr)
+            && matches!(f_type, Type::Unknown(_) | Type::Vector(_, _))
+        {
+            match code.unspan() {
+                Value::Call(d, _) => {
+                    let def = self.data.def(*d);
+                    if *def.code() == Value::Null
+                        && !def.native().is_empty()
+                        && let Type::Vector(elm, _) = def.returned()
+                    {
+                        Some((**elm).clone())
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+        if let Some(elm_tp) = native_vec_elm {
+            let rec_tp = self.append_elem_tp(&elm_tp);
+            // Route the foreign return through a named local `__fwd` (the
+            // #409 shape, control.rs::fwd_copy_409) — NOT the call inline.
+            // A named local is what scope analysis recognises as an owned
+            // temporary and frees (`OpFreeRef(__fwd)`); appending the call
+            // inline copies the elements but orphans the foreign source
+            // store (a per-assignment leak, ×N in a loop).
+            let fwd = self.create_unique(
+                "__fwd",
+                &Type::Vector(Box::new(elm_tp.clone()), Deps::none()),
+            );
+            self.vars.defined(fwd);
+            let set_fwd = v_set(fwd, code.clone());
+            // `vector_db` takes the ELEMENT type, mints a fresh owned store
+            // for the local (OpDatabase + `Set(v, field)` + length 0) and
+            // records the `__vdb` dep, so the later `+=` skips its own
+            // (destructive) `vector_db`.
+            let mut ls = vec![set_fwd];
+            ls.extend(self.vector_db(&elm_tp, var_nr));
+            ls.push(self.cl(
+                "OpAppendVector",
+                &[Value::Var(var_nr), Value::Var(fwd), Value::Int(rec_tp)],
+            ));
+            *code = Value::Insert(ls);
+            return Type::Void;
+        }
         // @P287 — same materialisation, but the LHS is a struct field
         // (`s.v = slice`) so var_nr is u16::MAX.  Three-step lower:
         //  (1) allocate a temp local vector,

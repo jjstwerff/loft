@@ -210,6 +210,63 @@ fn ffi_returned_vector_survives_in_place_append_409() {
     );
 }
 
+/// loft-lang/loft#410 (sibling of #409): the DIRECT pub-`#native`-decl shape.
+/// `ext_make_bytes` is declared `pub fn … -> vector<u8>; #native "…"` and
+/// called WITHOUT a loft wrapper, so the result is a foreign-store FFI return
+/// bound straight to the caller's local.  #409 fixed only the WRAPPER shape
+/// (the result flowed through a loft fn's `__retbuf`); a direct call has no
+/// wrapper, so the local borrowed the foreign store with no owned `__vdb`
+/// buffer and the in-place `+=` rebuilt a fresh EMPTY one — dropping the
+/// returned elements (len 4 → 1).  The fix materialises the foreign return
+/// into an owned buffer at the ASSIGNMENT (parser/expressions.rs), routing it
+/// through a named `__fwd` local so the foreign source store is also freed
+/// (no per-assignment leak).
+#[test]
+fn ffi_returned_vector_direct_decl_survives_in_place_append_410() {
+    let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    if fixture_lib_path().is_none() {
+        eprintln!(
+            "skipping: fixture cdylib not built — run: cd tests/lib/native_pkg/native && cargo build --release"
+        );
+        return;
+    }
+
+    // No wrapper fn — `ext_make_bytes` (the `#native` decl) is called directly.
+    let prog = std::env::temp_dir().join("loft_410_ffi_vec_direct.loft");
+    std::fs::write(
+        &prog,
+        "use native_pkg;\n\
+         fn main() { v = ext_make_bytes(4); v += [99 as u8]; println(\"R={len(v)} {v[0]} {v[4]}\"); }\n",
+    )
+    .expect("write program");
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+        .arg("--lib")
+        .arg("tests/lib/native_pkg")
+        .arg("--interpret")
+        .arg(&prog)
+        .output()
+        .expect("run loft binary");
+    let _ = std::fs::remove_file(&prog);
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // len 4 returned + 1 appended = 5; first byte of [0,1,2,3] survives; appended = 99.
+    assert!(
+        stdout.contains("R=5 0 99"),
+        "loft#410: a DIRECT `#native`-decl FFI vector<u8> return must survive an in-place \
+         `+=` (expected `R=5 0 99`); got stdout: {stdout:?}, stderr: {stderr:?}"
+    );
+    // The materialise must also free the foreign source store (the #409
+    // `__fwd` discipline) — no orphaned-store leak warning at exit.
+    assert!(
+        !stderr.contains("stores not freed"),
+        "loft#410: materialising the FFI return must not leak the foreign source store; \
+         got stderr: {stderr:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // A7.2.4: registry takes priority over dlsym — issue #119
 // ---------------------------------------------------------------------------

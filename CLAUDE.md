@@ -134,6 +134,8 @@ src/main.rs              CLI entry; loads default/ then user file
 - `#rust "..."` annotations in `default/*.loft` supply the Rust body for code generation.
 - Full naming and null-sentinel rules: see [CODE.md](doc/claude/CODE.md).
 - Response shape (reporting to the user): lead with the ONE highest-leverage item in full — the decision + the minimum to act on it — then a one-line summary of the rest; don't dump long detailed lists. Full norm: [ISSUE_TRACKING.md § The work queue](doc/claude/ISSUE_TRACKING.md).
+- Advice vs action: when asked for advice/evaluation/"what should we do about X", give the recommendation (best option + why) — do NOT bounce the decision back as a question. When asked a question, answer it — don't treat it as a trigger to start editing/running. Act only on an explicit do-it instruction.
+- Shared knowledge: anything an agent records to its private memory store that is durable and project-relevant must ALSO be documented in the repo (the right canonical doc) so other agents pick it up — memory is per-agent, the repo is the shared channel. Keep machine-specific values out of shared docs (document the convention, not the hostname).
 
 ---
 
@@ -173,12 +175,18 @@ must be releasable. All changes land on a feature branch and reach `main` only v
    broken build, a failing required check): a push that *unblocks* the PR is allowed without asking,
    because the PR cannot merge while it is red anyway. Check `gh pr list --head <branch>` if unsure.
 3. **Never create a branch or open a PR unless the user explicitly asks** ("create PR", "open a
-   PR", "merge", "switch to a new branch"). "fix X" / "implement Y" is NOT a PR instruction; a
-   prior "open a PR" does not authorise the next one. When in doubt, summarise what's ready and ask.
+   PR", "merge", "switch to a new branch"). "fix X" / "implement Y" / "push" / "retry" / "do the
+   fixes" are NOT branch/PR instructions; a prior "open a PR" does not authorise the next one. Do
+   the work in the working tree; if a protected branch (`main`) blocks the commit, surface that
+   and ask which branch — don't silently invent a feature branch. When in doubt, summarise what's
+   ready and ask. (Ad-hoc, specifically-named branches get forgotten and strand features.)
 4. Branch from the tip of `main` with a **GENERAL name** (`quality-pass`, `cleanup`, `work`) so one
    long-lived branch hosts cross-theme work — new branches keep re-rebasing against a moving `main`
-   and failing CI on patterns they didn't author. Only a substantial plan with its own design doc
-   (e.g. `plan-06-arc`, `lsp-server`) earns a specific name. The active cycle's long-lived branch is
+   and failing CI on patterns they didn't author. **Prefix an agent-created working branch with the
+   machine hostname** (e.g. `<hostname>-work`, `tuxedo-work`) so one discoverable branch per machine
+   consolidates that agent's work and the user controls merge/PR timing without losing features in
+   stray branches. Only a substantial plan with its own design doc (e.g. `plan-06-arc`, `lsp-server`)
+   earns a specific name. The active cycle's long-lived branch is
    a **monthly release branch** named for its release month, `YYYY-MM` (e.g. `2026-07`); cross-theme
    work lands there and it ships at the start of that month once the tree is stable with a low bug
    count — see [RELEASE.md § Release cadence](doc/claude/RELEASE.md#release-cadence).
