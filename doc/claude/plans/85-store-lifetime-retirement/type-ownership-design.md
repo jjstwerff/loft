@@ -459,6 +459,38 @@ be injected on the match-handling path (or `unify_if_branches_work_refs` extende
 - Native generator: confirm it consumes the same `returned.deps` / return-source
   facts (not a parallel derivation) so the two backends cannot diverge.
 
+## 6h-update-2 — Edge B fix attempts mapped (dead ends ruled out)
+
+A full session narrowed the Edge-B fix to a precise shape and ruled out the
+tempting wrong turns — recorded so the next session does not re-walk them:
+
+- **Why the type-keyed vector arm never fires for enc:** its match tail types as
+  `t = Never` (diverging arms), and `block_result`'s vector handling matches on `t`,
+  not the declared `result` (=Vector). A new branch keyed off `result` when
+  `t==Never && tail-terminal-is-branch` DOES fire.
+- **Whole-tail materialize** (`append(__retbuf, <whole If>)`): **interp goes fully
+  clean** (correct + no leak) but **native E0425** — the `If` sits in
+  `let _av_s = <If>` expression position, and `pre_declare_branch_vars` emits `let`
+  STATEMENTS that cannot live there. Dead end unless the native append-source
+  pre-declares branch vars at a statement scope.
+- **Per-arm materialize** (rewrite each arm to `clear+append(buf,_vec)+buf`): the
+  descent used `Block.operators.last()`, but an arm's result `_vec_N` is the block's
+  tracked result; got the shape wrong and leaked header + backing. The delivery ops
+  must be APPENDED to the arm (after its build ops), not replace a terminal.
+- **Relaxing `unify_if_branches_work_refs` to accept `_vec_` terminals** (so enc's
+  arms unify and ride the return-`if` path): the arms DO unify, values stay correct
+  on both backends — **but the interp leak is unchanged** (3 `kt=65535` backings).
+  Unification alone is not sufficient.
+- **Conclusion — the leak is interp store-lifecycle, not parser/codegen.** Values are
+  correct on both backends; `free_named` frees the `kt=68` vector HEADER but not its
+  separate `kt=65535` backing (from `OpPreAllocVector`) for a *transferred* vector
+  (an NRVO'd vector frees its backing; native's adopt frees it). The durable fix is
+  (a) true NRVO delivery — per-arm append into `__retbuf` with the correct arm-result
+  accessor (not `operators.last()`) — or (b) an interp-side header→backing cascade in
+  the vector free path (idempotent via the `store.free` no-op, scoped to NOT
+  double-handle the NRVO'd common case). A focused interp-lifecycle item, separate
+  from the now-shipped parser/codegen correctness.
+
 ---
 
 ## See also
