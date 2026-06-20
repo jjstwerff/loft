@@ -103,6 +103,41 @@ Either way the enforced invariant is the same (null-init dominates free); the
 instrument picks which of the two homes to fix it in. The #306 co-occurrence
 should fall out of the same fix (the stale slot decoded to a stack-store ref).
 
+## Stage D — instrument result + the refined fix (in progress)
+
+**Instrument run done** (temporary `eprintln` in `store_confinement`, reverted):
+on probe 04 it printed **nothing** → `store_confinement` does NOT classify
+`__vdb_1`. So hypothesis (b) confinement/relocation is **RULED OUT**; (a) the
+codegen/scope null-init gap is confirmed.
+
+**The chokepoint is `run_scan_phase`'s `lift_vars` prepend** (`scopes.rs` ~144):
+it already does exactly the right thing — `for v in lift_vars { bl.operators.insert(0, v_set(v, Null)) }`
+— "assigned inside conditional branches but their `OpFreeRef` lives at function
+exit; prepend the null-inits so codegen reserves their slot along every path."
+But `lift_vars` is populated ONLY by `scan_args` (the `__lift_N` inline-arg path,
+~1951). A conditionally-defined `__vdb` freed at fn scope is the same shape and
+is NOT added → no prepended null-init → the bug.
+
+**Refinement (the part that makes this load-bearing, not a one-liner):** `x`'s
+store is freed **per-iteration** — the pre-Set free of `x = null` reads `x`'s dep
+(`__vdb_1`) every loop pass — while `__vdb_1` is REUSED across iterations. So a
+single fn-entry `__vdb_1 = null` (the plain `lift_vars` prepend) null-inits only
+the FIRST pass; after the store is freed on a later pass, the slot still names the
+freed store → a subsequent pre-Set free is a **double-free**. The full invariant
+therefore has two halves:
+  1. **entry**: the slot is the null sentinel before its first free (the
+     `lift_vars` prepend, extended to this `__vdb` shape); AND
+  2. **post-free**: a free that consumes a slot **resets it to the null sentinel**,
+     so the next (stale) read is a no-op.
+Half (2) is the robust, all-paths form (it covers reuse + any future producer);
+it is also the higher double-free risk, so it must be matrix-validated, not
+guessed. Candidate sites: the free op (`fill.rs`/`Stores::free` — write the
+sentinel back after freeing) and/or the `lift_vars` extension for half (1).
+
+**Next concrete step:** boundary matrix varying {conditional, unused, nested,
+reuse-count, single-vs-multi-store} on `--interpret` + `--native`; implement
+half (1)+(2) at the chokepoint; verify no double-free via the gates below.
+
 ## Stage D (implementation) — validation gates
 
 A codegen/scope change on the free path is load-bearing. Gates: probe 04 +
