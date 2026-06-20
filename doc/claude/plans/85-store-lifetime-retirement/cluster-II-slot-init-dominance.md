@@ -138,6 +138,45 @@ sentinel back after freeing) and/or the `lift_vars` extension for half (1).
 reuse-count, single-vs-multi-store} on `--interpret` + `--native`; implement
 half (1)+(2) at the chokepoint; verify no double-free via the gates below.
 
+## Stage D — boundary matrix + half-1 attempt (DECISIVE: half-2 is required)
+
+**Boundary matrix** (`probes/05-matrix-*`, hand-computed expected = "completes
+cleanly", `--interpret`, pre-fix):
+
+| Cell | conditional | unused | nested | result |
+|---|---|---|---|---|
+| A | ✓ | ✓ | ✓ | **SIGSEGV** |
+| B | — (always assign) | — | ✓ | ✅ ok (control) |
+| C | ✓ | — (reads x) | ✓ | ✅ ok (control) |
+| D | ✓ | ✓ | — (single loop) | BUG #405 (refused, exit 0) |
+| E | ✓ | — (reads x) | ✓ | ✅ ok (control) |
+| F | ✓ | ✓ | ✓ (8×8) | **SIGSEGV** |
+
+Boundary: **conditional × unused** triggers (D); **nesting escalates to SIGSEGV**
+(A/F). B/C/E are passing controls — the matrix is calibrated (can fail AND pass).
+
+**Half-1 attempt (reverted):** extended the `lift_vars` prepend to add a
+fn-entry `__vdb_1 = null` for any heap var freed at the top level but defined
+only nested. IR confirmed the prepend fired (`__vdb_1 = null` at fn entry) — but
+A/D/F **still crashed**. This is the decisive result: the crashing free is NOT
+the fn-exit `OpFreeRef(__vdb_1)` — it is the **per-iteration pre-Set free** of
+`x = null` (the keyed reassign frees x's prior store via the dep slot every loop
+pass). Half-1 fixes the FIRST free only; on a later pass `x = null` frees the
+reused store A, leaving `__vdb_1` naming the freed A, so the NEXT `x = null`
+**double-frees A** → SIGSEGV.
+
+**Therefore the invariant's half-2 is REQUIRED, not optional:** *a free that
+consumes a slot must reset that slot to the null sentinel*, so the next read of
+the reused dep slot is a no-op. Fix site = the **keyed-reassign pre-Set free**
+(the `x = null` / `OpReplaceKeyed` + `remove_claims` path, `allocation.rs` /
+codegen): after freeing x's store, write `DbRef{u16::MAX}` back into the dep slot
+(`__vdb_1`). Half-1 (entry sentinel) is still needed for the very first free.
+
+This modifies the reassign/free path for ALL keyed locals → whole-language
+double-free risk → it must run the FULL validation harness below, not just the
+matrix. Half-1 was reverted (unvalidated + insufficient alone); the design
+(half-1 + half-2) is recorded here.
+
 ## Stage D (implementation) — validation gates
 
 A codegen/scope change on the free path is load-bearing. Gates: probe 04 +
