@@ -126,6 +126,7 @@ ownership — each is a type fact that should drive codegen mechanically.
 
 ## See also
 
+- [OWNERSHIP_MODEL.md](OWNERSHIP_MODEL.md) — the north star this method serves: `deps` as loft's borrow checker (Rust as the reference model); the store-lifetime bug class as holes to close
 - [COMPILER.md](COMPILER.md) — lexer/parser/two-pass/IR/types/bytecode
 - [INTERMEDIATE.md](INTERMEDIATE.md) — Value/Type enums, bytecode ops, State layout
 - [SLOTS.md](SLOTS.md) — stack-slot assignment
