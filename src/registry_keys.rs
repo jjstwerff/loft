@@ -21,27 +21,30 @@
 //!
 //! ## Current trust roots
 //!
-//! Today this list is intentionally **empty** — no production registry
-//! exists yet (R3 bootstrap pending).  When the
-//! `loft-lang/registry` repo is bootstrapped:
+//! The list is **bootstrapped** (REGISTRY_BOOTSTRAP.md § Step 1.5) and holds
+//! several INDEPENDENT keys: a client accepts a signature from ANY of them, so
+//! signers are added or revoked without rotating the others.  Two kinds:
 //!
-//! 1. Maintainers generate an Ed25519 keypair offline.
-//! 2. The 32-byte public key is hex-encoded and added to
-//!    `TRUSTED_PUBLIC_KEYS` below.
-//! 3. The private half is stored as a `loft-lang/registry` repo
-//!    secret + a backup copy in the maintainers' password manager.
-//! 4. A loft minor release ships the binary with the new
-//!    constant; future binaries built from this source tree pick it
-//!    up automatically.
+//! - **YubiKey on-card keys** — non-extractable, high-assurance; used for
+//!   release signing where the hardware token is to hand.
+//! - **Per-laptop software signers** — one unique Ed25519 key per maintainer
+//!   laptop (`~/.loft/trust-root/registry-signing-key.bin` on each), so a
+//!   laptop can sign/release remotely WITHOUT YubiKey access.  Each is labelled
+//!   by its machine below.
 //!
-//! Until step 2 lands, clients invoking signature-verified flows
-//! (R4+) MUST be passed `--allow-unsigned` explicitly — otherwise
-//! the install refuses to proceed.  This is by design: a missing
-//! trust root is a configuration error, not a "trust everything"
-//! signal.
+//! Add a signer: generate its keypair (`loft-keygen generate`), append the
+//! 32-byte public key here, ship a loft release — future binaries trust it
+//! automatically.  Revoke a lost/retired laptop: delete just its entry and ship
+//! a release; the others keep signing.  The private halves NEVER enter this
+//! file or the repo.
+//!
+//! When this list is empty (a fresh tree before bootstrap), clients invoking
+//! signature-verified flows MUST pass `--allow-unsigned` explicitly — a missing
+//! trust root is a configuration error, not a "trust everything" signal.
 
-/// 32-byte Ed25519 public keys embedded at compile time.  Empty until
-/// R3 bootstrap.  Format: `[key_bytes; 32]` per entry.
+/// 32-byte Ed25519 public keys embedded at compile time, one entry per
+/// trusted signer (YubiKey or per-laptop software key).  Format:
+/// `[key_bytes; 32]` per entry; a signature verifies if it matches ANY entry.
 ///
 /// `&'static [[u8; 32]]` keeps the type explicit so adding a key is
 /// just appending a new 32-byte literal — no allocations, no parsing,
@@ -57,6 +60,15 @@ pub const TRUSTED_PUBLIC_KEYS: &[[u8; 32]] = &[
         0xa8, 0x8b, 0xb7, 0xc5, 0x45, 0x46, 0x8c, 0xd5, 0x44, 0x79, 0xa3, 0x9e, 0x3b, 0x29, 0x73,
         0x91, 0xa9, 0xc6, 0x2e, 0x17, 0x79, 0xfb, 0xe9, 0xdf, 0x2f, 0x35, 0xdf, 0xf2, 0xa4, 0x51,
         0xc0, 0x75,
+    ],
+    // K_laptop_tuxedo — per-laptop software daily-signer on the `tuxedo` machine
+    // (~/.loft/trust-root/registry-signing-key.bin there).  Lets that laptop sign
+    // releases remotely without YubiKey access; revoke by deleting this entry +
+    // shipping a release (the other signers keep working — no rotation).
+    [
+        0x48, 0xdc, 0xff, 0xef, 0x19, 0x01, 0xef, 0xe4, 0xa5, 0x42, 0x6a, 0x8f, 0xd5, 0x38, 0xfc,
+        0x76, 0xd5, 0xe5, 0x3f, 0xb2, 0x64, 0x17, 0xbe, 0xdf, 0x7e, 0x0e, 0xf9, 0xd3, 0x26, 0x6e,
+        0x9d, 0x50,
     ],
     // K_yubiA — on-card, non-extractable (YubiKey serial 37327945, PIV slot 9C)
     [
