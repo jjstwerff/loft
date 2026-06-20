@@ -150,6 +150,15 @@ repro + investigation; do not assume this fix closes it.
 
 ## 5. Types / ownership annotations that make it work
 
+> **The type-system change is designed in full in
+> [type-ownership-design.md](type-ownership-design.md)** — heap-return ownership as
+> a computed type fact (the return type's `Deps`: owned/transferred vs
+> borrows-attr), the match/if reconciliation that `returned_var` can't express, and
+> how both codegen consumers (caller adopt-vs-copy; callee free-or-not) collapse to
+> mechanical reads. Per [CODEGEN_METHOD.md](../../CODEGEN_METHOD.md): the codegen
+> complexity below is the symptom; that doc is the type-system fix. The notes here
+> are the original sketch.
+
 - `__retbuf` is an **out-parameter**: the callee writes it but does NOT own it →
   marked **borrowed / skip-free** in the callee's scope analysis (its scope-exit
   must emit no `OpFreeRef(__retbuf)`).
