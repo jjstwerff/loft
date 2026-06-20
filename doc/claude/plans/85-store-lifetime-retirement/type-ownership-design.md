@@ -208,6 +208,37 @@ Result:
 (The change is reverted on the branch — it breaks native *compile*, so it can't
 land until sub-step 2 lands with it.)
 
+## 6c. Rung: borrow-of-param return — the caller-side answer (TESTED)
+
+The decisive test for "is the type good enough, or do we need more detail":
+`fn id(v: vector<u8>) -> vector<u8> { return v; }`, then `a = id(x)`.
+
+- **Runtime, both backends:** `a` **aliases** `x` — after `x += [9]`, `len(a)`
+  becomes 4 (not 3). Binding a borrow-of-param result *adopts* the param's store
+  instead of COPYING it — a value-semantics violation (a plain `b = a` deep-copies;
+  `a = id(x)` does not). A real latent bug, same ownership family.
+- **The type carries NO borrow fact:** `id`'s introspected signature is
+  `-> vector<integer(0, 255)>` with an **empty return dep** — it does NOT say
+  "borrows attr `v`", even though it returns `v`. A borrow-return is
+  indistinguishable from an owned-return at the type level.
+
+So the caller, reading the (empty) return dep, concludes "owned → adopt" and
+aliases. **This is the one place we genuinely need more detail.** The `Deps`
+MECHANISM exists (it can express `DepEntry::Attr(v)`), but for RETURNS it is **not
+populated**: a return that aliases a parameter must record that attr on the return
+type. The fix is therefore "compute + carry the return-ownership dep correctly"
+(owned ⇒ empty; borrows param `v` ⇒ `{Attr(v)}`), not a new type kind — but it IS a
+real addition of detail to what the return type states today (which is nothing).
+
+Net for the evaluation:
+- **Callee side (free-on-return, rung 0):** type system already good enough — the
+  facts were present; the gap was an incomplete traversal (`returned_var`). No new
+  detail.
+- **Caller side (adopt-vs-copy):** NOT good enough today — the return type omits
+  the borrow-of-param fact, so adopt-vs-copy can't be decided and borrow-returns
+  alias. Needs the return-ownership dep **computed and carried** (the missing
+  detail). Then the caller reads it: empty ⇒ adopt, `{Attr(a)}` ⇒ copy.
+
 ## 7. Open questions to verify against the implementation
 
 - Exact current contents of `Definition.returned` for `enc`/`mk` (is the dep empty,
