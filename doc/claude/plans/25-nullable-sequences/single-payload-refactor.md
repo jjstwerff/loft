@@ -102,11 +102,23 @@ None block the releasable gate-OFF state.  Roots:
   gotcha).  Under the ACTUAL flip (gate dropped, no cache mismatch) it PASSES — confirmed: the real
   flip suite is **2413/2417, 4 failures** and moros_glb is GONE.
 
-**TRUE flip tail (gate dropped, 2026-06-20): 4 = imaging + native_scripts(371,86) + loft_suite(184).**
-184 is FLIP-MECHANICAL (the nullable model makes undefended div-zero produce null by design — the
-warning says so; `@EXPECT_FAIL` updates when the gate drops, Option A).  So the real PRE-FLIP CODE work
-is THREE bugs: imaging (real native nullable-vector SIGSEGV — release-only UB, debug build exits 101
-silently), 371 (two-pass parse-order), 86 (native interface-method on a generic type-var → `todo!`).
+**TRUE flip tail (gate dropped): WAS 4, NOW 2 code bugs + 1 flip-mechanical.**  Progress 2026-06-20:
+- **86 FIXED (`9e15cad8`)** — `re_resolve_call` (mod.rs) now unwraps a `__nullable<S>` receiver to S's
+  concrete method (mirroring the interface-satisfaction unwrap at mod.rs:2290).  A bounded-generic
+  `for x in v: vector<T>` then `x.method()` (T→IfItem → element `__nullable<IfItem>`) was resolving to
+  the parametric stub `t_1T_<m>` (native `todo!()`) instead of `t_6IfItem_<m>`.  Both backends green.
+- **184 FLIP-MECHANICAL** — the nullable model makes undefended div-zero produce null by design (the
+  warning says so); `@EXPECT_FAIL` updates when the gate drops (Option A).  Not a code fix.
+- **REMAINING (2 code bugs):**
+  - **371** — a LOCAL `vector<S>` of a FORWARD-ref struct bakes a size-0 stride / MAX payload offset:
+    the synth `__nullable<S>` enum is created during pass-2 body parse and is NOT laid out when the
+    field-access bytecode bakes (the field-access bakes during PARSE; the only on-demand layout site,
+    `vector_db`, runs at CODEGEN — too late).  FIX: lay the synth enum out at FIELD-ACCESS time
+    (field(), when the `Some` variant is unregistered), via a TARGETED `finish_type` (the full
+    `finish()` corrupts keyed bookkeeping — reverted attempt).  Bounded next-session work.
+  - **imaging** — native cdylib FFI: the `loft_imaging` extension SIGSEGVs gate-on even when freshly
+    rebuilt (the FFI boundary doesn't account for the `__nullable<S>` element layout of image-pixel
+    vectors).  Hardest item.
 - **`wrap::loft_suite`** — 184 stale `@EXPECT_FAIL` div-zero annotation; resolves AT the flip
   (update the annotation when gate-on becomes default — can't pre-fix without breaking gate-off).
 
