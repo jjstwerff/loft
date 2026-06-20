@@ -6,9 +6,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # Stage C — design: the move / output-buffer calling convention for heap returns
 
 **Status:** design (not implemented). This is the *target* the implementation must
-produce, written and validated BEFORE touching loft's compiler. Method (per the
-ticket's direction): design the correct bytecode + types → prototype it standalone
-→ only then change the code to emit it. No poke-and-revert on the return path.
+produce, written and validated BEFORE touching loft's compiler. Method: the
+project-wide [CODEGEN_METHOD.md](../../CODEGEN_METHOD.md) — bytecode → types → code,
+per scale, with the working bytecode proven beside the broken one first, and codegen
+kept OBVIOUS (the decision lives in the types, not in on-the-spot heuristics). This
+plan is that method's first canonical application. No poke-and-revert on the return
+path.
 
 **Why this doc exists:** attempts 1–9 (see
 [cluster-II](cluster-II-slot-init-dominance.md)) each patched a symptom and
