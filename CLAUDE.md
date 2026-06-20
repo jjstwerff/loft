@@ -52,6 +52,26 @@ make index                                    # rebuild index/tags.json (plan-37
 make view                                     # branch-aware doc + code viewer (plan-35; SSH port-forward 8765)
 ```
 
+### Bounding a run — `--timeout` / `LOFT_TIMEOUT` (@PLAN49)
+
+loft runs **unbounded by default** — that is deliberate, so long-running programs
+(servers, game loops) work. There is **no** process-wide default timeout, and we do
+not want one. **Testing, by contrast, runs under a timeout:** `loft test` / `--tests`
+already arms the watchdog at 300s.
+
+So when YOU run loft ad-hoc — a probe, a one-shot script, and especially
+`--native` (which compiles via `rustc` and can hang) — **bound it yourself** so a
+runaway can't hang your session:
+
+```bash
+LOFT_TIMEOUT=60 loft --native prog.loft        # env form (floor; arms at startup)
+loft --timeout 60 prog.loft                     # flag form (0 = disabled)
+```
+
+The watchdog is a process-level hard-kill thread (covers the `--native` compile
+*and* execution); it kills at `timeout + grace` (grace default 2s,
+`LOFT_TIMEOUT_GRACE`). Full reference: [DEBUG.md § Bounding a run](doc/claude/DEBUG.md) and TESTING.md.
+
 <!-- noindex region: don't migrate the bare-name examples that explain the convention. -->
 ## Tracker tags (plan-37) <!--noindex-->
 

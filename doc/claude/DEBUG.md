@@ -649,6 +649,36 @@ runner will pick it up automatically.
 
 ---
 
+## Bounding a run — `--timeout` / `LOFT_TIMEOUT` (@PLAN49)
+
+**loft has no process-wide default timeout, by design.** Long-running programs —
+servers, game loops, anything that should run until interrupted — must be able to
+run unbounded, so we will not add a default. **Testing is the exception:** `loft
+test` / `--tests` arms the watchdog at 300s automatically (a hung test or looping
+compile in the suite can't be killed interactively).
+
+When you run loft **ad-hoc** in an agent session — a `/tmp` probe, a one-shot
+script, and especially `--native` (it shells out to `rustc`, which can hang on a
+pathological program) — **bound it yourself**, or a runaway hangs the session:
+
+```bash
+LOFT_TIMEOUT=60 loft --native prog.loft     # env form — arms at startup, is the floor
+loft --timeout 60 prog.loft                  # flag form — re-arms; 0 disables
+LOFT_TIMEOUT_GRACE=5 LOFT_TIMEOUT=60 loft …  # grace before the hard kill (default 2s)
+```
+
+Mechanics (`src/timeout.rs`): `arm(secs, grace)` spawns a `loft-watchdog` thread
+that sleeps to `secs + grace`, prints a breadcrumb, and **process-aborts** — so it
+bounds the WHOLE process: the `--native` compile, the interpreter loop, everything.
+`arm` is idempotent (first deadline wins) and `secs == 0` leaves it disarmed (the
+default for ad-hoc runs — hence the hang risk). `LOFT_TIMEOUT` is read before argv,
+so it is the floor; an explicit `--timeout` only re-arms if nothing armed yet.
+
+Rule of thumb: **server/long-task run → unbounded; test or throwaway probe →
+always pass `LOFT_TIMEOUT`.**
+
+---
+
 ## Tracker-tag indexer (`make index` + `./scripts/idx`)
 
 The tracker-tag indexer (@PLN42) maintains
