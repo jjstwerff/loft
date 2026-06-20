@@ -110,12 +110,23 @@ None block the releasable gate-OFF state.  Roots:
 - **184 FLIP-MECHANICAL** — the nullable model makes undefended div-zero produce null by design (the
   warning says so); `@EXPECT_FAIL` updates when the gate drops (Option A).  Not a code fix.
 - **REMAINING (2 code bugs):**
-  - **371** — a LOCAL `vector<S>` of a FORWARD-ref struct bakes a size-0 stride / MAX payload offset:
-    the synth `__nullable<S>` enum is created during pass-2 body parse and is NOT laid out when the
-    field-access bytecode bakes (the field-access bakes during PARSE; the only on-demand layout site,
-    `vector_db`, runs at CODEGEN — too late).  FIX: lay the synth enum out at FIELD-ACCESS time
-    (field(), when the `Some` variant is unregistered), via a TARGETED `finish_type` (the full
-    `finish()` corrupts keyed bookkeeping — reverted attempt).  Bounded next-session work.
+  - **371** — a LOCAL `vector<S>` of a FORWARD-ref struct: the synth `__nullable<S>` enum is created
+    during pass-2 body parse, AFTER `fill_all`'s registration, so it is unregistered when the
+    construction + read bake their offsets/strides.  **2026-06-20 attempt (reverted) — TWO of the
+    three sub-problems SOLVED, one remains:**
+    (a) PAYLOAD OFFSET ✓ — an on-demand `register_and_lay_out_synth` called from the inferred-literal
+    PEEK (vectors.rs, the EARLIEST site — before both the construction and the read bake) made the
+    `OpGetField`/`OpSetInt` payload offset bake correctly as **8** (was MAX); proven in the IR.
+    (b) `Some` variant SIZE ✓ — a TARGETED `lay_out_synth` (`finish_type` on just the `Some`+enum, NOT
+    the full `finish()` which corrupts keyed bookkeeping at types.rs:1756) laid the `Some` out at 16.
+    (c) ENUM SIZE ✗ (the blocker) — the synth ENUM's size stays **0** → the vector STRIDE + the
+    `OpCopyRecord` element size stay 0 → the element is never copied → `v[0].field == 0`.  Root: the
+    piecemeal `register_enum_db` + `fill_database(variants)` sequence does NOT propagate the `Some`
+    variant's db type into the enum's `Parts::Enum` variant CONTENT (stays MAX), so `finish_type`'s
+    enum-size = max(variant sizes) can't see the 16.  The canonical link is `fill_database`'s
+    EnumValue arm (typedef.rs:591-594, `database.enum_value(enum_tp, name, known_type)`) but in the
+    on-demand order it didn't take.  NEXT: replicate `fill_all`'s exact synth-enum layout order, or
+    find why `enum_value` doesn't update `Parts::Enum` here.
   - **imaging** — native cdylib FFI: the `loft_imaging` extension SIGSEGVs gate-on even when freshly
     rebuilt (the FFI boundary doesn't account for the `__nullable<S>` element layout of image-pixel
     vectors).  Hardest item.
