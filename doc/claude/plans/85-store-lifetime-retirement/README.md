@@ -87,6 +87,7 @@ no leak (`LOFT_STORES=warn`) + bounded runtime.
 | `02-enum-fields-in-vector.loft` | struct w/ 1 & 2 variable-sourced enum fields, appended to a vector | III (#406) | ✅ **PASS on current main** — #412 fully closed the #406 shape (the "still corrupt" in its thread was the pre-merge WIP). Control (direct read) proves non-vacuous. |
 | `03-copy-claims-breadth.loft` | struct w/ vector field, sub-struct field; nested `vector<vector>` appended | II/III breadth | ✅ **PASS** — `copy_claims` deep-copies these field kinds correctly; sibling #2 (copy_claims family) closed for reachable shapes |
 | `04-slot-init-405.loft` | heap local conditional × unused × nested loop (#405 shape) | II (#405) | 🔴 **LIVE — interpret SIGSEGV on current main.** VERIFIED (debugger): `OpFreeRef(ki)` double-frees the NRVO return-buffer alias `__ref_1` via a stack-ref (store_nr=8·(rec−1) > len → #405/#306). native completes. Can't graduate while it crashes. (filename predates the corrected mechanism.) |
+| `05-enum-arg-vector-return-aliasing.loft` | **REAL-CONSUMER (cbor):** `fn(enum) -> vector` called N times, results held live | II | 🔴 **LIVE — BOTH backends.** Every held result aliases the same NRVO return buffer → all read the LAST call's value (interp) / garbage (native). The minimal/broad cluster-II trigger (no conditional/unused/nested); root cause of the cbor map-encode corruption. See [cluster-II § Real-consumer extraction](cluster-II-slot-init-dominance.md). |
 
 ## Roadmap (next session)
 
