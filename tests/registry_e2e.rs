@@ -638,3 +638,81 @@ fn end_to_end_install_with_transitive_dep() {
     let _ = fs::remove_dir_all(&home_dir);
     let _ = fs::remove_dir_all(&install_cwd);
 }
+
+// ── loft search S4 — offline cache fallback ───────────────────────
+
+/// PKG.REG R8 (search S4): when the registry is unreachable but a cached index
+/// exists, the read-only discovery loader serves the cache and flags it
+/// (`stale_fallback`), while the install-path loader still surfaces the error
+/// — the contained-blast-radius invariant for the fallback.
+#[test]
+fn load_index_reporting_falls_back_to_cache_when_registry_unreachable() {
+    let tmp = tmpdir("search_offline_fallback");
+
+    let index_json = r#"{
+        "schema_version": 1,
+        "updated": "2026-06-19T00:00:00Z",
+        "packages": {
+            "regex": {
+                "description": "Regular expressions",
+                "categories": ["text"],
+                "versions": {
+                    "0.2.0": {
+                        "url": "https://example.com/regex-0.2.0.tar.gz",
+                        "sha256": "abc",
+                        "size": 1,
+                        "loft": ">=0.8",
+                        "triggers": ["matches:text"],
+                        "published": "2026-06-19T00:00:00Z"
+                    }
+                }
+            }
+        }
+    }"#;
+
+    let mut files = HashMap::new();
+    files.insert("/index.json".to_string(), index_json.as_bytes().to_vec());
+    let server = FixtureServer::new(files);
+
+    let home_dir = tmpdir("search_offline_home");
+    let (_home, _lh) = HomeGuard::set(&home_dir);
+
+    let opts = loft::install::InstallOptions {
+        allow_unsigned: true,
+        refresh: true, // force a fetch attempt each call (bypass the TTL)
+        offline: false,
+        allow_prerelease: false,
+        lock_path: None,
+    };
+
+    // 1. Reachable registry → fresh fetch primes the cache; not a fallback.
+    {
+        let (_reg, _lr) = RegUrlGuard::set(&server.url_for("/index.json"));
+        let loaded = loft::install::load_index_reporting(&opts).expect("fresh fetch");
+        assert!(!loaded.stale_fallback, "a fresh fetch is not a fallback");
+        assert!(loaded.index.packages.contains_key("regex"));
+    }
+
+    // 2. Unreachable registry (dead port) + refresh → fall back to the primed
+    //    cache, flagged stale.
+    {
+        let (_reg, _lr) = RegUrlGuard::set("http://127.0.0.1:1/index.json");
+        let loaded =
+            loft::install::load_index_reporting(&opts).expect("cache fallback on fetch failure");
+        assert!(
+            loaded.stale_fallback,
+            "unreachable registry + primed cache must report stale_fallback"
+        );
+        assert!(loaded.index.packages.contains_key("regex"));
+
+        // The install-path loader must NOT silently use the stale cache.
+        assert!(
+            loft::install::load_index(&opts).is_err(),
+            "load_index (install path) must surface the fetch error, not fall back"
+        );
+    }
+
+    drop(_home);
+    let _ = fs::remove_dir_all(&tmp);
+    let _ = fs::remove_dir_all(&home_dir);
+}

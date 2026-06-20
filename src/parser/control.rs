@@ -677,19 +677,12 @@ impl Parser {
         if self.data.def_type(self.context) != DefType::Generic {
             if let Type::Text(ls) = t {
                 self.text_return(ls);
-            } else if let Type::Vector(_, ls) = t {
+            } else if let Type::Vector(elm, ls) = t {
                 if ls.is_empty() && !l.is_empty() {
                     // Issue #120 mirror (see the Reference arm below): when
                     // filter_hidden stripped the deps, recover the tail
                     // call's work refs so the site still binds to the one
-                    // buffer.  ONLY when the callee actually returns VIA
-                    // that buffer (its returned deps are non-empty): a
-                    // wrapper of a buffer-IGNORING callee (`fn f() -> vector
-                    // { stack_trace() }` — the native call returns its own
-                    // store and never writes the passed buffer) must stay
-                    // unpromoted, or chaining a grand-caller's buffer
-                    // through it orphans that buffer (#355 follow-up leak,
-                    // 55-stack-trace).
+                    // buffer.
                     let last = &l[l.len() - 1];
                     let extra = Self::collect_hidden_ref_args(last, &self.data);
                     // Chain the wrapper into its callee's buffer — UNLESS the
@@ -702,9 +695,71 @@ impl Parser {
                     // only when the callee itself re-parses).
                     let callee_forwards = matches!(last.unspan(), Value::Call(d, _)
                         if self.callee_forwards_foreign_store(*d));
+                    // #409: a NATIVE / `#rust` decl with a heap return delivers
+                    // its OWN store and never writes the `__retbuf` it was
+                    // handed.  Leaving the forward returns that foreign value
+                    // with `__retbuf` empty, so the caller's later in-place
+                    // `+=` rebuilds the empty buffer and drops the data.  Such
+                    // a callee is PASS-STABLE (always `code==Null` + a symbol
+                    // set, identical in both parse passes — unlike a loft
+                    // forward ref, whose body is unparsed in pass 1), so it is
+                    // safe to mint a fresh local here: route the result through
+                    // it and COPY into `__retbuf` (clear + element-append) —
+                    // the delivery shape a hand-written `r = native(); r`
+                    // produces (which makes a downstream `+=` correct).
+                    // Copying (not chaining) keeps the #355 orphan impossible.
+                    let native_forwarder = matches!(last.unspan(), Value::Call(d, _) if {
+                        let cd = self.data.def(*d);
+                        *cd.code() == Value::Null
+                            && (!cd.native().is_empty() || !cd.rust().is_empty())
+                            && matches!(
+                                cd.returned(),
+                                Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+                            )
+                    });
                     if !extra.is_empty() && !callee_forwards {
                         self.ref_return(&extra, l, RetSite::BlockTail);
                         self.nrvo_collapse_tail_set(l, &extra);
+                    } else if native_forwarder {
+                        let elm_ty = (**elm).clone();
+                        if let Some((buf_attr, buf_var)) = self.return_buffer() {
+                            let fwd = self.create_var(
+                                "__fwd",
+                                &Type::Vector(Box::new(elm_ty.clone()), Deps::none()),
+                            );
+                            if fwd != u16::MAX {
+                                let rec_tp = self.append_elem_tp(&elm_ty);
+                                let clear = self.cl("OpClearVector", &[Value::Var(buf_var)]);
+                                let append = self.cl(
+                                    "OpAppendVector",
+                                    &[Value::Var(buf_var), Value::Var(fwd), Value::Int(rec_tp)],
+                                );
+                                if let Some(last) = l.last_mut() {
+                                    let orig = std::mem::replace(last, Value::Null);
+                                    let set_fwd = crate::data::v_set(fwd, orig);
+                                    *last = crate::data::v_block(
+                                        vec![set_fwd, clear, append, Value::Var(buf_var)],
+                                        Type::Vector(
+                                            Box::new(elm_ty.clone()),
+                                            Deps::frame1(buf_var),
+                                        ),
+                                        "fwd_copy_409",
+                                    );
+                                    // Finalize the fn's return-type dep to the
+                                    // `__retbuf` attribute — the same step
+                                    // `ref_return` does at its tail (Type::Vector
+                                    // (it, Deps::attrs([buf_attr]))).  Without it
+                                    // the signature stays bare-vector, so a caller
+                                    // (which can only consult the signature) does
+                                    // NOT bind its result var to the buffer it
+                                    // passed and instead rebuilds a fresh empty
+                                    // one — the exact `+=`-drops-data symptom.
+                                    let dep = Deps::attrs(vec![buf_attr]);
+                                    self.data.definitions[self.context as usize].returned =
+                                        Type::Vector(Box::new(elm_ty), dep);
+                                }
+                            }
+                        }
                     }
                 } else {
                     self.ref_return(ls, l, RetSite::BlockTail);

@@ -226,8 +226,9 @@ fn print_help() {
     );
     println!("  search [query]                client-side search of the package registry");
     println!(
-        "                                matches name / description / categories (case-insensitive)"
+        "                                matches name / description / categories (case-insensitive);"
     );
+    println!("                                no query lists all; --json for machine output");
     println!("                                (PKG.REG R8)");
     println!(
         "  info <name>                   per-package details (versions, latest, deps, homepage)"
@@ -499,62 +500,178 @@ fn install_from_registry_with_opts(args: &[String], opts: &loft::install::Instal
     }
 }
 
-/// PKG.REG R8 — `loft search <query>`: client-side filter against
-/// the cached index.  Refreshes the index if the cache is stale (TTL
-/// reuses `loft install`'s code path).  Output: one line per matching
-/// `name X.Y.Z — description` row.
+/// PKG.REG R8 — `loft search [query]`: client-side filter against the cached
+/// index (reuses `loft install`'s fetch/verify path via `install::load_index`).
+/// Ranks hits exact-name > name-prefix > description/category; marks a package
+/// whose latest version declares lazy-load `triggers` with `⚡auto-use`; and
+/// prints a `loft install` hint under each hit when a query is given.  `json`
+/// emits the same result set as a JSON array for tooling.
 #[cfg(feature = "registry")]
-fn search_registry(query: &str) {
+fn search_registry(query: &str, json: bool) {
     use loft::install::InstallOptions;
     use loft::registry_index;
 
     let opts = InstallOptions {
         allow_unsigned: true,
-        refresh: false,
-        offline: false,
-        allow_prerelease: false,
-        lock_path: None,
+        ..Default::default()
     };
-    let index = match loft_install_load_index(&opts) {
-        Ok(i) => i,
+    let loaded = match loft::install::load_index_reporting(&opts) {
+        Ok(l) => l,
         Err(e) => {
             eprintln!("loft search: {e}");
             std::process::exit(1);
         }
     };
+    if loaded.stale_fallback {
+        eprintln!("loft search: registry unreachable — showing cached index");
+    }
+    let index = loaded.index;
+
+    // S8 — the stdlib's function-level surface, extracted from the binary's
+    // EMBEDDED `default/*.loft` at search time (one source of truth shared with
+    // the WASM runtime, no disk dependency): stdlib functions appear as hits
+    // identical in shape to a library's, and never bloat the fetched index.
+    let stdlib: Vec<registry_index::ApiItem> = loft::stdlib_sources::STDLIB_SOURCES
+        .iter()
+        .flat_map(|(_, content)| loft::documentation::extract_api_items(content))
+        .collect();
 
     let q = query.to_ascii_lowercase();
-    let mut hits: Vec<&loft::registry_index::Package> = index
-        .packages
-        .values()
-        .filter(|p| {
-            let name_match = p.name.to_ascii_lowercase().contains(&q);
-            let desc_match = p
-                .description
-                .as_deref()
-                .unwrap_or("")
-                .to_ascii_lowercase()
-                .contains(&q);
-            let cat_match = p
-                .categories
-                .iter()
-                .any(|c| c.to_ascii_lowercase().contains(&q));
-            q.is_empty() || name_match || desc_match || cat_match
-        })
-        .collect();
-    hits.sort_by(|a, b| a.name.cmp(&b.name));
+    let results = registry_index::search_results(&index, &stdlib, &q);
 
-    if hits.is_empty() {
-        println!("No packages match `{query}`.");
+    if json {
+        println!(
+            "{}",
+            loft::json::to_json_string(&search_results_json(&results))
+        );
         return;
     }
-    for pkg in hits {
-        let latest = registry_index::find_best_version(pkg, "*", false)
-            .map(|v| v.semver.clone())
-            .unwrap_or_else(|| "(no stable version)".to_string());
-        let desc = pkg.description.as_deref().unwrap_or("(no description)");
-        println!("{} {latest} — {desc}", pkg.name);
+
+    if results.is_empty() {
+        println!("No packages or functions match `{query}`.");
+        return;
     }
+    let querying = !q.is_empty();
+    for r in &results {
+        // S9 — package header (stdlib reads "built in", no version/install).
+        if r.is_stdlib {
+            println!("stdlib (built in)");
+        } else {
+            let marker = if r.auto_use { " ⚡auto-use" } else { "" };
+            let mut line = format!("{} {}{marker}", r.name, r.version);
+            if let Some(d) = r.description.as_deref().filter(|d| !d.is_empty()) {
+                line.push_str(" — ");
+                line.push_str(d);
+            }
+            if !r.categories.is_empty() {
+                line.push_str(&format!("  ({})", r.categories.join(", ")));
+            }
+            println!("{line}");
+        }
+        // The matching functions: what it does (doc) + how to call it (sig).
+        for item in &r.fns {
+            println!("    {}", item.sig);
+            // Display only the first line of the (now full) doc paragraph; the
+            // whole paragraph stays searchable and travels in `--json`.
+            if let Some(summary) = item.doc.lines().next().filter(|l| !l.is_empty()) {
+                println!("        {summary}");
+            }
+        }
+        // How to get it.
+        if querying {
+            if r.is_stdlib {
+                println!("    built in — use directly, no install");
+            } else {
+                println!("    → loft install {}", r.name);
+            }
+        }
+    }
+}
+
+/// One `loft search --json` record (S9): everything an agent needs to decide
+/// and call — `source` (`stdlib`|`registry`), `package`, `version`, `signature`
+/// (null for a metadata-only hit), one-line `doc`, and `get` (the install line,
+/// or "built in" for the stdlib).
+#[cfg(feature = "registry")]
+fn search_record(
+    source: &str,
+    name: &str,
+    version: &str,
+    signature: loft::json::Parsed,
+    doc: loft::json::Parsed,
+    get: &str,
+) -> loft::json::Parsed {
+    use loft::json::Parsed;
+    Parsed::Object(vec![
+        ("source".to_string(), 0, Parsed::Str(source.to_string())),
+        ("package".to_string(), 0, Parsed::Str(name.to_string())),
+        ("version".to_string(), 0, Parsed::Str(version.to_string())),
+        ("signature".to_string(), 0, signature),
+        ("doc".to_string(), 0, doc),
+        ("get".to_string(), 0, Parsed::Str(get.to_string())),
+    ])
+}
+
+/// Build the `loft search --json` payload (S9): a FLAT array of function-level
+/// records (see [`search_record`]).  Replaces the S0–S5 per-package shape: each
+/// matching function is its own record carrying its package context; a
+/// metadata-only hit contributes one `signature: null` record (description as
+/// `doc`) so nothing is dropped.
+#[cfg(feature = "registry")]
+fn search_results_json(results: &[loft::registry_index::SearchResult]) -> loft::json::Parsed {
+    use loft::json::Parsed;
+    let mut arr: Vec<Parsed> = Vec::new();
+    for r in results {
+        let source = if r.is_stdlib { "stdlib" } else { "registry" };
+        let get = if r.is_stdlib {
+            "built in — use directly".to_string()
+        } else {
+            format!("loft install {}", r.name)
+        };
+        if r.fns.is_empty() {
+            let doc = r.description.clone().map_or(Parsed::Null, Parsed::Str);
+            arr.push(search_record(
+                source,
+                &r.name,
+                &r.version,
+                Parsed::Null,
+                doc,
+                &get,
+            ));
+        } else {
+            for item in &r.fns {
+                arr.push(search_record(
+                    source,
+                    &r.name,
+                    &r.version,
+                    Parsed::Str(item.sig.clone()),
+                    Parsed::Str(item.doc.clone()),
+                    &get,
+                ));
+            }
+        }
+    }
+    Parsed::Array(arr)
+}
+
+/// The `api` array for one source dir, as `[{ "sig": …, "doc": … }, …]` — the
+/// shared shape the index `api` field carries and `loft api --json` emits, so
+/// the registry CI can re-derive it from source and reject a pasted mismatch
+/// (S7-CI).  Used by `loft publish` (the entry) and `loft api --json`.
+#[cfg(feature = "registry")]
+fn api_items_json(items: &[loft::registry_index::ApiItem]) -> loft::json::Parsed {
+    use loft::json::Parsed;
+    Parsed::Array(
+        items
+            .iter()
+            .map(|item| {
+                Parsed::Object(vec![
+                    ("sig".to_string(), 0, Parsed::Str(item.sig.clone())),
+                    ("doc".to_string(), 0, Parsed::Str(item.doc.clone())),
+                ])
+            })
+            .collect(),
+    )
 }
 
 /// PKG.REG R8 — `loft info <name>`: full info for one package.
@@ -572,13 +689,17 @@ fn package_info(name: &str) {
         allow_prerelease: false,
         lock_path: None,
     };
-    let index = match loft_install_load_index(&opts) {
-        Ok(i) => i,
+    let loaded = match loft::install::load_index_reporting(&opts) {
+        Ok(l) => l,
         Err(e) => {
             eprintln!("loft info: {e}");
             std::process::exit(1);
         }
     };
+    if loaded.stale_fallback {
+        eprintln!("loft info: registry unreachable — showing cached index");
+    }
+    let index = loaded.index;
 
     let Some(pkg) = index.packages.get(name) else {
         eprintln!("loft info: package `{name}` not found in registry");
@@ -751,7 +872,7 @@ fn api_registry_catalog(refresh: bool) {
         allow_prerelease: false,
         lock_path: None,
     };
-    match loft_install_load_index(&opts) {
+    match loft::install::load_index(&opts) {
         Ok(index) => print!("{}", loft::registry_index::render_catalog(&index)),
         Err(e) => {
             eprintln!("loft api --registry: {e}");
@@ -809,7 +930,7 @@ fn write_api_stubs(lock_path: &std::path::Path, project_dir: &std::path::Path) {
         allow_prerelease: false,
         lock_path: None,
     };
-    if let Ok(index) = loft_install_load_index(&opts) {
+    if let Ok(index) = loft::install::load_index(&opts) {
         let _ = std::fs::write(
             api_dir.join("_available.api"),
             loft::registry_index::render_catalog(&index),
@@ -856,7 +977,7 @@ fn list_installed() {
         allow_prerelease: false,
         lock_path: None,
     };
-    let index = loft_install_load_index(&opts).ok();
+    let index = loft::install::load_index(&opts).ok();
 
     println!("Installed packages (in {}):", cache.display());
     for (name, version, path) in &entries {
@@ -989,7 +1110,7 @@ fn update_packages(opts: &UpdateOpts) -> i32 {
         allow_prerelease: false,
         lock_path: Some(lock_path.clone()),
     };
-    let index = match loft_install_load_index(&install_opts) {
+    let index = match loft::install::load_index(&install_opts) {
         Ok(i) => i,
         Err(e) => {
             eprintln!("loft update: {e}");
@@ -1158,7 +1279,7 @@ fn bundle_export(outdir: &str, packages: Option<&[String]>, all: bool) -> i32 {
         allow_prerelease: false,
         lock_path: None,
     };
-    let index = match loft_install_load_index(&opts) {
+    let index = match loft::install::load_index(&opts) {
         Ok(i) => i,
         Err(e) => {
             eprintln!("loft bundle export: {e}");
@@ -2025,6 +2146,14 @@ fn publish_package(pkg_path: &std::path::Path, dry_run: bool) -> i32 {
         let quoted: Vec<String> = triggers.iter().map(|t| format!("\"{t}\"")).collect();
         println!("  \"triggers\": [{}],", quoted.join(", "));
     }
+    // Function-level API surface (S6/S7) — derived from ALL of the package's
+    // `src/*.loft` at publish time (the same `parse_pkg_api` extractor `loft api`
+    // uses), so `loft search` can surface THIS version's functions without the
+    // source.  Emitted automatically (nothing hand-written), the exact mirror of
+    // `triggers`; the registry CI re-derives + verifies it from source (S7), so
+    // the pasted field is a pure function of the code and cannot drift.
+    let api_json = api_items_json(&loft::documentation::pkg_api_items(pkg_path));
+    println!("  \"api\": {},", loft::json::to_json_string(&api_json));
     println!("  \"published\": \"{published}\"");
     println!("}}");
     println!();
@@ -2374,7 +2503,7 @@ fn pin_script(script: &str) {
         allow_prerelease: false,
         lock_path: None,
     };
-    let index = match loft_install_load_index(&opts_for_index) {
+    let index = match loft::install::load_index(&opts_for_index) {
         Ok(i) => i,
         Err(e) => {
             eprintln!("loft pin: {e}");
@@ -2440,72 +2569,6 @@ fn pin_script(script: &str) {
     // Keep registry_index in the symbol table so the cfg above
     // doesn't drop the import.
     let _ = registry_index::cache_dir();
-}
-
-/// Thin wrapper exposing `install::load_index`-equivalent for the
-/// `search` / `info` paths above without making `install::load_index`
-/// public (it's an internal helper of the install orchestrator).
-/// Re-fetches if cache stale, verifies signature per opts.
-#[cfg(feature = "registry")]
-fn loft_install_load_index(
-    opts: &loft::install::InstallOptions,
-) -> Result<loft::registry_index::RegistryIndex, String> {
-    use loft::registry_index;
-    use loft::registry_signing::{VerifyResult, verify_index};
-
-    let url = registry_index::registry_url();
-    let (idx_path, sig_path, _) = registry_index::index_paths();
-    let content_bytes: Vec<u8> = if opts.offline {
-        std::fs::read(&idx_path).map_err(|e| {
-            format!(
-                "offline mode: no cached index ({}): {e}",
-                idx_path.display()
-            )
-        })?
-    } else {
-        let stale = std::fs::metadata(&idx_path)
-            .ok()
-            .and_then(|m| m.modified().ok())
-            .and_then(|t| t.elapsed().ok())
-            .is_none_or(|age| opts.refresh || age.as_secs() > 60 * 60);
-        if stale {
-            let fetched = registry_index::fetch_index(&url)?;
-            if let Some(parent) = idx_path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            std::fs::write(&idx_path, &fetched.content).map_err(|e| format!("cache index: {e}"))?;
-            if !fetched.signature.is_empty() {
-                let _ = std::fs::write(&sig_path, &fetched.signature);
-            }
-            fetched.content
-        } else {
-            std::fs::read(&idx_path).map_err(|e| format!("read cached index: {e}"))?
-        }
-    };
-    let sig = std::fs::read(&sig_path).unwrap_or_default();
-    match verify_index(&content_bytes, &sig) {
-        VerifyResult::Valid => {}
-        VerifyResult::NoTrustRoot | VerifyResult::MalformedSignature if opts.allow_unsigned => {}
-        VerifyResult::Invalid => {
-            return Err("index signature INVALID — refusing to load (hard failure)".to_string());
-        }
-        VerifyResult::NoTrustRoot => {
-            return Err(
-                "registry index unsigned and this loft binary has no embedded trust root; \
-                 pass --allow-unsigned to proceed"
-                    .to_string(),
-            );
-        }
-        VerifyResult::MalformedSignature => {
-            return Err(
-                "registry index signature is malformed; pass --allow-unsigned to proceed"
-                    .to_string(),
-            );
-        }
-    }
-    let text = std::str::from_utf8(&content_bytes)
-        .map_err(|e| format!("index is not valid UTF-8: {e}"))?;
-    registry_index::parse_index(text)
 }
 
 #[cfg(feature = "registry")]
@@ -3923,8 +3986,13 @@ fn main() {
             // PKG.REG R8: client-side registry search.
             #[cfg(feature = "registry")]
             {
-                let query = argv.get(i).cloned().unwrap_or_default();
-                search_registry(&query);
+                let json = argv[i..].iter().any(|s| s == "--json");
+                let query = argv[i..]
+                    .iter()
+                    .find(|s| !s.starts_with('-'))
+                    .cloned()
+                    .unwrap_or_default();
+                search_registry(&query, json);
                 return;
             }
             #[cfg(not(feature = "registry"))]
@@ -3949,15 +4017,28 @@ fn main() {
                 std::process::exit(1);
             }
         } else if a == "api" {
-            // PKG.STUB — agent-facing discovery: list reachable libraries, or
-            // print one library's public surface.
+            // PKG.STUB — agent-facing discovery: list reachable libraries, print
+            // one library's public surface, or emit it as JSON (`--json`) for the
+            // registry CI's `api` re-derive (S7-CI).
             #[cfg(feature = "registry")]
             {
-                if argv[i..].iter().any(|s| s == "--registry") {
+                // First non-flag arg = the package dir (default cwd); robust to
+                // flag order (`loft api --json <dir>` or `loft api <dir> --json`).
+                let target = argv[i..].iter().find(|s| !s.starts_with('-')).cloned();
+                if argv[i..].iter().any(|s| s == "--json") {
+                    // The function-level surface as `[{ "sig":…, "doc":… }, …]` —
+                    // the registry `validate.py` runs this on the cloned source and
+                    // rejects a pasted `api` that disagrees (the no-drift gate).
+                    let dir = target.map_or_else(
+                        || std::env::current_dir().unwrap_or_default(),
+                        std::path::PathBuf::from,
+                    );
+                    let items = loft::documentation::pkg_api_items(&dir);
+                    println!("{}", loft::json::to_json_string(&api_items_json(&items)));
+                } else if argv[i..].iter().any(|s| s == "--registry") {
                     let refresh = argv[i..].iter().any(|s| s == "--refresh");
                     api_registry_catalog(refresh);
                 } else {
-                    let target = argv.get(i).filter(|s| !s.starts_with('-')).cloned();
                     api_command(target.as_deref());
                 }
                 return;

@@ -27,3 +27,7 @@ pub fn ext_struct_vec_len(data: vector<integer>) -> integer not null;
 // Pattern 7: vector in loop
 pub fn ext_loop_vec_sum(data: vector<integer>) -> integer not null;
 #native "loft_ext_loop_vec_sum"
+
+// Pattern 8: vector<u8> RETURN via the FFI alloc path (loft-lang/loft#409)
+pub fn ext_make_bytes(n: integer) -> vector<u8>;
+#native "loft_ext_make_bytes"

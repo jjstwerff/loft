@@ -6127,7 +6127,20 @@ impl Parser {
         // separator consistently so nested `--lib` packages resolve on
         // Windows (the crystal_gold CI failure: "Library 'audience_crystal'
         // not found").  No behavioural change on Linux/macOS.
-        let pkg_dir_pb = std::path::Path::new(dir).join(id);
+        // #408 — accept `--lib` pointing AT the package dir itself (its basename
+        // matches `id` and it carries a loft.toml), not only at its parent.
+        // Without this, `--lib path/to/crypto` looks for `path/to/crypto/crypto`,
+        // fails, and `use crypto` falls through to an installed registry copy —
+        // the shadowing that made a local lib's `[wasm.bridge]` routes unreachable
+        // in `--html`. Falls back to `<dir>/<id>` for the normal parent-dir search.
+        let dir_pb = std::path::Path::new(dir);
+        let pkg_dir_pb = if dir_pb.file_name() == Some(std::ffi::OsStr::new(id))
+            && dir_pb.join("loft.toml").is_file()
+        {
+            dir_pb.to_path_buf()
+        } else {
+            dir_pb.join(id)
+        };
         if !pkg_dir_pb.is_dir() {
             return None;
         }

@@ -377,8 +377,8 @@ The rule: **always commit before any operation that changes the working tree.**
 | [DEPS_INVENTORY.md](doc/claude/DEPS_INVENTORY.md) | H2 deliverable: the dep-list `Vec<u16>` semantic model (frame vs def address space, five marker overloads), every site classified, corpus-probe findings, the typed-`Deps` migration design |
 | [PLANNING.md](doc/claude/PLANNING.md) | Priority-ordered enhancement backlog |
 | [ROADMAP.md](doc/claude/ROADMAP.md) | Items in implementation order by milestone (0.9.0 / 1.0.0 / 1.1+) |
-| [plans/README.md](doc/claude/plans/README.md) | Multi-phase core-language initiatives |
-| [lib_plans/README.md](doc/claude/lib_plans/README.md) | Multi-phase library initiatives (numbering independent) |
+| [plans/README.md](doc/claude/plans/README.md) | Multi-phase initiatives (core, runtime, AND library) — flat files `plans/<n>-<slug>.md` numbered to a `loft-lang/plans` `@PLN<n>` issue |
+| [lib_plans/README.md](doc/claude/lib_plans/README.md) | LEGACY — library plans absorbed into `plans/`; archive only |
 | [BROADENING.md](doc/claude/BROADENING.md) | Using loft beyond games (CLI, server, data), sequenced unlocks |
 | [TUPLES.md](doc/claude/TUPLES.md) | Tuple design — multi-value returns, deconstruction, match destructuring |
 | [STACKTRACE.md](doc/claude/STACKTRACE.md) | Stack trace introspection — `stack_trace()`, `StackFrame`, `ArgValue` |

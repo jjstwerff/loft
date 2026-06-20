@@ -501,6 +501,39 @@ impl Stores {
         i64::from(bytes[i as usize])
     }
 
+    /// Build a `text` from the raw bytes of a `vector<u8>` — the inverse of
+    /// `byte_at`.  Decodes the bytes as UTF-8; returns the decoded owned
+    /// `String` so every binary decoder (CBOR text, HPKE byte composition)
+    /// can turn an assembled byte buffer back into text.
+    ///
+    /// `bytes` is the argument `DbRef` (it points at the OWNING field, the
+    /// same shape `n_json_array` reads): the inner vector record is read from
+    /// `(bytes.rec, bytes.pos)`, the element count lives at offset 4 of that
+    /// record, and the payload starts at offset 8 (`Store::buffer`) — the
+    /// `vector::alloc_vector_from_bytes` layout.
+    ///
+    /// Invalid UTF-8 returns the empty string rather than panicking — the
+    /// stdlib convention for a loft-safe primitive (`text_byte_at_native`
+    /// returns 0 for an out-of-bounds read for the same reason).  A caller
+    /// that needs to distinguish "empty input" from "invalid bytes" should
+    /// validate before decoding.
+    #[must_use]
+    pub fn text_from_bytes_native(&mut self, bytes: DbRef) -> String {
+        let length = vector::length_vector(&bytes, &self.allocations);
+        if bytes.rec == 0 || bytes.pos == 0 || length == 0 {
+            return String::new();
+        }
+        let store = self.store_mut(&bytes);
+        let vec_rec = store.get_u32_raw(bytes.rec, bytes.pos);
+        if vec_rec == 0 {
+            return String::new();
+        }
+        // `buffer` returns the payload slice starting at offset 8; the live
+        // length (offset 4) bounds it — trailing capacity slack is ignored.
+        let raw = &store.buffer(vec_rec)[..length as usize];
+        String::from_utf8(raw.to_vec()).unwrap_or_default()
+    }
+
     /// Modification time of `path` as Unix epoch SECONDS (i64).
     /// Returns 0 on missing file, IO error, or pre-epoch dates.
     /// SECONDS not milliseconds — matches scan.sh's `stat -c %Y`

@@ -1136,16 +1136,23 @@ extern crate loft;"
                 if def.native().is_empty() || declared_natives.contains(def.native()) {
                     continue;
                 }
+                // #407 — skip the host-import extern declaration for ANY
+                // `#native` routed through `[wasm.bridge].routes`.  The local
+                // wrapper body is a call into `<crate>::<bridge_fn>` (see
+                // `output_wasm_bridge_call`), so the extern would be unused AND
+                // would collide with that wrapper's name (E0428) — exactly the
+                // blocker for a `text -> text` bridge, whose extern decl
+                // (`safe fn n_x(ptr,len) -> i32`) clashed with the loft wrapper
+                // `fn n_x(...) -> String`.  The bridge crate declares its OWN
+                // host imports, so no extern is needed at this layer.
+                if data.wasm_bridge_routes.contains_key(def.native()) {
+                    continue;
+                }
                 // @P321c browser-WASM (2026-05-29): skip the host-import
-                // declaration for store-mutating `#native` fns — the
-                // matching local body is now a graceful Phase 1 stub (see
-                // `output_native_direct_call`), so the extern would be
-                // unused AND would collide with the local body name
-                // (E0428).  When the lib_plan-29 routing maps these to a
-                // `pub fn` bridge in `<crate_ident>::<bridge_fn>` (e.g.
-                // `loft_imaging_wasm::imaging_load_png`), the bridge
-                // declares its OWN host imports — still no extern needed
-                // at this layer.
+                // declaration for store-mutating `#native` fns with NO bridge —
+                // the matching local body is a graceful Phase 1 stub (see
+                // `output_native_direct_call`), so the extern would be unused
+                // AND would collide with the local body name (E0428).
                 let stores_loft_ref =
                     matches!(def.returned(), Type::Vector(_, _) | Type::Reference(_, _));
                 let has_ref_arg = def.attributes().iter().any(|a| {
@@ -3275,6 +3282,29 @@ extern crate loft;"
         // Rust binary that calls `n_load_png()` as a plain Rust
         // function with no `State` indirection at runtime.
         if self.wasm_browser {
+            // #407 — the `[wasm.bridge].routes` table decides browser routing,
+            // NOT the arg/return SHAPE.  A `text -> text` / `text -> boolean`
+            // native (every crypto primitive) carries no struct/Reference arg
+            // and no Vector/Reference return, yet still belongs to a bridge.
+            // Consult the route table FIRST (the chokepoint), independent of
+            // shape; only the shape-driven Phase-1 fallback below cares about
+            // struct/ref shapes (those have no registered bridge to call).
+            //
+            // lib_plan-29 W1c (2026-05-29): the table is built from each
+            // library's `[wasm.bridge]` manifest section
+            // (`data.wasm_bridge_routes`) — no library symbols hard-coded in
+            // the compiler crate.  Key is the `#native "symbol"`.
+            let bridge_target =
+                self.data
+                    .wasm_bridge_routes
+                    .get(def.native())
+                    .map(|(bridge_crate, bridge_fn)| {
+                        let crate_ident = bridge_crate.replace('-', "_");
+                        format!("{crate_ident}::{bridge_fn}")
+                    });
+            if let Some(target) = bridge_target {
+                return Self::output_wasm_bridge_call(w, def, &target);
+            }
             let first_ref_arg = def
                 .attributes
                 .iter()
@@ -3282,37 +3312,6 @@ extern crate loft;"
             let returns_loft_ref =
                 matches!(def.returned(), Type::Vector(_, _) | Type::Reference(_, _));
             if returns_loft_ref || first_ref_arg.is_some() {
-                // lib_plan-29 W1c (2026-05-29): the routing table is now
-                // built from each library's `[wasm.bridge]` manifest
-                // section (`data.wasm_bridge_routes`).  No library symbols
-                // hard-coded in the compiler crate.
-                let bridge_target = self.data.wasm_bridge_routes.get(def.native()).map(
-                    |(bridge_crate, bridge_fn)| {
-                        let crate_ident = bridge_crate.replace('-', "_");
-                        format!("{crate_ident}::{bridge_fn}")
-                    },
-                );
-                if let Some(target) = bridge_target {
-                    // Emit the standard `let stores: &mut Stores = ...`
-                    // prelude (mirrors output_native_direct_call's non-
-                    // wasm path) + call into the bridge.
-                    writeln!(w, "{{")?;
-                    writeln!(
-                        w,
-                        "  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};"
-                    )?;
-                    write!(w, "  {target}(stores")?;
-                    for attr in def.attributes() {
-                        if attr.name.starts_with("__") {
-                            continue;
-                        }
-                        let var = sanitize(&attr.name);
-                        write!(w, ", &var_{var}")?;
-                    }
-                    writeln!(w, ")")?;
-                    writeln!(w, "}}")?;
-                    return Ok(());
-                }
                 // Phase 1 fallback: graceful loft-aware stub for any
                 // store-mutating #native fn that doesn't have a bridge
                 // registered.  Matches loft semantics (`false`/null
@@ -3588,6 +3587,73 @@ extern crate loft;"
             write!(w, ") }}")?;
         }
         writeln!(w, "\n}}")
+    }
+
+    /// #407 — emit a browser-WASM wrapper body that routes a `#native` through
+    /// its `[wasm.bridge].routes` entry: a call to `<crate>::<bridge_fn>` whose
+    /// result the wrapper returns directly.
+    ///
+    /// The bridge `pub fn` runs in pure Rust inside the standalone `--html`
+    /// wasm binary (no host import, no cdylib ABI), so its signature is the
+    /// *loft-side* one: `stores: &mut Stores` first, then one argument per loft
+    /// parameter in loft-side Rust types, returning a value of the loft-side
+    /// return type.  Because the rest of codegen already chooses the wrapper's
+    /// Rust signature from the loft return type (`returns_owned_string` →
+    /// `-> String` for text, `rust_type(Result)` → `u8` for boolean, `i64` for
+    /// integer), the bridge result needs only a per-type cast to land in that
+    /// signature — NO store reshaping for a text/scalar return.  This is the
+    /// clean convention: a `text -> text` native bridges with no per-fn
+    /// Reference-out reshape.
+    ///
+    /// Argument ABI (mirrors the non-bridge path so a bridge fn reads naturally
+    /// in pure Rust):
+    /// - `text`   → `&str`     (by value — `var_x` is already `&str`)
+    /// - `boolean`→ `bool`     (`var_x != 0`; loft holds the u8 storage form)
+    /// - `integer`/`character` → coerced via `as _`
+    /// - `float`/`single`      → by value
+    /// - `Reference`/`Vector`  → `&DbRef` (the bridge works the store via
+    ///   `stores`; matches the proven imaging-shape bridges)
+    fn output_wasm_bridge_call(
+        w: &mut dyn Write,
+        def: &crate::data::Definition,
+        target: &str,
+    ) -> std::io::Result<()> {
+        writeln!(w, "{{")?;
+        writeln!(
+            w,
+            "  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};"
+        )?;
+        // The bridge result lands directly in the wrapper's return slot.  Match
+        // the wrapper signature the rest of codegen chose for this return type.
+        let needs_ret_cast = matches!(def.returned(), Type::Integer(_)); // wrapper -> i64
+        let needs_bool_ret = matches!(def.returned(), Type::Boolean); // wrapper -> u8
+        write!(w, "  ")?;
+        write!(w, "{target}(stores")?;
+        for attr in def.attributes() {
+            if attr.name.starts_with("__") {
+                continue;
+            }
+            let var = sanitize(&attr.name);
+            match &attr.typedef {
+                Type::Text(_) => write!(w, ", var_{var}")?,
+                Type::Boolean => write!(w, ", var_{var} != 0")?,
+                Type::Integer(_) | Type::Character => write!(w, ", var_{var} as _")?,
+                Type::Float | Type::Single => write!(w, ", var_{var}")?,
+                // Reference/Vector args: hand the bridge a `&DbRef`; it works the
+                // store through the `stores` handle (the imaging-shape bridges).
+                _ => write!(w, ", &var_{var}")?,
+            }
+        }
+        write!(w, ")")?;
+        if needs_ret_cast {
+            writeln!(w, " as i64")?;
+        } else if needs_bool_ret {
+            // @PLN17: external `bool` -> loft `u8` storage form.
+            writeln!(w, " as u8")?;
+        } else {
+            writeln!(w)?;
+        }
+        writeln!(w, "}}")
     }
 
     /// Map a loft vector element type to the Rust primitive type used for the

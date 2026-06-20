@@ -658,32 +658,9 @@ pub fn virt_fs_clear() {
 // ── W1.9  compile_and_run() — WASM/native entry point ────────────────────────
 
 /// Embedded default standard library files (compiled into the WASM binary).
-const DEFAULT_FILES: &[(&str, &str)] = &[
-    (
-        "default/01_code.loft",
-        include_str!("../default/01_code.loft"),
-    ),
-    (
-        "default/02_files.loft",
-        include_str!("../default/02_files.loft"),
-    ),
-    (
-        "default/03_text.loft",
-        include_str!("../default/03_text.loft"),
-    ),
-    (
-        "default/04_stacktrace.loft",
-        include_str!("../default/04_stacktrace.loft"),
-    ),
-    (
-        "default/05_coroutine.loft",
-        include_str!("../default/05_coroutine.loft"),
-    ),
-    (
-        "default/06_json.loft",
-        include_str!("../default/06_json.loft"),
-    ),
-];
+/// The single source set lives in [`crate::stdlib_sources`] — shared with
+/// `loft search`'s stdlib API feed so both read the same embedded `default/*`.
+const DEFAULT_FILES: &[(&str, &str)] = crate::stdlib_sources::STDLIB_SOURCES;
 
 /// Library files embedded in the WASM build so `use <name>;` resolves in the
 /// browser sandbox without a native cdylib.

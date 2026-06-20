@@ -1,17 +1,29 @@
 # Plans
 
-Multi-phase initiatives that span more than one session.  Each
-subdirectory holds the README (goal + index) plus one markdown file
-per phase.
+Multi-phase initiatives that span more than one session — core language,
+compiler/runtime, **and library** work, unified here.
 
-> **Migrating to issues (@PLN27).** The canonical home for an active or
-> future plan is now a [`loft-lang/plans`](https://github.com/loft-lang/plans)
-> issue (`@PLN<n>` = its issue number).  The local dirs here are
-> legacy/transitional — active + future plans are being converted to issues
-> under **@PLN27**; `finished/` stays as the historical record.  File a NEW
-> plan as an issue (`gh issue create --repo loft-lang/plans`), not a dir — and
-> tag it with a **required `status:*` + `subject:*` label** (the two tracking
-> dimensions; every plan issue carries exactly one of each).
+> **Current convention — flat, in `plans/`, numbered to the issue (2026-06-19).**
+> A plan is a **single flat file**, `plans/<n>-<slug>.md`, with its phases as
+> sections inside that one file — *not* a directory of per-phase files.  `<n>` is
+> the plan's [`loft-lang/plans`](https://github.com/loft-lang/plans) issue number
+> (`@PLN<n>`): every plan has a gh issue (the cross-ecosystem id), and the local
+> file is named to match it.
+>
+> - **Every new plan lands here in `plans/`, whatever its source** — core,
+>   runtime, or library.  There is no separate `lib_plans/` for new work;
+>   `lib_plans/` is legacy and being absorbed.
+> - **New plan** (e.g. a library scope): create the gh issue first
+>   (`gh issue create --repo loft-lang/plans`, with a required `status:*` +
+>   `subject:*` label), read its number `n`, then write `plans/<n>-<slug>.md`.
+> - **Migrating an existing local plan** (a `lib_plans/` dir, or an un-issued
+>   `plans/` dir): if it already maps to a `@PLN` issue, move + renumber to that
+>   number; **if it does not exist on gh yet, create the issue, then renumber to
+>   it.**
+> - The existing numbered **directories** below predate this and remain as
+>   legacy closure records.  An investigation plan needing a probe corpus may
+>   keep an adjacent `<n>-<slug>/` dir (with `probes/`) — the one exception to
+>   flat.
 
 ## The rule — docs vs plans
 

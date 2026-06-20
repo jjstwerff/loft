@@ -38,6 +38,7 @@ H6 (sentinel codec) independent, S-sized — do in any gap
 H7 (codec derivation / F9)  before the next Value/Type variant lands
 H3 (ownership as data)  AFTER H1+H2 (both shrink its surface)
 H8 (allocations privacy)  the already-planned privacy pass
+H9 (LoftStore FFI handle)  with H8 — both harden the raw Stores surface
 H4 (backend unification)  continuous discipline now; structural fix is 1.1+ scale
 ```
 
@@ -607,6 +608,31 @@ Tracked in [STABILITY_PASS2.md](STABILITY_PASS2.md)'s deferred rows: design
 the accessor surface (worker-slot claim/release, swap-back, lock APIs) as
 ONE batch with [THREADING.md](THREADING.md) in hand, then convert callers
 mechanically.  Not started; should precede any new `par` feature work.
+
+---
+
+## H9 — Raw `*mut Stores` across the shared-store cdylib↔host bridge
+
+**The violated invariant**: *a cross-binary boundary must be C-ABI, not a shared
+in-memory layout.*  A loft library compiled to a shared-store cdylib (N9/C71
+dispatch) passes the **raw `*mut Stores`** across the `loft_shared_*` bridge to
+the host, so host and cdylib must agree on a byte-identical `Stores` layout.  A
+feature-divergent loft build silently diverges that layout, and
+`loft_ffi_fingerprint` does not catch a change that misses `loft-ffi` — this is
+the mechanism behind the `viewer_markdown` flaky-cdylib collision.
+
+**Mitigation (M, redesign)** — decouple to a stable `LoftStore` handle: the same
+C-ABI indirection the exec path already uses, so the cdylib↔host interaction
+crosses a versioned handle, not a raw pointer.  Design in
+[NATIVE.md § Resolution](NATIVE.md#resolution-separate-the-api-id-from-the-rust-part-link-the-cdylib-by-c-abi)
++ [@PLN26](https://github.com/loft-lang/plans/issues/26).  Sibling of
+[H8](#h8--the-raw-storesallocations-surface): both are "raw `Stores` state needs
+an interface" — H9 is the FFI-boundary site, H8 the in-process `allocations`
+site; do them together.
+
+**Status**: already realized (it manifests as the `viewer_markdown` collision),
+so this is debt to schedule, not a latent risk.  Was [#389](https://github.com/loft-lang/loft/issues/389)
+Part 1 (issue closed; Part 2 shipped as @PLN26 ph.2 — see NATIVE.md § Open work).
 
 ---
 
