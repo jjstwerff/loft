@@ -188,6 +188,34 @@ mirroring the Reference `OpCopyRecord` path with a vector clone (a fresh owned
 store + element copy, source left intact). Load-bearing; gate on probe 05 (both
 backends) + the leak/suite harness.
 
+### Attempts 5–6 (parser materialise, refined) — fixes interp, but TWO blockers (reverted)
+
+Extended the #410 `native_vec_elm` materialise (`expressions.rs`) to fire for
+**user-fn vector returns with a visible Reference/Enum param**, deep-copying via
+`vector_db + OpAppendVector` (the proven `b = a` vector-copy shape). Two variants:
+(5) append the call result inline; (6) `vector_db` FIRST, then a skip-free var
+temp `__vcp = call`, then `OpAppendVector(v, __vcp)` — order + var-source +
+skip-free, all needed.
+
+Result:
+- **Interpret: FIXED.** Probe 05 passes (`a=1 b=3 c=5`); the cbor repro is clean.
+- **Blocker 1 — REGRESSION:** the `audience_crystal` library tests now hit a
+  **`panic at src/compile.rs:306:17`** (+ "parse errors") — the materialise emits
+  malformed IR for some shape that library exercises. So the trigger/emission is
+  not yet correct for the full shape space (it over-fires or mis-lowers).
+- **Blocker 2 — native unaffected:** on native, `a = enc(k0)` returns **garbage
+  (`9`) even for a SINGLE call** — the native generator's **vector-return-ABI for a
+  ref-param fn is independently broken** (not just aliasing), so a parser-level
+  copy of an already-garbage result can't help. Native needs its own
+  `src/generation/` fix.
+
+**Net:** the fix is genuinely TWO-backend and harder than a parser materialise:
+(i) a parser/codegen vector deep-copy that handles every shape without the
+`compile.rs:306` panic, AND (ii) the native generator's vector-return-ABI. Reverted
+(a compile-panic regression + an interp/native divergence is worse than the
+consistent aliasing). Probe 05 + the audience_crystal compile-panic are the two
+gates the real fix must clear.
+
 ### Fix direction (Stage C — the real one)
 
 This is the **H1 / return-ABI / NRVO-alias** family: a var bound to an
