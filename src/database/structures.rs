@@ -51,6 +51,11 @@ impl Stores {
         (parent_tp, *data)
     }
 
+    /// Create a fresh record for a collection element / nullable field and return its `DbRef`.
+    ///
+    /// # Panics
+    /// Panics on an unsupported `parent_tp`/`field` parts kind (an internal invariant
+    /// violation — the parser only emits `OpNewRecord` for collection/struct field types).
     pub fn record_new(&mut self, data: &DbRef, parent_tp: u16, field: u16) -> DbRef {
         // @PLN25 single-payload: when creating a sub-record for a FIELD inside a
         // `__nullable<S>` element (a nested collection/struct), the field lives in the inline
@@ -118,10 +123,27 @@ impl Stores {
             let o = &f.other_indexes;
             if !o.is_empty() && o[0] != u16::MAX {
                 for fld_nr in o {
+                    let sibling_content = fields[*fld_nr as usize].content;
+                    // @PLN25 Scope B — a keyed index over a shared NULLABLE array indexes only
+                    // the non-null records: when the sibling keyed element is `__nullable<S>`
+                    // and this record is the `Null` variant (discriminant 1 at byte offset 0),
+                    // skip the keyed insert.  The null stays in the vector (the primary insert
+                    // at the top of this fn) but is unreachable by key and cannot collide with a
+                    // real empty/zero-key element.  Inert for dense (non-nullable) keyed elements.
+                    // Index ONLY a `Some` record (discriminant 2).  A null element is either
+                    // the zeroed/absent slot (discriminant 0) or the explicit `Null` variant
+                    // (discriminant 1); both are skipped.
+                    if self
+                        .nullable_some_variant(self.content(sibling_content))
+                        .is_some()
+                        && self.store(rec).get_byte(rec.rec, rec.pos, 0) != 2
+                    {
+                        continue;
+                    }
                     let o = self.field_ref(data, parent_tp, *fld_nr);
                     // Secondary index for a sibling field — index-only, never
                     // delete the displaced record (the primary collection owns it).
-                    self.insert_record(&o, rec, fields[*fld_nr as usize].content, true);
+                    self.insert_record(&o, rec, sibling_content, true);
                 }
             }
         }

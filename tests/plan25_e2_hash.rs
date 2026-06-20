@@ -89,11 +89,6 @@ fn main() {
 ";
 
 #[test]
-#[ignore = "Scope B / design point 3 (single-payload-refactor.md): a DENSE keyed index that \
-            shares records with a nullable sibling vector (struct { entries: vector<S>, \
-            lookup: hash<S[k]> }) must read keys from the Some-wrapped shared records at the \
-            payload offset and skip Null discriminants. Keyed collections are now dense \
-            (nullability is sequence-only); the shared-array key-read is forward work."]
 fn hash_over_nullable_vector_lookup_and_field_access() {
     // len preserved; key extraction finds the shared Some-wrapped records by
     // the `t` field through the Some payload; field access unwraps to S.
@@ -116,9 +111,6 @@ fn main() {
 ";
 
 #[test]
-#[ignore = "Scope B / design point 3 (single-payload-refactor.md): hash field sharing records \
-            with a nullable sibling vector field — same forward work as \
-            hash_over_nullable_vector_lookup_and_field_access."]
 fn anon_literal_into_hash_field_and_forloop_over_shared_array() {
     // Rung 5: anon `{ … }` literals into a hash field (the element resolves
     // against the `Some` variant, not the enum). For-loop deref: iterating the
@@ -225,4 +217,25 @@ fn method_on_nullable_vector_element_native() {
          }\n",
     );
     assert_both(&path, "v0=10 v1=20");
+}
+
+#[test]
+fn null_in_shared_vector_is_not_indexed_by_the_hash() {
+    // @PLN25 Scope B (design point 3): a `Null` element in a shared nullable vector
+    // STAYS in the vector (counted by `len`) but is NOT indexed by the sibling hash —
+    // so it is unreachable by key and cannot collide with a real empty-key record.
+    // `len(entries)=3` (incl. the null), `len(lookup)=2` (only the two `Some` records).
+    let path = probe(
+        "null_skip",
+        "struct Count { t: text, v: integer }\n\
+         struct Counting { entries: vector<Count>, lookup: hash<Count[t]> }\n\
+         fn main() {\n  \
+           c = Counting { };\n  \
+           c.entries = [ Count{t:\"One\",v:1}, null, Count{t:\"Three\",v:3} ];\n  \
+           print(\"veclen={len(c.entries)} hashlen={len(c.lookup)} \");\n  \
+           print(\"one={c.lookup[\\\"One\\\"].v} three={c.lookup[\\\"Three\\\"].v} \");\n  \
+           print(\"missnull={c.lookup[\\\"Two\\\"] == null}\\n\");\n\
+         }\n",
+    );
+    assert_both(&path, "veclen=3 hashlen=2 one=1 three=3 missnull=true");
 }

@@ -2021,12 +2021,56 @@ impl Parser {
         }
         self.lexer.token("}");
         self.lexer.has_token(";");
+        self.link_shared_nullable_hash(d_nr);
         // #91: check for circular init dependencies (second pass, all fields known).
         if !self.first_pass {
             self.check_circular_init(&init_deps);
         }
         self.context = context;
         true
+    }
+
+    /// @PLN25 Scope B — a keyed HASH field that shares its record set with a sibling NULLABLE
+    /// vector (the `other_indexes` "two views, one record set" pattern, e.g.
+    /// `struct Db { entries: vector<S>, lookup: hash<S[k]> }`) must index the `Some`-wrapped
+    /// records, not dense `S`.  Rewrite such a hash's element from `S` to the sibling's
+    /// `__nullable<S>` enum so the parser type, db storage, lookup type-id, and field-access all
+    /// agree on ONE type: the db link then matches by content, `determine_keys` bakes the key at
+    /// the payload offset, and `c.lookup[k].field` unwraps via the `Some` payload sub-ref — all
+    /// reusing the kept nullable machinery.  Gate-OFF-inert: a dense vector sibling's element is
+    /// `Reference(S)` (not the `Enum`), so nothing matches.  (Sorted/Index sharing is left dense —
+    /// no consumer exercises it and it needs the index bookkeeping on the `Some` variant.)
+    fn link_shared_nullable_hash(&mut self, d_nr: u32) {
+        let n = self.data.definitions[d_nr as usize].attributes.len();
+        // payload struct `S` -> its `__nullable<S>` enum, gathered from nullable vector siblings.
+        let mut nullable_of: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+        for a in 0..n {
+            if let Type::Vector(inner, _) = self.data.attr_type(d_nr, a)
+                && let Type::Enum(nd, true, _) = *inner
+                // ONLY the synth `__nullable<S>` enum — not an arbitrary user struct-enum
+                // element (`vector<Shape>`), whose `variant_of(.., "Some")` would be MAX.
+                && self.data.def(nd).name().starts_with("__nullable<")
+            {
+                let some = self.data.variant_of(nd, "Some");
+                let pa = self.data.attr(some, "payload");
+                if pa != usize::MAX
+                    && let Type::Reference(s, _) = self.data.attr_type(some, pa)
+                {
+                    nullable_of.insert(s, nd);
+                }
+            }
+        }
+        if nullable_of.is_empty() {
+            return;
+        }
+        for a in 0..n {
+            if let Type::Hash(h_elem, keys, deps) = self.data.attr_type(d_nr, a)
+                && let Some(&nd) = nullable_of.get(&h_elem)
+            {
+                self.data.definitions[d_nr as usize].attributes[a].typedef =
+                    Type::Hash(nd, keys, deps);
+            }
+        }
     }
 
     /// I3: parse an `interface` declaration and register it as `DefType::Interface`.

@@ -280,7 +280,9 @@ impl Parser {
         // so the worker reads the dense-`S` payload, not the element's discriminant @0.
         let elem_enum_d = match elem_tp {
             Type::Enum(d, true, _) => Some(*d),
-            Type::Reference(d, _) if self.data.def(*d).name().starts_with("__nullable<") => Some(*d),
+            Type::Reference(d, _) if self.data.def(*d).name().starts_with("__nullable<") => {
+                Some(*d)
+            }
             _ => None,
         };
         if !self.first_pass

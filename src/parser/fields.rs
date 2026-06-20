@@ -103,13 +103,13 @@ impl Parser {
             // `Unknown field __nullable<S>.field` regression for a library struct.
             let some_d = self.data.variant_of(enum_d, "Some");
             let payload_attr = self.data.attr(some_d, "payload");
-            let struct_d = if payload_attr != usize::MAX {
+            let struct_d = if payload_attr == usize::MAX {
+                u32::MAX
+            } else {
                 match self.data.attr_type(some_d, payload_attr) {
                     Type::Reference(d, _) => d,
                     _ => u32::MAX,
                 }
-            } else {
-                u32::MAX
             };
             if struct_d != u32::MAX && self.data.attributes(struct_d) > 0 {
                 if !self.first_pass {
