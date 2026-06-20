@@ -266,6 +266,44 @@ That consolidation is itself the first down payment on the beacon (one path, one
 fact). Reverted; no clean green-both behavior fix is reachable until the dep is
 resolved.
 
+## 6e. Trace of the return dep — corrected map (the `"??"` was a render artifact)
+
+Instrumented the raw `Definition.returned` deps (not the misleading display):
+
+- **implicit `fn idt(v) -> vector { v }`:** `returned = Vector(.., Deps{items:[0]})`
+  — **the borrow fact IS computed** (attr 0 = `v`). The `"??"` in the
+  `dump_fn_signature` output is a *render artifact* (that dump's var table lacks
+  names at print time; `introspect.rs` renders the SAME dep as `["v"]`, and the
+  block-result type shows `["v"]`). My earlier "uncomputed/`Type::Unknown`"
+  reading (§ 6d) was WRONG — corrected here.
+- **explicit `fn idr(v) -> vector { return v }`:** `returned = Vector(.., Deps{items:[]})`
+  — **empty; the borrow fact is NOT computed** on the explicit-return path.
+
+And at runtime BOTH still alias (`a=idt(x); x+=[..]` mutates `a`), even though
+`idt`'s dep is correct. So:
+
+**The precise gap map (replaces § 6c/6d guesses):**
+1. **Computation — explicit returns.** `return v` leaves the dep empty; the
+   implicit tail computes it. Close the explicit-return path (or funnel both to one
+   computation) so the borrow dep is always present. *(small, parser-side)*
+2. **Consumption — the vector caller.** Even with the correct dep `[0]`, `a = idt(x)`
+   ALIASES — the vector caller does not read the return dep to decide copy. The
+   **Reference** caller already does (`ids(s)` copies, green both backends), so
+   there is a working template; the vector caller needs the analogous copy. This is
+   the recurring vector-deep-copy, and its blocker is the native side (a vector copy
+   = fresh store + `OpAppendVector`, where the `rec_tp`/scoping must be right on
+   both backends).
+3. **Owned returns freed (cluster II).** For an OWNED return (`enc`'s arms), the
+   callee FREES it, so even a correct adopt aliases — the callee-skip-free fix,
+   whose blocker is the native `E0425` (arm-scoped return var).
+
+So the fact is largely *computed* already; the open work is **(1) finish the
+explicit-return computation, (2) make the vector caller consume the dep
+(copy-on-borrow), and (3) stop the callee freeing owned returns** — items 2 and 3
+both gated on native-generator work (function-scoped return buffer / vector copy).
+That native-generator capability is the shared prerequisite, and is the honest next
+focus before the leaf fixes can land green-both.
+
 ## 7. Open questions to verify against the implementation
 
 - Exact current contents of `Definition.returned` for `enc`/`mk` (is the dep empty,
