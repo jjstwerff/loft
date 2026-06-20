@@ -360,6 +360,51 @@ Net: the investigation is sound and the fact-map (§ 6e) holds, but the
 *implementation site* for the owned-return path was wrong. The next session's first
 move is path-location, not another edit.
 
+## 6h. BREAKTHROUGH — the working mechanism (probe 05 green BOTH backends), + its two remaining edges
+
+This session found the mechanism that makes the cluster-II owned-return correct on
+**both backends** for the first time in the whole investigation. Two coordinated
+changes did it:
+
+1. **scopes.rs — `collect_return_sources` + skip_free.** `returned_var` collapses a
+   `match`/`if` to `u16::MAX`, so the arm buffers get freed (the bug). A SET
+   collector (`collect_return_sources`, union of all arms incl. `If`/`Insert`/`Block`
+   terminals) marks every return-source do-not-free: owned terminal → mark it;
+   borrowing terminal (`_vec_N["__vdb_N"]`) → mark its dep `__vdb_N`. Result on
+   INTERP: `enc`'s `OpFreeRef(__vdb_*)` disappear → probe 05 = `1 3 5`.
+2. **emit.rs — brace a `Block`/`Insert` return value (a real native-generator bug).**
+   With the frees gone the return becomes `return {block}`, and the native generator
+   emitted `return let …; …` **unbraced** — invalid Rust, arm vars out of scope
+   (E0425). Wrapping as `return { … }` fixed native → probe 05 = `1 3 5` on `--native`
+   too, fully clean (no leak on native).
+
+**Verified:** probe 05 `a=1 b=3 c=5` on BOTH backends; single-call + `mk()`×3 clean.
+This is the design (move-on-return) proven end to end.
+
+**Why it is reverted — the two edges still to close:**
+
+- **Edge A — over-broad (the blocker).** `collect_return_sources` fires for EVERY
+  function's return, so it over-marks **keyed-collection** (`hash`/`sorted`/`index`)
+  and enum returns whose buffers SHOULD be freed → ~13 suite regressions, crashing
+  at `allocation.rs:562` / `keys.rs:295` (the #405 UAF/OOB shape) + audience_crystal
+  "index 65535". **Narrowing:** gate the marking to the case `returned_var` actually
+  misses — `returned_var(expr) == u16::MAX` AND the return type is `Vector` — so
+  single-var and keyed/enum returns keep their existing (correct) handling untouched.
+- **Edge B — interp leak (3 element buffers).** `enc`'s arms deliver via local
+  `_vec_N`/`__vdb_N`, NOT the caller's `__retbuf`, because
+  `unify_if_branches_work_refs` only unifies `__ref_`/`__rref_` terminals (not
+  `_vec_`). skip_free then suppresses the callee free but the store isn't NRVO-moved
+  into `__retbuf`, so on interp the element buffers (`kt=65535`) orphan (native's
+  adopt frees them, so native is clean). **Fix:** extend the if-branch unification to
+  deliver vector match-arms via `__retbuf` (true NRVO), so there is no local buffer
+  to skip_free at all — which also subsumes Edge A's risk.
+
+**Next move (precise):** re-apply the two changes, narrow Edge A (gate on
+`returned_var==MAX && Vector`), re-run the 13-test regression set + probe 05 both
+backends; then close Edge B by NRVO-delivering the vector match-arms into `__retbuf`.
+The native brace fix (emit.rs) is independently correct and can land on its own
+once a producer exercises it.
+
 ## 7. Open questions to verify against the implementation
 
 - Exact current contents of `Definition.returned` for `enc`/`mk` (is the dep empty,
