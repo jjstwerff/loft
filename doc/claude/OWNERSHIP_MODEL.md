@@ -116,9 +116,45 @@ multiple cycles. Order by leverage: return-ownership first (it is the cluster-II
 root and the most-reused decision), then nullability/layout/capture as their bug
 shapes surface.
 
+### Small steps are VITAL — not just tidy
+
+Each fact is a **small** migration, and it must STAY small: a single, narrowly
+scoped change that touches one decision and leaves the rest alone. This is the
+load-bearing constraint, for two reasons:
+
+- **It keeps the migrations small.** A small step is reviewable, testable on both
+  backends in one rung, and revertible without collateral. A big-bang "rewrite the
+  ownership system" is exactly the multi-hundred-line thrash the 9 reverted @PLN85
+  attempts were — un-bisectable and unsafe.
+- **It keeps the parser clean.** The danger when moving a fact INTO the
+  type/parser layer is over-correcting — dumping a pile of new analysis into the
+  parser and merely relocating the complexity (the caution in CODEGEN_METHOD § The
+  balance). Small steps prevent that: each adds one well-defined fact, the
+  heuristic it replaces is *deleted* in the same step, so the parser's net
+  complexity stays flat or drops. The parser should get *cleaner* with each
+  migration, never heavier.
+
+**If a step is getting large, you have bundled facts — split it.** A migration that
+can't be a small step is a sign the fact isn't isolated yet; find the one decision,
+do that, and let the next step take the next decision. Net code should trend DOWN
+(a fact replacing several heuristic branches), not up.
+
+### Build on a mostly-working base — never break it to fix it
+
+The migration takes time, and that time is the accepted cost of **never regressing
+a mostly-working language**. Every small step LANDS green: both backends pass, the
+suite is clean, the language works at least as well after as before (plus the one
+fixed fact). We never take the language down for a multi-step rewrite; we never
+leave a backend broken "to be fixed in the next step" (an interp fix that breaks
+native compile is NOT landable — both green, or it doesn't land); we never trade a
+working base for a half-built better one. **Time is fine; a broken intermediate is
+not.** The base is always shippable, and each migration only ever adds correctness
+on top of it. This is why the steps are small *and* sequential: a working language
+at every commit is the substrate the whole effort stands on.
+
 A fact is "done" when: it is computed once, completely (all shapes/paths); the
-heuristic it replaces is deleted; codegen reads it in one place; and the rung's
-probe is green on both backends with no leak.
+heuristic it replaces is deleted; codegen reads it in one place; the parser is no
+heavier than before; and the rung's probe is green on both backends with no leak.
 
 ## Connections
 
