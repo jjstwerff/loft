@@ -496,6 +496,35 @@ fn register_enum_db(data: &mut Data, database: &mut Stores, d: u32) {
     data.definitions[d as usize].known_type = e_nr;
 }
 
+/// @PLN25 — register + lay out a synth `__nullable<S>` enum ON DEMAND, for a FORWARD-referenced `S`
+/// whose synth enum is first created during pass-2 body parse — AFTER `fill_all`'s in-order
+/// registration ran.  Without it the enum keeps `known_type == u16::MAX`, the `Some` payload byte
+/// position + the element size both read 0/MAX, and `v[0].field` reads garbage (371).  `S` is fully
+/// laid out by pass 2, so this sizes the enum + `Some` immediately.  No-op once registered.
+///
+/// CRITICAL: do NOT `fill_database` the ENUM def itself — that runs `structure()` and re-registers it
+/// (under a qualified name), OVERWRITING `known_type` away from the enum, so the variant link below
+/// targets a struct and the `Some` size never reaches `Parts::Enum`.  Only the VARIANT structs go
+/// through `fill_database` (its `EnumValue` arm calls `enum_value` to link each into the enum).
+pub(crate) fn register_and_lay_out_synth(data: &mut Data, database: &mut Stores, synth_d: u32) {
+    if synth_d == u32::MAX || data.def(synth_d).known_type() != u16::MAX {
+        return;
+    }
+    register_enum_db(data, database, synth_d);
+    let variants: Vec<u32> = data.children_of(synth_d).collect();
+    for v in &variants {
+        fill_database(data, database, *v);
+    }
+    let enum_kt = data.def(synth_d).known_type();
+    let some_d = data.variant_of(synth_d, "Some");
+    let some_kt = if some_d == u32::MAX {
+        u16::MAX
+    } else {
+        data.def(some_d).known_type()
+    };
+    database.lay_out_synth(enum_kt, some_kt);
+}
+
 pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
     if data.def(d_nr).name == "Unknown(0)" {
         return;

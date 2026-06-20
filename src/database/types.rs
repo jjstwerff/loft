@@ -293,6 +293,26 @@ impl Stores {
         // self.dump_types();
     }
 
+    /// @PLN25 — lay out a SINGLE synth `__nullable<S>` enum + its `Some` variant on demand
+    /// (positions/sizes), WITHOUT the full `finish()` (which re-runs every type's `finish_type` and
+    /// re-appends keyed-index bookkeeping → corruption at `enum_parent_size`).  Used on-demand for a
+    /// FORWARD-referenced `S` whose synth enum is created during pass-2 body parse, after `fill_all`
+    /// ran (371).  Empty `linked` set is correct here: a `Some` payload is a dense struct, not a
+    /// vector, so no `Vector → Array` promotion applies.
+    pub(crate) fn lay_out_synth(&mut self, enum_kt: u16, some_kt: u16) {
+        let linked: HashSet<u16> = HashSet::new();
+        let mut in_progress: HashSet<usize> = HashSet::new();
+        if some_kt != u16::MAX && (some_kt as usize) < self.types.len() {
+            self.finish_type(&linked, some_kt as usize, &mut in_progress);
+        }
+        if enum_kt != u16::MAX && (enum_kt as usize) < self.types.len() {
+            // `enumerate` seeds the enum at `u16::MAX`; if anything left it sized, reset so
+            // `finish_type` (re)computes size = max(variant sizes) once `Some` is linked.
+            self.types[enum_kt as usize].size = u16::MAX;
+            self.finish_type(&linked, enum_kt as usize, &mut in_progress);
+        }
+    }
+
     pub(super) fn finish_type(
         &mut self,
         linked: &HashSet<u16>,

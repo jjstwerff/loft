@@ -1699,6 +1699,18 @@ impl Parser {
                         && self.data.def(d).synthetic.is_none()
                     {
                         let syn = self.data.nullable_enum_for(&mut self.lexer, d);
+                        // @PLN25 — for a FORWARD-referenced struct `S` the synth `__nullable<S>`
+                        // enum is first created HERE in pass-2 body parse, after `fill_all` ran, so
+                        // it is unregistered.  Lay it out NOW (this is the EARLIEST site — before
+                        // both the construction and the read bake their payload offset / element
+                        // stride) so they bake correct values (371).  No-op once registered.
+                        if !self.first_pass {
+                            crate::typedef::register_and_lay_out_synth(
+                                &mut self.data,
+                                &mut self.database,
+                                syn,
+                            );
+                        }
                         assign_tp = Type::Enum(syn, true, Deps::none());
                     }
                 }
