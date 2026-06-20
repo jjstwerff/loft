@@ -13,21 +13,31 @@ this method, one plan at a time.
 
 ## The principle
 
-> **Code generation is a mechanical, OBVIOUS translation from types to bytecode.
-> The decision lives in the TYPES, not in many layers of deduction at the
-> generation site.**
+> **Code-gen is the wrong place for complexity. Any complex work in code
+> generation is a DIAGNOSTIC of a type-system flaw — and the fix is in the type
+> system, never in the codegen.**
 
-At the point codegen decides what ops to emit, it should read **one clear
-type-level signal** and emit the corresponding bytecode — no multi-condition
-heuristics (e.g. "callee has ref params AND result is X AND not a borrowed view
-AND …"). If codegen needs to *deduce* the right output from a tangle of conditions,
-the design is wrong: the missing fact belongs in the type system, computed once,
-where it can be reasoned about and verified.
+This is a diagnosis, not a preference:
 
-Why: on-the-spot deduction is where bugs hide and regressions breed — every new
-shape needs another condition, and the conditions interact. A type-driven
-mechanical codegen is verifiable (the type carries the intent) and stable (new
-shapes get the right type, not a new branch).
+- **Symptom:** codegen that branches, accumulates conditions, or *deduces* the
+  right ops on the spot (e.g. "callee has ref params AND result is X AND not a
+  borrowed view AND …").
+- **Diagnosis:** the type system is missing a fact. Codegen is being forced to
+  re-derive, per site, something the types should already state.
+- **Remedy:** put the fact in the type (compute it once, where it can be reasoned
+  about and verified). The codegen then collapses to a **mechanical, obvious**
+  translation: read one clear type-level signal → emit the corresponding bytecode.
+
+So when you reach for another condition in the generator, **stop** — that urge is
+the signal. Do not make the codegen smarter; make the type carry the decision, and
+the codegen gets *simpler*. The end state is a codegen with no cleverness in it:
+every interesting choice was already made, and recorded, in a type.
+
+Why this is the reliability lever: on-the-spot deduction is where bugs hide and
+regressions breed — every new shape needs another condition, and the conditions
+interact combinatorially. A type-driven mechanical codegen is verifiable (the type
+carries the intent), stable (a new shape arrives with the right type, not a new
+branch), and the same on both backends (they translate the same type fact).
 
 ## The method — bytecode → types → code, per scale
 
