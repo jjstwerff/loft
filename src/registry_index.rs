@@ -342,7 +342,7 @@ fn parse_version(pkg_name: &str, semver: &str, val: &Parsed) -> Result<Version, 
                         for (ik, _, iv) in ifields {
                             match (ik.as_str(), iv) {
                                 ("sig", Parsed::Str(s)) => sig = Some(s.clone()),
-                                ("doc", Parsed::Str(s)) => doc = s.clone(),
+                                ("doc", Parsed::Str(s)) => doc.clone_from(s),
                                 _ => {}
                             }
                         }

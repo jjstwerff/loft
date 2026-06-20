@@ -652,6 +652,26 @@ fn search_results_json(results: &[loft::registry_index::SearchResult]) -> loft::
     Parsed::Array(arr)
 }
 
+/// The `api` array for one source dir, as `[{ "sig": …, "doc": … }, …]` — the
+/// shared shape the index `api` field carries and `loft api --json` emits, so
+/// the registry CI can re-derive it from source and reject a pasted mismatch
+/// (S7-CI).  Used by `loft publish` (the entry) and `loft api --json`.
+#[cfg(feature = "registry")]
+fn api_items_json(items: &[loft::registry_index::ApiItem]) -> loft::json::Parsed {
+    use loft::json::Parsed;
+    Parsed::Array(
+        items
+            .iter()
+            .map(|item| {
+                Parsed::Object(vec![
+                    ("sig".to_string(), 0, Parsed::Str(item.sig.clone())),
+                    ("doc".to_string(), 0, Parsed::Str(item.doc.clone())),
+                ])
+            })
+            .collect(),
+    )
+}
+
 /// PKG.REG R8 — `loft info <name>`: full info for one package.
 /// Prints homepage, categories, available versions (yanked /
 /// prerelease tags inline), deps for the latest.
@@ -2130,39 +2150,7 @@ fn publish_package(pkg_path: &std::path::Path, dry_run: bool) -> i32 {
     // source.  Emitted automatically (nothing hand-written), the exact mirror of
     // `triggers`; the registry CI re-derives + verifies it from source (S7), so
     // the pasted field is a pure function of the code and cannot drift.
-    let mut api_items: Vec<loft::registry_index::ApiItem> = Vec::new();
-    if let Ok(rd) = std::fs::read_dir(pkg_path.join("src")) {
-        let mut srcs: Vec<std::path::PathBuf> = rd
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|x| x == "loft"))
-            .collect();
-        srcs.sort(); // deterministic order → stable, CI-reproducible `api`
-        for f in srcs {
-            if let Ok(src) = std::fs::read_to_string(&f) {
-                api_items.extend(loft::documentation::extract_api_items(&src));
-            }
-        }
-    }
-    let api_json = loft::json::Parsed::Array(
-        api_items
-            .iter()
-            .map(|item| {
-                loft::json::Parsed::Object(vec![
-                    (
-                        "sig".to_string(),
-                        0,
-                        loft::json::Parsed::Str(item.sig.clone()),
-                    ),
-                    (
-                        "doc".to_string(),
-                        0,
-                        loft::json::Parsed::Str(item.doc.clone()),
-                    ),
-                ])
-            })
-            .collect(),
-    );
+    let api_json = api_items_json(&loft::documentation::pkg_api_items(pkg_path));
     println!("  \"api\": {},", loft::json::to_json_string(&api_json));
     println!("  \"published\": \"{published}\"");
     println!("}}");
@@ -4027,15 +4015,28 @@ fn main() {
                 std::process::exit(1);
             }
         } else if a == "api" {
-            // PKG.STUB — agent-facing discovery: list reachable libraries, or
-            // print one library's public surface.
+            // PKG.STUB — agent-facing discovery: list reachable libraries, print
+            // one library's public surface, or emit it as JSON (`--json`) for the
+            // registry CI's `api` re-derive (S7-CI).
             #[cfg(feature = "registry")]
             {
-                if argv[i..].iter().any(|s| s == "--registry") {
+                // First non-flag arg = the package dir (default cwd); robust to
+                // flag order (`loft api --json <dir>` or `loft api <dir> --json`).
+                let target = argv[i..].iter().find(|s| !s.starts_with('-')).cloned();
+                if argv[i..].iter().any(|s| s == "--json") {
+                    // The function-level surface as `[{ "sig":…, "doc":… }, …]` —
+                    // the registry `validate.py` runs this on the cloned source and
+                    // rejects a pasted `api` that disagrees (the no-drift gate).
+                    let dir = target.map_or_else(
+                        || std::env::current_dir().unwrap_or_default(),
+                        std::path::PathBuf::from,
+                    );
+                    let items = loft::documentation::pkg_api_items(&dir);
+                    println!("{}", loft::json::to_json_string(&api_items_json(&items)));
+                } else if argv[i..].iter().any(|s| s == "--registry") {
                     let refresh = argv[i..].iter().any(|s| s == "--refresh");
                     api_registry_catalog(refresh);
                 } else {
-                    let target = argv.get(i).filter(|s| !s.starts_with('-')).cloned();
                     api_command(target.as_deref());
                 }
                 return;

@@ -1207,6 +1207,32 @@ pub fn extract_api_items(content: &str) -> Vec<crate::registry_index::ApiItem> {
         .collect()
 }
 
+/// The function-level API surface of a whole package — [`extract_api_items`] over
+/// ALL of its `src/*.loft` (the flat sibling of [`render_pkg_api_text`]).  Files
+/// are read in SORTED order so the derived surface is deterministic and
+/// CI-reproducible.  Used by `loft publish` (→ the index `api` field) and by
+/// `loft api --json` (→ the registry CI re-derive that keeps the field honest,
+/// S7-CI — a pasted `api` that disagrees with the source is rejected).
+#[cfg(feature = "registry")]
+#[must_use]
+pub fn pkg_api_items(pkg_dir: &std::path::Path) -> Vec<crate::registry_index::ApiItem> {
+    let mut items = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(pkg_dir.join("src")) {
+        let mut srcs: Vec<std::path::PathBuf> = rd
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "loft"))
+            .collect();
+        srcs.sort();
+        for f in srcs {
+            if let Ok(src) = std::fs::read_to_string(&f) {
+                items.extend(extract_api_items(&src));
+            }
+        }
+    }
+    items
+}
+
 /// Strip function body from a pub declaration, keeping just the signature.
 fn strip_pub_body(line: &str) -> String {
     // For structs/enums, keep the full first line
@@ -1490,4 +1516,26 @@ fn gather_pkg_topics(docs_dir: &std::path::Path) -> Vec<Topic> {
         });
     }
     result
+}
+
+#[cfg(all(test, feature = "registry"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_api_items_pulls_pub_sig_and_first_doc_line() {
+        // The `//` lines directly above a `pub fn` are its doc; the signature is
+        // the declaration with the body stripped; non-`pub` items are excluded.
+        let src = "\
+// A greeting helper.
+// Detail on a second line.
+pub fn hello(name: text) -> text { name }
+
+fn private_helper() {}
+";
+        let items = extract_api_items(src);
+        assert_eq!(items.len(), 1, "only the pub fn is surfaced");
+        assert_eq!(items[0].sig, "pub fn hello(name: text) -> text");
+        assert_eq!(items[0].doc, "A greeting helper.");
+    }
 }

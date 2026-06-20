@@ -177,6 +177,32 @@ def gate_reproducible_build(idx: dict, prev: dict) -> None:
                 )
             print(f"[repro] {name} v{ver} reproduces from source")
 
+            # S7-CI: re-derive the function-level `api` from the cloned source and
+            # reject a pasted field that disagrees, so `loft search`'s function
+            # discovery can never point at a function the source does not have.
+            # The `api` field is AUTO-DERIVED by `loft publish` — it must equal
+            # the source, never hand-edited.  (Only checkable where the source is
+            # cloned; a package without a GitHub homepage has its `api` trusted-
+            # as-pasted, exactly like its sha256.)
+            submitted_api = vobj.get("api")
+            if submitted_api is not None:
+                try:
+                    derived = json.loads(
+                        subprocess.check_output(
+                            ["loft", "api", "--json", tmp], stderr=subprocess.PIPE
+                        )
+                    )
+                except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
+                    fail(f"`{name}` v{ver}: `loft api --json` re-derive failed: {e}")
+                if derived != submitted_api:
+                    fail(
+                        f"`{name}` v{ver}: `api` MISMATCH — the pasted `api` field "
+                        f"does not match the source at {tag}.\n"
+                        f"  The `api` field is auto-derived; re-run `loft publish` "
+                        f"and paste the regenerated entry rather than hand-editing it."
+                    )
+                print(f"[verify] {name} v{ver} api ({len(derived)} fns) matches source")
+
 
 def gate_trigger_uniqueness(idx: dict) -> None:
     """Every `method:receiver` Tier-1 trigger must be owned by at most one
