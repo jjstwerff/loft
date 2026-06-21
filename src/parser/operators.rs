@@ -1780,15 +1780,16 @@ struct WarnCtx {
     /// When a fault op uses `Var(v)` as its index AND `v` ∈ this set, we
     /// skip the warning (skip pattern 3).
     iter_vars: std::collections::HashSet<u16>,
-    /// `(idx_var, vec_var)` pairs proven safe by an enclosing
-    /// `if idx_var < len(vec_var) { ... }` guard.  Pushed on entry to
-    /// the `then` block, popped on exit.  Skip pattern 5.
-    guarded_pairs: Vec<(u16, u16)>,
-    /// Map from local-var slot → vec-var slot when the local was bound
+    /// `(idx_var, vec)` pairs proven safe by an enclosing
+    /// `if idx_var < len(vec) { ... }` guard, where `vec` is a `VecKey`
+    /// (a bare var OR a struct field read).  Pushed on entry to the
+    /// `then` block, popped on exit.  Skip pattern 5.
+    guarded_pairs: Vec<(u16, VecKey)>,
+    /// Map from local-var slot → vec `VecKey` when the local was bound
     /// via `n = len(vec)`.  Skip pattern 5 with `if i < n { v[i] }` then
     /// becomes equivalent to `if i < len(v) { v[i] }` via the lookup.
-    /// Populated when walking `Value::Set(local, Call(len, [Var(vec)]))`.
-    len_captures: std::collections::HashMap<u16, u16>,
+    /// Populated when walking `Value::Set(local, Call(len, [vec]))`.
+    len_captures: std::collections::HashMap<u16, VecKey>,
     /// Position of the innermost enclosing `Value::Span` — used as the
     /// fault site's source location when we emit a warning.
     last_pos: Option<Position>,
@@ -1800,6 +1801,42 @@ enum FaultKind {
     Rem,
     VectorIndex,
     TextIndex,
+}
+
+/// Identity of a "vector" a bounds guard can prove safe.  Either a bare
+/// local/parameter (`Var`) or a struct field read
+/// `OpGetField(Var(base), off, tp)`.  Skip-pattern 5 matches the guard's
+/// vec against the indexing's vec by this key, so
+/// `if i < len(self.v) { self.v[i] }` is proven exactly like the
+/// bare-local `if i < len(loc) { loc[i] }` form.  (A struct vector-field
+/// read COPIES post-@PLN85 #415, so the old `loc = self.v` alias trick is
+/// gone and value-correct code indexes the field directly.)
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum VecKey {
+    Var(u16),
+    Field(u16, i32, i32),
+}
+
+/// `VecKey` of an expression used as a vector — the indexing's first arg
+/// or a `len(...)` arg.  `Some` for a bare `Var` or an
+/// `OpGetField(Var(base), Int(off), Int(tp))`; `None` otherwise.
+fn vec_key(v: &Value, data: &Data) -> Option<VecKey> {
+    match v.unspan() {
+        Value::Var(n) => Some(VecKey::Var(*n)),
+        Value::Call(def_nr, args) => {
+            if data.def(*def_nr).original_name() != "GetField" || args.len() != 3 {
+                return None;
+            }
+            let Value::Var(base) = args[0].unspan() else {
+                return None;
+            };
+            let (Value::Int(off), Value::Int(tp)) = (args[1].unspan(), args[2].unspan()) else {
+                return None;
+            };
+            Some(VecKey::Field(*base, *off, *tp))
+        }
+        _ => None,
+    }
 }
 
 impl Parser {
@@ -2093,14 +2130,14 @@ fn is_easy_proof(kind: FaultKind, args: &[Value], ctx: &WarnCtx, data: &Data) ->
             // indexing `vec_var[expr]` where `expr` is loop/literal/guarded-var
             // arithmetic over the guard's idx_var.  Strip casts on the idx.
             if let Some(first) = args.first()
-                && let Value::Var(vec_var) = first.unspan()
+                && let Some(vk) = vec_key(first, data)
             {
                 let unwrapped = unwrap_cond(idx, data);
                 if let Value::Var(idx_var) = unwrapped
                     && ctx
                         .guarded_pairs
                         .iter()
-                        .any(|(i, v)| i == idx_var && v == vec_var)
+                        .any(|(i, v)| i == idx_var && *v == vk)
                 {
                     return true;
                 }
@@ -2122,8 +2159,8 @@ fn is_easy_proof(kind: FaultKind, args: &[Value], ctx: &WarnCtx, data: &Data) ->
 fn guard_pair_with_ctx(
     v: &Value,
     data: &Data,
-    captures: Option<&std::collections::HashMap<u16, u16>>,
-) -> Option<(u16, u16)> {
+    captures: Option<&std::collections::HashMap<u16, VecKey>>,
+) -> Option<(u16, VecKey)> {
     let inner = unwrap_cond(v, data);
     let Value::Call(def_nr, args) = inner else {
         return None;
@@ -2136,20 +2173,18 @@ fn guard_pair_with_ctx(
     let Value::Var(idx_var) = args[0].unspan() else {
         return None;
     };
-    // RHS can be either `len(<vec>)` inline OR a bare Var that was
-    // captured earlier as `<local> = len(<vec>)`.
+    // RHS can be either `len(<vec>)` inline (where `<vec>` is a bare var or
+    // a struct field read) OR a bare Var captured earlier as
+    // `<local> = len(<vec>)`.
     let rhs = args[1].unspan();
-    let vec_var = match rhs {
+    let vec = match rhs {
         Value::Call(len_def, len_args) => {
             let len_raw = data.def(*len_def).original_name();
             let len_name = len_raw.strip_suffix("Nullable").unwrap_or(len_raw.as_str());
             if !matches!(len_name, "len" | "LengthVector") || len_args.len() != 1 {
                 return None;
             }
-            let Value::Var(v) = len_args[0].unspan() else {
-                return None;
-            };
-            *v
+            vec_key(&len_args[0], data)?
         }
         Value::Var(n) => {
             let caps = captures?;
@@ -2157,7 +2192,7 @@ fn guard_pair_with_ctx(
         }
         _ => return None,
     };
-    Some((*idx_var, vec_var))
+    Some((*idx_var, vec))
 }
 
 /// Collect every `(idx_var, vec_var)` pair that `cond` proves safe.
@@ -2168,8 +2203,8 @@ fn guard_pair_with_ctx(
 fn collect_guard_pairs(
     cond: &Value,
     data: &Data,
-    captures: &std::collections::HashMap<u16, u16>,
-) -> Vec<(u16, u16)> {
+    captures: &std::collections::HashMap<u16, VecKey>,
+) -> Vec<(u16, VecKey)> {
     let mut out = Vec::new();
     collect_guard_pairs_into(cond, data, captures, &mut out);
     out
@@ -2178,8 +2213,8 @@ fn collect_guard_pairs(
 fn collect_guard_pairs_into(
     cond: &Value,
     data: &Data,
-    captures: &std::collections::HashMap<u16, u16>,
-    out: &mut Vec<(u16, u16)>,
+    captures: &std::collections::HashMap<u16, VecKey>,
+    out: &mut Vec<(u16, VecKey)>,
 ) {
     // Strip Conv* casts (handled by unwrap_cond).
     let inner = unwrap_cond(cond, data);
@@ -2211,7 +2246,7 @@ fn collect_guard_pairs_into(
 
 /// True when `src` is a `len(<Var>)` call — used to recognise the
 /// `<local> = len(<vec>)` capture pattern.  Returns the vec var-id.
-fn len_capture_target(src: &Value, data: &Data) -> Option<u16> {
+fn len_capture_target(src: &Value, data: &Data) -> Option<VecKey> {
     let Value::Call(def_nr, args) = src.unspan() else {
         return None;
     };
@@ -2220,10 +2255,7 @@ fn len_capture_target(src: &Value, data: &Data) -> Option<u16> {
     if !matches!(name, "len" | "LengthVector") || args.len() != 1 {
         return None;
     }
-    let Value::Var(v) = args[0].unspan() else {
-        return None;
-    };
-    Some(*v)
+    vec_key(&args[0], data)
 }
 
 /// Strip `ConvBoolFromInt` / `ConvIntFromInt` casts from a condition

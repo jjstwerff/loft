@@ -868,3 +868,88 @@ fn main() {
         "a variable divisor must still warn; got stderr={diag2:?}"
     );
 }
+
+// ── Skip pattern 5 — guarded STRUCT FIELD index ─────────────────────────────
+// `if i < len(self.v) { self.v[i] }` must be proven safe exactly like the
+// bare-local form.  Since a struct vector-field read COPIES (@PLN85 #415),
+// value-correct code indexes the field directly rather than a captured alias.
+
+#[test]
+fn skip_field_guarded_vec_index() {
+    let source = "\
+struct S { v: vector<text> not null }
+fn rd(self: S, i: integer) -> text {
+  if i < len(self.v) { self.v[i] } else { \"\" }
+}
+fn main() {
+  s = S { v: [\"a\", \"b\"] };
+  print(\"{rd(s, 0)}\\n\");
+}
+";
+    let (_stdout, diag, _code) = run_with_warnings("skip_field_guard", source);
+    assert!(
+        !diag.contains("may produce null on out-of-bounds"),
+        "a `if i < len(self.v) {{ self.v[i] }}` guard must NOT warn; got stderr={diag:?}"
+    );
+}
+
+#[test]
+fn skip_field_guarded_captured_len() {
+    let source = "\
+struct S { v: vector<text> not null }
+fn rd(self: S, i: integer) -> text {
+  n = len(self.v);
+  if i < n { self.v[i] } else { \"\" }
+}
+fn main() {
+  s = S { v: [\"a\"] };
+  print(\"{rd(s, 0)}\\n\");
+}
+";
+    let (_stdout, diag, _code) = run_with_warnings("skip_field_caplen", source);
+    assert!(
+        !diag.contains("may produce null on out-of-bounds"),
+        "captured `n = len(self.v); if i < n {{ self.v[i] }}` must NOT warn; got stderr={diag:?}"
+    );
+}
+
+#[test]
+fn undefended_field_vec_index_warns() {
+    let source = "\
+struct S { v: vector<text> not null }
+fn rd(self: S, i: integer) -> boolean {
+  x = self.v[i];
+  x != null
+}
+fn main() {
+  s = S { v: [\"a\"] };
+  print(\"{rd(s, 0)}\\n\");
+}
+";
+    let (_stdout, diag, _code) = run_with_warnings("undef_field", source);
+    assert!(
+        diag.contains("may produce null on out-of-bounds"),
+        "an UNguarded `self.v[i]` must still warn; got stderr={diag:?}"
+    );
+}
+
+#[test]
+fn wrong_field_guard_still_warns() {
+    // Guard proves `i < len(self.v)` but the index is on a DIFFERENT field
+    // `self.w` — the VecKey differs, so the warning must still fire.
+    let source = "\
+struct S { v: vector<text> not null, w: vector<text> not null }
+fn rd(self: S, i: integer) -> text {
+  if i < len(self.v) { self.w[i] } else { \"\" }
+}
+fn main() {
+  s = S { v: [\"a\"], w: [\"b\"] };
+  print(\"{rd(s, 0)}\\n\");
+}
+";
+    let (_stdout, diag, _code) = run_with_warnings("wrong_field_guard", source);
+    assert!(
+        diag.contains("may produce null on out-of-bounds"),
+        "a guard on a DIFFERENT field must still warn; got stderr={diag:?}"
+    );
+}
