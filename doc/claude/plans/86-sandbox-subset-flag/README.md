@@ -142,10 +142,12 @@ What is built is listed under [§ Implementation progress](#status); what remain
   `#cap` is per-def only.
 
 ### C. Precision / completeness refinements
-- **1.3b L4 residual** — `referenced_defs` resolves fn-refs through call-args + assignments;
-  a fn-ref flowing through a `Function`-typed RETURN value, struct field, or collection
-  element is not yet followed. Close before a host hands untrusted code such a ref (the §4
-  host-contract covers the trusted boundary meanwhile).
+- **1.3b L4 residual — ✅ DONE.** Every fn-ref is now recorded at its CREATION site
+  (`sandbox_fn_refs`, `record_sandbox_fn_ref` at the two `Value::Int(fn_d_nr)` points in
+  `objects.rs`), so a fn-ref flowing through a RETURN value, struct field, or collection
+  element is caught completely + precisely — `add_recorded_fn_refs` unions it into every
+  admission walk (capability, FFI-reach, recursion). Verified: a fn-ref to `mtime` hidden in
+  `[mtime]` is rejected naming `fs.read`. The capability arc is now soundly closed.
 - **3.3b abort-op robustness** — `ABORT_OPS` (`n_assert`/`n_panic`/`n_log_fatal`) is a
   by-name list; a `#[fault]`-style attribute on the def would be rename-proof, and the set
   should be audited for other process-terminating ops.
