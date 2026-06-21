@@ -2075,23 +2075,17 @@ use a separate collection or add after the loop"
         if struct_d == self.cur_type_var {
             return elem;
         }
-        if self.data.def_type(struct_d) != crate::data::DefType::Struct
-            || self.data.def(struct_d).synthetic.is_some()
-        {
-            return elem;
+        // The eligibility (non-stdlib, non-synthetic struct) and the synth-enum
+        // lookup live in ONE home — `typedef::nullable_vector_elem` — shared with the
+        // deferred forward-ref resolver (`copy_unknown_fields`), so a `vector<S>`
+        // element resolves identically whether `S` was known here or only later.
+        // (A STDLIB struct stays DENSE even inside a consumer's collection — its
+        // `#rust` bodies write the dense ABI — which the helper's struct-source check
+        // enforces.)
+        match crate::typedef::nullable_vector_elem(&mut self.data, &mut self.lexer, struct_d) {
+            Some(syn) => Type::Enum(syn, true, Deps::none()),
+            None => elem,
         }
-        // @PLN25 — a STDLIB struct stays DENSE even inside a CONSUMER's collection.  The
-        // stdlib produces/consumes its own structs densely (e.g. `stack_trace()` returns a
-        // dense `vector<StackFrame>`), so rewriting a consumer's `vector<StackFrame>` to
-        // `vector<__nullable<StackFrame>>` desyncs the boundary ("expected
-        // vector<__nullable<StackFrame>>, got vector<StackFrame> on return").  Mirror the
-        // `e2_rewrite_enabled` STD_SOURCE exclusion, but keyed on the STRUCT's source rather
-        // than the current parse source.
-        if self.data.def(struct_d).source == crate::data::STD_SOURCE {
-            return elem;
-        }
-        let syn = self.data.nullable_enum_for(&mut self.lexer, struct_d);
-        Type::Enum(syn, true, Deps::none())
     }
 
     // <assign> ::= <operators> [ '=' | '+=' | '-=' | '*=' | '%=' | '/=' <operators> ]
