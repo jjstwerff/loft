@@ -25,14 +25,28 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > *how*: the same admission + containment + bounded-execution mechanism, below.
 >
 > Written the loft way: every requirement is pinned to a **runnable Check**, so
-> the gap is measurable, not aspirational. Most Checks are RED today; this doc is
-> the checklist the work flips to GREEN.
+> the gap is measurable, not aspirational.
 >
 > **The loft-specific unlock:** the store architecture already carries the pieces
 > for a transactional world — a journal (`src/database/journal.rs::snapshot`) and
 > cross-store copy (`copy_block_cross_store`) — and the live surface exists too
 > (`src/repl.rs`, `src/live_reload.rs`, `src/live_dispatch.rs`). So this is
 > *assembling existing substrate behind an admission gate*, not green-field.
+
+> ## ✅ Admission control is BUILT — @PLN86 v1
+>
+> The **admission half** (idea 1) is implemented, tested, and CLI-enforced —
+> [plan `86-sandbox-subset-flag`](plans/86-sandbox-subset-flag/README.md). A host
+> declares a `[sandbox]` policy in `loft.toml`; designated functions are admitted
+> only if proven safe at LOAD, and rejected with actionable errors otherwise.
+> Surface: `Parser::sandbox_admission_errors` (+ `sandbox_forces_interpret`),
+> `src/sandbox.rs`. **Checks S1–S5 are now GREEN; S7/S8 are partially closed**
+> (statuses updated per-invariant below). The four arcs an admitted script
+> satisfies: **capability** (reaches only allow-listed libraries/groups),
+> **termination** (bounded loops + acyclic recursion + total ops), **data
+> integrity** (no raw writes to host data), **backend** (no FFI + force-interpret).
+> Remaining work is post-v1 (transactional world S7, an embedding `run_script`
+> boundary S8, expressiveness relaxations) — see the plan's § Open work.
 
 ## The model — validate before allow, don't isolate after
 
@@ -86,8 +100,12 @@ API + vetted pure-loft libraries. No file / network / env / process / FFI native
 - **Check:** a script that calls `file(...)` / `env_variable(...)` / `write(...)`
   (`default/02_files.loft`) or a `web`/`server` native — or `use`s a native-cdylib
   lib — is **rejected at admission** with a named-symbol reason.
-- **Status: 🔴 RED.** Those are plain `pub fn`s any script calls; there is no
-  admission gate (no deny-by-default capability model anywhere in `src/`).
+- **Status: 🟢 GREEN (@PLN86).** Library-first admission (`sandbox::admit_capabilities`):
+  a reachable trusted symbol admits iff its **library** is allow-listed wholesale
+  (`allow_libs`) or its `#cap` **group** is (`allow_caps`), else rejected naming the
+  symbol + group + fix. L4-complete — indirect fn-refs (`f = read_file; f(…)`) resolve to
+  their target, so they can't escape. A script calling `file(...)`/`write(...)` under a
+  policy that grants neither is rejected at load.
 
 ### S2 — No native FFI, no rustc
 An admitted script never loads a cdylib and never runs through the native (rustc)
@@ -97,9 +115,12 @@ backend (generating + compiling Rust on the host is RCE by construction).
   `dlopen`. `cargo build --no-default-features` (drops the `native-extensions`
   feature) compiles the `libloading` path out entirely — a buildable proof the
   FFI surface can be removed.
-- **Status: 🔴 RED.** `native` is the **default** backend (`loft --help`:
-  *"native is default"*); cdylibs `dlopen` freely via `libloading`
-  (`src/extensions.rs`). Feature-gated but on by default.
+- **Status: 🟢 GREEN (@PLN86 1.4).** `Parser::sandbox_forces_interpret` forces interpret
+  for any sandboxed program and the CLI **refuses an explicit `--native`**;
+  `sandbox::reachable_ffi_bridges` rejects a reachable external cdylib bridge unless
+  `native_ffi` is granted. `cargo build --no-default-features` compiles the `libloading`
+  path out (verified). *Remaining (post-v1):* feature-gate the rustc *codegen* path too, so
+  a deployment can build with ZERO host-codegen surface.
 
 ### S3 — Bounded recursion / call depth
 No unbounded recursion: either statically reject cycles in the call graph the
@@ -108,12 +129,12 @@ stack.
 - **Chokepoint:** the resolved call graph (admission) + a depth counter (runtime).
 - **Check:** a deeply-recursive / deeply-nested script is **rejected or
   depth-capped — never a crash**.
-- **Status: 🔴 RED — and worse than unbounded: it CRASHES.** A 5000-deep nested
-  expression **segfaults the parser** (`rc=139`):
-  ```sh
-  python3 -c "print('fn main(){x='+'('*5000+'1'+')'*5000+';}')" > /tmp/n.loft
-  ./target/release/loft --interpret /tmp/n.loft   # → SIGSEGV (139)
-  ```
+- **Status: 🟢 GREEN (@PLN86 3.2 + 0.1).** Recursion is rejected at admission:
+  `sandbox::recursion_cycles` runs a colour-DFS over the sandboxed call graph and rejects
+  any cycle (self + mutual), naming it. And the parser nesting guard (0.1) bounds expression
+  depth *inside a sandboxed def* so the once-`rc=139` deep-nesting segfault is now a clean
+  LOAD-time error there (limit 128). *(The guard is sandbox-scoped — trusted code is
+  unaffected; a global parser-depth cap is separate.)*
 
 ### S4 — Bounded loops / per-script fuel
 Loop back-edges (and calls) decrement a **per-script** budget; exhaustion aborts
@@ -121,14 +142,13 @@ Loop back-edges (and calls) decrement a **per-script** budget; exhaustion aborts
 - **Chokepoint:** the bytecode loop back-edge / a fuel counter in the VM dispatch.
 - **Check:** `fn main(){ while true {} }` aborts via budget and the host keeps
   running (a recoverable error, not a process death).
-- **Status: 🔴 RED.** The only bound is a process-level wall-clock `--timeout`
-  (`src/timeout.rs`, @PLN49) that **hard-kills the whole process** (SIGABRT):
-  ```sh
-  printf 'fn main(){x=0; while true {x=x+1;}}' > /tmp/l.loft
-  ./target/release/loft --interpret --timeout 3 /tmp/l.loft
-  # → "[timeout] hard-kill after 3s+2s grace" + SIGABRT  (kills the engine, not just the script)
-  ```
-  Useless for a frame loop: it ends the game, not the runaway mod.
+- **Status: 🟢 GREEN by admission (@PLN86 3.1).** v1 solves this at LOAD, not runtime: an
+  unbounded `while` in a sandboxed def is **rejected at admission** (`sandbox::admit_totality`
+  → `UnboundedLoop`), so it never runs — only bounded `for x in <collection>` / `for i in
+  0..N` is admitted. The `O(n^d)` complexity report (3.4) additionally lets the host bound
+  inputs so no admitted loop stalls a frame. *(A runtime per-script fuel counter — for a
+  recoverable backstop instead of the process-level `--timeout` SIGABRT — is the post-v1
+  runtime complement.)*
 
 ### S5 — Crash-safe admission (the FOUNDATIONAL prerequisite)
 The validator — i.e. the parser — must **reject** hostile input, never crash. You
@@ -136,7 +156,10 @@ cannot gate on a validator that segfaults: S1/S3 are unreachable until the parse
 that feeds them is itself bounded.
 - **Chokepoint:** parser recursion-depth limit (return a parse error at depth N).
 - **Check:** the S3 nested-source probe returns a clean parse error, not SIGSEGV.
-- **Status: 🔴 RED.** Same `rc=139` segfault as S3. **Land this first.**
+- **Status: 🟢 GREEN (@PLN86 0.1).** The parser nesting guard returns a clean LOAD-time
+  error past a depth bound while parsing a sandboxed def's body — the validator no longer
+  segfaults on the hostile nested-source probe. (Scoped to sandboxed defs; zero cost to
+  trusted code.)
 
 ### S6 — Performance preserved (the whole point)
 An admitted script runs in-process with direct store (`DbRef`) access — no
@@ -145,9 +168,10 @@ per-access marshalling — so per-frame data work stays at interpreter speed.
 - **Check:** a benchmark — a script reading/writing N entities/frame stays within
   a frame budget vs a native baseline (graduate to `benches/` once script mode
   exists).
-- **Status: ⚪ N/A today** (no script mode) — but the asset is real: loft's direct
-  `DbRef` store access is exactly what makes the in-process tier fast. This is the
-  reason NOT to choose the wasm-marshalling tier for game scripts.
+- **Status: 🟢 ENABLED (@PLN86), benchmark pending.** Admitted scripts run in-process,
+  interpret-only, sharing the engine's `Stores` at direct `DbRef` speed — no marshalling.
+  The admission model is built, so the fast in-process tier is now realizable; a `benches/`
+  per-frame benchmark vs a native baseline is the remaining proof.
 
 ### S7 — Effect containment (transactional sandbox world)
 A script READS the live world (fast, rich, direct) but its WRITES land in a
@@ -158,9 +182,12 @@ live world is untouched until explicitly committed. "Break everything" becomes
   commit-or-discard at the script boundary.
 - **Check:** run a script that mangles state in the sandbox, then discard → the
   live world is byte-identical to before; commit → the changes apply atomically.
-- **Status: 🔴 RED, but substrate exists.** Scripts share the live store directly;
-  no transaction boundary. The pieces are there: `src/database/journal.rs::snapshot`
-  + `copy_block_cross_store` (`src/database/structures.rs`).
+- **Status: 🟡 PARTIAL (@PLN86 2.4) + substrate exists.** Admission now forbids **raw
+  writes** to host data (`e.health = 0` / `v[i] = 9` → rejected; `sandbox::RawWriteViolation`)
+  — a script mutates host data only through allow-listed `*.write` ops, so it cannot corrupt
+  an invariant in the first place. The *transactional rollback* (run against a journal,
+  commit-or-discard) is the remaining runtime piece; substrate is there
+  (`journal.rs::snapshot` + `copy_block_cross_store`).
 
 ### S8 — Fault isolation (the host survives any script fault)
 A script that errors / overflows / hangs is caught at the *embedding boundary* and
@@ -171,16 +198,24 @@ gets a `Result`, never an `exit()` / abort / segfault.
   on an unparsed-safe input (S5).
 - **Check:** a script doing OOB / div-by-zero / `while true {}` returns a
   script-level error and the host continues serving.
-- **Status: 🟡 PARTIAL.** The *errors* are modeled and clean — OOB index returns
-  `null` (exit 0), div-by-zero is a clean error (exit 1) — so they are recoverable
-  by design. The gaps: loft is a CLI that **exits the process** (no `run_script`
-  API that *returns* the fault to an embedder), and the two true crashes — the
-  parser segfault (S5) and the loop `SIGABRT` (S4) — bypass any boundary. Close
-  S5 + S4, then deliver faults through an embedding API.
+- **Status: 🟡 PARTIAL → much stronger (@PLN86).** An *admitted* script is now proven not
+  to fault: total ops (3.3 — div-by-zero → `null`, OOB → `null`), no unbounded loop (3.1),
+  no recursion (3.2), and the explicit-abort ops `assert`/`panic`/`log_fatal` are **excluded
+  at admission**. The two former crash paths are closed for sandboxed code (parser guard S5,
+  loop-rejection S4). *Remaining:* an embedding `run_script(src, policy) -> Result<_,
+  ScriptError>` boundary so a host (not the CLI) gets the fault as a value — belt-and-
+  suspenders for an interpreter bug.
 
 ---
 
 ## Buildable now — the first slice (no substrate rework)
+
+> **✅ Executed by [@PLN86 v1](plans/86-sandbox-subset-flag/README.md).** This was
+> the original first-slice plan; the admission half is now built and CLI-enforced.
+> Items 1 (parser guard), 3 (interpret-only + no-FFI), and 6 (capability allowlist —
+> grown into the full library-first model) are DONE; items 2/4/5 (a committed
+> regression suite, the `run_script` embedding boundary, runtime op-budget) are the
+> remaining runtime-side work. Kept below as the historical decomposition.
 
 These are XS/S, individually validatable, and need none of the big pieces
 (transactional world, wasm tier, full fuel). Each flips a RED Check above to
