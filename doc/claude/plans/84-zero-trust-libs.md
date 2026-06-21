@@ -105,10 +105,23 @@ Run the **same** crypto API in the browser with a minimal bundle.
 > (`+=` after FFI alloc) are all **closed**; the forward-ref enum↔struct variant of
 > the cbor-map corruption, `#417`, is **fixed** (`fixed-pending-merge`, this branch —
 > the one-home `nullable_vector_elem` resolution). **Remaining work has NO compiler
-> gate** — it is browser-bridge library development: the crypto wasm bridge (B1–B6:
-> `crypto.subtle` mapping + async↔sync + release), the web wasm bridge (C2–C3:
-> browser `WebSocket` + CBOR frames), and the plugin runtime (ZT-E). ZT-D2 rustls
-> deferred. Next: stand up the wasm-bridge build/headless test path, then B1.
+> gate** — it is browser-bridge library development. **B1 reframed + half-shipped
+> (2026-06-21):** the `[wasm.bridge]` path compiles a pure-Rust bridge crate to wasm
+> — it is NOT a `crypto.subtle`/JS mapping (those are async Promises, which the
+> synchronous loft host ABI can't consume → that's B2's asyncify job). The headless
+> verify loop is now stood up (node `tools/wasm_repro.mjs`, no browser needed; build
+> via `loft --html`). **Shipped + verified `native == wasm`** (same KAT on
+> `--interpret` AND on the wasm backend, exit 0): `sha256`, `hmac_sha256`,
+> `base64_encode`/`base64_decode`/`base64url_encode`, `hkdf_sha256`/`hkdf_extract`/
+> `hkdf_expand` — hashing+base64 SHARED byte-identical via `#[path]` from the native
+> zero-dep `sha256.rs`/`base64.rs`, HKDF a pure-Rust RFC-5869 re-impl over the shared
+> HMAC (loft-libs-core@9811181). **B1 remaining:** `ed25519`/`x25519`/`aes256gcm`/
+> `random_bytes` — never hand-roll the curve/AEAD crypto; route them via the
+> **build-extension** (compile the bridge crate's dalek/RustCrypto deps to
+> wasm32-unknown-unknown so the bridge reuses the SAME vetted code as native →
+> `native == wasm` by construction), with `random_bytes` via a synchronous
+> `getRandomValues` host import. Then the web wasm bridge (C2–C3: browser `WebSocket`
+> + CBOR frames) and the plugin runtime (ZT-E). ZT-D2 rustls deferred.
 
 - **B1 — `[wasm.bridge]` → `crypto.subtle`.** Map each `n_crypto_*`:
   ed25519 sign/verify, x25519_dh, aes256gcm seal/open, hkdf, sha256, hmac,
