@@ -246,7 +246,15 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
             ${{ runner.os }}-cargo-
-      - name: Cache cargo registry and build (Windows — drops target/, see above)
+      # Drops target/'s BULK (the 4.5 GB dep/build artefacts + the ~9-min NTFS
+      # save) but KEEPS `target/loft-native-cache` — loft's native-test binary
+      # cache (`LOFT_TMPDIR`, env above), keyed on the libloft.rlib content hash.
+      # Dropping ALL of target/ (the first cut of this change) also dropped this,
+      # so every per-test `--native` compile went cold and the Test step ballooned
+      # ~700s → ~1200s, eating the cache-save win (measured on PR #413's Windows
+      # leg).  This sub-path is small, so the Windows cache still fits under the
+      # 10 GB eviction budget AND the test phase restores warm on repeat runs.
+      - name: Cache cargo registry and build (Windows — drops target/ bulk, keeps native-test cache)
         if: runner.os == 'Windows'
         uses: actions/cache@v4
         with:
@@ -255,6 +263,7 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             ~/.loft/build-cache
+            target/loft-native-cache
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
           restore-keys: |
             ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
