@@ -115,13 +115,18 @@ Run the **same** crypto API in the browser with a minimal bundle.
 > `base64_encode`/`base64_decode`/`base64url_encode`, `hkdf_sha256`/`hkdf_extract`/
 > `hkdf_expand` — hashing+base64 SHARED byte-identical via `#[path]` from the native
 > zero-dep `sha256.rs`/`base64.rs`, HKDF a pure-Rust RFC-5869 re-impl over the shared
-> HMAC (loft-libs-core@9811181). **B1 remaining:** `ed25519`/`x25519`/`aes256gcm`/
-> `random_bytes` — never hand-roll the curve/AEAD crypto; route them via the
-> **build-extension** (compile the bridge crate's dalek/RustCrypto deps to
-> wasm32-unknown-unknown so the bridge reuses the SAME vetted code as native →
-> `native == wasm` by construction), with `random_bytes` via a synchronous
-> `getRandomValues` host import. Then the web wasm bridge (C2–C3: browser `WebSocket`
-> + CBOR frames) and the plugin runtime (ZT-E). ZT-D2 rustls deferred.
+> HMAC (loft-libs-core@9811181). **Curve/AEAD ALSO shipped + verified `native ==
+> wasm`** (RFC 8032 / RFC 7748 / Wycheproof KAT on `--interpret` AND wasm, exit 0):
+> `ed25519_public_key`/`sign`/`verify`, `x25519_dh`, `aes256gcm_seal`/`open` —
+> SHARED byte-identical via `#[path]` from the native `ed25519.rs`/`x25519.rs`/
+> `aes256gcm.rs`, with the vetted dalek/RustCrypto crates compiled to
+> wasm32-unknown-unknown by the **build-extension** in `src/main.rs` (cargo-build
+> the bridge crate's Cargo deps for wasm32, `--extern` the direct deps + `-L` the
+> deps dir on the bridge rustc compile and the main wasm link).  The deterministic
+> ops need no RNG, so no getrandom / wasm-bindgen.  **B1 remaining:** only
+> `random_bytes` — it needs OS entropy, a synchronous `getRandomValues` host import
+> (the one non-pure-compute bridge).  Then the web wasm bridge (C2–C3: browser
+> `WebSocket` + CBOR frames) and the plugin runtime (ZT-E). ZT-D2 rustls deferred.
 
 - **B1 — `[wasm.bridge]` → `crypto.subtle`.** Map each `n_crypto_*`:
   ed25519 sign/verify, x25519_dh, aes256gcm seal/open, hkdf, sha256, hmac,
