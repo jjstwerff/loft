@@ -8469,4 +8469,52 @@ mod plan86_admission_tests {
             p3.sandbox_totality()
         );
     }
+
+    /// @PLN86 3.3 — total-op check: an explicit-abort op (`assert`) is excluded
+    /// (it faults the script), while arithmetic stays total — a divide-by-zero is
+    /// the interpreter's null sentinel, NOT a rejected op.
+    #[test]
+    fn totality_excludes_abort_ops_admits_total_arithmetic() {
+        // assert faults → excluded as a partial op
+        let p = parse_admit_libs(
+            &["fn:checks"],
+            &["code"],
+            &[],
+            "fn checks(n: integer) -> integer { assert(n > 0, \"pos\"); n }\n",
+        );
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        assert!(
+            p.sandbox_totality()
+                .iter()
+                .any(|v| matches!(v, TotalityViolation::PartialOp { .. })),
+            "assert must be excluded as a partial op, got {:?}",
+            p.sandbox_totality()
+        );
+        assert!(
+            p.sandbox_admission_errors()
+                .iter()
+                .any(|e| e.contains("assert") && e.contains("fix")),
+            "{:?}",
+            p.sandbox_admission_errors()
+        );
+
+        // a divide-by-zero is total on the interpreter → NOT a partial op
+        let p2 = parse_admit_libs(
+            &["fn:divides"],
+            &["code"],
+            &[],
+            "fn divides(a: integer, b: integer) -> integer { a / b ?? 0 }\n",
+        );
+        assert!(
+            !p2.sandbox_totality()
+                .iter()
+                .any(|v| matches!(v, TotalityViolation::PartialOp { .. })),
+            "arithmetic is total (not excluded), got {:?}",
+            p2.sandbox_totality()
+        );
+    }
 }

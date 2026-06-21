@@ -571,7 +571,23 @@ pub enum TotalityViolation {
     /// A cycle in the sandboxed call graph — recursion.  v1 is acyclic-only; the
     /// `cycle` lists the sandboxed defs forming the back-edge.
     Recursion { cycle: Vec<u32> },
+    /// `def` reaches a **partial op** that faults the script (3.3): `assert` /
+    /// `panic` / `log_fatal` abort, which would break the host.  The arithmetic
+    /// ops are NOT here — the interpreter makes them total (div/mod-by-zero →
+    /// null, OOB → null, overflow wraps), and the sandbox is interpret-only, so
+    /// they never fault.  Only the explicit-abort ops are excluded.
+    PartialOp {
+        def: u32,
+        op: u32,
+        position: Option<Position>,
+    },
 }
+
+/// @PLN86 step 3.3 — the explicit-abort ops excluded from sandboxed code: they
+/// terminate the script (a fault the host must never see), and unlike the
+/// arithmetic ops cannot be given a total result.  By stored name so the check
+/// is a set membership over the reachable refs.
+pub(crate) const ABORT_OPS: &[&str] = &["n_assert", "n_panic", "n_log_fatal"];
 
 /// The sandboxed defs that `from` calls — the edges of the sandboxed call graph
 /// (trusted callees are not followed; they are total by the host contract).
@@ -674,6 +690,26 @@ pub fn admit_totality(
     for cycle in recursion_cycles(data, sandboxed) {
         violations.push(TotalityViolation::Recursion { cycle });
     }
+    // 3.3 — reachable explicit-abort ops (assert / panic / log_fatal).  The
+    // arithmetic ops are total on the interpreter, so they are NOT rejected; only
+    // the ops that fault the script are excluded.
+    let mut entries: Vec<u32> = sandboxed.keys().copied().collect();
+    entries.sort_unstable();
+    for def in entries {
+        let mut refs = HashSet::new();
+        referenced_defs(data, def, &mut refs);
+        let mut refs: Vec<u32> = refs.into_iter().collect();
+        refs.sort_unstable();
+        for op in refs {
+            if !sandboxed.contains_key(&op) && ABORT_OPS.contains(&data.def(op).name()) {
+                violations.push(TotalityViolation::PartialOp {
+                    def,
+                    op,
+                    position: reference_position(data, def, op),
+                });
+            }
+        }
+    }
     violations
 }
 
@@ -701,6 +737,19 @@ pub fn describe_totality_violation(data: &Data, v: &TotalityViolation) -> String
                 "sandboxed recursion is not permitted (the script must be provably total): \
                  the call cycle `{chain} → {tail}` is unbounded.\n  fix: replace the \
                  recursion with a bounded `for` loop over the work to do."
+            )
+        }
+        TotalityViolation::PartialOp { def, op, position } => {
+            let from = display_name(data, *def);
+            let op_name = display_name(data, *op);
+            let at = position
+                .as_ref()
+                .map_or_else(String::new, |p| format!("{p}: "));
+            format!(
+                "{at}sandboxed `{from}` calls `{op_name}`, which faults the script — a \
+                 sandboxed script may never abort the host.\n  fix: handle the condition \
+                 without `{op_name}` (e.g. `if !ok {{ return <default> }}`, or `a / b ?? 0` \
+                 for a divide-by-zero — arithmetic faults are already total/null)."
             )
         }
     }
