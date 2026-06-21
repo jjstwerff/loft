@@ -804,6 +804,47 @@ impl Parser {
                             }
                         }
                     }
+                } else if !self.first_pass
+                    && ls.iter().any(|&d| self.vars.is_argument(d))
+                    && self.tail_is_struct_field_read(l)
+                    && let Some((buf_attr, buf_var)) = self.return_buffer()
+                    && !ls.contains(&buf_var)
+                {
+                    // #415 — an implicit-tail return of a STRUCT vector FIELD of
+                    // an argument (`fn getv(b: Box) -> vector { b.v }`): the tail
+                    // borrows the caller's store, so returning it ALIASES the arg.
+                    // Copy the field into `__retbuf` (clear + element-append) and
+                    // return the buffer, so the caller adopts an independent copy
+                    // — value semantics. The EXPLICIT `return b.v` already does
+                    // this (~4527) and the `a = bx.v` bind-site copy is the same
+                    // shape (suite-proven). Narrowed by `tail_is_struct_field_read`
+                    // to struct-field tails: whole-arg / index / call tails stay on
+                    // the ref_return path (the over-broad cut regressed the suite).
+                    let elm_ty = (**elm).clone();
+                    let fwd = self
+                        .create_var("__fwd", &Type::Vector(Box::new(elm_ty.clone()), Deps::none()));
+                    if fwd != u16::MAX
+                        && let Some(last) = l.last_mut()
+                    {
+                        let rec_tp = self.append_elem_tp(&elm_ty);
+                        let clear = self.cl("OpClearVector", &[Value::Var(buf_var)]);
+                        let append = self.cl(
+                            "OpAppendVector",
+                            &[Value::Var(buf_var), Value::Var(fwd), Value::Int(rec_tp)],
+                        );
+                        let orig = std::mem::replace(last, Value::Null);
+                        let set_fwd = crate::data::v_set(fwd, orig);
+                        *last = crate::data::v_block(
+                            vec![set_fwd, clear, append, Value::Var(buf_var)],
+                            Type::Vector(Box::new(elm_ty.clone()), Deps::frame1(buf_var)),
+                            "field_borrow_copy_415",
+                        );
+                        self.data.definitions[self.context as usize].returned =
+                            Type::Vector(Box::new(elm_ty), Deps::attrs(vec![buf_attr]));
+                    } else {
+                        self.ref_return(ls, l, RetSite::BlockTail);
+                        self.nrvo_collapse_tail_set(l, ls);
+                    }
                 } else {
                     self.ref_return(ls, l, RetSite::BlockTail);
                     // @P377 / S1: collapse `cv = inner_call(...); cv` so the
@@ -3830,6 +3871,37 @@ impl Parser {
                 true
             }
             _ => false,
+        }
+    }
+
+    /// #415 — does the block's tail expression read a STRUCT vector field
+    /// (`b.v` where the base is a `Reference`), as opposed to a whole var, a
+    /// call, or a vector INDEX read (`vv[i]`, base is a `Vector`)? Gates the
+    /// implicit-tail copy below: only a struct-field borrow of an argument needs
+    /// copying into the return buffer. Mirrors the bind-site narrowing for
+    /// `a = bx.v` — a vector index read's nested-element stride must NOT take
+    /// the append-copy path (plan-58 nested-bool).
+    fn tail_is_struct_field_read(&self, l: &[Value]) -> bool {
+        let mut v = match l.last() {
+            Some(v) => v,
+            None => return false,
+        };
+        loop {
+            match v.unspan() {
+                Value::Return(inner) | Value::Drop(inner) => v = inner,
+                Value::Block(bl) => match bl.operators.last() {
+                    Some(x) => v = x,
+                    None => return false,
+                },
+                Value::Call(d, args) => {
+                    return *d == self.data.def_nr("OpGetField")
+                        && matches!(
+                            args.first().map(|a| a.unspan()),
+                            Some(Value::Var(bv)) if matches!(self.vars.tp(*bv), Type::Reference(_, _))
+                        );
+                }
+                _ => return false,
+            }
         }
     }
 
