@@ -599,6 +599,14 @@ impl Parser {
         crate::sandbox::admit_capabilities(&self.data, &self.sandbox, &self.def_sandbox)
     }
 
+    /// @PLN86 step 2.2 — the capability-coverage lint: public functions lacking a
+    /// `#cap "group"`.  The host runs this over the stdlib + libraries to find the
+    /// surface still to tag; an empty result is full coverage (L3-cap).
+    #[must_use]
+    pub fn untagged_public_symbols(&self) -> Vec<u32> {
+        crate::sandbox::untagged_public_symbols(&self.data)
+    }
+
     /// # Panics
     /// With filesystem problems.
     pub fn parse(&mut self, filename: &str, default: bool) -> bool {
@@ -8140,6 +8148,29 @@ mod plan86_admission_tests {
                 group: "fs.read".to_string(),
             }),
             "L4 indirect fn-ref to fs.read must be rejected, got {v:?}"
+        );
+    }
+
+    /// @PLN86 2.2 — the coverage lint lists an untagged public function and omits a
+    /// tagged one (the work-list for tagging the stdlib/library surface).
+    #[test]
+    fn coverage_lint_lists_untagged_public_functions() {
+        let src = "pub fn tagged_fn() -> integer;\n#native\n#cap \"math\"\n\
+                   pub fn untagged_fn() -> integer;\n#native\n";
+        let p = parse_admit(&[], &[], src);
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        let untagged = p.untagged_public_symbols();
+        assert!(
+            untagged.contains(&p.data.def_nr("n_untagged_fn")),
+            "an untagged public fn must be listed"
+        );
+        assert!(
+            !untagged.contains(&p.data.def_nr("n_tagged_fn")),
+            "a tagged public fn must NOT be listed"
         );
     }
 }

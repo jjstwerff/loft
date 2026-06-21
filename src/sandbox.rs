@@ -11,7 +11,7 @@
 //! group is permitted only when an `allow_caps` entry is a dotted-segment prefix
 //! of it.
 
-use crate::data::{Data, Type, Value};
+use crate::data::{Data, DefType, Type, Value};
 use std::collections::{HashMap, HashSet};
 
 /// A named admission profile: which capability **groups** a sandboxed script may
@@ -384,6 +384,26 @@ pub fn admit_capabilities(
         }
     }
     violations
+}
+
+/// @PLN86 step 2.2 — the capability-coverage lint (L3-cap): every public function
+/// the host exposes must carry a `#cap "group"`, or admission can only deny-by-
+/// default reject it.  Returns the public, non-synthetic function defs that lack
+/// a group, sorted — the work-list for tagging the stdlib / library surface.  The
+/// END state is an empty result; until the surface is tagged this lists it.
+#[must_use]
+pub fn untagged_public_symbols(data: &Data) -> Vec<u32> {
+    let mut out: Vec<u32> = (0..data.definitions())
+        .filter(|&d| {
+            let def = data.def(d);
+            def.pub_visible
+                && matches!(def.def_type(), DefType::Function)
+                && def.synthetic().is_none()
+                && def.cap().is_empty()
+        })
+        .collect();
+    out.sort_unstable();
+    out
 }
 
 #[cfg(test)]
