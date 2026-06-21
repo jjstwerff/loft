@@ -379,6 +379,7 @@ The rule: **always commit before any operation that changes the working tree.**
 | [THREADING.md](doc/claude/THREADING.md) | Parallel execution — `par`/`par_light`, thread safety, store isolation |
 | [INTERFACES.md](doc/claude/INTERFACES.md) | Interface/trait system — bounded generics, operator overloading |
 | [WASM.md](doc/claude/WASM.md) | WASM runtime (wasm32-wasip2, VirtFS, host bridges, threading, frame yield). Major W1.x shipped; lone open item W1.18-6 |
+| [SANDBOX.md](doc/claude/SANDBOX.md) | Letting users run scripts without breaking the host (player playgrounds / game mods): admission-time validation (capability/library/loop/recursion limits) + effect-containment (transactional store) + fault-isolation, each pinned to a runnable Check (most RED today) + the buildable-now first slice. Aspirational/design |
 | [WINDOWS.md](doc/claude/WINDOWS.md) | Windows support — verified state, gaps G1–G4 + per-gap VM runbook |
 | [WINDOWS_SESSION.md](doc/claude/WINDOWS_SESSION.md) | Action checklist for when Windows access arrives (companion to WINDOWS.md) |
 | [LOGGER.md](doc/claude/LOGGER.md) | Runtime logging framework (log_info/warn/error/fatal, config, rate limiting) |
