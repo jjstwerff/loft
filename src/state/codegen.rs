@@ -788,9 +788,20 @@ impl State {
         // temp's `OpFreeText`) is wrong → frees an uninitialised slot → SIGSEGV.
         // The statement-style fast-path below (no value, or divergent true arm)
         // keeps the original skip-to-join behaviour.
+        //
+        // #405 / @PLN85: use the actual stack delta (`true_stack != stack_pos`)
+        // rather than `tp != Void` alone.  A void block whose last expression
+        // returns a non-Void type (e.g. a block ending in `OpAppendVector`, which
+        // consumes its two DbRef operands and pushes nothing) leaves `tp` non-Void
+        // even though the net stack change is zero.  Using `tp` alone triggers a
+        // spurious `ConstInt(i64::MIN)` on the else path, growing the runtime
+        // stack by 8 bytes per outer-loop iteration → stale DbRef in ki →
+        // SIGSEGV at `OpFreeRef`.  The stack-delta check is the authoritative
+        // signal: if no value reached the eval stack, no null sentinel is needed.
         let null_else_value = matches!(f_val.kind(), ValueType::Null)
             && !is_divergent(t_val)
-            && !matches!(tp, Type::Void | Type::Never);
+            && !matches!(tp, Type::Void | Type::Never)
+            && true_stack != stack_pos;
         if matches!(f_val.kind(), ValueType::Null) && !null_else_value {
             self.code_put(code_step, (self.code_pos - true_pos) as i16); // actual step
             // when the true branch diverges (return/break/continue, possibly

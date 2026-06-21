@@ -3770,7 +3770,10 @@ impl Parser {
     fn tail_terminal_is_branch(v: &Value) -> bool {
         match v.unspan() {
             Value::If(_, _, _) => true,
-            Value::Block(bl) => bl.operators.last().is_some_and(Self::tail_terminal_is_branch),
+            Value::Block(bl) => bl
+                .operators
+                .last()
+                .is_some_and(Self::tail_terminal_is_branch),
             Value::Insert(ops) => ops.last().is_some_and(Self::tail_terminal_is_branch),
             Value::Return(inner) | Value::Drop(inner) => Self::tail_terminal_is_branch(inner),
             _ => false,
