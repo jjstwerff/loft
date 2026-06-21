@@ -1793,6 +1793,12 @@ struct WarnCtx {
     /// Position of the innermost enclosing `Value::Span` — used as the
     /// fault site's source location when we emit a warning.
     last_pos: Option<Position>,
+    /// @PLN46 W2 — true while walking an argument that is passed DIRECTLY to a
+    /// `#null_safe` function: a fault-prone op that IS this argument tolerates
+    /// null by the callee's contract, so it is not flagged.  Reset (to the called
+    /// function's own null-safety) on entry to each nested call, so the
+    /// suppression never reaches a fault op buried inside a non-null-safe callee.
+    arg_to_null_safe_param: bool,
 }
 
 #[derive(Copy, Clone)]
@@ -1894,9 +1900,16 @@ impl Parser {
                 {
                     self.emit_undefended_warning(kind, ctx);
                 }
+                // @PLN46 W2 — arguments to a `#null_safe` function tolerate null;
+                // a fault op that IS such an argument is suppressed.  Override the
+                // flag to THIS callee's null-safety so a nested non-null-safe call
+                // resets it (the suppression is direct-argument only).
+                let saved = ctx.arg_to_null_safe_param;
+                ctx.arg_to_null_safe_param = self.null_safe_defs.contains(def_nr);
                 for arg in args {
                     self.walk_for_warnings(arg, ctx);
                 }
+                ctx.arg_to_null_safe_param = saved;
             }
             Value::CallRef(_, args) => {
                 for arg in args {
@@ -2042,6 +2055,11 @@ impl Parser {
 /// Returns `true` when a skip pattern matches and the warning should
 /// NOT fire.
 fn is_easy_proof(kind: FaultKind, args: &[Value], ctx: &WarnCtx, data: &Data) -> bool {
+    // @PLN46 W2 — this fault op is a direct argument to a `#null_safe` function,
+    // which contracts to handle the possible null.  Skip pattern 6.
+    if ctx.arg_to_null_safe_param {
+        return true;
+    }
     fn lit_int(v: &Value) -> Option<i64> {
         match v.unspan() {
             Value::Int(n) => Some(i64::from(*n)),

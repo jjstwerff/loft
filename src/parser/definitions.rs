@@ -1196,6 +1196,12 @@ impl Parser {
                 } else {
                     diagnostic!(self.lexer, Level::Error, "Expect rust next string");
                 }
+            } else if id == Some("null_safe".to_string()) {
+                // @PLN46 W2 — `#null_safe` asserts every nullable parameter
+                // tolerates null and yields a defined result, so a fault-prone
+                // expression (`s[i]`) passed DIRECTLY as an argument is not flagged
+                // at the call site (the possible-null is the callee's contract).
+                self.null_safe_defs.insert(self.context);
             } else if id == Some("pure".to_string()) {
                 // Plan-06 phase 5a (DESIGN.md D8.1): `#pure`
                 // declares "no observable side effects, no
