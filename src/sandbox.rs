@@ -750,6 +750,92 @@ pub fn describe_totality_violation(data: &Data, v: &TotalityViolation) -> String
     }
 }
 
+/// @PLN86 step 3.4 — one def's intrinsic complexity: the deepest loop nesting at
+/// which plain work happens (`max_leaf`), and every call with the loop nesting it
+/// sits under (`(nesting, callee)`).  A pure single-def walk — the inter-procedural
+/// composition is `complexity_degree`.  `Loop` (incl. comprehensions) / `Iter` /
+/// `ParFor` each add one nesting level; an admitted script has no `while` (3.1) so
+/// every loop is bounded.
+fn intrinsic_complexity(data: &Data, f: u32) -> (u32, Vec<(u32, u32)>) {
+    fn scan(v: &Value, nesting: u32, max_leaf: &mut u32, calls: &mut Vec<(u32, u32)>) {
+        let child_nesting = match v {
+            Value::Loop(_) | Value::Iter(..) | Value::ParFor(_) => nesting + 1,
+            _ => nesting,
+        };
+        if let Value::Call(g, _) = v {
+            calls.push((nesting, *g));
+        } else {
+            *max_leaf = (*max_leaf).max(nesting);
+        }
+        v.for_each_child(&mut |c| scan(c, child_nesting, max_leaf, calls));
+    }
+    let (mut max_leaf, mut calls) = (0, Vec::new());
+    scan(&data.def(f).code, 0, &mut max_leaf, &mut calls);
+    (max_leaf, calls)
+}
+
+/// @PLN86 step 3.4 — the polynomial DEGREE of `f`'s worst-case step count in the
+/// input size `n` (the largest collection / range a loop iterates): the max over
+/// `f`'s body of `loop_nesting + degree(callee)`.  A loop calling a fn that loops
+/// composes (O(n²)).  The call graph is acyclic (3.2), so this terminates; the
+/// `in_progress` guard is a defensive backstop.  Trusted-leaf ops count as O(1)
+/// (degree 0) per call in v1.
+fn complexity_degree(
+    data: &Data,
+    sandboxed: &HashMap<u32, String>,
+    f: u32,
+    memo: &mut HashMap<u32, u32>,
+    in_progress: &mut HashSet<u32>,
+) -> u32 {
+    if let Some(&d) = memo.get(&f) {
+        return d;
+    }
+    if !in_progress.insert(f) {
+        return 0; // cycle (rejected by 3.2) — break defensively
+    }
+    let (max_leaf, calls) = intrinsic_complexity(data, f);
+    let mut degree = max_leaf;
+    for (nesting, callee) in calls {
+        let callee_degree = if sandboxed.contains_key(&callee) {
+            complexity_degree(data, sandboxed, callee, memo, in_progress)
+        } else {
+            0
+        };
+        degree = degree.max(nesting + callee_degree);
+    }
+    in_progress.remove(&f);
+    memo.insert(f, degree);
+    degree
+}
+
+/// @PLN86 step 3.4 — the worst-case complexity DEGREE over all sandboxed entries:
+/// the script's step count is `O(n^degree)` in the largest input size.  An
+/// admitted script is total (3.1–3.3), so this is finite and computable; the host
+/// reads it to **bound the inputs** so no single frame stalls (L5).
+#[must_use]
+pub fn sandbox_complexity_degree(data: &Data, sandboxed: &HashMap<u32, String>) -> u32 {
+    let (mut memo, mut in_progress) = (HashMap::new(), HashSet::new());
+    sandboxed
+        .keys()
+        .map(|&f| complexity_degree(data, sandboxed, f, &mut memo, &mut in_progress))
+        .max()
+        .unwrap_or(0)
+}
+
+/// @PLN86 step 3.4 — the human-readable complexity report (the L5 host hint).
+#[must_use]
+pub fn complexity_report(degree: u32) -> String {
+    let big_o = match degree {
+        0 => "O(1)".to_string(),
+        1 => "O(n)".to_string(),
+        d => format!("O(n^{d})"),
+    };
+    format!(
+        "worst-case complexity: {big_o} (n = the largest input collection / range; \
+         bound n to keep each frame within budget)"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -657,6 +657,21 @@ impl Parser {
         !self.def_sandbox.is_empty()
     }
 
+    /// @PLN86 step 3.4 — the worst-case complexity DEGREE of the sandboxed code:
+    /// its step count is `O(n^degree)` in the largest input size.  An admitted
+    /// script is total, so this is finite; the host reads it to bound the inputs
+    /// so no single frame stalls (L5).
+    #[must_use]
+    pub fn sandbox_complexity_degree(&self) -> u32 {
+        crate::sandbox::sandbox_complexity_degree(&self.data, &self.def_sandbox)
+    }
+
+    /// @PLN86 step 3.4 — the human-readable worst-case complexity report.
+    #[must_use]
+    pub fn sandbox_complexity_report(&self) -> String {
+        crate::sandbox::complexity_report(self.sandbox_complexity_degree())
+    }
+
     /// # Panics
     /// With filesystem problems.
     pub fn parse(&mut self, filename: &str, default: bool) -> bool {
@@ -8547,6 +8562,57 @@ mod plan86_admission_tests {
         assert!(
             !p2.sandbox_forces_interpret(),
             "no sandboxed defs → native allowed"
+        );
+    }
+
+    /// @PLN86 3.4 — the worst-case complexity degree counts loop nesting, and
+    /// composes across the acyclic call graph (a loop calling a looping fn → n²).
+    #[test]
+    fn complexity_degree_counts_loop_nesting_inter_procedural() {
+        // no loop → O(1)
+        let p0 = parse_admit_libs(
+            &["fn:flat"],
+            &["code"],
+            &[],
+            "fn flat() -> integer { 1 + 2 }\n",
+        );
+        assert_eq!(p0.sandbox_complexity_degree(), 0, "no loops → O(1)");
+
+        // one loop → O(n)
+        let p1 = parse_admit_libs(
+            &["fn:one"],
+            &["code"],
+            &[],
+            "fn one() -> integer { s = 0; for i in 0..10 { s += i } s }\n",
+        );
+        assert_eq!(p1.sandbox_complexity_degree(), 1, "one loop → O(n)");
+
+        // nested loops → O(n^2)
+        let p2 = parse_admit_libs(
+            &["fn:nest"],
+            &["code"],
+            &[],
+            "fn nest() -> integer { s = 0; for i in 0..10 { for j in 0..10 { s += i } } s }\n",
+        );
+        assert_eq!(p2.sandbox_complexity_degree(), 2, "nested loops → O(n^2)");
+        assert!(
+            p2.sandbox_complexity_report().contains("O(n^2)"),
+            "{}",
+            p2.sandbox_complexity_report()
+        );
+
+        // inter-procedural: a loop calling a looping fn → O(n^2)
+        let p3 = parse_admit_libs(
+            &["fn:outer", "fn:inner"],
+            &["code"],
+            &[],
+            "fn inner() -> integer { s = 0; for j in 0..10 { s += j } s }\n\
+             fn outer() -> integer { s = 0; for i in 0..10 { s += inner() } s }\n",
+        );
+        assert_eq!(
+            p3.sandbox_complexity_degree(),
+            2,
+            "a loop calling a looping fn → O(n^2)"
         );
     }
 }
