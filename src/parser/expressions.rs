@@ -800,22 +800,22 @@ impl Parser {
     /// The emitted IR is equivalent to:
     ///   loop { if !cond { break }; body }
     pub(crate) fn parse_while(&mut self, code: &mut Value) {
-        // @PLN86 3.1 — a `while` in sandboxed code is an unbounded loop: record it
-        // for the totality admission (the parser uniquely knows this is a `while`;
-        // the IR cannot tell it from a bounded comprehension `Loop`).  Keyed by
-        // def so the two passes are idempotent.
-        if self.in_sandbox {
-            let pos = self.lexer.peek_pos().clone();
-            self.sandbox_unbounded_loops
-                .entry(self.context)
-                .or_insert(pos);
-        }
+        // @PLN86 3.1 — the `while`'s position, taken before the condition so an
+        // unbounded-loop diagnostic points at the `while` itself.
+        let while_pos = self.lexer.peek_pos().clone();
         let mut cond = Value::Null;
         self.expression(&mut cond);
         if !self.first_pass && matches!(cond, Value::Null) {
             diagnostic!(self.lexer, Level::Error, "Expected condition after 'while'");
             return;
         }
+        // @PLN86 3.1 — keep the raw condition (pass 2 only) to check for a
+        // decreasing variant once the body is parsed; the bound check needs both.
+        let sandbox_cond = if self.in_sandbox && !self.first_pass {
+            cond.clone()
+        } else {
+            Value::Null
+        };
         let not_cond = self.cl("OpNot", &[cond]);
         let break_if = v_if(
             not_cond,
@@ -831,6 +831,19 @@ impl Parser {
         self.vars.restore_write_state(&loop_write_state);
         self.in_loop = in_loop;
         self.vars.finish_loop(loop_nr);
+        // @PLN86 3.1 — on pass 2 (complete IR), a sandboxed `while` is admitted only
+        // if it carries a compiler-checked decreasing variant; otherwise it is an
+        // unbounded loop, recorded for the totality admission.  The parser uniquely
+        // knows this is a `while` (the IR can't tell it from a bounded comprehension
+        // `Loop`).  Keyed by def; the bound result is stable so re-entry is safe.
+        if self.in_sandbox
+            && !self.first_pass
+            && !crate::sandbox::while_is_bounded(&self.data, &sandbox_cond, &body)
+        {
+            self.sandbox_unbounded_loops
+                .entry(self.context)
+                .or_insert(while_pos);
+        }
         *code = v_loop(vec![break_if, body], "while");
     }
 

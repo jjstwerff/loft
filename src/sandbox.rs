@@ -688,6 +688,133 @@ pub fn recursion_cycles(
     cycles
 }
 
+/// @PLN86 3.1 — is `while cond { body }` PROVABLY terminating?  SOUND and
+/// conservative: true ONLY when a decreasing integer variant is found — an integer
+/// counter compared in `cond` against a STABLE bound, stepped monotonically toward
+/// it by a positive integer CONSTANT on EVERY iteration (an unconditional
+/// top-level `c = c + k` / `c = c - k`) and modified no other way.  Flag loops,
+/// non-integer / field variants, conditional or non-constant steps, and
+/// call/expression bounds all return false → rejected.  Unsoundness here is a HANG
+/// (the host's whole point is that it can't be hung), so when in any doubt: false.
+///
+/// The IR contract (verified): `&&` parses as `if A { B } else false`; `>` / `>=`
+/// normalise to a SWAPPED `OpLtInt` / `OpLeInt` (counter on the right); `+`/`-` on
+/// integers are `OpAddInt` / `OpMinInt`.
+#[must_use]
+pub fn while_is_bounded(data: &Data, cond: &Value, body: &Value) -> bool {
+    let mut candidates: Vec<(u16, bool)> = Vec::new();
+    collect_variant_candidates(data, cond, body, &mut candidates);
+    candidates
+        .iter()
+        .any(|&(counter, increasing)| counter_progresses(data, body, counter, increasing))
+}
+
+/// Collect `(counter, increasing)` candidates from `cond`: `counter < bound` /
+/// `counter <= bound` (increasing) or `bound < counter` / `bound <= counter`
+/// (decreasing) with a stable bound, plus BOTH conjuncts of an `&&` (parsed as
+/// `if A { B } else false`) — either can bound the loop.  `||` (`if A { true }
+/// else B`, else ≠ false) yields nothing: neither side alone bounds it.
+fn collect_variant_candidates(data: &Data, cond: &Value, body: &Value, out: &mut Vec<(u16, bool)>) {
+    match cond.unspan() {
+        Value::If(a, b, els) if matches!(els.unspan(), Value::Boolean(false)) => {
+            collect_variant_candidates(data, a, body, out);
+            collect_variant_candidates(data, b, body, out);
+        }
+        Value::Call(op, args) if args.len() == 2 => {
+            let name = data.def(*op).name();
+            if name == "OpLtInt" || name == "OpLeInt" {
+                if let Value::Var(c) = args[0].unspan()
+                    && is_stable_bound(body, &args[1], *c)
+                {
+                    out.push((*c, true)); // counter < bound → counts up
+                }
+                if let Value::Var(c) = args[1].unspan()
+                    && is_stable_bound(body, &args[0], *c)
+                {
+                    out.push((*c, false)); // bound < counter → counts down
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// A bound is stable iff it's an integer literal or a variable (not the counter)
+/// never assigned in the body — so it cannot move away from the counter.  A call
+/// or expression bound is conservatively unstable (hoist it to a local first).
+fn is_stable_bound(body: &Value, bound: &Value, counter: u16) -> bool {
+    match bound.unspan() {
+        Value::Int(_) | Value::Long(_) => true,
+        Value::Var(b) => *b != counter && !contains_assignment_to(body, *b),
+        _ => false,
+    }
+}
+
+/// Every assignment to `counter` in `body` must be a TOP-LEVEL (unconditional),
+/// monotonic, constant step in the right direction; at least one must exist.  A
+/// nested (conditional) or wrong-direction or non-constant assignment fails it.
+fn counter_progresses(data: &Data, body: &Value, counter: u16, increasing: bool) -> bool {
+    let ops: &[Value] = match body.unspan() {
+        Value::Block(b) => &b.operators,
+        other => std::slice::from_ref(other),
+    };
+    let mut stepped = false;
+    for stmt in ops {
+        if let Value::Set(v, rhs) = stmt.unspan() {
+            if *v == counter {
+                if is_monotonic_step(data, rhs, counter, increasing) {
+                    stepped = true;
+                } else {
+                    return false; // a top-level non-step assignment to the counter
+                }
+                continue;
+            }
+        }
+        // any other top-level statement must not touch the counter at all (a
+        // conditional / nested step can't be proven to run every iteration).
+        if contains_assignment_to(stmt, counter) {
+            return false;
+        }
+    }
+    stepped
+}
+
+/// `rhs` is `counter + k` (increasing) or `counter - k` (decreasing) with `k` a
+/// positive integer constant.
+fn is_monotonic_step(data: &Data, rhs: &Value, counter: u16, increasing: bool) -> bool {
+    let Value::Call(op, args) = rhs.unspan() else {
+        return false;
+    };
+    if args.len() != 2 {
+        return false;
+    }
+    let pos_int = |v: &Value| matches!(v.unspan(), Value::Int(k) if *k > 0);
+    let is_counter = |v: &Value| matches!(v.unspan(), Value::Var(c) if *c == counter);
+    match (increasing, data.def(*op).name()) {
+        // c + k  or  k + c
+        (true, "OpAddInt") => {
+            (is_counter(&args[0]) && pos_int(&args[1]))
+                || (pos_int(&args[0]) && is_counter(&args[1]))
+        }
+        // c - k  (subtraction is not commutative)
+        (false, "OpMinInt") => is_counter(&args[0]) && pos_int(&args[1]),
+        _ => false,
+    }
+}
+
+/// Does any node in `value` assign to `var` (a `Set(var, _)`)?
+fn contains_assignment_to(value: &Value, var: u16) -> bool {
+    let mut found = false;
+    value.walk(&mut |v| {
+        if let Value::Set(v_nr, _) = v
+            && *v_nr == var
+        {
+            found = true;
+        }
+    });
+    found
+}
+
 /// @PLN86 step P3 — the totality admission walk: a sandboxed script is total iff
 /// it has no unbounded loop (3.1) and no recursion cycle (3.2).  `unbounded_loops`
 /// is the parser's `sandbox_unbounded_loops` (while-loops recorded at parse).
@@ -749,9 +876,12 @@ pub fn describe_totality_violation(data: &Data, v: &TotalityViolation) -> String
         TotalityViolation::UnboundedLoop { def, position } => {
             let name = display_name(data, *def);
             format!(
-                "{position}: sandboxed `{name}` contains an unbounded `while` loop — a \
-                 sandboxed script must be provably total.\n  fix: use a bounded `for x in \
-                 <collection>` / `for i in 0..N` loop, whose iteration count is finite."
+                "{position}: sandboxed `{name}` contains a `while` loop with no provable \
+                 bound — a sandboxed script must be provably total.\n  fix: use a bounded \
+                 `for x in <collection>` / `for i in 0..N` loop; or give the `while` a \
+                 decreasing integer variant — an `int` counter compared against a constant or \
+                 unchanging bound and stepped by a constant every iteration, e.g. \
+                 `i = 0; while i < n {{ … i = i + 1 }}` (a guard `&& i < N` works too)."
             )
         }
         TotalityViolation::Recursion { cycle } => {

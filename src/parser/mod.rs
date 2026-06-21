@@ -8463,11 +8463,13 @@ mod plan86_admission_tests {
     /// @PLN86 3.1 — totality rejects an unbounded `while`, admits a bounded `for`.
     #[test]
     fn totality_rejects_while_admits_for() {
+        // An UNBOUNDED `while` (a flag loop — no decreasing variant) is rejected;
+        // bounded `while`s are admitted now and covered by `bounded_while_is_admitted`.
         let p = parse_admit_libs(
             &["fn:loops"],
             &["code"],
             &[],
-            "fn loops() -> integer { x = 0; while x < 10 { x += 1 } x }\n",
+            "fn loops(go: boolean) -> integer { x = 0; while go { x += 1 } x }\n",
         );
         assert!(
             p.diagnostics.level() < crate::diagnostics::Level::Error,
@@ -8817,5 +8819,99 @@ mod plan86_admission_tests {
             v.iter().any(|x| viol_symbol(x) == mtime),
             "a collection-hidden fn-ref to mtime must be capability-checked (L4), got {v:?}"
         );
+    }
+
+    /// @PLN86 3.1 — does the sandboxed program have an unbounded-`while` violation?
+    fn has_unbounded_while(p: &Parser) -> bool {
+        p.sandbox_totality()
+            .iter()
+            .any(|v| matches!(v, TotalityViolation::UnboundedLoop { .. }))
+    }
+
+    /// @PLN86 3.1 — a `while` carrying a compiler-checked DECREASING VARIANT is
+    /// admitted: an int counter against a stable bound, stepped by a constant every
+    /// iteration (counting up, counting down, or guarded by `&& i < N`).
+    #[test]
+    fn bounded_while_is_admitted() {
+        for (label, src) in [
+            (
+                "count up to a param bound",
+                "fn scripted(n: integer) -> integer { i = 0; s = 0; \
+                 while i < n { s = s + i; i = i + 1; } s }\n",
+            ),
+            (
+                "count down to zero",
+                "fn scripted() -> integer { j = 10; s = 0; \
+                 while j > 0 { s = s + j; j = j - 1; } s }\n",
+            ),
+            (
+                "guard counter in a conjunction",
+                "fn scripted(flag: boolean) -> integer { g = 0; s = 0; \
+                 while flag && (g < 2000) { s = s + g; g = g + 1; } s }\n",
+            ),
+        ] {
+            let p = parse_admit_libs(&["fn:scripted"], &["code"], &[], src);
+            assert!(
+                p.diagnostics.level() < crate::diagnostics::Level::Error,
+                "{label}: parse errors {:?}",
+                p.diagnostics.lines()
+            );
+            assert!(
+                !has_unbounded_while(&p),
+                "{label}: a bounded while must be admitted, got {:?}",
+                p.sandbox_totality()
+            );
+        }
+    }
+
+    /// @PLN86 3.1 — SOUNDNESS: a `while` whose termination cannot be PROVEN is
+    /// rejected.  Each of these is either a genuine non-terminator or one the
+    /// conservative recognizer must refuse (unsoundness here would let a script
+    /// hang the host).
+    #[test]
+    fn unprovable_while_is_rejected() {
+        for (label, src) in [
+            (
+                "flag loop (no variant)",
+                "fn scripted(running: boolean) -> integer { s = 0; \
+                 while running { s = s + 1; } s }\n",
+            ),
+            (
+                "no step (counter never moves)",
+                "fn scripted(n: integer) -> integer { i = 0; s = 0; \
+                 while i < n { s = s + i; } s }\n",
+            ),
+            (
+                "conditional step (may not run every iteration)",
+                "fn scripted(n: integer) -> integer { i = 0; \
+                 while i < n { if i > 5 { i = i + 1; } } i }\n",
+            ),
+            (
+                "cancelling steps (net non-monotonic)",
+                "fn scripted(n: integer) -> integer { i = 0; \
+                 while i < n { i = i + 1; i = i - 1; } i }\n",
+            ),
+            (
+                "non-constant step (cannot prove > 0)",
+                "fn scripted(n: integer, k: integer) -> integer { i = 0; \
+                 while i < n { i = i + k; } i }\n",
+            ),
+            (
+                "moving bound (races away)",
+                "fn scripted(n: integer) -> integer { i = 0; m = n; \
+                 while i < m { i = i + 1; m = m + 1; } i }\n",
+            ),
+        ] {
+            let p = parse_admit_libs(&["fn:scripted"], &["code"], &[], src);
+            assert!(
+                p.diagnostics.level() < crate::diagnostics::Level::Error,
+                "{label}: parse errors {:?}",
+                p.diagnostics.lines()
+            );
+            assert!(
+                has_unbounded_while(&p),
+                "{label}: an unprovable while must be rejected"
+            );
+        }
     }
 }
