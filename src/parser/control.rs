@@ -4526,10 +4526,32 @@ impl Parser {
                 // __ref_1 instead.
                 if let Type::Vector(elm_tp, dep) = &t {
                     let ref1_var = self.vars.var("__ref_1");
+                    // `__ref_1` is the promoted-local name after ref_return renames
+                    // the signature-time `__retbuf` placeholder.  When a function
+                    // returns a PARAMETER directly (`return v`) without going through
+                    // ref_return (because the parameter is not a work-ref), the
+                    // buffer stays named `__retbuf` and vars.var("__ref_1") returns
+                    // MAX.  Fall back to return_buffer() only when the returned value
+                    // is backed by a PARAMETER variable — a local vector that is not
+                    // yet bound to the buffer is handled elsewhere (returning the
+                    // local's DbRef directly and letting the caller free it at scope
+                    // exit); copying into __retbuf in that case causes the caller to
+                    // free __retbuf while the callee already freed its local, losing
+                    // the shared buffer for subsequent iterations.
+                    let buf_var = if ref1_var != u16::MAX && self.vars.is_argument(ref1_var) {
+                        ref1_var
+                    } else if let Some((_, bv)) = self.return_buffer()
+                        && dep
+                            .iter()
+                            .any(|&d| d != bv && self.vars.is_argument(d))
+                    {
+                        bv
+                    } else {
+                        u16::MAX
+                    };
                     if !vector_bound
-                        && ref1_var != u16::MAX
-                        && self.vars.is_argument(ref1_var)
-                        && !dep.contains(&ref1_var)
+                        && buf_var != u16::MAX
+                        && !dep.contains(&buf_var)
                     {
                         // @P314 — narrow-aware element type (see `append_elem_tp`).
                         let elm = (**elm_tp).clone();
@@ -4538,15 +4560,15 @@ impl Parser {
                         // (a caller's loop reuses the same fn-scoped buffer;
                         // without the clear each iteration's elements pile
                         // on top of the previous ones).
-                        let clear = self.cl("OpClearVector", &[Value::Var(ref1_var)]);
+                        let clear = self.cl("OpClearVector", &[Value::Var(buf_var)]);
                         let append = self.cl(
                             "OpAppendVector",
-                            &[Value::Var(ref1_var), v, Value::Int(rec_tp)],
+                            &[Value::Var(buf_var), v, Value::Int(rec_tp)],
                         );
                         *val = Value::Insert(vec![
                             clear,
                             append,
-                            Value::Return(Box::new(Value::Var(ref1_var))),
+                            Value::Return(Box::new(Value::Var(buf_var))),
                         ]);
                         return;
                     }
