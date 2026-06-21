@@ -145,10 +145,59 @@ the signal explicit). `size_code` (`stack.rs`) is the same family, same disposit
 - [x] **Cluster A · one site** — `infer_type(Insert)` value-position typed-null gap
       (`emit.rs`). Commit `6b29fe30`; bug auto-fixed: match-return-over-borrowed
       native E0308. *Demonstrates the model: land the fact → bug falls out.*
-- [ ] A.1–A.4 (the carried dep — collapses the remaining ~10 sites)
+- [x] **A.4 — unify `is_borrowed_view`** (the divergence fix). The
+      `is_borrowed_view` fact was derived THREE times, structurally identically
+      but separately (interp `state/codegen.rs` ×2, native `generation/dispatch.rs`
+      ×1) — the H4 drift risk. Collapsed onto ONE method,
+      `Definition::returns_borrowed_view()`, read by both backends (commit
+      `20610eaf`, net −56/+72). Behaviour-preserving (the A.0 return-ownership
+      boundary matrix is identical before/after on both backends); full suite
+      clean both backends; regression
+      `tests/scripts/85-store-lifetime-borrowed-view-query.loft`.
+      **`scan_set` runtime witness DELIBERATELY retained** (the over-unification
+      guard): `paired_witness`/`OpFreeRefIfDistinct` guards a *statically-
+      unresolvable* adopt-vs-orphan case (a callee like `map_from_json` that
+      adopts-or-allocates at RUNTIME on its input) — a genuinely different fact
+      the single static return-dep cannot carry; forcing it onto the dep regresses
+      that case.
+- [ ] A.1 (compute the return-source SET on `Deps`) — the set version
+      `collect_return_sources` EXISTS but is gated behind the single-`u16`
+      `returned_var` (`scopes.rs:1348`, narrowed to `ret_var==MAX && Vector`).
+      Making the set the primary path is blocked by the keyed/enum free-suppress
+      regression (§6h Edge A: ~13 tests) — needs A.2 first.
+- [ ] A.2 (funnel the return path) — **the foundational blocker.** A leaf
+      ownership fix lands in `block_result`'s Vector arm but the case flows through
+      a *different* return path (explicit `parse_return` ~4651 / the
+      forwarder/`ref_return` chain) that re-sets `Definition.returned` afterward,
+      so the signature the caller reads stays a borrow. Proven concretely: a
+      precisely-gated implicit-tail whole-arg copy (matrix a2) fires in the IR yet
+      the bytecode signature reverts to `["v"]` and the caller still aliases —
+      reverted (see report). Until the paths funnel to ONE return-ownership
+      computation (OWNERSHIP_MODEL row 104), leaf fixes for a2/a7/a10 are not
+      cleanly verifiable.
+- [ ] A.3 (replace the 11 `has_ref_params` sites + bind/reassign forests) —
+      partially enabled: `is_borrowed_view` now has one home; the
+      `has_ref_params` adopt-vs-copy sites still re-derive (they encode "any
+      visible ref param", a coarser proxy than "the return borrows a param").
+      Their clean collapse depends on A.2.
 - [ ] C.0–C.5 (the keystone)
 - [ ] D.1–D.2 (the sentinel table)
 - [ ] B (deferred — unverifiable until a trigger appears)
+
+### A.0 boundary-matrix RED findings (pre-existing return-ownership bugs)
+
+The A.0 matrix (`/tmp` corpus, both backends) surfaced three live, pre-existing
+return-ownership bugs — the bug family A.2/A.3 will dissolve, precisely localized:
+
+| Cell | Shape | Symptom (interp / native) | Localization |
+|---|---|---|---|
+| a2 | implicit-tail whole-arg `{ v }` borrow-return | ALIASES (`a.len 4` / 4) | the multi-path return thicket (above): callee copy lands but the signature is re-set to `["v"]` by another path |
+| a7 | `if`-return over owned literal arms | DIVERGENT — `[8,9]` both arms / `plen=0` corrupt | `if` arms aren't NRVO'd into `__retbuf` like the `match` path; a stray `OpFreeRef(__vdb_1)` + shared buffer recycles across calls |
+| a10 | forwarder `return mk(n)` | interp LEAK ×2 `kt=19` headers | `block_result` Vector-arm forwarder/`ref_return` chaining orphans the `__retbuf` header on interp |
+
+The explicit `return v` (a1), `match`-return owned arms (a6), struct param return
+(a8), field-of-param return (a5) all PASS both backends — the working templates
+the funnel (A.2) should converge a2/a7/a10 onto.
 
 ## Tracking
 
