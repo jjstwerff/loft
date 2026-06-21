@@ -569,9 +569,6 @@ impl Parser {
         }
     }
 
-    /// Parse the content of a given file.
-    /// - filename: the file to parse
-    /// - default: parsing system definitions
     /// @PLN86 step 1.2 — install the host's sandbox policy before parsing.  The
     /// designation is host-controlled; a script can never mark itself sandboxed.
     pub fn set_sandbox_config(&mut self, config: crate::sandbox::SandboxConfig) {
@@ -7997,9 +7994,10 @@ mod plan86_nesting_guard_tests {
     /// balanced: each sub-expression decrements, so siblings don't accumulate).
     #[test]
     fn ordinary_nesting_in_sandboxed_def_parses_clean() {
+        use std::fmt::Write as _;
         let mut body = String::from("fn scripted() {\n");
         for i in 0..200 {
-            body.push_str(&format!("  a{i} = ((({i})));\n")); // shallow, 200 siblings
+            let _ = writeln!(body, "  a{i} = ((({i})));"); // shallow, 200 siblings
         }
         body.push_str("}\n");
         let mut p = sandboxed_parser();

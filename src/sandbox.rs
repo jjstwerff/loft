@@ -18,7 +18,7 @@ use std::collections::{HashMap, HashSet};
 /// reach, plus the always-on coarse bans (never native/rustc, never a `[native]`
 /// cdylib — both RCE surfaces).  Defaults are the safe ones: deny every
 /// capability, interpret-only, no FFI.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SandboxProfile {
     /// Libraries allowed **wholesale** (e.g. `"text"`, `"crypto"`).  Every symbol
     /// from an allow-listed library admits with NO `#cap` tag — a complete,
@@ -33,16 +33,6 @@ pub struct SandboxProfile {
     /// sandboxed code, enforced by `Parser::sandbox_forces_interpret`: generating
     /// + compiling Rust on the host is RCE by construction.)
     pub native_ffi: bool,
-}
-
-impl Default for SandboxProfile {
-    fn default() -> Self {
-        SandboxProfile {
-            allow_libs: Vec::new(),
-            allow_caps: Vec::new(),
-            native_ffi: false,
-        }
-    }
 }
 
 impl SandboxProfile {
@@ -362,9 +352,7 @@ pub fn def_library(data: &Data, def_nr: u32) -> Option<String> {
     let base = std::path::Path::new(file).file_stem()?.to_str()?;
     // Strip a leading `\d+_` (stdlib module naming: `01_code` -> `code`).
     let name = match base.find('_') {
-        Some(i) if i > 0 && base.as_bytes()[..i].iter().all(|b| b.is_ascii_digit()) => {
-            &base[i + 1..]
-        }
+        Some(i) if i > 0 && base.as_bytes()[..i].iter().all(u8::is_ascii_digit) => &base[i + 1..],
         _ => base,
     };
     (!name.is_empty()).then(|| name.to_string())
@@ -377,6 +365,7 @@ pub fn def_library(data: &Data, def_nr: u32) -> Option<String> {
 ///      host-vetted library is included as a unit, NO `#cap` tag needed; or
 ///   2. its `#cap` **group** is allow-listed (`allow_caps`) — the fine-grained
 ///      layer, for carving a library in half ("include `files`, reads only").
+///
 /// A symbol in no allowed library and with no allowed cap is the violation.  A
 /// reference to another sandboxed def is fine (admitted under its own profile),
 /// so the union of per-def checks covers the whole reachable closure.  This is
