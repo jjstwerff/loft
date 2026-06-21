@@ -164,10 +164,13 @@ What is built is listed under [§ Implementation progress](#status); what remain
   (`--no-default-features` drops `native-extensions`); the rustc *codegen* path
   (`src/generation/`) is not yet behind a feature, so a deployment can't build with ZERO
   host-codegen RCE surface. Gate it.
-- **CLI warm-cache gap** — `LOFT_STDLIB_CACHE` / program warm-load skips the parse, so a
-  warm-loaded program never gets its parse-time designations (`def_sandbox`) — it would
-  bypass admission. Disable warm-load for a program with a `[sandbox]` policy, or persist
-  the designation set.
+- **CLI warm-cache gap — ✅ FIXED.** The program warm-cache (default-on) restored the IR
+  without re-parsing, so `def_sandbox` never formed and admission + force-interpret were
+  bypassed on warm runs (and, since the cache keys on program content not policy, a tightened
+  policy was ignored). Fix: the `[sandbox]` policy loads BEFORE the warm-load decision and
+  warm-load is disabled when a policy is active (`Parser::sandbox_is_active`) — a sandboxed
+  program always parses fresh. Regression: `warm_program_cache_does_not_bypass_admission`
+  (proven to fail without the gate).
 - **`loft.toml` discovery** — the CLI loads the `[sandbox]` policy from `loft.toml` *next to
   the program file* only; add parent-dir / `--project`-root discovery.
 - **Surface the complexity report** — `sandbox_complexity_report()` is computed but not
