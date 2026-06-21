@@ -34,15 +34,16 @@ unrestricted, in one process, sharing the store at full `DbRef` speed.
   it is read as a reference only in a `Function`-typed position (call arg / assignment).
   Both `apply(target,…)` and `f=target; apply(f,…)` covered; residual
   (returns/fields/collections) tracked. 3 tests.
-- **1.4 ◐ (FFI half)** — `sandbox::reachable_ffi_bridges` + `Parser::sandbox_ffi_bridges`
-  flag every reachable def whose `#native` symbol is owned by an external native package
-  (`native_symbol_crates` — what `backfill_native_symbol_crates` binds for a def under a
-  `native_packages` dir), distinct from built-in `#rust`/`#native` primitives. dlopen of
-  a cdylib is RCE by construction → rejected unless `native_ffi = true`. Test flags an
-  external bridge, not a non-package `#native`. **Backend half remaining:** force
-  sandboxed defs to interpret in the execution pipeline + prove
-  `cargo build --no-default-features` removes the cdylib path (`interpret_only` already
-  parses).
+- **1.4 ✅ (FFI + backend)** — **FFI:** `sandbox::reachable_ffi_bridges` flags every
+  reachable def whose `#native` symbol is owned by an external native package
+  (`native_symbol_crates`), distinct from built-in `#rust`/`#native` primitives — dlopen of
+  a cdylib is RCE → rejected unless `native_ffi = true`. **Backend:**
+  `Parser::sandbox_forces_interpret` (true on ANY designation) + main.rs wiring: a program's
+  `[sandbox]` policy loads from `loft.toml` before parse, and a sandboxed program REFUSES
+  `--native` / overrides the default native backend to interpret. Interpret-only is
+  unconditional, not a profile setting (the old `interpret_only` field + `backend` key
+  removed). `cargo build --no-default-features` builds (the cdylib-loading `native-extensions`
+  path is removable). Verified end-to-end on the CLI.
 - **2.1 ✅** — `#cap "<group>"` annotation: parsed in `parse_rust` beside `#native`
   (any file); `Definition.cap` + `Parser::def_cap_group` read it. `cap` is NOT yet
   IR-round-tripped (re-derived on parse) — persistence lands coupled with the first
@@ -85,10 +86,13 @@ unrestricted, in one process, sharing the store at full `DbRef` speed.
   `panic` / `log_fatal`) while arithmetic stays total on the interpreter (div-by-zero →
   null). All render actionable errors through `sandbox_admission_errors`. The capability arc
   (P0–P2 + 2.5) and the termination arc (3.1/3.2/3.3) are both proven.
-- **Next:** **3.4** worst-case complexity report (L5 — derive step/depth cost, host bounds
-  the inputs), then the **1.4 backend half** (force-interpret + no-default-features cdylib
-  removal) — which 3.3's total-op guarantee *depends on* (native arithmetic traps). The
-  decreasing-variant / structural-recursion relaxations are post-v1.
+- **1.4 backend half ✅** — sandboxed code is force-interpreted (`--native` refused), the
+  `[sandbox]` policy loads from `loft.toml`, and `--no-default-features` drops the cdylib
+  path. This was the prerequisite 3.3's total-op guarantee depends on (native traps).
+- **Next:** **3.4** worst-case complexity report (L5 — derive step/depth cost so the host
+  bounds the inputs) — the last open v1 step; then the admission-reject CLI wiring (run
+  `sandbox_admission_errors` and exit on violations). The decreasing-variant /
+  structural-recursion relaxations are post-v1.
 
 **Scope.** v1 is intentionally **fairly restricted** — a small total dialect (bounded
 loops, no/structural recursion, total ops) plus a **curated host API**; the
@@ -180,7 +184,8 @@ pub fn write(self: File, v: text);    #cap "fs.write"
 ```
 ```toml
 [profile.mod-script]
-backend = "interpret"; native_ffi = false   # never native/rustc, no cdylib
+native_ffi = false                            # no vetted cdylib bridge (interpret-only
+                                              # is unconditional — not a key)
 allow_libs = ["code", "text", "json"]        # whole modules — no tags needed
 allow_caps = ["fs.read"]                      # files NOT wholesale → reads only, no writes
 ```
