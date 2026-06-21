@@ -173,6 +173,10 @@ bad value. They are correct stopgaps; the stable future **retires** them when A 
 
 ## Landing order (leverage-first — the stable-future roadmap)
 
+> **Site-level steps + per-step verification gates for each cluster below:**
+> [STABILITY_REDFLAG_REMEDIATION.md](STABILITY_REDFLAG_REMEDIATION.md) — the
+> actionable *how* to this map's *what*.
+
 1. **Cluster A — carried return/bind ownership dep** (OWNERSHIP_MODEL 99/102/104).
    Collapses ~10 forests, deletes the runtime witnesses, and **dissolves Cluster E**
    and the `is_borrowed_view` divergence. The most-reused decision; do first.
