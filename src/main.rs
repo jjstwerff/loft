@@ -4938,6 +4938,21 @@ fn main() {
             std::process::exit(1);
         }
         native_mode = false;
+        // @PLN86 2.5 — admission: a sandboxed script is admitted only if it is
+        // proven safe at LOAD (capabilities + totality).  Reject with the
+        // actionable errors before it ever runs — the contract the modder writes
+        // against; a clean compile is the guarantee.
+        let errors = p.sandbox_admission_errors();
+        if !errors.is_empty() {
+            eprintln!(
+                "error: sandboxed code rejected — {} admission violation(s):",
+                errors.len()
+            );
+            for e in &errors {
+                eprintln!("{e}");
+            }
+            std::process::exit(1);
+        }
     }
     scopes::check(&mut p.data);
     // @PLN11 Arc N / N3 (Step 2) — auto-compile `use`d libraries that opted in via
