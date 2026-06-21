@@ -2891,6 +2891,17 @@ JavaScript.  JavaScript calls `requestAnimationFrame` and resumes the interprete
 on the next frame.  Loft game code is **identical** on native and browser — no
 API changes, no callback pattern, no user-visible generators.
 
+> **Two asyncify suspend imports (@PLN84 ZT-C).**  The `--html` `wasm-opt
+> --asyncify --pass-arg` now names **two** import functions (comma-separated):
+> `loft_gl.loft_gl_swap_buffers` (the GL frame-yield) and `loft_web.ws_yield`
+> (the WebSocket frame-yield).  The `web` library's `frame_yield()` lowers to
+> `loft_web.ws_yield`, so a synchronous WS poll loop returns to the JS event loop
+> between iterations — without it `WebSocket.onmessage` never fires (the @P337
+> deadlock applied to sockets).  `frame_yield()` does NOT call swap_buffers, so it
+> needs its own suspend point — a non-GL WS client has no GL window.  The headless
+> verify driver `tools/wasm_ws_repro.mjs` drives this suspend/resume loop on a
+> `setImmediate` (the Node rAF equivalent); see `plans/84-zt-c-web-ws-bridge.md`.
+
 ### Alternatives considered and rejected
 
 | Approach | Why rejected |

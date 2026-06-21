@@ -5,9 +5,14 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLN84 ZT-C — `web` WebSocket wasm bridge: detailed design
 
-Status: **design (ready to implement)** · Parent: [`84-zero-trust-libs.md`](84-zero-trust-libs.md) § ZT-C ·
-Home library: `loft-libs-net/web` · Compiler touch-points: `loft/src/main.rs` (--html
-asyncify), `loft/tools/` (a new headless WS driver).
+Status: **implemented + verified (2026-06-21)** — C2 + C3 GREEN on both backends
+(`native == wasm`); see § 11 for the resolved R1–R5. The `web` lib changes are staged
+in `loft/tools/zt-c-web-staging/` (the lib lives in a separate repo) and applied to the
+live lib; the loft-side changes (`src/main.rs` asyncify `--pass-arg`, `tools/wasm_ws_repro.mjs`
+driver, `tools/zt-c-web-staging/` probe + echo server) are in this worktree. ·
+Parent: [`84-zero-trust-libs.md`](84-zero-trust-libs.md) § ZT-C · Home library:
+`loft-libs-net/web` · Compiler touch-points: `loft/src/main.rs` (--html asyncify),
+`loft/tools/` (the headless WS driver).
 
 > One WS-client loft source must run unchanged as the **native sync-agent** and the
 > **browser client** — `native == wasm`. Unlike ZT-B crypto (pure compute), the WS
@@ -290,21 +295,57 @@ invocation) as the regression record.
 
 ---
 
-## 11. Risks / open questions (resolve in order)
+## 11. Risks / open questions — RESOLVED (implemented + verified 2026-06-21)
 
-- **R1 (load-bearing):** does `--html` asyncify resume work headless (no GL window)?
-  Probe with a trivial asyncified loop (step 1). If GL-coupled, take option (2)
-  (dedicated `loft_web.ws_yield` suspend import).
-- **R2:** is the `ws_group_*` API needed on wasm, or only native? Default: client-side
-  stub; revisit on a real browser-multiplexer need.
-- **R3:** host-import-only bridge — does it need a `[wasm.bridge.routes]` entry, or
-  does the `wasm_impl` extern (in the native crate's wasm path) suffice? Mirror how
-  crypto's `random_fill` is wired (native lib's own wasm path, not the bridge crate).
-- **R4:** `wasm-opt`/binaryen must be present for asyncify (now installed locally;
-  CI must have it). Without it the bundle can't asyncify and the page locks.
-- **R5:** the latched single-slot `LAST_MSG`/`LAST_OP` register is not per-connection
-  — the "recv then immediately read message/opcode" contract must hold across the
-  yield (the yield happens at loop top, after the read, so it's safe; document it).
+All four gates GREEN on both backends (`native == wasm`): C2 echo + C3 CBOR
+byte-identity each pass on `--interpret` (real TCP) AND `--html` (the new
+asyncify Node driver + Node echo server).
+
+- **R1 (load-bearing) — RESOLVED, option (2).** Headless `--html` asyncify resume
+  works with NO GL window. Proven by a hand-written minimal wasm
+  (`tools/zt-c-web-staging/asyncify_probe.rs`): one `loft_web.ws_yield` suspend
+  import, asyncified by the same `wasm-opt --pass-arg` pattern, resumes headless
+  under the `setImmediate` loop. We took option (2) — a dedicated
+  `loft_web.ws_yield` import added to the asyncify `--pass-arg` in `src/main.rs`
+  — because `yield_frame()` does NOT lower to `loft_gl_swap_buffers` (option 1
+  was a non-starter: a non-GL program never calls swap_buffers).
+  **Two ABI corrections** to the `doc/loft-gl-wasm.js` AsyncifyCtrl were needed
+  for the headless resume loop (the GL/browser path tolerates the originals; a
+  Node poll loop does not): (a) rewind reads the save buffer DOWNWARD from the
+  saved top — do NOT reset `current` to base before rewind; (b) the suspend shim
+  must be STATE-AWARE — `stop_rewind`+return while rewinding, else `start_unwind`
+  — or it spins forever on one loop iteration. Both folded into
+  `tools/wasm_ws_repro.mjs`.
+- **R2 — RESOLVED, client-side stub.** `ws_group_*` is stubbed on wasm
+  (`ws_group_poll` reports nothing-ready). Revisit on a real browser-multiplexer
+  need; the native sync-agent is the multiplexer.
+- **R3 — RESOLVED: ROUTE, do not bare-host-import.** The non-routed host-import
+  path the design floated CANNOT carry a `text`-returning native: the compiler
+  declares e.g. `safe fn n_ws_client_message() -> i32` under `loft_gl`, then the
+  wrapper reads `.ptr`/`.len` off that `i32` → a generated-code compile error
+  (observed on this exact lib). So EVERY WS native is routed through
+  `web/wasm/src/lib.rs` `pub fn`s (the crypto `text -> text` shape), which own
+  wasm memory and copy frame bytes in via the ptr/len ABI. The bridge crate
+  declares its OWN low-level `loft_web` host imports (`ws_connect`/`ws_poll`/
+  `ws_msg_len`/`ws_msg_copy`/`ws_opcode`/`ws_send`/`ws_send_binary`/`ws_close`/
+  `ws_yield`); host.js provides them. The native `ws_client.rs::wasm_impl` is
+  therefore UNTOUCHED — it only covers the orthogonal wasm32-wasip2/`loftHost`
+  path, not `--html`.
+- **R4 — confirmed.** `wasm-opt` v108 present locally; the bundle asyncifies.
+  CI must have binaryen.
+- **R5 — confirmed safe.** The latched single-slot `LAST_MSG`/`LAST_OP` register
+  survives the yield because the yield is at the loop TOP, after the read.
+
+### Gotchas surfaced during implementation
+- `yield` is a reserved loft keyword, so the loft API is **`frame_yield()`**, not
+  `yield_frame()` (the native symbol stays `n_yield_frame`).
+- The lib's `build.rs` generates the `loft_register_*` list from the `#native`
+  annotations in `src/**/*.loft`; cargo caches it, so adding a `#native` needs a
+  clean `target/release/build/<crate>-*` to re-emit (else the new symbol is
+  unregistered → "library did not load").
+- Run the C2/C3 `.loft` from OUTSIDE the lib tree: running a program located
+  inside `web/tests-network/` makes `--lib` auto-discovery double-resolve the
+  library and the native cdylib fails to register.
 
 ---
 
