@@ -78,15 +78,17 @@ unrestricted, in one process, sharing the store at full `DbRef` speed.
   (`reference_position`), the symbol + rule, the profile's allowed set, and BOTH
   library-first fixes (`allow_libs` wholesale / the `allow_caps` cap). The contract a
   modder iterates against.
-- **P3 ◐ (totality core)** — `admit_totality` → `TotalityViolation`: **3.1** rejects an
-  unbounded `while` (parse recorded), admits bounded `for`; **3.2** rejects recursion via a
-  colour-DFS cycle check on the sandboxed call graph (self + mutual), admits acyclic. Both
-  render actionable errors through `sandbox_admission_errors`. The capability arc (P0–P2 +
-  2.5) and the termination arc (3.1/3.2) are now both proven.
-- **Next:** **3.3** total-op check (div/mod-zero, overflow → defined-or-excluded), **3.4**
-  worst-case complexity report (L5), then the **1.4 backend half** (force-interpret +
-  no-default-features cdylib removal). The decreasing-variant / structural-recursion
-  relaxations are post-v1.
+- **P3 ◐ (totality: loops + recursion + total-ops)** — `admit_totality` →
+  `TotalityViolation`: **3.1** rejects an unbounded `while` (parse recorded), admits bounded
+  `for`; **3.2** rejects recursion via a colour-DFS cycle check on the sandboxed call graph
+  (self + mutual), admits acyclic; **3.3** excludes the explicit-abort ops (`assert` /
+  `panic` / `log_fatal`) while arithmetic stays total on the interpreter (div-by-zero →
+  null). All render actionable errors through `sandbox_admission_errors`. The capability arc
+  (P0–P2 + 2.5) and the termination arc (3.1/3.2/3.3) are both proven.
+- **Next:** **3.4** worst-case complexity report (L5 — derive step/depth cost, host bounds
+  the inputs), then the **1.4 backend half** (force-interpret + no-default-features cdylib
+  removal) — which 3.3's total-op guarantee *depends on* (native arithmetic traps). The
+  decreasing-variant / structural-recursion relaxations are post-v1.
 
 **Scope.** v1 is intentionally **fairly restricted** — a small total dialect (bounded
 loops, no/structural recursion, total ops) plus a **curated host API**; the
@@ -392,10 +394,15 @@ proven-total script.
   contract); a back-edge to a node on the current path is a cycle → v1 rejects (acyclic
   only). *Verify (L2):* self-recursion `rec(n+1)` and mutual `a→b→a` rejected naming the
   cycle; an acyclic chain admitted. The structurally-decreasing relaxation is later.
-- **3.3 Total-operation check.** *Change:* prove every op total — OOB→`null` (already),
-  div/mod-zero + overflow + conversions given a defined total result or excluded; reject
-  any partial op. *Verify (L3):* a div-by-zero in a sandboxed def yields the defined
-  sentinel, never a fault; an excluded partial op is rejected at admission.
+- **3.3 Total-operation check.** ✅ *shipped* (`admit_totality` → `PartialOp`). *Finding
+  (both backends probed):* the **interpreter already makes the arithmetic ops total** —
+  div/mod-by-zero → `null`, OOB → `null`, integer overflow wraps — so a sandboxed
+  expression never faults on them; **native traps** ("divide by zero"), so the guarantee
+  rests on interpret-only (the 1.4 backend ban). No rejection is needed for arithmetic.
+  *Excluded:* the explicit-abort ops `assert` / `panic` / `log_fatal` (`ABORT_OPS`) — they
+  fault the script and cannot be made total → `PartialOp` rejection naming the op + a
+  defensive-check fix. *Verify (L3):* `a / b ?? 0` admits as total; a sandboxed `assert`
+  is rejected. ✓
 - **3.4 Worst-case complexity report.** *Change:* derive the step/depth cost as a
   function of input sizes; flag loops over an unbounded source. *Verify (L5):* a
   per-entity loop reports `O(entities)`; an unbounded-source loop is flagged for an input
