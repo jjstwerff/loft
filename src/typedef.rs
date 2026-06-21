@@ -69,7 +69,32 @@ pub fn complete_definition(_lexer: &mut Lexer, data: &mut Data, d_nr: u32) {
     }
 }
 
-fn copy_unknown_fields(data: &mut Data, d: u32) {
+/// loft#417 / @PLN25 — the ONE home for "is this `vector<S>` struct-element the
+/// synthetic `__nullable<S>` enum (the nullable-by-default), and which def is it?".
+/// BOTH the parse-time chokepoint (`e2_nullable_elem`) and the deferred forward-ref
+/// resolver (`copy_unknown_fields` below) call it, so a `vector<S>` element resolves
+/// to the SAME type whether `S` was defined before its use (known → rewritten at
+/// parse) or after it (forward-ref → still `Unknown` at parse, resolved here once `S`
+/// is finally known).  Before this single home existed the two resolvers disagreed:
+/// the field went dense while its params/locals went nullable → element-stride
+/// mismatch → corrupted enum-discriminant reads on both backends (loft#417).  Returns
+/// the synth `__nullable<S>` enum def for an eligible element (a non-stdlib,
+/// non-synthetic struct); `None` leaves the element dense.
+pub(crate) fn nullable_vector_elem(data: &mut Data, lexer: &mut Lexer, struct_d: u32) -> Option<u32> {
+    if struct_d == u32::MAX
+        || !matches!(data.def_type(struct_d), DefType::Struct)
+        || data.def(struct_d).synthetic.is_some()
+        || data.def(struct_d).source == crate::data::STD_SOURCE
+    {
+        return None;
+    }
+    Some(data.nullable_enum_for(lexer, struct_d))
+}
+
+fn copy_unknown_fields(data: &mut Data, lexer: &mut Lexer, d: u32) {
+    // Mirror `e2_nullable_elem`'s `e2_rewrite_enabled` gate: only a non-stdlib owner's
+    // fields take the nullable-element default (the native stdlib stays dense).
+    let owner_rewrites = data.def(d).source != crate::data::STD_SOURCE;
     for nr in 0..data.attributes(d) {
         if let Type::Unknown(was) = data.attr_type(d, nr) {
             data.set_attr_type(d, nr, data.def(was).returned.clone());
@@ -77,8 +102,20 @@ fn copy_unknown_fields(data: &mut Data, d: u32) {
             && let Type::Unknown(was) = **content
             && was != 0
         {
-            let c = Box::new(data.def(was).returned.clone());
-            data.set_attr_type(d, nr, Type::Vector(c, dep.clone()));
+            let dep = dep.clone();
+            let resolved = data.def(was).returned.clone();
+            let s = if let Type::Reference(s, _) = &resolved { *s } else { u32::MAX };
+            // Forward-ref element: `e2_nullable_elem` was skipped at parse (the element
+            // was still `Unknown`), so apply the SAME rewrite now, through the shared
+            // home — the field then matches the params/locals of the same `vector<S>`.
+            let elem = if owner_rewrites
+                && let Some(syn) = nullable_vector_elem(data, lexer, s)
+            {
+                Type::Enum(syn, true, Deps::none())
+            } else {
+                resolved
+            };
+            data.set_attr_type(d, nr, Type::Vector(Box::new(elem), dep));
         }
     }
 }
@@ -126,13 +163,13 @@ pub fn actual_types_deferred(
                 lexer.pos_diagnostic(Level::Error, &data.def(d).position, &msg);
             }
             DefType::Function => {
-                copy_unknown_fields(data, d);
+                copy_unknown_fields(data, lexer, d);
                 if let Type::Unknown(was) = data.def(d).returned {
                     data.set_returned(d, data.def(was).returned.clone());
                 }
             }
             DefType::Struct => {
-                copy_unknown_fields(data, d);
+                copy_unknown_fields(data, lexer, d);
             }
             DefType::Enum => {
                 // @PLN25 — a synthetic `__nullable<S>` enum's `Some` variant carries
@@ -149,7 +186,7 @@ pub fn actual_types_deferred(
                 }
             }
             DefType::EnumValue if data.attributes(d) > 0 => {
-                copy_unknown_fields(data, d);
+                copy_unknown_fields(data, lexer, d);
             }
             _ => {}
         }
