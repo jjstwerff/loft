@@ -8173,4 +8173,50 @@ mod plan86_admission_tests {
             "a tagged public fn must NOT be listed"
         );
     }
+
+    /// @PLN86 2.2 — the REAL stdlib fs/env surface gates correctly: `mtime`
+    /// (tagged `fs.read`, bodiless so no untagged deps) is rejected naming the
+    /// group when fs.read is not granted, while `env_variable` (`env`, granted)
+    /// admits — and the tagged fs/env fns have left the coverage lint.
+    #[test]
+    fn stdlib_fs_env_caps_gate_real_functions() {
+        let src = "fn reads_mtime() -> integer { mtime(\"x\") }\n\
+                   fn reads_env() -> text { env_variable(\"X\") }\n";
+        let p = parse_admit(&["fn:reads_mtime", "fn:reads_env"], &["env"], src);
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        // the fs/env surface is no longer flagged by the coverage lint
+        let untagged = p.untagged_public_symbols();
+        for n in [
+            "n_content",
+            "n_write",
+            "n_env_variable",
+            "n_mtime",
+            "n_file",
+        ] {
+            assert!(
+                !untagged.contains(&p.data.def_nr(n)),
+                "{n} should be tagged (off the lint)"
+            );
+        }
+        let v = p.sandbox_admit();
+        // mtime (fs.read) is not granted → rejected naming the real group.
+        assert!(
+            v.contains(&CapViolation::UngrantedCap {
+                from: p.data.def_nr("n_reads_mtime"),
+                symbol: p.data.def_nr("n_mtime"),
+                group: "fs.read".to_string(),
+            }),
+            "mtime must be rejected naming fs.read, got {v:?}"
+        );
+        // env_variable (env) is granted → admits clean.
+        let envv = p.data.def_nr("n_env_variable");
+        assert!(
+            !v.iter().any(|x| viol_symbol(x) == envv),
+            "granted env must admit, got {v:?}"
+        );
+    }
 }

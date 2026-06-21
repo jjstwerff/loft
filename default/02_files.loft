@@ -60,19 +60,30 @@ pub struct File {
 
 fn OpGetFile(file: File) -> boolean;
 #rust"stores.get_file(&@file)"
+#cap "fs.read"
 fn OpGetDir(path: text, result: vector < File >) -> boolean;
 #rust"stores.get_dir(@path, &@result)"
+#cap "fs.read"
 fn OpGetFileText(file: File, content:  & text);
+#cap "fs.read"
 fn OpWriteFile(file: File, val: reference, db_tp: const u16);
+#cap "fs.write"
 fn OpReadFile(file: File, val: reference, bytes: integer, db_tp: const u16);
+#cap "fs.read"
 fn OpSeekFile(file: File, pos: integer);
+#cap "fs.read"
 fn OpSizeFile(file: File) -> integer;
+#cap "fs.read"
 fn OpDelete(path: text) -> boolean;
 #rust"codegen_runtime::fs_delete(&s.database.resolve_path(@path))"
+#cap "fs.write"
 fn OpMoveFile(from: text, to: text) -> boolean;
 #rust"codegen_runtime::fs_move(&s.database.resolve_path(@from), &s.database.resolve_path(@to))"
+#cap "fs.write"
 fn OpTruncateFile(self: File, size: integer) -> boolean;
+#cap "fs.write"
 fn OpSyncFile(self: File) -> boolean;
+#cap "fs.write"
 // Dynamic dispatch through a runtime function reference (fn-ref variable).
 // Placed here — after all file-I/O operators — so that it receives op_code 252 without
 // renumbering the operators defined earlier in this file.  Logically it beintegers near
@@ -83,8 +94,10 @@ fn OpCallRef(fn_var: const u16, arg_size: const u16);
 #rust"s.fn_call_ref(@fn_var, @arg_size);"
 fn OpMkdir(path: text) -> boolean;
 #rust"codegen_runtime::fs_mkdir(&s.database.resolve_path(@path))"
+#cap "fs.write"
 fn OpMkdirAll(path: text) -> boolean;
 #rust"codegen_runtime::fs_mkdir_all(&s.database.resolve_path(@path))"
+#cap "fs.write"
 // Reads the entire file as a UTF-8 text value.
 // Use for small configuration files or scripts.
 
@@ -98,6 +111,7 @@ pub fn content(self: File) -> text {
 // Par-safe: reads the file into a worker-local store; the host bridge
 // serialises filesystem access.
 #impure(io)
+#cap "fs.read"
 // Reads the file and splits it into lines.
 // Strips trailing '\r' so CRLF files (Windows) and LF files (Unix) produce
 // identical results. Use when processing line-by-line (logs, CSV, etc.).
@@ -126,6 +140,7 @@ pub fn lines(self: File) -> vector < text > {
 }
 // Par-safe filesystem read (via content()).
 #impure(io)
+#cap "fs.read"
 // --- Text ---
 // Splits self on every occurrence of separator and returns the parts as a vector.
 // Use to parse CSV lines or space-separated tokens.
@@ -231,6 +246,7 @@ pub fn file(path: text) -> File {
 }
 // Stat-equivalent filesystem read; par-safe.
 #impure(io)
+#cap "fs.read"
 // Use to check whether a path is accessible before reading or writing it.
 // Paths outside the project directory are always absent.
 
@@ -239,12 +255,14 @@ pub fn exists(path: text) -> boolean {
 }
 // Filesystem stat (via file()); par-safe.
 #impure(io)
+#cap "fs.read"
 // Method form: f = file("path"); if f.exists() { ... }
 // Also callable as exists(file_obj) via the 'both' parameter name.
 pub fn exists(both: File) -> boolean {
   both.format != Format.NotExists
 }
 #pure
+#cap "fs.read"
 // Use to remove a file after processing or as a cleanup step.
 // Returns FileResult.Ok on success, FileResult.NotFound when the file did
 // not exist or is outside the project directory.
@@ -256,6 +274,7 @@ pub fn delete(path: text) -> FileResult {
 }
 // Par-safe filesystem write; the host bridge serialises mutations.
 #impure(io)
+#cap "fs.write"
 // Use to rename or relocate a file within the project.
 // Both paths must stay within the project directory; the destination must
 // not already exist.
@@ -268,6 +287,7 @@ pub fn move(from: text, to: text) -> FileResult {
   FileResult.Other
 }
 #impure(io)
+#cap "fs.write"
 // Create a single directory level. Returns FileResult.NotFound if the path
 // is outside the project directory.
 
@@ -277,6 +297,7 @@ pub fn mkdir(path: text) -> FileResult {
   FileResult.Other
 }
 #impure(io)
+#cap "fs.write"
 // Create a directory and all missing parents (like Unix mkdir -p).
 // Returns FileResult.NotFound if the path is outside the project directory.
 
@@ -286,6 +307,7 @@ pub fn mkdir_all(path: text) -> FileResult {
   FileResult.Other
 }
 #impure(io)
+#cap "fs.write"
 // Truncate or extend the file to exactly `size` bytes.
 // Truncating removes bytes beyond `size`; extending fills with null bytes.
 // Returns FileResult.NotFound if the file does not exist; FileResult.IsDirectory
@@ -302,6 +324,7 @@ pub fn mkdir_all(path: text) -> FileResult {
 pub fn mtime(path: text) -> integer;
 #rust"Stores::os_mtime_native(@path)"
 #impure(host_io)
+#cap "fs.read"
 
 // Durable-store integrity check.  Returns true
 // iff the `.dmeta` sidecar at `<path>.dmeta` validates against the
@@ -312,6 +335,7 @@ pub fn mtime(path: text) -> integer;
 pub fn store_durable_check(path: text) -> boolean;
 #rust"crate::store::Store::durable_check(std::path::Path::new(@path))"
 #impure(io)
+#cap "fs.read"
 
 // Write a fresh `.dmeta` sidecar capturing the
 // current main-file's byte length + CRC32 + a clean-close timestamp.
@@ -322,6 +346,7 @@ pub fn store_durable_check(path: text) -> boolean;
 pub fn store_durable_seal(path: text) -> boolean;
 #rust"crate::store::Store::durable_seal(std::path::Path::new(@path))"
 #impure(io)
+#cap "fs.write"
 
 // "The hash IS the file."  Re-root the Store backing the
 // given reference at a file path so mutations are durable via mmap
@@ -348,6 +373,7 @@ pub fn store_durable_seal(path: text) -> boolean;
 pub fn store_persist_bind(r: hash, path: text) -> boolean;
 #rust"stores.bind_path((@r).store_nr, std::path::Path::new(@path))"
 #impure(io)
+#cap "fs.write"
 
 // Truncates or extends the file to `size` bytes. Returns FileResult.Ok, or an
 // error variant (IsDirectory / NotFound / Other).
@@ -359,6 +385,7 @@ pub fn set_file_size(self: File, size: integer) -> FileResult {
   FileResult.Other
 }
 #impure(io)
+#cap "fs.write"
 // Flushes buffered bytes for self to the underlying storage so that the
 // preceding writes are durable. Use between log records or block
 // boundaries to guarantee that earlier appends have landed on disk
@@ -370,6 +397,7 @@ pub fn sync(self: File) -> boolean {
   OpSyncFile(self)
 }
 #impure(io)
+#cap "fs.write"
 // Returns the entries inside a directory.
 // The File must have format == Format.Directory.
 // Use to iterate over all files in a folder.
@@ -382,11 +410,13 @@ pub fn files(self: File) -> vector < File > {
   result
 }
 #impure(io)
+#cap "fs.read"
 // Writes v as UTF-8 text to the file. Overwrites existing content.
 
 pub fn write(self: File, v: text);
 #rust"{{ let __wf_v = @v; stores.write_file(&@self, __wf_v); }}"
 #impure(io)
+#cap "fs.write"
 // --- Environment ---
 // Returns all environment variables as a vector of EnvVariable records (fields: name, value).
 // Use to inspect or forward the full environment.
@@ -394,11 +424,13 @@ pub fn write(self: File, v: text);
 pub fn env_variables() -> vector < EnvVariable >;
 #rust"stores.os_variables()"
 #impure(host_io)
+#cap "env"
 // Returns the value of the environment variable name, or null if it is not set.
 // Use to read configuration from the shell environment.
 pub fn env_variable(name: text) -> text;
 #rust"stores.os_variable(@name)"
 #impure(host_io)
+#cap "env"
 // --- Time ---
 // Returns the current wall-clock time as milliseconds since the Unix epoch
 // (00:00 UTC on 1 Jan 1970). Use for timestamps and logging.
