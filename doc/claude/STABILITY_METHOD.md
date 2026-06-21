@@ -23,6 +23,68 @@ and the layout still asserted (#328).  None of these were typos or logic
 slips — each was a *structural* defect: the invariant had no single home, so
 the copies drifted.
 
+## The trigger — a condition-thicket means the structure, not the logic, is wrong
+
+Dual-home drift is one shape.  The other arrives over time on a structure that
+was *fine when it was designed*.  A data structure is right for the features it
+was built to carry — not in the absolute.  As later features and fixes pile on,
+the implementations behind it accrete tests and branches: *"four tests on an `if`
+to get into a branch with another `if`."*  That condition-thicket is the signal —
+not a logic slip, not a coding-skill gap — that the structure has crossed an
+inflection point and is now the burden.
+
+This is the field's oldest principle, not a loft one.  Brooks: *"show me your
+tables, and I won't usually need your flowcharts; they'll be obvious."*  Pike's
+Rule 5: *"data dominates — if you've chosen the right data structures, the
+algorithms will almost always be self-evident."*  Torvalds names the smell exactly:
+good code *"rewrites it so that a special case goes away and becomes the normal
+case"* — the condition-thicket IS his special-case-that-should-not-exist.  What
+those quotes omit, and what this section adds, is the corrective: even their authors
+refactor their core structures *constantly* — you do not get the structure right
+once and keep it.  So the working skill is not "pick the perfect structure" (you
+can't, see below); it is recognizing *when* the one you have has become the burden.
+
+The mechanism is the same drift in a different dress: the algorithm needs a fact
+the structure does not carry, so every site **re-derives** it — order-dependently,
+with special cases — and the re-derivations diverge exactly like dual homes do.
+loft's vector element-nullability is the worked case: *"is this element nullable?"*
+lives nowhere — it is emergent from whether the element resolved to
+`Enum(__nullable<S>)` or `Reference(S)`, decided at **parse time** (so it depends
+on definition order), and the `not null` opt-out is *lost* once it collapses to the
+dense form.  The fact is then re-derived across ~188 sites; a forward-referenced
+element (`enum E { V { f: vector<S> } }` with `struct S` defined after `E`)
+silently misses the rewrite and corrupts discriminant reads on both backends.  No
+single edit was wrong; the accumulation is.
+
+The recognition is itself a skill — separate from logic or fluency, and learnable.
+Its most useful form is *felt*: when you are **stuck or thrashing** on a complex
+topic — the change keeps wanting more tests, it feels harder or longer than it
+should for what it does — that difficulty is itself the signal.  Like the rest of
+this method it is a **sight discipline, not a willpower one** (the engineering-rigor
+framing): being stuck means *suspect the structure*, not redouble the effort or add
+care.  Concretely: **when a fix wants to add one more condition / branch /
+special-case to re-derive a fact, especially a fact already re-derived elsewhere —
+stop.**  That edit is condition #189; the correct move is to evolve the structure so it *carries* the
+fact (here: an explicit element-nullable bit, with `__nullable<S>` synthesized by a
+single lowering pass once all types are known), and let every site just read it.
+Structures decay into burdens over a feature's life — budget for the evolution
+instead of paying interest on the thicket.  Then run the three passes below to move
+the now-named fact into its home.
+
+And this is **not avoidable** — that is the point, not a caveat.  You cannot design
+the perfect structure upfront: *which* facts it must carry is fixed by use cases and
+bugs that do not exist until the code is built and exercised.  A structure decaying
+into a burden is therefore the expected trajectory of a *living* one — not a logic
+fault, not a foresight gap, not a sign someone designed it badly.  So the
+professional move is neither chasing a perfect upfront design (impossible) nor
+silently patching the thicket forever (paying interest) — it is to **understand it
+is happening and signal it**: the moment a fix wants condition #189, record the
+thicket as a pass-1 finding ([STABILITY_SWEEP.md](STABILITY_SWEEP.md)) naming the
+fact the structure fails to carry, so the evolution is decided *deliberately* — with
+the use-case-and-bug knowledge that exists now and did not before — instead of
+quietly becoming condition #190.  The signal is the deliverable; the refactor
+follows from it.
+
 ## Pass 1 — the sweep (find and document; do not fix)
 
 Walk the whole body of code with one question: **which facts are asserted in
@@ -139,6 +201,13 @@ go* (pass 3).
   sites — the catalog already did both — then probe to falsify).
 - [STABILITY_SWEEP.md](STABILITY_SWEEP.md) — the live pass-1 catalog and
   work list.
+- [CODEGEN_METHOD.md](CODEGEN_METHOD.md) / [OWNERSHIP_MODEL.md](OWNERSHIP_MODEL.md)
+  — the same "facts live in the structure, not re-derived per-site" principle
+  for the compiler.  The *trigger* section above is its temporal form: a
+  structure that was fine decays into a burden as features pile re-derivation
+  onto it — recognizing that inflection point (the condition-thicket) and
+  paying for the evolution is a net win, because it retires the bug *class*,
+  not one instance.
 
 ---
 

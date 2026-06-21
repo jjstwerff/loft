@@ -130,6 +130,16 @@ one level apart** — learn the column you're in, but know it's one method.
    than the failing region; unifying genuinely distinct cases under a false
    invariant) drags blast radius and is its own brittleness. The proportionate
    move enforces *exactly* the invariant the whole failing region violates.
+   *The chokepoint is often a **data structure**, not a code path.* When the fix
+   keeps wanting another condition / branch / special-case to re-derive a fact — or
+   you are simply **stuck, the change wanting more tests than it should** — that
+   thicket is the signal the *structure* is wrong, not your logic (sight, not
+   willpower: suspect the structure, don't redouble effort). Fold the fact INTO the
+   structure so the special case becomes the normal case (Linus's "good taste";
+   "data dominates") — every site then *reads* it instead of re-deriving. You can't
+   design the perfect structure upfront, so this is recurring, not a one-time win:
+   recognize it, signal it, evolve. Full story:
+   [STABILITY_METHOD.md § The trigger](../../../doc/claude/STABILITY_METHOD.md).
 
 5. **Verify against what you wrote down**, not against the action's own momentum.
    Debug: re-run the full matrix on **every mode the result can diverge across**
