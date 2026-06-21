@@ -16,9 +16,10 @@ under a *prove-it-safe-at-load* policy, while the surrounding host code runs
 unrestricted, in one process, sharing the store at full `DbRef` speed.
 
 **Implementation progress** (branch `tuxedo-work2`):
-- **1.1 ✅** — `src/sandbox.rs`: `SandboxProfile`/`SandboxConfig` + the
-  deny-by-default dotted-segment `allows()` prefix match + the `loft.toml`
-  `[sandbox]`/`[profile.*]` parser. Unit-tested.
+- **1.1 ✅** — `src/sandbox.rs`: `SandboxProfile`/`SandboxConfig` + the deny-by-default
+  dotted-segment `allows()` cap match **and `allows_lib()` wholesale-library match** +
+  the `loft.toml` `[sandbox]`/`[profile.*]` parser (`allow_libs` / `allow_caps`).
+  Unit-tested.
 - **1.2 ✅** — per-def designation in the parser: `set_sandbox_config`, a
   `def_sandbox` side-map (`def_nr → profile`, off `Definition` so it stays out of
   IR serialization), recorded in `parse_function`. Host-controlled only; e2e test.
@@ -47,29 +48,35 @@ unrestricted, in one process, sharing the store at full `DbRef` speed.
   IR-round-tripped (re-derived on parse) — persistence lands coupled with the first
   stdlib `#cap` annotation, documented on the field so the gap stays loud. Read/write
   groups read back distinctly; unannotated = None.
-- **2.3 ✅ (the convergence)** — `sandbox::admit_capabilities` + `Parser::sandbox_admit`:
-  each sandboxed def is admitted under ITS OWN profile; every trusted symbol it
-  references must carry a `#cap` group the profile permits (1.1 `allows`) or — for an
-  external FFI bridge (1.4) — be `native_ffi`-allowed; a ref to another sandboxed def is
-  skipped (admitted under its own profile). Deny-by-default. **L4-complete**: indirect
-  fn-refs resolve to their target (1.3), so they land in the checked set. `CapViolation`
+- **2.3 ✅ (the convergence) + library-first** — `sandbox::admit_capabilities` +
+  `Parser::sandbox_admit`: each sandboxed def is admitted under ITS OWN profile; every
+  trusted symbol it references admits if **its library is allow-listed wholesale**
+  (`allow_libs` / `def_library`) **or** its `#cap` group is (1.1 `allows`) — or, for an
+  external FFI bridge (1.4), `native_ffi` permits it. So a whole vetted library is
+  included with NO tags (§3); a ref to another sandboxed def is skipped. Deny-by-default.
+  **L4-complete**: indirect fn-refs resolve to their target (1.3). `CapViolation`
   (UngrantedCap{group}/UntaggedSymbol/ExternalFfi{crate}) names each offender for 2.5.
-  Verified: granted admits, ungranted/untagged/L4-indirect rejected.
-- **2.2 ◐ (lint ✅ + persistence ✅; tagging open)** — `untagged_public_symbols` lists
-  every public, non-synthetic fn lacking a `#cap` group (L3-cap: empty = full coverage).
+  Verified: wholesale-lib admits untagged fns; granted/ungranted caps gate; L4-indirect
+  rejected.
+- **2.2 ✅ (lint + persistence; blanket tagging dropped)** — `untagged_public_symbols`
+  lists public fns lacking a `#cap` group — now a tool for a HOST tagging its OWN APIs, not
+  a stdlib full-coverage gate (library-first made that unnecessary).
   **`cap` IR persistence shipped (2.2-persist):** `Definition.cap` round-trips through the
   store codec, so a `#cap`-tagged stdlib loaded from the `LOFT_STDLIB_CACHE` bundle still
   gates correctly. The DB packs fields by region, so `cap` landed at offset 148 (read off
   the baked-layout probe), pushing the trailing bools (rnn 148→152, pub_visible 149→153,
   stride 150→154); `baked_layout_mirrors_loft_schema` is the offset guard, and
   `cap_annotation_survives_store_round_trip` proves a non-empty group survives.
-- **2.2 tagging — fs/env ✅ (first surface)** — `default/02_files.loft` carries 32 `#cap`
-  groups: `fs.read` (14), `fs.write` (16), `env` (2), covering the public fs/env API AND
-  the fs Op primitives they reach. Verified on the REAL stdlib: `mtime` (fs.read) is
-  rejected naming the group when only `env` is granted; `env_variable` (env) admits.
-- **Next:** tag the remaining surfaces against the lint — `text` (path/string helpers),
-  `collections.{read,write}`, `math`, `time`, the core language ops — so general scripts
-  admit → then 2.5 diagnostics, the 1.4 backend half, P3 totality.
+- **2.2 tagging — fs/env ✅ (the one stdlib split)** — `default/02_files.loft` carries 32
+  `#cap` groups: `fs.read` (14), `fs.write` (16), `env` (2). Under **library-first** this
+  is the *only* stdlib tagging needed — the built-in `files` read/write split. The pure
+  modules (`code`/`text`/`json`) are included wholesale via `allow_libs`, untagged.
+  Verified on the REAL stdlib: `mtime` (fs.read) rejected naming the group when only `env`
+  is granted; `env_variable` (env) admits; untagged `now()` admits under `allow_libs`.
+- **Next:** ~~tag the 166-fn surface~~ — **dropped** (library-first removes it). Remaining:
+  2.5 diagnostics (turn `CapViolation`s into spanned errors), the 1.4 backend half, P3
+  totality (loop/recursion bounds). The lint stays as the coverage tool for a host tagging
+  its OWN APIs.
 
 **Scope.** v1 is intentionally **fairly restricted** — a small total dialect (bounded
 loops, no/structural recursion, total ops) plus a **curated host API**; the
@@ -132,25 +139,41 @@ type uses), so indirect calls can't escape (L4).
 | sandboxed → a symbol outside the allowed groups / native FFI / file·net·env | **compile error** |
 | unrestricted → a sandboxed def | yes — and the call always returns (the script is total) |
 
-### 3. Capability groups — declared in the code, never a drift-prone list
-Each API function/method/type carries a `#cap "<group>"` tag **at its definition**
-(beside `#native`/`#rust`); a profile selects **groups**, never names — a function's
-capability is a fact that lives with the function (one home per fact,
-[STABILITY_REDFLAGS.md](../../STABILITY_REDFLAGS.md)).
+### 3. Library-first admission — whole libraries in, tags only to split one
+A reachable trusted symbol admits if **either** its **library** is allow-listed
+wholesale (`allow_libs`) **or** its `#cap` **group** is allow-listed (`allow_caps`).
+A complete, host-vetted library is included as a **unit** — every symbol in it
+admits with **no tag**, including its untagged functions and its native bridges. So
+the host allows the pure stdlib modules (`code`/`text`/`json`) wholesale and tags
+nothing; the 166-fn stdlib never needs blanket tagging.
+
+**Tags are purely the fine-grained layer** — for carving a library in half
+("include `files`, but reads only"). The capability is a fact that lives with the
+function (`#cap "<group>"` at its definition, beside `#native`/`#rust` — one home per
+fact, [STABILITY_REDFLAGS.md](../../STABILITY_REDFLAGS.md)). Only a *partially*-
+included library needs them.
+
+- **The stdlib ships its own tags**, only where a built-in split is worth exposing:
+  `files`'s `fs.read`/`fs.write` is the one example today. Projects **cannot edit the
+  stdlib** — they include its modules wholesale, or use the shipped split.
+- **Projects tag their OWN code** — internal APIs + bundled libraries — to gate them
+  finely; that is where new `#cap` tags come from, not the stdlib.
+- Keeping a few real tags (the `files` split) keeps the **cap path verifiable**
+  end-to-end alongside the wholesale path.
 
 ```
-fn read_file(path: text) -> text;  #native "n_file_read"  #cap "fs.read"
-pub fn get(self: vector, i: integer) -> ...;              #cap "collections.read"
-pub fn clear(self: vector);                                #cap "collections.write"
+// the stdlib SHIPS this split (a project cannot add it):
+pub fn mtime(path: text) -> integer;  #cap "fs.read"
+pub fn write(self: File, v: text);    #cap "fs.write"
 ```
 ```toml
 [profile.mod-script]
-backend = "interpret"; native_ffi = false        # never native/rustc, no cdylib
-allow_caps = ["game.read", "game.write", "math", "collections.read", "text"]
-# fs.*, net, env, collections.write → tagged outside → denied. Prefix: "game" ⊇ game.*.
+backend = "interpret"; native_ffi = false   # never native/rustc, no cdylib
+allow_libs = ["code", "text", "json"]        # whole modules — no tags needed
+allow_caps = ["fs.read"]                      # files NOT wholesale → reads only, no writes
 ```
-The group travels with the symbol; an **un-tagged symbol is denied** (forces
-classification, L3-cap).
+A symbol in **no** allowed library **and** with **no** allowed cap is denied
+(deny-by-default). The library is the source module (stdlib) or package name.
 
 ### 4. Totality admission (the core)
 
@@ -320,18 +343,21 @@ proven-total script.
   (read/write groups read back distinctly). **Remaining:** the type/module default with
   per-method override (resolve a method's effective cap from its type when it has none),
   and IR persistence (coupled with the stdlib annotation in 2.2).
-- **2.2 Tag the stdlib/API surface + coverage lint.** ◐ *lint shipped
-  (`untagged_public_symbols`); tagging gated on `cap` IR persistence (baked-layout regen
-  in `ir_schema_gen.rs`).* *Change:* assign groups across `default/*.loft` + registry libs
-  (`fs.*`, `net`, `env`, `collections.{read,write}`, `math`, `text`, …). *Verify
-  (L3-cap):* a lint fails if any public symbol lacks a group.
-- **2.3 Group-membership admission.** ✅ *shipped* (`admit_capabilities` /
-  `sandbox_admit`). *Change:* every reachable symbol's group ∈ `allow_caps` (prefix) or
-  another sandboxed def, else reject. *Verify:* `read_file` (`fs.read`) / `Vector.clear`
-  (`collections.write`) rejected naming the group; `Vector.get` passes; the L4 indirect
-  `let f=read_file; f(...)` rejected. **Done:** synthetic-cap equivalents verify each
-  case (granted admits, ungranted names the group, untagged denied, L4-indirect caught).
-  The named-stdlib examples (`read_file`/`Vector.*`) land once **2.2** tags the surface.
+- **2.2 Coverage lint + the one stdlib split.** ✅ *(re-scoped by library-first).* Blanket
+  stdlib tagging is **dropped**: pure modules are included wholesale (`allow_libs`), so
+  `code`/`text`/`json`/… stay untagged. Shipped: `untagged_public_symbols` (the lint — now
+  a tool for a *host* tagging its OWN APIs, not a stdlib gate), `cap` IR persistence
+  (baked-layout regen), and the built-in `files` `fs.read`/`fs.write` split. *L3-cap* is no
+  longer "every public symbol must be tagged" — it is "every symbol a sandbox reaches is in
+  an allowed library or carries an allowed cap," which the admission walk enforces.
+- **2.3 Library-first admission.** ✅ *shipped* (`admit_capabilities` / `sandbox_admit`).
+  *Change:* every reachable symbol is admitted if its **library ∈ `allow_libs`** OR its
+  **group ∈ `allow_caps`** OR it is another sandboxed def, else reject — so whole vetted
+  libraries need no tags (§3) and tags only carve a library in half. *Verify:* a
+  wholesale-allowed library admits its untagged fns; `mtime` (`fs.read`) rejected naming
+  the group when ungranted; the L4 indirect `f=read_file; f(...)` rejected. **Done on the
+  REAL stdlib**: untagged `now()` admits under `allow_libs=["files"]`; the fs.read/fs.write
+  split gates `files` finely. Library = source module / package (`def_library`).
 - **2.4 No-raw-write admission.** *Change:* in a sandboxed def, reject raw store/field
   assignment to host data — writes only via allow-listed `*.write` ops (§5). *Verify:*
   `e.health = 0` rejected; `damage(e, 10)` (a granted `game.write` op) passes.
