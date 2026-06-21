@@ -42,8 +42,15 @@ unrestricted, in one process, sharing the store at full `DbRef` speed.
   sandboxed defs to interpret in the execution pipeline + prove
   `cargo build --no-default-features` removes the cdylib path (`interpret_only` already
   parses).
-- **Next:** 1.4 backend half, then 2.x capabilities (where `allows()` gets its consumer
-  over the 1.3 reachable set, and the FFI ban becomes "external FFI = ungranted cap").
+- **2.1 ✅** — `#cap "<group>"` annotation: parsed in `parse_rust` beside `#native`
+  (any file); `Definition.cap` + `Parser::def_cap_group` read it. `cap` is NOT yet
+  IR-round-tripped (re-derived on parse) — persistence lands coupled with the first
+  stdlib `#cap` annotation, documented on the field so the gap stays loud. Read/write
+  groups read back distinctly; unannotated = None.
+- **Next:** 2.3 the **admission walk** — over the 1.3 reachable set, gate each trusted
+  (non-sandboxed) symbol's `def_cap_group` against the profile via `allows()`, fold in
+  the 1.4 FFI bridges (external FFI = ungranted cap), emit one diagnostic per violation.
+  Then the 1.4 backend half + stdlib `#cap` annotation (with its IR persistence).
 
 **Scope.** v1 is intentionally **fairly restricted** — a small total dialect (bounded
 loops, no/structural recursion, total ops) plus a **curated host API**; the
@@ -287,9 +294,13 @@ proven-total script.
   no-default-features cdylib removal.
 
 ### P2 — capabilities (groups + no-raw-write) + diagnostics
-- **2.1 `#cap "<group>"` annotation.** *Change:* parse `#cap` onto the def (like
-  `#native`); type/module group with per-method override. *Verify:* a def's group is
-  readable; `Vector.get`=`collections.read`, `Vector.clear`=`collections.write`.
+- **2.1 `#cap "<group>"` annotation.** ✅ *per-def parse + read shipped.* *Change:* parse
+  `#cap` onto the def (like `#native`); type/module group with per-method override.
+  *Verify:* a def's group is readable; `Vector.get`=`collections.read`,
+  `Vector.clear`=`collections.write`. **Done:** per-def `#cap` parse + `def_cap_group`
+  (read/write groups read back distinctly). **Remaining:** the type/module default with
+  per-method override (resolve a method's effective cap from its type when it has none),
+  and IR persistence (coupled with the stdlib annotation in 2.2).
 - **2.2 Tag the stdlib/API surface + coverage lint.** *Change:* assign groups across
   `default/*.loft` + registry libs (`fs.*`, `net`, `env`, `collections.{read,write}`,
   `math`, `text`, …). *Verify (L3-cap):* a lint fails if any public symbol lacks a group.
