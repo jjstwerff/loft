@@ -1571,9 +1571,24 @@ use a separate collection or add after the loop"
         // on the second), so the __vdb_N dep is created consistently, exactly as
         // the materialise path at lines ~995 does.  Element type is read from the
         // RHS (s_type) so an untyped `b = a` (f_type Unknown) is covered too.
+        // #415 — a STRUCT vector-field read (`af = bx.v`) bound to a fresh local
+        // must deep-copy like `a = x`, not alias the field's store. Narrow to a
+        // struct field read (base is a `Reference`): a vector INDEX read (`vv[2]`,
+        // base is a `Vector`) is also an `OpGetField` but reaches a nested element
+        // whose stride the append-copy here would mishandle (plan-58 nested-bool),
+        // and it already binds correctly elsewhere — so it is deliberately excluded.
+        let struct_vec_field = if let Value::Call(d, args) = code.unspan() {
+            *d == self.data.def_nr("OpGetField")
+                && matches!(
+                    args.first().map(|a| a.unspan()),
+                    Some(Value::Var(bv)) if matches!(self.vars.tp(*bv), Type::Reference(_, _))
+                )
+        } else {
+            false
+        };
         if op == "="
             && var_nr != u16::MAX
-            && matches!(code, Value::Var(_))
+            && (matches!(code, Value::Var(_)) || struct_vec_field)
             && matches!(f_type, Type::Unknown(_) | Type::Vector(_, _))
             && let Type::Vector(elm_tp, _) = &s_type
         {
@@ -1598,6 +1613,18 @@ use a separate collection or add after the loop"
                 if let Value::Var(rhs_var) = code.unspan() {
                     self.vars.make_independent(var_nr, *rhs_var);
                     for d in self.vars.tp(*rhs_var).depend() {
+                        self.vars.make_independent(var_nr, d);
+                    }
+                } else {
+                    // #415 — field-read RHS (`af = bx.v`): there is no rhs_var,
+                    // but `af` inherited the base's dep ({bx}) during type
+                    // resolution.  Strip af's own inherited deps so
+                    // `vector_needs_db` below sees an empty dep and allocates af
+                    // its OWN store; otherwise it takes the reassignment/clear arm,
+                    // af never owns a store, and the alias to bx's field persists.
+                    // The OpAppendVector then deep-copies the field's elements in.
+                    let inherited = self.vars.tp(var_nr).depend();
+                    for d in inherited {
                         self.vars.make_independent(var_nr, d);
                     }
                 }
