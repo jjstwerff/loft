@@ -1042,6 +1042,8 @@ fn write_definition(out: &mut String, d: &Definition) {
     write_str(out, &d.rust);
     out.push_str(",\"native\":");
     write_str(out, &d.native);
+    out.push_str(",\"cap\":"); // @PLN86
+    write_str(out, &d.cap);
     let _ = write!(
         out,
         ",\"op_code\":{},\"known_type\":{},\"pub_visible\":{},\"closure_record\":{}",
@@ -1295,8 +1297,7 @@ fn definition_from_parsed(p: &Parsed) -> Result<Definition, TypeDecodeError> {
         returned_not_null: as_bool(field(p, "returned_not_null")?)?,
         rust: as_str(field(p, "rust")?)?,
         native: as_str(field(p, "native")?)?,
-        // @PLN86 — not persisted yet; re-derived on parse (see Definition::cap).
-        cap: String::new(),
+        cap: as_str(field(p, "cap")?)?, // @PLN86
         op_code: as_u16(field(p, "op_code")?)?,
         known_type: as_u16(field(p, "known_type")?)?,
         pub_visible: as_bool(field(p, "pub_visible")?)?,

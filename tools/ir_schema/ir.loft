@@ -209,7 +209,8 @@ struct Definition {    // src/data.rs::Definition (portable IR subset)
   forced_size: integer,    // Option<u8> -> 0 = None
   purity: integer,         // Purity ordinal
   field_groups: vector<LinkedFieldGroup>,
-  synthetic: text          // Option<&'static str> -> "" = None
+  synthetic: text,         // Option<&'static str> -> "" = None
+  cap: text                // @PLN86 #cap "group" -> "" = unannotated
 }
 
 struct Data {          // src/data.rs::Data (the stored core)

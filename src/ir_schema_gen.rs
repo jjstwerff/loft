@@ -693,6 +693,7 @@ pub fn register_ir_schema(db: &mut Stores) -> IrSchemaIds {
     let vec_field_groups = db.vector(t144);
     db.field(t145, "field_groups", vec_field_groups);
     db.field(t145, "synthetic", t5);
+    db.field(t145, "cap", t5); // @PLN86 — kept in sync with ir.loft Definition.cap
     let t146 = db.vector(t139);
     let _ = t146; // may be unused
     let t147 = db.vector(t144);
