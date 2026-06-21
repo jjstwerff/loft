@@ -52,11 +52,11 @@ directly over `vector<u8>`). Full plan + phases C1–C5 in
   **text** + malformed/non-canonical/trailing rejection), `encode→decode→encode`
   byte-identical on both backends (loft-libs-core@5293cb6). Text decode landed via
   a new stdlib `text_from_bytes(vector<u8>) -> text` primitive (the inverse of
-  `byte_at`, loft@8c46955b). **Only MAP decode remains gated on
-  [loft#406](https://github.com/loft-lang/loft/issues/406)** (struct-with-enum-
-  fields vector append corrupts the discriminant — loft2's "null struct in
-  vectors" area); the recursive map read is already written and lands the moment
-  #406 clears.
+  `byte_at`, loft@8c46955b). **MAP decode now SHIPPED** — the recursive map read
+  passes on both backends (cbor lib green, maps included); the struct-with-enum-
+  fields append corruption ([loft#406](https://github.com/loft-lang/loft/issues/406))
+  and its forward-ref enum↔struct variant ([loft#417](https://github.com/loft-lang/loft/issues/417))
+  are both cleared.
 - **A4 typed path** — `T.to_cbor()` / `parse_cbor<T>` (loft struct ↔ CBOR map,
   int or text keys, canonical). *Check:* struct corpus round-trips; signed-record
   shape stable.
@@ -97,13 +97,18 @@ Run the **same** crypto API in the browser with a minimal bundle.
 > convention** so all ~12 primitives bridge without per-fn reshape). B3 HPKE is
 > separately gated on the same bytes↔text gap as cbor text decode.
 
-> **Gating summary (updated):** **DONE** — crypto native suite, HPKE, cbor
-> structural+text decode, the `text_from_bytes` enabler, ZT-D1 TLS runbook;
-> compiler gates `#405` (loop-local) + `#407` (wasm.bridge text-return) **fixed**
-> (`fixed-pending-merge`). **Still gated:** cbor maps → **#406** (loft2); every
-> wasm bridge's local-dev use → **#408** (registry shadows local routes) + the
-> async/dep-resolution gap; vector `+=` after FFI alloc → **#409**. Next
-> non-gated library work: B6 release (needs go-ahead) / ZT-D2 rustls.
+> **Gating summary (2026-06-21):** **DONE** — crypto native suite + HPKE (59 tests
+> both backends), cbor full encode + structural/text/**map** decode (cbor lib green
+> on both backends), the `text_from_bytes` enabler, ZT-D1 TLS runbook. **All
+> compiler gates CLEARED:** `#405` (loop-local), `#406` (struct-enum vector append),
+> `#407` (wasm.bridge text-return), `#408` (registry shadows local routes), `#409`
+> (`+=` after FFI alloc) are all **closed**; the forward-ref enum↔struct variant of
+> the cbor-map corruption, `#417`, is **fixed** (`fixed-pending-merge`, this branch —
+> the one-home `nullable_vector_elem` resolution). **Remaining work has NO compiler
+> gate** — it is browser-bridge library development: the crypto wasm bridge (B1–B6:
+> `crypto.subtle` mapping + async↔sync + release), the web wasm bridge (C2–C3:
+> browser `WebSocket` + CBOR frames), and the plugin runtime (ZT-E). ZT-D2 rustls
+> deferred. Next: stand up the wasm-bridge build/headless test path, then B1.
 
 - **B1 — `[wasm.bridge]` → `crypto.subtle`.** Map each `n_crypto_*`:
   ed25519 sign/verify, x25519_dh, aes256gcm seal/open, hkdf, sha256, hmac,
