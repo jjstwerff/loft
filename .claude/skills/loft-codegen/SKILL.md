@@ -1,0 +1,97 @@
+---
+name: loft-codegen
+description: >-
+  The discipline for ANY loft compiler/codegen work — fixing a store-lifetime or
+  codegen bug, adding/altering bytecode, parser IR, the interpreter, or the native
+  generator, or implementing a language feature that emits ops. USE THIS the moment
+  you are about to edit src/parser/, src/state/codegen.rs, src/fill.rs,
+  src/generation/, src/compile.rs, or scopes.rs to change what code is emitted —
+  ESPECIALLY when a fix looks obvious and you're tempted to "just patch the
+  generator and run the suite." The one load-bearing rule it enforces: PROVE THE
+  WORKING BYTECODE/IR STANDALONE ON BOTH BACKENDS *BEFORE* touching the compiler.
+  Skipping that step is how a codegen fix flails and regresses the suite (see the
+  probe-04 anti-example). The DESIGN/diagnosis counterparts are the engineering-rigor
+  and design-protocol skills; this is the EMIT-mode sibling. Routes to
+  CODEGEN_METHOD.md (the method) and OWNERSHIP_MODEL.md (the ownership beacon).
+user-invocable: true
+---
+
+# loft-codegen — Prove the Working Bytecode First
+
+## The one gate (do not pass it)
+
+> **Do NOT edit the compiler until you have the WORKING bytecode/IR for THIS
+> situation, captured beside the current/broken bytecode, and proven correct on
+> BOTH backends (`--interpret` AND `--native`).**
+
+This is the step that, skipped, wrecks codegen work. The proof is cheap (a `/tmp`
+source shape + `loft introspect` + a run on each backend); skipping it is what costs
+hours. A patch to `src/generation/` or `gen_set_*` written *before* you can point at
+the exact ops you intend to emit is a guess — and guesses in codegen regress the
+suite, because every new shape needs another condition and the conditions interact.
+
+**The anti-example (internalize it):** @PLN85 probe 05 was fixed correctly — working
+bytecode proven standalone (`bytecode-comparisons/` rungs, the hand-correct
+`a:vec=[]; a+=enc()` form) → types → codegen → clean on both backends. Probe 04 was
+NOT — a parser change went in with no working IR proven first; it regressed
+`loft_suite` and never closed the case. Same method, opposite outcomes. The
+difference was this gate.
+
+## The method — bytecode → types → code, smallest scale first
+
+1. **Bytecode first (the target, proven).** Write the minimal case. Capture the
+   **WORKING** bytecode/IR *beside* the **current/broken** one for the same
+   situation — `loft introspect prog.loft`, or `LOFT_LOG=static`. The diff IS the
+   spec. Get the working form from a hand-correct SOURCE shape (or hand-write it),
+   so it's a real runnable artifact, never a guess. **Prove it on BOTH backends
+   before any compiler edit.** Save the pair (e.g. under a plan's
+   `bytecode-comparisons/`).
+   - Static dumps don't show runtime identity (stack-ref vs owned heap). When the
+     two IRs look identical but behaviour differs, the fault is value-delivery —
+     reach for `LOFT_LOG=ref_debug` / `LOFT_TRACE_*`, not another static read.
+2. **Types next (make the target OBVIOUS).** What must the type carry (ownership /
+   transfer-vs-borrow, nullability, layout) so codegen reads ONE clear fact and
+   emits the working bytecode mechanically? If the types already carry it → no type
+   change. If not → **that gap is the type change, and it lands before the codegen
+   change.**
+3. **Code last (translation, not re-derivation).** Codegen reads the type fact +
+   the parse-tree node and emits the ops. Local translation logic is fine; the red
+   flag is codegen *re-deriving a non-local fact* (the `has_ref_params && … && …`
+   shape) — that fact belongs back in step 2.
+
+Then **validate at this scale on both backends** (correct result · clean exit · no
+leak via `LOFT_STORES=warn` / `LOFT_NATIVE_LEAK_CHECK` · suite) and **grow**:
+minimal → bigger → full functions, comparing working-vs-broken at each rung.
+
+## The diagnostic
+
+Complex *deduction* in codegen (accumulating conditions to recompute ownership /
+nullability / layout per site) is a SYMPTOM of a missing type fact — fix the type,
+not the generator. But don't over-correct into a 1:1 type→codegen map: **facts in
+types, translation in codegen.** Test: *would this be a simple read if the type
+carried one more fact?* Yes → the fact belongs in the type.
+
+## The both-backends rule
+
+Interp (`src/state/codegen.rs` → bytecode) and native (`src/generation/` → Rust) are
+**separate generators reading the same IR**. A rung is closed ONLY when BOTH emit
+the proven bytecode and pass (correct + clean + no leak). An interp fix that breaks
+native compile is NOT landable. When they diverge on the same IR (one clean, one
+wrong/E0425), that divergence is the bug — neither "the suite is green" nor "interp
+works" closes it.
+
+## Stop conditions (revert, don't push through)
+
+- You're editing the compiler but cannot point at the working bytecode you intend to
+  emit → STOP, go do step 1.
+- A change makes one backend pass and the other regress/hang/crash → revert; it is
+  not landable.
+- The patch is growing per-shape conditions → the fact belongs in the type (step 2).
+
+## Anchors
+
+- [CODEGEN_METHOD.md](../../../doc/claude/CODEGEN_METHOD.md) — the full method
+- [OWNERSHIP_MODEL.md](../../../doc/claude/OWNERSHIP_MODEL.md) — `deps` as loft's borrow checker (the north star for store-lifetime work)
+- Worked example + rungs: `doc/claude/plans/85-store-lifetime-retirement/` (`bytecode-comparisons/`, `type-ownership-design.md`); probe 05 = method followed (clean), probe 04 = method skipped (regressed) — read both
+- [DEBUG.md § Introspection CLI](../../../doc/claude/DEBUG.md) — `loft introspect` / `LOFT_LOG`
+- DESIGN/diagnosis siblings: the `engineering-rigor` and `design-protocol` skills

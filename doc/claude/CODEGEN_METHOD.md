@@ -5,6 +5,13 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # The codegen method — types drive obvious bytecode, built bottom-up by scale
 
+> This method is now the self-contained **`loft-codegen` skill**
+> (`.claude/skills/loft-codegen/`) — the EMIT-mode sibling of the
+> `engineering-rigor` (diagnosis) and `design-protocol` (design) skills. The skill
+> is what *triggers* the method when you start compiler work and enforces its one
+> gate (prove the working bytecode on both backends before editing the compiler);
+> this doc is the full reference it routes to.
+
 This is how loft's compiler work should be done, everywhere. It exists because the
 opposite — patching the generator with on-the-spot heuristics and seeing what
 breaks — produces unreliable code and endless regressions (see @PLN85's 9 reverted
