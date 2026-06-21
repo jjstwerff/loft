@@ -7,12 +7,26 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**Open — full design (total-sublanguage model), no implementation.** Plan **@PLN86**
+**Open — full design (total-sublanguage model); the designation foundation is
+landing.** Plan **@PLN86**
 ([loft-lang/plans#86](https://github.com/loft-lang/plans/issues/86)) · `status:future`
 · `subject:loft`. The concrete first slice of [SANDBOX.md](../../SANDBOX.md): a
 compiler-enforced flag that runs **designated subsets** of a program (user scripts)
 under a *prove-it-safe-at-load* policy, while the surrounding host code runs
 unrestricted, in one process, sharing the store at full `DbRef` speed.
+
+**Implementation progress** (branch `tuxedo-work2`):
+- **1.1 ✅** — `src/sandbox.rs`: `SandboxProfile`/`SandboxConfig` + the
+  deny-by-default dotted-segment `allows()` prefix match + the `loft.toml`
+  `[sandbox]`/`[profile.*]` parser. Unit-tested.
+- **1.2 ✅** — per-def designation in the parser: `set_sandbox_config`, a
+  `def_sandbox` side-map (`def_nr → profile`, off `Definition` so it stays out of
+  IR serialization), recorded in `parse_function`. Host-controlled only; e2e test.
+- **0.1 ✅** — scoped parser nesting guard: the transient `in_sandbox` flag +
+  `expression`→`expression_inner` depth-guarded wrapper; hostile deep nesting in a
+  sandboxed def is a clean LOAD-time error (limit 128 ≈ 1.3 MB; ~10 KB/level), trusted
+  code unguarded. Deterministic explicit-stack test.
+- **Next:** 1.3 (reachable-set DFS) · 1.4 (FFI/backend ban) → 2.x capabilities.
 
 **Scope.** v1 is intentionally **fairly restricted** — a small total dialect (bounded
 loops, no/structural recursion, total ops) plus a **curated host API**; the
