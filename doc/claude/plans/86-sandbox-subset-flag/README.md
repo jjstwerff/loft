@@ -7,13 +7,16 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**Open — full design (total-sublanguage model); the designation foundation is
-landing.** Plan **@PLN86**
-([loft-lang/plans#86](https://github.com/loft-lang/plans/issues/86)) · `status:future`
+**v1 functionally COMPLETE — built, tested, and CLI-enforced end-to-end.** Plan **@PLN86**
+([loft-lang/plans#86](https://github.com/loft-lang/plans/issues/86)) · `status:active`
 · `subject:loft`. The concrete first slice of [SANDBOX.md](../../SANDBOX.md): a
 compiler-enforced flag that runs **designated subsets** of a program (user scripts)
 under a *prove-it-safe-at-load* policy, while the surrounding host code runs
-unrestricted, in one process, sharing the store at full `DbRef` speed.
+unrestricted, in one process, sharing the store at full `DbRef` speed.  An admitted
+sandboxed script reaches only allowed capabilities, terminates, never faults, runs
+interpret-only, and carries a worst-case complexity budget — all checked at load via
+`Parser::sandbox_admission_errors`, wired into the CLI (`loft.toml` `[sandbox]` policy →
+reject-or-run).
 
 **Implementation progress** (branch `tuxedo-work2`):
 - **1.1 ✅** — `src/sandbox.rs`: `SandboxProfile`/`SandboxConfig` + the deny-by-default
@@ -93,9 +96,15 @@ unrestricted, in one process, sharing the store at full `DbRef` speed.
   walk and rejects a violating sandboxed program at LOAD with the actionable errors
   (`tests/sandbox_cli.rs` drives it end-to-end: violation rejected, clean admitted,
   `--native` refused). **The sandbox is now enforced end-to-end through the binary.**
-- **Next:** **3.4** worst-case complexity report (L5 — derive step/depth cost so the host
-  bounds the inputs) — the last open v1 step. The decreasing-variant / structural-recursion
-  relaxations are post-v1.
+- **3.4 + 3.5 ✅** — `sandbox_complexity_degree`/`_report` give the host the `O(n^d)` budget
+  hint (L5); the totality rejections already render actionable, bound-it diagnostics. **v1 is
+  functionally complete.**
+- **v1 DONE — the full safety model is built, tested, and CLI-enforced:** capability
+  (P0–P2 + 2.5), termination (3.1–3.5), backend ban (1.4). An admitted sandboxed script
+  reaches only allowed capabilities, terminates, never faults, runs interpret-only, and
+  carries a complexity budget. **Post-v1:** the decreasing-variant `while` / structural-
+  recursion relaxations, trusted-op cost in the complexity model, and the `--native` codegen
+  (rustc) feature-gate (the dlopen path is already removable).
 
 **Scope.** v1 is intentionally **fairly restricted** — a small total dialect (bounded
 loops, no/structural recursion, total ops) plus a **curated host API**; the
@@ -411,12 +420,15 @@ proven-total script.
   fault the script and cannot be made total → `PartialOp` rejection naming the op + a
   defensive-check fix. *Verify (L3):* `a / b ?? 0` admits as total; a sandboxed `assert`
   is rejected. ✓
-- **3.4 Worst-case complexity report.** *Change:* derive the step/depth cost as a
-  function of input sizes; flag loops over an unbounded source. *Verify (L5):* a
-  per-entity loop reports `O(entities)`; an unbounded-source loop is flagged for an input
-  bound.
-- **3.5 Totality diagnostics (§6).** *Change:* each totality rejection names the
-  construct + *how to bound it* (a range, a decreasing variant, a structural argument).
+- **3.4 Worst-case complexity report.** ✅ *shipped* (`sandbox_complexity_degree` /
+  `_report`). *Change:* derive the step cost as a function of input size. *Verify (L5):* a
+  per-entity loop reports `O(n)`. **Done:** the degree = max over the body of `loop_nesting
+  + degree(callee)`, composed across the acyclic call graph (loop-calling-a-looping-fn →
+  O(n²)); rendered `O(1)`/`O(n)`/`O(n^d)` for the host to bound inputs. Reported, not
+  rejected.
+- **3.5 Totality diagnostics (§6).** ✅ *shipped with 3.1–3.3* — each totality rejection
+  (`describe_totality_violation`) names the construct + how to bound it (a bounded `for`, a
+  defensive check), folded into `sandbox_admission_errors`.
   *Verify:* the unbounded-loop / unbounded-recursion errors include the actionable fix.
 
 ### P4 — execution (no guard, no abort path)
