@@ -243,6 +243,17 @@ try {
   // No lib/ dir — fine, no extensions to load.
 }
 
+// Also load explicit host.js paths from $LOFT_WASM_HOST_JS (colon-separated) —
+// for library bridges that live outside <repoRoot>/lib (e.g. loft-libs-core
+// packages built with `--lib`), so their host imports can be tested headlessly.
+for (const hostJs of (process.env.LOFT_WASM_HOST_JS || '').split(':').filter(Boolean)) {
+  try {
+    (0, eval)(fs.readFileSync(hostJs, 'utf8'));
+  } catch (e) {
+    if (enableTrace) console.error(`host.js load failed for ${hostJs}: ${e.message}`);
+  }
+}
+
 // Apply each registered extension to the stubs object BEFORE
 // instantiate, so the imports the wasm sees include everything.
 // `ctrl` wraps the asset table the same way the production preamble
