@@ -278,6 +278,30 @@ fn fnref_target(v: &Value) -> Option<u32> {
     }
 }
 
+/// @PLN86 step 1.4 — the external `[native]` cdylib bridges a sandboxed program
+/// reaches: defs in `reachable` whose `#native` symbol is owned by an external
+/// native package (`native_symbol_crates`), NOT a built-in interpreter
+/// primitive.  Built-in stdlib functions use inline `#rust` bodies — their
+/// `native()` is empty — and built-in `#native` ops live in `default/`, not under
+/// a `native_packages` dir, so neither enters the crate map; only an external
+/// cdylib bridge does.  Generating Rust + dlopen'ing a cdylib is RCE by
+/// construction, so unless a profile sets `native_ffi = true` a non-empty result
+/// is an admission rejection (consumed by the §4 walk).  Sorted for stable
+/// diagnostics.
+#[must_use]
+pub fn reachable_ffi_bridges(data: &Data, reachable: &HashSet<u32>) -> Vec<u32> {
+    let mut bridges: Vec<u32> = reachable
+        .iter()
+        .copied()
+        .filter(|d| {
+            let sym = data.def(*d).native();
+            !sym.is_empty() && data.native_symbol_crates.contains_key(sym)
+        })
+        .collect();
+    bridges.sort_unstable();
+    bridges
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

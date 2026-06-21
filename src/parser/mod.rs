@@ -570,6 +570,16 @@ impl Parser {
         crate::sandbox::reachable_set(&self.data, &self.def_sandbox)
     }
 
+    /// @PLN86 step 1.4 — external `[native]` cdylib bridges reachable from the
+    /// sandboxed entries.  Empty unless a sandboxed def reaches an external FFI
+    /// symbol; admission rejects a non-empty result when the profile forbids
+    /// native FFI (RCE by construction).  Backend force-interpret + the
+    /// no-default-features cdylib removal are the remaining 1.4 work.
+    #[must_use]
+    pub fn sandbox_ffi_bridges(&self) -> Vec<u32> {
+        crate::sandbox::reachable_ffi_bridges(&self.data, &self.sandbox_reachable_set())
+    }
+
     /// # Panics
     /// With filesystem problems.
     pub fn parse(&mut self, filename: &str, default: bool) -> bool {
@@ -7941,6 +7951,39 @@ mod plan86_reachable_set_tests {
             p.sandbox_reachable_set()
                 .contains(&p.data.def_nr("n_target")),
             "fn-ref laundered through a variable must be reachable (L4)"
+        );
+    }
+
+    /// @PLN86 1.4 — a sandboxed def reaching an EXTERNAL native bridge (its
+    /// `#native` symbol owned by a native package) is flagged; a `#native` symbol
+    /// with no external-package owner (a built-in op) is not.
+    /// `native_symbol_crates` is the discriminator `backfill_native_symbol_crates`
+    /// fills for package-owned symbols.
+    #[test]
+    fn reachable_external_ffi_bridge_is_flagged_local_native_is_not() {
+        let src = "fn ext_fn() -> integer; #native \"ext_sym\"\n\
+                   fn local_native() -> integer; #native \"local_sym\"\n\
+                   fn scripted() -> integer { ext_fn(); local_native() }\n";
+        let mut p = parse_with_sandbox(&["fn:scripted"], src);
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        // Simulate `ext_sym` being owned by an external native package — exactly
+        // what `backfill_native_symbol_crates` records for a def under a
+        // `native_packages` dir.  `local_sym` is left unowned.
+        p.data
+            .native_symbol_crates
+            .insert("ext_sym".to_string(), "extcrate".to_string());
+        let bridges = p.sandbox_ffi_bridges();
+        assert!(
+            bridges.contains(&p.data.def_nr("n_ext_fn")),
+            "reachable external FFI bridge must be flagged, got {bridges:?}"
+        );
+        assert!(
+            !bridges.contains(&p.data.def_nr("n_local_native")),
+            "a #native symbol with no external-package owner must NOT be flagged"
         );
     }
 }
