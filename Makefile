@@ -151,7 +151,15 @@ install-artifacts: check-targets all
 	# Build library in isolated target dir so deps/ contains exactly one copy
 	# of each crate — no binary-only duplicates (e.g. libloading) that cause
 	# StableCrateId collisions during native compilation.
-	cargo build --release --lib --no-default-features --features mmap,random,threading --target-dir target/install-lib
+	#
+	# `native-extensions` is REQUIRED: the `--native` codegen unconditionally
+	# emits `loft::native_call::{enter,build_store}` to marshal a heap value
+	# (`vector<u8>`, struct) across the cdylib FFI (src/generation/mod.rs), and
+	# that module is `#[cfg(feature = "native-extensions")]` (src/lib.rs).  Drop
+	# it here and the installed `libloft.rlib` lacks `native_call`, so every
+	# `--native` run of a library with a `vector`/struct-returning (or -taking)
+	# `#native` fn fails to compile with `E0433: cannot find native_call in loft`.
+	cargo build --release --lib --no-default-features --features mmap,random,threading,native-extensions --target-dir target/install-lib
 
 install:
 	# #398 — preflight: this target writes to root-owned /usr/local/{bin,share}.
