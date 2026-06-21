@@ -7,18 +7,17 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**Active — the read-capability, termination, and backend arcs are COMPLETE and
-CLI-enforced; the no-raw-write data-integrity arc (2.4) is the one remaining v1 safety
-step.** Plan **@PLN86**
+**v1 safety model COMPLETE — built, tested, and CLI-enforced end-to-end.** Plan **@PLN86**
 ([loft-lang/plans#86](https://github.com/loft-lang/plans/issues/86)) · `status:active`
 · `subject:loft`. The concrete first slice of [SANDBOX.md](../../SANDBOX.md): a
 compiler-enforced flag that runs **designated subsets** of a program (user scripts)
 under a *prove-it-safe-at-load* policy, while the surrounding host code runs
 unrestricted, in one process, sharing the store at full `DbRef` speed.  An admitted
 sandboxed script reaches only allow-listed capabilities, terminates, never faults, runs
-interpret-only, and carries a worst-case complexity budget — all checked at load via
-`Parser::sandbox_admission_errors`, wired into the CLI (`loft.toml` `[sandbox]` policy →
-reject-or-run).  It does NOT yet contain **raw writes** to host data (2.4) — see
+interpret-only, performs no raw writes to host data, and carries a worst-case complexity
+budget — all four arcs (capability · termination · data-integrity · backend) checked at
+load via `Parser::sandbox_admission_errors`, wired into the CLI (`loft.toml` `[sandbox]`
+policy → reject-or-run).  Remaining work is post-v1 expressiveness + hardening — see
 [§ Open work](#open-work).
 
 **Implementation progress** (branch `tuxedo-work2`):
@@ -101,11 +100,13 @@ reject-or-run).  It does NOT yet contain **raw writes** to host data (2.4) — s
   `--native` refused). **The sandbox is now enforced end-to-end through the binary.**
 - **3.4 + 3.5 ✅** — `sandbox_complexity_degree`/`_report` give the host the `O(n^d)` budget
   hint (L5); the totality rejections already render actionable, bound-it diagnostics.
-- **Three of the four arcs are DONE and CLI-enforced:** read-capability (P0–P2 + 2.5),
-  termination (3.1–3.5), backend ban (1.4). An admitted script reaches only allow-listed
-  capabilities, terminates, never faults, runs interpret-only, and carries a complexity
-  budget. **The data-integrity arc (2.4 no-raw-write) and the post-v1 items are tracked in
-  [§ Open work](#open-work).**
+- **2.4 ✅** — no-raw-write admission: a sandboxed def may not raw-write heap data
+  (`e.health = 0` / `v[i] = 9`); recorded at parse, rejected via `sandbox_admission_errors`.
+  The data-integrity arc.
+- **All FOUR arcs are DONE and CLI-enforced:** capability (P0–P2 + 2.5), termination
+  (3.1–3.5), data-integrity (2.4), backend ban (1.4). An admitted script reaches only
+  allow-listed capabilities, terminates, never faults, performs no raw writes, runs
+  interpret-only, and carries a complexity budget. **Post-v1 items: [§ Open work](#open-work).**
 
 **Scope.** v1 is intentionally **fairly restricted** — a small total dialect (bounded
 loops, no/structural recursion, total ops) plus a **curated host API**; the
@@ -119,13 +120,13 @@ situations. Admitting *more* complex scripts via deeper termination/safety analy
 What is built is listed under [§ Implementation progress](#status); what remains:
 
 ### A. Safety — completes the v1 admitted-script guarantee
-- **2.4 No-raw-write admission** *(the one open v1 safety step).* An admitted script is
-  capability- and termination-safe but can still RAW-WRITE host data (`e.health = 0`),
-  bypassing invariants. Reject a raw store/field assignment to host (non-sandboxed-owned)
-  data in a sandboxed def; permit writes only via an allow-listed `*.write` op (`damage(e,
-  10)`). Scan the sandboxed IR for `Set`/field-write to a host-owned target; render through
-  `sandbox_admission_errors`. *Verify:* `e.health = 0` rejected; `damage(e, 10)` passes.
-- **Runtime fault-isolation (S7/S8 complement).** Admission proves an admitted script can't
+- **2.4 No-raw-write admission — ✅ DONE.** (Was the one open v1 safety step.) A sandboxed
+  def may not raw-write heap data (`e.health = 0` / `v[i] = 9`) — recorded at parse
+  (`sandbox_raw_writes`, where field-write vs struct-construction is unambiguous) and
+  rejected via `sandbox_admission_errors`; mutation only through an allow-listed `*.write`
+  op. The v1 safety model is now complete.
+- **Runtime fault-isolation (S7/S8 complement)** *(post-v1, runtime side).* Admission proves
+  an admitted script can't
   fault, but the host's *runtime harness* should still be transactional + catch the
   unexpected (`run_script() -> Result`, journalled store rollback) — belt-and-suspenders
   for an interpreter bug. This is the runtime side of [SANDBOX.md](../../SANDBOX.md) S7/S8,
@@ -440,9 +441,12 @@ proven-total script.
   the group when ungranted; the L4 indirect `f=read_file; f(...)` rejected. **Done on the
   REAL stdlib**: untagged `now()` admits under `allow_libs=["files"]`; the fs.read/fs.write
   split gates `files` finely. Library = source module / package (`def_library`).
-- **2.4 No-raw-write admission.** *Change:* in a sandboxed def, reject raw store/field
-  assignment to host data — writes only via allow-listed `*.write` ops (§5). *Verify:*
-  `e.health = 0` rejected; `damage(e, 10)` (a granted `game.write` op) passes.
+- **2.4 No-raw-write admission.** ✅ *shipped* (`RawWriteViolation` / `sandbox_raw_writes`).
+  *Change:* in a sandboxed def, reject a raw store/field assignment to heap data — writes
+  only via allow-listed `*.write` ops (§5). *Verify:* `e.health = 0` / `v[i] = 9` rejected;
+  struct construction + local writes admit. **Done:** recorded at parse (`parse_assign`,
+  non-`Var` LHS), CLI-enforced (`tests/sandbox_cli.rs`). v1-conservative: ALL field/index
+  writes rejected (host- vs script-owned data not yet distinguished — post-v1).
 - **2.5 Diagnostic quality (§6).** ✅ *P2 classes shipped* (`describe_violation` /
   `Parser::sandbox_admission_errors`). *Change:* every rejection carries the construct
   span + the rule + the allowed set / fix. *Verify:* the error text for each rejection
