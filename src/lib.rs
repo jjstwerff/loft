@@ -115,6 +115,8 @@ pub mod package;
 pub mod registry;
 #[cfg(feature = "registry")]
 pub mod registry_advisories;
+/// @PLN86 — sandbox policy model (capability-group allow-lists + the loft.toml parser).
+pub mod sandbox;
 #[cfg(feature = "registry")]
 pub mod registry_index;
 pub mod registry_keys;
