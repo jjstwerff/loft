@@ -715,6 +715,14 @@ impl Parser {
         if self.context == u32::MAX {
             return false;
         }
+        // @PLN86 step 1.2 — record the sandbox profile for a host-designated
+        // function so the admission walk (and the nesting guard, 0.1) know this
+        // def is restricted.  Designation is host-controlled (`fn:<name>` here;
+        // file globs later) — never from the source, so a script cannot mark
+        // itself.  Re-derived on every pass (def_sandbox is cleared at parse start).
+        if let Some(profile) = self.sandbox.fn_designation(&fn_name).map(str::to_string) {
+            self.def_sandbox.insert(self.context, profile);
+        }
         // Plan-17 phase 01 (B) — bound resolution + t-stub creation now
         // happens on BOTH passes.  Before, this block was gated on
         // `!self.first_pass`, leaving `definitions[ctx].bounds` empty

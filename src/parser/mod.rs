@@ -89,6 +89,16 @@ pub struct Parser {
     /// True while parsing an expression inside a format string `{…}`.
     /// Prevents the `v: type = expr` annotation from consuming `:`.
     pub(crate) in_format_expr: bool,
+    /// @PLN86 — the host-supplied sandbox policy (profiles + designations).
+    /// Empty by default; set by the embedder before parsing.  A script cannot
+    /// designate itself — the designation is read from here, not the source.
+    pub(crate) sandbox: crate::sandbox::SandboxConfig,
+    /// @PLN86 step 1.2 — the sandbox profile NAME each designated function is
+    /// parsed under (`def_nr -> profile`), recorded as the function is parsed.
+    /// The compile-time admission walk reads this to know which defs are
+    /// restricted.  Side-map (not on `Definition`) so it stays out of the IR
+    /// serialization — the tag is policy, re-derivable from `sandbox`.
+    pub(crate) def_sandbox: HashMap<u32, String>,
     /// The current file number that is being parsed
     file: u32,
     pub diagnostics: Diagnostics,
@@ -462,6 +472,8 @@ impl Parser {
             lexer: Lexer::default(),
             in_loop: false,
             in_format_expr: false,
+            sandbox: crate::sandbox::SandboxConfig::default(),
+            def_sandbox: HashMap::new(),
             file: 1,
             diagnostics: Diagnostics::new(),
             default: false,
@@ -519,6 +531,20 @@ impl Parser {
     /// Parse the content of a given file.
     /// - filename: the file to parse
     /// - default: parsing system definitions
+    /// @PLN86 step 1.2 — install the host's sandbox policy before parsing.  The
+    /// designation is host-controlled; a script can never mark itself sandboxed.
+    pub fn set_sandbox_config(&mut self, config: crate::sandbox::SandboxConfig) {
+        self.sandbox = config;
+    }
+
+    /// @PLN86 step 1.2 — the sandbox profile a function was parsed under, or
+    /// `None` for unrestricted (trusted) code.  The admission walk reads this to
+    /// apply the totality / capability rules only to sandboxed defs.
+    #[must_use]
+    pub fn def_sandbox_profile(&self, def_nr: u32) -> Option<&str> {
+        self.def_sandbox.get(&def_nr).map(String::as_str)
+    }
+
     /// # Panics
     /// With filesystem problems.
     pub fn parse(&mut self, filename: &str, default: bool) -> bool {
@@ -556,6 +582,10 @@ impl Parser {
         self.pending_imports.clear();
         self.applied_imports.clear();
         self.deferred_unknown.clear();
+        // @PLN86 1.2 — the def→profile side-map is keyed by def_nr, which
+        // `data.reset()` reassigns; clear it so a re-parse re-derives the
+        // designation rather than reading a stale entry.
+        self.def_sandbox.clear();
         self.data.reset();
         // @PLN22 Phase 2 — the main program parses under its own source
         // (MAIN_SOURCE), distinct from the stdlib prelude (source 0), so a user
@@ -7678,5 +7708,39 @@ mod p269_native_backfill_tests {
                 .any(|(sym, srcs)| sym == "collide_shared" && srcs.len() >= 2),
             "expected a `collide_shared` collision across >= 2 sources, got {collisions:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod plan86_sandbox_designation_tests {
+    use super::*;
+    use crate::sandbox::parse_sandbox_config;
+
+    /// @PLN86 step 1.2 — a host designation (`fn:<name>`) tags exactly the named
+    /// function with its profile; other functions stay unrestricted; and the tag
+    /// comes from the host policy, never the source (only `fn:scripted` is
+    /// designated, yet `host` in the same file is untagged).
+    #[test]
+    fn fn_designation_tags_only_the_designated_function() {
+        let mut p = Parser::new();
+        p.set_sandbox_config(parse_sandbox_config(
+            "[sandbox]\nmod-script = [\"fn:scripted\"]\n[profile.mod-script]\nallow_caps = [\"math\"]\n",
+        ));
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("plan86_designation_{}.loft", std::process::id()));
+        std::fs::write(&path, "fn scripted() { }\nfn host() { }\n").unwrap();
+        p.parse(path.to_str().unwrap(), false);
+        let _ = std::fs::remove_file(&path);
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "unexpected parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        let scripted = p.data.def_nr("n_scripted");
+        let host = p.data.def_nr("n_host");
+        assert_ne!(scripted, u32::MAX, "scripted fn registered");
+        assert_ne!(host, u32::MAX, "host fn registered");
+        assert_eq!(p.def_sandbox_profile(scripted), Some("mod-script"));
+        assert_eq!(p.def_sandbox_profile(host), None);
     }
 }

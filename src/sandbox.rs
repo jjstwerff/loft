@@ -96,6 +96,18 @@ impl SandboxConfig {
             .find(|(s, _)| s == selector)
             .and_then(|(_, p)| self.profiles.get(p))
     }
+
+    /// The profile NAME a `fn:<name>` designation maps to, if the function is
+    /// designated sandboxed.  The compiler resolves each parsed function against
+    /// this (@PLN86 step 1.2); file-glob selectors are a later addition.
+    #[must_use]
+    pub fn fn_designation(&self, fn_name: &str) -> Option<&str> {
+        let selector = format!("fn:{fn_name}");
+        self.designations
+            .iter()
+            .find(|(s, _)| *s == selector)
+            .map(|(_, p)| p.as_str())
+    }
 }
 
 /// Parse the `[sandbox]` + `[profile.*]` sections of a `loft.toml` body into a
@@ -245,6 +257,17 @@ allow_caps = ["game.read", "game.write", "math", "collections.read"]
             cfg.profile_for_selector("mods/**/*.loft")
                 .is_some_and(|p| p.allows("math"))
         );
+    }
+
+    #[test]
+    fn fn_designation_resolves_only_designated_functions() {
+        let cfg = parse_sandbox_config(
+            "[sandbox]\nmod-script = [\"fn:player_eval\", \"fn:on_tick\"]\n[profile.mod-script]\n",
+        );
+        assert_eq!(cfg.fn_designation("player_eval"), Some("mod-script"));
+        assert_eq!(cfg.fn_designation("on_tick"), Some("mod-script"));
+        assert_eq!(cfg.fn_designation("host_update"), None); // not designated
+        assert_eq!(cfg.fn_designation(""), None);
     }
 
     #[test]
