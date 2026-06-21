@@ -622,6 +622,8 @@ pub fn read_definition(stores: &Stores, r: Record, bodies: bool) -> Definition {
         returned_not_null: r.field_bool(stores, ds::DEF_RETURNED_NOT_NULL),
         rust: r.field_str(stores, ds::DEF_RUST).to_string(),
         native: r.field_str(stores, ds::DEF_NATIVE).to_string(),
+        // @PLN86 — not persisted yet; re-derived on parse (see Definition::cap).
+        cap: String::new(),
         op_code: r.field_int(stores, ds::DEF_OP_CODE) as u16,
         known_type: r.field_int(stores, ds::DEF_KNOWN_TYPE) as u16,
         pub_visible: r.field_bool(stores, ds::DEF_PUB_VISIBLE),

@@ -580,6 +580,15 @@ impl Parser {
         crate::sandbox::reachable_ffi_bridges(&self.data, &self.sandbox_reachable_set())
     }
 
+    /// @PLN86 step 2.1 — the `#cap "group"` capability group a def declares, or
+    /// `None` if unannotated.  Step 2.3 gates each trusted symbol in the reachable
+    /// set against the profile via `SandboxConfig::allows`.
+    #[must_use]
+    pub fn def_cap_group(&self, def_nr: u32) -> Option<&str> {
+        let cap = self.data.def(def_nr).cap();
+        (!cap.is_empty()).then_some(cap)
+    }
+
     /// # Panics
     /// With filesystem problems.
     pub fn parse(&mut self, filename: &str, default: bool) -> bool {
@@ -7985,5 +7994,30 @@ mod plan86_reachable_set_tests {
             !bridges.contains(&p.data.def_nr("n_local_native")),
             "a #native symbol with no external-package owner must NOT be flagged"
         );
+    }
+
+    /// @PLN86 2.1 — `#cap "group"` parses onto a def and is readable; the
+    /// read/write distinction (the `Vector.get` vs `Vector.clear` case)
+    /// round-trips, and an unannotated def reads as `None`.
+    #[test]
+    fn cap_annotation_is_parsed_and_readable() {
+        let src = "fn reader() -> integer;\n#native\n#cap \"collections.read\"\n\
+                   fn writer() -> integer;\n#native\n#cap \"collections.write\"\n\
+                   fn plain() -> integer { 0 }\n";
+        let p = parse_with_sandbox(&[], src);
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        assert_eq!(
+            p.def_cap_group(p.data.def_nr("n_reader")),
+            Some("collections.read")
+        );
+        assert_eq!(
+            p.def_cap_group(p.data.def_nr("n_writer")),
+            Some("collections.write")
+        );
+        assert_eq!(p.def_cap_group(p.data.def_nr("n_plain")), None);
     }
 }

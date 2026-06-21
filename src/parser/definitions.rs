@@ -1162,6 +1162,22 @@ impl Parser {
                     let default_sym = self.data.def(self.context).name().to_string();
                     self.data.definitions[self.context as usize].native = default_sym;
                 }
+            } else if id == Some("cap".to_string()) {
+                // @PLN86 — `#cap "group"` declares the capability group this
+                // function represents; the sandbox admission walk gates a TRUSTED
+                // symbol against the active profile's allowed groups.  Allowed in
+                // any file (libraries declare caps too), like `#native`.  A
+                // sandboxed def's own `#cap` is ignored by admission — a script's
+                // capabilities derive from what it REACHES, not a self-label.
+                if let Some(group) = self.lexer.has_cstring() {
+                    self.data.definitions[self.context as usize].cap = group;
+                } else {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Expect a capability-group string after `#cap`"
+                    );
+                }
             } else if self.default && id == Some("rust".to_string()) {
                 if let Some(c) = self.lexer.has_cstring() {
                     self.data.definitions[self.context as usize].rust = c;
