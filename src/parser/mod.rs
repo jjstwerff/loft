@@ -8695,4 +8695,48 @@ mod plan86_admission_tests {
             p3.sandbox_raw_writes()
         );
     }
+
+    /// @PLN86 2.4 (ownership-aware) — a mod may MUTATE the data it owns (a local of
+    /// a script-defined struct — the dogfood `e.alive = false` pattern), but NOT
+    /// host data (a parameter — the type also catches aliasing).
+    #[test]
+    fn no_raw_write_admits_script_owned_struct_mutation() {
+        // local script-owned struct mutation → admitted (no violation at all)
+        let p = parse_admit_libs(
+            &["fn:scripted"],
+            &["code"],
+            &[],
+            "struct Mob { hp: integer }\n\
+             fn scripted() -> integer { m = Mob { hp: 5 }; m.hp = 0; m.hp }\n",
+        );
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        assert!(
+            p.sandbox_raw_writes().is_empty(),
+            "mutating a script-owned struct must be allowed, got {:?}",
+            p.sandbox_raw_writes()
+        );
+        assert!(
+            p.sandbox_admission_errors().is_empty(),
+            "a self-owned mutation script must fully admit, got {:?}",
+            p.sandbox_admission_errors()
+        );
+
+        // the SAME write to a PARAMETER (host data) is still rejected
+        let p2 = parse_admit_libs(
+            &["fn:scripted"],
+            &["code"],
+            &[],
+            "struct Mob { hp: integer }\n\
+             fn scripted(m: Mob) -> integer { m.hp = 0; m.hp }\n",
+        );
+        assert!(
+            !p2.sandbox_raw_writes().is_empty(),
+            "a write to a parameter (host data) must be rejected, got {:?}",
+            p2.sandbox_raw_writes()
+        );
+    }
 }

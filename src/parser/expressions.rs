@@ -16,6 +16,17 @@ use crate::data::Deps;
 /// hand-written script nests.  (Host-configurable later, per the plan.)
 pub(crate) const SANDBOX_MAX_PARSE_DEPTH: u32 = 128;
 
+/// @PLN86 2.4 — the leftmost base variable of a field/index LHS: `s.heading` /
+/// `v[i]` / `a.b.c` all descend through the `OpGet*` chain (the base is arg 0) to
+/// the root `s` / `v` / `a`.  `None` when the base is not rooted in a variable.
+fn lhs_root_var(v: &Value) -> Option<u16> {
+    match v.unspan() {
+        Value::Var(slot) => Some(*slot),
+        Value::Call(_, args) => args.first().and_then(lhs_root_var),
+        _ => None,
+    }
+}
+
 /// P194 helper — extract the host reference and base position from
 /// the leftmost `OpGet*` leaf of a tuple-typed field read.  Returns
 /// `(host_ref, first_element_position)` where `first_element_position`
@@ -2147,6 +2158,36 @@ use a separate collection or add after the loop"
         }
     }
 
+    /// @PLN86 2.4 — does this field/index write LHS target HOST data (reject) vs
+    /// the script's OWN data (allow)?  HOST when the base root is a PARAMETER, or
+    /// its type is anything but a script-defined struct — a host-library struct
+    /// (which also catches aliasing, since `x: Player = player` is typed `Player`
+    /// regardless of the value), a vector/scalar, or an unresolvable base.  A
+    /// non-parameter local of a script-defined struct type is the script's own:
+    /// mutable.  Conservative — when ownership can't be proven script, treat as
+    /// host.  A struct type is "script-defined" iff its library is NOT a host
+    /// allow-listed one (the script's own types live in the program's source,
+    /// which is never `allow_libs`).
+    fn raw_write_is_host_owned(&self, lhs: &Value) -> bool {
+        let Some(root) = lhs_root_var(lhs) else {
+            return true;
+        };
+        if self.vars.arguments().contains(&root) {
+            return true;
+        }
+        let Type::Reference(struct_def, _) = self.vars.tp(root) else {
+            return true;
+        };
+        let Some(lib) = crate::sandbox::def_library(&self.data, *struct_def) else {
+            return true;
+        };
+        let profile = self
+            .def_sandbox
+            .get(&self.context)
+            .and_then(|n| self.sandbox.profiles.get(n));
+        profile.is_none_or(|p| p.allows_lib(&lib))
+    }
+
     // <assign> ::= <operators> [ '=' | '+=' | '-=' | '*=' | '%=' | '/=' <operators> ]
     #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_assign(&mut self, code: &mut Value) -> Type {
@@ -2394,11 +2435,17 @@ use a separate collection or add after the loop"
                     self.vars.defined(*v_nr);
                 }
                 // @PLN86 2.4 — a NON-`Var` LHS here is a field/index target
-                // (`e.health = v` / `v[i] = v`): a raw write to heap data.  A bare
-                // local (`Value::Var`) and struct construction (a literal, never
-                // routed through here) are fine.  Record it for the no-raw-write
-                // admission; keyed by def so the two passes are idempotent.
-                if self.in_sandbox && !matches!(code.unspan(), Value::Var(_)) {
+                // (`e.health = v` / `v[i] = v`).  Ownership-aware: a write to the
+                // script's OWN data (a local of a script-defined struct type) is
+                // fine — a mod must manage the entities it creates; only a write to
+                // HOST data (a parameter, or any host-library struct/vector — the
+                // type catches aliasing like `x = player; x.health = …`) is the
+                // invariant-breaking raw write we reject.  Bare locals and struct
+                // construction never route here.  Keyed by def (idempotent).
+                if self.in_sandbox
+                    && !matches!(code.unspan(), Value::Var(_))
+                    && self.raw_write_is_host_owned(code)
+                {
                     let pos = self.lexer.peek_pos().clone();
                     self.sandbox_raw_writes.entry(self.context).or_insert(pos);
                 }
