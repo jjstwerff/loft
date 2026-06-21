@@ -165,16 +165,28 @@ the signal explicit). `size_code` (`stack.rs`) is the same family, same disposit
       `returned_var` (`scopes.rs:1348`, narrowed to `ret_var==MAX && Vector`).
       Making the set the primary path is blocked by the keyed/enum free-suppress
       regression (§6h Edge A: ~13 tests) — needs A.2 first.
-- [ ] A.2 (funnel the return path) — **the foundational blocker.** A leaf
-      ownership fix lands in `block_result`'s Vector arm but the case flows through
-      a *different* return path (explicit `parse_return` ~4651 / the
-      forwarder/`ref_return` chain) that re-sets `Definition.returned` afterward,
-      so the signature the caller reads stays a borrow. Proven concretely: a
-      precisely-gated implicit-tail whole-arg copy (matrix a2) fires in the IR yet
-      the bytecode signature reverts to `["v"]` and the caller still aliases —
-      reverted (see report). Until the paths funnel to ONE return-ownership
-      computation (OWNERSHIP_MODEL row 104), leaf fixes for a2/a7/a10 are not
-      cleanly verifiable.
+- [~] A.2 (funnel the return path) — **a2 LANDED; a7 localized + routed.** The
+      implicit-tail whole-arg vector return (`fn idv(v) -> vector { v }`, matrix a2)
+      now funnels through the SAME copy-into-`__retbuf` the struct-field tail (#415)
+      and the explicit `return v` (`parse_return`) use: one shared helper
+      `copy_borrow_tail_into_retbuf`, reached via a new `tail_whole_arg_vector`
+      predicate gated to `context == "return from block"` (the one funnelled return
+      path).  a2 is RED→GREEN on BOTH backends through bytecode (signature
+      `-> vector["__retbuf"]`, not the old `["v"]` borrow); regression
+      `tests/scripts/85-store-lifetime-implicit-param-return-copy.loft`.  The #415
+      inline copy collapsed into the shared helper (net: 2 borrow-tail cases, 1
+      copy site).  The earlier "fires in IR, bytecode reverts" symptom was the leaf
+      fix landing in `ref_return` (which records a param `ls` as a borrow dep); the
+      funnel sidesteps `ref_return` for the borrow-tail case entirely.  **a7 and a10
+      are NOT the row-104 funnel** (see the A.0 table) — a10 was already fixed by the
+      #409 forwarder branch on the A.4 floor (green both backends); a7 is a distinct
+      *if-return buffer-model* substrate bug (the function buffer is named `__vdb_1`
+      and the `if` true arm reuses it as its own build target via
+      `OpGetField(__vdb_1, 0)`, then clears+frees the buffer mid-arm).  Its root is
+      the `if`/`else` arm `result`-type asymmetry (the ELSE arm alone gets the
+      concrete heap type at `parse_if` ~1404, so it runs per-arm buffer delivery;
+      the true arm + every `match_arm` get `Unknown` and skip it), which a clean fix
+      must reconcile — out of the row-104 funnel's tight scope, routed forward.
 - [ ] A.3 (replace the 11 `has_ref_params` sites + bind/reassign forests) —
       partially enabled: `is_borrowed_view` now has one home; the
       `has_ref_params` adopt-vs-copy sites still re-derive (they encode "any
@@ -189,15 +201,18 @@ the signal explicit). `size_code` (`stack.rs`) is the same family, same disposit
 The A.0 matrix (`/tmp` corpus, both backends) surfaced three live, pre-existing
 return-ownership bugs — the bug family A.2/A.3 will dissolve, precisely localized:
 
-| Cell | Shape | Symptom (interp / native) | Localization |
+| Cell | Shape | Symptom (interp / native) | Localization / status |
 |---|---|---|---|
-| a2 | implicit-tail whole-arg `{ v }` borrow-return | ALIASES (`a.len 4` / 4) | the multi-path return thicket (above): callee copy lands but the signature is re-set to `["v"]` by another path |
-| a7 | `if`-return over owned literal arms | DIVERGENT — `[8,9]` both arms / `plen=0` corrupt | `if` arms aren't NRVO'd into `__retbuf` like the `match` path; a stray `OpFreeRef(__vdb_1)` + shared buffer recycles across calls |
-| a10 | forwarder `return mk(n)` | interp LEAK ×2 `kt=19` headers | `block_result` Vector-arm forwarder/`ref_return` chaining orphans the `__retbuf` header on interp |
+| a2 | implicit-tail whole-arg `{ v }` borrow-return | ALIASES (`a.len 4` / 4) | ✅ **FIXED (A.2):** funnelled to the shared `copy_borrow_tail_into_retbuf` (the #415 / explicit-`return v` copy), `context == "return from block"` gate; GREEN both backends |
+| a7 | `if`-return over owned literal arms | corrupt (`p0=null(oob)`, both backends agree wrong) | ⏳ **localized, routed** — NOT the funnel: the function return buffer is named `__vdb_1`, the `if` true arm reuses it as its own build target (`OpGetField(__vdb_1, 0)`) then clears+frees it mid-arm; root is the `if`/`else` arm `result`-type asymmetry (`parse_if` ~1404: only the ELSE arm gets the concrete heap type → runs per-arm delivery; true arm + `match_arm` get `Unknown`). A separate if-return-buffer-model fix. |
+| a10 | forwarder `return mk(n)` | (on the A.4 floor) no leak, correct value | ✅ already GREEN — the #409 `native_forwarder` branch (`block_result`) copies the forward into `__retbuf`; the A.0 "interp LEAK ×2 kt=19" finding predates that landing |
 
 The explicit `return v` (a1), `match`-return owned arms (a6), struct param return
-(a8), field-of-param return (a5) all PASS both backends — the working templates
-the funnel (A.2) should converge a2/a7/a10 onto.
+(a8), field-of-param return (a5), and now the implicit-tail whole-arg return (a2)
+all PASS both backends — the working templates the funnel converges onto.  Matrix
+corpus reconstructed at `/tmp/clusterA_matrix` (13 cells + control), baseline-
+classified against the A.4-floor binary: only a2 flipped FAIL→PASS, no green cell
+regressed, both backends.
 
 ## Tracking
 

@@ -820,44 +820,37 @@ impl Parser {
                     }
                 } else if !self.first_pass
                     && ls.iter().any(|&d| self.vars.is_argument(d))
-                    && self.tail_is_struct_field_read(l)
+                    && (self.tail_is_struct_field_read(l)
+                        // The whole-arg copy (a2) fires ONLY at the function-body
+                        // tail: an `if`/`match` ARM block also reaches block_result
+                        // (context "if"/"else"/"match_arm") with a `{ v }` tail, but
+                        // the arm is already delivered into the buffer by the
+                        // outer if-unify / arm-materialise path — copying it again
+                        // here orphans the buffer (a11 leak).  `return from block`
+                        // is the one funnelled return path (OWNERSHIP_MODEL row 104).
+                        || (context == "return from block"
+                            && self.tail_whole_arg_vector(l).is_some()))
                     && let Some((buf_attr, buf_var)) = self.return_buffer()
                     && !ls.contains(&buf_var)
                 {
-                    // #415 — an implicit-tail return of a STRUCT vector FIELD of
-                    // an argument (`fn getv(b: Box) -> vector { b.v }`): the tail
-                    // borrows the caller's store, so returning it ALIASES the arg.
-                    // Copy the field into `__retbuf` (clear + element-append) and
-                    // return the buffer, so the caller adopts an independent copy
-                    // — value semantics. The EXPLICIT `return b.v` already does
-                    // this (~4527) and the `a = bx.v` bind-site copy is the same
-                    // shape (suite-proven). Narrowed by `tail_is_struct_field_read`
-                    // to struct-field tails: whole-arg / index / call tails stay on
-                    // the ref_return path (the over-broad cut regressed the suite).
+                    // Row-104 — an implicit-tail return whose value BORROWS a
+                    // visible argument: a STRUCT vector FIELD of an arg
+                    // (`fn getv(b: Box) -> vector { b.v }`, #415) OR the whole
+                    // vector arg itself (`fn idv(v) -> vector { v }`, A.2/a2 —
+                    // the implicit-tail sibling of an explicit `return v`).
+                    // Either way returning the tail as-is ALIASES the caller's
+                    // store, so both funnel to ONE copy: clear `__retbuf`,
+                    // element-append the borrowed value, return the buffer, and
+                    // finalize the return-type dep to `{__retbuf}` — the caller
+                    // adopts an independent copy (value semantics).  The
+                    // EXPLICIT `return v` / `return b.v` already does this
+                    // (parse_return ~4651) and the `a = bx.v` bind-site copy is
+                    // the same shape (suite-proven).  Narrowed by the two tail
+                    // predicates to whole-arg / struct-field tails: index /
+                    // call tails stay on the ref_return path (the over-broad cut
+                    // regressed the suite).
                     let elm_ty = (**elm).clone();
-                    let fwd = self.create_var(
-                        "__fwd",
-                        &Type::Vector(Box::new(elm_ty.clone()), Deps::none()),
-                    );
-                    if fwd != u16::MAX
-                        && let Some(last) = l.last_mut()
-                    {
-                        let rec_tp = self.append_elem_tp(&elm_ty);
-                        let clear = self.cl("OpClearVector", &[Value::Var(buf_var)]);
-                        let append = self.cl(
-                            "OpAppendVector",
-                            &[Value::Var(buf_var), Value::Var(fwd), Value::Int(rec_tp)],
-                        );
-                        let orig = std::mem::replace(last, Value::Null);
-                        let set_fwd = crate::data::v_set(fwd, orig);
-                        *last = crate::data::v_block(
-                            vec![set_fwd, clear, append, Value::Var(buf_var)],
-                            Type::Vector(Box::new(elm_ty.clone()), Deps::frame1(buf_var)),
-                            "field_borrow_copy_415",
-                        );
-                        self.data.definitions[self.context as usize].returned =
-                            Type::Vector(Box::new(elm_ty), Deps::attrs(vec![buf_attr]));
-                    } else {
+                    if !self.copy_borrow_tail_into_retbuf(&elm_ty, l, buf_attr, buf_var) {
                         self.ref_return(ls, l, RetSite::BlockTail);
                         self.nrvo_collapse_tail_set(l, ls);
                     }
@@ -3955,6 +3948,76 @@ impl Parser {
                 _ => return false,
             }
         }
+    }
+
+    /// Row-104 funnel: does the body tail return a WHOLE vector PARAMETER
+    /// directly (`fn idv(v) -> vector { v }` — the implicit-tail sibling of an
+    /// explicit `return v`)?  Such a tail borrows the caller's store, so
+    /// returning the param as-is ALIASES the argument.  Returns the param var
+    /// so the caller can copy it into `__retbuf` — the same value-semantics
+    /// COPY the explicit `return v` path (`parse_return`) and the struct-field
+    /// tail (`tail_is_struct_field_read`, #415) both perform.  Narrowed to a
+    /// bare `Var` that is a vector argument: index / call / field tails keep
+    /// their existing handling (the over-broad cut regressed the suite — A.2).
+    fn tail_whole_arg_vector(&self, l: &[Value]) -> Option<u16> {
+        let mut v = l.last()?;
+        loop {
+            match v.unspan() {
+                Value::Return(inner) | Value::Drop(inner) => v = inner,
+                Value::Block(bl) => v = bl.operators.last()?,
+                Value::Insert(ops) => v = ops.last()?,
+                Value::Var(bv) => {
+                    return (self.vars.is_argument(*bv)
+                        && matches!(self.vars.tp(*bv), Type::Vector(_, _)))
+                    .then_some(*bv);
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    /// Row-104 funnel: copy a BORROWED implicit-tail vector return into the
+    /// function's one `__retbuf` buffer and finalize the return-type dep to
+    /// `{buf_attr}`, so the caller adopts an independent copy (value
+    /// semantics).  The single home for the "the tail borrows a visible arg →
+    /// COPY" decision in `block_result`; the struct-field tail (#415) and the
+    /// whole-arg param tail (a2) both route here instead of re-deriving the
+    /// copy shape inline.  Mirrors the explicit `return <borrow>` copy in
+    /// `parse_return` (~4651): capture the tail value into `__fwd`, then
+    /// `OpClearVector(buf); OpAppendVector(buf, __fwd); buf`.  Returns true on
+    /// success; false (var allocation failed / no tail) tells the caller to
+    /// fall back to the `ref_return` path.
+    fn copy_borrow_tail_into_retbuf(
+        &mut self,
+        elm: &Type,
+        l: &mut [Value],
+        buf_attr: u16,
+        buf_var: u16,
+    ) -> bool {
+        let elm_ty = elm.clone();
+        let fwd = self.create_var(
+            "__fwd",
+            &Type::Vector(Box::new(elm_ty.clone()), Deps::none()),
+        );
+        let Some(last) = (if fwd == u16::MAX { None } else { l.last_mut() }) else {
+            return false;
+        };
+        let rec_tp = self.append_elem_tp(&elm_ty);
+        let clear = self.cl("OpClearVector", &[Value::Var(buf_var)]);
+        let append = self.cl(
+            "OpAppendVector",
+            &[Value::Var(buf_var), Value::Var(fwd), Value::Int(rec_tp)],
+        );
+        let orig = std::mem::replace(last, Value::Null);
+        let set_fwd = crate::data::v_set(fwd, orig);
+        *last = crate::data::v_block(
+            vec![set_fwd, clear, append, Value::Var(buf_var)],
+            Type::Vector(Box::new(elm_ty.clone()), Deps::frame1(buf_var)),
+            "borrow_tail_copy_104",
+        );
+        self.data.definitions[self.context as usize].returned =
+            Type::Vector(Box::new(elm_ty), Deps::attrs(vec![buf_attr]));
+        true
     }
 
     fn chain_site_set_shape(ret: &Type, tail: &mut Value, w: u16) {
