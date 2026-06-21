@@ -77,3 +77,18 @@ fn sandboxed_native_is_refused() {
     assert!(!ok, "--native on sandboxed code must be refused");
     assert!(err.contains("interpret-only"), "stderr: {err}");
 }
+
+/// A raw field write to heap data in a sandboxed def is rejected (2.4) — mutation
+/// must go through a `*.write` op; construction stays fine.
+#[test]
+fn sandboxed_raw_write_is_rejected() {
+    let prog = "struct Ent { health: integer }\n\
+                fn scripted(e: Ent) -> integer { e.health = 0; e.health }\n\
+                fn main() -> integer { scripted(Ent { health: 5 }) }\n";
+    let (ok, err) = run("rawwrite", prog, POLICY, false);
+    assert!(!ok, "a raw write to host data must be rejected");
+    assert!(
+        err.contains("raw write") && err.contains("fix:"),
+        "stderr: {err}"
+    );
+}

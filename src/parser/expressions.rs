@@ -2393,6 +2393,15 @@ use a separate collection or add after the loop"
                 {
                     self.vars.defined(*v_nr);
                 }
+                // @PLN86 2.4 — a NON-`Var` LHS here is a field/index target
+                // (`e.health = v` / `v[i] = v`): a raw write to heap data.  A bare
+                // local (`Value::Var`) and struct construction (a literal, never
+                // routed through here) are fine.  Record it for the no-raw-write
+                // admission; keyed by def so the two passes are idempotent.
+                if self.in_sandbox && !matches!(code.unspan(), Value::Var(_)) {
+                    let pos = self.lexer.peek_pos().clone();
+                    self.sandbox_raw_writes.entry(self.context).or_insert(pos);
+                }
                 let var_nr = self.assign_var_nr(code, op, &f_type, &mut parent_tp);
                 // Handle `f += X` for File variables before type-changing logic.
                 if op == "+="

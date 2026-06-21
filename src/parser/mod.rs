@@ -105,6 +105,13 @@ pub struct Parser {
     /// `Loop` from a bounded comprehension `Loop`); the totality admission reads
     /// it.  Keyed by def_nr so the two parse passes are idempotent.
     pub(crate) sandbox_unbounded_loops: HashMap<u32, crate::lexer::Position>,
+    /// @PLN86 step 2.4 — sandboxed defs that perform a RAW WRITE to heap data
+    /// (`x.field = v` / `v[i] = v`), mapped to one such write's position.
+    /// Recorded at parse (`parse_assign` knows the LHS is a field/index target,
+    /// not a bare local or a struct literal); the no-raw-write admission reads it.
+    /// A sandboxed script may mutate host data only via allow-listed `*.write`
+    /// ops, never a raw field/element assignment.  Keyed by def_nr (idempotent).
+    pub(crate) sandbox_raw_writes: HashMap<u32, crate::lexer::Position>,
     /// @PLN86 step 0.1 — true while parsing the BODY of a sandboxed def.  Gates
     /// the parser nesting guard so it never touches trusted code (zero cost
     /// there); set per-def in `parse_function`, cleared at its end.
@@ -494,6 +501,7 @@ impl Parser {
             sandbox: crate::sandbox::SandboxConfig::default(),
             def_sandbox: HashMap::new(),
             sandbox_unbounded_loops: HashMap::new(),
+            sandbox_raw_writes: HashMap::new(),
             in_sandbox: false,
             parse_depth: 0,
             depth_overflowed: false,
@@ -630,10 +638,18 @@ impl Parser {
         crate::sandbox::admit_totality(&self.data, &self.def_sandbox, &self.sandbox_unbounded_loops)
     }
 
-    /// @PLN86 step 2.5 — ALL sandbox admission errors (capability + totality),
-    /// each rendered as a correct, specific, actionable message (position + the
-    /// rule + the fix).  Empty when the script is admitted.  This is the host's
-    /// primary surface — the contract a modder iterates against.
+    /// @PLN86 step 2.4 — no-raw-write violations: sandboxed defs that directly
+    /// mutate heap data (`x.field = v` / `v[i] = v`).  Empty when every mutation
+    /// goes through an allow-listed `*.write` op.
+    #[must_use]
+    pub fn sandbox_raw_writes(&self) -> Vec<crate::sandbox::RawWriteViolation> {
+        crate::sandbox::raw_write_violations(&self.def_sandbox, &self.sandbox_raw_writes)
+    }
+
+    /// @PLN86 step 2.5 — ALL sandbox admission errors (capability + totality +
+    /// no-raw-write), each rendered as a correct, specific, actionable message
+    /// (position + the rule + the fix).  Empty when the script is admitted.  This
+    /// is the host's primary surface — the contract a modder iterates against.
     #[must_use]
     pub fn sandbox_admission_errors(&self) -> Vec<String> {
         let caps = self.sandbox_admit().into_iter().map(|v| {
@@ -643,7 +659,11 @@ impl Parser {
             .sandbox_totality()
             .into_iter()
             .map(|v| crate::sandbox::describe_totality_violation(&self.data, &v));
-        caps.chain(totality).collect()
+        let raw_writes = self
+            .sandbox_raw_writes()
+            .into_iter()
+            .map(|v| crate::sandbox::describe_raw_write_violation(&self.data, &v));
+        caps.chain(totality).chain(raw_writes).collect()
     }
 
     /// @PLN86 step 1.4 — does this program contain sandboxed code that must run
@@ -714,6 +734,7 @@ impl Parser {
         // designation rather than reading a stale entry.
         self.def_sandbox.clear();
         self.sandbox_unbounded_loops.clear();
+        self.sandbox_raw_writes.clear();
         self.data.reset();
         // @PLN22 Phase 2 — the main program parses under its own source
         // (MAIN_SOURCE), distinct from the stdlib prelude (source 0), so a user
@@ -8613,6 +8634,65 @@ mod plan86_admission_tests {
             p3.sandbox_complexity_degree(),
             2,
             "a loop calling a looping fn → O(n^2)"
+        );
+    }
+
+    /// @PLN86 2.4 — no-raw-write rejects a field/index assignment to heap data,
+    /// while struct construction + local-variable writes stay clean.
+    #[test]
+    fn no_raw_write_rejects_field_index_admits_construction() {
+        // field write → rejected, with an actionable message
+        let p = parse_admit_libs(
+            &["fn:scripted"],
+            &["code", "prog"],
+            &[],
+            "struct Ent { health: integer }\n\
+             fn scripted(e: Ent) -> integer { e.health = 0; e.health }\n",
+        );
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        assert_eq!(
+            p.sandbox_raw_writes().len(),
+            1,
+            "a field write must be flagged, got {:?}",
+            p.sandbox_raw_writes()
+        );
+        assert!(
+            p.sandbox_admission_errors()
+                .iter()
+                .any(|e| e.contains("raw write") && e.contains("fix")),
+            "{:?}",
+            p.sandbox_admission_errors()
+        );
+
+        // index write → rejected
+        let p2 = parse_admit_libs(
+            &["fn:scripted"],
+            &["code", "prog"],
+            &[],
+            "fn scripted(v: vector<integer>) -> integer { v[0] = 9; v[0] }\n",
+        );
+        assert!(
+            !p2.sandbox_raw_writes().is_empty(),
+            "an index write must be flagged, got {:?}",
+            p2.sandbox_raw_writes()
+        );
+
+        // struct construction + local writes → admitted (no raw write)
+        let p3 = parse_admit_libs(
+            &["fn:scripted"],
+            &["code", "prog"],
+            &[],
+            "struct Ent { health: integer }\n\
+             fn scripted() -> integer { s = 0; for i in 0..3 { s += i } e = Ent { health: s }; e.health }\n",
+        );
+        assert!(
+            p3.sandbox_raw_writes().is_empty(),
+            "construction + local writes must be clean, got {:?}",
+            p3.sandbox_raw_writes()
         );
     }
 }

@@ -836,6 +836,51 @@ pub fn complexity_report(degree: u32) -> String {
     )
 }
 
+/// @PLN86 step 2.4 — a no-raw-write violation: a sandboxed def directly mutates
+/// heap data (`x.field = v` / `v[i] = v`).  An admitted script may mutate host
+/// data only through allow-listed `*.write` operations, never a raw assignment,
+/// so the host's invariants are preserved.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RawWriteViolation {
+    pub def: u32,
+    pub position: Position,
+}
+
+/// @PLN86 step 2.4 — the no-raw-write admission: every sandboxed def that the
+/// parser recorded a raw field/index write for (`sandbox_raw_writes`).  The
+/// check is at parse (the parser knows the LHS is a field/index target, distinct
+/// from a bare local or a struct literal), so this just surfaces the record.
+#[must_use]
+pub fn raw_write_violations(
+    sandboxed: &HashMap<u32, String>,
+    raw_writes: &HashMap<u32, Position>,
+) -> Vec<RawWriteViolation> {
+    let mut out: Vec<RawWriteViolation> = raw_writes
+        .iter()
+        .filter(|(d, _)| sandboxed.contains_key(d))
+        .map(|(&def, position)| RawWriteViolation {
+            def,
+            position: position.clone(),
+        })
+        .collect();
+    out.sort_by_key(|v| v.def);
+    out
+}
+
+/// @PLN86 step 2.4 — render a no-raw-write violation as an actionable error.
+#[must_use]
+pub fn describe_raw_write_violation(data: &Data, v: &RawWriteViolation) -> String {
+    let from = display_name(data, v.def);
+    format!(
+        "{}: sandboxed `{from}` performs a raw write to heap data (`x.field = …` / \
+         `v[i] = …`) — a sandboxed script may not directly mutate host fields/elements, \
+         which could break an invariant.\n  fix: mutate only through an allow-listed write \
+         operation (a `*.write` capability such as `damage(e, 10)`); construct new values \
+         freely.",
+        v.position
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
