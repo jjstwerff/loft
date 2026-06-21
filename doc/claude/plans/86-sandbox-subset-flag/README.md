@@ -7,16 +7,19 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**v1 functionally COMPLETE — built, tested, and CLI-enforced end-to-end.** Plan **@PLN86**
+**Active — the read-capability, termination, and backend arcs are COMPLETE and
+CLI-enforced; the no-raw-write data-integrity arc (2.4) is the one remaining v1 safety
+step.** Plan **@PLN86**
 ([loft-lang/plans#86](https://github.com/loft-lang/plans/issues/86)) · `status:active`
 · `subject:loft`. The concrete first slice of [SANDBOX.md](../../SANDBOX.md): a
 compiler-enforced flag that runs **designated subsets** of a program (user scripts)
 under a *prove-it-safe-at-load* policy, while the surrounding host code runs
 unrestricted, in one process, sharing the store at full `DbRef` speed.  An admitted
-sandboxed script reaches only allowed capabilities, terminates, never faults, runs
+sandboxed script reaches only allow-listed capabilities, terminates, never faults, runs
 interpret-only, and carries a worst-case complexity budget — all checked at load via
 `Parser::sandbox_admission_errors`, wired into the CLI (`loft.toml` `[sandbox]` policy →
-reject-or-run).
+reject-or-run).  It does NOT yet contain **raw writes** to host data (2.4) — see
+[§ Open work](#open-work).
 
 **Implementation progress** (branch `tuxedo-work2`):
 - **1.1 ✅** — `src/sandbox.rs`: `SandboxProfile`/`SandboxConfig` + the deny-by-default
@@ -97,14 +100,12 @@ reject-or-run).
   (`tests/sandbox_cli.rs` drives it end-to-end: violation rejected, clean admitted,
   `--native` refused). **The sandbox is now enforced end-to-end through the binary.**
 - **3.4 + 3.5 ✅** — `sandbox_complexity_degree`/`_report` give the host the `O(n^d)` budget
-  hint (L5); the totality rejections already render actionable, bound-it diagnostics. **v1 is
-  functionally complete.**
-- **v1 DONE — the full safety model is built, tested, and CLI-enforced:** capability
-  (P0–P2 + 2.5), termination (3.1–3.5), backend ban (1.4). An admitted sandboxed script
-  reaches only allowed capabilities, terminates, never faults, runs interpret-only, and
-  carries a complexity budget. **Post-v1:** the decreasing-variant `while` / structural-
-  recursion relaxations, trusted-op cost in the complexity model, and the `--native` codegen
-  (rustc) feature-gate (the dlopen path is already removable).
+  hint (L5); the totality rejections already render actionable, bound-it diagnostics.
+- **Three of the four arcs are DONE and CLI-enforced:** read-capability (P0–P2 + 2.5),
+  termination (3.1–3.5), backend ban (1.4). An admitted script reaches only allow-listed
+  capabilities, terminates, never faults, runs interpret-only, and carries a complexity
+  budget. **The data-integrity arc (2.4 no-raw-write) and the post-v1 items are tracked in
+  [§ Open work](#open-work).**
 
 **Scope.** v1 is intentionally **fairly restricted** — a small total dialect (bounded
 loops, no/structural recursion, total ops) plus a **curated host API**; the
@@ -112,6 +113,58 @@ expressiveness comes from the *API* (the safe operations the host hands modders)
 from language permissiveness — restricted-language + rich-API still expresses most game
 situations. Admitting *more* complex scripts via deeper termination/safety analysis
 ("involved code inspection") is **a separate future plan**, out of scope here.
+
+## Open work
+
+What is built is listed under [§ Implementation progress](#status); what remains:
+
+### A. Safety — completes the v1 admitted-script guarantee
+- **2.4 No-raw-write admission** *(the one open v1 safety step).* An admitted script is
+  capability- and termination-safe but can still RAW-WRITE host data (`e.health = 0`),
+  bypassing invariants. Reject a raw store/field assignment to host (non-sandboxed-owned)
+  data in a sandboxed def; permit writes only via an allow-listed `*.write` op (`damage(e,
+  10)`). Scan the sandboxed IR for `Set`/field-write to a host-owned target; render through
+  `sandbox_admission_errors`. *Verify:* `e.health = 0` rejected; `damage(e, 10)` passes.
+- **Runtime fault-isolation (S7/S8 complement).** Admission proves an admitted script can't
+  fault, but the host's *runtime harness* should still be transactional + catch the
+  unexpected (`run_script() -> Result`, journalled store rollback) — belt-and-suspenders
+  for an interpreter bug. This is the runtime side of [SANDBOX.md](../../SANDBOX.md) S7/S8,
+  outside the admission walk; track there.
+
+### B. Expressiveness relaxations (post-v1 — admit MORE total programs)
+- **3.1b decreasing-variant `while`** — admit a `while` that carries a compiler-checked
+  strictly-decreasing measure (today every `while` is rejected).
+- **3.2b structural recursion** — admit recursion when a structurally-decreasing argument
+  is proven (today the call graph must be acyclic).
+- **2.1b type/module `#cap` default + per-method override** — a `#cap` on a type/module
+  sets the default for its methods; a method without its own `#cap` inherits it. Today
+  `#cap` is per-def only.
+
+### C. Precision / completeness refinements
+- **1.3b L4 residual** — `referenced_defs` resolves fn-refs through call-args + assignments;
+  a fn-ref flowing through a `Function`-typed RETURN value, struct field, or collection
+  element is not yet followed. Close before a host hands untrusted code such a ref (the §4
+  host-contract covers the trusted boundary meanwhile).
+- **3.3b abort-op robustness** — `ABORT_OPS` (`n_assert`/`n_panic`/`n_log_fatal`) is a
+  by-name list; a `#[fault]`-style attribute on the def would be rename-proof, and the set
+  should be audited for other process-terminating ops.
+- **3.4b complexity precision** — trusted-leaf ops count as O(1)/call (a `sort` is
+  O(n log n), `contains` O(n)); and the loop walk treats an `Iter`'s once-run init as
+  in-loop (a safe over-count). Both tighten the `O(n^d)` report.
+
+### D. Hardening / integration
+- **1.4b feature-gate `--native` codegen** — the dlopen path is already removable
+  (`--no-default-features` drops `native-extensions`); the rustc *codegen* path
+  (`src/generation/`) is not yet behind a feature, so a deployment can't build with ZERO
+  host-codegen RCE surface. Gate it.
+- **CLI warm-cache gap** — `LOFT_STDLIB_CACHE` / program warm-load skips the parse, so a
+  warm-loaded program never gets its parse-time designations (`def_sandbox`) — it would
+  bypass admission. Disable warm-load for a program with a `[sandbox]` policy, or persist
+  the designation set.
+- **`loft.toml` discovery** — the CLI loads the `[sandbox]` policy from `loft.toml` *next to
+  the program file* only; add parent-dir / `--project`-root discovery.
+- **Surface the complexity report** — `sandbox_complexity_report()` is computed but not
+  printed by the CLI; show it (informational) on a sandboxed run.
 
 ## Goal
 
