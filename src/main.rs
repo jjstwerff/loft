@@ -5414,8 +5414,7 @@ fn main() {
                 .arg(format!("{crate_ident}={}", bridge_rlib.display()));
             // Build-extension: link the bridge crate's Cargo deps into the main wasm.
             if let Some(ref deps) = bridge_dep_search {
-                cmd.arg("-L")
-                    .arg(format!("dependency={}", deps.display()));
+                cmd.arg("-L").arg(format!("dependency={}", deps.display()));
             }
         }
         let status = cmd.status();
