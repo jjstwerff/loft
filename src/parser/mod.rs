@@ -112,6 +112,15 @@ pub struct Parser {
     /// A sandboxed script may mutate host data only via allow-listed `*.write`
     /// ops, never a raw field/element assignment.  Keyed by def_nr (idempotent).
     pub(crate) sandbox_raw_writes: HashMap<u32, crate::lexer::Position>,
+    /// @PLN86 L4 — the functions a sandboxed def references as a fn-ref VALUE
+    /// (`apply(read_file)`, `let h = read_file`, `[read_file]`, a returned
+    /// fn-ref), mapped `def_nr -> {referenced fn def_nrs}`.  Recorded at the
+    /// fn-ref CREATION site (where a function name becomes a value), so it catches
+    /// every flow — call-arg, assignment, struct field, collection element, return
+    /// — completely, where a post-parse IR walk could not (a bare `Int(d_nr)`
+    /// fn-ref is indistinguishable from an integer literal).  The admission unions
+    /// these into the checked set so an indirect call can't escape (L4).
+    pub(crate) sandbox_fn_refs: HashMap<u32, std::collections::HashSet<u32>>,
     /// @PLN86 step 0.1 — true while parsing the BODY of a sandboxed def.  Gates
     /// the parser nesting guard so it never touches trusted code (zero cost
     /// there); set per-def in `parse_function`, cleared at its end.
@@ -502,6 +511,7 @@ impl Parser {
             def_sandbox: HashMap::new(),
             sandbox_unbounded_loops: HashMap::new(),
             sandbox_raw_writes: HashMap::new(),
+            sandbox_fn_refs: HashMap::new(),
             in_sandbox: false,
             parse_depth: 0,
             depth_overflowed: false,
@@ -582,7 +592,7 @@ impl Parser {
     /// the non-sandboxed members.  Call after parsing, when bodies are resolved.
     #[must_use]
     pub fn sandbox_reachable_set(&self) -> std::collections::HashSet<u32> {
-        crate::sandbox::reachable_set(&self.data, &self.def_sandbox)
+        crate::sandbox::reachable_set(&self.data, &self.def_sandbox, &self.sandbox_fn_refs)
     }
 
     /// @PLN86 step 1.4 — external `[native]` cdylib bridges reachable from the
@@ -611,7 +621,12 @@ impl Parser {
     /// a diagnostic.  Run after parsing.
     #[must_use]
     pub fn sandbox_admit(&self) -> Vec<crate::sandbox::CapViolation> {
-        crate::sandbox::admit_capabilities(&self.data, &self.sandbox, &self.def_sandbox)
+        crate::sandbox::admit_capabilities(
+            &self.data,
+            &self.sandbox,
+            &self.def_sandbox,
+            &self.sandbox_fn_refs,
+        )
     }
 
     /// @PLN86 step 2.2 — the capability-coverage lint: public functions lacking a
@@ -635,7 +650,12 @@ impl Parser {
     /// cycle).  Empty for a provably-total script.
     #[must_use]
     pub fn sandbox_totality(&self) -> Vec<crate::sandbox::TotalityViolation> {
-        crate::sandbox::admit_totality(&self.data, &self.def_sandbox, &self.sandbox_unbounded_loops)
+        crate::sandbox::admit_totality(
+            &self.data,
+            &self.def_sandbox,
+            &self.sandbox_unbounded_loops,
+            &self.sandbox_fn_refs,
+        )
     }
 
     /// @PLN86 step 2.4 — no-raw-write violations: sandboxed defs that directly
@@ -692,6 +712,18 @@ impl Parser {
         crate::sandbox::complexity_report(self.sandbox_complexity_degree())
     }
 
+    /// @PLN86 L4 — record that the current def references `fn_d_nr` as a fn-ref
+    /// VALUE (a function name used as a value).  No-op outside sandboxed code.
+    /// Called at the fn-ref creation site so every flow is caught.
+    pub(crate) fn record_sandbox_fn_ref(&mut self, fn_d_nr: u32) {
+        if self.in_sandbox {
+            self.sandbox_fn_refs
+                .entry(self.context)
+                .or_default()
+                .insert(fn_d_nr);
+        }
+    }
+
     /// # Panics
     /// With filesystem problems.
     pub fn parse(&mut self, filename: &str, default: bool) -> bool {
@@ -735,6 +767,7 @@ impl Parser {
         self.def_sandbox.clear();
         self.sandbox_unbounded_loops.clear();
         self.sandbox_raw_writes.clear();
+        self.sandbox_fn_refs.clear();
         self.data.reset();
         // @PLN22 Phase 2 — the main program parses under its own source
         // (MAIN_SOURCE), distinct from the stdlib prelude (source 0), so a user
@@ -8737,6 +8770,43 @@ mod plan86_admission_tests {
             !p2.sandbox_raw_writes().is_empty(),
             "a write to a parameter (host data) must be rejected, got {:?}",
             p2.sandbox_raw_writes()
+        );
+    }
+
+    /// @PLN86 L4 — a fn-ref to a forbidden capability hidden where `referenced_defs`
+    /// can't see it (a COLLECTION element — neither a call nor an assignment) is
+    /// still capability-checked.  `mtime` (tagged `fs.read`) as a VALUE inside
+    /// `[mtime]` must be rejected exactly as a direct `mtime(..)` call would —
+    /// because it is recorded at the fn-ref CREATION site, not by an IR walk that
+    /// only catches call-args + assignments.
+    #[test]
+    fn l4_fn_ref_in_collection_cannot_escape_capability() {
+        let p = parse_admit_libs(
+            &["fn:scripted"],
+            &["code"],
+            &["env"], // fs.read NOT granted
+            "fn scripted() -> integer { handlers = [mtime]; len(handlers) }\n",
+        );
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        let scripted = p.data.def_nr("n_scripted");
+        let mtime = p.data.def_nr("n_mtime");
+        // recorded at creation — the L4 mechanism
+        assert!(
+            p.sandbox_fn_refs
+                .get(&scripted)
+                .is_some_and(|s| s.contains(&mtime)),
+            "the fn-ref to mtime must be recorded for L4, got {:?}",
+            p.sandbox_fn_refs.get(&scripted)
+        );
+        // and admission rejects it naming the capability — no escape
+        let v = p.sandbox_admit();
+        assert!(
+            v.iter().any(|x| viol_symbol(x) == mtime),
+            "a collection-hidden fn-ref to mtime must be capability-checked (L4), got {v:?}"
         );
     }
 }

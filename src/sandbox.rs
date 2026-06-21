@@ -209,7 +209,11 @@ fn parse_str_list(value: &str) -> Vec<String> {
 /// descended into, and the trusted leaves they reference.  Step 2.3 capability-
 /// checks the non-sandboxed members.
 #[must_use]
-pub fn reachable_set(data: &Data, sandboxed: &HashMap<u32, String>) -> HashSet<u32> {
+pub fn reachable_set(
+    data: &Data,
+    sandboxed: &HashMap<u32, String>,
+    fn_refs: &HashMap<u32, HashSet<u32>>,
+) -> HashSet<u32> {
     let mut reachable = HashSet::new();
     let mut worklist: Vec<u32> = sandboxed.keys().copied().collect();
     let mut descended = HashSet::new();
@@ -220,6 +224,7 @@ pub fn reachable_set(data: &Data, sandboxed: &HashMap<u32, String>) -> HashSet<u
         reachable.insert(d);
         let mut refs = HashSet::new();
         referenced_defs(data, d, &mut refs);
+        add_recorded_fn_refs(fn_refs, d, &mut refs);
         for r in refs {
             reachable.insert(r);
             // Descend ONLY into sandboxed defs; trusted symbols are leaves.
@@ -229,6 +234,16 @@ pub fn reachable_set(data: &Data, sandboxed: &HashMap<u32, String>) -> HashSet<u
         }
     }
     reachable
+}
+
+/// @PLN86 L4 — fold `f`'s parse-recorded fn-ref targets into its reference set.
+/// These are the functions `f` named as a VALUE (caught at the creation site), so
+/// an indirect call through a fn-ref returned / stored in a field / put in a
+/// collection cannot escape the admission walk.
+fn add_recorded_fn_refs(fn_refs: &HashMap<u32, HashSet<u32>>, f: u32, out: &mut HashSet<u32>) {
+    if let Some(targets) = fn_refs.get(&f) {
+        out.extend(targets.iter().copied());
+    }
 }
 
 /// Collect every def_nr referenced in `fn_dnr`'s body — both direct calls AND
@@ -374,6 +389,7 @@ pub fn admit_capabilities(
     data: &Data,
     config: &SandboxConfig,
     sandboxed: &HashMap<u32, String>,
+    fn_refs: &HashMap<u32, HashSet<u32>>,
 ) -> Vec<CapViolation> {
     let mut violations = Vec::new();
     let mut entries: Vec<u32> = sandboxed.keys().copied().collect();
@@ -382,6 +398,7 @@ pub fn admit_capabilities(
         let profile = config.profiles.get(&sandboxed[&from]);
         let mut refs = HashSet::new();
         referenced_defs(data, from, &mut refs);
+        add_recorded_fn_refs(fn_refs, from, &mut refs);
         let mut refs: Vec<u32> = refs.into_iter().collect();
         refs.sort_unstable();
         for symbol in refs {
@@ -586,9 +603,15 @@ pub(crate) const ABORT_OPS: &[&str] = &["n_assert", "n_panic", "n_log_fatal"];
 
 /// The sandboxed defs that `from` calls — the edges of the sandboxed call graph
 /// (trusted callees are not followed; they are total by the host contract).
-fn sandboxed_calls(data: &Data, sandboxed: &HashMap<u32, String>, from: u32) -> Vec<u32> {
+fn sandboxed_calls(
+    data: &Data,
+    sandboxed: &HashMap<u32, String>,
+    fn_refs: &HashMap<u32, HashSet<u32>>,
+    from: u32,
+) -> Vec<u32> {
     let mut refs = HashSet::new();
     referenced_defs(data, from, &mut refs);
+    add_recorded_fn_refs(fn_refs, from, &mut refs); // L4 — indirect calls are edges too
     let mut calls: Vec<u32> = refs
         .into_iter()
         .filter(|r| sandboxed.contains_key(r))
@@ -602,12 +625,17 @@ fn sandboxed_calls(data: &Data, sandboxed: &HashMap<u32, String>, from: u32) -> 
 /// cycle; the path slice from that node is the cycle.  Deduped by node-set so a
 /// cycle is reported once.  Self-recursion (`f` calls `f`) is a length-1 cycle.
 #[must_use]
-pub fn recursion_cycles(data: &Data, sandboxed: &HashMap<u32, String>) -> Vec<Vec<u32>> {
+pub fn recursion_cycles(
+    data: &Data,
+    sandboxed: &HashMap<u32, String>,
+    fn_refs: &HashMap<u32, HashSet<u32>>,
+) -> Vec<Vec<u32>> {
     #[allow(clippy::too_many_arguments)]
     fn dfs(
         n: u32,
         data: &Data,
         sandboxed: &HashMap<u32, String>,
+        fn_refs: &HashMap<u32, HashSet<u32>>,
         on_path: &mut HashSet<u32>,
         done: &mut HashSet<u32>,
         path: &mut Vec<u32>,
@@ -630,8 +658,10 @@ pub fn recursion_cycles(data: &Data, sandboxed: &HashMap<u32, String>) -> Vec<Ve
         }
         on_path.insert(n);
         path.push(n);
-        for callee in sandboxed_calls(data, sandboxed, n) {
-            dfs(callee, data, sandboxed, on_path, done, path, cycles, seen);
+        for callee in sandboxed_calls(data, sandboxed, fn_refs, n) {
+            dfs(
+                callee, data, sandboxed, fn_refs, on_path, done, path, cycles, seen,
+            );
         }
         path.pop();
         on_path.remove(&n);
@@ -647,6 +677,7 @@ pub fn recursion_cycles(data: &Data, sandboxed: &HashMap<u32, String>) -> Vec<Ve
             n,
             data,
             sandboxed,
+            fn_refs,
             &mut on_path,
             &mut done,
             &mut path,
@@ -666,6 +697,7 @@ pub fn admit_totality(
     data: &Data,
     sandboxed: &HashMap<u32, String>,
     unbounded_loops: &HashMap<u32, Position>,
+    fn_refs: &HashMap<u32, HashSet<u32>>,
 ) -> Vec<TotalityViolation> {
     let mut violations = Vec::new();
     // 3.1 — unbounded loops, ordered by def.
@@ -682,7 +714,7 @@ pub fn admit_totality(
         });
     }
     // 3.2 — recursion cycles.
-    for cycle in recursion_cycles(data, sandboxed) {
+    for cycle in recursion_cycles(data, sandboxed, fn_refs) {
         violations.push(TotalityViolation::Recursion { cycle });
     }
     // 3.3 — reachable explicit-abort ops (assert / panic / log_fatal).  The
@@ -693,6 +725,7 @@ pub fn admit_totality(
     for def in entries {
         let mut refs = HashSet::new();
         referenced_defs(data, def, &mut refs);
+        add_recorded_fn_refs(fn_refs, def, &mut refs); // L4 — fn-ref'd abort ops too
         let mut refs: Vec<u32> = refs.into_iter().collect();
         refs.sort_unstable();
         for op in refs {
