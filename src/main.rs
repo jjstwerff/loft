@@ -5287,6 +5287,75 @@ fn main() {
             }
             let crate_ident = bridge_crate.replace('-', "_");
             let bridge_rlib = std::env::temp_dir().join(format!("lib{crate_ident}.rlib"));
+            // Build-extension (@PLN84 ZT-B): when the bridge crate declares Cargo
+            // dependencies beyond `loft` (the vetted dalek/RustCrypto stack the SHARED
+            // ed25519/x25519/aes modules use), cargo-build the crate for wasm32 to
+            // produce those dependency rlibs.  Each DIRECT dep is `--extern`'d on the
+            // bridge rustc compile (the `use <crate>` extern-prelude entry — `-L` alone
+            // resolves only TRANSITIVE deps), and the deps dir is `-L`'d on both the
+            // bridge compile and the main wasm link (transitive symbols).  We consume
+            // ONLY the dependency rlibs — the bridge itself is rustc-compiled below
+            // against the SHARED prebuilt loft (no duplicate loft), and these deps are
+            // loft-independent, so no "two copies of loft" (`expected DbRef, found
+            // DbRef`) error arises.
+            let wasm_cargo = wasm_dir.join("Cargo.toml");
+            let mut nonloft_idents: Vec<String> = Vec::new();
+            if let Ok(text) = std::fs::read_to_string(&wasm_cargo) {
+                let mut in_deps = false;
+                for line in text.lines() {
+                    let t = line.trim();
+                    if let Some(rest) = t.strip_prefix('[') {
+                        in_deps = rest.starts_with("dependencies]");
+                    } else if in_deps && !t.is_empty() && !t.starts_with('#') {
+                        if let Some(k) = t.split('=').next().map(str::trim) {
+                            if !k.is_empty() && k != "loft" {
+                                nonloft_idents.push(k.replace('-', "_"));
+                            }
+                        }
+                    }
+                }
+            }
+            let mut bridge_dep_search: Option<std::path::PathBuf> = None;
+            let mut bridge_externs: Vec<(String, std::path::PathBuf)> = Vec::new();
+            if !nonloft_idents.is_empty() {
+                let cargo_ok = std::process::Command::new("cargo")
+                    .arg("build")
+                    .arg("--release")
+                    .arg("--target")
+                    .arg("wasm32-unknown-unknown")
+                    .arg("--manifest-path")
+                    .arg(&wasm_cargo)
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false);
+                if !cargo_ok {
+                    eprintln!(
+                        "loft: --html: failed to cargo-build wasm-bridge dependencies for {bridge_crate}"
+                    );
+                    std::process::exit(1);
+                }
+                let deps = wasm_dir.join("target/wasm32-unknown-unknown/release/deps");
+                if deps.is_dir() {
+                    // Resolve each DIRECT dep to its `lib<ident>-<hash>.rlib` for `--extern`.
+                    let files: Vec<String> = std::fs::read_dir(&deps)
+                        .map(|rd| {
+                            rd.flatten()
+                                .map(|e| e.file_name().to_string_lossy().into_owned())
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    for ident in &nonloft_idents {
+                        let prefix = format!("lib{ident}-");
+                        if let Some(f) = files
+                            .iter()
+                            .find(|f| f.starts_with(&prefix) && f.ends_with(".rlib"))
+                        {
+                            bridge_externs.push((ident.clone(), deps.join(f)));
+                        }
+                    }
+                    bridge_dep_search = Some(deps);
+                }
+            }
             let mut build = std::process::Command::new("rustc");
             build
                 .arg("--edition=2024")
@@ -5319,6 +5388,19 @@ fn main() {
                     }
                 }
             }
+            // Build-extension: the bridge crate's own Cargo deps (dalek/RustCrypto).
+            // `--extern` each DIRECT dep (the `use <crate>` extern-prelude entry), then
+            // `-L` the deps dir for their transitive deps.
+            for (ident, rlib) in &bridge_externs {
+                build
+                    .arg("--extern")
+                    .arg(format!("{ident}={}", rlib.display()));
+            }
+            if let Some(ref deps) = bridge_dep_search {
+                build
+                    .arg("-L")
+                    .arg(format!("dependency={}", deps.display()));
+            }
             let status = build.status();
             if !matches!(status, Ok(s) if s.success()) {
                 eprintln!(
@@ -5330,6 +5412,11 @@ fn main() {
             }
             cmd.arg("--extern")
                 .arg(format!("{crate_ident}={}", bridge_rlib.display()));
+            // Build-extension: link the bridge crate's Cargo deps into the main wasm.
+            if let Some(ref deps) = bridge_dep_search {
+                cmd.arg("-L")
+                    .arg(format!("dependency={}", deps.display()));
+            }
         }
         let status = cmd.status();
         if std::env::var("LOFT_KEEP_NATIVE_RS").is_err() {
