@@ -11,7 +11,8 @@
 //! group is permitted only when an `allow_caps` entry is a dotted-segment prefix
 //! of it.
 
-use std::collections::HashMap;
+use crate::data::{Data, Type, Value};
+use std::collections::{HashMap, HashSet};
 
 /// A named admission profile: which capability **groups** a sandboxed script may
 /// reach, plus the always-on coarse bans (never native/rustc, never a `[native]`
@@ -185,6 +186,96 @@ fn parse_str_list(value: &str) -> Vec<String> {
         .filter(|s| !s.is_empty())
         .map(str::to_string)
         .collect()
+}
+
+/// @PLN86 step 1.3 — the **sandbox-reachable set**: the transitive closure of
+/// references (calls + fn-ref literals) from every sandboxed def, **descending
+/// only into other sandboxed defs**.  A trusted / allow-listed symbol is a
+/// *leaf* — recorded (the admission walk capability-checks it) but not descended,
+/// because its body is the host's contract (§4 / L-host).  `sandboxed` maps each
+/// sandboxed def_nr to its profile (the parser's `def_sandbox`).
+///
+/// Returns every reachable def_nr: the sandboxed entries, the sandboxed defs
+/// descended into, and the trusted leaves they reference.  Step 2.3 capability-
+/// checks the non-sandboxed members.
+#[must_use]
+pub fn reachable_set(data: &Data, sandboxed: &HashMap<u32, String>) -> HashSet<u32> {
+    let mut reachable = HashSet::new();
+    let mut worklist: Vec<u32> = sandboxed.keys().copied().collect();
+    let mut descended = HashSet::new();
+    while let Some(d) = worklist.pop() {
+        if !descended.insert(d) {
+            continue;
+        }
+        reachable.insert(d);
+        let mut refs = HashSet::new();
+        referenced_defs(data, d, &mut refs);
+        for r in refs {
+            reachable.insert(r);
+            // Descend ONLY into sandboxed defs; trusted symbols are leaves.
+            if sandboxed.contains_key(&r) {
+                worklist.push(r);
+            }
+        }
+    }
+    reachable
+}
+
+/// Collect every def_nr referenced in `fn_dnr`'s body — both direct calls AND
+/// fn-ref literals.  L4 hazard (verified in the IR): a non-capturing fn-ref is
+/// emitted as a bare `Value::Int(def_nr)`, indistinguishable from an integer
+/// literal except by **type context** — so an `Int`/`Long` is a reference only
+/// where a `Function` type is expected: a `fn(...)`-typed call argument or an
+/// assignment to a `fn(...)`-typed variable.  Missing this lets
+/// `f = read_file; f(x)` escape admission.
+///
+/// RESIDUAL (tracked, closes before step 2.3 capability admission relies on this
+/// set): a fn-ref flowing through a `Function`-typed RETURN value, struct field,
+/// or collection element is not yet detected.  Until then the design's host
+/// contract (§4 / L-host: trusted APIs do not hand untrusted code arbitrary
+/// fn-refs) covers the trusted-boundary case; the sandboxed-internal vectors are
+/// the follow-up.
+fn referenced_defs(data: &Data, fn_dnr: u32, out: &mut HashSet<u32>) {
+    let def = data.def(fn_dnr);
+    let func = &def.variables;
+    def.code.walk(&mut |v| match v {
+        Value::Call(d, args) => {
+            out.insert(*d);
+            // A `fn(...)`-typed parameter receives its argument as a fn-ref.
+            let callee = &data.def(*d).variables;
+            let params = callee.arguments();
+            for (i, arg) in args.iter().enumerate() {
+                if let Some(slot) = params.get(i)
+                    && matches!(callee.tp(*slot), Type::Function(..))
+                    && let Some(r) = fnref_target(arg)
+                {
+                    out.insert(r);
+                }
+            }
+        }
+        Value::Set(slot, value) => {
+            // Assigning a fn-ref into a `fn(...)`-typed local.
+            if matches!(func.tp(*slot), Type::Function(..))
+                && let Some(r) = fnref_target(value)
+            {
+                out.insert(r);
+            }
+        }
+        Value::FnRef(d, _, _) if *d >= 0 => {
+            out.insert(*d as u32);
+        }
+        _ => {}
+    });
+}
+
+/// Extract the referenced function def_nr from a value used in a `Function`-typed
+/// position — a fn-ref is carried as `FnRef`, a bare `Int`, or a `Long` def_nr.
+fn fnref_target(v: &Value) -> Option<u32> {
+    match v.unspan() {
+        Value::Int(d) | Value::FnRef(d, _, _) if *d >= 0 => Some(*d as u32),
+        Value::Long(d) if *d >= 0 => Some(*d as u32),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

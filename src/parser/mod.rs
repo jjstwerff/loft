@@ -561,6 +561,15 @@ impl Parser {
         self.def_sandbox.get(&def_nr).map(String::as_str)
     }
 
+    /// @PLN86 step 1.3 — the sandbox-reachable set: every def reachable from the
+    /// sandboxed entries via calls + fn-ref literals, descending only into
+    /// sandboxed defs (trusted symbols are leaves).  Step 2.3 capability-checks
+    /// the non-sandboxed members.  Call after parsing, when bodies are resolved.
+    #[must_use]
+    pub fn sandbox_reachable_set(&self) -> std::collections::HashSet<u32> {
+        crate::sandbox::reachable_set(&self.data, &self.def_sandbox)
+    }
+
     /// # Panics
     /// With filesystem problems.
     pub fn parse(&mut self, filename: &str, default: bool) -> bool {
@@ -7836,6 +7845,102 @@ mod plan86_nesting_guard_tests {
                 .any(|l| l.contains("nesting too deep")),
             "guard false-tripped on ordinary code: {:?}",
             p.diagnostics.lines()
+        );
+    }
+}
+
+#[cfg(test)]
+mod plan86_reachable_set_tests {
+    use super::*;
+    use crate::sandbox::parse_sandbox_config;
+
+    fn parse_with_sandbox(selectors: &[&str], src: &str) -> Parser {
+        let list = selectors
+            .iter()
+            .map(|s| format!("\"{s}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let cfg = format!("[sandbox]\nmod = [{list}]\n[profile.mod]\nallow_caps = [\"x\"]\n");
+        let mut p = Parser::new();
+        p.set_sandbox_config(parse_sandbox_config(&cfg));
+        p.parse_dir("default", true, true).unwrap(); // `integer` et al. live in the stdlib
+        let path = std::env::temp_dir().join(format!(
+            "plan86_reach_{}_{:p}.loft",
+            std::process::id(),
+            src
+        ));
+        std::fs::write(&path, src).unwrap();
+        p.parse(path.to_str().unwrap(), false);
+        let _ = std::fs::remove_file(&path);
+        p
+    }
+
+    /// @PLN86 1.3 — the closure descends into sandboxed defs (so their callees are
+    /// reachable) but treats a trusted symbol as a LEAF: `untrusted_helper` is
+    /// recorded yet NOT descended, so the `hidden_leaf` it alone reaches is
+    /// excluded — the trust boundary §4 demands.
+    #[test]
+    fn closure_descends_sandboxed_defs_and_stops_at_trusted_leaves() {
+        let src = "fn allowed_leaf() -> integer { 1 }\n\
+                   fn hidden_leaf() -> integer { 2 }\n\
+                   fn inner() -> integer { allowed_leaf() }\n\
+                   fn untrusted_helper() -> integer { hidden_leaf() }\n\
+                   fn scripted() -> integer { inner(); untrusted_helper() }\n";
+        let p = parse_with_sandbox(&["fn:scripted", "fn:inner"], src);
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        let reach = p.sandbox_reachable_set();
+        let id = |n: &str| p.data.def_nr(n);
+        assert!(reach.contains(&id("n_scripted")));
+        assert!(reach.contains(&id("n_inner"))); // sandboxed → descended
+        assert!(reach.contains(&id("n_allowed_leaf"))); // reached via inner
+        assert!(reach.contains(&id("n_untrusted_helper"))); // referenced → leaf
+        assert!(
+            !reach.contains(&id("n_hidden_leaf")),
+            "a trusted leaf must not be descended"
+        );
+    }
+
+    /// L4 — a fn-ref passed as a `fn(...)`-typed argument (emitted as a bare
+    /// `Int(def_nr)`) is in the set, so an indirect call can't escape admission.
+    #[test]
+    fn fnref_passed_as_argument_is_reachable_l4() {
+        let src = "fn target(n: integer) -> integer { n }\n\
+                   fn apply(f: fn(integer) -> integer, n: integer) -> integer { f(n) }\n\
+                   fn scripted() -> integer { apply(target, 5) }\n";
+        let p = parse_with_sandbox(&["fn:scripted"], src);
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        assert!(
+            p.sandbox_reachable_set()
+                .contains(&p.data.def_nr("n_target")),
+            "fn-ref argument must be reachable (L4)"
+        );
+    }
+
+    /// L4 — a fn-ref laundered through a `fn(...)`-typed local (`f = target`,
+    /// emitted as `Set(f, Int(def_nr))`) is still in the set.
+    #[test]
+    fn fnref_laundered_through_a_variable_is_reachable_l4() {
+        let src = "fn target(n: integer) -> integer { n }\n\
+                   fn apply(f: fn(integer) -> integer, n: integer) -> integer { f(n) }\n\
+                   fn scripted() -> integer { f = target; apply(f, 5) }\n";
+        let p = parse_with_sandbox(&["fn:scripted"], src);
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        assert!(
+            p.sandbox_reachable_set()
+                .contains(&p.data.def_nr("n_target")),
+            "fn-ref laundered through a variable must be reachable (L4)"
         );
     }
 }
