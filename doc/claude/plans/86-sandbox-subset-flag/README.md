@@ -78,11 +78,15 @@ unrestricted, in one process, sharing the store at full `DbRef` speed.
   (`reference_position`), the symbol + rule, the profile's allowed set, and BOTH
   library-first fixes (`allow_libs` wholesale / the `allow_caps` cap). The contract a
   modder iterates against.
-- **Next:** ~~tag the 166-fn surface~~ **dropped** (library-first). Remaining: the **1.4
-  backend half** (force sandboxed defs to interpret + the no-default-features cdylib
-  removal) and **P3 totality** (loop boundedness, recursion analysis) — the last big arc,
-  with its own diagnostic classes feeding 2.5. The lint stays the coverage tool for a host
-  tagging its OWN APIs.
+- **P3 ◐ (totality core)** — `admit_totality` → `TotalityViolation`: **3.1** rejects an
+  unbounded `while` (parse recorded), admits bounded `for`; **3.2** rejects recursion via a
+  colour-DFS cycle check on the sandboxed call graph (self + mutual), admits acyclic. Both
+  render actionable errors through `sandbox_admission_errors`. The capability arc (P0–P2 +
+  2.5) and the termination arc (3.1/3.2) are now both proven.
+- **Next:** **3.3** total-op check (div/mod-zero, overflow → defined-or-excluded), **3.4**
+  worst-case complexity report (L5), then the **1.4 backend half** (force-interpret +
+  no-default-features cdylib removal). The decreasing-variant / structural-recursion
+  relaxations are post-v1.
 
 **Scope.** v1 is intentionally **fairly restricted** — a small total dialect (bounded
 loops, no/structural recursion, total ops) plus a **curated host API**; the
@@ -377,15 +381,17 @@ proven-total script.
   no-raw-write classes get their messages when those checks land.
 
 ### P3 — totality admission (the core)
-- **3.1 Loop boundedness.** *Change:* admit `for x in <finite collection>` / `for i in
-  0..N`; reject unbounded `while` unless it carries a compiler-checked decreasing
-  variant. *Verify (L2):* `while true {}` rejected; `for e in entities {…}` admitted; a
-  `while` with a strictly-decreasing measure admitted.
-- **3.2 Recursion analysis (the ancestry stack).** *Change:* the admission DFS carries
-  the parent chain (§4); a call to an **ancestor** is a back-edge → v1 rejects it (acyclic
-  only); the later relaxation admits it iff a structurally-decreasing argument is proven.
-  *Verify (L2):* a call to a parent function is rejected naming the cycle; an acyclic
-  script admitted; `f(n) -> f(n+1)` rejected.
+- **3.1 Loop boundedness.** ✅ *shipped* (`admit_totality` → `UnboundedLoop`). *Change:*
+  admit `for x in <finite collection>` / `for i in 0..N`; reject unbounded `while`.
+  *Verify (L2):* `while …` rejected; `for i in 0..10 {…}` admitted. **Done:** `parse_while`
+  records the loop when `in_sandbox` (the IR can't tell a `while` `Loop` from a bounded
+  comprehension `Loop`, so the parser marks it where it knows). The decreasing-variant
+  relaxation is later.
+- **3.2 Recursion analysis.** ✅ *shipped* (`recursion_cycles` → `Recursion`). *Change:* a
+  colour DFS over the sandboxed call graph (trusted callees not followed — total by
+  contract); a back-edge to a node on the current path is a cycle → v1 rejects (acyclic
+  only). *Verify (L2):* self-recursion `rec(n+1)` and mutual `a→b→a` rejected naming the
+  cycle; an acyclic chain admitted. The structurally-decreasing relaxation is later.
 - **3.3 Total-operation check.** *Change:* prove every op total — OOB→`null` (already),
   div/mod-zero + overflow + conversions given a defined total result or excluded; reject
   any partial op. *Verify (L3):* a div-by-zero in a sandboxed def yields the defined
