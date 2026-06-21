@@ -73,10 +73,16 @@ unrestricted, in one process, sharing the store at full `DbRef` speed.
   modules (`code`/`text`/`json`) are included wholesale via `allow_libs`, untagged.
   Verified on the REAL stdlib: `mtime` (fs.read) rejected naming the group when only `env`
   is granted; `env_variable` (env) admits; untagged `now()` admits under `allow_libs`.
-- **Next:** ~~tag the 166-fn surface~~ — **dropped** (library-first removes it). Remaining:
-  2.5 diagnostics (turn `CapViolation`s into spanned errors), the 1.4 backend half, P3
-  totality (loop/recursion bounds). The lint stays as the coverage tool for a host tagging
-  its OWN APIs.
+- **2.5 ✅ (P2 diagnostics)** — `describe_violation` / `Parser::sandbox_admission_errors`
+  render each capability rejection as an actionable error: call-site position
+  (`reference_position`), the symbol + rule, the profile's allowed set, and BOTH
+  library-first fixes (`allow_libs` wholesale / the `allow_caps` cap). The contract a
+  modder iterates against.
+- **Next:** ~~tag the 166-fn surface~~ **dropped** (library-first). Remaining: the **1.4
+  backend half** (force sandboxed defs to interpret + the no-default-features cdylib
+  removal) and **P3 totality** (loop boundedness, recursion analysis) — the last big arc,
+  with its own diagnostic classes feeding 2.5. The lint stays the coverage tool for a host
+  tagging its OWN APIs.
 
 **Scope.** v1 is intentionally **fairly restricted** — a small total dialect (bounded
 loops, no/structural recursion, total ops) plus a **curated host API**; the
@@ -361,9 +367,14 @@ proven-total script.
 - **2.4 No-raw-write admission.** *Change:* in a sandboxed def, reject raw store/field
   assignment to host data — writes only via allow-listed `*.write` ops (§5). *Verify:*
   `e.health = 0` rejected; `damage(e, 10)` (a granted `game.write` op) passes.
-- **2.5 Diagnostic quality (§6).** *Change:* every P2/P3 rejection carries the construct
+- **2.5 Diagnostic quality (§6).** ✅ *P2 classes shipped* (`describe_violation` /
+  `Parser::sandbox_admission_errors`). *Change:* every rejection carries the construct
   span + the rule + the allowed set / fix. *Verify:* the error text for each rejection
-  class names the symbol/group/op and points at the fix — snapshot-tested.
+  class names the symbol/group/op and points at the fix. **Done:** the three capability
+  classes (UngrantedCap / UntaggedSymbol / ExternalFfi) each render with a call-site
+  position (`reference_position` tracks the enclosing `Span`), the symbol + rule, the
+  profile's allowed set, and BOTH library-first fixes. **Remaining:** the P3 totality /
+  no-raw-write classes get their messages when those checks land.
 
 ### P3 — totality admission (the core)
 - **3.1 Loop boundedness.** *Change:* admit `for x in <finite collection>` / `for i in
