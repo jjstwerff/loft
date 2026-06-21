@@ -63,9 +63,13 @@ unrestricted, in one process, sharing the store at full `DbRef` speed.
   the baked-layout probe), pushing the trailing bools (rnn 148→152, pub_visible 149→153,
   stride 150→154); `baked_layout_mirrors_loft_schema` is the offset guard, and
   `cap_annotation_survives_store_round_trip` proves a non-empty group survives.
-- **Next:** **tag the 166-fn stdlib surface** against the lint (`fs.*`/`net`/`env`/
-  `collections.{read,write}`/`math`/`text`) so real scripts admit → then 2.5 diagnostics,
-  the 1.4 backend half, P3 totality.
+- **2.2 tagging — fs/env ✅ (first surface)** — `default/02_files.loft` carries 32 `#cap`
+  groups: `fs.read` (14), `fs.write` (16), `env` (2), covering the public fs/env API AND
+  the fs Op primitives they reach. Verified on the REAL stdlib: `mtime` (fs.read) is
+  rejected naming the group when only `env` is granted; `env_variable` (env) admits.
+- **Next:** tag the remaining surfaces against the lint — `text` (path/string helpers),
+  `collections.{read,write}`, `math`, `time`, the core language ops — so general scripts
+  admit → then 2.5 diagnostics, the 1.4 backend half, P3 totality.
 
 **Scope.** v1 is intentionally **fairly restricted** — a small total dialect (bounded
 loops, no/structural recursion, total ops) plus a **curated host API**; the
