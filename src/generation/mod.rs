@@ -1155,9 +1155,16 @@ extern crate loft;"
                 // AND would collide with the local body name (E0428).
                 let stores_loft_ref =
                     matches!(def.returned(), Type::Vector(_, _) | Type::Reference(_, _));
-                let has_ref_arg = def.attributes().iter().any(|a| {
-                    !a.name.starts_with("__") && matches!(a.typedef, Type::Reference(_, _))
-                });
+                // A heap-typed arg (Reference / Vector / data-enum / sorted /
+                // hash / index / spacial) is passed as a `LoftStore` + `LoftRef`
+                // handle, exactly as the interpreter's `ArgT::Ref`/`ArgT::Vec`
+                // marshal it — NOT a raw `(ptr, count)` pair.  `heap_dep()` is the
+                // canonical set of those types (the same union the interpreter
+                // groups in `compute_sig`); reuse it so the two backends agree.
+                let has_ref_arg = def
+                    .attributes()
+                    .iter()
+                    .any(|a| !a.name.starts_with("__") && a.typedef.heap_dep().is_some());
                 if stores_loft_ref || has_ref_arg {
                     continue;
                 }
@@ -1265,13 +1272,18 @@ extern crate loft;"
                     continue;
                 }
                 // A store handle is the first parameter when the fn writes
-                // the store: a Reference arg the cdylib mutates, or a
-                // Vector/Reference return it allocates.
+                // the store: a heap-typed arg (Reference / Vector / data-enum /
+                // sorted / hash / index / spacial) the cdylib reads or mutates,
+                // or a Vector/Reference return it allocates.  `heap_dep()` is the
+                // canonical set of heap types — the same union the interpreter
+                // marshals as a `LoftRef` handle (`compute_sig`); reuse it so
+                // both backends pass the identical ABI.
                 let returns_ref =
                     matches!(def.returned(), Type::Vector(_, _) | Type::Reference(_, _));
-                let has_ref_arg = def.attributes().iter().any(|a| {
-                    !a.name.starts_with("__") && matches!(a.typedef, Type::Reference(_, _))
-                });
+                let has_ref_arg = def
+                    .attributes()
+                    .iter()
+                    .any(|a| !a.name.starts_with("__") && a.typedef.heap_dep().is_some());
                 let mut sig = String::new();
                 if returns_ref || has_ref_arg {
                     sig.push_str("store: loft_ffi::LoftStore");
@@ -1284,16 +1296,16 @@ extern crate loft;"
                         sig.push_str(", ");
                     }
                     let n = sanitize(&attr.name);
+                    // A heap-typed arg is passed by `LoftRef` handle — matched
+                    // first so Vector and the keyed collections share the
+                    // Reference convention (the interpreter's `ArgT::Ref`/`Vec`).
+                    if attr.typedef.heap_dep().is_some() {
+                        let _ = write!(sig, "{n}: loft_ffi::LoftRef");
+                        continue;
+                    }
                     match &attr.typedef {
                         Type::Text(_) => {
                             let _ = write!(sig, "{n}_ptr: *const u8, {n}_len: usize");
-                        }
-                        Type::Vector(elem_tp, _) => {
-                            let elem = Self::vector_elem_rust_type(elem_tp);
-                            let _ = write!(sig, "{n}_ptr: *const {elem}, {n}_count: u32");
-                        }
-                        Type::Reference(_, _) => {
-                            let _ = write!(sig, "{n}: loft_ffi::LoftRef");
                         }
                         Type::Integer(s) if s.is_wide() => {
                             let _ = write!(sig, "{n}: i64");
@@ -3305,10 +3317,13 @@ extern crate loft;"
             if let Some(target) = bridge_target {
                 return Self::output_wasm_bridge_call(w, def, &target);
             }
+            // A heap-typed arg (Reference / Vector / data-enum / sorted / hash /
+            // index / spacial) makes this a store-touching native — `heap_dep()`
+            // is the canonical set (same union the C-ABI path keys on above).
             let first_ref_arg = def
                 .attributes
                 .iter()
-                .find(|a| !a.name.starts_with("__") && matches!(a.typedef, Type::Reference(_, _)));
+                .find(|a| !a.name.starts_with("__") && a.typedef.heap_dep().is_some());
             let returns_loft_ref =
                 matches!(def.returned(), Type::Vector(_, _) | Type::Reference(_, _));
             if returns_loft_ref || first_ref_arg.is_some() {
@@ -3353,26 +3368,20 @@ extern crate loft;"
             "  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};"
         )?;
 
-        // Pre-declare per-vector extraction variables before the call expression
-        // so that raw pointers are stable for the duration of the unsafe block.
+        // Pre-declare each `vector` arg's inner-record number before the call
+        // expression.  A loft `vector` var is an OUTER record whose word at
+        // `(rec, pos)` holds the inner vector record; `_vr_{var}` is that inner
+        // record, which the call site passes as a `LoftRef` (mirroring the
+        // interpreter's `ArgT::Vec` deref `rec = get_u32_raw(r.rec, r.pos)`).
         for attr in def.attributes() {
             if attr.name.starts_with("__") {
                 continue;
             }
-            if let Type::Vector(elem_tp, _) = &attr.typedef {
+            if let Type::Vector(_, _) = &attr.typedef {
                 let var = sanitize(&attr.name);
-                let elem = Self::vector_elem_rust_type(elem_tp);
                 writeln!(
                     w,
                     "  let _vr_{var} = loft::keys::store(&var_{var}, &stores.allocations).get_u32_raw(var_{var}.rec, var_{var}.pos);"
-                )?;
-                writeln!(
-                    w,
-                    "  let _vc_{var} = if _vr_{var} == 0 {{ 0u32 }} else {{ loft::keys::store(&var_{var}, &stores.allocations).get_u32_raw(_vr_{var}, 4) }};"
-                )?;
-                writeln!(
-                    w,
-                    "  let _vp_{var}: *const {elem} = if _vr_{var} == 0 {{ std::ptr::null() }} else {{ loft::keys::store(&var_{var}, &stores.allocations).addr::<{elem}>(_vr_{var}, 8) as *const {elem} }};"
                 )?;
             }
         }
@@ -3405,10 +3414,16 @@ extern crate loft;"
         // store as its owner (mirrors the interpreter's
         // `make_loft_store(stores, first_ref_store(args))` at
         // `src/extensions.rs:981`).
+        // Any heap-typed arg (Reference / Vector / data-enum / sorted / hash /
+        // index / spacial) pins the store and rides as a `LoftRef`, exactly as
+        // the interpreter's `ref_arg_store` picks the first `LoftTag::Ref` arg
+        // (a marshalled vector carries that tag too).  `heap_dep()` is the
+        // canonical heap set; the outer DbRef's `.store_nr` is the store for
+        // both Reference and Vector args.
         let first_ref_arg = def
             .attributes
             .iter()
-            .find(|a| !a.name.starts_with("__") && matches!(a.typedef, Type::Reference(_, _)));
+            .find(|a| !a.name.starts_with("__") && a.typedef.heap_dep().is_some());
         // `returns_loft_ref` drives the RETURN conversion (`from_loft_ref`);
         // `needs_loft_store` drives the store-handle + guard + `_ls` first arg.
         // They diverge for a Reference-arg fn with a scalar return (imaging's
@@ -3418,7 +3433,7 @@ extern crate loft;"
         if needs_loft_store {
             // Order matters: extract `store_nr` as a SEPARATE statement so it
             // doesn't dual-borrow `stores` alongside the build_store call
-            // (rustc E0502).  A Reference arg pins the store to that arg's
+            // (rustc E0502).  A heap-typed arg pins the store to that arg's
             // store_nr; otherwise (vector-return only, e.g. random) the null
             // store hosts the freshly allocated return vector.
             if let Some(a) = first_ref_arg {
@@ -3491,23 +3506,38 @@ extern crate loft;"
                     write!(w, "var_{var}.as_ptr(), var_{var}.len()")?;
                 }
                 Type::Vector(_, _) => {
-                    // Pass as (*const ELEM_TYPE, count: u32) — no LoftStore/LoftRef.
+                    // A `vector` arg rides as a `LoftStore` + `LoftRef`, NOT a
+                    // raw `(ptr, count)` pair — that mismatched the `#[loft_native]`
+                    // bridge's `(LoftStore, LoftRef)` ABI and segfaulted.  The loft
+                    // `vector` var is an OUTER record (a header whose word at
+                    // `(rec, pos)` is the inner vector record); `_vr_{var}` (set up
+                    // in the pre-declare block above) is that inner record, exactly
+                    // what the interpreter's `ArgT::Vec` marshals
+                    // (`extensions.rs` — `rec = get_u32_raw(r.rec, r.pos)`, pos 0).
                     if !first {
                         write!(w, ", ")?;
                     }
                     first = false;
-                    write!(w, "_vp_{var}, _vc_{var}")?;
+                    write!(
+                        w,
+                        "unsafe {{ std::mem::transmute_copy(&loft::codegen_runtime::to_loft_ref(loft::keys::DbRef {{ store_nr: var_{var}.store_nr, rec: _vr_{var}, pos: 0 }})) }}"
+                    )?;
                 }
-                Type::Reference(_, _) => {
-                    // @P321c — pass the struct as a `LoftRef`.  `var_{var}` is a
-                    // DbRef pointing directly at the struct record (matching the
-                    // interpreter's `ArgVal::Ref(r.store_nr, r.rec, r.pos)` at
-                    // `src/extensions.rs:464`).  `to_loft_ref` returns the loft
-                    // crate's `loft_ffi::LoftRef`; `transmute_copy` reinterprets
-                    // it as the cdylib's identically-`#[repr(C)]` copy without
-                    // naming the type (avoids the "colliding StableCrateId"
-                    // error when two `loft_ffi` copies are in the dep graph —
-                    // same trick the `_ls` store handle uses above).
+                // Reference / data-enum / sorted / hash / index / spacial: a
+                // heap-typed arg whose DbRef points DIRECTLY at the record
+                // (no outer→inner deref, unlike Vector).  Matched via
+                // `heap_dep()` so every keyed-collection kind shares the
+                // @P321c LoftRef convention (the interpreter's `ArgT::Ref`,
+                // which forwards `r.store_nr, r.rec, r.pos` verbatim).
+                t if t.heap_dep().is_some() => {
+                    // `var_{var}` is a DbRef pointing directly at the record
+                    // (matching the interpreter's `ArgVal::Ref(r.store_nr, r.rec,
+                    // r.pos)`).  `to_loft_ref` returns the loft crate's
+                    // `loft_ffi::LoftRef`; `transmute_copy` reinterprets it as the
+                    // cdylib's identically-`#[repr(C)]` copy without naming the
+                    // type (avoids the "colliding StableCrateId" error when two
+                    // `loft_ffi` copies are in the dep graph — same trick the
+                    // `_ls` store handle uses above).
                     if !first {
                         write!(w, ", ")?;
                     }
