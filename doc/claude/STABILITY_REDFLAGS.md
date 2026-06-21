@@ -116,7 +116,7 @@ exactly those bytes*, so the type IS the authority.
 **The fact:** "to traverse / construct / free a collection's owned nested heap —
 which element type, at which stride, with which container walk" is ONE per-`Parts`
 descriptor. Today it is hand-re-encoded across the family below — the **densest bug
-cluster in the tree** (the @P29x/@P3xx history).
+cluster in the tree** (the @P29x/@P3xx history). <!--noindex-->
 
 | Family | loft2 location | Count | Named bugs from the drift |
 |---|---|---|---|
