@@ -10,12 +10,17 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > fact** each one re-derives — so the path to a stable future is "land the fact
 > once; N forests collapse together," not "patch N sites." Companion to
 > [STABILITY_HOTSPOTS.md](STABILITY_HOTSPOTS.md) (the H-register) and
-> [OWNERSHIP_MODEL.md](OWNERSHIP_MODEL.md) (the ownership holes table); this doc
-> is the cross-cutting *red-flag* view those two are read through.
+> `OWNERSHIP_MODEL.md` (the ownership holes table); this doc is the cross-cutting
+> *red-flag* view those two are read through.
+>
+> **Two referenced docs — `OWNERSHIP_MODEL.md` and `CODEGEN_METHOD.md` — are the
+> ownership-migration docs from the active store-lifetime plan (`@PLN85`) and are
+> not yet merged into this tree; they are referenced by name (no local link) until
+> they land here.**
 
 ## The one thesis
 
-Per [CODEGEN_METHOD.md](CODEGEN_METHOD.md): **codegen re-deriving a non-local fact
+Per `CODEGEN_METHOD.md`: **codegen re-deriving a non-local fact
 (ownership, transfer/borrow, null-encoding, container layout) per call-site is a
 diagnostic of a missing type-system fact — fix the fact, not the generator.** A
 red flag here is therefore not "ugly code"; it is a *fact computed in the wrong
@@ -25,7 +30,7 @@ place / N times*. The test for every entry below is the method's own:
 > If yes → the fact belongs on the type, and every re-derivation site is a sibling
 > of one bug class.
 
-The rigor failure modes ([engineering-rigor skill](../../.claude/skills/engineering-rigor)):
+The rigor failure modes ([engineering-rigor skill](../../.claude/skills/engineering-rigor/SKILL.md)):
 **under-reach** (N mechanisms for one family — a spray), **over-reach** (one
 mechanism forced over N families — a false invariant), **wrong-signal** (a decision
 keyed on a type where the authority is a runtime delta), and
