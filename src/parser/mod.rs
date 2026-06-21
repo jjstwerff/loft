@@ -578,6 +578,15 @@ impl Parser {
         self.sandbox = config;
     }
 
+    /// @PLN86 — does the loaded `[sandbox]` policy designate any sandboxed source?
+    /// The CLI uses this to disable the program warm-cache for a sandboxed program:
+    /// a warm load restores the IR without re-parsing, so `def_sandbox` would never
+    /// form and admission (+ the force-interpret guard) would be silently bypassed.
+    #[must_use]
+    pub fn sandbox_is_active(&self) -> bool {
+        self.sandbox.is_active()
+    }
+
     /// @PLN86 step 1.2 — the sandbox profile a function was parsed under, or
     /// `None` for unrestricted (trusted) code.  The admission walk reads this to
     /// apply the totality / capability rules only to sandboxed defs.

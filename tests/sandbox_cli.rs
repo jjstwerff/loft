@@ -78,6 +78,66 @@ fn sandboxed_native_is_refused() {
     assert!(err.contains("interpret-only"), "stderr: {err}");
 }
 
+/// @PLN86 — the program warm-cache must NOT bypass admission.  A whole-program
+/// warm load restores the IR without re-parsing, so `def_sandbox` would never form
+/// and admission (+ force-interpret) would be skipped; and the cache is keyed by
+/// program CONTENT, not policy.  So a program admitted under a permissive policy,
+/// then run UNCHANGED under a tightened policy, must still be re-admitted — and
+/// rejected.  Forces the program cache on (`LOFT_PROGRAM_CACHE=1`) with an
+/// isolated `LOFT_HOME`, so run 1 writes a warm cache that run 2 must ignore.
+#[test]
+fn warm_program_cache_does_not_bypass_admission() {
+    let dir = std::env::temp_dir().join(format!("loft_sbcache_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let home = dir.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let prog = dir.join("prog.loft");
+    std::fs::write(
+        &prog,
+        "fn scripted() -> integer { mtime(\"Cargo.toml\") }\n\
+         fn main() -> integer { scripted() }\n",
+    )
+    .unwrap();
+
+    let run = |toml: &str| -> (bool, String) {
+        std::fs::write(dir.join("loft.toml"), toml).unwrap();
+        let out = Command::new(loft_bin())
+            .env("LOFT_PROGRAM_CACHE", "1")
+            .env("LOFT_HOME", &home)
+            .arg("--timeout")
+            .arg("60")
+            .arg(&prog)
+            .current_dir(workspace_root())
+            .output()
+            .expect("failed to invoke loft binary");
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+
+    // permissive: fs.read granted → admitted, runs, and WARMS the program cache.
+    let permissive = "[sandbox]\nmod = [\"fn:scripted\"]\n\
+                      [profile.mod]\nallow_libs = [\"code\"]\nallow_caps = [\"fs.read\"]\n";
+    let (ok1, err1) = run(permissive);
+    assert!(ok1, "permissive run must be admitted and run: {err1}");
+
+    // tightened (fs.read withdrawn): the SAME program must be rejected even though
+    // a warm cache now exists — no bypass.
+    let restrictive = "[sandbox]\nmod = [\"fn:scripted\"]\n\
+                       [profile.mod]\nallow_libs = [\"code\"]\n";
+    let (ok2, err2) = run(restrictive);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        !ok2,
+        "the tightened policy must reject on the warm run (admission not bypassed): {err2}"
+    );
+    assert!(
+        err2.contains("admission violation") && err2.contains("fs.read"),
+        "warm-run rejection must name the capability: {err2}"
+    );
+}
+
 /// A raw field write to heap data in a sandboxed def is rejected (2.4) — mutation
 /// must go through a `*.write` op; construction stays fine.
 #[test]
