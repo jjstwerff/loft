@@ -7,7 +7,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-Open — design ready, no implementation yet.  Discovered while
+**In progress — W1 shipped, W2 mechanism shipped.**  Discovered while
 auditing `tools/indexer/src/scan.loft` on 2026-05-18: 30+
 `s[i] may produce null on out-of-bounds with no defensive check`
 warnings, every one a false positive on code that either uses a
@@ -15,6 +15,18 @@ correctly-written library function (e.g. `is_digit_leaf(line[j])`
 — the helper handles null safely) or wraps the indexing in a
 short-circuit guard (`if j < ll && is_digit_leaf(line[j])` —
 intentional bounds check).
+
+- **W1 — DONE.** Short-circuit guard recognition (`WarnCtx::guarded_pairs` +
+  `len_captures`, skip pattern 5; extended to struct-field indices
+  `self.f[i]`).  `scan.loft` is now at **0** null warnings.
+- **W2 — mechanism DONE (first increment).** `#null_safe` function annotation
+  (after the body, the `parse_rust` slot) → `Parser::null_safe_defs`; the warning
+  walk skips a fault op that is a DIRECT argument to a `#null_safe` callee (skip
+  pattern 6), reset at nested calls so it never leaks (`outer(raw(s[i]))` with only
+  `outer` annotated still warns).  Tests in `tests/runtime_warnings.rs`.
+  *Remaining:* persist the flag on `Definition` (survive `LOFT_STDLIB_CACHE`) +
+  annotate the stdlib null-tolerant helpers + the per-param `c: #null_safe T` form.
+- **W3 / W4 — not started.**
 
 The existing `is_easy_proof` skip patterns in
 `src/parser/operators.rs::is_easy_proof` recognize three shapes
@@ -54,8 +66,8 @@ explicit `if x == null { return … }` guard).
 
 | Item | Source | Status |
 |---|---|---|
-| **W1** — Short-circuit guard recognition at call sites | § W1 design | Open |
-| **W2** — `#null_safe` param annotation (library author opts in) | § W2 design | Open |
+| **W1** — Short-circuit guard recognition at call sites | § W1 design | ✅ Done |
+| **W2** — `#null_safe` param annotation (library author opts in) | § W2 design | ◑ Mechanism done; persistence + stdlib annotations remain |
 | **W3** — Entry-guard auto-inference (`if x == null { return … }`) — explicit-check shape only | § W3 design | Open |
 | **W4** — `s[i] → byte_at` peephole when consumer is ASCII-only | § W4 design | Open |
 
