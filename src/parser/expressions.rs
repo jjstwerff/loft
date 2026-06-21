@@ -4,6 +4,18 @@
 use super::{Level, Parser, Parts, Type, Value, diagnostic_format, v_block, v_if, v_loop, v_set};
 use crate::data::Deps;
 
+/// @PLN86 step 0.1 — maximum expression-nesting depth allowed inside a sandboxed
+/// def's body.  Hostile deep nesting (`((((…))))`) drives the recursive-descent
+/// parser into a native stack overflow (rc=139); past this bound the parser
+/// rejects with a clean diagnostic at LOAD time instead.
+///
+/// Each nesting level costs roughly 10 KB of native stack (the
+/// expression→operators→part→single chain), so the bound must be REACHABLE
+/// without overflowing the smallest stack the parser runs on: 128 levels ≈ 1.3 MB,
+/// safe on a standard ≥2 MB thread with margin, and still far deeper than any
+/// hand-written script nests.  (Host-configurable later, per the plan.)
+pub(crate) const SANDBOX_MAX_PARSE_DEPTH: u32 = 128;
+
 /// P194 helper — extract the host reference and base position from
 /// the leftmost `OpGet*` leaf of a tuple-typed field read.  Returns
 /// `(host_ref, first_element_position)` where `first_element_position`
@@ -538,7 +550,44 @@ impl Parser {
 
     // <expression> ::= <for> | 'continue' | 'break' | 'return' | 'yield' | '{' <block> | <operators>
     #[allow(clippy::too_many_lines)]
+    /// @PLN86 step 0.1 — depth-guarded entry to expression parsing.  For trusted
+    /// code (`!in_sandbox`) this is a single bool check then a tail call — zero
+    /// cost.  Inside a sandboxed def it bounds the nesting depth so hostile
+    /// `((((…))))` is a clean LOAD-time parse error, never a native stack
+    /// overflow.  All recursion into nested sub-expressions routes back through
+    /// here (parens, arithmetic, indexing → `parse_single` → `expression`), so
+    /// one chokepoint bounds every nesting form.
     pub(crate) fn expression(&mut self, val: &mut Value) -> Type {
+        if !self.in_sandbox {
+            return self.expression_inner(val);
+        }
+        // Once the limit has tripped for this def, every further expression parse
+        // is a no-op: the def is already rejected, so we stop recursing entirely
+        // — this prevents a re-entry from re-walking the unconsumed deep tail and
+        // guarantees the parser unwinds in O(remaining tokens).  Reset per-def in
+        // `parse_function`.
+        if self.depth_overflowed {
+            return Type::Unknown(0);
+        }
+        self.parse_depth += 1;
+        if self.parse_depth > SANDBOX_MAX_PARSE_DEPTH {
+            // Stop recursing — emit once (latched) and unwind cleanly.
+            self.depth_overflowed = true;
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "expression nesting too deep in sandboxed code (limit {})",
+                SANDBOX_MAX_PARSE_DEPTH
+            );
+            self.parse_depth -= 1;
+            return Type::Unknown(0);
+        }
+        let result = self.expression_inner(val);
+        self.parse_depth -= 1;
+        result
+    }
+
+    fn expression_inner(&mut self, val: &mut Value) -> Type {
         // Start of the expression — an "Unknown variable" caret on a bare-Var
         // expression (e.g. a single call argument) must point here, not at the
         // cursor that has drifted to the closing `)` / `;` by detection time.

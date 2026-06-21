@@ -722,6 +722,13 @@ impl Parser {
         // itself.  Re-derived on every pass (def_sandbox is cleared at parse start).
         if let Some(profile) = self.sandbox.fn_designation(&fn_name).map(str::to_string) {
             self.def_sandbox.insert(self.context, profile);
+            // @PLN86 step 0.1 — enter restricted parsing for this def's body: the
+            // nesting guard activates and its depth state starts fresh.
+            self.in_sandbox = true;
+            self.parse_depth = 0;
+            self.depth_overflowed = false;
+        } else {
+            self.in_sandbox = false;
         }
         // Plan-17 phase 01 (B) — bound resolution + t-stub creation now
         // happens on BOTH passes.  Before, this block was gated on
@@ -1107,6 +1114,9 @@ impl Parser {
             .variables
             .append(&mut self.vars);
         self.context = u32::MAX;
+        // @PLN86 step 0.1 — leave restricted parsing; trusted top-level code that
+        // follows is never depth-guarded.
+        self.in_sandbox = false;
         true
     }
 

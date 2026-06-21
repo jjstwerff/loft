@@ -99,6 +99,19 @@ pub struct Parser {
     /// restricted.  Side-map (not on `Definition`) so it stays out of the IR
     /// serialization — the tag is policy, re-derivable from `sandbox`.
     pub(crate) def_sandbox: HashMap<u32, String>,
+    /// @PLN86 step 0.1 — true while parsing the BODY of a sandboxed def.  Gates
+    /// the parser nesting guard so it never touches trusted code (zero cost
+    /// there); set per-def in `parse_function`, cleared at its end.
+    pub(crate) in_sandbox: bool,
+    /// @PLN86 step 0.1 — current expression-nesting depth, counted ONLY while
+    /// `in_sandbox`.  Recursive-descent over hostile deep nesting (`((((…))))`)
+    /// overflows the native stack (rc=139); past `SANDBOX_MAX_PARSE_DEPTH` the
+    /// parser rejects with a clean diagnostic instead — a LOAD-time rejection,
+    /// never a runtime abort.  Reset to 0 at each sandboxed def's body.
+    pub(crate) parse_depth: u32,
+    /// @PLN86 step 0.1 — latched once the depth limit trips, so the diagnostic
+    /// is emitted once per def rather than at every frame as the parser unwinds.
+    pub(crate) depth_overflowed: bool,
     /// The current file number that is being parsed
     file: u32,
     pub diagnostics: Diagnostics,
@@ -474,6 +487,9 @@ impl Parser {
             in_format_expr: false,
             sandbox: crate::sandbox::SandboxConfig::default(),
             def_sandbox: HashMap::new(),
+            in_sandbox: false,
+            parse_depth: 0,
+            depth_overflowed: false,
             file: 1,
             diagnostics: Diagnostics::new(),
             default: false,
@@ -7742,5 +7758,84 @@ mod plan86_sandbox_designation_tests {
         assert_ne!(host, u32::MAX, "host fn registered");
         assert_eq!(p.def_sandbox_profile(scripted), Some("mod-script"));
         assert_eq!(p.def_sandbox_profile(host), None);
+    }
+}
+
+#[cfg(test)]
+mod plan86_nesting_guard_tests {
+    use super::*;
+    use crate::sandbox::parse_sandbox_config;
+
+    fn sandboxed_parser() -> Parser {
+        let mut p = Parser::new();
+        p.set_sandbox_config(parse_sandbox_config(
+            "[sandbox]\nmod-script = [\"fn:scripted\"]\n[profile.mod-script]\nallow_caps = [\"math\"]\n",
+        ));
+        p
+    }
+
+    fn parse_source(p: &mut Parser, src: &str) {
+        let path =
+            std::env::temp_dir().join(format!("plan86_nest_{}_{:p}.loft", std::process::id(), src));
+        std::fs::write(&path, src).unwrap();
+        p.parse(path.to_str().unwrap(), false);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// @PLN86 0.1 — hostile deep nesting inside a sandboxed def is a clean
+    /// LOAD-time parse error, NOT a native stack overflow (rc=139).  Runs on an
+    /// explicit 8 MB stack so the result is deterministic across CI harnesses
+    /// (a stack overflow aborts the whole process, it is not a catchable panic):
+    /// WITH the guard, 2000-deep parens bail at the limit (~1.3 MB); WITHOUT it
+    /// they overflow even 8 MB (2000 × ~10 KB ≈ 20 MB).  Process surviving + the
+    /// latched diagnostic together prove the guard fired.
+    #[test]
+    fn deep_nesting_in_sandboxed_def_is_a_clean_error_not_a_crash() {
+        let (has_error, has_msg) = std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let depth = 2000; // >> SANDBOX_MAX_PARSE_DEPTH and into the overflow zone
+                let src = format!(
+                    "fn scripted() {{ x = {}1{}; }}\n",
+                    "(".repeat(depth),
+                    ")".repeat(depth)
+                );
+                let mut p = sandboxed_parser();
+                parse_source(&mut p, &src);
+                let has_error = p.diagnostics.level() >= crate::diagnostics::Level::Error;
+                let has_msg = p
+                    .diagnostics
+                    .lines()
+                    .iter()
+                    .any(|l| l.contains("nesting too deep"));
+                (has_error, has_msg)
+            })
+            .unwrap()
+            .join()
+            .expect("the parse thread must not overflow/panic");
+        assert!(has_error, "expected a depth error");
+        assert!(has_msg, "expected the nesting-depth diagnostic");
+    }
+
+    /// The guard must not false-trip: ordinary nesting well below the limit —
+    /// and many sibling expressions — parse cleanly (proves the depth counter is
+    /// balanced: each sub-expression decrements, so siblings don't accumulate).
+    #[test]
+    fn ordinary_nesting_in_sandboxed_def_parses_clean() {
+        let mut body = String::from("fn scripted() {\n");
+        for i in 0..200 {
+            body.push_str(&format!("  a{i} = ((({i})));\n")); // shallow, 200 siblings
+        }
+        body.push_str("}\n");
+        let mut p = sandboxed_parser();
+        parse_source(&mut p, &body);
+        assert!(
+            !p.diagnostics
+                .lines()
+                .iter()
+                .any(|l| l.contains("nesting too deep")),
+            "guard false-tripped on ordinary code: {:?}",
+            p.diagnostics.lines()
+        );
     }
 }
