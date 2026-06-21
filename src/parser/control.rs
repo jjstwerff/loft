@@ -647,7 +647,35 @@ impl Parser {
                 let inner = std::mem::replace(&mut l[last], Value::Null);
                 l[last] = Value::Return(Box::new(inner));
             }
-            if !tuple_rewritten && !if_unified && !self.convert(&mut l[last], t, result) && !ignore
+            // @PLN85 cluster II — a VECTOR-returning fn whose tail is a `match`/`if`
+            // with per-arm LOCAL buffers (arms are `_vec_N`, not the `__ref_N`
+            // work-refs `if_unified` shares; the match types as `Never`, so the
+            // type-keyed vector arm below — keyed on `t` — is skipped). Without
+            // NRVO the result is delivered via a fresh local while the caller's
+            // eagerly-allocated `__retbuf` work-ref store is orphaned and LEAKS on
+            // the interpreter (Edge B / `init_ref`). Deliver per-arm into `__retbuf`.
+            let vec_match_materialized = !tuple_rewritten
+                && !if_unified
+                && !self.first_pass
+                && context == "return from block"
+                && matches!(result, Type::Vector(_, _))
+                && matches!(t, Type::Never | Type::Void)
+                && Self::tail_terminal_is_branch(&l[last]);
+            if vec_match_materialized
+                && let Type::Vector(elm, _) = result
+                && let Some((buf_attr, buf_var)) = self.return_buffer()
+            {
+                let elm_ty = (**elm).clone();
+                if self.materialize_vector_arms_into(&elm_ty, &mut l[last], buf_var) {
+                    self.data.definitions[self.context as usize].returned =
+                        Type::Vector(Box::new(elm_ty), Deps::attrs(vec![buf_attr]));
+                }
+            }
+            if !tuple_rewritten
+                && !if_unified
+                && !vec_match_materialized
+                && !self.convert(&mut l[last], t, result)
+                && !ignore
             {
                 // for function bodies with `not null` return, downgrade to a warning.
                 if context == "return from block"
@@ -3737,6 +3765,71 @@ impl Parser {
     /// wrote into `w`'s buffer — the @P377 no-op shape every consumer
     /// understands); a plain `{ call; w }` block would instead make the
     /// call a DISCARD whose result the witness machinery frees.
+    /// @PLN85 — true iff a return tail's terminal value is a `match`/`if`,
+    /// descending through `Insert`/`Block`/`Span`/`Return` wrappers.
+    fn tail_terminal_is_branch(v: &Value) -> bool {
+        match v.unspan() {
+            Value::If(_, _, _) => true,
+            Value::Block(bl) => bl.operators.last().is_some_and(Self::tail_terminal_is_branch),
+            Value::Insert(ops) => ops.last().is_some_and(Self::tail_terminal_is_branch),
+            Value::Return(inner) | Value::Drop(inner) => Self::tail_terminal_is_branch(inner),
+            _ => false,
+        }
+    }
+
+    /// @PLN85 cluster II — PER-ARM, native-safe vector NRVO delivery. Descends a
+    /// `match`/`if` to each arm's terminal local-vector `Var` and rewrites it to
+    /// `Insert([OpClearVector(w), OpAppendVector(w, <local>, rec_tp),
+    /// OpFreeRef(<local's __vdb dep>)…, w])`: the arm's element copy is delivered
+    /// into the caller's return buffer `w`, the now-dead local backing store is
+    /// freed, and the arm yields `w`. So the `If` yields `w` (a hidden param) from
+    /// every arm — a return-`if` the native generator already handles — and the
+    /// append source is a bare `Var` (not an `if`, which native can't scope in
+    /// expression position). This delivers into the eager `__retbuf` work-ref store
+    /// (fixing the interp orphan leak) while staying native-compilable. `null` arms
+    /// (an exhaustive match's unreachable fall-through) are left untouched.
+    fn materialize_vector_arms_into(&mut self, elm: &Type, op: &mut Value, w: u16) -> bool {
+        match op {
+            Value::Span(b) => self.materialize_vector_arms_into(elm, &mut b.1, w),
+            Value::Return(inner) | Value::Drop(inner) => {
+                self.materialize_vector_arms_into(elm, inner, w)
+            }
+            Value::If(_, t, f) => {
+                let a = self.materialize_vector_arms_into(elm, t, w);
+                let b2 = self.materialize_vector_arms_into(elm, f, w);
+                a || b2
+            }
+            Value::Block(bl) => bl
+                .operators
+                .last_mut()
+                .is_some_and(|last| self.materialize_vector_arms_into(elm, last, w)),
+            Value::Insert(ops) => ops
+                .last_mut()
+                .is_some_and(|last| self.materialize_vector_arms_into(elm, last, w)),
+            Value::Var(v) if *v != w && matches!(self.vars.tp(*v), Type::Vector(_, _)) => {
+                let local = *v;
+                let deps = self.vars.tp(local).depend().to_vec();
+                let rec_tp = self.append_elem_tp(elm);
+                let clear = self.cl("OpClearVector", &[Value::Var(w)]);
+                let append = self.cl(
+                    "OpAppendVector",
+                    &[Value::Var(w), Value::Var(local), Value::Int(rec_tp)],
+                );
+                let mut seq = vec![clear, append];
+                // Free the now-dead local backing store(s) the arm built (the
+                // append copied their elements into `w`); without this the
+                // interpreter orphans them. Idempotent with any scope-exit free.
+                for d in deps {
+                    seq.push(self.cl("OpFreeRef", &[Value::Var(d)]));
+                }
+                seq.push(Value::Var(w));
+                *op = Value::Insert(seq);
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn chain_site_set_shape(ret: &Type, tail: &mut Value, w: u16) {
         match tail {
             Value::Span(b) => Self::chain_site_set_shape(ret, &mut b.1, w),
