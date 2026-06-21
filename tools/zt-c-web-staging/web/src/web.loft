@@ -1,0 +1,345 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// --- HTTP Client + WebSocket Client ---
+// Blocking HTTP client for consuming web services.
+// Polling WebSocket client for browser-and-native communication.
+
+// The result of an HTTP request.
+pub struct HttpResponse {
+  status: integer,
+  body: text
+}
+
+// Returns true when the status code is in the 200-299 range.
+pub fn ok(self: HttpResponse) -> boolean {
+  self.status >= 200 && self.status < 300
+}
+
+// --- Internal native functions returning primitives ---
+
+fn http_do(method: text, url: text, body: text, headers: text) -> integer;
+#native
+
+fn http_body() -> text;
+#native
+
+// Internal: serialize headers vector to newline-separated "Key: Value" text.
+fn join_headers(headers: vector<text>) -> text {
+  result = "";
+  for h in headers {
+    if result.len() > 0 { result += "\n"; }
+    result += h;
+  }
+  result
+}
+
+// --- Simple HTTP functions (no custom headers) ---
+
+// Send a GET request.
+pub fn http_get(url: text) -> HttpResponse {
+  status = http_do("GET", url, "", "");
+  HttpResponse { status: status, body: http_body() }
+}
+
+// Send a POST request with a body.
+pub fn http_post(url: text, body: text) -> HttpResponse {
+  status = http_do("POST", url, body, "");
+  HttpResponse { status: status, body: http_body() }
+}
+
+// Send a PUT request with a body.
+pub fn http_put(url: text, body: text) -> HttpResponse {
+  status = http_do("PUT", url, body, "");
+  HttpResponse { status: status, body: http_body() }
+}
+
+// Send a DELETE request.
+pub fn http_delete(url: text) -> HttpResponse {
+  status = http_do("DELETE", url, "", "");
+  HttpResponse { status: status, body: http_body() }
+}
+
+// --- HTTP functions with custom headers ---
+// Headers are passed as a vector of "Key: Value" strings.
+
+// GET with custom headers.
+pub fn http_get_h(url: text, headers: vector<text>) -> HttpResponse {
+  status = http_do("GET", url, "", join_headers(headers));
+  HttpResponse { status: status, body: http_body() }
+}
+
+// POST with custom headers.
+pub fn http_post_h(url: text, body: text, headers: vector<text>) -> HttpResponse {
+  status = http_do("POST", url, body, join_headers(headers));
+  HttpResponse { status: status, body: http_body() }
+}
+
+// PUT with custom headers.
+pub fn http_put_h(url: text, body: text, headers: vector<text>) -> HttpResponse {
+  status = http_do("PUT", url, body, join_headers(headers));
+  HttpResponse { status: status, body: http_body() }
+}
+
+// DELETE with custom headers.
+pub fn http_delete_h(url: text, headers: vector<text>) -> HttpResponse {
+  status = http_do("DELETE", url, "", join_headers(headers));
+  HttpResponse { status: status, body: http_body() }
+}
+
+// --- WebSocket client ---
+//
+// Handler-style API: the programmer opens a session with `ws_handler`,
+// then drives event delivery by calling `pump(handler, on_message)`
+// from a main loop.  The library manages the connection lifecycle:
+// connect at registration time, auto-reconnect on transient failure
+// (exponential backoff capped at 10 seconds), close on `close()`.
+//
+// The `pump` closure is passed in per call rather than stored in the
+// `WsHandler` struct — that's the workaround for the layout limit on
+// closure-in-struct-field captures (PROBLEMS.md § 213).  Once full
+// closure support lands, `on_message` will move into the struct so
+// it can be registered once at `ws_handler` time.  The architecture
+// validated here is the one the eventual API targets; only the
+// "where does the closure live" detail changes.
+//
+// State pattern: the closure typically captures a `Reference<T>` to
+// state held in a Store (the "store with a fixed pointer" workaround
+// — the pointer is snapshotted at capture time, and the record it
+// points at remains mutable through the pointer).  This makes the
+// per-message handler look identical to the future direct-capture
+// style.
+
+pub struct WsHandler {
+  id: integer            // Rust-side connection slot
+}
+
+// --- Internal natives (lifecycle primitives) ---
+
+fn ws_client_connect_native(url: text) -> integer;
+#native "n_ws_connect"
+
+fn ws_client_send_native(handle: integer, msg: text) -> boolean;
+#native "n_ws_client_send"
+
+// Send the byte buffer as a binary WebSocket frame (opcode 2)
+// instead of a text frame (opcode 1).  Same payload encoding —
+// loft `text` is a byte buffer; this just changes the frame type
+// the peer sees.  Used by TTT v5 + plan-36 for binary world data.
+fn ws_client_send_binary_native(handle: integer, msg: text) -> boolean;
+#native "n_ws_client_send_binary"
+
+// Returns true when a message has been delivered to the receive
+// buffer; false when the queue is empty or the connection is currently
+// down.  After true, call ws_client_message_native() to read the payload.
+fn ws_client_recv_native(handle: integer) -> boolean;
+#native "n_ws_client_recv"
+
+fn ws_client_message_native() -> text;
+#native "n_ws_client_message"
+
+// Opcode of the last frame surfaced by `ws_client_recv_native`.
+// 1 = text, 2 = binary, 8 = close, 9 = ping, 10 = pong.
+// Loft programs that handle binary frames check this after a
+// successful recv to decide whether the message bytes are text
+// (utf-8) or a binary blob.
+fn ws_client_opcode_native() -> integer;
+#native "n_ws_client_opcode"
+
+fn ws_client_close_native(handle: integer);
+#native "n_ws_client_close"
+
+// --- Public API ---
+
+// Open a WebSocket session.  Returns null only if the URL is
+// malformed; transient connection failures (server not yet up,
+// network blip) are absorbed by the auto-reconnect loop in the Rust
+// layer, so this call always returns a usable handle for any
+// well-formed `ws://...` URL.
+pub fn ws_handler(url: text) -> WsHandler {
+  id = ws_client_connect_native(url);
+  if id < 0 { return null; }
+  WsHandler { id: id }
+}
+
+// Send a text message to the server.  Returns true on success; false
+// means the connection is currently in backoff / reconnecting and the
+// caller may retry after the next `pump()`.
+pub fn send(self: WsHandler, msg: text) -> boolean {
+  ws_client_send_native(self.id, msg)
+}
+
+// Send `msg` as a binary WebSocket frame (opcode 2).  Loft `text`
+// is a byte buffer — pack u8/u16/i32/etc. into it via `to_bytes`
+// style code, then ship it.  Returns true on success; false means
+// the connection is currently in backoff / reconnecting.
+pub fn send_binary(self: WsHandler, msg: text) -> boolean {
+  ws_client_send_binary_native(self.id, msg)
+}
+
+// Opcode of the last frame surfaced by `try_recv` / `pump` on this
+// handler.  Use after a successful read to decide whether to
+// interpret the payload as utf-8 text or as a binary blob.
+pub fn last_opcode(self: WsHandler) -> integer {
+  _ = self;
+  ws_client_opcode_native()
+}
+
+// Drain any pending received messages, firing `on_message` for each.
+// Returns the count of messages delivered this call.  Call this from
+// a main loop (and yield to the host between iterations on the browser
+// target) to drive event delivery without async.
+pub fn pump(self: WsHandler, on_message: fn(text)) -> integer {
+  count = 0;
+  while ws_client_recv_native(self.id) {
+    on_message(ws_client_message_native());
+    count += 1;
+  }
+  count
+}
+
+// Non-blocking single-message receive.  Returns the next pending
+// message text if one is available, null otherwise.  Equivalent to a
+// single iteration of pump without the callback — useful when the
+// receiver wants to drive its own loop and accumulate messages
+// locally without capturing state inside a closure.
+pub fn try_recv(self: WsHandler) -> text {
+  if !ws_client_recv_native(self.id) { return null; }
+  ws_client_message_native()
+}
+
+// Permanently close the session (no further reconnect attempts).
+pub fn close(self: WsHandler) {
+  ws_client_close_native(self.id);
+}
+
+// Block the calling thread for `ms` milliseconds.  Convenience for
+// tests and pacing loops; non-positive values are a no-op.  Not
+// available on the WASM target — the host event loop is the
+// equivalent.
+pub fn sleep_ms(ms: integer);
+#native
+
+// Yield one frame back to the host event loop, then resume.  This is the
+// async-to-sync bridge for the WebSocket poll loop: on native it is a no-op,
+// but on the browser target it lowers, through the asyncify frame-yield, to a
+// suspend point that returns control to the JS event loop, lets a pending
+// WebSocket message deliver, and resumes where it left off.  Call it once per
+// poll iteration, after draining try_recv / pump.  Without it a synchronous
+// poll loop under the browser target never returns to JS, so no WebSocket
+// event ever fires and the page deadlocks.  See @PLN84 ZT-C.
+//
+// Named `frame_yield` (not `yield_frame`) because `yield` is a reserved
+// keyword.  The underlying native symbol is `n_yield_frame`.
+pub fn frame_yield();
+#native "n_yield_frame"
+
+// --- Binary buffer construction (TTT v5 + plan-36) ---
+//
+// Loft `text` is a UTF-8 byte buffer; a NUL byte (codepoint 0) is the
+// `character` null sentinel, so a `text` built via `"{c}{c}…"`
+// interpolation silently drops zero bytes.  Binary protocols that
+// include zero bytes (e.g. the v5 5-byte blob header `[type:u8]
+// [session:u32-LE]` for any small session id) cannot be assembled
+// that way.
+//
+// `pack_*` are a thread-local builder pattern: `pack_reset()` empties
+// the buffer, `pack_u8` / `pack_u16_le` / `pack_u32_le` append fields
+// by type, and `pack_take()` returns a `text` whose bytes carry the
+// binary payload verbatim — NUL bytes preserved.  The buffer survives
+// across calls within a single thread; reset before each blob.  The
+// returned `text` lives until the next `pack_take()`, so `send_binary`
+// it (or copy it) before reusing the builder.
+//
+// On the receive side, `byte_at(t, i)` returns the single byte at
+// offset `i` of `t` (regardless of UTF-8 interpretation).  Use it to
+// decode binary frames returned by `try_recv` / `pump` field-by-field.
+
+// Empty the per-thread pack buffer.  Call before each blob.
+pub fn pack_reset();
+#native
+
+// Append a single byte to the pack buffer.  `b` is masked to 8 bits.
+pub fn pack_u8(b: integer);
+#native
+
+// Append a 2-byte little-endian unsigned value.
+pub fn pack_u16_le(v: integer);
+#native
+
+// Append a 4-byte little-endian unsigned value.  Loft `integer` is
+// i32 — bit-cast to u32 to preserve the LE byte pattern across the
+// sign boundary.
+pub fn pack_u32_le(v: integer);
+#native
+
+// Take the contents of the pack buffer and return them as a `text`
+// whose UTF-8 bytes are exactly the buffer bytes.  Resets the buffer.
+pub fn pack_take() -> text;
+#native
+
+// Read the byte at `idx` of the text payload.  Out-of-range (negative
+// or past the end) returns -1.  Use to decode binary frames received
+// via `try_recv` / `pump`.  Argument order is (idx, t) — the C-ABI
+// auto-marshal in src/extensions.rs supports (I32, Text) -> I32 but
+// not (Text, I32) -> I32.
+pub fn byte_at(idx: integer, t: text) -> integer;
+#native
+
+// --- Multiplexed client receiver (WsGroup) ---
+//
+// Watch multiple WsHandler connections and receive from whichever has
+// data ready — one scan across all handles instead of polling each
+// individually.  The key difference: handles with no data are skipped
+// after one short timeout, so N idle sockets cost one timeout total
+// instead of N timeouts.
+//
+//   group = web::ws_group()
+//   group.add(h1)
+//   group.add(h2)
+//   while true {
+//     ev = group.poll()
+//     if ev.handle < 0 { break }
+//     // ev.message has the data
+//   }
+
+pub struct WsGroupEvent {
+  handle: integer not null,
+  message: text
+}
+
+pub struct WsGroup {
+  _dummy: integer not null   // no state on loft side; Rust owns the list
+}
+
+fn ws_group_clear_native();
+#native "n_ws_group_clear"
+
+fn ws_group_add_native(handle: integer);
+#native "n_ws_group_add"
+
+fn ws_group_poll_native() -> integer;
+#native "n_ws_group_poll"
+
+// Create a new (empty) group.
+pub fn ws_group() -> WsGroup {
+  ws_group_clear_native();
+  WsGroup { _dummy: 0 }
+}
+
+// Add a handler to the group.
+pub fn add(self: WsGroup, h: WsHandler) {
+  _ = self;
+  ws_group_add_native(h.id);
+}
+
+// Poll all handles round-robin.  Returns a WsGroupEvent with
+// handle >= 0 and the message if one is ready; handle == -1
+// means nothing is available right now.
+pub fn poll(self: WsGroup) -> WsGroupEvent {
+  _ = self;
+  h = ws_group_poll_native();
+  if h < 0 {
+    return WsGroupEvent { handle: -1, message: "" };
+  }
+  WsGroupEvent { handle: h, message: ws_client_message_native() }
+}

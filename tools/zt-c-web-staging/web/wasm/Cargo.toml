@@ -1,0 +1,21 @@
+[package]
+name = "web-wasm"
+version = "0.1.0"
+edition = "2024"
+license = "LGPL-3.0-or-later"
+description = "Browser-WASM bridge for the web loft library — pub fn entry points called from generated --html standalone Rust binaries (WebSocket via loft_web host imports)."
+
+# rlib: the --html driver links this in via `--extern web_wasm=...` so the
+# generated code can call its `pub fn`s directly.  No cdylib (no dlopen in a
+# browser).
+[lib]
+crate-type = ["rlib"]
+
+# The loft crate provides `Stores` — the host-FFI surface this bridge's
+# signatures name.  Path-relative so the crate builds in-repo for `cargo
+# check`; the actual `--html` link is driven by rustc directly with `--extern
+# loft=…` (see loft/src/main.rs), not by this manifest.  The WS bridge has NO
+# Cargo deps beyond loft, so `loft --html` skips the build-extension entirely
+# (the `has-nonloft-deps` gate) — this manifest is never cargo-built by --html.
+[dependencies]
+loft = { path = "../../../loft", default-features = false, features = ["random"] }

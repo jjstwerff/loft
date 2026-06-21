@@ -1,0 +1,62 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN84 ZT-C — C2 text echo gate.  ONE source runs unchanged as the native
+// sync-agent (--interpret / --native) and the browser client (--html driven by
+// tools/wasm_ws_repro.mjs).  Connect → send a text message → drive the
+// yield_frame poll loop → receive the echo back → assert it matches.
+//
+// The poll loop is the load-bearing shape: drain try_recv, then yield_frame.
+// On native yield_frame is a no-op (the read itself blocks ~7ms); on the
+// browser it returns to the JS event loop so WebSocket.onmessage can deliver.
+//
+// Reads the ws:// URL from arg 1 (so the harness can pass the echo server's
+// port); defaults to ws://127.0.0.1:9099/ .
+
+use web;
+
+fn ws_url() -> text {
+  a = arguments();
+  if a.len() >= 1 { return a[0]; }
+  "ws://127.0.0.1:9099/"
+}
+
+fn main() {
+  url = ws_url();
+  h = web::ws_handler(url);
+  if h == null {
+    println("FAIL: ws_handler returned null (malformed URL {url})");
+    return;
+  }
+
+  sent = "hello-zt-c";
+  got = "";
+  ok = false;
+
+  // Bounded poll loop: try to send (retries while connecting), then drain
+  // any echo.  yield_frame() between iterations lets the browser event loop
+  // deliver the open + the echoed frame.
+  i = 0;
+  did_send = false;
+  while i < 2000 {
+    if !did_send {
+      if web::send(h, sent) { did_send = true; }
+    }
+    msg = web::try_recv(h);
+    if msg != null {
+      got = msg;
+      ok = true;
+      break;
+    }
+    web::frame_yield();
+    i += 1;
+  }
+
+  web::close(h);
+
+  if ok && got == sent {
+    println("C2 PASS: echoed {got}");
+  } else {
+    println("C2 FAIL: did_send={did_send} got=\"{got}\" after {i} iters");
+  }
+}

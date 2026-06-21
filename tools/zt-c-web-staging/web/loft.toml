@@ -1,0 +1,75 @@
+[package]
+name = "web"
+version = "0.1.1"
+loft = ">=0.8"
+
+[library]
+entry = "src/web.loft"
+native = "loft_web"
+
+[native]
+crate = "loft-web"
+
+# @PLAN12 phase 2 (2026-05-24) — declarative source of truth for the
+# library's native `n_*` symbols.  Walked by `tests/extraction_hygiene.rs`
+# to auto-populate FORBIDDEN_LIBRARY_SYMBOLS.  Format:
+#   loft_fn_name = "n_<symbol>"
+[native.functions]
+http_do = "n_http_do"
+http_body = "n_http_body"
+ws_client_connect_native = "n_ws_connect"
+ws_client_send_native = "n_ws_client_send"
+ws_client_send_binary_native = "n_ws_client_send_binary"
+ws_client_recv_native = "n_ws_client_recv"
+ws_client_message_native = "n_ws_client_message"
+ws_client_opcode_native = "n_ws_client_opcode"
+ws_client_close_native = "n_ws_client_close"
+frame_yield = "n_yield_frame"
+sleep_ms = "n_sleep_ms"
+pack_reset = "n_pack_reset"
+pack_u8 = "n_pack_u8"
+pack_u16_le = "n_pack_u16_le"
+pack_u32_le = "n_pack_u32_le"
+pack_take = "n_pack_take"
+byte_at = "n_byte_at"
+ws_group_clear_native = "n_ws_group_clear"
+ws_group_add_native = "n_ws_group_add"
+ws_group_poll_native = "n_ws_group_poll"
+
+# @PLN84 ZT-C — browser-WASM WebSocket bridge.  `loft --html` concatenates
+# `host_js` into the page preamble and links `crate` via rustc, routing each
+# `#native "n_<x>"` below to the matching `pub fn` in `wasm/src/lib.rs`.  The
+# WS natives must be ROUTED (not bare host imports) because some return loft
+# `text` (`n_ws_client_message`, `n_pack_take`), which the compiler's bare
+# host-import path cannot marshal — see wasm/src/lib.rs.  The bridge crate
+# declares its OWN low-level `loft_web` host imports (ws_connect/poll/…/
+# ws_yield); host.js provides them.  No Cargo deps beyond loft, so `--html`
+# skips the build-extension.
+[wasm.bridge]
+crate = "web-wasm"
+host_js = "wasm/host.js"
+
+[wasm.bridge.routes]
+# WebSocket lifecycle + latched-frame read — host imports under `loft_web`.
+n_ws_connect = "ws_client_connect"
+n_ws_client_send = "ws_client_send"
+n_ws_client_send_binary = "ws_client_send_binary"
+n_ws_client_recv = "ws_client_recv"
+n_ws_client_message = "ws_client_message"
+n_ws_client_opcode = "ws_client_opcode"
+n_ws_client_close = "ws_client_close"
+# Frame yield — the dedicated asyncify suspend point (loft_web.ws_yield).
+n_yield_frame = "yield_frame"
+# sleep_ms is a native pacing no-op on the browser (the event loop paces).
+n_sleep_ms = "sleep_ms"
+# Pure-compute pack builder + byte_at — no host import, byte-identical native.
+n_pack_reset = "pack_reset"
+n_pack_u8 = "pack_u8"
+n_pack_u16_le = "pack_u16_le"
+n_pack_u32_le = "pack_u32_le"
+n_pack_take = "pack_take"
+n_byte_at = "byte_at"
+# WsGroup — client-side stub on the browser (R2).
+n_ws_group_clear = "ws_group_clear"
+n_ws_group_add = "ws_group_add"
+n_ws_group_poll = "ws_group_poll"

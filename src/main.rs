@@ -5504,7 +5504,16 @@ fn main() {
                 "--strip-debug",
                 "--strip-producers",
                 "--asyncify",
-                "--pass-arg=asyncify-imports@loft_gl.loft_gl_swap_buffers",
+                // Asyncify suspend imports (comma-separated module.function):
+                //   loft_gl.loft_gl_swap_buffers — the GL frame-yield (games).
+                //   loft_web.ws_yield — the WebSocket frame-yield (@PLN84 ZT-C):
+                //     a synchronous WS poll loop calls `web::yield_frame()` once
+                //     per iteration; under --html that lowers to this import,
+                //     which unwinds back to the JS event loop so
+                //     `WebSocket.onmessage` can deliver, then resumes.  Naming
+                //     it here even when no program yields on it is harmless (the
+                //     import just isn't present in the wasm).
+                "--pass-arg=asyncify-imports@loft_gl.loft_gl_swap_buffers,loft_web.ws_yield",
             ])
             .arg("-o")
             .arg(&opt_path)
