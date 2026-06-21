@@ -55,18 +55,17 @@ unrestricted, in one process, sharing the store at full `DbRef` speed.
   fn-refs resolve to their target (1.3), so they land in the checked set. `CapViolation`
   (UngrantedCap{group}/UntaggedSymbol/ExternalFfi{crate}) names each offender for 2.5.
   Verified: granted admits, ungranted/untagged/L4-indirect rejected.
-- **2.2 ◐ (lint shipped; tagging gated)** — `sandbox::untagged_public_symbols` +
-  `Parser::untagged_public_symbols` list every public, non-synthetic fn lacking a `#cap`
-  group (L3-cap: empty = full coverage). The **tagging itself** is gated on a
-  prerequisite: `#cap` **IR persistence**. The stdlib startup cache
-  (`LOFT_STDLIB_CACHE`) round-trips defs through the store codec and the equivalence
-  tests compare the stdlib, so tagging without persisting `cap` breaks them / hides a
-  silent drop. Persisting needs a record-schema change — the IR packs fields by region
-  (`DEF_OP_CODE=44` precedes `DEF_NATIVE=104`), so a new string field shifts same-region
-  offsets and requires **regenerating the baked layout** (`ir_schema_gen.rs`) + updating
-  the `DEF_` constants. That schema-regen is the next focused increment.
-- **Next:** **2.2-persist** the `cap` IR round-trip (baked-layout regen) → then tag the
-  166-fn surface against the lint → then 2.5 diagnostics, the 1.4 backend half, P3.
+- **2.2 ◐ (lint ✅ + persistence ✅; tagging open)** — `untagged_public_symbols` lists
+  every public, non-synthetic fn lacking a `#cap` group (L3-cap: empty = full coverage).
+  **`cap` IR persistence shipped (2.2-persist):** `Definition.cap` round-trips through the
+  store codec, so a `#cap`-tagged stdlib loaded from the `LOFT_STDLIB_CACHE` bundle still
+  gates correctly. The DB packs fields by region, so `cap` landed at offset 148 (read off
+  the baked-layout probe), pushing the trailing bools (rnn 148→152, pub_visible 149→153,
+  stride 150→154); `baked_layout_mirrors_loft_schema` is the offset guard, and
+  `cap_annotation_survives_store_round_trip` proves a non-empty group survives.
+- **Next:** **tag the 166-fn stdlib surface** against the lint (`fs.*`/`net`/`env`/
+  `collections.{read,write}`/`math`/`text`) so real scripts admit → then 2.5 diagnostics,
+  the 1.4 backend half, P3 totality.
 
 **Scope.** v1 is intentionally **fairly restricted** — a small total dialect (bounded
 loops, no/structural recursion, total ops) plus a **curated host API**; the
