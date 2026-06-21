@@ -98,7 +98,7 @@ cannot diverge.
 | Hole | Symptom | The fact to complete |
 |---|---|---|
 | `returned_var` collapses `match`/`if` | returned arm buffers freed (cluster II / #405) | a return-**source set** (union of arms), not one var |
-| return dep empty for `return v` | `a = id(x)` aliases `x` (borrow-return rung) | populate `{Attr(param)}` when a return borrows a param |
+| ~~return dep empty for `return v`~~ ✅ CLOSED | `a = id(x)` aliased `x` | RESOLVED @PLN85: when the returned value is backed by a PARAMETER, the callee copies it into the return buffer (clear+append+return buffer, gated on `is_argument`) so the caller gets an owned copy — `control.rs` return promotion. Guard: `tests/scripts/85-store-lifetime-param-return-copy.loft`. (A copy-on-return, vs the originally-envisioned borrow-tag-then-caller-copies; same value-semantics outcome.) |
 | `has_ref_params` at the call site | adopt-vs-copy re-derived; vector returns alias | caller reads the return dep: empty ⇒ adopt, `{Attr}` ⇒ copy |
 | 3 return paths (`BlockTail`/`MidReturn`/native-forwarder) | each re-derives; fixes miss paths | funnel to ONE return-ownership computation |
 | `"??"` deps | unresolved ownership | compute the dep completely, no placeholder |
