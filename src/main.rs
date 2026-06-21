@@ -5346,10 +5346,12 @@ fn main() {
                         .unwrap_or_default();
                     for ident in &nonloft_idents {
                         let prefix = format!("lib{ident}-");
-                        if let Some(f) = files
-                            .iter()
-                            .find(|f| f.starts_with(&prefix) && f.ends_with(".rlib"))
-                        {
+                        if let Some(f) = files.iter().find(|f| {
+                            f.starts_with(&prefix)
+                                && std::path::Path::new(f.as_str())
+                                    .extension()
+                                    .is_some_and(|ext| ext.eq_ignore_ascii_case("rlib"))
+                        }) {
                             bridge_externs.push((ident.clone(), deps.join(f)));
                         }
                     }

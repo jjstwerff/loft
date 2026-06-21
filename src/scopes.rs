@@ -1362,7 +1362,7 @@ impl Scopes {
                 if !matches!(function.tp(v), Type::Vector(_, _)) {
                     continue;
                 }
-                let deps = function.tp(v).depend().to_vec();
+                let deps = function.tp(v).depend();
                 if deps.is_empty() {
                     // Directly-owned terminal: the terminal IS the freed store.
                     function.set_skip_free(v);

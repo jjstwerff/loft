@@ -1580,7 +1580,7 @@ use a separate collection or add after the loop"
         let struct_vec_field = if let Value::Call(d, args) = code.unspan() {
             *d == self.data.def_nr("OpGetField")
                 && matches!(
-                    args.first().map(|a| a.unspan()),
+                    args.first().map(Value::unspan),
                     Some(Value::Var(bv)) if matches!(self.vars.tp(*bv), Type::Reference(_, _))
                 )
         } else {

@@ -3904,7 +3904,7 @@ impl Parser {
                 .is_some_and(|last| self.materialize_vector_arms_into(elm, last, w)),
             Value::Var(v) if *v != w && matches!(self.vars.tp(*v), Type::Vector(_, _)) => {
                 let local = *v;
-                let deps = self.vars.tp(local).depend().to_vec();
+                let deps = self.vars.tp(local).depend();
                 let rec_tp = self.append_elem_tp(elm);
                 let clear = self.cl("OpClearVector", &[Value::Var(w)]);
                 let append = self.cl(
@@ -3948,7 +3948,7 @@ impl Parser {
                 Value::Call(d, args) => {
                     return *d == self.data.def_nr("OpGetField")
                         && matches!(
-                            args.first().map(|a| a.unspan()),
+                            args.first().map(Value::unspan),
                             Some(Value::Var(bv)) if matches!(self.vars.tp(*bv), Type::Reference(_, _))
                         );
                 }
