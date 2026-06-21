@@ -89,10 +89,13 @@ unrestricted, in one process, sharing the store at full `DbRef` speed.
 - **1.4 backend half ✅** — sandboxed code is force-interpreted (`--native` refused), the
   `[sandbox]` policy loads from `loft.toml`, and `--no-default-features` drops the cdylib
   path. This was the prerequisite 3.3's total-op guarantee depends on (native traps).
+- **CLI admission-reject ✅** — after the backend force, the CLI runs the full admission
+  walk and rejects a violating sandboxed program at LOAD with the actionable errors
+  (`tests/sandbox_cli.rs` drives it end-to-end: violation rejected, clean admitted,
+  `--native` refused). **The sandbox is now enforced end-to-end through the binary.**
 - **Next:** **3.4** worst-case complexity report (L5 — derive step/depth cost so the host
-  bounds the inputs) — the last open v1 step; then the admission-reject CLI wiring (run
-  `sandbox_admission_errors` and exit on violations). The decreasing-variant /
-  structural-recursion relaxations are post-v1.
+  bounds the inputs) — the last open v1 step. The decreasing-variant / structural-recursion
+  relaxations are post-v1.
 
 **Scope.** v1 is intentionally **fairly restricted** — a small total dialect (bounded
 loops, no/structural recursion, total ops) plus a **curated host API**; the
