@@ -9,6 +9,13 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > the single tracking view across all stability docs.  This file stays the
 > canonical home for each hotspot's invariant, evidence, and mitigation design.
 
+> **Cross-cut view:** [STABILITY_REDFLAGS.md](STABILITY_REDFLAGS.md) groups the
+> same designs (and two NEW ones — the container-traversal `for_each_owned_child`
+> keystone and the `gen_if`/`size_code` wrong-signal siblings) by the **missing
+> fact** each re-derives, with leverage-first landing order.  Read it for "which
+> one fact, computed once, collapses N forests"; read this file for each
+> hotspot's standalone invariant + mitigation.
+
 Companion to [STABILITY_METHOD.md](STABILITY_METHOD.md) (the three-pass
 method) and [STABILITY_PASS2.md](STABILITY_PASS2.md) (the executed
 relocation pass).  Where those documents look at *routines*, this one looks

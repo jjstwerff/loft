@@ -382,6 +382,7 @@ The rule: **always commit before any operation that changes the working tree.**
 | [STABILITY_METHOD.md](doc/claude/STABILITY_METHOD.md) | The three-pass stability method: sweep dual invariants (document, don't fix) → move algorithms to their data structures → de-duplicate |
 | [STABILITY_SWEEP.md](doc/claude/STABILITY_SWEEP.md) | The live pass-1 catalog: invariant families F1–F10, per-module work list, findings log |
 | [STABILITY_HOTSPOTS.md](doc/claude/STABILITY_HOTSPOTS.md) | Forward risk register H1–H8: the designs that will manufacture future bugs (analysis-dependent arity, dep-list overload, ownership-by-shape-analysis, …) — each with sized mitigation work, landing order, validation gates |
+| [STABILITY_REDFLAGS.md](doc/claude/STABILITY_REDFLAGS.md) | Cross-cut red-flag map (4-audit sweep, 2026-06): non-local facts re-derived per-site that a stable future must compute once — 5 clusters (return/bind ownership · stack-signal · container-traversal keystone · null-sentinel codec · manifestation guards) by missing fact + leverage-first landing order. Forward-stability record, not a fix-now list |
 | [DEPS_INVENTORY.md](doc/claude/DEPS_INVENTORY.md) | H2 deliverable: the dep-list `Vec<u16>` semantic model (frame vs def address space, five marker overloads), every site classified, corpus-probe findings, the typed-`Deps` migration design |
 | [PLANNING.md](doc/claude/PLANNING.md) | Priority-ordered enhancement backlog |
 | [ROADMAP.md](doc/claude/ROADMAP.md) | Items in implementation order by milestone (0.9.0 / 1.0.0 / 1.1+) |

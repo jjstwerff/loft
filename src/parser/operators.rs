@@ -1319,7 +1319,15 @@ impl Parser {
         // behaviour (bring the default to the value's type; result = value's type).
         let widen_ints = matches!(lhs_type, Type::Integer(_))
             && matches!(rhs_type, Type::Integer(_))
-            && *lhs_type != rhs_type;
+            && *lhs_type != rhs_type
+            // A CONSTANT integer default that provably fits the value's narrow type
+            // coerces to that type instead of widening: a literal emits at the
+            // target width, so the `if` branches still share a native type and the
+            // E0308 @P316 guards against (a wider-width *variable* default) cannot
+            // arise.  Keeping the result narrow lets `vec_of_u8[i] ?? 0` stay `u8`
+            // — no `as u8` cast and no spurious narrowing error at a later
+            // `out += [x]`.  A non-const or non-fitting default still widens.
+            && !self.int_value_fits(&rhs, lhs_type);
         // NB (@PLN25 E2 gap 2): do NOT coalesce a `__nullable<S> ?? dense_S` to dense
         // here.  It is tempting (it would make `chosen = v[i] ?? mk()` infer dense
         // `S` and dodge the return-boundary unwrap), but it BREAKS the common

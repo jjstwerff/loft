@@ -200,6 +200,27 @@ fn issue_403_narrow_vector_for_loop_terminates() {
     );
 }
 
+// `vec_of_u8[i] ?? <fitting-int-literal>` keeps the value's NARROW type instead
+// of widening the `??` result to i64, so the defaulted element appends back into
+// a `vector<u8>` with no `as u8` cast and no spurious "cannot implicitly narrow"
+// error.  A CONST default that fits the narrow type emits at that width, so both
+// `if` branches share a native type — the @P316 widen is only needed for a
+// wider-width VARIABLE default (still preserved).  Pre-fix this failed to compile
+// ("cannot implicitly narrow integer to u8").
+#[test]
+fn null_coalesce_fitting_int_literal_keeps_narrow_type() {
+    code!(
+        "fn test() {
+    bytes: vector<u8> = [10, 20, 30];
+    tb: vector<u8> = [];
+    for k in 0..3 { kb = bytes[k] ?? 0; tb += [kb]; }
+    assert(len(tb) == 3, \"len 3\");
+    assert((tb[0] ?? 99) == 10, \"first 10\");
+}"
+    )
+    .result(Value::Null);
+}
+
 // assert(false, ...) in production mode: had_fatal becomes true.
 #[test]
 fn production_mode_assert_false_sets_had_fatal() {

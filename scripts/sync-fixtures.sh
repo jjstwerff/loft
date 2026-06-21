@@ -98,8 +98,18 @@ EOF
 #   the test file's own dir (source_dir), so the prefix is dropped to the bare
 #   name.  Re-syncing would clobber the fix.  Drop these lines when
 #   loft-libs-graphics ships an imaging tag carrying the corrected paths.
+#
+# - imaging/src/imaging.loft — `not null` (dense-layout) annotation required by
+#   the nullable-by-default gate flip (@PLN25): the upstream tag declares the
+#   pixel buffer as `data: vector<Pixel>`, but with nullable-by-default ON that
+#   would wrap each element and change the stride, crashing the `#native`
+#   `n_load_png`/`n_save_png` FFI byte-copy (which assumes 3 contiguous bytes
+#   per Pixel).  The fixture pins `vector<Pixel not null>` to keep the dense
+#   element layout the extension assumes.  Drop this line when loft-libs-graphics
+#   ships an imaging tag carrying the `not null` annotation.
 LOCAL_PATCHES=$(cat <<'EOF'
 imaging/native/Cargo.toml
+imaging/src/imaging.loft
 imaging/tests/14-image.loft
 imaging/tests/15-regression.loft
 hex_world/tests/hex_world.loft
