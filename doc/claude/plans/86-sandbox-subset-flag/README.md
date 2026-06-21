@@ -133,8 +133,13 @@ What is built is listed under [§ Implementation progress](#status); what remain
   outside the admission walk; track there.
 
 ### B. Expressiveness relaxations (post-v1 — admit MORE total programs)
-- **3.1b decreasing-variant `while`** — admit a `while` that carries a compiler-checked
-  strictly-decreasing measure (today every `while` is rejected).
+- **3.1b decreasing-variant `while` — ✅ DONE.** `while_is_bounded` admits a `while` with a
+  proven decreasing variant: an int counter vs a STABLE bound (int literal or a body-unchanged
+  var), stepped by a positive constant every iteration (top-level `c = c ± k`), modified no
+  other way — counting up/down or guarded by `… && i < N`. Sound + conservative: flag loops,
+  conditional/cancelling/non-constant steps, moving bounds, and non-int/field/**call-bounded**
+  variants are rejected (hoist a call bound like `len(v)` to a local first). Tests:
+  `bounded_while_is_admitted` / `unprovable_while_is_rejected`.
 - **3.2b structural recursion** — admit recursion when a structurally-decreasing argument
   is proven (today the call graph must be acyclic).
 - **2.1b type/module `#cap` default + per-method override** — a `#cap` on a type/module
