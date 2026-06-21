@@ -789,6 +789,16 @@ impl Parser {
     /// The emitted IR is equivalent to:
     ///   loop { if !cond { break }; body }
     pub(crate) fn parse_while(&mut self, code: &mut Value) {
+        // @PLN86 3.1 — a `while` in sandboxed code is an unbounded loop: record it
+        // for the totality admission (the parser uniquely knows this is a `while`;
+        // the IR cannot tell it from a bounded comprehension `Loop`).  Keyed by
+        // def so the two passes are idempotent.
+        if self.in_sandbox {
+            let pos = self.lexer.peek_pos().clone();
+            self.sandbox_unbounded_loops
+                .entry(self.context)
+                .or_insert(pos);
+        }
         let mut cond = Value::Null;
         self.expression(&mut cond);
         if !self.first_pass && matches!(cond, Value::Null) {

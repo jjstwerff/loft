@@ -99,6 +99,12 @@ pub struct Parser {
     /// restricted.  Side-map (not on `Definition`) so it stays out of the IR
     /// serialization — the tag is policy, re-derivable from `sandbox`.
     pub(crate) def_sandbox: HashMap<u32, String>,
+    /// @PLN86 step 3.1 — sandboxed defs that contain an unbounded `while` loop,
+    /// mapped to one such loop's position.  Recorded at parse (`parse_while`
+    /// uniquely knows it is a `while`, where the IR cannot reliably tell a `while`
+    /// `Loop` from a bounded comprehension `Loop`); the totality admission reads
+    /// it.  Keyed by def_nr so the two parse passes are idempotent.
+    pub(crate) sandbox_unbounded_loops: HashMap<u32, crate::lexer::Position>,
     /// @PLN86 step 0.1 — true while parsing the BODY of a sandboxed def.  Gates
     /// the parser nesting guard so it never touches trusted code (zero cost
     /// there); set per-def in `parse_function`, cleared at its end.
@@ -487,6 +493,7 @@ impl Parser {
             in_format_expr: false,
             sandbox: crate::sandbox::SandboxConfig::default(),
             def_sandbox: HashMap::new(),
+            sandbox_unbounded_loops: HashMap::new(),
             in_sandbox: false,
             parse_depth: 0,
             depth_overflowed: false,
@@ -615,18 +622,28 @@ impl Parser {
         crate::sandbox::def_library(&self.data, def_nr)
     }
 
-    /// @PLN86 step 2.5 — the sandbox admission errors: each `CapViolation`
-    /// rendered as a correct, specific, actionable message (position + symbol +
-    /// rule + allowed set + fix).  Empty when the script is admitted.  This is the
-    /// host's primary surface — the contract a modder iterates against.
+    /// @PLN86 step P3 — totality violations: the sandboxed script is rejected if
+    /// it cannot be proven to terminate (an unbounded `while`, or a recursion
+    /// cycle).  Empty for a provably-total script.
+    #[must_use]
+    pub fn sandbox_totality(&self) -> Vec<crate::sandbox::TotalityViolation> {
+        crate::sandbox::admit_totality(&self.data, &self.def_sandbox, &self.sandbox_unbounded_loops)
+    }
+
+    /// @PLN86 step 2.5 — ALL sandbox admission errors (capability + totality),
+    /// each rendered as a correct, specific, actionable message (position + the
+    /// rule + the fix).  Empty when the script is admitted.  This is the host's
+    /// primary surface — the contract a modder iterates against.
     #[must_use]
     pub fn sandbox_admission_errors(&self) -> Vec<String> {
-        self.sandbox_admit()
-            .iter()
-            .map(|v| {
-                crate::sandbox::describe_violation(&self.data, &self.sandbox, &self.def_sandbox, v)
-            })
-            .collect()
+        let caps = self.sandbox_admit().into_iter().map(|v| {
+            crate::sandbox::describe_violation(&self.data, &self.sandbox, &self.def_sandbox, &v)
+        });
+        let totality = self
+            .sandbox_totality()
+            .into_iter()
+            .map(|v| crate::sandbox::describe_totality_violation(&self.data, &v));
+        caps.chain(totality).collect()
     }
 
     /// # Panics
@@ -670,6 +687,7 @@ impl Parser {
         // `data.reset()` reassigns; clear it so a re-parse re-derives the
         // designation rather than reading a stale entry.
         self.def_sandbox.clear();
+        self.sandbox_unbounded_loops.clear();
         self.data.reset();
         // @PLN22 Phase 2 — the main program parses under its own source
         // (MAIN_SOURCE), distinct from the stdlib prelude (source 0), so a user
@@ -8065,7 +8083,7 @@ mod plan86_reachable_set_tests {
 #[cfg(test)]
 mod plan86_admission_tests {
     use super::*;
-    use crate::sandbox::{CapViolation, parse_sandbox_config};
+    use crate::sandbox::{CapViolation, TotalityViolation, parse_sandbox_config};
 
     fn quoted(items: &[&str]) -> String {
         items
@@ -8350,6 +8368,105 @@ mod plan86_admission_tests {
                     && e.contains("native_ffi")),
             "external-FFI error names the crate + native_ffi: {:?}",
             p.sandbox_admission_errors()
+        );
+    }
+
+    /// @PLN86 3.1 — totality rejects an unbounded `while`, admits a bounded `for`.
+    #[test]
+    fn totality_rejects_while_admits_for() {
+        let p = parse_admit_libs(
+            &["fn:loops"],
+            &["code"],
+            &[],
+            "fn loops() -> integer { x = 0; while x < 10 { x += 1 } x }\n",
+        );
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        let t = p.sandbox_totality();
+        assert!(
+            t.iter()
+                .any(|v| matches!(v, TotalityViolation::UnboundedLoop { .. })),
+            "a `while` must be rejected, got {t:?}"
+        );
+        // the rendered error points at the bounded alternative
+        assert!(
+            p.sandbox_admission_errors()
+                .iter()
+                .any(|e| e.contains("while") && e.contains("for ")),
+            "{:?}",
+            p.sandbox_admission_errors()
+        );
+
+        let p2 = parse_admit_libs(
+            &["fn:counts"],
+            &["code"],
+            &[],
+            "fn counts() -> integer { s = 0; for i in 0..10 { s += i } s }\n",
+        );
+        assert!(
+            p2.sandbox_totality().is_empty(),
+            "a bounded `for` must be total, got {:?}",
+            p2.sandbox_totality()
+        );
+    }
+
+    /// @PLN86 3.2 — totality rejects recursion (self + mutual), admits acyclic.
+    #[test]
+    fn totality_rejects_recursion_admits_acyclic() {
+        // self-recursion `f -> f`
+        let p = parse_admit_libs(
+            &["fn:rec"],
+            &["code"],
+            &[],
+            "fn rec(n: integer) -> integer { rec(n + 1) }\n",
+        );
+        assert!(
+            p.sandbox_totality()
+                .iter()
+                .any(|v| matches!(v, TotalityViolation::Recursion { .. })),
+            "self-recursion must be rejected, got {:?}",
+            p.sandbox_totality()
+        );
+        assert!(
+            p.sandbox_admission_errors()
+                .iter()
+                .any(|e| e.contains("recursion") && e.contains("rec")),
+            "{:?}",
+            p.sandbox_admission_errors()
+        );
+
+        // mutual recursion `a -> b -> a`
+        let p2 = parse_admit_libs(
+            &["fn:a", "fn:b"],
+            &["code"],
+            &[],
+            "fn a(n: integer) -> integer { b(n) }\nfn b(n: integer) -> integer { a(n) }\n",
+        );
+        assert!(
+            p2.sandbox_totality()
+                .iter()
+                .any(|v| matches!(v, TotalityViolation::Recursion { .. })),
+            "mutual recursion must be rejected, got {:?}",
+            p2.sandbox_totality()
+        );
+
+        // acyclic call chain `top -> helper`
+        let p3 = parse_admit_libs(
+            &["fn:top", "fn:helper"],
+            &["code"],
+            &[],
+            "fn helper(n: integer) -> integer { n + 1 }\n\
+             fn top(n: integer) -> integer { helper(n) }\n",
+        );
+        assert!(
+            !p3.sandbox_totality()
+                .iter()
+                .any(|v| matches!(v, TotalityViolation::Recursion { .. })),
+            "an acyclic script must be total, got {:?}",
+            p3.sandbox_totality()
         );
     }
 }

@@ -560,6 +560,152 @@ pub fn describe_violation(
     }
 }
 
+/// @PLN86 step P3 — a totality violation: a sandboxed script that cannot be
+/// proven to terminate.  An admitted script always runs to completion, so these
+/// are rejected at LOAD (never a runtime hang).
+#[derive(Debug, Clone, PartialEq)]
+pub enum TotalityViolation {
+    /// An unbounded `while` loop in `def` (recorded at parse).  v1 admits only
+    /// `for` over a finite collection / range; a `while` has no proven bound.
+    UnboundedLoop { def: u32, position: Position },
+    /// A cycle in the sandboxed call graph — recursion.  v1 is acyclic-only; the
+    /// `cycle` lists the sandboxed defs forming the back-edge.
+    Recursion { cycle: Vec<u32> },
+}
+
+/// The sandboxed defs that `from` calls — the edges of the sandboxed call graph
+/// (trusted callees are not followed; they are total by the host contract).
+fn sandboxed_calls(data: &Data, sandboxed: &HashMap<u32, String>, from: u32) -> Vec<u32> {
+    let mut refs = HashSet::new();
+    referenced_defs(data, from, &mut refs);
+    let mut calls: Vec<u32> = refs
+        .into_iter()
+        .filter(|r| sandboxed.contains_key(r))
+        .collect();
+    calls.sort_unstable();
+    calls
+}
+
+/// @PLN86 step 3.2 — every cycle in the sandboxed call graph (recursion).  A
+/// standard colour DFS: a back-edge to a node still on the current path is a
+/// cycle; the path slice from that node is the cycle.  Deduped by node-set so a
+/// cycle is reported once.  Self-recursion (`f` calls `f`) is a length-1 cycle.
+#[must_use]
+pub fn recursion_cycles(data: &Data, sandboxed: &HashMap<u32, String>) -> Vec<Vec<u32>> {
+    #[allow(clippy::too_many_arguments)]
+    fn dfs(
+        n: u32,
+        data: &Data,
+        sandboxed: &HashMap<u32, String>,
+        on_path: &mut HashSet<u32>,
+        done: &mut HashSet<u32>,
+        path: &mut Vec<u32>,
+        cycles: &mut Vec<Vec<u32>>,
+        seen: &mut HashSet<Vec<u32>>,
+    ) {
+        if on_path.contains(&n) {
+            if let Some(start) = path.iter().position(|&x| x == n) {
+                let cycle = path[start..].to_vec();
+                let mut key = cycle.clone();
+                key.sort_unstable();
+                if seen.insert(key) {
+                    cycles.push(cycle);
+                }
+            }
+            return;
+        }
+        if !done.insert(n) {
+            return;
+        }
+        on_path.insert(n);
+        path.push(n);
+        for callee in sandboxed_calls(data, sandboxed, n) {
+            dfs(callee, data, sandboxed, on_path, done, path, cycles, seen);
+        }
+        path.pop();
+        on_path.remove(&n);
+    }
+
+    let mut cycles = Vec::new();
+    let (mut on_path, mut done, mut path, mut seen) =
+        (HashSet::new(), HashSet::new(), Vec::new(), HashSet::new());
+    let mut starts: Vec<u32> = sandboxed.keys().copied().collect();
+    starts.sort_unstable();
+    for n in starts {
+        dfs(
+            n,
+            data,
+            sandboxed,
+            &mut on_path,
+            &mut done,
+            &mut path,
+            &mut cycles,
+            &mut seen,
+        );
+    }
+    cycles
+}
+
+/// @PLN86 step P3 — the totality admission walk: a sandboxed script is total iff
+/// it has no unbounded loop (3.1) and no recursion cycle (3.2).  `unbounded_loops`
+/// is the parser's `sandbox_unbounded_loops` (while-loops recorded at parse).
+/// Returns every violation, deterministically ordered.
+#[must_use]
+pub fn admit_totality(
+    data: &Data,
+    sandboxed: &HashMap<u32, String>,
+    unbounded_loops: &HashMap<u32, Position>,
+) -> Vec<TotalityViolation> {
+    let mut violations = Vec::new();
+    // 3.1 — unbounded loops, ordered by def.
+    let mut looped: Vec<u32> = unbounded_loops
+        .keys()
+        .copied()
+        .filter(|d| sandboxed.contains_key(d))
+        .collect();
+    looped.sort_unstable();
+    for def in looped {
+        violations.push(TotalityViolation::UnboundedLoop {
+            def,
+            position: unbounded_loops[&def].clone(),
+        });
+    }
+    // 3.2 — recursion cycles.
+    for cycle in recursion_cycles(data, sandboxed) {
+        violations.push(TotalityViolation::Recursion { cycle });
+    }
+    violations
+}
+
+/// @PLN86 step 2.5 / P3 — render a totality violation as an actionable admission
+/// error: the construct, the rule, and how to bound it.
+#[must_use]
+pub fn describe_totality_violation(data: &Data, v: &TotalityViolation) -> String {
+    match v {
+        TotalityViolation::UnboundedLoop { def, position } => {
+            let name = display_name(data, *def);
+            format!(
+                "{position}: sandboxed `{name}` contains an unbounded `while` loop — a \
+                 sandboxed script must be provably total.\n  fix: use a bounded `for x in \
+                 <collection>` / `for i in 0..N` loop, whose iteration count is finite."
+            )
+        }
+        TotalityViolation::Recursion { cycle } => {
+            let chain = cycle
+                .iter()
+                .map(|&d| display_name(data, d))
+                .collect::<Vec<_>>()
+                .join(" → ");
+            let tail = display_name(data, cycle[0]);
+            format!(
+                "sandboxed recursion is not permitted (the script must be provably total): \
+                 the call cycle `{chain} → {tail}` is unbounded.\n  fix: replace the \
+                 recursion with a bounded `for` loop over the work to do."
+            )
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
