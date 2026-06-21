@@ -1,0 +1,55 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN85 — OWNERSHIP_MODEL.md holes 102/103 (adopt-vs-copy): binding a heap
+// FIELD does not establish a new owner, so the binding ALIASES the field's
+// store instead of copying it.  A value-semantics violation: loft has single
+// owner per store (principle 1), and plain `a = x` already copies — but
+// `a = x.v` (read a vector field of a struct) and `a = getv(x)` (a fn returning
+// a parameter's field) both adopt the field's store.
+//
+// TRIGGER (pinned by isolation):
+//   - `a = x`        (plain vector local -> local)        -> COPY  ✅ (the control)
+//   - `a = x.v`      (read a vector FIELD of a struct)    -> ALIAS 🔴
+//   - `a = getv(x)`  (fn RETURNS a vector field of a param) -> ALIAS 🔴
+//   Distinct from the CLOSED `return <param>` hole (#bae38cb / row 101): no
+//   function is needed — the bare field read `a = x.v` already aliases.  The
+//   fn-return case is the same adopt-vs-copy gap one step removed (row 102,
+//   "vector returns alias"), reached via the field read inside the callee.
+//   Owned heap kinds returned WHOLE are fine: struct-param and hash-param
+//   returns copy correctly; only the FIELD read/return adopts.
+//
+// STATUS: 🔴 LIVE on main, BOTH backends (interp + native: af/ag len == 4).
+// Silent corruption (no crash/leak) — value-semantics violation only.
+// Do NOT graduate to tests/scripts/ until the adopt-vs-copy fact is completed.
+
+struct Box { v: vector<integer> }
+
+fn getv(b: Box) -> vector<integer> { b.v }
+
+fn main() {
+  // --- control: plain local copy (value semantics ALREADY honoured) ---
+  x: vector<integer> = [1, 2, 3];
+  a = x;
+  x += [9];
+  // EXPECTED a.len=3 (independent copy); x.len=4.  OBSERVED: a=3 ✅ (calibrated).
+  assert(len(a) == 3, "control a=x must COPY (a.len 3)");
+  assert(len(x) == 4, "control x mutated to 4");
+
+  // --- hole 1: read a vector FIELD of a struct (no function) ---
+  bx = Box { v: [1, 2, 3] };
+  af = bx.v;
+  bx.v += [9];
+  // EXPECTED af.len=3 (af is a new owner).  OBSERVED on main: af.len=4 (af
+  // ALIASES bx.v — the field read adopted the field's store).
+  assert(len(af) == 3, "a = bx.v must COPY (af.len 3, got aliased 4)");
+
+  // --- hole 2: a fn returning a parameter's vector field ---
+  by = Box { v: [1, 2, 3] };
+  ag = getv(by);
+  by.v += [9];
+  // EXPECTED ag.len=3.  OBSERVED on main: ag.len=4 (same adopt-vs-copy gap, via
+  // the field read inside getv; the param-return copy of row 101 does not cover
+  // a returned field).
+  assert(len(ag) == 3, "a = getv(by) must COPY (ag.len 3, got aliased 4)");
+}
