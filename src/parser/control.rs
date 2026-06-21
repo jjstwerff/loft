@@ -579,6 +579,11 @@ impl Parser {
         tail_pos: &Position,
     ) -> Type {
         let mut tp = t.clone();
+        // #416 — set when the vector match/if tail below was materialised into the
+        // return buffer; gates the type-keyed vector arm (which is reached only in
+        // the IMPLICIT-tail `t = Vector` case) so it doesn't re-process / re-promote
+        // an arm buffer the materialise already delivered.
+        let mut vec_arm_handled = false;
         if *result != Type::Void && !matches!(*result, Type::Unknown(_)) {
             let last = l.len() - 1;
             // CO1.3c: generator bodies return void (values come from yield),
@@ -654,14 +659,22 @@ impl Parser {
             // NRVO the result is delivered via a fresh local while the caller's
             // eagerly-allocated `__retbuf` work-ref store is orphaned and LEAKS on
             // the interpreter (Edge B / `init_ref`). Deliver per-arm into `__retbuf`.
-            let vec_match_materialized = !tuple_rewritten
+            // Fires for an explicit `return match` (t = Never) AND an implicit
+            // `{ match }` block tail (t = Vector — #416). `tail_terminal_is_branch`
+            // keeps it to match/if tails. `tail_if_has_null_arm` EXCLUDES a nullable
+            // return (`{ if b { [..] } else { null } }`): materialising it would set
+            // `returned = Vector[__retbuf]` while a reachable arm yields null, which
+            // native cannot represent. enc's exhaustive-match default-null is nested
+            // and unreachable, so it is not a direct arm-null and still materialises.
+            let vec_match_candidate = !tuple_rewritten
                 && !if_unified
                 && !self.first_pass
                 && context == "return from block"
                 && matches!(result, Type::Vector(_, _))
-                && matches!(t, Type::Never | Type::Void)
-                && Self::tail_terminal_is_branch(&l[last]);
-            if vec_match_materialized
+                && matches!(t, Type::Never | Type::Void | Type::Vector(_, _))
+                && Self::tail_terminal_is_branch(&l[last])
+                && !self.tail_if_has_null_arm(&l[last]);
+            if vec_match_candidate
                 && let Type::Vector(elm, _) = result
                 && let Some((buf_attr, buf_var)) = self.return_buffer()
             {
@@ -669,11 +682,12 @@ impl Parser {
                 if self.materialize_vector_arms_into(&elm_ty, &mut l[last], buf_var) {
                     self.data.definitions[self.context as usize].returned =
                         Type::Vector(Box::new(elm_ty), Deps::attrs(vec![buf_attr]));
+                    vec_arm_handled = true;
                 }
             }
             if !tuple_rewritten
                 && !if_unified
-                && !vec_match_materialized
+                && !vec_match_candidate
                 && !self.convert(&mut l[last], t, result)
                 && !ignore
             {
@@ -720,7 +734,7 @@ impl Parser {
                 self.nrvo_collapse_tail_set(l, &[w]);
             } else if let Type::Text(ls) = t {
                 self.text_return(ls);
-            } else if let Type::Vector(elm, ls) = t {
+            } else if !vec_arm_handled && let Type::Vector(elm, ls) = t {
                 if ls.is_empty() && !l.is_empty() {
                     // Issue #120 mirror (see the Reference arm below): when
                     // filter_hidden stripped the deps, recover the tail
@@ -3772,6 +3786,42 @@ impl Parser {
         };
         matches!(&tp, Type::Enum(d, _, _) | Type::Reference(d, _)
             if self.data.def(*d).name().starts_with("__nullable<"))
+    }
+
+    /// #416 — does the tail's OUTERMOST `if`/`match` have a DIRECT `null` arm
+    /// (`{ if b { [..] } else { null } }`)? Such a return is nullable, and the
+    /// per-arm `__retbuf` materialise must not fire for it (it would force an
+    /// owned-buffer return type onto a path that yields null — the native
+    /// nullable-vector miscompile). An exhaustive `match`'s default-null is NESTED
+    /// (the inner-most else after the variant tests), so it is not a direct arm and
+    /// such a match still materialises. Only the outermost branch's arms are
+    /// inspected — descending would also catch the unreachable match default.
+    fn tail_if_has_null_arm(&self, v: &Value) -> bool {
+        match v.unspan() {
+            Value::Return(i) | Value::Drop(i) => self.tail_if_has_null_arm(i),
+            Value::Block(bl) => bl
+                .operators
+                .last()
+                .is_some_and(|x| self.tail_if_has_null_arm(x)),
+            Value::Insert(ops) => ops.last().is_some_and(|x| self.tail_if_has_null_arm(x)),
+            Value::If(_, t, f) => self.arm_is_null(t) || self.arm_is_null(f),
+            _ => false,
+        }
+    }
+
+    /// Does this branch arm reduce to a `null` value (descending through the arm's
+    /// block/insert tail)? A `null` vector arm lowers to `{ OpNullRefSentinel() }`,
+    /// not a bare `Value::Null`, so both forms count. A nested `if` arm is NOT null
+    /// — that's how enc's nested match-default is distinguished from maybe's direct
+    /// `else null`.
+    fn arm_is_null(&self, v: &Value) -> bool {
+        match v.unspan() {
+            Value::Null => true,
+            Value::Call(d, _) => *d == self.data.def_nr("OpNullRefSentinel"),
+            Value::Block(bl) => bl.operators.last().is_some_and(|x| self.arm_is_null(x)),
+            Value::Insert(ops) => ops.last().is_some_and(|x| self.arm_is_null(x)),
+            _ => false,
+        }
     }
 
     fn site_value_ref(&self, tail: &Value) -> Option<u16> {
