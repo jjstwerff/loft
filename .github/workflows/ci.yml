@@ -102,6 +102,38 @@ jobs:
             echo "docs-only diff — heavy jobs skipped"
           fi
 
+  # Hard gate: fail the PR when it cannot merge into the base branch (conflicts
+  # / "rebase issues").  A real 3-way merge in memory via `git merge-tree
+  # --write-tree` — exit 1 on conflict, 0 when clean (no working tree, no
+  # commit).  Runs on EVERY PR (independent of the `changes` skip — a docs-only
+  # PR can conflict too) and is fast (~seconds).  Flags genuine CONFLICTS only:
+  # a branch that is merely BEHIND main but still merges cleanly passes.  Add
+  # the `mergeable into main` context to branch protection's required checks so
+  # a red here blocks merge.
+  mergeable:
+    name: mergeable into main
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # The branch tip — NOT the default `refs/pull/N/merge`, which GitHub
+          # leaves stale when the PR conflicts (so it would false-green).
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Verify the PR merges into ${{ github.base_ref }} without conflicts
+        shell: bash
+        run: |
+          git fetch --no-tags origin "${{ github.base_ref }}"
+          if git merge-tree --write-tree "origin/${{ github.base_ref }}" HEAD >/dev/null 2>&1; then
+            echo "✓ merges cleanly into ${{ github.base_ref }}"
+          else
+            echo "::error title=Merge conflict::This PR conflicts with ${{ github.base_ref }}; rebase/merge it and resolve the conflicts before it can land."
+            echo "Conflicting paths:"
+            git merge-tree --write-tree --name-only "origin/${{ github.base_ref }}" HEAD | tail -n +2 || true
+            exit 1
+          fi
+
   # Shim for the complementary (docs-only) case — see the `changes` comment.
   # Emits the three required `Test (<os>)` contexts as trivially green so
   # branch protection is satisfied without spinning up the real matrix.  All
