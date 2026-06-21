@@ -615,6 +615,20 @@ impl Parser {
         crate::sandbox::def_library(&self.data, def_nr)
     }
 
+    /// @PLN86 step 2.5 — the sandbox admission errors: each `CapViolation`
+    /// rendered as a correct, specific, actionable message (position + symbol +
+    /// rule + allowed set + fix).  Empty when the script is admitted.  This is the
+    /// host's primary surface — the contract a modder iterates against.
+    #[must_use]
+    pub fn sandbox_admission_errors(&self) -> Vec<String> {
+        self.sandbox_admit()
+            .iter()
+            .map(|v| {
+                crate::sandbox::describe_violation(&self.data, &self.sandbox, &self.def_sandbox, v)
+            })
+            .collect()
+    }
+
     /// # Panics
     /// With filesystem problems.
     pub fn parse(&mut self, filename: &str, default: bool) -> bool {
@@ -8274,6 +8288,68 @@ mod plan86_admission_tests {
             p2.sandbox_admit().iter().any(|x| viol_symbol(x) == now),
             "without allow_libs, untagged now() must be flagged, got {:?}",
             p2.sandbox_admit()
+        );
+    }
+
+    /// @PLN86 2.5 — admission errors are actionable: each class names the
+    /// position, the symbol, the rule, and BOTH fixes (wholesale lib + the
+    /// fine-grained cap / native_ffi).
+    #[test]
+    fn admission_errors_name_symbol_rule_and_fix() {
+        // UngrantedCap — mtime needs fs.read; only env is granted.
+        let p = parse_admit(
+            &["fn:reads_mtime"],
+            &["env"],
+            "fn reads_mtime() -> integer { mtime(\"x\") }\n",
+        );
+        let errs = p.sandbox_admission_errors();
+        assert_eq!(errs.len(), 1, "{errs:?}");
+        let e = &errs[0];
+        eprintln!("CAP_DIAG: {e}");
+        assert!(e.contains("mtime"), "names the symbol: {e}");
+        assert!(e.contains("fs.read"), "names the group: {e}");
+        assert!(e.contains("fix:"), "points at the fix: {e}");
+        assert!(
+            e.contains("allow_caps") && e.contains("allow_libs"),
+            "offers both fixes: {e}"
+        );
+        assert!(e.contains(".loft:"), "carries a source position: {e}");
+
+        // UntaggedSymbol — now() in `files`, nothing allowed.
+        let p2 = parse_admit_libs(
+            &["fn:uses_now"],
+            &[],
+            &[],
+            "fn uses_now() -> integer { now() }\n",
+        );
+        assert!(
+            p2.sandbox_admission_errors()
+                .iter()
+                .any(|e| e.contains("now")
+                    && e.contains("library `files`")
+                    && e.contains("allow_libs")),
+            "untagged error names the library + allow_libs: {:?}",
+            p2.sandbox_admission_errors()
+        );
+    }
+
+    /// @PLN86 2.5 — an external-FFI rejection names the crate and `native_ffi`.
+    #[test]
+    fn admission_error_for_external_ffi_names_crate() {
+        let src = "fn ext_fn() -> integer; #native \"ext_sym\"\n\
+                   fn calls_ext() -> integer { ext_fn() }\n";
+        let mut p = parse_admit(&["fn:calls_ext"], &[], src);
+        p.data
+            .native_symbol_crates
+            .insert("ext_sym".to_string(), "extcrate".to_string());
+        assert!(
+            p.sandbox_admission_errors()
+                .iter()
+                .any(|e| e.contains("ext_fn")
+                    && e.contains("extcrate")
+                    && e.contains("native_ffi")),
+            "external-FFI error names the crate + native_ffi: {:?}",
+            p.sandbox_admission_errors()
         );
     }
 }

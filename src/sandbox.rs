@@ -11,7 +11,7 @@
 //! group is permitted only when an `allow_caps` entry is a dotted-segment prefix
 //! of it.
 
-use crate::data::{Data, DefType, Type, Value};
+use crate::data::{Data, DefType, Position, Type, Value};
 use std::collections::{HashMap, HashSet};
 
 /// A named admission profile: which capability **groups** a sandboxed script may
@@ -451,6 +451,113 @@ pub fn untagged_public_symbols(data: &Data) -> Vec<u32> {
         .collect();
     out.sort_unstable();
     out
+}
+
+impl CapViolation {
+    /// The sandboxed def that makes the offending reference.
+    #[must_use]
+    pub fn from(&self) -> u32 {
+        match self {
+            Self::UngrantedCap { from, .. }
+            | Self::UntaggedSymbol { from, .. }
+            | Self::ExternalFfi { from, .. } => *from,
+        }
+    }
+
+    /// The trusted def it reaches.
+    #[must_use]
+    pub fn symbol(&self) -> u32 {
+        match self {
+            Self::UngrantedCap { symbol, .. }
+            | Self::UntaggedSymbol { symbol, .. }
+            | Self::ExternalFfi { symbol, .. } => *symbol,
+        }
+    }
+}
+
+/// A def's human-readable name for diagnostics — the stored `n_<fn>` global
+/// prefix stripped; method names (`t_<len><Type>_<m>`) are left as-is.
+fn display_name(data: &Data, def_nr: u32) -> String {
+    let n = data.def(def_nr).name();
+    n.strip_prefix("n_").unwrap_or(n).to_string()
+}
+
+/// @PLN86 step 2.5 — the source position of the FIRST reference to `symbol` in
+/// `from`'s body, for pointing the diagnostic at the exact construct.  Tracks the
+/// nearest enclosing `Span` as it descends.  `None` (caller falls back to the
+/// function's own position) when the reference is a bare `Int` fn-ref with no
+/// span — rare, and the function position is still actionable.
+#[must_use]
+pub fn reference_position(data: &Data, from: u32, symbol: u32) -> Option<Position> {
+    fn scan(v: &Value, target: u32, cur: Option<&Position>, found: &mut Option<Position>) {
+        if found.is_some() {
+            return;
+        }
+        if let Value::Span(b) = v {
+            scan(&b.1, target, Some(&b.0), found);
+            return;
+        }
+        match v {
+            Value::Call(d, _) if *d == target => {
+                *found = cur.cloned();
+                return;
+            }
+            Value::FnRef(d, _, _) if *d >= 0 && *d as u32 == target => {
+                *found = cur.cloned();
+                return;
+            }
+            _ => {}
+        }
+        v.for_each_child(&mut |c| scan(c, target, cur, found));
+    }
+    let mut found = None;
+    scan(&data.def(from).code, symbol, None, &mut found);
+    found
+}
+
+/// @PLN86 step 2.5 — turn a `CapViolation` into a correct, specific, actionable
+/// admission error (§6): it names the construct's position, the symbol, the rule
+/// it breaks, the profile's allowed set, AND the fix — *before* the script runs.
+/// Under library-first every fix offers BOTH the wholesale option (allow the
+/// library) and the fine-grained one (the cap / `native_ffi`).
+#[must_use]
+pub fn describe_violation(
+    data: &Data,
+    config: &SandboxConfig,
+    sandboxed: &HashMap<u32, String>,
+    v: &CapViolation,
+) -> String {
+    let from = v.from();
+    let symbol = v.symbol();
+    let from_name = display_name(data, from);
+    let sym_name = display_name(data, symbol);
+    let lib = def_library(data, symbol);
+    let libhint = lib.as_deref().unwrap_or("<unknown>");
+    let pos =
+        reference_position(data, from, symbol).unwrap_or_else(|| data.def(from).position().clone());
+    let profile = sandboxed.get(&from).and_then(|n| config.profiles.get(n));
+    let allowed_libs = profile.map(|p| p.allow_libs.join(", ")).unwrap_or_default();
+    let allowed_caps = profile.map(|p| p.allow_caps.join(", ")).unwrap_or_default();
+    match v {
+        CapViolation::UngrantedCap { group, .. } => format!(
+            "{pos}: sandboxed `{from_name}` reaches `{sym_name}`, which needs capability \
+             `{group}` — not granted.\n  fix: add `{group}` to `allow_caps`, or add its \
+             library `{libhint}` to `allow_libs`.\n  allowed capabilities: [{allowed_caps}]"
+        ),
+        CapViolation::UntaggedSymbol { .. } => format!(
+            "{pos}: sandboxed `{from_name}` reaches `{sym_name}` (library `{libhint}`), which \
+             is neither an allowed library nor a granted capability.\n  fix: add `{libhint}` \
+             to `allow_libs` to include the whole library, or tag `{sym_name}` with a `#cap` \
+             group and grant it.\n  allowed libraries: [{allowed_libs}]; allowed \
+             capabilities: [{allowed_caps}]"
+        ),
+        CapViolation::ExternalFfi { crate_name, .. } => format!(
+            "{pos}: sandboxed `{from_name}` reaches `{sym_name}`, a native FFI bridge from \
+             crate `{crate_name}` — native code is not permitted (`native_ffi = false`).\n  \
+             fix: add its library `{libhint}` to `allow_libs` (you vet its native code), or \
+             set `native_ffi = true` for this profile."
+        ),
+    }
 }
 
 #[cfg(test)]
