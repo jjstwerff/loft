@@ -96,8 +96,23 @@ The group travels with the symbol; an **un-tagged symbol is denied** (forces
 classification, L3-cap).
 
 ### 4. Totality admission (the core)
-A sandboxed def is admitted only if the compiler can prove it **total** — terminates
-on every input — from a restricted but useful form:
+
+**The admission walk** is a DFS over the sandbox-reachable set, and it needs the
+**compile-time analog of the restricted/unrestricted stack we dropped from the runtime**
+— the same model reappears here, as *analysis* state rather than a resource budget:
+- **mode — restricted vs unrestricted.** The totality / capability / no-raw-write rules
+  apply only while the walk is inside a **sandboxed** def's body. A call to a **trusted**
+  allow-listed symbol is a **leaf**: the walk does *not* descend or re-analyze it — its
+  safety is the host contract (L-host). The compiler must therefore know, at every point,
+  which mode it is in (the 1.2 flag), and switch to "leaf" at the sandboxed→trusted edge.
+- **ancestry — the recursion stack.** The walk carries the chain of sandboxed defs on the
+  current path (its *parents*). A call to an **ancestor** is a back-edge = recursion; v1
+  **rejects** it (acyclic only), so termination is structural by construction. (Admitting
+  a back-edge when a structurally-decreasing argument is proven is the later relaxation;
+  general termination analysis is the separate plan.)
+
+A sandboxed def is admitted only if, under that walk, the compiler can prove it
+**total** — terminates on every input — from a restricted but useful form:
 - **Bounded loops only.** `for x in <finite collection>` / `for i in 0..N`. An
   unbounded `while` is rejected unless it carries a compiler-checked **decreasing
   variant** (a measure that strictly drops each iteration toward a floor).
@@ -202,40 +217,93 @@ Each rung is independently verifiable (RED before, GREEN after). Admission + the
 guard are compile-time (backend-agnostic); the only runtime work is executing a
 proven-total script.
 
-- **P0 — parser nesting bound (load-time).** A nesting-depth guard in the
-  recursive-descent parser, active **only while parsing a sandboxed def's body** (needs
-  the parse-time "in a sandboxed def" flag from 1.2). *Verify:* 5000-deep nested input
-  in a sandboxed def → clean **parse error**, not `rc=139`; trusted source unaffected.
-  *(A load-time rejection, not a runtime abort.)*
-- **P1 — designation + reachable set + FFI/backend ban.** Tag defs with a profile;
-  compute the reference-closure; force interpret, reject `[native]` libs. *Verify:* a
-  sandboxed `--native`/native-lib use rejected; the reference-closure puts
-  `let f = g`'s `g` in the set (L4).
-- **P2 — capability groups + group admission + no-raw-write.** `#cap` annotation + tag
-  the stdlib/API surface + group-membership check; **reject raw store/field mutation in
-  sandboxed code** — writes only through allow-listed `*.write` ops (§5). *Verify:*
-  `read_file`/`Vector.clear` (denied groups) rejected naming the group; a raw field
-  assign `e.health = 0` in a sandboxed def rejected (must use a granted write op);
-  `Vector.get` passes; the L4 indirect probe rejected. **Every rejection names the
-  symbol/group + the allowed set** (§6 — the modder's error contract).
-- **P3 — totality admission (the core).** Bounded-loop + well-founded-recursion +
-  total-op analysis over the sandbox-reachable set; reject non-total at load; report the
-  worst-case complexity. *Verify (L2/L3/L5):* `while true {}` / unbounded recursion
-  rejected; `for e in entities {…}` + structural recursion admitted with a reported
-  complexity; a div-by-zero in a sandboxed def is total (sentinel), never a fault.
-- **P4 — execution + result delivery.** `run_script(src, policy, world) -> Result` runs
-  the proven-total script and returns its value; **no guard, no abort path** — the only
-  failure surface is a *load-time* admission failure. *Verify:* an admitted script runs
-  to completion and writes live state; there is no code path that aborts a running
-  admitted script.
-- **P5 — performance gate.** *Verify (S6):* a sandboxed script reading/writing N
-  entities/frame stays within a frame budget vs a native baseline — with **direct
-  writes, no rollback, no copy, no journal** (the efficiency premise — if this needs a
-  rollback to be safe, the design is wrong, per §5).
+### P0 — parser nesting bound (load-time)
+- **0.1 Scoped parser depth guard.** *Change:* a nesting-depth counter in the
+  operator-precedence parser (counted at precedence-0 entries = source nesting),
+  active **only while parsing a sandboxed def's body** (gated on the 1.2 flag); a parse
+  *error* past a configurable limit. *Verify:* 5000-deep nested input in a sandboxed def
+  → clean parse error (not `rc=139`); the same in trusted source is unaffected; a legal
+  sandboxed program below the limit compiles. *(Load-time rejection, not a runtime
+  abort.)*
 
-Throughout, **P2/P3 admission errors are a first-class deliverable** (§6): each is
-tested to name the exact construct + rule + fix, so a clean compile is the safety
-contract.
+### P1 — designation + reachable set + coarse bans
+- **1.1 Policy model + parse.** *Change:* parse `[sandbox]` + `[profile.*]` into a
+  `Policy` (allowed groups, backend, native_ffi, input-bound hints). *Verify:* round-trip
+  unit test; a malformed policy → a clear error.
+- **1.2 Per-def profile tag + the "in sandboxed code" flag.** *Change:* from the manifest
+  globs, set `def.profile: Option<ProfileId>`, and a parse-time + runtime
+  "currently-untrusted" flag derived from it (annotation honoured only on trusted
+  sources). *Verify:* `loft introspect` shows exactly the designated defs tagged; the
+  flag is set while parsing/executing a sandboxed def, clear otherwise. *(Unblocks 0.1.)*
+- **1.3 Reachable-set over references (restricted-mode DFS).** *Change:* DFS the closure
+  over calls + fn-ref literals + type uses from sandboxed entries, **in restricted mode**;
+  a trusted allow-listed symbol is a **leaf** (not descended — §4). *Verify (L4):* an
+  indirect `let f = g` puts `g` in the set; a trusted call is a leaf; the set equals the
+  hand-computed set.
+- **1.4 Backend + FFI ban.** *Change:* sandboxed defs forced to interpret; a sandboxed
+  `use` of a `[native]` lib rejected. *Verify:* sandboxed `--native` / native-lib use
+  rejected; `cargo build --no-default-features` proves the cdylib path is removable.
+
+### P2 — capabilities (groups + no-raw-write) + diagnostics
+- **2.1 `#cap "<group>"` annotation.** *Change:* parse `#cap` onto the def (like
+  `#native`); type/module group with per-method override. *Verify:* a def's group is
+  readable; `Vector.get`=`collections.read`, `Vector.clear`=`collections.write`.
+- **2.2 Tag the stdlib/API surface + coverage lint.** *Change:* assign groups across
+  `default/*.loft` + registry libs (`fs.*`, `net`, `env`, `collections.{read,write}`,
+  `math`, `text`, …). *Verify (L3-cap):* a lint fails if any public symbol lacks a group.
+- **2.3 Group-membership admission.** *Change:* every reachable symbol's group ∈
+  `allow_caps` (prefix) or another sandboxed def, else reject. *Verify:* `read_file`
+  (`fs.read`) / `Vector.clear` (`collections.write`) rejected naming the group;
+  `Vector.get` passes; the L4 indirect `let f=read_file; f(...)` rejected.
+- **2.4 No-raw-write admission.** *Change:* in a sandboxed def, reject raw store/field
+  assignment to host data — writes only via allow-listed `*.write` ops (§5). *Verify:*
+  `e.health = 0` rejected; `damage(e, 10)` (a granted `game.write` op) passes.
+- **2.5 Diagnostic quality (§6).** *Change:* every P2/P3 rejection carries the construct
+  span + the rule + the allowed set / fix. *Verify:* the error text for each rejection
+  class names the symbol/group/op and points at the fix — snapshot-tested.
+
+### P3 — totality admission (the core)
+- **3.1 Loop boundedness.** *Change:* admit `for x in <finite collection>` / `for i in
+  0..N`; reject unbounded `while` unless it carries a compiler-checked decreasing
+  variant. *Verify (L2):* `while true {}` rejected; `for e in entities {…}` admitted; a
+  `while` with a strictly-decreasing measure admitted.
+- **3.2 Recursion analysis (the ancestry stack).** *Change:* the admission DFS carries
+  the parent chain (§4); a call to an **ancestor** is a back-edge → v1 rejects it (acyclic
+  only); the later relaxation admits it iff a structurally-decreasing argument is proven.
+  *Verify (L2):* a call to a parent function is rejected naming the cycle; an acyclic
+  script admitted; `f(n) -> f(n+1)` rejected.
+- **3.3 Total-operation check.** *Change:* prove every op total — OOB→`null` (already),
+  div/mod-zero + overflow + conversions given a defined total result or excluded; reject
+  any partial op. *Verify (L3):* a div-by-zero in a sandboxed def yields the defined
+  sentinel, never a fault; an excluded partial op is rejected at admission.
+- **3.4 Worst-case complexity report.** *Change:* derive the step/depth cost as a
+  function of input sizes; flag loops over an unbounded source. *Verify (L5):* a
+  per-entity loop reports `O(entities)`; an unbounded-source loop is flagged for an input
+  bound.
+- **3.5 Totality diagnostics (§6).** *Change:* each totality rejection names the
+  construct + *how to bound it* (a range, a decreasing variant, a structural argument).
+  *Verify:* the unbounded-loop / unbounded-recursion errors include the actionable fix.
+
+### P4 — execution (no guard, no abort path)
+- **4.1 `run_script(src, policy, world) -> Result`.** *Change:* a `src/lib.rs` entry that
+  compiles + admits + runs and returns the script's value; the only failure surface is a
+  *load-time* admission error. *Verify:* an admitted script runs to completion and writes
+  live state directly; **no code path aborts a running admitted script** (grep + a probe
+  that an admitted long-but-total script always finishes).
+- **4.2 Runtime total-op semantics.** *Change:* the interpreter honours the 3.3 total
+  semantics at runtime (OOB→`null`, div-zero→sentinel, …). *Verify:* runtime results
+  match admission's promise on both backends for the trusted-call path.
+
+### P5 — performance gate
+- **5.1 Benchmark.** *Verify (S6):* a sandboxed script reading/writing N entities/frame
+  stays within a frame budget vs a native baseline — with **direct writes, no rollback,
+  no copy, no journal** (if this needs a rollback to be safe, the design is wrong, §5).
+
+**Dependency order:** 1.1→1.2 (1.2 unblocks 0.1) → 1.3/1.4 → 2.x → 3.x → 4.x → 5.1.
+**P0–P3 are the compile-time core** (reject at load, game-safe); P4 has no abort path to
+make fail-safe; P5 proves *fast + safe*. **Admission diagnostics (2.5, 3.5) are
+first-class** — a clean compile is the safety contract. A rung graduates its probe to
+`tests/scripts/` / `tests/sandbox.rs` when green on both backends where applicable.
 
 ## Open questions
 
