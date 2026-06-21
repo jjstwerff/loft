@@ -440,7 +440,11 @@ pub(crate) fn html_wasm_import_modules_ok(wasm: &[u8]) -> Result<(), Vec<String>
                     return Ok(());
                 }
                 let m = String::from_utf8_lossy(module).into_owned();
-                if m != "loft_gl" && m != "loft_io" {
+                // loft's own host imports (`loft_io` / `loft_gl`) AND library-bridge
+                // host imports (e.g. the crypto bridge's `loft_crypto.random_fill`)
+                // all use a `loft_` prefix.  A wasm-bindgen stomp instead imports
+                // `__wbindgen_*`, so a non-`loft_` module is the red flag this guards.
+                if !m.starts_with("loft_") {
                     bad.insert(m);
                 }
             }

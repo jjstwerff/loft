@@ -123,9 +123,16 @@ Run the **same** crypto API in the browser with a minimal bundle.
 > wasm32-unknown-unknown by the **build-extension** in `src/main.rs` (cargo-build
 > the bridge crate's Cargo deps for wasm32, `--extern` the direct deps + `-L` the
 > deps dir on the bridge rustc compile and the main wasm link).  The deterministic
-> ops need no RNG, so no getrandom / wasm-bindgen.  **B1 remaining:** only
-> `random_bytes` — it needs OS entropy, a synchronous `getRandomValues` host import
-> (the one non-pure-compute bridge).  Then the web wasm bridge (C2–C3: browser
+> ops need no RNG, so no getrandom / wasm-bindgen.  **B1 COMPLETE — `random_bytes`
+> also bridged + verified** via the one HOST-IMPORT path: the synchronous
+> `crypto.getRandomValues` exposed by host.js as `loft_crypto.random_fill` (the
+> only Web Crypto call that is not a Promise), verified `native == wasm` (correct
+> base64 length + CSPRNG-distinct on both backends).  Two loft enablers landed for
+> it: the `--html` import-module guard now accepts the `loft_` prefix for
+> library-bridge host imports (not just `loft_io`/`loft_gl`), and
+> `tools/wasm_repro.mjs` loads extra host.js via `$LOFT_WASM_HOST_JS` so a
+> loft-libs-core bridge's host imports test headlessly.  **All 15 crypto primitives
+> now bridge native == wasm.**  Next: the web wasm bridge (C2–C3: browser
 > `WebSocket` + CBOR frames) and the plugin runtime (ZT-E). ZT-D2 rustls deferred.
 
 - **B1 — `[wasm.bridge]` → `crypto.subtle`.** Map each `n_crypto_*`:
