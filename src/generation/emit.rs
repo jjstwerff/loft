@@ -970,6 +970,21 @@ impl Output<'_> {
                 let r = node.as_block().result();
                 (r != Type::Void).then_some(r)
             }
+            // An Insert's result type is its LAST item's type (the tail value;
+            // earlier items are side-effecting ops like clear/append).  A
+            // `match` arm such as `{ clear(__retbuf); append(__retbuf, p);
+            // __retbuf }` lowers to an Insert, so a value-position
+            // `if … else null` whose value-branch is such an Insert must report
+            // this type — otherwise the sibling-Null typed-null handler below
+            // (`false_v == Null`) falls through and the `null` emits `()`,
+            // which rustc rejects against the `DbRef` result (the
+            // match-return-over-borrowed-params E0308; interp was already
+            // correct, so this closes a native-only divergence).
+            ValueType::Insert => node
+                .insert_items()
+                .iter()
+                .last()
+                .and_then(|last| self.infer_type(last)),
             ValueType::If => self.infer_type(node.if_then()),
             // @PLN17: resolve a tuple element's type so a boolean element used as
             // a predicate (`if t.1`) gets the `output_test_predicate` u8->bool
