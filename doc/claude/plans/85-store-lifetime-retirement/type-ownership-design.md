@@ -517,6 +517,31 @@ NOT a quick edit on top of the clean milestone, which is why this session ships 
 both-backends-correct milestone and leaves Edge B (the interp no-leak gate) as the
 single bounded follow-up.
 
+### 6h-update-5 — Edge B CLOSED (both gates green)
+
+Both gates are met for the cluster-II vector-`match`-return: **correct values AND no
+leak on BOTH backends**, full suite clean, probe 05 graduated. The close was the
+**per-arm Var-source NRVO delivery** (candidate 1): `materialize_vector_arms_into`
+descends the `match` (through `Return`/`Drop`/`Insert`/`Block`/`Span` — the missing
+`Return` descent was why earlier per-arm tries silently no-op'd) and rewrites each
+arm's terminal local-vector `Var` to
+`Insert([OpClearVector(__retbuf), OpAppendVector(__retbuf, <local>), OpFreeRef(<local
+__vdb dep>)…, __retbuf])`. This:
+
+- delivers into the caller's eager `__retbuf` work-ref store (so it is the result,
+  freed once by the caller — no orphan leak),
+- **explicitly frees the now-dead local arm backing** (the append already copied its
+  elements; without this free the interpreter orphaned it — the leak the whole-tail
+  form left), and
+- yields `__retbuf` from every arm, so the `If` is a return-`if` (native compiles it)
+  and the append source is a bare `Var` (native-safe, unlike the whole-tail form's
+  if-source which native could not scope → E0425).
+
+Gated to `t == Never|Void` (explicit `return match`, the real cbor-consumer shape).
+The IMPLICIT-tail variant (`{ match }`, `t == Vector`) routes through the type-keyed
+vector arm and is unchanged by this fix — a separate, pre-existing, lower-frequency
+leak left as a tracked follow-up.
+
 ### 6h-update-4 — Edge B ROOT-CAUSED (backtrace): `init_ref`'s eager work-ref store
 
 A `Store::new(100)` backtrace pinned the 3 leaked `kt=65535` stores exactly:
