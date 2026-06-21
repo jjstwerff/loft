@@ -47,10 +47,16 @@ unrestricted, in one process, sharing the store at full `DbRef` speed.
   IR-round-tripped (re-derived on parse) — persistence lands coupled with the first
   stdlib `#cap` annotation, documented on the field so the gap stays loud. Read/write
   groups read back distinctly; unannotated = None.
-- **Next:** 2.3 the **admission walk** — over the 1.3 reachable set, gate each trusted
-  (non-sandboxed) symbol's `def_cap_group` against the profile via `allows()`, fold in
-  the 1.4 FFI bridges (external FFI = ungranted cap), emit one diagnostic per violation.
-  Then the 1.4 backend half + stdlib `#cap` annotation (with its IR persistence).
+- **2.3 ✅ (the convergence)** — `sandbox::admit_capabilities` + `Parser::sandbox_admit`:
+  each sandboxed def is admitted under ITS OWN profile; every trusted symbol it
+  references must carry a `#cap` group the profile permits (1.1 `allows`) or — for an
+  external FFI bridge (1.4) — be `native_ffi`-allowed; a ref to another sandboxed def is
+  skipped (admitted under its own profile). Deny-by-default. **L4-complete**: indirect
+  fn-refs resolve to their target (1.3), so they land in the checked set. `CapViolation`
+  (UngrantedCap{group}/UntaggedSymbol/ExternalFfi{crate}) names each offender for 2.5.
+  Verified: granted admits, ungranted/untagged/L4-indirect rejected.
+- **Next:** **2.2** tag the stdlib `#cap` surface (+ the coupled `#cap` IR persistence) so
+  real scripts admit; then 2.5 diagnostics, the 1.4 backend half, and P3 totality.
 
 **Scope.** v1 is intentionally **fairly restricted** — a small total dialect (bounded
 loops, no/structural recursion, total ops) plus a **curated host API**; the
@@ -304,10 +310,13 @@ proven-total script.
 - **2.2 Tag the stdlib/API surface + coverage lint.** *Change:* assign groups across
   `default/*.loft` + registry libs (`fs.*`, `net`, `env`, `collections.{read,write}`,
   `math`, `text`, …). *Verify (L3-cap):* a lint fails if any public symbol lacks a group.
-- **2.3 Group-membership admission.** *Change:* every reachable symbol's group ∈
-  `allow_caps` (prefix) or another sandboxed def, else reject. *Verify:* `read_file`
-  (`fs.read`) / `Vector.clear` (`collections.write`) rejected naming the group;
-  `Vector.get` passes; the L4 indirect `let f=read_file; f(...)` rejected.
+- **2.3 Group-membership admission.** ✅ *shipped* (`admit_capabilities` /
+  `sandbox_admit`). *Change:* every reachable symbol's group ∈ `allow_caps` (prefix) or
+  another sandboxed def, else reject. *Verify:* `read_file` (`fs.read`) / `Vector.clear`
+  (`collections.write`) rejected naming the group; `Vector.get` passes; the L4 indirect
+  `let f=read_file; f(...)` rejected. **Done:** synthetic-cap equivalents verify each
+  case (granted admits, ungranted names the group, untagged denied, L4-indirect caught).
+  The named-stdlib examples (`read_file`/`Vector.*`) land once **2.2** tags the surface.
 - **2.4 No-raw-write admission.** *Change:* in a sandboxed def, reject raw store/field
   assignment to host data — writes only via allow-listed `*.write` ops (§5). *Verify:*
   `e.health = 0` rejected; `damage(e, 10)` (a granted `game.write` op) passes.
