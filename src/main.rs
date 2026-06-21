@@ -4848,6 +4848,16 @@ fn main() {
     if introspect_mode && introspect_trace {
         p.trace_types = true;
     }
+    // @PLN86 1.4 — load the program's `[sandbox]` policy (loft.toml next to the
+    // file) BEFORE parsing, so per-def designations apply during the parse.  The
+    // parser is lenient: a loft.toml with no `[sandbox]` section yields an empty
+    // config (no sandboxed defs, no effect).  The host owns this policy — a
+    // script cannot designate itself.
+    if let Some(dir) = std::path::Path::new(&abs_file).parent()
+        && let Ok(content) = std::fs::read_to_string(dir.join("loft.toml"))
+    {
+        p.set_sandbox_config(loft::sandbox::parse_sandbox_config(&content));
+    }
     // @PLN11 arc E — a whole-program warm load already holds every definition;
     // skip parsing the user file (and its lib loads) entirely.
     if !program_warm {
@@ -4913,6 +4923,21 @@ fn main() {
         if p.diagnostics.level() >= Level::Error {
             std::process::exit(1);
         }
+    }
+    // @PLN86 1.4 — sandboxed code must run on the INTERPRETER: generating +
+    // compiling Rust on the host is RCE by construction, and the native backend
+    // traps where the interpreter is total (div-by-zero yields null — 3.3).  An
+    // explicit `--native` on a sandboxed program is refused; otherwise the
+    // default native backend is overridden to interpret.
+    if p.sandbox_forces_interpret() {
+        if native_requested {
+            eprintln!(
+                "error: this program designates sandboxed code (@PLN86), which must run \
+                 interpret-only — remove --native"
+            );
+            std::process::exit(1);
+        }
+        native_mode = false;
     }
     scopes::check(&mut p.data);
     // @PLN11 Arc N / N3 (Step 2) — auto-compile `use`d libraries that opted in via

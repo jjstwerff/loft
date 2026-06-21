@@ -28,10 +28,10 @@ pub struct SandboxProfile {
     /// Allowed capability-group prefixes (e.g. `"game"`, `"collections.read"`).
     /// The fine-grained layer, used when a library is NOT allowed wholesale.
     pub allow_caps: Vec<String>,
-    /// Sandboxed code is always interpreted, never compiled to native via rustc
-    /// (generating + compiling Rust on the host is RCE by construction).
-    pub interpret_only: bool,
-    /// Sandboxed code may never load a `[native]` cdylib.
+    /// May this profile reach a vetted `[native]` cdylib bridge?  Default false.
+    /// (Interpret-only is NOT a per-profile choice — it is unconditional for ALL
+    /// sandboxed code, enforced by `Parser::sandbox_forces_interpret`: generating
+    /// + compiling Rust on the host is RCE by construction.)
     pub native_ffi: bool,
 }
 
@@ -40,7 +40,6 @@ impl Default for SandboxProfile {
         SandboxProfile {
             allow_libs: Vec::new(),
             allow_caps: Vec::new(),
-            interpret_only: true,
             native_ffi: false,
         }
     }
@@ -132,8 +131,8 @@ impl SandboxConfig {
 ///
 /// - `[sandbox]` — `profile-name = ["selector", …]` adds a designation per
 ///   selector.
-/// - `[profile.<name>]` — `allow_caps = ["g", …]`, `backend = "interpret"`,
-///   `native_ffi = false`.
+/// - `[profile.<name>]` — `allow_libs = ["l", …]`, `allow_caps = ["g", …]`,
+///   `native_ffi = false`.  (Interpret-only is unconditional, not a key here.)
 #[must_use]
 pub fn parse_sandbox_config(content: &str) -> SandboxConfig {
     let mut config = SandboxConfig::default();
@@ -167,7 +166,8 @@ pub fn parse_sandbox_config(content: &str) -> SandboxConfig {
             match key {
                 "allow_libs" => profile.allow_libs = parse_str_list(value),
                 "allow_caps" => profile.allow_caps = parse_str_list(value),
-                "backend" => profile.interpret_only = unquote(value) == "interpret",
+                // `backend` is accepted-and-ignored: interpret-only is unconditional
+                // for sandboxed code, not a per-profile setting (see SandboxProfile).
                 "native_ffi" => profile.native_ffi = value.trim() == "true",
                 _ => {}
             }
@@ -180,11 +180,6 @@ pub fn parse_sandbox_config(content: &str) -> SandboxConfig {
 /// manifest's simple values, which never contain a literal `#`.
 fn strip_comment(line: &str) -> &str {
     line.split_once('#').map_or(line, |(head, _)| head)
-}
-
-/// Strip surrounding double quotes from a scalar value.
-fn unquote(value: &str) -> &str {
-    value.trim().trim_matches('"')
 }
 
 /// Parse a value that is either a TOML array `["a", "b"]` or a bare/quoted
@@ -814,7 +809,6 @@ allow_caps = ["game.read", "game.write", "math", "collections.read"]
             ("fn:player_eval".to_string(), "mod-script".to_string())
         );
         let p = cfg.profiles.get("mod-script").expect("profile present");
-        assert!(p.interpret_only);
         assert!(!p.native_ffi);
         assert!(p.allows("game.write"));
         assert!(p.allows("collections.read"));
@@ -843,8 +837,9 @@ allow_caps = ["game.read", "game.write", "math", "collections.read"]
         let cfg = parse_sandbox_config("[sandbox]\nlocked = [\"a.loft\"]\n[profile.locked]\n");
         let p = cfg.profiles.get("locked").expect("registered");
         assert!(p.allow_caps.is_empty());
+        assert!(p.allow_libs.is_empty());
         assert!(!p.allows("game.read")); // deny-all by default
-        assert!(p.interpret_only && !p.native_ffi); // safe defaults
+        assert!(!p.native_ffi); // safe default
     }
 
     #[test]

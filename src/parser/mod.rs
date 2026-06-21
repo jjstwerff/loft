@@ -646,6 +646,17 @@ impl Parser {
         caps.chain(totality).collect()
     }
 
+    /// @PLN86 step 1.4 — does this program contain sandboxed code that must run
+    /// on the interpreter?  True iff ANY def is designated sandboxed.  This is
+    /// non-negotiable, NOT a per-profile choice: generating + compiling Rust on
+    /// the host is RCE by construction, and the native backend traps where the
+    /// interpreter is total (div-by-zero yields null — 3.3).  loft's own CLI
+    /// run-path forces interpret (and refuses an explicit `--native`) when true.
+    #[must_use]
+    pub fn sandbox_forces_interpret(&self) -> bool {
+        !self.def_sandbox.is_empty()
+    }
+
     /// # Panics
     /// With filesystem problems.
     pub fn parse(&mut self, filename: &str, default: bool) -> bool {
@@ -8515,6 +8526,27 @@ mod plan86_admission_tests {
                 .any(|v| matches!(v, TotalityViolation::PartialOp { .. })),
             "arithmetic is total (not excluded), got {:?}",
             p2.sandbox_totality()
+        );
+    }
+
+    /// @PLN86 1.4 — any designated def forces interpret-only (unconditional); a
+    /// program with no sandboxed defs leaves the native backend available.
+    #[test]
+    fn sandbox_forces_interpret_on_any_designation() {
+        let p = parse_admit_libs(
+            &["fn:scripted"],
+            &["code"],
+            &[],
+            "fn scripted() -> integer { 1 }\n",
+        );
+        assert!(
+            p.sandbox_forces_interpret(),
+            "a sandboxed def must force interpret-only"
+        );
+        let p2 = parse_admit_libs(&[], &["code"], &[], "fn plain() -> integer { 1 }\n");
+        assert!(
+            !p2.sandbox_forces_interpret(),
+            "no sandboxed defs → native allowed"
         );
     }
 }
