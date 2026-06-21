@@ -835,8 +835,10 @@ impl Parser {
                     // to struct-field tails: whole-arg / index / call tails stay on
                     // the ref_return path (the over-broad cut regressed the suite).
                     let elm_ty = (**elm).clone();
-                    let fwd = self
-                        .create_var("__fwd", &Type::Vector(Box::new(elm_ty.clone()), Deps::none()));
+                    let fwd = self.create_var(
+                        "__fwd",
+                        &Type::Vector(Box::new(elm_ty.clone()), Deps::none()),
+                    );
                     if fwd != u16::MAX
                         && let Some(last) = l.last_mut()
                     {
@@ -4663,18 +4665,13 @@ impl Parser {
                     let buf_var = if ref1_var != u16::MAX && self.vars.is_argument(ref1_var) {
                         ref1_var
                     } else if let Some((_, bv)) = self.return_buffer()
-                        && dep
-                            .iter()
-                            .any(|&d| d != bv && self.vars.is_argument(d))
+                        && dep.iter().any(|&d| d != bv && self.vars.is_argument(d))
                     {
                         bv
                     } else {
                         u16::MAX
                     };
-                    if !vector_bound
-                        && buf_var != u16::MAX
-                        && !dep.contains(&buf_var)
-                    {
+                    if !vector_bound && buf_var != u16::MAX && !dep.contains(&buf_var) {
                         // @P314 — narrow-aware element type (see `append_elem_tp`).
                         let elm = (**elm_tp).clone();
                         let rec_tp = self.append_elem_tp(&elm);

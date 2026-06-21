@@ -80,7 +80,11 @@ pub fn complete_definition(_lexer: &mut Lexer, data: &mut Data, d_nr: u32) {
 /// mismatch → corrupted enum-discriminant reads on both backends (loft#417).  Returns
 /// the synth `__nullable<S>` enum def for an eligible element (a non-stdlib,
 /// non-synthetic struct); `None` leaves the element dense.
-pub(crate) fn nullable_vector_elem(data: &mut Data, lexer: &mut Lexer, struct_d: u32) -> Option<u32> {
+pub(crate) fn nullable_vector_elem(
+    data: &mut Data,
+    lexer: &mut Lexer,
+    struct_d: u32,
+) -> Option<u32> {
     if struct_d == u32::MAX
         || !matches!(data.def_type(struct_d), DefType::Struct)
         || data.def(struct_d).synthetic.is_some()
@@ -104,13 +108,15 @@ fn copy_unknown_fields(data: &mut Data, lexer: &mut Lexer, d: u32) {
         {
             let dep = dep.clone();
             let resolved = data.def(was).returned.clone();
-            let s = if let Type::Reference(s, _) = &resolved { *s } else { u32::MAX };
+            let s = if let Type::Reference(s, _) = &resolved {
+                *s
+            } else {
+                u32::MAX
+            };
             // Forward-ref element: `e2_nullable_elem` was skipped at parse (the element
             // was still `Unknown`), so apply the SAME rewrite now, through the shared
             // home — the field then matches the params/locals of the same `vector<S>`.
-            let elem = if owner_rewrites
-                && let Some(syn) = nullable_vector_elem(data, lexer, s)
-            {
+            let elem = if owner_rewrites && let Some(syn) = nullable_vector_elem(data, lexer, s) {
                 Type::Enum(syn, true, Deps::none())
             } else {
                 resolved
