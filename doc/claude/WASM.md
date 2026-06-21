@@ -618,6 +618,69 @@ test('delta serialise and reload', () => {
 
 ---
 
+## Library `[wasm.bridge]` packages — build, link, verify (@PLN84)
+
+A registry/`--lib` library can run its `#native` functions in `--html` builds via a
+`[wasm.bridge]` in its `loft.toml`. The `crypto` library (loft-libs-core) is the
+worked reference — all 15 primitives bridge `native == wasm`. Two mechanisms:
+
+1. **Routed pure-compute (`[wasm.bridge.routes]`).** `n_<x> = "<bridge_fn>"` maps a
+   `#native` to a `pub fn` in the bridge crate (`wasm/src/lib.rs`); codegen calls it
+   directly. Text/scalar/bool in+out, runs synchronously to completion. The cleanest
+   way to keep `native == wasm` is to `#[path]`-SHARE the native crate's modules
+   (byte-identical), e.g. crypto shares `sha256.rs`/`base64.rs`/`ed25519.rs`/… .
+2. **Host imports** (the `random_fill` / WebSocket pattern). The bridge declares
+   `#[cfg(target_arch="wasm32")] #[link(wasm_import_module="loft_<x>")] unsafe extern
+   "C" { fn f(…); }` and `host.js` pushes a `LOFT_WASM_EXTENSIONS` callback
+   `(imports, ctrl, getMem)` that adds `imports.loft_<x>.f`. For anything touching
+   the live JS world (RNG, sockets, time). Bytes cross via the ptr/len ABI over
+   `getMem().buffer` (always re-fetch — wasm memory can grow/detach).
+
+### The build-extension (deps beyond `loft`)
+
+If the bridge crate's `Cargo.toml` declares dependencies beyond `loft` (e.g.
+dalek/RustCrypto), `loft --html` cargo-builds the crate for `wasm32-unknown-unknown`,
+`--extern`s each direct dep on the bridge rustc compile, and `-L`s the deps dir on
+both the bridge compile and the main wasm link (`src/main.rs` — the `--html` bridge
+loop). The bridge still links the SHARED prebuilt loft (no duplicate loft); the deps
+are loft-independent. Deterministic crypto ops need no RNG → no getrandom/wasm-bindgen.
+Dep-less bridges skip this (the `has-nonloft-deps` gate), so existing `--html` tests
+are untouched. Import-module names must use a **`loft_` prefix** (the `--html`
+stomp-guard in `src/native_utils.rs` allows `loft_*`, rejects `__wbindgen_*`).
+
+### Headless verify loop (no browser)
+
+```bash
+# build a KAT .loft to a browser-wasm bundle against the LOCAL lib
+loft --html /tmp/kat.html --lib /path/to/lib /path/to/kat.loft
+# extract the wasm and run it under node (node installed user-local at ~/.local/bin)
+python3 -c "import re,base64;h=open('/tmp/kat.html').read();\
+m=re.search(r'wasmB64=\"([A-Za-z0-9+/=]+)\"',h);\
+open('/tmp/kat.wasm','wb').write(base64.b64decode(m.group(1)))"
+# pure-compute bridge: wasm_repro finds lib/*/wasm/host.js automatically
+node tools/wasm_repro.mjs /tmp/kat.wasm           # exit 0 = asserts passed
+# a loft-libs-core bridge's host.js (outside <repo>/lib): point at it explicitly
+LOFT_WASM_HOST_JS=/path/to/lib/wasm/host.js node tools/wasm_repro.mjs /tmp/kat.wasm
+```
+
+A deterministic primitive's KAT passing on both `--interpret`/native AND this wasm
+run proves `native == wasm`. **`wasm_repro.mjs` runs `loft_start()` synchronously
+with no asyncify resume loop** — it is a trap+compute harness; it CANNOT drive an
+interactive/event-driven client (WebSocket) — that needs a new asyncify-aware driver
+(see [`plans/84-zt-c-web-ws-bridge.md`](plans/84-zt-c-web-ws-bridge.md) § 9).
+
+### Gotcha — clear `~/.cache/loft` before `--html` if you just ran `--interpret`
+
+The startup cache (#322) can serve a stale package entry to `--html` after an
+`--interpret` run of the same program — the freshly-added `[wasm.bridge].routes`
+don't apply and the build fails with `n_<x>(cell, …)` "unrouted native" / `can't be
+dereferenced` errors. Workaround: `rm -rf ~/.cache/loft` immediately before the
+`--html` build (the registry under `~/.loft` is separate, untouched). (Candidate
+cache-invalidation bug — the route table isn't keyed on the lib's `loft.toml` change
+across modes.)
+
+---
+
 ## Host Bridge API
 
 The WASM module imports functions from a `loftHost` namespace. The host (browser or

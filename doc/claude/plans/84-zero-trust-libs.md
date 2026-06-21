@@ -28,6 +28,43 @@ signature check).
 
 ---
 
+## Status & handoff (2026-06-21) — READ FIRST after a context reset
+
+**Done + on `main`-trackable state:**
+- **ZT-A cbor** — encode + decode incl. maps; cbor lib green both backends.
+- **ZT-B crypto — COMPLETE, all 15 primitives bridge `native == wasm`** (hashing/
+  base64/HKDF + ed25519/x25519/aes256gcm + random_bytes), each verified by running
+  its KAT/property test on `--interpret` AND the wasm backend.
+
+**⚠ The crypto wasm-bridge commits are LOCAL + UNPUSHED — integrate them first.**
+On `loft-libs-core` branch `cbor`, three commits are committed locally but the push
+is blocked: `9811181` (hashing/KDF), `cdf9515` (curve/AEAD), `4328ace` (random_bytes).
+Blocked because (a) origin `cbor` advanced by the unrelated `a10de50` lint commit
+(non-fast-forward) and (b) the tree has an **uncommitted local-only `loft2`
+`[patch.crates-io]` override** in `crypto/native/Cargo.toml` (+ lockfiles, marked
+"not for upstream"), which the git-safety rule forbids stashing/rebasing around.
+**To land them:** `git -C ~/workspace/loft-libs-core pull --rebase` on `cbor` (the
+override survives — `a10de50` touches a different file), then `git push`. Do NOT
+discard the override (native builds need the loft2 ABI match).
+
+**The loft-side enablers ARE pushed** (loft branch `plan-85-store-lifetime-retirement`):
+the `[wasm.bridge]` **build-extension** (compile a bridge crate's Cargo deps to
+wasm32), the `loft_`-prefix import-module allowance, and `tools/wasm_repro.mjs`
+`$LOFT_WASM_HOST_JS`. Plus this cycle's #417 fix + the data-structure lesson docs.
+
+**Environment (this machine):** **node** is installed user-local at `~/.local/bin`
+(runs the headless wasm verify loop — no browser needed); **chromium** + **binaryen**
+(wasm-opt) are apt-installed. The wasm32 Rust targets + rlibs are present. See
+[WASM.md § Building + verifying a `[wasm.bridge]`](../WASM.md) for the build/verify
+recipe and the `~/.cache/loft` cache gotcha.
+
+**Next: ZT-C web WebSocket bridge** — full design in
+[`84-zt-c-web-ws-bridge.md`](84-zt-c-web-ws-bridge.md). It is the async↔sync case
+(needs the asyncify frame-yield). Start at its step 1: the asyncify-aware Node verify
+driver + the **R1 probe** (does `--html` asyncify resume work headless, no GL window?).
+
+---
+
 ## ZT-A — `cbor` (NEW) · home `loft-libs-core/cbor` · → @PLN83
 
 Signable canonical CBOR, built **in pure loft** — no native crate, no
