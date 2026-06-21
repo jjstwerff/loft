@@ -55,8 +55,18 @@ unrestricted, in one process, sharing the store at full `DbRef` speed.
   fn-refs resolve to their target (1.3), so they land in the checked set. `CapViolation`
   (UngrantedCap{group}/UntaggedSymbol/ExternalFfi{crate}) names each offender for 2.5.
   Verified: granted admits, ungranted/untagged/L4-indirect rejected.
-- **Next:** **2.2** tag the stdlib `#cap` surface (+ the coupled `#cap` IR persistence) so
-  real scripts admit; then 2.5 diagnostics, the 1.4 backend half, and P3 totality.
+- **2.2 ◐ (lint shipped; tagging gated)** — `sandbox::untagged_public_symbols` +
+  `Parser::untagged_public_symbols` list every public, non-synthetic fn lacking a `#cap`
+  group (L3-cap: empty = full coverage). The **tagging itself** is gated on a
+  prerequisite: `#cap` **IR persistence**. The stdlib startup cache
+  (`LOFT_STDLIB_CACHE`) round-trips defs through the store codec and the equivalence
+  tests compare the stdlib, so tagging without persisting `cap` breaks them / hides a
+  silent drop. Persisting needs a record-schema change — the IR packs fields by region
+  (`DEF_OP_CODE=44` precedes `DEF_NATIVE=104`), so a new string field shifts same-region
+  offsets and requires **regenerating the baked layout** (`ir_schema_gen.rs`) + updating
+  the `DEF_` constants. That schema-regen is the next focused increment.
+- **Next:** **2.2-persist** the `cap` IR round-trip (baked-layout regen) → then tag the
+  166-fn surface against the lint → then 2.5 diagnostics, the 1.4 backend half, P3.
 
 **Scope.** v1 is intentionally **fairly restricted** — a small total dialect (bounded
 loops, no/structural recursion, total ops) plus a **curated host API**; the
@@ -307,9 +317,11 @@ proven-total script.
   (read/write groups read back distinctly). **Remaining:** the type/module default with
   per-method override (resolve a method's effective cap from its type when it has none),
   and IR persistence (coupled with the stdlib annotation in 2.2).
-- **2.2 Tag the stdlib/API surface + coverage lint.** *Change:* assign groups across
-  `default/*.loft` + registry libs (`fs.*`, `net`, `env`, `collections.{read,write}`,
-  `math`, `text`, …). *Verify (L3-cap):* a lint fails if any public symbol lacks a group.
+- **2.2 Tag the stdlib/API surface + coverage lint.** ◐ *lint shipped
+  (`untagged_public_symbols`); tagging gated on `cap` IR persistence (baked-layout regen
+  in `ir_schema_gen.rs`).* *Change:* assign groups across `default/*.loft` + registry libs
+  (`fs.*`, `net`, `env`, `collections.{read,write}`, `math`, `text`, …). *Verify
+  (L3-cap):* a lint fails if any public symbol lacks a group.
 - **2.3 Group-membership admission.** ✅ *shipped* (`admit_capabilities` /
   `sandbox_admit`). *Change:* every reachable symbol's group ∈ `allow_caps` (prefix) or
   another sandboxed def, else reject. *Verify:* `read_file` (`fs.read`) / `Vector.clear`
