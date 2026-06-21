@@ -26,7 +26,15 @@ unrestricted, in one process, sharing the store at full `DbRef` speed.
   `expression`→`expression_inner` depth-guarded wrapper; hostile deep nesting in a
   sandboxed def is a clean LOAD-time error (limit 128 ≈ 1.3 MB; ~10 KB/level), trusted
   code unguarded. Deterministic explicit-stack test.
-- **Next:** 1.3 (reachable-set DFS) · 1.4 (FFI/backend ban) → 2.x capabilities.
+- **1.3 ✅** — `sandbox::reachable_set` (restricted-mode DFS over `Value::walk`) +
+  `Parser::sandbox_reachable_set`: descends into sandboxed defs, trusted symbols are
+  leaves. **L4 hole found by probing the IR first** — a non-capturing fn-ref is a bare
+  `Value::Int(def_nr)` (`apply(target,5)` → `n_apply(599i32,…)`), not a `FnRef` node, so
+  it is read as a reference only in a `Function`-typed position (call arg / assignment).
+  Both `apply(target,…)` and `f=target; apply(f,…)` covered; residual
+  (returns/fields/collections) tracked. 3 tests.
+- **Next:** 1.4 (FFI/backend ban) → 2.x capabilities (where `allows()` gets its
+  consumer over the 1.3 reachable set).
 
 **Scope.** v1 is intentionally **fairly restricted** — a small total dialect (bounded
 loops, no/structural recursion, total ops) plus a **curated host API**; the
@@ -204,11 +212,18 @@ nothing, and touch only allowed capabilities.
 - **L3 — every operation can be made total.** *Probe:* enumerate the partial ops
   (div/mod-zero, integer overflow, conversions, …); each gets a defined total result or
   is excluded — none can fault. (OOB→`null` already holds.)
-- **L4 — capabilities are complete (indirect calls can't escape).** *Risk:* a fn-ref to
-  a denied symbol called indirectly. *Mitigation:* admission closes over **references**
-  (`let f = read_file` is a reference → caught) **and** allow-listed host APIs must not
-  hand untrusted code an arbitrary fn-ref (host contract). **Probe:**
-  `let f = read_file; f("/etc/passwd")` rejected naming `fs.read`.
+- **L4 — capabilities are complete (indirect calls can't escape).** *Status:*
+  **partially verified (1.3).** *Risk:* a fn-ref to a denied symbol called indirectly.
+  *IR finding (verified):* a non-capturing fn-ref is emitted as a bare
+  `Value::Int(def_nr)` — `apply(target, 5)` → `n_apply(599i32, 5i32)` — **not** a
+  `FnRef` node, so it is indistinguishable from an integer literal **except by type
+  context**; `reachable_set` reads an `Int`/`Long` as a reference only in a
+  `Function`-typed position (call arg / assignment). *Mitigation:* admission closes over
+  **references** (the fn-ref `target` → caught) **and** allow-listed host APIs must not
+  hand untrusted code an arbitrary fn-ref (host contract). **Probe (passing):**
+  `apply(target,…)` and `f = target; apply(f,…)` both put `target` in the set. *Residual
+  (tracked):* fn-refs via `Function`-typed return / struct field / collection — close
+  before 2.3 relies on the set.
 - **L5 — worst-case complexity is computable and inputs are host-bounded.** *Risk:* a
   total-but-`O(huge)` script stalls a frame. *Mitigation:* admission reports the
   complexity; the host bounds the inputs. **Probe:** admission reports `O(entities)` for
