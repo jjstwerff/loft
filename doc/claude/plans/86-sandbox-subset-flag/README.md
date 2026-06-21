@@ -152,6 +152,10 @@ What is built is listed under [§ Implementation progress](#status); what remain
 - **3.4b complexity precision** — trusted-leaf ops count as O(1)/call (a `sort` is
   O(n log n), `contains` O(n)); and the loop walk treats an `Iter`'s once-run init as
   in-loop (a safe over-count). Both tighten the `O(n^d)` report.
+- **2.4b index/vector write ownership** — ownership-aware 2.4 admits a script-owned STRUCT
+  mutation but conservatively rejects index writes (`v[i] = …`) and non-struct bases, since a
+  vector carries no per-value owner. Needs value provenance (is the vector a local
+  construction vs a host-passed param) to admit a mod mutating its own array.
 
 ### D. Hardening / integration
 - **1.4b feature-gate `--native` codegen** — the dlopen path is already removable
@@ -441,12 +445,15 @@ proven-total script.
   the group when ungranted; the L4 indirect `f=read_file; f(...)` rejected. **Done on the
   REAL stdlib**: untagged `now()` admits under `allow_libs=["files"]`; the fs.read/fs.write
   split gates `files` finely. Library = source module / package (`def_library`).
-- **2.4 No-raw-write admission.** ✅ *shipped* (`RawWriteViolation` / `sandbox_raw_writes`).
-  *Change:* in a sandboxed def, reject a raw store/field assignment to heap data — writes
-  only via allow-listed `*.write` ops (§5). *Verify:* `e.health = 0` / `v[i] = 9` rejected;
-  struct construction + local writes admit. **Done:** recorded at parse (`parse_assign`,
-  non-`Var` LHS), CLI-enforced (`tests/sandbox_cli.rs`). v1-conservative: ALL field/index
-  writes rejected (host- vs script-owned data not yet distinguished — post-v1).
+- **2.4 No-raw-write admission — OWNERSHIP-AWARE.** ✅ *shipped* (`RawWriteViolation` /
+  `raw_write_is_host_owned`). *Change:* in a sandboxed def, reject a raw field/index write to
+  HOST data, but ALLOW the script to mutate the data it OWNS (the ../crawler dogfood:
+  `e.alive = false` on a script-created entity). Host data = the base root is a parameter, or
+  its type is a host-library struct (the TYPE catches aliasing `x = player; x.health = …`), a
+  vector, or a scalar; a non-parameter local of a script-defined struct (its `def_library ∉
+  allow_libs`) is the script's own → mutable. *Verify:* `m = Mob{}; m.hp = 0` admits;
+  `fn f(p: Player){ p.hp = 0 }` rejected. **Limitation (post-v1):** index writes + non-struct
+  bases stay conservatively rejected — vector-element ownership needs value provenance.
 - **2.5 Diagnostic quality (§6).** ✅ *P2 classes shipped* (`describe_violation` /
   `Parser::sandbox_admission_errors`). *Change:* every rejection carries the construct
   span + the rule + the allowed set / fix. *Verify:* the error text for each rejection
