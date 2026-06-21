@@ -20,8 +20,13 @@ use std::collections::{HashMap, HashSet};
 /// capability, interpret-only, no FFI.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SandboxProfile {
+    /// Libraries allowed **wholesale** (e.g. `"text"`, `"crypto"`).  Every symbol
+    /// from an allow-listed library admits with NO `#cap` tag — a complete,
+    /// host-vetted library is included as a unit.  Tags (`allow_caps`) are only
+    /// for carving a library in half ("include `files`, but reads only").
+    pub allow_libs: Vec<String>,
     /// Allowed capability-group prefixes (e.g. `"game"`, `"collections.read"`).
-    /// Empty = deny everything.
+    /// The fine-grained layer, used when a library is NOT allowed wholesale.
     pub allow_caps: Vec<String>,
     /// Sandboxed code is always interpreted, never compiled to native via rustc
     /// (generating + compiling Rust on the host is RCE by construction).
@@ -33,6 +38,7 @@ pub struct SandboxProfile {
 impl Default for SandboxProfile {
     fn default() -> Self {
         SandboxProfile {
+            allow_libs: Vec::new(),
             allow_caps: Vec::new(),
             interpret_only: true,
             native_ffi: false,
@@ -41,6 +47,14 @@ impl Default for SandboxProfile {
 }
 
 impl SandboxProfile {
+    /// True iff library `lib` is allow-listed wholesale (exact name match).  A
+    /// match admits every symbol from that library — including its untagged
+    /// functions and its native bridges — because the host vetted it as a unit.
+    #[must_use]
+    pub fn allows_lib(&self, lib: &str) -> bool {
+        !lib.is_empty() && self.allow_libs.iter().any(|l| l == lib)
+    }
+
     /// True iff a symbol tagged with capability `group` is allowed by this
     /// profile.  **Deny-by-default**: an empty / untagged group is never allowed,
     /// and a group is allowed only when some `allow_caps` entry is a
@@ -151,6 +165,7 @@ pub fn parse_sandbox_config(content: &str) -> SandboxConfig {
         } else if let Some(name) = section.strip_prefix("profile.") {
             let profile = config.profiles.entry(name.to_string()).or_default();
             match key {
+                "allow_libs" => profile.allow_libs = parse_str_list(value),
                 "allow_caps" => profile.allow_caps = parse_str_list(value),
                 "backend" => profile.interpret_only = unquote(value) == "interpret",
                 "native_ffi" => profile.native_ffi = value.trim() == "true",
@@ -325,14 +340,38 @@ pub enum CapViolation {
     },
 }
 
-/// @PLN86 step 2.3 — the capability-admission walk.  Each sandboxed def is
-/// admitted under ITS OWN profile: every trusted symbol it references (a
-/// non-sandboxed leaf, §4) must carry a `#cap` group the profile permits — or,
-/// for an external FFI bridge, be allowed by `native_ffi`.  A reference to
-/// another sandboxed def is fine: that def is admitted under its own profile, so
-/// the union of per-def checks covers the whole reachable closure.  This is the
-/// L4-complete check: `referenced_defs` already resolves indirect fn-refs
-/// (`f = read_file`) to their target, so an indirect call cannot escape.
+/// @PLN86 — the library a def belongs to, the wholesale-admission key for
+/// `allow_libs`.  Derived from the def's source file: the basename minus a
+/// leading `NN_` number prefix and the extension.  Stdlib modules →
+/// `code`/`files`/`text`/`json`; a single-file external lib → its package name
+/// (`crypto`).  `None` for a synthetic / empty source.
+#[must_use]
+pub fn def_library(data: &Data, def_nr: u32) -> Option<String> {
+    let def = data.def(def_nr);
+    let file = def.position().file.as_str();
+    let base = std::path::Path::new(file).file_stem()?.to_str()?;
+    // Strip a leading `\d+_` (stdlib module naming: `01_code` -> `code`).
+    let name = match base.find('_') {
+        Some(i) if i > 0 && base.as_bytes()[..i].iter().all(|b| b.is_ascii_digit()) => {
+            &base[i + 1..]
+        }
+        _ => base,
+    };
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+/// @PLN86 step 2.3 — the capability-admission walk, **library-first**.  Each
+/// sandboxed def is admitted under ITS OWN profile; every trusted symbol it
+/// references (a non-sandboxed leaf, §4) is admitted if **either**:
+///   1. its **library** is allow-listed wholesale (`allow_libs`) — a complete,
+///      host-vetted library is included as a unit, NO `#cap` tag needed; or
+///   2. its `#cap` **group** is allow-listed (`allow_caps`) — the fine-grained
+///      layer, for carving a library in half ("include `files`, reads only").
+/// A symbol in no allowed library and with no allowed cap is the violation.  A
+/// reference to another sandboxed def is fine (admitted under its own profile),
+/// so the union of per-def checks covers the whole reachable closure.  This is
+/// L4-complete: `referenced_defs` resolves indirect fn-refs (`f = read_file`) to
+/// their target, so an indirect call cannot escape.
 ///
 /// Returns every violation, deterministically ordered, for diagnostics (2.5).
 #[must_use]
@@ -355,8 +394,16 @@ pub fn admit_capabilities(
             if sandboxed.contains_key(&symbol) {
                 continue;
             }
+            // LIBRARY-FIRST: a wholesale-allowed library admits every symbol in
+            // it — untagged functions AND native bridges — the host vetted it.
+            if let Some(lib) = def_library(data, symbol)
+                && profile.is_some_and(|p| p.allows_lib(&lib))
+            {
+                continue;
+            }
             let def = data.def(symbol);
-            // 1.4 fold-in: an external FFI bridge is gated by `native_ffi`, not caps.
+            // Not in an allowed library — apply the fine-grained gates.
+            // 1.4: an external FFI bridge is gated by `native_ffi`, not caps.
             let native = def.native();
             if !native.is_empty()
                 && let Some(crate_name) = data.native_symbol_crates.get(native)
@@ -370,7 +417,7 @@ pub fn admit_capabilities(
                 }
                 continue;
             }
-            // 2.3 capability check (deny-by-default).
+            // 2.3: capability check (deny-by-default).
             let cap = def.cap();
             if cap.is_empty() {
                 violations.push(CapViolation::UntaggedSymbol { from, symbol });

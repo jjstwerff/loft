@@ -607,6 +607,14 @@ impl Parser {
         crate::sandbox::untagged_public_symbols(&self.data)
     }
 
+    /// @PLN86 — the library a def belongs to (derived from its source), the
+    /// wholesale-admission key for a profile's `allow_libs`.  `None` for a
+    /// synthetic / sourceless def.
+    #[must_use]
+    pub fn def_library(&self, def_nr: u32) -> Option<String> {
+        crate::sandbox::def_library(&self.data, def_nr)
+    }
+
     /// # Panics
     /// With filesystem problems.
     pub fn parse(&mut self, filename: &str, default: bool) -> bool {
@@ -8045,18 +8053,26 @@ mod plan86_admission_tests {
     use super::*;
     use crate::sandbox::{CapViolation, parse_sandbox_config};
 
-    fn parse_admit(designations: &[&str], allow_caps: &[&str], src: &str) -> Parser {
-        let dlist = designations
+    fn quoted(items: &[&str]) -> String {
+        items
             .iter()
             .map(|s| format!("\"{s}\""))
             .collect::<Vec<_>>()
-            .join(", ");
-        let clist = allow_caps
-            .iter()
-            .map(|s| format!("\"{s}\""))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let cfg = format!("[sandbox]\nmod = [{dlist}]\n[profile.mod]\nallow_caps = [{clist}]\n");
+            .join(", ")
+    }
+
+    fn parse_admit_libs(
+        designations: &[&str],
+        allow_libs: &[&str],
+        allow_caps: &[&str],
+        src: &str,
+    ) -> Parser {
+        let cfg = format!(
+            "[sandbox]\nmod = [{}]\n[profile.mod]\nallow_libs = [{}]\nallow_caps = [{}]\n",
+            quoted(designations),
+            quoted(allow_libs),
+            quoted(allow_caps),
+        );
         let mut p = Parser::new();
         p.set_sandbox_config(parse_sandbox_config(&cfg));
         p.parse_dir("default", true, true).unwrap();
@@ -8069,6 +8085,10 @@ mod plan86_admission_tests {
         p.parse(path.to_str().unwrap(), false);
         let _ = std::fs::remove_file(&path);
         p
+    }
+
+    fn parse_admit(designations: &[&str], allow_caps: &[&str], src: &str) -> Parser {
+        parse_admit_libs(designations, &[], allow_caps, src)
     }
 
     fn viol_symbol(v: &CapViolation) -> u32 {
@@ -8217,6 +8237,43 @@ mod plan86_admission_tests {
         assert!(
             !v.iter().any(|x| viol_symbol(x) == envv),
             "granted env must admit, got {v:?}"
+        );
+    }
+
+    /// @PLN86 — library-first admission: a wholesale-allowed library admits its
+    /// UNTAGGED functions with no `#cap` tag (the common "include a whole
+    /// library" case).  `now()` lives in the `files` stdlib module and is
+    /// untagged; under `allow_libs=["files"]` it admits, without it it is an
+    /// `UntaggedSymbol`.  Tags stay the fine-grained layer, not a requirement.
+    #[test]
+    fn wholesale_allowed_library_admits_untagged_functions() {
+        // def_library identifies the stdlib module from the source file.
+        let p0 = parse_admit(&[], &[], "fn ignore() -> integer { 1 }\n");
+        assert_eq!(
+            p0.def_library(p0.data.def_nr("n_mtime")).as_deref(),
+            Some("files")
+        );
+
+        let src = "fn uses_now() -> integer { now() }\n";
+        // (a) files allowed wholesale → untagged now() admits, no tag needed.
+        let p = parse_admit_libs(&["fn:uses_now"], &["files"], &[], src);
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        assert!(
+            p.sandbox_admit().is_empty(),
+            "wholesale files must admit untagged now(), got {:?}",
+            p.sandbox_admit()
+        );
+        // (b) nothing allowed → now() is rejected (deny-by-default).
+        let p2 = parse_admit_libs(&["fn:uses_now"], &[], &[], src);
+        let now = p2.data.def_nr("n_now");
+        assert!(
+            p2.sandbox_admit().iter().any(|x| viol_symbol(x) == now),
+            "without allow_libs, untagged now() must be flagged, got {:?}",
+            p2.sandbox_admit()
         );
     }
 }
