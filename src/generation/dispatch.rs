@@ -174,14 +174,10 @@ impl Output<'_> {
             // store into its buffer param and nobody else owns it, so the
             // source-free bit must stay set (skipping it leaked one store
             // per `s = grow(s)` loop iteration).
-            let callee_attrs = self.data.def(*fn_nr).attributes();
-            let is_borrowed_view = self
-                .data
-                .def(*fn_nr)
-                .returned()
-                .depend()
-                .iter()
-                .any(|&d| callee_attrs.get(d as usize).is_none_or(|a| !a.hidden));
+            // Cluster-A A.4: ONE return-ownership query, shared with the
+            // interpreter (`state/codegen.rs`).  Both backends read the same
+            // fact, so they cannot diverge on the hidden-only / out-of-range edge.
+            let is_borrowed_view = self.data.def(*fn_nr).returns_borrowed_view();
             let tp_with_free: i32 = if is_borrowed_view {
                 i32::from(tp_nr)
             } else {
