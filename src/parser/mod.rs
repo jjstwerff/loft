@@ -589,6 +589,16 @@ impl Parser {
         (!cap.is_empty()).then_some(cap)
     }
 
+    /// @PLN86 step 2.3 — the capability-admission walk: every trusted symbol a
+    /// sandboxed def reaches must carry a `#cap` group its profile permits (or be
+    /// `native_ffi`-allowed).  An empty result means the sandboxed code is
+    /// admitted; otherwise each `CapViolation` names the offending reference for
+    /// a diagnostic.  Run after parsing.
+    #[must_use]
+    pub fn sandbox_admit(&self) -> Vec<crate::sandbox::CapViolation> {
+        crate::sandbox::admit_capabilities(&self.data, &self.sandbox, &self.def_sandbox)
+    }
+
     /// # Panics
     /// With filesystem problems.
     pub fn parse(&mut self, filename: &str, default: bool) -> bool {
@@ -8019,5 +8029,117 @@ mod plan86_reachable_set_tests {
             Some("collections.write")
         );
         assert_eq!(p.def_cap_group(p.data.def_nr("n_plain")), None);
+    }
+}
+
+#[cfg(test)]
+mod plan86_admission_tests {
+    use super::*;
+    use crate::sandbox::{CapViolation, parse_sandbox_config};
+
+    fn parse_admit(designations: &[&str], allow_caps: &[&str], src: &str) -> Parser {
+        let dlist = designations
+            .iter()
+            .map(|s| format!("\"{s}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let clist = allow_caps
+            .iter()
+            .map(|s| format!("\"{s}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let cfg = format!("[sandbox]\nmod = [{dlist}]\n[profile.mod]\nallow_caps = [{clist}]\n");
+        let mut p = Parser::new();
+        p.set_sandbox_config(parse_sandbox_config(&cfg));
+        p.parse_dir("default", true, true).unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "plan86_admit_{}_{:p}.loft",
+            std::process::id(),
+            src
+        ));
+        std::fs::write(&path, src).unwrap();
+        p.parse(path.to_str().unwrap(), false);
+        let _ = std::fs::remove_file(&path);
+        p
+    }
+
+    fn viol_symbol(v: &CapViolation) -> u32 {
+        match v {
+            CapViolation::UngrantedCap { symbol, .. }
+            | CapViolation::UntaggedSymbol { symbol, .. }
+            | CapViolation::ExternalFfi { symbol, .. } => *symbol,
+        }
+    }
+
+    /// @PLN86 2.3 — the admission convergence: a granted-cap reference admits, an
+    /// ungranted-cap reference is rejected naming the group, an untagged symbol is
+    /// rejected (deny-by-default).
+    #[test]
+    fn admission_grants_allowed_caps_and_rejects_ungranted_and_untagged() {
+        let src = "fn cap_fs_read() -> integer;\n#native\n#cap \"fs.read\"\n\
+                   fn cap_coll_read() -> integer;\n#native\n#cap \"collections.read\"\n\
+                   fn cap_untagged() -> integer;\n#native\n\
+                   fn ok() -> integer { cap_coll_read() }\n\
+                   fn bad() -> integer { cap_fs_read() }\n\
+                   fn uses_untagged() -> integer { cap_untagged() }\n";
+        let p = parse_admit(
+            &["fn:ok", "fn:bad", "fn:uses_untagged"],
+            &["collections.read"],
+            src,
+        );
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        let v = p.sandbox_admit();
+        // bad reaches fs.read which is not granted → named violation.
+        assert!(
+            v.contains(&CapViolation::UngrantedCap {
+                from: p.data.def_nr("n_bad"),
+                symbol: p.data.def_nr("n_cap_fs_read"),
+                group: "fs.read".to_string(),
+            }),
+            "expected UngrantedCap(fs.read), got {v:?}"
+        );
+        // uses_untagged reaches an unclassified symbol → deny-by-default.
+        assert!(
+            v.contains(&CapViolation::UntaggedSymbol {
+                from: p.data.def_nr("n_uses_untagged"),
+                symbol: p.data.def_nr("n_cap_untagged"),
+            }),
+            "expected UntaggedSymbol, got {v:?}"
+        );
+        // ok reaches only collections.read (granted) → admitted clean.
+        let coll = p.data.def_nr("n_cap_coll_read");
+        assert!(
+            !v.iter().any(|viol| viol_symbol(viol) == coll),
+            "granted collections.read must admit clean, got {v:?}"
+        );
+    }
+
+    /// @PLN86 2.3 / L4 — an indirect call through a fn-ref cannot escape: passing
+    /// `cap_fs_read` to a higher-order fn still puts it in the reachable set, so
+    /// admission rejects the ungranted `fs.read` group.
+    #[test]
+    fn admission_rejects_indirect_fnref_call_l4() {
+        let src = "fn cap_fs_read(n: integer) -> integer;\n#native\n#cap \"fs.read\"\n\
+                   fn apply(f: fn(integer) -> integer, n: integer) -> integer { f(n) }\n\
+                   fn sneaky() -> integer { apply(cap_fs_read, 5) }\n";
+        let p = parse_admit(&["fn:sneaky", "fn:apply"], &["collections.read"], src);
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        let v = p.sandbox_admit();
+        assert!(
+            v.contains(&CapViolation::UngrantedCap {
+                from: p.data.def_nr("n_sneaky"),
+                symbol: p.data.def_nr("n_cap_fs_read"),
+                group: "fs.read".to_string(),
+            }),
+            "L4 indirect fn-ref to fs.read must be rejected, got {v:?}"
+        );
     }
 }

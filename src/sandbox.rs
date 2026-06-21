@@ -302,6 +302,90 @@ pub fn reachable_ffi_bridges(data: &Data, reachable: &HashSet<u32>) -> Vec<u32> 
     bridges
 }
 
+/// @PLN86 step 2.3 — a capability-admission violation.  `from` is the sandboxed
+/// def that makes the reference, `symbol` the trusted def it reaches.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CapViolation {
+    /// `symbol`'s `#cap` group is not a prefix of any `allow_caps` entry.
+    UngrantedCap {
+        from: u32,
+        symbol: u32,
+        group: String,
+    },
+    /// `symbol` carries no `#cap` group — deny-by-default: an unclassified symbol
+    /// cannot be proven safe.  Until 2.2 tags the surface this fires for every
+    /// untagged stdlib symbol, which is correct (nothing is admitted yet).
+    UntaggedSymbol { from: u32, symbol: u32 },
+    /// `symbol` is an external native cdylib bridge and the profile does not set
+    /// `native_ffi` (dlopen is RCE by construction).
+    ExternalFfi {
+        from: u32,
+        symbol: u32,
+        crate_name: String,
+    },
+}
+
+/// @PLN86 step 2.3 — the capability-admission walk.  Each sandboxed def is
+/// admitted under ITS OWN profile: every trusted symbol it references (a
+/// non-sandboxed leaf, §4) must carry a `#cap` group the profile permits — or,
+/// for an external FFI bridge, be allowed by `native_ffi`.  A reference to
+/// another sandboxed def is fine: that def is admitted under its own profile, so
+/// the union of per-def checks covers the whole reachable closure.  This is the
+/// L4-complete check: `referenced_defs` already resolves indirect fn-refs
+/// (`f = read_file`) to their target, so an indirect call cannot escape.
+///
+/// Returns every violation, deterministically ordered, for diagnostics (2.5).
+#[must_use]
+pub fn admit_capabilities(
+    data: &Data,
+    config: &SandboxConfig,
+    sandboxed: &HashMap<u32, String>,
+) -> Vec<CapViolation> {
+    let mut violations = Vec::new();
+    let mut entries: Vec<u32> = sandboxed.keys().copied().collect();
+    entries.sort_unstable();
+    for from in entries {
+        let profile = config.profiles.get(&sandboxed[&from]);
+        let mut refs = HashSet::new();
+        referenced_defs(data, from, &mut refs);
+        let mut refs: Vec<u32> = refs.into_iter().collect();
+        refs.sort_unstable();
+        for symbol in refs {
+            // Another sandboxed def: admitted under its own profile, not a leaf.
+            if sandboxed.contains_key(&symbol) {
+                continue;
+            }
+            let def = data.def(symbol);
+            // 1.4 fold-in: an external FFI bridge is gated by `native_ffi`, not caps.
+            let native = def.native();
+            if !native.is_empty()
+                && let Some(crate_name) = data.native_symbol_crates.get(native)
+            {
+                if !profile.is_some_and(|p| p.native_ffi) {
+                    violations.push(CapViolation::ExternalFfi {
+                        from,
+                        symbol,
+                        crate_name: crate_name.clone(),
+                    });
+                }
+                continue;
+            }
+            // 2.3 capability check (deny-by-default).
+            let cap = def.cap();
+            if cap.is_empty() {
+                violations.push(CapViolation::UntaggedSymbol { from, symbol });
+            } else if !profile.is_some_and(|p| p.allows(cap)) {
+                violations.push(CapViolation::UngrantedCap {
+                    from,
+                    symbol,
+                    group: cap.to_string(),
+                });
+            }
+        }
+    }
+    violations
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
