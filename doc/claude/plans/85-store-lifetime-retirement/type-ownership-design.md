@@ -517,6 +517,53 @@ NOT a quick edit on top of the clean milestone, which is why this session ships 
 both-backends-correct milestone and leaves Edge B (the interp no-leak gate) as the
 single bounded follow-up.
 
+### 6h-update-4 — Edge B ROOT-CAUSED (backtrace): `init_ref`'s eager work-ref store
+
+A `Store::new(100)` backtrace pinned the 3 leaked `kt=65535` stores exactly:
+
+```
+Store::new(100) ← Stores::database_named ← State::init_ref ← execute_argv
+```
+
+`OpInitRef` initializes each `__ref_N` work-ref (the `__retbuf` passed to a heap
+return) via `self.database.null()` → `database(u32::MAX)` → an **eager 100-word
+`Store::new`**. So every work-ref gets a real pre-allocated store, NOT a null
+sentinel. The NRVO contract is that the callee FILLS that buffer and returns it.
+
+- **native** honours it: `enc` writes the buffer → it becomes `a` → freed by the
+  caller. Clean.
+- **interp** violates it: `enc`'s `match` arms build their OWN `__vdb` and return it
+  via the eval stack, ignoring the passed `__ref_N`. So `__ref_N`'s eager store is
+  orphaned and leaks (the caller's `OpFreeRef(__ref_N)` frees the rebound `__vdb`,
+  not the original buffer store).
+
+So the leak is a precise interp/native NRVO divergence: **interp's vector
+match-return doesn't deliver into the caller's `__retbuf`.** The parser materialize
+(§6h-update-3) makes interp deliver correctly (verified leak-clean), and the IR
+genuinely carries it (`one_buffer_vec_copy` / `OpClearVector(__retbuf)` /
+`OpAppendVector(__retbuf, …)` present) — but the **native generator mishandles that
+exact IR**: for `OpAppendVector(__retbuf, <if-source>)` in return position it emits
+the if-source (arm-scoped `_vec_`, unbraced) instead of the materialized block →
+`error: expected expression, found let`. So the materialize is interp-correct but a
+native compile regression.
+
+**Three candidate closes (for a dedicated session), in rough risk order:**
+1. **Per-arm Var-source materialize** — deliver into `__retbuf` INSIDE each arm
+   (`{…build…; clear(buf); append(buf, _vec_arm); buf}`) so the append source is a
+   bare `Var` (native-safe) and the `If` yields `buf` (a return-`if` native handles).
+   Needs the arm's result located via its tracked result, not `operators.last()`,
+   AND the per-arm `__vdb` intermediates freed on interp (they leaked when tried).
+2. **Fix the native generator** to emit the materialized `OpAppendVector(buf,<if>)`
+   block correctly (brace + scope the if-source arm vars) — then the §6h-update-3
+   whole-tail materialize lands on both.
+3. **Lazy work-ref allocation** — `init_ref`/`null()` write a null sentinel instead
+   of eagerly allocating, so an unfilled buffer has no store to leak. Smallest at the
+   leak site but largest blast radius (every `DbRef` var / NRVO fill path must handle
+   a sentinel buffer); validate the whole suite.
+
+The shipped milestone (skip_free, both-backends-correct, suite-clean) stands; this is
+the bounded, root-caused follow-up.
+
 ---
 
 ## See also
