@@ -760,15 +760,15 @@ fn counter_progresses(data: &Data, body: &Value, counter: u16, increasing: bool)
     };
     let mut stepped = false;
     for stmt in ops {
-        if let Value::Set(v, rhs) = stmt.unspan() {
-            if *v == counter {
-                if is_monotonic_step(data, rhs, counter, increasing) {
-                    stepped = true;
-                } else {
-                    return false; // a top-level non-step assignment to the counter
-                }
-                continue;
+        if let Value::Set(v, rhs) = stmt.unspan()
+            && *v == counter
+        {
+            if is_monotonic_step(data, rhs, counter, increasing) {
+                stepped = true;
+            } else {
+                return false; // a top-level non-step assignment to the counter
             }
+            continue;
         }
         // any other top-level statement must not touch the counter at all (a
         // conditional / nested step can't be proven to run every iteration).
