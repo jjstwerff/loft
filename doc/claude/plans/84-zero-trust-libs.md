@@ -172,6 +172,16 @@ Run the **same** crypto API in the browser with a minimal bundle.
 The WS-client written once must run as the browser client *and* the native
 laptop sync agent.
 
+> **Detailed design: [`84-zt-c-web-ws-bridge.md`](84-zt-c-web-ws-bridge.md).** Unlike
+> ZT-B crypto (pure compute), the WS client is stateful + event-driven, so it bridges
+> via HOST IMPORTS and — the load-bearing decision — needs the existing **asyncify
+> frame-yield** (a synchronous poll loop deadlocks because the browser `WebSocket`'s
+> events never fire until wasm returns to the JS event loop). The design covers the
+> host-import ABI, the `host.js` socket map, the `ws_client.rs` `wasm_impl` rewrite,
+> the CBOR-frame path, and the new asyncify-aware Node verify driver (which must exist
+> before the bridge is trustworthy). Sequence: verify-loop → plumbing → `yield_frame`
+> → C2 echo → C3 byte-identity.
+
 - **C1 — keep the polling WS-client API** (connect, non-blocking `recv`,
   `send`/`send_binary`, `close`).
 - **C2 — `[wasm.bridge]` → the browser's native `WebSocket`** (JS holds the
