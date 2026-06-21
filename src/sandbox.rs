@@ -241,9 +241,10 @@ allow_caps = ["game.read", "game.write", "math", "collections.read"]
         assert!(!p.allows("fs.read")); // not granted
         assert!(!p.allows("collections.write")); // sibling denied
         // resolve a designation to its profile
-        assert!(cfg
-            .profile_for_selector("mods/**/*.loft")
-            .is_some_and(|p| p.allows("math")));
+        assert!(
+            cfg.profile_for_selector("mods/**/*.loft")
+                .is_some_and(|p| p.allows("math"))
+        );
     }
 
     #[test]
