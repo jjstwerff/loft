@@ -33,8 +33,17 @@ unrestricted, in one process, sharing the store at full `DbRef` speed.
   it is read as a reference only in a `Function`-typed position (call arg / assignment).
   Both `apply(target,…)` and `f=target; apply(f,…)` covered; residual
   (returns/fields/collections) tracked. 3 tests.
-- **Next:** 1.4 (FFI/backend ban) → 2.x capabilities (where `allows()` gets its
-  consumer over the 1.3 reachable set).
+- **1.4 ◐ (FFI half)** — `sandbox::reachable_ffi_bridges` + `Parser::sandbox_ffi_bridges`
+  flag every reachable def whose `#native` symbol is owned by an external native package
+  (`native_symbol_crates` — what `backfill_native_symbol_crates` binds for a def under a
+  `native_packages` dir), distinct from built-in `#rust`/`#native` primitives. dlopen of
+  a cdylib is RCE by construction → rejected unless `native_ffi = true`. Test flags an
+  external bridge, not a non-package `#native`. **Backend half remaining:** force
+  sandboxed defs to interpret in the execution pipeline + prove
+  `cargo build --no-default-features` removes the cdylib path (`interpret_only` already
+  parses).
+- **Next:** 1.4 backend half, then 2.x capabilities (where `allows()` gets its consumer
+  over the 1.3 reachable set, and the FFI ban becomes "external FFI = ungranted cap").
 
 **Scope.** v1 is intentionally **fairly restricted** — a small total dialect (bounded
 loops, no/structural recursion, total ops) plus a **curated host API**; the
@@ -269,9 +278,13 @@ proven-total script.
   a trusted allow-listed symbol is a **leaf** (not descended — §4). *Verify (L4):* an
   indirect `let f = g` puts `g` in the set; a trusted call is a leaf; the set equals the
   hand-computed set.
-- **1.4 Backend + FFI ban.** *Change:* sandboxed defs forced to interpret; a sandboxed
-  `use` of a `[native]` lib rejected. *Verify:* sandboxed `--native` / native-lib use
-  rejected; `cargo build --no-default-features` proves the cdylib path is removable.
+- **1.4 Backend + FFI ban.** ◐ *FFI half shipped* (`reachable_ffi_bridges`). *Change:*
+  sandboxed defs forced to interpret; a sandboxed `use` of a `[native]` lib rejected.
+  *Verify:* sandboxed `--native` / native-lib use rejected; `cargo build
+  --no-default-features` proves the cdylib path is removable. **Done:** external-FFI
+  bridges reachable from sandboxed code are detected via `native_symbol_crates`.
+  **Remaining:** the backend force-interpret in the execution pipeline + the
+  no-default-features cdylib removal.
 
 ### P2 — capabilities (groups + no-raw-write) + diagnostics
 - **2.1 `#cap "<group>"` annotation.** *Change:* parse `#cap` onto the def (like
