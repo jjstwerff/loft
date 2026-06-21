@@ -1,0 +1,105 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN84 ZT-C — C3 CBOR byte-identity gate.  A binary frame with EMBEDDED
+// ZERO BYTES must round-trip byte-identical, both directions, both backends.
+// This is the case most likely to silently break: loft `text` treats codepoint
+// 0 as the null sentinel, so a payload assembled via interpolation drops zeros
+// — `pack_*` is the NUL-safe builder, `byte_at` the NUL-safe reader, and the
+// frame must travel as a BINARY frame (opcode 2), not text (a text frame would
+// mangle CBOR's zero bytes).
+//
+// Build a fixed CBOR-shaped blob with deliberate zero bytes at distinctive
+// positions, send_binary it, receive the echo, and assert EVERY byte matches
+// via byte_at + that the opcode came back as 2 (binary).
+//
+// One source; runs on --interpret/native (real TCP) and --html (the asyncify
+// driver + echo server).  URL from arg 1; default ws://127.0.0.1:9099/.
+
+use web;
+
+fn ws_url() -> text {
+  a = arguments();
+  if a.len() >= 1 { return a[0]; }
+  "ws://127.0.0.1:9099/"
+}
+
+// Build a 10-byte blob with zeros at positions 1, 4, 9 (distinctive,
+// collision-resistant non-zero values elsewhere).  Mirrors a small CBOR map
+// header + an integer field whose LE encoding carries a zero byte.
+fn build_blob() -> text {
+  web::pack_reset();
+  web::pack_u8(0xA2);        // [0] CBOR map(2) header — nonzero
+  web::pack_u8(0x00);        // [1] embedded ZERO
+  web::pack_u8(0x7F);        // [2]
+  web::pack_u8(0xFE);        // [3]
+  web::pack_u8(0x00);        // [4] embedded ZERO
+  web::pack_u32_le(0x00C30041);  // [5..8] LE = 41 00 C3 00 -> zeros at [6] and [8]
+  web::pack_u8(0x9C);        // [9]
+  web::pack_take()
+}
+
+fn main() {
+  url = ws_url();
+  h = web::ws_handler(url);
+  if h == null {
+    println("C3 FAIL: ws_handler null ({url})");
+    return;
+  }
+
+  blob = build_blob();
+  blen = blob.len();
+
+  got = "";
+  ok = false;
+  got_op = -1;
+
+  i = 0;
+  did_send = false;
+  while i < 2000 {
+    if !did_send {
+      if web::send_binary(h, blob) { did_send = true; }
+    }
+    msg = web::try_recv(h);
+    if msg != null {
+      got = msg;
+      got_op = web::last_opcode(h);
+      ok = true;
+      break;
+    }
+    web::frame_yield();
+    i += 1;
+  }
+
+  web::close(h);
+
+  if !ok {
+    println("C3 FAIL: no echo after {i} iters (did_send={did_send})");
+    return;
+  }
+
+  // Compare byte-for-byte via byte_at (NUL-safe), and check the opcode is
+  // binary (2).  A length mismatch or any differing byte is a failure.
+  if got.len() != blen {
+    println("C3 FAIL: length {got.len()} != {blen}");
+    return;
+  }
+  mismatch = -1;
+  j = 0;
+  while j < blen {
+    if web::byte_at(j, got) != web::byte_at(j, blob) {
+      mismatch = j;
+      break;
+    }
+    j += 1;
+  }
+  if mismatch >= 0 {
+    println("C3 FAIL: byte {mismatch} differs (got {web::byte_at(mismatch, got)} want {web::byte_at(mismatch, blob)})");
+    return;
+  }
+  if got_op != 2 {
+    println("C3 FAIL: opcode {got_op} != 2 (binary)");
+    return;
+  }
+  println("C3 PASS: {blen} bytes byte-identical, opcode 2");
+}
