@@ -18,6 +18,47 @@ Design + rationale: [OWNERSHIP_MODEL.md § The law](../OWNERSHIP_MODEL.md) +
 [DESIGN_DECISIONS.md C77](../DESIGN_DECISIONS.md). Builds on @PLN85 (the store-lifetime
 cluster); the W4 lint joins the @PLN46 warning family.
 
+## Status & handoff (2026-06-22) — READ FIRST after a context reset
+
+**P0 ✅ DONE + committed.** Migration sweep across the whole ecosystem (stdlib + all 10 registry
+libs + the entire zero-trust-shared-files app) found **zero** real propagation-reliance sites →
+**P2 is safe**. (Verdict in § Phases below. The gated `LOFT_SWEEP_P0` sweep instrument is
+throwaway WIP in `scopes::check` — strip before any PR, task D2.)
+
+**P1 mechanism ✅ DONE + verified — but BLOCKED on the substrate base.** `&<lvalue>` parses and
+binds a single-indirect **VIEW** (NOT a `RefVar` var — that slot is double-indirect,
+`codegen.rs:2139`), flagged in `Parser::amp_bindings` for P2's write-back. Verified on BOTH
+backends for the reference-default (vector-index) case: `cells = &vv[0]; cells[0] = 99` →
+`vv[0][0] == 99` (writes through); the no-`&` control views too. Impl: `operators.rs` base case
+(sets `amp_pending`, returns the inner type), `expressions.rs::parse_assign_op` (records
+`amp_bindings`, resets the flag), `mod.rs` (the two fields + init + cross-pass reset). Full P1.2
+diagnosis on the loft2 agent's task #2.
+
+**Rebased onto main `67710d7d` (2026-06-22): the substrate work MERGED** — #426 + #429 resolved,
+the reference-default + `&`-to-reassign design documented (C77, OWNERSHIP_MODEL). Clean rebase,
+build green; P1 **vector** case works on both backends (`cells = &vv[0]; cells[0] = 99` →
+`vv[0][0] == 99`).
+
+**The struct-field case gates on the #415 REVERSAL — not on P1, and not on the merge (which
+happened).** `cells = &chunk.cells; cells[0] = 99` does NOT write through on main (the struct field
+stays `10`/`20`, both backends) because **#415 makes a struct vector-field read COPY on bind**
+(OWNERSHIP_MODEL.md:152) — a documented store-lifetime STOPGAP, narrowed to struct fields (vector
+INDEX reads keep their view), that CONTRADICTS reference-default. The design's end state reverses it
+(struct-field reads become VIEWS via dep-driven ownership — row 102), which is OWNERSHIP_MODEL /
+substrate-stream work, NOT P1. Per the revised design (C77) **`&` means "reassigning writes back"
+(P2) and is REDUNDANT for a field/element mutation** (the W4 lint) — so the struct write-through is
+REFERENCE-DEFAULT, not `&`. The P1.2 verify (`&chunk.cells; cells[0]=99`) therefore exercises
+reference-default struct-field aliasing, which can only pass AFTER the #415 reversal.
+
+**P1's `&`-mechanism is DONE; P2 is the next actionable phase — it does NOT depend on #415.** P1
+made `&` ACCEPTED + ALIASING on a local binding and flagged it in `amp_bindings` for P2 — complete
+and correct (the vector case proves bind + alias). The struct cell of the P1.4 matrix gates on the
+#415 reversal, so it cannot close on this stream. **P2** (non-`&` whole-binding reassignment → local
+rebind; `&` → write back; P0 proved the migration empty → safe) changes REASSIGNMENT, not the
+field-read copy, so it is the next actionable @PLN87 work on `main`. WIP committed on `tuxedo-work2`:
+`operators.rs`/`expressions.rs`/`mod.rs` = P1; `main.rs`/`scopes.rs` = the throwaway P0 sweep (strip
+before PR, D2).
+
 ## Phases
 - **P0 — ✅ DONE (2026-06-22): the migration is EMPTY → P2 is SAFE.** Swept the whole
   ecosystem for heap-typed PARAMETERS reassigned wholesale (an IR `Set` on an argument

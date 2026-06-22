@@ -121,6 +121,16 @@ pub struct Parser {
     /// fn-ref is indistinguishable from an integer literal).  The admission unions
     /// these into the checked set so an indirect call can't escape (L4).
     pub(crate) sandbox_fn_refs: HashMap<u32, std::collections::HashSet<u32>>,
+    /// @PLN87 — `&`-bound locals per def (`cells = &chunk.cells`): the var binds a
+    /// VIEW (single-indirect, like no-`&`), but is flagged here so P2 can make a
+    /// whole-binding REASSIGNMENT of a `&`-binding write back rather than local-rebind.
+    /// A side flag, NOT the var type — `RefVar` would impose the wrong (double-indirect)
+    /// slot representation.
+    pub(crate) amp_bindings: HashMap<u32, std::collections::HashSet<u16>>,
+    /// @PLN87 — transient: set by the parser while parsing a `&<lvalue>` binding RHS,
+    /// consumed by `parse_assign_op` to record the bound var in `amp_bindings`, then
+    /// reset. A flag (not the `RefVar` type) keeps the var a single-indirect view.
+    pub(crate) amp_pending: bool,
     /// @PLN86 step 0.1 — true while parsing the BODY of a sandboxed def.  Gates
     /// the parser nesting guard so it never touches trusted code (zero cost
     /// there); set per-def in `parse_function`, cleared at its end.
@@ -523,6 +533,8 @@ impl Parser {
             sandbox_unbounded_loops: HashMap::new(),
             sandbox_raw_writes: HashMap::new(),
             sandbox_fn_refs: HashMap::new(),
+            amp_bindings: HashMap::new(),
+            amp_pending: false,
             in_sandbox: false,
             parse_depth: 0,
             depth_overflowed: false,
@@ -808,6 +820,8 @@ impl Parser {
         self.sandbox_unbounded_loops.clear();
         self.sandbox_raw_writes.clear();
         self.sandbox_fn_refs.clear();
+        self.amp_bindings.clear();
+        self.amp_pending = false;
         self.data.reset();
         // @PLN22 Phase 2 — the main program parses under its own source
         // (MAIN_SOURCE), distinct from the stdlib prelude (source 0), so a user

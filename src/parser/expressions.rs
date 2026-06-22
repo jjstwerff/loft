@@ -1000,6 +1000,19 @@ use a separate collection or add after the loop"
         mut parent_tp: Type,
         var_nr: u16,
     ) -> Type {
+        // @PLN87 P1.2 — a `&`-local binding: the base case (operators.rs) bound the RHS
+        // as a normal single-indirect VIEW (the inner heap type, NOT `RefVar` — which is
+        // double-indirect, codegen.rs:2139) and set `amp_pending`. Record the bound var
+        // so P2 can make a REASSIGNMENT of a `&`-binding write back, then reset the flag
+        // and fall through to the ordinary binding path (value-`Set` + borrow-dep + slot
+        // for a plain view).
+        if op == "=" && var_nr != u16::MAX && self.amp_pending {
+            self.amp_bindings
+                .entry(self.context)
+                .or_default()
+                .insert(var_nr);
+            self.amp_pending = false;
+        }
         self.check_iter_safety(to, f_type, op);
         // Save parent struct type before the RHS parse overwrites parent_tp.
         let lhs_parent_tp = parent_tp.clone();

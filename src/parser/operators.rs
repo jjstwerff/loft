@@ -452,6 +452,18 @@ impl Parser {
     ) -> Type {
         let mut ls = Vec::new();
         if precedence >= OPERATORS.len() {
+            // @PLN87 P1.1 — a PREFIX `&<lvalue>` is a reference-to (a borrow), distinct
+            // from the binary `&` (bitwise-and "Land"). The binary form only ever sits
+            // BETWEEN operands, so a `&` seen here at an operand START is the prefix: it
+            // binds a local single-indirect VIEW of the lvalue (like no-`&`), flagging
+            // the `&`-ness via `amp_pending` so parse_assign_op records it in
+            // `amp_bindings` for P2's write-back. NOT a `RefVar` var: that slot is
+            // double-indirect (codegen.rs:2139), so reads would deref one level too far.
+            // (`&&` is its own token, so this never mis-fires on logical-and.)
+            if self.lexer.has_token("&") {
+                self.amp_pending = true;
+                return self.parse_part(var_tp, code, parent_tp);
+            }
             let t = self.parse_part(var_tp, code, parent_tp);
             return t;
         }
