@@ -318,11 +318,7 @@ impl Stores {
         let store = keys::store(host_field, &self.allocations);
         let rec = store.get_u32_raw(host_field.rec, host_field.pos);
         if rec == 0 {
-            DbRef {
-                store_nr: u16::MAX,
-                rec: 0,
-                pos: 0,
-            }
+            DbRef::NULL
         } else {
             DbRef {
                 store_nr: host_field.store_nr,

@@ -7238,7 +7238,12 @@ impl Parser {
     // <function> ::= 'fn' <identifier> '(' <attributes> ] [ '->' <type> ] (';' <rust> | <code>)
     pub fn null(&mut self, tp: &Type) -> Value {
         match tp {
-            Type::Integer(_) | Type::Character => self.cl("OpConvIntFromNull", &[]),
+            Type::Integer(_) => self.cl("OpConvIntFromNull", &[]),
+            // `character` is a 4-byte (char-domain) type: its null is `'\0'`
+            // (`OpConvCharacterFromNull`), NOT the i64 integer sentinel.  Folding
+            // it into `OpConvIntFromNull` (i64::MIN) made native emit `i64::MIN`
+            // into an `i32` character return slot — rustc E0308 (Cluster D H4).
+            Type::Character => self.cl("OpConvCharacterFromNull", &[]),
             Type::Boolean => {
                 // @PLN17 spike: boolean is tri-state (255 = null sentinel).
                 // Supersedes the #256 rejection — `null` on a boolean now emits the

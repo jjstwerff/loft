@@ -461,7 +461,7 @@ impl Output<'_> {
         } else if is_dbref {
             (
                 "    fn next_dbref(&mut self, stores: &mut Stores) -> DbRef {",
-                "DbRef { store_nr: u16::MAX, rec: 0, pos: 0 }",
+                "DbRef::NULL",
                 "next_dbref",
                 "(",
                 ")",
@@ -700,7 +700,7 @@ impl Output<'_> {
                         if is_bare_dnr {
                             writeln!(
                                 w,
-                                "                let _f: (u32, DbRef) = (({yield_code}) as u32, loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }});"
+                                "                let _f: (u32, DbRef) = (({yield_code}) as u32, loft::keys::DbRef::NULL);"
                             )?;
                         } else {
                             writeln!(w, "                let _f: (u32, DbRef) = ({yield_code});")?;
@@ -922,13 +922,7 @@ impl Output<'_> {
                 "loft::state::STRING_NULL",
             )
         } else if is_dbref {
-            (
-                "DbRef",
-                "(",
-                ")",
-                "next_dbref",
-                "DbRef { store_nr: u16::MAX, rec: 0, pos: 0 }",
-            )
+            ("DbRef", "(", ")", "next_dbref", "DbRef::NULL")
         } else if matches!(yield_tp, Type::Float | Type::Single) {
             // #401 — float/single eager-collect buffer stores the IEEE
             // bit-pattern (mirror of the consumer's from_bits channel).

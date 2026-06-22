@@ -2545,6 +2545,60 @@ impl Definition {
         &self.returned
     }
 
+    /// Cluster-A (return/bind ownership) — THE one return-ownership query,
+    /// shared by both backends.  Answers: *does this function's heap return
+    /// BORROW a visible parameter's store (caller must copy / must not free
+    /// the source), or is it OWNED/fresh (caller adopts; the callee's source
+    /// store is freed via the `0x8000` source-free bit)?*
+    ///
+    /// Reads `returned().depend()` against the parameter list:
+    /// - a dep naming a VISIBLE (non-hidden) attribute → borrowed view (the
+    ///   return aliases that parameter; freeing the source would corrupt the
+    ///   caller's arg).
+    /// - an empty dep → not borrowed (owned/fresh → the source-free bit is set
+    ///   and the caller adopts).
+    /// - a HIDDEN-only dep (a `ref_return`-promoted `__retbuf`/work-ref attr,
+    ///   or the `["??"]` one-buffer marker) → NOT a borrow: the callee minted a
+    ///   fresh store into its own buffer param, so the source-free bit stays set.
+    /// - an OUT-OF-RANGE dep (def-space list contaminated with a frame var — the
+    ///   DEPS_INVENTORY corpus probe found zero of these) → conservatively
+    ///   borrowed (never free a maybe-borrowed source), with a debug scream.
+    ///
+    /// This collapses the three structurally-identical derivations that used to
+    /// live separately (interp `state/codegen.rs` ×2, native
+    /// `generation/dispatch.rs` ×1) into one fact — see
+    /// [STABILITY_REDFLAGS](../doc/claude/STABILITY_REDFLAGS.md) Cluster A (A.4).
+    /// Both backends translate the SAME answer, so they cannot diverge on the
+    /// out-of-range / hidden-only edge.
+    #[must_use]
+    pub fn returns_borrowed_view(&self) -> bool {
+        let attrs = self.attributes();
+        self.returned().depend().iter().any(|&d| {
+            // A `CALLEE_FRAME_BIT`-tagged note is a closure-internal frame var,
+            // never a real attr index; such deps live only on `Type::Function`
+            // returns, which the heap-return callers gate out before reaching
+            // here.  Assert that invariant so a future caller that violates it
+            // is caught rather than silently mis-reading the tag as out-of-range.
+            debug_assert!(
+                d == u16::MAX || d & 0x8000 == 0,
+                "returns_borrowed_view: callee-frame-tagged return dep {d} on \
+                 '{}' (closure-internal note reached a heap-return ownership read)",
+                self.name()
+            );
+            // Out-of-range (`None`) = a def-space dep list contaminated with a
+            // frame var (the DEPS_INVENTORY corpus probe found zero); scream in
+            // debug, then answer conservatively borrowed (never free a
+            // maybe-borrowed source).  A visible attr → borrows it; a hidden
+            // attr → not a borrow.
+            debug_assert!(
+                attrs.get(d as usize).is_some(),
+                "dep-space violation: returned dep {d} outside attr range of '{}'",
+                self.name()
+            );
+            attrs.get(d as usize).is_none_or(|a| !a.hidden)
+        })
+    }
+
     /// Interpreter operator code.
     #[must_use]
     pub fn op_code(&self) -> u16 {

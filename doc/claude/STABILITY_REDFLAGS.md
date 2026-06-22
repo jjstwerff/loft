@@ -154,6 +154,33 @@ This is H6's thesis exactly ("one width-fact, N drifting copies" — already cos
 `389-h6` nullable-narrow bug). Tracked under **H6**; these specific consumers are the
 named-but-unconverted ones. Lands behind the staged `NullEnc`/`sentinel(tp)` table.
 
+**Landed — the heap-ref + character facet (Cluster D D.1/D.2).** The four named
+typed-null encoders (`write_typed_null` native, `emit_typed_null` interp,
+`STRING_NULL`, `init_ref_sentinel`) are converged:
+
+- **Heap-ref null = one source, `DbRef::NULL` (`keys.rs`).** Every heap-ref null
+  encoder (native `write_typed_null` / `default_native_value` / `dispatch` / `calls`
+  / `coroutine`, the `codegen_runtime`/`parallel`/`structures` runtime writers, and
+  the interp `init_ref_sentinel` / `null_ref_sentinel`) read the single
+  `DbRef::NULL` const instead of re-spelling `DbRef { store_nr: u16::MAX, … }`. The
+  drift was a mixed `pos: 0` (interp/canonical) vs `pos: 8` (native) literal —
+  semantically inert (`is_null()` keys off `store_nr`, ignores `pos`) but real byte
+  drift, now gone. Round-trip matrix byte-identical on both backends; regression
+  `tests/scripts/407-cluster-d-null-sentinel-roundtrip.loft`.
+- **Character null H4 cell, found + closed.** `Parser::null` folded `character`
+  into `OpConvIntFromNull` (the i64 integer sentinel), so `-> character { return
+  null; }` emitted `return i64::MIN` into an `i32` return slot — native rustc E0308,
+  interpreter tolerated. Now routes to `OpConvCharacterFromNull` (char-domain null
+  `'\0'`), correct on both backends.
+
+**Deliberately LEFT (distinct representations, not the same fact).** `STRING_NULL`
+(a text `Str` sentinel `"\0"`, already a single `const` read by all text-null sites)
+and the interp `Reference` path's `database.null()` (which allocates a real null
+*store*, a different runtime mechanism than the `DbRef::NULL` sentinel) — forcing
+either onto `DbRef::NULL` would be a false merge. **Still open (the narrow-width
+facet):** `is_null_field` / `set_default_value` / `walk_parsed_into` per-width arms
+above — a separate `IntegerSpec::range_to_width` sub-thread, not the heap-ref one.
+
 ---
 
 ## Cluster E — defensive-at-manifestation guards (downstream of A)

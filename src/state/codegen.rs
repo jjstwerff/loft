@@ -1718,35 +1718,13 @@ impl State {
                         self.code_add(slot_offset);
                         self.code_add(tp_nr);
                     }
-                    // @PLAN51 Cluster II Step 2 — require at least one
-                    // VISIBLE-arg dep for is_borrowed_view.  Hidden-only
-                    // deps (ref_return-promoted buffer attrs) are either
-                    // canonical (same-store no-op gate in OpCopyRecord)
-                    // or fresh S1 — paired with the post-call sentinel
-                    // reset below to clear the caller's slot.
-                    let is_borrowed_view = {
-                        let def = stack.data.def(*fn_nr);
-                        let deps = def.returned().depend();
-                        !deps.is_empty()
-                            && deps.iter().any(|&a| {
-                                {
-                                    // H2: out-of-range = def-space dep list
-                                    // contaminated with a frame var.  The
-                                    // DEPS_INVENTORY corpus probe found zero;
-                                    // keep the conservative borrowed-view
-                                    // answer (never free a maybe-borrowed
-                                    // source) but scream in debug.
-                                    debug_assert!(
-                                        (a as usize) < def.attributes().len(),
-                                        "dep-space violation: returned dep {a} \
-                                         outside attr range of '{}'",
-                                        def.name()
-                                    );
-                                    (a as usize) >= def.attributes().len()
-                                        || !def.attributes()[a as usize].hidden
-                                }
-                            })
-                    };
+                    // Cluster-A A.4: ONE return-ownership query, shared with
+                    // the native backend (`generation/dispatch.rs`).  Hidden-only
+                    // deps (ref_return-promoted buffer attrs) read as NOT
+                    // borrowed — either canonical (same-store no-op gate in
+                    // OpCopyRecord) or fresh S1, paired with the post-call
+                    // sentinel reset below to clear the caller's slot.
+                    let is_borrowed_view = stack.data.def(*fn_nr).returns_borrowed_view();
                     let tp_val = if is_borrowed_view {
                         i32::from(tp_nr)
                     } else {
@@ -2443,28 +2421,14 @@ impl State {
             let prot = Value::Call(protect_fn, vec![Value::Var(*av)]);
             self.generate(&prot, stack, false);
         }
-        // @PLAN51 Cluster II Step 2 — require VISIBLE-arg dep for
-        // is_borrowed_view; hidden-only deps are either canonical
-        // (same-store no-op gate handles) or fresh S1 (0x8000
-        // safely frees, paired with caller_hidden_args reset below).
+        // Cluster-A A.4: ONE return-ownership query, shared with the native
+        // backend (`generation/dispatch.rs`).  Hidden-only deps are either
+        // canonical (same-store no-op gate handles) or fresh S1 (0x8000 safely
+        // frees, paired with caller_hidden_args reset below).
         #[cfg(not(feature = "wasm"))]
         let tp_with_free = {
             let is_borrowed_view = if let Value::Call(fn_nr, _) = value.unspan() {
-                let def = stack.data.def(*fn_nr);
-                let deps = def.returned().depend();
-                !deps.is_empty()
-                    && deps.iter().any(|&a| {
-                        // H2: see the twin site above — conservative answer
-                        // kept, debug scream on def-space contamination.
-                        debug_assert!(
-                            (a as usize) < def.attributes().len(),
-                            "dep-space violation: returned dep {a} outside \
-                             attr range of '{}'",
-                            def.name()
-                        );
-                        (a as usize) >= def.attributes().len()
-                            || !def.attributes()[a as usize].hidden
-                    })
+                stack.data.def(*fn_nr).returns_borrowed_view()
             } else {
                 false
             };

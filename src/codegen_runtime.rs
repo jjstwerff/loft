@@ -735,19 +735,11 @@ pub fn op_vector_first_or_null(stores: &[crate::store::Store], host: &DbRef) -> 
     let store = crate::keys::store(host, stores);
     let vec_rec = store.get_u32_raw(host.rec, host.pos);
     if vec_rec == 0 {
-        return DbRef {
-            store_nr: u16::MAX,
-            rec: 0,
-            pos: 0,
-        };
+        return DbRef::NULL;
     }
     let length = store.get_u32_raw(vec_rec, 4);
     if length == 0 {
-        DbRef {
-            store_nr: u16::MAX,
-            rec: 0,
-            pos: 0,
-        }
+        DbRef::NULL
     } else {
         DbRef {
             store_nr: host.store_nr,
@@ -3385,14 +3377,7 @@ where
     let batches = run_native_workers_ref(stores, &input, elem_size, threads, n, &worker);
 
     let unowned = !stores.has_owned_sub_fields(kt);
-    let mut refs: Vec<DbRef> = vec![
-        DbRef {
-            store_nr: u16::MAX,
-            rec: 0,
-            pos: 8
-        };
-        n
-    ];
+    let mut refs: Vec<DbRef> = vec![DbRef::NULL; n];
     for (batch, mut worker_stores) in batches {
         for (i, src_ref) in batch {
             let dest = DbRef {
@@ -3700,14 +3685,7 @@ where
         }
         (start, local)
     });
-    let null_fn = (
-        u32::MAX,
-        DbRef {
-            store_nr: u16::MAX,
-            rec: 0,
-            pos: 0,
-        },
-    );
+    let null_fn = (u32::MAX, DbRef::NULL);
     crate::parallel::merge_batches(batches, n, null_fn)
 }
 
@@ -3815,11 +3793,7 @@ pub trait LoftCoroutine {
     /// when the generator is exhausted.  Used by `iterator<Struct>` /
     /// `iterator<vector<T>>` / any DbRef-shaped yield (@P326).
     fn next_dbref(&mut self, _stores: &mut Stores) -> DbRef {
-        DbRef {
-            store_nr: u16::MAX,
-            rec: 0,
-            pos: 0,
-        }
+        DbRef::NULL
     }
 
     /// Unified store-backed yield channel (@P327 native; designed to absorb
@@ -3932,11 +3906,7 @@ pub fn coroutine_next_dbref(gen_ref: DbRef, stores: &mut Stores) -> DbRef {
             }
             val
         } else {
-            DbRef {
-                store_nr: u16::MAX,
-                rec: 0,
-                pos: 0,
-            }
+            DbRef::NULL
         }
     })
 }

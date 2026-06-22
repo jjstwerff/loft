@@ -9,7 +9,229 @@ use crate::store::Store;
 use crate::tree;
 use crate::vector;
 
+/// One owned nested-heap child of a container record, as enumerated by
+/// [`Stores::for_each_owned_child`] — the single per-`Parts` heap-cascade walk
+/// that `remove_claims` and `copy_claims_hash_body` read instead of each
+/// re-encoding the container layout (loop bounds, element strides, slot drift).
+/// The historical `@P290`/`@P306`/`@P318`/`@P309` bugs were all in this walk,
+/// hand-copied divergently across the dispatchers; carrying it once is the fix by
+/// construction.  (`validate_claims` deliberately stays a separate DEFENSIVE
+/// mirror — it bounds-checks each pointer before following it, on suspected-corrupt
+/// heaps, where this trusting walk must not be used; `copy_claims`' destination
+/// construction is genuinely per-kind and is not a walk over this enumeration.)
+///
+/// `child` is the `DbRef` (in the SOURCE record's store) at which the child value
+/// lives; `child_tp` is its type.  `owning_elem` is the separate element record
+/// that HOLDS this child for the per-element container kinds (`Array`/`Ordered`,
+/// `Hash`, `Index`) — `remove_claims` `delete`s it after recursing — and is
+/// `None` for the kinds whose children sit inline in the parent / container block
+/// (`Struct`, `Vector`/`Sorted` contiguous elements, `Enum` variant re-dispatch,
+/// `ChildRec`).
+#[derive(Clone, Copy)]
+pub(super) struct OwnedChild {
+    pub child: DbRef,
+    pub child_tp: u16,
+    pub owning_elem: Option<u32>,
+}
+
+/// The container-level teardown a `remove_claims` walk performs AFTER recursing
+/// into every owned child: which container/spine record (if any) to `delete`, and
+/// whether the field pointer must be zeroed.  Read from the same keystone so the
+/// per-kind spine layout lives in ONE place.
+///
+/// - `container_rec` is the block that backs the collection (the `Vector`/`Array`/
+///   `Hash` payload record, or the `ChildRec` child record); `Index` has no
+///   separate container block (its nodes ARE the records, freed via
+///   `OwnedChild::owning_elem`), so it is `None` there.
+/// - `zero_field` is true for the kinds whose value is reached through a heap
+///   POINTER stored at `(rec.rec, rec.pos)` (`Vector`/`Sorted`, `Array`/`Ordered`,
+///   `Hash`, `Index`, `ChildRec`) — `remove_claims` resets that pointer to 0 so a
+///   later reassignment starts clean.  `Struct`/`EnumValue`/`Enum` hold their
+///   children INLINE (no pointer to zero), so it is false.
+pub(super) struct OwnedWalk {
+    pub children: Vec<OwnedChild>,
+    pub container_rec: Option<u32>,
+    pub zero_field: bool,
+}
+
 impl Stores {
+    /// The Cluster-C keystone: enumerate the owned nested-heap children of the
+    /// record `rec` of type `tp`, plus the container record backing them.  This
+    /// is the SINGLE per-`Parts` heap-cascade walk (element type, stride,
+    /// container traversal) that `remove_claims` consumes as a thin visitor, and
+    /// that `copy_claims_hash_body` reads for its source-bucket enumeration —
+    /// replacing the divergent per-dispatcher re-encodings that produced the
+    /// `@P290`/`@P306`/`@P318`/`@P309` family.
+    ///
+    /// Returns the children to recurse on (each carrying its own `DbRef`, type,
+    /// and — for per-element kinds — the element record that owns it) and the
+    /// container record to free.  Leaf / empty / null shapes yield no children
+    /// and no container.  `Spacial` is unsupported (callers panic on it); the
+    /// keystone returns an empty walk so a non-cascading caller stays safe.
+    ///
+    /// Collects into a `Vec` (rather than borrowing an iterator) so callers can
+    /// take `&mut self` to recurse — the same shape `collect_index_nodes`
+    /// already uses.
+    pub(super) fn for_each_owned_child(&self, rec: &DbRef, tp: u16) -> OwnedWalk {
+        let mut children = Vec::new();
+        let mut container_rec = None;
+        match &self.types[tp as usize].parts {
+            Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
+                for f in fields {
+                    children.push(OwnedChild {
+                        child: DbRef {
+                            store_nr: rec.store_nr,
+                            rec: rec.rec,
+                            pos: rec.pos + u32::from(f.position),
+                        },
+                        child_tp: f.content,
+                        owning_elem: None,
+                    });
+                }
+            }
+            Parts::Vector(v) | Parts::Sorted(v, _) => {
+                let v = *v;
+                let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
+                if cur != 0 {
+                    let length = vector::length_vector(rec, &self.allocations);
+                    let size = u32::from(self.size(v));
+                    for i in 0..length {
+                        children.push(OwnedChild {
+                            child: DbRef {
+                                store_nr: rec.store_nr,
+                                rec: cur,
+                                pos: 8 + size * i,
+                            },
+                            child_tp: v,
+                            owning_elem: None,
+                        });
+                    }
+                    container_rec = Some(cur);
+                }
+            }
+            Parts::Array(v) | Parts::Ordered(v, _) => {
+                let v = *v;
+                let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
+                if cur != 0 {
+                    let length = vector::length_vector(rec, &self.allocations);
+                    for i in 0..length {
+                        let elm = self.store(rec).get_u32_raw(cur, 8 + i * 4);
+                        children.push(OwnedChild {
+                            child: DbRef {
+                                store_nr: rec.store_nr,
+                                rec: elm,
+                                pos: 8,
+                            },
+                            child_tp: v,
+                            owning_elem: Some(elm),
+                        });
+                    }
+                    container_rec = Some(cur);
+                }
+            }
+            Parts::Hash(v, _) => {
+                let v = *v;
+                let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
+                if cur != 0 {
+                    // Bucket record layout (per `src/hash.rs::add`): offset 0 =
+                    // room (record size in words), offset 4 = length, offset 8.. =
+                    // (room - 1) * 2 bucket slots.  The `(room - 1) * 2` bound is
+                    // the @P290 fix; `room * 2` walked 2 slots past the allocation.
+                    let elms = (self.store(rec).record_words(cur) - 1) * 2;
+                    for i in 0..elms {
+                        let elm = self.store(rec).get_u32_raw(cur, 8 + 4 * i);
+                        if elm == 0 {
+                            continue;
+                        }
+                        children.push(OwnedChild {
+                            child: DbRef {
+                                store_nr: rec.store_nr,
+                                rec: elm,
+                                pos: 8,
+                            },
+                            child_tp: v,
+                            owning_elem: Some(elm),
+                        });
+                    }
+                    container_rec = Some(cur);
+                }
+            }
+            Parts::Index(c, _, _) => {
+                let c = *c;
+                let left = self.fields(tp);
+                let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
+                if cur != 0 {
+                    for node in self.collect_index_nodes(rec, left) {
+                        children.push(OwnedChild {
+                            child: DbRef {
+                                store_nr: rec.store_nr,
+                                rec: node,
+                                pos: 8,
+                            },
+                            child_tp: c,
+                            owning_elem: Some(node),
+                        });
+                    }
+                    // No separate container block: index nodes ARE the records.
+                }
+            }
+            Parts::ChildRec(ct) => {
+                let ct = *ct;
+                let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
+                if cur != 0 {
+                    children.push(OwnedChild {
+                        child: DbRef {
+                            store_nr: rec.store_nr,
+                            rec: cur,
+                            pos: 8,
+                        },
+                        child_tp: ct,
+                        owning_elem: None,
+                    });
+                    container_rec = Some(cur);
+                }
+            }
+            Parts::Enum(values) => {
+                // Inline struct-enum: the live variant's payload sits at the SAME
+                // pos (in-place re-dispatch).  `get_byte(.., -1)` shifts so stored
+                // byte 1 = variant 0; a null/absent enum reads NEGATIVE and owns no
+                // payload (skip rather than index `values` OOB).  A simple
+                // (payload-less) variant is marked `u16::MAX`.
+                let e_nr = self.store(rec).get_byte(rec.rec, rec.pos, -1);
+                if e_nr >= 0 && (e_nr as usize) < values.len() {
+                    let vtp = values[e_nr as usize].0;
+                    if vtp != u16::MAX {
+                        children.push(OwnedChild {
+                            child: *rec,
+                            child_tp: vtp,
+                            owning_elem: None,
+                        });
+                    }
+                }
+            }
+            // Base text leaf, scalars, DbRef, Spacial (unsupported): no cascade.
+            _ => {}
+        }
+        // The value is reached through a heap pointer (zeroed on teardown) for the
+        // collection / child-record kinds; `Struct`/`EnumValue`/`Enum` hold their
+        // children inline and have no pointer field to reset.
+        let zero_field = matches!(
+            self.types[tp as usize].parts,
+            Parts::Vector(_)
+                | Parts::Sorted(_, _)
+                | Parts::Array(_)
+                | Parts::Ordered(_, _)
+                | Parts::Hash(_, _)
+                | Parts::Index(_, _, _)
+                | Parts::ChildRec(_)
+        );
+        OwnedWalk {
+            children,
+            container_rec,
+            zero_field,
+        }
+    }
+
     /**
     Try to allocate a new store.
     # Panics
@@ -1246,16 +1468,14 @@ impl Stores {
         };
         let size = u32::from(self.size(content_tp));
         let keys = self.types[tp as usize].keys.clone();
-        // Bucket record layout (per `src/hash.rs::add`): offset 0 = room (record
-        // size in words), offset 4 = length, offset 8.. = (room - 1) * 2 bucket
-        // slots (u32 rec-nrs).  Walk every source slot and re-insert each entry.
-        let room = self.store(rec).record_words(cur);
-        let elms = (room - 1) * 2;
-        for i in 0..elms {
-            let elm = self.store(rec).get_u32_raw(cur, 8 + 4 * i);
-            if elm == 0 {
+        // Source-bucket enumeration reads the SAME keystone walk `remove_claims`
+        // uses (the `(room - 1) * 2` bound + skip-empty-slot logic), so the @P290
+        // hash bound lives in ONE place.  Each child carries its element record in
+        // `owning_elem`; re-insert that entry into the emptied destination.
+        for child in self.for_each_owned_child(rec, tp).children {
+            let Some(elm) = child.owning_elem else {
                 continue;
-            }
+            };
             // @P295 — element record layout (per `record_new`'s Hash arm):
             // offset 0 = header, offset 4 = back-pointer to the parent record,
             // offset 8 = struct payload (`size` bytes).  Claim WITH the header
@@ -1675,182 +1895,54 @@ impl Stores {
     /**
     Remove claimed data for a record. Both strings and substructures are freed.
     It will not free the record itself because that might be a part of a vector.
+
+    Reads the [`Stores::for_each_owned_child`] keystone for every cascade kind
+    (struct / enum / vector / sorted / array / ordered / hash / index / childrec):
+    one walk recurses into each owned child, frees the per-element record it lived
+    in, then frees the container block and clears the field pointer.  Only the text
+    leaf and the (unimplemented) `Spacial` teardown stay special-cased.
     # Panics
-    When a field points to an index or spacial structure.
+    When a field points to a spacial structure (teardown unimplemented).
     */
-    #[allow(clippy::too_many_lines)]
     pub fn remove_claims(&mut self, rec: &DbRef, tp: u16) {
         // TODO prevent removing records twice via secondary structures
         match &self.types[tp as usize].parts {
             Parts::Base if tp == 5 => {
-                // text
+                // Text leaf: free the string record and clear the pointer.  Not a
+                // cascade kind (no owned children), so it stays out of the keystone.
                 let store = self.store_mut(rec);
                 let cur = store.get_u32_raw(rec.rec, rec.pos);
-                if cur == 0 {
-                    return;
-                }
-                store.delete(cur);
-                store.set_u32_raw(rec.rec, rec.pos, 0);
-            }
-            Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
-                for f in fields.clone() {
-                    self.remove_claims(
-                        &DbRef {
-                            store_nr: rec.store_nr,
-                            rec: rec.rec,
-                            pos: rec.pos + u32::from(f.position),
-                        },
-                        f.content,
-                    );
+                if cur != 0 {
+                    store.delete(cur);
+                    store.set_u32_raw(rec.rec, rec.pos, 0);
                 }
             }
-            Parts::Vector(v) | Parts::Sorted(v, _) => {
-                let tp = *v;
-                let length = vector::length_vector(rec, &self.allocations);
-                let size = u32::from(self.size(tp));
-                let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
-                if cur == 0 {
-                    // Do nothing if the structure was empty
-                    return;
-                }
-                for i in 0..length {
-                    self.remove_claims(
-                        &DbRef {
-                            store_nr: rec.store_nr,
-                            rec: cur,
-                            pos: 8 + size * i,
-                        },
-                        tp,
-                    );
-                }
-                let store = self.store_mut(rec);
-                store.delete(cur);
-                store.set_u32_raw(rec.rec, rec.pos, 0);
-            }
-            Parts::ChildRec(content_kt) => {
-                // P213: read rec-id; if 0, nothing to free.  Otherwise
-                // recurse to free child's nested heap data first, then
-                // delete the child record itself.  Resets the field's
-                // u32 to 0 so reassignment / re-host-construction starts
-                // from a clean slate.
-                let content_kt = *content_kt;
-                let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
-                if cur == 0 {
-                    return;
-                }
-                let child_db = DbRef {
-                    store_nr: rec.store_nr,
-                    rec: cur,
-                    pos: 8,
-                };
-                self.remove_claims(&child_db, content_kt);
-                let store = self.store_mut(rec);
-                store.delete(cur);
-                store.set_u32_raw(rec.rec, rec.pos, 0);
-            }
-            Parts::Array(v) | Parts::Ordered(v, _) => {
-                let tp = *v;
-                let length = vector::length_vector(rec, &self.allocations);
-                let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
-                if cur == 0 {
-                    // Do nothing if the structure was empty
-                    return;
-                }
-                for i in 0..length {
-                    let elm = self.store(rec).get_u32_raw(cur, 8 + i * 4);
-                    self.remove_claims(
-                        &DbRef {
-                            store_nr: rec.store_nr,
-                            rec: elm,
-                            pos: 8,
-                        },
-                        tp,
-                    );
-                    self.store_mut(rec).delete(elm);
-                }
-                let store = self.store_mut(rec);
-                store.delete(cur);
-                store.set_u32_raw(rec.rec, rec.pos, 0);
-            }
-            Parts::Hash(v, _) => {
-                let tp = *v;
-                let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
-                if cur == 0 {
-                    // Do nothing if the structure was empty
-                    return;
-                }
-                // @P290 sibling — the hash bucket record (per `src/hash.rs::add`)
-                // is: offset 0 = room (words), offset 4 = entry count, offset
-                // 8.. = (room - 1) * 2 bucket slots.  The bound MUST be
-                // `(room - 1) * 2`; the old `room * 2` walked 2 slots past the
-                // allocation, reading the next record's header bytes as
-                // bucket rec-nrs and calling `delete()` on garbage → SIGSEGV.
-                // Matches `copy_claims_hash_body`'s @P290 fix; surfaced by
-                // @P295 (keyed-local reassignment calls `remove_claims` on a
-                // hash via `OpReplaceKeyed`).
-                let length = (self.store(rec).record_words(cur) - 1) * 2;
-                for i in 0..length {
-                    let elm = self.store(rec).get_u32_raw(cur, 8 + i * 4);
-                    if elm == 0 {
-                        continue;
-                    }
-                    self.remove_claims(
-                        &DbRef {
-                            store_nr: rec.store_nr,
-                            rec: elm,
-                            pos: 8,
-                        },
-                        tp,
-                    );
-                    self.store_mut(rec).delete(elm);
-                }
-                let store = self.store_mut(rec);
-                store.delete(cur);
-                store.set_u32_raw(rec.rec, rec.pos, 0);
-            }
+            // `Spacial` teardown is unimplemented; the keystone yields nothing for
+            // it, so guard explicitly to preserve the loud failure (a silent no-op
+            // would leak).
             Parts::Spacial(_, _) => panic!("Not implemented"),
-            Parts::Index(c, _, _) => {
-                let content_tp = *c;
-                let left = self.fields(tp);
-                let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
-                if cur == 0 {
-                    return;
-                }
-                let nodes = self.collect_index_nodes(rec, left);
-                for node in nodes {
-                    self.remove_claims(
-                        &DbRef {
-                            store_nr: rec.store_nr,
-                            rec: node,
-                            pos: 8,
-                        },
-                        content_tp,
-                    );
-                    self.store_mut(rec).delete(node);
-                }
-                self.store_mut(rec).set_u32_raw(rec.rec, rec.pos, 0);
-            }
-            Parts::Enum(values) => {
-                // @PLN25 — symmetric with `copy_claims`' `Parts::Enum` arm
-                // (this fn previously fell through to the no-op `_` arm for an
-                // enum tp).  Free the LIVE variant's nested heap claims of an
-                // inline enum.  `get_byte(.., -1)` shifts so stored byte 1 =
-                // variant 0; a null/absent inline enum reads NEGATIVE (stored
-                // 0 → -1, an absent rec → i32::MIN) and owns no payload — skip
-                // rather than index `values` OOB.  Without this arm, overwriting
-                // an inline `__nullable<S>` element/field (`vr[i] = null`, the
-                // present↔null convert) leaked the prior `Some` payload (a text
-                // / nested vector) until the host store was freed.
-                let e_nr = self.store(rec).get_byte(rec.rec, rec.pos, -1);
-                if e_nr >= 0 && (e_nr as usize) < values.len() {
-                    let tp = values[e_nr as usize].0;
-                    // Skip simple (payload-less) variants — `u16::MAX` marks them.
-                    if tp != u16::MAX {
-                        self.remove_claims(rec, tp);
+            // Every owned-child cascade kind (Struct/Enum/Vector/Sorted/Array/
+            // Ordered/Hash/Index/ChildRec) reads the SINGLE keystone walk: recurse
+            // into each child, free the per-element record it lived in (Array/Hash/
+            // Index), then free the container block and clear the field pointer.
+            // The historical loop-bound / slot-drift / length-header bugs
+            // (@P290/@P306/@P318/@P309) lived in the per-dispatcher copies of this
+            // walk; reading it once removes them by construction.
+            _ => {
+                let walk = self.for_each_owned_child(rec, tp);
+                for c in walk.children {
+                    self.remove_claims(&c.child, c.child_tp);
+                    if let Some(elm) = c.owning_elem {
+                        self.store_mut(rec).delete(elm);
                     }
                 }
+                if let Some(cur) = walk.container_rec {
+                    self.store_mut(rec).delete(cur);
+                }
+                if walk.zero_field {
+                    self.store_mut(rec).set_u32_raw(rec.rec, rec.pos, 0);
+                }
             }
-            _ => {}
         }
     }
 

@@ -716,7 +716,18 @@ impl Parser {
         // Float), those hidden params are wrong.  Specialized copies inherit the template's
         // body and variable table; struct-returning specializations work correctly because
         // they return arguments (not locals), so ref_return would be a no-op anyway.
-        if self.data.def_type(self.context) != DefType::Generic {
+        //
+        // a7: this block PROMOTES a body-tail local to the function's hidden return
+        // buffer (`ref_return` renames `__retbuf` to the local; `text_return` likewise).
+        // That is only sound at the GENUINE function tail — `parse_code` parses it with
+        // context "return from block". An `if`/`match` ARM (context "if"/"else"/
+        // "match_arm") is NOT the function tail: promoting an arm's own `__vdb_N` makes
+        // that arm both build into AND free the shared return buffer, so its value is lost
+        // (interp reads the sibling arm, native reads empty — the two backends diverge).
+        // The fn-body tail then delivers every arm into `__retbuf` (the `match` path,
+        // `materialize_vector_arms_into`), so gating the promotion to the real return
+        // context lets the `if` arms behave exactly like `match` arms already do.
+        if self.data.def_type(self.context) != DefType::Generic && context == "return from block" {
             // @PLN25 single-payload: the tail was just coerced `__nullable<S>` → dense `S`
             // via a payload sub-ref (`OpGetField`), so `t` is still the Enum tail type and
             // the type-keyed branches below (which match `t`) all miss it — the default
@@ -820,44 +831,37 @@ impl Parser {
                     }
                 } else if !self.first_pass
                     && ls.iter().any(|&d| self.vars.is_argument(d))
-                    && self.tail_is_struct_field_read(l)
+                    && (self.tail_is_struct_field_read(l)
+                        // The whole-arg copy (a2) fires ONLY at the function-body
+                        // tail: an `if`/`match` ARM block also reaches block_result
+                        // (context "if"/"else"/"match_arm") with a `{ v }` tail, but
+                        // the arm is already delivered into the buffer by the
+                        // outer if-unify / arm-materialise path — copying it again
+                        // here orphans the buffer (a11 leak).  `return from block`
+                        // is the one funnelled return path (OWNERSHIP_MODEL row 104).
+                        || (context == "return from block"
+                            && self.tail_whole_arg_vector(l).is_some()))
                     && let Some((buf_attr, buf_var)) = self.return_buffer()
                     && !ls.contains(&buf_var)
                 {
-                    // #415 — an implicit-tail return of a STRUCT vector FIELD of
-                    // an argument (`fn getv(b: Box) -> vector { b.v }`): the tail
-                    // borrows the caller's store, so returning it ALIASES the arg.
-                    // Copy the field into `__retbuf` (clear + element-append) and
-                    // return the buffer, so the caller adopts an independent copy
-                    // — value semantics. The EXPLICIT `return b.v` already does
-                    // this (~4527) and the `a = bx.v` bind-site copy is the same
-                    // shape (suite-proven). Narrowed by `tail_is_struct_field_read`
-                    // to struct-field tails: whole-arg / index / call tails stay on
-                    // the ref_return path (the over-broad cut regressed the suite).
+                    // Row-104 — an implicit-tail return whose value BORROWS a
+                    // visible argument: a STRUCT vector FIELD of an arg
+                    // (`fn getv(b: Box) -> vector { b.v }`, #415) OR the whole
+                    // vector arg itself (`fn idv(v) -> vector { v }`, A.2/a2 —
+                    // the implicit-tail sibling of an explicit `return v`).
+                    // Either way returning the tail as-is ALIASES the caller's
+                    // store, so both funnel to ONE copy: clear `__retbuf`,
+                    // element-append the borrowed value, return the buffer, and
+                    // finalize the return-type dep to `{__retbuf}` — the caller
+                    // adopts an independent copy (value semantics).  The
+                    // EXPLICIT `return v` / `return b.v` already does this
+                    // (parse_return ~4651) and the `a = bx.v` bind-site copy is
+                    // the same shape (suite-proven).  Narrowed by the two tail
+                    // predicates to whole-arg / struct-field tails: index /
+                    // call tails stay on the ref_return path (the over-broad cut
+                    // regressed the suite).
                     let elm_ty = (**elm).clone();
-                    let fwd = self.create_var(
-                        "__fwd",
-                        &Type::Vector(Box::new(elm_ty.clone()), Deps::none()),
-                    );
-                    if fwd != u16::MAX
-                        && let Some(last) = l.last_mut()
-                    {
-                        let rec_tp = self.append_elem_tp(&elm_ty);
-                        let clear = self.cl("OpClearVector", &[Value::Var(buf_var)]);
-                        let append = self.cl(
-                            "OpAppendVector",
-                            &[Value::Var(buf_var), Value::Var(fwd), Value::Int(rec_tp)],
-                        );
-                        let orig = std::mem::replace(last, Value::Null);
-                        let set_fwd = crate::data::v_set(fwd, orig);
-                        *last = crate::data::v_block(
-                            vec![set_fwd, clear, append, Value::Var(buf_var)],
-                            Type::Vector(Box::new(elm_ty.clone()), Deps::frame1(buf_var)),
-                            "field_borrow_copy_415",
-                        );
-                        self.data.definitions[self.context as usize].returned =
-                            Type::Vector(Box::new(elm_ty), Deps::attrs(vec![buf_attr]));
-                    } else {
+                    if !self.copy_borrow_tail_into_retbuf(&elm_ty, l, buf_attr, buf_var) {
                         self.ref_return(ls, l, RetSite::BlockTail);
                         self.nrvo_collapse_tail_set(l, ls);
                     }
@@ -943,66 +947,71 @@ impl Parser {
     /// share a var).
     pub(crate) fn unify_if_branches_work_refs(&mut self, tail: &mut Value) -> Option<u16> {
         let if_value = tail.unspan_mut();
-        let Value::If(_, true_branch, false_branch) = if_value else {
-            return None;
-        };
-        let shared = Self::find_branch_terminal_var(true_branch)?;
-        let other = Self::find_branch_terminal_var(false_branch)?;
-        // P236: only unify when both branches' terminal vars are
-        // parser-internal work-refs (`__ref_N` / `__rref_N`).
-        // Renaming user-named parameters (e.g.,
-        // `if c { gen_x } else { gen_y }` in `gen_max<T: Ordered>`)
-        // would silently rewrite the false branch to return gen_x
-        // and corrupt the function's result.  When the guard fails,
-        // bail out and let the existing scope analysis handle the
-        // tail (typically B5-L3 wrap for scalar returns, or the
-        // legacy `Return(Null)` + eval-stack-top pattern for
-        // bytecode-only paths).  Skip when both branches already
-        // share the same var (no rewrite needed).
-        let shared_name = self.vars.name(shared);
-        let other_name = self.vars.name(other);
-        let both_work_refs = (shared_name.starts_with("__ref_")
-            || shared_name.starts_with("__rref_"))
-            && (other_name.starts_with("__ref_") || other_name.starts_with("__rref_"));
-        if !both_work_refs {
+        if !matches!(if_value, Value::If(_, _, _)) {
             return None;
         }
-        if shared != other {
-            Self::unify_branch_to(false_branch, shared);
+        // Collect EVERY arm's terminal var across the whole if-tree — an `else if`
+        // chain nests the alternatives as `If(_, arm, If(_, arm, …))`, so a 3-arm
+        // (or deeper) tail has three+ distinct terminals (`__ref_1`, `__ref_2`,
+        // `__ref_3`). The 2-arm case is just N=2 of this. Without collecting the
+        // whole chain the nested `If`'s terminals differ and the old pair-only
+        // lookup bailed, leaving native to drop the value and return the typed
+        // null sentinel for every arm (struct/ref 3-arm if returned the LAST arm
+        // on native — the struct sibling of the vector a7 bug).
+        let mut terms = Vec::new();
+        Self::collect_branch_terminal_vars(if_value, &mut terms);
+        // Need at least one terminal, and ALL must be parser-internal work-refs
+        // (`__ref_N` / `__rref_N`). Renaming a user-named parameter (e.g.
+        // `if c { gen_x } else { gen_y }`) would corrupt the result, so bail and
+        // let the existing scope analysis handle the tail.
+        let first = *terms.first()?;
+        let all_work_refs = terms.iter().all(|&v| {
+            let n = self.vars.name(v);
+            n.starts_with("__ref_") || n.starts_with("__rref_")
+        });
+        if !all_work_refs {
+            return None;
         }
-        Some(shared)
-    }
-
-    /// Walk a branch (Block / Span / nested If) to find the var nr of
-    /// its terminal `Value::Var(_)` — the work-ref this branch returns.
-    /// Returns `None` if the branch doesn't end in a `Var`.
-    fn find_branch_terminal_var(branch: &Value) -> Option<u16> {
-        match branch.unspan() {
-            Value::Var(v) => Some(*v),
-            Value::Block(bl) => bl.operators.last().and_then(Self::find_branch_terminal_var),
-            Value::Insert(ops) => ops.last().and_then(Self::find_branch_terminal_var),
-            Value::If(_, t, f) => {
-                let tv = Self::find_branch_terminal_var(t)?;
-                let fv = Self::find_branch_terminal_var(f)?;
-                if tv == fv { Some(tv) } else { None }
+        // Pick the FIRST arm's work-ref as the shared one; rewrite every OTHER arm
+        // (Var references, Set LHS slots, Block.result deps) to it across the whole
+        // tail, so all arms deliver through one return slot. Idempotent when the
+        // arms already share `first`.
+        for &other in terms.iter().skip(1) {
+            if other != first {
+                Self::substitute_work_ref(if_value, other, first);
             }
-            _ => None,
         }
+        Some(first)
     }
 
-    /// Rewrite a branch in place so its terminal work-ref is `shared`.
-    /// Walks the branch (recursively through nested If for else-if
-    /// chains) and substitutes the original terminal work-ref with
-    /// `shared` everywhere — Var references, Set LHS slots, and
-    /// Block.result deps.  No-op if the branch already uses `shared`.
-    fn unify_branch_to(branch: &mut Value, shared: u16) {
-        let Some(local) = Self::find_branch_terminal_var(branch) else {
-            return;
-        };
-        if local == shared {
-            return;
+    /// Collect the terminal `Value::Var` of EVERY arm reachable through an
+    /// `if`/`else-if` chain — descends both branches of each nested `If` so an
+    /// N-arm chain yields all N terminals. A non-`Var`-terminating arm
+    /// contributes nothing, so a mixed tail (one arm not ending in a work-ref)
+    /// is detected by the caller's `all_work_refs` check and left un-unified.
+    fn collect_branch_terminal_vars(branch: &Value, out: &mut Vec<u16>) {
+        match branch.unspan() {
+            Value::Var(v) => {
+                if !out.contains(v) {
+                    out.push(*v);
+                }
+            }
+            Value::Block(bl) => {
+                if let Some(last) = bl.operators.last() {
+                    Self::collect_branch_terminal_vars(last, out);
+                }
+            }
+            Value::Insert(ops) => {
+                if let Some(last) = ops.last() {
+                    Self::collect_branch_terminal_vars(last, out);
+                }
+            }
+            Value::If(_, t, f) => {
+                Self::collect_branch_terminal_vars(t, out);
+                Self::collect_branch_terminal_vars(f, out);
+            }
+            _ => {}
         }
-        Self::substitute_work_ref(branch, local, shared);
     }
 
     /// Replace every reference to work-ref `from` with `to` in `val` —
@@ -3955,6 +3964,76 @@ impl Parser {
                 _ => return false,
             }
         }
+    }
+
+    /// Row-104 funnel: does the body tail return a WHOLE vector PARAMETER
+    /// directly (`fn idv(v) -> vector { v }` — the implicit-tail sibling of an
+    /// explicit `return v`)?  Such a tail borrows the caller's store, so
+    /// returning the param as-is ALIASES the argument.  Returns the param var
+    /// so the caller can copy it into `__retbuf` — the same value-semantics
+    /// COPY the explicit `return v` path (`parse_return`) and the struct-field
+    /// tail (`tail_is_struct_field_read`, #415) both perform.  Narrowed to a
+    /// bare `Var` that is a vector argument: index / call / field tails keep
+    /// their existing handling (the over-broad cut regressed the suite — A.2).
+    fn tail_whole_arg_vector(&self, l: &[Value]) -> Option<u16> {
+        let mut v = l.last()?;
+        loop {
+            match v.unspan() {
+                Value::Return(inner) | Value::Drop(inner) => v = inner,
+                Value::Block(bl) => v = bl.operators.last()?,
+                Value::Insert(ops) => v = ops.last()?,
+                Value::Var(bv) => {
+                    return (self.vars.is_argument(*bv)
+                        && matches!(self.vars.tp(*bv), Type::Vector(_, _)))
+                    .then_some(*bv);
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    /// Row-104 funnel: copy a BORROWED implicit-tail vector return into the
+    /// function's one `__retbuf` buffer and finalize the return-type dep to
+    /// `{buf_attr}`, so the caller adopts an independent copy (value
+    /// semantics).  The single home for the "the tail borrows a visible arg →
+    /// COPY" decision in `block_result`; the struct-field tail (#415) and the
+    /// whole-arg param tail (a2) both route here instead of re-deriving the
+    /// copy shape inline.  Mirrors the explicit `return <borrow>` copy in
+    /// `parse_return` (~4651): capture the tail value into `__fwd`, then
+    /// `OpClearVector(buf); OpAppendVector(buf, __fwd); buf`.  Returns true on
+    /// success; false (var allocation failed / no tail) tells the caller to
+    /// fall back to the `ref_return` path.
+    fn copy_borrow_tail_into_retbuf(
+        &mut self,
+        elm: &Type,
+        l: &mut [Value],
+        buf_attr: u16,
+        buf_var: u16,
+    ) -> bool {
+        let elm_ty = elm.clone();
+        let fwd = self.create_var(
+            "__fwd",
+            &Type::Vector(Box::new(elm_ty.clone()), Deps::none()),
+        );
+        let Some(last) = (if fwd == u16::MAX { None } else { l.last_mut() }) else {
+            return false;
+        };
+        let rec_tp = self.append_elem_tp(&elm_ty);
+        let clear = self.cl("OpClearVector", &[Value::Var(buf_var)]);
+        let append = self.cl(
+            "OpAppendVector",
+            &[Value::Var(buf_var), Value::Var(fwd), Value::Int(rec_tp)],
+        );
+        let orig = std::mem::replace(last, Value::Null);
+        let set_fwd = crate::data::v_set(fwd, orig);
+        *last = crate::data::v_block(
+            vec![set_fwd, clear, append, Value::Var(buf_var)],
+            Type::Vector(Box::new(elm_ty.clone()), Deps::frame1(buf_var)),
+            "borrow_tail_copy_104",
+        );
+        self.data.definitions[self.context as usize].returned =
+            Type::Vector(Box::new(elm_ty), Deps::attrs(vec![buf_attr]));
+        true
     }
 
     fn chain_site_set_shape(ret: &Type, tail: &mut Value, w: u16) {

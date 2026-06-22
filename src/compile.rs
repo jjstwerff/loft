@@ -113,11 +113,7 @@ fn build_const_vectors(
     program_store: Option<&(crate::database::Stores, DbRef)>,
 ) {
     // Ensure const_refs is large enough for all definitions.
-    let null_ref = DbRef {
-        store_nr: u16::MAX,
-        rec: 0,
-        pos: 0,
-    };
+    let null_ref = DbRef::NULL;
     state
         .const_refs
         .resize(data.definitions() as usize, null_ref);

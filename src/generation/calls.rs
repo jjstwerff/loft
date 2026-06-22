@@ -189,10 +189,7 @@ impl Output<'_> {
                 let mut buf = Vec::new();
                 self.output_code_inner(&mut buf, v)?;
                 let s = String::from_utf8(buf).unwrap();
-                write!(
-                    w,
-                    "({s} as u32, loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }})"
-                )?;
+                write!(w, "({s} as u32, loft::keys::DbRef::NULL)")?;
             } else if param_is_routine && matches!(v, Value::Int(_)) {
                 let mut buf = Vec::new();
                 self.output_code_inner(&mut buf, v)?;
@@ -436,7 +433,7 @@ impl Output<'_> {
                         | Type::Enum(_, true, _)
                 ) && matches!(vals[a_nr], Value::Null)
                 {
-                    res = res.replace(&name, "(DbRef { store_nr: u16::MAX, rec: 0, pos: 8 })");
+                    res = res.replace(&name, "(DbRef::NULL)");
                     continue;
                 }
                 // @PLN17 — boolean operands: the op `#rust` templates do u8
