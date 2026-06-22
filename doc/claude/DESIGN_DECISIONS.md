@@ -1292,17 +1292,26 @@ inconsistency #426 surfaced.
 
 **Decision — ACCEPTED as the direction (2026-06-22).** Value-semantics by default;
 copy-vs-view is not a language distinction but an implementation choice the borrow
-analysis makes per binding. Genuine write-through requires an **explicit
-borrow/reference** binding; the implicit-write-through consumers (hex_world
-`set_cell` / p379) migrate to it. This is the concrete content of the OWNERSHIP_MODEL
-beacon and the stated target for the borrow-checker work — it collapses the per-form
-special cases and closes the store-lifetime bug class by construction. Staged:
-**share-or-copy first** (correctness core, dissolves #426); **move-when-dead + the
-explicit-borrow construct later** (move on a field/element is a *partial* move).
+analysis makes per binding. Genuine write-through uses the **`&` binding**
+(`cells = &chunk.ck_cells`) — the *same* `&` notation loft already uses for
+`&vector<T>` parameters (writes propagate to the source), now allowed at a local
+binding; **no lifetime annotations** (the borrow checker infers source-outlives-binding
+from scope, exactly as it already does for `&` params — C38's objection was to
+reference *types*, not this binding *notation*). `=` and `&` read ONE analysis and make
+the same "can I share?" decision, differing only in the observable contract: `=`
+**shares as an efficiency pass** (copy-on-write — sharing is the fast default, the copy
+materialises only when a write diverges), `&` makes the link the contract. The
+implicit-write-through consumers (hex_world `set_cell` / p379) migrate mechanically by
+adding `&`. This is the concrete content of the OWNERSHIP_MODEL beacon and the stated
+target for the borrow-checker work — it collapses the per-form special cases and closes
+the store-lifetime bug class by construction. Staged: **share-or-copy first**
+(correctness core, dissolves #426); **move-when-dead later** (move on a field/element
+is a *partial* move); the **`&`-binding** is loft's existing param mechanism extended
+to local bindings.
 Consistent with C64 (tuple struct-ref elements already use MOVE, not copy).
 
 **Revisit when.** The falsification probe fails — rewriting a real write-through
-consumer (`set_cell` / p379) with an explicit borrow proves *not* expressible or badly
-unergonomic (implicit write-through through deep nesting turns out to be a needed idiom
-no explicit borrow captures cleanly). That would mean value-semantics-by-default is the
-wrong default and the view model should stay, documented in INCONSISTENCIES.md.
+consumer (`set_cell` / p379) with `&` proves *not* expressible or badly unergonomic
+(implicit write-through through deep nesting turns out to be a needed idiom `&` can't
+spell cleanly). That would mean value-semantics-by-default is the wrong default and the
+view model should stay, documented in INCONSISTENCIES.md.

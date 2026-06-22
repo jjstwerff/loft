@@ -44,13 +44,25 @@ binding regardless of form — `a = x`, `a = x.f`, `a = x.v[i]`, `a = id(x)`:
 - **Path-sensitive.** "source written after" means through *any aliasing prefix* — a
   write to `x`, `x.v`, or `x.v[i]` all invalidate the share for `a = x.v[i]`.
   Computing that is the borrow-checker's hard part, and why it cannot live in codegen.
-- **Write-through becomes explicit.** Consumers relying on an *implicit* write-through
-  alias (`cells = chunk.ck_cells; cells[i] = v` writing back to `chunk` — hex_world
-  `set_cell` / p379) get a **copy** under this law, so genuine write-through needs an
-  explicit borrow/reference binding. **Falsification probe for the whole design:**
-  every real write-through use must be expressible with an explicit borrow — rewrite
-  `set_cell` to prove it; if write-through through deep nesting is common and awkward
-  to spell, the default is wrong.
+- **Write-through is explicit — the `&` loft already has.** A bare binding is
+  value-semantics; to opt INTO a live link, prefix the source with `&`:
+  `cells = &chunk.ck_cells` makes `cells` an alias whose writes propagate back to
+  `chunk`. This is the **same `&` notation loft already uses for `&vector<T>`
+  parameters** (where `v += x` writes back to the caller — LOFT.md:1529), now allowed
+  at a local binding. So p379's `set_cell` becomes
+  `cells = &chunk.ck_cells; cells[i] = v`; every other binding is value-semantic for
+  free. The migration is mechanical: add `&` exactly where a binding is meant to alias.
+- **No lifetime annotations — the analysis already does this.** A `&` binding is safe
+  exactly when the source outlives it; the borrow checker infers that from scope
+  structure (rejecting `cells = &mk().cells`, a link to a temporary) — the *same*
+  inference that already makes `&vector<T>` params safe (the caller outlives the call).
+  What C38 declined was reference *types* with annotations; this is a binding
+  *notation* the analysis resolves itself.
+- **Two contracts, one analysis.** `=` and `&` read the SAME liveness+mutation analysis
+  and make the SAME "can I share this?" decision; they differ only in the *observable*
+  contract. So `=` **shares as an efficiency pass** (sharing is the fast default; the
+  copy materialises only when a write would diverge — static copy-on-write), while `&`
+  makes the share part of the contract (write-through, never silently copied).
 - **The payoff — the special cases collapse.** Whole-value eager copy · #415
   struct-field copy-on-bind · the `a = x.v[i]` view · `has_ref_params` adopt-vs-copy ·
   the return-source SET · the `block_result`/`ref_return` funnel are all one branch of
@@ -59,8 +71,9 @@ binding regardless of form — `a = x`, `a = x.f`, `a = x.v[i]`, `a = id(x)`:
   computing the answer N times. Landing the rule once closes the class.
 - **Staging.** **Share-or-copy first** (the correctness core — makes value semantics
   hold, dissolves #426). **Move-when-dead later** (deletes loft's eager copies, but
-  field/element moves need partial-move tracking). The explicit-borrow construct lands
-  with the write-through migration.
+  field/element moves need partial-move tracking). The **`&`-binding** is the existing
+  `&vector<T>` param mechanism extended to local bindings — it lands with the
+  write-through migration.
 
 ## Why — the bug class is the symptom of an incomplete ownership system
 
