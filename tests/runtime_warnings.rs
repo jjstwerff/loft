@@ -1007,3 +1007,27 @@ fn main() -> integer { 0 }
         "an index inside a nested NON-null-safe call must still warn; got stderr={diag:?}"
     );
 }
+
+/// @PLN46 W2 — the STDLIB character predicates are annotated `#null_safe` (they
+/// are native `char::is_X()`, which never fault — verified on both backends), so
+/// the common `s[i].is_numeric()` shape no longer false-warns, while a raw `s[i]`
+/// still does.
+#[test]
+fn stdlib_char_predicate_is_null_safe() {
+    let source = "\
+fn scan(line: text, j: integer) -> boolean { line[j].is_numeric() }
+fn raw(line: text, j: integer) -> character { line[j] }
+fn main() -> integer { 0 }
+";
+    let (_stdout, diag, _code) = run_with_warnings("w2_stdlib_isnum", source);
+    // exactly the raw site warns; the is_numeric receiver does not.
+    assert!(
+        diag.contains("may produce null"),
+        "the raw `line[j]` must still warn; got stderr={diag:?}"
+    );
+    assert_eq!(
+        diag.matches("may produce null").count(),
+        1,
+        "only the raw site should warn — `is_numeric(s[i])` is #null_safe; got stderr={diag:?}"
+    );
+}
