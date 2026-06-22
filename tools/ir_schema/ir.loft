@@ -202,6 +202,7 @@ struct Definition {    // src/data.rs::Definition (portable IR subset)
   known_type: integer,
   variables: Function,
   pub_visible: boolean,
+  null_safe: boolean,      // @PLN46 W2 #null_safe -> false = unannotated
   closure_record: integer,
   mutated_captures: vector<NameRef>,
   scalars_to_box: vector<NameRef>,

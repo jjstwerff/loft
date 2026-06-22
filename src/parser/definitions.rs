@@ -1106,6 +1106,9 @@ impl Parser {
             // first pass doesn't have the swap-pass results yet.
             let body = self.data.definitions[self.context as usize].code.clone();
             self.warn_undefended_fault_sites(&body);
+            // @PLN46 W3 — auto-infer `#null_safe` from entry guards (after the warn
+            // pass, so this fn's flag is set for LATER callers' walks).
+            self.infer_function_null_safe(&body);
         }
         self.lexer.has_token(";");
         self.parse_rust();
@@ -1196,6 +1199,12 @@ impl Parser {
                 } else {
                     diagnostic!(self.lexer, Level::Error, "Expect rust next string");
                 }
+            } else if id == Some("null_safe".to_string()) {
+                // @PLN46 W2 — `#null_safe` asserts every nullable parameter
+                // tolerates null and yields a defined result, so a fault-prone
+                // expression (`s[i]`) passed DIRECTLY as an argument is not flagged
+                // at the call site (the possible-null is the callee's contract).
+                self.data.definitions[self.context as usize].null_safe = true;
             } else if id == Some("pure".to_string()) {
                 // Plan-06 phase 5a (DESIGN.md D8.1): `#pure`
                 // declares "no observable side effects, no

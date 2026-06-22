@@ -282,7 +282,7 @@ pub(crate) const NAMENR_NAME: u32 = 8; // text
 /// `Definition` record (element of `Data.definitions` = `vector<Definition>`).
 /// Inlines `Position` (`DEF_POSITION` base) and `Function` (`DEF_VARIABLES`
 /// base).  `def_type` / `purity` store integer codes (see `ir_store`).
-pub(crate) const DEFINITION_STRIDE: u32 = 154;
+pub(crate) const DEFINITION_STRIDE: u32 = 155; // @PLN46 W2 — +1 for null_safe at 154
 pub(crate) const DEF_SOURCE: u32 = 0;
 pub(crate) const DEF_DEF_TYPE: u32 = 8;
 pub(crate) const DEF_PARENT: u32 = 16;
@@ -307,6 +307,7 @@ pub(crate) const DEF_SYNTHETIC: u32 = 144; // Option<&str>; "" = None
 pub(crate) const DEF_CAP: u32 = 148; // @PLN86 #cap "group"; "" = unannotated
 pub(crate) const DEF_RETURNED_NOT_NULL: u32 = 152;
 pub(crate) const DEF_PUB_VISIBLE: u32 = 153;
+pub(crate) const DEF_NULL_SAFE: u32 = 154; // @PLN46 W2 #null_safe; false = unannotated
 
 /// `Data` record (the root).
 pub(crate) const DATA_SOURCE: u32 = 0;
@@ -1427,6 +1428,7 @@ mod tests {
             DEF_RETURNED_NOT_NULL
         );
         assert_eq!(pos(ids.definition, "pub_visible"), DEF_PUB_VISIBLE);
+        assert_eq!(pos(ids.definition, "null_safe"), DEF_NULL_SAFE);
 
         // Data record (root).
         assert_eq!(pos(ids.data, "source"), DATA_SOURCE);
