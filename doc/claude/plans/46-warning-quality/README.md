@@ -7,7 +7,8 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**In progress — W1 + W2 shipped; W3 next.**  Discovered while
+**W1 + W2 + W3 shipped — false-positive elimination complete; only the optional
+W4 perf peephole remains.**  Discovered while
 auditing `tools/indexer/src/scan.loft` on 2026-05-18: 30+
 `s[i] may produce null on out-of-bounds with no defensive check`
 warnings, every one a false positive on code that either uses a
@@ -30,8 +31,15 @@ intentional bounds check).
   Tests in `tests/runtime_warnings.rs`.  *Optional refinement:* the per-param
   `c: #null_safe T` form (today it is function-wide — fine for single-nullable-param
   helpers, which is every annotated case so far).
-- **W3 — next.** Entry-guard auto-inference (`if x == null { return … }`
-  auto-sets `null_safe`, reusing W2's storage).  **W4 — not started.**
+- **W3 — DONE.** Entry-guard auto-inference: `infer_function_null_safe` (pass 2,
+  after the warn pass) sets `null_safe` when EVERY parameter has a leading
+  `if p == null { return … }` guard — so explicitly null-checking user code gets
+  W2's suppression with no annotation.  Sound: a partially-guarded function is not
+  inferred (the unguarded slot keeps warning).  Recognizer looks through one
+  `OpConv*` layer (a `character` compares as int).  Tests in `runtime_warnings.rs`.
+- **W4 — not started (optional).** `s[i] → byte_at` peephole when the consumer is
+  ASCII-only — a perf rewrite, independent of W1–W3; the plan notes it can be
+  skipped if writing `byte_at` explicitly in the rare hot loop is cheaper.
 
 The existing `is_easy_proof` skip patterns in
 `src/parser/operators.rs::is_easy_proof` recognize three shapes
@@ -73,7 +81,7 @@ explicit `if x == null { return … }` guard).
 |---|---|---|
 | **W1** — Short-circuit guard recognition at call sites | § W1 design | ✅ Done |
 | **W2** — `#null_safe` param annotation (library author opts in) | § W2 design | ✅ Done (mechanism + persistence + stdlib char predicates) |
-| **W3** — Entry-guard auto-inference (`if x == null { return … }`) — explicit-check shape only | § W3 design | Open |
+| **W3** — Entry-guard auto-inference (`if x == null { return … }`) — explicit-check shape only | § W3 design | ✅ Done |
 | **W4** — `s[i] → byte_at` peephole when consumer is ASCII-only | § W4 design | Open |
 
 W1 + W2 + W3 silence false-positive warnings on *intentionally*
