@@ -152,6 +152,11 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("t_9character_is_control", t_9character_is_control),
     ("n_arguments", n_arguments),
     ("n_mtime", n_mtime),
+    ("n_is_dir", n_is_dir),
+    ("n_is_file", n_is_file),
+    ("n_list_dir", n_list_dir),
+    ("n_read_bytes", n_read_bytes),
+    ("n_write_bytes", n_write_bytes),
     #[cfg(feature = "mmap")]
     ("n_store_durable_check", n_store_durable_check),
     #[cfg(feature = "mmap")]
@@ -1098,6 +1103,52 @@ fn n_mtime(stores: &mut Stores, stack: &mut DbRef) {
     let v_path = *stores.get::<Str>(stack);
     let result = Stores::os_mtime_native(v_path.str());
     stores.put(stack, result);
+}
+
+/// Interpreter handler for `is_dir` — mirrors the `#rust` template in
+/// `default/02_files.loft`.  Resolves the path against the program anchor,
+/// then stats it.
+fn n_is_dir(stores: &mut Stores, stack: &mut DbRef) {
+    let v_path = *stores.get::<Str>(stack);
+    let new_value = crate::codegen_runtime::fs_is_dir(&stores.resolve_path(v_path.str()));
+    stores.put(stack, new_value);
+}
+
+/// Interpreter handler for `is_file` — mirrors the `#rust` template in
+/// `default/02_files.loft`.
+fn n_is_file(stores: &mut Stores, stack: &mut DbRef) {
+    let v_path = *stores.get::<Str>(stack);
+    let new_value = crate::codegen_runtime::fs_is_file(&stores.resolve_path(v_path.str()));
+    stores.put(stack, new_value);
+}
+
+/// Interpreter handler for `list_dir` — mirrors the `#rust` template in
+/// `default/02_files.loft`.  `fs_list_dir` re-homes the path internally and
+/// returns the `vector<text>` of sorted entry names.
+fn n_list_dir(stores: &mut Stores, stack: &mut DbRef) {
+    let v_path = *stores.get::<Str>(stack);
+    let new_value = stores.fs_list_dir(v_path.str());
+    stores.put(stack, new_value);
+}
+
+/// Interpreter handler for `read_bytes` — mirrors the `#rust` template in
+/// `default/02_files.loft`.  Returns the file contents as a `vector<u8>`.
+fn n_read_bytes(stores: &mut Stores, stack: &mut DbRef) {
+    let v_path = *stores.get::<Str>(stack);
+    let new_value = stores.fs_read_bytes(v_path.str());
+    stores.put(stack, new_value);
+}
+
+/// Interpreter handler for `write_bytes` — mirrors the `#rust` template in
+/// `default/02_files.loft`.  Arguments are popped in REVERSE declaration
+/// order (last-pushed first), so the `vector<u8>` payload comes off the stack
+/// before the path — matching the generated handler convention
+/// (`move_file` pops `to` then `from`; `get_dir` pops `result` then `path`).
+fn n_write_bytes(stores: &mut Stores, stack: &mut DbRef) {
+    let v_bytes = *stores.get::<DbRef>(stack);
+    let v_path = *stores.get::<Str>(stack);
+    let new_value = stores.fs_write_bytes(v_path.str(), v_bytes);
+    stores.put(stack, new_value);
 }
 
 /// @PLAN38 phase 01b — interpreter handler for `store_durable_check`.

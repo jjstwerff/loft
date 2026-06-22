@@ -581,6 +581,10 @@ script_test!(auto_convert, "tests/scripts/54-auto-convert.loft");
 
 // stack_trace() introspection returns frames from nested calls.
 script_test!(stack_trace_script, "tests/scripts/55-stack-trace.loft");
+script_test!(
+    p430_file_builtins,
+    "tests/scripts/430-native-file-builtins.loft"
+);
 
 // @PLAN53 Wave 2 regression: remove_vector off-by-one OOB.
 // A vector at full initial capacity (11 integer elements) with a middle element

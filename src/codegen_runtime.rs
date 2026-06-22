@@ -4001,6 +4001,32 @@ pub fn fs_mkdir_all(path: &str) -> bool {
     }
 }
 
+/// Returns `true` if `path` exists and is a directory.
+#[must_use]
+pub fn fs_is_dir(path: &str) -> bool {
+    #[cfg(feature = "wasm")]
+    {
+        crate::wasm::host_fs_is_dir(path)
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        std::path::Path::new(path).is_dir()
+    }
+}
+
+/// Returns `true` if `path` exists and is a regular file.
+#[must_use]
+pub fn fs_is_file(path: &str) -> bool {
+    #[cfg(feature = "wasm")]
+    {
+        crate::wasm::host_fs_is_file(path)
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        std::path::Path::new(path).is_file()
+    }
+}
+
 /// Store a closure DbRef associated with a lambda definition number.
 /// Called in generated native code when `OpStoreClosure` appears in the IR,
 /// immediately before the fn-ref variable is stored.
