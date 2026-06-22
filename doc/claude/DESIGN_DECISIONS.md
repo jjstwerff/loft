@@ -1269,3 +1269,40 @@ site migrated; tests `imports::pln22_phase4_grouped_import` /
 **Revisit when.** A concrete need arises for nested/path grouping that `()` can't
 express (e.g. `use a::(b::c, d)`), with a parse that doesn't collide with the
 struct-literal or call grammar.
+
+## C77 — Binding ownership: value-semantics by default, copy/share/move chosen by analysis
+
+**Question.** When `a = x` / `a = x.f` / `a = x.v[i]` binds from a value backed by
+another store, is the binding a COPY (independent value), a VIEW (alias), or chosen
+per binding *form*? loft today does all three by form — whole-value eager copy, the
+#415 struct-field copy-on-bind, the `a = x.v[i]` element view — the copy-vs-view
+inconsistency #426 surfaced.
+
+**Evaluation.** Three candidate invariants:
+- *View-by-default* (status quo): element/field reads alias, whole-value copies. The
+  `=` ambiguity is permanent and non-local — "is this a copy?" can't be read off the
+  line — and the split manufactures the store-lifetime bug class (Cluster A, #415, #426).
+- *Copy-always*: uniform but pessimal (eager copies everywhere) and still cannot
+  express write-through.
+- **Value-semantics by default, copy/share/move chosen by a path-sensitive
+  liveness+mutation analysis** ([OWNERSHIP_MODEL.md § The law](OWNERSHIP_MODEL.md)):
+  observably every binding is an independent value; the compiler *shares* while no
+  aliasing write is possible and *moves* when the source is dead. Uniform across all
+  forms — the source is just a path expression.
+
+**Decision — ACCEPTED as the direction (2026-06-22).** Value-semantics by default;
+copy-vs-view is not a language distinction but an implementation choice the borrow
+analysis makes per binding. Genuine write-through requires an **explicit
+borrow/reference** binding; the implicit-write-through consumers (hex_world
+`set_cell` / p379) migrate to it. This is the concrete content of the OWNERSHIP_MODEL
+beacon and the stated target for the borrow-checker work — it collapses the per-form
+special cases and closes the store-lifetime bug class by construction. Staged:
+**share-or-copy first** (correctness core, dissolves #426); **move-when-dead + the
+explicit-borrow construct later** (move on a field/element is a *partial* move).
+Consistent with C64 (tuple struct-ref elements already use MOVE, not copy).
+
+**Revisit when.** The falsification probe fails — rewriting a real write-through
+consumer (`set_cell` / p379) with an explicit borrow proves *not* expressible or badly
+unergonomic (implicit write-through through deep nesting turns out to be a needed idiom
+no explicit borrow captures cleanly). That would mean value-semantics-by-default is the
+wrong default and the view model should stay, documented in INCONSISTENCIES.md.

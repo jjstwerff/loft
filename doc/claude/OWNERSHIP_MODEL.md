@@ -20,6 +20,48 @@ Corollary (from [CODEGEN_METHOD.md](CODEGEN_METHOD.md)): a store-lifetime bug is
 then never a *codegen* bug — it is a **hole in the ownership computation**. Fix the
 fact, not the generator.
 
+## The law — one rule for every binding
+
+What that analysis *computes* is a single rule, applied uniformly to **every**
+binding regardless of form — `a = x`, `a = x.f`, `a = x.v[i]`, `a = id(x)`:
+
+> **A binding owns an independent value: a mutation to one side is never observed by
+> the other.** That is the only *observable* law. Whether the storage is copied,
+> shared, or moved is an invisible choice the compiler makes from a path-sensitive
+> liveness + mutation analysis:
+>
+> | after `a = <source>` … | implementation | safe because |
+> |---|---|---|
+> | source is dead (never read again) | **move** — `a` takes its storage | nothing observes the transfer (field/element ⇒ *partial* move) |
+> | `a` and source both stay read-only | **share** (alias) | no write reveals the sharing; a copy would be observationally identical, only slower |
+> | `a` or source written while both live | **copy** | the write must not leak across — they diverge into distinct values |
+
+- **Uniform across forms.** The form is irrelevant; the source is just a *path
+  expression*. `a = x.v[i]` aliasing is neither feature nor bug — it is the **share**
+  branch, correct while both stay read-only, wrong the moment a write should force
+  divergence. The copy-vs-view question (#426) *dissolves*: there was never a
+  distinction, only N accidental implementations of this one rule.
+- **Path-sensitive.** "source written after" means through *any aliasing prefix* — a
+  write to `x`, `x.v`, or `x.v[i]` all invalidate the share for `a = x.v[i]`.
+  Computing that is the borrow-checker's hard part, and why it cannot live in codegen.
+- **Write-through becomes explicit.** Consumers relying on an *implicit* write-through
+  alias (`cells = chunk.ck_cells; cells[i] = v` writing back to `chunk` — hex_world
+  `set_cell` / p379) get a **copy** under this law, so genuine write-through needs an
+  explicit borrow/reference binding. **Falsification probe for the whole design:**
+  every real write-through use must be expressible with an explicit borrow — rewrite
+  `set_cell` to prove it; if write-through through deep nesting is common and awkward
+  to spell, the default is wrong.
+- **The payoff — the special cases collapse.** Whole-value eager copy · #415
+  struct-field copy-on-bind · the `a = x.v[i]` view · `has_ref_params` adopt-vs-copy ·
+  the return-source SET · the `block_result`/`ref_return` funnel are all one branch of
+  this rule, computed locally and differently. The store-lifetime bug class (Cluster
+  A, #415, #426, the free-suppress + return-buffer leaks) is the *symptom* of
+  computing the answer N times. Landing the rule once closes the class.
+- **Staging.** **Share-or-copy first** (the correctness core — makes value semantics
+  hold, dissolves #426). **Move-when-dead later** (deletes loft's eager copies, but
+  field/element moves need partial-move tracking). The explicit-borrow construct lands
+  with the write-through migration.
+
 ## Why — the bug class is the symptom of an incomplete ownership system
 
 The store-lifetime class (#405/#406/#409/#410 this cycle, cluster II of @PLN85) is
