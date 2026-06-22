@@ -19,7 +19,18 @@ Design + rationale: [OWNERSHIP_MODEL.md § The law](../OWNERSHIP_MODEL.md) +
 cluster); the W4 lint joins the @PLN46 warning family.
 
 ## Phases
-- **P0** — size the migration (sweep for non-`&` reassignment-propagation reliance; **gates P2**).
+- **P0 — ✅ DONE (2026-06-22): the migration is EMPTY → P2 is SAFE.** Swept the whole
+  ecosystem for heap-typed PARAMETERS reassigned wholesale (an IR `Set` on an argument
+  slot, which propagates to the caller today) via a gated `scopes::check` instrument
+  (`LOFT_SWEEP_P0=1 loft … / --tests …`). Result: **0** in the stdlib (`default/`),
+  **0** across all 10 registry libs (cbor, crypto, web, server, time, random, regex,
+  arguments, game_protocol, input), and **0** across the entire `zero-trust-shared-files`
+  application (20+ packages incl. `server/core`). The only raw hits anywhere are
+  crawler's `cube`/`plane`/`sphere` (3) — NRVO return-buffers (`fn cube() -> Mesh`
+  builds + RETURNS a Mesh), safe by construction: the caller receives the value via the
+  RETURN, not param propagation, so P2's local-rebind change cannot break them. **No code
+  relies on non-`&` reassignment propagating — the load-bearing P2 risk is retired.**
+  (The sweep instrument is throwaway; remove before the PR.)
 - **P1** — `&` on local bindings (additive, non-breaking).
 - **P2** — reassignment-locality (**breaking**: non-`&` reassignment → local rebind; `&` writes back).
 - **P3** — W4 redundant-`&` lint.
