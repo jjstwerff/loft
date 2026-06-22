@@ -701,9 +701,22 @@ tree: @P290 (SIGSEGV — `room*2` vs `(room-1)*2`), @P306/@P318 (hash slot-drift
 @P309 (missing length header), #373 (`types[u32::MAX]`), the `gen_set_first_*_null`
 family (#260/#330). Every drift between the dispatchers is a latent corruption.
 
-**The fix.** Finish the keystone — fold copy / validate / construct onto
-`for_each_owned_child(tp, rec) → Iterator<(child, child_tp, stride)>` as thin visitors,
-the collapse `remove_claims` already got. **Size M–L.** Surfaced by the 2026-06-22
-code-quality audit as the highest-leverage UN-tracked hotspot; detail in
-[STABILITY_REDFLAGS.md cluster C](STABILITY_REDFLAGS.md). Pick up after the Cluster A
-residual (#426/#429) lands; deserves a `@PLN`.
+**The fix — a 3-way split, NOT a uniform fold (the over-unification guard).** Grounding
+in the structure (2026-06-22) shows the keystone `Stores::for_each_owned_child(rec, tp) →
+OwnedWalk` (`src/database/allocation.rs:75`) yields `children` (each
+`{child: DbRef, child_tp, owning_elem: Option<u32>}`) + `container_rec` + `zero_field`;
+`remove_claims` (1907) is the model thin-visitor. The three "drifting" dispatchers do NOT
+fold equally — spraying all three onto the read-walk keystone would be over-reach:
+- **`validate_claims` (1206)** — a pure READ-walk → folds CLEANLY (a validating visitor like
+  `remove_claims`). Cleanest, highest-confidence; do first.
+- **`copy_claims` (1594) + 4 helpers** — the SOURCE enumeration folds (`copy_claims_hash_body`
+  already reads the keystone); the DESTINATION build (allocating into `to`) stays. PARTIAL.
+- **construction `record_new`/`record_finish` (`structures.rs:59`/`104`)** — a WRITE/build,
+  NOT a read-walk → forcing it onto the keystone is OVER-REACH. If it shares a per-`Parts`
+  LAYOUT fact (strides/positions), that is a SEPARATE refactor, not this fold.
+
+**Phasing** (each verifies BOTH backends, with the historical shapes @P290/@P306/@P318/@P309
+still caught): (1) `validate_claims` fold — **IN FLIGHT 2026-06-22**; (2) `copy_claims`
+source-enum fold; (3) assess construction (likely its own layout-descriptor refactor — do NOT
+force it). **Size M–L.** Surfaced by the 2026-06-22 code-quality audit; detail in
+[STABILITY_REDFLAGS.md cluster C](STABILITY_REDFLAGS.md). Tracked as task #39 / this H10.
