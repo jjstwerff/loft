@@ -7,8 +7,8 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**W1 + W2 + W3 shipped — false-positive elimination complete; only the optional
-W4 perf peephole remains.**  Discovered while
+**COMPLETE — W1 + W2 + W3 shipped (false-positive elimination); W4 verified not
+worth it (skip).**  Discovered while
 auditing `tools/indexer/src/scan.loft` on 2026-05-18: 30+
 `s[i] may produce null on out-of-bounds with no defensive check`
 warnings, every one a false positive on code that either uses a
@@ -37,9 +37,17 @@ intentional bounds check).
   W2's suppression with no annotation.  Sound: a partially-guarded function is not
   inferred (the unguarded slot keeps warning).  Recognizer looks through one
   `OpConv*` layer (a `character` compares as int).  Tests in `runtime_warnings.rs`.
-- **W4 — not started (optional).** `s[i] → byte_at` peephole when the consumer is
-  ASCII-only — a perf rewrite, independent of W1–W3; the plan notes it can be
-  skipped if writing `byte_at` explicitly in the rare hot loop is cheaper.
+- **W4 — VERIFIED NOT WORTH IT; recommend SKIP.** The premise (a perf gap that
+  pushes users to `byte_at`) was measured and is weak.  `s[i]` is **O(1)
+  byte-indexed** (`ops::text_character` = `as_bytes()[idx]` + a char decode, NOT a
+  UTF-8 scan), so the gap vs `byte_at` is a constant char-decode, not algorithmic:
+  **0 on the interpreter** (0.080 vs 0.092 s) and **~1.85× on native** (isolated
+  execution: 15.9 vs 8.6 ns/op over 600 M indexings).  That only matters in an
+  *extreme* hot loop (100 M+ ASCII indexings), where a developer can write
+  `byte_at` explicitly — and since W1–W3 removed the false warnings, `s[i]` is no
+  longer nudged toward `byte_at` as a workaround, so the original motivation is
+  moot.  A codegen peephole (~150 lines + byte-variant helpers + non-ASCII
+  correctness risk) does not pay back.  Per the plan's own "stop after W3" guidance.
 
 The existing `is_easy_proof` skip patterns in
 `src/parser/operators.rs::is_easy_proof` recognize three shapes
@@ -82,7 +90,7 @@ explicit `if x == null { return … }` guard).
 | **W1** — Short-circuit guard recognition at call sites | § W1 design | ✅ Done |
 | **W2** — `#null_safe` param annotation (library author opts in) | § W2 design | ✅ Done (mechanism + persistence + stdlib char predicates) |
 | **W3** — Entry-guard auto-inference (`if x == null { return … }`) — explicit-check shape only | § W3 design | ✅ Done |
-| **W4** — `s[i] → byte_at` peephole when consumer is ASCII-only | § W4 design | Open |
+| **W4** — `s[i] → byte_at` peephole when consumer is ASCII-only | § W4 design | ⏹️ Verified not worth it — skip (gap is constant-factor: 0 interp, ~1.85× native) |
 
 W1 + W2 + W3 silence false-positive warnings on *intentionally*
 safe code.  W4 closes the perf gap so users never have a perf
