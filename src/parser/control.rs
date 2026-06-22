@@ -2183,6 +2183,22 @@ impl Parser {
         (arm, exhaustive)
     }
 
+    /// #429: the frame var a match-arm field binding BORROWS from — the
+    /// subject's backing variable.  A heap match binding (`CMap { entries }`)
+    /// is a DbRef into the subject's record, so its type must carry a borrow
+    /// dep on this var (see the call site).  Returns `Some(var)` only when the
+    /// subject reduces to a plain `Var` (the common `match m { … }` /
+    /// `match self.f { … }`-into-a-temp case, where `subject_val` is the
+    /// match temp or the parameter itself); a non-`Var` subject (a raw inline
+    /// field/index/call expression with no single backing var) yields `None`,
+    /// leaving the binding dep-free exactly as before.
+    fn match_borrow_source(subject_val: &Value) -> Option<u16> {
+        match subject_val.unspan() {
+            Value::Var(v) => Some(*v),
+            _ => None,
+        }
+    }
+
     /// Parse field bindings for a struct-enum match arm.
     fn parse_match_enum_field_bindings(
         &mut self,
@@ -2245,6 +2261,40 @@ impl Parser {
                             // cleanup leaves it alone in both the
                             // taken and not-taken arms.
                             self.vars.set_skip_free(v_nr);
+                            // #429: the binding is a BORROWED VIEW of the
+                            // subject, so its TYPE must record that borrow —
+                            // otherwise a value derived from it and returned
+                            // (`CMap { entries } => { r = entries[..]; return r }`)
+                            // breaks the borrow chain at the binding: `ref_return`
+                            // walks `r` → `entries` → <this binding> and stops (the
+                            // binding has empty deps), never reaching the subject
+                            // parameter, so the fn is mis-classified OWNED and the
+                            // caller whole-store-frees the subject's record (#429
+                            // interp-vs-native divergence).  Give a HEAP
+                            // (DbRef-carrying) binding a frame dep on the subject's
+                            // source var so the chain reaches the parameter — exactly
+                            // the `["src"]` dep a `b = subj.field` bind already
+                            // carries.  Scalars hold no DbRef, so they need no borrow
+                            // dep (the `_mv_value` integer binding stays dep-free).
+                            if matches!(
+                                &field_type,
+                                Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+                            ) && let Some(src) = Self::match_borrow_source(subject_val)
+                            {
+                                let bound_tp = match self.vars.tp(v_nr).clone() {
+                                    Type::Reference(td, _) => {
+                                        Type::Reference(td, crate::data::Deps::frame1(src))
+                                    }
+                                    Type::Vector(it, _) => {
+                                        Type::Vector(it, crate::data::Deps::frame1(src))
+                                    }
+                                    Type::Enum(td, su, _) => {
+                                        Type::Enum(td, su, crate::data::Deps::frame1(src))
+                                    }
+                                    other => other,
+                                };
+                                self.vars.set_type(v_nr, bound_tp);
+                            }
                         }
                     }
                 }

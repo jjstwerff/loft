@@ -2070,7 +2070,8 @@ impl State {
             // T1.8c: tuple destructuring `(q1, q2) = expr` — when an element
             // is Type::Reference, deep-copy the record to avoid aliasing.
             self.gen_set_first_ref_tuple_copy(stack, v, value, d_nr);
-        } else if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
+        } else if let Type::Reference(d_nr, _) | Type::Enum(d_nr, true, _) =
+            stack.function.tp(v).clone()
             && let Value::Call(fn_nr, _) = value.unspan()
             && stack.data.def(*fn_nr).name().starts_with("n_")
             && *stack.data.def(*fn_nr).code() != Value::Null
@@ -2086,6 +2087,17 @@ impl State {
             // and must be deep-copied into a fresh store `v` owns.  This reads
             // `return_adopts_fresh_store()` rather than re-deriving the coarse
             // "any visible ref param" proxy (A.3).
+            //
+            // #429: a struct-enum (`Type::Enum(_, true, _)`) binding is a heap
+            // record exactly like `Type::Reference`, so it needs the SAME
+            // copy-or-adopt split.  Before, only `Reference` had this arm — a
+            // `acl = get_field(m, k)` whose callee returns a BORROWED view of
+            // `m` (`["m"]`) fell through to a plain adopt, then `OpFreeRef(acl)`
+            // at scope exit whole-store-freed `m`'s record (interp-only;
+            // native's runtime adopt-or-copy guard already handled it).  The
+            // record copy (`OpDatabase` + `OpCopyRecord`, keyed on the enum's
+            // `known_type`) is identical for an enum d_nr, mirroring
+            // `materialize_return_into`'s `Type::Enum(td, true, _)` leg.
             if stack.data.def(*fn_nr).return_adopts_fresh_store() {
                 // runtime tolerates double-free as a no-op so leaving
                 // __ref_N to be freed by scopes.rs's is_work_ref gate at
