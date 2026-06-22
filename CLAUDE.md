@@ -230,6 +230,16 @@ must be releasable. All changes land on a feature branch and reach `main` only v
    work lands there and it ships at the start of that month once the tree is stable with a low bug
    count — see [RELEASE.md § Release cadence](doc/claude/RELEASE.md#release-cadence).
 5. Merge to `main` via a GitHub PR — never a local `git merge`.
+6. **Before opening a PR — and again before requesting its merge — verify the branch is current
+   on `origin/main`.** `git fetch origin`, then confirm the head sits on the latest `origin/main`
+   tip (`git merge-base --is-ancestor origin/main <head>` returns true = it IS an ancestor). A
+   branch that went green on CI while `main` advanced underneath it merges as **BLOCKED / behind**:
+   GitHub still reports `mergeable=MERGEABLE`, but the "branch up to date" protection refuses the
+   merge (this sank PR #427 — `main` gained one commit after the PR opened, so the PR head was no
+   longer a descendant of `origin/main`). If stale, rebase on `origin/main` and re-push *before*
+   asking for the merge — catching it at PR-open time is cheap; discovering it at merge time forces
+   the most disruptive rebase. `mergeStateStatus: BEHIND` (via `gh pr view <#> --json
+   mergeStateStatus`) is the explicit signal.
 
 ---
 
