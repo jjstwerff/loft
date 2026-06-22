@@ -1,0 +1,41 @@
+// @PLN85 A.1 RED gate — borrowing-read aliasing residuals (#426, the #415 siblings).
+//
+// A binding from a BORROWING READ (a value backed by another store) must get its
+// OWN store (single-owner value semantics — plain `a = x` already copies). #415
+// closed the DIRECT struct-field read (`a = x.v`); these sibling shapes still ALIAS
+// the source store on BOTH backends (silent value-semantics violation, no crash):
+//   A  vector INDEX read         `a = vv[0]`
+//   B  fn-return-of-index        `b = idx0(w){ w[0] }`
+//   C  nested struct-field read  `c = o.inner.v`
+//
+// RED until A.1 lands the one dep-driven copy (return dep empty => adopt,
+// {Attr} => copy) at the bind-site (`expressions.rs:1663`) + the return path,
+// which closes #415 + #425 + #426 together and lets the #415 special-case be
+// deleted. Workaround (verified both backends): force an owned copy — `a = []; a += vv[0]`.
+
+struct Inner { v: vector<integer> }
+struct Outer { inner: Inner }
+
+fn idx0(w: vector<vector<integer>>) -> vector<integer> { w[0] }
+
+fn main() {
+  // A — vector INDEX read
+  vv: vector<vector<integer>> = [[1, 2, 3]];
+  a = vv[0];
+  vv[0] += [9];
+  assert(len(a) == 3, "A a=vv[0] must COPY (observed 4: aliases vv[0])");
+
+  // B — fn returns a vector INDEX element
+  ww: vector<vector<integer>> = [[1, 2, 3]];
+  b = idx0(ww);
+  ww[0] += [9];
+  assert(len(b) == 3, "B b=idx0(ww) must COPY (observed 4)");
+
+  // C — NESTED struct-field vector read
+  o = Outer { inner: Inner { v: [1, 2, 3] } };
+  c = o.inner.v;
+  o.inner.v += [9];
+  assert(len(c) == 3, "C c=o.inner.v must COPY (observed 4)");
+
+  println("borrowing-read aliasing: all COPY (A.1 landed)");
+}

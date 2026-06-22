@@ -162,11 +162,27 @@ the signal explicit). `size_code` (`stack.rs`) is the same family, same disposit
       adopts-or-allocates at RUNTIME on its input) — a genuinely different fact
       the single static return-dep cannot carry; forcing it onto the dep regresses
       that case.
-- [ ] A.1 (compute the return-source SET on `Deps`) — the set version
-      `collect_return_sources` EXISTS but is gated behind the single-`u16`
-      `returned_var` (`scopes.rs:1348`, narrowed to `ret_var==MAX && Vector`).
-      Making the set the primary path is blocked by the keyed/enum free-suppress
-      regression (§6h Edge A: ~13 tests) — needs A.2 first.
+- [ ] A.1 (the carried return-ownership dep — **SCOPED**; now ALSO absorbs the
+      bind-site borrowing-read class **#426**). Two parts:
+      **(i) Return-source SET.** `collect_return_sources` EXISTS (`scopes.rs:2363`)
+      but is gated behind the single-`u16` `returned_var` (`:2327`, gate `:1358`,
+      narrowed to `ret_var==MAX && Vector`). Making the set primary CRASHES on a
+      keyed/enum **free-suppress** regression (10 keyed tests; artifacts
+      `/tmp/a1_scope/`). Root = `skip_free` OVERLOADED (don't-free vs don't-allocate)
+      at the two `gen_set_first_*_null` init sites (`state/codegen.rs:1330`/`:1411`):
+      the set-path marks an OWNED keyed return-local `skip_free` → init misreads it as
+      "borrow ⇒ don't allocate" → `OpDatabase` suppressed → OOB `allocation.rs:784`.
+      **Prereq: the companion `skip_free` de-conflation** (gate the no-alloc path on
+      `is_inline_ref` ALONE) — *in progress*. Then drop the `ret_var==MAX`/Vector gate.
+      **(ii) Bind-site borrowing-read copy (#415 siblings — #426 A/C + B + #425).**
+      ONE dep-driven copy (return dep empty ⇒ adopt, `{Attr}` ⇒ copy) covers the
+      **bind-site** (`a = vv[0]` index, `c = o.inner.v` nested-field —
+      `expressions.rs:1663`) AND the **return-path** (`b = idx0(w){w[0]}`,
+      `return d.value` = #425), closing **#415 + #425 + #426** with one fact and
+      letting the #415 `expressions.rs:1663` special-case be DELETED. Probe:
+      `probes/07-borrowing-read-aliasing.loft` (RED until the fact lands).
+      Effort **M** (the companion fix is **S**, first). Build on top of the companion
+      `skip_free` fix + the #425 return-copy fix.
 - [~] A.2 (funnel the return path) — **a2 LANDED; a7 localized + routed.** The
       implicit-tail whole-arg vector return (`fn idv(v) -> vector { v }`, matrix a2)
       now funnels through the SAME copy-into-`__retbuf` the struct-field tail (#415)
