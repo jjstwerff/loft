@@ -7947,8 +7947,14 @@ mod plan86_nesting_guard_tests {
     }
 
     fn parse_source(p: &mut Parser, src: &str) {
-        let path =
-            std::env::temp_dir().join(format!("plan86_nest_{}_{:p}.loft", std::process::id(), src));
+        // Process-global counter (not the `src` pointer) for a collision-free name
+        // across concurrent test threads — see `parse_admit_libs`.
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "plan86_nest_{}_{}.loft",
+            std::process::id(),
+            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        ));
         std::fs::write(&path, src).unwrap();
         p.parse(path.to_str().unwrap(), false);
         let _ = std::fs::remove_file(&path);
@@ -8028,10 +8034,13 @@ mod plan86_reachable_set_tests {
         let mut p = Parser::new();
         p.set_sandbox_config(parse_sandbox_config(&cfg));
         p.parse_dir("default", true, true).unwrap(); // `integer` et al. live in the stdlib
+        // Process-global counter (not the `src` pointer) for a collision-free name
+        // across concurrent test threads — see `parse_admit_libs`.
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let path = std::env::temp_dir().join(format!(
-            "plan86_reach_{}_{:p}.loft",
+            "plan86_reach_{}_{}.loft",
             std::process::id(),
-            src
+            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         ));
         std::fs::write(&path, src).unwrap();
         p.parse(path.to_str().unwrap(), false);
@@ -8195,10 +8204,15 @@ mod plan86_admission_tests {
         let mut p = Parser::new();
         p.set_sandbox_config(parse_sandbox_config(&cfg));
         p.parse_dir("default", true, true).unwrap();
+        // A process-global counter, not the `src` pointer: cargo runs tests as
+        // threads in ONE process, so a deterministic name (the literal's address)
+        // can collide across concurrent threads — Windows' strict file locking
+        // then fails the write where Unix tolerates it.
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let path = std::env::temp_dir().join(format!(
-            "plan86_admit_{}_{:p}.loft",
+            "plan86_admit_{}_{}.loft",
             std::process::id(),
-            src
+            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         ));
         std::fs::write(&path, src).unwrap();
         p.parse(path.to_str().unwrap(), false);
