@@ -712,10 +712,32 @@ impl Parser {
         crate::sandbox::sandbox_complexity_degree(&self.data, &self.def_sandbox)
     }
 
-    /// @PLN86 step 3.4 — the human-readable worst-case complexity report.
+    /// @PLN86 space budget — the worst-case SPACE (peak-heap) degree of the
+    /// sandboxed code: `O(n^degree)` memory in the largest input.  The host bounds
+    /// inputs against it so a bounded loop building a structure cannot OOM.
+    #[must_use]
+    pub fn sandbox_space_degree(&self) -> u32 {
+        crate::sandbox::sandbox_space_degree(&self.data, &self.def_sandbox)
+    }
+
+    /// @PLN86 prevention #3 — host capabilities that are NOT total: every
+    /// `#cap`-tagged function whose call tree can reach an abort op.  A host-side
+    /// lint (the mirror of the script-side 3.3 exclusion); an empty result means the
+    /// loft-bodied capability surface cannot fault the host on a script value.
+    #[must_use]
+    pub fn sandbox_capability_totality_violations(
+        &self,
+    ) -> Vec<crate::sandbox::CapTotalityViolation> {
+        crate::sandbox::capability_totality_violations(&self.data, &self.sandbox_fn_refs)
+    }
+
+    /// @PLN86 — the human-readable worst-case complexity report (time + space).
     #[must_use]
     pub fn sandbox_complexity_report(&self) -> String {
-        crate::sandbox::complexity_report(self.sandbox_complexity_degree())
+        crate::sandbox::complexity_report(
+            self.sandbox_complexity_degree(),
+            self.sandbox_space_degree(),
+        )
     }
 
     /// @PLN86 L4 — record that the current def references `fn_d_nr` as a fn-ref
@@ -8696,6 +8718,340 @@ mod plan86_admission_tests {
             2,
             "a loop calling a looping fn → O(n^2)"
         );
+    }
+
+    /// @PLN86 space budget — the SPACE degree counts only ACCUMULATING appends (a
+    /// structure grown across a loop), so a pure-compute loop is O(1) space even
+    /// when it is O(n) time, a transient buffer (reset each iteration) is O(1), and
+    /// a vector built across nested loops is O(n^2).
+    #[test]
+    fn space_degree_counts_accumulating_appends_only() {
+        // pure compute — O(n) TIME, O(1) SPACE (no heap grows)
+        let p0 = parse_admit_libs(
+            &["fn:spc_pure"],
+            &["code"],
+            &[],
+            "fn spc_pure() -> integer { s = 0; for i in 0..10 { s += i } s }\n",
+        );
+        assert_eq!(p0.sandbox_complexity_degree(), 1, "time O(n)");
+        assert_eq!(p0.sandbox_space_degree(), 0, "pure compute → O(1) space");
+
+        // accumulate into a vector declared OUTSIDE the loop → O(n) SPACE
+        let p1 = parse_admit_libs(
+            &["fn:spc_build"],
+            &["code"],
+            &[],
+            "fn spc_build() -> integer { r = []; for i in 0..10 { r += [i] } len(r) }\n",
+        );
+        assert_eq!(
+            p1.sandbox_space_degree(),
+            1,
+            "accumulating vector → O(n) space"
+        );
+
+        // transient buffer — reset every iteration → O(1) SPACE
+        let p2 = parse_admit_libs(
+            &["fn:spc_trans"],
+            &["code"],
+            &[],
+            "fn spc_trans() -> integer { c = 0; for i in 0..10 { b = []; b += [i]; c += len(b) } c }\n",
+        );
+        assert_eq!(
+            p2.sandbox_space_degree(),
+            0,
+            "a buffer reset each iteration is transient → O(1) space, got {}",
+            p2.sandbox_space_degree()
+        );
+
+        // accumulate across NESTED loops → O(n^2) SPACE; report names both axes
+        let p3 = parse_admit_libs(
+            &["fn:spc_grid"],
+            &["code"],
+            &[],
+            "fn spc_grid() -> integer { r = []; for i in 0..10 { for j in 0..10 { r += [i] } } len(r) }\n",
+        );
+        assert_eq!(
+            p3.sandbox_space_degree(),
+            2,
+            "nested accumulation → O(n^2) space"
+        );
+        assert!(
+            p3.sandbox_complexity_report().contains("space O(n^2)"),
+            "report names the space axis: {}",
+            p3.sandbox_complexity_report()
+        );
+    }
+
+    /// @PLN86 prevention #3 — TOTAL host capabilities: a `#cap`-tagged function that
+    /// can reach an abort op (directly OR via a helper) is flagged as not total; a
+    /// capability that validates and returns a clean value is clean.  The host-side
+    /// mirror of the script-side 3.3 abort-op exclusion.
+    #[test]
+    fn capability_totality_flags_abort_reaching_caps() {
+        let src = "\
+            fn cap_bad(n: integer) -> integer { assert(n > 0, \"pos\"); n }\n#cap \"game\"\n\
+            fn cap_ok(n: integer) -> integer { if n > 0 { n } else { 0 } }\n#cap \"game\"\n\
+            fn helper(n: integer) -> integer { assert(n > 0, \"x\"); n }\n\
+            fn cap_trans(n: integer) -> integer { helper(n) }\n#cap \"game\"\n";
+        let p = parse_admit_libs(&[], &["code"], &[], src);
+        let v = p.sandbox_capability_totality_violations();
+        let flagged: std::collections::HashSet<&str> =
+            v.iter().map(|x| p.data.def(x.capability).name()).collect();
+        // direct abort + transitive abort (via a non-cap helper) are both caught
+        assert!(
+            flagged.contains("n_cap_bad"),
+            "cap_bad reaches assert: {flagged:?}"
+        );
+        assert!(
+            flagged.contains("n_cap_trans"),
+            "cap_trans reaches assert via helper: {flagged:?}"
+        );
+        // a total capability is NOT flagged; a non-cap helper is never enumerated
+        assert!(
+            !flagged.contains("n_cap_ok"),
+            "cap_ok is total: {flagged:?}"
+        );
+        assert!(
+            !flagged.contains("n_helper"),
+            "non-cap helper is not a capability: {flagged:?}"
+        );
+        // the message is actionable
+        let bad = v
+            .iter()
+            .find(|x| p.data.def(x.capability).name() == "n_cap_bad")
+            .unwrap();
+        let msg = crate::sandbox::describe_cap_totality_violation(&p.data, bad);
+        assert!(
+            msg.contains("not total") && msg.contains("cap_bad"),
+            "actionable message: {msg}"
+        );
+    }
+
+    /// @PLN86 prevention #4 — adversarial admission ESCAPE suite.  A battery that
+    /// TRIES to break out across every dimension (capability / totality / raw-write);
+    /// each must be rejected at load.  Positive controls prove the suite is not
+    /// vacuously rejecting everything — a sandbox that admits nothing is useless.
+    /// "No unknown holes" is unprovable, so this is how confidence is earned.
+    #[test]
+    fn admission_escape_suite_rejects_every_breakout() {
+        // Parse + admit; ASSERT the probe parsed (a parse error would make the
+        // admission check vacuous — a silent pass), then return the errors.
+        fn adm(sel: &[&str], libs: &[&str], caps: &[&str], src: &str) -> Vec<String> {
+            let p = parse_admit_libs(sel, libs, caps, src);
+            assert!(
+                p.diagnostics.level() < crate::diagnostics::Level::Error,
+                "probe did not parse (vacuous):\n{src}\n{:?}",
+                p.diagnostics.lines()
+            );
+            p.sandbox_admission_errors()
+        }
+        // A forbidden #cap native, declared in-source and NOT in an allowed library,
+        // so the fine-grained capability gate applies to it.
+        let secret = "fn secret() -> integer;\n#native\n#cap \"danger\"\n";
+
+        // ===== ESCAPES — admission MUST reject (≥1 error). =====
+        let escapes: Vec<(&str, Vec<String>)> = vec![
+            (
+                "cap: direct ungranted call",
+                adm(
+                    &["fn:evil"],
+                    &["code"],
+                    &[],
+                    &format!("{secret}fn evil() -> integer {{ secret() }}\n"),
+                ),
+            ),
+            (
+                "cap: indirect fn-ref (L4)",
+                adm(
+                    &["fn:evil"],
+                    &["code"],
+                    &[],
+                    &format!("{secret}fn evil() -> integer {{ f = secret; f() }}\n"),
+                ),
+            ),
+            (
+                "cap: via sandboxed helper",
+                adm(
+                    &["fn:evil", "fn:helper"],
+                    &["code"],
+                    &[],
+                    &format!(
+                        "{secret}fn helper() -> integer {{ secret() }}\nfn evil() -> integer {{ helper() }}\n"
+                    ),
+                ),
+            ),
+            (
+                "totality: unbounded while",
+                adm(
+                    &["fn:evil"],
+                    &["code"],
+                    &[],
+                    "fn evil() { while true { } }\n",
+                ),
+            ),
+            (
+                "totality: self-recursion",
+                adm(
+                    &["fn:evil"],
+                    &["code"],
+                    &[],
+                    "fn evil() -> integer { evil() }\n",
+                ),
+            ),
+            (
+                "totality: mutual recursion",
+                adm(
+                    &["fn:a", "fn:b"],
+                    &["code"],
+                    &[],
+                    "fn a() -> integer { b() }\nfn b() -> integer { a() }\n",
+                ),
+            ),
+            (
+                "totality: abort op assert",
+                adm(
+                    &["fn:evil"],
+                    &["code"],
+                    &[],
+                    "fn evil() { assert(false, \"x\") }\n",
+                ),
+            ),
+            (
+                "totality: abort op panic",
+                adm(&["fn:evil"], &["code"], &[], "fn evil() { panic(\"x\") }\n"),
+            ),
+            (
+                "totality: while non-constant step",
+                adm(
+                    &["fn:evil"],
+                    &["code"],
+                    &[],
+                    "fn evil(n: integer) { i = 0; j = 2; while i < n { i = i + j } }\n",
+                ),
+            ),
+            (
+                "totality: while conditional step",
+                adm(
+                    &["fn:evil"],
+                    &["code"],
+                    &[],
+                    "fn evil(n: integer, c: boolean) { i = 0; while i < n { if c { i = i + 1 } } }\n",
+                ),
+            ),
+            (
+                "cap: fn-ref in a collection (L4 — caught at fn-ref creation site)",
+                adm(
+                    &["fn:evil"],
+                    &["code"],
+                    &[],
+                    &format!("{secret}fn evil() -> integer {{ v = [secret]; v[0]() }}\n"),
+                ),
+            ),
+            (
+                "cap: fn-ref returned then called (L4 — caught at fn-ref creation site)",
+                adm(
+                    &["fn:evil", "fn:get"],
+                    &["code"],
+                    &[],
+                    &format!(
+                        "{secret}fn get() -> fn() -> integer {{ secret }}\nfn evil() -> integer {{ g = get(); g() }}\n"
+                    ),
+                ),
+            ),
+            (
+                "cap: fn-ref in a struct field (L4 — caught at fn-ref creation site)",
+                adm(
+                    &["fn:evil"],
+                    &["code", "prog"],
+                    &[],
+                    &format!(
+                        "{secret}struct Holder {{ f: fn() -> integer }}\nfn evil() -> integer {{ h = Holder {{ f: secret }}; h.f() }}\n"
+                    ),
+                ),
+            ),
+            (
+                "raw-write: field",
+                adm(
+                    &["fn:evil"],
+                    &["code", "prog"],
+                    &[],
+                    "struct Ent { hp: integer }\nfn evil(e: Ent) -> integer { e.hp = 0; e.hp }\n",
+                ),
+            ),
+            (
+                "raw-write: index",
+                adm(
+                    &["fn:evil"],
+                    &["code", "prog"],
+                    &[],
+                    "fn evil(v: vector<integer>) -> integer { v[0] = 9; v[0] }\n",
+                ),
+            ),
+            (
+                "raw-write: nested field",
+                adm(
+                    &["fn:evil"],
+                    &["code", "prog"],
+                    &[],
+                    "struct In { hp: integer }\nstruct Ent { it: In }\nfn evil(e: Ent) -> integer { e.it.hp = 0; e.it.hp }\n",
+                ),
+            ),
+        ];
+        for (name, e) in &escapes {
+            assert!(!e.is_empty(), "ESCAPE NOT REJECTED — {name}");
+        }
+
+        // ===== CONTROLS — admission MUST admit (no errors). =====
+        let controls: Vec<(&str, Vec<String>)> = vec![
+            (
+                "bounded for + arithmetic",
+                adm(
+                    &["fn:ok"],
+                    &["code"],
+                    &[],
+                    "fn ok() -> integer { s = 0; for i in 0..10 { s += i } s }\n",
+                ),
+            ),
+            (
+                "bounded while (constant variant)",
+                adm(
+                    &["fn:ok"],
+                    &["code"],
+                    &[],
+                    "fn ok() -> integer { i = 0; while i < 10 { i = i + 1 } i }\n",
+                ),
+            ),
+            (
+                "struct construction (not a write)",
+                adm(
+                    &["fn:ok"],
+                    &["code", "prog"],
+                    &[],
+                    "struct Pt { x: integer }\nfn ok() -> Pt { Pt { x: 1 } }\n",
+                ),
+            ),
+            (
+                "local variable writes",
+                adm(
+                    &["fn:ok"],
+                    &["code"],
+                    &[],
+                    "fn ok() -> integer { x = 5; x = x + 1; x }\n",
+                ),
+            ),
+            (
+                "granted capability",
+                adm(
+                    &["fn:ok"],
+                    &["code"],
+                    &["danger"],
+                    &format!("{secret}fn ok() -> integer {{ secret() }}\n"),
+                ),
+            ),
+        ];
+        for (name, e) in &controls {
+            assert!(e.is_empty(), "CLEAN SCRIPT REJECTED — {name}: {e:?}");
+        }
     }
 
     /// @PLN86 2.4 — no-raw-write rejects a field/index assignment to heap data,

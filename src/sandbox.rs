@@ -902,6 +902,93 @@ pub fn describe_totality_violation(data: &Data, v: &TotalityViolation) -> String
     }
 }
 
+/// @PLN86 prevention #3 — a host capability that is NOT total: a `#cap`-tagged
+/// function whose call tree (transitively) reaches an explicit-abort op (3.3's
+/// [`ABORT_OPS`]), so a script-supplied value could fault the HOST through it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CapTotalityViolation {
+    /// The `#cap`-tagged capability function.
+    pub capability: u32,
+    /// The explicit-abort op it can reach.
+    pub op: u32,
+    /// Where `capability` references `op` directly (None when the op is reached
+    /// only transitively, through a helper).
+    pub position: Option<Position>,
+}
+
+/// @PLN86 prevention #3 — TOTAL host capabilities.  An allow-listed capability is
+/// TRUSTED but, unlike sandboxed script code (3.3), un-analysed: if it aborts on a
+/// script-supplied value the fault is PAST admission, and a runtime `catch_unwind`
+/// only mops up after the break.  This is the host-side MIRROR of 3.3 — over every
+/// `#cap`-tagged function it flags those whose call tree reaches an [`ABORT_OPS`] op
+/// (`assert` / `panic` / `log_fatal`), so the host makes them total (validate +
+/// return a clean error, never abort) before exposing them.
+///
+/// Follows EVERY callee — a capability's whole implementation must be total, not
+/// just its top frame.  A NATIVE capability has no loft body, so its Rust is OPAQUE
+/// to this lint; the host vouches for native totality separately.  This catches the
+/// loft-bodied (library) capability surface, which grows as libraries expose `#cap`
+/// functions.
+#[must_use]
+pub fn capability_totality_violations(
+    data: &Data,
+    fn_refs: &HashMap<u32, HashSet<u32>>,
+) -> Vec<CapTotalityViolation> {
+    let mut violations = Vec::new();
+    let mut caps: Vec<u32> = (0..data.definitions())
+        .filter(|&d| !data.def(d).cap().is_empty())
+        .collect();
+    caps.sort_unstable();
+    for cap in caps {
+        // Transitive closure from the capability, following every callee; a native
+        // callee has no loft body, so it is a natural leaf (its Rust is opaque).
+        let mut reach = HashSet::new();
+        let mut work = vec![cap];
+        while let Some(d) = work.pop() {
+            if !reach.insert(d) {
+                continue;
+            }
+            let mut refs = HashSet::new();
+            referenced_defs(data, d, &mut refs);
+            add_recorded_fn_refs(fn_refs, d, &mut refs);
+            work.extend(refs);
+        }
+        // Any reached explicit-abort op (3.3) ⇒ the capability is NOT total.
+        let mut hits: Vec<u32> = reach
+            .iter()
+            .copied()
+            .filter(|&r| ABORT_OPS.contains(&data.def(r).name()))
+            .collect();
+        hits.sort_unstable();
+        for op in hits {
+            violations.push(CapTotalityViolation {
+                capability: cap,
+                op,
+                position: reference_position(data, cap, op),
+            });
+        }
+    }
+    violations
+}
+
+/// @PLN86 prevention #3 — render a capability-totality violation as an actionable
+/// host-side lint message.
+#[must_use]
+pub fn describe_cap_totality_violation(data: &Data, v: &CapTotalityViolation) -> String {
+    let cap = display_name(data, v.capability);
+    let op = display_name(data, v.op);
+    let at = v
+        .position
+        .as_ref()
+        .map_or_else(String::new, |p| format!("{p}: "));
+    format!(
+        "{at}host capability `{cap}` is not total: it can reach `{op}`, which aborts — a \
+         script-supplied value could fault the HOST through it (admission cannot see past a \
+         trusted capability).\n  fix: make `{cap}` total — validate the input and return a \
+         clean error value (e.g. a nullable result), never `{op}`."
+    )
+}
+
 /// @PLN86 step 3.4 — one def's intrinsic complexity: the deepest loop nesting at
 /// which plain work happens (`max_leaf`), and every call with the loop nesting it
 /// sits under (`(nesting, callee)`).  A pure single-def walk — the inter-procedural
@@ -974,17 +1061,153 @@ pub fn sandbox_complexity_degree(data: &Data, sandboxed: &HashMap<u32, String>) 
         .unwrap_or(0)
 }
 
-/// @PLN86 step 3.4 — the human-readable complexity report (the L5 host hint).
+/// @PLN86 — variables truly RESET within `v`: a `Set(var, rhs)` whose `rhs` does
+/// NOT read `var`.  Inside a loop such a var is fresh each iteration, so an append
+/// to it does not accumulate (a transient buffer, O(1) space).  A SELF-referential
+/// `Set(v, … v …)` — what `v += x` lowers to (`Set(v, OpAppendVector(v, x))`) — is
+/// a GROWTH, not a reset, so `v` is NOT collected and stays accumulating.
+fn collect_set_targets(v: &Value, out: &mut HashSet<u16>) {
+    v.walk(&mut |n| {
+        if let Value::Set(var, rhs) = n
+            && !rhs.reads_var(*var)
+        {
+            out.insert(*var);
+        }
+    });
+}
+
+/// @PLN86 space budget — one def's intrinsic SPACE complexity: the deepest loop
+/// nesting at which an in-place append (`OpAppend*`) grows a structure NOT reset
+/// inside that loop (declared in an enclosing scope), so it ACCUMULATES across the
+/// iterations (`O(n)` per nesting level).  Plus every call with its loop nesting
+/// for the inter-procedural composition (`space_degree`).  Conservative — a
+/// transient buffer (reset each iteration) is O(1) and excluded; the `Iter` init's
+/// once-run allocation is counted in-loop (a safe over-count, like 3.4b).  KNOWN
+/// GAPS (v1 under-models, future tightening): a concat-reassign `v = v + [x]` and a
+/// call returning a kept growing structure are not yet treated as accumulation.
+fn intrinsic_space(data: &Data, f: u32) -> (u32, Vec<(u32, u32)>) {
+    fn scan(
+        data: &Data,
+        v: &Value,
+        nesting: u32,
+        reset: &mut HashSet<u16>,
+        max_leaf: &mut u32,
+        calls: &mut Vec<(u32, u32)>,
+    ) {
+        match v {
+            Value::Loop(_) | Value::Iter(..) | Value::ParFor(_) => {
+                // vars reset somewhere in this loop don't accumulate across it.
+                let mut targets = HashSet::new();
+                collect_set_targets(v, &mut targets);
+                let fresh: Vec<u16> = targets.into_iter().filter(|t| reset.insert(*t)).collect();
+                v.for_each_child(&mut |c| scan(data, c, nesting + 1, reset, max_leaf, calls));
+                for t in fresh {
+                    reset.remove(&t);
+                }
+                return;
+            }
+            Value::Call(g, args) => {
+                let nm = data.def(*g).name();
+                // A structure GROWS via an in-place append (`OpAppend*`) or a
+                // capacity prealloc for an appended element (`OpPreAlloc*` — what
+                // `r += [x]` lowers to).  On a var not reset in the loop it
+                // ACCUMULATES across the iterations.
+                if nm.starts_with("OpAppend") || nm.starts_with("OpPreAlloc") {
+                    if nesting > 0
+                        && let Some(Value::Var(t)) = args.first().map(Value::unspan)
+                        && !reset.contains(t)
+                    {
+                        *max_leaf = (*max_leaf).max(nesting);
+                    }
+                } else {
+                    calls.push((nesting, *g));
+                }
+            }
+            _ => {}
+        }
+        v.for_each_child(&mut |c| scan(data, c, nesting, reset, max_leaf, calls));
+    }
+    let (mut max_leaf, mut calls, mut reset) = (0, Vec::new(), HashSet::new());
+    scan(
+        data,
+        &data.def(f).code,
+        0,
+        &mut reset,
+        &mut max_leaf,
+        &mut calls,
+    );
+    (max_leaf, calls)
+}
+
+/// @PLN86 space budget — the polynomial DEGREE of `f`'s worst-case PEAK heap in the
+/// input size: `max(intrinsic accumulation, loop_nesting + space_degree(callee))`.
+/// Acyclic (3.2) so this terminates; `in_progress` is a defensive backstop.
+fn space_degree(
+    data: &Data,
+    sandboxed: &HashMap<u32, String>,
+    f: u32,
+    memo: &mut HashMap<u32, u32>,
+    in_progress: &mut HashSet<u32>,
+) -> u32 {
+    if let Some(&d) = memo.get(&f) {
+        return d;
+    }
+    if !in_progress.insert(f) {
+        return 0;
+    }
+    let (max_leaf, calls) = intrinsic_space(data, f);
+    let mut degree = max_leaf;
+    for (nesting, callee) in calls {
+        let callee_degree = if sandboxed.contains_key(&callee) {
+            space_degree(data, sandboxed, callee, memo, in_progress)
+        } else {
+            0
+        };
+        // Only a callee that ITSELF accumulates composes (its internal O(n^s)
+        // build, run under the caller's loops).  A non-accumulating call — a
+        // trusted leaf op, or a fn that allocates O(1) — adds NO space here: its
+        // result, if kept across a loop, is the CALLER'S append, already counted
+        // at the bind site.  (This is where space diverges from the time rule,
+        // which adds `nesting` for every call.)
+        if callee_degree > 0 {
+            degree = degree.max(nesting + callee_degree);
+        }
+    }
+    in_progress.remove(&f);
+    memo.insert(f, degree);
+    degree
+}
+
+/// @PLN86 space budget — worst-case SPACE degree over all sandboxed entries: peak
+/// heap is `O(n^degree)` in the largest input.  The host reads it to BOUND the
+/// inputs so a bounded loop building a structure cannot OOM — an abort that
+/// `catch_unwind` can never see — turning OOM into a load-time concern.  The
+/// analogue of the time budget (3.4) for memory.
 #[must_use]
-pub fn complexity_report(degree: u32) -> String {
-    let big_o = match degree {
+pub fn sandbox_space_degree(data: &Data, sandboxed: &HashMap<u32, String>) -> u32 {
+    let (mut memo, mut in_progress) = (HashMap::new(), HashSet::new());
+    sandboxed
+        .keys()
+        .map(|&f| space_degree(data, sandboxed, f, &mut memo, &mut in_progress))
+        .max()
+        .unwrap_or(0)
+}
+
+/// @PLN86 — the human-readable complexity report (the L5 host hint): worst-case
+/// TIME (step count, 3.4) and SPACE (peak heap) degrees, so the host bounds inputs
+/// against the tighter of the time and memory budgets.
+#[must_use]
+pub fn complexity_report(time: u32, space: u32) -> String {
+    let big_o = |d: u32| match d {
         0 => "O(1)".to_string(),
         1 => "O(n)".to_string(),
         d => format!("O(n^{d})"),
     };
     format!(
-        "worst-case complexity: {big_o} (n = the largest input collection / range; \
-         bound n to keep each frame within budget)"
+        "worst-case complexity: time {} / space {} (n = the largest input collection \
+         / range; bound n to keep each frame within the time AND memory budget)",
+        big_o(time),
+        big_o(space)
     )
 }
 

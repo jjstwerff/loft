@@ -37,8 +37,13 @@ policy → reject-or-run).  Remaining work is post-v1 expressiveness + hardening
   leaves. **L4 hole found by probing the IR first** — a non-capturing fn-ref is a bare
   `Value::Int(def_nr)` (`apply(target,5)` → `n_apply(599i32,…)`), not a `FnRef` node, so
   it is read as a reference only in a `Function`-typed position (call arg / assignment).
-  Both `apply(target,…)` and `f=target; apply(f,…)` covered; residual
-  (returns/fields/collections) tracked. 3 tests.
+  Both `apply(target,…)` and `f=target; apply(f,…)` covered; the
+  returns/fields/collections forms are ALSO covered — recorded at the fn-ref CREATION
+  site, so the flow afterward (a returned fn-ref, a vector element, a struct field)
+  cannot escape it. **Confirmed by the prevention-#4 escape suite**
+  (`admission_escape_suite_rejects_every_breakout`): `v = [secret]; v[0]()`,
+  `get() -> fn(){ secret }` then call, and a `Holder { f: secret }` field call are each
+  rejected. (The earlier "residual tracked" note was stale.)
 - **1.4 ✅ (FFI + backend)** — **FFI:** `sandbox::reachable_ffi_bridges` flags every
   reachable def whose `#native` symbol is owned by an external native package
   (`native_symbol_crates`), distinct from built-in `#rust`/`#native` primitives — dlopen of
@@ -119,18 +124,108 @@ situations. Admitting *more* complex scripts via deeper termination/safety analy
 
 What is built is listed under [§ Implementation progress](#status); what remains:
 
+### Prioritization — prevention over the catch-net (root cause, not mop-up)
+
+The model's whole premise is **prove-it-safe-at-load**: an admitted script *cannot*
+fault.  So a runtime fault is, by definition, a HOLE — in the admission walk or in
+the interpreter — and the answer is to **close the hole at load time, not catch the
+fault at runtime**.  Catching a panic or killing a hung loop keeps the *host* alive
+but leaves the *mod* exactly as broken — same input, same fault, every run; for any
+KNOWN fault class the catch-net is a band-aid over a fixable bug, and because the
+root cause stays it breaks again immediately.
+
+So each fault class shifts LEFT to a load-time / interpreter-level guarantee.  This
+is the load-bearing open work, ranked **above** the catch-net:
+
+1. **Memory-safe interpreter** — the root cause of "interpreter bug".  A UAF /
+   double-free caught as a panic is still a UAF; the fix is that it cannot happen.
+   This is the @PLN85 store-lifetime / ownership (`deps`) work
+   ([STABILITY_REDFLAGS.md](../../STABILITY_REDFLAGS.md) — the hard dependency
+   SANDBOX.md names: admission narrows the *language*, this removes the *escape
+   hatch* a memory-safety bug opens).  **Highest priority** — it is the whole
+   difference between "proven safe" and "proven safe *assuming a correct engine*".
+2. **Space budget at admission — ✅ DONE.** The root cause of OOM.  Admission now
+   computes a worst-case SPACE degree (`sandbox_space_degree`) the same way as the
+   TIME degree (`O(n^d)`, 3.4), so the host bounds `n` for memory the way it already
+   does for time — turning OOM from a runtime abort `catch_unwind` cannot even see
+   into a load-time concern.  **Model** (`src/sandbox.rs`): the peak-heap degree is
+   the deepest loop nesting at which a structure GROWS (`OpAppend*` / `OpPreAlloc*`,
+   what `v += x` lowers to) on a var NOT reset in that loop — a transient buffer
+   (reset each iteration, e.g. `b = []; b += x`) is O(1), a pure-compute loop is
+   O(1), a vector built across nested loops is O(n²).  Reset is detected via
+   `Value::reads_var` so a self-referential `Set(v, …v…)` (growth) is not mistaken
+   for a reset.  Composes inter-procedurally, but ONLY for a callee that itself
+   accumulates (a non-allocating call adds no space — that is where space diverges
+   from the time rule).  `complexity_report` now names both axes (`time … / space …`).
+   *Known v1 under-models* (future tightening): an explicit concat-reassign
+   `v = v + [x]` (lowers via `OpAddVector` on a temp) and a kept growing return.
+3. **Total host capabilities — ✅ DONE (loft-bodied surface).** The root cause of
+   host-fn faults.  An allow-listed capability is trusted but, unlike sandboxed code
+   (3.3), un-analysed; if it aborts on a script-supplied value the fault is past
+   admission.  `capability_totality_violations` (`src/sandbox.rs`) is the host-side
+   MIRROR of 3.3: over every `#cap`-tagged function it flags those whose call tree
+   (transitively, following every callee) reaches an `ABORT_OPS` op (`assert` /
+   `panic` / `log_fatal`), with an actionable "make it total — validate + return a
+   clean error" message (`describe_cap_totality_violation`).  API:
+   `Parser::sandbox_capability_totality_violations`.  **Limitation:** a NATIVE
+   capability has no loft body, so its Rust is OPAQUE to this lint — the host vouches
+   for native totality separately; this catches the loft-bodied (library) capability
+   surface, which grows as libraries expose `#cap` functions.
+4. **Close + FUZZ the admission walk — ✅ DONE.** The root cause of admission gaps.
+   The adversarial escape suite `admission_escape_suite_rejects_every_breakout`
+   (`src/parser/mod.rs`) TRIES to break out across every dimension — capability
+   (direct / indirect fn-ref / via a sandboxed helper / a fn-ref in a collection,
+   return, or struct field), totality (unbounded `while`, self- + mutual recursion,
+   `assert` / `panic` abort ops, non-constant + conditional `while` steps), raw-write
+   (field / index / nested field) — and asserts admission rejects each (16 breakouts).
+   Positive controls (bounded `for`/`while`, struct construction, local writes, a
+   granted capability) prove it is not vacuously rejecting.  Each probe is guarded to
+   have PARSED, so a malformed probe can't pass silently.  **Residual closed by proof:**
+   the documented L4 returns/fields/collections residual is NOT a hole — fn-refs are
+   recorded at the CREATION site, so all three forms are rejected (the README note was
+   stale; now corrected).  "No unknown holes" is unprovable, so this is the standing
+   adversarial battery confidence rests on; the next deepening is to add forms as the
+   library/capability surface grows.
+
+**The catch-net (S7/S8) is demoted to a thin, ALARMED backstop** for the one thing
+prevention cannot reach — the unknown-unknown, an interpreter bug nobody has found
+yet.  A game engine must survive one bad mod rather than hard-crash, so
+`run_script() -> Result` (`catch_unwind` → value) + a journalled store (effects roll
+back) earn their keep there.  But its honest role is **host survival + a bug
+report**, never "handled": every catch is a prevention failure that must fire an
+alarm and become a root-cause fix.  If catches are *routine*, the design has already
+failed.  (Hard aborts — OOM, stack-`SIGSEGV` — bypass `catch_unwind` and fall to the
+process watchdog `--timeout` / @PLN49; one more reason prevention, not the net, is
+the line.)
+
+### Now: handed to the crawler agent for dogfood
+
+Admission (v1 #422) + the prevention hardening (#2 space budget, #3 total host capabilities,
+#4 escape suite — all DONE) are shipped, so the feature is in the **two-agent dogfood** phase
+([CLAUDE.md § The consumer runs in its OWN agent](../../../../CLAUDE.md)): **crawler** is the
+dedicated consumer agent. It switches on a `[sandbox]` policy over its content/script surface,
+feels out whether the restrictions are **too tight** to express its mods, and **adversarially
+tries to break out** via its own codebase. This stream does NOT do that consuming — it ships +
+documents the feature and *responds* to what crawler reports (a blocking restriction or an escape
+routes back here as language work). The remaining post-v1 pieces (transactional world S7,
+`run_script` boundary S8) wait on the memory-safe-interpreter dependency (#1, the `../loft`
+store-lifetime stream), so the next sandbox work is **driven by the crawler dogfood findings**,
+not pushed from here.
+
 ### A. Safety — completes the v1 admitted-script guarantee
 - **2.4 No-raw-write admission — ✅ DONE.** (Was the one open v1 safety step.) A sandboxed
   def may not raw-write heap data (`e.health = 0` / `v[i] = 9`) — recorded at parse
   (`sandbox_raw_writes`, where field-write vs struct-construction is unambiguous) and
   rejected via `sandbox_admission_errors`; mutation only through an allow-listed `*.write`
   op. The v1 safety model is now complete.
-- **Runtime fault-isolation (S7/S8 complement)** *(post-v1, runtime side).* Admission proves
-  an admitted script can't
-  fault, but the host's *runtime harness* should still be transactional + catch the
-  unexpected (`run_script() -> Result`, journalled store rollback) — belt-and-suspenders
-  for an interpreter bug. This is the runtime side of [SANDBOX.md](../../SANDBOX.md) S7/S8,
-  outside the admission walk; track there.
+- **Runtime fault-isolation (S7/S8 complement) — DEMOTED to the alarmed backstop.**
+  `run_script() -> Result` (`catch_unwind` → value) + a journalled store roll-back,
+  the runtime side of [SANDBOX.md](../../SANDBOX.md) S7/S8.  **NOT a primary item** —
+  per the [§ Prioritization](#prioritization--prevention-over-the-catch-net-root-cause-not-mop-up)
+  above, the load-bearing work is *preventing* the fault (memory-safe interpreter,
+  space budget, total host capabilities, admission fuzzing), since a caught fault
+  recurs on the next run.  This catch-net is only for the unknown-unknown, and every
+  catch is a bug report that must become a root-cause fix.
 
 ### B. Expressiveness relaxations (post-v1 — admit MORE total programs)
 - **3.1b decreasing-variant `while` — ✅ DONE.** `while_is_bounded` admits a `while` with a
