@@ -4305,6 +4305,47 @@ fn holder_retained(node: &Value, holders: &HashSet<u16>) -> bool {
     }
 }
 
+/// #426B — every var that transitively reaches store `st` through the dep graph.
+///
+/// `reclaim_safe`'s holder model needs the full closure, not the one-hop depers:
+/// a binding can borrow a store INDIRECTLY through an intermediate local — a
+/// fn-return-of-index `b = idx0(ww){ w[0] }` binds `b` with dep `["ww"]`, and
+/// `ww` deps `["__vdb_1"]`, so `b` holds `__vdb_1` via `ww`.  Missing `b` here
+/// lets reclaim free `__vdb_1` before `b`'s last read (store-reuse-after-free).
+///
+/// Walks to a fixpoint: a var is a deper of `st` if its dep list contains `st`
+/// or contains any var already known to be a deper.  Marker deps (`u16::MAX`
+/// one-buffer sentinel, the `0x8000` callee-frame tag) name no frame var and are
+/// skipped.  Bounded by `vars.count()` iterations (each pass adds at least one
+/// var or stops), so it always terminates.
+fn transitive_depers(vars: &Function, st: u16) -> Vec<u16> {
+    let n = vars.count();
+    let mut reaches: HashSet<u16> = HashSet::new();
+    loop {
+        let mut added = false;
+        for v in 0..n {
+            if reaches.contains(&v) {
+                continue;
+            }
+            let deps_st = vars
+                .tp(v)
+                .depend()
+                .into_iter()
+                .any(|d| d != u16::MAX && d & 0x8000 == 0 && (d == st || reaches.contains(&d)));
+            if deps_st {
+                reaches.insert(v);
+                added = true;
+            }
+        }
+        if !added {
+            break;
+        }
+    }
+    let mut out: Vec<u16> = reaches.into_iter().collect();
+    out.sort_unstable();
+    out
+}
+
 /// Plan-57 Phase-3 soundness gate: is store `st` (a `__vdb` work-ref) safe to
 /// early-free + relocate + strip-its-scope-exit-free?  Mirrors `store_confinement`'s
 /// per-store predicates (the I-a soundness model) for the function-scoped case:
@@ -4330,9 +4371,18 @@ fn reclaim_safe(code: &Value, vars: &Function, st: u16) -> bool {
     if guard_escapes(code, st) {
         return false;
     }
-    let depers: Vec<u16> = (0..vars.count())
-        .filter(|&v| vars.tp(v).depend().contains(&st))
-        .collect();
+    // #426B — the holder set must be the TRANSITIVE dep closure, not just the
+    // one-hop depers.  A view-of-a-view keeps `st` live through an intermediate
+    // local: `b = idx0(ww)` where `idx0` returns `w[0]` binds `b` with dep
+    // `["ww"]`, and `ww` deps `["__vdb_1"]` — so `b` transitively holds
+    // `__vdb_1` and extends its lifetime to `b`'s last use.  A single-hop scan
+    // sees only `ww` (the receiver arg of the call, treated as a read, not a
+    // retention), misses `b`, and reclaim frees `__vdb_1` right after the call —
+    // before `b` reads it.  The freed slot is then recycled into the next
+    // allocation, corrupting `b` (store-reuse-after-free).  Walking the dep
+    // graph to fixpoint makes `b` a holder, so the retention scan / multi-user-
+    // local gate below leave `st`'s sound scope-exit free in place.
+    let depers: Vec<u16> = transitive_depers(vars, st);
     let mut user_locals = 0;
     for &v in &depers {
         if vars.is_argument(v)
