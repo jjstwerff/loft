@@ -681,6 +681,7 @@ pub fn register_ir_schema(db: &mut Stores) -> IrSchemaIds {
     db.field(t145, "known_type", 0);
     db.field(t145, "variables", t141);
     db.field(t145, "pub_visible", t4);
+    db.field(t145, "null_safe", t4); // @PLN46 W2 — kept in sync with ir.loft Definition.null_safe
     db.field(t145, "closure_record", 0);
     let vec_mutated_captures = db.vector(t71);
     db.field(t145, "mutated_captures", vec_mutated_captures);

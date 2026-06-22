@@ -1793,6 +1793,12 @@ struct WarnCtx {
     /// Position of the innermost enclosing `Value::Span` — used as the
     /// fault site's source location when we emit a warning.
     last_pos: Option<Position>,
+    /// @PLN46 W2 — true while walking an argument that is passed DIRECTLY to a
+    /// `#null_safe` function: a fault-prone op that IS this argument tolerates
+    /// null by the callee's contract, so it is not flagged.  Reset (to the called
+    /// function's own null-safety) on entry to each nested call, so the
+    /// suppression never reaches a fault op buried inside a non-null-safe callee.
+    arg_to_null_safe_param: bool,
 }
 
 #[derive(Copy, Clone)]
@@ -1894,9 +1900,16 @@ impl Parser {
                 {
                     self.emit_undefended_warning(kind, ctx);
                 }
+                // @PLN46 W2 — arguments to a `#null_safe` function tolerate null;
+                // a fault op that IS such an argument is suppressed.  Override the
+                // flag to THIS callee's null-safety so a nested non-null-safe call
+                // resets it (the suppression is direct-argument only).
+                let saved = ctx.arg_to_null_safe_param;
+                ctx.arg_to_null_safe_param = self.data.def(*def_nr).null_safe();
                 for arg in args {
                     self.walk_for_warnings(arg, ctx);
                 }
+                ctx.arg_to_null_safe_param = saved;
             }
             Value::CallRef(_, args) => {
                 for arg in args {
@@ -2036,12 +2049,121 @@ impl Parser {
             self.lexer.diagnostic(Level::Warning, msg);
         }
     }
+
+    /// @PLN46 W3 — auto-set `#null_safe` (function-wide) when EVERY parameter is
+    /// entry-guarded by a leading `if p == null { return … }`.  SOUND: an
+    /// unguarded parameter leaves the flag unset, so its null is never silently
+    /// suppressed at call sites — the plan's "explicit assertion only" rule, here
+    /// the explicit guard.  Only SETS the flag, so a `#null_safe` annotation (W2)
+    /// is preserved.  Runs on pass 2 after the body, so a forward-defined callee's
+    /// flag is set before a caller's warning walk.
+    pub(crate) fn infer_function_null_safe(&mut self, body: &Value) {
+        if self.first_pass || self.data.def(self.context).null_safe() {
+            return;
+        }
+        let params = self.vars.arguments();
+        if params.is_empty() {
+            return;
+        }
+        let guarded = leading_null_guards(&self.data, body);
+        if params.iter().all(|p| guarded.contains(p)) {
+            self.data.definitions[self.context as usize].null_safe = true;
+        }
+    }
+}
+
+/// @PLN46 W3 — the parameter slots guarded by LEADING `if p == null { return … }`
+/// statements (line markers skipped; the first real non-guard ends the entry
+/// region, so a recognised guard always precedes any use of its parameter).
+fn leading_null_guards(data: &Data, body: &Value) -> std::collections::HashSet<u16> {
+    let mut guarded = std::collections::HashSet::new();
+    let Value::Block(b) = body.unspan() else {
+        return guarded;
+    };
+    for stmt in &b.operators {
+        if let Some(p) = null_guard_param(data, stmt) {
+            guarded.insert(p);
+        } else if !matches!(stmt.unspan(), Value::Line(_) | Value::Null) {
+            break; // first real non-guard ends the entry region (markers are skipped)
+        }
+    }
+    guarded
+}
+
+/// The parameter an entry guard `if p == null { return … }` protects, if `stmt`
+/// is exactly that shape: an `OpEq*` of `Var(p)` against `null` (either operand
+/// order), whose `then` branch returns.
+fn null_guard_param(data: &Data, stmt: &Value) -> Option<u16> {
+    let Value::If(cond, then, _) = stmt.unspan() else {
+        return None;
+    };
+    if !contains_return(then) {
+        return None;
+    }
+    let Value::Call(op, args) = cond.unspan() else {
+        return None;
+    };
+    if args.len() != 2 || !data.def(*op).name().starts_with("OpEq") {
+        return None;
+    }
+    // A comparison may convert the operand first — e.g. a `character` is compared
+    // as int: `OpConvIntFromCharacter(Var(c))`.  Look through one `OpConv*` layer.
+    let var_of = |v: &Value| -> Option<u16> {
+        match v.unspan() {
+            Value::Var(p) => Some(*p),
+            Value::Call(c, a) if a.len() == 1 && data.def(*c).name().starts_with("OpConv") => {
+                match a[0].unspan() {
+                    Value::Var(p) => Some(*p),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    };
+    if let Some(p) = var_of(&args[0])
+        && is_null_literal(data, &args[1])
+    {
+        return Some(p);
+    }
+    if let Some(p) = var_of(&args[1])
+        && is_null_literal(data, &args[0])
+    {
+        return Some(p);
+    }
+    None
+}
+
+/// `null` as it appears in a comparison: a bare `Null`, or a `…FromNull()` cast
+/// (the parser converts `null` to the compared type, e.g. `OpConvTextFromNull()`).
+fn is_null_literal(data: &Data, v: &Value) -> bool {
+    match v.unspan() {
+        Value::Null => true,
+        Value::Call(op, args) if args.is_empty() => data.def(*op).name().ends_with("FromNull"),
+        _ => false,
+    }
+}
+
+/// Does `v` contain a `return`?  The guard must EXIT on null, not fall through to
+/// a use of the (still-possibly-null) parameter.
+fn contains_return(v: &Value) -> bool {
+    let mut found = false;
+    v.walk(&mut |n| {
+        if matches!(n, Value::Return(_)) {
+            found = true;
+        }
+    });
+    found
 }
 
 /// Evaluate the easy-proof skip list against a fault-prone call's args.
 /// Returns `true` when a skip pattern matches and the warning should
 /// NOT fire.
 fn is_easy_proof(kind: FaultKind, args: &[Value], ctx: &WarnCtx, data: &Data) -> bool {
+    // @PLN46 W2 — this fault op is a direct argument to a `#null_safe` function,
+    // which contracts to handle the possible null.  Skip pattern 6.
+    if ctx.arg_to_null_safe_param {
+        return true;
+    }
     fn lit_int(v: &Value) -> Option<i64> {
         match v.unspan() {
             Value::Int(n) => Some(i64::from(*n)),

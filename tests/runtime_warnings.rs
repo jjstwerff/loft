@@ -953,3 +953,116 @@ fn main() {
         "a guard on a DIFFERENT field must still warn; got stderr={diag:?}"
     );
 }
+
+// ── @PLN46 W2 — `#null_safe` param annotation (skip pattern 6) ───────────────
+
+/// A fault-prone expression passed DIRECTLY to a `#null_safe` function is not
+/// flagged — the callee contracts to handle the possible null.
+#[test]
+fn skip_null_safe_arg() {
+    let source = "\
+fn handles_null(c: character) -> boolean { c == 'a' }
+#null_safe
+fn scan(line: text, j: integer) -> boolean { handles_null(line[j]) }
+fn main() -> integer { 0 }
+";
+    let (_stdout, diag, _code) = run_with_warnings("w2_null_safe", source);
+    assert!(
+        !diag.contains("may produce null"),
+        "an index passed to a #null_safe param must NOT warn; got stderr={diag:?}"
+    );
+}
+
+/// The SAME call shape on an UNannotated function still warns — the annotation is
+/// the signal, never "the helper happens to avoid the unsafe op".
+#[test]
+fn null_safe_only_skips_annotated() {
+    let source = "\
+fn no_annotation(c: character) -> boolean { c == 'a' }
+fn scan(line: text, j: integer) -> boolean { no_annotation(line[j]) }
+fn main() -> integer { 0 }
+";
+    let (_stdout, diag, _code) = run_with_warnings("w2_unannotated", source);
+    assert!(
+        diag.contains("may produce null"),
+        "an index passed to an UNannotated param must still warn; got stderr={diag:?}"
+    );
+}
+
+/// PRECISION: the suppression is direct-argument only — a fault op buried inside a
+/// NON-null-safe nested call still warns, even when the OUTER call is `#null_safe`
+/// (the inner callee gets the raw null, so the prompt must stand).
+#[test]
+fn null_safe_does_not_leak_through_nested_call() {
+    let source = "\
+fn outer(b: boolean) -> boolean { b }
+#null_safe
+fn raw(c: character) -> boolean { c == 'a' }
+fn scan(line: text, j: integer) -> boolean { outer(raw(line[j])) }
+fn main() -> integer { 0 }
+";
+    let (_stdout, diag, _code) = run_with_warnings("w2_nested", source);
+    assert!(
+        diag.contains("may produce null"),
+        "an index inside a nested NON-null-safe call must still warn; got stderr={diag:?}"
+    );
+}
+
+/// @PLN46 W2 — the STDLIB character predicates are annotated `#null_safe` (they
+/// are native `char::is_X()`, which never fault — verified on both backends), so
+/// the common `s[i].is_numeric()` shape no longer false-warns, while a raw `s[i]`
+/// still does.
+#[test]
+fn stdlib_char_predicate_is_null_safe() {
+    let source = "\
+fn scan(line: text, j: integer) -> boolean { line[j].is_numeric() }
+fn raw(line: text, j: integer) -> character { line[j] }
+fn main() -> integer { 0 }
+";
+    let (_stdout, diag, _code) = run_with_warnings("w2_stdlib_isnum", source);
+    // exactly the raw site warns; the is_numeric receiver does not.
+    assert!(
+        diag.contains("may produce null"),
+        "the raw `line[j]` must still warn; got stderr={diag:?}"
+    );
+    assert_eq!(
+        diag.matches("may produce null").count(),
+        1,
+        "only the raw site should warn — `is_numeric(s[i])` is #null_safe; got stderr={diag:?}"
+    );
+}
+
+// ── @PLN46 W3 — entry-guard auto-inference of #null_safe ─────────────────────
+
+/// A function whose every parameter is entry-guarded by `if p == null { return }`
+/// is AUTO-inferred `#null_safe`, so a fault-prone arg passed to it is not flagged
+/// — no annotation needed.
+#[test]
+fn w3_entry_guard_infers_null_safe() {
+    let source = "\
+fn g(c: character) -> boolean { if c == null { return false } c == 'a' }
+fn use_g(line: text, j: integer) -> boolean { g(line[j]) }
+fn main() -> integer { 0 }
+";
+    let (_stdout, diag, _code) = run_with_warnings("w3_guard", source);
+    assert!(
+        !diag.contains("may produce null"),
+        "an arg to an entry-guarded (null_safe-inferred) fn must not warn; got stderr={diag:?}"
+    );
+}
+
+/// SOUNDNESS: a function where only SOME parameters are guarded is NOT inferred
+/// null_safe — an arg in the unguarded slot still warns (no over-inference).
+#[test]
+fn w3_partial_guard_stays_warning() {
+    let source = "\
+fn h(a: character, b: character) -> boolean { if a == null { return false } a == b }
+fn use_h(line: text, j: integer) -> boolean { h('x', line[j]) }
+fn main() -> integer { 0 }
+";
+    let (_stdout, diag, _code) = run_with_warnings("w3_partial", source);
+    assert!(
+        diag.contains("may produce null"),
+        "an arg to an UNguarded param must still warn (no over-inference); got stderr={diag:?}"
+    );
+}

@@ -2416,6 +2416,13 @@ pub struct Definition {
     pub variables: Function,
     /// Whether this definition was declared with `pub`.
     pub pub_visible: bool,
+    /// @PLN46 W2 — `#null_safe`: the author asserts every nullable parameter
+    /// tolerates null and yields a defined result, so the undefended-fault warning
+    /// is suppressed for a fault-prone expression passed DIRECTLY as an argument.
+    /// Persisted through the IR store (`DEF_NULL_SAFE`) so a `#null_safe`-annotated
+    /// stdlib helper loaded from the `LOFT_STDLIB_CACHE` bundle still suppresses;
+    /// mirrored in `tools/ir_schema/ir.loft` (`Definition.null_safe`).
+    pub null_safe: bool,
     /// Definition number of the closure record struct for capturing lambdas.
     /// `u32::MAX` if this function does not capture.
     pub closure_record: u32,
@@ -2513,6 +2520,12 @@ impl Definition {
     #[must_use]
     pub fn cap(&self) -> &str {
         &self.cap
+    }
+
+    /// `#null_safe` (@PLN46 W2): the author asserts nullable params tolerate null.
+    #[must_use]
+    pub fn null_safe(&self) -> bool {
+        self.null_safe
     }
 
     /// Source-file id this definition was parsed from.
@@ -3338,6 +3351,7 @@ impl Data {
             code_length: 0,
             variables: Function::new(name, &position.file),
             pub_visible: false,
+            null_safe: false,
             closure_record: u32::MAX,
             mutated_captures: Vec::new(),
             scalars_to_box: Vec::new(),
