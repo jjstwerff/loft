@@ -7,7 +7,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**In progress — W1 shipped, W2 mechanism shipped.**  Discovered while
+**In progress — W1 + W2 shipped; W3 next.**  Discovered while
 auditing `tools/indexer/src/scan.loft` on 2026-05-18: 30+
 `s[i] may produce null on out-of-bounds with no defensive check`
 warnings, every one a false positive on code that either uses a
