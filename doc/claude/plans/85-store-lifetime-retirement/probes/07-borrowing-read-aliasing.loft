@@ -1,38 +1,51 @@
-// @PLN85 A.1 — borrowing-read aliasing (#426, the #415 siblings).  STILL RED:
-// blocked on the store-reuse-after-free substrate (see below), NOT landable as a
-// localized dep-driven copy.
+// @PLN85 A.1 — borrowing-read aliasing (#426).  STILL RED — but the 2026-06-22
+// re-attempt (after the store-reuse-after-free SUBSTRATE fix landed, commit
+// 782937e9) found the residual blocker is NOT a substrate bug: it is a LANGUAGE
+// DESIGN CONFLICT.  #426's premise — that `a = vv[0]` (A) and `c = o.inner.v`
+// (C) "must COPY" — CONTRADICTS the documented vector-element VIEW semantics.
+// Routed forward as a design decision, NOT a localized codegen fix.
 //
-// A binding from a BORROWING READ (a value backed by another store) should get
-// its OWN store (single-owner value semantics — plain `a = x` already copies).
-// #415 closed the DIRECT struct-field read (`a = x.v`); these sibling shapes
-// still ALIAS the source store on BOTH backends (silent value-semantics
-// violation, no crash):
 //   A  vector INDEX read         `a = vv[0]`
 //   B  fn-return-of-index        `b = idx0(w){ w[0] }`
 //   C  nested struct-field read  `c = o.inner.v`
 //
-// A.1 INVESTIGATION FINDING (2026-06-22) — the dep-driven copy is CORRECT per
-// case but cannot land on the current substrate:
-//   * The bind-site copy (the #415 mechanism generalized: "any `OpGetField`
-//     whose result type carries a borrow dep ⇒ allocate + `OpAppendVector`")
-//     makes the source store DEAD at the read, so it is FREED at the read site.
-//     A subsequent NESTED 3-deep vector build (`vector<vector<vector<T>>>`) then
-//     corrupts (`len 0`) — the store-reuse-after-free substrate bug.  The
-//     EXISTING #415 struct-field copy already hits it latently (no test followed
-//     it with a 3-deep append); widening to the index / nested reads turned that
-//     latent corruption into a real regression (`185-nested-boolean-vector`).
-//     Minimal repro: `bx=Box{v:[1,2,3]}; af=bx.v; vvv:vec<vec<vec<int>>>=[];
-//     a:vec<vec<int>>=[[7,8]]; vvv+=[a]; assert(len(vvv[0][0])==2)` → len 0.
-//     (2-deep is fine; only 3-deep corrupts.)
-//   * The return-path (B) gets the `["??"]` one-buffer ABI but never copies
-//     `w[0]` into it (unlike the whole-arg `{ v }` and struct-field `{ b.v }`
-//     tails, which DO funnel into `__retbuf`), so the raw inner-element view
-//     escapes with an unstable store-nr — the same substrate, a7 class.
+// WHY A/C CANNOT BE A COPY (the matrix-first finding, both backends):
+//   1. DOCUMENTED VIEW SEMANTICS (#338, LOFT.md § Vectors / § Variables): "Reading
+//      a struct ELEMENT into a local (`e = v[i]`) yields a dep-tracked VIEW of the
+//      slot's record (`e.f = x` mutates `v[i]`)."  On base, `a = vv[0]` for a
+//      `vector<vector<T>>` is a VIEW too — `vv[0] += [9]` makes `len(a) == 4`
+//      CONSISTENTLY with the struct-element view.  The probe's "must COPY (observed
+//      4: aliases)" treats the documented, deliberate VIEW as a bug — it is not.
+//   2. #415 DELIBERATELY EXCLUDED index reads (OWNERSHIP_MODEL row 102 + the #415
+//      regression test: "narrowed to STRUCT field reads — a vector INDEX read keeps
+//      its existing nested-stride path").  #426 re-opens exactly that exclusion.
+//   3. tests/scripts/294-vector-element-view-semantics.loft PINS element-read =
+//      view (`test_element_read_is_view`: `e = v[0]; e.val = 99; assert v[0].val
+//      == 99`).  A copy would break it (it passes today only because the LHS there
+//      is a STRUCT element, not a vector, so the copy predicate would not fire —
+//      but the SAME view rule applies to vector elements).
+//   4. REAL-CONSUMER WRITE-THROUGH (p379, hex_world `set_cell`): `cells =
+//      chunk.ck_cells; cells[i] = value` RELIES on the field read aliasing to
+//      mutate through.  Copying it makes `self: &World` "never modified" — a
+//      parse error / silent data loss.  Generalizing the #415 copy to the
+//      nested-field base regressed p379 (verified).
+//   The carried borrow dep CANNOT distinguish a read-only copy from a write-through
+//   alias; that needs the `find_field_written_vars` mutation analysis (the
+//   OWNERSHIP_MODEL borrow checker).  So A/C are a DESIGN reconciliation
+//   (copy-vs-view for vector elements), not a dep-driven codegen patch.
 //
-// All three stay ALIASED until the store-reuse / return-buffer substrate is
-// fixed (routed forward).  Workaround (verified both backends): force an owned
-// copy — `a = []; a += vv[0]`.  What A.1 DID land: the return-source SET as the
-// primary free-suppress path (`scopes.rs::free_vars`, all heap return types).
+// B (return path) is a SEPARATE store-lifetime SUBSTRATE bug, NOT design:
+//   Routing `{ w[0] }` through `copy_borrow_tail_into_retbuf` (the #415/a2 helper)
+//   DOES copy `w[0]` into `__retbuf`, but the helper's `OpFreeRef(__fwd)` then frees
+//   a store the FREELIST recycles into the NEXT allocation, corrupting a subsequent
+//   borrowing-read copy (`b = idx0(ww); c = by.v` → `len(c) == 0`).  getv's struct-
+//   field tail does not hit it (its `__fwd` views the arg's base, not a nested
+//   element store).  Repro banked: /tmp/p_followups/p426B_returnbuf_store_reuse.loft.
+//   This is the a7-class return-buffer substrate — its own investigation.
+//
+// Workaround for A/C value-semantics (verified both backends): force an owned copy
+// — `a = []; a += vv[0]`.  The substrate fix 782937e9 (3-deep corruption) DID land
+// and IS unblocking — it is just not the blocker #426 needs.
 
 struct Inner { v: vector<integer> }
 struct Outer { inner: Inner }
