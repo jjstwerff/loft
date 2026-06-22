@@ -139,11 +139,21 @@ is the load-bearing open work, ranked **above** the catch-net:
    SANDBOX.md names: admission narrows the *language*, this removes the *escape
    hatch* a memory-safety bug opens).  **Highest priority** — it is the whole
    difference between "proven safe" and "proven safe *assuming a correct engine*".
-2. **Space budget at admission** — the root cause of OOM.  Admission already computes
-   a worst-case TIME degree (`O(n^d)`, 3.4); compute a worst-case SPACE degree the
-   same way, so a script whose allocation is unbounded in its input is *rejected at
-   load* (or the host bounds `n`).  Turns OOM from a runtime abort — which
-   `catch_unwind` cannot even see — into a load-time "no".
+2. **Space budget at admission — ✅ DONE.** The root cause of OOM.  Admission now
+   computes a worst-case SPACE degree (`sandbox_space_degree`) the same way as the
+   TIME degree (`O(n^d)`, 3.4), so the host bounds `n` for memory the way it already
+   does for time — turning OOM from a runtime abort `catch_unwind` cannot even see
+   into a load-time concern.  **Model** (`src/sandbox.rs`): the peak-heap degree is
+   the deepest loop nesting at which a structure GROWS (`OpAppend*` / `OpPreAlloc*`,
+   what `v += x` lowers to) on a var NOT reset in that loop — a transient buffer
+   (reset each iteration, e.g. `b = []; b += x`) is O(1), a pure-compute loop is
+   O(1), a vector built across nested loops is O(n²).  Reset is detected via
+   `Value::reads_var` so a self-referential `Set(v, …v…)` (growth) is not mistaken
+   for a reset.  Composes inter-procedurally, but ONLY for a callee that itself
+   accumulates (a non-allocating call adds no space — that is where space diverges
+   from the time rule).  `complexity_report` now names both axes (`time … / space …`).
+   *Known v1 under-models* (future tightening): an explicit concat-reassign
+   `v = v + [x]` (lowers via `OpAddVector` on a temp) and a kept growing return.
 3. **Total host capabilities** — the root cause of host-fn faults.  An allow-listed
    host function is trusted but un-analysed; if it panics on a script-supplied value
    the fault is past admission.  Require a capability function to be TOTAL (validate,

@@ -974,17 +974,153 @@ pub fn sandbox_complexity_degree(data: &Data, sandboxed: &HashMap<u32, String>) 
         .unwrap_or(0)
 }
 
-/// @PLN86 step 3.4 — the human-readable complexity report (the L5 host hint).
+/// @PLN86 — variables truly RESET within `v`: a `Set(var, rhs)` whose `rhs` does
+/// NOT read `var`.  Inside a loop such a var is fresh each iteration, so an append
+/// to it does not accumulate (a transient buffer, O(1) space).  A SELF-referential
+/// `Set(v, … v …)` — what `v += x` lowers to (`Set(v, OpAppendVector(v, x))`) — is
+/// a GROWTH, not a reset, so `v` is NOT collected and stays accumulating.
+fn collect_set_targets(v: &Value, out: &mut HashSet<u16>) {
+    v.walk(&mut |n| {
+        if let Value::Set(var, rhs) = n
+            && !rhs.reads_var(*var)
+        {
+            out.insert(*var);
+        }
+    });
+}
+
+/// @PLN86 space budget — one def's intrinsic SPACE complexity: the deepest loop
+/// nesting at which an in-place append (`OpAppend*`) grows a structure NOT reset
+/// inside that loop (declared in an enclosing scope), so it ACCUMULATES across the
+/// iterations (`O(n)` per nesting level).  Plus every call with its loop nesting
+/// for the inter-procedural composition (`space_degree`).  Conservative — a
+/// transient buffer (reset each iteration) is O(1) and excluded; the `Iter` init's
+/// once-run allocation is counted in-loop (a safe over-count, like 3.4b).  KNOWN
+/// GAPS (v1 under-models, future tightening): a concat-reassign `v = v + [x]` and a
+/// call returning a kept growing structure are not yet treated as accumulation.
+fn intrinsic_space(data: &Data, f: u32) -> (u32, Vec<(u32, u32)>) {
+    fn scan(
+        data: &Data,
+        v: &Value,
+        nesting: u32,
+        reset: &mut HashSet<u16>,
+        max_leaf: &mut u32,
+        calls: &mut Vec<(u32, u32)>,
+    ) {
+        match v {
+            Value::Loop(_) | Value::Iter(..) | Value::ParFor(_) => {
+                // vars reset somewhere in this loop don't accumulate across it.
+                let mut targets = HashSet::new();
+                collect_set_targets(v, &mut targets);
+                let fresh: Vec<u16> = targets.into_iter().filter(|t| reset.insert(*t)).collect();
+                v.for_each_child(&mut |c| scan(data, c, nesting + 1, reset, max_leaf, calls));
+                for t in fresh {
+                    reset.remove(&t);
+                }
+                return;
+            }
+            Value::Call(g, args) => {
+                let nm = data.def(*g).name();
+                // A structure GROWS via an in-place append (`OpAppend*`) or a
+                // capacity prealloc for an appended element (`OpPreAlloc*` — what
+                // `r += [x]` lowers to).  On a var not reset in the loop it
+                // ACCUMULATES across the iterations.
+                if nm.starts_with("OpAppend") || nm.starts_with("OpPreAlloc") {
+                    if nesting > 0
+                        && let Some(Value::Var(t)) = args.first().map(Value::unspan)
+                        && !reset.contains(t)
+                    {
+                        *max_leaf = (*max_leaf).max(nesting);
+                    }
+                } else {
+                    calls.push((nesting, *g));
+                }
+            }
+            _ => {}
+        }
+        v.for_each_child(&mut |c| scan(data, c, nesting, reset, max_leaf, calls));
+    }
+    let (mut max_leaf, mut calls, mut reset) = (0, Vec::new(), HashSet::new());
+    scan(
+        data,
+        &data.def(f).code,
+        0,
+        &mut reset,
+        &mut max_leaf,
+        &mut calls,
+    );
+    (max_leaf, calls)
+}
+
+/// @PLN86 space budget — the polynomial DEGREE of `f`'s worst-case PEAK heap in the
+/// input size: `max(intrinsic accumulation, loop_nesting + space_degree(callee))`.
+/// Acyclic (3.2) so this terminates; `in_progress` is a defensive backstop.
+fn space_degree(
+    data: &Data,
+    sandboxed: &HashMap<u32, String>,
+    f: u32,
+    memo: &mut HashMap<u32, u32>,
+    in_progress: &mut HashSet<u32>,
+) -> u32 {
+    if let Some(&d) = memo.get(&f) {
+        return d;
+    }
+    if !in_progress.insert(f) {
+        return 0;
+    }
+    let (max_leaf, calls) = intrinsic_space(data, f);
+    let mut degree = max_leaf;
+    for (nesting, callee) in calls {
+        let callee_degree = if sandboxed.contains_key(&callee) {
+            space_degree(data, sandboxed, callee, memo, in_progress)
+        } else {
+            0
+        };
+        // Only a callee that ITSELF accumulates composes (its internal O(n^s)
+        // build, run under the caller's loops).  A non-accumulating call — a
+        // trusted leaf op, or a fn that allocates O(1) — adds NO space here: its
+        // result, if kept across a loop, is the CALLER'S append, already counted
+        // at the bind site.  (This is where space diverges from the time rule,
+        // which adds `nesting` for every call.)
+        if callee_degree > 0 {
+            degree = degree.max(nesting + callee_degree);
+        }
+    }
+    in_progress.remove(&f);
+    memo.insert(f, degree);
+    degree
+}
+
+/// @PLN86 space budget — worst-case SPACE degree over all sandboxed entries: peak
+/// heap is `O(n^degree)` in the largest input.  The host reads it to BOUND the
+/// inputs so a bounded loop building a structure cannot OOM — an abort that
+/// `catch_unwind` can never see — turning OOM into a load-time concern.  The
+/// analogue of the time budget (3.4) for memory.
 #[must_use]
-pub fn complexity_report(degree: u32) -> String {
-    let big_o = match degree {
+pub fn sandbox_space_degree(data: &Data, sandboxed: &HashMap<u32, String>) -> u32 {
+    let (mut memo, mut in_progress) = (HashMap::new(), HashSet::new());
+    sandboxed
+        .keys()
+        .map(|&f| space_degree(data, sandboxed, f, &mut memo, &mut in_progress))
+        .max()
+        .unwrap_or(0)
+}
+
+/// @PLN86 — the human-readable complexity report (the L5 host hint): worst-case
+/// TIME (step count, 3.4) and SPACE (peak heap) degrees, so the host bounds inputs
+/// against the tighter of the time and memory budgets.
+#[must_use]
+pub fn complexity_report(time: u32, space: u32) -> String {
+    let big_o = |d: u32| match d {
         0 => "O(1)".to_string(),
         1 => "O(n)".to_string(),
         d => format!("O(n^{d})"),
     };
     format!(
-        "worst-case complexity: {big_o} (n = the largest input collection / range; \
-         bound n to keep each frame within budget)"
+        "worst-case complexity: time {} / space {} (n = the largest input collection \
+         / range; bound n to keep each frame within the time AND memory budget)",
+        big_o(time),
+        big_o(space)
     )
 }
 

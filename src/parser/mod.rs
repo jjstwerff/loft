@@ -712,10 +712,21 @@ impl Parser {
         crate::sandbox::sandbox_complexity_degree(&self.data, &self.def_sandbox)
     }
 
-    /// @PLN86 step 3.4 — the human-readable worst-case complexity report.
+    /// @PLN86 space budget — the worst-case SPACE (peak-heap) degree of the
+    /// sandboxed code: `O(n^degree)` memory in the largest input.  The host bounds
+    /// inputs against it so a bounded loop building a structure cannot OOM.
+    #[must_use]
+    pub fn sandbox_space_degree(&self) -> u32 {
+        crate::sandbox::sandbox_space_degree(&self.data, &self.def_sandbox)
+    }
+
+    /// @PLN86 — the human-readable worst-case complexity report (time + space).
     #[must_use]
     pub fn sandbox_complexity_report(&self) -> String {
-        crate::sandbox::complexity_report(self.sandbox_complexity_degree())
+        crate::sandbox::complexity_report(
+            self.sandbox_complexity_degree(),
+            self.sandbox_space_degree(),
+        )
     }
 
     /// @PLN86 L4 — record that the current def references `fn_d_nr` as a fn-ref
@@ -8695,6 +8706,68 @@ mod plan86_admission_tests {
             p3.sandbox_complexity_degree(),
             2,
             "a loop calling a looping fn → O(n^2)"
+        );
+    }
+
+    /// @PLN86 space budget — the SPACE degree counts only ACCUMULATING appends (a
+    /// structure grown across a loop), so a pure-compute loop is O(1) space even
+    /// when it is O(n) time, a transient buffer (reset each iteration) is O(1), and
+    /// a vector built across nested loops is O(n^2).
+    #[test]
+    fn space_degree_counts_accumulating_appends_only() {
+        // pure compute — O(n) TIME, O(1) SPACE (no heap grows)
+        let p0 = parse_admit_libs(
+            &["fn:spc_pure"],
+            &["code"],
+            &[],
+            "fn spc_pure() -> integer { s = 0; for i in 0..10 { s += i } s }\n",
+        );
+        assert_eq!(p0.sandbox_complexity_degree(), 1, "time O(n)");
+        assert_eq!(p0.sandbox_space_degree(), 0, "pure compute → O(1) space");
+
+        // accumulate into a vector declared OUTSIDE the loop → O(n) SPACE
+        let p1 = parse_admit_libs(
+            &["fn:spc_build"],
+            &["code"],
+            &[],
+            "fn spc_build() -> integer { r = []; for i in 0..10 { r += [i] } len(r) }\n",
+        );
+        assert_eq!(
+            p1.sandbox_space_degree(),
+            1,
+            "accumulating vector → O(n) space"
+        );
+
+        // transient buffer — reset every iteration → O(1) SPACE
+        let p2 = parse_admit_libs(
+            &["fn:spc_trans"],
+            &["code"],
+            &[],
+            "fn spc_trans() -> integer { c = 0; for i in 0..10 { b = []; b += [i]; c += len(b) } c }\n",
+        );
+        assert_eq!(
+            p2.sandbox_space_degree(),
+            0,
+            "a buffer reset each iteration is transient → O(1) space, got {}",
+            p2.sandbox_space_degree()
+        );
+
+        // accumulate across NESTED loops → O(n^2) SPACE; report names both axes
+        let p3 = parse_admit_libs(
+            &["fn:spc_grid"],
+            &["code"],
+            &[],
+            "fn spc_grid() -> integer { r = []; for i in 0..10 { for j in 0..10 { r += [i] } } len(r) }\n",
+        );
+        assert_eq!(
+            p3.sandbox_space_degree(),
+            2,
+            "nested accumulation → O(n^2) space"
+        );
+        assert!(
+            p3.sandbox_complexity_report().contains("space O(n^2)"),
+            "report names the space axis: {}",
+            p3.sandbox_complexity_report()
         );
     }
 

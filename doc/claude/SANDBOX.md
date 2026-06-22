@@ -146,7 +146,10 @@ Loop back-edges (and calls) decrement a **per-script** budget; exhaustion aborts
   unbounded `while` in a sandboxed def is **rejected at admission** (`sandbox::admit_totality`
   → `UnboundedLoop`), so it never runs — only bounded `for x in <collection>` / `for i in
   0..N` is admitted. The `O(n^d)` complexity report (3.4) additionally lets the host bound
-  inputs so no admitted loop stalls a frame. *(A runtime per-script fuel counter — for a
+  inputs so no admitted loop stalls a frame, and a parallel **space** degree (`sandbox_space_degree`) lets it
+  bound them for *memory* the same way — a bounded loop building a structure cannot OOM (an
+  abort `catch_unwind` can never see); `complexity_report` names both axes. *(A runtime
+  per-script fuel counter — for a
   recoverable backstop instead of the process-level `--timeout` SIGABRT — is the post-v1
   runtime complement.)*
 
