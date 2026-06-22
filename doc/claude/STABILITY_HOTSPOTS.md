@@ -683,3 +683,27 @@ in the ref_return comment.  Regression:
 mostly dissolved with H1 (the contract is now documented + the assert
 enforces its hardest clause).  Full history:
 [plans/55-return-abi](plans/55-return-abi/README.md).
+
+## H10 — The per-`Parts` container taxonomy (copy/remove/validate/construct drift)
+
+**The risk.** The heap-cascade operations — copy, remove, validate, construct —
+each re-encode the same per-`Parts` fact ("which child type, at which stride, with
+which container walk") independently. `remove_claims` was collapsed onto
+`for_each_owned_child` (REDFLAGS cluster C, C.0–C.3, merged), but **copy / validate /
+construct never followed**: `copy_claims` split into 4 per-kind helpers
+(`copy_claims_seq_vector/array/hash/index`), `validate_claims` stayed monolithic, and
+construction (`record_new`/`record_finish`) is a 4th encoding — ~53 `Parts::` arms
+across 3 dispatchers, already drifting. A new collection kind must be taught each
+dispatcher separately or it silently misclassifies.
+
+**Why it's a future bug factory.** The **densest HISTORICAL bug cluster** in the
+tree: @P290 (SIGSEGV — `room*2` vs `(room-1)*2`), @P306/@P318 (hash slot-drift),
+@P309 (missing length header), #373 (`types[u32::MAX]`), the `gen_set_first_*_null`
+family (#260/#330). Every drift between the dispatchers is a latent corruption.
+
+**The fix.** Finish the keystone — fold copy / validate / construct onto
+`for_each_owned_child(tp, rec) → Iterator<(child, child_tp, stride)>` as thin visitors,
+the collapse `remove_claims` already got. **Size M–L.** Surfaced by the 2026-06-22
+code-quality audit as the highest-leverage UN-tracked hotspot; detail in
+[STABILITY_REDFLAGS.md cluster C](STABILITY_REDFLAGS.md). Pick up after the Cluster A
+residual (#426/#429) lands; deserves a `@PLN`.

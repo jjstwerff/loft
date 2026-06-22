@@ -38,9 +38,12 @@ fix runs matrix-first (CLAUDE.md § Debugging policy).
 ## The queue
 
 The bug-level stability work — the F-family sweep, the armed-corpus residuals,
-the store-lifetime UAFs, and the **Pass-2 arity-growth cascade** (Reference +
-Vector/struct-Enum, #355/#356) — is **complete** (see Done below); nothing in
-this queue is an active failure. What remains is **forward-risk hardening** (the
+the store-lifetime UAFs *as of that pass*, and the **Pass-2 arity-growth cascade**
+(Reference + Vector/struct-Enum, #355/#356) — is **complete** (see Done below) —
+**EXCEPT the store-lifetime class, which REOPENED 2026-06-21: see
+[§ Red-flag remediation](#red-flag-remediation--the-live-store-lifetime-stream-2026-06-21-) below.
+It, not this H-register, is the live open stability work.** Nothing in the
+H-register queue below is an active failure. What remains *there* is **forward-risk hardening** (the
 H-register): asserts and tripwires that lock in finished work, then structural
 refactors that retire whole future-bug *classes*. In finishing order:
 
@@ -83,6 +86,27 @@ with a `cross_mode!` cell or `tests/scripts/` file (H4's S half — add as a
 CODE.md checklist line with the next CODE.md touch); every M+ design through
 the design protocol; verify-armed before trusting the armed channel's silence
 ([reference: STABILITY_SWEEP § armed-channel restoration](STABILITY_SWEEP.md)).
+
+## Red-flag remediation — the live store-lifetime stream (2026-06-21 →)
+
+> **The H-register above is the forward-risk hardening (genuinely cleared
+> 2026-06-17). This stream is different and LIVE:** a later cross-cut
+> ([STABILITY_REDFLAGS.md](STABILITY_REDFLAGS.md), 2026-06-21) plus the live tracker
+> show the **store-lifetime / return-bind-ownership class is still spawning bugs** —
+> the GitHub tracker's only TWO open issues (#426, #429) are this class, and #429 is
+> a NEW manifestation. So store-lifetime is **mid-migration (@PLN85), not complete.**
+> Finishing order:
+
+| # | Item | Size | Status |
+|---|---|---|---|
+| **A** | **Cluster A — return/bind ownership** (collapse the per-site ownership re-derivation onto one carried `deps` fact). A.4 / A.3 / A.2-a7 + the native-FFI fixes merged (#423); A.1 part i (free-suppress, return-source SET) + the parser-counter substrate / #426B / #425-sibling / native-leak fixes on `tuxedo-substrate-followup`. **Residual: #426** (RESOLVED — A/C correct-as-view, B fixed via #426B, `probes/07` green; PR pending) **+ #429** (borrowed-view return over-free — `get_field`'s `["??"]`-adopt return type LIES for a borrow-return (`return r` where `r` aliases an arg), so the interpreter adopts + whole-store-frees the source `Core`; native is correct. Precisely localized: borrow-classify in `ref_return` (`["m"]` not `["??"]`) + add the nullable-enum (`Type::Enum(_,true,_)`) copy-bind path in `gen_set_first_at_tos` — 2 coordinated dep-system changes — fix in flight). Closes when both land with regressions, both backends. | M (residual) | 🔄 in flight — PR holds for #429 |
+| **C** | **Cluster C — per-`Parts` container taxonomy** (copy/remove/validate/construct heap-cascade). `remove_claims` collapsed onto `for_each_owned_child` (C.0–C.3, merged), but **copy / validate / construct still drift** — `copy_claims` split 4 ways, `validate_claims` monolithic, ~53 `Parts::` arms across 3 dispatchers. The densest HISTORICAL bug cluster (@P290 SIGSEGV, @P306/@P318 hash slot-drift, @P309, #260/#330) and the highest-leverage **UN-TRACKED** hotspot. Fix: fold copy/validate/construct onto the keystone. Now H10. | M–L | ⬜ open — the next pass after A |
+| **@PLN87** | **Reference-default `&`-binding semantics** — `&`-to-reassign + the W4 redundant-`&` lint; the OWNERSHIP_MODEL binding rule realized. | M | ⬜ planned ([@PLN87](https://github.com/loft-lang/plans/issues/87), loft2 implements) |
+| **B** | **Cluster B — stack-delta wrong-signal.** Deferred — unverifiable, no RED probe fires; latent. Pick up only on a real trigger. | — | ⏸ deferred |
+
+D (typed-null encoders) merged; E (manifestation guards) dissolves behind A. Full
+detail: [STABILITY_REDFLAG_REMEDIATION.md](STABILITY_REDFLAG_REMEDIATION.md),
+[STABILITY_REDFLAGS.md](STABILITY_REDFLAGS.md), @PLN85.
 
 ## Done (this cycle — closing commits in the canonical homes)
 
