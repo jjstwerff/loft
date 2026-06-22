@@ -1660,6 +1660,19 @@ use a separate collection or add after the loop"
         // base is a `Vector`) is also an `OpGetField` but reaches a nested element
         // whose stride the append-copy here would mishandle (plan-58 nested-bool),
         // and it already binds correctly elsewhere — so it is deliberately excluded.
+        //
+        // #426 (A.1) attempted to generalize this to the dep-driven rule "any
+        // `OpGetField` whose result type carries a borrow dep ⇒ copy" — covering
+        // the vector INDEX read (`a = vv[0]`) and the nested-field read
+        // (`c = o.inner.v`).  Per-case the copy is correct, BUT it makes the
+        // source store DEAD at the read (the alias is stripped), so it is freed at
+        // the read site — and a subsequent NESTED (3-deep) vector build into the
+        // recycled store-nr corrupts (the pre-existing store-reuse-after-free
+        // substrate bug `185-nested-boolean-vector` exercises; the struct-field
+        // copy already hits it latently, but no test followed it with a 3-deep
+        // append).  Widening here turned that latent corruption into a real
+        // regression, so the index / nested cases stay ALIASED until the
+        // store-reuse substrate is fixed (routed forward, the case-B / a7 class).
         let struct_vec_field = if let Value::Call(d, args) = code.unspan() {
             *d == self.data.def_nr("OpGetField")
                 && matches!(

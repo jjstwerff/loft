@@ -3962,9 +3962,17 @@ impl Parser {
     /// (`b.v` where the base is a `Reference`), as opposed to a whole var, a
     /// call, or a vector INDEX read (`vv[i]`, base is a `Vector`)? Gates the
     /// implicit-tail copy below: only a struct-field borrow of an argument needs
-    /// copying into the return buffer. Mirrors the bind-site narrowing for
-    /// `a = bx.v` — a vector index read's nested-element stride must NOT take
-    /// the append-copy path (plan-58 nested-bool).
+    /// copying into the return buffer.
+    ///
+    /// A vector INDEX / nested-element read (`OpGetField(OpGetVector …)`) is
+    /// DELIBERATELY excluded.  #426 (A.1) probed generalizing this funnel to the
+    /// index-read tail (`fn idx0(w) -> vector { w[0] }`): forcing it through this
+    /// `__retbuf` copy path collides the forward temp's inner-element view
+    /// store-nr with a freed sibling store once the caller frame has released a
+    /// vector store (the `borrow_tail_copy_104` return-buffer model is proven only
+    /// for whole-arg / struct-field tails).  The index-read RETURN (#426B) stays
+    /// ALIASED until that store-reuse / return-buffer substrate is fixed (routed
+    /// forward, the a7 class — see `STABILITY_REDFLAG_REMEDIATION.md` A.1).
     fn tail_is_struct_field_read(&self, l: &[Value]) -> bool {
         let mut v = match l.last() {
             Some(v) => v,

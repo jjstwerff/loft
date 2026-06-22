@@ -162,27 +162,45 @@ the signal explicit). `size_code` (`stack.rs`) is the same family, same disposit
       adopts-or-allocates at RUNTIME on its input) — a genuinely different fact
       the single static return-dep cannot carry; forcing it onto the dep regresses
       that case.
-- [ ] A.1 (the carried return-ownership dep — **SCOPED**; now ALSO absorbs the
-      bind-site borrowing-read class **#426**). Two parts:
-      **(i) Return-source SET.** `collect_return_sources` EXISTS (`scopes.rs:2363`)
-      but is gated behind the single-`u16` `returned_var` (`:2327`, gate `:1358`,
-      narrowed to `ret_var==MAX && Vector`). Making the set primary CRASHES on a
-      keyed/enum **free-suppress** regression (10 keyed tests; artifacts
-      `/tmp/a1_scope/`). Root = `skip_free` OVERLOADED (don't-free vs don't-allocate)
-      at the two `gen_set_first_*_null` init sites (`state/codegen.rs:1330`/`:1411`):
-      the set-path marks an OWNED keyed return-local `skip_free` → init misreads it as
-      "borrow ⇒ don't allocate" → `OpDatabase` suppressed → OOB `allocation.rs:784`.
-      **Prereq: the companion `skip_free` de-conflation** (gate the no-alloc path on
-      `is_inline_ref` ALONE) — *in progress*. Then drop the `ret_var==MAX`/Vector gate.
-      **(ii) Bind-site borrowing-read copy (#415 siblings — #426 A/C + B + #425).**
-      ONE dep-driven copy (return dep empty ⇒ adopt, `{Attr}` ⇒ copy) covers the
-      **bind-site** (`a = vv[0]` index, `c = o.inner.v` nested-field —
-      `expressions.rs:1663`) AND the **return-path** (`b = idx0(w){w[0]}`,
-      `return d.value` = #425), closing **#415 + #425 + #426** with one fact and
-      letting the #415 `expressions.rs:1663` special-case be DELETED. Probe:
-      `probes/07-borrowing-read-aliasing.loft` (RED until the fact lands).
-      Effort **M** (the companion fix is **S**, first). Build on top of the companion
-      `skip_free` fix + the #425 return-copy fix.
+- [ ] A.1 — **BOTH parts ROUTED: each blocks on a store-lifetime SUBSTRATE bug the
+      prereqs did NOT actually unblock (2026-06-22 investigation).** No code landed
+      (behaviour-preserving on `main`); the value is the precise localization + two
+      substrate bugs to file.
+      **(i) Return-source SET — hypothesis FALSIFIED by the leak suite.** Dropping
+      the `ret_var==MAX` gate (make the union-of-arms SET primary) over-suppresses a
+      free even WITH the companion `skip_free` de-conflation (`1ff929f5`), LEAKING:
+      `repro_p365` (`main_vector<integer>`) for the vector widening, and
+      `25-nullable-sequences` (`__nullable<NRow>::Some`) for the struct-enum
+      widening (both caught by `wrap::loft_suite`'s strict per-script leak
+      accounting; the authoritative `leak` + `leak_cases` suites and standalone
+      `LOFT_STORES=warn` pass — it's an aggregate-only leak the gate was protecting
+      against).  The `ret_var==MAX` gate is LOAD-BEARING for free-suppress
+      correctness — it confines the set-path to the multi-arm case `returned_var`
+      can't see; single-arm returns already free correctly via `in_ret`, and the
+      set-path's `skip_free` mark leaks them.  The companion fix unblocked only the
+      keyed ALLOCATION crash, not this broader free-suppress correctness.  Kept the
+      original gated `free_vars` (`scopes.rs`).
+      **(ii) #426 bind-site/return copy — store-reuse-after-free substrate.** The
+      dep-driven copy ("any `OpGetField` whose result type carries a borrow dep ⇒
+      allocate + `OpAppendVector`") is CORRECT per case (A `a=vv[0]`, C `c=o.inner.v`
+      copy cleanly in ISOLATION, both backends), BUT it makes the source store DEAD
+      at the read → FREED at the read site, and a subsequent NESTED 3-deep vector
+      build (`vector<vector<vector<T>>>`) into the recycled store corrupts (`len 0`).
+      The EXISTING #415 struct-field copy already hits this latently (no test
+      followed it with a 3-deep append; 2-deep is fine, only 3-deep corrupts);
+      widening to the index / nested reads turned the latent corruption into a real
+      regression (`185-nested-boolean-vector`).  The return-path (B `b=idx0(w){w[0]}`)
+      is the same substrate — the index-read tail gets the `["??"]` buffer ABI but
+      never copies `w[0]` into it (the a7 class).  So #426 stays ALIASED and the
+      #415 `expressions.rs` special-case is RETAINED (NOT deleted).
+      **TWO substrate bugs to file (pre-existing on `main`):** (1) the
+      store-reuse-after-free 3-deep corruption (repro
+      `/tmp/p_followups/p426_store_reuse_3deep.loft`); (2) the return-buffer index-tail
+      aliasing (#426B, the a7 sibling).  Probe
+      `probes/07-borrowing-read-aliasing.loft` documents the residual (RED until the
+      substrate fix).  Effort to UNBLOCK A.1: the store-reuse / return-buffer
+      substrate (its own investigation — the a7 sibling — NOT a localized
+      dep-driven copy).
 - [~] A.2 (funnel the return path) — **a2 LANDED; a7 localized + routed.** The
       implicit-tail whole-arg vector return (`fn idv(v) -> vector { v }`, matrix a2)
       now funnels through the SAME copy-into-`__retbuf` the struct-field tail (#415)
