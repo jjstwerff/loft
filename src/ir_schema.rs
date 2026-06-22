@@ -1046,8 +1046,8 @@ fn write_definition(out: &mut String, d: &Definition) {
     write_str(out, &d.cap);
     let _ = write!(
         out,
-        ",\"op_code\":{},\"known_type\":{},\"pub_visible\":{},\"closure_record\":{}",
-        d.op_code, d.known_type, d.pub_visible, d.closure_record
+        ",\"op_code\":{},\"known_type\":{},\"pub_visible\":{},\"null_safe\":{},\"closure_record\":{}",
+        d.op_code, d.known_type, d.pub_visible, d.null_safe, d.closure_record
     );
     out.push_str(",\"mutated_captures\":");
     write_str_list(out, &d.mutated_captures);
@@ -1301,6 +1301,7 @@ fn definition_from_parsed(p: &Parsed) -> Result<Definition, TypeDecodeError> {
         op_code: as_u16(field(p, "op_code")?)?,
         known_type: as_u16(field(p, "known_type")?)?,
         pub_visible: as_bool(field(p, "pub_visible")?)?,
+        null_safe: as_bool(field(p, "null_safe")?)?, // @PLN46 W2
         closure_record: as_u32(field(p, "closure_record")?)?,
         mutated_captures: str_list(field(p, "mutated_captures")?)?,
         scalars_to_box: str_list(field(p, "scalars_to_box")?)?,
@@ -2179,6 +2180,7 @@ mod tests {
             known_type: 3,
             variables: crate::variables::Function::new("Point", "geo.loft"),
             pub_visible: true,
+            null_safe: false,
             closure_record: u32::MAX,
             mutated_captures: Vec::new(),
             scalars_to_box: Vec::new(),
@@ -2249,6 +2251,7 @@ mod tests {
             known_type: u16::MAX,
             variables: crate::variables::Function::new("T", ""),
             pub_visible: false,
+            null_safe: false,
             closure_record: u32::MAX,
             mutated_captures: Vec::new(),
             scalars_to_box: Vec::new(),

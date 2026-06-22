@@ -121,13 +121,6 @@ pub struct Parser {
     /// fn-ref is indistinguishable from an integer literal).  The admission unions
     /// these into the checked set so an indirect call can't escape (L4).
     pub(crate) sandbox_fn_refs: HashMap<u32, std::collections::HashSet<u32>>,
-    /// @PLN46 W2 — functions annotated `#null_safe`: the author asserts every
-    /// nullable parameter tolerates null and yields a defined result.  A
-    /// fault-prone expression (`s[i]`, `a / b`) passed DIRECTLY as an argument to
-    /// such a function is not flagged by the null-safety warning (the value's
-    /// possible-null is the callee's contract).  Accumulates across the stdlib +
-    /// user parses (def_nrs share one table); never cleared per-parse.
-    pub(crate) null_safe_defs: std::collections::HashSet<u32>,
     /// @PLN86 step 0.1 — true while parsing the BODY of a sandboxed def.  Gates
     /// the parser nesting guard so it never touches trusted code (zero cost
     /// there); set per-def in `parse_function`, cleared at its end.
@@ -519,7 +512,6 @@ impl Parser {
             sandbox_unbounded_loops: HashMap::new(),
             sandbox_raw_writes: HashMap::new(),
             sandbox_fn_refs: HashMap::new(),
-            null_safe_defs: std::collections::HashSet::new(),
             in_sandbox: false,
             parse_depth: 0,
             depth_overflowed: false,

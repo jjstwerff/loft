@@ -1905,7 +1905,7 @@ impl Parser {
                 // flag to THIS callee's null-safety so a nested non-null-safe call
                 // resets it (the suppression is direct-argument only).
                 let saved = ctx.arg_to_null_safe_param;
-                ctx.arg_to_null_safe_param = self.null_safe_defs.contains(def_nr);
+                ctx.arg_to_null_safe_param = self.data.def(*def_nr).null_safe();
                 for arg in args {
                     self.walk_for_warnings(arg, ctx);
                 }
