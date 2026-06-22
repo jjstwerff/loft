@@ -1106,6 +1106,9 @@ impl Parser {
             // first pass doesn't have the swap-pass results yet.
             let body = self.data.definitions[self.context as usize].code.clone();
             self.warn_undefended_fault_sites(&body);
+            // @PLN46 W3 — auto-infer `#null_safe` from entry guards (after the warn
+            // pass, so this fn's flag is set for LATER callers' walks).
+            self.infer_function_null_safe(&body);
         }
         self.lexer.has_token(";");
         self.parse_rust();

@@ -1031,3 +1031,38 @@ fn main() -> integer { 0 }
         "only the raw site should warn — `is_numeric(s[i])` is #null_safe; got stderr={diag:?}"
     );
 }
+
+// ── @PLN46 W3 — entry-guard auto-inference of #null_safe ─────────────────────
+
+/// A function whose every parameter is entry-guarded by `if p == null { return }`
+/// is AUTO-inferred `#null_safe`, so a fault-prone arg passed to it is not flagged
+/// — no annotation needed.
+#[test]
+fn w3_entry_guard_infers_null_safe() {
+    let source = "\
+fn g(c: character) -> boolean { if c == null { return false } c == 'a' }
+fn use_g(line: text, j: integer) -> boolean { g(line[j]) }
+fn main() -> integer { 0 }
+";
+    let (_stdout, diag, _code) = run_with_warnings("w3_guard", source);
+    assert!(
+        !diag.contains("may produce null"),
+        "an arg to an entry-guarded (null_safe-inferred) fn must not warn; got stderr={diag:?}"
+    );
+}
+
+/// SOUNDNESS: a function where only SOME parameters are guarded is NOT inferred
+/// null_safe — an arg in the unguarded slot still warns (no over-inference).
+#[test]
+fn w3_partial_guard_stays_warning() {
+    let source = "\
+fn h(a: character, b: character) -> boolean { if a == null { return false } a == b }
+fn use_h(line: text, j: integer) -> boolean { h('x', line[j]) }
+fn main() -> integer { 0 }
+";
+    let (_stdout, diag, _code) = run_with_warnings("w3_partial", source);
+    assert!(
+        diag.contains("may produce null"),
+        "an arg to an UNguarded param must still warn (no over-inference); got stderr={diag:?}"
+    );
+}
