@@ -119,18 +119,67 @@ situations. Admitting *more* complex scripts via deeper termination/safety analy
 
 What is built is listed under [§ Implementation progress](#status); what remains:
 
+### Prioritization — prevention over the catch-net (root cause, not mop-up)
+
+The model's whole premise is **prove-it-safe-at-load**: an admitted script *cannot*
+fault.  So a runtime fault is, by definition, a HOLE — in the admission walk or in
+the interpreter — and the answer is to **close the hole at load time, not catch the
+fault at runtime**.  Catching a panic or killing a hung loop keeps the *host* alive
+but leaves the *mod* exactly as broken — same input, same fault, every run; for any
+KNOWN fault class the catch-net is a band-aid over a fixable bug, and because the
+root cause stays it breaks again immediately.
+
+So each fault class shifts LEFT to a load-time / interpreter-level guarantee.  This
+is the load-bearing open work, ranked **above** the catch-net:
+
+1. **Memory-safe interpreter** — the root cause of "interpreter bug".  A UAF /
+   double-free caught as a panic is still a UAF; the fix is that it cannot happen.
+   This is the @PLN85 store-lifetime / ownership (`deps`) work
+   ([STABILITY_REDFLAGS.md](../../STABILITY_REDFLAGS.md) — the hard dependency
+   SANDBOX.md names: admission narrows the *language*, this removes the *escape
+   hatch* a memory-safety bug opens).  **Highest priority** — it is the whole
+   difference between "proven safe" and "proven safe *assuming a correct engine*".
+2. **Space budget at admission** — the root cause of OOM.  Admission already computes
+   a worst-case TIME degree (`O(n^d)`, 3.4); compute a worst-case SPACE degree the
+   same way, so a script whose allocation is unbounded in its input is *rejected at
+   load* (or the host bounds `n`).  Turns OOM from a runtime abort — which
+   `catch_unwind` cannot even see — into a load-time "no".
+3. **Total host capabilities** — the root cause of host-fn faults.  An allow-listed
+   host function is trusted but un-analysed; if it panics on a script-supplied value
+   the fault is past admission.  Require a capability function to be TOTAL (validate,
+   return a clean error value, never panic) and make it **lintable** — the host-side
+   mirror of the script-side abort-op exclusion (3.3).
+4. **Close + FUZZ the admission walk** — the root cause of admission gaps.  Drive the
+   documented residuals to zero and run an adversarial escape suite (try to reach a
+   forbidden capability, a non-terminating loop, a raw host write) so a fault-prone
+   script is never admitted.  "No unknown holes" is not provable, so fuzzing is how
+   confidence is earned.
+
+**The catch-net (S7/S8) is demoted to a thin, ALARMED backstop** for the one thing
+prevention cannot reach — the unknown-unknown, an interpreter bug nobody has found
+yet.  A game engine must survive one bad mod rather than hard-crash, so
+`run_script() -> Result` (`catch_unwind` → value) + a journalled store (effects roll
+back) earn their keep there.  But its honest role is **host survival + a bug
+report**, never "handled": every catch is a prevention failure that must fire an
+alarm and become a root-cause fix.  If catches are *routine*, the design has already
+failed.  (Hard aborts — OOM, stack-`SIGSEGV` — bypass `catch_unwind` and fall to the
+process watchdog `--timeout` / @PLN49; one more reason prevention, not the net, is
+the line.)
+
 ### A. Safety — completes the v1 admitted-script guarantee
 - **2.4 No-raw-write admission — ✅ DONE.** (Was the one open v1 safety step.) A sandboxed
   def may not raw-write heap data (`e.health = 0` / `v[i] = 9`) — recorded at parse
   (`sandbox_raw_writes`, where field-write vs struct-construction is unambiguous) and
   rejected via `sandbox_admission_errors`; mutation only through an allow-listed `*.write`
   op. The v1 safety model is now complete.
-- **Runtime fault-isolation (S7/S8 complement)** *(post-v1, runtime side).* Admission proves
-  an admitted script can't
-  fault, but the host's *runtime harness* should still be transactional + catch the
-  unexpected (`run_script() -> Result`, journalled store rollback) — belt-and-suspenders
-  for an interpreter bug. This is the runtime side of [SANDBOX.md](../../SANDBOX.md) S7/S8,
-  outside the admission walk; track there.
+- **Runtime fault-isolation (S7/S8 complement) — DEMOTED to the alarmed backstop.**
+  `run_script() -> Result` (`catch_unwind` → value) + a journalled store roll-back,
+  the runtime side of [SANDBOX.md](../../SANDBOX.md) S7/S8.  **NOT a primary item** —
+  per the [§ Prioritization](#prioritization--prevention-over-the-catch-net-root-cause-not-mop-up)
+  above, the load-bearing work is *preventing* the fault (memory-safe interpreter,
+  space budget, total host capabilities, admission fuzzing), since a caught fault
+  recurs on the next run.  This catch-net is only for the unknown-unknown, and every
+  catch is a bug report that must become a root-cause fix.
 
 ### B. Expressiveness relaxations (post-v1 — admit MORE total programs)
 - **3.1b decreasing-variant `while` — ✅ DONE.** `while_is_bounded` admits a `while` with a
