@@ -1270,7 +1270,7 @@ site migrated; tests `imports::pln22_phase4_grouped_import` /
 express (e.g. `use a::(b::c, d)`), with a parse that doesn't collide with the
 struct-literal or call grammar.
 
-## C77 — Binding ownership: value-semantics by default, copy/share/move chosen by analysis
+## C77 — Binding ownership: reference by default, `&` to reassign back
 
 **Question.** When `a = x` / `a = x.f` / `a = x.v[i]` binds from a value backed by
 another store, is the binding a COPY (independent value), a VIEW (alias), or chosen
@@ -1290,28 +1290,29 @@ inconsistency #426 surfaced.
   aliasing write is possible and *moves* when the source is dead. Uniform across all
   forms — the source is just a path expression.
 
-**Decision — ACCEPTED as the direction (2026-06-22).** Value-semantics by default;
-copy-vs-view is not a language distinction but an implementation choice the borrow
-analysis makes per binding. Genuine write-through uses the **`&` binding**
-(`cells = &chunk.ck_cells`) — the *same* `&` notation loft already uses for
-`&vector<T>` parameters (writes propagate to the source), now allowed at a local
-binding; **no lifetime annotations** (the borrow checker infers source-outlives-binding
-from scope, exactly as it already does for `&` params — C38's objection was to
-reference *types*, not this binding *notation*). `=` and `&` read ONE analysis and make
-the same "can I share?" decision, differing only in the observable contract: `=`
-**shares as an efficiency pass** (copy-on-write — sharing is the fast default, the copy
-materialises only when a write diverges), `&` makes the link the contract. The
-implicit-write-through consumers (hex_world `set_cell` / p379) migrate mechanically by
-adding `&`. This is the concrete content of the OWNERSHIP_MODEL beacon and the stated
-target for the borrow-checker work — it collapses the per-form special cases and closes
-the store-lifetime bug class by construction. Staged: **share-or-copy first**
-(correctness core, dissolves #426); **move-when-dead later** (move on a field/element
-is a *partial* move); the **`&`-binding** is loft's existing param mechanism extended
-to local bindings.
-Consistent with C64 (tuple struct-ref elements already use MOVE, not copy).
+**Decision — REVISED to reference-default + `&`-to-reassign (2026-06-22).** An initial
+value-semantics direction was reconsidered against loft's *actual* behaviour (verified
+both backends): heap values are **aliased/shared by default** — a binding or param to a
+struct/vector aliases the source, and in-place field/element mutation (`o.field = x`,
+`o.v[i] = y`, `a = vv[0]; a[i] = z`) writes through. So `a = vv[0]` is a **view**, and
+**#426 A/C are correct as-is** (not bugs). The ONE change: a non-`&` **whole-binding
+reassignment** (`o = Obj{...}`) becomes a *local rebind* (today it overwrites the source
+in place); **`&` makes the reassignment write back** to the source — the *same* `&`
+notation loft already uses for `&vector<T>` parameters, now at a local binding. So `&`
+has one uniform meaning — *"reassigning writes back"* — load-bearing **only** when the
+body reassigns the binding; a `&` on a struct that merely mutates fields is **redundant**
+→ the **W4 redundant-`&` lint** (it fixes the recurring '`&Object` is needed to mutate an
+object' confusion — `&` is needed to *replace* one, not mutate it). No lifetime
+annotations (the borrow checker infers source-outlives-binding from scope, as it already
+does for `&` params — C38's objection was to reference *types*, not this binding
+*notation*). This is **smaller than full value-semantics** (no copy-on-write, no p379
+rewrite — p379's field mutation already writes through) and is the concrete content of
+the OWNERSHIP_MODEL beacon. Consistent with C64 (tuple struct-ref elements already use
+MOVE). See [OWNERSHIP_MODEL.md § The law](OWNERSHIP_MODEL.md).
 
-**Revisit when.** The falsification probe fails — rewriting a real write-through
-consumer (`set_cell` / p379) with `&` proves *not* expressible or badly unergonomic
-(implicit write-through through deep nesting turns out to be a needed idiom `&` can't
-spell cleanly). That would mean value-semantics-by-default is the wrong default and the
-view model should stay, documented in INCONSISTENCIES.md.
+**Revisit when.** The reference-default aliasing proves a net footgun — a real consumer
+is repeatedly bitten by a field/element write propagating through a view it did not
+intend to alias, and the cost of those bugs exceeds the value-semantics migration
+(copy-on-write + `&` on every alias) it would take to remove them. Only then reconsider
+value-semantics-by-default; until then the W4 lint + the documented view default are the
+cheaper guard.
