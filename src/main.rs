@@ -4798,10 +4798,23 @@ fn main() {
     // @PLN11 G2/M6 — on a warm hit with LOFT_CODEGEN_STORE, the cache is loaded
     // as a SKELETON (def table only) and the mmap'd bundle store is returned
     // here so codegen reads bodies straight from it (no read_data body rebuild).
+    // @PLN86 — load the program's `[sandbox]` policy (loft.toml next to the file)
+    // BEFORE the warm-load decision.  A whole-program warm load restores the IR
+    // WITHOUT re-parsing, so the per-def designations (`def_sandbox`) would never
+    // form and admission — AND the force-interpret guard — would be silently
+    // skipped on every warm run; worse, the cache is keyed by program content, not
+    // policy, so a TIGHTENED policy would be ignored.  A sandboxed program must
+    // therefore always parse fresh: disable the warm-load when a policy is active.
+    // The host owns this policy — a script cannot designate itself.
+    if let Some(dir) = std::path::Path::new(&abs_file).parent()
+        && let Ok(content) = std::fs::read_to_string(dir.join("loft.toml"))
+    {
+        p.set_sandbox_config(loft::sandbox::parse_sandbox_config(&content));
+    }
     let mut warm_store: Option<(loft::database::Stores, loft::keys::DbRef)> = None;
     // #358 — a warm hit returns the def-table index where user definitions
     // start; the cold path derives it from the post-stdlib def count below.
-    let warm_user_start = if program_cache_on {
+    let warm_user_start = if program_cache_on && !p.sandbox_is_active() {
         loft::startup_cache::warm_load_program(&mut p, &abs_file, &mut warm_store)
     } else {
         None
@@ -4849,7 +4862,9 @@ fn main() {
         p.trace_types = true;
     }
     // @PLN11 arc E — a whole-program warm load already holds every definition;
-    // skip parsing the user file (and its lib loads) entirely.
+    // skip parsing the user file (and its lib loads) entirely.  (The `[sandbox]`
+    // policy was loaded above, before the warm-load gate, so designations form
+    // during this parse — and a sandboxed program is never warm-loaded.)
     if !program_warm {
         p.parse(&abs_file, false);
     }
@@ -4911,6 +4926,36 @@ fn main() {
             }
         }
         if p.diagnostics.level() >= Level::Error {
+            std::process::exit(1);
+        }
+    }
+    // @PLN86 1.4 — sandboxed code must run on the INTERPRETER: generating +
+    // compiling Rust on the host is RCE by construction, and the native backend
+    // traps where the interpreter is total (div-by-zero yields null — 3.3).  An
+    // explicit `--native` on a sandboxed program is refused; otherwise the
+    // default native backend is overridden to interpret.
+    if p.sandbox_forces_interpret() {
+        if native_requested {
+            eprintln!(
+                "error: this program designates sandboxed code (@PLN86), which must run \
+                 interpret-only — remove --native"
+            );
+            std::process::exit(1);
+        }
+        native_mode = false;
+        // @PLN86 2.5 — admission: a sandboxed script is admitted only if it is
+        // proven safe at LOAD (capabilities + totality).  Reject with the
+        // actionable errors before it ever runs — the contract the modder writes
+        // against; a clean compile is the guarantee.
+        let errors = p.sandbox_admission_errors();
+        if !errors.is_empty() {
+            eprintln!(
+                "error: sandboxed code rejected — {} admission violation(s):",
+                errors.len()
+            );
+            for e in &errors {
+                eprintln!("{e}");
+            }
             std::process::exit(1);
         }
     }

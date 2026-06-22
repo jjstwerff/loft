@@ -282,7 +282,7 @@ pub(crate) const NAMENR_NAME: u32 = 8; // text
 /// `Definition` record (element of `Data.definitions` = `vector<Definition>`).
 /// Inlines `Position` (`DEF_POSITION` base) and `Function` (`DEF_VARIABLES`
 /// base).  `def_type` / `purity` store integer codes (see `ir_store`).
-pub(crate) const DEFINITION_STRIDE: u32 = 150;
+pub(crate) const DEFINITION_STRIDE: u32 = 154;
 pub(crate) const DEF_SOURCE: u32 = 0;
 pub(crate) const DEF_DEF_TYPE: u32 = 8;
 pub(crate) const DEF_PARENT: u32 = 16;
@@ -304,8 +304,9 @@ pub(crate) const DEF_SCALARS_TO_BOX: u32 = 132; // vector<NameRef>
 pub(crate) const DEF_BOUNDS: u32 = 136; // vector<integer>
 pub(crate) const DEF_FIELD_GROUPS: u32 = 140; // vector<LinkedFieldGroup>
 pub(crate) const DEF_SYNTHETIC: u32 = 144; // Option<&str>; "" = None
-pub(crate) const DEF_RETURNED_NOT_NULL: u32 = 148;
-pub(crate) const DEF_PUB_VISIBLE: u32 = 149;
+pub(crate) const DEF_CAP: u32 = 148; // @PLN86 #cap "group"; "" = unannotated
+pub(crate) const DEF_RETURNED_NOT_NULL: u32 = 152;
+pub(crate) const DEF_PUB_VISIBLE: u32 = 153;
 
 /// `Data` record (the root).
 pub(crate) const DATA_SOURCE: u32 = 0;
@@ -1420,6 +1421,7 @@ mod tests {
         assert_eq!(pos(ids.definition, "bounds"), DEF_BOUNDS);
         assert_eq!(pos(ids.definition, "field_groups"), DEF_FIELD_GROUPS);
         assert_eq!(pos(ids.definition, "synthetic"), DEF_SYNTHETIC);
+        assert_eq!(pos(ids.definition, "cap"), DEF_CAP);
         assert_eq!(
             pos(ids.definition, "returned_not_null"),
             DEF_RETURNED_NOT_NULL

@@ -715,6 +715,21 @@ impl Parser {
         if self.context == u32::MAX {
             return false;
         }
+        // @PLN86 step 1.2 — record the sandbox profile for a host-designated
+        // function so the admission walk (and the nesting guard, 0.1) know this
+        // def is restricted.  Designation is host-controlled (`fn:<name>` here;
+        // file globs later) — never from the source, so a script cannot mark
+        // itself.  Re-derived on every pass (def_sandbox is cleared at parse start).
+        if let Some(profile) = self.sandbox.fn_designation(&fn_name).map(str::to_string) {
+            self.def_sandbox.insert(self.context, profile);
+            // @PLN86 step 0.1 — enter restricted parsing for this def's body: the
+            // nesting guard activates and its depth state starts fresh.
+            self.in_sandbox = true;
+            self.parse_depth = 0;
+            self.depth_overflowed = false;
+        } else {
+            self.in_sandbox = false;
+        }
         // Plan-17 phase 01 (B) — bound resolution + t-stub creation now
         // happens on BOTH passes.  Before, this block was gated on
         // `!self.first_pass`, leaving `definitions[ctx].bounds` empty
@@ -1099,6 +1114,9 @@ impl Parser {
             .variables
             .append(&mut self.vars);
         self.context = u32::MAX;
+        // @PLN86 step 0.1 — leave restricted parsing; trusted top-level code that
+        // follows is never depth-guarded.
+        self.in_sandbox = false;
         true
     }
 
@@ -1143,6 +1161,22 @@ impl Parser {
                     // native symbol, so the binding needs no separate string.
                     let default_sym = self.data.def(self.context).name().to_string();
                     self.data.definitions[self.context as usize].native = default_sym;
+                }
+            } else if id == Some("cap".to_string()) {
+                // @PLN86 — `#cap "group"` declares the capability group this
+                // function represents; the sandbox admission walk gates a TRUSTED
+                // symbol against the active profile's allowed groups.  Allowed in
+                // any file (libraries declare caps too), like `#native`.  A
+                // sandboxed def's own `#cap` is ignored by admission — a script's
+                // capabilities derive from what it REACHES, not a self-label.
+                if let Some(group) = self.lexer.has_cstring() {
+                    self.data.definitions[self.context as usize].cap = group;
+                } else {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Expect a capability-group string after `#cap`"
+                    );
                 }
             } else if self.default && id == Some("rust".to_string()) {
                 if let Some(c) = self.lexer.has_cstring() {

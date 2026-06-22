@@ -4,6 +4,29 @@
 use super::{Level, Parser, Parts, Type, Value, diagnostic_format, v_block, v_if, v_loop, v_set};
 use crate::data::Deps;
 
+/// @PLN86 step 0.1 — maximum expression-nesting depth allowed inside a sandboxed
+/// def's body.  Hostile deep nesting (`((((…))))`) drives the recursive-descent
+/// parser into a native stack overflow (rc=139); past this bound the parser
+/// rejects with a clean diagnostic at LOAD time instead.
+///
+/// Each nesting level costs roughly 10 KB of native stack (the
+/// expression→operators→part→single chain), so the bound must be REACHABLE
+/// without overflowing the smallest stack the parser runs on: 128 levels ≈ 1.3 MB,
+/// safe on a standard ≥2 MB thread with margin, and still far deeper than any
+/// hand-written script nests.  (Host-configurable later, per the plan.)
+pub(crate) const SANDBOX_MAX_PARSE_DEPTH: u32 = 128;
+
+/// @PLN86 2.4 — the leftmost base variable of a field/index LHS: `s.heading` /
+/// `v[i]` / `a.b.c` all descend through the `OpGet*` chain (the base is arg 0) to
+/// the root `s` / `v` / `a`.  `None` when the base is not rooted in a variable.
+fn lhs_root_var(v: &Value) -> Option<u16> {
+    match v.unspan() {
+        Value::Var(slot) => Some(*slot),
+        Value::Call(_, args) => args.first().and_then(lhs_root_var),
+        _ => None,
+    }
+}
+
 /// P194 helper — extract the host reference and base position from
 /// the leftmost `OpGet*` leaf of a tuple-typed field read.  Returns
 /// `(host_ref, first_element_position)` where `first_element_position`
@@ -538,7 +561,44 @@ impl Parser {
 
     // <expression> ::= <for> | 'continue' | 'break' | 'return' | 'yield' | '{' <block> | <operators>
     #[allow(clippy::too_many_lines)]
+    /// @PLN86 step 0.1 — depth-guarded entry to expression parsing.  For trusted
+    /// code (`!in_sandbox`) this is a single bool check then a tail call — zero
+    /// cost.  Inside a sandboxed def it bounds the nesting depth so hostile
+    /// `((((…))))` is a clean LOAD-time parse error, never a native stack
+    /// overflow.  All recursion into nested sub-expressions routes back through
+    /// here (parens, arithmetic, indexing → `parse_single` → `expression`), so
+    /// one chokepoint bounds every nesting form.
     pub(crate) fn expression(&mut self, val: &mut Value) -> Type {
+        if !self.in_sandbox {
+            return self.expression_inner(val);
+        }
+        // Once the limit has tripped for this def, every further expression parse
+        // is a no-op: the def is already rejected, so we stop recursing entirely
+        // — this prevents a re-entry from re-walking the unconsumed deep tail and
+        // guarantees the parser unwinds in O(remaining tokens).  Reset per-def in
+        // `parse_function`.
+        if self.depth_overflowed {
+            return Type::Unknown(0);
+        }
+        self.parse_depth += 1;
+        if self.parse_depth > SANDBOX_MAX_PARSE_DEPTH {
+            // Stop recursing — emit once (latched) and unwind cleanly.
+            self.depth_overflowed = true;
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "expression nesting too deep in sandboxed code (limit {})",
+                SANDBOX_MAX_PARSE_DEPTH
+            );
+            self.parse_depth -= 1;
+            return Type::Unknown(0);
+        }
+        let result = self.expression_inner(val);
+        self.parse_depth -= 1;
+        result
+    }
+
+    fn expression_inner(&mut self, val: &mut Value) -> Type {
         // Start of the expression — an "Unknown variable" caret on a bare-Var
         // expression (e.g. a single call argument) must point here, not at the
         // cursor that has drifted to the closing `)` / `;` by detection time.
@@ -740,12 +800,22 @@ impl Parser {
     /// The emitted IR is equivalent to:
     ///   loop { if !cond { break }; body }
     pub(crate) fn parse_while(&mut self, code: &mut Value) {
+        // @PLN86 3.1 — the `while`'s position, taken before the condition so an
+        // unbounded-loop diagnostic points at the `while` itself.
+        let while_pos = self.lexer.peek_pos().clone();
         let mut cond = Value::Null;
         self.expression(&mut cond);
         if !self.first_pass && matches!(cond, Value::Null) {
             diagnostic!(self.lexer, Level::Error, "Expected condition after 'while'");
             return;
         }
+        // @PLN86 3.1 — keep the raw condition (pass 2 only) to check for a
+        // decreasing variant once the body is parsed; the bound check needs both.
+        let sandbox_cond = if self.in_sandbox && !self.first_pass {
+            cond.clone()
+        } else {
+            Value::Null
+        };
         let not_cond = self.cl("OpNot", &[cond]);
         let break_if = v_if(
             not_cond,
@@ -761,6 +831,19 @@ impl Parser {
         self.vars.restore_write_state(&loop_write_state);
         self.in_loop = in_loop;
         self.vars.finish_loop(loop_nr);
+        // @PLN86 3.1 — on pass 2 (complete IR), a sandboxed `while` is admitted only
+        // if it carries a compiler-checked decreasing variant; otherwise it is an
+        // unbounded loop, recorded for the totality admission.  The parser uniquely
+        // knows this is a `while` (the IR can't tell it from a bounded comprehension
+        // `Loop`).  Keyed by def; the bound result is stable so re-entry is safe.
+        if self.in_sandbox
+            && !self.first_pass
+            && !crate::sandbox::while_is_bounded(&self.data, &sandbox_cond, &body)
+        {
+            self.sandbox_unbounded_loops
+                .entry(self.context)
+                .or_insert(while_pos);
+        }
         *code = v_loop(vec![break_if, body], "while");
     }
 
@@ -2088,6 +2171,36 @@ use a separate collection or add after the loop"
         }
     }
 
+    /// @PLN86 2.4 — does this field/index write LHS target HOST data (reject) vs
+    /// the script's OWN data (allow)?  HOST when the base root is a PARAMETER, or
+    /// its type is anything but a script-defined struct — a host-library struct
+    /// (which also catches aliasing, since `x: Player = player` is typed `Player`
+    /// regardless of the value), a vector/scalar, or an unresolvable base.  A
+    /// non-parameter local of a script-defined struct type is the script's own:
+    /// mutable.  Conservative — when ownership can't be proven script, treat as
+    /// host.  A struct type is "script-defined" iff its library is NOT a host
+    /// allow-listed one (the script's own types live in the program's source,
+    /// which is never `allow_libs`).
+    fn raw_write_is_host_owned(&self, lhs: &Value) -> bool {
+        let Some(root) = lhs_root_var(lhs) else {
+            return true;
+        };
+        if self.vars.arguments().contains(&root) {
+            return true;
+        }
+        let Type::Reference(struct_def, _) = self.vars.tp(root) else {
+            return true;
+        };
+        let Some(lib) = crate::sandbox::def_library(&self.data, *struct_def) else {
+            return true;
+        };
+        let profile = self
+            .def_sandbox
+            .get(&self.context)
+            .and_then(|n| self.sandbox.profiles.get(n));
+        profile.is_none_or(|p| p.allows_lib(&lib))
+    }
+
     // <assign> ::= <operators> [ '=' | '+=' | '-=' | '*=' | '%=' | '/=' <operators> ]
     #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_assign(&mut self, code: &mut Value) -> Type {
@@ -2333,6 +2446,21 @@ use a separate collection or add after the loop"
                     && self.vars.exists(*v_nr)
                 {
                     self.vars.defined(*v_nr);
+                }
+                // @PLN86 2.4 — a NON-`Var` LHS here is a field/index target
+                // (`e.health = v` / `v[i] = v`).  Ownership-aware: a write to the
+                // script's OWN data (a local of a script-defined struct type) is
+                // fine — a mod must manage the entities it creates; only a write to
+                // HOST data (a parameter, or any host-library struct/vector — the
+                // type catches aliasing like `x = player; x.health = …`) is the
+                // invariant-breaking raw write we reject.  Bare locals and struct
+                // construction never route here.  Keyed by def (idempotent).
+                if self.in_sandbox
+                    && !matches!(code.unspan(), Value::Var(_))
+                    && self.raw_write_is_host_owned(code)
+                {
+                    let pos = self.lexer.peek_pos().clone();
+                    self.sandbox_raw_writes.entry(self.context).or_insert(pos);
                 }
                 let var_nr = self.assign_var_nr(code, op, &f_type, &mut parent_tp);
                 // Handle `f += X` for File variables before type-changing logic.

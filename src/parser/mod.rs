@@ -89,6 +89,51 @@ pub struct Parser {
     /// True while parsing an expression inside a format string `{…}`.
     /// Prevents the `v: type = expr` annotation from consuming `:`.
     pub(crate) in_format_expr: bool,
+    /// @PLN86 — the host-supplied sandbox policy (profiles + designations).
+    /// Empty by default; set by the embedder before parsing.  A script cannot
+    /// designate itself — the designation is read from here, not the source.
+    pub(crate) sandbox: crate::sandbox::SandboxConfig,
+    /// @PLN86 step 1.2 — the sandbox profile NAME each designated function is
+    /// parsed under (`def_nr -> profile`), recorded as the function is parsed.
+    /// The compile-time admission walk reads this to know which defs are
+    /// restricted.  Side-map (not on `Definition`) so it stays out of the IR
+    /// serialization — the tag is policy, re-derivable from `sandbox`.
+    pub(crate) def_sandbox: HashMap<u32, String>,
+    /// @PLN86 step 3.1 — sandboxed defs that contain an unbounded `while` loop,
+    /// mapped to one such loop's position.  Recorded at parse (`parse_while`
+    /// uniquely knows it is a `while`, where the IR cannot reliably tell a `while`
+    /// `Loop` from a bounded comprehension `Loop`); the totality admission reads
+    /// it.  Keyed by def_nr so the two parse passes are idempotent.
+    pub(crate) sandbox_unbounded_loops: HashMap<u32, crate::lexer::Position>,
+    /// @PLN86 step 2.4 — sandboxed defs that perform a RAW WRITE to heap data
+    /// (`x.field = v` / `v[i] = v`), mapped to one such write's position.
+    /// Recorded at parse (`parse_assign` knows the LHS is a field/index target,
+    /// not a bare local or a struct literal); the no-raw-write admission reads it.
+    /// A sandboxed script may mutate host data only via allow-listed `*.write`
+    /// ops, never a raw field/element assignment.  Keyed by def_nr (idempotent).
+    pub(crate) sandbox_raw_writes: HashMap<u32, crate::lexer::Position>,
+    /// @PLN86 L4 — the functions a sandboxed def references as a fn-ref VALUE
+    /// (`apply(read_file)`, `let h = read_file`, `[read_file]`, a returned
+    /// fn-ref), mapped `def_nr -> {referenced fn def_nrs}`.  Recorded at the
+    /// fn-ref CREATION site (where a function name becomes a value), so it catches
+    /// every flow — call-arg, assignment, struct field, collection element, return
+    /// — completely, where a post-parse IR walk could not (a bare `Int(d_nr)`
+    /// fn-ref is indistinguishable from an integer literal).  The admission unions
+    /// these into the checked set so an indirect call can't escape (L4).
+    pub(crate) sandbox_fn_refs: HashMap<u32, std::collections::HashSet<u32>>,
+    /// @PLN86 step 0.1 — true while parsing the BODY of a sandboxed def.  Gates
+    /// the parser nesting guard so it never touches trusted code (zero cost
+    /// there); set per-def in `parse_function`, cleared at its end.
+    pub(crate) in_sandbox: bool,
+    /// @PLN86 step 0.1 — current expression-nesting depth, counted ONLY while
+    /// `in_sandbox`.  Recursive-descent over hostile deep nesting (`((((…))))`)
+    /// overflows the native stack (rc=139); past `SANDBOX_MAX_PARSE_DEPTH` the
+    /// parser rejects with a clean diagnostic instead — a LOAD-time rejection,
+    /// never a runtime abort.  Reset to 0 at each sandboxed def's body.
+    pub(crate) parse_depth: u32,
+    /// @PLN86 step 0.1 — latched once the depth limit trips, so the diagnostic
+    /// is emitted once per def rather than at every frame as the parser unwinds.
+    pub(crate) depth_overflowed: bool,
     /// The current file number that is being parsed
     file: u32,
     pub diagnostics: Diagnostics,
@@ -462,6 +507,14 @@ impl Parser {
             lexer: Lexer::default(),
             in_loop: false,
             in_format_expr: false,
+            sandbox: crate::sandbox::SandboxConfig::default(),
+            def_sandbox: HashMap::new(),
+            sandbox_unbounded_loops: HashMap::new(),
+            sandbox_raw_writes: HashMap::new(),
+            sandbox_fn_refs: HashMap::new(),
+            in_sandbox: false,
+            parse_depth: 0,
+            depth_overflowed: false,
             file: 1,
             diagnostics: Diagnostics::new(),
             default: false,
@@ -516,9 +569,167 @@ impl Parser {
         }
     }
 
-    /// Parse the content of a given file.
-    /// - filename: the file to parse
-    /// - default: parsing system definitions
+    /// @PLN86 step 1.2 — install the host's sandbox policy before parsing.  The
+    /// designation is host-controlled; a script can never mark itself sandboxed.
+    pub fn set_sandbox_config(&mut self, config: crate::sandbox::SandboxConfig) {
+        self.sandbox = config;
+    }
+
+    /// @PLN86 — does the loaded `[sandbox]` policy designate any sandboxed source?
+    /// The CLI uses this to disable the program warm-cache for a sandboxed program:
+    /// a warm load restores the IR without re-parsing, so `def_sandbox` would never
+    /// form and admission (+ the force-interpret guard) would be silently bypassed.
+    #[must_use]
+    pub fn sandbox_is_active(&self) -> bool {
+        self.sandbox.is_active()
+    }
+
+    /// @PLN86 step 1.2 — the sandbox profile a function was parsed under, or
+    /// `None` for unrestricted (trusted) code.  The admission walk reads this to
+    /// apply the totality / capability rules only to sandboxed defs.
+    #[must_use]
+    pub fn def_sandbox_profile(&self, def_nr: u32) -> Option<&str> {
+        self.def_sandbox.get(&def_nr).map(String::as_str)
+    }
+
+    /// @PLN86 step 1.3 — the sandbox-reachable set: every def reachable from the
+    /// sandboxed entries via calls + fn-ref literals, descending only into
+    /// sandboxed defs (trusted symbols are leaves).  Step 2.3 capability-checks
+    /// the non-sandboxed members.  Call after parsing, when bodies are resolved.
+    #[must_use]
+    pub fn sandbox_reachable_set(&self) -> std::collections::HashSet<u32> {
+        crate::sandbox::reachable_set(&self.data, &self.def_sandbox, &self.sandbox_fn_refs)
+    }
+
+    /// @PLN86 step 1.4 — external `[native]` cdylib bridges reachable from the
+    /// sandboxed entries.  Empty unless a sandboxed def reaches an external FFI
+    /// symbol; admission rejects a non-empty result when the profile forbids
+    /// native FFI (RCE by construction).  Backend force-interpret + the
+    /// no-default-features cdylib removal are the remaining 1.4 work.
+    #[must_use]
+    pub fn sandbox_ffi_bridges(&self) -> Vec<u32> {
+        crate::sandbox::reachable_ffi_bridges(&self.data, &self.sandbox_reachable_set())
+    }
+
+    /// @PLN86 step 2.1 — the `#cap "group"` capability group a def declares, or
+    /// `None` if unannotated.  Step 2.3 gates each trusted symbol in the reachable
+    /// set against the profile via `SandboxConfig::allows`.
+    #[must_use]
+    pub fn def_cap_group(&self, def_nr: u32) -> Option<&str> {
+        let cap = self.data.def(def_nr).cap();
+        (!cap.is_empty()).then_some(cap)
+    }
+
+    /// @PLN86 step 2.3 — the capability-admission walk: every trusted symbol a
+    /// sandboxed def reaches must carry a `#cap` group its profile permits (or be
+    /// `native_ffi`-allowed).  An empty result means the sandboxed code is
+    /// admitted; otherwise each `CapViolation` names the offending reference for
+    /// a diagnostic.  Run after parsing.
+    #[must_use]
+    pub fn sandbox_admit(&self) -> Vec<crate::sandbox::CapViolation> {
+        crate::sandbox::admit_capabilities(
+            &self.data,
+            &self.sandbox,
+            &self.def_sandbox,
+            &self.sandbox_fn_refs,
+        )
+    }
+
+    /// @PLN86 step 2.2 — the capability-coverage lint: public functions lacking a
+    /// `#cap "group"`.  The host runs this over the stdlib + libraries to find the
+    /// surface still to tag; an empty result is full coverage (L3-cap).
+    #[must_use]
+    pub fn untagged_public_symbols(&self) -> Vec<u32> {
+        crate::sandbox::untagged_public_symbols(&self.data)
+    }
+
+    /// @PLN86 — the library a def belongs to (derived from its source), the
+    /// wholesale-admission key for a profile's `allow_libs`.  `None` for a
+    /// synthetic / sourceless def.
+    #[must_use]
+    pub fn def_library(&self, def_nr: u32) -> Option<String> {
+        crate::sandbox::def_library(&self.data, def_nr)
+    }
+
+    /// @PLN86 step P3 — totality violations: the sandboxed script is rejected if
+    /// it cannot be proven to terminate (an unbounded `while`, or a recursion
+    /// cycle).  Empty for a provably-total script.
+    #[must_use]
+    pub fn sandbox_totality(&self) -> Vec<crate::sandbox::TotalityViolation> {
+        crate::sandbox::admit_totality(
+            &self.data,
+            &self.def_sandbox,
+            &self.sandbox_unbounded_loops,
+            &self.sandbox_fn_refs,
+        )
+    }
+
+    /// @PLN86 step 2.4 — no-raw-write violations: sandboxed defs that directly
+    /// mutate heap data (`x.field = v` / `v[i] = v`).  Empty when every mutation
+    /// goes through an allow-listed `*.write` op.
+    #[must_use]
+    pub fn sandbox_raw_writes(&self) -> Vec<crate::sandbox::RawWriteViolation> {
+        crate::sandbox::raw_write_violations(&self.def_sandbox, &self.sandbox_raw_writes)
+    }
+
+    /// @PLN86 step 2.5 — ALL sandbox admission errors (capability + totality +
+    /// no-raw-write), each rendered as a correct, specific, actionable message
+    /// (position + the rule + the fix).  Empty when the script is admitted.  This
+    /// is the host's primary surface — the contract a modder iterates against.
+    #[must_use]
+    pub fn sandbox_admission_errors(&self) -> Vec<String> {
+        let caps = self.sandbox_admit().into_iter().map(|v| {
+            crate::sandbox::describe_violation(&self.data, &self.sandbox, &self.def_sandbox, &v)
+        });
+        let totality = self
+            .sandbox_totality()
+            .into_iter()
+            .map(|v| crate::sandbox::describe_totality_violation(&self.data, &v));
+        let raw_writes = self
+            .sandbox_raw_writes()
+            .into_iter()
+            .map(|v| crate::sandbox::describe_raw_write_violation(&self.data, &v));
+        caps.chain(totality).chain(raw_writes).collect()
+    }
+
+    /// @PLN86 step 1.4 — does this program contain sandboxed code that must run
+    /// on the interpreter?  True iff ANY def is designated sandboxed.  This is
+    /// non-negotiable, NOT a per-profile choice: generating + compiling Rust on
+    /// the host is RCE by construction, and the native backend traps where the
+    /// interpreter is total (div-by-zero yields null — 3.3).  loft's own CLI
+    /// run-path forces interpret (and refuses an explicit `--native`) when true.
+    #[must_use]
+    pub fn sandbox_forces_interpret(&self) -> bool {
+        !self.def_sandbox.is_empty()
+    }
+
+    /// @PLN86 step 3.4 — the worst-case complexity DEGREE of the sandboxed code:
+    /// its step count is `O(n^degree)` in the largest input size.  An admitted
+    /// script is total, so this is finite; the host reads it to bound the inputs
+    /// so no single frame stalls (L5).
+    #[must_use]
+    pub fn sandbox_complexity_degree(&self) -> u32 {
+        crate::sandbox::sandbox_complexity_degree(&self.data, &self.def_sandbox)
+    }
+
+    /// @PLN86 step 3.4 — the human-readable worst-case complexity report.
+    #[must_use]
+    pub fn sandbox_complexity_report(&self) -> String {
+        crate::sandbox::complexity_report(self.sandbox_complexity_degree())
+    }
+
+    /// @PLN86 L4 — record that the current def references `fn_d_nr` as a fn-ref
+    /// VALUE (a function name used as a value).  No-op outside sandboxed code.
+    /// Called at the fn-ref creation site so every flow is caught.
+    pub(crate) fn record_sandbox_fn_ref(&mut self, fn_d_nr: u32) {
+        if self.in_sandbox {
+            self.sandbox_fn_refs
+                .entry(self.context)
+                .or_default()
+                .insert(fn_d_nr);
+        }
+    }
+
     /// # Panics
     /// With filesystem problems.
     pub fn parse(&mut self, filename: &str, default: bool) -> bool {
@@ -556,6 +767,13 @@ impl Parser {
         self.pending_imports.clear();
         self.applied_imports.clear();
         self.deferred_unknown.clear();
+        // @PLN86 1.2 — the def→profile side-map is keyed by def_nr, which
+        // `data.reset()` reassigns; clear it so a re-parse re-derives the
+        // designation rather than reading a stale entry.
+        self.def_sandbox.clear();
+        self.sandbox_unbounded_loops.clear();
+        self.sandbox_raw_writes.clear();
+        self.sandbox_fn_refs.clear();
         self.data.reset();
         // @PLN22 Phase 2 — the main program parses under its own source
         // (MAIN_SOURCE), distinct from the stdlib prelude (source 0), so a user
@@ -7678,5 +7896,1034 @@ mod p269_native_backfill_tests {
                 .any(|(sym, srcs)| sym == "collide_shared" && srcs.len() >= 2),
             "expected a `collide_shared` collision across >= 2 sources, got {collisions:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod plan86_sandbox_designation_tests {
+    use super::*;
+    use crate::sandbox::parse_sandbox_config;
+
+    /// @PLN86 step 1.2 — a host designation (`fn:<name>`) tags exactly the named
+    /// function with its profile; other functions stay unrestricted; and the tag
+    /// comes from the host policy, never the source (only `fn:scripted` is
+    /// designated, yet `host` in the same file is untagged).
+    #[test]
+    fn fn_designation_tags_only_the_designated_function() {
+        let mut p = Parser::new();
+        p.set_sandbox_config(parse_sandbox_config(
+            "[sandbox]\nmod-script = [\"fn:scripted\"]\n[profile.mod-script]\nallow_caps = [\"math\"]\n",
+        ));
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("plan86_designation_{}.loft", std::process::id()));
+        std::fs::write(&path, "fn scripted() { }\nfn host() { }\n").unwrap();
+        p.parse(path.to_str().unwrap(), false);
+        let _ = std::fs::remove_file(&path);
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "unexpected parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        let scripted = p.data.def_nr("n_scripted");
+        let host = p.data.def_nr("n_host");
+        assert_ne!(scripted, u32::MAX, "scripted fn registered");
+        assert_ne!(host, u32::MAX, "host fn registered");
+        assert_eq!(p.def_sandbox_profile(scripted), Some("mod-script"));
+        assert_eq!(p.def_sandbox_profile(host), None);
+    }
+}
+
+#[cfg(test)]
+mod plan86_nesting_guard_tests {
+    use super::*;
+    use crate::sandbox::parse_sandbox_config;
+
+    fn sandboxed_parser() -> Parser {
+        let mut p = Parser::new();
+        p.set_sandbox_config(parse_sandbox_config(
+            "[sandbox]\nmod-script = [\"fn:scripted\"]\n[profile.mod-script]\nallow_caps = [\"math\"]\n",
+        ));
+        p
+    }
+
+    fn parse_source(p: &mut Parser, src: &str) {
+        // Process-global counter (not the `src` pointer) for a collision-free name
+        // across concurrent test threads — see `parse_admit_libs`.
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "plan86_nest_{}_{}.loft",
+            std::process::id(),
+            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        ));
+        std::fs::write(&path, src).unwrap();
+        p.parse(path.to_str().unwrap(), false);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// @PLN86 0.1 — hostile deep nesting inside a sandboxed def is a clean
+    /// LOAD-time parse error, NOT a native stack overflow (rc=139).  Runs on an
+    /// explicit 8 MB stack so the result is deterministic across CI harnesses
+    /// (a stack overflow aborts the whole process, it is not a catchable panic):
+    /// WITH the guard, 2000-deep parens bail at the limit (~1.3 MB); WITHOUT it
+    /// they overflow even 8 MB (2000 × ~10 KB ≈ 20 MB).  Process surviving + the
+    /// latched diagnostic together prove the guard fired.
+    #[test]
+    fn deep_nesting_in_sandboxed_def_is_a_clean_error_not_a_crash() {
+        let (has_error, has_msg) = std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let depth = 2000; // >> SANDBOX_MAX_PARSE_DEPTH and into the overflow zone
+                let src = format!(
+                    "fn scripted() {{ x = {}1{}; }}\n",
+                    "(".repeat(depth),
+                    ")".repeat(depth)
+                );
+                let mut p = sandboxed_parser();
+                parse_source(&mut p, &src);
+                let has_error = p.diagnostics.level() >= crate::diagnostics::Level::Error;
+                let has_msg = p
+                    .diagnostics
+                    .lines()
+                    .iter()
+                    .any(|l| l.contains("nesting too deep"));
+                (has_error, has_msg)
+            })
+            .unwrap()
+            .join()
+            .expect("the parse thread must not overflow/panic");
+        assert!(has_error, "expected a depth error");
+        assert!(has_msg, "expected the nesting-depth diagnostic");
+    }
+
+    /// The guard must not false-trip: ordinary nesting well below the limit —
+    /// and many sibling expressions — parse cleanly (proves the depth counter is
+    /// balanced: each sub-expression decrements, so siblings don't accumulate).
+    #[test]
+    fn ordinary_nesting_in_sandboxed_def_parses_clean() {
+        use std::fmt::Write as _;
+        let mut body = String::from("fn scripted() {\n");
+        for i in 0..200 {
+            let _ = writeln!(body, "  a{i} = ((({i})));"); // shallow, 200 siblings
+        }
+        body.push_str("}\n");
+        let mut p = sandboxed_parser();
+        parse_source(&mut p, &body);
+        assert!(
+            !p.diagnostics
+                .lines()
+                .iter()
+                .any(|l| l.contains("nesting too deep")),
+            "guard false-tripped on ordinary code: {:?}",
+            p.diagnostics.lines()
+        );
+    }
+}
+
+#[cfg(test)]
+mod plan86_reachable_set_tests {
+    use super::*;
+    use crate::sandbox::parse_sandbox_config;
+
+    fn parse_with_sandbox(selectors: &[&str], src: &str) -> Parser {
+        let list = selectors
+            .iter()
+            .map(|s| format!("\"{s}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let cfg = format!("[sandbox]\nmod = [{list}]\n[profile.mod]\nallow_caps = [\"x\"]\n");
+        let mut p = Parser::new();
+        p.set_sandbox_config(parse_sandbox_config(&cfg));
+        p.parse_dir("default", true, true).unwrap(); // `integer` et al. live in the stdlib
+        // Process-global counter (not the `src` pointer) for a collision-free name
+        // across concurrent test threads — see `parse_admit_libs`.
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "plan86_reach_{}_{}.loft",
+            std::process::id(),
+            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        ));
+        std::fs::write(&path, src).unwrap();
+        p.parse(path.to_str().unwrap(), false);
+        let _ = std::fs::remove_file(&path);
+        p
+    }
+
+    /// @PLN86 1.3 — the closure descends into sandboxed defs (so their callees are
+    /// reachable) but treats a trusted symbol as a LEAF: `untrusted_helper` is
+    /// recorded yet NOT descended, so the `hidden_leaf` it alone reaches is
+    /// excluded — the trust boundary §4 demands.
+    #[test]
+    fn closure_descends_sandboxed_defs_and_stops_at_trusted_leaves() {
+        let src = "fn allowed_leaf() -> integer { 1 }\n\
+                   fn hidden_leaf() -> integer { 2 }\n\
+                   fn inner() -> integer { allowed_leaf() }\n\
+                   fn untrusted_helper() -> integer { hidden_leaf() }\n\
+                   fn scripted() -> integer { inner(); untrusted_helper() }\n";
+        let p = parse_with_sandbox(&["fn:scripted", "fn:inner"], src);
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        let reach = p.sandbox_reachable_set();
+        let id = |n: &str| p.data.def_nr(n);
+        assert!(reach.contains(&id("n_scripted")));
+        assert!(reach.contains(&id("n_inner"))); // sandboxed → descended
+        assert!(reach.contains(&id("n_allowed_leaf"))); // reached via inner
+        assert!(reach.contains(&id("n_untrusted_helper"))); // referenced → leaf
+        assert!(
+            !reach.contains(&id("n_hidden_leaf")),
+            "a trusted leaf must not be descended"
+        );
+    }
+
+    /// L4 — a fn-ref passed as a `fn(...)`-typed argument (emitted as a bare
+    /// `Int(def_nr)`) is in the set, so an indirect call can't escape admission.
+    #[test]
+    fn fnref_passed_as_argument_is_reachable_l4() {
+        let src = "fn target(n: integer) -> integer { n }\n\
+                   fn apply(f: fn(integer) -> integer, n: integer) -> integer { f(n) }\n\
+                   fn scripted() -> integer { apply(target, 5) }\n";
+        let p = parse_with_sandbox(&["fn:scripted"], src);
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        assert!(
+            p.sandbox_reachable_set()
+                .contains(&p.data.def_nr("n_target")),
+            "fn-ref argument must be reachable (L4)"
+        );
+    }
+
+    /// L4 — a fn-ref laundered through a `fn(...)`-typed local (`f = target`,
+    /// emitted as `Set(f, Int(def_nr))`) is still in the set.
+    #[test]
+    fn fnref_laundered_through_a_variable_is_reachable_l4() {
+        let src = "fn target(n: integer) -> integer { n }\n\
+                   fn apply(f: fn(integer) -> integer, n: integer) -> integer { f(n) }\n\
+                   fn scripted() -> integer { f = target; apply(f, 5) }\n";
+        let p = parse_with_sandbox(&["fn:scripted"], src);
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        assert!(
+            p.sandbox_reachable_set()
+                .contains(&p.data.def_nr("n_target")),
+            "fn-ref laundered through a variable must be reachable (L4)"
+        );
+    }
+
+    /// @PLN86 1.4 — a sandboxed def reaching an EXTERNAL native bridge (its
+    /// `#native` symbol owned by a native package) is flagged; a `#native` symbol
+    /// with no external-package owner (a built-in op) is not.
+    /// `native_symbol_crates` is the discriminator `backfill_native_symbol_crates`
+    /// fills for package-owned symbols.
+    #[test]
+    fn reachable_external_ffi_bridge_is_flagged_local_native_is_not() {
+        let src = "fn ext_fn() -> integer; #native \"ext_sym\"\n\
+                   fn local_native() -> integer; #native \"local_sym\"\n\
+                   fn scripted() -> integer { ext_fn(); local_native() }\n";
+        let mut p = parse_with_sandbox(&["fn:scripted"], src);
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        // Simulate `ext_sym` being owned by an external native package — exactly
+        // what `backfill_native_symbol_crates` records for a def under a
+        // `native_packages` dir.  `local_sym` is left unowned.
+        p.data
+            .native_symbol_crates
+            .insert("ext_sym".to_string(), "extcrate".to_string());
+        let bridges = p.sandbox_ffi_bridges();
+        assert!(
+            bridges.contains(&p.data.def_nr("n_ext_fn")),
+            "reachable external FFI bridge must be flagged, got {bridges:?}"
+        );
+        assert!(
+            !bridges.contains(&p.data.def_nr("n_local_native")),
+            "a #native symbol with no external-package owner must NOT be flagged"
+        );
+    }
+
+    /// @PLN86 2.1 — `#cap "group"` parses onto a def and is readable; the
+    /// read/write distinction (the `Vector.get` vs `Vector.clear` case)
+    /// round-trips, and an unannotated def reads as `None`.
+    #[test]
+    fn cap_annotation_is_parsed_and_readable() {
+        let src = "fn reader() -> integer;\n#native\n#cap \"collections.read\"\n\
+                   fn writer() -> integer;\n#native\n#cap \"collections.write\"\n\
+                   fn plain() -> integer { 0 }\n";
+        let p = parse_with_sandbox(&[], src);
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        assert_eq!(
+            p.def_cap_group(p.data.def_nr("n_reader")),
+            Some("collections.read")
+        );
+        assert_eq!(
+            p.def_cap_group(p.data.def_nr("n_writer")),
+            Some("collections.write")
+        );
+        assert_eq!(p.def_cap_group(p.data.def_nr("n_plain")), None);
+    }
+}
+
+#[cfg(test)]
+mod plan86_admission_tests {
+    use super::*;
+    use crate::sandbox::{CapViolation, TotalityViolation, parse_sandbox_config};
+
+    fn quoted(items: &[&str]) -> String {
+        items
+            .iter()
+            .map(|s| format!("\"{s}\""))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    fn parse_admit_libs(
+        designations: &[&str],
+        allow_libs: &[&str],
+        allow_caps: &[&str],
+        src: &str,
+    ) -> Parser {
+        let cfg = format!(
+            "[sandbox]\nmod = [{}]\n[profile.mod]\nallow_libs = [{}]\nallow_caps = [{}]\n",
+            quoted(designations),
+            quoted(allow_libs),
+            quoted(allow_caps),
+        );
+        let mut p = Parser::new();
+        p.set_sandbox_config(parse_sandbox_config(&cfg));
+        p.parse_dir("default", true, true).unwrap();
+        // A process-global counter, not the `src` pointer: cargo runs tests as
+        // threads in ONE process, so a deterministic name (the literal's address)
+        // can collide across concurrent threads — Windows' strict file locking
+        // then fails the write where Unix tolerates it.
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "plan86_admit_{}_{}.loft",
+            std::process::id(),
+            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        ));
+        std::fs::write(&path, src).unwrap();
+        p.parse(path.to_str().unwrap(), false);
+        let _ = std::fs::remove_file(&path);
+        p
+    }
+
+    fn parse_admit(designations: &[&str], allow_caps: &[&str], src: &str) -> Parser {
+        parse_admit_libs(designations, &[], allow_caps, src)
+    }
+
+    fn viol_symbol(v: &CapViolation) -> u32 {
+        match v {
+            CapViolation::UngrantedCap { symbol, .. }
+            | CapViolation::UntaggedSymbol { symbol, .. }
+            | CapViolation::ExternalFfi { symbol, .. } => *symbol,
+        }
+    }
+
+    /// @PLN86 2.3 — the admission convergence: a granted-cap reference admits, an
+    /// ungranted-cap reference is rejected naming the group, an untagged symbol is
+    /// rejected (deny-by-default).
+    #[test]
+    fn admission_grants_allowed_caps_and_rejects_ungranted_and_untagged() {
+        let src = "fn cap_fs_read() -> integer;\n#native\n#cap \"fs.read\"\n\
+                   fn cap_coll_read() -> integer;\n#native\n#cap \"collections.read\"\n\
+                   fn cap_untagged() -> integer;\n#native\n\
+                   fn ok() -> integer { cap_coll_read() }\n\
+                   fn bad() -> integer { cap_fs_read() }\n\
+                   fn uses_untagged() -> integer { cap_untagged() }\n";
+        let p = parse_admit(
+            &["fn:ok", "fn:bad", "fn:uses_untagged"],
+            &["collections.read"],
+            src,
+        );
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        let v = p.sandbox_admit();
+        // bad reaches fs.read which is not granted → named violation.
+        assert!(
+            v.contains(&CapViolation::UngrantedCap {
+                from: p.data.def_nr("n_bad"),
+                symbol: p.data.def_nr("n_cap_fs_read"),
+                group: "fs.read".to_string(),
+            }),
+            "expected UngrantedCap(fs.read), got {v:?}"
+        );
+        // uses_untagged reaches an unclassified symbol → deny-by-default.
+        assert!(
+            v.contains(&CapViolation::UntaggedSymbol {
+                from: p.data.def_nr("n_uses_untagged"),
+                symbol: p.data.def_nr("n_cap_untagged"),
+            }),
+            "expected UntaggedSymbol, got {v:?}"
+        );
+        // ok reaches only collections.read (granted) → admitted clean.
+        let coll = p.data.def_nr("n_cap_coll_read");
+        assert!(
+            !v.iter().any(|viol| viol_symbol(viol) == coll),
+            "granted collections.read must admit clean, got {v:?}"
+        );
+    }
+
+    /// @PLN86 2.3 / L4 — an indirect call through a fn-ref cannot escape: passing
+    /// `cap_fs_read` to a higher-order fn still puts it in the reachable set, so
+    /// admission rejects the ungranted `fs.read` group.
+    #[test]
+    fn admission_rejects_indirect_fnref_call_l4() {
+        let src = "fn cap_fs_read(n: integer) -> integer;\n#native\n#cap \"fs.read\"\n\
+                   fn apply(f: fn(integer) -> integer, n: integer) -> integer { f(n) }\n\
+                   fn sneaky() -> integer { apply(cap_fs_read, 5) }\n";
+        let p = parse_admit(&["fn:sneaky", "fn:apply"], &["collections.read"], src);
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        let v = p.sandbox_admit();
+        assert!(
+            v.contains(&CapViolation::UngrantedCap {
+                from: p.data.def_nr("n_sneaky"),
+                symbol: p.data.def_nr("n_cap_fs_read"),
+                group: "fs.read".to_string(),
+            }),
+            "L4 indirect fn-ref to fs.read must be rejected, got {v:?}"
+        );
+    }
+
+    /// @PLN86 2.2 — the coverage lint lists an untagged public function and omits a
+    /// tagged one (the work-list for tagging the stdlib/library surface).
+    #[test]
+    fn coverage_lint_lists_untagged_public_functions() {
+        let src = "pub fn tagged_fn() -> integer;\n#native\n#cap \"math\"\n\
+                   pub fn untagged_fn() -> integer;\n#native\n";
+        let p = parse_admit(&[], &[], src);
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        let untagged = p.untagged_public_symbols();
+        assert!(
+            untagged.contains(&p.data.def_nr("n_untagged_fn")),
+            "an untagged public fn must be listed"
+        );
+        assert!(
+            !untagged.contains(&p.data.def_nr("n_tagged_fn")),
+            "a tagged public fn must NOT be listed"
+        );
+    }
+
+    /// @PLN86 2.2 — the REAL stdlib fs/env surface gates correctly: `mtime`
+    /// (tagged `fs.read`, bodiless so no untagged deps) is rejected naming the
+    /// group when fs.read is not granted, while `env_variable` (`env`, granted)
+    /// admits — and the tagged fs/env fns have left the coverage lint.
+    #[test]
+    fn stdlib_fs_env_caps_gate_real_functions() {
+        let src = "fn reads_mtime() -> integer { mtime(\"x\") }\n\
+                   fn reads_env() -> text { env_variable(\"X\") }\n";
+        let p = parse_admit(&["fn:reads_mtime", "fn:reads_env"], &["env"], src);
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        // the fs/env surface is no longer flagged by the coverage lint
+        let untagged = p.untagged_public_symbols();
+        for n in [
+            "n_content",
+            "n_write",
+            "n_env_variable",
+            "n_mtime",
+            "n_file",
+        ] {
+            assert!(
+                !untagged.contains(&p.data.def_nr(n)),
+                "{n} should be tagged (off the lint)"
+            );
+        }
+        let v = p.sandbox_admit();
+        // mtime (fs.read) is not granted → rejected naming the real group.
+        assert!(
+            v.contains(&CapViolation::UngrantedCap {
+                from: p.data.def_nr("n_reads_mtime"),
+                symbol: p.data.def_nr("n_mtime"),
+                group: "fs.read".to_string(),
+            }),
+            "mtime must be rejected naming fs.read, got {v:?}"
+        );
+        // env_variable (env) is granted → admits clean.
+        let envv = p.data.def_nr("n_env_variable");
+        assert!(
+            !v.iter().any(|x| viol_symbol(x) == envv),
+            "granted env must admit, got {v:?}"
+        );
+    }
+
+    /// @PLN86 — library-first admission: a wholesale-allowed library admits its
+    /// UNTAGGED functions with no `#cap` tag (the common "include a whole
+    /// library" case).  `now()` lives in the `files` stdlib module and is
+    /// untagged; under `allow_libs=["files"]` it admits, without it it is an
+    /// `UntaggedSymbol`.  Tags stay the fine-grained layer, not a requirement.
+    #[test]
+    fn wholesale_allowed_library_admits_untagged_functions() {
+        // def_library identifies the stdlib module from the source file.
+        let p0 = parse_admit(&[], &[], "fn ignore() -> integer { 1 }\n");
+        assert_eq!(
+            p0.def_library(p0.data.def_nr("n_mtime")).as_deref(),
+            Some("files")
+        );
+
+        let src = "fn uses_now() -> integer { now() }\n";
+        // (a) files allowed wholesale → untagged now() admits, no tag needed.
+        let p = parse_admit_libs(&["fn:uses_now"], &["files"], &[], src);
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        assert!(
+            p.sandbox_admit().is_empty(),
+            "wholesale files must admit untagged now(), got {:?}",
+            p.sandbox_admit()
+        );
+        // (b) nothing allowed → now() is rejected (deny-by-default).
+        let p2 = parse_admit_libs(&["fn:uses_now"], &[], &[], src);
+        let now = p2.data.def_nr("n_now");
+        assert!(
+            p2.sandbox_admit().iter().any(|x| viol_symbol(x) == now),
+            "without allow_libs, untagged now() must be flagged, got {:?}",
+            p2.sandbox_admit()
+        );
+    }
+
+    /// @PLN86 2.5 — admission errors are actionable: each class names the
+    /// position, the symbol, the rule, and BOTH fixes (wholesale lib + the
+    /// fine-grained cap / native_ffi).
+    #[test]
+    fn admission_errors_name_symbol_rule_and_fix() {
+        // UngrantedCap — mtime needs fs.read; only env is granted.
+        let p = parse_admit(
+            &["fn:reads_mtime"],
+            &["env"],
+            "fn reads_mtime() -> integer { mtime(\"x\") }\n",
+        );
+        let errs = p.sandbox_admission_errors();
+        assert_eq!(errs.len(), 1, "{errs:?}");
+        let e = &errs[0];
+        eprintln!("CAP_DIAG: {e}");
+        assert!(e.contains("mtime"), "names the symbol: {e}");
+        assert!(e.contains("fs.read"), "names the group: {e}");
+        assert!(e.contains("fix:"), "points at the fix: {e}");
+        assert!(
+            e.contains("allow_caps") && e.contains("allow_libs"),
+            "offers both fixes: {e}"
+        );
+        assert!(e.contains(".loft:"), "carries a source position: {e}");
+
+        // UntaggedSymbol — now() in `files`, nothing allowed.
+        let p2 = parse_admit_libs(
+            &["fn:uses_now"],
+            &[],
+            &[],
+            "fn uses_now() -> integer { now() }\n",
+        );
+        assert!(
+            p2.sandbox_admission_errors()
+                .iter()
+                .any(|e| e.contains("now")
+                    && e.contains("library `files`")
+                    && e.contains("allow_libs")),
+            "untagged error names the library + allow_libs: {:?}",
+            p2.sandbox_admission_errors()
+        );
+    }
+
+    /// @PLN86 2.5 — an external-FFI rejection names the crate and `native_ffi`.
+    #[test]
+    fn admission_error_for_external_ffi_names_crate() {
+        let src = "fn ext_fn() -> integer; #native \"ext_sym\"\n\
+                   fn calls_ext() -> integer { ext_fn() }\n";
+        let mut p = parse_admit(&["fn:calls_ext"], &[], src);
+        p.data
+            .native_symbol_crates
+            .insert("ext_sym".to_string(), "extcrate".to_string());
+        assert!(
+            p.sandbox_admission_errors()
+                .iter()
+                .any(|e| e.contains("ext_fn")
+                    && e.contains("extcrate")
+                    && e.contains("native_ffi")),
+            "external-FFI error names the crate + native_ffi: {:?}",
+            p.sandbox_admission_errors()
+        );
+    }
+
+    /// @PLN86 3.1 — totality rejects an unbounded `while`, admits a bounded `for`.
+    #[test]
+    fn totality_rejects_while_admits_for() {
+        // An UNBOUNDED `while` (a flag loop — no decreasing variant) is rejected;
+        // bounded `while`s are admitted now and covered by `bounded_while_is_admitted`.
+        let p = parse_admit_libs(
+            &["fn:loops"],
+            &["code"],
+            &[],
+            "fn loops(go: boolean) -> integer { x = 0; while go { x += 1 } x }\n",
+        );
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        let t = p.sandbox_totality();
+        assert!(
+            t.iter()
+                .any(|v| matches!(v, TotalityViolation::UnboundedLoop { .. })),
+            "a `while` must be rejected, got {t:?}"
+        );
+        // the rendered error points at the bounded alternative
+        assert!(
+            p.sandbox_admission_errors()
+                .iter()
+                .any(|e| e.contains("while") && e.contains("for ")),
+            "{:?}",
+            p.sandbox_admission_errors()
+        );
+
+        let p2 = parse_admit_libs(
+            &["fn:counts"],
+            &["code"],
+            &[],
+            "fn counts() -> integer { s = 0; for i in 0..10 { s += i } s }\n",
+        );
+        assert!(
+            p2.sandbox_totality().is_empty(),
+            "a bounded `for` must be total, got {:?}",
+            p2.sandbox_totality()
+        );
+    }
+
+    /// @PLN86 3.2 — totality rejects recursion (self + mutual), admits acyclic.
+    #[test]
+    fn totality_rejects_recursion_admits_acyclic() {
+        // self-recursion `f -> f`
+        let p = parse_admit_libs(
+            &["fn:rec"],
+            &["code"],
+            &[],
+            "fn rec(n: integer) -> integer { rec(n + 1) }\n",
+        );
+        assert!(
+            p.sandbox_totality()
+                .iter()
+                .any(|v| matches!(v, TotalityViolation::Recursion { .. })),
+            "self-recursion must be rejected, got {:?}",
+            p.sandbox_totality()
+        );
+        assert!(
+            p.sandbox_admission_errors()
+                .iter()
+                .any(|e| e.contains("recursion") && e.contains("rec")),
+            "{:?}",
+            p.sandbox_admission_errors()
+        );
+
+        // mutual recursion `a -> b -> a`
+        let p2 = parse_admit_libs(
+            &["fn:a", "fn:b"],
+            &["code"],
+            &[],
+            "fn a(n: integer) -> integer { b(n) }\nfn b(n: integer) -> integer { a(n) }\n",
+        );
+        assert!(
+            p2.sandbox_totality()
+                .iter()
+                .any(|v| matches!(v, TotalityViolation::Recursion { .. })),
+            "mutual recursion must be rejected, got {:?}",
+            p2.sandbox_totality()
+        );
+
+        // acyclic call chain `top -> helper`
+        let p3 = parse_admit_libs(
+            &["fn:top", "fn:helper"],
+            &["code"],
+            &[],
+            "fn helper(n: integer) -> integer { n + 1 }\n\
+             fn top(n: integer) -> integer { helper(n) }\n",
+        );
+        assert!(
+            !p3.sandbox_totality()
+                .iter()
+                .any(|v| matches!(v, TotalityViolation::Recursion { .. })),
+            "an acyclic script must be total, got {:?}",
+            p3.sandbox_totality()
+        );
+    }
+
+    /// @PLN86 3.3 — total-op check: an explicit-abort op (`assert`) is excluded
+    /// (it faults the script), while arithmetic stays total — a divide-by-zero is
+    /// the interpreter's null sentinel, NOT a rejected op.
+    #[test]
+    fn totality_excludes_abort_ops_admits_total_arithmetic() {
+        // assert faults → excluded as a partial op
+        let p = parse_admit_libs(
+            &["fn:checks"],
+            &["code"],
+            &[],
+            "fn checks(n: integer) -> integer { assert(n > 0, \"pos\"); n }\n",
+        );
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        assert!(
+            p.sandbox_totality()
+                .iter()
+                .any(|v| matches!(v, TotalityViolation::PartialOp { .. })),
+            "assert must be excluded as a partial op, got {:?}",
+            p.sandbox_totality()
+        );
+        assert!(
+            p.sandbox_admission_errors()
+                .iter()
+                .any(|e| e.contains("assert") && e.contains("fix")),
+            "{:?}",
+            p.sandbox_admission_errors()
+        );
+
+        // a divide-by-zero is total on the interpreter → NOT a partial op
+        let p2 = parse_admit_libs(
+            &["fn:divides"],
+            &["code"],
+            &[],
+            "fn divides(a: integer, b: integer) -> integer { a / b ?? 0 }\n",
+        );
+        assert!(
+            !p2.sandbox_totality()
+                .iter()
+                .any(|v| matches!(v, TotalityViolation::PartialOp { .. })),
+            "arithmetic is total (not excluded), got {:?}",
+            p2.sandbox_totality()
+        );
+    }
+
+    /// @PLN86 1.4 — any designated def forces interpret-only (unconditional); a
+    /// program with no sandboxed defs leaves the native backend available.
+    #[test]
+    fn sandbox_forces_interpret_on_any_designation() {
+        let p = parse_admit_libs(
+            &["fn:scripted"],
+            &["code"],
+            &[],
+            "fn scripted() -> integer { 1 }\n",
+        );
+        assert!(
+            p.sandbox_forces_interpret(),
+            "a sandboxed def must force interpret-only"
+        );
+        let p2 = parse_admit_libs(&[], &["code"], &[], "fn plain() -> integer { 1 }\n");
+        assert!(
+            !p2.sandbox_forces_interpret(),
+            "no sandboxed defs → native allowed"
+        );
+    }
+
+    /// @PLN86 3.4 — the worst-case complexity degree counts loop nesting, and
+    /// composes across the acyclic call graph (a loop calling a looping fn → n²).
+    #[test]
+    fn complexity_degree_counts_loop_nesting_inter_procedural() {
+        // no loop → O(1)
+        let p0 = parse_admit_libs(
+            &["fn:flat"],
+            &["code"],
+            &[],
+            "fn flat() -> integer { 1 + 2 }\n",
+        );
+        assert_eq!(p0.sandbox_complexity_degree(), 0, "no loops → O(1)");
+
+        // one loop → O(n)
+        let p1 = parse_admit_libs(
+            &["fn:one"],
+            &["code"],
+            &[],
+            "fn one() -> integer { s = 0; for i in 0..10 { s += i } s }\n",
+        );
+        assert_eq!(p1.sandbox_complexity_degree(), 1, "one loop → O(n)");
+
+        // nested loops → O(n^2)
+        let p2 = parse_admit_libs(
+            &["fn:nest"],
+            &["code"],
+            &[],
+            "fn nest() -> integer { s = 0; for i in 0..10 { for j in 0..10 { s += i } } s }\n",
+        );
+        assert_eq!(p2.sandbox_complexity_degree(), 2, "nested loops → O(n^2)");
+        assert!(
+            p2.sandbox_complexity_report().contains("O(n^2)"),
+            "{}",
+            p2.sandbox_complexity_report()
+        );
+
+        // inter-procedural: a loop calling a looping fn → O(n^2)
+        let p3 = parse_admit_libs(
+            &["fn:outer", "fn:inner"],
+            &["code"],
+            &[],
+            "fn inner() -> integer { s = 0; for j in 0..10 { s += j } s }\n\
+             fn outer() -> integer { s = 0; for i in 0..10 { s += inner() } s }\n",
+        );
+        assert_eq!(
+            p3.sandbox_complexity_degree(),
+            2,
+            "a loop calling a looping fn → O(n^2)"
+        );
+    }
+
+    /// @PLN86 2.4 — no-raw-write rejects a field/index assignment to heap data,
+    /// while struct construction + local-variable writes stay clean.
+    #[test]
+    fn no_raw_write_rejects_field_index_admits_construction() {
+        // field write → rejected, with an actionable message
+        let p = parse_admit_libs(
+            &["fn:scripted"],
+            &["code", "prog"],
+            &[],
+            "struct Ent { health: integer }\n\
+             fn scripted(e: Ent) -> integer { e.health = 0; e.health }\n",
+        );
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        assert_eq!(
+            p.sandbox_raw_writes().len(),
+            1,
+            "a field write must be flagged, got {:?}",
+            p.sandbox_raw_writes()
+        );
+        assert!(
+            p.sandbox_admission_errors()
+                .iter()
+                .any(|e| e.contains("raw write") && e.contains("fix")),
+            "{:?}",
+            p.sandbox_admission_errors()
+        );
+
+        // index write → rejected
+        let p2 = parse_admit_libs(
+            &["fn:scripted"],
+            &["code", "prog"],
+            &[],
+            "fn scripted(v: vector<integer>) -> integer { v[0] = 9; v[0] }\n",
+        );
+        assert!(
+            !p2.sandbox_raw_writes().is_empty(),
+            "an index write must be flagged, got {:?}",
+            p2.sandbox_raw_writes()
+        );
+
+        // struct construction + local writes → admitted (no raw write)
+        let p3 = parse_admit_libs(
+            &["fn:scripted"],
+            &["code", "prog"],
+            &[],
+            "struct Ent { health: integer }\n\
+             fn scripted() -> integer { s = 0; for i in 0..3 { s += i } e = Ent { health: s }; e.health }\n",
+        );
+        assert!(
+            p3.sandbox_raw_writes().is_empty(),
+            "construction + local writes must be clean, got {:?}",
+            p3.sandbox_raw_writes()
+        );
+    }
+
+    /// @PLN86 2.4 (ownership-aware) — a mod may MUTATE the data it owns (a local of
+    /// a script-defined struct — the dogfood `e.alive = false` pattern), but NOT
+    /// host data (a parameter — the type also catches aliasing).
+    #[test]
+    fn no_raw_write_admits_script_owned_struct_mutation() {
+        // local script-owned struct mutation → admitted (no violation at all)
+        let p = parse_admit_libs(
+            &["fn:scripted"],
+            &["code"],
+            &[],
+            "struct Mob { hp: integer }\n\
+             fn scripted() -> integer { m = Mob { hp: 5 }; m.hp = 0; m.hp }\n",
+        );
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        assert!(
+            p.sandbox_raw_writes().is_empty(),
+            "mutating a script-owned struct must be allowed, got {:?}",
+            p.sandbox_raw_writes()
+        );
+        assert!(
+            p.sandbox_admission_errors().is_empty(),
+            "a self-owned mutation script must fully admit, got {:?}",
+            p.sandbox_admission_errors()
+        );
+
+        // the SAME write to a PARAMETER (host data) is still rejected
+        let p2 = parse_admit_libs(
+            &["fn:scripted"],
+            &["code"],
+            &[],
+            "struct Mob { hp: integer }\n\
+             fn scripted(m: Mob) -> integer { m.hp = 0; m.hp }\n",
+        );
+        assert!(
+            !p2.sandbox_raw_writes().is_empty(),
+            "a write to a parameter (host data) must be rejected, got {:?}",
+            p2.sandbox_raw_writes()
+        );
+    }
+
+    /// @PLN86 L4 — a fn-ref to a forbidden capability hidden where `referenced_defs`
+    /// can't see it (a COLLECTION element — neither a call nor an assignment) is
+    /// still capability-checked.  `mtime` (tagged `fs.read`) as a VALUE inside
+    /// `[mtime]` must be rejected exactly as a direct `mtime(..)` call would —
+    /// because it is recorded at the fn-ref CREATION site, not by an IR walk that
+    /// only catches call-args + assignments.
+    #[test]
+    fn l4_fn_ref_in_collection_cannot_escape_capability() {
+        let p = parse_admit_libs(
+            &["fn:scripted"],
+            &["code"],
+            &["env"], // fs.read NOT granted
+            "fn scripted() -> integer { handlers = [mtime]; len(handlers) }\n",
+        );
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        let scripted = p.data.def_nr("n_scripted");
+        let mtime = p.data.def_nr("n_mtime");
+        // recorded at creation — the L4 mechanism
+        assert!(
+            p.sandbox_fn_refs
+                .get(&scripted)
+                .is_some_and(|s| s.contains(&mtime)),
+            "the fn-ref to mtime must be recorded for L4, got {:?}",
+            p.sandbox_fn_refs.get(&scripted)
+        );
+        // and admission rejects it naming the capability — no escape
+        let v = p.sandbox_admit();
+        assert!(
+            v.iter().any(|x| viol_symbol(x) == mtime),
+            "a collection-hidden fn-ref to mtime must be capability-checked (L4), got {v:?}"
+        );
+    }
+
+    /// @PLN86 3.1 — does the sandboxed program have an unbounded-`while` violation?
+    fn has_unbounded_while(p: &Parser) -> bool {
+        p.sandbox_totality()
+            .iter()
+            .any(|v| matches!(v, TotalityViolation::UnboundedLoop { .. }))
+    }
+
+    /// @PLN86 3.1 — a `while` carrying a compiler-checked DECREASING VARIANT is
+    /// admitted: an int counter against a stable bound, stepped by a constant every
+    /// iteration (counting up, counting down, or guarded by `&& i < N`).
+    #[test]
+    fn bounded_while_is_admitted() {
+        for (label, src) in [
+            (
+                "count up to a param bound",
+                "fn scripted(n: integer) -> integer { i = 0; s = 0; \
+                 while i < n { s = s + i; i = i + 1; } s }\n",
+            ),
+            (
+                "count down to zero",
+                "fn scripted() -> integer { j = 10; s = 0; \
+                 while j > 0 { s = s + j; j = j - 1; } s }\n",
+            ),
+            (
+                "guard counter in a conjunction",
+                "fn scripted(flag: boolean) -> integer { g = 0; s = 0; \
+                 while flag && (g < 2000) { s = s + g; g = g + 1; } s }\n",
+            ),
+        ] {
+            let p = parse_admit_libs(&["fn:scripted"], &["code"], &[], src);
+            assert!(
+                p.diagnostics.level() < crate::diagnostics::Level::Error,
+                "{label}: parse errors {:?}",
+                p.diagnostics.lines()
+            );
+            assert!(
+                !has_unbounded_while(&p),
+                "{label}: a bounded while must be admitted, got {:?}",
+                p.sandbox_totality()
+            );
+        }
+    }
+
+    /// @PLN86 3.1 — SOUNDNESS: a `while` whose termination cannot be PROVEN is
+    /// rejected.  Each of these is either a genuine non-terminator or one the
+    /// conservative recognizer must refuse (unsoundness here would let a script
+    /// hang the host).
+    #[test]
+    fn unprovable_while_is_rejected() {
+        for (label, src) in [
+            (
+                "flag loop (no variant)",
+                "fn scripted(running: boolean) -> integer { s = 0; \
+                 while running { s = s + 1; } s }\n",
+            ),
+            (
+                "no step (counter never moves)",
+                "fn scripted(n: integer) -> integer { i = 0; s = 0; \
+                 while i < n { s = s + i; } s }\n",
+            ),
+            (
+                "conditional step (may not run every iteration)",
+                "fn scripted(n: integer) -> integer { i = 0; \
+                 while i < n { if i > 5 { i = i + 1; } } i }\n",
+            ),
+            (
+                "cancelling steps (net non-monotonic)",
+                "fn scripted(n: integer) -> integer { i = 0; \
+                 while i < n { i = i + 1; i = i - 1; } i }\n",
+            ),
+            (
+                "non-constant step (cannot prove > 0)",
+                "fn scripted(n: integer, k: integer) -> integer { i = 0; \
+                 while i < n { i = i + k; } i }\n",
+            ),
+            (
+                "moving bound (races away)",
+                "fn scripted(n: integer) -> integer { i = 0; m = n; \
+                 while i < m { i = i + 1; m = m + 1; } i }\n",
+            ),
+        ] {
+            let p = parse_admit_libs(&["fn:scripted"], &["code"], &[], src);
+            assert!(
+                p.diagnostics.level() < crate::diagnostics::Level::Error,
+                "{label}: parse errors {:?}",
+                p.diagnostics.lines()
+            );
+            assert!(
+                has_unbounded_while(&p),
+                "{label}: an unprovable while must be rejected"
+            );
+        }
     }
 }

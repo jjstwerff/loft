@@ -622,6 +622,7 @@ pub fn read_definition(stores: &Stores, r: Record, bodies: bool) -> Definition {
         returned_not_null: r.field_bool(stores, ds::DEF_RETURNED_NOT_NULL),
         rust: r.field_str(stores, ds::DEF_RUST).to_string(),
         native: r.field_str(stores, ds::DEF_NATIVE).to_string(),
+        cap: r.field_str(stores, ds::DEF_CAP).to_string(), // @PLN86
         op_code: r.field_int(stores, ds::DEF_OP_CODE) as u16,
         known_type: r.field_int(stores, ds::DEF_KNOWN_TYPE) as u16,
         pub_visible: r.field_bool(stores, ds::DEF_PUB_VISIBLE),
@@ -1416,6 +1417,38 @@ mod tests {
             miss.err().map(|e| e.kind()),
             Some(std::io::ErrorKind::NotFound)
         );
+    }
+
+    /// @PLN86 2.2-persist — a NON-EMPTY `#cap` group survives the store round-trip
+    /// (the path the `LOFT_STDLIB_CACHE` bundle uses), so a tagged stdlib loaded
+    /// from cache still gates correctly.  Without persistence this reloads as `""`
+    /// and admission silently over-rejects.
+    #[cfg(feature = "mmap")]
+    #[test]
+    fn cap_annotation_survives_store_round_trip() {
+        use crate::data::Data;
+
+        let mut p = crate::parser::Parser::new();
+        p.parse_dir("default", true, false).expect("parse stdlib");
+        let src = "fn capped() -> integer;\n#native\n#cap \"fs.read\"\n";
+        let lpath = std::env::temp_dir().join(format!("loft_cap_rt_{}.loft", std::process::id()));
+        std::fs::write(&lpath, src).unwrap();
+        p.parse(lpath.to_str().unwrap(), false);
+        let _ = std::fs::remove_file(&lpath);
+        assert_eq!(p.data.def(p.data.def_nr("n_capped")).cap(), "fs.read");
+
+        let fresh = p.data;
+        let spath = std::env::temp_dir().join(format!("loft_cap_rt_{}.store", std::process::id()));
+        let spath_str = spath.to_str().unwrap();
+        fresh.save(spath_str).expect("Data::save");
+        let loaded = Data::open(spath_str).expect("Data::open");
+        let _ = std::fs::remove_file(&spath);
+        assert_eq!(
+            loaded.def(loaded.def_nr("n_capped")).cap(),
+            "fs.read",
+            "cap must survive the store round-trip"
+        );
+        crate::ir_schema::compare_data(&fresh, &loaded).expect("round-trip equal incl. cap");
     }
 
     /// @PLN11 arc D micro-bench — wall-clock of producing the native stdlib

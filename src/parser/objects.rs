@@ -225,6 +225,7 @@ impl Parser {
                     self.var_usages(index_var, true);
                     *code = Value::Int(fn_d_nr as i32);
                     self.data.def_used(fn_d_nr);
+                    self.record_sandbox_fn_ref(fn_d_nr); // @PLN86 L4
                     // A forward-declared value-returning fn re-resolved on pass 2
                     // reaches here; same buffer-exclusion as the bare-name path.
                     let arg_types = self.fn_ref_arg_types(fn_d_nr);
@@ -447,6 +448,7 @@ impl Parser {
                 } else {
                     *code = Value::Int(fn_d_nr as i32);
                     self.data.def_used(fn_d_nr);
+                    self.record_sandbox_fn_ref(fn_d_nr); // @PLN86 L4
                     let arg_types = self.fn_ref_arg_types(fn_d_nr);
                     let ret_type = self.data.def(fn_d_nr).returned().clone();
                     t = Type::Function(arg_types, Box::new(ret_type), crate::data::Deps::none());

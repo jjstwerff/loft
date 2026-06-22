@@ -121,6 +121,8 @@ pub mod registry_keys;
 #[cfg(feature = "registry")]
 pub mod registry_signing;
 pub mod runtime_error;
+/// @PLN86 — sandbox policy model (capability-group allow-lists + the loft.toml parser).
+pub mod sandbox;
 mod stack;
 pub mod timeout;
 pub mod triggers;

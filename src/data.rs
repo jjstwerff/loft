@@ -2395,6 +2395,15 @@ pub struct Definition {
     pub rust: String,
     /// Native symbol name for `#native "symbol"` extern dispatch; empty if not native.
     pub native: String,
+    /// `#cap "group"` capability group this function represents (@PLN86); empty if
+    /// unannotated.  The sandbox admission walk gates a TRUSTED symbol against the
+    /// active profile's allowed groups; a sandboxed def's own `#cap` is ignored
+    /// (its capabilities derive from what it reaches, not a self-label).
+    ///
+    /// Persisted through the IR store (`DEF_CAP`) so a `#cap`-tagged stdlib loaded
+    /// from the `LOFT_STDLIB_CACHE` bundle still gates correctly; mirrored in
+    /// `tools/ir_schema/ir.loft` (`Definition.cap`).
+    pub cap: String,
     /// Interpreter operator code
     pub op_code: u16,
     /// Position inside the generated code
@@ -2498,6 +2507,12 @@ impl Definition {
     #[must_use]
     pub fn native(&self) -> &str {
         &self.native
+    }
+
+    /// `#cap "group"` capability group (@PLN86), or empty if unannotated.
+    #[must_use]
+    pub fn cap(&self) -> &str {
+        &self.cap
     }
 
     /// Source-file id this definition was parsed from.
@@ -3262,6 +3277,7 @@ impl Data {
             returned_not_null: false,
             rust: String::new(),
             native: String::new(),
+            cap: String::new(),
             op_code: u16::MAX,
             known_type: u16::MAX,
             code_position: 0,
