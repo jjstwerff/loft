@@ -192,8 +192,22 @@ the signal explicit). `size_code` (`stack.rs`) is the same family, same disposit
       `has_ref_params` adopt-vs-copy sites still re-derive (they encode "any
       visible ref param", a coarser proxy than "the return borrows a param").
       Their clean collapse depends on A.2.
-- [ ] C.0–C.5 (the keystone)
-- [ ] D.1–D.2 (the sentinel table)
+- [x] **C.0–C.3 — `for_each_owned_child` keystone** (commit `4ff673f8`): `remove_claims`
+      collapsed 9 arms/174 lines → 2 arms/41 lines onto one carried heap-cascade walk;
+      `copy_claims_hash_body` reads the keystone spine. Over-unification guard:
+      `validate_claims` (defensive mirror, bounds-checks before deref) + `copy_claims`
+      destination construction (genuinely per-kind) left separate. Matrix byte-identical
+      both backends; @P290/@P306/@P318/@P309 repros green. C.4/C.5 (construction/null-init
+      + keyed re-dispatch) routed forward.
+- [x] **D.1–D.2 — typed-null encoders converged onto `DbRef::NULL`** (commit `526cac22`
+      → cherry-picked `83d0484e`): every heap-ref null encoder reads one `DbRef::NULL`
+      const (`keys.rs`) instead of re-spelling `DbRef { store_nr: MAX, … }`; the
+      `pos:0`/`pos:8` byte-drift is gone. **Bonus H4 fix:** `fn f() -> character { return
+      null }` was native-E0308 / interp-tolerant (the `character` null was routed to the
+      integer sentinel) — now `OpConvCharacterFromNull`, byte-identical both backends.
+      Over-unification guard: `STRING_NULL` (text `Str` sentinel) + interp `database.null()`
+      (allocates a real null *store*, a different mechanism) left distinct. Regression
+      `tests/scripts/407-cluster-d-null-sentinel-roundtrip.loft`.
 - [ ] B (deferred — unverifiable until a trigger appears)
 
 ### A.0 boundary-matrix RED findings (pre-existing return-ownership bugs)
