@@ -67,7 +67,7 @@ impl Output<'_> {
                     // in fn-ref context (if-else branch), emit tuple.
                     return write!(
                         w,
-                        "({}_i32 as u32, loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }})",
+                        "({}_i32 as u32, loft::keys::DbRef::NULL)",
                         node.int_value()
                     );
                 } else if self.i32_literal_context {
@@ -163,10 +163,7 @@ impl Output<'_> {
                 if let Some(name) = clos_name {
                     return write!(w, "({d_nr}_u32, var_{name})");
                 }
-                return write!(
-                    w,
-                    "({d_nr}_u32, loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }})"
-                );
+                return write!(w, "({d_nr}_u32, loft::keys::DbRef::NULL)");
             }
             ValueType::Parallel => {
                 return write!(w, "/* parallel {{}} — not supported in native codegen */");
@@ -859,7 +856,7 @@ impl Output<'_> {
             )?;
             "__vc_hbuf".to_string()
         } else {
-            "loft::keys::DbRef { store_nr: u16::MAX, rec: 0, pos: 0 }".to_string()
+            "loft::keys::DbRef::NULL".to_string()
         };
         // match on .0 (d_nr) of the (u32, DbRef) fn-ref tuple.
         write!(w, "match var_{var_name}.0 {{")?;
@@ -1041,7 +1038,12 @@ impl Output<'_> {
             | Type::Hash(_, _, _)
             | Type::Index(_, _, _)
             | Type::Enum(_, true, _) => {
-                write!(w, "DbRef {{ store_nr: u16::MAX, rec: 0, pos: 8 }}")
+                // The canonical heap-ref null is `DbRef::NULL` (`keys.rs`), the
+                // ONE source every backend reads — `is_null()` keys off
+                // `store_nr == u16::MAX` and ignores `pos`, so the historical
+                // `pos: 8` literal here was drift, not a distinct sentinel
+                // (Cluster D / H6).
+                write!(w, "DbRef::NULL")
             }
             _ => write!(w, "()"),
         }
@@ -1064,10 +1066,9 @@ impl Output<'_> {
     /// lowering at `parser/operators.rs` synthesises `if _ncc_N { _ncc_N }
     /// else { fallback }` — but `_ncc_N` is a `DbRef`, not a `bool`,
     /// and rustc rejects it with E0308.  The null sentinel for heap
-    /// DbRefs is `DbRef { store_nr: u16::MAX, rec: 0, pos: 8 }` (see
-    /// `write_typed_null` at line ~807), so `.rec != 0` is the
-    /// canonical present-check (mirrors the existing checks throughout
-    /// `codegen_runtime.rs`).
+    /// DbRefs is `DbRef::NULL` (`keys.rs`, `store_nr == u16::MAX`; see
+    /// `write_typed_null`), so `.rec != 0` is the canonical present-check
+    /// (mirrors the existing checks throughout `codegen_runtime.rs`).
     ///
     /// PLAN52 cluster IV (heap-typed value-block `??`): probes 21 / 22 /
     /// 23 / 36 / 40 / 41 / 50.

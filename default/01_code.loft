@@ -761,7 +761,7 @@ fn OpConvRefFromNull() -> reference;
 // Complements `OpConvRefFromNull` for writes to pre-reserved slots.
 fn OpInitRef(pos: const u16);
 fn OpNullRefSentinel() -> reference;
-#rust"DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }}"
+#rust"DbRef::NULL"
 // Plan-04 Phase B: positional sentinel init — writes
 // DbRef{store_nr: u16::MAX, rec: 0, pos: 0} at frame slot
 // `stack_pos - pos`.  Does not push onto the eval stack.  Paired

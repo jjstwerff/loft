@@ -1832,11 +1832,7 @@ impl State {
         *self.database.store_mut(&self.stack_cur).addr_mut::<DbRef>(
             self.stack_cur.rec,
             self.stack_cur.pos + self.stack_pos - u32::from(pos),
-        ) = DbRef {
-            store_nr: u16::MAX,
-            rec: 0,
-            pos: 0,
-        };
+        ) = DbRef::NULL;
     }
 
     /// Plan-04 Phase B: positional variant of `create_stack`.
@@ -3543,11 +3539,7 @@ impl State {
                     Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
                 )
             {
-                self.put_stack(crate::keys::DbRef {
-                    store_nr: u16::MAX,
-                    rec: 0,
-                    pos: 8,
-                });
+                self.put_stack(crate::keys::DbRef::NULL);
             }
         }
         self.put_stack(u32::MAX);

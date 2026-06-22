@@ -803,11 +803,7 @@ pub fn run_parallel_queue_ref(
             })
             .collect()
     });
-    let null_db = DbRef {
-        store_nr: u16::MAX,
-        rec: 0,
-        pos: 0,
-    };
+    let null_db = DbRef::NULL;
     let mut refs: Vec<DbRef> = vec![null_db; n_rows];
     let mut adopted: Vec<u16> = Vec::new();
     // Grow parent's allocations to fit the dispenser's high-water
@@ -1769,11 +1765,7 @@ pub(crate) fn read_tuple_at_wide(
                     buf.as_mut_ptr().add(arg_offset),
                     8,
                 );
-                let sentinel = DbRef {
-                    store_nr: u16::MAX,
-                    rec: 0,
-                    pos: 0,
-                };
+                let sentinel = DbRef::NULL;
                 std::ptr::copy_nonoverlapping(
                     (&raw const sentinel).cast::<u8>(),
                     buf.as_mut_ptr().add(arg_offset + 8),

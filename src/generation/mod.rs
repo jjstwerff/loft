@@ -856,8 +856,8 @@ fn collect_scope_hoists(code: &Value) -> std::collections::HashSet<u16> {
 /// `emit_typed_null` (`state/codegen.rs`) pushes on the bytecode stack
 /// (H4 — keep the two in step; do NOT assume they're interchangeable):
 /// - For bool / text / reference / collection types the default-init IS the
-///   null storage form (`255u8` / `STRING_NULL` / the `{u16::MAX,0,8}` DbRef),
-///   so it coincides with the null.
+///   null storage form (`255u8` / `STRING_NULL` / `DbRef::NULL`), so it
+///   coincides with the null.
 /// - For SCALARS (`Integer`, `Character`, `Float`, `Single`) it is the ZERO
 ///   default (`0` / `0.0`), NOT the null sentinel (`i64::MIN` / `NaN`).  Safe
 ///   because a live scalar null never flows through here: the live-null path
@@ -873,9 +873,7 @@ pub(super) fn default_native_value(tp: &Type) -> String {
         Type::Boolean => "255u8".into(),
         Type::Text(_) => "Str::new(loft::state::STRING_NULL)".into(),
         Type::Routine(_) => "0_u32".into(),
-        Type::Function(_, _, _) => {
-            "(0_u32, DbRef { store_nr: u16::MAX, rec: 0, pos: 0 })".into()
-        }
+        Type::Function(_, _, _) => "(0_u32, DbRef::NULL)".into(),
         Type::Reference(_, _)
         | Type::Vector(_, _)
         | Type::Sorted(_, _, _)
@@ -886,7 +884,10 @@ pub(super) fn default_native_value(tp: &Type) -> String {
         // with the store-backed family so it never falls to the `0` default.
         | Type::Spacial(_, _, _)
         // N8b.1: exhausted / uninitialized generator variable.
-        | Type::Iterator(_, _) => "DbRef { store_nr: u16::MAX, rec: 0, pos: 8 }".into(),
+        // The canonical heap-ref null is `DbRef::NULL` (`keys.rs`) — the one
+        // source; `is_null()` ignores `pos`, so the old `pos: 8` was drift
+        // (Cluster D / H6), now converged.
+        | Type::Iterator(_, _) => "DbRef::NULL".into(),
         // N8a.1: a tuple null is the zero-default for each element type.
         Type::Tuple(elems) => {
             // Tuple variables hold Variable-context element types
@@ -1949,7 +1950,7 @@ extern crate loft;"
         )?;
         writeln!(
             w,
-            "    db.const_refs.resize({till}, loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }});"
+            "    db.const_refs.resize({till}, loft::keys::DbRef::NULL);"
         )?;
         for d_nr in 0..till {
             let def = self.data.def(d_nr);
@@ -2922,7 +2923,7 @@ extern crate loft;"
                     use std::fmt::Write as _;
                     let _ = write!(
                         vdb_prologue,
-                        "\n  let mut var_{}: DbRef = DbRef {{ store_nr: u16::MAX, rec: 0, pos: 8 }};",
+                        "\n  let mut var_{}: DbRef = DbRef::NULL;",
                         sanitize(vars.name(v))
                     );
                     self.declared.insert(v);
@@ -3349,10 +3350,7 @@ extern crate loft;"
                         writeln!(w, "  String::new()")?;
                     }
                     Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => {
-                        writeln!(
-                            w,
-                            "  loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }}"
-                        )?;
+                        writeln!(w, "  loft::keys::DbRef::NULL")?;
                     }
                     _ => {
                         writeln!(w, "  Default::default()")?;

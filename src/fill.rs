@@ -1275,11 +1275,7 @@ fn init_ref(s: &mut State) {
 }
 
 fn null_ref_sentinel(s: &mut State) {
-    let new_value = DbRef {
-        store_nr: u16::MAX,
-        rec: 0,
-        pos: 0,
-    };
+    let new_value = DbRef::NULL;
     s.put_stack(new_value);
 }
 

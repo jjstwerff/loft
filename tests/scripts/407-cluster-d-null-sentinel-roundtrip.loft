@@ -1,0 +1,104 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Cluster D (STABILITY_REDFLAGS / H6) — the typed-null encoders converge onto
+// ONE source per representation: scalar nulls go through their per-type
+// `OpConv*FromNull` op, the heap-ref null is the single `DbRef::NULL`
+// (`keys.rs`).  A `null` of every type-kind must round-trip identically on
+// BOTH backends (`--interpret` and `--native`).
+//
+// The `character` cell is the regression that drove the fix: `Parser::null`
+// folded `character` into `OpConvIntFromNull` (the i64 integer sentinel), so a
+// `-> character { return null; }` function emitted `return i64::MIN` into an
+// `i32` return slot — rustc E0308 on `--native` (the interpreter tolerated it).
+// `character` now lowers through `OpConvCharacterFromNull` (the char-domain
+// null `'\0'`), correct on both backends.
+//
+// Hand-computed expected null per type (LOFT.md sentinels):
+//   boolean=255  integer=i64::MIN  float/single=NaN  character='\0'
+//   text=internal-null-ptr  reference/value-enum/vector=DbRef::NULL.
+
+struct S      { x: integer }
+enum Shape    { Circle { r: integer }, Square { s: integer } }  // value enum (heap)
+struct FullU8 { x: integer limit(0, 255) }
+struct FullI8 { x: integer limit(-128, 127) }
+
+// scalar return-null encoders
+fn n_int()    -> integer   { return null; }
+fn n_float()  -> float     { return null; }
+fn n_single() -> single    { return null; }
+fn n_bool()   -> boolean   { return null; }
+fn n_char()   -> character { return null; }   // the E0308 regression cell
+fn n_text()   -> text      { return null; }
+
+// heap-ref return-null encoders (DbRef::NULL on both backends)
+fn n_struct(c: boolean) -> S               { if c { S { x: 1 } } else { null } }
+fn n_vec(c: boolean)    -> vector<integer> { if c { [1, 2] } else { null } }
+fn n_enumv(c: boolean)  -> Shape           { if c { Circle { r: 3 } } else { null } }
+
+// character null in an if-branch (write_typed_null's Character arm)
+fn pick_char(c: boolean) -> character { if c { 'a' } else { null } }
+
+fn main() {
+  // scalars: null round-trips, real value is not swallowed
+  assert(n_int()    == null, "int null");
+  assert(n_float()  == null, "float null");
+  assert(n_single() == null, "single null");
+  assert(n_bool()   == null, "bool null");
+  assert(n_char()   == null, "char null (return path)");
+  assert(n_text()   == null, "text null");
+
+  // boolean `== null` is RAW (null != false); `!null` coerces to false
+  assert(n_bool() != false, "bool null != false (raw)");
+  assert(!n_bool(), "bool null coerces false under not");
+
+  // ?? discharge falls to the default for each scalar null
+  assert((n_int()   ?? 99)  == 99,  "int ?? default");
+  assert((n_char()  ?? 'z') == 'z', "char ?? default");
+  assert((n_text()  ?? "d") == "d", "text ?? default");
+
+  // character null in an if-branch round-trips, value branch is not null
+  assert(pick_char(false) == null, "if-branch char null");
+  assert(pick_char(true)  == 'a',  "if-branch char value");
+
+  // `if { scalar } else { null }` drives the interp `emit_typed_null` arms
+  // (codegen.rs) — bool/char/int null must round-trip on both backends.
+  cond = false;
+  bif = if cond { true } else { null };
+  assert(bif == null, "bool if/else null arm");
+  cif = if cond { 'a' } else { null };
+  assert(cif == null, "char if/else null arm");
+  iif = if cond { 7 } else { null };
+  assert(iif == null, "int if/else null arm");
+  ival = if !cond { 7 } else { null };
+  assert(ival == 7, "int if/else value arm");
+
+  // heap-ref returns: null round-trips, value branch is not null
+  assert(n_struct(false) == null, "struct(ref) null");
+  assert(n_struct(true).x == 1,   "struct(ref) value");
+  assert(n_vec(false)    == null, "vector null");
+  assert(len(n_vec(true)) == 2,   "vector value len");
+  assert(n_enumv(false)  == null, "value-enum null");
+  assert(n_enumv(true)   != null, "value-enum value");
+
+  // narrow nullable fields round-trip null, extremes survive
+  assert(FullU8 { x: null }.x == null, "u8 field null");
+  assert(FullI8 { x: null }.x == null, "i8 field null");
+  assert(FullU8 { x: 255 }.x == 255,   "u8 max not null");
+  assert(FullI8 { x: -128 }.x == -128, "i8 min not null");
+
+  // reassign field to null round-trips
+  s = FullI8 { x: 10 };
+  s.x = null;
+  assert(s.x == null, "i8 reassign null");
+  s.x = 100;
+  assert(s.x == 100, "i8 reassign value");
+
+  // vector element nullable narrow
+  v = [FullU8 { x: 100 }, FullU8 { x: null }, FullU8 { x: 255 }];
+  assert(v[0].x == 100,  "vec elem value");
+  assert(v[1].x == null, "vec elem null");
+  assert(v[2].x == 255,  "vec elem max");
+
+  println("cluster-d-null-sentinel-roundtrip: ok");
+}

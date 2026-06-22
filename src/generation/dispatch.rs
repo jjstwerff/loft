@@ -591,10 +591,7 @@ impl Output<'_> {
                 {
                     write!(w, ".to_string()")?;
                 } else if wrap_fn_ref {
-                    write!(
-                        w,
-                        " as u32, loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }})"
-                    )?;
+                    write!(w, " as u32, loft::keys::DbRef::NULL)")?;
                 } else if matches!(variables.tp(var), Type::Routine(_))
                     && !matches!(to, Value::Null)
                 {
@@ -656,7 +653,7 @@ impl Output<'_> {
             _ => false,
         };
         if is_elm || variables.is_inline_ref(var) || !owns_store {
-            write!(w, "DbRef {{ store_nr: u16::MAX, rec: 0, pos: 8 }}")?;
+            write!(w, "DbRef::NULL")?;
         } else {
             let ref_buf_type_id = {
                 let var_tp = variables.tp(var).clone();
@@ -735,7 +732,7 @@ impl Output<'_> {
                 // a loop — the C3-incremental store exhaustion that tripped
                 // `assert!(store.free)`).  Matches the interpreter, which
                 // null-inits ref locals to a sentinel, not an allocation.
-                write!(w, "DbRef {{ store_nr: u16::MAX, rec: 0, pos: 8 }}")?;
+                write!(w, "DbRef::NULL")?;
             } else if first {
                 writeln!(w, "stores.null_named(\"var_{name}\");")?;
                 self.indent(w)?;
