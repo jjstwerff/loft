@@ -1697,6 +1697,32 @@ use a separate collection or add after the loop"
             let elm_tp_clone = (**elm_tp).clone();
             let vec_tp = Type::Vector(Box::new(elm_tp_clone.clone()), Deps::none());
             self.change_var(to, &vec_tp);
+            let field_read = !matches!(code.unspan(), Value::Var(_));
+            // #426 — a struct vector-FIELD read (`af = bx.v`, `field_read`) must
+            // strip `af`'s inherited base dep on BOTH passes, then consume one
+            // `elm`-name slot on both.  `Function::unique`'s per-prefix counter has
+            // to advance IDENTICALLY across passes: a family created on only one
+            // pass shifts every other family's numbering, so a later `_elm_N`
+            // re-resolves to a pass-1 var backed by a different store — silent
+            // corruption (a nested vector literal `[[…]]` after `af = bx.v` built
+            // its inner element into an orphaned store, reading back len 0).  The
+            // field-read used to take the whole pass-2-only branch below, so on
+            // pass 1 its dep stayed non-empty (`vector_needs_db` false → no `elm`)
+            // while pass 2 stripped it (`vector_needs_db` true → one `elm`): a
+            // one-slot drift.  Stripping + advancing the counter on pass 1 too
+            // removes the drift.  The var-copy case (`b = a`) is untouched here —
+            // its strip stays pass-2-only (line below), since it never had the
+            // pass-1 dep-mismatch (the RHS var already owns an independent store).
+            if field_read && self.first_pass {
+                let inherited = self.vars.tp(var_nr).depend();
+                for d in inherited {
+                    self.vars.make_independent(var_nr, d);
+                }
+                if self.vector_needs_db(var_nr, &elm_tp_clone, true) {
+                    self.unique_elm_var(&lhs_parent_tp, &elm_tp_clone, var_nr);
+                }
+                return Type::Void;
+            }
             if !self.first_pass {
                 // Break the alias.  The standard type-inference copied the RHS
                 // var's store dep onto v (making v *borrow* rhs's storage — the
