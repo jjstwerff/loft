@@ -446,6 +446,11 @@ Mutating filesystem operations return a `FileResult` enum:
 | `move(from: text, to: text) -> FileResult` | Renames or relocates a file within the project. |
 | `mkdir(path: text) -> FileResult` | Creates a single directory level. |
 | `mkdir_all(path: text) -> FileResult` | Creates a directory and all missing parents. |
+| `is_dir(path: text) -> boolean` | Returns `true` if the path exists and is a directory. |
+| `is_file(path: text) -> boolean` | Returns `true` if the path exists and is a regular file. |
+| `list_dir(path: text) -> vector<text>` | Entry names (base names, sorted) of a directory; empty when not a readable directory. |
+| `read_bytes(path: text) -> vector<u8>` | Reads the whole file as raw bytes; empty on missing/unreadable. Binary-exact (round-trips with `write_bytes`). |
+| `write_bytes(path: text, bytes: vector<u8>) -> boolean` | Writes raw bytes to a file, truncating existing content; `true` on success. |
 | `set_file_size(self: File, size: integer) -> FileResult` | Truncates or extends a file to exactly `size` bytes. |
 
 ### Durable stores (`@PLN43`)

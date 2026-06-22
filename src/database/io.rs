@@ -688,6 +688,94 @@ impl Stores {
             }
         }
     }
+
+    /// List the entry NAMES of directory `path` as a `vector<text>` (base
+    /// names, not full paths — matching the `host_fs_list_dir` host shape).
+    /// Entries are sorted for a deterministic order.  Returns an empty vector
+    /// when the path is not a readable directory.  Drives the `list_dir`
+    /// builtin on both backends via its `#rust` template.
+    #[must_use]
+    pub fn fs_list_dir(&mut self, path: &str) -> DbRef {
+        // #255 / @PLN9: re-home a relative dir path against the program anchor.
+        let resolved = self.resolve_path(path);
+        #[cfg(feature = "wasm")]
+        let mut names = crate::wasm::host_fs_list_dir(&resolved);
+        #[cfg(not(feature = "wasm"))]
+        let mut names: Vec<String> = {
+            let mut v = Vec::new();
+            if let Ok(iter) = std::fs::read_dir(std::path::Path::new(&resolved)) {
+                for entry in iter.flatten() {
+                    // Keep only the final path component; skip non-UTF-8 names
+                    // (that ENTRY degrades, never the whole listing).
+                    if let Some(name) = entry.file_name().to_str() {
+                        v.push(name.to_owned());
+                    }
+                }
+            }
+            v
+        };
+        names.sort();
+        self.text_vector(&names)
+    }
+
+    /// Read the entire file `path` as a `vector<u8>`.  Returns an empty vector
+    /// on a missing file / IO error / non-regular path.  Binary-exact: a
+    /// non-UTF-8 blob round-trips byte-for-byte through `fs_write_bytes`.
+    /// Drives the `read_bytes` builtin on both backends via its `#rust`
+    /// template.
+    #[must_use]
+    pub fn fs_read_bytes(&mut self, path: &str) -> DbRef {
+        // #255 / @PLN9: re-home against the program anchor.
+        let resolved = self.resolve_path(path);
+        #[cfg(feature = "wasm")]
+        let data: Vec<u8> = {
+            // VirtFS read: size the file then read it whole.
+            let n = crate::wasm::host_fs_file_size(&resolved).max(0) as usize;
+            crate::wasm::host_fs_read_bytes(&resolved, n).unwrap_or_default()
+        };
+        #[cfg(not(feature = "wasm"))]
+        let data: Vec<u8> = std::fs::read(std::path::Path::new(&resolved)).unwrap_or_default();
+        // Owning field is a 4-byte vector pointer; the inner record holds the
+        // bytes one-per-element (length at offset 4, payload at offset 8).
+        let vec = self.database(4);
+        let count = data.len() as u32;
+        let rec = vector::alloc_vector_from_bytes(self.store_mut(&vec), 1, count, &data);
+        self.store_mut(&vec).set_u32_raw(vec.rec, vec.pos, rec);
+        vec
+    }
+
+    /// Write `bytes` (a `vector<u8>`) to file `path`, truncating any existing
+    /// content.  Returns `true` on success.  The inverse of `fs_read_bytes`;
+    /// the pair round-trips a non-UTF-8 blob byte-for-byte.  Drives the
+    /// `write_bytes` builtin on both backends via its `#rust` template.
+    #[must_use]
+    pub fn fs_write_bytes(&mut self, path: &str, bytes: DbRef) -> bool {
+        // #255 / @PLN9: re-home against the program anchor.
+        let resolved = self.resolve_path(path);
+        // Read the byte payload out of the `vector<u8>` (same layout
+        // `text_from_bytes_native` reads): inner record at (bytes.rec,
+        // bytes.pos), live length at offset 4, payload from offset 8.
+        let length = vector::length_vector(&bytes, &self.allocations);
+        let data: Vec<u8> = if bytes.rec == 0 || bytes.pos == 0 || length == 0 {
+            Vec::new()
+        } else {
+            let store = self.store_mut(&bytes);
+            let vec_rec = store.get_u32_raw(bytes.rec, bytes.pos);
+            if vec_rec == 0 {
+                Vec::new()
+            } else {
+                store.buffer(vec_rec)[..length as usize].to_vec()
+            }
+        };
+        #[cfg(feature = "wasm")]
+        {
+            crate::wasm::host_fs_write_bytes(&resolved, &data) == 0
+        }
+        #[cfg(not(feature = "wasm"))]
+        {
+            std::fs::write(std::path::Path::new(&resolved), &data).is_ok()
+        }
+    }
 }
 
 #[cfg(test)]

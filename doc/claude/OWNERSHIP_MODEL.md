@@ -20,6 +20,55 @@ Corollary (from [CODEGEN_METHOD.md](CODEGEN_METHOD.md)): a store-lifetime bug is
 then never a *codegen* bug — it is a **hole in the ownership computation**. Fix the
 fact, not the generator.
 
+## The law — reference by default, `&` to reassign back
+
+A binding or parameter to a heap value — struct, vector, element — **aliases** the
+source; it does not copy. In-place mutation *through* the alias reaches the original,
+because they share one store: `o.field = x`, `o.v[i] = y`, and `a = vv[0]; a[i] = z` all
+write back — no annotation. That is loft's actual model (verified on both backends), and
+`a = vv[0]` being a view is a **feature**, not the #426 bug it was first read as.
+
+The one thing an alias cannot do silently is **replace the whole binding**:
+`o = Obj{...}` (rebinding the variable to a fresh value) is a **local rebind** — it does
+nothing to the source. To make a reassignment write back, prefix the source with **`&`**:
+
+> **`&` means "reassigning this binding writes back to the source variable."** One
+> meaning, uniform across scalars and structs.
+>
+> | operation | plain | `&` |
+> |---|---|---|
+> | in-place mutate (`o.field = x`, `o.v[i] = y`) | writes through (heap is shared) | same |
+> | **reassign the binding** (`o = Obj{...}`) | local rebind — source untouched | **writes back to the source** |
+> | scalar (`n = n + 1`) | local (scalars are by-value) | writes back |
+
+- **`&` is load-bearing exactly when the body reassigns the binding** — and nowhere
+  else. A `&` on a struct whose body only mutates fields is **redundant** (the mutation
+  already writes through). That redundancy is a lint (W4: "`&` here has no effect; `&`
+  only matters when you reassign the binding"). It is the fix for the recurring confusion
+  that `&Object` is needed to *mutate* an object — it is not; it is needed to *replace*
+  one.
+- **No lifetime annotations.** A `&` is safe when the source outlives the binding; the
+  borrow checker infers that from scope (rejecting `o = &mk()`, a `&` to a temporary),
+  exactly as it already does for `&` *parameters* (the caller outlives the call). C38
+  declined reference *types* with annotations; this is a binding *notation* the analysis
+  resolves itself.
+- **Aliasing is bounded, not a footgun.** The single owner still frees once; an alias is
+  a tracked borrow in `deps` (the borrow system above). `&` makes the one non-obvious
+  case — reassignment write-back — *explicit*, so no silent "did this propagate?"
+  remains. The copy-vs-view question (#426 A/C) dissolves the other way from the original
+  read: the view is the documented default, `&` covers the rest.
+- **The payoff — the store-lifetime decisions collapse.** Once "is this binding a borrow
+  of that store?" is one carried `deps` fact, the N places that re-derive ownership
+  (#415's struct-field branch, the `a = x.v[i]` path, `has_ref_params`, the return-source
+  set, the `block_result`/`ref_return` funnel, `reclaim_safe`) just read it. The
+  store-lifetime bug class (Cluster A, #415, #426, the free-suppress + return-buffer
+  leaks) is the *symptom* of computing it N times; landing the fact once closes the class.
+- **Staging.** This is **loft's current behaviour minus one change**: make a non-`&`
+  whole-binding reassignment a *local rebind* (today it overwrites the source in place),
+  and let `&` carry the write-back — the existing `&vector<T>` param mechanism, now at
+  bindings. Then ship the W4 redundant-`&` lint. **No value-semantics migration, no
+  copy-on-write:** `a = vv[0]` stays a view, so #426 A/C are already correct.
+
 ## Why — the bug class is the symptom of an incomplete ownership system
 
 The store-lifetime class (#405/#406/#409/#410 this cycle, cluster II of @PLN85) is

@@ -1,0 +1,67 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// #430 — the five filesystem builtins list_dir / is_dir / is_file /
+// read_bytes / write_bytes were missing from the builtin table: every call
+// failed "Unknown function" on BOTH backends even though the underlying
+// host implementations existed.  This wires them through the `n_<func>`
+// native-function path (interp impl in src/native.rs, native codegen via the
+// `#rust` template in default/02_files.loft) and proves them identically on
+// interp and --native.
+//
+// The load-bearing check is the BINARY round-trip: write_bytes a non-UTF-8
+// blob, read_bytes it back, assert byte-equal — so the vector<u8> path moves
+// raw bytes without a UTF-8 detour.
+
+// @PLN9: cwd-relative paths — this test does cwd-relative file I/O, staying
+// inside the project directory so valid_path / resolve_path accept it.
+#cwd
+fn cleanup() {
+  delete("p430_dir/blob.bin");
+  delete("p430_dir");
+}
+
+fn main() {
+  cleanup();
+
+  // --- mkdir_all + is_dir / is_file on a directory ---
+  r = mkdir_all("p430_dir");
+  assert(r == FileResult.Ok, "mkdir_all should succeed");
+  assert(is_dir("p430_dir"), "is_dir on a directory is true");
+  assert(is_file("p430_dir") == false, "is_file on a directory is false");
+
+  // --- write_bytes a NON-UTF-8 blob ---
+  blob: vector<u8> = [0, 255, 1, 254, 128];
+  ok = write_bytes("p430_dir/blob.bin", blob);
+  assert(ok, "write_bytes should succeed");
+  assert(is_file("p430_dir/blob.bin"), "is_file on a file is true");
+  assert(is_dir("p430_dir/blob.bin") == false, "is_dir on a file is false");
+
+  // --- read_bytes back: byte-exact round-trip ---
+  back = read_bytes("p430_dir/blob.bin");
+  assert(back.len() == 5, "read_bytes returns 5 bytes");
+  assert(back[0] == 0, "byte 0 round-trips");
+  assert(back[1] == 255, "byte 1 round-trips (non-UTF-8)");
+  assert(back[2] == 1, "byte 2 round-trips");
+  assert(back[3] == 254, "byte 3 round-trips (non-UTF-8)");
+  assert(back[4] == 128, "byte 4 round-trips (non-UTF-8)");
+
+  // --- list_dir contains the entry name (base name, not full path) ---
+  entries = list_dir("p430_dir");
+  found = false;
+  for e in entries {
+    if e == "blob.bin" { found = true; }
+  }
+  assert(found, "list_dir lists blob.bin by base name");
+
+  // --- is_dir / is_file on a path that does not exist ---
+  assert(is_dir("p430_dir/nope") == false, "is_dir on a missing path is false");
+  assert(is_file("p430_dir/nope") == false, "is_file on a missing path is false");
+
+  // --- read_bytes of a missing file is an empty vector (no crash) ---
+  empty = read_bytes("p430_dir/nope");
+  assert(empty.len() == 0, "read_bytes of a missing file is empty");
+
+  cleanup();
+  println("430-native-file-builtins ok");
+}

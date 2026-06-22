@@ -1,0 +1,44 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Native-only store-leak regression: a `match` arm that binds a VECTOR-typed
+// enum payload (`match h { Bytes { v } => … }`) is a BORROWED VIEW into the
+// subject's record — it must NOT allocate a backing store.  The match binding
+// is `skip_free` (no `OpFreeRef` is emitted), so an allocated store would have
+// no free site and leak one store per evaluation.
+//
+// The interpreter's `InitRefSentinel` never allocates; native `emit_null_dbref`
+// used to re-derive ownership from the (empty) dep list instead of reading the
+// `skip_free` ownership fact, so the vector-typed bind allocated-then-leaked.
+// It now reads `skip_free` and emits the null sentinel, matching the
+// interpreter.  Looped so any per-call leak multiplies past a 1-off tolerance.
+//
+// The struct→enum→vector wrapper and the bare-enum forms share the one root;
+// the struct-with-vector (no enum) control stays clean either way.
+
+enum Holder { Bytes { v: vector<u8> }, Empty }
+struct Box { value: Holder }
+
+fn relen(h: Holder) -> integer {
+  match h {
+    Bytes { v } => len(v),
+    Empty => -1,
+  }
+}
+
+pub fn test() {
+  total = 0;
+  for _ in 0..40 {
+    bs: vector<u8> = [];
+    for i in 0..8 { bs += [(i + 1) as u8]; }
+    // bare-enum local holding a vector payload
+    h = Bytes { v: bs };
+    total += relen(h);
+    // struct wrapping the enum (repro 1 shape)
+    cs: vector<u8> = [];
+    for i in 0..5 { cs += [(i + 1) as u8]; }
+    b = Box { value: Bytes { v: cs } };
+    total += relen(b.value);
+  }
+  assert(total == 40 * (8 + 5), "total={total}");
+}

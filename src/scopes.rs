@@ -571,6 +571,7 @@ impl Scopes {
                     self.loops[self.loops.len() - *lv as usize - 1],
                     &Type::Void,
                     u16::MAX,
+                    &HashSet::new(),
                 );
                 if ls.is_empty() {
                     Value::Break(*lv)
@@ -587,6 +588,7 @@ impl Scopes {
                     self.loops[self.loops.len() - *lv as usize - 1],
                     &Type::Void,
                     u16::MAX,
+                    &HashSet::new(),
                 );
                 if ls.is_empty() {
                     Value::BreakWith(*lv, Box::new(scanned_val))
@@ -602,6 +604,7 @@ impl Scopes {
                     self.loops[self.loops.len() - *lv as usize - 1],
                     &Type::Void,
                     u16::MAX,
+                    &HashSet::new(),
                 );
                 if ls.is_empty() {
                     Value::Continue(*lv)
@@ -1358,37 +1361,47 @@ impl Scopes {
         to_scope: u16,
     ) -> Vec<Value> {
         let ret_var = returned_var(expr);
-        // @PLN85 cluster II — when the return is a `match`/`if` whose arms differ,
-        // `returned_var` gives up (`u16::MAX`) and the per-arm buffers get freed at
-        // scope exit even though they are transferred to the caller (the freed-
-        // return bug, #405 / probe 05). Mark the full return-source set do-not-free.
-        // NARROW: only when `returned_var` actually missed (`ret_var == MAX`) AND
-        // the source is a VECTOR buffer — single-var returns keep their existing
-        // (correct) `in_ret` handling, and keyed (`hash`/`sorted`/`index`) / enum
-        // returns are left alone (marking them frees-suppresses buffers that must
-        // be freed → UAF/OOB regressions).
-        if is_return && ret_var == u16::MAX {
+        // @PLN85 cluster II / A.1 part i (OWNERSHIP_MODEL row 100, invariant #5
+        // "per binding, per path, complete") — the return-source SET, not the
+        // single `returned_var`, drives free-suppression.  `returned_var`
+        // collapses an arms-differ `match`/`if` to `u16::MAX`, which would free
+        // every arm's transferred buffer at scope exit (the freed-return bug,
+        // #405 / probe 05).  `collect_return_sources` is the union of every arm's
+        // terminal var — the values this return transfers to the caller.
+        //
+        // The suppression is PATH-LOCAL: it is computed per `free_vars`
+        // invocation and consumed only by THIS scope-exit's `get_free_vars`, so a
+        // variable transferred on this return path is suppressed here while the
+        // SAME variable, dead on a sibling path (an early `return e` vs a tail
+        // `return [..]`, or the `null` arm of a nullable return), is still freed
+        // by its own path's sweep.  A single global `skip_free` bit cannot encode
+        // that path-dependence — marking the source do-not-free everywhere
+        // over-suppresses and LEAKS the dead-path allocation (repro_p365's
+        // `via_local`/`nested`, 25-nullable's `maybe_row`).  So the set is passed
+        // down, not stamped onto the variable.
+        let return_sources: HashSet<u16> = if is_return {
             let mut sources = Vec::new();
             collect_return_sources(expr, &mut sources);
-            for v in sources {
-                if !matches!(function.tp(v), Type::Vector(_, _)) {
-                    continue;
-                }
-                let deps = function.tp(v).depend();
-                if deps.is_empty() {
-                    // Directly-owned terminal: the terminal IS the freed store.
-                    function.set_skip_free(v);
-                } else {
-                    // Borrowing terminal (`_vec_N["__vdb_N"]`): the dep buffer is
-                    // what `get_free_vars` frees. Mark the dep, NOT the borrowing
-                    // terminal (marking the latter makes native skip declaring it).
-                    for d in deps {
-                        function.set_skip_free(d);
-                    }
-                }
+            // A nullable return (`if b { Struct{} } else { null }`) leaves the
+            // present arm's work-ref placeholder orphaned on the null path.  When
+            // a null arm is reachable, do NOT SET-suppress a Reference/Enum work-
+            // ref source — hand it to the standard work-ref free path so the
+            // orphan is freed.  Vector sources are unaffected (their backing is
+            // NRVO-delivered, not orphaned).  See `return_has_null_arm`.
+            let null_sentinel_nr = data.def_nr("OpNullRefSentinel");
+            if return_has_null_arm(expr, null_sentinel_nr) {
+                sources.retain(|&v| {
+                    !matches!(
+                        function.tp(v),
+                        Type::Reference(_, _) | Type::Enum(_, true, _)
+                    )
+                });
             }
-        }
-        let mut ls = self.get_free_vars(function, data, to_scope, tp, ret_var);
+            sources.into_iter().collect()
+        } else {
+            HashSet::new()
+        };
+        let mut ls = self.get_free_vars(function, data, to_scope, tp, ret_var, &return_sources);
         // The B5-L3 wrap (Set(__ret_N, expr); free ops; Return(Var(__ret_N)))
         // must not fire when `expr` is already a `Return` or contains one
         // at its tail — otherwise we'd emit `let _ret = return …` (E0308 in
@@ -1593,19 +1606,50 @@ impl Scopes {
         to_scope: u16,
         tp: &Type,
         ret_var: u16,
+        return_sources: &HashSet<u16>,
     ) -> Vec<Value> {
         let scope_debug = std::env::var("LOFT_LOG").as_deref() == Ok("scope_debug");
         let mut ls = Vec::new();
         let vars = self.variables(to_scope);
         if scope_debug {
             eprintln!(
-                "[get_free_vars] fn={} to_scope={to_scope} scope={} vars={vars:?} ret_var={ret_var}",
+                "[get_free_vars] fn={} to_scope={to_scope} scope={} vars={vars:?} ret_var={ret_var} \
+                 return_sources={return_sources:?}",
                 data.def(self.d_nr).name,
                 self.scope
             );
         }
+        // @PLN85 A.1 part i — the directly-owned heap BUFFER of EACH transferred
+        // return arm (the union-of-arms SET, not just `returned_var`'s single
+        // var) is freed by the caller, so suppress its scope-exit free here.
+        // PATH-LOCAL: `return_sources` is this return's set, so a source dead on
+        // a sibling path is absent and still freed by that path's sweep (no
+        // global `skip_free` stamp — that would over-suppress and leak the
+        // dead-path allocation).  The dep buffer of a BORROWING terminal
+        // (`_vec_N["__vdb_N"]`) is handled in the `in_ret` computation below.
+        //
+        // The SET drives suppression ONLY for the heap-buffer block (Vector /
+        // Reference / Enum / keyed).  TEXT and TUPLE returns keep their own,
+        // mature free paths (`OpFreeText` + the B5-L3 `__ret_N` text hoist;
+        // per-element tuple frees) — a `match`-returning-text whose owned
+        // `__work_N` buffer is alive but unused on a sibling arm MUST still be
+        // freed, and short-circuiting the whole iteration on `return_sources`
+        // would leak it (the enum-vector param-return `show()` regression).
+        let suppress_source = |function: &Function, v: u16| {
+            return_sources.contains(&v)
+                && matches!(
+                    function.tp(v),
+                    Type::Reference(_, _)
+                        | Type::Vector(_, _)
+                        | Type::Enum(_, true, _)
+                        | Type::Sorted(_, _, _)
+                        | Type::Hash(_, _, _)
+                        | Type::Index(_, _, _)
+                        | Type::Spacial(_, _, _)
+                )
+        };
         for v in vars {
-            if v == ret_var {
+            if v == ret_var || suppress_source(function, v) {
                 continue;
             }
             // T1.3: tuple scope exit — free owned elements in reverse index order.
@@ -1665,7 +1709,16 @@ impl Scopes {
                         crate::data::DepEntry::CalleeFrame(w) => w == v,
                     })
                 });
+                // @PLN85 A.1 part i — `v` is the dep BUFFER of a borrowing
+                // return-source terminal (`_vec_N["__vdb_N"]`, where `_vec_N` is
+                // in `return_sources` and its dep names `v`): the buffer's store
+                // is what the caller adopts, so suppress it here.  Path-local for
+                // the same reason as the directly-owned case above.
+                let backs_return_source = return_sources
+                    .iter()
+                    .any(|&src| src != v && function.tp(src).depend().contains(&v));
                 let in_ret = ret_borrows_v
+                    || backs_return_source
                     || ret_var != u16::MAX && function.tp(ret_var).depend().contains(&v);
                 // H2 step-5 sentinel: the BLOCK-RESULT type's deps were
                 // read here for years under the positional guess; the
@@ -2384,6 +2437,40 @@ fn collect_return_sources(expr: &Value, out: &mut Vec<u16>) {
         }
         Value::Span(b) => collect_return_sources(&b.1, out),
         _ => {}
+    }
+}
+
+/// @PLN85 A.1 part i — does this return expression have a reachable arm whose
+/// terminal is the typed-null sentinel (`OpNullRefSentinel` / `Value::Null`)?
+///
+/// A nullable `if b { Struct{} } else { null }` allocates the present arm's
+/// work-ref placeholder (`__ref_N`) at function entry, but the `null` arm
+/// returns the sentinel and leaves that placeholder ORPHANED.  The SET-driven
+/// free-suppression must therefore NOT suppress that work-ref: whether it is
+/// transferred (present path) or orphaned-and-must-free (null path) is a RUNTIME
+/// decision, not a static one — so the SET hands it back to the standard
+/// work-ref free path (which frees the orphan correctly).  Resolving the runtime
+/// split (NRVO-delivering each arm into `__retbuf`, or a conditional free) is the
+/// callee-side control.rs / native work, out of scope-analysis's reach.
+///
+/// `null_sentinel_nr` is `OpNullRefSentinel`'s def number (resolved by the
+/// caller, which holds `data`).
+fn return_has_null_arm(expr: &Value, null_sentinel_nr: u32) -> bool {
+    match expr.unspan() {
+        Value::Null => true,
+        Value::Call(d, _) => *d == null_sentinel_nr,
+        Value::If(_, t, f) => {
+            return_has_null_arm(t, null_sentinel_nr) || return_has_null_arm(f, null_sentinel_nr)
+        }
+        Value::Block(bl) => bl
+            .operators
+            .last()
+            .is_some_and(|o| return_has_null_arm(o, null_sentinel_nr)),
+        Value::Insert(ops) => ops
+            .last()
+            .is_some_and(|o| return_has_null_arm(o, null_sentinel_nr)),
+        Value::Return(inner) | Value::Drop(inner) => return_has_null_arm(inner, null_sentinel_nr),
+        _ => false,
     }
 }
 
@@ -4305,6 +4392,47 @@ fn holder_retained(node: &Value, holders: &HashSet<u16>) -> bool {
     }
 }
 
+/// #426B — every var that transitively reaches store `st` through the dep graph.
+///
+/// `reclaim_safe`'s holder model needs the full closure, not the one-hop depers:
+/// a binding can borrow a store INDIRECTLY through an intermediate local — a
+/// fn-return-of-index `b = idx0(ww){ w[0] }` binds `b` with dep `["ww"]`, and
+/// `ww` deps `["__vdb_1"]`, so `b` holds `__vdb_1` via `ww`.  Missing `b` here
+/// lets reclaim free `__vdb_1` before `b`'s last read (store-reuse-after-free).
+///
+/// Walks to a fixpoint: a var is a deper of `st` if its dep list contains `st`
+/// or contains any var already known to be a deper.  Marker deps (`u16::MAX`
+/// one-buffer sentinel, the `0x8000` callee-frame tag) name no frame var and are
+/// skipped.  Bounded by `vars.count()` iterations (each pass adds at least one
+/// var or stops), so it always terminates.
+fn transitive_depers(vars: &Function, st: u16) -> Vec<u16> {
+    let n = vars.count();
+    let mut reaches: HashSet<u16> = HashSet::new();
+    loop {
+        let mut added = false;
+        for v in 0..n {
+            if reaches.contains(&v) {
+                continue;
+            }
+            let deps_st = vars
+                .tp(v)
+                .depend()
+                .into_iter()
+                .any(|d| d != u16::MAX && d & 0x8000 == 0 && (d == st || reaches.contains(&d)));
+            if deps_st {
+                reaches.insert(v);
+                added = true;
+            }
+        }
+        if !added {
+            break;
+        }
+    }
+    let mut out: Vec<u16> = reaches.into_iter().collect();
+    out.sort_unstable();
+    out
+}
+
 /// Plan-57 Phase-3 soundness gate: is store `st` (a `__vdb` work-ref) safe to
 /// early-free + relocate + strip-its-scope-exit-free?  Mirrors `store_confinement`'s
 /// per-store predicates (the I-a soundness model) for the function-scoped case:
@@ -4330,9 +4458,18 @@ fn reclaim_safe(code: &Value, vars: &Function, st: u16) -> bool {
     if guard_escapes(code, st) {
         return false;
     }
-    let depers: Vec<u16> = (0..vars.count())
-        .filter(|&v| vars.tp(v).depend().contains(&st))
-        .collect();
+    // #426B — the holder set must be the TRANSITIVE dep closure, not just the
+    // one-hop depers.  A view-of-a-view keeps `st` live through an intermediate
+    // local: `b = idx0(ww)` where `idx0` returns `w[0]` binds `b` with dep
+    // `["ww"]`, and `ww` deps `["__vdb_1"]` — so `b` transitively holds
+    // `__vdb_1` and extends its lifetime to `b`'s last use.  A single-hop scan
+    // sees only `ww` (the receiver arg of the call, treated as a read, not a
+    // retention), misses `b`, and reclaim frees `__vdb_1` right after the call —
+    // before `b` reads it.  The freed slot is then recycled into the next
+    // allocation, corrupting `b` (store-reuse-after-free).  Walking the dep
+    // graph to fixpoint makes `b` a holder, so the retention scan / multi-user-
+    // local gate below leave `st`'s sound scope-exit free in place.
+    let depers: Vec<u16> = transitive_depers(vars, st);
     let mut user_locals = 0;
     for &v in &depers {
         if vars.is_argument(v)

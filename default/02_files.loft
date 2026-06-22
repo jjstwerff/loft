@@ -308,6 +308,39 @@ pub fn mkdir_all(path: text) -> FileResult {
 }
 #impure(io)
 #cap "fs.write"
+// Returns true if `path` exists and is a directory.
+// Use to branch on a path's kind before descending into / reading it.
+pub fn is_dir(path: text) -> boolean;
+#rust"codegen_runtime::fs_is_dir(&s.database.resolve_path(@path))"
+#impure(io)
+#cap "fs.read"
+// Returns true if `path` exists and is a regular file.
+// Use to confirm a directory entry is a readable file before opening it.
+pub fn is_file(path: text) -> boolean;
+#rust"codegen_runtime::fs_is_file(&s.database.resolve_path(@path))"
+#impure(io)
+#cap "fs.read"
+// Lists the entry NAMES of directory `path` (base names, not full paths),
+// sorted.  Returns an empty vector when `path` is not a readable directory.
+// Use to enumerate a directory; join with `path` to build full child paths.
+pub fn list_dir(path: text) -> vector < text >;
+#rust"stores.fs_list_dir(@path)"
+#impure(io)
+#cap "fs.read"
+// Reads the whole file `path` as raw bytes.  Returns an empty vector on a
+// missing file or IO error.  Binary-exact (round-trips with write_bytes);
+// use for non-UTF-8 data — for text prefer `file(path).content()`.
+pub fn read_bytes(path: text) -> vector < u8 >;
+#rust"stores.fs_read_bytes(@path)"
+#impure(io)
+#cap "fs.read"
+// Writes `bytes` to file `path`, truncating any existing content.  Returns
+// true on success.  The inverse of read_bytes; the pair round-trips a
+// non-UTF-8 blob byte-for-byte.
+pub fn write_bytes(path: text, bytes: vector < u8 >) -> boolean;
+#rust"stores.fs_write_bytes(@path, @bytes)"
+#impure(io)
+#cap "fs.write"
 // Truncate or extend the file to exactly `size` bytes.
 // Truncating removes bytes beyond `size`; extending fills with null bytes.
 // Returns FileResult.NotFound if the file does not exist; FileResult.IsDirectory

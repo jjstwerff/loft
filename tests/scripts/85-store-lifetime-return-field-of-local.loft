@@ -52,6 +52,27 @@ fn mk_num() -> Wrap { return Wrap { value: N { n: 77 } }; }
 fn num_val(x: Num) -> integer { match x { N { n } => n } }
 fn shallow_field_of_local() -> Num { d = mk_num(); return d.value; }
 
+// #425 SIBLING — return a heap field projected from an INLINE-CALL result
+// (`return mk().value`) rather than a named local (`d = mk(); return d.value`).
+// The call result is an anonymous owned temporary (lifted to `__lift_N`) that is
+// freed at scope exit, so the projected sub-ref dangles the same way. Before the
+// sibling fix, `--native` returned the null sentinel here (`inline=0`) while the
+// named-local form (above) was already fixed. Same OWNERSHIP_MODEL row-104 class:
+// copy the field's record into `__retbuf` before the temporary's free.
+struct Nested { inner: Box }
+fn mk_nested() -> Nested {
+  bs: vector<u8> = [];
+  for i in 0..8 { bs += [(i + 1) as u8]; }
+  return Nested { inner: Box { value: Bytes { v: bs } } };
+}
+// enum field of an inline-call result.
+fn inline_enum_field() -> Holder { return mk().value; }
+// struct field of an inline-call result (Reference twin of the enum case).
+fn inline_struct_field() -> Box { return mk_nested().inner; }
+// CHAINED projection (`mk().a.b`) — the intermediate Reference is materialised,
+// so this path was already sound; guard it stays so.
+fn inline_chained_field() -> Holder { return mk_nested().inner.value; }
+
 fn main() {
   // #425 — the returned enum's vector field must survive `d`'s free.
   assert(relen(decode_value()) == 8, "return d.value (field-of-local) must COPY (len 8)");
@@ -66,4 +87,13 @@ fn main() {
 
   // shallow scalar enum field of a local.
   assert(num_val(shallow_field_of_local()) == 77, "shallow field-of-local (val 77)");
+
+  // #425 SIBLING — enum field of an inline-call result must COPY (was null native).
+  assert(relen(inline_enum_field()) == 8, "return mk().value (enum field-of-call) must COPY (len 8)");
+
+  // #425 SIBLING — struct field of an inline-call result (Reference twin).
+  assert(relen(inline_struct_field().value) == 8, "return mk().field (struct field-of-call) must COPY (len 8)");
+
+  // #425 SIBLING — chained projection must stay valid (already-sound path).
+  assert(relen(inline_chained_field()) == 8, "return mk().a.b (chained field-of-call) (len 8)");
 }

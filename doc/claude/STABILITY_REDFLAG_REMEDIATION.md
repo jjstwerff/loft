@@ -162,10 +162,36 @@ the signal explicit). `size_code` (`stack.rs`) is the same family, same disposit
       adopts-or-allocates at RUNTIME on its input) — a genuinely different fact
       the single static return-dep cannot carry; forcing it onto the dep regresses
       that case.
-- [ ] A.1 — **BOTH parts ROUTED: each blocks on a store-lifetime SUBSTRATE bug the
-      prereqs did NOT actually unblock (2026-06-22 investigation).** No code landed
-      (behaviour-preserving on `main`); the value is the precise localization + two
-      substrate bugs to file.
+- [ ] A.1 — **RE-ATTEMPT 2026-06-22 (after the substrate fix `782937e9` landed):
+      the bind-site copy is NOT a bug fix — it CONTRADICTS the documented language
+      design. Routed as a DESIGN decision; no code landed (behaviour-preserving).**
+      The store-reuse-after-free 3-deep substrate IS fixed and IS unblocking, but it
+      was never the real blocker for the bind-site cases (A/C).
+      **#426A/C (`a = vv[0]`, `c = o.inner.v`) "must COPY" is FALSE per the docs.**
+      LOFT.md § Vectors/§ Variables (#338) documents vector-ELEMENT reads as
+      dep-tracked VIEWS: `a = vv[0]` for `vector<vector<T>>` is a VIEW on base
+      (`vv[0] += [9]` ⇒ `len(a) == 4`), CONSISTENTLY with the struct-element view that
+      `tests/scripts/294-vector-element-view-semantics.loft` PINS and that #415
+      DELIBERATELY excluded index reads to preserve (OWNERSHIP_MODEL row 102: "a
+      vector INDEX read keeps its existing nested-stride path"). The probe's "observed
+      4: aliases" reads the deliberate VIEW as a bug. Worse, copying the nested-field
+      base REGRESSED a real consumer (`p379`, hex_world `set_cell`): `cells =
+      chunk.ck_cells; cells[i] = v` RELIES on the field-read alias to write through —
+      copying it makes `self: &World` "never modified" (parse error / data loss). The
+      carried borrow dep CANNOT distinguish a read-only copy from a write-through
+      alias; that is the `find_field_written_vars` mutation analysis (the
+      OWNERSHIP_MODEL borrow checker), not a dep-driven codegen patch. So A/C are a
+      copy-vs-view LANGUAGE design reconciliation, routed forward. (Validated
+      matrix-first, both backends; over-unification guard fired on p379 + test 294.)
+      **#426B (return path) is a SEPARATE store-lifetime SUBSTRATE bug (NOT design,
+      NOT the design conflict above).** Routing `{ w[0] }` through
+      `copy_borrow_tail_into_retbuf` DOES copy into `__retbuf`, but the helper's
+      `OpFreeRef(__fwd)` frees a store the freelist recycles into the NEXT allocation,
+      corrupting a subsequent borrowing-read copy (`b = idx0(ww); c = by.v` ⇒
+      `len(c) == 0`; getv's struct-field tail does not hit it — its `__fwd` views the
+      arg base, not a nested element store). The a7-class return-buffer substrate.
+      Repro banked `/tmp/p_followups/p426B_returnbuf_store_reuse.loft`.
+      **Earlier-attempt notes RE-VERIFIED on this base (still accurate):**
       **(i) Return-source SET — hypothesis FALSIFIED by the leak suite.** Dropping
       the `ret_var==MAX` gate (make the union-of-arms SET primary) over-suppresses a
       free even WITH the companion `skip_free` de-conflation (`1ff929f5`), LEAKING:
