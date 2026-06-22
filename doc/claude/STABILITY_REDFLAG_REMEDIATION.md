@@ -201,6 +201,31 @@ the signal explicit). `size_code` (`stack.rs`) is the same family, same disposit
       substrate fix).  Effort to UNBLOCK A.1: the store-reuse / return-buffer
       substrate (its own investigation — the a7 sibling — NOT a localized
       dep-driven copy).
+      **WAY OUT (the unblocking sequence — substrate FIRST, then A.1 lands clean):**
+      1. **Fix the store-reuse-after-free substrate** (the deeper root). A
+         borrowing-read copy frees its source store at the read, the freed `store_nr`
+         is recycled, and a later 3-deep nested build into it corrupts (`len 0`, both
+         backends — `p426_store_reuse_3deep.loft`). Matrix-first on the allocator
+         recycle path; two candidate chokepoints: (a) the allocator must not hand
+         back a `store_nr` while a live downstream build still targets it (a
+         use-after-recycle guard on the free-list), or (b) the borrowing-read copy
+         must keep the source alive past the read (defer its free to true scope-exit).
+         #415's existing copy hits this latently, so the fix is a net stability win
+         beyond A.1.
+      2. **Fix the free-suppress correctness** (the return-source SET). The
+         `ret_var==MAX` gate is load-bearing because the SET marks EVERY source
+         `skip_free`, suppressing the free even for a single-arm / owned return that
+         SHOULD free. The dep must carry, per source, *owned-and-returned (suppress
+         free)* vs *owned-and-freed (don't)* — not just source identity. Then the
+         set-path can replace `in_ret` without the `p365` / `25-nullable-sequences`
+         leaks.
+      3. **THEN A.1 lands clean:** drop the `ret_var==MAX` gate (part i) and the
+         dep-driven bind-site/return copy (part ii) read the now-trustworthy dep —
+         closing #415 + the #425 inline-call sibling + #426 and DELETING the #415
+         `expressions.rs` special-case (the original A.1 goal). probe 07 + the
+         row-99/100 matrix are the both-backends gate.
+      Track as a **store-allocator substrate investigation** (its own plan); the two
+      substrate bugs are its entry points, repros banked in `/tmp/p_followups/`.
 - [~] A.2 (funnel the return path) — **a2 LANDED; a7 localized + routed.** The
       implicit-tail whole-arg vector return (`fn idv(v) -> vector { v }`, matrix a2)
       now funnels through the SAME copy-into-`__retbuf` the struct-field tail (#415)
