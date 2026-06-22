@@ -19,14 +19,19 @@ intentional bounds check).
 - **W1 — DONE.** Short-circuit guard recognition (`WarnCtx::guarded_pairs` +
   `len_captures`, skip pattern 5; extended to struct-field indices
   `self.f[i]`).  `scan.loft` is now at **0** null warnings.
-- **W2 — mechanism DONE (first increment).** `#null_safe` function annotation
-  (after the body, the `parse_rust` slot) → `Parser::null_safe_defs`; the warning
-  walk skips a fault op that is a DIRECT argument to a `#null_safe` callee (skip
-  pattern 6), reset at nested calls so it never leaks (`outer(raw(s[i]))` with only
-  `outer` annotated still warns).  Tests in `tests/runtime_warnings.rs`.
-  *Remaining:* persist the flag on `Definition` (survive `LOFT_STDLIB_CACHE`) +
-  annotate the stdlib null-tolerant helpers + the per-param `c: #null_safe T` form.
-- **W3 / W4 — not started.**
+- **W2 — DONE.** `#null_safe` function annotation (after the body, the `parse_rust`
+  slot); the warning walk skips a fault op that is a DIRECT argument to a
+  `#null_safe` callee (skip pattern 6), reset at nested calls so it never leaks
+  (`outer(raw(s[i]))` with only `outer` annotated still warns).  **Persisted** on
+  `Definition.null_safe` (`DEF_NULL_SAFE`, store + JSON codecs) so it survives
+  `LOFT_STDLIB_CACHE`.  **Stdlib annotated:** the seven `character` predicates
+  (`is_numeric`/`is_alphabetic`/…) carry `#null_safe` (native `char::is_X()`, never
+  fault — verified both backends), so `s[i].is_numeric()` no longer false-warns.
+  Tests in `tests/runtime_warnings.rs`.  *Optional refinement:* the per-param
+  `c: #null_safe T` form (today it is function-wide — fine for single-nullable-param
+  helpers, which is every annotated case so far).
+- **W3 — next.** Entry-guard auto-inference (`if x == null { return … }`
+  auto-sets `null_safe`, reusing W2's storage).  **W4 — not started.**
 
 The existing `is_easy_proof` skip patterns in
 `src/parser/operators.rs::is_easy_proof` recognize three shapes
@@ -67,7 +72,7 @@ explicit `if x == null { return … }` guard).
 | Item | Source | Status |
 |---|---|---|
 | **W1** — Short-circuit guard recognition at call sites | § W1 design | ✅ Done |
-| **W2** — `#null_safe` param annotation (library author opts in) | § W2 design | ◑ Mechanism done; persistence + stdlib annotations remain |
+| **W2** — `#null_safe` param annotation (library author opts in) | § W2 design | ✅ Done (mechanism + persistence + stdlib char predicates) |
 | **W3** — Entry-guard auto-inference (`if x == null { return … }`) — explicit-check shape only | § W3 design | Open |
 | **W4** — `s[i] → byte_at` peephole when consumer is ASCII-only | § W4 design | Open |
 
