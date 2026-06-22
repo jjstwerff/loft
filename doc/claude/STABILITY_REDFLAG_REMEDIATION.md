@@ -64,9 +64,11 @@ escape* (102), the *return-source SET over arms* (99), *one funnelled return pat
 2. **A.2 — funnel the return path.** `block_result`/mid-return/native-forwarder
    converge on ONE emit that *reads* A.1 — delete the per-shape adopt/copy/borrow
    arms + the `RetSite` fork. *Gate:* the @PLN85 probe suite green both backends.
-3. **A.3 — replace the 11 `has_ref_params` sites + the bind/reassign forests**
-   (`parser/expressions.rs::assign`, the `codegen.rs` `gen_set_first_at_tos` region)
-   with the dep read. *Gate:* `grep -c has_ref_params` → ~0 in decision positions.
+3. **A.3 — replace the 11 `has_ref_params` sites with the dep read.** ✅ DONE
+   (the 3 live sites — `scopes.rs`, `codegen.rs` `gen_set_first_at_tos` + `gen_set_first_ref_copy`)
+   read `Definition::return_adopts_fresh_store()`. *Gate met:* `grep -c has_ref_params`
+   → 0 in decision positions; matrix green both backends. See the A.3 progress note
+   for the over-unification finding (the dep is broader than `returns_borrowed_view`).
 4. **A.4 — unify `is_borrowed_view`** (compute once, shared interp+native) and
    **delete the `scan_set` runtime witness**. *Gate:* the OOB/hidden-only edge agrees
    both backends; a `--static` dump shows the witness ops gone.
@@ -160,11 +162,70 @@ the signal explicit). `size_code` (`stack.rs`) is the same family, same disposit
       adopts-or-allocates at RUNTIME on its input) — a genuinely different fact
       the single static return-dep cannot carry; forcing it onto the dep regresses
       that case.
-- [ ] A.1 (compute the return-source SET on `Deps`) — the set version
-      `collect_return_sources` EXISTS but is gated behind the single-`u16`
-      `returned_var` (`scopes.rs:1348`, narrowed to `ret_var==MAX && Vector`).
-      Making the set the primary path is blocked by the keyed/enum free-suppress
-      regression (§6h Edge A: ~13 tests) — needs A.2 first.
+- [ ] A.1 — **BOTH parts ROUTED: each blocks on a store-lifetime SUBSTRATE bug the
+      prereqs did NOT actually unblock (2026-06-22 investigation).** No code landed
+      (behaviour-preserving on `main`); the value is the precise localization + two
+      substrate bugs to file.
+      **(i) Return-source SET — hypothesis FALSIFIED by the leak suite.** Dropping
+      the `ret_var==MAX` gate (make the union-of-arms SET primary) over-suppresses a
+      free even WITH the companion `skip_free` de-conflation (`1ff929f5`), LEAKING:
+      `repro_p365` (`main_vector<integer>`) for the vector widening, and
+      `25-nullable-sequences` (`__nullable<NRow>::Some`) for the struct-enum
+      widening (both caught by `wrap::loft_suite`'s strict per-script leak
+      accounting; the authoritative `leak` + `leak_cases` suites and standalone
+      `LOFT_STORES=warn` pass — it's an aggregate-only leak the gate was protecting
+      against).  The `ret_var==MAX` gate is LOAD-BEARING for free-suppress
+      correctness — it confines the set-path to the multi-arm case `returned_var`
+      can't see; single-arm returns already free correctly via `in_ret`, and the
+      set-path's `skip_free` mark leaks them.  The companion fix unblocked only the
+      keyed ALLOCATION crash, not this broader free-suppress correctness.  Kept the
+      original gated `free_vars` (`scopes.rs`).
+      **(ii) #426 bind-site/return copy — store-reuse-after-free substrate.** The
+      dep-driven copy ("any `OpGetField` whose result type carries a borrow dep ⇒
+      allocate + `OpAppendVector`") is CORRECT per case (A `a=vv[0]`, C `c=o.inner.v`
+      copy cleanly in ISOLATION, both backends), BUT it makes the source store DEAD
+      at the read → FREED at the read site, and a subsequent NESTED 3-deep vector
+      build (`vector<vector<vector<T>>>`) into the recycled store corrupts (`len 0`).
+      The EXISTING #415 struct-field copy already hits this latently (no test
+      followed it with a 3-deep append; 2-deep is fine, only 3-deep corrupts);
+      widening to the index / nested reads turned the latent corruption into a real
+      regression (`185-nested-boolean-vector`).  The return-path (B `b=idx0(w){w[0]}`)
+      is the same substrate — the index-read tail gets the `["??"]` buffer ABI but
+      never copies `w[0]` into it (the a7 class).  So #426 stays ALIASED and the
+      #415 `expressions.rs` special-case is RETAINED (NOT deleted).
+      **TWO substrate bugs to file (pre-existing on `main`):** (1) the
+      store-reuse-after-free 3-deep corruption (repro
+      `/tmp/p_followups/p426_store_reuse_3deep.loft`); (2) the return-buffer index-tail
+      aliasing (#426B, the a7 sibling).  Probe
+      `probes/07-borrowing-read-aliasing.loft` documents the residual (RED until the
+      substrate fix).  Effort to UNBLOCK A.1: the store-reuse / return-buffer
+      substrate (its own investigation — the a7 sibling — NOT a localized
+      dep-driven copy).
+      **WAY OUT (the unblocking sequence — substrate FIRST, then A.1 lands clean):**
+      1. **Fix the store-reuse-after-free substrate** (the deeper root). A
+         borrowing-read copy frees its source store at the read, the freed `store_nr`
+         is recycled, and a later 3-deep nested build into it corrupts (`len 0`, both
+         backends — `p426_store_reuse_3deep.loft`). Matrix-first on the allocator
+         recycle path; two candidate chokepoints: (a) the allocator must not hand
+         back a `store_nr` while a live downstream build still targets it (a
+         use-after-recycle guard on the free-list), or (b) the borrowing-read copy
+         must keep the source alive past the read (defer its free to true scope-exit).
+         #415's existing copy hits this latently, so the fix is a net stability win
+         beyond A.1.
+      2. **Fix the free-suppress correctness** (the return-source SET). The
+         `ret_var==MAX` gate is load-bearing because the SET marks EVERY source
+         `skip_free`, suppressing the free even for a single-arm / owned return that
+         SHOULD free. The dep must carry, per source, *owned-and-returned (suppress
+         free)* vs *owned-and-freed (don't)* — not just source identity. Then the
+         set-path can replace `in_ret` without the `p365` / `25-nullable-sequences`
+         leaks.
+      3. **THEN A.1 lands clean:** drop the `ret_var==MAX` gate (part i) and the
+         dep-driven bind-site/return copy (part ii) read the now-trustworthy dep —
+         closing #415 + the #425 inline-call sibling + #426 and DELETING the #415
+         `expressions.rs` special-case (the original A.1 goal). probe 07 + the
+         row-99/100 matrix are the both-backends gate.
+      Track as a **store-allocator substrate investigation** (its own plan); the two
+      substrate bugs are its entry points, repros banked in `/tmp/p_followups/`.
 - [~] A.2 (funnel the return path) — **a2 LANDED; a7 localized + routed.** The
       implicit-tail whole-arg vector return (`fn idv(v) -> vector { v }`, matrix a2)
       now funnels through the SAME copy-into-`__retbuf` the struct-field tail (#415)
@@ -187,11 +248,29 @@ the signal explicit). `size_code` (`stack.rs`) is the same family, same disposit
       concrete heap type at `parse_if` ~1404, so it runs per-arm buffer delivery;
       the true arm + every `match_arm` get `Unknown` and skip it), which a clean fix
       must reconcile — out of the row-104 funnel's tight scope, routed forward.
-- [ ] A.3 (replace the 11 `has_ref_params` sites + bind/reassign forests) —
-      partially enabled: `is_borrowed_view` now has one home; the
-      `has_ref_params` adopt-vs-copy sites still re-derive (they encode "any
-      visible ref param", a coarser proxy than "the return borrows a param").
-      Their clean collapse depends on A.2.
+- [x] **A.3 — replace the 11 `has_ref_params` sites with the carried adopt-vs-copy
+      fact.** The 3 LIVE decision sites (`scopes.rs:946`, `state/codegen.rs:2066`
+      + `:2201`; codegen2201 is dead — the whole-suite usage sentinel found zero
+      fires across `tests/scripts` + `tests/docs`, kept consistent for revival)
+      now read ONE accessor `Definition::return_adopts_fresh_store()` (`data.rs`):
+      **dep empty OR the `["??"]` one-buffer marker ⇒ adopt; any real attr index
+      ⇒ copy**. `grep -c has_ref_params` in decision positions: 3 → 0.
+      **Over-unification guard (the load-bearing finding):** the A.3 fact is
+      STRICTLY BROADER than A.4's `returns_borrowed_view()` — that method checks
+      only VISIBLE attrs, but the adopt-vs-copy decision must ALSO copy a HIDDEN
+      `ref_return` work-ref return (dep `["cv"]`, the caller-reused `__ref_N`
+      buffer). The first collapse onto `returns_borrowed_view` REGRESSED
+      `143-plan51-cluster3` (cross-iteration `kt=66 Canvas` alias, interp-correct
+      / native-leak — caught by the both-backends gate); the broader
+      `return_adopts_fresh_store` fact splits `["??"]` (adopt) from `["cv"]`
+      (copy) and fixes it. The refinement flips copy→adopt ONLY for the
+      genuinely-fresh case (a ref param whose return is a fresh literal). The
+      return-ownership boundary matrix (15 cells + control, both backends) is
+      green before/after; full `cargo test` clean (the known stale-cdylib
+      registry fixtures `p310`/`p171`/`imaging`/`v2_*` are unrelated — they pass
+      on a fresh worktree build). `scan_set`/`OpFreeRefIfDistinct` +
+      `paired_witness` adopt-vs-orphan witness DELIBERATELY retained (A.4 guard).
+      Regression `tests/scripts/85-store-lifetime-return-ownership-adopt.loft`.
 - [x] **C.0–C.3 — `for_each_owned_child` keystone** (commit `4ff673f8`): `remove_claims`
       collapsed 9 arms/174 lines → 2 arms/41 lines onto one carried heap-cascade walk;
       `copy_claims_hash_body` reads the keystone spine. Over-unification guard:

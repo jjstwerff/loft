@@ -1408,11 +1408,27 @@ impl State {
             stack.position += bump;
         }
         let slot_offset = stack.var_pos(v);
-        if stack.function.is_skip_free(v) || stack.function.is_inline_ref(v) {
-            // Skip-free / inline-ref keyed locals share an outer-owned store.
+        // De-conflated no-alloc gate (@PLN85 A.1 companion): gate on
+        // `is_inline_ref` ALONE — the genuine "borrow, don't allocate" signal —
+        // NOT `is_skip_free`, whose only contract is "don't emit `OpFreeRef`"
+        // (a free-time fact).  A keyed return-local that OWNS its store but
+        // transfers it on return is marked `skip_free`; the old `skip_free`
+        // sentinel suppressed `OpDatabase` for it, leaving `store_nr = u16::MAX`
+        // and OOB-panicking the next record op (`allocation.rs`).  With the gate
+        // on `inline_ref` such a local falls through and ALLOCATES below.
+        //
+        // The vector twin (`gen_set_first_vector_null`) keeps the broader
+        // `skip_free` gate on purpose: there `skip_free` also marks match-bind /
+        // `??`-coalesce borrowed views (`_mv_*`, `__ncc_*`) that are overwritten
+        // before read and must NOT allocate (allocating leaks them — they carry
+        // no `OpFreeRef`).  No owned-vector case needs the vector site changed,
+        // so de-conflating there only over-reaches.  See
+        // `tests/scripts/122-keyed-return-local-allocates.loft`.
+        if stack.function.is_inline_ref(v) {
+            // inline_ref keyed locals borrow an outer-owned store.
             // On first assignment, point the slot at it via the sentinel; on
             // reassignment there is nothing to re-init (no current shape
-            // produces a keyed skip-free reassignment).
+            // produces a keyed inline-ref reassignment).
             if first {
                 stack.add_op("OpInitRefSentinel", self);
                 self.code_add(slot_offset);
@@ -2059,16 +2075,18 @@ impl State {
             && stack.data.def(*fn_nr).name().starts_with("n_")
             && *stack.data.def(*fn_nr).code() != Value::Null
         {
-            // when the callee has no visible Reference params, the
-            // caller and callee share __ref_N's store. No deep copy needed
-            // since OpAppendVector in handle_field already deep-copies vector
-            // field data into the struct's store during construction.
-            let has_ref_params = stack.data.def(*fn_nr).attributes().iter().any(|a| {
-                !a.hidden && matches!(a.typedef, Type::Reference(_, _) | Type::Enum(_, true, _))
-            });
-            if has_ref_params {
-                self.gen_set_first_ref_call_copy(stack, v, value, d_nr);
-            } else {
+            // Cluster A.3 (OWNERSHIP_MODEL row 102): read the carried
+            // adopt-vs-copy fact.  When the callee returns a genuinely FRESH
+            // store (empty dep, or the `["??"]` one-buffer marker), the caller
+            // adopts it directly — no deep copy needed (OpAppendVector in
+            // handle_field already deep-copies vector field data into the
+            // struct's store during construction).  Otherwise the return is
+            // tied to a passed buffer/param — a visible param it aliases, or a
+            // hidden `ref_return` work-ref the caller REUSES across iterations —
+            // and must be deep-copied into a fresh store `v` owns.  This reads
+            // `return_adopts_fresh_store()` rather than re-deriving the coarse
+            // "any visible ref param" proxy (A.3).
+            if stack.data.def(*fn_nr).return_adopts_fresh_store() {
                 // runtime tolerates double-free as a no-op so leaving
                 // __ref_N to be freed by scopes.rs's is_work_ref gate at
                 // scope exit is safe in both adoption and orphan cases.
@@ -2079,6 +2097,8 @@ impl State {
                 let var_pos = stack.var_pos(v);
                 stack.add_op("OpPutRef", self);
                 self.code_add(var_pos);
+            } else {
+                self.gen_set_first_ref_call_copy(stack, v, value, d_nr);
             }
         } else if matches!(stack.function.tp(v), Type::Vector(_, _)) && *value == Value::Null {
             self.gen_set_first_vector_null(stack, v);
@@ -2187,9 +2207,15 @@ impl State {
     /// Slot-move is removed in B.3.h, at which point `slot_offset`
     /// reflects V1's actual placement.
     fn gen_set_first_ref_copy(&mut self, stack: &mut Stack, v: u16, d_nr: u32, value: &Value) {
-        // O-B2: if the source is a call to a function with no Reference parameters,
-        // the returned store is always fresh — adopt it directly instead of deep copying.
-        // This eliminates both the copy overhead and the store leak.
+        // O-B2: if the inner call returns a genuinely FRESH store (empty dep or
+        // the `["??"]` one-buffer marker), adopt it directly instead of deep
+        // copying.  This eliminates both the copy overhead and the store leak.
+        // Reads the carried `return_adopts_fresh_store()` fact (OWNERSHIP_MODEL
+        // row 102), matching the `gen_set_first_at_tos` adopt-vs-copy decision
+        // (A.3).  NOTE: this `Call(OpCopyRecord, [Call(inner), …])` shape does
+        // not arise in the current corpus (the whole-suite usage sentinel found
+        // zero fires) — it is kept consistent with its sibling sites so a future
+        // revival reads the same precise fact, not the old coarse proxy.
         if let Value::Call(_, args) = value.unspan()
             && !args.is_empty()
             && let Value::Call(inner_nr, _) = &args[0]
@@ -2197,29 +2223,22 @@ impl State {
                 stack.data.def(*inner_nr).returned(),
                 Type::Reference(_, _) | Type::Enum(_, true, _)
             )
+            && stack.data.def(*inner_nr).return_adopts_fresh_store()
         {
-            let has_ref_params = stack
-                .data
-                .def(*inner_nr)
-                .attributes
-                .iter()
-                .any(|a| matches!(a.typedef, Type::Reference(_, _) | Type::Enum(_, true, _)));
-            if !has_ref_params {
-                // Safe: function has no Reference params, cannot return an aliased store.
-                // Generate just the inner call — its result DbRef is on the eval stack.
-                // Plan-04 Phase B.3.h.3: slot-aware.  Move the pushed DbRef to
-                // v's slot via OpPutRef(slot_offset).  Under slot-move (still
-                // active through B.3.h), slot_offset equals 12 after the push,
-                // so OpPutRef copies the DbRef bytes onto themselves — harmless
-                // bytecode-level overhead.  Once slot-move is removed, the
-                // OpPutRef becomes the mechanism that lands the result in v's
-                // actual slot.
-                self.generate(&args[0], stack, false);
-                let var_pos = stack.var_pos(v);
-                stack.add_op("OpPutRef", self);
-                self.code_add(var_pos);
-                return;
-            }
+            // Safe: the inner call's return is owned/fresh, never an aliased store.
+            // Generate just the inner call — its result DbRef is on the eval stack.
+            // Plan-04 Phase B.3.h.3: slot-aware.  Move the pushed DbRef to
+            // v's slot via OpPutRef(slot_offset).  Under slot-move (still
+            // active through B.3.h), slot_offset equals 12 after the push,
+            // so OpPutRef copies the DbRef bytes onto themselves — harmless
+            // bytecode-level overhead.  Once slot-move is removed, the
+            // OpPutRef becomes the mechanism that lands the result in v's
+            // actual slot.
+            self.generate(&args[0], stack, false);
+            let var_pos = stack.var_pos(v);
+            stack.add_op("OpPutRef", self);
+            self.code_add(var_pos);
+            return;
         }
         // Fallback: allocate fresh store + deep copy (source store may alias a parameter).
         let ref_size = size_of::<crate::keys::DbRef>() as u16;

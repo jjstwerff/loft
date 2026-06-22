@@ -1,0 +1,62 @@
+// @PLN85 A.1 — borrowing-read aliasing (#426, the #415 siblings).  STILL RED:
+// blocked on the store-reuse-after-free substrate (see below), NOT landable as a
+// localized dep-driven copy.
+//
+// A binding from a BORROWING READ (a value backed by another store) should get
+// its OWN store (single-owner value semantics — plain `a = x` already copies).
+// #415 closed the DIRECT struct-field read (`a = x.v`); these sibling shapes
+// still ALIAS the source store on BOTH backends (silent value-semantics
+// violation, no crash):
+//   A  vector INDEX read         `a = vv[0]`
+//   B  fn-return-of-index        `b = idx0(w){ w[0] }`
+//   C  nested struct-field read  `c = o.inner.v`
+//
+// A.1 INVESTIGATION FINDING (2026-06-22) — the dep-driven copy is CORRECT per
+// case but cannot land on the current substrate:
+//   * The bind-site copy (the #415 mechanism generalized: "any `OpGetField`
+//     whose result type carries a borrow dep ⇒ allocate + `OpAppendVector`")
+//     makes the source store DEAD at the read, so it is FREED at the read site.
+//     A subsequent NESTED 3-deep vector build (`vector<vector<vector<T>>>`) then
+//     corrupts (`len 0`) — the store-reuse-after-free substrate bug.  The
+//     EXISTING #415 struct-field copy already hits it latently (no test followed
+//     it with a 3-deep append); widening to the index / nested reads turned that
+//     latent corruption into a real regression (`185-nested-boolean-vector`).
+//     Minimal repro: `bx=Box{v:[1,2,3]}; af=bx.v; vvv:vec<vec<vec<int>>>=[];
+//     a:vec<vec<int>>=[[7,8]]; vvv+=[a]; assert(len(vvv[0][0])==2)` → len 0.
+//     (2-deep is fine; only 3-deep corrupts.)
+//   * The return-path (B) gets the `["??"]` one-buffer ABI but never copies
+//     `w[0]` into it (unlike the whole-arg `{ v }` and struct-field `{ b.v }`
+//     tails, which DO funnel into `__retbuf`), so the raw inner-element view
+//     escapes with an unstable store-nr — the same substrate, a7 class.
+//
+// All three stay ALIASED until the store-reuse / return-buffer substrate is
+// fixed (routed forward).  Workaround (verified both backends): force an owned
+// copy — `a = []; a += vv[0]`.  What A.1 DID land: the return-source SET as the
+// primary free-suppress path (`scopes.rs::free_vars`, all heap return types).
+
+struct Inner { v: vector<integer> }
+struct Outer { inner: Inner }
+
+fn idx0(w: vector<vector<integer>>) -> vector<integer> { w[0] }
+
+fn main() {
+  // A — vector INDEX read
+  vv: vector<vector<integer>> = [[1, 2, 3]];
+  a = vv[0];
+  vv[0] += [9];
+  assert(len(a) == 3, "A a=vv[0] must COPY (observed 4: aliases vv[0])");
+
+  // B — fn returns a vector INDEX element
+  ww: vector<vector<integer>> = [[1, 2, 3]];
+  b = idx0(ww);
+  ww[0] += [9];
+  assert(len(b) == 3, "B b=idx0(ww) must COPY (observed 4)");
+
+  // C — NESTED struct-field vector read
+  o = Outer { inner: Inner { v: [1, 2, 3] } };
+  c = o.inner.v;
+  o.inner.v += [9];
+  assert(len(c) == 3, "C c=o.inner.v must COPY (observed 4)");
+
+  println("borrowing-read aliasing: all COPY (A.1 landed)");
+}

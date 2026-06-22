@@ -14,19 +14,39 @@ The registry (`loft-lang/registry`) is a static **`index.json`** plus a detached
 **sha256 + size** against the index entry. So the index and its signature must always move
 together — an index the signature doesn't match makes the whole registry unusable.
 
-## The steps
+## The steps — the actual commands (from a real publish: crypto 0.3.3)
 
-1. **Finalize `loft.toml`** — version bump, the target list (only targets that passed the
-   parity gate), and any `[wasm.bridge]` block. Don't publish a target you haven't proven.
-2. **Build per target** — produce the artifacts for each claimed target (interp source,
-   `--native` rlib, `--native-wasm` rlib, `--html` bridge bundle).
-3. **Record sha256 + size** — for each artifact, exactly as `loft install` will recompute
-   them. A mismatch here is an install-time hard failure, not a warning.
-4. **Add the entry to `index.json`** — the new version, its artifacts, sha256s, sizes.
-5. **RE-SIGN `index.json`** — regenerate `index.json.sig` over the edited index with
-   `loft-keygen sign` (the maintainer key). **This is the step that breaks everything if
-   skipped** (see below). Verify locally with `loft-keygen verify` before opening the PR.
-6. **Open the registry PR** — and on the PR branch, ensure the re-signed `.sig` is included.
+The registry package is a **source tarball** — `loft package` does **not** build per-target
+artifacts (no prebuilt cdylib). Consumers build the native/wasm artifacts at install time
+against their own loft, so cross-tree `loft-ffi` matching is a *consumer-side* concern, **not a
+publish blocker**. (It does mean a `#native` feature only works on `--native` once the
+consumer's loft itself carries the needed compiler support.)
+
+1. **Land the code first.** The lib's PR must be merged to its repo's `main` (the package is
+   built from `main`), with the new `version` in `loft.toml`.
+2. **`loft package`** (in the package dir) → writes `<pkg>-<version>.tar.gz` and **prints the
+   index entry** (`url`, `sha256`, `size`, `loft`). It **omits `subpath` and `deps`** — copy
+   those from the package's existing entries (e.g. `"subpath": "crypto"`, `"deps": {}`).
+3. **GitHub release + asset** (the tag must match the entry's `url`):
+   ```
+   gh release create <pkg>-v<version> --repo <org>/<repo> --target main \
+     <pkg>-<version>.tar.gz --title "<pkg> v<version>" --notes "…"
+   ```
+4. **Registry PR** — clone `loft-lang/registry`, then:
+   - Add the version under `packages.<pkg>.versions.<version>` (the printed entry **plus**
+     `subpath` + `deps` + a `published` ISO-8601 UTC timestamp), and bump the top-level
+     `updated`.
+   - **Edit the JSON with `ensure_ascii=True`** (Python's default): the index escapes unicode as
+     `\uXXXX`, so `ensure_ascii=False` rewrites *every* description line and makes the diff
+     unreviewable — keep it to your entry + `updated`.
+   - **Re-sign, then verify** (the maintainer key; this is the step that breaks all installs if
+     skipped — see below):
+     ```
+     loft-keygen sign   --in index.json --key ~/.loft/trust-root/registry-signing-key.bin --out index.json.sig
+     loft-keygen verify --in index.json --sig index.json.sig --pub "$(cat ~/.loft/trust-root/registry-signing-key.pub)"
+     ```
+   - **Commit `index.json` + `index.json.sig` TOGETHER** (one atomic change), push a branch,
+     open the PR against `loft-lang/registry`.
 
 ## The re-sign foot-gun (internalize this)
 

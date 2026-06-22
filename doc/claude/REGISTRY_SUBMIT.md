@@ -175,6 +175,25 @@ you don't use.  See
 [PKG_REGISTRY.md § Schema](PKG_REGISTRY.md#schema) for the
 full reference.
 
+> **Two things a programmatic edit gets wrong** (learned publishing crypto
+> 0.3.3): for a **multi-package repo** (e.g. `loft-libs-core`), copy the existing
+> entries' **`subpath`** field (`"subpath": "crypto"`) — `loft package` omits it.
+> And if you edit `index.json` with a script, keep **ASCII-escaped JSON**
+> (Python's default `json.dump(..., ensure_ascii=True)`): the index escapes
+> unicode as `\uXXXX`, so `ensure_ascii=False` rewrites *every* description line
+> and buries your one-line change in a full-file diff.
+>
+> **Maintainer step — re-sign before merge.** An author PR edits `index.json` but
+> cannot sign it; before merging, the maintainer re-signs with the trust-root key
+> and commits the `.sig` **together with** the index (one atomic change).
+> Skipping this leaves a stale signature that fails verification for *all*
+> installs (see [REGISTRY_RECOVERY.md](REGISTRY_RECOVERY.md)):
+>
+> ```
+> loft-keygen sign   --in index.json --key ~/.loft/trust-root/registry-signing-key.bin --out index.json.sig
+> loft-keygen verify --in index.json --sig index.json.sig --pub "$(cat ~/.loft/trust-root/registry-signing-key.pub)"
+> ```
+
 Open the PR.  Title format: `add my-lib 0.1.0` (or for
 subsequent versions, `add my-lib 0.2.0`).
 
