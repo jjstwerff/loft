@@ -198,6 +198,20 @@ failed.  (Hard aborts — OOM, stack-`SIGSEGV` — bypass `catch_unwind` and fal
 process watchdog `--timeout` / @PLN49; one more reason prevention, not the net, is
 the line.)
 
+### Now: handed to the crawler agent for dogfood
+
+Admission (v1 #422) + the prevention hardening (#2 space budget, #3 total host capabilities,
+#4 escape suite — all DONE) are shipped, so the feature is in the **two-agent dogfood** phase
+([CLAUDE.md § The consumer runs in its OWN agent](../../../../CLAUDE.md)): **crawler** is the
+dedicated consumer agent. It switches on a `[sandbox]` policy over its content/script surface,
+feels out whether the restrictions are **too tight** to express its mods, and **adversarially
+tries to break out** via its own codebase. This stream does NOT do that consuming — it ships +
+documents the feature and *responds* to what crawler reports (a blocking restriction or an escape
+routes back here as language work). The remaining post-v1 pieces (transactional world S7,
+`run_script` boundary S8) wait on the memory-safe-interpreter dependency (#1, the `../loft`
+store-lifetime stream), so the next sandbox work is **driven by the crawler dogfood findings**,
+not pushed from here.
+
 ### A. Safety — completes the v1 admitted-script guarantee
 - **2.4 No-raw-write admission — ✅ DONE.** (Was the one open v1 safety step.) A sandboxed
   def may not raw-write heap data (`e.health = 0` / `v[i] = 9`) — recorded at parse

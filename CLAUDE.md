@@ -32,6 +32,25 @@ When picking work, prefer the path that exercises the language against a real co
 feature slice surfaces a language gap, fix it on the spot when XS/S, else route to its canonical
 home — [DEVELOPMENT.md § Inserting Discovered Enhancements](doc/claude/DEVELOPMENT.md#inserting-discovered-enhancements-into-the-active-plan).
 
+### The consumer runs in its OWN agent — two-agent dogfood
+
+A feature big enough to dogfood is handed to its consumer's **dedicated agent**, and the two
+agents play different roles — do not collapse them:
+
+- **The language agent (this stream) BUILDS.** Ship a ready, tested feature to `main`, document
+  the contract (how to switch it on, what it restricts), then *respond* to what the consumer
+  reports. It does **not** wire the feature into the consumer or judge its ergonomics from the
+  inside — that is the consumer's lived experience to report, not ours to assume.
+- **The consumer agent USES + BREAKS.** It wires the feature into its real codebase, feels out
+  whether the restrictions are **too tight to express what it needs**, and **adversarially tries
+  to break out** of them through its own code. Its findings — a restriction that blocks a
+  legitimate pattern, or an escape that slips through — are the harvested lessons.
+
+The current example: the **sandbox** (`@PLN86`) is built by this stream; **crawler** is its
+dedicated consumer agent, which switches on a `[sandbox]` policy, stress-tests the restrictions,
+and tries to escape them. A reported gap routes back here as language work (fix-on-spot when XS/S,
+else its canonical home). So the loop is genuinely two agents: **we ship + fix; they use + break.**
+
 ---
 
 ## Key commands
