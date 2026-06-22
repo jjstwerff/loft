@@ -3858,6 +3858,45 @@ impl Parser {
         }
     }
 
+    /// #425 sibling — is the return tail a heap-field projection of an INLINE
+    /// CALL result (`return mk().value`), as opposed to a named local
+    /// (`return d.value`)?  The base `mk()` is an owned temporary that scope
+    /// analysis lifts to a `__lift_N` local and frees at scope exit; the
+    /// projected sub-ref is a VIEW into it, so returning the projection as-is
+    /// makes the buffer dangle (native re-reads the freed store → null
+    /// sentinel; the `bound_field` workaround `t = mk(); return t.value`
+    /// dodges it because the named local reaches `ref_return`'s copy leg).
+    /// Returns `true` only for a DIRECT `OpGetField(Call(fn,…), …)` whose base
+    /// is a plain function call — NOT a chained projection (`mk().a.b`, whose
+    /// intermediate `Reference` is already materialised into a work-ref) and
+    /// NOT a `Var`/parameter base (handled by `return_field_base_var`).  The
+    /// caller copies the projected field into `__retbuf` via
+    /// `materialize_view_return` so the field's record survives the lift's
+    /// free — the same owned-copy `return d.value` already performs.
+    fn return_field_base_is_call(&self, tail: &Value) -> bool {
+        match tail.unspan() {
+            Value::Return(inner) | Value::Drop(inner) => self.return_field_base_is_call(inner),
+            Value::Block(bl) => bl
+                .operators
+                .last()
+                .is_some_and(|t| self.return_field_base_is_call(t)),
+            Value::Insert(ops) => ops
+                .last()
+                .is_some_and(|t| self.return_field_base_is_call(t)),
+            Value::Call(d, args) if *d == self.data.def_nr("OpGetField") => {
+                // The base is an owned temporary iff it is a plain function
+                // CALL (not an `OpGetField` chain, not a `Var`).  An inner
+                // `OpGetField` base is the chained case (E), already delivered
+                // through a materialised work-ref.
+                matches!(
+                    args.first().map(Value::unspan),
+                    Some(Value::Call(bd, _)) if *bd != self.data.def_nr("OpGetField")
+                )
+            }
+            _ => false,
+        }
+    }
+
     fn site_value_ref(&self, tail: &Value) -> Option<u16> {
         match tail.unspan() {
             Value::Var(v) => Some(*v),
@@ -4691,7 +4730,16 @@ impl Parser {
                 // copy-rewrites inside it (the reassignment guard does not
                 // apply: explicit return already copies the value).
                 if let Type::Reference(td, ls) = &t {
-                    if ls.is_empty() {
+                    if self.return_field_base_is_call(&v) {
+                        // #425 sibling — `return mk().field` projects a struct
+                        // field of an inline-call temporary.  The call result is
+                        // freed at scope exit (lifted to `__lift_N`), so the
+                        // sub-ref dangles; copy the field's record into an owned
+                        // buffer first (the same owned-copy `return d.field` gets
+                        // from `ref_return`'s named-local leg).
+                        let w = self.materialize_view_return(*td, &mut v);
+                        self.ref_return(&[w], std::slice::from_mut(&mut v), RetSite::MidReturn);
+                    } else if ls.is_empty() {
                         let extra = Self::collect_hidden_ref_args(&v, &self.data);
                         if !extra.is_empty() {
                             let ls_own = extra.clone();
@@ -4731,6 +4779,15 @@ impl Parser {
                         && self.data.def(*e_d).name().starts_with("__nullable<")
                     {
                         let w = self.materialize_view_return(rtd, &mut v);
+                        self.ref_return(&[w], std::slice::from_mut(&mut v), RetSite::MidReturn);
+                    } else if self.return_field_base_is_call(&v) {
+                        // #425 sibling — `return mk().field` where `field` is a
+                        // struct-enum (heap record): the inline-call base is freed
+                        // at scope exit, so copy the field's record into an owned
+                        // buffer first.  The Reference arm above does the same for
+                        // a struct field; this is the struct-enum twin.
+                        let ed = *e_d;
+                        let w = self.materialize_view_return(ed, &mut v);
                         self.ref_return(&[w], std::slice::from_mut(&mut v), RetSite::MidReturn);
                     } else {
                         let ls_own: Vec<u16> = ls.to_vec();
