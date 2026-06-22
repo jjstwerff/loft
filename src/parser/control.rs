@@ -3835,6 +3835,29 @@ impl Parser {
         }
     }
 
+    /// #425 — if the return tail is a struct/enum FIELD projection
+    /// (`OpGetField(Var(base), …)`, possibly wrapped in `Return`/`Block`),
+    /// return the base var being projected. Used to decide whether the
+    /// projected field's record is locally owned (and freed at scope exit) or
+    /// caller-owned (a parameter).
+    fn return_field_base_var(&self, tail: &Value) -> Option<u16> {
+        match tail.unspan() {
+            Value::Return(inner) | Value::Drop(inner) => self.return_field_base_var(inner),
+            Value::Block(bl) => bl
+                .operators
+                .last()
+                .and_then(|t| self.return_field_base_var(t)),
+            Value::Insert(ops) => ops.last().and_then(|t| self.return_field_base_var(t)),
+            Value::Call(d, args) if *d == self.data.def_nr("OpGetField") => {
+                match args.first().map(Value::unspan) {
+                    Some(Value::Var(b)) => Some(*b),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
     fn site_value_ref(&self, tail: &Value) -> Option<u16> {
         match tail.unspan() {
             Value::Var(v) => Some(*v),
@@ -4366,8 +4389,25 @@ impl Parser {
                 // retire the placeholder var those sites reference — the
                 // later candidate must copy instead.
                 let bound_already = self.return_buffer().is_some_and(|(a, _)| dep.contains(&a));
+                // #425 — the return value is a struct/enum FIELD projection of THIS
+                // candidate (`return d.value`, where `d` is the container local).
+                // Renaming `d` to the return buffer is wrong: `d` holds the WHOLE
+                // record (`Decoded`) while the fn returns its inner field
+                // (`CborValue`), so the promoted buffer would be the container, the
+                // field sub-ref would be dropped, and `d` freed at scope exit — the
+                // returned value dangles (native re-encodes to 0 bytes). Suppress the
+                // rename so `d` stays an ordinary local and the candidate falls
+                // through to the copy-into-buffer leg below (`materialize_return_into`
+                // deep-copies `d.value` into the separate `__retbuf`). A field-of-
+                // ARGUMENT never reaches here (a true parameter hits the earlier
+                // `attr_names` continue), and a local-bind (`v = d.value; return v`)
+                // returns `v` itself (not a projection), so this is field-projection-
+                // of-a-local only.
+                let returns_own_field =
+                    self.return_field_base_var(body.last().unwrap_or(&Value::Null)) == Some(*v);
                 let allow_rename = !(bound_already
                     || reassigned
+                    || returns_own_field
                     || (site == RetSite::MidReturn && matches!(&ret, Type::Vector(_, _))));
                 if allow_rename
                     && let Some(&buf_attr) = self.data.def(self.context).attr_names.get("__retbuf")
@@ -4418,7 +4458,10 @@ impl Parser {
                 // literal site and invoked via CallRef, so no earlier
                 // caller can hold a short arg list.
                 if is_plain_fn
-                    && matches!(&ret, Type::Reference(_, _) | Type::Vector(_, _))
+                    && matches!(
+                        &ret,
+                        Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+                    )
                     && let Some((buf_attr, buf_var)) = self.return_buffer()
                     && buf_var != *v
                 {
@@ -4437,9 +4480,13 @@ impl Parser {
                         }
                     } else if let Some(tail) = body.last_mut() {
                         // Named local: keep its own store; deliver a COPY in
-                        // the buffer at the return.
+                        // the buffer at the return.  #425 — a struct-enum
+                        // (heap `Type::Enum`) field-of-local return copies the
+                        // same way as a Reference: `materialize_return_into`
+                        // emits `OpCopyRecord(d.field → buf)` (the record copy
+                        // works for any heap record, enum or struct).
                         match ret.clone() {
-                            Type::Reference(td, _) => {
+                            Type::Reference(td, _) | Type::Enum(td, true, _) => {
                                 self.materialize_return_into(td, tail, buf_var);
                             }
                             Type::Vector(elm, _) => {
