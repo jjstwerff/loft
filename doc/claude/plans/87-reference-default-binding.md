@@ -41,3 +41,86 @@ both-backends parity · borrow-checker integration (read the carried `deps` fact
 re-derive) · scalar-vs-heap `&` distinction · store-lifetime safety (the @PLN85 fixes stay
 green) · out of scope: partial-move / copy-on-write · dogfood against a real heavy-mutation
 consumer.
+
+## Implementation steps (verifiable)
+
+Discipline for EVERY step: small + reviewable; lands GREEN on **both** backends (interp ==
+native, concern 3); READS the carried `deps` borrow fact rather than re-deriving per site
+(concern 4); keeps `tests/scripts/85-store-lifetime-*` green (concern 6). Each step names a
+runnable gate — graduate the passing probe to `tests/scripts/87-*.loft`. Land order: P1 → P3.0
+(realloc edge) → P2 → P3.
+
+### P1 — `&` on local bindings (additive, non-breaking)
+
+`&` is load-bearing only for scalar params today; on heap it is a no-op (struct/vector are
+already reference-by-default). P1 makes `&` ACCEPTED + ALIASING on a binding RHS; it does NOT
+change reassignment (that is P2), so P1 is behaviour-preserving for existing code.
+
+- **P1.1 — Parser accepts `&<lvalue>` on a binding RHS.** Extend the assignment-RHS parse
+  (`parser/expressions.rs`) to accept `x = &<binding|field|element>`, recording `x` as a borrow
+  of the source — the existing `&`-param notation, now at a local.
+  *Verify:* `chunk = Chunk{cells:[1,2,3]}; cells = &chunk.cells` parses with NO error
+  (parse-success test); a fresh-temp `&mk()` is handled by P1.3, a scalar `&5` stays as the
+  scalar by-ref form (concern 5).
+- **P1.2 — Codegen aliases the `&`-binding by reusing the `&`-param lowering.** `x`'s type carries
+  the borrow dep `{source}`; codegen views the source store (no copy), reading the carried `deps`
+  fact — NO new lowering, reuse the `&vector`/`&struct` param aliasing at the local site.
+  *Verify (both backends):* `cells = &chunk.cells; cells[0] = 99; assert(chunk.cells[0] == 99)`.
+- **P1.3 — Borrow check rejects `&` to a non-outliving source.** Reuse the source-outlives-binding
+  inference the `&`-param already relies on (no lifetime annotation — C38 declined reference
+  *types*; this is a binding *notation*, concern 4).
+  *Verify:* `o = &mk()` (fresh temp) → load-time error naming the dangling source; `o = &existing`
+  (outlives) → admitted.
+- **P1.4 — P1 gate matrix → graduate.** `x = &<src>; <mutate x>; assert <src sees it>` ×
+  {struct field, vector, nested-field} × {interp, native}, plus a `cells = chunk.cells` (no-`&`)
+  control (unchanged). → `tests/scripts/87-p1-amp-local-binding.loft`.
+  *Verify:* matrix green both backends, no leak (`LOFT_STORES=warn`).
+
+### P3.0 — Pin the `&vector` realloc edge (do BEFORE P2/P3; concern 2)
+
+`LOFT.md:1529` claims `&vector<T>` is needed for `+=` to propagate, but a grow seems to propagate
+without `&`. Settle it with a realloc-FORCING grow on both backends.
+- *Verify:* `v = &src.vec; for … { v += [..] }` past the inline capacity; `assert(len(src.vec)`
+  grew on both backends. If `&` is NOT needed → `LOFT.md:1529` is stale, fix it. If a realloc cell
+  DOES need `&` → record the cell so **P3.1 never flags it**.
+
+### P2 — reassignment-locality (BREAKING — de-risked: P0 migration is empty)
+
+Changes EXACTLY one cell of the issue matrix: "heap reassign, no `&`" propagate → local rebind.
+Field/element writes are UNCHANGED (still write through).
+
+- **P2.1 — Non-`&` whole-binding reassignment → LOCAL REBIND.** At the heap-binding assignment
+  codegen site, a non-`&` `o = X` allocates a FRESH store for `o`, leaving the source untouched
+  (today it overwrites the source in place).
+  *Verify (both backends):* `fn f(o: Obj){ o = Obj{x:9} }  a = Obj{x:1}; f(a); assert(a.x == 1)`
+  (caller UNCHANGED, was 9 pre-P2); control `fn g(o){ o.x = 9 }` still propagates (`a.x == 9`).
+- **P2.2 — `&` whole-binding reassignment → WRITE BACK.** A `&` binding/param reassignment writes
+  the new value into the source store — `&` now means "reassigning this binding writes back",
+  uniform across scalar and heap.
+  *Verify (both backends):* `fn f(o: &Obj){ o = Obj{x:9} }  a = Obj{x:1}; f(&a); assert(a.x == 9)`.
+- **P2.3 — Store-lifetime safety (concern 6).** The P2.1 fresh-store rebind drops the source view;
+  the old store's ownership/free must stay sound.
+  *Verify:* `tests/scripts/85-store-lifetime-*` green after P2.1/P2.2 both backends; P2 matrix
+  leak-free (`LOFT_STORES=warn`).
+- **P2.4 — P2 gate matrix → graduate.** `fn f(o){o=X}` no-`&` → caller unchanged; `&` → caller
+  sees X. × {param, local} × {struct, vector, scalar} × {interp, native}. →
+  `tests/scripts/87-p2-reassign-locality.loft`. *Verify:* green both backends, no leak.
+
+### P3 — W4 redundant-`&` lint (the @PLN46 warning family)
+
+- **P3.1 — Detection: redundant `&` = never reassigned, HEAP only.** A `&` binding/param is
+  redundant iff its body field/element-mutates but never REASSIGNS it (reuse the reassignment
+  detector from the P0 sweep). Scalar `&` is always needed → never flagged (concern 5). Exclude
+  any realloc cell P3.0 found load-bearing.
+  *Verify:* `fn f(o: &Obj){ o.x = 1 }` → flagged; `fn f(o: &Obj){ o = X }` → NOT flagged;
+  `fn f(o: &integer){ o = 5 }` → NOT flagged.
+- **P3.2 — W4 warning emission.** `Level::Warning` with actionable text ("`&` here has no effect;
+  `&` only matters when you reassign the binding"); silenceable via the warning-suppression flag.
+  *Verify:* warning + message for the redundant case; a `tests/runtime_warnings.rs` W4 case.
+
+### Close-out
+
+- **D1 — dogfood (concern 8).** Validate `&`-binding ergonomics against crawler's nested-mutation
+  world — does `&` read naturally at depth, or awkward? Surface the signal, don't paper over.
+- **D2 — strip the throwaway P0 sweep** from `scopes::check` (the `LOFT_SWEEP_P0` instrument)
+  before the PR.
