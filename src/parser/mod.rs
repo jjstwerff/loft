@@ -8827,6 +8827,233 @@ mod plan86_admission_tests {
         );
     }
 
+    /// @PLN86 prevention #4 — adversarial admission ESCAPE suite.  A battery that
+    /// TRIES to break out across every dimension (capability / totality / raw-write);
+    /// each must be rejected at load.  Positive controls prove the suite is not
+    /// vacuously rejecting everything — a sandbox that admits nothing is useless.
+    /// "No unknown holes" is unprovable, so this is how confidence is earned.
+    #[test]
+    fn admission_escape_suite_rejects_every_breakout() {
+        // Parse + admit; ASSERT the probe parsed (a parse error would make the
+        // admission check vacuous — a silent pass), then return the errors.
+        fn adm(sel: &[&str], libs: &[&str], caps: &[&str], src: &str) -> Vec<String> {
+            let p = parse_admit_libs(sel, libs, caps, src);
+            assert!(
+                p.diagnostics.level() < crate::diagnostics::Level::Error,
+                "probe did not parse (vacuous):\n{src}\n{:?}",
+                p.diagnostics.lines()
+            );
+            p.sandbox_admission_errors()
+        }
+        // A forbidden #cap native, declared in-source and NOT in an allowed library,
+        // so the fine-grained capability gate applies to it.
+        let secret = "fn secret() -> integer;\n#native\n#cap \"danger\"\n";
+
+        // ===== ESCAPES — admission MUST reject (≥1 error). =====
+        let escapes: Vec<(&str, Vec<String>)> = vec![
+            (
+                "cap: direct ungranted call",
+                adm(
+                    &["fn:evil"],
+                    &["code"],
+                    &[],
+                    &format!("{secret}fn evil() -> integer {{ secret() }}\n"),
+                ),
+            ),
+            (
+                "cap: indirect fn-ref (L4)",
+                adm(
+                    &["fn:evil"],
+                    &["code"],
+                    &[],
+                    &format!("{secret}fn evil() -> integer {{ f = secret; f() }}\n"),
+                ),
+            ),
+            (
+                "cap: via sandboxed helper",
+                adm(
+                    &["fn:evil", "fn:helper"],
+                    &["code"],
+                    &[],
+                    &format!(
+                        "{secret}fn helper() -> integer {{ secret() }}\nfn evil() -> integer {{ helper() }}\n"
+                    ),
+                ),
+            ),
+            (
+                "totality: unbounded while",
+                adm(
+                    &["fn:evil"],
+                    &["code"],
+                    &[],
+                    "fn evil() { while true { } }\n",
+                ),
+            ),
+            (
+                "totality: self-recursion",
+                adm(
+                    &["fn:evil"],
+                    &["code"],
+                    &[],
+                    "fn evil() -> integer { evil() }\n",
+                ),
+            ),
+            (
+                "totality: mutual recursion",
+                adm(
+                    &["fn:a", "fn:b"],
+                    &["code"],
+                    &[],
+                    "fn a() -> integer { b() }\nfn b() -> integer { a() }\n",
+                ),
+            ),
+            (
+                "totality: abort op assert",
+                adm(
+                    &["fn:evil"],
+                    &["code"],
+                    &[],
+                    "fn evil() { assert(false, \"x\") }\n",
+                ),
+            ),
+            (
+                "totality: abort op panic",
+                adm(&["fn:evil"], &["code"], &[], "fn evil() { panic(\"x\") }\n"),
+            ),
+            (
+                "totality: while non-constant step",
+                adm(
+                    &["fn:evil"],
+                    &["code"],
+                    &[],
+                    "fn evil(n: integer) { i = 0; j = 2; while i < n { i = i + j } }\n",
+                ),
+            ),
+            (
+                "totality: while conditional step",
+                adm(
+                    &["fn:evil"],
+                    &["code"],
+                    &[],
+                    "fn evil(n: integer, c: boolean) { i = 0; while i < n { if c { i = i + 1 } } }\n",
+                ),
+            ),
+            (
+                "cap: fn-ref in a collection (L4 — caught at fn-ref creation site)",
+                adm(
+                    &["fn:evil"],
+                    &["code"],
+                    &[],
+                    &format!("{secret}fn evil() -> integer {{ v = [secret]; v[0]() }}\n"),
+                ),
+            ),
+            (
+                "cap: fn-ref returned then called (L4 — caught at fn-ref creation site)",
+                adm(
+                    &["fn:evil", "fn:get"],
+                    &["code"],
+                    &[],
+                    &format!(
+                        "{secret}fn get() -> fn() -> integer {{ secret }}\nfn evil() -> integer {{ g = get(); g() }}\n"
+                    ),
+                ),
+            ),
+            (
+                "cap: fn-ref in a struct field (L4 — caught at fn-ref creation site)",
+                adm(
+                    &["fn:evil"],
+                    &["code", "prog"],
+                    &[],
+                    &format!(
+                        "{secret}struct Holder {{ f: fn() -> integer }}\nfn evil() -> integer {{ h = Holder {{ f: secret }}; h.f() }}\n"
+                    ),
+                ),
+            ),
+            (
+                "raw-write: field",
+                adm(
+                    &["fn:evil"],
+                    &["code", "prog"],
+                    &[],
+                    "struct Ent { hp: integer }\nfn evil(e: Ent) -> integer { e.hp = 0; e.hp }\n",
+                ),
+            ),
+            (
+                "raw-write: index",
+                adm(
+                    &["fn:evil"],
+                    &["code", "prog"],
+                    &[],
+                    "fn evil(v: vector<integer>) -> integer { v[0] = 9; v[0] }\n",
+                ),
+            ),
+            (
+                "raw-write: nested field",
+                adm(
+                    &["fn:evil"],
+                    &["code", "prog"],
+                    &[],
+                    "struct In { hp: integer }\nstruct Ent { it: In }\nfn evil(e: Ent) -> integer { e.it.hp = 0; e.it.hp }\n",
+                ),
+            ),
+        ];
+        for (name, e) in &escapes {
+            assert!(!e.is_empty(), "ESCAPE NOT REJECTED — {name}");
+        }
+
+        // ===== CONTROLS — admission MUST admit (no errors). =====
+        let controls: Vec<(&str, Vec<String>)> = vec![
+            (
+                "bounded for + arithmetic",
+                adm(
+                    &["fn:ok"],
+                    &["code"],
+                    &[],
+                    "fn ok() -> integer { s = 0; for i in 0..10 { s += i } s }\n",
+                ),
+            ),
+            (
+                "bounded while (constant variant)",
+                adm(
+                    &["fn:ok"],
+                    &["code"],
+                    &[],
+                    "fn ok() -> integer { i = 0; while i < 10 { i = i + 1 } i }\n",
+                ),
+            ),
+            (
+                "struct construction (not a write)",
+                adm(
+                    &["fn:ok"],
+                    &["code", "prog"],
+                    &[],
+                    "struct Pt { x: integer }\nfn ok() -> Pt { Pt { x: 1 } }\n",
+                ),
+            ),
+            (
+                "local variable writes",
+                adm(
+                    &["fn:ok"],
+                    &["code"],
+                    &[],
+                    "fn ok() -> integer { x = 5; x = x + 1; x }\n",
+                ),
+            ),
+            (
+                "granted capability",
+                adm(
+                    &["fn:ok"],
+                    &["code"],
+                    &["danger"],
+                    &format!("{secret}fn ok() -> integer {{ secret() }}\n"),
+                ),
+            ),
+        ];
+        for (name, e) in &controls {
+            assert!(e.is_empty(), "CLEAN SCRIPT REJECTED — {name}: {e:?}");
+        }
+    }
+
     /// @PLN86 2.4 — no-raw-write rejects a field/index assignment to heap data,
     /// while struct construction + local-variable writes stay clean.
     #[test]

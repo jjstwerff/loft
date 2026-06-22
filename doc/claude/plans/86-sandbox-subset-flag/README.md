@@ -37,8 +37,13 @@ policy → reject-or-run).  Remaining work is post-v1 expressiveness + hardening
   leaves. **L4 hole found by probing the IR first** — a non-capturing fn-ref is a bare
   `Value::Int(def_nr)` (`apply(target,5)` → `n_apply(599i32,…)`), not a `FnRef` node, so
   it is read as a reference only in a `Function`-typed position (call arg / assignment).
-  Both `apply(target,…)` and `f=target; apply(f,…)` covered; residual
-  (returns/fields/collections) tracked. 3 tests.
+  Both `apply(target,…)` and `f=target; apply(f,…)` covered; the
+  returns/fields/collections forms are ALSO covered — recorded at the fn-ref CREATION
+  site, so the flow afterward (a returned fn-ref, a vector element, a struct field)
+  cannot escape it. **Confirmed by the prevention-#4 escape suite**
+  (`admission_escape_suite_rejects_every_breakout`): `v = [secret]; v[0]()`,
+  `get() -> fn(){ secret }` then call, and a `Holder { f: secret }` field call are each
+  rejected. (The earlier "residual tracked" note was stale.)
 - **1.4 ✅ (FFI + backend)** — **FFI:** `sandbox::reachable_ffi_bridges` flags every
   reachable def whose `#native` symbol is owned by an external native package
   (`native_symbol_crates`), distinct from built-in `#rust`/`#native` primitives — dlopen of
@@ -166,11 +171,21 @@ is the load-bearing open work, ranked **above** the catch-net:
    capability has no loft body, so its Rust is OPAQUE to this lint — the host vouches
    for native totality separately; this catches the loft-bodied (library) capability
    surface, which grows as libraries expose `#cap` functions.
-4. **Close + FUZZ the admission walk** — the root cause of admission gaps.  Drive the
-   documented residuals to zero and run an adversarial escape suite (try to reach a
-   forbidden capability, a non-terminating loop, a raw host write) so a fault-prone
-   script is never admitted.  "No unknown holes" is not provable, so fuzzing is how
-   confidence is earned.
+4. **Close + FUZZ the admission walk — ✅ DONE.** The root cause of admission gaps.
+   The adversarial escape suite `admission_escape_suite_rejects_every_breakout`
+   (`src/parser/mod.rs`) TRIES to break out across every dimension — capability
+   (direct / indirect fn-ref / via a sandboxed helper / a fn-ref in a collection,
+   return, or struct field), totality (unbounded `while`, self- + mutual recursion,
+   `assert` / `panic` abort ops, non-constant + conditional `while` steps), raw-write
+   (field / index / nested field) — and asserts admission rejects each (16 breakouts).
+   Positive controls (bounded `for`/`while`, struct construction, local writes, a
+   granted capability) prove it is not vacuously rejecting.  Each probe is guarded to
+   have PARSED, so a malformed probe can't pass silently.  **Residual closed by proof:**
+   the documented L4 returns/fields/collections residual is NOT a hole — fn-refs are
+   recorded at the CREATION site, so all three forms are rejected (the README note was
+   stale; now corrected).  "No unknown holes" is unprovable, so this is the standing
+   adversarial battery confidence rests on; the next deepening is to add forms as the
+   library/capability surface grows.
 
 **The catch-net (S7/S8) is demoted to a thin, ALARMED backstop** for the one thing
 prevention cannot reach — the unknown-unknown, an interpreter bug nobody has found
