@@ -1408,11 +1408,27 @@ impl State {
             stack.position += bump;
         }
         let slot_offset = stack.var_pos(v);
-        if stack.function.is_skip_free(v) || stack.function.is_inline_ref(v) {
-            // Skip-free / inline-ref keyed locals share an outer-owned store.
+        // De-conflated no-alloc gate (@PLN85 A.1 companion): gate on
+        // `is_inline_ref` ALONE — the genuine "borrow, don't allocate" signal —
+        // NOT `is_skip_free`, whose only contract is "don't emit `OpFreeRef`"
+        // (a free-time fact).  A keyed return-local that OWNS its store but
+        // transfers it on return is marked `skip_free`; the old `skip_free`
+        // sentinel suppressed `OpDatabase` for it, leaving `store_nr = u16::MAX`
+        // and OOB-panicking the next record op (`allocation.rs`).  With the gate
+        // on `inline_ref` such a local falls through and ALLOCATES below.
+        //
+        // The vector twin (`gen_set_first_vector_null`) keeps the broader
+        // `skip_free` gate on purpose: there `skip_free` also marks match-bind /
+        // `??`-coalesce borrowed views (`_mv_*`, `__ncc_*`) that are overwritten
+        // before read and must NOT allocate (allocating leaks them — they carry
+        // no `OpFreeRef`).  No owned-vector case needs the vector site changed,
+        // so de-conflating there only over-reaches.  See
+        // `tests/scripts/122-keyed-return-local-allocates.loft`.
+        if stack.function.is_inline_ref(v) {
+            // inline_ref keyed locals borrow an outer-owned store.
             // On first assignment, point the slot at it via the sentinel; on
             // reassignment there is nothing to re-init (no current shape
-            // produces a keyed skip-free reassignment).
+            // produces a keyed inline-ref reassignment).
             if first {
                 stack.add_op("OpInitRefSentinel", self);
                 self.code_add(slot_offset);
