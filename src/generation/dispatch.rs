@@ -639,6 +639,19 @@ impl Output<'_> {
         let variables = self.data.def(self.def_nr).variables();
         let var_raw_name = variables.name(var);
         let is_elm = var_raw_name.starts_with("_elm");
+        // A `skip_free` variable is a BORROWED VIEW by construction — the parser /
+        // scope analysis set the flag precisely to suppress its `OpFreeRef` because
+        // it does not own a store (e.g. a match-arm binding `match e { V { v } =>
+        // … }`, which aliases the subject's payload record).  Such a slot is always
+        // overwritten by the borrowing read (`InitRefSentinel` → `OpGetField`), so
+        // allocating a backing store here would orphan it: no free is emitted, so
+        // the store leaks (one per evaluation).  The interpreter's `InitRefSentinel`
+        // never allocates; this reads the same ownership fact rather than
+        // re-deriving it from the dep list — a vector-typed match-bind carries an
+        // EMPTY dep (it is not dep-tracked), so `owns_store` below would wrongly
+        // read it as owning.  The `??`-coalesce borrow (`__ncc_*`) instead carries a
+        // non-empty dep, so it already lands on the sentinel via `owns_store`.
+        let is_skip_free = variables.is_skip_free(var);
         let owns_store = match variables.tp(var) {
             Type::Reference(_, dep) | Type::Vector(_, dep) | Type::Enum(_, true, dep) => {
                 dep.is_empty()
@@ -652,7 +665,7 @@ impl Output<'_> {
             | Type::Spacial(_, _, dep) => dep.is_empty() || (dep.len() == 1 && dep[0] == var),
             _ => false,
         };
-        if is_elm || variables.is_inline_ref(var) || !owns_store {
+        if is_elm || variables.is_inline_ref(var) || is_skip_free || !owns_store {
             write!(w, "DbRef::NULL")?;
         } else {
             let ref_buf_type_id = {
