@@ -2599,6 +2599,46 @@ impl Definition {
         })
     }
 
+    /// Cluster-A.3 (OWNERSHIP_MODEL row 102) — THE adopt-vs-copy answer for a
+    /// heap binding from a struct/Reference-returning call: *may the caller
+    /// ADOPT the callee's returned store directly (no deep copy), or must it
+    /// COPY into a fresh store the binding owns?*
+    ///
+    /// ADOPT (returns `true`) iff the return is a genuinely FRESH store the
+    /// callee minted with no tie to any passed buffer:
+    /// - an **empty** return dep (`fn mk() -> Box { Box { … } }`), or
+    /// - the **`["??"]` one-buffer marker** (`Deps::pointer_marker()`, a single
+    ///   `u16::MAX`): an NRVO'd by-value return whose hidden `__ref`/`__vdb`
+    ///   buffer the caller already frees, so adopting it is safe.
+    ///
+    /// COPY (returns `false`) iff the return dep names a REAL attribute index —
+    /// whether a VISIBLE parameter (`fn idb(b) -> Box { b }`, dep `["b"]` — the
+    /// return aliases the arg) OR a HIDDEN `ref_return`-promoted work-ref attr
+    /// (`fn render(p) -> Canvas { cv = …; cv }`, dep `["cv"]` — the return IS
+    /// the caller-passed `__ref_N` buffer, which the caller REUSES across loop
+    /// iterations; adopting it without a copy aliases every iteration onto the
+    /// recycled buffer).
+    ///
+    /// This is a STRICTLY BROADER copy condition than
+    /// [`Self::returns_borrowed_view`]: that method answers the *source-free-bit*
+    /// question (does the return borrow a VISIBLE param?) and treats both hidden
+    /// cases (`["??"]` and `["cv"]`) alike as "not a borrow".  The adopt-vs-copy
+    /// decision must split them — `["??"]` adopts, `["cv"]` copies — so it reads
+    /// THIS predicate, not `returns_borrowed_view`.
+    #[must_use]
+    pub fn return_adopts_fresh_store(&self) -> bool {
+        let deps = self.returned().depend();
+        // Empty → owned/fresh → adopt.
+        if deps.is_empty() {
+            return true;
+        }
+        // The `["??"]` one-buffer marker (a lone `u16::MAX`, the
+        // `Deps::pointer_marker()` shape) is an NRVO'd hidden-buffer return the
+        // caller already frees — adopt.  Any OTHER non-empty dep names a real
+        // attr (visible param OR hidden work-ref) the return is tied to — copy.
+        deps.len() == 1 && deps[0] == u16::MAX
+    }
+
     /// Interpreter operator code.
     #[must_use]
     pub fn op_code(&self) -> u16 {

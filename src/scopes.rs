@@ -923,12 +923,26 @@ impl Scopes {
             self.var_order.push(v);
         }
         // When a Reference variable is assigned from a user-function call,
-        // codegen has two sub-paths (state/codegen.rs:1039-1066):
-        // - has_ref_params == true → gen_set_first_ref_call_copy deep-copy
-        // - has_ref_params == false → adoption (callee's __ref_N store IS
-        //   the returned struct's store), OR the callee returned a
-        //   different fresh store and the caller's __ref_N pre-alloc is
-        //   orphaned.
+        // codegen has two sub-paths (state/codegen.rs gen_set_first_at_tos /
+        // gen_set_first_ref_call_copy), keyed on the SAME carried adopt-vs-copy
+        // fact `Definition::return_adopts_fresh_store()` (Cluster A.3,
+        // OWNERSHIP_MODEL row 102):
+        // - adopts_fresh_store == false → the return is tied to a passed
+        //   buffer/param (a visible arg it aliases, or a hidden ref_return
+        //   work-ref the caller reuses); gen_set_first_ref_call_copy deep-copies
+        //   into a FRESH store `v` owns.
+        // - adopts_fresh_store == true → the return is genuinely fresh (empty
+        //   dep or the `["??"]` one-buffer marker); `v` adopts the callee's
+        //   store (the callee's `__ref_N` store IS the returned struct's store),
+        //   OR the callee minted a different fresh store and the caller's
+        //   `__ref_N` pre-alloc is orphaned.
+        // This reads the precise carried adopt-vs-copy fact rather than the
+        // coarse "callee has any visible ref param" proxy `has_ref_params` the
+        // 11 sites used to re-derive (A.3): a callee with a ref param that
+        // returns a *fresh* store (`fn mk_from(seed) -> Box { Box { v: [...] } }`)
+        // now adopts instead of wastefully deep-copying, while a hidden
+        // work-ref return (`fn render(p) -> Canvas { cv = …; cv }`, dep
+        // `["cv"]`) still copies — the coarse proxy lumped both as "copy".
         // P198 — most operators are wrapped in Value::Span by the parser
         // for diagnostics.  Unwrap before pattern-matching so the
         // deep-copy / make_independent logic fires for Span(Call(...))
@@ -943,12 +957,10 @@ impl Scopes {
             && data.def(*fn_nr).name.starts_with("n_")
             && data.def(*fn_nr).code != Value::Null
         {
-            let has_ref_params = data.def(*fn_nr).attributes.iter().any(|a| {
-                !a.hidden && matches!(a.typedef, Type::Reference(_, _) | Type::Enum(_, true, _))
-            });
-            if has_ref_params {
-                // codegen will take gen_set_first_ref_call_copy
-                // (state/codegen.rs:1186-1238) — OpConvRefFromNull +
+            let adopts_fresh_store = data.def(*fn_nr).return_adopts_fresh_store();
+            if !adopts_fresh_store {
+                // codegen will take gen_set_first_ref_call_copy —
+                // OpConvRefFromNull +
                 // OpDatabase + lock-args + OpCopyRecord deep-copy into a
                 // FRESH store owned by `v`.  Strip v's declared deps so
                 // get_free_vars emits OpFreeRef at scope exit; otherwise
@@ -960,7 +972,7 @@ impl Scopes {
                     function.make_independent(v, d);
                 }
             }
-            // `has_ref_params == false` call whose result is assigned
+            // `adopts_fresh_store == true` call whose result is assigned
             // to a Reference variable `v`.  At runtime the callee either:
             //   - **adopts** the placeholder (writes into the passed
             //     `__ref_N` and returns the same DbRef) — then `v`
@@ -986,7 +998,7 @@ impl Scopes {
             // v)` instead of `OpFreeRef(__ref_N)`: the runtime
             // store-nr comparison settles the two cases per execution
             // path (match → skip; differ → free).
-            if !has_ref_params && let Value::Call(_, args) = unspanned_value {
+            if adopts_fresh_store && let Value::Call(_, args) = unspanned_value {
                 for arg in args {
                     let arg_var = match arg {
                         Value::Var(av) => Some(*av),
@@ -1037,7 +1049,7 @@ impl Scopes {
                 }
             }
         }
-        // Companion to the has_ref_params == true branch above for the
+        // Companion to the !adopts_fresh_store (deep-copy) branch above for the
         // var-to-var deep-copy path.  When `Set(v, Var(src))` and
         // both are References to the same struct, codegen takes
         // `gen_set_first_ref_var_copy` (state/codegen.rs:1025-1033)

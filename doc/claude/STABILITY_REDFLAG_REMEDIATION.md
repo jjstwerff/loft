@@ -64,9 +64,11 @@ escape* (102), the *return-source SET over arms* (99), *one funnelled return pat
 2. **A.2 — funnel the return path.** `block_result`/mid-return/native-forwarder
    converge on ONE emit that *reads* A.1 — delete the per-shape adopt/copy/borrow
    arms + the `RetSite` fork. *Gate:* the @PLN85 probe suite green both backends.
-3. **A.3 — replace the 11 `has_ref_params` sites + the bind/reassign forests**
-   (`parser/expressions.rs::assign`, the `codegen.rs` `gen_set_first_at_tos` region)
-   with the dep read. *Gate:* `grep -c has_ref_params` → ~0 in decision positions.
+3. **A.3 — replace the 11 `has_ref_params` sites with the dep read.** ✅ DONE
+   (the 3 live sites — `scopes.rs`, `codegen.rs` `gen_set_first_at_tos` + `gen_set_first_ref_copy`)
+   read `Definition::return_adopts_fresh_store()`. *Gate met:* `grep -c has_ref_params`
+   → 0 in decision positions; matrix green both backends. See the A.3 progress note
+   for the over-unification finding (the dep is broader than `returns_borrowed_view`).
 4. **A.4 — unify `is_borrowed_view`** (compute once, shared interp+native) and
    **delete the `scan_set` runtime witness**. *Gate:* the OOB/hidden-only edge agrees
    both backends; a `--static` dump shows the witness ops gone.
@@ -187,11 +189,29 @@ the signal explicit). `size_code` (`stack.rs`) is the same family, same disposit
       concrete heap type at `parse_if` ~1404, so it runs per-arm buffer delivery;
       the true arm + every `match_arm` get `Unknown` and skip it), which a clean fix
       must reconcile — out of the row-104 funnel's tight scope, routed forward.
-- [ ] A.3 (replace the 11 `has_ref_params` sites + bind/reassign forests) —
-      partially enabled: `is_borrowed_view` now has one home; the
-      `has_ref_params` adopt-vs-copy sites still re-derive (they encode "any
-      visible ref param", a coarser proxy than "the return borrows a param").
-      Their clean collapse depends on A.2.
+- [x] **A.3 — replace the 11 `has_ref_params` sites with the carried adopt-vs-copy
+      fact.** The 3 LIVE decision sites (`scopes.rs:946`, `state/codegen.rs:2066`
+      + `:2201`; codegen2201 is dead — the whole-suite usage sentinel found zero
+      fires across `tests/scripts` + `tests/docs`, kept consistent for revival)
+      now read ONE accessor `Definition::return_adopts_fresh_store()` (`data.rs`):
+      **dep empty OR the `["??"]` one-buffer marker ⇒ adopt; any real attr index
+      ⇒ copy**. `grep -c has_ref_params` in decision positions: 3 → 0.
+      **Over-unification guard (the load-bearing finding):** the A.3 fact is
+      STRICTLY BROADER than A.4's `returns_borrowed_view()` — that method checks
+      only VISIBLE attrs, but the adopt-vs-copy decision must ALSO copy a HIDDEN
+      `ref_return` work-ref return (dep `["cv"]`, the caller-reused `__ref_N`
+      buffer). The first collapse onto `returns_borrowed_view` REGRESSED
+      `143-plan51-cluster3` (cross-iteration `kt=66 Canvas` alias, interp-correct
+      / native-leak — caught by the both-backends gate); the broader
+      `return_adopts_fresh_store` fact splits `["??"]` (adopt) from `["cv"]`
+      (copy) and fixes it. The refinement flips copy→adopt ONLY for the
+      genuinely-fresh case (a ref param whose return is a fresh literal). The
+      return-ownership boundary matrix (15 cells + control, both backends) is
+      green before/after; full `cargo test` clean (the known stale-cdylib
+      registry fixtures `p310`/`p171`/`imaging`/`v2_*` are unrelated — they pass
+      on a fresh worktree build). `scan_set`/`OpFreeRefIfDistinct` +
+      `paired_witness` adopt-vs-orphan witness DELIBERATELY retained (A.4 guard).
+      Regression `tests/scripts/85-store-lifetime-return-ownership-adopt.loft`.
 - [x] **C.0–C.3 — `for_each_owned_child` keystone** (commit `4ff673f8`): `remove_claims`
       collapsed 9 arms/174 lines → 2 arms/41 lines onto one carried heap-cascade walk;
       `copy_claims_hash_body` reads the keystone spine. Over-unification guard:
