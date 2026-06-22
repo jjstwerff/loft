@@ -1474,3 +1474,34 @@ pub fn test() {
          (expected a small constant). Report:\n{report}"
     );
 }
+
+// @PLN85 A.1 part i — a nullable-returning fn (`if b { value } else { null }`)
+// whose result is bound by a caller must free that local at the caller's scope
+// exit.  The return-source SET drives free-suppression in the CALLEE (the arm
+// buffers are transferred), but the suppression must be PATH-LOCAL: a global
+// `skip_free` stamp on the source over-suppresses the caller's binding too,
+// leaking it (the 25-nullable-sequences regression this guards).
+#[test]
+fn pln85_nullable_return_caller_binding_freed() {
+    let leaks = leaks_for(
+        r#"
+struct NRow { id: integer, tag: text }
+fn maybe(b: boolean) -> vector<integer> { if b { [10, 20] } else { null } }
+fn maybe_row(b: boolean) -> NRow { if b { NRow { id: 9, tag: "z" } } else { null } }
+pub fn test() {
+  n = maybe(false);
+  p = maybe(true);
+  assert(n == null, "n null");
+  assert(len(p) == 2, "p len");
+  r = maybe_row(false);
+  q = maybe_row(true);
+  assert(r == null, "r null");
+  assert(q.id == 9, "q id");
+}
+"#,
+    );
+    assert!(
+        leaks.is_empty(),
+        "nullable-return caller bindings leaked: {leaks:?}"
+    );
+}
