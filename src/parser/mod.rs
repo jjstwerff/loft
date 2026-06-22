@@ -720,6 +720,17 @@ impl Parser {
         crate::sandbox::sandbox_space_degree(&self.data, &self.def_sandbox)
     }
 
+    /// @PLN86 prevention #3 — host capabilities that are NOT total: every
+    /// `#cap`-tagged function whose call tree can reach an abort op.  A host-side
+    /// lint (the mirror of the script-side 3.3 exclusion); an empty result means the
+    /// loft-bodied capability surface cannot fault the host on a script value.
+    #[must_use]
+    pub fn sandbox_capability_totality_violations(
+        &self,
+    ) -> Vec<crate::sandbox::CapTotalityViolation> {
+        crate::sandbox::capability_totality_violations(&self.data, &self.sandbox_fn_refs)
+    }
+
     /// @PLN86 — the human-readable worst-case complexity report (time + space).
     #[must_use]
     pub fn sandbox_complexity_report(&self) -> String {
@@ -8768,6 +8779,51 @@ mod plan86_admission_tests {
             p3.sandbox_complexity_report().contains("space O(n^2)"),
             "report names the space axis: {}",
             p3.sandbox_complexity_report()
+        );
+    }
+
+    /// @PLN86 prevention #3 — TOTAL host capabilities: a `#cap`-tagged function that
+    /// can reach an abort op (directly OR via a helper) is flagged as not total; a
+    /// capability that validates and returns a clean value is clean.  The host-side
+    /// mirror of the script-side 3.3 abort-op exclusion.
+    #[test]
+    fn capability_totality_flags_abort_reaching_caps() {
+        let src = "\
+            fn cap_bad(n: integer) -> integer { assert(n > 0, \"pos\"); n }\n#cap \"game\"\n\
+            fn cap_ok(n: integer) -> integer { if n > 0 { n } else { 0 } }\n#cap \"game\"\n\
+            fn helper(n: integer) -> integer { assert(n > 0, \"x\"); n }\n\
+            fn cap_trans(n: integer) -> integer { helper(n) }\n#cap \"game\"\n";
+        let p = parse_admit_libs(&[], &["code"], &[], src);
+        let v = p.sandbox_capability_totality_violations();
+        let flagged: std::collections::HashSet<&str> =
+            v.iter().map(|x| p.data.def(x.capability).name()).collect();
+        // direct abort + transitive abort (via a non-cap helper) are both caught
+        assert!(
+            flagged.contains("n_cap_bad"),
+            "cap_bad reaches assert: {flagged:?}"
+        );
+        assert!(
+            flagged.contains("n_cap_trans"),
+            "cap_trans reaches assert via helper: {flagged:?}"
+        );
+        // a total capability is NOT flagged; a non-cap helper is never enumerated
+        assert!(
+            !flagged.contains("n_cap_ok"),
+            "cap_ok is total: {flagged:?}"
+        );
+        assert!(
+            !flagged.contains("n_helper"),
+            "non-cap helper is not a capability: {flagged:?}"
+        );
+        // the message is actionable
+        let bad = v
+            .iter()
+            .find(|x| p.data.def(x.capability).name() == "n_cap_bad")
+            .unwrap();
+        let msg = crate::sandbox::describe_cap_totality_violation(&p.data, bad);
+        assert!(
+            msg.contains("not total") && msg.contains("cap_bad"),
+            "actionable message: {msg}"
         );
     }
 

@@ -154,11 +154,18 @@ is the load-bearing open work, ranked **above** the catch-net:
    from the time rule).  `complexity_report` now names both axes (`time … / space …`).
    *Known v1 under-models* (future tightening): an explicit concat-reassign
    `v = v + [x]` (lowers via `OpAddVector` on a temp) and a kept growing return.
-3. **Total host capabilities** — the root cause of host-fn faults.  An allow-listed
-   host function is trusted but un-analysed; if it panics on a script-supplied value
-   the fault is past admission.  Require a capability function to be TOTAL (validate,
-   return a clean error value, never panic) and make it **lintable** — the host-side
-   mirror of the script-side abort-op exclusion (3.3).
+3. **Total host capabilities — ✅ DONE (loft-bodied surface).** The root cause of
+   host-fn faults.  An allow-listed capability is trusted but, unlike sandboxed code
+   (3.3), un-analysed; if it aborts on a script-supplied value the fault is past
+   admission.  `capability_totality_violations` (`src/sandbox.rs`) is the host-side
+   MIRROR of 3.3: over every `#cap`-tagged function it flags those whose call tree
+   (transitively, following every callee) reaches an `ABORT_OPS` op (`assert` /
+   `panic` / `log_fatal`), with an actionable "make it total — validate + return a
+   clean error" message (`describe_cap_totality_violation`).  API:
+   `Parser::sandbox_capability_totality_violations`.  **Limitation:** a NATIVE
+   capability has no loft body, so its Rust is OPAQUE to this lint — the host vouches
+   for native totality separately; this catches the loft-bodied (library) capability
+   surface, which grows as libraries expose `#cap` functions.
 4. **Close + FUZZ the admission walk** — the root cause of admission gaps.  Drive the
    documented residuals to zero and run an adversarial escape suite (try to reach a
    forbidden capability, a non-terminating loop, a raw host write) so a fault-prone

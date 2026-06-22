@@ -106,6 +106,14 @@ API + vetted pure-loft libraries. No file / network / env / process / FFI native
   symbol + group + fix. L4-complete — indirect fn-refs (`f = read_file; f(…)`) resolve to
   their target, so they can't escape. A script calling `file(...)`/`write(...)` under a
   policy that grants neither is rejected at load.
+- **TOTAL capabilities (host-side lint, @PLN86 prevention #3).** Admission gates *which*
+  capabilities a script reaches; `capability_totality_violations` gates whether those
+  capabilities can *fault the host*. It is the host-side mirror of the script-side abort-op
+  exclusion (3.3): over every `#cap`-tagged function it flags those whose call tree reaches
+  an abort op (`assert`/`panic`/`log_fatal`), so the host makes them total (validate + return
+  a clean error, never abort) before exposing them. Catches the **loft-bodied** (library)
+  capability surface; a **native** capability's Rust is opaque to the lint — the host vouches
+  for native totality separately.
 
 ### S2 — No native FFI, no rustc
 An admitted script never loads a cdylib and never runs through the native (rustc)

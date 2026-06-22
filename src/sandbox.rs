@@ -902,6 +902,93 @@ pub fn describe_totality_violation(data: &Data, v: &TotalityViolation) -> String
     }
 }
 
+/// @PLN86 prevention #3 — a host capability that is NOT total: a `#cap`-tagged
+/// function whose call tree (transitively) reaches an explicit-abort op (3.3's
+/// [`ABORT_OPS`]), so a script-supplied value could fault the HOST through it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CapTotalityViolation {
+    /// The `#cap`-tagged capability function.
+    pub capability: u32,
+    /// The explicit-abort op it can reach.
+    pub op: u32,
+    /// Where `capability` references `op` directly (None when the op is reached
+    /// only transitively, through a helper).
+    pub position: Option<Position>,
+}
+
+/// @PLN86 prevention #3 — TOTAL host capabilities.  An allow-listed capability is
+/// TRUSTED but, unlike sandboxed script code (3.3), un-analysed: if it aborts on a
+/// script-supplied value the fault is PAST admission, and a runtime `catch_unwind`
+/// only mops up after the break.  This is the host-side MIRROR of 3.3 — over every
+/// `#cap`-tagged function it flags those whose call tree reaches an [`ABORT_OPS`] op
+/// (`assert` / `panic` / `log_fatal`), so the host makes them total (validate +
+/// return a clean error, never abort) before exposing them.
+///
+/// Follows EVERY callee — a capability's whole implementation must be total, not
+/// just its top frame.  A NATIVE capability has no loft body, so its Rust is OPAQUE
+/// to this lint; the host vouches for native totality separately.  This catches the
+/// loft-bodied (library) capability surface, which grows as libraries expose `#cap`
+/// functions.
+#[must_use]
+pub fn capability_totality_violations(
+    data: &Data,
+    fn_refs: &HashMap<u32, HashSet<u32>>,
+) -> Vec<CapTotalityViolation> {
+    let mut violations = Vec::new();
+    let mut caps: Vec<u32> = (0..data.definitions())
+        .filter(|&d| !data.def(d).cap().is_empty())
+        .collect();
+    caps.sort_unstable();
+    for cap in caps {
+        // Transitive closure from the capability, following every callee; a native
+        // callee has no loft body, so it is a natural leaf (its Rust is opaque).
+        let mut reach = HashSet::new();
+        let mut work = vec![cap];
+        while let Some(d) = work.pop() {
+            if !reach.insert(d) {
+                continue;
+            }
+            let mut refs = HashSet::new();
+            referenced_defs(data, d, &mut refs);
+            add_recorded_fn_refs(fn_refs, d, &mut refs);
+            work.extend(refs);
+        }
+        // Any reached explicit-abort op (3.3) ⇒ the capability is NOT total.
+        let mut hits: Vec<u32> = reach
+            .iter()
+            .copied()
+            .filter(|&r| ABORT_OPS.contains(&data.def(r).name()))
+            .collect();
+        hits.sort_unstable();
+        for op in hits {
+            violations.push(CapTotalityViolation {
+                capability: cap,
+                op,
+                position: reference_position(data, cap, op),
+            });
+        }
+    }
+    violations
+}
+
+/// @PLN86 prevention #3 — render a capability-totality violation as an actionable
+/// host-side lint message.
+#[must_use]
+pub fn describe_cap_totality_violation(data: &Data, v: &CapTotalityViolation) -> String {
+    let cap = display_name(data, v.capability);
+    let op = display_name(data, v.op);
+    let at = v
+        .position
+        .as_ref()
+        .map_or_else(String::new, |p| format!("{p}: "));
+    format!(
+        "{at}host capability `{cap}` is not total: it can reach `{op}`, which aborts — a \
+         script-supplied value could fault the HOST through it (admission cannot see past a \
+         trusted capability).\n  fix: make `{cap}` total — validate the input and return a \
+         clean error value (e.g. a nullable result), never `{op}`."
+    )
+}
+
 /// @PLN86 step 3.4 — one def's intrinsic complexity: the deepest loop nesting at
 /// which plain work happens (`max_leaf`), and every call with the loop nesting it
 /// sits under (`(nesting, callee)`).  A pure single-def walk — the inter-procedural
