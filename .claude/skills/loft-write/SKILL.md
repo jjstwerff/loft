@@ -133,9 +133,16 @@ pub fn exported() { }   // pub = publicly visible
 
 Parameter modifiers:
 - `const T` — immutable (compile error to assign to it inside function)
-- `&T` — mutable reference, mutations propagate to caller
+- `&T` — a **live reference** to the caller's argument: reads see the caller's current value,
+  writes write the caller, field/element mutation mutates the caller. **Call WITHOUT `&`** — the
+  reference comes from the param's TYPE: `fn inc(n: &integer){ n = n + 1 }` is called `inc(x)`, not
+  `inc(&x)` (`&` is a binding marker, not a general operator). `&` to a temporary or in a general
+  expression is an error.
 - **`&` that is never mutated is a compile error** — drop it if the param is read-only
-- Omit modifier — pass by value/copy
+- Omit modifier — pass by value/copy (heap values still alias: field/element mutation propagates)
+
+A local reference is bound with `a = &b` (or `a: &T = b`); the operand must be addressable (a
+variable / struct field / vector element). Full model: [LOFT.md § References](../../../doc/claude/LOFT.md).
 
 A function body ending in an expression (no `;`) returns that value. Functions without `->` return `void`.
 

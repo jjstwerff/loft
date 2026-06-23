@@ -2190,6 +2190,11 @@ impl State {
                 | Type::Hash(_, _, _)
                 | Type::Index(_, _, _)
                 | Type::Spacial(_, _, _) => stack.add_op("OpPutRef", self),
+                // @PLN87 L1 — first-Set of a local `&`-link (`b = &a` →
+                // `b: &T = OpCreateStack(a)`): the value is the 12-byte stack-cell
+                // ref; store it raw into `b`'s RefVar slot.  Reads/writes of `b`
+                // then deref the cell to the source's slot.
+                Type::RefVar(_) => stack.add_op("OpPutRef", self),
                 Type::Tuple(elems) => {
                     let tuple_var_base = stack.function.stack(v);
                     self.emit_tuple_put_ops(stack, &elems, tuple_var_base);

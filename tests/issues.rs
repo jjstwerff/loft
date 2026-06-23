@@ -15401,7 +15401,6 @@ fn pln87_amp_rhs_link_is_not_rejected() {
 
 /// L1 — scalar local, LIVE read: a link reflects the source's current value.
 #[test]
-#[ignore = "@PLN87 L1 — scalar link live-read; un-ignore when `&a` binds a live reference to a's slot (not a copy)"]
 fn pln87_link_l1_scalar_live_read() {
     code!("fn check() -> integer { a = 3; b = &a; a = 5; b }")
         .expr("check()")
@@ -15410,7 +15409,6 @@ fn pln87_link_l1_scalar_live_read() {
 
 /// L2 — scalar local, WRITE-THROUGH (the north star): writing the link writes the source.
 #[test]
-#[ignore = "@PLN87 L2 (north star) — scalar link write-through; un-ignore when `b = 4` through a link writes a's slot"]
 fn pln87_link_l2_scalar_write_through() {
     code!("fn check() -> integer { a = 3; b = &a; b = 4; a }")
         .expr("check()")

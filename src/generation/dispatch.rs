@@ -123,6 +123,49 @@ impl Output<'_> {
             }
             return Ok(());
         }
+        // @PLN87 L1 — a local SCALAR `&`-link.  `b = &a` lowers to
+        // `b: &T = OpCreateStack(a)`; native represents it as a Rust mutable borrow
+        // (`&mut i64`), so reads/writes of `b` deref to `a`'s slot (the same shape a
+        // `&integer` PARAMETER already uses).  First-Set (the `OpCreateStack` value)
+        // (re)binds the reference to the source local; any other value is a
+        // write-THROUGH (`*var_b = …`).
+        if !variables.is_argument(var)
+            && let Type::RefVar(inner) = variables.tp(var)
+            && matches!(
+                **inner,
+                Type::Integer(..) | Type::Float | Type::Single | Type::Boolean | Type::Character
+            )
+        {
+            let name = sanitize(variables.name(var));
+            // A RAW pointer (`*mut T`), not `&mut T`: the source local stays usable
+            // and assignable while the link is alive (loft allows the aliasing that
+            // Rust's borrow checker forbids), matching the interpreter and loft's
+            // internal unchecked-aliasing model.  Scalars don't move, so the pointer
+            // stays valid for the source's scope.
+            let base = rust_type(inner, &Context::Variable);
+            if let Value::Call(d_nr, cargs) = to.unspan()
+                && self.data.def(*d_nr).name() == "OpCreateStack"
+                && let [src_arg] = cargs.as_slice()
+                && let Value::Var(src) = src_arg.unspan()
+            {
+                let src_name = sanitize(variables.name(*src));
+                if self.declared.contains(&var) {
+                    write!(w, "var_{name} = std::ptr::addr_of_mut!(var_{src_name})")?;
+                } else {
+                    self.declared.insert(var);
+                    write!(
+                        w,
+                        "let mut var_{name}: *mut {base} = std::ptr::addr_of_mut!(var_{src_name})"
+                    )?;
+                }
+            } else {
+                // write-THROUGH to the linked source
+                write!(w, "unsafe {{ *var_{name} = ")?;
+                self.output_code_inner(w, to)?;
+                write!(w, " }}")?;
+            }
+            return Ok(());
+        }
         // #257: aliasing a `&ref` param into a fresh local (`snap = s`), both
         // RefVars.  A local RefVar alias is non-owning and never written back
         // through, so storing the record `DbRef` by value (a pointer triple,

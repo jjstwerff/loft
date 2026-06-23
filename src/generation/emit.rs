@@ -211,6 +211,19 @@ impl Output<'_> {
                         return write!(w, "*var_{var_name}");
                     }
                     return write!(w, "var_{var_name}");
+                } else if let Type::RefVar(inner) = variables.tp(var)
+                    && matches!(
+                        **inner,
+                        Type::Integer(..)
+                            | Type::Float
+                            | Type::Single
+                            | Type::Boolean
+                            | Type::Character
+                    )
+                {
+                    // @PLN87 L1 — a local scalar `&`-link holds `*mut T` (raw); deref
+                    // to read the linked source's current value.
+                    return write!(w, "unsafe {{ *var_{var_name} }}");
                 } else if matches!(variables.tp(var), Type::Text(_)) && !self.tuple_text_to_string {
                     // Text locals are `String` — `&` coerces to `&str`.  Inside a
                     // (String, …) tuple-return literal (@P330) emit the bare name.

@@ -8,45 +8,59 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 detailed plan (phases, gates, the matrix) and the eight load-bearing concerns live there.
 Implemented by the loft2 agent.
 
-> ## ⚠️ CORRECTED MODEL (2026-06-23) — `&` is bind-site LINKING. SUPERSEDES the write-back framing.
+> ## ⚠️ CORRECTED MODEL (2026-06-23) — `&` binds a LIVE REFERENCE. SUPERSEDES the write-back framing.
 >
-> **`&` means exactly one thing: a binding (or part of a data structure) is LINKED to its source
-> instead of COPIED.** It is a bind-site marker, not a reassignment annotation. A linked binding is a
-> NORMAL variable — every operation (read, field/element mutate, whole reassign) goes THROUGH the link
-> to the source, using the EXISTING mutation code. We do NOT special-case assignment and we do NOT
-> change the mutation code.
+> **`&` means exactly one thing: a binding (or part of a data structure) is a LIVE REFERENCE to its
+> source instead of a COPY.** A reference is a normal variable — every operation goes THROUGH it to the
+> source, using the EXISTING mutation code (we do NOT special-case assignment and do NOT change the
+> mutation code): a READ sees the source's current value, a WRITE writes the source, a field/element
+> mutate mutates the source.
 >
-> **North star:** `a = 3; b = &a; b = 4; a` evaluates to **4** (`b` links to `a`; `b = 4` writes
-> through). The earlier "`&` makes a whole-binding REASSIGNMENT write back / non-`&` rebinds locally"
-> framing (P2 below) was WRONG and is being unwound; the write-back rejection it spawned is removed.
+> **North star:** `a = 3; b = &a; b = 4; a` evaluates to **4** (`b` references `a`; `b = 4` writes `a`).
 >
-> **Already enforced:** `&var = 3` (a `&` on the assignment TARGET) is an error — `&` is a bind-site
-> marker, not an lvalue (`operators.rs`; tests `pln87_amp_on_*`).
+> ### `&` is NOT a general operator — it only appears in a reference-BINDING position
+> Its operand must be **addressable**: a variable, a struct field, or a vector element — never a
+> temporary. (`&` is not a "normal expression"; it is a binding form.)
 >
-> **Baseline today (interp):** read a fresh link works (`b=&a; b`→3 ✅); but it is NOT live
-> (`a=3;b=&a;a=5;b`→3, want 5 ❌ — `&a` COPIES a scalar) and write-through fails (north star → no 4
-> ❌). Element/field mutation through a HEAP link already propagates (`cells=&vv[0]; cells[0]=99` ✅,
-> reference-default). So `&` on heap already shares; `&` on a scalar still copies. The work: make `&`
-> a true LIVE LINK (read- AND write-through), scalars first.
+> | Form | Allowed? | Meaning |
+> |---|---|---|
+> | `a = &b` | ✅ | `&b` as the WHOLE assignment RHS — bind a reference to `b`. |
+> | `a: &T = b` | ✅ | the declared type says reference; `b` is the referent. |
+> | `a = &(1+2)`, `a = &foo()` | ❌ error | operand is a temporary, not addressable. |
+> | `foo(&x)`, `&x + 1`, `[&a]` | ❌ error | `&` used as a general operator / sub-expression. |
+> | `foo(x)` where param is `&T` | ✅ | the reference comes from the param's TYPE — call WITHOUT `&`. |
+> | `&var = 3` (`&` on the TARGET) | ❌ error | `&` is a bind-site marker, not an lvalue. |
+>
+> So a `&` parameter is called **without** `&` at the call site (`foo(x)`), and a `&` local is bound
+> with `a = &b` / `a: &T = b`. ✅-ENFORCED: `&var = 3` (`operators.rs`; tests `pln87_amp_on_*`).
 >
 > ### The ladder — simplest first; each rung a runnable lock-in, both backends, leak-free
-> - **L1 — scalar local, live read.** `a=3; b=&a; a=5; b==5`. `b` is a live reference to `a`'s slot.
-> - **L2 — scalar local, write-through (NORTH STAR).** `a=3; b=&a; b=4; a==4`. Writing `b` writes `a`.
-> - **L3 — scalar struct-field link.** `s.x=3; b=&s.x; b=4; s.x==4`.
-> - **L4 — scalar vector-element link.** `v=[10,20]; c=&v[0]; c=99; v[0]==99`.
-> - **L5 — heap whole-value link.** `o=Obj{..}; p=&o; …` — confirm field mutation propagates (✅) and
->   pin whole-value behaviour through the link.
-> - **L6 — link as a function parameter.** `fn f(b:&integer){ b=4 } …; f(&a); a==4`. A linked param IS
->   a link to the caller's lvalue — replaces the old "&-param write-back" with the uniform link model.
-> - **L7 — edges.** link inside a data structure, link-to-link, scope/lifetime (source outlives link),
->   leak-freedom on both backends.
+> - **L1+L2 — scalar local, live read + write-through ✅ BUILT (interp + native, leak-free).**
+>   `a=3; b=&a; a=5; b==5` (live read) and `a=3; b=&a; b=4; a==4` (north star). `b` is a live
+>   reference to `a`'s slot, lowered to `b: &T = OpCreateStack(a)` (interp: RefVar deref; native:
+>   `*mut T` raw pointer — `&mut` trips Rust's borrow checker on the legal aliasing).
+> - **L3 — scalar struct-field reference.** `s.x=3; b=&s.x; b=4; s.x==4`.
+> - **L4 — scalar vector-element reference.** `v=[10,20]; c=&v[0]; c=99; v[0]==99`.
+> - **L5 — heap whole-value reference.** `o=Obj{..}; p=&o; …` — field mutation already propagates (✅,
+>   reference-default); pin whole-value behaviour.
+> - **L6 — `&` function parameter.** `fn f(b:&integer){ b=4 } …; f(a); a==4`. Called WITHOUT `&`.
+> - **L7 — edges.** reference inside a data structure, reference-to-reference, scope/lifetime (source
+>   outlives reference), leak-freedom on both backends.
+>
+> ### REMAINING front-end work (the codegen engine is done at L1/L2)
+> - **Addressable-operand check:** `&<temporary>` must error.
+> - **Ban `&` as a general operator:** `foo(&x)`, sub-expression `&`. This makes existing `foo(&x)`
+>   call sites an error — **~53 stdlib + ~75 test sites** migrate to the no-`&` form `foo(x)` (which
+>   already works for every `&`-param type). A deliberate ecosystem migration, sequenced after the
+>   binding rules land.
+> - **`a: &T = b` typed-local form** (additive; the `&` in a local's declared type — currently a parse
+>   error).
 >
 > ### Method (per rung)
-> Matrix-first probe in `/tmp` on `--interpret`; design the representation (a scalar link is a
-> reference to the source's slot — the single-indirect VIEW from P1); prove the WORKING bytecode on
-> BOTH backends before editing the compiler (loft-codegen skill); verify correct + leak-free with
-> `loft --interpret` / the harness (NOT bare `loft` — native, skips the interp leak check); pin a
-> `tests/` lock-in and un-ignore it. One rung at a time.
+> Matrix-first probe in `/tmp` on `--interpret`; prove the WORKING bytecode on BOTH backends before
+> editing the compiler (loft-codegen skill); verify correct + leak-free with `loft --interpret` / the
+> harness (NOT bare `loft` — native, skips the interp leak check); pin a `tests/` lock-in and
+> un-ignore it. One rung at a time.
 
 ---
 

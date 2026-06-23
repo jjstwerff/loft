@@ -1162,6 +1162,26 @@ use a separate collection or add after the loop"
         let rhs_pos = self.lexer.peek_pos().clone();
         let mut s_type = self.parse_operators(f_type, code, &mut parent_tp, 0);
         self.read_target_type = prev_read_target;
+        // @PLN87 L1 — a local `&`-binding to a SCALAR lvalue (`b = &a`) makes `b` a
+        // LIVE reference to the source's stack slot: lower it to
+        // `b: &T = OpCreateStack(a)` — the SAME stack-ref mechanism a `&T` parameter
+        // uses, so reading (L1) and writing (L2) `b` deref to `a`'s slot.  The prefix
+        // `&` set `amp_pending` during this RHS parse; a scalar RHS that is a plain
+        // `Var` is the L1 case (struct-field / vector-element sources are later rungs;
+        // heap sources keep the single-indirect view from P1, which leaves
+        // `amp_pending` for the existing handling).
+        if op == "="
+            && self.amp_pending
+            && matches!(
+                s_type,
+                Type::Integer(..) | Type::Float | Type::Single | Type::Boolean | Type::Character
+            )
+            && let Value::Var(src) = *code.unspan()
+        {
+            *code = self.cl("OpCreateStack", &[Value::Var(src)]);
+            s_type = Type::RefVar(Box::new(s_type));
+            self.amp_pending = false;
+        }
         if amp_vector_replace {
             let clear = self.cl("OpClearVector", &[Value::Var(var_nr)]);
             *code = Value::Insert(vec![clear, code.clone()]);

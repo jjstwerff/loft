@@ -1270,7 +1270,14 @@ site migrated; tests `imports::pln22_phase4_grouped_import` /
 express (e.g. `use a::(b::c, d)`), with a parse that doesn't collide with the
 struct-literal or call grammar.
 
-## C77 — Binding ownership: reference by default, `&` to reassign back
+## C77 — Binding ownership: heap aliases by default; `&` binds a live reference
+
+> **CORRECTED (2026-06-23, @PLN87).** The "`&` makes a *reassignment write back*" reading
+> below is superseded: **`&` binds a live REFERENCE** (read- and write-through to an
+> addressable source), not a reassignment annotation, and it is a binding marker — not a
+> general operator. Heap-aliases-by-default still holds. See
+> [OWNERSHIP_MODEL.md § The law](OWNERSHIP_MODEL.md) and
+> [plans/87-reference-default-binding.md](plans/87-reference-default-binding.md).
 
 **Question.** When `a = x` / `a = x.f` / `a = x.v[i]` binds from a value backed by
 another store, is the binding a COPY (independent value), a VIEW (alias), or chosen

@@ -1,0 +1,30 @@
+// @PLN87 L1/L2 — a scalar local `&`-reference is a LIVE link: reads see the source's
+// current value, writes write the source.  Runs on interp + --native + wasm, under the
+// store-leak gate.  `&` here is the allowed binding form (`a = &b`, addressable operand).
+
+fn test() {
+    // L1 — live read: the reference reflects the source's current value.
+    a = 3;
+    b = &a;
+    assert(b == 3, "fresh reference reads the source");
+    a = 5;
+    assert(b == 5, "reference is LIVE — sees a's update");
+
+    // L2 — write-through (north star): writing the reference writes the source.
+    c = 10;
+    d = &c;
+    d = 4;
+    assert(c == 4, "write through the reference writes the source");
+
+    // combined: alternating reads/writes through the reference and the source.
+    x = 1;
+    y = &x;
+    y = 7;
+    assert(x == 7, "write y -> x");
+    x = 9;
+    assert(y == 9, "read y <- x");
+    y = y + 1;
+    assert(x == 10 && y == 10, "read-modify-write through the reference");
+
+    print("pln87 scalar reference ok\n");
+}
