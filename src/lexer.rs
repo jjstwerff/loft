@@ -407,7 +407,17 @@ impl Lexer {
                         }
                     } else {
                         let ident = self.get_identifier();
-                        if self.keywords.contains(&ident) {
+                        if ident.is_empty() {
+                            // An unrecognized character: not a known token, not a
+                            // number/string/identifier start (e.g. a stray '\' in
+                            // code).  `get_identifier` consumed nothing, so we must
+                            // consume the offending char here — without this the
+                            // lexer re-reads the same position forever, hanging the
+                            // parser instead of reporting a clean error.
+                            self.err(Level::Error, &format!("Unexpected character {c:?}"));
+                            self.next_char();
+                            Lexer::none()
+                        } else if self.keywords.contains(&ident) {
                             LexResult::new(LexItem::Token(ident), pos)
                         } else {
                             LexResult::new(LexItem::Identifier(ident), pos)
@@ -1542,6 +1552,31 @@ mod test {
             }
         }
         assert_eq!(array(&mut Lexer::from_str(s, "tokens")), data);
+    }
+
+    #[test]
+    fn stray_unrecognized_char_errors_and_advances() {
+        // Regression #434 — an unrecognized character (a stray '\' in code) must
+        // produce an error AND advance past it.  The old code emitted an empty
+        // Identifier("") without consuming the char, so every cont() re-read the
+        // same position forever — an infinite parse loop / hang, not a clean error.
+        let mut l = Lexer::from_str("5 \\ 2", "stray");
+        // Drain with a hard cap well above the ~4 real tokens: if the lexer fails to
+        // advance, the stream never reaches `None` and only the cap stops it — that
+        // overrun IS the bug this guards against.
+        let mut steps = 0;
+        while l.peek().has != LexItem::None && steps < 50 {
+            l.cont();
+            steps += 1;
+        }
+        assert!(
+            steps < 50,
+            "lexer did not advance past a stray '\\' — it hangs"
+        );
+        assert!(
+            format!("{:?}", l.diagnostics).contains("Unexpected character"),
+            "a stray '\\' must report an 'Unexpected character' error"
+        );
     }
 
     #[test]
