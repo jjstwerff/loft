@@ -121,10 +121,14 @@ OPEN: **3**
 - **Effect:** correctness for native means "matches the interpreter on the tests we ran",
   not "obeys the semantics". The unwritten parts (heap/store steps, iterators, coroutines)
   have no spec but the interpreter's code.
-- **Status:** OPEN — the structural rough spot #3.
-- **Removal:** grow these rules to cover the core, and treat them as the oracle both
-  backends are tested against (a differential harness keyed to the rules, not to each
-  other).
+- **Status:** OPEN — **direction chosen (2026-06): a differential oracle.**
+- **Removal:** build a **differential oracle** — run a growing program corpus on BOTH
+  backends and assert they AGREE (value / trap / stdout / leak); these rules stay the
+  written contract that GUIDES the corpus (what behaviour to cover), not a third
+  implementation. A mismatch is then a divergence caught before ship, and every fixed
+  divergence grows the corpus. *Chosen for now over an executable shared semantics (both
+  backends conforming to one definition) — switchable to that later; these rules are reused
+  either way.*  Open follow-up: a plan issue for the oracle + corpus (none yet).
 
 ### D-op-2 — interp/native divergences are test-caught, not definition-caught
 - **Violates:** E-Op / E-Trap / the shared-contract premise
@@ -135,9 +139,10 @@ OPEN: **3**
 - **Effect:** every codegen fix this session (the bool-arg E0308, the `__native_tail_ret`
   lift) was a backend disagreeing with the interpreter; under a shared semantics each is a
   definitional error, found before shipping.
-- **Status:** OPEN — downstream of D-op-1.
-- **Removal:** the differential oracle of D-op-1 makes "interp and native step differently"
-  a definitional failure, not a missing test.
+- **Status:** OPEN — downstream of D-op-1 (the differential oracle).
+- **Removal:** the differential oracle (D-op-1) makes "interp and native disagree on a
+  program both accept" a *caught* failure (run-both-and-compare), not a coverage lottery —
+  the corpus, not luck, decides what is exercised.
 
 ### D-op-3 — trap-vs-null is context-dependent and lives only in code
 - **Violates:** E-Coalesce being a clean, written rule

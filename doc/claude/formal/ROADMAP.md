@@ -65,11 +65,11 @@ The real weight. Each is a `loft-lang/plans` issue, sequenced.
 | C2 | **D-own-3** | typed `Deps` (replace the overloaded `Vec<u16>`) — the substrate the rest of ownership reads | H2 ([DEPS_INVENTORY.md](../DEPS_INVENTORY.md)); *no issue yet* | M |
 | C3 | **D-own-1, D-own-2, D-own-5, D-own-4** | the `deps` borrow checker: ownership computed once per binding/path; free/copy/move derive from one `deps` fact; `&`-borrow source tracked in `deps`; reverse the #415 copy-on-bind stopgap | **[@PLN85](https://github.com/loft-lang/plans/issues/85)** | L (the north star) |
 
-## Phase D — the operational oracle (research-scale; possibly spec-adjusting)
+## Phase D — the operational oracle (decided: differential)
 
 | # | deviation(s) | project | direction |
 |---|---|---|---|
-| D1 | **D-op-1, D-op-2** | a **shared small-step semantics both backends are tested against** — turning an interp/native divergence (the D4/#433 class) from a test gap into a definitional error. Needs a differential oracle keyed to the rules. *No issue yet.* | **spec-may-adjust** at the edges: decide whether the goal is a full operational semantics or interp-as-spec + a differential harness — then file a plan |
+| D1 | **D-op-1, D-op-2** | **DECIDED (2026-06): a differential oracle** — run a growing corpus on BOTH backends and assert they agree (value / trap / stdout / leak); the operational.md rules guide coverage. Turns the interp/native divergence class (D4/#433) from a coverage lottery into a caught failure. Switchable later to an executable shared semantics; the rules reuse either way. *Needs a plan issue (none yet).* | code→spec (the chosen model) |
 
 ---
 
