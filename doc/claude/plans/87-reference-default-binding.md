@@ -47,14 +47,16 @@ Implemented by the loft2 agent.
 > - **L7 — edges.** reference inside a data structure, reference-to-reference, scope/lifetime (source
 >   outlives reference), leak-freedom on both backends.
 >
-> ### REMAINING front-end work (the codegen engine is done at L1/L2)
-> - **Addressable-operand check:** `&<temporary>` must error.
-> - **Ban `&` as a general operator:** `foo(&x)`, sub-expression `&`. This makes existing `foo(&x)`
->   call sites an error — **~53 stdlib + ~75 test sites** migrate to the no-`&` form `foo(x)` (which
->   already works for every `&`-param type). A deliberate ecosystem migration, sequenced after the
->   binding rules land.
-> - **`a: &T = b` typed-local form** (additive; the `&` in a local's declared type — currently a parse
->   error).
+> ### Front-end work
+> - **✅ Addressable-operand check** — `&<temporary>` (`&(1+2)`, `&f()`, `&123`) errors; a place
+>   (variable / struct field / vector element) is fine. `Parser::is_amp_place` at the prefix-`&` site
+>   (`operators.rs`); tests `parse_errors::pln87_amp_on_{temporary_paren,call_result,literal}_is_error`.
+> - **✅ `a: &T = b` typed-local form** — the `&` in a local's declared type binds a reference, the same
+>   as `a = &b` (sets `amp_pending`, reuses the L1 lowering). Both backends; tests
+>   `issues::pln87_typed_local_*`, script 434.
+> - **Ban `&` as a general operator** (REMAINING): `foo(&x)`, sub-expression `&`. This makes existing
+>   `foo(&x)` call sites an error — **~53 stdlib + ~75 test sites** migrate to the no-`&` form `foo(x)`
+>   (which already works for every `&`-param type). A deliberate ecosystem migration, sequenced next.
 >
 > ### Method (per rung)
 > Matrix-first probe in `/tmp` on `--interpret`; prove the WORKING bytecode on BOTH backends before

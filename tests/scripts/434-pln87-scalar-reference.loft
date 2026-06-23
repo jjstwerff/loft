@@ -26,5 +26,14 @@ fn test() {
     y = y + 1;
     assert(x == 10 && y == 10, "read-modify-write through the reference");
 
+    // #2 — the typed-local form `b: &T = src` (the `&` on the type, not the value).
+    p = 3;
+    q: &integer = p;
+    assert(q == 3, "typed reference reads the source");
+    p = 5;
+    assert(q == 5, "typed reference is LIVE");
+    q = 8;
+    assert(p == 8, "typed reference writes through to the source");
+
     print("pln87 scalar reference ok\n");
 }

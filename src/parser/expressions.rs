@@ -1023,19 +1023,6 @@ use a separate collection or add after the loop"
         mut parent_tp: Type,
         var_nr: u16,
     ) -> Type {
-        // @PLN87 P1.2 — a `&`-local binding: the base case (operators.rs) bound the RHS
-        // as a normal single-indirect VIEW (the inner heap type, NOT `RefVar` — which is
-        // double-indirect, codegen.rs:2139) and set `amp_pending`. Record the bound var
-        // so P2 can make a REASSIGNMENT of a `&`-binding write back, then reset the flag
-        // and fall through to the ordinary binding path (value-`Set` + borrow-dep + slot
-        // for a plain view).
-        if op == "=" && var_nr != u16::MAX && self.amp_pending {
-            self.amp_bindings
-                .entry(self.context)
-                .or_default()
-                .insert(var_nr);
-            self.amp_pending = false;
-        }
         self.check_iter_safety(to, f_type, op);
         // Save parent struct type before the RHS parse overwrites parent_tp.
         let lhs_parent_tp = parent_tp.clone();
@@ -1162,26 +1149,31 @@ use a separate collection or add after the loop"
         let rhs_pos = self.lexer.peek_pos().clone();
         let mut s_type = self.parse_operators(f_type, code, &mut parent_tp, 0);
         self.read_target_type = prev_read_target;
-        // @PLN87 L1 — a local `&`-binding to a SCALAR lvalue (`b = &a`) makes `b` a
-        // LIVE reference to the source's stack slot: lower it to
-        // `b: &T = OpCreateStack(a)` — the SAME stack-ref mechanism a `&T` parameter
-        // uses, so reading (L1) and writing (L2) `b` deref to `a`'s slot.  The prefix
-        // `&` set `amp_pending` during this RHS parse; a scalar RHS that is a plain
-        // `Var` is the L1 case (struct-field / vector-element sources are later rungs;
-        // heap sources keep the single-indirect view from P1, which leaves
-        // `amp_pending` for the existing handling).
+        // @PLN87 L1 / #2 — a local `&`-binding to a SCALAR lvalue (`b = &a` or
+        // `b: &integer = a`) makes `b` a LIVE reference to the source's stack slot:
+        // lower it to `b: &T = OpCreateStack(a)` — the SAME stack-ref mechanism a `&T`
+        // parameter uses, so reading (L1) and writing (L2) `b` deref to `a`'s slot.
+        // `amp_pending` is set by the prefix `&` (`b = &a`) OR the typed-annotation
+        // `&` (`b: &integer = a`); we gate on the SOURCE var's actual type (`s_type`
+        // is coerced to the RefVar target in the annotated form).  A non-scalar source
+        // keeps the single-indirect view from P1; a non-`Var` source is a later rung.
         if op == "="
             && self.amp_pending
+            && let Value::Var(src) = *code.unspan()
             && matches!(
-                s_type,
+                self.vars.tp(src),
                 Type::Integer(..) | Type::Float | Type::Single | Type::Boolean | Type::Character
             )
-            && let Value::Var(src) = *code.unspan()
         {
+            let inner = self.vars.tp(src).clone();
             *code = self.cl("OpCreateStack", &[Value::Var(src)]);
-            s_type = Type::RefVar(Box::new(s_type));
-            self.amp_pending = false;
+            s_type = Type::RefVar(Box::new(inner));
         }
+        // `amp_pending` is a one-shot per binding — clear it here so a `&` that did
+        // NOT take the scalar-reference path (a heap `&`-view, a non-`Var` source, an
+        // already-reported error) cannot leak the flag into the NEXT statement and
+        // wrongly turn `y = scalarvar` into a reference.
+        self.amp_pending = false;
         if amp_vector_replace {
             let clear = self.cl("OpClearVector", &[Value::Var(var_nr)]);
             *code = Value::Insert(vec![clear, code.clone()]);
@@ -2352,6 +2344,10 @@ use a separate collection or add after the loop"
         {
             let lnk = self.lexer.link();
             self.lexer.cont(); // consume ":"
+            // @PLN87 #2 — a `&` in the declared type (`b: &T = src`) makes `b` a
+            // reference to the addressable `src` — the same as `b = &src`, just with
+            // the `&` on the type instead of the value.  Mirror the param parser.
+            let is_ref = self.lexer.has_token("&");
             let mut got_annotation = false;
             if let Some(tp) = self.parse_type_full(u32::MAX, false)
                 && self.lexer.peek_token("=")
@@ -2360,9 +2356,21 @@ use a separate collection or add after the loop"
                 // vector-type-resolution chokepoint (definitions.rs `sub_type`
                 // `vector` arm), so a `vector<S>` annotation already arrives
                 // rewritten; no per-site hook here.
+                let tp = if is_ref {
+                    Type::RefVar(Box::new(tp))
+                } else {
+                    tp
+                };
                 self.change_var_type(*v_nr, &tp);
                 f_type = tp;
                 got_annotation = true;
+                // @PLN87 #2 — `b: &T = src` IS `b = &src`: flag the reference bind so
+                // the scalar-reference lowering (the `amp_pending` path in
+                // `parse_assign_op`) fires.  A later non-annotated `b = x` carries no
+                // flag, so it correctly writes THROUGH the reference instead.
+                if is_ref {
+                    self.amp_pending = true;
+                }
             }
             if !got_annotation {
                 self.lexer.revert(lnk);

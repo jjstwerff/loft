@@ -452,14 +452,12 @@ impl Parser {
     ) -> Type {
         let mut ls = Vec::new();
         if precedence >= OPERATORS.len() {
-            // @PLN87 P1.1 — a PREFIX `&<lvalue>` is a reference-to (a borrow), distinct
-            // from the binary `&` (bitwise-and "Land"). The binary form only ever sits
-            // BETWEEN operands, so a `&` seen here at an operand START is the prefix: it
-            // binds a local single-indirect VIEW of the lvalue (like no-`&`), flagging
-            // the `&`-ness via `amp_pending` so parse_assign_op records it in
-            // `amp_bindings` for P2's write-back. NOT a `RefVar` var: that slot is
-            // double-indirect (codegen.rs:2139), so reads would deref one level too far.
-            // (`&&` is its own token, so this never mis-fires on logical-and.)
+            // @PLN87 — a PREFIX `&<lvalue>` is a reference-to, distinct from the binary
+            // `&` (bitwise-and "Land"). The binary form only ever sits BETWEEN operands,
+            // so a `&` seen here at an operand START is the prefix: it flags the `&`-ness
+            // via `amp_pending` so `parse_assign_op` can lower a scalar reference to
+            // `OpCreateStack`. (`&&` is its own token, so this never mis-fires on
+            // logical-and.)
             if self.lexer.has_token("&") {
                 self.amp_pending = true;
                 let t = self.parse_part(var_tp, code, parent_tp);
@@ -485,6 +483,19 @@ impl Parser {
                         "`&` cannot appear on the left of an assignment — it marks a \
                          binding as a link to its source at the binding site (`x = &src`), \
                          not an assignment target; drop the `&` (the binding is already linked)"
+                    );
+                }
+                // @PLN87 #1 — `&`'s operand must be a PLACE: a variable, struct field,
+                // or vector element, never a temporary (a literal, computed value, or
+                // call result).  `&` binds a reference TO storage; a temporary has
+                // none.
+                if !self.first_pass && !Self::is_amp_place(code, &self.data) {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "`&` requires an addressable operand — a variable, struct field, \
+                         or vector element — not a temporary (a literal, computed value, \
+                         or call result)"
                     );
                 }
                 return t;

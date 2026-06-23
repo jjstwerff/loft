@@ -121,15 +121,10 @@ pub struct Parser {
     /// fn-ref is indistinguishable from an integer literal).  The admission unions
     /// these into the checked set so an indirect call can't escape (L4).
     pub(crate) sandbox_fn_refs: HashMap<u32, std::collections::HashSet<u32>>,
-    /// @PLN87 — `&`-bound locals per def (`cells = &chunk.cells`): the var binds a
-    /// VIEW (single-indirect, like no-`&`), but is flagged here so P2 can make a
-    /// whole-binding REASSIGNMENT of a `&`-binding write back rather than local-rebind.
-    /// A side flag, NOT the var type — `RefVar` would impose the wrong (double-indirect)
-    /// slot representation.
-    pub(crate) amp_bindings: HashMap<u32, std::collections::HashSet<u16>>,
-    /// @PLN87 — transient: set by the parser while parsing a `&<lvalue>` binding RHS,
-    /// consumed by `parse_assign_op` to record the bound var in `amp_bindings`, then
-    /// reset. A flag (not the `RefVar` type) keeps the var a single-indirect view.
+    /// @PLN87 — transient one-shot: set while parsing a `&<lvalue>` binding (the prefix
+    /// `&` in `b = &a`, or the `&` in a `b: &T = a` type annotation), consumed by
+    /// `parse_assign_op` to lower a SCALAR reference to `OpCreateStack`. Cleared per
+    /// binding so it never leaks into the next statement.
     pub(crate) amp_pending: bool,
     /// @PLN86 step 0.1 — true while parsing the BODY of a sandboxed def.  Gates
     /// the parser nesting guard so it never touches trusted code (zero cost
@@ -533,7 +528,6 @@ impl Parser {
             sandbox_unbounded_loops: HashMap::new(),
             sandbox_raw_writes: HashMap::new(),
             sandbox_fn_refs: HashMap::new(),
-            amp_bindings: HashMap::new(),
             amp_pending: false,
             in_sandbox: false,
             parse_depth: 0,
@@ -820,7 +814,6 @@ impl Parser {
         self.sandbox_unbounded_loops.clear();
         self.sandbox_raw_writes.clear();
         self.sandbox_fn_refs.clear();
-        self.amp_bindings.clear();
         self.amp_pending = false;
         self.data.reset();
         // @PLN22 Phase 2 — the main program parses under its own source
@@ -6954,6 +6947,43 @@ impl Parser {
                 (name == "OpGetField" || name == "OpGetVector" || name == "OpVectorRef")
                     && !args.is_empty()
                     && Self::is_addressable(&args[0], data)
+            }
+            _ => false,
+        }
+    }
+
+    /// @PLN87 #1 — is `val` a PLACE (an addressable lvalue: a variable, struct field,
+    /// or vector/array element) versus a TEMPORARY (a literal, a computed value, or a
+    /// call result)?  Broader than [`is_addressable`] (which is the narrower
+    /// "produces a heap DbRef" test the `&`-ARGUMENT path needs): a place includes a
+    /// SCALAR field/element (`s.x` → `OpGetInt(s, …)`), whose reference codegen is a
+    /// later rung (L3/L4) and copies for now — but it is still a place, not a
+    /// temporary.  Used to reject `&<temporary>` at a `&` binding.  The accessor
+    /// allowlist (place-GETTERS only) keeps temporary-builders like `OpGetTextSub`
+    /// and every arithmetic / `n_*` op out.
+    fn is_amp_place(val: &Value, data: &Data) -> bool {
+        match val.unspan() {
+            Value::Var(_) => true,
+            Value::Call(d_nr, args) => {
+                let name = data.def(*d_nr).name();
+                matches!(
+                    name,
+                    "OpGetField"
+                        | "OpGetVector"
+                        | "OpVectorRef"
+                        | "OpGetInt"
+                        | "OpGetFloat"
+                        | "OpGetSingle"
+                        | "OpGetByte"
+                        | "OpGetCharacter"
+                        | "OpGetBoolean"
+                        | "OpGetEnum"
+                        | "OpGetShort"
+                        | "OpGetRecord"
+                        | "OpGetRef"
+                        | "OpGetDbRef"
+                ) && !args.is_empty()
+                    && Self::is_amp_place(&args[0], data)
             }
             _ => false,
         }

@@ -15441,3 +15441,20 @@ fn pln87_link_l6_param_write_through() {
         .expr("check()")
         .result(Value::Int(4));
 }
+
+/// @PLN87 #2 — a typed-local reference `b: &T = src` is the L1 form with the `&` on
+/// the TYPE (instead of `b = &src`): a live reference to the addressable scalar `src`,
+/// read- and write-through.
+#[test]
+fn pln87_typed_local_scalar_reference_live_read() {
+    code!("fn check() -> integer { a = 3; b: &integer = a; a = 5; b }")
+        .expr("check()")
+        .result(Value::Int(5));
+}
+
+#[test]
+fn pln87_typed_local_reference_write_through() {
+    code!("fn check() -> integer { c = 10; d: &integer = c; d = 4; c }")
+        .expr("check()")
+        .result(Value::Int(4));
+}

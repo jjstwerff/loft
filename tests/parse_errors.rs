@@ -1540,3 +1540,23 @@ fn pln87_amp_on_compound_assign_target_is_error() {
     code!("fn test() { x = 5; print(\"{x}\\n\"); &x += 3; print(\"{x}\\n\"); }")
         .error("`&` cannot appear on the left of an assignment — it marks a binding as a link to its source at the binding site (`x = &src`), not an assignment target; drop the `&` (the binding is already linked) at pln87_amp_on_compound_assign_target_is_error:1:41");
 }
+
+// @PLN87 #1 — `&`'s operand must be a PLACE (variable / struct field / vector element),
+// never a temporary (literal, computed value, or call result).
+#[test]
+fn pln87_amp_on_temporary_paren_is_error() {
+    code!("fn test() { b = &(1 + 2); print(\"{b}\\n\"); }")
+        .error("`&` requires an addressable operand — a variable, struct field, or vector element — not a temporary (a literal, computed value, or call result) at pln87_amp_on_temporary_paren_is_error:1:26");
+}
+
+#[test]
+fn pln87_amp_on_call_result_is_error() {
+    code!("fn mk() -> integer { 5 } fn test() { b = &mk(); print(\"{b}\\n\"); }")
+        .error("`&` requires an addressable operand — a variable, struct field, or vector element — not a temporary (a literal, computed value, or call result) at pln87_amp_on_call_result_is_error:1:48");
+}
+
+#[test]
+fn pln87_amp_on_literal_is_error() {
+    code!("fn test() { b = &123; print(\"{b}\\n\"); }")
+        .error("`&` requires an addressable operand — a variable, struct field, or vector element — not a temporary (a literal, computed value, or call result) at pln87_amp_on_literal_is_error:1:22");
+}
