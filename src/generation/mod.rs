@@ -583,6 +583,23 @@ fn narrow_int_cast(tp: &Type) -> Option<&'static str> {
     }
 }
 
+/// #433 — does a value placed DIRECTLY into a plain `integer` (i64) destination
+/// need an `as i64` widen?  A narrow-int value-block (e.g. a `vec<u8>[i] ?? <int>`
+/// null-coalesce) self-casts its tail to the element width (`as u8`) so the
+/// element-store / append consumers, which require a narrow input, accept it.  When
+/// such a block is instead the RHS of an `integer` return or assignment, that narrow
+/// Rust type must be widened back, or rustc rejects with E0308 (`as u8` where i64 is
+/// expected).  Other consumers (call args, arithmetic, struct-field / element stores)
+/// coerce on their own, so only the two direct-placement seams (Return, Set) consult
+/// this.  True when `dest` is a wide integer and `val` is a narrow-integer block.
+#[must_use]
+fn block_needs_i64_widen(val: &Value, dest: &Type) -> bool {
+    matches!(dest, Type::Integer(_))
+        && narrow_int_cast(dest).is_none()
+        && matches!(val.unspan(), Value::Block(b)
+            if matches!(b.result, Type::Integer(_)) && narrow_int_cast(&b.result).is_some())
+}
+
 /// @PLN10 — text-returning natives whose generated **wrapper** body returns an
 /// owned `String` (their `codegen_runtime` impl was converted off the
 /// never-cleared `stores.scratch`).  The wrapper return type (the `-> …` at the

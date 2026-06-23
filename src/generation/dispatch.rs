@@ -8,7 +8,9 @@ use crate::ir_node::IrNode;
 use std::io::Write;
 
 use super::calls::contains_op_database;
-use super::{Output, default_native_value, narrow_int_cast, rust_type, sanitize};
+use super::{
+    Output, block_needs_i64_widen, default_native_value, narrow_int_cast, rust_type, sanitize,
+};
 
 impl Output<'_> {
     #[allow(clippy::too_many_lines)]
@@ -437,7 +439,12 @@ impl Output<'_> {
             // here; the narrow-cast suffix below closes it with `) as u8`.
             let wrap_bool =
                 !matches!(to, Value::Null) && matches!(variables.tp(var), Type::Boolean);
-            if wrap_bool {
+            // #433 — a narrow-int value-block (`vec<u8>[i] ?? <int>` ncc) assigned to
+            // a plain `integer` (i64) variable needs an `as i64` widen, same as the
+            // return seam (see block_needs_i64_widen).  Open the wrapping paren here;
+            // the suffix closes it below.
+            let widen_block = block_needs_i64_widen(to, variables.tp(var));
+            if wrap_bool || widen_block {
                 write!(w, "(")?;
             }
             // O7: when this text assignment opens a multi-segment format string,
@@ -607,6 +614,10 @@ impl Output<'_> {
                     } else {
                         write!(w, " as i64")?;
                     }
+                } else if widen_block {
+                    // #433 — close the paren opened above and widen the narrow-int
+                    // value-block to the `integer` (i64) variable's slot width.
+                    write!(w, ") as i64")?;
                 } else if let Value::Call(d_nr, _) = to.unspan() {
                     // When the variable type and the called function's return type differ
                     // (e.g., multiple parallel-for loops reusing `b` with different worker types),

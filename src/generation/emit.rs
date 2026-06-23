@@ -9,7 +9,9 @@ use crate::ir_node::{IrBlock, IrNode};
 use std::io::Write;
 
 use super::text::count_format_ops;
-use super::{Output, default_native_value, narrow_int_cast, rust_type, sanitize};
+use super::{
+    Output, block_needs_i64_widen, default_native_value, narrow_int_cast, rust_type, sanitize,
+};
 
 impl Output<'_> {
     /// `&Value` entry — wraps the native node in an [`IrNode`] and delegates to
@@ -404,6 +406,9 @@ impl Output<'_> {
                 } else {
                     let returns_text = matches!(returned, Type::Text(_));
                     let narrow = narrow_int_cast(returned);
+                    // #433 — widen a narrow-int value-block returned from a plain
+                    // `integer` (i64) function back to i64 (see block_needs_i64_widen).
+                    let widen_block = block_needs_i64_widen(val, returned);
                     // A direct `return helper()` where `helper` is itself a
                     // BUFFERED user text fn already yields a `Str` — no re-wrap.
                     // @PLN10 Phase A: EXCLUDE nwb inner fns (they now return an
@@ -512,7 +517,7 @@ impl Output<'_> {
                         write!(w, "{{ let _tmp = (")?;
                     } else if wrap_text {
                         write!(w, "Str::new(")?;
-                    } else if narrow.is_some() {
+                    } else if narrow.is_some() || widen_block {
                         write!(w, "(")?;
                     }
                     // P238: when the function's return type is a tuple
@@ -589,6 +594,8 @@ impl Output<'_> {
                         write!(w, ")")?;
                     } else if let Some(cast) = narrow {
                         write!(w, ") as {cast}")?;
+                    } else if widen_block {
+                        write!(w, ") as i64")?;
                     }
                 }
             }
