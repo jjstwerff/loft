@@ -96,8 +96,10 @@ semantics live in [binding.md](binding.md); here it is just one more thing `⤳`
 for free (`u8` flows into `integer`); the other way round (wider into narrower) needs an
 explicit `as`, unless the value is a literal that plainly fits. A literal takes whatever
 width is expected of it. And a variable written in several places gets the type big enough
-for *all* its writes (the join) — not just its first one. That last point is exactly where
-the #433-residual lives (deviation D4).
+for *all* its writes (the join) — not just its first one. That last point was the
+#433-residual; `(I-Join)` is now implemented for inferred locals (an inferred local widens
+to the join when a write would not fit; an annotated `x: u8` stays constrained), guarded by
+`tests/scripts/433-ijoin-multiply-assigned.loft`.
 
 ### Coercion closure
 
@@ -110,7 +112,7 @@ the #433-residual lives (deviation D4).
 
 ## Deviations
 
-OPEN: **5**
+OPEN: **4**
 
 ### D1 — four expected-type side-channels instead of one checking judgment
 - **Violates:** T-Chk (and its T-Chk-* instances)
@@ -143,18 +145,6 @@ OPEN: **5**
 - **Removal:** fold the narrow check into `⤳`/`(C-Int)` so a single relation both
   accepts and rejects.
 
-### D4 — `(I-Join)` not implemented: a multiply-assigned local keeps the narrowest type
-- **Violates:** I-Join
-- **Where:** front-end variable-type inference (no join across assignments)
-- **Effect:** **#433-residual** — `arg=0; arg=bytes[i]; arg=arg*256+…` infers `u8`
-  from the first write, overflows, and E0308s against its `i64` use under `--native`.
-  The shipped #433 fix (`block_needs_i64_widen`, a return/assign **seam** widen) is a
-  codegen patch for the visible-seam case; it does not compute the join for a
-  variable inferred narrow across branches. See R3.
-- **Status:** OPEN — the highest-leverage close (fixes the residual at the type, so
-  neither backend needs a seam patch)
-- **Removal:** infer a multiply-assigned local as `⨆` of its assignment types.
-
 ### D5 — integer width has three authorities that must agree by hand
 - **Violates:** the single-relation intent of C-Int (one authority)
 - **Where:** `Type::is_equal` (ignores width), `convert`/`is_narrowing_int` (errors on
@@ -171,9 +161,11 @@ OPEN: **5**
 Each deviation should have a falsifying program — the case where obeying the rule and
 obeying the code disagree. Examples on record:
 
-- **D1/D4:** `fn f(b: vector<u8>) -> integer { return (b[1] ?? 99); }` and the cbor
-  `read_value` cross-branch `arg` — interp obeys the rules, `--native` (pre-fix)
-  obeyed the code and E0308'd. (#432, #433 + residual.)
+- **D1:** `fn f(b: vector<u8>) -> integer { return (b[1] ?? 99); }` — interp obeys the
+  rules, `--native` (pre-fix) obeyed the code and E0308'd. (#432, #433.)
+- **D4 (CLOSED):** the cbor `read_value` cross-branch `arg` (`arg=bytes[i];
+  arg=arg*256+…`) inferred `u8` and overflowed. `(I-Join)` now widens it; the falsifier
+  graduated to `tests/scripts/433-ijoin-multiply-assigned.loft`.
 
 When a deviation closes, its falsifying program graduates to `tests/scripts/` and the
 entry here is deleted.

@@ -204,6 +204,11 @@ pub struct Function {
     pub(crate) current_loop: u16,
     loops: Vec<Iterator>,
     variables: Vec<Variable>,
+    /// Variables whose type came from an EXPLICIT `: Type` annotation (not inferred
+    /// from an assignment).  An annotated narrow integer (`x: u8`) stays constrained;
+    /// an INFERRED local widens to the join of its assignments — the `(I-Join)` rule
+    /// that closes the #433-residual (see `parse_assign_op`).
+    annotated: HashSet<u16>,
     work_text: u16,
     work_ref: u16,
     // Separate counter for vector-db work-refs created by `vector_db()`.
@@ -275,6 +280,7 @@ impl Function {
             work_ref: 0,
             work_vdb: 0,
             variables: Vec::new(),
+            annotated: HashSet::new(),
             work_texts: BTreeSet::new(),
             work_refs: BTreeSet::new(),
             inline_ref_vars: BTreeSet::new(),
@@ -446,6 +452,7 @@ impl Function {
             unique: HashMap::new(),
             loops: other.loops.clone(),
             variables: other.variables.clone(),
+            annotated: other.annotated.clone(),
             work_text: 0,
             work_ref: 0,
             work_vdb: 0,
@@ -1008,6 +1015,27 @@ impl Function {
         *ctr += 1;
         let nr = *ctr;
         self.add_variable(&format!("_{name}_{nr}"), type_def, lexer)
+    }
+
+    /// Mark a variable as carrying an EXPLICIT `: Type` annotation (vs an inferred type).
+    /// An annotated narrow integer stays constrained; an inferred one widens (`widen_int`).
+    pub fn set_annotated(&mut self, var_nr: u16) {
+        self.annotated.insert(var_nr);
+    }
+
+    /// Whether the variable's type came from an explicit annotation.
+    #[must_use]
+    pub fn is_annotated(&self, var_nr: u16) -> bool {
+        self.annotated.contains(&var_nr)
+    }
+
+    /// Widen an INFERRED integer variable's type directly to `type_def` (the `(I-Join)`
+    /// join target).  Bypasses `change_var_type`, which no-ops on integers because
+    /// `is_equal` collapses all integer widths to one type.
+    pub fn widen_int(&mut self, var_nr: u16, type_def: &Type) {
+        if let Some(v) = self.variables.get_mut(var_nr as usize) {
+            v.type_def = type_def.clone();
+        }
     }
 
     pub fn add_variable(&mut self, name: &str, type_def: &Type, lexer: &mut Lexer) -> u16 {

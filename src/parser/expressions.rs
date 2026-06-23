@@ -2182,6 +2182,33 @@ use a separate collection or add after the loop"
                 | Type::Character
                 | Type::Text(_)
         );
+        // (I-Join) D4 — an INFERRED scalar integer local reassigned a WIDER integer widens
+        // to the full `integer` (the join of its writes), instead of erroring on the
+        // narrowing (the #433-residual: `arg = bytes[i]; arg = arg*256+…`).  An explicitly
+        // annotated `x: u8` is NOT widened (it stays constrained).  Gated to a plain
+        // whole-variable target (not `v[i]`/`s.field`).  Pass 1 widens the var directly
+        // (`change_var_type` no-ops because `is_equal` collapses integer widths);
+        // `add_variable` preserves the widened type into pass 2, so the convert / narrowing
+        // checks below then see the joined type.
+        let widened_int;
+        let f_type: &Type = if op == "="
+            && var_nr != u16::MAX
+            && matches!(to.unspan(), Value::Var(vn) if *vn == var_nr)
+            && matches!(f_type, Type::Integer(_))
+            && !self.vars.is_annotated(var_nr)
+            && Self::is_narrowing_int(&s_type, f_type)
+            // Only widen when the value genuinely does NOT fit the narrow type — i.e.
+            // exactly when the assignment would otherwise be a narrowing error.  A wider
+            // value that PROVABLY fits (a constant) needs no widen; widening it anyway
+            // over-widens width-sensitive locals (it regressed the engine_host kernel).
+            && !self.int_value_fits(code, f_type)
+        {
+            self.vars.widen_int(var_nr, &crate::data::I64);
+            widened_int = crate::data::I64.clone();
+            &widened_int
+        } else {
+            f_type
+        };
         if op == "="
             && scalar_target
             && !self.first_pass
@@ -2422,6 +2449,10 @@ use a separate collection or add after the loop"
                     tp
                 };
                 self.change_var_type(*v_nr, &tp);
+                // (I-Join) — an EXPLICIT `: Type` annotation pins the variable's type, so
+                // it stays constrained (a wider write is a narrowing error).  An inferred
+                // local (no annotation) widens to the join instead (see parse_assign_op).
+                self.vars.set_annotated(*v_nr);
                 f_type = tp;
                 got_annotation = true;
                 // @PLN87 #2 — `b: &T = src` IS `b = &src`: flag the reference bind so
