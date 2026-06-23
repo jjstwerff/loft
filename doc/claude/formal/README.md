@@ -69,6 +69,13 @@ not duplicate: a deviation entry links to the lens analysis instead of re-explai
 | [operational.md](operational.md) | small-step semantics for the stable core | **started** — the scalar core as the shared interp/native contract (values/null sentinels, left-to-right order, the overflow/divide trap discipline + `??` suppression, state steps); 3 deviations (no shared semantics → divergence is structural, #433) |
 | [ownership.md](ownership.md) | the `deps` / borrow **checker** (lifetimes) — distinct from binding.md's surface | **started (aspirational)** — the 5 sound+complete invariants we steer toward (the rules), with the active @PLN85/@PLN87 migration as the 5 deviations. Written deliberately ahead of the implementation: the target steers the work |
 
+## Roadmap
+
+[ROADMAP.md](ROADMAP.md) is the single ordered view of every open deviation across the
+areas — sequenced into the order to resolve them, each flagged **code→spec** (the default)
+or **spec-may-adjust** (where the rule itself is the decision). Start there to see the path
+to a spec-conformant implementation; the per-area docs hold the detail.
+
 ## Deviation entry format
 
 ```
