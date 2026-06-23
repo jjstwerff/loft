@@ -15338,3 +15338,36 @@ fn run() -> integer { nested(\"n\").v + nested(\"x\").v }"
     .expr("run()")
     .result(Value::Int(94007 + 94100));
 }
+
+// ── @PLN87 P2 reassignment-locality / write-back CONSISTENCY lock-ins ─────────
+// The uniform model (mirrors tests/scripts/87-p2-reassign-locality.loft, which
+// holds the GREEN cells): a non-`&` whole-binding reassignment of a heap param
+// is LOCAL; a `&` reassignment writes BACK; field/element mutation propagates.
+// Struct + scalar cells already pass (P2.1).  These pin the still-inconsistent
+// VECTOR cells to their target consistent behaviour; un-ignore each when it lands.
+
+// Vector non-`&` reassignment must REBIND locally (leave the caller untouched),
+// like the struct case.  Today it APPENDS to the caller's backing (`len` grows).
+#[test]
+#[ignore = "@PLN87 P2.4 — un-ignore when vector param non-& reassignment rebinds locally (today it appends to the caller backing)"]
+fn pln87_vector_param_reassign_is_local() {
+    code!(
+        "fn vrebind(v: vector<integer>) { v = [7, 8, 9]; }
+fn check() -> integer { a = [1, 2, 3]; vrebind(a); len(a) }"
+    )
+    .expr("check()")
+    .result(Value::Int(3));
+}
+
+// Vector `&` reassignment must WRITE BACK (caller sees the new vector), like the
+// struct `&` case.  Today it is a no-op — the caller's vector is unchanged.
+#[test]
+#[ignore = "@PLN87 P2.4 — un-ignore when vector param & reassignment writes back (today it is a no-op)"]
+fn pln87_vector_param_amp_writes_back() {
+    code!(
+        "fn vamp(v: &vector<integer>) { v = [7, 8, 9]; }
+fn check() -> integer { a = [1, 2, 3]; vamp(&a); a[0] }"
+    )
+    .expr("check()")
+    .result(Value::Int(7));
+}

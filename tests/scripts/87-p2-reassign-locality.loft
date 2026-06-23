@@ -1,53 +1,68 @@
-// @PLN87 P2.4 — reassignment-locality gate (struct + scalar cells).
+// @PLN87 P2 — reassignment-locality / write-back CONSISTENCY contract.
 //
-// A whole-binding reassignment of a non-`&` heap PARAMETER (`o = Obj{..}`) is
-// LOCAL: it rebinds `o` to a fresh store and leaves the caller's value
-// untouched.  Reference-default field mutation (`o.x = 9`) still propagates.
-// The rebound store is freed at function exit, distinct-guarded against the
-// caller's original (witness `__orig`), so it is sound across conditional and
-// repeated rebind with no double-free and no leak (this script runs under
-// loft_suite's program-exit leak gate on the interpreter; native verified
-// separately via `loft --native`).
+// The uniform model: for a parameter of ANY type,
+//   * a non-`&` whole-binding reassignment (`o = X`) is LOCAL — it rebinds the
+//     parameter, leaving the caller's value untouched;
+//   * a `&` whole-binding reassignment writes BACK — the caller sees the new value;
+//   * field / element mutation (`o.x = 9`, `v[0] = 9`) always PROPAGATES
+//     (reference-default), independent of `&`.
+// Sound + leak-free across conditional / repeated rebind, on every backend (this
+// script runs under loft_suite's program-exit leak gate on the interpreter, and
+// through --native / --native-wasm).
 //
-// NOT covered here:
-//   - `&` write-back (P2.2): behaviour is correct (`g.x == 9`) but the
-//     `SetStackRef` path leaks the old caller store — a PRE-EXISTING gap in the
-//     `&`-reassignment codegen, tracked as P2.2-completion work.
-//   - vector cell (P2.4): vector param reassignment still appends to the
-//     caller's backing — the `__vdb` path is not yet rebind-aware.
+// This file holds the cells that are GREEN today.  The remaining cells —
+// vector non-`&` rebind (P2.4), vector `&` write-back, and the struct `&`
+// write-back store leak (P2.2) — are pinned as lock-in tests in tests/issues.rs
+// (search @PLN87) until they land, then move here.
 
 struct Obj { x: integer }
 
-// P2.1: non-& param reassign -> local rebind (caller unchanged).
-fn rebind(o: Obj) { o = Obj { x: 9 }; }
-// Control: reference-default field mutation still propagates.
-fn field_mut(o: Obj) { o.x = 7; }
-// Conditional rebind: sound on both the taken and untaken path.
-fn cond(o: Obj, c: boolean) { if c { o = Obj { x: 9 }; } }
-// Repeated rebind: each prior rebind store is freed, none leak.
-fn multi(o: Obj) { o = Obj { x: 2 }; o = Obj { x: 3 }; }
-// Field write (propagates) THEN whole-binding rebind (local): the caller keeps
-// the field write, not the rebound value.
-fn field_then(o: Obj) { o.x = 5; o = Obj { x: 9 }; }
+// --- struct, non-& : whole reassign is LOCAL ---
+fn o_rebind(o: Obj) { o = Obj { x: 9 }; }
+// --- struct : field mutation PROPAGATES (reference-default) ---
+fn o_field(o: Obj) { o.x = 7; }
+// --- struct, non-& : conditional rebind, both paths sound ---
+fn o_cond(o: Obj, c: boolean) { if c { o = Obj { x: 9 }; } }
+// --- struct, non-& : repeated rebind, no leak ---
+fn o_multi(o: Obj) { o = Obj { x: 2 }; o = Obj { x: 3 }; }
+// --- struct : field write (propagates) THEN whole rebind (local) ---
+fn o_field_then(o: Obj) { o.x = 5; o = Obj { x: 9 }; }
+// --- vector : element mutation PROPAGATES (reference-default) ---
+fn v_elem(v: vector<integer>) { v[0] = 9; }
+// --- scalar, non-& : reassign is LOCAL (by value) ---
+fn n_local(n: integer) { n = n * 2; }
+// --- scalar, & : reassign writes BACK ---
+fn n_amp(n: &integer) { n = 5; }
 
 fn main() {
-    a = Obj { x: 1 }; rebind(a);
-    assert(a.x == 1, "non-& param reassign is local (caller unchanged)");
+    a = Obj { x: 1 }; o_rebind(a);
+    assert(a.x == 1, "struct non-& reassign is local (caller unchanged)");
 
-    b = Obj { x: 1 }; field_mut(b);
-    assert(b.x == 7, "field mutation still propagates (reference-default)");
+    b = Obj { x: 1 }; o_field(b);
+    assert(b.x == 7, "struct field mutation propagates (reference-default)");
 
-    c1 = Obj { x: 1 }; cond(c1, true);
+    c1 = Obj { x: 1 }; o_cond(c1, true);
     assert(c1.x == 1, "conditional rebind (taken) is local");
-    c2 = Obj { x: 1 }; cond(c2, false);
+    c2 = Obj { x: 1 }; o_cond(c2, false);
     assert(c2.x == 1, "conditional rebind (untaken) leaves caller intact");
 
-    m = Obj { x: 1 }; multi(m);
-    assert(m.x == 1, "repeated rebind is local (no leak, no caller mutation)");
+    m = Obj { x: 1 }; o_multi(m);
+    assert(m.x == 1, "repeated rebind is local (no leak)");
 
-    f = Obj { x: 1 }; field_then(f);
+    f = Obj { x: 1 }; o_field_then(f);
     assert(f.x == 5, "field write propagates, later rebind is local");
 
+    ve = [1, 2, 3]; v_elem(ve);
+    assert(ve[0] == 9, "vector element mutation propagates");
+    assert(len(ve) == 3, "vector element mutation does not change length");
+
+    x = 3; n_local(x);
+    assert(x == 3, "scalar non-& reassign is local (by value)");
+
+    y = 1; n_amp(&y);
+    assert(y == 5, "scalar & reassign writes back");
+
+    // local (non-param) rebind sanity
     l = Obj { x: 1 }; l = Obj { x: 2 };
     assert(l.x == 2, "local rebind reassigns in place");
 
