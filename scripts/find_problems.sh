@@ -61,8 +61,19 @@ REPO_TAG=$(printf '%s' "$REPO_ROOT" | cksum | cut -d' ' -f1)
 # OUTSIDE the repo: a `target/`-relative TMPDIR breaks the package/registry tests
 # (they build fixtures in temp_dir and package/extract them — anything under
 # `target/` is excluded, so loft.toml goes missing).  /var/tmp is disk-backed.
+#
+# A sandbox, though, may not include /var/tmp in its write allow-list, so every
+# test that writes via temp_dir() then fails "Read-only file system".  So VERIFY
+# /var/tmp is actually writable (the dir can exist yet still be write-denied);
+# if not, fall back to the INHERITED TMPDIR — a sandbox sets that to a writable,
+# disk-backed scratch dir — or /tmp.  Non-sandbox machines are unaffected.
+INHERITED_TMPDIR="${TMPDIR:-/tmp}"
 LOFT_TEST_SCRATCH="/var/tmp/loft-test-scratch-$REPO_TAG"
-mkdir -p "$LOFT_TEST_SCRATCH"
+if ! ( mkdir -p "$LOFT_TEST_SCRATCH" && touch "$LOFT_TEST_SCRATCH/.wtest" ) 2>/dev/null; then
+	LOFT_TEST_SCRATCH="$INHERITED_TMPDIR/loft-test-scratch-$REPO_TAG"
+	mkdir -p "$LOFT_TEST_SCRATCH"
+fi
+rm -f "$LOFT_TEST_SCRATCH/.wtest" 2>/dev/null
 export TMPDIR="$LOFT_TEST_SCRATCH"
 export LOFT_TMPDIR="$LOFT_TEST_SCRATCH"
 LOG_DEFAULT=/tmp/loft_test.$REPO_TAG.log
