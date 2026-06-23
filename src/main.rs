@@ -4960,40 +4960,6 @@ fn main() {
         }
     }
     scopes::check(&mut p.data);
-    // @PLN87 P0 — one-time migration sweep (gated): list every heap-typed PARAMETER
-    // that is reassigned WHOLESALE (`o = …`, an IR `Set` on an argument slot), which
-    // PROPAGATES to the caller today and would become a local rebind under P2. The
-    // count gates whether P2 is safe. Run: `LOFT_SWEEP_P0=1 loft <program>`.
-    if std::env::var_os("LOFT_SWEEP_P0").is_some() {
-        use crate::data::{Type, Value};
-        let is_heap = |tp: &Type| tp.heap_def_nr().is_some() || matches!(tp, Type::Vector(..));
-        let mut total = 0usize;
-        let mut fns = 0usize;
-        for d in 0..p.data.definitions() {
-            let def = p.data.def(d);
-            let vars = def.variables();
-            let mut hits: Vec<u16> = Vec::new();
-            def.code().walk(&mut |node| {
-                if let Value::Set(var, _) = node
-                    && vars.is_argument(*var)
-                    && is_heap(vars.tp(*var))
-                {
-                    hits.push(*var);
-                }
-            });
-            if !hits.is_empty() {
-                hits.sort_unstable();
-                hits.dedup();
-                total += hits.len();
-                fns += 1;
-                println!("  {}  → reassigns heap param slot(s) {hits:?}", def.name());
-            }
-        }
-        println!(
-            "\n@PLN87 P0 sweep: {total} heap-param wholesale reassignment(s) across {fns} fn(s)"
-        );
-        std::process::exit(0);
-    }
     // @PLN11 Arc N / N3 (Step 2) — auto-compile `use`d libraries that opted in via
     // `[library] compile = "native"`, **build-before-mark**: build each library's
     // cdylib from the post-parse type schema FIRST, then mark its functions native

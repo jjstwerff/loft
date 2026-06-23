@@ -264,36 +264,6 @@ fn relocate_null_init(code: &mut Value, vdb: u16, block_scope: u16) -> bool {
 /// reclaim pass left a store the model says is dead un-freed past a later
 /// allocation (the Phase-4 Goal-E watermark guard).  Never panics in normal builds.
 pub fn check(data: &mut Data) {
-    // @PLN87 P0 migration sweep (gated, throwaway): every invocation path — run,
-    // `--tests`, native — calls `scopes::check`, so this fires the heap-param
-    // wholesale-reassignment sweep universally. `LOFT_SWEEP_P0=1 loft … / --tests …`.
-    if std::env::var_os("LOFT_SWEEP_P0").is_some() {
-        use crate::data::{Type, Value};
-        let is_heap = |tp: &Type| tp.heap_def_nr().is_some() || matches!(tp, Type::Vector(..));
-        let (mut total, mut fns) = (0usize, 0usize);
-        for d in 0..data.definitions() {
-            let def = data.def(d);
-            let vars = def.variables();
-            let mut hits: Vec<u16> = Vec::new();
-            def.code().walk(&mut |node| {
-                if let Value::Set(var, _) = node
-                    && vars.is_argument(*var)
-                    && is_heap(vars.tp(*var))
-                {
-                    hits.push(*var);
-                }
-            });
-            if !hits.is_empty() {
-                hits.sort_unstable();
-                hits.dedup();
-                total += hits.len();
-                fns += 1;
-                println!("  {}  → heap param slot(s) {hits:?}", def.name());
-            }
-        }
-        println!("@PLN87 P0 sweep: {total} heap-param wholesale reassignment(s) / {fns} fn(s)");
-        std::process::exit(0);
-    }
     // Plan-57 store-identity gate (Phase 2.5): emit the verifying store ops only
     // when LOFT_STORE_TAG is set.  Counter is global so ids are unique across
     // functions (a cross-function wrong-store free mismatches).

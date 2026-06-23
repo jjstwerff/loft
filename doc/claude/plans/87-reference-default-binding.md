@@ -22,8 +22,8 @@ cluster); the W4 lint joins the @PLN46 warning family.
 
 **P0 ✅ DONE + committed.** Migration sweep across the whole ecosystem (stdlib + all 10 registry
 libs + the entire zero-trust-shared-files app) found **zero** real propagation-reliance sites →
-**P2 is safe**. (Verdict in § Phases below. The gated `LOFT_SWEEP_P0` sweep instrument is
-throwaway WIP in `scopes::check` — strip before any PR, task D2.)
+**P2 is safe**. (Verdict in § Phases below. The gated `LOFT_SWEEP_P0` sweep instrument has been
+removed — D2 done.)
 
 **P1 mechanism ✅ DONE + verified — but BLOCKED on the substrate base.** `&<lvalue>` parses and
 binds a single-indirect **VIEW** (NOT a `RefVar` var — that slot is double-indirect,
@@ -144,7 +144,7 @@ program-exit leak gate) with the three former gaps' lock-ins un-ignored:
 
 **REMAINING (not P2-core):**
 - **P3** — W4 redundant-`&` lint (see § Phases).
-- **D2** — strip the throwaway `LOFT_SWEEP_P0` instrument from `scopes::check` before any PR.
+- **D2 — ✅ DONE** — the throwaway `LOFT_SWEEP_P0` instrument is removed from `scopes::check` + `main.rs`.
 
 Runnable probe (the behavioral pair — now prints `1 9` on both backends):
 
@@ -165,7 +165,7 @@ Runnable probe (the behavioral pair — now prints `1 9` on both backends):
   builds + RETURNS a Mesh), safe by construction: the caller receives the value via the
   RETURN, not param propagation, so P2's local-rebind change cannot break them. **No code
   relies on non-`&` reassignment propagating — the load-bearing P2 risk is retired.**
-  (The sweep instrument is throwaway; remove before the PR.)
+  (The sweep instrument has been removed — D2 done.)
 - **P1** — `&` on local bindings (additive, non-breaking).
 - **P2 — ✅ COMPLETE both backends, leak-free (2026-06-23).** reassignment-locality (**breaking**:
   non-`&` reassignment → local rebind; `&` writes back), uniform across struct / vector / scalar; the
@@ -259,5 +259,5 @@ Field/element writes are UNCHANGED (still write through).
 
 - **D1 — dogfood (concern 8).** Validate `&`-binding ergonomics against crawler's nested-mutation
   world — does `&` read naturally at depth, or awkward? Surface the signal, don't paper over.
-- **D2 — strip the throwaway P0 sweep** from `scopes::check` (the `LOFT_SWEEP_P0` instrument)
-  before the PR.
+- **D2 — ✅ DONE — stripped the throwaway P0 sweep** (the `LOFT_SWEEP_P0` instrument) from
+  `scopes::check` and `main.rs`.
