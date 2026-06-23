@@ -90,7 +90,8 @@ writing `&` anywhere else (`1 + &a`, `[&a]`, `f(&a)`, `&x = 3`, …) is a parse 
 **In words.** A linked variable is a window onto its source: read it and you see the
 source's current value; write it and the source changes (`a=3; b=&a; b=4` leaves
 `a==4`). You use it like any normal variable — the link is invisible at the use site
-because it lives in the type.
+because it lives in the type. (In the type system, this read-through is the conversion
+rule `C-Ref` in [types.md](types.md): a `&τ` is accepted wherever a `τ` is.)
 
 ### `&` vs reference-default — where the annotation is load-bearing
 

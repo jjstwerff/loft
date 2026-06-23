@@ -14,6 +14,10 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 - `Γ` — typing context (variable ⟼ type bindings).
 - `τ, σ` — types (the `Type` enum, `src/data.rs`).
+- `&τ` — a **reference type**: the type of a variable that is a live link to a τ-lvalue
+  (read/write-through). A type constructor; its introduction and link semantics live in
+  [binding.md](binding.md). In *this* doc it appears only in the conversion relation —
+  it reads through to its referent (`C-Ref`).
 - `Integer[a,b]` — an integer type with closed value range `[a, b]` (the `IntegerSpec`
   min/max). `integer` = `Integer[i64::MIN, i64::MAX]`; `u8` = `Integer[0, 255]`; etc.
 - `τ ⤳ σ` — **conversion**: a value of `τ` is accepted where `σ` is expected, with no
@@ -55,6 +59,8 @@ other channel for an expected type.
   (C-Var)     Reference(S) ⤳ Enum(E)   ⟸   S ∈ variants(E)            (and the
               dual Enum(__nullable<S>) ⤳ Reference(S), and plain Enum ⤳ Integer tag)
   (C-Int)     Integer[a,b] ⤳ Integer[c,d]   ⟸   [a,b] ⊆ [c,d]         (see I-*)
+  (C-Ref)     &τ ⤳ σ   ⟸   τ ⤳ σ      (a reference reads through to its referent; there
+              is NO  σ ⤳ &τ  — a reference is made only by `&` at a binding, never coerced)
 ```
 
 **In words.** `τ ⤳ σ` is loft's *only* automatic conversion — "a `τ` value is fine where a
@@ -63,7 +69,12 @@ other channel for an expected type.
 of an enum's variants (and the nullable/tag duals); and an integer into a *wider* integer.
 `(C-Int)` means **width lives inside `⤳`**: an integer flows into another integer iff its
 range fits. There is no separate width gate and no separate authority — `is_equal`,
-`convert`, and codegen all read width from this one relation.
+`convert`, and codegen all read width from this one relation. `(C-Ref)` threads in
+references: a `&τ` variable *has* type `&τ` and reads **through** to a `τ`, so it is
+usable wherever a `τ` is, and `τ`'s own conversions then apply (e.g. `&u8` → `integer`).
+The reverse never holds — you cannot coerce a plain value into a reference; a `&τ` is made
+only by a `&` annotation at a binding. The link's introduction and its write-through
+semantics live in [binding.md](binding.md); here it is just one more thing `⤳` accepts.
 
 ### Integer width
 
