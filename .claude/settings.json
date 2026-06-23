@@ -2,7 +2,7 @@
   "sandbox": {
     "enabled": true,
     "filesystem": {
-      "allowWrite": ["/tmp"],
+      "allowWrite": ["/tmp", "~/.loft"],
       "denyRead": ["~/.ssh", "~/.aws", "~/.gnupg"]
     },
     "network": {
