@@ -51,9 +51,18 @@ Implemented by the loft2 agent.
 >   RefVar deref, native via a `*mut T` into the store slot (keyed off the `OpGetField`/`OpGetVector`
 >   value, no per-variable flag — survives an IR snapshot). Tests
 >   `issues::pln87_link_l4_element_{write_through,live_read}`, `leak`, script 434.
-> - **L5 — heap whole-value reference.** `o=Obj{..}; p=&o; …` — field mutation already propagates (✅,
->   reference-default); pin whole-value behaviour.
-> - **L6 — `&` function parameter.** `fn f(b:&integer){ b=4 } …; f(a); a==4`. Called WITHOUT `&`.
+> - **L5 — heap whole-value reference.** `o=Obj{..}; p=&o; p.x=5; o.x==5`. **DEFERRED — the D-bind-0
+>   trigger.** A heap local COPIES on `p = o` (value-type), so `p = &o` must ALIAS. The interp form
+>   works (`OpCreateStack(o)`, the same stack-ref as a `&Obj` param), but native cannot: a struct
+>   reference and the existing #257 param-alias both type as `RefVar(Reference)`, yet need different
+>   reads (a raw `*mut DbRef` tracking `o`'s binding vs a DbRef-by-value), and the read site can't tell
+>   them apart from the type alone. The scalar rungs (L1–L4) sidestep this because their deref is
+>   uniform; the struct case is exactly what needs the **real `&τ` reference type (D-bind-0)** that
+>   carries the representation. Lock-in `issues::pln87_link_l5_*` to be added when it lands.
+> - **✅ L6 — `&` function parameter.** `fn f(b:&integer){ b=4 } …; f(a); a==4`. Called WITHOUT `&`. A
+>   `&` scalar/struct parameter already links to the caller's lvalue (write-back + field mutation
+>   propagate) via the call-site stack-ref — it was working before this rung; the lock-ins just pin it.
+>   Both backends + leak-gated; tests `issues::pln87_link_l6_{param_write_through,struct_param_field_writes_back}`, script 434.
 > - **L7 — edges.** reference inside a data structure, reference-to-reference, scope/lifetime (source
 >   outlives reference), leak-freedom on both backends.
 >
@@ -71,12 +80,13 @@ Implemented by the loft2 agent.
 >   "~53 stdlib + ~75 test" estimate was `#rust` FFI bodies + comments; the real loft sites were 3 in
 >   script 87 + ~5 `&`-param tests, all migrated to `f(x)`. Full suite + both backends green.
 >
-> **All @PLN87 front-end rules + L3/L4 (scalar field & element references) are in place** — every
-> scalar `&`-reference (local, struct field, vector element) is live read- and write-through on both
-> backends, via one `*mut T`/RefVar lowering keyed off the IR value. Next: **L5–L7** (heap whole-value
-> references, `&` function parameters, lifetime edges). The formal model (`../loft` `formalize` branch:
-> `formal/binding.md`, `types.md`) is the spec these rungs close against — its `&τ` reference type is
-> the clean end-state (D-bind-0).
+> **Done: all front-end rules + every SCALAR reference (L1/L2 local, L3 field, L4 element) + L6 (`&`
+> parameters).** A scalar `&`-reference is live read- and write-through on both backends via one
+> `*mut T`/RefVar lowering keyed off the IR value; `&` parameters link to the caller's lvalue.
+> **Next: L5** (heap whole-value reference) — the natural trigger for the **D-bind-0 `&τ` reference
+> type** refactor, because the struct case is where the ad-hoc per-rung representation hits the #257
+> param-alias conflict (see the L5 entry). Then **L7** (lifetime edges). The formal model (`../loft`
+> `formalize` branch: `formal/binding.md`, `types.md`) is the spec these close against.
 >
 > ### Method (per rung)
 > Matrix-first probe in `/tmp` on `--interpret`; prove the WORKING bytecode on BOTH backends before

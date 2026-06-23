@@ -5,6 +5,10 @@
 
 struct Pair { a: integer, b: integer }
 
+// L6 — a `&` parameter is a reference to the caller's lvalue, called WITHOUT `&`.
+fn write_back(w: &integer) { w = 4; }
+fn mutate_field(obj: &Pair) { obj.a = 9; }
+
 fn test() {
     // L1 — live read: the reference reflects the source's current value.
     a = 3;
@@ -63,6 +67,14 @@ fn test() {
     fa = &sf.a;
     fa = 4;
     assert(sf.a == 4 && sf.b == 99, "a field-0 reference is independent of field-8");
+
+    // L6 — a `&` parameter links to the caller's lvalue (called WITHOUT `&`).
+    w = 3;
+    write_back(w);
+    assert(w == 4, "& scalar parameter writes back to the caller's variable");
+    sp = Pair { a: 1, b: 2 };
+    mutate_field(sp);
+    assert(sp.a == 9, "& struct parameter's field mutation writes the caller's struct");
 
     print("pln87 scalar reference ok\n");
 }

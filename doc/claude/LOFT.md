@@ -346,11 +346,12 @@ So a `&` parameter is called by passing the variable directly (`f(x)`), and a `&
 with `a = &b` or `a: &T = b`. A `&` reference cannot outlive its source.
 
 > **Status (2026-06, @PLN87):** every SCALAR reference is live read- and write-through on both
-> backends — a local (`a = &b`, `a: &T = b`), a **struct field** (`b = &s.x`), and a **vector element**
-> (`c = &v[0]`). The addressable-operand check and the general-operator ban (`&` only as a binding RHS;
-> `&`-params called without `&`) are in place. Remaining: heap whole-value references and `&` function
-> parameters — see [plans/87-reference-default-binding.md](plans/87-reference-default-binding.md).
-> Heap references (struct/vector) already share by pointer (field/element mutation propagates).
+> backends — a local (`a = &b`, `a: &T = b`), a **struct field** (`b = &s.x`), a **vector element**
+> (`c = &v[0]`), and a `&` **function parameter** (`fn f(b: &integer)`, called `f(a)`). The
+> addressable-operand check and the general-operator ban (`&` only as a binding RHS; `&`-params called
+> without `&`) are in place. Remaining: a heap WHOLE-VALUE reference (`p = &o` aliasing a struct local)
+> — see [plans/87-reference-default-binding.md](plans/87-reference-default-binding.md). Heap references
+> (struct/vector) already share by pointer (field/element mutation propagates).
 
 ### Constants
 

@@ -15452,12 +15452,36 @@ fn pln87_link_l4_element_live_read() {
 }
 
 /// L6 — link as a function parameter: `fn f(b: &integer){ b = 4 }; f(a)` writes `a`.
+/// The `&` parameter is called WITHOUT `&` (`f(a)`); the reference comes from the type.
 #[test]
-#[ignore = "@PLN87 L6 — linked param write-through; un-ignore when a `&` param links to the caller's lvalue and writes through"]
 fn pln87_link_l6_param_write_through() {
     code!("fn f(b: &integer) { b = 4 } fn check() -> integer { a = 3; f(a); a }")
         .expr("check()")
         .result(Value::Int(4));
+}
+
+/// L6 — a `&`-struct parameter links to the caller's struct: a field mutation through
+/// the parameter writes the caller's field.
+#[test]
+fn pln87_link_l6_struct_param_field_writes_back() {
+    code!(
+        "struct S { x: integer } fn g(obj: &S) { obj.x = 5; } \
+         fn check() -> integer { s = S { x: 1 }; g(s); s.x }"
+    )
+    .expr("check()")
+    .result(Value::Int(5));
+}
+
+/// L5 — heap whole-value reference: `p = &o` must ALIAS the heap local (which COPIES on a
+/// plain `p = o`), so a field mutation through `p` writes `o`.  The interp form works, but
+/// native needs the D-bind-0 `&τ` reference type to distinguish a struct reference from the
+/// #257 param-alias (both `RefVar(Reference)`, different reads).  See plans/87.
+#[test]
+#[ignore = "@PLN87 L5 — heap whole-value reference (struct alias); un-ignore when `&` to a heap local aliases the source on both backends (needs the D-bind-0 `&τ` type, plans/87-reference-default-binding.md)"]
+fn pln87_link_l5_heap_whole_value_ref() {
+    code!("struct S { x: integer } fn check() -> integer { o = S { x: 1 }; p = &o; p.x = 5; o.x }")
+        .expr("check()")
+        .result(Value::Int(5));
 }
 
 /// @PLN87 #2 — a typed-local reference `b: &T = src` is the L1 form with the `&` on
