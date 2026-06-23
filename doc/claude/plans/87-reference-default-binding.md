@@ -18,7 +18,7 @@ Design + rationale: [OWNERSHIP_MODEL.md § The law](../OWNERSHIP_MODEL.md) +
 [DESIGN_DECISIONS.md C77](../DESIGN_DECISIONS.md). Builds on @PLN85 (the store-lifetime
 cluster); the W4 lint joins the @PLN46 warning family.
 
-## Status & handoff (2026-06-22) — READ FIRST after a context reset
+## Status & handoff (2026-06-22; P2 start 2026-06-23) — READ FIRST after a context reset
 
 **P0 ✅ DONE + committed.** Migration sweep across the whole ecosystem (stdlib + all 10 registry
 libs + the entire zero-trust-shared-files app) found **zero** real propagation-reliance sites →
@@ -58,6 +58,39 @@ rebind; `&` → write back; P0 proved the migration empty → safe) changes REAS
 field-read copy, so it is the next actionable @PLN87 work on `main`. WIP committed on `tuxedo-work2`:
 `operators.rs`/`expressions.rs`/`mod.rs` = P1; `main.rs`/`scopes.rs` = the throwaway P0 sweep (strip
 before PR, D2).
+
+### P2 start — baseline + spec banked (2026-06-23)
+
+Behavioral baseline proven on BOTH backends (interp == native):
+- **non-`&` param reassign** `fn f(o: Obj){ o = Obj{x:9} }; a=Obj{x:1}; f(a)` → `a.x == 9` TODAY
+  (overwrites the caller). **P2.1 target: `1`** (local rebind).
+- **`&` param reassign** `fn f2(o: &Obj){ o = Obj{x:9} }; a2=Obj{x:1}; f2(&a2)` → `a2.x == 9` TODAY
+  (`f2(&a2)` parses + runs). **P2.2 target: `9`** (write-back) — UNCHANGED.
+- So **today BOTH overwrite** (`&` on heap is a no-op); P2's job is to DIFFERENTIATE them. The
+  deciding fact is ALREADY in the type: the param shows as `ref(Obj)` and a `&`-param carries
+  `RefVar` (`definitions.rs:1292`) — **no type change** (the loft-codegen "facts in types" test passes).
+
+**Spec (loft-codegen step 1, proven):** a param reassignment writes THROUGH the ref (overwrite). P2:
+for a **non-`RefVar`** param, REBIND — allocate the new value in a FRESH store and point the param's
+slot at it (caller untouched); for a **`RefVar`** (`&`) param, keep the write-through. One fact, one site.
+
+**NEXT concrete steps (gate: do NOT edit codegen before step 1):**
+1. Capture the bytecode PAIR — working (rebind: alloc-fresh + set-slot) vs broken (overwrite:
+   write-through-ref) — on both backends. NB `loft introspect` dumped only the slot table here; get
+   the ops via `LOFT_LOG=static`.
+2. Locate the Set-into-ref-param codegen site (`src/state/codegen.rs` set_var / gen_set_* + the native
+   twin in `src/generation/`).
+3. Gate it on `RefVar`: non-`RefVar` → rebind; `RefVar` → write-through.
+4. Verify both backends + keep `tests/scripts/85-store-lifetime-*` green (P2.3).
+5. P2.4 matrix `{param,local}×{struct,vector,scalar}×{interp,native}` →
+   `tests/scripts/87-p2-reassign-locality.loft`.
+
+Runnable probe (recreate in /tmp; the behavioral pair):
+
+    struct Obj { x: integer }
+    fn f(o: Obj)  { o = Obj { x: 9 } }    // non-& param: a.x stays 9 today, P2 target 1
+    fn f2(o: &Obj){ o = Obj { x: 9 } }    // &-param: a2.x = 9 write-back (unchanged)
+    fn main() { a = Obj{x:1}; f(a); a2 = Obj{x:1}; f2(&a2); print("{a.x} {a2.x}\n"); }
 
 ## Phases
 - **P0 — ✅ DONE (2026-06-22): the migration is EMPTY → P2 is SAFE.** Swept the whole
