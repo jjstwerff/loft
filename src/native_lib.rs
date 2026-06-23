@@ -550,7 +550,11 @@ fn bridge_read(t: &Type, slot: &str) -> String {
         Type::Integer(s) if s.forced_size.is_none() => format!("{slot}.scalar"),
         Type::Integer(_) => format!("{slot}.scalar as {}", rust_type(t, &Context::Argument)),
         Type::Character => format!("{slot}.scalar as i32"),
-        Type::Boolean => format!("{slot}.scalar != 0"),
+        // A loft bool is a `u8` (0/1) in the inner fn's signature, so the read must
+        // be a `u8`, not a bare Rust `bool`: `let p: u8 = a[0].scalar != 0` is a type
+        // error (#433 — surfaced once the loft_ffi collision stopped masking it).
+        // `!= 0` normalises any non-zero scalar to the canonical 1.
+        Type::Boolean => format!("(({slot}.scalar != 0) as u8)"),
         Type::Float => format!("f64::from_bits({slot}.scalar as u64)"),
         Type::Single => format!("f32::from_bits({slot}.scalar as u32)"),
         // Text arg → `&str` borrowed from the slot's (store-backed) bytes.
@@ -1393,6 +1397,25 @@ mod toolchain_hint_tests {
         // A real type error must pass through untouched so its diagnostics show.
         let stderr = "error[E0308]: mismatched types\n  expected `i32`, found `&str`";
         assert!(toolchain_failure_hint(stderr).is_none());
+    }
+}
+
+#[cfg(test)]
+mod bridge_read_tests {
+    use super::bridge_read;
+    use crate::data::Type;
+
+    #[test]
+    fn bool_arg_reads_as_u8_not_bare_bool() {
+        // #433 — a loft bool param is a `u8` in the inner fn's signature, so the
+        // LibArg read must yield a `u8`, not a bare Rust `bool`.  `let p: u8 =
+        // a[0].scalar != 0` is an E0308; every other scalar arm casts `.scalar` to
+        // the param's Rust type, and Boolean must too.  (Surfaced in the zero-trust
+        // telemetry cdylib once the loft_ffi collision stopped masking it.)
+        assert_eq!(
+            bridge_read(&Type::Boolean, "a[0]"),
+            "((a[0].scalar != 0) as u8)"
+        );
     }
 }
 
