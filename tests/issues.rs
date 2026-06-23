@@ -264,6 +264,27 @@ fn null_coalesce_fitting_int_literal_keeps_narrow_type() {
     .result(Value::Null);
 }
 
+// (D2/D3/D5) `is_narrowing_int` is range containment, not `forced_size` width — so
+// signedness is visible: an `i8` (down to -128) is not contained in `u8`, and the
+// implicit conversion needs an explicit `as`.  Pre-change the two shared a 1-byte
+// `forced_size` and the lossy implicit conversion was (wrongly) allowed.  This is the
+// behaviour that aligns the parser's width check with codegen's (already range+sign-aware)
+// `narrow_int_cast`.  See formal/types.md § the integer model.
+#[test]
+fn d2_signed_narrowing_i8_to_u8_needs_cast() {
+    code!(
+        "fn test() {
+    a: i8 = 100;
+    b: u8 = a;
+    assert(b == 100, \"b\");
+}"
+    )
+    .error(
+        "cannot implicitly narrow i8 to u8 (may lose data) — cast explicitly with `as u8` \
+at d2_signed_narrowing_i8_to_u8_needs_cast:3:15",
+    );
+}
+
 // assert(false, ...) in production mode: had_fatal becomes true.
 #[test]
 fn production_mode_assert_false_sets_had_fatal() {

@@ -141,8 +141,8 @@ escape hatch. The two open rules:
 | id | rough spot | the rule that would close it |
 |----|------------|------------------------------|
 | R1 | four `*_hint` side-channels for one idea | the checking judgment `Γ ⊢ e ⇐ τ` (§1) |
-| R2 | width lives outside `⤳` — re-derived per-site, not range containment | `⤳` = range containment; `forced_size` a cache (§2) |
-| R3 | width derived two ways (convert `forced_size` / codegen `range()`) | `⤳` range containment; `forced_size` a cache (§3) |
+| R2 | ~~width lives outside `⤳`~~ **DONE** — `⤳` is range containment; residual: i64 bounds | done (§2) |
+| R3 | ~~width derived two ways~~ **DONE** — parser/codegen agree via range; residual: i64 bounds | done (§3) |
 
 None of these is a runtime/memory red flag — they are **front-end** rough spots, which
 is why [STABILITY_REDFLAGS.md](STABILITY_REDFLAGS.md) structurally misses them
@@ -159,10 +159,12 @@ This is a **lens**, not a migration plan. Concretely, the cheap wins it points a
 2. **Collapse the four `*_hint` fields into one checking-mode parameter** threaded
    through the expression parser. Mechanical; removes R1 and makes the next literal
    position correct by construction.
-3. **Make `⤳` on integers range containment** (`[a,b] ⊆ [c,d]`) so width has one home:
-   `is_narrowing_int` reads it and `forced_size` becomes a derived storage cache, not a
-   width source. `is_equal` keeps its (correct) width-free collapse. Larger; the now-landed
-   `(I-Join)` rule proves the range-as-truth model out. This is formal/types.md D2/D3/D5.
+3. ~~**Make `⤳` on integers range containment**~~ **DONE** — `is_narrowing_int` now decides
+   by range containment (`[a,b] ⊆ [c,d]`), in agreement with codegen's `narrow_int_cast`, so
+   signedness is visible and the parser/codegen split is closed (was D3/D5). `is_equal` keeps
+   its (correct) width-free collapse. **Residual (D2):** the full integer is still flagged by
+   `forced_size = None`, because `IntegerSpec` carries i32/u32 bounds, not i64 — giving it a
+   canonical i64 range is the remaining step. See formal/types.md § the integer model.
 
 Defer anything ownership/`deps`-shaped until @PLN85/@PLN87 close — per
 [FORMALIZATION.md](FORMALIZATION.md) § Recommendation, the type's own contents are

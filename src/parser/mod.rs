@@ -1475,11 +1475,20 @@ impl Parser {
         let (Type::Integer(s), Type::Integer(d)) = (src, dst) else {
             return false;
         };
-        let Some(dw) = d.forced_size else {
-            return false; // widening / plain-integer target — never narrowing
-        };
-        let sw = s.forced_size.map_or(8u8, std::num::NonZeroU8::get);
-        sw > dw.get()
+        // The integer model (formal/types.md § the integer model): width lives in the
+        // value RANGE.  A `dst` with no `forced_size` is the FULL integer — `IntegerSpec`'s
+        // i32/u32 bounds cannot represent the i64 range and the "full integer" has several
+        // bound encodings (`signed32` max = i32::MAX, `wide` max = u32::MAX), so
+        // `forced_size = None` is the canonical "full range" marker; nothing narrows to it.
+        // For a genuinely narrow (forced) storage, `src` narrows iff its range is not
+        // contained in `dst`'s — `[s.min,s.max] ⊆ [d.min,d.max]`.  This is the same
+        // range+sign test codegen's `narrow_int_cast` uses, so the two width derivations
+        // now agree (D2/D3/D5).  Containment also makes signedness visible: `i8` (down to
+        // -128) is not contained in `u8`.
+        if d.forced_size.is_none() {
+            return false;
+        }
+        s.min < d.min || s.max > d.max
     }
 
     /// @PLAN48 P2: render an integer type with its explicit narrow alias

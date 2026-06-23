@@ -96,9 +96,11 @@ semantics live in [binding.md](binding.md); here it is just one more thing `⤳`
 > ("is this `integer`?" carries no width); narrowing (`I-Narrow`) and the codegen cast both
 > **derive from the range**, not from `forced_size`. A too-narrow range is then
 > unambiguously a bug — undersized storage means a silent overflow, with no second
-> authority to mask it — which is *why* range inference (`I-Join`, …) must be sound. The
-> deviations D2/D3/D5 are the spots where the code still treats `forced_size` (or a
-> per-site copy) as a width authority instead of a derived cache of the range.
+> authority to mask it — which is *why* range inference (`I-Join`, …) must be sound.
+> Narrowing now decides by range containment (`is_narrowing_int`), in agreement with
+> codegen's `narrow_int_cast` — so signedness is visible and the old split is closed. The
+> one residual (D2) is that the *full integer* is still marked by `forced_size = None`,
+> because `IntegerSpec`'s i32/u32 bounds cannot yet hold the i64 range.
 
 ### Integer width
 
@@ -136,7 +138,7 @@ to the join when a write would not fit; an annotated `x: u8` stays constrained),
 
 ## Deviations
 
-OPEN: **4**
+OPEN: **2**
 
 ### D1 — four expected-type side-channels instead of one checking judgment
 - **Violates:** T-Chk (and its T-Chk-* instances)
@@ -149,40 +151,23 @@ OPEN: **4**
 - **Removal:** thread a single `expected: Option<Type>` (the `⇐` mode) through the
   expression parser; delete the four fields.
 
-### D2 — `forced_size` is read as a width authority, not derived from the range
-- **Violates:** the integer model (width lives in the range; `forced_size` is a cache)
-- **Where:** `is_narrowing_int` (`src/parser/mod.rs:1467`) keys on `forced_size`; codegen's
-  `narrow_int_cast` (`src/generation/mod.rs:571`) keys on `range()` — the one width,
-  derived two ways. See [../TYPING_RELATION.md](../TYPING_RELATION.md) § R2.
-- **Effect:** the two derivations can disagree at a narrow range with `forced_size = None`
-  (exactly the #433 edge). `is_equal` collapsing every integer is **not** this bug — that
-  is the correct width-free base-type answer (see the integer model).
-- **Status:** OPEN
-- **Removal:** `is_narrowing_int` reads range-containment (`I-Sub`); `forced_size` collapses
-  to `bytes_for_range(min,max)`, consulted only at the storage seam, never as a width source.
-
-### D3 — narrowing is a diagnostic bolted onto `convert`, not the range relation deciding
-- **Violates:** I-Narrow (placement — the rule is correct, its home is wrong)
-- **Where:** `src/parser/mod.rs::convert` ~1559 (`is_narrowing_int` + `int_value_fits`
-  → an Error emitted *beside* the `is_equal` accept)
-- **Effect:** the accept (base-type, via `is_equal`) and the width check sit apart, and the
-  width check reads `forced_size` (D2) rather than the range. The single relation
-  `⤳`/`(C-Int)` should itself accept-or-reject by range containment, not lean on a bolted-on
-  diagnostic.
-- **Status:** OPEN
-- **Removal:** make `(C-Int)` (range containment) the accept/reject; the narrowing "error"
-  is just "range not contained," with the literal-fits exemption part of the rule.
-
-### D5 — integer width is derived in two places that must agree by hand
-- **Violates:** the integer model (width has one home — the range)
-- **Where:** `convert`/`is_narrowing_int` (derives width from `forced_size`) and
-  `narrow_int_cast` in `src/generation/` (derives it from `range()`). (`is_equal` collapsing
-  integers is the correct base-type answer, not a third authority.)
-- **Effect:** #433 and its residual are both "these two derivations disagreed." Forward-bug
-  generator until both read the range.
-- **Status:** OPEN (closing D2 + D3 collapses this)
-- **Removal:** both derive width from the range (`I-Sub`); `forced_size` is a cache used
-  only for storage layout, never as a width source.
+### D2 — the full integer is marked by `forced_size = None`, not a canonical maximal range
+- **Violates:** the integer model (width should be the range alone)
+- **Where:** `is_narrowing_int` (`src/parser/mod.rs`) now decides narrowing by **range
+  containment** for a forced (narrow) target — the same range+sign test codegen's
+  `narrow_int_cast` uses, so the two agree (this closed the old D3/D5). But it must still
+  treat `forced_size = None` as "full integer → never narrows": `IntegerSpec`'s i32/u32
+  bounds cannot represent the i64 range, and the full integer has several bound encodings
+  (`signed32` max = i32::MAX, `wide` max = u32::MAX), so pure containment flags false
+  narrowings there. `forced_size = None` is thus still a width *marker*, not a pure range
+  fact. See [../TYPING_RELATION.md](../TYPING_RELATION.md) § R2.
+- **Effect:** width is range-driven for narrow types — signedness is now correct (`i8` does
+  not implicitly fit `u8`) and the parser agrees with codegen. The one residual: "is this
+  the full integer?" rides on `forced_size`, not on the bounds. Guard:
+  `d2_signed_narrowing_i8_to_u8_needs_cast` (tests/issues.rs).
+- **Status:** OPEN — the residual after the D3/D5 close.
+- **Removal:** give `IntegerSpec` **i64 bounds** (a canonical range), so `[a,b] ⊆ [c,d]`
+  alone decides narrowing and `forced_size` is purely a storage cache.
 
 ---
 
