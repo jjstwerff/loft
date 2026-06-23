@@ -5030,19 +5030,33 @@ fn main() {
                 any_dev_interpret = true;
             }
             Err(e) => {
-                // Silent interpret-fallback (Step 2 invariant): warn, do NOT mark,
-                // do NOT exit — the library's calls stay ordinary interpreted calls.
-                // Under LOFT_REQUIRE_NATIVE this becomes a hard error instead.
-                if native_required {
+                // The fallback rule: interpreting a library instead of building it
+                // native is graceful ONLY when native is impossible here — i.e. there
+                // is no Rust toolchain.  When `rustc` IS installed, a failed native
+                // build is a REAL failure: silently interpreting it would hand back a
+                // partly-interpreted binary (or one whose `#native` functions panic at
+                // runtime) while the caller asked for native.  So hard-fail when a
+                // toolchain is present (and always under LOFT_REQUIRE_NATIVE); fall back
+                // only when there is genuinely no toolchain to build with.
+                if native_required || loft::native_lib::rustc_available() {
+                    let why = if native_required {
+                        "LOFT_REQUIRE_NATIVE is set"
+                    } else {
+                        "rustc is installed, so this is a real build failure, not a \
+                         missing-toolchain fallback"
+                    };
                     eprintln!(
-                        "loft: LOFT_REQUIRE_NATIVE is set, but library '{pkg_dir}' could not \
-                         compile native ({e}); refusing to fall back to the interpreter. \
-                         Fix the library build, or unset LOFT_REQUIRE_NATIVE."
+                        "loft: library '{pkg_dir}' failed to build native ({e}).\n\
+                         {why} — refusing to silently interpret it (that would hand back a \
+                         partly-interpreted binary, or one whose #native functions panic \
+                         when called).  Fix the library's native build, or run with \
+                         --interpret to run interpreted on purpose."
                     );
                     std::process::exit(1);
                 }
                 eprintln!(
-                    "loft: library '{pkg_dir}' could not compile native ({e}); interpreting it"
+                    "loft: library '{pkg_dir}' has no native build and no Rust toolchain to \
+                     build one ({e}); interpreting it.  Install rustc for a native build."
                 );
             }
         }

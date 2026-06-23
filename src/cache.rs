@@ -489,11 +489,22 @@ pub fn native_artifact_cache_key() -> u64 {
     // no matter how often loft was reinstalled (the #433 manifestation).  BUILD_ID is
     // the git-HEAD / source-content id: profile-independent (debug/release/test still
     // share the cache, the author's original goal) but flips on a real loft change.
+    native_artifact_cache_key_of(
+        combine_native_cache_key(loft_ffi_fingerprint(), rustflags_fingerprint()),
+        LOFT_VERSION,
+        BUILD_ID,
+    )
+}
+
+/// Pure core of [`native_artifact_cache_key`] (testable without the build-time env):
+/// fold the loft codegen version (`version` + `build_id`) into the ABI/RUSTFLAGS key
+/// so a codegen change moves the key and invalidates a cached generated cdylib.
+fn native_artifact_cache_key_of(abi_rustflags_key: u64, version: &str, build_id: &str) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    combine_native_cache_key(loft_ffi_fingerprint(), rustflags_fingerprint()).hash(&mut h);
-    LOFT_VERSION.hash(&mut h);
-    BUILD_ID.hash(&mut h);
+    abi_rustflags_key.hash(&mut h);
+    version.hash(&mut h);
+    build_id.hash(&mut h);
     h.finish().max(1)
 }
 
@@ -938,6 +949,36 @@ mod tests {
             "key must avoid the 0 sentinel"
         );
         assert_ne!(native_artifact_cache_key(), 0);
+    }
+
+    #[test]
+    fn native_cache_key_folds_in_codegen_version() {
+        // #433 — a loft CODEGEN change (new BUILD_ID, same FFI ABI + RUSTFLAGS) must
+        // move the generated-cdylib cache key, or a consumer silently re-links a stale
+        // pre-fix `loft_auto_*.so`.  The N0 framework's
+        // `stale_fingerprint_forces_rebuild_and_restamp` proves the sidecar MECHANISM
+        // (a clobbered sidecar → rebuild); this proves the KEY itself moves on a
+        // codegen change — the dimension the cdylib cache key was missing.
+        let abi = combine_native_cache_key(0xABCD_1234, 0x5678_9ABC);
+        let base = native_artifact_cache_key_of(abi, "1.0.0", "commitA");
+        assert_ne!(
+            base,
+            native_artifact_cache_key_of(abi, "1.0.0", "commitB"),
+            "a BUILD_ID (codegen) change must move the cdylib cache key"
+        );
+        assert_ne!(
+            base,
+            native_artifact_cache_key_of(abi, "1.1.0", "commitA"),
+            "a LOFT_VERSION bump must move the key"
+        );
+        // The ABI/RUSTFLAGS dimension still matters after folding the version in.
+        assert_ne!(
+            base,
+            native_artifact_cache_key_of(abi ^ 1, "1.0.0", "commitA"),
+            "an FFI-ABI / RUSTFLAGS change must still move the key"
+        );
+        // The key proper is never the 0 match-anything sentinel.
+        assert_ne!(native_artifact_cache_key_of(0, "", ""), 0);
     }
 
     #[test]

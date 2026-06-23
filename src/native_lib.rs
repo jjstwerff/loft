@@ -1061,6 +1061,26 @@ pub fn build_shared_cdylib(
 /// one-line, actionable hint to surface ABOVE the raw output; return `None` for
 /// a genuine compile error so the real diagnostics show through untouched.
 #[must_use]
+/// Is a working `rustc` on `PATH`?  Cached for the process.
+///
+/// This is the line between a legitimate interpret-fallback and a real failure: with
+/// NO toolchain, loft cannot build native at all, so interpreting a library is the
+/// only option and is graceful.  With a toolchain PRESENT, a native build that fails
+/// is a genuine error — silently interpreting it would hand back a partly-interpreted
+/// binary (or one whose `#native` functions panic at runtime) while the user asked for
+/// native.  Callers gate the fallback on this.
+#[must_use]
+pub fn rustc_available() -> bool {
+    use std::sync::OnceLock;
+    static AVAIL: OnceLock<bool> = OnceLock::new();
+    *AVAIL.get_or_init(|| {
+        std::process::Command::new("rustc")
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success())
+    })
+}
+
 pub fn toolchain_failure_hint(stderr: &str) -> Option<String> {
     let tmp = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
     let env_fault = |what: &str| {
@@ -1086,6 +1106,22 @@ pub fn toolchain_failure_hint(stderr: &str) -> Option<String> {
         || stderr.contains("SIGKILL")
     {
         return env_fault("was killed (out of memory)");
+    }
+    // The known `loft_ffi` duplicate-crate collision: two copies of loft-ffi reach the
+    // same link carrying the same StableCrateId, which rustc refuses.  Name it
+    // explicitly so a consumer does not read the raw rustc dump as a bug in their own
+    // code or in the library — it is neither, and loft falls back to interpreting.
+    if stderr.contains("StableCrateId") {
+        return Some(
+            "NOTE: this is the known loft_ffi duplicate-crate collision — two copies of \
+             loft-ffi reach the same link with the same StableCrateId, which rustc \
+             refuses.  It is a BUILD/TOOLCHAIN limitation, NOT a bug in your code or in \
+             this library.  To clear it, rebuild the library's cdylib against the CURRENT \
+             loft — `make rebuild-native-cdylibs` in the loft tree, or `cargo build \
+             --release` in the library's native/ dir — then re-run.  If it persists after \
+             a clean rebuild, it is the tracked StableCrateId limitation, not your build."
+                .to_string(),
+        );
     }
     None
 }
