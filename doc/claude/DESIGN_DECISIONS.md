@@ -1323,3 +1323,98 @@ intend to alias, and the cost of those bugs exceeds the value-semantics migratio
 (copy-on-write + `&` on every alias) it would take to remove them. Only then reconsider
 value-semantics-by-default; until then the W4 lint + the documented view default are the
 cheaper guard.
+
+---
+
+## C78 — The Rust-engine ↔ loft-library boundary: mechanism not genre, and no black boxes above the engine
+
+**Question.** When something is *hard* and would be *reused* — a world model, gameplay
+primitives, rendering composition, a streaming substrate — should it move down into the
+**Rust engine** (shipped with the compiler: paid once, fast, opaque), or stay up as a
+**loft library** (written in loft, slower to write, readable)? Stated the other way:
+what is the Rust core *allowed* to swallow?
+
+**Evaluation.** Three forces act on the line, and they do not all pull the same way:
+
+1. **Cost (paid-once)** — *pulls down.* Complexity is conserved: building reliable
+   servers and efficient cross-platform games is hard by nature, and you can't delete
+   that, only relocate it. The only question is who pays it and how many times. The Rust
+   engine pays the hard-and-universal complexity **once**; every loft program above it
+   pays zero, instead of re-writing it over and over. This is "easily" (Goal F) achieved
+   by *relocating* complexity, not by pretending none exists.
+2. **Neutrality (mechanism vs policy)** — *pulls up.* The compiler must encode **no
+   worldview.** A genre baked into the compiler stops being a *choice* and becomes a
+   *tax everyone pays*: a side-scroller author should not carry one byte of a hex world.
+   So an opinionated game-type model is **policy** and stays a library, even though it is
+   hard (force 1) and would be reused by every world-game author.
+3. **Transparency (no black boxes above the engine)** — *pulls up.* A game developer
+   must be able to **read** the library, **learn** how it works, and **fork** its
+   behaviour and primitives for their own game. The moment code goes into Rust it is a
+   black box to them — a different language, needing Rust skill and an engine recompile
+   to touch. So "should a developer ever want to open this?" pulls game-facing code up
+   into loft regardless of how hard it is.
+
+Forces 2 and 3 **override** force 1. The naive test "hard-and-universal → Rust" is
+wrong; the correct test is tighter: **universal AND something a game developer should
+never need to read.** That narrows the Rust core to its minimal opaque floor.
+
+**Decision.** **Closed — accepted architectural principle.** Dated 2026-06-23. Four
+load-bearing rules:
+
+1. **The compiler ships mechanism, never a genre.** Opinionated game-type models (the
+   hex-based streaming world is the flagship case) stay **loft libraries**, never baked
+   into the compiler — so they are *optional* (don't `use` it → not limited by it),
+   *replaceable* (write your own side-scroller library), and *unprivileged* (the
+   author's own flagship gets no special compiler status; it is just another `use`,
+   on equal footing with a stranger's library). This is "adoption is a result, not a
+   steering input" applied to architecture: the shared floor is not bent toward the one
+   game that exists yet.
+2. **The Rust/loft line is "should a game developer ever need to open this?"** — *No*
+   (codegen, the type checker, the store allocator, memory management) → Rust: paid once,
+   opaque, fine. *Yes, ever* (the world model, gameplay primitives, rendering
+   composition) → loft, **even when hard**. "Hard" is not what sends code into Rust;
+   "the developer never opens it" is.
+3. **Libraries are kits of composable primitives, not sealed monoliths.** "Change the
+   behaviour and primitives for their own use" only holds if a developer can lift **one**
+   primitive (the streaming, the chunk loader, the spatial query) and recombine it
+   without forking the whole library. Coming-apart-cleanly into visible primitives is
+   part of the library's contract, not a nicety — and it is harder to write than a
+   monolith.
+4. **The engine is "unlearnable from above" — a property to *defend*, not merely
+   observe.** Learnability is relative to (code, audience): the engine is correctly
+   **below the game developer's horizon** (the relief — "paid once so you can forget
+   about it"; *forget about* literally means *don't have to learn*), while being **fully
+   learnable to an engine contributor** (what the whole `doc/claude/` corpus + the
+   matrix-first method exist for). Opaque is only safe because **dependable** — you can
+   only afford to not-learn what won't surprise you, so this rule rests on Goal A
+   (soundness) and Goal E (predictable memory). The failure mode is the engine *leaking
+   upward* and forcing itself to be learned: every time a developer must understand a
+   store-lifetime quirk to get their game running (the crawler survival guide,
+   [loft#248](https://github.com/loft-lang/loft/issues/248)) the engine has become
+   *involuntarily* learnable — exactly the [STRONG_POINTS.md](STRONG_POINTS.md) #3/#4
+   turn-offs. "Not learnable from above" is the goal; "the dev had to learn it anyway"
+   is a bug.
+
+**Anti-cage.** This is [GOALS.md § Purpose](GOALS.md#purpose--what-loft-is-for)'s "win
+the dependability *without the cage*" stated as a boundary. The AS/400's engine bought
+its reliability as a *closed* box — opaque to everyone. loft's engine is closed only to
+the developer's *concern*, and open to anyone who wants to work on loft itself; everything
+above it is loft source the developer can read, learn from, and fork.
+
+**Not in tension with C71.** [C71](#c71--native-libraries-compile-scripts-interpret--the-steady-state-execution-model)
+(native libraries compile, scripts interpret) is about *how a loft library executes*
+(native vs interpret); C78 is about *where code lives* (Rust engine vs loft library).
+They are orthogonal: a loft library may be native-compiled for speed (C71) and still be
+transparent loft *source* the developer reads and forks (C78) — the native artifact is a
+derived, invisible cache, and the loft source stays the truth (cf. [C70](#c70--no-per-library-ir-snapshot--cache):
+"the loft source is the better representation of a library's state").
+
+**Revisit when.** A concrete consumer need shows a *genre-neutral mechanism* currently
+in a loft library is a real, measured bottleneck only the Rust engine can fix, **AND**
+moving it down buries neither a worldview choice (rule 1) nor a primitive a developer
+needs to read/fork (rule 3) — bring the profile and the boundary analysis together. The
+likely live case is the **streaming substrate**: loading/unloading spatial chunks from
+the store as the player moves is genre-neutral (a side-scroller and an open world both
+want it), so it may rightly sink into the engine or a lower neutral library *while the
+hex tiling stays up* in the world library on top of it. Note: "it's hard" or "it'd be
+reused" **alone is not sufficient** — that is force 1, which forces 2 and 3 override.
