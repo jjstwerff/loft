@@ -1710,7 +1710,16 @@ impl Output<'_> {
                     let tail_outer_owned =
                         wrap_result && super::def_returns_owned_text(self.data.def(self.def_nr));
                     if is_tail_capture_call {
-                        write!(w, "let __native_tail_ret: DbRef = ")?;
+                        // Wrap the captured value in a block.  A tail call whose
+                        // argument carries a store-lifetime "lift" pre-eval emits that
+                        // lift as a LEADING `{ … };` statement (it reassigns the lifted
+                        // temp), and its own `;` would otherwise terminate this `let`
+                        // early — binding `__native_tail_ret` to the lift's `()` and
+                        // detaching the real call (E0308, the ztserve blocker).  The
+                        // block makes the lift a statement and the call the tail expr,
+                        // so `__native_tail_ret` binds the call's result.  Harmless for
+                        // lift-free tails: `{ n_error_frame(…) }` is just a tail expr.
+                        write!(w, "let __native_tail_ret: DbRef = {{ ")?;
                     } else if tail_outer_owned {
                         write!(w, "(")?;
                     } else if needs_p205_scratch {
@@ -1737,7 +1746,10 @@ impl Output<'_> {
                     self.indent += 1;
                     self.output_code_inner(w, v)?;
                     self.indent -= 1;
-                    if tail_outer_owned {
+                    if is_tail_capture_call {
+                        // Close the block opened above; the call is its tail expr.
+                        write!(w, " }}")?;
+                    } else if tail_outer_owned {
                         write!(w, ").to_string()")?;
                     } else if needs_p205_scratch {
                         // @PLN10 Phase B — buffer-write (see If-Return path).
