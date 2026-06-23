@@ -67,7 +67,7 @@ not duplicate: a deviation entry links to the lens analysis instead of re-explai
 | [binding.md](binding.md) | reference types & `&` (the bind-site link law) | **started** — `&` is a TYPE ANNOTATION (`&τ` reference type carried by the variable), not an operator; a unary `&` outside a type annotation is a parse error (vital); 8 deviations = the @PLN87 ladder + the model + parse-leak gaps |
 | [grammar.md](grammar.md) | concrete grammar + operator precedence | **started** — the 12-level precedence ladder (all left-associative, incl. `**`) the written grammar omits; the prefix-`&` (reference) vs infix-`&` (bitwise-and) overload; 4 deviations |
 | [operational.md](operational.md) | small-step semantics for the stable core | **started** — the scalar core as the shared interp/native contract (values/null sentinels, left-to-right order, the overflow/divide trap discipline + `??` suppression, state steps); 3 deviations (no shared semantics → divergence is structural, #433) |
-| ownership.md | the `deps` / borrow **checker** (lifetimes) — distinct from binding.md's surface | **deferred** — until @PLN85 / @PLN87 close ([FORMALIZATION.md](../FORMALIZATION.md) § Recommendation); a checker over a still-moving type is premature |
+| [ownership.md](ownership.md) | the `deps` / borrow **checker** (lifetimes) — distinct from binding.md's surface | **started (aspirational)** — the 5 sound+complete invariants we steer toward (the rules), with the active @PLN85/@PLN87 migration as the 5 deviations. Written deliberately ahead of the implementation: the target steers the work |
 
 ## Deviation entry format
 
