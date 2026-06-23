@@ -243,6 +243,15 @@ pub struct Function {
     pub logging: bool,
     // maps fn_ref_var_nr → closure_var_nr for native codegen.
     closure_var_map: HashMap<u16, u16>,
+    /// @PLN87 P2.1 — reassignment-locality.  Maps a user-visible heap PARAMETER
+    /// (whole-binding-reassigned in the body) → its `__orig` witness var, a
+    /// skip-free work-ref holding the param's caller-supplied DbRef captured at
+    /// function entry.  A rebind frees the param's CURRENT store only when it
+    /// differs from this witness (`OpFreeRefIfDistinct`), so the caller's
+    /// original store is never freed by the callee and a fresh rebind store is.
+    /// Parse-time only: on a snapshot load `scopes::check` is skipped (the frees
+    /// are already in `code`), so this map is not part of the snapshot.
+    rebind_orig: HashMap<u16, u16>,
 }
 
 impl Display for Function {
@@ -276,6 +285,7 @@ impl Function {
             logging: false,
             done: false,
             closure_var_map: HashMap::new(),
+            rebind_orig: HashMap::new(),
         }
     }
 
@@ -420,6 +430,12 @@ impl Function {
         self.closure_var_map.clear();
         self.closure_var_map.clone_from(&other.closure_var_map);
         other.closure_var_map.clear();
+        // @PLN87 P2.1 — carry the parsed pass's rebind-witness map into the
+        // stored function so `scopes::check` can emit the function-exit
+        // `OpFreeRefIfDistinct`.  Cleared first so a re-parse can't leave a
+        // stale param→witness entry.
+        self.rebind_orig.clear();
+        self.rebind_orig.clone_from(&other.rebind_orig);
     }
 
     pub fn copy(other: &Function) -> Self {
@@ -443,6 +459,7 @@ impl Function {
             logging: other.logging,
             done: other.done,
             closure_var_map: other.closure_var_map.clone(),
+            rebind_orig: other.rebind_orig.clone(),
         }
     }
 
@@ -1288,6 +1305,27 @@ impl Function {
         if (var_nr as usize) < self.variables.len() {
             self.variables[var_nr as usize].caller_hidden_buf = true;
         }
+    }
+
+    /// @PLN87 P2.1 — record that visible heap parameter `param` is
+    /// whole-binding-reassigned in the body and `orig` is its caller-store
+    /// witness (see [`Function::rebind_orig`]).  Idempotent — keyed on `param`.
+    pub fn set_rebind_orig(&mut self, param: u16, orig: u16) {
+        self.rebind_orig.insert(param, orig);
+    }
+
+    /// @PLN87 P2.1 — the witness var for a rebindable heap param, or `None` if
+    /// `param` is never wholesale-reassigned (the common case).
+    #[must_use]
+    pub fn rebind_orig(&self, param: u16) -> Option<u16> {
+        self.rebind_orig.get(&param).copied()
+    }
+
+    /// @PLN87 P2.1 — every (param, witness) pair, for the entry stash and the
+    /// function-exit `OpFreeRefIfDistinct`.
+    #[must_use]
+    pub fn rebind_params(&self) -> Vec<(u16, u16)> {
+        self.rebind_orig.iter().map(|(&p, &o)| (p, o)).collect()
     }
 
     pub fn is_caller_hidden_buf(&self, var_nr: u16) -> bool {

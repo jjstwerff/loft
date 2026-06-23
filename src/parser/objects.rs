@@ -2030,6 +2030,45 @@ impl Parser {
         true
     }
 
+    /// @PLN87 P2.1 — get-or-create the `__orig` witness for a rebindable heap
+    /// parameter `param`.  The witness is a skip-free work-ref that will hold the
+    /// param's caller-supplied DbRef (stashed at function entry in the parser
+    /// preamble); `scopes::check` reads the recorded mapping to emit the
+    /// function-exit `OpFreeRefIfDistinct(param, witness)`.  Idempotent — a param
+    /// reassigned several times reuses one witness.  Final pass only.
+    /// @PLN87 P2.1 — true if `v_nr` is a SYNTHETIC parameter: a `hidden`
+    /// return-buffer the compiler promoted (e.g. an NRVO `result` out-param —
+    /// user-named, so it is NOT `_`-prefixed, yet `hidden` in the attributes).
+    /// Such a buffer MUST keep its in-place write — the caller receives the
+    /// value through it — so it is never rebound.
+    fn is_hidden_param(&self, v_nr: u16) -> bool {
+        self.context != u32::MAX
+            && self
+                .data
+                .def(self.context)
+                .attributes()
+                .iter()
+                .any(|a| a.hidden && self.vars.var(&a.name) == v_nr)
+    }
+
+    fn ensure_rebind_witness(&mut self, param: u16) -> u16 {
+        if let Some(orig) = self.vars.rebind_orig(param) {
+            return orig;
+        }
+        let tp = self.vars.tp(param).clone();
+        let orig = self.vars.work_refs(&tp, &mut self.lexer);
+        // The witness only WITNESSES the caller's store (its store_nr is the
+        // distinctness key) — it must never free it, so it is skip_free.  And it
+        // never OWNS a store: mark it inline_ref so its entry null-init lowers to
+        // `OpInitRefSentinel` (no allocation) rather than `OpInitRef` (which would
+        // allocate a store the stash then orphans — a leak); the value is
+        // supplied by the entry stash `Set(orig, param)` (a raw DbRef copy).
+        self.vars.set_skip_free(orig);
+        self.vars.mark_inline_ref(orig);
+        self.vars.set_rebind_orig(param, orig);
+        orig
+    }
+
     pub(crate) fn parse_object(&mut self, td_nr: u32, code: &mut Value) -> Type {
         // @PLN25 single-payload: a `__nullable<S>::Some` variant's body uses S's field names,
         // which live in the inline `payload` field — not `Some`'s direct fields {enum, payload}.
@@ -2069,11 +2108,41 @@ impl Parser {
                 if !self.first_pass && !self.vars.is_compiler_generated(*v_nr) {
                     in_place_var = Some(*v_nr);
                 }
-                if !self.vars.is_argument(*v_nr) {
-                    list.push(v_set(*v_nr, Value::Null));
-                }
                 self.data.set_referenced(td_nr, self.context, Value::Null);
                 let tp = i32::from(self.data.def(td_nr).known_type());
+                // @PLN87 P2.1 — whole-binding reassignment locality.
+                if !self.first_pass
+                    && self.vars.is_argument(*v_nr)
+                    && !self.vars.is_compiler_generated(*v_nr)
+                    && !self.is_hidden_param(*v_nr)
+                {
+                    // A user-visible heap PARAM's slot ALIASES the caller's value;
+                    // it does not own a store.  Reassigning it wholesale REBINDS
+                    // locally: free a PRIOR rebind store but never the caller's
+                    // original (`OpFreeRefIfDistinct` against the entry witness),
+                    // null the slot WITHOUT freeing (`OpInitRefSentinel`), then
+                    // `OpDatabase` allocates a FRESH store.  So `o = Obj{..}` no
+                    // longer mutates the caller — reference-default still
+                    // propagates field writes (`o.x = 9`); only whole-binding
+                    // reassignment is local.  The witness is stashed at function
+                    // entry and the rebound store freed at function exit (both in
+                    // `scopes::check`).  A `&`/RefVar param never reaches here
+                    // (`type_matches` is false for RefVar → temp + write-back,
+                    // P2.2, already correct).
+                    let orig = self.ensure_rebind_witness(*v_nr);
+                    list.push(self.cl(
+                        "OpFreeRefIfDistinct",
+                        &[Value::Var(*v_nr), Value::Var(orig)],
+                    ));
+                    list.push(self.cl("OpInitRefSentinel", &[Value::Var(*v_nr)]));
+                } else if !self.vars.is_argument(*v_nr) {
+                    // A non-arg local OWNS its store; the `Set(Null)` lets the
+                    // allocator reuse-or-fresh it in place (pre-existing).  A
+                    // compiler-generated arg (NRVO hidden return-buffer) keeps the
+                    // bare in-place `OpDatabase` reuse — writing the caller's
+                    // buffer IS its purpose.
+                    list.push(v_set(*v_nr, Value::Null));
+                }
                 list.push(self.cl("OpDatabase", &[Value::Var(*v_nr), Value::Int(tp)]));
             } else if (!type_matches
                 || (!self.vars.is_independent(*v_nr) && !self.vars.is_compiler_generated(*v_nr)))

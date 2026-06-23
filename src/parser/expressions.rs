@@ -418,6 +418,29 @@ impl Parser {
         }
         if let Value::Block(bl) = &mut v {
             let ls = &mut bl.operators;
+            // @PLN87 P2.1 — stash each rebindable heap param's caller-supplied
+            // DbRef into its witness at function entry, as two ordered ops:
+            //   Set(__orig, Null)  — first-def for slot assignment; the witness
+            //                        is inline_ref so this lowers to a
+            //                        non-allocating `OpInitRefSentinel`, NOT the
+            //                        store-allocating `OpInitRef` (whose store the
+            //                        stash would then orphan — a leak).
+            //   OpPutRef(__orig, param) — a RAW DbRef copy (same store_nr as
+            //                        param), NOT `Set(__orig, param)` which would
+            //                        DEEP-COPY param into a fresh store and defeat
+            //                        the distinctness check.
+            // It snapshots param's ENTRY store; later rebinds change param's slot
+            // but not the witness, so the function-exit `OpFreeRefIfDistinct`
+            // (emitted by `scopes::check`) frees a rebound store and never the
+            // caller's original.  Inserted before the null-init loops, so a `Set`
+            // first-def is present for the inline_ref preamble to anchor on.
+            for (param, orig) in self.vars.rebind_params() {
+                ls.insert(
+                    0,
+                    self.cl("OpPutRef", &[Value::Var(orig), Value::Var(param)]),
+                );
+                ls.insert(0, v_set(orig, Value::Null));
+            }
             for wt in self.vars.work_texts() {
                 ls.insert(0, v_set(wt, Value::Text(String::new())));
             }

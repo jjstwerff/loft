@@ -59,37 +59,69 @@ field-read copy, so it is the next actionable @PLN87 work on `main`. WIP committ
 `operators.rs`/`expressions.rs`/`mod.rs` = P1; `main.rs`/`scopes.rs` = the throwaway P0 sweep (strip
 before PR, D2).
 
-### P2 start — baseline + spec banked (2026-06-23)
+### P2 — STRUCT + SCALAR cells DONE on both backends (2026-06-23); vector cell remains
 
-Behavioral baseline proven on BOTH backends (interp == native):
-- **non-`&` param reassign** `fn f(o: Obj){ o = Obj{x:9} }; a=Obj{x:1}; f(a)` → `a.x == 9` TODAY
-  (overwrites the caller). **P2.1 target: `1`** (local rebind).
-- **`&` param reassign** `fn f2(o: &Obj){ o = Obj{x:9} }; a2=Obj{x:1}; f2(&a2)` → `a2.x == 9` TODAY
-  (`f2(&a2)` parses + runs). **P2.2 target: `9`** (write-back) — UNCHANGED.
-- So **today BOTH overwrite** (`&` on heap is a no-op); P2's job is to DIFFERENTIATE them. The
-  deciding fact is ALREADY in the type: the param shows as `ref(Obj)` and a `&`-param carries
-  `RefVar` (`definitions.rs:1292`) — **no type change** (the loft-codegen "facts in types" test passes).
+**Struct reassignment-locality is implemented, sound, and verified interp == native.** Baseline was
+`9 9` (both overwrote — `&` on heap was a no-op); now `1 9` (non-`&` rebinds locally, `&` writes
+back). `tests/scripts/87-p2-reassign-locality.loft` is the gate (param/local × struct/scalar,
+conditional, repeated rebind, field-then-rebind) — green on both backends and leak-free under
+`loft_suite`'s program-exit leak gate (interp) + `--native` (native). The `&`-writeback cell is
+EXCLUDED from the gate: its behaviour is correct but the path leaks (see remaining work #1).
 
-**Spec (loft-codegen step 1, proven):** a param reassignment writes THROUGH the ref (overwrite). P2:
-for a **non-`RefVar`** param, REBIND — allocate the new value in a FRESH store and point the param's
-slot at it (caller untouched); for a **`RefVar`** (`&`) param, keep the write-through. One fact, one site.
+**The mechanism (witness + distinct-guarded free — sound across conditional/repeated rebind).**
+The naive "null the param slot so `OpDatabase` allocs fresh" is UNSOUND: codegen's owned pre-Set free
+then frees the CALLER's store, and the fresh store leaks (store-table exhaustion in a loop). The fix
+treats a wholesale-reassigned heap param as an ownership TRANSITION (borrow→owned), guarded at runtime:
+- **Detect** (`parser/objects.rs::parse_object`): a struct literal assigned to a user-visible heap
+  param — `is_argument && !is_compiler_generated && !is_hidden_param` (the last excludes NRVO
+  return-buffers like `result`, which are compiler-promoted but user-named, so keep their in-place
+  write). A `&`/`RefVar` param never reaches this branch (`type_matches` is false) → it keeps the
+  existing write-back path (P2.2; behaviour correct, but see leak below).
+- **Witness** (`Function::rebind_orig` map + `ensure_rebind_witness`): a skip-free + inline_ref
+  `__ref_N` work-ref holding the param's caller-supplied `DbRef`.  inline_ref is LOAD-BEARING — it
+  makes the witness's entry null-init lower to the non-allocating `OpInitRefSentinel`; a plain owned
+  ref would `OpInitRef`→`null()` a kt=65535 store that the stash then orphans (the leak `loft_suite`
+  caught — the standalone binary's leak check did NOT, only the harness's cloned-DB run did).
+- **Entry stash** (`parser/expressions.rs` preamble): `Set(__orig, Null)` (the inline_ref sentinel
+  first-def, for slot assignment) then `OpPutRef(__orig, param)` — a RAW DbRef copy (same store_nr),
+  NOT `Set(__orig, param)` which DEEP-COPIES into a fresh store and defeats the distinctness check.
+  Snapshots param's ENTRY store; later rebinds move param's slot but not the witness.
+- **Rebind** (parser emits, both backends share the IR): `OpFreeRefIfDistinct(o, __orig)` (frees a
+  PRIOR rebind store; no-op on the first, `o == __orig`) → `OpInitRefSentinel(o)` (null slot, no free)
+  → `OpDatabase(o)` (fresh store).
+- **Exit free** (`scopes::check::get_free_vars`, `to_scope == 1` = the function-exit hook every
+  `return`/tail routes through; args are otherwise excluded from the free sweep): `OpFreeRefIfDistinct(o,
+  __orig)` — frees the rebound store iff distinct from the caller's original. Sound for conditional
+  (untaken path: `o == __orig`, no-op) and repeated rebind.
+- **Native twins** (`generation/ops/ref_ops.rs` + registered in `ops/mod.rs`): `OpInitRefSentinel`
+  (`var = DbRef::NULL`) and `OpPutRef` (`var = value`) were interp-only opcodes; added emitters so the
+  shared IR compiles on `--native`. `OpFreeRefIfDistinct` + `OpDatabase` already had emitters.
 
-**NEXT concrete steps (gate: do NOT edit codegen before step 1):**
-1. Capture the bytecode PAIR — working (rebind: alloc-fresh + set-slot) vs broken (overwrite:
-   write-through-ref) — on both backends. NB `loft introspect` dumped only the slot table here; get
-   the ops via `LOFT_LOG=static`.
-2. Locate the Set-into-ref-param codegen site (`src/state/codegen.rs` set_var / gen_set_* + the native
-   twin in `src/generation/`).
-3. Gate it on `RefVar`: non-`RefVar` → rebind; `RefVar` → write-through.
-4. Verify both backends + keep `tests/scripts/85-store-lifetime-*` green (P2.3).
-5. P2.4 matrix `{param,local}×{struct,vector,scalar}×{interp,native}` →
-   `tests/scripts/87-p2-reassign-locality.loft`.
+Whole change is **gated on the rebind detection** (off for all existing code — P0 proved heap-param
+reassignment is ~nonexistent), so regression risk to the store-lifetime machinery is contained.
+Verified: `issues.rs` 723 pass, `loft_suite` green (incl. the new gate), both backends.
 
-Runnable probe (recreate in /tmp; the behavioral pair):
+**REMAINING P2 work:**
+1. **P2.2 `&` write-back leak** — `fn f(o: &Obj){ o = Obj{..} }` returns the right value (`g.x == 9`)
+   but `SetStackRef` overwrites the caller's slot with the new ref WITHOUT freeing the OLD caller store
+   → it orphans 1 store (caught by `loft_suite`, not the standalone binary). PRE-EXISTING (the `&`
+   path is untouched by P2.1), but it means P2.2 is NOT actually done: the `&` write-back needs the
+   SAME ownership-transition treatment as P2.1 (free the displaced store, distinct-guarded). The P2.1
+   witness/IfDistinct infra is reusable.
+2. **Vector cell of P2.4** — `fn f(v: vector<T>){ v = [..] }` still appends to the caller's backing
+   (`len` grows; pre-existing, NOT a regression). The struct chokepoint is one `OpDatabase`; the
+   vector path materialises through the `__vdb` backing store (`parser/vectors.rs::vector_db` /
+   `build_vector_list`, deliberately skipped for arguments) + per-element `new_record`, so it needs
+   the same witness/IfDistinct applied there (the infra is backend-agnostic and reusable; only the
+   vector EMISSION path is new). The `__vdb` store has its own scope-exit free, so beware double-handling.
+3. **P3** — W4 redundant-`&` lint (unchanged; see § Phases).
+4. **D2** — strip the throwaway `LOFT_SWEEP_P0` instrument from `scopes::check` before any PR.
+
+Runnable probe (the behavioral pair — now prints `1 9` on both backends):
 
     struct Obj { x: integer }
-    fn f(o: Obj)  { o = Obj { x: 9 } }    // non-& param: a.x stays 9 today, P2 target 1
-    fn f2(o: &Obj){ o = Obj { x: 9 } }    // &-param: a2.x = 9 write-back (unchanged)
+    fn f(o: Obj)  { o = Obj { x: 9 } }    // non-& param: REBINDS local → a.x == 1
+    fn f2(o: &Obj){ o = Obj { x: 9 } }    // &-param: write-back → a2.x == 9
     fn main() { a = Obj{x:1}; f(a); a2 = Obj{x:1}; f2(&a2); print("{a.x} {a2.x}\n"); }
 
 ## Phases
@@ -107,6 +139,8 @@ Runnable probe (recreate in /tmp; the behavioral pair):
   (The sweep instrument is throwaway; remove before the PR.)
 - **P1** — `&` on local bindings (additive, non-breaking).
 - **P2** — reassignment-locality (**breaking**: non-`&` reassignment → local rebind; `&` writes back).
+  **non-`&` STRUCT + SCALAR rebind ✅ DONE both backends, leak-free (2026-06-23)**; the `&`-writeback
+  leak (P2.2) + the vector cell remain (see § P2 above).
 - **P3** — W4 redundant-`&` lint.
 
 ## Concerns (detail in the issue)
