@@ -155,6 +155,24 @@ program-exit leak gate) with the three former gaps' lock-ins un-ignored:
   first cut.
 - **D2 — ✅ DONE** — the throwaway `LOFT_SWEEP_P0` instrument is removed from `scopes::check` + `main.rs`.
 
+**Post-merge probing — `&` write-back RHS shapes (2026-06-23).** The P2 matrix tested the LITERAL
+forms only; probing the others found two gaps and a latent concern:
+- **#1 (was a LEAK) — ✅ FIXED via clean rejection.** `&`-struct write-back from a CALL (`o = mk()`)
+  or VARIABLE (`o = src`) leaked the displaced caller store (the P2.2 displaced-free fires only when
+  the RHS `result_var` is the skip_free construction temp, i.e. only `o = Obj{..}`). A `Block`/`Insert`
+  temp-wrap to reuse that path collided with fragile RefVar-assignment transforms (the `Set(o,…)`
+  write-back got dropped), so full ownership-transfer support is DEFERRED. Until then these shapes are
+  **rejected at parse time** with a clear message (no silent leak): `parser/expressions.rs`,
+  gated on `RefVar(Reference|Vector)` + non-skip_free RHS. Lock-ins: `parse_errors`
+  `pln87_amp_writeback_*_rejected`, `leak::pln87_struct_amp_literal_writeback_no_leak`, and the
+  ignored `issues::pln87_amp_writeback_from_call_writes_back` (flips to PASS when full support lands).
+- **#2 (was a WRONG MESSAGE) — ✅ FIXED.** `&vector = otherVector` reported the misleading
+  "`&` but is never modified"; now the same clear write-back-not-supported error. The duplicate
+  "never modified" is suppressed via `Parser::writeback_rejected` (cleared per function).
+- **#3 — leak-detection divergence (OPEN, investigating).** The standalone binary's exit leak-check
+  under-reports leaks the cloned-DB harness (`loft_suite`/`leaks_for`) catches; the harness is the
+  authority used throughout P2. Root-causing why the binary misses them.
+
 Runnable probe (the behavioral pair — now prints `1 9` on both backends):
 
     struct Obj { x: integer }

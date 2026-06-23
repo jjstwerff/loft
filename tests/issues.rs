@@ -15371,3 +15371,16 @@ fn check() -> integer { a = [1, 2, 3]; vamp(&a); a[0] }"
     .expr("check()")
     .result(Value::Int(7));
 }
+
+/// @PLN87 #1 — DEFERRED: full `&` write-back support for a CALL/VAR RHS (`o = mk()`,
+/// `o = src`).  Today these are rejected at parse time (see parse_errors
+/// `pln87_amp_writeback_*_rejected`) because the ownership-transfer machinery only
+/// handles an owned LITERAL (`o = Obj{..}`).  When the transfer is generalised to
+/// call/var RHS this lock-in flips to PASS: the write-back must reach the caller.
+#[test]
+#[ignore = "@PLN87 #1 — & write-back from call/var is rejected pending ownership-transfer support; un-ignore when parse_assign_op routes a call/var RHS through a transferable owned temp"]
+fn pln87_amp_writeback_from_call_writes_back() {
+    code!("struct Obj { x: integer } fn mk() -> Obj { Obj { x: 9 } } fn f(o: &Obj) { o = mk(); } fn check() -> integer { a = Obj { x: 1 }; f(&a); a.x }")
+        .expr("check()")
+        .result(Value::Int(9));
+}

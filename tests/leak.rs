@@ -1563,3 +1563,15 @@ fn pln87_vector_amp_writeback_no_leak() {
         leaks_for("fn va(v: &vector<integer>){ v = [7,8,9]; } pub fn test(){ a=[1,2,3]; va(&a); }");
     assert!(l.is_empty(), "vector & write-back leaked: {l:?}");
 }
+
+/// @PLN87 #1 — the SUPPORTED `&` struct write-back (`o = Obj{..}`, a literal) frees
+/// the displaced caller store and transfers the new one, leak-free.  The call/var
+/// forms (`o = mk()`, `o = src`) that USED to leak here are now rejected at parse
+/// time (see parse_errors `pln87_amp_writeback_*_rejected`); full support is deferred.
+#[test]
+fn pln87_struct_amp_literal_writeback_no_leak() {
+    let l = leaks_for(
+        "struct Obj{x:integer} fn f(o:&Obj){o=Obj{x:9};} pub fn test(){g=Obj{x:1};f(&g);}",
+    );
+    assert!(l.is_empty(), "struct & literal write-back leaked: {l:?}");
+}
