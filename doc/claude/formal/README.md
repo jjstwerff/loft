@@ -42,9 +42,10 @@ not duplicate: a deviation entry links to the lens analysis instead of re-explai
 | doc | area | status |
 |---|---|---|
 | [types.md](types.md) | type system + conversion relation (incl. integer width) | **started** |
+| [binding.md](binding.md) | reference types & `&` (the bind-site link law) | **started** — `&` is a TYPE ANNOTATION (`&τ` reference type carried by the variable), not an operator; 7 deviations = the @PLN87 ladder + the model gap |
 | grammar.md | concrete grammar + operator precedence | todo (rough spot #4) |
 | operational.md | small-step semantics for the stable core | todo (rough spot #3) |
-| ownership.md | `deps` / borrow model | **deferred** — until @PLN85 / @PLN87 close ([FORMALIZATION.md](../FORMALIZATION.md) § Recommendation); a typing relation over a still-moving type is premature |
+| ownership.md | the `deps` / borrow **checker** (lifetimes) — distinct from binding.md's surface | **deferred** — until @PLN85 / @PLN87 close ([FORMALIZATION.md](../FORMALIZATION.md) § Recommendation); a checker over a still-moving type is premature |
 
 ## Deviation entry format
 
