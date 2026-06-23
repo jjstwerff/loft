@@ -1,0 +1,154 @@
+<!--
+Copyright (c) 2026 Jurjen Stellingwerff
+SPDX-License-Identifier: LGPL-3.0-or-later
+-->
+
+# formal/types.md — type system & conversion relation (strict)
+
+> **Rules then deviations** (see [README](README.md)). The rules are the target loft's
+> front end should satisfy; the deviations are where today's code breaks them, to be
+> driven to zero. Analysis/rationale lives in [../TYPING_RELATION.md](../TYPING_RELATION.md)
+> (the lens) — entries here link to it instead of re-explaining.
+
+## Notation
+
+- `Γ` — typing context (variable ⟼ type bindings).
+- `τ, σ` — types (the `Type` enum, `src/data.rs`).
+- `Integer[a,b]` — an integer type with closed value range `[a, b]` (the `IntegerSpec`
+  min/max). `integer` = `Integer[i64::MIN, i64::MAX]`; `u8` = `Integer[0, 255]`; etc.
+- `τ ⤳ σ` — **conversion**: a value of `τ` is accepted where `σ` is expected, with no
+  explicit cast. This is the *only* implicit coercion in the language.
+- `⊔` — the **join** (least type containing both); for integers, the range-union's
+  enclosing `Integer[min a c, max b d]`.
+
+---
+
+## Rules
+
+### Judgments — bidirectional, two modes only
+
+```
+  (T-Syn)   Γ ⊢ e ⇒ τ        e synthesises its own type τ
+  (T-Chk)   Γ ⊢ e ⇐ τ        e is checked against an expected τ
+  (T-Sub)   Γ ⊢ e ⇒ τ ,  τ ⤳ σ   ⟹   Γ ⊢ e ⇐ σ
+```
+
+`(T-Chk)` is the **single** carrier of "the expected type" — there is exactly one
+checking mode, pushed structurally into sub-expressions (literals, lambda bodies,
+variant references, read targets). There is no other channel for an expected type.
+
+```
+  (T-Chk-Vec)    Γ ⊢ [e₁ … eₙ] ⇐ vector<τ>   ⟸   ∀i. Γ ⊢ eᵢ ⇐ τ
+  (T-Chk-Lam)    Γ ⊢ (\x.e) ⇐ fn(σ)→τ         ⟸   Γ, x:σ ⊢ e ⇐ τ
+  (T-Chk-Var)    Γ ⊢ V ⇐ Enum E               ⟸   V ∈ variants(E)
+```
+
+### Conversion `τ ⤳ σ` — width folded in
+
+```
+  (C-Refl)    τ ⤳ τ
+  (C-Never)   Never ⤳ τ
+  (C-Tuple)   (σ₁…σₙ) ⤳ (τ₁…τₙ)        ⟸   ∀i. σᵢ ⤳ τᵢ
+  (C-Var)     Reference(S) ⤳ Enum(E)   ⟸   S ∈ variants(E)            (and the
+              dual Enum(__nullable<S>) ⤳ Reference(S), and plain Enum ⤳ Integer tag)
+  (C-Int)     Integer[a,b] ⤳ Integer[c,d]   ⟸   [a,b] ⊆ [c,d]         (see I-*)
+```
+
+`(C-Int)` means **width lives inside `⤳`**: an integer flows into another integer iff
+its range fits. There is no separate width gate and no separate authority — `is_equal`,
+`convert`, and codegen all read width from this one relation.
+
+### Integer width
+
+```
+  (I-Sub)     Integer[a,b] <: Integer[c,d]   ⟺   [a,b] ⊆ [c,d]
+              and  <:  is exactly the implicit  ⤳  on integers (C-Int).
+  (I-Widen)   widening (a superset target) is implicit.
+  (I-Narrow)  narrowing (a non-superset target) is NOT implicit: it needs either
+                – an explicit  e as σ , or
+                – e is a literal whose value ∈ range(σ).
+  (I-Lit)     an integer literal n  has every type Integer[a,b] with a ≤ n ≤ b
+              (it checks at the expected width; it does not force i64).
+  (I-Join)    a variable assigned e₁ … eₙ in a scope has type  ⨆ᵢ τᵢ  where τᵢ are the
+              synthesised assignment types.  (Its width is the join of all writes,
+              never just the first/narrowest.)
+```
+
+### Coercion closure
+
+```
+  (C-Only)    ⤳ is the only implicit coercion.  Every other type change is an explicit
+              op or cast and appears in the syntax.
+```
+
+---
+
+## Deviations
+
+OPEN: **5**
+
+### D1 — four expected-type side-channels instead of one checking judgment
+- **Violates:** T-Chk (and its T-Chk-* instances)
+- **Where:** `src/parser/mod.rs` — `Parser.lambda_hint`, `Parser.enum_hint`,
+  `Parser.read_target_type`, `Parser.vector_hint`
+- **Effect:** the checking mode is hand-threaded per syntactic position; a position
+  nobody wired is the next #432 (the `vector_hint` channel was literally added *as*
+  the #432 fix). See [../TYPING_RELATION.md](../TYPING_RELATION.md) § R1.
+- **Status:** OPEN
+- **Removal:** thread a single `expected: Option<Type>` (the `⇐` mode) through the
+  expression parser; delete the four fields.
+
+### D2 — `is_equal` collapses integer width
+- **Violates:** I-Sub / C-Int (width is supposed to live *in* `⤳`)
+- **Where:** `Type::is_equal` treats every `Integer(_)` as one type
+- **Effect:** `(C-Refl)` via `is_equal` makes *any* integer flow into *any* integer
+  with width invisible; width must then be re-imposed elsewhere (D3). See R2.
+- **Status:** OPEN
+- **Removal:** make `is_equal` (or a width-aware sibling used by `⤳`) compare ranges,
+  so `(C-Int)` is the single source of integer compatibility.
+
+### D3 — narrowing enforced as a diagnostic layered on `convert`, not as a rule in `⤳`
+- **Violates:** I-Narrow (placement — the rule is correct, its home is wrong)
+- **Where:** `src/parser/mod.rs::convert` ~1559 (`is_narrowing_int` + `int_value_fits`
+  → an Error emitted *beside* the `is_equal` accept)
+- **Effect:** `convert` returns "compatible" (via `is_equal`) yet separately errors;
+  two answers to one question. Functionally correct today, but it is a second width
+  authority (feeds D5).
+- **Status:** OPEN
+- **Removal:** fold the narrow check into `⤳`/`(C-Int)` so a single relation both
+  accepts and rejects.
+
+### D4 — `(I-Join)` not implemented: a multiply-assigned local keeps the narrowest type
+- **Violates:** I-Join
+- **Where:** front-end variable-type inference (no join across assignments)
+- **Effect:** **#433-residual** — `arg=0; arg=bytes[i]; arg=arg*256+…` infers `u8`
+  from the first write, overflows, and E0308s against its `i64` use under `--native`.
+  The shipped #433 fix (`block_needs_i64_widen`, a return/assign **seam** widen) is a
+  codegen patch for the visible-seam case; it does not compute the join for a
+  variable inferred narrow across branches. See R3.
+- **Status:** OPEN — the highest-leverage close (fixes the residual at the type, so
+  neither backend needs a seam patch)
+- **Removal:** infer a multiply-assigned local as `⨆` of its assignment types.
+
+### D5 — integer width has three authorities that must agree by hand
+- **Violates:** the single-relation intent of C-Int (one authority)
+- **Where:** `Type::is_equal` (ignores width), `convert`/`is_narrowing_int` (errors on
+  it), `narrow_int_cast` in `src/generation/` (emits the `as`)
+- **Effect:** #433 and its residual are both "these three disagreed." Forward-bug
+  generator until unified.
+- **Status:** OPEN (closing D2 + D3 collapses this)
+- **Removal:** one width-aware `⤳`; `is_equal` and codegen read it, not their own copy.
+
+---
+
+## Conformance check (how we know a deviation is real)
+
+Each deviation should have a falsifying program — the case where obeying the rule and
+obeying the code disagree. Examples on record:
+
+- **D1/D4:** `fn f(b: vector<u8>) -> integer { return (b[1] ?? 99); }` and the cbor
+  `read_value` cross-branch `arg` — interp obeys the rules, `--native` (pre-fix)
+  obeyed the code and E0308'd. (#432, #433 + residual.)
+
+When a deviation closes, its falsifying program graduates to `tests/scripts/` and the
+entry here is deleted.
