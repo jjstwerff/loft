@@ -1890,6 +1890,65 @@ impl Parser {
         self.walk_for_warnings(body, &mut ctx);
     }
 
+    /// @PLN87 P3 (W4) — flag a `&` on a HEAP struct parameter that the body never
+    /// REASSIGNS.  For a heap param, field mutation (`o.x = 9`) already propagates
+    /// to the caller (reference-default); `&` only changes a WHOLE-BINDING
+    /// reassignment (`o = X`) into a write-back.  So a `&Obj` that is only
+    /// field-mutated or read gains nothing from the `&` — usually a leftover of the
+    /// old "`&Object` needed to mutate" misconception.  Scalar `&` (always
+    /// load-bearing) and never-read params (already covered by `test_used`) are not
+    /// flagged.  Stdlib exempt; silenceable via `LOFT_NO_WARN_RUNTIME`.
+    pub(crate) fn warn_redundant_amp(&mut self, body: &Value) {
+        if self.default || self.context == u32::MAX {
+            return;
+        }
+        // OPT-IN (off by default): reference-default (P2) only just made `&` on a
+        // field-mutated heap param redundant, so a large body of existing code —
+        // ~20 `&` ref-param regression tests + several scripts — still uses the
+        // pattern intentionally.  Enabling this by default would flag all of them
+        // at once; until that ecosystem is cleaned (or each acknowledges the
+        // warning), gate it behind `LOFT_WARN_REDUNDANT_AMP=1`.
+        if !std::env::var("LOFT_WARN_REDUNDANT_AMP").is_ok_and(|v| v == "1" || v == "true") {
+            return;
+        }
+        let attrs = self.data.def(self.context).attributes().to_vec();
+        for a in &attrs {
+            // `self` is the method-receiver convention — `&self` is idiomatic and
+            // not the "&Object to mutate" misconception this lint targets, so it is
+            // never flagged even when only field-mutated.  Hidden synthetic params
+            // (return buffers) are not user `&` either.
+            if a.hidden || a.name == "self" {
+                continue;
+            }
+            let var = self.vars.var(&a.name);
+            if var == u16::MAX
+                || self.vars.uses(var) == 0
+                || !matches!(self.vars.tp(var), Type::RefVar(inner) if matches!(**inner, Type::Reference(_, _)))
+            {
+                continue;
+            }
+            let mut reassigned = false;
+            body.walk(&mut |node| {
+                if matches!(node, Value::Set(v, _) if *v == var) {
+                    reassigned = true;
+                }
+            });
+            if reassigned {
+                continue;
+            }
+            self.lexer.to(self.vars.var_source(var));
+            diagnostic!(
+                self.lexer,
+                Level::Warning,
+                "`&` on parameter `{}` has no effect here — field mutation already \
+                 propagates to the caller; `&` only matters when you REASSIGN the \
+                 whole binding (`{} = …`)",
+                a.name,
+                a.name,
+            );
+        }
+    }
+
     fn walk_for_warnings(&mut self, code: &Value, ctx: &mut WarnCtx) {
         match code {
             Value::Span(boxed) => {

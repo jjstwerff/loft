@@ -51,6 +51,27 @@ fn run_with_warnings(name: &str, source: &str) -> (String, String, Option<i32>) 
     )
 }
 
+/// @PLN87 P3 (W4) — the redundant-`&` lint is OPT-IN (`LOFT_WARN_REDUNDANT_AMP=1`)
+/// until the ecosystem's now-redundant `&` usages are cleaned up, so its tests
+/// must enable it explicitly.
+fn run_with_w4(name: &str, source: &str) -> (String, String, Option<i32>) {
+    let script_path = std::env::temp_dir().join(format!("loft_w4_{name}.loft"));
+    std::fs::write(&script_path, source).expect("write temp script");
+    let out = Command::new(loft_bin())
+        .arg("--interpret")
+        .arg(&script_path)
+        .current_dir(workspace_root())
+        .env("LOFT_WARN_REDUNDANT_AMP", "1")
+        .output()
+        .expect("failed to invoke loft binary");
+    let _ = std::fs::remove_file(&script_path);
+    (
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        out.status.code(),
+    )
+}
+
 // ── Warning fires on every undefended fault site ────────────────────────────
 
 #[test]
@@ -1064,5 +1085,53 @@ fn main() -> integer { 0 }
     assert!(
         diag.contains("may produce null"),
         "an arg to an UNguarded param must still warn (no over-inference); got stderr={diag:?}"
+    );
+}
+
+// ── @PLN87 P3 (W4) — redundant `&` on a heap struct param ────────────────────
+
+/// A `&Obj` param that is only field-mutated (never reassigned) gains nothing
+/// from the `&` — field mutation propagates regardless.  W4 flags it.
+#[test]
+fn w4_redundant_amp_warns() {
+    let source = "\
+struct Obj { x: integer }
+fn f(o: &Obj) { o.x = 1; }
+fn main() { a = Obj { x: 0 }; f(&a); print(\"{a.x}\\n\"); }
+";
+    let (_stdout, diag, _code) = run_with_w4("w4_redundant", source);
+    assert!(
+        diag.contains("has no effect here") && diag.contains("REASSIGN"),
+        "redundant & must warn (W4); got stderr={diag:?}"
+    );
+}
+
+/// A `&Obj` param that IS reassigned writes back to the caller — the `&` is
+/// load-bearing, so W4 must NOT fire.
+#[test]
+fn w4_writeback_amp_no_warn() {
+    let source = "\
+struct Obj { x: integer }
+fn f(o: &Obj) { o = Obj { x: 9 }; }
+fn main() { a = Obj { x: 0 }; f(&a); print(\"{a.x}\\n\"); }
+";
+    let (_stdout, diag, _code) = run_with_w4("w4_writeback", source);
+    assert!(
+        !diag.contains("has no effect here"),
+        "a reassigned & is load-bearing — W4 must NOT fire; got stderr={diag:?}"
+    );
+}
+
+/// A scalar `&integer` is always load-bearing (scalars are by-value) — never W4.
+#[test]
+fn w4_scalar_amp_no_warn() {
+    let source = "\
+fn f(n: &integer) { n = 5; }
+fn main() { x = 0; f(&x); print(\"{x}\\n\"); }
+";
+    let (_stdout, diag, _code) = run_with_w4("w4_scalar", source);
+    assert!(
+        !diag.contains("has no effect here"),
+        "scalar & is always needed — W4 must NOT fire; got stderr={diag:?}"
     );
 }

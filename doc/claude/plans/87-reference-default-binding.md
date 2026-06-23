@@ -143,7 +143,16 @@ program-exit leak gate) with the three former gaps' lock-ins un-ignored:
    → replace, not grow. `+=` keeps the grow. Lock-in `pln87_vector_param_amp_writes_back`.
 
 **REMAINING (not P2-core):**
-- **P3** — W4 redundant-`&` lint (see § Phases).
+- **P3 — ✅ IMPLEMENTED, OPT-IN (`LOFT_WARN_REDUNDANT_AMP=1`).** The W4 lint flags a `&` on a heap
+  STRUCT param that the body never reassigns (field mutation propagates regardless; `&` only matters for
+  write-back). Excludes `self` (the method-receiver convention), scalar `&` (always load-bearing), hidden
+  return-buffers, and never-read params (covered by `test_used`). `parser/operators.rs::warn_redundant_amp`,
+  called per-fn from `definitions.rs`; tests in `tests/runtime_warnings.rs` (`w4_*`). **Kept OPT-IN**
+  because reference-default (P2) only just made the pattern redundant, so ~20 `&` ref-param regression
+  tests + ~9 scripts still use it intentionally — enabling by default flags them all at once. **Follow-up:
+  an ecosystem cleanup pass (modernise / acknowledge those usages), then flip W4 on-by-default + silenceable
+  per the original P3.2 spec.**  Vector/Enum inners and the `&vector` realloc edge (P3.0) are out of this
+  first cut.
 - **D2 — ✅ DONE** — the throwaway `LOFT_SWEEP_P0` instrument is removed from `scopes::check` + `main.rs`.
 
 Runnable probe (the behavioral pair — now prints `1 9` on both backends):
@@ -170,7 +179,8 @@ Runnable probe (the behavioral pair — now prints `1 9` on both backends):
 - **P2 — ✅ COMPLETE both backends, leak-free (2026-06-23).** reassignment-locality (**breaking**:
   non-`&` reassignment → local rebind; `&` writes back), uniform across struct / vector / scalar; the
   full consistency matrix is green in `tests/scripts/87-p2-reassign-locality.loft` (see § P2 above).
-- **P3** — W4 redundant-`&` lint.
+- **P3 — ✅ IMPLEMENTED (opt-in `LOFT_WARN_REDUNDANT_AMP=1`; on-by-default pending an ecosystem
+  cleanup pass).** W4 redundant-`&` lint.
 
 ## Concerns (detail in the issue)
 P2 breaking-change risk (P0 first) · the `&vector` realloc edge (LOFT.md:1529 may be stale) ·
