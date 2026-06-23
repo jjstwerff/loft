@@ -550,7 +550,11 @@ fn bridge_read(t: &Type, slot: &str) -> String {
         Type::Integer(s) if s.forced_size.is_none() => format!("{slot}.scalar"),
         Type::Integer(_) => format!("{slot}.scalar as {}", rust_type(t, &Context::Argument)),
         Type::Character => format!("{slot}.scalar as i32"),
-        Type::Boolean => format!("{slot}.scalar != 0"),
+        // A loft bool is a `u8` (0/1) in the inner fn's signature, so the read must
+        // be a `u8`, not a bare Rust `bool`: `let p: u8 = a[0].scalar != 0` is a type
+        // error (#433 — surfaced once the loft_ffi collision stopped masking it).
+        // `!= 0` normalises any non-zero scalar to the canonical 1.
+        Type::Boolean => format!("(({slot}.scalar != 0) as u8)"),
         Type::Float => format!("f64::from_bits({slot}.scalar as u64)"),
         Type::Single => format!("f32::from_bits({slot}.scalar as u32)"),
         // Text arg → `&str` borrowed from the slot's (store-backed) bytes.
@@ -738,6 +742,47 @@ fn extra_externs(deps: &std::path::Path) -> Vec<(String, std::path::PathBuf)> {
         }
     }
     out
+}
+
+/// Pick the `loft_ffi` rlib in `deps` that `libloft` was built against.
+///
+/// loft's `deps/` can hold several `libloft_ffi-<hash>.rlib` with the same
+/// StableCrateId but different SVH — e.g. one from `cargo build` (the loft binary)
+/// and one from `cargo test` (the suite).  `libloft` links exactly ONE of them; if
+/// the cdylib's `--extern loft_ffi=` names a DIFFERENT copy, the link carries two
+/// `loft_ffi` and rustc aborts with "found crates (`loft_ffi` and `loft_ffi`) with
+/// colliding StableCrateId values" — the zero-trust native blocker, and the same
+/// failure behind p171/p310/imaging.
+///
+/// rmeta records the dependency by SVH, not by the filename hash, so we can't
+/// string-match it.  Instead pick the candidate whose mtime is closest to
+/// `libloft`'s: a crate and the dependency it links are produced by one cargo
+/// invocation and share a build time, while a stray copy from another build sits far
+/// off.  (A heuristic — a precise SVH match is the follow-up hardening.)
+pub fn loft_ffi_for_libloft(
+    libloft: &std::path::Path,
+    deps: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    let anchor = libloft.metadata().and_then(|m| m.modified()).ok()?;
+    let mut best: Option<(std::path::PathBuf, std::time::Duration)> = None;
+    for e in std::fs::read_dir(deps).ok()?.flatten() {
+        let n = e.file_name().to_string_lossy().into_owned();
+        if !n.starts_with("libloft_ffi-") || !has_rlib_ext(&n) {
+            continue;
+        }
+        let Ok(mtime) = e.metadata().and_then(|m| m.modified()) else {
+            continue;
+        };
+        // Symmetric gap so clock direction does not matter.
+        let gap = mtime
+            .duration_since(anchor)
+            .or_else(|_| anchor.duration_since(mtime))
+            .unwrap_or_default();
+        if best.as_ref().is_none_or(|(_, b)| gap < *b) {
+            best = Some((e.path(), gap));
+        }
+    }
+    best.map(|(p, _)| p)
 }
 
 /// On Windows MSVC, the build-script output dirs holding native import libraries
@@ -993,13 +1038,12 @@ pub fn build_shared_cdylib(
         // own `loft_ffi` rlib must be on the command (the package `.so` is C-ABI,
         // so this is the only `loft_ffi` the cdylib's Rust code names).  Mirrors
         // the standalone native compile in main.rs.
-        if let Some(name) = std::fs::read_dir(&deps).ok().and_then(|rd| {
-            rd.flatten()
-                .map(|e| e.file_name().to_string_lossy().into_owned())
-                .find(|n| n.starts_with("libloft_ffi-") && has_rlib_ext(n))
-        }) {
+        // Pick the `loft_ffi` `libloft` was built against, NOT the first one in dir
+        // order: with two copies present, naming the wrong one puts a second
+        // `loft_ffi` in the link → "colliding StableCrateId" (see `loft_ffi_for_libloft`).
+        if let Some(ffi) = loft_ffi_for_libloft(&rlib, &deps) {
             args.push("--extern".to_string());
-            args.push(format!("loft_ffi={}", deps.join(name).display()));
+            args.push(format!("loft_ffi={}", ffi.display()));
         }
         // Link each native package's resolved cdylib `.so` (the same `-L native`
         // / `-l dylib` / RPATH the executable path emits) so the cdylib's
@@ -1050,6 +1094,26 @@ pub fn build_shared_cdylib(
     Ok(so)
 }
 
+/// Is a working `rustc` on `PATH`?  Cached for the process.
+///
+/// This is the line between a legitimate interpret-fallback and a real failure: with
+/// NO toolchain, loft cannot build native at all, so interpreting a library is the
+/// only option and is graceful.  With a toolchain PRESENT, a native build that fails
+/// is a genuine error — silently interpreting it would hand back a partly-interpreted
+/// binary (or one whose `#native` functions panic at runtime) while the user asked for
+/// native.  Callers gate the fallback on this.
+#[must_use]
+pub fn rustc_available() -> bool {
+    use std::sync::OnceLock;
+    static AVAIL: OnceLock<bool> = OnceLock::new();
+    *AVAIL.get_or_init(|| {
+        std::process::Command::new("rustc")
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success())
+    })
+}
+
 /// Detect ENVIRONMENT failures that masquerade as compiler/linker errors.
 ///
 /// A `rustc`/`cc`/`ld` invocation that dies from a full temp dir or OOM emits a
@@ -1086,6 +1150,22 @@ pub fn toolchain_failure_hint(stderr: &str) -> Option<String> {
         || stderr.contains("SIGKILL")
     {
         return env_fault("was killed (out of memory)");
+    }
+    // The known `loft_ffi` duplicate-crate collision: two copies of loft-ffi reach the
+    // same link carrying the same StableCrateId, which rustc refuses.  Name it
+    // explicitly so a consumer does not read the raw rustc dump as a bug in their own
+    // code or in the library — it is neither, and loft falls back to interpreting.
+    if stderr.contains("StableCrateId") {
+        return Some(
+            "NOTE: this is the known loft_ffi duplicate-crate collision — two copies of \
+             loft-ffi reach the same link with the same StableCrateId, which rustc \
+             refuses.  It is a BUILD/TOOLCHAIN limitation, NOT a bug in your code or in \
+             this library.  To clear it, rebuild the library's cdylib against the CURRENT \
+             loft — `make rebuild-native-cdylibs` in the loft tree, or `cargo build \
+             --release` in the library's native/ dir — then re-run.  If it persists after \
+             a clean rebuild, it is the tracked StableCrateId limitation, not your build."
+                .to_string(),
+        );
     }
     None
 }
@@ -1317,6 +1397,25 @@ mod toolchain_hint_tests {
         // A real type error must pass through untouched so its diagnostics show.
         let stderr = "error[E0308]: mismatched types\n  expected `i32`, found `&str`";
         assert!(toolchain_failure_hint(stderr).is_none());
+    }
+}
+
+#[cfg(test)]
+mod bridge_read_tests {
+    use super::bridge_read;
+    use crate::data::Type;
+
+    #[test]
+    fn bool_arg_reads_as_u8_not_bare_bool() {
+        // #433 — a loft bool param is a `u8` in the inner fn's signature, so the
+        // LibArg read must yield a `u8`, not a bare Rust `bool`.  `let p: u8 =
+        // a[0].scalar != 0` is an E0308; every other scalar arm casts `.scalar` to
+        // the param's Rust type, and Boolean must too.  (Surfaced in the zero-trust
+        // telemetry cdylib once the loft_ffi collision stopped masking it.)
+        assert_eq!(
+            bridge_read(&Type::Boolean, "a[0]"),
+            "((a[0].scalar != 0) as u8)"
+        );
     }
 }
 

@@ -5215,8 +5215,24 @@ impl Parser {
                 in_named = true;
                 self.lexer.has_identifier(); // consume name
                 self.lexer.has_token(":"); // consume :
+                // #432 — a named vector-literal argument (`f(v: [10, 255, 20])`)
+                // builds at the parameter's element width too.  Map the name to its
+                // parameter to seed the hint, then clear it after parsing.
+                let hint_d_nr = self.data.def_nr(&format!("n_{name}"));
+                if hint_d_nr != u32::MAX {
+                    for a in 0..self.data.attributes(hint_d_nr) {
+                        if self.data.attr_name(hint_d_nr, a) == arg_name {
+                            let expected = self.data.attr_type(hint_d_nr, a);
+                            if Self::seeds_vector_hint(&expected) {
+                                self.vector_hint = expected;
+                            }
+                            break;
+                        }
+                    }
+                }
                 let mut p = Value::Null;
                 let t = self.expression(&mut p);
+                self.vector_hint = Type::Unknown(0);
                 named_args.push((arg_name, p, t));
                 // accept trailing comma on the last named arg.
                 if !self.lexer.has_token(",") || self.lexer.peek_token(")") {
@@ -5251,6 +5267,13 @@ impl Parser {
                     let expected = self.data.attr_type(hint_d_nr, arg_idx);
                     if self.enum_context(&expected) {
                         self.enum_hint = expected;
+                    } else if Self::seeds_vector_hint(&expected) {
+                        // #432 — seed a bare vector-literal argument's element width
+                        // from the parameter type, so it builds at the callee's
+                        // stride instead of `vector<integer>`.  Both passes (like the
+                        // enum hint): the literal's element type must agree across
+                        // passes, and the callee is already registered on pass 1.
+                        self.vector_hint = expected;
                     }
                 }
             }
@@ -5294,6 +5317,7 @@ impl Parser {
             let t = self.expression(&mut p);
             self.lambda_hint = Type::Unknown(0);
             self.enum_hint = Type::Unknown(0);
+            self.vector_hint = Type::Unknown(0);
             types.push(t);
             list.push(p);
             arg_idx += 1;
@@ -5837,6 +5861,32 @@ impl Parser {
         Type::Text(Deps::none())
     }
 
+    /// #432 — should a bare vector-literal argument be seeded with this parameter
+    /// type's element width (`vector_hint`)?  Only for a CONCRETE narrow-integer
+    /// element (`vector<u8>` … `vector<i32>`): an untyped integer literal infers
+    /// `vector<integer>` (8-byte stride) and the callee would reinterpret it at the
+    /// narrow stride.  Each branch below is deliberately NOT covered:
+    /// - A generic `vector<T>` (element is a `Reference` to a type-var) must NOT
+    ///   seed — the literal cannot be built at an abstract element type, and seeding
+    ///   it wrongly fails `min_of([3, 1, 2])` with "would lose precision".
+    /// - `vector<single>` is excluded on purpose: a float literal infers
+    ///   `vector<float>` and f64→f32 is rejected as precision-loss regardless of the
+    ///   constant, so seeding would turn the (separate, pre-existing) stride bug
+    ///   into a fresh compile error — out of #432's "integer-vector literal" scope.
+    /// - Struct/enum element vectors already build from their own literal.
+    ///
+    /// Recurses through nested vector layers so `vector<vector<u8>>` seeds too (the
+    /// outer literal is seeded; inner literals thread their element type through
+    /// `var_tp`).  The leaf must be a narrow integer.
+    fn seeds_vector_hint(expected: &Type) -> bool {
+        match expected {
+            Type::Vector(elem, _) => {
+                matches!(**elem, Type::Integer(_)) || Self::seeds_vector_hint(elem)
+            }
+            _ => false,
+        }
+    }
+
     // <call> ::= [ <expression> { ',' <expression> } ] ')'
     pub(crate) fn parse_method(&mut self, val: &mut Value, md_nr: u32, on: Type) -> Type {
         let mut list = vec![val.clone()];
@@ -5848,9 +5898,20 @@ impl Parser {
             return self.call_nr(val, md_nr, &list, &types, true, &arg_pos);
         }
         loop {
+            // #432 — `list[0]` is the receiver (attribute 0), so `list.len()` is the
+            // attribute index of the explicit argument about to be parsed.  Seed a
+            // bare vector-literal argument's element width from that parameter type,
+            // matching the free-function path in `parse_call`.
+            if md_nr != u32::MAX && list.len() < self.data.attributes(md_nr) {
+                let expected = self.data.attr_type(md_nr, list.len());
+                if Self::seeds_vector_hint(&expected) {
+                    self.vector_hint = expected;
+                }
+            }
             let mut p = Value::Null;
             arg_pos.push(self.lexer.peek_pos().clone());
             let t = self.expression(&mut p);
+            self.vector_hint = Type::Unknown(0);
             types.push(t);
             list.push(p);
             if !self.lexer.has_token(",") {

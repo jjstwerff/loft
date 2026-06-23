@@ -15,10 +15,29 @@ use crate::vector;
 /// re-encoding the container layout (loop bounds, element strides, slot drift).
 /// The historical `@P290`/`@P306`/`@P318`/`@P309` bugs were all in this walk,
 /// hand-copied divergently across the dispatchers; carrying it once is the fix by
-/// construction.  (`validate_claims` deliberately stays a separate DEFENSIVE
-/// mirror — it bounds-checks each pointer before following it, on suspected-corrupt
-/// heaps, where this trusting walk must not be used; `copy_claims`' destination
-/// construction is genuinely per-kind and is not a walk over this enumeration.)
+/// construction.
+///
+/// Two other per-`Parts` walkers deliberately do NOT fold onto this keystone — the
+/// boundary is load-bearing (H10 / Cluster C), so it is stated here rather than
+/// re-derived:
+/// - `validate_claims` is a separate DEFENSIVE family, NOT a thin visitor over this
+///   walk.  Enumerating a collection's children HERE means dereferencing the
+///   container pointer — `length_vector`, `record_words(cur)`, tree navigation — which
+///   this keystone TRUSTS (the accessors `debug_assert!` on a freed/out-of-range
+///   record).  `validate_claims` runs on *suspected-corrupt* heaps (the `#306`
+///   `LOFT_TRACE_CR` pre-walk before `OpCopyRecord`, naming the first broken edge
+///   instead of faulting on it), so it bounds-checks each pointer BEFORE following it
+///   and does not recurse into the per-element-record kinds (`Array`/`Ordered`/`Hash`/
+///   `Index`) at all.  Its `Struct`/`Vector`/`ChildRec`/`Enum` child arithmetic
+///   matches this keystone's, but those arms need no bound check and save nothing by
+///   folding; the arms that WOULD save code are exactly the ones whose
+///   guard-before-deref is the whole point — folding them would turn "name the broken
+///   edge" back into "fault on it".  Keep it separate.
+/// - `copy_claims`' destination construction is genuinely per-kind (allocate-into-`to`,
+///   header writes, re-insert-vs-slot-copy) and is not a walk over this enumeration.
+///   Its SOURCE enumeration DOES match this keystone — `copy_claims_hash_body` already
+///   reads it, and `seq_vector`/`array_body`/`index_body` are a mechanical source-fold
+///   away (each then pairs a keystone source child with a freshly-claimed dest slot).
 ///
 /// `child` is the `DbRef` (in the SOURCE record's store) at which the child value
 /// lives; `child_tp` is its type.  `owning_elem` is the separate element record

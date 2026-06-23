@@ -1002,20 +1002,16 @@ pub(crate) fn run_tests(
                                 // (LoftStore/LoftRef/LoftStr) in its `extern "C"`
                                 // decls, so loft's own `loft_ffi` rlib must be on
                                 // the command (mirrors the standalone native
-                                // compile in main.rs).
-                                if let Ok(rd) = std::fs::read_dir(native_utils::deps_dir_of(ld)) {
-                                    for e in rd.flatten() {
-                                        let name = e.file_name().to_string_lossy().to_string();
-                                        if name.starts_with("libloft_ffi-")
-                                            && std::path::Path::new(&name)
-                                                .extension()
-                                                .is_some_and(|ext| ext.eq_ignore_ascii_case("rlib"))
-                                        {
-                                            cmd.arg("--extern")
-                                                .arg(format!("loft_ffi={}", e.path().display()));
-                                            break;
-                                        }
-                                    }
+                                // compile in main.rs).  Pick the copy `libloft` was
+                                // built against, not the first in dir order — two
+                                // copies in `deps/` else collide on StableCrateId
+                                // (see `native_lib::loft_ffi_for_libloft`).
+                                if let Some(ffi) = loft::native_lib::loft_ffi_for_libloft(
+                                    &ld.join("libloft.rlib"),
+                                    &native_utils::deps_dir_of(ld),
+                                ) {
+                                    cmd.arg("--extern")
+                                        .arg(format!("loft_ffi={}", ffi.display()));
                                 }
                             }
                             // LibCI: link each package's `#native` crate so tests

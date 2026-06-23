@@ -161,16 +161,19 @@ fn mixed_library_dispatches_native_and_interprets_rest() {
     let _ = std::fs::remove_dir_all(native_auto);
 }
 
-/// `LOFT_REQUIRE_NATIVE` (the crawler / efficiency-work aid): a native→interpreter
-/// fallback that is a warning-and-continue by default becomes a HARD ERROR naming the
-/// reason, so a performance run can never silently run slow interpreted code.  This
-/// guards the **library** chokepoint: `LOFT_FORCE_NATIVE_BUILD_FAIL` deterministically
-/// drives the auto-native build to `Err` (no `rustc` needed), so the test runs
-/// everywhere.  Both arms are asserted from the SAME forced failure:
-///  * default (no env)  → exit 0, the library interprets, correct output;
-///  * `LOFT_REQUIRE_NATIVE=1` → exit ≠ 0, no program output, the reason on stderr.
+/// A native build failure with a `rustc` toolchain present is a HARD ERROR — loft
+/// refuses to silently degrade to the interpreter — and `LOFT_REQUIRE_NATIVE` names
+/// itself as the reason.  This guards the **library** chokepoint:
+/// `LOFT_FORCE_NATIVE_BUILD_FAIL` deterministically drives the auto-native build to
+/// `Err` (a `rustc` toolchain IS present on the host), so both arms hard-fail from
+/// the SAME forced failure, with DIFFERENT reasons on stderr:
+///  * default (no env)  → exit ≠ 0, no output, "a real build failure" (rustc present);
+///  * `LOFT_REQUIRE_NATIVE=1` → exit ≠ 0, no output, the env var named as the reason.
+///
+/// The graceful no-toolchain fallback (the only remaining silent-interpret path) is
+/// covered by `require_native_errors_when_rustc_is_absent` below.
 #[test]
-fn require_native_turns_library_fallback_into_an_error() {
+fn native_build_failure_hard_fails_default_and_under_require() {
     let pid = std::process::id();
     let tmp = std::env::temp_dir().join(format!("loft_n3_require_{pid}"));
     let _ = std::fs::remove_dir_all(&tmp);
@@ -198,18 +201,23 @@ fn require_native_turns_library_fallback_into_an_error() {
         c.output().expect("run the loft binary")
     };
 
-    // Default: the forced build failure warns and the library interprets — the
-    // program still runs and produces the right answer (the fallback is benign).
+    // Default (no env): with rustc present, the forced build failure is a REAL
+    // failure — loft refuses to silently interpret it, exits non-zero, and runs no
+    // program output.  The reason names the present toolchain, NOT LOFT_REQUIRE_NATIVE.
     let def = run(false);
     let def_stdout = String::from_utf8_lossy(&def.stdout);
     let def_stderr = String::from_utf8_lossy(&def.stderr);
     assert!(
-        def.status.success(),
-        "default fallback should still run.\nstdout:\n{def_stdout}\nstderr:\n{def_stderr}"
+        !def.status.success(),
+        "a native build failure with rustc present must hard-fail by default.\nstdout:\n{def_stdout}\nstderr:\n{def_stderr}"
     );
-    assert_eq!(
-        def_stdout, "42\n",
-        "interpreted fallback should produce 21*2=42"
+    assert!(
+        !def_stdout.contains("42"),
+        "a hard-failed build must not run the interpreted fallback (saw program output)"
+    );
+    assert!(
+        def_stderr.contains("real build failure") && !def_stderr.contains("LOFT_REQUIRE_NATIVE"),
+        "the default hard-fail names the present toolchain, not LOFT_REQUIRE_NATIVE.\nstderr:\n{def_stderr}"
     );
 
     // Strict: the same forced failure is now a hard error — no program output, a
@@ -227,7 +235,7 @@ fn require_native_turns_library_fallback_into_an_error() {
     );
     assert!(
         strict_stderr.contains("LOFT_REQUIRE_NATIVE")
-            && strict_stderr.contains("could not compile native"),
+            && strict_stderr.contains("failed to build native"),
         "strict error must name the env var and the reason.\nstderr:\n{strict_stderr}"
     );
 

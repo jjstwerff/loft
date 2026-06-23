@@ -1,0 +1,38 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Native-codegen regression: a ref-returning tail call captured into
+// `__native_tail_ret` (the 87-store-leaks capture path) whose argument is an
+// INLINE call-result that the store-lifetime pass "lifts" into a temp.
+//
+// Pre-fix, native codegen emitted the lift as a leading `{ … };` statement whose
+// own `;` terminated the capture `let` early — binding `__native_tail_ret` to the
+// lift's `()` and detaching the real call:
+//     let __native_tail_ret: DbRef = { …lift-prep… };
+//       n_sl_lift_inner(…)            // detached → rustc E0308 (expected DbRef, found ())
+// Fix (src/generation/emit.rs, the `is_tail_capture_call` branch): wrap the capture
+// value in a block so the lift is a statement and the call is the block's tail.
+//
+// `sl_make()` returns a fresh struct passed BY VALUE (non-`const`) to the tail call
+// `sl_lift_inner`, which is the captured ref-return — exactly the shape zero-trust
+// `opsurface::handle_write_s` hit (`resp_frame(rid, tag, empty_body())`).  Must
+// compile + run identically on interpret and native.
+
+struct SlSf { sl_v: vector<float> }
+
+fn sl_make() -> SlSf { return SlSf { sl_v: [2.0] }; }
+
+fn sl_lift_inner(sl_la: const SlSf, sl_lb: SlSf) -> SlSf {
+  SlSf { sl_v: [sl_la.sl_v[0] + sl_lb.sl_v[0]] }
+}
+
+fn sl_lift_wrap(sl_lx: const SlSf) -> SlSf {
+  sl_lift_inner(sl_lx, sl_make())
+}
+
+fn main() {
+  p = SlSf { sl_v: [2.0] };
+  q = sl_lift_wrap(p);
+  assert(q.sl_v[0] == 4.0, "tail-capture lifted-arg: q.sl_v[0]={q.sl_v[0]}");
+  println("ok");
+}

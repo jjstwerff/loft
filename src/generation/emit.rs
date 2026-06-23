@@ -9,7 +9,9 @@ use crate::ir_node::{IrBlock, IrNode};
 use std::io::Write;
 
 use super::text::count_format_ops;
-use super::{Output, default_native_value, narrow_int_cast, rust_type, sanitize};
+use super::{
+    Output, block_needs_i64_widen, default_native_value, narrow_int_cast, rust_type, sanitize,
+};
 
 impl Output<'_> {
     /// `&Value` entry — wraps the native node in an [`IrNode`] and delegates to
@@ -404,6 +406,9 @@ impl Output<'_> {
                 } else {
                     let returns_text = matches!(returned, Type::Text(_));
                     let narrow = narrow_int_cast(returned);
+                    // #433 — widen a narrow-int value-block returned from a plain
+                    // `integer` (i64) function back to i64 (see block_needs_i64_widen).
+                    let widen_block = block_needs_i64_widen(val, returned);
                     // A direct `return helper()` where `helper` is itself a
                     // BUFFERED user text fn already yields a `Str` — no re-wrap.
                     // @PLN10 Phase A: EXCLUDE nwb inner fns (they now return an
@@ -512,7 +517,7 @@ impl Output<'_> {
                         write!(w, "{{ let _tmp = (")?;
                     } else if wrap_text {
                         write!(w, "Str::new(")?;
-                    } else if narrow.is_some() {
+                    } else if narrow.is_some() || widen_block {
                         write!(w, "(")?;
                     }
                     // P238: when the function's return type is a tuple
@@ -589,6 +594,8 @@ impl Output<'_> {
                         write!(w, ")")?;
                     } else if let Some(cast) = narrow {
                         write!(w, ") as {cast}")?;
+                    } else if widen_block {
+                        write!(w, ") as i64")?;
                     }
                 }
             }
@@ -1703,7 +1710,16 @@ impl Output<'_> {
                     let tail_outer_owned =
                         wrap_result && super::def_returns_owned_text(self.data.def(self.def_nr));
                     if is_tail_capture_call {
-                        write!(w, "let __native_tail_ret: DbRef = ")?;
+                        // Wrap the captured value in a block.  A tail call whose
+                        // argument carries a store-lifetime "lift" pre-eval emits that
+                        // lift as a LEADING `{ … };` statement (it reassigns the lifted
+                        // temp), and its own `;` would otherwise terminate this `let`
+                        // early — binding `__native_tail_ret` to the lift's `()` and
+                        // detaching the real call (E0308, the ztserve blocker).  The
+                        // block makes the lift a statement and the call the tail expr,
+                        // so `__native_tail_ret` binds the call's result.  Harmless for
+                        // lift-free tails: `{ n_error_frame(…) }` is just a tail expr.
+                        write!(w, "let __native_tail_ret: DbRef = {{ ")?;
                     } else if tail_outer_owned {
                         write!(w, "(")?;
                     } else if needs_p205_scratch {
@@ -1730,7 +1746,10 @@ impl Output<'_> {
                     self.indent += 1;
                     self.output_code_inner(w, v)?;
                     self.indent -= 1;
-                    if tail_outer_owned {
+                    if is_tail_capture_call {
+                        // Close the block opened above; the call is its tail expr.
+                        write!(w, " }}")?;
+                    } else if tail_outer_owned {
                         write!(w, ").to_string()")?;
                     } else if needs_p205_scratch {
                         // @PLN10 Phase B — buffer-write (see If-Return path).

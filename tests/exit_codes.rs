@@ -328,6 +328,46 @@ fn p171_native_copy_record_high_bit_does_not_panic() {
     let _ = std::fs::remove_file(&glb_path);
 }
 
+// ── tail-call ref-return capture with a store-lifetime "lifted" arg ────────
+//
+// Native-codegen regression (the zero-trust ztserve blocker; fix in
+// `src/generation/emit.rs`, the `is_tail_capture_call` branch).  A ref-returning
+// tail call captured into `__native_tail_ret` whose argument is an inline
+// call-result that the store-lifetime pass LIFTS emitted the lift as a leading
+// `{ … };` statement; its own `;` terminated the capture `let` early — binding the
+// var to the lift's `()` and detaching the call (rustc E0308 "expected DbRef, found
+// ()").  The fix wraps the capture value in a block (lift = statement, call = tail).
+
+/// Native-codegen regression: a captured ref-return tail call with a store-lifetime
+/// "lifted" inline-call argument must compile + run under `--native`.  Mirrors the
+/// zero-trust `opsurface::handle_write_s` shape `resp_frame(rid, tag, empty_body())`.
+#[test]
+fn tail_capture_lifted_arg_compiles_native() {
+    let script = workspace_root().join("tests/scripts/tail-capture-lifted-arg.loft");
+    let out = Command::new(loft_bin())
+        .arg("--native")
+        .arg(&script)
+        .output()
+        .expect("invoke loft");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // Skip on toolchain-availability issues (not code-under-test regressions),
+    // mirroring p171 above.
+    if stderr.contains("rustc not found") || stderr.contains("E0514") || stderr.contains("E0463") {
+        eprintln!("SKIP: native toolchain not ready — {stderr}");
+        return;
+    }
+    assert!(
+        out.status.success(),
+        "native run must exit 0 (the lifted-arg tail capture must not E0308); \
+         stdout={stdout:?}; stderr={stderr:?}"
+    );
+    assert!(
+        stdout.contains("ok"),
+        "expected the script's 'ok' (its assert passed); stdout={stdout:?}"
+    );
+}
+
 // ── P166: file().content() on a binary file must surface a warning ────────
 //
 // Root-cause data-loss bug: prior to the 2026-04-17 fix,
