@@ -350,8 +350,10 @@ with `a = &b` or `a: &T = b`. A `&` reference cannot outlive its source.
 > (`c = &v[0]`), a **heap whole-value** (`p = &o`, aliases the struct — `p = o` without `&` still
 > copies), and a `&` **function parameter** (`fn f(b: &integer)`, called `f(a)`). The addressable-operand
 > check and the general-operator ban (`&` only as a binding RHS; `&`-params called without `&`) are in
-> place. Remaining: lifetime edges (reference-in-data-structure, source-outlives-reference) — see
-> [plans/87-reference-default-binding.md](plans/87-reference-default-binding.md).
+> place. The edges are characterized too: a reference-to-reference works; a reference can't escape its
+> source (no `&T` return type, no `&` in a collection literal, no `&T` struct field). The ladder is
+> complete — see [plans/87-reference-default-binding.md](plans/87-reference-default-binding.md). The one
+> deferral is full borrow checking (the formal spec's `ownership.md`).
 
 ### Constants
 

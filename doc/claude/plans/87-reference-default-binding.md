@@ -64,8 +64,21 @@ Implemented by the loft2 agent.
 >   `&` scalar/struct parameter already links to the caller's lvalue (write-back + field mutation
 >   propagate) via the call-site stack-ref — it was working before this rung; the lock-ins just pin it.
 >   Both backends + leak-gated; tests `issues::pln87_link_l6_{param_write_through,struct_param_field_writes_back}`, script 434.
-> - **L7 — edges.** reference inside a data structure, reference-to-reference, scope/lifetime (source
->   outlives reference), leak-freedom on both backends.
+> - **✅ L7 — edges** (characterized + made safe/consistent on both backends):
+>   - **reference-to-reference** (`c = &b`, `q = &p`) — works: `c`/`q` links to the same source `b`/`p`
+>     does. Struct ref-to-ref already worked; the scalar case needed a native pointer-copy branch (it
+>     was hitting the #257 DbRef path). Tests `issues::pln87_l7_ref_to_ref_{scalar,struct}`.
+>   - **reference inside a data structure** — rejected: `[&a]` hits the general-operator ban, a `&T`
+>     struct-FIELD type is "needs type or definition". So a reference cannot be stored in a heap record
+>     or collection. Tests `parse_errors::pln87_l7_ref_in_vector_literal_is_error`, script 434.
+>   - **source-outlives-reference** — largely prevented by construction: a function cannot DECLARE a
+>     `&T` return type, and references cannot be stored (above), so a reference cannot escape its
+>     source's scope. An inner-scope reference to an OUTER local is safe (the source outlives it).
+>     Test `issues::pln87_l7_inner_scope_reference_to_outer`, script 434. (Full borrow checking — every
+>     dangling case — remains the formal spec's deferred `ownership.md`.)
+>   - **whole-value reassignment of the source** (`o = S{..}` after `p = &o`) — the alias stays LIVE
+>     (the reassignment reuses the record in place). Test `issues::pln87_l7_heap_reference_live_across_reassign`.
+>   - **leak-freedom** — pinned on both backends (`leak::pln87_{element,field,heap}_reference_no_leak`).
 >
 > ### Front-end work
 > - **✅ Addressable-operand check** — `&<temporary>` (`&(1+2)`, `&f()`, `&123`) errors; a place
@@ -81,15 +94,18 @@ Implemented by the loft2 agent.
 >   "~53 stdlib + ~75 test" estimate was `#rust` FFI bodies + comments; the real loft sites were 3 in
 >   script 87 + ~5 `&`-param tests, all migrated to `f(x)`. Full suite + both backends green.
 >
-> **Done: all front-end rules + L1–L6.** Every `&`-reference is live read- and write-through on both
-> backends — a scalar local (L1/L2), a struct field (L3), a vector element (L4), a heap whole-value
-> (L5), and a `&` function parameter (L6). The key to L5 was **harmonizing** the new heap reference
-> with the representation the `&`-param / #257 alias already used (one `RefVar` + `OpCreateStack`
-> lowering, read as a stack-ref in interp / DbRef-by-value in native) — so the feared D-bind-0 refactor
-> was NOT needed; the scalar rungs key off the IR value, the heap rung reuses the alias shape.
-> **Next: L7** (lifetime edges — reference-in-data-structure, reference-to-reference, source-outlives-
-> reference, `o`-rebind through a heap reference). The formal model (`../loft` `formalize` branch:
-> `formal/binding.md`, `types.md`) is the spec these close against.
+> **Done: all front-end rules + L1–L7 — the `&`-reference ladder is complete.** Every `&`-reference is
+> live read- and write-through on both backends — a scalar local (L1/L2), a struct field (L3), a vector
+> element (L4), a heap whole-value (L5), a `&` function parameter (L6) — and the edges (L7) are
+> characterized + safe/consistent (ref-to-ref works, references can't escape into containers/returns,
+> the alias stays live across reassignment, no leaks). The key to L5 was **harmonizing** the new heap
+> reference with the representation the `&`-param / #257 alias already used (one `RefVar` +
+> `OpCreateStack` lowering, read as a stack-ref in interp / DbRef-by-value in native) — so the feared
+> D-bind-0 refactor was NOT needed; the scalar rungs key off the IR value, the heap rung reuses the
+> alias shape. The one genuine deferral is **full borrow checking** (every dangling case) — the formal
+> spec's `ownership.md`; the constructs that could create a dangling reference are rejected today, but
+> a complete checker is future work. The formal model (`../loft` `formalize` branch: `formal/binding.md`,
+> `types.md`) is the spec these close against.
 >
 > ### Method (per rung)
 > Matrix-first probe in `/tmp` on `--interpret`; prove the WORKING bytecode on BOTH backends before

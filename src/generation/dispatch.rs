@@ -189,6 +189,19 @@ impl Output<'_> {
                         "let mut var_{name}: *mut {base} = std::ptr::addr_of_mut!(var_{src_name})"
                     )?;
                 }
+            } else if let Value::Var(src) = to.unspan()
+                && matches!(variables.tp(*src), Type::RefVar(_))
+            {
+                // @PLN87 L7 — ref-to-ref (`c = &b`, `b` a scalar reference): `c` copies
+                // `b`'s pointer, referencing the same source `b` does (the scalar analogue
+                // of the struct ref-to-ref the #257 alias already handles).
+                let src_name = sanitize(variables.name(*src));
+                if self.declared.contains(&var) {
+                    write!(w, "var_{name} = var_{src_name}")?;
+                } else {
+                    self.declared.insert(var);
+                    write!(w, "let mut var_{name}: *mut {base} = var_{src_name}")?;
+                }
             } else {
                 // write-THROUGH to the linked source
                 write!(w, "unsafe {{ *var_{name} = ")?;

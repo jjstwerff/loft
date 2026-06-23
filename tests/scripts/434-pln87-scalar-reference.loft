@@ -85,5 +85,23 @@ fn test() {
     whole.b = 9;
     assert(pr.b == 9, "whole-value reference is LIVE — sees the source's update");
 
+    // L7 — edges: a reference to a reference, and an inner-scope reference to an outer local.
+    rr_a = 3;
+    rr_b = &rr_a;
+    rr_c = &rr_b;
+    rr_c = 5;
+    assert(rr_a == 5, "ref-to-ref (scalar): writing the outer reference reaches the original");
+    rr_o = Pair { a: 1, b: 2 };
+    rr_p = &rr_o;
+    rr_q = &rr_p;
+    rr_q.a = 7;
+    assert(rr_o.a == 7, "ref-to-ref (struct): a field mutation reaches the original");
+    outer = 1;
+    if true {
+        inner_ref = &outer;
+        inner_ref = 8;
+    }
+    assert(outer == 8, "inner-scope reference to an outer local writes through (source outlives it)");
+
     print("pln87 scalar reference ok\n");
 }

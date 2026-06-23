@@ -1575,3 +1575,13 @@ fn pln87_amp_in_subexpr_is_error() {
     code!("fn test() { a = 5; b = &a + 1; print(\"{b}\\n\"); }")
         .error("`&` is not a general operator — it binds a reference only as the whole right-hand side of an assignment (`a = &b`). Pass a `&` parameter WITHOUT `&` (`f(x)`, the reference comes from the parameter type); do not use `&` in an argument or sub-expression at pln87_amp_in_subexpr_is_error:1:28");
 }
+
+// @PLN87 L7 — a reference cannot be smuggled into a data-structure literal: a `&` in a
+// collection element hits the general-operator ban, keeping references from outliving
+// their source.  (A `&T` struct-FIELD type is likewise rejected — "Attribute … needs
+// type or definition" — so a reference cannot be stored in a heap record either.)
+#[test]
+fn pln87_l7_ref_in_vector_literal_is_error() {
+    code!("fn test() { a = 3; v = [&a]; print(\"{v[0]}\\n\"); }")
+        .error("`&` is not a general operator — it binds a reference only as the whole right-hand side of an assignment (`a = &b`). Pass a `&` parameter WITHOUT `&` (`f(x)`, the reference comes from the parameter type); do not use `&` in an argument or sub-expression at pln87_l7_ref_in_vector_literal_is_error:1:28");
+}

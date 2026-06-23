@@ -15514,3 +15514,41 @@ fn pln87_typed_local_reference_write_through() {
         .expr("check()")
         .result(Value::Int(4));
 }
+
+// @PLN87 L7 — edges of the `&`-reference model.
+
+/// L7 — a reference to a reference (`c = &b`, both scalar): `c` links to the same source
+/// `b` does, so writing `c` writes the original and reads are live.
+#[test]
+fn pln87_l7_ref_to_ref_scalar() {
+    code!("fn check() -> integer { a = 3; b = &a; c = &b; c = 5; a }")
+        .expr("check()")
+        .result(Value::Int(5));
+}
+
+/// L7 — a reference to a struct reference (`q = &p`): a field mutation through `q`
+/// reaches the original struct.
+#[test]
+fn pln87_l7_ref_to_ref_struct() {
+    code!("struct S { x: integer } fn check() -> integer { o = S { x: 1 }; p = &o; q = &p; q.x = 7; o.x }")
+        .expr("check()")
+        .result(Value::Int(7));
+}
+
+/// L7 — a reference in an inner scope to an OUTER local (the source outlives the
+/// reference): write-through is safe.
+#[test]
+fn pln87_l7_inner_scope_reference_to_outer() {
+    code!("fn check() -> integer { a = 3; if true { b = &a; b = 5; } a }")
+        .expr("check()")
+        .result(Value::Int(5));
+}
+
+/// L7 — a heap reference stays LIVE across a whole-value reassignment of the source
+/// (`o = S{..}` reuses the record in place, so the alias sees the new field values).
+#[test]
+fn pln87_l7_heap_reference_live_across_reassign() {
+    code!("struct S { x: integer } fn check() -> integer { o = S { x: 1 }; p = &o; o = S { x: 9 }; p.x }")
+        .expr("check()")
+        .result(Value::Int(9));
+}
