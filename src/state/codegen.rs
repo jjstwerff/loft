@@ -3490,6 +3490,31 @@ impl State {
                 self.code_add(var_pos);
                 return;
             }
+            // @PLN87 P2.2 — a `&`-param write-back of an OWNED construction
+            // (`o = Obj{..}`; the RHS is the transferred skip_free temp from
+            // `parse_object`'s new_object branch) must FREE the DISPLACED caller
+            // store before installing the new value, else the old store orphans
+            // (the pre-P2.2 leak).  Read it live through `o` (`OpGetStackRef`) so
+            // the free is PATH-SENSITIVE — only on the path that runs the
+            // write-back — keeping conditional `&` reassignment sound without a
+            // witness.  Heap inner type only; scalar `&` has no store to free.
+            if stack.function.is_argument(var)
+                && matches!(
+                    *tp,
+                    Type::Vector(_, _) | Type::Reference(_, _) | Type::Enum(_, true, _)
+                )
+                && {
+                    let src = value.result_var();
+                    src != u16::MAX && stack.function.is_skip_free(src)
+                }
+            {
+                let var_pos = stack.var_pos(var);
+                stack.add_op("OpVarRef", self);
+                self.code_add(var_pos);
+                stack.add_op("OpGetStackRef", self);
+                self.code_add(0u16);
+                stack.add_op("OpFreeRef", self);
+            }
             let var_pos = stack.var_pos(var);
             stack.add_op("OpVarRef", self);
             self.code_add(var_pos);

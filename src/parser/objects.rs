@@ -2178,6 +2178,16 @@ impl Parser {
                 let tp = i32::from(self.data.def(td_nr).known_type());
                 list.push(v_set(w, Value::Null));
                 list.push(self.cl("OpDatabase", &[Value::Var(w), Value::Int(tp)]));
+                // @PLN87 P2.2 — `&`-param write-back (`o = Obj{..}` on a `&Obj`):
+                // the new value `w` is TRANSFERRED to the caller through the
+                // double-indirect `o` (codegen's RefVar-set lowering frees the
+                // displaced caller store first), so the caller owns it and frees
+                // it — `w` must NOT be freed here (skip_free), else the temp's
+                // scope-exit free would orphan the caller's binding (a UAF) AND
+                // leave the OLD caller store unfreed (the pre-P2.2 leak).
+                if matches!(self.vars.tp(*v_nr), Type::RefVar(_)) {
+                    self.vars.set_skip_free(w);
+                }
                 *code = Value::Var(w);
             }
         } else if !self.first_pass && !self.is_field(code) {

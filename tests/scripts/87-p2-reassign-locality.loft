@@ -19,6 +19,8 @@ struct Obj { x: integer }
 
 // --- struct, non-& : whole reassign is LOCAL ---
 fn o_rebind(o: Obj) { o = Obj { x: 9 }; }
+// --- struct, & : whole reassign WRITES BACK (caller sees the new value), leak-free ---
+fn o_amp(o: &Obj) { o = Obj { x: 9 }; }
 // --- struct : field mutation PROPAGATES (reference-default) ---
 fn o_field(o: Obj) { o.x = 7; }
 // --- struct, non-& : conditional rebind, both paths sound ---
@@ -45,6 +47,9 @@ fn n_amp(n: &integer) { n = 5; }
 fn main() {
     a = Obj { x: 1 }; o_rebind(a);
     assert(a.x == 1, "struct non-& reassign is local (caller unchanged)");
+
+    g = Obj { x: 1 }; o_amp(&g);
+    assert(g.x == 9, "struct & reassign writes back to the caller (leak-free)");
 
     b = Obj { x: 1 }; o_field(b);
     assert(b.x == 7, "struct field mutation propagates (reference-default)");

@@ -1507,12 +1507,11 @@ pub fn test() {
 }
 
 // @PLN87 P2.2 — a `&` whole-binding write-back (`o = Obj{..}` on a `&Obj` param)
-// must free the DISPLACED caller store as it installs the new value.  Today the
-// `SetStackRef` write-back overwrites the caller's slot without freeing the old
-// store, orphaning it (1 Obj leaked).  The behaviour is correct (`g.x == 9`),
-// only the store-lifetime is wrong — so this is a leak lock-in, not a value one.
+// frees the DISPLACED caller store as it installs the new value: the RefVar-set
+// lowering reads the old store live through `o` and frees it, and the
+// transferred construction temp is skip_free.  Fixed by P2.2 — was: `SetStackRef`
+// overwrote the caller's slot without freeing the old store, orphaning 1 Obj.
 #[test]
-#[ignore = "@PLN87 P2.2 — un-ignore when the & write-back frees the displaced caller store (today it leaks 1 Obj)"]
 fn pln87_struct_amp_writeback_is_leak_free() {
     let leaks = leaks_for(
         r#"

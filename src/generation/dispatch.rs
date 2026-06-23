@@ -86,6 +86,24 @@ impl Output<'_> {
         {
             if to != &Value::Null {
                 let name = sanitize(variables.name(var));
+                // @PLN87 P2.2 — a `&`-param write-back of an OWNED construction
+                // (the RHS is the transferred skip_free temp) must FREE the
+                // DISPLACED caller store (`*var_o`) before installing the new
+                // value, else the old store orphans (the pre-P2.2 leak).  The
+                // native twin of the interp `OpGetStackRef`+`OpFreeRef` at the
+                // RefVar-set site (codegen.rs); `OpFreeRef` no-ops on the null
+                // sentinel.  Heap inner type only; a `RefVar(Text)` buffer has no
+                // such displaced store.
+                let src = to.result_var();
+                if src != u16::MAX
+                    && variables.is_skip_free(src)
+                    && matches!(
+                        **inner,
+                        Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+                    )
+                {
+                    write!(w, "OpFreeRef(cell, *var_{name}, \"var_{name}\"); ")?;
+                }
                 write!(w, "*var_{name} = ")?;
                 let needs_text_coerce = matches!(**inner, Type::Text(_));
                 if needs_text_coerce {
