@@ -33,9 +33,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
   (T-Sub)   Γ ⊢ e ⇒ τ ,  τ ⤳ σ   ⟹   Γ ⊢ e ⇐ σ
 ```
 
-`(T-Chk)` is the **single** carrier of "the expected type" — there is exactly one
-checking mode, pushed structurally into sub-expressions (literals, lambda bodies,
-variant references, read targets). There is no other channel for an expected type.
+**In words.** loft works out a type in one of two directions: either the expression tells
+us its type (`⇒`, *synthesis*), or the surrounding code already expects a type and we
+check the expression against it (`⇐`, *checking*). `(T-Chk)` is the **single** carrier of
+"the expected type" — there is exactly one checking mode, pushed structurally into
+sub-expressions (literals, lambda bodies, variant references, read targets). There is no
+other channel for an expected type.
 
 ```
   (T-Chk-Vec)    Γ ⊢ [e₁ … eₙ] ⇐ vector<τ>   ⟸   ∀i. Γ ⊢ eᵢ ⇐ τ
@@ -54,8 +57,12 @@ variant references, read targets). There is no other channel for an expected typ
   (C-Int)     Integer[a,b] ⤳ Integer[c,d]   ⟸   [a,b] ⊆ [c,d]         (see I-*)
 ```
 
-`(C-Int)` means **width lives inside `⤳`**: an integer flows into another integer iff
-its range fits. There is no separate width gate and no separate authority — `is_equal`,
+**In words.** `τ ⤳ σ` is loft's *only* automatic conversion — "a `τ` value is fine where a
+`σ` is wanted, no cast needed." The rules list the safe cases: the same type; a `Never`
+(a `return`/`break`, which fits anywhere); tuples element-by-element; a struct used as one
+of an enum's variants (and the nullable/tag duals); and an integer into a *wider* integer.
+`(C-Int)` means **width lives inside `⤳`**: an integer flows into another integer iff its
+range fits. There is no separate width gate and no separate authority — `is_equal`,
 `convert`, and codegen all read width from this one relation.
 
 ### Integer width
@@ -73,6 +80,13 @@ its range fits. There is no separate width gate and no separate authority — `i
               synthesised assignment types.  (Its width is the join of all writes,
               never just the first/narrowest.)
 ```
+
+**In words.** An integer's type is its value *range*. A narrower integer fits a wider one
+for free (`u8` flows into `integer`); the other way round (wider into narrower) needs an
+explicit `as`, unless the value is a literal that plainly fits. A literal takes whatever
+width is expected of it. And a variable written in several places gets the type big enough
+for *all* its writes (the join) — not just its first one. That last point is exactly where
+the #433-residual lives (deviation D4).
 
 ### Coercion closure
 

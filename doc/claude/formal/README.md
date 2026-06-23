@@ -21,6 +21,28 @@ area and has exactly two parts:
 > A new edge that the rules can't express is a signal the *rule* is wrong (fix the
 > rule); a place the code disobeys a sound rule is a *deviation* (fix the code).
 
+## Reading guide
+
+These docs are dense (they are a spec), but every rule is meant to be readable. How to
+get through them:
+
+- **Read the prose first.** Each substantial block of formal rules is paired with an
+  **"In words"** reading in plain English. The formal rule is the precise version; the
+  prose is the one to read first. If the two ever disagree, the prose is the mistake
+  (fix it).
+- **The notation, explained once:**
+  - `Γ ⊢ e ⇒ τ` — "expression `e` *has* type `τ`" (the parser works the type out itself).
+  - `Γ ⊢ e ⇐ τ` — "`e` is *checked against* an expected type `τ`" (the `τ` is pushed in
+    from the surrounding code).
+  - `τ ⤳ σ` — "a value of type `τ` is *accepted where* `σ` is expected", with no cast.
+  - `⊔` — the *join*: the smallest type that contains both (for integers, the wider range).
+  - `(Name)` in front of a rule is just its label, so a deviation can cite it.
+- **The examples are the anchor.** Each area ends with *falsifying programs* — tiny
+  snippets where obeying the rule and obeying today's code disagree. Read those to see
+  what a rule actually buys.
+- **A deviation (`Dn`) is a known gap, not a bug report** — "the code breaks this rule,
+  here" — tracked to be removed, then deleted.
+
 ## Relationship to the working docs
 
 These formal docs are **new and separate**; the existing planning/analysis docs are

@@ -43,6 +43,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
                      the binding — never a per-expression operation.
 ```
 
+**In words.** `&integer` is a *type* — the type of a variable that is a live link to some
+integer, the same way `vector<integer>` is the type of a vector. The `&` belongs to the
+variable's type and stays there for the variable's whole life; it is never an action you
+perform on a value. There is no `&` operator.
+
 ### Introducing a reference (at a binding, not by evaluating an expression)
 
 ```
@@ -64,6 +69,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
                      annotation lives at a binding, not on an lvalue being written.
 ```
 
+**In words.** You make a reference by writing `&` at a binding — `b = &a`, or a
+`&integer` parameter — which gives `b` a link to `a`; it does *not* read a value out of
+`a`. Because `&` is a type annotation and not an operator, it is allowed *only* there:
+writing `&` anywhere else (`1 + &a`, `[&a]`, `f(&a)`, `&x = 3`, …) is a parse error.
+
 ### Using a `&τ` variable — the link is carried by the type
 
 ```
@@ -76,6 +86,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
                   the EXISTING mutation code.  The TYPE carries the linkage; no
                   operation is special-cased and the mutation code is unchanged.
 ```
+
+**In words.** A linked variable is a window onto its source: read it and you see the
+source's current value; write it and the source changes (`a=3; b=&a; b=4` leaves
+`a==4`). You use it like any normal variable — the link is invisible at the use site
+because it lives in the type.
 
 ### `&` vs reference-default — where the annotation is load-bearing
 
