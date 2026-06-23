@@ -8,14 +8,14 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > **Rules then deviations** (see [README](README.md)). The governing rule: **`&` is a
 > TYPE ANNOTATION, not an operator.** `&τ` is a *reference type* (a live link to a
 > τ-lvalue); the `&` belongs to the **variable's type**, fixed at its binding — it is
-> not something the expression grammar applies per use. The deviation list **is** the
-> @PLN87 ladder (built in the `loft2` worktree, branch `tuxedo-work2`) plus the gap
-> between this type-level model and the current expression-level handling.
+> not something the expression grammar applies per use. The @PLN87 ladder (built in the
+> `loft2` worktree, branch `tuxedo-work2`) **realises this model** and landed via PR#436
+> (merged into this branch); the deviation list is now down to one residual (D-bind-7).
 >
-> ⚠️ The model here **supersedes** the "`&` = reassignment write-back" framing still in
-> [OWNERSHIP_MODEL.md § The law](../OWNERSHIP_MODEL.md) and the
-> [@PLN87 plan](../plans/87-reference-default-binding.md) on `main` (D-bind-doc). Design
-> home: [OWNERSHIP_MODEL.md](../OWNERSHIP_MODEL.md), [DESIGN_DECISIONS.md C77](../DESIGN_DECISIONS.md).
+> The model here is now also the one in [OWNERSHIP_MODEL.md § The law](../OWNERSHIP_MODEL.md) —
+> @PLN87 rewrote it to the bind-site-link framing (the old "`&` = reassignment write-back"
+> framing is gone). Design home: [OWNERSHIP_MODEL.md](../OWNERSHIP_MODEL.md),
+> [DESIGN_DECISIONS.md C77](../DESIGN_DECISIONS.md).
 > This doc is the **binding surface**; the `deps`/borrow *checker* (lifetimes) stays in
 > the deferred `ownership.md`.
 
@@ -107,74 +107,40 @@ rule `C-Ref` in [types.md](types.md): a `&τ` is accepted wherever a `τ` is.)
 
 ## Deviations
 
-OPEN: **8** — D-bind-0 (the model gap), D-bind-7 (the parse leak, ⚑ vital), the @PLN87
-ladder L1–L6, + the doc reconciliation. Each ladder entry links to its runnable lock-in
-in `loft2` (`tests/issues.rs`, `pln87_link_l*`, currently `#[ignore]`).
+OPEN: **1** — D-bind-7 (a residual of the ⚑ vital rule). The @PLN87 ladder (L1–L6) and the
+model + doc reconciliation **landed via PR#436** (merged into this branch) and are verified
+below.
 
-### D-bind-0 — `&` is handled as an expression operator, not a type annotation
-- **Violates:** B-RefType / B-RefType-OfVar
-- **Where:** the parser treats `&` at the EXPRESSION level — a base-case marker
-  (`loft2 operators.rs`, `amp_pending`) recorded per assignment (`expressions.rs`,
-  `amp_bindings`). It "works kind of as an operator but not truly"; the linkage rides
-  on a per-expression flag, not on the variable's type.
-- **Effect:** the rules above cannot be read off the variable's type alone; `&`-ness is
-  scattered across parse sites instead of being one type fact.
-- **Status:** OPEN — the structural one; the ladder rungs below are easier to land on
-  top of the expression-level handling, but the clean end-state is a reference TYPE.
-- **Removal:** represent `&τ` as the binding's **type** (a reference type the variable
-  carries), so reads/writes/mutations dispatch on the type, not an expression flag.
+> **Landed via @PLN87 / PR#436 (verified, closed):**
+> - **D-bind-0** — `&τ` is now `Type::RefVar` (a reference type the variable carries); `&` is
+>   no longer a general operator (a dedicated diagnostic rejects it elsewhere). Reads/writes
+>   dispatch on the variable's RefVar type, not a per-expression flag.
+> - **D-bind-1 / D-bind-2 (NORTH STAR)** — scalar live read + write-through: `a=3; b=&a; b=4;
+>   a==4` → verified on interp **and** native.
+> - **D-bind-3** — struct-field reference write-through: `b=&s.x; b=4; s.x==4` (the #415 gate
+>   no longer blocks it).
+> - **D-bind-4** — vector-element reference: `c=&v[0]; c=9; v[0]==9`.
+> - **D-bind-6** — `&`-parameter link: `fn f(b:&integer){b=4}; f(a); a==4` → both backends.
+> - **D-bind-doc** — `OWNERSHIP_MODEL § The law` rewritten to "heap aliases by default; `&`
+>   binds a live REFERENCE"; the write-back framing is gone.
+>
+> One known **deferred** case (not a leak): `&`-write-back from a CALL/var RHS needs ownership
+> transfer — `tests/issues.rs` ignored `pln87_amp_writeback_from_call_writes_back`, tracked in
+> the @PLN87 plan, consistent with `&` on a non-lvalue being rejected.
 
-### D-bind-7 — `&` in a non-binding position is not rejected at parse time  ⚑ vital
+### D-bind-7 — a bare `&a;` statement is not parse-rejected  ⚑ vital (residual)
 - **Violates:** B-Ref-AnnotationOnly
-- **Where:** because `&` is parsed as an expression prefix (D-bind-0), it is accepted in
-  any expression position and only fails *downstream* with an unrelated error instead of
-  a clean "`&` is only a reference-type annotation" parse error.
-- **Effect (measured, this branch):**
-  | source | wanted | actual |
-  |---|---|---|
-  | `x = 1 + &a` | parse error at `&` | `error[E0308]: mismatched types` |
-  | `v = [&a]` | parse error at `&` | `error: Unknown variable '_elm_1'` (internal) |
-  | `f(&a)` (format/call arg) | parse error at `&` | `error[E0308]: mismatched types` |
-  | `&a;` (bare) / `if &a > 0` | parse error at `&` | `error[E0308]: mismatched types` |
-- **Status:** OPEN — the parse leak the VITAL rule forbids; a symptom of D-bind-0.
-- **Removal:** accept `&` only in reference-type-annotation positions (type / bind site)
-  and reject it elsewhere *in the parser*, with a message naming the rule — not as an
-  accidental type mismatch. Closing D-bind-0 (a real `&τ` type) makes this hold by
-  construction; until then, an explicit parse-site guard enforces it.
-
-### D-bind-1 — a scalar `&τ` variable copies instead of reading live  (ladder L1)
-- **Violates:** B-Ref-Read
-- **Where:** a scalar binding lowers to a COPY; only a HEAP source binds a live view today.
-- **Effect:** `a = 3; b = &a; a = 5; b` → `3` (want `5`).
-- **Status:** OPEN — `pln87_link_l1_scalar_live_read`.
-- **Removal:** a scalar `&τ` variable holds a live reference to the source's slot.
-
-### D-bind-2 — a scalar `&τ` write does not reach the source  (ladder L2, NORTH STAR)
-- **Violates:** B-Ref-Write
-- **Effect:** `a = 3; b = &a; b = 4; a` → `3` (want `4`).
-- **Status:** OPEN — `pln87_link_l2_scalar_write_through`.
-
-### D-bind-3 — struct-field reference blocked by the #415 copy-on-bind  (ladder L3)
-- **Violates:** B-Ref-Lvalue (struct field) + B-HeapAlias
-- **Where:** #415 makes a STRUCT vector-field read COPY on bind ([OWNERSHIP_MODEL.md:152](../OWNERSHIP_MODEL.md)) — a store-lifetime stopgap contradicting reference-default; the design's end state reverses it.
-- **Effect:** `s.x = 3; b = &s.x; b = 4; s.x` → `3` (want `4`).
-- **Status:** OPEN — gated on the **#415 reversal** (substrate stream). `pln87_link_l3_field_write_through`.
-
-### D-bind-4 — scalar vector-element reference does not write through  (ladder L4)
-- **Violates:** B-Ref-Lvalue (vector element) + B-Ref-Write
-- **Effect:** `v = [10, 20]; c = &v[0]; c = 99; v[0]` → `10` (want `99`) for a SCALAR element.
-- **Status:** OPEN — `pln87_link_l4_element_write_through`.
-
-### D-bind-6 — a `&τ` parameter is not a link to the caller's lvalue  (ladder L6)
-- **Violates:** B-Ref-Intro / B-Ref-Write across a call
-- **Effect:** `fn f(b: &integer){ b = 4 }  … f(&a); a` → `3` (want `4`). Replaces the old "`&`-param write-back" with the uniform type-carried link.
-- **Status:** OPEN — `pln87_link_l6_param_write_through`.
-
-### D-bind-doc — canonical docs still describe the superseded write-back framing
-- **Violates:** B-RefType (the model's own statement of itself)
-- **Where:** [OWNERSHIP_MODEL.md § The law](../OWNERSHIP_MODEL.md) ("`&` to reassign back") + the [@PLN87 plan](../plans/87-reference-default-binding.md) write-back/P2 framing, both on `main`. The correction is committed on `loft2`/`tuxedo-work2`, not yet merged.
-- **Status:** OPEN — closes when @PLN87 reaches `main`.
-- **Removal:** rewrite OWNERSHIP_MODEL § The law to the type-annotation / bind-site-link framing on merge; this doc becomes the spec it points to.
+- **Where:** @PLN87 rejects prefix `&` in every EXPRESSION position — assignment target,
+  field target, compound-assign target, `(&a)`, a call result, a literal, a call argument, a
+  sub-expression, a vector literal, an `if` condition — each with a clean parse error naming
+  the rule (*"`&` is not a general operator …"*; `pln87_amp_on_*` in `tests/parse_errors.rs`).
+  The one gap: a **bare `&a;` statement** still parses (a no-op) instead of that parse error.
+- **Effect:** `fn main(){ a=5; &a; }` runs and prints nothing, where the VITAL rule wants a
+  parse error at `&`. Harmless (the reference is discarded) but it is a position *outside a
+  binding*, which the rule forbids.
+- **Status:** OPEN — the last position the rule does not yet cover.
+- **Removal:** extend the prefix-`&` guard that already rejects the expression positions to the
+  bare-statement position.
 
 ---
 

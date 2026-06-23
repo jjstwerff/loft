@@ -119,15 +119,18 @@ reality: the model is the beacon, the code is mid-migration.
 - **Status:** OPEN — reverse once the dep-driven view (D-own-2) lands.
 - **Removal:** struct-field reads become views via `deps`; delete the copy-on-bind branch.
 
-### D-own-5 — the `&` law is mid-correction and unbuilt
-- **Violates:** O-Borrow / O-Deps for the explicit-link case
-- **Where:** @PLN87 — the surface law is corrected to bind-site linking ([binding.md](binding.md)),
-  but the ladder L1–L6 is 0/6 implemented (loft2/`tuxedo-work2`), and the canonical docs
-  still carry the superseded write-back framing (binding.md D-bind-doc).
-- **Effect:** `&` does not yet realize a tracked borrow with a derived lifetime.
-- **Status:** OPEN — the active @PLN87 work; tracked in detail in binding.md (D-bind-0..7).
-- **Removal:** land the link ladder; the `&τ` borrow then carries its source in `deps` like
-  any other (O-Borrow).
+### D-own-5 — the `&` borrow is built but not yet a `deps`-tracked borrow
+- **Violates:** O-Deps for the explicit-link case
+- **Where:** @PLN87 (PR#436, merged) **landed** the ladder L1–L6 — scalar/field/element/param
+  references read + write through, leak-free ([binding.md](binding.md), verified). So `&`
+  realises a live reference. What remains is the *checker* side: the `&τ` borrow's source is
+  not yet carried as one `deps` fact the borrow checker reads — it shares the per-site
+  ownership re-derivation of [D-own-1](#d-own-1).
+- **Effect:** `&` works and is leak-free, but its lifetime is enforced by the existing
+  store-lifetime machinery, not derived from a single `deps` borrow fact.
+- **Status:** OPEN — folds into D-own-1 (one `deps` fact); the surface (binding.md) is closed.
+- **Removal:** the `&τ` borrow carries its source in `deps` like any other borrow (O-Borrow),
+  so free placement for a referenced lvalue derives from that fact.
 
 ---
 
