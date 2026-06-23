@@ -1,6 +1,9 @@
-// @PLN87 L1/L2 — a scalar local `&`-reference is a LIVE link: reads see the source's
-// current value, writes write the source.  Runs on interp + --native + wasm, under the
-// store-leak gate.  `&` here is the allowed binding form (`a = &b`, addressable operand).
+// @PLN87 L1/L2/L3/L4 — a scalar `&`-reference (to a local, a struct field, or a vector
+// element) is a LIVE link: reads see the source's current value, writes write the source.
+// Runs on interp + --native + wasm, under the store-leak gate.  `&` here is the allowed
+// binding form (`a = &b`, addressable operand).
+
+struct Pair { a: integer, b: integer }
 
 fn test() {
     // L1 — live read: the reference reflects the source's current value.
@@ -48,6 +51,18 @@ fn test() {
     r1 = &v[1];
     r1 = 7;
     assert(v[1] == 7, "a second element reference is independent");
+
+    // L3 — a scalar struct-FIELD reference (`fb = &sf.b`) is live both ways, at any offset.
+    sf = Pair { a: 3, b: 7 };
+    fb = &sf.b;
+    assert(fb == 7, "field reference reads the field");
+    sf.b = 5;
+    assert(fb == 5, "field reference is LIVE — sees sf.b's update");
+    fb = 99;
+    assert(sf.b == 99, "write through the field reference writes sf.b");
+    fa = &sf.a;
+    fa = 4;
+    assert(sf.a == 4 && sf.b == 99, "a field-0 reference is independent of field-8");
 
     print("pln87 scalar reference ok\n");
 }

@@ -144,38 +144,34 @@ impl Output<'_> {
             // stays valid for the source's scope.
             let base = rust_type(inner, &Context::Variable);
             // Dispatch on the construction VALUE, which is in the IR (so it survives a
-            // snapshot round-trip) — no per-variable flag needed: an `OpGetVector`/
-            // `OpVectorRef` value is an L4 element link, an `OpCreateStack` value an L1
-            // local link, anything else a write-through.  All three share the `*mut T`
-            // representation; only the construction differs.
-            if let Value::Call(d_nr, cargs) = to.unspan()
-                && matches!(self.data.def(*d_nr).name(), "OpGetVector" | "OpVectorRef")
-                && cargs.len() >= 3
+            // snapshot round-trip) — no per-variable flag needed: an `OpGetField` value
+            // is an L3 struct-field link, `OpGetVector`/`OpVectorRef` an L4 element link,
+            // `OpCreateStack` an L1 local link, anything else a write-through.  All share
+            // the `*mut T` representation; only the construction differs.
+            if let Value::Call(d_nr, _) = to.unspan()
+                && matches!(
+                    self.data.def(*d_nr).name(),
+                    "OpGetField" | "OpGetVector" | "OpVectorRef"
+                )
             {
-                // @PLN87 L4 — a heap vector-ELEMENT `&`-ref (`c = &v[0]`).  `c` is the
-                // SAME `*mut T` shape as L1, so reads/writes (`*var_c`) stay uniform;
-                // only construction differs — resolve the element's INLINE DbRef
-                // (`vec_get_or_raise_runtime`, args: vector, element-size, index — the
-                // SAME helper a value read uses, here kept as the location not the
-                // value) and take a `*mut` into its store slot.  Aliases unchecked like
-                // L1; a realloc of `v` staleness-invalidates it, the same as the
-                // interpreter's element DbRef.
+                // @PLN87 L3/L4 — a heap field (`r = &s.x`) / element (`c = &v[0]`)
+                // `&`-ref.  `r`/`c` is the SAME `*mut T` shape as L1, so reads/writes
+                // (`*var`) stay uniform; only construction differs — the value yields the
+                // place's DbRef (`OpGetField` → record+offset; `OpGetVector` → the inline
+                // element location), and we take a `*mut` into that store slot.  Aliases
+                // unchecked like L1; a realloc / move of the backing staleness-invalidates
+                // it, the same as the interpreter's DbRef.
                 if self.declared.contains(&var) {
                     write!(w, "var_{name} = ")?;
                 } else {
                     self.declared.insert(var);
                     write!(w, "let mut var_{name}: *mut {base} = ")?;
                 }
-                write!(w, "unsafe {{ let __ed = {{ let __vr = ")?;
-                self.output_code_inner(w, &cargs[0])?;
-                write!(w, "; let __vi = ")?;
-                self.output_code_inner(w, &cargs[2])?;
-                write!(w, "; stores.vec_get_or_raise_runtime(&__vr, (")?;
-                self.output_code_inner(w, &cargs[1])?;
+                write!(w, "unsafe {{ let __ed = ")?;
+                self.output_code_inner(w, to)?;
                 write!(
                     w,
-                    ") as u32, __vi) }}; \
-                     stores.store_mut(&__ed).addr_mut::<{base}>(__ed.rec, __ed.pos) \
+                    "; stores.store_mut(&__ed).addr_mut::<{base}>(__ed.rec, __ed.pos) \
                      as *mut {base} }}"
                 )?;
             } else if let Value::Call(d_nr, cargs) = to.unspan()

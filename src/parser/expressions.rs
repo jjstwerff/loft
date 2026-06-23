@@ -1173,19 +1173,26 @@ use a separate collection or add after the loop"
                 Value::Var(src) if is_scalar(self.vars.tp(src)) => Some(src),
                 _ => None,
             };
-            // L4 — a scalar vector-ELEMENT source (`c = &v[0]`): the element VALUE
-            // lowered to `OpGet*(OpGetVector(v,..), 0)`; the element DbRef is the inner
-            // accessor.  Strip the outer scalar getter so `c` holds that DbRef.
-            let element_ref = if stack_src.is_none() && is_scalar(&s_type) {
+            // L3 / L4 — a scalar HEAP-place source: a vector ELEMENT (`c = &v[0]`) or a
+            // struct FIELD (`r = &s.x`).  Both lower to a scalar value-read
+            // `OpGet*(<base>, fld)`; the place's DbRef is:
+            //   element — the inner `OpGetVector`/`OpVectorRef` accessor itself
+            //             (`OpGet*(OpGetVector(v,..), 0)` → strip to the inner)
+            //   field   — `OpGetField(<base>, fld)`, the record at the field's offset.
+            // Bind `c`/`r` to that ref; reads/writes deref it the same as L1/L4.
+            let heap_ref = if stack_src.is_none() && is_scalar(&s_type) {
                 match code.unspan() {
-                    Value::Call(g, gargs)
-                        if self.data.def(*g).name().starts_with("OpGet")
-                            && gargs.first().is_some_and(|a| {
-                                matches!(a.unspan(), Value::Call(d, _)
-                                    if matches!(self.data.def(*d).name(), "OpGetVector" | "OpVectorRef"))
-                            }) =>
-                    {
-                        Some(gargs[0].clone())
+                    Value::Call(g, gargs) if self.data.def(*g).name().starts_with("OpGet") => {
+                        if gargs.first().is_some_and(|a| {
+                            matches!(a.unspan(), Value::Call(d, _)
+                                if matches!(self.data.def(*d).name(), "OpGetVector" | "OpVectorRef"))
+                        }) {
+                            Some(gargs[0].clone())
+                        } else if let [base, fld] = gargs.as_slice() {
+                            Some(self.cl("OpGetField", &[base.clone(), fld.clone()]))
+                        } else {
+                            None
+                        }
                     }
                     _ => None,
                 }
@@ -1196,11 +1203,11 @@ use a separate collection or add after the loop"
                 let inner = self.vars.tp(src).clone();
                 *code = self.cl("OpCreateStack", &[Value::Var(src)]);
                 s_type = Type::RefVar(Box::new(inner));
-            } else if let Some(eref) = element_ref {
-                // `c` holds the element DbRef; interp reads/writes it via the uniform
-                // RefVar deref (`OpGet*/OpSet*(c,0)`), and native keys its element-pointer
-                // construction off this `OpGetVector` value — so no per-variable flag is
-                // needed, and the link survives an IR snapshot round-trip.
+            } else if let Some(eref) = heap_ref {
+                // `c`/`r` holds the field/element DbRef; interp reads/writes it via the
+                // uniform RefVar deref (`OpGet*/OpSet*(c,0)`), and native keys its
+                // pointer construction off this `OpGetField`/`OpGetVector` value — so no
+                // per-variable flag is needed and the link survives an IR snapshot.
                 *code = eref;
                 s_type = Type::RefVar(Box::new(s_type));
             }

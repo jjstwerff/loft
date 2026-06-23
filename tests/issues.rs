@@ -15417,11 +15417,22 @@ fn pln87_link_l2_scalar_write_through() {
 
 /// L3 — scalar struct-field link: `b = &s.x; b = 4` writes `s.x`.
 #[test]
-#[ignore = "@PLN87 L3 — scalar struct-field link write-through; un-ignore when a link to a field's slot writes through"]
 fn pln87_link_l3_field_write_through() {
     code!("struct S { x: integer } fn check() -> integer { s = S { x: 3 }; b = &s.x; b = 4; s.x }")
         .expr("check()")
         .result(Value::Int(4));
+}
+
+/// L3 — the field link is LIVE in the read direction too, and works for a field at a
+/// NON-zero offset (`s.b`, offset 8) as well as offset 0.
+#[test]
+fn pln87_link_l3_field_live_read() {
+    code!(
+        "struct S { a: integer, b: integer } \
+         fn check() -> integer { s = S { a: 3, b: 7 }; r = &s.b; s.b = 5; r }"
+    )
+    .expr("check()")
+    .result(Value::Int(5));
 }
 
 /// L4 — scalar vector-element link: `c = &v[0]; c = 99` writes `v[0]`.

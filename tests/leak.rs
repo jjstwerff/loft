@@ -1572,6 +1572,16 @@ fn pln87_element_reference_no_leak() {
     assert!(l.is_empty(), "element reference leaked: {l:?}");
 }
 
+/// @PLN87 L3 — a scalar struct-field reference (`r = &s.x`) links into the existing
+/// record (no fresh allocation); read/write-through must not leak the struct's store.
+#[test]
+fn pln87_field_reference_no_leak() {
+    let l = leaks_for(
+        "struct S{a:integer,b:integer} pub fn test(){ s=S{a:1,b:2}; r=&s.b; r=9; q=&s.a; q=7; }",
+    );
+    assert!(l.is_empty(), "field reference leaked: {l:?}");
+}
+
 /// @PLN87 — reassigning a `&Obj` parameter to a struct literal (`o = Obj{..}`) frees
 /// the displaced caller store and transfers the new one, leak-free.  The `&` parameter
 /// is called WITHOUT `&` (the reference comes from the type).
