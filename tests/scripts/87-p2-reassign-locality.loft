@@ -50,7 +50,7 @@ fn main() {
     a = Obj { x: 1 }; o_rebind(a);
     assert(a.x == 1, "struct non-& reassign is local (caller unchanged)");
 
-    g = Obj { x: 1 }; o_amp(&g);
+    g = Obj { x: 1 }; o_amp(g);
     assert(g.x == 9, "struct & reassign writes back to the caller (leak-free)");
 
     b = Obj { x: 1 }; o_field(b);
@@ -79,7 +79,7 @@ fn main() {
     vm = [1, 2, 3]; v_multi(vm);
     assert(len(vm) == 3, "vector repeated rebind is local (no leak)");
 
-    va = [1, 2, 3]; v_amp(&va);
+    va = [1, 2, 3]; v_amp(va);
     assert(va[0] == 7 && len(va) == 3, "vector & reassign writes back to the caller");
 
     vg = [1, 2, 3]; v_grow(vg);
@@ -92,7 +92,7 @@ fn main() {
     x = 3; n_local(x);
     assert(x == 3, "scalar non-& reassign is local (by value)");
 
-    y = 1; n_amp(&y);
+    y = 1; n_amp(y);
     assert(y == 5, "scalar & reassign writes back");
 
     // local (non-param) rebind sanity

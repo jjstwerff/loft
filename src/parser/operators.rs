@@ -461,42 +461,50 @@ impl Parser {
             if self.lexer.has_token("&") {
                 self.amp_pending = true;
                 let t = self.parse_part(var_tp, code, parent_tp);
-                // @PLN87 — a prefix `&` whose lvalue is immediately the TARGET of an
-                // assignment (`&var = …`, `&o.f = …`) is invalid: `&` is a BIND-SITE
-                // marker meaning "this binding LINKS its source instead of copying it"
-                // (`x = &src`, `o: &T`), NOT an assignment target.  Detected LOCALLY —
-                // `parse_part` has consumed the whole lvalue, so the next token tells
-                // target (`=`/`+=`/… follows) from a valid RHS link (`c = &v[0]`, where
-                // `&v[0]` is followed by `;`/operator, never `=`).  (Local peek avoids
-                // the `amp_pending` flag, which is global and leaks across statements.)
-                if !self.first_pass
-                    && (self.lexer.peek_token("=")
+                // @PLN87 — `&` is a binding marker, NOT a general operator.  It is valid
+                // ONLY as the WHOLE right-hand side of an assignment (`a = &b`), which —
+                // since loft statements are `;`-terminated — is always followed by `;`
+                // (a block-final reference `{ … &x }` by `}`).  `parse_part` has consumed
+                // the whole lvalue, so the NEXT token classifies the use:
+                //   `=`/`+=`/…  → `&` on the assignment TARGET (`&var = …`)   [error]
+                //   not `;`/`}` → `&` as a sub-expression / argument          [error]
+                //   `;`/`}`     → a valid binding RHS → check the operand is a PLACE (#1)
+                // (Local peek; avoids the global `amp_pending` flag which leaks.)
+                if !self.first_pass {
+                    let next_assign = self.lexer.peek_token("=")
                         || self.lexer.peek_token("+=")
                         || self.lexer.peek_token("-=")
                         || self.lexer.peek_token("*=")
                         || self.lexer.peek_token("%=")
-                        || self.lexer.peek_token("/="))
-                {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Error,
-                        "`&` cannot appear on the left of an assignment — it marks a \
-                         binding as a link to its source at the binding site (`x = &src`), \
-                         not an assignment target; drop the `&` (the binding is already linked)"
-                    );
-                }
-                // @PLN87 #1 — `&`'s operand must be a PLACE: a variable, struct field,
-                // or vector element, never a temporary (a literal, computed value, or
-                // call result).  `&` binds a reference TO storage; a temporary has
-                // none.
-                if !self.first_pass && !Self::is_amp_place(code, &self.data) {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Error,
-                        "`&` requires an addressable operand — a variable, struct field, \
-                         or vector element — not a temporary (a literal, computed value, \
-                         or call result)"
-                    );
+                        || self.lexer.peek_token("/=");
+                    let next_terminates = self.lexer.peek_token(";") || self.lexer.peek_token("}");
+                    if next_assign {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "`&` cannot appear on the left of an assignment — it marks a \
+                             binding as a link to its source at the binding site (`x = &src`), \
+                             not an assignment target; drop the `&` (the binding is already linked)"
+                        );
+                    } else if !next_terminates {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "`&` is not a general operator — it binds a reference only as the \
+                             whole right-hand side of an assignment (`a = &b`). Pass a `&` \
+                             parameter WITHOUT `&` (`f(x)`, the reference comes from the \
+                             parameter type); do not use `&` in an argument or sub-expression"
+                        );
+                    } else if !Self::is_amp_place(code, &self.data) {
+                        // #1 — a valid binding RHS still needs a PLACE operand.
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "`&` requires an addressable operand — a variable, struct field, \
+                             or vector element — not a temporary (a literal, computed value, \
+                             or call result)"
+                        );
+                    }
                 }
                 return t;
             }

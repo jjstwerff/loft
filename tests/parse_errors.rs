@@ -1560,3 +1560,18 @@ fn pln87_amp_on_literal_is_error() {
     code!("fn test() { b = &123; print(\"{b}\\n\"); }")
         .error("`&` requires an addressable operand — a variable, struct field, or vector element — not a temporary (a literal, computed value, or call result) at pln87_amp_on_literal_is_error:1:22");
 }
+
+// @PLN87 — `&` is NOT a general operator: valid only as the whole RHS of a binding
+// (`a = &b`).  As a call argument or a sub-expression it is an error — a `&` parameter
+// is called WITHOUT `&` (the reference comes from the parameter's type).
+#[test]
+fn pln87_amp_as_call_arg_is_error() {
+    code!("fn f(o: &integer) { o = o + 1; } fn test() { x = 5; f(&x); print(\"{x}\\n\"); }")
+        .error("`&` is not a general operator — it binds a reference only as the whole right-hand side of an assignment (`a = &b`). Pass a `&` parameter WITHOUT `&` (`f(x)`, the reference comes from the parameter type); do not use `&` in an argument or sub-expression at pln87_amp_as_call_arg_is_error:1:58");
+}
+
+#[test]
+fn pln87_amp_in_subexpr_is_error() {
+    code!("fn test() { a = 5; b = &a + 1; print(\"{b}\\n\"); }")
+        .error("`&` is not a general operator — it binds a reference only as the whole right-hand side of an assignment (`a = &b`). Pass a `&` parameter WITHOUT `&` (`f(x)`, the reference comes from the parameter type); do not use `&` in an argument or sub-expression at pln87_amp_in_subexpr_is_error:1:28");
+}

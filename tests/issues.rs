@@ -15366,7 +15366,7 @@ fn check() -> integer { a = [1, 2, 3]; vrebind(a); len(a) }"
 fn pln87_vector_param_amp_writes_back() {
     code!(
         "fn vamp(v: &vector<integer>) { v = [7, 8, 9]; }
-fn check() -> integer { a = [1, 2, 3]; vamp(&a); a[0] }"
+fn check() -> integer { a = [1, 2, 3]; vamp(a); a[0] }"
     )
     .expr("check()")
     .result(Value::Int(7));
@@ -15380,7 +15380,7 @@ fn check() -> integer { a = [1, 2, 3]; vamp(&a); a[0] }"
 #[test]
 #[ignore = "@PLN87 #1 — & write-back from call/var is rejected pending ownership-transfer support; un-ignore when parse_assign_op routes a call/var RHS through a transferable owned temp"]
 fn pln87_amp_writeback_from_call_writes_back() {
-    code!("struct Obj { x: integer } fn mk() -> Obj { Obj { x: 9 } } fn f(o: &Obj) { o = mk(); } fn check() -> integer { a = Obj { x: 1 }; f(&a); a.x }")
+    code!("struct Obj { x: integer } fn mk() -> Obj { Obj { x: 9 } } fn f(o: &Obj) { o = mk(); } fn check() -> integer { a = Obj { x: 1 }; f(a); a.x }")
         .expr("check()")
         .result(Value::Int(9));
 }
@@ -15433,11 +15433,11 @@ fn pln87_link_l4_element_write_through() {
         .result(Value::Int(99));
 }
 
-/// L6 — link as a function parameter: `fn f(b: &integer){ b = 4 }; f(&a)` writes `a`.
+/// L6 — link as a function parameter: `fn f(b: &integer){ b = 4 }; f(a)` writes `a`.
 #[test]
 #[ignore = "@PLN87 L6 — linked param write-through; un-ignore when a `&` param links to the caller's lvalue and writes through"]
 fn pln87_link_l6_param_write_through() {
-    code!("fn f(b: &integer) { b = 4 } fn check() -> integer { a = 3; f(&a); a }")
+    code!("fn f(b: &integer) { b = 4 } fn check() -> integer { a = 3; f(a); a }")
         .expr("check()")
         .result(Value::Int(4));
 }

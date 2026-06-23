@@ -54,9 +54,15 @@ Implemented by the loft2 agent.
 > - **✅ `a: &T = b` typed-local form** — the `&` in a local's declared type binds a reference, the same
 >   as `a = &b` (sets `amp_pending`, reuses the L1 lowering). Both backends; tests
 >   `issues::pln87_typed_local_*`, script 434.
-> - **Ban `&` as a general operator** (REMAINING): `foo(&x)`, sub-expression `&`. This makes existing
->   `foo(&x)` call sites an error — **~53 stdlib + ~75 test sites** migrate to the no-`&` form `foo(x)`
->   (which already works for every `&`-param type). A deliberate ecosystem migration, sequenced next.
+> - **✅ Ban `&` as a general operator** — `&` is valid ONLY as the whole RHS of a binding (`a = &b`,
+>   detected by the trailing `;`/`}` at the prefix-`&` site); a call argument or sub-expression
+>   (`f(&x)`, `&x + 1`) errors. A `&` parameter is called WITHOUT `&` (`f(x)`). Tests
+>   `parse_errors::pln87_amp_{as_call_arg,in_subexpr}_is_error`. **Migration was tiny** — the
+>   "~53 stdlib + ~75 test" estimate was `#rust` FFI bodies + comments; the real loft sites were 3 in
+>   script 87 + ~5 `&`-param tests, all migrated to `f(x)`. Full suite + both backends green.
+>
+> **All @PLN87 front-end rules are now in place.** Next: rungs **L3/L4** (struct-field / vector-element
+> references) and **L5–L7** (heap whole-value, lifetime edges).
 >
 > ### Method (per rung)
 > Matrix-first probe in `/tmp` on `--interpret`; prove the WORKING bytecode on BOTH backends before
