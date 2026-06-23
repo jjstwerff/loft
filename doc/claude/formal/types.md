@@ -166,29 +166,34 @@ OPEN: **2**
   the full integer?" rides on `forced_size`, not on the bounds. Guard:
   `d2_signed_narrowing_i8_to_u8_needs_cast` (tests/issues.rs).
 - **Status:** OPEN — the residual after the D3/D5 close.
-- **Removal — two layers; the second is the real blocker (found by attempting it):**
-  1. *Storage migration — mechanical, verified do-able.* `IntegerSpec` **i64 bounds**
-     (`min`/`max` → i64) ripple into ~36 i32-assuming sites: `Parts::Byte/Short(i32)` (DB
-     storage-type enum), `Value::Int(i32)` (IR node), the `byte`/`short`/`int` ops
-     (`min: i32`), `usable_min`/`usable_max` (i32 returns); `range()` needs i128 (the full-i64
-     count overflows i64); the `is_wide`/`*_template` predicates compare bound literals
-     (`u32::MAX` → `i64::MAX`). Most sites are narrow-gated (`forced == Some(n)`, element
-     width 1/2/4) so the i64→i32 cast is safe; widen `usable_min`/`usable_max` to i64. **This
-     part builds clean** — it is not the obstacle.
-  2. *The real blocker — loft has TWO `integer` ranges.* The default `integer` keyword
-     resolves to **`I32 = signed32()`** — an **i32**-range template with `forced_size = None`
-     (`src/typedef.rs` `"integer" => I32`) — while **`I64 = wide()`** is a *separate* i64
-     template. The `forced_size = None` guard in `is_narrowing_int` treated the two as
-     interchangeable. Pure range containment correctly distinguishes them (`wide ⊄ signed32`),
-     so a `wide` value (e.g. an `(I-Join)`-widened local) returned/assigned to an `integer`
-     (`signed32`) destination becomes a narrowing — *"cannot narrow integer to integer"*.
-     Closing D2 therefore requires **unifying the integer model to one i64 range**, which
-     touches: the `integer` keyword resolution (`typedef.rs` → `I32`), `signed32()`'s ~15 call
-     sites, the `__cell_long` / `__cell_integer` cell-type naming (`src/parser/vectors.rs`),
-     and the `(I-Join)` widen target. That is a **semantic decision** — does `integer` become
-     truly i64-range, as STDLIB.md already claims ("64-bit signed integer end-to-end")? — and
-     a corruption-prone one (cell-type identity), so it is its own focused change with the
-     full suite as the net, **not** a storage migration.
+- **Removal — three layers; the bottom is an IR change (each found by attempting it):**
+  1. *Storage migration — mechanical, builds clean.* `IntegerSpec` **i64 bounds** ripple into
+     ~35 i32-assuming sites: `Parts::Byte/Short(i32)` (DB storage-type enum), the
+     `byte`/`short`/`int` ops (`min: i32`), the i32 casts at storage boundaries; `range()`
+     needs i128 (the full-i64 count overflows i64); `usable_min`/`usable_max` widen to i64;
+     the `is_wide`/`*_template` predicates compare bound literals (`u32::MAX` → `i64::MAX`).
+     Narrow-gated, so the casts type-check. **Not the obstacle.**
+  2. *Two `integer` ranges.* The default `integer` keyword resolves to **`I32 = signed32()`**
+     — an **i32**-range template with `forced_size = None` (`src/typedef.rs` `"integer" => I32`)
+     — while **`I64 = wide()`** is a *separate* i64 template; the `forced_size = None` guard in
+     `is_narrowing_int` treated them as interchangeable. Pure range containment correctly
+     distinguishes them (`wide ⊄ signed32`), so a `wide` value (e.g. an `(I-Join)`-widened
+     local) assigned to an `integer` (`signed32`) destination narrows — *"cannot narrow
+     integer to integer"*. Unifying = `signed32() → wide()`, fix the predicates
+     (`is_wide`/`is_signed32_template`/`is_wide_template`), and collapse `__cell_long` into
+     `__cell_integer` (`src/parser/vectors.rs`). This too **builds clean**.
+  3. *The bottom — the IR assumes the default integer is i32.* With the model unified to i64 it
+     **breaks at runtime/codegen**: `Value::Int(i32)` (the IR integer node) cannot hold a large
+     value (`9_000_000_000` → *"literal out of range for i32"*), and a default integer — now
+     `wide`, `min = i64::MIN+1` — flowing into a narrow storage op has its min cast `as i32`,
+     **silently truncating** `i64::MIN+1` (emitted Rust: `db.byte(-9223372036854775807, …)`).
+     The boundary casts *mask* this; they do not fix it. Closing D2 therefore bottoms out in an
+     **IR change** — `Value::Int` must carry i64 (or default integers route through a `Long`/i64
+     IR path) — so the default integer is genuinely i64 end-to-end, not i32 with a wide static
+     range bolted on. That is the true depth of "make `integer` 64-bit": a fundamental IR /
+     codegen change with the full suite + both backends as the net, **not** a type-or-cast
+     change. (Attempted; reverted at this boundary — the `as i32` truncation is silent
+     store corruption, exactly what the discipline says not to ship.)
 
 ---
 
