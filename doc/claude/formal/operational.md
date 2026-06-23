@@ -15,10 +15,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 >
 > Rough spot #3 from [FORMALIZATION.md](../FORMALIZATION.md). Pinned-behaviour sources:
 > [LOFT.md § null](../LOFT.md) (in-band sentinels) and [LOFT.md § Arithmetic safety](../LOFT.md)
-> (overflow / divide-by-zero trap; the `??` suppression). Scope note: this covers the
-> scalar core (values, arithmetic, the null/trap discipline, evaluation order, assignment,
-> `if`, sequencing). Heap/store steps, iterators, and coroutines are **not yet** written —
-> the interpreter remains their spec (D-op-1).
+> (overflow / divide-by-zero — under C80, these yield **null and continue**; `??` is the
+> null-fallback). Scope note: this covers the scalar core (values, arithmetic, the
+> uncomputable→null discipline, evaluation order, assignment, `if`, sequencing). Heap/store
+> steps, iterators, and coroutines are **not yet** written — the interpreter remains their
+> spec (D-op-1).
 
 ## Notation
 
@@ -27,8 +28,9 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 - `⟨e, σ⟩ → ⟨e', σ'⟩` — one **small step**.
 - `v` — a **value**: an `integer` (64-bit), `float`, `boolean`, `character`, `text`, a
   heap reference, or **`null`**.
-- `⟨e, σ⟩ ↯ r` — a **trap**: evaluation halts with reason `r` (a runtime error). A trap is
-  terminal; nothing steps out of it.
+  (There is no trap/halt step in the core: an uncomputable result is the value `null`, not a
+  halt — see `E-Uncomp`. The only runtime halts are the *explicit* `panic`/`assert` in
+  dev/test, which are statements outside this scalar core.)
 
 ---
 
@@ -59,39 +61,36 @@ sentinel is its business, but the value it computes must match.
 **In words.** Operands evaluate left first, then right — so any side effects (a call that
 mutates the store) happen in source order. Both backends must use this order.
 
-### Arithmetic, and the trap discipline
+### Arithmetic — uncomputable yields null (the spreadsheet model)
 
 ```
   (E-Op)        ⟨v₁ op v₂, σ⟩ → ⟨v, σ⟩          where v = v₁ op v₂ is representable
-  (E-Trap)      ⟨v₁ op v₂, σ⟩ ↯ r               where v₁ op v₂ overflows, or op is `/`
-                                                or `%` with v₂ = 0.  r names the operator
-                                                and the operands ("integer overflow:
-                                                2147483647 + 1", "integer division by zero").
+  (E-Uncomp)    ⟨v₁ op v₂, σ⟩ → ⟨null, σ⟩       where the result is NOT computable — `v₁ op v₂`
+                                                overflows the type, or op is `/`/`%` with
+                                                v₂ = 0.  The result is **null**; evaluation
+                                                CONTINUES (it never halts).
   (E-NullArg)   any op with a `null` operand produces `null` (null is contagious),
                 EXCEPT comparisons, which compare against the sentinel.
 ```
 
-**In words.** Arithmetic gives the obvious result *when it fits*. When it would overflow
-the type, or divide/modulo by zero, it does **not** quietly return a wrong number or a
-null — it **traps**: the program halts with a message naming the operator and operands.
-This is the safety guarantee, and both backends must trap on exactly the same inputs.
+**In words.** Arithmetic gives the obvious result when it fits. When it *can't* — overflow,
+divide/modulo by zero — it yields **null** and the program **keeps running**; it does not
+halt. This is the **spreadsheet model** ([DESIGN_DECISIONS.md C80](../DESIGN_DECISIONS.md)): a
+cell that can't compute shows null and never stops the other cells. A fault is *local* — it
+degrades one value, never the whole run. The same holds for every uncomputable step (an
+out-of-bounds index, a deref of an absent value): null, continue.
 
-### The `??` trap-suppression mode
+### `??` — a non-null fallback (no trap mode)
 
 ```
-  (E-Coalesce)   ⟨e ?? d, σ⟩ : evaluate e in TRAP-SUPPRESSING mode —
-                   – if e → v (v ≠ null):           e ?? d  →  v
-                   – if e → null, OR e would trap:  e ?? d  →  d
-                 The mode is STATIC: an arithmetic op is trap-suppressing IFF it is the
-                 direct operand of `??`.  Elsewhere (E-Trap) applies.
+  (E-Coalesce)   ⟨e ?? d, σ⟩ → ⟨v, σ⟩   if  e → v  with v ≠ null
+                 ⟨e ?? d, σ⟩ → ⟨d, σ⟩   if  e → null
 ```
 
-**In words.** `??` is the escape hatch. An arithmetic operation written *directly* under
-`??` does not trap on overflow or divide-by-zero — instead it yields `null`, which `??`
-then replaces with the fallback. So `(a * b) ?? 0` is "a*b, or 0 if it overflows." The
-suppression is decided by syntax (is this op the direct operand of `??`?), so the *same*
-`a * b` traps in one place and falls through in another — a context-dependent evaluation
-mode both backends must reproduce identically.
+**In words.** `??` supplies a fallback for a null: `(a * b) ?? 0` is "a*b, or 0 if it couldn't
+compute." There is **no** context-dependent "trap-suppression mode" any more — an op yields
+null whether or not it sits under `??` (C80); `??` just decides what to do with that null.
+(This is what closes the old D-op-3.)
 
 ### State steps
 
@@ -123,7 +122,7 @@ OPEN: **3**
   have no spec but the interpreter's code.
 - **Status:** OPEN — **direction chosen (2026-06): a differential oracle.**
 - **Removal:** build a **differential oracle** — run a growing program corpus on BOTH
-  backends and assert they AGREE (value / trap / stdout / leak); these rules stay the
+  backends and assert they AGREE (value / null / halt / stdout / leak); these rules stay the
   written contract that GUIDES the corpus (what behaviour to cover), not a third
   implementation. A mismatch is then a divergence caught before ship, and every fixed
   divergence grows the corpus. *Chosen for now over an executable shared semantics (both
@@ -131,7 +130,7 @@ OPEN: **3**
   either way.*  Open follow-up: a plan issue for the oracle + corpus (none yet).
 
 ### D-op-2 — interp/native divergences are test-caught, not definition-caught
-- **Violates:** E-Op / E-Trap / the shared-contract premise
+- **Violates:** E-Op / E-Uncomp / the shared-contract premise
 - **Where:** the two backends are kept in agreement by the suite, so a divergence ships
   until a test happens to exercise it. **#433** is the canonical case: a program the
   interpreter evaluated fine failed to *compile* natively (`E0308`), i.e. the backends
@@ -144,17 +143,24 @@ OPEN: **3**
   program both accept" a *caught* failure (run-both-and-compare), not a coverage lottery —
   the corpus, not luck, decides what is exercised.
 
-### D-op-3 — trap-vs-null is context-dependent and lives only in code
-- **Violates:** E-Coalesce being a clean, written rule
-- **Where:** whether `a op b` traps or yields null depends on whether it is the direct
-  operand of `??` — a static parser fact (the trap-suppression flag), implemented per-site
-  rather than derived from one rule. Adjacent to the integer-width re-derivation in
-  [types.md D5](types.md).
-- **Effect:** a new syntactic position that *should* suppress (or must not) is decided by
-  whoever wires it — the same shape as the four `*_hint` channels (types.md D1).
-- **Status:** OPEN.
-- **Removal:** carry "trap-suppressing context" as one fact threaded by E-Coalesce, not a
-  per-op flag.
+### D-op-4 — the runtime traps/halts on uncomputable, instead of null-and-continue
+- **Violates:** E-Uncomp (the spreadsheet model — [DESIGN_DECISIONS.md C80](../DESIGN_DECISIONS.md))
+- **Where:** today an overflow / divide-by-zero / out-of-bounds index **traps**, and in
+  development HALTS the run (the old C66 dev-mode behaviour); the trap-vs-null choice still
+  rides on a static `??`-position flag. E-Uncomp says the result is **null** and evaluation
+  CONTINUES in every mode, with no trap-suppression flag (so `??` is purely the null-fallback).
+  `panic` / `assert` are **not** in scope — those are explicit developer signals that keep
+  their dev/test-halt + production-log-and-continue split (C66); only the *implicit* calculation
+  faults move.
+- **Effect:** one bad calculation can stop a development run, where the model says it degrades
+  a single value and the rest of the program still computes — a misbehaving entity never
+  freezes the world.
+- **Status:** OPEN — the implementation gap the C80 decision opened (the rule moved; the code
+  has not). Subsumes the former D-op-3 (the trap-suppression flag disappears with the trap).
+- **Removal:** every uncomputable arithmetic / index / deref yields null + continue (the
+  existing production sentinel path) in ALL modes, **silently** (no per-fault log by default —
+  too spammy; an opt-in **debug log level** can trace uncomputables); drop the `??`
+  trap-suppression mode.
 
 ---
 

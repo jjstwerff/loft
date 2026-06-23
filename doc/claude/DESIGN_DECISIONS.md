@@ -336,6 +336,13 @@ value structs (none on the roadmap) would re-open the row.
 
 ## C66 — Production loft programs never abort on user-attributable edge cases (development may halt)
 
+> **Revised by [C80](#c80--the-spreadsheet-fault-model-nothing-stops-a-running-calculation)
+> (2026-06-24).** The "development *may halt*" half no longer applies to **calculation**
+> faults (divide-by-zero, overflow, OOB, null-deref): those now yield **null and continue in
+> every mode** (the spreadsheet model), silently by default. C66's split still holds for the
+> *explicit* signals — `panic` / `assert` halt in dev/test, log + continue in production — and
+> for startup ([C67](#c67--fail-at-startup-not-at-runtime)).
+
 **Question.** Should runtime fault sites (divide-by-zero, vector /
 text out-of-bounds, null DbRef dereference, narrow-cast overflow,
 `panic("msg")` / failed `assert`) HALT the loft program with a typed
@@ -1489,3 +1496,71 @@ A concrete consumer hits a case where silently copying is a real, measured cost 
 *clearly-diagnosable* surface (e.g. "this reference would outlive its source") would be more
 natural than the copy — i.e. one named case earns a user-facing diagnostic. Even then: a
 single case, never the general Rust model.
+
+---
+
+## C80 — The spreadsheet fault model: nothing stops a running calculation
+
+### Question
+
+When a runtime fault occurs mid-execution — a calculation that can't produce a value
+(`s / 0`, an overflow it can't represent, `v[99]` out of bounds, a deref of an absent value),
+or an explicit `panic("msg")` / `assert(cond, msg)` — should the program stop (halt the run /
+skip the rest), as C66's *development* mode does, or keep running?
+
+### Evaluation
+
+It mimics a **spreadsheet**: one cell with a bad formula shows an error in *that* cell and
+never stops the other cells from recalculating. That is what normal programmers expect of a
+robust system, and it is the most natural mental model — far more so than "one bad value
+anywhere aborts everything after it." In a game loop it is the difference between *one mob
+behaving strangely* and *the whole world freezing because one mob did*. The visible signal is
+the **null itself** (you see it in the result); there is **no per-fault log by default** — in a
+spreadsheet most empty cells are normal, so logging each uncomputable would be pure spam. A
+programmer who wants to trace *where* uncomputables arise can opt into a **debug log level**.
+This is the same through-line as [C79](#c79--ownership-is-internal-no-user-facing-borrow-checker)
+(ownership) and the differential-oracle decision: the safety lives *under* a surface that keeps
+going.
+
+This **deliberately deviates from the norm** (most languages abort on a fault) — accepted on
+purpose, because it directly drives the **fun** of building a game ([GOALS.md](GOALS.md)). A
+developer iterating on something half-working keeps seeing it **run** — one broken formula
+doesn't blank the screen, one bad mob doesn't freeze the world — instead of the
+crash → read-trace → fix → rerun loop that kills creative flow. Here robustness is a
+*creativity* feature, not only a safety one: you stay in the world, tweaking, while it keeps
+moving.
+
+### Decision
+
+**Closed (2026-06-24) — NOTHING stops a running calculation. Revises C66.**
+
+1. **Uncomputable → null, by default, silently.** `s / 0`, overflow, out-of-bounds index,
+   deref of an absent value all yield **null** with no `??` needed. `??` means "give me a
+   *non-null* fallback," not "rescue from a trap." (The trap discipline — "overflow traps, NOT
+   a silent null" — is **reversed**.) **No per-fault log by default** — uncomputable values are
+   common (the spreadsheet's empty cells), so logging each would be spam; a programmer who
+   wants to trace them opts into a **debug log level**.
+2. **A calculation fault never halts the run or skips a later statement.** The script is a
+   sequence of independent steps. Step A producing null does not abort; step B still
+   **executes** (and gets null if it consumed A's null — null is contagious — but it *runs*).
+   No step is skipped because something earlier "happened to be wrong."
+3. **`panic` / `assert` are NOT calculations — they keep their C66 split.** They are explicit
+   developer signals, so during **development and testing they still HALT** (you want a
+   deliberate `assert(false)` / `panic(...)` to stop and show you, exactly as today). In
+   **production** they **log and continue** — one assertion never takes down a running system.
+   Only the *implicit* calculation faults of point 1 move to universal null-and-continue.
+4. **Startup still stops** ([C67](#c67--fail-at-startup-not-at-runtime)): bad config /
+   port-bind / missing deps exit *before* the run begins — "can't open the spreadsheet," not
+   "a cell errored." A running calculation never stops.
+
+Robustness payoff: a system degrades **locally** (one value, one entity), never **globally**.
+Note: this is a design target; the current code still traps/halts on calculation faults per
+C66 — the change is tracked in [formal/operational.md](formal/operational.md) (rule E-Uncomp,
+deviation D-op-4).
+
+### Revisit when
+
+A consumer shows that silent null-and-continue (plus the opt-in debug log) genuinely loses
+critical information — e.g. a class of uncomputable that *should* be noisy by default. Even
+then the fix is more **observability** (turning a debug log on by default, a louder surface),
+never a halt.
