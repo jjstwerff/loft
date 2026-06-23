@@ -1409,6 +1409,38 @@ transparent loft *source* the developer reads and forks (C78) — the native art
 derived, invisible cache, and the loft source stays the truth (cf. [C70](#c70--no-per-library-ir-snapshot--cache):
 "the loft source is the better representation of a library's state").
 
+### Corollary — the move-to-Rust alarm (added 2026-06-23)
+
+Needing to push something *out of a current loft library and into Rust* should feel
+like a **failure of language design** — and that feeling is **load-bearing, kept on
+purpose.** It is the conscience that holds the Rust core minimal: a builder who felt
+*fine* pushing code into Rust would let the opaque floor metastasize one "just drop it
+to Rust" at a time, and transparency (rules 3–4) would erode silently. The discomfort is
+the forcing function that grows *loft* instead of the engine.
+
+Aim it precisely: the failure is not "code moved to Rust," it is **"code moved to Rust
+because loft couldn't express or run it."** Two reasons a library reaches for Rust, and
+only the first is the failure —
+
+1. **loft couldn't do it.** The code *is* game-facing, but the language wasn't expressive
+   or fast enough. *This* is the alarm's true target. The disciplined response is the
+   dogfood loop: treat the library's pull toward Rust as a **bug report against the
+   language** and fix loft (add the expressiveness, make the slow primitive fast) — never
+   let the library escape downward. ("Find the old conservative mechanism and narrow it,"
+   turned on loft's own surface.)
+2. **It was never game-facing code.** It is genre-neutral *mechanism* that started in a
+   library only because that is the cheapest place to prototype. Relocating it down is
+   rule-1/rule-2's boundary *correcting itself*, not loft failing — relocate without
+   shame. The streaming substrate (see Revisit-when) is this case.
+
+The test that separates them is C78's own: *would a developer ever want to open this?*
+**Yes** + dropping it to Rust → the failure; fix the language. **No** → engine mechanism
+wearing a library's clothes; moving it is housekeeping. Even then there is a gentler step
+before Rust: neutral-but-readable mechanism can sink into a **lower loft library** and
+stay transparent; it earns *Rust* only when it is *also* never-opened **and** needs native
+speed. So the alarm should ring loudest at a jump *straight from game-facing loft to
+Rust* — that one is almost always the failure case, not the correction.
+
 **Revisit when.** A concrete consumer need shows a *genre-neutral mechanism* currently
 in a loft library is a real, measured bottleneck only the Rust engine can fix, **AND**
 moving it down buries neither a worldview choice (rule 1) nor a primitive a developer
