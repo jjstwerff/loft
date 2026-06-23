@@ -1519,26 +1519,24 @@ fn p376_undefined_var_in_format_no_cascade() {
         .error("Unknown variable 'zzz' at p376_undefined_var_in_format_no_cascade:1:21");
 }
 
-// @PLN87 #1/#2 — a `&`-HEAP-param whole-binding WRITE-BACK is supported only for an
-// owned LITERAL (`o = Obj{..}`, `v = [..]`).  A call / variable RHS is not yet
-// supported (the ownership transfer for those shapes is deferred); it is rejected
-// with a clear message instead of silently leaking the displaced store (#1) or the
-// old misleading "& but is never modified" (#2).
-
+// @PLN87 — `&` is a BIND-SITE link marker ("link this binding instead of copying
+// it"), not an assignment target.  `&var = …` / `&o.f = …` is invalid; a linked
+// binding is reassigned with a plain `var = …` (no `&`), and a valid RHS link
+// (`c = &v[0]`) is unaffected.
 #[test]
-fn pln87_amp_writeback_from_call_rejected() {
-    code!("struct Obj { x: integer } fn mk() -> Obj { Obj { x: 9 } } fn f(o: &Obj) { o = mk(); } fn test() { }")
-        .error("writing back `&o` from a call or variable is not yet supported; assign a struct literal (`o = Type { .. }`) or mutate fields (`o.field = ..`) at pln87_amp_writeback_from_call_rejected:1:74");
+fn pln87_amp_on_assignment_target_is_error() {
+    code!("fn test() { x = 5; print(\"{x}\\n\"); &x = 3; print(\"{x}\\n\"); }")
+        .error("`&` cannot appear on the left of an assignment — it marks a binding as a link to its source at the binding site (`x = &src`), not an assignment target; drop the `&` (the binding is already linked) at pln87_amp_on_assignment_target_is_error:1:40");
 }
 
 #[test]
-fn pln87_amp_writeback_from_var_rejected() {
-    code!("struct Obj { x: integer } fn f(o: &Obj, s: Obj) { o = s; } fn test() { }")
-        .error("writing back `&o` from a call or variable is not yet supported; assign a struct literal (`o = Type { .. }`) or mutate fields (`o.field = ..`) at pln87_amp_writeback_from_var_rejected:1:50");
+fn pln87_amp_on_field_target_is_error() {
+    code!("struct O { y: integer } fn test() { o = O { y: 1 }; print(\"{o.y}\\n\"); &o.y = 3; }")
+        .error("`&` cannot appear on the left of an assignment — it marks a binding as a link to its source at the binding site (`x = &src`), not an assignment target; drop the `&` (the binding is already linked) at pln87_amp_on_field_target_is_error:1:77");
 }
 
 #[test]
-fn pln87_amp_vector_writeback_from_var_rejected() {
-    code!("fn f(v: &vector<integer>, s: vector<integer>) { v = s; } fn test() { }")
-        .error("writing back `&v` from a call or variable is not yet supported; assign a vector literal (`v = [..]`) or mutate fields (`v.field = ..`) at pln87_amp_vector_writeback_from_var_rejected:1:48");
+fn pln87_amp_on_compound_assign_target_is_error() {
+    code!("fn test() { x = 5; print(\"{x}\\n\"); &x += 3; print(\"{x}\\n\"); }")
+        .error("`&` cannot appear on the left of an assignment — it marks a binding as a link to its source at the binding site (`x = &src`), not an assignment target; drop the `&` (the binding is already linked) at pln87_amp_on_compound_assign_target_is_error:1:41");
 }

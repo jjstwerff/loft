@@ -462,7 +462,32 @@ impl Parser {
             // (`&&` is its own token, so this never mis-fires on logical-and.)
             if self.lexer.has_token("&") {
                 self.amp_pending = true;
-                return self.parse_part(var_tp, code, parent_tp);
+                let t = self.parse_part(var_tp, code, parent_tp);
+                // @PLN87 — a prefix `&` whose lvalue is immediately the TARGET of an
+                // assignment (`&var = …`, `&o.f = …`) is invalid: `&` is a BIND-SITE
+                // marker meaning "this binding LINKS its source instead of copying it"
+                // (`x = &src`, `o: &T`), NOT an assignment target.  Detected LOCALLY —
+                // `parse_part` has consumed the whole lvalue, so the next token tells
+                // target (`=`/`+=`/… follows) from a valid RHS link (`c = &v[0]`, where
+                // `&v[0]` is followed by `;`/operator, never `=`).  (Local peek avoids
+                // the `amp_pending` flag, which is global and leaks across statements.)
+                if !self.first_pass
+                    && (self.lexer.peek_token("=")
+                        || self.lexer.peek_token("+=")
+                        || self.lexer.peek_token("-=")
+                        || self.lexer.peek_token("*=")
+                        || self.lexer.peek_token("%=")
+                        || self.lexer.peek_token("/="))
+                {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "`&` cannot appear on the left of an assignment — it marks a \
+                         binding as a link to its source at the binding site (`x = &src`), \
+                         not an assignment target; drop the `&` (the binding is already linked)"
+                    );
+                }
+                return t;
             }
             let t = self.parse_part(var_tp, code, parent_tp);
             return t;

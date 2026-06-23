@@ -15384,3 +15384,13 @@ fn pln87_amp_writeback_from_call_writes_back() {
         .expr("check()")
         .result(Value::Int(9));
 }
+
+/// @PLN87 — the `&var = 3` rejection must NOT over-fire on a valid RHS link:
+/// `c = &v[0]` LINKS `c` to the element (bind-site `&`), and reading `c` sees the
+/// linked value. (The `&` is on the RHS, followed by `;`, not an assignment `=`.)
+#[test]
+fn pln87_amp_rhs_link_is_not_rejected() {
+    code!("fn check() -> integer { v = [10, 20]; c = &v[0]; c }")
+        .expr("check()")
+        .result(Value::Int(10));
+}

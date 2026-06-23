@@ -218,12 +218,6 @@ pub struct Parser {
     // count snapshot compared end-of-pass-1 vs end-of-pass-2 in debug/armed
     // builds, so any future cross-pass divergence fails loud (H5).
     first_pass: bool,
-    /// @PLN87 #1/#2 — `&`-heap params whose unsupported whole-binding write-back
-    /// (`o = call()/var`, `v = other`) was already reported with a clear error in
-    /// `parse_assign_op`.  `check_ref_mutations` skips these so they don't ALSO
-    /// draw the misleading "has & but is never modified" diagnostic (the write-back
-    /// WAS attempted; it is just not yet supported).  Cleared per parse pass.
-    writeback_rejected: std::collections::HashSet<u16>,
     /// Set by `parse_in_range` when `rev(collection)` (without a `..` range) is parsed.
     /// Consumed by `fill_iter` to add the reverse bit (64) into the `on` byte of OpIterate/OpStep.
     reverse_iterator: bool,
@@ -549,7 +543,6 @@ impl Parser {
             default: false,
             context: u32::MAX,
             first_pass: true,
-            writeback_rejected: std::collections::HashSet::new(),
             reverse_iterator: false,
             last_range_from: None,
             last_range_till: None,
@@ -7239,9 +7232,6 @@ impl Parser {
             if matches!(a.typedef, Type::RefVar(_))
                 && !a.constant
                 && !written.contains(&(a_nr as u16))
-                // @PLN87 #1/#2 — an unsupported write-back was already reported with a
-                // clear error in parse_assign_op; don't ALSO claim "never modified".
-                && !self.writeback_rejected.contains(&(a_nr as u16))
             {
                 let src = self.vars.var_source(a_nr as u16);
                 self.lexer.to(src);
@@ -7291,9 +7281,6 @@ impl Parser {
                 );
             }
         }
-        // Per-function reset: arg indices repeat across functions, so a rejection
-        // recorded for THIS function must not leak into the next one's check.
-        self.writeback_rejected.clear();
     }
 
     // <function> ::= 'fn' <identifier> '(' <attributes> ] [ '->' <type> ] (';' <rust> | <code>)

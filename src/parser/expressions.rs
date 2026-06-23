@@ -1166,55 +1166,6 @@ use a separate collection or add after the loop"
             let clear = self.cl("OpClearVector", &[Value::Var(var_nr)]);
             *code = Value::Insert(vec![clear, code.clone()]);
         }
-        // @PLN87 #1/#2 — a `&`-HEAP-param whole-binding WRITE-BACK (`o = RHS`) is
-        // supported only when RHS is an owned LITERAL construction (`o = Obj{..}`,
-        // `v = [..]`): that routes through a skip_free temp transferred in place, so
-        // codegen frees the displaced caller store (P2.2) and the new value is
-        // installed leak-free.  A CALL or VARIABLE RHS (`o = mk()`, `o = src`,
-        // `v = other`) does NOT produce a transferable owned temp — the displaced
-        // store leaks and a call's NRVO buffer dangles the binding (#1), and the
-        // pre-existing rejection misfired with a misleading "never modified" message
-        // (#2).  Until the ownership-transfer machinery handles those shapes, reject
-        // them with a CLEAR error pointing at the supported forms (no silent leak).
-        // Field/element mutation (`o.x = ..`) is a different op with a non-RefVar
-        // target type, so it is unaffected.
-        if !self.first_pass
-            && op == "="
-            && var_nr != u16::MAX
-            && self.vars.is_argument(var_nr)
-            && matches!(
-                f_type,
-                Type::RefVar(inner)
-                    if matches!(**inner, Type::Reference(_, _) | Type::Vector(_, _))
-            )
-            && !amp_vector_replace
-        {
-            let rv = code.result_var();
-            let is_owned_literal = rv != u16::MAX && self.vars.is_skip_free(rv);
-            // A `&`-vector CONCAT replacement (`v = a + x`) is already rejected with
-            // its own message in `vectors.rs` (build_vector_list returns `Var(self)`),
-            // so skip the self-reference here to avoid a duplicate error.
-            let concat_self = matches!(code.unspan(), Value::Var(x) if *x == var_nr);
-            if !is_owned_literal && !concat_self {
-                let name = self.vars.name(var_nr).to_string();
-                let kind = if matches!(f_type, Type::RefVar(inner) if matches!(**inner, Type::Vector(_, _)))
-                {
-                    "a vector literal (`v = [..]`)"
-                } else {
-                    "a struct literal (`o = Type { .. }`)"
-                };
-                self.lexer.to(self.vars.var_source(var_nr));
-                diagnostic!(
-                    self.lexer,
-                    Level::Error,
-                    "writing back `&{name}` from a call or variable is not yet \
-                     supported; assign {kind} or mutate fields (`{name}.field = ..`)",
-                    name = name,
-                    kind = kind,
-                );
-                self.writeback_rejected.insert(var_nr);
-            }
-        }
         // @P376 — POISON an errored whole-RHS that resolves to `Unknown` (pass 2)
         // so the assigned variable doesn't cascade.  In the final pass an Unknown
         // whole-RHS is always an unresolved-name error — an undefined variable
