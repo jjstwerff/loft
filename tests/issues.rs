@@ -15394,3 +15394,52 @@ fn pln87_amp_rhs_link_is_not_rejected() {
         .expr("check()")
         .result(Value::Int(10));
 }
+
+// @PLN87 — the LINK-semantics ladder (corrected `&` model: `&` LINKS a binding to
+// its source, read- and write-through).  Each rung is an ignored lock-in that flips
+// to PASS when that rung lands.  North star: `a=3; b=&a; b=4; a == 4`.
+
+/// L1 — scalar local, LIVE read: a link reflects the source's current value.
+#[test]
+#[ignore = "@PLN87 L1 — scalar link live-read; un-ignore when `&a` binds a live reference to a's slot (not a copy)"]
+fn pln87_link_l1_scalar_live_read() {
+    code!("fn check() -> integer { a = 3; b = &a; a = 5; b }")
+        .expr("check()")
+        .result(Value::Int(5));
+}
+
+/// L2 — scalar local, WRITE-THROUGH (the north star): writing the link writes the source.
+#[test]
+#[ignore = "@PLN87 L2 (north star) — scalar link write-through; un-ignore when `b = 4` through a link writes a's slot"]
+fn pln87_link_l2_scalar_write_through() {
+    code!("fn check() -> integer { a = 3; b = &a; b = 4; a }")
+        .expr("check()")
+        .result(Value::Int(4));
+}
+
+/// L3 — scalar struct-field link: `b = &s.x; b = 4` writes `s.x`.
+#[test]
+#[ignore = "@PLN87 L3 — scalar struct-field link write-through; un-ignore when a link to a field's slot writes through"]
+fn pln87_link_l3_field_write_through() {
+    code!("struct S { x: integer } fn check() -> integer { s = S { x: 3 }; b = &s.x; b = 4; s.x }")
+        .expr("check()")
+        .result(Value::Int(4));
+}
+
+/// L4 — scalar vector-element link: `c = &v[0]; c = 99` writes `v[0]`.
+#[test]
+#[ignore = "@PLN87 L4 — scalar vector-element link write-through; un-ignore when a link to an element writes through"]
+fn pln87_link_l4_element_write_through() {
+    code!("fn check() -> integer { v = [10, 20]; c = &v[0]; c = 99; v[0] }")
+        .expr("check()")
+        .result(Value::Int(99));
+}
+
+/// L6 — link as a function parameter: `fn f(b: &integer){ b = 4 }; f(&a)` writes `a`.
+#[test]
+#[ignore = "@PLN87 L6 — linked param write-through; un-ignore when a `&` param links to the caller's lvalue and writes through"]
+fn pln87_link_l6_param_write_through() {
+    code!("fn f(b: &integer) { b = 4 } fn check() -> integer { a = 3; f(&a); a }")
+        .expr("check()")
+        .result(Value::Int(4));
+}

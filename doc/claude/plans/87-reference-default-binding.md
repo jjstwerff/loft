@@ -8,11 +8,53 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 detailed plan (phases, gates, the matrix) and the eight load-bearing concerns live there.
 Implemented by the loft2 agent.
 
+> ## ⚠️ CORRECTED MODEL (2026-06-23) — `&` is bind-site LINKING. SUPERSEDES the write-back framing.
+>
+> **`&` means exactly one thing: a binding (or part of a data structure) is LINKED to its source
+> instead of COPIED.** It is a bind-site marker, not a reassignment annotation. A linked binding is a
+> NORMAL variable — every operation (read, field/element mutate, whole reassign) goes THROUGH the link
+> to the source, using the EXISTING mutation code. We do NOT special-case assignment and we do NOT
+> change the mutation code.
+>
+> **North star:** `a = 3; b = &a; b = 4; a` evaluates to **4** (`b` links to `a`; `b = 4` writes
+> through). The earlier "`&` makes a whole-binding REASSIGNMENT write back / non-`&` rebinds locally"
+> framing (P2 below) was WRONG and is being unwound; the write-back rejection it spawned is removed.
+>
+> **Already enforced:** `&var = 3` (a `&` on the assignment TARGET) is an error — `&` is a bind-site
+> marker, not an lvalue (`operators.rs`; tests `pln87_amp_on_*`).
+>
+> **Baseline today (interp):** read a fresh link works (`b=&a; b`→3 ✅); but it is NOT live
+> (`a=3;b=&a;a=5;b`→3, want 5 ❌ — `&a` COPIES a scalar) and write-through fails (north star → no 4
+> ❌). Element/field mutation through a HEAP link already propagates (`cells=&vv[0]; cells[0]=99` ✅,
+> reference-default). So `&` on heap already shares; `&` on a scalar still copies. The work: make `&`
+> a true LIVE LINK (read- AND write-through), scalars first.
+>
+> ### The ladder — simplest first; each rung a runnable lock-in, both backends, leak-free
+> - **L1 — scalar local, live read.** `a=3; b=&a; a=5; b==5`. `b` is a live reference to `a`'s slot.
+> - **L2 — scalar local, write-through (NORTH STAR).** `a=3; b=&a; b=4; a==4`. Writing `b` writes `a`.
+> - **L3 — scalar struct-field link.** `s.x=3; b=&s.x; b=4; s.x==4`.
+> - **L4 — scalar vector-element link.** `v=[10,20]; c=&v[0]; c=99; v[0]==99`.
+> - **L5 — heap whole-value link.** `o=Obj{..}; p=&o; …` — confirm field mutation propagates (✅) and
+>   pin whole-value behaviour through the link.
+> - **L6 — link as a function parameter.** `fn f(b:&integer){ b=4 } …; f(&a); a==4`. A linked param IS
+>   a link to the caller's lvalue — replaces the old "&-param write-back" with the uniform link model.
+> - **L7 — edges.** link inside a data structure, link-to-link, scope/lifetime (source outlives link),
+>   leak-freedom on both backends.
+>
+> ### Method (per rung)
+> Matrix-first probe in `/tmp` on `--interpret`; design the representation (a scalar link is a
+> reference to the source's slot — the single-indirect VIEW from P1); prove the WORKING bytecode on
+> BOTH backends before editing the compiler (loft-codegen skill); verify correct + leak-free with
+> `loft --interpret` / the harness (NOT bare `loft` — native, skips the interp leak check); pin a
+> `tests/` lock-in and un-ignore it. One rung at a time.
+
+---
+
 Implement loft's binding-ownership model: **heap is reference-by-default** (a binding or
-parameter aliases the source; field/element mutation writes through), and **`&` makes a
-whole-binding reassignment write back** to the source. One uniform meaning for `&`; fixes the
+parameter aliases the source; field/element mutation writes through). `&` makes a binding a
+LINK to its source (read- and write-through). One uniform meaning for `&`; fixes the
 recurring "`&Object` needed to mutate" confusion; realizes the OWNERSHIP_MODEL beacon for
-binding semantics.
+binding semantics. (The "`&` = reassignment write-back" reading is corrected in the box above.)
 
 Design + rationale: [OWNERSHIP_MODEL.md § The law](../OWNERSHIP_MODEL.md) +
 [DESIGN_DECISIONS.md C77](../DESIGN_DECISIONS.md). Builds on @PLN85 (the store-lifetime
