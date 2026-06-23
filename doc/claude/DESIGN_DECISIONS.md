@@ -1530,6 +1530,16 @@ crash → read-trace → fix → rerun loop that kills creative flow. Here robus
 *creativity* feature, not only a safety one: you stay in the world, tweaking, while it keeps
 moving.
 
+It also corrects a common misread of the "safe language" promise. Rust's reputation — *"if it
+compiles, it works"* — oversells what compilation buys: the borrow checker and type system
+remove **memory** bugs and data races, but a *logic* fault (`unwrap` on `None`, an out-of-bounds
+index, an overflow) still **panics — it halts at the first problem.** "It compiles" means "it
+won't corrupt; it'll stop cleanly," **not** "it keeps working." loft's robustness is on a
+*different axis*: not "prevent a class of bugs, then halt on the rest," but **keep running
+*through* a fault** — degraded and local. This is **not universally better** — a flight
+controller should halt rather than fly on a null — but it is right for loft's domain, where a
+*frozen* game is worse than a *strange* one.
+
 ### Decision
 
 **Closed (2026-06-24) — NOTHING stops a running calculation. Revises C66.**
