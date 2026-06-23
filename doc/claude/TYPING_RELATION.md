@@ -141,8 +141,8 @@ escape hatch. The two open rules:
 | id | rough spot | the rule that would close it |
 |----|------------|------------------------------|
 | R1 | four `*_hint` side-channels for one idea | the checking judgment `Γ ⊢ e ⇐ τ` (§1) |
-| R2 | ~~width lives outside `⤳`~~ **DONE** — `⤳` is range containment; residual: i64 bounds | done (§2) |
-| R3 | ~~width derived two ways~~ **DONE** — parser/codegen agree via range; residual: i64 bounds | done (§3) |
+| R2 | ~~width lives outside `⤳`~~ **DONE** — `⤳` is range containment; residual: storage off i32 | done (§2) |
+| R3 | ~~width derived two ways~~ **DONE** — parser/codegen agree via range; residual: storage off i32 | done (§3) |
 
 None of these is a runtime/memory red flag — they are **front-end** rough spots, which
 is why [STABILITY_REDFLAGS.md](STABILITY_REDFLAGS.md) structurally misses them
@@ -163,8 +163,10 @@ This is a **lens**, not a migration plan. Concretely, the cheap wins it points a
    by range containment (`[a,b] ⊆ [c,d]`), in agreement with codegen's `narrow_int_cast`, so
    signedness is visible and the parser/codegen split is closed (was D3/D5). `is_equal` keeps
    its (correct) width-free collapse. **Residual (D2):** the full integer is still flagged by
-   `forced_size = None`, because `IntegerSpec` carries i32/u32 bounds, not i64 — giving it a
-   canonical i64 range is the remaining step. See formal/types.md § the integer model.
+   `forced_size = None`, because `IntegerSpec` carries i32/u32 bounds, not i64. i64 bounds are
+   the trigger, but the real work is migrating the narrow-storage layer (`Parts`, `Value::Int`,
+   the storage ops, `usable_min`/`usable_max`) off i32 — ~36 sites, mapped in formal/types.md
+   § D2 Removal (two carry a silent-truncation hazard; do it as one focused pass).
 
 Defer anything ownership/`deps`-shaped until @PLN85/@PLN87 close — per
 [FORMALIZATION.md](FORMALIZATION.md) § Recommendation, the type's own contents are

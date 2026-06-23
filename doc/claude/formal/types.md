@@ -166,8 +166,23 @@ OPEN: **2**
   the full integer?" rides on `forced_size`, not on the bounds. Guard:
   `d2_signed_narrowing_i8_to_u8_needs_cast` (tests/issues.rs).
 - **Status:** OPEN — the residual after the D3/D5 close.
-- **Removal:** give `IntegerSpec` **i64 bounds** (a canonical range), so `[a,b] ⊆ [c,d]`
-  alone decides narrowing and `forced_size` is purely a storage cache.
+- **Removal:** the trigger is `IntegerSpec` **i64 bounds** (`min`/`max` → i64) so
+  `[a,b] ⊆ [c,d]` alone decides narrowing and `forced_size` is purely a storage cache. The
+  real scope, though, is **migrating the narrow-storage layer off i32** — i64 bounds ripple
+  into ~36 sites that assume i32:
+  - `Parts::Byte(i32, …)` / `Parts::Short(i32, …)` — the DB storage-type enum holds the min.
+  - `Value::Int(i32)` — the IR integer node.
+  - `byte()` / `short()` / `int()` storage ops (`min: i32`, stored into `Parts`).
+  - `usable_min` / `usable_max` — return i32.
+  - `range()` needs i128 (the full-i64 count overflows i64); the `is_wide` / `*_template`
+    predicates compare against the bound literals (`u32::MAX` → `i64::MAX`, etc.).
+
+  Most ripple sites are **narrow-gated** (`forced == Some(n)`, element width 1/2/4) so the
+  i64→i32 cast is safe. The **hazard** sites are `usable_min`/`usable_max` on a possibly-wide
+  spec and the parser range checks — there an i64→i32 cast would *silently truncate* a wide
+  bound, so widen those to i64 rather than cast. Do it as one focused pass (matrix + both
+  backends + full suite), not piecemeal — a silent truncation here corrupts narrow-field
+  storage (the class `range_to_width`'s comment already documents).
 
 ---
 
