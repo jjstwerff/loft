@@ -68,13 +68,37 @@ other channel for an expected type.
 (a `return`/`break`, which fits anywhere); tuples element-by-element; a struct used as one
 of an enum's variants (and the nullable/tag duals); and an integer into a *wider* integer.
 `(C-Int)` means **width lives inside `⤳`**: an integer flows into another integer iff its
-range fits. There is no separate width gate and no separate authority — `is_equal`,
-`convert`, and codegen all read width from this one relation. `(C-Ref)` threads in
+range fits. There is no separate width authority. `is_equal` answers only the *width-free*
+base-type question ("is this `integer`?" — correctly *yes* for every width); `convert` and
+codegen read width from this one relation, never their own copy (see the integer model
+below). `(C-Ref)` threads in
 references: a `&τ` variable *has* type `&τ` and reads **through** to a `τ`, so it is
 usable wherever a `τ` is, and `τ`'s own conversions then apply (e.g. `&u8` → `integer`).
 The reverse never holds — you cannot coerce a plain value into a reference; a `&τ` is made
 only by a `&` annotation at a binding. The link's introduction and its write-through
 semantics live in [binding.md](binding.md); here it is just one more thing `⤳` accepts.
+
+### The integer model — one type; the rest is notation
+
+> **`integer` is the only integer type.** Its identity is its value range `[min, max]`
+> (plus `not_null`). `u8` / `i8` / `u16` / `i16` / `i32` are **not** distinct types — they
+> are **notation** for an `integer` whose range fits in fewer than 8 bytes. The value
+> semantics have no per-width type; a width is a *consequence* of the range.
+>
+> **Storage width is derived, never declared.** The bytes a value occupies are a pure
+> function of its range — `bytes_for_range(min, max)`: `[0,255]` ⟹ 1 byte, the full range
+> ⟹ 8. `IntegerSpec.forced_size` is a **cache of that function**, not an independent fact:
+> it must always equal `bytes_for_range(min, max)`. It is a storage hint, not a value-type
+> (the field's own doc says exactly this).
+>
+> **Why this settles the width question.** Width has one home — the range, read through
+> `⤳` / `(C-Int)`. So `is_equal` collapsing every `Integer(_)` to one type is **correct**
+> ("is this `integer`?" carries no width); narrowing (`I-Narrow`) and the codegen cast both
+> **derive from the range**, not from `forced_size`. A too-narrow range is then
+> unambiguously a bug — undersized storage means a silent overflow, with no second
+> authority to mask it — which is *why* range inference (`I-Join`, …) must be sound. The
+> deviations D2/D3/D5 are the spots where the code still treats `forced_size` (or a
+> per-site copy) as a width authority instead of a derived cache of the range.
 
 ### Integer width
 
@@ -125,34 +149,40 @@ OPEN: **4**
 - **Removal:** thread a single `expected: Option<Type>` (the `⇐` mode) through the
   expression parser; delete the four fields.
 
-### D2 — `is_equal` collapses integer width
-- **Violates:** I-Sub / C-Int (width is supposed to live *in* `⤳`)
-- **Where:** `Type::is_equal` treats every `Integer(_)` as one type
-- **Effect:** `(C-Refl)` via `is_equal` makes *any* integer flow into *any* integer
-  with width invisible; width must then be re-imposed elsewhere (D3). See R2.
+### D2 — `forced_size` is read as a width authority, not derived from the range
+- **Violates:** the integer model (width lives in the range; `forced_size` is a cache)
+- **Where:** `is_narrowing_int` (`src/parser/mod.rs:1467`) keys on `forced_size`; codegen's
+  `narrow_int_cast` (`src/generation/mod.rs:571`) keys on `range()` — the one width,
+  derived two ways. See [../TYPING_RELATION.md](../TYPING_RELATION.md) § R2.
+- **Effect:** the two derivations can disagree at a narrow range with `forced_size = None`
+  (exactly the #433 edge). `is_equal` collapsing every integer is **not** this bug — that
+  is the correct width-free base-type answer (see the integer model).
 - **Status:** OPEN
-- **Removal:** make `is_equal` (or a width-aware sibling used by `⤳`) compare ranges,
-  so `(C-Int)` is the single source of integer compatibility.
+- **Removal:** `is_narrowing_int` reads range-containment (`I-Sub`); `forced_size` collapses
+  to `bytes_for_range(min,max)`, consulted only at the storage seam, never as a width source.
 
-### D3 — narrowing enforced as a diagnostic layered on `convert`, not as a rule in `⤳`
+### D3 — narrowing is a diagnostic bolted onto `convert`, not the range relation deciding
 - **Violates:** I-Narrow (placement — the rule is correct, its home is wrong)
 - **Where:** `src/parser/mod.rs::convert` ~1559 (`is_narrowing_int` + `int_value_fits`
   → an Error emitted *beside* the `is_equal` accept)
-- **Effect:** `convert` returns "compatible" (via `is_equal`) yet separately errors;
-  two answers to one question. Functionally correct today, but it is a second width
-  authority (feeds D5).
+- **Effect:** the accept (base-type, via `is_equal`) and the width check sit apart, and the
+  width check reads `forced_size` (D2) rather than the range. The single relation
+  `⤳`/`(C-Int)` should itself accept-or-reject by range containment, not lean on a bolted-on
+  diagnostic.
 - **Status:** OPEN
-- **Removal:** fold the narrow check into `⤳`/`(C-Int)` so a single relation both
-  accepts and rejects.
+- **Removal:** make `(C-Int)` (range containment) the accept/reject; the narrowing "error"
+  is just "range not contained," with the literal-fits exemption part of the rule.
 
-### D5 — integer width has three authorities that must agree by hand
-- **Violates:** the single-relation intent of C-Int (one authority)
-- **Where:** `Type::is_equal` (ignores width), `convert`/`is_narrowing_int` (errors on
-  it), `narrow_int_cast` in `src/generation/` (emits the `as`)
-- **Effect:** #433 and its residual are both "these three disagreed." Forward-bug
-  generator until unified.
+### D5 — integer width is derived in two places that must agree by hand
+- **Violates:** the integer model (width has one home — the range)
+- **Where:** `convert`/`is_narrowing_int` (derives width from `forced_size`) and
+  `narrow_int_cast` in `src/generation/` (derives it from `range()`). (`is_equal` collapsing
+  integers is the correct base-type answer, not a third authority.)
+- **Effect:** #433 and its residual are both "these two derivations disagreed." Forward-bug
+  generator until both read the range.
 - **Status:** OPEN (closing D2 + D3 collapses this)
-- **Removal:** one width-aware `⤳`; `is_equal` and codegen read it, not their own copy.
+- **Removal:** both derive width from the range (`I-Sub`); `forced_size` is a cache used
+  only for storage layout, never as a width source.
 
 ---
 

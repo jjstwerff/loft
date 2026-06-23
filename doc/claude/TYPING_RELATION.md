@@ -73,12 +73,20 @@ the `as`-sanctioned widenings/narrowings).
  (C-Bare)    Sorted/Hash/Index/Spacial(..) ⤳ Reference(bare collection)
 ```
 
-> **Rough spot R2 — the integer collapse.** `is_equal` collapses every
-> `Integer(spec)` to one type, so `(C-Refl)` makes *any* integer flow to *any* other
-> at the relation level. Width is then re-imposed OUTSIDE the relation, as a
-> diagnostic (§3). So "does `u8` convert to `i64`?" has two answers depending on
-> which function you ask — the conversion relation says yes unconditionally; `convert`
-> says yes-but-maybe-an-error. A real rule would fold width INTO `⤳`.
+> **Rough spot R2 — width lives outside `⤳`.** `is_equal` collapses every
+> `Integer(spec)` to one type, so `(C-Refl)` makes *any* integer flow to *any* other at
+> the relation level; width is then re-imposed OUTSIDE the relation, as a diagnostic (§3).
+> So "does `u8` convert to `i64`?" has two answers depending on which function you ask —
+> the relation says yes unconditionally; `convert` says yes-but-maybe-an-error.
+>
+> The collapse in `is_equal` is **not** itself the bug: there is one integer type
+> (`integer`), identified by its range, and `u8`/`i16`/… are notation for a narrow range
+> (see [formal/types.md § the integer model](formal/types.md)). `is_equal` answering the
+> width-free "is this `integer`?" is correct. The rough spot is that `⤳` for integers
+> *bottoms out in that collapse* instead of being **range containment** — so width has no
+> home in the relation and gets re-derived per-site (from `forced_size` in `convert`, from
+> `range()` in codegen). The fix folds width INTO `⤳` as `[a,b] ⊆ [c,d]`, with
+> `forced_size` a derived storage cache, not a width source.
 
 ## 3. Integer width — where #432 / #433 live
 
@@ -115,16 +123,17 @@ escape hatch. The two open rules:
   ```
     (T-Join)   Γ ⊢ (x := e₁; … ; x := eₙ) ⇒  x : ⨆ᵢ τᵢ     where Γ ⊢ eᵢ ⇒ τᵢ
   ```
-  The shipped #433 fix (`block_needs_i64_widen`: widen a narrow value-block at a
-  return/assign **seam**) is the *codegen* patch for the case where the seam is
-  visible; it does NOT compute `(T-Join)` for a variable whose declared/inferred
-  type is narrow across branches. That join is the real fix and is **not yet a
-  rule** — it is the front-end counterpart left open after the native seam patch.
+  The earlier #433 fix (`block_needs_i64_widen`: widen a narrow value-block at a
+  return/assign **seam**) was the *codegen* patch for the visible-seam case. The front-end
+  join is now **landed**: an inferred multiply-assigned local widens to `⨆ᵢ τᵢ` (the
+  `(I-Join)` rule), so the residual closes at the type, not the seam. Guarded by
+  `tests/scripts/433-ijoin-multiply-assigned.loft`; an annotated `x: u8` stays constrained.
 
-> **Rough spot R3.** Width lives in three places that must agree by hand:
-> `is_equal` (ignores it), `convert`/`is_narrowing_int` (errors on it),
-> `narrow_int_cast` in codegen (emits the `as`). #433 and its residual are both
-> "these three disagreed." `(W-*)` + `(T-Join)` as the single source would remove the
+> **Rough spot R3.** Width is *derived* in two places that must agree by hand:
+> `convert`/`is_narrowing_int` (from `forced_size`) and `narrow_int_cast` in codegen (from
+> `range()`). `is_equal` ignoring width is **correct** — the base-type question carries no
+> width — not a third authority. #433 and its residual were both "these two derivations
+> disagreed." Making `⤳` range containment, with `forced_size` a derived cache, removes the
 > disagreement surface.
 
 ## 4. The rough spots, collected
@@ -132,8 +141,8 @@ escape hatch. The two open rules:
 | id | rough spot | the rule that would close it |
 |----|------------|------------------------------|
 | R1 | four `*_hint` side-channels for one idea | the checking judgment `Γ ⊢ e ⇐ τ` (§1) |
-| R2 | `is_equal` collapses integer width; `⤳` then lies about it | fold width into `⤳` (§2) |
-| R3 | width re-derived in is_equal / convert / codegen | `(W-Widen)`/`(W-Narrow)` + `(T-Join)` (§3) |
+| R2 | width lives outside `⤳` — re-derived per-site, not range containment | `⤳` = range containment; `forced_size` a cache (§2) |
+| R3 | width derived two ways (convert `forced_size` / codegen `range()`) | `⤳` range containment; `forced_size` a cache (§3) |
 
 None of these is a runtime/memory red flag — they are **front-end** rough spots, which
 is why [STABILITY_REDFLAGS.md](STABILITY_REDFLAGS.md) structurally misses them
@@ -143,14 +152,17 @@ is why [STABILITY_REDFLAGS.md](STABILITY_REDFLAGS.md) structurally misses them
 
 This is a **lens**, not a migration plan. Concretely, the cheap wins it points at:
 
-1. **Add `(T-Join)`** — infer a multiply-assigned local as the join of its assigned
-   integer specs in the front end. Closes the #433-residual at the type, so neither
-   backend needs a seam patch. Smallest, highest-confidence next step.
+1. ~~**Add `(T-Join)`**~~ **DONE** — an inferred multiply-assigned local now widens to the
+   join of its writes (the `(I-Join)` rule), closing the #433-residual at the type. Guarded
+   by `tests/scripts/433-ijoin-multiply-assigned.loft`; see
+   [formal/types.md](formal/types.md) (was deviation D4).
 2. **Collapse the four `*_hint` fields into one checking-mode parameter** threaded
    through the expression parser. Mechanical; removes R1 and makes the next literal
    position correct by construction.
-3. **Fold integer width into `is_equal`/`⤳`** so width has one authority. Larger;
-   sequence after `(T-Join)` proves the join rule out.
+3. **Make `⤳` on integers range containment** (`[a,b] ⊆ [c,d]`) so width has one home:
+   `is_narrowing_int` reads it and `forced_size` becomes a derived storage cache, not a
+   width source. `is_equal` keeps its (correct) width-free collapse. Larger; the now-landed
+   `(I-Join)` rule proves the range-as-truth model out. This is formal/types.md D2/D3/D5.
 
 Defer anything ownership/`deps`-shaped until @PLN85/@PLN87 close — per
 [FORMALIZATION.md](FORMALIZATION.md) § Recommendation, the type's own contents are
