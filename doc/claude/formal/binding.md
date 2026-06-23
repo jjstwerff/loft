@@ -51,8 +51,17 @@ SPDX-License-Identifier: LGPL-3.0-or-later
                      It records "b's type is a link to a" — it does NOT evaluate `a`
                      into a fresh value.
   (B-Ref-Lvalue)     the linked source is an lvalue (variable / field / element).
-  (B-Ref-NotTarget)  `&` may not annotate an assignment TARGET: `&x = 3` is an error —
-                     a type annotation lives at a binding, not on an lvalue being written.
+  (B-Ref-AnnotationOnly)  ⚑ VITAL.  `&` occurs ONLY as a reference-type annotation — in a
+                     type (`&τ`) or at the bind site that gives a variable that type.  A
+                     unary `&` in ANY other position is a PARSE ERROR: an operand
+                     (`x + &y`), a collection element (`[&a]`), a call/format argument
+                     (`f(&a)` passes a value, not a `&`-prefixed expression), a condition
+                     (`if &a > 0`), a bare statement (`&a;`), an assignment TARGET
+                     (`&x = 3`).  There is NO `&` operator; permitting `&` as a
+                     value-level prefix is precisely what lets the reference leak into
+                     contexts that then mis-elaborate.
+  (B-Ref-NotTarget)  (instance of B-Ref-AnnotationOnly) `&x = 3` is an error — a type
+                     annotation lives at a binding, not on an lvalue being written.
 ```
 
 ### Using a `&τ` variable — the link is carried by the type
@@ -82,9 +91,9 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Deviations
 
-OPEN: **7** — D-bind-0 (the model gap) + the @PLN87 ladder L1–L6 + the doc reconciliation.
-Each ladder entry links to its runnable lock-in in `loft2` (`tests/issues.rs`,
-`pln87_link_l*`, currently `#[ignore]`).
+OPEN: **8** — D-bind-0 (the model gap), D-bind-7 (the parse leak, ⚑ vital), the @PLN87
+ladder L1–L6, + the doc reconciliation. Each ladder entry links to its runnable lock-in
+in `loft2` (`tests/issues.rs`, `pln87_link_l*`, currently `#[ignore]`).
 
 ### D-bind-0 — `&` is handled as an expression operator, not a type annotation
 - **Violates:** B-RefType / B-RefType-OfVar
@@ -98,6 +107,24 @@ Each ladder entry links to its runnable lock-in in `loft2` (`tests/issues.rs`,
   top of the expression-level handling, but the clean end-state is a reference TYPE.
 - **Removal:** represent `&τ` as the binding's **type** (a reference type the variable
   carries), so reads/writes/mutations dispatch on the type, not an expression flag.
+
+### D-bind-7 — `&` in a non-binding position is not rejected at parse time  ⚑ vital
+- **Violates:** B-Ref-AnnotationOnly
+- **Where:** because `&` is parsed as an expression prefix (D-bind-0), it is accepted in
+  any expression position and only fails *downstream* with an unrelated error instead of
+  a clean "`&` is only a reference-type annotation" parse error.
+- **Effect (measured, this branch):**
+  | source | wanted | actual |
+  |---|---|---|
+  | `x = 1 + &a` | parse error at `&` | `error[E0308]: mismatched types` |
+  | `v = [&a]` | parse error at `&` | `error: Unknown variable '_elm_1'` (internal) |
+  | `f(&a)` (format/call arg) | parse error at `&` | `error[E0308]: mismatched types` |
+  | `&a;` (bare) / `if &a > 0` | parse error at `&` | `error[E0308]: mismatched types` |
+- **Status:** OPEN — the parse leak the VITAL rule forbids; a symptom of D-bind-0.
+- **Removal:** accept `&` only in reference-type-annotation positions (type / bind site)
+  and reject it elsewhere *in the parser*, with a message naming the rule — not as an
+  accidental type mismatch. Closing D-bind-0 (a real `&τ` type) makes this hold by
+  construction; until then, an explicit parse-site guard enforces it.
 
 ### D-bind-1 — a scalar `&τ` variable copies instead of reading live  (ladder L1)
 - **Violates:** B-Ref-Read
