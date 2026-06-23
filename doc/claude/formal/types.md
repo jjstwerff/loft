@@ -166,23 +166,29 @@ OPEN: **2**
   the full integer?" rides on `forced_size`, not on the bounds. Guard:
   `d2_signed_narrowing_i8_to_u8_needs_cast` (tests/issues.rs).
 - **Status:** OPEN — the residual after the D3/D5 close.
-- **Removal:** the trigger is `IntegerSpec` **i64 bounds** (`min`/`max` → i64) so
-  `[a,b] ⊆ [c,d]` alone decides narrowing and `forced_size` is purely a storage cache. The
-  real scope, though, is **migrating the narrow-storage layer off i32** — i64 bounds ripple
-  into ~36 sites that assume i32:
-  - `Parts::Byte(i32, …)` / `Parts::Short(i32, …)` — the DB storage-type enum holds the min.
-  - `Value::Int(i32)` — the IR integer node.
-  - `byte()` / `short()` / `int()` storage ops (`min: i32`, stored into `Parts`).
-  - `usable_min` / `usable_max` — return i32.
-  - `range()` needs i128 (the full-i64 count overflows i64); the `is_wide` / `*_template`
-    predicates compare against the bound literals (`u32::MAX` → `i64::MAX`, etc.).
-
-  Most ripple sites are **narrow-gated** (`forced == Some(n)`, element width 1/2/4) so the
-  i64→i32 cast is safe. The **hazard** sites are `usable_min`/`usable_max` on a possibly-wide
-  spec and the parser range checks — there an i64→i32 cast would *silently truncate* a wide
-  bound, so widen those to i64 rather than cast. Do it as one focused pass (matrix + both
-  backends + full suite), not piecemeal — a silent truncation here corrupts narrow-field
-  storage (the class `range_to_width`'s comment already documents).
+- **Removal — two layers; the second is the real blocker (found by attempting it):**
+  1. *Storage migration — mechanical, verified do-able.* `IntegerSpec` **i64 bounds**
+     (`min`/`max` → i64) ripple into ~36 i32-assuming sites: `Parts::Byte/Short(i32)` (DB
+     storage-type enum), `Value::Int(i32)` (IR node), the `byte`/`short`/`int` ops
+     (`min: i32`), `usable_min`/`usable_max` (i32 returns); `range()` needs i128 (the full-i64
+     count overflows i64); the `is_wide`/`*_template` predicates compare bound literals
+     (`u32::MAX` → `i64::MAX`). Most sites are narrow-gated (`forced == Some(n)`, element
+     width 1/2/4) so the i64→i32 cast is safe; widen `usable_min`/`usable_max` to i64. **This
+     part builds clean** — it is not the obstacle.
+  2. *The real blocker — loft has TWO `integer` ranges.* The default `integer` keyword
+     resolves to **`I32 = signed32()`** — an **i32**-range template with `forced_size = None`
+     (`src/typedef.rs` `"integer" => I32`) — while **`I64 = wide()`** is a *separate* i64
+     template. The `forced_size = None` guard in `is_narrowing_int` treated the two as
+     interchangeable. Pure range containment correctly distinguishes them (`wide ⊄ signed32`),
+     so a `wide` value (e.g. an `(I-Join)`-widened local) returned/assigned to an `integer`
+     (`signed32`) destination becomes a narrowing — *"cannot narrow integer to integer"*.
+     Closing D2 therefore requires **unifying the integer model to one i64 range**, which
+     touches: the `integer` keyword resolution (`typedef.rs` → `I32`), `signed32()`'s ~15 call
+     sites, the `__cell_long` / `__cell_integer` cell-type naming (`src/parser/vectors.rs`),
+     and the `(I-Join)` widen target. That is a **semantic decision** — does `integer` become
+     truly i64-range, as STDLIB.md already claims ("64-bit signed integer end-to-end")? — and
+     a corruption-prone one (cell-type identity), so it is its own focused change with the
+     full suite as the net, **not** a storage migration.
 
 ---
 
