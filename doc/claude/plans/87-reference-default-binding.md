@@ -169,9 +169,23 @@ forms only; probing the others found two gaps and a latent concern:
 - **#2 (was a WRONG MESSAGE) — ✅ FIXED.** `&vector = otherVector` reported the misleading
   "`&` but is never modified"; now the same clear write-back-not-supported error. The duplicate
   "never modified" is suppressed via `Parser::writeback_rejected` (cleared per function).
-- **#3 — leak-detection divergence (OPEN, investigating).** The standalone binary's exit leak-check
-  under-reports leaks the cloned-DB harness (`loft_suite`/`leaks_for`) catches; the harness is the
-  authority used throughout P2. Root-causing why the binary misses them.
+- **#3 — leak-detection divergence — ✅ RESOLVED: NOT a detection bug.** The detection logic
+  (`collect_store_leaks`) is byte-identical everywhere. The apparent "binary misses leaks" had two
+  compounding causes, both benign:
+  1. **The default run mode is `--native`** (`main.rs` `native_mode = true`). Bare `loft prog.loft`
+     compiles + runs the native binary and exits via the subprocess status BEFORE the interpreter's
+     `check_store_leaks` (which only runs on the explicit `--interpret` path; `--tests` arms it too).
+     Native has its own `collect_store_leaks`, gated opt-in on `LOFT_NATIVE_LEAK_CHECK`.
+  2. **The leaks P2 fixed were INTERPRET-ONLY.** The eager `OpInitRef` null-init allocates a store in
+     the interpreter (`state/io.rs`) but native lowers the same init to `DbRef::NULL` — *no allocation*
+     (`generation/dispatch.rs:687/766`). So the native default genuinely has no such leak to report.
+
+  Verified: `loft --interpret` on the (fix-disabled) v_cond case prints
+  `Warning: 1 stores not freed … kt=65535 ?×1` — IDENTICAL to `leaks_for`/`loft_suite`. The harness is
+  interpret-based, so it is the correct authority for interpreter store-lifetime work — which is what
+  every P2 fix targeted. (Native leak-checking is a separate axis: `LOFT_NATIVE_LEAK_CHECK` + a native
+  run.) No code change needed; the takeaway is a doc/process one: **leak-check ad-hoc runs with
+  `loft --interpret`, not bare `loft` (which is native and skips the interpreter check).**
 
 Runnable probe (the behavioral pair — now prints `1 9` on both backends):
 
