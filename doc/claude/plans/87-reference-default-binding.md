@@ -101,6 +101,24 @@ Whole change is **gated on the rebind detection** (off for all existing code —
 reassignment is ~nonexistent), so regression risk to the store-lifetime machinery is contained.
 Verified: `issues.rs` 723 pass, `loft_suite` green (incl. the new gate), both backends.
 
+### Method note — when iterating through these multi-pass areas, ALWAYS diff against `main`
+
+The parser is two-pass and the store-lifetime codegen has many interacting sites, so the same area gets
+re-read many times and a symptom is easy to mis-attribute to the in-flight change. **When a problem
+pops up, compare against `main` first to separate NEW breakage from PRE-EXISTING** — it repeatedly
+short-circuited dead ends here (the struct `&` write-back "leak" looked like a P2.1 regression until a
+main diff showed the `SetStackRef` path is untouched and the leak is pre-existing; the standalone
+binary vs `loft_suite` divergence was another). Concretely:
+
+- **Behaviour / leak:** build a `main`-tip `loft` and run the same probe both ways. `scripts/probe-matrix
+  --baseline <main-binary>` auto-classifies each cell REGRESSION vs PRE-EXISTING (CLAUDE.md § matrix-first).
+- **IR / bytecode:** `LOFT_LOG=static loft --dump prog.loft` on each binary and diff; or read the source
+  diff directly — `git diff main -- <file>`, `git show origin/main:<file>` — to confirm a path is in
+  fact unchanged (NO working-tree switch — commit WIP first; CLAUDE.md § Git safety).
+
+If `main` shows the same symptom, it is pre-existing: file it (a `main` bug) or work it as its own item,
+don't fold it into the active fix.
+
 **REMAINING P2 work:**
 1. **P2.2 `&` write-back leak** — `fn f(o: &Obj){ o = Obj{..} }` returns the right value (`g.x == 9`)
    but `SetStackRef` overwrites the caller's slot with the new ref WITHOUT freeing the OLD caller store
@@ -108,14 +126,22 @@ Verified: `issues.rs` 723 pass, `loft_suite` green (incl. the new gate), both ba
    path is untouched by P2.1), but it means P2.2 is NOT actually done: the `&` write-back needs the
    SAME ownership-transition treatment as P2.1 (free the displaced store, distinct-guarded). The P2.1
    witness/IfDistinct infra is reusable.
-2. **Vector cell of P2.4** — `fn f(v: vector<T>){ v = [..] }` still appends to the caller's backing
-   (`len` grows; pre-existing, NOT a regression). The struct chokepoint is one `OpDatabase`; the
-   vector path materialises through the `__vdb` backing store (`parser/vectors.rs::vector_db` /
-   `build_vector_list`, deliberately skipped for arguments) + per-element `new_record`, so it needs
-   the same witness/IfDistinct applied there (the infra is backend-agnostic and reusable; only the
-   vector EMISSION path is new). The `__vdb` store has its own scope-exit free, so beware double-handling.
-3. **P3** — W4 redundant-`&` lint (unchanged; see § Phases).
-4. **D2** — strip the throwaway `LOFT_SWEEP_P0` instrument from `scopes::check` before any PR.
+2. **Vector non-`&` rebind — ✅ DONE (2026-06-23), both backends, leak-free.** `fn f(v: vector<T>){ v
+   = [..] }` now REBINDS locally (caller length/elements unchanged) instead of appending. The `=`-vs-`+=`
+   distinction is unavailable at the vector materialiser (`parse_vector`/`build_vector_list`, which the
+   literal path reaches without going through `parse_assign_op`'s tail), so it is captured EARLIER: in
+   `parse_assign_op`, BEFORE the RHS parse, a `=`-to-a-visible-vector-param with the next token `[`
+   (peek) marks the param a rebind (`ensure_rebind_witness`).  Then the RHS parse's `vector_db` sees
+   `rebind_orig` set and hands a FRESH `__vdb` backing (skip_free — the param's exit
+   `OpFreeRefIfDistinct(v, witness)` frees v's store, so scopes must not also free the `__vdb`).  `+=`
+   (grows the caller backing), self-concat `v = v + [..]`, and `v = other` keep the caller backing.
+   Verified: single / conditional / repeated rebind, `+=`-grow, element-mutation-propagate all correct
+   both backends; `loft_suite` + full suite green. Lock-in `pln87_vector_param_reassign_is_local` un-ignored.
+3. **Vector `&` write-back** — `fn f(v: &vector<T>){ v = [..] }` is currently a silent NO-OP (caller
+   unchanged); for consistency with struct `&` it must write back. Distinct mechanism from non-`&`.
+   Lock-in: `pln87_vector_param_amp_writes_back` (still `#[ignore]`).
+4. **P3** — W4 redundant-`&` lint (unchanged; see § Phases).
+5. **D2** — strip the throwaway `LOFT_SWEEP_P0` instrument from `scopes::check` before any PR.
 
 Runnable probe (the behavioral pair — now prints `1 9` on both backends):
 

@@ -2041,7 +2041,7 @@ impl Parser {
     /// user-named, so it is NOT `_`-prefixed, yet `hidden` in the attributes).
     /// Such a buffer MUST keep its in-place write — the caller receives the
     /// value through it — so it is never rebound.
-    fn is_hidden_param(&self, v_nr: u16) -> bool {
+    pub(crate) fn is_hidden_param(&self, v_nr: u16) -> bool {
         self.context != u32::MAX
             && self
                 .data
@@ -2051,7 +2051,7 @@ impl Parser {
                 .any(|a| a.hidden && self.vars.var(&a.name) == v_nr)
     }
 
-    fn ensure_rebind_witness(&mut self, param: u16) -> u16 {
+    pub(crate) fn ensure_rebind_witness(&mut self, param: u16) -> u16 {
         if let Some(orig) = self.vars.rebind_orig(param) {
             return orig;
         }

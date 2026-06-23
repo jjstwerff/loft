@@ -15346,10 +15346,10 @@ fn run() -> integer { nested(\"n\").v + nested(\"x\").v }"
 // Struct + scalar cells already pass (P2.1).  These pin the still-inconsistent
 // VECTOR cells to their target consistent behaviour; un-ignore each when it lands.
 
-// Vector non-`&` reassignment must REBIND locally (leave the caller untouched),
-// like the struct case.  Today it APPENDS to the caller's backing (`len` grows).
+// Vector non-`&` reassignment REBINDS locally (leaves the caller untouched),
+// like the struct case — fixed by P2.4 (vector_db hands a rebind param a fresh
+// `__vdb` backing; the witness frees it at exit).
 #[test]
-#[ignore = "@PLN87 P2.4 — un-ignore when vector param non-& reassignment rebinds locally (today it appends to the caller backing)"]
 fn pln87_vector_param_reassign_is_local() {
     code!(
         "fn vrebind(v: vector<integer>) { v = [7, 8, 9]; }

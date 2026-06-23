@@ -1125,6 +1125,26 @@ use a separate collection or add after the loop"
         // the symmetry of `f += s.field` (which already takes the field's
         // declared width).  Restored to Unknown after the RHS parse so
         // it doesn't leak into unrelated sub-expressions.
+        // @PLN87 P2.4 — a `v = [..]` whole-binding REPLACE on a visible vector
+        // PARAM rebinds LOCALLY.  Detect it BEFORE the RHS parse — the literal
+        // materialises in parse_vector, which never reaches this fn's tail — by
+        // peeking for the `[`: mark the param as a rebind so the RHS parse's
+        // `vector_db` hands it a FRESH backing (instead of appending to the
+        // caller's store), and the witness frees that backing at exit (the P2.1
+        // rebind infra).  `+=` (op != "="), and `v = v + [..]` / `v = other` (RHS
+        // is not a bare literal), keep the caller backing.  A `&`/RefVar vector
+        // param is handled earlier by `assign_refvar_vector`.
+        if !self.first_pass
+            && op == "="
+            && var_nr != u16::MAX
+            && matches!(f_type, Type::Vector(_, _))
+            && self.vars.is_argument(var_nr)
+            && !self.vars.is_compiler_generated(var_nr)
+            && !self.is_hidden_param(var_nr)
+            && self.lexer.peek_token("[")
+        {
+            self.ensure_rebind_witness(var_nr);
+        }
         let prev_read_target = std::mem::replace(&mut self.read_target_type, f_type.clone());
         let rhs_pos = self.lexer.peek_pos().clone();
         let mut s_type = self.parse_operators(f_type, code, &mut parent_tp, 0);

@@ -27,8 +27,16 @@ fn o_cond(o: Obj, c: boolean) { if c { o = Obj { x: 9 }; } }
 fn o_multi(o: Obj) { o = Obj { x: 2 }; o = Obj { x: 3 }; }
 // --- struct : field write (propagates) THEN whole rebind (local) ---
 fn o_field_then(o: Obj) { o.x = 5; o = Obj { x: 9 }; }
+// --- vector, non-& : whole reassign is LOCAL (rebind to a fresh backing) ---
+fn v_rebind(v: vector<integer>) { v = [7, 8, 9]; }
+// --- vector, non-& : conditional rebind, both paths sound ---
+fn v_cond(v: vector<integer>, c: boolean) { if c { v = [9]; } }
+// --- vector, non-& : repeated rebind, no leak ---
+fn v_multi(v: vector<integer>) { v = [2]; v = [3, 4]; }
 // --- vector : element mutation PROPAGATES (reference-default) ---
 fn v_elem(v: vector<integer>) { v[0] = 9; }
+// --- vector, += : GROWS the caller's backing (not a rebind) ---
+fn v_grow(v: vector<integer>) { v += [7]; }
 // --- scalar, non-& : reassign is LOCAL (by value) ---
 fn n_local(n: integer) { n = n * 2; }
 // --- scalar, & : reassign writes BACK ---
@@ -51,6 +59,21 @@ fn main() {
 
     f = Obj { x: 1 }; o_field_then(f);
     assert(f.x == 5, "field write propagates, later rebind is local");
+
+    vr = [1, 2, 3]; v_rebind(vr);
+    assert(len(vr) == 3, "vector non-& reassign is local (caller length unchanged)");
+    assert(vr[0] == 1, "vector non-& reassign leaves the caller's first element");
+
+    vt = [1, 2, 3]; v_cond(vt, true);
+    assert(len(vt) == 3, "vector conditional rebind (taken) is local");
+    vf = [1, 2, 3]; v_cond(vf, false);
+    assert(len(vf) == 3, "vector conditional rebind (untaken) leaves caller intact");
+
+    vm = [1, 2, 3]; v_multi(vm);
+    assert(len(vm) == 3, "vector repeated rebind is local (no leak)");
+
+    vg = [1, 2, 3]; v_grow(vg);
+    assert(len(vg) == 4, "vector += grows the caller's backing (reference-default)");
 
     ve = [1, 2, 3]; v_elem(ve);
     assert(ve[0] == 9, "vector element mutation propagates");

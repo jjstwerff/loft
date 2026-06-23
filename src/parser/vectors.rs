@@ -2652,7 +2652,13 @@ impl Parser {
     }
 
     pub(crate) fn vector_db(&mut self, assign_tp: &Type, vec: u16) -> Vec<Value> {
-        if self.first_pass || vec == u16::MAX || self.vars.is_argument(vec) {
+        // @PLN87 P2.4 — a REBIND vector param (`v = [..]` whole-binding replace on
+        // a visible vector param, marked via `ensure_rebind_witness`) DOES get a
+        // fresh backing: it rebinds locally rather than appending to the caller's
+        // store.  Every other argument keeps the caller-provided backing (no
+        // local `__vdb` that would be freed before the return).
+        let rebind = self.vars.rebind_orig(vec).is_some();
+        if self.first_pass || vec == u16::MAX || (self.vars.is_argument(vec) && !rebind) {
             Vec::new()
         } else {
             let mut ls = Vec::new();
@@ -2660,6 +2666,12 @@ impl Parser {
             let db = self
                 .vars
                 .work_vec_db(&Type::Reference(vec_def, Deps::none()), &mut self.lexer);
+            // The rebind param's fresh backing is freed at function exit by the
+            // param's own `OpFreeRefIfDistinct(v, witness)` (it frees v's store);
+            // skip_free keeps scopes from ALSO freeing the `__vdb` (a double-free).
+            if rebind {
+                self.vars.set_skip_free(db);
+            }
             self.vars.depend(vec, db);
             let tp = self.vector_wrapper_known_type(vec_def);
             debug_assert_ne!(
