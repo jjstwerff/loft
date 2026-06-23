@@ -740,6 +740,47 @@ fn extra_externs(deps: &std::path::Path) -> Vec<(String, std::path::PathBuf)> {
     out
 }
 
+/// Pick the `loft_ffi` rlib in `deps` that `libloft` was built against.
+///
+/// loft's `deps/` can hold several `libloft_ffi-<hash>.rlib` with the same
+/// StableCrateId but different SVH — e.g. one from `cargo build` (the loft binary)
+/// and one from `cargo test` (the suite).  `libloft` links exactly ONE of them; if
+/// the cdylib's `--extern loft_ffi=` names a DIFFERENT copy, the link carries two
+/// `loft_ffi` and rustc aborts with "found crates (`loft_ffi` and `loft_ffi`) with
+/// colliding StableCrateId values" — the zero-trust native blocker, and the same
+/// failure behind p171/p310/imaging.
+///
+/// rmeta records the dependency by SVH, not by the filename hash, so we can't
+/// string-match it.  Instead pick the candidate whose mtime is closest to
+/// `libloft`'s: a crate and the dependency it links are produced by one cargo
+/// invocation and share a build time, while a stray copy from another build sits far
+/// off.  (A heuristic — a precise SVH match is the follow-up hardening.)
+pub fn loft_ffi_for_libloft(
+    libloft: &std::path::Path,
+    deps: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    let anchor = libloft.metadata().and_then(|m| m.modified()).ok()?;
+    let mut best: Option<(std::path::PathBuf, std::time::Duration)> = None;
+    for e in std::fs::read_dir(deps).ok()?.flatten() {
+        let n = e.file_name().to_string_lossy().into_owned();
+        if !n.starts_with("libloft_ffi-") || !has_rlib_ext(&n) {
+            continue;
+        }
+        let Ok(mtime) = e.metadata().and_then(|m| m.modified()) else {
+            continue;
+        };
+        // Symmetric gap so clock direction does not matter.
+        let gap = mtime
+            .duration_since(anchor)
+            .or_else(|_| anchor.duration_since(mtime))
+            .unwrap_or_default();
+        if best.as_ref().is_none_or(|(_, b)| gap < *b) {
+            best = Some((e.path(), gap));
+        }
+    }
+    best.map(|(p, _)| p)
+}
+
 /// On Windows MSVC, the build-script output dirs holding native import libraries
 /// (e.g. `windows.0.48.5.lib` from `windows-sys`) must be passed to a hand-driven
 /// `rustc` as `-L` paths — cargo adds them via `cargo:rustc-link-search` but we
@@ -993,13 +1034,12 @@ pub fn build_shared_cdylib(
         // own `loft_ffi` rlib must be on the command (the package `.so` is C-ABI,
         // so this is the only `loft_ffi` the cdylib's Rust code names).  Mirrors
         // the standalone native compile in main.rs.
-        if let Some(name) = std::fs::read_dir(&deps).ok().and_then(|rd| {
-            rd.flatten()
-                .map(|e| e.file_name().to_string_lossy().into_owned())
-                .find(|n| n.starts_with("libloft_ffi-") && has_rlib_ext(n))
-        }) {
+        // Pick the `loft_ffi` `libloft` was built against, NOT the first one in dir
+        // order: with two copies present, naming the wrong one puts a second
+        // `loft_ffi` in the link → "colliding StableCrateId" (see `loft_ffi_for_libloft`).
+        if let Some(ffi) = loft_ffi_for_libloft(&rlib, &deps) {
             args.push("--extern".to_string());
-            args.push(format!("loft_ffi={}", deps.join(name).display()));
+            args.push(format!("loft_ffi={}", ffi.display()));
         }
         // Link each native package's resolved cdylib `.so` (the same `-L native`
         // / `-l dylib` / RPATH the executable path emits) so the cdylib's

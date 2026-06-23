@@ -6034,19 +6034,15 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
                     .arg(format!("loft={}", lib_dir.join("libloft.rlib").display()));
                 let deps = deps_dir_of(&lib_dir);
                 cmd.arg("-L").arg(format!("dependency={}", deps.display()));
-                if let Ok(rd) = std::fs::read_dir(&deps) {
-                    for e in rd.flatten() {
-                        let name = e.file_name().to_string_lossy().to_string();
-                        if name.starts_with("libloft_ffi-")
-                            && std::path::Path::new(&name)
-                                .extension()
-                                .is_some_and(|ext| ext.eq_ignore_ascii_case("rlib"))
-                        {
-                            cmd.arg("--extern")
-                                .arg(format!("loft_ffi={}", e.path().display()));
-                            break;
-                        }
-                    }
+                // Pick the `loft_ffi` that `libloft` was built against, NOT the first
+                // in dir order: with two copies in `deps/`, naming the wrong one puts
+                // a second `loft_ffi` in the link → "colliding StableCrateId" (see
+                // `native_lib::loft_ffi_for_libloft`).
+                if let Some(ffi) =
+                    loft::native_lib::loft_ffi_for_libloft(&lib_dir.join("libloft.rlib"), &deps)
+                {
+                    cmd.arg("--extern")
+                        .arg(format!("loft_ffi={}", ffi.display()));
                 }
                 // Propagate `-L native=` for every build-script `OUT_DIR`
                 // that bundles a native lib.  Windows-targets ships
