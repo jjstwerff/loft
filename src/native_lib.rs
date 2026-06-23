@@ -1094,17 +1094,6 @@ pub fn build_shared_cdylib(
     Ok(so)
 }
 
-/// Detect ENVIRONMENT failures that masquerade as compiler/linker errors.
-///
-/// A `rustc`/`cc`/`ld` invocation that dies from a full temp dir or OOM emits a
-/// cryptic crash, not a clear diagnosis: a SIGBUS from `ld` writing to a full
-/// tmpfs (the common case — the linker mmaps object files into `TMPDIR`, and a
-/// write the tmpfs can no longer back faults with a Bus error) reads like a
-/// linker bug or a stale-artifact problem, when it is really "disk is full".
-/// Scan a failed invocation's captured stderr for those signatures and return a
-/// one-line, actionable hint to surface ABOVE the raw output; return `None` for
-/// a genuine compile error so the real diagnostics show through untouched.
-#[must_use]
 /// Is a working `rustc` on `PATH`?  Cached for the process.
 ///
 /// This is the line between a legitimate interpret-fallback and a real failure: with
@@ -1125,6 +1114,17 @@ pub fn rustc_available() -> bool {
     })
 }
 
+/// Detect ENVIRONMENT failures that masquerade as compiler/linker errors.
+///
+/// A `rustc`/`cc`/`ld` invocation that dies from a full temp dir or OOM emits a
+/// cryptic crash, not a clear diagnosis: a SIGBUS from `ld` writing to a full
+/// tmpfs (the common case — the linker mmaps object files into `TMPDIR`, and a
+/// write the tmpfs can no longer back faults with a Bus error) reads like a
+/// linker bug or a stale-artifact problem, when it is really "disk is full".
+/// Scan a failed invocation's captured stderr for those signatures and return a
+/// one-line, actionable hint to surface ABOVE the raw output; return `None` for
+/// a genuine compile error so the real diagnostics show through untouched.
+#[must_use]
 pub fn toolchain_failure_hint(stderr: &str) -> Option<String> {
     let tmp = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
     let env_fault = |what: &str| {
