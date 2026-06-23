@@ -165,7 +165,8 @@ OPEN: **2**
   not implicitly fit `u8`) and the parser agrees with codegen. The one residual: "is this
   the full integer?" rides on `forced_size`, not on the bounds. Guard:
   `d2_signed_narrowing_i8_to_u8_needs_cast` (tests/issues.rs).
-- **Status:** OPEN — the residual after the D3/D5 close.
+- **Status:** OPEN — the residual after the D3/D5 close. Tracked as
+  [@PLN88](https://github.com/loft-lang/plans/issues/88) (loft-lang/plans#88).
 - **Removal — three layers; the bottom is an IR change (each found by attempting it):**
   1. *Storage migration — mechanical, builds clean.* `IntegerSpec` **i64 bounds** ripple into
      ~35 i32-assuming sites: `Parts::Byte/Short(i32)` (DB storage-type enum), the
