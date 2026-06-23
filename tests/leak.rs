@@ -1529,3 +1529,37 @@ pub fn test() {
         "& write-back leaked the displaced store: {leaks:?}"
     );
 }
+
+// @PLN87 P2.4 — the vector-param rebind allocates a fresh `__vdb` backing and
+// frees it via the witness `OpFreeRefIfDistinct` at exit; a REPEAT rebind pre-frees
+// the prior backing (vector_db), else it orphans it.  These guard each cell against
+// a backing leak (the harness's cloned-DB leak check catches what the binary misses).
+#[test]
+fn pln87_vector_rebind_no_leak() {
+    let l =
+        leaks_for("fn vr(v: vector<integer>){ v = [7,8,9]; } pub fn test(){ a=[1,2,3]; vr(a); }");
+    assert!(l.is_empty(), "vector rebind leaked: {l:?}");
+}
+#[test]
+fn pln87_vector_repeated_rebind_no_leak() {
+    let l = leaks_for(
+        "fn vm(v: vector<integer>){ v = [2]; v = [3,4]; } pub fn test(){ a=[1,2,3]; vm(a); }",
+    );
+    assert!(
+        l.is_empty(),
+        "vector repeated rebind leaked the prior backing: {l:?}"
+    );
+}
+#[test]
+fn pln87_vector_conditional_rebind_no_leak() {
+    let l = leaks_for(
+        "fn vc(v: vector<integer>, c: boolean){ if c { v = [9]; } } pub fn test(){ a=[1,2,3]; vc(a, true); }",
+    );
+    assert!(l.is_empty(), "vector conditional rebind leaked: {l:?}");
+}
+#[test]
+fn pln87_vector_amp_writeback_no_leak() {
+    let l =
+        leaks_for("fn va(v: &vector<integer>){ v = [7,8,9]; } pub fn test(){ a=[1,2,3]; va(&a); }");
+    assert!(l.is_empty(), "vector & write-back leaked: {l:?}");
+}

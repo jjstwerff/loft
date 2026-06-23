@@ -2671,6 +2671,25 @@ impl Parser {
             // skip_free keeps scopes from ALSO freeing the `__vdb` (a double-free).
             if rebind {
                 self.vars.set_skip_free(db);
+                // inline_ref makes the `__vdb`'s ENTRY null-init a non-allocating
+                // sentinel rather than `OpInitRef` (which eagerly allocates a store).
+                // The null-init is hoisted to function scope, but the `OpDatabase`
+                // that fills it sits at the rebind site — which may be CONDITIONAL
+                // (`if c { v = [..] }`).  Without the sentinel, the untaken path
+                // leaks the eagerly-allocated backing.  `OpDatabase` allocates fresh
+                // from the sentinel when the rebind does run.
+                self.vars.mark_inline_ref(db);
+                // Pre-free a PRIOR rebind backing before repointing `vec` at this
+                // fresh one: on the FIRST rebind `vec == witness` (the caller's
+                // store) so it no-ops; on a REPEAT (`v = [..]; v = [..]`) `vec` is
+                // the previous fresh `__vdb`, now orphaned, so it is freed — without
+                // this, every repeat rebind leaks the prior backing.  Emitted INSIDE
+                // vector_db's op list (not as an outer `Insert` wrap, which would
+                // make `create_vector` re-fire and re-allocate), and BEFORE the
+                // `OpDatabase` below that repoints `vec`.
+                if let Some(orig) = self.vars.rebind_orig(vec) {
+                    ls.push(self.cl("OpFreeRefIfDistinct", &[Value::Var(vec), Value::Var(orig)]));
+                }
             }
             self.vars.depend(vec, db);
             let tp = self.vector_wrapper_known_type(vec_def);
