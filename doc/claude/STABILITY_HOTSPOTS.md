@@ -707,8 +707,13 @@ OwnedWalk` (`src/database/allocation.rs:75`) yields `children` (each
 `{child: DbRef, child_tp, owning_elem: Option<u32>}`) + `container_rec` + `zero_field`;
 `remove_claims` (1907) is the model thin-visitor. The three "drifting" dispatchers do NOT
 fold equally — spraying all three onto the read-walk keystone would be over-reach:
-- **`validate_claims` (1206)** — a pure READ-walk → folds CLEANLY (a validating visitor like
-  `remove_claims`). Cleanest, highest-confidence; do first.
+- **`validate_claims` (1206)** — does **NOT** fold. The 2026-06-22 investigation falsified the
+  "pure read-walk folds cleanly" hypothesis: it is a separate DEFENSIVE family. It runs on
+  *suspected-corrupt* heaps (the @P306 `LOFT_TRACE_CR` pre-walk before `OpCopyRecord`), so it
+  bounds-checks each pointer BEFORE following it and does not recurse into the per-element-record
+  kinds (`Array`/`Ordered`/`Hash`/`Index`) at all — whereas this keystone TRUSTS its pointers
+  (`debug_assert!` on a freed/out-of-range record). Folding it would turn "name the broken edge"
+  back into "fault on it". The boundary is pinned in the keystone's `OwnedChild` doc comment.
 - **`copy_claims` (1594) + 4 helpers** — the SOURCE enumeration folds (`copy_claims_hash_body`
   already reads the keystone); the DESTINATION build (allocating into `to`) stays. PARTIAL.
 - **construction `record_new`/`record_finish` (`structures.rs:59`/`104`)** — a WRITE/build,
@@ -716,7 +721,12 @@ fold equally — spraying all three onto the read-walk keystone would be over-re
   LAYOUT fact (strides/positions), that is a SEPARATE refactor, not this fold.
 
 **Phasing** (each verifies BOTH backends, with the historical shapes @P290/@P306/@P318/@P309
-still caught): (1) `validate_claims` fold — **IN FLIGHT 2026-06-22**; (2) `copy_claims`
-source-enum fold; (3) assess construction (likely its own layout-descriptor refactor — do NOT
-force it). **Size M–L.** Surfaced by the 2026-06-22 code-quality audit; detail in
-[STABILITY_REDFLAGS.md cluster C](STABILITY_REDFLAGS.md). Tracked as task #39 / this H10.
+still caught): (1) `validate_claims` — investigated 2026-06-22, does **NOT** fold (separate
+defensive walk; boundary pinned in the keystone doc comment); (2) `copy_claims` source-enum
+fold — **the active step**, with a concrete verifiable plan in
+[plans/85-store-lifetime-retirement/cluster-C-copy-claims-fold.md](plans/85-store-lifetime-retirement/cluster-C-copy-claims-fold.md)
+(per-helper Phase 0–4, ~S each: `index_body` is a near drop-in, `array_body`/`seq_vector` need a
+container-type call-site touch); (3) assess construction (likely its own layout-descriptor
+refactor — do NOT force it). **Size S per copy helper.** Surfaced by the 2026-06-22 code-quality
+audit; detail in [STABILITY_REDFLAGS.md cluster C](STABILITY_REDFLAGS.md). Tracked as task #39 /
+this H10.
