@@ -200,12 +200,13 @@ fn datalib_store_touching_types_parity() {
 /// byte-identical, no `exit`, no `OpStaticCall` to an unbuilt symbol.
 ///
 /// `LOFT_FORCE_NATIVE_BUILD_FAIL=1` simulates a cdylib build failure (e.g. a
-/// codegen gap the gate didn't catch).  The program must still run, exit 0, and
-/// produce output **byte-identical** to the pure-interpreted reference — proving
-/// the build-before-mark flow never marks (so never dispatches) on failure.  No
-/// `rustc` is needed: this path deliberately skips the build.
+/// codegen gap the gate didn't catch).  With a `rustc` toolchain present (the
+/// normal dev/CI host) that is a REAL build failure, not a graceful fallback: loft
+/// refuses to silently interpret it (which would hand back a partly-interpreted
+/// binary) and exits non-zero with an actionable message.  No cdylib is built.  The
+/// graceful no-toolchain fallback is covered by the rustc-absent tests.
 #[test]
-fn build_failure_silently_interprets() {
+fn build_failure_with_rustc_present_hard_fails() {
     let pid = std::process::id();
     let root = std::env::temp_dir().join(format!("loft_n3_fail_{pid}"));
     let _ = std::fs::remove_dir_all(&root);
@@ -231,17 +232,18 @@ fn build_failure_silently_interprets() {
     )
     .unwrap();
 
-    let interp = run_against(&libdir, &prog, &[("LOFT_NO_NATIVE_LIBS", "1")]);
     let forced = run_against(&libdir, &prog, &[("LOFT_FORCE_NATIVE_BUILD_FAIL", "1")]);
 
     assert!(
-        forced.success,
-        "a build failure must NOT exit non-zero — it must silently interpret.\nstderr:\n{}",
+        !forced.success,
+        "a native build failure with rustc present must hard-fail, not silently interpret.\nstderr:\n{}",
         forced.stderr
     );
-    assert_eq!(
-        forced.stdout, interp.stdout,
-        "a build failure must interpret byte-identically to the interpreted reference"
+    assert!(
+        forced.stderr.contains("real build failure")
+            || forced.stderr.contains("refusing to silently interpret"),
+        "the hard-fail must explain itself (real build failure, not a missing-toolchain fallback).\nstderr:\n{}",
+        forced.stderr
     );
     assert!(
         !native_auto.exists(),
