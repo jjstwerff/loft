@@ -1564,6 +1564,14 @@ fn pln87_vector_amp_writeback_no_leak() {
     assert!(l.is_empty(), "vector & write-back leaked: {l:?}");
 }
 
+/// @PLN87 L4 — a scalar vector-element reference (`c = &v[0]`) holds a link into the
+/// existing backing (no fresh allocation); read/write-through must not leak a store.
+#[test]
+fn pln87_element_reference_no_leak() {
+    let l = leaks_for("pub fn test(){ v = [10, 20]; c = &v[0]; c = 99; d = &v[1]; d = 7; }");
+    assert!(l.is_empty(), "element reference leaked: {l:?}");
+}
+
 /// @PLN87 — reassigning a `&Obj` parameter to a struct literal (`o = Obj{..}`) frees
 /// the displaced caller store and transfers the new one, leak-free.  The `&` parameter
 /// is called WITHOUT `&` (the reference comes from the type).

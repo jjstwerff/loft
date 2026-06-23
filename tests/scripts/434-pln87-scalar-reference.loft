@@ -35,5 +35,19 @@ fn test() {
     q = 8;
     assert(p == 8, "typed reference writes through to the source");
 
+    // L4 — a scalar vector-ELEMENT reference (`r0 = &v[0]`) is live both ways.
+    v = [10, 20];
+    r0 = &v[0];
+    assert(r0 == 10, "element reference reads the element");
+    v[0] = 5;
+    assert(r0 == 5, "element reference is LIVE — sees v[0]'s update");
+    r0 = 99;
+    assert(v[0] == 99, "write through the element reference writes v[0]");
+    r0 = r0 + 1;
+    assert(v[0] == 100 && r0 == 100, "read-modify-write through the element reference");
+    r1 = &v[1];
+    r1 = 7;
+    assert(v[1] == 7, "a second element reference is independent");
+
     print("pln87 scalar reference ok\n");
 }

@@ -39,8 +39,13 @@ Implemented by the loft2 agent.
 >   `a=3; b=&a; a=5; b==5` (live read) and `a=3; b=&a; b=4; a==4` (north star). `b` is a live
 >   reference to `a`'s slot, lowered to `b: &T = OpCreateStack(a)` (interp: RefVar deref; native:
 >   `*mut T` raw pointer — `&mut` trips Rust's borrow checker on the legal aliasing).
-> - **L3 — scalar struct-field reference.** `s.x=3; b=&s.x; b=4; s.x==4`.
-> - **L4 — scalar vector-element reference.** `v=[10,20]; c=&v[0]; c=99; v[0]==99`.
+> - **L3 — scalar struct-field reference.** `s.x=3; b=&s.x; b=4; s.x==4`. (Open — the formal spec's
+>   D-bind-3 gates the struct *vector*-field case on the #415 reversal, substrate stream.)
+> - **✅ L4 — scalar vector-element reference.** `v=[10,20]; c=&v[0]; c=99; v[0]==99`. Live both ways.
+>   The bind strips the value-read `OpGet*(OpGetVector(v,..),0)` so `c` holds the element ref; interp
+>   reads/writes it via the uniform RefVar deref, native via a `*mut T` into the element's store slot
+>   (keyed off the `OpGetVector` value, no per-variable flag — survives an IR snapshot). Both backends
+>   + leak-gated; tests `issues::pln87_link_l4_element_{write_through,live_read}`, `leak`, script 434.
 > - **L5 — heap whole-value reference.** `o=Obj{..}; p=&o; …` — field mutation already propagates (✅,
 >   reference-default); pin whole-value behaviour.
 > - **L6 — `&` function parameter.** `fn f(b:&integer){ b=4 } …; f(a); a==4`. Called WITHOUT `&`.
@@ -61,8 +66,11 @@ Implemented by the loft2 agent.
 >   "~53 stdlib + ~75 test" estimate was `#rust` FFI bodies + comments; the real loft sites were 3 in
 >   script 87 + ~5 `&`-param tests, all migrated to `f(x)`. Full suite + both backends green.
 >
-> **All @PLN87 front-end rules are now in place.** Next: rungs **L3/L4** (struct-field / vector-element
-> references) and **L5–L7** (heap whole-value, lifetime edges).
+> **All @PLN87 front-end rules + L4 (vector-element references) are in place.** Next: rung **L3**
+> (struct-field references — scalar fields look doable the same way L4 was; the formal spec's #415
+> gating is about struct *vector* fields), then **L5–L7** (heap whole-value, lifetime edges). The
+> formal model (`../loft` `formalize` branch: `formal/binding.md`, `types.md`) is the spec these rungs
+> close against — its `&τ` reference type is the clean end-state (D-bind-0).
 >
 > ### Method (per rung)
 > Matrix-first probe in `/tmp` on `--interpret`; prove the WORKING bytecode on BOTH backends before

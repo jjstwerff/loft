@@ -1157,17 +1157,53 @@ use a separate collection or add after the loop"
         // `&` (`b: &integer = a`); we gate on the SOURCE var's actual type (`s_type`
         // is coerced to the RefVar target in the annotated form).  A non-scalar source
         // keeps the single-indirect view from P1; a non-`Var` source is a later rung.
-        if op == "="
-            && self.amp_pending
-            && let Value::Var(src) = *code.unspan()
-            && matches!(
-                self.vars.tp(src),
-                Type::Integer(..) | Type::Float | Type::Single | Type::Boolean | Type::Character
-            )
-        {
-            let inner = self.vars.tp(src).clone();
-            *code = self.cl("OpCreateStack", &[Value::Var(src)]);
-            s_type = Type::RefVar(Box::new(inner));
+        if op == "=" && self.amp_pending {
+            let is_scalar = |t: &Type| {
+                matches!(
+                    t,
+                    Type::Integer(..)
+                        | Type::Float
+                        | Type::Single
+                        | Type::Boolean
+                        | Type::Character
+                )
+            };
+            // L1 / #2 — a scalar stack LOCAL source (`b = &a` / `b: &T = a`).
+            let stack_src = match *code.unspan() {
+                Value::Var(src) if is_scalar(self.vars.tp(src)) => Some(src),
+                _ => None,
+            };
+            // L4 — a scalar vector-ELEMENT source (`c = &v[0]`): the element VALUE
+            // lowered to `OpGet*(OpGetVector(v,..), 0)`; the element DbRef is the inner
+            // accessor.  Strip the outer scalar getter so `c` holds that DbRef.
+            let element_ref = if stack_src.is_none() && is_scalar(&s_type) {
+                match code.unspan() {
+                    Value::Call(g, gargs)
+                        if self.data.def(*g).name().starts_with("OpGet")
+                            && gargs.first().is_some_and(|a| {
+                                matches!(a.unspan(), Value::Call(d, _)
+                                    if matches!(self.data.def(*d).name(), "OpGetVector" | "OpVectorRef"))
+                            }) =>
+                    {
+                        Some(gargs[0].clone())
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            if let Some(src) = stack_src {
+                let inner = self.vars.tp(src).clone();
+                *code = self.cl("OpCreateStack", &[Value::Var(src)]);
+                s_type = Type::RefVar(Box::new(inner));
+            } else if let Some(eref) = element_ref {
+                // `c` holds the element DbRef; interp reads/writes it via the uniform
+                // RefVar deref (`OpGet*/OpSet*(c,0)`), and native keys its element-pointer
+                // construction off this `OpGetVector` value — so no per-variable flag is
+                // needed, and the link survives an IR snapshot round-trip.
+                *code = eref;
+                s_type = Type::RefVar(Box::new(s_type));
+            }
         }
         // `amp_pending` is a one-shot per binding — clear it here so a `&` that did
         // NOT take the scalar-reference path (a heap `&`-view, a non-`Var` source, an

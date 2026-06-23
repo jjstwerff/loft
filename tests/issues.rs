@@ -15426,11 +15426,18 @@ fn pln87_link_l3_field_write_through() {
 
 /// L4 — scalar vector-element link: `c = &v[0]; c = 99` writes `v[0]`.
 #[test]
-#[ignore = "@PLN87 L4 — scalar vector-element link write-through; un-ignore when a link to an element writes through"]
 fn pln87_link_l4_element_write_through() {
     code!("fn check() -> integer { v = [10, 20]; c = &v[0]; c = 99; v[0] }")
         .expr("check()")
         .result(Value::Int(99));
+}
+
+/// L4 — the link is LIVE in the read direction too: `v[0]` updates show through `c`.
+#[test]
+fn pln87_link_l4_element_live_read() {
+    code!("fn check() -> integer { v = [10, 20]; c = &v[0]; v[0] = 5; c }")
+        .expr("check()")
+        .result(Value::Int(5));
 }
 
 /// L6 — link as a function parameter: `fn f(b: &integer){ b = 4 }; f(a)` writes `a`.

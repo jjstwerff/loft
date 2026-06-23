@@ -345,12 +345,12 @@ operand must be **addressable** (a variable, struct field, or vector element —
 So a `&` parameter is called by passing the variable directly (`f(x)`), and a `&` local is bound
 with `a = &b` or `a: &T = b`. A `&` reference cannot outlive its source.
 
-> **Status (2026-06, @PLN87):** scalar local references (`a = &b` and `a: &T = b`) are live read- and
-> write-through on both backends; the addressable-operand check and the general-operator ban (`&` only
-> as a binding RHS; `&`-params called without `&`) are in place. Remaining: references to a struct
-> field or vector element, and heap whole-value references — see
-> [plans/87-reference-default-binding.md](plans/87-reference-default-binding.md). Heap references
-> (struct/vector) already share by pointer (field/element mutation propagates).
+> **Status (2026-06, @PLN87):** scalar references that are live read- and write-through on both
+> backends: a local (`a = &b`, `a: &T = b`) and a **vector element** (`c = &v[0]`). The
+> addressable-operand check and the general-operator ban (`&` only as a binding RHS; `&`-params
+> called without `&`) are in place. Remaining: references to a struct field, and heap whole-value
+> references — see [plans/87-reference-default-binding.md](plans/87-reference-default-binding.md).
+> Heap references (struct/vector) already share by pointer (field/element mutation propagates).
 
 ### Constants
 
