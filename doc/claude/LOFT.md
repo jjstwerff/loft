@@ -296,7 +296,12 @@ fn function_name(param: type, other: type = default_value) -> return_type {
 ```
 
 - `pub` prefix makes a definition publicly visible (applies to functions, structs, and enums).
-- Parameters with a `&` prefix are passed by mutable reference (in-out for any type).
+- Parameters with a `&` prefix are a **live reference** to the caller's argument (in-out for any
+  type): reads see the caller's current value, writes write the caller, field/element mutation
+  mutates the caller. **Call WITHOUT `&` at the call site** — the reference comes from the
+  parameter's TYPE, not a call-site operator: `fn inc(n: &integer){ n = n + 1 }` is called `inc(x)`,
+  not `inc(&x)`. (See § References (`&`) for the full model; `&` is a binding marker, not a general
+  operator.)
   - **Enforced**: a `&` parameter that is never mutated (directly or transitively through a called function) is a **compile error**. Drop the `&` if the parameter is read-only.
 - Parameters with `const` prevent mutation of that parameter inside the function body.
   - `const` is a compile-time check: any assignment to a `const` parameter is an **error**.
@@ -311,6 +316,44 @@ External (Rust-implemented) functions are declared without a body, followed by `
 pub fn starts_with(self: text, value: text) -> boolean;
 #rust "@self.starts_with(@value)"
 ```
+
+### References (`&`)
+
+A `&`-typed binding is a **live reference** to its source, not a copy. Every operation goes through
+it to the source: a read sees the source's current value, a write writes the source, and a
+field/element mutation mutates the source.
+
+```
+a = 3
+b = &a        // b references a
+b = 4         // writes a  →  a == 4
+a = 9         // b sees a's value  →  b == 9
+```
+
+`&` is **not a general operator** — it appears only in a reference-*binding* position, and its
+operand must be **addressable** (a variable, struct field, or vector element — never a temporary):
+
+| Form | Allowed? | Meaning |
+|---|---|---|
+| `a = &b` | ✅ | `&b` as the whole assignment RHS — bind a reference to `b`. |
+| `a: &T = b` | ✅ | the declared type says reference; `b` is the referent. |
+| `a = &(1 + 2)`, `a = &f()` | ❌ error | operand is a temporary, not addressable. |
+| `f(&x)`, `&x + 1`, `[&a]` | ❌ error | `&` used as a general operator / sub-expression. |
+| `f(x)` where the param is `&T` | ✅ | the reference comes from the parameter's TYPE — call without `&`. |
+| `&a = 4` (`&` on the assignment TARGET) | ❌ error | `&` is a bind-site marker, not an lvalue. |
+
+So a `&` parameter is called by passing the variable directly (`f(x)`), and a `&` local is bound
+with `a = &b` or `a: &T = b`. A `&` reference cannot outlive its source.
+
+> **Status (2026-06, @PLN87):** every `&`-reference is live read- and write-through on both backends —
+> a scalar local (`a = &b`, `a: &T = b`), a **struct field** (`b = &s.x`), a **vector element**
+> (`c = &v[0]`), a **heap whole-value** (`p = &o`, aliases the struct — `p = o` without `&` still
+> copies), and a `&` **function parameter** (`fn f(b: &integer)`, called `f(a)`). The addressable-operand
+> check and the general-operator ban (`&` only as a binding RHS; `&`-params called without `&`) are in
+> place. The edges are characterized too: a reference-to-reference works; a reference can't escape its
+> source (no `&T` return type, no `&` in a collection literal, no `&T` struct field). The ladder is
+> complete — see [plans/87-reference-default-binding.md](plans/87-reference-default-binding.md). The one
+> deferral is full borrow checking (the formal spec's `ownership.md`).
 
 ### Constants
 

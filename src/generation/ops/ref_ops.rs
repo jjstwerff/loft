@@ -208,6 +208,42 @@ impl OpEmitter for OpFreeRefIfDistinctEmitter {
     }
 }
 
+/// @PLN87 P2.1 — `OpInitRefSentinel(slot)` sets the slot to the null sentinel
+/// (`DbRef::NULL`, `store_nr == u16::MAX`) WITHOUT freeing its prior contents, so
+/// a following `OpDatabase` allocates a FRESH store instead of clearing+reusing
+/// the current one (`OpDatabase` reuses iff `store_nr != u16::MAX`).  This is the
+/// native twin of the interpreter `OpInitRefSentinel` opcode (`state/io.rs`); it
+/// is interp-only otherwise, so it had no native emitter before.  `args`: `[slot]`.
+pub struct OpInitRefSentinelEmitter;
+
+impl OpEmitter for OpInitRefSentinelEmitter {
+    fn emit(&self, ctx: &mut EmitCtx<'_, '_>, args: &[Value]) -> io::Result<()> {
+        if let [slot] = args {
+            ctx.emit(slot)?;
+            write!(ctx.w, " = DbRef::NULL")?;
+        }
+        Ok(())
+    }
+}
+
+/// @PLN87 P2.1 — `OpPutRef(slot, value)` writes a DbRef into `slot` WITHOUT
+/// freeing the slot's prior contents — a raw pointer copy (alias).  Used to
+/// stash a rebindable heap param's caller-supplied DbRef into its `__orig`
+/// witness at function entry.  Native twin of the interpreter `OpPutRef` opcode;
+/// interp-only otherwise.  `args`: `[slot, value]`.
+pub struct OpPutRefEmitter;
+
+impl OpEmitter for OpPutRefEmitter {
+    fn emit(&self, ctx: &mut EmitCtx<'_, '_>, args: &[Value]) -> io::Result<()> {
+        if let [slot, value] = args {
+            ctx.emit(slot)?;
+            write!(ctx.w, " = ")?;
+            ctx.emit(value)?;
+        }
+        Ok(())
+    }
+}
+
 /// `OpCopyRecord` — deep copy (`copy_block` + `copy_claims`).
 /// `args`: `[src, dst, tp]` → `OpCopyRecord(cell, <src>, <dst>, <tp>_i32)`.
 pub struct OpCopyRecordEmitter;

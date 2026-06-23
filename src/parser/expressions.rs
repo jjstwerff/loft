@@ -418,6 +418,29 @@ impl Parser {
         }
         if let Value::Block(bl) = &mut v {
             let ls = &mut bl.operators;
+            // @PLN87 P2.1 — stash each rebindable heap param's caller-supplied
+            // DbRef into its witness at function entry, as two ordered ops:
+            //   Set(__orig, Null)  — first-def for slot assignment; the witness
+            //                        is inline_ref so this lowers to a
+            //                        non-allocating `OpInitRefSentinel`, NOT the
+            //                        store-allocating `OpInitRef` (whose store the
+            //                        stash would then orphan — a leak).
+            //   OpPutRef(__orig, param) — a RAW DbRef copy (same store_nr as
+            //                        param), NOT `Set(__orig, param)` which would
+            //                        DEEP-COPY param into a fresh store and defeat
+            //                        the distinctness check.
+            // It snapshots param's ENTRY store; later rebinds change param's slot
+            // but not the witness, so the function-exit `OpFreeRefIfDistinct`
+            // (emitted by `scopes::check`) frees a rebound store and never the
+            // caller's original.  Inserted before the null-init loops, so a `Set`
+            // first-def is present for the inline_ref preamble to anchor on.
+            for (param, orig) in self.vars.rebind_params() {
+                ls.insert(
+                    0,
+                    self.cl("OpPutRef", &[Value::Var(orig), Value::Var(param)]),
+                );
+                ls.insert(0, v_set(orig, Value::Null));
+            }
             for wt in self.vars.work_texts() {
                 ls.insert(0, v_set(wt, Value::Text(String::new())));
             }
@@ -1089,10 +1112,132 @@ use a separate collection or add after the loop"
         // the symmetry of `f += s.field` (which already takes the field's
         // declared width).  Restored to Unknown after the RHS parse so
         // it doesn't leak into unrelated sub-expressions.
+        // @PLN87 P2.4 — a `v = [..]` whole-binding REPLACE on a visible vector
+        // PARAM rebinds LOCALLY.  Detect it BEFORE the RHS parse — the literal
+        // materialises in parse_vector, which never reaches this fn's tail — by
+        // peeking for the `[`: mark the param as a rebind so the RHS parse's
+        // `vector_db` hands it a FRESH backing (instead of appending to the
+        // caller's store), and the witness frees that backing at exit (the P2.1
+        // rebind infra).  `+=` (op != "="), and `v = v + [..]` / `v = other` (RHS
+        // is not a bare literal), keep the caller backing.  A `&`/RefVar vector
+        // param is handled earlier by `assign_refvar_vector`.
+        if !self.first_pass
+            && op == "="
+            && var_nr != u16::MAX
+            && matches!(f_type, Type::Vector(_, _))
+            && self.vars.is_argument(var_nr)
+            && !self.vars.is_compiler_generated(var_nr)
+            && !self.is_hidden_param(var_nr)
+            && self.lexer.peek_token("[")
+        {
+            self.ensure_rebind_witness(var_nr);
+        }
+        // @PLN87 P2.4 — `v = [..]` whole-binding REPLACE on a `&`-vector param
+        // WRITES BACK to the caller.  A `&`-vector ref shares the caller's backing
+        // in place (it cannot repoint at a fresh store), so the write-back is a
+        // CLEAR + refill of that backing: prepend `OpClearVector(v)` so the
+        // literal — which appends to v's (the caller's) store — yields a replace,
+        // not a grow.  `+=` keeps the grow (handled by `assign_refvar_vector` /
+        // the parse_block expansion).  Detected by peeking the leading `[`.
+        let amp_vector_replace = !self.first_pass
+            && op == "="
+            && var_nr != u16::MAX
+            && matches!(f_type, Type::RefVar(inner) if matches!(**inner, Type::Vector(_, _)))
+            && self.vars.is_argument(var_nr)
+            && self.lexer.peek_token("[");
         let prev_read_target = std::mem::replace(&mut self.read_target_type, f_type.clone());
         let rhs_pos = self.lexer.peek_pos().clone();
         let mut s_type = self.parse_operators(f_type, code, &mut parent_tp, 0);
         self.read_target_type = prev_read_target;
+        // @PLN87 L1 / #2 — a local `&`-binding to a SCALAR lvalue (`b = &a` or
+        // `b: &integer = a`) makes `b` a LIVE reference to the source's stack slot:
+        // lower it to `b: &T = OpCreateStack(a)` — the SAME stack-ref mechanism a `&T`
+        // parameter uses, so reading (L1) and writing (L2) `b` deref to `a`'s slot.
+        // `amp_pending` is set by the prefix `&` (`b = &a`) OR the typed-annotation
+        // `&` (`b: &integer = a`); we gate on the SOURCE var's actual type (`s_type`
+        // is coerced to the RefVar target in the annotated form).  A non-scalar source
+        // keeps the single-indirect view from P1; a non-`Var` source is a later rung.
+        if op == "=" && self.amp_pending {
+            let is_scalar = |t: &Type| {
+                matches!(
+                    t,
+                    Type::Integer(..)
+                        | Type::Float
+                        | Type::Single
+                        | Type::Boolean
+                        | Type::Character
+                )
+            };
+            // L1 / #2 — a scalar stack LOCAL source (`b = &a` / `b: &T = a`).
+            // L5 — a HEAP whole-value source (`p = &o`, `o: Reference`): a NON-OWNING
+            // alias of the source's record.  A heap local COPIES on `p = o` (value type),
+            // so the `&` makes `p` share `o` instead.  Both lower to `OpCreateStack(src)`
+            // — a reference to `src`'s slot, the SAME stack-ref a `&T` PARAMETER uses
+            // (interp: `GetStackRef` deref; native: the record DbRef by value, the #257
+            // alias shape).  A heap source additionally marks `p` non-owning (skip_free):
+            // `o` frees the record, not the alias.
+            let stack_src = match *code.unspan() {
+                Value::Var(src)
+                    if is_scalar(self.vars.tp(src))
+                        || matches!(self.vars.tp(src), Type::Reference(..)) =>
+                {
+                    Some(src)
+                }
+                _ => None,
+            };
+            // L3 / L4 — a scalar HEAP-place source: a vector ELEMENT (`c = &v[0]`) or a
+            // struct FIELD (`r = &s.x`).  Both lower to a scalar value-read
+            // `OpGet*(<base>, fld)`; the place's DbRef is:
+            //   element — the inner `OpGetVector`/`OpVectorRef` accessor itself
+            //             (`OpGet*(OpGetVector(v,..), 0)` → strip to the inner)
+            //   field   — `OpGetField(<base>, fld)`, the record at the field's offset.
+            // Bind `c`/`r` to that ref; reads/writes deref it the same as L1/L4.
+            let heap_ref = if stack_src.is_none() && is_scalar(&s_type) {
+                match code.unspan() {
+                    Value::Call(g, gargs) if self.data.def(*g).name().starts_with("OpGet") => {
+                        if gargs.first().is_some_and(|a| {
+                            matches!(a.unspan(), Value::Call(d, _)
+                                if matches!(self.data.def(*d).name(), "OpGetVector" | "OpVectorRef"))
+                        }) {
+                            Some(gargs[0].clone())
+                        } else if let [base, fld] = gargs.as_slice() {
+                            Some(self.cl("OpGetField", &[base.clone(), fld.clone()]))
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            if let Some(src) = stack_src {
+                let inner = self.vars.tp(src).clone();
+                let is_ref = matches!(inner, Type::Reference(..));
+                *code = self.cl("OpCreateStack", &[Value::Var(src)]);
+                s_type = Type::RefVar(Box::new(inner));
+                // L5 — a heap whole-value alias is NON-OWNING: the source frees the record.
+                if is_ref && var_nr != u16::MAX {
+                    self.vars.set_skip_free(var_nr);
+                }
+            } else if let Some(eref) = heap_ref {
+                // `c`/`r` holds the field/element DbRef; interp reads/writes it via the
+                // uniform RefVar deref (`OpGet*/OpSet*(c,0)`), and native keys its
+                // pointer construction off this `OpGetField`/`OpGetVector` value — so no
+                // per-variable flag is needed and the link survives an IR snapshot.
+                *code = eref;
+                s_type = Type::RefVar(Box::new(s_type));
+            }
+        }
+        // `amp_pending` is a one-shot per binding — clear it here so a `&` that did
+        // NOT take the scalar-reference path (a heap `&`-view, a non-`Var` source, an
+        // already-reported error) cannot leak the flag into the NEXT statement and
+        // wrongly turn `y = scalarvar` into a reference.
+        self.amp_pending = false;
+        if amp_vector_replace {
+            let clear = self.cl("OpClearVector", &[Value::Var(var_nr)]);
+            *code = Value::Insert(vec![clear, code.clone()]);
+        }
         // @P376 — POISON an errored whole-RHS that resolves to `Unknown` (pass 2)
         // so the assigned variable doesn't cascade.  In the final pass an Unknown
         // whole-RHS is always an unresolved-name error — an undefined variable
@@ -2259,6 +2404,10 @@ use a separate collection or add after the loop"
         {
             let lnk = self.lexer.link();
             self.lexer.cont(); // consume ":"
+            // @PLN87 #2 — a `&` in the declared type (`b: &T = src`) makes `b` a
+            // reference to the addressable `src` — the same as `b = &src`, just with
+            // the `&` on the type instead of the value.  Mirror the param parser.
+            let is_ref = self.lexer.has_token("&");
             let mut got_annotation = false;
             if let Some(tp) = self.parse_type_full(u32::MAX, false)
                 && self.lexer.peek_token("=")
@@ -2267,9 +2416,21 @@ use a separate collection or add after the loop"
                 // vector-type-resolution chokepoint (definitions.rs `sub_type`
                 // `vector` arm), so a `vector<S>` annotation already arrives
                 // rewritten; no per-site hook here.
+                let tp = if is_ref {
+                    Type::RefVar(Box::new(tp))
+                } else {
+                    tp
+                };
                 self.change_var_type(*v_nr, &tp);
                 f_type = tp;
                 got_annotation = true;
+                // @PLN87 #2 — `b: &T = src` IS `b = &src`: flag the reference bind so
+                // the scalar-reference lowering (the `amp_pending` path in
+                // `parse_assign_op`) fires.  A later non-annotated `b = x` carries no
+                // flag, so it correctly writes THROUGH the reference instead.
+                if is_ref {
+                    self.amp_pending = true;
+                }
             }
             if !got_annotation {
                 self.lexer.revert(lnk);

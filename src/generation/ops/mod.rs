@@ -208,6 +208,13 @@ fn build_registry() -> std::collections::HashMap<&'static str, Box<dyn OpEmitter
     // only under the gate), so registering them is inert otherwise.
     r.insert("OpStoreTag", Box::new(ref_ops::OpStoreTagEmitter));
     r.insert("OpFreeRefTag", Box::new(ref_ops::OpFreeRefTagEmitter));
+    // @PLN87 P2.1 — native twins for the param-rebind sequence (interp-only
+    // opcodes otherwise): sentinel-null a slot and raw-copy a DbRef.
+    r.insert(
+        "OpInitRefSentinel",
+        Box::new(ref_ops::OpInitRefSentinelEmitter),
+    );
+    r.insert("OpPutRef", Box::new(ref_ops::OpPutRefEmitter));
     r.insert("OpCopyRecord", Box::new(ref_ops::OpCopyRecordEmitter));
     r.insert("OpSizeofRef", Box::new(ref_ops::OpSizeofRefEmitter));
 

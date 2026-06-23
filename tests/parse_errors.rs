@@ -1518,3 +1518,70 @@ fn p376_undefined_var_in_format_no_cascade() {
     code!("fn test() { print(\"{zzz}\"); }")
         .error("Unknown variable 'zzz' at p376_undefined_var_in_format_no_cascade:1:21");
 }
+
+// @PLN87 — `&` is a BIND-SITE link marker ("link this binding instead of copying
+// it"), not an assignment target.  `&var = …` / `&o.f = …` is invalid; a linked
+// binding is reassigned with a plain `var = …` (no `&`), and a valid RHS link
+// (`c = &v[0]`) is unaffected.
+#[test]
+fn pln87_amp_on_assignment_target_is_error() {
+    code!("fn test() { x = 5; print(\"{x}\\n\"); &x = 3; print(\"{x}\\n\"); }")
+        .error("`&` cannot appear on the left of an assignment — it marks a binding as a link to its source at the binding site (`x = &src`), not an assignment target; drop the `&` (the binding is already linked) at pln87_amp_on_assignment_target_is_error:1:40");
+}
+
+#[test]
+fn pln87_amp_on_field_target_is_error() {
+    code!("struct O { y: integer } fn test() { o = O { y: 1 }; print(\"{o.y}\\n\"); &o.y = 3; }")
+        .error("`&` cannot appear on the left of an assignment — it marks a binding as a link to its source at the binding site (`x = &src`), not an assignment target; drop the `&` (the binding is already linked) at pln87_amp_on_field_target_is_error:1:77");
+}
+
+#[test]
+fn pln87_amp_on_compound_assign_target_is_error() {
+    code!("fn test() { x = 5; print(\"{x}\\n\"); &x += 3; print(\"{x}\\n\"); }")
+        .error("`&` cannot appear on the left of an assignment — it marks a binding as a link to its source at the binding site (`x = &src`), not an assignment target; drop the `&` (the binding is already linked) at pln87_amp_on_compound_assign_target_is_error:1:41");
+}
+
+// @PLN87 #1 — `&`'s operand must be a PLACE (variable / struct field / vector element),
+// never a temporary (literal, computed value, or call result).
+#[test]
+fn pln87_amp_on_temporary_paren_is_error() {
+    code!("fn test() { b = &(1 + 2); print(\"{b}\\n\"); }")
+        .error("`&` requires an addressable operand — a variable, struct field, or vector element — not a temporary (a literal, computed value, or call result) at pln87_amp_on_temporary_paren_is_error:1:26");
+}
+
+#[test]
+fn pln87_amp_on_call_result_is_error() {
+    code!("fn mk() -> integer { 5 } fn test() { b = &mk(); print(\"{b}\\n\"); }")
+        .error("`&` requires an addressable operand — a variable, struct field, or vector element — not a temporary (a literal, computed value, or call result) at pln87_amp_on_call_result_is_error:1:48");
+}
+
+#[test]
+fn pln87_amp_on_literal_is_error() {
+    code!("fn test() { b = &123; print(\"{b}\\n\"); }")
+        .error("`&` requires an addressable operand — a variable, struct field, or vector element — not a temporary (a literal, computed value, or call result) at pln87_amp_on_literal_is_error:1:22");
+}
+
+// @PLN87 — `&` is NOT a general operator: valid only as the whole RHS of a binding
+// (`a = &b`).  As a call argument or a sub-expression it is an error — a `&` parameter
+// is called WITHOUT `&` (the reference comes from the parameter's type).
+#[test]
+fn pln87_amp_as_call_arg_is_error() {
+    code!("fn f(o: &integer) { o = o + 1; } fn test() { x = 5; f(&x); print(\"{x}\\n\"); }")
+        .error("`&` is not a general operator — it binds a reference only as the whole right-hand side of an assignment (`a = &b`). Pass a `&` parameter WITHOUT `&` (`f(x)`, the reference comes from the parameter type); do not use `&` in an argument or sub-expression at pln87_amp_as_call_arg_is_error:1:58");
+}
+
+#[test]
+fn pln87_amp_in_subexpr_is_error() {
+    code!("fn test() { a = 5; b = &a + 1; print(\"{b}\\n\"); }")
+        .error("`&` is not a general operator — it binds a reference only as the whole right-hand side of an assignment (`a = &b`). Pass a `&` parameter WITHOUT `&` (`f(x)`, the reference comes from the parameter type); do not use `&` in an argument or sub-expression at pln87_amp_in_subexpr_is_error:1:28");
+}
+
+// @PLN87 L7 — a reference cannot be smuggled into a data-structure literal: a `&` in a
+// collection element hits the general-operator ban, keeping references from outliving
+// their source.  (A `&T` struct-FIELD type is likewise rejected — "Attribute … needs
+// type or definition" — so a reference cannot be stored in a heap record either.)
+#[test]
+fn pln87_l7_ref_in_vector_literal_is_error() {
+    code!("fn test() { a = 3; v = [&a]; print(\"{v[0]}\\n\"); }")
+        .error("`&` is not a general operator — it binds a reference only as the whole right-hand side of an assignment (`a = &b`). Pass a `&` parameter WITHOUT `&` (`f(x)`, the reference comes from the parameter type); do not use `&` in an argument or sub-expression at pln87_l7_ref_in_vector_literal_is_error:1:28");
+}

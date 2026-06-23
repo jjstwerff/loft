@@ -15338,3 +15338,217 @@ fn run() -> integer { nested(\"n\").v + nested(\"x\").v }"
     .expr("run()")
     .result(Value::Int(94007 + 94100));
 }
+
+// ── @PLN87 P2 reassignment-locality / write-back CONSISTENCY lock-ins ─────────
+// The uniform model (mirrors tests/scripts/87-p2-reassign-locality.loft, which
+// holds the GREEN cells): a non-`&` whole-binding reassignment of a heap param
+// is LOCAL; a `&` reassignment writes BACK; field/element mutation propagates.
+// Struct + scalar cells already pass (P2.1).  These pin the still-inconsistent
+// VECTOR cells to their target consistent behaviour; un-ignore each when it lands.
+
+// Vector non-`&` reassignment REBINDS locally (leaves the caller untouched),
+// like the struct case — fixed by P2.4 (vector_db hands a rebind param a fresh
+// `__vdb` backing; the witness frees it at exit).
+#[test]
+fn pln87_vector_param_reassign_is_local() {
+    code!(
+        "fn vrebind(v: vector<integer>) { v = [7, 8, 9]; }
+fn check() -> integer { a = [1, 2, 3]; vrebind(a); len(a) }"
+    )
+    .expr("check()")
+    .result(Value::Int(3));
+}
+
+// Vector `&` reassignment WRITES BACK (caller sees the new vector), like the
+// struct `&` case — fixed by P2.4 (a `&`-vector shares the caller's backing, so
+// the write-back is a clear+refill in place: `OpClearVector` before the literal).
+#[test]
+fn pln87_vector_param_amp_writes_back() {
+    code!(
+        "fn vamp(v: &vector<integer>) { v = [7, 8, 9]; }
+fn check() -> integer { a = [1, 2, 3]; vamp(a); a[0] }"
+    )
+    .expr("check()")
+    .result(Value::Int(7));
+}
+
+/// @PLN87 #1 — DEFERRED: full `&` write-back support for a CALL/VAR RHS (`o = mk()`,
+/// `o = src`).  Today these are rejected at parse time (see parse_errors
+/// `pln87_amp_writeback_*_rejected`) because the ownership-transfer machinery only
+/// handles an owned LITERAL (`o = Obj{..}`).  When the transfer is generalised to
+/// call/var RHS this lock-in flips to PASS: the write-back must reach the caller.
+#[test]
+#[ignore = "@PLN87 #1 — & write-back from call/var is rejected pending ownership-transfer support; un-ignore when parse_assign_op routes a call/var RHS through a transferable owned temp"]
+fn pln87_amp_writeback_from_call_writes_back() {
+    code!("struct Obj { x: integer } fn mk() -> Obj { Obj { x: 9 } } fn f(o: &Obj) { o = mk(); } fn check() -> integer { a = Obj { x: 1 }; f(a); a.x }")
+        .expr("check()")
+        .result(Value::Int(9));
+}
+
+/// @PLN87 — the `&var = 3` rejection must NOT over-fire on a valid RHS link:
+/// `c = &v[0]` LINKS `c` to the element (bind-site `&`), and reading `c` sees the
+/// linked value. (The `&` is on the RHS, followed by `;`, not an assignment `=`.)
+#[test]
+fn pln87_amp_rhs_link_is_not_rejected() {
+    code!("fn check() -> integer { v = [10, 20]; c = &v[0]; c }")
+        .expr("check()")
+        .result(Value::Int(10));
+}
+
+// @PLN87 — the LINK-semantics ladder (corrected `&` model: `&` LINKS a binding to
+// its source, read- and write-through).  Each rung is an ignored lock-in that flips
+// to PASS when that rung lands.  North star: `a=3; b=&a; b=4; a == 4`.
+
+/// L1 — scalar local, LIVE read: a link reflects the source's current value.
+#[test]
+fn pln87_link_l1_scalar_live_read() {
+    code!("fn check() -> integer { a = 3; b = &a; a = 5; b }")
+        .expr("check()")
+        .result(Value::Int(5));
+}
+
+/// L2 — scalar local, WRITE-THROUGH (the north star): writing the link writes the source.
+#[test]
+fn pln87_link_l2_scalar_write_through() {
+    code!("fn check() -> integer { a = 3; b = &a; b = 4; a }")
+        .expr("check()")
+        .result(Value::Int(4));
+}
+
+/// L3 — scalar struct-field link: `b = &s.x; b = 4` writes `s.x`.
+#[test]
+fn pln87_link_l3_field_write_through() {
+    code!("struct S { x: integer } fn check() -> integer { s = S { x: 3 }; b = &s.x; b = 4; s.x }")
+        .expr("check()")
+        .result(Value::Int(4));
+}
+
+/// L3 — the field link is LIVE in the read direction too, and works for a field at a
+/// NON-zero offset (`s.b`, offset 8) as well as offset 0.
+#[test]
+fn pln87_link_l3_field_live_read() {
+    code!(
+        "struct S { a: integer, b: integer } \
+         fn check() -> integer { s = S { a: 3, b: 7 }; r = &s.b; s.b = 5; r }"
+    )
+    .expr("check()")
+    .result(Value::Int(5));
+}
+
+/// L4 — scalar vector-element link: `c = &v[0]; c = 99` writes `v[0]`.
+#[test]
+fn pln87_link_l4_element_write_through() {
+    code!("fn check() -> integer { v = [10, 20]; c = &v[0]; c = 99; v[0] }")
+        .expr("check()")
+        .result(Value::Int(99));
+}
+
+/// L4 — the link is LIVE in the read direction too: `v[0]` updates show through `c`.
+#[test]
+fn pln87_link_l4_element_live_read() {
+    code!("fn check() -> integer { v = [10, 20]; c = &v[0]; v[0] = 5; c }")
+        .expr("check()")
+        .result(Value::Int(5));
+}
+
+/// L6 — link as a function parameter: `fn f(b: &integer){ b = 4 }; f(a)` writes `a`.
+/// The `&` parameter is called WITHOUT `&` (`f(a)`); the reference comes from the type.
+#[test]
+fn pln87_link_l6_param_write_through() {
+    code!("fn f(b: &integer) { b = 4 } fn check() -> integer { a = 3; f(a); a }")
+        .expr("check()")
+        .result(Value::Int(4));
+}
+
+/// L6 — a `&`-struct parameter links to the caller's struct: a field mutation through
+/// the parameter writes the caller's field.
+#[test]
+fn pln87_link_l6_struct_param_field_writes_back() {
+    code!(
+        "struct S { x: integer } fn g(obj: &S) { obj.x = 5; } \
+         fn check() -> integer { s = S { x: 1 }; g(s); s.x }"
+    )
+    .expr("check()")
+    .result(Value::Int(5));
+}
+
+/// L5 — heap whole-value reference: `p = &o` ALIASES the heap local (which COPIES on a
+/// plain `p = o`), so a field mutation through `p` writes `o`.  `p` reuses the #257
+/// alias representation (interp stack-ref / native DbRef-by-value), non-owning.
+#[test]
+fn pln87_link_l5_heap_whole_value_ref() {
+    code!("struct S { x: integer } fn check() -> integer { o = S { x: 1 }; p = &o; p.x = 5; o.x }")
+        .expr("check()")
+        .result(Value::Int(5));
+}
+
+/// L5 — the heap reference is LIVE in the read direction too: `o`'s field updates show
+/// through `p`; and `p = o` WITHOUT `&` still copies (the `&` is what makes it a link).
+#[test]
+fn pln87_link_l5_heap_reference_live_read() {
+    code!("struct S { x: integer } fn check() -> integer { o = S { x: 1 }; p = &o; o.x = 7; p.x }")
+        .expr("check()")
+        .result(Value::Int(7));
+}
+
+#[test]
+fn pln87_plain_heap_assign_still_copies() {
+    code!("struct S { x: integer } fn check() -> integer { o = S { x: 1 }; p = o; p.x = 5; o.x }")
+        .expr("check()")
+        .result(Value::Int(1));
+}
+
+/// @PLN87 #2 — a typed-local reference `b: &T = src` is the L1 form with the `&` on
+/// the TYPE (instead of `b = &src`): a live reference to the addressable scalar `src`,
+/// read- and write-through.
+#[test]
+fn pln87_typed_local_scalar_reference_live_read() {
+    code!("fn check() -> integer { a = 3; b: &integer = a; a = 5; b }")
+        .expr("check()")
+        .result(Value::Int(5));
+}
+
+#[test]
+fn pln87_typed_local_reference_write_through() {
+    code!("fn check() -> integer { c = 10; d: &integer = c; d = 4; c }")
+        .expr("check()")
+        .result(Value::Int(4));
+}
+
+// @PLN87 L7 — edges of the `&`-reference model.
+
+/// L7 — a reference to a reference (`c = &b`, both scalar): `c` links to the same source
+/// `b` does, so writing `c` writes the original and reads are live.
+#[test]
+fn pln87_l7_ref_to_ref_scalar() {
+    code!("fn check() -> integer { a = 3; b = &a; c = &b; c = 5; a }")
+        .expr("check()")
+        .result(Value::Int(5));
+}
+
+/// L7 — a reference to a struct reference (`q = &p`): a field mutation through `q`
+/// reaches the original struct.
+#[test]
+fn pln87_l7_ref_to_ref_struct() {
+    code!("struct S { x: integer } fn check() -> integer { o = S { x: 1 }; p = &o; q = &p; q.x = 7; o.x }")
+        .expr("check()")
+        .result(Value::Int(7));
+}
+
+/// L7 — a reference in an inner scope to an OUTER local (the source outlives the
+/// reference): write-through is safe.
+#[test]
+fn pln87_l7_inner_scope_reference_to_outer() {
+    code!("fn check() -> integer { a = 3; if true { b = &a; b = 5; } a }")
+        .expr("check()")
+        .result(Value::Int(5));
+}
+
+/// L7 — a heap reference stays LIVE across a whole-value reassignment of the source
+/// (`o = S{..}` reuses the record in place, so the alias sees the new field values).
+#[test]
+fn pln87_l7_heap_reference_live_across_reassign() {
+    code!("struct S { x: integer } fn check() -> integer { o = S { x: 1 }; p = &o; o = S { x: 9 }; p.x }")
+        .expr("check()")
+        .result(Value::Int(9));
+}

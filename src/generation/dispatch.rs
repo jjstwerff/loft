@@ -86,6 +86,24 @@ impl Output<'_> {
         {
             if to != &Value::Null {
                 let name = sanitize(variables.name(var));
+                // @PLN87 P2.2 — a `&`-param write-back of an OWNED construction
+                // (the RHS is the transferred skip_free temp) must FREE the
+                // DISPLACED caller store (`*var_o`) before installing the new
+                // value, else the old store orphans (the pre-P2.2 leak).  The
+                // native twin of the interp `OpGetStackRef`+`OpFreeRef` at the
+                // RefVar-set site (codegen.rs); `OpFreeRef` no-ops on the null
+                // sentinel.  Heap inner type only; a `RefVar(Text)` buffer has no
+                // such displaced store.
+                let src = to.result_var();
+                if src != u16::MAX
+                    && variables.is_skip_free(src)
+                    && matches!(
+                        **inner,
+                        Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+                    )
+                {
+                    write!(w, "OpFreeRef(cell, *var_{name}, \"var_{name}\"); ")?;
+                }
                 write!(w, "*var_{name} = ")?;
                 let needs_text_coerce = matches!(**inner, Type::Text(_));
                 if needs_text_coerce {
@@ -102,6 +120,116 @@ impl Output<'_> {
                 if needs_text_coerce {
                     write!(w, ").to_string()")?;
                 }
+            }
+            return Ok(());
+        }
+        // @PLN87 L1 — a local SCALAR `&`-link.  `b = &a` lowers to
+        // `b: &T = OpCreateStack(a)`; native represents it as a Rust mutable borrow
+        // (`&mut i64`), so reads/writes of `b` deref to `a`'s slot (the same shape a
+        // `&integer` PARAMETER already uses).  First-Set (the `OpCreateStack` value)
+        // (re)binds the reference to the source local; any other value is a
+        // write-THROUGH (`*var_b = …`).
+        if !variables.is_argument(var)
+            && let Type::RefVar(inner) = variables.tp(var)
+            && matches!(
+                **inner,
+                Type::Integer(..) | Type::Float | Type::Single | Type::Boolean | Type::Character
+            )
+        {
+            let name = sanitize(variables.name(var));
+            // A RAW pointer (`*mut T`), not `&mut T`: the source local stays usable
+            // and assignable while the link is alive (loft allows the aliasing that
+            // Rust's borrow checker forbids), matching the interpreter and loft's
+            // internal unchecked-aliasing model.  Scalars don't move, so the pointer
+            // stays valid for the source's scope.
+            let base = rust_type(inner, &Context::Variable);
+            // Dispatch on the construction VALUE, which is in the IR (so it survives a
+            // snapshot round-trip) — no per-variable flag needed: an `OpGetField` value
+            // is an L3 struct-field link, `OpGetVector`/`OpVectorRef` an L4 element link,
+            // `OpCreateStack` an L1 local link, anything else a write-through.  All share
+            // the `*mut T` representation; only the construction differs.
+            if let Value::Call(d_nr, _) = to.unspan()
+                && matches!(
+                    self.data.def(*d_nr).name(),
+                    "OpGetField" | "OpGetVector" | "OpVectorRef"
+                )
+            {
+                // @PLN87 L3/L4 — a heap field (`r = &s.x`) / element (`c = &v[0]`)
+                // `&`-ref.  `r`/`c` is the SAME `*mut T` shape as L1, so reads/writes
+                // (`*var`) stay uniform; only construction differs — the value yields the
+                // place's DbRef (`OpGetField` → record+offset; `OpGetVector` → the inline
+                // element location), and we take a `*mut` into that store slot.  Aliases
+                // unchecked like L1; a realloc / move of the backing staleness-invalidates
+                // it, the same as the interpreter's DbRef.
+                if self.declared.contains(&var) {
+                    write!(w, "var_{name} = ")?;
+                } else {
+                    self.declared.insert(var);
+                    write!(w, "let mut var_{name}: *mut {base} = ")?;
+                }
+                write!(w, "unsafe {{ let __ed = ")?;
+                self.output_code_inner(w, to)?;
+                write!(
+                    w,
+                    "; stores.store_mut(&__ed).addr_mut::<{base}>(__ed.rec, __ed.pos) \
+                     as *mut {base} }}"
+                )?;
+            } else if let Value::Call(d_nr, cargs) = to.unspan()
+                && self.data.def(*d_nr).name() == "OpCreateStack"
+                && let [src_arg] = cargs.as_slice()
+                && let Value::Var(src) = src_arg.unspan()
+            {
+                let src_name = sanitize(variables.name(*src));
+                if self.declared.contains(&var) {
+                    write!(w, "var_{name} = std::ptr::addr_of_mut!(var_{src_name})")?;
+                } else {
+                    self.declared.insert(var);
+                    write!(
+                        w,
+                        "let mut var_{name}: *mut {base} = std::ptr::addr_of_mut!(var_{src_name})"
+                    )?;
+                }
+            } else if let Value::Var(src) = to.unspan()
+                && matches!(variables.tp(*src), Type::RefVar(_))
+            {
+                // @PLN87 L7 — ref-to-ref (`c = &b`, `b` a scalar reference): `c` copies
+                // `b`'s pointer, referencing the same source `b` does (the scalar analogue
+                // of the struct ref-to-ref the #257 alias already handles).
+                let src_name = sanitize(variables.name(*src));
+                if self.declared.contains(&var) {
+                    write!(w, "var_{name} = var_{src_name}")?;
+                } else {
+                    self.declared.insert(var);
+                    write!(w, "let mut var_{name}: *mut {base} = var_{src_name}")?;
+                }
+            } else {
+                // write-THROUGH to the linked source
+                write!(w, "unsafe {{ *var_{name} = ")?;
+                self.output_code_inner(w, to)?;
+                write!(w, " }}")?;
+            }
+            return Ok(());
+        }
+        // @PLN87 L5 — a heap whole-value reference (`p = &o`): `OpCreateStack(o)` with a
+        // Reference referent.  The interp form is a stack-ref to `o`'s slot; native aliases
+        // the record BY VALUE (the #257 alias shape, read via the record DbRef) — store
+        // `o`'s DbRef.  `p` is non-owning (skip_free at the bind site); a realloc/rebind of
+        // `o` is the same L7 edge the #257 alias has.
+        if !variables.is_argument(var)
+            && let Type::RefVar(inner) = variables.tp(var)
+            && matches!(**inner, Type::Reference(..))
+            && let Value::Call(d_nr, cargs) = to.unspan()
+            && self.data.def(*d_nr).name() == "OpCreateStack"
+            && let [src_arg] = cargs.as_slice()
+            && let Value::Var(src) = src_arg.unspan()
+        {
+            let name = sanitize(variables.name(var));
+            let src_name = sanitize(variables.name(*src));
+            if self.declared.contains(&var) {
+                write!(w, "var_{name} = var_{src_name}")?;
+            } else {
+                self.declared.insert(var);
+                write!(w, "let mut var_{name}: DbRef = var_{src_name}")?;
             }
             return Ok(());
         }

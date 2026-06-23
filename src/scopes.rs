@@ -1929,6 +1929,27 @@ impl Scopes {
                 }
             }
         }
+        // @PLN87 P2.1 — function exit (`to_scope == 1` is the body scope; every
+        // `return` and the tail both free up to it).  For each rebindable heap
+        // param, free its CURRENT store iff it differs from the caller-supplied
+        // original (witness) captured at entry: a wholesale-reassigned param
+        // points at a callee-owned FRESH store (freed here), while an
+        // un-reassigned or field-only-mutated param still equals its witness
+        // (`OpFreeRefIfDistinct` no-ops, the caller owns + frees it).  The
+        // runtime distinctness check makes this sound across conditional and
+        // repeated rebinds.  Arguments are deliberately excluded from the normal
+        // `variables()` sweep ("never return function arguments"), so this is the
+        // sole site that frees a rebound param.  Loop scopes / nested blocks use
+        // `to_scope >= 2`, so a `break`/`continue`/block-exit never fires this.
+        if to_scope == 1 {
+            let free_distinct = data.def_nr("OpFreeRefIfDistinct");
+            for (param, orig) in function.rebind_params() {
+                ls.push(Value::Call(
+                    free_distinct,
+                    vec![Value::Var(param), Value::Var(orig)],
+                ));
+            }
+        }
         ls
     }
 

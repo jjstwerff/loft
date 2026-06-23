@@ -895,6 +895,31 @@ impl Value {
             _ => None,
         }
     }
+
+    /// @PLN87 P2.2 — the terminal/result variable of a value expression: a bare
+    /// `Var`, the target of a tail `Set`, or the last non-`Line` operator of a
+    /// `Block`/`Insert` (recursively, unspanning at each level).  Used to
+    /// recognise a TRANSFERRED construction temp — `o = Obj{..}` lowers to a
+    /// `Block` whose result is the owned `__ref_N` — at the RefVar-set site.
+    /// `u16::MAX` when there is no single terminal var (the SAFE default: the
+    /// caller then skips the displaced-free, never frees the wrong store).
+    #[must_use]
+    pub fn result_var(&self) -> u16 {
+        let last_non_line = |ops: &[Value]| -> u16 {
+            ops.iter()
+                .rev()
+                .find(|o| !matches!(o.unspan(), Value::Line(_)))
+                .map_or(u16::MAX, Value::result_var)
+        };
+        match self.unspan() {
+            Value::Var(v) => *v,
+            Value::Set(v, _) => *v,
+            Value::Block(bl) => last_non_line(&bl.operators),
+            Value::Insert(ops) => last_non_line(ops),
+            Value::Return(inner) | Value::Drop(inner) => inner.result_var(),
+            _ => u16::MAX,
+        }
+    }
 }
 
 #[must_use]

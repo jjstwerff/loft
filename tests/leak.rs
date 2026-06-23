@@ -1505,3 +1505,98 @@ pub fn test() {
         "nullable-return caller bindings leaked: {leaks:?}"
     );
 }
+
+// @PLN87 P2.2 — a `&` whole-binding write-back (`o = Obj{..}` on a `&Obj` param)
+// frees the DISPLACED caller store as it installs the new value: the RefVar-set
+// lowering reads the old store live through `o` and frees it, and the
+// transferred construction temp is skip_free.  Fixed by P2.2 — was: `SetStackRef`
+// overwrote the caller's slot without freeing the old store, orphaning 1 Obj.
+#[test]
+fn pln87_struct_amp_writeback_is_leak_free() {
+    let leaks = leaks_for(
+        r#"
+struct Obj { x: integer }
+fn oamp(o: &Obj) { o = Obj { x: 9 }; }
+pub fn test() {
+  g = Obj { x: 1 };
+  oamp(g);
+  assert(g.x == 9, "& write-back is visible to the caller");
+}
+"#,
+    );
+    assert!(
+        leaks.is_empty(),
+        "& write-back leaked the displaced store: {leaks:?}"
+    );
+}
+
+// @PLN87 P2.4 — the vector-param rebind allocates a fresh `__vdb` backing and
+// frees it via the witness `OpFreeRefIfDistinct` at exit; a REPEAT rebind pre-frees
+// the prior backing (vector_db), else it orphans it.  These guard each cell against
+// a backing leak (the harness's cloned-DB leak check catches what the binary misses).
+#[test]
+fn pln87_vector_rebind_no_leak() {
+    let l =
+        leaks_for("fn vr(v: vector<integer>){ v = [7,8,9]; } pub fn test(){ a=[1,2,3]; vr(a); }");
+    assert!(l.is_empty(), "vector rebind leaked: {l:?}");
+}
+#[test]
+fn pln87_vector_repeated_rebind_no_leak() {
+    let l = leaks_for(
+        "fn vm(v: vector<integer>){ v = [2]; v = [3,4]; } pub fn test(){ a=[1,2,3]; vm(a); }",
+    );
+    assert!(
+        l.is_empty(),
+        "vector repeated rebind leaked the prior backing: {l:?}"
+    );
+}
+#[test]
+fn pln87_vector_conditional_rebind_no_leak() {
+    let l = leaks_for(
+        "fn vc(v: vector<integer>, c: boolean){ if c { v = [9]; } } pub fn test(){ a=[1,2,3]; vc(a, true); }",
+    );
+    assert!(l.is_empty(), "vector conditional rebind leaked: {l:?}");
+}
+#[test]
+fn pln87_vector_amp_writeback_no_leak() {
+    let l =
+        leaks_for("fn va(v: &vector<integer>){ v = [7,8,9]; } pub fn test(){ a=[1,2,3]; va(a); }");
+    assert!(l.is_empty(), "vector & write-back leaked: {l:?}");
+}
+
+/// @PLN87 L4 — a scalar vector-element reference (`c = &v[0]`) holds a link into the
+/// existing backing (no fresh allocation); read/write-through must not leak a store.
+#[test]
+fn pln87_element_reference_no_leak() {
+    let l = leaks_for("pub fn test(){ v = [10, 20]; c = &v[0]; c = 99; d = &v[1]; d = 7; }");
+    assert!(l.is_empty(), "element reference leaked: {l:?}");
+}
+
+/// @PLN87 L3 — a scalar struct-field reference (`r = &s.x`) links into the existing
+/// record (no fresh allocation); read/write-through must not leak the struct's store.
+#[test]
+fn pln87_field_reference_no_leak() {
+    let l = leaks_for(
+        "struct S{a:integer,b:integer} pub fn test(){ s=S{a:1,b:2}; r=&s.b; r=9; q=&s.a; q=7; }",
+    );
+    assert!(l.is_empty(), "field reference leaked: {l:?}");
+}
+
+/// @PLN87 L5 — a heap whole-value reference (`p = &o`) is a NON-OWNING alias of the
+/// source's record (no fresh allocation, no second free); only the source frees it.
+#[test]
+fn pln87_heap_reference_no_leak() {
+    let l = leaks_for("struct S{x:integer} pub fn test(){ o=S{x:1}; p=&o; p.x=5; }");
+    assert!(l.is_empty(), "heap reference leaked: {l:?}");
+}
+
+/// @PLN87 — reassigning a `&Obj` parameter to a struct literal (`o = Obj{..}`) frees
+/// the displaced caller store and transfers the new one, leak-free.  The `&` parameter
+/// is called WITHOUT `&` (the reference comes from the type).
+#[test]
+fn pln87_struct_amp_literal_writeback_no_leak() {
+    let l = leaks_for(
+        "struct Obj{x:integer} fn f(o:&Obj){o=Obj{x:9};} pub fn test(){g=Obj{x:1};f(g);}",
+    );
+    assert!(l.is_empty(), "struct & literal write-back leaked: {l:?}");
+}

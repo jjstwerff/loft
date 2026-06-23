@@ -533,9 +533,19 @@ where a vector's length word lives**.  This family (`@P311`, `@P313`, `@P314`,
 | `LOFT_TRACE_COPY=1` | Native-side OpCopyRecord trace (src, dst, size, free_src). | Companion to `LOFT_TRACE_CR` for native; pin schema-mismatch copies (compile-side layout vs runtime-side layout disagree). |
 | `LOFT_TRACE_FINISH=1` | Every `finish_type` entry/exit for tuple types (size, align, field_groups count). | Pin tuple-schema propagation gaps (compiler side has groups, runtime side doesn't → wrong size).  Added during PLAN51 V-a diagnosis. |
 | `LOFT_KEEP_NATIVE_RS=1` | Preserves the generated Rust at `/tmp/loft_native_*.rs` instead of cleaning it. | Read the generated Rust at a specific line a runtime panic cites.  Added during PLAN51 V-c diagnosis. |
-| `check_store_leaks` (interp, automatic at clean exit) / `LOFT_NATIVE_LEAK_CHECK=1` (native) | At-exit summary of unfreed stores, **aggregated by type** (`kt=68 ChunkKey×6026`). | Pin *which type* leaks.  Run the **same** repro on both backends — a leak on one and not the other means a backend-specific free emission bug (the @P317 symptom-2 shape). |
+| `check_store_leaks` (interp, **`--interpret` only** — see note) / `LOFT_NATIVE_LEAK_CHECK=1` (native) | At-exit summary of unfreed stores, **aggregated by type** (`kt=68 ChunkKey×6026`). | Pin *which type* leaks.  Run the **same** repro on both backends — a leak on one and not the other means a backend-specific free emission bug (the @P317 symptom-2 shape). |
 | `--native-emit out.rs` | Writes the generated Rust and exits. | A native-only bug.  Read the generated function: look for a `null_named(...)` placeholder that is overwritten without a free, or a missing/extra `OpFreeRef`. |
 | `"Allocating a used store #N (known_type=…, requested by=…)"` panic (`allocation.rs:104`) | The store-pool tripwire (free-bitmap vs `store.free` disagree), now with slot + type + requester. | Fires at the *next* allocation after the real over-free/leak — a tripwire, not the bug site.  The pool near `u16::MAX` ⇒ a leak exhausted the pool and `max` wrapped to 0; otherwise a double-free. |
+
+> **Gotcha — the interpreter leak check needs `--interpret`.** Bare `loft prog.loft` runs the
+> **default `--native` mode** (`main.rs` `native_mode = true`): it compiles + runs the native binary
+> and exits via the subprocess status BEFORE the interpreter's `check_store_leaks` is reached, so a
+> bare run prints NO leak warning even on a real interpreter leak. Always leak-check with
+> `loft --interpret prog.loft` (or rely on the test harness, which is interpreter-based:
+> `tests/leak.rs::leaks_for`, `loft_suite`). Native leak-checking is the separate
+> `LOFT_NATIVE_LEAK_CHECK=1` axis. Note also that some leaks are interpreter-only: the eager
+> `OpInitRef` null-init allocates a store in the interpreter but native lowers it to `DbRef::NULL`
+> (no allocation), so an interpreter `kt=65535` leak can be genuinely absent under native.
 
 Workflow: reproduce minimally, run on **both** backends (divergence localises
 the backend), use `zero_claim` to classify the non-determinism, then `--native-emit`
