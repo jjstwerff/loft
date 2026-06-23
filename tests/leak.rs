@@ -1582,6 +1582,14 @@ fn pln87_field_reference_no_leak() {
     assert!(l.is_empty(), "field reference leaked: {l:?}");
 }
 
+/// @PLN87 L5 — a heap whole-value reference (`p = &o`) is a NON-OWNING alias of the
+/// source's record (no fresh allocation, no second free); only the source frees it.
+#[test]
+fn pln87_heap_reference_no_leak() {
+    let l = leaks_for("struct S{x:integer} pub fn test(){ o=S{x:1}; p=&o; p.x=5; }");
+    assert!(l.is_empty(), "heap reference leaked: {l:?}");
+}
+
 /// @PLN87 — reassigning a `&Obj` parameter to a struct literal (`o = Obj{..}`) frees
 /// the displaced caller store and transfers the new one, leak-free.  The `&` parameter
 /// is called WITHOUT `&` (the reference comes from the type).

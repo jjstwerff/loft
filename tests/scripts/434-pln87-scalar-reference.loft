@@ -76,5 +76,14 @@ fn test() {
     mutate_field(sp);
     assert(sp.a == 9, "& struct parameter's field mutation writes the caller's struct");
 
+    // L5 — a heap WHOLE-VALUE reference (`pr = &whole`) aliases the struct, non-owning.
+    whole = Pair { a: 1, b: 2 };
+    pr = &whole;
+    assert(pr.a == 1 && pr.b == 2, "whole-value reference reads the source's fields");
+    pr.a = 5;
+    assert(whole.a == 5, "field mutation through the whole-value reference writes the source");
+    whole.b = 9;
+    assert(pr.b == 9, "whole-value reference is LIVE — sees the source's update");
+
     print("pln87 scalar reference ok\n");
 }

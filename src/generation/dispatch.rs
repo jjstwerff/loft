@@ -197,6 +197,29 @@ impl Output<'_> {
             }
             return Ok(());
         }
+        // @PLN87 L5 — a heap whole-value reference (`p = &o`): `OpCreateStack(o)` with a
+        // Reference referent.  The interp form is a stack-ref to `o`'s slot; native aliases
+        // the record BY VALUE (the #257 alias shape, read via the record DbRef) — store
+        // `o`'s DbRef.  `p` is non-owning (skip_free at the bind site); a realloc/rebind of
+        // `o` is the same L7 edge the #257 alias has.
+        if !variables.is_argument(var)
+            && let Type::RefVar(inner) = variables.tp(var)
+            && matches!(**inner, Type::Reference(..))
+            && let Value::Call(d_nr, cargs) = to.unspan()
+            && self.data.def(*d_nr).name() == "OpCreateStack"
+            && let [src_arg] = cargs.as_slice()
+            && let Value::Var(src) = src_arg.unspan()
+        {
+            let name = sanitize(variables.name(var));
+            let src_name = sanitize(variables.name(*src));
+            if self.declared.contains(&var) {
+                write!(w, "var_{name} = var_{src_name}")?;
+            } else {
+                self.declared.insert(var);
+                write!(w, "let mut var_{name}: DbRef = var_{src_name}")?;
+            }
+            return Ok(());
+        }
         // #257: aliasing a `&ref` param into a fresh local (`snap = s`), both
         // RefVars.  A local RefVar alias is non-owning and never written back
         // through, so storing the record `DbRef` by value (a pointer triple,

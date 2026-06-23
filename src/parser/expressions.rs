@@ -1169,8 +1169,20 @@ use a separate collection or add after the loop"
                 )
             };
             // L1 / #2 — a scalar stack LOCAL source (`b = &a` / `b: &T = a`).
+            // L5 — a HEAP whole-value source (`p = &o`, `o: Reference`): a NON-OWNING
+            // alias of the source's record.  A heap local COPIES on `p = o` (value type),
+            // so the `&` makes `p` share `o` instead.  Both lower to `OpCreateStack(src)`
+            // — a reference to `src`'s slot, the SAME stack-ref a `&T` PARAMETER uses
+            // (interp: `GetStackRef` deref; native: the record DbRef by value, the #257
+            // alias shape).  A heap source additionally marks `p` non-owning (skip_free):
+            // `o` frees the record, not the alias.
             let stack_src = match *code.unspan() {
-                Value::Var(src) if is_scalar(self.vars.tp(src)) => Some(src),
+                Value::Var(src)
+                    if is_scalar(self.vars.tp(src))
+                        || matches!(self.vars.tp(src), Type::Reference(..)) =>
+                {
+                    Some(src)
+                }
                 _ => None,
             };
             // L3 / L4 — a scalar HEAP-place source: a vector ELEMENT (`c = &v[0]`) or a
@@ -1201,8 +1213,13 @@ use a separate collection or add after the loop"
             };
             if let Some(src) = stack_src {
                 let inner = self.vars.tp(src).clone();
+                let is_ref = matches!(inner, Type::Reference(..));
                 *code = self.cl("OpCreateStack", &[Value::Var(src)]);
                 s_type = Type::RefVar(Box::new(inner));
+                // L5 — a heap whole-value alias is NON-OWNING: the source frees the record.
+                if is_ref && var_nr != u16::MAX {
+                    self.vars.set_skip_free(var_nr);
+                }
             } else if let Some(eref) = heap_ref {
                 // `c`/`r` holds the field/element DbRef; interp reads/writes it via the
                 // uniform RefVar deref (`OpGet*/OpSet*(c,0)`), and native keys its

@@ -15472,16 +15472,30 @@ fn pln87_link_l6_struct_param_field_writes_back() {
     .result(Value::Int(5));
 }
 
-/// L5 — heap whole-value reference: `p = &o` must ALIAS the heap local (which COPIES on a
-/// plain `p = o`), so a field mutation through `p` writes `o`.  The interp form works, but
-/// native needs the D-bind-0 `&τ` reference type to distinguish a struct reference from the
-/// #257 param-alias (both `RefVar(Reference)`, different reads).  See plans/87.
+/// L5 — heap whole-value reference: `p = &o` ALIASES the heap local (which COPIES on a
+/// plain `p = o`), so a field mutation through `p` writes `o`.  `p` reuses the #257
+/// alias representation (interp stack-ref / native DbRef-by-value), non-owning.
 #[test]
-#[ignore = "@PLN87 L5 — heap whole-value reference (struct alias); un-ignore when `&` to a heap local aliases the source on both backends (needs the D-bind-0 `&τ` type, plans/87-reference-default-binding.md)"]
 fn pln87_link_l5_heap_whole_value_ref() {
     code!("struct S { x: integer } fn check() -> integer { o = S { x: 1 }; p = &o; p.x = 5; o.x }")
         .expr("check()")
         .result(Value::Int(5));
+}
+
+/// L5 — the heap reference is LIVE in the read direction too: `o`'s field updates show
+/// through `p`; and `p = o` WITHOUT `&` still copies (the `&` is what makes it a link).
+#[test]
+fn pln87_link_l5_heap_reference_live_read() {
+    code!("struct S { x: integer } fn check() -> integer { o = S { x: 1 }; p = &o; o.x = 7; p.x }")
+        .expr("check()")
+        .result(Value::Int(7));
+}
+
+#[test]
+fn pln87_plain_heap_assign_still_copies() {
+    code!("struct S { x: integer } fn check() -> integer { o = S { x: 1 }; p = o; p.x = 5; o.x }")
+        .expr("check()")
+        .result(Value::Int(1));
 }
 
 /// @PLN87 #2 — a typed-local reference `b: &T = src` is the L1 form with the `&` on

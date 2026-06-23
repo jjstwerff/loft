@@ -51,14 +51,15 @@ Implemented by the loft2 agent.
 >   RefVar deref, native via a `*mut T` into the store slot (keyed off the `OpGetField`/`OpGetVector`
 >   value, no per-variable flag — survives an IR snapshot). Tests
 >   `issues::pln87_link_l4_element_{write_through,live_read}`, `leak`, script 434.
-> - **L5 — heap whole-value reference.** `o=Obj{..}; p=&o; p.x=5; o.x==5`. **DEFERRED — the D-bind-0
->   trigger.** A heap local COPIES on `p = o` (value-type), so `p = &o` must ALIAS. The interp form
->   works (`OpCreateStack(o)`, the same stack-ref as a `&Obj` param), but native cannot: a struct
->   reference and the existing #257 param-alias both type as `RefVar(Reference)`, yet need different
->   reads (a raw `*mut DbRef` tracking `o`'s binding vs a DbRef-by-value), and the read site can't tell
->   them apart from the type alone. The scalar rungs (L1–L4) sidestep this because their deref is
->   uniform; the struct case is exactly what needs the **real `&τ` reference type (D-bind-0)** that
->   carries the representation. Lock-in `issues::pln87_link_l5_*` to be added when it lands.
+> - **✅ L5 — heap whole-value reference.** `o=Obj{..}; p=&o; p.x=5; o.x==5`. A heap local COPIES on
+>   `p = o` (value type), so `p = &o` ALIASES instead — **harmonized with the existing `&`-param /
+>   #257 alias representation** rather than inventing a new one: `p` lowers to `OpCreateStack(o)`
+>   (RefVar, non-owning via skip_free), and is read EXACTLY like a `&Obj` param / a #257 alias — interp
+>   a stack-ref (`GetStackRef` deref), native the record DbRef by value. So the read stays uniform (no
+>   new flag, no D-bind-0 refactor needed). Field mutation writes through, reads are live; `p = o`
+>   without `&` still copies. Both backends + leak-gated; tests
+>   `issues::pln87_link_l5_heap_{whole_value_ref,reference_live_read}`, `pln87_plain_heap_assign_still_copies`,
+>   `leak`, script 434. (Binding-rebind of `o` is the L7 edge, the same as the #257 alias.)
 > - **✅ L6 — `&` function parameter.** `fn f(b:&integer){ b=4 } …; f(a); a==4`. Called WITHOUT `&`. A
 >   `&` scalar/struct parameter already links to the caller's lvalue (write-back + field mutation
 >   propagate) via the call-site stack-ref — it was working before this rung; the lock-ins just pin it.
@@ -80,13 +81,15 @@ Implemented by the loft2 agent.
 >   "~53 stdlib + ~75 test" estimate was `#rust` FFI bodies + comments; the real loft sites were 3 in
 >   script 87 + ~5 `&`-param tests, all migrated to `f(x)`. Full suite + both backends green.
 >
-> **Done: all front-end rules + every SCALAR reference (L1/L2 local, L3 field, L4 element) + L6 (`&`
-> parameters).** A scalar `&`-reference is live read- and write-through on both backends via one
-> `*mut T`/RefVar lowering keyed off the IR value; `&` parameters link to the caller's lvalue.
-> **Next: L5** (heap whole-value reference) — the natural trigger for the **D-bind-0 `&τ` reference
-> type** refactor, because the struct case is where the ad-hoc per-rung representation hits the #257
-> param-alias conflict (see the L5 entry). Then **L7** (lifetime edges). The formal model (`../loft`
-> `formalize` branch: `formal/binding.md`, `types.md`) is the spec these close against.
+> **Done: all front-end rules + L1–L6.** Every `&`-reference is live read- and write-through on both
+> backends — a scalar local (L1/L2), a struct field (L3), a vector element (L4), a heap whole-value
+> (L5), and a `&` function parameter (L6). The key to L5 was **harmonizing** the new heap reference
+> with the representation the `&`-param / #257 alias already used (one `RefVar` + `OpCreateStack`
+> lowering, read as a stack-ref in interp / DbRef-by-value in native) — so the feared D-bind-0 refactor
+> was NOT needed; the scalar rungs key off the IR value, the heap rung reuses the alias shape.
+> **Next: L7** (lifetime edges — reference-in-data-structure, reference-to-reference, source-outlives-
+> reference, `o`-rebind through a heap reference). The formal model (`../loft` `formalize` branch:
+> `formal/binding.md`, `types.md`) is the spec these close against.
 >
 > ### Method (per rung)
 > Matrix-first probe in `/tmp` on `--interpret`; prove the WORKING bytecode on BOTH backends before

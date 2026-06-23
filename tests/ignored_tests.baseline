@@ -8,5 +8,4 @@
 # Regenerate with: `python3 tests/dump_ignored_tests.py > tests/ignored_tests.baseline`
 p4d_a2_par_vector_fn_ref_single	p4dA2 — same hang as the full canary (3 elements).  Confirmed via timeout 15s exit 143.  The bug is in par-dispatch with vector<fn-ref> input — consistent with the design's phase 2B path.
 pln87_amp_writeback_from_call_writes_back	@PLN87 #1 — & write-back from call/var is rejected pending ownership-transfer support; un-ignore when parse_assign_op routes a call/var RHS through a transferable owned temp
-pln87_link_l5_heap_whole_value_ref	@PLN87 L5 — heap whole-value reference (struct alias); un-ignore when `&` to a heap local aliases the source on both backends (needs the D-bind-0 `&τ` type, plans/87-reference-default-binding.md)
 regen_fill_rs	maintenance: regenerates src/fill.rs — run manually when default/*.loft changes
