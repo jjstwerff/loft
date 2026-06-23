@@ -11,7 +11,10 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > once; N forests collapse together," not "patch N sites." Companion to
 > [STABILITY_HOTSPOTS.md](STABILITY_HOTSPOTS.md) (the H-register) and
 > `OWNERSHIP_MODEL.md` (the ownership holes table); this doc is the cross-cutting
-> *red-flag* view those two are read through.
+> *red-flag* view those two are read through. This map is scoped to
+> runtime/memory/codegen; the FRONT-END rough spots it structurally misses — the
+> typing/conversion relation (where #432/#433 live) and grammar precedence — are in
+> [FORMALIZATION.md](FORMALIZATION.md) (the formal-definition-as-lens companion).
 >
 > **Two referenced docs — `OWNERSHIP_MODEL.md` and `CODEGEN_METHOD.md` — are the
 > ownership-migration docs from the active store-lifetime plan (`@PLN85`) and are
