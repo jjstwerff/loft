@@ -56,6 +56,13 @@ Anything that just borrows is tracked but never frees. Crucially, *where* to fre
 **computed** from these facts, not guessed per code-site — and it's computed for **every**
 binding on **every** branch, not just the easy ones.
 
+**This is an INTERNAL system — it never rejects a program.** loft has no user-facing borrow
+checker; the user writes naively and the compiler always finds a valid lowering, copying when
+it cannot prove an alias is safe ([OWNERSHIP_MODEL.md § Internal and invisible](../OWNERSHIP_MODEL.md)).
+That makes **`O-Complete` the load-bearing invariant**: an incomplete fact is not a compile
+error the user fixes — it is a miscompile or a leak. So the failure mode to fear here is
+*incompleteness* (D-own-2), not just unsoundness — the analysis must be **total**.
+
 ### The mechanism — one fact, derived everywhere
 
 ```

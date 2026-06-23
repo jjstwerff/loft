@@ -1450,3 +1450,42 @@ the store as the player moves is genre-neutral (a side-scroller and an open worl
 want it), so it may rightly sink into the engine or a lower neutral library *while the
 hex tiling stays up* in the world library on top of it. Note: "it's hard" or "it'd be
 reused" **alone is not sufficient** — that is force 1, which forces 2 and 3 override.
+
+---
+
+## C79 — Ownership is internal; no user-facing borrow checker
+
+### Question
+
+loft's ownership/`deps` system is described as "loft's borrow checker, Rust as the reference
+model" ([OWNERSHIP_MODEL.md](OWNERSHIP_MODEL.md)). Should that surface to the programmer —
+compile errors for ambiguous/unsafe aliasing and lifetimes, à la Rust — or stay entirely
+internal (the compiler always finds a valid lowering, never rejecting)?
+
+### Evaluation
+
+A user-facing borrow checker gives a simpler, more predictable compiler (it *checks*
+annotations rather than *solving*) and zero surprise copies — but it imports Rust's #1
+learning hurdle into a rapid-prototyping scripting language whose stated aim
+([GOALS.md](GOALS.md)) is *fun on pickup* and *the most natural solution for the programmer*.
+An internal system keeps the surface clean (write naively, it works) at the cost of a harder
+compiler obligation: the analysis must be **total** (never stuck), copying when it cannot
+prove an alias is safe.
+
+### Decision
+
+**Closed (2026-06-24) — INTERNAL only.** No user-facing ownership errors, ever. The compiler
+always produces a correct free/copy/move, copying when unsure; the one deliberate user-facing
+ownership concept is `&` (a live reference, opt-in shared mutation —
+[OWNERSHIP_MODEL.md § The law](OWNERSHIP_MODEL.md), @PLN87). "Rust as the reference model"
+means **soundness of the internal analysis**, not Rust's UX. This was always the plan.
+Consequence: `O-Complete` ([formal/ownership.md](formal/ownership.md)) is the load-bearing
+invariant — an incomplete fact is a miscompile / leak, not a recoverable compile error, so the
+failure to fear is *incompleteness*, not just unsoundness.
+
+### Revisit when
+
+A concrete consumer hits a case where silently copying is a real, measured cost AND a narrow,
+*clearly-diagnosable* surface (e.g. "this reference would outlive its source") would be more
+natural than the copy — i.e. one named case earns a user-facing diagnostic. Even then: a
+single case, never the general Rust model.
