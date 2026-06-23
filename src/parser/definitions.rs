@@ -2373,10 +2373,10 @@ impl Parser {
                         // default (`level: Level = Warning`) resolves against the
                         // declared field type.
                         if self.enum_context(&a_type) {
-                            self.enum_hint = a_type.clone();
+                            self.expected = a_type.clone();
                         }
                         let tp = self.expression(&mut value);
-                        self.enum_hint = Type::Unknown(0);
+                        self.expected = Type::Unknown(0);
                         self.init_field_tracking = false;
                         if a_type.is_unknown() {
                             a_type = tp;

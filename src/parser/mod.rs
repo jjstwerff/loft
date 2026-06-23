@@ -243,37 +243,21 @@ pub struct Parser {
     /// Lambda names are `__lambda_N`; the same N is produced on both passes because the counter
     /// advances identically in both passes (same token order → same parse order).
     pub lambda_counter: u32,
-    /// Expected `Type::Function(params, ret)` for the argument currently being parsed.
-    /// Set by `parse_call` before parsing a function-typed argument so that short-form
-    /// lambdas (`|x| { … }`) can infer parameter types from the call-site context.
-    /// Cleared to `Type::Unknown(0)` immediately after the argument is parsed.
-    pub(crate) lambda_hint: Type,
-    /// @PLN22 Phase 1 — expected enum type for the value currently being parsed
-    /// where the operand `var_tp` does not carry it (a call argument, a function
-    /// return-body tail).  Set by `parse_call` / the return-body parse before the
-    /// value is parsed, consulted by `parse_single` to resolve a bare
-    /// value-position variant against the expected enum, then cleared to
-    /// `Type::Unknown(0)`.  (`var_tp` already carries the enum for typed-local
-    /// decls and `==`, so those need no hint.)
-    pub(crate) enum_hint: Type,
-    /// Expected destination type for an `f#read` with no explicit `(n)` and
-    /// no `as T` cast.  Set by `parse_assign` from the LHS type before
-    /// parsing the RHS so that `s.field = f#read` infers the byte width
-    /// from `s.field`'s declared type — symmetric with the way `f += s.field`
-    /// already takes its width from the field's declared type.  Reset to
-    /// `Type::Unknown(0)` after the RHS is parsed.
-    pub(crate) read_target_type: Type,
-    /// Expected `vector<…>` type for a bare vector literal currently being parsed
-    /// as a call argument, where the operand `var_tp` does not carry it.  An
-    /// untyped literal `[10, 255, 20]` otherwise infers `vector<integer>` (8-byte
-    /// elements); passed to a `vector<u8>` parameter that reads 1-byte stride, the
-    /// callee reinterprets the bytes (#432).  Set by `parse_call` / `parse_method`
-    /// from the parameter type before the argument is parsed, consulted by
-    /// `parse_single`'s `[` branch to build the literal at the parameter's element
-    /// width — symmetric with how a typed-local decl (`v: vector<u8> = [..]`)
-    /// already narrows via `var_tp`.  Reset to `Type::Unknown(0)` after the
-    /// argument is parsed.
-    pub(crate) vector_hint: Type,
+    /// The single **expected type** — the `⇐` checking mode (formal `(T-Chk)`) pushed into
+    /// the value currently being parsed, where the operand's own `var_tp` does not already
+    /// carry it (a call argument, a function return-body tail, an `f#read` RHS).  Set before
+    /// the value is parsed and reset to `Type::Unknown(0)` after.  There is ONE channel, not
+    /// four: readers dispatch on its SHAPE via the helpers below —
+    /// - a `Type::Function` → short-form lambda (`|x| {…}`) parameter inference ([`Self::lambda_hint`]);
+    /// - an enum type → a bare value-position variant (`f(Red)`) resolves against it ([`Self::enum_hint`]);
+    /// - a `Type::Vector` of concrete narrow elements → a bare literal (`[10,255,20]`) builds at the
+    ///   element width (#432, [`Self::vector_hint`]);
+    /// - any type → an `f#read` infers its byte width from it ([`Self::read_target_type`]).
+    ///
+    /// (`var_tp` already carries the type for typed-local decls / `==` / struct-field init,
+    /// so those need no push.)  Consolidating the former four `*_hint` fields is
+    /// [formal/types.md D1](../../doc/claude/formal/types.md) — one judgment, not four side-channels.
+    pub(crate) expected: Type,
     /// Set by `iter_op` when `#fields` is encountered. Holds the struct `def_nr`.
     /// Checked by `parse_for` to take the unrolling path. Reset after use.
     pub(crate) fields_of: u32,
@@ -557,10 +541,7 @@ impl Parser {
             expr_not_null: false,
             expr_not_null_name: String::new(),
             lambda_counter: 0,
-            lambda_hint: Type::Unknown(0),
-            enum_hint: Type::Unknown(0),
-            read_target_type: Type::Unknown(0),
-            vector_hint: Type::Unknown(0),
+            expected: Type::Unknown(0),
             fields_of: u32::MAX,
             capture_context: Vec::new(),
             captured_names: Vec::new(),
@@ -1467,6 +1448,42 @@ impl Parser {
     /// The iterable expression is in *code.
     /// Creating the iterator will be in *code afterward.
     /// Return the next expression; with `Value::None` the iterator creation was impossible.
+    /// Expected function type for a short-form lambda (`|x| {…}`) — the `⇐` push
+    /// ([`Self::expected`]) filtered to `Type::Function` (D1: one channel, not four).
+    pub(crate) fn lambda_hint(&self) -> Type {
+        if matches!(self.expected, Type::Function(_, _, _)) {
+            self.expected.clone()
+        } else {
+            Type::Unknown(0)
+        }
+    }
+
+    /// Expected enum type for a bare value-position variant (`f(Red)`) — `expected`
+    /// filtered to enum context.
+    pub(crate) fn enum_hint(&self) -> Type {
+        if self.enum_context(&self.expected) {
+            self.expected.clone()
+        } else {
+            Type::Unknown(0)
+        }
+    }
+
+    /// Expected `vector<…>` element-width hint for a bare literal — `expected` filtered to a
+    /// concrete narrow-element vector (#432; [`Self::seeds_vector_hint`]).
+    pub(crate) fn vector_hint(&self) -> Type {
+        if Self::seeds_vector_hint(&self.expected) {
+            self.expected.clone()
+        } else {
+            Type::Unknown(0)
+        }
+    }
+
+    /// Expected destination type for an `f#read` (no `(n)`, no `as T`) — the raw `⇐` push,
+    /// any shape; the read infers its byte width from it.
+    pub(crate) fn read_target_type(&self) -> Type {
+        self.expected.clone()
+    }
+
     /// @PLAN48 P2: true when converting `src` → `dst` narrows a loft integer to a
     /// smaller explicit width (e.g. `integer` → `i32`, or `i32` → `u8`), which
     /// loses data.  Widening (`i32` → `integer`) and same-width are not narrowing.

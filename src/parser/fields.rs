@@ -516,12 +516,12 @@ impl Parser {
                     _ => None,
                 };
                 if let Some(h) = hint {
-                    self.lambda_hint = h;
+                    self.expected = h;
                 }
             }
             let mut p = Value::Null;
             let pt = self.expression(&mut p);
-            self.lambda_hint = Type::Unknown(0);
+            self.expected = Type::Unknown(0);
             list.push(p);
             types.push(pt);
             m_arg_idx += 1;

@@ -369,7 +369,8 @@ impl Parser {
             // typed context already carries the type in `var_tp` and wins.  Take
             // (clear) the hint so it seeds only this outermost literal — nested
             // literals get their element type threaded through `var_tp`.
-            let hint = std::mem::replace(&mut self.vector_hint, Type::Unknown(0));
+            let hint = self.vector_hint();
+            self.expected = Type::Unknown(0);
             let seeded;
             let elem_tp = if var_tp.is_unknown() && matches!(hint, Type::Vector(_, _)) {
                 seeded = hint;
@@ -424,8 +425,8 @@ impl Parser {
             if !self.enum_context(parent_tp) {
                 if self.enum_context(var_tp) {
                     *parent_tp = var_tp.clone();
-                } else if self.enum_context(&self.enum_hint) {
-                    *parent_tp = self.enum_hint.clone();
+                } else if self.enum_context(&self.enum_hint()) {
+                    *parent_tp = self.enum_hint();
                 }
             }
             self.parse_var(val, &name, parent_tp, &name_pos)
@@ -682,7 +683,7 @@ impl Parser {
         let stored_name = format!("n_{lambda_name}");
 
         // Capture hint types before entering the new context.
-        let hint_params_ret = self.lambda_hint.clone();
+        let hint_params_ret = self.lambda_hint();
         let hint_params: Vec<Type> = if let Type::Function(pts, _, _) = &hint_params_ret {
             pts.clone()
         } else {

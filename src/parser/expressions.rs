@@ -1145,10 +1145,10 @@ use a separate collection or add after the loop"
             && matches!(f_type, Type::RefVar(inner) if matches!(**inner, Type::Vector(_, _)))
             && self.vars.is_argument(var_nr)
             && self.lexer.peek_token("[");
-        let prev_read_target = std::mem::replace(&mut self.read_target_type, f_type.clone());
+        let prev_read_target = std::mem::replace(&mut self.expected, f_type.clone());
         let rhs_pos = self.lexer.peek_pos().clone();
         let mut s_type = self.parse_operators(f_type, code, &mut parent_tp, 0);
-        self.read_target_type = prev_read_target;
+        self.expected = prev_read_target;
         // @PLN87 L1 / #2 — a local `&`-binding to a SCALAR lvalue (`b = &a` or
         // `b: &integer = a`) makes `b` a LIVE reference to the source's stack slot:
         // lower it to `b: &T = OpCreateStack(a)` — the SAME stack-ref mechanism a `&T`

@@ -51,9 +51,11 @@ position, threaded by hand instead of by the judgment:
 | `read_target_type`  | `Γ ⊢ read(...) ⇐ τ` — the destination of a parse/read  |
 | `vector_hint`       | `Γ ⊢ [e, …] ⇐ vector<τ>` — element type of a literal    |
 
-> **Rough spot R1.** Four fields = four positions someone remembered to thread. The
-> checking judgment `⇐` is total over the syntax; the side-channel set is not — the
-> next literal position that needs an expected type is the next #432.
+> **Rough spot R1 — RESOLVED.** Four fields = four positions someone remembered to thread.
+> The four are now consolidated into one `Parser.expected` field with shape-dispatching
+> reader methods (`lambda_hint()`/`enum_hint()`/`vector_hint()`/`read_target_type()`) — one
+> `⇐` channel, set once and read by shape. A new position pushes the same `expected` rather
+> than adding a 5th field. See formal/types.md (was D1).
 
 ## 2. The conversion relation  `τ ⤳ τ′`  (implicit) and  `τ ⟶as⟶ τ′`  (explicit)
 
@@ -140,7 +142,7 @@ escape hatch. The two open rules:
 
 | id | rough spot | the rule that would close it |
 |----|------------|------------------------------|
-| R1 | four `*_hint` side-channels for one idea | the checking judgment `Γ ⊢ e ⇐ τ` (§1) |
+| R1 | ~~four `*_hint` side-channels for one idea~~ **DONE** — one `Parser.expected`, shape-dispatched | done (§1) |
 | R2 | ~~width lives outside `⤳`~~ **DONE** — `⤳` is range containment; residual: storage off i32 | done (§2) |
 | R3 | ~~width derived two ways~~ **DONE** — parser/codegen agree via range; residual: storage off i32 | done (§3) |
 
@@ -156,9 +158,11 @@ This is a **lens**, not a migration plan. Concretely, the cheap wins it points a
    join of its writes (the `(I-Join)` rule), closing the #433-residual at the type. Guarded
    by `tests/scripts/433-ijoin-multiply-assigned.loft`; see
    [formal/types.md](formal/types.md) (was deviation D4).
-2. **Collapse the four `*_hint` fields into one checking-mode parameter** threaded
-   through the expression parser. Mechanical; removes R1 and makes the next literal
-   position correct by construction.
+2. ~~**Collapse the four `*_hint` fields**~~ **DONE** — consolidated into one
+   `Parser.expected` field with shape-dispatching reader methods; the four set-sites push the
+   one field, the readers filter by shape (lambda → `Type::Function`, enum → enum-context,
+   vector → narrow-element vector, read-target → any). A new position pushes `expected`, not a
+   5th field. (was deviation D1.)
 3. ~~**Make `⤳` on integers range containment**~~ **DONE** — `is_narrowing_int` now decides
    by range containment (`[a,b] ⊆ [c,d]`), in agreement with codegen's `narrow_int_cast`, so
    signedness is visible and the parser/codegen split is closed (was D3/D5). `is_equal` keeps

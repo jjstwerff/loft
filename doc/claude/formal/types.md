@@ -138,18 +138,7 @@ to the join when a write would not fit; an annotated `x: u8` stays constrained),
 
 ## Deviations
 
-OPEN: **2**
-
-### D1 — four expected-type side-channels instead of one checking judgment
-- **Violates:** T-Chk (and its T-Chk-* instances)
-- **Where:** `src/parser/mod.rs` — `Parser.lambda_hint`, `Parser.enum_hint`,
-  `Parser.read_target_type`, `Parser.vector_hint`
-- **Effect:** the checking mode is hand-threaded per syntactic position; a position
-  nobody wired is the next #432 (the `vector_hint` channel was literally added *as*
-  the #432 fix). See [../TYPING_RELATION.md](../TYPING_RELATION.md) § R1.
-- **Status:** OPEN
-- **Removal:** thread a single `expected: Option<Type>` (the `⇐` mode) through the
-  expression parser; delete the four fields.
+OPEN: **1**
 
 ### D2 — the full integer is marked by `forced_size = None`, not a canonical maximal range
 - **Violates:** the integer model (width should be the range alone)
@@ -203,8 +192,10 @@ OPEN: **2**
 Each deviation should have a falsifying program — the case where obeying the rule and
 obeying the code disagree. Examples on record:
 
-- **D1:** `fn f(b: vector<u8>) -> integer { return (b[1] ?? 99); }` — interp obeys the
-  rules, `--native` (pre-fix) obeyed the code and E0308'd. (#432, #433.)
+- **D1 (CLOSED):** the four `*_hint` side-channels (`lambda_hint` / `enum_hint` /
+  `vector_hint` / `read_target_type`) are consolidated into one `Parser.expected` field with
+  shape-dispatching reader methods — one `⇐` channel, not four. (#432's `vector_hint` was the
+  symptom of the sprawl.)
 - **D4 (CLOSED):** the cbor `read_value` cross-branch `arg` (`arg=bytes[i];
   arg=arg*256+…`) inferred `u8` and overflowed. `(I-Join)` now widens it; the falsifier
   graduated to `tests/scripts/433-ijoin-multiply-assigned.loft`.
