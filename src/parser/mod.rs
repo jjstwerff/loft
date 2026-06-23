@@ -258,6 +258,17 @@ pub struct Parser {
     /// already takes its width from the field's declared type.  Reset to
     /// `Type::Unknown(0)` after the RHS is parsed.
     pub(crate) read_target_type: Type,
+    /// Expected `vector<…>` type for a bare vector literal currently being parsed
+    /// as a call argument, where the operand `var_tp` does not carry it.  An
+    /// untyped literal `[10, 255, 20]` otherwise infers `vector<integer>` (8-byte
+    /// elements); passed to a `vector<u8>` parameter that reads 1-byte stride, the
+    /// callee reinterprets the bytes (#432).  Set by `parse_call` / `parse_method`
+    /// from the parameter type before the argument is parsed, consulted by
+    /// `parse_single`'s `[` branch to build the literal at the parameter's element
+    /// width — symmetric with how a typed-local decl (`v: vector<u8> = [..]`)
+    /// already narrows via `var_tp`.  Reset to `Type::Unknown(0)` after the
+    /// argument is parsed.
+    pub(crate) vector_hint: Type,
     /// Set by `iter_op` when `#fields` is encountered. Holds the struct `def_nr`.
     /// Checked by `parse_for` to take the unrolling path. Reset after use.
     pub(crate) fields_of: u32,
@@ -543,6 +554,7 @@ impl Parser {
             lambda_hint: Type::Unknown(0),
             enum_hint: Type::Unknown(0),
             read_target_type: Type::Unknown(0),
+            vector_hint: Type::Unknown(0),
             fields_of: u32::MAX,
             capture_context: Vec::new(),
             captured_names: Vec::new(),

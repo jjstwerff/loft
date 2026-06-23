@@ -1,0 +1,62 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Regression for #432 — an UNTYPED integer-vector literal passed directly as a
+// call argument must build at the PARAMETER's element width, not as
+// `vector<integer>` (8-byte elements).  Before the fix, `f([11, 222, 33])` to a
+// `vector<u8>` parameter inferred `vector<integer>` and passed it by reference;
+// the callee then read it with 1-byte stride and reinterpreted the bytes —
+// element 0 survived, the rest came out as zeros / wrong lanes (not a uniform
+// zero-fill: the vector LENGTH was always correct, only the per-element stride
+// was wrong).  The fix seeds the literal's element type from the parameter
+// (`vector_hint`), exactly as a typed-local decl `v: vector<u8> = [..]` already
+// narrows via `var_tp`.  Runs on BOTH backends (parser-level; identical IR).
+//
+// Distinctive collision-resistant values [11, 222, 33] across all three lanes —
+// a weak probe (only `v[0]`, or small values) would miss the stride reinterpret.
+
+fn s_u8(v: vector<u8>)   -> integer { v[0] * 1000000 + v[1] * 1000 + v[2] }
+fn s_u16(v: vector<u16>) -> integer { v[0] * 1000000 + v[1] * 1000 + v[2] }
+fn s_u32(v: vector<u32>) -> integer { v[0] * 1000000 + v[1] * 1000 + v[2] }
+fn s_i32(v: vector<i32>) -> integer { v[0] * 1000000 + v[1] * 1000 + v[2] }
+fn named_sink(label: integer, v: vector<u8>) -> integer { v[0] * 1000000 + v[1] * 1000 + v[2] }
+fn nested(vv: vector<vector<u8>>) -> integer { vv[0][1] * 1000 + vv[1][2] }
+
+struct Holder { tag: integer }
+fn take(self: Holder, v: vector<u8>) -> integer { v[0] * 1000000 + v[1] * 1000 + v[2] }
+
+// Positional free-function argument — the reported shape, across narrow widths.
+fn test_p432_positional_narrow_widths() {
+  assert(s_u8([11, 222, 33]) == 11222033, "u8 arg = {s_u8([11, 222, 33])} (want 11222033)");
+  assert(s_u16([11, 222, 33]) == 11222033, "u16 arg = {s_u16([11, 222, 33])} (want 11222033)");
+  assert(s_u32([11, 222, 33]) == 11222033, "u32 arg = {s_u32([11, 222, 33])} (want 11222033)");
+  assert(s_i32([11, 222, 33]) == 11222033, "i32 arg = {s_i32([11, 222, 33])} (want 11222033)");
+}
+
+// Method-call argument (receiver is attribute 0; the explicit arg is attribute 1).
+fn test_p432_method_arg() {
+  h: Holder = Holder { tag: 1 };
+  assert(h.take([11, 222, 33]) == 11222033, "method arg = {h.take([11, 222, 33])} (want 11222033)");
+}
+
+// Named argument — name maps to the parameter, which seeds the width.
+fn test_p432_named_arg() {
+  assert(named_sink(label: 7, v: [11, 222, 33]) == 11222033,
+    "named arg = {named_sink(label: 7, v: [11, 222, 33])} (want 11222033)");
+}
+
+// Nested `vector<vector<u8>>`: the outer hint seeds the outer literal, the inner
+// element type threads through `var_tp.content()` to each inner literal.
+fn test_p432_nested_vector_arg() {
+  assert(nested([[1, 222, 3], [4, 5, 66]]) == 222066,
+    "nested arg = {nested([[1, 222, 3], [4, 5, 66]])} (want 222066)");
+}
+
+// A GENERIC `vector<T>` parameter (`min_of<T: Ordered>`) must NOT be seeded — the
+// element is an abstract type variable, not a concrete narrow integer.  Seeding it
+// regressed this to a "cannot store integer elements in a vector<T>" compile error
+// (the over-wide first cut of the fix).  The seed predicate excludes it.
+fn test_p432_generic_vector_arg_unaffected() {
+  assert(min_of([3, 1, 2]) == 1, "min_of inline = {min_of([3, 1, 2])} (want 1)");
+  assert(max_of([3, 1, 2]) == 3, "max_of inline = {max_of([3, 1, 2])} (want 3)");
+}

@@ -361,7 +361,23 @@ impl Parser {
         } else if self.lexer.peek_token("{") {
             self.parse_block("block", val, &Type::Unknown(0))
         } else if self.lexer.has_token("[") {
-            self.parse_vector(var_tp, val, parent_tp)
+            // #432 — a bare vector literal in call-argument position arrives with
+            // `var_tp` unknown (the parameter type is dropped by `expression`).
+            // Build it at the parameter's element width via `vector_hint`, so a
+            // `vector<u8>` parameter gets a 1-byte-stride literal instead of a
+            // `vector<integer>` (8-byte) the callee silently reinterprets.  A
+            // typed context already carries the type in `var_tp` and wins.  Take
+            // (clear) the hint so it seeds only this outermost literal — nested
+            // literals get their element type threaded through `var_tp`.
+            let hint = std::mem::replace(&mut self.vector_hint, Type::Unknown(0));
+            let seeded;
+            let elem_tp = if var_tp.is_unknown() && matches!(hint, Type::Vector(_, _)) {
+                seeded = hint;
+                &seeded
+            } else {
+                var_tp
+            };
+            self.parse_vector(elem_tp, val, parent_tp)
         } else if self.lexer.has_token("if") {
             self.parse_if(val)
         } else if self.lexer.has_token("match") {
