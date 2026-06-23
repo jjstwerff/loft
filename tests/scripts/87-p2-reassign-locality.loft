@@ -35,6 +35,8 @@ fn v_rebind(v: vector<integer>) { v = [7, 8, 9]; }
 fn v_cond(v: vector<integer>, c: boolean) { if c { v = [9]; } }
 // --- vector, non-& : repeated rebind, no leak ---
 fn v_multi(v: vector<integer>) { v = [2]; v = [3, 4]; }
+// --- vector, & : whole reassign WRITES BACK (clear + refill the caller in place) ---
+fn v_amp(v: &vector<integer>) { v = [7, 8, 9]; }
 // --- vector : element mutation PROPAGATES (reference-default) ---
 fn v_elem(v: vector<integer>) { v[0] = 9; }
 // --- vector, += : GROWS the caller's backing (not a rebind) ---
@@ -76,6 +78,9 @@ fn main() {
 
     vm = [1, 2, 3]; v_multi(vm);
     assert(len(vm) == 3, "vector repeated rebind is local (no leak)");
+
+    va = [1, 2, 3]; v_amp(&va);
+    assert(va[0] == 7 && len(va) == 3, "vector & reassign writes back to the caller");
 
     vg = [1, 2, 3]; v_grow(vg);
     assert(len(vg) == 4, "vector += grows the caller's backing (reference-default)");

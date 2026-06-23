@@ -15359,10 +15359,10 @@ fn check() -> integer { a = [1, 2, 3]; vrebind(a); len(a) }"
     .result(Value::Int(3));
 }
 
-// Vector `&` reassignment must WRITE BACK (caller sees the new vector), like the
-// struct `&` case.  Today it is a no-op — the caller's vector is unchanged.
+// Vector `&` reassignment WRITES BACK (caller sees the new vector), like the
+// struct `&` case — fixed by P2.4 (a `&`-vector shares the caller's backing, so
+// the write-back is a clear+refill in place: `OpClearVector` before the literal).
 #[test]
-#[ignore = "@PLN87 P2.4 — un-ignore when vector param & reassignment writes back (today it is a no-op)"]
 fn pln87_vector_param_amp_writes_back() {
     code!(
         "fn vamp(v: &vector<integer>) { v = [7, 8, 9]; }

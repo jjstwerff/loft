@@ -119,29 +119,32 @@ binary vs `loft_suite` divergence was another). Concretely:
 If `main` shows the same symptom, it is pre-existing: file it (a `main` bug) or work it as its own item,
 don't fold it into the active fix.
 
-**REMAINING P2 work:**
-1. **P2.2 `&` write-back leak** — `fn f(o: &Obj){ o = Obj{..} }` returns the right value (`g.x == 9`)
-   but `SetStackRef` overwrites the caller's slot with the new ref WITHOUT freeing the OLD caller store
-   → it orphans 1 store (caught by `loft_suite`, not the standalone binary). PRE-EXISTING (the `&`
-   path is untouched by P2.1), but it means P2.2 is NOT actually done: the `&` write-back needs the
-   SAME ownership-transition treatment as P2.1 (free the displaced store, distinct-guarded). The P2.1
-   witness/IfDistinct infra is reusable.
-2. **Vector non-`&` rebind — ✅ DONE (2026-06-23), both backends, leak-free.** `fn f(v: vector<T>){ v
-   = [..] }` now REBINDS locally (caller length/elements unchanged) instead of appending. The `=`-vs-`+=`
-   distinction is unavailable at the vector materialiser (`parse_vector`/`build_vector_list`, which the
-   literal path reaches without going through `parse_assign_op`'s tail), so it is captured EARLIER: in
-   `parse_assign_op`, BEFORE the RHS parse, a `=`-to-a-visible-vector-param with the next token `[`
-   (peek) marks the param a rebind (`ensure_rebind_witness`).  Then the RHS parse's `vector_db` sees
-   `rebind_orig` set and hands a FRESH `__vdb` backing (skip_free — the param's exit
-   `OpFreeRefIfDistinct(v, witness)` frees v's store, so scopes must not also free the `__vdb`).  `+=`
-   (grows the caller backing), self-concat `v = v + [..]`, and `v = other` keep the caller backing.
-   Verified: single / conditional / repeated rebind, `+=`-grow, element-mutation-propagate all correct
-   both backends; `loft_suite` + full suite green. Lock-in `pln87_vector_param_reassign_is_local` un-ignored.
-3. **Vector `&` write-back** — `fn f(v: &vector<T>){ v = [..] }` is currently a silent NO-OP (caller
-   unchanged); for consistency with struct `&` it must write back. Distinct mechanism from non-`&`.
-   Lock-in: `pln87_vector_param_amp_writes_back` (still `#[ignore]`).
-4. **P3** — W4 redundant-`&` lint (unchanged; see § Phases).
-5. **D2** — strip the throwaway `LOFT_SWEEP_P0` instrument from `scopes::check` before any PR.
+**P2 CONSISTENCY MATRIX — ✅ COMPLETE (2026-06-23), both backends, leak-free.** Every cell of
+`{struct, vector, scalar} × {non-&, &} × {reassign, field/element}` now behaves uniformly and is pinned
+green in `tests/scripts/87-p2-reassign-locality.loft` (interp + `--native` + `--native-wasm`, under the
+program-exit leak gate) with the three former gaps' lock-ins un-ignored:
+
+1. **P2.2 `&` write-back leak — ✅ DONE.** `fn f(o: &Obj){ o = Obj{..} }` writes back (`g.x == 9`) AND
+   frees the displaced caller store. The RefVar-set lowering frees the OLD `*o` store before installing
+   the new value, read LIVE through `o` (interp `OpGetStackRef`+`OpFreeRef` at `codegen.rs`; native
+   `OpFreeRef(cell, *var_o)` at `dispatch.rs`) — PATH-SENSITIVE, so conditional `&` reassignment is sound
+   with no witness; the transferred construction temp is `skip_free` (the caller owns + frees it). Gated:
+   arg + RefVar heap inner + the RHS's `result_var` is the skip_free transfer temp. Lock-in
+   `pln87_struct_amp_writeback_is_leak_free`.
+2. **Vector non-`&` rebind — ✅ DONE.** `fn f(v: vector<T>){ v = [..] }` REBINDS locally. The `=`-vs-`+=`
+   distinction is unavailable at the vector materialiser, so captured EARLIER: in `parse_assign_op`,
+   BEFORE the RHS parse, a `=`-to-a-visible-vector-param with next token `[` (peek) marks the param a
+   rebind; the RHS parse's `vector_db` then hands it a FRESH `__vdb` backing (skip_free; freed at exit by
+   the param's `OpFreeRefIfDistinct(v, witness)`). `+=` / self-concat / `v = other` keep the caller
+   backing. Lock-in `pln87_vector_param_reassign_is_local`.
+3. **Vector `&` write-back — ✅ DONE.** `fn f(v: &vector<T>){ v = [..] }` WRITES BACK. A `&`-vector ref
+   shares the caller's backing and cannot repoint, so the write-back is a CLEAR + refill IN PLACE:
+   `parse_assign_op` prepends `OpClearVector(v)` before the literal (which appends to the caller's store)
+   → replace, not grow. `+=` keeps the grow. Lock-in `pln87_vector_param_amp_writes_back`.
+
+**REMAINING (not P2-core):**
+- **P3** — W4 redundant-`&` lint (see § Phases).
+- **D2** — strip the throwaway `LOFT_SWEEP_P0` instrument from `scopes::check` before any PR.
 
 Runnable probe (the behavioral pair — now prints `1 9` on both backends):
 
@@ -164,9 +167,9 @@ Runnable probe (the behavioral pair — now prints `1 9` on both backends):
   relies on non-`&` reassignment propagating — the load-bearing P2 risk is retired.**
   (The sweep instrument is throwaway; remove before the PR.)
 - **P1** — `&` on local bindings (additive, non-breaking).
-- **P2** — reassignment-locality (**breaking**: non-`&` reassignment → local rebind; `&` writes back).
-  **non-`&` STRUCT + SCALAR rebind ✅ DONE both backends, leak-free (2026-06-23)**; the `&`-writeback
-  leak (P2.2) + the vector cell remain (see § P2 above).
+- **P2 — ✅ COMPLETE both backends, leak-free (2026-06-23).** reassignment-locality (**breaking**:
+  non-`&` reassignment → local rebind; `&` writes back), uniform across struct / vector / scalar; the
+  full consistency matrix is green in `tests/scripts/87-p2-reassign-locality.loft` (see § P2 above).
 - **P3** — W4 redundant-`&` lint.
 
 ## Concerns (detail in the issue)

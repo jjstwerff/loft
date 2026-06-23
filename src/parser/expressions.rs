@@ -1145,10 +1145,27 @@ use a separate collection or add after the loop"
         {
             self.ensure_rebind_witness(var_nr);
         }
+        // @PLN87 P2.4 — `v = [..]` whole-binding REPLACE on a `&`-vector param
+        // WRITES BACK to the caller.  A `&`-vector ref shares the caller's backing
+        // in place (it cannot repoint at a fresh store), so the write-back is a
+        // CLEAR + refill of that backing: prepend `OpClearVector(v)` so the
+        // literal — which appends to v's (the caller's) store — yields a replace,
+        // not a grow.  `+=` keeps the grow (handled by `assign_refvar_vector` /
+        // the parse_block expansion).  Detected by peeking the leading `[`.
+        let amp_vector_replace = !self.first_pass
+            && op == "="
+            && var_nr != u16::MAX
+            && matches!(f_type, Type::RefVar(inner) if matches!(**inner, Type::Vector(_, _)))
+            && self.vars.is_argument(var_nr)
+            && self.lexer.peek_token("[");
         let prev_read_target = std::mem::replace(&mut self.read_target_type, f_type.clone());
         let rhs_pos = self.lexer.peek_pos().clone();
         let mut s_type = self.parse_operators(f_type, code, &mut parent_tp, 0);
         self.read_target_type = prev_read_target;
+        if amp_vector_replace {
+            let clear = self.cl("OpClearVector", &[Value::Var(var_nr)]);
+            *code = Value::Insert(vec![clear, code.clone()]);
+        }
         // @P376 — POISON an errored whole-RHS that resolves to `Unknown` (pass 2)
         // so the assigned variable doesn't cascade.  In the final pass an Unknown
         // whole-RHS is always an unresolved-name error — an undefined variable
