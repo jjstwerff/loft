@@ -128,3 +128,116 @@ taken here: the contained free-site fix restores consistency without that risk.
 | I-a fix (union at 906) correct + non-regressing | ✅ VERIFIED (06/07 both backends; 01 + 5 guards green) |
 | I-b is the same root via the materialization path | 🟢 strong (probe 08 reproduces; cbor = this shape) |
 | I-b fix site (the match→`result` materialization) | 🤔 located by symptom (the `"result"` var at 906); exact lowering line TBD |
+
+---
+
+## Cluster I-d — the leak residual: the `+= call()` append-source class (the deep root, now taken)
+
+**The I-c fix stopped the corruption but left a LEAK.** The graduated guard
+`tests/scripts/437-nrvo-return-aliasing.loft` — added to close the class — *itself*
+trips the `wrap::loft_suite` leak gate (`1 store(s) leaked at program exit:
+main_vector<integer(0,255)>`), reddening #443's CI across 5 jobs (quick suite, Test
+ubuntu/macos, stack_align sweep, ASan sweep) plus a trivial Clippy nit at
+`scopes.rs:1865` (`map(..).unwrap_or(false)` → `is_some_and`). The guard passes its
+*value* asserts (corruption is fixed) but leaks. It slipped through because bare
+`loft --tests` runs each fn in an isolated state; only the `wrap` harness reuses one
+state across the file and leak-checks at the end — and the green-suite claim predated
+the guard file.
+
+### Boundary matrix (each cell its own program; interpreter + native; branch vs a fresh `origin/main`)
+
+| shape | leaks? | main | verdict |
+|---|---|---|---|
+| `buf=[]; return buf` / `buf=[1,2]; return buf` | no | clean | — |
+| `buf=head(); return buf` (adopt-return) | no | clean | — |
+| `return head()` (direct) | no | clean | — |
+| `buf=[]; buf+=[9]; return buf` (`+=` **literal**) | no | clean | — |
+| `buf=[]; buf+=otherVar; return buf` (`+=` **var**) | no | clean | — |
+| `buf=[]; buf+=head();` **(local, not returned)** | **no** | clean | — |
+| `buf=[]; buf+=head(); return buf` | **LEAK** | leak | **pre-existing on main** |
+| `buf=head(); buf+=head()×{1,2}; return buf` | **LEAK** | leak | **pre-existing** |
+| adopt + `for{ buf+=head; buf+=head }` (encode_map_ic) | **LEAK** | leak | **pre-existing** |
+| `a = head()+head(); return a` (inline concat) | **LEAK ×1** | **clean** | **REGRESSION (I-c)** |
+| full `encode_ic` (struct+match+loop) | **LEAK ×2** | **leak ×1** | pre-existing **+1 from I-c** |
+| full 437 guard (all 3) | LEAK ×4 | **CORRUPTS** | corruption fixed; leak remains |
+
+### The single rule
+A leak occurs **iff `vec += <call-returning-a-vector>` AND the accumulator escapes
+(is returned).** Nothing else leaks — `+= literal`, `+= var`, adopt-and-return,
+direct-return, and the *same* `+= call()` when the accumulator stays **local** are all
+clean. It is a **resource leak, not corruption** (values always correct) — it matters
+because a long-running encoder (the cbor/ztcbor signer) grows memory per encode.
+
+### How much
+**Exactly one store per escaping function that ends in `… += call()`** — the *last*
+appended call's hidden buffer. Multiple appends still leak ×1 (earlier append-sources
+are freed; only the last is mis-attributed to the accumulator). `encode_ic` → ×2 (one
+append-source + one adopt-return store, the I-c face-flip); the full guard → ×4 (two
+`encode_ic` calls × 2).
+
+### Where, in the code — three sites, one root
+1. **Root — the append inherits the source's NRVO dep.** `buf += head(..,__ref_N)`
+   leaves `buf` with dep `["__ref_N"]` (the consumed source's work-ref) instead of its
+   real backing `__vdb_1`. Under the dep model (`scopes.rs:14-19`) that means *“buf
+   borrows from __ref_N”*. The **`=` path explicitly strips this inherited dep** via
+   `make_independent` (`src/parser/expressions.rs:1871-1897`) — the whole @P292 / @P394
+   / #415 / #426 family. **The `+=`/append path has no equivalent strip** → it is the
+   unfixed sibling of that family.
+2. **No source-free on vector-append.** The **struct**-returning append frees its
+   source temp via the `0x8000` "free source after copy" bit (`copy_ref`,
+   `src/parser/operators.rs:304-335`); `OpAppendVector` (`src/parser/vectors.rs:13-113`)
+   has **no equivalent**, so head's `__ref_N` is deep-copied in and orphaned.
+3. **The free-decision reads the wrong dep.** `get_free_vars`
+   (`src/scopes.rs:1776-1893`): because `buf` borrows `__ref_N` and `buf` escapes, the
+   source's free is suppressed → leak. The **I-c** hunk lives here
+   (`scopes.rs:1859-1880`) and is what flipped the adopt-return store from *corruption*
+   (main: freed-while-returned) to *leak* (branch: not freed).
+
+### Regression vs pre-existing
+The core `+= call(); return` leak is **PRE-EXISTING on `origin/main`** (identical on
+both, both backends) — the new guard merely exposes a main bug no prior test covered
+(the cbor `CMap` coverage gap). plan-90's I-c **added two** branch-internal leaks (the
+inline-concat `N` and `encode_ic`'s second store) by conditionalizing the adopt-free,
+while correctly fixing the corruption. So this is no longer “a plan-90 residual” — it
+is the deep `+=` append-source ownership root (STABILITY_REDFLAGS cluster 1 / @PLN85
+territory) that the I-c commit deferred; we take it here now.
+
+### The chokepoint
+One invariant fixes the class: **a vector local's `dep` = the heap store it actually
+owns after its last assignment/adopt** — computed where each shape's store is decided,
+not re-derived per-site with conflicting rules.
+
+### Resolution — IMPLEMENTED (the red-flag thicket collapsed 4 → 2)
+
+Driving the matrix to zero bugs, the four conflicting per-site dep rules reduced to
+**two principled enforcements of the one invariant**, and the other two proved
+**redundant and were DELETED** (verified by env-gated removal: matrix + suites stay
+green without them):
+
+- **KEPT — `ref_return` adopt promotion** (`src/parser/control.rs`, the
+  `site_adopts_v` exception): when the returned local ADOPTS a work-ref
+  (`buf = head(..); return buf`, `buf`'s dep names the call's `__ref`), promote that
+  `__ref` to `__retbuf` so `buf == __retbuf` (true NRVO) — the end-state the literal
+  `buf = []` path reaches directly. Fixes the mixed-arm #2 leak.
+- **KEPT — concat-adopt owns the call's store** (`src/parser/vectors.rs` +
+  `src/parser/operators.rs`): `a = <call> + …` returns the *adopted* store's dep
+  (`parse_append_vector` reads `collect_hidden_ref_args`), and `create_vector` SKIPS
+  the redundant `__vdb` backing when the first operand is an adopting call
+  (`body_adopts_call`, the sibling of the literal-init `body_allocates` skip). Fixes N.
+- **DELETED — I-c witness-pairing** (`src/scopes.rs`, the escape-gated
+  `OpFreeRefIfDistinct` + the `__ref_N → buf` vector pairing): once the bind/adopt deps
+  are correct, the standard return-source suppression frees the adopt store exactly
+  once. The red-flag-flagged escape-gate is gone (−40 lines), and the original #443
+  Clippy failure (`scopes.rs:1865`) vanishes with it.
+- **DELETED — `+=` backing-preserve** (`src/parser/expressions.rs`): subsumed by the
+  `ref_return` promotion; `buf += call(); return buf` is clean without it.
+
+**Validation.** Full boundary matrix CLEAN on **both backends** (interp + `--native`);
+`wrap` 51/51 (the 437 guard passes), `issues` 746, `leak_cases`/`strings`/`frame_vars`
+green; full suite clean aside from the env-only `38_import` registry-DNS baseline
+(fails identically on `origin/main`) and a network-flake server test (passes on retry).
+`fmt` + `clippy` clean.
+
+The remaining @PLN85 reduction (deriving the owned-store dep in ONE computation rather
+than two enforcement sites) is the next step, but the class is closed and the thicket
+is halved.

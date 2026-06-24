@@ -3729,7 +3729,7 @@ impl Parser {
         tail_forwards(def.code(), &self.data)
     }
 
-    fn collect_hidden_ref_args(val: &Value, data: &crate::data::Data) -> Vec<u16> {
+    pub(crate) fn collect_hidden_ref_args(val: &Value, data: &crate::data::Data) -> Vec<u16> {
         match val {
             Value::Call(d_nr, args) => {
                 let mut result = Vec::new();
@@ -4544,7 +4544,20 @@ impl Parser {
                 // An inner work ref that is not the site's value stays a
                 // plain local: the outer call deep-copies its record into
                 // the destination before scope exit frees it.
-                if is_work_ref && site_value.is_some() && site_value != Some(*v) {
+                //
+                // Cluster I-d (plan-90) EXCEPTION — the site value ADOPTS this
+                // work ref: `buf = head(.., __ref_1); …; return buf`, where
+                // `buf`'s dep is `__ref_1` (buf aliases head's returned store).
+                // Here `buf == __ref_1` at runtime, so promoting `__ref_1` to
+                // `__retbuf` makes `buf == __retbuf` (true NRVO) — the same
+                // end-state the `buf = []` literal path reaches directly.  Left
+                // un-promoted the fn returns a FRESH adopt store while a `["??"]`
+                // caller (e.g. a `match` wrapper) frees the unused buffer and
+                // the adopted store LEAKS (the I-c face-flip).  Only skip when
+                // the site value does NOT adopt `v`.
+                let site_adopts_v =
+                    site_value.is_some_and(|sv| self.vars.tp(sv).depend().contains(v));
+                if is_work_ref && site_value.is_some() && site_value != Some(*v) && !site_adopts_v {
                     continue;
                 }
                 // @PLAN59 / H1: bind the promoted local to the

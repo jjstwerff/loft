@@ -12,9 +12,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 | A — Probe catalogue | ✅ 8 probes; both sub-shapes isolated (06 raw, 08 materialized) |
 | B — Mechanism investigation | ✅ VERIFIED (agent IR/runtime traces) — see [cluster-I](cluster-I-nrvo-coexist.md) |
 | C — Fix design | ✅ O-Move: every arm of a single-tail vector match delivers into the one return buffer |
-| D — Implementation | ✅ **ALL THREE clusters FIXED** — I-a control.rs:906 · I-b control.rs:4101 · I-c scopes.rs (2 hunks). **ztcbor 3/3 — the world is consistent.** |
+| D — Implementation | ✅ I-a control.rs:906 · I-b control.rs:4101 · I-c scopes.rs (2 hunks). **ztcbor 3/3 (corruption fixed).** |
+| **D′ — leak residual (cluster I-d)** | ✅ **FIXED + REDUCED.** The deep `+= call()` / adopt ownership root — pre-existing on `main` + 2 I-c-added regressions — is closed by enforcing one invariant (*a vector local's `dep` = the store it owns*) at TWO principled sites; the 4-site dep thicket collapsed to 2 (I-c witness-pairing + `+=` backing-preserve DELETED as subsumed, −40 lines, also clearing the #443 Clippy fail). Full matrix CLEAN both backends; suites green. See [cluster-I § I-d](cluster-I-nrvo-coexist.md#resolution--implemented-the-red-flag-thicket-collapsed-4--2). |
 
-> **All three clusters closed; the consumer that opened this (ztcbor) is GREEN 3/3, both backends.**
+> **Corruption fixed AND the leak residual (cluster I-d) fixed: the deep adopt/append
+> ownership root is closed by the single invariant, the per-site dep thicket halved
+> (4 → 2 sites), full boundary matrix clean on both backends, suites green.**
 > I-a (raw match) + I-b (materialized match) restored cbor ENCODE; **I-c** (an ENCODE-side
 > *vector-adopt free*, surfaced by ztcbor re-encoding a decoded map) is fixed by aligning the
 > witness-pairing with the **escape** signal — record the `__ref_N → buf` vector pairing without the

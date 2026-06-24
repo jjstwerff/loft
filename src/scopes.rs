@@ -953,35 +953,6 @@ impl Scopes {
         // freshly-allocated store and Database N leaks at scope exit
         // (e.g. tests/scripts/95-alias-copy.loft Database 3 leak).
         let unspanned_value = value.unspan();
-        // I-c narrow: a Vector binding `buf = head(.., __ref_N)` adopts the
-        // callee's hidden NRVO buffer.  Record __ref_N -> buf so the work-ref's
-        // free becomes OpFreeRefIfDistinct — but ONLY when `buf` ESCAPES (is a
-        // return source), gated at the emission site.  Crucially we do NOT enter
-        // the Reference/Enum make_independent dep-strip (it would flip an
-        // APPENDED temp like `ki = encode(key)` to owned and free it per-loop).
-        if matches!(function.tp(v), Type::Vector(_, _))
-            && let Value::Call(fn_nr, args) = unspanned_value
-            && data.def(*fn_nr).name.starts_with("n_")
-            && data.def(*fn_nr).code != Value::Null
-        {
-            for arg in args {
-                let arg_var = match arg {
-                    Value::Var(av) => Some(*av),
-                    Value::Set(av, _) => Some(*av),
-                    _ => None,
-                };
-                if let Some(av) = arg_var {
-                    let n = function.name(av);
-                    if n.starts_with("__ref_") || n.starts_with("__rref_") {
-                        let av_scope = self.var_scope.get(&av).copied().unwrap_or(u16::MAX);
-                        let v_scope = self.var_scope.get(&v).copied().unwrap_or(u16::MAX);
-                        if v_scope <= av_scope && v_scope != u16::MAX {
-                            self.paired_witness.entry(av).or_insert(v);
-                        }
-                    }
-                }
-            }
-        }
         if matches!(
             function.tp(v),
             Type::Reference(_, _) | Type::Enum(_, true, _)
@@ -1856,24 +1827,7 @@ impl Scopes {
                     // case (distinct stores, placeholder orphaned).
                     // Falls through to plain `OpFreeRef` when no pairing
                     // was recorded.
-                    // I-c: for a VECTOR witness (the `buf = head(.., __ref_N)`
-                    // adopt), the conditional free is only needed when `buf`
-                    // ESCAPES this function (is a return source) — a plain
-                    // appended temp (`ki = encode(key)`, copied into buf and
-                    // discarded) must keep its UNCONDITIONAL free.  Reference/Enum
-                    // witnesses keep the existing unconditional pairing.
-                    let witness_ok = self
-                        .paired_witness
-                        .get(&v)
-                        .map(|&w| {
-                            !matches!(function.tp(w), Type::Vector(_, _))
-                                || return_sources.contains(&w)
-                        })
-                        .unwrap_or(false);
-                    if is_work_ref
-                        && witness_ok
-                        && let Some(&witness) = self.paired_witness.get(&v)
-                    {
+                    if is_work_ref && let Some(&witness) = self.paired_witness.get(&v) {
                         ls.push(Value::Call(
                             data.def_nr("OpFreeRefIfDistinct"),
                             vec![Value::Var(v), Value::Var(witness)],

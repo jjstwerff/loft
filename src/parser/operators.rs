@@ -193,11 +193,25 @@ impl Parser {
                             Value::Set(s, rhs) if *s == var_nr
                                 && matches!(rhs.unspan(), Value::Call(d, _) if *d == get_field_nr))
                     });
+                    // Cluster I-d (plan-90 / @PLN85 single-dep) — `a = <call> + …`:
+                    // parse_append_vector emits a leading `Set(a, call())` so `a`
+                    // ADOPTS the call's fresh `["??"]` store (no copy).  Allocating a
+                    // SECOND `__vdb` backing here orphans that empty store — it leaks
+                    // when `a` escapes (the N shape: `a = head()+head()`, returned).
+                    // The adopt IS the body providing a's store, exactly like the
+                    // literal-init `body_allocates` case — so skip `vector_db` too.
+                    let body_adopts_call = ls.first().is_some_and(|first| {
+                        matches!(first.unspan(), Value::Set(s, rhs) if *s == var_nr
+                            && matches!(rhs.unspan(), Value::Call(d, _)
+                                if self.data.def(*d).name().starts_with("n_")
+                                    && *self.data.def(*d).code() != Value::Null
+                                    && !self.data.def(*d).returns_borrowed_view()))
+                    });
                     // The materialise prefix reads v while it is still intact, so
                     // it MUST precede the `vector_db` clear: insert prefix ++
                     // vector_db ops together, ahead of the body (prefix first).
                     let mut front = prefix;
-                    if !body_allocates {
+                    if !body_allocates && !body_adopts_call {
                         front.extend(self.vector_db(tp, var_nr));
                     }
                     for (i, p) in front.into_iter().enumerate() {
