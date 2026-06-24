@@ -685,9 +685,39 @@ impl Parser {
                     vec_arm_handled = true;
                 }
             }
+            // #448 — the early-`return <call>` + tail-`return [literal]` shape.
+            // A sibling Call/NRVO return already classified `returned` to deliver
+            // into `__retbuf` (so the caller frees `__retbuf`), but the TAIL is a
+            // bare return of a FRESH local vector — it builds its own store and
+            // returns THAT, which the caller never frees (`__vdb_N` orphaned).
+            // Unlike the implicit-tail case, `ref_return` cannot RENAME this local
+            // onto `__retbuf` (the buffer is already taken by the Call path), so it
+            // falls through and leaks. COPY the tail into `__retbuf` via the same
+            // per-arm materialiser the branch tails use, so every return path
+            // honours the `__retbuf` classification. Gated to: NRVO buffer exists,
+            // `returned` already uses it, the tail is a non-branch fresh non-arg
+            // local vector (not an arg/field borrow, which copy elsewhere).
+            if !vec_arm_handled
+                && !tuple_rewritten
+                && !if_unified
+                && !self.first_pass
+                && context == "return from block"
+                && !Self::tail_terminal_is_branch(&l[last])
+                && let Type::Vector(elm, _) = result.clone()
+                && let Some((buf_attr, buf_var)) = self.return_buffer()
+                && self.returned_uses_buffer(buf_attr)
+                && Self::body_has_buffer_return(&l[..last], buf_var)
+                && self.tail_terminal_fresh_local_vec(&l[last], buf_var)
+            {
+                let elm_ty = (*elm).clone();
+                if self.materialize_vector_arms_into(&elm_ty, &mut l[last], buf_var) {
+                    vec_arm_handled = true;
+                }
+            }
             if !tuple_rewritten
                 && !if_unified
                 && !vec_match_candidate
+                && !vec_arm_handled
                 && !self.convert(&mut l[last], t, result)
                 && !ignore
             {
@@ -4047,6 +4077,79 @@ impl Parser {
             Value::Return(inner) | Value::Drop(inner) => Self::tail_terminal_is_branch(inner),
             _ => false,
         }
+    }
+
+    /// #448 — descend a body tail (through Return/Drop/Block/Insert/Span) to its
+    /// terminal value and report whether it is a FRESH non-argument vector LOCAL
+    /// (not the return buffer `buf`). Such a tail builds its own store; when the
+    /// fn is ALSO classified to deliver into `__retbuf` (a sibling Call/NRVO
+    /// return), the caller frees `__retbuf` and orphans this tail's store unless
+    /// it is copied into the buffer. Excludes arg / field borrows (copied
+    /// elsewhere) and the buffer itself (already delivered).
+    fn tail_terminal_fresh_local_vec(&self, v: &Value, buf: u16) -> bool {
+        match v.unspan() {
+            Value::Return(inner) | Value::Drop(inner) => {
+                self.tail_terminal_fresh_local_vec(inner, buf)
+            }
+            Value::Block(bl) => bl
+                .operators
+                .last()
+                .is_some_and(|x| self.tail_terminal_fresh_local_vec(x, buf)),
+            Value::Insert(ops) => ops
+                .last()
+                .is_some_and(|x| self.tail_terminal_fresh_local_vec(x, buf)),
+            Value::Var(o) => {
+                *o != buf
+                    && self.vars.exists(*o)
+                    && !self.vars.is_argument(*o)
+                    && matches!(self.vars.tp(*o), Type::Vector(_, _))
+            }
+            _ => false,
+        }
+    }
+
+    /// #448 — is the fn's `returned` type already classified to deliver into the
+    /// hidden return-buffer attribute `buf_attr`? When so, EVERY return path must
+    /// deliver into `__retbuf`, or the caller's buffer free orphans a path that
+    /// builds its own store. The precondition for the copy-into-buffer rewrite of
+    /// a fresh-local tail (so it does not re-derive / overwrite the classification).
+    fn returned_uses_buffer(&self, buf_attr: u16) -> bool {
+        matches!(
+            self.data.def(self.context).returned(),
+            Type::Vector(_, d) if d.contains(&buf_attr)
+        )
+    }
+
+    /// #448 — does any statement BEFORE the tail contain a `return` that already
+    /// DELIVERS into the return buffer `buf` (its value's terminal is the `__retbuf`
+    /// var — the lowered shape of an early `return <call>` that NRVO-adopted into
+    /// the buffer)? This is the precise precondition for COPYING a fresh-local tail
+    /// into `__retbuf`: the buffer is already TAKEN, so `tail_ret_local` cannot
+    /// RENAME the tail onto it. When NO early return delivers the buffer (e.g. the
+    /// stdlib `split_text`'s early `return [self]` literal, or a plain single-return
+    /// fn), the tail must still be renamed — copying it instead orphans the original
+    /// store (the 104-split-text regression). Stays within this fn's own control
+    /// flow (does not descend into nested fn / closure bodies).
+    fn body_has_buffer_return(stmts: &[Value], buf: u16) -> bool {
+        fn terminal_is_buf(v: &Value, buf: u16) -> bool {
+            match v.unspan() {
+                Value::Var(o) => *o == buf,
+                Value::Block(bl) => bl.operators.last().is_some_and(|x| terminal_is_buf(x, buf)),
+                Value::Insert(ops) => ops.last().is_some_and(|x| terminal_is_buf(x, buf)),
+                _ => false,
+            }
+        }
+        fn walk(v: &Value, buf: u16) -> bool {
+            match v.unspan() {
+                Value::Return(inner) => terminal_is_buf(inner, buf),
+                Value::Drop(inner) => walk(inner, buf),
+                Value::If(_, t, f) => walk(t, buf) || walk(f, buf),
+                Value::Block(bl) => bl.operators.iter().any(|x| walk(x, buf)),
+                Value::Insert(ops) => ops.iter().any(|x| walk(x, buf)),
+                _ => false,
+            }
+        }
+        stmts.iter().any(|s| walk(s, buf))
     }
 
     /// @PLN85 cluster II — PER-ARM, native-safe vector NRVO delivery. Descends a

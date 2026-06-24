@@ -1,0 +1,39 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN89 differential-oracle corpus — AXIS: NRVO mixed-construction return paths
+// (#448, the oracle's first catch). A vector-returning fn with an early
+// `return <call>` (which NRVO-adopts into __retbuf) AND a tail `return [literal]`
+// must deliver BOTH paths into __retbuf — else the caller frees __retbuf and
+// orphans the literal path's store. Fixed by copying a fresh-local tail into
+// __retbuf when the fn is already buffer-classified (control.rs). Guards the
+// leak-freedom (both backends) and the value.
+
+fn squares(n: integer) -> vector<integer> {
+  out = [];
+  for i in 0..n { out += [i * i]; }
+  return out;
+}
+
+// early Call-return (NRVO) + tail literal-return (the #448 shape)
+fn pick(f: boolean, n: integer) -> vector<integer> {
+  if f { return squares(n); }
+  return [n, n, n];
+}
+
+fn main() {
+  // take the literal path — was a leak before the fix
+  a = pick(false, 7);
+  print("a={a[0]}+{a[1]}+{a[2]} alen={len(a)}\n"); // 7+7+7, len 3
+
+  // take the Call path — always clean
+  b = pick(true, 4);
+  print("b={b[0]}+{b[3]} blen={len(b)}\n"); // 0 + 9, len 4
+
+  // both, kept together, then consume
+  sa = 0;
+  for x in a { sa += x; }
+  sb = 0;
+  for x in b { sb += x; }
+  print("sa={sa} sb={sb}\n"); // 21, 14
+}
