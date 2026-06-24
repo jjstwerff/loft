@@ -710,35 +710,12 @@ impl Parser {
                     vec_arm_handled = true;
                 }
             }
-            // #448 — the early-`return <call>` + tail-`return [literal]` shape.
-            // A sibling Call/NRVO return already classified `returned` to deliver
-            // into `__retbuf` (so the caller frees `__retbuf`), but the TAIL is a
-            // bare return of a FRESH local vector — it builds its own store and
-            // returns THAT, which the caller never frees (`__vdb_N` orphaned).
-            // Unlike the implicit-tail case, `ref_return` cannot RENAME this local
-            // onto `__retbuf` (the buffer is already taken by the Call path), so it
-            // falls through and leaks. COPY the tail into `__retbuf` via the same
-            // per-arm materialiser the branch tails use, so every return path
-            // honours the `__retbuf` classification. Gated to: NRVO buffer exists,
-            // `returned` already uses it, the tail is a non-branch fresh non-arg
-            // local vector (not an arg/field borrow, which copy elsewhere).
-            if !vec_arm_handled
-                && !tuple_rewritten
-                && !if_unified
-                && !self.first_pass
-                && context == "return from block"
-                && !Self::tail_terminal_is_branch(&l[last])
-                && let Type::Vector(elm, _) = result.clone()
-                && let Some((buf_attr, buf_var)) = self.return_buffer()
-                && self.returned_uses_buffer(buf_attr)
-                && Self::body_has_buffer_return(&l[..last], buf_var)
-                && self.tail_terminal_fresh_local_vec(&l[last], buf_var)
-            {
-                let elm_ty = (*elm).clone();
-                if self.materialize_vector_arms_into(&elm_ty, &mut l[last], buf_var) {
-                    vec_arm_handled = true;
-                }
-            }
+            // (#448, the early-`return <call>` + tail-`return [literal]` shape, was a
+            // SECOND upper materialise block here. It is now a CELL of the tail-return
+            // handling below — `Delivery::Materialize` when the buffer is already
+            // TAKEN by a sibling return — so it shares one fresh-owned-vector classifier
+            // (`fresh_owned_vector_deps`) and one dispatch with the buffer-free #437/c5
+            // rename. See the `tail_ret_owned` block.)
             if !tuple_rewritten
                 && !if_unified
                 && !vec_match_candidate
@@ -820,24 +797,47 @@ impl Parser {
             };
             if let Some(ls) = tail_ret_owned {
                 let last = l.len() - 1;
-                // strip the `return` → implicit tail: peel any Span, then the Return,
-                // keeping the owned expr (a bare Var #437, or the literal block).
-                let mut taken = std::mem::replace(&mut l[last], Value::Null);
-                loop {
-                    taken = match taken {
-                        Value::Span(b) => b.1,
-                        Value::Return(inner) => {
-                            l[last] = *inner;
-                            break;
-                        }
-                        other => {
-                            l[last] = other;
-                            break;
-                        }
-                    };
+                // #448 (now a CELL, not a separate upper block) — when the buffer is
+                // already TAKEN by a sibling return that delivers __retbuf (an early
+                // `return <call>` NRVO-adopted it), RENAMING this fresh-owned tail onto
+                // __retbuf would double-own the buffer, so COPY it in (the per-arm
+                // materialiser: clear + append + free the local). `returned` is already
+                // `["__retbuf"]` (returned_uses_buffer checked it), so it is NOT re-set.
+                // The buffer-FREE case RENAMES (#437/c5). One fresh-owned-vector
+                // classifier (`fresh_owned_vector_deps`), the deps fact deciding
+                // rename-vs-copy.
+                let mut delivered = false;
+                if !Self::tail_terminal_is_branch(&l[last])
+                    && let Type::Vector(elm, _) = result
+                    && let Some((buf_attr, buf_var)) = self.return_buffer()
+                    && self.returned_uses_buffer(buf_attr)
+                    && Self::body_has_buffer_return(&l[..last], buf_var)
+                {
+                    let elm_ty = (**elm).clone();
+                    delivered = self.materialize_vector_arms_into(&elm_ty, &mut l[last], buf_var);
                 }
-                self.ref_return(&ls, l, RetSite::BlockTail);
-                self.nrvo_collapse_tail_set(l, &ls);
+                if !delivered {
+                    // buffer FREE (or the copy did not fire) → strip the `return` →
+                    // implicit tail (peel any Span, then the Return, keeping the owned
+                    // expr — a bare Var #437 or the literal block) and RENAME its store
+                    // onto __retbuf via ref_return + NRVO.
+                    let mut taken = std::mem::replace(&mut l[last], Value::Null);
+                    loop {
+                        taken = match taken {
+                            Value::Span(b) => b.1,
+                            Value::Return(inner) => {
+                                l[last] = *inner;
+                                break;
+                            }
+                            other => {
+                                l[last] = other;
+                                break;
+                            }
+                        };
+                    }
+                    self.ref_return(&ls, l, RetSite::BlockTail);
+                    self.nrvo_collapse_tail_set(l, &ls);
+                }
             } else if let Type::Reference(td, _) = result
                 && !l.is_empty()
                 && self.tail_is_nullable_unwrap(&l[l.len() - 1])
@@ -4130,35 +4130,6 @@ impl Parser {
                 .is_some_and(Self::tail_terminal_is_branch),
             Value::Insert(ops) => ops.last().is_some_and(Self::tail_terminal_is_branch),
             Value::Return(inner) | Value::Drop(inner) => Self::tail_terminal_is_branch(inner),
-            _ => false,
-        }
-    }
-
-    /// #448 — descend a body tail (through Return/Drop/Block/Insert/Span) to its
-    /// terminal value and report whether it is a FRESH non-argument vector LOCAL
-    /// (not the return buffer `buf`). Such a tail builds its own store; when the
-    /// fn is ALSO classified to deliver into `__retbuf` (a sibling Call/NRVO
-    /// return), the caller frees `__retbuf` and orphans this tail's store unless
-    /// it is copied into the buffer. Excludes arg / field borrows (copied
-    /// elsewhere) and the buffer itself (already delivered).
-    fn tail_terminal_fresh_local_vec(&self, v: &Value, buf: u16) -> bool {
-        match v.unspan() {
-            Value::Return(inner) | Value::Drop(inner) => {
-                self.tail_terminal_fresh_local_vec(inner, buf)
-            }
-            Value::Block(bl) => bl
-                .operators
-                .last()
-                .is_some_and(|x| self.tail_terminal_fresh_local_vec(x, buf)),
-            Value::Insert(ops) => ops
-                .last()
-                .is_some_and(|x| self.tail_terminal_fresh_local_vec(x, buf)),
-            Value::Var(o) => {
-                *o != buf
-                    && self.vars.exists(*o)
-                    && !self.vars.is_argument(*o)
-                    && matches!(self.vars.tp(*o), Type::Vector(_, _))
-            }
             _ => false,
         }
     }
