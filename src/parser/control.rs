@@ -903,7 +903,7 @@ impl Parser {
                         self.nrvo_collapse_tail_set(l, ls);
                     }
                 } else {
-                    // #437/plan-90 (O-Move): a multi-arm `match`/`if` vector tail
+                    // #437/@PLN85 cluster V (O-Move): a multi-arm `match`/`if` vector tail
                     // must deliver EVERY arm's buffer into the one return buffer.
                     // The Vector type dep `ls` can be INCOMPLETE — it carries only
                     // the first arm's `__ref_1`, while a later arm's `__ref_N` is
@@ -4099,7 +4099,7 @@ impl Parser {
                 true
             }
             Value::Call(_, _) => {
-                // #437/plan-90 cluster I-b (O-Move): a Call-terminal arm
+                // #437/@PLN85 cluster V cluster I-b (O-Move): a Call-terminal arm
                 // (`head(0,value)`) writes its OWN hidden `__ref_N` buffer, which
                 // this materialiser left untouched (only `Var` terminals above were
                 // rewritten).  The epilogue then freed that `__ref_N` while it was
@@ -4545,7 +4545,7 @@ impl Parser {
                 // plain local: the outer call deep-copies its record into
                 // the destination before scope exit frees it.
                 //
-                // Cluster I-d (plan-90) EXCEPTION — the site value ADOPTS this
+                // Cluster I-d (@PLN85 cluster V) EXCEPTION — the site value ADOPTS this
                 // work ref: `buf = head(.., __ref_1); …; return buf`, where
                 // `buf`'s dep is `__ref_1` (buf aliases head's returned store).
                 // Here `buf == __ref_1` at runtime, so promoting `__ref_1` to

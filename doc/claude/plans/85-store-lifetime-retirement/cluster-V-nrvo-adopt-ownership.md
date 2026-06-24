@@ -3,7 +3,15 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Cluster I — multi-arm vector `match` drops a later arm's return buffer
+# @PLN85 cluster V — NRVO adopt/append ownership-dep (the #437 return-aliasing regression)
+
+> Formerly the standalone **plan-90** investigation (the ztcbor-consumer-reported #437 NRVO
+> regression). Folded into @PLN85 as cluster V: it is the same class — *a vector local's `dep`
+> must equal the store it owns*. The sub-clusters below (I-a/b/c = the corruption mechanism,
+> I-d = the leak) are the #437 detail; the **Resolution — IMPLEMENTED** section is the landed fix
+> (one invariant enforced at two sites, the per-site dep thicket halved 4 → 2).
+
+## I-a/b/c — multi-arm vector `match` drops a later arm's return buffer (corruption)
 
 **Severity (split by failure mode):**
 - **Corruption (silent):** wrong value, no crash — the trust-fatal face. Interp clobbers a

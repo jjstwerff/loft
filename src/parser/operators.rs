@@ -193,7 +193,7 @@ impl Parser {
                             Value::Set(s, rhs) if *s == var_nr
                                 && matches!(rhs.unspan(), Value::Call(d, _) if *d == get_field_nr))
                     });
-                    // Cluster I-d (plan-90 / @PLN85 single-dep) — `a = <call> + …`:
+                    // Cluster I-d (@PLN85 cluster V) — `a = <call> + …`:
                     // parse_append_vector emits a leading `Set(a, call())` so `a`
                     // ADOPTS the call's fresh `["??"]` store (no copy).  Allocating a
                     // SECOND `__vdb` backing here orphans that empty store — it leaks

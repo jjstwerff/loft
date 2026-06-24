@@ -18,7 +18,7 @@ impl Parser {
         orig_var: u16,
     ) -> Type {
         let mut ls = Vec::new();
-        // Cluster I-d (plan-90 / @PLN85 single-dep) — the store `orig_var` ends up
+        // Cluster I-d (@PLN85 cluster V / @PLN85 single-dep) — the store `orig_var` ends up
         // OWNING after this concat.  For `a = <call> + …` the first-operand adopt
         // (branch below) makes `a` hold the call's `["??"]` store, but `a`'s
         // pre-allocated `create_vector` backing is its current dep; the returned

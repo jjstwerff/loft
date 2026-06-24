@@ -1,8 +1,0 @@
-fn head(x: integer) -> vector<u8> { buf: vector<u8> = []; buf += [x as u8]; return buf; }
-fn pick(a: vector<u8>, b: vector<u8>) -> integer { return (a[0] ?? 99) * 100 + (b[0] ?? 99); }
-fn main() {
-  ki = head(1);                 // ki = [1], LIVE
-  r = pick(head(2), ki);        // head(2) is a TEMP coexisting with live ki
-  println("r={r} (EXPECT 201: a=head(2)=2, b=ki=1)");
-  println("ki[0]={ki[0] ?? 99} (EXPECT 1 — clobbered to 2 = the bug)");
-}

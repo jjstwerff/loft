@@ -40,9 +40,11 @@ exactly one owner at every point; all mutation flows through that owner; a non-o
 read-only and never outlives its owner* — breached four ways: **leak** (owner dropped without a
 free) · **double-free** (owner duplicated) · **use-after-free** (alias outlives owner) ·
 **silent corruption** (two owners mutate one store). The #437 NRVO regression is the corruption
-face: two coexisting returned vectors handed the same `__retbuf`. Plan
-[`90-nrvo-return-aliasing`](plans/90-nrvo-return-aliasing/README.md) is the concrete entry that
-consumer forced open — pin this slice of the invariant, enforce at the chokepoint.
+face: two coexisting returned vectors handed the same `__retbuf`. The concrete entry that
+consumer forced open is **@PLN85 cluster V**
+([cluster-V-nrvo-adopt-ownership.md](plans/85-store-lifetime-retirement/cluster-V-nrvo-adopt-ownership.md),
+formerly the standalone plan-90 #437 investigation) — pin this slice of the invariant (a vector
+local's `dep` = the store it owns), enforce at the chokepoint.
 
 ## Internal and invisible — never a user-facing borrow checker (decided)
 

@@ -1,4 +1,5 @@
-// Regression for #437's NRVO return-aliasing class (investigation plan-90).
+// Regression for #437's NRVO return-aliasing class (@PLN85 cluster V — the
+// store-lifetime/ownership investigation; formerly the standalone plan-90).
 //
 // #437 made vector-returning fns NRVO (a fn returns its caller-provided `["??"]`
 // buffer). When a multi-arm vector `match` delivers arms into one return buffer, OR
