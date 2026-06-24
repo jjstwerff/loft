@@ -448,23 +448,35 @@ construction is unaffected.
 
 ## Operators
 
-Listed by precedence (lowest to highest):
+Listed by precedence, loosest first — each level binds **tighter** than the one above
+it, so a lower level groups last (outermost) and a higher level groups first (innermost):
 
 | Precedence | Operators                              | Notes                   |
 |------------|----------------------------------------|-------------------------|
-| 0 (lowest) | `??`, `?? return`                      | null-coalescing / early return (C56) |
+| 0 (loosest)| `??`, `?? return`                      | null-coalescing / early return (C56) |
 | 1          | `\|\|`, `or`                           | logical OR              |
 | 2          | `&&`, `and`                            | logical AND             |
 | 3          | `==`, `!=`, `<`, `<=`, `>`, `>=`       | comparison              |
 | 4          | `\|`                                   | bitwise OR              |
 | 5          | `^`                                    | bitwise EOR             |
-| 6          | `&`                                    | bitwise AND             |
+| 6          | `&`                                    | bitwise AND — *infix only*; a **leading** `&` is the reference annotation, not an operator (see § References (`&`)) |
 | 7          | `<<`, `>>`                             | bit shift               |
 | 8          | `-`, `+`                               | addition/subtraction    |
-| 9          | `*`, `/`, `%`                          | multiplication/division |
-| 10         | `as` (type cast/conversion)            |                         |
+| 9          | `*`, `/`, `%`                          | multiplication/division/modulo |
+| 10         | `**`                                    | power — **right-associative** |
+| 11 (tightest)| `as`                                 | type cast/conversion (right operand is a *type*) |
 
-Unary operators: `!` (logical not), `-` (negation), `~` (bitwise NOT).
+**Associativity.** All binary operators are **left-associative** (equal-precedence
+operators group left-to-right: `a - b - c` is `(a - b) - c`) except `**` (power),
+which is **right-associative**: `2 ** 3 ** 2` is `2 ** (3 ** 2) = 512`. Worked groupings:
+`1 + 2 & 3` is `(1 + 2) & 3 == 3` (additive tighter than bitwise-and); `2 * 3 ** 2` is
+`2 * (3 ** 2) == 18` (power tighter than multiply); `x as integer as float` is
+`(x as integer) as float` (`as` left-associative).
+
+Unary operators: `!` (logical not), `-` (negation), `~` (bitwise NOT). A unary prefix
+binds **tighter than every binary operator** (it is part of the primary expression), so
+`-2 ** 2` is `(-2) ** 2 == 4`, *not* `-(2 ** 2)` — note this differs from Python. Wrap the
+exponent base if you mean the negation to apply last: `-(2 ** 2) == -4`.
 
 `~x` computes the bitwise complement (all bits flipped): `~0 == -1`, `flags & ~32` clears bit 5.
 Only defined for `integer`; use `as integer` to convert other types first.
@@ -1524,7 +1536,11 @@ match_arm    ::= pattern { '|' pattern } [ 'if' expr ] '=>' expr
 pattern      ::= '_' | 'null' | literal | range | CamelIdent [ '{' field_bind '}' ]
 assignment   ::= operators [ ( '=' | '+=' | '-=' | '*=' | '/=' | '%=' ) operators ]
 operators    ::= single { '.' ident [ '(' args ')' ] | '[' index ']' | '#' ident }
-               { op operators }
+               { binary_op operators }   // grouping by precedence + associativity: see § Operators
+binary_op    ::= '??' | '||' | 'or' | '&&' | 'and'
+               | '==' | '!=' | '<' | '<=' | '>' | '>='
+               | '|' | '^' | '&' | '<<' | '>>'
+               | '+' | '-' | '*' | '/' | '%' | '**' | 'as'   // 'as' right operand is a type
 single       ::= '!' single | '-' single | '(' expr ')' | block | '[' vector_lit ']'
                | 'if' expr block [ 'else' ( single | block ) ]
                | 'for' ident 'in' range_expr [ 'if' expr ] block
@@ -1535,6 +1551,14 @@ range_expr   ::= expr '..' [ '=' ] expr   // exclusive or inclusive end
                | expr '..'                 // open-ended
                | 'rev' '(' range_expr ')' // reverse
 ```
+
+The `{ binary_op operators }` rule above is intentionally **flat** — it does not encode
+how a chain like `a + b * c ?? d` groups. That grouping is fixed by the **precedence
+ladder** (twelve levels, loosest `??` to tightest `as`) and **associativity** (every level
+left-associative except `**`, which is right-associative) given in [§ Operators](#operators);
+a unary prefix (`!`, `-`, `~` in `single`) binds tighter than every binary operator. The
+parser realises this with a precedence-climbing walk (`OPERATORS` / `parse_operators`); the
+two statements — this grammar and that table — together pin every expression's shape.
 
 ---
 

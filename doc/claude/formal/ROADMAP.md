@@ -26,12 +26,12 @@ Closing a row means the implementation obeys the rule (then the deviation entry 
 | area | open | what's left |
 |---|---|---|
 | [types.md](types.md) | 1 | D2 — the integer model is i64 end-to-end (`Value::Int` IR change) |
-| [binding.md](binding.md) | 1 | D-bind-7 — reject a bare `&a;` statement |
-| [grammar.md](grammar.md) | 3 | precedence-in-the-grammar-doc + 2 decisions (`**` right-assoc landed) |
-| [operational.md](operational.md) | 3 | the shared interp/native semantics (oracle) |
+| [binding.md](binding.md) | 0 | ✓ closed — D-bind-7 (reject bare `&a;` / block-final `{ &a }`) landed |
+| [grammar.md](grammar.md) | 2 | 2 decisions left (D-gram-2 CFG · D-gram-4 `&` overload — B3, now ready); precedence-doc (D-gram-1) + `**` right-assoc landed |
+| [operational.md](operational.md) | 3 | D-op-1/2 the differential oracle (@PLN89) · D-op-4 the spreadsheet runtime (C80) |
 | [ownership.md](ownership.md) | 5 | the `deps` borrow checker (the big one) |
 
-Type, binding, and grammar are nearly done; operational and ownership are the long arcs.
+Binding is closed; type and grammar are nearly done; operational and ownership are the long arcs.
 
 ---
 
@@ -41,9 +41,9 @@ Cheap, well-scoped, no plan needed — clear the easy distance first.
 
 | # | deviation | change | direction |
 |---|---|---|---|
-| A1 | **D-bind-7** | extend the prefix-`&` parser guard (already rejects 9 expression positions) to the bare-statement position `&a;` → binding.md reaches **0** | code→spec |
-| A2 | **D-gram-1** | lift the 12-level precedence ladder + left-associativity from the parser into [LOFT.md](../LOFT.md)'s user-facing grammar | code→spec (doc) |
-| A3 | **D-op-3** | carry "trap-suppressing context" (`?? ` operand) as one threaded fact, not a per-site flag — same shape as the D1 hint consolidation just landed | code→spec |
+| ~~A1~~ **DONE** | ~~**D-bind-7**~~ | extended the prefix-`&` guard to the bare-statement position `&a;` (and block-final `{ &a }`, the same leak) at the `parse_assign` chokepoint → binding.md is **0**. `pln87_d_bind_7_*` in `tests/parse_errors.rs`. | code→spec, landed |
+| ~~A2~~ **DONE** | ~~**D-gram-1**~~ | lifted the 12-level precedence ladder + associativity into [LOFT.md § Operators](../LOFT.md#operators) (fixed the stale table: `**`@10, `as`@11, assoc statement, unary-tightest note) and enumerated `binary_op` in § Summary of grammar | code→spec (doc), landed |
+| ~~A3~~ **RESOLVED (subsumed)** | ~~**D-op-3**~~ | **obsolete — do NOT thread the flag.** The C80 decision (this cycle) eliminated trap-suppression as a concept: every uncomputable op yields null+continue in ALL modes, so the trapping variant *and* the `??`-position rewrite (`rewrite_outer_arith_to_nullable`, the per-site flag) both disappear. operational.md folded D-op-3 into **D-op-4** (`E-Coalesce`: "closes the old D-op-3"). The remaining work is D-op-4 (below), not a Phase-A consolidation. | spec-adjusted → D-op-4 |
 
 ## Phase B — three decisions (a sentence each; may change the spec, not the code)
 
@@ -65,19 +65,21 @@ The real weight. Each is a `loft-lang/plans` issue, sequenced.
 | C2 | **D-own-3** | typed `Deps` (replace the overloaded `Vec<u16>`) — the substrate the rest of ownership reads | H2 ([DEPS_INVENTORY.md](../DEPS_INVENTORY.md)); *no issue yet* | M |
 | C3 | **D-own-1, D-own-2, D-own-5, D-own-4** | the `deps` borrow checker: ownership computed once per binding/path; free/copy/move derive from one `deps` fact; `&`-borrow source tracked in `deps`; reverse the #415 copy-on-bind stopgap | **[@PLN85](https://github.com/loft-lang/plans/issues/85)** | L (the north star) |
 
-## Phase D — the operational oracle (decided: differential)
+## Phase D — the operational arc (two projects: oracle + spreadsheet runtime)
 
 | # | deviation(s) | project | direction |
 |---|---|---|---|
 | D1 | **D-op-1, D-op-2** | **DECIDED (2026-06): a differential oracle** — run a growing corpus on BOTH backends and assert they agree (value / null / halt / stdout / leak); the operational.md rules guide coverage. Turns the interp/native divergence class (D4/#433) from a coverage lottery into a caught failure. Switchable later to an executable shared semantics; the rules reuse either way. Tracked: **[@PLN89](https://github.com/loft-lang/plans/issues/89)**. | code→spec (the chosen model) |
+| D2 | **D-op-4** (subsumes ~~D-op-3~~) | **BUILD the spreadsheet runtime** — the C80 implementation gap (the rule moved; the code has not). Today an overflow / div-by-zero / OOB-index **traps**, and a dev run **halts**; the trap-vs-null choice rides on the static `??`-position rewrite. `E-Uncomp` wants null+continue in **all** modes, **silently** (opt-in debug log), with the `??`-rewrite dropped — `panic`/`assert` keep their C66 dev-halt/prod-log split (out of scope). Size **M+** (touches arith op dispatch, codegen, dev-halt behaviour); needs a plan issue (none yet). | code→spec (C80) |
 
 ---
 
 ## Resolving order, in one line
 
-**A1 → A2 → A3** (clear types/binding/grammar to near-zero) **·** **B1/B2/B3** (decide, cheap) **·**
+**~~A1~~ ~~A2~~ ~~A3~~ (all done — A3 was obsolete, subsumed by D-op-4)** clears Phase A **·**
+**B1/B2/B3** (decide, cheap; B3 D-gram-4 now ready — A1 met its condition) **·**
 then the tracked arcs **C1 (@PLN88) · C2 (typed Deps) → C3 (@PLN85)** in that dependency order **·**
-**D1** (operational oracle) last, after its goal is decided.
+the operational arc **D1** (oracle, @PLN89) + **D2** (D-op-4 spreadsheet runtime, C80) last.
 
 ## What is NOT on this list (already clean or decided)
 

@@ -83,17 +83,16 @@ is the only place a leading `&` is allowed. The parser disambiguates purely by p
 
 ## Deviations
 
-OPEN: **3** — (was 4; D-gram-3 `**`-associativity closed: `**` is now right-associative)
+OPEN: **2** — (was 4; D-gram-3 `**`-associativity + D-gram-1 precedence-doc both closed)
 
-### D-gram-1 — the written grammar omits precedence entirely
-- **Violates:** G-Prec / G-Assoc (they exist only in code)
-- **Where:** [LOFT.md § Summary of grammar](../LOFT.md) collapses every binary operator
-  into one `expr OP expr` rule; the twelve levels + left-associativity live only in
-  `src/parser/mod.rs:375` (`OPERATORS`) and `operators.rs:446` (`parse_operators`).
-- **Effect:** reasoning about how an expression groups means reading the parser — the
-  "read-the-parser tax" (FORMALIZATION.md rough spot #4).
-- **Status:** OPEN — closing it = lifting the table above into LOFT.md's grammar.
-- **Removal:** state the precedence ladder + left-associativity in the user-facing grammar.
+> **D-gram-1 (CLOSED this cycle) — the written grammar now states precedence + associativity.**
+> [LOFT.md § Operators](../LOFT.md#operators) carries the full twelve-level ladder (the stale
+> table is fixed: `**` added at level 10, `as` moved to 11) with an explicit associativity
+> statement (all left-assoc except `**` right-assoc) and the unary-binds-tightest note
+> (`-2 ** 2 == 4`). [LOFT.md § Summary of grammar](../LOFT.md) no longer collapses operators
+> into one undefined `op`: it enumerates `binary_op` and cross-references § Operators for the
+> grouping. The "read-the-parser tax" (FORMALIZATION.md rough spot #4) is paid down — the two
+> user-facing statements pin every expression's shape, matching `OPERATORS` / `parse_operators`.
 
 ### D-gram-2 — the surface is not context-free
 - **Violates:** the implicit goal that the grammar is a context-free spec
@@ -110,13 +109,15 @@ OPEN: **3** — (was 4; D-gram-3 `**`-associativity closed: `**` is now right-as
 ### D-gram-4 — `&` is overloaded (bitwise-and vs reference annotation)
 - **Violates:** the clean separation G-Amp-* relies on position alone
 - **Where:** infix `&` (bitwise-and, level 6) and prefix `&` (reference annotation) share
-  one token; disambiguation is positional, and the prefix case is exactly the leak
-  [binding.md D-bind-7](binding.md) records (a stray prefix `&` parses, then mis-elaborates).
+  one token; disambiguation is positional.
 - **Effect:** the overload couples this grammar to binding.md: enforcing "prefix `&` only
   at a binding" is a grammar obligation, not just a binding one.
-- **Status:** OPEN — coupled to binding.md D-bind-0/D-bind-7.
-- **Removal:** make prefix `&` accepted *only* in reference-annotation positions at the
-  grammar level (so it can never reach an expression slot), which also closes D-bind-7.
+- **Status:** OPEN but **its removal condition is now MET** — binding.md D-bind-0..D-bind-7
+  are all closed: a prefix `&` is rejected in every non-binding position (the last, the bare
+  statement, closed by A1 this cycle), so it can never reach an expression slot. This is now
+  the roadmap **B3 decision**: reclassify D-gram-4 as a *decided edge* (an accepted positional
+  overload, like Rust's `&`) rather than a deviation — the residual the roadmap said to
+  "fold/close once A1 lands."
 
 ---
 
