@@ -79,10 +79,33 @@ sub-thicket at a time; if a step regresses, bisect by site and revert that site
 (the #448 first cut regressed `104-split-text` — the matrix caught it). The win is
 measured in deleted helpers + shrunk line count, with zero behaviour change.
 
+## Probe result (deps-sufficiency CONFIRMED — from the #448 bytecode)
+
+The `LOFT_LOG=fn:n_pick` dump of the #448 repro already answers the probe:
+
+- the leaking tail is `_vec_1(4):vector<integer>["__vdb_1"]` — **deps `["__vdb_1"]`**:
+  it OWNS a fresh local store, distinct from `__retbuf`;
+- the early Call arm is `__retbuf(0):vector<integer>` — **delivers `__retbuf`**;
+- `returned` carries the `__retbuf` attr.
+
+So the deps fact *already* distinguishes the three cases the shape-helpers
+re-derive: **owned-fresh** (deps = a `__vdb` local ≠ buffer), **delivers-buffer**
+(deps = `[__retbuf]`), **arg-borrow** (deps = an arg var). Two of the three #448
+helpers (`returned_uses_buffer`, `tail_terminal_fresh_local_vec`) are ALREADY
+reading deps — they just re-walk the shape to find the terminal first. The
+collapse is therefore sound and not blocked by a D-own-2 gap: **one descent to the
+return terminal + one deps read** replaces the per-shape classification. (Empirical
+re-confirm on the full oracle corpus is the first step of the build, but the
+representative case is settled.)
+
 ## Status
 
 - [x] Instrument: the thicket counted (459 lines / 45 calls / 15 helpers).
 - [x] Invariant named; first target + probe scoped.
-- [ ] Probe the deps-sufficiency of the vector return-buffer sub-thicket.
-- [ ] Collapse it (oracle-guarded); measure the shrink.
+- [x] Probe the deps-sufficiency — CONFIRMED on the #448 case (owned-fresh /
+      delivers-buffer / arg-borrow are all deps-distinguishable).
+- [ ] **NEXT:** factor the vector return-buffer sub-thicket into one
+      `delivery_of_return(tail) -> Delivery::{AsIs, MoveIntoBuf, CopyIntoBuf}`
+      read off the deps fact; replace the per-shape branches; oracle-guarded;
+      measure deleted helpers + line shrink.
 - [ ] Repeat for `parse_return` mid-body (the #448 residual lands here too).
