@@ -165,7 +165,12 @@ OPEN: **1**
   the full integer?" rides on `forced_size`, not on the bounds. Guard:
   `d2_signed_narrowing_i8_to_u8_needs_cast` (tests/issues.rs).
 - **Status:** OPEN — the residual after the D3/D5 close. Tracked as
-  [@PLN88](https://github.com/loft-lang/plans/issues/88) (loft-lang/plans#88).
+  [@PLN88](https://github.com/loft-lang/plans/issues/88) (loft-lang/plans#88); the site-by-site
+  audit + rung plan is [plans/88-integer-i64.md](../plans/88-integer-i64.md). **Key reframe from
+  the audit:** the fix is NOT "widen `Value::Int` to i64" (that bloats every node) — the runtime
+  is already i64, and `Int(i32)`/`Long(i64)` is a compact value-size encoding. The change is the
+  `IntegerSpec` bounds → i64 + the template unify + an `int_const(i64)` keystone (compact `Int`
+  if it fits, else `Long`); `Value::Int` stays i32 for the metadata + small-value majority.
 - **Removal — three layers; the bottom is an IR change (each found by attempting it):**
   1. *Storage migration — mechanical, builds clean.* `IntegerSpec` **i64 bounds** ripple into
      ~35 i32-assuming sites: `Parts::Byte/Short(i32)` (DB storage-type enum), the

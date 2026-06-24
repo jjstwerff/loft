@@ -61,7 +61,7 @@ The real weight. Each is a `loft-lang/plans` issue, sequenced.
 
 | # | deviation(s) | project | plan | size |
 |---|---|---|---|---|
-| C1 | **D2** | integer model i64 end-to-end — widen `Value::Int` to i64 (the IR change; the two false-bottoms are ruled out) | **[@PLN88](https://github.com/loft-lang/plans/issues/88)** | M–L |
+| C1 | **D2** | integer model i64 end-to-end. **AUDITED** ([plans/88-integer-i64.md](../plans/88-integer-i64.md)) — reframed: do NOT widen `Value::Int` (the runtime is already i64; `Int(i32)`/`Long(i64)` is a compact value-size encoding). The change is `IntegerSpec` bounds → i64 + template unify + an `int_const(i64)` keystone (compact `Int` if it fits, else `Long`). | **[@PLN88](https://github.com/loft-lang/plans/issues/88)** | M–L |
 | C2 | **D-own-3** | typed `Deps` (replace the overloaded `Vec<u16>`) — the substrate the rest of ownership reads | H2 ([DEPS_INVENTORY.md](../DEPS_INVENTORY.md)); *no issue yet* | M |
 | C3 | **D-own-1, D-own-2, D-own-5, D-own-4** | the `deps` borrow checker: ownership computed once per binding/path; free/copy/move derive from one `deps` fact; `&`-borrow source tracked in `deps`; reverse the #415 copy-on-bind stopgap | **[@PLN85](https://github.com/loft-lang/plans/issues/85)** | L (the north star) |
 
