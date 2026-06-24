@@ -115,7 +115,11 @@ fn fold_op(name: &str, args: &[Value]) -> Option<Value> {
         ("OpMinSingleSingle", [Value::Single(a)]) => Some(Value::Single(-a)),
         // --- casts ---
         ("OpConvFloatFromInt", [Value::Int(a)]) => Some(Value::Float(f64::from(*a))),
-        ("OpConvIntFromFloat", [Value::Float(a)]) if a.is_finite() => Some(Value::Int(*a as i32)),
+        // @PLN88: a folded `float as integer` is a USER value — route through int_const so
+        // a large float (`3e9 as integer`) becomes `Long`, not a silent `as i32` truncation.
+        ("OpConvIntFromFloat", [Value::Float(a)]) if a.is_finite() => {
+            Some(Value::int_const(*a as i64))
+        }
         ("OpConvSingleFromInt", [Value::Int(a)]) => Some(Value::Single(*a as f32)),
         // --- boolean ---
         ("OpNot", [Value::Boolean(a)]) => Some(Value::Boolean(!a)),

@@ -27,24 +27,19 @@ use std::cmp::Ordering;
 // crate deps cleanly; safe to remove from src/Cargo.toml once the
 // `random` feature flag is also retired.
 
-/// C54.G — trap (panic) on overflow or sentinel-collision result.
-/// Uniform behaviour across debug and release builds: silent-sentinel
-/// channel for overflow is closed.  The dual `checked_long_nullable!`
-/// preserves the old release behaviour for the G-hybrid `??`-context
-/// path, where the codegen emits `OpAddIntNullable` / etc. so `??`
-/// can discharge the null.
+/// C80 / E-Uncomp (formal/operational.md) — arithmetic overflow is
+/// uncomputable, so the result is the integer null sentinel (`i64::MIN`) and
+/// execution CONTINUES.  It does NOT trap.  This reverses C54.G ("overflow
+/// traps, NOT a silent null"): under the spreadsheet model a value that can't
+/// be computed shows null and the rest of the program runs on, identically in
+/// development, test, and production (mode-independent).  The fault is silent by
+/// default — the null itself is the visible signal; trace via the opt-in debug
+/// log.  `checked_long_nullable!` is now behaviourally identical; both stay only
+/// until the `??`-context op split (`OpAddIntNullable` / etc.) is retired.
+/// The `$op` / `$v1` / `$v2` metavariables are still matched so every call site
+/// stays unchanged.
 macro_rules! checked_long {
-    ($checked:expr, $op:expr, $v1:expr, $v2:expr) => {{
-        let r = $checked.unwrap_or_else(|| panic!("long overflow: {} {} {}", $v1, $op, $v2));
-        assert!(
-            r != i64::MIN,
-            "long null-sentinel collision: {} {} {} = i64::MIN",
-            $v1,
-            $op,
-            $v2
-        );
-        r
-    }};
+    ($checked:expr, $op:expr, $v1:expr, $v2:expr) => {{ $checked.unwrap_or(i64::MIN) }};
 }
 
 macro_rules! checked_long_nullable {

@@ -132,7 +132,28 @@ codegen constant emission (C, D).
 
 ## Plan — rungs (each proven standalone on `--interpret` AND `--native` before the next)
 
-1. **Keystone:** add `int_const(v: i64) -> Value` (data.rs); no behaviour change yet.
+> **Progress (formalize4) — D2 CLOSED by reconciliation; user-visible side done.** The audit
+> RESPLIT the plan around [DESIGN_DECISIONS C83](../DESIGN_DECISIONS.md#c83--the-internal-representation-follows-the-user-visible-contract-never-widen-storage-for-implementation-convenience):
+> the **storage rework is OFF-PATH** (the compact `Int`/`Long` encoding is the intended design —
+> never blanket-widen for convenience), so rungs **2, 3, 6 are NOT pursued**. What matters is the
+> **user-visible** side: a large value a user can OBSERVE must never `as i32`-truncate.
+> - **Keystone (rung 1) DONE:** `Value::int_const(v: i64)` (data.rs) — compact `Int` or wide `Long`.
+> - **Construction sites (rung 5):** audited both backends. The ONE user-visible truncation found
+>   was the `float as integer` const-fold — routed through `int_const` (`9e9 as integer` →
+>   `9000000000`, was a clipped i32). Every other path already preserves i64 (the parser promotes
+>   overflowing folds + wide locals to `Long` *before* fold_op's i32 arithmetic; `2147483647 + 1
+>   == 2147483648`, no wrap). So no further construction site needs `int_const` today.
+> - **Guards:** `tests/scripts/438-integer-i64-user-visible.loft` (storage round-trips) +
+>   `439-integer-i64-cast-and-fold.loft` (cast + overflow-fold), both backends.
+> - **types.md D2 closed by reconciliation** (the spec records the compact encoding as conformant).
+>   This plan's user-visible deliverable is complete; reopen a targeted rung only if a NEW
+>   user-visible truncation is found.
+
+The original 7-rung storage-migration plan below is retained as the audit record; rungs 2/3/6
+(the IR/bounds/storage-selector rework) are **declined per C83** — not the path.
+
+1. **Keystone:** ✅ `Value::int_const(v: i64) -> Value` (data.rs) — compact `Int` if it fits i32,
+   else `Long`. First use: the `float as integer` fold (const_eval.rs, audit C/D overlap).
 2. **Type model (B):** `"integer" => wide()`; unify the predicates + `__cell_*`; fix the name()
    sites. *Builds clean; suite green* is the gate (no IR change yet — values still fit i32 ranges).
 3. **Bounds (A):** `IntegerSpec.min`/`usable_min` → i64; `range()` → i128; retire the literal
