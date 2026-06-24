@@ -5768,9 +5768,20 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
     ctrl.ac=ac;
     ac.start('loft_start');
     if(ac.sleeping){{
-      (function frame(){{
-        if(ac.resume('loft_start'))requestAnimationFrame(frame);
-      }})();
+      // Drive the asyncify resume loop.  A HIDDEN page (headless capture, a
+      // backgrounded tab) throttles or fully pauses requestAnimationFrame, so
+      // an rAF-only loop stalls at the first suspend (issue #450).  Pump via an
+      // unthrottled MessageChannel while the page is hidden, and via rAF while
+      // visible so a GL render loop stays vsync-aligned.  schedule() re-checks
+      // visibility each tick, so a tab going hidden/visible adapts live.
+      const mc=new MessageChannel();
+      const pump=()=>{{ if(ac.resume('loft_start'))schedule(); }};
+      mc.port1.onmessage=pump;
+      const schedule=()=>{{
+        if(document.hidden)mc.port2.postMessage(0);
+        else requestAnimationFrame(pump);
+      }};
+      schedule();
     }}
   }}else{{
     r.instance.exports.loft_start();
