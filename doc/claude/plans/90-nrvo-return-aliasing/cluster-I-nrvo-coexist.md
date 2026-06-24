@@ -73,6 +73,30 @@ delivers into the one buffer; `buf == w` is a no-op (idempotent). Verified: prob
 `unify_if_branches_work_refs` was **refuted** as the path (agent-confirmed): it bails for 08
 because the CB arm's terminal `buf` is a named local, not a work-ref → `all_work_refs=false`.
 
+### I-c — vector ADOPT free at the witness-pairing gate (OPEN — cluster-1 red flag)
+One level DOWN from I-a/I-b: not the match's arm-delivery, but inside `encode_map`,
+`buf = head(5,n)` **adopts** head's `["??"]`-NRVO store (`__ref_1`). The witness-pairing gate
+(`scopes.rs:956`) that records `__ref_N → v` for `OpFreeRefIfDistinct` covers only
+`Reference`/`Enum`, **not `Type::Vector`** — so the epilogue emits a plain `OpFreeRef(__ref_1)`,
+freeing the store `buf` aliases → dangling → a coexisting `encode` reuses it (probe 09; the ztcbor
+`encode∘decode` clobber). Surfaced because ztcbor re-encodes a *decoded* `CMap`, and cbor's own
+`roundtrip()` never exercises `CMap` — a test coverage gap, not a decode bug.
+
+**Red-flag framing — `STABILITY_REDFLAGS.md` cluster 1 (return/bind ownership re-derived per-site).**
+The "does this binding adopt its callee's store?" fact lives at ~6 sites that **disagree** on the
+vector-NRVO case: `suppress_source` (scopes.rs:1643) + the bind-site codegen include `Type::Vector`;
+the witness-pairing gate (956) does not; I-a (906) + I-b (4101) are two more re-derivations of the
+same fact. **The proof the red flag is real:** the blanket fix (add `Type::Vector` at 956)
+REGRESSED cbor 02 (`[162 1 2 3 4]` → `[162 1 2 4]`) — it over-fires for the APPENDED temp
+`ki = encode(); buf += ki` (which must free UNCONDITIONALLY after the copy), the very case site 4101
+owns. **A patch to site 956 broke the fix at site 4101** — the signature of a fact with no single home.
+
+**Owned IN-PLAN (not filed, not routed to @PLN85).** An investigation owns every problem it
+surfaces; plan-90 closes only when ztcbor is green with no regression. Correct fix = the NARROW
+predicate that fires the witness-pairing for a RETURNED adopt (`buf` flows to the fn return) but NOT
+an appended temp (`ki` consumed by `buf +=`), aligned with how 1643 already gates `Type::Vector` —
+making the sites *consistent*, not blanket-widening one. Agent re-engaged to pin it.
+
 ## Hazards (agent-enumerated; check on I-b too)
 1. **Native parity** — both backends corrupt differently; verify each post-fix.
 2. **Don't over-unify into the multi-return-*statement* shape** —

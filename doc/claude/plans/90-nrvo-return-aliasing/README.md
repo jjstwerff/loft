@@ -14,13 +14,16 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 | C — Fix design | ✅ O-Move: every arm of a single-tail vector match delivers into the one return buffer |
 | D — Implementation | 🟡 **ENCODE side CLOSED** — I-a control.rs:906 · I-b control.rs:4101 (cbor suite GREEN, both backends). **I-c (decode side) OPEN.** |
 
-> **cbor ENCODE is fully restored** — both sub-shapes fixed, cbor library suite green on both
-> backends, full loft suite 2533/2534 (the 1 fail = env-only `38_import` DNS baseline). But the
-> **ztcbor DECODE round-trip** (`test_decode_and_accessors — encode∘decode byte-identical`) still
-> fails → **cluster I-c**, a decode-side sibling the encode-shape fixes don't reach (a code-only
-> agent is pinning it). cbor's consumer is NOT fully green until I-c lands. Then close the plan:
-> graduate guarantee probes (06/07/08 + cbor + I-c) to `tests/scripts/`. Mechanism:
-> [cluster-I-nrvo-coexist.md](cluster-I-nrvo-coexist.md).
+> **I-a + I-b landed** (cbor ENCODE green both backends, full loft suite 2533/2534 — the 1 fail =
+> env-only `38_import` DNS baseline). **I-c OPEN** — it's an ENCODE-side *vector-adopt free* bug
+> (not decode): `buf = head()` adopts the NRVO store but the witness-pairing gate (scopes.rs:956)
+> omits `Type::Vector`, so the store is freed while returned (probe 09; ztcbor's re-encode surfaces
+> it). It is **`STABILITY_REDFLAGS.md` cluster 1** — the blanket fix (add `Type::Vector` at 956)
+> REGRESSED cbor 02, because a patch at site 956 broke the I-b fix at site 4101 (the adopt-fact has
+> no single home). **Owned in-plan — not filed, not routed.** The fix makes the ~6 adopt-fact sites
+> *consistent* (the narrow returned-adopt-vs-appended-temp predicate aligned with scopes.rs:1643).
+> **The plan closes only when ztcbor is green with no regression.** Agent re-engaged to pin the
+> narrow fix. Mechanism: [cluster-I-nrvo-coexist.md](cluster-I-nrvo-coexist.md).
 
 **What triggered this.** The zero-trust consumer (dogfood) reported that the
 released loft (`2026.6.0`, carrying the #437 fix merged as #440) **regressed** —
