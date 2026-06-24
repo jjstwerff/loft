@@ -110,6 +110,16 @@ struct ManifestState {
     /// one table, so without this boundary the no-`main` test-fn fallback sees
     /// an empty user range and silently runs nothing (#358).
     user_def_start: Option<u32>,
+    /// #444 — `[wasm.bridge]` state a `use`d library's manifest contributes:
+    /// the `routes` map (`loft_sym → (crate, bridge_fn)`), the bridge crate
+    /// packages, and the host-JS preamble files.  Manifest-derived parse state
+    /// the IR bundle does not serialize, so — like `native_lib_regs` — a warm
+    /// load must replay it or `--html` codegen sees an empty route table and
+    /// emits a host-import `extern` for an already-routed `#native`, colliding
+    /// (`E0428`) with the library's public wrapper of the same name.
+    wasm_bridge_routes: Vec<(String, String, String)>,
+    wasm_bridge_packages: Vec<(String, String)>,
+    wasm_bridge_host_js: Vec<String>,
 }
 
 /// On a valid match, returns the parse-time [`ManifestState`] persisted in the
@@ -155,6 +165,31 @@ fn manifest_state(manifest: &std::path::Path) -> Option<ManifestState> {
         native_lib_regs.push((stem.to_string(), pkg_dir.to_string()));
         next = lines.next();
     }
+    // #444 — optional `wbroute <loft_sym> <crate> <bridge_fn>` headers: the
+    // `[wasm.bridge].routes` map.  The three tokens are a `#native` symbol, a
+    // crate name, and a bridge fn — none contains a space — so `splitn(3)` is
+    // exact.  `wbpkg`/`wbhostjs` follow (their tail is a path that MAY contain
+    // spaces, so they split only on the first / no space).
+    let mut wasm_bridge_routes = Vec::new();
+    while let Some(rest) = next.and_then(|l| l.strip_prefix("wbroute ")) {
+        let mut it = rest.splitn(3, ' ');
+        let sym = it.next()?.to_string();
+        let krate = it.next()?.to_string();
+        let bridge_fn = it.next()?.to_string();
+        wasm_bridge_routes.push((sym, krate, bridge_fn));
+        next = lines.next();
+    }
+    let mut wasm_bridge_packages = Vec::new();
+    while let Some(rest) = next.and_then(|l| l.strip_prefix("wbpkg ")) {
+        let (krate, pkg_dir) = rest.split_once(' ')?;
+        wasm_bridge_packages.push((krate.to_string(), pkg_dir.to_string()));
+        next = lines.next();
+    }
+    let mut wasm_bridge_host_js = Vec::new();
+    while let Some(rest) = next.and_then(|l| l.strip_prefix("wbhostjs ")) {
+        wasm_bridge_host_js.push(rest.to_string());
+        next = lines.next();
+    }
     // Remaining lines: `<hexhash> <path>` for every parsed source.
     let mut any = false;
     let mut cur = next;
@@ -171,6 +206,9 @@ fn manifest_state(manifest: &std::path::Path) -> Option<ManifestState> {
         program_relative,
         native_lib_regs,
         user_def_start,
+        wasm_bridge_routes,
+        wasm_bridge_packages,
+        wasm_bridge_host_js,
     })
 }
 
@@ -242,6 +280,17 @@ pub fn warm_load_program(
     // `#native` call hits the "native function not loaded" stub.
     p.pending_native_libs = native_libs;
     p.native_lib_regs = state.native_lib_regs;
+    // #444 — restore the `[wasm.bridge]` state the IR bundle does not carry.
+    // `--html` codegen keys the host-import-extern skip AND the routed-call on
+    // `wasm_bridge_routes`; an empty table makes those two decisions disagree
+    // and collide (E0428).  `packages` drives the bridge-crate link and
+    // `host_js` the HTML preamble — all three are parse-time-only, so the warm
+    // path replays them here exactly as the cold parse populated them.
+    for (sym, krate, bridge_fn) in state.wasm_bridge_routes {
+        p.data.wasm_bridge_routes.insert(sym, (krate, bridge_fn));
+    }
+    p.data.wasm_bridge_packages = state.wasm_bridge_packages;
+    p.data.wasm_bridge_host_js_files = state.wasm_bridge_host_js;
     Some(state.user_def_start.unwrap_or_else(|| p.data.definitions()))
 }
 
@@ -271,6 +320,21 @@ pub fn save_program(p: &Parser, script_abspath: &str, user_def_start: u32) {
     // re-resolve (and freshness-check) the cdylibs the parse registered.
     for (stem, pkg_dir) in &p.native_lib_regs {
         let _ = writeln!(lines, "nlib {stem} {pkg_dir}");
+    }
+    // #444 — persist the `[wasm.bridge]` state so a warm load reconstructs the
+    // route table `--html` codegen reads (the IR bundle stores only the def
+    // table).  Routes are sorted for a byte-stable manifest; the read side
+    // rebuilds a `HashMap` so order is immaterial there.
+    let mut routes: Vec<(&String, &(String, String))> = p.data.wasm_bridge_routes.iter().collect();
+    routes.sort_by(|a, b| a.0.cmp(b.0));
+    for (sym, (krate, bridge_fn)) in routes {
+        let _ = writeln!(lines, "wbroute {sym} {krate} {bridge_fn}");
+    }
+    for (krate, pkg_dir) in &p.data.wasm_bridge_packages {
+        let _ = writeln!(lines, "wbpkg {krate} {pkg_dir}");
+    }
+    for host_js in &p.data.wasm_bridge_host_js_files {
+        let _ = writeln!(lines, "wbhostjs {host_js}");
     }
     for path in &paths {
         let Some(h) = crate::cache::file_hash(path) else {

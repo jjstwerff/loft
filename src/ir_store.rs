@@ -431,6 +431,13 @@ pub fn materialize_data(stores: &mut Stores, data: &Data) -> DbRef {
 /// materialised IR lands directly on disk for the mmap load path (@PLN11 arc
 /// D).  The whole IR (records, inline vectors, and interned strings) lives in
 /// `root`'s store, so persisting/mmapping that one store captures everything.
+///
+/// Only `source` + `definitions` are stored; the derived indices rebuild from
+/// the definitions on load.  Manifest-derived parse state (`native_lib_regs`,
+/// the `wasm_bridge_*` tables) is NOT in the bundle — the whole-program cache
+/// carries it on the side via the drift-manifest's `nlib`/`wbroute`/`wbpkg`/
+/// `wbhostjs` lines and replays it in `startup_cache::warm_load_program` (#310,
+/// #444).  Do not add it here: that would double-restore.
 pub fn materialize_data_at(stores: &mut Stores, root: DbRef, data: &Data) {
     // Clear the root's Data fields (claim/database do not zero) so the
     // `definitions` vector header starts empty.
