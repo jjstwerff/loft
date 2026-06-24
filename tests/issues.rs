@@ -200,6 +200,49 @@ fn issue_403_narrow_vector_for_loop_terminates() {
     );
 }
 
+// #437 — an explicit `return <vector>` from a loft function delivered its value
+// into __retbuf (or returned an owned local) but never FINALIZED the signature's
+// `{__retbuf}` dep.  A caller consults only the signature, so it saw a BARE vector
+// return, rebound its result var to a fresh empty store, and the first in-place
+// `+=` DROPPED the returned elements — collapsing a copy+append vector to just the
+// last-appended element (`b = mk(); b += [x]` lost mk()'s rows; the filed symptom
+// was a 3-vector-field struct literal losing all but the last row).  Both backends
+// miscompiled identically.  Fixed by delivering every store-backed bare-vector
+// return into __retbuf AND finalizing the return dep, matching the implicit-tail
+// path (parser/control.rs::parse_return).
+#[test]
+fn issue_437_explicit_vector_return_then_append_keeps_elements() {
+    code!(
+        "fn ct(v: vector<text>) -> vector<text> { o: vector<text> = []; for i in 0..len(v) { o += [ v[i] ?? \"\" ]; } return o; }
+fn ci(v: vector<integer>) -> vector<integer> { o: vector<integer> = []; for j in 0..len(v) { o += [ v[j] ?? 0 ]; } return o; }
+fn mk() -> vector<text> { o: vector<text> = []; o += [\"A\"]; return o; }
+fn idv(v: vector<text>) -> vector<text> { return v; }
+struct S { xs: vector<text>, ys: vector<text>, zs: vector<integer> }
+fn test() {
+    // fresh-local explicit return + append keeps BOTH elements (was len 1, last only)
+    a = mk(); a += [\"b\"]; assert(len(a) == 2, \"fresh-local return then append\");
+    assert((a[0] ?? \"\") == \"A\", \"first (returned) element preserved, not dropped\");
+    // copy-helper return + append (the #437 minimal)
+    src: vector<text> = [\"title\"]; xs = ct(src); xs += [\"tags\"];
+    assert(len(xs) == 2, \"copy-helper return then append\");
+    // arg return must value-copy (source untouched) yet stay appendable
+    s2: vector<text> = [\"A\"]; c = idv(s2); c += [\"x\"];
+    assert(len(c) == 2, \"arg return appendable\"); assert(len(s2) == 1, \"arg return copies, source untouched\");
+    // loop reuse must not corrupt the shared return buffer
+    total = 0; for i in 0..3 { b = mk(); b += [\"e{i}\"]; total = total + len(b); }
+    assert(total == 6, \"loop: each iteration yields len 2\");
+    // the filed symptom — three copy+append vector fields bound in one struct literal
+    ys0: vector<text> = [\"Hello\"]; zs0: vector<integer> = [100];
+    fxs = ct(src); fxs += [\"tags\"]; fys = ct(ys0); fys += [\"x\"]; fzs = ci(zs0); fzs += [105];
+    s = S { xs: fxs, ys: fys, zs: fzs };
+    assert(len(s.xs) == 2, \"struct field xs keeps both rows\");
+    assert(len(s.ys) == 2 && len(s.zs) == 2, \"all struct vector fields keep both rows\");
+    assert((s.zs[0] ?? 0) == 100, \"first row of zs preserved\");
+}"
+    )
+    .result(Value::Null);
+}
+
 // `vec_of_u8[i] ?? <fitting-int-literal>` keeps the value's NARROW type instead
 // of widening the `??` result to i64, so the defaulted element appends back into
 // a `vector<u8>` with no `as u8` cast and no spurious "cannot implicitly narrow"

@@ -735,7 +735,44 @@ impl Parser {
             // (native returns the null sentinel).  Key off the dense return type `result`
             // instead: materialise the unwrap tail into an owned work-ref (copy the viewed
             // `S`) and promote that — the #306 view-return shape.  Gate-off-inert.
-            if let Type::Reference(td, _) = result
+            // #437 — a TAIL explicit `return o` whose value is a fresh-local owned
+            // vector is semantically identical to the implicit tail `o`, but
+            // `parse_return` left it as a Never-typed `Value::Return(Var(o))`, so the
+            // implicit-tail vector arm below (gated on `t == Vector`) never promoted
+            // it: the signature stayed a BARE vector, the caller rebound its result
+            // var to a fresh store, and the first in-place `+=` DROPPED the rows.
+            // Strip the `return` and route the local through the SAME ref_return +
+            // NRVO the implicit tail uses (promotes `o` to BE the __retbuf buffer, no
+            // copy → no mid-body orphan leak; a mid-body `if { return e }` is in
+            // "if"/"match_arm" context, never "return from block", so it is untouched).
+            let tail_ret_local: Option<(u16, Vec<u16>)> = if !self.first_pass
+                && matches!(result, Type::Vector(_, _))
+            {
+                match l.last().map(Value::unspan) {
+                    Some(Value::Return(inner)) => match inner.unspan() {
+                        Value::Var(o)
+                            if self.vars.exists(*o)
+                                && !self.vars.is_argument(*o)
+                                && matches!(self.vars.tp(*o), Type::Vector(_, d) if !d.is_empty()) =>
+                        {
+                            let Type::Vector(_, d) = self.vars.tp(*o) else {
+                                unreachable!()
+                            };
+                            Some((*o, d.iter().copied().collect()))
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            if let Some((o_var, ls)) = tail_ret_local {
+                let last = l.len() - 1;
+                l[last] = Value::Var(o_var); // strip the `return` → implicit tail
+                self.ref_return(&ls, l, RetSite::BlockTail);
+                self.nrvo_collapse_tail_set(l, &ls);
+            } else if let Type::Reference(td, _) = result
                 && !l.is_empty()
                 && self.tail_is_nullable_unwrap(&l[l.len() - 1])
             {
@@ -4897,21 +4934,23 @@ impl Parser {
                     // ref_return (because the parameter is not a work-ref), the
                     // buffer stays named `__retbuf` and vars.var("__ref_1") returns
                     // MAX.  Fall back to return_buffer() only when the returned value
-                    // is backed by a PARAMETER variable — a local vector that is not
-                    // yet bound to the buffer is handled elsewhere (returning the
-                    // local's DbRef directly and letting the caller free it at scope
-                    // exit); copying into __retbuf in that case causes the caller to
-                    // free __retbuf while the callee already freed its local, losing
-                    // the shared buffer for subsequent iterations.
-                    let buf_var = if ref1_var != u16::MAX && self.vars.is_argument(ref1_var) {
-                        ref1_var
-                    } else if let Some((_, bv)) = self.return_buffer()
-                        && dep.iter().any(|&d| d != bv && self.vars.is_argument(d))
-                    {
-                        bv
-                    } else {
-                        u16::MAX
-                    };
+                    // is backed by a PARAMETER variable — a fresh LOCAL vector
+                    // (`return o`) is NOT delivered here: copying it into __retbuf
+                    // would orphan the local on a MID-BODY return (it never reaches
+                    // its scope-free).  A fresh-local TAIL return is instead promoted
+                    // by `block_result`'s #437 tail-intercept (strip the `return`,
+                    // route through the implicit-tail ref_return + NRVO — no copy).
+                    // (a, _) keeps the buffer-attr index for the #437 dep finalize.
+                    let (buf_attr, buf_var) =
+                        if ref1_var != u16::MAX && self.vars.is_argument(ref1_var) {
+                            (self.return_buffer().map_or(u16::MAX, |(a, _)| a), ref1_var)
+                        } else if let Some((a, bv)) = self.return_buffer()
+                            && dep.iter().any(|&d| d != bv && self.vars.is_argument(d))
+                        {
+                            (a, bv)
+                        } else {
+                            (u16::MAX, u16::MAX)
+                        };
                     if !vector_bound && buf_var != u16::MAX && !dep.contains(&buf_var) {
                         // @P314 — narrow-aware element type (see `append_elem_tp`).
                         let elm = (**elm_tp).clone();
@@ -4930,6 +4969,20 @@ impl Parser {
                             append,
                             Value::Return(Box::new(Value::Var(buf_var))),
                         ]);
+                        // #437 — finalize the return-type dep to {__retbuf}, the step
+                        // the implicit-tail path does (fwd_copy_409, ~825) and this
+                        // explicit path omitted.  An arg / struct-field return
+                        // (`return v` / `return b.v`) already element-copied its value
+                        // INTO __retbuf above, but left the SIGNATURE a bare vector —
+                        // so a caller (which consults only the signature) rebound its
+                        // result var to a fresh empty store and the first in-place
+                        // `+=` DROPPED the returned elements (#437).  Finalizing the
+                        // dep makes the caller bind to the buffer it passed, so the
+                        // result owns an appendable store and `+=` grows it in place.
+                        if buf_attr != u16::MAX {
+                            self.data.definitions[self.context as usize].returned =
+                                Type::Vector(Box::new(elm), Deps::attrs(vec![buf_attr]));
+                        }
                         return;
                     }
                 }
