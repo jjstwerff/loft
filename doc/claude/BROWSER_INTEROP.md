@@ -107,6 +107,18 @@ primitives, composed in libraries. (The wasm-export / JS-calls-loft ABI was
 considered and set aside: it solves synchronous typed JS→loft calls, which this
 model does not need — see *The data boundary* and *Rejected alternatives*.)
 
+**Verified stronger (scoping pass):** the three items above are not even engine-
+*code* additions — they are realizable as a browser-target **library** on
+machinery `--html` already ships. A library's `wasm/host.js` bridge is inlined
+into the generated page generically (`src/parser/mod.rs:6567`,
+`src/main.rs:5716`); any reachable body-less `#native` is emitted as a host
+import with no allowlist (`src/generation/mod.rs:1152`); and the `(ptr,len)`
+push + len/copy poll primitives are proven by `web`'s browser WebSocket bridge.
+So loft's `src/` needs **zero change** — the lone conditional touch (a *blocking*
+suspend import → the asyncify `--pass-arg` list in `src/main.rs`) is avoided by
+keeping every service poll-based. The *Verifiable build steps* below are the
+proof: each runs against the stock installed loft.
+
 ---
 
 ## The data boundary — push, poll, gather-until-enough
@@ -204,24 +216,62 @@ way the design degrades and the thing that prevents it.
 
 ---
 
-## First concrete work, and the probe before it
+## Verifiable build steps
 
-The smallest step that proves the model is the **input-service surface**, since
-text input is the one capability a text UI needs and the engine lacks today:
+Dependency-ordered; each step is independently shippable and pinned to **one
+invariant + one runnable check**. The engine-side guarantee is structural:
+**every step builds and passes against the stock installed loft with no `src/`
+diff** — the suite going green *is* the proof that the model needs no engine
+change. All the build work is the browser-target **library** (its `#native`
+declarations + a `wasm/host.js` registered via `LOFT_WASM_EXTENSIONS`, modelled
+on `web`); none of it edits loft core.
 
-- Engine: host imports for typed text + IME compose state + clipboard
-  read/write, backed JS-side by a hidden editable element; declared in the
-  graphics / game-infra library.
-- Library tier: a text-editor **widget** that consumes those services.
+Verification reuses the shipped headless-Chromium gate pattern
+(`tests/html_wasm.rs` loads + runs an `--html` fixture; `tests/html_asyncify.rs`
+asserts a multi-suspend program reaches its final line **both visible and
+hidden**; `tests/html_render.rs` + the CDP driver `tools/html_render_check.mjs`
+drive input and inspect the page). Graduate each step's probe into a `tests/`
+gate so it stays a regression.
 
-**The cheap probe to run first** (an afternoon `--html` spike, before building
-the real shell): a page showing a **clickable file list + one editable text
-box**, exercising the input service end-to-end. It answers the one question the
-clean architecture cannot answer from the desk — *does the engine's input
-surface actually cover text/IME/clipboard for an arbitrary consumer* — and it
-does so agnostically of any document model. If text editing on the input service
-turns out to be a deeper hole than IME+clipboard, that is the lesson to harvest
-**before** the UI is built on top of it, not after.
+**Step 1 — Push (loft → JS).**
+- *Deliverable:* a browser-target lib with `#native fn emit(channel: text, payload: text);` + a `wasm/host.js` that routes `emit` to a JS sink.
+- *Invariant:* a loft routine pushes arbitrary bytes to JS through a **library-declared** host import — no core change.
+- *Check:* a headless `--html` page calls `emit` with a distinctive payload; the CDP driver reads the sink and asserts the bytes are identical.
+
+**Step 2 — Poll (JS → loft), full round-trip.**
+- *Deliverable:* `poll_len(channel: text) -> integer` + `poll_copy(channel: text, buf: text)` (the len + copy-into-`(ptr,len)` pattern) backed by a host.js inbound queue fed by a JS `send(channel, bytes)`.
+- *Invariant:* loft pulls JS-enqueued bytes via len/copy; the write-into-wasm-memory direction works for an arbitrary library.
+- *Check:* CDP enqueues a payload; loft polls + copies + echoes it back via `emit`; assert echo == sent (a JS→loft→JS round-trip).
+
+**Step 3 — Gather-until-enough (the synchronous-pretend contract).**
+- *Deliverable:* a lib `receive(channel: text) -> text` that loops `poll_len`/`poll_copy` + `frame_yield()` until a complete unit arrives, returning it synchronously (mirrors `ztclient`'s `poll_for`).
+- *Invariant:* "blocking" = yield-and-accumulate; the gather never starves the event loop (no new suspend import — it reuses the existing `frame_yield`).
+- *Check:* CDP sends a payload N frames after load; assert loft returns the complete unit **and** the page reaches its final line both visible and hidden (the `tests/html_asyncify.rs` gate shape). This is the critical starvation guard.
+
+**Step 4 — Input services (poll-based: text / IME / clipboard).**
+- *Deliverable:* `typed_text() -> text`, `ime_active() -> integer`, `clipboard_read() -> text`, `clipboard_write(text)` + a host.js backing (a hidden editable element + clipboard wiring). Poll-based, so the asyncify `--pass-arg` list is untouched.
+- *Invariant:* the input surface covers text + clipboard for an arbitrary consumer, poll-based — and proves no engine `src/` change is needed for input.
+- *Check:* CDP synthesizes keystrokes (`Input.dispatchKeyEvent`) into the hidden element; loft polls `typed_text` + emits it; assert == synthesized. Clipboard: CDP seeds the clipboard, loft reads + emits, assert. (IME *compose* is a visible-browser manual check; the scalar `ime_active` poll is verified headless.)
+
+**Step 5 — JS-shaped data (the cost gradient).**
+- *Deliverable:* lib routines that (a) serialize a loft structure to JSON text and `emit` it, and (b) `emit` a `(ptr,len)` the host.js wraps as a zero-copy `Uint8Array` view.
+- *Invariant:* a browser-target lib emits JS-native structures with the JS-coupling confined to it — JSON the default, typed-array for binary.
+- *Check:* CDP does `JSON.parse` on the pushed object and asserts fields; for binary, emit a known byte pattern and assert the `Uint8Array` view matches with no copy.
+
+**Step 6 — Integration probe → permanent gate: clickable file-list + editable box.**
+- *Deliverable:* a `--html` demo composing Steps 1–5 — a file list + an editable text box wired through the input service + byte channel, agnostic of any document model.
+- *Invariant:* the full model works end-to-end for an arbitrary consumer; the engine's input surface actually covers text/clipboard in composition.
+- *Check:* CDP synthesizes a click + typing; assert the page reflects the edit (a canvas-content gate à la `tests/html_render.rs`, or a pushed-state assertion). This is the afternoon spike, graduated to a regression gate — and it answers the one question the clean architecture cannot answer from the desk: *is text editing a deeper hole than text/IME/clipboard?* — **before** any real UI is built on top.
+
+**Engine-side guarantee (the answer to "what's on the loft side").** Steps 1–6
+build and pass against an **unmodified** loft binary; that is the verification.
+The single conditional core touch the plan deliberately avoids: a *blocking*
+(suspending) input or channel import would need its name added to the asyncify
+`--pass-arg` list in the `--html` `wasm-opt` invocation (`src/main.rs`). Because
+every service above is poll-based and reuses the shipped `frame_yield` suspend,
+that list is never touched — verified by Steps 3 and 4 passing on stock loft. If
+a future need forces a blocking primitive, that one-line list addition is the
+*entire* engine change.
 
 ---
 
