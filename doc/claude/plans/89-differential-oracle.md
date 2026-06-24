@@ -57,13 +57,28 @@ The corpus is **not** meant to be complete — it is meant to **grow**:
 When the corpus is broad enough that "interp and native disagree on a program
 both accept" is reliably caught before ship, D-op-1 / D-op-2 close.
 
-## First candidate finding (not yet a corpus entry)
+## First finding — [#448](https://github.com/loft-lang/loft/issues/448) (the oracle's first catch)
 
-While authoring the seed, a program with **four coexisting kept vectors** leaked
-one store on the interpreter, while no reduced 2-vector pattern did — a
-multi-vector-coexistence ownership leak (the irreducible-coexistence shape: the
-bug *is* the coexistence). Parked here for a focused look; once understood +
-fixed, its minimal repro graduates into the corpus.
+While authoring the seed, a vector program leaked one store. The boundary matrix
+narrowed "four coexisting vectors" down to the real root: a `vector<T>`-returning
+function with **multiple return statements of differing construction** leaks the
+store of whichever path does NOT deliver into `__retbuf`.
+
+```loft
+fn pick(f: boolean, n: integer) -> vector<integer> {
+  if f { return squares(n); }   // NRVO-adopts the call into __retbuf
+  return [n, n, n];             // builds a SEPARATE store, returns THAT → leaks
+}
+```
+
+Uniform-construction returns (all-call / all-literal) are clean; only the
+**mixed** multi-return leaks, on both backends. Root cause: the call path
+promotes the fn to NRVO (`returned = __retbuf`, so the caller frees `__retbuf`),
+but the other path returns a fresh store the caller never frees. This is the
+**O-Move / O-Complete** gap (formal/ownership.md D-own-2): the #443 cluster-I
+materialization delivers `match`/`if` *tails* into `__retbuf`, not the
+early-return + tail-return shape. Workaround: a single tail return via a result
+local. Once fixed, the minimal repro graduates into `tests/oracle/`.
 
 ## Next steps
 
