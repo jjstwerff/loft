@@ -378,9 +378,12 @@ delta is named and owned.
 out-of-bounds index, a deref of an absent value — yields **null** and the program **keeps
 running**; it never halts the run or skips a later statement. Like a spreadsheet, one cell's
 bad formula shows null in that cell and never stops the others recalculating — a fault is
-*local*, it degrades one value, not the whole run. This inverts the half-true "if it compiles
-it works" (which really means "it halts cleanly at the first logic fault"): loft's promise is
-**"it won't stop."** See [DESIGN_DECISIONS.md C80](DESIGN_DECISIONS.md) and
+*local*, it degrades one value, not the whole run. It does this with **no exception machinery**:
+no stack unwinding, and no `finally` block to get wrong — a fault is a **value, not a thrown
+control-flow event**, so it can't leave the half-cleaned-up state that is `try`/`catch`'s own
+corruption surface. This inverts the half-true "if it compiles it works" (which really means "it
+halts cleanly at the first logic fault"): loft's promise is **"it won't stop."** See
+[DESIGN_DECISIONS.md C80](DESIGN_DECISIONS.md) and
 [formal/operational.md § E-Uncomp](formal/operational.md).
 
 **Who it wins.** Anyone building something that must **stay up** — and that is not just games.

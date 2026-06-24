@@ -1545,6 +1545,17 @@ context where *acting* on a bad value is worse than stopping (a physical actuato
 there the answer is an **explicit check at that boundary** (`?? safe`, validate-before-act),
 not making the language halt globally. Keep-running plus a local guard beats a global stop.
 
+And it beats the *other* norm too — **exceptions**. `try`/`catch`/`finally` does keep a program
+running after a small error, but at a steep price: surviving the error means **unwinding the
+stack** — heavy machinery to tear down frames and run cleanup, invoked for one bad value. Worse,
+it is **error-prone**: a missed case in a `finally` corrupts state that was *fine without the
+exception* — the recovery mechanism itself *introduces* the corruption. loft sidesteps both by
+making a fault a **value, not a control-flow event**: the failed operation yields null *in
+place*, execution continues linearly, **nothing unwinds**, and there are **no cleanup blocks to
+get wrong**. Error handling becomes **data flow** (null propagates like any value), not control
+flow — so it cannot leave the half-unwound, half-cleaned-up state that is exceptions' own
+corruption surface.
+
 ### Decision
 
 **Closed (2026-06-24) — NOTHING stops a running calculation. Revises C66.**
