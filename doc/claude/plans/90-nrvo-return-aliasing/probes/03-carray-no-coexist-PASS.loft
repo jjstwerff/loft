@@ -1,0 +1,13 @@
+enum CV { CI { value: integer not null }, CA { items: vector<CV> } }
+fn head(major: integer, arg: integer) -> vector<u8> { buf: vector<u8> = []; buf += [(major*32+arg) as u8]; return buf; }
+fn encode(v: CV) -> vector<u8> {
+  match v {
+    CI { value } => head(0, value),
+    CA { items } => { buf = head(4, len(items)); for i in 0..len(items) { buf += encode(items[i]); } buf },
+  }
+}
+fn main() {
+  a = CA { items: [ CI{value:1}, CI{value:2}, CI{value:3} ] };
+  b = encode(a); s = ""; for i in 0..len(b) { s += "{b[i]??255} "; }
+  println("CArray=[ {s}]  (EXPECT 131 1 2 3)");
+}

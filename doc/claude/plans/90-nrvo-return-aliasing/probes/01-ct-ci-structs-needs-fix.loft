@@ -1,0 +1,11 @@
+struct S { xs: vector<text>, ys: vector<text>, zs: vector<integer> }
+fn ct(v: vector<text>) -> vector<text> { o: vector<text> = []; for i in 0..len(v) { o += [ v[i] ?? "" ]; } return o; }
+fn ci(v: vector<integer>) -> vector<integer> { o: vector<integer> = []; for j in 0..len(v) { o += [ v[j] ?? 0 ]; } return o; }
+fn main() {
+  xs0: vector<text> = [ "title" ]; ys0: vector<text> = [ "Hello" ]; zs0: vector<integer> = [ 100 ];
+  xs = ct(xs0); xs += [ "tags" ];
+  ys = ct(ys0); ys += [ "x" ];
+  zs = ci(zs0); zs += [ 105 ];
+  s = S { xs: xs, ys: ys, zs: zs };
+  println("len={len(s.xs)} (EXPECT 2)");
+}

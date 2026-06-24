@@ -1,0 +1,16 @@
+// Minimal NRVO return-aliasing repro: a __retbuf leaf (head) called as a TEMP
+// inside a nested loop while a named result (ki) of the same fn is live across it,
+// then ki appended to an accumulator. Mirrors cbor::encode_map's structure.
+fn head(x: integer) -> vector<u8> { buf: vector<u8> = []; buf += [x as u8]; return buf; }
+fn pick(a: vector<u8>, b: vector<u8>) -> integer { return (a[0] ?? 99) * 100 + (b[0] ?? 99); }
+fn main() {
+  acc: vector<u8> = [];
+  for i in 0..2 {
+    ki = head(10 + i);                       // ki = [10] then [11]
+    for j in 0..2 {
+      if j != i { z = pick(head(80 + j), ki); }   // TEMP head() coexists with live ki
+    }
+    acc += ki;                               // ki must still be [10]/[11]
+  }
+  println("acc=[ {acc[0] ?? 0} {acc[1] ?? 0} ]  (EXPECT 10 11)");
+}
