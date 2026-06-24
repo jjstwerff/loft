@@ -35,6 +35,31 @@ not one weakness among many; it is THE gate on loft being trustworthy with real 
 Cross-target parity tests catch the divergences today (the right defensive move), but the
 cure is the complete `deps` analysis, not the test net.
 
+## ACTIVE — the simplification exploration (next days; exploratory + revertable)
+
+> **NOW: spend the next days collapsing the per-site ownership thicket toward the beacon —
+> `deps` as the ONE fact every store-lifetime site reads.** This is an exploration of *how
+> far we can go*: land the fact once and watch N forests collapse. A branch that doesn't pay
+> off gets reverted — no harm; the goal is to find the ceiling of the simplification.
+
+The fresh motivation is **[#448](https://github.com/loft-lang/loft/issues/448)**: fixing
+ONE NRVO multi-return leak required adding THREE more per-site conditions
+(`returned_uses_buffer` + `body_has_buffer_return` + `tail_terminal_fresh_local_vec`) and a
+special case to `block_result` (`src/parser/control.rs`), which already carries dozens of
+tail-shape cases. That is the thicket the beacon exists to delete: each leak closed by
+another condition rather than by completing the fact. ([[evolve-data-structures-when-burdened]]
+— the condition-count IS the signal the structure, not the logic, is the burden.)
+
+**Entry point: the typed `Deps` substrate (D-own-3 / [DEPS_INVENTORY.md](DEPS_INVENTORY.md)
+H2).** The `Vec<u16>` whose entries overload five marker meanings across two address spaces
+is what makes the fact hard to read and easy to mis-derive — so every site re-checks shapes
+instead of reading one typed answer. Type it first; then the `block_result` / `parse_return`
+return-delivery thicket and the [STABILITY_REDFLAGS.md](STABILITY_REDFLAGS.md) re-derivation
+clusters can collapse onto it. The [formal/ownership.md](formal/ownership.md) `D-own-*`
+deviations are the finish line: OPEN → 0 means the class is closed by construction. The
+differential oracle (`tests/oracle/`, @PLN89) is the safety net for the exploration — every
+collapse is validated leak/value-identical across both backends before it lands.
+
 **The invariant as a violation set.** The whole class is ONE invariant — *each heap store has
 exactly one owner at every point; all mutation flows through that owner; a non-owning alias is
 read-only and never outlives its owner* — breached four ways: **leak** (owner dropped without a
