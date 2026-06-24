@@ -27,7 +27,7 @@ Closing a row means the implementation obeys the rule (then the deviation entry 
 |---|---|---|
 | [types.md](types.md) | 1 | D2 — the integer model is i64 end-to-end (`Value::Int` IR change) |
 | [binding.md](binding.md) | 1 | D-bind-7 — reject a bare `&a;` statement |
-| [grammar.md](grammar.md) | 4 | precedence-in-the-grammar-doc + 3 decisions |
+| [grammar.md](grammar.md) | 3 | precedence-in-the-grammar-doc + 2 decisions (`**` right-assoc landed) |
 | [operational.md](operational.md) | 3 | the shared interp/native semantics (oracle) |
 | [ownership.md](ownership.md) | 5 | the `deps` borrow checker (the big one) |
 
@@ -51,7 +51,7 @@ These are **spec-may-adjust** — your call resolves them, then they close or re
 
 | # | deviation | the decision | likely outcome |
 |---|---|---|---|
-| B1 | **D-gram-3** | is `**` **left**-associative intentional (`2**3**2 == 64`)? | **spec-may-adjust**: accept it → move to INCONSISTENCIES; or code→spec: right-associate `**` |
+| ~~B1~~ | ~~**D-gram-3**~~ **DONE** | `**` is now **right**-associative (`2**3**2 == 512`) — the maker-centric call (don't carry a surprise). | code→spec, landed; `tests/issues.rs::power_is_right_associative` |
 | B2 | **D-gram-2** | is loft's surface deliberately **not context-free** (speculative backtracking + lexer modes)? | **spec-may-adjust**: almost certainly a *decided edge*, not a deviation — reclassify (don't chase a CFG) |
 | B3 | **D-gram-4** | the `&` bitwise/reference overload | mostly closed by @PLN87 (prefix `&` now rejected in expression positions); its residual **is** A1 (D-bind-7) — fold/close once A1 lands |
 

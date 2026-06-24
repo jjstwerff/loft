@@ -1748,8 +1748,17 @@ impl Parser {
             self.expr_not_null = false;
             let mut second_code = Value::Null;
             let second_pos = self.lexer.peek_pos().clone();
+            // `**` is RIGHT-associative — `2 ** 3 ** 2` is `2 ** (3 ** 2)` = 512, matching
+            // maths and most languages, so the maker never carries a surprise here.  Its RHS
+            // therefore parses at the SAME precedence (it recurses into a following `**`),
+            // where every other binary operator is left-associative (RHS at `precedence + 1`).
+            let rhs_precedence = if operator == "**" {
+                precedence
+            } else {
+                precedence + 1
+            };
             let second_type =
-                self.parse_operators(var_tp, &mut second_code, parent_tp, precedence + 1);
+                self.parse_operators(var_tp, &mut second_code, parent_tp, rhs_precedence);
             self.known_var_or_type(&second_code, &second_pos);
             if !self.first_pass
                 && (operator == "/" || operator == "%")

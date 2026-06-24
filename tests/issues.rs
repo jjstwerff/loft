@@ -285,6 +285,22 @@ at d2_signed_narrowing_i8_to_u8_needs_cast:3:15",
     );
 }
 
+// (grammar D-gram-3) `**` is RIGHT-associative — `2 ** 3 ** 2` is `2 ** (3 ** 2)` = 512,
+// matching maths / most languages (it was left-associative = 64 before). Precedence vs the
+// other operators is unchanged: `**` binds tighter than `*`. See formal/grammar.md.
+#[test]
+fn power_is_right_associative() {
+    code!(
+        "fn test() {
+    assert(2 ** 3 ** 2 == 512, \"2**3**2 = 2**(3**2) = 512\");
+    assert(2 ** 3 ** 2 ** 1 == 512, \"right-assoc chain\");
+    assert(2 ** 3 * 2 == 16, \"** tighter than *\");
+    assert(2 * 3 ** 2 == 18, \"* looser than **\");
+}"
+    )
+    .result(Value::Null);
+}
+
 // assert(false, ...) in production mode: had_fatal becomes true.
 #[test]
 fn production_mode_assert_false_sets_had_fatal() {

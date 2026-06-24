@@ -42,7 +42,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
    7      <<   >>                            (shifts)
    8      +    -                             (additive)
    9      *    /    %                        (multiplicative)
-  10      **                                 (power)
+  10      **                                 (power — RIGHT-associative; all others left)
   11      as                                 ← tightest (cast; groups first / innermost)
 ```
 
@@ -50,16 +50,17 @@ SPDX-License-Identifier: LGPL-3.0-or-later
   (G-Prec)   for binary operators, level N binds tighter than level N-1.  Parsing is
              precedence-climbing: `parse_operators(p)` parses operands at level p+1, so a
              higher level groups deeper.
-  (G-Assoc)  ALL binary levels are LEFT-associative, including `**` and `as`:
-                 2 ** 3 ** 2  ==  (2 ** 3) ** 2  ==  64        (NOT 2 ** (3 ** 2) == 512)
-                 x as integer as float  ==  (x as integer) as float
+  (G-Assoc)  binary levels are LEFT-associative, EXCEPT `**` (power), which is RIGHT-assoc:
+                 2 ** 3 ** 2  ==  2 ** (3 ** 2)  ==  512       (matches maths / most languages)
+                 x as integer as float  ==  (x as integer) as float   (`as` stays left-assoc)
 ```
 
 **In words.** loft has one precedence ladder, twelve rungs. The closer to the bottom
 (`as`, `**`, `*`), the tighter an operator grips its operands; the closer to the top
-(`??`, `||`), the later it groups. Everything is left-to-right — there is no
-right-associative operator, so `2 ** 3 ** 2` is `(2**3)**2 = 64`, which is **not** the
-usual maths convention (most languages make `**` right-associative → `512`).
+(`??`, `||`), the later it groups. Operators group left-to-right, with **one exception**:
+`**` (power) is **right**-associative, so `2 ** 3 ** 2` is `2 ** (3 ** 2) = 512` — matching
+maths and most languages (it was left-associative = 64 before; the maker should not carry a
+surprise there).
 
 ### Prefix `&` is NOT an operator — it is the reference annotation
 
@@ -82,7 +83,7 @@ is the only place a leading `&` is allowed. The parser disambiguates purely by p
 
 ## Deviations
 
-OPEN: **4**
+OPEN: **3** — (was 4; D-gram-3 `**`-associativity closed: `**` is now right-associative)
 
 ### D-gram-1 — the written grammar omits precedence entirely
 - **Violates:** G-Prec / G-Assoc (they exist only in code)
@@ -106,16 +107,6 @@ OPEN: **4**
 - **Removal:** (long-horizon) a grammar whose ambiguities are resolved without unbounded
   backtracking, or an explicit statement of the context-sensitive productions.
 
-### D-gram-3 — `**` is left-associative, against convention
-- **Violates:** least-surprise (not a soundness rule — a decided edge to pin)
-- **Where:** `**` sits in the uniform left-associative precedence-climbing loop
-  (`mod.rs:375` level 10); measured `2 ** 3 ** 2 == 64`.
-- **Effect:** `a ** b ** c` means `(a**b)**c`, where maths and most languages mean
-  `a**(b**c)`. A real footgun for a ported formula.
-- **Status:** OPEN — decide: keep (document loudly in LOFT.md) or make `**`
-  right-associative. If kept, this becomes an INCONSISTENCIES.md entry, not a deviation.
-- **Removal:** either right-associate `**`, or move this to the decided-edge register.
-
 ### D-gram-4 — `&` is overloaded (bitwise-and vs reference annotation)
 - **Violates:** the clean separation G-Amp-* relies on position alone
 - **Where:** infix `&` (bitwise-and, level 6) and prefix `&` (reference annotation) share
@@ -132,6 +123,7 @@ OPEN: **4**
 ## Conformance
 
 The precedence rules are checkable by evaluation: `1 + 2 & 3 == 3` (additive tighter than
-bitwise-and), `2 ** 3 ** 2 == 64` (left-assoc `**`), `x as integer as float` (left-assoc
-`as`). D-gram-2's falsifier is structural (no CFG accepts loft); D-gram-3's is the `**`
-result; D-gram-4's is binding.md's `[&a]` → internal-error case.
+bitwise-and), `2 ** 3 ** 2 == 512` (RIGHT-assoc `**`; guarded by
+`tests/issues.rs::power_is_right_associative`), `x as integer as float` (left-assoc `as`).
+D-gram-2's falsifier is structural (no CFG accepts loft); D-gram-4's is binding.md's `[&a]` →
+internal-error case.
