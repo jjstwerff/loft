@@ -4116,7 +4116,7 @@ impl Parser {
     fn returned_uses_buffer(&self, buf_attr: u16) -> bool {
         matches!(
             self.data.def(self.context).returned(),
-            Type::Vector(_, d) if d.iter().any(|x| *x == buf_attr)
+            Type::Vector(_, d) if d.contains(&buf_attr)
         )
     }
 

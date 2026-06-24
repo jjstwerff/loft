@@ -103,7 +103,9 @@ fn divergences(interp: &ModeRun, native: &ModeRun) -> Vec<String> {
     let i = normalise_stdout(&interp.stdout);
     let n = normalise_stdout(&native.stdout);
     if i != n {
-        d.push(format!("stdout differs:\n    interp = {i:?}\n    native = {n:?}"));
+        d.push(format!(
+            "stdout differs:\n    interp = {i:?}\n    native = {n:?}"
+        ));
     }
     if interp.exit_code != native.exit_code {
         d.push(format!(
@@ -118,7 +120,10 @@ fn divergences(interp: &ModeRun, native: &ModeRun) -> Vec<String> {
         ));
     }
     if leaked(native) {
-        d.push(format!("native leaked a store:\n    {}", native.stderr.trim()));
+        d.push(format!(
+            "native leaked a store:\n    {}",
+            native.stderr.trim()
+        ));
     }
     d
 }
@@ -133,7 +138,11 @@ fn corpus() -> Vec<PathBuf> {
         .filter(|p| p.extension().is_some_and(|x| x == "loft"))
         .collect();
     files.sort();
-    assert!(!files.is_empty(), "oracle corpus is empty: {}", dir.display());
+    assert!(
+        !files.is_empty(),
+        "oracle corpus is empty: {}",
+        dir.display()
+    );
     files
 }
 
@@ -201,7 +210,11 @@ mod tests {
         assert!(
             !divergences(
                 &base,
-                &run("x=1\n", "Warning: 1 stores not freed at program exit", Some(0))
+                &run(
+                    "x=1\n",
+                    "Warning: 1 stores not freed at program exit",
+                    Some(0)
+                )
             )
             .is_empty(),
             "a native store leak must be caught"
@@ -209,11 +222,7 @@ mod tests {
 
         // an interpreter leak too
         assert!(
-            !divergences(
-                &run("x=1\n", "Warning: 1 stores not freed", Some(0)),
-                &base
-            )
-            .is_empty(),
+            !divergences(&run("x=1\n", "Warning: 1 stores not freed", Some(0)), &base).is_empty(),
             "an interpreter store leak must be caught"
         );
     }
@@ -222,7 +231,10 @@ mod tests {
     /// absorb trailing-newline / CRLF noise (else every program "diverges").
     #[test]
     fn normalisation_absorbs_noise_not_signal() {
-        assert_eq!(normalise_stdout("a\nb\n"), normalise_stdout("a\r\nb\r\n\n\n"));
+        assert_eq!(
+            normalise_stdout("a\nb\n"),
+            normalise_stdout("a\r\nb\r\n\n\n")
+        );
         assert_ne!(normalise_stdout("a=1\n"), normalise_stdout("a=2\n"));
     }
 }
