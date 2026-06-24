@@ -207,10 +207,16 @@ must be releasable. All changes land on a feature branch and reach `main` only v
 
 1. **Never `git commit` on `main`.** If you land there by accident, move the change to a feature
    branch first.
-2. **Pushing is OK by default — unless an open PR on the branch would be disturbed.** Push freely
-   after green CI on a long-lived branch with no open PR (the user wants commits visible without
-   asking). With an open PR, do NOT push without the user's explicit consent — force-pushes,
-   rebases, or surprise commits disrupt review — **except a fix for a blocking failure** (red CI, a
+2. **ALWAYS push the changes you make — it is a SAFETY rule, not a review step.** Work that lives
+   only in the local working tree or in unpushed commits can be lost (machine/session loss);
+   `origin/<branch>` is the backup. So once a change settles (it compiles / its tests are green),
+   commit it to the feature branch and **push proactively, without being asked** — every time you
+   make a change, don't leave it stranded locally. This is **separate from opening a PR**: pushing
+   to the working branch is the default for safety; **the PR is purely the user's call** — it takes
+   real review time and marks a deliberate "bow on the topic", so push freely but **never open or
+   merge a PR without an explicit request** (see point 3). The one caveat: with an **open PR** on
+   the branch, a surprise push disrupts review — hold non-blocking pushes for the user's consent
+   (force-pushes / rebases / surprise commits), **except a fix for a blocking failure** (red CI, a
    broken build, a failing required check): a push that *unblocks* the PR is allowed without asking,
    because the PR cannot merge while it is red anyway. Check `gh pr list --head <branch>` if unsure.
 3. **Never create a branch or open a PR unless the user explicitly asks** ("create PR", "open a
