@@ -1568,7 +1568,32 @@ use a separate collection or add after the loop"
         if nullable_to_dense_assign && self.convert(code, &s_type, f_type) {
             s_type = f_type.clone();
         }
+        // @PLN85 cluster V — a vector `+=` is an IN-PLACE append: `buf` keeps its OWN
+        // backing store; the appended source is COPIED in and consumed.  `change_var`
+        // below copies the RHS type's deps onto `buf`, so for `+=` it re-points `buf`
+        // onto the LAST appended source (e.g. a `["??"]`-returning call's hidden
+        // `__ref_N`).  That mis-dep then collides with NRVO promotion: ref_return
+        // promotes `__ref_N` to `__retbuf`, but `__ref_N` is ALSO that append call's
+        // scratch buffer — so the call writes into `buf`'s own backing and clobbers it
+        // (native: `encode_map_ic`'s second `+= head()` clips the result to len 1;
+        // interp tolerated the aliasing).  Preserve `buf`'s pre-append backing dep
+        // across `change_var` so the append never changes ownership.
+        let preserve_append_backing =
+            op == "+=" && var_nr != u16::MAX && matches!(self.vars.tp(var_nr), Type::Vector(_, _));
+        let saved_backing: Vec<u16> = if preserve_append_backing {
+            self.vars.tp(var_nr).depend()
+        } else {
+            Vec::new()
+        };
         self.change_var(to, &s_type);
+        if preserve_append_backing {
+            for d in self.vars.tp(var_nr).depend() {
+                self.vars.make_independent(var_nr, d);
+            }
+            for d in saved_backing {
+                self.vars.depend(var_nr, d);
+            }
+        }
         // Plan-22 phase 02d-vi — bypass the text-special branch
         // when the LHS is auto-deref'd boxed text.  The general
         // path (towards_set + call_to_set_op + maybe_prepend_cell_alloc)

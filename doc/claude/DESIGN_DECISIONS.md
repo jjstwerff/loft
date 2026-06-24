@@ -1578,6 +1578,18 @@ corruption surface.
 4. **Startup still stops** ([C67](#c67--fail-at-startup-not-at-runtime)): bad config /
    port-bind / missing deps exit *before* the run begins — "can't open the spreadsheet," not
    "a cell errored." A running calculation never stops.
+5. **Implicit faults are MODE-INDEPENDENT — and tested via the debug log.** Points 1–2 hold
+   **identically** in development, test, AND production: a div0 / overflow / OOB / deref yields
+   null-and-continue the same way everywhere. There is **no dev-vs-production split for
+   calculation faults** — only the explicit `panic`/`assert` signals (point 3) split by mode. A
+   mode-dependent implicit-fault path is deliberately rejected: a fault that behaves one way in
+   test and another in production is its own class of bugs ("works in test, degrades differently
+   live"). Because these faults are **silent** by default (no per-fault log), the project builds
+   **debug-level logging infrastructure** (normally invisible) that traces every uncomputable,
+   and the **test suite enables that debug level to VALIDATE** that the expected faults fire and
+   yield null. The debug log — not a halt — is how a calculation fault is *asserted* in a test;
+   it replaces the old dev-halt as the observation mechanism, so a test can confirm "this divided
+   by zero and produced null, and the rest still ran."
 
 Robustness payoff: a system degrades **locally** (one value, one entity), never **globally**.
 Note: this is a design target; the current code still traps/halts on calculation faults per

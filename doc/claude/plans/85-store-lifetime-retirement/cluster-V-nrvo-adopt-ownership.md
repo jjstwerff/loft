@@ -9,7 +9,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > regression). Folded into @PLN85 as cluster V: it is the same class — *a vector local's `dep`
 > must equal the store it owns*. The sub-clusters below (I-a/b/c = the corruption mechanism,
 > I-d = the leak) are the #437 detail; the **Resolution — IMPLEMENTED** section is the landed fix
-> (one invariant enforced at two sites, the per-site dep thicket halved 4 → 2).
+> (one invariant enforced at three sites, the per-site dep thicket reduced 4 → 3 — I-c deleted as subsumed; the `+=` backing-preserve retained, load-bearing on native).
 
 ## I-a/b/c — multi-arm vector `match` drops a later arm's return buffer (corruption)
 
@@ -215,37 +215,47 @@ One invariant fixes the class: **a vector local's `dep` = the heap store it actu
 owns after its last assignment/adopt** — computed where each shape's store is decided,
 not re-derived per-site with conflicting rules.
 
-### Resolution — IMPLEMENTED (the red-flag thicket collapsed 4 → 2)
+### Resolution — IMPLEMENTED (the red-flag thicket collapsed 4 → 3)
 
 Driving the matrix to zero bugs, the four conflicting per-site dep rules reduced to
-**two principled enforcements of the one invariant**, and the other two proved
-**redundant and were DELETED** (verified by env-gated removal: matrix + suites stay
-green without them):
+**three principled enforcements of the one invariant**, and the fourth (I-c) proved
+**redundant and was DELETED**:
 
+- **KEPT — `+=` backing-preserve** (`src/parser/expressions.rs`): a vector `+=` is an
+  IN-PLACE append; `buf` keeps its OWN backing dep across `change_var` so the append
+  never re-points `buf` onto the appended source's `__ref_N`. **Load-bearing on native**
+  (see the correction below). Fixes the `buf += call(); return buf` family.
 - **KEPT — `ref_return` adopt promotion** (`src/parser/control.rs`, the
   `site_adopts_v` exception): when the returned local ADOPTS a work-ref
   (`buf = head(..); return buf`, `buf`'s dep names the call's `__ref`), promote that
-  `__ref` to `__retbuf` so `buf == __retbuf` (true NRVO) — the end-state the literal
-  `buf = []` path reaches directly. Fixes the mixed-arm #2 leak.
+  `__ref` to `__retbuf` so `buf == __retbuf` (true NRVO). Fixes the mixed-arm #2 leak.
 - **KEPT — concat-adopt owns the call's store** (`src/parser/vectors.rs` +
-  `src/parser/operators.rs`): `a = <call> + …` returns the *adopted* store's dep
-  (`parse_append_vector` reads `collect_hidden_ref_args`), and `create_vector` SKIPS
-  the redundant `__vdb` backing when the first operand is an adopting call
-  (`body_adopts_call`, the sibling of the literal-init `body_allocates` skip). Fixes N.
+  `src/parser/operators.rs`): `a = <call> + …` returns the *adopted* store's dep, and
+  `create_vector` SKIPS the redundant `__vdb` backing when the first operand is an
+  adopting call (`body_adopts_call`). Fixes N.
 - **DELETED — I-c witness-pairing** (`src/scopes.rs`, the escape-gated
   `OpFreeRefIfDistinct` + the `__ref_N → buf` vector pairing): once the bind/adopt deps
   are correct, the standard return-source suppression frees the adopt store exactly
   once. The red-flag-flagged escape-gate is gone (−40 lines), and the original #443
   Clippy failure (`scopes.rs:1865`) vanishes with it.
-- **DELETED — `+=` backing-preserve** (`src/parser/expressions.rs`): subsumed by the
-  `ref_return` promotion; `buf += call(); return buf` is clean without it.
 
-**Validation.** Full boundary matrix CLEAN on **both backends** (interp + `--native`);
-`wrap` 51/51 (the 437 guard passes), `issues` 746, `leak_cases`/`strings`/`frame_vars`
-green; full suite clean aside from the env-only `38_import` registry-DNS baseline
-(fails identically on `origin/main`) and a network-flake server test (passes on retry).
-`fmt` + `clippy` clean.
+**Correction (the `+=` backing-preserve is NOT subsumed — a both-backends lesson).** An
+earlier pass deleted the `+=` backing-preserve too (claiming a 4 → 2 collapse), verified
+by env-gated removal showing the interp matrix + `wrap`/`issues`/`leak_cases` green. That
+verification was **interp-only and leak-only** — it missed a **native value corruption**:
+without the `+=` preserve, `change_var` re-points `buf`'s dep onto the LAST append source
+`__ref_N`; `ref_return` then promotes that `__ref_N` to `__retbuf`, but `__ref_N` is ALSO
+that append call's scratch buffer, so on **native** the call writes into `buf`'s own
+backing and clips the result (`encode_map_ic`'s second `+= head()` → `len 1`; the 437
+guard's I-c assert panics under the `native_scripts` suite). Interp tolerated the
+aliasing; native did not. The `+=` preserve is therefore **retained** — this is precisely
+the **interp/native divergence the differential oracle (D-op-1/2, @PLN89) exists to
+catch**: a subsumption claim must be validated on BOTH backends *and* on values, not just
+interp + the leak gate.
+
+**Validation.** Full boundary matrix CLEAN on **both backends** (interp + `--native`),
+including values; `wrap` 51/51 (437 guard passes), `issues` 746, `leak_cases` green; 437
+and 438 pass under `--native --tests`. `fmt` + `clippy` clean.
 
 The remaining @PLN85 reduction (deriving the owned-store dep in ONE computation rather
-than two enforcement sites) is the next step, but the class is closed and the thicket
-is halved.
+than three enforcement sites) is the next step, but the class is closed.

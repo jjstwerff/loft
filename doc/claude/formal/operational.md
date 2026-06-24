@@ -159,8 +159,18 @@ OPEN: **3**
   has not). Subsumes the former D-op-3 (the trap-suppression flag disappears with the trap).
 - **Removal:** every uncomputable arithmetic / index / deref yields null + continue (the
   existing production sentinel path) in ALL modes, **silently** (no per-fault log by default —
-  too spammy; an opt-in **debug log level** can trace uncomputables); drop the `??`
-  trap-suppression mode.
+  too spammy); drop the `??` trap-suppression mode (`??` is then purely the null-fallback).
+  - **Mode-independent** (C80 point 5): implicit faults behave **identically** in dev / test /
+    production — there is no dev-vs-production split for them; only `panic`/`assert` keep the C66
+    split. **Mechanism:** the implicit-fault sites must take the null+continue path
+    *unconditionally* — i.e. NOT consult `dev_soft_halt_enabled()` (today `raise_recoverable`
+    halts under dev-soft-halt, which is why OOB still stops a test run). `panic`/`assert` keep
+    `raise` + the dev-soft-halt; only the implicit faults move to an always-null variant.
+  - **Tested via the debug log, not a halt:** because the faults are silent, the suite enables
+    the opt-in **debug log level** (normally invisible) to VALIDATE that an expected uncomputable
+    fired and produced null while the rest of the program kept running. The debug-log
+    infrastructure is part of this deviation's implementation — it is the observation mechanism
+    that replaces the dev-halt for asserting fault behaviour in tests.
 
 ---
 
