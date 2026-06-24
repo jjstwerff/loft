@@ -48,11 +48,15 @@ full-range `integer`.  Writing `long` or `10l` is a parse error
 `x as i32` etc.  Use plain `integer` for ordinary arithmetic — it has
 the full 64-bit range.
 
-**Integer sentinel warning:** Any arithmetic that produces exactly
-`i64::MIN` becomes `null`. Division by zero also returns `null`. A
-function returning `integer` may `return null` (it yields `i64::MIN`,
-detectable with `!result`).  Use `not null` fields when a slot must
-reject null.
+**Uncomputable arithmetic → null, and the program KEEPS RUNNING** (C80, the
+spreadsheet model): divide / modulo by zero, and integer overflow
+(`i64::MAX + 1`), are uncomputable, so they yield `null` and execution CONTINUES
+— no trap, no halt, identically in dev / test / production.  Any arithmetic
+landing exactly on `i64::MIN` also reads as `null` (the in-band sentinel).
+Defend a site with `?? <fallback>` to turn the null into a value; an *unguarded*
+divide-by-zero additionally logs a Warn (overflow is silent — the null is the
+signal).  A function returning `integer` may `return null` (it yields `i64::MIN`,
+detectable with `!result`).  Use `not null` fields when a slot must reject null.
 
 **`text` vs `string`:** The canonical string type is `text`. Using `string` in struct fields causes errors.
 

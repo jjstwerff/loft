@@ -54,7 +54,7 @@ and can emit Rust code for host integration.
 | Type        | Description                                      |
 |-------------|--------------------------------------------------|
 | `boolean`   | `true` / `false`                                 |
-| `integer`   | 64-bit signed integer end-to-end (stack, fields, arithmetic).  Range can be constrained with `limit(...)`; narrow widths (`u8`/`u16`/`i8`/`i16`/`i32`) keep compact storage.  Overflow traps.  See "Arithmetic safety" below. |
+| `integer`   | 64-bit signed integer end-to-end (stack, fields, arithmetic).  Range can be constrained with `limit(...)`; narrow widths (`u8`/`u16`/`i8`/`i16`/`i32`) keep compact storage.  Overflow yields null and continues (the spreadsheet model).  See "Arithmetic safety" below. |
 | `float`     | 64-bit floating-point; literals contain a `.`    |
 | `single`    | 32-bit float; literals end with `f`              |
 | `character` | A single Unicode character                       |
@@ -79,44 +79,45 @@ Loft uses in-band sentinel values to represent `null`. Each type has a dedicated
 | narrow int (`u8`/`u16`/`i8`/`i16`) | top of the packed range | e.g. `i8::MIN` for `i8`; stored compactly in `Parts::Byte`/`Short` |
 | `i32` / `integer size(4)` | `i32::MIN` | 4-byte storage via `Parts::Int`; widens to i64 on the stack |
 
-**Arithmetic safety (C54.G-hybrid, landed 0.9.0):** integer arithmetic that
-would overflow — `(i32::MAX + 1)`, `(i32::MIN - 1)`, `(i32::MAX * 2)` — now
-produces a **runtime trap** with source location, NOT a silent null.
-Division and modulo by zero also trap.  The trap message names the operator
-and the inputs, so the failing site is obvious.
+**Arithmetic safety — the spreadsheet model (C80, [formal/operational.md](formal/operational.md)):**
+integer arithmetic that can't produce a value — overflow (`i64::MAX + 1`,
+`i64::MIN - 1`, `i64::MAX * 2`), or `/` / `%` by zero — yields **null and keeps
+running**.  It does NOT trap or halt.  A bad calculation degrades that one value
+(it becomes null); every later statement still executes (null is contagious — a
+consumer of the null gets null too — but it *runs*).  This holds identically in
+development, test, and production: a calculation fault never stops the run.
 
 ```loft
-a = 2147483647;
-b = a + 1;                  // TRAPS: "integer overflow: 2147483647 + 1"
-c = a / 0;                  // TRAPS: "integer division by zero"
+a = 9223372036854775807;     // i64::MAX
+b = a + 1;                   // b = null  (overflow → null, NOT a wrapped value)
+c = a / 0;                   // c = null  (divide-by-zero → null, execution continues)
+print("done");               // ALWAYS reached
 ```
 
-**`??` discharge**: if the arithmetic's result is the *immediate* LHS of a
-`??`, the trap is suppressed and the op produces null — which `??` then
-catches.  Use this idiom when you want overflow to fall through to a
-default:
+**`??` — a non-null fallback** (it is the null-fallback, not a trap-rescue):
+`expr ?? default` yields `expr` when it is non-null, else `default`.  Use it to
+turn a null result into a usable value at the spots that need one:
 
 ```loft
-x = (a * b) ?? default;     // overflow → x = default, no trap
-// Note: only the OUTERMOST op gets the discharge.  Nested sub-
-// expressions still trap.  Split into stages if they need different
-// handling:
-inner = a * b;              // traps if this overflows
-x = (inner + c) ?? 0;       // outer + gets discharge
+x = (a * b) ?? 0;            // overflow → null → x = 0
+y = total / count ?? 0;      // count == 0 → null → y = 0
 ```
 
-Explicit `i64::MIN` is the null sentinel for `integer` (post-2c).  The
-older `i32::MIN` sentinel survives on `i32` / `u8` / `u16` / `i8` / `i16`
-alias fields — those use their own narrow sentinel at storage time, but
-widen to i64 on the stack so arithmetic is uniform.  The interpreter
-and native backends both recognise `i64::MIN` as the integer null and
-don't produce it from arithmetic any more.
+**Observability.** An *unguarded* divide-by-zero (no `??` / null-check) also
+emits one Warn log, so an undefended fault is not invisible; a *guarded* site is
+silent.  Overflow is silent (the null result is the signal — and silent overflow
+is the Rust-release default, except loft's result is null rather than a wrapped
+wrong number).  To trace faults, opt into the debug log level.  The compiler also
+warns at the unguarded site (`consider a / b ?? 0`).
 
-**Legacy note:** before C54.G-hybrid, overflow silently produced the
-`i32::MIN` / `i64::MIN` sentinel.  Programs that relied on that
-behaviour should either use explicit guards (`if a > 0 && b > 0 && a <
-i64::MAX / b { a * b } else { default }`) or adopt the `?? default`
-idiom.
+The null sentinel is `i64::MIN` for `integer` (`NaN` for `float`/`single`).
+Narrow alias fields (`i32` / `u8` / `u16` / `i8` / `i16`) store their own narrow
+sentinel but widen to i64 on the stack, so arithmetic is uniform.  Both the
+interpreter and the native backend produce the same null on the same fault.
+
+**History:** 0.9.0's C54.G-hybrid made overflow / div0 **trap** (a halt, with a
+`??`-only discharge).  C80 (the spreadsheet model) reverses that to
+null-and-continue everywhere — so `??` is now a plain fallback, not a trap mode.
 
 **Binary file I/O caveat:** post-2c `f += <integer_expression>` on a
 `BigEndian` / `LittleEndian` file writes **8 bytes**.  Pre-2c
