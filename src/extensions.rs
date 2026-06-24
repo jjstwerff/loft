@@ -1639,6 +1639,90 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
     }
 }
 
+/// @PLN26 phase 3 — cross-build a `#native` package's crate to a wasm `target`
+/// (`wasm32-wasip2` for `--native-wasm`, `wasm32-unknown-unknown` for `--html`) so the
+/// wasm linker can consume its **rlib**, the way [`auto_build_native`] produces the host
+/// cdylib.  The rlib lands at the IN-TREE `<pkg>/native/target/<target>/release/lib<stem>.rlib`
+/// — exactly the path `native_utils::add_native_extern_flags` reads for a wasm target.
+///
+/// Returns whether that rlib is present afterwards: reused when it is already stamped with
+/// the current loft-ffi ABI key, else freshly cross-built.  Best-effort — a missing
+/// toolchain/target, or a crate that is not wasm-clean, returns `false` (the caller then
+/// emits the "no wasm build" notice rather than dying on a bare `E0463`).
+pub fn auto_build_native_target(pkg_dir: &str, stem: &str, target: &str) -> bool {
+    use std::path::PathBuf;
+    let pkg = PathBuf::from(pkg_dir);
+    let cargo_toml = pkg.join("native").join("Cargo.toml");
+    if !cargo_toml.exists() {
+        return false;
+    }
+    let rlib_name = format!("lib{stem}.rlib");
+    // A `cargo build --target <t>` writes under `<dir>/<t>/release/`; the wasm consume
+    // path reads the IN-TREE `native/target` (not the redirected host root), so build
+    // there to keep the produced rlib and the linked rlib the same file.
+    let out_dir = pkg
+        .join("native")
+        .join("target")
+        .join(target)
+        .join("release");
+    let rlib = out_dir.join(&rlib_name);
+    let fp = crate::cache::native_artifact_cache_key();
+    let fresh = |out: &std::path::Path| {
+        out.join(&rlib_name).exists() && crate::cache::native_artifact_fingerprint_matches(out, fp)
+    };
+    if fresh(&out_dir) {
+        return true;
+    }
+    // Serialise cross-process builds on the SAME global lock the host path uses, so
+    // parallel `loft` invocations don't race cargo's shared registry index/cache.
+    let _build_lock = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(std::env::temp_dir().join("loft-native-build.lock"))
+        .ok();
+    if let Some(f) = &_build_lock {
+        let _ = f.lock();
+    }
+    if fresh(&out_dir) {
+        // A process we waited on just produced it.
+        return true;
+    }
+    let mut cmd = std::process::Command::new("cargo");
+    cmd.args(["build", "--release", "--target", target, "--manifest-path"])
+        .arg(&cargo_toml)
+        // Build with CLEAN flags: the host `RUSTFLAGS`/`CARGO_ENCODED_RUSTFLAGS` loft was
+        // built with are host-target-specific and would either break the wasm build or
+        // mis-key it.  A `#native` crate links loft-ffi (the source-stable C-ABI), not
+        // loft's rlib, so no shared-SVH flag matching is needed for the wasm leg.
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit());
+    match cmd.status() {
+        Ok(s) if s.success() => {
+            // Stamp the same loft-ffi ABI key so a later loft-ffi change re-builds it.
+            crate::cache::write_native_artifact_fingerprint(&out_dir, fp);
+            rlib.exists()
+        }
+        Ok(_) => {
+            eprintln!(
+                "loft: cross-building native library '{stem}' for {target} failed (cargo error \
+                 above) — its native crate is likely not wasm-clean.{}",
+                build_deps_hint(pkg_dir)
+            );
+            false
+        }
+        Err(e) => {
+            eprintln!(
+                "loft: cannot cross-build native library '{stem}' for {target}: {e} — needs a \
+                 Rust toolchain with the {target} target (`rustup target add {target}`)."
+            );
+            false
+        }
+    }
+}
+
 /// @PLN21 Phase 3 — a trailing hint naming the package's declared `[native]
 /// build-deps` (the system dev packages its cdylib needs to compile), for a
 /// failed source build.  Empty when none are declared.

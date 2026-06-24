@@ -855,3 +855,73 @@ fn base64_decode_standard(s: &str) -> Option<Vec<u8>> {
     }
     Some(out)
 }
+
+/// @PLN26 phase 3 (#438) — a program that uses a `#native` (`[native] crate`) package
+/// compiles to `--native-wasm` and runs under wasmtime: loft cross-builds the package's
+/// native crate to `wasm32-wasip2` on demand and links its rlib (+ the host proc-macro
+/// deps).  `native_scalar_pkg` is a minimal wasm-clean fixture (one scalar `#native` fn,
+/// `native_answer() -> 42`), so this pins the loft cross-build PIPELINE, isolated from any
+/// heavy crate's own wasm-cleanliness.  Skipped when the wasip2 target or wasmtime is absent.
+#[test]
+fn pln26_phase3_native_package_runs_on_wasm() {
+    let Some(wasmtime) = which("wasmtime") else {
+        eprintln!("skip: wasmtime not installed");
+        return;
+    };
+    let have_wasip2 = Command::new("rustup")
+        .args(["target", "list", "--installed"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .is_some_and(|s| s.lines().any(|l| l == "wasm32-wasip2"));
+    if !have_wasip2 {
+        eprintln!("skip: wasm32-wasip2 target not installed");
+        return;
+    }
+    let root = repo_root();
+    let loft_bin = root.join("target/release/loft");
+    if !loft_bin.exists() {
+        eprintln!("skip: target/release/loft not built");
+        return;
+    }
+    let tmp = std::env::temp_dir().join("loft_pln26_p3");
+    let _ = std::fs::create_dir_all(&tmp);
+    let prog = tmp.join("native_pkg_wasm.loft");
+    std::fs::write(
+        &prog,
+        "use native_scalar_pkg;\nfn main() {\n  answer = native_answer();\n  \
+         print(\"native-answer={answer}\\n\");\n}\n",
+    )
+    .unwrap();
+    let wasm = tmp.join("native_pkg_wasm.wasm");
+    let _ = std::fs::remove_file(&wasm);
+    // Clean any prior wasm cross-build so the ON-DEMAND build path is exercised.
+    let _ = std::fs::remove_dir_all(
+        root.join("tests/lib/native_scalar_pkg/native/target/wasm32-wasip2"),
+    );
+
+    let build = Command::new(&loft_bin)
+        .arg("--native-wasm")
+        .arg(&wasm)
+        .arg("--lib")
+        .arg(root.join("tests/lib"))
+        .arg(&prog)
+        .output()
+        .expect("run loft --native-wasm");
+    assert!(
+        build.status.success() && wasm.exists(),
+        "loft --native-wasm of a #native-package program failed:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let run = Command::new(&wasmtime)
+        .arg(&wasm)
+        .output()
+        .expect("run wasmtime");
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(
+        stdout.contains("native-answer=42"),
+        "wasm `#native` call returned wrong/no value: stdout={stdout:?} stderr={}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+}

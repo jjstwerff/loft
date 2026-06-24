@@ -810,22 +810,34 @@ pub(crate) fn add_native_extern_flags(
             let stem = crate_name.replace('-', "_");
             let _ = crate::extensions::auto_build_native(pkg_dir, &stem);
         }
-        // @PLN26 phase 3 — a wasm target (`target.is_some()`) can't auto-build the
-        // package rlib (no host cross-compile) and can't use the C-ABI `.so` path
-        // (wasm links statically).  A missing wasm rlib means the package has no
-        // wasm build at all, so the compile would die on a bare E0463 "can't find
-        // crate".  Per "disallow the unverifiable loudly", emit a clear signal
-        // instead.  (The StableCrateId collision the C-ABI path fixes is UNREALIZED
-        // for wasm: it needs two colliding wasm rlibs, and no native package
-        // compiles to wasm today — so wasm stays on the rlib path, see § Open work.)
-        if target.is_some() && !rlib_path.exists() {
-            eprintln!(
-                "loft: native package `{crate_name}` has no {} build (no prebuilt or \
-                 cross-built rlib) — compiling a program that uses native packages to wasm \
-                 is not supported yet (@PLN26 phase 3, loft-lang/plans#26).  Ship a prebuilt \
-                 rlib for the package, or run with --interpret.",
-                target.unwrap_or("wasm32-wasip2")
-            );
+        // @PLN26 phase 3 — a wasm target needs the package's rlib (wasm links statically;
+        // the C-ABI `.so` path is host-only).  When neither a shipped `prebuilt/` rlib nor a
+        // prior cross-build is present, CROSS-BUILD the package's native crate to the wasm
+        // target on demand — `auto_build_native_target`, the wasm sibling of
+        // `auto_build_native`, lands the rlib at the in-tree path `rlib_path` reads below.
+        // Only if that can't produce the rlib (no toolchain/target, or the crate is not
+        // wasm-clean) do we emit a clear signal instead of dying on a bare E0463.
+        if let Some(tgt) = target {
+            // Cross-build on demand UNLESS a `prebuilt/<t>/` rlib is shipped (trusted as
+            // sent).  `auto_build_native_target` reuses an ABI-fresh in-tree rlib and
+            // rebuilds a stale/missing one, so calling it every wasm compile is cheap (a
+            // fingerprint read) and keeps a stale wasm rlib from being linked after a
+            // loft-ffi ABI change — the wasm analogue of the host `stale` gate above.
+            let prebuilt = std::path::PathBuf::from(pkg_dir)
+                .join("prebuilt")
+                .join(tgt)
+                .join(&rlib_name);
+            if !prebuilt.exists() {
+                let stem = crate_name.replace('-', "_");
+                crate::extensions::auto_build_native_target(pkg_dir, &stem, tgt);
+            }
+            if !rlib_path.exists() {
+                eprintln!(
+                    "loft: native package `{crate_name}` has no {tgt} build (no prebuilt, and \
+                     cross-build unavailable or the crate is not wasm-clean) — ship a prebuilt \
+                     rlib for the package, or run with --interpret."
+                );
+            }
         }
         if rlib_path.exists() {
             let extern_name = crate_name.replace('-', "_");
@@ -851,6 +863,24 @@ pub(crate) fn add_native_extern_flags(
                             ));
                         }
                     }
+                }
+            }
+            // @PLN26 phase 3 — a wasm cross-build keeps the package's PROC-MACRO deps
+            // (e.g. `loft-ffi-macros`, used by its `#[loft_native]` bridge) as HOST
+            // artifacts under `native/target/release/deps` (cargo builds proc-macros for
+            // the host even with `--target`).  The wasm `<target>/release/deps` dir above
+            // holds only the wasm rlibs, so `extern crate <pkg>` fails to resolve the
+            // proc-macro (E0463) without this.  rustc filters by target, so the host
+            // loft-ffi rlib that also lives here is ignored in favour of the wasm one.
+            if target.is_some() {
+                let host_deps = std::path::PathBuf::from(pkg_dir)
+                    .join("native")
+                    .join("target")
+                    .join("release")
+                    .join("deps");
+                if host_deps.is_dir() {
+                    cmd.arg("-L")
+                        .arg(format!("dependency={}", host_deps.display()));
                 }
             }
             // @P229 (G2): harvest build-script `rustc-link-search` dirs from
