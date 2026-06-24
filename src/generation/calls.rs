@@ -663,10 +663,7 @@ impl Output<'_> {
         // match inside `s.raise_recoverable(` (an `_` follows `s.raise`, not
         // `(`), so this is an independent substitution; the `_runtime` suffix
         // again breaks the self-re-match (see `Stores::raise_recoverable_runtime`).
-        res = res.replace(
-            "s.raise_recoverable(",
-            "stores.raise_recoverable_runtime(",
-        );
+        res = res.replace("s.raise_recoverable(", "stores.raise_recoverable_runtime(");
         res = res.replace("s.vec_get_or_raise(", "stores.vec_get_or_raise_runtime(");
         res = res.replace("s.vec_ref_or_raise(", "stores.vec_ref_or_raise_runtime(");
         res = res.replace(

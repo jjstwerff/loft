@@ -1046,20 +1046,18 @@ fn div_by_literal_constant_no_warning() {
     );
 }
 
-// ── #333: undefended div-by-zero raises with exit 1 on BOTH backends ─────────
-// The generated native binary arms `NATIVE_FAIL_FAST`, so `raise_runtime`
-// halts at the faulting op (matching the interpreter's CLI contract).
-// Pre-fix the native binary recorded the raise, printed a wrong value, and
-// exited 0.  The @EXPECT_FAIL script (tests/scripts/184-…) covers the interp
-// runner; the native suite skips @EXPECT_FAIL files, so this drives the
-// compiled binary directly.
+// ── #333 / C80: undefended div-by-zero is null-and-continue on BOTH backends ──
+// E-Uncomp (formal/operational.md): a calculation fault never halts.  `5 / z`
+// with `z == 0` yields the null sentinel and execution CONTINUES (exit 0) — the
+// interpreter and the compiled native binary must agree.  (Was: both exited 1
+// via the raise/NATIVE_FAIL_FAST halt; reversed by C80.)
 #[test]
-fn issue_333_native_div_zero_exits_one() {
+fn issue_333_div_zero_null_continues() {
     let pid = std::process::id();
     let script = std::env::temp_dir().join(format!("loft_i333_{pid}.loft"));
     std::fs::write(
         &script,
-        "fn main() {\n  z = 0;\n  a = 5 / z;\n  print(\"unreachable {a}\");\n}\n",
+        "fn main() {\n  z = 0;\n  a = 5 / z;\n  print(\"reached a={a}\");\n}\n",
     )
     .expect("write script");
     for mode in ["--interpret", "--native"] {
@@ -1073,17 +1071,13 @@ fn issue_333_native_div_zero_exits_one() {
         let stdout = String::from_utf8_lossy(&out.stdout);
         assert_eq!(
             out.status.code(),
-            Some(1),
-            "{mode}: expected exit 1, got {:?}\nstdout: {stdout}\nstderr: {stderr}",
+            Some(0),
+            "{mode}: expected exit 0 (null-and-continue), got {:?}\nstdout: {stdout}\nstderr: {stderr}",
             out.status.code()
         );
         assert!(
-            stderr.contains("divide by zero"),
-            "{mode}: stderr missing the error: {stderr}"
-        );
-        assert!(
-            !stdout.contains("unreachable"),
-            "{mode}: execution continued past the fault: {stdout}"
+            stdout.contains("reached a=null"),
+            "{mode}: execution must continue past the fault with null: {stdout}"
         );
     }
     let _ = std::fs::remove_file(&script);

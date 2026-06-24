@@ -871,36 +871,39 @@ mod test {
         assert_eq!(op_add_int(i64::MIN, 5), i64::MIN);
     }
 
+    // C80 / E-Uncomp (formal/operational.md): integer `+`/`-`/`*` overflow is
+    // uncomputable — the result is the null sentinel (i64::MIN) and execution
+    // CONTINUES; it does NOT panic.  This reverses the old C54.G "overflow traps,
+    // NOT a silent null" contract (these tests formerly asserted `should_panic`).
     #[test]
-    #[should_panic(expected = "long overflow")]
-    fn add_int_overflow() {
-        let _ = op_add_int(i64::MAX, 1);
+    fn add_int_overflow_is_null() {
+        assert_eq!(op_add_int(i64::MAX, 1), i64::MIN);
     }
 
     #[test]
-    #[should_panic(expected = "long overflow")]
-    fn sub_int_overflow() {
-        let _ = op_min_int(i64::MIN + 1, 2);
+    fn sub_int_overflow_is_null() {
+        assert_eq!(op_min_int(i64::MIN + 1, 2), i64::MIN);
     }
 
     #[test]
-    #[should_panic(expected = "long overflow")]
-    fn mul_int_overflow() {
-        let _ = op_mul_int(i64::MAX, 2);
+    fn mul_int_overflow_is_null() {
+        assert_eq!(op_mul_int(i64::MAX, 2), i64::MIN);
     }
 
+    // A computation whose exact result lands ON the sentinel reads back as null —
+    // the accepted in-band-sentinel cost: (i64::MIN + 1) - 1 == i64::MIN.
     #[test]
-    #[should_panic(expected = "long null-sentinel collision")]
-    fn sub_int_sentinel() {
-        let _ = op_min_int(-9_223_372_036_854_775_807, 1);
+    fn sub_int_onto_sentinel_is_null() {
+        assert_eq!(op_min_int(-9_223_372_036_854_775_807, 1), i64::MIN);
     }
 
+    // Bitwise ops keep `sentinel_long!` (a debug-only collision assert), untouched
+    // by C80 — they cannot overflow, only land on the sentinel.
     #[test]
     #[cfg(debug_assertions)]
     #[should_panic(expected = "long null-sentinel collision")]
     fn and_int_sentinel() {
-        // Post-2c: int arithmetic forwards to long; the sentinel becomes
-        // i64::MIN, not i32::MIN.
+        // Post-2c: int arithmetic forwards to long; the sentinel is i64::MIN.
         let _ = op_logical_and_int(i64::MIN + 1, i64::MIN + 2);
     }
 
@@ -910,15 +913,13 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "long overflow")]
-    fn add_long_overflow() {
-        let _ = op_add_long(i64::MAX, 1);
+    fn add_long_overflow_is_null() {
+        assert_eq!(op_add_long(i64::MAX, 1), i64::MIN);
     }
 
     #[test]
-    #[should_panic(expected = "long null-sentinel collision")]
-    fn sub_long_sentinel() {
-        let _ = op_min_long(i64::MIN + 1, 1);
+    fn sub_long_onto_sentinel_is_null() {
+        assert_eq!(op_min_long(i64::MIN + 1, 1), i64::MIN);
     }
 
     // `no_i64_sentinel_in_int_functions` removed in C54 Phase 2c.  Int

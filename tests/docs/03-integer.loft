@@ -33,16 +33,17 @@ fn main() {
   assert(pow(2.0, 3.0) == 8.0, "pow() for exponentiation");
   // 'abs()' returns the absolute value — the distance from zero, always positive.
   assert(1 + abs(-2) == 3, "abs(-2) == 2");
-  // ## Division by zero — explicit null with `?? null`
-  // Most languages crash on division by zero.  Loft has TWO modes:
-  // - **Defended** (with `?? null` or `if x != null { ... }` after):
-  //   the divide silently produces null and execution continues.
-  //   This lets you handle missing or bad data gracefully.
-  // - **Undefended** (bare `1 / 0`): in development the program halts
-  //   with a typed `error: divide by zero` and the source location;
-  //   in production the program logs a warning + continues with the
-  //   null sentinel so deployed games / servers never abort on
-  //   user-attributable edge cases.
+  // ## Division by zero — produces null and keeps running
+  // Most languages crash on division by zero.  Loft does NOT: a divide (or
+  // modulo) by zero is uncomputable, so it produces null and execution
+  // CONTINUES — the spreadsheet model, where one bad cell shows an error but
+  // the rest still recalculate.  This holds the same everywhere (development,
+  // test, and production) — one bad calculation never halts the run.
+  // - **Undefended** (bare `1 / 0`): you get null, and at this unguarded site
+  //   loft also reports a warning so the divide-by-zero is not invisible.
+  // - **Defended** (`1 / 0 ?? fallback`, or a following `if x != null`):
+  //   `??` supplies a non-null fallback and the warning is suppressed —
+  //   you have explicitly handled the case.
   a = 2 * 2;
   a -= 4;
   // a is now 0
@@ -86,8 +87,9 @@ fn main() {
   assert("{1 + 1:+4}" == "  +2", "Long in format string");
   assert(12 as integer == 12, "Long to integer conversion");
   // ## Common pitfall: integer overflow
-  // If a 32-bit integer calculation overflows the max value (~2 billion),
-  // the result wraps around silently. Use 'long' when you expect large values.
-  // For example, a score that multiplies two large numbers can silently wrap.
-  // Switching to 'long' avoids this: 'score = big_a as integer * big_b as integer'.
+  // A calculation whose result is too large to represent overflows — and in
+  // loft an overflow is uncomputable, so the result is null. It never wraps to
+  // a silently-wrong number, and it never crashes; execution continues with the
+  // null, exactly like divide-by-zero above. Check the result for null (or keep
+  // intermediate values in range) when multiplying or summing very large numbers.
 }
