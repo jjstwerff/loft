@@ -790,41 +790,52 @@ impl Parser {
             // (native returns the null sentinel).  Key off the dense return type `result`
             // instead: materialise the unwrap tail into an owned work-ref (copy the viewed
             // `S`) and promote that — the #306 view-return shape.  Gate-off-inert.
-            // #437 — a TAIL explicit `return o` whose value is a fresh-local owned
-            // vector is semantically identical to the implicit tail `o`, but
-            // `parse_return` left it as a Never-typed `Value::Return(Var(o))`, so the
-            // implicit-tail vector arm below (gated on `t == Vector`) never promoted
-            // it: the signature stayed a BARE vector, the caller rebound its result
-            // var to a fresh store, and the first in-place `+=` DROPPED the rows.
-            // Strip the `return` and route the local through the SAME ref_return +
-            // NRVO the implicit tail uses (promotes `o` to BE the __retbuf buffer, no
-            // copy → no mid-body orphan leak; a mid-body `if { return e }` is in
-            // "if"/"match_arm" context, never "return from block", so it is untouched).
-            let tail_ret_local: Option<(u16, Vec<u16>)> = if !self.first_pass
+            // #437 + c5/#448 residual — a TAIL explicit `return <fresh-owned vector>`
+            // is semantically identical to the implicit tail `<expr>`, but
+            // `parse_return` left it as a Never-typed `Value::Return(<expr>)`, so the
+            // implicit-tail vector arm below (gated on `t == Vector`) never delivered
+            // it: the signature stayed a BARE vector. A direct caller copes (it owns
+            // the result), but an NRVO caller that CHAINS this return into its buffer
+            // (`return wrap()` → `__retbuf = wrap(__retbuf)`) orphans the fresh store
+            // wrap never wrote into __retbuf (#448 c5). `<expr>` is either a named
+            // non-arg local (#437) OR a fresh literal / comprehension whose block owns
+            // a `__vdb` store (the c5 residual). Strip the `return` → implicit tail and
+            // route through the SAME ref_return + NRVO (renames its store onto
+            // __retbuf, no copy); ref_return then delivers any sibling mid-body returns
+            // via deliver_mid_vector_returns. A mid-body `if { return e }` is in
+            // "if"/"match_arm" context, never "return from block", so it is untouched.
+            // `!vec_arm_handled` — when the upper match/if (#416) or #448 path
+            // already materialised this tail into __retbuf, its delivered block's
+            // RESULT TYPE still reads the original `["__vdb"]` (the inner build),
+            // so without this gate `fresh_owned_vector_deps` is fooled and delivers
+            // it a SECOND time (appending __retbuf into itself → doubled length).
+            let tail_ret_owned: Option<Vec<u16>> = if !self.first_pass
+                && !vec_arm_handled
                 && matches!(result, Type::Vector(_, _))
+                && let Some(Value::Return(inner)) = l.last().map(Value::unspan)
             {
-                match l.last().map(Value::unspan) {
-                    Some(Value::Return(inner)) => match inner.unspan() {
-                        Value::Var(o)
-                            if self.vars.exists(*o)
-                                && !self.vars.is_argument(*o)
-                                && matches!(self.vars.tp(*o), Type::Vector(_, d) if !d.is_empty()) =>
-                        {
-                            let Type::Vector(_, d) = self.vars.tp(*o) else {
-                                unreachable!()
-                            };
-                            Some((*o, d.iter().copied().collect()))
-                        }
-                        _ => None,
-                    },
-                    _ => None,
-                }
+                self.fresh_owned_vector_deps(inner)
             } else {
                 None
             };
-            if let Some((o_var, ls)) = tail_ret_local {
+            if let Some(ls) = tail_ret_owned {
                 let last = l.len() - 1;
-                l[last] = Value::Var(o_var); // strip the `return` → implicit tail
+                // strip the `return` → implicit tail: peel any Span, then the Return,
+                // keeping the owned expr (a bare Var #437, or the literal block).
+                let mut taken = std::mem::replace(&mut l[last], Value::Null);
+                loop {
+                    taken = match taken {
+                        Value::Span(b) => b.1,
+                        Value::Return(inner) => {
+                            l[last] = *inner;
+                            break;
+                        }
+                        other => {
+                            l[last] = other;
+                            break;
+                        }
+                    };
+                }
                 self.ref_return(&ls, l, RetSite::BlockTail);
                 self.nrvo_collapse_tail_set(l, &ls);
             } else if let Type::Reference(td, _) = result
@@ -4152,6 +4163,45 @@ impl Parser {
         }
     }
 
+    /// #437 + c5/#448 residual — the fresh-local vector deps of a tail expression
+    /// that OWNS a fresh store: a named non-argument local vector (#437), OR a
+    /// literal / comprehension whose block result owns a `__vdb` store (every dep
+    /// a non-argument local — the c5 residual). `None` if it borrows an argument,
+    /// already delivers into `__retbuf` (its dep is the hidden buffer arg), or
+    /// isn't a fresh-owned vector. The precondition for renaming its store onto
+    /// `__retbuf` so the fn delivers via NRVO instead of returning a bare store an
+    /// NRVO caller's chain would orphan.
+    fn fresh_owned_vector_deps(&self, v: &Value) -> Option<Vec<u16>> {
+        match v.unspan() {
+            // #437 — a named non-argument local vector with a backing store.
+            Value::Var(o)
+                if self.vars.exists(*o)
+                    && !self.vars.is_argument(*o)
+                    && matches!(self.vars.tp(*o), Type::Vector(_, d) if !d.is_empty()) =>
+            {
+                let Type::Vector(_, d) = self.vars.tp(*o) else {
+                    unreachable!()
+                };
+                Some(d.iter().copied().collect())
+            }
+            // c5 residual — a fresh literal / comprehension block that owns its
+            // store. Every dep must be a non-argument local; this excludes a block
+            // already delivering into `__retbuf` (whose dep is the hidden buffer
+            // arg) and an arg / struct-field borrow (copied, not renamed).
+            Value::Block(bl) => match &bl.result {
+                Type::Vector(_, d)
+                    if !d.is_empty()
+                        && d.iter()
+                            .all(|&x| self.vars.exists(x) && !self.vars.is_argument(x)) =>
+                {
+                    Some(d.iter().copied().collect())
+                }
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     /// #448 — is the fn's `returned` type already classified to deliver into the
     /// hidden return-buffer attribute `buf_attr`? When so, EVERY return path must
     /// deliver into `__retbuf`, or the caller's buffer free orphans a path that
@@ -4471,6 +4521,15 @@ impl Parser {
                         append,
                         Value::Return(Box::new(Value::Var(buf_var))),
                     ]);
+                } else if self.fresh_owned_vector_deps(inner.unspan()).is_some() {
+                    // c5/#448 residual sibling — a mid-body `return <fresh literal>`
+                    // in an NRVO-promoted vector fn must ALSO deliver into __retbuf,
+                    // or the buffer-classified caller frees __retbuf and orphans this
+                    // path's store (the `dual` early-path leak). The literal block's
+                    // terminal Var is a fresh `_vec`, so the cluster-I per-arm
+                    // materialiser delivers it (clear+append+free the __vdb), leaving
+                    // the block yielding __retbuf; wrap it back in the `return`.
+                    self.materialize_vector_arms_into(elm, inner.unspan_mut(), buf_var);
                 }
             }
             Value::Span(b) => self.deliver_mid_vector_walk(elm, &mut b.1, buf_var),
