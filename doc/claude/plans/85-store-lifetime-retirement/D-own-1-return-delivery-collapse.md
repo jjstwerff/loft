@@ -59,9 +59,28 @@ source), not a shape to re-classify.
 The **vector return-buffer sub-thicket**: `return_buffer` + the 3
 `materialize_vector_arms_into` sites + the #448 trio (`returned_uses_buffer`,
 `body_has_buffer_return`, `tail_terminal_fresh_local_vec`) + `tail_terminal_is_branch`.
-These all answer "deliver this vector return into `__retbuf`, copying iff it isn't
-already there". Hypothesis: one query — *does this return's deps say it owns a
-fresh store distinct from `__retbuf`?* — replaces all of the shape-classification.
+
+### Refined finding (from reading the whole `t == Vector(elm, ls)` arm, ~785–960)
+
+The decision is **already deps-branched at the top** — the code keys off `ls` (the
+tail Type's deps): `ls.is_empty()` → OWNED-FRESH; `ls.iter().any(is_argument)` ∧
+(struct-field ∨ whole-arg) → BORROWS-ARG; else → multi-arm. So the gap is NOT "the
+fact isn't read" — it IS read to branch. The gap is that the **three delivery
+MECHANISMS are unfused**, each re-handling shape inside its branch:
+
+| mechanism | what it does | when |
+|---|---|---|
+| **rename** (`ref_return` + `nrvo_collapse_tail_set`) | promote the tail's local to BE `__retbuf` | owned-fresh, buffer FREE |
+| **copy** (`OpClearVector`+`OpAppendVector`+free) | clear `__retbuf`, element-append, free the source | borrows an arg, OR owned-fresh but buffer TAKEN (#448) |
+| **forward-copy** (`native_forwarder`) | mint a local, run the foreign-store call into it, copy in | a `#native` callee that delivers its own store |
+
+`#448` is exactly "owned-fresh but the buffer is TAKEN by an early Call return →
+must **copy**, not rename" — a fourth path bolted on because rename was assumed
+whenever owned-fresh. **The collapse is the SELECTOR, not the reads:** one
+`return_delivery(ls, buffer_taken, terminal_kind) -> {Rename, Copy, ForwardCopy, AsIs}`
+computed once from the deps fact + buffer-availability, then ONE dispatch to the
+three mechanism emitters — so #448's "buffer taken ⇒ copy" becomes a cell in the
+selector, not a special case, and the per-branch shape re-handling collapses.
 
 ## Probe before building (design-protocol — falsify the hypothesis cheaply)
 
@@ -104,8 +123,15 @@ representative case is settled.)
 - [x] Invariant named; first target + probe scoped.
 - [x] Probe the deps-sufficiency — CONFIRMED on the #448 case (owned-fresh /
       delivers-buffer / arg-borrow are all deps-distinguishable).
-- [ ] **NEXT:** factor the vector return-buffer sub-thicket into one
-      `delivery_of_return(tail) -> Delivery::{AsIs, MoveIntoBuf, CopyIntoBuf}`
-      read off the deps fact; replace the per-shape branches; oracle-guarded;
-      measure deleted helpers + line shrink.
+- [x] Read the whole `t == Vector` arm — REFINED the target: the decision is
+      already deps-branched; the gap is the THREE unfused mechanisms
+      (rename / copy / forward-copy), with #448 a fourth bolt-on. The collapse is
+      the SELECTOR, not the reads.
+- [ ] **NEXT (the build):** introduce `enum Delivery { Rename, Copy, ForwardCopy,
+      AsIs }` + `return_delivery(ls, buffer_taken, terminal_kind) -> Delivery`
+      computed once from the deps fact; route the existing branches through ONE
+      dispatch to three mechanism emitters; #448 becomes the `buffer_taken ⇒ Copy`
+      cell (delete the bolt-on trio). Oracle-guarded, one mechanism at a time;
+      measure deleted helpers + line shrink. (Delicate function — best done with a
+      fresh budget; the design is now precise enough to execute directly.)
 - [ ] Repeat for `parse_return` mid-body (the #448 residual lands here too).
