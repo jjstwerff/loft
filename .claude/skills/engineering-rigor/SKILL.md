@@ -295,6 +295,19 @@ engine: the **dogfood loop** (real consumers, not toys) converts an unknown axis
 into a known one, and each harvested lesson widens the next matrix. This skill
 makes the *visible* axes safe; the dogfood loop grows what is visible.
 
+## Keep `git diff main` usable — one branch, rebase often
+
+For a refactor the sharpest instrument is **`git diff main`**: it shows your delta (am I
+going the right direction?) and gives a clean revert to a known-good baseline
+(`git checkout origin/main -- f`, `git show origin/main:f`). That instrument only works
+while you stay on **one** branch held **close to main** — build everything there (mixed
+topics are fine) and **rebase on `origin/main` often**, not once at the end. Per-topic
+branches, or a branch left to diverge, poison the diff with merge noise AND make overlapping
+work un-mergeable later: a squash upstream vs your original commits is a guaranteed conflict,
+then a multi-commit rebase from hell. Do not create a branch unless the user explicitly asks;
+if the branch has drifted from main, rebase before continuing. (Full rationale + cautionary
+tale: `doc/claude/DEVELOPMENT.md` § "Stay close to main — rebase rigorously".)
+
 ## Go deeper — route here, don't reinvent
 
 This skill is the **synthesis + the router**, and everything above is
