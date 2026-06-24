@@ -148,57 +148,39 @@ overflows *at runtime* yields **null and keeps running** (operational.md `E-Unco
 
 ## Deviations
 
-OPEN: **1**
+OPEN: **0**
 
-### D2 — the full integer is marked by `forced_size = None`, not a canonical maximal range
-- **Violates:** the integer model (width should be the range alone)
-- **Where:** `is_narrowing_int` (`src/parser/mod.rs`) now decides narrowing by **range
-  containment** for a forced (narrow) target — the same range+sign test codegen's
-  `narrow_int_cast` uses, so the two agree (this closed the old D3/D5). But it must still
-  treat `forced_size = None` as "full integer → never narrows": `IntegerSpec`'s i32/u32
-  bounds cannot represent the i64 range, and the full integer has several bound encodings
-  (`signed32` max = i32::MAX, `wide` max = u32::MAX), so pure containment flags false
-  narrowings there. `forced_size = None` is thus still a width *marker*, not a pure range
-  fact. See [../TYPING_RELATION.md](../TYPING_RELATION.md) § R2.
-- **Effect:** width is range-driven for narrow types — signedness is now correct (`i8` does
-  not implicitly fit `u8`) and the parser agrees with codegen. The one residual: "is this
-  the full integer?" rides on `forced_size`, not on the bounds. Guard:
-  `d2_signed_narrowing_i8_to_u8_needs_cast` (tests/issues.rs).
-- **Status:** OPEN — the residual after the D3/D5 close. Tracked as
-  [@PLN88](https://github.com/loft-lang/plans/issues/88) (loft-lang/plans#88); the site-by-site
-  audit + rung plan is [plans/88-integer-i64.md](../plans/88-integer-i64.md). **Key reframe from
-  the audit:** the fix is NOT "widen `Value::Int` to i64" (that bloats every node) — the runtime
-  is already i64, and `Int(i32)`/`Long(i64)` is a compact value-size encoding. The change is the
-  `IntegerSpec` bounds → i64 + the template unify + an `int_const(i64)` keystone (compact `Int`
-  if it fits, else `Long`); `Value::Int` stays i32 for the metadata + small-value majority.
-- **Removal — three layers; the bottom is an IR change (each found by attempting it):**
-  1. *Storage migration — mechanical, builds clean.* `IntegerSpec` **i64 bounds** ripple into
-     ~35 i32-assuming sites: `Parts::Byte/Short(i32)` (DB storage-type enum), the
-     `byte`/`short`/`int` ops (`min: i32`), the i32 casts at storage boundaries; `range()`
-     needs i128 (the full-i64 count overflows i64); `usable_min`/`usable_max` widen to i64;
-     the `is_wide`/`*_template` predicates compare bound literals (`u32::MAX` → `i64::MAX`).
-     Narrow-gated, so the casts type-check. **Not the obstacle.**
-  2. *Two `integer` ranges.* The default `integer` keyword resolves to **`I32 = signed32()`**
-     — an **i32**-range template with `forced_size = None` (`src/typedef.rs` `"integer" => I32`)
-     — while **`I64 = wide()`** is a *separate* i64 template; the `forced_size = None` guard in
-     `is_narrowing_int` treated them as interchangeable. Pure range containment correctly
-     distinguishes them (`wide ⊄ signed32`), so a `wide` value (e.g. an `(I-Join)`-widened
-     local) assigned to an `integer` (`signed32`) destination narrows — *"cannot narrow
-     integer to integer"*. Unifying = `signed32() → wide()`, fix the predicates
-     (`is_wide`/`is_signed32_template`/`is_wide_template`), and collapse `__cell_long` into
-     `__cell_integer` (`src/parser/vectors.rs`). This too **builds clean**.
-  3. *The bottom — the IR assumes the default integer is i32.* With the model unified to i64 it
-     **breaks at runtime/codegen**: `Value::Int(i32)` (the IR integer node) cannot hold a large
-     value (`9_000_000_000` → *"literal out of range for i32"*), and a default integer — now
-     `wide`, `min = i64::MIN+1` — flowing into a narrow storage op has its min cast `as i32`,
-     **silently truncating** `i64::MIN+1` (emitted Rust: `db.byte(-9223372036854775807, …)`).
-     The boundary casts *mask* this; they do not fix it. Closing D2 therefore bottoms out in an
-     **IR change** — `Value::Int` must carry i64 (or default integers route through a `Long`/i64
-     IR path) — so the default integer is genuinely i64 end-to-end, not i32 with a wide static
-     range bolted on. That is the true depth of "make `integer` 64-bit": a fundamental IR /
-     codegen change with the full suite + both backends as the net, **not** a type-or-cast
-     change. (Attempted; reverted at this boundary — the `as i32` truncation is silent
-     store corruption, exactly what the discipline says not to ship.)
+### D2 — CLOSED by reconciliation (2026-06-24): `integer` = i64 is a *user-visible* contract met by a *compact* internal encoding
+
+D2 was framed as a deviation to *remove* by widening the IR (`Value::Int` → i64) so the default
+integer is "i64 end-to-end." That framing is **declined** — see
+[DESIGN_DECISIONS.md C83](../DESIGN_DECISIONS.md#c83--the-internal-representation-follows-the-user-visible-contract-never-widen-storage-for-implementation-convenience).
+The reconciliation:
+
+- **The user-visible contract is met.** `integer` *is* i64 everywhere a user can observe it — a
+  boundary matrix (graduated to `tests/scripts/438-integer-i64-user-visible.loft`) confirms a
+  value above i32 range survives arithmetic (`* / % -`), bare literals, struct fields, vector
+  elements, fn args/returns, comparison, negation, tuples, and field mutation, **identically on
+  the interpreter and `--native`**. The runtime computes on `i64` throughout.
+- **The internal model is *supposed* to be compact.** `Value::Int(i32)`/`Value::Long(i64)` is a
+  deliberate value-size encoding (i32 for the small-value majority, i64 when needed), and
+  `forced_size = None` marks the full i64 range. Per **C83** the internal representation *follows*
+  the user-visible contract and is memory-bandwidth-conscious — it is **never widened for
+  implementation convenience**. Blanket i64 storage would double every integer node/field for
+  zero user-visible gain; the earlier "widen `Value::Int`" attempt was correctly **reverted** (it
+  introduced a silent `as i32` truncation in a narrow storage path — solving the wrong problem).
+- **The rule, restated to match the intended design:** *the default `integer` denotes the i64
+  value range; storage uses the smallest sufficient encoding, with `forced_size = None` /
+  `Long` as the full-range carriers.* Under this rule the code is **conformant** — `forced_size`
+  as the full-integer marker is the intended encoding, not a width hack to remove. Narrowing is
+  range-driven (this already closed D3/D5); signedness is correct (`i8` does not fit `u8`); the
+  parser agrees with codegen. Guard: `d2_signed_narrowing_i8_to_u8_needs_cast` (tests/issues.rs)
+  + the i64 user-visible regression above.
+
+**If** a *user-visible* i64 truncation is ever found (a value a user can observe being clipped),
+that narrow path is fixed — still without blanket widening (C83 § Revisit). The site audit in
+[plans/88-integer-i64.md](../plans/88-integer-i64.md) remains the reference for any such targeted
+fix. @PLN88's storage-rework rungs are **not** pursued (off the path per C83).
 
 ---
 

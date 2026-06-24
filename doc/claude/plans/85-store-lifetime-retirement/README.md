@@ -8,6 +8,29 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 Plan id: [@PLN85](https://github.com/loft-lang/plans/issues/85) · investigation-style
 (reading order: Status → Probes → Cluster docs → Roadmap).
 
+> ## ✅ CLOSED — outcome (b): the clusters are independent, each invariant named + enforced at its own chokepoint, with a standing instrument that keeps the class shut.
+>
+> The investigation's central single-root hypothesis was **falsified** (Stage B): the
+> store-lifetime bugs are *independent mechanisms*, not one shared slot-init root. Each is now
+> fixed at its own chokepoint and guarded:
+>
+> | Cluster | Invariant (the one fact) | Chokepoint | Guard |
+> |---|---|---|---|
+> | **II** NRVO return-buffer double-free | a returned local's buffer is delivered into `__retbuf` once, freed once | `scopes.rs` `collect_return_sources` + `control.rs` `materialize_vector_arms_into` | `85-store-lifetime-vector-match-return.loft` + 4 more |
+> | **III** enum-discriminant corruption | `copy_claims` reads an initialised discriminant from every producer | #412 (enum-field producer) | probes 02/03 |
+> | **V** NRVO adopt/append ownership-dep (the #437 regression, ex-plan-90) | **a vector local's `dep` = the store it owns** | `control.rs` ref_return adopt-promotion + `vectors.rs`/`operators.rs` concat-adopt | `437-nrvo-return-aliasing.loft` |
+> | **I** FFI foreign-store vector return | a local that adopts a callee store frees it once | producer chokepoints (#409/#410) | — (vector instances fixed; struct-return latent, forward-homed) |
+>
+> **Standing instrument (keeps the class shut):** the `wrap` program-exit **leak-gate** over the
+> whole `tests/scripts/` corpus + `leak_cases` / `leak_cross_mode` + **ASan** (UAF/OOB) + **Miri**
+> (hard-UB) in CI, plus **20 graduated `85-*` regressions** and the `437` guard. A new sibling that
+> leaks/UAFs in any covered shape fails CI by construction (cluster V was exactly such a
+> re-discovered sibling — now closed, and its shapes are in the corpus).
+>
+> **Residuals forward-homed** (per the closure policy → [QUALITY.md § Store-lifetime cluster](../../QUALITY.md#store-lifetime-cluster)): cluster I's **latent** FFI struct-return read gap (unreachable until an `alloc_struct` helper) and cluster IV's **@PLN51 latent edge leaks** (re-probed at closure — native-mostly leaks on tuple/lambda/operator/capture-heap shapes, **pre-existing, identical on `origin/main`**, below the graduated-corpus gate).
+>
+> The original detail below is retained as the investigation record.
+
 ## Status
 
 | Stage | Status |
@@ -72,6 +95,7 @@ Full policy: [`_INVESTIGATION_TEMPLATE.md`](../_INVESTIGATION_TEMPLATE.md).
 | II | **NRVO return-buffer double-free** (was mis-described as a dep-slot init bug): `ki` aliases the NRVO buffer `__ref_1`; under conditional × **unused**, scope analysis emits a per-iteration `OpFreeRef(ki)` that whole-store-frees the stack-alias (#405/#306) while `__ref_1` also frees it at fn exit | high | **interp SIGSEGV / native completes** | 🔴 **LIVE on main** (probe 04); mechanism VERIFIED via debugger. THE live cluster. | [cluster-II](cluster-II-slot-init-dominance.md) § CLOSED OUT |
 | III | enum-discriminant corruption: struct-with-enum-fields-from-a-variable appended to a vector; `copy_claims` reads a -1 discriminant | high | both | ✅ **CLOSED on main** (probes 02/03): #412 fixed the enum shape; `copy_claims` breadth (vector/sub-struct fields, nested) verified clean | — |
 | IV | @PLN51 hidden-buffer-aliasing residuals (siblings not re-probed since closure) | tbd | both | re-extract from `finished/51` probes | cluster-IV (todo) |
+| V | **NRVO adopt/append ownership-dep** (the #437 regression, was the standalone plan-90): a vector local's `dep` diverges from the store it actually holds — `buf += call()` (append-source orphaned), `buf = head()` via a `match` wrapper (mixed-arm NRVO), `a = call() + …` (concat backing orphaned) → wrong free → leak on escape / corruption | high | both | ✅ **FIXED + REDUCED** — one invariant (*dep = owned store*) at 3 sites; the 4-site dep thicket reduced 4→3 (I-c witness-pairing DELETED as subsumed; the `+=` backing-preserve **retained — load-bearing on native**, an interp-only subsumption check had wrongly dropped it). Full matrix CLEAN both backends (values + leaks); suites green. Guard `tests/scripts/437-nrvo-return-aliasing.loft` | [cluster-V](cluster-V-nrvo-adopt-ownership.md) |
 
 ## Probe suite
 

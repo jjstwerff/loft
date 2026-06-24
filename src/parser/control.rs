@@ -903,10 +903,28 @@ impl Parser {
                         self.nrvo_collapse_tail_set(l, ls);
                     }
                 } else {
-                    self.ref_return(ls, l, RetSite::BlockTail);
+                    // #437/@PLN85 cluster V (O-Move): a multi-arm `match`/`if` vector tail
+                    // must deliver EVERY arm's buffer into the one return buffer.
+                    // The Vector type dep `ls` can be INCOMPLETE — it carries only
+                    // the first arm's `__ref_1`, while a later arm's `__ref_N` is
+                    // allocated but unregistered, so scope analysis frees it and the
+                    // function returns a dangling ref into a freed store (the arm
+                    // transferred its store out but the callee still freed it).
+                    // Union `ls` with every hidden buffer-arg ref in the tail so
+                    // ref_return renames each arm's buffer onto the retbuf (the
+                    // pre-#437 [__ref_1, __ref_2] shape).
+                    let mut full: Vec<u16> = ls.to_vec();
+                    if let Some(last) = l.last() {
+                        for w in Self::collect_hidden_ref_args(last, &self.data) {
+                            if !full.contains(&w) {
+                                full.push(w);
+                            }
+                        }
+                    }
+                    self.ref_return(&full, l, RetSite::BlockTail);
                     // @P377 / S1: collapse `cv = inner_call(...); cv` so the
                     // inner call's hidden buffer arg points at cv directly.
-                    self.nrvo_collapse_tail_set(l, ls);
+                    self.nrvo_collapse_tail_set(l, &full);
                 }
             } else if let Type::Reference(td, ls) = t {
                 // Issue #120: when filter_hidden stripped the deps from a
@@ -3711,7 +3729,7 @@ impl Parser {
         tail_forwards(def.code(), &self.data)
     }
 
-    fn collect_hidden_ref_args(val: &Value, data: &crate::data::Data) -> Vec<u16> {
+    pub(crate) fn collect_hidden_ref_args(val: &Value, data: &crate::data::Data) -> Vec<u16> {
         match val {
             Value::Call(d_nr, args) => {
                 let mut result = Vec::new();
@@ -4079,6 +4097,28 @@ impl Parser {
                 seq.push(Value::Var(w));
                 *op = Value::Insert(seq);
                 true
+            }
+            Value::Call(_, _) => {
+                // #437/@PLN85 cluster V cluster I-b (O-Move): a Call-terminal arm
+                // (`head(0,value)`) writes its OWN hidden `__ref_N` buffer, which
+                // this materialiser left untouched (only `Var` terminals above were
+                // rewritten).  The epilogue then freed that `__ref_N` while it was
+                // the arm's returned value — a dangling ref / silent clobber.
+                // Substitute the arm's hidden buffer ref onto the shared return
+                // buffer `w` and unregister it (no null-init, no scope-exit free),
+                // exactly as `ref_return` does for a bare-call return — so EVERY
+                // arm of a materialised single-tail vector match delivers into the
+                // one buffer.  `buf == w` (an arm already writing the buffer) is a
+                // no-op via the guard, so this is idempotent.
+                let mut changed = false;
+                for buf in Self::collect_hidden_ref_args(op, &self.data) {
+                    if buf != w {
+                        Self::substitute_work_ref(op, buf, w);
+                        self.vars.unregister_work_ref(buf);
+                        changed = true;
+                    }
+                }
+                changed
             }
             _ => false,
         }
@@ -4504,7 +4544,20 @@ impl Parser {
                 // An inner work ref that is not the site's value stays a
                 // plain local: the outer call deep-copies its record into
                 // the destination before scope exit frees it.
-                if is_work_ref && site_value.is_some() && site_value != Some(*v) {
+                //
+                // Cluster I-d (@PLN85 cluster V) EXCEPTION — the site value ADOPTS this
+                // work ref: `buf = head(.., __ref_1); …; return buf`, where
+                // `buf`'s dep is `__ref_1` (buf aliases head's returned store).
+                // Here `buf == __ref_1` at runtime, so promoting `__ref_1` to
+                // `__retbuf` makes `buf == __retbuf` (true NRVO) — the same
+                // end-state the `buf = []` literal path reaches directly.  Left
+                // un-promoted the fn returns a FRESH adopt store while a `["??"]`
+                // caller (e.g. a `match` wrapper) frees the unused buffer and
+                // the adopted store LEAKS (the I-c face-flip).  Only skip when
+                // the site value does NOT adopt `v`.
+                let site_adopts_v =
+                    site_value.is_some_and(|sv| self.vars.tp(sv).depend().contains(v));
+                if is_work_ref && site_value.is_some() && site_value != Some(*v) && !site_adopts_v {
                     continue;
                 }
                 // @PLAN59 / H1: bind the promoted local to the

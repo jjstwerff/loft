@@ -18,6 +18,13 @@ impl Parser {
         orig_var: u16,
     ) -> Type {
         let mut ls = Vec::new();
+        // Cluster I-d (@PLN85 cluster V / @PLN85 single-dep) — the store `orig_var` ends up
+        // OWNING after this concat.  For `a = <call> + …` the first-operand adopt
+        // (branch below) makes `a` hold the call's `["??"]` store, but `a`'s
+        // pre-allocated `create_vector` backing is its current dep; the returned
+        // type must carry the ADOPTED store's dep so `change_var` re-points `a` to
+        // what it truly owns (else the orphaned backing leaks on escape — N).
+        let mut adopt_dep: Option<u16> = None;
         let rec_tp = if let Type::Vector(cont, _) = tp {
             // @P314 — narrow-aware element type (see `append_elem_tp`).
             let cont = (**cont).clone();
@@ -94,6 +101,16 @@ impl Parser {
             ));
             orig_var
         } else {
+            // `orig_var` ADOPTS a fresh-storage temp (`Set(v, Call/Block)`, no copy)
+            // — or the self-ref `v = v + x` (code == Var(orig_var)).  For a CALL
+            // adopt, record the call's hidden `["??"]` buffer as the store `v` now
+            // owns so the return type below carries it (re-pointing `v` off its
+            // orphaned create_vector backing).  Self-ref keeps its dep.
+            if !self.first_pass && matches!(code.unspan(), Value::Call(_, _)) {
+                adopt_dep = Self::collect_hidden_ref_args(code, &self.data)
+                    .first()
+                    .copied();
+            }
             ls.push(v_set(orig_var, code.clone()));
             orig_var
         };
@@ -110,7 +127,10 @@ impl Parser {
             return res;
         }
         *code = Value::Insert(ls);
-        Type::Rewritten(Box::new(tp.clone()))
+        match adopt_dep {
+            Some(dep) => Type::Rewritten(Box::new(tp.depending(dep))),
+            None => Type::Rewritten(Box::new(tp.clone())),
+        }
     }
 
     pub(crate) fn parse_append_text(

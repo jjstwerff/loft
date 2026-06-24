@@ -1578,6 +1578,18 @@ corruption surface.
 4. **Startup still stops** ([C67](#c67--fail-at-startup-not-at-runtime)): bad config /
    port-bind / missing deps exit *before* the run begins — "can't open the spreadsheet," not
    "a cell errored." A running calculation never stops.
+5. **Implicit faults are MODE-INDEPENDENT — and tested via the debug log.** Points 1–2 hold
+   **identically** in development, test, AND production: a div0 / overflow / OOB / deref yields
+   null-and-continue the same way everywhere. There is **no dev-vs-production split for
+   calculation faults** — only the explicit `panic`/`assert` signals (point 3) split by mode. A
+   mode-dependent implicit-fault path is deliberately rejected: a fault that behaves one way in
+   test and another in production is its own class of bugs ("works in test, degrades differently
+   live"). Because these faults are **silent** by default (no per-fault log), the project builds
+   **debug-level logging infrastructure** (normally invisible) that traces every uncomputable,
+   and the **test suite enables that debug level to VALIDATE** that the expected faults fire and
+   yield null. The debug log — not a halt — is how a calculation fault is *asserted* in a test;
+   it replaces the old dev-halt as the observation mechanism, so a test can confirm "this divided
+   by zero and produced null, and the rest still ran."
 
 Robustness payoff: a system degrades **locally** (one value, one entity), never **globally**.
 Note: this is a design target; the current code still traps/halts on calculation faults per
@@ -1660,3 +1672,60 @@ context-sensitive points as accepted. D-gram-2 leaves formal/grammar.md as a dec
 A concrete consumer needs a CFG (a third-party grammar-based tool that genuinely cannot reuse
 loft's parser) **and** the context-sensitive points can be expressed without unbounded
 backtracking.
+
+## C83 — The internal representation follows the user-visible contract; never widen storage for implementation convenience
+
+### Question
+
+The user-visible type `integer` is **i64** (verified — see below). Should the internal
+representation therefore widen to a uniform i64 — e.g. make `Value::Int` carry `i64`, and store
+every integer field/element as 8 bytes — to "match the type" and simplify the code? More
+generally: when a user-visible type is wide, is it acceptable to store it wide everywhere because
+that is the easy, uniform choice?
+
+### Evaluation
+
+**The user-visible i64 contract is already met, at no cost to the representation.** A boundary
+matrix confirms a value above i32 range survives **every** observable round-trip — arithmetic
+(`*`, `/`, `%`, `-`), bare literals, struct fields, vector elements, function args/returns,
+comparison, negation, tuples, and field mutation — **identically on the interpreter and
+`--native`**. The runtime computes on `i64` throughout.
+
+The internal storage uses a **compact value-size encoding** — `Value::Int(i32)` when the value
+fits in 32 bits, `Value::Long(i64)` only when it doesn't — and narrow stored fields use the
+smallest sufficient width. This is **deliberate**, not an accident waiting to be "fixed":
+
+- A tree-walking interpreter and a word-addressed heap are **memory-bandwidth bound**. Doubling
+  every integer IR node and every stored integer to 8 bytes — most of which hold small values —
+  is a direct, measurable bandwidth tax for **zero user-visible benefit** (the contract is
+  already i64).
+- "Store it wide because it's uniform/easier" optimises the *implementation's* convenience at the
+  *user's* expense. The dependency must run the other way: **the internal model follows the
+  user-visible contract, and serves it at minimum bandwidth.** A wide *contract* does not imply
+  wide *storage* — it implies storage as narrow as each value allows, with the wide semantics
+  preserved on read/compute.
+
+This is why `formal/types.md` deviation **D2 closes by reconciliation, not by an IR rewrite**: the
+rule (`integer` = i64) is satisfied user-visibly; the compact encoding is the intended design, so
+the spec records the encoding as conformant rather than the code widening to match a mis-stated
+rule. (The earlier "widen `Value::Int` to i64" attempt was correctly **reverted** — it solved the
+wrong problem and introduced a silent-truncation hazard in the IR.)
+
+### Decision
+
+**DECLINED — blanket-widening storage to match a wide user-visible type (2026-06-24).** General
+tenet: **internal representation follows the user-visible contract and is memory-bandwidth-
+conscious; storage is never widened for implementation convenience.** For integers specifically:
+the compact `Int(i32)`/`Long(i64)` encoding stays; `integer` = i64 is the law on read/compute;
+D2 is closed by reconciliation. The same tenet governs any future representation choice (narrow
+fields, packed records, sentinels): pick the smallest encoding that preserves the user-visible
+semantics.
+
+### Revisit when
+
+A **measurement** shows the compact-encoding dispatch (the `Int`-vs-`Long` branch, or per-width
+field handling) costs more than the bandwidth it saves — at which point a *measured* widening of a
+*specific* hot path is on the table, never a blanket one. Independently, if a **user-visible** i64
+truncation is ever found (a value a user can observe being clipped), fix that narrow path — still
+without blanket widening; the contract failing is the trigger, not the representation being
+non-uniform.
