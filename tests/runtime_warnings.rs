@@ -449,14 +449,14 @@ fn main() {
     );
 }
 
-/// Without `--dev-soft-halt`, the first fault halts execution.
+/// C80 — an IMPLICIT calculation fault (div0) no longer halts; only an EXPLICIT
+/// signal (`panic` / `assert`) halts the run in dev.  This checks the explicit
+/// signal still stops at the first one (the post-signal `print` is unreached).
 #[test]
-fn g4g_default_halts_on_first_fault() {
+fn g4g_explicit_signal_halts_in_dev() {
     let source = "\
 fn main() {
-  z = 0;
-  bad1 = 1 / z;
-  bad2 = 2 / z;
+  assert(false, \"first\");
   print(\"done\\n\");
 }
 ";
@@ -464,52 +464,26 @@ fn main() {
     assert_eq!(code, Some(1));
     assert!(
         !stdout.contains("done"),
-        "default mode must halt on first fault; got stdout={stdout:?}"
+        "an explicit assert must halt in dev; got stdout={stdout:?}"
     );
 }
 
-/// Faults inside a call chain render the chain after the typed
-/// error, innermost first.
-#[test]
-fn g4g_call_chain_rendered() {
-    let source = "\
-fn divide_safely(a: integer, b: integer) -> integer {
-  return a / b;
-}
-
-fn calculate_damage(base: integer, armor: integer) -> integer {
-  reduced = divide_safely(base * 100, armor);
-  return reduced;
-}
-
-fn main() {
-  enemy_armor = 0;
-  dmg = calculate_damage(50, enemy_armor);
-  print(\"damage: {dmg}\\n\");
-}
-";
-    let (_stdout, stderr, code) = run_with_warnings("g4g_chain", source);
-    assert_eq!(code, Some(1), "must halt at fault");
-    // Innermost frame named first, then chevron + outer frames.
-    assert!(
-        stderr.contains("in fn divide_safely() ← called from"),
-        "expected innermost-first chain header; got stderr={stderr:?}"
-    );
-    assert!(
-        stderr.contains("fn calculate_damage()"),
-        "expected outer frame; got stderr={stderr:?}"
-    );
-    assert!(
-        stderr.contains("fn main()"),
-        "expected top frame; got stderr={stderr:?}"
-    );
-}
+// NOTE (C80): the former `g4g_call_chain_rendered` tested the call-chain that
+// `State::raise()` rendered when an UNDEFENDED div-by-zero dev-halted.  Under
+// C80 that fault is recoverable (null-and-continue), so it no longer raises a
+// halting error with a chain.  The chain-rendering code still exists (e.g. for
+// StackOverflow), but the explicit `panic`/`assert` signals construct their
+// error via `RuntimeError::user_panic`/`assertion_failed` with an EMPTY chain
+// (n_panic/n_assert take `&mut Stores`, not the interpreter's `State.call_stack`).
+// Capturing the chain for those signals is a latent follow-up; the obsolete
+// div0-scenario test is removed rather than asserting a behaviour C80 deleted.
 
 // ── Plan-07 phase 4f — float / single div / mod by zero raises ──────────────
 
-/// Undefended float div by zero raises and halts in dev mode.
+/// C80 / E-Uncomp — undefended float div by zero is null-and-continue (NaN is
+/// the float null sentinel), not a dev halt.
 #[test]
-fn f4f_float_div_by_zero_raises() {
+fn f4f_float_div_by_zero_null_continues() {
     let source = "\
 fn main() {
   z = 0.0;
@@ -518,10 +492,14 @@ fn main() {
 }
 ";
     let (stdout, _stderr, code) = run_with_warnings("4f_div_float", source);
-    assert_eq!(code, Some(1), "must halt with exit 1; got code={code:?}");
+    assert_eq!(
+        code,
+        Some(0),
+        "null-and-continue exits 0; got code={code:?}"
+    );
     assert!(
-        !stdout.contains("bad="),
-        "post-fault stdout must NOT print; got stdout={stdout:?}"
+        stdout.contains("bad=null"),
+        "float div0 yields null (NaN) and continues; got stdout={stdout:?}"
     );
 }
 
@@ -564,9 +542,9 @@ fn main() {
     );
 }
 
-/// Float mod by zero raises like div.
+/// Float mod by zero is null-and-continue like div (C80).
 #[test]
-fn f4f_float_mod_by_zero_raises() {
+fn f4f_float_mod_by_zero_null_continues() {
     let source = "\
 fn main() {
   z = 0.0;
@@ -574,13 +552,17 @@ fn main() {
   print(\"bad={bad}\\n\");
 }
 ";
-    let (_stdout, _stderr, code) = run_with_warnings("4f_mod_float", source);
-    assert_eq!(code, Some(1));
+    let (stdout, _stderr, code) = run_with_warnings("4f_mod_float", source);
+    assert_eq!(code, Some(0));
+    assert!(
+        stdout.contains("bad=null"),
+        "float mod0 yields null and continues; got stdout={stdout:?}"
+    );
 }
 
-/// Single-precision div by zero raises.
+/// Single-precision div by zero is null-and-continue (C80).
 #[test]
-fn f4f_single_div_by_zero_raises() {
+fn f4f_single_div_by_zero_null_continues() {
     let source = "\
 fn main() {
   z = 0.0f;
@@ -588,8 +570,12 @@ fn main() {
   print(\"bad={bad}\\n\");
 }
 ";
-    let (_stdout, _stderr, code) = run_with_warnings("4f_div_single", source);
-    assert_eq!(code, Some(1));
+    let (stdout, _stderr, code) = run_with_warnings("4f_div_single", source);
+    assert_eq!(code, Some(0));
+    assert!(
+        stdout.contains("bad=null"),
+        "single div0 yields null and continues; got stdout={stdout:?}"
+    );
 }
 
 // ── Plan-07 phase 4h — `not null` field-reminder hint ──────────────────

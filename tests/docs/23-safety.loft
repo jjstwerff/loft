@@ -50,19 +50,16 @@ fn main() {
   // Mitigation: Use `long` when you need the full 32-bit integer range, or
   // declare struct fields as `not null` so that reserved value can be used as data.
 
-  // ## Integer overflow wraps silently
-  // 32-bit integers wrap when they exceed roughly 2 billion. There is no
-  // runtime overflow check and no exception. The result is a small or
-  // negative number and the program continues as if nothing happened.
-  // The following would wrap silently in a release build:
-  //   big = 2000000000; big + big  →  negative number
-  // Mitigation: Use `long` (64-bit) when multiplying or summing large
-  // values: `big as integer + big as integer` avoids the wrap.
-  // Design: a future `--debug` flag will turn silent overflow into a logged
-  // WARN with file:line context so overflows are visible during development
-  // without affecting release performance.
-  big = 2000000000;
-  assert(big as integer + big as integer == 4000000000, "long avoids wrap");
+  // ## Integer overflow yields null
+  // A calculation that overflows the integer range is uncomputable, so loft
+  // yields null and keeps running — it never wraps to a silently-wrong number
+  // (the way C, or a Rust release build, would) and it never crashes. One bad
+  // value degrades locally; the rest of the program still computes.
+  //   huge = 9223372036854775807; huge + 1  →  null (not a wrapped negative)
+  // To trace where overflows arise, opt into the debug log level. Mitigation:
+  // check the result for null, or keep intermediate values within range.
+  huge = 9223372036854775807;
+  assert(!(huge + 1), "overflow yields null, not a wrapped value");
 
   // ## Bitwise operators with zero
   // All bitwise operators (AND, OR, XOR, shift) work correctly with zero.
@@ -77,8 +74,9 @@ fn main() {
   // Floats represent null as `NaN` (Not a Number). Null floats behave
   // consistently with other null types: null is not equal to anything
   // (including itself), and null is not-equal to everything.
-  // The DEFENDED division yields null; the undefended form raises
-  // `divide by zero` (plan-07 4f.5 — see tests/scripts/184-…).
+  // Both the defended and the undefended division yield null and continue
+  // (C80 / E-Uncomp — see tests/scripts/184-i333-div-zero-null-continues.loft);
+  // the undefended site additionally reports a warning.
   bad = 0.0 / 0.0 ?? null;
   assert(!bad, "NaN is falsy — this is how you detect null floats");
   assert(!(bad == bad), "null == null is false");

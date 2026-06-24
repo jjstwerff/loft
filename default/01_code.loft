@@ -169,9 +169,9 @@ fn OpMinInt(v1: integer, v2: integer) -> integer;
 fn OpMulInt(v1: integer, v2: integer) -> integer;
 #rust"ops::op_mul_int(@v1, @v2)"
 fn OpDivInt(v1: integer, v2: integer) -> integer;
-#rust"if @v2 == 0 {{ s.raise(crate::runtime_error::RuntimeErrorKind::DivideByZero); 0_i64 }} else {{ ops::op_div_int(@v1, @v2) }}"
+#rust"if @v2 == 0 {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::DivideByZero); i64::MIN }} else {{ ops::op_div_int(@v1, @v2) }}"
 fn OpRemInt(v1: integer, v2: integer) -> integer;
-#rust"if @v2 == 0 {{ s.raise(crate::runtime_error::RuntimeErrorKind::DivideByZero); 0_i64 }} else {{ ops::op_rem_int(@v1, @v2) }}"
+#rust"if @v2 == 0 {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::DivideByZero); i64::MIN }} else {{ ops::op_rem_int(@v1, @v2) }}"
 // C54.G-hybrid — nullable integer arithmetic.  Emitted only when the op's
 // result is the immediate LHS of `??` so `??` can discharge the null.
 fn OpAddIntNullable(v1: integer, v2: integer) -> integer;
@@ -240,12 +240,12 @@ fn OpMinSingle(v1: single, v2: single) -> single;
 #rust"@v1 - @v2"
 fn OpMulSingle(v1: single, v2: single) -> single;
 #rust"@v1 * @v2"
-// Plan-07 phase 4f.5 — single-precision div / mod by zero raise
-// `RuntimeError::DivideByZero`; mirror of the float pair above.
+// C80 / E-Uncomp: single-precision div / mod by zero yields the float null
+// sentinel (NaN) and CONTINUES (raise_recoverable, no halt); mirror of float.
 fn OpDivSingle(v1: single, v2: single) -> single;
-#rust"if @v2 == 0.0 {{ s.raise(crate::runtime_error::RuntimeErrorKind::DivideByZero); f32::NAN }} else {{ @v1 / @v2 }}"
+#rust"if @v2 == 0.0 {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::DivideByZero); f32::NAN }} else {{ @v1 / @v2 }}"
 fn OpRemSingle(v1: single, v2: single) -> single;
-#rust"if @v2 == 0.0 {{ s.raise(crate::runtime_error::RuntimeErrorKind::DivideByZero); f32::NAN }} else {{ @v1 % @v2 }}"
+#rust"if @v2 == 0.0 {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::DivideByZero); f32::NAN }} else {{ @v1 % @v2 }}"
 fn OpDivSingleNullable(v1: single, v2: single) -> single;
 #rust"@v1 / @v2"
 fn OpRemSingleNullable(v1: single, v2: single) -> single;
@@ -527,18 +527,18 @@ fn OpMinFloat(v1: float, v2: float) -> float;
 #rust"@v1 - @v2"
 fn OpMulFloat(v1: float, v2: float) -> float;
 #rust"@v1 * @v2"
-// Plan-07 phase 4f.5 — float / single div / mod by zero raise
-// `RuntimeError::DivideByZero` like the integer peers.  Today `a / 0.0`
-// produces `Inf` (silent) and `0.0 / 0.0` produces `NaN` (silent
-// null) — both are silent-wrong-answer cases per the phase 0 rubric.
-// IEEE behaviour stays available via the `*Nullable` peers (emitted
-// only when `??` / `if x != null` defends the site, mirroring the
-// integer split).
+// C80 / E-Uncomp: float div / mod by zero is uncomputable — it yields the
+// float null sentinel (NaN) and CONTINUES (raise_recoverable, no halt), like
+// the integer peers (it does NOT trap/halt; the spreadsheet model degrades one
+// value while the rest of the program keeps computing).  The raw IEEE behaviour
+// (`a / 0.0` → `Inf`) stays available via the `*Nullable` peers, emitted only
+// when `??` / `if x != null` defends the site — so a deliberately-defended site
+// can still observe `Inf` rather than the null.
 fn OpDivFloat(v1: float, v2: float) -> float;
-#rust"if @v2 == 0.0 {{ s.raise(crate::runtime_error::RuntimeErrorKind::DivideByZero); f64::NAN }} else {{ @v1 / @v2 }}"
+#rust"if @v2 == 0.0 {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::DivideByZero); f64::NAN }} else {{ @v1 / @v2 }}"
 fn OpRemFloat(v1: float, v2: float) -> float;
-#rust"if @v2 == 0.0 {{ s.raise(crate::runtime_error::RuntimeErrorKind::DivideByZero); f64::NAN }} else {{ @v1 % @v2 }}"
-// Silent IEEE-behaviour peers — emitted only when defended.
+#rust"if @v2 == 0.0 {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::DivideByZero); f64::NAN }} else {{ @v1 % @v2 }}"
+// IEEE-behaviour peers — emitted only when defended.
 fn OpDivFloatNullable(v1: float, v2: float) -> float;
 #rust"@v1 / @v2"
 fn OpRemFloatNullable(v1: float, v2: float) -> float;

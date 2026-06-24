@@ -1,12 +1,7 @@
-==== exit: 1 ====
+==== exit: 0 ====
 ==== stdout ====
-==== stderr ====
+result=null==== stderr ====
 warning: division may produce null on divide-by-zero with no defensive check; consider `a / b ?? 0` or wrap in `if b != 0 { ... }`
-  --> <cases>/17_runtime_div_by_zero_int.loft:3:15
-  |
-3 |   result = 1 / z;
-  |               ^
-error: divide by zero
   --> <cases>/17_runtime_div_by_zero_int.loft:3:15
   |
 3 |   result = 1 / z;

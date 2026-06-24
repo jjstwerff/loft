@@ -537,8 +537,8 @@ fn div_int(s: &mut State) {
     let v_v2 = *s.get_stack::<i64>();
     let v_v1 = *s.get_stack::<i64>();
     let new_value = if v_v2 == 0 {
-        s.raise(crate::runtime_error::RuntimeErrorKind::DivideByZero);
-        0_i64
+        s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::DivideByZero);
+        i64::MIN
     } else {
         ops::op_div_int(v_v1, v_v2)
     };
@@ -549,8 +549,8 @@ fn rem_int(s: &mut State) {
     let v_v2 = *s.get_stack::<i64>();
     let v_v1 = *s.get_stack::<i64>();
     let new_value = if v_v2 == 0 {
-        s.raise(crate::runtime_error::RuntimeErrorKind::DivideByZero);
-        0_i64
+        s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::DivideByZero);
+        i64::MIN
     } else {
         ops::op_rem_int(v_v1, v_v2)
     };
@@ -741,7 +741,7 @@ fn div_single(s: &mut State) {
     let v_v2 = *s.get_stack::<f32>();
     let v_v1 = *s.get_stack::<f32>();
     let new_value = if v_v2 == 0.0 {
-        s.raise(crate::runtime_error::RuntimeErrorKind::DivideByZero);
+        s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::DivideByZero);
         f32::NAN
     } else {
         v_v1 / v_v2
@@ -753,7 +753,7 @@ fn rem_single(s: &mut State) {
     let v_v2 = *s.get_stack::<f32>();
     let v_v1 = *s.get_stack::<f32>();
     let new_value = if v_v2 == 0.0 {
-        s.raise(crate::runtime_error::RuntimeErrorKind::DivideByZero);
+        s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::DivideByZero);
         f32::NAN
     } else {
         v_v1 % v_v2
@@ -975,7 +975,7 @@ fn div_float(s: &mut State) {
     let v_v2 = *s.get_stack::<f64>();
     let v_v1 = *s.get_stack::<f64>();
     let new_value = if v_v2 == 0.0 {
-        s.raise(crate::runtime_error::RuntimeErrorKind::DivideByZero);
+        s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::DivideByZero);
         f64::NAN
     } else {
         v_v1 / v_v2
@@ -987,7 +987,7 @@ fn rem_float(s: &mut State) {
     let v_v2 = *s.get_stack::<f64>();
     let v_v1 = *s.get_stack::<f64>();
     let new_value = if v_v2 == 0.0 {
-        s.raise(crate::runtime_error::RuntimeErrorKind::DivideByZero);
+        s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::DivideByZero);
         f64::NAN
     } else {
         v_v1 % v_v2

@@ -1,0 +1,20 @@
+// @PLN88 user-visible side of D2 (DESIGN_DECISIONS C83 — construct user integers via the
+// compact-or-wide encoding, never a silent `as i32`).  A large value CONSTRUCTED as an
+// integer — via a `float as integer` cast or a const-folded arithmetic result — must keep
+// its full i64 value, identically on interp and --native.  Companion to 438 (storage
+// round-trips); this one guards the CONSTRUCTION sites `Value::int_const` covers.
+
+fn test_439_float_to_integer_cast() {
+  assert(3000000000.0 as integer == 3000000000, "folded float-literal cast over i32");
+  f: float = 9000000000.0;
+  assert(f as integer == 9000000000, "runtime float cast over i32");
+  assert(-5000000000.0 as integer == -5000000000, "negative float cast");
+}
+
+fn test_439_const_fold_no_overflow() {
+  // operands fit i32 but the result does not — must widen, not wrap
+  assert(2147483647 + 1 == 2147483648, "i32::MAX + 1");
+  assert(2000000000 * 2 == 4000000000, "i32-fitting operands, wide product");
+  assert(2147483647 * 2 == 4294967294, "i32::MAX * 2");
+  assert(0 - 3000000000 == -3000000000, "wide negative const-fold");
+}

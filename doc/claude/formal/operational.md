@@ -92,6 +92,28 @@ compute." There is **no** context-dependent "trap-suppression mode" any more —
 null whether or not it sits under `??` (C80); `??` just decides what to do with that null.
 (This is what closes the old D-op-3.)
 
+### Observability — report a fault only where it is UNGUARDED
+
+```
+  (E-Report)   an UNGUARDED uncomputable divide/modulo-by-zero ALSO emits a Warn-level
+               log (`divide_by_zero`) — the "no guard" signal — before yielding null.
+               A GUARDED site (the operand of `??` / a following null-check) emits the
+               silent `*Nullable` op and reports NOTHING (the guard owns the null).
+               Integer OVERFLOW is silent at every site (the null IS the signal — also
+               the rustc-release default); the value is null, never a wrapped wrong answer.
+```
+
+**In words.** The fault stays a *value*, never a halt (E-Uncomp), but loft is not blind to it:
+an uncomputable you did **not** defend — a bare `a / 0` — also writes one Warn log so it is not
+invisible, while a site you *explicitly* defended (`a / b ?? 0`) is silent because you already
+said how to handle it. Overflow is silent everywhere — common enough that a per-site log would
+be spam, and the null result already shows it. The Warn is **silent on a default CLI run** (no
+logger attached) and surfaces when a logger is — which is how a test *validates* the fault fired
+(see `runtime_logging.rs::prod_divide_by_zero_logs_and_continues`). The opt-in `--dev-soft-halt`
+debug flag still surfaces these recoverable faults (uniformly: div0, overflow, OOB) for one-shot
+breakage triage — it is an explicit debugging tool, NOT a dev/test/prod mode, so it does not break
+E-Uncomp's mode-independence.
+
 ### State steps
 
 ```
@@ -110,7 +132,7 @@ share them.
 
 ## Deviations
 
-OPEN: **3**
+OPEN: **2**
 
 ### D-op-1 — there is no shared operational semantics; the interpreter is the spec
 - **Violates:** the premise of this doc (a single evaluation relation both backends obey)
@@ -143,42 +165,22 @@ OPEN: **3**
   program both accept" a *caught* failure (run-both-and-compare), not a coverage lottery —
   the corpus, not luck, decides what is exercised.
 
-### D-op-4 — the runtime traps/halts on uncomputable, instead of null-and-continue
-- **Violates:** E-Uncomp (the spreadsheet model — [DESIGN_DECISIONS.md C80](../DESIGN_DECISIONS.md))
-- **Where:** today an overflow / divide-by-zero / out-of-bounds index **traps**, and in
-  development HALTS the run (the old C66 dev-mode behaviour); the trap-vs-null choice still
-  rides on a static `??`-position flag. E-Uncomp says the result is **null** and evaluation
-  CONTINUES in every mode, with no trap-suppression flag (so `??` is purely the null-fallback).
-  `panic` / `assert` are **not** in scope — those are explicit developer signals that keep
-  their dev/test-halt + production-log-and-continue split (C66); only the *implicit* calculation
-  faults move.
-- **Effect:** one bad calculation can stop a development run, where the model says it degrades
-  a single value and the rest of the program still computes — a misbehaving entity never
-  freezes the world.
-- **Status:** OPEN — the implementation gap the C80 decision opened (the rule moved; the code
-  has not). Subsumes the former D-op-3 (the trap-suppression flag disappears with the trap).
-- **Removal:** every uncomputable arithmetic / index / deref yields null + continue (the
-  existing production sentinel path) in ALL modes, **silently** (no per-fault log by default —
-  too spammy); drop the `??` trap-suppression mode (`??` is then purely the null-fallback).
-  - **Mode-independent** (C80 point 5): implicit faults behave **identically** in dev / test /
-    production — there is no dev-vs-production split for them; only `panic`/`assert` keep the C66
-    split. **Mechanism:** the implicit-fault sites must take the null+continue path
-    *unconditionally* — i.e. NOT consult `dev_soft_halt_enabled()` (today `raise_recoverable`
-    halts under dev-soft-halt, which is why OOB still stops a test run). `panic`/`assert` keep
-    `raise` + the dev-soft-halt; only the implicit faults move to an always-null variant.
-  - **Tested via the debug log, not a halt:** because the faults are silent, the suite enables
-    the opt-in **debug log level** (normally invisible) to VALIDATE that an expected uncomputable
-    fired and produced null while the rest of the program kept running. The debug-log
-    infrastructure is part of this deviation's implementation — it is the observation mechanism
-    that replaces the dev-halt for asserting fault behaviour in tests.
+> **D-op-4 — CLOSED (formalize4), so it is deleted from the list above.** The runtime no
+> longer traps/halts on an uncomputable: div/mod-by-zero and integer overflow yield the null
+> sentinel and continue on BOTH backends (E-Uncomp + E-Report), OOB already complied, and
+> `NullDereference` was never raised. Guard: `tests/scripts/184-i333-div-zero-null-continues.loft`.
+> The `??` trap-suppression mode is gone behaviourally (the `*Nullable` op split is now dead
+> code — a separable cleanup). Kept as a one-line tombstone because it reshaped two rules
+> (E-Report's logging policy + the C80 refinement); see `git log` for the full entry.
 
 ---
 
 ## Conformance
 
-The pinned rules are checkable directly: `5 / 0` traps (`error: divide by zero`); `a + 1`
-at `a = i64::MAX` traps; `(i64::MAX + 1) ?? 0` is `0` (E-Coalesce suppresses the trap);
-`integer` null is `i64::MIN`. D-op-1/D-op-2's falsifier is any program where the
-interpreter and `--native` disagree — e.g. #433's cbor `read_value` (interp `20`, native
-E0308 pre-fix). When the rules become the shared oracle, that disagreement is the
-definitional error, and this doc is the definition it fails against.
+The pinned rules are checkable directly: `5 / 0` is **null** and execution continues (an
+unguarded site also logs a `divide_by_zero` Warn); `a + 1` at `a = i64::MAX` is **null** and
+continues; `(i64::MAX + 1) ?? 0` is `0` (E-Coalesce); `integer` null is `i64::MIN`.
+D-op-1/D-op-2's falsifier is any program where the interpreter and `--native` disagree —
+e.g. #433's cbor `read_value` (interp `20`, native E0308 pre-fix). When the rules become the
+shared oracle, that disagreement is the definitional error, and this doc is the definition it
+fails against.

@@ -129,9 +129,10 @@ fn main() {
     );
 }
 
-/// Production: integer `/` by zero logs Warn + returns null sentinel +
-/// continues.  Downstream `?? null` rescue or null-check defends; here
-/// we just print the result and confirm the post-fault path runs.
+/// C80 / E-Uncomp: an UNGUARDED integer `/` by zero is a recoverable
+/// calculation fault — it logs a Warn (the "no guard" report) + returns the
+/// null sentinel + CONTINUES, mode-independently (exit 0, like OOB below).  A
+/// `?? null` / null-check guard would emit the silent `*Nullable` op instead.
 #[test]
 fn prod_divide_by_zero_logs_and_continues() {
     let source = "\
@@ -144,15 +145,15 @@ fn main() {
 }
 ";
     let (stdout, _stderr, code, log) = run_prod("divide_by_zero", source);
-    assert_eq!(code, Some(1), "had_fatal should still exit 1");
+    assert_eq!(code, Some(0), "recoverable div-by-zero should exit 0 (C80)");
     assert!(stdout.contains("before"));
     assert!(
         stdout.contains("after"),
-        "production must continue past divide-by-zero; got {stdout:?}"
+        "must continue past divide-by-zero; got {stdout:?}"
     );
     assert!(
         log.contains("WARN") && log.contains("[divide_by_zero]"),
-        "log missing divide_by_zero Warn entry; got {log:?}"
+        "unguarded div-by-zero must report a Warn log; got {log:?}"
     );
 }
 

@@ -144,11 +144,11 @@ fn main() {
     );
 }
 
-/// Phase 4 step 4.3 — integer `/` by zero produces a `DivideByZero`
-/// runtime error pointing at the `/` operator's source position
-/// (Plan-07 phase 1's Span wrap on binary `/`).
+/// C80 / E-Uncomp — integer `/` by zero is a recoverable calculation fault:
+/// null sentinel + continue (exit 0), not a halt.  (Was: a `DivideByZero`
+/// dev-halt pretty error — reversed by C80.)
 #[test]
-fn kind_divide_by_zero_int_prints_pretty_error() {
+fn kind_divide_by_zero_int_returns_null_and_continues() {
     let source = "\
 fn main() {
   a = 10;
@@ -158,43 +158,52 @@ fn main() {
 }
 ";
     let (stdout, stderr, code) = run_loft_snippet("rt_div0_int", source);
-    assert_eq!(code, Some(1), "divide by zero should exit 1");
-    assert!(
-        !stdout.contains("c="),
-        "post-fault stdout should NOT print; got: {stdout:?}"
+    // C80 / E-Uncomp: integer `/` by zero is a RECOVERABLE calculation fault — it
+    // yields the null sentinel and CONTINUES (exit 0), like OOB below.  (Formerly
+    // a dev-halt pretty error; reversed by C80.)
+    assert_eq!(
+        code,
+        Some(0),
+        "div-by-zero is null-and-continue (exit 0); stderr={stderr:?}"
     );
     assert!(
-        stderr.contains("error:") && stderr.contains("divide by zero"),
-        "stderr missing divide-by-zero entry; got: {stderr:?}"
+        stdout.contains("null"),
+        "post-fault stdout should print the null result; got: {stdout:?}"
     );
-    // Caret should point at the `/` operator's column (Plan-07 phase 1
-    // wraps binary `/` in `Value::Span` at the operator token).
     assert!(
-        stderr.contains("--> ") && stderr.contains(":4:"),
-        "stderr missing source location at line 4 (the `/` line); got: {stderr:?}"
+        !stderr.contains("error:"),
+        "div-by-zero must NOT raise a typed error; got: {stderr:?}"
     );
     assert!(
         !stderr.contains("panicked at"),
-        "stderr still contains a Rust panic — typed RuntimeError conversion bypassed; got: {stderr:?}"
+        "stderr still contains a Rust panic — bypassed the null-and-continue path; got: {stderr:?}"
     );
 }
 
-/// Phase 4 step 4.4 — integer `%` by zero produces the same
-/// `DivideByZero` kind (mod-by-zero shares the kind because the
-/// underlying op is the same indeterminate-result fault).
+/// C80 / E-Uncomp — integer `%` by zero is the same recoverable fault as `/`:
+/// null sentinel + continue (exit 0), not a halt.
 #[test]
-fn kind_mod_by_zero_int_prints_pretty_error() {
+fn kind_mod_by_zero_int_returns_null_and_continues() {
     let source = "\
 fn main() {
-  c = 7 % 0;
+  z = 0;
+  c = 7 % z;
   print(\"{c}\\n\");
 }
 ";
-    let (_stdout, stderr, code) = run_loft_snippet("rt_mod0_int", source);
-    assert_eq!(code, Some(1), "mod by zero should exit 1");
+    let (stdout, stderr, code) = run_loft_snippet("rt_mod0_int", source);
+    assert_eq!(
+        code,
+        Some(0),
+        "mod-by-zero is null-and-continue (exit 0); stderr={stderr:?}"
+    );
     assert!(
-        stderr.contains("error:") && stderr.contains("divide by zero"),
-        "stderr missing divide-by-zero entry for `%`; got: {stderr:?}"
+        stdout.contains("null"),
+        "mod-by-zero should yield null and continue; got: {stdout:?}"
+    );
+    assert!(
+        !stderr.contains("error:"),
+        "mod-by-zero must NOT raise a typed error; got: {stderr:?}"
     );
 }
 

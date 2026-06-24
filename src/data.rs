@@ -616,6 +616,26 @@ impl Value {
         Value::Text(s.to_string())
     }
 
+    /// @PLN88 keystone — turn a user integer VALUE into an IR constant with the
+    /// compact-or-wide encoding: a value that fits i32 stays the compact 4-byte
+    /// `Value::Int`, a larger one routes to `Value::Long` (i64) instead of silently
+    /// truncating via `as i32`.  This is "i32 in the IR, outside the i64": the runtime
+    /// is already i64 and every reader widens `Int` via `i64::from`, so only the
+    /// CONSTRUCTION of a user value can truncate — use this at every such site
+    /// (const-fold results, `float as integer`, computed bounds/defaults).
+    ///
+    /// Do NOT use it for compiler METADATA emitted as `Value::Int` (def / type / field
+    /// numbers, sizes, line numbers, char codes): those are inherently small and stay
+    /// the compact `Int` — widening them is the IR bloat @PLN88 deliberately avoids.
+    /// Mirrors the lexer's `ret_number` literal selection (`src/lexer.rs`).
+    #[must_use]
+    pub fn int_const(v: i64) -> Value {
+        match i32::try_from(v) {
+            Ok(n) => Value::Int(n),
+            Err(_) => Value::Long(v),
+        }
+    }
+
     #[must_use]
     pub fn is_op(&self, op: u32) -> bool {
         if let Value::Call(func, _) = self {

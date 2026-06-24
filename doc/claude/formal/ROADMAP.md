@@ -25,13 +25,14 @@ Closing a row means the implementation obeys the rule (then the deviation entry 
 
 | area | open | what's left |
 |---|---|---|
-| [types.md](types.md) | 1 | D2 — the integer model is i64 end-to-end (`Value::Int` IR change) |
+| [types.md](types.md) | 0 | ✓ closed — D2 closed by reconciliation (C83): `integer` is i64 user-visibly via a compact internal encoding |
 | [binding.md](binding.md) | 0 | ✓ closed — D-bind-7 (reject bare `&a;` / block-final `{ &a }`) landed |
 | [grammar.md](grammar.md) | 0 | ✓ closed — D-gram-1/3 landed; D-gram-2 (non-CFG) + D-gram-4 (`&` overload) resolved as decided edges → DESIGN_DECISIONS C81/C82 |
-| [operational.md](operational.md) | 3 | D-op-1/2 the differential oracle (@PLN89) · D-op-4 the spreadsheet runtime (C80) |
+| [operational.md](operational.md) | 2 | D-op-1/2 the differential oracle (@PLN89) — D-op-4 the spreadsheet runtime (C80) is **CLOSED** (formalize4) |
 | [ownership.md](ownership.md) | 5 | the `deps` borrow checker (the big one) |
 
-Binding is closed; type and grammar are nearly done; operational and ownership are the long arcs.
+Binding, type, and grammar are closed; the only open arcs are operational's differential
+oracle (D-op-1/2, @PLN89) and ownership's borrow checker (the big one).
 
 ---
 
@@ -70,16 +71,17 @@ The real weight. Each is a `loft-lang/plans` issue, sequenced.
 | # | deviation(s) | project | direction |
 |---|---|---|---|
 | D1 | **D-op-1, D-op-2** | **DECIDED (2026-06): a differential oracle** — run a growing corpus on BOTH backends and assert they agree (value / null / halt / stdout / leak); the operational.md rules guide coverage. Turns the interp/native divergence class (D4/#433) from a coverage lottery into a caught failure. Switchable later to an executable shared semantics; the rules reuse either way. Tracked: **[@PLN89](https://github.com/loft-lang/plans/issues/89)**. | code→spec (the chosen model) |
-| D2 | **D-op-4** (subsumes ~~D-op-3~~) | **BUILD the spreadsheet runtime** — the C80 implementation gap (the rule moved; the code has not). Today an overflow / div-by-zero / OOB-index **traps**, and a dev run **halts**; the trap-vs-null choice rides on the static `??`-position rewrite. `E-Uncomp` wants null+continue in **all** modes, **silently** (opt-in debug log), with the `??`-rewrite dropped — `panic`/`assert` keep their C66 dev-halt/prod-log split (out of scope). Size **M+** (touches arith op dispatch, codegen, dev-halt behaviour); needs a plan issue (none yet). | code→spec (C80) |
+| ~~D2~~ **DONE** | ~~**D-op-4**~~ | **BUILT the spreadsheet runtime** (formalize4). Div/mod-by-zero and integer overflow now yield the null sentinel and CONTINUE on both backends (`raise_recoverable` + `checked_long!`→`i64::MIN`); OOB already complied; `NullDereference` was never raised. Two refinements vs the original plan: an UNGUARDED div0 reports a Warn log (`E-Report`), overflow is silent (rustc-release default). The `??` trap-suppression mode is gone behaviourally (the `*Nullable` op split is now dead code — separable cleanup). Guard: `tests/scripts/184-i333-div-zero-null-continues.loft`. | code→spec (C80), landed |
 
 ---
 
 ## Resolving order, in one line
 
 **~~A1~~ ~~A2~~ ~~A3~~** clears Phase A **·** **~~B1~~ ~~B2~~ ~~B3~~** all decided (D-gram-2/4 →
-decided edges C82/C81; grammar.md at 0) **·** binding.md + grammar.md now **closed**, types.md at 1
-**·** NEXT: the tracked arcs **C1 (@PLN88) · C2 (typed Deps) → C3 (@PLN85)** in that dependency
-order **·** the operational arc **D1** (oracle, @PLN89) + **D2** (D-op-4 spreadsheet runtime, C80) last.
+decided edges C82/C81; grammar.md at 0) **·** binding.md + grammar.md + types.md (D2 reconciled)
++ **~~D2~~ (D-op-4 spreadsheet runtime, formalize4)** now **closed** **·** NEXT: the tracked arcs
+**C2 (typed Deps) → C3 (@PLN85)** ownership, and the operational **D1** (differential oracle, @PLN89)
+— the only open deviations left.
 
 ## What is NOT on this list (already clean or decided)
 
