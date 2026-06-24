@@ -12,13 +12,15 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 | A — Probe catalogue | ✅ 8 probes; both sub-shapes isolated (06 raw, 08 materialized) |
 | B — Mechanism investigation | ✅ VERIFIED (agent IR/runtime traces) — see [cluster-I](cluster-I-nrvo-coexist.md) |
 | C — Fix design | ✅ O-Move: every arm of a single-tail vector match delivers into the one return buffer |
-| D — Implementation | ✅ **BOTH clusters FIXED** — I-a (raw) control.rs:906 · I-b (materialized) control.rs:4101. **cbor restored.** |
+| D — Implementation | 🟡 **ENCODE side CLOSED** — I-a control.rs:906 · I-b control.rs:4101 (cbor suite GREEN, both backends). **I-c (decode side) OPEN.** |
 
-> **cbor's #437 regression is CLOSED** (both sub-shapes). Interp verified: probe 08 → `ki=1`, cbor
-> (02) → `[162 1 2 3 4]`, all I-a/#437 probes green. Native parity + cbor/ztcbor + full loft suite
-> running. Remaining to close the PLAN: graduate guarantee probes (06/07/08 + cbor) to
-> `tests/scripts/`; add the agent's sibling probes (nested-if-of-calls arm, bare-Call non-`head`
-> arm, Block-arm-ending-in-Call). Full mechanism: [cluster-I-nrvo-coexist.md](cluster-I-nrvo-coexist.md).
+> **cbor ENCODE is fully restored** — both sub-shapes fixed, cbor library suite green on both
+> backends, full loft suite 2533/2534 (the 1 fail = env-only `38_import` DNS baseline). But the
+> **ztcbor DECODE round-trip** (`test_decode_and_accessors — encode∘decode byte-identical`) still
+> fails → **cluster I-c**, a decode-side sibling the encode-shape fixes don't reach (a code-only
+> agent is pinning it). cbor's consumer is NOT fully green until I-c lands. Then close the plan:
+> graduate guarantee probes (06/07/08 + cbor + I-c) to `tests/scripts/`. Mechanism:
+> [cluster-I-nrvo-coexist.md](cluster-I-nrvo-coexist.md).
 
 **What triggered this.** The zero-trust consumer (dogfood) reported that the
 released loft (`2026.6.0`, carrying the #437 fix merged as #440) **regressed** —
@@ -74,6 +76,7 @@ a narrowing of the return-site condition.
 |---|---|---|---|---|---|
 | I-a | multi-arm **raw** vector `match` drops a later arm's return buffer → dangling ref | corruption (silent) | both (interp `ki=3`, native `ki=99`) | 06, 07 | **FIXED** control.rs:906 — [cluster-I](cluster-I-nrvo-coexist.md) |
 | I-b | same root via **materialized** match (block-bodied arm → `result` var) | corruption (silent) | both | 02, 08 | **FIXED** control.rs:4101 — [cluster-I](cluster-I-nrvo-coexist.md) |
+| I-c | **decode side** — `encode∘decode` not byte-identical (a vector return the encode-shape fixes miss) | corruption (silent) | TBD | ztcbor `test_decode_and_accessors` | **OPEN** — agent pinning |
 
 ## Probe suite
 
