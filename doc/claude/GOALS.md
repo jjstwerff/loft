@@ -47,6 +47,19 @@ prototype fearlessly only because the substrate will not corrupt your data or fa
 over under an edit. So beneath "fun" sits an older aim — **software that does not
 fail for software reasons** — and it has a proof of existence.
 
+**The mechanism is mental load.** A game developer's attention is already spent on
+the game — the feel, the balance, the content. Every unit the *language* demands to
+keep things *correct* — manual memory, lifetime puzzles, null checks,
+`try`/`catch`/`finally`, "what if this fails" — is a unit stolen from the creative
+work. So an early, generating choice: loft **carries the correctness load itself,
+instead of handing it to the programmer.** That one intent produces the design
+decisions — ownership is internal ([DESIGN_DECISIONS.md C79](DESIGN_DECISIONS.md): the
+compiler finds a valid free/copy, never a borrow error to answer); a fault degrades to
+null and the program keeps running ([C80](DESIGN_DECISIONS.md): no exception machinery
+to get right); null is implicit, not a `Result` to thread. The language holds the
+invariants; the developer builds the game. **Fun is what a low correctness-load feels
+like from the inside.**
+
 The IBM midrange machines (System/38, AS/400, today's IBM i) were *loved* by the
 people who programmed them, for an unglamorous reason: they did not fail — not the
 hardware, and, more tellingly, not the software. A program written in 1988 still
