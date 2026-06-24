@@ -244,6 +244,37 @@ a manual state-machine yield implemented in codegen
 (measure-and-decide; the current implementation favours
 asyncify for binary size).
 
+### The resume loop — `AsyncifyCtrl` + scheduler
+
+Any suspending import — `loft_gl.loft_gl_swap_buffers` (games) and
+`loft_web.ws_yield` (the `web` library's WebSocket `frame_yield`) — drives the
+same `AsyncifyCtrl` in `doc/loft-gl-wasm.js`.  Two correctness rules are
+load-bearing for the suspend/rewind ABI; getting either wrong leaves the
+program stuck on its FIRST suspend (the symptom of issue #450 — the page
+prints only the first line, then nothing):
+
+1. **Rewind from the SAVED TOP, not the buffer base.**  Asyncify writes the
+   stack upward from the buffer base during an unwind (leaving `current` at the
+   top) and reads it back during a rewind.  `resume()` must set the data
+   struct's `current` to the saved top captured after the matching unwind;
+   resetting it to the base discards every saved frame, so the program rewinds
+   into an empty stack and "returns" without resuming.
+2. **The suspend shim is state-aware.**  During a rewind the suspend import is
+   re-invoked when execution replays up to the yield point.  In that case it
+   must `asyncify_stop_rewind()` and RETURN so execution continues PAST the
+   yield.  Re-starting an unwind there spins forever on one iteration.
+
+The resume loop is then driven by a scheduler that survives a **hidden** page.
+Chromium pauses/throttles `requestAnimationFrame` for hidden pages (a headless
+capture page and a backgrounded tab are both hidden), so an rAF-only loop
+stalls.  The generated page (`src/main.rs`) pumps via an unthrottled
+`MessageChannel` while `document.hidden` is true and via `requestAnimationFrame`
+while visible (so a GL render loop stays vsync-aligned), re-checking visibility
+each tick.  The asyncify-aware Node driver `tools/wasm_ws_repro.mjs` carries the
+same corrected `AsyncifyCtrl` and pumps on `setImmediate`; the browser gate is
+`tests/html_asyncify.rs` (asserts a multi-suspend program reaches its final line
+both visible and hidden).
+
 ## HTML assembly — what ships in the output
 
 The output `.html` is a single self-contained file:
