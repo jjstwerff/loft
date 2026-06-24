@@ -1565,7 +1565,9 @@ corruption surface.
    *non-null* fallback," not "rescue from a trap." (The trap discipline — "overflow traps, NOT
    a silent null" — is **reversed**.) **No per-fault log by default** — uncomputable values are
    common (the spreadsheet's empty cells), so logging each would be spam; a programmer who
-   wants to trace them opts into a **debug log level**.
+   wants to trace them opts into a **debug log level**. (Refined at implementation — see the
+   *Implemented* note below: an **unguarded** div-by-zero is the one exception, emitting a
+   single Warn so an undefended fault is not invisible.)
 2. **A calculation fault never halts the run or skips a later statement.** The script is a
    sequence of independent steps. Step A producing null does not abort; step B still
    **executes** (and gets null if it consumed A's null — null is contagious — but it *runs*).
@@ -1592,9 +1594,19 @@ corruption surface.
    by zero and produced null, and the rest still ran."
 
 Robustness payoff: a system degrades **locally** (one value, one entity), never **globally**.
-Note: this is a design target; the current code still traps/halts on calculation faults per
-C66 — the change is tracked in [formal/operational.md](formal/operational.md) (rule E-Uncomp,
-deviation D-op-4).
+
+**Implemented (2026-06-24, formalize4).** Div/mod-by-zero and integer `+`/`-`/`*` overflow now
+yield the null sentinel and CONTINUE on both backends (the interpreter and `--native`); OOB
+already did, and a null deref never trapped — so the implicit-fault class is fully on the
+spreadsheet model. Two refinements to point 1's "silently" came out of validation review:
+(a) an **UNGUARDED** divide-by-zero emits **one** Warn log — the "no guard already" signal, so an
+undefended fault is observable (it surfaces when a logger is attached, e.g. in tests; a default
+CLI run with no logger is still quiet) — while a **guarded** site (`?? ` / a null-check) reports
+nothing; (b) **overflow is silent** at every site (the null result is the signal — and silent
+overflow is the rustc-release default; loft's is null rather than a wrapped wrong answer).
+Specced in [formal/operational.md](formal/operational.md) (E-Uncomp + the E-Report logging rule);
+deviation **D-op-4 closed**. The opt-in `--dev-soft-halt` debug flag still surfaces these
+recoverable faults uniformly for one-shot triage — an explicit debug tool, not a mode split.
 
 ### Revisit when
 
