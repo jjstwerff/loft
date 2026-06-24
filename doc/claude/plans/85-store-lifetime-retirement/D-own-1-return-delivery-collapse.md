@@ -127,11 +127,29 @@ representative case is settled.)
       already deps-branched; the gap is the THREE unfused mechanisms
       (rename / copy / forward-copy), with #448 a fourth bolt-on. The collapse is
       the SELECTOR, not the reads.
-- [ ] **NEXT (the build):** introduce `enum Delivery { Rename, Copy, ForwardCopy,
-      AsIs }` + `return_delivery(ls, buffer_taken, terminal_kind) -> Delivery`
-      computed once from the deps fact; route the existing branches through ONE
-      dispatch to three mechanism emitters; #448 becomes the `buffer_taken ⇒ Copy`
-      cell (delete the bolt-on trio). Oracle-guarded, one mechanism at a time;
-      measure deleted helpers + line shrink. (Delicate function — best done with a
-      fresh budget; the design is now precise enough to execute directly.)
-- [ ] Repeat for `parse_return` mid-body (the #448 residual lands here too).
+- [x] **Build slice 1 — the `Delivery` selector for the lower `t == Vector` arm**
+      (commit `cc69101b`). `enum Delivery { Rename, CopyBorrow, ForwardCopy, AsIs }`
+      + `classify_vector_delivery` (pure `&self`) + `dispatch_vector_delivery`; the
+      #409 forward-copy block extracted to `emit_forward_copy_409`. The three inline
+      branches (recover-hidden-refs / arg-borrow-copy / multi-arm-rename) are now
+      cells of one selector. **Behaviour-PRESERVING**: `loft introspect` over the
+      `bytecode-comparisons/D-own-1-corpus.loft` (one fn per delivery path) is
+      byte-identical IR + native Rust before/after, both backends. Net +44 lines
+      (scaffolding); the measurable shrink lands when #448 folds in (slice 3).
+- [x] **The #448 c5 residual** (commit `237b8347`) — surfaced mid-slice by a user
+      boundary matrix. An explicit `return [literal]` left `returned` a BARE vector
+      (vs the implicit tail's `["__retbuf"]`); a bare-returning vector fn CHAINED by
+      an NRVO caller (`return wrap()` → `__retbuf = wrap(__retbuf)`) orphans the
+      store `wrap` never wrote there. Broader than the filed matrix: multi-return
+      bare literals (`wrap(dual)`) leak the same way, both paths. Fix delivers EVERY
+      fresh-owned vector return into `__retbuf` — tail (#437 intercept generalized
+      to literals via `fresh_owned_vector_deps`, gated `!vec_arm_handled` against the
+      #448-path double-append) AND mid-body (`deliver_mid_vector_returns`). This is
+      the `parse_return` residual the plan anticipated. Matrix (value+len+leak, 13
+      cells) clean both backends; corpus stays byte-identical (surgical); suite +
+      oracle green; guarded by `tests/oracle/09-nrvo-bare-return-chained.loft`.
+- [ ] **NEXT (slice 3 — the headline shrink):** fold the upper `vec_match_candidate`
+      (#416) + #448 path B into the same selector so #448 becomes the
+      `buffer_taken ⇒ Copy` cell; delete the bolt-on trio (`returned_uses_buffer`,
+      `body_has_buffer_return`, `tail_terminal_fresh_local_vec`). Measure deleted
+      helpers + line shrink. Oracle-guarded, one mechanism at a time.
