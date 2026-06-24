@@ -66,6 +66,36 @@ The branch is merged to main via a single PR when all items pass CI.
 - Each commit within the branch is still one coherent item (test + code +
   enable), so `git log` stays bisectable.
 
+### Stay close to `main` — rebase rigorously (the 2026-06-24 lesson)
+
+The instinct to partition work into clean per-topic branches feels tidy but is the
+direct cause of merge hell.  **Build everything on the ONE working branch — mixed
+topics are fine — and rebase it on `origin/main` OFTEN** (after every merge into
+main, not once at the end).  Four reasons this is the discipline, not a preference:
+
+1. **You don't lose track of the work.**  One branch is one whole; many branches
+   scatter it and you can no longer see (or reason about) the change as a unit.
+2. **Overlapping work merges cleanly.**  You reconcile small and continuously,
+   instead of one big painful merge where a diverged base collides commit-by-commit.
+3. **`git diff main` becomes a real refactor compass.**  Close to main, the diff
+   tells you *exactly* what you changed — am I going the right direction? — and lets
+   you cleanly **revert any file to a known-good baseline** (`git diff main -- f`,
+   `git show origin/main:f`).  A diverged branch poisons that diff with merge noise,
+   so you lose BOTH the compass and the clean revert.
+4. **The compass survives others' work.**  After a rebase onto a `main` that now
+   carries someone else's slightly-related fixes, your `git diff main` is *still* your
+   delta on the up-to-date base — you absorb their fixes for free and keep comparing
+   cleanly.  Skipping the rebase is what makes their work and yours un-mergeable later.
+
+**The cautionary tale (what NOT to do):** a long-lived branch accumulated ~65 commits
+across 5 topics (@PLN87 · sandbox · formalization · a parser fix · a CI change) without
+rebasing, while `main` advanced.  @PLN87 reached `main` as a SQUASH (one PR commit) while
+the branch kept the *individual* @PLN87 commits AND built more on top of them.  Different
+patch-ids + a diverged base ⇒ git cannot auto-drop the duplicates, every parser commit
+collides, and spinning off sub-branches multiplied the surface.  The only clean escape was
+to cherry-pick just the genuine delta onto fresh `main` — exactly the reconciliation a
+regular rebase would have done a little at a time.  Rebase early, rebase often.
+
 ### Sprint branch naming
 
 ```
