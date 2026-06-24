@@ -13,7 +13,14 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 ## Honest compatibility statement
 
 The CI matrix runs the full test suite on `windows-latest`
-(`.github/workflows/ci.yml`).  But a set of tests are **skipped or
+(`.github/workflows/ci.yml`) **daily (03:00 UTC schedule) and on every
+push-to-main — NOT on every PR**: the Windows leg costs ~30 min and almost
+never regresses independently of the Linux/macOS legs that DO run per-PR.  On
+a PR the required `Test (windows-latest)` context is a non-blocking placeholder
+and the non-required **`Windows (daily)`** job mirrors the latest daily result
+(green = last daily passed, red = it failed) so the state is visible without
+re-validating — a red there never blocks the merge, it is a nudge to open a
+focused Windows-fix session.  A set of tests are also **skipped or
 `#[ignore]`d on Windows** because they hit failures no contributor has been
 able to reproduce or diagnose without a real Windows machine.  So the
 accurate claim today is:
