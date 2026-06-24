@@ -73,6 +73,7 @@ open is the exact trust-break above.
 | 9 | Embeddable + sandboxable | hosts running player scripts / mods | a script escapes, or its effects can't be rolled back |
 | 10 | Ships and is legible | a newcomer who just discovered loft | they install, hit a library that fights them, and leave |
 | 11 | The method is the moat | contributors who value a project that fixes the class | the rough-spot lists stop shrinking |
+| 12 | Keeps running under fault | game/server authors who can't take a crash-on-fault | it isn't built yet (still halts); a degraded null can be hard to trace to its source |
 
 Read top-down: the turn-offs are roughly in trust-cost order — #1–#5 break the
 promises that *are* loft's identity, so they cost the most to leave open.
@@ -368,6 +369,39 @@ stayed for the method is the first to notice.
 release, and keep writing them down — the strength is that the lists *exist* and
 *shrink*. *Check:* each release's rough-spot count is lower than the last, or the
 delta is named and owned.
+
+---
+
+## 12. Keeps running under fault — it degrades, it doesn't stop
+
+**Strength.** A calculation that can't produce a value — `s / 0`, an overflow, an
+out-of-bounds index, a deref of an absent value — yields **null** and the program **keeps
+running**; it never halts the run or skips a later statement. Like a spreadsheet, one cell's
+bad formula shows null in that cell and never stops the others recalculating — a fault is
+*local*, it degrades one value, not the whole run. This inverts the half-true "if it compiles
+it works" (which really means "it halts cleanly at the first logic fault"): loft's promise is
+**"it won't stop."** See [DESIGN_DECISIONS.md C80](DESIGN_DECISIONS.md) and
+[formal/operational.md § E-Uncomp](formal/operational.md).
+
+**Who it wins.** Anyone building something that must **stay up** — and that is not just games.
+A **game** dev iterating on something half-working (one bad mob doesn't freeze the world); a
+**server** author who refuses an outage on one bad request; at the limit a **kernel** where
+stopping *is* a dead machine. Termination is the larger failure for any long-running system, so
+availability-as-a-default — not a framework bolted on — wins all of them.
+
+**The turn-off.** Two, on the same topic. First, **it isn't built yet**: the runtime still
+traps/halts on these faults in development (the old C66 behaviour, tracked as
+[operational.md D-op-4](formal/operational.md)) — the promise is *decided, not delivered*.
+Second, the inherent one: **silent degradation can hide the cause** — you see a null
+*downstream*, not *where* it first arose, the mirror image of Rust's halt-at-the-source
+pinpointing the bug. The person who loves "keeps running" is the same one who curses a null they
+can't trace.
+
+**Raise it higher.** Land D-op-4 (uncomputable → null + continue in every mode), then close the
+second turn-off with the **opt-in debug log + null provenance** — when the programmer asks, show
+*where* a degraded value first went null, so "keeps running" never costs them the root cause.
+*Check:* a deliberate `s/0` deep in a call chain keeps the program running AND, with the debug
+log on, names the originating site.
 
 ---
 

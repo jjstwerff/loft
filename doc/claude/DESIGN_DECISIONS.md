@@ -1536,9 +1536,14 @@ remove **memory** bugs and data races, but a *logic* fault (`unwrap` on `None`, 
 index, an overflow) still **panics — it halts at the first problem.** "It compiles" means "it
 won't corrupt; it'll stop cleanly," **not** "it keeps working." loft's robustness is on a
 *different axis*: not "prevent a class of bugs, then halt on the rest," but **keep running
-*through* a fault** — degraded and local. This is **not universally better** — a flight
-controller should halt rather than fly on a null — but it is right for loft's domain, where a
-*frozen* game is worse than a *strange* one.
+*through* a fault** — degraded and local.
+
+And this is **not specific to games.** A **server** that terminates on one bad request is an
+outage; a **kernel** that stops is a dead machine. *Keep running* is the right default for any
+long-running system — anywhere termination is the larger failure. The narrow exception is a
+context where *acting* on a bad value is worse than stopping (a physical actuator) — and even
+there the answer is an **explicit check at that boundary** (`?? safe`, validate-before-act),
+not making the language halt globally. Keep-running plus a local guard beats a global stop.
 
 ### Decision
 
