@@ -478,6 +478,12 @@ impl Parser {
                         || self.lexer.peek_token("%=")
                         || self.lexer.peek_token("/=");
                     let next_terminates = self.lexer.peek_token(";") || self.lexer.peek_token("}");
+                    // An invalid `&` must not stay "pending": clear the flag in each
+                    // error branch so it cannot leak into `parse_assign_op`'s
+                    // reference-lowering (1160) or the D-bind-7 bare-statement guard
+                    // in `parse_assign` (which would then double-report).  Only the
+                    // accepted case (terminates AND is a place) keeps `amp_pending`
+                    // true, to be consumed by the binding that follows.
                     if next_assign {
                         diagnostic!(
                             self.lexer,
@@ -486,6 +492,7 @@ impl Parser {
                              binding as a link to its source at the binding site (`x = &src`), \
                              not an assignment target; drop the `&` (the binding is already linked)"
                         );
+                        self.amp_pending = false;
                     } else if !next_terminates {
                         diagnostic!(
                             self.lexer,
@@ -495,6 +502,7 @@ impl Parser {
                              parameter WITHOUT `&` (`f(x)`, the reference comes from the \
                              parameter type); do not use `&` in an argument or sub-expression"
                         );
+                        self.amp_pending = false;
                     } else if !Self::is_amp_place(code, &self.data) {
                         // #1 — a valid binding RHS still needs a PLACE operand.
                         diagnostic!(
@@ -504,6 +512,7 @@ impl Parser {
                              or vector element — not a temporary (a literal, computed value, \
                              or call result)"
                         );
+                        self.amp_pending = false;
                     }
                 }
                 return t;
@@ -1748,8 +1757,17 @@ impl Parser {
             self.expr_not_null = false;
             let mut second_code = Value::Null;
             let second_pos = self.lexer.peek_pos().clone();
+            // `**` is RIGHT-associative — `2 ** 3 ** 2` is `2 ** (3 ** 2)` = 512, matching
+            // maths and most languages, so the maker never carries a surprise here.  Its RHS
+            // therefore parses at the SAME precedence (it recurses into a following `**`),
+            // where every other binary operator is left-associative (RHS at `precedence + 1`).
+            let rhs_precedence = if operator == "**" {
+                precedence
+            } else {
+                precedence + 1
+            };
             let second_type =
-                self.parse_operators(var_tp, &mut second_code, parent_tp, precedence + 1);
+                self.parse_operators(var_tp, &mut second_code, parent_tp, rhs_precedence);
             self.known_var_or_type(&second_code, &second_pos);
             if !self.first_pass
                 && (operator == "/" || operator == "%")

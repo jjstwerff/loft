@@ -90,6 +90,8 @@ works" closes it.
 
 ## Anchors
 
+- **Keep `git diff main` a usable codegen compass** — ONE branch held close to main, rebased on `origin/main` often (the `engineering-rigor` skill § "Keep `git diff main` usable"); a diverged branch loses the working-vs-broken comparison this method depends on.
+
 - [CODEGEN_METHOD.md](../../../doc/claude/CODEGEN_METHOD.md) — the full method
 - [OWNERSHIP_MODEL.md](../../../doc/claude/OWNERSHIP_MODEL.md) — `deps` as loft's borrow checker (the north star for store-lifetime work)
 - Worked example + rungs: `doc/claude/plans/85-store-lifetime-retirement/` (`bytecode-comparisons/`, `type-ownership-design.md`); probe 05 = method followed (clean), probe 04 = method skipped (regressed) — read both

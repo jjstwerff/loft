@@ -1,0 +1,27 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Regression: (I-Join) — an INFERRED integer local takes the JOIN of its assigned
+// widths, not the narrowest first one (the #433-residual, formal/types.md D4).
+//
+// `arg = b[0]` infers `arg : u8` (a `vector<u8>` element); `arg = arg*256 + b[1]`
+// assigns an `integer` (the multiplication widens) that does NOT fit `u8`.  Pre-fix,
+// `arg` stayed `u8` and the wider write errored "cannot implicitly narrow integer to
+// u8" on BOTH backends (and the cbor `read_value` shape E0308'd on native).  An
+// inferred local now widens to the join (`integer`); an explicitly annotated `arg: u8`
+// would stay constrained (still an error).  Must run identically on interpret + native.
+
+fn second(b: vector<u8>) -> integer {
+  arg = b[0];
+  arg = arg * 256 + b[1];
+  return arg;
+}
+
+fn main() {
+  v: vector<u8> = [];
+  v += [1 as u8];
+  v += [2 as u8];
+  r = second(v);
+  assert(r == 258, "I-Join: second(v) = {r}, want 1*256+2 = 258");
+  println("ok");
+}

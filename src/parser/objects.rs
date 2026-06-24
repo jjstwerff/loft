@@ -635,7 +635,7 @@ impl Parser {
             // from the field's type.
             let has_cast = self.lexer.has_token("as");
             let target_hint = if !has_cast && !has_explicit_size {
-                let hint = self.read_target_type.clone();
+                let hint = self.read_target_type();
                 if matches!(hint, Type::Integer(_) | Type::Float | Type::Single) {
                     Some(hint)
                 } else {

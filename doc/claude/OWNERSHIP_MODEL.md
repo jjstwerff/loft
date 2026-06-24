@@ -20,6 +20,29 @@ Corollary (from [CODEGEN_METHOD.md](CODEGEN_METHOD.md)): a store-lifetime bug is
 then never a *codegen* bug — it is a **hole in the ownership computation**. Fix the
 fact, not the generator.
 
+## Internal and invisible — never a user-facing borrow checker (decided)
+
+> **Ownership in loft is INTERNAL.** It never surfaces an ownership error to the
+> programmer. The user writes naively — `a = makeThing(); b = a; b.x = 9` — and the
+> compiler always finds a correct lowering, **copying when it cannot prove an alias is
+> safe**. No "cannot borrow", no lifetime annotations, no move-vs-borrow puzzles. The goal
+> is the *most natural solution for the programmer*: write it the obvious way, it works.
+> (This was always the plan.)
+
+This makes the system's load-bearing property **completeness, not just soundness**: the
+analysis must be **total** — produce a valid free/copy/move for *every* binding on *every*
+path, never get stuck, never reject. An incomplete fact is **not** a compile error the user
+fixes (that is the user-facing model loft does *not* have) — it is a miscompile or a leak.
+So [ownership.md](formal/ownership.md)'s `O-Complete` is the invariant under the most pressure.
+
+**"Rust as the reference model" means SOUNDNESS, not UX.** loft borrows Rust's *internal
+discipline* (one owner, move on return, borrow tracking) to get codegen right — it does
+**not** import Rust's user-facing borrow checker. The one deliberate user-facing ownership
+concept is `&` (§ The law): an opt-in for *shared mutation*, when the programmer explicitly
+wants a live reference instead of the default copy/alias. That is the entire surface; a
+user-facing borrow checker is **declined** ([DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)) — it
+would fight loft's *fun-on-pickup* goal ([GOALS.md](GOALS.md)).
+
 ## The law — heap aliases by default; `&` binds a live REFERENCE
 
 > **CORRECTED (2026-06-23, @PLN87).** The earlier reading — "`&` makes a whole-binding

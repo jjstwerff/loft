@@ -20,6 +20,16 @@ over time; its result does not — run it to see where you stand today.
 One drive runs through every layer: **do the hard plumbing yourself, deeply, so
 someone else can just pick it up and have fun.**
 
+**Why — to aid the people who make games.** Making a game is hard enough already —
+the feel, the systems, the content, the art. The tools should not pile on. But today's
+engines are built **by programmers, from a programmer's point of view**: their
+abstractions, their ceremony, their notion of "correct" all reflect how a *programmer*
+thinks, and the maker has to learn that worldview before building anything. loft inverts
+the default — it is built from the **maker's** side of the screen. The programmer's
+concerns (memory, types, errors, lifetimes) are carried *by the language*, out of sight,
+so the person making the game thinks about the *game*, not about thinking like a
+programmer. That is the whole reason loft exists.
+
 - **loft** handles memory, types, and the store, so you write the logic with no
   ceremony.
 - the **hex-world library** handles terrain, walls, collision, and rendering, so
@@ -46,6 +56,33 @@ The fun rests on something quieter: **a floor that does not betray you.** You ca
 prototype fearlessly only because the substrate will not corrupt your data or fall
 over under an edit. So beneath "fun" sits an older aim — **software that does not
 fail for software reasons** — and it has a proof of existence.
+
+**The mechanism is mental load.** A game developer's attention is already spent on
+the game — the feel, the balance, the content. Every unit the *language* demands to
+keep things *correct* — manual memory, lifetime puzzles, null checks,
+`try`/`catch`/`finally`, "what if this fails" — is a unit stolen from the creative
+work. So an early, generating choice: loft **carries the correctness load itself,
+instead of handing it to the programmer.** That one intent produces the design
+decisions — ownership is internal ([DESIGN_DECISIONS.md C79](DESIGN_DECISIONS.md): the
+compiler finds a valid free/copy, never a borrow error to answer); a fault degrades to
+null and the program keeps running ([C80](DESIGN_DECISIONS.md): no exception machinery
+to get right); null is implicit, not a `Result` to thread. The language holds the
+invariants; the developer builds the game. **Fun is what a low correctness-load feels
+like from the inside.**
+
+**It is *timing*, not the mere presence of load.** What the principle forbids is load at
+the **wrong moment**: at *runtime* (the running game must not stop — C80's whole job) or in
+the *common path* (the ordinary code you write all day). A rare, deliberate **write-time**
+acknowledgement — `x as u8` at the point you *choose* to throw bits away — is fine: you are
+in the editor, with the headspace, doing it on purpose. The test is **frequency in idiomatic
+code**: a well-built library, used as intended, should need **zero `as`**. The archetypal
+failure is Rust's `usize` — indexing must be pointer-sized, a toolmaker's memory fact, so
+**everyone who writes `v[i]` is forced to cast** (`i as usize`, `len() as i32`) all over the
+common path. That is the wrong-moment tax, structural and unavoidable. loft refuses it with
+**one integer type and no special index type**: `v[i]` takes any integer, indexing produces
+no `as`, and the pointer-width fact stays the *language's* problem. (That is the maker-centric
+reason for the one-integer model — [@PLN88](https://github.com/loft-lang/plans/issues/88) —
+not just tidiness.)
 
 The IBM midrange machines (System/38, AS/400, today's IBM i) were *loved* by the
 people who programmed them, for an unglamorous reason: they did not fail — not the

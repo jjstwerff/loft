@@ -368,6 +368,41 @@ fn tail_capture_lifted_arg_compiles_native() {
     );
 }
 
+// ── (I-Join): an inferred integer local widens to the join of its writes ───
+//
+// The #433-residual (formal/types.md was D4).  `arg = b[0]` (vector<u8>) infers
+// `arg : u8`; `arg = arg*256 + b[1]` assigns an `integer` that doesn't fit u8.
+// Pre-fix `arg` stayed u8 and the wider write errored on both backends (E0308 on
+// native for the cbor shape).  An inferred local now takes the join (`integer`);
+// an annotated `arg: u8` would still be constrained.
+
+/// (I-Join) regression: an inferred multiply-assigned integer local compiles + runs
+/// natively, widened to the join of its writes (not the narrowest first one).
+#[test]
+fn ijoin_multiply_assigned_widens_native() {
+    let script = workspace_root().join("tests/scripts/433-ijoin-multiply-assigned.loft");
+    let out = Command::new(loft_bin())
+        .arg("--native")
+        .arg(&script)
+        .output()
+        .expect("invoke loft");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    if stderr.contains("rustc not found") || stderr.contains("E0514") || stderr.contains("E0463") {
+        eprintln!("SKIP: native toolchain not ready — {stderr}");
+        return;
+    }
+    assert!(
+        out.status.success(),
+        "native run must exit 0 (the inferred local must widen to the join, not narrow); \
+         stdout={stdout:?}; stderr={stderr:?}"
+    );
+    assert!(
+        stdout.contains("ok"),
+        "expected the script's 'ok' (second(v) == 258); stdout={stdout:?}"
+    );
+}
+
 // ── P166: file().content() on a binary file must surface a warning ────────
 //
 // Root-cause data-loss bug: prior to the 2026-04-17 fix,

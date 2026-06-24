@@ -1145,10 +1145,10 @@ use a separate collection or add after the loop"
             && matches!(f_type, Type::RefVar(inner) if matches!(**inner, Type::Vector(_, _)))
             && self.vars.is_argument(var_nr)
             && self.lexer.peek_token("[");
-        let prev_read_target = std::mem::replace(&mut self.read_target_type, f_type.clone());
+        let prev_read_target = std::mem::replace(&mut self.expected, f_type.clone());
         let rhs_pos = self.lexer.peek_pos().clone();
         let mut s_type = self.parse_operators(f_type, code, &mut parent_tp, 0);
-        self.read_target_type = prev_read_target;
+        self.expected = prev_read_target;
         // @PLN87 L1 / #2 — a local `&`-binding to a SCALAR lvalue (`b = &a` or
         // `b: &integer = a`) makes `b` a LIVE reference to the source's stack slot:
         // lower it to `b: &T = OpCreateStack(a)` — the SAME stack-ref mechanism a `&T`
@@ -2182,6 +2182,33 @@ use a separate collection or add after the loop"
                 | Type::Character
                 | Type::Text(_)
         );
+        // (I-Join) D4 — an INFERRED scalar integer local reassigned a WIDER integer widens
+        // to the full `integer` (the join of its writes), instead of erroring on the
+        // narrowing (the #433-residual: `arg = bytes[i]; arg = arg*256+…`).  An explicitly
+        // annotated `x: u8` is NOT widened (it stays constrained).  Gated to a plain
+        // whole-variable target (not `v[i]`/`s.field`).  Pass 1 widens the var directly
+        // (`change_var_type` no-ops because `is_equal` collapses integer widths);
+        // `add_variable` preserves the widened type into pass 2, so the convert / narrowing
+        // checks below then see the joined type.
+        let widened_int;
+        let f_type: &Type = if op == "="
+            && var_nr != u16::MAX
+            && matches!(to.unspan(), Value::Var(vn) if *vn == var_nr)
+            && matches!(f_type, Type::Integer(_))
+            && !self.vars.is_annotated(var_nr)
+            && Self::is_narrowing_int(&s_type, f_type)
+            // Only widen when the value genuinely does NOT fit the narrow type — i.e.
+            // exactly when the assignment would otherwise be a narrowing error.  A wider
+            // value that PROVABLY fits (a constant) needs no widen; widening it anyway
+            // over-widens width-sensitive locals (it regressed the engine_host kernel).
+            && !self.int_value_fits(code, f_type)
+        {
+            self.vars.widen_int(var_nr, &crate::data::I64);
+            widened_int = crate::data::I64.clone();
+            &widened_int
+        } else {
+            f_type
+        };
         if op == "="
             && scalar_target
             && !self.first_pass
@@ -2389,6 +2416,16 @@ use a separate collection or add after the loop"
     #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_assign(&mut self, code: &mut Value) -> Type {
         let mut parent_tp = Type::Null;
+        // @PLN87 D-bind-7 — does THIS statement begin with a prefix `&`?  No valid
+        // statement does: `&` is only ever a binding RHS (`x = &a`) or a type
+        // annotation, both AFTER a name.  Captured before the parse so a nested
+        // parse (`&(1+2)` re-enters parse_assign for the inner `1+2`, which begins
+        // with `1`) doesn't see the outer `&` — `amp_pending` is a global flag that
+        // would otherwise leak into it.  `&&` is its own token, so this never
+        // mis-fires on logical-and.  The start position also points the caret below
+        // at the `&` (the cursor has drifted to `;`/`}` by detection time).
+        let stmt_start_pos = self.lexer.peek_pos().clone();
+        let started_with_amp = self.lexer.peek_token("&");
         let mut f_type = self.parse_operators(&Type::Unknown(0), code, &mut parent_tp, 0);
         if let (Type::RefVar(_), Value::Var(v_nr)) = (&f_type, &code) {
             self.vars.in_use(*v_nr, true);
@@ -2422,6 +2459,10 @@ use a separate collection or add after the loop"
                     tp
                 };
                 self.change_var_type(*v_nr, &tp);
+                // (I-Join) — an EXPLICIT `: Type` annotation pins the variable's type, so
+                // it stays constrained (a wider write is a narrowing error).  An inferred
+                // local (no annotation) widens to the join instead (see parse_assign_op).
+                self.vars.set_annotated(*v_nr);
                 f_type = tp;
                 got_annotation = true;
                 // @PLN87 #2 — `b: &T = src` IS `b = &src`: flag the reference bind so
@@ -2684,6 +2725,29 @@ use a separate collection or add after the loop"
                 }
                 return result;
             }
+        }
+        // @PLN87 D-bind-7 — a statement that BEGAN with `&` whose `&` was not
+        // consumed by an assignment: a bare `&a;` statement or a block-final
+        // `{ &a }`.  Both are non-binding positions the VITAL rule (binding.md
+        // B-Ref-AnnotationOnly) forbids — `&` binds a reference only as an
+        // assignment RHS (`name = &a`); a standalone `&a` discards it.  The
+        // operators.rs guard clears `amp_pending` when it has already reported the
+        // `&` (a sub-expression `&a + 1`, a non-place `&(1+2)`), so the flag is
+        // still set here ONLY in the unreported bare/block-final case; the
+        // `started_with_amp` gate keeps a leaked flag from a nested `&(…)` parse
+        // from mis-firing.  Report once on pass 2.
+        if started_with_amp && self.amp_pending {
+            if !self.first_pass {
+                diagnostic_at!(
+                    self.lexer,
+                    &stmt_start_pos,
+                    Level::Error,
+                    "`&` is not a general operator — it binds a reference only as the \
+                     whole right-hand side of an assignment (`a = &b`); a bare `&a` \
+                     discards the reference. Drop it, or write `name = &a` to bind one"
+                );
+            }
+            self.amp_pending = false;
         }
         *code = to;
         f_type

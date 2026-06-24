@@ -207,10 +207,16 @@ must be releasable. All changes land on a feature branch and reach `main` only v
 
 1. **Never `git commit` on `main`.** If you land there by accident, move the change to a feature
    branch first.
-2. **Pushing is OK by default — unless an open PR on the branch would be disturbed.** Push freely
-   after green CI on a long-lived branch with no open PR (the user wants commits visible without
-   asking). With an open PR, do NOT push without the user's explicit consent — force-pushes,
-   rebases, or surprise commits disrupt review — **except a fix for a blocking failure** (red CI, a
+2. **ALWAYS push the changes you make — it is a SAFETY rule, not a review step.** Work that lives
+   only in the local working tree or in unpushed commits can be lost (machine/session loss);
+   `origin/<branch>` is the backup. So once a change settles (it compiles / its tests are green),
+   commit it to the feature branch and **push proactively, without being asked** — every time you
+   make a change, don't leave it stranded locally. This is **separate from opening a PR**: pushing
+   to the working branch is the default for safety; **the PR is purely the user's call** — it takes
+   real review time and marks a deliberate "bow on the topic", so push freely but **never open or
+   merge a PR without an explicit request** (see point 3). The one caveat: with an **open PR** on
+   the branch, a surprise push disrupts review — hold non-blocking pushes for the user's consent
+   (force-pushes / rebases / surprise commits), **except a fix for a blocking failure** (red CI, a
    broken build, a failing required check): a push that *unblocks* the PR is allowed without asking,
    because the PR cannot merge while it is red anyway. Check `gh pr list --head <branch>` if unsure.
 3. **Never create a branch or open a PR unless the user explicitly asks** ("create PR", "open a
@@ -430,12 +436,15 @@ The rule: **always commit before any operation that changes the working tree.**
 | [INCONSISTENCIES.md](doc/claude/INCONSISTENCIES.md) | Known language design inconsistencies |
 | [PERFORMANCE.md](doc/claude/PERFORMANCE.md) | Benchmarks, root-cause vs CPython/Rust, wasm-vs-native gap, optimisation designs. Open follow-ups in § Open work |
 | [GOALS.md](doc/claude/GOALS.md) | What loft is *for*: purpose (foundation for lavition, fun-on-pickup) + six stack-wide goals A–F, each with a runnable Check |
+| [STRONG_POINTS.md](doc/claude/STRONG_POINTS.md) | What loft is genuinely *good at* — an evaluation LENS, not a brag sheet: each strength paired with the **turn-off** (the gap on the same topic that loses the person the strength attracts) + a "raise it higher" check. Strengths are worth *reaching* even when they aren't the author's use case (scripting is the worked example). Positive-space companion to GOALS.md (aims) and FORMALIZATION.md (rough spots) |
 | [STABILITY_ROADMAP.md](doc/claude/STABILITY_ROADMAP.md) | THE single tracking view: every open stability item in finishing order (order/size/status only; detail stays in the canonical homes) |
 | [STABILITY_METHOD.md](doc/claude/STABILITY_METHOD.md) | The three-pass stability method: sweep dual invariants (document, don't fix) → move algorithms to their data structures → de-duplicate |
 | [STABILITY_SWEEP.md](doc/claude/STABILITY_SWEEP.md) | The live pass-1 catalog: invariant families F1–F10, per-module work list, findings log |
 | [STABILITY_HOTSPOTS.md](doc/claude/STABILITY_HOTSPOTS.md) | Forward risk register H1–H8: the designs that will manufacture future bugs (analysis-dependent arity, dep-list overload, ownership-by-shape-analysis, …) — each with sized mitigation work, landing order, validation gates |
 | [STABILITY_REDFLAGS.md](doc/claude/STABILITY_REDFLAGS.md) | Cross-cut red-flag map (4-audit sweep, 2026-06): non-local facts re-derived per-site that a stable future must compute once — 5 clusters (return/bind ownership · stack-signal · container-traversal keystone · null-sentinel codec · manifestation guards) by missing fact + leverage-first landing order. Forward-stability record, not a fix-now list |
 | [FORMALIZATION.md](doc/claude/FORMALIZATION.md) | A formal definition used as a rough-spot LENS (not a deliverable yet): per-layer readiness + the ranked semantic rough spots. Adds the two the red-flag map misses — the front-end typing/conversion relation (where #432/#433 live) and grammar precedence. Recommends formalizing the typing relation + an operational core first; defer the ownership model until @PLN85/@PLN87 close |
+| [TYPING_RELATION.md](doc/claude/TYPING_RELATION.md) | The type/conversion area through the formalization lens: the relation read off `convert`/`cast`/`can_convert` + the four `*_hint` channels, written as judgments, with rough spots R1–R3 (four expected-type side-channels · `is_equal` collapses integer width · width re-derived in three places) and the missing `(T-Join)` rule the #433-residual needs |
+| [formal/README.md](doc/claude/formal/README.md) | The **strict** formal definition (rules + a shrinking deviation list). Each area doc = the rules loft should satisfy, then numbered deviations (`Dn`) where the code breaks them, driven to zero over time. The lens docs stay separate. First area: [formal/types.md](doc/claude/formal/types.md) (type system + conversion + integer width; 5 open deviations) |
 | [DEPS_INVENTORY.md](doc/claude/DEPS_INVENTORY.md) | H2 deliverable: the dep-list `Vec<u16>` semantic model (frame vs def address space, five marker overloads), every site classified, corpus-probe findings, the typed-`Deps` migration design |
 | [PLANNING.md](doc/claude/PLANNING.md) | Priority-ordered enhancement backlog |
 | [ROADMAP.md](doc/claude/ROADMAP.md) | Items in implementation order by milestone (0.9.0 / 1.0.0 / 1.1+) |

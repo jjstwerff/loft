@@ -314,12 +314,12 @@ impl Parser {
             // RESTORE the prior hint rather than clearing to Unknown, so sibling
             // statements / if-branches under the same expected type each still see
             // it (clearing made only the FIRST branch of an `if`-return resolve).
-            let saved_enum_hint = self.enum_hint.clone();
+            let saved_expected = self.expected.clone();
             if self.enum_context(result) {
-                self.enum_hint = result.clone();
+                self.expected = result.clone();
             }
             t = self.expression(&mut n);
-            self.enum_hint = saved_enum_hint;
+            self.expected = saved_expected;
             // Track unconditional terminators at block scope.
             // if/else/loop/match contain terminators inside branches — not unconditional.
             match &n {
@@ -5277,7 +5277,7 @@ impl Parser {
                         if self.data.attr_name(hint_d_nr, a) == arg_name {
                             let expected = self.data.attr_type(hint_d_nr, a);
                             if Self::seeds_vector_hint(&expected) {
-                                self.vector_hint = expected;
+                                self.expected = expected;
                             }
                             break;
                         }
@@ -5285,7 +5285,7 @@ impl Parser {
                 }
                 let mut p = Value::Null;
                 let t = self.expression(&mut p);
-                self.vector_hint = Type::Unknown(0);
+                self.expected = Type::Unknown(0);
                 named_args.push((arg_name, p, t));
                 // accept trailing comma on the last named arg.
                 if !self.lexer.has_token(",") || self.lexer.peek_token(")") {
@@ -5305,7 +5305,7 @@ impl Parser {
             {
                 let expected = self.data.attr_type(d_nr, arg_idx);
                 if matches!(expected, Type::Function(_, _, _)) {
-                    self.lambda_hint = expected;
+                    self.expected = expected;
                 }
             }
             // @PLN22 Phase 1 — hint the expected enum so a bare value-position
@@ -5319,14 +5319,14 @@ impl Parser {
                 if hint_d_nr != u32::MAX && arg_idx < self.data.attributes(hint_d_nr) {
                     let expected = self.data.attr_type(hint_d_nr, arg_idx);
                     if self.enum_context(&expected) {
-                        self.enum_hint = expected;
+                        self.expected = expected;
                     } else if Self::seeds_vector_hint(&expected) {
                         // #432 — seed a bare vector-literal argument's element width
                         // from the parameter type, so it builds at the callee's
                         // stride instead of `vector<integer>`.  Both passes (like the
                         // enum hint): the literal's element type must agree across
                         // passes, and the callee is already registered on pass 1.
-                        self.vector_hint = expected;
+                        self.expected = expected;
                     }
                 }
             }
@@ -5359,7 +5359,7 @@ impl Parser {
                     _ => None,
                 };
                 if let Some(h) = hint {
-                    self.lambda_hint = h;
+                    self.expected = h;
                 }
             }
             let mut p = Value::Null;
@@ -5368,9 +5368,7 @@ impl Parser {
             // the cursor drifted to `)` / `,`.
             arg_pos.push(self.lexer.peek_pos().clone());
             let t = self.expression(&mut p);
-            self.lambda_hint = Type::Unknown(0);
-            self.enum_hint = Type::Unknown(0);
-            self.vector_hint = Type::Unknown(0);
+            self.expected = Type::Unknown(0);
             types.push(t);
             list.push(p);
             arg_idx += 1;
@@ -5931,7 +5929,7 @@ impl Parser {
     /// Recurses through nested vector layers so `vector<vector<u8>>` seeds too (the
     /// outer literal is seeded; inner literals thread their element type through
     /// `var_tp`).  The leaf must be a narrow integer.
-    fn seeds_vector_hint(expected: &Type) -> bool {
+    pub(crate) fn seeds_vector_hint(expected: &Type) -> bool {
         match expected {
             Type::Vector(elem, _) => {
                 matches!(**elem, Type::Integer(_)) || Self::seeds_vector_hint(elem)
@@ -5958,13 +5956,13 @@ impl Parser {
             if md_nr != u32::MAX && list.len() < self.data.attributes(md_nr) {
                 let expected = self.data.attr_type(md_nr, list.len());
                 if Self::seeds_vector_hint(&expected) {
-                    self.vector_hint = expected;
+                    self.expected = expected;
                 }
             }
             let mut p = Value::Null;
             arg_pos.push(self.lexer.peek_pos().clone());
             let t = self.expression(&mut p);
-            self.vector_hint = Type::Unknown(0);
+            self.expected = Type::Unknown(0);
             types.push(t);
             list.push(p);
             if !self.lexer.has_token(",") {

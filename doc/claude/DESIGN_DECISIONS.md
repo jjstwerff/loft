@@ -336,6 +336,13 @@ value structs (none on the roadmap) would re-open the row.
 
 ## C66 — Production loft programs never abort on user-attributable edge cases (development may halt)
 
+> **Revised by [C80](#c80--the-spreadsheet-fault-model-nothing-stops-a-running-calculation)
+> (2026-06-24).** The "development *may halt*" half no longer applies to **calculation**
+> faults (divide-by-zero, overflow, OOB, null-deref): those now yield **null and continue in
+> every mode** (the spreadsheet model), silently by default. C66's split still holds for the
+> *explicit* signals — `panic` / `assert` halt in dev/test, log + continue in production — and
+> for startup ([C67](#c67--fail-at-startup-not-at-runtime)).
+
 **Question.** Should runtime fault sites (divide-by-zero, vector /
 text out-of-bounds, null DbRef dereference, narrow-cast overflow,
 `panic("msg")` / failed `assert`) HALT the loft program with a typed
@@ -1323,3 +1330,333 @@ intend to alias, and the cost of those bugs exceeds the value-semantics migratio
 (copy-on-write + `&` on every alias) it would take to remove them. Only then reconsider
 value-semantics-by-default; until then the W4 lint + the documented view default are the
 cheaper guard.
+
+---
+
+## C78 — The Rust-engine ↔ loft-library boundary: mechanism not genre, and no black boxes above the engine
+
+**Question.** When something is *hard* and would be *reused* — a world model, gameplay
+primitives, rendering composition, a streaming substrate — should it move down into the
+**Rust engine** (shipped with the compiler: paid once, fast, opaque), or stay up as a
+**loft library** (written in loft, slower to write, readable)? Stated the other way:
+what is the Rust core *allowed* to swallow?
+
+**Evaluation.** Three forces act on the line, and they do not all pull the same way:
+
+1. **Cost (paid-once)** — *pulls down.* Complexity is conserved: building reliable
+   servers and efficient cross-platform games is hard by nature, and you can't delete
+   that, only relocate it. The only question is who pays it and how many times. The Rust
+   engine pays the hard-and-universal complexity **once**; every loft program above it
+   pays zero, instead of re-writing it over and over. This is "easily" (Goal F) achieved
+   by *relocating* complexity, not by pretending none exists.
+2. **Neutrality (mechanism vs policy)** — *pulls up.* The compiler must encode **no
+   worldview.** A genre baked into the compiler stops being a *choice* and becomes a
+   *tax everyone pays*: a side-scroller author should not carry one byte of a hex world.
+   So an opinionated game-type model is **policy** and stays a library, even though it is
+   hard (force 1) and would be reused by every world-game author.
+3. **Transparency (no black boxes above the engine)** — *pulls up.* A game developer
+   must be able to **read** the library, **learn** how it works, and **fork** its
+   behaviour and primitives for their own game. The moment code goes into Rust it is a
+   black box to them — a different language, needing Rust skill and an engine recompile
+   to touch. So "should a developer ever want to open this?" pulls game-facing code up
+   into loft regardless of how hard it is.
+
+Forces 2 and 3 **override** force 1. The naive test "hard-and-universal → Rust" is
+wrong; the correct test is tighter: **universal AND something a game developer should
+never need to read.** That narrows the Rust core to its minimal opaque floor.
+
+**Decision.** **Closed — accepted architectural principle.** Dated 2026-06-23. Four
+load-bearing rules:
+
+1. **The compiler ships mechanism, never a genre.** Opinionated game-type models (the
+   hex-based streaming world is the flagship case) stay **loft libraries**, never baked
+   into the compiler — so they are *optional* (don't `use` it → not limited by it),
+   *replaceable* (write your own side-scroller library), and *unprivileged* (the
+   author's own flagship gets no special compiler status; it is just another `use`,
+   on equal footing with a stranger's library). This is "adoption is a result, not a
+   steering input" applied to architecture: the shared floor is not bent toward the one
+   game that exists yet.
+2. **The Rust/loft line is "should a game developer ever need to open this?"** — *No*
+   (codegen, the type checker, the store allocator, memory management) → Rust: paid once,
+   opaque, fine. *Yes, ever* (the world model, gameplay primitives, rendering
+   composition) → loft, **even when hard**. "Hard" is not what sends code into Rust;
+   "the developer never opens it" is.
+3. **Libraries are kits of composable primitives, not sealed monoliths.** "Change the
+   behaviour and primitives for their own use" only holds if a developer can lift **one**
+   primitive (the streaming, the chunk loader, the spatial query) and recombine it
+   without forking the whole library. Coming-apart-cleanly into visible primitives is
+   part of the library's contract, not a nicety — and it is harder to write than a
+   monolith.
+4. **The engine is "unlearnable from above" — a property to *defend*, not merely
+   observe.** Learnability is relative to (code, audience): the engine is correctly
+   **below the game developer's horizon** (the relief — "paid once so you can forget
+   about it"; *forget about* literally means *don't have to learn*), while being **fully
+   learnable to an engine contributor** (what the whole `doc/claude/` corpus + the
+   matrix-first method exist for). Opaque is only safe because **dependable** — you can
+   only afford to not-learn what won't surprise you, so this rule rests on Goal A
+   (soundness) and Goal E (predictable memory). The failure mode is the engine *leaking
+   upward* and forcing itself to be learned: every time a developer must understand a
+   store-lifetime quirk to get their game running (the crawler survival guide,
+   [loft#248](https://github.com/loft-lang/loft/issues/248)) the engine has become
+   *involuntarily* learnable — exactly the [STRONG_POINTS.md](STRONG_POINTS.md) #3/#4
+   turn-offs. "Not learnable from above" is the goal; "the dev had to learn it anyway"
+   is a bug.
+
+**Anti-cage.** This is [GOALS.md § Purpose](GOALS.md#purpose--what-loft-is-for)'s "win
+the dependability *without the cage*" stated as a boundary. The AS/400's engine bought
+its reliability as a *closed* box — opaque to everyone. loft's engine is closed only to
+the developer's *concern*, and open to anyone who wants to work on loft itself; everything
+above it is loft source the developer can read, learn from, and fork.
+
+**Not in tension with C71.** [C71](#c71--native-libraries-compile-scripts-interpret--the-steady-state-execution-model)
+(native libraries compile, scripts interpret) is about *how a loft library executes*
+(native vs interpret); C78 is about *where code lives* (Rust engine vs loft library).
+They are orthogonal: a loft library may be native-compiled for speed (C71) and still be
+transparent loft *source* the developer reads and forks (C78) — the native artifact is a
+derived, invisible cache, and the loft source stays the truth (cf. [C70](#c70--no-per-library-ir-snapshot--cache):
+"the loft source is the better representation of a library's state").
+
+### Corollary — the move-to-Rust alarm (added 2026-06-23)
+
+Needing to push something *out of a current loft library and into Rust* should feel
+like a **failure of language design** — and that feeling is **load-bearing, kept on
+purpose.** It is the conscience that holds the Rust core minimal: a builder who felt
+*fine* pushing code into Rust would let the opaque floor metastasize one "just drop it
+to Rust" at a time, and transparency (rules 3–4) would erode silently. The discomfort is
+the forcing function that grows *loft* instead of the engine.
+
+Aim it precisely: the failure is not "code moved to Rust," it is **"code moved to Rust
+because loft couldn't express or run it."** Two reasons a library reaches for Rust, and
+only the first is the failure —
+
+1. **loft couldn't do it.** The code *is* game-facing, but the language wasn't expressive
+   or fast enough. *This* is the alarm's true target. The disciplined response is the
+   dogfood loop: treat the library's pull toward Rust as a **bug report against the
+   language** and fix loft (add the expressiveness, make the slow primitive fast) — never
+   let the library escape downward. ("Find the old conservative mechanism and narrow it,"
+   turned on loft's own surface.)
+2. **It was never game-facing code.** It is genre-neutral *mechanism* that started in a
+   library only because that is the cheapest place to prototype. Relocating it down is
+   rule-1/rule-2's boundary *correcting itself*, not loft failing — relocate without
+   shame. The streaming substrate (see Revisit-when) is this case.
+
+The test that separates them is C78's own: *would a developer ever want to open this?*
+**Yes** + dropping it to Rust → the failure; fix the language. **No** → engine mechanism
+wearing a library's clothes; moving it is housekeeping. Even then there is a gentler step
+before Rust: neutral-but-readable mechanism can sink into a **lower loft library** and
+stay transparent; it earns *Rust* only when it is *also* never-opened **and** needs native
+speed. So the alarm should ring loudest at a jump *straight from game-facing loft to
+Rust* — that one is almost always the failure case, not the correction.
+
+**Revisit when.** A concrete consumer need shows a *genre-neutral mechanism* currently
+in a loft library is a real, measured bottleneck only the Rust engine can fix, **AND**
+moving it down buries neither a worldview choice (rule 1) nor a primitive a developer
+needs to read/fork (rule 3) — bring the profile and the boundary analysis together. The
+likely live case is the **streaming substrate**: loading/unloading spatial chunks from
+the store as the player moves is genre-neutral (a side-scroller and an open world both
+want it), so it may rightly sink into the engine or a lower neutral library *while the
+hex tiling stays up* in the world library on top of it. Note: "it's hard" or "it'd be
+reused" **alone is not sufficient** — that is force 1, which forces 2 and 3 override.
+
+---
+
+## C79 — Ownership is internal; no user-facing borrow checker
+
+### Question
+
+loft's ownership/`deps` system is described as "loft's borrow checker, Rust as the reference
+model" ([OWNERSHIP_MODEL.md](OWNERSHIP_MODEL.md)). Should that surface to the programmer —
+compile errors for ambiguous/unsafe aliasing and lifetimes, à la Rust — or stay entirely
+internal (the compiler always finds a valid lowering, never rejecting)?
+
+### Evaluation
+
+A user-facing borrow checker gives a simpler, more predictable compiler (it *checks*
+annotations rather than *solving*) and zero surprise copies — but it imports Rust's #1
+learning hurdle into a rapid-prototyping scripting language whose stated aim
+([GOALS.md](GOALS.md)) is *fun on pickup* and *the most natural solution for the programmer*.
+An internal system keeps the surface clean (write naively, it works) at the cost of a harder
+compiler obligation: the analysis must be **total** (never stuck), copying when it cannot
+prove an alias is safe.
+
+### Decision
+
+**Closed (2026-06-24) — INTERNAL only.** No user-facing ownership errors, ever. The compiler
+always produces a correct free/copy/move, copying when unsure; the one deliberate user-facing
+ownership concept is `&` (a live reference, opt-in shared mutation —
+[OWNERSHIP_MODEL.md § The law](OWNERSHIP_MODEL.md), @PLN87). "Rust as the reference model"
+means **soundness of the internal analysis**, not Rust's UX. This was always the plan.
+Consequence: `O-Complete` ([formal/ownership.md](formal/ownership.md)) is the load-bearing
+invariant — an incomplete fact is a miscompile / leak, not a recoverable compile error, so the
+failure to fear is *incompleteness*, not just unsoundness.
+
+### Revisit when
+
+A concrete consumer hits a case where silently copying is a real, measured cost AND a narrow,
+*clearly-diagnosable* surface (e.g. "this reference would outlive its source") would be more
+natural than the copy — i.e. one named case earns a user-facing diagnostic. Even then: a
+single case, never the general Rust model.
+
+---
+
+## C80 — The spreadsheet fault model: nothing stops a running calculation
+
+### Question
+
+When a runtime fault occurs mid-execution — a calculation that can't produce a value
+(`s / 0`, an overflow it can't represent, `v[99]` out of bounds, a deref of an absent value),
+or an explicit `panic("msg")` / `assert(cond, msg)` — should the program stop (halt the run /
+skip the rest), as C66's *development* mode does, or keep running?
+
+### Evaluation
+
+It mimics a **spreadsheet**: one cell with a bad formula shows an error in *that* cell and
+never stops the other cells from recalculating. That is what normal programmers expect of a
+robust system, and it is the most natural mental model — far more so than "one bad value
+anywhere aborts everything after it." In a game loop it is the difference between *one mob
+behaving strangely* and *the whole world freezing because one mob did*. The visible signal is
+the **null itself** (you see it in the result); there is **no per-fault log by default** — in a
+spreadsheet most empty cells are normal, so logging each uncomputable would be pure spam. A
+programmer who wants to trace *where* uncomputables arise can opt into a **debug log level**.
+This is the same through-line as [C79](#c79--ownership-is-internal-no-user-facing-borrow-checker)
+(ownership) and the differential-oracle decision: the safety lives *under* a surface that keeps
+going.
+
+This **deliberately deviates from the norm** (most languages abort on a fault) — accepted on
+purpose, because it directly drives the **fun** of building a game ([GOALS.md](GOALS.md)). A
+developer iterating on something half-working keeps seeing it **run** — one broken formula
+doesn't blank the screen, one bad mob doesn't freeze the world — instead of the
+crash → read-trace → fix → rerun loop that kills creative flow. Here robustness is a
+*creativity* feature, not only a safety one: you stay in the world, tweaking, while it keeps
+moving.
+
+It also corrects a common misread of the "safe language" promise. Rust's reputation — *"if it
+compiles, it works"* — oversells what compilation buys: the borrow checker and type system
+remove **memory** bugs and data races, but a *logic* fault (`unwrap` on `None`, an out-of-bounds
+index, an overflow) still **panics — it halts at the first problem.** "It compiles" means "it
+won't corrupt; it'll stop cleanly," **not** "it keeps working." loft's robustness is on a
+*different axis*: not "prevent a class of bugs, then halt on the rest," but **keep running
+*through* a fault** — degraded and local.
+
+And this is **not specific to games.** A **server** that terminates on one bad request is an
+outage; a **kernel** that stops is a dead machine. *Keep running* is the right default for any
+long-running system — anywhere termination is the larger failure. The narrow exception is a
+context where *acting* on a bad value is worse than stopping (a physical actuator) — and even
+there the answer is an **explicit check at that boundary** (`?? safe`, validate-before-act),
+not making the language halt globally. Keep-running plus a local guard beats a global stop.
+
+And it beats the *other* norm too — **exceptions**. `try`/`catch`/`finally` does keep a program
+running after a small error, but at a steep price: surviving the error means **unwinding the
+stack** — heavy machinery to tear down frames and run cleanup, invoked for one bad value. Worse,
+it is **error-prone**: a missed case in a `finally` corrupts state that was *fine without the
+exception* — the recovery mechanism itself *introduces* the corruption. loft sidesteps both by
+making a fault a **value, not a control-flow event**: the failed operation yields null *in
+place*, execution continues linearly, **nothing unwinds**, and there are **no cleanup blocks to
+get wrong**. Error handling becomes **data flow** (null propagates like any value), not control
+flow — so it cannot leave the half-unwound, half-cleaned-up state that is exceptions' own
+corruption surface.
+
+### Decision
+
+**Closed (2026-06-24) — NOTHING stops a running calculation. Revises C66.**
+
+1. **Uncomputable → null, by default, silently.** `s / 0`, overflow, out-of-bounds index,
+   deref of an absent value all yield **null** with no `??` needed. `??` means "give me a
+   *non-null* fallback," not "rescue from a trap." (The trap discipline — "overflow traps, NOT
+   a silent null" — is **reversed**.) **No per-fault log by default** — uncomputable values are
+   common (the spreadsheet's empty cells), so logging each would be spam; a programmer who
+   wants to trace them opts into a **debug log level**.
+2. **A calculation fault never halts the run or skips a later statement.** The script is a
+   sequence of independent steps. Step A producing null does not abort; step B still
+   **executes** (and gets null if it consumed A's null — null is contagious — but it *runs*).
+   No step is skipped because something earlier "happened to be wrong."
+3. **`panic` / `assert` are NOT calculations — they keep their C66 split.** They are explicit
+   developer signals, so during **development and testing they still HALT** (you want a
+   deliberate `assert(false)` / `panic(...)` to stop and show you, exactly as today). In
+   **production** they **log and continue** — one assertion never takes down a running system.
+   Only the *implicit* calculation faults of point 1 move to universal null-and-continue.
+4. **Startup still stops** ([C67](#c67--fail-at-startup-not-at-runtime)): bad config /
+   port-bind / missing deps exit *before* the run begins — "can't open the spreadsheet," not
+   "a cell errored." A running calculation never stops.
+
+Robustness payoff: a system degrades **locally** (one value, one entity), never **globally**.
+Note: this is a design target; the current code still traps/halts on calculation faults per
+C66 — the change is tracked in [formal/operational.md](formal/operational.md) (rule E-Uncomp,
+deviation D-op-4).
+
+### Revisit when
+
+A consumer shows that silent null-and-continue (plus the opt-in debug log) genuinely loses
+critical information — e.g. a class of uncomputable that *should* be noisy by default. Even
+then the fix is more **observability** (turning a debug log on by default, a louder surface),
+never a halt.
+
+---
+
+## C81 — `&` stays one token, disambiguated by position (bitwise-and vs reference)
+
+### Question
+
+`&` does double duty: an **infix** `&` is bitwise-and (precedence level 6, `a & b`), a
+**prefix** `&` is the reference-type annotation (`b = &a`, [binding.md](formal/binding.md)).
+Should the grammar split them into two distinct tokens (a separate reference sigil), or keep
+one `&` resolved by position? (formal/grammar.md deviation **D-gram-4**.)
+
+### Evaluation
+
+The two are told apart purely by **position**: a `&` with a left operand is infix bitwise-and;
+a *leading* `&` is the reference annotation. @PLN87 plus A1 (binding.md D-bind-7) made a prefix
+`&` a **parse error in every non-binding position** — assignment target, operand, argument,
+collection element, condition, bare statement, block-final — so it can never reach an
+expression slot. The disambiguation is therefore **total**, not heuristic. Rust makes the same
+call (`&` is both reference and bitwise-and, disambiguated by position); a new sigil would add
+surface for zero semantic gain and break the familiar reading. The coupling to binding.md
+("prefix `&` only at a binding") is a *documentation* obligation — the rule is stated in both
+the grammar and binding areas — not a soundness gap.
+
+### Decision
+
+**Closed (2026-06-24) — KEEP one `&` token, disambiguated by position.** The
+prefix-`&`-only-at-a-binding rule (binding.md `B-Ref-AnnotationOnly`, enforced through
+D-bind-7) is what makes the position rule total, so the overload is a **decided edge**, not a
+deviation. D-gram-4 leaves formal/grammar.md.
+
+### Revisit when
+
+A concrete grammar/tooling need (a *generated* parser that cannot reproduce the positional
+rule) hits an actual ambiguity — not merely the doc coupling.
+
+---
+
+## C82 — loft's surface is deliberately not context-free
+
+### Question
+
+loft's grammar resolves some constructs with **speculative backtracking** (type-vs-variable;
+struct-init `S { … }` vs block `{ … }`) and **lexer modes** (string interpolation `"{e}"`), so
+no context-free grammar accepts exactly loft. Should we pursue a CFG (so an external,
+grammar-based tool could be derived), or accept the context-sensitive surface? (formal/grammar.md
+deviation **D-gram-2**.)
+
+### Evaluation
+
+The context-sensitivity buys real ergonomics — the `S { … }` struct-literal shorthand and
+format-string interpolation — that a CFG-clean grammar would force into clumsier syntax. No
+consumer has needed a CFG: the hand-written two-pass recursive-descent parser **is** the spec,
+and tooling (LSP, formatter, the doc viewer) reuses it rather than a generated parser. Chasing
+a CFG would constrain the surface for a benefit nobody has asked for, and the backtracking is
+bounded in practice (a couple of fixed lookahead/disambiguation points, documented in
+[COMPILER.md](COMPILER.md)).
+
+### Decision
+
+**Closed (2026-06-24) — ACCEPT the non-context-free surface; do not chase a CFG.** The
+hand-written parser is the grammar; formal/grammar.md states the one fact that used to live
+only in code (precedence + associativity — D-gram-1, now lifted into LOFT.md) and records the
+context-sensitive points as accepted. D-gram-2 leaves formal/grammar.md as a decided edge.
+
+### Revisit when
+
+A concrete consumer needs a CFG (a third-party grammar-based tool that genuinely cannot reuse
+loft's parser) **and** the context-sensitive points can be expressed without unbounded
+backtracking.
