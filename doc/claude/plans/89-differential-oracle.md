@@ -5,6 +5,14 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLN89 — the differential oracle (operational.md D-op-1 / D-op-2)
 
+> **Status — seed phase LANDED (this PR).** The runner + positive control + an
+> 8-program seed corpus are in and green across both backends. The oracle already
+> earned a real catch (#448, NRVO mixed-return leak — primary shape fixed, guarded
+> by corpus program 08). The corpus now GROWS per the contract below; the immediate
+> next user of the net is the **ownership code-simplification exploration**
+> ([OWNERSHIP_MODEL.md § ACTIVE](../../OWNERSHIP_MODEL.md#active--the-simplification-exploration-next-days-exploratory--revertable)).
+> D-op-1/2 stay OPEN until the corpus is broad enough to reliably catch the class.
+
 The interpreter (`src/state/`) and the native generator (`src/generation/`) are
 two separate implementations of one language, kept in agreement **only by
 tests**. A program the interpreter runs fine but `--native` miscompiles, leaks,
