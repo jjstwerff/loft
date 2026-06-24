@@ -148,8 +148,19 @@ representative case is settled.)
       the `parse_return` residual the plan anticipated. Matrix (value+len+leak, 13
       cells) clean both backends; corpus stays byte-identical (surgical); suite +
       oracle green; guarded by `tests/oracle/09-nrvo-bare-return-chained.loft`.
-- [ ] **NEXT (slice 3 — the headline shrink):** fold the upper `vec_match_candidate`
-      (#416) + #448 path B into the same selector so #448 becomes the
-      `buffer_taken ⇒ Copy` cell; delete the bolt-on trio (`returned_uses_buffer`,
-      `body_has_buffer_return`, `tail_terminal_fresh_local_vec`). Measure deleted
-      helpers + line shrink. Oracle-guarded, one mechanism at a time.
+- [x] **Slice 3 — fold #448 into the tail-return cell** (commit `c9b8f154`,
+      byte-identical, net −29 lines). The #448 buffer-taken delivery was a second
+      upper materialise block with its own three-helper gate; it is now ONE cell of
+      the fresh-owned-vector tail-return handling (the #437/c5 block): the deps fact
+      + buffer state decide rename-vs-copy — `fresh_owned_vector_deps(tail)=Some` →
+      buffer FREE renames, buffer TAKEN materialises (#448). `tail_terminal_fresh_-
+      local_vec` DELETED (subsumed by `fresh_owned_vector_deps`); `returned_uses_-
+      buffer` + `body_has_buffer_return` stay as the buffer-taken cell-guard
+      (legitimate, not bolt-on). Moving #448 past `convert` is sound (a `Never`-typed
+      `return <expr>` tail is inert to convert). Corpus byte-identical both backends;
+      13-cell value+len+leak matrix all pass; suite + oracle green.
+- [ ] **Optional further fold:** the upper `vec_match_candidate` (#416, cluster-II
+      match/if branch-tail NRVO) stays in place — branch tails are `t = Never`
+      pre-convert and a genuinely distinct mechanism (not a #448-style bolt-on), so
+      folding it carries worse risk/reward than the #448 cell did. Revisit only if a
+      future delivery-shape change makes the branch-tail path share the cell.
