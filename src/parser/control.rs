@@ -18,6 +18,31 @@ pub(crate) enum RetSite {
     MidReturn,
 }
 
+/// @PLN85 / D-own-1 — how an implicit-tail `t == Vector` return delivers its
+/// value into the fn's one `__retbuf` buffer. The SELECTOR
+/// (`classify_vector_delivery`) reads the deps fact + tail shape once and picks a
+/// variant; the dispatch (`dispatch_vector_delivery`) emits the matching
+/// mechanism. This collapses the per-branch shape re-handling the vector arm of
+/// `block_result` used to inline (OWNERSHIP_MODEL.md: ownership read once, not
+/// re-derived per tail-shape at the delivery site).
+enum Delivery {
+    /// Promote the tail's work-ref(s) to BE `__retbuf` (no copy):
+    /// `ref_return(ws) + nrvo_collapse_tail_set(ws)`. The owned-fresh / hidden-ref
+    /// recovery (#120) / multi-arm (#437, cluster-V) case.
+    Rename(Vec<u16>),
+    /// The tail BORROWS a visible argument (the whole vector arg A.2, or a struct
+    /// vector FIELD #415) — copy it into `__retbuf` for value semantics. `ls` is
+    /// carried for the fallback rename if the copy's work-var allocation fails.
+    CopyBorrow(Vec<u16>),
+    /// A `#native`/`#rust` callee delivers its OWN store and never writes the
+    /// `__retbuf` it was handed (#409) — mint a local, run the call into it, copy
+    /// in. A no-op when there is no buffer or no work-var.
+    ForwardCopy,
+    /// The tail already writes `__retbuf` (or there is no buffer / nothing to
+    /// recover) — emit nothing here.
+    AsIs,
+}
+
 use super::{
     DefType, I32, Level, LexItem, Parser, Position, Type, Value, diagnostic_format,
     merge_dependencies, v_block, v_if, v_loop, v_set,
@@ -813,149 +838,12 @@ impl Parser {
             } else if let Type::Text(ls) = t {
                 self.text_return(ls);
             } else if !vec_arm_handled && let Type::Vector(elm, ls) = t {
-                if ls.is_empty() && !l.is_empty() {
-                    // Issue #120 mirror (see the Reference arm below): when
-                    // filter_hidden stripped the deps, recover the tail
-                    // call's work refs so the site still binds to the one
-                    // buffer.
-                    let last = &l[l.len() - 1];
-                    let extra = Self::collect_hidden_ref_args(last, &self.data);
-                    // Chain the wrapper into its callee's buffer — UNLESS the
-                    // callee forwards a foreign store and never writes that
-                    // buffer (`fn f() -> vector { stack_trace() }`): chaining
-                    // a grand-caller's buffer through such a forwarder
-                    // orphans it (#355 follow-up leak, 55-stack-trace).  The
-                    // forwarder test reads the callee's BODY shape, which is
-                    // pass-stable (unlike its `returned` deps, recomputed
-                    // only when the callee itself re-parses).
-                    let callee_forwards = matches!(last.unspan(), Value::Call(d, _)
-                        if self.callee_forwards_foreign_store(*d));
-                    // #409: a NATIVE / `#rust` decl with a heap return delivers
-                    // its OWN store and never writes the `__retbuf` it was
-                    // handed.  Leaving the forward returns that foreign value
-                    // with `__retbuf` empty, so the caller's later in-place
-                    // `+=` rebuilds the empty buffer and drops the data.  Such
-                    // a callee is PASS-STABLE (always `code==Null` + a symbol
-                    // set, identical in both parse passes — unlike a loft
-                    // forward ref, whose body is unparsed in pass 1), so it is
-                    // safe to mint a fresh local here: route the result through
-                    // it and COPY into `__retbuf` (clear + element-append) —
-                    // the delivery shape a hand-written `r = native(); r`
-                    // produces (which makes a downstream `+=` correct).
-                    // Copying (not chaining) keeps the #355 orphan impossible.
-                    let native_forwarder = matches!(last.unspan(), Value::Call(d, _) if {
-                        let cd = self.data.def(*d);
-                        *cd.code() == Value::Null
-                            && (!cd.native().is_empty() || !cd.rust().is_empty())
-                            && matches!(
-                                cd.returned(),
-                                Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
-                            )
-                    });
-                    if !extra.is_empty() && !callee_forwards {
-                        self.ref_return(&extra, l, RetSite::BlockTail);
-                        self.nrvo_collapse_tail_set(l, &extra);
-                    } else if native_forwarder {
-                        let elm_ty = (**elm).clone();
-                        if let Some((buf_attr, buf_var)) = self.return_buffer() {
-                            let fwd = self.create_var(
-                                "__fwd",
-                                &Type::Vector(Box::new(elm_ty.clone()), Deps::none()),
-                            );
-                            if fwd != u16::MAX {
-                                let rec_tp = self.append_elem_tp(&elm_ty);
-                                let clear = self.cl("OpClearVector", &[Value::Var(buf_var)]);
-                                let append = self.cl(
-                                    "OpAppendVector",
-                                    &[Value::Var(buf_var), Value::Var(fwd), Value::Int(rec_tp)],
-                                );
-                                if let Some(last) = l.last_mut() {
-                                    let orig = std::mem::replace(last, Value::Null);
-                                    let set_fwd = crate::data::v_set(fwd, orig);
-                                    *last = crate::data::v_block(
-                                        vec![set_fwd, clear, append, Value::Var(buf_var)],
-                                        Type::Vector(
-                                            Box::new(elm_ty.clone()),
-                                            Deps::frame1(buf_var),
-                                        ),
-                                        "fwd_copy_409",
-                                    );
-                                    // Finalize the fn's return-type dep to the
-                                    // `__retbuf` attribute — the same step
-                                    // `ref_return` does at its tail (Type::Vector
-                                    // (it, Deps::attrs([buf_attr]))).  Without it
-                                    // the signature stays bare-vector, so a caller
-                                    // (which can only consult the signature) does
-                                    // NOT bind its result var to the buffer it
-                                    // passed and instead rebuilds a fresh empty
-                                    // one — the exact `+=`-drops-data symptom.
-                                    let dep = Deps::attrs(vec![buf_attr]);
-                                    self.data.definitions[self.context as usize].returned =
-                                        Type::Vector(Box::new(elm_ty), dep);
-                                }
-                            }
-                        }
-                    }
-                } else if !self.first_pass
-                    && ls.iter().any(|&d| self.vars.is_argument(d))
-                    && (self.tail_is_struct_field_read(l)
-                        // The whole-arg copy (a2) fires ONLY at the function-body
-                        // tail: an `if`/`match` ARM block also reaches block_result
-                        // (context "if"/"else"/"match_arm") with a `{ v }` tail, but
-                        // the arm is already delivered into the buffer by the
-                        // outer if-unify / arm-materialise path — copying it again
-                        // here orphans the buffer (a11 leak).  `return from block`
-                        // is the one funnelled return path (OWNERSHIP_MODEL row 104).
-                        || (context == "return from block"
-                            && self.tail_whole_arg_vector(l).is_some()))
-                    && let Some((buf_attr, buf_var)) = self.return_buffer()
-                    && !ls.contains(&buf_var)
-                {
-                    // Row-104 — an implicit-tail return whose value BORROWS a
-                    // visible argument: a STRUCT vector FIELD of an arg
-                    // (`fn getv(b: Box) -> vector { b.v }`, #415) OR the whole
-                    // vector arg itself (`fn idv(v) -> vector { v }`, A.2/a2 —
-                    // the implicit-tail sibling of an explicit `return v`).
-                    // Either way returning the tail as-is ALIASES the caller's
-                    // store, so both funnel to ONE copy: clear `__retbuf`,
-                    // element-append the borrowed value, return the buffer, and
-                    // finalize the return-type dep to `{__retbuf}` — the caller
-                    // adopts an independent copy (value semantics).  The
-                    // EXPLICIT `return v` / `return b.v` already does this
-                    // (parse_return ~4651) and the `a = bx.v` bind-site copy is
-                    // the same shape (suite-proven).  Narrowed by the two tail
-                    // predicates to whole-arg / struct-field tails: index /
-                    // call tails stay on the ref_return path (the over-broad cut
-                    // regressed the suite).
-                    let elm_ty = (**elm).clone();
-                    if !self.copy_borrow_tail_into_retbuf(&elm_ty, l, buf_attr, buf_var) {
-                        self.ref_return(ls, l, RetSite::BlockTail);
-                        self.nrvo_collapse_tail_set(l, ls);
-                    }
-                } else {
-                    // #437/@PLN85 cluster V (O-Move): a multi-arm `match`/`if` vector tail
-                    // must deliver EVERY arm's buffer into the one return buffer.
-                    // The Vector type dep `ls` can be INCOMPLETE — it carries only
-                    // the first arm's `__ref_1`, while a later arm's `__ref_N` is
-                    // allocated but unregistered, so scope analysis frees it and the
-                    // function returns a dangling ref into a freed store (the arm
-                    // transferred its store out but the callee still freed it).
-                    // Union `ls` with every hidden buffer-arg ref in the tail so
-                    // ref_return renames each arm's buffer onto the retbuf (the
-                    // pre-#437 [__ref_1, __ref_2] shape).
-                    let mut full: Vec<u16> = ls.to_vec();
-                    if let Some(last) = l.last() {
-                        for w in Self::collect_hidden_ref_args(last, &self.data) {
-                            if !full.contains(&w) {
-                                full.push(w);
-                            }
-                        }
-                    }
-                    self.ref_return(&full, l, RetSite::BlockTail);
-                    // @P377 / S1: collapse `cv = inner_call(...); cv` so the
-                    // inner call's hidden buffer arg points at cv directly.
-                    self.nrvo_collapse_tail_set(l, &full);
-                }
+                // @PLN85 / D-own-1 — classify ONCE from the deps fact + tail shape,
+                // then emit. The three old inline branches (recover-hidden-refs /
+                // arg-borrow-copy / multi-arm-rename) are now cells of one selector.
+                let delivery = self.classify_vector_delivery(ls, l, context);
+                let elm_ty = (**elm).clone();
+                self.dispatch_vector_delivery(delivery, &elm_ty, l);
             } else if let Type::Reference(td, ls) = t {
                 // Issue #120: when filter_hidden stripped the deps from a
                 // Reference return type, recover work-ref variables from the
@@ -984,6 +872,162 @@ impl Parser {
             }
         }
         tp
+    }
+
+    /// @PLN85 / D-own-1 — the SELECTOR for an implicit-tail `t == Vector` return:
+    /// read the deps fact `ls` and the tail shape ONCE and pick a [`Delivery`].
+    /// Pure (`&self`) so classification and emission stay separable. Replaces the
+    /// three inline branches the vector arm of `block_result` used to carry.
+    fn classify_vector_delivery(&self, ls: &[u16], l: &[Value], context: &str) -> Delivery {
+        if ls.is_empty() && !l.is_empty() {
+            // Issue #120 mirror (see the Reference arm): when filter_hidden
+            // stripped the deps, recover the tail call's work refs so the site
+            // still binds to the one buffer.
+            let last = &l[l.len() - 1];
+            let extra = Self::collect_hidden_ref_args(last, &self.data);
+            // Chain the wrapper into its callee's buffer — UNLESS the callee
+            // forwards a foreign store and never writes that buffer
+            // (`fn f() -> vector { stack_trace() }`): chaining a grand-caller's
+            // buffer through such a forwarder orphans it (#355 follow-up leak,
+            // 55-stack-trace). The forwarder test reads the callee's BODY shape,
+            // which is pass-stable (unlike its `returned` deps).
+            let callee_forwards = matches!(last.unspan(), Value::Call(d, _)
+                if self.callee_forwards_foreign_store(*d));
+            // #409: a NATIVE / `#rust` decl with a heap return delivers its OWN
+            // store and never writes the `__retbuf` it was handed — route the
+            // result through a fresh local and COPY into `__retbuf` (ForwardCopy).
+            // Such a callee is PASS-STABLE (`code==Null` + a symbol set, identical
+            // in both parse passes), so minting a local here is safe. Copying (not
+            // chaining) keeps the #355 orphan impossible.
+            let native_forwarder = matches!(last.unspan(), Value::Call(d, _) if {
+                let cd = self.data.def(*d);
+                *cd.code() == Value::Null
+                    && (!cd.native().is_empty() || !cd.rust().is_empty())
+                    && matches!(
+                        cd.returned(),
+                        Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+                    )
+            });
+            if !extra.is_empty() && !callee_forwards {
+                Delivery::Rename(extra)
+            } else if native_forwarder {
+                Delivery::ForwardCopy
+            } else {
+                Delivery::AsIs
+            }
+        } else if !self.first_pass
+            && ls.iter().any(|&d| self.vars.is_argument(d))
+            && (self.tail_is_struct_field_read(l)
+                // The whole-arg copy (a2) fires ONLY at the function-body tail: an
+                // `if`/`match` ARM block also reaches block_result (context "if"/
+                // "else"/"match_arm") with a `{ v }` tail, but the arm is already
+                // delivered into the buffer by the outer if-unify / arm-materialise
+                // path — copying it again here orphans the buffer (a11 leak).
+                // `return from block` is the one funnelled return path (row 104).
+                || (context == "return from block"
+                    && self.tail_whole_arg_vector(l).is_some()))
+            && self
+                .return_buffer()
+                .is_some_and(|(_, buf_var)| !ls.contains(&buf_var))
+        {
+            // Row-104 — an implicit-tail return whose value BORROWS a visible
+            // argument: a STRUCT vector FIELD of an arg (`fn getv(b: Box) ->
+            // vector { b.v }`, #415) OR the whole vector arg itself
+            // (`fn idv(v) -> vector { v }`, A.2/a2). Returning the tail as-is
+            // ALIASES the caller's store, so copy it into `__retbuf` (value
+            // semantics). The EXPLICIT `return v` / `return b.v` already does this
+            // (parse_return), suite-proven. Narrowed by the two tail predicates to
+            // whole-arg / struct-field tails: index / call tails stay on the rename
+            // path (the over-broad cut regressed the suite). `ls` is carried for
+            // the alloc-failure fallback rename.
+            Delivery::CopyBorrow(ls.to_vec())
+        } else {
+            // #437/@PLN85 cluster V (O-Move): a multi-arm `match`/`if` vector tail
+            // must deliver EVERY arm's buffer into the one return buffer. The
+            // Vector type dep `ls` can be INCOMPLETE — it carries only the first
+            // arm's `__ref_1`, while a later arm's `__ref_N` is allocated but
+            // unregistered, so scope analysis frees it and the function returns a
+            // dangling ref into a freed store. Union `ls` with every hidden
+            // buffer-arg ref in the tail so ref_return renames each arm's buffer
+            // onto the retbuf (the pre-#437 [__ref_1, __ref_2] shape).
+            let mut full: Vec<u16> = ls.to_vec();
+            if let Some(last) = l.last() {
+                for w in Self::collect_hidden_ref_args(last, &self.data) {
+                    if !full.contains(&w) {
+                        full.push(w);
+                    }
+                }
+            }
+            Delivery::Rename(full)
+        }
+    }
+
+    /// @PLN85 / D-own-1 — emit the mechanism the selector chose for an
+    /// implicit-tail `t == Vector` return. `elm` is the vector element type (for
+    /// the element-copy ops); the tail of `l` is rewritten in place.
+    fn dispatch_vector_delivery(&mut self, delivery: Delivery, elm: &Type, l: &mut [Value]) {
+        match delivery {
+            Delivery::Rename(ws) => {
+                self.ref_return(&ws, l, RetSite::BlockTail);
+                // @P377 / S1: collapse `cv = inner_call(...); cv` so the inner
+                // call's hidden buffer arg points at cv directly.
+                self.nrvo_collapse_tail_set(l, &ws);
+            }
+            Delivery::CopyBorrow(ls) => {
+                // The buffer's existence was verified by the selector; re-fetch it
+                // for the copy (idempotent — nothing mutated in between). Fall back
+                // to the rename path if the copy's work-var allocation fails.
+                if let Some((buf_attr, buf_var)) = self.return_buffer()
+                    && !self.copy_borrow_tail_into_retbuf(elm, l, buf_attr, buf_var)
+                {
+                    self.ref_return(&ls, l, RetSite::BlockTail);
+                    self.nrvo_collapse_tail_set(l, &ls);
+                }
+            }
+            Delivery::ForwardCopy => self.emit_forward_copy_409(elm, l),
+            Delivery::AsIs => {}
+        }
+    }
+
+    /// #409 — a `#native`/`#rust` callee delivers its OWN store and never writes
+    /// the `__retbuf` it was handed; leaving the forward returns that foreign
+    /// value with `__retbuf` empty, so the caller's later in-place `+=` rebuilds
+    /// the empty buffer and drops the data. Mint a fresh `__fwd` local, run the
+    /// call into it, then COPY into `__retbuf` (clear + element-append) — the
+    /// shape a hand-written `r = native(); r` produces. Finalize the return-type
+    /// dep to `{__retbuf}` so a caller binds its result var to the buffer it
+    /// passed (else the signature stays bare-vector and `+=` drops data). A no-op
+    /// when there is no buffer, no work-var, or no tail.
+    fn emit_forward_copy_409(&mut self, elm: &Type, l: &mut [Value]) {
+        let elm_ty = elm.clone();
+        let Some((buf_attr, buf_var)) = self.return_buffer() else {
+            return;
+        };
+        let fwd = self.create_var(
+            "__fwd",
+            &Type::Vector(Box::new(elm_ty.clone()), Deps::none()),
+        );
+        if fwd == u16::MAX {
+            return;
+        }
+        let rec_tp = self.append_elem_tp(&elm_ty);
+        let clear = self.cl("OpClearVector", &[Value::Var(buf_var)]);
+        let append = self.cl(
+            "OpAppendVector",
+            &[Value::Var(buf_var), Value::Var(fwd), Value::Int(rec_tp)],
+        );
+        let Some(last) = l.last_mut() else {
+            return;
+        };
+        let orig = std::mem::replace(last, Value::Null);
+        let set_fwd = crate::data::v_set(fwd, orig);
+        *last = crate::data::v_block(
+            vec![set_fwd, clear, append, Value::Var(buf_var)],
+            Type::Vector(Box::new(elm_ty.clone()), Deps::frame1(buf_var)),
+            "fwd_copy_409",
+        );
+        let dep = Deps::attrs(vec![buf_attr]);
+        self.data.definitions[self.context as usize].returned = Type::Vector(Box::new(elm_ty), dep);
     }
 
     /// Plan-14 phase 07 (P234 runtime): rewrite a body-tail
