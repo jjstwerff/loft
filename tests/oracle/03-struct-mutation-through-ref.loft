@@ -1,0 +1,37 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN89 differential-oracle corpus — AXIS: struct field mutation through a
+// reference parameter (the store-lifetime / ownership-by-shape class). Whether
+// a `&`-param's writes are seen by the caller, and whether a struct field's
+// vector is aliased vs copied, is decided in codegen and has historically
+// diverged interp-vs-native. Both backends must observe the same final state.
+
+struct Counter { n: integer, tags: vector<text> }
+
+fn bump(c: &Counter, by: integer) {
+  c.n += by;
+  c.tags += ["bumped"];
+}
+
+fn main() {
+  c = Counter { n: 10, tags: ["init"] };
+  bump(c, 5);        // &-ref: caller must see the writes
+  bump(c, 7);
+  print("n={c.n} tags={len(c.tags)}\n"); // n=22, tags=3
+
+  // nested field read + write through an element
+  v = [Counter { n: 1, tags: [] }, Counter { n: 2, tags: [] }];
+  v[0].n += 100;
+  v[1].tags += ["x"];
+  print("v0n={v[0].n} v1tags={len(v[1].tags)}\n"); // 101, 1
+
+  // a plain (non-&) param must NOT grow the caller's vector
+  d = Counter { n: 0, tags: ["a"] };
+  add_local(d);
+  print("dtags={len(d.tags)}\n"); // still 1 — local append not visible
+}
+
+fn add_local(c: Counter) {
+  c.tags += ["local"];
+}

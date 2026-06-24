@@ -1,0 +1,26 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN89 differential-oracle corpus — AXIS: left-to-right evaluation order
+// (E-Left). Operands reduce left first, then right, so any side effects happen
+// in source order regardless of operator precedence. A backend that reorders
+// (e.g. evaluates the `*` subtree before the leading `+` operand) would diverge
+// here and nowhere a pure-value test looks.
+
+fn note(log: &text, tag: text, v: integer) -> integer {
+  log += tag;
+  return v;
+}
+
+fn main() {
+  // `a + b * c`: `*` binds tighter, but the OPERANDS still evaluate left to
+  // right, so the side-effect log is "abc" and the value is 1 + 2*3 = 7.
+  log = "";
+  r = note(log, "a", 1) + note(log, "b", 2) * note(log, "c", 3);
+  print("r={r} order={log}\n");
+
+  // nested calls keep source order too
+  log2 = "";
+  r2 = note(log2, "x", 10) - note(log2, "y", 4);
+  print("r2={r2} order2={log2}\n"); // r2 = 6, order2 = xy
+}

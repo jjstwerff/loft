@@ -1,0 +1,31 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN89 differential-oracle corpus — AXIS: arithmetic nested inside other
+// runtime (`&mut`) calls. This is the shape that breaks `--native` codegen when
+// an op is `&mut self` and inlined as an argument to another `&mut` call (the
+// E0499 double-borrow this session's overflow-log attempt hit). The interpreter
+// dispatches each op separately and never sees it; native inlines, so a nesting
+// bug shows up here and NOWHERE in the interpreter. Both backends must agree.
+
+fn at(t: text, i: integer) -> character {
+  // index computed by arithmetic, nested in the `[]` runtime call
+  return t[i - 1];
+}
+
+fn main() {
+  s = "hello";
+  // arithmetic (i - 1) nested inside text indexing
+  for i in 1..6 { print("{at(s, i)}"); }
+  print("\n");
+
+  // arithmetic nested inside vector indexing
+  v = [10, 20, 30, 40];
+  acc = 0;
+  for j in 0..4 { acc += v[(j * 2) % 4]; }
+  print("acc={acc}\n");
+
+  // arithmetic nested inside a fn argument, itself nested in another call
+  inner = "{1 + 2 * 3}_{(8 - 1) / 7}";
+  print("len={len(inner)} inner={inner}\n");
+}

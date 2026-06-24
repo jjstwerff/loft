@@ -1,0 +1,25 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN89 differential-oracle corpus — AXIS: the arithmetic fault contract
+// (E-Uncomp / E-Coalesce). Locks that the interpreter and `--native` AGREE on
+// what a fault does — whatever the contract is (trap on pre-C80 mains,
+// null-and-continue after #447 merges). Uses immediate-`??` forms so the result
+// is deterministic and the program produces output on either main.
+
+fn main() {
+  z = 0;
+  print("div={(10 / z) ?? -1}\n");        // div-by-zero, discharged -> -1
+  print("mod={(10 % z) ?? -2}\n");        // mod-by-zero, discharged -> -2
+  print("fdiv={(0.0 / 0.0) ?? -3.0}\n");  // float NaN (null), discharged -> -3.0
+
+  big = 9223372036854775807;              // i64::MAX
+  print("ovf={(big + 1) ?? -4}\n");       // overflow, discharged -> -4
+  print("ovfm={(big * 2) ?? -5}\n");      // overflow, discharged -> -5
+
+  // null is contagious: a null operand makes the op null (E-NullArg), then `??`
+  // supplies the fallback.
+  bad = (10 / z) ?? null;
+  print("contag={(bad + 1) ?? -6}\n");    // null + 1 = null -> -6
+  print("cmp={bad == null}\n");           // null compares true against the sentinel
+}

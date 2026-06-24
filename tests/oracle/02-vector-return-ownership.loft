@@ -1,0 +1,40 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN89 differential-oracle corpus — AXIS: vector-return ownership (the NRVO /
+// adopt-on-return class, @PLN85 cluster V / #437). A function that builds and
+// returns a vector, then the caller `+=`s onto it (or concatenates two returned
+// vectors), is the exact shape where a store leaked or a backend miscompiled the
+// return buffer. The leak dimension (neither backend leaks a store) is as
+// load-bearing here as the value.
+
+fn squares(n: integer) -> vector<integer> {
+  out = [];
+  for i in 0..n { out += [i * i]; }
+  return out;
+}
+
+fn pick(flag: boolean, n: integer) -> vector<integer> {
+  // multi-arm value-return of a vector — both arms must deliver into the one
+  // return buffer (cluster I-a/I-b).
+  if flag { return squares(n); }
+  return [n, n, n];
+}
+
+fn main() {
+  a = squares(5);
+  a += [99];                       // += on a returned vector (the #437 shape)
+  sa = 0;
+  for x in a { sa += x; }
+  print("a_sum={sa} a_len={len(a)}\n"); // 0+1+4+9+16+99 = 129, len 6
+
+  // concat two returned vectors, then read the last element
+  d = squares(3);
+  e = squares(4);
+  d += e;
+  print("d_len={len(d)} d_last={d[len(d) - 1]}\n"); // 3 + 4 = 7, last = 9
+
+  // multi-arm vector return through a second return
+  p = pick(true, 4);
+  print("p_sum={p[0] + p[1] + p[2] + p[3]} p_len={len(p)}\n"); // 0+1+4+9=14, len 4
+}

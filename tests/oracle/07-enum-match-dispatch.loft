@@ -1,0 +1,28 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN89 differential-oracle corpus — AXIS: enum/match dispatch with payload
+// extraction. Struct-enum variant fields are laid out by codegen, and matching
+// + destructuring them (especially as call args / vector elements) is a known
+// interp-vs-native divergence surface (@P303). Both backends must agree.
+
+enum Shape { Circle { radius: integer }, Rect { width: integer, height: integer } }
+
+fn area(s: Shape) -> integer {
+  return match s {
+    Circle { radius } => radius * radius * 3,
+    Rect { width, height } => width * height,
+  };
+}
+
+fn main() {
+  c = Circle { radius: 2 };
+  r = Rect { width: 3, height: 4 };
+  print("circle={area(c)} rect={area(r)}\n"); // 12, 12
+
+  // match over a vector of enum values (element destructuring path)
+  shapes = [Circle { radius: 1 }, Rect { width: 5, height: 6 }, Circle { radius: 3 }];
+  total = 0;
+  for s in shapes { total += area(s); }
+  print("total={total}\n"); // 3 + 30 + 27 = 60
+}

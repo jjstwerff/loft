@@ -1,0 +1,32 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN89 differential-oracle corpus — AXIS: closure capture + higher-order use.
+// A closure factory captures its enclosing fn's parameters into a synthesized
+// cell whose layout/ownership is codegen-decided; two factory calls must yield
+// independent records (the H2 store-reuse bug). map/filter materialization is a
+// separate known interp-vs-native divergence surface. Both backends must agree.
+
+fn adder(base: integer, factor: integer) -> fn(integer) -> integer {
+  // captures `base` + `factor` (enclosing-fn params) into the returned closure
+  return fn(x: integer) -> integer { base + x * factor };
+}
+
+fn main() {
+  f = adder(100, 5);
+  g = adder(1000, 2);   // a second record must NOT reuse the first's store
+  print("f3={f(3)} f0={f(0)} g3={g(3)}\n"); // 115, 100, 1006
+
+  // map over a vector (inferred `|x|` lambda), then sum
+  v = [1, 2, 3, 4];
+  doubled = v.map(|x| { x * 5 });
+  sd = 0;
+  for x in doubled { sd += x; }
+  print("sumdoubled={sd}\n"); // (1+2+3+4)*5 = 50
+
+  // filter, then sum
+  kept = v.filter(|x| { x > 2 });
+  sk = 0;
+  for x in kept { sk += x; }
+  print("sumkept={sk} keptlen={len(kept)}\n"); // 3+4=7, len 2
+}
