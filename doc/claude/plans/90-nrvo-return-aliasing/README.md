@@ -12,18 +12,19 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 | A — Probe catalogue | ✅ 8 probes; both sub-shapes isolated (06 raw, 08 materialized) |
 | B — Mechanism investigation | ✅ VERIFIED (agent IR/runtime traces) — see [cluster-I](cluster-I-nrvo-coexist.md) |
 | C — Fix design | ✅ O-Move: every arm of a single-tail vector match delivers into the one return buffer |
-| D — Implementation | 🟡 **ENCODE side CLOSED** — I-a control.rs:906 · I-b control.rs:4101 (cbor suite GREEN, both backends). **I-c (decode side) OPEN.** |
+| D — Implementation | ✅ **ALL THREE clusters FIXED** — I-a control.rs:906 · I-b control.rs:4101 · I-c scopes.rs (2 hunks). **ztcbor 3/3 — the world is consistent.** |
 
-> **I-a + I-b landed** (cbor ENCODE green both backends, full loft suite 2533/2534 — the 1 fail =
-> env-only `38_import` DNS baseline). **I-c OPEN** — it's an ENCODE-side *vector-adopt free* bug
-> (not decode): `buf = head()` adopts the NRVO store but the witness-pairing gate (scopes.rs:956)
-> omits `Type::Vector`, so the store is freed while returned (probe 09; ztcbor's re-encode surfaces
-> it). It is **`STABILITY_REDFLAGS.md` cluster 1** — the blanket fix (add `Type::Vector` at 956)
-> REGRESSED cbor 02, because a patch at site 956 broke the I-b fix at site 4101 (the adopt-fact has
-> no single home). **Owned in-plan — not filed, not routed.** The fix makes the ~6 adopt-fact sites
-> *consistent* (the narrow returned-adopt-vs-appended-temp predicate aligned with scopes.rs:1643).
-> **The plan closes only when ztcbor is green with no regression.** Agent re-engaged to pin the
-> narrow fix. Mechanism: [cluster-I-nrvo-coexist.md](cluster-I-nrvo-coexist.md).
+> **All three clusters closed; the consumer that opened this (ztcbor) is GREEN 3/3, both backends.**
+> I-a (raw match) + I-b (materialized match) restored cbor ENCODE; **I-c** (an ENCODE-side
+> *vector-adopt free*, surfaced by ztcbor re-encoding a decoded map) is fixed by aligning the
+> witness-pairing with the **escape** signal — record the `__ref_N → buf` vector pairing without the
+> dep-strip, and emit the conditional free only when the witness is a `return_source` (so the
+> returned `buf` is protected, the appended temp `ki` keeps its unconditional free). This is the
+> **`STABILITY_REDFLAGS.md` cluster 1** lesson made concrete: the blanket `Type::Vector` gate
+> REGRESSED cbor (a patch at site 956 broke the I-b fix at site 4101), so the fix makes the sites
+> *consistent* rather than widening one. **Owned in-plan — nothing filed or routed.** Mechanism:
+> [cluster-I-nrvo-coexist.md](cluster-I-nrvo-coexist.md). Remaining to fully close the plan:
+> graduate guarantee probes (06/07/08/09 + a cbor `roundtrip(CMap)`) to `tests/scripts/`.
 
 **What triggered this.** The zero-trust consumer (dogfood) reported that the
 released loft (`2026.6.0`, carrying the #437 fix merged as #440) **regressed** —
@@ -79,7 +80,7 @@ a narrowing of the return-site condition.
 |---|---|---|---|---|---|
 | I-a | multi-arm **raw** vector `match` drops a later arm's return buffer → dangling ref | corruption (silent) | both (interp `ki=3`, native `ki=99`) | 06, 07 | **FIXED** control.rs:906 — [cluster-I](cluster-I-nrvo-coexist.md) |
 | I-b | same root via **materialized** match (block-bodied arm → `result` var) | corruption (silent) | both | 02, 08 | **FIXED** control.rs:4101 — [cluster-I](cluster-I-nrvo-coexist.md) |
-| I-c | **decode side** — `encode∘decode` not byte-identical (a vector return the encode-shape fixes miss) | corruption (silent) | TBD | ztcbor `test_decode_and_accessors` | **OPEN** — agent pinning |
+| I-c | vector-**adopt free** — `buf = head()` adopts the NRVO store but the witness-pairing gate omits Vector → freed-while-returned | corruption (silent) | both | 09, ztcbor `test_decode_and_accessors` | **FIXED** scopes.rs (2 hunks) — [cluster-I](cluster-I-nrvo-coexist.md) |
 
 ## Probe suite
 

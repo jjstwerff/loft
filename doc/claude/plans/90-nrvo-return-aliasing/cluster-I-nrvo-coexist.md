@@ -92,10 +92,24 @@ REGRESSED cbor 02 (`[162 1 2 3 4]` → `[162 1 2 4]`) — it over-fires for the 
 owns. **A patch to site 956 broke the fix at site 4101** — the signature of a fact with no single home.
 
 **Owned IN-PLAN (not filed, not routed to @PLN85).** An investigation owns every problem it
-surfaces; plan-90 closes only when ztcbor is green with no regression. Correct fix = the NARROW
-predicate that fires the witness-pairing for a RETURNED adopt (`buf` flows to the fn return) but NOT
-an appended temp (`ki` consumed by `buf +=`), aligned with how 1643 already gates `Type::Vector` —
-making the sites *consistent*, not blanket-widening one. Agent re-engaged to pin it.
+surfaces; plan-90 closes only when ztcbor is green with no regression.
+
+**FIXED — `scopes.rs`, two hunks (the consistent, narrow fix).** The distinguishing signal is
+**escape**: `buf` ∈ `return_sources` (its store flows to the fn return); `ki` ∉ (it's copied into
+`buf` by `OpAppendVector` and discarded) — the same signal `suppress_source` (1643) already uses.
+- **Hunk 1 (~956):** record the `__ref_N → buf` vector witness pairing **WITHOUT** the
+  Reference/Enum `make_independent` dep-strip. (The blanket fix's regression came from the strip: it
+  flipped the appended temp `ki` to `owns=true` → a per-loop `OpFreeRef(ki)` that freed `__ref_2`
+  mid-loop. Skipping the strip keeps `ki`'s `["__ref_2"]` dep and its once-at-fn-exit free.)
+- **Hunk 2 (~1856):** emit the conditional `OpFreeRefIfDistinct(__ref_N, buf)` **only when the
+  vector witness is a return source** (`witness_ok`); Reference/Enum keep their unconditional
+  pairing. So the escaping `buf` gets the safe conditional free; the appended `ki` is untouched.
+
+Verified BOTH backends: probe 09 `a len=4`; cbor 02 `[162 1 2 3 4]` (the case the blanket fix broke
+— intact); **ztcbor suite 3/3** (the I-c gate); cbor suite green; I-a/I-b probes (06/07/08) +
+01/03/04/05 green; guards 137/298. The deeper root (the `+=` path re-pointing `buf`'s dep — a
+one-source-of-truth `operators.rs` change with large blast radius) is recorded but deliberately NOT
+taken here: the contained free-site fix restores consistency without that risk.
 
 ## Hazards (agent-enumerated; check on I-b too)
 1. **Native parity** — both backends corrupt differently; verify each post-fix.
