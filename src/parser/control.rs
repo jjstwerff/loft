@@ -903,10 +903,28 @@ impl Parser {
                         self.nrvo_collapse_tail_set(l, ls);
                     }
                 } else {
-                    self.ref_return(ls, l, RetSite::BlockTail);
+                    // #437/plan-90 (O-Move): a multi-arm `match`/`if` vector tail
+                    // must deliver EVERY arm's buffer into the one return buffer.
+                    // The Vector type dep `ls` can be INCOMPLETE — it carries only
+                    // the first arm's `__ref_1`, while a later arm's `__ref_N` is
+                    // allocated but unregistered, so scope analysis frees it and the
+                    // function returns a dangling ref into a freed store (the arm
+                    // transferred its store out but the callee still freed it).
+                    // Union `ls` with every hidden buffer-arg ref in the tail so
+                    // ref_return renames each arm's buffer onto the retbuf (the
+                    // pre-#437 [__ref_1, __ref_2] shape).
+                    let mut full: Vec<u16> = ls.to_vec();
+                    if let Some(last) = l.last() {
+                        for w in Self::collect_hidden_ref_args(last, &self.data) {
+                            if !full.contains(&w) {
+                                full.push(w);
+                            }
+                        }
+                    }
+                    self.ref_return(&full, l, RetSite::BlockTail);
                     // @P377 / S1: collapse `cv = inner_call(...); cv` so the
                     // inner call's hidden buffer arg points at cv directly.
-                    self.nrvo_collapse_tail_set(l, ls);
+                    self.nrvo_collapse_tail_set(l, &full);
                 }
             } else if let Type::Reference(td, ls) = t {
                 // Issue #120: when filter_hidden stripped the deps from a

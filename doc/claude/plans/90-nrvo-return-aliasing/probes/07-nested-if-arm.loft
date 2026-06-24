@@ -1,0 +1,20 @@
+// Cluster I-b candidate: a match arm that is itself a nested `if` (cbor's CInt arm
+// shape: `CI{value} => if value>=0 { head(0,value) } else { head(1,...) }`). cbor's
+// encode materializes into a `result` var rather than staying a raw match-tail, so the
+// 906 raw-match fix may not reach it. Does the nested-if arm reproduce post-906-fix?
+enum CV { CNull, CI { value: integer not null } }
+fn head(major: integer, arg: integer) -> vector<u8> {
+  buf: vector<u8> = []; buf += [(major * 32 + arg) as u8]; return buf;
+}
+fn byte_lt(a: vector<u8>, b: vector<u8>) -> boolean { return (a[0] ?? 0) < (b[0] ?? 0); }
+fn encode(v: CV) -> vector<u8> {
+  match v {
+    CNull => head(7, 22),
+    CI { value } => if value >= 0 { head(0, value) } else { head(1, 0 - value - 1) },
+  }
+}
+fn main() {
+  ki = encode(CI{value:1});
+  z = byte_lt(encode(CI{value:3}), ki);
+  println("ki={ki[0] ?? 99} (EXPECT 1)  z={z} (EXPECT false)");
+}
