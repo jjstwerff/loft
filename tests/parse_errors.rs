@@ -1585,3 +1585,27 @@ fn pln87_l7_ref_in_vector_literal_is_error() {
     code!("fn test() { a = 3; v = [&a]; print(\"{v[0]}\\n\"); }")
         .error("`&` is not a general operator — it binds a reference only as the whole right-hand side of an assignment (`a = &b`). Pass a `&` parameter WITHOUT `&` (`f(x)`, the reference comes from the parameter type); do not use `&` in an argument or sub-expression at pln87_l7_ref_in_vector_literal_is_error:1:28");
 }
+
+// @PLN87 D-bind-7 — the LAST position the VITAL rule (binding.md B-Ref-AnnotationOnly)
+// did not cover: a bare `&a;` STATEMENT.  `&` binds a reference only as an assignment
+// RHS; standing alone (or as a block-final value) it discards the reference, which the
+// rule forbids — `&` may appear ONLY at a binding.  Caret points at the `&`.
+#[test]
+fn pln87_d_bind_7_bare_amp_statement_is_error() {
+    code!("fn test() { a = 5; &a; print(\"{a}\\n\"); }")
+        .error("`&` is not a general operator — it binds a reference only as the whole right-hand side of an assignment (`a = &b`); a bare `&a` discards the reference. Drop it, or write `name = &a` to bind one at pln87_d_bind_7_bare_amp_statement_is_error:1:20");
+}
+
+#[test]
+fn pln87_d_bind_7_bare_amp_field_statement_is_error() {
+    code!("struct O { y: integer } fn test() { o = O { y: 1 }; &o.y; print(\"{o.y}\\n\"); }")
+        .error("`&` is not a general operator — it binds a reference only as the whole right-hand side of an assignment (`a = &b`); a bare `&a` discards the reference. Drop it, or write `name = &a` to bind one at pln87_d_bind_7_bare_amp_field_statement_is_error:1:53");
+}
+
+// A block-final `&a` (a function/block tail value) is likewise outside a binding —
+// rejected, not silently a no-op return.
+#[test]
+fn pln87_d_bind_7_block_final_amp_is_error() {
+    code!("fn mk() -> integer { a = 5; &a } fn test() { print(\"{mk()}\\n\"); }")
+        .error("`&` is not a general operator — it binds a reference only as the whole right-hand side of an assignment (`a = &b`); a bare `&a` discards the reference. Drop it, or write `name = &a` to bind one at pln87_d_bind_7_block_final_amp_is_error:1:29");
+}

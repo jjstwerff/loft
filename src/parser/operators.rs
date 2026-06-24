@@ -478,6 +478,12 @@ impl Parser {
                         || self.lexer.peek_token("%=")
                         || self.lexer.peek_token("/=");
                     let next_terminates = self.lexer.peek_token(";") || self.lexer.peek_token("}");
+                    // An invalid `&` must not stay "pending": clear the flag in each
+                    // error branch so it cannot leak into `parse_assign_op`'s
+                    // reference-lowering (1160) or the D-bind-7 bare-statement guard
+                    // in `parse_assign` (which would then double-report).  Only the
+                    // accepted case (terminates AND is a place) keeps `amp_pending`
+                    // true, to be consumed by the binding that follows.
                     if next_assign {
                         diagnostic!(
                             self.lexer,
@@ -486,6 +492,7 @@ impl Parser {
                              binding as a link to its source at the binding site (`x = &src`), \
                              not an assignment target; drop the `&` (the binding is already linked)"
                         );
+                        self.amp_pending = false;
                     } else if !next_terminates {
                         diagnostic!(
                             self.lexer,
@@ -495,6 +502,7 @@ impl Parser {
                              parameter WITHOUT `&` (`f(x)`, the reference comes from the \
                              parameter type); do not use `&` in an argument or sub-expression"
                         );
+                        self.amp_pending = false;
                     } else if !Self::is_amp_place(code, &self.data) {
                         // #1 — a valid binding RHS still needs a PLACE operand.
                         diagnostic!(
@@ -504,6 +512,7 @@ impl Parser {
                              or vector element — not a temporary (a literal, computed value, \
                              or call result)"
                         );
+                        self.amp_pending = false;
                     }
                 }
                 return t;

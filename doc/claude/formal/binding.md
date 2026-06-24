@@ -10,7 +10,8 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > τ-lvalue); the `&` belongs to the **variable's type**, fixed at its binding — it is
 > not something the expression grammar applies per use. The @PLN87 ladder (built in the
 > `loft2` worktree, branch `tuxedo-work2`) **realises this model** and landed via PR#436
-> (merged into this branch); the deviation list is now down to one residual (D-bind-7).
+> (merged into this branch); the deviation list is now **closed (OPEN: 0)** — D-bind-7,
+> the last residual, was fixed this cycle.
 >
 > The model here is now also the one in [OWNERSHIP_MODEL.md § The law](../OWNERSHIP_MODEL.md) —
 > @PLN87 rewrote it to the bind-site-link framing (the old "`&` = reassignment write-back"
@@ -107,9 +108,8 @@ rule `C-Ref` in [types.md](types.md): a `&τ` is accepted wherever a `τ` is.)
 
 ## Deviations
 
-OPEN: **1** — D-bind-7 (a residual of the ⚑ vital rule). The @PLN87 ladder (L1–L6) and the
-model + doc reconciliation **landed via PR#436** (merged into this branch) and are verified
-below.
+OPEN: **0**. The @PLN87 ladder (L1–L6), the model + doc reconciliation (PR#436), and the
+last residual D-bind-7 are all closed and verified below.
 
 > **Landed via @PLN87 / PR#436 (verified, closed):**
 > - **D-bind-0** — `&τ` is now `Type::RefVar` (a reference type the variable carries); `&` is
@@ -123,24 +123,20 @@ below.
 > - **D-bind-6** — `&`-parameter link: `fn f(b:&integer){b=4}; f(a); a==4` → both backends.
 > - **D-bind-doc** — `OWNERSHIP_MODEL § The law` rewritten to "heap aliases by default; `&`
 >   binds a live REFERENCE"; the write-back framing is gone.
+> - **D-bind-7 (the last residual ⚑ vital position)** — a bare `&a;` statement (and a
+>   block-final `{ &a }`, the same leak) is now parse-rejected. The fix sits at the statement
+>   chokepoint, `parser/expressions.rs::parse_assign`: a statement that BEGAN with a prefix
+>   `&` whose `&` was not consumed by an assignment is the non-binding use the rule forbids.
+>   The `operators.rs` guard clears `amp_pending` whenever it has already reported the `&`
+>   (sub-expression / non-place), so the flag is still set at the chokepoint only in the
+>   unreported bare/block-final case; a `started_with_amp` gate keeps a leaked flag from a
+>   nested `&(…)` parse from mis-firing. Verified on interp **and** native; `pln87_d_bind_7_*`
+>   in `tests/parse_errors.rs` (bare statement · bare field statement · block-final). The
+>   caret points at the `&`.
 >
 > One known **deferred** case (not a leak): `&`-write-back from a CALL/var RHS needs ownership
 > transfer — `tests/issues.rs` ignored `pln87_amp_writeback_from_call_writes_back`, tracked in
 > the @PLN87 plan, consistent with `&` on a non-lvalue being rejected.
-
-### D-bind-7 — a bare `&a;` statement is not parse-rejected  ⚑ vital (residual)
-- **Violates:** B-Ref-AnnotationOnly
-- **Where:** @PLN87 rejects prefix `&` in every EXPRESSION position — assignment target,
-  field target, compound-assign target, `(&a)`, a call result, a literal, a call argument, a
-  sub-expression, a vector literal, an `if` condition — each with a clean parse error naming
-  the rule (*"`&` is not a general operator …"*; `pln87_amp_on_*` in `tests/parse_errors.rs`).
-  The one gap: a **bare `&a;` statement** still parses (a no-op) instead of that parse error.
-- **Effect:** `fn main(){ a=5; &a; }` runs and prints nothing, where the VITAL rule wants a
-  parse error at `&`. Harmless (the reference is discarded) but it is a position *outside a
-  binding*, which the rule forbids.
-- **Status:** OPEN — the last position the rule does not yet cover.
-- **Removal:** extend the prefix-`&` guard that already rejects the expression positions to the
-  bare-statement position.
 
 ---
 

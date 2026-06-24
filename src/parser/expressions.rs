@@ -2416,6 +2416,16 @@ use a separate collection or add after the loop"
     #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_assign(&mut self, code: &mut Value) -> Type {
         let mut parent_tp = Type::Null;
+        // @PLN87 D-bind-7 — does THIS statement begin with a prefix `&`?  No valid
+        // statement does: `&` is only ever a binding RHS (`x = &a`) or a type
+        // annotation, both AFTER a name.  Captured before the parse so a nested
+        // parse (`&(1+2)` re-enters parse_assign for the inner `1+2`, which begins
+        // with `1`) doesn't see the outer `&` — `amp_pending` is a global flag that
+        // would otherwise leak into it.  `&&` is its own token, so this never
+        // mis-fires on logical-and.  The start position also points the caret below
+        // at the `&` (the cursor has drifted to `;`/`}` by detection time).
+        let stmt_start_pos = self.lexer.peek_pos().clone();
+        let started_with_amp = self.lexer.peek_token("&");
         let mut f_type = self.parse_operators(&Type::Unknown(0), code, &mut parent_tp, 0);
         if let (Type::RefVar(_), Value::Var(v_nr)) = (&f_type, &code) {
             self.vars.in_use(*v_nr, true);
@@ -2715,6 +2725,29 @@ use a separate collection or add after the loop"
                 }
                 return result;
             }
+        }
+        // @PLN87 D-bind-7 — a statement that BEGAN with `&` whose `&` was not
+        // consumed by an assignment: a bare `&a;` statement or a block-final
+        // `{ &a }`.  Both are non-binding positions the VITAL rule (binding.md
+        // B-Ref-AnnotationOnly) forbids — `&` binds a reference only as an
+        // assignment RHS (`name = &a`); a standalone `&a` discards it.  The
+        // operators.rs guard clears `amp_pending` when it has already reported the
+        // `&` (a sub-expression `&a + 1`, a non-place `&(1+2)`), so the flag is
+        // still set here ONLY in the unreported bare/block-final case; the
+        // `started_with_amp` gate keeps a leaked flag from a nested `&(…)` parse
+        // from mis-firing.  Report once on pass 2.
+        if started_with_amp && self.amp_pending {
+            if !self.first_pass {
+                diagnostic_at!(
+                    self.lexer,
+                    &stmt_start_pos,
+                    Level::Error,
+                    "`&` is not a general operator — it binds a reference only as the \
+                     whole right-hand side of an assignment (`a = &b`); a bare `&a` \
+                     discards the reference. Drop it, or write `name = &a` to bind one"
+                );
+            }
+            self.amp_pending = false;
         }
         *code = to;
         f_type
