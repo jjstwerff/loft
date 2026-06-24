@@ -50,15 +50,24 @@ tail-shape cases. That is the thicket the beacon exists to delete: each leak clo
 another condition rather than by completing the fact. ([[evolve-data-structures-when-burdened]]
 — the condition-count IS the signal the structure, not the logic, is the burden.)
 
-**Entry point: the typed `Deps` substrate (D-own-3 / [DEPS_INVENTORY.md](DEPS_INVENTORY.md)
-H2).** The `Vec<u16>` whose entries overload five marker meanings across two address spaces
-is what makes the fact hard to read and easy to mis-derive — so every site re-checks shapes
-instead of reading one typed answer. Type it first; then the `block_result` / `parse_return`
-return-delivery thicket and the [STABILITY_REDFLAGS.md](STABILITY_REDFLAGS.md) re-derivation
-clusters can collapse onto it. The [formal/ownership.md](formal/ownership.md) `D-own-*`
-deviations are the finish line: OPEN → 0 means the class is closed by construction. The
-differential oracle (`tests/oracle/`, @PLN89) is the safety net for the exploration — every
-collapse is validated leak/value-identical across both backends before it lands.
+**The substrate is already done — the work is the collapse.** Typed `Deps` (D-own-3 /
+[DEPS_INVENTORY.md](DEPS_INVENTORY.md) H2) is COMPLETE (steps 1–5, 2026-06-12): the newtype,
+named constructors, space-checked queries (`frame_vars` / `as_attr_indices`), and the
+`CALLEE_FRAME_BIT` value tag all landed, debug+release suites green. So the fact is now
+*typed and readable*; what remains is **D-own-1 — every store-lifetime decision should READ
+that fact, not re-derive it per site.**
+
+**Entry point: the `block_result` return-delivery thicket** (`src/parser/control.rs`, the
+heart of D-own-1). Measured: **459 lines, 45 special-case helper calls, 15 distinct
+tail-shape decision helpers** — each re-deriving "which store does this return deliver / who
+frees `__retbuf`" from the parse-tree SHAPE rather than reading one deps fact. #448 was a
+fresh deposit into it (three more helpers). The first collapse is scoped in
+[plans/85-store-lifetime-retirement/D-own-1-return-delivery-collapse.md](plans/85-store-lifetime-retirement/D-own-1-return-delivery-collapse.md).
+Then `parse_return` and the [STABILITY_REDFLAGS.md](STABILITY_REDFLAGS.md) clusters follow.
+The [formal/ownership.md](formal/ownership.md) `D-own-*` deviations are the finish line: OPEN
+→ 0 means the class is closed by construction. The differential oracle (`tests/oracle/`,
+@PLN89) is the safety net — every collapse validated leak/value-identical across both backends
+before it lands.
 
 **The invariant as a violation set.** The whole class is ONE invariant — *each heap store has
 exactly one owner at every point; all mutation flows through that owner; a non-owning alias is
