@@ -83,9 +83,11 @@ is the only place a leading `&` is allowed. The parser disambiguates purely by p
 
 ## Deviations
 
-OPEN: **2** — (was 4; D-gram-3 `**`-associativity + D-gram-1 precedence-doc both closed)
+OPEN: **0** — (was 4). D-gram-3 (`**` right-assoc) + D-gram-1 (precedence-doc) closed in code/
+doc; D-gram-2 + D-gram-4 resolved as **decided edges** (the spec-may-adjust outcome the roadmap
+predicted — they leave formal/ rather than being driven to zero).
 
-> **D-gram-1 (CLOSED this cycle) — the written grammar now states precedence + associativity.**
+> **D-gram-1 (CLOSED) — the written grammar now states precedence + associativity.**
 > [LOFT.md § Operators](../LOFT.md#operators) carries the full twelve-level ladder (the stale
 > table is fixed: `**` added at level 10, `as` moved to 11) with an explicit associativity
 > statement (all left-assoc except `**` right-assoc) and the unary-binds-tightest note
@@ -94,30 +96,17 @@ OPEN: **2** — (was 4; D-gram-3 `**`-associativity + D-gram-1 precedence-doc bo
 > grouping. The "read-the-parser tax" (FORMALIZATION.md rough spot #4) is paid down — the two
 > user-facing statements pin every expression's shape, matching `OPERATORS` / `parse_operators`.
 
-### D-gram-2 — the surface is not context-free
-- **Violates:** the implicit goal that the grammar is a context-free spec
-- **Where:** speculative backtracking in the parser — type-vs-variable, struct-init
-  (`S { … }`) vs block (`{ … }`) — plus the lexer's Formatting mode for string
-  interpolation (`"{e}"`). The token stream's meaning depends on parse context.
-- **Effect:** there is no context-free grammar that accepts exactly loft; a generated
-  parser / external tool can't be derived from a CFG.
-- **Status:** OPEN — a known, accepted shape today; recorded so a formal grammar attempt
-  knows the boundary.
-- **Removal:** (long-horizon) a grammar whose ambiguities are resolved without unbounded
-  backtracking, or an explicit statement of the context-sensitive productions.
+> **D-gram-2 (RESOLVED — decided edge) — the surface is deliberately not context-free.**
+> The speculative backtracking (type-vs-variable, `S { … }`-vs-block) + lexer interpolation
+> modes are accepted on purpose: they buy real ergonomics and no consumer needs a CFG (tooling
+> reuses the hand-written parser, which IS the spec). Decided, not chased → [DESIGN_DECISIONS.md
+> C82](../DESIGN_DECISIONS.md#c82--lofts-surface-is-deliberately-not-context-free).
 
-### D-gram-4 — `&` is overloaded (bitwise-and vs reference annotation)
-- **Violates:** the clean separation G-Amp-* relies on position alone
-- **Where:** infix `&` (bitwise-and, level 6) and prefix `&` (reference annotation) share
-  one token; disambiguation is positional.
-- **Effect:** the overload couples this grammar to binding.md: enforcing "prefix `&` only
-  at a binding" is a grammar obligation, not just a binding one.
-- **Status:** OPEN but **its removal condition is now MET** — binding.md D-bind-0..D-bind-7
-  are all closed: a prefix `&` is rejected in every non-binding position (the last, the bare
-  statement, closed by A1 this cycle), so it can never reach an expression slot. This is now
-  the roadmap **B3 decision**: reclassify D-gram-4 as a *decided edge* (an accepted positional
-  overload, like Rust's `&`) rather than a deviation — the residual the roadmap said to
-  "fold/close once A1 lands."
+> **D-gram-4 (RESOLVED — decided edge) — `&` stays one token, disambiguated by position.**
+> Infix `&` is bitwise-and; a *leading* `&` is the reference annotation. A1 (binding.md
+> D-bind-7) made prefix `&` a parse error in every non-binding position, so the positional rule
+> is now **total** — like Rust, one `&` token is kept. Decided → [DESIGN_DECISIONS.md
+> C81](../DESIGN_DECISIONS.md#c81---stays-one-token-disambiguated-by-position-bitwise-and-vs-reference).
 
 ---
 
@@ -125,6 +114,7 @@ OPEN: **2** — (was 4; D-gram-3 `**`-associativity + D-gram-1 precedence-doc bo
 
 The precedence rules are checkable by evaluation: `1 + 2 & 3 == 3` (additive tighter than
 bitwise-and), `2 ** 3 ** 2 == 512` (RIGHT-assoc `**`; guarded by
-`tests/issues.rs::power_is_right_associative`), `x as integer as float` (left-assoc `as`).
-D-gram-2's falsifier is structural (no CFG accepts loft); D-gram-4's is binding.md's `[&a]` →
-internal-error case.
+`tests/issues.rs::power_is_right_associative`), `x as integer as float` (left-assoc `as`). The
+two decided edges have no falsifier *to drive to zero* — they are accepted shapes: the
+positional `&` rule is enforced by binding.md's `pln87_amp_*` parse-error tests, and the
+non-CFG surface is the parser's own behaviour (COMPILER.md documents the disambiguation points).

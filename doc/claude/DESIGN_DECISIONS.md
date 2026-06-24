@@ -1590,3 +1590,73 @@ A consumer shows that silent null-and-continue (plus the opt-in debug log) genui
 critical information — e.g. a class of uncomputable that *should* be noisy by default. Even
 then the fix is more **observability** (turning a debug log on by default, a louder surface),
 never a halt.
+
+---
+
+## C81 — `&` stays one token, disambiguated by position (bitwise-and vs reference)
+
+### Question
+
+`&` does double duty: an **infix** `&` is bitwise-and (precedence level 6, `a & b`), a
+**prefix** `&` is the reference-type annotation (`b = &a`, [binding.md](formal/binding.md)).
+Should the grammar split them into two distinct tokens (a separate reference sigil), or keep
+one `&` resolved by position? (formal/grammar.md deviation **D-gram-4**.)
+
+### Evaluation
+
+The two are told apart purely by **position**: a `&` with a left operand is infix bitwise-and;
+a *leading* `&` is the reference annotation. @PLN87 plus A1 (binding.md D-bind-7) made a prefix
+`&` a **parse error in every non-binding position** — assignment target, operand, argument,
+collection element, condition, bare statement, block-final — so it can never reach an
+expression slot. The disambiguation is therefore **total**, not heuristic. Rust makes the same
+call (`&` is both reference and bitwise-and, disambiguated by position); a new sigil would add
+surface for zero semantic gain and break the familiar reading. The coupling to binding.md
+("prefix `&` only at a binding") is a *documentation* obligation — the rule is stated in both
+the grammar and binding areas — not a soundness gap.
+
+### Decision
+
+**Closed (2026-06-24) — KEEP one `&` token, disambiguated by position.** The
+prefix-`&`-only-at-a-binding rule (binding.md `B-Ref-AnnotationOnly`, enforced through
+D-bind-7) is what makes the position rule total, so the overload is a **decided edge**, not a
+deviation. D-gram-4 leaves formal/grammar.md.
+
+### Revisit when
+
+A concrete grammar/tooling need (a *generated* parser that cannot reproduce the positional
+rule) hits an actual ambiguity — not merely the doc coupling.
+
+---
+
+## C82 — loft's surface is deliberately not context-free
+
+### Question
+
+loft's grammar resolves some constructs with **speculative backtracking** (type-vs-variable;
+struct-init `S { … }` vs block `{ … }`) and **lexer modes** (string interpolation `"{e}"`), so
+no context-free grammar accepts exactly loft. Should we pursue a CFG (so an external,
+grammar-based tool could be derived), or accept the context-sensitive surface? (formal/grammar.md
+deviation **D-gram-2**.)
+
+### Evaluation
+
+The context-sensitivity buys real ergonomics — the `S { … }` struct-literal shorthand and
+format-string interpolation — that a CFG-clean grammar would force into clumsier syntax. No
+consumer has needed a CFG: the hand-written two-pass recursive-descent parser **is** the spec,
+and tooling (LSP, formatter, the doc viewer) reuses it rather than a generated parser. Chasing
+a CFG would constrain the surface for a benefit nobody has asked for, and the backtracking is
+bounded in practice (a couple of fixed lookahead/disambiguation points, documented in
+[COMPILER.md](COMPILER.md)).
+
+### Decision
+
+**Closed (2026-06-24) — ACCEPT the non-context-free surface; do not chase a CFG.** The
+hand-written parser is the grammar; formal/grammar.md states the one fact that used to live
+only in code (precedence + associativity — D-gram-1, now lifted into LOFT.md) and records the
+context-sensitive points as accepted. D-gram-2 leaves formal/grammar.md as a decided edge.
+
+### Revisit when
+
+A concrete consumer needs a CFG (a third-party grammar-based tool that genuinely cannot reuse
+loft's parser) **and** the context-sensitive points can be expressed without unbounded
+backtracking.

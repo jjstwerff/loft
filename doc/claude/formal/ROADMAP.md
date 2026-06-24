@@ -27,7 +27,7 @@ Closing a row means the implementation obeys the rule (then the deviation entry 
 |---|---|---|
 | [types.md](types.md) | 1 | D2 — the integer model is i64 end-to-end (`Value::Int` IR change) |
 | [binding.md](binding.md) | 0 | ✓ closed — D-bind-7 (reject bare `&a;` / block-final `{ &a }`) landed |
-| [grammar.md](grammar.md) | 2 | 2 decisions left (D-gram-2 CFG · D-gram-4 `&` overload — B3, now ready); precedence-doc (D-gram-1) + `**` right-assoc landed |
+| [grammar.md](grammar.md) | 0 | ✓ closed — D-gram-1/3 landed; D-gram-2 (non-CFG) + D-gram-4 (`&` overload) resolved as decided edges → DESIGN_DECISIONS C81/C82 |
 | [operational.md](operational.md) | 3 | D-op-1/2 the differential oracle (@PLN89) · D-op-4 the spreadsheet runtime (C80) |
 | [ownership.md](ownership.md) | 5 | the `deps` borrow checker (the big one) |
 
@@ -52,8 +52,8 @@ These are **spec-may-adjust** — your call resolves them, then they close or re
 | # | deviation | the decision | likely outcome |
 |---|---|---|---|
 | ~~B1~~ | ~~**D-gram-3**~~ **DONE** | `**` is now **right**-associative (`2**3**2 == 512`) — the maker-centric call (don't carry a surprise). | code→spec, landed; `tests/issues.rs::power_is_right_associative` |
-| B2 | **D-gram-2** | is loft's surface deliberately **not context-free** (speculative backtracking + lexer modes)? | **spec-may-adjust**: almost certainly a *decided edge*, not a deviation — reclassify (don't chase a CFG) |
-| B3 | **D-gram-4** | the `&` bitwise/reference overload | mostly closed by @PLN87 (prefix `&` now rejected in expression positions); its residual **is** A1 (D-bind-7) — fold/close once A1 lands |
+| ~~B2~~ | ~~**D-gram-2**~~ **DONE** | loft's surface IS deliberately not context-free — accepted on purpose. | reclassified → decided edge, [DESIGN_DECISIONS C82](../DESIGN_DECISIONS.md#c82--lofts-surface-is-deliberately-not-context-free) |
+| ~~B3~~ | ~~**D-gram-4**~~ **DONE** | A1 made prefix `&` total — keep one `&` token, disambiguated by position (like Rust). | reclassified → decided edge, [DESIGN_DECISIONS C81](../DESIGN_DECISIONS.md#c81---stays-one-token-disambiguated-by-position-bitwise-and-vs-reference) |
 
 ## Phase C — tracked projects (have or need a plan; weeks)
 
@@ -76,10 +76,10 @@ The real weight. Each is a `loft-lang/plans` issue, sequenced.
 
 ## Resolving order, in one line
 
-**~~A1~~ ~~A2~~ ~~A3~~ (all done — A3 was obsolete, subsumed by D-op-4)** clears Phase A **·**
-**B1/B2/B3** (decide, cheap; B3 D-gram-4 now ready — A1 met its condition) **·**
-then the tracked arcs **C1 (@PLN88) · C2 (typed Deps) → C3 (@PLN85)** in that dependency order **·**
-the operational arc **D1** (oracle, @PLN89) + **D2** (D-op-4 spreadsheet runtime, C80) last.
+**~~A1~~ ~~A2~~ ~~A3~~** clears Phase A **·** **~~B1~~ ~~B2~~ ~~B3~~** all decided (D-gram-2/4 →
+decided edges C82/C81; grammar.md at 0) **·** binding.md + grammar.md now **closed**, types.md at 1
+**·** NEXT: the tracked arcs **C1 (@PLN88) · C2 (typed Deps) → C3 (@PLN85)** in that dependency
+order **·** the operational arc **D1** (oracle, @PLN89) + **D2** (D-op-4 spreadsheet runtime, C80) last.
 
 ## What is NOT on this list (already clean or decided)
 
