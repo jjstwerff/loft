@@ -23,8 +23,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > **`STABILITY_REDFLAGS.md` cluster 1** lesson made concrete: the blanket `Type::Vector` gate
 > REGRESSED cbor (a patch at site 956 broke the I-b fix at site 4101), so the fix makes the sites
 > *consistent* rather than widening one. **Owned in-plan — nothing filed or routed.** Mechanism:
-> [cluster-I-nrvo-coexist.md](cluster-I-nrvo-coexist.md). Remaining to fully close the plan:
-> graduate guarantee probes (06/07/08/09 + a cbor `roundtrip(CMap)`) to `tests/scripts/`.
+> [cluster-I-nrvo-coexist.md](cluster-I-nrvo-coexist.md). **CLOSED:** all 3 clusters fixed, ztcbor
+> 3/3, full loft suite clean (env-only `38_import` aside), both backends. Guarantee probes graduated
+> → `tests/scripts/437-nrvo-return-aliasing.loft` (guards I-a/I-b/I-c, both backends). The cbor
+> library's coverage gap (`roundtrip()` never exercises `CMap`) is the one follow-up for the cbor
+> maintainer (a separate repo); the loft-compiler class is closed by construction here.
 
 **What triggered this.** The zero-trust consumer (dogfood) reported that the
 released loft (`2026.6.0`, carrying the #437 fix merged as #440) **regressed** —
