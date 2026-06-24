@@ -20,6 +20,16 @@ over time; its result does not — run it to see where you stand today.
 One drive runs through every layer: **do the hard plumbing yourself, deeply, so
 someone else can just pick it up and have fun.**
 
+**Why — to aid the people who make games.** Making a game is hard enough already —
+the feel, the systems, the content, the art. The tools should not pile on. But today's
+engines are built **by programmers, from a programmer's point of view**: their
+abstractions, their ceremony, their notion of "correct" all reflect how a *programmer*
+thinks, and the maker has to learn that worldview before building anything. loft inverts
+the default — it is built from the **maker's** side of the screen. The programmer's
+concerns (memory, types, errors, lifetimes) are carried *by the language*, out of sight,
+so the person making the game thinks about the *game*, not about thinking like a
+programmer. That is the whole reason loft exists.
+
 - **loft** handles memory, types, and the store, so you write the logic with no
   ceremony.
 - the **hex-world library** handles terrain, walls, collision, and rendering, so
