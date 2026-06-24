@@ -4098,6 +4098,28 @@ impl Parser {
                 *op = Value::Insert(seq);
                 true
             }
+            Value::Call(_, _) => {
+                // #437/plan-90 cluster I-b (O-Move): a Call-terminal arm
+                // (`head(0,value)`) writes its OWN hidden `__ref_N` buffer, which
+                // this materialiser left untouched (only `Var` terminals above were
+                // rewritten).  The epilogue then freed that `__ref_N` while it was
+                // the arm's returned value — a dangling ref / silent clobber.
+                // Substitute the arm's hidden buffer ref onto the shared return
+                // buffer `w` and unregister it (no null-init, no scope-exit free),
+                // exactly as `ref_return` does for a bare-call return — so EVERY
+                // arm of a materialised single-tail vector match delivers into the
+                // one buffer.  `buf == w` (an arm already writing the buffer) is a
+                // no-op via the guard, so this is idempotent.
+                let mut changed = false;
+                for buf in Self::collect_hidden_ref_args(op, &self.data) {
+                    if buf != w {
+                        Self::substitute_work_ref(op, buf, w);
+                        self.vars.unregister_work_ref(buf);
+                        changed = true;
+                    }
+                }
+                changed
+            }
             _ => false,
         }
     }

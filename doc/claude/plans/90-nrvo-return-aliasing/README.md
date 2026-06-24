@@ -11,14 +11,14 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 |---|---|
 | A — Probe catalogue | ✅ 8 probes; both sub-shapes isolated (06 raw, 08 materialized) |
 | B — Mechanism investigation | ✅ VERIFIED (agent IR/runtime traces) — see [cluster-I](cluster-I-nrvo-coexist.md) |
-| C — Fix design | ✅ O-Move: collect EVERY arm's buffer ref at the return-collection, not just arm 1 |
-| D — Implementation | 🟡 **I-a (raw match) FIXED** at control.rs:906; **I-b (materialized match) OPEN** — cbor needs it |
+| C — Fix design | ✅ O-Move: every arm of a single-tail vector match delivers into the one return buffer |
+| D — Implementation | ✅ **BOTH clusters FIXED** — I-a (raw) control.rs:906 · I-b (materialized) control.rs:4101. **cbor restored.** |
 
-> **Resume here:** I-a landed + verified (06/07 both backends; 01 + 5 guard scripts green). The
-> remaining work is **I-b** — the match-materialization path (block-bodied arm → match lowers into
-> a `result` var, bypassing the 906 recovery). Probe 08 is the 11-line repro; cbor (02) is purely
-> this shape. Fix lead: apply the same all-arms-transfer rule where `match`/`if` is lowered into
-> the `"result"`/`"out"` temp. Full mechanism + fix site: [cluster-I-nrvo-coexist.md](cluster-I-nrvo-coexist.md).
+> **cbor's #437 regression is CLOSED** (both sub-shapes). Interp verified: probe 08 → `ki=1`, cbor
+> (02) → `[162 1 2 3 4]`, all I-a/#437 probes green. Native parity + cbor/ztcbor + full loft suite
+> running. Remaining to close the PLAN: graduate guarantee probes (06/07/08 + cbor) to
+> `tests/scripts/`; add the agent's sibling probes (nested-if-of-calls arm, bare-Call non-`head`
+> arm, Block-arm-ending-in-Call). Full mechanism: [cluster-I-nrvo-coexist.md](cluster-I-nrvo-coexist.md).
 
 **What triggered this.** The zero-trust consumer (dogfood) reported that the
 released loft (`2026.6.0`, carrying the #437 fix merged as #440) **regressed** —
@@ -73,7 +73,7 @@ a narrowing of the return-site condition.
 | ID | Cluster | Severity | Backend asymmetry | Probes | Doc |
 |---|---|---|---|---|---|
 | I-a | multi-arm **raw** vector `match` drops a later arm's return buffer → dangling ref | corruption (silent) | both (interp `ki=3`, native `ki=99`) | 06, 07 | **FIXED** control.rs:906 — [cluster-I](cluster-I-nrvo-coexist.md) |
-| I-b | same root via **materialized** match (block-bodied arm → `result` var) | corruption (silent) | both | 02, 08 | **OPEN** — [cluster-I](cluster-I-nrvo-coexist.md) |
+| I-b | same root via **materialized** match (block-bodied arm → `result` var) | corruption (silent) | both | 02, 08 | **FIXED** control.rs:4101 — [cluster-I](cluster-I-nrvo-coexist.md) |
 
 ## Probe suite
 
@@ -86,7 +86,7 @@ a narrowing of the return-site condition.
 | `05-loop-coexist-PASS.loft` | loop temp coexistence + append | (refuter) | PASS — refutes loop-alone |
 | `06-min-trigger-2arm-match.loft` | **raw** 2-arm match, both arms tail-call `head` | I-a | was FAIL `ki=3` → **PASS `ki=1`** (fix, both backends) |
 | `07-nested-if-arm.loft` | arm is a nested `if` (cbor CInt shape) | I-a | **PASS** post-fix (`full=[__ref_1,__ref_2,__ref_3]`) |
-| `08-block-arm-materializes.loft` | block-bodied arm → match **materializes** | I-b | **FAIL `ki=3`** (open; cbor's shape) |
+| `08-block-arm-materializes.loft` | block-bodied arm → match **materializes** | I-b | was FAIL `ki=3` → **PASS `ki=1`** (control.rs:4101, both backends) |
 
 Probes graduate to `tests/scripts/NN-*.loft` when the cluster fix lands (gate:
 assertions pass · clean exit · no leak · bounded runtime).

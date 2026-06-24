@@ -53,18 +53,25 @@ self.ref_return(&full, l, RetSite::BlockTail);
 Verified: 06/07 → `ki=1`, both backends; `01` (#437's ct/ci) stays `len=2`; the 5
 return-buffer regression scripts (298/137/100/150/139) stay green.
 
-### I-b — MATERIALIZED match (OPEN — cbor's actual shape)
+### I-b — MATERIALIZED match (FIXED, control.rs:4101)
 When the match has a **block-bodied arm** (`{ buf=head(); …; buf }` — cbor's
-CBytes/CText/CArray) the whole match **materializes into a `result` var** instead of
-staying a raw tail. It then reaches 906 only as `Var(result)` (single dep, `collect=[]`),
-so the I-a recovery never fires. The firing tail-call arm's buffer is freed → same clobber.
-**Probe 08 (min, 11 lines) reproduces; cbor (02) is purely this shape.**
+CBytes/CText/CArray) `vec_match_candidate` fires (block_result ~669) and the tail is lowered
+by **`materialize_vector_arms_into` (control.rs:4063)**, which sets `vec_arm_handled=true` and
+**gates off** the 906 recovery (line 785). That materialiser rewrote only `Var`-terminal arms
+(4081) and left a **`Call`-terminal arm** (`CI => head(0,value)`) at the `_ => false` fallthrough
+— so its own `__ref_N` buffer stayed a separate store, which the epilogue freed while it was the
+returned value → dangling ref → clobber (interp `ki=3`, native `ki=99`). loft2 escapes only by
+*leaking* that store (its "1 stores not freed" warning) so the returned ref stays valid.
 
-**Fix lead:** the match-materialization path (where arms assign into the `result` var) must
-apply the same all-arms-transfer rule — collect every arm's buffer ref when materializing,
-so none is left local-and-freed. Locate where the `match`/`if` result is lowered into the
-`"result"`/`"out"` temp and its arm assignments; enforce O-Move there. This is the next
-step; cbor stays broken until it lands.
+**Fix:** add a `Value::Call` arm to `materialize_vector_arms_into` (before `_ => false`) that
+recovers the arm's hidden buffer ref via `collect_hidden_ref_args` and substitutes it onto the
+shared return buffer `w` + `unregister_work_ref`s it — the exact pattern `ref_return` uses for a
+bare-call return (control.rs:4620-4627). Now every arm of a materialised single-tail vector match
+delivers into the one buffer; `buf == w` is a no-op (idempotent). Verified: probe 08 → `ki=1`,
+**cbor (02) → `[162 1 2 3 4]`**, both backends; all I-a/#437 probes stay green.
+
+`unify_if_branches_work_refs` was **refuted** as the path (agent-confirmed): it bails for 08
+because the CB arm's terminal `buf` is a named local, not a work-ref → `all_work_refs=false`.
 
 ## Hazards (agent-enumerated; check on I-b too)
 1. **Native parity** — both backends corrupt differently; verify each post-fix.
