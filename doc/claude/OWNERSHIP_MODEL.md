@@ -20,6 +20,30 @@ Corollary (from [CODEGEN_METHOD.md](CODEGEN_METHOD.md)): a store-lifetime bug is
 then never a *codegen* bug — it is a **hole in the ownership computation**. Fix the
 fact, not the generator.
 
+## External validation — a consumer named this from its own pain (2026-06-24)
+
+The **zero-trust** dogfood consumer — building crypto/signature systems on loft —
+independently identified this exact beacon as loft's **single most important weakness and
+#1 priority**, reasoning only from its own bugs: *"stop patching store-lifetime
+symptom-by-symptom, pin the single invariant the heap model must uphold, enforce it at the
+chokepoint — turn this class from recurring-and-silent into impossible-by-construction."*
+A real consumer landing on the project's own north star is the priority confirmed from outside.
+
+**The stake it sharpened: trust.** For crypto/signatures, **silent corruption is the one
+fatal failure** — a wrong byte is an invalid signature with no error raised. So this class is
+not one weakness among many; it is THE gate on loft being trustworthy with real data.
+Cross-target parity tests catch the divergences today (the right defensive move), but the
+cure is the complete `deps` analysis, not the test net.
+
+**The invariant as a violation set.** The whole class is ONE invariant — *each heap store has
+exactly one owner at every point; all mutation flows through that owner; a non-owning alias is
+read-only and never outlives its owner* — breached four ways: **leak** (owner dropped without a
+free) · **double-free** (owner duplicated) · **use-after-free** (alias outlives owner) ·
+**silent corruption** (two owners mutate one store). The #437 NRVO regression is the corruption
+face: two coexisting returned vectors handed the same `__retbuf`. Plan
+[`90-nrvo-return-aliasing`](plans/90-nrvo-return-aliasing/README.md) is the concrete entry that
+consumer forced open — pin this slice of the invariant, enforce at the chokepoint.
+
 ## Internal and invisible — never a user-facing borrow checker (decided)
 
 > **Ownership in loft is INTERNAL.** It never surfaces an ownership error to the
