@@ -3380,6 +3380,50 @@ fn collect_lib_dirs(args: &[String]) -> Vec<String> {
     dirs
 }
 
+/// Parse a wasm-bridge crate's `Cargo.toml` text, returning each non-`loft`
+/// `[dependencies]` entry as `(crate_ident, full TOML line)`.  The `loft`
+/// dependency is dropped on purpose (#446): the `--html` driver links the SHARED
+/// prebuilt loft via `--extern`, never through this manifest — so the bridge's
+/// `loft = { path = "../../../loft" }` (which does not resolve for a
+/// registry-installed package) must never reach cargo.  Only inline `[dependencies]`
+/// entries are recognised (a `[dependencies.foo]` sub-table is not), matching the
+/// shape every shipped bridge manifest uses.
+fn bridge_nonloft_deps(cargo_text: &str) -> Vec<(String, String)> {
+    let mut deps = Vec::new();
+    let mut in_deps = false;
+    for line in cargo_text.lines() {
+        let t = line.trim();
+        if let Some(rest) = t.strip_prefix('[') {
+            in_deps = rest.starts_with("dependencies]");
+        } else if in_deps && !t.is_empty() && !t.starts_with('#') {
+            if let Some(k) = t.split('=').next().map(str::trim) {
+                if !k.is_empty() && k != "loft" {
+                    deps.push((k.replace('-', "_"), t.to_string()));
+                }
+            }
+        }
+    }
+    deps
+}
+
+/// Build a throwaway "deps-only" `Cargo.toml` whose `[dependencies]` are exactly
+/// `nonloft_deps` (each full TOML line copied verbatim).  Building this crate
+/// produces the bridge's non-`loft` dependency rlibs for wasm32 WITHOUT cargo ever
+/// resolving the bridge manifest's `loft` path dep (#446).  The empty `src/lib.rs`
+/// uses none of the deps, but cargo compiles every declared dependency regardless,
+/// so every dep rlib still lands in the crate's deps dir.
+fn synth_bridge_deps_manifest(nonloft_deps: &[(String, String)]) -> String {
+    let mut manifest = String::from(
+        "[package]\nname = \"loft_html_bridge_deps\"\nversion = \"0.0.0\"\n\
+         edition = \"2021\"\n\n[lib]\ncrate-type = [\"rlib\"]\n\n[dependencies]\n",
+    );
+    for (_, line) in nonloft_deps {
+        manifest.push_str(line);
+        manifest.push('\n');
+    }
+    manifest
+}
+
 /// @PLN16 M5a — `loft debug <file>:<line>`: load the file, break at `file:line`, run
 /// `main()` to the breakpoint, and drop into the interactive `(dbg)` prompt.  Reads its
 /// `<file>:<line>` argument by scanning the command line (so it needs no thread-through
@@ -5348,42 +5392,60 @@ fn main() {
             let bridge_rlib = std::env::temp_dir().join(format!("lib{crate_ident}.rlib"));
             // Build-extension (@PLN84 ZT-B): when the bridge crate declares Cargo
             // dependencies beyond `loft` (the vetted dalek/RustCrypto stack the SHARED
-            // ed25519/x25519/aes modules use), cargo-build the crate for wasm32 to
-            // produce those dependency rlibs.  Each DIRECT dep is `--extern`'d on the
-            // bridge rustc compile (the `use <crate>` extern-prelude entry — `-L` alone
-            // resolves only TRANSITIVE deps), and the deps dir is `-L`'d on both the
-            // bridge compile and the main wasm link (transitive symbols).  We consume
-            // ONLY the dependency rlibs — the bridge itself is rustc-compiled below
-            // against the SHARED prebuilt loft (no duplicate loft), and these deps are
+            // ed25519/x25519/aes modules use), build those deps for wasm32 to produce
+            // their rlibs.  Each DIRECT dep is `--extern`'d on the bridge rustc compile
+            // (the `use <crate>` extern-prelude entry — `-L` alone resolves only
+            // TRANSITIVE deps), and the deps dir is `-L`'d on both the bridge compile
+            // and the main wasm link (transitive symbols).  We consume ONLY the
+            // dependency rlibs — the bridge itself is rustc-compiled below against the
+            // SHARED prebuilt loft (no duplicate loft), and these deps are
             // loft-independent, so no "two copies of loft" (`expected DbRef, found
             // DbRef`) error arises.
+            //
+            // #446: we deliberately do NOT `cargo build` the bridge's own
+            // `wasm/Cargo.toml`.  It carries a `loft = { path = "../../../loft" }` dep
+            // that resolves only in a dev checkout — NOT for a registry-installed
+            // package, where the relative path points at the nonexistent `~/.loft/loft`
+            // and cargo aborts before building any dep.  That `loft` dep is pure
+            // redundancy here: the bridge links the SHARED prebuilt loft via `--extern`
+            // (below), never through this manifest.  So we synthesize a throwaway
+            // deps-only crate whose `[dependencies]` are exactly the bridge's non-`loft`
+            // deps and build THAT: cargo compiles every declared dep (even though the
+            // empty lib uses none), producing the identical wasm32 rlibs without ever
+            // resolving the manifest's `loft` path dep.
             let wasm_cargo = wasm_dir.join("Cargo.toml");
-            let mut nonloft_idents: Vec<String> = Vec::new();
-            if let Ok(text) = std::fs::read_to_string(&wasm_cargo) {
-                let mut in_deps = false;
-                for line in text.lines() {
-                    let t = line.trim();
-                    if let Some(rest) = t.strip_prefix('[') {
-                        in_deps = rest.starts_with("dependencies]");
-                    } else if in_deps && !t.is_empty() && !t.starts_with('#') {
-                        if let Some(k) = t.split('=').next().map(str::trim) {
-                            if !k.is_empty() && k != "loft" {
-                                nonloft_idents.push(k.replace('-', "_"));
-                            }
-                        }
-                    }
-                }
-            }
+            // Every non-`loft` [dependencies] entry as (crate_ident, full TOML line).
+            let nonloft_deps: Vec<(String, String)> = std::fs::read_to_string(&wasm_cargo)
+                .map(|text| bridge_nonloft_deps(&text))
+                .unwrap_or_default();
+            let nonloft_idents: Vec<String> = nonloft_deps
+                .iter()
+                .map(|(ident, _)| ident.clone())
+                .collect();
             let mut bridge_dep_search: Option<std::path::PathBuf> = None;
             let mut bridge_externs: Vec<(String, std::path::PathBuf)> = Vec::new();
-            if !nonloft_idents.is_empty() {
+            if !nonloft_deps.is_empty() {
+                // Stage the deps-only crate under a per-bridge temp dir, then build it.
+                let synth_dir =
+                    std::env::temp_dir().join(format!("loft_html_bridge_deps_{crate_ident}"));
+                let synth_src = synth_dir.join("src");
+                let manifest = synth_bridge_deps_manifest(&nonloft_deps);
+                let staged = std::fs::create_dir_all(&synth_src).is_ok()
+                    && std::fs::write(synth_dir.join("Cargo.toml"), &manifest).is_ok()
+                    && std::fs::write(synth_src.join("lib.rs"), "").is_ok();
+                if !staged {
+                    eprintln!(
+                        "loft: --html: failed to stage wasm-bridge dependency build for {bridge_crate}"
+                    );
+                    std::process::exit(1);
+                }
                 let cargo_ok = std::process::Command::new("cargo")
                     .arg("build")
                     .arg("--release")
                     .arg("--target")
                     .arg("wasm32-unknown-unknown")
                     .arg("--manifest-path")
-                    .arg(&wasm_cargo)
+                    .arg(synth_dir.join("Cargo.toml"))
                     .status()
                     .map(|s| s.success())
                     .unwrap_or(false);
@@ -5393,7 +5455,7 @@ fn main() {
                     );
                     std::process::exit(1);
                 }
-                let deps = wasm_dir.join("target/wasm32-unknown-unknown/release/deps");
+                let deps = synth_dir.join("target/wasm32-unknown-unknown/release/deps");
                 if deps.is_dir() {
                     // Resolve each DIRECT dep to its `lib<ident>-<hash>.rlib` for `--extern`.
                     let files: Vec<String> = std::fs::read_dir(&deps)
@@ -6569,5 +6631,69 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
     }
     if state.database.had_fatal {
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The crypto bridge manifest verbatim (loft-libs-core crypto/wasm/Cargo.toml,
+    // as published in crypto 0.3.3): one `loft` path dep + the dalek/RustCrypto stack.
+    const CRYPTO_BRIDGE_CARGO: &str = "\
+[package]
+name = \"crypto-wasm\"
+version = \"0.1.0\"
+edition = \"2024\"
+
+[lib]
+crate-type = [\"rlib\"]
+
+[dependencies]
+loft = { path = \"../../../loft\", default-features = false, features = [\"random\"] }
+ed25519-dalek = { version = \"2.1\", default-features = false, features = [\"std\", \"fast\"] }
+x25519-dalek  = { version = \"2.0\", default-features = false, features = [\"static_secrets\"] }
+aes-gcm       = { version = \"0.10\", default-features = false, features = [\"aes\", \"alloc\"] }
+";
+
+    #[test]
+    fn bridge_nonloft_deps_excludes_loft_and_keeps_the_rest() {
+        let deps = bridge_nonloft_deps(CRYPTO_BRIDGE_CARGO);
+        let idents: Vec<&str> = deps.iter().map(|(i, _)| i.as_str()).collect();
+        // #446: `loft` must NOT appear — it is the redundant path dep that fails
+        // to resolve for a registry-installed package.
+        assert!(
+            !idents.contains(&"loft"),
+            "loft must be excluded, got {idents:?}"
+        );
+        // The hyphenated crate names are normalised to rlib idents.
+        assert_eq!(idents, ["ed25519_dalek", "x25519_dalek", "aes_gcm"]);
+        // The full dependency line is preserved verbatim (versions + features).
+        assert!(deps[0].1.contains("version = \"2.1\""));
+        assert!(deps[2].1.contains("features = [\"aes\", \"alloc\"]"));
+    }
+
+    #[test]
+    fn synth_manifest_never_contains_loft_path_dep() {
+        let deps = bridge_nonloft_deps(CRYPTO_BRIDGE_CARGO);
+        let manifest = synth_bridge_deps_manifest(&deps);
+        // #446 invariant: the synthesized deps-only manifest carries the non-loft
+        // deps but NO `loft` line, so cargo never resolves `../../../loft`.
+        assert!(
+            !manifest.contains("loft = {"),
+            "synth manifest leaked the loft dep:\n{manifest}"
+        );
+        assert!(!manifest.contains("../../../loft"));
+        assert!(manifest.contains("ed25519-dalek = { version = \"2.1\""));
+        assert!(manifest.contains("[lib]\ncrate-type = [\"rlib\"]"));
+    }
+
+    #[test]
+    fn bridge_with_no_extra_deps_yields_empty() {
+        // A bridge whose only dep is `loft` (e.g. the web WS bridge) must produce
+        // zero non-loft deps, so the driver skips the build-extension entirely.
+        let web = "[package]\nname = \"web-wasm\"\n\n[dependencies]\n\
+                   loft = { path = \"../../../loft\" }\n";
+        assert!(bridge_nonloft_deps(web).is_empty());
     }
 }

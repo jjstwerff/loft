@@ -1047,6 +1047,22 @@ rlib lands in `std::env::temp_dir()/lib<crate_ident>.rlib`; the
 final link adds `--extern <crate_ident>=<that rlib>` to the main
 rustc invocation.  One copy of `loft`, zero collisions.
 
+The SAME reasoning extends to the bridge's *own* Cargo deps
+(dalek/RustCrypto).  Those are loft-independent, so they CAN be
+`cargo build`-ed — but NOT from the bridge's `wasm/Cargo.toml`,
+which still declares `loft = { path = "../../../loft" }`.  That path
+resolves in a dev checkout but not for a registry-installed package
+(`~/.loft/registry/<pkg>/wasm/../../../loft` → `~/.loft/loft`, absent),
+where cargo aborts before building a single dep — this was
+[#446](https://github.com/loft-lang/loft/issues/446), the last blocker
+for browser builds off the registry.  The fix: synthesize a
+**deps-only crate** (an empty lib whose `[dependencies]` are exactly
+the bridge's non-`loft` deps) and `cargo build` THAT.  cargo builds
+every declared dep regardless of the empty lib, yielding the identical
+wasm32 dep rlibs WITHOUT resolving the manifest's redundant `loft`
+path.  See `bridge_nonloft_deps` / `synth_bridge_deps_manifest` in
+`src/main.rs`.
+
 ### Self-registration via `LOFT_WASM_EXTENSIONS`
 
 The HTML preamble's load order is:

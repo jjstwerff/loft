@@ -639,7 +639,7 @@ worked reference — all 15 primitives bridge `native == wasm`. Two mechanisms:
 ### The build-extension (deps beyond `loft`)
 
 If the bridge crate's `Cargo.toml` declares dependencies beyond `loft` (e.g.
-dalek/RustCrypto), `loft --html` cargo-builds the crate for `wasm32-unknown-unknown`,
+dalek/RustCrypto), `loft --html` builds those deps for `wasm32-unknown-unknown`,
 `--extern`s each direct dep on the bridge rustc compile, and `-L`s the deps dir on
 both the bridge compile and the main wasm link (`src/main.rs` — the `--html` bridge
 loop). The bridge still links the SHARED prebuilt loft (no duplicate loft); the deps
@@ -647,6 +647,20 @@ are loft-independent. Deterministic crypto ops need no RNG → no getrandom/wasm
 Dep-less bridges skip this (the `has-nonloft-deps` gate), so existing `--html` tests
 are untouched. Import-module names must use a **`loft_` prefix** (the `--html`
 stomp-guard in `src/native_utils.rs` allows `loft_*`, rejects `__wbindgen_*`).
+
+The dep build does **not** `cargo build` the bridge's own `wasm/Cargo.toml` — that
+manifest carries a `loft = { path = "../../../loft" }` dep that resolves only in a
+dev checkout, never for a registry-installed package (where the relative path points
+at the nonexistent `~/.loft/loft`, so cargo aborts before building any dep — this was
+[#446](https://github.com/loft-lang/loft/issues/446)). That `loft` dep is redundant
+here anyway: the bridge links the SHARED prebuilt loft via `--extern`, not through the
+manifest. So the driver synthesizes a throwaway **deps-only crate** — an empty lib
+whose `[dependencies]` are exactly the bridge's non-`loft` deps (`bridge_nonloft_deps`
+/ `synth_bridge_deps_manifest` in `src/main.rs`) — and builds THAT. cargo compiles
+every declared dep regardless of the empty lib, producing the identical wasm32 dep
+rlibs without ever resolving the `loft` path. Works uniformly for dev-checkout and
+registry consumption; guarded by unit tests in `src/main.rs` (the synth manifest must
+never contain a `loft` line).
 
 ### Headless verify loop (no browser)
 
