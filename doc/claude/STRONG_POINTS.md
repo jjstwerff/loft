@@ -163,10 +163,13 @@ silent corpus-wide **and** the assertion holds and keeps holding.
 ## 4. Friction-free surface — the language serves the programmer
 
 **Strength.** Reads like Python, statically typed with almost no annotations.
-**No lifetime annotations, no `move`, no turbofish, no `Pin`** — no syntax exists
-to feed the compiler's analysis. When the compiler can't prove what it wants, it
-takes the cost itself; warnings are the only channel back, and they're free to
-ignore ([GOALS.md § Goal F](GOALS.md#goal-f--friction-free-surface-the-language-serves-the-programmer-not-the-compiler)).
+**No lifetime annotations, no `move`, no turbofish, no `Pin`, and no `usize` index
+cast** — `v[i]` takes any integer, where Rust forces `i as usize` / `len() as i32`
+all over the *common path*; loft has **one integer type and no special index type**,
+so idiomatic code needs **zero `as`**. No syntax exists to feed the compiler's
+analysis. When the compiler can't prove what it wants, it takes the cost itself;
+warnings are the only channel back, and they're free to ignore
+([GOALS.md § Goal F](GOALS.md#goal-f--friction-free-surface-the-language-serves-the-programmer-not-the-compiler)).
 
 **Who it wins.** Refugees from Rust's borrow-checker ceremony who want the safety
 without filling in proof obligations.
@@ -183,7 +186,11 @@ fine; one that *bounds the user into serving the compiler* is forbidden — and
 drive the type/conversion rough spots ([TYPING_RELATION.md](TYPING_RELATION.md)
 R1–R3, the `*_hint` channels) to zero so fewer needed shapes get refused. *Check:*
 no feature design reaches "…and the user must write X so the compiler can Y"; every
-refusal hands back a supported path.
+refusal hands back a supported path. *And:* idiomatic consumer code — a well-built
+library used as intended (e.g. the hex-world) — contains **zero `as`**; any `as`
+there means a width leaked that the types should have carried (the bar Rust's `usize`
+breaks by construction). A rare *deliberate* narrowing at a write-time edge is the
+allowed exception, not the common path.
 
 ---
 

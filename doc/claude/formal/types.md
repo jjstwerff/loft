@@ -127,6 +127,16 @@ for *all* its writes (the join) — not just its first one. That last point was 
 to the join when a write would not fit; an annotated `x: u8` stays constrained), guarded by
 `tests/scripts/433-ijoin-multiply-assigned.loft`.
 
+**Why `(I-Narrow)`'s `as` is consistent with the maker-centric center.** The explicit `as` is
+a *write-time intent marker* at a **rare, deliberate edge** — idiomatic code (a well-built
+library used as intended) needs **none**, the bar Rust's `usize`-index `as`-tax breaks by
+construction and loft holds by having **one integer type, no special index type**. It is the
+*right* moment to ask intent (you are in the editor, choosing to drop bits), not the wrong one
+(runtime, or the common path). And it coexists with the spreadsheet model: a narrowing that
+overflows *at runtime* yields **null and keeps running** (operational.md `E-Uncomp`, C80) —
+`as` is compile-time intent, null is runtime keep-going. See
+[GOALS.md § the wrong moment](../GOALS.md) and [DESIGN_DECISIONS.md C79/C80](../DESIGN_DECISIONS.md).
+
 ### Coercion closure
 
 ```

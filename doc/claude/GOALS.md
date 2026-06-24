@@ -70,6 +70,20 @@ to get right); null is implicit, not a `Result` to thread. The language holds th
 invariants; the developer builds the game. **Fun is what a low correctness-load feels
 like from the inside.**
 
+**It is *timing*, not the mere presence of load.** What the principle forbids is load at
+the **wrong moment**: at *runtime* (the running game must not stop — C80's whole job) or in
+the *common path* (the ordinary code you write all day). A rare, deliberate **write-time**
+acknowledgement — `x as u8` at the point you *choose* to throw bits away — is fine: you are
+in the editor, with the headspace, doing it on purpose. The test is **frequency in idiomatic
+code**: a well-built library, used as intended, should need **zero `as`**. The archetypal
+failure is Rust's `usize` — indexing must be pointer-sized, a toolmaker's memory fact, so
+**everyone who writes `v[i]` is forced to cast** (`i as usize`, `len() as i32`) all over the
+common path. That is the wrong-moment tax, structural and unavoidable. loft refuses it with
+**one integer type and no special index type**: `v[i]` takes any integer, indexing produces
+no `as`, and the pointer-width fact stays the *language's* problem. (That is the maker-centric
+reason for the one-integer model — [@PLN88](https://github.com/loft-lang/plans/issues/88) —
+not just tidiness.)
+
 The IBM midrange machines (System/38, AS/400, today's IBM i) were *loved* by the
 people who programmed them, for an unglamorous reason: they did not fail — not the
 hardware, and, more tellingly, not the software. A program written in 1988 still
