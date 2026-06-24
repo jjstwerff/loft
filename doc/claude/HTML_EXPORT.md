@@ -357,6 +357,10 @@ the export model documented above.
 
 ## See also
 
+- [BROWSER_INTEROP.md](BROWSER_INTEROP.md) — **design**: how a
+  `--html` program and its libraries talk to the browser/JS —
+  the engine as an agnostic byte-mover, the four tiers, and the
+  gather-until-enough library contract over the frame yield.
 - [WASM.md](WASM.md) — WASM runtime architecture (VFS, host
   bridges, threading, frame yield mechanics — the layer this
   pipeline produces output for)

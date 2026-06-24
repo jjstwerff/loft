@@ -472,6 +472,7 @@ The rule: **always commit before any operation that changes the working tree.**
 | [COROUTINE.md](doc/claude/COROUTINE.md) | Coroutine design — stackful `yield`, `iterator<T>`, `yield from` (planned, 1.1+) |
 | [LIFETIME.md](doc/claude/LIFETIME.md) | Dep tracking + scope-based freeing — dep fields, Text vs Reference, closures |
 | [HTML_EXPORT.md](doc/claude/HTML_EXPORT.md) | `loft --html` pipeline: cdylib codegen, WebGL2 bridge, frame-yield contract |
+| [BROWSER_INTEROP.md](doc/claude/BROWSER_INTEROP.md) | **Design**: the browser as an agnostic engine (moves only bytes) + four tiers; loft libs gather-until-enough over the asyncify yield and expose finished work to JS; browser-target libs may write JS-shaped data. No wasm-export ABI / no wasm-bindgen needed |
 | [../PROMPTS.md](doc/PROMPTS.md) | Working with Claude — practices + when to use each prompt |
 
 ---
