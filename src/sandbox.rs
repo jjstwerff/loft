@@ -1173,27 +1173,29 @@ fn appended_record_size(vars: &crate::variables::Function, var_nr: u16) -> u32 {
 /// future tightening): a concat-reassign `v = v + [x]` and a call returning a kept
 /// growing structure are not yet treated as accumulation.
 fn intrinsic_space(data: &Data, f: u32) -> (u32, u32, Vec<(u32, u32)>) {
-    fn scan(
-        data: &Data,
-        vars: &crate::variables::Function,
-        v: &Value,
-        nesting: u32,
-        reset: &mut HashSet<u16>,
-        max_leaf: &mut u32,
-        coeff: &mut u32,
-        calls: &mut Vec<(u32, u32)>,
-    ) {
+    /// Accumulator threaded through the space scan (bundled so the recursion stays
+    /// within clippy's argument limit): vars reset inside the current loop, the
+    /// deepest accumulating nesting, the coefficient, and the outgoing calls.
+    struct St<'a> {
+        vars: &'a crate::variables::Function,
+        reset: HashSet<u16>,
+        max_leaf: u32,
+        coeff: u32,
+        calls: Vec<(u32, u32)>,
+    }
+    fn scan(data: &Data, v: &Value, nesting: u32, st: &mut St) {
         match v {
             Value::Loop(_) | Value::Iter(..) | Value::ParFor(_) => {
                 // vars reset somewhere in this loop don't accumulate across it.
                 let mut targets = HashSet::new();
                 collect_set_targets(v, &mut targets);
-                let fresh: Vec<u16> = targets.into_iter().filter(|t| reset.insert(*t)).collect();
-                v.for_each_child(&mut |c| {
-                    scan(data, vars, c, nesting + 1, reset, max_leaf, coeff, calls);
-                });
+                let fresh: Vec<u16> = targets
+                    .into_iter()
+                    .filter(|t| st.reset.insert(*t))
+                    .collect();
+                v.for_each_child(&mut |c| scan(data, c, nesting + 1, st));
                 for t in fresh {
-                    reset.remove(&t);
+                    st.reset.remove(&t);
                 }
                 return;
             }
@@ -1206,32 +1208,29 @@ fn intrinsic_space(data: &Data, f: u32) -> (u32, u32, Vec<(u32, u32)>) {
                 if nm.starts_with("OpAppend") || nm.starts_with("OpPreAlloc") {
                     if nesting > 0
                         && let Some(Value::Var(t)) = args.first().map(Value::unspan)
-                        && !reset.contains(t)
+                        && !st.reset.contains(t)
                     {
-                        *max_leaf = (*max_leaf).max(nesting);
-                        *coeff += appended_record_size(vars, *t);
+                        st.max_leaf = st.max_leaf.max(nesting);
+                        st.coeff += appended_record_size(st.vars, *t);
                     }
                 } else {
-                    calls.push((nesting, *g));
+                    st.calls.push((nesting, *g));
                 }
             }
             _ => {}
         }
-        v.for_each_child(&mut |c| scan(data, vars, c, nesting, reset, max_leaf, coeff, calls));
+        v.for_each_child(&mut |c| scan(data, c, nesting, st));
     }
-    let (mut max_leaf, mut coeff, mut calls, mut reset) = (0, 0, Vec::new(), HashSet::new());
     let def = data.def(f);
-    scan(
-        data,
-        &def.variables,
-        &def.code,
-        0,
-        &mut reset,
-        &mut max_leaf,
-        &mut coeff,
-        &mut calls,
-    );
-    (max_leaf, coeff, calls)
+    let mut st = St {
+        vars: &def.variables,
+        reset: HashSet::new(),
+        max_leaf: 0,
+        coeff: 0,
+        calls: Vec::new(),
+    };
+    scan(data, &def.code, 0, &mut st);
+    (st.max_leaf, st.coeff, st.calls)
 }
 
 /// @PLN86 space budget — `f`'s worst-case PEAK heap as `(degree, coeff)`: the
