@@ -822,6 +822,60 @@ safe*. **Admission diagnostics (2.5, 3.5, 6.8) are first-class** — a clean com
 safety contract. A rung graduates its probe to `tests/scripts/` / `tests/sandbox.rs` when
 green on both backends where applicable.
 
+### The build flow — a verifiable sequence (every gate is runnable)
+
+The ladder above is grouped by *arc*; this is the **order you actually build in**. It is
+sequenced so the **shipped function surface migrates atomically** (the suite never sees a
+mixed string/`group#right` model), then the new member + data surfaces layer on
+**additively**, each behaviour change gated by a single RED→GREEN test. **The invariant of
+the flow: `make ci` is green after every F-step**, so each lands as one PR-sized change on a
+releasable tree.
+
+**Foundation (additive — no admission change yet)**
+- **F1 — capability decl + `group#right` token + resolver** (P6.1). *Gate:* `cargo test` —
+  `capability fs` parses, `fs#read` resolves to its def, `typo#read` is a load error.
+
+**Migrate the function surface (the ONE atomic step over shipped code)**
+- **F2 — switch function `#cap` parse to the `group#right` token, retag `default/02_files.loft`
+  (`fs#read`/`fs#update`/`env#read` + the `capability` decls), fold `allow_caps`→`allow` with a
+  `#`-splitting `cap_prefix_match`** (P6.2 + 6.3, landed together so the stdlib never loads
+  against a half-migrated matcher). *Gate:* `make ci` green; `allow=["fs#read"]` admits `mtime`
+  and rejects file `write` (`fs#update`). This is the consistency cut — after F2 there is one
+  capability model.
+
+**Layer per-member access (additive until each admission rung flips its probe)**
+- **F3 — member link parse + `member_access` carrier** (P6.4). *Gate:* `loft introspect` shows
+  `stats#read`/`stats#update` on the field; an unlinked member is empty. *(Recorded, not yet
+  enforced — additive.)*
+- **F4 — read admission** (P6.5). *Gate:* a `tests/sandbox.rs` probe — reading a `priv#read`
+  field with no grant → Rejected (RED→GREEN); an unlinked read admits.
+- **F5 — update admission** (P6.6). *Gate:* writing a granted field admits; a read-only field
+  → Rejected; the SAME script with only `…#append` granted is still Rejected (update ≠ append).
+- **F6 — append admission** (P6.7). *Gate:* `log += e` under `log#append` admits; constructing
+  `Command::Shutdown` (no append link) → Rejected naming the variant.
+- **F7 — diagnostics + IR persistence** (P6.8). *Gate:* each rejection names
+  member + right + the `group#right` it needs + fix; a tagged member survives the store
+  round-trip.
+
+**Data envelope**
+- **F8 — coefficient on `space_degree`** (P7.1). *Gate:* a per-entity build loop reports
+  `(degree 1, coeff sizeof(struct))`. *(Reported — additive.)*
+- **F9 — static-sizing gate** (P7.2). *Gate:* an uncapped string-build loop → Rejected; a
+  `max_string_len`-capped one admits.
+- **F10 — budget reject** (P7.3 + 7.4). *Gate:* a script whose `coeff · max_input_n^degree`
+  exceeds `data_budget` → Rejected naming the figure; an under-budget one admits.
+
+**Prove it**
+- **F11 — `sandbox-check` verdict** (P8.1). *Gate:* `loft sandbox-check <profile> <file>`
+  prints Admitted / Rejected and **never executes** (a side-effecting body proves no run).
+- **F12 — RED/GREEN corpus** (P8.2). *Gate:* `cargo test --test sandbox` green on the real
+  type defs + the migrated `02_files.loft`, both backends where applicable.
+
+**Reading the flow:** F1 / F3 / F8 are *additive* (build state, change no verdict — safe to
+land anytime); **F2 is the single atomic migration** of shipped code; F4–F6 and F9–F10 each
+flip exactly one RED probe to GREEN. Land them top to bottom and the tree is releasable at
+every step.
+
 ## Open questions
 
 - **Totality-checker expressiveness (scoped for v1)** — v1 = *bounded loops + no /
