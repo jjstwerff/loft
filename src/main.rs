@@ -5035,6 +5035,22 @@ fn main() {
     let mut auto_native_libs: Vec<String> = Vec::new();
     let mut any_dev_interpret = false;
     for pkg_dir in &pending_native {
+        // #453 — for an `--html` build a `[wasm.bridge]` library builds its WASM
+        // bridge (the `--html` branch below), not a native cdylib. Building the
+        // native cdylib here is wasted work that FAILS for a browser-only bridge
+        // lib: its `#native` symbols route through the bridge, so they have no
+        // native implementation (P269). Skip it — the bridge build downstream uses
+        // the routes that `register_native_manifest` registered. (Populated only
+        // because the `[wasm.bridge]` registration there is now ungated by
+        // `[native]`; the two halves of #453 are a pair.)
+        if html_out.is_some()
+            && p.data
+                .wasm_bridge_packages
+                .iter()
+                .any(|(_, dir)| dir == pkg_dir)
+        {
+            continue;
+        }
         // @PLN18 — `[native] in_binary = true`: the library's natives are
         // registered inside this binary (src/native.rs); a cdylib compile can
         // only fail (the symbols exist nowhere else).  Skip it silently.

@@ -6544,34 +6544,6 @@ impl Parser {
                     rust_symbol.clone_into(&mut self.data.definitions[d_nr as usize].native);
                 }
             }
-            // lib_plan-29 W1c — same population in the sibling-probe path
-            // as in apply_manifest_side_effects (see comments below for
-            // why both paths need this).
-            if let Some(ref bridge_crate) = m.wasm_bridge_crate {
-                if !self
-                    .data
-                    .wasm_bridge_packages
-                    .iter()
-                    .any(|(c, _)| c == bridge_crate)
-                {
-                    self.data
-                        .wasm_bridge_packages
-                        .push((bridge_crate.clone(), pkg_dir.clone()));
-                }
-                for (loft_sym, bridge_fn) in &m.wasm_bridge_routes {
-                    self.data
-                        .wasm_bridge_routes
-                        .insert(loft_sym.clone(), (bridge_crate.clone(), bridge_fn.clone()));
-                }
-            }
-            // lib_plan-29 W2 — host_js mirror.
-            if let Some(ref host_js_rel) = m.wasm_bridge_host_js {
-                let abs = std::path::Path::new(&pkg_dir).join(host_js_rel);
-                let abs_str = abs.to_string_lossy().to_string();
-                if !self.data.wasm_bridge_host_js_files.contains(&abs_str) {
-                    self.data.wasm_bridge_host_js_files.push(abs_str);
-                }
-            }
             // P266: same ownership-driven restriction as
             // `apply_manifest_side_effects` above — only map `#native`
             // symbols whose definition lives in THIS package's source
@@ -6592,6 +6564,38 @@ impl Parser {
                 self.data
                     .native_symbol_crates
                     .insert(sym.to_string(), rust_crate.clone());
+            }
+        }
+        // #453 — a `[wasm.bridge]` library must register its bridge crate +
+        // routes + host_js even with NO `[native]`. This used to sit INSIDE the
+        // `m.native_crate` guard above, so a browser-only bridge lib (no native
+        // crate) reached through `--lib` / a `path` dep / the sibling walk
+        // silently dropped its routes and `--html` failed with P269. Register it
+        // ungated, mirroring `apply_manifest_side_effects` — the legacy resolution
+        // path that always got this right. (lib_plan-29 W1c bridge crate + routes,
+        // W2 host_js.)
+        if let Some(ref bridge_crate) = m.wasm_bridge_crate {
+            if !self
+                .data
+                .wasm_bridge_packages
+                .iter()
+                .any(|(c, _)| c == bridge_crate)
+            {
+                self.data
+                    .wasm_bridge_packages
+                    .push((bridge_crate.clone(), pkg_dir.clone()));
+            }
+            for (loft_sym, bridge_fn) in &m.wasm_bridge_routes {
+                self.data
+                    .wasm_bridge_routes
+                    .insert(loft_sym.clone(), (bridge_crate.clone(), bridge_fn.clone()));
+            }
+        }
+        if let Some(ref host_js_rel) = m.wasm_bridge_host_js {
+            let abs = std::path::Path::new(&pkg_dir).join(host_js_rel);
+            let abs_str = abs.to_string_lossy().to_string();
+            if !self.data.wasm_bridge_host_js_files.contains(&abs_str) {
+                self.data.wasm_bridge_host_js_files.push(abs_str);
             }
         }
     }
