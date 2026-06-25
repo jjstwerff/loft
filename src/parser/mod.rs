@@ -876,6 +876,12 @@ impl Parser {
         // referencing a capability that was never declared.  Surfaced alongside the
         // grant violations so the host fixes its contract before a modder iterates.
         let undeclared = self.sandbox_undeclared_links();
+        // @PLN86 §8 (F11) — the data envelope: the proven peak-heap footprint must fit
+        // the profile's declared data_budget (or be provable at all).
+        let data_env =
+            crate::sandbox::data_envelope_violations(&self.data, &self.sandbox, &self.def_sandbox)
+                .into_iter()
+                .map(|v| crate::sandbox::describe_data_violation(&v));
         caps.chain(totality)
             .chain(raw_writes)
             .chain(field_reads)
@@ -883,6 +889,7 @@ impl Parser {
             .chain(field_appends)
             .chain(param_locks)
             .chain(undeclared)
+            .chain(data_env)
             .collect()
     }
 
@@ -8623,20 +8630,10 @@ mod plan86_admission_tests {
             .join(", ")
     }
 
-    fn parse_admit_libs(
-        designations: &[&str],
-        allow_libs: &[&str],
-        allow: &[&str],
-        src: &str,
-    ) -> Parser {
-        let cfg = format!(
-            "[sandbox]\nmod = [{}]\n[profile.mod]\nallow_libs = [{}]\nallow = [{}]\n",
-            quoted(designations),
-            quoted(allow_libs),
-            quoted(allow),
-        );
+    /// Load the stdlib + parse `src` under the literal `[sandbox]` config `cfg`.
+    fn parse_admit_cfg(cfg: &str, src: &str) -> Parser {
         let mut p = Parser::new();
-        p.set_sandbox_config(parse_sandbox_config(&cfg));
+        p.set_sandbox_config(parse_sandbox_config(cfg));
         p.parse_dir("default", true, true).unwrap();
         // A process-global counter, not the `src` pointer: cargo runs tests as
         // threads in ONE process, so a deterministic name (the literal's address)
@@ -8652,6 +8649,43 @@ mod plan86_admission_tests {
         p.parse(path.to_str().unwrap(), false);
         let _ = std::fs::remove_file(&path);
         p
+    }
+
+    fn parse_admit_libs(
+        designations: &[&str],
+        allow_libs: &[&str],
+        allow: &[&str],
+        src: &str,
+    ) -> Parser {
+        let cfg = format!(
+            "[sandbox]\nmod = [{}]\n[profile.mod]\nallow_libs = [{}]\nallow = [{}]\n",
+            quoted(designations),
+            quoted(allow_libs),
+            quoted(allow),
+        );
+        parse_admit_cfg(&cfg, src)
+    }
+
+    /// Parse `src` with a `mod` profile carrying data-envelope bounds (`0` = omit).
+    fn parse_admit_envelope(
+        designations: &[&str],
+        allow_libs: &[&str],
+        data_budget: u64,
+        max_input_n: u64,
+        src: &str,
+    ) -> Parser {
+        let cfg = format!(
+            "[sandbox]\nmod = [{}]\n[profile.mod]\nallow_libs = [{}]\ndata_budget = {}\n{}",
+            quoted(designations),
+            quoted(allow_libs),
+            data_budget,
+            if max_input_n == 0 {
+                String::new()
+            } else {
+                format!("max_input_n = {max_input_n}\n")
+            },
+        );
+        parse_admit_cfg(&cfg, src)
     }
 
     fn parse_admit(designations: &[&str], allow_caps: &[&str], src: &str) -> Parser {
@@ -9225,6 +9259,56 @@ mod plan86_admission_tests {
             ps.sandbox_space_footprint(),
             (1, 12),
             "vector<Mob> build → (degree 1, coeff 12 = DbRef backing slot)"
+        );
+    }
+
+    /// @PLN86 §8 (F11) — the data-envelope reject: `coeff · max_input_n^degree` must
+    /// fit `data_budget`, with `max_input_n` provable; over-budget / unprovable reject.
+    #[test]
+    fn data_budget_rejects_over_envelope_and_admits_under() {
+        // degree 1, coeff 8 (vector<integer>); figure = 8 · max_input_n.
+        let src = "fn build() -> integer { r = []; for i in 0..10 { r += [i] } len(r) }\n";
+
+        // over budget: 8 · 1000 = 8000 > 4000 → rejected, naming the figure + budget.
+        let over = parse_admit_envelope(&["fn:build"], &["code"], 4000, 1000, src);
+        let errs = over.sandbox_admission_errors();
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("8000") && e.contains("data_budget 4000")),
+            "over-budget must be rejected naming the figure: {errs:?}"
+        );
+
+        // under budget: 8 · 1000 = 8000 ≤ 40000 → admitted (no data-envelope error).
+        let under = parse_admit_envelope(&["fn:build"], &["code"], 40000, 1000, src);
+        assert!(
+            !under
+                .sandbox_admission_errors()
+                .iter()
+                .any(|e| e.contains("data_budget") || e.contains("peak heap")),
+            "under-budget must admit: {:?}",
+            under.sandbox_admission_errors()
+        );
+
+        // budget set but max_input_n unset, degree > 0 → unprovable → rejected.
+        let unprov = parse_admit_envelope(&["fn:build"], &["code"], 40000, 0, src);
+        assert!(
+            unprov
+                .sandbox_admission_errors()
+                .iter()
+                .any(|e| e.contains("cannot be bounded") && e.contains("max_input_n")),
+            "an unset max_input_n with a growing footprint must be rejected: {:?}",
+            unprov.sandbox_admission_errors()
+        );
+
+        // no data_budget → report-only (the same growing script admits).
+        let nobudget = parse_admit_envelope(&["fn:build"], &["code"], 0, 0, src);
+        assert!(
+            !nobudget
+                .sandbox_admission_errors()
+                .iter()
+                .any(|e| e.contains("peak heap")),
+            "no data_budget → report-only, no reject: {:?}",
+            nobudget.sandbox_admission_errors()
         );
     }
 

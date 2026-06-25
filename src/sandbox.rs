@@ -1627,6 +1627,107 @@ pub fn describe_param_lock_violation(data: &Data, v: &ParamLockViolation) -> Str
     )
 }
 
+/// @PLN86 §8 (F11) — a data-envelope violation: the proven worst-case peak heap does
+/// not fit the profile's declared `data_budget`, or cannot be bounded because a degree
+/// depends on an unset `max_input_n`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DataViolation {
+    /// `coeff · max_input_n^degree` bytes exceeds `data_budget`.
+    OverBudget {
+        profile: String,
+        figure: u64,
+        budget: u64,
+        degree: u32,
+        coeff: u32,
+        max_input_n: u64,
+    },
+    /// Peak heap grows with input (degree > 0) but `max_input_n` is unset, so the
+    /// figure cannot be bounded — deny-by-default.
+    Unprovable { profile: String, degree: u32 },
+}
+
+/// `coeff · n^degree`, saturating: a genuinely over-budget figure can overflow `u64`,
+/// and saturation preserves the only fact we need ("exceeds the budget").
+fn footprint_bytes(coeff: u32, n: u64, degree: u32) -> u64 {
+    let mut v = u64::from(coeff);
+    for _ in 0..degree {
+        v = v.saturating_mul(n);
+    }
+    v
+}
+
+/// @PLN86 §8 (F11) — the data-envelope admission: for every designated profile that
+/// sets a `data_budget`, prove the sandboxed code's worst-case peak heap
+/// (`coeff · max_input_n^degree`, the P7.1 footprint) fits — else reject.  A non-zero
+/// degree with an unset `max_input_n` is unprovable (rejected, deny-by-default).  A
+/// profile without a `data_budget` is report-only (skipped).  The footprint is the
+/// program-global one; a single-profile sandbox (the norm) is exact, a multi-profile
+/// one is checked conservatively against each budget.
+#[must_use]
+pub fn data_envelope_violations(
+    data: &Data,
+    config: &SandboxConfig,
+    sandboxed: &HashMap<u32, String>,
+) -> Vec<DataViolation> {
+    let (degree, coeff) = sandbox_space_footprint(data, sandboxed);
+    let mut profiles: Vec<&String> = sandboxed.values().collect();
+    profiles.sort();
+    profiles.dedup();
+    let mut out = Vec::new();
+    for pname in profiles {
+        let Some(p) = config.profiles.get(pname) else {
+            continue;
+        };
+        if p.data_budget == 0 {
+            continue; // no budget declared → report-only
+        }
+        if degree > 0 && p.max_input_n == 0 {
+            out.push(DataViolation::Unprovable {
+                profile: pname.clone(),
+                degree,
+            });
+            continue;
+        }
+        let figure = footprint_bytes(coeff, p.max_input_n, degree);
+        if figure > p.data_budget {
+            out.push(DataViolation::OverBudget {
+                profile: pname.clone(),
+                figure,
+                budget: p.data_budget,
+                degree,
+                coeff,
+                max_input_n: p.max_input_n,
+            });
+        }
+    }
+    out
+}
+
+/// @PLN86 §8 (F11) — render a data-envelope violation as an actionable error naming
+/// the figure and the fix.
+#[must_use]
+pub fn describe_data_violation(v: &DataViolation) -> String {
+    match v {
+        DataViolation::OverBudget {
+            profile,
+            figure,
+            budget,
+            degree,
+            coeff,
+            max_input_n,
+        } => format!(
+            "profile `{profile}`: sandboxed worst-case peak heap ~{figure} bytes \
+             ({coeff} · {max_input_n}^{degree}) exceeds data_budget {budget}.\n  fix: \
+             raise data_budget, lower max_input_n, or build less per input."
+        ),
+        DataViolation::Unprovable { profile, degree } => format!(
+            "profile `{profile}`: peak heap grows as O(n^{degree}) but max_input_n is \
+             unset, so the footprint cannot be bounded.\n  fix: set max_input_n in the \
+             profile, or remove the input-growing allocation."
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
