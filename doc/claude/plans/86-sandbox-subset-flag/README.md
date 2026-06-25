@@ -257,7 +257,11 @@ not pushed from here.
   variants are rejected (hoist a call bound like `len(v)` to a local first). Tests:
   `bounded_while_is_admitted` / `unprovable_while_is_rejected`.
 - **3.2b structural recursion** — admit recursion when a structurally-decreasing argument
-  is proven (today the call graph must be acyclic).
+  is proven (today the call graph must be acyclic). **Likely SUPERSEDED by the
+  [lightweight expand-walker](expand-walker.md)** — a trusted, budgeted, deterministic
+  tree/graph walk primitive that gives sandboxed code recursion's reach without recursion
+  (and without an admission change), handling generative + cyclic structures that
+  structural-recursion analysis could not. 🟡 DESIGNED (minimal), to prototype + experiment.
 - **2.1b type/module `#cap` default + per-method override** — a `#cap` on a type/module
   sets the default for its methods; a method without its own `#cap` inherits it. Today
   `#cap` is per-def only.
