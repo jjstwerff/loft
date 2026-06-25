@@ -711,9 +711,34 @@ the same `copy_block`.
 
 ## Design: N1 — Direct-emit local collections in native codegen
 
-**Affected benchmarks:** 08 (16×), 09 (12×), 10 (7.25×)
+**Affected benchmarks:** 08 word-count (20.5×), 09 matrix (24.5×), 10 sort (18.5×) — *refreshed 2026-06-25*
 **Expected gain:** 5–15× on data-structure benchmarks; closes the native/Rust gap
 **Cost:** High — new analysis pass, new emit path, extended type system in codegen
+
+> **Status (investigated 2026-06-25): the LOCAL-ONLY design below is mis-scoped — it would
+> not move the target benchmarks, and its real foundation is the @PLN85 ownership model.** Two
+> findings:
+> 1. **The benchmark vectors ESCAPE.** In `10_sort`, `data` is passed to `insertion_sort(arr)`
+>    and `arr` is a `DbRef` *parameter* mutated in place — so neither is "a local used only
+>    within one function." The 18.5× gap is the per-access indirection on a vector that
+>    **crosses a function boundary** (`stores.vec_get_or_raise_runtime(...)` + `stores.store(&db).get_int(...)`
+>    per `arr[j]`). Closing it needs the vector to be `Vec<i64>` **across the call** (caller's
+>    `data: Vec`, callee takes `&mut Vec`) — *not* the local-only emit. The local-only slice is
+>    sound but moves few real programs.
+> 2. **The escape/representation fact N1 needs IS the ownership work.** The existing
+>    `scopes.rs::escapes_value`/`guard_escapes` is partial (only "handed out as-is" — return /
+>    yield / tuple), does **not** track "passed to a function" as an escape, and is for
+>    store-*freeing* decisions, not representation choice — explicitly "left for the fix's full
+>    escape analysis." That full analysis is **@PLN85** (ownership as a type fact). Building a
+>    separate N1 escape pass would duplicate it and add a soundness surface in loft's #1-priority
+>    heap area (a missed escape → a `Vec` where a `DbRef` is expected → corruption).
+>
+> **Recommendation:** sequence N1 as a **consumer of the @PLN85 ownership/representation fact**,
+> not a standalone pass. Once "is this vector locally owned / does it escape (incl. across calls)"
+> is a sound type fact, N1 is a clean translation (facts-in-types per CODEGEN_METHOD): read the
+> fact → emit `Vec`/`&mut Vec` vs the store path. The widened scope (Vec across boundaries) is
+> what actually moves the benchmarks, and it is even more dependent on that fact. Until then, the
+> local-only slice is the only sound piece, and it isn't worth the risk for its narrow payoff.
 
 ### Background
 
