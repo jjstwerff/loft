@@ -1,0 +1,71 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN89 differential-oracle corpus — AXIS: a vector fn whose tail is an explicit
+// `return <fresh-owned vector>` must NRVO-deliver into __retbuf, exactly as the
+// implicit tail does. This is the #448 c5 residual (the oracle's first catch was
+// the headline #448 shape, program 08; this guards the rest of its matrix).
+//
+// An explicit `return [literal]` used to leave the fn's `returned` a BARE vector
+// (it built a fresh __vdb store and returned THAT), while the equivalent implicit
+// tail `{ [literal] }` delivered into __retbuf. A DIRECT caller copes (it owns the
+// result), but an NRVO caller that CHAINS the bare-returning fn into its own buffer
+// (`return wrap()` → `__retbuf = wrap(__retbuf)`) frees __retbuf and orphans the
+// store wrap never wrote there. Fixed by delivering every fresh-owned vector return
+// — tail (block_result #437 generalized to literals) AND mid-body (deliver_mid_-
+// vector_returns) — into __retbuf. Guards leak-freedom + value on both backends.
+
+// single-return literal fn (triple), chained by an NRVO wrapper (#448 c5)
+fn triple(n: integer) -> vector<integer> {
+  return [n, n, n];
+}
+fn wrap1(n: integer) -> vector<integer> {
+  return triple(n);
+}
+
+// MULTI-return literal fn (dual), chained — both return paths must deliver
+fn dual(c: boolean) -> vector<integer> {
+  if c { return [1, 1]; }
+  return [2, 2, 2];
+}
+fn wrap2(c: boolean) -> vector<integer> {
+  return dual(c);
+}
+
+// MIRROR shape — an early `return [literal]` (mid-body) + a tail `return <call>`
+// that NRVO-chains the buffer. The tail chain makes the fn buffer-bound via a
+// parse_return MidReturn (NOT a tail rename), so the mid-body literal must still
+// be delivered into __retbuf or the early path orphans its store. Pre-existing
+// leak on main, both backends; fixed by the block_result buffer-bound mid-body
+// delivery.
+fn mixed(c: boolean, n: integer) -> vector<integer> {
+  if c { return [n, n]; }
+  return triple(n);
+}
+
+fn main() {
+  // single-return literal, chained: leaked before the fix
+  a = wrap1(7);
+  print("a={a[0]}+{a[2]} alen={len(a)}\n");        // 7+7, len 3
+
+  // multi-return literal, chained, take the TAIL path
+  b = wrap2(false);
+  print("b={b[0]} blen={len(b)}\n");               // 2, len 3
+
+  // multi-return literal, chained, take the EARLY path
+  d = wrap2(true);
+  print("d={d[0]} dlen={len(d)}\n");               // 1, len 2
+
+  // mirror: early literal + tail call-chain, take the EARLY path (was the h4 leak)
+  e = mixed(true, 7);
+  print("e={e[0]} elen={len(e)}\n");               // 7, len 2
+
+  // mirror, take the TAIL (call) path
+  f = mixed(false, 7);
+  print("f={f[0]} flen={len(f)}\n");               // 7, len 3
+
+  // consume so a downstream `+=` would surface any dropped/doubled rows
+  sa = 0;
+  for x in a { sa += x; }
+  print("sa={sa}\n");                              // 21
+}

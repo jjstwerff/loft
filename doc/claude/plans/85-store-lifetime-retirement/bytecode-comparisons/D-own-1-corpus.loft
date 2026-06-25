@@ -1,0 +1,68 @@
+// @PLN85 / D-own-1 — return-delivery corpus. Each fn exercises ONE delivery
+// path in block_result's vector arm; main() runs them all so the program is a
+// clean (no-leak) end-to-end check on both backends. Capture `loft introspect`
+// on this file BEFORE and AFTER the Delivery-selector collapse — the per-fn
+// bytecode must be byte-identical (behaviour-preserving refactor).
+
+struct Box { v: vector<integer> }
+
+// (A) #416 — implicit match/if vector tail → materialise each arm into __retbuf.
+fn arms(f: boolean) -> vector<integer> {
+  if f { [1, 2, 3] } else { [4, 5, 6] }
+}
+
+// (B) #448 — early `return <call>` (NRVO-adopts __retbuf) + tail `return [lit]`
+// (fresh local store) → the tail must COPY into __retbuf, not rename.
+fn squares(n: integer) -> vector<integer> {
+  out = [];
+  for i in 0..n { out += [i * i]; }
+  return out;
+}
+fn pick(f: boolean, n: integer) -> vector<integer> {
+  if f { return squares(n); }
+  return [n, n, n];
+}
+
+// (C) #437 — explicit `return o` of a fresh-local owned vector → strip the
+// return, rename o onto __retbuf (implicit-tail equivalence).
+fn ret_local() -> vector<integer> {
+  o = [7, 8, 9];
+  return o;
+}
+
+// (D1) #120 — tail is a bare call delivering through a hidden buffer arg; ls
+// stripped by filter_hidden → recover the call's hidden refs and rename.
+fn wrap(n: integer) -> vector<integer> {
+  squares(n)
+}
+
+// (E whole-arg, A.2) — implicit tail returns the whole vector ARGUMENT → copy
+// into __retbuf (value semantics; the caller adopts an independent copy).
+fn idv(v: vector<integer>) -> vector<integer> {
+  v
+}
+
+// (E struct-field, #415) — implicit tail reads a struct vector FIELD of an arg
+// → copy into __retbuf.
+fn getv(b: Box) -> vector<integer> {
+  b.v
+}
+
+// (F multi-arm, cluster-V) — a non-arg, non-empty-deps tail that nrvo-collapses
+// `cv = inner(); cv` so the inner call's hidden buffer points at cv directly.
+fn collapse(n: integer) -> vector<integer> {
+  cv = squares(n);
+  cv
+}
+
+fn main() {
+  a = arms(true);
+  b = pick(false, 3);
+  c = ret_local();
+  d = wrap(4);
+  e = idv([10, 20, 30]);
+  bx = Box { v: [40, 50] };
+  g = getv(bx);
+  h = collapse(2);
+  print("{len(a)} {len(b)} {len(c)} {len(d)} {len(e)} {len(g)} {len(h)}\n");
+}
