@@ -1,0 +1,128 @@
+// #457 adopt/free shape-sweep — the axes D-own-1's tail-sweep missed.
+// Each cell: a returned vector local reassigned to a recursive return in >=2
+// branches, then `+=`, then `return out` — plus a TRAILING heap build (`churn`)
+// to reoccupy any wrongly-freed slot.  Every cell asserts value AND length;
+// run under LOFT_STORES=warn (interp) / LOFT_NATIVE_LEAK_CHECK=1 (native) for
+// the leak axis.  Hand-computed expectations are in each assert.
+
+struct Pt { x: integer, y: integer }
+
+// churn: a vector<u8> build that reoccupies a freed slot (the #457 trigger tail).
+fn churn(k: integer) -> integer { b: vector<u8> = [0]; for i in 0..k { b += [1]; } return len(b); }
+
+// --- Cell A: baseline if/else, vector<text> (the #457 minimal shape) ---
+fn a_path(m: integer, lo: integer, hi: integer) -> vector<text> {
+  out: vector<text> = []; n = hi - lo;
+  if n <= 1 { return out; }
+  if m < 1 { out = a_path(m, lo, lo + 1); out += ["L"]; }
+  else     { out = a_path(m - 1, lo + 1, hi); out += ["R"]; }
+  return out;
+}
+
+// --- Cell B: element type = integer ---
+fn b_build(n: integer) -> vector<integer> {
+  out: vector<integer> = [];
+  if n <= 0 { return out; }
+  if n % 2 == 0 { out = b_build(n - 1); out += [n]; }
+  else          { out = b_build(n - 1); out += [n * 10]; }
+  return out;
+}
+
+// --- Cell C: element type = struct ---
+fn c_build(n: integer) -> vector<Pt> {
+  out: vector<Pt> = [];
+  if n <= 0 { return out; }
+  if n % 2 == 0 { out = c_build(n - 1); out += [Pt { x: n, y: n } ]; }
+  else          { out = c_build(n - 1); out += [Pt { x: n, y: 0 } ]; }
+  return out;
+}
+
+// --- Cell D: deeper recursion (depth 6) ---
+fn d_build(n: integer) -> vector<integer> {
+  out: vector<integer> = [];
+  if n <= 0 { return out; }
+  if n > 100 { out = d_build(n - 1); out += [n]; }
+  else       { out = d_build(n - 1); out += [n]; }
+  return out;
+}
+
+// --- Cell E: 3-arm chain (else-if), vector<text> ---
+fn e_build(n: integer) -> vector<text> {
+  out: vector<text> = [];
+  if n <= 0 { return out; }
+  r = n % 3;
+  if r == 0      { out = e_build(n - 1); out += ["a"]; }
+  else if r == 1 { out = e_build(n - 1); out += ["b"]; }
+  else           { out = e_build(n - 1); out += ["c"]; }
+  return out;
+}
+
+// --- Cell F: match-STATEMENT arms reassigning `out` (the in-class adopt shape) ---
+// NOTE: the match-EXPRESSION form (`out = match { _ => { v = f(); v += []; v } }`)
+// hits a SEPARATE pre-existing bug — a vector local FIRST-assigned from a call
+// inside an arm gets a fresh `__vdb` buffer at its first `+=`, dropping the adopt
+// (same ownership fact unread at the materialisation site, not the free site).
+// Tracked separately; not part of #457's adopt/free free-site class.
+fn f_build(n: integer) -> vector<integer> {
+  out: vector<integer> = [];
+  if n <= 0 { return out; }
+  match n % 2 {
+    0 => { out = f_build(n - 1); out += [n]; },
+    _ => { out = f_build(n - 1); out += [n + 100]; },
+  }
+  return out;
+}
+
+// --- Cell G: nested if (adopt inside a nested branch) ---
+fn g_build(n: integer) -> vector<integer> {
+  out: vector<integer> = [];
+  if n <= 0 { return out; }
+  if n % 2 == 0 {
+    if n > 4 { out = g_build(n - 1); out += [n]; }
+    else     { out = g_build(n - 1); out += [n + 1]; }
+  } else {
+    out = g_build(n - 1); out += [n];
+  }
+  return out;
+}
+
+fn main() {
+  // Cell A: a_path(0,0,2) -> 1 sibling.
+  pa = a_path(0, 0, 2); churn(7);
+  assert(len(pa) == 1, "A len={len(pa)} want 1");
+  assert((pa[0] ?? "") == "L", "A[0]={pa[0] ?? \"?\"} want L");
+
+  // Cell B: b_build(5) -> [50,40,30,20,10]? walk: each level appends n or n*10.
+  // n=5(odd)->50, 4(even)->4, 3->30, 2->2, 1->10 ; built innermost-first so
+  // order = [10,2,30,4,50]. len 5.
+  pb = b_build(5); churn(9);
+  assert(len(pb) == 5, "B len={len(pb)} want 5");
+  assert((pb[0] ?? 0) == 10, "B[0]={pb[0] ?? 0} want 10");
+  assert((pb[4] ?? 0) == 50, "B[4]={pb[4] ?? 0} want 50");
+
+  // Cell C: c_build(4) -> 4 structs, order x=[1,2,3,4], y alternates 0/n.
+  zero = Pt { x: 0, y: 0 };
+  pc = c_build(4); churn(5);
+  assert(len(pc) == 4, "C len={len(pc)} want 4");
+  assert((pc[0] ?? zero).x == 1, "C[0].x want 1");
+  assert((pc[3] ?? zero).x == 4, "C[3].x want 4");
+
+  // Cell D: d_build(6) -> [1,2,3,4,5,6]. len 6.
+  pd = d_build(6); churn(11);
+  assert(len(pd) == 6, "D len={len(pd)} want 6");
+  assert((pd[0] ?? 0) == 1 && (pd[5] ?? 0) == 6, "D ends want 1..6");
+
+  // Cell E: e_build(4) -> 4 elements. len 4.
+  pe = e_build(4); churn(6);
+  assert(len(pe) == 4, "E len={len(pe)} want 4");
+
+  // Cell F: f_build(5) -> 5 elements (match-arm adopt). len 5.
+  pf = f_build(5); churn(8);
+  assert(len(pf) == 5, "F len={len(pf)} want 5");
+
+  // Cell G: g_build(6) -> 6 elements (nested-if adopt). len 6.
+  pg = g_build(6); churn(10);
+  assert(len(pg) == 6, "G len={len(pg)} want 6");
+
+  println("shape-sweep OK: A..G all pass");
+}
