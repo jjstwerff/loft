@@ -1,0 +1,29 @@
+// #457 minimal repro (pure loft, no crypto) — both backends print/assert len(p) == 2.
+//
+// Trigger (bisected): a returned vector<text> local `out` is reassigned to a recursive
+// `path()` return in BOTH if/else arms, then `out += [...]`, then `return out`.  The
+// callee frees BOTH per-arm NRVO buffers (__ref_1, __ref_2) at exit — including the one
+// `out` adopted and returns — so `p` holds a freed store.  A later vector<u8> build
+// (`mleaf`: `b = [0]; b += b2b(x)` → `[0,1]`, len 2) reuses the freed slot, so `len(p)`
+// reads 2.  On larger trees the reuse lands elsewhere → non-deterministic SIGSEGV.
+//
+// Necessary+sufficient conditions (do NOT remove without re-checking):
+//   - BOTH arms reassign `out = path(...)` (single arm = safe; see bisect probe R)
+//   - a trailing vector<u8> build to reoccupy the slot (no build = no symptom; probe S)
+// Not needed: crypto, `verify`, the for-loop, the multi-arg signature (probes K/L/M).
+fn b2b(s: text) -> vector<u8> { r: vector<u8> = []; for c in s { r += [1]; } return r; }
+fn mleaf(x: text) -> text { b: vector<u8> = [0]; b += b2b(x); return "h"; }
+fn path(m: integer, lo: integer, hi: integer) -> vector<text> {
+  out: vector<text> = []; n = hi - lo;
+  if n <= 1 { return out; }
+  k = 1;
+  if m < k { out = path(m, lo, lo + k); out += [ mleaf("a") ]; }
+  else     { out = path(m - k, lo + k, hi); out += [ mleaf("b") ]; }
+  return out;
+}
+fn main() {
+  p = path(0, 0, 2);
+  r = mleaf("e");
+  assert(len(p) == 1, "len corrupted: {len(p)} (want 1) — #457");
+  println("ok len={len(p)}");
+}

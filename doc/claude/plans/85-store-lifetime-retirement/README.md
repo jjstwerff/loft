@@ -8,6 +8,15 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 Plan id: [@PLN85](https://github.com/loft-lang/plans/issues/85) · investigation-style
 (reading order: Status → Probes → Cluster docs → Roadmap).
 
+> **▶ ACTIVE D-own slice (2026-06-25): the adopt/free re-derivation collapse — driven by
+> [#457](https://github.com/loft-lang/loft/issues/457).** A `vector<text>` corrupted (wrong len +
+> SIGSEGV) because a returned local adopted across `if/else` arms is freed before `return`. The
+> goal is NOT to patch #457 but to **complete the cluster-V invariant so the class closes by
+> construction** (the adopt/free sibling of the done [D-own-1 delivery collapse](D-own-1-return-delivery-collapse.md)).
+> Full handoff — repro, mechanism, the seam to D-own-1, the method, the fix site — in
+> **[adopt-free-collapse.md](adopt-free-collapse.md)**. The investigation below is CLOSED; the
+> *simplification* (D-own) continues per [OWNERSHIP_MODEL.md § ACTIVE](../../OWNERSHIP_MODEL.md#active--the-simplification-exploration-next-days-exploratory--revertable).
+
 > ## ✅ CLOSED — outcome (b): the clusters are independent, each invariant named + enforced at its own chokepoint, with a standing instrument that keeps the class shut.
 >
 > The investigation's central single-root hypothesis was **falsified** (Stage B): the
