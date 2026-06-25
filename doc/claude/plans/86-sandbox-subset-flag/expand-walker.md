@@ -178,6 +178,14 @@ Net: the design is sound; the work to make it real is loft-level (generics, the 
 worklist divergence, recursive value construction) — i.e. this stream's language work,
 not a flaw in the walker contract.
 
+**Handoff (2026-06-25):** A2 (native worklist divergence) and A3 (deep-construction
+stack overflow) are store-lifetime / codegen issues — handed to the `../loft` @PLN85
+store-lifetime stream, which owns that code and was already investigating a related
+problem. This (sandbox) stream does not edit those paths in parallel; it re-validates
+the walker on `--native` once @PLN85 lands the fix. A1 (generics for a universal
+`walk<N>`) stays here as independent language work, lower priority (per-type works
+meanwhile).
+
 ## Build note
 
 Simplest first cut is a **trusted stdlib primitive** (sandboxed code calls it; it is
