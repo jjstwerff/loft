@@ -213,6 +213,18 @@ store-lifetime stream), so the next sandbox work is **driven by the crawler dogf
 not pushed from here.
 
 ### A. Safety — completes the v1 admitted-script guarantee
+- **Per-member access — read / update / append (P6, §7) — 🟡 DESIGNED.** Refines the
+  all-or-nothing no-raw-write arc into independent **read / update / append** rights per
+  struct field + enum variant, linked via the `group#right` notation to explicitly-declared,
+  namespaced `capability` groups (resolved + validated at compile); so append-only
+  (grow a log, never alter it; never forge a privileged variant) is expressible. Pure
+  compile-time, lands on existing IR chokepoints (`OpGetField` / raw-write /
+  `OpAppend*`+`Value::Enum`). Supersedes the coarse 2.4 below.
+- **Data envelope (P7, §8) — 🟡 DESIGNED.** Turns the §4 complexity *degree* into a hard
+  load-time limit: prove `coeff · max_input_n^degree ≤ data_budget` or reject. Closes OOM —
+  the one fault `catch_unwind` cannot see — at admission. Pure compile-time, no @PLN85 dep.
+- **`sandbox-check` verdict + RED/GREEN access corpus (P8) — 🟡 DESIGNED.** A no-run
+  "will this be allowed?" surface (CLI + lib) and the committed compile-only test battery.
 - **2.4 No-raw-write admission — ✅ DONE.** (Was the one open v1 safety step.) A sandboxed
   def may not raw-write heap data (`e.health = 0` / `v[i] = 9`) — recorded at parse
   (`sandbox_raw_writes`, where field-write vs struct-construction is unambiguous) and
@@ -330,41 +342,44 @@ type uses), so indirect calls can't escape (L4).
 | sandboxed → a symbol outside the allowed groups / native FFI / file·net·env | **compile error** |
 | unrestricted → a sandboxed def | yes — and the call always returns (the script is total) |
 
-### 3. Library-first admission — whole libraries in, tags only to split one
+### 3. Library-first admission — whole libraries in, capabilities only to split one
 A reachable trusted symbol admits if **either** its **library** is allow-listed
-wholesale (`allow_libs`) **or** its `#cap` **group** is allow-listed (`allow_caps`).
-A complete, host-vetted library is included as a **unit** — every symbol in it
-admits with **no tag**, including its untagged functions and its native bridges. So
-the host allows the pure stdlib modules (`code`/`text`/`json`) wholesale and tags
-nothing; the 166-fn stdlib never needs blanket tagging.
+wholesale (`allow_libs`) **or** the profile grants its `group#right` capability link
+(`allow`). A complete, host-vetted library is included as a **unit** — every symbol in it
+admits with **no link**, including its unlinked functions and its native bridges. So the
+host allows the pure stdlib modules (`code`/`text`/`json`) wholesale and links nothing; the
+166-fn stdlib never needs blanket tagging.
 
-**Tags are purely the fine-grained layer** — for carving a library in half
-("include `files`, but reads only"). The capability is a fact that lives with the
-function (`#cap "<group>"` at its definition, beside `#native`/`#rust` — one home per
-fact, [STABILITY_REDFLAGS.md](../../STABILITY_REDFLAGS.md)). Only a *partially*-
-included library needs them.
+**Capabilities are purely the fine-grained layer** — for carving a library in half
+("include `files`, but reads only"). The capability is the **same mechanism functions and
+data members share** (§7): a declared, namespaced `capability` referenced by a validated
+`group#right` link at the definition, beside `#native`/`#rust` — one home per fact,
+[STABILITY_REDFLAGS.md](../../STABILITY_REDFLAGS.md). Only a *partially*-included library
+needs them. *(v1 shipped the function link as an unchecked `#cap "fs.read"` string; P6.2
+migrates it to the declared-`capability` + `group#right` form below — one model, validated.)*
 
-- **The stdlib ships its own tags**, only where a built-in split is worth exposing:
-  `files`'s `fs.read`/`fs.write` is the one example today. Projects **cannot edit the
+- **The stdlib ships its own capabilities**, only where a built-in split is worth exposing:
+  `files`'s `fs#read`/`fs#update` is the one example today. Projects **cannot edit the
   stdlib** — they include its modules wholesale, or use the shipped split.
-- **Projects tag their OWN code** — internal APIs + bundled libraries — to gate them
-  finely; that is where new `#cap` tags come from, not the stdlib.
-- Keeping a few real tags (the `files` split) keeps the **cap path verifiable**
-  end-to-end alongside the wholesale path.
+- **Projects declare + link their OWN code** — internal APIs + bundled libraries — to gate
+  them finely; that is where new `capability` declarations come from, not the stdlib.
+- Keeping a few real links (the `files` split) keeps the **cap path verifiable** end-to-end
+  alongside the wholesale path.
 
-```
-// the stdlib SHIPS this split (a project cannot add it):
-pub fn mtime(path: text) -> integer;  #cap "fs.read"
-pub fn write(self: File, v: text);    #cap "fs.write"
+```loft
+// the stdlib DECLARES + SHIPS this split (a project cannot add it):
+capability fs
+pub fn mtime(path: text) -> integer;  fs#read
+pub fn write(self: File, v: text);    fs#update     // a write modifies existing content
 ```
 ```toml
 [profile.mod-script]
 native_ffi = false                            # no vetted cdylib bridge (interpret-only
                                               # is unconditional — not a key)
-allow_libs = ["code", "text", "json"]        # whole modules — no tags needed
-allow_caps = ["fs.read"]                      # files NOT wholesale → reads only, no writes
+allow_libs = ["code", "text", "json"]        # whole modules — no links needed
+allow      = ["fs#read"]                       # files NOT wholesale → reads only, no writes
 ```
-A symbol in **no** allowed library **and** with **no** allowed cap is denied
+A symbol in **no** allowed library **and** with **no** granted `group#right` is denied
 (deny-by-default). The library is the source module (stdlib) or package name.
 
 ### 4. Totality admission (the core)
@@ -407,14 +422,15 @@ Anything that can't be proven total is **rejected at load**, with the reason.
 idea is dropped.** Instead, make every write a sandboxed script can do **safe by
 construction**, so direct writes to live state are always valid and there is nothing
 to undo:
-- sandboxed code has **no raw store mutation** — it cannot assign struct fields or
-  store cells directly. Its only writes are through **invariant-preserving,
-  capability-gated host operations** (the `*.write` groups): each validates its inputs
-  and leaves the host's invariants intact.
-- a profile grants *which* write ops via `allow_caps`; each granted op is vetted safe
-  (the L-host contract, extended to writes). **Any sequence of them keeps the world
-  valid**, so order/interruption can't matter — and admitted scripts never interrupt
-  (they're total).
+- sandboxed code performs **no _unauthorised_ mutation** — it may directly write only a
+  **member the host granted an `update`/`append` right** (§7), each of which the host has
+  vouched is invariant-safe for ANY value (the **L-member** contract), and otherwise mutates
+  coupled state only through **invariant-preserving, capability-gated host operations**. It
+  can never raw-write a member it was not granted (deny-by-default), so no write can corrupt.
+- a profile grants *which* members/ops via the `allow` `group#right` links; each granted right
+  (and each write op) is vetted safe (the L-host / L-member contract). **Any sequence of them
+  keeps the world valid**, so order/interruption can't matter — and admitted scripts never
+  interrupt (they're total).
 - writes therefore land **directly on live state** (fast — the performance premise);
   a script's *logic* may produce an unwanted-but-valid state (the modder's
   responsibility), **never an invalid/corrupt one**.
@@ -437,6 +453,90 @@ run. Each rejection class names its fix:
 A script that compiles clean is then guaranteed safe at runtime — **the admission
 errors are the contract.** This diagnostic quality is a first-class deliverable, not an
 afterthought: it is the entire developer experience of writing a mod.
+
+### 7. Per-member access — read / update / append, declared as groups in loft code
+The data-integrity arc (§5, the no-raw-write rule) is **all-or-nothing**: a sandboxed
+script either mutates host data only through cap *operations*, or not at all. The
+refinement gives the host **per-member control**, at the granularity of a single struct
+field or enum variant, split across **three independent rights**:
+
+- **read** — observe: a field read (`OpGetField`), an index read, a match on a variant.
+- **update** — mutate an existing slot in place: `e.health = 0`, `v[i] = x` (the writes
+  §2.4 already records in `sandbox_raw_writes`).
+- **append** — introduce something new: grow a structure (`v += x`, the `OpAppend*` /
+  `OpPreAlloc*` ops the space analysis already finds) **or** construct a host enum variant
+  (`Value::Enum(disc, tp)` — producing a new value).
+
+The three are independent, so **append-only** is expressible — a script may add log
+entries or spawn-list items but never alter the existing ones, and can never forge a
+privileged variant. `update` ≠ `append`: granting one does not grant the other.
+
+**A capability group is declared explicitly in loft** (a namespaced symbol, resolved like
+any other), and a member **links to it with the `group#right` notation** — so the compiler
+**validates the group at the language level**: an undeclared or mistyped group is a **load
+error**, not a silently-never-granted string. `capability` is deliberately verbose —
+declarations are rare and a design with *many* of them is a smell, so the cost falls in the
+right place.
+
+```loft
+// the host declares its capability groups (namespaced, validated on reference):
+capability stats
+capability log
+capability cmd.move
+
+struct Entity {
+    id: int                              // unlinked → read-only (default)
+    health: int  stats#read stats#update
+    log: [Event] log#read log#append     // append-only: read + append, never update
+}
+enum Command {
+    Move(Vec2)  cmd.move#append          // constructible via cmd.move when granted
+    Shutdown                             // unlinked → un-forgeable (default)
+}
+```
+
+A profile grants the **same `group#right` token** — one notation in the type def and the
+manifest:
+
+```toml
+[profile.mod-script]
+allow = ["stats#read", "stats#update", "log#read", "log#append", "cmd.move#append"]
+```
+
+`#read` / `#update` / `#append` are the three built-in rights; `stats` / `log` / `cmd.move`
+resolve through **normal namespacing** — a grant on a parent namespace + right (e.g.
+`game#read`) covers every capability beneath it, extending the existing `cap_prefix_match`.
+
+**Defaults** (asymmetric, both the safe choice): **read** defaults to *allow* (an unlinked
+member is readable — the fast-rich-read premise; privacy is opt-in via an ungranted read
+capability), while **update** and **append** default to *deny* (nothing is mutable, growable,
+or forgeable unless a granted capability says so). The **§2.4 ownership split is unchanged**: these
+rights gate **host** data only — a script's own structures (types it defines, values it
+constructs locally) stay freely read/update/append.
+
+Every check is at **admission** — the walk already visits each `OpGetField`, raw-write,
+`OpAppend*`, and `Value::Enum` node, and each carries the `(type, member)` identity, so the
+lookup is `(member, right) → group ∈ profile.allow_<right>?`. No runtime cost, no rollback:
+a disallowed access is a **load error**, never a caught mutation.
+
+### 8. Data envelope — a compile-time footprint bound
+§4 reports a worst-case complexity *degree* (`O(n^d)`) and asks the host to "bound n." The
+envelope makes that a **hard, checked limit at load**: the host declares a `data_budget`
+(words of peak live heap) plus the input bounds the degree is expressed in (`max_input_n`,
+`max_depth`, `max_string_len`), and admission proves the footprint fits — or **rejects**.
+
+Because the totality arc (§4) already bounds every loop and makes recursion acyclic, peak
+heap is a closed form: `Σ over accumulating allocation sites (record_size × max_input_n^nesting)`.
+Every factor is known — the trip count from `max_input_n`, the record size **exactly** from
+the type's stride. The space analysis already computes the *degree*; the envelope adds the
+*coefficient* (`Σ record_size`) and compares `coeff · max_input_n^degree` against
+`data_budget`. An allocation whose size cannot be tied to a declared bound (an uncapped
+dynamic string, a host-value-sized allocation) is **rejected** — deny-by-default, the same
+trade as an unbounded loop, with a diagnostic that names the fix.
+
+This is **purely compile-time**: no allocation counter, no runtime ceiling, no saturation,
+no rollback. OOM — the one fault that bypasses every other guarantee because `catch_unwind`
+cannot see it — becomes a load-time concern.
 
 ## Compile-time vs runtime
 
@@ -615,11 +715,112 @@ proven-total script.
   stays within a frame budget vs a native baseline — with **direct writes, no rollback,
   no copy, no journal** (if this needs a rollback to be safe, the design is wrong, §5).
 
+### P6 — Unified capability model: `capability` decls + `group#right` for functions AND members [compile-time core, §3 + §7]
+
+> **Consistency migration (pre-customer, deliberate).** v1 shipped the *function* capability
+> as an unchecked STRING — `#cap "fs.read"` → `Definition.cap: String` (`src/data.rs:2451`),
+> parsed at `src/parser/definitions.rs:1172`, matched via `allow_caps` /
+> `cap_prefix_match` (`src/sandbox.rs:65`). This ladder lands ONE mechanism for functions and
+> data members: a declared, namespaced `capability` referenced by a validated `group#right`
+> token. The `.`-segment split (`fs.read` / `fs.write`) becomes the right split
+> (`fs#read` / `fs#update`). Do NOT ship the member model beside the old string model.
+
+- **6.1 The `capability` declaration + the `group#right` token + a shared resolver (foundation).**
+  - Parse a `capability <namespaced-name>` top-level declaration beside `parse_struct`
+    (`src/parser/definitions.rs:1955`) / `parse_enum` (`:367`) — it registers a namespaced
+    `Definition` of a new capability kind, so `def_library` + normal name resolution apply.
+  - Lex the `group#right` token (`<ident-path>#<read|update|append>`) and add a shared
+    `enum Right { Read, Update, Append }` (`src/sandbox.rs`).
+  - One shared `resolve_cap_link(path, right) -> Option<(cap_def_nr, Right)>` that resolves
+    `path` by normal lookup; **an undeclared/mistyped group is a LOAD error**.
+  - *Verify:* `capability fs` declares; `fs#read` resolves; `typo#read` is a load error
+    naming the unknown capability; `loft introspect` lists the declared capabilities.
+- **6.2 Migrate the function-cap surface onto `group#right`.**
+  - `#cap` parse (`definitions.rs:1172`) accepts the bare `group#right` token (drop the
+    quoted string) and validates it via 6.1; `Definition.cap` (`data.rs:2451`) now holds the
+    `group#right` token; `cap()` (`data.rs:2564`) shape unchanged; IR persistence (`DEF_CAP`,
+    the 2.2-persist codec) keeps round-tripping the string.
+  - Retag `default/02_files.loft`: declare `capability fs` + `capability env`; rewrite the 32
+    tags — `fs.read`→`fs#read` (14), `fs.write`→`fs#update` (16), `env`→`env#read` (2). (File
+    write = `#update`: it modifies existing content; an append-mode op would be `fs#append` —
+    the host's call.)
+  - *Verify:* `mtime` carries `fs#read`, file `write` carries `fs#update`; the shipped
+    capability tests gate on the renamed tokens.
+- **6.3 Profile grants: the unified `allow` list of `group#right` tokens.** `SandboxProfile`
+  (`src/sandbox.rs:22`): fold `allow_caps` into `allow: Vec<String>` of `group#right` tokens
+  (keep `allow_libs` wholesale). Extend `cap_prefix_match` (`:65`) to split each side on `#`:
+  **namespace-prefix match on the group, EXACT on the right**. `parse_sandbox_config` (`:127`)
+  reads `allow`. *Verify:* `allow=["fs#read"]` admits `mtime`, rejects `write` (`fs#update`);
+  `game#read` covers `game.stats#read`; round-trip.
+- **6.4 Member link parse + carrier.** Parse the bare `group#right` token on struct fields
+  (`parse_field`, `definitions.rs:2306`) and enum variants (`parse_enum_values`, `:199` /
+  `parse_enum_field`, `objects.rs:2637`); resolve via 6.1. Store `member_access:
+  HashMap<(type_def, member_idx), MemberAccess>` (`MemberAccess` = per-right
+  `Option<cap_def_nr>`) off `Data` (off the IR like `def_sandbox`; persist in 6.8). *Verify:*
+  `health: int stats#read stats#update` records two links; an unlinked member is empty;
+  `loft introspect` shows them.
+- **6.5 Read admission.** In the reachable-set walk (`reachable_set`, `sandbox.rs:202` /
+  `admit_capabilities`, `:377`), an `OpGetField` / variant-match on a HOST member whose `read`
+  link is NOT granted (`group#read` ∉ `allow`, prefix-matched) is rejected; an unlinked member
+  = allow. *Verify:* reading a `stats#read`-linked field with no `stats#read` grant is rejected
+  naming the field; unlinked reads admit.
+- **6.6 Update admission (generalises 2.4).** A recorded raw write (`raw_write_is_host_owned`,
+  `expressions.rs:2420`; the `sandbox_raw_writes` map, `parser/mod.rs:114`) to host data is
+  rejected unless the member's `update` link is granted; script-owned data stays mutable (the
+  2.4 ownership rule). *Verify:* `e.health = 0` admits under `allow=["stats#update"]`;
+  `e.id = 0` rejected; the SAME script with only `stats#append` granted is still rejected
+  (update ≠ append).
+- **6.7 Append admission.** A growth op (`OpAppend*`/`OpPreAlloc*` — the ops `intrinsic_space`
+  already scans, `sandbox.rs:1115`) or a host enum construction (`Value::Enum`, `data.rs:481`)
+  is rejected unless the member/variant's `append` link is granted; script-owned
+  growth/construction free. *Verify:* `log += e` admits under `allow=["log#append"]`;
+  constructing `Command::Shutdown` (no append link) is rejected naming the variant.
+- **6.8 Diagnostics + IR persistence.** Every rejection (function or member; read/update/append)
+  renders through `sandbox_admission_errors` (`parser/mod.rs`) naming the symbol/member + right
+  + the `group#right` it needs + the profile's grants + the fix (extend `describe_violation`,
+  `sandbox.rs:525`). Round-trip `member_access` through the store codec the way `Definition.cap`
+  already does. *Verify:* error text per class; a tagged member survives the store round-trip.
+
+### P7 — Data envelope (compile-time footprint bound) [compile-time core, §8]
+- **7.1 Coefficient.** Extend `intrinsic_space` (`sandbox.rs:1088`) / `space_degree` (`:1145`)
+  to also accumulate `Σ record_size` over accumulating sites — record size = the exact type
+  stride (`LinkedFieldGroup::group_size`, `data.rs`). Return `(degree, coeff)`. *Verify:* a
+  per-entity struct-build loop reports `(degree 1, coeff sizeof(struct))`.
+- **7.2 Static-sizing gate.** In the space scan, flag an allocation whose record size is not
+  statically bounded (uncapped dynamic string; a host-value-sized alloc not tied to
+  `max_input_n`) → a new `DataViolation::UnboundedAlloc` rejection. *Verify:* an uncapped
+  string build is rejected; a `max_string_len`-capped one admits.
+- **7.3 Envelope fields.** `max_input_n` / `max_depth` / `max_string_len` / `data_budget` on
+  `SandboxProfile` (`sandbox.rs:22`) + `parse_sandbox_config` (`:127`). *Verify:* round-trip.
+- **7.4 Bound + reject.** In `sandbox_admission_errors`, compute `coeff · max_input_n^degree`
+  (reuse `sandbox_complexity_degree`, `:1055`) and reject if `> data_budget` or unprovable,
+  with the figure + fix; extend `complexity_report` (`:1200`) to print the absolute bound.
+  *Verify:* an over-budget script is rejected naming the figure; an under-budget one admits.
+
+### P8 — `sandbox-check` verdict + the access corpus [tooling]
+- **8.1 No-run verdict.** A `loft sandbox-check <profile> <file>` subcommand (`src/main.rs`) +
+  a `sandbox_check(src, profile) -> Verdict` entry (`src/lib.rs`) that run the admission walk
+  (`Parser::sandbox_admission_errors`) ONLY — print Admitted / Rejected+diagnostics, never
+  execute. *Verify:* a side-effecting body proves no run on Admitted; a violation prints the
+  diagnostics. This is the "will this be allowed?" loop the modder + a mod-registry submit-gate
+  iterate against.
+- **8.2 RED/GREEN access corpus.** Extend `tests/sandbox.rs` (CLI-level: `tests/sandbox_cli.rs`)
+  with the battery: RED — write a read-only field, append to an update-only structure, construct
+  an un-forgeable variant, read a private field, call a `fs#update` fn under a `fs#read`-only
+  grant — each Rejected; GREEN — read/update/append within grants, match any variant — Admitted.
+  Each RED probe proven to fail WITHOUT its rule (not vacuously rejecting). *Verify:* green on
+  the real type defs + the migrated `02_files.loft`, both backends where applicable.
+
 **Dependency order:** 1.1→1.2 (1.2 unblocks 0.1) → 1.3/1.4 → 2.x → 3.x → 4.x → 5.1.
-**P0–P3 are the compile-time core** (reject at load, game-safe); P4 has no abort path to
-make fail-safe; P5 proves *fast + safe*. **Admission diagnostics (2.5, 3.5) are
-first-class** — a clean compile is the safety contract. A rung graduates its probe to
-`tests/scripts/` / `tests/sandbox.rs` when green on both backends where applicable.
+Within P6 the migration is sequential: **6.1 → 6.2 → 6.3** lands the unified function model
+first (it touches shipped code — do it before the new member surface), then **6.4 → 6.8** add
+members on top. **P6 and P7 are independent compile-time arcs** — both reject at load, neither
+needs the @PLN85 memory-safe interpreter (that was only the dropped runtime layer), so they
+slot alongside the P0–P3 core; **P8 rides on both**. **P0–P3 + P6 + P7 are the compile-time
+core** (reject at load, game-safe); P4 has no abort path to make fail-safe; P5 proves *fast +
+safe*. **Admission diagnostics (2.5, 3.5, 6.8) are first-class** — a clean compile is the
+safety contract. A rung graduates its probe to `tests/scripts/` / `tests/sandbox.rs` when
+green on both backends where applicable.
 
 ## Open questions
 

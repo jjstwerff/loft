@@ -45,8 +45,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > satisfies: **capability** (reaches only allow-listed libraries/groups),
 > **termination** (bounded loops + acyclic recursion + total ops), **data
 > integrity** (no raw writes to host data), **backend** (no FFI + force-interpret).
-> Remaining work is post-v1 (transactional world S7, an embedding `run_script`
-> boundary S8, expressiveness relaxations) — see the plan's § Open work.
+> The next arcs are **DESIGNED, compile-only** (S9–S10 below): a **data envelope**
+> (a load-time peak-heap bound) and **per-member access** (independent read/update/append
+> rights per field + enum variant, declared as groups in the loft type defs). Per the
+> **compile-only decision**, the transactional world (S7) and runtime guards are **dropped**;
+> `run_script` (S8) survives only as the unknown-unknown backstop — see the plan's § Open work.
 
 ## The model — validate before allow, don't isolate after
 
@@ -216,6 +219,50 @@ gets a `Result`, never an `exit()` / abort / segfault.
   loop-rejection S4). *Remaining:* an embedding `run_script(src, policy) -> Result<_,
   ScriptError>` boundary so a host (not the CLI) gets the fault as a value — belt-and-
   suspenders for an interpreter bug.
+
+### S9 — Data envelope (compile-time footprint bound)
+An admitted script's peak heap is bounded at LOAD by a host-declared budget: the closed-form
+footprint `coeff · max_input_n^degree` is proven `≤ data_budget`, else rejected. No runtime
+allocation counter, no ceiling, no rollback — OOM (the one fault `catch_unwind` cannot see)
+becomes a load-time concern.
+- **Chokepoint:** the space analysis (`sandbox_space_degree`) extended with the coefficient
+  (`Σ record_size`, exact from the type stride), compared against the profile's `data_budget`
+  in the admission walk. Inputs are host-declared (`max_input_n` / `max_depth` /
+  `max_string_len`).
+- **Check:** a per-entity struct-building loop reports `coeff·n`; a script whose worst case
+  exceeds `data_budget`, or whose allocation size can't be tied to a declared bound (uncapped
+  string, host-value-sized alloc), is rejected at admission with the figure + fix.
+- **Status: 🟡 DESIGNED ([@PLN86 P7](plans/86-sandbox-subset-flag/README.md)).** The degree is
+  computed today; the coefficient + budget compare + static-sizing gate are the build. Pure
+  compile-time; no @PLN85 dependency (it was only the dropped runtime layer).
+
+### S10 — Per-member access (read / update / append)
+Host data carries independent **read / update / append** rights at the granularity of a
+struct field or enum variant, linked via the `group#right` notation to explicitly-declared,
+namespaced `capability` groups — resolved and validated at compile, so an undeclared group is
+a load error, never a silent never-grant. A script may observe, mutate-in-place, or
+grow/produce a member only if the profile grants that `group#right` — so **append-only** (grow
+a log, never alter it; never forge a privileged variant) is expressible (`update ≠ append`).
+Refines the all-or-nothing no-raw-write arc (S7-was / @PLN86 2.4) down to the member.
+- **Chokepoint:** the admission walk over `OpGetField` (read), the recorded raw writes
+  (update), and `OpAppend*` / `Value::Enum` (append / construct) — each carries the
+  `(type, member)` identity; the lookup is `member's group#right ∈ profile.allow`
+  (namespace-prefix matched on the group, exact on the right).
+- **Check:** reading a private field, updating a read-only field, appending to an update-only
+  structure, or constructing an un-forgeable variant is rejected at load naming the member +
+  right + group; an access within grants admits. Script-owned data is unrestricted (ownership).
+- **Status: 🟡 DESIGNED ([@PLN86 P6](plans/86-sandbox-subset-flag/README.md)).** Read
+  default-allow, update/append default-deny; capabilities declared in loft source; pure
+  compile-time. The **same `capability`/`group#right` mechanism migrates the S1 *function*
+  capability surface** (the shipped `#cap "fs.read"` strings → `fs#read`/`fs#update`) onto one
+  validated model — pre-customer, so functions and data members land on a single mechanism.
+
+> **The compile-only decision (finalizes S7/S8).** Effect containment is now **by
+> construction** — a script can only touch members it is granted (S10), never more (S9) —
+> **not by rollback**: the transactional world (S7) and any runtime resource guard are
+> **dropped** (the perf tax + a rollback/exception path in the language are both rejected).
+> `run_script() -> Result` (S8) remains **only** as the alarmed backstop for the
+> unknown-unknown interpreter bug, never as a data-limit or write-containment mechanism.
 
 ---
 
