@@ -1,0 +1,9 @@
+fn zero() -> integer { 0 }
+fn main() {
+  a = 10;
+  b = zero();
+  c = a / b;
+  print("DIVRESULT=[{c ?? -999}]\n");
+  m = a % b;
+  print("MODRESULT=[{m ?? -999}]\n");
+}

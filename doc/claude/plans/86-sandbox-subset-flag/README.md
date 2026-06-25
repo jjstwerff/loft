@@ -13,12 +13,14 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 compiler-enforced flag that runs **designated subsets** of a program (user scripts)
 under a *prove-it-safe-at-load* policy, while the surrounding host code runs
 unrestricted, in one process, sharing the store at full `DbRef` speed.  An admitted
-sandboxed script reaches only allow-listed capabilities, terminates, never faults, runs
-interpret-only, performs no raw writes to host data, and carries a worst-case complexity
-budget — all four arcs (capability · termination · data-integrity · backend) checked at
-load via `Parser::sandbox_admission_errors`, wired into the CLI (`loft.toml` `[sandbox]`
-policy → reject-or-run).  Remaining work is post-v1 expressiveness + hardening — see
-[§ Open work](#open-work).
+sandboxed script reaches only allow-listed capabilities, terminates, never faults,
+performs no raw writes to host data, and carries a worst-case complexity budget — all
+checked at load via `Parser::sandbox_admission_errors`, wired into the CLI (`loft.toml`
+`[sandbox]` policy → reject-or-run).  The proof is **backend-agnostic** (an admitted
+script is total + fault-free on the interpreter AND `--native` — the former forced
+interpret-only was dropped as unjustified, 2026-06-25); the only remaining backend gate
+is the external-FFI ban (`native_ffi`).  Remaining work is post-v1 expressiveness +
+hardening — see [§ Open work](#open-work).
 
 **Implementation progress** (branch `tuxedo-work2`):
 - **1.1 ✅** — `src/sandbox.rs`: `SandboxProfile`/`SandboxConfig` + the deny-by-default
@@ -44,16 +46,19 @@ policy → reject-or-run).  Remaining work is post-v1 expressiveness + hardening
   (`admission_escape_suite_rejects_every_breakout`): `v = [secret]; v[0]()`,
   `get() -> fn(){ secret }` then call, and a `Holder { f: secret }` field call are each
   rejected. (The earlier "residual tracked" note was stale.)
-- **1.4 ✅ (FFI + backend)** — **FFI:** `sandbox::reachable_ffi_bridges` flags every
-  reachable def whose `#native` symbol is owned by an external native package
-  (`native_symbol_crates`), distinct from built-in `#rust`/`#native` primitives — dlopen of
-  a cdylib is RCE → rejected unless `native_ffi = true`. **Backend:**
-  `Parser::sandbox_forces_interpret` (true on ANY designation) + main.rs wiring: a program's
-  `[sandbox]` policy loads from `loft.toml` before parse, and a sandboxed program REFUSES
-  `--native` / overrides the default native backend to interpret. Interpret-only is
-  unconditional, not a profile setting (the old `interpret_only` field + `backend` key
-  removed). `cargo build --no-default-features` builds (the cdylib-loading `native-extensions`
-  path is removable). Verified end-to-end on the CLI.
+- **1.4 ✅ (FFI ban) — backend force DROPPED (2026-06-25).** **FFI:**
+  `sandbox::reachable_ffi_bridges` flags every reachable def whose `#native` symbol is owned
+  by an external native package (`native_symbol_crates`), distinct from built-in
+  `#rust`/`#native` primitives — dlopen of a cdylib is RCE → rejected unless `native_ffi =
+  true`. This is the real RCE surface and it stays gated. **Backend:** the former forced
+  interpret-only was **removed** — it rested on a false "native traps where the interpreter
+  is total" premise (re-probed: div/mod-zero, OOB, overflow all yield `null` on `--native`
+  too), and it made the sandbox unusable for a game engine. Admission (`has_sandboxed_defs`
+  → `sandbox_admission_errors`, renamed from `sandbox_forces_interpret`) now runs
+  backend-agnostically: an admitted script is total + fault-free on the interpreter AND
+  native, so the host keeps its backend choice. `cargo build --no-default-features` still
+  drops the cdylib-loading `native-extensions` path. A deployment that wants to forbid
+  host-side `rustc` on mod input can reintroduce interpret-only as a per-profile opt-in.
 - **2.1 ✅** — `#cap "<group>"` annotation: parsed in `parse_rust` beside `#native`
   (any file); `Definition.cap` + `Parser::def_cap_group` read it. `cap` is NOT yet
   IR-round-tripped (re-derived on parse) — persistence lands coupled with the first
@@ -93,16 +98,19 @@ policy → reject-or-run).  Remaining work is post-v1 expressiveness + hardening
   `TotalityViolation`: **3.1** rejects an unbounded `while` (parse recorded), admits bounded
   `for`; **3.2** rejects recursion via a colour-DFS cycle check on the sandboxed call graph
   (self + mutual), admits acyclic; **3.3** excludes the explicit-abort ops (`assert` /
-  `panic` / `log_fatal`) while arithmetic stays total on the interpreter (div-by-zero →
+  `panic` / `log_fatal`) while arithmetic stays total on BOTH backends (div-by-zero →
   null). All render actionable errors through `sandbox_admission_errors`. The capability arc
   (P0–P2 + 2.5) and the termination arc (3.1/3.2/3.3) are both proven.
-- **1.4 backend half ✅** — sandboxed code is force-interpreted (`--native` refused), the
-  `[sandbox]` policy loads from `loft.toml`, and `--no-default-features` drops the cdylib
-  path. This was the prerequisite 3.3's total-op guarantee depends on (native traps).
-- **CLI admission-reject ✅** — after the backend force, the CLI runs the full admission
-  walk and rejects a violating sandboxed program at LOAD with the actionable errors
-  (`tests/sandbox_cli.rs` drives it end-to-end: violation rejected, clean admitted,
-  `--native` refused). **The sandbox is now enforced end-to-end through the binary.**
+- **1.4 backend ✅ (force DROPPED 2026-06-25)** — the `[sandbox]` policy loads from
+  `loft.toml`, `--no-default-features` drops the cdylib path, and the external-FFI ban
+  stays. The former forced interpret-only was removed (it depended on the false "native
+  traps" claim, now disproven); admission is backend-agnostic, so a sandboxed program runs
+  on whatever backend the host picks.
+- **CLI admission-reject ✅** — the CLI runs the full admission walk on any program with
+  sandboxed defs (any backend) and rejects a violating one at LOAD with the actionable
+  errors (`tests/sandbox_cli.rs` drives it end-to-end: violation rejected, clean admitted,
+  clean program also runs on `--native`). **The sandbox is enforced end-to-end through the
+  binary.**
 - **3.4 + 3.5 ✅** — `sandbox_complexity_degree`/`_report` give the host the `O(n^d)` budget
   hint (L5); the totality rejections already render actionable, bound-it diagnostics.
 - **2.4 ✅** — no-raw-write admission: a sandboxed def may not raw-write heap data
@@ -739,14 +747,18 @@ proven-total script.
   only). *Verify (L2):* self-recursion `rec(n+1)` and mutual `a→b→a` rejected naming the
   cycle; an acyclic chain admitted. The structurally-decreasing relaxation is later.
 - **3.3 Total-operation check.** ✅ *shipped* (`admit_totality` → `PartialOp`). *Finding
-  (both backends probed):* the **interpreter already makes the arithmetic ops total** —
-  div/mod-by-zero → `null`, OOB → `null`, integer overflow wraps — so a sandboxed
-  expression never faults on them; **native traps** ("divide by zero"), so the guarantee
-  rests on interpret-only (the 1.4 backend ban). No rejection is needed for arithmetic.
-  *Excluded:* the explicit-abort ops `assert` / `panic` / `log_fatal` (`ABORT_OPS`) — they
-  fault the script and cannot be made total → `PartialOp` rejection naming the op + a
-  defensive-check fix. *Verify (L3):* `a / b ?? 0` admits as total; a sandboxed `assert`
-  is rejected. ✓
+  (both backends re-probed 2026-06-25, CORRECTING an earlier false claim):* the partial
+  arithmetic ops are total on **BOTH** backends — div/mod-by-zero → `null`, OOB → `null`,
+  integer overflow → `null` — on the interpreter AND on `--native`. The earlier note that
+  "native traps (divide by zero), so the guarantee rests on interpret-only" was **wrong**:
+  native does not trap on any of these (verified — each yields `null`), so the total-op
+  guarantee is backend-agnostic and the forced interpret-only was dropped. No rejection is
+  needed for arithmetic. *Excluded:* the explicit-abort ops `assert` / `panic` /
+  `log_fatal` (`ABORT_OPS`) → `PartialOp` rejection naming the op + a defensive-check fix.
+  *(Caveat, also probed: `assert` aborts both backends, but `panic` aborts only the
+  interpreter and `log_fatal` aborts neither — a pre-existing loft inconsistency to fix
+  separately; the admission rejection sidesteps it for sandboxed code.)* *Verify (L3):*
+  `a / b ?? 0` admits as total; a sandboxed `assert` is rejected. ✓
 - **3.4 Worst-case complexity report.** ✅ *shipped* (`sandbox_complexity_degree` /
   `_report`). *Change:* derive the step cost as a function of input size. *Verify (L5):* a
   per-entity loop reports `O(n)`. **Done:** the degree = max over the body of `loop_nesting

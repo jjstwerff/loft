@@ -886,14 +886,18 @@ impl Parser {
             .collect()
     }
 
-    /// @PLN86 step 1.4 — does this program contain sandboxed code that must run
-    /// on the interpreter?  True iff ANY def is designated sandboxed.  This is
-    /// non-negotiable, NOT a per-profile choice: generating + compiling Rust on
-    /// the host is RCE by construction, and the native backend traps where the
-    /// interpreter is total (div-by-zero yields null — 3.3).  loft's own CLI
-    /// run-path forces interpret (and refuses an explicit `--native`) when true.
+    /// @PLN86 — does this program designate ANY sandboxed def?  True gates the
+    /// load-time admission walk (`sandbox_admission_errors`), which is **backend-
+    /// agnostic**: an admitted script is total and fault-free on the interpreter AND
+    /// on `--native` (bounded loops + an acyclic call graph + partial ops that yield
+    /// null on both backends — div/mod-zero, OOB, overflow), so the host keeps its
+    /// choice of backend.  (The earlier forced interpret-only was dropped: it rested
+    /// on a false "native traps where the interpreter is total" premise — verified
+    /// untrue.  A deployment that wants to forbid host-side `rustc` on mod-derived
+    /// input can reintroduce it as a per-profile opt-in; the cdylib-FFI surface stays
+    /// gated by `native_ffi`.)
     #[must_use]
-    pub fn sandbox_forces_interpret(&self) -> bool {
+    pub fn has_sandboxed_defs(&self) -> bool {
         !self.def_sandbox.is_empty()
     }
 
@@ -9042,10 +9046,11 @@ mod plan86_admission_tests {
         );
     }
 
-    /// @PLN86 1.4 — any designated def forces interpret-only (unconditional); a
-    /// program with no sandboxed defs leaves the native backend available.
+    /// @PLN86 — any designated def flags the program as carrying sandboxed code (which
+    /// gates the load-time admission walk); a program with no sandboxed defs does not.
+    /// The flag is backend-agnostic — it no longer forces interpret-only.
     #[test]
-    fn sandbox_forces_interpret_on_any_designation() {
+    fn has_sandboxed_defs_on_any_designation() {
         let p = parse_admit_libs(
             &["fn:scripted"],
             &["code"],
@@ -9053,14 +9058,11 @@ mod plan86_admission_tests {
             "fn scripted() -> integer { 1 }\n",
         );
         assert!(
-            p.sandbox_forces_interpret(),
-            "a sandboxed def must force interpret-only"
+            p.has_sandboxed_defs(),
+            "a designated def must flag the program as sandboxed"
         );
         let p2 = parse_admit_libs(&[], &["code"], &[], "fn plain() -> integer { 1 }\n");
-        assert!(
-            !p2.sandbox_forces_interpret(),
-            "no sandboxed defs → native allowed"
-        );
+        assert!(!p2.has_sandboxed_defs(), "no sandboxed defs → not flagged");
     }
 
     /// @PLN86 3.4 — the worst-case complexity degree counts loop nesting, and

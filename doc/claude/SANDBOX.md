@@ -39,12 +39,13 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > [plan `86-sandbox-subset-flag`](plans/86-sandbox-subset-flag/README.md). A host
 > declares a `[sandbox]` policy in `loft.toml`; designated functions are admitted
 > only if proven safe at LOAD, and rejected with actionable errors otherwise.
-> Surface: `Parser::sandbox_admission_errors` (+ `sandbox_forces_interpret`),
+> Surface: `Parser::sandbox_admission_errors` (+ `has_sandboxed_defs`),
 > `src/sandbox.rs`. **Checks S1–S5 are now GREEN; S7/S8 are partially closed**
 > (statuses updated per-invariant below). The four arcs an admitted script
 > satisfies: **capability** (reaches only allow-listed libraries/groups),
 > **termination** (bounded loops + acyclic recursion + total ops), **data
-> integrity** (no raw writes to host data), **backend** (no FFI + force-interpret).
+> integrity** (no raw writes to host data), **backend** (no external FFI; the
+> proof itself is backend-agnostic — the former force-interpret was dropped).
 > The next arcs are **DESIGNED, compile-only** (S9–S10 below): a **data envelope**
 > (a load-time peak-heap bound) and **per-member access** (independent read/update/append
 > rights per field + enum variant, declared as groups in the loft type defs). Per the
@@ -126,11 +127,15 @@ backend (generating + compiling Rust on the host is RCE by construction).
   `dlopen`. `cargo build --no-default-features` (drops the `native-extensions`
   feature) compiles the `libloading` path out entirely — a buildable proof the
   FFI surface can be removed.
-- **Status: 🟢 GREEN (@PLN86 1.4).** `Parser::sandbox_forces_interpret` forces interpret
-  for any sandboxed program and the CLI **refuses an explicit `--native`**;
-  `sandbox::reachable_ffi_bridges` rejects a reachable external cdylib bridge unless
-  `native_ffi` is granted. `cargo build --no-default-features` compiles the `libloading`
-  path out (verified). *Remaining (post-v1):* feature-gate the rustc *codegen* path too, so
+- **Status: 🟢 GREEN (@PLN86 1.4) — interpret-only force DROPPED (2026-06-25).** The
+  external-FFI ban stays: `sandbox::reachable_ffi_bridges` rejects a reachable external
+  cdylib bridge unless `native_ffi` is granted (that dlopen is the real RCE surface). The
+  former forced interpret-only was **removed** — it rested on a false "native traps where
+  the interpreter is total" premise (re-probed: div/mod-zero, OOB, overflow all yield
+  `null` on `--native` too), so admission is backend-agnostic and a sandboxed program runs
+  on whatever backend the host picks (`Parser::has_sandboxed_defs` gates the admission
+  walk). `cargo build --no-default-features` compiles the `libloading` path out (verified).
+  *Remaining (post-v1):* feature-gate the rustc *codegen* path too, so
   a deployment can build with ZERO host-codegen surface.
 
 ### S3 — Bounded recursion / call depth

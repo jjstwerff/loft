@@ -4973,24 +4973,17 @@ fn main() {
             std::process::exit(1);
         }
     }
-    // @PLN86 1.4 — sandboxed code must run on the INTERPRETER: generating +
-    // compiling Rust on the host is RCE by construction, and the native backend
-    // traps where the interpreter is total (div-by-zero yields null — 3.3).  An
-    // explicit `--native` on a sandboxed program is refused; otherwise the
-    // default native backend is overridden to interpret.
-    if p.sandbox_forces_interpret() {
-        if native_requested {
-            eprintln!(
-                "error: this program designates sandboxed code (@PLN86), which must run \
-                 interpret-only — remove --native"
-            );
-            std::process::exit(1);
-        }
-        native_mode = false;
-        // @PLN86 2.5 — admission: a sandboxed script is admitted only if it is
-        // proven safe at LOAD (capabilities + totality).  Reject with the
-        // actionable errors before it ever runs — the contract the modder writes
-        // against; a clean compile is the guarantee.
+    // @PLN86 2.5 — admission: a program that designates sandboxed code is admitted
+    // only if it is proven safe at LOAD (capabilities + totality + no-raw-write).
+    // Reject with the actionable errors before it ever runs — the contract the modder
+    // writes against; a clean compile is the guarantee.  This is BACKEND-AGNOSTIC: an
+    // admitted script is total and fault-free on the interpreter AND on `--native`
+    // (bounded loops, an acyclic call graph, partial ops total on both — div/mod-zero,
+    // OOB, overflow all yield null natively too), so the host keeps its choice of
+    // backend.  (A deployment that wants to forbid host-side `rustc` on mod-derived
+    // input can opt in to interpret-only per profile; the cdylib-FFI surface is already
+    // gated by `native_ffi`.)
+    if p.has_sandboxed_defs() {
         let errors = p.sandbox_admission_errors();
         if !errors.is_empty() {
             eprintln!(

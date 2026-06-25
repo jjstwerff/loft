@@ -3,8 +3,9 @@
 
 //! @PLN86 — the sandbox, end-to-end through the `loft` binary: a program's
 //! `[sandbox]` policy loads from `loft.toml`, a violating sandboxed program is
-//! rejected at load with an actionable error, a clean one is admitted and runs
-//! (force-interpreted), and an explicit `--native` on sandboxed code is refused.
+//! rejected at load with an actionable error, a clean one is admitted and runs, and
+//! a clean sandboxed program also runs on `--native` (admission is backend-agnostic —
+//! the forced interpret-only was dropped, an admitted script is fault-free on both).
 
 use std::process::Command;
 
@@ -68,20 +69,27 @@ fn sandboxed_clean_program_is_admitted() {
     );
 }
 
-/// An explicit `--native` on a program that designates sandboxed code is refused
-/// (sandboxed code is interpret-only: native codegen is RCE + traps).
+/// A clean sandboxed program runs on `--native` too: admission is backend-agnostic
+/// (an admitted script is total + fault-free on both backends), so the forced
+/// interpret-only was dropped and `--native` is no longer refused.
 #[test]
-fn sandboxed_native_is_refused() {
+fn sandboxed_clean_program_runs_on_native() {
     let prog = "fn scripted() -> integer { 21 + 21 }\nfn main() -> integer { scripted() }\n";
     let (ok, err) = run("native", prog, POLICY, true);
-    assert!(!ok, "--native on sandboxed code must be refused");
-    assert!(err.contains("interpret-only"), "stderr: {err}");
+    assert!(
+        ok,
+        "a clean sandboxed program must be admitted + run on --native; stderr: {err}"
+    );
+    assert!(
+        !err.contains("interpret-only"),
+        "--native must no longer be refused for sandboxed code: {err}"
+    );
 }
 
 /// @PLN86 — the program warm-cache must NOT bypass admission.  A whole-program
 /// warm load restores the IR without re-parsing, so `def_sandbox` would never form
-/// and admission (+ force-interpret) would be skipped; and the cache is keyed by
-/// program CONTENT, not policy.  So a program admitted under a permissive policy,
+/// and admission would be skipped; and the cache is keyed by program CONTENT, not
+/// policy.  So a program admitted under a permissive policy,
 /// then run UNCHANGED under a tightened policy, must still be re-admitted — and
 /// rejected.  Forces the program cache on (`LOFT_PROGRAM_CACHE=1`) with an
 /// isolated `LOFT_HOME`, so run 1 writes a warm cache that run 2 must ignore.

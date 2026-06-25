@@ -31,10 +31,11 @@ pub struct SandboxProfile {
     /// grant's group is a dotted-segment prefix of the link's group (`"game#read"`
     /// grants `"game.entity#read"` but NOT `"game#update"`).
     pub allow: Vec<String>,
-    /// May this profile reach a vetted `[native]` cdylib bridge?  Default false.
-    /// (Interpret-only is NOT a per-profile choice — it is unconditional for ALL
-    /// sandboxed code, enforced by `Parser::sandbox_forces_interpret`: generating
-    /// + compiling Rust on the host is RCE by construction.)
+    /// May this profile reach a vetted `[native]` cdylib bridge (dlopen of an external
+    /// crate = RCE)?  Default false — admission rejects a reachable external FFI bridge
+    /// unless this is set.  (This is the surface the dropped interpret-only force was
+    /// really guarding; the admission proof itself is backend-agnostic, so a sandboxed
+    /// program runs on whatever backend the host picks.)
     pub native_ffi: bool,
 }
 
