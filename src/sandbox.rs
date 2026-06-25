@@ -1421,6 +1421,66 @@ pub fn describe_field_update_violation(data: &Data, v: &FieldUpdateViolation) ->
     )
 }
 
+/// @PLN86 P6.4 (F6) — a sandboxed APPEND (`e.f += x`, growing a collection) to a host
+/// field whose `#append` capability the active profile does not grant.  Only a field
+/// that CARRIES an `#append` link reaches here (a `+=` without one is an `#update` or a
+/// coarse reject); so this fires exactly when the appendable field's token is ungranted.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FieldAppendViolation {
+    pub def: u32,
+    pub field: String,
+    pub token: String,
+    pub position: Position,
+}
+
+/// @PLN86 P6.4 (F6) — the field-append admission: every recorded sandboxed append to an
+/// `#append`-linked host field whose token the writing def's profile does not grant.
+#[must_use]
+pub fn field_append_violations(
+    config: &SandboxConfig,
+    sandboxed: &HashMap<u32, String>,
+    member_access: &HashMap<(u32, String), Vec<String>>,
+    field_appends: &HashMap<u32, Vec<(u32, String, Position)>>,
+) -> Vec<FieldAppendViolation> {
+    let mut out = Vec::new();
+    for (&def, writes) in field_appends {
+        if !sandboxed.contains_key(&def) {
+            continue;
+        }
+        let profile = config.profiles.get(&sandboxed[&def]);
+        for (struct_def, field, position) in writes {
+            let appends = member_access
+                .get(&(*struct_def, field.clone()))
+                .into_iter()
+                .flatten()
+                .filter(|t| t.ends_with("#append"));
+            for token in appends {
+                if !profile.is_some_and(|p| p.allows(token)) {
+                    out.push(FieldAppendViolation {
+                        def,
+                        field: field.clone(),
+                        token: token.clone(),
+                        position: position.clone(),
+                    });
+                }
+            }
+        }
+    }
+    out.sort_by(|a, b| a.def.cmp(&b.def).then_with(|| a.field.cmp(&b.field)));
+    out
+}
+
+/// @PLN86 P6.4 (F6) — render a field-append violation as an actionable error.
+#[must_use]
+pub fn describe_field_append_violation(data: &Data, v: &FieldAppendViolation) -> String {
+    let from = display_name(data, v.def);
+    format!(
+        "{}: sandboxed `{from}` appends to host field `{}`, which needs capability `{}` — \
+         not granted.\n  fix: add `{}` to `allow`, or grow only fields the profile permits.",
+        v.position, v.field, v.token, v.token
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

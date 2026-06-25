@@ -2736,7 +2736,7 @@ use a separate collection or add after the loop"
                     // the stash `field()` set, VERIFIED against the base var's struct type —
                     // a base that is not a `Var` of the stash's struct never qualifies.
                     let target = self.last_field_target.take();
-                    let field_update = target.and_then(|(sd, field, read_count)| {
+                    let resolved = target.and_then(|(sd, field, read_count)| {
                         let base_var = match code.unspan() {
                             Value::Call(_, args) => match args.first().map(Value::unspan) {
                                 Some(Value::Var(r)) => Some(*r),
@@ -2747,25 +2747,41 @@ use a separate collection or add after the loop"
                         let base_ok = base_var.is_some_and(
                             |r| matches!(self.vars.tp(r), Type::Reference(bsd, _) if *bsd == sd),
                         );
-                        let has_update = self
-                            .member_access
-                            .get(&(sd, field.clone()))
-                            .is_some_and(|l| l.iter().any(|t| t.ends_with("#update")));
-                        (base_ok && has_update).then_some((sd, field, read_count))
+                        if !base_ok {
+                            return None;
+                        }
+                        let has = |right: &str| {
+                            self.member_access
+                                .get(&(sd, field.clone()))
+                                .is_some_and(|l| l.iter().any(|t| t.ends_with(right)))
+                        };
+                        // @PLN86 F6 — a `+=` to an `#append`-linked field is an APPEND
+                        // (grow the collection); otherwise an `#update`-linked write is
+                        // an UPDATE (F5).  Neither → the coarse 2.4 reject.
+                        if op == "+=" && has("#append") {
+                            Some((sd, field, read_count, true))
+                        } else if has("#update") {
+                            Some((sd, field, read_count, false))
+                        } else {
+                            None
+                        }
                     });
-                    if let Some((sd, field, read_count)) = field_update {
+                    if let Some((sd, field, read_count, is_append)) = resolved {
+                        let ctx = self.context;
                         // un-record the spurious F4 read this field's LHS logged — a
                         // write is not a read (resolves the F4 read/update overlap).
                         if read_count > 0
-                            && let Some(v) = self.sandbox_field_reads.get_mut(&self.context)
+                            && let Some(v) = self.sandbox_field_reads.get_mut(&ctx)
                         {
                             let n = v.len().saturating_sub(read_count);
                             v.truncate(n);
                         }
-                        self.sandbox_field_updates
-                            .entry(self.context)
-                            .or_default()
-                            .push((sd, field, pos));
+                        let map = if is_append {
+                            &mut self.sandbox_field_appends
+                        } else {
+                            &mut self.sandbox_field_updates
+                        };
+                        map.entry(ctx).or_default().push((sd, field, pos));
                     } else {
                         self.sandbox_raw_writes.entry(self.context).or_insert(pos);
                     }

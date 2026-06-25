@@ -147,6 +147,12 @@ pub struct Parser {
     /// iff the token is granted); a write to a field with NO update link stays the coarse
     /// 2.4 `sandbox_raw_writes` reject (read-only by default).
     pub(crate) sandbox_field_updates: HashMap<u32, Vec<(u32, String, crate::lexer::Position)>>,
+    /// @PLN86 P6.4 (F6) — sandboxed APPENDS (`e.f += x`, growing a collection field)
+    /// of a host field that carries an `#append` link, keyed by the writing def → each
+    /// `(struct def_nr, field, position)`.  A `+=` to an `#append`-linked field is
+    /// diverted here (admission admits iff the token is granted); without an append
+    /// link it falls back to the `#update` (F5) or coarse (2.4) path.
+    pub(crate) sandbox_field_appends: HashMap<u32, Vec<(u32, String, crate::lexer::Position)>>,
     /// @PLN86 P6.4 (F5) — transient one-shot: the `(struct def_nr, field, #read-links
     /// recorded)` of the field access `field()` last built, so the assignment site can
     /// resolve which field a raw write targets (and un-record the spurious F4 read it
@@ -548,6 +554,7 @@ impl Parser {
             member_access: HashMap::new(),
             sandbox_field_reads: HashMap::new(),
             sandbox_field_updates: HashMap::new(),
+            sandbox_field_appends: HashMap::new(),
             last_field_target: None,
             amp_pending: false,
             in_sandbox: false,
@@ -767,10 +774,19 @@ impl Parser {
         )
         .into_iter()
         .map(|v| crate::sandbox::describe_field_update_violation(&self.data, &v));
+        let field_appends = crate::sandbox::field_append_violations(
+            &self.sandbox,
+            &self.def_sandbox,
+            &self.member_access,
+            &self.sandbox_field_appends,
+        )
+        .into_iter()
+        .map(|v| crate::sandbox::describe_field_append_violation(&self.data, &v));
         caps.chain(totality)
             .chain(raw_writes)
             .chain(field_reads)
             .chain(field_updates)
+            .chain(field_appends)
             .collect()
     }
 
@@ -882,6 +898,7 @@ impl Parser {
         self.member_access.clear();
         self.sandbox_field_reads.clear();
         self.sandbox_field_updates.clear();
+        self.sandbox_field_appends.clear();
         self.last_field_target = None;
         self.amp_pending = false;
         self.data.reset();
@@ -1290,6 +1307,7 @@ impl Parser {
         self.member_access.clear();
         self.sandbox_field_reads.clear();
         self.sandbox_field_updates.clear();
+        self.sandbox_field_appends.clear();
         self.last_field_target = None;
         self.parse_file();
         self.resolve_deferred_unknowns();
@@ -9462,6 +9480,37 @@ mod plan86_admission_tests {
             !p3.sandbox_admission_errors().is_empty(),
             "an unlinked host field must stay read-only: {:?}",
             p3.sandbox_admission_errors()
+        );
+    }
+
+    /// @PLN86 P6.4 (F6) — `e.f += x` growing an `#append`-linked collection field admits
+    /// iff the token is granted; an append to a field with no append link falls to the
+    /// `#update`/coarse path.  This is what makes append-only expressible.
+    #[test]
+    fn field_append_gates_collection_grow() {
+        let src = "capability bag\n\
+                   struct Inv { items: vector<integer> bag#append }\n\
+                   fn add(i: Inv, x: integer) { i.items += [x] }\n";
+        // ungranted: appending to `items` (bag#append) is rejected.
+        let p = parse_admit_libs(&["fn:add"], &["code"], &[], src);
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        assert!(
+            p.sandbox_admission_errors()
+                .iter()
+                .any(|e| e.contains("bag#append")),
+            "an ungranted append must be rejected: {:?}",
+            p.sandbox_admission_errors()
+        );
+        // granted: the same append admits clean.
+        let p2 = parse_admit_libs(&["fn:add"], &["code"], &["bag#append"], src);
+        assert!(
+            p2.sandbox_admission_errors().is_empty(),
+            "granted bag#append must admit the grow: {:?}",
+            p2.sandbox_admission_errors()
         );
     }
 
