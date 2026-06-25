@@ -1,0 +1,10 @@
+// FAMILY A — STILL FAILS (both backends, panic). A NON-EMPTY vector-literal default
+// `?? [99]` on a nested-vector element is strictly worse than `?? []`: it panics in
+// EVERY context (len/for/bind/append), not only native. Root: the vector-literal
+// coalesce default is never materialised into the result temp. Should print R=2.
+fn main() {
+  out: vector<vector<integer>> = [[1, 2], [3]];
+  n = len(out[0] ?? [99]);
+  assert(n == 2, "n={n} (want 2)");
+  println("R={n}");
+}

@@ -1701,6 +1701,21 @@ impl Parser {
             });
         }
         if let Some(sub_name) = self.lexer.has_identifier() {
+            // @PLN25 storage-vs-access-nullability — a POSTFIX `?` on the element type
+            // (`vector<S?>`) is the nullable-element opt-IN. Dense is the default: a
+            // struct / enum element stores inline; `S?` synthesises the `__nullable<S>`
+            // enum. The `?` is a flag on the type, not the headline — hence postfix,
+            // pairing with `x ?? d`. Keyed collections stay dense (a key denotes
+            // presence) — `?` there is an error.
+            let nullable_elem = self.lexer.has_token("?");
+            if nullable_elem && type_name != "vector" {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "`?` (nullable element) is only valid on `vector` — `{type_name}` \
+                     elements are always dense (a key / slot denotes presence)"
+                );
+            }
             // before trying to resolve the element type, fail fast if the
             // identifier shadows a non-type definition (constant, function).
             // parse_type silently returns None in that case; sub_type's later
@@ -1782,15 +1797,19 @@ impl Parser {
                         // and skip the rewrite, leaving the bare inline struct.
                         // (Scalar elements consume their own `not null` in the type
                         // parse above, so this fires only for a named element.)
-                        let elem_not_null = self.lexer.has_keyword("not");
-                        if elem_not_null {
+                        // `not null` still accepted (now redundant — dense IS the
+                        // default) as a no-op, for back-compat with existing source.
+                        if self.lexer.has_keyword("not") {
                             self.lexer.token("null");
                         }
                         self.lexer.closing_angle();
-                        let elem = if elem_not_null {
-                            tp
-                        } else {
+                        // @PLN25 storage-vs-access-nullability: DENSE by default; the
+                        // leading `?` (`vector<?S>`) opts in to a nullable element,
+                        // synthesising the `__nullable<S>` enum.
+                        let elem = if nullable_elem {
                             self.e2_nullable_elem(tp)
+                        } else {
+                            tp
                         };
                         Type::Vector(Box::new(elem), crate::data::Deps::none())
                     }

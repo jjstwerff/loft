@@ -1,0 +1,11 @@
+// SIBLING SWEEP — STILL FAILS (native). `?? []` (empty-vector default) on a
+// NESTED-vector element: `len(vv[i] ?? [])`. Interp prints n=2 (correct); native
+// emits `if (ncc.rec != 0) {ncc} else { () }` → E0308 (the empty-vector default
+// becomes `()` not a vector). Sibling of the @PLN25 nullable / #457 delivery class
+// surfaced while hunting #462. Should print n=2 on BOTH backends once fixed.
+fn main() {
+  out: vector<vector<integer>> = [[1, 2], [3]];
+  n = len(out[0] ?? []);
+  assert(n == 2, "n={n} (want 2)");
+  println("ok n={n}");
+}

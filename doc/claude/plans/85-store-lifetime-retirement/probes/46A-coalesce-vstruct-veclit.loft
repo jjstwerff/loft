@@ -1,0 +1,12 @@
+// FAMILY A — STILL FAILS (native compile E0308; interp OK = divergence). Same `?? []`
+// vector-literal default, element type = vector<struct>, used in len() context. The
+// vstruct+len cell is native-only (interp survives) — contrast 46A-*-nonempty (both
+// panic) and -bind (both panic): the failure MODE varies by elem-type × context, but
+// the root is one — the vector-literal coalesce default is not materialised. R=1 want.
+struct S { a: integer not null, b: text }
+fn main() {
+  vw: vector<vector<S>> = [[S { a: 1, b: "x" }], [S { a: 2, b: "y" }]];
+  n = len(vw[0] ?? []);
+  assert(n == 1, "n={n} (want 1)");
+  println("R={n}");
+}

@@ -1,0 +1,19 @@
+// SIBLING of #457 — NESTED vector<vector<integer>> delivered across conditional arms
+// (the delivery axis #457 fixed, at one more level of nesting). CLEAN both backends:
+// confirms nested-vector delivery across arms is correct. (The `?? []` element access
+// is deliberately avoided here — it has its OWN bug, isolated in
+// sib-nullcoalesce-nested-len / -bind.)
+fn churn(k: integer) -> integer { b: vector<u8> = [0]; for i in 0..k { b += [1]; } return len(b); }
+fn build(n: integer) -> vector<vector<integer>> {
+  out: vector<vector<integer>> = [];
+  if n <= 0 { return out; }
+  if n % 2 == 0 { out = build(n - 1); out += [[n, n]]; }
+  else          { out = build(n - 1); out += [[n]]; }
+  return out;
+}
+fn main() {
+  r = build(5);
+  _ = churn(8);
+  assert(len(r) == 5, "len corrupted: {len(r)} (want 5)");
+  println("ok len={len(r)}");
+}

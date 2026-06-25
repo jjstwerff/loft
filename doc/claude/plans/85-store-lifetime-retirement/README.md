@@ -110,6 +110,23 @@ Full policy: [`_INVESTIGATION_TEMPLATE.md`](../_INVESTIGATION_TEMPLATE.md).
 | III | enum-discriminant corruption: struct-with-enum-fields-from-a-variable appended to a vector; `copy_claims` reads a -1 discriminant | high | both | ✅ **CLOSED on main** (probes 02/03): #412 fixed the enum shape; `copy_claims` breadth (vector/sub-struct fields, nested) verified clean | — |
 | IV | @PLN51 hidden-buffer-aliasing residuals (siblings not re-probed since closure) | tbd | both | re-extract from `finished/51` probes | cluster-IV (todo) |
 | V | **NRVO adopt/append ownership-dep** (the #437 regression, was the standalone plan-90): a vector local's `dep` diverges from the store it actually holds — `buf += call()` (append-source orphaned), `buf = head()` via a `match` wrapper (mixed-arm NRVO), `a = call() + …` (concat backing orphaned) → wrong free → leak on escape / corruption | high | both | ✅ **FIXED + REDUCED** — one invariant (*dep = owned store*) at 3 sites; the 4-site dep thicket reduced 4→3 (I-c witness-pairing DELETED as subsumed; the `+=` backing-preserve **retained — load-bearing on native**, an interp-only subsumption check had wrongly dropped it). Full matrix CLEAN both backends (values + leaks); suites green. Guard `tests/scripts/437-nrvo-return-aliasing.loft` | [cluster-V](cluster-V-nrvo-adopt-ownership.md) |
+| 462 | **stale-DbRef-after-slot-reuse UAF**: `vector<__nullable<S>>` += `[fn()->struct]` in a large accumulating fn; a prematurely-freed struct store's slot is reused, a live stale DbRef (on the operand stack / in an element) corrupts the new occupant → `copy_record` reads a freed store | high | **interp SIGSEGV** (crawler `questtest`) | 🔴 **LIVE on main** — regression from the #457/#459 D-own delivery rework; `LOFT_NO_SLOT_REUSE=1` proves slot-reuse; does NOT shrink (needs ~190-store interleave). Coexisting massive leak. | [cluster-462](cluster-462-slot-reuse-uaf.md) |
+
+> **▶ REOPENED (2026-06-25): the crawler dogfood wave.** The outcome-(b) closure held for the
+> probed shapes, but the crawler consumer surfaced a fresh wave at real-consumer scale —
+> [#462](https://github.com/loft-lang/loft/issues/462) (cluster-462 above) is the live store-lifetime
+> SIGSEGV. The standing instruments **missed it** because the survivor reference is not a frame
+> variable (so `LOFT_UAF` is blind) and the minimal shapes don't trip the CI leak-gate. See
+> cluster-462 § "Why the standing instruments missed it" + § "Tool gaps". The **sibling sweep**
+> (probes `46x-*`) hunts the same class at the other recently-fixed sites.
+>
+> **▶ FIELD MAP (~95-shape sweep): [nullable-materialization-field-map.md](nullable-materialization-field-map.md).**
+> Beyond #462 the sweep found **two crisp, minimal bug families** in the @PLN25 nullable layer —
+> **A** (`?? <vector-literal>` default not materialised) and **N** (a vector-literal element that
+> isn't a struct-literal is over-promoted to `__nullable`) — plus the safe region (all delivery +
+> append shapes clean). The doc documents each cell's complexity and names the unifying pattern: a
+> **materialisation hole for freshly-constructed vector/struct values at the nullable boundary**
+> (one predicted fix locus, not three). Curated probes: `46A-*`, `46N-*`, `sib-nullcoalesce-*`.
 
 ## Probe suite
 

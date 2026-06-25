@@ -1191,6 +1191,32 @@ pub fn auto_cdylib_stem(pkg_dir: &str) -> String {
     )
 }
 
+/// #461 — combine two fingerprints into one stable, order-sensitive digest.
+fn mix_fp(a: u64, b: u64) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    a.hash(&mut h);
+    b.hash(&mut h);
+    h.finish()
+}
+
+/// #461 — a digest of the type-table LAYOUT a cdylib would be built against:
+/// the index → (name, size, align) mapping, in order.  Two contexts with the
+/// same digest assign every type the same index, so a cdylib's hardcoded
+/// `db_tp` indices stay valid when reused across them; a different digest means
+/// the indices would resolve to the wrong type and the cdylib must be rebuilt.
+fn type_layout_fingerprint(stores: &Stores) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    stores.types.len().hash(&mut h);
+    for t in &stores.types {
+        t.name.hash(&mut h);
+        t.size_bytes().hash(&mut h);
+        t.align_bytes().hash(&mut h);
+    }
+    h.finish()
+}
+
 /// @PLN11 Arc N / N3 (Step 4 — **dev-interpret-on-edit**) — decide how the library
 /// at `pkg_dir` should run this invocation, and build its cdylib only when warranted.
 ///
@@ -1229,7 +1255,19 @@ pub fn cached_or_build_shared_cdylib(
     let stem = auto_cdylib_stem(pkg_dir);
     let out_dir = std::path::Path::new(pkg_dir).join("native-auto");
     let so = out_dir.join(platform_cdylib_name(&stem));
-    let fp = crate::cache::loft_build_fingerprint();
+    // #461 — the generated cdylib hardcodes type-table INDICES (e.g. `OpWriteFile`'s
+    // `db_tp`), but those indices SHIFT with which libraries are loaded (an `i32`
+    // write is `db_tp=64` standalone, `67` once `hex_grid` is parsed).  At runtime
+    // the cdylib resolves the index against the caller's SHARED `Stores` type table,
+    // so a cdylib built in one consumer's context, then reused (cached per-library)
+    // by another consumer whose table differs, reads the WRONG type and corrupts
+    // (the moros GLB header wrote 8-byte fields for `as i32` → version 0).  Fold the
+    // caller's type-table layout into the freshness key so a context mismatch
+    // rebuilds instead of silently linking an index-incompatible cdylib.
+    let fp = mix_fp(
+        crate::cache::loft_build_fingerprint(),
+        type_layout_fingerprint(stores),
+    );
 
     // 1. Fresh artifact → native, no hashing.
     if so.exists()

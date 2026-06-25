@@ -5063,7 +5063,21 @@ fn main() {
     };
     let mut auto_native_libs: Vec<String> = Vec::new();
     let mut any_dev_interpret = false;
+    // #460 — never auto-native-compile the package that OWNS the entry file: that
+    // package is the *script* being run, not a `use`d library, and the model is
+    // "libraries compile, scripts interpret".  Its export set is entry-point
+    // dependent (only files reachable from THIS entry get parsed), so a cdylib
+    // built for one entry (e.g. `selftest.loft` → exports `build_walls`) is wrong
+    // for another (`equiptest.loft` → marks `player_new`): the freshness check
+    // adopts the stale `.so`, then `mark_exports` marks a symbol it never built →
+    // `OpStaticCall` to a missing bridge → the compile.rs panic stub.  Under
+    // `--native` these functions compile into the whole-program binary anyway, so
+    // excluding them from the cdylib loop costs nothing there.
+    let entry_path = std::path::Path::new(&abs_file);
     for pkg_dir in &pending_native {
+        if entry_path.starts_with(pkg_dir) {
+            continue;
+        }
         // #453 — for an `--html` build a `[wasm.bridge]` library builds its WASM
         // bridge (the `--html` branch below), not a native cdylib. Building the
         // native cdylib here is wasted work that FAILS for a browser-only bridge

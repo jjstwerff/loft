@@ -1,0 +1,11 @@
+// SIBLING SWEEP — STILL FAILS (both backends). Binding a nested-vector-element
+// `?? []` coalesce to a NEW variable: `inner = vv[i] ?? []`. Panics in bytecode-gen
+// `codegen.rs:3065` ("Incorrect var _vec_1[65535] versus 96") on interp AND native —
+// the coalesced empty-vector default's slot/type is mis-assigned at bind. Sibling of
+// sib-nullcoalesce-nested-len (same `?? []` root, the bind path vs the len path).
+fn main() {
+  out: vector<vector<integer>> = [[1, 2], [3]];
+  inner = out[1] ?? [];
+  assert(len(inner) == 1, "inner_len={len(inner)} (want 1)");
+  println("ok inner_len={len(inner)}");
+}

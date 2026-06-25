@@ -1,0 +1,2 @@
+use mod_a;
+fn main() { println("{val_a()}"); }

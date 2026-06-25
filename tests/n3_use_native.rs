@@ -284,3 +284,163 @@ fn require_native_errors_when_rustc_is_absent() {
 
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// #460 — the package that OWNS the entry file is the *script*, not a `use`d
+/// library: it must never be auto-native-compiled, even though it carries a
+/// `loft.toml`.  Its export set is entry-point dependent — running `entry_a.loft`
+/// parses only `mod_a` (`val_a`), running `entry_b.loft` parses only `mod_b`
+/// (`val_b`) — so a cdylib built for one entry exports the wrong symbol set for
+/// the other.  Before the fix, the second run found the first run's cdylib
+/// "fresh", skipped the rebuild, then marked its own export set against it →
+/// `OpStaticCall` to a bridge symbol the `.so` never built → the `compile.rs`
+/// panic stub (crawler's `make test` gate, exit 101).
+///
+/// The invariant: the entry package produces NO `native-auto/` cdylib at all
+/// (the "libraries compile, scripts interpret" model), so running two different
+/// entry points from the same package in sequence both succeed cleanly.
+#[test]
+fn entry_package_is_never_auto_native_compiled() {
+    if Command::new("rustc").arg("--version").output().is_err() {
+        eprintln!("skip: rustc unavailable");
+        return;
+    }
+
+    // The fixture `tests/lib/selfpkg/` is a normal package (loft.toml, no
+    // [native]) run DIRECTLY via two entries that `use` disjoint local modules.
+    let pkg = std::path::Path::new("tests/lib/selfpkg");
+    let native_auto = pkg.join("native-auto");
+    let _ = std::fs::remove_dir_all(&native_auto);
+
+    let run = |entry: &str| {
+        Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg("--lib")
+            .arg("tests/lib")
+            .arg(pkg.join(entry))
+            .env("LOFT_NO_CACHE", "1")
+            .output()
+            .expect("run the loft binary")
+    };
+
+    // entry_a built the (wrong) cdylib before the fix; entry_b is where the
+    // stale-export-set adoption used to panic.
+    let a = run("entry_a.loft");
+    let b = run("entry_b.loft");
+
+    for (name, out) in [("entry_a", &a), ("entry_b", &b)] {
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            out.status.success(),
+            "{name} must run clean (no cdylib-dispatch panic).\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        );
+        assert!(
+            !stderr.contains("could not be wired"),
+            "{name}: an entry-package function was marked for cdylib dispatch (the #460 \
+             marking bug).\nstderr:\n{stderr}"
+        );
+    }
+    assert_eq!(
+        String::from_utf8_lossy(&a.stdout),
+        "111\n",
+        "entry_a output"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&b.stdout),
+        "222\n",
+        "entry_b output"
+    );
+
+    // The decisive invariant: the entry package is the script, so it never
+    // builds a cdylib — the structural cause of the stale-export-set mismatch.
+    assert!(
+        !native_auto.exists(),
+        "the entry package must NOT be auto-native-compiled, but {} exists",
+        native_auto.display()
+    );
+}
+
+/// #461 — an auto-native cdylib hardcodes type-table INDICES (e.g. `OpWriteFile`'s
+/// `db_tp`), but those indices shift with which libraries are loaded, and the
+/// cdylib resolves them against the caller's SHARED `Stores` at runtime.  A cdylib
+/// is cached per-library, so one consumer's build can be reused by another whose
+/// type table differs — making the baked indices resolve to the WRONG type and
+/// silently corrupt (the moros GLB header wrote 8-byte fields for `as i32`).
+///
+/// The fixture `binwriter` writes a 2-field i32 header via `f += X as i32`; the
+/// fixture `typeshift` adds struct types that shift `binwriter`'s `i32` index
+/// (verified: `db_tp` 64 → 67).  Build `binwriter`'s cdylib in the bare context,
+/// then call it from a context where `typeshift` is also loaded: the freshness key
+/// must notice the layout changed and rebuild, so the write stays 4 bytes wide.
+#[test]
+fn cdylib_type_indices_stay_valid_across_consumer_contexts() {
+    if Command::new("rustc").arg("--version").output().is_err() {
+        eprintln!("skip: rustc unavailable");
+        return;
+    }
+
+    let native_auto = std::path::Path::new("tests/lib/binwriter/native-auto");
+    let _ = std::fs::remove_dir_all(native_auto);
+
+    let pid = std::process::id();
+    let tmp = std::env::temp_dir().join(format!("loft_n3_461_{pid}"));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+    // Bare context: only binwriter loaded — its cdylib bakes binwriter's `i32` index.
+    std::fs::write(
+        tmp.join("bare.loft"),
+        "use binwriter;\nfn main() { write_magic(arguments()[0], 2); }\n",
+    )
+    .unwrap();
+    // Shifted context: typeshift's struct types move `i32` to a different index.
+    std::fs::write(
+        tmp.join("shifted.loft"),
+        "use typeshift;\nuse binwriter;\n\
+         fn main() { _ = ts_touch(); write_magic(arguments()[0], 2); }\n",
+    )
+    .unwrap();
+
+    let run = |entry: &str, out: &std::path::Path| {
+        Command::new(env!("CARGO_BIN_EXE_loft"))
+            .arg("--interpret")
+            .arg("--lib")
+            .arg("tests/lib")
+            .arg(tmp.join(entry))
+            .arg(out)
+            .env("LOFT_NO_CACHE", "1")
+            .output()
+            .expect("run the loft binary")
+    };
+
+    // Build + cache binwriter's cdylib in the bare context first…
+    let bare_out = tmp.join("bare.bin");
+    let a = run("bare.loft", &bare_out);
+    assert!(
+        a.status.success(),
+        "bare run failed.\nstderr:\n{}",
+        String::from_utf8_lossy(&a.stderr)
+    );
+    // …then reuse it from the shifted context, where the baked index is wrong
+    // unless the cdylib is rebuilt for this layout.
+    let shifted_out = tmp.join("shifted.bin");
+    let b = run("shifted.loft", &shifted_out);
+    assert!(
+        b.status.success(),
+        "shifted run failed.\nstderr:\n{}",
+        String::from_utf8_lossy(&b.stderr)
+    );
+
+    // Each header field is a 4-byte i32: magic 'glTF' (LE) + version 2 → 8 bytes.
+    // A stale-index cdylib would write 8-byte i64 fields (16 bytes, version split).
+    let want: &[u8] = &[0x67, 0x6c, 0x54, 0x46, 0x02, 0x00, 0x00, 0x00];
+    for (name, path) in [("bare", &bare_out), ("shifted", &shifted_out)] {
+        let bytes = std::fs::read(path).expect("read output");
+        assert_eq!(
+            bytes, want,
+            "{name} context wrote the wrong header — `as i32` did not narrow to 4 bytes \
+             (stale cdylib type index resolved against the host table)"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&tmp);
+    let _ = std::fs::remove_dir_all(native_auto);
+}
