@@ -38,6 +38,11 @@ enum Delivery {
     /// `__retbuf` it was handed (#409) — mint a local, run the call into it, copy
     /// in. A no-op when there is no buffer or no work-var.
     ForwardCopy,
+    /// Per-arm / fresh-local element COPY into `__retbuf` via
+    /// `materialize_vector_arms_into`: a `match`/`if` branch tail (#416,
+    /// cluster-II) OR a fresh-local tail whose buffer is already TAKEN by a sibling
+    /// (#448). Finalises `returned` to `{__retbuf}` (idempotent when already set).
+    Materialize,
     /// The tail already writes `__retbuf` (or there is no buffer / nothing to
     /// recover) — emit nothing here.
     AsIs,
@@ -699,16 +704,13 @@ impl Parser {
                 && matches!(t, Type::Never | Type::Void | Type::Vector(_, _))
                 && Self::tail_terminal_is_branch(&l[last])
                 && !self.tail_if_has_null_arm(&l[last]);
-            if vec_match_candidate
-                && let Type::Vector(elm, _) = result
-                && let Some((buf_attr, buf_var)) = self.return_buffer()
-            {
+            if vec_match_candidate && let Type::Vector(elm, _) = result {
+                // #416 — a match/if branch tail materialises each arm into __retbuf.
+                // Routed through the ONE vector dispatch (Delivery::Materialize); it
+                // gates convert via vec_arm_handled on whether a rewritable arm was
+                // found (no buffer / no terminal → false, convert runs as before).
                 let elm_ty = (**elm).clone();
-                if self.materialize_vector_arms_into(&elm_ty, &mut l[last], buf_var) {
-                    self.data.definitions[self.context as usize].returned =
-                        Type::Vector(Box::new(elm_ty), Deps::attrs(vec![buf_attr]));
-                    vec_arm_handled = true;
-                }
+                vec_arm_handled = self.dispatch_vector_delivery(Delivery::Materialize, &elm_ty, l);
             }
             // (#448, the early-`return <call>` + tail-`return [literal]` shape, was a
             // SECOND upper materialise block here. It is now a CELL of the tail-return
@@ -800,12 +802,12 @@ impl Parser {
                 // #448 (now a CELL, not a separate upper block) — when the buffer is
                 // already TAKEN by a sibling return that delivers __retbuf (an early
                 // `return <call>` NRVO-adopted it), RENAMING this fresh-owned tail onto
-                // __retbuf would double-own the buffer, so COPY it in (the per-arm
-                // materialiser: clear + append + free the local). `returned` is already
-                // `["__retbuf"]` (returned_uses_buffer checked it), so it is NOT re-set.
-                // The buffer-FREE case RENAMES (#437/c5). One fresh-owned-vector
-                // classifier (`fresh_owned_vector_deps`), the deps fact deciding
-                // rename-vs-copy.
+                // __retbuf would double-own the buffer, so COPY it in via the ONE vector
+                // dispatch (Delivery::Materialize: clear + append + free the local; the
+                // `returned` re-set to {__retbuf} is idempotent — returned_uses_buffer
+                // checked it is already there). The buffer-FREE case RENAMES (#437/c5).
+                // One fresh-owned-vector classifier (`fresh_owned_vector_deps`), the deps
+                // fact deciding rename-vs-copy.
                 let mut delivered = false;
                 if !Self::tail_terminal_is_branch(&l[last])
                     && let Type::Vector(elm, _) = result
@@ -814,7 +816,7 @@ impl Parser {
                     && Self::body_has_buffer_return(&l[..last], buf_var)
                 {
                     let elm_ty = (**elm).clone();
-                    delivered = self.materialize_vector_arms_into(&elm_ty, &mut l[last], buf_var);
+                    delivered = self.dispatch_vector_delivery(Delivery::Materialize, &elm_ty, l);
                 }
                 if !delivered {
                     // buffer FREE (or the copy did not fire) → strip the `return` →
@@ -988,16 +990,24 @@ impl Parser {
         }
     }
 
-    /// @PLN85 / D-own-1 — emit the mechanism the selector chose for an
-    /// implicit-tail `t == Vector` return. `elm` is the vector element type (for
-    /// the element-copy ops); the tail of `l` is rewritten in place.
-    fn dispatch_vector_delivery(&mut self, delivery: Delivery, elm: &Type, l: &mut [Value]) {
+    /// @PLN85 / D-own-1 — emit the mechanism the selector chose for a vector
+    /// return. `elm` is the vector element type (for the element-copy ops); the
+    /// tail of `l` is rewritten in place. Returns whether a `Materialize` actually
+    /// delivered (the upper #416 / #448 callers gate `vec_arm_handled` / a fallback
+    /// rename on it); the other variants always handle their tail.
+    fn dispatch_vector_delivery(
+        &mut self,
+        delivery: Delivery,
+        elm: &Type,
+        l: &mut [Value],
+    ) -> bool {
         match delivery {
             Delivery::Rename(ws) => {
                 self.ref_return(&ws, l, RetSite::BlockTail);
                 // @P377 / S1: collapse `cv = inner_call(...); cv` so the inner
                 // call's hidden buffer arg points at cv directly.
                 self.nrvo_collapse_tail_set(l, &ws);
+                true
             }
             Delivery::CopyBorrow(ls) => {
                 // The buffer's existence was verified by the selector; re-fetch it
@@ -1009,9 +1019,32 @@ impl Parser {
                     self.ref_return(&ls, l, RetSite::BlockTail);
                     self.nrvo_collapse_tail_set(l, &ls);
                 }
+                true
             }
-            Delivery::ForwardCopy => self.emit_forward_copy_409(elm, l),
-            Delivery::AsIs => {}
+            Delivery::ForwardCopy => {
+                self.emit_forward_copy_409(elm, l);
+                true
+            }
+            Delivery::Materialize => {
+                // The per-arm / fresh-local element copy (#416 branch tails, #448
+                // buffer-taken tails). Materialise each arm/tail into __retbuf and
+                // finalise the return-type dep to {__retbuf} — the step #416 always
+                // did and #448 relied on (returned already `["__retbuf"]`, so the
+                // set is idempotent). Returns false when there is no buffer or the
+                // materialiser found no rewritable terminal, so the caller can fall
+                // back (#448) or leave convert to run (#416).
+                let last = l.len() - 1;
+                if let Some((buf_attr, buf_var)) = self.return_buffer()
+                    && self.materialize_vector_arms_into(elm, &mut l[last], buf_var)
+                {
+                    self.data.definitions[self.context as usize].returned =
+                        Type::Vector(Box::new(elm.clone()), Deps::attrs(vec![buf_attr]));
+                    true
+                } else {
+                    false
+                }
+            }
+            Delivery::AsIs => false,
         }
     }
 
