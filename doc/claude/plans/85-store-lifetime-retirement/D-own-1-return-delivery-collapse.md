@@ -159,6 +159,23 @@ representative case is settled.)
       (legitimate, not bolt-on). Moving #448 past `convert` is sound (a `Never`-typed
       `return <expr>` tail is inert to convert). Corpus byte-identical both backends;
       13-cell value+len+leak matrix all pass; suite + oracle green.
+- [x] **#448 mirror — mid-body delivery via a tail call-chain** (commit `0f79737b`).
+      Surfaced by sweeping the class across composition axes. An early
+      `return [literal]` (mid-body) + a tail `return <call>` NRVO-chain: the chain is
+      a `parse_return` `MidReturn`, which (unlike a tail rename) never triggers
+      `deliver_mid_vector_returns`, so the deferred early literal orphans its store on
+      that path. PRE-EXISTING on `main` (classified vs an `origin/main` worktree), the
+      mirror of c5. Fix: a final `block_result` cell delivers every mid-body return
+      when the fn is buffer-bound but no tail cell handled it (the call-chain case);
+      cells that DID handle the tail short-circuit it, so no double-delivery. Corpus
+      byte-identical; suite + oracle green; guard = oracle prog 09 (extended).
+- [x] **Class swept dry.** ~41 probes / 5 rounds: round 1 caught the mirror, rounds
+      2–5 dry. Axes: literal · comprehension · call · arg-borrow · struct-field ·
+      empty · vector-of-structs · nested vectors · deep/nested chains · three-way
+      mixed · loop reuse · recursion · methods (`self:`) · generics · fn-refs ·
+      explicit+implicit-tail mix · match arms — and the PARALLEL `__retbuf` arms
+      (struct/Reference, text, struct-enum), all clean both backends (the gap was
+      vector-specific). The vector-return-delivery leak class is closed.
 - [ ] **Optional further fold:** the upper `vec_match_candidate` (#416, cluster-II
       match/if branch-tail NRVO) stays in place — branch tails are `t = Never`
       pre-convert and a genuinely distinct mechanism (not a #448-style bolt-on), so
