@@ -1,0 +1,110 @@
+// @PLN85 D-own / #457 RESIDUAL R2 — the consistency-proof corruption is a SEPARATE
+// store-lifetime bug INSIDE verify_consistency (NOT the vector-adopt fixed in 47b30a53).
+// Faithful standalone of ZT directory::test_consistency (real crypto).  With the #457
+// fix: m=3,5,6 print verify=false (baseline SIGSEGVs).  The proof vector is STABLE
+// (snapshot before/after the call is identical) — verify miscomputes via the
+// `fr = mnode(c, fr)` text-reassign-from-allocating-call loop.  Its own slice.
+//
+use crypto;
+
+pub fn mleaf(x_b64: text) -> text {
+  b: vector<u8> = [0];
+  b += base64_to_bytes(x_b64);
+  return sha256_b64(bytes_to_base64(b));
+}
+pub fn mnode(l_b64: text, r_b64: text) -> text {
+  b: vector<u8> = [1];
+  b += base64_to_bytes(l_b64);
+  b += base64_to_bytes(r_b64);
+  return sha256_b64(bytes_to_base64(b));
+}
+pub fn mempty() -> text {
+  b: vector<u8> = [2];
+  s = "loft-zts/v1/merkle-empty";
+  for i in 0..len(s) { b += [ s.byte_at(i) as u8 ]; }
+  return sha256_b64(bytes_to_base64(b));
+}
+fn split(n: integer) -> integer { k = 1; while k * 2 < n { k = k * 2; } return k; }
+fn mth(leaves: vector<text>, lo: integer, hi: integer) -> text {
+  n = hi - lo;
+  if n == 0 { return mempty(); }
+  if n == 1 { return mleaf(leaves[lo] ?? ""); }
+  k = split(n);
+  return mnode(mth(leaves, lo, lo + k), mth(leaves, lo + k, hi));
+}
+pub fn merkle_root(leaves: vector<text>) -> text { return mth(leaves, 0, len(leaves)); }
+
+fn subproof(m: integer, leaves: vector<text>, lo: integer, hi: integer, b: boolean) -> vector<text> {
+  out: vector<text> = [];
+  n = hi - lo;
+  if m == n {
+    if b { return out; }
+    out += [ mth(leaves, lo, hi) ];
+    return out;
+  }
+  k = split(n);
+  if m <= k {
+    out = subproof(m, leaves, lo, lo + k, b);
+    out += [ mth(leaves, lo + k, hi) ];
+  } else {
+    out = subproof(m - k, leaves, lo + k, hi, false);
+    out += [ mth(leaves, lo, lo + k) ];
+  }
+  return out;
+}
+pub fn consistency_path(leaves: vector<text>, first_size: integer) -> vector<text> {
+  return subproof(first_size, leaves, 0, len(leaves), true);
+}
+fn is_pow2(n: integer) -> boolean {
+  if n <= 0 { return false; }
+  x = n;
+  while (x % 2) == 0 { x = x / 2; }
+  return x == 1;
+}
+pub fn verify_consistency(first: integer, second: integer, first_hash: text, second_hash: text, proof: vector<text>) -> boolean {
+  if first > second { return false; }
+  if first == second { return (len(proof) == 0) && (first_hash == second_hash); }
+  if first == 0 { return len(proof) == 0; }
+  cpath: vector<text> = [];
+  if is_pow2(first) { cpath += [ first_hash ]; }
+  for i in 0..len(proof) { cpath += [ proof[i] ?? "" ]; }
+  if len(cpath) == 0 { return false; }
+  fnx = first - 1; sn = second - 1;
+  while (fnx % 2) == 1 { fnx = fnx / 2; sn = sn / 2; }
+  fr = cpath[0] ?? "";
+  sr = cpath[0] ?? "";
+  for i in 1..len(cpath) {
+    c = cpath[i] ?? "";
+    if sn == 0 { return false; }
+    if ((fnx % 2) == 1) || (fnx == sn) {
+      fr = mnode(c, fr);
+      sr = mnode(c, sr);
+      if (fnx % 2) == 0 {
+        while ((fnx % 2) == 0) && (fnx != 0) { fnx = fnx / 2; sn = sn / 2; }
+      }
+    } else {
+      sr = mnode(sr, c);
+    }
+    fnx = fnx / 2; sn = sn / 2;
+  }
+  return (fr == first_hash) && (sr == second_hash) && (sn == 0);
+}
+fn prefix(v: vector<text>, k: integer) -> vector<text> {
+  out: vector<text> = [];
+  for i in 0..k { out += [ v[i] ?? "" ]; }
+  return out;
+}
+fn main() {
+  N = 7;
+  entries: vector<text> = [];
+  for i in 0..N { entries += [ base64_encode("entry-{i}") ]; }
+  rootN = merkle_root(entries);
+  ok = true;
+  for m in 1..N {
+    rm = merkle_root(prefix(entries, m));
+    res = verify_consistency(m, N, rm, rootN, consistency_path(entries, m));
+    println("m={m} verify={res}");
+    if !res { ok = false; }
+  }
+  if ok { println("ALL CONSISTENT (test_consistency would PASS)"); } else { println("FAIL: some prefix not consistent"); }
+}

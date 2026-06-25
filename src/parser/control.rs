@@ -615,6 +615,13 @@ impl Parser {
         // an arm buffer the materialise already delivered.
         let mut vec_arm_handled = false;
         if *result != Type::Void && !matches!(*result, Type::Unknown(_)) {
+            // An empty block (e.g. an empty comprehension body `[for i in r {}]`) has no
+            // tail to convert/deliver; without this guard `l.len() - 1` underflows to
+            // usize::MAX and the index below panics.  Leave the empty block to downstream
+            // type-checking (which reports the real "expected <T>, produced nothing").
+            if l.is_empty() {
+                return tp;
+            }
             let last = l.len() - 1;
             // CO1.3c: generator bodies return void (values come from yield),
             // so suppress the void-vs-iterator mismatch.

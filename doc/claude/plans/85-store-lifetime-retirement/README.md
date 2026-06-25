@@ -8,6 +8,20 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 Plan id: [@PLN85](https://github.com/loft-lang/plans/issues/85) · investigation-style
 (reading order: Status → Probes → Cluster docs → Roadmap).
 
+> **▶ ACTIVE D-own slice (2026-06-25): the adopt/free re-derivation collapse — driven by
+> [#457](https://github.com/loft-lang/loft/issues/457).** A `vector<text>` corrupted (wrong len +
+> SIGSEGV) because a returned local adopted across `if/else` arms is freed before `return`.
+> **PARTIAL fix landed (`47b30a53`):** the witness-pairing was extended to vector adopters — #457's
+> **inclusion-proof subject is FIXED**, loft suite 2538/2538, leak-clean.  But it GREW the free-side
+> thicket instead of shrinking it, and **two residuals keep #457 OPEN** (a #306 dep-mismatch on ZT
+> §8.3, and a separate `verify_consistency` store-lifetime bug).  The clean, complexity-DELETING end
+> state is the **delivery root fix** (callee delivers into `__ref_N` so the dep is accurate, then
+> delete the pairing + explicit-free + `IfDistinct` dance).  Full state — what landed, the three
+> rejected free-side approaches, the residuals, the recommended root fix — in §7–§8 of
+> **[adopt-free-collapse.md](adopt-free-collapse.md)** (the adopt/free sibling of the done
+> [D-own-1 delivery collapse](D-own-1-return-delivery-collapse.md)).
+> The *simplification* (D-own) continues per [OWNERSHIP_MODEL.md § ACTIVE](../../OWNERSHIP_MODEL.md#active--the-simplification-exploration-next-days-exploratory--revertable).
+
 > ## ✅ CLOSED — outcome (b): the clusters are independent, each invariant named + enforced at its own chokepoint, with a standing instrument that keeps the class shut.
 >
 > The investigation's central single-root hypothesis was **falsified** (Stage B): the

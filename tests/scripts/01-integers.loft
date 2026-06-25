@@ -25,6 +25,11 @@ fn main() {
   assert(3 >= 3, "int ge");
   assert(3 == 3, "int eq");
   assert(3 != 4, "int ne");
+  // --- L11 digit-group separators (accepted; value identical to the plain form) ---
+  assert(1_000_000 == 1000000, "underscore separators in decimal");
+  assert(0xFF_FF == 0xFFFF, "underscore separators in hex");
+  assert(1_000.5 == 1000.5, "underscore separators in float integer part");
+  assert(2_000e3 == 2000e3, "underscore separators in exponent mantissa");
   // --- Bitwise ---
   assert(0b1010 & 0b1100 == 0b1000, "int bitwise and");
   assert(0b1010 | 0b1100 == 0b1110, "int bitwise or");

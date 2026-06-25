@@ -28,24 +28,49 @@ design for each planned improvement.
 
 ## Benchmark results
 
-All times are wall-clock milliseconds, best of one warm run, single core,
-Linux x86-64. Run `bench/run_bench.sh` from the project root to reproduce.
+Wall-clock milliseconds, **best of 3 warm runs**, single core, Linux x86-64, **refreshed
+2026-06-25** (v2026.6.0). Run `bench/run_bench.sh` from the project root to reproduce.
 
-| # | Benchmark | Python | interp | native | wasm | Rust | interp/Py | native/Rust |
-|---|-----------|-------:|-------:|-------:|-----:|-----:|----------:|------------:|
-| 01 | fibonacci (recursive, n=38)      | 3395 | 4819  | 169 | 257 |  92 | 1.42× | 1.84× |
-| 02 | sum loop (10 M integers)         |   66 |  584  |  15 |  21 |   8 | 8.85× | 1.88× |
-| 03 | prime sieve (n=100 000)          |   49 |  141  |   4 |   6 |   4 | 2.88× | 1.00× |
-| 04 | Collatz lengths (1 .. 1 M)       | 7393 | 14379 | 334 | 599 | 149 | 1.94× | 2.24× |
-| 05 | Mandelbrot (200×200, 256 iter)   |  135 |  344  |   7 |  10 |   6 | 2.55× | 1.17× |
-| 06 | Newton sqrt (1 M calls)          | 1481 | 3437  | 159 | 159 | 152 | 2.32× | 1.05× |
-| 07 | string build (500 K appends)     |   70 |   61  |  33 |  68 |  23 | **0.87×** | 1.43× |
-| 08 | word frequency (hash map)        |   46 |  169  |  32 |  60 |   2 | 3.67× | 16.0× |
-| 09 | dot product (5 M floats)         |  158 |  428  |  36 |  86 |   3 | 2.71× | 12.0× |
-| 10 | insertion sort (3 000 integers)  |  131 |  291  |  29 |  56 |   4 | 2.22× | 7.25× |
+> **Read the two measurement notes first — they invalidate naïve numbers:**
+> 1. **`native` = optimized (`rustc -O`).** `loft --native` (the *default*) compiles
+>    **without `-O`** for fast dev iteration and runs ~6× slower (fib: 2953 ms unoptimized
+>    vs 489 ms optimized). The benchmark + this table use the optimized build
+>    (`loft --native-release` / the script's `rustc -O`). Quote *that* for "native speed".
+> 2. **Run WITHOUT `LOFT_TIMEOUT`.** An armed watchdog makes `checkpoint_fn` do a mutex
+>    `try_lock` + deadline check on **every function call** — it inflated fib ~2× (489 →
+>    ~1000 ms+) and call-heavy code more. (Side effect worth noting: `loft test` arms the
+>    watchdog at 300 s, so the test path pays this per-call tax — a real follow-up.)
 
-Ratios below 2× are expected for an interpreter that has not been tuned yet.
-Ratios above 5× in native mode signal a structural problem.
+| # | Benchmark | Python | interp | native | Rust | interp/Py | native/Rust |
+|---|-----------|-------:|-------:|-------:|-----:|----------:|------------:|
+| 01 | fibonacci (recursive, n=38)      | 2445 | 2972 | 489 |  71 | 1.22× | 6.9× |
+| 02 | sum loop                         |   67 |   42 |   6 |   4 | **0.63×** | 1.5× |
+| 03 | prime sieve                      |   24 |   15 |   4 |   3 | **0.63×** | 1.3× |
+| 04 | Collatz lengths                  | 4706 | 1492 | 176 |  88 | **0.32×** | 2.0× |
+| 05 | Mandelbrot                       |  141 |   13 |   9 |  10 | **0.09×** | **0.9×** |
+| 06 | Newton sqrt                      | 1216 |  657 | 196 | 115 | **0.54×** | 1.7× |
+| 07 | string build                     |   51 |   47 |  25 |  20 | **0.92×** | 1.25× |
+| 08 | word frequency (hash map)        |   50 |   59 |  41 |   2 | 1.18× | **20.5×** |
+| 09 | matrix mul (float)               |  131 |  104 |  49 |   2 | **0.79×** | **24.5×** |
+| 10 | insertion sort                   |   97 |   73 |  37 |   2 | **0.75×** | **18.5×** |
+| 11 | parallel-for                     |   65 |   40 |  17 |   5 | **0.62×** | 3.4× |
+
+**What changed since the old table (and what it means):**
+- **The interpreter now beats CPython on 8 of 11** (interp/Py 0.09–1.22, median ~0.6) — the
+  old table had it 1.4–8.85× *slower*. A large, previously-unrecorded interpreter improvement.
+  This makes the interpreter optimisations (P1/P2) **low-priority** — it's already fast.
+- **Optimized native vs Rust is healthy on compute** (mandelbrot 0.9×, sieve 1.3×, sum 1.5×,
+  newton 1.7×, collatz 2.0×) but has **two real gaps**:
+  - **Data structures — matrix 24.5×, word-count 20.5×, sort 18.5×** (the `codegen_runtime`/`DbRef`
+    indirection). This is **N1** — confirmed the biggest, most consistent native gap.
+  - **Recursive calls — fib 6.9×** (was 1.84× in the old table). A **~3× regression** from
+    per-call instrumentation (the `cr_call_push` shadow stack + `live_flipped` hot-reload check
+    added since). Addressed by **N2/N4** + gating the instrumentation for non-debug builds.
+- **wasm not measured** — the script's wasm run failed silently (`|| true` → blank), likely the
+  same wasip2 `#native`-symbol gap seen elsewhere. Re-add once that's fixed.
+
+A native/Rust ratio above ~5× signals a structural gap (here: data structures, and recursive
+per-call overhead). Single-box, best-of-3 — directional, not a leaderboard.
 
 ---
 
@@ -57,18 +82,30 @@ below.
 ### Dispatch loop (`src/state/mod.rs`)
 
 The main execution loop fetches one opcode byte per cycle and calls the corresponding
-function from a 240-entry array of function pointers (`src/fill.rs`):
+function from the `OPERATORS` function-pointer **slice** (`src/fill.rs`). Bytes 0–254
+are one-byte opcodes; **byte 255 is a two-byte escape prefix** — the loop reads a
+second byte `ext` and dispatches `OPERATORS[255 + ext]` (encoding handled by `emit_op`
+in `src/state/mod.rs`):
 
 ```rust
 while self.code_pos < bytecode_len {
-    let op = *self.code::<u8>();          // fetch byte, advance code_pos
-    OPERATORS[op as usize](self);          // indirect call through fn-pointer array
+    let op = *self.code::<u8>();              // fetch byte, advance code_pos
+    if op == 255 {                            // escape: read ext, dispatch beyond 254
+        let ext = *self.code::<u8>();
+        OPERATORS[255 + ext as usize](self);
+    } else {
+        OPERATORS[op as usize](self);         // one-byte op — the common case
+    }
     if self.code_pos == u32::MAX { break; }
 }
 ```
 
-Each element of `OPERATORS` is a standalone Rust function taking `&mut State`.
-The array currently has **240 entries** (opcodes 0–239); opcodes 240–255 are unused.
+Each element of `OPERATORS` is a standalone Rust function taking `&mut State`. The slice
+currently holds **269 entries**: all 255 one-byte opcodes (0–254) plus 14 escape-range
+ops (255–268, reached via the 255 prefix). The escape extends the space to **~511
+opcodes** (255 one-byte + up to 256 via `255 + ext`), so **~242 slots are free**.
+`emit_op(op_code: u16, …)` hides the encoding from codegen: `< 255` emits one byte,
+`≥ 255` emits the `255` prefix followed by `(op_code − 255)`.
 
 There is no `match` at the top level — dispatch is already a hardware indirect branch.
 The cost per cycle is: one array index, one indirect branch (potentially mispredicted),
@@ -123,6 +160,11 @@ store-indirection cost on the many arithmetic operations inside the call body do
 
 ## Interpreter vs Python
 
+> **⚠ Ratios below are SUPERSEDED** by the refreshed table (2026-06-25): the interpreter now
+> *beats* CPython on most benchmarks (interp/Py median ~0.6), so the "2–9× slower" framing here
+> is stale. The root-cause *mechanisms* (dispatch overhead, store indirection) still hold as the
+> per-op cost model; only the headline ratios are out of date. Refresh this section next.
+
 ### Summary table
 
 | Group | Benchmarks | Typical ratio | Primary cost |
@@ -174,6 +216,12 @@ workloads can favour loft.
 ---
 
 ## Native vs Rust
+
+> **⚠ Ratios below are SUPERSEDED** by the refreshed table (2026-06-25). Current optimized-native
+> reality: compute is healthy (1–2×), the big gaps are **data structures** (matrix/word/sort
+> 18–25× — N1) and **recursive per-call overhead** (fib 6.9×, regressed from 1.84× — the
+> `cr_call_push`/`live_flipped` instrumentation, N2/N4). The "every fn takes `stores`" and
+> "`codegen_runtime` indirection" mechanisms below are still the correct root causes.
 
 ### Summary table
 
@@ -263,11 +311,23 @@ The 2× gaps on data structures and strings are design-level issues addressed by
 
 ### Background
 
-**Blocked:** The opcode table now has 254/256 entries — only 2 slots remain (255–256),
-which is not enough for even one superinstruction sequence.  O1 is deferred indefinitely
-until opcode space is freed (e.g. by a two-byte escape prefix or a dedicated
-superinstruction dispatch table).  The hot-pattern analysis below is preserved for
-reference when that redesign is undertaken.
+**No longer blocked (corrected 2026-06).** An earlier note here said the opcode table
+was nearly full (254/256, "2 slots left") and deferred P1 *"until opcode space is freed,
+e.g. by a two-byte escape prefix."* **That escape prefix now exists** — byte 255 escapes
+to `OPERATORS[255 + ext]` (see [How the interpreter executes](#how-the-interpreter-executes)),
+the table is at **269/511 with ~242 free slots**, and 14 escape-range ops already use it.
+So P1 can proceed: its superinstructions land in the escape range, i.e. as **two-byte
+opcodes** (`255` prefix + `ext`). The one extra byte-fetch is negligible against the win
+— a superinstruction replaces ~4 one-byte ops (4 fetches + 4 indirect calls + the
+intermediate stack traffic), so even as an escape op it is a large net reduction. If a
+specific superinstruction profiles hot enough to want a one-byte slot, swap it for one of
+the 14 cold escape-range ops; `emit_op` makes the encoding transparent either way.
+
+> Encoding note for the operand sections below: the original P1 design assumed one-byte
+> slots `240–245`. With the escape in place, superinstructions are **escape-range ops**
+> emitted via `emit_op(op_code ≥ 255, …)`; the operand layouts are otherwise unchanged.
+
+The hot-pattern analysis below stands.
 
 ### Hot patterns
 
@@ -642,17 +702,43 @@ the same `copy_block`.
 
 - @P287 already shipped — defines the IR shape this optimisation
   recognises and replaces.
-- Opcode-table headroom: 254/256 used (per P1's blocked-by note).  P4
-  needs one new opcode slot; if P1's opcode-widening lands first,
-  trivially available.  Otherwise needs one retire-candidate.
+- Opcode-table headroom: the two-byte escape (byte 255 → `OPERATORS[255 + ext]`,
+  see § How the interpreter executes) leaves **~242 free escape-range slots**, so
+  P4's one new opcode (`OpAppendVectorSlice`) is trivially available — emit it via
+  `emit_op` in the escape range, no retirement needed.
 
 ---
 
 ## Design: N1 — Direct-emit local collections in native codegen
 
-**Affected benchmarks:** 08 (16×), 09 (12×), 10 (7.25×)
+**Affected benchmarks:** 08 word-count (20.5×), 09 matrix (24.5×), 10 sort (18.5×) — *refreshed 2026-06-25*
 **Expected gain:** 5–15× on data-structure benchmarks; closes the native/Rust gap
 **Cost:** High — new analysis pass, new emit path, extended type system in codegen
+
+> **Status (investigated 2026-06-25): the LOCAL-ONLY design below is mis-scoped — it would
+> not move the target benchmarks, and its real foundation is the @PLN85 ownership model.** Two
+> findings:
+> 1. **The benchmark vectors ESCAPE.** In `10_sort`, `data` is passed to `insertion_sort(arr)`
+>    and `arr` is a `DbRef` *parameter* mutated in place — so neither is "a local used only
+>    within one function." The 18.5× gap is the per-access indirection on a vector that
+>    **crosses a function boundary** (`stores.vec_get_or_raise_runtime(...)` + `stores.store(&db).get_int(...)`
+>    per `arr[j]`). Closing it needs the vector to be `Vec<i64>` **across the call** (caller's
+>    `data: Vec`, callee takes `&mut Vec`) — *not* the local-only emit. The local-only slice is
+>    sound but moves few real programs.
+> 2. **The escape/representation fact N1 needs IS the ownership work.** The existing
+>    `scopes.rs::escapes_value`/`guard_escapes` is partial (only "handed out as-is" — return /
+>    yield / tuple), does **not** track "passed to a function" as an escape, and is for
+>    store-*freeing* decisions, not representation choice — explicitly "left for the fix's full
+>    escape analysis." That full analysis is **@PLN85** (ownership as a type fact). Building a
+>    separate N1 escape pass would duplicate it and add a soundness surface in loft's #1-priority
+>    heap area (a missed escape → a `Vec` where a `DbRef` is expected → corruption).
+>
+> **Recommendation:** sequence N1 as a **consumer of the @PLN85 ownership/representation fact**,
+> not a standalone pass. Once "is this vector locally owned / does it escape (incl. across calls)"
+> is a sound type fact, N1 is a clean translation (facts-in-types per CODEGEN_METHOD): read the
+> fact → emit `Vec`/`&mut Vec` vs the store path. The widened scope (Vec across boundaries) is
+> what actually moves the benchmarks, and it is even more dependent on that fact. Until then, the
+> local-only slice is the only sound piece, and it isn't worth the risk for its narrow payoff.
 
 ### Background
 
@@ -751,7 +837,18 @@ ensure the native pipeline produces correct output for all 10 benchmarks.
 
 **Affected benchmarks:** 01 (1.84×), 06 (2.32×)
 **Expected gain:** 10–30% on recursive compute benchmarks
-**Cost:** High — purity analysis, two function signatures, call-site dispatch
+**Cost:** ~~High~~ → **Medium** (audited 2026-06-25 — see status).
+
+> **Status (audited 2026-06-25): OPEN, but the purity prerequisite is already done.**
+> The design below says to "add `fn is_pure`" — but a full purity analysis already
+> exists: `def.purity` is computed in `src/parser/definitions.rs` + `src/scopes.rs`
+> (the `Purity::{Pure, Impure(ParentWrite|HostIo)}` lattice, propagated across the call
+> graph and consumed by `scopes.rs` for effect analysis). So the costly half is built;
+> what remains is purely the **codegen** half — emit the `n_foo_pure` (stores-less)
+> inner function for `Purity::Pure` defs and call it from other pure defs. `src/generation/`
+> does **not** read `def.purity` today. Cost drops from High to Medium accordingly. (Use
+> the existing `def.purity`; do **not** add a second `is_pure` per the design's §"Purity
+> analysis implementation" — that pass is redundant now.)
 
 ### Background
 
@@ -850,7 +947,33 @@ Memoise results to avoid exponential recursion on call graphs.
 
 **Affected benchmarks:** 04 (2.24×)
 **Expected gain:** 1.3–1.5× on Collatz and any `long`-heavy generated code
-**Cost:** Low — localised change in `src/generation/` + `src/ops.rs`
+**Cost:** **Medium+ and soundness-critical** (corrected 2026-06-25 — the original "Low" was
+wrong; see Status + the full design below). Medium for slices 1–2, Large with range analysis.
+
+> **Status (investigated 2026-06-25): OPEN — and NOT Low-cost; the cheap version is
+> UNSOUND.** The `_nn` long ops exist in `src/ops.rs` (`op_add_long_nn`, …, 6 fns) but are
+> dead code. The trap is *why* they're dead. The original "Low cost" estimate assumed a
+> nullability classifier was easy — it is the opposite:
+> - **`op_add_int(v1,v2) { op_add_long(v1,v2) }`** — the common `integer` path *is* the
+>   long path, and its `if v1 != i64::MIN && v2 != i64::MIN { … } else { i64::MIN }` guard
+>   is **the core null-PROPAGATION semantics for all integer/long arithmetic** (a null
+>   operand flows to a null result through it) — **not** a removable backstop.
+> - **No definite-non-null analysis exists.** The only nullability machinery is the
+>   `OpAddInt → OpAddIntNullable` swap in `parser/operators.rs::rewrite_outer_arith_to_nullable`,
+>   which is the **`??` operator** mechanism (swap so a fault-prone op returns its sentinel
+>   silently for `??` to discharge) — it marks where nulls *are expected*, the opposite of
+>   proving non-null. There is a narrow `expr_not_null` flag (scoped to a `??` LHS) and a
+>   field-level `not_null` bit, but no per-operand dataflow.
+> - So emitting `_nn` for an operand that *could* be null produces a **silent wrong result**
+>   — in loft's #1-priority (heap/value soundness) area. Plus an overflow edge: `_nn` chains
+>   diverge from the sentinel form when an inner op overflows to `i64::MIN`.
+>
+> **Real cost: Medium+, soundness-critical** — it needs a sound definite-non-null dataflow
+> (or to restrict `_nn` to operands a type-level `not_null`/`expr_not_null` fact already
+> proves non-null — a narrow but sound subset). The 6 op stubs are the trivial 5% done.
+> N5 (`integer`) is the same path (`op_add_int == op_add_long`), not a separate item. **Not
+> recommended as a near-term pick** — modest native gain (rustc -O predicts the `!= MIN`
+> branch well), real soundness risk; prefer N1 (safe, mechanical, larger).
 
 ### Background
 
@@ -864,48 +987,101 @@ if v1 == i64::MIN || v2 == i64::MIN { i64::MIN } else { v1 + v2 }
 For Collatz, this pattern appears in every loop body. The two comparisons and the
 conditional branch prevent `rustc -O` from auto-vectorising or pipelining the arithmetic.
 
-### Strategy: sentinel checks only at store boundaries
+> The original strategy below ("a definitely-assigned local is never null") was **wrong** —
+> the 2026-06-25 investigation (Status above) showed the sentinel is null *propagation* and
+> there is no non-null analysis. The sound full design follows; the old sketch is kept struck
+> through for context.
 
-`i64::MIN` as null means "this field was never written". This matters only when:
-- Reading a `long` field from a `Store` record that may never have been assigned
-- Writing a `long` field and wanting to clear it (set to null)
+### ~~Strategy: sentinel checks only at store boundaries~~ (superseded — unsound)
 
-Within a function body, a `long` local variable that has been assigned is never null
-during arithmetic. Generated code has definite assignment for every local variable at
-its first use (guaranteed by the compiler's scope analysis).
+~~A `long` local variable that has been assigned is never null during arithmetic.~~ False:
+`op_add_int`/`op_add_long` returns `i64::MIN` (null) on **overflow**, and a local can hold a
+null read from a nullable field or a null-returning call. Definite *assignment* ≠ definite
+*non-null*. The real design must prove non-null, not assume it.
 
-### Design
+### Full implementation design (the sound version)
 
-1. **New template in `src/ops.rs`:**
+Done right, N3 is **not** a codegen patch — it is **non-nullability tracked as a type fact**,
+with the `_nn` ops as its first consumer. Per [CODEGEN_METHOD.md](CODEGEN_METHOD.md), the fact
+is computed once by an analysis and *read* by codegen, never re-derived per emit site. The
+payoff is broader than Collatz: a real non-null fact also sharpens `??` codegen and lets other
+defensive sentinels drop — it's a type-system improvement that happens to unlock the perf win.
 
-   ```rust
-   #[inline(always)]
-   pub fn op_add_long_nn(v1: i64, v2: i64) -> i64 { v1 + v2 }  // nn = non-null
-   #[inline(always)]
-   pub fn op_mul_long_nn(v1: i64, v2: i64) -> i64 { v1 * v2 }
-   // … etc. for all long arithmetic ops
-   ```
+**The one invariant.** Emit a `_nn` op for an int/long binary-arithmetic node **iff both
+operands are provably ≠ `i64::MIN` at that program point**; otherwise emit the sentinel op.
+Everything below is the machinery that decides "provably non-null," soundly.
 
-2. **In `src/generation/`:**
+**1. The fact — a `NonNull` bit on int/long values.** Add a two-point nullability lattice
+carried on the value/expression type: `Nullable` (⊤, default — may be `MIN`) ⊐ `NonNull`
+(proven ≠ `MIN`). It **joins conservatively** — `Nullable` wins at any control-flow merge. The
+two nullability hooks that already exist become *inputs*, not the whole story: the field-level
+`not_null` bit (`src/typedef.rs`) and the `??`-scoped `expr_not_null` flag
+(`src/parser/operators.rs`).
 
-   For a `long` binary operation where both operands are local variables (determined by
-   the same escape analysis pass from N1, applied to `long` variables), emit
-   `op_add_long_nn` instead of `op_add_long`.
+**2. Sources of `NonNull`** (where the bit is introduced):
+- **Literals** — `Value::Int(k)` with `k != i64::MIN` → `NonNull` (the lone `MIN` literal stays `Nullable`).
+- **`not_null` fields** — a record field declared/inferred non-null reads back `NonNull`.
+- **Bounded loop induction vars** — `for i in lo..hi` with non-null bounds: `i ∈ [lo,hi)`, never `MIN` → `NonNull` in the body (the `i + 1` / Collatz win).
+- **Post-guard** — a value after `x ?? d` or inside an `if x != null` branch (reuse `expr_not_null`).
+- **Non-null-by-construction conversions** — e.g. `bool→int`.
 
-   For a `long` field read from a store or a function parameter annotated as nullable,
-   continue to use `op_add_long` with the sentinel check.
+**3. Propagation — and the overflow decision (the load-bearing call).** Is `(a + b)` non-null
+when `a`, `b` are? **No, not in general:** `op_add_int` is `checked_add(...).unwrap_or(MIN)`, so
+a *result* can be `MIN` on overflow even from non-null inputs. Two sound options:
+- **(A) Conservative — recommended first.** Arithmetic *results* re-enter as `Nullable`. So
+  `_nn` fires on the *operands* (each proven from a source), but a chained result keeps the
+  outer op on the sentinel. Captures the common single-op shape (`i + 1`, `3 * cur`) — most of
+  the gain — with **zero** overflow risk and no new analysis.
+- **(B) Range-aware — later.** Add an interval lattice; when a result's proven range excludes
+  `MIN`, mark it `NonNull` so `_nn` *chains* and `rustc -O` fuses the expression. Bigger, but
+  unlocks multi-op fusion.
 
-3. **Conservative fallback:** If there is any doubt about nullability (e.g. the value
-   comes from a function call that returns `long`), use the sentinel version. Only
-   local-variable-to-local-variable arithmetic with definite assignment uses `_nn`.
+  Name the **semantic** edge explicitly: today overflow silently yields null and propagates; a
+  `_nn` over operands that themselves overflowed would not re-propagate. Option A **side-steps
+  it** (results stay `Nullable`, so behaviour is identical) — which is exactly why it ships
+  first. Option B must either prove no-overflow or declare overflow-to-null unsupported.
 
-### Changes
+**4. Codegen reads the bit (translation, not derivation).** In `src/generation/` (native) and
+`src/state/codegen.rs` (interp emit), at an int/long binary-op node: both operand bits `NonNull`
+→ emit the `_nn` op; else the sentinel op. The bit was computed in the analysis pass — no
+`has_ref_params && …`-style re-derivation at the site. Note `op_add_int_nn` ≡ `op_add_long_nn`
+(same path — `op_add_int` *is* `op_add_long`), so **no new integer ops are needed**; the 6
+existing `_nn` long ops cover both.
 
-- `src/ops.rs`: add `_nn` variants for `add`, `sub`, `mul`, `div`, `mod`, `neg`,
-  comparison ops.
-- `src/generation/`: in the long-arithmetic emit path, check nullability of both
-  operands before choosing variant.
-- `default/01_code.loft`: add `#rust` templates for the `_nn` ops if needed by codegen.
+**5. Both backends.** Native picks the `_nn` Rust fn directly. The interpreter today runs
+`ops::op_add_long` via its opcode; for the interp win (the debug-loop slice), add escape-range
+`add_long_nn` *opcodes* (opcode space is now free — see § How the interpreter executes) wired to
+`op_add_long_nn`, emitted under the same bit. Ship native first; interp opcodes are optional.
+
+**6. Validation — the boundary matrix is the soundness gate.** This is a soundness change in
+loft's #1-priority area, so the `engineering-rigor` matrix is mandatory, asserting **value +
+null-propagation + overflow on BOTH backends**, and **introspecting *which op was emitted*** (a
+result can be coincidentally right):
+- non-null `lit op lit` → correct value AND `_nn` chosen.
+- one operand a **nullable field** (unassigned record) → result MUST be null AND `_nn` MUST NOT
+  be chosen (the corruption cell — this is the whole point).
+- overflow cell (`MAX + 1`) → matches current behaviour under the chosen option.
+- `??`-fed, bounded-loop-var, conversion-source cells. Grow one `tests/oracle/` guard (Goal D).
+
+**7. Staging (each slice shippable):**
+1. `NonNull` lattice + literal & `not_null`-field sources; native codegen reads it; matrix.
+   (Smallest sound slice: `_nn` on `lit op lit` / `field op lit`.)
+2. Bounded-loop-induction-variable source — the `i + 1` win (Collatz 04).
+3. Interpreter `_nn` opcodes.
+4. *(optional)* Option-B range analysis for chained fusion.
+
+**Cost/risk:** Medium for slices 1–2, Large with range analysis. Soundness-critical — the
+matrix + introspect-the-emit gate is non-negotiable. Re-run `bench/04_collatz` after slice 2 to
+confirm the gain is real on current `rustc` (which already predicts the `!= MIN` branch well).
+
+### Touched files (full version)
+
+- `src/ops.rs`: the 6 `_nn` ops already exist; add `_nn` comparison/`neg` variants only if a slice needs them.
+- *new* nullability analysis (alongside `src/scopes.rs` / the type pass): compute the `NonNull` bit.
+- `src/data.rs` / `src/typedef.rs`: carry the `NonNull` bit on the value/type (feed in the existing `not_null` + `expr_not_null`).
+- `src/generation/` + `src/state/codegen.rs`: read the bit, pick `_nn` vs sentinel.
+- `default/01_code.loft`: `_nn` op declarations + `#rust` templates (so codegen can name them).
+- `tests/` + `tests/oracle/`: the boundary matrix + a differential guard.
 
 ---
 
@@ -920,6 +1096,12 @@ scan.loft hot loop that's a meaningful share of the ~165 ms
 `-O` baseline.
 **Cost:** Small — localised change in `src/generation/mod.rs` +
 purity-classifier extension.
+
+> **Status (audited 2026-06-25): OPEN.** `is_leaf_pure` is absent and `cr_call_push` is
+> still emitted unconditionally for every `n_` function. But the "purity-classifier
+> extension" the cost cites is mostly free: `def.purity` already exists (see N2 status),
+> so `is_leaf_pure` = `def.purity == Purity::Pure` AND the body has no `Call`/`Method` —
+> only the leaf check is new. Stays Small.
 
 ### Background
 
@@ -1022,6 +1204,20 @@ N5 right after for `integer`) so the analysis lives in one place.
 ---
 
 ## Design: N6 — Skip the rustc toolchain probe on a native cache hit
+
+> **DELIVERED (verified 2026-06).** There is **no up-front `rustc --version` probe**:
+> a warm cache hit runs the cached binary directly and spawns **zero** rustc/cargo
+> processes (confirmed via `strace -f -e execve` — 0 rustc execve on a warm run), and
+> rustc is checked only on a cache *miss* — a cheap `cache::rustc_mismatch()` for the
+> default path plus the compile's NotFound-arm lazy fallback (`src/main.rs` ≈5818–6060,
+> the `'native` block). Measured warm native startup of a trivial program is **~0–10 ms**
+> (vs the ~26 ms below), so the ~18 ms tax is gone. The implementation is *better* than
+> the original design (which moved the probe into the cache-miss branch) — it removed
+> the probe entirely, letting the compile attempt itself be the rustc-presence check.
+> **Residual (separate, not done):** the ~6.6 ms parse+codegen+emit+hash still runs on
+> every warm invocation (the cache is keyed on the *generated Rust*, not the `.loft`
+> source) — see the Ceiling note below; the source-keyed cache to reach the ~1 ms floor
+> is the open follow-up.
 
 **Affected workload:** Native **startup latency** of any short-lived
 program — a CLI tool, a test harness, a script invoked repeatedly.
@@ -1136,22 +1332,57 @@ modes.
 
 ## Improvement priority order
 
-| Priority | Item | Target benchmarks | Expected gain | Cost |
-|---|---|---|---|---|
-| 1 | P1 — Superinstructions | 02, 03, 04, all tight loops | 2–4× on integer loops | Medium |
-| 2 | N1 — Direct collection emit | 08, 09, 10 | 5–15× data-struct native | High |
-| 3 | P2 — Stack raw pointer cache | all interpreter | 20–50% across interpreter | High |
-| 4 | N2 — Pure function stores omit | 01, 06 native | 10–30% recursive native | High |
-| 5 | N3 — Long sentinel in codegen | 04 native | ~1.5× Collatz native | Low |
-| 6 | N5 — Integer sentinel in codegen | scanners, parsers, any indexed loop | parallel to N3 for `integer` | Low (folds into N3) |
-| 7 | N4 — Suppress cr_call_push on `#pure` leaves | hot loops with tiny `#pure` helpers (scan.loft) | measurable share of `-O` baseline on per-byte loops | Small |
-| 8 | N6 — Skip rustc probe on native cache hit | native warm startup (any short-lived program) | ~18 ms / ≈3.7× off warm startup | Small |
-| 9 | P3 — Verify integer sentinel | 02, 10 | 2–5% (verification) | Low |
-| 10 | W1 — wasm string path | 07 wasm | <1.3× gap | Medium |
+**Audited against the code 2026-06-25.** Two items were already delivered but listed open
+(the opcode-table two-byte escape that "blocked" P1, and N6); two are cheaper than estimated
+because their prerequisite already exists (N2/N4 — purity analysis is built); one is partially
+scaffolded (N3 — dead `_nn` op stubs). The `Status` column records what's actually in the tree.
+Cost/gain are unchanged estimates (the benchmark table itself predates v2026.6.0 — re-run
+`bench/run_bench.sh` before committing to a High-cost item).
 
-Items 1–3 should be scheduled after the 0.8.3 language-syntax milestone. P1 is the
-highest-impact single change because it benefits every tight loop in the interpreter
-without touching the memory model.
+| Item | Target benchmarks | Gain | Cost | **Status (2026-06-25)** |
+|---|---|---|---|---|
+| P1 — Superinstructions | 02, 03, 04, all tight loops | 2–4× | Medium | **Open** — *unblocked* (the escape exists); not implemented (no `si_*`/peephole). Cheap secondary (debug loop). |
+| N1 — Direct collection emit | 08, 09, 10 | 5–15× | High | **Open** — no escape-analysis/`Locality`. The big native prize. |
+| P2 — Stack raw pointer cache | all interpreter | 20–50% | High | **Open** — `stack_base:u32` is frame bookkeeping, *not* the raw-ptr cache; + memory-model risk. Low priority. |
+| N2 — Pure-fn stores omit | 01, 06 native | 10–30% | ~~High~~ **Med** | **Open**, but `def.purity` already computed (scopes.rs) — only the stores-less codegen half remains. |
+| N3 — Long sentinel in codegen | 04 native | ~1.5× | ~~Low~~ **Med+** | **Open — cheap version is UNSOUND** (investigated 2026-06-25). The 6 `_nn` ops are dead; the sentinel they'd skip is the *core null-propagation path* for all integer/long arithmetic, and no definite-non-null analysis exists. Needs a sound non-null dataflow (soundness-critical). See N3 section. |
+| N5 — Integer sentinel | scanners, parsers, indexed loops | ~N3 | Med+ | **Open — same path as N3** (`op_add_int == op_add_long`); not a separate item. Same soundness blocker. |
+| N4 — Suppress cr_call_push on `#pure` leaves | hot loops w/ tiny `#pure` helpers | per-call | Small | **Open** — reuses existing `def.purity`; `is_leaf_pure` absent. |
+| P4 — Block-copy slice (`OpAppendVectorSlice`) | primitive-vector slice copies | 5–10× | Medium | **Open** — op absent; opcode slot now trivially free (escape). |
+| P3 — Verify integer sentinel | 02, 10 | 2–5% | Low | **Open** — audit test absent. |
+| W1 — wasm string path | 07 wasm | <1.3× | Medium | **Open** — no string `with_capacity` in `generation/`. |
+| Arc worker-clone (`Stores::types`/`names`) | parallel workers | small | Low–Med | **Open** — fields not `Arc`-wrapped. |
+| O8.3 — zero-fill struct defaults | struct construction | small | Small | **Open** — not in `parser/objects.rs`. |
+| ✅ **N6 — Skip rustc probe on cache hit** | native warm startup | ~18 ms / ≈3.7× | Small | **DELIVERED** — verified: 0 rustc spawns on a warm run, ~0–10 ms. |
+| ✅ **Opcode two-byte escape** (P1's "blocker") | — | — | — | **DELIVERED** — `255 → OPERATORS[255+ext]`, ~242 free slots. |
+
+Suggested order given the audit: **N4** (Small, purity ready, no soundness risk) → **N2** (now
+Medium, purity ready) → **N1** (the High-cost native prize) → **P1** (cheap interpreter
+secondary). **N3/N5 dropped from "cheap-first"** — the 2026-06-25 investigation found the cheap
+version is unsound (the sentinel is core null-propagation; no non-null analysis exists), so it's
+Medium+ and soundness-critical, not a quick win. P2 parked (interp-only, bounded, memory-model risk).
+
+**The interpreter's place — and its bounds.** `--native` is the default *shipping*
+backend, but the **interpreter is the debug / live-edit backend** — a debug session
+forces execution through the interpreter so it can step, inspect, and hot-reload. That
+touches the **debug loop**, which is Purpose-level (the fast iterative loop is loft's
+whole value). But the impact is **bounded**, for two reasons: a shipped game runs
+native (players never touch the interpreter), and **library calls dispatch to the
+native cdylib even under `--interpret`** (the C71 / [NATIVE.md § N9](NATIVE.md#n9--native-library-shared-store-dispatch-c71)
+shared-store dispatch). So during a debug session only the maker's *own* glue/logic
+runs interpreted, while the heavy library work (render, physics, hex-world) stays
+native. Interpreter optimisation (P1, P2) is therefore a **real but secondary** win —
+worth doing because P1 is now cheap and unblocked, not because it dominates the loop.
+The **native** items (N6, N1, N3/N5) are prime: they speed the shipped game, the
+library calls that dominate even a debug session, *and* the dev/test path.
+
+**P1 is the highest-impact interpreter change** — it benefits every tight loop the
+maker writes by hand, without touching the memory model, and (corrected 2026-06) it is
+**no longer blocked**: the two-byte escape gives ~242 free opcode slots, so its
+superinstructions land as escape-range ops. P2 (stack pointer cache) is the larger
+follow-on but carries memory-model risk (raw-pointer invalidation), and its
+interpreter-only gain is bounded by the same reasoning — so P1 is the safer first step
+and P2 is low-priority.
 
 ---
 
@@ -3050,7 +3281,7 @@ plan-cleanup audits:
 
 | Item | Section | ROADMAP row | Tier | Status |
 |---|---|---|---|---|
-| **P1** — Superinstruction merging | § Design: P1 | O1 | Interpreter | Open — **blocked by opcode-table capacity** (254/256 used).  Decide between retiring rare Op codes vs widening the opcode field before P1 itself starts. |
+| **P1** — Superinstruction merging | § Design: P1 | O1 | Interpreter | Open — **unblocked** (corrected 2026-06): the two-byte escape (byte 255 → `OPERATORS[255+ext]`) gives ~242 free slots; superinstructions are escape-range ops. **Secondary** value — the debug loop runs interpreted, but bounded (library calls stay native via C71/N9; players run native), so it speeds only the maker's own glue. Worth doing because it is now cheap + low-risk. |
 | **P2** — Reduce store indirection on the stack | § Design: P2 | (cited in PLANNING.md) | Interpreter | Open — design ready, no scheduled slot. |
 | **P3** — Confirm integer paths carry no `long` sentinel | § Design: P3 | — | Interpreter | Open — small verification + audit task; verifies the Plan-01 `i32::MIN`-removal stuck. |
 | **P4** — Block-copy slice materialisation for primitive vectors | § Design: P4 | — | Interpreter + Native | Open — discovered alongside @P287 (2026-05-20).  Today's slice → vector materialisation is element-by-element through the record allocator (5 000+ dispatches for 1 000 i32 elements); a new `OpAppendVectorSlice` op + parser fast-path reduces this to one `copy_block`.  Affects both backends. |
@@ -3058,8 +3289,8 @@ plan-cleanup audits:
 | **P6** — Free-block coalescing in `Store` (merge mergeable neighbours) | — | — | Interpreter + Native | **LANDED 2026-05-21.**  Partner of P5.  `Store::delete` coalesces only FORWARD (`rec + size`) — the header-only block layout has no footer, so a freed block can't find its PREDECESSOR; freeing B while A is already free left A|B uncoalesced, and accumulated small free blocks forced the store to GROW instead of reusing freed space.  **Fixed with NO new index** (no end→start map, no boundary-tag footer — those grow with the free-block count): a lazy `coalesce_free` sweep walks the contiguous block chain (the adjacency info that already exists — the same walk `claim_scan`/`usage`/`fl_rebuild` do), merges every run of adjacent free blocks in place, and rebuilds the ONE existing size-keyed free tree via `fl_rebuild`.  It runs in `claim` only when a best-fit miss would otherwise grow the store (that path already costs O(n) via `resize_store`), guarded by a single `needs_coalesce` bool so alloc-only workloads never sweep.  Backward coalescing falls out of the address-order walk (A+B merge regardless of free order).  Shared `Store` → both backends.  Guards: Rust unit test `coalesce_free_merges_adjacent_and_reuses_space` (`src/store.rs` — mergeable-pairs → 0, merged block reused without growing), cross-mode `tests/scripts/126-store-coalesce.loft`. |
 | **P7** — `reserve(v, n)` / `shrink_to_fit(v)` vector builtins | — | — | Interpreter + Native | Open — the deferred P5 follow-up.  P5's amortised ×2 growth leaves a vector at up to ~2× capacity (builds run ~57–73 % utilised).  Expose `reserve(v, n)` (wrapping the existing `OpPreAllocVector` / `vector::pre_alloc_vector`) so a known-size build claims exactly once, and/or `shrink_to_fit(v)` (a length-based re-claim — the deep-copy path `copy_claims_seq_vector` already does this internally) to reclaim slack after building.  Opt-in, benefits every vector consumer; drives @PLN6 mesh memory-reduction item **M2** (`plans/6-audience-generative-art/03-projector-view.md`).  Effort S–M. |
 | **N1** — Direct-emit local collections in native codegen | § Design: N1 | **O4** | Native | Open — design ready.  Cooperates with `lib_plans/59-lazy-stdlib/`.  (`plans/finished/21-retire-scratch/` shipped, so the scratch consumer set is now zero — N1 is independent.) |
-| **N2** — Omit `stores` parameter from pure native fns | § Design: N2 | **O5** | Native | Open — design ready. |
-| **N3** — Remove `long` null-sentinel from generated code | § Design: N3 | — | Native | Open — verification + cleanup; small. |
+| **N2** — Omit `stores` parameter from pure native fns | § Design: N2 | **O5** | Native | Open — purity analysis already built (`def.purity`, scopes.rs); only the stores-less codegen remains (audited 2026-06-25 → Cost High→Medium). |
+| **N3** — Remove `long` null-sentinel from generated code | § Design: N3 | — | Native | Open — the 6 `_nn` long ops exist in `ops.rs` but are dead/unwired; needs the non-null classifier + emit (audited 2026-06-25). |
 | **N4** — Suppress `cr_call_push` on `#pure` leaf functions | § Design: N4 | — | Native | Open — discovered while optimising @PLN42 scan.loft (2026-05-18).  Small change; reuses N2's purity classifier with a leaf check. |
 | **N5** — Inline `integer` arithmetic when operands are non-null | § Design: N5 | — | Native | Open — discovered alongside N4 (2026-05-18) while inspecting `--native-emit` output for scan.loft's byte loop.  Folds into N3 (same nullability classifier, parallel application to `integer`). |
 | **W1** — wasm string representation | § Design: W1 | — | WASM | Open — design ready, scheduled for wasm-priority workloads (game-client + browser-IDE consumers). |

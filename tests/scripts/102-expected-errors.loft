@@ -19,6 +19,35 @@ fn vec_sum(r: vector<integer>) -> integer {
   total
 }
 
+// ── L11 digit-separator placement errors ───────────────────────
+
+// @EXPECT_ERROR: Misplaced '_' in number literal
+fn test_digit_separator_doubled() {
+  x = 1__0;
+  assert(x == 10, "unreached");
+}
+
+// @EXPECT_ERROR: Misplaced '_' in number literal
+fn test_digit_separator_trailing() {
+  x = 1_ + 0;
+  assert(x == 1, "unreached");
+}
+
+// @EXPECT_ERROR: Misplaced '_' in number literal
+fn test_digit_separator_after_hex_prefix() {
+  x = 0x_F;
+  assert(x == 15, "unreached");
+}
+
+// ── Empty comprehension body (was a compiler panic — control.rs:624 underflow
+//    + data.rs:4453 Unknown-definition; now a clean diagnostic) ──────────────
+
+// @EXPECT_ERROR: comprehension body must produce a value
+fn test_empty_comprehension_body() {
+  v = [for i in 0..3 {}];
+  assert(len(v) == 0, "unreached");
+}
+
 // ── From 06-structs.loft ────────────────────────────────────────
 
 // @EXPECT_ERROR: vector concatenation in an expression creates a temporary

@@ -974,31 +974,81 @@ impl Lexer {
         string
     }
 
-    fn get_number(&mut self) -> String {
+    /// Scan a run of digits and return the digit string (with any `_`
+    /// separators stripped) together with the size of each digit group the
+    /// separators carve out.  L11: a `_` is accepted only *between two
+    /// digits*; a misplaced `_` (trailing, doubled, or next to a radix
+    /// prefix / `.` / `e`) is a hard error.  A leading `_` never reaches
+    /// here — `_1` lexes as an identifier.  The group sizes let `number()`
+    /// lint non-thousands grouping on the decimal integer part.
+    fn get_number(&mut self) -> (String, Vec<usize>) {
         let mut number = String::new();
         let mut hex = false;
+        let mut groups: Vec<usize> = Vec::new();
+        let mut group_start = 0usize; // number.len() at the last separator
+        let mut prev_was_digit = false; // was the last CONSUMED char a (hex)digit?
         while let Some(&c) = self.iter.peek() {
             if c.is_ascii_digit() || c == 'b' || c == 'o' {
                 number.push(c);
                 self.next_char();
+                prev_was_digit = c.is_ascii_digit();
             } else if c == 'x' && !hex && number == "0" {
                 hex = true;
                 number.push(c);
                 self.next_char();
+                prev_was_digit = false;
             } else if hex && (('a'..='f').contains(&c) || ('A'..='F').contains(&c)) {
                 number.push(c);
                 self.next_char();
+                prev_was_digit = true;
+            } else if c == '_' {
+                // Digit separator (L11): valid only between two digits.
+                self.next_char();
+                let next_is_digit = self
+                    .iter
+                    .peek()
+                    .is_some_and(|&n| n.is_ascii_digit() || (hex && n.is_ascii_hexdigit()));
+                if prev_was_digit && next_is_digit {
+                    groups.push(number.len() - group_start);
+                    group_start = number.len();
+                } else {
+                    self.err(
+                        Level::Error,
+                        "Misplaced '_' in number literal — separators go between digits",
+                    );
+                    // Swallow the rest of a `_` run so `1__0` is one error, not one per `_`.
+                    while self.iter.peek() == Some(&'_') {
+                        self.next_char();
+                    }
+                }
+                prev_was_digit = false;
             } else {
                 break;
             }
         }
-        number
+        groups.push(number.len() - group_start);
+        (number, groups)
     }
 
     /// Parse a number for the lexer.
     fn number(&mut self) -> LexResult {
         let pos = self.position.clone();
-        let mut val = self.get_number();
+        let (mut val, int_groups) = self.get_number();
+        // L11 thousands-grouping lint: warn (but still accept) when decimal `_`
+        // separators don't carve standard 3-digit groups — the leftmost group
+        // may be 1-3 digits, every group after it must be exactly 3.  Skipped for
+        // hex/bin/oct (those group by 4/8, not 3) and for un-separated numbers.
+        if int_groups.len() > 1
+            && !val.starts_with("0x")
+            && !val.starts_with("0b")
+            && !val.starts_with("0o")
+            && (int_groups[0] > 3 || int_groups[1..].iter().any(|&g| g != 3))
+        {
+            self.err(
+                Level::Warning,
+                "Digit separators '_' are not on thousands boundaries (expected groups of 3)",
+            );
+        }
         let mut f = false;
         // P195: when the previous emitted token was a `.` (field
         // access), the current number is a tuple/struct field index —
@@ -1051,7 +1101,7 @@ impl Lexer {
             }
             val.push('.');
             f = true;
-            let part = self.get_number();
+            let (part, _) = self.get_number();
             if part.is_empty() {
                 self.err(Level::Error, "Problem parsing float");
                 return Lexer::none();
@@ -1066,7 +1116,7 @@ impl Lexer {
                 self.next_char();
                 val.push('-');
             }
-            let exp = self.get_number();
+            let (exp, _) = self.get_number();
             if exp.is_empty() {
                 self.err(Level::Error, "Problem parsing float");
                 return Lexer::none();
