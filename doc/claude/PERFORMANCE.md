@@ -57,18 +57,30 @@ below.
 ### Dispatch loop (`src/state/mod.rs`)
 
 The main execution loop fetches one opcode byte per cycle and calls the corresponding
-function from a 240-entry array of function pointers (`src/fill.rs`):
+function from the `OPERATORS` function-pointer **slice** (`src/fill.rs`). Bytes 0–254
+are one-byte opcodes; **byte 255 is a two-byte escape prefix** — the loop reads a
+second byte `ext` and dispatches `OPERATORS[255 + ext]` (encoding handled by `emit_op`
+in `src/state/mod.rs`):
 
 ```rust
 while self.code_pos < bytecode_len {
-    let op = *self.code::<u8>();          // fetch byte, advance code_pos
-    OPERATORS[op as usize](self);          // indirect call through fn-pointer array
+    let op = *self.code::<u8>();              // fetch byte, advance code_pos
+    if op == 255 {                            // escape: read ext, dispatch beyond 254
+        let ext = *self.code::<u8>();
+        OPERATORS[255 + ext as usize](self);
+    } else {
+        OPERATORS[op as usize](self);         // one-byte op — the common case
+    }
     if self.code_pos == u32::MAX { break; }
 }
 ```
 
-Each element of `OPERATORS` is a standalone Rust function taking `&mut State`.
-The array currently has **240 entries** (opcodes 0–239); opcodes 240–255 are unused.
+Each element of `OPERATORS` is a standalone Rust function taking `&mut State`. The slice
+currently holds **269 entries**: all 255 one-byte opcodes (0–254) plus 14 escape-range
+ops (255–268, reached via the 255 prefix). The escape extends the space to **~511
+opcodes** (255 one-byte + up to 256 via `255 + ext`), so **~242 slots are free**.
+`emit_op(op_code: u16, …)` hides the encoding from codegen: `< 255` emits one byte,
+`≥ 255` emits the `255` prefix followed by `(op_code − 255)`.
 
 There is no `match` at the top level — dispatch is already a hardware indirect branch.
 The cost per cycle is: one array index, one indirect branch (potentially mispredicted),
@@ -263,11 +275,23 @@ The 2× gaps on data structures and strings are design-level issues addressed by
 
 ### Background
 
-**Blocked:** The opcode table now has 254/256 entries — only 2 slots remain (255–256),
-which is not enough for even one superinstruction sequence.  O1 is deferred indefinitely
-until opcode space is freed (e.g. by a two-byte escape prefix or a dedicated
-superinstruction dispatch table).  The hot-pattern analysis below is preserved for
-reference when that redesign is undertaken.
+**No longer blocked (corrected 2026-06).** An earlier note here said the opcode table
+was nearly full (254/256, "2 slots left") and deferred P1 *"until opcode space is freed,
+e.g. by a two-byte escape prefix."* **That escape prefix now exists** — byte 255 escapes
+to `OPERATORS[255 + ext]` (see [How the interpreter executes](#how-the-interpreter-executes)),
+the table is at **269/511 with ~242 free slots**, and 14 escape-range ops already use it.
+So P1 can proceed: its superinstructions land in the escape range, i.e. as **two-byte
+opcodes** (`255` prefix + `ext`). The one extra byte-fetch is negligible against the win
+— a superinstruction replaces ~4 one-byte ops (4 fetches + 4 indirect calls + the
+intermediate stack traffic), so even as an escape op it is a large net reduction. If a
+specific superinstruction profiles hot enough to want a one-byte slot, swap it for one of
+the 14 cold escape-range ops; `emit_op` makes the encoding transparent either way.
+
+> Encoding note for the operand sections below: the original P1 design assumed one-byte
+> slots `240–245`. With the escape in place, superinstructions are **escape-range ops**
+> emitted via `emit_op(op_code ≥ 255, …)`; the operand layouts are otherwise unchanged.
+
+The hot-pattern analysis below stands.
 
 ### Hot patterns
 
@@ -642,9 +666,10 @@ the same `copy_block`.
 
 - @P287 already shipped — defines the IR shape this optimisation
   recognises and replaces.
-- Opcode-table headroom: 254/256 used (per P1's blocked-by note).  P4
-  needs one new opcode slot; if P1's opcode-widening lands first,
-  trivially available.  Otherwise needs one retire-candidate.
+- Opcode-table headroom: the two-byte escape (byte 255 → `OPERATORS[255 + ext]`,
+  see § How the interpreter executes) leaves **~242 free escape-range slots**, so
+  P4's one new opcode (`OpAppendVectorSlice`) is trivially available — emit it via
+  `emit_op` in the escape range, no retirement needed.
 
 ---
 
@@ -1149,9 +1174,27 @@ modes.
 | 9 | P3 — Verify integer sentinel | 02, 10 | 2–5% (verification) | Low |
 | 10 | W1 — wasm string path | 07 wasm | <1.3× gap | Medium |
 
-Items 1–3 should be scheduled after the 0.8.3 language-syntax milestone. P1 is the
-highest-impact single change because it benefits every tight loop in the interpreter
-without touching the memory model.
+**The interpreter's place — and its bounds.** `--native` is the default *shipping*
+backend, but the **interpreter is the debug / live-edit backend** — a debug session
+forces execution through the interpreter so it can step, inspect, and hot-reload. That
+touches the **debug loop**, which is Purpose-level (the fast iterative loop is loft's
+whole value). But the impact is **bounded**, for two reasons: a shipped game runs
+native (players never touch the interpreter), and **library calls dispatch to the
+native cdylib even under `--interpret`** (the C71 / [NATIVE.md § N9](NATIVE.md#n9--native-library-shared-store-dispatch-c71)
+shared-store dispatch). So during a debug session only the maker's *own* glue/logic
+runs interpreted, while the heavy library work (render, physics, hex-world) stays
+native. Interpreter optimisation (P1, P2) is therefore a **real but secondary** win —
+worth doing because P1 is now cheap and unblocked, not because it dominates the loop.
+The **native** items (N6, N1, N3/N5) are prime: they speed the shipped game, the
+library calls that dominate even a debug session, *and* the dev/test path.
+
+**P1 is the highest-impact interpreter change** — it benefits every tight loop the
+maker writes by hand, without touching the memory model, and (corrected 2026-06) it is
+**no longer blocked**: the two-byte escape gives ~242 free opcode slots, so its
+superinstructions land as escape-range ops. P2 (stack pointer cache) is the larger
+follow-on but carries memory-model risk (raw-pointer invalidation), and its
+interpreter-only gain is bounded by the same reasoning — so P1 is the safer first step
+and P2 is low-priority.
 
 ---
 
@@ -3050,7 +3093,7 @@ plan-cleanup audits:
 
 | Item | Section | ROADMAP row | Tier | Status |
 |---|---|---|---|---|
-| **P1** — Superinstruction merging | § Design: P1 | O1 | Interpreter | Open — **blocked by opcode-table capacity** (254/256 used).  Decide between retiring rare Op codes vs widening the opcode field before P1 itself starts. |
+| **P1** — Superinstruction merging | § Design: P1 | O1 | Interpreter | Open — **unblocked** (corrected 2026-06): the two-byte escape (byte 255 → `OPERATORS[255+ext]`) gives ~242 free slots; superinstructions are escape-range ops. **Secondary** value — the debug loop runs interpreted, but bounded (library calls stay native via C71/N9; players run native), so it speeds only the maker's own glue. Worth doing because it is now cheap + low-risk. |
 | **P2** — Reduce store indirection on the stack | § Design: P2 | (cited in PLANNING.md) | Interpreter | Open — design ready, no scheduled slot. |
 | **P3** — Confirm integer paths carry no `long` sentinel | § Design: P3 | — | Interpreter | Open — small verification + audit task; verifies the Plan-01 `i32::MIN`-removal stuck. |
 | **P4** — Block-copy slice materialisation for primitive vectors | § Design: P4 | — | Interpreter + Native | Open — discovered alongside @P287 (2026-05-20).  Today's slice → vector materialisation is element-by-element through the record allocator (5 000+ dispatches for 1 000 i32 elements); a new `OpAppendVectorSlice` op + parser fast-path reduces this to one `copy_block`.  Affects both backends. |
