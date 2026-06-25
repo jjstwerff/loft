@@ -1209,15 +1209,18 @@ fn appended_record_size(vars: &crate::variables::Function, var_nr: u16) -> u32 {
 /// is counted in-loop (a safe over-count, like 3.4b).  KNOWN GAPS (v1 under-models,
 /// future tightening): a concat-reassign `v = v + [x]` and a call returning a kept
 /// growing structure are not yet treated as accumulation.
-fn intrinsic_space(data: &Data, f: u32) -> (u32, u32, Vec<(u32, u32)>) {
+fn intrinsic_space(data: &Data, f: u32) -> (u32, u32, bool, Vec<(u32, u32)>) {
     /// Accumulator threaded through the space scan (bundled so the recursion stays
     /// within clippy's argument limit): vars reset inside the current loop, the
-    /// deepest accumulating nesting, the coefficient, and the outgoing calls.
+    /// deepest accumulating nesting, the coefficient, whether a dynamic STRING grows
+    /// unboundedly (F10 — its byte size is not a fixed record stride, so it is invisible
+    /// to `coeff`), and the outgoing calls.
     struct St<'a> {
         vars: &'a crate::variables::Function,
         reset: HashSet<u16>,
         max_leaf: u32,
         coeff: u32,
+        text_growth: bool,
         calls: Vec<(u32, u32)>,
     }
     fn scan(data: &Data, v: &Value, nesting: u32, st: &mut St) {
@@ -1249,6 +1252,17 @@ fn intrinsic_space(data: &Data, f: u32) -> (u32, u32, Vec<(u32, u32)>) {
                     {
                         st.max_leaf = st.max_leaf.max(nesting);
                         st.coeff += appended_record_size(st.vars, *t);
+                        // A growing TEXT has no fixed record stride — its byte length
+                        // is unbounded, so `coeff` cannot see it; flag it for F10.  The
+                        // var is a `text` or a promoted `&text` work-ref (text-return).
+                        let is_text = match st.vars.tp(*t) {
+                            Type::Text(_) => true,
+                            Type::RefVar(inner) => matches!(**inner, Type::Text(_)),
+                            _ => false,
+                        };
+                        if is_text {
+                            st.text_growth = true;
+                        }
                     }
                 } else {
                     st.calls.push((nesting, *g));
@@ -1264,10 +1278,22 @@ fn intrinsic_space(data: &Data, f: u32) -> (u32, u32, Vec<(u32, u32)>) {
         reset: HashSet::new(),
         max_leaf: 0,
         coeff: 0,
+        text_growth: false,
         calls: Vec::new(),
     };
     scan(data, &def.code, 0, &mut st);
-    (st.max_leaf, st.coeff, st.calls)
+    (st.max_leaf, st.coeff, st.text_growth, st.calls)
+}
+
+/// @PLN86 §8 (F10) — does any sandboxed def grow a dynamic STRING unboundedly (an
+/// `OpAppend*` to a `text` var inside a loop, not reset there)?  Such a build has no
+/// fixed record stride, so the F9 coefficient is blind to it; F10 rejects it unless the
+/// profile caps strings with `max_string_len`.  Intra-procedural (the append + its
+/// enclosing loop in one def) — a string grown across a call boundary is a documented
+/// v1 gap, like the inter-procedural coeff case.
+#[must_use]
+pub fn sandbox_grows_unbounded_string(data: &Data, sandboxed: &HashMap<u32, String>) -> bool {
+    sandboxed.keys().any(|&f| intrinsic_space(data, f).2)
 }
 
 /// @PLN86 space budget — `f`'s worst-case PEAK heap as `(degree, coeff)`: the
@@ -1288,7 +1314,9 @@ fn space_degree(
     if !in_progress.insert(f) {
         return (0, 0);
     }
-    let (max_leaf, mut coeff, calls) = intrinsic_space(data, f);
+    // `text_growth` (`.2`) is handled by `sandbox_grows_unbounded_string` (F10),
+    // not the degree/coeff footprint, so it is ignored here.
+    let (max_leaf, mut coeff, _text_growth, calls) = intrinsic_space(data, f);
     let mut degree = max_leaf;
     for (nesting, callee) in calls {
         let (callee_degree, callee_coeff) = if sandboxed.contains_key(&callee) {
@@ -1644,6 +1672,10 @@ pub enum DataViolation {
     /// Peak heap grows with input (degree > 0) but `max_input_n` is unset, so the
     /// figure cannot be bounded — deny-by-default.
     Unprovable { profile: String, degree: u32 },
+    /// @PLN86 §8 (F10) — a dynamic string grows unboundedly (no fixed record stride,
+    /// invisible to `coeff`) and the profile caps no string length, so the footprint
+    /// cannot be bounded.
+    UnboundedAlloc { profile: String },
 }
 
 /// `coeff · n^degree`, saturating: a genuinely over-budget figure can overflow `u64`,
@@ -1670,6 +1702,7 @@ pub fn data_envelope_violations(
     sandboxed: &HashMap<u32, String>,
 ) -> Vec<DataViolation> {
     let (degree, coeff) = sandbox_space_footprint(data, sandboxed);
+    let grows_string = sandbox_grows_unbounded_string(data, sandboxed);
     let mut profiles: Vec<&String> = sandboxed.values().collect();
     profiles.sort();
     profiles.dedup();
@@ -1679,7 +1712,14 @@ pub fn data_envelope_violations(
             continue;
         };
         if p.data_budget == 0 {
-            continue; // no budget declared → report-only
+            continue; // no envelope declared → report-only (F10 + F11 both opt-in)
+        }
+        // @PLN86 §8 (F10) — a dynamic string growing under an ACTIVE envelope must be
+        // capped, else the footprint is unbounded (and `coeff` cannot see it).
+        if grows_string && p.max_string_len == 0 {
+            out.push(DataViolation::UnboundedAlloc {
+                profile: pname.clone(),
+            });
         }
         if degree > 0 && p.max_input_n == 0 {
             out.push(DataViolation::Unprovable {
@@ -1724,6 +1764,11 @@ pub fn describe_data_violation(v: &DataViolation) -> String {
             "profile `{profile}`: peak heap grows as O(n^{degree}) but max_input_n is \
              unset, so the footprint cannot be bounded.\n  fix: set max_input_n in the \
              profile, or remove the input-growing allocation."
+        ),
+        DataViolation::UnboundedAlloc { profile } => format!(
+            "profile `{profile}`: a dynamic string grows unboundedly in a loop, so its \
+             heap size cannot be bounded.\n  fix: set max_string_len in the profile to \
+             cap it, or build the string outside the loop."
         ),
     }
 }

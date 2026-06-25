@@ -9312,6 +9312,42 @@ mod plan86_admission_tests {
         );
     }
 
+    /// @PLN86 §8 (F10) — under an active envelope, an uncapped dynamic string build is
+    /// rejected (its bytes aren't a fixed record stride); a `max_string_len` cap admits.
+    #[test]
+    fn unbounded_string_build_rejected_unless_capped() {
+        // grows `s` across a loop; max_input_n set so ONLY the string gate can fire.
+        let src = "fn grow() -> text { s = \"\"; for i in 0..10 { s += \"x\" } s }\n";
+        let base = "[sandbox]\nmod = [\"fn:grow\"]\n[profile.mod]\n\
+                    allow_libs = [\"code\"]\ndata_budget = 1000000\nmax_input_n = 100\n";
+
+        // uncapped (no max_string_len) → UnboundedAlloc rejection.
+        let uncapped = parse_admit_cfg(base, src);
+        assert!(
+            uncapped.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            uncapped.diagnostics.lines()
+        );
+        let errs = uncapped.sandbox_admission_errors();
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("string grows unboundedly") && e.contains("max_string_len")),
+            "an uncapped string build must be rejected: {errs:?}"
+        );
+
+        // capped → admits (the cap bounds it).
+        let capped_cfg = format!("{base}max_string_len = 256\n");
+        let capped = parse_admit_cfg(&capped_cfg, src);
+        assert!(
+            !capped
+                .sandbox_admission_errors()
+                .iter()
+                .any(|e| e.contains("string grows unboundedly")),
+            "a max_string_len-capped string build must admit: {:?}",
+            capped.sandbox_admission_errors()
+        );
+    }
+
     /// @PLN86 prevention #3 — TOTAL host capabilities: a `#cap`-tagged function that
     /// can reach an abort op (directly OR via a helper) is flagged as not total; a
     /// capability that validates and returns a clean value is clean.  The host-side
