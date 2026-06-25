@@ -888,15 +888,30 @@ Memoise results to avoid exponential recursion on call graphs.
 **Expected gain:** 1.3–1.5× on Collatz and any `long`-heavy generated code
 **Cost:** Low — localised change in `src/generation/` + `src/ops.rs`
 
-> **Status (audited 2026-06-25): OPEN, but partially scaffolded.** The `_nn` (non-null)
-> long ops the design calls for **already exist** in `src/ops.rs` — `op_add_long_nn`,
-> `op_sub`/`min`/`mul`/`div`/`rem`/`neg_long_nn` (6 fns). But they are **dead code**: no
-> caller in `src/fill.rs` (interpreter), `src/generation/` (native), or anywhere. So the
-> stubs are done; the remaining work is the **nullability classifier** (which locals are
-> provably non-null) + having codegen emit `_nn` instead of the sentinel form. N5 (the
-> `integer` parallel) has **no** stubs yet — 0 `_int_nn` ops in `src/ops.rs` — so N5 adds
-> its own op variants too. Net: N3 is the cheapest remaining item but is not started past
-> the op stubs.
+> **Status (investigated 2026-06-25): OPEN — and NOT Low-cost; the cheap version is
+> UNSOUND.** The `_nn` long ops exist in `src/ops.rs` (`op_add_long_nn`, …, 6 fns) but are
+> dead code. The trap is *why* they're dead. The original "Low cost" estimate assumed a
+> nullability classifier was easy — it is the opposite:
+> - **`op_add_int(v1,v2) { op_add_long(v1,v2) }`** — the common `integer` path *is* the
+>   long path, and its `if v1 != i64::MIN && v2 != i64::MIN { … } else { i64::MIN }` guard
+>   is **the core null-PROPAGATION semantics for all integer/long arithmetic** (a null
+>   operand flows to a null result through it) — **not** a removable backstop.
+> - **No definite-non-null analysis exists.** The only nullability machinery is the
+>   `OpAddInt → OpAddIntNullable` swap in `parser/operators.rs::rewrite_outer_arith_to_nullable`,
+>   which is the **`??` operator** mechanism (swap so a fault-prone op returns its sentinel
+>   silently for `??` to discharge) — it marks where nulls *are expected*, the opposite of
+>   proving non-null. There is a narrow `expr_not_null` flag (scoped to a `??` LHS) and a
+>   field-level `not_null` bit, but no per-operand dataflow.
+> - So emitting `_nn` for an operand that *could* be null produces a **silent wrong result**
+>   — in loft's #1-priority (heap/value soundness) area. Plus an overflow edge: `_nn` chains
+>   diverge from the sentinel form when an inner op overflows to `i64::MIN`.
+>
+> **Real cost: Medium+, soundness-critical** — it needs a sound definite-non-null dataflow
+> (or to restrict `_nn` to operands a type-level `not_null`/`expr_not_null` fact already
+> proves non-null — a narrow but sound subset). The 6 op stubs are the trivial 5% done.
+> N5 (`integer`) is the same path (`op_add_int == op_add_long`), not a separate item. **Not
+> recommended as a near-term pick** — modest native gain (rustc -O predicts the `!= MIN`
+> branch well), real soundness risk; prefer N1 (safe, mechanical, larger).
 
 ### Background
 
@@ -1215,8 +1230,8 @@ Cost/gain are unchanged estimates (the benchmark table itself predates v2026.6.0
 | N1 — Direct collection emit | 08, 09, 10 | 5–15× | High | **Open** — no escape-analysis/`Locality`. The big native prize. |
 | P2 — Stack raw pointer cache | all interpreter | 20–50% | High | **Open** — `stack_base:u32` is frame bookkeeping, *not* the raw-ptr cache; + memory-model risk. Low priority. |
 | N2 — Pure-fn stores omit | 01, 06 native | 10–30% | ~~High~~ **Med** | **Open**, but `def.purity` already computed (scopes.rs) — only the stores-less codegen half remains. |
-| N3 — Long sentinel in codegen | 04 native | ~1.5× | Low | **Open**, partially scaffolded — 6 `_nn` long ops exist in `ops.rs` but are *dead*; needs the non-null classifier + emit. |
-| N5 — Integer sentinel | scanners, parsers, indexed loops | ~N3 | Low | **Open** — no `_int_nn` stubs yet; folds into N3. |
+| N3 — Long sentinel in codegen | 04 native | ~1.5× | ~~Low~~ **Med+** | **Open — cheap version is UNSOUND** (investigated 2026-06-25). The 6 `_nn` ops are dead; the sentinel they'd skip is the *core null-propagation path* for all integer/long arithmetic, and no definite-non-null analysis exists. Needs a sound non-null dataflow (soundness-critical). See N3 section. |
+| N5 — Integer sentinel | scanners, parsers, indexed loops | ~N3 | Med+ | **Open — same path as N3** (`op_add_int == op_add_long`); not a separate item. Same soundness blocker. |
 | N4 — Suppress cr_call_push on `#pure` leaves | hot loops w/ tiny `#pure` helpers | per-call | Small | **Open** — reuses existing `def.purity`; `is_leaf_pure` absent. |
 | P4 — Block-copy slice (`OpAppendVectorSlice`) | primitive-vector slice copies | 5–10× | Medium | **Open** — op absent; opcode slot now trivially free (escape). |
 | P3 — Verify integer sentinel | 02, 10 | 2–5% | Low | **Open** — audit test absent. |
@@ -1226,9 +1241,11 @@ Cost/gain are unchanged estimates (the benchmark table itself predates v2026.6.0
 | ✅ **N6 — Skip rustc probe on cache hit** | native warm startup | ~18 ms / ≈3.7× | Small | **DELIVERED** — verified: 0 rustc spawns on a warm run, ~0–10 ms. |
 | ✅ **Opcode two-byte escape** (P1's "blocker") | — | — | — | **DELIVERED** — `255 → OPERATORS[255+ext]`, ~242 free slots. |
 
-Suggested order given the audit (native-first, cheap-first): **N3+N5** (cheapest, partly
-scaffolded) → **N4** (Small, purity ready) → **N2** (now Medium) → **N1** (the High-cost native
-prize) → **P1** (cheap interpreter secondary). P2 parked (interp-only, bounded, memory-model risk).
+Suggested order given the audit: **N4** (Small, purity ready, no soundness risk) → **N2** (now
+Medium, purity ready) → **N1** (the High-cost native prize) → **P1** (cheap interpreter
+secondary). **N3/N5 dropped from "cheap-first"** — the 2026-06-25 investigation found the cheap
+version is unsound (the sentinel is core null-propagation; no non-null analysis exists), so it's
+Medium+ and soundness-critical, not a quick win. P2 parked (interp-only, bounded, memory-model risk).
 
 **The interpreter's place — and its bounds.** `--native` is the default *shipping*
 backend, but the **interpreter is the debug / live-edit backend** — a debug session
