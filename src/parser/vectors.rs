@@ -1464,6 +1464,22 @@ impl Parser {
         } else {
             body_type
         };
+        // A comprehension body must produce an element value.  An empty body
+        // `[for i in r {}]` (or a void-producing one) yields `Void`, which
+        // downstream lifetime/codegen reads as an Unknown definition
+        // (`control.rs` block_result, `data.rs::def`) and panics.  Report it
+        // cleanly and recover with a dense element type so later passes don't crash.
+        if matches!(*in_t, Type::Void) {
+            if !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "comprehension body must produce a value — the `{{ … }}` after \
+                     `for … in …` cannot be empty"
+                );
+            }
+            *in_t = crate::data::I64.clone();
+        }
         self.in_loop = in_loop;
         self.vars.finish_loop(loop_nr);
         // Finalise vector element type (same as parse_vector post-loop)
