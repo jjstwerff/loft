@@ -40,7 +40,7 @@ fn run(name: &str, prog: &str, toml: &str, native: bool) -> (bool, String) {
 
 const POLICY: &str = "[sandbox]\nmod = [\"fn:scripted\"]\n[profile.mod]\nallow_libs = [\"code\"]\n";
 
-/// A sandboxed def reaching `mtime` (fs.read) under a policy that grants only
+/// A sandboxed def reaching `mtime` (fs#read) under a policy that grants only
 /// `code` is rejected, with the actionable error naming the symbol + group + fix.
 #[test]
 fn sandboxed_capability_violation_is_rejected() {
@@ -50,7 +50,7 @@ fn sandboxed_capability_violation_is_rejected() {
     assert!(
         err.contains("admission violation")
             && err.contains("mtime")
-            && err.contains("fs.read")
+            && err.contains("fs#read")
             && err.contains("fix:"),
         "stderr: {err}"
     );
@@ -116,13 +116,13 @@ fn warm_program_cache_does_not_bypass_admission() {
         )
     };
 
-    // permissive: fs.read granted → admitted, runs, and WARMS the program cache.
+    // permissive: fs#read granted → admitted, runs, and WARMS the program cache.
     let permissive = "[sandbox]\nmod = [\"fn:scripted\"]\n\
-                      [profile.mod]\nallow_libs = [\"code\"]\nallow_caps = [\"fs.read\"]\n";
+                      [profile.mod]\nallow_libs = [\"code\"]\nallow = [\"fs#read\"]\n";
     let (ok1, err1) = run(permissive);
     assert!(ok1, "permissive run must be admitted and run: {err1}");
 
-    // tightened (fs.read withdrawn): the SAME program must be rejected even though
+    // tightened (fs#read withdrawn): the SAME program must be rejected even though
     // a warm cache now exists — no bypass.
     let restrictive = "[sandbox]\nmod = [\"fn:scripted\"]\n\
                        [profile.mod]\nallow_libs = [\"code\"]\n";
@@ -133,7 +133,7 @@ fn warm_program_cache_does_not_bypass_admission() {
         "the tightened policy must reject on the warm run (admission not bypassed): {err2}"
     );
     assert!(
-        err2.contains("admission violation") && err2.contains("fs.read"),
+        err2.contains("admission violation") && err2.contains("fs#read"),
         "warm-run rejection must name the capability: {err2}"
     );
 }

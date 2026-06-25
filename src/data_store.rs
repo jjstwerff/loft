@@ -304,7 +304,7 @@ pub(crate) const DEF_SCALARS_TO_BOX: u32 = 132; // vector<NameRef>
 pub(crate) const DEF_BOUNDS: u32 = 136; // vector<integer>
 pub(crate) const DEF_FIELD_GROUPS: u32 = 140; // vector<LinkedFieldGroup>
 pub(crate) const DEF_SYNTHETIC: u32 = 144; // Option<&str>; "" = None
-pub(crate) const DEF_CAP: u32 = 148; // @PLN86 #cap "group"; "" = unannotated
+pub(crate) const DEF_CAP: u32 = 148; // @PLN86 the group#right call-gate link; "" = unlinked
 pub(crate) const DEF_RETURNED_NOT_NULL: u32 = 152;
 pub(crate) const DEF_PUB_VISIBLE: u32 = 153;
 pub(crate) const DEF_NULL_SAFE: u32 = 154; // @PLN46 W2 #null_safe; false = unannotated

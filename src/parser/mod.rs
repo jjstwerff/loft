@@ -618,8 +618,8 @@ impl Parser {
         crate::sandbox::reachable_ffi_bridges(&self.data, &self.sandbox_reachable_set())
     }
 
-    /// @PLN86 step 2.1 — the `#cap "group"` capability group a def declares, or
-    /// `None` if unannotated.  Step 2.3 gates each trusted symbol in the reachable
+    /// @PLN86 — the `group#right` call-gate link a def declares (in its signature),
+    /// or `None` if unlinked.  Admission gates each trusted symbol in the reachable
     /// set against the profile via `SandboxConfig::allows`.
     #[must_use]
     pub fn def_cap_group(&self, def_nr: u32) -> Option<&str> {
@@ -628,8 +628,8 @@ impl Parser {
     }
 
     /// @PLN86 step 2.3 — the capability-admission walk: every trusted symbol a
-    /// sandboxed def reaches must carry a `#cap` group its profile permits (or be
-    /// `native_ffi`-allowed).  An empty result means the sandboxed code is
+    /// sandboxed def reaches must carry a `group#right` call-gate link its profile
+    /// grants (or be `native_ffi`-allowed).  An empty result means the sandboxed code is
     /// admitted; otherwise each `CapViolation` names the offending reference for
     /// a diagnostic.  Run after parsing.
     #[must_use]
@@ -643,7 +643,7 @@ impl Parser {
     }
 
     /// @PLN86 step 2.2 — the capability-coverage lint: public functions lacking a
-    /// `#cap "group"`.  The host runs this over the stdlib + libraries to find the
+    /// `group#right` call-gate link.  The host runs this over the stdlib + libraries to find the
     /// surface still to tag; an empty result is full coverage (L3-cap).
     #[must_use]
     pub fn untagged_public_symbols(&self) -> Vec<u32> {
@@ -8054,7 +8054,7 @@ mod plan86_sandbox_designation_tests {
     fn fn_designation_tags_only_the_designated_function() {
         let mut p = Parser::new();
         p.set_sandbox_config(parse_sandbox_config(
-            "[sandbox]\nmod-script = [\"fn:scripted\"]\n[profile.mod-script]\nallow_caps = [\"math\"]\n",
+            "[sandbox]\nmod-script = [\"fn:scripted\"]\n[profile.mod-script]\nallow = [\"math#read\"]\n",
         ));
         let dir = std::env::temp_dir();
         let path = dir.join(format!("plan86_designation_{}.loft", std::process::id()));
@@ -8083,7 +8083,7 @@ mod plan86_nesting_guard_tests {
     fn sandboxed_parser() -> Parser {
         let mut p = Parser::new();
         p.set_sandbox_config(parse_sandbox_config(
-            "[sandbox]\nmod-script = [\"fn:scripted\"]\n[profile.mod-script]\nallow_caps = [\"math\"]\n",
+            "[sandbox]\nmod-script = [\"fn:scripted\"]\n[profile.mod-script]\nallow = [\"math#read\"]\n",
         ));
         p
     }
@@ -8199,7 +8199,7 @@ mod plan86_reachable_set_tests {
             .map(|s| format!("\"{s}\""))
             .collect::<Vec<_>>()
             .join(", ");
-        let cfg = format!("[sandbox]\nmod = [{list}]\n[profile.mod]\nallow_caps = [\"x\"]\n");
+        let cfg = format!("[sandbox]\nmod = [{list}]\n[profile.mod]\nallow = [\"x#read\"]\n");
         let mut p = Parser::new();
         p.set_sandbox_config(parse_sandbox_config(&cfg));
         p.parse_dir("default", true, true).unwrap(); // `integer` et al. live in the stdlib
@@ -8319,13 +8319,13 @@ mod plan86_reachable_set_tests {
         );
     }
 
-    /// @PLN86 2.1 — `#cap "group"` parses onto a def and is readable; the
-    /// read/write distinction (the `Vector.get` vs `Vector.clear` case)
-    /// round-trips, and an unannotated def reads as `None`.
+    /// @PLN86 — a `group#right` call-gate link parses off the signature onto a def
+    /// and is readable; the read/update distinction round-trips, and an unlinked def
+    /// reads as `None`.
     #[test]
     fn cap_annotation_is_parsed_and_readable() {
-        let src = "fn reader() -> integer;\n#native\n#cap \"collections.read\"\n\
-                   fn writer() -> integer;\n#native\n#cap \"collections.write\"\n\
+        let src = "fn reader() -> integer collections#read;\n#native\n\
+                   fn writer() -> integer collections#update;\n#native\n\
                    fn plain() -> integer { 0 }\n";
         let p = parse_with_sandbox(&[], src);
         assert!(
@@ -8335,11 +8335,11 @@ mod plan86_reachable_set_tests {
         );
         assert_eq!(
             p.def_cap_group(p.data.def_nr("n_reader")),
-            Some("collections.read")
+            Some("collections#read")
         );
         assert_eq!(
             p.def_cap_group(p.data.def_nr("n_writer")),
-            Some("collections.write")
+            Some("collections#update")
         );
         assert_eq!(p.def_cap_group(p.data.def_nr("n_plain")), None);
     }
@@ -8361,14 +8361,14 @@ mod plan86_admission_tests {
     fn parse_admit_libs(
         designations: &[&str],
         allow_libs: &[&str],
-        allow_caps: &[&str],
+        allow: &[&str],
         src: &str,
     ) -> Parser {
         let cfg = format!(
-            "[sandbox]\nmod = [{}]\n[profile.mod]\nallow_libs = [{}]\nallow_caps = [{}]\n",
+            "[sandbox]\nmod = [{}]\n[profile.mod]\nallow_libs = [{}]\nallow = [{}]\n",
             quoted(designations),
             quoted(allow_libs),
-            quoted(allow_caps),
+            quoted(allow),
         );
         let mut p = Parser::new();
         p.set_sandbox_config(parse_sandbox_config(&cfg));
@@ -8406,15 +8406,15 @@ mod plan86_admission_tests {
     /// rejected (deny-by-default).
     #[test]
     fn admission_grants_allowed_caps_and_rejects_ungranted_and_untagged() {
-        let src = "fn cap_fs_read() -> integer;\n#native\n#cap \"fs.read\"\n\
-                   fn cap_coll_read() -> integer;\n#native\n#cap \"collections.read\"\n\
+        let src = "fn cap_fs_read() -> integer fs#read;\n#native\n\
+                   fn cap_coll_read() -> integer collections#read;\n#native\n\
                    fn cap_untagged() -> integer;\n#native\n\
                    fn ok() -> integer { cap_coll_read() }\n\
                    fn bad() -> integer { cap_fs_read() }\n\
                    fn uses_untagged() -> integer { cap_untagged() }\n";
         let p = parse_admit(
             &["fn:ok", "fn:bad", "fn:uses_untagged"],
-            &["collections.read"],
+            &["collections#read"],
             src,
         );
         assert!(
@@ -8428,7 +8428,7 @@ mod plan86_admission_tests {
             v.contains(&CapViolation::UngrantedCap {
                 from: p.data.def_nr("n_bad"),
                 symbol: p.data.def_nr("n_cap_fs_read"),
-                group: "fs.read".to_string(),
+                group: "fs#read".to_string(),
             }),
             "expected UngrantedCap(fs.read), got {v:?}"
         );
@@ -8453,10 +8453,10 @@ mod plan86_admission_tests {
     /// admission rejects the ungranted `fs.read` group.
     #[test]
     fn admission_rejects_indirect_fnref_call_l4() {
-        let src = "fn cap_fs_read(n: integer) -> integer;\n#native\n#cap \"fs.read\"\n\
+        let src = "fn cap_fs_read(n: integer) -> integer fs#read;\n#native\n\
                    fn apply(f: fn(integer) -> integer, n: integer) -> integer { f(n) }\n\
                    fn sneaky() -> integer { apply(cap_fs_read, 5) }\n";
-        let p = parse_admit(&["fn:sneaky", "fn:apply"], &["collections.read"], src);
+        let p = parse_admit(&["fn:sneaky", "fn:apply"], &["collections#read"], src);
         assert!(
             p.diagnostics.level() < crate::diagnostics::Level::Error,
             "parse errors: {:?}",
@@ -8467,7 +8467,7 @@ mod plan86_admission_tests {
             v.contains(&CapViolation::UngrantedCap {
                 from: p.data.def_nr("n_sneaky"),
                 symbol: p.data.def_nr("n_cap_fs_read"),
-                group: "fs.read".to_string(),
+                group: "fs#read".to_string(),
             }),
             "L4 indirect fn-ref to fs.read must be rejected, got {v:?}"
         );
@@ -8477,7 +8477,7 @@ mod plan86_admission_tests {
     /// tagged one (the work-list for tagging the stdlib/library surface).
     #[test]
     fn coverage_lint_lists_untagged_public_functions() {
-        let src = "pub fn tagged_fn() -> integer;\n#native\n#cap \"math\"\n\
+        let src = "pub fn tagged_fn() -> integer math#read;\n#native\n\
                    pub fn untagged_fn() -> integer;\n#native\n";
         let p = parse_admit(&[], &[], src);
         assert!(
@@ -8504,7 +8504,7 @@ mod plan86_admission_tests {
     fn stdlib_fs_env_caps_gate_real_functions() {
         let src = "fn reads_mtime() -> integer { mtime(\"x\") }\n\
                    fn reads_env() -> text { env_variable(\"X\") }\n";
-        let p = parse_admit(&["fn:reads_mtime", "fn:reads_env"], &["env"], src);
+        let p = parse_admit(&["fn:reads_mtime", "fn:reads_env"], &["env#read"], src);
         assert!(
             p.diagnostics.level() < crate::diagnostics::Level::Error,
             "parse errors: {:?}",
@@ -8525,12 +8525,12 @@ mod plan86_admission_tests {
             );
         }
         let v = p.sandbox_admit();
-        // mtime (fs.read) is not granted → rejected naming the real group.
+        // mtime (fs#read) is not granted → rejected naming the real group.
         assert!(
             v.contains(&CapViolation::UngrantedCap {
                 from: p.data.def_nr("n_reads_mtime"),
                 symbol: p.data.def_nr("n_mtime"),
-                group: "fs.read".to_string(),
+                group: "fs#read".to_string(),
             }),
             "mtime must be rejected naming fs.read, got {v:?}"
         );
@@ -8584,10 +8584,10 @@ mod plan86_admission_tests {
     /// fine-grained cap / native_ffi).
     #[test]
     fn admission_errors_name_symbol_rule_and_fix() {
-        // UngrantedCap — mtime needs fs.read; only env is granted.
+        // UngrantedCap — mtime needs fs#read; only env#read is granted.
         let p = parse_admit(
             &["fn:reads_mtime"],
-            &["env"],
+            &["env#read"],
             "fn reads_mtime() -> integer { mtime(\"x\") }\n",
         );
         let errs = p.sandbox_admission_errors();
@@ -8595,10 +8595,10 @@ mod plan86_admission_tests {
         let e = &errs[0];
         eprintln!("CAP_DIAG: {e}");
         assert!(e.contains("mtime"), "names the symbol: {e}");
-        assert!(e.contains("fs.read"), "names the group: {e}");
+        assert!(e.contains("fs#read"), "names the group: {e}");
         assert!(e.contains("fix:"), "points at the fix: {e}");
         assert!(
-            e.contains("allow_caps") && e.contains("allow_libs"),
+            e.contains("`allow`") && e.contains("allow_libs"),
             "offers both fixes: {e}"
         );
         assert!(e.contains(".loft:"), "carries a source position: {e}");
@@ -8931,10 +8931,10 @@ mod plan86_admission_tests {
     #[test]
     fn capability_totality_flags_abort_reaching_caps() {
         let src = "\
-            fn cap_bad(n: integer) -> integer { assert(n > 0, \"pos\"); n }\n#cap \"game\"\n\
-            fn cap_ok(n: integer) -> integer { if n > 0 { n } else { 0 } }\n#cap \"game\"\n\
+            fn cap_bad(n: integer) -> integer game#read { assert(n > 0, \"pos\"); n }\n\
+            fn cap_ok(n: integer) -> integer game#read { if n > 0 { n } else { 0 } }\n\
             fn helper(n: integer) -> integer { assert(n > 0, \"x\"); n }\n\
-            fn cap_trans(n: integer) -> integer { helper(n) }\n#cap \"game\"\n";
+            fn cap_trans(n: integer) -> integer game#read { helper(n) }\n";
         let p = parse_admit_libs(&[], &["code"], &[], src);
         let v = p.sandbox_capability_totality_violations();
         let flagged: std::collections::HashSet<&str> =
@@ -8989,7 +8989,7 @@ mod plan86_admission_tests {
         }
         // A forbidden #cap native, declared in-source and NOT in an allowed library,
         // so the fine-grained capability gate applies to it.
-        let secret = "fn secret() -> integer;\n#native\n#cap \"danger\"\n";
+        let secret = "fn secret() -> integer danger#read;\n#native\n";
 
         // ===== ESCAPES — admission MUST reject (≥1 error). =====
         let escapes: Vec<(&str, Vec<String>)> = vec![
@@ -9186,7 +9186,7 @@ mod plan86_admission_tests {
                 adm(
                     &["fn:ok"],
                     &["code"],
-                    &["danger"],
+                    &["danger#read"],
                     &format!("{secret}fn ok() -> integer {{ secret() }}\n"),
                 ),
             ),

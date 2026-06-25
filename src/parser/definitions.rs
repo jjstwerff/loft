@@ -869,6 +869,16 @@ impl Parser {
         } else {
             Type::Void
         };
+        // @PLN86 P6.2 — the call-gate capability link in the SIGNATURE, after the output
+        // (`-> int fs#read`, or a void fn's `) fs#update`): a first-class part of the
+        // contract beside the params + return, NOT in the `#native`/`#impure`/`#wasm`
+        // implementation plumbing.  A restricted caller needs this granted to CALL the
+        // function (`admit_capabilities`); passing arguments is part of the call.  After
+        // an output, only `;` / `{` / a link is legal, so a leading identifier is
+        // unambiguously a link.  Re-read each pass, so set unconditionally.
+        if let Some(token) = self.try_cap_link() {
+            self.data.definitions[self.context as usize].cap = token;
+        }
         // Plan-14 phase 07 (P234 runtime): when the declared return type
         // is `Type::Tuple(elems)` and any element carries a lifetime
         // concern (Text, Reference, Vector, Enum-struct, keyed
@@ -1167,22 +1177,6 @@ impl Parser {
                     // native symbol, so the binding needs no separate string.
                     let default_sym = self.data.def(self.context).name().to_string();
                     self.data.definitions[self.context as usize].native = default_sym;
-                }
-            } else if id == Some("cap".to_string()) {
-                // @PLN86 — `#cap "group"` declares the capability group this
-                // function represents; the sandbox admission walk gates a TRUSTED
-                // symbol against the active profile's allowed groups.  Allowed in
-                // any file (libraries declare caps too), like `#native`.  A
-                // sandboxed def's own `#cap` is ignored by admission — a script's
-                // capabilities derive from what it REACHES, not a self-label.
-                if let Some(group) = self.lexer.has_cstring() {
-                    self.data.definitions[self.context as usize].cap = group;
-                } else {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Error,
-                        "Expect a capability-group string after `#cap`"
-                    );
                 }
             } else if self.default && id == Some("rust".to_string()) {
                 if let Some(c) = self.lexer.has_cstring() {
@@ -1987,6 +1981,56 @@ impl Parser {
         }
         self.declared_capabilities.insert(name);
         true
+    }
+
+    /// @PLN86 P6.2 — try to parse a `group#right` capability-link token in a position
+    /// where one is OPTIONAL: a dotted group, `#`, then one of `read`/`update`/`append`.
+    /// Returns the canonical `"group#right"` string; returns `None` **silently** when
+    /// no link is present (the next token is not an identifier — e.g. the `;`/`{`
+    /// terminator after a signature, or a field separator); errors only on a *malformed*
+    /// link (a group with no `#right`).  The group's existence as a declared `capability`
+    /// is validated at admission, so forward + cross-file declarations resolve.  Shared
+    /// by the function call gate (P6.2, in the signature) and a struct-field link (P6.4).
+    pub(crate) fn try_cap_link(&mut self) -> Option<String> {
+        // No leading identifier → no link here (the terminator follows); not an error.
+        let mut group = self.lexer.has_identifier()?;
+        while self.lexer.has_token(".") {
+            let Some(seg) = self.lexer.has_identifier() else {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Expect an identifier after `.` in a capability group"
+                );
+                return None;
+            };
+            group.push('.');
+            group.push_str(&seg);
+        }
+        if !self.lexer.has_token("#") {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "Expect `#read` / `#update` / `#append` after the capability group"
+            );
+            return None;
+        }
+        let Some(right) = self.lexer.has_identifier() else {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "Expect a right (read/update/append) after `#`"
+            );
+            return None;
+        };
+        if crate::sandbox::Right::parse(&right).is_none() {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "Unknown capability right `{right}` — expected read, update, or append"
+            );
+            return None;
+        }
+        Some(format!("{group}#{right}"))
     }
 
     pub(crate) fn parse_struct(&mut self) -> bool {

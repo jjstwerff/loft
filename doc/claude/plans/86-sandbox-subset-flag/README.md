@@ -369,8 +369,8 @@ migrates it to the declared-`capability` + `group#right` form below — one mode
 ```loft
 // the stdlib DECLARES + SHIPS this split (a project cannot add it):
 capability fs
-pub fn mtime(path: text) -> integer;  fs#read
-pub fn write(self: File, v: text);    fs#update     // a write modifies existing content
+pub fn mtime(path: text) -> integer fs#read;     // call gate in the signature (§7.1)
+pub fn write(self: File, v: text)   fs#update;   // void → the link goes after the params
 ```
 ```toml
 [profile.mod-script]
@@ -454,70 +454,127 @@ A script that compiles clean is then guaranteed safe at runtime — **the admiss
 errors are the contract.** This diagnostic quality is a first-class deliverable, not an
 afterthought: it is the entire developer experience of writing a mod.
 
-### 7. Per-member access — read / update / append, declared as groups in loft code
-The data-integrity arc (§5, the no-raw-write rule) is **all-or-nothing**: a sandboxed
-script either mutates host data only through cap *operations*, or not at all. The
-refinement gives the host **per-member control**, at the granularity of a single struct
-field or enum variant, split across **three independent rights**:
+### 7. Capabilities — what a restricted caller may do
 
-- **read** — observe: a field read (`OpGetField`), an index read, a match on a variant.
-- **update** — mutate an existing slot in place: `e.health = 0`, `v[i] = x` (the writes
-  §2.4 already records in `sandbox_raw_writes`).
-- **append** — introduce something new: grow a structure (`v += x`, the `OpAppend*` /
-  `OpPreAlloc*` ops the space analysis already finds) **or** construct a host enum variant
-  (`Value::Enum(disc, tp)` — producing a new value).
+A capability is a permission the **host/library** requires of a **restricted caller** (a
+sandboxed modder).  The host annotates *its own* surface — functions, their parameters, its
+struct fields — with `group#right` links; a modder's profile is granted a set of
+capabilities; admission checks every point where the modder's code touches the host
+surface.  **The modder's own functions and data carry no links and are never restricted** —
+only what they reach *into the host* is gated.  This generalizes the all-or-nothing §5
+no-raw-write rule into a fine-grained, caller-facing permission system.
 
-The three are independent, so **append-only** is expressible — a script may add log
-entries or spawn-list items but never alter the existing ones, and can never forge a
-privileged variant. `update` ≠ `append`: granting one does not grant the other.
-
-**A capability group is declared explicitly in loft** (a namespaced symbol, resolved like
-any other), and a member **links to it with the `group#right` notation** — so the compiler
-**validates the group at the language level**: an undeclared or mistyped group is a **load
-error**, not a silently-never-granted string. `capability` is deliberately verbose —
-declarations are rare and a design with *many* of them is a smell, so the cost falls in the
-right place.
+**Declaring a capability** — a namespaced top-level symbol; an undeclared group in a link
+is a load error (validated at admission, so forward + cross-file references resolve):
 
 ```loft
-// the host declares its capability groups (namespaced, validated on reference):
-capability stats
-capability log
-capability cmd.move
+capability fs
+capability world
+capability bag
+```
 
+`capability` is deliberately verbose: declarations are rare, and a design with *many* of
+them is a smell, so the cost falls in the right place.
+
+**The three rights** a link may carry:
+- **read** — observe a value.
+- **update** — change an existing value in place.
+- **append** — add to a **structure** (a collection).  Append exists *only* on a collection
+  — there is no append for a scalar.
+
+#### 7.1 Calling a function — the call gate (in the signature)
+The host puts the call gate at the end of the signature (after the return type, or after the
+parameters when there is no return).  The right is the effect the call has.  `#cap` is gone
+— the link is a first-class part of the contract, beside the parameters and the return type,
+*not* lumped with the `#native` / `#impure` / `#wasm` implementation plumbing.
+
+```loft
+fn mtime(path: text) -> int  fs#read;     // calling this reads the filesystem
+fn remove(path: text)        fs#update;   // void → the link goes after the params
+```
+
+A modder granted `fs#read` may call `mtime`; not granted → the call is rejected at load.
+**Passing arguments is part of the call** — if you may call a function, you may pass any
+argument you like, with no extra grant.
+
+#### 7.2 Locking a parameter to its default
+For when the host lets a modder *call* a function but not steer a particular argument.  Tag
+only the parameter you want to pin; it is then forced to its default unless the modder holds
+the lock.
+
+```loft
+fn spawn(kind:  text,
+         count: int = 1  spawn.count#default) -> Entity   world#append;
+```
+
+- Granted `world#append`: may call `spawn`, may pass any `kind` (untagged → free), but
+  `count` is forced to `1`.
+- Also granted `spawn.count#default`: may write `spawn(count: 5)`.
+
+Untagged parameters are always free — **set is inherited from the call** — so the host tags
+only what it locks; there is no per-parameter upkeep.  `#default` is the opt-out limitation,
+allow-by-default, the inverse polarity of the deny-by-default field rights below.
+
+#### 7.3 Reading and writing a field
+A field of a host struct carries its own access links.  A scalar field has read + update; a
+**collection** field also has append.
+
+```loft
 struct Entity {
-    id: int                              // unlinked → read-only (default)
-    health: int  stats#read stats#update
-    log: [Event] log#read log#append     // append-only: read + append, never update
-}
-enum Command {
-    Move(Vec2)  cmd.move#append          // constructible via cmd.move when granted
-    Shutdown                             // unlinked → un-forgeable (default)
+    id:     int                                // untagged → readable, never writable
+    health: int    health#read health#update   // scalar: read + update
+    bag:    [Item]  bag#read bag#append         // collection: read + APPEND only (no update)
 }
 ```
 
-A profile grants the **same `group#right` token** — one notation in the type def and the
-manifest:
+- `e.health` — readable by anyone (read is free), updatable only with `health#update`.
+- `e.bag += item` — needs `bag#append`; since `bag#update` is *not* granted, the modder may
+  grow the bag but never overwrite an existing slot.  **Append-only is exactly this.**
+- `e.id` — no write link → read-only.
 
+`append` appears on `bag` because `bag` is a structure; it would be meaningless on a scalar
+like `health`.
+
+#### 7.4 Defaults, and the modder's side
+| Operation | When the host adds no link |
+|---|---|
+| read a field | **free** |
+| update / append a field | **denied** (the host must grant) |
+| override a parameter | **free** (inherited from the call) |
+| call a function | needs its call-gate link (or a wholesale-allowed library, §3) |
+
+The modder writes unrestricted code; gating happens only at the host boundary:
+
+```loft
+// no links anywhere — a modder never tags their own code:
+fn my_strategy(e: Entity) -> int {
+    let h = e.health        // read a host field — free
+    damage(e, 10)           // call a host fn — needs whatever damage() requires
+    e.bag += Item.Potion    // append to a host field — needs bag#append
+    spawn("goblin")         // call — needs world#append; count is pinned to 1
+}
+```
 ```toml
-[profile.mod-script]
-allow = ["stats#read", "stats#update", "log#read", "log#append", "cmd.move#append"]
+[profile.mod]
+allow_libs = ["math", "text"]
+allow      = ["world#append", "bag#append", "health#read"]
 ```
 
-`#read` / `#update` / `#append` are the three built-in rights; `stats` / `log` / `cmd.move`
-resolve through **normal namespacing** — a grant on a parent namespace + right (e.g.
-`game#read`) covers every capability beneath it, extending the existing `cap_prefix_match`.
+A grant resolves through **normal namespacing**: `allow = ["game#read"]` covers every
+capability beneath `game` (e.g. `game.entity#read`) with the same right — the existing
+`cap_prefix_match` on the group part, exact on the right.  The **§2.4 ownership split is
+unchanged**: links gate **host** data only — a script's own structures (types it defines,
+values it constructs locally) stay freely read/update/append.
 
-**Defaults** (asymmetric, both the safe choice): **read** defaults to *allow* (an unlinked
-member is readable — the fast-rich-read premise; privacy is opt-in via an ungranted read
-capability), while **update** and **append** default to *deny* (nothing is mutable, growable,
-or forgeable unless a granted capability says so). The **§2.4 ownership split is unchanged**: these
-rights gate **host** data only — a script's own structures (types it defines, values it
-constructs locally) stay freely read/update/append.
+Every check is at **admission** — no runtime cost, no rollback: a disallowed call, parameter
+override, or field access is a **load error**, never a caught fault.
 
-Every check is at **admission** — the walk already visits each `OpGetField`, raw-write,
-`OpAppend*`, and `Value::Enum` node, and each carries the `(type, member)` identity, so the
-lookup is `(member, right) → group ∈ profile.allow_<right>?`. No runtime cost, no rollback:
-a disallowed access is a **load error**, never a caught mutation.
+**Deliberately *not* in this model** (the over-reach this section drops): no append on a
+scalar; no implementer-side mutability/borrow notion (the links authorize the *caller*, not
+the function body); and enum-variant **construction** gating is a separate question — it is
+**not** folded into read/update/append.  Closures (a modder-authored callable handed across
+the boundary, or captured host state) are the one genuinely subtle case and ride on the
+existing L4 fn-ref handling — designed in their own pass, not here.
 
 ### 8. Data envelope — a compile-time footprint bound
 §4 reports a worst-case complexity *degree* (`O(n^d)`) and asks the host to "bound n." The
@@ -725,27 +782,31 @@ proven-total script.
 > token. The `.`-segment split (`fs.read` / `fs.write`) becomes the right split
 > (`fs#read` / `fs#update`). Do NOT ship the member model beside the old string model.
 
-- **6.1 The `capability` declaration + the `group#right` token + a shared resolver (foundation).**
-  - Parse a `capability <namespaced-name>` top-level declaration beside `parse_struct`
-    (`src/parser/definitions.rs:1955`) / `parse_enum` (`:367`) — it registers a namespaced
-    `Definition` of a new capability kind, so `def_library` + normal name resolution apply.
-  - Lex the `group#right` token (`<ident-path>#<read|update|append>`) and add a shared
-    `enum Right { Read, Update, Append }` (`src/sandbox.rs`).
-  - One shared `resolve_cap_link(path, right) -> Option<(cap_def_nr, Right)>` that resolves
-    `path` by normal lookup; **an undeclared/mistyped group is a LOAD error**.
-  - *Verify:* `capability fs` declares; `fs#read` resolves; `typo#read` is a load error
-    naming the unknown capability; `loft introspect` lists the declared capabilities.
-- **6.2 Migrate the function-cap surface onto `group#right`.**
-  - `#cap` parse (`definitions.rs:1172`) accepts the bare `group#right` token (drop the
-    quoted string) and validates it via 6.1; `Definition.cap` (`data.rs:2451`) now holds the
-    `group#right` token; `cap()` (`data.rs:2564`) shape unchanged; IR persistence (`DEF_CAP`,
-    the 2.2-persist codec) keeps round-tripping the string.
-  - Retag `default/02_files.loft`: declare `capability fs` + `capability env`; rewrite the 32
-    tags — `fs.read`→`fs#read` (14), `fs.write`→`fs#update` (16), `env`→`env#read` (2). (File
-    write = `#update`: it modifies existing content; an append-mode op would be `fs#append` —
-    the host's call.)
-  - *Verify:* `mtime` carries `fs#read`, file `write` carries `fs#update`; the shipped
-    capability tests gate on the renamed tokens.
+- **6.1 The `capability` declaration + the `group#right` token + a resolver (foundation).** ✅ **DONE.**
+  - `parse_capability` (`src/parser/definitions.rs`) parses a `capability <dotted.name>`
+    top-level declaration (a contextual keyword, also added to `starts_top_level_def`) and
+    records the dotted name in a parser-side `declared_capabilities: HashSet<String>` — the
+    dotted name IS the namespace (like the `fs.read` groups), so this needs no new `Definition`
+    kind. Cleared in the reset + `parse_str` paths.
+  - `enum Right { Read, Update, Append }` + `Right::parse`/`as_str` (`src/sandbox.rs`).
+  - `Parser::cap_is_declared(group)` resolver; an undeclared/mistyped group in a link is a
+    LOAD error (validated at admission). *(IR persistence of the registry for a warm-cached
+    stdlib is the later 6.8; sandboxed programs parse fresh.)*
+  - *Verify:* `capability_declarations_register_and_resolve` — `fs` / `cmd.move` resolve,
+    `typo` does not; `Right::parse` covers read/update/append.
+- **6.2 The function call-gate link in the SIGNATURE; drop `#cap`.** ✅ **DONE.**
+  - `try_cap_link` (`definitions.rs`) parses a `group#right` token where one is OPTIONAL
+    (silent `None` when the next token is the `;`/`{` terminator; errors only on a malformed
+    link). `parse_function` parses it **after the output** (return type, or the param list for
+    a void fn) into `Definition.cap`; the **`#cap` annotation branch is removed** — the link is
+    a first-class part of the contract, not plumbing. `cap()` + IR persistence (`DEF_CAP`)
+    unchanged, now round-tripping the `group#right` token.
+  - Retag `default/02_files.loft`: declare `capability fs` + `capability env`; **37 links moved
+    into the signatures** — `fs.read`→`fs#read`, `fs.write`→`fs#update`, `env`→`env#read` —
+    covering both native `;`-decls (`-> boolean fs#read;`) and loft-bodied functions
+    (`-> text fs#read {`). (`fs.write`→`#update`: a write modifies existing content.)
+  - *Verify:* `mtime` carries `fs#read` in its signature; `cap_annotation_is_parsed_and_readable`
+    + the cap IR round-trip + the 8 admission tests green.
 - **6.3 Profile grants: the unified `allow` list of `group#right` tokens.** `SandboxProfile`
   (`src/sandbox.rs:22`): fold `allow_caps` into `allow: Vec<String>` of `group#right` tokens
   (keep `allow_libs` wholesale). Extend `cap_prefix_match` (`:65`) to split each side on `#`:
@@ -832,16 +893,18 @@ the flow: `make ci` is green after every F-step**, so each lands as one PR-sized
 releasable tree.
 
 **Foundation (additive — no admission change yet)**
-- **F1 — capability decl + `group#right` token + resolver** (P6.1). *Gate:* `cargo test` —
-  `capability fs` parses, `fs#read` resolves to its def, `typo#read` is a load error.
+- **F1 — capability decl + `group#right` token + resolver** (P6.1). ✅ **DONE.** *Gate:*
+  `capability_declarations_register_and_resolve` — `capability fs` parses, `fs#read` resolves,
+  `typo#read` is a load error.
 
 **Migrate the function surface (the ONE atomic step over shipped code)**
-- **F2 — switch function `#cap` parse to the `group#right` token, retag `default/02_files.loft`
-  (`fs#read`/`fs#update`/`env#read` + the `capability` decls), fold `allow_caps`→`allow` with a
-  `#`-splitting `cap_prefix_match`** (P6.2 + 6.3, landed together so the stdlib never loads
-  against a half-migrated matcher). *Gate:* `make ci` green; `allow=["fs#read"]` admits `mtime`
-  and rejects file `write` (`fs#update`). This is the consistency cut — after F2 there is one
-  capability model.
+- **F2 — parse the function call-gate link in the SIGNATURE (after the output, `-> int fs#read`),
+  drop the `#cap` annotation, retag `default/02_files.loft` (`fs#read`/`fs#update`/`env#read` +
+  the `capability fs`/`capability env` decls), fold `allow_caps`→`allow` with a `#`-splitting
+  `cap_prefix_match` + a quote-aware `strip_comment`** (so a `#` survives in a TOML token). ✅
+  **DONE.** *Gate:* `allow=["fs#read"]` admits `mtime`, rejects file `write` (`fs#update`); the
+  plan86 admission suite (29) + `sandbox_cli` (5) + the cap IR round-trip green. This is the
+  consistency cut — after F2 there is one capability model and `#cap` is gone.
 
 **Layer per-member access (additive until each admission rung flips its probe)**
 - **F3 — member link parse + `member_access` carrier** (P6.4). *Gate:* `loft introspect` shows

@@ -1431,12 +1431,12 @@ mod tests {
 
         let mut p = crate::parser::Parser::new();
         p.parse_dir("default", true, false).expect("parse stdlib");
-        let src = "fn capped() -> integer;\n#native\n#cap \"fs.read\"\n";
+        let src = "fn capped() -> integer fs#read;\n#native\n";
         let lpath = std::env::temp_dir().join(format!("loft_cap_rt_{}.loft", std::process::id()));
         std::fs::write(&lpath, src).unwrap();
         p.parse(lpath.to_str().unwrap(), false);
         let _ = std::fs::remove_file(&lpath);
-        assert_eq!(p.data.def(p.data.def_nr("n_capped")).cap(), "fs.read");
+        assert_eq!(p.data.def(p.data.def_nr("n_capped")).cap(), "fs#read");
 
         let fresh = p.data;
         let spath = std::env::temp_dir().join(format!("loft_cap_rt_{}.store", std::process::id()));
@@ -1446,7 +1446,7 @@ mod tests {
         let _ = std::fs::remove_file(&spath);
         assert_eq!(
             loaded.def(loaded.def_nr("n_capped")).cap(),
-            "fs.read",
+            "fs#read",
             "cap must survive the store round-trip"
         );
         crate::ir_schema::compare_data(&fresh, &loaded).expect("round-trip equal incl. cap");

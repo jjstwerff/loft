@@ -7,9 +7,9 @@
 //!
 //! Nothing here executes — it is policy DATA the compile-time admission walk
 //! reads (`SandboxProfile::allows` is the central capability check used by the
-//! group-membership admission, @PLN86 step 2.3).  Deny-by-default: a capability
-//! group is permitted only when an `allow_caps` entry is a dotted-segment prefix
-//! of it.
+//! group-membership admission, @PLN86 step 2.3).  Deny-by-default: a `group#right`
+//! capability link is permitted only when an `allow` entry has the same right and
+//! its group is a dotted-segment prefix of the link's group.
 
 use crate::data::{Data, DefType, Position, Type, Value};
 use std::collections::{HashMap, HashSet};
@@ -21,13 +21,16 @@ use std::collections::{HashMap, HashSet};
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SandboxProfile {
     /// Libraries allowed **wholesale** (e.g. `"text"`, `"crypto"`).  Every symbol
-    /// from an allow-listed library admits with NO `#cap` tag — a complete,
-    /// host-vetted library is included as a unit.  Tags (`allow_caps`) are only
-    /// for carving a library in half ("include `files`, but reads only").
+    /// from an allow-listed library admits with NO capability link — a complete,
+    /// host-vetted library is included as a unit.  Links (`allow`) are only for
+    /// carving a library in half ("include `files`, but reads only").
     pub allow_libs: Vec<String>,
-    /// Allowed capability-group prefixes (e.g. `"game"`, `"collections.read"`).
-    /// The fine-grained layer, used when a library is NOT allowed wholesale.
-    pub allow_caps: Vec<String>,
+    /// Granted `group#right` capability tokens (e.g. `"fs#read"`, `"game#update"`).
+    /// The fine-grained layer, used when a library is NOT allowed wholesale.  A
+    /// grant matches a symbol's link when the RIGHT is exactly equal and the
+    /// grant's group is a dotted-segment prefix of the link's group (`"game#read"`
+    /// grants `"game.entity#read"` but NOT `"game#update"`).
+    pub allow: Vec<String>,
     /// May this profile reach a vetted `[native]` cdylib bridge?  Default false.
     /// (Interpret-only is NOT a per-profile choice — it is unconditional for ALL
     /// sandboxed code, enforced by `Parser::sandbox_forces_interpret`: generating
@@ -44,17 +47,24 @@ impl SandboxProfile {
         !lib.is_empty() && self.allow_libs.iter().any(|l| l == lib)
     }
 
-    /// True iff a symbol tagged with capability `group` is allowed by this
-    /// profile.  **Deny-by-default**: an empty / untagged group is never allowed,
-    /// and a group is allowed only when some `allow_caps` entry is a
-    /// dotted-segment prefix of it — so `"game"` allows `"game.read"` but NOT
-    /// `"gameover"`, and `"game.read"` is exact (does not match `"game.write"`).
+    /// True iff a symbol's `group#right` capability link `token` is granted by this
+    /// profile.  **Deny-by-default**: a grant matches only when the RIGHT is exactly
+    /// equal AND the grant's group is a dotted-segment prefix of the link's group —
+    /// so `"game#read"` grants `"game.entity#read"` but NOT `"game#update"` (a
+    /// different right) or `"gameover#read"` (not a segment boundary).  A token (or
+    /// grant) without a `#right` matches nothing.
     #[must_use]
-    pub fn allows(&self, group: &str) -> bool {
-        if group.is_empty() {
+    pub fn allows(&self, token: &str) -> bool {
+        let Some((group, right)) = token.split_once('#') else {
+            return false;
+        };
+        if group.is_empty() || right.is_empty() {
             return false;
         }
-        self.allow_caps.iter().any(|a| cap_prefix_match(a, group))
+        self.allow.iter().any(|a| {
+            a.split_once('#')
+                .is_some_and(|(ag, ar)| ar == right && cap_prefix_match(ag, group))
+        })
     }
 }
 
@@ -158,7 +168,7 @@ impl SandboxConfig {
 ///
 /// - `[sandbox]` — `profile-name = ["selector", …]` adds a designation per
 ///   selector.
-/// - `[profile.<name>]` — `allow_libs = ["l", …]`, `allow_caps = ["g", …]`,
+/// - `[profile.<name>]` — `allow_libs = ["l", …]`, `allow = ["g#right", …]`,
 ///   `native_ffi = false`.  (Interpret-only is unconditional, not a key here.)
 #[must_use]
 pub fn parse_sandbox_config(content: &str) -> SandboxConfig {
@@ -192,7 +202,7 @@ pub fn parse_sandbox_config(content: &str) -> SandboxConfig {
             let profile = config.profiles.entry(name.to_string()).or_default();
             match key {
                 "allow_libs" => profile.allow_libs = parse_str_list(value),
-                "allow_caps" => profile.allow_caps = parse_str_list(value),
+                "allow" => profile.allow = parse_str_list(value),
                 // `backend` is accepted-and-ignored: interpret-only is unconditional
                 // for sandboxed code, not a per-profile setting (see SandboxProfile).
                 "native_ffi" => profile.native_ffi = value.trim() == "true",
@@ -203,10 +213,19 @@ pub fn parse_sandbox_config(content: &str) -> SandboxConfig {
     config
 }
 
-/// Drop a trailing `# comment` (loft.toml line comments).  Naive — fine for the
-/// manifest's simple values, which never contain a literal `#`.
+/// Drop a trailing `# comment` (loft.toml line comments).  Quote-aware: a `#`
+/// INSIDE a quoted string is kept, because the `group#right` capability tokens
+/// (`"fs#read"`) carry a literal `#` — only a `#` outside quotes starts a comment.
 fn strip_comment(line: &str) -> &str {
-    line.split_once('#').map_or(line, |(head, _)| head)
+    let mut in_quotes = false;
+    for (i, c) in line.char_indices() {
+        match c {
+            '"' => in_quotes = !in_quotes,
+            '#' if !in_quotes => return &line[..i],
+            _ => {}
+        }
+    }
+    line
 }
 
 /// Parse a value that is either a TOML array `["a", "b"]` or a bare/quoted
@@ -358,7 +377,7 @@ pub fn reachable_ffi_bridges(data: &Data, reachable: &HashSet<u32>) -> Vec<u32> 
 /// def that makes the reference, `symbol` the trusted def it reaches.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CapViolation {
-    /// `symbol`'s `#cap` group is not a prefix of any `allow_caps` entry.
+    /// `symbol`'s `#cap` link is not granted by any `allow` entry.
     UngrantedCap {
         from: u32,
         symbol: u32,
@@ -400,7 +419,7 @@ pub fn def_library(data: &Data, def_nr: u32) -> Option<String> {
 /// references (a non-sandboxed leaf, §4) is admitted if **either**:
 ///   1. its **library** is allow-listed wholesale (`allow_libs`) — a complete,
 ///      host-vetted library is included as a unit, NO `#cap` tag needed; or
-///   2. its `#cap` **group** is allow-listed (`allow_caps`) — the fine-grained
+///   2. its `#cap` **link** is granted (`allow`) — the fine-grained
 ///      layer, for carving a library in half ("include `files`, reads only").
 ///
 /// A symbol in no allowed library and with no allowed cap is the violation.  A
@@ -472,7 +491,7 @@ pub fn admit_capabilities(
 }
 
 /// @PLN86 step 2.2 — the capability-coverage lint (L3-cap): every public function
-/// the host exposes must carry a `#cap "group"`, or admission can only deny-by-
+/// the host exposes must carry a `group#right` call-gate link, or admission can only deny-by-
 /// default reject it.  Returns the public, non-synthetic function defs that lack
 /// a group, sorted — the work-list for tagging the stdlib / library surface.  The
 /// END state is an empty result; until the surface is tagged this lists it.
@@ -575,11 +594,11 @@ pub fn describe_violation(
         reference_position(data, from, symbol).unwrap_or_else(|| data.def(from).position().clone());
     let profile = sandboxed.get(&from).and_then(|n| config.profiles.get(n));
     let allowed_libs = profile.map(|p| p.allow_libs.join(", ")).unwrap_or_default();
-    let allowed_caps = profile.map(|p| p.allow_caps.join(", ")).unwrap_or_default();
+    let allowed_caps = profile.map(|p| p.allow.join(", ")).unwrap_or_default();
     match v {
         CapViolation::UngrantedCap { group, .. } => format!(
             "{pos}: sandboxed `{from_name}` reaches `{sym_name}`, which needs capability \
-             `{group}` — not granted.\n  fix: add `{group}` to `allow_caps`, or add its \
+             `{group}` — not granted.\n  fix: add `{group}` to `allow`, or add its \
              library `{libhint}` to `allow_libs`.\n  allowed capabilities: [{allowed_caps}]"
         ),
         CapViolation::UntaggedSymbol { .. } => format!(
@@ -1311,19 +1330,25 @@ mod tests {
     #[test]
     fn allows_is_deny_by_default() {
         let p = SandboxProfile {
-            allow_caps: vec!["game.read".into(), "math".into(), "collections.read".into()],
+            allow: vec![
+                "game#read".into(),
+                "math#read".into(),
+                "collections#read".into(),
+            ],
             ..SandboxProfile::default()
         };
-        assert!(p.allows("game.read"));
-        assert!(p.allows("math")); // exact whole-lib
-        assert!(p.allows("math.trig")); // child of an allowed prefix
-        assert!(p.allows("collections.read"));
-        assert!(!p.allows("collections.write")); // sibling — denied
-        assert!(!p.allows("fs.read")); // not listed — denied
-        assert!(!p.allows("game.write")); // sibling — denied
-        assert!(!p.allows("")); // untagged — denied
+        assert!(p.allows("game#read"));
+        assert!(p.allows("math#read"));
+        assert!(p.allows("math.trig#read")); // group child of an allowed prefix, same right
+        assert!(p.allows("game.entity#read")); // group child of `game`, same right
+        assert!(p.allows("collections#read"));
+        assert!(!p.allows("collections#update")); // same group, different right — denied
+        assert!(!p.allows("game#update")); // same group, different right — denied
+        assert!(!p.allows("fs#read")); // group not listed — denied
+        assert!(!p.allows("game")); // no `#right` — denied
+        assert!(!p.allows("")); // empty — denied
         // an empty profile denies everything
-        assert!(!SandboxProfile::default().allows("math"));
+        assert!(!SandboxProfile::default().allows("math#read"));
     }
 
     #[test]
@@ -1338,7 +1363,7 @@ mod-script = ["mods/**/*.loft", "fn:player_eval"]
 [profile.mod-script]
 backend = "interpret"
 native_ffi = false
-allow_caps = ["game.read", "game.write", "math", "collections.read"]
+allow = ["game#read", "game#update", "math#read", "collections#read"]
 "#;
         let cfg = parse_sandbox_config(toml);
         assert!(cfg.is_active());
@@ -1353,14 +1378,14 @@ allow_caps = ["game.read", "game.write", "math", "collections.read"]
         );
         let p = cfg.profiles.get("mod-script").expect("profile present");
         assert!(!p.native_ffi);
-        assert!(p.allows("game.write"));
-        assert!(p.allows("collections.read"));
-        assert!(!p.allows("fs.read")); // not granted
-        assert!(!p.allows("collections.write")); // sibling denied
+        assert!(p.allows("game#update"));
+        assert!(p.allows("collections#read"));
+        assert!(!p.allows("fs#read")); // group not granted
+        assert!(!p.allows("collections#update")); // same group, different right — denied
         // resolve a designation to its profile
         assert!(
             cfg.profile_for_selector("mods/**/*.loft")
-                .is_some_and(|p| p.allows("math"))
+                .is_some_and(|p| p.allows("math#read"))
         );
     }
 
@@ -1379,9 +1404,9 @@ allow_caps = ["game.read", "game.write", "math", "collections.read"]
     fn empty_profile_section_registers_a_deny_all_profile() {
         let cfg = parse_sandbox_config("[sandbox]\nlocked = [\"a.loft\"]\n[profile.locked]\n");
         let p = cfg.profiles.get("locked").expect("registered");
-        assert!(p.allow_caps.is_empty());
+        assert!(p.allow.is_empty());
         assert!(p.allow_libs.is_empty());
-        assert!(!p.allows("game.read")); // deny-all by default
+        assert!(!p.allows("game#read")); // deny-all by default
         assert!(!p.native_ffi); // safe default
     }
 

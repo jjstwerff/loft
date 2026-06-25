@@ -68,6 +68,7 @@ not duplicate: a deviation entry links to the lens analysis instead of re-explai
 | [grammar.md](grammar.md) | concrete grammar + operator precedence | **started** — the 12-level precedence ladder (left-associative except `**`, now right-assoc) the written grammar omits; the prefix-`&` (reference) vs infix-`&` (bitwise-and) overload; 3 deviations |
 | [operational.md](operational.md) | small-step semantics for the stable core | **started** — the scalar core as the shared interp/native contract (values/null sentinels, left-to-right order, the **uncomputable→null** discipline [the spreadsheet model, C80] + `??` fallback, state steps); 3 deviations (no shared semantics → divergence is structural, #433; the trap→null runtime change is D-op-4) |
 | [ownership.md](ownership.md) | the `deps` / borrow **checker** (lifetimes) — distinct from binding.md's surface | **started (aspirational)** — the 5 sound+complete invariants we steer toward (the rules), with the active @PLN85/@PLN87 migration as the 5 deviations. Written deliberately ahead of the implementation: the target steers the work |
+| [capabilities.md](capabilities.md) | sandbox **admission** — what a restricted caller may do (call / parameter / field rights) | **started (aspirational + conditional)** — a 6-rule authorization judgment `P;ctx ⊢ e ✓`, gated on a sandbox profile (vacuous for trusted code); the call gate is enforced, field rights + the parameter lock are the 3 deviations (@PLN86 F4–F7). Cites ownership.md for the owned-vs-host predicate |
 
 ## Roadmap
 

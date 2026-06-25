@@ -236,26 +236,30 @@ becomes a load-time concern.
   computed today; the coefficient + budget compare + static-sizing gate are the build. Pure
   compile-time; no @PLN85 dependency (it was only the dropped runtime layer).
 
-### S10 — Per-member access (read / update / append)
-Host data carries independent **read / update / append** rights at the granularity of a
-struct field or enum variant, linked via the `group#right` notation to explicitly-declared,
-namespaced `capability` groups — resolved and validated at compile, so an undeclared group is
-a load error, never a silent never-grant. A script may observe, mutate-in-place, or
-grow/produce a member only if the profile grants that `group#right` — so **append-only** (grow
-a log, never alter it; never forge a privileged variant) is expressible (`update ≠ append`).
-Refines the all-or-nothing no-raw-write arc (S7-was / @PLN86 2.4) down to the member.
-- **Chokepoint:** the admission walk over `OpGetField` (read), the recorded raw writes
-  (update), and `OpAppend*` / `Value::Enum` (append / construct) — each carries the
-  `(type, member)` identity; the lookup is `member's group#right ∈ profile.allow`
-  (namespace-prefix matched on the group, exact on the right).
-- **Check:** reading a private field, updating a read-only field, appending to an update-only
-  structure, or constructing an un-forgeable variant is rejected at load naming the member +
-  right + group; an access within grants admits. Script-owned data is unrestricted (ownership).
-- **Status: 🟡 DESIGNED ([@PLN86 P6](plans/86-sandbox-subset-flag/README.md)).** Read
-  default-allow, update/append default-deny; capabilities declared in loft source; pure
-  compile-time. The **same `capability`/`group#right` mechanism migrates the S1 *function*
-  capability surface** (the shipped `#cap "fs.read"` strings → `fs#read`/`fs#update`) onto one
-  validated model — pre-customer, so functions and data members land on a single mechanism.
+### S10 — Capabilities: what a restricted caller may do
+A capability is a permission the **host/library** requires of a **restricted caller**: the
+host annotates *its own* surface with `group#right` links to explicitly-declared, namespaced
+`capability` groups (resolved + validated at compile — an undeclared group is a load error),
+the modder's profile is granted a set, and admission gates every point the modder's code
+touches the host. **The modder's own code carries no links and is never restricted** — only
+host reach is gated. The full model with examples is [@PLN86 §7](plans/86-sandbox-subset-flag/README.md).
+Three surfaces:
+- **call a function** — the call gate sits in the **signature** (`fn mtime(p: text) -> int fs#read;`),
+  a first-class part of the contract, NOT in the `#native`/`#impure`/`#wasm` plumbing block.
+  Passing arguments is part of the call (set is inherited — no extra grant).
+- **override a parameter** — a parameter tagged `…#default` (`count: int = 1 spawn.count#default`)
+  is pinned to its default unless the modder holds the lock; untagged parameters are free.
+- **read / update / append a field** — `read` free, `update`/`append` deny-by-default;
+  `append` only on a **collection** field (there is no append for a scalar).
+- **Check:** an ungranted call, a non-default override of a locked parameter, or an ungranted
+  field update/append is a **load error** naming the symbol + right + group; reads and untagged
+  parameters admit. Script-owned data is unrestricted (the §2.4 ownership split).
+- **Status: 🟡 DESIGNED ([@PLN86 P6](plans/86-sandbox-subset-flag/README.md)).** Pure
+  compile-time, no runtime cost / rollback. The **same `capability`/`group#right` mechanism
+  carries the S1 *function* capability surface** (the shipped `#cap "fs.read"` strings →
+  signature `fs#read` / `fs#update`) — pre-customer, so functions, parameters, and fields land
+  on one validated model. (Enum-variant *construction* gating is a separate question, not
+  folded into read/update/append.)
 
 > **The compile-only decision (finalizes S7/S8).** Effect containment is now **by
 > construction** — a script can only touch members it is granted (S10), never more (S9) —
