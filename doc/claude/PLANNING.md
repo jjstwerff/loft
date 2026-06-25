@@ -1538,8 +1538,12 @@ CAVEATS.md C11 closed.
 ---
 
 ### L11  Digit-group separators (`_`) in number literals + thousands-position lint
-**Status: designed, not started**
-**Sources:** user request 2026-06-25 (verified absent — the lexer rejects `1_000_000`).
+**Status: completed** — `src/lexer.rs::get_number` accepts `_` between digits (stripped before
+parse) across all bases + float/exponent parts; misplaced `_` (trailing / doubled / next to a
+prefix·`.`·`e`) is one `Level::Error`; decimal groups that aren't thousands (leftmost 1-3, rest
+exactly 3) emit a `Level::Warning` but still accept. Tests: `01-integers.loft` (accept),
+`38-parse-warnings.loft` (warn), `102-expected-errors.loft` (errors). Both backends (shared lexer).
+**Sources:** user request 2026-06-25 (verified absent — the lexer rejected `1_000_000`).
 **Description:** Let `_` separate digit groups in numeric literals so big numbers read
 easily — `1_000_000`, `0xFF_FF`, `1_000.000_5` — and **warn** (accept, do not reject) when
 the separators are *not* on standard thousands boundaries (`1_00_000`, `10_0`). The warning

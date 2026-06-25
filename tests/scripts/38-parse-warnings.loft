@@ -25,6 +25,15 @@ fn test_unused_loop_var_vector() {
   assert(total == 3, "t");
 }
 
+// --- L11 digit-separator grouping warning ---
+
+// @EXPECT_WARNING: Digit separators
+fn test_digit_separator_misgrouped_warns() {
+  // 1_00_000 groups as 1,00,000 — not thousands; the lexer warns but accepts it.
+  x = 1_00_000;
+  assert(x == 100000, "value still correct despite the grouping warning");
+}
+
 // --- Unreachable code warnings ---
 
 // @EXPECT_WARNING: Unreachable code after return
