@@ -32,6 +32,17 @@ fn wrap2(c: boolean) -> vector<integer> {
   return dual(c);
 }
 
+// MIRROR shape — an early `return [literal]` (mid-body) + a tail `return <call>`
+// that NRVO-chains the buffer. The tail chain makes the fn buffer-bound via a
+// parse_return MidReturn (NOT a tail rename), so the mid-body literal must still
+// be delivered into __retbuf or the early path orphans its store. Pre-existing
+// leak on main, both backends; fixed by the block_result buffer-bound mid-body
+// delivery.
+fn mixed(c: boolean, n: integer) -> vector<integer> {
+  if c { return [n, n]; }
+  return triple(n);
+}
+
 fn main() {
   // single-return literal, chained: leaked before the fix
   a = wrap1(7);
@@ -44,6 +55,14 @@ fn main() {
   // multi-return literal, chained, take the EARLY path
   d = wrap2(true);
   print("d={d[0]} dlen={len(d)}\n");               // 1, len 2
+
+  // mirror: early literal + tail call-chain, take the EARLY path (was the h4 leak)
+  e = mixed(true, 7);
+  print("e={e[0]} elen={len(e)}\n");               // 7, len 2
+
+  // mirror, take the TAIL (call) path
+  f = mixed(false, 7);
+  print("f={f[0]} flen={len(f)}\n");               // 7, len 3
 
   // consume so a downstream `+=` would surface any dropped/doubled rows
   sa = 0;

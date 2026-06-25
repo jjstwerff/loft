@@ -880,6 +880,21 @@ impl Parser {
                     // @P377 / S1: see above.
                     self.nrvo_collapse_tail_set(l, ls);
                 }
+            } else if let Type::Vector(elm, _) = result
+                && let Some((buf_attr, buf_var)) = self.return_buffer()
+                && self.returned_uses_buffer(buf_attr)
+            {
+                // #448 mirror — the fn is buffer-bound but NONE of the cells above
+                // handled this tail: it became buffer-bound via a tail `return <call>`
+                // chain (parse_return sets that up as a MidReturn, which — unlike a tail
+                // rename — never triggers deliver_mid_vector_returns). A mid-body
+                // fresh-owned return (an early `return [literal]`) was deferred by
+                // parse_return and would orphan its store on that path. Deliver every
+                // mid-body return into __retbuf now that the binding is final. Cells
+                // that DID handle the tail short-circuit this arm (their ref_return
+                // already delivered the mid-body), so this never double-delivers.
+                let elm_ty = (**elm).clone();
+                self.deliver_mid_vector_returns(&elm_ty, l, buf_var);
             }
         }
         tp
