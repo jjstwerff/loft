@@ -292,6 +292,11 @@ The urge to apply a fix is the signal you have NOT earned it yet. On any non-tri
      corruption).
    - **Prove the harness can fail**: a cell that produces no output is vacuous, not clean — check
      the probe's own output appears; keep one deliberately-broken control cell red.
+   - **A leak probe is not a value probe.** For a store-lifetime bug the pull is to check only
+     leak-freedom — but a delivery that silently corrupts is leak-free: a copy that doubles a
+     vector's rows frees every store yet returns the wrong length. Assert value AND length per cell,
+     not just the `… not freed` line. (@PLN85 D-own-1: a leak-only matrix read "clean" while a
+     double-append doubled the result; the length check caught it, the leak check could not.)
 3. **Map pass/fail; find the real boundary.** Expect the filed/assumed scope to be wrong — it
    usually is (#263 was *any runtime fn-ref value*; #262 was *every context*; cluster III was three
    different mechanisms).

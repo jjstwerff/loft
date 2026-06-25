@@ -98,6 +98,53 @@ leak · suite) and **grow**: minimal → bigger examples → full functions, com
 working-vs-broken bytecode at each rung. A rung is closed only when its bytecode
 matches the working form and the gates pass on both backends.
 
+## The refactor mode — behaviour-preserving (flip the gate to before/after)
+
+The three layers above are the BUG-FIX mode: the reference is the *working*
+bytecode, and the diff against the *broken* output is the spec. A large share of
+codegen work, though, is the opposite intent — RESHAPING emitting code that should
+emit exactly the same ops: extract a selector, fold a special case into a cell of a
+general path, delete a redundant condition, route several sites through one
+dispatch. (The whole @PLN85 ownership *simplification* is a string of these.) Here
+the instrument is unchanged — `loft introspect` on both backends — but the
+reference flips: **the gate is a byte-identical before/after diff, and an empty diff
+IS the proof you changed nothing emitted.**
+
+1. **Build a one-function-per-path corpus first.** One `.loft` file, one small
+   function per code path the change touches (each emit/delivery branch), plus a
+   `main` that runs them all so the file is also a clean end-to-end run. The corpus
+   is what makes the diff *exercise* the branches you restructured — a path the
+   corpus misses cannot be caught if the refactor breaks it. Keep it under the
+   plan's [bytecode-comparisons/](plans/85-store-lifetime-retirement/bytecode-comparisons/).
+2. **Capture BEFORE.** `loft introspect corpus.loft > before.txt`. One capture
+   covers both backends — the dump carries the IR + bytecode AND the generated
+   native Rust. Confirm the corpus runs clean on `--interpret` and `--native`
+   (`LOFT_STORES=warn` / `LOFT_NATIVE_LEAK_CHECK`) so the baseline is leak-free.
+3. **Refactor, then prove AFTER == BEFORE.** `loft introspect corpus.loft >
+   after.txt; diff before.txt after.txt`. **Empty = you changed nothing emitted, on
+   both backends** — exactly the claim of a behaviour-preserving refactor. Re-run
+   after `cargo fmt` (it rewrites the file). One commit per sub-step; a non-empty
+   diff you did not intend is the bug — bisect by sub-step, do not push through.
+
+This is why a delicate function can be reshaped quickly and safely: "did I change
+what's emitted?" becomes a one-line `diff`, not a guess that the suite happens to
+cover. It is the dual of the bug-fix gate — *working-vs-broken* becomes
+*before-vs-after*.
+
+### When a refactor surfaces a real behaviour change
+
+A latent bug often shows up mid-collapse (a leak the old structure hid, a case two
+branches handled inconsistently). Then the two gates run **together**: the
+byte-identical corpus proves *"I changed nothing on the paths I did not mean to,"*
+and a boundary matrix ([engineering-rigor](../../.claude/skills/engineering-rigor/SKILL.md)
+/ CLAUDE.md § matrix-first) proves *"the path I did mean to change is now correct."*
+Assert the matrix on **value + length + leak**, both backends — not leak alone: a
+delivery that doubles a vector's contents is leak-free yet wrong, and only a
+length/value check catches it. Keep the corpus byte-identical for the untouched
+paths even as the matrix cells change. The @PLN85 D-own-1 `block_result` collapse is
+the worked example — the corpus stayed byte-identical step by step, and the two
+leaks it surfaced (#448 c5 and its mirror) were closed under the matrix.
+
 ## What this rules out
 
 - Heuristic forests at the generation site (the `has_ref_params && … && …` shape).
