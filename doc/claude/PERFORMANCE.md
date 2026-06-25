@@ -1048,6 +1048,20 @@ N5 right after for `integer`) so the analysis lives in one place.
 
 ## Design: N6 — Skip the rustc toolchain probe on a native cache hit
 
+> **DELIVERED (verified 2026-06).** There is **no up-front `rustc --version` probe**:
+> a warm cache hit runs the cached binary directly and spawns **zero** rustc/cargo
+> processes (confirmed via `strace -f -e execve` — 0 rustc execve on a warm run), and
+> rustc is checked only on a cache *miss* — a cheap `cache::rustc_mismatch()` for the
+> default path plus the compile's NotFound-arm lazy fallback (`src/main.rs` ≈5818–6060,
+> the `'native` block). Measured warm native startup of a trivial program is **~0–10 ms**
+> (vs the ~26 ms below), so the ~18 ms tax is gone. The implementation is *better* than
+> the original design (which moved the probe into the cache-miss branch) — it removed
+> the probe entirely, letting the compile attempt itself be the rustc-presence check.
+> **Residual (separate, not done):** the ~6.6 ms parse+codegen+emit+hash still runs on
+> every warm invocation (the cache is keyed on the *generated Rust*, not the `.loft`
+> source) — see the Ceiling note below; the source-keyed cache to reach the ~1 ms floor
+> is the open follow-up.
+
 **Affected workload:** Native **startup latency** of any short-lived
 program — a CLI tool, a test harness, a script invoked repeatedly.
 Not a throughput benchmark; it is a fixed per-invocation tax that
@@ -1170,7 +1184,7 @@ modes.
 | 5 | N3 — Long sentinel in codegen | 04 native | ~1.5× Collatz native | Low |
 | 6 | N5 — Integer sentinel in codegen | scanners, parsers, any indexed loop | parallel to N3 for `integer` | Low (folds into N3) |
 | 7 | N4 — Suppress cr_call_push on `#pure` leaves | hot loops with tiny `#pure` helpers (scan.loft) | measurable share of `-O` baseline on per-byte loops | Small |
-| 8 | N6 — Skip rustc probe on native cache hit | native warm startup (any short-lived program) | ~18 ms / ≈3.7× off warm startup | Small |
+| ✅ | **N6 — Skip rustc probe on native cache hit — DELIVERED** (verified 2026-06; warm run spawns 0 rustc, ~0–10 ms startup) | native warm startup (any short-lived program) | ~18 ms / ≈3.7× off warm startup | Small |
 | 9 | P3 — Verify integer sentinel | 02, 10 | 2–5% (verification) | Low |
 | 10 | W1 — wasm string path | 07 wasm | <1.3× gap | Medium |
 
