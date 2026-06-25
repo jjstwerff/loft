@@ -235,6 +235,7 @@ pub const OPERATORS: &[fn(&mut State)] = &[
     new_record,
     finish_record,
     append_vector,
+    replace_vector,
     claim_child_rec,
     ref_from_child_rec,
     get_record,
@@ -1915,6 +1916,13 @@ fn append_vector(s: &mut State) {
     let v_other = *s.get_stack::<DbRef>();
     let v_r = *s.get_stack::<DbRef>();
     s.database.vector_add(&v_r, &v_other, v_tp);
+}
+
+fn replace_vector(s: &mut State) {
+    let v_tp = s.code::<u16>();
+    let v_other = *s.get_stack::<DbRef>();
+    let v_r = *s.get_stack::<DbRef>();
+    s.database.vector_replace(&v_r, &v_other, v_tp);
 }
 
 fn claim_child_rec(s: &mut State) {

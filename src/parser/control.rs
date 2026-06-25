@@ -4537,14 +4537,17 @@ impl Parser {
                 {
                     let local = *v;
                     let rec_tp = self.append_elem_tp(elm);
-                    let clear = self.cl("OpClearVector", &[Value::Var(buf_var)]);
-                    let append = self.cl(
-                        "OpAppendVector",
+                    // Aliasing-safe deliver: `local` may ALIAS `buf_var` (an
+                    // un-reassigned `return out` where `out` borrows the buffer),
+                    // and the old `clear(buf); append(buf, out)` then emptied it
+                    // (the mid-body-return self-copy).  `OpReplaceVector` no-ops
+                    // when the two name the same backing vector.
+                    let replace = self.cl(
+                        "OpReplaceVector",
                         &[Value::Var(buf_var), Value::Var(local), Value::Int(rec_tp)],
                     );
                     *op = Value::Insert(vec![
-                        clear,
-                        append,
+                        replace,
                         Value::Return(Box::new(Value::Var(buf_var))),
                     ]);
                 } else if self.fresh_owned_vector_deps(inner.unspan()).is_some() {

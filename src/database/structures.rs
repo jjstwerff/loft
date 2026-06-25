@@ -328,6 +328,24 @@ impl Stores {
         }
     }
 
+    /// Make `db` (dest) hold `o_db` (src)'s content — the aliasing-safe vector
+    /// "deliver into buffer" the return machinery needs.  When `db` and `o_db`
+    /// name the SAME backing vector (the NRVO case where a returned local still
+    /// ALIASES the function's buffer — `out` borrows `__vdb_1`, and the buffer is
+    /// the return slot), the content is ALREADY in place: clearing first would
+    /// DESTROY it, which is the `clear(buf); append(buf, out)` self-copy that
+    /// silently returned an empty vector.  Same vector → no-op.  Distinct vectors
+    /// → clear dest and append src (`vector_add` snapshots a same-store source).
+    pub fn vector_replace(&mut self, db: &DbRef, o_db: &DbRef, known: u16) {
+        let dest_rec = keys::store(db, &self.allocations).get_u32_raw(db.rec, db.pos);
+        let src_rec = keys::store(o_db, &self.allocations).get_u32_raw(o_db.rec, o_db.pos);
+        if db.store_nr == o_db.store_nr && dest_rec != 0 && dest_rec == src_rec {
+            return;
+        }
+        vector::clear_vector(db, &mut self.allocations);
+        self.vector_add(db, o_db, known);
+    }
+
     pub fn vector_add(&mut self, db: &DbRef, o_db: &DbRef, known: u16) {
         // `LOFT_TRACE_VADD=1` prints one line per vector concat/append-copy
         // with the resolved stride — the instrument that settled the nested
