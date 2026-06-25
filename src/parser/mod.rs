@@ -134,6 +134,13 @@ pub struct Parser {
     /// sandboxed read/update/append of a host field on the matching grant.
     /// Parser-side (off the IR), recorded first-pass; IR persistence is P6.8.
     pub(crate) member_access: HashMap<(u32, String), Vec<String>>,
+    /// @PLN86 P6.4 (F4) — sandboxed READS of a host field that carries a `#read`
+    /// capability link, keyed by the reading sandboxed def → the `(read token,
+    /// position)` of each such read.  Recorded second-pass at the field-access site
+    /// (where the struct type + field name resolve); admission rejects a read whose
+    /// token the profile does not grant.  Reads are default-allow, so only a field
+    /// the host marked with a `#read` link is ever recorded here.
+    pub(crate) sandbox_field_reads: HashMap<u32, Vec<(String, crate::lexer::Position)>>,
     /// @PLN87 — transient one-shot: set while parsing a `&<lvalue>` binding (the prefix
     /// `&` in `b = &a`, or the `&` in a `b: &T = a` type annotation), consumed by
     /// `parse_assign_op` to lower a SCALAR reference to `OpCreateStack`. Cleared per
@@ -527,6 +534,7 @@ impl Parser {
             sandbox_fn_refs: HashMap::new(),
             declared_capabilities: HashSet::new(),
             member_access: HashMap::new(),
+            sandbox_field_reads: HashMap::new(),
             amp_pending: false,
             in_sandbox: false,
             parse_depth: 0,
@@ -730,7 +738,17 @@ impl Parser {
             .sandbox_raw_writes()
             .into_iter()
             .map(|v| crate::sandbox::describe_raw_write_violation(&self.data, &v));
-        caps.chain(totality).chain(raw_writes).collect()
+        let field_reads = crate::sandbox::field_read_violations(
+            &self.sandbox,
+            &self.def_sandbox,
+            &self.sandbox_field_reads,
+        )
+        .into_iter()
+        .map(|v| crate::sandbox::describe_field_read_violation(&self.data, &v));
+        caps.chain(totality)
+            .chain(raw_writes)
+            .chain(field_reads)
+            .collect()
     }
 
     /// @PLN86 step 1.4 — does this program contain sandboxed code that must run
@@ -839,6 +857,7 @@ impl Parser {
         self.sandbox_fn_refs.clear();
         self.declared_capabilities.clear();
         self.member_access.clear();
+        self.sandbox_field_reads.clear();
         self.amp_pending = false;
         self.data.reset();
         // @PLN22 Phase 2 — the main program parses under its own source
@@ -1244,6 +1263,7 @@ impl Parser {
         self.fn_lambdas.clear();
         self.declared_capabilities.clear();
         self.member_access.clear();
+        self.sandbox_field_reads.clear();
         self.parse_file();
         self.resolve_deferred_unknowns();
         let lvl = self.lexer.diagnostics().level();
@@ -9344,6 +9364,37 @@ mod plan86_admission_tests {
             !p2.sandbox_raw_writes().is_empty(),
             "a write to a parameter (host data) must be rejected, got {:?}",
             p2.sandbox_raw_writes()
+        );
+    }
+
+    /// @PLN86 P6.4 (F4) — a sandboxed read of a `#read`-linked HOST field needs the
+    /// grant; an unlinked field is freely readable (read default-allow).
+    #[test]
+    fn field_read_gates_private_field_admits_unlinked() {
+        let src = "capability secret\n\
+                   struct Player { name: text, hidden: text secret#read }\n\
+                   fn peek(p: Player) -> text { p.hidden }\n\
+                   fn nameof(p: Player) -> text { p.name }\n";
+        // ungranted: reading `hidden` (secret#read) is rejected; `name` (unlinked) is fine.
+        let p = parse_admit_libs(&["fn:peek", "fn:nameof"], &["code"], &[], src);
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        let errs = p.sandbox_admission_errors();
+        assert!(
+            errs.iter().any(|e| e.contains("secret#read")),
+            "a private field read must be rejected: {errs:?}"
+        );
+        // granted: the same read admits clean.
+        let p2 = parse_admit_libs(&["fn:peek", "fn:nameof"], &["code"], &["secret#read"], src);
+        assert!(
+            !p2.sandbox_admission_errors()
+                .iter()
+                .any(|e| e.contains("secret#read")),
+            "granted secret#read must admit the read: {:?}",
+            p2.sandbox_admission_errors()
         );
     }
 

@@ -1312,6 +1312,55 @@ pub fn describe_raw_write_violation(data: &Data, v: &RawWriteViolation) -> Strin
     )
 }
 
+/// @PLN86 P6.4 (F4) — a sandboxed read of a host field whose `#read` capability the
+/// active profile does not grant.  Reads are default-allow, so this fires only on a
+/// field the host explicitly marked private with a `#read` link.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FieldReadViolation {
+    pub def: u32,
+    pub token: String,
+    pub position: Position,
+}
+
+/// @PLN86 P6.4 (F4) — the field-read admission: every recorded sandboxed read of a
+/// `#read`-linked host field whose token the reading def's profile does not grant.
+#[must_use]
+pub fn field_read_violations(
+    config: &SandboxConfig,
+    sandboxed: &HashMap<u32, String>,
+    field_reads: &HashMap<u32, Vec<(String, Position)>>,
+) -> Vec<FieldReadViolation> {
+    let mut out = Vec::new();
+    for (&def, reads) in field_reads {
+        if !sandboxed.contains_key(&def) {
+            continue;
+        }
+        let profile = config.profiles.get(&sandboxed[&def]);
+        for (token, position) in reads {
+            if !profile.is_some_and(|p| p.allows(token)) {
+                out.push(FieldReadViolation {
+                    def,
+                    token: token.clone(),
+                    position: position.clone(),
+                });
+            }
+        }
+    }
+    out.sort_by(|a, b| a.def.cmp(&b.def).then_with(|| a.token.cmp(&b.token)));
+    out
+}
+
+/// @PLN86 P6.4 (F4) — render a field-read violation as an actionable error.
+#[must_use]
+pub fn describe_field_read_violation(data: &Data, v: &FieldReadViolation) -> String {
+    let from = display_name(data, v.def);
+    format!(
+        "{}: sandboxed `{from}` reads a host field that needs capability `{}` — not \
+         granted.\n  fix: add `{}` to `allow`, or read only fields the profile permits.",
+        v.position, v.token, v.token
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

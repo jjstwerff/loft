@@ -142,6 +142,32 @@ impl Parser {
             return Type::Void;
         }
         let fnr = self.data.attr(dnr, &field);
+        // @PLN86 P6.4 (F4) — record a sandboxed READ of a host field that carries a
+        // `#read` capability link, so admission can gate it.  Reads are default-allow,
+        // so only a `#read`-linked field is ever recorded.  Second pass only (the base
+        // type + attribute have resolved).  (A write LHS also reaches field(); a write
+        // to a host field is independently rejected by 2.4, and a field is rarely both
+        // read-linked and written — F5 reworks the write path.)
+        if fnr != usize::MAX && self.in_sandbox && !self.first_pass {
+            let reads: Vec<String> = self
+                .member_access
+                .get(&(dnr, field.clone()))
+                .map(|links| {
+                    links
+                        .iter()
+                        .filter(|t| t.rsplit_once('#').is_some_and(|(_, r)| r == "read"))
+                        .cloned()
+                        .collect()
+                })
+                .unwrap_or_default();
+            if !reads.is_empty() {
+                let pos = self.lexer.peek_pos().clone();
+                let entry = self.sandbox_field_reads.entry(self.context).or_default();
+                for t in reads {
+                    entry.push((t, pos.clone()));
+                }
+            }
+        }
         // Trace point: field/method dispatch entry state.  Captures
         // what type and field name reached `field()`, whether the
         // attribute was found, and which pass we're on.  Recurring
