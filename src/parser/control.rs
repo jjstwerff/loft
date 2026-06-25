@@ -4578,10 +4578,8 @@ impl Parser {
                         "OpReplaceVector",
                         &[Value::Var(buf_var), Value::Var(local), Value::Int(rec_tp)],
                     );
-                    *op = Value::Insert(vec![
-                        replace,
-                        Value::Return(Box::new(Value::Var(buf_var))),
-                    ]);
+                    *op =
+                        Value::Insert(vec![replace, Value::Return(Box::new(Value::Var(buf_var)))]);
                 } else if self.fresh_owned_vector_deps(inner.unspan()).is_some() {
                     // c5/#448 residual sibling — a mid-body `return <fresh literal>`
                     // in an NRVO-promoted vector fn must ALSO deliver into __retbuf,
@@ -5012,7 +5010,7 @@ impl Parser {
                 // single-arm / non-reassigned tail is untouched — this is why it no
                 // longer self-copies), so the fn ALWAYS returns its buffer and the
                 // dep is accurate: no adopt, no per-site free derivation.
-                let tail_cv = body.last().and_then(|v| Self::tail_var(v));
+                let tail_cv = body.last().and_then(Self::tail_var);
                 if let Some(cv) = tail_cv
                     && cv != buf_var
                     && matches!(self.vars.tp(cv), Type::Vector(_, _))
