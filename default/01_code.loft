@@ -1021,6 +1021,13 @@ fn OpFinishRecord(data: reference, rec: reference, parent_tp: const u16, fld: co
 fn OpAppendVector(r: vector, other: vector, tp: const u16);
 #rust"s.database.vector_add(&@r, &@other, @tp);"
 #impure(parent_write)
+// Replace `r`'s content with `other`'s, aliasing-safe: a no-op when `r` and
+// `other` are the SAME backing vector (NRVO return-into-own-buffer), so the
+// return machinery can deliver `return out` into the buffer without the
+// `clear + append` self-copy that emptied an aliasing vector.
+fn OpReplaceVector(r: vector, other: vector, tp: const u16);
+#rust"s.database.vector_replace(&@r, &@other, @tp);"
+#impure(parent_write)
 // P213: claim a fresh record in `field`'s Store, deep-copy `src`'s
 // payload + nested heap data into it, write the new rec-id u32 into
 // `field`.  Used by capturing-closure-in-struct-field writes to

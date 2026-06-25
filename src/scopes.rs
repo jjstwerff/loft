@@ -93,16 +93,6 @@ struct Scopes {
     /// `av` (outer/function) outlives `v` (inner), so `av`'s Rust
     /// `let` is still live where `v`'s free fires.
     witness_buffer: HashMap<u16, u16>,
-    /// #457 — vector locals assigned from an NRVO call that ADOPTS the call's
-    /// delivery store (the return is tied to a hidden buffer attr, not a visible
-    /// param).  The dep is NOT stripped (that would orphan a fresh null-init
-    /// store), so `get_free_vars` would not free `v`'s adopted store on its own;
-    /// this set drives an explicit `OpFreeRef(v)` there for a NON-return-source
-    /// adopter (a return-source adopter is carried to the caller, freed there).
-    /// The paired `__ref_N` buffer is freed by `paired_witness` →
-    /// `OpFreeRefIfDistinct(__ref_N, v)`; the two dedup at runtime (a double-free
-    /// of one shared store is a tolerated no-op).
-    vector_adopters: HashSet<u16>,
     /// #316 — Reference vars whose LATEST scanned assignment gave them an
     /// OWNED store (a call whose filtered return deps are empty, a deep-copied
     /// var, …), mapped to the loop depth (`loops.len()`) at that assignment.
@@ -143,7 +133,6 @@ fn run_scan_phase(
         ret_temp_counter: 0,
         paired_witness: HashMap::new(),
         witness_buffer: HashMap::new(),
-        vector_adopters: HashSet::new(),
         owned_refs: HashMap::new(),
     };
     let mut function = Function::copy(orig_vars);
@@ -964,87 +953,30 @@ impl Scopes {
         // freshly-allocated store and Database N leaks at scope exit
         // (e.g. tests/scripts/95-alias-copy.loft Database 3 leak).
         let unspanned_value = value.unspan();
-        // Reference / Enum / Vector all ADOPT a callee's `__ref_N` buffer store
-        // (D-own-1 made the vector return-delivery adopt, like the older
-        // Reference path).  An adopter holds whatever store the call delivers, so
-        // at scope exit a NON-return-source adopter needs BOTH halves of the
-        // cluster-V ownership rule:
-        //   1. free the store it holds — `get_free_vars` emits `OpFreeRef(v)` for
-        //      the `vector_adopters` set (the dep is kept, NOT stripped, so the
-        //      null-init stays a borrowed VIEW with no orphaned fresh store); and
-        //   2. free the placeholder — pair `__ref_N` with `v` so the buffer's
-        //      exit free is `OpFreeRefIfDistinct(__ref_N, v)` (a no-op when the
-        //      call delivered into the buffer, a real free when `v` adopted a
-        //      deeper store and the buffer is orphaned).  The two dedup at
-        //      runtime (a double-free of one shared store is a tolerated no-op).
-        // #457 was a `vector<text>` adopter getting NEITHER half: the buffer it
-        // returned was freed at the callee's exit (UAF), and main's `p` kept a
-        // dep on the buffer it no longer pointed at, leaking its real store.
-        // KNOWN RESIDUAL: the dep can lie at runtime (the callee returns a deeper
-        // or stack-backed store), so the half-1 free occasionally targets a
-        // non-heap store (the #306 guard no-ops it loudly).  The sound, leak-free
-        // end state is the delivery root fix (callee delivers into `__ref_N` so
-        // the dep is accurate) — see adopt-free-collapse.md.
         if matches!(
             function.tp(v),
-            Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
+            Type::Reference(_, _) | Type::Enum(_, true, _)
         ) && let Value::Call(fn_nr, _) = unspanned_value
             && data.def(*fn_nr).name.starts_with("n_")
             && data.def(*fn_nr).code != Value::Null
         {
             let adopts_fresh_store = data.def(*fn_nr).return_adopts_fresh_store();
-            // A vector `v = call(.., __ref_N)` adopts the NRVO delivery buffer
-            // when the call's return is tied ONLY to hidden buffer attrs (or the
-            // `u16::MAX` fresh-store marker), never a visible param — `v` holds
-            // the delivered store, not a borrow of a caller's vector.  The marker
-            // is not promoted yet at scope-analysis time, so the concrete
-            // hidden-attr deps are what we read here (`return_adopts_fresh_store`
-            // only recognises the promoted marker, so it reads `false`).
-            //
-            // We do NOT strip a vector adopter's dep (unlike the Reference path
-            // below): the dep keeps `v` borrowing `__ref_N`, so the placeholder
-            // buffer's exit free becomes `OpFreeRefIfDistinct(__ref_N, v)` (the
-            // pairing) — a no-op when the callee delivered the result INTO the
-            // buffer (`v` and `__ref_N` share a store, so freeing it would be the
-            // #457 use-after-free), a real free when `v` adopted a deeper store
-            // and the buffer is an orphan.
-            let vector_adopts = matches!(function.tp(v), Type::Vector(_, _)) && {
-                let def = data.def(*fn_nr);
-                let deps = def.returned().depend();
-                // A NON-EMPTY dep tied only to hidden buffer attrs (or the
-                // marker) is the genuine NRVO-delivery adopt where `v` borrows
-                // `__ref_N` (the #457 shape).
-                !deps.is_empty()
-                    && deps.iter().all(|&a| {
-                        a == u16::MAX
-                            || ((a as usize) < def.attributes.len()
-                                && def.attributes[a as usize].hidden)
-                    })
-            };
-            if vector_adopts {
-                self.vector_adopters.insert(v);
-            }
-            if !adopts_fresh_store
-                && matches!(
-                    function.tp(v),
-                    Type::Reference(_, _) | Type::Enum(_, true, _)
-                )
-            {
+            if !adopts_fresh_store {
                 // codegen will take gen_set_first_ref_call_copy —
-                // OpConvRefFromNull + OpDatabase + lock-args + OpCopyRecord
-                // deep-copy into a FRESH store owned by `v`.  Strip v's declared
-                // deps so get_free_vars emits OpFreeRef at scope exit; otherwise
+                // OpConvRefFromNull +
+                // OpDatabase + lock-args + OpCopyRecord deep-copy into a
+                // FRESH store owned by `v`.  Strip v's declared deps so
+                // get_free_vars emits OpFreeRef at scope exit; otherwise
                 // the parser's "borrows from arg N" inference suppresses
-                // emission and the deep-copied store leaks (the `dep_empty=false`
-                // path in scopes.rs:906).
+                // emission and the deep-copied store leaks (the
+                // `dep_empty=false` path in scopes.rs:906).
                 let deps: Vec<u16> = function.tp(v).depend().clone();
                 for d in deps {
                     function.make_independent(v, d);
                 }
             }
             // `adopts_fresh_store == true` call whose result is assigned
-            // to an adopting heap variable `v` (Reference / Enum / Vector).
-            // At runtime the callee either:
+            // to a Reference variable `v`.  At runtime the callee either:
             //   - **adopts** the placeholder (writes into the passed
             //     `__ref_N` and returns the same DbRef) — then `v`
             //     and `__ref_N` share a store;
@@ -1069,9 +1001,7 @@ impl Scopes {
             // v)` instead of `OpFreeRef(__ref_N)`: the runtime
             // store-nr comparison settles the two cases per execution
             // path (match → skip; differ → free).
-            if (adopts_fresh_store || vector_adopts)
-                && let Value::Call(_, args) = unspanned_value
-            {
+            if adopts_fresh_store && let Value::Call(_, args) = unspanned_value {
                 for arg in args {
                     let arg_var = match arg {
                         Value::Var(av) => Some(*av),
@@ -1868,17 +1798,8 @@ impl Scopes {
                 // the captured-Reference exemption in `check_ref_leaks`.
                 let captured_ref =
                     function.is_captured(v) && matches!(function.tp(v), Type::Reference(_, _));
-                // #457 — a NON-return-source vector adopter holds a store the
-                // call delivered (its dep is on the `__ref_N` buffer, but at
-                // runtime it may be a deeper store): free it directly.  The
-                // paired `__ref_N` free runs `OpFreeRefIfDistinct(__ref_N, v)`,
-                // so the two dedup.  Return-source adopters are `continue`d above
-                // (`suppress_source`) — the caller frees them.
-                let is_vector_adopter = self.vector_adopters.contains(&v);
-                let emit = (owns || is_work_ref || is_vector_adopter)
-                    && !in_ret
-                    && !function.is_skip_free(v)
-                    && !captured_ref;
+                let emit =
+                    (owns || is_work_ref) && !in_ret && !function.is_skip_free(v) && !captured_ref;
                 if scope_debug && !emit {
                     eprintln!(
                         "[scope_debug] NOT freeing '{}' (var={v}, scope={}, to_scope={to_scope}): \

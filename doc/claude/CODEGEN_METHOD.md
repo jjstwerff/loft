@@ -44,6 +44,25 @@ The diagnosis:
   it. The generator's logic stays — it just consults a fact instead of
   reconstructing one.
 
+### Corollary: when the fact is WRONG (not just missing), fix its PRODUCER
+
+The same principle has a sharper form. A carried fact can be present but **lie** — a
+dep/type that says one thing while the runtime store says another. The lie surfaces
+downstream at the **consumer** (a free → use-after-free; a guard → a noisy refusal),
+and that is the tempting place to start. Don't. Every per-site condition there
+*compensates* for an upstream lie and stacks more conditions. **Go to where the fact
+is PRODUCED and make it true** — then the consumer-side compensation is *deletable*,
+not patched. Worked example: #457's vector adopt — the return dep said "`out` borrows
+`__vdb_1`" while `out` held the adopted `__ref_N`. A free-side thicket (pairing /
+strip / explicit-free) grew for a whole session and never closed; the fix was to
+**deliver `out` into the buffer at the return** so the dep is true by construction,
+which deleted the thicket (`scopes.rs` back to baseline). Two early signals you took
+the wrong start: complexity is *growing* per shape, and you can already *name* the
+fact as the root ("X lies; patching here can't reconcile it") — that sentence is the
+instruction to leave the consumer. Often the tangle is N callers working around one
+**unsafe shared primitive** (#457: `clear; append` assuming non-aliasing); making the
+primitive safe collapses it.
+
 ### The balance (do NOT over-correct)
 
 Pushing *everything* into the type system is the opposite error. The type must NOT

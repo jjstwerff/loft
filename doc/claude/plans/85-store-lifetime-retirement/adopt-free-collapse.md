@@ -186,40 +186,40 @@ delivery/adopt seam (most likely) or an older latent shape.
 - [x] Sweep + graduate — [`probes/457-shape-sweep.loft`](probes/457-shape-sweep.loft) (if/else ·
       match-STATEMENT · nested-if · 3-arm · int/struct/text elems · recursion depth, value+length+
       leak both backends) → `tests/scripts/85-store-lifetime-457-vector-adopt-free.loft`.
-- [ ] **NOT GREEN — two residuals remain (see §8); #457 stays OPEN.**
+- [x] **CLOSED — the delivery root fix landed; #457 fully fixed, both backends, ZT green, no #306.**
 
-## 8. Findings — what landed, what's left, and why it is NOT clean yet
+## 8. Resolution — the aliasing-safe delivery, and the thicket DELETED
 
-**The fix is a FREE-side patch, not the root fix.**  It grew the thicket (Reference/Enum strip +
-witness-pairing `IfDistinct` + the new vector explicit-free) rather than shrinking it — the opposite
-of this slice's stated "net code DOWN" goal.  The one win: vectors REUSE the Reference/Enum
-pairing instead of a bespoke #457 condition.
+The free-side patch (`47b30a53`) was abandoned: it grew the thicket and left two residuals because
+it patched around the **dep-mismatch root** — a vector adopter's *static* dep says "`v` borrows
+`__ref_N`" while its *runtime* store is a deeper/adopted store.  The real fix moves to the **return
+delivery**, in two small commits:
 
-**The root it patches around — a dep-mismatch.**  A vector adopter's *static* dep says
-"`v` borrows `__ref_N`", but its *runtime* store may be a **deeper** store (the callee adopted a
-grandchild) or a **stack transient**.  Patching the free cannot reconcile that lie, so each shape
-needed another condition.  The two residuals are the mismatch surfacing:
+1. **`cd66579b` — aliasing-safe delivery (`OpReplaceVector`).**  The return machinery delivered a
+   `return out` into the buffer with `OpClearVector(buf); OpAppendVector(buf, out)`.  When `out`
+   ALIASES `buf` (the NRVO case), the clear emptied `out` before the append read it — a **self-copy
+   that returned EMPTY**.  This was **R2**: NOT a `verify_consistency` bug as first guessed, but
+   subproof's `m == n` base case (`out += [mth]; return out`, `out` aliasing the buffer) coming back
+   empty (and `f(0)` returned len 0 on `main`).  Fix: one op — `vector_replace` no-ops when dest and
+   src are the same backing vector, else clears+appends — replacing the clear+append pair in
+   `deliver_mid_vector_returns`.  Removes the "callers must guarantee non-aliasing" burden.
+2. **`<this commit>` — the adopt delivers; the thicket is DELETED.**  With delivery aliasing-safe,
+   the implicit-tail adopt (`cv = recurse(.., __ref_N)`, then implicit `cv` tail) delivers `cv` into
+   the buffer via `OpReplaceVector` and returns the buffer.  So the fn ALWAYS returns its buffer, the
+   dep is accurate, and the per-arm `__ref_N` free is the plain `OpFreeRef` again.  `src/scopes.rs`
+   reverts to **origin/main** — the `vector_adopters` set, the explicit free, and the witness-pairing
+   extension are all gone.  **R1** (the #306 stack-store-free noise) vanishes with the explicit free.
 
-- **R1 — #306 on ZT `directory` §8.3 / `connauth`.**  The explicit `OpFreeRef(v)` occasionally
-  targets a non-heap store (the dep lying at runtime); the #306 guard no-ops it **loudly**.  The
-  loft suite never hits this (it is clean); it is confined to ZT's complex shapes.  Functionally a
-  guard-protected no-op (no corruption), but it is the same root.
-- **R2 — ZT `directory::test_consistency` (m=3,5,6 fail).**  A **separate** store-lifetime bug
-  **inside `verify_consistency`**, not the vector-adopt: the proof vector is STABLE (snapshot
-  before/after the call is identical), but verify miscomputes via the `fr = mnode(c, fr)`
-  text-reassign-from-allocating-call loop.  Standalone repro (real crypto) reproduces ZT exactly:
-  baseline SIGSEGVs, this fix turns it into a wrong-result.  Its own slice.
+**Net for #457:** the fix is one aliasing-safe op + a tail delivery in `control.rs`, with `scopes.rs`
+UNCHANGED from origin/main — the free-side derivation is GONE, not grown.  The earlier failed
+free-side approaches (pairing-only leaks; strip-the-dep orphans a null-init store; explicit-free
+hits #306) all stemmed from fighting the dep-mismatch on the free side; delivering into the buffer
+makes the dep true by construction so none of them are needed.
 
-**The clean, complexity-DELETING end state — the delivery root fix (the recommended next step):**
-make the multi-arm-reassign tail `return out` DELIVER into `__vdb_1`/`__ref_N` (clear+append —
-exactly what the early-return arm already emits) instead of adopting a different store, in
-`nrvo_collapse_tail_set` (`control.rs`).  Then `v == __ref_N` ALWAYS, the dep is accurate, and a
-SINGLE plain free works — letting us **delete** the vector pairing, the explicit free, AND the
-`IfDistinct` dance, and it closes R1 (and likely R2) by construction.  Cost: one vector copy per
-recursive return (the base case already pays it).  Bigger + riskier (D-own-1 area), but it is the
-version that gets *smaller*.  Three free-side approaches were tried and rejected on the way here:
-pairing-only (sound but FAILS the leak suite — every adopt leaks), strip-the-dep (leak-free but a
-ref-element null-init-materialisation orphan), explicit-free (leak-free + suite-clean but R1).
+**Verified:** full loft suite **2538/2538** both backends; `457-min` + `457-shape-sweep` leak-clean
+both backends; the self-copy guard `tests/scripts/85-store-lifetime-mid-return-aliasing-deliver.loft`;
+ZT `directory` (inclusion + consistency + §8.3) + `fedops` + `membership` + `records` all pass with
+**zero #306**.
 
 ## Anchors
 

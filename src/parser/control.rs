@@ -4528,6 +4528,38 @@ impl Parser {
         }
     }
 
+    /// #457 — does `cv` get reassigned to a CALL result anywhere in `body`?
+    /// `cv = some_fn(.., __ref_N)` ADOPTS the callee's delivery store, so at the
+    /// tail `cv` holds a store DISTINCT from its NRVO buffer.  In-place
+    /// `cv += [..]` does NOT count (its `Set` target is the element temp), nor
+    /// does the initial `cv: vector = []`.
+    fn body_reassigns_var_to_call(body: &[Value], cv: u16) -> bool {
+        fn walk(node: &Value, cv: u16) -> bool {
+            if let Value::Set(w, val) = node
+                && *w == cv
+                && matches!(val.unspan(), Value::Call(_, _))
+            {
+                return true;
+            }
+            match node {
+                Value::Set(_, val) => walk(val, cv),
+                Value::Call(_, args)
+                | Value::Insert(args)
+                | Value::Tuple(args)
+                | Value::Parallel(args) => args.iter().any(|a| walk(a, cv)),
+                Value::Block(bl) | Value::Loop(bl) => bl.operators.iter().any(|o| walk(o, cv)),
+                Value::If(c, t, e) => walk(c, cv) || walk(t, cv) || walk(e, cv),
+                Value::Iter(_, c, n, e) => walk(c, cv) || walk(n, cv) || walk(e, cv),
+                Value::Return(x) | Value::Drop(x) | Value::Yield(x) | Value::BreakWith(_, x) => {
+                    walk(x, cv)
+                }
+                Value::Span(b) => walk(&b.1, cv),
+                _ => false,
+            }
+        }
+        body.iter().any(|o| walk(o, cv))
+    }
+
     fn deliver_mid_vector_walk(&mut self, elm: &Type, op: &mut Value, buf_var: u16) {
         match op {
             Value::Return(inner) => {
@@ -4537,16 +4569,17 @@ impl Parser {
                 {
                     let local = *v;
                     let rec_tp = self.append_elem_tp(elm);
-                    let clear = self.cl("OpClearVector", &[Value::Var(buf_var)]);
-                    let append = self.cl(
-                        "OpAppendVector",
+                    // Aliasing-safe deliver: `local` may ALIAS `buf_var` (an
+                    // un-reassigned `return out` where `out` borrows the buffer),
+                    // and the old `clear(buf); append(buf, out)` then emptied it
+                    // (the mid-body-return self-copy).  `OpReplaceVector` no-ops
+                    // when the two name the same backing vector.
+                    let replace = self.cl(
+                        "OpReplaceVector",
                         &[Value::Var(buf_var), Value::Var(local), Value::Int(rec_tp)],
                     );
-                    *op = Value::Insert(vec![
-                        clear,
-                        append,
-                        Value::Return(Box::new(Value::Var(buf_var))),
-                    ]);
+                    *op =
+                        Value::Insert(vec![replace, Value::Return(Box::new(Value::Var(buf_var)))]);
                 } else if self.fresh_owned_vector_deps(inner.unspan()).is_some() {
                     // c5/#448 residual sibling — a mid-body `return <fresh literal>`
                     // in an NRVO-promoted vector fn must ALSO deliver into __retbuf,
@@ -4965,6 +4998,33 @@ impl Parser {
             {
                 let elm = (**elm).clone();
                 self.deliver_mid_vector_returns(&elm, body, buf_var);
+                // #457 — deliver the IMPLICIT tail too. `deliver_mid_vector_returns`
+                // rewrites `Return(Var(cv))` sites, but a body ending in an implicit
+                // `cv` (no `return` keyword) leaves a bare `Var(cv)` tail it does not
+                // touch. When `cv` was reassigned to a call-ADOPT in an arm
+                // (`cv = recurse(.., __ref_N)`), `cv` holds a store distinct from
+                // `buf_var`; returning it as-is was the #457 adopt (the callee then
+                // freed the buffer it returned, fixed previously by a per-site
+                // free thicket). Deliver `cv` into `buf_var` via the aliasing-safe
+                // `OpReplaceVector` (a NO-OP when `cv` still aliases the buffer, so a
+                // single-arm / non-reassigned tail is untouched — this is why it no
+                // longer self-copies), so the fn ALWAYS returns its buffer and the
+                // dep is accurate: no adopt, no per-site free derivation.
+                let tail_cv = body.last().and_then(Self::tail_var);
+                if let Some(cv) = tail_cv
+                    && cv != buf_var
+                    && matches!(self.vars.tp(cv), Type::Vector(_, _))
+                    && Self::body_reassigns_var_to_call(body, cv)
+                {
+                    let rec_tp = self.append_elem_tp(&elm);
+                    let replace = self.cl(
+                        "OpReplaceVector",
+                        &[Value::Var(buf_var), Value::Var(cv), Value::Int(rec_tp)],
+                    );
+                    if let Some(last) = body.last_mut() {
+                        *last = Value::Insert(vec![replace, Value::Var(buf_var)]);
+                    }
+                }
                 // Clear the buffer ON ENTRY: a caller's loop re-passes the
                 // same fn-scoped buffer every iteration, and the NRVO
                 // literal build (unlike the copy/injection sites) appends
