@@ -715,6 +715,14 @@ impl Parser {
         if self.context == u32::MAX {
             return false;
         }
+        // @PLN86 §7.2 (F7) — now the function's def_nr exists, key each parsed parameter
+        // `…#default` lock by `(this fn, param index)`.  First pass only (definitions
+        // resolve there); the call-site gate reads `param_locks` on the second pass.
+        if self.first_pass {
+            for (idx, token) in std::mem::take(&mut self.pending_param_locks) {
+                self.param_locks.insert((self.context, idx as u32), token);
+            }
+        }
         // @PLN86 step 1.2 — record the sandbox profile for a host-designated
         // function so the admission walk (and the nesting guard, 0.1) know this
         // def is restricted.  Designation is host-controlled (`fn:<name>` here;
@@ -1259,6 +1267,9 @@ impl Parser {
     }
 
     pub(crate) fn parse_arguments(&mut self, fn_name: &str, arguments: &mut Vec<Argument>) -> bool {
+        // @PLN86 §7.2 (F7) — collect this list's `…#default` parameter locks fresh; the
+        // caller (`parse_function`) records them once the function's def_nr exists.
+        self.pending_param_locks.clear();
         loop {
             if self.lexer.peek_token(")") {
                 break;
@@ -1351,6 +1362,14 @@ impl Parser {
             };
             for (name, _, _) in &injected {
                 self.vars.remove_name(name);
+            }
+            // @PLN86 §7.2 (F7) — an optional `group#default` lock after the parameter
+            // (its default): `count: int = 1 spawn.count#default`.  Consumed on BOTH
+            // passes (else the second pass chokes on the token); the index is the slot
+            // this parameter is about to occupy (`arguments.len()`).  `try_cap_link` is
+            // non-destructive, so a `,`/`)` after the default is never mis-consumed.
+            if let Some(token) = self.try_cap_link() {
+                self.pending_param_locks.push((arguments.len(), token));
             }
             if !self.first_pass
                 && typedef.is_unknown()

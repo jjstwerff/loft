@@ -68,39 +68,47 @@ impl SandboxProfile {
     }
 }
 
-/// @PLN86 P6.1 — the three access rights a `group#right` capability link selects.
+/// @PLN86 P6.1 — the access rights a `group#right` capability link selects.
 /// `read` observes (a field read / index read / variant match), `update` mutates an
 /// existing slot in place (`e.health = 0`), `append` introduces something new (grows
-/// a structure, or constructs a host enum variant).  The rights are independent, so
+/// a structure, or constructs a host enum variant).  These three are independent, so
 /// an append-only member (grow a log, never alter it) is expressible — `update` does
 /// not imply `append`.
+///
+/// `default` (§7.2, F7) is the odd one out: it tags a function PARAMETER, not a value,
+/// and is the inverse polarity — allow-by-default.  A modder may always call a function
+/// (subject to its call gate) and pass any untagged argument, but a parameter the host
+/// pinned with `…#default` is forced to its default unless the modder ALSO holds the
+/// lock.  So it gates an *argument override*, not a read/write of host state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Right {
     Read,
     Update,
     Append,
+    Default,
 }
 
 impl Right {
-    /// Parse the suffix of a `group#right` token; `None` if `s` is not one of the
-    /// three rights.
+    /// Parse the suffix of a `group#right` token; `None` if `s` is not a known right.
     #[must_use]
     pub fn parse(s: &str) -> Option<Right> {
         match s {
             "read" => Some(Right::Read),
             "update" => Some(Right::Update),
             "append" => Some(Right::Append),
+            "default" => Some(Right::Default),
             _ => None,
         }
     }
 
-    /// The token suffix for this right (`"read"` / `"update"` / `"append"`).
+    /// The token suffix for this right (`"read"` / `"update"` / `"append"` / `"default"`).
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Right::Read => "read",
             Right::Update => "update",
             Right::Append => "append",
+            Right::Default => "default",
         }
     }
 }
@@ -1478,6 +1486,60 @@ pub fn describe_field_append_violation(data: &Data, v: &FieldAppendViolation) ->
         "{}: sandboxed `{from}` appends to host field `{}`, which needs capability `{}` — \
          not granted.\n  fix: add `{}` to `allow`, or grow only fields the profile permits.",
         v.position, v.field, v.token, v.token
+    )
+}
+
+/// @PLN86 §7.2 (F7) — a sandboxed call site OVERRODE a parameter the host pinned with a
+/// `…#default` lock, but the active profile does not grant the lock.  An argument equal
+/// to the parameter's default is NOT an override (the default is what the lock pins to),
+/// so only a value that DIFFERS reaches here — and then the modder needs the lock.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParamLockViolation {
+    /// The sandboxed def whose body holds the overriding call.
+    pub def: u32,
+    /// The lock token written on the parameter (e.g. `"spawn.count#default"`).
+    pub token: String,
+    pub position: Position,
+}
+
+/// @PLN86 §7.2 (F7) — the parameter-lock admission: every recorded sandboxed override of
+/// a `…#default`-locked parameter whose lock token the overriding def's profile does not
+/// grant.  `overrides` is keyed by the calling def → each `(lock token, position)` of an
+/// argument that differed from the locked parameter's default.
+#[must_use]
+pub fn param_lock_violations(
+    config: &SandboxConfig,
+    sandboxed: &HashMap<u32, String>,
+    overrides: &HashMap<u32, Vec<(String, Position)>>,
+) -> Vec<ParamLockViolation> {
+    let mut out = Vec::new();
+    for (&def, calls) in overrides {
+        if !sandboxed.contains_key(&def) {
+            continue;
+        }
+        let profile = config.profiles.get(&sandboxed[&def]);
+        for (token, position) in calls {
+            if !profile.is_some_and(|p| p.allows(token)) {
+                out.push(ParamLockViolation {
+                    def,
+                    token: token.clone(),
+                    position: position.clone(),
+                });
+            }
+        }
+    }
+    out.sort_by(|a, b| a.def.cmp(&b.def).then_with(|| a.token.cmp(&b.token)));
+    out
+}
+
+/// @PLN86 §7.2 (F7) — render a parameter-lock violation as an actionable error.
+#[must_use]
+pub fn describe_param_lock_violation(data: &Data, v: &ParamLockViolation) -> String {
+    let from = display_name(data, v.def);
+    format!(
+        "{}: sandboxed `{from}` overrides a parameter the host pinned with `{}` — not \
+         granted.\n  fix: add `{}` to `allow`, or omit the argument so it keeps its default.",
+        v.position, v.token, v.token
     )
 }
 

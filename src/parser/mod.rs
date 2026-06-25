@@ -159,6 +159,23 @@ pub struct Parser {
     /// just logged for a write LHS).  Set per field access in a sandboxed def; consumed
     /// at the write site.
     pub(crate) last_field_target: Option<(u32, String, usize)>,
+    /// @PLN86 §7.2 (F7) — parameter `…#default` locks, keyed by `(fn def_nr, param
+    /// index)` → the lock token written after the parameter's default (`count: int = 1
+    /// spawn.count#default`).  At a sandboxed call site, an argument that OVERRIDES a
+    /// locked parameter (differs from its default) is gated on the token.  Parser-side
+    /// (off the IR), recorded first-pass; sandboxed programs always parse fresh.
+    pub(crate) param_locks: HashMap<(u32, u32), String>,
+    /// @PLN86 §7.2 (F7) — sandboxed OVERRIDES of a `…#default`-locked parameter, keyed by
+    /// the calling def → each `(lock token, position)` of an argument that differed from
+    /// the locked parameter's default.  Recorded second-pass at the call site (where the
+    /// callee + its argument values resolve); admission rejects an override whose lock
+    /// token the profile does not grant.
+    pub(crate) sandbox_param_overrides: HashMap<u32, Vec<(String, crate::lexer::Position)>>,
+    /// @PLN86 §7.2 (F7) — transient: the `(param index, lock token)` pairs parsed while
+    /// reading a function's parameter list, ferried to `parse_function` to be recorded in
+    /// `param_locks` once the function's def_nr is known (parameters parse BEFORE the def
+    /// is created).  Cleared at the start of each parameter list; consumed per function.
+    pub(crate) pending_param_locks: Vec<(usize, String)>,
     /// @PLN87 — transient one-shot: set while parsing a `&<lvalue>` binding (the prefix
     /// `&` in `b = &a`, or the `&` in a `b: &T = a` type annotation), consumed by
     /// `parse_assign_op` to lower a SCALAR reference to `OpCreateStack`. Cleared per
@@ -556,6 +573,9 @@ impl Parser {
             sandbox_field_updates: HashMap::new(),
             sandbox_field_appends: HashMap::new(),
             last_field_target: None,
+            param_locks: HashMap::new(),
+            sandbox_param_overrides: HashMap::new(),
+            pending_param_locks: Vec::new(),
             amp_pending: false,
             in_sandbox: false,
             parse_depth: 0,
@@ -782,11 +802,19 @@ impl Parser {
         )
         .into_iter()
         .map(|v| crate::sandbox::describe_field_append_violation(&self.data, &v));
+        let param_locks = crate::sandbox::param_lock_violations(
+            &self.sandbox,
+            &self.def_sandbox,
+            &self.sandbox_param_overrides,
+        )
+        .into_iter()
+        .map(|v| crate::sandbox::describe_param_lock_violation(&self.data, &v));
         caps.chain(totality)
             .chain(raw_writes)
             .chain(field_reads)
             .chain(field_updates)
             .chain(field_appends)
+            .chain(param_locks)
             .collect()
     }
 
@@ -900,6 +928,9 @@ impl Parser {
         self.sandbox_field_updates.clear();
         self.sandbox_field_appends.clear();
         self.last_field_target = None;
+        self.param_locks.clear();
+        self.sandbox_param_overrides.clear();
+        self.pending_param_locks.clear();
         self.amp_pending = false;
         self.data.reset();
         // @PLN22 Phase 2 — the main program parses under its own source
@@ -1309,6 +1340,9 @@ impl Parser {
         self.sandbox_field_updates.clear();
         self.sandbox_field_appends.clear();
         self.last_field_target = None;
+        self.param_locks.clear();
+        self.sandbox_param_overrides.clear();
+        self.pending_param_locks.clear();
         self.parse_file();
         self.resolve_deferred_unknowns();
         let lvl = self.lexer.diagnostics().level();
@@ -4853,10 +4887,47 @@ impl Parser {
         if actual.is_empty() && !types.is_empty() {
             return Type::Null;
         }
+        // @PLN86 §7.2 (F7) — gate an OVERRIDE of a `…#default`-locked parameter BEFORE
+        // defaults fill the gaps: at this point a parameter slot is non-`Null` exactly
+        // when the caller supplied it explicitly, so a defaulted parameter is invisible.
+        if self.in_sandbox && !self.first_pass {
+            self.record_param_lock_overrides(d_nr, &actual);
+        }
         self.add_defaults(d_nr, &mut actual, &mut all_types);
         let tp = self.call_dependencies(d_nr, &all_types);
         *code = Value::Call(d_nr, actual);
         tp
+    }
+
+    /// @PLN86 §7.2 (F7) — record, for a sandboxed call to `d_nr`, each argument that
+    /// OVERRIDES a `…#default`-locked parameter.  A parameter is overridden when its slot
+    /// was supplied explicitly (`actual[i]` present and non-`Null` — defaults have not
+    /// filled the gaps yet at the call site) AND the value DIFFERS from the parameter's
+    /// declared default; an argument equal to the default is exactly what the lock pins
+    /// to, so it is free.  Admission (`param_lock_violations`) then rejects an override
+    /// whose lock token the calling profile does not grant.
+    fn record_param_lock_overrides(&mut self, d_nr: u32, actual: &[Value]) {
+        if self.param_locks.is_empty() {
+            return;
+        }
+        for i in 0..self.data.attributes(d_nr) {
+            let Some(token) = self.param_locks.get(&(d_nr, i as u32)) else {
+                continue;
+            };
+            let token = token.clone();
+            let Some(arg) = actual.get(i) else { continue };
+            if matches!(arg.unspan(), Value::Null) {
+                continue; // not supplied → keeps its default, free
+            }
+            if arg.unspan() == self.data.def(d_nr).attributes()[i].value.unspan() {
+                continue; // explicitly the default → not an override
+            }
+            let pos = self.lexer.peek_pos().clone();
+            self.sandbox_param_overrides
+                .entry(self.context)
+                .or_default()
+                .push((token, pos));
+        }
     }
 
     /// Convert and validate each positional argument for a call.
@@ -9510,6 +9581,59 @@ mod plan86_admission_tests {
         assert!(
             p2.sandbox_admission_errors().is_empty(),
             "granted bag#append must admit the grow: {:?}",
+            p2.sandbox_admission_errors()
+        );
+    }
+
+    /// @PLN86 §7.2 (F7) — a parameter the host pinned with `…#default` is forced to its
+    /// default unless the modder holds the lock: omitting the argument (`spawn("g")`) is
+    /// free, but OVERRIDING it (`spawn("g", 5)`) needs `spawn.count#default` granted.
+    #[test]
+    fn param_default_lock_gates_override() {
+        // `world#append` is the call gate (needed to call spawn at all); `count` is then
+        // pinned to its default `1` by `spawn.count#default`.
+        let src = "capability world\n\
+                   capability spawn.count\n\
+                   fn spawn(kind: text, count: integer = 1 spawn.count#default) \
+                       -> integer world#append;\n#native\n\
+                   fn bare() -> integer { spawn(\"goblin\") }\n\
+                   fn override_count() -> integer { spawn(\"goblin\", 5) }\n";
+        // call-gate granted, lock NOT granted: the bare call admits, the override is rejected.
+        let p = parse_admit_libs(
+            &["fn:bare", "fn:override_count"],
+            &["code"],
+            &["world#append"],
+            src,
+        );
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        let errs = p.sandbox_admission_errors();
+        assert!(
+            errs.iter().any(|e| e.contains("spawn.count#default")),
+            "overriding a pinned parameter must be rejected: {errs:?}"
+        );
+        // the bare call (uses the default) must NOT be flagged — only the override is.
+        let bare = p.data.def_nr("n_bare");
+        assert!(
+            !p.sandbox_param_overrides.contains_key(&bare),
+            "a defaulted parameter is not an override: {:?}",
+            p.sandbox_param_overrides.get(&bare)
+        );
+        // lock granted: the override admits clean.
+        let p2 = parse_admit_libs(
+            &["fn:bare", "fn:override_count"],
+            &["code"],
+            &["world#append", "spawn.count#default"],
+            src,
+        );
+        assert!(
+            !p2.sandbox_admission_errors()
+                .iter()
+                .any(|e| e.contains("spawn.count#default")),
+            "granted spawn.count#default must admit the override: {:?}",
             p2.sandbox_admission_errors()
         );
     }

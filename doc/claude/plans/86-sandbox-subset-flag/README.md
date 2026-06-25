@@ -218,9 +218,9 @@ not pushed from here.
   struct field, linked via `group#right` to declared `capability` groups; so append-only
   (grow a log, never alter it) is expressible and a `#read`-marked field is private. Pure
   compile-time (parse-site recording + `field_{read,update,append}_violations`), generalising
-  the coarse 2.4 below. Remaining model surface: **6.9** parameter `#default` locks + **6.8**
-  group-existence validation + IR persistence. *(Construction stays unrestricted — position 1
-  — so there is no enum-variant gate.)*
+  the coarse 2.4 below. **Parameter `#default` locks (6.9/F7) now LANDED too** (`param_lock_violations`),
+  so the host-authored model surface is complete. Remaining: **6.8** group-existence validation +
+  IR persistence. *(Construction stays unrestricted — position 1 — so there is no enum-variant gate.)*
 - **Data envelope (P7, §8) — 🟡 DESIGNED.** Turns the §4 complexity *degree* into a hard
   load-time limit: prove `coeff · max_input_n^degree ≤ data_budget` or reject. Closes OOM —
   the one fault `catch_unwind` cannot see — at admission. Pure compile-time, no @PLN85 dep.
@@ -843,10 +843,16 @@ proven-total script.
   way `Definition.cap` already does, so a warm-cached host type keeps its field links; tighten
   each rejection's wording. *Verify:* `typo#read` → load error naming the unknown capability; a
   tagged member survives the store round-trip.
-- **6.9 Parameter `#default` locks (§7.2).** Parse a `…#default` link on a function parameter;
-  at a sandboxed call site, gate an argument that DIFFERS from the parameter's default on the
-  lock token — an untagged parameter is free (set is inherited from the call). *Verify:*
-  `spawn(count: 5)` rejected unless `spawn.count#default` is granted; bare `spawn()` admits.
+- **6.9 Parameter `#default` locks (§7.2).** ✅ **DONE.** `parse_arguments` parses an optional
+  `group#default` link after a parameter's default (`count: int = 1 spawn.count#default`),
+  ferried through the transient `pending_param_locks` into `param_locks[(fn, idx)]` once the
+  fn def_nr exists; `Right::Default` extends the right enum so `try_cap_link` accepts the token.
+  At a sandboxed call site, `record_param_lock_overrides` (in `call_nr`, BEFORE `add_defaults` —
+  a slot is non-`Null` only when supplied explicitly) records an argument that DIFFERS from the
+  parameter's default; `param_lock_violations` rejects one whose lock the profile does not grant.
+  An untagged parameter, or an argument equal to the default, is free. *Verify:*
+  `param_default_lock_gates_override` — `spawn("g", 5)` rejected unless `spawn.count#default` is
+  granted; bare `spawn("g")` admits (and is not even recorded as an override).
 
 ### P7 — Data envelope (compile-time footprint bound) [compile-time core, §8]
 - **7.1 Coefficient.** Extend `intrinsic_space` (`sandbox.rs:1088`) / `space_degree` (`:1145`)
@@ -881,8 +887,8 @@ proven-total script.
 **Dependency order:** 1.1→1.2 (1.2 unblocks 0.1) → 1.3/1.4 → 2.x → 3.x → 4.x → 5.1.
 Within P6 the migration ran sequentially: **6.1 → 6.2 → 6.3** landed the unified function
 model first (it touches shipped code), then **6.4 → 6.7** added the struct-field rights
-(read/update/append). **6.1–6.7 are DONE**; **6.8** (group-existence + IR persistence) and
-**6.9** (parameter `#default` locks) complete the surface and are the remaining P6 work.
+(read/update/append), and **6.9** added the parameter `#default` locks. **6.1–6.7 + 6.9 are
+DONE**; **6.8** (group-existence + IR persistence) is the remaining P6 work.
 **P6 and P7 are independent compile-time arcs** — both reject at load, neither
 needs the @PLN85 memory-safe interpreter (that was only the dropped runtime layer), so they
 slot alongside the P0–P3 core; **P8 rides on both**. **P0–P3 + P6 + P7 are the compile-time
@@ -932,10 +938,11 @@ releasable tree.
   operator, so `bag#read bag#append` (no update) is genuinely append-only.
 
 **Complete the authored model surface (the remaining model work)**
-- **F7 — parameter `#default` locks** (§7.2). A non-default argument to a parameter tagged
-  `…#default` is gated at the call site; an untagged parameter is free (set is inherited from
-  the call). *Gate:* `spawn(count: 5)` Rejected unless `spawn.count#default` is granted; bare
-  `spawn()` (the default) admits. *(The one model surface still unbuilt.)*
+- **F7 — parameter `#default` locks** (§7.2). ✅ **DONE.** A non-default argument to a parameter
+  tagged `…#default` is gated at the call site; an untagged parameter is free (set is inherited
+  from the call). *Gate:* `param_default_lock_gates_override` — `spawn("g", 5)` Rejected unless
+  `spawn.count#default` is granted; bare `spawn("g")` (the default) admits. Parsed in
+  `parse_arguments`, recorded at `call_nr` before defaults fill, gated by `param_lock_violations`.
 - **F8 — group-existence validation + IR persistence + diagnostics** (P6.8). Wire
   `cap_is_declared` into admission so a link to an **undeclared** `capability` is a clean load
   error; round-trip the `member_access` carrier through the store codec so a warm-cached host
@@ -956,10 +963,10 @@ releasable tree.
 - **F13 — RED/GREEN corpus** (P8.2). *Gate:* `cargo test --test sandbox` green on the real
   type defs + the migrated `02_files.loft`, both backends where applicable.
 
-**Status:** F1–F6 are **landed** (the call gate + all three field rights). The next runnable
-increment is **F7 (parameter locks)** — it completes the host-authored surface — then **F8**
-closes the model (validation + persistence). F9–F13 (data envelope + tooling) follow and are
-independent of the access work. F9 is additive; F4–F6 / F7 / F10–F11 each flip one RED probe.
+**Status:** F1–F7 are **landed** (the call gate + all three field rights + parameter locks) —
+the host-authored model surface is complete. The next runnable increment is **F8** (group-existence
+validation + IR persistence), which closes the model. F9–F13 (data envelope + tooling) follow and
+are independent of the access work. F9 is additive; F4–F7 / F10–F11 each flip one RED probe.
 
 ## Open questions
 
