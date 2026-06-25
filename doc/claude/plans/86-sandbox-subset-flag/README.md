@@ -213,13 +213,14 @@ store-lifetime stream), so the next sandbox work is **driven by the crawler dogf
 not pushed from here.
 
 ### A. Safety — completes the v1 admitted-script guarantee
-- **Per-member access — read / update / append (P6, §7) — 🟡 DESIGNED.** Refines the
-  all-or-nothing no-raw-write arc into independent **read / update / append** rights per
-  struct field + enum variant, linked via the `group#right` notation to explicitly-declared,
-  namespaced `capability` groups (resolved + validated at compile); so append-only
-  (grow a log, never alter it; never forge a privileged variant) is expressible. Pure
-  compile-time, lands on existing IR chokepoints (`OpGetField` / raw-write /
-  `OpAppend*`+`Value::Enum`). Supersedes the coarse 2.4 below.
+- **Per-member access — read / update / append (P6 6.4–6.7, §7) — ✅ LANDED (F3–F6).** The
+  all-or-nothing no-raw-write arc is now independent **read / update / append** rights per
+  struct field, linked via `group#right` to declared `capability` groups; so append-only
+  (grow a log, never alter it) is expressible and a `#read`-marked field is private. Pure
+  compile-time (parse-site recording + `field_{read,update,append}_violations`), generalising
+  the coarse 2.4 below. Remaining model surface: **6.9** parameter `#default` locks + **6.8**
+  group-existence validation + IR persistence. *(Construction stays unrestricted — position 1
+  — so there is no enum-variant gate.)*
 - **Data envelope (P7, §8) — 🟡 DESIGNED.** Turns the §4 complexity *degree* into a hard
   load-time limit: prove `coeff · max_input_n^degree ≤ data_budget` or reject. Closes OOM —
   the one fault `catch_unwind` cannot see — at admission. Pure compile-time, no @PLN85 dep.
@@ -813,34 +814,39 @@ proven-total script.
   **namespace-prefix match on the group, EXACT on the right**. `parse_sandbox_config` (`:127`)
   reads `allow`. *Verify:* `allow=["fs#read"]` admits `mtime`, rejects `write` (`fs#update`);
   `game#read` covers `game.stats#read`; round-trip.
-- **6.4 Member link parse + carrier.** Parse the bare `group#right` token on struct fields
-  (`parse_field`, `definitions.rs:2306`) and enum variants (`parse_enum_values`, `:199` /
-  `parse_enum_field`, `objects.rs:2637`); resolve via 6.1. Store `member_access:
-  HashMap<(type_def, member_idx), MemberAccess>` (`MemberAccess` = per-right
-  `Option<cap_def_nr>`) off `Data` (off the IR like `def_sandbox`; persist in 6.8). *Verify:*
-  `health: int stats#read stats#update` records two links; an unlinked member is empty;
-  `loft introspect` shows them.
-- **6.5 Read admission.** In the reachable-set walk (`reachable_set`, `sandbox.rs:202` /
-  `admit_capabilities`, `:377`), an `OpGetField` / variant-match on a HOST member whose `read`
-  link is NOT granted (`group#read` ∉ `allow`, prefix-matched) is rejected; an unlinked member
-  = allow. *Verify:* reading a `stats#read`-linked field with no `stats#read` grant is rejected
-  naming the field; unlinked reads admit.
-- **6.6 Update admission (generalises 2.4).** A recorded raw write (`raw_write_is_host_owned`,
-  `expressions.rs:2420`; the `sandbox_raw_writes` map, `parser/mod.rs:114`) to host data is
-  rejected unless the member's `update` link is granted; script-owned data stays mutable (the
-  2.4 ownership rule). *Verify:* `e.health = 0` admits under `allow=["stats#update"]`;
-  `e.id = 0` rejected; the SAME script with only `stats#append` granted is still rejected
-  (update ≠ append).
-- **6.7 Append admission.** A growth op (`OpAppend*`/`OpPreAlloc*` — the ops `intrinsic_space`
-  already scans, `sandbox.rs:1115`) or a host enum construction (`Value::Enum`, `data.rs:481`)
-  is rejected unless the member/variant's `append` link is granted; script-owned
-  growth/construction free. *Verify:* `log += e` admits under `allow=["log#append"]`;
-  constructing `Command::Shutdown` (no append link) is rejected naming the variant.
-- **6.8 Diagnostics + IR persistence.** Every rejection (function or member; read/update/append)
-  renders through `sandbox_admission_errors` (`parser/mod.rs`) naming the symbol/member + right
-  + the `group#right` it needs + the profile's grants + the fix (extend `describe_violation`,
-  `sandbox.rs:525`). Round-trip `member_access` through the store codec the way `Definition.cap`
-  already does. *Verify:* error text per class; a tagged member survives the store round-trip.
+- **6.4 Member link parse + carrier.** ✅ **DONE.** `parse_field_links` (`definitions.rs`)
+  parses the bare `group#right` link after a struct field's type in BOTH field-type branches
+  (named/scalar + vector/generic). `try_cap_link` is **non-destructive** (saves the cursor +
+  reverts on a miss), so a `not null` / default after a field type is never mis-consumed.
+  Recorded in `member_access: HashMap<(struct def_nr, field name), Vec<group#right>>` off `Data`
+  (first-pass; persist in 6.8). *Verify:* `field_capability_links_are_recorded`. *(Keyed by
+  field NAME, not member index; enum-variant links are out of scope — see 6.7.)*
+- **6.5 Read admission.** ✅ **DONE.** A sandboxed read of a `#read`-linked host field is
+  recorded at the field-access site (`fields.rs::field`, second pass) into `sandbox_field_reads`;
+  `field_read_violations` (`sandbox.rs`) rejects a read whose token the profile does not grant.
+  Read is default-allow, so only a `#read`-linked field ever gates. *Verify:*
+  `field_read_gates_private_field_admits_unlinked`.
+- **6.6 Update admission (generalises 2.4).** ✅ **DONE.** A one-level field write `e.f = v`
+  whose field has an `#update` link is diverted at the 2.4 site (`expressions.rs`) into
+  `sandbox_field_updates` — the written field resolved via a `last_field_target` stash VERIFIED
+  against the base var's struct; admitted iff granted, else `field_update_violations`. A field
+  with NO update link stays the coarse 2.4 reject (read-only by default). *Verify:*
+  `field_update_gates_writable_fields_unlinked_read_only`.
+- **6.7 Append admission.** ✅ **DONE.** A `+=` to an `#append`-linked field is routed BY THE
+  OPERATOR to `sandbox_field_appends`; admitted iff granted, else `field_append_violations`.
+  `=` stays the `#update` path (6.6), so `bag#read bag#append` (no update) is append-only.
+  *Verify:* `field_append_gates_collection_grow`. *(Construction is **unrestricted** — the
+  position-1 decision — so there is NO enum-variant construct gate; the design dropped it.)*
+- **6.8 Group-existence + IR persistence + diagnostic polish.** Wire `cap_is_declared` into
+  admission so a link to an **undeclared** `capability` is a clean LOAD error (today an unknown
+  group simply never matches a grant); round-trip `member_access` through the store codec the
+  way `Definition.cap` already does, so a warm-cached host type keeps its field links; tighten
+  each rejection's wording. *Verify:* `typo#read` → load error naming the unknown capability; a
+  tagged member survives the store round-trip.
+- **6.9 Parameter `#default` locks (§7.2).** Parse a `…#default` link on a function parameter;
+  at a sandboxed call site, gate an argument that DIFFERS from the parameter's default on the
+  lock token — an untagged parameter is free (set is inherited from the call). *Verify:*
+  `spawn(count: 5)` rejected unless `spawn.count#default` is granted; bare `spawn()` admits.
 
 ### P7 — Data envelope (compile-time footprint bound) [compile-time core, §8]
 - **7.1 Coefficient.** Extend `intrinsic_space` (`sandbox.rs:1088`) / `space_degree` (`:1145`)
@@ -873,9 +879,11 @@ proven-total script.
   the real type defs + the migrated `02_files.loft`, both backends where applicable.
 
 **Dependency order:** 1.1→1.2 (1.2 unblocks 0.1) → 1.3/1.4 → 2.x → 3.x → 4.x → 5.1.
-Within P6 the migration is sequential: **6.1 → 6.2 → 6.3** lands the unified function model
-first (it touches shipped code — do it before the new member surface), then **6.4 → 6.8** add
-members on top. **P6 and P7 are independent compile-time arcs** — both reject at load, neither
+Within P6 the migration ran sequentially: **6.1 → 6.2 → 6.3** landed the unified function
+model first (it touches shipped code), then **6.4 → 6.7** added the struct-field rights
+(read/update/append). **6.1–6.7 are DONE**; **6.8** (group-existence + IR persistence) and
+**6.9** (parameter `#default` locks) complete the surface and are the remaining P6 work.
+**P6 and P7 are independent compile-time arcs** — both reject at load, neither
 needs the @PLN85 memory-safe interpreter (that was only the dropped runtime layer), so they
 slot alongside the P0–P3 core; **P8 rides on both**. **P0–P3 + P6 + P7 are the compile-time
 core** (reject at load, game-safe); P4 has no abort path to make fail-safe; P5 proves *fast +
@@ -906,38 +914,52 @@ releasable tree.
   plan86 admission suite (29) + `sandbox_cli` (5) + the cap IR round-trip green. This is the
   consistency cut — after F2 there is one capability model and `#cap` is gone.
 
-**Layer per-member access (additive until each admission rung flips its probe)**
-- **F3 — member link parse + `member_access` carrier** (P6.4). *Gate:* `loft introspect` shows
-  `stats#read`/`stats#update` on the field; an unlinked member is empty. *(Recorded, not yet
-  enforced — additive.)*
-- **F4 — read admission** (P6.5). *Gate:* a `tests/sandbox.rs` probe — reading a `priv#read`
-  field with no grant → Rejected (RED→GREEN); an unlinked read admits.
-- **F5 — update admission** (P6.6). *Gate:* writing a granted field admits; a read-only field
-  → Rejected; the SAME script with only `…#append` granted is still Rejected (update ≠ append).
-- **F6 — append admission** (P6.7). *Gate:* `log += e` under `log#append` admits; constructing
-  `Command::Shutdown` (no append link) → Rejected naming the variant.
-- **F7 — diagnostics + IR persistence** (P6.8). *Gate:* each rejection names
-  member + right + the `group#right` it needs + fix; a tagged member survives the store
-  round-trip.
+**Per-member access — read / update / append (all DONE)**
+- **F3 — member link parse + `member_access` carrier** (P6.4). ✅ **DONE.** *Gate:*
+  `field_capability_links_are_recorded` — `loot: Item bag#read bag#append` records both rights;
+  an unlinked field is empty. Parsed in BOTH field-type branches; `try_cap_link` made
+  non-destructive (a `not null` / default after a type is never mis-consumed).
+- **F4 — read admission** (P6.5). ✅ **DONE.** *Gate:*
+  `field_read_gates_private_field_admits_unlinked` — a sandboxed read of a `#read`-linked field
+  with no grant → Rejected; an unlinked read admits (read default-allow). Recorded at the
+  field-access site (`fields.rs::field`).
+- **F5 — update admission** (P6.6). ✅ **DONE.** *Gate:*
+  `field_update_gates_writable_fields_unlinked_read_only` — `e.f = v` admits iff `#update` is
+  granted; an unlinked field stays read-only (coarse 2.4). Generalises 2.4 per-field via a
+  `last_field_target` stash verified against the base var's struct.
+- **F6 — append admission** (P6.7). ✅ **DONE.** *Gate:* `field_append_gates_collection_grow` —
+  `e.f += [x]` admits iff `#append` is granted; `=` stays the `#update` path. Routed by the
+  operator, so `bag#read bag#append` (no update) is genuinely append-only.
+
+**Complete the authored model surface (the remaining model work)**
+- **F7 — parameter `#default` locks** (§7.2). A non-default argument to a parameter tagged
+  `…#default` is gated at the call site; an untagged parameter is free (set is inherited from
+  the call). *Gate:* `spawn(count: 5)` Rejected unless `spawn.count#default` is granted; bare
+  `spawn()` (the default) admits. *(The one model surface still unbuilt.)*
+- **F8 — group-existence validation + IR persistence + diagnostics** (P6.8). Wire
+  `cap_is_declared` into admission so a link to an **undeclared** `capability` is a clean load
+  error; round-trip the `member_access` carrier through the store codec so a warm-cached host
+  type keeps its field links; polish each rejection's wording. *Gate:* `typo#read` → load error
+  naming the unknown capability; a tagged member survives the store round-trip.
 
 **Data envelope**
-- **F8 — coefficient on `space_degree`** (P7.1). *Gate:* a per-entity build loop reports
+- **F9 — coefficient on `space_degree`** (P7.1). *Gate:* a per-entity build loop reports
   `(degree 1, coeff sizeof(struct))`. *(Reported — additive.)*
-- **F9 — static-sizing gate** (P7.2). *Gate:* an uncapped string-build loop → Rejected; a
+- **F10 — static-sizing gate** (P7.2). *Gate:* an uncapped string-build loop → Rejected; a
   `max_string_len`-capped one admits.
-- **F10 — budget reject** (P7.3 + 7.4). *Gate:* a script whose `coeff · max_input_n^degree`
+- **F11 — budget reject** (P7.3 + 7.4). *Gate:* a script whose `coeff · max_input_n^degree`
   exceeds `data_budget` → Rejected naming the figure; an under-budget one admits.
 
 **Prove it**
-- **F11 — `sandbox-check` verdict** (P8.1). *Gate:* `loft sandbox-check <profile> <file>`
+- **F12 — `sandbox-check` verdict** (P8.1). *Gate:* `loft sandbox-check <profile> <file>`
   prints Admitted / Rejected and **never executes** (a side-effecting body proves no run).
-- **F12 — RED/GREEN corpus** (P8.2). *Gate:* `cargo test --test sandbox` green on the real
+- **F13 — RED/GREEN corpus** (P8.2). *Gate:* `cargo test --test sandbox` green on the real
   type defs + the migrated `02_files.loft`, both backends where applicable.
 
-**Reading the flow:** F1 / F3 / F8 are *additive* (build state, change no verdict — safe to
-land anytime); **F2 is the single atomic migration** of shipped code; F4–F6 and F9–F10 each
-flip exactly one RED probe to GREEN. Land them top to bottom and the tree is releasable at
-every step.
+**Status:** F1–F6 are **landed** (the call gate + all three field rights). The next runnable
+increment is **F7 (parameter locks)** — it completes the host-authored surface — then **F8**
+closes the model (validation + persistence). F9–F13 (data envelope + tooling) follow and are
+independent of the access work. F9 is additive; F4–F6 / F7 / F10–F11 each flip one RED probe.
 
 ## Open questions
 

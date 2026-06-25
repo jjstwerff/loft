@@ -113,18 +113,20 @@ edge the rules can't express, i.e. a signal the *rule* is wrong (README), not a 
 OPEN: **3**. The call gate (`Cap-Call`) is enforced today; the rest is designed-not-built,
 so the deviations are the migration.
 
-### D-cap-1 — field rights + the parameter lock are not enforced (only the coarse 2.4 ban)
-- **Violates:** Cap-Read, Cap-Write, Cap-Set
-- **Where:** `src/sandbox.rs` — admission enforces `Cap-Call` (`admit_capabilities`) and the
-  all-or-nothing no-raw-write ban (2.4, `raw_write_violations`), but not per-field
-  read/update/append nor the `…#default` parameter lock. The links don't yet parse onto
-  fields/parameters (the [@PLN86 §7](../plans/86-sandbox-subset-flag/README.md) F4–F7 work).
-- **Effect:** a sandboxed script is gated at the function and the blunt "no host write at
-  all" level, not at the fine `group#right` granularity the rules specify — so append-only,
-  per-field privacy, and locked arguments are unavailable.
-- **Status:** OPEN — @PLN86 F4–F7 (member-access admission) + the parameter-lock check.
-- **Removal:** parse the field/parameter links into a `member_access` carrier; check each
-  `OpGetField` / raw-write / `OpAppend*` and each non-default argument against `P`.
+### D-cap-1 — the parameter `#default` lock is not enforced (Cap-Read/Write are now done)
+- **Violates:** Cap-Set
+- **Where:** `src/parser/` + `src/sandbox.rs`. **Cap-Read / Cap-Write are now enforced** —
+  field `#read` (`field_read_violations`), `#update` (`field_update_violations`), and `#append`
+  (`field_append_violations`) gate per-field, parsed by `parse_field_links` into `member_access`
+  ([@PLN86 §7](../plans/86-sandbox-subset-flag/README.md) F3–F6, landed). What remains is
+  **Cap-Set**: the `…#default` parameter lock does not yet parse or gate (the §7 6.9 / F7 work),
+  so an argument override is never restricted.
+- **Effect:** a host can mark a function callable but cannot yet pin a specific argument to its
+  default — `spawn(count: 5)` is not gated even when the host wants `spawn.count#default`.
+- **Status:** OPEN — @PLN86 6.9 (the parameter-lock check). Group-existence validation +
+  `member_access` IR persistence (6.8) ride alongside it.
+- **Removal:** parse a `…#default` link onto a parameter; at a sandboxed call site, check a
+  non-default argument's lock token against `P`.
 
 ### D-cap-2 — a closure may carry authority across the boundary
 - **Violates:** Cap-Call (completeness — an indirect call must resolve to its callee's gate)
