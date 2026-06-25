@@ -160,3 +160,65 @@ fn sandboxed_raw_write_is_rejected() {
         "stderr: {err}"
     );
 }
+
+/// @PLN86 F12 — `loft sandbox-check <file>` reports the admission verdict and NEVER
+/// executes: a clean program prints `Admitted` (exit 0) without running its
+/// side-effecting `main`; a violating one prints `Rejected` + diagnostics (exit 1).
+#[test]
+fn sandbox_check_reports_verdict_without_executing() {
+    // Run `sandbox-check <file>` in a temp dir with a loft.toml; capture BOTH streams
+    // (Admitted → stdout, Rejected → stderr) and the exit status.
+    fn check(name: &str, prog: &str, toml: &str) -> (bool, String) {
+        let dir = std::env::temp_dir().join(format!("loft_sccli_{}_{name}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        std::fs::write(dir.join("prog.loft"), prog).unwrap();
+        std::fs::write(dir.join("loft.toml"), toml).unwrap();
+        let out = Command::new(loft_bin())
+            .arg("sandbox-check")
+            .arg("--timeout")
+            .arg("60")
+            .arg(dir.join("prog.loft"))
+            .current_dir(workspace_root())
+            .output()
+            .expect("failed to invoke loft binary");
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut both = String::from_utf8_lossy(&out.stdout).into_owned();
+        both.push_str(&String::from_utf8_lossy(&out.stderr));
+        (out.status.success(), both)
+    }
+
+    // The side-effecting main must NOT run in either verdict.
+    let sentinel = "EXECUTED-SHOULD-NOT-PRINT";
+
+    // clean program → Admitted (exit 0), complexity reported, main NOT run.
+    let clean = format!(
+        "fn scripted() -> integer {{ s = 0; for i in 0..10 {{ s += i }} s }}\n\
+         fn main() {{ print(\"{sentinel}\") }}\n"
+    );
+    let (ok, out) = check("clean", &clean, POLICY);
+    assert!(ok, "a clean program must be Admitted (exit 0): {out}");
+    assert!(out.contains("Admitted"), "must print Admitted: {out}");
+    assert!(
+        !out.contains(sentinel),
+        "sandbox-check must NOT execute the program: {out}"
+    );
+
+    // violating program → Rejected (exit 1), diagnostics, main NOT run.
+    let bad = format!(
+        "fn scripted() -> integer {{ mtime(\"x\") }}\n\
+         fn main() {{ print(\"{sentinel}\") }}\n"
+    );
+    let (ok2, out2) = check("bad", &bad, POLICY);
+    assert!(
+        !ok2,
+        "a violating program must be Rejected (exit 1): {out2}"
+    );
+    assert!(
+        out2.contains("Rejected") && out2.contains("fs#read") && out2.contains("fix:"),
+        "must print Rejected + diagnostics: {out2}"
+    );
+    assert!(
+        !out2.contains(sentinel),
+        "a rejected sandbox-check must NOT execute the program: {out2}"
+    );
+}

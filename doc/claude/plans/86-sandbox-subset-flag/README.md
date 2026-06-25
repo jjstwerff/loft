@@ -901,12 +901,14 @@ proven-total script.
   *Verify:* an over-budget script is rejected naming the figure; an under-budget one admits.
 
 ### P8 — `sandbox-check` verdict + the access corpus [tooling]
-- **8.1 No-run verdict.** A `loft sandbox-check <profile> <file>` subcommand (`src/main.rs`) +
-  a `sandbox_check(src, profile) -> Verdict` entry (`src/lib.rs`) that run the admission walk
-  (`Parser::sandbox_admission_errors`) ONLY — print Admitted / Rejected+diagnostics, never
-  execute. *Verify:* a side-effecting body proves no run on Admitted; a violation prints the
-  diagnostics. This is the "will this be allowed?" loop the modder + a mod-registry submit-gate
-  iterate against.
+- **8.1 No-run verdict.** ✅ **DONE (F12).** `loft sandbox-check <file>` (`src/main.rs`) loads the
+  `loft.toml` `[sandbox]` policy, parses, runs the admission walk (`Parser::sandbox_admission_errors`)
+  ONLY, and prints `Admitted` (+ the complexity report) or `Rejected` + diagnostics — then EXITS
+  before any codegen/run path. *Verify:* `sandbox_check_reports_verdict_without_executing`
+  (`tests/sandbox_cli.rs`) — a side-effecting `main` never prints on either verdict (proves no run);
+  a violation prints `Rejected` + the named capability + fix. The programmatic surface (for a
+  mod-registry submit-gate) is the already-public `Parser::sandbox_admission_errors()`; a dedicated
+  `src/lib.rs` wrapper is deferred (it needs embedder stdlib-path plumbing for marginal value).
 - **8.2 RED/GREEN access corpus.** Extend `tests/sandbox.rs` (CLI-level: `tests/sandbox_cli.rs`)
   with the battery: RED — write a read-only field, append to an update-only structure, construct
   an un-forgeable variant, read a private field, call a `fs#update` fn under a `fs#read`-only
@@ -1000,18 +1002,19 @@ releasable tree.
   `complexity_report` with the absolute figure is deferred — the violation message carries it.)
 
 **Prove it**
-- **F12 — `sandbox-check` verdict** (P8.1). *Gate:* `loft sandbox-check <profile> <file>`
-  prints Admitted / Rejected and **never executes** (a side-effecting body proves no run).
+- **F12 — `sandbox-check` verdict** (P8.1). ✅ **DONE.** `loft sandbox-check <file>` prints
+  Admitted / Rejected + diagnostics and **never executes** (a side-effecting `main` proves no
+  run). *Gate:* `sandbox_check_reports_verdict_without_executing`.
 - **F13 — RED/GREEN corpus** (P8.2). *Gate:* `cargo test --test sandbox` green on the real
   type defs + the migrated `02_files.loft`, both backends where applicable.
 
-**Status:** F1–F7, **F8a**, and the whole **data envelope F9–F11** are **landed** — the
-host-authored model surface + its load-time validation + the compile-time footprint bound
-(`coeff · max_input_n^degree ≤ data_budget`, plus the unbounded-string gate) are complete and
-CLI-enforced. OOM is now a load-time concern. Remaining: **F8b** (registry + member/param IR
-persistence — a forward-looking, fails-safe widening for cached libraries) and **F12–F13**
-(the `sandbox-check` verdict subcommand + the RED/GREEN corpus). All independent of the access
-work.
+**Status:** F1–F7, **F8a**, the whole **data envelope F9–F11**, and **F12** (the
+`sandbox-check` verdict) are **landed** — the host-authored model surface + its load-time
+validation + the compile-time footprint bound (`coeff · max_input_n^degree ≤ data_budget`, plus
+the unbounded-string gate) + the no-run "will this be allowed?" CLI are complete and CLI-enforced.
+OOM is now a load-time concern. Remaining: **F8b** (registry + member/param IR persistence — a
+forward-looking, fails-safe widening for cached libraries) and **F13** (the RED/GREEN corpus).
+Both independent of the access work.
 
 ## Open questions
 

@@ -160,6 +160,10 @@ fn print_help() {
         "                                (inspect/edit/step the live frame; :help at the prompt)"
     );
     println!("  check <file>                  same as --check <file>");
+    println!(
+        "  sandbox-check <file>          report the @PLN86 sandbox admission verdict and STOP"
+    );
+    println!("                                (Admitted / Rejected + diagnostics; never executes)");
     println!("  test [target]                 run package tests (requires loft.toml in cwd)");
     println!("                                test         — run all tests in tests/");
     println!("                                test draw    — run tests/draw.loft");
@@ -3590,6 +3594,10 @@ fn main() {
     // into `introspect_opts` and are flushed into a real
     // `introspect::Options` after argv parsing.
     let mut introspect_mode = false;
+    // @PLN86 F12 — `loft sandbox-check <file>`: run the admission walk ONLY and print
+    // Admitted / Rejected + diagnostics, NEVER execute.  The modder's "will this be
+    // allowed?" loop; the policy comes from `loft.toml` like a normal run.
+    let mut sandbox_check_mode = false;
     let mut introspect_sections: Vec<loft::introspect::Section> = Vec::new();
     let mut introspect_bytecode_out: Option<String> = None;
     let mut introspect_rust_out: Option<String> = None;
@@ -3694,6 +3702,11 @@ fn main() {
         } else if a == "--dump" {
             native_mode = false;
             dump_only = true;
+        } else if a == "sandbox-check" {
+            // @PLN86 F12 — admission-only verdict; never executes (forced interpret
+            // path, no codegen).  The program file follows as a positional arg.
+            sandbox_check_mode = true;
+            native_mode = false;
         } else if a == "--introspect" || a == "introspect" {
             // @PLN12 phase 01: introspection mode (flag or bare subcommand).
             // Default = emit bytecode + Rust + slots + types to stdout.
@@ -4972,6 +4985,29 @@ fn main() {
         if p.diagnostics.level() >= Level::Error {
             std::process::exit(1);
         }
+    }
+    // @PLN86 F12 — `sandbox-check`: report the admission verdict and STOP, never
+    // executing.  The whole point is a no-run "will this be allowed?" surface, so this
+    // returns before any codegen/run path below.
+    if sandbox_check_mode {
+        let errors = p.sandbox_admission_errors();
+        if errors.is_empty() {
+            if p.has_sandboxed_defs() {
+                println!("Admitted: no admission violations.");
+                println!("{}", p.sandbox_complexity_report());
+            } else {
+                println!(
+                    "Admitted: no sandboxed code is designated (check the [sandbox] \
+                     policy in loft.toml)."
+                );
+            }
+            std::process::exit(0);
+        }
+        eprintln!("Rejected: {} admission violation(s):", errors.len());
+        for e in &errors {
+            eprintln!("{e}");
+        }
+        std::process::exit(1);
     }
     // @PLN86 2.5 — admission: a program that designates sandboxed code is admitted
     // only if it is proven safe at LOAD (capabilities + totality + no-raw-write).
