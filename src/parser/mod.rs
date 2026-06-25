@@ -121,6 +121,13 @@ pub struct Parser {
     /// fn-ref is indistinguishable from an integer literal).  The admission unions
     /// these into the checked set so an indirect call can't escape (L4).
     pub(crate) sandbox_fn_refs: HashMap<u32, std::collections::HashSet<u32>>,
+    /// @PLN86 P6.1 — the dotted names of every `capability` group declared in the
+    /// program (stdlib + host code).  A `group#right` capability link resolves
+    /// against this set; an undeclared/mistyped group is a load error.  The dotted
+    /// name IS the namespace (matched hierarchically on the grant side, like the
+    /// `fs.read` groups).  Parser-side (off the IR), idempotent across passes; IR
+    /// persistence for a warm-cached stdlib is P6.8.
+    pub(crate) declared_capabilities: HashSet<String>,
     /// @PLN87 — transient one-shot: set while parsing a `&<lvalue>` binding (the prefix
     /// `&` in `b = &a`, or the `&` in a `b: &T = a` type annotation), consumed by
     /// `parse_assign_op` to lower a SCALAR reference to `OpCreateStack`. Cleared per
@@ -512,6 +519,7 @@ impl Parser {
             sandbox_unbounded_loops: HashMap::new(),
             sandbox_raw_writes: HashMap::new(),
             sandbox_fn_refs: HashMap::new(),
+            declared_capabilities: HashSet::new(),
             amp_pending: false,
             in_sandbox: false,
             parse_depth: 0,
@@ -671,6 +679,15 @@ impl Parser {
         crate::sandbox::raw_write_violations(&self.def_sandbox, &self.sandbox_raw_writes)
     }
 
+    /// @PLN86 P6.1 — true iff `group` (the part before `#` in a `group#right`
+    /// capability link) is a declared `capability`.  A link to an undeclared group
+    /// is a load error; admission resolves links against this set once every
+    /// declaration is registered (parsing complete), so forward references are fine.
+    #[must_use]
+    pub fn cap_is_declared(&self, group: &str) -> bool {
+        self.declared_capabilities.contains(group)
+    }
+
     /// @PLN86 step 2.5 — ALL sandbox admission errors (capability + totality +
     /// no-raw-write), each rendered as a correct, specific, actionable message
     /// (position + the rule + the fix).  Empty when the script is admitted.  This
@@ -795,6 +812,7 @@ impl Parser {
         self.sandbox_unbounded_loops.clear();
         self.sandbox_raw_writes.clear();
         self.sandbox_fn_refs.clear();
+        self.declared_capabilities.clear();
         self.amp_pending = false;
         self.data.reset();
         // @PLN22 Phase 2 — the main program parses under its own source
@@ -1198,6 +1216,7 @@ impl Parser {
         self.data.reset();
         self.lambda_counter = 0;
         self.fn_lambdas.clear();
+        self.declared_capabilities.clear();
         self.parse_file();
         self.resolve_deferred_unknowns();
         let lvl = self.lexer.diagnostics().level();
@@ -1382,7 +1401,16 @@ impl Parser {
             .collect();
         matches!(
             word.as_str(),
-            "struct" | "enum" | "fn" | "type" | "pub" | "use" | "interface" | "typedef" | "const"
+            "struct"
+                | "enum"
+                | "fn"
+                | "type"
+                | "pub"
+                | "use"
+                | "interface"
+                | "typedef"
+                | "const"
+                | "capability"
         )
     }
 
@@ -5443,7 +5471,8 @@ impl Parser {
             let is_pub = self.lexer.has_token("pub");
             let before = self.data.definitions();
             if self.lexer.diagnostics().level() == Level::Fatal
-                || (!self.parse_enum()
+                || (!self.parse_capability()
+                    && !self.parse_enum()
                     && !self.parse_typedef()
                     && !self.parse_function()
                     && !self.parse_struct()
@@ -8071,6 +8100,33 @@ mod plan86_nesting_guard_tests {
         std::fs::write(&path, src).unwrap();
         p.parse(path.to_str().unwrap(), false);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn capability_declarations_register_and_resolve() {
+        // @PLN86 P6.1 — a `capability` decl registers its dotted name; a
+        // `group#right` link resolves against it, and an undeclared group does not
+        // (the load error a mistyped link becomes).  The dotted name is the namespace.
+        let mut p = Parser::new();
+        parse_source(
+            &mut p,
+            "capability fs\ncapability cmd.move\nfn main() { }\n",
+        );
+        assert!(p.cap_is_declared("fs"), "fs should be declared");
+        assert!(
+            p.cap_is_declared("cmd.move"),
+            "the dotted name cmd.move should be declared"
+        );
+        assert!(
+            !p.cap_is_declared("typo"),
+            "an undeclared group must not resolve"
+        );
+        // the `#right` suffix parses to exactly the three rights, nothing else.
+        use crate::sandbox::Right;
+        assert_eq!(Right::parse("read"), Some(Right::Read));
+        assert_eq!(Right::parse("update"), Some(Right::Update));
+        assert_eq!(Right::parse("append"), Some(Right::Append));
+        assert_eq!(Right::parse("delete"), None);
     }
 
     /// @PLN86 0.1 — hostile deep nesting inside a sandboxed def is a clean

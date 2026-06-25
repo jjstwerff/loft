@@ -1952,6 +1952,43 @@ impl Parser {
     }
 
     // <struct> = 'struct' <identifier> [ ':' <type> ] '{' <param-id> ':' <field> { ',' <param-id> ':' <field> } '}'
+    /// @PLN86 P6.1 — a `capability <dotted.name>` top-level declaration.  Registers
+    /// a namespaced capability group that functions + data members link to via the
+    /// `group#right` notation (P6.2 / P6.4); the dotted name IS the namespace (matched
+    /// hierarchically on the grant side, like the existing `fs.read` groups).  A
+    /// capability has no code or type — it is a pure annotation target — so this only
+    /// records the name; a `group#right` link to an UNDECLARED group is a load error,
+    /// validated at admission once every declaration is registered.  `capability` is a
+    /// contextual keyword (not reserved), so it never shadows an identifier.
+    pub(crate) fn parse_capability(&mut self) -> bool {
+        if !self.lexer.has_keyword("capability") {
+            return false;
+        }
+        let Some(mut name) = self.lexer.has_identifier() else {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "Expect a capability name after `capability`"
+            );
+            return true;
+        };
+        // A dotted name (`cmd.move`) is the namespace, like the `fs.read` groups.
+        while self.lexer.has_token(".") {
+            let Some(seg) = self.lexer.has_identifier() else {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Expect an identifier after `.` in a capability name"
+                );
+                return true;
+            };
+            name.push('.');
+            name.push_str(&seg);
+        }
+        self.declared_capabilities.insert(name);
+        true
+    }
+
     pub(crate) fn parse_struct(&mut self) -> bool {
         if !self.lexer.has_token("struct") {
             return false;

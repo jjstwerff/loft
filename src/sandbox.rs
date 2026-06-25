@@ -58,6 +58,43 @@ impl SandboxProfile {
     }
 }
 
+/// @PLN86 P6.1 — the three access rights a `group#right` capability link selects.
+/// `read` observes (a field read / index read / variant match), `update` mutates an
+/// existing slot in place (`e.health = 0`), `append` introduces something new (grows
+/// a structure, or constructs a host enum variant).  The rights are independent, so
+/// an append-only member (grow a log, never alter it) is expressible — `update` does
+/// not imply `append`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Right {
+    Read,
+    Update,
+    Append,
+}
+
+impl Right {
+    /// Parse the suffix of a `group#right` token; `None` if `s` is not one of the
+    /// three rights.
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Right> {
+        match s {
+            "read" => Some(Right::Read),
+            "update" => Some(Right::Update),
+            "append" => Some(Right::Append),
+            _ => None,
+        }
+    }
+
+    /// The token suffix for this right (`"read"` / `"update"` / `"append"`).
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Right::Read => "read",
+            Right::Update => "update",
+            Right::Append => "append",
+        }
+    }
+}
+
 /// Dotted-segment prefix match: `allow` matches `group` iff `group == allow` or
 /// `group` continues `allow` at a `.` boundary.  So `"game"` ⊇ `"game.read"` but
 /// not `"gameover"`; `"game.read"` is exact.
