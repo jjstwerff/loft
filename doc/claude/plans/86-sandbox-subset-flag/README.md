@@ -229,9 +229,12 @@ not pushed from here.
   the coarse 2.4 below. **Parameter `#default` locks (6.9/F7) now LANDED too** (`param_lock_violations`),
   so the host-authored model surface is complete. Remaining: **6.8** group-existence validation +
   IR persistence. *(Construction stays unrestricted — position 1 — so there is no enum-variant gate.)*
-- **Data envelope (P7, §8) — 🟡 DESIGNED.** Turns the §4 complexity *degree* into a hard
-  load-time limit: prove `coeff · max_input_n^degree ≤ data_budget` or reject. Closes OOM —
-  the one fault `catch_unwind` cannot see — at admission. Pure compile-time, no @PLN85 dep.
+- **Data envelope (P7, §8) — ✅ LANDED (F9–F11).** Turns the §4 complexity *degree* into a hard
+  load-time limit: `data_envelope_violations` proves `coeff · max_input_n^degree ≤ data_budget`
+  (the footprint from `sandbox_space_footprint`) or rejects, plus the F10 unbounded-string gate
+  (`max_string_len`). Closes OOM — the one fault `catch_unwind` cannot see — at admission. Pure
+  compile-time, no @PLN85 dep, CLI-enforced. Known v1 under-count: separately-allocated record
+  bodies + cross-procedure string growth (documented gaps).
 - **`sandbox-check` verdict + RED/GREEN access corpus (P8) — 🟡 DESIGNED.** A no-run
   "will this be allowed?" surface (CLI + lib) and the committed compile-only test battery.
 - **2.4 No-raw-write admission — ✅ DONE.** (Was the one open v1 safety step.) A sandboxed
@@ -980,13 +983,21 @@ releasable tree.
   *safe* today (coarse read-only reject), so an expressiveness gap for cached libraries, not a hole.
   *Gate:* a tagged member survives the store round-trip; a cached-library `#update` field admits.
 
-**Data envelope**
-- **F9 — coefficient on `space_degree`** (P7.1). *Gate:* a per-entity build loop reports
-  `(degree 1, coeff sizeof(struct))`. *(Reported — additive.)*
-- **F10 — static-sizing gate** (P7.2). *Gate:* an uncapped string-build loop → Rejected; a
-  `max_string_len`-capped one admits.
-- **F11 — budget reject** (P7.3 + 7.4). *Gate:* a script whose `coeff · max_input_n^degree`
-  exceeds `data_budget` → Rejected naming the figure; an under-budget one admits.
+**Data envelope (all DONE)**
+- **F9 — coefficient on `space_degree`** (P7.1). ✅ **DONE.** `sandbox_space_footprint`
+  returns `(degree, coeff)`; coeff = Σ per-element backing-slot size over accumulating sites.
+  *Gate:* `space_footprint_reports_degree_and_record_coefficient` — `vector<integer>` build →
+  `(1, 8)`, `vector<Mob>` build → `(1, 12)` (DbRef slot). Known v1 under-count: separately-
+  allocated record bodies (the same gap §8 documents).
+- **F10 — static-sizing gate** (P7.2). ✅ **DONE.** `sandbox_grows_unbounded_string` flags a
+  dynamic string grown in a loop (invisible to `coeff`); under an active envelope an uncapped
+  one is `DataViolation::UnboundedAlloc`. *Gate:* `unbounded_string_build_rejected_unless_capped`
+  — `s += "x"` rejected; `max_string_len` cap admits.
+- **F11 — budget reject** (P7.3 + 7.4). ✅ **DONE.** Fields on `SandboxProfile` +
+  `parse_sandbox_config` (P7.3); `data_envelope_violations` proves `coeff · max_input_n^degree ≤
+  data_budget` else rejects (P7.4), folded into `sandbox_admission_errors`. *Gate:*
+  `parses_data_envelope_fields` + `data_budget_rejects_over_envelope_and_admits_under`. (Extending
+  `complexity_report` with the absolute figure is deferred — the violation message carries it.)
 
 **Prove it**
 - **F12 — `sandbox-check` verdict** (P8.1). *Gate:* `loft sandbox-check <profile> <file>`
@@ -994,11 +1005,13 @@ releasable tree.
 - **F13 — RED/GREEN corpus** (P8.2). *Gate:* `cargo test --test sandbox` green on the real
   type defs + the migrated `02_files.loft`, both backends where applicable.
 
-**Status:** F1–F7 + **F8a** are **landed** (the call gate + all three field rights + parameter
-locks + undeclared-link validation) — the host-authored model surface + its load-time validation
-are complete and CLI-enforced. Remaining: **F8b** (registry + member/param IR persistence — a
-forward-looking, fails-safe widening for cached libraries) and F9–F13 (data envelope + tooling),
-both independent of the access work. F9 is additive; F4–F7 / F10–F11 each flip one RED probe.
+**Status:** F1–F7, **F8a**, and the whole **data envelope F9–F11** are **landed** — the
+host-authored model surface + its load-time validation + the compile-time footprint bound
+(`coeff · max_input_n^degree ≤ data_budget`, plus the unbounded-string gate) are complete and
+CLI-enforced. OOM is now a load-time concern. Remaining: **F8b** (registry + member/param IR
+persistence — a forward-looking, fails-safe widening for cached libraries) and **F12–F13**
+(the `sandbox-check` verdict subcommand + the RED/GREEN corpus). All independent of the access
+work.
 
 ## Open questions
 
