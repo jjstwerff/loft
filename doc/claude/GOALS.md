@@ -204,9 +204,15 @@ language feature — its own plan when picked up, out of scope here.
 The six goals below are **foundation goals**: loft must be sound (A), shipped and
 clear (B), capable (C), portable (D), predictable (E), and friction-free (F). A
 crack in the foundation becomes a crack in everything above it. The same bar holds
-for the libraries on top — and they are the real end. They **do not meet the bar
-yet**. The shift now underway: loft is finishing its job, and the work is moving up
-to bring the libraries to the same standard.
+for the libraries on top — and they are the real end. The shift up is now underway:
+the libraries are **extracted, versioned, and installable** through the
+[`loft-lang/registry`](https://github.com/loft-lang/registry) (Goal B's structure
+floor — see [The two floors](#the-two-floors--why-dogfood-is-paused-and-when-it-resumes)),
+so the foundation has largely finished its job. What the libraries do **not** all
+meet yet is the next bar up — **per-library quality**: each one, on every target,
+good enough to be fun ([LIBRARY_CHECKLIST.md](LIBRARY_CHECKLIST.md): cross-target
+parity + the registry `verified` mark). That quality bar — not extraction — is the
+work moving up.
 
 ---
 
@@ -643,13 +649,29 @@ not "all of A" or "all of B":
   the Miri/ASan set covers the surfaces the games use (eval stack, store
   claim/copy/resize, vectors, fn-refs, text). *Not* "every Goal-A coverage leg
   shipped."
+  **Reading (2026-06): near.** CI's `guard`/`asan` jobs are green on `main`; the
+  store-lifetime class that kept surfacing is being retired the right way
+  ([OWNERSHIP_MODEL.md](OWNERSHIP_MODEL.md), @PLN85). The open part is *confirming*
+  the Miri/ASan set covers the game surfaces, not new failures.
 - **Structure floor — cleared when:** the libraries a game depends on (graphics,
   game_client / game_protocol, server) are extracted, installable, and
   version-stable through the registry. *Not* "the whole package toolchain
   polished."
+  **Reading (2026-06): MET.** The [`loft-lang/registry`](https://github.com/loft-lang/registry)
+  carries 21 signed (`index.json` + Ed25519 `.sig`), per-version-`sha256` packages
+  with dependency resolution (`server` → `web >=0.1`) — `graphics`, `game_protocol`,
+  `server`, the hex-world stack, `web`, `crypto` (the zero-trust lib), assets, docs
+  — each on its own semver track (`web 0.2.2`, `crypto 0.3.4`). `loft install <name>`
+  resolves against it end to end. Extraction + installability + version-stability —
+  the named bar — read true.
 
-When both bars read true, the pause ends and the dogfood loop sets the agenda
-again. Until then, A and B are the work *because* C and D asked for them.
+The structure floor's bar reads MET and the soundness floor is near, so **the pause
+is at its end, not its middle**. When both read true the dogfood loop sets the
+agenda again — and the work above it is no longer *extracting* libraries but raising
+each to the **per-library quality bar** (cross-target parity + `verified`,
+[LIBRARY_CHECKLIST.md](LIBRARY_CHECKLIST.md)) — a Goal-C-and-up concern, not a
+foundation floor. Until the soundness floor confirms, A stays the foundation work
+*because* C and D asked for it.
 
 ---
 
