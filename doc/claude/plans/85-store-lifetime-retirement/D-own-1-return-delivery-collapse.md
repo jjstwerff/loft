@@ -176,8 +176,39 @@ representative case is settled.)
       explicit+implicit-tail mix · match arms — and the PARALLEL `__retbuf` arms
       (struct/Reference, text, struct-enum), all clean both backends (the gap was
       vector-specific). The vector-return-delivery leak class is closed.
-- [ ] **Optional further fold:** the upper `vec_match_candidate` (#416, cluster-II
-      match/if branch-tail NRVO) stays in place — branch tails are `t = Never`
-      pre-convert and a genuinely distinct mechanism (not a #448-style bolt-on), so
-      folding it carries worse risk/reward than the #448 cell did. Revisit only if a
-      future delivery-shape change makes the branch-tail path share the cell.
+- [x] **Dispatch unification — #416 + #448 through the ONE vector dispatch**
+      (commit `0fcf66fa`, byte-identical). The branch-tail materialise (#416,
+      `vec_match_candidate`) and the buffer-taken materialise (#448 cell) both called
+      `materialize_vector_arms_into` + set `returned` inline; both now route through
+      `dispatch_vector_delivery` as `Delivery::Materialize`. The dispatch returns
+      whether it delivered (the #416 caller gates `vec_arm_handled`, the #448 caller
+      its fallback rename). Every vector-delivery mechanism now flows through ONE
+      dispatch (Rename / CopyBorrow / ForwardCopy / Materialize / AsIs). Corpus
+      byte-identical both backends; matrix + hunt + suite + oracle green.
+
+## Close-out — the collapse paid off
+
+The vector return-buffer sub-thicket is collapsed to the plan's invariant:
+**the deps fact decides (`fresh_owned_vector_deps` / `ls`), ONE dispatch emits.**
+
+- **Structure.** The lower implicit-tail arm is `classify_vector_delivery` (pure
+  `&self`) → `dispatch_vector_delivery`; the explicit-return tail (#437/c5) and the
+  upper branch tail (#416) + buffer-taken (#448) all produce a `Delivery` routed to
+  that one dispatch. Classification stays at three structurally-distinct entry
+  points (implicit tail / explicit `return` / pre-convert branch) — that split is
+  inherent (different `t`, different convert-ordering), not re-derivation — but the
+  *mechanism* is no longer re-handled per branch.
+- **Shrink.** `tail_terminal_fresh_local_vec` deleted (subsumed by
+  `fresh_owned_vector_deps`); the #448 second upper materialise block removed; the
+  per-branch inline mechanism handling replaced by one enum + one dispatch.
+- **Bugs found + fixed (the real payoff).** Two pre-existing `main` leaks in the
+  `#448` class the collapse surfaced and closed: **c5** (explicit `return [literal]`
+  never delivered → orphaned when chained) and **h4** (mid-body literal not
+  delivered when buffer-bound via a tail call-chain). Both guarded by oracle prog
+  `09`.
+- **Swept dry.** ~41 probes / 5 rounds across all axes incl. the parallel
+  struct/text/enum `__retbuf` arms — the vector-return-delivery leak class is closed.
+
+The Reference / Text return sub-thickets are a *future* D-own-1 slice (their arms
+are clean today — round 5 — so any collapse there is organisational, not
+bug-driven). This slice (the vector sub-thicket) is DONE.
