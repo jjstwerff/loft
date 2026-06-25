@@ -141,6 +141,18 @@ pub struct Parser {
     /// token the profile does not grant.  Reads are default-allow, so only a field
     /// the host marked with a `#read` link is ever recorded here.
     pub(crate) sandbox_field_reads: HashMap<u32, Vec<(String, crate::lexer::Position)>>,
+    /// @PLN86 P6.4 (F5) — sandboxed UPDATES (raw writes) of a host field that carries an
+    /// `#update` capability link, keyed by the writing def → each `(struct def_nr, field,
+    /// position)`.  A field write WITH an update link is diverted here (admission admits
+    /// iff the token is granted); a write to a field with NO update link stays the coarse
+    /// 2.4 `sandbox_raw_writes` reject (read-only by default).
+    pub(crate) sandbox_field_updates: HashMap<u32, Vec<(u32, String, crate::lexer::Position)>>,
+    /// @PLN86 P6.4 (F5) — transient one-shot: the `(struct def_nr, field, #read-links
+    /// recorded)` of the field access `field()` last built, so the assignment site can
+    /// resolve which field a raw write targets (and un-record the spurious F4 read it
+    /// just logged for a write LHS).  Set per field access in a sandboxed def; consumed
+    /// at the write site.
+    pub(crate) last_field_target: Option<(u32, String, usize)>,
     /// @PLN87 — transient one-shot: set while parsing a `&<lvalue>` binding (the prefix
     /// `&` in `b = &a`, or the `&` in a `b: &T = a` type annotation), consumed by
     /// `parse_assign_op` to lower a SCALAR reference to `OpCreateStack`. Cleared per
@@ -535,6 +547,8 @@ impl Parser {
             declared_capabilities: HashSet::new(),
             member_access: HashMap::new(),
             sandbox_field_reads: HashMap::new(),
+            sandbox_field_updates: HashMap::new(),
+            last_field_target: None,
             amp_pending: false,
             in_sandbox: false,
             parse_depth: 0,
@@ -745,9 +759,18 @@ impl Parser {
         )
         .into_iter()
         .map(|v| crate::sandbox::describe_field_read_violation(&self.data, &v));
+        let field_updates = crate::sandbox::field_update_violations(
+            &self.sandbox,
+            &self.def_sandbox,
+            &self.member_access,
+            &self.sandbox_field_updates,
+        )
+        .into_iter()
+        .map(|v| crate::sandbox::describe_field_update_violation(&self.data, &v));
         caps.chain(totality)
             .chain(raw_writes)
             .chain(field_reads)
+            .chain(field_updates)
             .collect()
     }
 
@@ -858,6 +881,8 @@ impl Parser {
         self.declared_capabilities.clear();
         self.member_access.clear();
         self.sandbox_field_reads.clear();
+        self.sandbox_field_updates.clear();
+        self.last_field_target = None;
         self.amp_pending = false;
         self.data.reset();
         // @PLN22 Phase 2 — the main program parses under its own source
@@ -1264,6 +1289,8 @@ impl Parser {
         self.declared_capabilities.clear();
         self.member_access.clear();
         self.sandbox_field_reads.clear();
+        self.sandbox_field_updates.clear();
+        self.last_field_target = None;
         self.parse_file();
         self.resolve_deferred_unknowns();
         let lvl = self.lexer.diagnostics().level();
@@ -9395,6 +9422,46 @@ mod plan86_admission_tests {
                 .any(|e| e.contains("secret#read")),
             "granted secret#read must admit the read: {:?}",
             p2.sandbox_admission_errors()
+        );
+    }
+
+    /// @PLN86 P6.4 (F5) — a write to an `#update`-linked host field admits iff the
+    /// token is granted; a field with NO update link stays read-only (the coarse 2.4
+    /// reject), generalising the all-or-nothing no-raw-write.
+    #[test]
+    fn field_update_gates_writable_fields_unlinked_read_only() {
+        let src = "capability stats\n\
+                   struct Mob { hp: integer stats#update, id: integer }\n\
+                   fn hurt(m: Mob) -> integer { m.hp = 0; m.hp }\n";
+        // ungranted: writing `hp` (stats#update) is rejected.
+        let p = parse_admit_libs(&["fn:hurt"], &["code"], &[], src);
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        assert!(
+            p.sandbox_admission_errors()
+                .iter()
+                .any(|e| e.contains("stats#update")),
+            "an ungranted field write must be rejected: {:?}",
+            p.sandbox_admission_errors()
+        );
+        // granted: the same write admits clean.
+        let p2 = parse_admit_libs(&["fn:hurt"], &["code"], &["stats#update"], src);
+        assert!(
+            p2.sandbox_admission_errors().is_empty(),
+            "granted stats#update must admit the write: {:?}",
+            p2.sandbox_admission_errors()
+        );
+        // a field with NO update link stays read-only even when a cap is granted.
+        let src2 = "struct Mob { hp: integer }\n\
+                    fn hurt(m: Mob) -> integer { m.hp = 0; m.hp }\n";
+        let p3 = parse_admit_libs(&["fn:hurt"], &["code"], &["stats#update"], src2);
+        assert!(
+            !p3.sandbox_admission_errors().is_empty(),
+            "an unlinked host field must stay read-only: {:?}",
+            p3.sandbox_admission_errors()
         );
     }
 

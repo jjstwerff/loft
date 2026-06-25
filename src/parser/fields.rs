@@ -160,6 +160,7 @@ impl Parser {
                         .collect()
                 })
                 .unwrap_or_default();
+            let read_count = reads.len();
             if !reads.is_empty() {
                 let pos = self.lexer.peek_pos().clone();
                 let entry = self.sandbox_field_reads.entry(self.context).or_default();
@@ -167,6 +168,10 @@ impl Parser {
                     entry.push((t, pos.clone()));
                 }
             }
+            // @PLN86 F5 — remember this field access so a raw write at the assignment
+            // site can resolve which field it targets (and un-record the read just
+            // logged above, since a write LHS is not a read).
+            self.last_field_target = Some((dnr, field.clone(), read_count));
         }
         // Trace point: field/method dispatch entry state.  Captures
         // what type and field name reached `field()`, whether the

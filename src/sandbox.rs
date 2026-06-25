@@ -1361,6 +1361,66 @@ pub fn describe_field_read_violation(data: &Data, v: &FieldReadViolation) -> Str
     )
 }
 
+/// @PLN86 P6.4 (F5) — a sandboxed raw write (`e.f = v`) of a host field whose
+/// `#update` capability the active profile does not grant.  Only a field that
+/// CARRIES an `#update` link reaches here (a field with none stays the coarse 2.4
+/// reject); so this fires exactly when the writable field's token is not granted.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FieldUpdateViolation {
+    pub def: u32,
+    pub field: String,
+    pub token: String,
+    pub position: Position,
+}
+
+/// @PLN86 P6.4 (F5) — the field-update admission: every recorded sandboxed write of
+/// an `#update`-linked host field whose token the writing def's profile does not grant.
+#[must_use]
+pub fn field_update_violations(
+    config: &SandboxConfig,
+    sandboxed: &HashMap<u32, String>,
+    member_access: &HashMap<(u32, String), Vec<String>>,
+    field_updates: &HashMap<u32, Vec<(u32, String, Position)>>,
+) -> Vec<FieldUpdateViolation> {
+    let mut out = Vec::new();
+    for (&def, writes) in field_updates {
+        if !sandboxed.contains_key(&def) {
+            continue;
+        }
+        let profile = config.profiles.get(&sandboxed[&def]);
+        for (struct_def, field, position) in writes {
+            let updates = member_access
+                .get(&(*struct_def, field.clone()))
+                .into_iter()
+                .flatten()
+                .filter(|t| t.ends_with("#update"));
+            for token in updates {
+                if !profile.is_some_and(|p| p.allows(token)) {
+                    out.push(FieldUpdateViolation {
+                        def,
+                        field: field.clone(),
+                        token: token.clone(),
+                        position: position.clone(),
+                    });
+                }
+            }
+        }
+    }
+    out.sort_by(|a, b| a.def.cmp(&b.def).then_with(|| a.field.cmp(&b.field)));
+    out
+}
+
+/// @PLN86 P6.4 (F5) — render a field-update violation as an actionable error.
+#[must_use]
+pub fn describe_field_update_violation(data: &Data, v: &FieldUpdateViolation) -> String {
+    let from = display_name(data, v.def);
+    format!(
+        "{}: sandboxed `{from}` writes host field `{}`, which needs capability `{}` — not \
+         granted.\n  fix: add `{}` to `allow`, or mutate only fields the profile permits.",
+        v.position, v.field, v.token, v.token
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
