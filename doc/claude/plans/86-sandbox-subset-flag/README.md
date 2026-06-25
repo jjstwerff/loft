@@ -837,12 +837,23 @@ proven-total script.
   `=` stays the `#update` path (6.6), so `bag#read bag#append` (no update) is append-only.
   *Verify:* `field_append_gates_collection_grow`. *(Construction is **unrestricted** — the
   position-1 decision — so there is NO enum-variant construct gate; the design dropped it.)*
-- **6.8 Group-existence + IR persistence + diagnostic polish.** Wire `cap_is_declared` into
-  admission so a link to an **undeclared** `capability` is a clean LOAD error (today an unknown
-  group simply never matches a grant); round-trip `member_access` through the store codec the
-  way `Definition.cap` already does, so a warm-cached host type keeps its field links; tighten
-  each rejection's wording. *Verify:* `typo#read` → load error naming the unknown capability; a
-  tagged member survives the store round-trip.
+- **6.8 Group-existence validation — ✅ DONE (F8a).** `sandbox_undeclared_links` scans every
+  capability link in the **main program** — a function call gate (`Definition.cap`), a struct-field
+  link (`member_access`), a parameter `#default` lock (`param_locks`) — and rejects any whose group
+  is not covered by a declared `capability` (`cap_is_declared`, now namespace-prefix-aware), with an
+  actionable "add `capability <g>`" message. Folded into `sandbox_admission_errors` and CLI-enforced.
+  **Scoped to `MAIN_SOURCE`** (the program the author iterates on, always parsed fresh so its
+  declarations are present): the vetted stdlib + installed libraries are trusted and may load from
+  the IR cache where the parser-side registry is not restored, so re-checking them would falsely
+  reject a clean program. *Verify:* `undeclared_capability_link_is_a_load_error` — `helth#update`
+  (typo for declared `health`) → load error naming `helth`; the declared spelling is clean.
+- **6.8b IR persistence (member_access registry + field/param links) — REMAINING.** Round-trip the
+  capability registry + `member_access`/`param_locks` through the store codec so a **warm-cached host
+  type / library** keeps its links (and the undeclared-link scan can widen past `MAIN_SOURCE` to
+  cached libraries). Forward-looking: no stdlib struct carries a field link today, and a sandboxed
+  write to an unrestored library link fails *safe* (the coarse 2.4 read-only reject), so this is an
+  expressiveness gap for cached libraries, not a safety hole. *Verify:* a tagged member survives the
+  store round-trip; a cached-library `#update` field admits under its grant.
 - **6.9 Parameter `#default` locks (§7.2).** ✅ **DONE.** `parse_arguments` parses an optional
   `group#default` link after a parameter's default (`count: int = 1 spawn.count#default`),
   ferried through the transient `pending_param_locks` into `param_locks[(fn, idx)]` once the
@@ -943,11 +954,15 @@ releasable tree.
   from the call). *Gate:* `param_default_lock_gates_override` — `spawn("g", 5)` Rejected unless
   `spawn.count#default` is granted; bare `spawn("g")` (the default) admits. Parsed in
   `parse_arguments`, recorded at `call_nr` before defaults fill, gated by `param_lock_violations`.
-- **F8 — group-existence validation + IR persistence + diagnostics** (P6.8). Wire
-  `cap_is_declared` into admission so a link to an **undeclared** `capability` is a clean load
-  error; round-trip the `member_access` carrier through the store codec so a warm-cached host
-  type keeps its field links; polish each rejection's wording. *Gate:* `typo#read` → load error
-  naming the unknown capability; a tagged member survives the store round-trip.
+- **F8a — group-existence validation** (P6.8). ✅ **DONE.** A link in the main program to an
+  **undeclared** `capability` is a clean load error (`sandbox_undeclared_links`, namespace-aware
+  `cap_is_declared`), folded into `sandbox_admission_errors` + CLI-enforced. *Gate:*
+  `undeclared_capability_link_is_a_load_error` — `helth#update` → load error naming `helth`.
+- **F8b — IR persistence (registry + member/param links)** — REMAINING. Round-trip the capability
+  registry + `member_access`/`param_locks` through the store codec so a warm-cached host type keeps
+  its links (and the F8a scan widens past `MAIN_SOURCE` to cached libraries). Forward-looking: fails
+  *safe* today (coarse read-only reject), so an expressiveness gap for cached libraries, not a hole.
+  *Gate:* a tagged member survives the store round-trip; a cached-library `#update` field admits.
 
 **Data envelope**
 - **F9 — coefficient on `space_degree`** (P7.1). *Gate:* a per-entity build loop reports
@@ -963,10 +978,11 @@ releasable tree.
 - **F13 — RED/GREEN corpus** (P8.2). *Gate:* `cargo test --test sandbox` green on the real
   type defs + the migrated `02_files.loft`, both backends where applicable.
 
-**Status:** F1–F7 are **landed** (the call gate + all three field rights + parameter locks) —
-the host-authored model surface is complete. The next runnable increment is **F8** (group-existence
-validation + IR persistence), which closes the model. F9–F13 (data envelope + tooling) follow and
-are independent of the access work. F9 is additive; F4–F7 / F10–F11 each flip one RED probe.
+**Status:** F1–F7 + **F8a** are **landed** (the call gate + all three field rights + parameter
+locks + undeclared-link validation) — the host-authored model surface + its load-time validation
+are complete and CLI-enforced. Remaining: **F8b** (registry + member/param IR persistence — a
+forward-looking, fails-safe widening for cached libraries) and F9–F13 (data envelope + tooling),
+both independent of the access work. F9 is additive; F4–F7 / F10–F11 each flip one RED probe.
 
 ## Open questions
 

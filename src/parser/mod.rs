@@ -736,12 +736,75 @@ impl Parser {
     }
 
     /// @PLN86 P6.1 — true iff `group` (the part before `#` in a `group#right`
-    /// capability link) is a declared `capability`.  A link to an undeclared group
-    /// is a load error; admission resolves links against this set once every
-    /// declaration is registered (parsing complete), so forward references are fine.
+    /// capability link) is covered by a declared `capability`: either declared
+    /// exactly, or a sub-namespace of one (a `capability game` declaration covers a
+    /// `game.entity#read` link, matching the grant-side namespacing).  A link to an
+    /// uncovered group is a load error; admission resolves links against the declared
+    /// set once every declaration is registered (parsing complete), so forward +
+    /// cross-file references are fine.
     #[must_use]
     pub fn cap_is_declared(&self, group: &str) -> bool {
-        self.declared_capabilities.contains(group)
+        self.declared_capabilities
+            .iter()
+            .any(|d| crate::sandbox::cap_prefix_match(d, group))
+    }
+
+    /// @PLN86 P6.8 (F8) — every capability link in the **main program** whose group is
+    /// NOT covered by a declared `capability` (a typo'd / forgotten declaration).  Scans
+    /// the three link homes: a function call gate (`Definition.cap`), a struct-field link
+    /// (`member_access`), and a parameter `#default` lock (`param_locks`).  An uncovered
+    /// group can never match a grant, so today it denies SILENTLY — this turns it into a
+    /// clean, named load error.  Reported once per distinct group.
+    ///
+    /// Scoped to `MAIN_SOURCE` — the program the author is iterating on (the §6 modder
+    /// feedback loop), which is always parsed fresh so its declarations are present in
+    /// the registry.  The stdlib + installed libraries (other sources) are TRUSTED: their
+    /// links were validated when authored as a main program, and they may be loaded from
+    /// the IR cache (where the parser-side `capability` registry is not restored), so
+    /// re-checking them here would falsely reject a clean program.  Registry IR
+    /// persistence — needed to widen this to cached library links — is a later step.
+    #[must_use]
+    pub fn sandbox_undeclared_links(&self) -> Vec<String> {
+        let mut undeclared: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let mut check = |token: &str| {
+            if let Some((group, _)) = token.split_once('#')
+                && !group.is_empty()
+                && !self.cap_is_declared(group)
+            {
+                undeclared.insert(group.to_string());
+            }
+        };
+        let is_main = |d_nr: u32| {
+            (d_nr as usize) < self.data.definitions.len()
+                && self.data.definitions[d_nr as usize].source == crate::data::MAIN_SOURCE
+        };
+        for d in &self.data.definitions {
+            if !d.cap.is_empty() && d.source == crate::data::MAIN_SOURCE {
+                check(&d.cap);
+            }
+        }
+        for ((struct_nr, _), tokens) in &self.member_access {
+            if is_main(*struct_nr) {
+                for t in tokens {
+                    check(t);
+                }
+            }
+        }
+        for ((fn_nr, _), t) in &self.param_locks {
+            if is_main(*fn_nr) {
+                check(t);
+            }
+        }
+        undeclared
+            .into_iter()
+            .map(|g| {
+                format!(
+                    "undeclared capability `{g}` — a `group#right` link references it but no \
+                     matching `capability` is declared.\n  fix: add `capability {g}` at top \
+                     level, or correct the link."
+                )
+            })
+            .collect()
     }
 
     /// @PLN86 P6.4 — record a `group#right` capability link on a struct field
@@ -809,12 +872,17 @@ impl Parser {
         )
         .into_iter()
         .map(|v| crate::sandbox::describe_param_lock_violation(&self.data, &v));
+        // @PLN86 P6.8 (F8) — an authoring error in the host's OWN links: a `group#right`
+        // referencing a capability that was never declared.  Surfaced alongside the
+        // grant violations so the host fixes its contract before a modder iterates.
+        let undeclared = self.sandbox_undeclared_links();
         caps.chain(totality)
             .chain(raw_writes)
             .chain(field_reads)
             .chain(field_updates)
             .chain(field_appends)
             .chain(param_locks)
+            .chain(undeclared)
             .collect()
     }
 
@@ -9173,7 +9241,7 @@ mod plan86_admission_tests {
         }
         // A forbidden #cap native, declared in-source and NOT in an allowed library,
         // so the fine-grained capability gate applies to it.
-        let secret = "fn secret() -> integer danger#read;\n#native\n";
+        let secret = "capability danger\nfn secret() -> integer danger#read;\n#native\n";
 
         // ===== ESCAPES — admission MUST reject (≥1 error). =====
         let escapes: Vec<(&str, Vec<String>)> = vec![
@@ -9634,6 +9702,41 @@ mod plan86_admission_tests {
                 .iter()
                 .any(|e| e.contains("spawn.count#default")),
             "granted spawn.count#default must admit the override: {:?}",
+            p2.sandbox_admission_errors()
+        );
+    }
+
+    /// @PLN86 P6.8 (F8) — a `group#right` link in the main program whose group was never
+    /// declared as a `capability` is a clean LOAD error (today it would silently deny, the
+    /// group never matching a grant); a correctly-declared link is not flagged.
+    #[test]
+    fn undeclared_capability_link_is_a_load_error() {
+        // a field link to `helth` — a typo for the `health` capability actually declared.
+        let typo = "capability health\n\
+                    struct Mob { hp: integer helth#update }\n\
+                    fn hurt(m: Mob) { m.hp = 0 }\n";
+        let p = parse_admit_libs(&["fn:hurt"], &["code"], &["helth#update"], typo);
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        let errs = p.sandbox_admission_errors();
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("undeclared capability `helth`")),
+            "an undeclared capability group must be a load error: {errs:?}"
+        );
+        // the correctly-spelled link resolves against its declaration — not flagged.
+        let ok = "capability health\n\
+                  struct Mob { hp: integer health#update }\n\
+                  fn hurt(m: Mob) { m.hp = 0 }\n";
+        let p2 = parse_admit_libs(&["fn:hurt"], &["code"], &["health#update"], ok);
+        assert!(
+            !p2.sandbox_admission_errors()
+                .iter()
+                .any(|e| e.contains("undeclared capability")),
+            "a declared link must not be flagged: {:?}",
             p2.sandbox_admission_errors()
         );
     }

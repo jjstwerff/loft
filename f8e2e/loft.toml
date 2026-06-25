@@ -1,0 +1,5 @@
+[sandbox]
+mod = ["fn:modscript"]
+[profile.mod]
+allow_libs = ["code", "files"]
+allow = ["wrld#update"]
