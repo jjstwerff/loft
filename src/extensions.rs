@@ -571,6 +571,15 @@ pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data
         }
 
         if !registry.contains_key(sym) {
+            // #453 — a `[wasm.bridge].routes` `#native` symbol is implemented by
+            // the bridge crate (the `--html` target), not a native cdylib. Its
+            // absence from the cdylib registry is by design, not a missing/stale
+            // build, so it is NOT an unresolved native — reporting it (and telling
+            // the user to "rebuild the cdylib") is wrong. (Run in the interpreter
+            // it is genuinely unavailable, but that is a "use --html" matter.)
+            if data.wasm_bridge_routes.contains_key(sym) {
+                continue;
+            }
             // Neither the registry nor `try_dlsym` (phase 1) found it: the owning
             // library's cdylib is missing / stale / failed to rebuild.  The panic
             // stub stays in place; record the symbol so load-time reporting names it.
