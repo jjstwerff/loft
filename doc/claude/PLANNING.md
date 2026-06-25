@@ -1537,6 +1537,39 @@ CAVEATS.md C11 closed.
 
 ---
 
+### L11  Digit-group separators (`_`) in number literals + thousands-position lint
+**Status: designed, not started**
+**Sources:** user request 2026-06-25 (verified absent — the lexer rejects `1_000_000`).
+**Description:** Let `_` separate digit groups in numeric literals so big numbers read
+easily — `1_000_000`, `0xFF_FF`, `1_000.000_5` — and **warn** (accept, do not reject) when
+the separators are *not* on standard thousands boundaries (`1_00_000`, `10_0`). The warning
+nudges toward conventional 3-digit grouping without forcing it.
+
+Today `_` is rejected: `get_number()` (`src/lexer.rs:977`) accepts only digits / `b` / `o`
+/ hex chars, and `_` is an identifier character (`src/lexer.rs:966`), so `1_000_000` lexes
+as `1` followed by the identifier `_000_000`, and the parser reports "Expect token `;`".
+
+**Design (XS–S):**
+1. **Lexer (`get_number`)** — accept `_` *only between two digits*; strip it from the
+   collected string before `parse`. Reject (Error) a leading `_` (`_1`, which is an
+   identifier), a trailing `_` (`1_`), a doubled `__`, or a `_` adjacent to the radix
+   prefix / `.` / `e` (`0x_F`, `1._5`, `1e_3`). The same function scans the integer,
+   fraction, and exponent parts and every base (dec/hex/bin/oct), so one change covers all.
+2. **Thousands-position lint** — while scanning the integer part, record the digit count
+   between separators. If any *interior* group is not exactly 3 digits (the most-significant
+   group may be 1–3), emit a `Level::Warning` ("digit separators not on thousands
+   boundaries") and still accept the value. Decimal only at first — hex/bin group by 4/8,
+   not 3, so either skip the lint there or add nibble/byte grouping as a follow-up.
+3. **Tests** (`tests/` parse-warnings suite): `1_000_000` parses to `1000000`; warn on
+   `1_00_000` / `10_0`; error on `_1` / `1_` / `1__0` / `0x_F`. The lexer is shared, so
+   interp and native agree by construction (no separate codegen).
+
+**Files:** `src/lexer.rs` (`get_number` + the lint), a regression test, and a one-line note
+in `LOFT.md` § number literals once shipped. No parser/codegen change — the value is already
+a plain integer by the time it leaves the lexer.
+
+---
+
 ### A12  Lazy work-variable initialization
 **Status: deferred to 1.1+ — too complex and disruptive for stability; also blocked by Issues 68–70 (see PROBLEMS.md)**
 **Sources:** Stack efficiency evaluation 2026-03-20

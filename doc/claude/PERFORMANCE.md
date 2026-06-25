@@ -886,7 +886,8 @@ Memoise results to avoid exponential recursion on call graphs.
 
 **Affected benchmarks:** 04 (2.24×)
 **Expected gain:** 1.3–1.5× on Collatz and any `long`-heavy generated code
-**Cost:** Low — localised change in `src/generation/` + `src/ops.rs`
+**Cost:** **Medium+ and soundness-critical** (corrected 2026-06-25 — the original "Low" was
+wrong; see Status + the full design below). Medium for slices 1–2, Large with range analysis.
 
 > **Status (investigated 2026-06-25): OPEN — and NOT Low-cost; the cheap version is
 > UNSOUND.** The `_nn` long ops exist in `src/ops.rs` (`op_add_long_nn`, …, 6 fns) but are
@@ -925,48 +926,101 @@ if v1 == i64::MIN || v2 == i64::MIN { i64::MIN } else { v1 + v2 }
 For Collatz, this pattern appears in every loop body. The two comparisons and the
 conditional branch prevent `rustc -O` from auto-vectorising or pipelining the arithmetic.
 
-### Strategy: sentinel checks only at store boundaries
+> The original strategy below ("a definitely-assigned local is never null") was **wrong** —
+> the 2026-06-25 investigation (Status above) showed the sentinel is null *propagation* and
+> there is no non-null analysis. The sound full design follows; the old sketch is kept struck
+> through for context.
 
-`i64::MIN` as null means "this field was never written". This matters only when:
-- Reading a `long` field from a `Store` record that may never have been assigned
-- Writing a `long` field and wanting to clear it (set to null)
+### ~~Strategy: sentinel checks only at store boundaries~~ (superseded — unsound)
 
-Within a function body, a `long` local variable that has been assigned is never null
-during arithmetic. Generated code has definite assignment for every local variable at
-its first use (guaranteed by the compiler's scope analysis).
+~~A `long` local variable that has been assigned is never null during arithmetic.~~ False:
+`op_add_int`/`op_add_long` returns `i64::MIN` (null) on **overflow**, and a local can hold a
+null read from a nullable field or a null-returning call. Definite *assignment* ≠ definite
+*non-null*. The real design must prove non-null, not assume it.
 
-### Design
+### Full implementation design (the sound version)
 
-1. **New template in `src/ops.rs`:**
+Done right, N3 is **not** a codegen patch — it is **non-nullability tracked as a type fact**,
+with the `_nn` ops as its first consumer. Per [CODEGEN_METHOD.md](CODEGEN_METHOD.md), the fact
+is computed once by an analysis and *read* by codegen, never re-derived per emit site. The
+payoff is broader than Collatz: a real non-null fact also sharpens `??` codegen and lets other
+defensive sentinels drop — it's a type-system improvement that happens to unlock the perf win.
 
-   ```rust
-   #[inline(always)]
-   pub fn op_add_long_nn(v1: i64, v2: i64) -> i64 { v1 + v2 }  // nn = non-null
-   #[inline(always)]
-   pub fn op_mul_long_nn(v1: i64, v2: i64) -> i64 { v1 * v2 }
-   // … etc. for all long arithmetic ops
-   ```
+**The one invariant.** Emit a `_nn` op for an int/long binary-arithmetic node **iff both
+operands are provably ≠ `i64::MIN` at that program point**; otherwise emit the sentinel op.
+Everything below is the machinery that decides "provably non-null," soundly.
 
-2. **In `src/generation/`:**
+**1. The fact — a `NonNull` bit on int/long values.** Add a two-point nullability lattice
+carried on the value/expression type: `Nullable` (⊤, default — may be `MIN`) ⊐ `NonNull`
+(proven ≠ `MIN`). It **joins conservatively** — `Nullable` wins at any control-flow merge. The
+two nullability hooks that already exist become *inputs*, not the whole story: the field-level
+`not_null` bit (`src/typedef.rs`) and the `??`-scoped `expr_not_null` flag
+(`src/parser/operators.rs`).
 
-   For a `long` binary operation where both operands are local variables (determined by
-   the same escape analysis pass from N1, applied to `long` variables), emit
-   `op_add_long_nn` instead of `op_add_long`.
+**2. Sources of `NonNull`** (where the bit is introduced):
+- **Literals** — `Value::Int(k)` with `k != i64::MIN` → `NonNull` (the lone `MIN` literal stays `Nullable`).
+- **`not_null` fields** — a record field declared/inferred non-null reads back `NonNull`.
+- **Bounded loop induction vars** — `for i in lo..hi` with non-null bounds: `i ∈ [lo,hi)`, never `MIN` → `NonNull` in the body (the `i + 1` / Collatz win).
+- **Post-guard** — a value after `x ?? d` or inside an `if x != null` branch (reuse `expr_not_null`).
+- **Non-null-by-construction conversions** — e.g. `bool→int`.
 
-   For a `long` field read from a store or a function parameter annotated as nullable,
-   continue to use `op_add_long` with the sentinel check.
+**3. Propagation — and the overflow decision (the load-bearing call).** Is `(a + b)` non-null
+when `a`, `b` are? **No, not in general:** `op_add_int` is `checked_add(...).unwrap_or(MIN)`, so
+a *result* can be `MIN` on overflow even from non-null inputs. Two sound options:
+- **(A) Conservative — recommended first.** Arithmetic *results* re-enter as `Nullable`. So
+  `_nn` fires on the *operands* (each proven from a source), but a chained result keeps the
+  outer op on the sentinel. Captures the common single-op shape (`i + 1`, `3 * cur`) — most of
+  the gain — with **zero** overflow risk and no new analysis.
+- **(B) Range-aware — later.** Add an interval lattice; when a result's proven range excludes
+  `MIN`, mark it `NonNull` so `_nn` *chains* and `rustc -O` fuses the expression. Bigger, but
+  unlocks multi-op fusion.
 
-3. **Conservative fallback:** If there is any doubt about nullability (e.g. the value
-   comes from a function call that returns `long`), use the sentinel version. Only
-   local-variable-to-local-variable arithmetic with definite assignment uses `_nn`.
+  Name the **semantic** edge explicitly: today overflow silently yields null and propagates; a
+  `_nn` over operands that themselves overflowed would not re-propagate. Option A **side-steps
+  it** (results stay `Nullable`, so behaviour is identical) — which is exactly why it ships
+  first. Option B must either prove no-overflow or declare overflow-to-null unsupported.
 
-### Changes
+**4. Codegen reads the bit (translation, not derivation).** In `src/generation/` (native) and
+`src/state/codegen.rs` (interp emit), at an int/long binary-op node: both operand bits `NonNull`
+→ emit the `_nn` op; else the sentinel op. The bit was computed in the analysis pass — no
+`has_ref_params && …`-style re-derivation at the site. Note `op_add_int_nn` ≡ `op_add_long_nn`
+(same path — `op_add_int` *is* `op_add_long`), so **no new integer ops are needed**; the 6
+existing `_nn` long ops cover both.
 
-- `src/ops.rs`: add `_nn` variants for `add`, `sub`, `mul`, `div`, `mod`, `neg`,
-  comparison ops.
-- `src/generation/`: in the long-arithmetic emit path, check nullability of both
-  operands before choosing variant.
-- `default/01_code.loft`: add `#rust` templates for the `_nn` ops if needed by codegen.
+**5. Both backends.** Native picks the `_nn` Rust fn directly. The interpreter today runs
+`ops::op_add_long` via its opcode; for the interp win (the debug-loop slice), add escape-range
+`add_long_nn` *opcodes* (opcode space is now free — see § How the interpreter executes) wired to
+`op_add_long_nn`, emitted under the same bit. Ship native first; interp opcodes are optional.
+
+**6. Validation — the boundary matrix is the soundness gate.** This is a soundness change in
+loft's #1-priority area, so the `engineering-rigor` matrix is mandatory, asserting **value +
+null-propagation + overflow on BOTH backends**, and **introspecting *which op was emitted*** (a
+result can be coincidentally right):
+- non-null `lit op lit` → correct value AND `_nn` chosen.
+- one operand a **nullable field** (unassigned record) → result MUST be null AND `_nn` MUST NOT
+  be chosen (the corruption cell — this is the whole point).
+- overflow cell (`MAX + 1`) → matches current behaviour under the chosen option.
+- `??`-fed, bounded-loop-var, conversion-source cells. Grow one `tests/oracle/` guard (Goal D).
+
+**7. Staging (each slice shippable):**
+1. `NonNull` lattice + literal & `not_null`-field sources; native codegen reads it; matrix.
+   (Smallest sound slice: `_nn` on `lit op lit` / `field op lit`.)
+2. Bounded-loop-induction-variable source — the `i + 1` win (Collatz 04).
+3. Interpreter `_nn` opcodes.
+4. *(optional)* Option-B range analysis for chained fusion.
+
+**Cost/risk:** Medium for slices 1–2, Large with range analysis. Soundness-critical — the
+matrix + introspect-the-emit gate is non-negotiable. Re-run `bench/04_collatz` after slice 2 to
+confirm the gain is real on current `rustc` (which already predicts the `!= MIN` branch well).
+
+### Touched files (full version)
+
+- `src/ops.rs`: the 6 `_nn` ops already exist; add `_nn` comparison/`neg` variants only if a slice needs them.
+- *new* nullability analysis (alongside `src/scopes.rs` / the type pass): compute the `NonNull` bit.
+- `src/data.rs` / `src/typedef.rs`: carry the `NonNull` bit on the value/type (feed in the existing `not_null` + `expr_not_null`).
+- `src/generation/` + `src/state/codegen.rs`: read the bit, pick `_nn` vs sentinel.
+- `default/01_code.loft`: `_nn` op declarations + `#rust` templates (so codegen can name them).
+- `tests/` + `tests/oracle/`: the boundary matrix + a differential guard.
 
 ---
 
