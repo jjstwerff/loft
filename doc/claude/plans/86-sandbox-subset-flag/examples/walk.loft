@@ -1,0 +1,49 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN86 — lightweight expand-walker PROTOTYPE (see ../expand-walker.md § Prototype findings).
+// Iterative worklist (no recursion), budget-bounded, edge-specified via `expand`.
+// Order is BFS/level-order here (grow-and-read a cursor — loft vectors have no pop).
+//
+// STATUS: correct on --interpret (TREE 5/15). On --native this returns the WRONG result
+// (TREE 2/3) — an interp/native divergence in the worklist (read-during-grow + the
+// `expand` HOF). A repro, not a passing test, until that codegen bug is fixed.
+//
+// NOTE: written at a CONCRETE node type. The single universal `walk<N>` is blocked
+// today by two loft limits — `!= null` is undefined on a generic type, and a
+// `vector<T>` unifies as `vector<__nullable<T>>` which won't match `vector<N>` under
+// a generic HOF. (Null-skip is moot anyway: loft forces recursive links to be
+// collections, so an absent link is `[]`, never a null element.)
+
+struct Tree { val: integer, kids: vector<Tree> }
+
+// expand chooses the edges; the walker owns termination via max_steps.
+fn walk_tree(root: Tree, expand: fn(Tree) -> vector<Tree>, max_steps: integer)
+    -> vector<Tree> {
+  frontier = [root];
+  out: vector<Tree> = [];
+  i = 0;
+  while i < frontier.len() && out.len() < max_steps {
+    n = frontier[i];
+    i = i + 1;
+    out += [n];
+    for k in expand(n) { frontier += [k] }
+  }
+  out
+}
+
+fn main() {
+  t = Tree { val: 1, kids: [
+        Tree { val: 2, kids: [ Tree { val: 4, kids: [] }, Tree { val: 5, kids: [] } ] },
+        Tree { val: 3, kids: [] } ] };
+
+  // full walk
+  nodes = walk_tree(t, fn(x: Tree) -> vector<Tree> { x.kids }, 1000);
+  sum = 0;
+  for n in nodes { sum = sum + n.val }
+  print("TREE visited={nodes.len()} sum={sum}\n");      // 5, 15
+
+  // budget truncation — clean stop, no error
+  trunc = walk_tree(t, fn(x: Tree) -> vector<Tree> { x.kids }, 2);
+  print("TRUNC visited={trunc.len()} (budget 2)\n");     // 2
+}

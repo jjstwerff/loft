@@ -143,6 +143,41 @@ Kept out of the minimal version on purpose — add back only when a real case ne
   pre-order visit/iterate only.
 - **truncation signal, BFS/`order:` option, parallel walk.**
 
+## Prototype findings (2026-06-25)
+
+Built a concrete-type prototype (`examples/walk.loft`) and ran it on common patterns.
+The *pattern* is validated — but trying to build it surfaced three loft-level issues
+(the dogfood payoff), one of which currently blocks running it on `--native`:
+
+- **The walk pattern works.** A child-vector tree walks correctly on `--interpret`
+  (5 nodes, sum 15) and budget truncation stops cleanly at the cap. The `expand`
+  callback + iterative worklist + budget all behave as designed.
+- **A1 — the universal `walk<N>` is blocked by loft generics.** `!= null` is undefined
+  on a generic type, and a `vector<T>` unifies as `vector<__nullable<T>>`, which won't
+  match `vector<N>` under a generic HOF parameter. So the prototype is written per
+  concrete node type, not as one universal function. (Null-skip turned out moot anyway —
+  loft forces recursive links to be collections, so an absent link is `[]`, never a null
+  element. The minimal walker drops the null check entirely.)
+- **A2 — `--native` returns the WRONG result for the walk.** The same tree gives 5/15 on
+  `--interpret` but 2/3 on `--native` — an interp/native divergence. Minimal repros
+  (nested-literal construction; append-refs-in-a-loop) are each *correct* on both
+  backends, so the bug needs the walk's specific combination: **reading `frontier[i]`
+  while `frontier += …` grows it, fed by the `expand` HOF's returned vector**. This is a
+  store-lifetime/codegen divergence (the @PLN85 family) and is the blocker for using the
+  walker on native — needs a focused matrix-first investigation.
+- **A3 — loft can't BUILD a deep linked structure: construction stack-overflows.** A
+  chain only ~2000–8000 deep overflows the engine stack on *both* backends — confirmed in
+  *construction* (an unbuffered `log_info` right after the build loop never fires), not
+  free. loft builds nested struct/vector *values* by recursive descent, so a deeply
+  nested literal recurses to its full depth. So "deep structures just work" holds for the
+  iterative *walk*, but is moot until loft can hold a deep structure at all — the depth
+  limit is in loft's value construction, not in traversal. Worth its own bug (pre-existing,
+  reproduces outside this experiment).
+
+Net: the design is sound; the work to make it real is loft-level (generics, the native
+worklist divergence, recursive value construction) — i.e. this stream's language work,
+not a flaw in the walker contract.
+
 ## Build note
 
 Simplest first cut is a **trusted stdlib primitive** (sandboxed code calls it; it is
