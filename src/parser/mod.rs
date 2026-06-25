@@ -9620,6 +9620,182 @@ mod plan86_admission_tests {
         }
     }
 
+    /// @PLN86 P8.2 (F13) — the RED/GREEN ACCESS corpus: the committed battery over the
+    /// capability access model (function call gate, field read/update/append, parameter
+    /// `#default` lock, the `files` library split, undeclared links).  Every RED is
+    /// paired with a GREEN TWIN — the SAME code with the grant added must ADMIT — so a
+    /// rejection is proven to be the rule firing, not a parse error or an unrelated
+    /// reject (non-vacuity, the escape-suite discipline).  Plus standalone REDs
+    /// (read-only-by-default) and GREENs (construction is unrestricted, reads are free).
+    #[test]
+    fn access_corpus_red_green() {
+        // parse + assert the probe parsed (else admission is vacuous) → errors.
+        fn adm(sel: &[&str], libs: &[&str], caps: &[&str], src: &str) -> Vec<String> {
+            let p = parse_admit_libs(sel, libs, caps, src);
+            assert!(
+                p.diagnostics.level() < crate::diagnostics::Level::Error,
+                "probe did not parse (vacuous):\n{src}\n{:?}",
+                p.diagnostics.lines()
+            );
+            p.sandbox_admission_errors()
+        }
+        // A RED (ungranted) rejects naming `token`; its GREEN twin (granted) does NOT —
+        // proving the rejection is the access rule, not an incidental failure.
+        let twin = |name: &str,
+                    libs: &[&str],
+                    token: &str,
+                    ungranted: &[&str],
+                    granted: &[&str],
+                    src: &str| {
+            let red = adm(&["fn:f"], libs, ungranted, src);
+            assert!(
+                red.iter().any(|e| e.contains(token)),
+                "{name}: RED must be rejected naming `{token}`: {red:?}"
+            );
+            let green = adm(&["fn:f"], libs, granted, src);
+            assert!(
+                !green.iter().any(|e| e.contains(token)),
+                "{name}: GREEN twin (granted) must admit — non-vacuity: {green:?}"
+            );
+        };
+
+        // ── call gate: an `fs#update` function under an `fs#read`-only grant ──
+        twin(
+            "call gate fs#update under fs#read",
+            &["code"],
+            "fs#update",
+            &["fs#read"],
+            &["fs#read", "fs#update"],
+            "fn host_write() -> integer fs#update;\n#native\n\
+             fn f() -> integer { host_write() }\n",
+        );
+        // ── field READ of a private (`#read`-linked) field ──
+        twin(
+            "field read (private)",
+            &["code"],
+            "secret#read",
+            &[],
+            &["secret#read"],
+            "capability secret\nstruct P { hidden: text secret#read }\n\
+             fn f(p: P) -> text { p.hidden }\n",
+        );
+        // ── field UPDATE of an `#update`-linked field ──
+        twin(
+            "field update",
+            &["code"],
+            "stats#update",
+            &[],
+            &["stats#update"],
+            "capability stats\nstruct M { hp: integer stats#update }\n\
+             fn f(m: M) { m.hp = 0 }\n",
+        );
+        // ── field APPEND to a `#append`-linked collection field ──
+        twin(
+            "field append",
+            &["code"],
+            "bag#append",
+            &[],
+            &["bag#append"],
+            "capability bag\nstruct I { items: vector<integer> bag#append }\n\
+             fn f(i: I, x: integer) { i.items += [x] }\n",
+        );
+        // ── parameter `#default` lock: overriding a pinned argument ──
+        twin(
+            "param #default lock override",
+            &["code"],
+            "spawn.count#default",
+            &["world#append"],
+            &["world#append", "spawn.count#default"],
+            "capability world\ncapability spawn.count\n\
+             fn spawn(kind: text, count: integer = 1 spawn.count#default) -> integer world#append;\n#native\n\
+             fn f() -> integer { spawn(\"g\", 5) }\n",
+        );
+
+        // ── undeclared capability link (typo) — RED + corrected-spelling GREEN twin ──
+        let typo = adm(
+            &["fn:f"],
+            &["code"],
+            &["helth#update"],
+            "capability health\nstruct M { hp: integer helth#update }\nfn f(m: M) { m.hp = 0 }\n",
+        );
+        assert!(
+            typo.iter()
+                .any(|e| e.contains("undeclared capability `helth`")),
+            "undeclared link must reject naming the group: {typo:?}"
+        );
+        let fixed = adm(
+            &["fn:f"],
+            &["code"],
+            &["health#update"],
+            "capability health\nstruct M { hp: integer health#update }\nfn f(m: M) { m.hp = 0 }\n",
+        );
+        assert!(
+            !fixed.iter().any(|e| e.contains("undeclared")),
+            "the corrected spelling must admit (non-vacuity): {fixed:?}"
+        );
+
+        // ===== standalone REDs — read-only-by-default (no grant admits them) =====
+        // an UNLINKED host field stays read-only even when a capability is granted.
+        let unlinked = adm(
+            &["fn:f"],
+            &["code"],
+            &["stats#update"],
+            "struct M { hp: integer }\nfn f(m: M) { m.hp = 0 }\n",
+        );
+        assert!(
+            !unlinked.is_empty(),
+            "an unlinked host field must stay read-only: {unlinked:?}"
+        );
+        // append-only: `=` (update) on a field with `#append` but NO `#update` is rejected
+        // even with append granted — append-only is exactly this.
+        let append_only_update = adm(
+            &["fn:f"],
+            &["code"],
+            &["bag#append"],
+            "capability bag\nstruct I { items: vector<integer> bag#append }\n\
+             fn f(i: I) { i.items = [1] }\n",
+        );
+        assert!(
+            !append_only_update.is_empty(),
+            "update via `=` on an append-only field must be rejected: {append_only_update:?}"
+        );
+
+        // ===== standalone GREENs — the model must not over-reject =====
+        // CONSTRUCTION is unrestricted (the position-1 decision — no construction gate).
+        let construct = adm(
+            &["fn:f"],
+            &["code", "prog"],
+            &[],
+            "struct Pt { x: integer }\nfn f() -> Pt { Pt { x: 1 } }\n",
+        );
+        assert!(
+            construct.is_empty(),
+            "construction must admit (no construction gate): {construct:?}"
+        );
+        // reading an UNLINKED field is free (read is default-allow).
+        let free_read = adm(
+            &["fn:f"],
+            &["code"],
+            &[],
+            "struct P { name: text }\nfn f(p: P) -> text { p.name }\n",
+        );
+        assert!(
+            free_read.is_empty(),
+            "reading an unlinked field is free: {free_read:?}"
+        );
+        // the REAL stdlib `files` split: `mtime` (fs#read) admits under an `fs#read` grant.
+        let real_read = adm(
+            &["fn:f"],
+            &["code"],
+            &["fs#read"],
+            "fn f() -> integer { mtime(\"x\") }\n",
+        );
+        assert!(
+            real_read.is_empty(),
+            "real stdlib mtime (fs#read) must admit under fs#read: {real_read:?}"
+        );
+    }
+
     /// @PLN86 2.4 — no-raw-write rejects a field/index assignment to heap data,
     /// while struct construction + local-variable writes stay clean.
     #[test]

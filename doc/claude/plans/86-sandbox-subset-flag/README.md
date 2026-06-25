@@ -909,12 +909,17 @@ proven-total script.
   a violation prints `Rejected` + the named capability + fix. The programmatic surface (for a
   mod-registry submit-gate) is the already-public `Parser::sandbox_admission_errors()`; a dedicated
   `src/lib.rs` wrapper is deferred (it needs embedder stdlib-path plumbing for marginal value).
-- **8.2 RED/GREEN access corpus.** Extend `tests/sandbox.rs` (CLI-level: `tests/sandbox_cli.rs`)
-  with the battery: RED — write a read-only field, append to an update-only structure, construct
-  an un-forgeable variant, read a private field, call a `fs#update` fn under a `fs#read`-only
-  grant — each Rejected; GREEN — read/update/append within grants, match any variant — Admitted.
-  Each RED probe proven to fail WITHOUT its rule (not vacuously rejecting). *Verify:* green on
-  the real type defs + the migrated `02_files.loft`, both backends where applicable.
+- **8.2 RED/GREEN access corpus.** ✅ **DONE (F13).** `access_corpus_red_green` (the inline
+  plan86 module, beside the escape suite) is the committed battery over the access model: REDs —
+  a private-field read, an `#update` field write, an `#append`, a `#default`-locked override, an
+  `fs#update` call under an `fs#read`-only grant, an undeclared link, and the read-only-by-default
+  cases (unlinked field, `=` on an append-only field) — each Rejected; GREENs — construction is
+  unrestricted, an unlinked read is free, the real stdlib `mtime` (`fs#read`) admits under
+  `fs#read`. **Each RED is paired with a GREEN twin** (the same code with the grant added must
+  admit), so a rejection is proven to be the rule firing, not a parse error (non-vacuity).
+  Admission is compile-time + backend-agnostic, so "both backends" does not apply.  *(The
+  README's "un-forgeable variant" RED is intentionally absent — construction was left unrestricted,
+  the position-1 decision; the corpus asserts it as a GREEN instead.)*
 
 **Dependency order:** 1.1→1.2 (1.2 unblocks 0.1) → 1.3/1.4 → 2.x → 3.x → 4.x → 5.1.
 Within P6 the migration ran sequentially: **6.1 → 6.2 → 6.3** landed the unified function
@@ -1005,16 +1010,15 @@ releasable tree.
 - **F12 — `sandbox-check` verdict** (P8.1). ✅ **DONE.** `loft sandbox-check <file>` prints
   Admitted / Rejected + diagnostics and **never executes** (a side-effecting `main` proves no
   run). *Gate:* `sandbox_check_reports_verdict_without_executing`.
-- **F13 — RED/GREEN corpus** (P8.2). *Gate:* `cargo test --test sandbox` green on the real
-  type defs + the migrated `02_files.loft`, both backends where applicable.
+- **F13 — RED/GREEN corpus** (P8.2). ✅ **DONE.** `access_corpus_red_green` — every access rule
+  as a RED + its GREEN twin (non-vacuity), the real `02_files.loft` `mtime` split included.
 
-**Status:** F1–F7, **F8a**, the whole **data envelope F9–F11**, and **F12** (the
-`sandbox-check` verdict) are **landed** — the host-authored model surface + its load-time
-validation + the compile-time footprint bound (`coeff · max_input_n^degree ≤ data_budget`, plus
-the unbounded-string gate) + the no-run "will this be allowed?" CLI are complete and CLI-enforced.
-OOM is now a load-time concern. Remaining: **F8b** (registry + member/param IR persistence — a
-forward-looking, fails-safe widening for cached libraries) and **F13** (the RED/GREEN corpus).
-Both independent of the access work.
+**Status:** the **entire F-ladder F1–F13 is landed** EXCEPT **F8b** — the host-authored model
+surface + its load-time validation + the compile-time data-envelope footprint bound + the no-run
+`sandbox-check` verdict + the committed RED/GREEN access corpus are all complete and CLI-enforced.
+OOM is a load-time concern. The one remaining piece is **F8b** (registry + member/param IR
+persistence — a forward-looking, fails-safe widening so cached-library links survive the IR cache;
+independent, no @PLN85 dep). v1's compile-time core is otherwise DONE.
 
 ## Open questions
 
