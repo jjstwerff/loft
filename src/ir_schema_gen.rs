@@ -635,6 +635,12 @@ pub fn register_ir_schema(db: &mut Stores) -> IrSchemaIds {
     db.field(t139, "check_message", vec_check_message);
     db.field(t139, "alias_d_nr", 0);
     db.field(t139, "assigned_lambda_d_nr", 0);
+    // @PLN86 F8b — hand-applied (already in ir.loft, so a future clean regen emits it
+    // here too): the Attribute `links: text` member.  Added by hand rather than via a
+    // wholesale regen, which currently drifts the `tN` ids (a pre-existing staleness of
+    // this generated file, unrelated to this field).  Last ref-typed field → packed at
+    // the next reference slot (ATTR_LINKS, after check_message).
+    db.field(t139, "links", t5);
     db.field(t140, "name", t5);
     let vec_type_def = db.vector(t64);
     db.field(t140, "type_def", vec_type_def);

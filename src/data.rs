@@ -2198,6 +2198,13 @@ pub struct Attribute {
     /// lambdas with different capture schemas) are rejected at the
     /// second assignment site by `set_field_check`.
     pub assigned_lambda_d_nr: u32,
+    /// @PLN86 P6.8 (F8b) — the `group#right` capability links the host put on this
+    /// member: a struct field's read/update/append rights, or a function parameter's
+    /// `…#default` lock.  The single home for both (one fact, one place), so they
+    /// round-trip through the IR store (`ATTR_LINKS`) — a warm-cached host type / library
+    /// keeps its links instead of losing them with the parser side-maps.  Empty = an
+    /// unlinked member.
+    pub links: Vec<String>,
 }
 
 impl Debug for Attribute {
@@ -3378,6 +3385,7 @@ impl Data {
             check_message: Value::Null,
             alias_d_nr: u32::MAX,
             assigned_lambda_d_nr: u32::MAX,
+            links: Vec::new(),
         };
         let next_attr = self.def(on_def).attributes.len();
         let def = &mut self.definitions[on_def as usize];
