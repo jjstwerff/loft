@@ -776,7 +776,18 @@ ensure the native pipeline produces correct output for all 10 benchmarks.
 
 **Affected benchmarks:** 01 (1.84×), 06 (2.32×)
 **Expected gain:** 10–30% on recursive compute benchmarks
-**Cost:** High — purity analysis, two function signatures, call-site dispatch
+**Cost:** ~~High~~ → **Medium** (audited 2026-06-25 — see status).
+
+> **Status (audited 2026-06-25): OPEN, but the purity prerequisite is already done.**
+> The design below says to "add `fn is_pure`" — but a full purity analysis already
+> exists: `def.purity` is computed in `src/parser/definitions.rs` + `src/scopes.rs`
+> (the `Purity::{Pure, Impure(ParentWrite|HostIo)}` lattice, propagated across the call
+> graph and consumed by `scopes.rs` for effect analysis). So the costly half is built;
+> what remains is purely the **codegen** half — emit the `n_foo_pure` (stores-less)
+> inner function for `Purity::Pure` defs and call it from other pure defs. `src/generation/`
+> does **not** read `def.purity` today. Cost drops from High to Medium accordingly. (Use
+> the existing `def.purity`; do **not** add a second `is_pure` per the design's §"Purity
+> analysis implementation" — that pass is redundant now.)
 
 ### Background
 
@@ -877,6 +888,16 @@ Memoise results to avoid exponential recursion on call graphs.
 **Expected gain:** 1.3–1.5× on Collatz and any `long`-heavy generated code
 **Cost:** Low — localised change in `src/generation/` + `src/ops.rs`
 
+> **Status (audited 2026-06-25): OPEN, but partially scaffolded.** The `_nn` (non-null)
+> long ops the design calls for **already exist** in `src/ops.rs` — `op_add_long_nn`,
+> `op_sub`/`min`/`mul`/`div`/`rem`/`neg_long_nn` (6 fns). But they are **dead code**: no
+> caller in `src/fill.rs` (interpreter), `src/generation/` (native), or anywhere. So the
+> stubs are done; the remaining work is the **nullability classifier** (which locals are
+> provably non-null) + having codegen emit `_nn` instead of the sentinel form. N5 (the
+> `integer` parallel) has **no** stubs yet — 0 `_int_nn` ops in `src/ops.rs` — so N5 adds
+> its own op variants too. Net: N3 is the cheapest remaining item but is not started past
+> the op stubs.
+
 ### Background
 
 The current generated code for `long` arithmetic, e.g. addition, is:
@@ -945,6 +966,12 @@ scan.loft hot loop that's a meaningful share of the ~165 ms
 `-O` baseline.
 **Cost:** Small — localised change in `src/generation/mod.rs` +
 purity-classifier extension.
+
+> **Status (audited 2026-06-25): OPEN.** `is_leaf_pure` is absent and `cr_call_push` is
+> still emitted unconditionally for every `n_` function. But the "purity-classifier
+> extension" the cost cites is mostly free: `def.purity` already exists (see N2 status),
+> so `is_leaf_pure` = `def.purity == Purity::Pure` AND the body has no `Call`/`Method` —
+> only the leaf check is new. Stays Small.
 
 ### Background
 
@@ -1175,18 +1202,33 @@ modes.
 
 ## Improvement priority order
 
-| Priority | Item | Target benchmarks | Expected gain | Cost |
+**Audited against the code 2026-06-25.** Two items were already delivered but listed open
+(the opcode-table two-byte escape that "blocked" P1, and N6); two are cheaper than estimated
+because their prerequisite already exists (N2/N4 — purity analysis is built); one is partially
+scaffolded (N3 — dead `_nn` op stubs). The `Status` column records what's actually in the tree.
+Cost/gain are unchanged estimates (the benchmark table itself predates v2026.6.0 — re-run
+`bench/run_bench.sh` before committing to a High-cost item).
+
+| Item | Target benchmarks | Gain | Cost | **Status (2026-06-25)** |
 |---|---|---|---|---|
-| 1 | P1 — Superinstructions | 02, 03, 04, all tight loops | 2–4× on integer loops | Medium |
-| 2 | N1 — Direct collection emit | 08, 09, 10 | 5–15× data-struct native | High |
-| 3 | P2 — Stack raw pointer cache | all interpreter | 20–50% across interpreter | High |
-| 4 | N2 — Pure function stores omit | 01, 06 native | 10–30% recursive native | High |
-| 5 | N3 — Long sentinel in codegen | 04 native | ~1.5× Collatz native | Low |
-| 6 | N5 — Integer sentinel in codegen | scanners, parsers, any indexed loop | parallel to N3 for `integer` | Low (folds into N3) |
-| 7 | N4 — Suppress cr_call_push on `#pure` leaves | hot loops with tiny `#pure` helpers (scan.loft) | measurable share of `-O` baseline on per-byte loops | Small |
-| ✅ | **N6 — Skip rustc probe on native cache hit — DELIVERED** (verified 2026-06; warm run spawns 0 rustc, ~0–10 ms startup) | native warm startup (any short-lived program) | ~18 ms / ≈3.7× off warm startup | Small |
-| 9 | P3 — Verify integer sentinel | 02, 10 | 2–5% (verification) | Low |
-| 10 | W1 — wasm string path | 07 wasm | <1.3× gap | Medium |
+| P1 — Superinstructions | 02, 03, 04, all tight loops | 2–4× | Medium | **Open** — *unblocked* (the escape exists); not implemented (no `si_*`/peephole). Cheap secondary (debug loop). |
+| N1 — Direct collection emit | 08, 09, 10 | 5–15× | High | **Open** — no escape-analysis/`Locality`. The big native prize. |
+| P2 — Stack raw pointer cache | all interpreter | 20–50% | High | **Open** — `stack_base:u32` is frame bookkeeping, *not* the raw-ptr cache; + memory-model risk. Low priority. |
+| N2 — Pure-fn stores omit | 01, 06 native | 10–30% | ~~High~~ **Med** | **Open**, but `def.purity` already computed (scopes.rs) — only the stores-less codegen half remains. |
+| N3 — Long sentinel in codegen | 04 native | ~1.5× | Low | **Open**, partially scaffolded — 6 `_nn` long ops exist in `ops.rs` but are *dead*; needs the non-null classifier + emit. |
+| N5 — Integer sentinel | scanners, parsers, indexed loops | ~N3 | Low | **Open** — no `_int_nn` stubs yet; folds into N3. |
+| N4 — Suppress cr_call_push on `#pure` leaves | hot loops w/ tiny `#pure` helpers | per-call | Small | **Open** — reuses existing `def.purity`; `is_leaf_pure` absent. |
+| P4 — Block-copy slice (`OpAppendVectorSlice`) | primitive-vector slice copies | 5–10× | Medium | **Open** — op absent; opcode slot now trivially free (escape). |
+| P3 — Verify integer sentinel | 02, 10 | 2–5% | Low | **Open** — audit test absent. |
+| W1 — wasm string path | 07 wasm | <1.3× | Medium | **Open** — no string `with_capacity` in `generation/`. |
+| Arc worker-clone (`Stores::types`/`names`) | parallel workers | small | Low–Med | **Open** — fields not `Arc`-wrapped. |
+| O8.3 — zero-fill struct defaults | struct construction | small | Small | **Open** — not in `parser/objects.rs`. |
+| ✅ **N6 — Skip rustc probe on cache hit** | native warm startup | ~18 ms / ≈3.7× | Small | **DELIVERED** — verified: 0 rustc spawns on a warm run, ~0–10 ms. |
+| ✅ **Opcode two-byte escape** (P1's "blocker") | — | — | — | **DELIVERED** — `255 → OPERATORS[255+ext]`, ~242 free slots. |
+
+Suggested order given the audit (native-first, cheap-first): **N3+N5** (cheapest, partly
+scaffolded) → **N4** (Small, purity ready) → **N2** (now Medium) → **N1** (the High-cost native
+prize) → **P1** (cheap interpreter secondary). P2 parked (interp-only, bounded, memory-model risk).
 
 **The interpreter's place — and its bounds.** `--native` is the default *shipping*
 backend, but the **interpreter is the debug / live-edit backend** — a debug session
@@ -3115,8 +3157,8 @@ plan-cleanup audits:
 | **P6** — Free-block coalescing in `Store` (merge mergeable neighbours) | — | — | Interpreter + Native | **LANDED 2026-05-21.**  Partner of P5.  `Store::delete` coalesces only FORWARD (`rec + size`) — the header-only block layout has no footer, so a freed block can't find its PREDECESSOR; freeing B while A is already free left A|B uncoalesced, and accumulated small free blocks forced the store to GROW instead of reusing freed space.  **Fixed with NO new index** (no end→start map, no boundary-tag footer — those grow with the free-block count): a lazy `coalesce_free` sweep walks the contiguous block chain (the adjacency info that already exists — the same walk `claim_scan`/`usage`/`fl_rebuild` do), merges every run of adjacent free blocks in place, and rebuilds the ONE existing size-keyed free tree via `fl_rebuild`.  It runs in `claim` only when a best-fit miss would otherwise grow the store (that path already costs O(n) via `resize_store`), guarded by a single `needs_coalesce` bool so alloc-only workloads never sweep.  Backward coalescing falls out of the address-order walk (A+B merge regardless of free order).  Shared `Store` → both backends.  Guards: Rust unit test `coalesce_free_merges_adjacent_and_reuses_space` (`src/store.rs` — mergeable-pairs → 0, merged block reused without growing), cross-mode `tests/scripts/126-store-coalesce.loft`. |
 | **P7** — `reserve(v, n)` / `shrink_to_fit(v)` vector builtins | — | — | Interpreter + Native | Open — the deferred P5 follow-up.  P5's amortised ×2 growth leaves a vector at up to ~2× capacity (builds run ~57–73 % utilised).  Expose `reserve(v, n)` (wrapping the existing `OpPreAllocVector` / `vector::pre_alloc_vector`) so a known-size build claims exactly once, and/or `shrink_to_fit(v)` (a length-based re-claim — the deep-copy path `copy_claims_seq_vector` already does this internally) to reclaim slack after building.  Opt-in, benefits every vector consumer; drives @PLN6 mesh memory-reduction item **M2** (`plans/6-audience-generative-art/03-projector-view.md`).  Effort S–M. |
 | **N1** — Direct-emit local collections in native codegen | § Design: N1 | **O4** | Native | Open — design ready.  Cooperates with `lib_plans/59-lazy-stdlib/`.  (`plans/finished/21-retire-scratch/` shipped, so the scratch consumer set is now zero — N1 is independent.) |
-| **N2** — Omit `stores` parameter from pure native fns | § Design: N2 | **O5** | Native | Open — design ready. |
-| **N3** — Remove `long` null-sentinel from generated code | § Design: N3 | — | Native | Open — verification + cleanup; small. |
+| **N2** — Omit `stores` parameter from pure native fns | § Design: N2 | **O5** | Native | Open — purity analysis already built (`def.purity`, scopes.rs); only the stores-less codegen remains (audited 2026-06-25 → Cost High→Medium). |
+| **N3** — Remove `long` null-sentinel from generated code | § Design: N3 | — | Native | Open — the 6 `_nn` long ops exist in `ops.rs` but are dead/unwired; needs the non-null classifier + emit (audited 2026-06-25). |
 | **N4** — Suppress `cr_call_push` on `#pure` leaf functions | § Design: N4 | — | Native | Open — discovered while optimising @PLN42 scan.loft (2026-05-18).  Small change; reuses N2's purity classifier with a leaf check. |
 | **N5** — Inline `integer` arithmetic when operands are non-null | § Design: N5 | — | Native | Open — discovered alongside N4 (2026-05-18) while inspecting `--native-emit` output for scan.loft's byte loop.  Folds into N3 (same nullability classifier, parallel application to `integer`). |
 | **W1** — wasm string representation | § Design: W1 | — | WASM | Open — design ready, scheduled for wasm-priority workloads (game-client + browser-IDE consumers). |
