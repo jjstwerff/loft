@@ -28,24 +28,49 @@ design for each planned improvement.
 
 ## Benchmark results
 
-All times are wall-clock milliseconds, best of one warm run, single core,
-Linux x86-64. Run `bench/run_bench.sh` from the project root to reproduce.
+Wall-clock milliseconds, **best of 3 warm runs**, single core, Linux x86-64, **refreshed
+2026-06-25** (v2026.6.0). Run `bench/run_bench.sh` from the project root to reproduce.
 
-| # | Benchmark | Python | interp | native | wasm | Rust | interp/Py | native/Rust |
-|---|-----------|-------:|-------:|-------:|-----:|-----:|----------:|------------:|
-| 01 | fibonacci (recursive, n=38)      | 3395 | 4819  | 169 | 257 |  92 | 1.42× | 1.84× |
-| 02 | sum loop (10 M integers)         |   66 |  584  |  15 |  21 |   8 | 8.85× | 1.88× |
-| 03 | prime sieve (n=100 000)          |   49 |  141  |   4 |   6 |   4 | 2.88× | 1.00× |
-| 04 | Collatz lengths (1 .. 1 M)       | 7393 | 14379 | 334 | 599 | 149 | 1.94× | 2.24× |
-| 05 | Mandelbrot (200×200, 256 iter)   |  135 |  344  |   7 |  10 |   6 | 2.55× | 1.17× |
-| 06 | Newton sqrt (1 M calls)          | 1481 | 3437  | 159 | 159 | 152 | 2.32× | 1.05× |
-| 07 | string build (500 K appends)     |   70 |   61  |  33 |  68 |  23 | **0.87×** | 1.43× |
-| 08 | word frequency (hash map)        |   46 |  169  |  32 |  60 |   2 | 3.67× | 16.0× |
-| 09 | dot product (5 M floats)         |  158 |  428  |  36 |  86 |   3 | 2.71× | 12.0× |
-| 10 | insertion sort (3 000 integers)  |  131 |  291  |  29 |  56 |   4 | 2.22× | 7.25× |
+> **Read the two measurement notes first — they invalidate naïve numbers:**
+> 1. **`native` = optimized (`rustc -O`).** `loft --native` (the *default*) compiles
+>    **without `-O`** for fast dev iteration and runs ~6× slower (fib: 2953 ms unoptimized
+>    vs 489 ms optimized). The benchmark + this table use the optimized build
+>    (`loft --native-release` / the script's `rustc -O`). Quote *that* for "native speed".
+> 2. **Run WITHOUT `LOFT_TIMEOUT`.** An armed watchdog makes `checkpoint_fn` do a mutex
+>    `try_lock` + deadline check on **every function call** — it inflated fib ~2× (489 →
+>    ~1000 ms+) and call-heavy code more. (Side effect worth noting: `loft test` arms the
+>    watchdog at 300 s, so the test path pays this per-call tax — a real follow-up.)
 
-Ratios below 2× are expected for an interpreter that has not been tuned yet.
-Ratios above 5× in native mode signal a structural problem.
+| # | Benchmark | Python | interp | native | Rust | interp/Py | native/Rust |
+|---|-----------|-------:|-------:|-------:|-----:|----------:|------------:|
+| 01 | fibonacci (recursive, n=38)      | 2445 | 2972 | 489 |  71 | 1.22× | 6.9× |
+| 02 | sum loop                         |   67 |   42 |   6 |   4 | **0.63×** | 1.5× |
+| 03 | prime sieve                      |   24 |   15 |   4 |   3 | **0.63×** | 1.3× |
+| 04 | Collatz lengths                  | 4706 | 1492 | 176 |  88 | **0.32×** | 2.0× |
+| 05 | Mandelbrot                       |  141 |   13 |   9 |  10 | **0.09×** | **0.9×** |
+| 06 | Newton sqrt                      | 1216 |  657 | 196 | 115 | **0.54×** | 1.7× |
+| 07 | string build                     |   51 |   47 |  25 |  20 | **0.92×** | 1.25× |
+| 08 | word frequency (hash map)        |   50 |   59 |  41 |   2 | 1.18× | **20.5×** |
+| 09 | matrix mul (float)               |  131 |  104 |  49 |   2 | **0.79×** | **24.5×** |
+| 10 | insertion sort                   |   97 |   73 |  37 |   2 | **0.75×** | **18.5×** |
+| 11 | parallel-for                     |   65 |   40 |  17 |   5 | **0.62×** | 3.4× |
+
+**What changed since the old table (and what it means):**
+- **The interpreter now beats CPython on 8 of 11** (interp/Py 0.09–1.22, median ~0.6) — the
+  old table had it 1.4–8.85× *slower*. A large, previously-unrecorded interpreter improvement.
+  This makes the interpreter optimisations (P1/P2) **low-priority** — it's already fast.
+- **Optimized native vs Rust is healthy on compute** (mandelbrot 0.9×, sieve 1.3×, sum 1.5×,
+  newton 1.7×, collatz 2.0×) but has **two real gaps**:
+  - **Data structures — matrix 24.5×, word-count 20.5×, sort 18.5×** (the `codegen_runtime`/`DbRef`
+    indirection). This is **N1** — confirmed the biggest, most consistent native gap.
+  - **Recursive calls — fib 6.9×** (was 1.84× in the old table). A **~3× regression** from
+    per-call instrumentation (the `cr_call_push` shadow stack + `live_flipped` hot-reload check
+    added since). Addressed by **N2/N4** + gating the instrumentation for non-debug builds.
+- **wasm not measured** — the script's wasm run failed silently (`|| true` → blank), likely the
+  same wasip2 `#native`-symbol gap seen elsewhere. Re-add once that's fixed.
+
+A native/Rust ratio above ~5× signals a structural gap (here: data structures, and recursive
+per-call overhead). Single-box, best-of-3 — directional, not a leaderboard.
 
 ---
 
@@ -135,6 +160,11 @@ store-indirection cost on the many arithmetic operations inside the call body do
 
 ## Interpreter vs Python
 
+> **⚠ Ratios below are SUPERSEDED** by the refreshed table (2026-06-25): the interpreter now
+> *beats* CPython on most benchmarks (interp/Py median ~0.6), so the "2–9× slower" framing here
+> is stale. The root-cause *mechanisms* (dispatch overhead, store indirection) still hold as the
+> per-op cost model; only the headline ratios are out of date. Refresh this section next.
+
 ### Summary table
 
 | Group | Benchmarks | Typical ratio | Primary cost |
@@ -186,6 +216,12 @@ workloads can favour loft.
 ---
 
 ## Native vs Rust
+
+> **⚠ Ratios below are SUPERSEDED** by the refreshed table (2026-06-25). Current optimized-native
+> reality: compute is healthy (1–2×), the big gaps are **data structures** (matrix/word/sort
+> 18–25× — N1) and **recursive per-call overhead** (fib 6.9×, regressed from 1.84× — the
+> `cr_call_push`/`live_flipped` instrumentation, N2/N4). The "every fn takes `stores`" and
+> "`codegen_runtime` indirection" mechanisms below are still the correct root causes.
 
 ### Summary table
 
