@@ -1141,22 +1141,46 @@ fn collect_set_targets(v: &Value, out: &mut HashSet<u16>) {
     });
 }
 
+/// @PLN86 P7.1 — heap bytes one appended element costs in the COLLECTION's backing,
+/// given the collection var's type (the append's first arg): the per-element SLOT
+/// size (`element_size`) — a dense scalar (`i64` = 8), or the `DbRef` slot of a
+/// reference / struct / enum-struct element (a `vector<Mob>` stores nullable-enum
+/// DbRef slots).  This is the backing footprint per element.  KNOWN v1 under-count:
+/// the separately-allocated record BODIES (a `Mob`'s own record, a nested
+/// collection's backing) are NOT added here — the same gap §8 already documents;
+/// tightening it means deep-sizing through the nullable wrappers.  A keyed
+/// collection's element is its declared record (also a DbRef slot).
+fn appended_record_size(vars: &crate::variables::Function, var_nr: u16) -> u32 {
+    let elem: Type = match vars.tp(var_nr) {
+        Type::Vector(e, _) => (**e).clone(),
+        Type::Sorted(nr, _, _)
+        | Type::Index(nr, _, _)
+        | Type::Hash(nr, _, _)
+        | Type::Spacial(nr, _, _) => Type::Reference(*nr, crate::data::Deps::none()),
+        _ => return 0,
+    };
+    crate::data::element_size(&elem) as u32
+}
+
 /// @PLN86 space budget — one def's intrinsic SPACE complexity: the deepest loop
 /// nesting at which an in-place append (`OpAppend*`) grows a structure NOT reset
 /// inside that loop (declared in an enclosing scope), so it ACCUMULATES across the
-/// iterations (`O(n)` per nesting level).  Plus every call with its loop nesting
-/// for the inter-procedural composition (`space_degree`).  Conservative — a
-/// transient buffer (reset each iteration) is O(1) and excluded; the `Iter` init's
-/// once-run allocation is counted in-loop (a safe over-count, like 3.4b).  KNOWN
-/// GAPS (v1 under-models, future tightening): a concat-reassign `v = v + [x]` and a
-/// call returning a kept growing structure are not yet treated as accumulation.
-fn intrinsic_space(data: &Data, f: u32) -> (u32, Vec<(u32, u32)>) {
+/// iterations (`O(n)` per nesting level); PLUS the coefficient `Σ record_size` over
+/// those accumulating sites (P7.1).  Plus every call with its loop nesting for the
+/// inter-procedural composition (`space_degree`).  Conservative — a transient buffer
+/// (reset each iteration) is O(1) and excluded; the `Iter` init's once-run allocation
+/// is counted in-loop (a safe over-count, like 3.4b).  KNOWN GAPS (v1 under-models,
+/// future tightening): a concat-reassign `v = v + [x]` and a call returning a kept
+/// growing structure are not yet treated as accumulation.
+fn intrinsic_space(data: &Data, f: u32) -> (u32, u32, Vec<(u32, u32)>) {
     fn scan(
         data: &Data,
+        vars: &crate::variables::Function,
         v: &Value,
         nesting: u32,
         reset: &mut HashSet<u16>,
         max_leaf: &mut u32,
+        coeff: &mut u32,
         calls: &mut Vec<(u32, u32)>,
     ) {
         match v {
@@ -1165,7 +1189,9 @@ fn intrinsic_space(data: &Data, f: u32) -> (u32, Vec<(u32, u32)>) {
                 let mut targets = HashSet::new();
                 collect_set_targets(v, &mut targets);
                 let fresh: Vec<u16> = targets.into_iter().filter(|t| reset.insert(*t)).collect();
-                v.for_each_child(&mut |c| scan(data, c, nesting + 1, reset, max_leaf, calls));
+                v.for_each_child(&mut |c| {
+                    scan(data, vars, c, nesting + 1, reset, max_leaf, coeff, calls);
+                });
                 for t in fresh {
                     reset.remove(&t);
                 }
@@ -1183,6 +1209,7 @@ fn intrinsic_space(data: &Data, f: u32) -> (u32, Vec<(u32, u32)>) {
                         && !reset.contains(t)
                     {
                         *max_leaf = (*max_leaf).max(nesting);
+                        *coeff += appended_record_size(vars, *t);
                     }
                 } else {
                     calls.push((nesting, *g));
@@ -1190,43 +1217,48 @@ fn intrinsic_space(data: &Data, f: u32) -> (u32, Vec<(u32, u32)>) {
             }
             _ => {}
         }
-        v.for_each_child(&mut |c| scan(data, c, nesting, reset, max_leaf, calls));
+        v.for_each_child(&mut |c| scan(data, vars, c, nesting, reset, max_leaf, coeff, calls));
     }
-    let (mut max_leaf, mut calls, mut reset) = (0, Vec::new(), HashSet::new());
+    let (mut max_leaf, mut coeff, mut calls, mut reset) = (0, 0, Vec::new(), HashSet::new());
+    let def = data.def(f);
     scan(
         data,
-        &data.def(f).code,
+        &def.variables,
+        &def.code,
         0,
         &mut reset,
         &mut max_leaf,
+        &mut coeff,
         &mut calls,
     );
-    (max_leaf, calls)
+    (max_leaf, coeff, calls)
 }
 
-/// @PLN86 space budget — the polynomial DEGREE of `f`'s worst-case PEAK heap in the
-/// input size: `max(intrinsic accumulation, loop_nesting + space_degree(callee))`.
-/// Acyclic (3.2) so this terminates; `in_progress` is a defensive backstop.
+/// @PLN86 space budget — `f`'s worst-case PEAK heap as `(degree, coeff)`: the
+/// polynomial DEGREE in the input size (`max(intrinsic accumulation, loop_nesting +
+/// callee degree)`) and the COEFFICIENT `Σ record_size` over its accumulating sites
+/// plus those of every accumulating callee (P7.1).  Acyclic (3.2) so this terminates;
+/// `in_progress` is a defensive backstop.
 fn space_degree(
     data: &Data,
     sandboxed: &HashMap<u32, String>,
     f: u32,
-    memo: &mut HashMap<u32, u32>,
+    memo: &mut HashMap<u32, (u32, u32)>,
     in_progress: &mut HashSet<u32>,
-) -> u32 {
+) -> (u32, u32) {
     if let Some(&d) = memo.get(&f) {
         return d;
     }
     if !in_progress.insert(f) {
-        return 0;
+        return (0, 0);
     }
-    let (max_leaf, calls) = intrinsic_space(data, f);
+    let (max_leaf, mut coeff, calls) = intrinsic_space(data, f);
     let mut degree = max_leaf;
     for (nesting, callee) in calls {
-        let callee_degree = if sandboxed.contains_key(&callee) {
+        let (callee_degree, callee_coeff) = if sandboxed.contains_key(&callee) {
             space_degree(data, sandboxed, callee, memo, in_progress)
         } else {
-            0
+            (0, 0)
         };
         // Only a callee that ITSELF accumulates composes (its internal O(n^s)
         // build, run under the caller's loops).  A non-accumulating call — a
@@ -1236,11 +1268,12 @@ fn space_degree(
         // which adds `nesting` for every call.)
         if callee_degree > 0 {
             degree = degree.max(nesting + callee_degree);
+            coeff += callee_coeff;
         }
     }
     in_progress.remove(&f);
-    memo.insert(f, degree);
-    degree
+    memo.insert(f, (degree, coeff));
+    (degree, coeff)
 }
 
 /// @PLN86 space budget — worst-case SPACE degree over all sandboxed entries: peak
@@ -1250,12 +1283,26 @@ fn space_degree(
 /// analogue of the time budget (3.4) for memory.
 #[must_use]
 pub fn sandbox_space_degree(data: &Data, sandboxed: &HashMap<u32, String>) -> u32 {
+    sandbox_space_footprint(data, sandboxed).0
+}
+
+/// @PLN86 P7.1 — the worst-case peak-heap FOOTPRINT shape `(degree, coeff)` over all
+/// sandboxed entries: peak heap is bounded by `coeff · n^degree` bytes in the largest
+/// input `n`.  `degree` is the max over entries; `coeff` sums their per-entry
+/// coefficients (conservative — entries that share an accumulating callee count it in
+/// each, an over-estimate that never under-bounds).  F11 compares `coeff ·
+/// max_input_n^degree` against the profile's `data_budget`.
+#[must_use]
+pub fn sandbox_space_footprint(data: &Data, sandboxed: &HashMap<u32, String>) -> (u32, u32) {
     let (mut memo, mut in_progress) = (HashMap::new(), HashSet::new());
-    sandboxed
-        .keys()
-        .map(|&f| space_degree(data, sandboxed, f, &mut memo, &mut in_progress))
-        .max()
-        .unwrap_or(0)
+    let mut degree = 0;
+    let mut coeff = 0u32;
+    for &f in sandboxed.keys() {
+        let (d, c) = space_degree(data, sandboxed, f, &mut memo, &mut in_progress);
+        degree = degree.max(d);
+        coeff = coeff.saturating_add(c);
+    }
+    (degree, coeff)
 }
 
 /// @PLN86 — the human-readable complexity report (the L5 host hint): worst-case

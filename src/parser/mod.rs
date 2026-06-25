@@ -918,6 +918,15 @@ impl Parser {
         crate::sandbox::sandbox_space_degree(&self.data, &self.def_sandbox)
     }
 
+    /// @PLN86 P7.1 (F9) — the worst-case peak-heap footprint `(degree, coeff)`: peak
+    /// heap is bounded by `coeff · n^degree` bytes in the largest input `n`.  The
+    /// coefficient is `Σ record_size` over the accumulating allocation sites; F11
+    /// compares `coeff · max_input_n^degree` against the profile's `data_budget`.
+    #[must_use]
+    pub fn sandbox_space_footprint(&self) -> (u32, u32) {
+        crate::sandbox::sandbox_space_footprint(&self.data, &self.def_sandbox)
+    }
+
     /// @PLN86 prevention #3 — host capabilities that are NOT total: every
     /// `#cap`-tagged function whose call tree can reach an abort op.  A host-side
     /// lint (the mirror of the script-side 3.3 exclusion); an empty result means the
@@ -9175,6 +9184,47 @@ mod plan86_admission_tests {
             p3.sandbox_complexity_report().contains("space O(n^2)"),
             "report names the space axis: {}",
             p3.sandbox_complexity_report()
+        );
+    }
+
+    /// @PLN86 P7.1 (F9) — the space footprint reports `(degree, coeff)`: a per-element
+    /// build loop accumulates ONE record's stride per appended element.
+    #[test]
+    fn space_footprint_reports_degree_and_record_coefficient() {
+        // vector<integer>: one i64 element = 8 bytes per append.
+        let pi = parse_admit_libs(
+            &["fn:b"],
+            &["code"],
+            &[],
+            "fn b() -> integer { r = []; for i in 0..10 { r += [i] } len(r) }\n",
+        );
+        assert_eq!(
+            pi.sandbox_space_footprint(),
+            (1, 8),
+            "vector<integer> build → (degree 1, coeff 8)"
+        );
+
+        // vector<Mob>: coeff = the struct's record stride (one i64 field = 8 bytes).
+        let ps = parse_admit_libs(
+            &["fn:bs"],
+            &["code"],
+            &[],
+            "struct Mob { hp: integer }\n\
+             fn bs() -> integer { acc: vector<Mob> = []; \
+              for i in 0..10 { acc += [Mob { hp: i }] } len(acc) }\n",
+        );
+        assert!(
+            ps.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            ps.diagnostics.lines()
+        );
+        // vector<Mob> stores DbRef slots (a reference element) → sizeof(DbRef)=12 bytes
+        // per element in the backing (the Mob record body is a separate allocation, a
+        // documented v1 under-count). Degree 1, coeff 12 (one slot per appended element).
+        assert_eq!(
+            ps.sandbox_space_footprint(),
+            (1, 12),
+            "vector<Mob> build → (degree 1, coeff 12 = DbRef backing slot)"
         );
     }
 
