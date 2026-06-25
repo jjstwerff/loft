@@ -1992,34 +1992,30 @@ impl Parser {
     /// is validated at admission, so forward + cross-file declarations resolve.  Shared
     /// by the function call gate (P6.2, in the signature) and a struct-field link (P6.4).
     pub(crate) fn try_cap_link(&mut self) -> Option<String> {
-        // No leading identifier → no link here (the terminator follows); not an error.
-        let mut group = self.lexer.has_identifier()?;
+        // NON-DESTRUCTIVE: in this optional position the next token might instead be
+        // a separator, a default `=`, or a field-modifier keyword (`not`, `assert`)
+        // — all of which lex as ordinary tokens/identifiers.  So consume nothing
+        // unless this is really a link: save the cursor and revert on a miss.  Only
+        // a real `#` followed by a bad right is a hard error.
+        let saved = self.lexer.link();
+        let Some(mut group) = self.lexer.has_identifier() else {
+            return None; // no identifier consumed
+        };
         while self.lexer.has_token(".") {
             let Some(seg) = self.lexer.has_identifier() else {
-                diagnostic!(
-                    self.lexer,
-                    Level::Error,
-                    "Expect an identifier after `.` in a capability group"
-                );
+                self.lexer.revert(saved);
                 return None;
             };
             group.push('.');
             group.push_str(&seg);
         }
         if !self.lexer.has_token("#") {
-            diagnostic!(
-                self.lexer,
-                Level::Error,
-                "Expect `#read` / `#update` / `#append` after the capability group"
-            );
+            // not a link (e.g. `not null`, `assert(...)`, the next field) — un-consume.
+            self.lexer.revert(saved);
             return None;
         }
         let Some(right) = self.lexer.has_identifier() else {
-            diagnostic!(
-                self.lexer,
-                Level::Error,
-                "Expect a right (read/update/append) after `#`"
-            );
+            self.lexer.revert(saved);
             return None;
         };
         if crate::sandbox::Right::parse(&right).is_none() {
@@ -2031,6 +2027,18 @@ impl Parser {
             return None;
         }
         Some(format!("{group}#{right}"))
+    }
+
+    /// @PLN86 P6.4 — consume zero-or-more `group#right` capability links after a
+    /// struct field's type (`health: int stats#read stats#update`), recording each
+    /// on `(struct, field)` for the admission walk.  Consumed every pass, recorded
+    /// once (first pass) so the per-field link list does not double on re-parse.
+    pub(crate) fn parse_field_links(&mut self, d_nr: u32, a_name: &str) {
+        while let Some(token) = self.try_cap_link() {
+            if self.first_pass {
+                self.record_member_link(d_nr, a_name, token);
+            }
+        }
     }
 
     pub(crate) fn parse_struct(&mut self) -> bool {
@@ -2463,6 +2471,8 @@ impl Parser {
                             a_type = tp;
                         }
                     }
+                    // @PLN86 P6.4 — links after a scalar/named field type.
+                    self.parse_field_links(d_nr, a_name);
                 }
             } else if let Some(tp) = self.parse_type_full(d_nr, false) {
                 // Plan-06 phase 4d: tuple-typed struct fields are now
@@ -2474,6 +2484,8 @@ impl Parser {
                 // and `get_val` for the per-element write/read paths.
                 defined = true;
                 a_type = tp;
+                // @PLN86 P6.4 — links after a vector/generic/tuple field type.
+                self.parse_field_links(d_nr, a_name);
                 break;
             } else {
                 break;

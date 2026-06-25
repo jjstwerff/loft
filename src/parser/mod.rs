@@ -128,6 +128,12 @@ pub struct Parser {
     /// `fs.read` groups).  Parser-side (off the IR), idempotent across passes; IR
     /// persistence for a warm-cached stdlib is P6.8.
     pub(crate) declared_capabilities: HashSet<String>,
+    /// @PLN86 P6.4 — capability links on struct fields, keyed by `(struct def_nr,
+    /// field name)` → the `group#right` tokens written after the field's type
+    /// (`health: int stats#read stats#update`).  The admission walk gates a
+    /// sandboxed read/update/append of a host field on the matching grant.
+    /// Parser-side (off the IR), recorded first-pass; IR persistence is P6.8.
+    pub(crate) member_access: HashMap<(u32, String), Vec<String>>,
     /// @PLN87 — transient one-shot: set while parsing a `&<lvalue>` binding (the prefix
     /// `&` in `b = &a`, or the `&` in a `b: &T = a` type annotation), consumed by
     /// `parse_assign_op` to lower a SCALAR reference to `OpCreateStack`. Cleared per
@@ -520,6 +526,7 @@ impl Parser {
             sandbox_raw_writes: HashMap::new(),
             sandbox_fn_refs: HashMap::new(),
             declared_capabilities: HashSet::new(),
+            member_access: HashMap::new(),
             amp_pending: false,
             in_sandbox: false,
             parse_depth: 0,
@@ -688,6 +695,24 @@ impl Parser {
         self.declared_capabilities.contains(group)
     }
 
+    /// @PLN86 P6.4 — record a `group#right` capability link on a struct field
+    /// (`struct def_nr`, field name).  Called as each field's links are parsed.
+    pub(crate) fn record_member_link(&mut self, struct_nr: u32, field: &str, token: String) {
+        self.member_access
+            .entry((struct_nr, field.to_string()))
+            .or_default()
+            .push(token);
+    }
+
+    /// @PLN86 P6.4 — the `group#right` capability links on a struct field, or empty
+    /// if the field carries none (read-allow / no-update / no-append by default).
+    #[must_use]
+    pub fn member_links(&self, struct_nr: u32, field: &str) -> &[String] {
+        self.member_access
+            .get(&(struct_nr, field.to_string()))
+            .map_or(&[], Vec::as_slice)
+    }
+
     /// @PLN86 step 2.5 — ALL sandbox admission errors (capability + totality +
     /// no-raw-write), each rendered as a correct, specific, actionable message
     /// (position + the rule + the fix).  Empty when the script is admitted.  This
@@ -813,6 +838,7 @@ impl Parser {
         self.sandbox_raw_writes.clear();
         self.sandbox_fn_refs.clear();
         self.declared_capabilities.clear();
+        self.member_access.clear();
         self.amp_pending = false;
         self.data.reset();
         // @PLN22 Phase 2 — the main program parses under its own source
@@ -1217,6 +1243,7 @@ impl Parser {
         self.lambda_counter = 0;
         self.fn_lambdas.clear();
         self.declared_capabilities.clear();
+        self.member_access.clear();
         self.parse_file();
         self.resolve_deferred_unknowns();
         let lvl = self.lexer.diagnostics().level();
@@ -8127,6 +8154,27 @@ mod plan86_nesting_guard_tests {
         assert_eq!(Right::parse("update"), Some(Right::Update));
         assert_eq!(Right::parse("append"), Some(Right::Append));
         assert_eq!(Right::parse("delete"), None);
+    }
+
+    #[test]
+    fn field_capability_links_are_recorded() {
+        // @PLN86 P6.4 — a `group#right` link after a struct field's type is recorded
+        // per (struct, field); an unlinked field carries none; multiple links stack;
+        // append rides on a collection field.
+        let mut p = Parser::new();
+        parse_source(
+            &mut p,
+            "capability stats\ncapability bag\n\
+             struct Item { v: integer }\n\
+             struct Entity { id: integer, health: integer stats#read stats#update, \
+             loot: Item bag#read bag#append }\n\
+             fn main() { }\n",
+        );
+        let e = p.data.def_nr("Entity");
+        let links = |f: &str| -> Vec<String> { p.member_links(e, f).to_vec() };
+        assert!(links("id").is_empty(), "an unlinked field carries no links");
+        assert_eq!(links("health"), ["stats#read", "stats#update"]);
+        assert_eq!(links("loot"), ["bag#read", "bag#append"]);
     }
 
     /// @PLN86 0.1 — hostile deep nesting inside a sandboxed def is a clean
