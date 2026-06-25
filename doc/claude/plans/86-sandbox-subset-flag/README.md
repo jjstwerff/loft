@@ -866,13 +866,17 @@ proven-total script.
   the IR cache where the parser-side registry is not restored, so re-checking them would falsely
   reject a clean program. *Verify:* `undeclared_capability_link_is_a_load_error` — `helth#update`
   (typo for declared `health`) → load error naming `helth`; the declared spelling is clean.
-- **6.8b IR persistence (member_access registry + field/param links) — REMAINING.** Round-trip the
-  capability registry + `member_access`/`param_locks` through the store codec so a **warm-cached host
-  type / library** keeps its links (and the undeclared-link scan can widen past `MAIN_SOURCE` to
-  cached libraries). Forward-looking: no stdlib struct carries a field link today, and a sandboxed
-  write to an unrestored library link fails *safe* (the coarse 2.4 read-only reject), so this is an
-  expressiveness gap for cached libraries, not a safety hole. *Verify:* a tagged member survives the
-  store round-trip; a cached-library `#update` field admits under its grant.
+- **6.8b IR persistence — ✅ INFRASTRUCTURE LANDED (F8b); WIRING DEFERRED.** A new
+  `Attribute.links: Vec<String>` is the single home for a struct field's read/update/append rights
+  AND a parameter's `#default` lock, and it **round-trips through the IR store** exactly like
+  `Definition.cap` (`ATTR_LINKS`, the baked-layout guard pins the offsets). So a warm-cached host
+  type / library *can* carry persisted links. *Verify:* `member_links_survive_store_round_trip`
+  (mmap) — a non-empty link list survives `Data::save`→`open` with `compare_data` equality.
+  **Deferred wiring** (zero consumer today — no stdlib/library ships gated fields, and an unrestored
+  link fails *safe* via the coarse 2.4 reject): the parse→`links` finalize, repointing admission to
+  read `Attribute.links` (so cached field gating actually fires), and the **registry** persistence +
+  the F8a widening past `MAIN_SOURCE`. These land with the first cached-gated-library consumer
+  (driven by the crawler dogfood), where they can be tested against real cached types.
 - **6.9 Parameter `#default` locks (§7.2).** ✅ **DONE.** `parse_arguments` parses an optional
   `group#default` link after a parameter's default (`count: int = 1 spawn.count#default`),
   ferried through the transient `pending_param_locks` into `param_locks[(fn, idx)]` once the
@@ -984,11 +988,11 @@ releasable tree.
   **undeclared** `capability` is a clean load error (`sandbox_undeclared_links`, namespace-aware
   `cap_is_declared`), folded into `sandbox_admission_errors` + CLI-enforced. *Gate:*
   `undeclared_capability_link_is_a_load_error` — `helth#update` → load error naming `helth`.
-- **F8b — IR persistence (registry + member/param links)** — REMAINING. Round-trip the capability
-  registry + `member_access`/`param_locks` through the store codec so a warm-cached host type keeps
-  its links (and the F8a scan widens past `MAIN_SOURCE` to cached libraries). Forward-looking: fails
-  *safe* today (coarse read-only reject), so an expressiveness gap for cached libraries, not a hole.
-  *Gate:* a tagged member survives the store round-trip; a cached-library `#update` field admits.
+- **F8b — IR persistence (member links)** — ✅ **INFRASTRUCTURE DONE; wiring deferred.**
+  `Attribute.links` round-trips through the IR store (gate: `member_links_survive_store_round_trip`).
+  Deferred (zero consumer; fails *safe* via the coarse reject): the parse→links finalize, repointing
+  admission to read `Attribute.links`, and registry persistence + the F8a widening — land with the
+  first cached-gated-library consumer.
 
 **Data envelope (all DONE)**
 - **F9 — coefficient on `space_degree`** (P7.1). ✅ **DONE.** `sandbox_space_footprint`
@@ -1013,12 +1017,14 @@ releasable tree.
 - **F13 — RED/GREEN corpus** (P8.2). ✅ **DONE.** `access_corpus_red_green` — every access rule
   as a RED + its GREEN twin (non-vacuity), the real `02_files.loft` `mtime` split included.
 
-**Status:** the **entire F-ladder F1–F13 is landed** EXCEPT **F8b** — the host-authored model
-surface + its load-time validation + the compile-time data-envelope footprint bound + the no-run
-`sandbox-check` verdict + the committed RED/GREEN access corpus are all complete and CLI-enforced.
-OOM is a load-time concern. The one remaining piece is **F8b** (registry + member/param IR
-persistence — a forward-looking, fails-safe widening so cached-library links survive the IR cache;
-independent, no @PLN85 dep). v1's compile-time core is otherwise DONE.
+**Status:** the **entire F-ladder F1–F13 is landed**, with **F8b at its infrastructure stage** —
+the host-authored model surface + its load-time validation + the compile-time data-envelope
+footprint bound + the no-run `sandbox-check` verdict + the committed RED/GREEN access corpus are all
+complete and CLI-enforced, and the `Attribute.links` IR-persistence codec (F8b) round-trips and is
+guarded. OOM is a load-time concern. **v1's compile-time core is DONE.** The only open item is the
+remaining F8b *wiring* (parse→links finalize + admission-read repoint + registry persistence/F8a
+widening) — forward-looking, fails-safe, zero-consumer today; it lands with the first
+cached-gated-library, driven by the crawler dogfood.
 
 ## Open questions
 
