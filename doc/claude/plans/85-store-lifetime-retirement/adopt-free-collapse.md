@@ -169,12 +169,57 @@ delivery/adopt seam (most likely) or an older latent shape.
 
 - [x] #457 reproduced (pure loft), minimized to 12 lines, mechanism root-caused, class named.
       Repro: [`probes/457-adopt-free-min.loft`](probes/457-adopt-free-min.loft).
-- [ ] **NEXT:** regression-origin read (§3) — is this D-own-1 fallout? (`git show`, not bisect).
-- [ ] Instrument: count the adopt/free re-assertion sites (§4.1).
-- [ ] Probe deps-sufficiency (§4.2) — fact-unread vs D-own-2 gap.
-- [ ] Complete the fact at the chokepoint (§5); delete the per-site condition(s); both backends green.
-- [ ] Sweep the shape-space dry (§6); graduate the probe to `tests/scripts/85-*`; oracle guard.
-- [ ] Verify ZT `loft test` green + leak-clean both backends.
+- [x] Regression-origin read (§3) — the `Type::Reference | Enum` gate on the witness-pairing
+      predates D-own-1 (since #137, `5afb054c`).  So #457 is the **seam**, not D-own-1 fallout:
+      D-own-1 made the vector return-delivery *adopt* `__ref_N` (like Reference), but the
+      adopt/free protection was never widened to vectors.
+- [x] Instrument + deps-sufficiency (§4.1–4.2) — **fact-unread, not a D-own-2 gap**.  The
+      witness-pairing (`paired_witness` → `OpFreeRefIfDistinct(__ref_N, witness)`) already exists;
+      it was just type-restricted to Reference/Enum.  `vector_adopts` at scan time reads
+      `returned().depend() == [hidden_buffer_attr]` (NOT the `u16::MAX` marker — that's promoted
+      later, so `return_adopts_fresh_store()` reads `false`).
+- [x] **PARTIAL fix landed** (`47b30a53`, `scopes.rs`): extend the witness-pairing to vector
+      adopters + an explicit `OpFreeRef(v)` for a non-return-source adopter (it keeps its dep, so
+      no null-init-materialisation orphan).  No new opcodes.  **#457 inclusion-proof subject FIXED**
+      (ZT `test_directory` + issue repro pass, baseline SIGSEGVs); full loft suite **2538/2538**,
+      leak-clean both backends.
+- [x] Sweep + graduate — [`probes/457-shape-sweep.loft`](probes/457-shape-sweep.loft) (if/else ·
+      match-STATEMENT · nested-if · 3-arm · int/struct/text elems · recursion depth, value+length+
+      leak both backends) → `tests/scripts/85-store-lifetime-457-vector-adopt-free.loft`.
+- [ ] **NOT GREEN — two residuals remain (see §8); #457 stays OPEN.**
+
+## 8. Findings — what landed, what's left, and why it is NOT clean yet
+
+**The fix is a FREE-side patch, not the root fix.**  It grew the thicket (Reference/Enum strip +
+witness-pairing `IfDistinct` + the new vector explicit-free) rather than shrinking it — the opposite
+of this slice's stated "net code DOWN" goal.  The one win: vectors REUSE the Reference/Enum
+pairing instead of a bespoke #457 condition.
+
+**The root it patches around — a dep-mismatch.**  A vector adopter's *static* dep says
+"`v` borrows `__ref_N`", but its *runtime* store may be a **deeper** store (the callee adopted a
+grandchild) or a **stack transient**.  Patching the free cannot reconcile that lie, so each shape
+needed another condition.  The two residuals are the mismatch surfacing:
+
+- **R1 — #306 on ZT `directory` §8.3 / `connauth`.**  The explicit `OpFreeRef(v)` occasionally
+  targets a non-heap store (the dep lying at runtime); the #306 guard no-ops it **loudly**.  The
+  loft suite never hits this (it is clean); it is confined to ZT's complex shapes.  Functionally a
+  guard-protected no-op (no corruption), but it is the same root.
+- **R2 — ZT `directory::test_consistency` (m=3,5,6 fail).**  A **separate** store-lifetime bug
+  **inside `verify_consistency`**, not the vector-adopt: the proof vector is STABLE (snapshot
+  before/after the call is identical), but verify miscomputes via the `fr = mnode(c, fr)`
+  text-reassign-from-allocating-call loop.  Standalone repro (real crypto) reproduces ZT exactly:
+  baseline SIGSEGVs, this fix turns it into a wrong-result.  Its own slice.
+
+**The clean, complexity-DELETING end state — the delivery root fix (the recommended next step):**
+make the multi-arm-reassign tail `return out` DELIVER into `__vdb_1`/`__ref_N` (clear+append —
+exactly what the early-return arm already emits) instead of adopting a different store, in
+`nrvo_collapse_tail_set` (`control.rs`).  Then `v == __ref_N` ALWAYS, the dep is accurate, and a
+SINGLE plain free works — letting us **delete** the vector pairing, the explicit free, AND the
+`IfDistinct` dance, and it closes R1 (and likely R2) by construction.  Cost: one vector copy per
+recursive return (the base case already pays it).  Bigger + riskier (D-own-1 area), but it is the
+version that gets *smaller*.  Three free-side approaches were tried and rejected on the way here:
+pairing-only (sound but FAILS the leak suite — every adopt leaks), strip-the-dep (leak-free but a
+ref-element null-init-materialisation orphan), explicit-free (leak-free + suite-clean but R1).
 
 ## Anchors
 
