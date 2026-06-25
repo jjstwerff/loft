@@ -37,6 +37,23 @@ pub struct SandboxProfile {
     /// really guarding; the admission proof itself is backend-agnostic, so a sandboxed
     /// program runs on whatever backend the host picks.)
     pub native_ffi: bool,
+    /// @PLN86 §8 (P7.3) — the data envelope.  The host declares the input bounds the
+    /// complexity degrees are expressed in plus a peak-heap budget; admission proves
+    /// the footprint fits or rejects (F11).  `0` = unset: an unset bound that a degree
+    /// actually depends on makes the footprint unprovable (rejected); an unset
+    /// `data_budget` disables the check (report-only).
+    ///
+    /// Largest input collection / range size `n` (the variable the `O(n^d)` degrees
+    /// are in).
+    pub max_input_n: u64,
+    /// Maximum structure nesting depth the host will feed in.
+    pub max_depth: u64,
+    /// Maximum dynamic-string length (bytes) — bounds an otherwise-uncapped string
+    /// allocation (F10).
+    pub max_string_len: u64,
+    /// Peak live-heap budget in bytes.  `coeff · max_input_n^degree` must be ≤ this,
+    /// else the script is rejected at load (F11).  `0` disables the budget check.
+    pub data_budget: u64,
 }
 
 impl SandboxProfile {
@@ -215,6 +232,12 @@ pub fn parse_sandbox_config(content: &str) -> SandboxConfig {
                 // `backend` is accepted-and-ignored: interpret-only is unconditional
                 // for sandboxed code, not a per-profile setting (see SandboxProfile).
                 "native_ffi" => profile.native_ffi = value.trim() == "true",
+                // @PLN86 §8 (P7.3) — data-envelope bounds; a bare integer, `0`/absent
+                // = unset.  An underscore-or-comma separator in the figure is tolerated.
+                "max_input_n" => profile.max_input_n = parse_u64(value),
+                "max_depth" => profile.max_depth = parse_u64(value),
+                "max_string_len" => profile.max_string_len = parse_u64(value),
+                "data_budget" => profile.data_budget = parse_u64(value),
                 _ => {}
             }
         }
@@ -239,6 +262,20 @@ fn strip_comment(line: &str) -> &str {
 
 /// Parse a value that is either a TOML array `["a", "b"]` or a bare/quoted
 /// scalar into a trimmed, unquoted, non-empty list.
+/// @PLN86 §8 — parse a data-envelope figure: a bare unsigned integer, tolerating
+/// `_`/`,` digit groupers and surrounding quotes (`"1_000_000"`).  Unparseable / empty
+/// → `0` (treated as unset).
+fn parse_u64(value: &str) -> u64 {
+    value
+        .trim()
+        .trim_matches('"')
+        .chars()
+        .filter(char::is_ascii_digit)
+        .collect::<String>()
+        .parse()
+        .unwrap_or(0)
+}
+
 fn parse_str_list(value: &str) -> Vec<String> {
     let inner = value
         .trim()
@@ -1664,6 +1701,35 @@ allow = ["game#read", "game#update", "math#read", "collections#read"]
         assert!(
             cfg.profile_for_selector("mods/**/*.loft")
                 .is_some_and(|p| p.allows("math#read"))
+        );
+    }
+
+    #[test]
+    fn parses_data_envelope_fields() {
+        let toml = r#"
+[sandbox]
+mod = ["fn:eval"]
+
+[profile.mod]
+allow_libs = ["code"]
+max_input_n = 10000
+max_depth = 64
+max_string_len = 256
+data_budget = "8_000_000"
+"#;
+        let cfg = parse_sandbox_config(toml);
+        let p = cfg.profiles.get("mod").expect("profile present");
+        assert_eq!(p.max_input_n, 10000);
+        assert_eq!(p.max_depth, 64);
+        assert_eq!(p.max_string_len, 256);
+        assert_eq!(p.data_budget, 8_000_000, "underscore-grouped figure parses");
+        // an absent envelope field stays 0 (unset).
+        let bare = parse_sandbox_config("[sandbox]\nm = [\"fn:e\"]\n[profile.m]\n");
+        let bp = bare.profiles.get("m").expect("profile present");
+        assert_eq!(
+            (bp.max_input_n, bp.data_budget),
+            (0, 0),
+            "absent → unset (0)"
         );
     }
 
