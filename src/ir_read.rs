@@ -1488,9 +1488,9 @@ mod tests {
         let loaded = Data::open(spath_str).expect("Data::open");
         let _ = std::fs::remove_file(&spath);
 
-        let linv = loaded.def_nr("Inv");
+        let reloaded_inv = loaded.def_nr("Inv");
         assert_eq!(
-            loaded.def(linv).attributes[0].links,
+            loaded.def(reloaded_inv).attributes[0].links,
             links,
             "member links must survive the store round-trip"
         );
