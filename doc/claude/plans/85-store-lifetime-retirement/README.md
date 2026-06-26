@@ -8,6 +8,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 Plan id: [@PLN85](https://github.com/loft-lang/plans/issues/85) · investigation-style
 (reading order: Status → Probes → Cluster docs → Roadmap).
 
+> **▶▶ NEXT SESSION START HERE (2026-06-26):** [NEXT-SESSION-leak-fix.md](NEXT-SESSION-leak-fix.md).
+> #462 CRASH is FIXED (`0ccc756c`, `resize` in-place-grow zeroing); the #462 LEAK is root-caused
+> (the **adopt-and-re-return NRVO chain** — `fn m(){ t=base(); t }` leaks 1 store/call, both
+> backends) but NOT fixed — that handoff doc has the repros, broken-bytecode root cause, fix
+> target (`control.rs` `block_result`/`ref_return`/`nrvo_collapse_tail_set`), and method.
+
 > **▶ ACTIVE D-own slice (2026-06-25): the adopt/free re-derivation collapse — driven by
 > [#457](https://github.com/loft-lang/loft/issues/457).** A `vector<text>` corrupted (wrong len +
 > SIGSEGV) because a returned local adopted across `if/else` arms is freed before `return`.
