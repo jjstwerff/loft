@@ -5,6 +5,19 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # NEXT SESSION — start here (cluster-462 leak fix)
 
+> ## ✅ THE ADOPT-AND-RE-RETURN LEAK IS FIXED (2026-06-26, commit `cafe98a0`)
+>
+> The task this doc describes is **done**. Fix at the NRVO chokepoint
+> (`control.rs nrvo_collapse_tail_set` + new `nrvo_collapse_defining_call`): mark each collapsed
+> **vector** work-ref `skip_free` (no orphan alloc, no free) and extend the collapse to the
+> `t = f(); t += …; t` merge shape. **Crawler interp 531→0, native 752→216**; both backends +
+> full suite green; regression `tests/leak_cases/clean/p462_adopt_rereturn_vector.loft`. Detail:
+> [cluster-462-slot-reuse-uaf.md](cluster-462-slot-reuse-uaf.md) roadmap item 4.
+>
+> **Still open under #462 (roadmap item 5):** the native-only `MonsterDef×216` **record** leak —
+> a DIFFERENT mechanism (the `mon_*` borrowed-view shape, pre-existing on `main`). Keep #462 open.
+> The rest of this doc is the original (now-historical) task description.
+
 Cold-start handoff after the 2026-06-26 session that fixed the #462 crash and root-caused the
 #462 leak. Branch: **`fix-crawler`** (everything pushed; no open PR). Read order: this file →
 [cluster-462-slot-reuse-uaf.md](cluster-462-slot-reuse-uaf.md) → the repros below.
@@ -16,10 +29,10 @@ Cold-start handoff after the 2026-06-26 session that fixed the #462 crash and ro
 - **#462 CRASH = FIXED** (commit `0ccc756c`): `Store::resize`'s in-place grow now zeroes the
   absorbed region. Crawler completes `QUEST OK` on both backends; suite 2542-green; regression
   `store.rs::resize_in_place_zeroes_absorbed_region`.
-- **#462 LEAK = OPEN, root-caused, NOT fixed.** This is the next task. It is the
-  **adopt-and-re-return NRVO chain** leaking one store per call (both backends).
-- Issue #462 is intentionally **kept open** (two-severity rule): crash fixed, leak remains.
-  Commits use `Refs #462`, NOT `Fixes #462`, so a merge won't auto-close it.
+- **#462 LEAK (adopt-and-re-return) = FIXED** (commit `cafe98a0`, see banner above). The residual
+  native record leak (different mechanism) keeps #462 open.
+- Issue #462 is intentionally **kept open** (two-severity rule): crash fixed, vector leak fixed,
+  the native record leak remains. Commits use `Refs #462`, NOT `Fixes #462`.
 
 ---
 

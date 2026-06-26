@@ -263,6 +263,19 @@ loft --interpret --lib ../loft-libs-core-main/ --lib ../loft-libs-world/ $BL src
    absorbed region), regression `store.rs::resize_in_place_zeroes_absorbed_region`. Crash gone
    on both backends; full suite green. (A real-scale `.loft` crawler-corpus guard is still
    nice-to-have but the unit test pins the invariant directly.)
-4. ⬜ **OPEN** — the coexisting **leak** (row 4): interp `2 stores not freed`
-   (`ItemDef`/`MonsterDef` vectors); native clean. Separate severity field — keeping #462 open
-   for it (the two-severity rule: don't claim "fixed" while leaks persist).
+4. ✅ **DONE (the adopt-and-re-return vector leak)** — fixed at the NRVO chokepoint
+   (`control.rs nrvo_collapse_tail_set` + new `nrvo_collapse_defining_call`). The collapse
+   redirected the inner call's hidden `__ref_N` buffer onto the retbuf but left `__ref_N`'s eager
+   `OpDatabase` allocation orphaned (never used, never freed); scope analysis suppressed its free
+   because `cv`'s stale dep still named it as escaping. Fix = mark each collapsed **vector**
+   work-ref `skip_free` (no-alloc `OpInitRefSentinel`, no free), and extend the collapse to the
+   `t = f(); t += …; t` merge shape (`game_items()`/`game_monsters()`) via a top-level
+   single-defining-call redirect. VECTOR-only (a Reference/struct work-ref uses the
+   `gen_set_first_ref_*` deep-copy path where the store is live + balanced — marking it skip_free
+   regressed @P377). Crawler: **interp 531→0**, **native 752→216**. Both backends, suite-green.
+   Regression: `tests/leak_cases/clean/p462_adopt_rereturn_vector.loft`. Commit `cafe98a0`.
+5. ⬜ **OPEN (residual, pre-existing, native-only)** — `MonsterDef×216` records still leak on
+   `--native` (clean on interp). A DIFFERENT mechanism from the vector leak above: the `mon_*`
+   borrowed-view shape (`mon_one`/`mon_choose` return a view of a local `pool`; see row 8 /
+   [over-free-class-study.md](over-free-class-study.md)). On `main` before this fix too — keeping
+   #462 open for it (`Refs #462`, not `Fixes`).
