@@ -93,6 +93,19 @@ clear)**, and reports `stamped < current`. The LIFO clear is load-bearing: witho
 stamp survives a non-DbRef push that reused the offset → false positives (162 reports → 57
 after the clear).
 
+### Finding — the residual 3546 crash is freed-AND-REUSED, not free=true
+
+Row 2 (`copy_record` source `free=true`) was verified **pre-fix**. After the `mon_one`/`pool`
+driver was closed (the `nullable_to_dense_assign` materialise-copy), the **remaining** 3546
+SIGSEGV is a *different* shape: `LOFT_UAF_SRC=1` now reports **zero `src BAD`** at the crash —
+the source store's `free` flag is **false**. The slot was freed *and already re-claimed* by a
+new, **smaller** occupant; the `OpCopyRecord` at 3546 reads Enemy-size (238 bytes, offset 8)
+from it → out-of-bounds → SIGSEGV. This is precisely the slice (a) cannot see (free flag is
+false) and (c) can (the per-slot **gen** bumped on the intervening free). So post-`mon_one`,
+cluster-462's live crash is a **reused-slot** UAF, not a freed-slot UAF — the fix target is
+the over-free of the nullable-element append source (`enemies += [mk_enemy(...)]`), whose
+return store is freed while the append's copy-source DbRef is still live on the eval stack.
+
 ### Finding — (c) fingers the crash site
 
 `LOFT_UAF_GEN=1` on the crawler (`src/questtest.loft`) reports **57 distinct stale-reused-ref
