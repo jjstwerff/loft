@@ -307,6 +307,22 @@ pub fn uaf_gen_enabled() -> bool {
     *UAF_GEN.get_or_init(|| std::env::var_os("LOFT_UAF_GEN").is_some())
 }
 
+/// `LOFT_WATCH_STORE=<n>` — the write-watch for cluster-462's root: after each
+/// `copy_record` whose DESTINATION is store `<n>`, scan the just-written record's text
+/// fields for an out-of-bounds pointer and report the op that produced it (pc/line +
+/// source). This catches the BUILD copy that first writes a garbage text-pointer into the
+/// watched store, distinguishing "uninitialised fresh slot" from "propagated over-free".
+/// Returns the watched store number, or None when unset.
+#[must_use]
+pub fn watch_store() -> Option<u16> {
+    static WATCH: OnceLock<Option<u16>> = OnceLock::new();
+    *WATCH.get_or_init(|| {
+        std::env::var("LOFT_WATCH_STORE")
+            .ok()
+            .and_then(|s| s.trim().parse::<u16>().ok())
+    })
+}
+
 thread_local! {
     /// `LOFT_UAF_GEN` (c): generation per store slot — bumped on each free. A DbRef
     /// minted while a slot is at gen G is stale if the slot reaches gen >G (freed +

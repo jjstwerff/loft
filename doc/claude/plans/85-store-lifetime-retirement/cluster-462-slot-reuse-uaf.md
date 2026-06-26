@@ -8,11 +8,37 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 **Source:** [loft#462](https://github.com/loft-lang/loft/issues/462) (sev:high, wa:none,
 hit-by:crawler). Surfaced by the crawler dogfood consumer's headless gate.
 
+> ## ✅ CRASH FIXED (2026-06-26) — `resize` in-place grow now zeroes the absorbed region
+>
+> **Root cause:** `Store::resize`'s in-place grow path absorbed an adjacent freed block and
+> extended the record **without zeroing** the absorbed bytes — violating the "claimed payload
+> reads zero" invariant that `claim`/`finish_claim` uphold (and that `set_default_value` + the
+> vector/text readers rely on). A vector (`enemies`) growing in-place over a dirty freed block
+> exposed element slots carrying **stale text/vec handles**; `remove_claims`, tearing the old
+> vector down before reassignment, followed a garbage text-pointer into `Store::delete` → OOB
+> read of a record header → SIGSEGV at `sim.loft:3546`.
+>
+> **Fix:** `src/store.rs` `resize` — after the in-place grow, `zero_range` the newly-absorbed
+> tail (gated on the same `zero_claim_enabled` as `claim`, so `LOFT_NO_ZERO_CLAIM` toggles
+> both). The crawler now completes (`QUEST OK`) on **both** backends with no diagnostic guard.
+> Regression: `store.rs` unit test `resize_in_place_zeroes_absorbed_region` (fails under
+> `LOFT_NO_ZERO_CLAIM`, passes with the fix).
+>
+> **How it was found (the instrument chain):** none of the source-side detectors (a/b/c) saw
+> it because the fault is in dst teardown, not the source. The phase trace localised it to
+> `remove_claims`; detector (d) named the dst field; the **`LOFT_WATCH_STORE` write-watch**
+> across all copy paths found **zero** writes of the garbage — the decisive negative that ruled
+> out "a copy wrote it" and pointed at un-zeroed in-place-grown memory.
+>
+> **Still open — the coexisting LEAK (row 4):** interp still reports `2 stores not freed`
+> (`ItemDef`/`MonsterDef` vectors). Separate severity field, tracked below; the crash fix does
+> not address it (native is leak-free).
+
 **Severity (two fields, never conflate):**
 
 | Corruption / panic / hang | Leak |
 |---|---|
-| 🔴 **SIGSEGV** (interpreter), deterministic, `sim_new_gen_s` @ `src/sim.loft:3546` — the nullable-element struct append `enemies += [mk_enemy(wdef, …)]` | 🔴 **massive** — `LOFT_NO_SLOT_REUSE=1` exhausts the store table (65535 live); pervasive `stores not freed` on `vector<__nullable<Enemy>>` / `<MonsterDef>` / `<ItemDef>` |
+| ✅ **FIXED** — was 🔴 SIGSEGV (interpreter) @ `src/sim.loft:3546`; root = `resize` in-place grow not zeroing | 🔴 still open — pervasive `stores not freed` on `vector<__nullable<Enemy>>` / `<MonsterDef>` / `<ItemDef>` (interp; native clean) |
 
 A **regression** from the @PLN85 D-own delivery rework ([#457](https://github.com/loft-lang/loft/issues/457)/#459) —
 the pre-@PLN85 toolchain produced `QUEST OK`.

@@ -1327,6 +1327,7 @@ impl State {
             };
             self.database.copy_block(&from, &to, size);
             self.database.copy_claims(&data, &to, ctp);
+            self.database.watch_oob_text(&to, ctp, Some(&data), "append_copy");
         }
     }
 
@@ -1501,6 +1502,10 @@ impl State {
         self.database.remove_claims(&to, tp);
         self.database.copy_block(&data, &to, size);
         self.database.copy_claims(&data, &to, tp);
+        // LOFT_WATCH_STORE (cluster-462 write-watch) — name the copy that leaves a garbage
+        // text-ptr in the watched store; src_oob says propagated-vs-introduced-here.
+        self.database
+            .watch_oob_text(&to, tp, Some(&data), "copy_record");
         if std::env::var("LOFT_TRACE_CR").is_ok() {
             let dst_w = self.database.store(&to).get_int(to.rec, to.pos);
             let dst_data_ptr = self.database.store(&to).get_u32_raw(to.rec, to.pos + 8);

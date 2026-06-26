@@ -474,6 +474,21 @@ impl Stores {
                 },
                 known,
             );
+            // LOFT_WATCH_STORE — flag the element if this append left a garbage text-ptr.
+            self.watch_oob_text(
+                &DbRef {
+                    store_nr: db.store_nr,
+                    rec: new_db.rec,
+                    pos: new_db.pos + size * i,
+                },
+                known,
+                Some(&DbRef {
+                    store_nr: o_db.store_nr,
+                    rec: o_rec,
+                    pos: 8 + size * i,
+                }),
+                "vector_add",
+            );
         }
     }
 
@@ -536,6 +551,21 @@ impl Stores {
                     known,
                 );
                 self.store_mut(db).set_u32_raw(slot.rec, slot.pos, new_rec);
+                // LOFT_WATCH_STORE — flag this element if the append left a garbage text-ptr.
+                self.watch_oob_text(
+                    &DbRef {
+                        store_nr: db.store_nr,
+                        rec: new_rec,
+                        pos: 8,
+                    },
+                    known,
+                    Some(&DbRef {
+                        store_nr: o_db.store_nr,
+                        rec: src_rec,
+                        pos: 8,
+                    }),
+                    "vector_add_array",
+                );
             }
             vector::vector_finish(db, &mut self.allocations);
         }

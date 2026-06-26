@@ -2002,6 +2002,70 @@ impl Stores {
         }
     }
 
+    /// `LOFT_WATCH_STORE` (cluster-462 write-watch) — read-only sibling of `remove_claims`:
+    /// walk the record's text fields and return the first whose stored pointer is
+    /// out-of-bounds (`>= capacity_words`, i.e. would fault a later `delete`/`get_str`),
+    /// as `(field_pos, bad_pointer)`. Never deletes, never recurses through a bad pointer
+    /// (it only follows OWNED-CHILD edges, which `for_each_owned_child` derives from the
+    /// type, not from heap pointers — so the walk itself cannot fault). Used to NAME the
+    /// copy that first wrote a garbage text-pointer into the watched store.
+    #[must_use]
+    pub fn first_oob_text(&self, rec: &DbRef, tp: u16) -> Option<(u32, u32)> {
+        match &self.types[tp as usize].parts {
+            Parts::Base if tp == 5 => {
+                let store = self.store(rec);
+                let cur = store.get_u32_raw(rec.rec, rec.pos);
+                if cur != 0 && cur >= store.capacity_words() {
+                    Some((rec.pos, cur))
+                } else {
+                    None
+                }
+            }
+            Parts::Spacial(_, _) => None,
+            _ => {
+                let walk = self.for_each_owned_child(rec, tp);
+                for c in walk.children {
+                    if let Some(hit) = self.first_oob_text(&c.child, c.child_tp) {
+                        return Some(hit);
+                    }
+                }
+                None
+            }
+        }
+    }
+
+    /// `LOFT_WATCH_STORE` write-watch — call right AFTER a copy/append that may have
+    /// written `to` (type `tp`). If the watched store now holds an out-of-bounds text
+    /// pointer, report the writing op (pc/line via `crash_report`) + whether the SOURCE
+    /// already had the bad pointer (`src_oob` distinguishes propagated-from-source vs
+    /// introduced-here). `ctx` names the path. No-op unless `to.store_nr` is watched.
+    pub fn watch_oob_text(&self, to: &DbRef, tp: u16, src: Option<&DbRef>, ctx: &str) {
+        if crate::keys::watch_store() != Some(to.store_nr) {
+            return;
+        }
+        let Some((bad_pos, bad_cur)) = self.first_oob_text(to, tp) else {
+            return;
+        };
+        let src_oob = src.and_then(|s| self.first_oob_text(s, tp));
+        let (pc, _op, _d) = crate::crash_report::last_context();
+        let line = crate::crash_report::source_loc_for_pc(pc).map_or(0, |p| p.line);
+        let cap = self.store(to).capacity_words();
+        thread_local! {
+            static RPT_W: std::cell::RefCell<std::collections::HashSet<(u16, u32, u32)>> =
+                std::cell::RefCell::new(std::collections::HashSet::new());
+        }
+        if RPT_W.with(|s| s.borrow_mut().insert((to.store_nr, to.rec, bad_pos))) {
+            let (s_nr, s_rec, s_pos) =
+                src.map_or((u16::MAX, 0, 0), |s| (s.store_nr, s.rec, s.pos));
+            eprintln!(
+                "[watch-store/{ctx}] OOB text-ptr now in watched store #{}: dst rec={} field \
+                 pos={bad_pos} holds ptr={bad_cur} (cap_words={cap}, tp={tp}) — src=#{s_nr}(rec={s_rec},\
+                 pos={s_pos}) src_oob_text={src_oob:?} — at pc={pc} (line {line})",
+                to.store_nr, to.rec,
+            );
+        }
+    }
+
     /// @PLAN38 — bind the Store at `slot` to a file at `path`, returning
     /// `true` on success.  Dryopea-driven "the hash IS the file" entry
     /// point: a freshly-allocated container (e.g. `hash<X[k]>::new()`)
