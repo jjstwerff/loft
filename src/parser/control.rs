@@ -960,7 +960,11 @@ impl Parser {
                 // path — copying it again here orphans the buffer (a11 leak).
                 // `return from block` is the one funnelled return path (row 104).
                 || (context == "return from block"
-                    && self.tail_whole_arg_vector(l).is_some()))
+                    && self.tail_whole_arg_vector(l).is_some())
+                // @PLN85 P14 — a borrowed match-arm binding (or local) returned
+                // directly borrows a visible arg; copy it into __retbuf rather
+                // than rename it onto (and alias) the caller's buffer.
+                || (context == "return from block" && self.tail_borrows_arg(l)))
             && self
                 .return_buffer()
                 .is_some_and(|(_, buf_var)| !ls.contains(&buf_var))
@@ -4408,6 +4412,47 @@ impl Parser {
                     .then_some(*bv);
                 }
                 _ => return None,
+            }
+        }
+    }
+
+    /// @PLN85 over-free class — does the body tail return a vector LOCAL that
+    /// BORROWS a visible argument (its type deps name an arg)?  The canonical
+    /// case is a match-arm field binding returned directly
+    /// (`Filled { items } => items`, where `items` is a borrowed view of the
+    /// subject's `items` field, deps `["c"]`).  Such a tail is neither an
+    /// `OpGetField` struct-field read (`tail_is_struct_field_read`) nor a whole
+    /// vector ARG (`tail_whole_arg_vector`), so without this it falls through to
+    /// the `Rename` path — which promotes the borrowed binding onto the CALLER's
+    /// return buffer, aliasing the buffer to the arg's store; the caller's later
+    /// buffer free then corrupts the arg (P14 enum-field-vector crash).  Routing
+    /// it through `CopyBorrow` copies the view into `__retbuf` (value semantics).
+    fn tail_borrows_arg(&self, l: &[Value]) -> bool {
+        let mut v = match l.last() {
+            Some(v) => v,
+            None => return false,
+        };
+        loop {
+            match v.unspan() {
+                Value::Return(inner) | Value::Drop(inner) => v = inner,
+                Value::Block(bl) => match bl.operators.last() {
+                    Some(x) => v = x,
+                    None => return false,
+                },
+                Value::Insert(ops) => match ops.last() {
+                    Some(x) => v = x,
+                    None => return false,
+                },
+                Value::Var(bv) => {
+                    return matches!(self.vars.tp(*bv), Type::Vector(_, _))
+                        && self
+                            .vars
+                            .tp(*bv)
+                            .depend()
+                            .iter()
+                            .any(|&d| self.vars.is_argument(d));
+                }
+                _ => return false,
             }
         }
     }
