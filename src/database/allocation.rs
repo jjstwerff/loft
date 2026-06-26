@@ -1934,11 +1934,43 @@ impl Stores {
             Parts::Base if tp == 5 => {
                 // Text leaf: free the string record and clear the pointer.  Not a
                 // cascade kind (no owned children), so it stays out of the keystone.
-                let store = self.store_mut(rec);
-                let cur = store.get_u32_raw(rec.rec, rec.pos);
+                let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
                 if cur != 0 {
-                    store.delete(cur);
-                    store.set_u32_raw(rec.rec, rec.pos, 0);
+                    let cap = self.store(rec).capacity_words();
+                    // (d) cluster-462 stale-interior-claim guard — the slice the
+                    // copy-source detectors miss. The DESTINATION record's text-field
+                    // pointer is read here and `delete()`-ed; if the dst slot was reused
+                    // and this field holds a STALE pointer past the store's end, the
+                    // delete reads a record header OOB → SIGSEGV (release skips the
+                    // bounds debug_assert). Under LOFT_UAF* name the bad field and SKIP
+                    // the delete (leak, not crash) so the run continues and the site is
+                    // located — this is what catches the #462 sim.loft:3546 fault.
+                    if crate::keys::uaf_any_enabled() && cur >= cap {
+                        let rec_ok = self.store(rec).valid(rec.rec, rec.pos);
+                        let (sfree, skt) = {
+                            let a = &self.allocations[rec.store_nr as usize];
+                            (a.free, a.known_type)
+                        };
+                        thread_local! {
+                            static RPT: std::cell::RefCell<std::collections::HashSet<(u16, u32, u32)>> =
+                                std::cell::RefCell::new(std::collections::HashSet::new());
+                        }
+                        if RPT.with(|s| s.borrow_mut().insert((rec.store_nr, rec.rec, rec.pos))) {
+                            eprintln!(
+                                "[uaf-claim] remove_claims: TEXT field at store #{} rec={} pos={} \
+                                 holds STALE pointer cur={cur} past store end (cap_words={cap}; \
+                                 slot free={sfree} known_type={skt} rec_pos_valid={rec_ok}) — dst \
+                                 record has a dangling interior claim (reused-slot or borrowed-ref \
+                                 over-free); skipping delete to avoid SIGSEGV",
+                                rec.store_nr, rec.rec, rec.pos,
+                            );
+                        }
+                        self.store_mut(rec).set_u32_raw(rec.rec, rec.pos, 0);
+                    } else {
+                        let store = self.store_mut(rec);
+                        store.delete(cur);
+                        store.set_u32_raw(rec.rec, rec.pos, 0);
+                    }
                 }
             }
             // `Spacial` teardown is unimplemented; the keystone yields nothing for

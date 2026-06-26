@@ -132,6 +132,48 @@ leaks on DbRef movement outside `put_stack`/`get_stack` → both false-negatives
 reads) and large-delta false-positives. **Trust small-delta reports; treat large-delta as
 noise.**
 
+### Detector (d) — the stale-interior-claim guard that ACTUALLY pins 3546
+
+Where (a)/(b)/(c) all missed 3546, a **phase trace** inside `do_copy_record` (markers before
+`remove_claims` / `copy_block` / `copy_claims`) pinned the fault precisely: the SIGSEGV is in
+**`remove_claims(&to)`** — *before* the copy — not in the copy itself. op=227 IS `copy_record`
+(confirmed via the `fill.rs` OPERATORS table), but it faults clearing the **destination's old
+content**, not reading the source. That is why every source-side detector read "clean".
+
+`remove_claims` walks the dst record's owned children; for a struct it recurses into each
+field, and a **text** field (`tp==5`) does `store.delete(cur)` on the stored text-record
+pointer. `Store::delete` reads the record header at `cur` — and in release the bounds
+`debug_assert` is gone, so a garbage `cur` past the store end faults. Detector (d)
+(`allocation.rs remove_claims`, gated `LOFT_UAF*`) validates `cur < capacity_words` before the
+delete; on a bad pointer it **names the field and SKIPS the delete** (leak, not crash).
+
+**Result:** with (d), the crawler **runs to completion (`QUEST OK`, exit 0)** instead of
+SIGSEGV. (d) names the exact fault:
+
+```
+[uaf-claim] remove_claims: TEXT field at store #535 rec=418 pos=6390 holds STALE pointer
+cur=3407872 past store end (cap_words=2956; slot free=false known_type=196 rec_pos_valid=true)
+```
+
+**Root signal (what the slot-state tells us):** the dst slot is **live** (`free=false`), the
+offset **is in bounds** (`rec_pos_valid=true`), `known_type=196` — only the text-pointer
+*values* (glyph/key/name, at consecutive offsets 6390/6394/6398) are garbage. So this is **not**
+a freed/relocated dst; it is a **live destination record whose payload text-pointers were never
+validly initialised (or were over-freed)**, which `remove_claims` then walks. The dst is the
+final target of a chained return-copy (`#609 → #608 → #535`).
+
+**Two candidate roots (next step — discriminate with a write-watch on `#535 rec=418`):**
+1. *Uninitialised fresh slot* — `claim`/`resize` zero only under `zero_claim_enabled()` (opt-in,
+   off in release; `resize`'s in-place grow path absorbs an adjacent free block and never zeroes
+   it), so a freshly-exposed slot holds stale free-tree bytes that `remove_claims` walks before
+   the copy writes them.
+2. *Prior over-free* — an earlier delivery wrote a borrowed text ref into `#535`'s payload and
+   that target was freed, leaving the pointer dangling.
+
+The fix target is upstream of `remove_claims` (don't tear down a never-initialised dst, or zero
+the slot before the copy-bracket runs `remove_claims`). (d) is the diagnostic + a temporary
+safety net, **not** the root fix — it is gated off by default, so released runs still crash.
+
 (Both `LOFT_NO_SLOT_REUSE` and the throwaway operand-stack scan were used as probes and
 reverted; (a)/(b)/(c) are the kept, committed diagnostics.)
 
