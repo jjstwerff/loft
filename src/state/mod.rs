@@ -3617,7 +3617,7 @@ impl State {
                     let freed = std::mem::take(&mut self.database.uaf_freed_this_op);
                     let d_nr = self.call_stack.last().map_or(u32::MAX, |f| f.d_nr);
                     for &slot in &freed {
-                        crate::keys::uaf_record_free(slot, self.code_pos, d_nr);
+                        crate::keys::uaf_record_free(slot, op_pos_rt, d_nr, u16::from(op));
                     }
                 }
             }

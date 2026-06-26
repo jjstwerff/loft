@@ -128,3 +128,23 @@ it is the **scale/composition residual** (cluster-462's ~190-store slot-reuse in
 reproducible only on the crawler corpus + `LOFT_UAF_SRC`. Next step: instrument `sim_descend`
 on the corpus to find which field-copy (or the `sim_new_gen_s` interaction) frees `ns`'s
 buffer before the caller's copy — a fresh sub-investigation, not a minimal-probe target.
+
+### sim_descend early-free PINNED (LOFT_UAF_SRC + op-code, 2026-06-26)
+
+Enhanced `LOFT_UAF_SRC` to also report the freeing OPCODE. On the corpus:
+
+```
+[uaf-src] OpCopyRecord reads FREED source store #238 (tp=194) at copy-site line 75
+  (gameflow, fn d_nr=1280); last freed at line 4121 (sim_descend, fn d_nr=1262, op=152)
+```
+
+So `ns`'s `Sim` store (tp=194) is freed by op 152 (a `FreeRef`-family op) at `sim_descend`'s
+RETURN region (sim.loft:4121), BEFORE `return ns` (bytecode offset 1690) — then the caller
+(`gameflow:75 s2 = sim_descend(s)`) copy-binds the freed store. `sim_descend` does ~70
+`ns.field = s.field` assignments, which generate `ns`-borrowing temps (`__p154_rhs`
+typed `vector<…>["ns"]`, from expressions.rs:1797, + `__lift_1`); the scope-exit free
+sequence at the return releases `ns`'s own store prematurely. Same over-free class — a
+returned struct's store freed before the return — but a COMPOSITION of the big-struct +
+many-field-assign + return-delivery/scope-free interaction (not a simple shape; the S1/U1/U2
+probes are clean). Next: bisect which scope-exit free (op 152) targets `ns`'s store vs a
+borrowing temp, and whether the return-delivery fails to protect `ns`.

@@ -295,21 +295,22 @@ thread_local! {
     /// (the source `OpCopyRecord` pops) — so this records every free's pc and
     /// `do_copy_record` reports it when it reads a still-freed source, pinning
     /// the premature-free op without a full operand-stack scan.
-    static FREED_AT: std::cell::RefCell<std::collections::HashMap<u16, (u32, u32)>> =
+    static FREED_AT: std::cell::RefCell<std::collections::HashMap<u16, (u32, u32, u16)>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
 /// Record (under `LOFT_UAF`) that store `slot` was freed while executing `pc` in
-/// function `d_nr`.
-pub fn uaf_record_free(slot: u16, pc: u32, d_nr: u32) {
+/// function `d_nr`, by the op whose opcode is `op` (names the freeing op category:
+/// a scope-exit `OpFreeRef`, an `OpFreeRefIfDistinct`, or a `copy_record` free-bit).
+pub fn uaf_record_free(slot: u16, pc: u32, d_nr: u32, op: u16) {
     FREED_AT.with(|m| {
-        m.borrow_mut().insert(slot, (pc, d_nr));
+        m.borrow_mut().insert(slot, (pc, d_nr, op));
     });
 }
 
-/// The `(code_pos, d_nr)` of `slot`'s most-recent recorded free, if any.
+/// The `(code_pos, d_nr, op_code)` of `slot`'s most-recent recorded free, if any.
 #[must_use]
-pub fn uaf_freed_pc(slot: u16) -> Option<(u32, u32)> {
+pub fn uaf_freed_pc(slot: u16) -> Option<(u32, u32, u16)> {
     FREED_AT.with(|m| m.borrow().get(&slot).copied())
 }
 
