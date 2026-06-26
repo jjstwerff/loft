@@ -1,0 +1,8 @@
+struct Aaa { a: integer not null, name: text }
+fn base() -> vector<Aaa> { t: vector<Aaa> = []; t += [Aaa{a:1,name:"a"}]; t }
+fn m2() -> vector<Aaa> { t = base(); t }
+fn main() {
+  s = 0;
+  for i in 0..30 { g = m2(); s = s + len(g); }
+  print("s=" + to_text(s));
+}

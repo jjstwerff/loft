@@ -30,20 +30,39 @@ hit-by:crawler). Surfaced by the crawler dogfood consumer's headless gate.
 > across all copy paths found **zero** writes of the garbage — the decisive negative that ruled
 > out "a copy wrote it" and pointed at un-zeroed in-place-grown memory.
 >
-> **Still open — the coexisting LEAK (row 4), now CHARACTERISED (2026-06-26):** the exit
-> warning's "2 stores" is **2 type-groups**, not 2 stores — actually **531 leaked**:
+> **Still open — the coexisting LEAK (row 4), ROOT-CAUSED (2026-06-26):** the exit warning's
+> "2 stores" is **2 type-groups**, not 2 stores — actually **531 leaked**:
 > `518× vector<__nullable<ItemDef>>` + `13× vector<__nullable<MonsterDef>>`. `LOFT_LEAK_SITES=1`
-> grouped them by allocation site to the two catalog builders `game_items()` / `game_monsters()`
-> (`catalog.loft`). **Mechanism (minimal repro `probes/leak-462/merge-sibling-adopt-leak.loft`):**
-> a function that returns one adopted vector local via implicit tail (`t = base(); … ; t`) AND
-> holds a SECOND adopted-return vector local used in a loop (`src = bun(); for i … t += [src[i]]`)
-> — the **sibling local `src` never gets a scope-exit free**. Each call leaks one `src` (×518
-> game_items calls, ×13 game_monsters). Interp-only — native uses Rust `Drop`, leaks nothing.
-> **What does NOT leak:** a single adopted local (`src = mk(); return src[0]`), a returned local
-> (ownership transferred), simple inline temporaries — all freed correctly. **Fix target:** the
-> interp free-placement analysis (`scopes.rs`) omits the scope-exit free for a non-returned
-> adopted-vector local when the scope's implicit-tail return is *also* an adopted vector. This is
-> the @PLN85 dep-accounting LEAK side; not yet fixed.
+> (new gated diagnostic, groups leaks by allocation site) pointed at the catalog builders
+> `game_items()` / `game_monsters()` (`catalog.loft`).
+>
+> **Root cause (verified, minimal repro `probes/leak-462/adopt-rereturn-leak.loft`): the
+> ADOPT-AND-RE-RETURN chain.** A function that binds a vector-returning call into a local and
+> re-returns it — `fn m() -> vector<T> { t = base(); t }` — **leaks exactly one store per call,
+> on BOTH backends.** Calling `base()` directly (`g = base()`) is clean; the leak is introduced
+> by the wrapper. The broken bytecode shows why: `m` emits a **dead `__ref_1` buffer** — native
+> `var___ref_1 = OpDatabase(…)` allocated, never used (the call delivers into the retbuf `var_t`),
+> never freed; interp leaves `__ref_1` null but mis-tags the returned value `t["__ref_1"]` so the
+> caller's free indirects through a phantom owner. The NRVO collapse fails to elide the
+> intermediate work-ref when the returned local is *itself* an adopted call result.
+> `game_items()` = exactly this shape (`t = item_table(); … ; t`), ×518 calls.
+>
+> **What does NOT leak (boundary):** a direct call result (`g = base()`), a single fresh builder
+> (`t: vector<T> = []; … ; t`), inline temporaries (`len(build())`), bound vs inline (both leak
+> for the wrapper) — only the adopt-*then*-re-return wrapper leaks. Native and interp both leak
+> (NOT native-clean as first thought — the crawler's native run happened not to exercise this
+> path at exit-checked scope).
+>
+> **Fix target:** the NRVO return-delivery collapse (`control.rs` `block_result` /
+> `ref_return` / `nrvo_collapse_tail_set`) — when a returned local is first-assigned from a
+> buffer-returning call, the call should deliver into the fn's `__retbuf` with no intermediate
+> `__ref_1` and correct ownership, instead of minting a dead work-ref. **M-sized codegen; not yet
+> fixed** — root-caused + minimal repro in hand, needs careful both-backends verification.
+>
+> **Correction:** an earlier note here said "sibling local `src` never freed" + "interp-only" —
+> the distinct-types probe **disproved both**; the leaking store is the *returned* value via the
+> adopt-and-re-return chain, on both backends. (Engineering-rigor: acted on the first reading;
+> the matrix corrected it.)
 
 **Severity (two fields, never conflate):**
 
