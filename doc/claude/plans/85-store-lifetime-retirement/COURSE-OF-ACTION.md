@@ -51,6 +51,26 @@ After (1)+(2): clean green `main`-based branch, nullability parked, ready for br
 
 ## STREAM A — the brittleness work (PRIORITY)
 
+> **DONE (first wedge, 2026-06-26):** step-6 `150-i306` over-free fixed at the canonical
+> Cluster-A.3 chokepoint, BOTH backends. Root: native's first-bind copy gate
+> (`src/generation/dispatch.rs`) re-derived a coarse **type-shape proxy** ("callee has a
+> visible `Reference`/`Enum` param") for the own-vs-borrow fact — which MISSED a borrowed
+> **vector-element** view (`fn pick(t: vector<M>) -> M { t[i] }`: `t` is a `Vector` param,
+> not `Reference`, yet the return aliases it). The bound local was adopted as owned and its
+> scope-exit `OpFreeRef` whole-store-freed the caller's vector (recycled under allocation
+> pressure → corruption). Interp was already correct — it reads the canonical
+> `return_adopts_fresh_store()` fact (`state/codegen.rs` gen_set_first_at_tos); the fix routes
+> native through the **same fact**, deleting the proxy (exactly the "read one carried answer,
+> don't re-derive" remedy). Regression: `tests/scripts/85-store-lifetime-vector-view-call-bind-overfree.loft`
+> (first-bind form; 150-i306 covers the reassignment form). Verified: full /tmp matrix +
+> 150-i306 green both backends, leak-free, no suite regression.
+>
+> **Still open:** `85-…-enum-match-borrowed-view-overfree` fails, but its interp failure is a
+> *read returns wrong value* (`found=false`, no crash) — a nullability-**access** correctness
+> bug (Phase-1 / Stream B, PARKED), NOT an over-free. It cannot pass without the parked
+> nullable-access glue, so it (and the 4 `plan25_e2_*` failures) are Stream-B, not brittleness.
+> `#462` (slot-reuse UAF, needs the crawler corpus) remains the next ownership wedge.
+
 **Thesis** (`OWNERSHIP_MODEL.md`): ownership/lifetime is *re-derived per site* — `copy_record`'s
 free-source flag, scope frees, the adopt/free thicket, the borrowed-view deep-copy that fires for
 one representation but not another. Every site re-decides "do I own / free / copy this store," and
