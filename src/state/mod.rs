@@ -3771,6 +3771,37 @@ impl State {
             };
             let msg = format!("{count} stores not freed at program exit: {preview}");
             eprintln!("Warning: {msg}");
+            // LOFT_LEAK_SITES — group leaked stores by ALLOCATION site (created_at →
+            // source line) so the leak's where-from is named, not just its type. Gated.
+            if std::env::var_os("LOFT_LEAK_SITES").is_some() {
+                let mut by_site: std::collections::BTreeMap<(u32, u16), usize> =
+                    std::collections::BTreeMap::new();
+                for (s_nr, s) in self.database.allocations.iter().enumerate() {
+                    if s_nr == 0
+                        || s.is_locked()
+                        || self.const_refs.iter().any(|cr| cr.store_nr == s_nr as u16)
+                        || s.free
+                    {
+                        continue;
+                    }
+                    *by_site.entry((s.created_at, s.known_type)).or_default() += 1;
+                }
+                let mut sites: Vec<_> = by_site.into_iter().collect();
+                sites.sort_by_key(|&(_, n)| std::cmp::Reverse(n));
+                for ((created_at, kt), n) in sites {
+                    let line = self
+                        .line_numbers
+                        .range(..=created_at)
+                        .next_back()
+                        .map_or(0, |(_, &v)| v);
+                    let tn = self
+                        .database
+                        .types
+                        .get(kt as usize)
+                        .map_or("?", |t| t.name.as_str());
+                    eprintln!("  [leak-site] {n}× {tn} (kt={kt}) allocated at pc={created_at} (line {line})");
+                }
+            }
         }
     }
 

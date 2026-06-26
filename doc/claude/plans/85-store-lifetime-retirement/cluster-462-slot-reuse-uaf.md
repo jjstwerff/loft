@@ -30,9 +30,20 @@ hit-by:crawler). Surfaced by the crawler dogfood consumer's headless gate.
 > across all copy paths found **zero** writes of the garbage — the decisive negative that ruled
 > out "a copy wrote it" and pointed at un-zeroed in-place-grown memory.
 >
-> **Still open — the coexisting LEAK (row 4):** interp still reports `2 stores not freed`
-> (`ItemDef`/`MonsterDef` vectors). Separate severity field, tracked below; the crash fix does
-> not address it (native is leak-free).
+> **Still open — the coexisting LEAK (row 4), now CHARACTERISED (2026-06-26):** the exit
+> warning's "2 stores" is **2 type-groups**, not 2 stores — actually **531 leaked**:
+> `518× vector<__nullable<ItemDef>>` + `13× vector<__nullable<MonsterDef>>`. `LOFT_LEAK_SITES=1`
+> grouped them by allocation site to the two catalog builders `game_items()` / `game_monsters()`
+> (`catalog.loft`). **Mechanism (minimal repro `probes/leak-462/merge-sibling-adopt-leak.loft`):**
+> a function that returns one adopted vector local via implicit tail (`t = base(); … ; t`) AND
+> holds a SECOND adopted-return vector local used in a loop (`src = bun(); for i … t += [src[i]]`)
+> — the **sibling local `src` never gets a scope-exit free**. Each call leaks one `src` (×518
+> game_items calls, ×13 game_monsters). Interp-only — native uses Rust `Drop`, leaks nothing.
+> **What does NOT leak:** a single adopted local (`src = mk(); return src[0]`), a returned local
+> (ownership transferred), simple inline temporaries — all freed correctly. **Fix target:** the
+> interp free-placement analysis (`scopes.rs`) omits the scope-exit free for a non-returned
+> adopted-vector local when the scope's implicit-tail return is *also* an adopted vector. This is
+> the @PLN85 dep-accounting LEAK side; not yet fixed.
 
 **Severity (two fields, never conflate):**
 

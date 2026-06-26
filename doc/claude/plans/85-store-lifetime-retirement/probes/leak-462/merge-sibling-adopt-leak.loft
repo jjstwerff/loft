@@ -1,0 +1,14 @@
+struct Def { a: integer not null, name: text }
+fn base() -> vector<Def> { t: vector<Def> = []; t += [Def{a:1,name:"b"}]; t }
+fn bun() -> vector<Def> { t: vector<Def> = []; t += [Def{a:3,name:"u"}]; t }
+fn merged() -> vector<Def> {
+  t = base();
+  src = bun();
+  for i in 0..len(src) { if i < len(src) { t += [src[i]]; } }
+  t
+}
+fn main() {
+  acc = 0;
+  for q in 0..30 { acc = acc + len(merged()); }
+  print("acc=" + to_text(acc));
+}
