@@ -1938,15 +1938,25 @@ impl State {
             .database
             .store_mut(&self.stack_cur)
             .addr_mut::<T>(self.stack_cur.rec, self.stack_cur.pos + self.stack_pos);
-        // LOFT_UAF_GEN (c): stamp the slot-gen of a pushed DbRef at its stack offset
-        // (BEFORE the move below), so a POP after the slot is freed+reused detects the
-        // gen mismatch.
-        if crate::keys::uaf_gen_enabled()
-            && std::any::TypeId::of::<T>() == std::any::TypeId::of::<DbRef>()
-        {
-            let db: &DbRef = unsafe { &*(&raw const val).cast::<DbRef>() };
-            if db.store_nr != u16::MAX {
-                crate::keys::uaf_stamp_shadow(self.stack_pos, crate::keys::uaf_slot_gen(db.store_nr));
+        // LOFT_UAF_GEN (c): keep the offset's shadow stamp in sync with what is pushed
+        // (BEFORE the move below). A DbRef push STAMPS its slot-gen so a later pop after a
+        // free+reuse is caught; ANY non-DbRef push CLEARS the offset, so a stale stamp left
+        // by an earlier DbRef cannot survive to a later unrelated pop — that staleness was
+        // the detector's whole false-positive source (the "gen 0 at push" / huge-delta
+        // residual). After both, the shadow holds a stamp only for a DbRef live right now.
+        if crate::keys::uaf_gen_enabled() {
+            if std::any::TypeId::of::<T>() == std::any::TypeId::of::<DbRef>() {
+                let db: &DbRef = unsafe { &*(&raw const val).cast::<DbRef>() };
+                if db.store_nr == u16::MAX {
+                    crate::keys::uaf_clear_shadow(self.stack_pos);
+                } else {
+                    crate::keys::uaf_stamp_shadow(
+                        self.stack_pos,
+                        crate::keys::uaf_slot_gen(db.store_nr),
+                    );
+                }
+            } else {
+                crate::keys::uaf_clear_shadow(self.stack_pos);
             }
         }
         *m = val;

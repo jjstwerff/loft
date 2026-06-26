@@ -88,10 +88,11 @@ re-claim that didn't bump past the stamp is not flagged.
 
 **(c) implementation:** `SLOT_GEN: Vec<u32>` (per-slot generation, bumped in
 `allocation.rs free_named`); `STACK_SHADOW: HashMap<offset,gen>` (the gen stamped at each eval
-offset). `put_stack<DbRef>` stamps; `get_stack<DbRef>` reads the stamp, **consumes it (LIFO
-clear)**, and reports `stamped < current`. The LIFO clear is load-bearing: without it a stale
-stamp survives a non-DbRef push that reused the offset → false positives (162 reports → 57
-after the clear).
+offset). `put_stack<DbRef>` stamps the slot-gen; **any non-DbRef push CLEARS** the offset;
+`get_stack<DbRef>` reads the stamp, **consumes it (LIFO clear)**, and reports `stamped <
+current`. The two clears keep the shadow holding a stamp only for a DbRef *live right now* at
+that offset — without them an old stamp survives a slot's reuse and reports against an
+unrelated later pop (that staleness drove the false positives: 162 → 57 reports).
 
 ### Finding — the residual 3546 crash is freed-AND-REUSED, not free=true
 
@@ -100,27 +101,36 @@ driver was closed (the `nullable_to_dense_assign` materialise-copy), the **remai
 SIGSEGV is a *different* shape: `LOFT_UAF_SRC=1` now reports **zero `src BAD`** at the crash —
 the source store's `free` flag is **false**. The slot was freed *and already re-claimed* by a
 new, **smaller** occupant; the `OpCopyRecord` at 3546 reads Enemy-size (238 bytes, offset 8)
-from it → out-of-bounds → SIGSEGV. This is precisely the slice (a) cannot see (free flag is
-false) and (c) can (the per-slot **gen** bumped on the intervening free). So post-`mon_one`,
-cluster-462's live crash is a **reused-slot** UAF, not a freed-slot UAF — the fix target is
-the over-free of the nullable-element append source (`enemies += [mk_enemy(...)]`), whose
-return store is freed while the append's copy-source DbRef is still live on the eval stack.
+from it → out-of-bounds → SIGSEGV. So post-`mon_one`, cluster-462's live crash is a
+**reused-slot** UAF, not a freed-slot UAF — the fix target is the over-free of the
+nullable-element append source (`enemies += [mk_enemy(...)]`), whose return store is freed
+while the append's copy-source DbRef is still live.
 
-### Finding — (c) fingers the crash site
+### Finding — (c) is a NOISY diagnostic; it does NOT cleanly pin 3546
 
-`LOFT_UAF_GEN=1` on the crawler (`src/questtest.loft`) reports **57 distinct stale-reused-ref
-reads**, and **`sim.loft:3546` — the exact SIGSEGV site — is among them** (with `3545`
-adjacent, plus a cluster at 3482/3483/3901/3947/3951/3955/3969/4003/4020/4050). This
-**confirms row 3 + row 8 from the other direction**: the crash is a DbRef read whose backing
-store was freed *and re-claimed by a new occupant* between push and pop. The detector converts
-the crash from "190-store interleaving, invisible minimally" into a named, line-located
-stale-read at the chokepoint (`get_stack<DbRef>`).
+**This corrects an earlier over-claim** (the engineering-rigor lesson: I trusted the first
+coherent reading). `LOFT_UAF_GEN=1` reports ~56 stale reads, but they split sharply by
+**gen-delta** (`current − stamped`):
 
-**Residual / limitation:** (c) reports only *reads* that flow through `get_stack` (the eval
-stack); a DbRef reaching the stack via a **non-DbRef-typed push** (struct-bytes copy) carries
-no stamp → it is a false-negative, not a false-positive. So 57 is a *lower* bound on stale
-reads, and the detector is safe to trust when it *does* fire (no false alarms) but not as a
-completeness oracle.
+- **Small delta (1–~30): trustworthy.** A DbRef plausibly sat on the eval stack across a few
+  intervening frees of its slot. These cluster at `sim.loft` **3193, 3222, 3226, 3901, 3947,
+  3951, 3969, 4003** — the **`sim_descend` `ns`-struct-return region** the roadmap already
+  named as the *second* driver — plus scattered library sites.
+- **Huge delta (hundreds–50000+): residual false positives.** A delta of 9419 means the slot
+  was freed+reused 9419× "between push and pop" of one DbRef — implausible for an eval-stack
+  temporary. These are offsets whose stamp went stale despite the clears (a DbRef reaching the
+  offset by a path `put_stack`/`get_stack` don't see — e.g. a multi-word struct copy writing
+  DbRef-shaped words at `base+k`). The `gen 0 at push` reports are the same class.
+
+**`sim.loft:3546` itself reports delta = 9419** — it sits in the *residual* bucket, NOT a
+trustworthy hit. So **(c) does not finger the actual SIGSEGV site**; it reliably surfaces the
+*sim_descend* driver but is blind-with-noise on 3546. Pinning 3546 needs a **store-identity**
+instrument (watch the specific source slot's alloc/free/reuse), not the offset-shadow.
+
+**Limitation summary:** (c) is sound *in mechanism* (per-slot gen) but its offset-keyed shadow
+leaks on DbRef movement outside `put_stack`/`get_stack` → both false-negatives (unstamped
+reads) and large-delta false-positives. **Trust small-delta reports; treat large-delta as
+noise.**
 
 (Both `LOFT_NO_SLOT_REUSE` and the throwaway operand-stack scan were used as probes and
 reverted; (a)/(b)/(c) are the kept, committed diagnostics.)
