@@ -1064,7 +1064,17 @@ impl Scopes {
         // owns + frees the returned buffer). Restricted to the return-buffer ARG —
         // a dead vector LOCAL (e.g. `other`) is not an argument, so it keeps its
         // plain free (its borrowed source must still be released, else it leaks).
-        if matches!(function.tp(ov), Type::Vector(_, _))
+        // Extended to Reference (struct) + struct-Enum return-buffers too: a struct
+        // retbuf `ns = sim_new_gen_s(…, __ref_1)` that ADOPTS the buffer-returning
+        // callee's `__ref_1` has the SAME plain-`OpFreeRef(__ref_1)` over-free (#462's
+        // sim_descend driver, tp=194). The witness-pair is conservative —
+        // `OpFreeRefIfDistinct(__ref_1, ov)` frees `__ref_1` exactly as the plain free
+        // did when they are DISTINCT (the deep-copy case), and only skips when they
+        // alias (the adopt case, the bug) — so this can only fix, never regress.
+        if matches!(
+            function.tp(ov),
+            Type::Vector(_, _) | Type::Reference(_, _) | Type::Enum(_, true, _)
+        )
             && function.is_argument(ov)
             && data
                 .def(self.d_nr)
