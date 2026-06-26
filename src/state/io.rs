@@ -1407,6 +1407,44 @@ impl State {
                 );
             }
         }
+        // (b) cluster-462 LOFT_UAF_REUSE — the REUSED case the free-check above misses:
+        // the source slot is LIVE (free=false) but `validate_claims` finds it structurally
+        // invalid for `tp` (out-of-range rec/pos, broken interior edges), i.e. it was
+        // freed-then-reused as a DIFFERENT record since the source ref was minted. That is
+        // the stale-reused read behind the post-reuse SIGSEGV (#462 @ sim.loft:3546) —
+        // named here, before the faulting copy. `validate_claims` is bounds-checked (it
+        // reports, never faults). Deduped by store slot.
+        if crate::keys::uaf_reuse_enabled()
+            && data.rec != 0
+            && (data.store_nr as usize) < self.database.allocations.len()
+            && !self.database.allocations[data.store_nr as usize].free
+        {
+            let mut problems = 0u32;
+            self.database
+                .validate_claims(&data, tp, "uaf-reuse-src", &mut problems);
+            if problems > 0 {
+                thread_local! {
+                    static REPORTED_REUSE: std::cell::RefCell<std::collections::HashSet<u16>> =
+                        std::cell::RefCell::new(std::collections::HashSet::new());
+                }
+                let first = REPORTED_REUSE.with(|s| s.borrow_mut().insert(data.store_nr));
+                if first {
+                    let line = self
+                        .line_numbers
+                        .range(..=self.code_pos)
+                        .next_back()
+                        .map_or(0, |(_, &v)| v);
+                    let cur_kt = self.database.allocations[data.store_nr as usize].known_type;
+                    eprintln!(
+                        "[uaf-reuse] OpCopyRecord source store #{} (rec={},pos={}) is LIVE but \
+                         STRUCTURALLY INVALID for tp={tp} ({problems} broken edge(s); slot now \
+                         holds known_type={cur_kt}) — freed-then-reused-as-different, a stale read \
+                         at copy-site pc={} (line {line})",
+                        data.store_nr, data.rec, data.pos, self.code_pos,
+                    );
+                }
+            }
+        }
         if std::env::var("LOFT_TRACE_CR").is_ok() {
             let src_w = if data.rec != 0 {
                 self.database.store(&data).get_int(data.rec, data.pos)

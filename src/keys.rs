@@ -288,6 +288,25 @@ pub fn uaf_any_enabled() -> bool {
     uaf_check_enabled() || uaf_src_enabled()
 }
 
+/// `LOFT_UAF_REUSE` (detector b) — at `copy_record`, when the source slot is LIVE
+/// (`free=false`) but structurally invalid for the copy's `tp` (a `validate_claims`
+/// failure), the slot was freed-then-reused as a different record since the source ref
+/// was minted: the stale-REUSED read behind the post-reuse SIGSEGV (#462 @ 3546),
+/// caught before the fault. (A same-type reuse slips through, but that wouldn't fault.)
+pub fn uaf_reuse_enabled() -> bool {
+    static UAF_REUSE: OnceLock<bool> = OnceLock::new();
+    *UAF_REUSE.get_or_init(|| std::env::var_os("LOFT_UAF_REUSE").is_some())
+}
+
+/// `LOFT_UAF_GEN` (detector c) — the SOUND reused detector: a per-slot generation
+/// (bumped on free) plus a shadow stack stamping each operand-stack DbRef's gen at push;
+/// at consume a shadow-vs-current mismatch is a slot freed-then-reused since the ref was
+/// pushed. Catches the reused read that `store_nr` alone cannot — no `DbRef` widening.
+pub fn uaf_gen_enabled() -> bool {
+    static UAF_GEN: OnceLock<bool> = OnceLock::new();
+    *UAF_GEN.get_or_init(|| std::env::var_os("LOFT_UAF_GEN").is_some())
+}
+
 thread_local! {
     /// `LOFT_UAF` companion (cluster-462 tool-gap #1): store slot -> the
     /// execution `code_pos` of its most-recent free.  The frame-var scan in
