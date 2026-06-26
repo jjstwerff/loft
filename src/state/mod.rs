@@ -3799,7 +3799,9 @@ impl State {
                         .types
                         .get(kt as usize)
                         .map_or("?", |t| t.name.as_str());
-                    eprintln!("  [leak-site] {n}× {tn} (kt={kt}) allocated at pc={created_at} (line {line})");
+                    eprintln!(
+                        "  [leak-site] {n}× {tn} (kt={kt}) allocated at pc={created_at} (line {line})"
+                    );
                 }
             }
         }

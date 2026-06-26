@@ -1074,8 +1074,7 @@ impl Scopes {
         if matches!(
             function.tp(ov),
             Type::Vector(_, _) | Type::Reference(_, _) | Type::Enum(_, true, _)
-        )
-            && function.is_argument(ov)
+        ) && function.is_argument(ov)
             && data
                 .def(self.d_nr)
                 .attributes

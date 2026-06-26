@@ -1582,9 +1582,10 @@ use a separate collection or add after the loop"
             {
                 let td = *td;
                 let kt = self.data.def(td).known_type();
-                let w = self
-                    .vars
-                    .work_refs(&Type::Reference(td, crate::data::Deps::none()), &mut self.lexer);
+                let w = self.vars.work_refs(
+                    &Type::Reference(td, crate::data::Deps::none()),
+                    &mut self.lexer,
+                );
                 if w != u16::MAX {
                     self.vars.set_skip_free(w);
                     let copy_d = self.data.def_nr("OpCopyRecord");

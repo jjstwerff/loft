@@ -2055,8 +2055,7 @@ impl Stores {
                 std::cell::RefCell::new(std::collections::HashSet::new());
         }
         if RPT_W.with(|s| s.borrow_mut().insert((to.store_nr, to.rec, bad_pos))) {
-            let (s_nr, s_rec, s_pos) =
-                src.map_or((u16::MAX, 0, 0), |s| (s.store_nr, s.rec, s.pos));
+            let (s_nr, s_rec, s_pos) = src.map_or((u16::MAX, 0, 0), |s| (s.store_nr, s.rec, s.pos));
             eprintln!(
                 "[watch-store/{ctx}] OOB text-ptr now in watched store #{}: dst rec={} field \
                  pos={bad_pos} holds ptr={bad_cur} (cap_words={cap}, tp={tp}) — src=#{s_nr}(rec={s_rec},\

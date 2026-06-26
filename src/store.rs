@@ -2858,7 +2858,10 @@ mod tests {
         *store.addr_mut::<u32>(b, 100) = 0x00CA_FE00;
         store.delete(b); // b becomes a free block adjacent to a
         let a2 = store.resize(a, 12); // grow a in place into b's region
-        assert_eq!(a2, a, "resize should grow a in place (absorb the adjacent free block)");
+        assert_eq!(
+            a2, a,
+            "resize should grow a in place (absorb the adjacent free block)"
+        );
         // b started at word 4 relative to a; b byte 80/100 -> a byte 4*8+80 / 4*8+100.
         assert_eq!(
             *store.addr::<u32>(a, 32 + 80),

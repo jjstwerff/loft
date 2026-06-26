@@ -1327,7 +1327,8 @@ impl State {
             };
             self.database.copy_block(&from, &to, size);
             self.database.copy_claims(&data, &to, ctp);
-            self.database.watch_oob_text(&to, ctp, Some(&data), "append_copy");
+            self.database
+                .watch_oob_text(&to, ctp, Some(&data), "append_copy");
         }
     }
 
@@ -1394,12 +1395,11 @@ impl State {
                 };
                 let copy_line = line_of(&self.line_numbers, self.code_pos);
                 let copy_d_nr = self.call_stack.last().map_or(u32::MAX, |f| f.d_nr);
-                let (free_pc, free_line, free_d_nr, free_op) = crate::keys::uaf_freed_pc(
-                    data.store_nr,
-                )
-                .map_or((0, 0, u32::MAX, u16::MAX), |(pc, d, op)| {
-                    (pc, line_of(&self.line_numbers, pc), d, op)
-                });
+                let (free_pc, free_line, free_d_nr, free_op) =
+                    crate::keys::uaf_freed_pc(data.store_nr)
+                        .map_or((0, 0, u32::MAX, u16::MAX), |(pc, d, op)| {
+                            (pc, line_of(&self.line_numbers, pc), d, op)
+                        });
                 eprintln!(
                     "[uaf-src] OpCopyRecord reads FREED source store #{} (rec={},pos={},tp={tp}) \
                      at copy-site pc={} (line {copy_line}, fn d_nr={copy_d_nr}); that store was \
