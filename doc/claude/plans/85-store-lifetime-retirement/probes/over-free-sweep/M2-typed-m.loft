@@ -1,0 +1,28 @@
+struct M { hp: integer not null, depth: integer not null, name: text }
+fn m_none() -> M { M { hp: 0, depth: 0, name: "" } }
+fn pool_of(t: vector<M>) -> vector<M> { out: vector<M> = []; for i in 0..len(t) { out += [t[i] ?? m_none()]; } out }
+fn one(t: vector<M>, salt: integer) -> M {
+  pool = pool_of(t);
+  chosen = m_none();
+  np = len(pool);
+  for wj in 0..np { if salt % np == wj { m: M = pool[wj] ?? m_none(); chosen = m; } }
+  chosen
+}
+fn choose(t: vector<M>, salt: integer) -> M {
+  best = m_none(); d = 0;
+  while d < 3 { cand = one(t, salt * 131 + d * 17); if cand.depth > best.depth { best = cand; } d += 1; }
+  best
+}
+fn filler(n: integer) -> integer { es: vector<M> = []; for j in 0..n { es += [M{hp:j,depth:j,name:"RECYCLE-FILL-{j}"}]; } return len(es); }
+fn main() {
+  t: vector<M> = []; for k in 0..12 { t += [M{hp:k,depth:k,name:"mon{k}"}]; }
+  found = 0;
+  for i in 0..30 {
+    r = choose(t, i);
+    acc = 0; for f in 0..12 { acc += filler(8); }
+    if r.depth >= 0 && r.depth < 12 { found += 1; }
+    assert(len(t) == 12, "iter {i}: len(t)={len(t)}");
+    assert(r.depth >= 0 && r.depth < 12, "iter {i}: r.depth={r.depth} corrupt");
+  }
+  println("M ok: found={found}");
+}
