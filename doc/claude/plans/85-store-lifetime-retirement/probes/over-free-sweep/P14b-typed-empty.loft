@@ -1,0 +1,11 @@
+struct M { hp: integer not null, depth: integer not null, name: text }
+enum Cell { Empty, Filled { items: vector<M> } }
+fn m_none() -> M { M{hp:0,depth:0,name:""} }
+fn filler(n: integer) -> integer { es: vector<M> = []; for j in 0..n { es += [M{hp:j,depth:j,name:"f"}]; } return len(es); }
+fn items_of(c: Cell) -> vector<M> { match c { Filled { items } => { items }, _ => { e: vector<M> = []; e } } }
+fn main() {
+  inner: vector<M> = []; inner += [M{hp:1,depth:1,name:"a"}]; inner += [M{hp:2,depth:2,name:"b"}];
+  c = Filled { items: inner };
+  for i in 0..6 { r = items_of(c); acc=0; for f in 0..6 { acc += filler(6); } assert(len(r)==2, "i{i}: r={len(r)}"); }
+  println("P14 ok");
+}

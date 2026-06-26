@@ -1,0 +1,16 @@
+struct M { hp: integer not null, depth: integer not null, name: text }
+struct Box { rows: vector<M> }
+enum Cell { Empty, Filled { items: vector<M> } }
+fn m_none() -> M { M { hp: 0, depth: 0, name: "" } }
+fn filler(n: integer) -> integer { es: vector<M> = []; for j in 0..n { es += [M{hp:j,depth:j,name:"f{j}"}]; } return len(es); }
+fn pick(t: vector<M>, i: integer, alt: vector<M>) -> M {
+  r = if i >= 0 && i < len(t) { t[i] ?? m_none() } else { alt[0] ?? m_none() };
+  r
+}
+fn choose(t: vector<M>, alt: vector<M>) -> M { best = m_none(); d = 0; while d < 3 { cand = pick(t, d, alt); if cand.depth > best.depth { best = cand; } d += 1; } best }
+fn main() {
+  t: vector<M> = []; for k in 0..6 { t += [M{hp:k,depth:k,name:"m{k}"}]; }
+  a: vector<M> = []; a += [M{hp:9,depth:1,name:"alt"}];
+  for i in 0..8 { r = choose(t, a); acc=0; for f in 0..8 { acc += filler(7); } assert(len(t)==6, "i{i}: t={len(t)}"); assert(len(a)==1, "i{i}: a={len(a)}"); }
+  println("P6 ok");
+}

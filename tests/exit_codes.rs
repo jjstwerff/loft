@@ -562,6 +562,14 @@ fn p169_lambda_suggestion_mentions_omitting_return_type() {
 /// a GLB.  This verifies the full loft-level pipeline: JSON parse → Map →
 /// build_hex_meshes → save_scene_glb, driven from a standalone script via
 /// `arguments()`.
+///
+/// Exercises the MIXED path (interpreted entry package calling auto-native
+/// library functions like `save_scene_glb`), which is the default for a
+/// `--interpret` run after #460.  This is the exact path that surfaced #461:
+/// an auto-native cdylib cached in one consumer's context baked type-table
+/// indices that were wrong in another's, so `OpWriteFile` wrote 8-byte fields
+/// for `as i32` (GLB version 0, +28 bytes).  A correct version-2 header proves
+/// the #461 fix (context-keyed cdylib freshness) holds end to end.
 #[test]
 fn moros_glb_cli_end_to_end() {
     let dir = std::env::temp_dir();

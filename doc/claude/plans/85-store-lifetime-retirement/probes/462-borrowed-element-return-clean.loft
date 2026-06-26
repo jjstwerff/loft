@@ -1,0 +1,60 @@
+// #462 boundary control — CLEAN (does NOT reproduce the crash).
+//
+// Adds the one ingredient 462-nullable-append-clean.loft omits: the source struct
+// is a BORROWED nullable-vector element returned from a function, exactly like
+// crawler's `wdef = mon_choose_habitat(table, ...)` which does
+// `m2 = table[mj] ?? mon_none(); ... return m2;` (monsters.loft:144) — returning a
+// view into the shared `table` store, then appended via `enemies += [mk_en(wdef,..)]`.
+//
+// Still CLEAN on both backends. Second negative control: even borrowed-element
+// return + nullable append + text-field copy is safe in isolation. Confirms the
+// crawler crash (cluster-462) is NOT any single one of these shapes — it is the
+// accumulated slot-reuse interleaving. The issue author's standalone attempts and
+// these two probes agree: the bug does not shrink below the full world-gen context.
+struct MD {
+  m_hp: integer not null, m_dam: integer not null, m_rarity: integer not null,
+  m_habitat: integer, m_glyph: text, m_key: text, m_name: text, m_tags: integer,
+}
+struct En {
+  q: integer not null, r: integer not null, hp: integer not null, dam: integer not null,
+  glyph: text, key: text, name: text, alive: boolean not null,
+}
+fn mon_none() -> MD { MD { m_hp: 0, m_dam: 0, m_rarity: 0, m_habitat: 0, m_glyph: "", m_key: "", m_name: "", m_tags: 0 } }
+fn mk_md(i: integer) -> MD {
+  MD { m_hp: 5+i, m_dam: 2, m_rarity: 1, m_habitat: 7, m_glyph: "g{i}", m_key: "rat_{i}", m_name: "giant rat {i}", m_tags: i }
+}
+// returns a BORROWED nullable-vector element (mirrors mon_choose_habitat)
+fn choose(table: vector<MD>, salt: integer) -> MD {
+  n = 0;
+  for mi in 0..len(table) { m = table[mi] ?? mon_none(); if m.m_hp > 0 { n += 1; } }
+  if n == 0 { return mon_none(); }
+  pick = salt % n ?? 0;
+  k = 0;
+  for mj in 0..len(table) {
+    m2 = table[mj] ?? mon_none();
+    if m2.m_hp > 0 { if k == pick { return m2; } k += 1; }
+  }
+  mon_none()
+}
+fn mk_en(md: MD, q: integer, r: integer) -> En {
+  g = md.m_glyph; if len(g) == 0 { g = "?"; }
+  En { q: q, r: r, hp: md.m_hp, dam: md.m_dam, glyph: g, key: md.m_key, name: md.m_name, alive: true }
+}
+fn peek(v: vector<En>, i: integer) -> En { v[i] ?? v[0] }
+fn gen(table: vector<MD>) -> vector<En> {
+  enemies: vector<En> = [];
+  for i in 0..400 {
+    wdef = choose(table, i * 7 + 3);
+    if wdef.m_hp > 0 { enemies += [mk_en(wdef, i, i)]; }
+  }
+  enemies
+}
+fn main() {
+  table: vector<MD> = [];
+  for i in 0..30 { table += [mk_md(i)]; }
+  v = gen(table);
+  e = peek(v, 0);
+  assert(len(v) == 400, "len {len(v)} (want 400)");
+  assert(len(e.name) > 0, "name corrupted: '{e.name}'");
+  println("ok len={len(v)} name0={e.name}");
+}

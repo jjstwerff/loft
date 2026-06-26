@@ -1,0 +1,2 @@
+use mod_b;
+fn main() { println("{val_b()}"); }

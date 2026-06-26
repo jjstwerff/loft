@@ -1,0 +1,19 @@
+// SIBLING of #457 — a 3-arm MATCH delivers the adopted vector return (vs if/else).
+fn churn(k: integer) -> integer { b: vector<u8> = [0]; for i in 0..k { b += [1]; } return len(b); }
+fn build(n: integer) -> vector<text> {
+  out: vector<text> = [];
+  if n <= 0 { return out; }
+  m = n % 3;
+  match m {
+    0 => { out = build(n - 1); out += ["a"]; },
+    1 => { out = build(n - 1); out += ["b"]; },
+    _ => { out = build(n - 1); out += ["c"]; },
+  }
+  return out;
+}
+fn main() {
+  r = build(7);
+  _ = churn(8);
+  assert(len(r) == 7, "len corrupted: {len(r)} (want 7)");
+  println("ok len={len(r)}");
+}

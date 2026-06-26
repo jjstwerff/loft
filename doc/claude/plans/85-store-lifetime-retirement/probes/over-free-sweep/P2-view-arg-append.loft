@@ -1,0 +1,11 @@
+struct M { hp: integer not null, depth: integer not null, name: text }
+struct Box { rows: vector<M> }
+fn m_none() -> M { M { hp: 0, depth: 0, name: "" } }
+fn filler(n: integer) -> integer { es: vector<M> = []; for j in 0..n { es += [M{hp:j,depth:j,name:"f{j}"}]; } return len(es); }
+fn pick(t: vector<M>, i: integer) -> M { t[i] ?? m_none() }
+fn collect(t: vector<M>) -> vector<M> { out: vector<M> = []; for i in 0..len(t) { e = pick(t, i); out += [e]; } out }
+fn main() {
+  t: vector<M> = []; for k in 0..5 { t += [M{hp:k,depth:k,name:"m{k}"}]; }
+  for i in 0..6 { c = collect(t); acc=0; for k in 0..6 { acc += filler(6); } assert(len(t)==5, "i{i}: t={len(t)}"); assert(len(c)==5, "i{i}: c={len(c)}");}
+  println("P2 ok");
+}

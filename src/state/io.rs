@@ -1327,6 +1327,8 @@ impl State {
             };
             self.database.copy_block(&from, &to, size);
             self.database.copy_claims(&data, &to, ctp);
+            self.database
+                .watch_oob_text(&to, ctp, Some(&data), "append_copy");
         }
     }
 
@@ -1373,6 +1375,76 @@ impl State {
         // OpCopyRecord, so this path is the can't-represent-null fallback.)
         if data.store_nr == u16::MAX {
             return;
+        }
+        // cluster-462 tool-gap #1 — name the premature-free op: when the copy
+        // SOURCE is read while its store is still freed (the operand-stack stale
+        // ref the LOFT_UAF frame scan misses), report the source, the line that
+        // freed it, and the copy site.  Gated on LOFT_UAF; capped to avoid flood.
+        if crate::keys::uaf_any_enabled()
+            && (data.store_nr as usize) < self.database.allocations.len()
+            && self.database.allocations[data.store_nr as usize].free
+        {
+            thread_local! {
+                static REPORTED: std::cell::RefCell<std::collections::HashSet<u16>> =
+                    std::cell::RefCell::new(std::collections::HashSet::new());
+            }
+            let first = REPORTED.with(|s| s.borrow_mut().insert(data.store_nr));
+            if first {
+                let line_of = |ln: &std::collections::BTreeMap<u32, u32>, pc: u32| -> u32 {
+                    ln.range(..=pc).next_back().map_or(0, |(_, &v)| v)
+                };
+                let copy_line = line_of(&self.line_numbers, self.code_pos);
+                let copy_d_nr = self.call_stack.last().map_or(u32::MAX, |f| f.d_nr);
+                let (free_pc, free_line, free_d_nr, free_op) =
+                    crate::keys::uaf_freed_pc(data.store_nr)
+                        .map_or((0, 0, u32::MAX, u16::MAX), |(pc, d, op)| {
+                            (pc, line_of(&self.line_numbers, pc), d, op)
+                        });
+                eprintln!(
+                    "[uaf-src] OpCopyRecord reads FREED source store #{} (rec={},pos={},tp={tp}) \
+                     at copy-site pc={} (line {copy_line}, fn d_nr={copy_d_nr}); that store was \
+                     last freed at pc={free_pc} (line {free_line}, fn d_nr={free_d_nr}, op={free_op})",
+                    data.store_nr, data.rec, data.pos, self.code_pos,
+                );
+            }
+        }
+        // (b) cluster-462 LOFT_UAF_REUSE — the REUSED case the free-check above misses:
+        // the source slot is LIVE (free=false) but `validate_claims` finds it structurally
+        // invalid for `tp` (out-of-range rec/pos, broken interior edges), i.e. it was
+        // freed-then-reused as a DIFFERENT record since the source ref was minted. That is
+        // the stale-reused read behind the post-reuse SIGSEGV (#462 @ sim.loft:3546) —
+        // named here, before the faulting copy. `validate_claims` is bounds-checked (it
+        // reports, never faults). Deduped by store slot.
+        if crate::keys::uaf_reuse_enabled()
+            && data.rec != 0
+            && (data.store_nr as usize) < self.database.allocations.len()
+            && !self.database.allocations[data.store_nr as usize].free
+        {
+            let mut problems = 0u32;
+            self.database
+                .validate_claims(&data, tp, "uaf-reuse-src", &mut problems);
+            if problems > 0 {
+                thread_local! {
+                    static REPORTED_REUSE: std::cell::RefCell<std::collections::HashSet<u16>> =
+                        std::cell::RefCell::new(std::collections::HashSet::new());
+                }
+                let first = REPORTED_REUSE.with(|s| s.borrow_mut().insert(data.store_nr));
+                if first {
+                    let line = self
+                        .line_numbers
+                        .range(..=self.code_pos)
+                        .next_back()
+                        .map_or(0, |(_, &v)| v);
+                    let cur_kt = self.database.allocations[data.store_nr as usize].known_type;
+                    eprintln!(
+                        "[uaf-reuse] OpCopyRecord source store #{} (rec={},pos={}) is LIVE but \
+                         STRUCTURALLY INVALID for tp={tp} ({problems} broken edge(s); slot now \
+                         holds known_type={cur_kt}) — freed-then-reused-as-different, a stale read \
+                         at copy-site pc={} (line {line})",
+                        data.store_nr, data.rec, data.pos, self.code_pos,
+                    );
+                }
+            }
         }
         if std::env::var("LOFT_TRACE_CR").is_ok() {
             let src_w = if data.rec != 0 {
@@ -1430,6 +1502,10 @@ impl State {
         self.database.remove_claims(&to, tp);
         self.database.copy_block(&data, &to, size);
         self.database.copy_claims(&data, &to, tp);
+        // LOFT_WATCH_STORE (cluster-462 write-watch) — name the copy that leaves a garbage
+        // text-ptr in the watched store; src_oob says propagated-vs-introduced-here.
+        self.database
+            .watch_oob_text(&to, tp, Some(&data), "copy_record");
         if std::env::var("LOFT_TRACE_CR").is_ok() {
             let dst_w = self.database.store(&to).get_int(to.rec, to.pos);
             let dst_data_ptr = self.database.store(&to).get_u32_raw(to.rec, to.pos + 8);

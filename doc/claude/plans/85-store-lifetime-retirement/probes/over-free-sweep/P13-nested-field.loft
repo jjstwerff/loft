@@ -1,0 +1,12 @@
+struct M { hp: integer not null, depth: integer not null, name: text }
+struct Inner { rows: vector<M> }
+struct Outer { inner: Inner }
+fn m_none() -> M { M{hp:0,depth:0,name:""} }
+fn filler(n: integer) -> integer { es: vector<M> = []; for j in 0..n { es += [M{hp:j,depth:j,name:"f"}]; } return len(es); }
+fn rows(o: Outer) -> vector<M> { o.inner.rows }
+fn main() {
+  o = Outer { inner: Inner { rows: [] } };
+  o.inner.rows += [M{hp:1,depth:1,name:"a"}]; o.inner.rows += [M{hp:2,depth:2,name:"b"}];
+  for i in 0..6 { r = rows(o); acc=0; for f in 0..6 { acc += filler(6); } assert(len(o.inner.rows)==2, "i{i}: o={len(o.inner.rows)}"); assert(len(r)==2, "i{i}: r={len(r)}"); }
+  println("P13 ok");
+}

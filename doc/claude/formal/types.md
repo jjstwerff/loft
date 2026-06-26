@@ -50,14 +50,18 @@ other channel for an expected type.
   (T-Chk-Var)    Γ ⊢ V ⇐ Enum E               ⟸   V ∈ variants(E)
 ```
 
+See **§ Nullability** below for `τ?` (the optional former) and the rules that introduce /
+eliminate it; indexing (`(N-Index)`) is one of the fallible operations that synthesise it.
+
 ### Conversion `τ ⤳ σ` — width folded in
 
 ```
   (C-Refl)    τ ⤳ τ
   (C-Never)   Never ⤳ τ
   (C-Tuple)   (σ₁…σₙ) ⤳ (τ₁…τₙ)        ⟸   ∀i. σᵢ ⤳ τᵢ
-  (C-Var)     Reference(S) ⤳ Enum(E)   ⟸   S ∈ variants(E)            (and the
-              dual Enum(__nullable<S>) ⤳ Reference(S), and plain Enum ⤳ Integer tag)
+  (C-Var)     Reference(S) ⤳ Enum(E)   ⟸   S ∈ variants(E)            (and plain
+              Enum ⤳ Integer tag).  NB: the null INTRO `S ⤳ S?` is `(N-Intro)`; there is
+              NO implicit `S? ⤳ S` unwrap (that is `(N-Store)`-illegal — discharge via `??`)
   (C-Int)     Integer[a,b] ⤳ Integer[c,d]   ⟸   [a,b] ⊆ [c,d]         (see I-*)
   (C-Ref)     &τ ⤳ σ   ⟸   τ ⤳ σ      (a reference reads through to its referent; there
               is NO  σ ⤳ &τ  — a reference is made only by `&` at a binding, never coerced)
@@ -77,6 +81,103 @@ usable wherever a `τ` is, and `τ`'s own conversions then apply (e.g. `&u8` →
 The reverse never holds — you cannot coerce a plain value into a reference; a `&τ` is made
 only by a `&` annotation at a binding. The link's introduction and its write-through
 semantics live in [binding.md](binding.md); here it is just one more thing `⤳` accepts.
+
+### Nullability — the optional former `τ?`
+
+> **One former, representation derived — the integer model applied to null.** `τ?` is the
+> *optional* type ("a `τ`, or `null`"). **Storage is non-null by default**: a binding,
+> field, or `vector` element of type `τ` never holds `null` — `τ?` is the *only* way a slot
+> admits it. `not null` is accepted but a **no-op** (non-null is already the default; kept
+> for source back-compat). Null enters values only through the **fallible operations**
+> below, which synthesise `τ?`; it leaves only through an explicit **discharge** (`??` /
+> `match`). There is no implicit unwrap.
+
+```
+  formation
+  (N-Opt)      τ wf  ⟹  τ? wf          τ? is a type for any τ
+  (N-Idem)     τ?? ≡ τ?                 optional is idempotent — no double-null
+  (N-Dense)    vector<τ> stores τ       elements are non-null unless written vector<τ?>
+
+  introduction (a non-null value flows into an optional slot)
+  (N-Intro)    τ ⤳ τ?                   the ONLY null-direction conversion in ⤳
+
+  "no representable result" → τ?.  null is the UNIVERSAL doesn't-fit / undefined value —
+  NEVER wrap, saturate, or an out-of-range value (that would be UB).  Nullability is
+  RANGE-DRIVEN: an op is non-null when its result provably fits, τ? when it could miss.
+  (N-Index)    Γ ⊢ v ⇒ vector<τ>, Γ ⊢ i ⇒ Integer   ⟹   Γ ⊢ v[i]  ⇒ τ?       (OOB — no elem)
+  (N-Div)      Γ ⊢ a,b ⇒ Integer                     ⟹   Γ ⊢ a/b, a%b ⇒ Integer?  (÷0 undefined)
+  (N-Parse)    Γ ⊢ parse_τ(s)                          ⟹   Γ ⊢ …     ⇒ τ?           (invalid)
+  (N-Arith)    Γ ⊢ a,b ⇒ Integer,  op ∈ {+,-,*}      ⟹   Γ ⊢ a op b ⇒ Integer[r]
+               where r = the range-arithmetic of the operands.  NON-null if r ⊆ i64 (the
+               common bounded case — no `??`); else Integer? (overflow → null).
+  (N-Cast)     Γ ⊢ e ⇒ Integer[s]   ⟹   Γ ⊢ (e as τ) ⇒ τ   REQUIRES s ⊆ range(τ).  If the
+               fit is NOT provable it is a COMPILE ERROR — `as τ` is an assertion of fit; the
+               honest form for a maybe-miss is `as τ?`.  (`b: integer; b as u8` errors; `400
+               as u8` errors — provably can't fit.)
+  (N-Cast?)    Γ ⊢ (e as τ?) ⇒ τ?    the CHECKED cast — value if it fits, else null.  Always
+               legal; NEVER yields an out-of-range value.  (`b as u8? ⇒ u8?`.)
+
+  elimination (discharge — REQUIRED; there is NO  τ? ⤳ τ)
+  (N-Coal)     Γ ⊢ e ⇒ τ?,  Γ ⊢ d ⇐ τ                ⟹   Γ ⊢ (e ?? d) ⇒ τ
+  (N-Match)    match e { null ⇒ …,  x ⇒ …(x:τ)… }      eliminates τ?, binds the τ arm
+  (N-Store)    storing  e:τ?  into a  τ  slot is ILL-TYPED — discharge first
+
+  inference — declared vs inferred storage (the "by definition vs by use" split)
+  (N-Decl)     a DECLARED slot `x: τ` is a COMMITMENT: `x = e` checks `e ⇐ τ`. If e:τ? it is
+               `(N-Store)`-illegal — declaring non-null FORBIDS a later nullable write.
+  (N-Join)     an INFERRED `a = e₁ … a = eₙ` (no annotation) has type `⨆ᵢ τᵢ`, made OPTIONAL
+               iff some `τᵢ` is optional.  `?` rides the SAME join as integer width `(I-Join)`
+               — `integer ⊔ integer? = integer?`.
+```
+
+> **The case that proves the declaration means something** (`do we allow a:integer=2; a=v[i]`?):
+>
+> | code | result | why |
+> |---|---|---|
+> | `a: integer = 2;  a = v[i]` | **type error** | `a` declared non-null `(N-Decl)`; `v[i]:integer?` can't store `(N-Store)` — write `a = v[i] ?? 0` or declare `a: integer?` |
+> | `a = 2;  a = v[i]`          | `a : integer?` | inferred → `(N-Join)` widens to optional |
+>
+> Exactly parallel to declared integer width (`a: u8 = 2; a = big` also errors — a declared
+> type is a commitment; an inferred one widens by join).
+
+**In words.** Nullability is a property of **operations, not storage**. `null` is the
+**one universal value for "no representable result"** — division by zero, out-of-bounds
+index, failed parse, integer overflow, and a cast that doesn't fit **all yield `null`**,
+never a wrapped / saturated / out-of-range value. That single choice is what **roots out
+the UB class**: a slot of type `τ` never holds a non-`τ` value — it either fits (and the
+op is non-null) or it's `null` (and `(N-Store)` forces you to discharge it). We do **not**
+fake non-null on an op that can miss.
+
+Nullability is **range-driven**, so the discharge burden is proportional to *real* risk,
+not theoretical: `a op b` and `e as τ` are **non-null when the result provably fits** the
+target range — `b=4; b*100 ⇒ Integer[400]` fits i64, so it's non-null, **no `??`** — and
+`τ?` only when the range could miss (a narrowing `as`, a declared-narrow slot, a genuinely
+i64-overflowing product). So there is **no `??` "after every `a*x`"** — only where the op
+can actually fail to produce an in-range value. `(N-Intro)` is the one implicit
+null-direction step; the reverse is never implicit, so a null can't be lost by accident.
+
+This unifies nullability with the **integer range model into one system**: a value's range
+decides its storage width *and* whether a fit-failure yields `null`. Overflow-to-null is
+therefore the *correct* runtime behavior (loft already does it for `a*b`); the work is to
+**type** it (`Integer?` when the range exceeds i64) and require discharge — and to fix
+`as` so `400 as u8` yields `null`, not the current `400`.
+
+**Representation is derived, exactly like integer width.** `τ?` has one identity
+(optional-of-τ); how the `null` is *stored* follows from the base type and is not part of
+the type:
+
+| base `τ` | `τ?` null representation |
+|---|---|
+| `Integer` / `Bool` / `Char` / `Float` | the value-slot **null sentinel** (`i32::MIN`, `255`, …) |
+| a struct `S` as a `vector` element | the tagged **`__nullable<S>`** enum (discriminant + payload) |
+
+So `bytes_for(τ?)` and the sentinel-vs-tag choice are *consequences* of `τ`, never declared
+— the same discipline as `bytes_for_range` on integers. **Parametricity holds**: `τ?` and
+`vector<τ>` formation commute with substitution (`⟦N?⟧[N:=S]=⟦S?⟧`,
+`⟦vector<N>⟧[N:=S]=⟦vector<S>⟧`), because nothing is rewritten on the element's *shape*.
+
+(Design + the evidence that the old implicit default-nullable rewrite broke parametricity
+and forced materialisation: [../plans/25-nullable-sequences/storage-vs-access-nullability.md](../plans/25-nullable-sequences/storage-vs-access-nullability.md).)
 
 ### The integer model — one type; the rest is notation
 
@@ -148,7 +249,39 @@ overflows *at runtime* yields **null and keeps running** (operational.md `E-Unco
 
 ## Deviations
 
-OPEN: **0**
+OPEN: **4** (the nullability flip + UB-rooting — §25 in progress)
+
+### DN1 — scalar / field storage is still nullable-by-default
+The `(N-Dense)` / non-null-default rule holds for `vector` elements (flipped: dense default,
+`vector<τ?>` opt-in) but **not yet for scalars and struct fields**: a plain `integer` field
+still admits `null` (verified: `a.x = null` on `x: integer` succeeds), and `not null` is the
+opt-out rather than a no-op. Falsifier: `struct A { x: integer }  …  a.x = null` type-checks
+today; under the rule it must require `x: integer?`. Closes when the scalar default flips +
+`not null` becomes the no-op.
+
+### DN2 — implicit `S? ⤳ S` unwrap still exists
+Code still performs the implicit `Enum(__nullable<S>) ⤳ Reference(S)` unwrap (the old
+`(C-Var)` dual), violating `(N-Store)` / the no-implicit-elim rule — a `τ?` can reach a `τ`
+slot without a `??`/`match`. Falsifier: an `S?` value assigned to an `S` binding with no
+discharge. Closes when the unwrap is removed and `(N-Coal)`/`(N-Match)` are the only elims.
+
+### DN3 — fit-failing ops warn + propagate instead of yielding `τ?`
+`a / b`, `a % b`, `parse_*`, and overflowing `a*b` already produce **null at runtime**
+(correct per the model — null is the doesn't-fit value, `E-Uncomp`/C80), but the **type**
+doesn't carry it: they're typed non-null and only *warn* ("division may produce null"),
+so an un-discharged null flows into non-null storage. Falsifier: `b = a / x` with no `??`
+type-checks (warns) today; under `(N-Div)`/`(N-Arith)`+`(N-Store)` it must be `… ?? 0` or
+`b: integer?`. The runtime is right; the **typing + discharge** is the gap. Its blast
+radius (fit-failing results stored into non-null without `??`) is the gating measurement.
+
+### DN4 — `as` to a narrower type doesn't enforce the range (UB)
+`400 as u8` yields **400** — the cast asserts the *type* but leaves an out-of-range value
+in a `u8` slot (undefined behaviour: a `u8` holding 400). Per `(N-Cast)`/`(N-Cast?)` the
+two honest forms are: **`as u8` requires a PROVABLE fit** (so `400 as u8` and `b: integer;
+b as u8` are **compile errors** — "use `as u8?`"), and **`as u8?` is the CHECKED cast**
+(`u8?`, value or `null`, never out-of-range). Falsifier: `(400 as u8) == 400` is true
+today; under the rules `400 as u8` does not compile and `400 as u8?` is `null`. The
+integer-range sibling of DN1–DN3's null work — same "no claim without enforcement."
 
 ### D2 — CLOSED by reconciliation (2026-06-24): `integer` = i64 is a *user-visible* contract met by a *compact* internal encoding
 

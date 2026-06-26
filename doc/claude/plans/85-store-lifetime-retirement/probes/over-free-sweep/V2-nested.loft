@@ -1,0 +1,29 @@
+struct Player { clevel: integer, xp: integer, gold: integer }
+struct Big { tag: text, player: Player, inv: vector<integer>, eq: vector<integer>, dn_q: integer, dn_r: integer, px: integer, py: integer }
+fn m_none() -> Big { Big { tag:"", player: Player{clevel:0,xp:0,gold:0}, inv:[], eq:[], dn_q:0,dn_r:0,px:0,py:0 } }
+fn fresh(seed: integer) -> Big { Big { tag:"f", player: Player{clevel:0,xp:0,gold:0}, inv:[], eq:[], dn_q:1,dn_r:1,px:0,py:0 } }
+fn mutate(b: &Big) { b.player.xp = b.player.xp + 1; }
+fn filler(k: integer) -> integer { es: vector<integer> = []; for j in 0..k { es += [j]; } return len(es); }
+fn descend(s: Big, seed: integer) -> Big {
+  ns = fresh(seed);
+  ns.inv = s.inv; ns.eq = s.eq; ns.tag = s.tag;
+  ns.player.clevel = s.player.clevel;   // NESTED field assignment
+  ns.player.xp = s.player.xp;
+  ns.player.gold = s.player.gold;
+  mutate(ns);                            // pass ns to a &-mutating fn
+  if ns.dn_q >= 0 { ns.px = ns.dn_q * 2; ns.py = ns.dn_r * 3; }
+  ns
+}
+fn main() {
+  s = Big { tag:"orig", player: Player{clevel:5,xp:100,gold:50}, inv:[], eq:[], dn_q:2,dn_r:3,px:0,py:0 };
+  s.inv += [1]; s.inv += [2]; s.eq += [9];
+  for i in 0..20 {
+    s2 = descend(s, i);
+    acc=0; for f in 0..8 { acc += filler(8); }
+    assert(s.player.clevel == 5, "iter {i}: s.clevel={s.player.clevel}");
+    assert(s2.player.clevel == 5, "iter {i}: s2.clevel={s2.player.clevel}");
+    assert(len(s2.inv) == 2, "iter {i}: s2.inv={len(s2.inv)}");
+    assert(s2.tag == "orig", "iter {i}: s2.tag={s2.tag}");
+  }
+  println("V2 ok");
+}

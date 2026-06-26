@@ -1,0 +1,20 @@
+// SIBLING of #457 (delivery-aliasing) — STRUCT return instead of vector. #457 fixed
+// vector delivery via OpReplaceVector; does the same multi-arm adopt-and-return work
+// for a STRUCT local? `out` is reassigned to a recursive struct return in BOTH arms,
+// then a field is set, then `return out`; a trailing churn reoccupies a freed slot.
+struct Box { tag: integer not null, name: text }
+fn churn(k: integer) -> integer { b: vector<u8> = [0]; for i in 0..k { b += [1]; } return len(b); }
+fn build(n: integer) -> Box {
+  out = Box { tag: 0, name: "seed" };
+  if n <= 0 { return out; }
+  if n % 2 == 0 { out = build(n - 1); out.tag = n; }
+  else          { out = build(n - 1); out.tag = n * 10; }
+  return out;
+}
+fn main() {
+  r = build(5);
+  _ = churn(8);
+  assert(r.tag == 50, "tag corrupted: {r.tag} (want 50)");
+  assert(r.name == "seed", "name corrupted: '{r.name}'");
+  println("ok tag={r.tag} name={r.name}");
+}

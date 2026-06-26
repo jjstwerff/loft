@@ -454,6 +454,13 @@ impl State {
     /// a branch this activation never reaches.)
     pub fn uaf_scan_freed(&mut self, data: &Data) {
         let freed = std::mem::take(&mut self.database.uaf_freed_this_op);
+        // cluster-462 tool-gap #1: stamp each freed slot with the pc that freed
+        // it, so a later `do_copy_record` of a still-freed source can name the
+        // premature-free op (the operand-stack stale ref the frame scan misses).
+        let free_d_nr = self.call_stack.last().map_or(u32::MAX, |f| f.d_nr);
+        for &slot in &freed {
+            crate::keys::uaf_record_free(slot, self.code_pos, free_d_nr, u16::MAX);
+        }
         // Opcode bytes for the load + free families.  All are < 255 (single
         // byte); bail quietly if that ever changes rather than misdecode.
         let op_of = |name: &str| -> u16 {

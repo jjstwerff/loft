@@ -1,0 +1,12 @@
+struct M { hp: integer not null, depth: integer not null, name: text }
+fn m_none() -> M { M { hp: 0, depth: 0, name: "" } }
+fn filler(k: integer) -> integer { es: vector<M> = []; for j in 0..k { es += [M{hp:j,depth:j,name:"f"}]; } return len(es); }
+fn pool_of(t: vector<M>) -> vector<M> { out: vector<M> = []; for i in 0..len(t) { out += [t[i] ?? m_none()]; } out }
+fn pick(table: vector<M>, salt: integer) -> M {
+  n = len(table);
+  for mj in 0..n { if salt % n ?? 0 == mj { m2 = table[mj] ?? m_none(); return m2; } }
+  m_none()
+}
+fn gen(seed: integer) -> M { pool = pool_of_seed(seed); wdef = pick(pool, seed); wdef }
+fn pool_of_seed(seed: integer) -> vector<M> { out: vector<M> = []; for k in 0..6 { out += [M{hp:k,depth:k,name:"m{k}"}]; } out }
+fn main() { for i in 0..20 { r = gen(i); acc=0; for f in 0..8 { acc += filler(8); } assert(r.depth>=0 && r.depth<6, "i{i}: r.depth={r.depth}"); } println("U1 ok"); }

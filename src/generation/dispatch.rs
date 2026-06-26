@@ -266,16 +266,22 @@ impl Output<'_> {
         // (tests/scripts/95-alias-copy.loft assert orig.x == 1.0 fails
         // because mutating ac_copy mutates ac_orig too).
         let to_unspanned = to.unspan();
-        // when a call returns a Reference and the callee has
-        // visible Reference params, the returned DbRef may alias a parameter.
-        // Deep-copy to prevent aliasing.
+        // A call whose return is NOT a fresh-adopt store (it borrows a visible
+        // param OR is a reused hidden buffer) must be deep-copied into a store
+        // this binding owns — else the returned DbRef aliases the callee's
+        // arg/buffer and a later `OpFreeRef(var)` whole-store-frees it.
+        // Cluster-A A.3: reads the canonical `return_adopts_fresh_store()` fact,
+        // the SAME gate the interpreter uses (`state/codegen.rs`
+        // gen_set_first_at_tos), instead of the coarse "callee has a visible
+        // Reference/Enum param" proxy — which MISSED a borrowed VECTOR-element
+        // view (`fn pick(t: vector<M>) -> M { t[i] }`: no Reference param, yet
+        // the return aliases `t`, so freeing the bound local freed the caller's
+        // vector).
         if let (Some(d_nr), Value::Call(fn_nr, args)) =
             (variables.tp(var).heap_def_nr(), to_unspanned)
             && self.data.def(*fn_nr).name().starts_with("n_")
             && *self.data.def(*fn_nr).code() != Value::Null
-            && self.data.def(*fn_nr).attributes().iter().any(|a| {
-                !a.hidden && matches!(a.typedef, Type::Reference(_, _) | Type::Enum(_, true, _))
-            })
+            && !self.data.def(*fn_nr).return_adopts_fresh_store()
         {
             let tp_nr = self.data.def(d_nr).known_type();
             if !self.declared.contains(&var) {

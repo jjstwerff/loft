@@ -15,6 +15,15 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## DESIGN DECISION (2026-06-20): nullability is a SEQUENCE concept — keyed collections stay DENSE
 
+> **⚠️ The "vector<S> nullable BY DEFAULT" half of this is SUPERSEDED (2026-06-25)** by
+> [storage-vs-access-nullability.md](storage-vs-access-nullability.md): `vector<S>` is now
+> **DENSE by default**, with `?S` (`vector<?S>`) the explicit nullable opt-in. The implicit
+> default-rewrite broke parametricity (a generic `vector<N>` couldn't be written — the
+> walker A1) and forced materialisation everywhere (Families N/A) + the #462 UAF. The
+> "nullability is a sequence concept, keyed stay dense" framing still holds; only the
+> *default direction* flipped (dense, opt-in `?`). The text below is retained as the
+> historical decision.
+
 > **Nullability applies to sequences (`vector`/`array`) ONLY.  Keyed collections
 > (`hash`/`sorted`/`index`/`spacial`) are always dense — implicitly `not null`.**
 

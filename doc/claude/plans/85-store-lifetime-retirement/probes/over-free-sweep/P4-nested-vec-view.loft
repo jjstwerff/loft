@@ -1,0 +1,11 @@
+struct M { hp: integer not null, depth: integer not null, name: text }
+struct Box { rows: vector<M> }
+fn m_none() -> M { M { hp: 0, depth: 0, name: "" } }
+fn filler(n: integer) -> integer { es: vector<M> = []; for j in 0..n { es += [M{hp:j,depth:j,name:"f{j}"}]; } return len(es); }
+fn row(vv: vector<vector<M>>, i: integer) -> vector<M> { vv[i] ?? [] }
+fn main() {
+  vv: vector<vector<M>> = [];
+  for r in 0..4 { row_v: vector<M> = []; for c in 0..3 { row_v += [M{hp:r,depth:c,name:"c{c}"}]; } vv += [row_v]; }
+  for i in 0..6 { x = row(vv, i % 4 ?? 0); acc=0; for k in 0..6 { acc += filler(6); } assert(len(vv)==4, "i{i}: vv={len(vv)}"); assert(len(x)==3, "i{i}: x={len(x)}"); }
+  println("P4 ok");
+}

@@ -1,0 +1,64 @@
+// #462 boundary control — CLEAN (does NOT reproduce the crash).
+//
+// Shape: a `vector<Big>` PROMOTED to `vector<__nullable<Big>>` (the `peek` fn's
+// `v[i] ?? v[0]` forces element-nullability), appended in a loop with
+// `v += [mk(src, ...)]` where `mk` returns a ~33-field struct WITH TEXT FIELDS
+// copied from a struct argument — the exact crawler `enemies += [mk_enemy(wdef,..)]`
+// shape (sim.loft:3546). Compiles to the nullable-element append:
+//   OpPreAllocVector + OpNewRecord(195) + OpSetEnum(disc) + OpCopyRecord(GetField(8,190))
+//
+// This runs CLEAN on both backends (assert passes, exit 0). It is a NEGATIVE
+// control: it proves the nullable-element struct-append codegen is correct in
+// isolation. The crawler SIGSEGV (cluster-462) needs the ACCUMULATED slot-reuse
+// interleaving (~190 live stores) that this minimal shape cannot build — see
+// cluster-462-slot-reuse-uaf.md. Keep as the boundary marker: if a future fix
+// makes THIS crash, the fix over-reached.
+struct MD {
+  m_hp: integer not null, m_dam: integer not null, m_xp: integer not null,
+  m_depth: integer not null, m_vision: integer not null, m_flags: integer not null,
+  m_speed: integer not null, m_cr: integer not null, m_cg: integer not null, m_cb: integer not null,
+  m_glyph: text, m_key: text, m_name: text, m_tags: integer,
+}
+struct En {
+  cur_q: integer not null, cur_r: integer not null, tgt_q: integer not null, tgt_r: integer not null,
+  hp: integer not null, maxhp: integer not null, dam: integer not null, xp: integer not null,
+  mlvl: integer not null, vision: integer not null, flags: integer not null, tags: integer not null,
+  awake: boolean not null, speed: integer not null, energy: integer not null,
+  slow_until: integer not null, stun_until: integer not null,
+  cr: integer not null, cg: integer not null, cb: integer not null,
+  glyph: text, key: text, name: text, alive: boolean not null,
+  role: integer not null, hq: integer not null, hr: integer not null,
+  wq2: integer not null, wr2: integer not null, aq2: integer not null, ar2: integer not null,
+  c1g: integer not null, c2g: integer not null,
+}
+fn mk_md(i: integer) -> MD {
+  MD { m_hp: 5 + i, m_dam: 2, m_xp: 3, m_depth: 1, m_vision: 4, m_flags: 0,
+       m_speed: 1, m_cr: 100, m_cg: 120, m_cb: 90,
+       m_glyph: "g{i}", m_key: "giant_rat_{i}", m_name: "giant rat number {i}", m_tags: i }
+}
+fn mk_en(md: MD, q: integer, r: integer) -> En {
+  g = md.m_glyph;
+  if len(g) == 0 { g = "?"; }
+  En { cur_q: q, cur_r: r, tgt_q: q, tgt_r: r,
+    hp: md.m_hp, maxhp: md.m_hp, dam: md.m_dam, xp: md.m_xp, mlvl: md.m_depth,
+    vision: md.m_vision, flags: md.m_flags, tags: md.m_tags ?? 0, awake: false,
+    speed: 10 + md.m_speed, energy: 0, slow_until: 0, stun_until: 0,
+    cr: md.m_cr, cg: md.m_cg, cb: md.m_cb, glyph: g, key: md.m_key, name: md.m_name, alive: true,
+    role: 0, hq: q, hr: r, wq2: q, wr2: r, aq2: q, ar2: r, c1g: -1, c2g: -1 }
+}
+fn peek(v: vector<En>, i: integer) -> En { v[i] ?? v[0] }   // forces __nullable<En> element
+fn gen() -> vector<En> {
+  enemies: vector<En> = [];
+  for i in 0..300 {
+    wdef = mk_md(i);
+    if wdef.m_hp > 0 { enemies += [mk_en(wdef, i, i)]; }
+  }
+  enemies
+}
+fn main() {
+  v = gen();
+  e = peek(v, 0);
+  assert(len(v) == 300, "len {len(v)} (want 300)");
+  assert(e.name == "giant rat number 0", "name0 corrupted: {e.name}");
+  println("ok len={len(v)} name0={e.name}");
+}

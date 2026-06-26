@@ -1,0 +1,4 @@
+pub struct Ts1 { a: integer, b: float }
+pub struct Ts2 { c: text, d: boolean }
+pub struct Ts3 { e: vector<integer> }
+pub fn ts_touch() -> integer { 7 }

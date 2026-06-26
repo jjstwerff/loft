@@ -1705,6 +1705,51 @@ impl State {
                 }
             }
         }
+        // LOFT_UAF_GEN (c): a popped DbRef whose stamped push-gen differs from the slot's
+        // CURRENT gen was freed+reused between push and pop — a stale read store_nr alone
+        // cannot see, and (unlike the free-site scan) sound: the gen tells old occupant
+        // from a re-claimed new one. Deduped by read site.
+        if crate::keys::uaf_gen_enabled()
+            && std::any::TypeId::of::<T>() == std::any::TypeId::of::<DbRef>()
+        {
+            let db: &DbRef = unsafe { &*std::ptr::from_ref::<T>(r).cast::<DbRef>() };
+            // Read the stamp, then CONSUME it (LIFO): the stack is last-in-first-out, so a
+            // stamp belongs to exactly the pop that matches its push. Clearing on pop stops
+            // a stale stamp from surviving to a later unrelated read once a non-DbRef push
+            // reuses the offset — the main residual-false-positive source.
+            let stamped = crate::keys::uaf_shadow_gen(self.stack_pos);
+            crate::keys::uaf_clear_shadow(self.stack_pos);
+            // Only stamped < current is a genuine reuse-SINCE-push (gen increases
+            // monotonically per slot). A stamped >= current is not a reuse-since-push; the
+            // `<` test drops stale stamps too.
+            if db.store_nr != u16::MAX
+                && (db.store_nr as usize) < self.database.allocations.len()
+                && let Some(stamped) = stamped
+                && stamped < crate::keys::uaf_slot_gen(db.store_nr)
+            {
+                thread_local! {
+                    static REPORTED_GEN: std::cell::RefCell<std::collections::HashSet<u32>> =
+                        std::cell::RefCell::new(std::collections::HashSet::new());
+                }
+                if REPORTED_GEN.with(|s| s.borrow_mut().insert(self.code_pos)) {
+                    let line = self
+                        .line_numbers
+                        .range(..=self.code_pos)
+                        .next_back()
+                        .map_or(0, |(_, &v)| v);
+                    eprintln!(
+                        "[uaf-gen] stale DbRef popped: store #{} (rec={}, pos={}) was gen {stamped} \
+                         at push but is now gen {} (freed+reused since) — read at code_pos={} \
+                         (line {line})",
+                        db.store_nr,
+                        db.rec,
+                        db.pos,
+                        crate::keys::uaf_slot_gen(db.store_nr),
+                        self.code_pos,
+                    );
+                }
+            }
+        }
         r
     }
 
@@ -1893,6 +1938,27 @@ impl State {
             .database
             .store_mut(&self.stack_cur)
             .addr_mut::<T>(self.stack_cur.rec, self.stack_cur.pos + self.stack_pos);
+        // LOFT_UAF_GEN (c): keep the offset's shadow stamp in sync with what is pushed
+        // (BEFORE the move below). A DbRef push STAMPS its slot-gen so a later pop after a
+        // free+reuse is caught; ANY non-DbRef push CLEARS the offset, so a stale stamp left
+        // by an earlier DbRef cannot survive to a later unrelated pop — that staleness was
+        // the detector's whole false-positive source (the "gen 0 at push" / huge-delta
+        // residual). After both, the shadow holds a stamp only for a DbRef live right now.
+        if crate::keys::uaf_gen_enabled() {
+            if std::any::TypeId::of::<T>() == std::any::TypeId::of::<DbRef>() {
+                let db: &DbRef = unsafe { &*(&raw const val).cast::<DbRef>() };
+                if db.store_nr == u16::MAX {
+                    crate::keys::uaf_clear_shadow(self.stack_pos);
+                } else {
+                    crate::keys::uaf_stamp_shadow(
+                        self.stack_pos,
+                        crate::keys::uaf_slot_gen(db.store_nr),
+                    );
+                }
+            } else {
+                crate::keys::uaf_clear_shadow(self.stack_pos);
+            }
+        }
         *m = val;
         self.stack_pos += self.stack_step(size_of::<T>() as u32);
         if self.stack_pos > self.stack_high {
@@ -3554,6 +3620,7 @@ impl State {
         #[allow(unused_mut)]
         let mut bytecode_len = self.bytecode.len() as u32;
         let uaf_on = crate::keys::uaf_check_enabled();
+        let uaf_src_on = crate::keys::uaf_src_enabled();
         // @PLN18 phase 02 — tier-0 live reload: a counter-gated poll so a file
         // save can swap one fn's dispatch targets mid-run (append-only code, so
         // the cached length refreshes after a swap).  One decrement + one
@@ -3606,9 +3673,19 @@ impl State {
                 OPERATORS[op as usize](self);
             }
             // LOFT_UAF: the op freed store slots — scan live frame variables
-            // for one that still reads a freed slot (premature free).
-            if uaf_on && !self.database.uaf_freed_this_op.is_empty() {
-                self.uaf_scan_freed(data);
+            // for one that still reads a freed slot (premature free).  Under the
+            // cheap LOFT_UAF_SRC variant, only stamp each freed slot's pc (no
+            // frame scan) so a later copy of a freed source can name the free site.
+            if !self.database.uaf_freed_this_op.is_empty() {
+                if uaf_on {
+                    self.uaf_scan_freed(data);
+                } else if uaf_src_on {
+                    let freed = std::mem::take(&mut self.database.uaf_freed_this_op);
+                    let d_nr = self.call_stack.last().map_or(u32::MAX, |f| f.d_nr);
+                    for &slot in &freed {
+                        crate::keys::uaf_record_free(slot, op_pos_rt, d_nr, u16::from(op));
+                    }
+                }
             }
             // @PLAN53 cluster 2 / S4 — alignment invariant guard.  In aligned
             // mode the entry base is 8 and every push/pop/reserve advances by a
@@ -3694,6 +3771,39 @@ impl State {
             };
             let msg = format!("{count} stores not freed at program exit: {preview}");
             eprintln!("Warning: {msg}");
+            // LOFT_LEAK_SITES — group leaked stores by ALLOCATION site (created_at →
+            // source line) so the leak's where-from is named, not just its type. Gated.
+            if std::env::var_os("LOFT_LEAK_SITES").is_some() {
+                let mut by_site: std::collections::BTreeMap<(u32, u16), usize> =
+                    std::collections::BTreeMap::new();
+                for (s_nr, s) in self.database.allocations.iter().enumerate() {
+                    if s_nr == 0
+                        || s.is_locked()
+                        || self.const_refs.iter().any(|cr| cr.store_nr == s_nr as u16)
+                        || s.free
+                    {
+                        continue;
+                    }
+                    *by_site.entry((s.created_at, s.known_type)).or_default() += 1;
+                }
+                let mut sites: Vec<_> = by_site.into_iter().collect();
+                sites.sort_by_key(|&(_, n)| std::cmp::Reverse(n));
+                for ((created_at, kt), n) in sites {
+                    let line = self
+                        .line_numbers
+                        .range(..=created_at)
+                        .next_back()
+                        .map_or(0, |(_, &v)| v);
+                    let tn = self
+                        .database
+                        .types
+                        .get(kt as usize)
+                        .map_or("?", |t| t.name.as_str());
+                    eprintln!(
+                        "  [leak-site] {n}× {tn} (kt={kt}) allocated at pc={created_at} (line {line})"
+                    );
+                }
+            }
         }
     }
 

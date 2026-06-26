@@ -1,0 +1,9 @@
+struct M { hp: integer not null, depth: integer not null, name: text }
+fn m_none() -> M { M{hp:0,depth:0,name:""} }
+fn filler(n: integer) -> integer { es: vector<M> = []; for j in 0..n { es += [M{hp:j,depth:j,name:"f"}]; } return len(es); }
+fn first_and_len(t: vector<M>) -> M { t[0] ?? m_none() }
+fn main() {
+  t: vector<M> = []; for k in 0..5 { t += [M{hp:k,depth:k,name:"m"}]; }
+  for i in 0..6 { r = first_and_len(t); acc=0; for f in 0..6 { acc += filler(6); } assert(len(t)==5, "i{i}: t={len(t)}"); assert(r.depth==0, "i{i}: r={r.depth}"); }
+  println("P16 ok");
+}

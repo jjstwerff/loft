@@ -1,0 +1,32 @@
+struct Big {
+  tag: text, a: integer, b: integer, c: integer, d: integer,
+  v1: vector<integer>, v2: vector<integer>, v3: vector<integer>,
+  px: integer, py: integer, dn_q: integer, dn_r: integer
+}
+fn m_none() -> Big { Big { tag:"", a:0,b:0,c:0,d:0, v1:[],v2:[],v3:[], px:0,py:0,dn_q:0,dn_r:0 } }
+fn fresh(seed: integer) -> Big { Big { tag:"f", a:seed,b:0,c:0,d:0, v1:[],v2:[],v3:[], px:0,py:0,dn_q:1,dn_r:1 } }
+fn logit(x: Big, m: text) -> integer { return x.a + len(x.v1); }   // sim_log shape: passes ns by value
+fn hexpx(q: integer, r: integer) -> (integer, integer) { return (q*2, r*3); }
+fn filler(k: integer) -> integer { es: vector<integer> = []; for j in 0..k { es += [j]; } return len(es); }
+fn descend(s: Big, seed: integer) -> Big {
+  ns = fresh(seed);
+  ns.a = s.a; ns.b = s.b; ns.c = s.c; ns.d = s.d;     // scalar field copies
+  ns.v1 = s.v1; ns.v2 = s.v2; ns.v3 = s.v3;            // vector field copies (the __p154_rhs temps)
+  ns.tag = s.tag;
+  acc = logit(ns, "descend");                          // pass ns to a fn (sim_log shape)
+  if ns.dn_q >= 0 { (ax, ay) = hexpx(ns.dn_q, ns.dn_r); ns.px = ax; ns.py = ay; }
+  ns
+}
+fn main() {
+  s = Big { tag:"orig", a:7,b:8,c:9,d:10, v1:[],v2:[],v3:[], px:0,py:0,dn_q:2,dn_r:3 };
+  s.v1 += [1]; s.v1 += [2]; s.v2 += [3]; s.v3 += [4];
+  for i in 0..20 {
+    s2 = descend(s, i);
+    acc=0; for f in 0..8 { acc += filler(8); }
+    assert(s.a == 7, "iter {i}: s.a={s.a}");
+    assert(s2.a == 7, "iter {i}: s2.a={s2.a}");
+    assert(len(s2.v1) == 2, "iter {i}: s2.v1={len(s2.v1)}");
+    assert(s2.tag == "orig", "iter {i}: s2.tag={s2.tag}");
+  }
+  println("V1 ok");
+}

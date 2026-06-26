@@ -1,0 +1,34 @@
+// @PLN85 cluster-462 / #462 — a vector-returning fn that BINDS a
+// vector-returning call into a local and re-returns that local
+// ("adopt-and-re-return") used to mint a dead `__ref_N` buffer store that was
+// allocated, never used, and never freed — one leaked store per call, on BOTH
+// backends.  The NRVO collapse now redirects the inner call to deliver into the
+// fn's return buffer directly (no orphan), for the immediate `t = f(); t` shape
+// AND the `t = f(); t += …; t` merge shape (`game_items()`/`game_monsters()`).
+struct Def { a: integer not null, name: text }
+
+fn base() -> vector<Def> { t: vector<Def> = []; t += [Def { a: 1, name: "b" }]; t }
+fn bun() -> vector<Def> { t: vector<Def> = []; t += [Def { a: 3, name: "u" }]; t }
+
+// Immediate adopt-and-re-return.
+fn rereturn() -> vector<Def> { t = base(); t }
+
+// Merge shape: adopt, adopt a sibling, append it in place, return — the exact
+// catalog-builder shape that leaked 531 stores in the crawler dogfood.
+fn merged() -> vector<Def> {
+  t = base();
+  src = bun();
+  for i in 0..len(src) { if i < len(src) { t += [src[i]]; } }
+  t
+}
+
+pub fn test() {
+  // Loop so any per-call leak accumulates well past the noise floor.
+  s = 0;
+  for q in 0..20 {
+    a = rereturn();
+    b = merged();
+    s = s + len(a) + len(b);
+  }
+  assert(s == 20 * (1 + 2), "s={s}");
+}

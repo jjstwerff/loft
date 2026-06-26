@@ -1,0 +1,12 @@
+struct M { hp: integer not null, depth: integer not null, name: text }
+struct Box { rows: vector<M> }
+fn m_none() -> M { M { hp: 0, depth: 0, name: "" } }
+fn filler(n: integer) -> integer { es: vector<M> = []; for j in 0..n { es += [M{hp:j,depth:j,name:"f{j}"}]; } return len(es); }
+fn rows(b: Box) -> vector<M> { b.rows }
+fn pick(b: Box, c: Box) -> vector<M> { if len(c.rows) > len(b.rows) { rows(c) } else { rows(b) } }
+fn main() {
+  b = Box { rows: [] }; b.rows += [M{hp:1,depth:1,name:"b"}];
+  c = Box { rows: [] }; c.rows += [M{hp:2,depth:2,name:"c1"}]; c.rows += [M{hp:3,depth:3,name:"c2"}];
+  for i in 0..6 { r = pick(b, c); acc=0; for f in 0..6 { acc += filler(6); } assert(len(r)==2, "i{i}: r={len(r)}"); assert(len(b.rows)==1, "i{i}: b={len(b.rows)}"); }
+  println("P11 ok");
+}

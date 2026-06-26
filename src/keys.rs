@@ -273,6 +273,135 @@ pub fn uaf_check_enabled() -> bool {
     *UAF.get_or_init(|| std::env::var_os("LOFT_UAF").is_some())
 }
 
+/// `LOFT_UAF_SRC` — the cheap companion to `LOFT_UAF`: record each free's pc and
+/// report when `do_copy_record` reads a still-freed SOURCE, but SKIP the expensive
+/// per-op frame scan (which floods + slows a real-scale run past its timeout before
+/// the faulting copy is reached).  Enables the same `uaf_freed_this_op` recording.
+pub fn uaf_src_enabled() -> bool {
+    static UAF_SRC: OnceLock<bool> = OnceLock::new();
+    *UAF_SRC.get_or_init(|| std::env::var_os("LOFT_UAF_SRC").is_some())
+}
+
+/// Either UAF instrument is on (gates the `uaf_freed_this_op` recording in `free_named`).
+#[must_use]
+pub fn uaf_any_enabled() -> bool {
+    uaf_check_enabled() || uaf_src_enabled()
+}
+
+/// `LOFT_UAF_REUSE` (detector b) — at `copy_record`, when the source slot is LIVE
+/// (`free=false`) but structurally invalid for the copy's `tp` (a `validate_claims`
+/// failure), the slot was freed-then-reused as a different record since the source ref
+/// was minted: the stale-REUSED read behind the post-reuse SIGSEGV (#462 @ 3546),
+/// caught before the fault. (A same-type reuse slips through, but that wouldn't fault.)
+pub fn uaf_reuse_enabled() -> bool {
+    static UAF_REUSE: OnceLock<bool> = OnceLock::new();
+    *UAF_REUSE.get_or_init(|| std::env::var_os("LOFT_UAF_REUSE").is_some())
+}
+
+/// `LOFT_UAF_GEN` (detector c) — the SOUND reused detector: a per-slot generation
+/// (bumped on free) plus a shadow stack stamping each operand-stack DbRef's gen at push;
+/// at consume a shadow-vs-current mismatch is a slot freed-then-reused since the ref was
+/// pushed. Catches the reused read that `store_nr` alone cannot — no `DbRef` widening.
+pub fn uaf_gen_enabled() -> bool {
+    static UAF_GEN: OnceLock<bool> = OnceLock::new();
+    *UAF_GEN.get_or_init(|| std::env::var_os("LOFT_UAF_GEN").is_some())
+}
+
+/// `LOFT_WATCH_STORE=<n>` — the write-watch for cluster-462's root: after each
+/// `copy_record` whose DESTINATION is store `<n>`, scan the just-written record's text
+/// fields for an out-of-bounds pointer and report the op that produced it (pc/line +
+/// source). This catches the BUILD copy that first writes a garbage text-pointer into the
+/// watched store, distinguishing "uninitialised fresh slot" from "propagated over-free".
+/// Returns the watched store number, or None when unset.
+#[must_use]
+pub fn watch_store() -> Option<u16> {
+    static WATCH: OnceLock<Option<u16>> = OnceLock::new();
+    *WATCH.get_or_init(|| {
+        std::env::var("LOFT_WATCH_STORE")
+            .ok()
+            .and_then(|s| s.trim().parse::<u16>().ok())
+    })
+}
+
+thread_local! {
+    /// `LOFT_UAF_GEN` (c): generation per store slot — bumped on each free. A DbRef
+    /// minted while a slot is at gen G is stale if the slot reaches gen >G (freed +
+    /// reused) before the ref is read. The gen distinguishes the OLD occupant from a
+    /// re-claimed NEW one — so it does NOT false-positive on free-then-reclaim (the
+    /// flaw that sank the store_nr-only scan).
+    static SLOT_GEN: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// Shadow of the operand stack: the slot-gen stamped on each DbRef at PUSH, keyed by
+    /// its eval-stack byte offset. At POP, a shadow-vs-current mismatch = reused-since-push.
+    static STACK_SHADOW: std::cell::RefCell<std::collections::HashMap<u32, u32>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Bump store `slot`'s generation (called from `free_named` under `LOFT_UAF_GEN`).
+pub fn uaf_bump_gen(slot: u16) {
+    SLOT_GEN.with(|g| {
+        let mut v = g.borrow_mut();
+        let i = slot as usize;
+        if i >= v.len() {
+            v.resize(i + 1, 0);
+        }
+        v[i] = v[i].wrapping_add(1);
+    });
+}
+
+/// Store `slot`'s current generation (0 if never freed).
+#[must_use]
+pub fn uaf_slot_gen(slot: u16) -> u32 {
+    SLOT_GEN.with(|g| g.borrow().get(slot as usize).copied().unwrap_or(0))
+}
+
+/// Stamp the generation of the DbRef pushed at eval-stack offset `off`.
+pub fn uaf_stamp_shadow(off: u32, generation: u32) {
+    STACK_SHADOW.with(|s| {
+        s.borrow_mut().insert(off, generation);
+    });
+}
+
+/// The gen stamped at eval-stack offset `off`, if any.
+#[must_use]
+pub fn uaf_shadow_gen(off: u32) -> Option<u32> {
+    STACK_SHADOW.with(|s| s.borrow().get(&off).copied())
+}
+
+/// Consume the shadow stamp at `off` (called on a DbRef POP). The stack is LIFO, so a
+/// stamp is valid only for its matching pop; clearing it stops a stale stamp from
+/// surviving to an unrelated later read once a non-DbRef push reuses the offset.
+pub fn uaf_clear_shadow(off: u32) {
+    STACK_SHADOW.with(|s| {
+        s.borrow_mut().remove(&off);
+    });
+}
+
+thread_local! {
+    /// `LOFT_UAF` companion (cluster-462 tool-gap #1): store slot -> the
+    /// execution `code_pos` of its most-recent free.  The frame-var scan in
+    /// `uaf_scan_freed` misses a stale DbRef that lives on the OPERAND STACK
+    /// (the source `OpCopyRecord` pops) — so this records every free's pc and
+    /// `do_copy_record` reports it when it reads a still-freed source, pinning
+    /// the premature-free op without a full operand-stack scan.
+    static FREED_AT: std::cell::RefCell<std::collections::HashMap<u16, (u32, u32, u16)>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Record (under `LOFT_UAF`) that store `slot` was freed while executing `pc` in
+/// function `d_nr`, by the op whose opcode is `op` (names the freeing op category:
+/// a scope-exit `OpFreeRef`, an `OpFreeRefIfDistinct`, or a `copy_record` free-bit).
+pub fn uaf_record_free(slot: u16, pc: u32, d_nr: u32, op: u16) {
+    FREED_AT.with(|m| {
+        m.borrow_mut().insert(slot, (pc, d_nr, op));
+    });
+}
+
+/// The `(code_pos, d_nr, op_code)` of `slot`'s most-recent recorded free, if any.
+#[must_use]
+pub fn uaf_freed_pc(slot: u16) -> Option<(u32, u32, u16)> {
+    FREED_AT.with(|m| m.borrow().get(&slot).copied())
+}
+
 #[must_use]
 pub fn store<'a>(r: &DbRef, stores: &'a [Store]) -> &'a Store {
     debug_assert!(

@@ -1052,6 +1052,53 @@ impl Scopes {
                 }
             }
         }
+        // @PLN85 over-free class — a VECTOR return-buffer (the hidden SRet arg,
+        // NRVO'd into a source local like `best`) bound from a call that
+        // DETERMINISTICALLY returns its OWN buffer (`!return_adopts_fresh_store()`,
+        // e.g. `best = rows(b, __ref_1)` where `rows` returns its `__retbuf`) is
+        // PutRef-ALIASED to the work-ref arg `__ref_1` — no deep copy (unlike the
+        // Reference path above, which `gen_set_first_ref_call_copy` copies). A plain
+        // `OpFreeRef(__ref_1)` at scope exit then whole-store-frees the RETURNED
+        // buffer. Pair `__ref_1 → ov` so the free becomes
+        // `OpFreeRefIfDistinct(__ref_1, ov)`: a no-op since they alias (the caller
+        // owns + frees the returned buffer). Restricted to the return-buffer ARG —
+        // a dead vector LOCAL (e.g. `other`) is not an argument, so it keeps its
+        // plain free (its borrowed source must still be released, else it leaks).
+        // Extended to Reference (struct) + struct-Enum return-buffers too: a struct
+        // retbuf `ns = sim_new_gen_s(…, __ref_1)` that ADOPTS the buffer-returning
+        // callee's `__ref_1` has the SAME plain-`OpFreeRef(__ref_1)` over-free (#462's
+        // sim_descend driver, tp=194). The witness-pair is conservative —
+        // `OpFreeRefIfDistinct(__ref_1, ov)` frees `__ref_1` exactly as the plain free
+        // did when they are DISTINCT (the deep-copy case), and only skips when they
+        // alias (the adopt case, the bug) — so this can only fix, never regress.
+        if matches!(
+            function.tp(ov),
+            Type::Vector(_, _) | Type::Reference(_, _) | Type::Enum(_, true, _)
+        ) && function.is_argument(ov)
+            && data
+                .def(self.d_nr)
+                .attributes
+                .iter()
+                .any(|a| a.hidden && a.name == function.name(ov))
+            && let Value::Call(fn_nr, args) = unspanned_value
+            && data.def(*fn_nr).name.starts_with("n_")
+            && data.def(*fn_nr).code != Value::Null
+            && !data.def(*fn_nr).return_adopts_fresh_store()
+        {
+            for arg in args {
+                let av = match arg {
+                    Value::Var(a) => Some(*a),
+                    Value::Set(a, _) => Some(*a),
+                    _ => None,
+                };
+                if let Some(av) = av {
+                    let n = function.name(av);
+                    if n.starts_with("__ref_") || n.starts_with("__rref_") {
+                        self.paired_witness.entry(av).or_insert(ov);
+                    }
+                }
+            }
+        }
         // Companion to the !adopts_fresh_store (deep-copy) branch above for the
         // var-to-var deep-copy path.  When `Set(v, Var(src))` and
         // both are References to the same struct, codegen takes

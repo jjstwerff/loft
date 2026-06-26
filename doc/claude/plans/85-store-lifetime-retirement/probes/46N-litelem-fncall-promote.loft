@@ -1,0 +1,13 @@
+// FAMILY N — STILL FAILS (both backends, compile). A vector literal whose element is
+// a struct-RETURNING FUNCTION CALL is wrongly inferred `vector<__nullable<S>>`, so a
+// declared `vector<S>` return mismatches. A direct struct-LITERAL element is fine —
+// element nullability is decided on syntactic literal-ness, not the element's type.
+// This is why crawler tables go nullable on `[mk_thing(...)]`. Should compile + R=1.
+struct S { a: integer not null, b: text }
+fn mk_s(i: integer) -> S { S { a: i, b: "n" } }
+fn build() -> vector<S> { [mk_s(1)] }
+fn main() {
+  v = build();
+  assert(len(v) == 1, "len={len(v)}");
+  println("R={len(v)}");
+}

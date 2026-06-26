@@ -212,3 +212,20 @@ The vector return-buffer sub-thicket is collapsed to the plan's invariant:
 The Reference / Text return sub-thickets are a *future* D-own-1 slice (their arms
 are clean today — round 5 — so any collapse there is organisational, not
 bug-driven). This slice (the vector sub-thicket) is DONE.
+
+## Slice 2 — the Reference (struct) return sub-thicket (2026-06-26)
+
+The close-out above named the Reference/Text arms a *future* slice. Reference done now,
+mirroring the vector collapse: `RefDelivery { Rename(ws), MaterializeView, AsIs }` +
+`classify_reference_delivery` (pure `&self`) → `dispatch_reference_delivery`. The three
+inline sub-cases of the `Type::Reference(td, ls)` arm (#120 hidden-ref recovery / #306
+return_views_local copy / plain rename) are now cells of one selector; the separate
+nullable-unwrap arm is left as-is (its own earlier `block_result` branch).
+
+**Behaviour-PRESERVING.** Corpus `bytecode-comparisons/D-own-1-reference-corpus.loft` (one fn
+per Reference-return path: owned-fresh, wrap-call, return-views-local #306, nullable-unwrap,
+arg-borrow). Verified: bytecode + native Rust byte-identical before/after (the only introspect
+diff was the scope-id label + variable-table columns, proven NON-DETERMINISTIC by re-capturing
+the same binary twice). Full suite 2542 green both backends; differential oracle green. No
+behaviour change — organisational collapse (the Reference arm was clean; this readies it for
+the carried-fact model and shrinks the thicket toward the beacon).

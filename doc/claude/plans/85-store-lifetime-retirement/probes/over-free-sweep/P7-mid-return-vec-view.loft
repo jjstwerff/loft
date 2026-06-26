@@ -1,0 +1,11 @@
+struct M { hp: integer not null, depth: integer not null, name: text }
+struct Box { rows: vector<M> }
+enum Cell { Empty, Filled { items: vector<M> } }
+fn m_none() -> M { M { hp: 0, depth: 0, name: "" } }
+fn filler(n: integer) -> integer { es: vector<M> = []; for j in 0..n { es += [M{hp:j,depth:j,name:"f{j}"}]; } return len(es); }
+fn rows_or(b: Box, want: boolean) -> vector<M> { if want { return b.rows; } empty: vector<M> = []; empty }
+fn main() {
+  b = Box { rows: [] }; for k in 0..5 { b.rows += [M{hp:k,depth:k,name:"r{k}"}]; }
+  for i in 0..8 { x = rows_or(b, true); acc=0; for f in 0..8 { acc += filler(7); } assert(len(b.rows)==5, "i{i}: brows={len(b.rows)}"); assert(len(x)==5, "i{i}: x={len(x)}"); }
+  println("P7 ok");
+}

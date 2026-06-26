@@ -638,14 +638,28 @@ impl Store {
                 // The adjacent free block can cover the growth.
                 self.fl_remove(next);
                 let act = req_size * 7 / 4;
-                if claim - next_size > act {
+                let new_size = if claim - next_size > act {
                     let new_next = rec + act as u32;
                     let new_free_size = (-next_size) as u32 + next - new_next;
                     *self.addr_mut(rec, 0) = act;
                     *self.addr_mut(new_next, 0) = -(new_free_size as i32);
                     self.fl_insert(new_next);
+                    act
                 } else {
                     *self.addr_mut(rec, 0) = claim - next_size;
+                    claim - next_size
+                };
+                // The absorbed region (old end `claim` .. new end) held the freed block's
+                // STALE bytes.  `claim`/`finish_claim` zero a payload on allocation so a
+                // freshly-exposed slot reads as 0 (the invariant `set_default_value` and the
+                // vector/text readers rely on); an in-place grow must uphold the SAME
+                // invariant or a newly-exposed vector element carries garbage text/vec
+                // handles that `remove_claims`/`length_vector` then follow into a UAF
+                // (cluster-462, #462 @ sim.loft:3546).  Zero only the grown tail; the old
+                // payload (words 1..claim) is preserved.  Same flag as `claim` so
+                // `LOFT_NO_ZERO_CLAIM` toggles both together.
+                if Self::zero_claim_enabled() {
+                    self.zero_range(rec, claim as u32 * 8, (new_size - claim) as u32 * 8);
                 }
                 return rec;
             }
@@ -2824,5 +2838,40 @@ mod tests {
     fn freed_sentinel_is_free() {
         let sentinel = Store::new_freed_sentinel();
         assert!(sentinel.free);
+    }
+
+    /// cluster-462 / #462 regression: an in-place `resize` grow that absorbs an adjacent
+    /// freed block MUST zero the newly-absorbed region, upholding the same "claimed payload
+    /// reads zero" invariant `claim` provides. A freshly-exposed vector element slot that
+    /// keeps the freed block's stale bytes (garbage text/vec handles) is followed by
+    /// `remove_claims`/`length_vector` into a UAF (the sim.loft:3546 SIGSEGV). Pre-fix this
+    /// region kept `0xDEAD_BEEF`; post-fix it reads 0.
+    #[test]
+    fn resize_in_place_zeroes_absorbed_region() {
+        let mut store = Store::new(256);
+        store.free = false;
+        let a = store.claim(4); // 4-word record
+        let b = store.claim(16); // adjacent 16-word record
+        // Garbage at HIGH offsets in b, past the free-tree node header `delete` writes into
+        // b's first words — so it survives the free and is what `resize` must clear.
+        *store.addr_mut::<u32>(b, 80) = 0xDEAD_BEEF;
+        *store.addr_mut::<u32>(b, 100) = 0x00CA_FE00;
+        store.delete(b); // b becomes a free block adjacent to a
+        let a2 = store.resize(a, 12); // grow a in place into b's region
+        assert_eq!(
+            a2, a,
+            "resize should grow a in place (absorb the adjacent free block)"
+        );
+        // b started at word 4 relative to a; b byte 80/100 -> a byte 4*8+80 / 4*8+100.
+        assert_eq!(
+            *store.addr::<u32>(a, 32 + 80),
+            0,
+            "absorbed region must be zeroed (kept 0xDEADBEEF pre-fix)"
+        );
+        assert_eq!(
+            *store.addr::<u32>(a, 32 + 100),
+            0,
+            "absorbed region must be zeroed (kept 0xCAFE pre-fix)"
+        );
     }
 }

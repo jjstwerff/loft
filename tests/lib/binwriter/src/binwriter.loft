@@ -1,0 +1,7 @@
+pub fn write_magic(path: text, ver: integer) {
+  f = file(path);
+  f#format = LittleEndian;
+  f.set_file_size(0);
+  f += 0x46546C67 as i32;
+  f += ver as i32;
+}
