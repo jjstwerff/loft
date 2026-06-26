@@ -48,6 +48,23 @@ enum Delivery {
     AsIs,
 }
 
+/// @PLN85 D-own-1 — the delivery mechanism for a `Type::Reference` (struct) return,
+/// the Reference counterpart of [`Delivery`]. Two mechanisms keyed on the deps fact:
+/// rename the tail's work-ref(s) onto `__retbuf`, or materialise-copy a tail that
+/// borrows a LOCAL (#306) before it escapes. (The nullable-unwrap tail is handled by
+/// its own earlier `block_result` arm and is NOT routed here.)
+enum RefDelivery {
+    /// Promote the tail's work-ref(s) to BE `__retbuf` — `ref_return(ws) +
+    /// nrvo_collapse_tail_set(ws)`. Covers #120 hidden-ref recovery (`ls` empty,
+    /// `ws` = recovered) AND the plain arg-borrow/owned rename (`ws` = `ls`).
+    Rename(Vec<u16>),
+    /// The tail borrows a LOCAL's store (#306) — copy it into an owned work-ref
+    /// via `materialize_view_return` before it escapes, then rename that.
+    MaterializeView,
+    /// `ls` empty and no work-ref to recover — the tail already delivers; emit nothing.
+    AsIs,
+}
+
 use super::{
     DefType, I32, Level, LexItem, Parser, Position, Type, Value, diagnostic_format,
     merge_dependencies, v_block, v_if, v_loop, v_set,
@@ -865,30 +882,13 @@ impl Parser {
                 let elm_ty = (**elm).clone();
                 self.dispatch_vector_delivery(delivery, &elm_ty, l);
             } else if let Type::Reference(td, ls) = t {
-                // Issue #120: when filter_hidden stripped the deps from a
-                // Reference return type, recover work-ref variables from the
-                // return expression. First try Call arguments, then fall back
-                // to promoting ALL non-argument __ref_N work-refs.
-                if ls.is_empty() && !l.is_empty() {
-                    let last = &l[l.len() - 1];
-                    let extra = Self::collect_hidden_ref_args(last, &self.data);
-                    if !extra.is_empty() {
-                        self.ref_return(&extra, l, RetSite::BlockTail);
-                        // @P377 / S1: see above.
-                        self.nrvo_collapse_tail_set(l, &extra);
-                    }
-                } else if self.return_views_local(ls) {
-                    // #306: the tail value borrows from a local — copy it
-                    // into an owned work-ref before it escapes the function.
-                    let last = l.len() - 1;
-                    let w = self.materialize_view_return(*td, &mut l[last]);
-                    self.ref_return(&[w], l, RetSite::BlockTail);
-                    self.nrvo_collapse_tail_set(l, &[w]);
-                } else {
-                    self.ref_return(ls, l, RetSite::BlockTail);
-                    // @P377 / S1: see above.
-                    self.nrvo_collapse_tail_set(l, ls);
-                }
+                // @PLN85 D-own-1 — Reference return sub-thicket: classify ONCE from
+                // the deps fact + tail shape, then dispatch to the ONE mechanism
+                // (rename via ref_return, or materialise-copy a borrowed-local view).
+                // Mirrors the vector `classify_vector_delivery` collapse.
+                let td = *td;
+                let delivery = self.classify_reference_delivery(ls, l);
+                self.dispatch_reference_delivery(delivery, td, l);
             } else if let Type::Vector(elm, _) = result
                 && let Some((buf_attr, buf_var)) = self.return_buffer()
                 && self.returned_uses_buffer(buf_attr)
@@ -1056,6 +1056,48 @@ impl Parser {
                 }
             }
             Delivery::AsIs => false,
+        }
+    }
+
+    /// @PLN85 D-own-1 — the SELECTOR for a `Type::Reference` (struct) return: read
+    /// the deps fact `ls` + the tail shape ONCE and pick a [`RefDelivery`]. Pure
+    /// (`&self`). Replaces the three inline branches the Reference arm of
+    /// `block_result` carried; mirrors `classify_vector_delivery`.
+    fn classify_reference_delivery(&self, ls: &[u16], l: &[Value]) -> RefDelivery {
+        if ls.is_empty() {
+            // Issue #120: deps stripped — recover the tail's hidden work-refs so the
+            // site still binds to the one buffer. No work-ref to recover → AsIs.
+            if let Some(last) = l.last() {
+                let extra = Self::collect_hidden_ref_args(last, &self.data);
+                if !extra.is_empty() {
+                    return RefDelivery::Rename(extra);
+                }
+            }
+            RefDelivery::AsIs
+        } else if self.return_views_local(ls) {
+            // #306: the tail borrows a LOCAL's store — copy it before it escapes.
+            RefDelivery::MaterializeView
+        } else {
+            // Owned / arg-borrow: rename the tail's work-ref(s) onto `__retbuf`.
+            RefDelivery::Rename(ls.to_vec())
+        }
+    }
+
+    /// @PLN85 D-own-1 — emit the mechanism the Reference selector chose. The tail of
+    /// `l` is rewritten in place; mirrors `dispatch_vector_delivery`.
+    fn dispatch_reference_delivery(&mut self, delivery: RefDelivery, td: u32, l: &mut [Value]) {
+        match delivery {
+            RefDelivery::Rename(ws) => {
+                self.ref_return(&ws, l, RetSite::BlockTail);
+                self.nrvo_collapse_tail_set(l, &ws);
+            }
+            RefDelivery::MaterializeView => {
+                let last = l.len() - 1;
+                let w = self.materialize_view_return(td, &mut l[last]);
+                self.ref_return(&[w], l, RetSite::BlockTail);
+                self.nrvo_collapse_tail_set(l, &[w]);
+            }
+            RefDelivery::AsIs => {}
         }
     }
 
