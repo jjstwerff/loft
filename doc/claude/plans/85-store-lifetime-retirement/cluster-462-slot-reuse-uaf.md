@@ -224,11 +224,15 @@ loft --interpret --lib ../loft-libs-core-main/ --lib ../loft-libs-world/ $BL src
 
 ## Roadmap (per cluster)
 
-1. **[S]** Promote the two tool gaps (extend `LOFT_UAF`; gate `disable_slot_reuse`).
-2. **[M]** With the extended `LOFT_UAF`, name the premature-free op on the crawler
-   run (closes row 8) — read it against the #457/#459 diff (closes row 9).
-3. **[M/L]** Fix the dep miscount at its chokepoint in the @PLN85 delivery/adopt
-   path; graduate a real-scale regression (the minimal probes can't guard it —
-   needs a crawler-corpus or a synthetic ~200-store slot-reuse stress).
-4. Address the coexisting **leak** (row 4) separately — closing the SIGSEGV while
-   leaks persist is the false-fix trap this plan's two-severity rule guards against.
+1. ✅ **DONE** — tool gaps built as four gated detectors (a `LOFT_UAF_SRC`, b
+   `LOFT_UAF_REUSE`, c `LOFT_UAF_GEN`, d stale-interior-claim) + the `LOFT_WATCH_STORE`
+   write-watch. Kept as standing diagnostics.
+2. ✅ **DONE (reframed)** — the fault was NOT a premature free but `remove_claims` walking
+   un-zeroed in-place-grown memory; the detector chain + write-watch localised it.
+3. ✅ **DONE** — root fixed at the chokepoint (`Store::resize` in-place grow now zeroes the
+   absorbed region), regression `store.rs::resize_in_place_zeroes_absorbed_region`. Crash gone
+   on both backends; full suite green. (A real-scale `.loft` crawler-corpus guard is still
+   nice-to-have but the unit test pins the invariant directly.)
+4. ⬜ **OPEN** — the coexisting **leak** (row 4): interp `2 stores not freed`
+   (`ItemDef`/`MonsterDef` vectors); native clean. Separate severity field — keeping #462 open
+   for it (the two-severity rule: don't claim "fixed" while leaks persist).
