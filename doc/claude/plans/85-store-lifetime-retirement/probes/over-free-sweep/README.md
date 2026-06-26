@@ -63,6 +63,18 @@ done
   NOT trip it, so their corruption surfaces at a vector read/append, not a record copy —
   the operand-stack/vector-element half of the detector still to extend (cluster-462 gap #1).
 
+## Crash-fix progress (2026-06-26) — two slices landed, #462 root-caused
+
+| Crash | Sub-shape | Status |
+|---|---|---|
+| **P9** | vector return-buffer bound from a buffer-returning call (PutRef-alias of `__ref`) | ✅ **FIXED** (slice 1, scopes.rs witness-pair) — both backends; suite green |
+| **P14** | borrowed match-arm vector binding returned (`Filled { items } => items`) renamed onto the caller's buffer | ✅ **FIXED** (slice 2, control.rs `tail_borrows_arg` → CopyBorrow) — both backends; suite green; guard `tests/scripts/85-store-lifetime-enum-field-vector-borrow.loft` |
+| **#462** | STRUCT sibling: `mon_one`'s `chosen = m` where `chosen: M` (dense) and `m: __nullable<M>` (from `pool[wj] ?? …`) | 🔴 **OPEN, root-caused** — the type mismatch (M vs __nullable<M>) skips the same-struct deep-copy → falls to a `PutRef` ALIAS (`one()` bytecode @301), so the dense-struct retbuf aliases the local `pool` element; `pool` freed at exit → return dangles → mon_choose copies a freed `tp=76` store. Entangled with the nullable-element coalesce-unwrap (`m` should be dense `M`, not `__nullable<M>`). Crawler-scale only — verify via `LOFT_UAF_SRC` on the corpus, not a minimal probe. |
+
+Remaining: the **leak-dual** (P9 native — false `["c"]` return-borrow) and **#462** (struct,
+nullable-unwrap-in-reassign). Both converge on the propagated borrow-set + the dense/nullable
+conversion in assignment.
+
 ## Substrate fix progress (2026-06-26, scopes.rs)
 
 First substrate slice, driven by P9: a **VECTOR return-buffer** (hidden SRet arg, NRVO'd)
