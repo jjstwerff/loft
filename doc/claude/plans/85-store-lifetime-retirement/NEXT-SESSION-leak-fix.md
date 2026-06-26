@@ -131,12 +131,35 @@ the exit-warning "N stores" is **N type-groups**, not N stores (the `×count` is
 cd /home/lima.guest/crawler
 BL=$(for d in bundles/*/ bundles/*/items/; do printf -- "--lib %s " "$d"; done)
 LOFT_TIMEOUT=180 loft --interpret --lib ../loft-libs-core-main/ --lib ../loft-libs-world/ $BL src/questtest.loft
-#   → QUEST OK (crash fixed); exit warning still lists the 531-store leak
+#   → QUEST OK; interp now leak-free (was 531). --native still lists the
+#     pre-existing MonsterDef×216 record leak (the mon_* borrowed-view shape).
 ```
 
-## Broader @PLN85 open work (after the leak)
+## Broader @PLN85 open work — verified state (2026-06-26 re-check)
 
-- **Cluster A** (#429 borrowed-view return over-free) — in flight.
-- **Cluster C / H10** — fold `copy_claims`/`validate_claims`/construct onto the
-  `for_each_owned_child` keystone (~53 `Parts::` arms across 3 dispatchers). Next pass after A.
-- **#460 / #461** — crawler-wave native cdylib-dispatch + mixed-mode struct-arg corruption.
+Each line below was re-run on the current build, not taken from the prior note.
+
+- **Cluster A** (#429 borrowed-view return over-free) — **CLOSED** (GitHub, 2026-06-22;
+  the earlier "in flight" note was stale). Regression
+  `tests/scripts/85-store-lifetime-enum-match-borrowed-view-overfree.loft` passes on BOTH
+  backends.
+- **#462 leak — item 5 (still open)**: native-only `MonsterDef×216` **record** leak — the
+  `mon_*` borrowed-view shape (`mon_one`/`mon_choose` return a view of a local `pool`),
+  distinct from the now-fixed adopt-and-re-return chain. Reproduces on `--native`:
+  `probes/over-free-sweep/P3-monone-cond.loft` → `M×36`, `M-462repro.loft` → `M×90`; interp
+  clean. See [over-free-class-study.md](over-free-class-study.md). The natural next pickup.
+- **Cluster C / H10** — **OPEN** (confirmed in code): `remove_claims` is folded onto
+  `for_each_owned_child`, but `copy_claims` is still split four ways
+  (`copy_claims_seq_vector`/`_array_body`/`_hash_body`/`_index_body`) and `validate_claims` is
+  monolithic. A brittleness refactor, not a red test. See
+  [cluster-C-copy-claims-fold.md](cluster-C-copy-claims-fold.md).
+- **#460** (interpret aborts on cdylib-dispatch stub) — **OPEN, could not reproduce here.**
+  Crawler `equiptest`/`selftest` both run to `OK` (exit 0) with no `extensions.rs:678` warning,
+  on the current build AND the pre-fix baseline. BUT the test box has lib cdylibs built from
+  earlier `--native` runs (`hex_grid`, `hex_terrain`, `random`), and #460's panic needs NO
+  cdylib present — likely **masked, not fixed**. A real verdict needs a clean checkout with no
+  built artifacts.
+- **#461** (mixed-mode complex-struct-arg corruption) — **OPEN, partial guard only.**
+  `tests/exit_codes.rs::moros_glb_cli_end_to_end` passes (`version == 2`) but with a MINIMAL
+  scene (one material); #461's corruption is a complex nested `Scene` (vector-of-mesh/material/
+  node), which that test does not exercise. Not cleared.
