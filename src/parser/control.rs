@@ -4431,23 +4431,27 @@ impl Parser {
         buf_var: u16,
     ) -> bool {
         let elm_ty = elm.clone();
-        let fwd = self.create_var(
-            "__fwd",
-            &Type::Vector(Box::new(elm_ty.clone()), Deps::none()),
-        );
-        let Some(last) = (if fwd == u16::MAX { None } else { l.last_mut() }) else {
+        let Some(last) = l.last_mut() else {
             return false;
         };
         let rec_tp = self.append_elem_tp(&elm_ty);
         let clear = self.cl("OpClearVector", &[Value::Var(buf_var)]);
+        // Append the borrowed tail value DIRECTLY into the buffer — no `__fwd`
+        // local.  This function is only the BORROWED-arg case (the tail views a
+        // visible param: a whole-arg vector, a struct-field of an arg), so `orig`
+        // never owns its store and never aliases the hidden buffer.  A captured
+        // `__fwd` local carried empty deps, so its scope-exit `OpFreeRef` freed
+        // the borrowed source — i.e. the caller's vector (P462 over-free, recycled
+        // under allocation pressure -> corruption).  Inlining matches the proven
+        // explicit `return <borrow>` path in `parse_return`, which appends inline
+        // and frees nothing.
+        let orig = std::mem::replace(last, Value::Null);
         let append = self.cl(
             "OpAppendVector",
-            &[Value::Var(buf_var), Value::Var(fwd), Value::Int(rec_tp)],
+            &[Value::Var(buf_var), orig, Value::Int(rec_tp)],
         );
-        let orig = std::mem::replace(last, Value::Null);
-        let set_fwd = crate::data::v_set(fwd, orig);
         *last = crate::data::v_block(
-            vec![set_fwd, clear, append, Value::Var(buf_var)],
+            vec![clear, append, Value::Var(buf_var)],
             Type::Vector(Box::new(elm_ty.clone()), Deps::frame1(buf_var)),
             "borrow_tail_copy_104",
         );
