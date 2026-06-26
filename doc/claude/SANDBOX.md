@@ -39,14 +39,18 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > [plan `86-sandbox-subset-flag`](plans/86-sandbox-subset-flag/README.md). A host
 > declares a `[sandbox]` policy in `loft.toml`; designated functions are admitted
 > only if proven safe at LOAD, and rejected with actionable errors otherwise.
-> Surface: `Parser::sandbox_admission_errors` (+ `sandbox_forces_interpret`),
+> Surface: `Parser::sandbox_admission_errors` (+ `has_sandboxed_defs`),
 > `src/sandbox.rs`. **Checks S1–S5 are now GREEN; S7/S8 are partially closed**
 > (statuses updated per-invariant below). The four arcs an admitted script
 > satisfies: **capability** (reaches only allow-listed libraries/groups),
 > **termination** (bounded loops + acyclic recursion + total ops), **data
-> integrity** (no raw writes to host data), **backend** (no FFI + force-interpret).
-> Remaining work is post-v1 (transactional world S7, an embedding `run_script`
-> boundary S8, expressiveness relaxations) — see the plan's § Open work.
+> integrity** (no raw writes to host data), **backend** (no external FFI; the
+> proof itself is backend-agnostic — the former force-interpret was dropped).
+> The next arcs are **DESIGNED, compile-only** (S9–S10 below): a **data envelope**
+> (a load-time peak-heap bound) and **per-member access** (independent read/update/append
+> rights per field + enum variant, declared as groups in the loft type defs). Per the
+> **compile-only decision**, the transactional world (S7) and runtime guards are **dropped**;
+> `run_script` (S8) survives only as the unknown-unknown backstop — see the plan's § Open work.
 
 ## The model — validate before allow, don't isolate after
 
@@ -123,11 +127,15 @@ backend (generating + compiling Rust on the host is RCE by construction).
   `dlopen`. `cargo build --no-default-features` (drops the `native-extensions`
   feature) compiles the `libloading` path out entirely — a buildable proof the
   FFI surface can be removed.
-- **Status: 🟢 GREEN (@PLN86 1.4).** `Parser::sandbox_forces_interpret` forces interpret
-  for any sandboxed program and the CLI **refuses an explicit `--native`**;
-  `sandbox::reachable_ffi_bridges` rejects a reachable external cdylib bridge unless
-  `native_ffi` is granted. `cargo build --no-default-features` compiles the `libloading`
-  path out (verified). *Remaining (post-v1):* feature-gate the rustc *codegen* path too, so
+- **Status: 🟢 GREEN (@PLN86 1.4) — interpret-only force DROPPED (2026-06-25).** The
+  external-FFI ban stays: `sandbox::reachable_ffi_bridges` rejects a reachable external
+  cdylib bridge unless `native_ffi` is granted (that dlopen is the real RCE surface). The
+  former forced interpret-only was **removed** — it rested on a false "native traps where
+  the interpreter is total" premise (re-probed: div/mod-zero, OOB, overflow all yield
+  `null` on `--native` too), so admission is backend-agnostic and a sandboxed program runs
+  on whatever backend the host picks (`Parser::has_sandboxed_defs` gates the admission
+  walk). `cargo build --no-default-features` compiles the `libloading` path out (verified).
+  *Remaining (post-v1):* feature-gate the rustc *codegen* path too, so
   a deployment can build with ZERO host-codegen surface.
 
 ### S3 — Bounded recursion / call depth
@@ -216,6 +224,54 @@ gets a `Result`, never an `exit()` / abort / segfault.
   loop-rejection S4). *Remaining:* an embedding `run_script(src, policy) -> Result<_,
   ScriptError>` boundary so a host (not the CLI) gets the fault as a value — belt-and-
   suspenders for an interpreter bug.
+
+### S9 — Data envelope (compile-time footprint bound)
+An admitted script's peak heap is bounded at LOAD by a host-declared budget: the closed-form
+footprint `coeff · max_input_n^degree` is proven `≤ data_budget`, else rejected. No runtime
+allocation counter, no ceiling, no rollback — OOM (the one fault `catch_unwind` cannot see)
+becomes a load-time concern.
+- **Chokepoint:** the space analysis (`sandbox_space_degree`) extended with the coefficient
+  (`Σ record_size`, exact from the type stride), compared against the profile's `data_budget`
+  in the admission walk. Inputs are host-declared (`max_input_n` / `max_depth` /
+  `max_string_len`).
+- **Check:** a per-entity struct-building loop reports `coeff·n`; a script whose worst case
+  exceeds `data_budget`, or whose allocation size can't be tied to a declared bound (uncapped
+  string, host-value-sized alloc), is rejected at admission with the figure + fix.
+- **Status: 🟡 DESIGNED ([@PLN86 P7](plans/86-sandbox-subset-flag/README.md)).** The degree is
+  computed today; the coefficient + budget compare + static-sizing gate are the build. Pure
+  compile-time; no @PLN85 dependency (it was only the dropped runtime layer).
+
+### S10 — Capabilities: what a restricted caller may do
+A capability is a permission the **host/library** requires of a **restricted caller**: the
+host annotates *its own* surface with `group#right` links to explicitly-declared, namespaced
+`capability` groups (resolved + validated at compile — an undeclared group is a load error),
+the modder's profile is granted a set, and admission gates every point the modder's code
+touches the host. **The modder's own code carries no links and is never restricted** — only
+host reach is gated. The full model with examples is [@PLN86 §7](plans/86-sandbox-subset-flag/README.md).
+Three surfaces:
+- **call a function** — the call gate sits in the **signature** (`fn mtime(p: text) -> int fs#read;`),
+  a first-class part of the contract, NOT in the `#native`/`#impure`/`#wasm` plumbing block.
+  Passing arguments is part of the call (set is inherited — no extra grant).
+- **override a parameter** — a parameter tagged `…#default` (`count: int = 1 spawn.count#default`)
+  is pinned to its default unless the modder holds the lock; untagged parameters are free.
+- **read / update / append a field** — `read` free, `update`/`append` deny-by-default;
+  `append` only on a **collection** field (there is no append for a scalar).
+- **Check:** an ungranted call, a non-default override of a locked parameter, or an ungranted
+  field update/append is a **load error** naming the symbol + right + group; reads and untagged
+  parameters admit. Script-owned data is unrestricted (the §2.4 ownership split).
+- **Status: 🟡 DESIGNED ([@PLN86 P6](plans/86-sandbox-subset-flag/README.md)).** Pure
+  compile-time, no runtime cost / rollback. The **same `capability`/`group#right` mechanism
+  carries the S1 *function* capability surface** (the shipped `#cap "fs.read"` strings →
+  signature `fs#read` / `fs#update`) — pre-customer, so functions, parameters, and fields land
+  on one validated model. (Enum-variant *construction* gating is a separate question, not
+  folded into read/update/append.)
+
+> **The compile-only decision (finalizes S7/S8).** Effect containment is now **by
+> construction** — a script can only touch members it is granted (S10), never more (S9) —
+> **not by rollback**: the transactional world (S7) and any runtime resource guard are
+> **dropped** (the perf tax + a rollback/exception path in the language are both rejected).
+> `run_script() -> Result` (S8) remains **only** as the alarmed backstop for the
+> unknown-unknown interpreter bug, never as a data-limit or write-containment mechanism.
 
 ---
 

@@ -222,18 +222,19 @@ pub(crate) const BLOCK_SCOPE: u32 = 0;
 pub(crate) const BLOCK_VAR_SIZE: u32 = 8;
 
 /// `Attribute` record (element of `vector<Attribute>`).
-pub(crate) const ATTRIBUTE_STRIDE: u32 = 42;
+pub(crate) const ATTRIBUTE_STRIDE: u32 = 46; // @PLN86 F8b — +4 for the `links` text field
 pub(crate) const ATTR_NAME: u32 = 16;
 pub(crate) const ATTR_TYPEDEF: u32 = 20; // vector<TypeT> (box-of-one)
 pub(crate) const ATTR_VALUE: u32 = 24; // vector<Node> (box-of-one)
 pub(crate) const ATTR_CHECK: u32 = 28; // vector<Node> (box-of-one)
 pub(crate) const ATTR_CHECK_MESSAGE: u32 = 32; // vector<Node> (box-of-one)
-pub(crate) const ATTR_MUTABLE: u32 = 36;
-pub(crate) const ATTR_CONSTANT: u32 = 37;
-pub(crate) const ATTR_INIT: u32 = 38;
-pub(crate) const ATTR_NULLABLE: u32 = 39;
-pub(crate) const ATTR_PRIMARY: u32 = 40;
-pub(crate) const ATTR_HIDDEN: u32 = 41;
+pub(crate) const ATTR_LINKS: u32 = 36; // @PLN86 F8b — text; "" = unlinked member
+pub(crate) const ATTR_MUTABLE: u32 = 40;
+pub(crate) const ATTR_CONSTANT: u32 = 41;
+pub(crate) const ATTR_INIT: u32 = 42;
+pub(crate) const ATTR_NULLABLE: u32 = 43;
+pub(crate) const ATTR_PRIMARY: u32 = 44;
+pub(crate) const ATTR_HIDDEN: u32 = 45;
 pub(crate) const ATTR_ALIAS_D_NR: u32 = 0;
 pub(crate) const ATTR_ASSIGNED_LAMBDA_D_NR: u32 = 8;
 
@@ -304,7 +305,7 @@ pub(crate) const DEF_SCALARS_TO_BOX: u32 = 132; // vector<NameRef>
 pub(crate) const DEF_BOUNDS: u32 = 136; // vector<integer>
 pub(crate) const DEF_FIELD_GROUPS: u32 = 140; // vector<LinkedFieldGroup>
 pub(crate) const DEF_SYNTHETIC: u32 = 144; // Option<&str>; "" = None
-pub(crate) const DEF_CAP: u32 = 148; // @PLN86 #cap "group"; "" = unannotated
+pub(crate) const DEF_CAP: u32 = 148; // @PLN86 the group#right call-gate link; "" = unlinked
 pub(crate) const DEF_RETURNED_NOT_NULL: u32 = 152;
 pub(crate) const DEF_PUB_VISIBLE: u32 = 153;
 pub(crate) const DEF_NULL_SAFE: u32 = 154; // @PLN46 W2 #null_safe; false = unannotated
@@ -1341,6 +1342,7 @@ mod tests {
         assert_eq!(pos(ids.attribute, "value"), ATTR_VALUE);
         assert_eq!(pos(ids.attribute, "check"), ATTR_CHECK);
         assert_eq!(pos(ids.attribute, "check_message"), ATTR_CHECK_MESSAGE);
+        assert_eq!(pos(ids.attribute, "links"), ATTR_LINKS);
         assert_eq!(pos(ids.attribute, "mutable"), ATTR_MUTABLE);
         assert_eq!(pos(ids.attribute, "constant"), ATTR_CONSTANT);
         assert_eq!(pos(ids.attribute, "init"), ATTR_INIT);

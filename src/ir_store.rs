@@ -240,6 +240,9 @@ fn write_attribute(stores: &mut Stores, r: &Record, a: &Attribute) {
         ds::ATTR_ASSIGNED_LAMBDA_D_NR,
         i64::from(a.assigned_lambda_d_nr),
     );
+    // @PLN86 F8b — the group#right member links, joined by spaces (tokens contain no
+    // whitespace), so a warm-cached host type keeps its capability links.
+    r.set_field_str(stores, ds::ATTR_LINKS, &a.links.join(" "));
 }
 
 /// Materialize a `Vec<Attribute>` into the `vector<Attribute>` field at `off`
@@ -1507,6 +1510,7 @@ mod tests {
             check_message: Value::Text("bad".into()),
             alias_d_nr: 3,
             assigned_lambda_d_nr: 99,
+            links: vec!["fs#read".into()],
         }];
 
         // Host record whose field 0 is the root vector<Attribute>.

@@ -867,9 +867,12 @@ fn write_attribute(out: &mut String, a: &Attribute) {
     write_value(out, &a.check_message);
     let _ = write!(
         out,
-        ",\"alias_d_nr\":{},\"assigned_lambda_d_nr\":{}}}",
+        ",\"alias_d_nr\":{},\"assigned_lambda_d_nr\":{}",
         a.alias_d_nr, a.assigned_lambda_d_nr
     );
+    out.push_str(",\"links\":");
+    write_str(out, &a.links.join(" "));
+    out.push('}');
 }
 
 /// Parse a JSON string into an [`Attribute`].
@@ -898,6 +901,11 @@ fn attribute_from_parsed(p: &Parsed) -> Result<Attribute, TypeDecodeError> {
         check_message: value_from_parsed(field(p, "check_message")?)?,
         alias_d_nr: as_u32(field(p, "alias_d_nr")?)?,
         assigned_lambda_d_nr: as_u32(field(p, "assigned_lambda_d_nr")?)?,
+        // @PLN86 F8b — group#right member links; tolerant of older JSON without the field.
+        links: match field(p, "links") {
+            Ok(f) => as_str(f)?.split_whitespace().map(str::to_string).collect(),
+            Err(_) => Vec::new(),
+        },
     })
 }
 
@@ -2048,6 +2056,7 @@ mod tests {
             check_message: Value::Text("too big".to_string()),
             alias_d_nr: 42,
             assigned_lambda_d_nr: u32::MAX,
+            links: vec!["stats#read".to_string(), "stats#update".to_string()],
         }
     }
 
@@ -2080,6 +2089,7 @@ mod tests {
             check_message: Value::Null,
             alias_d_nr: u32::MAX,
             assigned_lambda_d_nr: u32::MAX,
+            links: Vec::new(),
         };
         let json = attribute_to_json(&a);
         let back = attribute_from_json(&json).expect("decode");
@@ -2103,10 +2113,11 @@ mod tests {
             check_message: Value::Null,
             alias_d_nr: 0,
             assigned_lambda_d_nr: 0,
+            links: Vec::new(),
         };
         assert_eq!(
             attribute_to_json(&a),
-            r#"{"name":"x","typedef":{"k":"Boolean"},"mutable":false,"constant":true,"init":false,"nullable":false,"primary":false,"hidden":false,"value":{"k":"Null"},"check":{"k":"Null"},"check_message":{"k":"Null"},"alias_d_nr":0,"assigned_lambda_d_nr":0}"#
+            r#"{"name":"x","typedef":{"k":"Boolean"},"mutable":false,"constant":true,"init":false,"nullable":false,"primary":false,"hidden":false,"value":{"k":"Null"},"check":{"k":"Null"},"check_message":{"k":"Null"},"alias_d_nr":0,"assigned_lambda_d_nr":0,"links":""}"#
         );
     }
 
@@ -2150,6 +2161,7 @@ mod tests {
                     check_message: Value::Null,
                     alias_d_nr: u32::MAX,
                     assigned_lambda_d_nr: u32::MAX,
+                    links: Vec::new(),
                 },
                 Attribute {
                     name: "y".to_string(),
@@ -2165,6 +2177,7 @@ mod tests {
                     check_message: Value::Null,
                     alias_d_nr: u32::MAX,
                     assigned_lambda_d_nr: u32::MAX,
+                    links: Vec::new(),
                 },
             ],
             attr_names: std::collections::HashMap::new(),

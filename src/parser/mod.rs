@@ -121,6 +121,61 @@ pub struct Parser {
     /// fn-ref is indistinguishable from an integer literal).  The admission unions
     /// these into the checked set so an indirect call can't escape (L4).
     pub(crate) sandbox_fn_refs: HashMap<u32, std::collections::HashSet<u32>>,
+    /// @PLN86 P6.1 — the dotted names of every `capability` group declared in the
+    /// program (stdlib + host code).  A `group#right` capability link resolves
+    /// against this set; an undeclared/mistyped group is a load error.  The dotted
+    /// name IS the namespace (matched hierarchically on the grant side, like the
+    /// `fs.read` groups).  Parser-side (off the IR), idempotent across passes; IR
+    /// persistence for a warm-cached stdlib is P6.8.
+    pub(crate) declared_capabilities: HashSet<String>,
+    /// @PLN86 P6.4 — capability links on struct fields, keyed by `(struct def_nr,
+    /// field name)` → the `group#right` tokens written after the field's type
+    /// (`health: int stats#read stats#update`).  The admission walk gates a
+    /// sandboxed read/update/append of a host field on the matching grant.
+    /// Parser-side (off the IR), recorded first-pass; IR persistence is P6.8.
+    pub(crate) member_access: HashMap<(u32, String), Vec<String>>,
+    /// @PLN86 P6.4 (F4) — sandboxed READS of a host field that carries a `#read`
+    /// capability link, keyed by the reading sandboxed def → the `(read token,
+    /// position)` of each such read.  Recorded second-pass at the field-access site
+    /// (where the struct type + field name resolve); admission rejects a read whose
+    /// token the profile does not grant.  Reads are default-allow, so only a field
+    /// the host marked with a `#read` link is ever recorded here.
+    pub(crate) sandbox_field_reads: HashMap<u32, Vec<(String, crate::lexer::Position)>>,
+    /// @PLN86 P6.4 (F5) — sandboxed UPDATES (raw writes) of a host field that carries an
+    /// `#update` capability link, keyed by the writing def → each `(struct def_nr, field,
+    /// position)`.  A field write WITH an update link is diverted here (admission admits
+    /// iff the token is granted); a write to a field with NO update link stays the coarse
+    /// 2.4 `sandbox_raw_writes` reject (read-only by default).
+    pub(crate) sandbox_field_updates: HashMap<u32, Vec<(u32, String, crate::lexer::Position)>>,
+    /// @PLN86 P6.4 (F6) — sandboxed APPENDS (`e.f += x`, growing a collection field)
+    /// of a host field that carries an `#append` link, keyed by the writing def → each
+    /// `(struct def_nr, field, position)`.  A `+=` to an `#append`-linked field is
+    /// diverted here (admission admits iff the token is granted); without an append
+    /// link it falls back to the `#update` (F5) or coarse (2.4) path.
+    pub(crate) sandbox_field_appends: HashMap<u32, Vec<(u32, String, crate::lexer::Position)>>,
+    /// @PLN86 P6.4 (F5) — transient one-shot: the `(struct def_nr, field, #read-links
+    /// recorded)` of the field access `field()` last built, so the assignment site can
+    /// resolve which field a raw write targets (and un-record the spurious F4 read it
+    /// just logged for a write LHS).  Set per field access in a sandboxed def; consumed
+    /// at the write site.
+    pub(crate) last_field_target: Option<(u32, String, usize)>,
+    /// @PLN86 §7.2 (F7) — parameter `…#default` locks, keyed by `(fn def_nr, param
+    /// index)` → the lock token written after the parameter's default (`count: int = 1
+    /// spawn.count#default`).  At a sandboxed call site, an argument that OVERRIDES a
+    /// locked parameter (differs from its default) is gated on the token.  Parser-side
+    /// (off the IR), recorded first-pass; sandboxed programs always parse fresh.
+    pub(crate) param_locks: HashMap<(u32, u32), String>,
+    /// @PLN86 §7.2 (F7) — sandboxed OVERRIDES of a `…#default`-locked parameter, keyed by
+    /// the calling def → each `(lock token, position)` of an argument that differed from
+    /// the locked parameter's default.  Recorded second-pass at the call site (where the
+    /// callee + its argument values resolve); admission rejects an override whose lock
+    /// token the profile does not grant.
+    pub(crate) sandbox_param_overrides: HashMap<u32, Vec<(String, crate::lexer::Position)>>,
+    /// @PLN86 §7.2 (F7) — transient: the `(param index, lock token)` pairs parsed while
+    /// reading a function's parameter list, ferried to `parse_function` to be recorded in
+    /// `param_locks` once the function's def_nr is known (parameters parse BEFORE the def
+    /// is created).  Cleared at the start of each parameter list; consumed per function.
+    pub(crate) pending_param_locks: Vec<(usize, String)>,
     /// @PLN87 — transient one-shot: set while parsing a `&<lvalue>` binding (the prefix
     /// `&` in `b = &a`, or the `&` in a `b: &T = a` type annotation), consumed by
     /// `parse_assign_op` to lower a SCALAR reference to `OpCreateStack`. Cleared per
@@ -512,6 +567,15 @@ impl Parser {
             sandbox_unbounded_loops: HashMap::new(),
             sandbox_raw_writes: HashMap::new(),
             sandbox_fn_refs: HashMap::new(),
+            declared_capabilities: HashSet::new(),
+            member_access: HashMap::new(),
+            sandbox_field_reads: HashMap::new(),
+            sandbox_field_updates: HashMap::new(),
+            sandbox_field_appends: HashMap::new(),
+            last_field_target: None,
+            param_locks: HashMap::new(),
+            sandbox_param_overrides: HashMap::new(),
+            pending_param_locks: Vec::new(),
             amp_pending: false,
             in_sandbox: false,
             parse_depth: 0,
@@ -610,8 +674,8 @@ impl Parser {
         crate::sandbox::reachable_ffi_bridges(&self.data, &self.sandbox_reachable_set())
     }
 
-    /// @PLN86 step 2.1 — the `#cap "group"` capability group a def declares, or
-    /// `None` if unannotated.  Step 2.3 gates each trusted symbol in the reachable
+    /// @PLN86 — the `group#right` call-gate link a def declares (in its signature),
+    /// or `None` if unlinked.  Admission gates each trusted symbol in the reachable
     /// set against the profile via `SandboxConfig::allows`.
     #[must_use]
     pub fn def_cap_group(&self, def_nr: u32) -> Option<&str> {
@@ -620,8 +684,8 @@ impl Parser {
     }
 
     /// @PLN86 step 2.3 — the capability-admission walk: every trusted symbol a
-    /// sandboxed def reaches must carry a `#cap` group its profile permits (or be
-    /// `native_ffi`-allowed).  An empty result means the sandboxed code is
+    /// sandboxed def reaches must carry a `group#right` call-gate link its profile
+    /// grants (or be `native_ffi`-allowed).  An empty result means the sandboxed code is
     /// admitted; otherwise each `CapViolation` names the offending reference for
     /// a diagnostic.  Run after parsing.
     #[must_use]
@@ -635,7 +699,7 @@ impl Parser {
     }
 
     /// @PLN86 step 2.2 — the capability-coverage lint: public functions lacking a
-    /// `#cap "group"`.  The host runs this over the stdlib + libraries to find the
+    /// `group#right` call-gate link.  The host runs this over the stdlib + libraries to find the
     /// surface still to tag; an empty result is full coverage (L3-cap).
     #[must_use]
     pub fn untagged_public_symbols(&self) -> Vec<u32> {
@@ -671,6 +735,96 @@ impl Parser {
         crate::sandbox::raw_write_violations(&self.def_sandbox, &self.sandbox_raw_writes)
     }
 
+    /// @PLN86 P6.1 — true iff `group` (the part before `#` in a `group#right`
+    /// capability link) is covered by a declared `capability`: either declared
+    /// exactly, or a sub-namespace of one (a `capability game` declaration covers a
+    /// `game.entity#read` link, matching the grant-side namespacing).  A link to an
+    /// uncovered group is a load error; admission resolves links against the declared
+    /// set once every declaration is registered (parsing complete), so forward +
+    /// cross-file references are fine.
+    #[must_use]
+    pub fn cap_is_declared(&self, group: &str) -> bool {
+        self.declared_capabilities
+            .iter()
+            .any(|d| crate::sandbox::cap_prefix_match(d, group))
+    }
+
+    /// @PLN86 P6.8 (F8) — every capability link in the **main program** whose group is
+    /// NOT covered by a declared `capability` (a typo'd / forgotten declaration).  Scans
+    /// the three link homes: a function call gate (`Definition.cap`), a struct-field link
+    /// (`member_access`), and a parameter `#default` lock (`param_locks`).  An uncovered
+    /// group can never match a grant, so today it denies SILENTLY — this turns it into a
+    /// clean, named load error.  Reported once per distinct group.
+    ///
+    /// Scoped to `MAIN_SOURCE` — the program the author is iterating on (the §6 modder
+    /// feedback loop), which is always parsed fresh so its declarations are present in
+    /// the registry.  The stdlib + installed libraries (other sources) are TRUSTED: their
+    /// links were validated when authored as a main program, and they may be loaded from
+    /// the IR cache (where the parser-side `capability` registry is not restored), so
+    /// re-checking them here would falsely reject a clean program.  Registry IR
+    /// persistence — needed to widen this to cached library links — is a later step.
+    #[must_use]
+    pub fn sandbox_undeclared_links(&self) -> Vec<String> {
+        let mut undeclared: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let mut check = |token: &str| {
+            if let Some((group, _)) = token.split_once('#')
+                && !group.is_empty()
+                && !self.cap_is_declared(group)
+            {
+                undeclared.insert(group.to_string());
+            }
+        };
+        let is_main = |d_nr: u32| {
+            (d_nr as usize) < self.data.definitions.len()
+                && self.data.definitions[d_nr as usize].source == crate::data::MAIN_SOURCE
+        };
+        for d in &self.data.definitions {
+            if !d.cap.is_empty() && d.source == crate::data::MAIN_SOURCE {
+                check(&d.cap);
+            }
+        }
+        for ((struct_nr, _), tokens) in &self.member_access {
+            if is_main(*struct_nr) {
+                for t in tokens {
+                    check(t);
+                }
+            }
+        }
+        for ((fn_nr, _), t) in &self.param_locks {
+            if is_main(*fn_nr) {
+                check(t);
+            }
+        }
+        undeclared
+            .into_iter()
+            .map(|g| {
+                format!(
+                    "undeclared capability `{g}` — a `group#right` link references it but no \
+                     matching `capability` is declared.\n  fix: add `capability {g}` at top \
+                     level, or correct the link."
+                )
+            })
+            .collect()
+    }
+
+    /// @PLN86 P6.4 — record a `group#right` capability link on a struct field
+    /// (`struct def_nr`, field name).  Called as each field's links are parsed.
+    pub(crate) fn record_member_link(&mut self, struct_nr: u32, field: &str, token: String) {
+        self.member_access
+            .entry((struct_nr, field.to_string()))
+            .or_default()
+            .push(token);
+    }
+
+    /// @PLN86 P6.4 — the `group#right` capability links on a struct field, or empty
+    /// if the field carries none (read-allow / no-update / no-append by default).
+    #[must_use]
+    pub fn member_links(&self, struct_nr: u32, field: &str) -> &[String] {
+        self.member_access
+            .get(&(struct_nr, field.to_string()))
+            .map_or(&[], Vec::as_slice)
+    }
+
     /// @PLN86 step 2.5 — ALL sandbox admission errors (capability + totality +
     /// no-raw-write), each rendered as a correct, specific, actionable message
     /// (position + the rule + the fix).  Empty when the script is admitted.  This
@@ -688,17 +842,69 @@ impl Parser {
             .sandbox_raw_writes()
             .into_iter()
             .map(|v| crate::sandbox::describe_raw_write_violation(&self.data, &v));
-        caps.chain(totality).chain(raw_writes).collect()
+        let field_reads = crate::sandbox::field_read_violations(
+            &self.sandbox,
+            &self.def_sandbox,
+            &self.sandbox_field_reads,
+        )
+        .into_iter()
+        .map(|v| crate::sandbox::describe_field_read_violation(&self.data, &v));
+        let field_updates = crate::sandbox::field_update_violations(
+            &self.sandbox,
+            &self.def_sandbox,
+            &self.member_access,
+            &self.sandbox_field_updates,
+        )
+        .into_iter()
+        .map(|v| crate::sandbox::describe_field_update_violation(&self.data, &v));
+        let field_appends = crate::sandbox::field_append_violations(
+            &self.sandbox,
+            &self.def_sandbox,
+            &self.member_access,
+            &self.sandbox_field_appends,
+        )
+        .into_iter()
+        .map(|v| crate::sandbox::describe_field_append_violation(&self.data, &v));
+        let param_locks = crate::sandbox::param_lock_violations(
+            &self.sandbox,
+            &self.def_sandbox,
+            &self.sandbox_param_overrides,
+        )
+        .into_iter()
+        .map(|v| crate::sandbox::describe_param_lock_violation(&self.data, &v));
+        // @PLN86 P6.8 (F8) — an authoring error in the host's OWN links: a `group#right`
+        // referencing a capability that was never declared.  Surfaced alongside the
+        // grant violations so the host fixes its contract before a modder iterates.
+        let undeclared = self.sandbox_undeclared_links();
+        // @PLN86 §8 (F11) — the data envelope: the proven peak-heap footprint must fit
+        // the profile's declared data_budget (or be provable at all).
+        let data_env =
+            crate::sandbox::data_envelope_violations(&self.data, &self.sandbox, &self.def_sandbox)
+                .into_iter()
+                .map(|v| crate::sandbox::describe_data_violation(&v));
+        caps.chain(totality)
+            .chain(raw_writes)
+            .chain(field_reads)
+            .chain(field_updates)
+            .chain(field_appends)
+            .chain(param_locks)
+            .chain(undeclared)
+            .chain(data_env)
+            .collect()
     }
 
-    /// @PLN86 step 1.4 — does this program contain sandboxed code that must run
-    /// on the interpreter?  True iff ANY def is designated sandboxed.  This is
-    /// non-negotiable, NOT a per-profile choice: generating + compiling Rust on
-    /// the host is RCE by construction, and the native backend traps where the
-    /// interpreter is total (div-by-zero yields null — 3.3).  loft's own CLI
-    /// run-path forces interpret (and refuses an explicit `--native`) when true.
+    /// @PLN86 — does this program designate ANY sandboxed def?  True gates the
+    /// load-time admission walk (`sandbox_admission_errors`), which is **backend-
+    /// agnostic**: an admitted script is total and fault-free on the interpreter AND
+    /// on `--native` (bounded loops + an acyclic call graph + partial ops that yield
+    /// null on both backends — div/mod-zero, OOB, overflow), so the host keeps its
+    /// choice of backend.  (The earlier forced interpret-only was dropped: it rested
+    /// on a false "native traps where the interpreter is total" premise — verified
+    /// untrue.  A deployment that wants to forbid host-side `rustc` on mod-derived
+    /// input can reintroduce it as a per-profile opt-in; the cdylib-FFI surface stays
+    /// gated by `native_ffi`.)
     #[must_use]
-    pub fn sandbox_forces_interpret(&self) -> bool {
+    pub fn has_sandboxed_defs(&self) -> bool {
         !self.def_sandbox.is_empty()
     }
 
@@ -717,6 +923,15 @@ impl Parser {
     #[must_use]
     pub fn sandbox_space_degree(&self) -> u32 {
         crate::sandbox::sandbox_space_degree(&self.data, &self.def_sandbox)
+    }
+
+    /// @PLN86 P7.1 (F9) — the worst-case peak-heap footprint `(degree, coeff)`: peak
+    /// heap is bounded by `coeff · n^degree` bytes in the largest input `n`.  The
+    /// coefficient is `Σ record_size` over the accumulating allocation sites; F11
+    /// compares `coeff · max_input_n^degree` against the profile's `data_budget`.
+    #[must_use]
+    pub fn sandbox_space_footprint(&self) -> (u32, u32) {
+        crate::sandbox::sandbox_space_footprint(&self.data, &self.def_sandbox)
     }
 
     /// @PLN86 prevention #3 — host capabilities that are NOT total: every
@@ -795,6 +1010,15 @@ impl Parser {
         self.sandbox_unbounded_loops.clear();
         self.sandbox_raw_writes.clear();
         self.sandbox_fn_refs.clear();
+        self.declared_capabilities.clear();
+        self.member_access.clear();
+        self.sandbox_field_reads.clear();
+        self.sandbox_field_updates.clear();
+        self.sandbox_field_appends.clear();
+        self.last_field_target = None;
+        self.param_locks.clear();
+        self.sandbox_param_overrides.clear();
+        self.pending_param_locks.clear();
         self.amp_pending = false;
         self.data.reset();
         // @PLN22 Phase 2 — the main program parses under its own source
@@ -1198,6 +1422,15 @@ impl Parser {
         self.data.reset();
         self.lambda_counter = 0;
         self.fn_lambdas.clear();
+        self.declared_capabilities.clear();
+        self.member_access.clear();
+        self.sandbox_field_reads.clear();
+        self.sandbox_field_updates.clear();
+        self.sandbox_field_appends.clear();
+        self.last_field_target = None;
+        self.param_locks.clear();
+        self.sandbox_param_overrides.clear();
+        self.pending_param_locks.clear();
         self.parse_file();
         self.resolve_deferred_unknowns();
         let lvl = self.lexer.diagnostics().level();
@@ -1382,7 +1615,16 @@ impl Parser {
             .collect();
         matches!(
             word.as_str(),
-            "struct" | "enum" | "fn" | "type" | "pub" | "use" | "interface" | "typedef" | "const"
+            "struct"
+                | "enum"
+                | "fn"
+                | "type"
+                | "pub"
+                | "use"
+                | "interface"
+                | "typedef"
+                | "const"
+                | "capability"
         )
     }
 
@@ -4733,10 +4975,47 @@ impl Parser {
         if actual.is_empty() && !types.is_empty() {
             return Type::Null;
         }
+        // @PLN86 §7.2 (F7) — gate an OVERRIDE of a `…#default`-locked parameter BEFORE
+        // defaults fill the gaps: at this point a parameter slot is non-`Null` exactly
+        // when the caller supplied it explicitly, so a defaulted parameter is invisible.
+        if self.in_sandbox && !self.first_pass {
+            self.record_param_lock_overrides(d_nr, &actual);
+        }
         self.add_defaults(d_nr, &mut actual, &mut all_types);
         let tp = self.call_dependencies(d_nr, &all_types);
         *code = Value::Call(d_nr, actual);
         tp
+    }
+
+    /// @PLN86 §7.2 (F7) — record, for a sandboxed call to `d_nr`, each argument that
+    /// OVERRIDES a `…#default`-locked parameter.  A parameter is overridden when its slot
+    /// was supplied explicitly (`actual[i]` present and non-`Null` — defaults have not
+    /// filled the gaps yet at the call site) AND the value DIFFERS from the parameter's
+    /// declared default; an argument equal to the default is exactly what the lock pins
+    /// to, so it is free.  Admission (`param_lock_violations`) then rejects an override
+    /// whose lock token the calling profile does not grant.
+    fn record_param_lock_overrides(&mut self, d_nr: u32, actual: &[Value]) {
+        if self.param_locks.is_empty() {
+            return;
+        }
+        for i in 0..self.data.attributes(d_nr) {
+            let Some(token) = self.param_locks.get(&(d_nr, i as u32)) else {
+                continue;
+            };
+            let token = token.clone();
+            let Some(arg) = actual.get(i) else { continue };
+            if matches!(arg.unspan(), Value::Null) {
+                continue; // not supplied → keeps its default, free
+            }
+            if arg.unspan() == self.data.def(d_nr).attributes()[i].value.unspan() {
+                continue; // explicitly the default → not an override
+            }
+            let pos = self.lexer.peek_pos().clone();
+            self.sandbox_param_overrides
+                .entry(self.context)
+                .or_default()
+                .push((token, pos));
+        }
     }
 
     /// Convert and validate each positional argument for a call.
@@ -5443,7 +5722,8 @@ impl Parser {
             let is_pub = self.lexer.has_token("pub");
             let before = self.data.definitions();
             if self.lexer.diagnostics().level() == Level::Fatal
-                || (!self.parse_enum()
+                || (!self.parse_capability()
+                    && !self.parse_enum()
                     && !self.parse_typedef()
                     && !self.parse_function()
                     && !self.parse_struct()
@@ -8025,7 +8305,7 @@ mod plan86_sandbox_designation_tests {
     fn fn_designation_tags_only_the_designated_function() {
         let mut p = Parser::new();
         p.set_sandbox_config(parse_sandbox_config(
-            "[sandbox]\nmod-script = [\"fn:scripted\"]\n[profile.mod-script]\nallow_caps = [\"math\"]\n",
+            "[sandbox]\nmod-script = [\"fn:scripted\"]\n[profile.mod-script]\nallow = [\"math#read\"]\n",
         ));
         let dir = std::env::temp_dir();
         let path = dir.join(format!("plan86_designation_{}.loft", std::process::id()));
@@ -8054,7 +8334,7 @@ mod plan86_nesting_guard_tests {
     fn sandboxed_parser() -> Parser {
         let mut p = Parser::new();
         p.set_sandbox_config(parse_sandbox_config(
-            "[sandbox]\nmod-script = [\"fn:scripted\"]\n[profile.mod-script]\nallow_caps = [\"math\"]\n",
+            "[sandbox]\nmod-script = [\"fn:scripted\"]\n[profile.mod-script]\nallow = [\"math#read\"]\n",
         ));
         p
     }
@@ -8071,6 +8351,54 @@ mod plan86_nesting_guard_tests {
         std::fs::write(&path, src).unwrap();
         p.parse(path.to_str().unwrap(), false);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn capability_declarations_register_and_resolve() {
+        // @PLN86 P6.1 — a `capability` decl registers its dotted name; a
+        // `group#right` link resolves against it, and an undeclared group does not
+        // (the load error a mistyped link becomes).  The dotted name is the namespace.
+        let mut p = Parser::new();
+        parse_source(
+            &mut p,
+            "capability fs\ncapability cmd.move\nfn main() { }\n",
+        );
+        assert!(p.cap_is_declared("fs"), "fs should be declared");
+        assert!(
+            p.cap_is_declared("cmd.move"),
+            "the dotted name cmd.move should be declared"
+        );
+        assert!(
+            !p.cap_is_declared("typo"),
+            "an undeclared group must not resolve"
+        );
+        // the `#right` suffix parses to exactly the three rights, nothing else.
+        use crate::sandbox::Right;
+        assert_eq!(Right::parse("read"), Some(Right::Read));
+        assert_eq!(Right::parse("update"), Some(Right::Update));
+        assert_eq!(Right::parse("append"), Some(Right::Append));
+        assert_eq!(Right::parse("delete"), None);
+    }
+
+    #[test]
+    fn field_capability_links_are_recorded() {
+        // @PLN86 P6.4 — a `group#right` link after a struct field's type is recorded
+        // per (struct, field); an unlinked field carries none; multiple links stack;
+        // append rides on a collection field.
+        let mut p = Parser::new();
+        parse_source(
+            &mut p,
+            "capability stats\ncapability bag\n\
+             struct Item { v: integer }\n\
+             struct Entity { id: integer, health: integer stats#read stats#update, \
+             loot: Item bag#read bag#append }\n\
+             fn main() { }\n",
+        );
+        let e = p.data.def_nr("Entity");
+        let links = |f: &str| -> Vec<String> { p.member_links(e, f).to_vec() };
+        assert!(links("id").is_empty(), "an unlinked field carries no links");
+        assert_eq!(links("health"), ["stats#read", "stats#update"]);
+        assert_eq!(links("loot"), ["bag#read", "bag#append"]);
     }
 
     /// @PLN86 0.1 — hostile deep nesting inside a sandboxed def is a clean
@@ -8143,7 +8471,7 @@ mod plan86_reachable_set_tests {
             .map(|s| format!("\"{s}\""))
             .collect::<Vec<_>>()
             .join(", ");
-        let cfg = format!("[sandbox]\nmod = [{list}]\n[profile.mod]\nallow_caps = [\"x\"]\n");
+        let cfg = format!("[sandbox]\nmod = [{list}]\n[profile.mod]\nallow = [\"x#read\"]\n");
         let mut p = Parser::new();
         p.set_sandbox_config(parse_sandbox_config(&cfg));
         p.parse_dir("default", true, true).unwrap(); // `integer` et al. live in the stdlib
@@ -8263,13 +8591,13 @@ mod plan86_reachable_set_tests {
         );
     }
 
-    /// @PLN86 2.1 — `#cap "group"` parses onto a def and is readable; the
-    /// read/write distinction (the `Vector.get` vs `Vector.clear` case)
-    /// round-trips, and an unannotated def reads as `None`.
+    /// @PLN86 — a `group#right` call-gate link parses off the signature onto a def
+    /// and is readable; the read/update distinction round-trips, and an unlinked def
+    /// reads as `None`.
     #[test]
     fn cap_annotation_is_parsed_and_readable() {
-        let src = "fn reader() -> integer;\n#native\n#cap \"collections.read\"\n\
-                   fn writer() -> integer;\n#native\n#cap \"collections.write\"\n\
+        let src = "fn reader() -> integer collections#read;\n#native\n\
+                   fn writer() -> integer collections#update;\n#native\n\
                    fn plain() -> integer { 0 }\n";
         let p = parse_with_sandbox(&[], src);
         assert!(
@@ -8279,11 +8607,11 @@ mod plan86_reachable_set_tests {
         );
         assert_eq!(
             p.def_cap_group(p.data.def_nr("n_reader")),
-            Some("collections.read")
+            Some("collections#read")
         );
         assert_eq!(
             p.def_cap_group(p.data.def_nr("n_writer")),
-            Some("collections.write")
+            Some("collections#update")
         );
         assert_eq!(p.def_cap_group(p.data.def_nr("n_plain")), None);
     }
@@ -8302,20 +8630,10 @@ mod plan86_admission_tests {
             .join(", ")
     }
 
-    fn parse_admit_libs(
-        designations: &[&str],
-        allow_libs: &[&str],
-        allow_caps: &[&str],
-        src: &str,
-    ) -> Parser {
-        let cfg = format!(
-            "[sandbox]\nmod = [{}]\n[profile.mod]\nallow_libs = [{}]\nallow_caps = [{}]\n",
-            quoted(designations),
-            quoted(allow_libs),
-            quoted(allow_caps),
-        );
+    /// Load the stdlib + parse `src` under the literal `[sandbox]` config `cfg`.
+    fn parse_admit_cfg(cfg: &str, src: &str) -> Parser {
         let mut p = Parser::new();
-        p.set_sandbox_config(parse_sandbox_config(&cfg));
+        p.set_sandbox_config(parse_sandbox_config(cfg));
         p.parse_dir("default", true, true).unwrap();
         // A process-global counter, not the `src` pointer: cargo runs tests as
         // threads in ONE process, so a deterministic name (the literal's address)
@@ -8331,6 +8649,43 @@ mod plan86_admission_tests {
         p.parse(path.to_str().unwrap(), false);
         let _ = std::fs::remove_file(&path);
         p
+    }
+
+    fn parse_admit_libs(
+        designations: &[&str],
+        allow_libs: &[&str],
+        allow: &[&str],
+        src: &str,
+    ) -> Parser {
+        let cfg = format!(
+            "[sandbox]\nmod = [{}]\n[profile.mod]\nallow_libs = [{}]\nallow = [{}]\n",
+            quoted(designations),
+            quoted(allow_libs),
+            quoted(allow),
+        );
+        parse_admit_cfg(&cfg, src)
+    }
+
+    /// Parse `src` with a `mod` profile carrying data-envelope bounds (`0` = omit).
+    fn parse_admit_envelope(
+        designations: &[&str],
+        allow_libs: &[&str],
+        data_budget: u64,
+        max_input_n: u64,
+        src: &str,
+    ) -> Parser {
+        let cfg = format!(
+            "[sandbox]\nmod = [{}]\n[profile.mod]\nallow_libs = [{}]\ndata_budget = {}\n{}",
+            quoted(designations),
+            quoted(allow_libs),
+            data_budget,
+            if max_input_n == 0 {
+                String::new()
+            } else {
+                format!("max_input_n = {max_input_n}\n")
+            },
+        );
+        parse_admit_cfg(&cfg, src)
     }
 
     fn parse_admit(designations: &[&str], allow_caps: &[&str], src: &str) -> Parser {
@@ -8350,15 +8705,15 @@ mod plan86_admission_tests {
     /// rejected (deny-by-default).
     #[test]
     fn admission_grants_allowed_caps_and_rejects_ungranted_and_untagged() {
-        let src = "fn cap_fs_read() -> integer;\n#native\n#cap \"fs.read\"\n\
-                   fn cap_coll_read() -> integer;\n#native\n#cap \"collections.read\"\n\
+        let src = "fn cap_fs_read() -> integer fs#read;\n#native\n\
+                   fn cap_coll_read() -> integer collections#read;\n#native\n\
                    fn cap_untagged() -> integer;\n#native\n\
                    fn ok() -> integer { cap_coll_read() }\n\
                    fn bad() -> integer { cap_fs_read() }\n\
                    fn uses_untagged() -> integer { cap_untagged() }\n";
         let p = parse_admit(
             &["fn:ok", "fn:bad", "fn:uses_untagged"],
-            &["collections.read"],
+            &["collections#read"],
             src,
         );
         assert!(
@@ -8372,7 +8727,7 @@ mod plan86_admission_tests {
             v.contains(&CapViolation::UngrantedCap {
                 from: p.data.def_nr("n_bad"),
                 symbol: p.data.def_nr("n_cap_fs_read"),
-                group: "fs.read".to_string(),
+                group: "fs#read".to_string(),
             }),
             "expected UngrantedCap(fs.read), got {v:?}"
         );
@@ -8397,10 +8752,10 @@ mod plan86_admission_tests {
     /// admission rejects the ungranted `fs.read` group.
     #[test]
     fn admission_rejects_indirect_fnref_call_l4() {
-        let src = "fn cap_fs_read(n: integer) -> integer;\n#native\n#cap \"fs.read\"\n\
+        let src = "fn cap_fs_read(n: integer) -> integer fs#read;\n#native\n\
                    fn apply(f: fn(integer) -> integer, n: integer) -> integer { f(n) }\n\
                    fn sneaky() -> integer { apply(cap_fs_read, 5) }\n";
-        let p = parse_admit(&["fn:sneaky", "fn:apply"], &["collections.read"], src);
+        let p = parse_admit(&["fn:sneaky", "fn:apply"], &["collections#read"], src);
         assert!(
             p.diagnostics.level() < crate::diagnostics::Level::Error,
             "parse errors: {:?}",
@@ -8411,7 +8766,7 @@ mod plan86_admission_tests {
             v.contains(&CapViolation::UngrantedCap {
                 from: p.data.def_nr("n_sneaky"),
                 symbol: p.data.def_nr("n_cap_fs_read"),
-                group: "fs.read".to_string(),
+                group: "fs#read".to_string(),
             }),
             "L4 indirect fn-ref to fs.read must be rejected, got {v:?}"
         );
@@ -8421,7 +8776,7 @@ mod plan86_admission_tests {
     /// tagged one (the work-list for tagging the stdlib/library surface).
     #[test]
     fn coverage_lint_lists_untagged_public_functions() {
-        let src = "pub fn tagged_fn() -> integer;\n#native\n#cap \"math\"\n\
+        let src = "pub fn tagged_fn() -> integer math#read;\n#native\n\
                    pub fn untagged_fn() -> integer;\n#native\n";
         let p = parse_admit(&[], &[], src);
         assert!(
@@ -8448,7 +8803,7 @@ mod plan86_admission_tests {
     fn stdlib_fs_env_caps_gate_real_functions() {
         let src = "fn reads_mtime() -> integer { mtime(\"x\") }\n\
                    fn reads_env() -> text { env_variable(\"X\") }\n";
-        let p = parse_admit(&["fn:reads_mtime", "fn:reads_env"], &["env"], src);
+        let p = parse_admit(&["fn:reads_mtime", "fn:reads_env"], &["env#read"], src);
         assert!(
             p.diagnostics.level() < crate::diagnostics::Level::Error,
             "parse errors: {:?}",
@@ -8469,12 +8824,12 @@ mod plan86_admission_tests {
             );
         }
         let v = p.sandbox_admit();
-        // mtime (fs.read) is not granted → rejected naming the real group.
+        // mtime (fs#read) is not granted → rejected naming the real group.
         assert!(
             v.contains(&CapViolation::UngrantedCap {
                 from: p.data.def_nr("n_reads_mtime"),
                 symbol: p.data.def_nr("n_mtime"),
-                group: "fs.read".to_string(),
+                group: "fs#read".to_string(),
             }),
             "mtime must be rejected naming fs.read, got {v:?}"
         );
@@ -8528,10 +8883,10 @@ mod plan86_admission_tests {
     /// fine-grained cap / native_ffi).
     #[test]
     fn admission_errors_name_symbol_rule_and_fix() {
-        // UngrantedCap — mtime needs fs.read; only env is granted.
+        // UngrantedCap — mtime needs fs#read; only env#read is granted.
         let p = parse_admit(
             &["fn:reads_mtime"],
-            &["env"],
+            &["env#read"],
             "fn reads_mtime() -> integer { mtime(\"x\") }\n",
         );
         let errs = p.sandbox_admission_errors();
@@ -8539,10 +8894,10 @@ mod plan86_admission_tests {
         let e = &errs[0];
         eprintln!("CAP_DIAG: {e}");
         assert!(e.contains("mtime"), "names the symbol: {e}");
-        assert!(e.contains("fs.read"), "names the group: {e}");
+        assert!(e.contains("fs#read"), "names the group: {e}");
         assert!(e.contains("fix:"), "points at the fix: {e}");
         assert!(
-            e.contains("allow_caps") && e.contains("allow_libs"),
+            e.contains("`allow`") && e.contains("allow_libs"),
             "offers both fixes: {e}"
         );
         assert!(e.contains(".loft:"), "carries a source position: {e}");
@@ -8734,10 +9089,11 @@ mod plan86_admission_tests {
         );
     }
 
-    /// @PLN86 1.4 — any designated def forces interpret-only (unconditional); a
-    /// program with no sandboxed defs leaves the native backend available.
+    /// @PLN86 — any designated def flags the program as carrying sandboxed code (which
+    /// gates the load-time admission walk); a program with no sandboxed defs does not.
+    /// The flag is backend-agnostic — it no longer forces interpret-only.
     #[test]
-    fn sandbox_forces_interpret_on_any_designation() {
+    fn has_sandboxed_defs_on_any_designation() {
         let p = parse_admit_libs(
             &["fn:scripted"],
             &["code"],
@@ -8745,14 +9101,11 @@ mod plan86_admission_tests {
             "fn scripted() -> integer { 1 }\n",
         );
         assert!(
-            p.sandbox_forces_interpret(),
-            "a sandboxed def must force interpret-only"
+            p.has_sandboxed_defs(),
+            "a designated def must flag the program as sandboxed"
         );
         let p2 = parse_admit_libs(&[], &["code"], &[], "fn plain() -> integer { 1 }\n");
-        assert!(
-            !p2.sandbox_forces_interpret(),
-            "no sandboxed defs → native allowed"
-        );
+        assert!(!p2.has_sandboxed_defs(), "no sandboxed defs → not flagged");
     }
 
     /// @PLN86 3.4 — the worst-case complexity degree counts loop nesting, and
@@ -8868,6 +9221,133 @@ mod plan86_admission_tests {
         );
     }
 
+    /// @PLN86 P7.1 (F9) — the space footprint reports `(degree, coeff)`: a per-element
+    /// build loop accumulates ONE record's stride per appended element.
+    #[test]
+    fn space_footprint_reports_degree_and_record_coefficient() {
+        // vector<integer>: one i64 element = 8 bytes per append.
+        let pi = parse_admit_libs(
+            &["fn:b"],
+            &["code"],
+            &[],
+            "fn b() -> integer { r = []; for i in 0..10 { r += [i] } len(r) }\n",
+        );
+        assert_eq!(
+            pi.sandbox_space_footprint(),
+            (1, 8),
+            "vector<integer> build → (degree 1, coeff 8)"
+        );
+
+        // vector<Mob>: coeff = the struct's record stride (one i64 field = 8 bytes).
+        let ps = parse_admit_libs(
+            &["fn:bs"],
+            &["code"],
+            &[],
+            "struct Mob { hp: integer }\n\
+             fn bs() -> integer { acc: vector<Mob> = []; \
+              for i in 0..10 { acc += [Mob { hp: i }] } len(acc) }\n",
+        );
+        assert!(
+            ps.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            ps.diagnostics.lines()
+        );
+        // vector<Mob> stores DbRef slots (a reference element) → sizeof(DbRef)=12 bytes
+        // per element in the backing (the Mob record body is a separate allocation, a
+        // documented v1 under-count). Degree 1, coeff 12 (one slot per appended element).
+        assert_eq!(
+            ps.sandbox_space_footprint(),
+            (1, 12),
+            "vector<Mob> build → (degree 1, coeff 12 = DbRef backing slot)"
+        );
+    }
+
+    /// @PLN86 §8 (F11) — the data-envelope reject: `coeff · max_input_n^degree` must
+    /// fit `data_budget`, with `max_input_n` provable; over-budget / unprovable reject.
+    #[test]
+    fn data_budget_rejects_over_envelope_and_admits_under() {
+        // degree 1, coeff 8 (vector<integer>); figure = 8 · max_input_n.
+        let src = "fn build() -> integer { r = []; for i in 0..10 { r += [i] } len(r) }\n";
+
+        // over budget: 8 · 1000 = 8000 > 4000 → rejected, naming the figure + budget.
+        let over = parse_admit_envelope(&["fn:build"], &["code"], 4000, 1000, src);
+        let errs = over.sandbox_admission_errors();
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("8000") && e.contains("data_budget 4000")),
+            "over-budget must be rejected naming the figure: {errs:?}"
+        );
+
+        // under budget: 8 · 1000 = 8000 ≤ 40000 → admitted (no data-envelope error).
+        let under = parse_admit_envelope(&["fn:build"], &["code"], 40000, 1000, src);
+        assert!(
+            !under
+                .sandbox_admission_errors()
+                .iter()
+                .any(|e| e.contains("data_budget") || e.contains("peak heap")),
+            "under-budget must admit: {:?}",
+            under.sandbox_admission_errors()
+        );
+
+        // budget set but max_input_n unset, degree > 0 → unprovable → rejected.
+        let unprov = parse_admit_envelope(&["fn:build"], &["code"], 40000, 0, src);
+        assert!(
+            unprov
+                .sandbox_admission_errors()
+                .iter()
+                .any(|e| e.contains("cannot be bounded") && e.contains("max_input_n")),
+            "an unset max_input_n with a growing footprint must be rejected: {:?}",
+            unprov.sandbox_admission_errors()
+        );
+
+        // no data_budget → report-only (the same growing script admits).
+        let nobudget = parse_admit_envelope(&["fn:build"], &["code"], 0, 0, src);
+        assert!(
+            !nobudget
+                .sandbox_admission_errors()
+                .iter()
+                .any(|e| e.contains("peak heap")),
+            "no data_budget → report-only, no reject: {:?}",
+            nobudget.sandbox_admission_errors()
+        );
+    }
+
+    /// @PLN86 §8 (F10) — under an active envelope, an uncapped dynamic string build is
+    /// rejected (its bytes aren't a fixed record stride); a `max_string_len` cap admits.
+    #[test]
+    fn unbounded_string_build_rejected_unless_capped() {
+        // grows `s` across a loop; max_input_n set so ONLY the string gate can fire.
+        let src = "fn grow() -> text { s = \"\"; for i in 0..10 { s += \"x\" } s }\n";
+        let base = "[sandbox]\nmod = [\"fn:grow\"]\n[profile.mod]\n\
+                    allow_libs = [\"code\"]\ndata_budget = 1000000\nmax_input_n = 100\n";
+
+        // uncapped (no max_string_len) → UnboundedAlloc rejection.
+        let uncapped = parse_admit_cfg(base, src);
+        assert!(
+            uncapped.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            uncapped.diagnostics.lines()
+        );
+        let errs = uncapped.sandbox_admission_errors();
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("string grows unboundedly") && e.contains("max_string_len")),
+            "an uncapped string build must be rejected: {errs:?}"
+        );
+
+        // capped → admits (the cap bounds it).
+        let capped_cfg = format!("{base}max_string_len = 256\n");
+        let capped = parse_admit_cfg(&capped_cfg, src);
+        assert!(
+            !capped
+                .sandbox_admission_errors()
+                .iter()
+                .any(|e| e.contains("string grows unboundedly")),
+            "a max_string_len-capped string build must admit: {:?}",
+            capped.sandbox_admission_errors()
+        );
+    }
+
     /// @PLN86 prevention #3 — TOTAL host capabilities: a `#cap`-tagged function that
     /// can reach an abort op (directly OR via a helper) is flagged as not total; a
     /// capability that validates and returns a clean value is clean.  The host-side
@@ -8875,10 +9355,10 @@ mod plan86_admission_tests {
     #[test]
     fn capability_totality_flags_abort_reaching_caps() {
         let src = "\
-            fn cap_bad(n: integer) -> integer { assert(n > 0, \"pos\"); n }\n#cap \"game\"\n\
-            fn cap_ok(n: integer) -> integer { if n > 0 { n } else { 0 } }\n#cap \"game\"\n\
+            fn cap_bad(n: integer) -> integer game#read { assert(n > 0, \"pos\"); n }\n\
+            fn cap_ok(n: integer) -> integer game#read { if n > 0 { n } else { 0 } }\n\
             fn helper(n: integer) -> integer { assert(n > 0, \"x\"); n }\n\
-            fn cap_trans(n: integer) -> integer { helper(n) }\n#cap \"game\"\n";
+            fn cap_trans(n: integer) -> integer game#read { helper(n) }\n";
         let p = parse_admit_libs(&[], &["code"], &[], src);
         let v = p.sandbox_capability_totality_violations();
         let flagged: std::collections::HashSet<&str> =
@@ -8933,7 +9413,7 @@ mod plan86_admission_tests {
         }
         // A forbidden #cap native, declared in-source and NOT in an allowed library,
         // so the fine-grained capability gate applies to it.
-        let secret = "fn secret() -> integer;\n#native\n#cap \"danger\"\n";
+        let secret = "capability danger\nfn secret() -> integer danger#read;\n#native\n";
 
         // ===== ESCAPES — admission MUST reject (≥1 error). =====
         let escapes: Vec<(&str, Vec<String>)> = vec![
@@ -9130,7 +9610,7 @@ mod plan86_admission_tests {
                 adm(
                     &["fn:ok"],
                     &["code"],
-                    &["danger"],
+                    &["danger#read"],
                     &format!("{secret}fn ok() -> integer {{ secret() }}\n"),
                 ),
             ),
@@ -9138,6 +9618,182 @@ mod plan86_admission_tests {
         for (name, e) in &controls {
             assert!(e.is_empty(), "CLEAN SCRIPT REJECTED — {name}: {e:?}");
         }
+    }
+
+    /// @PLN86 P8.2 (F13) — the RED/GREEN ACCESS corpus: the committed battery over the
+    /// capability access model (function call gate, field read/update/append, parameter
+    /// `#default` lock, the `files` library split, undeclared links).  Every RED is
+    /// paired with a GREEN TWIN — the SAME code with the grant added must ADMIT — so a
+    /// rejection is proven to be the rule firing, not a parse error or an unrelated
+    /// reject (non-vacuity, the escape-suite discipline).  Plus standalone REDs
+    /// (read-only-by-default) and GREENs (construction is unrestricted, reads are free).
+    #[test]
+    fn access_corpus_red_green() {
+        // parse + assert the probe parsed (else admission is vacuous) → errors.
+        fn adm(sel: &[&str], libs: &[&str], caps: &[&str], src: &str) -> Vec<String> {
+            let p = parse_admit_libs(sel, libs, caps, src);
+            assert!(
+                p.diagnostics.level() < crate::diagnostics::Level::Error,
+                "probe did not parse (vacuous):\n{src}\n{:?}",
+                p.diagnostics.lines()
+            );
+            p.sandbox_admission_errors()
+        }
+        // A RED (ungranted) rejects naming `token`; its GREEN twin (granted) does NOT —
+        // proving the rejection is the access rule, not an incidental failure.
+        let twin = |name: &str,
+                    libs: &[&str],
+                    token: &str,
+                    ungranted: &[&str],
+                    granted: &[&str],
+                    src: &str| {
+            let red = adm(&["fn:f"], libs, ungranted, src);
+            assert!(
+                red.iter().any(|e| e.contains(token)),
+                "{name}: RED must be rejected naming `{token}`: {red:?}"
+            );
+            let green = adm(&["fn:f"], libs, granted, src);
+            assert!(
+                !green.iter().any(|e| e.contains(token)),
+                "{name}: GREEN twin (granted) must admit — non-vacuity: {green:?}"
+            );
+        };
+
+        // ── call gate: an `fs#update` function under an `fs#read`-only grant ──
+        twin(
+            "call gate fs#update under fs#read",
+            &["code"],
+            "fs#update",
+            &["fs#read"],
+            &["fs#read", "fs#update"],
+            "fn host_write() -> integer fs#update;\n#native\n\
+             fn f() -> integer { host_write() }\n",
+        );
+        // ── field READ of a private (`#read`-linked) field ──
+        twin(
+            "field read (private)",
+            &["code"],
+            "secret#read",
+            &[],
+            &["secret#read"],
+            "capability secret\nstruct P { hidden: text secret#read }\n\
+             fn f(p: P) -> text { p.hidden }\n",
+        );
+        // ── field UPDATE of an `#update`-linked field ──
+        twin(
+            "field update",
+            &["code"],
+            "stats#update",
+            &[],
+            &["stats#update"],
+            "capability stats\nstruct M { hp: integer stats#update }\n\
+             fn f(m: M) { m.hp = 0 }\n",
+        );
+        // ── field APPEND to a `#append`-linked collection field ──
+        twin(
+            "field append",
+            &["code"],
+            "bag#append",
+            &[],
+            &["bag#append"],
+            "capability bag\nstruct I { items: vector<integer> bag#append }\n\
+             fn f(i: I, x: integer) { i.items += [x] }\n",
+        );
+        // ── parameter `#default` lock: overriding a pinned argument ──
+        twin(
+            "param #default lock override",
+            &["code"],
+            "spawn.count#default",
+            &["world#append"],
+            &["world#append", "spawn.count#default"],
+            "capability world\ncapability spawn.count\n\
+             fn spawn(kind: text, count: integer = 1 spawn.count#default) -> integer world#append;\n#native\n\
+             fn f() -> integer { spawn(\"g\", 5) }\n",
+        );
+
+        // ── undeclared capability link (typo) — RED + corrected-spelling GREEN twin ──
+        let typo = adm(
+            &["fn:f"],
+            &["code"],
+            &["helth#update"],
+            "capability health\nstruct M { hp: integer helth#update }\nfn f(m: M) { m.hp = 0 }\n",
+        );
+        assert!(
+            typo.iter()
+                .any(|e| e.contains("undeclared capability `helth`")),
+            "undeclared link must reject naming the group: {typo:?}"
+        );
+        let fixed = adm(
+            &["fn:f"],
+            &["code"],
+            &["health#update"],
+            "capability health\nstruct M { hp: integer health#update }\nfn f(m: M) { m.hp = 0 }\n",
+        );
+        assert!(
+            !fixed.iter().any(|e| e.contains("undeclared")),
+            "the corrected spelling must admit (non-vacuity): {fixed:?}"
+        );
+
+        // ===== standalone REDs — read-only-by-default (no grant admits them) =====
+        // an UNLINKED host field stays read-only even when a capability is granted.
+        let unlinked = adm(
+            &["fn:f"],
+            &["code"],
+            &["stats#update"],
+            "struct M { hp: integer }\nfn f(m: M) { m.hp = 0 }\n",
+        );
+        assert!(
+            !unlinked.is_empty(),
+            "an unlinked host field must stay read-only: {unlinked:?}"
+        );
+        // append-only: `=` (update) on a field with `#append` but NO `#update` is rejected
+        // even with append granted — append-only is exactly this.
+        let append_only_update = adm(
+            &["fn:f"],
+            &["code"],
+            &["bag#append"],
+            "capability bag\nstruct I { items: vector<integer> bag#append }\n\
+             fn f(i: I) { i.items = [1] }\n",
+        );
+        assert!(
+            !append_only_update.is_empty(),
+            "update via `=` on an append-only field must be rejected: {append_only_update:?}"
+        );
+
+        // ===== standalone GREENs — the model must not over-reject =====
+        // CONSTRUCTION is unrestricted (the position-1 decision — no construction gate).
+        let construct = adm(
+            &["fn:f"],
+            &["code", "prog"],
+            &[],
+            "struct Pt { x: integer }\nfn f() -> Pt { Pt { x: 1 } }\n",
+        );
+        assert!(
+            construct.is_empty(),
+            "construction must admit (no construction gate): {construct:?}"
+        );
+        // reading an UNLINKED field is free (read is default-allow).
+        let free_read = adm(
+            &["fn:f"],
+            &["code"],
+            &[],
+            "struct P { name: text }\nfn f(p: P) -> text { p.name }\n",
+        );
+        assert!(
+            free_read.is_empty(),
+            "reading an unlinked field is free: {free_read:?}"
+        );
+        // the REAL stdlib `files` split: `mtime` (fs#read) admits under an `fs#read` grant.
+        let real_read = adm(
+            &["fn:f"],
+            &["code"],
+            &["fs#read"],
+            "fn f() -> integer { mtime(\"x\") }\n",
+        );
+        assert!(
+            real_read.is_empty(),
+            "real stdlib mtime (fs#read) must admit under fs#read: {real_read:?}"
+        );
     }
 
     /// @PLN86 2.4 — no-raw-write rejects a field/index assignment to heap data,
@@ -9240,6 +9896,196 @@ mod plan86_admission_tests {
             !p2.sandbox_raw_writes().is_empty(),
             "a write to a parameter (host data) must be rejected, got {:?}",
             p2.sandbox_raw_writes()
+        );
+    }
+
+    /// @PLN86 P6.4 (F4) — a sandboxed read of a `#read`-linked HOST field needs the
+    /// grant; an unlinked field is freely readable (read default-allow).
+    #[test]
+    fn field_read_gates_private_field_admits_unlinked() {
+        let src = "capability secret\n\
+                   struct Player { name: text, hidden: text secret#read }\n\
+                   fn peek(p: Player) -> text { p.hidden }\n\
+                   fn nameof(p: Player) -> text { p.name }\n";
+        // ungranted: reading `hidden` (secret#read) is rejected; `name` (unlinked) is fine.
+        let p = parse_admit_libs(&["fn:peek", "fn:nameof"], &["code"], &[], src);
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        let errs = p.sandbox_admission_errors();
+        assert!(
+            errs.iter().any(|e| e.contains("secret#read")),
+            "a private field read must be rejected: {errs:?}"
+        );
+        // granted: the same read admits clean.
+        let p2 = parse_admit_libs(&["fn:peek", "fn:nameof"], &["code"], &["secret#read"], src);
+        assert!(
+            !p2.sandbox_admission_errors()
+                .iter()
+                .any(|e| e.contains("secret#read")),
+            "granted secret#read must admit the read: {:?}",
+            p2.sandbox_admission_errors()
+        );
+    }
+
+    /// @PLN86 P6.4 (F5) — a write to an `#update`-linked host field admits iff the
+    /// token is granted; a field with NO update link stays read-only (the coarse 2.4
+    /// reject), generalising the all-or-nothing no-raw-write.
+    #[test]
+    fn field_update_gates_writable_fields_unlinked_read_only() {
+        let src = "capability stats\n\
+                   struct Mob { hp: integer stats#update, id: integer }\n\
+                   fn hurt(m: Mob) -> integer { m.hp = 0; m.hp }\n";
+        // ungranted: writing `hp` (stats#update) is rejected.
+        let p = parse_admit_libs(&["fn:hurt"], &["code"], &[], src);
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        assert!(
+            p.sandbox_admission_errors()
+                .iter()
+                .any(|e| e.contains("stats#update")),
+            "an ungranted field write must be rejected: {:?}",
+            p.sandbox_admission_errors()
+        );
+        // granted: the same write admits clean.
+        let p2 = parse_admit_libs(&["fn:hurt"], &["code"], &["stats#update"], src);
+        assert!(
+            p2.sandbox_admission_errors().is_empty(),
+            "granted stats#update must admit the write: {:?}",
+            p2.sandbox_admission_errors()
+        );
+        // a field with NO update link stays read-only even when a cap is granted.
+        let src2 = "struct Mob { hp: integer }\n\
+                    fn hurt(m: Mob) -> integer { m.hp = 0; m.hp }\n";
+        let p3 = parse_admit_libs(&["fn:hurt"], &["code"], &["stats#update"], src2);
+        assert!(
+            !p3.sandbox_admission_errors().is_empty(),
+            "an unlinked host field must stay read-only: {:?}",
+            p3.sandbox_admission_errors()
+        );
+    }
+
+    /// @PLN86 P6.4 (F6) — `e.f += x` growing an `#append`-linked collection field admits
+    /// iff the token is granted; an append to a field with no append link falls to the
+    /// `#update`/coarse path.  This is what makes append-only expressible.
+    #[test]
+    fn field_append_gates_collection_grow() {
+        let src = "capability bag\n\
+                   struct Inv { items: vector<integer> bag#append }\n\
+                   fn add(i: Inv, x: integer) { i.items += [x] }\n";
+        // ungranted: appending to `items` (bag#append) is rejected.
+        let p = parse_admit_libs(&["fn:add"], &["code"], &[], src);
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        assert!(
+            p.sandbox_admission_errors()
+                .iter()
+                .any(|e| e.contains("bag#append")),
+            "an ungranted append must be rejected: {:?}",
+            p.sandbox_admission_errors()
+        );
+        // granted: the same append admits clean.
+        let p2 = parse_admit_libs(&["fn:add"], &["code"], &["bag#append"], src);
+        assert!(
+            p2.sandbox_admission_errors().is_empty(),
+            "granted bag#append must admit the grow: {:?}",
+            p2.sandbox_admission_errors()
+        );
+    }
+
+    /// @PLN86 §7.2 (F7) — a parameter the host pinned with `…#default` is forced to its
+    /// default unless the modder holds the lock: omitting the argument (`spawn("g")`) is
+    /// free, but OVERRIDING it (`spawn("g", 5)`) needs `spawn.count#default` granted.
+    #[test]
+    fn param_default_lock_gates_override() {
+        // `world#append` is the call gate (needed to call spawn at all); `count` is then
+        // pinned to its default `1` by `spawn.count#default`.
+        let src = "capability world\n\
+                   capability spawn.count\n\
+                   fn spawn(kind: text, count: integer = 1 spawn.count#default) \
+                       -> integer world#append;\n#native\n\
+                   fn bare() -> integer { spawn(\"goblin\") }\n\
+                   fn override_count() -> integer { spawn(\"goblin\", 5) }\n";
+        // call-gate granted, lock NOT granted: the bare call admits, the override is rejected.
+        let p = parse_admit_libs(
+            &["fn:bare", "fn:override_count"],
+            &["code"],
+            &["world#append"],
+            src,
+        );
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        let errs = p.sandbox_admission_errors();
+        assert!(
+            errs.iter().any(|e| e.contains("spawn.count#default")),
+            "overriding a pinned parameter must be rejected: {errs:?}"
+        );
+        // the bare call (uses the default) must NOT be flagged — only the override is.
+        let bare = p.data.def_nr("n_bare");
+        assert!(
+            !p.sandbox_param_overrides.contains_key(&bare),
+            "a defaulted parameter is not an override: {:?}",
+            p.sandbox_param_overrides.get(&bare)
+        );
+        // lock granted: the override admits clean.
+        let p2 = parse_admit_libs(
+            &["fn:bare", "fn:override_count"],
+            &["code"],
+            &["world#append", "spawn.count#default"],
+            src,
+        );
+        assert!(
+            !p2.sandbox_admission_errors()
+                .iter()
+                .any(|e| e.contains("spawn.count#default")),
+            "granted spawn.count#default must admit the override: {:?}",
+            p2.sandbox_admission_errors()
+        );
+    }
+
+    /// @PLN86 P6.8 (F8) — a `group#right` link in the main program whose group was never
+    /// declared as a `capability` is a clean LOAD error (today it would silently deny, the
+    /// group never matching a grant); a correctly-declared link is not flagged.
+    #[test]
+    fn undeclared_capability_link_is_a_load_error() {
+        // a field link to `helth` — a typo for the `health` capability actually declared.
+        let typo = "capability health\n\
+                    struct Mob { hp: integer helth#update }\n\
+                    fn hurt(m: Mob) { m.hp = 0 }\n";
+        let p = parse_admit_libs(&["fn:hurt"], &["code"], &["helth#update"], typo);
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        let errs = p.sandbox_admission_errors();
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("undeclared capability `helth`")),
+            "an undeclared capability group must be a load error: {errs:?}"
+        );
+        // the correctly-spelled link resolves against its declaration — not flagged.
+        let ok = "capability health\n\
+                  struct Mob { hp: integer health#update }\n\
+                  fn hurt(m: Mob) { m.hp = 0 }\n";
+        let p2 = parse_admit_libs(&["fn:hurt"], &["code"], &["health#update"], ok);
+        assert!(
+            !p2.sandbox_admission_errors()
+                .iter()
+                .any(|e| e.contains("undeclared capability")),
+            "a declared link must not be flagged: {:?}",
+            p2.sandbox_admission_errors()
         );
     }
 

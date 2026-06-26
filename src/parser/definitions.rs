@@ -715,6 +715,14 @@ impl Parser {
         if self.context == u32::MAX {
             return false;
         }
+        // @PLN86 §7.2 (F7) — now the function's def_nr exists, key each parsed parameter
+        // `…#default` lock by `(this fn, param index)`.  First pass only (definitions
+        // resolve there); the call-site gate reads `param_locks` on the second pass.
+        if self.first_pass {
+            for (idx, token) in std::mem::take(&mut self.pending_param_locks) {
+                self.param_locks.insert((self.context, idx as u32), token);
+            }
+        }
         // @PLN86 step 1.2 — record the sandbox profile for a host-designated
         // function so the admission walk (and the nesting guard, 0.1) know this
         // def is restricted.  Designation is host-controlled (`fn:<name>` here;
@@ -869,6 +877,16 @@ impl Parser {
         } else {
             Type::Void
         };
+        // @PLN86 P6.2 — the call-gate capability link in the SIGNATURE, after the output
+        // (`-> int fs#read`, or a void fn's `) fs#update`): a first-class part of the
+        // contract beside the params + return, NOT in the `#native`/`#impure`/`#wasm`
+        // implementation plumbing.  A restricted caller needs this granted to CALL the
+        // function (`admit_capabilities`); passing arguments is part of the call.  After
+        // an output, only `;` / `{` / a link is legal, so a leading identifier is
+        // unambiguously a link.  Re-read each pass, so set unconditionally.
+        if let Some(token) = self.try_cap_link() {
+            self.data.definitions[self.context as usize].cap = token;
+        }
         // Plan-14 phase 07 (P234 runtime): when the declared return type
         // is `Type::Tuple(elems)` and any element carries a lifetime
         // concern (Text, Reference, Vector, Enum-struct, keyed
@@ -1168,22 +1186,6 @@ impl Parser {
                     let default_sym = self.data.def(self.context).name().to_string();
                     self.data.definitions[self.context as usize].native = default_sym;
                 }
-            } else if id == Some("cap".to_string()) {
-                // @PLN86 — `#cap "group"` declares the capability group this
-                // function represents; the sandbox admission walk gates a TRUSTED
-                // symbol against the active profile's allowed groups.  Allowed in
-                // any file (libraries declare caps too), like `#native`.  A
-                // sandboxed def's own `#cap` is ignored by admission — a script's
-                // capabilities derive from what it REACHES, not a self-label.
-                if let Some(group) = self.lexer.has_cstring() {
-                    self.data.definitions[self.context as usize].cap = group;
-                } else {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Error,
-                        "Expect a capability-group string after `#cap`"
-                    );
-                }
             } else if self.default && id == Some("rust".to_string()) {
                 if let Some(c) = self.lexer.has_cstring() {
                     self.data.definitions[self.context as usize].rust = c;
@@ -1265,6 +1267,9 @@ impl Parser {
     }
 
     pub(crate) fn parse_arguments(&mut self, fn_name: &str, arguments: &mut Vec<Argument>) -> bool {
+        // @PLN86 §7.2 (F7) — collect this list's `…#default` parameter locks fresh; the
+        // caller (`parse_function`) records them once the function's def_nr exists.
+        self.pending_param_locks.clear();
         loop {
             if self.lexer.peek_token(")") {
                 break;
@@ -1357,6 +1362,14 @@ impl Parser {
             };
             for (name, _, _) in &injected {
                 self.vars.remove_name(name);
+            }
+            // @PLN86 §7.2 (F7) — an optional `group#default` lock after the parameter
+            // (its default): `count: int = 1 spawn.count#default`.  Consumed on BOTH
+            // passes (else the second pass chokes on the token); the index is the slot
+            // this parameter is about to occupy (`arguments.len()`).  `try_cap_link` is
+            // non-destructive, so a `,`/`)` after the default is never mis-consumed.
+            if let Some(token) = self.try_cap_link() {
+                self.pending_param_locks.push((arguments.len(), token));
             }
             if !self.first_pass
                 && typedef.is_unknown()
@@ -1952,6 +1965,101 @@ impl Parser {
     }
 
     // <struct> = 'struct' <identifier> [ ':' <type> ] '{' <param-id> ':' <field> { ',' <param-id> ':' <field> } '}'
+    /// @PLN86 P6.1 — a `capability <dotted.name>` top-level declaration.  Registers
+    /// a namespaced capability group that functions + data members link to via the
+    /// `group#right` notation (P6.2 / P6.4); the dotted name IS the namespace (matched
+    /// hierarchically on the grant side, like the existing `fs.read` groups).  A
+    /// capability has no code or type — it is a pure annotation target — so this only
+    /// records the name; a `group#right` link to an UNDECLARED group is a load error,
+    /// validated at admission once every declaration is registered.  `capability` is a
+    /// contextual keyword (not reserved), so it never shadows an identifier.
+    pub(crate) fn parse_capability(&mut self) -> bool {
+        if !self.lexer.has_keyword("capability") {
+            return false;
+        }
+        let Some(mut name) = self.lexer.has_identifier() else {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "Expect a capability name after `capability`"
+            );
+            return true;
+        };
+        // A dotted name (`cmd.move`) is the namespace, like the `fs.read` groups.
+        while self.lexer.has_token(".") {
+            let Some(seg) = self.lexer.has_identifier() else {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Expect an identifier after `.` in a capability name"
+                );
+                return true;
+            };
+            name.push('.');
+            name.push_str(&seg);
+        }
+        self.declared_capabilities.insert(name);
+        true
+    }
+
+    /// @PLN86 P6.2 — try to parse a `group#right` capability-link token in a position
+    /// where one is OPTIONAL: a dotted group, `#`, then one of `read`/`update`/`append`.
+    /// Returns the canonical `"group#right"` string; returns `None` **silently** when
+    /// no link is present (the next token is not an identifier — e.g. the `;`/`{`
+    /// terminator after a signature, or a field separator); errors only on a *malformed*
+    /// link (a group with no `#right`).  The group's existence as a declared `capability`
+    /// is validated at admission, so forward + cross-file declarations resolve.  Shared
+    /// by the function call gate (P6.2, in the signature) and a struct-field link (P6.4).
+    pub(crate) fn try_cap_link(&mut self) -> Option<String> {
+        // NON-DESTRUCTIVE: in this optional position the next token might instead be
+        // a separator, a default `=`, or a field-modifier keyword (`not`, `assert`)
+        // — all of which lex as ordinary tokens/identifiers.  So consume nothing
+        // unless this is really a link: save the cursor and revert on a miss.  Only
+        // a real `#` followed by a bad right is a hard error.
+        let saved = self.lexer.link();
+        let Some(mut group) = self.lexer.has_identifier() else {
+            return None; // no identifier consumed
+        };
+        while self.lexer.has_token(".") {
+            let Some(seg) = self.lexer.has_identifier() else {
+                self.lexer.revert(saved);
+                return None;
+            };
+            group.push('.');
+            group.push_str(&seg);
+        }
+        if !self.lexer.has_token("#") {
+            // not a link (e.g. `not null`, `assert(...)`, the next field) — un-consume.
+            self.lexer.revert(saved);
+            return None;
+        }
+        let Some(right) = self.lexer.has_identifier() else {
+            self.lexer.revert(saved);
+            return None;
+        };
+        if crate::sandbox::Right::parse(&right).is_none() {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "Unknown capability right `{right}` — expected read, update, or append"
+            );
+            return None;
+        }
+        Some(format!("{group}#{right}"))
+    }
+
+    /// @PLN86 P6.4 — consume zero-or-more `group#right` capability links after a
+    /// struct field's type (`health: int stats#read stats#update`), recording each
+    /// on `(struct, field)` for the admission walk.  Consumed every pass, recorded
+    /// once (first pass) so the per-field link list does not double on re-parse.
+    pub(crate) fn parse_field_links(&mut self, d_nr: u32, a_name: &str) {
+        while let Some(token) = self.try_cap_link() {
+            if self.first_pass {
+                self.record_member_link(d_nr, a_name, token);
+            }
+        }
+    }
+
     pub(crate) fn parse_struct(&mut self) -> bool {
         if !self.lexer.has_token("struct") {
             return false;
@@ -2382,6 +2490,8 @@ impl Parser {
                             a_type = tp;
                         }
                     }
+                    // @PLN86 P6.4 — links after a scalar/named field type.
+                    self.parse_field_links(d_nr, a_name);
                 }
             } else if let Some(tp) = self.parse_type_full(d_nr, false) {
                 // Plan-06 phase 4d: tuple-typed struct fields are now
@@ -2393,6 +2503,8 @@ impl Parser {
                 // and `get_val` for the per-element write/read paths.
                 defined = true;
                 a_type = tp;
+                // @PLN86 P6.4 — links after a vector/generic/tuple field type.
+                self.parse_field_links(d_nr, a_name);
                 break;
             } else {
                 break;

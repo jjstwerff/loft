@@ -2722,11 +2722,69 @@ use a separate collection or add after the loop"
                 // invariant-breaking raw write we reject.  Bare locals and struct
                 // construction never route here.  Keyed by def (idempotent).
                 if self.in_sandbox
+                    && !self.first_pass
                     && !matches!(code.unspan(), Value::Var(_))
                     && self.raw_write_is_host_owned(code)
                 {
                     let pos = self.lexer.peek_pos().clone();
-                    self.sandbox_raw_writes.entry(self.context).or_insert(pos);
+                    // @PLN86 F5 — a ONE-LEVEL struct field write whose field carries an
+                    // `#update` link is gated PER-FIELD (admission admits iff the token is
+                    // granted).  A write to a field with NO update link, an index write, a
+                    // nested field, or a stale stash falls through to the coarse 2.4 reject
+                    // (a host field is read-only by default).  Field access uses
+                    // type-specific ops (not just `OpGetField`), so we identify the write by
+                    // the stash `field()` set, VERIFIED against the base var's struct type —
+                    // a base that is not a `Var` of the stash's struct never qualifies.
+                    let target = self.last_field_target.take();
+                    let resolved = target.and_then(|(sd, field, read_count)| {
+                        let base_var = match code.unspan() {
+                            Value::Call(_, args) => match args.first().map(Value::unspan) {
+                                Some(Value::Var(r)) => Some(*r),
+                                _ => None,
+                            },
+                            _ => None,
+                        };
+                        let base_ok = base_var.is_some_and(
+                            |r| matches!(self.vars.tp(r), Type::Reference(bsd, _) if *bsd == sd),
+                        );
+                        if !base_ok {
+                            return None;
+                        }
+                        let has = |right: &str| {
+                            self.member_access
+                                .get(&(sd, field.clone()))
+                                .is_some_and(|l| l.iter().any(|t| t.ends_with(right)))
+                        };
+                        // @PLN86 F6 — a `+=` to an `#append`-linked field is an APPEND
+                        // (grow the collection); otherwise an `#update`-linked write is
+                        // an UPDATE (F5).  Neither → the coarse 2.4 reject.
+                        if op == "+=" && has("#append") {
+                            Some((sd, field, read_count, true))
+                        } else if has("#update") {
+                            Some((sd, field, read_count, false))
+                        } else {
+                            None
+                        }
+                    });
+                    if let Some((sd, field, read_count, is_append)) = resolved {
+                        let ctx = self.context;
+                        // un-record the spurious F4 read this field's LHS logged — a
+                        // write is not a read (resolves the F4 read/update overlap).
+                        if read_count > 0
+                            && let Some(v) = self.sandbox_field_reads.get_mut(&ctx)
+                        {
+                            let n = v.len().saturating_sub(read_count);
+                            v.truncate(n);
+                        }
+                        let map = if is_append {
+                            &mut self.sandbox_field_appends
+                        } else {
+                            &mut self.sandbox_field_updates
+                        };
+                        map.entry(ctx).or_default().push((sd, field, pos));
+                    } else {
+                        self.sandbox_raw_writes.entry(self.context).or_insert(pos);
+                    }
                 }
                 let var_nr = self.assign_var_nr(code, op, &f_type, &mut parent_tp);
                 // Handle `f += X` for File variables before type-changing logic.

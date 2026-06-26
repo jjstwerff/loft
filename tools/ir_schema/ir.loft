@@ -154,7 +154,8 @@ struct Attribute {     // src/data.rs::Attribute
   check: vector<Node>,
   check_message: vector<Node>,
   alias_d_nr: integer,
-  assigned_lambda_d_nr: integer
+  assigned_lambda_d_nr: integer,
+  links: text                // @PLN86 F8b — group#right member links; "" = unlinked
 }
 
 struct Variable {      // src/variables/mod.rs::Variable (debug-symbol subset)

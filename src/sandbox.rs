@@ -7,9 +7,9 @@
 //!
 //! Nothing here executes — it is policy DATA the compile-time admission walk
 //! reads (`SandboxProfile::allows` is the central capability check used by the
-//! group-membership admission, @PLN86 step 2.3).  Deny-by-default: a capability
-//! group is permitted only when an `allow_caps` entry is a dotted-segment prefix
-//! of it.
+//! group-membership admission, @PLN86 step 2.3).  Deny-by-default: a `group#right`
+//! capability link is permitted only when an `allow` entry has the same right and
+//! its group is a dotted-segment prefix of the link's group.
 
 use crate::data::{Data, DefType, Position, Type, Value};
 use std::collections::{HashMap, HashSet};
@@ -21,18 +21,39 @@ use std::collections::{HashMap, HashSet};
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SandboxProfile {
     /// Libraries allowed **wholesale** (e.g. `"text"`, `"crypto"`).  Every symbol
-    /// from an allow-listed library admits with NO `#cap` tag — a complete,
-    /// host-vetted library is included as a unit.  Tags (`allow_caps`) are only
-    /// for carving a library in half ("include `files`, but reads only").
+    /// from an allow-listed library admits with NO capability link — a complete,
+    /// host-vetted library is included as a unit.  Links (`allow`) are only for
+    /// carving a library in half ("include `files`, but reads only").
     pub allow_libs: Vec<String>,
-    /// Allowed capability-group prefixes (e.g. `"game"`, `"collections.read"`).
-    /// The fine-grained layer, used when a library is NOT allowed wholesale.
-    pub allow_caps: Vec<String>,
-    /// May this profile reach a vetted `[native]` cdylib bridge?  Default false.
-    /// (Interpret-only is NOT a per-profile choice — it is unconditional for ALL
-    /// sandboxed code, enforced by `Parser::sandbox_forces_interpret`: generating
-    /// + compiling Rust on the host is RCE by construction.)
+    /// Granted `group#right` capability tokens (e.g. `"fs#read"`, `"game#update"`).
+    /// The fine-grained layer, used when a library is NOT allowed wholesale.  A
+    /// grant matches a symbol's link when the RIGHT is exactly equal and the
+    /// grant's group is a dotted-segment prefix of the link's group (`"game#read"`
+    /// grants `"game.entity#read"` but NOT `"game#update"`).
+    pub allow: Vec<String>,
+    /// May this profile reach a vetted `[native]` cdylib bridge (dlopen of an external
+    /// crate = RCE)?  Default false — admission rejects a reachable external FFI bridge
+    /// unless this is set.  (This is the surface the dropped interpret-only force was
+    /// really guarding; the admission proof itself is backend-agnostic, so a sandboxed
+    /// program runs on whatever backend the host picks.)
     pub native_ffi: bool,
+    /// @PLN86 §8 (P7.3) — the data envelope.  The host declares the input bounds the
+    /// complexity degrees are expressed in plus a peak-heap budget; admission proves
+    /// the footprint fits or rejects (F11).  `0` = unset: an unset bound that a degree
+    /// actually depends on makes the footprint unprovable (rejected); an unset
+    /// `data_budget` disables the check (report-only).
+    ///
+    /// Largest input collection / range size `n` (the variable the `O(n^d)` degrees
+    /// are in).
+    pub max_input_n: u64,
+    /// Maximum structure nesting depth the host will feed in.
+    pub max_depth: u64,
+    /// Maximum dynamic-string length (bytes) — bounds an otherwise-uncapped string
+    /// allocation (F10).
+    pub max_string_len: u64,
+    /// Peak live-heap budget in bytes.  `coeff · max_input_n^degree` must be ≤ this,
+    /// else the script is rejected at load (F11).  `0` disables the budget check.
+    pub data_budget: u64,
 }
 
 impl SandboxProfile {
@@ -44,17 +65,69 @@ impl SandboxProfile {
         !lib.is_empty() && self.allow_libs.iter().any(|l| l == lib)
     }
 
-    /// True iff a symbol tagged with capability `group` is allowed by this
-    /// profile.  **Deny-by-default**: an empty / untagged group is never allowed,
-    /// and a group is allowed only when some `allow_caps` entry is a
-    /// dotted-segment prefix of it — so `"game"` allows `"game.read"` but NOT
-    /// `"gameover"`, and `"game.read"` is exact (does not match `"game.write"`).
+    /// True iff a symbol's `group#right` capability link `token` is granted by this
+    /// profile.  **Deny-by-default**: a grant matches only when the RIGHT is exactly
+    /// equal AND the grant's group is a dotted-segment prefix of the link's group —
+    /// so `"game#read"` grants `"game.entity#read"` but NOT `"game#update"` (a
+    /// different right) or `"gameover#read"` (not a segment boundary).  A token (or
+    /// grant) without a `#right` matches nothing.
     #[must_use]
-    pub fn allows(&self, group: &str) -> bool {
-        if group.is_empty() {
+    pub fn allows(&self, token: &str) -> bool {
+        let Some((group, right)) = token.split_once('#') else {
+            return false;
+        };
+        if group.is_empty() || right.is_empty() {
             return false;
         }
-        self.allow_caps.iter().any(|a| cap_prefix_match(a, group))
+        self.allow.iter().any(|a| {
+            a.split_once('#')
+                .is_some_and(|(ag, ar)| ar == right && cap_prefix_match(ag, group))
+        })
+    }
+}
+
+/// @PLN86 P6.1 — the access rights a `group#right` capability link selects.
+/// `read` observes (a field read / index read / variant match), `update` mutates an
+/// existing slot in place (`e.health = 0`), `append` introduces something new (grows
+/// a structure, or constructs a host enum variant).  These three are independent, so
+/// an append-only member (grow a log, never alter it) is expressible — `update` does
+/// not imply `append`.
+///
+/// `default` (§7.2, F7) is the odd one out: it tags a function PARAMETER, not a value,
+/// and is the inverse polarity — allow-by-default.  A modder may always call a function
+/// (subject to its call gate) and pass any untagged argument, but a parameter the host
+/// pinned with `…#default` is forced to its default unless the modder ALSO holds the
+/// lock.  So it gates an *argument override*, not a read/write of host state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Right {
+    Read,
+    Update,
+    Append,
+    Default,
+}
+
+impl Right {
+    /// Parse the suffix of a `group#right` token; `None` if `s` is not a known right.
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Right> {
+        match s {
+            "read" => Some(Right::Read),
+            "update" => Some(Right::Update),
+            "append" => Some(Right::Append),
+            "default" => Some(Right::Default),
+            _ => None,
+        }
+    }
+
+    /// The token suffix for this right (`"read"` / `"update"` / `"append"` / `"default"`).
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Right::Read => "read",
+            Right::Update => "update",
+            Right::Append => "append",
+            Right::Default => "default",
+        }
     }
 }
 
@@ -121,7 +194,7 @@ impl SandboxConfig {
 ///
 /// - `[sandbox]` — `profile-name = ["selector", …]` adds a designation per
 ///   selector.
-/// - `[profile.<name>]` — `allow_libs = ["l", …]`, `allow_caps = ["g", …]`,
+/// - `[profile.<name>]` — `allow_libs = ["l", …]`, `allow = ["g#right", …]`,
 ///   `native_ffi = false`.  (Interpret-only is unconditional, not a key here.)
 #[must_use]
 pub fn parse_sandbox_config(content: &str) -> SandboxConfig {
@@ -155,10 +228,16 @@ pub fn parse_sandbox_config(content: &str) -> SandboxConfig {
             let profile = config.profiles.entry(name.to_string()).or_default();
             match key {
                 "allow_libs" => profile.allow_libs = parse_str_list(value),
-                "allow_caps" => profile.allow_caps = parse_str_list(value),
+                "allow" => profile.allow = parse_str_list(value),
                 // `backend` is accepted-and-ignored: interpret-only is unconditional
                 // for sandboxed code, not a per-profile setting (see SandboxProfile).
                 "native_ffi" => profile.native_ffi = value.trim() == "true",
+                // @PLN86 §8 (P7.3) — data-envelope bounds; a bare integer, `0`/absent
+                // = unset.  An underscore-or-comma separator in the figure is tolerated.
+                "max_input_n" => profile.max_input_n = parse_u64(value),
+                "max_depth" => profile.max_depth = parse_u64(value),
+                "max_string_len" => profile.max_string_len = parse_u64(value),
+                "data_budget" => profile.data_budget = parse_u64(value),
                 _ => {}
             }
         }
@@ -166,14 +245,37 @@ pub fn parse_sandbox_config(content: &str) -> SandboxConfig {
     config
 }
 
-/// Drop a trailing `# comment` (loft.toml line comments).  Naive — fine for the
-/// manifest's simple values, which never contain a literal `#`.
+/// Drop a trailing `# comment` (loft.toml line comments).  Quote-aware: a `#`
+/// INSIDE a quoted string is kept, because the `group#right` capability tokens
+/// (`"fs#read"`) carry a literal `#` — only a `#` outside quotes starts a comment.
 fn strip_comment(line: &str) -> &str {
-    line.split_once('#').map_or(line, |(head, _)| head)
+    let mut in_quotes = false;
+    for (i, c) in line.char_indices() {
+        match c {
+            '"' => in_quotes = !in_quotes,
+            '#' if !in_quotes => return &line[..i],
+            _ => {}
+        }
+    }
+    line
 }
 
 /// Parse a value that is either a TOML array `["a", "b"]` or a bare/quoted
 /// scalar into a trimmed, unquoted, non-empty list.
+/// @PLN86 §8 — parse a data-envelope figure: a bare unsigned integer, tolerating
+/// `_`/`,` digit groupers and surrounding quotes (`"1_000_000"`).  Unparseable / empty
+/// → `0` (treated as unset).
+fn parse_u64(value: &str) -> u64 {
+    value
+        .trim()
+        .trim_matches('"')
+        .chars()
+        .filter(char::is_ascii_digit)
+        .collect::<String>()
+        .parse()
+        .unwrap_or(0)
+}
+
 fn parse_str_list(value: &str) -> Vec<String> {
     let inner = value
         .trim()
@@ -321,7 +423,7 @@ pub fn reachable_ffi_bridges(data: &Data, reachable: &HashSet<u32>) -> Vec<u32> 
 /// def that makes the reference, `symbol` the trusted def it reaches.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CapViolation {
-    /// `symbol`'s `#cap` group is not a prefix of any `allow_caps` entry.
+    /// `symbol`'s `#cap` link is not granted by any `allow` entry.
     UngrantedCap {
         from: u32,
         symbol: u32,
@@ -363,7 +465,7 @@ pub fn def_library(data: &Data, def_nr: u32) -> Option<String> {
 /// references (a non-sandboxed leaf, §4) is admitted if **either**:
 ///   1. its **library** is allow-listed wholesale (`allow_libs`) — a complete,
 ///      host-vetted library is included as a unit, NO `#cap` tag needed; or
-///   2. its `#cap` **group** is allow-listed (`allow_caps`) — the fine-grained
+///   2. its `#cap` **link** is granted (`allow`) — the fine-grained
 ///      layer, for carving a library in half ("include `files`, reads only").
 ///
 /// A symbol in no allowed library and with no allowed cap is the violation.  A
@@ -435,7 +537,7 @@ pub fn admit_capabilities(
 }
 
 /// @PLN86 step 2.2 — the capability-coverage lint (L3-cap): every public function
-/// the host exposes must carry a `#cap "group"`, or admission can only deny-by-
+/// the host exposes must carry a `group#right` call-gate link, or admission can only deny-by-
 /// default reject it.  Returns the public, non-synthetic function defs that lack
 /// a group, sorted — the work-list for tagging the stdlib / library surface.  The
 /// END state is an empty result; until the surface is tagged this lists it.
@@ -538,11 +640,11 @@ pub fn describe_violation(
         reference_position(data, from, symbol).unwrap_or_else(|| data.def(from).position().clone());
     let profile = sandboxed.get(&from).and_then(|n| config.profiles.get(n));
     let allowed_libs = profile.map(|p| p.allow_libs.join(", ")).unwrap_or_default();
-    let allowed_caps = profile.map(|p| p.allow_caps.join(", ")).unwrap_or_default();
+    let allowed_caps = profile.map(|p| p.allow.join(", ")).unwrap_or_default();
     match v {
         CapViolation::UngrantedCap { group, .. } => format!(
             "{pos}: sandboxed `{from_name}` reaches `{sym_name}`, which needs capability \
-             `{group}` — not granted.\n  fix: add `{group}` to `allow_caps`, or add its \
+             `{group}` — not granted.\n  fix: add `{group}` to `allow`, or add its \
              library `{libhint}` to `allow_libs`.\n  allowed capabilities: [{allowed_caps}]"
         ),
         CapViolation::UntaggedSymbol { .. } => format!(
@@ -1076,33 +1178,64 @@ fn collect_set_targets(v: &Value, out: &mut HashSet<u16>) {
     });
 }
 
+/// @PLN86 P7.1 — heap bytes one appended element costs in the COLLECTION's backing,
+/// given the collection var's type (the append's first arg): the per-element SLOT
+/// size (`element_size`) — a dense scalar (`i64` = 8), or the `DbRef` slot of a
+/// reference / struct / enum-struct element (a `vector<Mob>` stores nullable-enum
+/// DbRef slots).  This is the backing footprint per element.  KNOWN v1 under-count:
+/// the separately-allocated record BODIES (a `Mob`'s own record, a nested
+/// collection's backing) are NOT added here — the same gap §8 already documents;
+/// tightening it means deep-sizing through the nullable wrappers.  A keyed
+/// collection's element is its declared record (also a DbRef slot).
+fn appended_record_size(vars: &crate::variables::Function, var_nr: u16) -> u32 {
+    let elem: Type = match vars.tp(var_nr) {
+        Type::Vector(e, _) => (**e).clone(),
+        Type::Sorted(nr, _, _)
+        | Type::Index(nr, _, _)
+        | Type::Hash(nr, _, _)
+        | Type::Spacial(nr, _, _) => Type::Reference(*nr, crate::data::Deps::none()),
+        _ => return 0,
+    };
+    crate::data::element_size(&elem) as u32
+}
+
 /// @PLN86 space budget — one def's intrinsic SPACE complexity: the deepest loop
 /// nesting at which an in-place append (`OpAppend*`) grows a structure NOT reset
 /// inside that loop (declared in an enclosing scope), so it ACCUMULATES across the
-/// iterations (`O(n)` per nesting level).  Plus every call with its loop nesting
-/// for the inter-procedural composition (`space_degree`).  Conservative — a
-/// transient buffer (reset each iteration) is O(1) and excluded; the `Iter` init's
-/// once-run allocation is counted in-loop (a safe over-count, like 3.4b).  KNOWN
-/// GAPS (v1 under-models, future tightening): a concat-reassign `v = v + [x]` and a
-/// call returning a kept growing structure are not yet treated as accumulation.
-fn intrinsic_space(data: &Data, f: u32) -> (u32, Vec<(u32, u32)>) {
-    fn scan(
-        data: &Data,
-        v: &Value,
-        nesting: u32,
-        reset: &mut HashSet<u16>,
-        max_leaf: &mut u32,
-        calls: &mut Vec<(u32, u32)>,
-    ) {
+/// iterations (`O(n)` per nesting level); PLUS the coefficient `Σ record_size` over
+/// those accumulating sites (P7.1).  Plus every call with its loop nesting for the
+/// inter-procedural composition (`space_degree`).  Conservative — a transient buffer
+/// (reset each iteration) is O(1) and excluded; the `Iter` init's once-run allocation
+/// is counted in-loop (a safe over-count, like 3.4b).  KNOWN GAPS (v1 under-models,
+/// future tightening): a concat-reassign `v = v + [x]` and a call returning a kept
+/// growing structure are not yet treated as accumulation.
+fn intrinsic_space(data: &Data, f: u32) -> (u32, u32, bool, Vec<(u32, u32)>) {
+    /// Accumulator threaded through the space scan (bundled so the recursion stays
+    /// within clippy's argument limit): vars reset inside the current loop, the
+    /// deepest accumulating nesting, the coefficient, whether a dynamic STRING grows
+    /// unboundedly (F10 — its byte size is not a fixed record stride, so it is invisible
+    /// to `coeff`), and the outgoing calls.
+    struct St<'a> {
+        vars: &'a crate::variables::Function,
+        reset: HashSet<u16>,
+        max_leaf: u32,
+        coeff: u32,
+        text_growth: bool,
+        calls: Vec<(u32, u32)>,
+    }
+    fn scan(data: &Data, v: &Value, nesting: u32, st: &mut St) {
         match v {
             Value::Loop(_) | Value::Iter(..) | Value::ParFor(_) => {
                 // vars reset somewhere in this loop don't accumulate across it.
                 let mut targets = HashSet::new();
                 collect_set_targets(v, &mut targets);
-                let fresh: Vec<u16> = targets.into_iter().filter(|t| reset.insert(*t)).collect();
-                v.for_each_child(&mut |c| scan(data, c, nesting + 1, reset, max_leaf, calls));
+                let fresh: Vec<u16> = targets
+                    .into_iter()
+                    .filter(|t| st.reset.insert(*t))
+                    .collect();
+                v.for_each_child(&mut |c| scan(data, c, nesting + 1, st));
                 for t in fresh {
-                    reset.remove(&t);
+                    st.reset.remove(&t);
                 }
                 return;
             }
@@ -1115,53 +1248,81 @@ fn intrinsic_space(data: &Data, f: u32) -> (u32, Vec<(u32, u32)>) {
                 if nm.starts_with("OpAppend") || nm.starts_with("OpPreAlloc") {
                     if nesting > 0
                         && let Some(Value::Var(t)) = args.first().map(Value::unspan)
-                        && !reset.contains(t)
+                        && !st.reset.contains(t)
                     {
-                        *max_leaf = (*max_leaf).max(nesting);
+                        st.max_leaf = st.max_leaf.max(nesting);
+                        st.coeff += appended_record_size(st.vars, *t);
+                        // A growing TEXT has no fixed record stride — its byte length
+                        // is unbounded, so `coeff` cannot see it; flag it for F10.  The
+                        // var is a `text` or a promoted `&text` work-ref (text-return).
+                        let is_text = match st.vars.tp(*t) {
+                            Type::Text(_) => true,
+                            Type::RefVar(inner) => matches!(**inner, Type::Text(_)),
+                            _ => false,
+                        };
+                        if is_text {
+                            st.text_growth = true;
+                        }
                     }
                 } else {
-                    calls.push((nesting, *g));
+                    st.calls.push((nesting, *g));
                 }
             }
             _ => {}
         }
-        v.for_each_child(&mut |c| scan(data, c, nesting, reset, max_leaf, calls));
+        v.for_each_child(&mut |c| scan(data, c, nesting, st));
     }
-    let (mut max_leaf, mut calls, mut reset) = (0, Vec::new(), HashSet::new());
-    scan(
-        data,
-        &data.def(f).code,
-        0,
-        &mut reset,
-        &mut max_leaf,
-        &mut calls,
-    );
-    (max_leaf, calls)
+    let def = data.def(f);
+    let mut st = St {
+        vars: &def.variables,
+        reset: HashSet::new(),
+        max_leaf: 0,
+        coeff: 0,
+        text_growth: false,
+        calls: Vec::new(),
+    };
+    scan(data, &def.code, 0, &mut st);
+    (st.max_leaf, st.coeff, st.text_growth, st.calls)
 }
 
-/// @PLN86 space budget — the polynomial DEGREE of `f`'s worst-case PEAK heap in the
-/// input size: `max(intrinsic accumulation, loop_nesting + space_degree(callee))`.
-/// Acyclic (3.2) so this terminates; `in_progress` is a defensive backstop.
+/// @PLN86 §8 (F10) — does any sandboxed def grow a dynamic STRING unboundedly (an
+/// `OpAppend*` to a `text` var inside a loop, not reset there)?  Such a build has no
+/// fixed record stride, so the F9 coefficient is blind to it; F10 rejects it unless the
+/// profile caps strings with `max_string_len`.  Intra-procedural (the append + its
+/// enclosing loop in one def) — a string grown across a call boundary is a documented
+/// v1 gap, like the inter-procedural coeff case.
+#[must_use]
+pub fn sandbox_grows_unbounded_string(data: &Data, sandboxed: &HashMap<u32, String>) -> bool {
+    sandboxed.keys().any(|&f| intrinsic_space(data, f).2)
+}
+
+/// @PLN86 space budget — `f`'s worst-case PEAK heap as `(degree, coeff)`: the
+/// polynomial DEGREE in the input size (`max(intrinsic accumulation, loop_nesting +
+/// callee degree)`) and the COEFFICIENT `Σ record_size` over its accumulating sites
+/// plus those of every accumulating callee (P7.1).  Acyclic (3.2) so this terminates;
+/// `in_progress` is a defensive backstop.
 fn space_degree(
     data: &Data,
     sandboxed: &HashMap<u32, String>,
     f: u32,
-    memo: &mut HashMap<u32, u32>,
+    memo: &mut HashMap<u32, (u32, u32)>,
     in_progress: &mut HashSet<u32>,
-) -> u32 {
+) -> (u32, u32) {
     if let Some(&d) = memo.get(&f) {
         return d;
     }
     if !in_progress.insert(f) {
-        return 0;
+        return (0, 0);
     }
-    let (max_leaf, calls) = intrinsic_space(data, f);
+    // `text_growth` (`.2`) is handled by `sandbox_grows_unbounded_string` (F10),
+    // not the degree/coeff footprint, so it is ignored here.
+    let (max_leaf, mut coeff, _text_growth, calls) = intrinsic_space(data, f);
     let mut degree = max_leaf;
     for (nesting, callee) in calls {
-        let callee_degree = if sandboxed.contains_key(&callee) {
+        let (callee_degree, callee_coeff) = if sandboxed.contains_key(&callee) {
             space_degree(data, sandboxed, callee, memo, in_progress)
         } else {
-            0
+            (0, 0)
         };
         // Only a callee that ITSELF accumulates composes (its internal O(n^s)
         // build, run under the caller's loops).  A non-accumulating call — a
@@ -1171,11 +1332,12 @@ fn space_degree(
         // which adds `nesting` for every call.)
         if callee_degree > 0 {
             degree = degree.max(nesting + callee_degree);
+            coeff += callee_coeff;
         }
     }
     in_progress.remove(&f);
-    memo.insert(f, degree);
-    degree
+    memo.insert(f, (degree, coeff));
+    (degree, coeff)
 }
 
 /// @PLN86 space budget — worst-case SPACE degree over all sandboxed entries: peak
@@ -1185,12 +1347,26 @@ fn space_degree(
 /// analogue of the time budget (3.4) for memory.
 #[must_use]
 pub fn sandbox_space_degree(data: &Data, sandboxed: &HashMap<u32, String>) -> u32 {
+    sandbox_space_footprint(data, sandboxed).0
+}
+
+/// @PLN86 P7.1 — the worst-case peak-heap FOOTPRINT shape `(degree, coeff)` over all
+/// sandboxed entries: peak heap is bounded by `coeff · n^degree` bytes in the largest
+/// input `n`.  `degree` is the max over entries; `coeff` sums their per-entry
+/// coefficients (conservative — entries that share an accumulating callee count it in
+/// each, an over-estimate that never under-bounds).  F11 compares `coeff ·
+/// max_input_n^degree` against the profile's `data_budget`.
+#[must_use]
+pub fn sandbox_space_footprint(data: &Data, sandboxed: &HashMap<u32, String>) -> (u32, u32) {
     let (mut memo, mut in_progress) = (HashMap::new(), HashSet::new());
-    sandboxed
-        .keys()
-        .map(|&f| space_degree(data, sandboxed, f, &mut memo, &mut in_progress))
-        .max()
-        .unwrap_or(0)
+    let mut degree = 0;
+    let mut coeff = 0u32;
+    for &f in sandboxed.keys() {
+        let (d, c) = space_degree(data, sandboxed, f, &mut memo, &mut in_progress);
+        degree = degree.max(d);
+        coeff = coeff.saturating_add(c);
+    }
+    (degree, coeff)
 }
 
 /// @PLN86 — the human-readable complexity report (the L5 host hint): worst-case
@@ -1256,6 +1432,347 @@ pub fn describe_raw_write_violation(data: &Data, v: &RawWriteViolation) -> Strin
     )
 }
 
+/// @PLN86 P6.4 (F4) — a sandboxed read of a host field whose `#read` capability the
+/// active profile does not grant.  Reads are default-allow, so this fires only on a
+/// field the host explicitly marked private with a `#read` link.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FieldReadViolation {
+    pub def: u32,
+    pub token: String,
+    pub position: Position,
+}
+
+/// @PLN86 P6.4 (F4) — the field-read admission: every recorded sandboxed read of a
+/// `#read`-linked host field whose token the reading def's profile does not grant.
+#[must_use]
+pub fn field_read_violations(
+    config: &SandboxConfig,
+    sandboxed: &HashMap<u32, String>,
+    field_reads: &HashMap<u32, Vec<(String, Position)>>,
+) -> Vec<FieldReadViolation> {
+    let mut out = Vec::new();
+    for (&def, reads) in field_reads {
+        if !sandboxed.contains_key(&def) {
+            continue;
+        }
+        let profile = config.profiles.get(&sandboxed[&def]);
+        for (token, position) in reads {
+            if !profile.is_some_and(|p| p.allows(token)) {
+                out.push(FieldReadViolation {
+                    def,
+                    token: token.clone(),
+                    position: position.clone(),
+                });
+            }
+        }
+    }
+    out.sort_by(|a, b| a.def.cmp(&b.def).then_with(|| a.token.cmp(&b.token)));
+    out
+}
+
+/// @PLN86 P6.4 (F4) — render a field-read violation as an actionable error.
+#[must_use]
+pub fn describe_field_read_violation(data: &Data, v: &FieldReadViolation) -> String {
+    let from = display_name(data, v.def);
+    format!(
+        "{}: sandboxed `{from}` reads a host field that needs capability `{}` — not \
+         granted.\n  fix: add `{}` to `allow`, or read only fields the profile permits.",
+        v.position, v.token, v.token
+    )
+}
+
+/// @PLN86 P6.4 (F5) — a sandboxed raw write (`e.f = v`) of a host field whose
+/// `#update` capability the active profile does not grant.  Only a field that
+/// CARRIES an `#update` link reaches here (a field with none stays the coarse 2.4
+/// reject); so this fires exactly when the writable field's token is not granted.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FieldUpdateViolation {
+    pub def: u32,
+    pub field: String,
+    pub token: String,
+    pub position: Position,
+}
+
+/// @PLN86 P6.4 (F5) — the field-update admission: every recorded sandboxed write of
+/// an `#update`-linked host field whose token the writing def's profile does not grant.
+#[must_use]
+pub fn field_update_violations(
+    config: &SandboxConfig,
+    sandboxed: &HashMap<u32, String>,
+    member_access: &HashMap<(u32, String), Vec<String>>,
+    field_updates: &HashMap<u32, Vec<(u32, String, Position)>>,
+) -> Vec<FieldUpdateViolation> {
+    let mut out = Vec::new();
+    for (&def, writes) in field_updates {
+        if !sandboxed.contains_key(&def) {
+            continue;
+        }
+        let profile = config.profiles.get(&sandboxed[&def]);
+        for (struct_def, field, position) in writes {
+            let updates = member_access
+                .get(&(*struct_def, field.clone()))
+                .into_iter()
+                .flatten()
+                .filter(|t| t.ends_with("#update"));
+            for token in updates {
+                if !profile.is_some_and(|p| p.allows(token)) {
+                    out.push(FieldUpdateViolation {
+                        def,
+                        field: field.clone(),
+                        token: token.clone(),
+                        position: position.clone(),
+                    });
+                }
+            }
+        }
+    }
+    out.sort_by(|a, b| a.def.cmp(&b.def).then_with(|| a.field.cmp(&b.field)));
+    out
+}
+
+/// @PLN86 P6.4 (F5) — render a field-update violation as an actionable error.
+#[must_use]
+pub fn describe_field_update_violation(data: &Data, v: &FieldUpdateViolation) -> String {
+    let from = display_name(data, v.def);
+    format!(
+        "{}: sandboxed `{from}` writes host field `{}`, which needs capability `{}` — not \
+         granted.\n  fix: add `{}` to `allow`, or mutate only fields the profile permits.",
+        v.position, v.field, v.token, v.token
+    )
+}
+
+/// @PLN86 P6.4 (F6) — a sandboxed APPEND (`e.f += x`, growing a collection) to a host
+/// field whose `#append` capability the active profile does not grant.  Only a field
+/// that CARRIES an `#append` link reaches here (a `+=` without one is an `#update` or a
+/// coarse reject); so this fires exactly when the appendable field's token is ungranted.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FieldAppendViolation {
+    pub def: u32,
+    pub field: String,
+    pub token: String,
+    pub position: Position,
+}
+
+/// @PLN86 P6.4 (F6) — the field-append admission: every recorded sandboxed append to an
+/// `#append`-linked host field whose token the writing def's profile does not grant.
+#[must_use]
+pub fn field_append_violations(
+    config: &SandboxConfig,
+    sandboxed: &HashMap<u32, String>,
+    member_access: &HashMap<(u32, String), Vec<String>>,
+    field_appends: &HashMap<u32, Vec<(u32, String, Position)>>,
+) -> Vec<FieldAppendViolation> {
+    let mut out = Vec::new();
+    for (&def, writes) in field_appends {
+        if !sandboxed.contains_key(&def) {
+            continue;
+        }
+        let profile = config.profiles.get(&sandboxed[&def]);
+        for (struct_def, field, position) in writes {
+            let appends = member_access
+                .get(&(*struct_def, field.clone()))
+                .into_iter()
+                .flatten()
+                .filter(|t| t.ends_with("#append"));
+            for token in appends {
+                if !profile.is_some_and(|p| p.allows(token)) {
+                    out.push(FieldAppendViolation {
+                        def,
+                        field: field.clone(),
+                        token: token.clone(),
+                        position: position.clone(),
+                    });
+                }
+            }
+        }
+    }
+    out.sort_by(|a, b| a.def.cmp(&b.def).then_with(|| a.field.cmp(&b.field)));
+    out
+}
+
+/// @PLN86 P6.4 (F6) — render a field-append violation as an actionable error.
+#[must_use]
+pub fn describe_field_append_violation(data: &Data, v: &FieldAppendViolation) -> String {
+    let from = display_name(data, v.def);
+    format!(
+        "{}: sandboxed `{from}` appends to host field `{}`, which needs capability `{}` — \
+         not granted.\n  fix: add `{}` to `allow`, or grow only fields the profile permits.",
+        v.position, v.field, v.token, v.token
+    )
+}
+
+/// @PLN86 §7.2 (F7) — a sandboxed call site OVERRODE a parameter the host pinned with a
+/// `…#default` lock, but the active profile does not grant the lock.  An argument equal
+/// to the parameter's default is NOT an override (the default is what the lock pins to),
+/// so only a value that DIFFERS reaches here — and then the modder needs the lock.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParamLockViolation {
+    /// The sandboxed def whose body holds the overriding call.
+    pub def: u32,
+    /// The lock token written on the parameter (e.g. `"spawn.count#default"`).
+    pub token: String,
+    pub position: Position,
+}
+
+/// @PLN86 §7.2 (F7) — the parameter-lock admission: every recorded sandboxed override of
+/// a `…#default`-locked parameter whose lock token the overriding def's profile does not
+/// grant.  `overrides` is keyed by the calling def → each `(lock token, position)` of an
+/// argument that differed from the locked parameter's default.
+#[must_use]
+pub fn param_lock_violations(
+    config: &SandboxConfig,
+    sandboxed: &HashMap<u32, String>,
+    overrides: &HashMap<u32, Vec<(String, Position)>>,
+) -> Vec<ParamLockViolation> {
+    let mut out = Vec::new();
+    for (&def, calls) in overrides {
+        if !sandboxed.contains_key(&def) {
+            continue;
+        }
+        let profile = config.profiles.get(&sandboxed[&def]);
+        for (token, position) in calls {
+            if !profile.is_some_and(|p| p.allows(token)) {
+                out.push(ParamLockViolation {
+                    def,
+                    token: token.clone(),
+                    position: position.clone(),
+                });
+            }
+        }
+    }
+    out.sort_by(|a, b| a.def.cmp(&b.def).then_with(|| a.token.cmp(&b.token)));
+    out
+}
+
+/// @PLN86 §7.2 (F7) — render a parameter-lock violation as an actionable error.
+#[must_use]
+pub fn describe_param_lock_violation(data: &Data, v: &ParamLockViolation) -> String {
+    let from = display_name(data, v.def);
+    format!(
+        "{}: sandboxed `{from}` overrides a parameter the host pinned with `{}` — not \
+         granted.\n  fix: add `{}` to `allow`, or omit the argument so it keeps its default.",
+        v.position, v.token, v.token
+    )
+}
+
+/// @PLN86 §8 (F11) — a data-envelope violation: the proven worst-case peak heap does
+/// not fit the profile's declared `data_budget`, or cannot be bounded because a degree
+/// depends on an unset `max_input_n`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DataViolation {
+    /// `coeff · max_input_n^degree` bytes exceeds `data_budget`.
+    OverBudget {
+        profile: String,
+        figure: u64,
+        budget: u64,
+        degree: u32,
+        coeff: u32,
+        max_input_n: u64,
+    },
+    /// Peak heap grows with input (degree > 0) but `max_input_n` is unset, so the
+    /// figure cannot be bounded — deny-by-default.
+    Unprovable { profile: String, degree: u32 },
+    /// @PLN86 §8 (F10) — a dynamic string grows unboundedly (no fixed record stride,
+    /// invisible to `coeff`) and the profile caps no string length, so the footprint
+    /// cannot be bounded.
+    UnboundedAlloc { profile: String },
+}
+
+/// `coeff · n^degree`, saturating: a genuinely over-budget figure can overflow `u64`,
+/// and saturation preserves the only fact we need ("exceeds the budget").
+fn footprint_bytes(coeff: u32, n: u64, degree: u32) -> u64 {
+    let mut v = u64::from(coeff);
+    for _ in 0..degree {
+        v = v.saturating_mul(n);
+    }
+    v
+}
+
+/// @PLN86 §8 (F11) — the data-envelope admission: for every designated profile that
+/// sets a `data_budget`, prove the sandboxed code's worst-case peak heap
+/// (`coeff · max_input_n^degree`, the P7.1 footprint) fits — else reject.  A non-zero
+/// degree with an unset `max_input_n` is unprovable (rejected, deny-by-default).  A
+/// profile without a `data_budget` is report-only (skipped).  The footprint is the
+/// program-global one; a single-profile sandbox (the norm) is exact, a multi-profile
+/// one is checked conservatively against each budget.
+#[must_use]
+pub fn data_envelope_violations(
+    data: &Data,
+    config: &SandboxConfig,
+    sandboxed: &HashMap<u32, String>,
+) -> Vec<DataViolation> {
+    let (degree, coeff) = sandbox_space_footprint(data, sandboxed);
+    let grows_string = sandbox_grows_unbounded_string(data, sandboxed);
+    let mut profiles: Vec<&String> = sandboxed.values().collect();
+    profiles.sort();
+    profiles.dedup();
+    let mut out = Vec::new();
+    for pname in profiles {
+        let Some(p) = config.profiles.get(pname) else {
+            continue;
+        };
+        if p.data_budget == 0 {
+            continue; // no envelope declared → report-only (F10 + F11 both opt-in)
+        }
+        // @PLN86 §8 (F10) — a dynamic string growing under an ACTIVE envelope must be
+        // capped, else the footprint is unbounded (and `coeff` cannot see it).
+        if grows_string && p.max_string_len == 0 {
+            out.push(DataViolation::UnboundedAlloc {
+                profile: pname.clone(),
+            });
+        }
+        if degree > 0 && p.max_input_n == 0 {
+            out.push(DataViolation::Unprovable {
+                profile: pname.clone(),
+                degree,
+            });
+            continue;
+        }
+        let figure = footprint_bytes(coeff, p.max_input_n, degree);
+        if figure > p.data_budget {
+            out.push(DataViolation::OverBudget {
+                profile: pname.clone(),
+                figure,
+                budget: p.data_budget,
+                degree,
+                coeff,
+                max_input_n: p.max_input_n,
+            });
+        }
+    }
+    out
+}
+
+/// @PLN86 §8 (F11) — render a data-envelope violation as an actionable error naming
+/// the figure and the fix.
+#[must_use]
+pub fn describe_data_violation(v: &DataViolation) -> String {
+    match v {
+        DataViolation::OverBudget {
+            profile,
+            figure,
+            budget,
+            degree,
+            coeff,
+            max_input_n,
+        } => format!(
+            "profile `{profile}`: sandboxed worst-case peak heap ~{figure} bytes \
+             ({coeff} · {max_input_n}^{degree}) exceeds data_budget {budget}.\n  fix: \
+             raise data_budget, lower max_input_n, or build less per input."
+        ),
+        DataViolation::Unprovable { profile, degree } => format!(
+            "profile `{profile}`: peak heap grows as O(n^{degree}) but max_input_n is \
+             unset, so the footprint cannot be bounded.\n  fix: set max_input_n in the \
+             profile, or remove the input-growing allocation."
+        ),
+        DataViolation::UnboundedAlloc { profile } => format!(
+            "profile `{profile}`: a dynamic string grows unboundedly in a loop, so its \
+             heap size cannot be bounded.\n  fix: set max_string_len in the profile to \
+             cap it, or build the string outside the loop."
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1274,19 +1791,25 @@ mod tests {
     #[test]
     fn allows_is_deny_by_default() {
         let p = SandboxProfile {
-            allow_caps: vec!["game.read".into(), "math".into(), "collections.read".into()],
+            allow: vec![
+                "game#read".into(),
+                "math#read".into(),
+                "collections#read".into(),
+            ],
             ..SandboxProfile::default()
         };
-        assert!(p.allows("game.read"));
-        assert!(p.allows("math")); // exact whole-lib
-        assert!(p.allows("math.trig")); // child of an allowed prefix
-        assert!(p.allows("collections.read"));
-        assert!(!p.allows("collections.write")); // sibling — denied
-        assert!(!p.allows("fs.read")); // not listed — denied
-        assert!(!p.allows("game.write")); // sibling — denied
-        assert!(!p.allows("")); // untagged — denied
+        assert!(p.allows("game#read"));
+        assert!(p.allows("math#read"));
+        assert!(p.allows("math.trig#read")); // group child of an allowed prefix, same right
+        assert!(p.allows("game.entity#read")); // group child of `game`, same right
+        assert!(p.allows("collections#read"));
+        assert!(!p.allows("collections#update")); // same group, different right — denied
+        assert!(!p.allows("game#update")); // same group, different right — denied
+        assert!(!p.allows("fs#read")); // group not listed — denied
+        assert!(!p.allows("game")); // no `#right` — denied
+        assert!(!p.allows("")); // empty — denied
         // an empty profile denies everything
-        assert!(!SandboxProfile::default().allows("math"));
+        assert!(!SandboxProfile::default().allows("math#read"));
     }
 
     #[test]
@@ -1301,7 +1824,7 @@ mod-script = ["mods/**/*.loft", "fn:player_eval"]
 [profile.mod-script]
 backend = "interpret"
 native_ffi = false
-allow_caps = ["game.read", "game.write", "math", "collections.read"]
+allow = ["game#read", "game#update", "math#read", "collections#read"]
 "#;
         let cfg = parse_sandbox_config(toml);
         assert!(cfg.is_active());
@@ -1316,14 +1839,43 @@ allow_caps = ["game.read", "game.write", "math", "collections.read"]
         );
         let p = cfg.profiles.get("mod-script").expect("profile present");
         assert!(!p.native_ffi);
-        assert!(p.allows("game.write"));
-        assert!(p.allows("collections.read"));
-        assert!(!p.allows("fs.read")); // not granted
-        assert!(!p.allows("collections.write")); // sibling denied
+        assert!(p.allows("game#update"));
+        assert!(p.allows("collections#read"));
+        assert!(!p.allows("fs#read")); // group not granted
+        assert!(!p.allows("collections#update")); // same group, different right — denied
         // resolve a designation to its profile
         assert!(
             cfg.profile_for_selector("mods/**/*.loft")
-                .is_some_and(|p| p.allows("math"))
+                .is_some_and(|p| p.allows("math#read"))
+        );
+    }
+
+    #[test]
+    fn parses_data_envelope_fields() {
+        let toml = r#"
+[sandbox]
+mod = ["fn:eval"]
+
+[profile.mod]
+allow_libs = ["code"]
+max_input_n = 10000
+max_depth = 64
+max_string_len = 256
+data_budget = "8_000_000"
+"#;
+        let cfg = parse_sandbox_config(toml);
+        let p = cfg.profiles.get("mod").expect("profile present");
+        assert_eq!(p.max_input_n, 10000);
+        assert_eq!(p.max_depth, 64);
+        assert_eq!(p.max_string_len, 256);
+        assert_eq!(p.data_budget, 8_000_000, "underscore-grouped figure parses");
+        // an absent envelope field stays 0 (unset).
+        let bare = parse_sandbox_config("[sandbox]\nm = [\"fn:e\"]\n[profile.m]\n");
+        let bp = bare.profiles.get("m").expect("profile present");
+        assert_eq!(
+            (bp.max_input_n, bp.data_budget),
+            (0, 0),
+            "absent → unset (0)"
         );
     }
 
@@ -1342,9 +1894,9 @@ allow_caps = ["game.read", "game.write", "math", "collections.read"]
     fn empty_profile_section_registers_a_deny_all_profile() {
         let cfg = parse_sandbox_config("[sandbox]\nlocked = [\"a.loft\"]\n[profile.locked]\n");
         let p = cfg.profiles.get("locked").expect("registered");
-        assert!(p.allow_caps.is_empty());
+        assert!(p.allow.is_empty());
         assert!(p.allow_libs.is_empty());
-        assert!(!p.allows("game.read")); // deny-all by default
+        assert!(!p.allows("game#read")); // deny-all by default
         assert!(!p.native_ffi); // safe default
     }
 

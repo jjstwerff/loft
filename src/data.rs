@@ -2198,6 +2198,13 @@ pub struct Attribute {
     /// lambdas with different capture schemas) are rejected at the
     /// second assignment site by `set_field_check`.
     pub assigned_lambda_d_nr: u32,
+    /// @PLN86 P6.8 (F8b) — the `group#right` capability links the host put on this
+    /// member: a struct field's read/update/append rights, or a function parameter's
+    /// `…#default` lock.  The single home for both (one fact, one place), so they
+    /// round-trip through the IR store (`ATTR_LINKS`) — a warm-cached host type / library
+    /// keeps its links instead of losing them with the parser side-maps.  Empty = an
+    /// unlinked member.
+    pub links: Vec<String>,
 }
 
 impl Debug for Attribute {
@@ -2440,10 +2447,11 @@ pub struct Definition {
     pub rust: String,
     /// Native symbol name for `#native "symbol"` extern dispatch; empty if not native.
     pub native: String,
-    /// `#cap "group"` capability group this function represents (@PLN86); empty if
-    /// unannotated.  The sandbox admission walk gates a TRUSTED symbol against the
-    /// active profile's allowed groups; a sandboxed def's own `#cap` is ignored
-    /// (its capabilities derive from what it reaches, not a self-label).
+    /// The function's call-gate capability link — a `group#right` token written in
+    /// the signature (@PLN86, e.g. `fs#read`); empty if unlinked.  The sandbox
+    /// admission walk gates a TRUSTED symbol against the active profile's grants; a
+    /// sandboxed def's own link is ignored (its capabilities derive from what it
+    /// reaches, not a self-label).
     ///
     /// Persisted through the IR store (`DEF_CAP`) so a `#cap`-tagged stdlib loaded
     /// from the `LOFT_STDLIB_CACHE` bundle still gates correctly; mirrored in
@@ -2561,7 +2569,7 @@ impl Definition {
         &self.native
     }
 
-    /// `#cap "group"` capability group (@PLN86), or empty if unannotated.
+    /// The function's `group#right` call-gate link (@PLN86), or empty if unlinked.
     #[must_use]
     pub fn cap(&self) -> &str {
         &self.cap
@@ -3377,6 +3385,7 @@ impl Data {
             check_message: Value::Null,
             alias_d_nr: u32::MAX,
             assigned_lambda_d_nr: u32::MAX,
+            links: Vec::new(),
         };
         let next_attr = self.def(on_def).attributes.len();
         let def = &mut self.definitions[on_def as usize];

@@ -678,6 +678,12 @@ fn read_attribute(stores: &Stores, r: Record) -> Attribute {
         check_message: read_node_child(stores, r.field_vec(ds::ATTR_CHECK_MESSAGE)),
         alias_d_nr: r.field_int(stores, ds::ATTR_ALIAS_D_NR) as u32,
         assigned_lambda_d_nr: r.field_int(stores, ds::ATTR_ASSIGNED_LAMBDA_D_NR) as u32,
+        // @PLN86 F8b — restore the group#right member links (space-joined; "" = none).
+        links: r
+            .field_str(stores, ds::ATTR_LINKS)
+            .split_whitespace()
+            .map(str::to_string)
+            .collect(),
     }
 }
 
@@ -1431,12 +1437,12 @@ mod tests {
 
         let mut p = crate::parser::Parser::new();
         p.parse_dir("default", true, false).expect("parse stdlib");
-        let src = "fn capped() -> integer;\n#native\n#cap \"fs.read\"\n";
+        let src = "fn capped() -> integer fs#read;\n#native\n";
         let lpath = std::env::temp_dir().join(format!("loft_cap_rt_{}.loft", std::process::id()));
         std::fs::write(&lpath, src).unwrap();
         p.parse(lpath.to_str().unwrap(), false);
         let _ = std::fs::remove_file(&lpath);
-        assert_eq!(p.data.def(p.data.def_nr("n_capped")).cap(), "fs.read");
+        assert_eq!(p.data.def(p.data.def_nr("n_capped")).cap(), "fs#read");
 
         let fresh = p.data;
         let spath = std::env::temp_dir().join(format!("loft_cap_rt_{}.store", std::process::id()));
@@ -1446,10 +1452,49 @@ mod tests {
         let _ = std::fs::remove_file(&spath);
         assert_eq!(
             loaded.def(loaded.def_nr("n_capped")).cap(),
-            "fs.read",
+            "fs#read",
             "cap must survive the store round-trip"
         );
         crate::ir_schema::compare_data(&fresh, &loaded).expect("round-trip equal incl. cap");
+    }
+
+    /// @PLN86 F8b — a member's `group#right` capability links survive the store
+    /// round-trip (the `LOFT_STDLIB_CACHE` path), so a warm-cached host type / library
+    /// keeps its field-access rights instead of losing them with the parser side-maps.
+    /// Without persistence the links reload empty and admission silently over-rejects.
+    #[cfg(feature = "mmap")]
+    #[test]
+    fn member_links_survive_store_round_trip() {
+        use crate::data::Data;
+
+        let mut p = crate::parser::Parser::new();
+        p.parse_dir("default", true, false).expect("parse stdlib");
+        let src = "struct Inv { items: integer }\n";
+        let lpath = std::env::temp_dir().join(format!("loft_ml_rt_{}.loft", std::process::id()));
+        std::fs::write(&lpath, src).unwrap();
+        p.parse(lpath.to_str().unwrap(), false);
+        let _ = std::fs::remove_file(&lpath);
+
+        // Stamp the F8b carrier directly (the parse→links finalize is the next wiring
+        // step); this proves the CODEC round-trips a non-empty link list.
+        let inv = p.data.def_nr("Inv");
+        let links = vec!["bag#read".to_string(), "bag#append".to_string()];
+        p.data.definitions[inv as usize].attributes[0].links = links.clone();
+
+        let fresh = p.data;
+        let spath = std::env::temp_dir().join(format!("loft_ml_rt_{}.store", std::process::id()));
+        let spath_str = spath.to_str().unwrap();
+        fresh.save(spath_str).expect("Data::save");
+        let loaded = Data::open(spath_str).expect("Data::open");
+        let _ = std::fs::remove_file(&spath);
+
+        let reloaded_inv = loaded.def_nr("Inv");
+        assert_eq!(
+            loaded.def(reloaded_inv).attributes[0].links,
+            links,
+            "member links must survive the store round-trip"
+        );
+        crate::ir_schema::compare_data(&fresh, &loaded).expect("round-trip equal incl. links");
     }
 
     /// @PLN46 W2-persist — `#null_safe` survives the store round-trip (the

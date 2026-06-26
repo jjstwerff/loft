@@ -13,12 +13,14 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 compiler-enforced flag that runs **designated subsets** of a program (user scripts)
 under a *prove-it-safe-at-load* policy, while the surrounding host code runs
 unrestricted, in one process, sharing the store at full `DbRef` speed.  An admitted
-sandboxed script reaches only allow-listed capabilities, terminates, never faults, runs
-interpret-only, performs no raw writes to host data, and carries a worst-case complexity
-budget — all four arcs (capability · termination · data-integrity · backend) checked at
-load via `Parser::sandbox_admission_errors`, wired into the CLI (`loft.toml` `[sandbox]`
-policy → reject-or-run).  Remaining work is post-v1 expressiveness + hardening — see
-[§ Open work](#open-work).
+sandboxed script reaches only allow-listed capabilities, terminates, never faults,
+performs no raw writes to host data, and carries a worst-case complexity budget — all
+checked at load via `Parser::sandbox_admission_errors`, wired into the CLI (`loft.toml`
+`[sandbox]` policy → reject-or-run).  The proof is **backend-agnostic** (an admitted
+script is total + fault-free on the interpreter AND `--native` — the former forced
+interpret-only was dropped as unjustified, 2026-06-25); the only remaining backend gate
+is the external-FFI ban (`native_ffi`).  Remaining work is post-v1 expressiveness +
+hardening — see [§ Open work](#open-work).
 
 **Implementation progress** (branch `tuxedo-work2`):
 - **1.1 ✅** — `src/sandbox.rs`: `SandboxProfile`/`SandboxConfig` + the deny-by-default
@@ -44,16 +46,19 @@ policy → reject-or-run).  Remaining work is post-v1 expressiveness + hardening
   (`admission_escape_suite_rejects_every_breakout`): `v = [secret]; v[0]()`,
   `get() -> fn(){ secret }` then call, and a `Holder { f: secret }` field call are each
   rejected. (The earlier "residual tracked" note was stale.)
-- **1.4 ✅ (FFI + backend)** — **FFI:** `sandbox::reachable_ffi_bridges` flags every
-  reachable def whose `#native` symbol is owned by an external native package
-  (`native_symbol_crates`), distinct from built-in `#rust`/`#native` primitives — dlopen of
-  a cdylib is RCE → rejected unless `native_ffi = true`. **Backend:**
-  `Parser::sandbox_forces_interpret` (true on ANY designation) + main.rs wiring: a program's
-  `[sandbox]` policy loads from `loft.toml` before parse, and a sandboxed program REFUSES
-  `--native` / overrides the default native backend to interpret. Interpret-only is
-  unconditional, not a profile setting (the old `interpret_only` field + `backend` key
-  removed). `cargo build --no-default-features` builds (the cdylib-loading `native-extensions`
-  path is removable). Verified end-to-end on the CLI.
+- **1.4 ✅ (FFI ban) — backend force DROPPED (2026-06-25).** **FFI:**
+  `sandbox::reachable_ffi_bridges` flags every reachable def whose `#native` symbol is owned
+  by an external native package (`native_symbol_crates`), distinct from built-in
+  `#rust`/`#native` primitives — dlopen of a cdylib is RCE → rejected unless `native_ffi =
+  true`. This is the real RCE surface and it stays gated. **Backend:** the former forced
+  interpret-only was **removed** — it rested on a false "native traps where the interpreter
+  is total" premise (re-probed: div/mod-zero, OOB, overflow all yield `null` on `--native`
+  too), and it made the sandbox unusable for a game engine. Admission (`has_sandboxed_defs`
+  → `sandbox_admission_errors`, renamed from `sandbox_forces_interpret`) now runs
+  backend-agnostically: an admitted script is total + fault-free on the interpreter AND
+  native, so the host keeps its backend choice. `cargo build --no-default-features` still
+  drops the cdylib-loading `native-extensions` path. A deployment that wants to forbid
+  host-side `rustc` on mod input can reintroduce interpret-only as a per-profile opt-in.
 - **2.1 ✅** — `#cap "<group>"` annotation: parsed in `parse_rust` beside `#native`
   (any file); `Definition.cap` + `Parser::def_cap_group` read it. `cap` is NOT yet
   IR-round-tripped (re-derived on parse) — persistence lands coupled with the first
@@ -93,16 +98,19 @@ policy → reject-or-run).  Remaining work is post-v1 expressiveness + hardening
   `TotalityViolation`: **3.1** rejects an unbounded `while` (parse recorded), admits bounded
   `for`; **3.2** rejects recursion via a colour-DFS cycle check on the sandboxed call graph
   (self + mutual), admits acyclic; **3.3** excludes the explicit-abort ops (`assert` /
-  `panic` / `log_fatal`) while arithmetic stays total on the interpreter (div-by-zero →
+  `panic` / `log_fatal`) while arithmetic stays total on BOTH backends (div-by-zero →
   null). All render actionable errors through `sandbox_admission_errors`. The capability arc
   (P0–P2 + 2.5) and the termination arc (3.1/3.2/3.3) are both proven.
-- **1.4 backend half ✅** — sandboxed code is force-interpreted (`--native` refused), the
-  `[sandbox]` policy loads from `loft.toml`, and `--no-default-features` drops the cdylib
-  path. This was the prerequisite 3.3's total-op guarantee depends on (native traps).
-- **CLI admission-reject ✅** — after the backend force, the CLI runs the full admission
-  walk and rejects a violating sandboxed program at LOAD with the actionable errors
-  (`tests/sandbox_cli.rs` drives it end-to-end: violation rejected, clean admitted,
-  `--native` refused). **The sandbox is now enforced end-to-end through the binary.**
+- **1.4 backend ✅ (force DROPPED 2026-06-25)** — the `[sandbox]` policy loads from
+  `loft.toml`, `--no-default-features` drops the cdylib path, and the external-FFI ban
+  stays. The former forced interpret-only was removed (it depended on the false "native
+  traps" claim, now disproven); admission is backend-agnostic, so a sandboxed program runs
+  on whatever backend the host picks.
+- **CLI admission-reject ✅** — the CLI runs the full admission walk on any program with
+  sandboxed defs (any backend) and rejects a violating one at LOAD with the actionable
+  errors (`tests/sandbox_cli.rs` drives it end-to-end: violation rejected, clean admitted,
+  clean program also runs on `--native`). **The sandbox is enforced end-to-end through the
+  binary.**
 - **3.4 + 3.5 ✅** — `sandbox_complexity_degree`/`_report` give the host the `O(n^d)` budget
   hint (L5); the totality rejections already render actionable, bound-it diagnostics.
 - **2.4 ✅** — no-raw-write admission: a sandboxed def may not raw-write heap data
@@ -213,6 +221,22 @@ store-lifetime stream), so the next sandbox work is **driven by the crawler dogf
 not pushed from here.
 
 ### A. Safety — completes the v1 admitted-script guarantee
+- **Per-member access — read / update / append (P6 6.4–6.7, §7) — ✅ LANDED (F3–F6).** The
+  all-or-nothing no-raw-write arc is now independent **read / update / append** rights per
+  struct field, linked via `group#right` to declared `capability` groups; so append-only
+  (grow a log, never alter it) is expressible and a `#read`-marked field is private. Pure
+  compile-time (parse-site recording + `field_{read,update,append}_violations`), generalising
+  the coarse 2.4 below. **Parameter `#default` locks (6.9/F7) now LANDED too** (`param_lock_violations`),
+  so the host-authored model surface is complete. Remaining: **6.8** group-existence validation +
+  IR persistence. *(Construction stays unrestricted — position 1 — so there is no enum-variant gate.)*
+- **Data envelope (P7, §8) — ✅ LANDED (F9–F11).** Turns the §4 complexity *degree* into a hard
+  load-time limit: `data_envelope_violations` proves `coeff · max_input_n^degree ≤ data_budget`
+  (the footprint from `sandbox_space_footprint`) or rejects, plus the F10 unbounded-string gate
+  (`max_string_len`). Closes OOM — the one fault `catch_unwind` cannot see — at admission. Pure
+  compile-time, no @PLN85 dep, CLI-enforced. Known v1 under-count: separately-allocated record
+  bodies + cross-procedure string growth (documented gaps).
+- **`sandbox-check` verdict + RED/GREEN access corpus (P8) — 🟡 DESIGNED.** A no-run
+  "will this be allowed?" surface (CLI + lib) and the committed compile-only test battery.
 - **2.4 No-raw-write admission — ✅ DONE.** (Was the one open v1 safety step.) A sandboxed
   def may not raw-write heap data (`e.health = 0` / `v[i] = 9`) — recorded at parse
   (`sandbox_raw_writes`, where field-write vs struct-construction is unambiguous) and
@@ -236,7 +260,11 @@ not pushed from here.
   variants are rejected (hoist a call bound like `len(v)` to a local first). Tests:
   `bounded_while_is_admitted` / `unprovable_while_is_rejected`.
 - **3.2b structural recursion** — admit recursion when a structurally-decreasing argument
-  is proven (today the call graph must be acyclic).
+  is proven (today the call graph must be acyclic). **Likely SUPERSEDED by the
+  [lightweight expand-walker](expand-walker.md)** — a trusted, budgeted, deterministic
+  tree/graph walk primitive that gives sandboxed code recursion's reach without recursion
+  (and without an admission change), handling generative + cyclic structures that
+  structural-recursion analysis could not. 🟡 DESIGNED (minimal), to prototype + experiment.
 - **2.1b type/module `#cap` default + per-method override** — a `#cap` on a type/module
   sets the default for its methods; a method without its own `#cap` inherits it. Today
   `#cap` is per-def only.
@@ -330,41 +358,44 @@ type uses), so indirect calls can't escape (L4).
 | sandboxed → a symbol outside the allowed groups / native FFI / file·net·env | **compile error** |
 | unrestricted → a sandboxed def | yes — and the call always returns (the script is total) |
 
-### 3. Library-first admission — whole libraries in, tags only to split one
+### 3. Library-first admission — whole libraries in, capabilities only to split one
 A reachable trusted symbol admits if **either** its **library** is allow-listed
-wholesale (`allow_libs`) **or** its `#cap` **group** is allow-listed (`allow_caps`).
-A complete, host-vetted library is included as a **unit** — every symbol in it
-admits with **no tag**, including its untagged functions and its native bridges. So
-the host allows the pure stdlib modules (`code`/`text`/`json`) wholesale and tags
-nothing; the 166-fn stdlib never needs blanket tagging.
+wholesale (`allow_libs`) **or** the profile grants its `group#right` capability link
+(`allow`). A complete, host-vetted library is included as a **unit** — every symbol in it
+admits with **no link**, including its unlinked functions and its native bridges. So the
+host allows the pure stdlib modules (`code`/`text`/`json`) wholesale and links nothing; the
+166-fn stdlib never needs blanket tagging.
 
-**Tags are purely the fine-grained layer** — for carving a library in half
-("include `files`, but reads only"). The capability is a fact that lives with the
-function (`#cap "<group>"` at its definition, beside `#native`/`#rust` — one home per
-fact, [STABILITY_REDFLAGS.md](../../STABILITY_REDFLAGS.md)). Only a *partially*-
-included library needs them.
+**Capabilities are purely the fine-grained layer** — for carving a library in half
+("include `files`, but reads only"). The capability is the **same mechanism functions and
+data members share** (§7): a declared, namespaced `capability` referenced by a validated
+`group#right` link at the definition, beside `#native`/`#rust` — one home per fact,
+[STABILITY_REDFLAGS.md](../../STABILITY_REDFLAGS.md). Only a *partially*-included library
+needs them. *(v1 shipped the function link as an unchecked `#cap "fs.read"` string; P6.2
+migrates it to the declared-`capability` + `group#right` form below — one model, validated.)*
 
-- **The stdlib ships its own tags**, only where a built-in split is worth exposing:
-  `files`'s `fs.read`/`fs.write` is the one example today. Projects **cannot edit the
+- **The stdlib ships its own capabilities**, only where a built-in split is worth exposing:
+  `files`'s `fs#read`/`fs#update` is the one example today. Projects **cannot edit the
   stdlib** — they include its modules wholesale, or use the shipped split.
-- **Projects tag their OWN code** — internal APIs + bundled libraries — to gate them
-  finely; that is where new `#cap` tags come from, not the stdlib.
-- Keeping a few real tags (the `files` split) keeps the **cap path verifiable**
-  end-to-end alongside the wholesale path.
+- **Projects declare + link their OWN code** — internal APIs + bundled libraries — to gate
+  them finely; that is where new `capability` declarations come from, not the stdlib.
+- Keeping a few real links (the `files` split) keeps the **cap path verifiable** end-to-end
+  alongside the wholesale path.
 
-```
-// the stdlib SHIPS this split (a project cannot add it):
-pub fn mtime(path: text) -> integer;  #cap "fs.read"
-pub fn write(self: File, v: text);    #cap "fs.write"
+```loft
+// the stdlib DECLARES + SHIPS this split (a project cannot add it):
+capability fs
+pub fn mtime(path: text) -> integer fs#read;     // call gate in the signature (§7.1)
+pub fn write(self: File, v: text)   fs#update;   // void → the link goes after the params
 ```
 ```toml
 [profile.mod-script]
 native_ffi = false                            # no vetted cdylib bridge (interpret-only
                                               # is unconditional — not a key)
-allow_libs = ["code", "text", "json"]        # whole modules — no tags needed
-allow_caps = ["fs.read"]                      # files NOT wholesale → reads only, no writes
+allow_libs = ["code", "text", "json"]        # whole modules — no links needed
+allow      = ["fs#read"]                       # files NOT wholesale → reads only, no writes
 ```
-A symbol in **no** allowed library **and** with **no** allowed cap is denied
+A symbol in **no** allowed library **and** with **no** granted `group#right` is denied
 (deny-by-default). The library is the source module (stdlib) or package name.
 
 ### 4. Totality admission (the core)
@@ -407,14 +438,15 @@ Anything that can't be proven total is **rejected at load**, with the reason.
 idea is dropped.** Instead, make every write a sandboxed script can do **safe by
 construction**, so direct writes to live state are always valid and there is nothing
 to undo:
-- sandboxed code has **no raw store mutation** — it cannot assign struct fields or
-  store cells directly. Its only writes are through **invariant-preserving,
-  capability-gated host operations** (the `*.write` groups): each validates its inputs
-  and leaves the host's invariants intact.
-- a profile grants *which* write ops via `allow_caps`; each granted op is vetted safe
-  (the L-host contract, extended to writes). **Any sequence of them keeps the world
-  valid**, so order/interruption can't matter — and admitted scripts never interrupt
-  (they're total).
+- sandboxed code performs **no _unauthorised_ mutation** — it may directly write only a
+  **member the host granted an `update`/`append` right** (§7), each of which the host has
+  vouched is invariant-safe for ANY value (the **L-member** contract), and otherwise mutates
+  coupled state only through **invariant-preserving, capability-gated host operations**. It
+  can never raw-write a member it was not granted (deny-by-default), so no write can corrupt.
+- a profile grants *which* members/ops via the `allow` `group#right` links; each granted right
+  (and each write op) is vetted safe (the L-host / L-member contract). **Any sequence of them
+  keeps the world valid**, so order/interruption can't matter — and admitted scripts never
+  interrupt (they're total).
 - writes therefore land **directly on live state** (fast — the performance premise);
   a script's *logic* may produce an unwanted-but-valid state (the modder's
   responsibility), **never an invalid/corrupt one**.
@@ -437,6 +469,147 @@ run. Each rejection class names its fix:
 A script that compiles clean is then guaranteed safe at runtime — **the admission
 errors are the contract.** This diagnostic quality is a first-class deliverable, not an
 afterthought: it is the entire developer experience of writing a mod.
+
+### 7. Capabilities — what a restricted caller may do
+
+A capability is a permission the **host/library** requires of a **restricted caller** (a
+sandboxed modder).  The host annotates *its own* surface — functions, their parameters, its
+struct fields — with `group#right` links; a modder's profile is granted a set of
+capabilities; admission checks every point where the modder's code touches the host
+surface.  **The modder's own functions and data carry no links and are never restricted** —
+only what they reach *into the host* is gated.  This generalizes the all-or-nothing §5
+no-raw-write rule into a fine-grained, caller-facing permission system.
+
+**Declaring a capability** — a namespaced top-level symbol; an undeclared group in a link
+is a load error (validated at admission, so forward + cross-file references resolve):
+
+```loft
+capability fs
+capability world
+capability bag
+```
+
+`capability` is deliberately verbose: declarations are rare, and a design with *many* of
+them is a smell, so the cost falls in the right place.
+
+**The three rights** a link may carry:
+- **read** — observe a value.
+- **update** — change an existing value in place.
+- **append** — add to a **structure** (a collection).  Append exists *only* on a collection
+  — there is no append for a scalar.
+
+#### 7.1 Calling a function — the call gate (in the signature)
+The host puts the call gate at the end of the signature (after the return type, or after the
+parameters when there is no return).  The right is the effect the call has.  `#cap` is gone
+— the link is a first-class part of the contract, beside the parameters and the return type,
+*not* lumped with the `#native` / `#impure` / `#wasm` implementation plumbing.
+
+```loft
+fn mtime(path: text) -> int  fs#read;     // calling this reads the filesystem
+fn remove(path: text)        fs#update;   // void → the link goes after the params
+```
+
+A modder granted `fs#read` may call `mtime`; not granted → the call is rejected at load.
+**Passing arguments is part of the call** — if you may call a function, you may pass any
+argument you like, with no extra grant.
+
+#### 7.2 Locking a parameter to its default
+For when the host lets a modder *call* a function but not steer a particular argument.  Tag
+only the parameter you want to pin; it is then forced to its default unless the modder holds
+the lock.
+
+```loft
+fn spawn(kind:  text,
+         count: int = 1  spawn.count#default) -> Entity   world#append;
+```
+
+- Granted `world#append`: may call `spawn`, may pass any `kind` (untagged → free), but
+  `count` is forced to `1`.
+- Also granted `spawn.count#default`: may write `spawn(count: 5)`.
+
+Untagged parameters are always free — **set is inherited from the call** — so the host tags
+only what it locks; there is no per-parameter upkeep.  `#default` is the opt-out limitation,
+allow-by-default, the inverse polarity of the deny-by-default field rights below.
+
+#### 7.3 Reading and writing a field
+A field of a host struct carries its own access links.  A scalar field has read + update; a
+**collection** field also has append.
+
+```loft
+struct Entity {
+    id:     int                                // untagged → readable, never writable
+    health: int    health#read health#update   // scalar: read + update
+    bag:    [Item]  bag#read bag#append         // collection: read + APPEND only (no update)
+}
+```
+
+- `e.health` — readable by anyone (read is free), updatable only with `health#update`.
+- `e.bag += item` — needs `bag#append`; since `bag#update` is *not* granted, the modder may
+  grow the bag but never overwrite an existing slot.  **Append-only is exactly this.**
+- `e.id` — no write link → read-only.
+
+`append` appears on `bag` because `bag` is a structure; it would be meaningless on a scalar
+like `health`.
+
+#### 7.4 Defaults, and the modder's side
+| Operation | When the host adds no link |
+|---|---|
+| read a field | **free** |
+| update / append a field | **denied** (the host must grant) |
+| override a parameter | **free** (inherited from the call) |
+| call a function | needs its call-gate link (or a wholesale-allowed library, §3) |
+
+The modder writes unrestricted code; gating happens only at the host boundary:
+
+```loft
+// no links anywhere — a modder never tags their own code:
+fn my_strategy(e: Entity) -> int {
+    let h = e.health        // read a host field — free
+    damage(e, 10)           // call a host fn — needs whatever damage() requires
+    e.bag += Item.Potion    // append to a host field — needs bag#append
+    spawn("goblin")         // call — needs world#append; count is pinned to 1
+}
+```
+```toml
+[profile.mod]
+allow_libs = ["math", "text"]
+allow      = ["world#append", "bag#append", "health#read"]
+```
+
+A grant resolves through **normal namespacing**: `allow = ["game#read"]` covers every
+capability beneath `game` (e.g. `game.entity#read`) with the same right — the existing
+`cap_prefix_match` on the group part, exact on the right.  The **§2.4 ownership split is
+unchanged**: links gate **host** data only — a script's own structures (types it defines,
+values it constructs locally) stay freely read/update/append.
+
+Every check is at **admission** — no runtime cost, no rollback: a disallowed call, parameter
+override, or field access is a **load error**, never a caught fault.
+
+**Deliberately *not* in this model** (the over-reach this section drops): no append on a
+scalar; no implementer-side mutability/borrow notion (the links authorize the *caller*, not
+the function body); and enum-variant **construction** gating is a separate question — it is
+**not** folded into read/update/append.  Closures (a modder-authored callable handed across
+the boundary, or captured host state) are the one genuinely subtle case and ride on the
+existing L4 fn-ref handling — designed in their own pass, not here.
+
+### 8. Data envelope — a compile-time footprint bound
+§4 reports a worst-case complexity *degree* (`O(n^d)`) and asks the host to "bound n." The
+envelope makes that a **hard, checked limit at load**: the host declares a `data_budget`
+(words of peak live heap) plus the input bounds the degree is expressed in (`max_input_n`,
+`max_depth`, `max_string_len`), and admission proves the footprint fits — or **rejects**.
+
+Because the totality arc (§4) already bounds every loop and makes recursion acyclic, peak
+heap is a closed form: `Σ over accumulating allocation sites (record_size × max_input_n^nesting)`.
+Every factor is known — the trip count from `max_input_n`, the record size **exactly** from
+the type's stride. The space analysis already computes the *degree*; the envelope adds the
+*coefficient* (`Σ record_size`) and compares `coeff · max_input_n^degree` against
+`data_budget`. An allocation whose size cannot be tied to a declared bound (an uncapped
+dynamic string, a host-value-sized allocation) is **rejected** — deny-by-default, the same
+trade as an unbounded loop, with a diagnostic that names the fix.
+
+This is **purely compile-time**: no allocation counter, no runtime ceiling, no saturation,
+no rollback. OOM — the one fault that bypasses every other guarantee because `catch_unwind`
+cannot see it — becomes a load-time concern.
 
 ## Compile-time vs runtime
 
@@ -581,14 +754,18 @@ proven-total script.
   only). *Verify (L2):* self-recursion `rec(n+1)` and mutual `a→b→a` rejected naming the
   cycle; an acyclic chain admitted. The structurally-decreasing relaxation is later.
 - **3.3 Total-operation check.** ✅ *shipped* (`admit_totality` → `PartialOp`). *Finding
-  (both backends probed):* the **interpreter already makes the arithmetic ops total** —
-  div/mod-by-zero → `null`, OOB → `null`, integer overflow wraps — so a sandboxed
-  expression never faults on them; **native traps** ("divide by zero"), so the guarantee
-  rests on interpret-only (the 1.4 backend ban). No rejection is needed for arithmetic.
-  *Excluded:* the explicit-abort ops `assert` / `panic` / `log_fatal` (`ABORT_OPS`) — they
-  fault the script and cannot be made total → `PartialOp` rejection naming the op + a
-  defensive-check fix. *Verify (L3):* `a / b ?? 0` admits as total; a sandboxed `assert`
-  is rejected. ✓
+  (both backends re-probed 2026-06-25, CORRECTING an earlier false claim):* the partial
+  arithmetic ops are total on **BOTH** backends — div/mod-by-zero → `null`, OOB → `null`,
+  integer overflow → `null` — on the interpreter AND on `--native`. The earlier note that
+  "native traps (divide by zero), so the guarantee rests on interpret-only" was **wrong**:
+  native does not trap on any of these (verified — each yields `null`), so the total-op
+  guarantee is backend-agnostic and the forced interpret-only was dropped. No rejection is
+  needed for arithmetic. *Excluded:* the explicit-abort ops `assert` / `panic` /
+  `log_fatal` (`ABORT_OPS`) → `PartialOp` rejection naming the op + a defensive-check fix.
+  *(Caveat, also probed: `assert` aborts both backends, but `panic` aborts only the
+  interpreter and `log_fatal` aborts neither — a pre-existing loft inconsistency to fix
+  separately; the admission rejection sidesteps it for sandboxed code.)* *Verify (L3):*
+  `a / b ?? 0` admits as total; a sandboxed `assert` is rejected. ✓
 - **3.4 Worst-case complexity report.** ✅ *shipped* (`sandbox_complexity_degree` /
   `_report`). *Change:* derive the step cost as a function of input size. *Verify (L5):* a
   per-entity loop reports `O(n)`. **Done:** the degree = max over the body of `loop_nesting
@@ -615,11 +792,239 @@ proven-total script.
   stays within a frame budget vs a native baseline — with **direct writes, no rollback,
   no copy, no journal** (if this needs a rollback to be safe, the design is wrong, §5).
 
+### P6 — Unified capability model: `capability` decls + `group#right` for functions AND members [compile-time core, §3 + §7]
+
+> **Consistency migration (pre-customer, deliberate).** v1 shipped the *function* capability
+> as an unchecked STRING — `#cap "fs.read"` → `Definition.cap: String` (`src/data.rs:2451`),
+> parsed at `src/parser/definitions.rs:1172`, matched via `allow_caps` /
+> `cap_prefix_match` (`src/sandbox.rs:65`). This ladder lands ONE mechanism for functions and
+> data members: a declared, namespaced `capability` referenced by a validated `group#right`
+> token. The `.`-segment split (`fs.read` / `fs.write`) becomes the right split
+> (`fs#read` / `fs#update`). Do NOT ship the member model beside the old string model.
+
+- **6.1 The `capability` declaration + the `group#right` token + a resolver (foundation).** ✅ **DONE.**
+  - `parse_capability` (`src/parser/definitions.rs`) parses a `capability <dotted.name>`
+    top-level declaration (a contextual keyword, also added to `starts_top_level_def`) and
+    records the dotted name in a parser-side `declared_capabilities: HashSet<String>` — the
+    dotted name IS the namespace (like the `fs.read` groups), so this needs no new `Definition`
+    kind. Cleared in the reset + `parse_str` paths.
+  - `enum Right { Read, Update, Append }` + `Right::parse`/`as_str` (`src/sandbox.rs`).
+  - `Parser::cap_is_declared(group)` resolver; an undeclared/mistyped group in a link is a
+    LOAD error (validated at admission). *(IR persistence of the registry for a warm-cached
+    stdlib is the later 6.8; sandboxed programs parse fresh.)*
+  - *Verify:* `capability_declarations_register_and_resolve` — `fs` / `cmd.move` resolve,
+    `typo` does not; `Right::parse` covers read/update/append.
+- **6.2 The function call-gate link in the SIGNATURE; drop `#cap`.** ✅ **DONE.**
+  - `try_cap_link` (`definitions.rs`) parses a `group#right` token where one is OPTIONAL
+    (silent `None` when the next token is the `;`/`{` terminator; errors only on a malformed
+    link). `parse_function` parses it **after the output** (return type, or the param list for
+    a void fn) into `Definition.cap`; the **`#cap` annotation branch is removed** — the link is
+    a first-class part of the contract, not plumbing. `cap()` + IR persistence (`DEF_CAP`)
+    unchanged, now round-tripping the `group#right` token.
+  - Retag `default/02_files.loft`: declare `capability fs` + `capability env`; **37 links moved
+    into the signatures** — `fs.read`→`fs#read`, `fs.write`→`fs#update`, `env`→`env#read` —
+    covering both native `;`-decls (`-> boolean fs#read;`) and loft-bodied functions
+    (`-> text fs#read {`). (`fs.write`→`#update`: a write modifies existing content.)
+  - *Verify:* `mtime` carries `fs#read` in its signature; `cap_annotation_is_parsed_and_readable`
+    + the cap IR round-trip + the 8 admission tests green.
+- **6.3 Profile grants: the unified `allow` list of `group#right` tokens.** `SandboxProfile`
+  (`src/sandbox.rs:22`): fold `allow_caps` into `allow: Vec<String>` of `group#right` tokens
+  (keep `allow_libs` wholesale). Extend `cap_prefix_match` (`:65`) to split each side on `#`:
+  **namespace-prefix match on the group, EXACT on the right**. `parse_sandbox_config` (`:127`)
+  reads `allow`. *Verify:* `allow=["fs#read"]` admits `mtime`, rejects `write` (`fs#update`);
+  `game#read` covers `game.stats#read`; round-trip.
+- **6.4 Member link parse + carrier.** ✅ **DONE.** `parse_field_links` (`definitions.rs`)
+  parses the bare `group#right` link after a struct field's type in BOTH field-type branches
+  (named/scalar + vector/generic). `try_cap_link` is **non-destructive** (saves the cursor +
+  reverts on a miss), so a `not null` / default after a field type is never mis-consumed.
+  Recorded in `member_access: HashMap<(struct def_nr, field name), Vec<group#right>>` off `Data`
+  (first-pass; persist in 6.8). *Verify:* `field_capability_links_are_recorded`. *(Keyed by
+  field NAME, not member index; enum-variant links are out of scope — see 6.7.)*
+- **6.5 Read admission.** ✅ **DONE.** A sandboxed read of a `#read`-linked host field is
+  recorded at the field-access site (`fields.rs::field`, second pass) into `sandbox_field_reads`;
+  `field_read_violations` (`sandbox.rs`) rejects a read whose token the profile does not grant.
+  Read is default-allow, so only a `#read`-linked field ever gates. *Verify:*
+  `field_read_gates_private_field_admits_unlinked`.
+- **6.6 Update admission (generalises 2.4).** ✅ **DONE.** A one-level field write `e.f = v`
+  whose field has an `#update` link is diverted at the 2.4 site (`expressions.rs`) into
+  `sandbox_field_updates` — the written field resolved via a `last_field_target` stash VERIFIED
+  against the base var's struct; admitted iff granted, else `field_update_violations`. A field
+  with NO update link stays the coarse 2.4 reject (read-only by default). *Verify:*
+  `field_update_gates_writable_fields_unlinked_read_only`.
+- **6.7 Append admission.** ✅ **DONE.** A `+=` to an `#append`-linked field is routed BY THE
+  OPERATOR to `sandbox_field_appends`; admitted iff granted, else `field_append_violations`.
+  `=` stays the `#update` path (6.6), so `bag#read bag#append` (no update) is append-only.
+  *Verify:* `field_append_gates_collection_grow`. *(Construction is **unrestricted** — the
+  position-1 decision — so there is NO enum-variant construct gate; the design dropped it.)*
+- **6.8 Group-existence validation — ✅ DONE (F8a).** `sandbox_undeclared_links` scans every
+  capability link in the **main program** — a function call gate (`Definition.cap`), a struct-field
+  link (`member_access`), a parameter `#default` lock (`param_locks`) — and rejects any whose group
+  is not covered by a declared `capability` (`cap_is_declared`, now namespace-prefix-aware), with an
+  actionable "add `capability <g>`" message. Folded into `sandbox_admission_errors` and CLI-enforced.
+  **Scoped to `MAIN_SOURCE`** (the program the author iterates on, always parsed fresh so its
+  declarations are present): the vetted stdlib + installed libraries are trusted and may load from
+  the IR cache where the parser-side registry is not restored, so re-checking them would falsely
+  reject a clean program. *Verify:* `undeclared_capability_link_is_a_load_error` — `helth#update`
+  (typo for declared `health`) → load error naming `helth`; the declared spelling is clean.
+- **6.8b IR persistence — ✅ INFRASTRUCTURE LANDED (F8b); WIRING DEFERRED.** A new
+  `Attribute.links: Vec<String>` is the single home for a struct field's read/update/append rights
+  AND a parameter's `#default` lock, and it **round-trips through the IR store** exactly like
+  `Definition.cap` (`ATTR_LINKS`, the baked-layout guard pins the offsets). So a warm-cached host
+  type / library *can* carry persisted links. *Verify:* `member_links_survive_store_round_trip`
+  (mmap) — a non-empty link list survives `Data::save`→`open` with `compare_data` equality.
+  **Deferred wiring** (zero consumer today — no stdlib/library ships gated fields, and an unrestored
+  link fails *safe* via the coarse 2.4 reject): the parse→`links` finalize, repointing admission to
+  read `Attribute.links` (so cached field gating actually fires), and the **registry** persistence +
+  the F8a widening past `MAIN_SOURCE`. These land with the first cached-gated-library consumer
+  (driven by the crawler dogfood), where they can be tested against real cached types.
+- **6.9 Parameter `#default` locks (§7.2).** ✅ **DONE.** `parse_arguments` parses an optional
+  `group#default` link after a parameter's default (`count: int = 1 spawn.count#default`),
+  ferried through the transient `pending_param_locks` into `param_locks[(fn, idx)]` once the
+  fn def_nr exists; `Right::Default` extends the right enum so `try_cap_link` accepts the token.
+  At a sandboxed call site, `record_param_lock_overrides` (in `call_nr`, BEFORE `add_defaults` —
+  a slot is non-`Null` only when supplied explicitly) records an argument that DIFFERS from the
+  parameter's default; `param_lock_violations` rejects one whose lock the profile does not grant.
+  An untagged parameter, or an argument equal to the default, is free. *Verify:*
+  `param_default_lock_gates_override` — `spawn("g", 5)` rejected unless `spawn.count#default` is
+  granted; bare `spawn("g")` admits (and is not even recorded as an override).
+
+### P7 — Data envelope (compile-time footprint bound) [compile-time core, §8]
+- **7.1 Coefficient.** Extend `intrinsic_space` (`sandbox.rs:1088`) / `space_degree` (`:1145`)
+  to also accumulate `Σ record_size` over accumulating sites — record size = the exact type
+  stride (`LinkedFieldGroup::group_size`, `data.rs`). Return `(degree, coeff)`. *Verify:* a
+  per-entity struct-build loop reports `(degree 1, coeff sizeof(struct))`.
+- **7.2 Static-sizing gate.** In the space scan, flag an allocation whose record size is not
+  statically bounded (uncapped dynamic string; a host-value-sized alloc not tied to
+  `max_input_n`) → a new `DataViolation::UnboundedAlloc` rejection. *Verify:* an uncapped
+  string build is rejected; a `max_string_len`-capped one admits.
+- **7.3 Envelope fields.** `max_input_n` / `max_depth` / `max_string_len` / `data_budget` on
+  `SandboxProfile` (`sandbox.rs:22`) + `parse_sandbox_config` (`:127`). *Verify:* round-trip.
+- **7.4 Bound + reject.** In `sandbox_admission_errors`, compute `coeff · max_input_n^degree`
+  (reuse `sandbox_complexity_degree`, `:1055`) and reject if `> data_budget` or unprovable,
+  with the figure + fix; extend `complexity_report` (`:1200`) to print the absolute bound.
+  *Verify:* an over-budget script is rejected naming the figure; an under-budget one admits.
+
+### P8 — `sandbox-check` verdict + the access corpus [tooling]
+- **8.1 No-run verdict.** ✅ **DONE (F12).** `loft sandbox-check <file>` (`src/main.rs`) loads the
+  `loft.toml` `[sandbox]` policy, parses, runs the admission walk (`Parser::sandbox_admission_errors`)
+  ONLY, and prints `Admitted` (+ the complexity report) or `Rejected` + diagnostics — then EXITS
+  before any codegen/run path. *Verify:* `sandbox_check_reports_verdict_without_executing`
+  (`tests/sandbox_cli.rs`) — a side-effecting `main` never prints on either verdict (proves no run);
+  a violation prints `Rejected` + the named capability + fix. The programmatic surface (for a
+  mod-registry submit-gate) is the already-public `Parser::sandbox_admission_errors()`; a dedicated
+  `src/lib.rs` wrapper is deferred (it needs embedder stdlib-path plumbing for marginal value).
+- **8.2 RED/GREEN access corpus.** ✅ **DONE (F13).** `access_corpus_red_green` (the inline
+  plan86 module, beside the escape suite) is the committed battery over the access model: REDs —
+  a private-field read, an `#update` field write, an `#append`, a `#default`-locked override, an
+  `fs#update` call under an `fs#read`-only grant, an undeclared link, and the read-only-by-default
+  cases (unlinked field, `=` on an append-only field) — each Rejected; GREENs — construction is
+  unrestricted, an unlinked read is free, the real stdlib `mtime` (`fs#read`) admits under
+  `fs#read`. **Each RED is paired with a GREEN twin** (the same code with the grant added must
+  admit), so a rejection is proven to be the rule firing, not a parse error (non-vacuity).
+  Admission is compile-time + backend-agnostic, so "both backends" does not apply.  *(The
+  README's "un-forgeable variant" RED is intentionally absent — construction was left unrestricted,
+  the position-1 decision; the corpus asserts it as a GREEN instead.)*
+
 **Dependency order:** 1.1→1.2 (1.2 unblocks 0.1) → 1.3/1.4 → 2.x → 3.x → 4.x → 5.1.
-**P0–P3 are the compile-time core** (reject at load, game-safe); P4 has no abort path to
-make fail-safe; P5 proves *fast + safe*. **Admission diagnostics (2.5, 3.5) are
-first-class** — a clean compile is the safety contract. A rung graduates its probe to
-`tests/scripts/` / `tests/sandbox.rs` when green on both backends where applicable.
+Within P6 the migration ran sequentially: **6.1 → 6.2 → 6.3** landed the unified function
+model first (it touches shipped code), then **6.4 → 6.7** added the struct-field rights
+(read/update/append), and **6.9** added the parameter `#default` locks. **6.1–6.7 + 6.9 are
+DONE**; **6.8** (group-existence + IR persistence) is the remaining P6 work.
+**P6 and P7 are independent compile-time arcs** — both reject at load, neither
+needs the @PLN85 memory-safe interpreter (that was only the dropped runtime layer), so they
+slot alongside the P0–P3 core; **P8 rides on both**. **P0–P3 + P6 + P7 are the compile-time
+core** (reject at load, game-safe); P4 has no abort path to make fail-safe; P5 proves *fast +
+safe*. **Admission diagnostics (2.5, 3.5, 6.8) are first-class** — a clean compile is the
+safety contract. A rung graduates its probe to `tests/scripts/` / `tests/sandbox.rs` when
+green on both backends where applicable.
+
+### The build flow — a verifiable sequence (every gate is runnable)
+
+The ladder above is grouped by *arc*; this is the **order you actually build in**. It is
+sequenced so the **shipped function surface migrates atomically** (the suite never sees a
+mixed string/`group#right` model), then the new member + data surfaces layer on
+**additively**, each behaviour change gated by a single RED→GREEN test. **The invariant of
+the flow: `make ci` is green after every F-step**, so each lands as one PR-sized change on a
+releasable tree.
+
+**Foundation (additive — no admission change yet)**
+- **F1 — capability decl + `group#right` token + resolver** (P6.1). ✅ **DONE.** *Gate:*
+  `capability_declarations_register_and_resolve` — `capability fs` parses, `fs#read` resolves,
+  `typo#read` is a load error.
+
+**Migrate the function surface (the ONE atomic step over shipped code)**
+- **F2 — parse the function call-gate link in the SIGNATURE (after the output, `-> int fs#read`),
+  drop the `#cap` annotation, retag `default/02_files.loft` (`fs#read`/`fs#update`/`env#read` +
+  the `capability fs`/`capability env` decls), fold `allow_caps`→`allow` with a `#`-splitting
+  `cap_prefix_match` + a quote-aware `strip_comment`** (so a `#` survives in a TOML token). ✅
+  **DONE.** *Gate:* `allow=["fs#read"]` admits `mtime`, rejects file `write` (`fs#update`); the
+  plan86 admission suite (29) + `sandbox_cli` (5) + the cap IR round-trip green. This is the
+  consistency cut — after F2 there is one capability model and `#cap` is gone.
+
+**Per-member access — read / update / append (all DONE)**
+- **F3 — member link parse + `member_access` carrier** (P6.4). ✅ **DONE.** *Gate:*
+  `field_capability_links_are_recorded` — `loot: Item bag#read bag#append` records both rights;
+  an unlinked field is empty. Parsed in BOTH field-type branches; `try_cap_link` made
+  non-destructive (a `not null` / default after a type is never mis-consumed).
+- **F4 — read admission** (P6.5). ✅ **DONE.** *Gate:*
+  `field_read_gates_private_field_admits_unlinked` — a sandboxed read of a `#read`-linked field
+  with no grant → Rejected; an unlinked read admits (read default-allow). Recorded at the
+  field-access site (`fields.rs::field`).
+- **F5 — update admission** (P6.6). ✅ **DONE.** *Gate:*
+  `field_update_gates_writable_fields_unlinked_read_only` — `e.f = v` admits iff `#update` is
+  granted; an unlinked field stays read-only (coarse 2.4). Generalises 2.4 per-field via a
+  `last_field_target` stash verified against the base var's struct.
+- **F6 — append admission** (P6.7). ✅ **DONE.** *Gate:* `field_append_gates_collection_grow` —
+  `e.f += [x]` admits iff `#append` is granted; `=` stays the `#update` path. Routed by the
+  operator, so `bag#read bag#append` (no update) is genuinely append-only.
+
+**Complete the authored model surface (the remaining model work)**
+- **F7 — parameter `#default` locks** (§7.2). ✅ **DONE.** A non-default argument to a parameter
+  tagged `…#default` is gated at the call site; an untagged parameter is free (set is inherited
+  from the call). *Gate:* `param_default_lock_gates_override` — `spawn("g", 5)` Rejected unless
+  `spawn.count#default` is granted; bare `spawn("g")` (the default) admits. Parsed in
+  `parse_arguments`, recorded at `call_nr` before defaults fill, gated by `param_lock_violations`.
+- **F8a — group-existence validation** (P6.8). ✅ **DONE.** A link in the main program to an
+  **undeclared** `capability` is a clean load error (`sandbox_undeclared_links`, namespace-aware
+  `cap_is_declared`), folded into `sandbox_admission_errors` + CLI-enforced. *Gate:*
+  `undeclared_capability_link_is_a_load_error` — `helth#update` → load error naming `helth`.
+- **F8b — IR persistence (member links)** — ✅ **INFRASTRUCTURE DONE; wiring deferred.**
+  `Attribute.links` round-trips through the IR store (gate: `member_links_survive_store_round_trip`).
+  Deferred (zero consumer; fails *safe* via the coarse reject): the parse→links finalize, repointing
+  admission to read `Attribute.links`, and registry persistence + the F8a widening — land with the
+  first cached-gated-library consumer.
+
+**Data envelope (all DONE)**
+- **F9 — coefficient on `space_degree`** (P7.1). ✅ **DONE.** `sandbox_space_footprint`
+  returns `(degree, coeff)`; coeff = Σ per-element backing-slot size over accumulating sites.
+  *Gate:* `space_footprint_reports_degree_and_record_coefficient` — `vector<integer>` build →
+  `(1, 8)`, `vector<Mob>` build → `(1, 12)` (DbRef slot). Known v1 under-count: separately-
+  allocated record bodies (the same gap §8 documents).
+- **F10 — static-sizing gate** (P7.2). ✅ **DONE.** `sandbox_grows_unbounded_string` flags a
+  dynamic string grown in a loop (invisible to `coeff`); under an active envelope an uncapped
+  one is `DataViolation::UnboundedAlloc`. *Gate:* `unbounded_string_build_rejected_unless_capped`
+  — `s += "x"` rejected; `max_string_len` cap admits.
+- **F11 — budget reject** (P7.3 + 7.4). ✅ **DONE.** Fields on `SandboxProfile` +
+  `parse_sandbox_config` (P7.3); `data_envelope_violations` proves `coeff · max_input_n^degree ≤
+  data_budget` else rejects (P7.4), folded into `sandbox_admission_errors`. *Gate:*
+  `parses_data_envelope_fields` + `data_budget_rejects_over_envelope_and_admits_under`. (Extending
+  `complexity_report` with the absolute figure is deferred — the violation message carries it.)
+
+**Prove it**
+- **F12 — `sandbox-check` verdict** (P8.1). ✅ **DONE.** `loft sandbox-check <file>` prints
+  Admitted / Rejected + diagnostics and **never executes** (a side-effecting `main` proves no
+  run). *Gate:* `sandbox_check_reports_verdict_without_executing`.
+- **F13 — RED/GREEN corpus** (P8.2). ✅ **DONE.** `access_corpus_red_green` — every access rule
+  as a RED + its GREEN twin (non-vacuity), the real `02_files.loft` `mtime` split included.
+
+**Status:** the **entire F-ladder F1–F13 is landed**, with **F8b at its infrastructure stage** —
+the host-authored model surface + its load-time validation + the compile-time data-envelope
+footprint bound + the no-run `sandbox-check` verdict + the committed RED/GREEN access corpus are all
+complete and CLI-enforced, and the `Attribute.links` IR-persistence codec (F8b) round-trips and is
+guarded. OOM is a load-time concern. **v1's compile-time core is DONE.** The only open item is the
+remaining F8b *wiring* (parse→links finalize + admission-read repoint + registry persistence/F8a
+widening) — forward-looking, fails-safe, zero-consumer today; it lands with the first
+cached-gated-library, driven by the crawler dogfood.
 
 ## Open questions
 
