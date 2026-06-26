@@ -3554,6 +3554,7 @@ impl State {
         #[allow(unused_mut)]
         let mut bytecode_len = self.bytecode.len() as u32;
         let uaf_on = crate::keys::uaf_check_enabled();
+        let uaf_src_on = crate::keys::uaf_src_enabled();
         // @PLN18 phase 02 — tier-0 live reload: a counter-gated poll so a file
         // save can swap one fn's dispatch targets mid-run (append-only code, so
         // the cached length refreshes after a swap).  One decrement + one
@@ -3606,9 +3607,19 @@ impl State {
                 OPERATORS[op as usize](self);
             }
             // LOFT_UAF: the op freed store slots — scan live frame variables
-            // for one that still reads a freed slot (premature free).
-            if uaf_on && !self.database.uaf_freed_this_op.is_empty() {
-                self.uaf_scan_freed(data);
+            // for one that still reads a freed slot (premature free).  Under the
+            // cheap LOFT_UAF_SRC variant, only stamp each freed slot's pc (no
+            // frame scan) so a later copy of a freed source can name the free site.
+            if !self.database.uaf_freed_this_op.is_empty() {
+                if uaf_on {
+                    self.uaf_scan_freed(data);
+                } else if uaf_src_on {
+                    let freed = std::mem::take(&mut self.database.uaf_freed_this_op);
+                    let d_nr = self.call_stack.last().map_or(u32::MAX, |f| f.d_nr);
+                    for &slot in &freed {
+                        crate::keys::uaf_record_free(slot, self.code_pos, d_nr);
+                    }
+                }
             }
             // @PLAN53 cluster 2 / S4 — alignment invariant guard.  In aligned
             // mode the entry base is 8 and every push/pop/reserve advances by a

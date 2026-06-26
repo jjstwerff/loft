@@ -572,7 +572,7 @@ impl Stores {
         store.free = true;
         // LOFT_UAF: record the freed slot so the dispatch loop can scan, after
         // this op, for live variables that still read it (a premature free).
-        if crate::keys::uaf_check_enabled() {
+        if crate::keys::uaf_any_enabled() {
             self.uaf_freed_this_op.push(al);
         }
         // S29: mark slot as free in the bitmap so database_named()

@@ -1374,6 +1374,37 @@ impl State {
         if data.store_nr == u16::MAX {
             return;
         }
+        // cluster-462 tool-gap #1 — name the premature-free op: when the copy
+        // SOURCE is read while its store is still freed (the operand-stack stale
+        // ref the LOFT_UAF frame scan misses), report the source, the line that
+        // freed it, and the copy site.  Gated on LOFT_UAF; capped to avoid flood.
+        if crate::keys::uaf_any_enabled()
+            && (data.store_nr as usize) < self.database.allocations.len()
+            && self.database.allocations[data.store_nr as usize].free
+        {
+            thread_local! {
+                static REPORTED: std::cell::RefCell<std::collections::HashSet<u16>> =
+                    std::cell::RefCell::new(std::collections::HashSet::new());
+            }
+            let first = REPORTED.with(|s| s.borrow_mut().insert(data.store_nr));
+            if first {
+                let line_of = |ln: &std::collections::BTreeMap<u32, u32>, pc: u32| -> u32 {
+                    ln.range(..=pc).next_back().map_or(0, |(_, &v)| v)
+                };
+                let copy_line = line_of(&self.line_numbers, self.code_pos);
+                let copy_d_nr = self.call_stack.last().map_or(u32::MAX, |f| f.d_nr);
+                let (free_pc, free_line, free_d_nr) = crate::keys::uaf_freed_pc(data.store_nr)
+                    .map_or((0, 0, u32::MAX), |(pc, d)| {
+                        (pc, line_of(&self.line_numbers, pc), d)
+                    });
+                eprintln!(
+                    "[uaf-src] OpCopyRecord reads FREED source store #{} (rec={},pos={},tp={tp}) \
+                     at copy-site pc={} (line {copy_line}, fn d_nr={copy_d_nr}); that store was \
+                     last freed at pc={free_pc} (line {free_line}, fn d_nr={free_d_nr})",
+                    data.store_nr, data.rec, data.pos, self.code_pos,
+                );
+            }
+        }
         if std::env::var("LOFT_TRACE_CR").is_ok() {
             let src_w = if data.rec != 0 {
                 self.database.store(&data).get_int(data.rec, data.pos)

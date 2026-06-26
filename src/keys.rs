@@ -273,6 +273,46 @@ pub fn uaf_check_enabled() -> bool {
     *UAF.get_or_init(|| std::env::var_os("LOFT_UAF").is_some())
 }
 
+/// `LOFT_UAF_SRC` — the cheap companion to `LOFT_UAF`: record each free's pc and
+/// report when `do_copy_record` reads a still-freed SOURCE, but SKIP the expensive
+/// per-op frame scan (which floods + slows a real-scale run past its timeout before
+/// the faulting copy is reached).  Enables the same `uaf_freed_this_op` recording.
+pub fn uaf_src_enabled() -> bool {
+    static UAF_SRC: OnceLock<bool> = OnceLock::new();
+    *UAF_SRC.get_or_init(|| std::env::var_os("LOFT_UAF_SRC").is_some())
+}
+
+/// Either UAF instrument is on (gates the `uaf_freed_this_op` recording in `free_named`).
+#[must_use]
+pub fn uaf_any_enabled() -> bool {
+    uaf_check_enabled() || uaf_src_enabled()
+}
+
+thread_local! {
+    /// `LOFT_UAF` companion (cluster-462 tool-gap #1): store slot -> the
+    /// execution `code_pos` of its most-recent free.  The frame-var scan in
+    /// `uaf_scan_freed` misses a stale DbRef that lives on the OPERAND STACK
+    /// (the source `OpCopyRecord` pops) — so this records every free's pc and
+    /// `do_copy_record` reports it when it reads a still-freed source, pinning
+    /// the premature-free op without a full operand-stack scan.
+    static FREED_AT: std::cell::RefCell<std::collections::HashMap<u16, (u32, u32)>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Record (under `LOFT_UAF`) that store `slot` was freed while executing `pc` in
+/// function `d_nr`.
+pub fn uaf_record_free(slot: u16, pc: u32, d_nr: u32) {
+    FREED_AT.with(|m| {
+        m.borrow_mut().insert(slot, (pc, d_nr));
+    });
+}
+
+/// The `(code_pos, d_nr)` of `slot`'s most-recent recorded free, if any.
+#[must_use]
+pub fn uaf_freed_pc(slot: u16) -> Option<(u32, u32)> {
+    FREED_AT.with(|m| m.borrow().get(&slot).copied())
+}
+
 #[must_use]
 pub fn store<'a>(r: &DbRef, stores: &'a [Store]) -> &'a Store {
     debug_assert!(
