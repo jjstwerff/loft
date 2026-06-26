@@ -308,6 +308,59 @@ pub fn uaf_gen_enabled() -> bool {
 }
 
 thread_local! {
+    /// `LOFT_UAF_GEN` (c): generation per store slot — bumped on each free. A DbRef
+    /// minted while a slot is at gen G is stale if the slot reaches gen >G (freed +
+    /// reused) before the ref is read. The gen distinguishes the OLD occupant from a
+    /// re-claimed NEW one — so it does NOT false-positive on free-then-reclaim (the
+    /// flaw that sank the store_nr-only scan).
+    static SLOT_GEN: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// Shadow of the operand stack: the slot-gen stamped on each DbRef at PUSH, keyed by
+    /// its eval-stack byte offset. At POP, a shadow-vs-current mismatch = reused-since-push.
+    static STACK_SHADOW: std::cell::RefCell<std::collections::HashMap<u32, u32>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Bump store `slot`'s generation (called from `free_named` under `LOFT_UAF_GEN`).
+pub fn uaf_bump_gen(slot: u16) {
+    SLOT_GEN.with(|g| {
+        let mut v = g.borrow_mut();
+        let i = slot as usize;
+        if i >= v.len() {
+            v.resize(i + 1, 0);
+        }
+        v[i] = v[i].wrapping_add(1);
+    });
+}
+
+/// Store `slot`'s current generation (0 if never freed).
+#[must_use]
+pub fn uaf_slot_gen(slot: u16) -> u32 {
+    SLOT_GEN.with(|g| g.borrow().get(slot as usize).copied().unwrap_or(0))
+}
+
+/// Stamp the generation of the DbRef pushed at eval-stack offset `off`.
+pub fn uaf_stamp_shadow(off: u32, generation: u32) {
+    STACK_SHADOW.with(|s| {
+        s.borrow_mut().insert(off, generation);
+    });
+}
+
+/// The gen stamped at eval-stack offset `off`, if any.
+#[must_use]
+pub fn uaf_shadow_gen(off: u32) -> Option<u32> {
+    STACK_SHADOW.with(|s| s.borrow().get(&off).copied())
+}
+
+/// Consume the shadow stamp at `off` (called on a DbRef POP). The stack is LIFO, so a
+/// stamp is valid only for its matching pop; clearing it stops a stale stamp from
+/// surviving to an unrelated later read once a non-DbRef push reuses the offset.
+pub fn uaf_clear_shadow(off: u32) {
+    STACK_SHADOW.with(|s| {
+        s.borrow_mut().remove(&off);
+    });
+}
+
+thread_local! {
     /// `LOFT_UAF` companion (cluster-462 tool-gap #1): store slot -> the
     /// execution `code_pos` of its most-recent free.  The frame-var scan in
     /// `uaf_scan_freed` misses a stale DbRef that lives on the OPERAND STACK

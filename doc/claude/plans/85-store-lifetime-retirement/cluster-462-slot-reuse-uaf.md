@@ -64,8 +64,53 @@ reachable at real-consumer scale.**
    a SIGSEGV vanish, the crash is a slot-reuse UAF (row 3). Worth promoting to a
    permanent gated diagnostic alongside `poison_free` / `LOFT_UAF`.
 
-(Both were used as throwaway probes this session and reverted; promote them when the
-cluster's fix work starts.)
+---
+
+## Detectors built (2026-06-26) — three gated diagnostics
+
+Tool-gap #1 is now built as **three** independent, env-gated detectors (all default-off,
+zero behavioural effect when unset — verified suite-green). Each catches a different slice
+of "a DbRef into a freed slot is still read":
+
+| Flag | Where | What it catches | Soundness |
+|---|---|---|---|
+| `LOFT_UAF_SRC` | `io.rs do_copy_record` (a) | `copy_record` whose **source store has `free=true`** — the use-after-free at the copy itself | sound (reads the live `free` flag) |
+| `LOFT_UAF_REUSE` | `io.rs do_copy_record` (b) | `copy_record` (free=false) where `validate_claims` finds the destination layout already inconsistent — reuse-corruption *visible at copy time* | sound |
+| `LOFT_UAF_GEN` | `keys.rs` + `state/mod.rs` `put_stack`/`get_stack` (c) | a DbRef **pushed** to the eval stack, whose slot is later **freed AND reused** (gen bumped) before the DbRef is **popped** and read — the general stale-reused-ref read | sound *in principle* (per-slot generation distinguishes old occupant from re-claimed new); residual false-NEGATIVES only |
+
+**Why the operand-stack free-site scan (the obvious approach) was rejected as UNSOUND:** a
+store can be freed and *immediately re-claimed* on the same op (e.g. `s = []` in-place
+reinit), so "a stack DbRef points at a slot freed this op" fires ~21856× on legitimate
+free-then-reclaim. The **generation** approach (c) fixes this: each slot carries a monotonic
+`gen`, bumped on free; a stack DbRef is stamped with its slot's gen at push; a pop is stale
+**only if** `stamped < current_gen` (freed *and reused* since push, not merely freed). A
+re-claim that didn't bump past the stamp is not flagged.
+
+**(c) implementation:** `SLOT_GEN: Vec<u32>` (per-slot generation, bumped in
+`allocation.rs free_named`); `STACK_SHADOW: HashMap<offset,gen>` (the gen stamped at each eval
+offset). `put_stack<DbRef>` stamps; `get_stack<DbRef>` reads the stamp, **consumes it (LIFO
+clear)**, and reports `stamped < current`. The LIFO clear is load-bearing: without it a stale
+stamp survives a non-DbRef push that reused the offset → false positives (162 reports → 57
+after the clear).
+
+### Finding — (c) fingers the crash site
+
+`LOFT_UAF_GEN=1` on the crawler (`src/questtest.loft`) reports **57 distinct stale-reused-ref
+reads**, and **`sim.loft:3546` — the exact SIGSEGV site — is among them** (with `3545`
+adjacent, plus a cluster at 3482/3483/3901/3947/3951/3955/3969/4003/4020/4050). This
+**confirms row 3 + row 8 from the other direction**: the crash is a DbRef read whose backing
+store was freed *and re-claimed by a new occupant* between push and pop. The detector converts
+the crash from "190-store interleaving, invisible minimally" into a named, line-located
+stale-read at the chokepoint (`get_stack<DbRef>`).
+
+**Residual / limitation:** (c) reports only *reads* that flow through `get_stack` (the eval
+stack); a DbRef reaching the stack via a **non-DbRef-typed push** (struct-bytes copy) carries
+no stamp → it is a false-negative, not a false-positive. So 57 is a *lower* bound on stale
+reads, and the detector is safe to trust when it *does* fire (no false alarms) but not as a
+completeness oracle.
+
+(Both `LOFT_NO_SLOT_REUSE` and the throwaway operand-stack scan were used as probes and
+reverted; (a)/(b)/(c) are the kept, committed diagnostics.)
 
 ---
 

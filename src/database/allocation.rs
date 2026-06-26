@@ -575,6 +575,11 @@ impl Stores {
         if crate::keys::uaf_any_enabled() {
             self.uaf_freed_this_op.push(al);
         }
+        // LOFT_UAF_GEN (c): bump the slot's generation so a DbRef minted at the old
+        // gen is detectably stale if read after this free (+ any later reuse).
+        if crate::keys::uaf_gen_enabled() {
+            crate::keys::uaf_bump_gen(al);
+        }
         // S29: mark slot as free in the bitmap so database_named()
         // can reuse it without LIFO ordering.
         self.set_free_bit(al);

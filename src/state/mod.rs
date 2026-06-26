@@ -1705,6 +1705,51 @@ impl State {
                 }
             }
         }
+        // LOFT_UAF_GEN (c): a popped DbRef whose stamped push-gen differs from the slot's
+        // CURRENT gen was freed+reused between push and pop — a stale read store_nr alone
+        // cannot see, and (unlike the free-site scan) sound: the gen tells old occupant
+        // from a re-claimed new one. Deduped by read site.
+        if crate::keys::uaf_gen_enabled()
+            && std::any::TypeId::of::<T>() == std::any::TypeId::of::<DbRef>()
+        {
+            let db: &DbRef = unsafe { &*std::ptr::from_ref::<T>(r).cast::<DbRef>() };
+            // Read the stamp, then CONSUME it (LIFO): the stack is last-in-first-out, so a
+            // stamp belongs to exactly the pop that matches its push. Clearing on pop stops
+            // a stale stamp from surviving to a later unrelated read once a non-DbRef push
+            // reuses the offset — the main residual-false-positive source.
+            let stamped = crate::keys::uaf_shadow_gen(self.stack_pos);
+            crate::keys::uaf_clear_shadow(self.stack_pos);
+            // Only stamped < current is a genuine reuse-SINCE-push (gen increases
+            // monotonically per slot). A stamped >= current is not a reuse-since-push; the
+            // `<` test drops stale stamps too.
+            if db.store_nr != u16::MAX
+                && (db.store_nr as usize) < self.database.allocations.len()
+                && let Some(stamped) = stamped
+                && stamped < crate::keys::uaf_slot_gen(db.store_nr)
+            {
+                thread_local! {
+                    static REPORTED_GEN: std::cell::RefCell<std::collections::HashSet<u32>> =
+                        std::cell::RefCell::new(std::collections::HashSet::new());
+                }
+                if REPORTED_GEN.with(|s| s.borrow_mut().insert(self.code_pos)) {
+                    let line = self
+                        .line_numbers
+                        .range(..=self.code_pos)
+                        .next_back()
+                        .map_or(0, |(_, &v)| v);
+                    eprintln!(
+                        "[uaf-gen] stale DbRef popped: store #{} (rec={}, pos={}) was gen {stamped} \
+                         at push but is now gen {} (freed+reused since) — read at code_pos={} \
+                         (line {line})",
+                        db.store_nr,
+                        db.rec,
+                        db.pos,
+                        crate::keys::uaf_slot_gen(db.store_nr),
+                        self.code_pos,
+                    );
+                }
+            }
+        }
         r
     }
 
@@ -1893,6 +1938,17 @@ impl State {
             .database
             .store_mut(&self.stack_cur)
             .addr_mut::<T>(self.stack_cur.rec, self.stack_cur.pos + self.stack_pos);
+        // LOFT_UAF_GEN (c): stamp the slot-gen of a pushed DbRef at its stack offset
+        // (BEFORE the move below), so a POP after the slot is freed+reused detects the
+        // gen mismatch.
+        if crate::keys::uaf_gen_enabled()
+            && std::any::TypeId::of::<T>() == std::any::TypeId::of::<DbRef>()
+        {
+            let db: &DbRef = unsafe { &*(&raw const val).cast::<DbRef>() };
+            if db.store_nr != u16::MAX {
+                crate::keys::uaf_stamp_shadow(self.stack_pos, crate::keys::uaf_slot_gen(db.store_nr));
+            }
+        }
         *m = val;
         self.stack_pos += self.stack_step(size_of::<T>() as u32);
         if self.stack_pos > self.stack_high {
