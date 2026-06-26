@@ -103,3 +103,28 @@ the one propagated borrow-set in [../../over-free-class-study.md](../../over-fre
 A probe graduates to `tests/scripts/85-<slug>.loft` once GREEN on both backends with no
 leak. The ✅-guard rows are graduation candidates now; P9/P14 graduate when the substrate
 fix lands (they are the fix's acceptance tests).
+
+## Second crawler driver — `sim_descend` (tp=194), 2026-06-26
+
+After the dominant-driver fix (M-462repro silent), the crawler STILL SIGSEGVs at
+`sim.loft:3546` (`enemies += [mk_enemy(wdef,…)]`, op=227 = `copy_record` per cluster-462
+row 2). The fatal read is a slot freed-THEN-reused (`free=false` by read time, so
+`LOFT_UAF_SRC` — which checks `free=true` — flags only the PRECURSOR, not the fatal read).
+The one remaining instrument-pinned freed-source read is **`sim_descend`'s `ns`** (tp=194,
+the `Sim` struct): `ns = sim_new_gen_s(...)` + ~70 `ns.field = s.field` copies from the
+param, returned; the caller (`gameflow.loft:75 s2 = sim_descend(s)`) copy-binds it
+(`!return_adopts_fresh_store`), but `ns`'s buffer is freed before that copy reads it.
+
+**Related to our work:** YES — same over-free class (a returned buffer freed prematurely /
+a `copy_record` reading a freed source).
+
+**Boundary probes (clean — those exact shapes are HANDLED):**
+- `S1-descend` — `ns = fresh(); ns.field = s.field (×4 incl. vectors); return ns` → ✅ clean.
+- `U1-localreturn` — `m2 = table[i] ?? m_none(); return m2` (mon_choose_habitat shape) → ✅ clean.
+- `U2-directreturn` — `return table[i] ?? m_none()` → ✅ clean.
+
+So the `sim_descend` instance does NOT reduce to a simple field-copy or return-view shape —
+it is the **scale/composition residual** (cluster-462's ~190-store slot-reuse interleaving),
+reproducible only on the crawler corpus + `LOFT_UAF_SRC`. Next step: instrument `sim_descend`
+on the corpus to find which field-copy (or the `sim_new_gen_s` interaction) frees `ns`'s
+buffer before the caller's copy — a fresh sub-investigation, not a minimal-probe target.

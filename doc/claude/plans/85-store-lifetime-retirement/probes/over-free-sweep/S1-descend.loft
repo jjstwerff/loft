@@ -1,0 +1,26 @@
+struct M { hp: integer not null, depth: integer not null, name: text }
+struct Big { tag: text, n: integer, items: vector<M>, more: vector<M> }
+fn m_none() -> M { M { hp: 0, depth: 0, name: "" } }
+fn filler(k: integer) -> integer { es: vector<M> = []; for j in 0..k { es += [M{hp:j,depth:j,name:"f"}]; } return len(es); }
+fn fresh(seed: integer) -> Big { Big { tag: "fresh{seed}", n: seed, items: [], more: [] } }
+fn descend(s: Big, seed: integer) -> Big {
+  ns = fresh(seed);
+  ns.items = s.items;   // vector field copied from PARAM s
+  ns.more = s.more;
+  ns.tag = s.tag;
+  ns.n = s.n;
+  ns
+}
+fn main() {
+  s = Big { tag: "orig", n: 7, items: [], more: [] };
+  s.items += [M{hp:1,depth:1,name:"a"}]; s.items += [M{hp:2,depth:2,name:"b"}];
+  s.more += [M{hp:9,depth:9,name:"z"}];
+  for i in 0..20 {
+    s2 = descend(s, i);
+    acc=0; for f in 0..8 { acc += filler(8); }
+    assert(len(s.items)==2, "iter {i}: s.items={len(s.items)}");
+    assert(len(s2.items)==2, "iter {i}: s2.items={len(s2.items)}");
+    assert(s2.tag == "orig", "iter {i}: s2.tag={s2.tag}");
+  }
+  println("S1 ok");
+}
