@@ -63,6 +63,29 @@ done
   NOT trip it, so their corruption surfaces at a vector read/append, not a record copy —
   the operand-stack/vector-element half of the detector still to extend (cluster-462 gap #1).
 
+## Substrate fix progress (2026-06-26, scopes.rs)
+
+First substrate slice, driven by P9: a **VECTOR return-buffer** (hidden SRet arg, NRVO'd)
+bound from a `!return_adopts_fresh_store()` call is PutRef-ALIASED to the call's work-ref
+arg (no copy — unlike the Reference path, which `gen_set_first_ref_call_copy` copies), and
+a plain `OpFreeRef(work-ref)` at scope exit then frees the RETURNED buffer. Fix
+(`scan_set`): witness-pair `work-ref → ov` so the free becomes
+`OpFreeRefIfDistinct(work-ref, ov)` (no-op since they alias; the caller frees the buffer).
+
+- **P9 crash → FIXED** both backends; full suite 2542 green; no regression.
+- **P9 now LEAKS on native** (the two-severity dual): `pick_bigger`'s return carries a
+  FALSE `["c"]` borrow dep (it COPIES from `c`, doesn't borrow it), so the caller's `r` is
+  classed as a borrow and never freed. Pre-existing return-*classification* error, exposed
+  (not caused) by removing the crash. **Next facet** = the false return-borrow inference.
+- **#462 (struct sibling) STILL crashes** — `mon_one` returns a `MonsterDef` (Reference,
+  tp=76), not a vector, so this vector-specific slice doesn't reach it. The Reference path
+  copies on a CALL bind but `chosen = m` (conditional var-assign of a local view) aliases.
+- **P14 (enum sibling)** still interp-crashes (enum-field vector via match arm).
+
+The class needs the same treatment per representation (vector ✅ slice, struct/Reference
+#462, enum P14) PLUS the return-borrow-classification fix (the leak-dual) — converging on
+the one propagated borrow-set in [../../over-free-class-study.md](../../over-free-class-study.md).
+
 ## Graduation
 
 A probe graduates to `tests/scripts/85-<slug>.loft` once GREEN on both backends with no
