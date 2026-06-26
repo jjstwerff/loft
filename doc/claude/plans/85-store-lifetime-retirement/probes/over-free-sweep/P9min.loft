@@ -1,0 +1,13 @@
+struct M { hp: integer not null, depth: integer not null, name: text }
+struct Box { rows: vector<M> }
+fn m_none() -> M { M { hp: 0, depth: 0, name: "" } }
+fn filler(n: integer) -> integer { es: vector<M> = []; for j in 0..n { es += [M{hp:j,depth:j,name:"f{j}"}]; } return len(es); }
+fn rows(b: Box) -> vector<M> { b.rows }
+fn pick_bigger(b: Box, c: Box) -> vector<M> { best = rows(b); other = rows(c); if len(other) > len(best) { best = other; } best }
+fn main() {
+  b = Box { rows: [] }; b.rows += [M{hp:1,depth:1,name:"b"}];
+  c = Box { rows: [] }; c.rows += [M{hp:2,depth:2,name:"c1"}]; c.rows += [M{hp:3,depth:3,name:"c2"}];
+  r = pick_bigger(b, c);
+  assert(len(r)==2, "r={len(r)} expect 2");
+  println("P9min ok");
+}

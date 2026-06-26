@@ -1,0 +1,12 @@
+struct M { hp: integer not null, depth: integer not null, name: text }
+struct Box { rows: vector<M> }
+fn m_none() -> M { M { hp: 0, depth: 0, name: "" } }
+fn filler(n: integer) -> integer { es: vector<M> = []; for j in 0..n { es += [M{hp:j,depth:j,name:"f{j}"}]; } return len(es); }
+fn pool_of(t: vector<M>) -> vector<M> { out: vector<M> = []; for i in 0..len(t) { out += [t[i] ?? m_none()]; } out }
+fn one(t: vector<M>, salt: integer) -> M { pool = pool_of(t); chosen = m_none(); np = len(pool); if np > 0 { for wj in 0..np { if salt % np == wj { m = pool[wj] ?? m_none(); chosen = m; } } } chosen }
+fn choose(t: vector<M>, salt: integer) -> M { best = m_none(); d = 0; while d < 3 { cand = one(t, salt*131 + d*17); if cand.depth > best.depth { best = cand; } d += 1; } best }
+fn main() {
+  t: vector<M> = []; for k in 0..10 { t += [M{hp:k,depth:k,name:"m{k}"}]; }
+  for i in 0..12 { r = choose(t, i); acc=0; for f in 0..10 { acc += filler(8); } assert(len(t)==10, "i{i}: t={len(t)}"); assert(r.depth>=0 && r.depth<10, "i{i}: r.depth={r.depth}"); }
+  println("P3 ok");
+}

@@ -120,6 +120,17 @@ retbuf aliases `pool`. The fix is not another per-site patch; it is to make the
 assignment rule above hold for the reassign-from-borrow case, then the existing #306
 machinery fires unchanged.
 
+## Problem coverage (the probe sweep)
+
+[probes/over-free-sweep/](probes/over-free-sweep/) is the boundary-matrix sweep of this
+class (18 probes, both backends, `origin/main`-baselined). It confirms: the two fixes
+hold + generalise (P11/P15 red on main, green on HEAD; no regression), and the OPEN items
+are all pre-existing instances of THIS class — **P9** (struct-field vector borrow +
+reassign), **P14** (enum-field vector borrow via match arm, interp-only), **#462**
+(crawler scale), and the **P3** leak-mirror. P9/P14 fail at ~6–8 pressure iterations, so
+they are compact drivers + acceptance tests for the substrate fix. (P4 `?? []` is parked
+Family-A nullability, not this class.)
+
 ## Recommended next step
 
 Land the **assignment borrow-set propagation** (the one rule) as the chokepoint, with

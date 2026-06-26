@@ -1,0 +1,11 @@
+struct M { hp: integer not null, depth: integer not null, name: text }
+struct Box { rows: vector<M> }
+fn m_none() -> M { M { hp: 0, depth: 0, name: "" } }
+fn filler(n: integer) -> integer { es: vector<M> = []; for j in 0..n { es += [M{hp:j,depth:j,name:"f{j}"}]; } return len(es); }
+fn pick(t: vector<M>, i: integer) -> M { t[i] ?? m_none() }
+fn best_of(t: vector<M>) -> M { best = m_none(); for i in 0..len(t) { cand = pick(t, i); if cand.depth > best.depth { best = cand; } } best }
+fn main() {
+  t: vector<M> = []; for k in 0..6 { t += [M{hp:k,depth:k,name:"m{k}"}]; }
+  for i in 0..8 { r = best_of(t); acc=0; for f in 0..8 { acc += filler(7); } assert(len(t)==6, "i{i}: t={len(t)}"); assert(r.depth==5, "i{i}: r.depth={r.depth}"); }
+  println("P12 ok");
+}
