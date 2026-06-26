@@ -52,6 +52,45 @@ per-site heuristic:
   and `returns_borrowed_view()` (`data.rs`) — but are READ at only some sites; the rest
   re-derive (instance 1's deleted proxy; instance 2's empty-dep `__fwd`).
 
+## The return-delivery thicket — concrete inventory (what collapses)
+
+The family that "the one I fixed here" (`copy_borrow_tail_into_retbuf`) belongs to, read
+end-to-end. It is **6 emitters + 5 tail predicates + a 5-variant `Delivery` enum**, each a
+narrow special-case of "put a value of τ into `__retbuf`, owning it":
+
+**Emitters** (`parser/control.rs`)
+| fn | source shape | emission | frees source? |
+|---|---|---|---|
+| `emit_forward_copy_409` (1067) | owned foreign `#native` store | `__fwd = src; clear(w); append(w,__fwd); w` | yes — `__fwd` (empty deps) is scope-freed |
+| `copy_borrow_tail_into_retbuf` (4426) **[fixed]** | borrowed whole-arg / struct-field | `clear(w); append(w, src-inline); w` | **no** — inline, nothing to scope-free |
+| `materialize_vector_arms_into` Var-arm (4304) | owned local vector (an arm) | `clear(w); append(w,local); free deps; w` | yes — explicit `OpFreeRef` of deps |
+| `materialize_vector_arms_into` Call-arm (4324) | arm's hidden `__ref_N` | substitute buffer onto `w` (NRVO rename) | — (move, not copy) |
+| `materialize_return_into` (3972) | Reference/struct view | `OpDatabase(w); OpCopyRecord(src→w); w` | via `0x8000` bit |
+| `deliver_mid_vector_returns` (4529) | mid-body vector returns | per-return delivery into buf | — |
+
+**The smoking gun:** `emit_forward_copy_409` and the fixed `copy_borrow_tail_into_retbuf`
+are the SAME emitter (`clear; append; w`) differing by **exactly one thing** — the owned
+one routes through a `__fwd` local *so scope-exit frees it*; the borrowed one appends
+inline *so nothing frees the borrowed store*. That difference **is** the owned-vs-borrow
+bit. The Var-arm of `materialize_vector_arms_into` is the same shape with an explicit
+free. Three emitters, one parameterised body: `deliver_vector(w, src, owned)`.
+
+**Tail predicates** — all answer "what does the tail borrow / does it own?":
+`return_views_local` (3929, borrows a non-arg local), `tail_whole_arg_vector` (4398,
+borrows a whole vector arg), `tail_is_struct_field_read` (4365, borrows an arg's field).
+These are three reads of the **tail's borrow-set (`deps`)**. (`tail_is_nullable_unwrap`,
+4004, is orthogonal — a `__nullable<S>`→`S` *representation* conversion, not an ownership
+question; it does NOT fold in.) `classify_vector_delivery` (916) is the switch over them.
+
+**Why they are not already merged — the blocker is the buggy substrate, not taste.**
+`tail_is_struct_field_read`'s own comment (control.rs:4350-4364) records that the vector
+INDEX-read tail (`fn f(v)->vector { v[0] }`, #426B) is **deliberately excluded** from the
+copy funnel: forcing it through `__retbuf` "collides the forward temp's inner-element view
+store-nr with a freed sibling store once the caller frees a vector store." That is the
+#462 store-reuse hole. So each predicate is *narrowed around the unsafe substrate* — a
+naive merge re-exposes #426B / #462. The thicket is accreted scar tissue around a
+substrate bug, which is why it keeps growing a special-case per shape.
+
 ## Can we simplify it? — YES, and the direction is proven
 
 The two fixes are the template: **each replaced a per-site re-derivation with a read of
