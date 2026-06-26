@@ -1407,7 +1407,23 @@ impl Parser {
             return;
         }
 
-        // (2) Penultimate must be `Set(cv, Call(fn_nr, args))`, modulo Span.
+        // (2) FAST PATH — the penultimate op is `Set(cv, Call(...))`: collapse
+        //     it (and any earlier CONSECUTIVE `Set(cv, Call)` chain) below.
+        //     When the defining call is EARLIER, with in-place mutation between
+        //     it and the tail (`t = base(); t += …; t` — the @PLN85 cluster-462
+        //     merge / `game_items()` shape), the penultimate is the mutation,
+        //     not the call: fall back to redirecting cv's single top-level
+        //     defining call instead of returning (else its `__ref_N` buffer is
+        //     allocated, orphaned, and leaks one store per call).
+        let penultimate_is_set_cv_call = matches!(
+            l[last - 1].unspan(),
+            Value::Set(slot, rhs) if *slot == cv && matches!(rhs.unspan(), Value::Call(_, _))
+        );
+        if !penultimate_is_set_cv_call {
+            let collapsed = self.nrvo_collapse_defining_call(l, cv);
+            self.suppress_collapsed_workrefs(l, collapsed);
+            return;
+        }
         let prev = l[last - 1].unspan_mut();
         let Value::Set(slot, rhs) = prev else { return };
         if *slot != cv {
@@ -1459,6 +1475,12 @@ impl Parser {
         for a in args.iter_mut() {
             Self::substitute_work_ref(a, work_ref, cv);
         }
+        // Each work-ref collapsed onto `cv` is now redirected: the inner call
+        // delivers into `cv` directly, so the work-ref's own buffer is orphaned.
+        // Collect them and (below, once `l` is final) suppress their eager
+        // allocation — without this they leak one store per call (the
+        // adopt-and-re-return shape, @PLN85 cluster-462 / #462).
+        let mut collapsed_refs = vec![work_ref];
 
         // (6) @PLAN51 Cluster II — extend the substitution backwards to
         //     EARLIER consecutive `Set(cv, Call(_))` ops (probes 02, 21).
@@ -1523,7 +1545,217 @@ impl Parser {
             for a in eargs.iter_mut() {
                 Self::substitute_work_ref(a, ework_ref, cv);
             }
+            collapsed_refs.push(ework_ref);
         }
+
+        self.suppress_collapsed_workrefs(l, collapsed_refs);
+    }
+
+    /// A work-ref collapsed onto `cv` (its inner call now delivers into `cv`
+    /// directly) no longer owns a store, so suppress its eager buffer
+    /// allocation.  For a VECTOR work-ref `skip_free` flips
+    /// `gen_set_first_vector_null` to the no-alloc `OpInitRefSentinel` path and
+    /// tells scope analysis there is nothing to free — closing the
+    /// adopt-and-re-return leak (#462) at its source instead of minting then
+    /// orphaning a store.
+    ///
+    /// VECTOR-only on purpose: a Reference/struct-Enum work-ref is initialised
+    /// through `gen_set_first_ref_*` (a deep-COPY path, not the sentinel
+    /// branch), where its store is genuinely live and already freed balanced by
+    /// scope analysis (the @P377 `render_struct(p) -> Canvas` shape).  Marking
+    /// THAT skip_free both skips a real alloc and suppresses a real free →
+    /// leak.  Skip a work-ref that still has any live use (a defensive guard; a
+    /// freshly-minted call buffer never does).
+    fn suppress_collapsed_workrefs(&mut self, l: &[Value], refs: Vec<u16>) {
+        for w in refs {
+            if matches!(self.vars.tp(w), Type::Vector(_, _)) && !Self::ir_var_has_live_use(l, w) {
+                self.vars.set_skip_free(w);
+            }
+        }
+    }
+
+    /// General NRVO collapse for the "adopt → mutate in place → return" shape
+    /// (`t = base(); t += …; t` — the @PLN85 cluster-462 merge / `game_items()`
+    /// case, #462).  The penultimate-op fast path in `nrvo_collapse_tail_set`
+    /// misses it because the call defining `cv` is followed by in-place
+    /// mutation before the tail.  When `cv` has EXACTLY ONE defining
+    /// `Set(cv, Call(fn, [..__ref_N..]))` and it sits at the TOP LEVEL of the
+    /// body, redirect that call's hidden buffer arg onto `cv` (the promoted
+    /// retbuf) so the inner call delivers there directly — no orphaned buffer.
+    /// Returns the collapsed work-ref(s) for the caller's skip_free pass.
+    ///
+    /// Guarded against the conditional-reassign hazard the penultimate chain
+    /// documents (a blanket substitution broke `87-store-leaks.loft`): a SECOND
+    /// defining `Set(cv, Call)` ANYWHERE — including nested in an `if`/loop arm
+    /// — means `cv` may be conditionally re-defined, so leave it untouched.  A
+    /// sole defining call that is itself nested (assigned only inside a branch)
+    /// is also skipped: redirecting a conditionally-run delivery into the
+    /// retbuf is unsound.
+    fn nrvo_collapse_defining_call(&self, l: &mut [Value], cv: u16) -> Vec<u16> {
+        // VECTOR returns only.  The adopt-then-mutate-then-return shape is
+        // proven safe for a vector tail (`t = base(); t += …; t`): the in-place
+        // mutations append, never re-own.  A STRUCT (Reference/Enum) tail of the
+        // same syntactic shape (`rs = new(); rs.f = …; rs`) instead OVERWRITES
+        // owned fields after the defining call, and redirecting that call into
+        // the retbuf perturbs the field-overwrite free ordering (a small Sim
+        // field leak in the crawler).  That case is a separate, harder shape —
+        // left on its existing (correct) delivery path until proven.
+        if !matches!(self.vars.tp(cv), Type::Vector(_, _)) {
+            return Vec::new();
+        }
+        // Count EVERY assignment to `cv` (`Set(cv, _)` with ANY rhs, incl.
+        // nested in `if`/loop arms), and note the FIRST top-level buffer-call
+        // assignment.  `cv` is eligible ONLY when it is assigned exactly once —
+        // its defining buffer call — and that lone assignment is at the top
+        // level.  A second assignment anywhere means `cv` is conditionally
+        // re-defined (`best = mon_none(); … if … { best = cand } … best`, where
+        // `cand` is a borrowed view): redirecting the first call into the retbuf
+        // and freeing nothing would orphan the buffer the later value never
+        // wrote.  Counting ALL assignments (not just call-assignments) is what
+        // separates the safe merge shape from this hazard — a `cv = view`
+        // re-define is a `Set(cv, Var)`, invisible to a call-only count.
+        let mut assigns = 0usize;
+        let mut top_level_idx: Option<usize> = None;
+        for (idx, op) in l.iter().enumerate() {
+            assigns += Self::count_cv_assignments(op, cv);
+            if top_level_idx.is_none() && self.buffer_call_workref(op, cv).is_some() {
+                top_level_idx = Some(idx);
+            }
+        }
+        if assigns != 1 {
+            return Vec::new();
+        }
+        let Some(idx) = top_level_idx else {
+            // The sole assignment is not a top-level buffer call (a bare view
+            // bind, or nested in a branch) — unsafe / nothing to redirect.
+            return Vec::new();
+        };
+        // Re-resolve the work-ref against the (mutable) node, then substitute.
+        let Some(work_ref) = self.buffer_call_workref(&l[idx], cv) else {
+            return Vec::new();
+        };
+        if let Value::Set(_, rhs) = l[idx].unspan_mut()
+            && let Value::Call(_, args) = rhs.unspan_mut()
+        {
+            for a in args.iter_mut() {
+                Self::substitute_work_ref(a, work_ref, cv);
+            }
+            vec![work_ref]
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Recursively count assignments to slot `cv` — every `Set(cv, _)` /
+    /// `TuplePut(cv, …)`, with ANY right-hand side, anywhere in `node`
+    /// (including nested `if`/loop arms).  In-place mutation of `cv` (vector
+    /// append, struct field write) is NOT an assignment to `cv`'s slot, so it
+    /// is correctly not counted.  `nrvo_collapse_defining_call` uses this to
+    /// fire only when `cv` is assigned exactly once.
+    fn count_cv_assignments(node: &Value, cv: u16) -> usize {
+        let here = matches!(node.unspan(), Value::Set(s, _) | Value::TuplePut(s, _, _) if *s == cv);
+        let children = match node {
+            Value::Set(_, b)
+            | Value::TuplePut(_, _, b)
+            | Value::Return(b)
+            | Value::Drop(b)
+            | Value::Yield(b)
+            | Value::BreakWith(_, b) => Self::count_cv_assignments(b, cv),
+            Value::Span(b) => Self::count_cv_assignments(&b.1, cv),
+            Value::Call(_, a)
+            | Value::CallRef(_, a)
+            | Value::Insert(a)
+            | Value::Tuple(a)
+            | Value::Parallel(a) => a.iter().map(|x| Self::count_cv_assignments(x, cv)).sum(),
+            Value::Block(bl) | Value::Loop(bl) => bl
+                .operators
+                .iter()
+                .map(|o| Self::count_cv_assignments(o, cv))
+                .sum(),
+            Value::If(c, t, f) => {
+                Self::count_cv_assignments(c, cv)
+                    + Self::count_cv_assignments(t, cv)
+                    + Self::count_cv_assignments(f, cv)
+            }
+            Value::Iter(_, a, b, c) => {
+                Self::count_cv_assignments(a, cv)
+                    + Self::count_cv_assignments(b, cv)
+                    + Self::count_cv_assignments(c, cv)
+            }
+            Value::ParFor(b) => {
+                Self::count_cv_assignments(&b.input, cv) + Self::count_cv_assignments(&b.worker, cv)
+            }
+            _ => 0,
+        };
+        usize::from(here) + children
+    }
+
+    /// Read-only probe: if `node` is `Set(cv, Call(fn, args))` whose callee has
+    /// a hidden heap buffer attribute filled by a parser-internal
+    /// `__ref_N`/`__rref_N` work-ref distinct from `cv`, return that work-ref.
+    /// Mirrors steps (3)–(4) of `nrvo_collapse_tail_set`'s fast path without
+    /// mutating, so it can drive both detection and the redirect.
+    fn buffer_call_workref(&self, node: &Value, cv: u16) -> Option<u16> {
+        let Value::Set(slot, rhs) = node.unspan() else {
+            return None;
+        };
+        if *slot != cv {
+            return None;
+        }
+        let Value::Call(fn_nr, args) = rhs.unspan() else {
+            return None;
+        };
+        let def = self.data.def(*fn_nr);
+        let i = def.attributes().iter().position(|a| {
+            a.hidden
+                && matches!(
+                    &a.typedef,
+                    Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+                )
+        })?;
+        let work_ref = match args.get(i)?.unspan() {
+            Value::Var(v) => *v,
+            _ => return None,
+        };
+        if work_ref == cv {
+            return None;
+        }
+        let nm = self.vars.name(work_ref);
+        (nm.starts_with("__ref_") || nm.starts_with("__rref_")).then_some(work_ref)
+    }
+
+    /// True when `v` appears in `l` as anything other than its own
+    /// null-init `Set(v, Null)` — i.e. a live read (`Var(v)`) or a real
+    /// store-producing reassignment (`Set(v, non-null)`).  Used by
+    /// `nrvo_collapse_tail_set` to confirm a collapsed work-ref is fully
+    /// dead before suppressing its allocation/free (skipping the free of a
+    /// still-live owned ref would itself leak).
+    fn ir_var_has_live_use(l: &[Value], v: u16) -> bool {
+        fn walk(val: &Value, v: u16) -> bool {
+            match val {
+                Value::Var(x) => *x == v,
+                // `Set(v, Null)` is the work-ref's own init — not a live use;
+                // any other `Set(v, …)` allocates/writes into it (live).
+                Value::Set(slot, body) | Value::TuplePut(slot, _, body) => {
+                    (*slot == v && !matches!(body.unspan(), Value::Null)) || walk(body, v)
+                }
+                Value::Return(b) | Value::Drop(b) | Value::Yield(b) | Value::BreakWith(_, b) => {
+                    walk(b, v)
+                }
+                Value::Span(b) => walk(&b.1, v),
+                Value::Call(_, args)
+                | Value::CallRef(_, args)
+                | Value::Insert(args)
+                | Value::Tuple(args)
+                | Value::Parallel(args) => args.iter().any(|a| walk(a, v)),
+                Value::Block(bl) | Value::Loop(bl) => bl.operators.iter().any(|op| walk(op, v)),
+                Value::If(c, t, f) => walk(c, v) || walk(t, v) || walk(f, v),
+                Value::Iter(_, a, b, c) => walk(a, v) || walk(b, v) || walk(c, v),
+                Value::ParFor(b) => walk(&b.input, v) || walk(&b.worker, v),
+                _ => false,
+            }
+        }
+        l.iter().any(|op| walk(op, v))
     }
 
     /// Walk past `Span` / `Return` wrappers to find a tail `Var(v)`.
