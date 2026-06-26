@@ -1380,6 +1380,33 @@ impl Parser {
         let rhs_type = self.parse_operators(var_tp, &mut rhs, parent_tp, precedence + 1);
         self.known_var_or_type(&rhs, &rhs_pos);
 
+        // The default may be a vector literal (`?? []`, `?? [99]`) that builds into
+        // its OWN work-ref `_vec_N` — the last operator of the emitted `"Vector"`
+        // block.  That work-ref's only `Set` lives in the else-branch block the
+        // slot scan does not walk (the #319 unwalked-block gap — here for the
+        // DEFAULT literal, not the subject temp handled below), so without help its
+        // slot stays unassigned and codegen panics `Incorrect var _vec_N[65535]`.
+        // Register it (function-entry preamble reserves the slot) and clear its
+        // borrow-dep so the preamble owned-inits it as the owned vector it is.
+        if let Value::Block(bl) = rhs.unspan()
+            && bl.name == "Vector"
+            && let Some(Value::Var(w)) = bl.operators.last().map(Value::unspan)
+        {
+            let w = *w;
+            self.vars.register_work_ref(w);
+            if let Type::Vector(elm, dep) = self.vars.tp(w).clone()
+                && !dep.is_empty()
+            {
+                // An owned literal default borrows nothing — clear the frame-dep so
+                // the preamble gate (dep-empty) fires AND `gen_set_first_vector_null`
+                // takes the owned-vector alloc path.  `set_type` overwrites the dep;
+                // `change_var_type` early-returns on `is_equal` (deps ignored) and
+                // only ADDS deps, so it cannot clear.
+                self.vars
+                    .set_type(w, Type::Vector(elm, crate::data::Deps::none()));
+            }
+        }
+
         if matches!(lhs_type, Type::Null) {
             // LHS is an untyped null literal: always use the RHS.
             *code = rhs;
