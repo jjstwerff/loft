@@ -148,3 +148,23 @@ returned struct's store freed before the return — but a COMPOSITION of the big
 many-field-assign + return-delivery/scope-free interaction (not a simple shape; the S1/U1/U2
 probes are clean). Next: bisect which scope-exit free (op 152) targets `ns`'s store vs a
 borrowing temp, and whether the return-delivery fails to protect `ns`.
+
+### sim_descend replication attempts (2026-06-26) — does NOT reduce minimally
+
+Bytecode confirms: at `sim_descend`'s return, a `FreeRef` (op 152) frees `ns`'s store
+(#238, tp=194) and `return ns` follows (offset 1690) — `ns` is scope-freed as a local
+WHILE being returned, i.e. its NRVO promotion to `__retbuf` (or a return-copy) failed under
+the function's composition. The caller (gameflow:75) then copy-binds the freed store.
+
+Five progressively-closer minimal probes — **all CLEAN** (uaf-src 0, both backends):
+- `S1-descend` — `ns = fresh(); ns.field = s.field ×4 (incl. vectors); return ns`
+- `V1-manyfields` — 12-field struct, 8 field-copies, `logit(ns)` pass-by-value, tuple destructure, conditional field-write, `return ns`
+- `V2-nested` — nested struct field (`ns.player.clevel = s.player.clevel`), `&`-mutate call (`mutate(ns)`), vector fields, `return ns`
+- `U1-localreturn`, `U2-directreturn` — return-side nullable-view
+
+None reproduce. So the `sim_descend` over-free is NOT a reducible shape — it is the
+**scale/composition residual** (cluster-462's ~190-store slot-reuse interleaving), where the
+accumulated allocation pattern is what breaks `ns`'s NRVO promotion / makes the freed slot
+collide. Reproducible ONLY on the crawler corpus + `LOFT_UAF_SRC`. The fix path is therefore
+in the return-delivery / NRVO of a large struct returned after many in-place field ops —
+read on the corpus, not a `/tmp` probe.
