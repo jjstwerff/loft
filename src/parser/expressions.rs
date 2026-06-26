@@ -1567,6 +1567,43 @@ use a separate collection or add after the loop"
                         == format!("__nullable<{}>", self.data.def(*struct_d).name())));
         if nullable_to_dense_assign && self.convert(code, &s_type, f_type) {
             s_type = f_type.clone();
+            // The unwrap (`convert`) produced a payload sub-ref `OpGetField(src, payload)`
+            // — a VIEW into the nullable source's store. Assigning that view to an OWNING
+            // dense Reference local aliases it; if the local is then returned the view
+            // dangles once the source (e.g. a local `pool`) is freed (#462). Deep-COPY the
+            // unwrapped payload into a fresh owned store so the target keeps value
+            // semantics — it stays OWNED (so #316's pre-Set free of its prior store still
+            // fires) AND owns an independent copy (so the return is not a dangling view).
+            // This makes the imperative `chosen = pool[i] ?? mk()` reassign match the
+            // already-correct if-EXPRESSION form. The work-ref is `skip_free` (the target
+            // adopts + solely owns the copy), so there is no double-free.
+            if !self.first_pass
+                && let Type::Reference(td, _) = f_type
+            {
+                let td = *td;
+                let kt = self.data.def(td).known_type();
+                let w = self
+                    .vars
+                    .work_refs(&Type::Reference(td, crate::data::Deps::none()), &mut self.lexer);
+                if w != u16::MAX {
+                    self.vars.set_skip_free(w);
+                    let copy_d = self.data.def_nr("OpCopyRecord");
+                    let orig = std::mem::replace(code, Value::Null);
+                    *code = crate::data::v_block(
+                        vec![
+                            crate::data::v_set(w, Value::Null),
+                            self.cl("OpDatabase", &[Value::Var(w), Value::Int(i32::from(kt))]),
+                            Value::Call(
+                                copy_d,
+                                vec![orig, Value::Var(w), Value::Int(i32::from(kt))],
+                            ),
+                            Value::Var(w),
+                        ],
+                        Type::Reference(td, crate::data::Deps::none()),
+                        "nullable_unwrap_copy",
+                    );
+                }
+            }
         }
         // @PLN85 cluster V — a vector `+=` is an IN-PLACE append: `buf` keeps its OWN
         // backing store; the appended source is COPIED in and consumed.  `change_var`
