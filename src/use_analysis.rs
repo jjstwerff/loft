@@ -222,6 +222,18 @@ fn analyze_fn(code: &Value, function: &Function, data: &Data) -> Vec<VerdictRow>
     };
     u.visit(code, Ctx::Other);
 
+    // The SOURCE-mutation fact (¬D2) is the parser's mature, interprocedural
+    // mutation analysis — `find_written_vars` also catches a source handed to a
+    // mutating callee, which our intraprocedural walk would miss. (We cannot use it
+    // for the LOCAL `v`: `find_written_vars` marks a var written by its own
+    // defining `Set`, so every bound local is "written"; `v`'s read-only-ness needs
+    // the copy-idiom-aware walk above, which excludes `v`'s def and copy-fill.)
+    let written = {
+        let mut w = HashSet::new();
+        crate::parser::find_written_vars(code, data, &mut w, &mut HashMap::new());
+        w
+    };
+
     let mut vars: Vec<u16> = u.append_src.keys().copied().collect();
     vars.sort_unstable();
 
@@ -240,7 +252,7 @@ fn analyze_fn(code: &Value, function: &Function, data: &Data) -> Vec<VerdictRow>
         let single_def = u.def_count.get(&v).copied().unwrap_or(0) == 1;
         let v_readonly = !u.ineligible.contains(&v);
         let src_is_param = src.is_some_and(|s| function.is_argument(s));
-        let src_unmutated = src.is_some_and(|s| !u.ineligible.contains(&s));
+        let src_unmutated = src.is_some_and(|s| !written.contains(&s));
 
         let (verdict, reason) = if single_def && v_readonly && src_is_param && src_unmutated {
             (

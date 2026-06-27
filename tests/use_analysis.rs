@@ -75,9 +75,30 @@ fn to_user(s: Sim) -> integer {
   sink(w)
 }
 
+// the SOURCE is read by a non-mutating callee -> still BORROW. This is the
+// interprocedural precision the shared `find_written_vars` buys: a purely
+// intraprocedural source check would have to assume `peek` might mutate `s`.
+fn peek(s: Sim) -> integer { len(s.tiles) }
+fn via_peek(s: Sim, i: integer) -> integer {
+  u = s.tiles;
+  d = peek(s);
+  u[i] ?? d
+}
+
+// the SOURCE is mutated through a callee while the local is live -> COPY
+// (caught only because the mutation analysis is interprocedural).
+fn poke(s: &Sim) { s.tiles[0] = 1; }
+fn via_poke(s: Sim, i: integer) -> integer {
+  u = s.tiles;
+  poke(s);
+  u[i] ?? 0
+}
+
 fn main() {
   s = Sim { tiles: [1, 2, 3], walls: [0, 0, 0] };
-  print("{tile_at(s, 1)} {edge_at(s, 1)} {mutate(s, 1)} {local_src(1)} {to_user(s)}\n");
+  print(
+    "{tile_at(s, 1)} {edge_at(s, 1)} {mutate(s, 1)} {local_src(1)} {to_user(s)} {via_peek(s, 1)} {via_poke(s, 1)}\n"
+  );
 }
 "#;
 
@@ -91,4 +112,7 @@ fn verdicts_per_boundary_cell() {
     assert_verdict(&stderr, "mutate", "Copy"); // D1: local written
     assert_verdict(&stderr, "local_src", "Copy"); // D3: non-param source (Tier-0 limit)
     assert_verdict(&stderr, "to_user", "Copy"); // D3/escape: passed to a user fn
+    // interprocedural source-mutation (¬D2) via the shared find_written_vars
+    assert_verdict(&stderr, "via_peek", "Borrow"); // callee only reads the source
+    assert_verdict(&stderr, "via_poke", "Copy"); // callee mutates the source
 }
