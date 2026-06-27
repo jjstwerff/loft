@@ -1,0 +1,13 @@
+enum V { CNull, CInt { value: integer not null }, CText { value: text }, CMap { entries: vector<Entry> } }
+struct Entry { key: V, value: V }
+fn first_key(m: V) -> integer {
+  match m {
+    CMap { entries } => { match entries[0].key { CInt { value } => { value }, _ => { -1 } } },
+    _ => -2,
+  }
+}
+fn main() {
+  es: vector<Entry> = []; es += [ Entry { key: CInt{value:1}, value: CNull } ];
+  m = CMap { entries: es };
+  print("OUT={first_key(m)}\n");
+}

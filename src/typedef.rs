@@ -95,10 +95,7 @@ pub(crate) fn nullable_vector_elem(
     Some(data.nullable_enum_for(lexer, struct_d))
 }
 
-fn copy_unknown_fields(data: &mut Data, lexer: &mut Lexer, d: u32) {
-    // Mirror `e2_nullable_elem`'s `e2_rewrite_enabled` gate: only a non-stdlib owner's
-    // fields take the nullable-element default (the native stdlib stays dense).
-    let owner_rewrites = data.def(d).source != crate::data::STD_SOURCE;
+fn copy_unknown_fields(data: &mut Data, d: u32) {
     for nr in 0..data.attributes(d) {
         if let Type::Unknown(was) = data.attr_type(d, nr) {
             data.set_attr_type(d, nr, data.def(was).returned.clone());
@@ -107,21 +104,17 @@ fn copy_unknown_fields(data: &mut Data, lexer: &mut Lexer, d: u32) {
             && was != 0
         {
             let dep = dep.clone();
+            // Forward-ref element resolves DENSE — the dense-default invariant
+            // ("`vector<τ>` is dense for every τ unless an explicit `τ?`").  A
+            // `vector<S?>` carries its `?` from parse as a synth `__nullable<S>`
+            // enum element (`e2_nullable_elem` registers it eagerly even when S is
+            // a forward ref), so only the dense `vector<S>` ever reaches here as a
+            // bare `Unknown`.  Wrapping it here (the pre-dense behaviour) is what
+            // made a forward-referenced element's FIELD nullable while its
+            // construction stayed dense → element-stride mismatch → corrupted
+            // enum-discriminant reads / over-free on both backends (@PLN25 #465).
             let resolved = data.def(was).returned.clone();
-            let s = if let Type::Reference(s, _) = &resolved {
-                *s
-            } else {
-                u32::MAX
-            };
-            // Forward-ref element: `e2_nullable_elem` was skipped at parse (the element
-            // was still `Unknown`), so apply the SAME rewrite now, through the shared
-            // home — the field then matches the params/locals of the same `vector<S>`.
-            let elem = if owner_rewrites && let Some(syn) = nullable_vector_elem(data, lexer, s) {
-                Type::Enum(syn, true, Deps::none())
-            } else {
-                resolved
-            };
-            data.set_attr_type(d, nr, Type::Vector(Box::new(elem), dep));
+            data.set_attr_type(d, nr, Type::Vector(Box::new(resolved), dep));
         }
     }
 }
@@ -169,13 +162,13 @@ pub fn actual_types_deferred(
                 lexer.pos_diagnostic(Level::Error, &data.def(d).position, &msg);
             }
             DefType::Function => {
-                copy_unknown_fields(data, lexer, d);
+                copy_unknown_fields(data, d);
                 if let Type::Unknown(was) = data.def(d).returned {
                     data.set_returned(d, data.def(was).returned.clone());
                 }
             }
             DefType::Struct => {
-                copy_unknown_fields(data, lexer, d);
+                copy_unknown_fields(data, d);
             }
             DefType::Enum => {
                 // @PLN25 — a synthetic `__nullable<S>` enum's `Some` variant carries
@@ -192,7 +185,7 @@ pub fn actual_types_deferred(
                 }
             }
             DefType::EnumValue if data.attributes(d) > 0 => {
-                copy_unknown_fields(data, lexer, d);
+                copy_unknown_fields(data, d);
             }
             _ => {}
         }

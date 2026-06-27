@@ -1,0 +1,7 @@
+struct Holder { items: vector<Item?> }
+struct Item { v: integer not null }
+fn main() {
+  xs: vector<Item?> = [ Item{v:7}, null ];
+  h = Holder { items: xs };
+  print("FN present={h.items[0].v} isnull={h.items[1] == null} exp=7,true\n");
+}

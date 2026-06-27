@@ -2429,6 +2429,21 @@ use a separate collection or add after the loop"
         if !self.e2_rewrite_enabled() {
             return elem;
         }
+        // Forward-ref `S?`: S is not laid out yet (still `Unknown`), so synth
+        // `__nullable<S>` eagerly here — its `Some` payload is `Reference(S)`,
+        // which resolves once S is known.  This carries the `?` opt-in through
+        // the forward reference, so the deferred resolver (`copy_unknown_fields`)
+        // only ever sees a DENSE `vector<S>` as a bare `Unknown` and resolves it
+        // dense.  Without this, a forward-ref `vector<S?>` would lose its `?` and
+        // resolve dense (silent loss of nullability).  Stdlib elements stay dense
+        // (their `#rust` bodies use the dense ABI), matching `nullable_vector_elem`.
+        if let Type::Unknown(was) = &elem
+            && *was != 0
+            && self.data.def(*was).source != crate::data::STD_SOURCE
+        {
+            let syn = self.data.nullable_enum_for(&mut self.lexer, *was);
+            return Type::Enum(syn, true, Deps::none());
+        }
         let Type::Reference(struct_d, _) = &elem else {
             return elem;
         };

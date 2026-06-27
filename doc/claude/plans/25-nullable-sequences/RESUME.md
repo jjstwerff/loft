@@ -31,10 +31,17 @@ probe verdicts) → [implementation-steps.md](implementation-steps.md) (the phas
     on both backends. Root: the #415 deep-copy keyed on the syntactic shape; fixed to key
     on the base's `deps` ownership (empty = owns = copy; non-empty = borrows = alias).
     Regression: `tests/scripts/85-store-lifetime-forloop-elem-field-alias-write.loft`.
-- **Remaining: 2 failures = #465 / Step C** — both the SAME script
-  (`85-store-lifetime-enum-match-borrowed-view-overfree.loft`), once interp
-  (`wrap::loft_suite`) + once native (`native::native_scripts`). This is the documented
-  enum-match borrowed-view over-free (Step C below).
+- **STEP C / #465 FIXED** — the suite is now **fully green (2557 passed, 0 failed)** =
+  the vectors-green checkpoint. The matrix showed the real root was NOT the hypothesised
+  borrow→deep-copy delivery: a FORWARD-REFERENCED vector element (`vector<Entry>` inside a
+  recursive enum, element declared after use) was resolved by the deferred resolver
+  (`copy_unknown_fields`) by wrapping it in `__nullable<Entry>` — the pre-dense default —
+  while construction stayed dense → element-stride mismatch (40 vs 32) → corrupted
+  discriminant reads (interp) / over-free (native). Fix: `copy_unknown_fields` resolves a
+  forward-ref element DENSE; `e2_nullable_elem` registers the `__nullable<S>` synth EAGERLY
+  for a forward-ref `S?` so the `?` opt-in survives the forward reference. Regression:
+  `tests/scripts/85-forward-ref-vector-element-density.loft`. (The earlier p379 fix — a
+  borrow wrongly *copied* on assignment — is the inverse-direction sibling.)
 - **Decision (signed off):** dense-default is the approach. The old enum-synthesis line
   on `2026-07-mac` is **abandoned** (superseded, 109 commits stale — do not build on it).
 - **Pre-dense baseline binary for working-vs-broken IR diffs:**
@@ -61,8 +68,12 @@ already passed; p379 crashed — unpredicted). Now **2** remain after Step B + t
 | `plan25_e2_hash::null_in_shared_vector_is_not_indexed_by_the_hash` | nullable-feature | ✅ Step B |
 | `plan25_e2_json::null_in_the_middle_…` | nullable-feature | ✅ (annotated `Item?`; passed already) |
 | `issues::p379_two_libs_same_struct_name` | dense regression (borrowed-base field copy) | ✅ FIXED (`73304f37`) |
-| `wrap::loft_suite` (1 `.loft` script) | **#465 enum-match borrowed-view over-free** | ⬜ **Step C** |
-| `native::native_scripts` (same script, native) | **#465 native mirror** | ⬜ **Step C** |
+| `wrap::loft_suite` (1 `.loft` script) | #465 (real root: fwd-ref element density) | ✅ Step C |
+| `native::native_scripts` (same script, native) | #465 native mirror | ✅ Step C |
+
+**Suite now fully green (2557 passed, 0 failed) — the vectors-green checkpoint.** Next:
+scalars (Phase 0→2), then Phase 3 TIGHTEN, then Phase 5 CLEANUP (see Step D below). The
+vectors half is the first mergeable nullability checkpoint (merge is the user's call).
 
 ---
 
