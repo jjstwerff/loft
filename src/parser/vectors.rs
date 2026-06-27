@@ -1421,35 +1421,10 @@ impl Parser {
             if self.data.def(*e).name.starts_with("__nullable<"))
         {
             in_t.clone()
-        } else if in_t.is_unknown() && self.e2_rewrite_enabled() {
-            // @PLN25 — INFERRED comprehension (no element annotation): peek the
-            // body for a leading struct-literal `{ S{…} }` and default the
-            // element to `__nullable<S>`, mirroring the inferred-literal PEEK in
-            // `parse_vector`.  The body then builds `Some` (parse_block enum-hint)
-            // and `*in_t` becomes the enum below — so the result matches every
-            // DECLARED `vector<S>` (now `vector<__nullable<S>>`).  Without it an
-            // inferred `v = [for … { S{…} }]` stayed dense `vector<S>`: `v[i] =
-            // null` was a silent no-op and passing `v` to a `vector<S>` parameter
-            // mismatched.  A PEEK only (reverted); a body whose first token is not
-            // a struct literal (multi-statement, scalar) stays dense.
-            let link = self.lexer.link();
-            let mut peeked = Type::Unknown(0);
-            self.lexer.has_token("{");
-            if let Some(name) = self.lexer.has_identifier()
-                && self.lexer.peek_token("{")
-            {
-                let d = self.data.def_nr(&name);
-                if d != u32::MAX
-                    && self.data.def_type(d) == DefType::Struct
-                    && self.data.def(d).synthetic.is_none()
-                {
-                    let syn = self.data.nullable_enum_for(&mut self.lexer, d);
-                    peeked = Type::Enum(syn, true, Deps::none());
-                }
-            }
-            self.lexer.revert(link);
-            peeked
         } else {
+            // @PLN25 storage-vs-access-nullability — INFERRED comprehensions stay DENSE
+            // (the struct-literal PEEK is retired). A nullable element comes only from a
+            // DECLARED `vector<?S>` (the first arm above).
             Type::Unknown(0)
         };
         let mut body = Value::Null;
@@ -1721,55 +1696,12 @@ impl Parser {
         {
             assign_tp = Type::Enum(*d, true, dep.clone());
         }
-        // @PLN25 — INFERRED struct-literal vector default: with no declared element
-        // type (`var_tp` Unknown — an inferred local `v = [Row{…}]`, a fn return
-        // body `{ [Row{…}] }`, …) and a first item that is a struct literal `S{…}`,
-        // default the element to the synthetic `__nullable<S>` enum so the elements
-        // build `Some` — matching the `vector<__nullable<S>>` that every DECLARED
-        // site now resolves to (the construction half of the representation).  A
-        // PEEK only (reverted); fires solely for an inferred struct-literal vector,
-        // so `[1.0]` / `[1,2]`, index expressions, and `not null` / declared vectors
-        // are untouched.  Native stdlib (STD_SOURCE) stays dense.
-        if assign_tp.is_unknown() && self.e2_rewrite_enabled() {
-            let link = self.lexer.link();
-            if let Some(first) = self.lexer.has_identifier() {
-                // A library-qualified struct literal (`lib::S { … }`) reads as TWO
-                // identifiers around `::`; the bare-identifier peek saw only `lib`,
-                // missed the `{`, and left the inferred literal DENSE while DECLARED
-                // `lib::S` sites are nullable — the type mismatch at `v += [lib::S{…}]`.
-                // Skip past `::` to the real struct name (last segment) before the `{`.
-                let struct_name = if self.lexer.has_token("::") {
-                    self.lexer.has_identifier()
-                } else {
-                    Some(first)
-                };
-                if let Some(sname) = struct_name
-                    && self.lexer.peek_token("{")
-                {
-                    let d = self.data.def_nr(&sname);
-                    if d != u32::MAX
-                        && self.data.def_type(d) == DefType::Struct
-                        && self.data.def(d).synthetic.is_none()
-                    {
-                        let syn = self.data.nullable_enum_for(&mut self.lexer, d);
-                        // @PLN25 — for a FORWARD-referenced struct `S` the synth `__nullable<S>`
-                        // enum is first created HERE in pass-2 body parse, after `fill_all` ran, so
-                        // it is unregistered.  Lay it out NOW (this is the EARLIEST site — before
-                        // both the construction and the read bake their payload offset / element
-                        // stride) so they bake correct values (371).  No-op once registered.
-                        if !self.first_pass {
-                            crate::typedef::register_and_lay_out_synth(
-                                &mut self.data,
-                                &mut self.database,
-                                syn,
-                            );
-                        }
-                        assign_tp = Type::Enum(syn, true, Deps::none());
-                    }
-                }
-            }
-            self.lexer.revert(link);
-        }
+        // @PLN25 storage-vs-access-nullability — INFERRED literals stay DENSE. With no
+        // declared element type, an inferred `v = [S{…}]` builds a dense `vector<S>`;
+        // nullability is never inferred from a literal's shape (the old struct-literal
+        // PEEK is retired). A nullable element comes only from a DECLARED `vector<?S>`
+        // (the `?` opt-in), where the checking-mode element type + `(C-Var)` `S ⤳ ?S`
+        // wraps each element. Keeps type formation substitution-stable (parametricity).
         // @P315 — `declared` is true when the element type comes from a typed
         // target (typed local / struct field), false when it is inferred from
         // an untyped literal.  A declared element type must NOT be silently

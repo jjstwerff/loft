@@ -549,6 +549,12 @@ fn register_enum_db(data: &mut Data, database: &mut Stores, d: u32) {
 /// (under a qualified name), OVERWRITING `known_type` away from the enum, so the variant link below
 /// targets a struct and the `Some` size never reaches `Parts::Enum`.  Only the VARIANT structs go
 /// through `fill_database` (its `EnumValue` arm calls `enum_value` to link each into the enum).
+// @PLN25 dense flip — superseded for the paths that exist today by
+// `nullable_vector_elem` + `copy_unknown_fields` (e2_nullable_elem), which handle the
+// forward-referenced synth layout. Kept (allow dead) for the Phase-0 EXPAND residual:
+// when `?` parsing extends to return/param type positions, a forward-ref `vector<S?>`
+// synth created there may need this on-demand layout again.
+#[allow(dead_code)]
 pub(crate) fn register_and_lay_out_synth(data: &mut Data, database: &mut Stores, synth_d: u32) {
     if synth_d == u32::MAX || data.def(synth_d).known_type() != u16::MAX {
         return;
