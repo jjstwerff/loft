@@ -129,6 +129,18 @@ struct Uses {
     def_vdb: HashMap<u16, u16>,
     /// Source bases of `OpAppendVector(Var(v), <src>)` (one entry per append).
     append_src: HashMap<u16, Vec<Option<u16>>>,
+    /// Source EXPRESSIONS of `OpAppendVector(Var(v), <src>)` — kept for the
+    /// elision plan (the field-read to inline in place of `v`'s reads).
+    append_expr: HashMap<u16, Vec<Value>>,
+}
+
+/// An elidable copy: replace `v`'s reads with `source` and drop the copy idiom
+/// (the `vdb` buffer + its alloc/append/free).
+#[derive(Clone, Debug)]
+pub struct ElidePlan {
+    pub var: u16,
+    pub vdb: u16,
+    pub source: Value,
 }
 
 impl Uses {
@@ -158,6 +170,12 @@ impl Uses {
                     // mark `v` ineligible (this append IS the copy, not a user write).
                     let src = args.get(1).and_then(|s| base_var(s, self.get_field));
                     self.append_src.entry(*v).or_default().push(src);
+                    if let Some(s) = args.get(1) {
+                        self.append_expr
+                            .entry(*v)
+                            .or_default()
+                            .push(s.unspan().clone());
+                    }
                     for a in &args[1..] {
                         self.visit(a, Ctx::ReaderArg);
                     }
@@ -207,7 +225,7 @@ impl Uses {
 }
 
 /// Compute the borrow-vs-copy verdict for every elidable vector-copy binding in `code`.
-fn analyze_fn(code: &Value, function: &Function, data: &Data) -> Vec<VerdictRow> {
+fn analyze_fn(code: &Value, function: &Function, data: &Data) -> (Vec<VerdictRow>, Vec<ElidePlan>) {
     let mut u = Uses {
         get_field: data.def_nr("OpGetField"),
         op_append: data.def_nr("OpAppendVector"),
@@ -219,6 +237,7 @@ fn analyze_fn(code: &Value, function: &Function, data: &Data) -> Vec<VerdictRow>
         database_vars: HashSet::new(),
         def_vdb: HashMap::new(),
         append_src: HashMap::new(),
+        append_expr: HashMap::new(),
     };
     u.visit(code, Ctx::Other);
 
@@ -238,6 +257,7 @@ fn analyze_fn(code: &Value, function: &Function, data: &Data) -> Vec<VerdictRow>
     vars.sort_unstable();
 
     let mut rows = Vec::new();
+    let mut plans = Vec::new();
     for v in vars {
         let appends = &u.append_src[&v];
         // The copy idiom: v is a fresh OpDatabase buffer, filled by exactly one append.
@@ -274,6 +294,18 @@ fn analyze_fn(code: &Value, function: &Function, data: &Data) -> Vec<VerdictRow>
             (Verdict::Copy, "source mutated")
         };
 
+        if verdict == Verdict::Borrow
+            && let Some(vdb) = u.def_vdb.get(&v)
+            && let Some(exprs) = u.append_expr.get(&v)
+            && exprs.len() == 1
+        {
+            plans.push(ElidePlan {
+                var: v,
+                vdb: *vdb,
+                source: exprs[0].clone(),
+            });
+        }
+
         rows.push(VerdictRow {
             var_nr: v,
             var_name: function.name(v).to_string(),
@@ -282,14 +314,21 @@ fn analyze_fn(code: &Value, function: &Function, data: &Data) -> Vec<VerdictRow>
             reason,
         });
     }
-    rows
+    (rows, plans)
 }
 
 /// Public, test-facing entry: the verdicts for one function by its def number.
 #[must_use]
 pub fn verdicts_for(data: &Data, d_nr: u32) -> Vec<VerdictRow> {
     let def = data.def(d_nr);
-    analyze_fn(&def.code, &def.variables, data)
+    analyze_fn(&def.code, &def.variables, data).0
+}
+
+/// The elision plans (Borrow verdicts) for one function — what the (flagged)
+/// borrow rewrite consumes.
+#[must_use]
+pub fn elision_plans(code: &Value, function: &Function, data: &Data) -> Vec<ElidePlan> {
+    analyze_fn(code, function, data).1
 }
 
 /// Print every function's verdicts when `LOFT_MATERIALIZE_DUMP` is set. Called from
@@ -303,7 +342,7 @@ pub fn dump_all(data: &Data) {
         if !matches!(def.def_type, DefType::Function) {
             continue;
         }
-        for r in analyze_fn(&def.code, &def.variables, data) {
+        for r in analyze_fn(&def.code, &def.variables, data).0 {
             eprintln!(
                 "MAT fn={} v={}({}) src={} verdict={:?} [{}]",
                 def.name, r.var_nr, r.var_name, r.source, r.verdict, r.reason
