@@ -5,7 +5,13 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Copy-vs-borrow elision — derive the materialization mode from USE, not RHS shape
 
-> **Status:** design (doc-first, pre-code, per `design-protocol`). Harvested from the
+> **Status:** **Tier-0 LANDED, default-on** (`5cc11bb1`, opt-out `LOFT_NO_BORROW_ELIDE`).
+> The decision layer is `src/use_analysis.rs`; the inline rewrite is
+> `scopes::elide_borrows`. Validated: full suite green default-on (2558), copy-vs-borrow
+> differential (`tests/scripts/85-borrow-elision-differential.loft`), ~8× on crawler's
+> sim-tick. The copy mechanism stays the substrate (conservative fallback + opt-out).
+> Tiers 1–3 (local-source dominance, ¬D2 mutable source, return-delivery #465
+> unification) remain design-only below. Harvested from the
 > @PLN25 dense dogfood: verifying crawler on the dense branch surfaced a ~5× per-tick
 > slowdown whose root cause is a copy that *should* be a borrow. This is the
 > **performance face of Cluster C / OWNERSHIP_MODEL** ("ownership read once from the
