@@ -282,9 +282,24 @@ fn elide_borrows(data: &mut Data) {
         if plans.is_empty() {
             continue;
         }
+        // A var that BORROWS `v` (`e = v[i]`, `deps` ∋ `v`) is left with a stale dep
+        // once `v` is deleted, so the borrowed-view codegen (`stack(dep[0])`) would
+        // dereference a dead slot. `use_analysis` only emits a plan when every such
+        // borrower is read-only/non-escaping, and lists them; RE-POINT each borrower
+        // `v → source_base` so it borrows the live source element instead (codegen
+        // then reads the source param's valid slot). This is what lets the
+        // borrowed-element accessors elide rather than fall back to copy.
         let mut elide_v: HashMap<u16, Value> = HashMap::new();
         let mut elide_vdb: HashSet<u16> = HashSet::new();
         for p in plans {
+            for &e in &p.borrowers {
+                data.definitions[d_nr as usize]
+                    .variables
+                    .make_independent(e, p.var);
+                data.definitions[d_nr as usize]
+                    .variables
+                    .depend(e, p.source_base);
+            }
             elide_v.insert(p.var, p.source);
             elide_vdb.insert(p.vdb);
         }
@@ -384,14 +399,12 @@ pub fn check(data: &mut Data) {
     // Behaviour-neutral USE-analysis dump (LOFT_MATERIALIZE_DUMP) — the
     // copy-vs-borrow verdict per binding, before any codegen consumes it.
     crate::use_analysis::dump_all(data);
-    // Tier-0 borrow elision (OPT-IN via LOFT_BORROW_ELIDE; default OFF).
-    // Reverted from default-on: the crawler dogfood surfaced a codegen panic the
-    // suite missed — eliding `v` drops `v`/`vdb` but leaves any OTHER var whose
-    // `deps` referenced them dangling, so the borrowed-view codegen path
-    // dereferences a dead dep (codegen.rs `stack(dep[0])`). Re-enable the default
-    // only after the elision fixes up / refuses dependent vars. Off ⇒
-    // behaviour-neutral; the copy mechanism is the substrate.
-    if std::env::var_os("LOFT_BORROW_ELIDE").is_some() {
+    // Tier-0 borrow elision (DEFAULT ON; opt-out LOFT_NO_BORROW_ELIDE). Inlines
+    // Borrow-verdict vector copies before the scope/free passes. `elide_borrows`
+    // refuses to elide a `v` that another var borrows (its `deps` point at `v`),
+    // which is the dogfood-found dangling-dep hazard. The copy mechanism stays the
+    // substrate; the opt-out forces the always-correct copy (the A-B lever).
+    if std::env::var_os("LOFT_NO_BORROW_ELIDE").is_none() {
         elide_borrows(data);
     }
     // Plan-57 store-identity gate (Phase 2.5): emit the verifying store ops only

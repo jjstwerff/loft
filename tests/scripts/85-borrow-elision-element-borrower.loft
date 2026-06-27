@@ -1,0 +1,50 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN25 Tier-1.5 — elide a vector copy whose ELEMENT is borrowed (`e = v[i]`).
+// Tier-0 refused this (a borrower of `v` left a dangling dep → borrowed-view
+// codegen panic), forcing the most common accessor shape to copy. Tier-1.5
+// RE-POINTS each read-only borrower's dep `v → source_base` so it borrows the live
+// source element, and elides — while a MUTATED or ESCAPING borrower keeps the copy
+// (value semantics: the borrowed view would otherwise write/escape the source).
+//
+// This guards: (1) the read-only element borrower elides and reads correctly;
+// (2) the mutated borrower keeps copy semantics (the write hits the discarded copy,
+// the source is unchanged); (3) the escaping borrower keeps copy semantics. Both
+// backends, no leak. See copy-elision-design.md § Tier-1.5.
+
+struct Item { v: integer not null }
+struct G { c: vector<Item> not null }
+
+// read-only element borrower — ELIDES (xs inlined; e borrows the live g.c element)
+fn read_elem(g: G, i: integer) -> integer {
+  xs = g.c;
+  e = xs[i];
+  e.v
+}
+
+// mutated borrower — must KEEP COPY: in copy semantics `e` mutates the discarded
+// snapshot, so the source is unchanged. (If this wrongly elided, `g.c[i]` would
+// see the mutation.)
+fn mut_elem(g: G, i: integer) -> integer {
+  xs = g.c;
+  e = xs[i];
+  e.v = 99;
+  g.c[i].v
+}
+
+// escaping borrower — must KEEP COPY (the returned view would otherwise alias the
+// source element).
+fn esc_elem(g: G, i: integer) -> Item {
+  xs = g.c;
+  e = xs[i];
+  e
+}
+
+fn main() {
+  g = G { c: [Item { v: 5 }, Item { v: 9 }] };
+  assert(read_elem(g, 1) == 9, "read-only element borrow reads the element");
+  assert(mut_elem(g, 0) == 5, "mutated borrower keeps copy semantics (source unchanged)");
+  assert(esc_elem(g, 1).v == 9, "escaping borrower keeps copy semantics");
+  println("borrow-elision element-borrower ok");
+}
