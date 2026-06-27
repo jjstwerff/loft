@@ -264,6 +264,9 @@ fn relocate_null_init(code: &mut Value, vdb: u16, block_scope: u16) -> bool {
 /// reclaim pass left a store the model says is dead un-freed past a later
 /// allocation (the Phase-4 Goal-E watermark guard).  Never panics in normal builds.
 pub fn check(data: &mut Data) {
+    // Behaviour-neutral USE-analysis dump (LOFT_MATERIALIZE_DUMP) — the
+    // copy-vs-borrow verdict per binding, before any codegen consumes it.
+    crate::use_analysis::dump_all(data);
     // Plan-57 store-identity gate (Phase 2.5): emit the verifying store ops only
     // when LOFT_STORE_TAG is set.  Counter is global so ids are unique across
     // functions (a cross-function wrong-store free mismatches).
