@@ -1,0 +1,39 @@
+// @PLN85 cluster-462 — a struct-returning fn whose return-local is CONDITIONALLY
+// reassigned (`chosen = m_none(); if c { chosen = … }; chosen`) leaked one store
+// per call on --native (interp was clean).  The return-local is promoted to the
+// hidden retbuf attribute, which native's reassign-free deliberately excluded
+// (the caller owns the buffer) — so the orphaned first store was never freed.
+// Fix: an entry-buffer witness (`_rb_w_<name>`) lets the reassign free the
+// fn-owned intermediate while never freeing the caller's buffer.  Covers both the
+// plain-call reassignment and the nullable-unwrap (`v[i] ?? d`) reassignment (the
+// `mon_*` / catalog shapes behind the crawler's native MonsterDef leak).
+struct M { hp: integer not null, depth: integer not null, name: text }
+
+fn m_none() -> M { M { hp: 0, depth: 0, name: "" } }
+
+// plain-call conditional reassignment
+fn pick_plain(t: vector<M>) -> M {
+  chosen = m_none();
+  if len(t) > 0 { chosen = m_none(); }
+  chosen
+}
+
+// nullable-unwrap conditional reassignment (the catalog/mon_* shape)
+fn pick_unwrap(t: vector<M>, salt: integer) -> M {
+  chosen = m_none();
+  if len(t) > 0 { chosen = t[salt % len(t) ?? 0] ?? m_none(); }
+  chosen
+}
+
+pub fn test() {
+  t: vector<M> = [];
+  for k in 0..6 { t += [M { hp: k, depth: k, name: "m" }]; }
+  s = 0;
+  for i in 0..12 {
+    a = pick_plain(t);
+    b = pick_unwrap(t, i);
+    s = s + a.depth + b.depth;
+    assert(len(t) == 6, "t corrupted: {len(t)}");
+  }
+  assert(s >= 0, "s={s}");
+}

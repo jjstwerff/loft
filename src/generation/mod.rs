@@ -467,6 +467,13 @@ pub struct Output<'a> {
     pub def_nr: u32,
     pub indent: u32,
     pub declared: HashSet<u16>,
+    /// Hidden return-buffer (retbuf) attribute vars that have an entry-buffer
+    /// witness `_rb_w_<name>` emitted in the prologue (capturing the caller's
+    /// buffer at function entry).  A CONDITIONAL reassignment of such a
+    /// return-local frees an orphaned fn-owned intermediate guarded by
+    /// `_old != _rb_w_<name>`, so it never frees the caller's buffer — closing
+    /// the cluster-462 native record leak without an over-free.
+    pub retbuf_witness: HashSet<u16>,
     /// #260 Fix B: `__vdb` store locals declared up front in the function
     /// prologue (sentinel-bound, no allocation).  The first body
     /// `Set(v, Null)` consumes its entry so it still emits the named-store
@@ -999,6 +1006,7 @@ impl<'a> Output<'a> {
             def_nr: 0,
             indent: 0,
             declared: HashSet::new(),
+            retbuf_witness: HashSet::new(),
             predeclared: HashSet::new(),
             active_pre_eval: HashMap::new(),
             reachable: HashSet::new(),
@@ -1049,6 +1057,7 @@ impl Output<'_> {
         self.def_nr = def_nr;
         self.indent = 0;
         self.declared.clear();
+        self.retbuf_witness.clear();
         self.predeclared.clear();
         self.next_format_count = 0;
     }
@@ -2945,6 +2954,27 @@ extern crate loft;"
                     );
                     self.declared.insert(v);
                     self.predeclared.insert(v);
+                }
+            }
+            // Entry-buffer witness for each hidden return buffer (retbuf): stash
+            // the caller's buffer at function entry as `_rb_w_<name>`.  A
+            // CONDITIONAL reassignment of the return-local (`chosen = m_none();
+            // if c { chosen = … }`) then frees the orphaned fn-owned intermediate
+            // guarded by `_old != _rb_w_<name>`, so it never frees the caller's
+            // buffer — closing the cluster-462 native record leak (the interp
+            // already frees the orphan; native's reassign-free excluded the
+            // retbuf-attr entirely).  Leading `_` suppresses the unused warning
+            // for retbuf locals that are never reassigned.
+            for a in def.attributes() {
+                if a.hidden && matches!(&a.typedef, Type::Reference(_, _) | Type::Enum(_, true, _))
+                {
+                    let av = vars.var(&a.name);
+                    if av != u16::MAX && (av as usize) < vars.count() as usize {
+                        use std::fmt::Write as _;
+                        let nm = sanitize(vars.name(av));
+                        let _ = write!(vdb_prologue, "\n  let _rb_w_{nm}: DbRef = var_{nm};");
+                        self.retbuf_witness.insert(av);
+                    }
                 }
             }
             // #354: hoist block-crossing locals into the prologue — loft

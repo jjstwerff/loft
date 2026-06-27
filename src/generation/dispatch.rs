@@ -36,6 +36,14 @@ impl Output<'_> {
         // coroutine-persistent fields (no `var_x` local exists).
         {
             let variables = self.data.def(self.def_nr).variables();
+            let is_retbuf_attr =
+                self.data.def(self.def_nr).attributes().iter().any(|a| {
+                    a.hidden && self.data.def(self.def_nr).variables().var(&a.name) == var
+                });
+            // A retbuf-attr return-local is normally EXCLUDED (the caller owns its
+            // store).  But when it has an entry-buffer witness, a CONDITIONAL
+            // reassignment must free the orphaned fn-owned intermediate — guarded
+            // (below) against the witness so the caller's buffer is never freed.
             let owned_ref_reassign = self.declared.contains(&var)
                 && matches!(
                     variables.tp(var),
@@ -43,17 +51,33 @@ impl Output<'_> {
                 )
                 && variables.tp(var).depend().is_empty()
                 && !self.coroutine_persistent_vars.contains(&var)
-                && matches!(to.unspan(), Value::Call(_, _) | Value::Insert(_))
-                && !self.data.def(self.def_nr).attributes().iter().any(|a| {
-                    a.hidden && self.data.def(self.def_nr).variables().var(&a.name) == var
-                });
+                // A fresh-store-producing rhs: a call, an inline object `Insert`,
+                // or a `Block` that builds a new store (the `nullable_unwrap_copy`
+                // / `ncc` materialisers — `chosen = v[i] ?? d`).  A bare `Var` rhs
+                // (a borrow / move) is excluded — `depend().is_empty()` above
+                // already gates out borrowed locals.
+                && matches!(
+                    to.unspan(),
+                    Value::Call(_, _) | Value::Insert(_) | Value::Block(_)
+                )
+                && (!is_retbuf_attr || self.retbuf_witness.contains(&var));
             if owned_ref_reassign {
                 let name = sanitize(variables.name(var));
+                // For a witnessed retbuf-attr, also exclude the caller's entry
+                // buffer (`_rb_w_<name>`): freeing it would orphan the buffer the
+                // caller passed (an over-free / UAF).  Only a fn-owned
+                // intermediate (distinct from both the new value AND the witness)
+                // is freed.
+                let witness_guard = if is_retbuf_attr {
+                    format!(" && _old_{name}.store_nr != _rb_w_{name}.store_nr")
+                } else {
+                    String::new()
+                };
                 write!(w, "{{ let _old_{name}: DbRef = var_{name}; ")?;
                 self.output_set_inner(w, var, to)?;
                 write!(
                     w,
-                    "; if _old_{name}.store_nr != var_{name}.store_nr \
+                    "; if _old_{name}.store_nr != var_{name}.store_nr{witness_guard} \
                      {{ OpFreeRef(cell, _old_{name}, \"var_{name}(prev)\"); }} }}"
                 )?;
                 return Ok(());

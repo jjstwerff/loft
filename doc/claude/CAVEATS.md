@@ -57,6 +57,40 @@ still build.  `--interpret` keeps its existing (silent, last-loaded) behavior.
 
 ---
 
+## Open problems — the mixed interpret↔native boundary (2026-06-26)
+
+These are the only open `sev:high` issues. They all live at one place: a program
+that **mixes** modes — an interpreted caller into a native shared-store library
+(`loft_shared_*` cdylib), or a `--interpret` run whose entry package was marked
+for native dispatch. **Uniform modes are sound** — both whole-program `--native`
+and whole-program `--interpret` produce correct results and agree (verified on
+the moros GLB 3-way matrix). So the practical rule for a project today: **run one
+mode end to end.**
+
+- **[#461](https://github.com/loft-lang/loft/issues/461) — a complex struct arg
+  is corrupted across the interpret→native call.** An interpreted function passing
+  a deeply nested struct (e.g. a `Scene` of vectors-of-meshes/materials) into a
+  native shared-store library fn marshals the aggregate wrong; the callee produces
+  corrupt output (moros GLB: version 0 / +28 bytes). **Scalar args are fine.**
+  *Workaround (verified both ends):* run uniform — `--native`, or `--interpret`
+  with `LOFT_NO_NATIVE_LIBS=1` (forces deps to interpret too). Both write the
+  correct output.
+- **[#460](https://github.com/loft-lang/loft/issues/460) — `--interpret` can
+  abort when a main-program fn is marked for cdylib dispatch with no cdylib
+  built.** The marked call lands on a panic stub (exit 101). *Workaround:* run
+  `--native` (the cdylib exists), or force whole-program interpretation. Note:
+  could not be reproduced on 2026-06-26 (a previously-built cdylib satisfies the
+  symbol and hides it) — a clean checkout with no built artifacts is needed to
+  confirm whether it still bites.
+- **[#462](https://github.com/loft-lang/loft/issues/462) residual — a native-only
+  store leak.** The original crash (world-gen SIGSEGV) and the adopt-and-re-return
+  vector leak are **fixed**; what remains is a `--native`-only leak of struct
+  records returned as a **borrowed view of a local** (the `mon_*` "pick one of a
+  pool" shape). It leaks memory over a long run; it does **not** corrupt or crash.
+  Interp is leak-free. No workaround needed for correctness.
+
+---
+
 ## Scheduled — 0.8.5
 
 ### ~~P137~~ — `loft --html` Brick Buster: runtime `unreachable` panic — DONE
