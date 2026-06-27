@@ -141,6 +141,14 @@ pub struct ElidePlan {
     pub var: u16,
     pub vdb: u16,
     pub source: Value,
+    /// The base var of `source` (`s` in `v = s.f`) — the owner the borrowers below
+    /// must re-point to once `v` is gone.
+    pub source_base: u16,
+    /// Vars that BORROW `v` (`e = v[i]` / `e = v.fld`, `deps` ∋ `v`). After inlining,
+    /// each borrows the live source element, so its dep must be re-pointed
+    /// `v → source_base`. Only present (the plan only emitted) when every borrower is
+    /// read-only and non-escaping — else the copy is kept (value semantics).
+    pub borrowers: Vec<u16>,
 }
 
 impl Uses {
@@ -298,12 +306,26 @@ fn analyze_fn(code: &Value, function: &Function, data: &Data) -> (Vec<VerdictRow
             && let Some(vdb) = u.def_vdb.get(&v)
             && let Some(exprs) = u.append_expr.get(&v)
             && exprs.len() == 1
+            && let Some(source_base) = base_var(&exprs[0], u.get_field)
         {
-            plans.push(ElidePlan {
-                var: v,
-                vdb: *vdb,
-                source: exprs[0].clone(),
-            });
+            // Vars that borrow `v` (their `deps` reference it). After `v` is inlined
+            // they borrow the live source element, so each must be re-pointed
+            // `v → source_base`. We may only do that — and therefore only elide a
+            // borrowed `v` — when every borrower is itself read-only and
+            // non-escaping (∉ ineligible); otherwise eliding would route the
+            // borrower's write/escape onto the live source, so keep the copy.
+            let borrowers: Vec<u16> = (0..function.next_var())
+                .filter(|&e| e != v && function.tp(e).depend().contains(&v))
+                .collect();
+            if borrowers.iter().all(|e| !u.ineligible.contains(e)) {
+                plans.push(ElidePlan {
+                    var: v,
+                    vdb: *vdb,
+                    source: exprs[0].clone(),
+                    source_base,
+                    borrowers,
+                });
+            }
         }
 
         rows.push(VerdictRow {

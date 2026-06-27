@@ -5,16 +5,46 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Copy-vs-borrow elision — derive the materialization mode from USE, not RHS shape
 
-> **Status:** **Tier-0 built, OPT-IN (`LOFT_BORROW_ELIDE`), default OFF.** The default-on
-> cutover was REVERTED: the crawler dogfood surfaced a codegen panic the suite missed —
-> eliding `v` drops `v`/`vdb` but leaves any OTHER var whose `deps` referenced them
-> dangling, so the borrowed-view codegen path dereferences a dead dep (`codegen.rs`
-> `stack(dep[0])`). **Open fix before re-cutover:** the elision must fix up / refuse vars
-> that other `deps` point at. The decision layer is `src/use_analysis.rs`; the inline
-> rewrite is `scopes::elide_borrows`. Validated under the flag: copy-vs-borrow
-> differential (`tests/scripts/85-borrow-elision-differential.loft`), ~8× on crawler's
-> sim-tick, full elide-mode suite (modulo the dependent-dep shape now known). The copy
-> mechanism is the substrate (conservative fallback).
+> ## OPEN TICKET — Tier-1.5: elide a vector whose ELEMENT is borrowed (`e = v[i]`)
+> **Why:** Tier-0 *refuses* to elide a `v` that another var borrows (`borrowed_by_other`
+> in `scopes::elide_borrows`) — the conservative fix for the dangling-dep codegen panic.
+> But that fallback leaves the **most common accessor shape copying**: validated on
+> crawler, **~20 functions** (`sim_enemy_hp`/`_alive`/`_pos`/…, `sim_dead_indices`,
+> `front_enemy`, `aim_target`, `enemy_blocks`) all do `enemies = s.enemies; e = enemies[i];
+> … e.field` and so copy the source vector per call — exactly the residual slow paths.
+> The @PLN85 regression corpus (28/28) passes and elides cleanly; this gap is consumer-shaped.
+>
+> **Fix:** when eliding `v = s.f` (inlining `v`→`S`, `S = OpGetField(s,…)`, base var `s`),
+> instead of refusing on a borrower `e` (dep ∋ `v`), **re-point `e`'s dep `v → base_var(S)`**
+> (`make_independent(e, v)` + `depend(e, s)`). After inlining, `e = v[i]` becomes
+> `e = (s.f)[i]` — `e` borrows the live source element, owned by the param `s`; the
+> borrowed-view codegen (`stack(dep[0])`) then reads `s`'s valid slot. No panic, and the
+> accessor elides.
+>
+> **Safety gate (load-bearing):** re-point + elide ONLY if every borrower `e` is itself
+> **read-only**. Under elision `e` aliases the LIVE source, so a write through `e` would
+> hit `s` (D1 on the borrower) — whereas copy-mode `e` wrote the discarded copy. If any
+> borrower is mutated, keep the copy (value-semantics fallback). Reuse the use-analysis to
+> classify each borrower (copy-idiom-aware, since `e`'s own def is a `Set`).
+>
+> **Validation:** matrix {read-only borrower, mutated borrower} × {index-read `v[i]`,
+> field-read `v.x`} × both backends + leak; assert the ~20 crawler accessors elide and the
+> @PLN85 corpus stays green; confirm the 8× extends to the accessor-heavy paths. Diagnostic:
+> `LOFT_ELIDE_REFUSED` lists every fallback so the gap is measurable. **Goal: elision is the
+> only materialization for every borrowable case; copy remains ONLY where a mutated/escaping
+> local genuinely needs value semantics.**
+
+> **Status:** **Tier-0 LANDED, default-on** (opt-out `LOFT_NO_BORROW_ELIDE`). Decision
+> layer `src/use_analysis.rs`; inline rewrite `scopes::elide_borrows`. The default-on
+> cutover was reverted once — the crawler dogfood surfaced a codegen panic the suite
+> missed: eliding `v` left any var that BORROWS `v` (`e = v[i]`) with a stale dep, so the
+> borrowed-view codegen dereferenced the dead slot (`codegen.rs` `stack(dep[0])`). Fixed
+> at the chokepoint: `elide_borrows` refuses to elide a `v` that another var borrows.
+> Re-landed default-on after: full default-config suite green (2558), full elide-mode
+> suite, the copy-vs-borrow differential, crawler equiptest+selftest clean, and ~8× on
+> crawler's sim-tick (the v-borrowed accessors stay copy; `tile_at`/`edge_wall_raw` —
+> the map copies — still elide). The copy mechanism is the substrate (conservative
+> fallback + opt-out A-B lever). Tiers 1–3 remain design-only below.
 > Tiers 1–3 (local-source dominance, ¬D2 mutable source, return-delivery #465
 > unification) remain design-only below. Harvested from the
 > @PLN25 dense dogfood: verifying crawler on the dense branch surfaced a ~5× per-tick
