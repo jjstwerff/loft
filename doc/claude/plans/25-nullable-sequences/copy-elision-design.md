@@ -12,6 +12,13 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > carried fact, not re-derived from shape"). Cross-refs:
 > [OWNERSHIP_MODEL.md](../../OWNERSHIP_MODEL.md), [STABILITY_ROADMAP.md § Cluster C](../../STABILITY_ROADMAP.md),
 > the p379 + #465 fixes (the inverse-direction siblings of this same decision).
+>
+> **Depends on the pre-work:** the materialization predicate here is a *query* of the
+> reusable USE-analysis defined in
+> [use-analysis-prework-design.md](use-analysis-prework-design.md) — build that phase
+> first (it computes the read-only / escape / source facts once, over the full IR, where
+> every decision site can consult them). This doc is the *first optimizing consumer* of
+> that phase.
 
 ---
 
