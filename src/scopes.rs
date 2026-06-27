@@ -257,12 +257,6 @@ fn relocate_null_init(code: &mut Value, vdb: u16, block_scope: u16) -> bool {
     }
 }
 
-/// Scope / lifetime analysis pass over every function definition.
-///
-/// # Panics
-/// Under the `LASTUSE_RECLAIM` gate only (a Plan-57 testing build), panics if the
-/// reclaim pass left a store the model says is dead un-freed past a later
-/// allocation (the Phase-4 Goal-E watermark guard).  Never panics in normal builds.
 /// EXPERIMENTAL (LOFT_BORROW_ELIDE) — inline the Tier-0 Borrow-verdict vector
 /// copies: for each elidable `v = copy(s.f)`, replace every read of `v` with the
 /// source field-access `s.f` and drop the copy idiom (the `vdb` buffer's alloc /
@@ -307,6 +301,9 @@ fn elide_borrows(data: &mut Data) {
     }
 }
 
+// The `op_` prefix is meaningful (these are operator def-numbers), so the
+// same-prefix style lint does not apply.
+#[allow(clippy::struct_field_names)]
 struct ElideOps {
     op_database: u32,
     op_append: u32,
@@ -377,6 +374,12 @@ fn elide_rewrite(
     }
 }
 
+/// Scope / lifetime analysis pass over every function definition.
+///
+/// # Panics
+/// Under the `LASTUSE_RECLAIM` gate only (a Plan-57 testing build), panics if the
+/// reclaim pass left a store the model says is dead un-freed past a later
+/// allocation (the Phase-4 Goal-E watermark guard).  Never panics in normal builds.
 pub fn check(data: &mut Data) {
     // Behaviour-neutral USE-analysis dump (LOFT_MATERIALIZE_DUMP) — the
     // copy-vs-borrow verdict per binding, before any codegen consumes it.
