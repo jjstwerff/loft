@@ -14,19 +14,31 @@ probe verdicts) → [implementation-steps.md](implementation-steps.md) (the phas
 
 ---
 
-## TL;DR — where we are
+## TL;DR — where we are (updated 2026-06-27)
 
-- **Branch: `pln25-dense`**, off current `main` (`b53e718c`), **pushed** to
-  `origin/pln25-dense`. Two commits on top of main:
-  - `419750be` — the full design doc.
-  - `38332665` — **the dense-vector flip, recovered** (reverted the old park-revert
-    `afde094f` onto current main).
+- **Branch: `pln25-dense`**, off current `main` (`b53e718c`), **pushed**.
 - **The flip is LIVE and validated:** `vector<S>` is **dense** (`main_vector<S>`, no
   `__nullable`); `vector<S?>` is the nullable opt-in and `v[1] == null` is **true**.
-- **Baseline = the design's exact prediction: 7 test failures** (2550 pass). They are
-  NOT surprises — they are the planned Phase-1 + Phase-4 remainder (listed below).
+- **Progress this session — suite 6→2:**
+  - **STEP A was already done** — the postfix `?` parses in EVERY type position (decl,
+    `as`-cast, return-type, param, nested) via the shared `sub_type_inner` chokepoint.
+    The old "decl-only" claim below was against a stale binary. No parser change needed.
+  - **STEP B done** (`3d4f99c8`) — the 4 nullable E2 tests annotated to `vector<T?>`
+    (json×3 + hash `Counting.entries`×3 defs). All 11 E2 tests green on both backends.
+  - **p379 dense regression FIXED** (`73304f37`) — NOT in the old baseline: a vector
+    FIELD read off a BORROWED base (for-loop element — `cells = sc.ck_hexes`) was
+    deep-copied instead of aliased → write-through lost + null-ref crash (`index … 65535`)
+    on both backends. Root: the #415 deep-copy keyed on the syntactic shape; fixed to key
+    on the base's `deps` ownership (empty = owns = copy; non-empty = borrows = alias).
+    Regression: `tests/scripts/85-store-lifetime-forloop-elem-field-alias-write.loft`.
+- **Remaining: 2 failures = #465 / Step C** — both the SAME script
+  (`85-store-lifetime-enum-match-borrowed-view-overfree.loft`), once interp
+  (`wrap::loft_suite`) + once native (`native::native_scripts`). This is the documented
+  enum-match borrowed-view over-free (Step C below).
 - **Decision (signed off):** dense-default is the approach. The old enum-synthesis line
   on `2026-07-mac` is **abandoned** (superseded, 109 commits stale — do not build on it).
+- **Pre-dense baseline binary for working-vs-broken IR diffs:**
+  `/home/lima.guest/loft2/target/release/loft` (branch `fix2-crawler`, no dense flip).
 
 ## The one invariant (what the whole rewrite installs)
 
@@ -37,23 +49,30 @@ probe verdicts) → [implementation-steps.md](implementation-steps.md) (the phas
 
 ---
 
-## The 7 baseline failures (run `find_problems.sh --bg`; this is the expected set)
+## Failure ledger (run `find_problems.sh --bg`)
 
-| Test | Class | Phase to fix |
+The original handoff predicted 7; the real baseline was 6 (json `null_in_the_middle`
+already passed; p379 crashed — unpredicted). Now **2** remain after Step B + the p379 fix.
+
+| Test | Class | Status |
 |---|---|---|
-| `plan25_e2_json::all_null_elements` | nullable-feature (asserts null elements) | **1 (annotate)** |
-| `plan25_e2_json::null_in_the_middle_preserved_present_objects_kept` | nullable-feature | **1** |
-| `plan25_e2_json::null_leading_then_present` | nullable-feature | **1** |
-| `plan25_e2_hash::null_in_shared_vector_is_not_indexed_by_the_hash` | nullable-feature | **1** |
-| `wrap::loft_suite` (one `.loft` script) | #465 dense borrowed-view over-free | **4** |
-| `native::native_scripts` (1 run-fail) | #465 native mirror | **4** |
-| (the 7th rolls up under the above counts) | — | — |
+| `plan25_e2_json::all_null_elements` | nullable-feature | ✅ Step B (`3d4f99c8`) |
+| `plan25_e2_json::null_leading_then_present` | nullable-feature | ✅ Step B |
+| `plan25_e2_hash::null_in_shared_vector_is_not_indexed_by_the_hash` | nullable-feature | ✅ Step B |
+| `plan25_e2_json::null_in_the_middle_…` | nullable-feature | ✅ (annotated `Item?`; passed already) |
+| `issues::p379_two_libs_same_struct_name` | dense regression (borrowed-base field copy) | ✅ FIXED (`73304f37`) |
+| `wrap::loft_suite` (1 `.loft` script) | **#465 enum-match borrowed-view over-free** | ⬜ **Step C** |
+| `native::native_scripts` (same script, native) | **#465 native mirror** | ⬜ **Step C** |
 
 ---
 
 ## NEXT STEPS — precise, in order
 
-### STEP A — finish Phase 0 EXPAND: make `?` parse in EVERY type position (the immediate blocker)
+### STEP A — ✅ DONE (was already complete; the gap below was a stale-binary artefact)
+
+Verified: `?` parses in decl / `as`-cast / return-type / param / nested positions on both
+backends (the shared `sub_type_inner` chokepoint handles all). The text below is retained
+for history only.
 
 The recovered flip wired the postfix `?` ONLY into the declaration path. Confirmed gap:
 
@@ -79,7 +98,7 @@ loft --interpret /tmp/c.loft        # -> error: Expect token
 - Additive, **zero-breakage by design** (new syntax nothing-yet-uses). Gate: full suite
   still 7-failing (unchanged), AND the three probes above all pass.
 
-### STEP B — Phase 1 MIGRATE: annotate the 4 nullable-feature tests (depends on Step A)
+### STEP B — ✅ DONE (`3d4f99c8`) — Phase 1 MIGRATE: annotate the nullable-feature tests
 
 Once `?` parses in casts, annotate the genuinely-nullable sites — turns 7 failing → 3:
 
