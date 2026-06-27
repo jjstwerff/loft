@@ -5,11 +5,16 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Copy-vs-borrow elision — derive the materialization mode from USE, not RHS shape
 
-> **Status:** **Tier-0 LANDED, default-on** (`5cc11bb1`, opt-out `LOFT_NO_BORROW_ELIDE`).
-> The decision layer is `src/use_analysis.rs`; the inline rewrite is
-> `scopes::elide_borrows`. Validated: full suite green default-on (2558), copy-vs-borrow
+> **Status:** **Tier-0 built, OPT-IN (`LOFT_BORROW_ELIDE`), default OFF.** The default-on
+> cutover was REVERTED: the crawler dogfood surfaced a codegen panic the suite missed —
+> eliding `v` drops `v`/`vdb` but leaves any OTHER var whose `deps` referenced them
+> dangling, so the borrowed-view codegen path dereferences a dead dep (`codegen.rs`
+> `stack(dep[0])`). **Open fix before re-cutover:** the elision must fix up / refuse vars
+> that other `deps` point at. The decision layer is `src/use_analysis.rs`; the inline
+> rewrite is `scopes::elide_borrows`. Validated under the flag: copy-vs-borrow
 > differential (`tests/scripts/85-borrow-elision-differential.loft`), ~8× on crawler's
-> sim-tick. The copy mechanism stays the substrate (conservative fallback + opt-out).
+> sim-tick, full elide-mode suite (modulo the dependent-dep shape now known). The copy
+> mechanism is the substrate (conservative fallback).
 > Tiers 1–3 (local-source dominance, ¬D2 mutable source, return-delivery #465
 > unification) remain design-only below. Harvested from the
 > @PLN25 dense dogfood: verifying crawler on the dense branch surfaced a ~5× per-tick
