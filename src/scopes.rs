@@ -384,12 +384,14 @@ pub fn check(data: &mut Data) {
     // Behaviour-neutral USE-analysis dump (LOFT_MATERIALIZE_DUMP) — the
     // copy-vs-borrow verdict per binding, before any codegen consumes it.
     crate::use_analysis::dump_all(data);
-    // EXPERIMENTAL (LOFT_BORROW_ELIDE, default off): inline the Borrow-verdict
-    // vector copies (replace `v`'s reads with the source field-access, drop the
-    // copy idiom) before the scope/free passes run, so they see the elided IR.
-    // Off by default ⇒ behaviour-neutral; on ⇒ the copy-vs-borrow execution
-    // differential arm.
-    if std::env::var_os("LOFT_BORROW_ELIDE").is_some() {
+    // Tier-0 borrow elision (DEFAULT ON): inline the Borrow-verdict vector copies
+    // (replace `v`'s reads with the source field-access, drop the copy idiom)
+    // before the scope/free passes run, so they see the elided IR. The copy
+    // mechanism stays the substrate — this only SUBTRACTS copies proven safe
+    // (read-only local off an unmutated param source). `LOFT_NO_BORROW_ELIDE` is
+    // the opt-out (the A-B lever: forces the always-correct copy everywhere, for
+    // diagnosing whether the elision is implicated in any regression).
+    if std::env::var_os("LOFT_NO_BORROW_ELIDE").is_none() {
         elide_borrows(data);
     }
     // Plan-57 store-identity gate (Phase 2.5): emit the verifying store ops only
