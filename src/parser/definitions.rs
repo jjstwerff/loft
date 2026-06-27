@@ -1420,13 +1420,38 @@ impl Parser {
         Type::Function(args, Box::new(r_type), crate::data::Deps::none())
     }
 
-    // <type> ::= <identifier> [::<identifier>] [ '<' ( <sub_type> | <type> ) '>' ] [ <depend> ]
+    // <type> ::= <identifier> [::<identifier>] [ '<' ( <sub_type> | <type> ) '>' ] [ <depend> ] [ '?' ]
+    //
+    // @PLN25 Phase 0 (EXPAND): accept a postfix `?` on ANY scalar / struct type
+    // (`integer?`, `text?`, `S?`) as the nullable opt-in. Today plain types are
+    // ALREADY nullable by default, so `?` is a behaviour-preserving no-op — its
+    // job in EXPAND is purely to let nullable sites be pre-annotated (MIGRATE)
+    // before the Phase-2 default flip gives the marker teeth. The vector ELEMENT
+    // `?` (`vector<S?>`) is consumed earlier in `sub_type_inner` (before this
+    // returns), so this wrapper never steals it — it only catches the outer `?`.
     pub(crate) fn parse_type(
         &mut self,
         on_d: u32,
         type_name: &str,
         returned: bool,
     ) -> Option<Type> {
+        let tp = self.parse_type_inner(on_d, type_name, returned);
+        if tp.is_some() && self.lexer.has_token("?") {
+            // Integer carries the flag explicitly — record nullable so the marker
+            // survives the Phase-2 default flip (today `not_null` is already
+            // false, so this changes nothing). Other scalars have no type-level
+            // flag yet (Phase 2 adds the representation); accept-and-ignore.
+            if let Some(Type::Integer(spec)) = tp {
+                return Some(Type::Integer(IntegerSpec {
+                    not_null: false,
+                    ..spec
+                }));
+            }
+        }
+        tp
+    }
+
+    fn parse_type_inner(&mut self, on_d: u32, type_name: &str, returned: bool) -> Option<Type> {
         // Phase 2c round 10c: `long` has been removed as a user-facing
         // type.  Callers now use `integer` everywhere; if anyone still
         // writes `long` it parses as an unknown identifier and fails

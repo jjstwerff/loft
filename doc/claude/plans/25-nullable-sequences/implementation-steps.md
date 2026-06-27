@@ -38,8 +38,13 @@ at once.
 - Type system: `τ?` is the optional former; `(N-Opt)`, `(N-Idem)`, `(N-Intro) τ ⤳ τ?`. No
   default changes, no discharge enforcement yet — `τ?` simply *coexists* with today's behaviour.
 - **Test impact: none.** Gate: full suite stays green.
-- Status: vectors **done** (postfix `vector<S?>` parses + works). Scalars `x: integer?` still
-  to add.
+- Status: vectors **done** (postfix `vector<S?>` parses + works). Scalars **done** — `integer?`
+  / `text?` / `S?` parse in every type position (field, param, return, `as`-cast) via a postfix
+  `?` consumer wrapping `parse_type` (the named-type chokepoint; the vector element `?` is
+  consumed earlier in `sub_type_inner`, so it isn't stolen). Today a no-op (plain types are
+  already nullable); for Integer the `?` records `not_null:false` so it survives the Phase-2
+  flip, other scalars accept-and-ignore until Phase 2 adds their optional representation.
+  Regression: `tests/scripts/25-scalar-optional-syntax.loft`. Full suite green.
 
 ## Phase 1 — MIGRATE: annotate nullable sites with `?`  ·  zero breakage  ← the test-saver
 
@@ -129,11 +134,21 @@ legible and the merge order safe.
 
 | Phase | vectors | scalars |
 |---|---|---|
-| 0 EXPAND (`?` syntax) | ✅ done | ⬜ not started |
-| 1 MIGRATE (annotate `?`) | ❌ **skipped** → the 4 nullable-feature failures | ⬜ |
-| 2 CONTRACT (flip default) | ✅ done (live) | ⬜ |
-| 3 TIGHTEN | ⬜ | ⬜ |
+| 0 EXPAND (`?` syntax) | ✅ done | ✅ **done** (`integer?`/`text?`/`S?` parse, no-op) |
+| 1 MIGRATE (annotate `?`) | ✅ done (merged #467) | ⬜ survey + annotate |
+| 2 CONTRACT (flip default) | ✅ done (merged #467) | ⬜ needs the `τ?` representation decision (below) |
+| 3 TIGHTEN | ⬜ contract-changing — stability-line deadline | ⬜ |
 | 5 CLEANUP (`not null`) | ⬜ | ⬜ |
+
+> **The Phase-2 scalars blocker (representation decision).** Only `Type::Integer` carries a
+> null-flag (`not_null`); `Boolean`/`Float`/`Single`/`Character`/`Text`/`Reference`/`Enum` have
+> **no type-level optional marker** (they are nullable-by-default via runtime sentinels). So when
+> Phase 2 flips the scalar default to non-null, `text?`/`S?` need a way to *say* "nullable" that
+> the unmarked type no longer means. Three options to weigh before building Phase 2: (a) a
+> `nullable: bool` on each scalar variant; (b) a unifying `Type::Optional(Box<Type>)`; (c) reuse
+> the `__nullable<S>` synth (today vector-element-only). This is a load-bearing type-system design
+> choice — settle it (design-protocol) before flipping. Phase 0 deliberately defers it: `?` is a
+> no-op today, so EXPAND + MIGRATE proceed without it.
 
 So the **7 failing tests are exactly "Phase 2 ran ahead of Phase 1"**: 4 nullable-feature tests
 (fixed by doing Phase 1 — annotate `vector<S?>`) + 3 the step-6 ownership over-free (Phase 4).
