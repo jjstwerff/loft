@@ -1,0 +1,316 @@
+fn n_set_hex(w:&ref(World), cx:integer, idx:integer, h:Hex) {#block(1):void
+  [14] n_ensure(w(65535), cx(65535));
+  [15] {#For block(2):void
+    _vector_1(65535):vector<ref(Chunk)>["w"] = OpGetField(w(65535), 0i32, 68i32);
+    sc_c#index(65535):integer = -1i32;
+    loop {#For loop_3
+      sc_c(65535):ref(Chunk)["_vector_1"] = {#iter next(4):ref(Chunk)
+        sc_c#index(65535):integer = OpAddInt(sc_c#index(65535), 1i32);
+        OpGetVectorNullable(_vector_1(65535), 12i32, sc_c#index(65535));
+      }#iter next(4):ref(Chunk);
+      if OpLeInt(OpLengthVector(_vector_1(65535)), sc_c#index(65535)) {#break(5):void
+        break(0);
+      }#break(5):void else null;
+      if OpLtInt(sc_c#index(65535), 0i32) {#break(6):void
+        break(0);
+      }#break(6):void else null;
+      {#block(7):void
+        [16] cells(65535):vector<ref(Hex)>["sc_c"] = null;
+        if OpEqInt(OpGetInt(sc_c(65535), 0i32), cx(65535)) {#block(8):never
+          cells(65535):vector<ref(Hex)>["sc_c"] = OpGetField(sc_c(65535), 8i32, 66i32);
+          if OpLtInt(idx(65535), t_6vector_len(cells(65535))) {#block(9):void
+            OpCopyRecord(h(65535), OpGetVector(cells(65535), 16i32, idx(65535)), 64i32);
+          }#block(9):void else null;
+          return null;
+        }#block(8):never else null;
+      }#block(7):void;
+    }#For loop_3;
+  }#For block(2):void;
+}#block(1):void
+fn n_set_hex(cell: &std::cell::UnsafeCell<Stores>, mut var_w: &mut DbRef, mut var_cx: i64, mut var_idx: i64, mut var_h: DbRef) { //block_1: void
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  cr_call_push("set_hex", "/tmp/p5.loft", 13);
+  let _call_guard = codegen_runtime::CallGuard;
+  // loft:/tmp/p5.loft:14
+  n_ensure(cell, var_w, var_cx);
+  // loft:/tmp/p5.loft:15
+  { //For block_2: void
+    let mut var__vector_1: DbRef = {{ let _v_v1 = (*var_w); DbRef {store_nr: _v_v1.store_nr, rec: _v_v1.rec, pos: _v_v1.pos + (0_i64) as u32} }};
+    let mut var_sc_c__index: i64 = -1_i64;
+    'l3: loop { //For loop_3
+      let mut var_sc_c: DbRef = { //iter next_4: ref(Chunk)
+        var_sc_c__index = ops::op_add_int((var_sc_c__index), (1_i64));
+        vector::get_vector(&(var__vector_1), (12_i64) as u32, (var_sc_c__index), &stores.allocations)
+        } /*iter next_4: ref(Chunk)*/;
+      if ((((i64::from(vector::length_vector(&(var__vector_1), &stores.allocations))) as i64) <= ((var_sc_c__index) as i64)) as u8) == 1 { //break_5: void
+        break;
+        } /*break_5: void*/ else {()};
+      if ((((var_sc_c__index) as i64) < ((0_i64) as i64)) as u8) == 1 { //break_6: void
+        break;
+        } /*break_6: void*/ else {()};
+      { //block_7: void
+        // loft:/tmp/p5.loft:16
+        let mut var_cells: DbRef = DbRef::NULL;
+        if (((({{let db = (var_sc_c); if db.rec == 0 { i64::MIN } else { stores.store(&db).get_int(db.rec, db.pos + (0_i64) as u32)} }}) as i64) == ((var_cx) as i64)) as u8) == 1 { //block_8: never
+          var_cells = {{ let _v_v1 = (var_sc_c); DbRef {store_nr: _v_v1.store_nr, rec: _v_v1.rec, pos: _v_v1.pos + (8_i64) as u32} }};
+          if ((((var_idx) as i64) < ((t_6vector_len(cell, var_cells)) as i64)) as u8) == 1 { //block_9: void
+            OpCopyRecord(cell,var_h, {{let __vr = (var_cells); let __vi = (var_idx); stores.vec_get_or_raise_runtime(&__vr, (16_i64) as u32, __vi)}}, 64_i32);
+            } /*block_9: void*/ else {()};
+          return ()
+          } /*block_8: never*/ else {()};
+        } /*block_7: void*/;
+      } /*For loop_3*/;
+    } /*For block_2: void*/;
+  } /*block_1: void*/
+
+// loft:/tmp/p5.loft:19
+fn n_get_hex(cell: &std::cell::UnsafeCell<Stores>, mut var_w: DbRef, mut var_cx: i64, mut var_idx: i64, mut var___ref_1: DbRef) -> DbRef { //block_1: ref(Hex)["__retbuf"]
+  if loft::live_dispatch::live_flipped(4) { return loft::live_dispatch::live_call_ref(cell, 4, |st| { st.put_stack(var_w); st.put_stack(var_cx); st.put_stack(var_idx); st.put_stack(var___ref_1); }); }
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  cr_call_push("get_hex", "/tmp/p5.loft", 19);
+  let _call_guard = codegen_runtime::CallGuard;
+  let _rb_w___ref_1: DbRef = var___ref_1;
+  let mut var___ref_3: DbRef = DbRef::NULL;
+  let mut var___ref_2: DbRef = DbRef::NULL;
+  // loft:/tmp/p5.loft:20
+  { //For block_2: void
+    let mut var__vector_1: DbRef = {{ let _v_v1 = (var_w); DbRef {store_nr: _v_v1.store_nr, rec: _v_v1.rec, pos: _v_v1.pos + (0_i64) as u32} }};
+    let mut var_gc__index: i64 = -1_i64;
+    'l3: loop { //For loop_3
+      let mut var_gc: DbRef = { //iter next_4: ref(Chunk)
+        var_gc__index = ops::op_add_int((var_gc__index), (1_i64));
+        vector::get_vector(&(var__vector_1), (12_i64) as u32, (var_gc__index), &stores.allocations)
+        } /*iter next_4: ref(Chunk)*/;
+      if ((((i64::from(vector::length_vector(&(var__vector_1), &stores.allocations))) as i64) <= ((var_gc__index) as i64)) as u8) == 1 { //break_5: void
+        break;
+        } /*break_5: void*/ else {()};
+      if ((((var_gc__index) as i64) < ((0_i64) as i64)) as u8) == 1 { //break_6: void
+        break;
+        } /*break_6: void*/ else {()};
+      { //block_7: void
+        // loft:/tmp/p5.loft:21
+        let mut var_cells: DbRef = DbRef::NULL;
+        if (((({{let db = (var_gc); if db.rec == 0 { i64::MIN } else { stores.store(&db).get_int(db.rec, db.pos + (0_i64) as u32)} }}) as i64) == ((var_cx) as i64)) as u8) == 1 { //block_8: never
+          var_cells = {{ let _v_v1 = (var_gc); DbRef {store_nr: _v_v1.store_nr, rec: _v_v1.rec, pos: _v_v1.pos + (8_i64) as u32} }};
+          if ((((var_idx) as i64) < ((t_6vector_len(cell, var_cells)) as i64)) as u8) == 1 { //block_9: never
+            { //materialized_view_return_10: ref(Hex)["__ref_1"]
+              var___ref_1 = OpDatabase(cell,var___ref_1, 64_i32);
+              OpCopyRecord(cell,{{let __vr = (var_cells); let __vi = (var_idx); stores.vec_get_or_raise_runtime(&__vr, (16_i64) as u32, __vi)}}, var___ref_1, 64_i32);
+              OpFreeRef(cell,var___ref_2, "var___ref_2"); var___ref_2.store_nr = u16::MAX;
+              OpFreeRef(cell,var___ref_3, "var___ref_3"); var___ref_3.store_nr = u16::MAX;
+              return var___ref_1
+              } /*materialized_view_return_10: ref(Hex)["__ref_1"]*/
+            } /*block_9: never*/ else {()};
+          { //Object_11: ref(Hex)["__ref_2"]
+            var___ref_2 = OpDatabase(cell,var___ref_2, 64_i32);
+            {{let db = (var___ref_2); let v = (0_i64); stores.store_mut(&db).set_int(db.rec, db.pos + (0_i64) as u32, v);}};
+            {{let db = (var___ref_2); let v = (0_i64); stores.store_mut(&db).set_int(db.rec, db.pos + (8_i64) as u32, v);}};
+            OpFreeRef(cell,var___ref_3, "var___ref_3"); var___ref_3.store_nr = u16::MAX;
+            return var___ref_2
+            } /*Object_11: ref(Hex)["__ref_2"]*/
+          } /*block_8: never*/ else {()};
+        } /*block_7: void*/;
+      } /*For loop_3*/;
+    } /*For block_2: void*/;
+  // loft:/tmp/p5.loft:23
+  { //Object_12: ref(Hex)["__ref_3"]
+    var___ref_3 = OpDatabase(cell,var___ref_3, 64_i32);
+    {{let db = (var___ref_3); let v = (0_i64); stores.store_mut(&db).set_int(db.rec, db.pos + (0_i64) as u32, v);}};
+    {{let db = (var___ref_3); let v = (0_i64); stores.store_mut(&db).set_int(db.rec, db.pos + (8_i64) as u32, v);}};
+    OpFreeRef(cell,var___ref_2, "var___ref_2"); var___ref_2.store_nr = u16::MAX;
+    return var___ref_3
+    } /*Object_12: ref(Hex)["__ref_3"]*/
+  } /*block_1: ref(Hex)["__retbuf"]*/
+
+// loft:/tmp/p5.loft:25
+fn n_main(cell: &std::cell::UnsafeCell<Stores>) { //block_1: void
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  cr_call_push("main", "/tmp/p5.loft", 25);
+  let _call_guard = codegen_runtime::CallGuard;
+  let mut var___ref_1: DbRef = DbRef::NULL;
+  let mut var___work_1: String = "".to_string();
+  // loft:/tmp/p5.loft:26
+  let mut var_w: DbRef = DbRef::NULL;
+  var_w = OpDatabase(cell,var_w, 67_i32);
+  {{ let _v_val = (0_i64); {let db = (var_w); let v = if _v_val == i64::MIN { i32::MIN } else { _v_val as i32 }; stores.store_mut(&db).set_i32_raw(db.rec, db.pos + (0_i64) as u32, v);} }};
+  // loft:/tmp/p5.loft:27
+  let mut var_cur: DbRef = DbRef::NULL;
+  var_cur = OpDatabase(cell,var_cur, 64_i32);
+  {{let db = (var_cur); let v = (7_i64); stores.store_mut(&db).set_int(db.rec, db.pos + (0_i64) as u32, v);}};
+  {{let db = (var_cur); let v = (0_i64); stores.store_mut(&db).set_int(db.rec, db.pos + (8_i64) as u32, v);}};
+  // loft:/tmp/p5.loft:28
+  n_set_hex(cell, &mut var_w, 1_i64, 2_i64, var_cur);
+  // loft:/tmp/p5.loft:29
+  let mut var_r: DbRef = stores.null_named("var_r");
+    { let _dst = var_r; let _src = n_get_hex(cell, var_w, 1_i64, 2_i64, var___ref_1); if _src.store_nr == u16::MAX || _src.store_nr == _dst.store_nr { var_r = _src; } else { var_r = OpDatabase(cell, _dst, 64_i32); OpCopyRecord(cell,_src, var_r, 32832_i32); } };
+  // loft:/tmp/p5.loft:30
+  let _pre_4 = &*({ //Formatted string_2: text["__work_1"]
+    var___work_1 = { let mut _s = String::with_capacity(18_usize); _s.push_str("h="); _s };
+    ops::format_long_with_tag(&mut var___work_1, {{let db = (var_r); if db.rec == 0 { i64::MIN } else { stores.store(&db).get_int(db.rec, db.pos + (0_i64) as u32)} }}, stores.take_format_fault(), 10 as u8, 0_i64, 32 as u8, false, false, 2 as i8);
+    var___work_1 += &*("\n");
+    &var___work_1
+    } /*Formatted string_2: text["__work_1"]*/);
+  n_print(cell, _pre_4);
+  OpFreeRef(cell,var_r, "var_r"); var_r.store_nr = u16::MAX;
+  OpFreeRef(cell,var_cur, "var_cur"); var_cur.store_nr = u16::MAX;
+  OpFreeRef(cell,var_w, "var_w"); var_w.store_nr = u16::MAX;
+  ;
+  OpFreeRef(cell,var___ref_1, "var___ref_1"); var___ref_1.store_nr = u16::MAX;
+  } /*block_1: void*/
+
+const LOFT_PROGRAM_RELATIVE: bool = true;
+static LOFT_LIVE_FNS: &[&str] = &["n___add_int", "n_sum_of", "n_exhausted", "n_build_chunk", "n_get_hex", ];
+
+fn main() {
+    // @PLAN49 native subprocess arming — the spawned native binary self-arms
+    // the watchdog if LOFT_TIMEOUT is set in the env (inherited from the parent
+    // `loft <prog>` invocation or set directly).  No-op when LOFT_TIMEOUT=0/unset.
+    loft::timeout::arm(loft::timeout::env_timeout_secs(), loft::timeout::env_grace_secs());
+    // #333: standalone binary mirrors the interpreter's halt-at-op contract.
+    loft::database::NATIVE_FAIL_FAST.store(true, std::sync::atomic::Ordering::Relaxed);
+    let cell = std::cell::UnsafeCell::new(loft::live_dispatch::boot_stores(LOFT_LIVE_FNS));
+    { let stores: &mut Stores = unsafe { &mut *cell.get() }; stores.user_args = std::env::args().skip(1).collect(); stores.source_dir = Stores::source_dir_native(); stores.program_relative = LOFT_PROGRAM_RELATIVE; if let Ok(m) = std::env::var("LOFT_PATHS") { stores.program_relative = m.eq_ignore_ascii_case("program"); } }
+    if !loft::live_dispatch::live_enabled() { init(&cell); }
+    n_main(&cell);
+    { let stores: &Stores = unsafe { &*cell.get() }; if stores.had_fatal { std::process::exit(1); } }
+    if !loft::live_dispatch::live_enabled() {
+    if std::env::var("LOFT_NATIVE_LEAK_CHECK").is_ok() {
+        let stores: &Stores = unsafe { &*cell.get() };
+        let leaks = stores.collect_store_leaks();
+        if !leaks.is_empty() {
+            let count = leaks.len();
+            let preview = if count <= 5 { leaks.join(", ") } else { format!("{} ... and {} more", leaks[..5].join(", "), count - 5) };
+            eprintln!("Warning: {count} stores not freed at program exit: {preview}");
+        }
+    }
+    }
+}
+
+=== slots ===
+fn n_build_chunk:
+  #    arg  name                 type           scope  slot         live
+  ----------------------------------------------------------------------
+  0    arg  cx                   int            -      [0, 8)       -
+  1    arg  __retbuf             ref(606)       -      [8, 20)      -
+  2         hexes                vec<ref(605)>  -      [56, 68)     -
+  3         _#index              int            -      [72, 80)     -
+  4         _                    int            -      [80, 88)     -
+  5         _elm_1               ref(605)       -      [88, 100)    -
+  6         __vdb_1              ref(610)       -      [44, 56)     -
+  7         __ref_1              ref(606)       -      [32, 44)     -
+
+
+fn n_ensure:
+  #    arg  name                 type           scope  slot         live
+  ----------------------------------------------------------------------
+  0    arg  w                    &ref(607)      -      [0, 12)      -
+  1    arg  cx                   int            -      [16, 24)     -
+  2         _vector_1            vec<ref(606)>  -      [56, 68)     -
+  3         ec#index             int            -      [72, 80)     -
+  4         ec                   ref(606)       -      [80, 92)     -
+  5         _elm_1               ref(606)       -      [92, 104)    -
+  6         __ref_1              ref(606)       -      [44, 56)     -
+  7         __lift_1             ref(606)       -      [32, 44)     -
+
+
+fn n_set_hex:
+  #    arg  name                 type           scope  slot         live
+  ----------------------------------------------------------------------
+  0    arg  w                    &ref(607)      -      [0, 12)      -
+  1    arg  cx                   int            -      [16, 24)     -
+  2    arg  idx                  int            -      [24, 32)     -
+  3    arg  h                    ref(605)       -      [32, 44)     -
+  4         _vector_1            vec<ref(606)>  -      [56, 68)     -
+  5         sc_c#index           int            -      [72, 80)     -
+  6         sc_c                 ref(606)       -      [80, 92)     -
+  7         cells                vec<ref(605)>  -      [92, 104)    -
+
+
+fn n_get_hex:
+  #    arg  name                 type           scope  slot         live
+  ----------------------------------------------------------------------
+  0    arg  w                    ref(607)       -      [0, 12)      -
+  1    arg  cx                   int            -      [16, 24)     -
+  2    arg  idx                  int            -      [24, 32)     -
+  3         __retbuf             ref(605)       -      -            -
+  4         _vector_1            vec<ref(606)>  -      [80, 92)     -
+  5         gc#index             int            -      [96, 104)    -
+  6         gc                   ref(606)       -      [104, 116)   -
+  7         cells                vec<ref(605)>  -      [116, 128)   -
+  8    arg  __ref_1              ref(605)       -      [32, 44)     -
+  9         __ref_2              ref(605)       -      [68, 80)     -
+  10        __ref_3              ref(605)       -      [56, 68)     -
+
+
+fn n_main:
+  #    arg  name                 type           scope  slot         live
+  ----------------------------------------------------------------------
+  0         w                    ref(607)       -      [48, 60)     -
+  1         cur                  ref(605)       -      [60, 72)     -
+  2         r                    ref(605)       -      [72, 84)     -
+  3         __ref_1              ref(605)       -      [8, 20)      -
+  4         __work_1             text           -      [24, 48)     -
+
+
+
+=== types ===
+fn n_build_chunk -> ref(Chunk):
+  #    arg  name                     type [deps]
+  ----------------------------------------------------------------------
+  0    arg  cx                       integer
+  1    arg  __retbuf                 ref(Chunk)
+  2         hexes                    vector<ref(Hex)>["__vdb_1"]
+  3         _#index                  integer
+  4         _                        integer
+  5         _elm_1                   ref(Hex)["hexes"]
+  6         __vdb_1                  ref(main_vector<Hex>)
+  7         __ref_1                  ref(Chunk)
+
+fn n_ensure -> void:
+  #    arg  name                     type [deps]
+  ----------------------------------------------------------------------
+  0    arg  w                        &ref(World)
+  1    arg  cx                       integer
+  2         _vector_1                vector<ref(Chunk)>["w"]
+  3         ec#index                 integer
+  4         ec                       ref(Chunk)["_vector_1"]
+  5         _elm_1                   ref(Chunk)["w"]
+  6         __ref_1                  ref(Chunk)
+  7         __lift_1                 ref(Chunk)
+
+fn n_set_hex -> void:
+  #    arg  name                     type [deps]
+  ----------------------------------------------------------------------
+  0    arg  w                        &ref(World)
+  1    arg  cx                       integer
+  2    arg  idx                      integer
+  3    arg  h                        ref(Hex)
+  4         _vector_1                vector<ref(Chunk)>["w"]
+  5         sc_c#index               integer
+  6         sc_c                     ref(Chunk)["_vector_1"]
+  7         cells                    vector<ref(Hex)>["sc_c"]
+
+fn n_get_hex -> ref(Hex)["__retbuf"]:
+  #    arg  name                     type [deps]
+  ----------------------------------------------------------------------
+  0    arg  w                        ref(World)
+  1    arg  cx                       integer
+  2    arg  idx                      integer
+  3         __retbuf                 ref(Hex)
+  4         _vector_1                vector<ref(Chunk)>["w"]
+  5         gc#index                 integer
+  6         gc                       ref(Chunk)["_vector_1"]
+  7         cells                    vector<ref(Hex)>["gc"]
+  8    arg  __ref_1                  ref(Hex)
+  9         __ref_2                  ref(Hex)
+  10        __ref_3                  ref(Hex)
+
+fn n_main -> void:
+  #    arg  name                     type [deps]
+  ----------------------------------------------------------------------
+  0         w                        ref(World)
+  1         cur                      ref(Hex)
+  2         r                        ref(Hex)
+  3         __ref_1                  ref(Hex)
+  4         __work_1                 text
+

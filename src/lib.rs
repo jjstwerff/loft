@@ -61,6 +61,7 @@ pub mod keys;
 mod lexer;
 pub mod native;
 pub mod scopes;
+pub mod use_analysis;
 mod variables;
 pub mod vector;
 

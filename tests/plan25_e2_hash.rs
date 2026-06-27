@@ -75,7 +75,7 @@ fn probe(name: &str, body: &str) -> std::path::PathBuf {
 
 const SRC: &str = "\
 struct Count { t: text, v: integer }
-struct Counting { entries: vector<Count>, lookup: hash<Count[t]> }
+struct Counting { entries: vector<Count?>, lookup: hash<Count[t]> }
 fn fill(c: Counting) {
   c.entries = [ Count{t: \"One\", v: 1}, Count{t: \"Two\", v: 2}, Count{t: \"Three\", v: 3} ];
 }
@@ -97,7 +97,7 @@ fn hash_over_nullable_vector_lookup_and_field_access() {
 
 const SRC_ANON_FORLOOP: &str = "\
 struct Count { t: text, v: integer }
-struct Counting { entries: vector<Count>, lookup: hash<Count[t]> }
+struct Counting { entries: vector<Count?>, lookup: hash<Count[t]> }
 fn fill(c: Counting) {
   c.entries = [ {t:\"One\",v:1}, {t:\"Two\",v:2}, {t:\"Three\",v:3}, {t:\"Four\",v:4} ]
 }
@@ -228,7 +228,7 @@ fn null_in_shared_vector_is_not_indexed_by_the_hash() {
     let path = probe(
         "null_skip",
         "struct Count { t: text, v: integer }\n\
-         struct Counting { entries: vector<Count>, lookup: hash<Count[t]> }\n\
+         struct Counting { entries: vector<Count?>, lookup: hash<Count[t]> }\n\
          fn main() {\n  \
            c = Counting { };\n  \
            c.entries = [ Count{t:\"One\",v:1}, null, Count{t:\"Three\",v:3} ];\n  \

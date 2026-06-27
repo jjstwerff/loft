@@ -257,6 +257,123 @@ fn relocate_null_init(code: &mut Value, vdb: u16, block_scope: u16) -> bool {
     }
 }
 
+/// EXPERIMENTAL (LOFT_BORROW_ELIDE) — inline the Tier-0 Borrow-verdict vector
+/// copies: for each elidable `v = copy(s.f)`, replace every read of `v` with the
+/// source field-access `s.f` and drop the copy idiom (the `vdb` buffer's alloc /
+/// length-set / append / free, and `v`'s defining `Set`). The result is the IR a
+/// direct `s.f[i]` program compiles — which already aliases with no copy — so it
+/// needs no borrow-dep/skip_free surgery. Runs before the scope/free passes.
+fn elide_borrows(data: &mut Data) {
+    let op_database = data.def_nr("OpDatabase");
+    let op_append = data.def_nr("OpAppendVector");
+    let op_set_int4 = data.def_nr("OpSetInt4");
+    let op_set_int = data.def_nr("OpSetInt");
+    let op_free = data.def_nr("OpFreeRef");
+
+    for d_nr in 0..data.definitions() {
+        if !matches!(data.def(d_nr).def_type, DefType::Function) {
+            continue;
+        }
+        let plans = crate::use_analysis::elision_plans(
+            &data.def(d_nr).code,
+            &data.def(d_nr).variables,
+            data,
+        );
+        if plans.is_empty() {
+            continue;
+        }
+        let mut elide_v: HashMap<u16, Value> = HashMap::new();
+        let mut elide_vdb: HashSet<u16> = HashSet::new();
+        for p in plans {
+            elide_v.insert(p.var, p.source);
+            elide_vdb.insert(p.vdb);
+        }
+        let ops = ElideOps {
+            op_database,
+            op_append,
+            op_set_int4,
+            op_set_int,
+            op_free,
+        };
+        let mut code = data.def(d_nr).code.clone();
+        elide_rewrite(&mut code, &elide_v, &elide_vdb, &ops);
+        data.definitions[d_nr as usize].code = code;
+    }
+}
+
+// The `op_` prefix is meaningful (these are operator def-numbers), so the
+// same-prefix style lint does not apply.
+#[allow(clippy::struct_field_names)]
+struct ElideOps {
+    op_database: u32,
+    op_append: u32,
+    op_set_int4: u32,
+    op_set_int: u32,
+    op_free: u32,
+}
+
+/// Is `stmt` a copy-idiom statement for an elided binding (to be dropped)?
+fn idiom_drop(
+    stmt: &Value,
+    elide_v: &HashMap<u16, Value>,
+    elide_vdb: &HashSet<u16>,
+    o: &ElideOps,
+) -> bool {
+    match stmt.unspan() {
+        // `v = OpGetField(vdb,…)` (the def) and `vdb = null` (the init).
+        Value::Set(v, _) => elide_v.contains_key(v) || elide_vdb.contains(v),
+        Value::Call(d, args) => {
+            let target = match args.first().map(Value::unspan) {
+                Some(Value::Var(t)) => Some(*t),
+                _ => None,
+            };
+            if *d == o.op_database || *d == o.op_set_int4 || *d == o.op_set_int {
+                target.is_some_and(|t| elide_vdb.contains(&t)) // buffer alloc / length-set
+            } else if *d == o.op_append {
+                target.is_some_and(|t| elide_v.contains_key(&t)) // copy-fill
+            } else if *d == o.op_free {
+                target.is_some_and(|t| elide_vdb.contains(&t) || elide_v.contains_key(&t))
+            } else {
+                false
+            }
+        }
+        _ => false,
+    }
+}
+
+fn elide_rewrite(
+    node: &mut Value,
+    elide_v: &HashMap<u16, Value>,
+    elide_vdb: &HashSet<u16>,
+    o: &ElideOps,
+) {
+    // Inline a read of an elided var with its source field-access.
+    let replacement = match node.unspan() {
+        Value::Var(v) => elide_v.get(v).cloned(),
+        _ => None,
+    };
+    if let Some(src) = replacement {
+        *node = src;
+        return;
+    }
+    match node {
+        Value::Block(b) => {
+            b.operators
+                .retain(|s| !idiom_drop(s, elide_v, elide_vdb, o));
+            for op in &mut b.operators {
+                elide_rewrite(op, elide_v, elide_vdb, o);
+            }
+        }
+        Value::Insert(ops) => {
+            ops.retain(|s| !idiom_drop(s, elide_v, elide_vdb, o));
+            for op in &mut *ops {
+                elide_rewrite(op, elide_v, elide_vdb, o);
+            }
+        }
+        _ => node.for_each_child_mut(&mut |c| elide_rewrite(c, elide_v, elide_vdb, o)),
+    }
+}
+
 /// Scope / lifetime analysis pass over every function definition.
 ///
 /// # Panics
@@ -264,6 +381,19 @@ fn relocate_null_init(code: &mut Value, vdb: u16, block_scope: u16) -> bool {
 /// reclaim pass left a store the model says is dead un-freed past a later
 /// allocation (the Phase-4 Goal-E watermark guard).  Never panics in normal builds.
 pub fn check(data: &mut Data) {
+    // Behaviour-neutral USE-analysis dump (LOFT_MATERIALIZE_DUMP) — the
+    // copy-vs-borrow verdict per binding, before any codegen consumes it.
+    crate::use_analysis::dump_all(data);
+    // Tier-0 borrow elision (OPT-IN via LOFT_BORROW_ELIDE; default OFF).
+    // Reverted from default-on: the crawler dogfood surfaced a codegen panic the
+    // suite missed — eliding `v` drops `v`/`vdb` but leaves any OTHER var whose
+    // `deps` referenced them dangling, so the borrowed-view codegen path
+    // dereferences a dead dep (codegen.rs `stack(dep[0])`). Re-enable the default
+    // only after the elision fixes up / refuses dependent vars. Off ⇒
+    // behaviour-neutral; the copy mechanism is the substrate.
+    if std::env::var_os("LOFT_BORROW_ELIDE").is_some() {
+        elide_borrows(data);
+    }
     // Plan-57 store-identity gate (Phase 2.5): emit the verifying store ops only
     // when LOFT_STORE_TAG is set.  Counter is global so ids are unique across
     // functions (a cross-function wrong-store free mismatches).

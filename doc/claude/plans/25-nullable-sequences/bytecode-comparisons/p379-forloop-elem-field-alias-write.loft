@@ -1,0 +1,31 @@
+struct Hex { h_height: integer, h_material: integer }
+struct Chunk { ck_cx: integer, ck_hexes: vector<Hex> }
+struct World { chunks: vector<Chunk> not null }
+fn build_chunk(cx: integer) -> Chunk {
+  hexes: vector<Hex> = [];
+  for _ in 0..4 { hexes += [Hex {h_height:0,h_material:0}]; }
+  Chunk { ck_cx: cx, ck_hexes: hexes }
+}
+fn ensure(w: &World, cx: integer) {
+  for ec in w.chunks { if ec.ck_cx == cx { return; } }
+  w.chunks += [build_chunk(cx)];
+}
+fn set_hex(w: &World, cx: integer, idx: integer, h: Hex) {
+  ensure(w, cx);
+  for sc_c in w.chunks {
+    if sc_c.ck_cx == cx { cells = sc_c.ck_hexes; if idx < len(cells) { cells[idx] = h; } return; }
+  }
+}
+fn get_hex(w: World, cx: integer, idx: integer) -> Hex {
+  for gc in w.chunks {
+    if gc.ck_cx == cx { cells = gc.ck_hexes; if idx < len(cells) { return cells[idx]; } return Hex{h_height:0,h_material:0}; }
+  }
+  Hex{h_height:0,h_material:0}
+}
+fn main() {
+  w = World { chunks: [] };
+  cur = Hex {h_height:7, h_material:0};
+  set_hex(w, 1, 2, cur);
+  r = get_hex(w, 1, 2);
+  print("h={r.h_height}\n");
+}

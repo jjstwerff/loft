@@ -1881,12 +1881,24 @@ use a separate collection or add after the loop"
         // append).  Widening here turned that latent corruption into a real
         // regression, so the index / nested cases stay ALIASED until the
         // store-reuse substrate is fixed (routed forward, the case-B / a7 class).
-        let struct_vec_field = if let Value::Call(d, args) = code.unspan() {
-            *d == self.data.def_nr("OpGetField")
-                && matches!(
-                    args.first().map(Value::unspan),
-                    Some(Value::Var(bv)) if matches!(self.vars.tp(*bv), Type::Reference(_, _))
-                )
+        // The #415 deep-copy fires only when the base struct OWNS its store
+        // (empty deps).  When the base BORROWS a live source (non-empty deps —
+        // e.g. a for-loop element of an outer vector, or another borrowed view),
+        // its vector field must ALIAS so an in-place write-through (`cells =
+        // sc.v; cells[i] = h`) reaches the source, and the borrow is recognised
+        // as a mutation of the source.  Pre-dense the nullable element wrap made
+        // `sc.v` a DOUBLE `OpGetField` (base = a Call, not a Var), so this rule
+        // never fired on a borrowed element; the dense flip collapsed it to a
+        // single `OpGetField(Var, …)`, which mis-took the borrow for an owned
+        // copy → deep-copy into a fresh store → write lost / null-ref crash
+        // (@PLN25 p379).  The owns-vs-borrows split is the `deps` ownership fact,
+        // not the syntactic shape.
+        let struct_vec_field = if let Value::Call(d, args) = code.unspan()
+            && *d == self.data.def_nr("OpGetField")
+            && let Some(Value::Var(bv)) = args.first().map(Value::unspan)
+            && matches!(self.vars.tp(*bv), Type::Reference(_, _))
+        {
+            self.vars.tp(*bv).depend().is_empty()
         } else {
             false
         };
@@ -2416,6 +2428,21 @@ use a separate collection or add after the loop"
     pub(crate) fn e2_nullable_elem(&mut self, elem: Type) -> Type {
         if !self.e2_rewrite_enabled() {
             return elem;
+        }
+        // Forward-ref `S?`: S is not laid out yet (still `Unknown`), so synth
+        // `__nullable<S>` eagerly here — its `Some` payload is `Reference(S)`,
+        // which resolves once S is known.  This carries the `?` opt-in through
+        // the forward reference, so the deferred resolver (`copy_unknown_fields`)
+        // only ever sees a DENSE `vector<S>` as a bare `Unknown` and resolves it
+        // dense.  Without this, a forward-ref `vector<S?>` would lose its `?` and
+        // resolve dense (silent loss of nullability).  Stdlib elements stay dense
+        // (their `#rust` bodies use the dense ABI), matching `nullable_vector_elem`.
+        if let Type::Unknown(was) = &elem
+            && *was != 0
+            && self.data.def(*was).source != crate::data::STD_SOURCE
+        {
+            let syn = self.data.nullable_enum_for(&mut self.lexer, *was);
+            return Type::Enum(syn, true, Deps::none());
         }
         let Type::Reference(struct_d, _) = &elem else {
             return elem;

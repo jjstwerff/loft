@@ -86,7 +86,7 @@ fn null_in_the_middle_preserved_present_objects_kept() {
         "null_mid",
         &format!(
             "{STRUCT}fn main() {{\n  \
-             v = \"[ {{{{name: \\\"a\\\", value: 1}}}}, null, {{{{name: \\\"c\\\", value: 3}}}} ]\" as vector < Item >;\n  \
+             v = \"[ {{{{name: \\\"a\\\", value: 1}}}}, null, {{{{name: \\\"c\\\", value: 3}}}} ]\" as vector < Item? >;\n  \
              print(\"len={{len(v)}} i0={{v[0].name}}/{{v[0].value}} i1null={{v[1] == null}} i2={{v[2].name}}/{{v[2].value}}\\n\");\n\
              }}\n"
         ),
@@ -100,7 +100,7 @@ fn null_leading_then_present() {
         "null_lead",
         &format!(
             "{STRUCT}fn main() {{\n  \
-             v = \"[ null, {{{{name: \\\"b\\\", value: 2}}}} ]\" as vector < Item >;\n  \
+             v = \"[ null, {{{{name: \\\"b\\\", value: 2}}}} ]\" as vector < Item? >;\n  \
              print(\"len={{len(v)}} i0null={{v[0] == null}} i1null={{v[1] == null}} i1v={{v[1].value}}\\n\");\n\
              }}\n"
         ),
@@ -114,7 +114,7 @@ fn all_null_elements() {
         "all_null",
         &format!(
             "{STRUCT}fn main() {{\n  \
-             v = \"[ null, null, null ]\" as vector < Item >;\n  \
+             v = \"[ null, null, null ]\" as vector < Item? >;\n  \
              print(\"len={{len(v)}} all=[{{v[0] == null}},{{v[1] == null}},{{v[2] == null}}]\\n\");\n\
              }}\n"
         ),

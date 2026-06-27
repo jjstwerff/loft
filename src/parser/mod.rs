@@ -7962,7 +7962,7 @@ fn collect_vars_in(val: &Value, result: &mut HashSet<u16>) {
 /// - It flows into a callee whose own body mutates that parameter
 ///   (directly or transitively via further calls).  The
 ///   interprocedural lookup is memoised via `callee_cache`.
-fn find_written_vars(
+pub(crate) fn find_written_vars(
     code: &Value,
     data: &Data,
     written: &mut HashSet<u16>,
