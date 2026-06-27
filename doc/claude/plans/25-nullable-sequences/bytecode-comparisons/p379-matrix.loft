@@ -1,0 +1,39 @@
+struct Hex { h_height: integer, h_material: integer }
+struct Chunk { ck_cx: integer, ck_hexes: vector<Hex> }
+struct Map { m_chunks: vector<Chunk> }
+
+fn mk_chunk(cx: integer) -> Chunk {
+  hexes: vector<Hex> = [];
+  for _ in 0..4 { hexes += [Hex {h_height:0, h_material:0}]; }
+  Chunk { ck_cx: cx, ck_hexes: hexes }
+}
+fn ensure(m: &Map, cx: integer) {
+  for ec in m.m_chunks { if ec.ck_cx == cx { return; } }
+  m.m_chunks += [mk_chunk(cx)];
+}
+// A1: source = &Chunk ref param, alias-write  (expect 7)
+fn a1_write(c: &Chunk, idx: integer, h: Hex) { cells = c.ck_hexes; cells[idx] = h; }
+// A2: source = for-loop element, alias-write (expect 7)
+fn a2_write(m: &Map, cx: integer, idx: integer, h: Hex) {
+  ensure(m, cx);
+  for sc in m.m_chunks { if sc.ck_cx == cx { cells = sc.ck_hexes; cells[idx] = h; return; } }
+}
+// A3: source = index-read element, alias-write (expect 7)
+fn a3_write(m: &Map, cx: integer, idx: integer, h: Hex) {
+  ensure(m, cx);
+  cells = m.m_chunks[0].ck_hexes; cells[idx] = h;
+}
+// A5: source = for-loop element, alias-read (expect 7)
+fn a5_read(m: Map, cx: integer, idx: integer) -> integer {
+  for gc in m.m_chunks { if gc.ck_cx == cx { cells = gc.ck_hexes; return cells[idx].h_height; } }
+  -1
+}
+fn main() {
+  c1 = mk_chunk(1); a1_write(c1, 2, Hex{h_height:7,h_material:0});
+  print("A1={c1.ck_hexes[2].h_height} (exp 7)\n");
+  m = Map{m_chunks:[]}; a2_write(m, 1, 2, Hex{h_height:7,h_material:0});
+  print("A2={m.m_chunks[0].ck_hexes[2].h_height} (exp 7)\n");
+  print("A5={a5_read(m, 1, 2)} (exp 7)\n");
+  m2 = Map{m_chunks:[]}; a3_write(m2, 1, 2, Hex{h_height:7,h_material:0});
+  print("A3={m2.m_chunks[0].ck_hexes[2].h_height} (exp 7)\n");
+}

@@ -1881,12 +1881,24 @@ use a separate collection or add after the loop"
         // append).  Widening here turned that latent corruption into a real
         // regression, so the index / nested cases stay ALIASED until the
         // store-reuse substrate is fixed (routed forward, the case-B / a7 class).
-        let struct_vec_field = if let Value::Call(d, args) = code.unspan() {
-            *d == self.data.def_nr("OpGetField")
-                && matches!(
-                    args.first().map(Value::unspan),
-                    Some(Value::Var(bv)) if matches!(self.vars.tp(*bv), Type::Reference(_, _))
-                )
+        // The #415 deep-copy fires only when the base struct OWNS its store
+        // (empty deps).  When the base BORROWS a live source (non-empty deps —
+        // e.g. a for-loop element of an outer vector, or another borrowed view),
+        // its vector field must ALIAS so an in-place write-through (`cells =
+        // sc.v; cells[i] = h`) reaches the source, and the borrow is recognised
+        // as a mutation of the source.  Pre-dense the nullable element wrap made
+        // `sc.v` a DOUBLE `OpGetField` (base = a Call, not a Var), so this rule
+        // never fired on a borrowed element; the dense flip collapsed it to a
+        // single `OpGetField(Var, …)`, which mis-took the borrow for an owned
+        // copy → deep-copy into a fresh store → write lost / null-ref crash
+        // (@PLN25 p379).  The owns-vs-borrows split is the `deps` ownership fact,
+        // not the syntactic shape.
+        let struct_vec_field = if let Value::Call(d, args) = code.unspan()
+            && *d == self.data.def_nr("OpGetField")
+            && let Some(Value::Var(bv)) = args.first().map(Value::unspan)
+            && matches!(self.vars.tp(*bv), Type::Reference(_, _))
+        {
+            self.vars.tp(*bv).depend().is_empty()
         } else {
             false
         };
