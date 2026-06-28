@@ -50,7 +50,7 @@ fi
 
 auth=()
 [ -n "${GITHUB_TOKEN:-}" ] && auth=(-H "Authorization: Bearer $GITHUB_TOKEN")
-if ! curl -fsSL "${auth[@]}" \
+if ! curl -fsSL ${auth[@]+"${auth[@]}"} \
     "https://api.github.com/orgs/$ORG/repos?per_page=100" -o "$tmp/repos.json"; then
     echo "GitHub API unreachable — skipping (needs network)"
     exit 0
