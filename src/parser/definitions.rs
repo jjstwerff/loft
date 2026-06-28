@@ -1451,7 +1451,15 @@ impl Parser {
         tp
     }
 
-    fn parse_type_inner(&mut self, on_d: u32, type_name: &str, returned: bool) -> Option<Type> {
+    // `pub(crate)` so the `as`-cast (operators.rs) can parse the target type
+    // WITHOUT the postfix-`?` consumer — the cast detects the `?` itself to tell
+    // `as τ` (fit-checked) from `as τ?` (checked cast); see DN4.
+    pub(crate) fn parse_type_inner(
+        &mut self,
+        on_d: u32,
+        type_name: &str,
+        returned: bool,
+    ) -> Option<Type> {
         // Phase 2c round 10c: `long` has been removed as a user-facing
         // type.  Callers now use `integer` everywhere; if anyone still
         // writes `long` it parses as an unknown identifier and fails

@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 use super::{
-    Data, Level, OPERATORS, Parser, Position, Type, Value, diagnostic_format, rename, v_block,
-    v_if, v_set,
+    Data, IntegerSpec, Level, OPERATORS, Parser, Position, Type, Value, diagnostic_format, rename,
+    v_block, v_if, v_set,
 };
 
 // Operator parsing and type dispatch.
@@ -1578,6 +1578,41 @@ impl Parser {
         *ctp = result_type;
     }
 
+    /// @PLN25 DN4 `(N-Cast?)` — lower `e as τ?` (narrowing, not provably-fit) to a
+    /// range guard: bind `e` once, yield it if it lies in τ's range, else the
+    /// integer null. Pure parse-time desugar over existing ops (`OpLeInt`,
+    /// `OpConvIntFromNull`, `if`) — no new runtime op, no runtime error. `src_tp`
+    /// is `e`'s type (the temp's slot); the result type is the nullable `τ`.
+    fn dn4_checked_cast(&mut self, code: &mut Value, tp: &Type, src_tp: &Type) -> Type {
+        let Type::Integer(spec) = tp else {
+            return tp.clone();
+        };
+        let (min, max) = (spec.min, spec.max as i32);
+        // Result is a FULL nullable integer, NOT the narrow τ: the else-branch is the
+        // integer null sentinel (`i64::MIN`), which needs the full width. Typing the
+        // block as the narrow τ makes native emit `as u8` on the tail, and
+        // `i64::MIN as u8 == 0` silently destroys the null (interp tolerated it,
+        // native did not). The narrow-width tag is dropped here until nullable-narrow
+        // sentinel support lands; the value still fits τ on the present path.
+        let res_tp = match src_tp {
+            Type::Integer(s) => Type::Integer(IntegerSpec {
+                not_null: false,
+                ..*s
+            }),
+            other => other.clone(),
+        };
+        let tmp = self.create_unique("_dn4", src_tp);
+        let set = v_set(tmp, code.clone());
+        let cond_lo = self.cl("OpLeInt", &[Value::Int(min), Value::Var(tmp)]);
+        let cond_hi = self.cl("OpLeInt", &[Value::Var(tmp), Value::Int(max)]);
+        let null_lo = self.cl("OpConvIntFromNull", &[]);
+        let null_hi = self.cl("OpConvIntFromNull", &[]);
+        let inner = v_if(cond_hi, Value::Var(tmp), null_hi);
+        let outer = v_if(cond_lo, inner, null_lo);
+        *code = v_block(vec![set, outer], res_tp.clone(), "dn4cast");
+        res_tp
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn handle_operator(
         &mut self,
@@ -1594,19 +1629,47 @@ impl Parser {
         } else if operator == "as" {
             self.expr_not_null = false;
             if let Some(tps) = self.lexer.has_identifier() {
-                let Some(tp) = self.parse_type(u32::MAX, &tps, false) else {
+                // Parse the target WITHOUT the postfix-`?` consumer, then detect the
+                // `?` here — `as τ` and `as τ?` are otherwise indistinguishable (the
+                // narrow aliases all carry `not_null:false`).
+                let Some(mut tp) = self.parse_type_inner(u32::MAX, &tps, false) else {
                     diagnostic!(self.lexer, Level::Error, "Expect type");
                     return Some(Type::Null);
                 };
+                let nullable_cast = self.lexer.has_token("?");
+                let narrowing = Self::is_narrowing_int(ctp, &tp);
                 // @PLAN48 P2: an explicit `as <narrow-int>` is the sanctioned way to
-                // narrow `integer` → `i32`/`u8`/… — accept it here so the
-                // implicit-narrowing diagnostic in `convert` does NOT fire on an
-                // explicit cast.  The value stays in the 8-byte slot (a width-tag);
-                // the narrow target type is returned below (`rt = tp`).
-                if !Self::is_narrowing_int(ctp, &tp)
-                    && !self.convert(code, ctp, &tp)
-                    && !self.cast(code, ctp, &tp)
-                {
+                // narrow `integer` → `i32`/`u8`/… so the implicit-narrowing
+                // diagnostic in `convert` does NOT fire on an explicit cast.
+                //
+                // @PLN25 DN4 (LOFT_DN4, default off) — `(N-Cast)`/`(N-Cast?)`: a
+                // narrowing cast whose value is NOT provably in range is no longer a
+                // silent 8-byte width-tag (`400 as u8 == 400`). `as τ` errors (the
+                // value may not fit — use `as τ?`); `as τ?` lowers to a range guard
+                // that yields the value if it fits, else the integer null. The fit
+                // path and the flag-off path keep the old accept-as-width-tag.
+                if narrowing {
+                    if !self.first_pass
+                        && std::env::var_os("LOFT_DN4").is_some()
+                        && !self.int_value_fits(code, &tp)
+                    {
+                        if nullable_cast {
+                            let src = ctp.clone();
+                            tp = self.dn4_checked_cast(code, &tp, &src);
+                        } else {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "narrowing cast from {} to {tps} may not fit at runtime; \
+                                 use `{tps}?` for a checked cast (value or null), or guard \
+                                 the value (`?? d`, mask, or an `if` range check)",
+                                self.int_type_name(ctp),
+                            );
+                        }
+                    }
+                    // else: in range, or DN4 off — accept as a width-tag (value
+                    // stays in the 8-byte slot), the pre-DN4 behaviour.
+                } else if !self.convert(code, ctp, &tp) && !self.cast(code, ctp, &tp) {
                     diagnostic!(
                         self.lexer,
                         Level::Error,
