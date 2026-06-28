@@ -4,7 +4,7 @@ schema_version = 1
 
 [[package]]
 name = "gridmesh"
-version = "0.1.1"
-url = "https://github.com/loft-lang/loft-libs-graphics/releases/download/gridmesh-v0.1.1/gridmesh-0.1.1.tar.gz"
-sha256 = "baedd9c4537a2de34fe5a4b5a026a281aa6037411eb3261e2a97fabc15850e13"
+version = "0.1.2"
+url = "https://github.com/loft-lang/loft-libs-graphics/releases/download/gridmesh-v0.1.2/gridmesh-0.1.2.tar.gz"
+sha256 = "97ac4a990c4501982e05f8a2bd65d6010527f3ace6b3f7598a262ef03ebe6b26"
 source = "registry"

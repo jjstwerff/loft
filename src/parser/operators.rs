@@ -1671,15 +1671,15 @@ impl Parser {
                 // narrow `integer` → `i32`/`u8`/… so the implicit-narrowing
                 // diagnostic in `convert` does NOT fire on an explicit cast.
                 //
-                // @PLN25 DN4 (LOFT_DN4, default off) — `(N-Cast)`/`(N-Cast?)`: a
-                // narrowing cast whose value is NOT provably in range is no longer a
+                // @PLN25 DN4 (default ON; opt-out LOFT_NO_DN4) — `(N-Cast)`/`(N-Cast?)`:
+                // a narrowing cast whose value is NOT provably in range is no longer a
                 // silent 8-byte width-tag (`400 as u8 == 400`). `as τ` errors (the
                 // value may not fit — use `as τ?`); `as τ?` lowers to a range guard
                 // that yields the value if it fits, else the integer null. The fit
-                // path and the flag-off path keep the old accept-as-width-tag.
+                // path (and the opt-out) keep the old accept-as-width-tag.
                 if narrowing {
                     if !self.first_pass
-                        && std::env::var_os("LOFT_DN4").is_some()
+                        && std::env::var_os("LOFT_NO_DN4").is_none()
                         && !self.int_value_fits(code, &tp)
                     {
                         if nullable_cast {

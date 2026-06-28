@@ -11,7 +11,7 @@
 // Fix: gate null-else on `true_stack != stack_pos`. Guards: no crash, correct
 // total, no leak, BOTH backends.
 
-fn enc(n: integer) -> vector<u8> { b: vector<u8> = []; b += [n as u8]; return b; }
+fn enc(n: integer) -> vector<u8> { b: vector<u8> = []; b += [(n & 255) as u8]; return b; }
 
 fn main() {
   for t in 0..2 {

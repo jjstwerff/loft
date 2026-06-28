@@ -99,7 +99,7 @@ fn structure(self: Parser, public: boolean) -> boolean {
     return false;
   }
   id = self.lexer.identifier();
-  struct_nr = self.code.define(public, id, code::Struct, self.cur_file as u16, self.lexer.get_line() as i32);
+  struct_nr = self.code.define(public, id, code::Struct, (self.cur_file & 65535) as u16, self.lexer.get_line() as i32);
   self.expect("{{");
   for parameter in 0..256 {
     if self.lexer.test("}}") {
@@ -543,7 +543,7 @@ fn type_def(self: Parser, define: boolean) -> u16 {
   }
   t = self.code.get_type(id);
   if !t && define {
-    self.code.define(false, id, code::TypeDef, self.cur_file as u16, self.lexer.get_line() as i32);
+    self.code.define(false, id, code::TypeDef, (self.cur_file & 65535) as u16, self.lexer.get_line() as i32);
     for param in parameters {
       self.code.field(null, param);
     }
@@ -643,14 +643,14 @@ fn flags(self: Parser) {
   }
   s = self.lexer.int();
   if s {
-    format.size = s as i8;
+    format.size = (s & 127) as i8;
   }
   if self.lexer.matches(".") {
     format.is_float = true;
   }
   d = self.lexer.int();
   if d {
-    format.decimals = d as i8;
+    format.decimals = (d & 127) as i8;
   }
   if self.lexer.matches("x") || self.lexer.matches("X") {
     format.radix = 16;

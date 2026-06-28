@@ -30,13 +30,13 @@ pub fn test() {
   total = 0;
   for _ in 0..40 {
     bs: vector<u8> = [];
-    for i in 0..8 { bs += [(i + 1) as u8]; }
+    for i in 0..8 { bs += [((i + 1) & 255) as u8]; }
     // bare-enum local holding a vector payload
     h = Bytes { v: bs };
     total += relen(h);
     // struct wrapping the enum (repro 1 shape)
     cs: vector<u8> = [];
-    for i in 0..5 { cs += [(i + 1) as u8]; }
+    for i in 0..5 { cs += [((i + 1) & 255) as u8]; }
     b = Box { value: Bytes { v: cs } };
     total += relen(b.value);
   }

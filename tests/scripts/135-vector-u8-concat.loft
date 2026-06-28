@@ -36,7 +36,7 @@ fn test_p314_u8_concat_from_field() {
   parts: vector<V> = [];
   for k in 0..4 {
     seg = V{a: []};
-    for j in 0..7 { seg.a += [((k * 10 + j) % 200) as u8]; }   // odd length 7
+    for j in 0..7 { seg.a += [(((k * 10 + j) % 200) & 255) as u8]; }   // odd length 7
     parts += [seg];
   }
   per = 0;

@@ -110,10 +110,10 @@ pub fn emit_segment(m: &SegMesh, kind: integer,
                     x0: float, y0: float, z0: float,
                     x1: float, y1: float, z1: float,
                     color: integer, owner: integer) {
-  m.kinds   += [kind as u8];
+  m.kinds   += [(kind & 255) as u8];
   m.x0s += [x0 as single]; m.y0s += [y0 as single]; m.z0s += [z0 as single];
   m.x1s += [x1 as single]; m.y1s += [y1 as single]; m.z1s += [z1 as single];
-  m.colors  += [color as u8];
+  m.colors  += [(color & 255) as u8];
   m.cell_ix += [owner];
 }
 

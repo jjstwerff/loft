@@ -1,11 +1,11 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// @PLN25 DN4 (LOFT_DN4) — `(N-Cast)` / `(N-Cast?)`: a narrowing integer cast whose
-// value is not provably in range stops being a silent 8-byte width-tag
-// (`400 as u8 == 400`). `as τ` is a compile error (use `as τ?`); `as τ?` is a
-// checked cast — value if it fits, else the integer null. Built behind the flag
-// (default off) and validated here on BOTH backends before any cutover. Design:
+// @PLN25 DN4 (default ON; opt-out LOFT_NO_DN4) — `(N-Cast)` / `(N-Cast?)`: a
+// narrowing integer cast whose value is not provably in range stops being a silent
+// 8-byte width-tag (`400 as u8 == 400`). `as τ` is a compile error (use `as τ?`);
+// `as τ?` is a checked cast — value if it fits, else the integer null. Validated
+// here on BOTH backends. Design:
 // doc/claude/plans/25-nullable-sequences/implementation-steps.md § Phase 3 / DN4
 // and doc/claude/formal/types.md § DN4.
 
@@ -60,7 +60,6 @@ fn dn4_checked_cast_matrix_both_backends() {
         let out = Command::new(env!("CARGO_BIN_EXE_loft"))
             .args([backend])
             .arg(&path)
-            .env("LOFT_DN4", "1")
             .env("LOFT_NO_CACHE", "1")
             .env("LOFT_TIMEOUT", "180")
             .output()
@@ -89,7 +88,6 @@ fn dn4_rejects_non_fit_nonnull_cast() {
         let out = Command::new(env!("CARGO_BIN_EXE_loft"))
             .args(["--check"])
             .arg(&path)
-            .env("LOFT_DN4", "1")
             .env("LOFT_NO_CACHE", "1")
             .output()
             .expect("spawn loft");
@@ -102,13 +100,14 @@ fn dn4_rejects_non_fit_nonnull_cast() {
 }
 
 /// With the flag OFF (the default), DN4 is inert — the old width-tag behaviour
-/// stands (`300 as u8 == 300`, no error). Guards the opt-in default.
+/// stands (`300 as u8 == 300`, no error). Guards the `LOFT_NO_DN4` escape hatch.
 #[test]
 fn dn4_off_keeps_old_behaviour() {
     let path = write_probe("off.loft", "fn main(){ x = 300 as u8; println(\"{x}\"); }");
     let out = Command::new(env!("CARGO_BIN_EXE_loft"))
         .args(["--interpret"])
         .arg(&path)
+        .env("LOFT_NO_DN4", "1")
         .env("LOFT_NO_CACHE", "1")
         .output()
         .expect("spawn loft");

@@ -10,8 +10,8 @@
 
 struct B { x: u8 }    struct S { z: u16 }
 
-fn to_u8(v: integer) -> u8 { v as u8 }
-fn to_u16(v: integer) -> u16 { v as u16 }
+fn to_u8(v: integer) -> u8 { (v & 255) as u8 }
+fn to_u16(v: integer) -> u16 { (v & 65535) as u16 }
 
 fn main() {
   b = B { x: to_u8(255) };       // 255 = the all-ones byte sentinel → reads null
