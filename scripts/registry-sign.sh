@@ -88,32 +88,47 @@ fi
 # $LOFT_SIG_IN / $LOFT_SIG_OUT); else a default pkcs11-tool EDDSA call — module
 # auto-found (override LOFT_YUBIKEY_PKCS11_MODULE), PIV 9C → id 02 (override
 # LOFT_YUBIKEY_PIV_ID).
+# Path to the PKCS#11 module (LOFT_YUBIKEY_PKCS11_MODULE, else common locations).
+yubikey_module() {
+    [ -n "${LOFT_YUBIKEY_PKCS11_MODULE:-}" ] && { echo "$LOFT_YUBIKEY_PKCS11_MODULE"; return; }
+    local m
+    for m in /opt/homebrew/lib/libykcs11.dylib /usr/local/lib/libykcs11.dylib \
+             /opt/homebrew/lib/opensc-pkcs11.so /usr/local/lib/opensc-pkcs11.so \
+             /usr/lib/x86_64-linux-gnu/libykcs11.so /usr/lib/x86_64-linux-gnu/opensc-pkcs11.so; do
+        [ -e "$m" ] && { echo "$m"; return; }
+    done
+}
+# Is on-card signing available here?  Decided BEFORE prompting, so an absent card
+# falls straight to the local key instead of making you wait.
+yubikey_available() {
+    [ -n "${LOFT_YUBIKEY_SIGN_CMD:-}" ] && return 0
+    command -v pkcs11-tool >/dev/null 2>&1 && [ -n "$(yubikey_module)" ]
+}
+
 yubikey_sign() {  # <in> <out>  → 0 = signed on-card, non-zero = not signed (fall back)
-    local in="$1" out="$2" t="${LOFT_YUBIKEY_TIMEOUT:-10}"
-    local TO=""   # bound the wait if a timeout command exists (macOS often lacks it)
-    command -v timeout  >/dev/null 2>&1 && TO="timeout $t"
-    [ -z "$TO" ] && command -v gtimeout >/dev/null 2>&1 && TO="gtimeout $t"
+    local in="$1" out="$2" t="${LOFT_YUBIKEY_TIMEOUT:-}"
+    local TO=""   # UNBOUNDED by default (take your time); LOFT_YUBIKEY_TIMEOUT=<sec> to bound it
+    if [ -n "$t" ]; then
+        command -v timeout  >/dev/null 2>&1 && TO="timeout $t"
+        [ -z "$TO" ] && command -v gtimeout >/dev/null 2>&1 && TO="gtimeout $t"
+    fi
     rm -f "$out"
     if [ -n "${LOFT_YUBIKEY_SIGN_CMD:-}" ]; then
-        LOFT_SIG_IN="$in" LOFT_SIG_OUT="$out" $TO bash -c "$LOFT_YUBIKEY_SIGN_CMD" || return 1
-        [ -s "$out" ] || return 1
+        LOFT_SIG_IN="$in" LOFT_SIG_OUT="$out" $TO bash -c "$LOFT_YUBIKEY_SIGN_CMD" \
+            || { echo "  YubiKey: LOFT_YUBIKEY_SIGN_CMD failed" >&2; return 1; }
+        [ -s "$out" ] || { echo "  YubiKey: produced no signature" >&2; return 1; }
         return 0
     fi
-    command -v pkcs11-tool >/dev/null 2>&1 || return 1
-    local module="${LOFT_YUBIKEY_PKCS11_MODULE:-}"
-    if [ -z "$module" ]; then
-        for m in /usr/local/lib/libykcs11.dylib /opt/homebrew/lib/libykcs11.dylib \
-                 /usr/local/lib/opensc-pkcs11.so /opt/homebrew/lib/opensc-pkcs11.so \
-                 /usr/lib/x86_64-linux-gnu/libykcs11.so /usr/lib/x86_64-linux-gnu/opensc-pkcs11.so; do
-            [ -e "$m" ] && { module="$m"; break; }
-        done
-    fi
-    [ -n "$module" ] || return 1
-    echo "  YubiKey: on-card sign via $module (PIV 9C / id ${LOFT_YUBIKEY_PIV_ID:-02}), up to ${t}s — PIN + touch…" >&2
+    local module; module="$(yubikey_module)"
+    local pin_arg=(); [ -n "${LOFT_YUBIKEY_PIN:-}" ] && pin_arg=(--pin "$LOFT_YUBIKEY_PIN")
+    echo "  YubiKey: signing on-card via $module (PIV 9C / id ${LOFT_YUBIKEY_PIV_ID:-02})." >&2
+    echo "           Enter PIN if asked, then TOUCH the key — take your time." >&2
+    # NOTE: output is shown (PIN prompt + errors visible — do NOT suppress it).
     $TO pkcs11-tool --module "$module" --sign --mechanism EDDSA \
-        --id "${LOFT_YUBIKEY_PIV_ID:-02}" --login \
-        --input-file "$in" --output-file "$out" >/dev/null 2>&1 || return 1
-    [ -s "$out" ] || return 1
+        --id "${LOFT_YUBIKEY_PIV_ID:-02}" --login "${pin_arg[@]}" \
+        --input-file "$in" --output-file "$out" \
+        || { echo "  YubiKey: pkcs11-tool sign failed — check the id/PIN/slot, or set LOFT_YUBIKEY_SIGN_CMD" >&2; return 1; }
+    [ -s "$out" ] || { echo "  YubiKey: empty signature" >&2; return 1; }
     return 0
 }
 
@@ -316,38 +331,41 @@ else
 fi
 echo
 
-# Signer policy.  DEFAULT: try the YubiKey on-card first (bounded ~10s for PIN +
-# touch), and if it doesn't come through, fall back to the local key file if present.
-# --yubikey (or LOFT_REGISTRY_SIGNER=yubikey) forces on-card ONLY (no fallback);
-# LOFT_REGISTRY_SIGNER=file forces the local key only (skip the card).
+# Signer policy.  If a YubiKey is available, CONFIRM-BY-TOUCH: go straight to the
+# on-card sign — the PIN + touch ARE the confirmation (no typing), and the wait is
+# UNBOUNDED (take your time; LOFT_YUBIKEY_TIMEOUT=<sec> to bound it).  Only when the
+# card is ABSENT do we fall back to the local key (with a typed 'yes').  --yubikey
+# forces on-card (no fallback); LOFT_REGISTRY_SIGNER=file forces the local key.
 KEY_ONLY=0; [ "${LOFT_REGISTRY_SIGNER:-}" = file ] && KEY_ONLY=1
-
-if [ "$YES" != 1 ]; then
-    [ "$PUSH" = 1 ] && verb="Sign, commit & push" || verb="Sign & commit (no push)"
-    echo "$verb this index (YubiKey if present within ${LOFT_YUBIKEY_TIMEOUT:-10}s, else the local key)."
-    printf "  type 'yes' to proceed: "
-    read -r ans
-    case "$ans" in yes|YES) ;; *) echo "aborted — NOT signed."; exit 1;; esac
+USE_CARD=0
+[ "$KEY_ONLY" != 1 ] && { [ "$YUBIKEY" = 1 ] || yubikey_available; } && USE_CARD=1
+if [ "$KEY_ONLY" != 1 ] && [ "$USE_CARD" = 0 ]; then
+    echo "  note: YubiKey signing unavailable here — need pkcs11-tool + a PKCS#11 module" >&2
+    echo "        (macOS: brew install opensc yubico-piv-tool), or set LOFT_YUBIKEY_SIGN_CMD." >&2
+    echo "        Falling through to the local key." >&2
 fi
 
-# Sign: YubiKey first (unless key-only), then fall back to the local key file.
 SIGNED_VIA=""
-if [ "$KEY_ONLY" != 1 ]; then
-    if yubikey_sign "$INDEX" "$SIG"; then SIGNED_VIA="YubiKey (on-card)"; fi
+if [ "$USE_CARD" = 1 ]; then
+    [ "$PUSH" = 1 ] && verb="Sign, commit & push" || verb="Sign & commit (no push)"
+    echo "$verb this index — review the diff above, then CONFIRM BY TOUCHING YOUR YUBIKEY."
+    if yubikey_sign "$INDEX" "$SIG"; then
+        SIGNED_VIA="YubiKey (on-card)"
+    elif [ "$YUBIKEY" = 1 ]; then
+        echo "!! --yubikey: card sign failed and fallback is disabled." >&2; exit 4
+    else
+        echo "  card sign didn't complete — falling back to the local key." >&2
+    fi
 fi
 if [ -z "$SIGNED_VIA" ]; then
-    if [ "$YUBIKEY" = 1 ]; then
-        echo "!! --yubikey: the card did not sign within ${LOFT_YUBIKEY_TIMEOUT:-10}s, and fallback is disabled." >&2
-        exit 4
+    if [ "$YES" != 1 ]; then
+        printf "  sign with the local key %s? type 'yes': " "$(basename "$KEY")"
+        read -r ans
+        case "$ans" in yes|YES) ;; *) echo "aborted — NOT signed."; exit 1;; esac
     fi
-    if [ -f "$KEY" ]; then
-        [ "$KEY_ONLY" = 1 ] || echo "  YubiKey not used (absent/timeout) — falling back to the local key." >&2
-        "$KG" sign --in "$INDEX" --key "$KEY" --out "$SIG"
-        SIGNED_VIA="local key $(basename "$KEY")"
-    else
-        echo "!! no YubiKey signature and no local key at $KEY — nothing to sign with." >&2
-        exit 2
-    fi
+    [ -f "$KEY" ] || { echo "!! no card signature and no local key at $KEY — nothing to sign with." >&2; exit 2; }
+    "$KG" sign --in "$INDEX" --key "$KEY" --out "$SIG"
+    SIGNED_VIA="local key $(basename "$KEY")"
 fi
 SIGNED=1
 echo "signed: $SIG  (via $SIGNED_VIA)"
