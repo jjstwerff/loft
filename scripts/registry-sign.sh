@@ -72,7 +72,13 @@ CLONED=0; SIGNED=0; PUSHED=0
 if [ "$REG_GIVEN" != 1 ] && [ ! -f "$REG_DIR/index.json" ]; then
     REG_DIR=$(mktemp -d -t loft-registry.XXXXXX)
     echo "cloning loft-lang/registry → $REG_DIR ..." >&2
-    gh repo clone loft-lang/registry "$REG_DIR" -- -q 2>/dev/null \
+    # SSH first: it pushes with your key and never prompts, so the later
+    # commit+push succeeds unattended.  GitHub no longer accepts an HTTPS
+    # password at the git push prompt, so an HTTPS clone needs a working
+    # credential helper — fall back to it (gh, then plain HTTPS) only when SSH
+    # is unavailable.
+    git clone -q git@github.com:loft-lang/registry.git "$REG_DIR" 2>/dev/null \
+        || gh repo clone loft-lang/registry "$REG_DIR" -- -q 2>/dev/null \
         || git clone -q https://github.com/loft-lang/registry "$REG_DIR"
     CLONED=1
     if [ -n "$PR" ]; then
@@ -290,8 +296,37 @@ fi
 
 "$KG" sign --in "$INDEX" --key "$KEY" --out "$SIG"
 SIGNED=1
-[ -f "$PUB" ] && "$KG" verify --in "$INDEX" --sig "$SIG" --pub "$(cat "$PUB")"
 echo "signed: $SIG"
+
+# Trust gate — the signature must verify under a key that CLIENTS trust
+# (src/registry_keys.rs::TRUSTED_PUBLIC_KEYS), not merely under the key we
+# signed with.  Signing with an untrusted key yields a sig that every
+# `loft install` rejects ("registry index signature INVALID").  The old check
+# verified only against ${KEY}.pub AND was skipped entirely when that file was
+# absent — so a wrong/untrusted key shipped silently (broke the live index
+# 2026-06-28).  Refuse to commit/push unless a trusted key validates it.
+KEYS_RS="$here/src/registry_keys.rs"
+if [ -f "$KEYS_RS" ]; then
+    trusted_hex=$(grep -oE '0x[0-9A-Fa-f]{2}' "$KEYS_RS" | sed 's/0x//' | tr -d '\n')
+    ok=0; i=0
+    while [ "$i" -lt "${#trusted_hex}" ]; do
+        if "$KG" verify --in "$INDEX" --sig "$SIG" --pub "${trusted_hex:$i:64}" >/dev/null 2>&1; then ok=1; break; fi
+        i=$((i + 64))
+    done
+    if [ "$ok" != 1 ]; then
+        echo "!! registry-sign: the new signature verifies under NONE of the trusted" >&2
+        echo "   keys in $KEYS_RS — every 'loft install' would reject this index." >&2
+        echo "   Signing key: $KEY is not a registry trust-root key." >&2
+        echo "   NOT committing/pushing.  Sign with a trusted key (set LOFT_REGISTRY_KEY" >&2
+        echo "   / --key), or add this key's public to TRUSTED_PUBLIC_KEYS and ship a" >&2
+        echo "   new client release first." >&2
+        exit 3
+    fi
+    echo "  trust gate OK — signature verifies under a client-trusted key"
+else
+    echo "  WARNING: $KEYS_RS not found — skipping trust-set verification" >&2
+    [ -f "$PUB" ] && "$KG" verify --in "$INDEX" --sig "$SIG" --pub "$(cat "$PUB")"
+fi
 
 # Automated git: stage index.json AND its signature together, commit, push.
 # Ed25519 is deterministic, so re-signing identical content yields the same bytes

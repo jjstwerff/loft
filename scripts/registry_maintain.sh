@@ -276,7 +276,10 @@ done < "$tmp/prs.tsv"
 
 if [ -z "$REG_DIR" ]; then
     REG_DIR="$tmp/registry"
-    git clone --quiet "https://github.com/$ORG/registry.git" "$REG_DIR"
+    # SSH first so the sign+push step (registry-sign.sh, given this checkout)
+    # pushes with your key without an HTTPS password prompt; fall back to HTTPS.
+    git clone --quiet "git@github.com:$ORG/registry.git" "$REG_DIR" 2>/dev/null \
+        || git clone --quiet "https://github.com/$ORG/registry.git" "$REG_DIR"
 else
     git -C "$REG_DIR" pull --ff-only
 fi
