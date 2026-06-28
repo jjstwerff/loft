@@ -240,8 +240,11 @@ if [ "$DRY" = 1 ]; then
 fi
 if [ "$YES" != 1 ]; then
     n_green=$(awk -F'\t' '$3 == "green"' "$tmp/prs.tsv" | wc -l)
-    read -rp "publish $n_own own lib(s) + merge $n_green green PR(s)? (registry-sign then shows the diff to review + sign) [y/N] " a
-    [ "$a" = y ] || [ "$a" = Y ] || { echo "aborted."; exit 1; }
+    # No prompt here — registry-sign.sh below is the single human gate (it shows the
+    # diff, re-checks each tarball, asks you to confirm/sign, and trust-gates the
+    # push).  A second [y/N] is redundant AND a touch-trap (an idle YubiKey touch
+    # types an OTP, which a `read` would mis-read).  Use --dry-run to preview.
+    echo "publishing $n_own own lib(s) + merging $n_green green PR(s) — registry-sign will review + sign next."
 fi
 
 # ── execute ───────────────────────────────────────────────────────────────────
