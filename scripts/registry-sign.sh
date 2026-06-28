@@ -12,9 +12,13 @@
 #     --registry-dir DIR  registry checkout (default: $PWD; if that isn't a
 #                         registry, the live loft-lang/registry is cloned)
 #     --pr N              clone the registry + check out registry PR #N, then sign
-#     --key FILE          Ed25519 private key
+#     --key FILE          Ed25519 private key file (the local-key path)
 #                         (default: $LOFT_REGISTRY_KEY or
 #                          ~/.loft/trust-root/registry-signing-key.bin)
+#     --yubikey           sign ON-CARD with the YubiKey (PIV slot 9C, Ed25519) —
+#                         the private key never leaves the card.  Use this when the
+#                         trusted signer is a YubiKey (K_yubiA/B), e.g. on a laptop
+#                         that has no trusted *file* key.  (or LOFT_REGISTRY_SIGNER=yubikey)
 #     --since REF         diff index.json against this git ref (default: auto —
 #                         HEAD if you have uncommitted edits, else HEAD~1)
 #     --notes             also print each release's full notes (gh release body)
@@ -24,12 +28,20 @@
 #                         passes "publish: <libs>")
 #     --yes               skip the confirm prompt (scripted use)
 #
-# Confirmation gate (the human review IS the trust root): the LOCAL key signs;
-# a YubiKey TOUCH is the human-presence confirmation.  On touch the YubiKey types
-# its one-time OTP (a long ModHex string), which the prompt reads as the "yes".
-# It waits 10s for the touch, otherwise falls back to a typed 'yes'.  Set
-# LOFT_YUBIKEY_PREFIX to your OTP public-id (first ~12 chars) to pin the gate to
-# YOUR key (a touch from any other key is then refused).  `--yes` skips the gate.
+# Two signing paths (both end at the same trust gate — see below):
+#   * default (file key): the LOCAL key signs; a YubiKey TOUCH is the human-presence
+#     confirmation — on touch the YubiKey types its one-time OTP (a long ModHex
+#     string), read as the "yes".  Waits 10s, else falls back to a typed 'yes'.
+#     LOFT_YUBIKEY_PREFIX (your OTP public-id, first ~12 chars) pins the gate to
+#     YOUR key.
+#   * --yubikey (on-card): the YubiKey itself signs (PIV 9C, Ed25519); its PIN +
+#     touch during the sign ARE the presence proof.  Override the sign step with
+#     LOFT_YUBIKEY_SIGN_CMD (gets $LOFT_SIG_IN / $LOFT_SIG_OUT), else a default
+#     `pkcs11-tool --mechanism EDDSA` call (module auto-found or
+#     LOFT_YUBIKEY_PKCS11_MODULE; PIV 9C → id 02 or LOFT_YUBIKEY_PIV_ID).
+# `--yes` skips the confirmation.  The TRUST GATE always runs: whatever was signed
+# must verify under a key in src/registry_keys.rs::TRUSTED_PUBLIC_KEYS or it is
+# NOT committed/pushed — so a wrong key/module fails safe.
 #
 # On confirm it signs, commits index.json + index.json.sig together (so HEAD's
 # index always matches its signature — #377), pushes, and (for an auto-clone)
@@ -42,11 +54,13 @@ set -euo pipefail
 
 REG_DIR="$PWD"; REG_GIVEN=0; PR=""; SINCE=""; NOTES=0; DOWNLOAD=1; YES=0; PUSH=1; MSG=""
 KEY="${LOFT_REGISTRY_KEY:-$HOME/.loft/trust-root/registry-signing-key.bin}"
+YUBIKEY="${LOFT_REGISTRY_SIGNER:+$([ "$LOFT_REGISTRY_SIGNER" = yubikey ] && echo 1)}"; YUBIKEY="${YUBIKEY:-0}"
 while [ $# -gt 0 ]; do
     case "$1" in
         --registry-dir) REG_DIR="$2"; REG_GIVEN=1; shift;;
         --pr)           PR="$2"; shift;;
         --key)          KEY="$2"; shift;;
+        --yubikey)      YUBIKEY=1;;
         --since)        SINCE="$2"; shift;;
         --notes)        NOTES=1;;
         --no-download)  DOWNLOAD=0;;
@@ -65,6 +79,41 @@ if [ ! -x "$KG" ]; then
     echo "building loft-keygen (release) ..." >&2
     (cd "$here" && cargo build --release --bin loft-keygen --features registry >/dev/null)
 fi
+
+# On-card sign: the YubiKey itself (PIV slot 9C, Ed25519) produces the raw 64-byte
+# Ed25519 signature over <in> → <out>.  The private key never leaves the card; the
+# touch/PIN happen during this call.  The result is verified against the embedded
+# trust roots by the trust gate below, so a wrong module/slot/key fails SAFE (no
+# push).  Override the whole step with LOFT_YUBIKEY_SIGN_CMD (gets $LOFT_SIG_IN /
+# $LOFT_SIG_OUT); else a default pkcs11-tool EDDSA call, with the module auto-found
+# (override LOFT_YUBIKEY_PKCS11_MODULE) and PIV 9C → PKCS#11 id 02 (override
+# LOFT_YUBIKEY_PIV_ID).
+yubikey_sign() {  # <in> <out>
+    local in="$1" out="$2"
+    if [ -n "${LOFT_YUBIKEY_SIGN_CMD:-}" ]; then
+        LOFT_SIG_IN="$in" LOFT_SIG_OUT="$out" bash -c "$LOFT_YUBIKEY_SIGN_CMD" \
+            || { echo "yubikey: LOFT_YUBIKEY_SIGN_CMD failed" >&2; exit 4; }
+        return
+    fi
+    command -v pkcs11-tool >/dev/null \
+        || { echo "yubikey: pkcs11-tool not found (install OpenSC) or set LOFT_YUBIKEY_SIGN_CMD" >&2; exit 4; }
+    local module="${LOFT_YUBIKEY_PKCS11_MODULE:-}"
+    if [ -z "$module" ]; then
+        for m in /usr/local/lib/libykcs11.dylib /opt/homebrew/lib/libykcs11.dylib \
+                 /usr/local/lib/opensc-pkcs11.so /opt/homebrew/lib/opensc-pkcs11.so \
+                 /usr/lib/x86_64-linux-gnu/libykcs11.so /usr/lib/x86_64-linux-gnu/opensc-pkcs11.so; do
+            [ -e "$m" ] && { module="$m"; break; }
+        done
+    fi
+    [ -n "$module" ] \
+        || { echo "yubikey: no PKCS#11 module found — set LOFT_YUBIKEY_PKCS11_MODULE or LOFT_YUBIKEY_SIGN_CMD" >&2; exit 4; }
+    echo "  on-card sign via $module (PIV 9C / id ${LOFT_YUBIKEY_PIV_ID:-02}) — enter PIN + touch when it flashes" >&2
+    pkcs11-tool --module "$module" --sign --mechanism EDDSA \
+        --id "${LOFT_YUBIKEY_PIV_ID:-02}" --login \
+        --input-file "$in" --output-file "$out" \
+        || { echo "yubikey: pkcs11-tool sign failed — check module/id/PIN, or set LOFT_YUBIKEY_SIGN_CMD" >&2; exit 4; }
+    [ -s "$out" ] || { echo "yubikey: produced an empty signature" >&2; exit 4; }
+}
 
 # No explicit checkout and the cwd isn't a registry → clone the live registry, so
 # the routine runs standalone (inspection, or signing a PR via --pr).
@@ -103,7 +152,8 @@ trap cleanup EXIT
 
 INDEX="$REG_DIR/index.json"
 [ -f "$INDEX" ] || { echo "no index.json in $REG_DIR — use --registry-dir" >&2; exit 2; }
-[ -f "$KEY" ]   || { echo "signing key not found: $KEY — use --key / set LOFT_REGISTRY_KEY" >&2; exit 2; }
+[ "$YUBIKEY" = 1 ] || [ -f "$KEY" ] \
+    || { echo "signing key not found: $KEY — use --key / set LOFT_REGISTRY_KEY (or --yubikey)" >&2; exit 2; }
 
 # Shape gate: refuse to even look at a non-JSON index.
 python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$INDEX" \
@@ -265,36 +315,49 @@ echo
 
 if [ "$YES" != 1 ]; then
     [ "$PUSH" = 1 ] && verb="Sign, commit & push" || verb="Sign & commit (no push)"
-    echo "$verb this index with $(basename "$KEY")."
-    # Confirmation gate.  The LOCAL key does the actual signing; a YubiKey TOUCH
-    # is the human-presence confirmation (not the crypto).  On touch the YubiKey
-    # types its one-time OTP — a long ModHex string + Enter — which we read as the
-    # confirmation.  Wait 10s for it; otherwise fall back to a typed 'yes'.  Set
-    # LOFT_YUBIKEY_PREFIX to your OTP public-id (first ~12 chars) to pin the gate
-    # to YOUR key.  `--yes` skips the gate entirely (scripted use).
-    printf "  Touch your YubiKey within 10s to confirm (or type 'yes'): "
-    if read -r -t 10 ans; then
-        echo
-        case "$ans" in
-            y|Y|yes|YES) echo "  confirmed (typed)";;
-            *)
-                if [ "${#ans}" -ge 32 ] && { [ -z "${LOFT_YUBIKEY_PREFIX:-}" ] || \
-                     case "$ans" in "${LOFT_YUBIKEY_PREFIX}"*) true;; *) false;; esac; }; then
-                    echo "  confirmed (YubiKey touch)"
-                else
-                    echo "aborted — NOT signed."; exit 1
-                fi
-                ;;
-        esac
-    else
-        echo
-        printf "  no YubiKey touch within 10s — type 'yes' to sign with the local key: "
+    if [ "$YUBIKEY" = 1 ]; then
+        # On-card: the YubiKey's PIN + touch during the sign ARE the human-presence
+        # proof, so just take a typed confirm here (the card prompts next).
+        echo "$verb this index — signing ON-CARD with the YubiKey."
+        printf "  type 'yes' to proceed (the card will ask for PIN + touch): "
         read -r ans
         case "$ans" in yes|YES) ;; *) echo "aborted — NOT signed."; exit 1;; esac
+    else
+        echo "$verb this index with $(basename "$KEY")."
+        # Confirmation gate.  The LOCAL key does the actual signing; a YubiKey TOUCH
+        # is the human-presence confirmation (not the crypto).  On touch the YubiKey
+        # types its one-time OTP — a long ModHex string + Enter — which we read as the
+        # confirmation.  Wait 10s for it; otherwise fall back to a typed 'yes'.  Set
+        # LOFT_YUBIKEY_PREFIX to your OTP public-id (first ~12 chars) to pin the gate
+        # to YOUR key.  `--yes` skips the gate entirely (scripted use).
+        printf "  Touch your YubiKey within 10s to confirm (or type 'yes'): "
+        if read -r -t 10 ans; then
+            echo
+            case "$ans" in
+                y|Y|yes|YES) echo "  confirmed (typed)";;
+                *)
+                    if [ "${#ans}" -ge 32 ] && { [ -z "${LOFT_YUBIKEY_PREFIX:-}" ] || \
+                         case "$ans" in "${LOFT_YUBIKEY_PREFIX}"*) true;; *) false;; esac; }; then
+                        echo "  confirmed (YubiKey touch)"
+                    else
+                        echo "aborted — NOT signed."; exit 1
+                    fi
+                    ;;
+            esac
+        else
+            echo
+            printf "  no YubiKey touch within 10s — type 'yes' to sign with the local key: "
+            read -r ans
+            case "$ans" in yes|YES) ;; *) echo "aborted — NOT signed."; exit 1;; esac
+        fi
     fi
 fi
 
-"$KG" sign --in "$INDEX" --key "$KEY" --out "$SIG"
+if [ "$YUBIKEY" = 1 ]; then
+    yubikey_sign "$INDEX" "$SIG"
+else
+    "$KG" sign --in "$INDEX" --key "$KEY" --out "$SIG"
+fi
 SIGNED=1
 echo "signed: $SIG"
 
