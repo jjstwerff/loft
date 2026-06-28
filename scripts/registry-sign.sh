@@ -24,6 +24,13 @@
 #                         passes "publish: <libs>")
 #     --yes               skip the confirm prompt (scripted use)
 #
+# Confirmation gate (the human review IS the trust root): the LOCAL key signs;
+# a YubiKey TOUCH is the human-presence confirmation.  On touch the YubiKey types
+# its one-time OTP (a long ModHex string), which the prompt reads as the "yes".
+# It waits 10s for the touch, otherwise falls back to a typed 'yes'.  Set
+# LOFT_YUBIKEY_PREFIX to your OTP public-id (first ~12 chars) to pin the gate to
+# YOUR key (a touch from any other key is then refused).  `--yes` skips the gate.
+#
 # On confirm it signs, commits index.json + index.json.sig together (so HEAD's
 # index always matches its signature — #377), pushes, and (for an auto-clone)
 # deletes the temp checkout.  A failed push keeps the clone so the signed commit
@@ -252,9 +259,33 @@ echo
 
 if [ "$YES" != 1 ]; then
     [ "$PUSH" = 1 ] && verb="Sign, commit & push" || verb="Sign & commit (no push)"
-    printf "%s this index with %s ? [y/N] " "$verb" "$(basename "$KEY")"
-    read -r ans
-    case "$ans" in y|Y|yes|YES) ;; *) echo "aborted — NOT signed."; exit 1;; esac
+    echo "$verb this index with $(basename "$KEY")."
+    # Confirmation gate.  The LOCAL key does the actual signing; a YubiKey TOUCH
+    # is the human-presence confirmation (not the crypto).  On touch the YubiKey
+    # types its one-time OTP — a long ModHex string + Enter — which we read as the
+    # confirmation.  Wait 10s for it; otherwise fall back to a typed 'yes'.  Set
+    # LOFT_YUBIKEY_PREFIX to your OTP public-id (first ~12 chars) to pin the gate
+    # to YOUR key.  `--yes` skips the gate entirely (scripted use).
+    printf "  Touch your YubiKey within 10s to confirm (or type 'yes'): "
+    if read -r -t 10 ans; then
+        echo
+        case "$ans" in
+            y|Y|yes|YES) echo "  confirmed (typed)";;
+            *)
+                if [ "${#ans}" -ge 32 ] && { [ -z "${LOFT_YUBIKEY_PREFIX:-}" ] || \
+                     case "$ans" in "${LOFT_YUBIKEY_PREFIX}"*) true;; *) false;; esac; }; then
+                    echo "  confirmed (YubiKey touch)"
+                else
+                    echo "aborted — NOT signed."; exit 1
+                fi
+                ;;
+        esac
+    else
+        echo
+        printf "  no YubiKey touch within 10s — type 'yes' to sign with the local key: "
+        read -r ans
+        case "$ans" in yes|YES) ;; *) echo "aborted — NOT signed."; exit 1;; esac
+    fi
 fi
 
 "$KG" sign --in "$INDEX" --key "$KEY" --out "$SIG"
