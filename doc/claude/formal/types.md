@@ -287,11 +287,14 @@ on both backends (`tests/dn4_cast.rs`; the value matrix, the compile-error cases
 flag-off-is-inert guard). `as τ?` is a pure parse-time range-guard desugar (`OpLeInt` + `if`
 + `OpConvIntFromNull`) — **no new runtime op and no runtime error**; the result types as a
 full nullable integer (the null sentinel `i64::MIN` needs full width — typing the guard as
-the narrow `τ` made native `i64::MIN as u8 == 0` and lost the null). Two items gate the
-**default-on cutover**: (1) **range-tracking** so a masked value (`(x & 255) as u8`) is
-provably-fit instead of needing `as u8?` — couples with `(N-Arith)`/DN3; (2) **migrate the
-30 measured in-tree sites** (stdlib 0, crawler 0, tests/scripts 30/9 files) to `as τ?`.
-Deviation **shrinks but stays open** until cutover. The integer-range sibling of DN1–DN3's
+the narrow `τ` made native `i64::MIN as u8 == 0` and lost the null). One item now gates the
+**default-on cutover**: **migrate the remaining in-tree sites** to `as τ?` (measured at
+stdlib 0, crawler 0, tests/scripts 30/9 *before* range-tracking — now fewer, since masked
+casts are exempt). Gate (1) — **range-tracking** so a masked value is provably-fit — is
+**DONE for `&`/`%`** (always-on; `x & 255` types `integer(0,255)`, `(non-neg) % c` types
+`[0,|c|-1]`, both sound + suite-green): `(x & 255) as u8` no longer needs `as u8?`. The
+`(N-Arith)` range arithmetic for `+`/`-`/`*` (overflow → `Integer?`) remains, and lands
+with DN3. Deviation **shrinks but stays open** until cutover. The integer-range sibling of DN1–DN3's
 null work — same "no claim without enforcement."
 
 ### D2 — CLOSED by reconciliation (2026-06-24): `integer` = i64 is a *user-visible* contract met by a *compact* internal encoding

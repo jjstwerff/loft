@@ -35,9 +35,13 @@ fn main() {
   b: integer = 50;
   assert((a as u8?) == null, "dynamic 300 as u8? -> null");
   assert((b as u8?) == 50, "dynamic 50 as u8? -> value");
-  // masked value: no range-tracking yet, so the checked form is required
+  // range-tracking: a masked value is provably-fit, so the NON-null `as u8`
+  // is accepted (no `?` needed) — `x & 255` types as integer(0,255).
   c: integer = 777;
-  assert(((c & 255) as u8?) == (777 & 255), "masked via checked cast");
+  assert(((c & 255) as u8) == (777 & 255), "masked & provably fits (range-tracking)");
+  // and `% c` from a NON-negative source narrows to [0, |c|-1]
+  e: u16 = 777;
+  assert(((e % 256) as u8) == (777 % 256), "non-neg %256 provably fits");
   // signed boundary (i8 range -128..127)
   assert((-1 as i8?) == -1, "-1 as i8? in range");
   assert((200 as i8?) == null, "200 as i8? -> null");

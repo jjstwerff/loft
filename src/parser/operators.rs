@@ -1613,6 +1613,35 @@ impl Parser {
         res_tp
     }
 
+    /// The constant integer value of `code`, if it is one (literal or const-foldable).
+    fn const_int(&self, code: &Value) -> Option<i64> {
+        match code.unspan() {
+            Value::Int(n) => Some(i64::from(*n)),
+            Value::Long(n) => Some(*n),
+            other => match crate::const_eval::const_eval(other, &self.data) {
+                Some(Value::Int(n)) => Some(i64::from(n)),
+                Some(Value::Long(n)) => Some(n),
+                _ => None,
+            },
+        }
+    }
+
+    /// If the operand is provably in `[0, M]` — a non-negative constant, or an
+    /// integer type with `min >= 0` — return `M`. Used by `&` range-tracking.
+    fn nonneg_bound(&self, ty: &Type, code: &Value) -> Option<u32> {
+        if let Some(c) = self.const_int(code)
+            && (0..=i64::from(u32::MAX)).contains(&c)
+        {
+            return Some(u32::try_from(c).unwrap_or(u32::MAX));
+        }
+        if let Type::Integer(s) = ty
+            && s.min >= 0
+        {
+            return Some(s.max);
+        }
+        None
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn handle_operator(
         &mut self,
@@ -1888,12 +1917,59 @@ impl Parser {
                     }
                 );
             }
+            // @PLN25 (N-Arith) range-tracking — capture the operand bounds BEFORE
+            // call_op consumes them, so the result range of `&`/`%` can be narrowed
+            // (a masked/modded value becomes provably-fit for a later narrowing
+            // cast, removing DN4's `(x & 255) as u8` friction).
+            let (and_bound, mod_const, lhs_nonneg) = if matches!(operator, "&" | "%") {
+                let and_bound = [
+                    self.nonneg_bound(ctp, code),
+                    self.nonneg_bound(&second_type, &second_code),
+                ]
+                .into_iter()
+                .flatten()
+                .min();
+                let lhs_nonneg = matches!(ctp, Type::Integer(s) if s.min >= 0);
+                (and_bound, self.const_int(&second_code), lhs_nonneg)
+            } else {
+                (None, None, false)
+            };
             *ctp = self.call_op(
                 code,
                 operator,
                 &[code.clone(), second_code],
                 &[ctp.clone(), second_type],
             );
+            // Tighten the result range — sound + conservative (never narrower than
+            // the operation guarantees), and only ever a tightening of call_op's
+            // range. `a & c` (c ≥ 0) ∈ [0, c]; `a % c` ∈ [-(|c|-1), |c|-1], or
+            // [0, |c|-1] when `a` is non-negative.
+            if let Type::Integer(s) = &*ctp {
+                let narrowed = match operator {
+                    "&" => and_bound.map(|m| (0i32, m)),
+                    "%" => mod_const.filter(|c| *c != 0).map(|c| {
+                        let m =
+                            u32::try_from(c.unsigned_abs().saturating_sub(1)).unwrap_or(u32::MAX);
+                        let lo = if lhs_nonneg {
+                            0
+                        } else {
+                            -i32::try_from(m).unwrap_or(i32::MAX)
+                        };
+                        (lo, m)
+                    }),
+                    _ => None,
+                };
+                if let Some((nmin, nmax)) = narrowed
+                    && nmin >= s.min
+                    && nmax <= s.max
+                {
+                    *ctp = Type::Integer(IntegerSpec {
+                        min: nmin,
+                        max: nmax,
+                        ..*s
+                    });
+                }
+            }
             // Plan-07 phase 1, step 1.B.1 — wrap binary fault-prone
             // arithmetic ops in `Value::Span` so runtime errors
             // (div-by-zero, narrow overflow, signed-overflow panic
