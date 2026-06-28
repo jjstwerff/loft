@@ -140,15 +140,14 @@ legible and the merge order safe.
 | 3 TIGHTEN | ⬜ contract-changing — stability-line deadline | ⬜ |
 | 5 CLEANUP (`not null`) | ⬜ | ⬜ |
 
-> **The Phase-2 scalars blocker (representation decision).** Only `Type::Integer` carries a
-> null-flag (`not_null`); `Boolean`/`Float`/`Single`/`Character`/`Text`/`Reference`/`Enum` have
-> **no type-level optional marker** (they are nullable-by-default via runtime sentinels). So when
-> Phase 2 flips the scalar default to non-null, `text?`/`S?` need a way to *say* "nullable" that
-> the unmarked type no longer means. Three options to weigh before building Phase 2: (a) a
-> `nullable: bool` on each scalar variant; (b) a unifying `Type::Optional(Box<Type>)`; (c) reuse
-> the `__nullable<S>` synth (today vector-element-only). This is a load-bearing type-system design
-> choice — settle it (design-protocol) before flipping. Phase 0 deliberately defers it: `?` is a
-> no-op today, so EXPAND + MIGRATE proceed without it.
+> **The Phase-2 scalars blocker — DECIDED: `Type::Optional(Box<Type>)`.** Only `Type::Integer`
+> carried a null-flag; the other scalars had no type-level optional marker. The representation is
+> now settled — a single optional former, **compile-time only** (storage stays sentinel-based, so
+> zero runtime cost / zero runtime errors), chosen because a new variant makes every unhandled
+> `match` a **loud compile error** (vs a silently-ignorable `nullable: bool`). Full rationale +
+> the `IntegerSpec.not_null` reconciliation + landing approach:
+> [scalar-optional-representation.md](scalar-optional-representation.md). Built inside DN1/DN3;
+> **DN4 needs none of it** (integer-only) and ships first.
 
 So the **7 failing tests are exactly "Phase 2 ran ahead of Phase 1"**: 4 nullable-feature tests
 (fixed by doing Phase 1 — annotate `vector<S?>`) + 3 the step-6 ownership over-free (Phase 4).
