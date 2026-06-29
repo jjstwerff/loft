@@ -114,8 +114,15 @@ def main():
     ap.add_argument("--corpus", nargs="*", default=[])
     ap.add_argument("--mutate", type=int, default=0)
     ap.add_argument("--native-replay", action="store_true")
+    ap.add_argument("--poison", action="store_true",
+                    help="run both backends under LOFT_POISON=1 (arena poison-on-free, @PLN54 S3) — "
+                         "turns a SILENT store-internal use-after-free into a loud crash; strictly "
+                         "stronger (caught elem_accumulate-none, which the differential alone missed)")
     ap.add_argument("--self-test", action="store_true")
     args = ap.parse_args()
+
+    if args.poison:
+        os.environ["LOFT_POISON"] = "1"   # run() copies os.environ → both backends inherit it
 
     if not os.access(LOFT, os.X_OK):
         sys.exit(f"no loft binary at {LOFT} (build: cargo build --release)")

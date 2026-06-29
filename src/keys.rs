@@ -288,6 +288,21 @@ pub fn uaf_any_enabled() -> bool {
     uaf_check_enabled() || uaf_src_enabled()
 }
 
+/// `LOFT_POISON=1` (@PLN54 S3) — the arena poison-on-free keystone. When on, `free_named`
+/// overwrites a freed store's payload (past the 8-byte size header) with `0xDEADBEEF`, so a
+/// dangling-`DbRef` read after free hits loud, deterministic garbage — an out-of-range
+/// `store_nr` that trips the read guards — instead of silent stale data. This is the
+/// store-internal use-after-free blind spot Miri/ASan/Valgrind all share, because loft's
+/// arena "free" is not a libc `free()`. Works on BOTH backends (native-generated code calls
+/// the same `free_named`), on any rustc, no nightly. One cached env read; off by default.
+/// (The buried `LOFT_LOG=poison_free` path still flips the same poison; this is its dedicated,
+/// documented front door, and the one the fuzz-proof harness drives.)
+#[must_use]
+pub fn poison_enabled() -> bool {
+    static POISON: OnceLock<bool> = OnceLock::new();
+    *POISON.get_or_init(|| std::env::var_os("LOFT_POISON").is_some())
+}
+
 /// `LOFT_UAF_REUSE` (detector b) — at `copy_record`, when the source slot is LIVE
 /// (`free=false`) but structurally invalid for the copy's `tp` (a `validate_claims`
 /// failure), the slot was freed-then-reused as a different record since the source ref

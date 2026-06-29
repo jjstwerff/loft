@@ -152,10 +152,32 @@ So the live over-free is precisely **struct-value × {match-arm, element-accumul
 generator reproduced both live classes from a clean grammar and pinned a new no-churn abort variant —
 this is the boundary-matrix the chokepoint fix (Cluster C) must be measured against.
 
+### Increment 3 — `LOFT_POISON` built + validated (2026-06-29)
+
+The arena poison-on-free keystone (@PLN54 S3). A dedicated `LOFT_POISON=1`
+(`keys.rs::poison_enabled`) now gates the poison-on-free in `Stores::free_named` — overwriting a
+freed store's payload (past the 8-byte header) with `0xDEADBEEF`, so a dangling-`DbRef` read after
+free hits loud, deterministic garbage instead of silent stale data. **Works on both backends** —
+native-generated code calls the same `free_named`, so one cached env-read covers both; any rustc, no
+nightly. This is the store-internal UAF blind spot Miri/ASan/Valgrind share (loft's arena "free" is
+not a libc `free()`).
+
+**Validated (design-protocol positive control):**
+- **No false positives** — ~46 clean programs stay correct under `LOFT_POISON` on both backends.
+- **Exposes a SILENT UAF the differential alone missed** — `elem_accumulate × struct × none` is
+  clean without poison (exit 0, plausible stale data) but **SIGSEGVs with it**. That is the detection
+  power the cross-backend oracle lacks (both backends *agreed* it was fine), and exactly what S3 is for.
+- Makes known bugs louder (P10 assert-fail → crash).
+
+Driven by the harness `--poison` flag (sets `LOFT_POISON=1` for both backends). **Note:**
+`LOFT_POISON=1 cargo test` is NOT yet green — it exposes the open over-free class (the same
+elem-accumulate / match-arm bugs); that green is a FUTURE done-criterion, met when the Cluster-C
+chokepoint fix lands. The detector is the instrument; the class is still open.
+
 **Next, in order:**
 1. **Correct the stale catalog** — over-free-sweep/README P10 verdict PASS → divergence; mark P3/P9/leak fixed. ✅ done.
 2. **Graduate the generator in-process** — port `grammar_gen.py` to a `fuzz/fuzz_targets/program_ownership.rs` cargo-fuzz target (the full grammar is built; this makes it run in-process/fast under libfuzzer coverage-guidance, no rustc-per-program) and add the `value` axis pieces (enum-payload, nested, hash) as @PLN25 settles them.
-3. **Build `LOFT_POISON`** (@PLN54 S3) — the arena UAF/double-free detector stock sanitizers miss; wire it into the native replay.
+3. **Build `LOFT_POISON`** (@PLN54 S3) — the arena UAF/double-free detector stock sanitizers miss. ✅ done — wired (`keys.rs::poison_enabled` + `allocation.rs` free path), both backends, harness `--poison`; positive control proven. Follow-up: poison freed STACK slots too (S3's second half), and drive `LOFT_POISON=1 cargo test` to green once Cluster C lands.
 4. **Minimize** P14 + P10 to `tests/scripts/85-*.loft` regressions; wire the harness into the differential-oracle corpus as a standing job (the done-criteria budget).
 - **Method gate:** every M+ step runs the `design-protocol` skill; this doc IS the hypothesis.
 - **Blocked-by reminder:** widen the value axis only as @PLN25 settles it (above).
