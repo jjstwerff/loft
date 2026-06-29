@@ -453,6 +453,63 @@ fn ownership_resolves_the_borrow_base() {
     assert_return_own(&stderr, "whole", "Borrowed(base=__retbuf)");
 }
 
+// ── @PLN85 match_return — the resisting case, pinned against the oracle ─────────
+// The match_return codegen collapse is still open (the retbuf-promotion site). These
+// tests pin what the NEW routine (`ownership_of`) classifies for the resisting
+// variants, so the fix has a VERIFIED SPEC and the precise discriminator is locked.
+// Key finding: the RETURN verdict `Join` is NOT the discriminator — it over-classifies
+// the fresh-build case (`deliver3 → Join(base=o)`, the retbuf-param approximation,
+// runtime-clean). The precise fix signal is the `ParamDeliver` FREE SITE: a retbuf
+// reassigned to a borrowed enum-field view (base = an EXTERNAL var `e`), which the
+// genuinely-leaking arms have and the fresh-build does not.
+const MATCH_VARIANTS_SRC: &str = r#"
+struct E { hp: integer not null, name: text }
+fn e_default() -> E { E{hp:0, name:""} }
+// V1: Filled arm borrows `e`; else arm is owned `[]` — a runtime JOIN (LEAKS today).
+enum Cell { Empty, Filled { items: vector<E> } }
+fn deliver(e: Cell) -> vector<E> { match e { Filled { items } => { items }, _ => { [] } } }
+// V2: BOTH field arms borrow `e` (+ implicit owned default) — also a borrow-of-`e`.
+enum Two { A { xs: vector<E> }, B { ys: vector<E> } }
+fn deliver2(e: Two) -> vector<E> { match e { A { xs } => { xs }, B { ys } => { ys } } }
+// V3: the Filled arm builds a FRESH owned vector `o` — owned, runtime-clean. The
+// oracle over-classifies its RETURN as Join(base=o) (the retbuf approximation), but
+// it has NO ParamDeliver site (the precise discriminator excludes it).
+fn deliver3(e: Cell) -> vector<E> {
+  match e { Filled { items } => { o: vector<E> = []; for x in 0..len(items) { o += [items[x] ?? e_default()]; } o }, _ => { [] } }
+}
+fn main() {
+  c = Filled { items: [] }; r = deliver(c);
+  t = A { xs: [] }; r2 = deliver2(t);
+  r3 = deliver3(c);
+  print("{len(r)} {len(r2)} {len(r3)}\n");
+}
+"#;
+
+/// The match_return resisting cases pinned against the oracle. The `ParamDeliver`
+/// FREE SITE — a retbuf aliased to a borrowed enum-field view whose base is an
+/// EXTERNAL var — is the precise fix discriminator; the `Join` RETURN verdict alone
+/// is not (it over-classifies the fresh-build `deliver3`). This is the verified spec
+/// the still-open codegen fix must act on: materialise exactly the ParamDeliver arms.
+#[test]
+fn ownership_pins_match_return_resisting_cases() {
+    let stderr = dump(MATCH_VARIANTS_SRC);
+
+    // V1/V2 — the GENUINE over-free arms: the retbuf is aliased to a borrowed
+    // enum-field view of the EXTERNAL subject `e`. The ParamDeliver site (base=e) is
+    // the precise fix signal; the return verdict is Join(base=e).
+    assert_free_site(&stderr, "deliver", "ParamDeliver", "Borrowed", "e");
+    assert_return_own(&stderr, "deliver", "Join(base=e)");
+    assert_free_site(&stderr, "deliver2", "ParamDeliver", "Borrowed", "e");
+    assert_return_own(&stderr, "deliver2", "Join(base=e)");
+
+    // V3 — the FRESH-BUILD arm: owned, runtime-clean. The oracle OVER-classifies its
+    // RETURN as Join(base=o) (the retbuf-param approximation — `o` is the owned retbuf
+    // classified as borrowed-of-itself), but there is NO ParamDeliver site. So the fix,
+    // keyed on ParamDeliver (NOT the return verdict), correctly LEAVES deliver3 ALONE.
+    assert_return_own(&stderr, "deliver3", "Join(base=o)"); // documented over-classification
+    assert_no_free_site(&stderr, "deliver3"); // the precise discriminator excludes it
+}
+
 // ── @PLN85 Stage-3 site 1: the `local_source` compiler wiring (LOFT_JOIN_OWN) ───
 // The displaced-owned-store leak: `chosen = dflt()` move-adopts a fresh store into
 // `chosen` (the source retbuf the cleanup guards is left null), then `chosen =

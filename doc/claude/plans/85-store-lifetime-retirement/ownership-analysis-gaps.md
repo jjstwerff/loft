@@ -202,6 +202,25 @@ delivery runs. This is the hardest site: TWO competing return-delivery paths (NR
 vector-arm materialise), and `deliver` falls into the one that can't materialise. Sites 1+2 stay
 fixed on both backends; `match_return` is left at baseline (its broken attempts fully reverted).
 
+**THE PRECISE DISCRIMINATOR — pinned in `ownership_pins_match_return_resisting_cases` (unit-tested
+the new routine on the resisting cases, instead of flailing on the codegen).** Comparing the oracle
+across match-return variants gives the grip:
+| variant | promoted local (deps) | oracle RETURN | `ParamDeliver`? | runtime |
+|---|---|---|---|---|
+| `deliver` (Filled→items / else→[]) | `_mv_items_1` deps `[e]` | `Join(base=e)` | YES `Borrowed(base=e)` | leaks |
+| `deliver2` (two field arms, both borrow `e`) | `_mv_xs_1` deps `[e]` | `Join(base=e)` | YES `Borrowed(base=e)` | leaks |
+| `deliver3` (Filled arm builds a FRESH `o`) | `o` deps `[]` | `Join(base=o)` | **NO** | clean |
+- **The `Join` RETURN verdict is NOT the fix signal** — it over-classifies `deliver3` as `Join(base=o)`
+  (the retbuf-param approximation: the owned retbuf `o` classified as borrowed-of-itself), yet
+  `deliver3` is runtime-clean and must NOT be touched.
+- **The precise signal is the `ParamDeliver` FREE SITE** (a retbuf aliased to a borrowed enum-field
+  view whose base is an EXTERNAL var `e`) — equivalently, the promoted candidate's NON-EMPTY deps.
+  The genuinely-leaking arms have it; the fresh-build does not. (This is why the earlier skip's
+  *discriminator* was right — it keyed on non-empty deps — and only its *action* was wrong.)
+So the fix is now spec'd precisely: **materialise exactly the `ParamDeliver` arms** (copy the
+borrowed field into the retbuf), leaving fresh-build arms (`deliver3`) untouched. The analysis side
+is verified; the remaining work is purely the emit (the explicit copy at the retbuf promotion).
+
 Then flip default-on once all three sites are green on both backends + the full matrix + POISON. Then
 fold the remaining own-vs-borrow re-derivations (the return-delivery thicket) onto the oracle as cleanup.
 
