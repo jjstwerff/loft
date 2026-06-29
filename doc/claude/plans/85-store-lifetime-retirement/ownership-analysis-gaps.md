@@ -115,8 +115,16 @@ still reports `ParamDeliver` (same projection shape) though it runs clean — ma
 
 ## Next step
 
-1. **`local_source` first** — analysis COMPLETE (`reassign_sites prior=Owned`); deterministic
-   both-backend leak → cleanest gate. Wire `scopes.rs` free-placement behind `LOFT_JOIN_OWN`.
+1. **`local_source`** — ✅ DONE (commit `a639433d`, behind `LOFT_JOIN_OWN`). Root cause (nailed by an
+   FRD runtime trace): `chosen = dflt()` move-adopts the fresh store into `chosen`; the caller's
+   `__ref_2` retbuf keeps its null sentinel (it never owned the store), so the cleanup
+   `FreeRefIfDistinct(__ref_2, chosen)` guards the wrong ref and the store orphans on reassign. Since
+   `free` is store-level, a naive reassign-free is unsound (it would whole-store-free the pool). FIX:
+   `use_analysis::displaced_owned_slots` flags `chosen`; `scopes.rs::scan_set` strips its `["pool"]`
+   dep so the OWNED path deep-copies the borrow into its own store + frees it at scope exit (reusing
+   the instances-1/2 `make_independent` pattern). Proven both backends; gate + fix tests in
+   `tests/use_analysis.rs`.
 2. **Then** `elem_accumulate` (interp `AppendSource` source-free) and `match_return` (interp
    `ParamDeliver` delivery), each against its `462-*` repro + the matrix + POISON, mirroring the
-   already-correct native behaviour. All three sites are now visible in the analysis.
+   already-correct native behaviour. Both sites are already surfaced by `free_sites`.
+3. Flip default-on once all three + the full matrix are green on both backends and POISON-clean.
