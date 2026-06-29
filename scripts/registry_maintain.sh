@@ -387,6 +387,15 @@ pkg = index["packages"].setdefault(
 if desc_src == "manifest" and desc:
     pkg["description"] = desc
 pkg["versions"][ver] = entry
+# Bump the top-level `updated` so it reflects this publish (REGISTRY_SUBMIT.md).
+# Reuse the entry's own `published` UTC stamp — the precise moment this version
+# was published, already in `YYYY-MM-DDTHH:MM:SSZ` form — falling back to now.
+# Sequential publishes overwrite it, so the last (newest) one wins.
+from datetime import datetime, timezone
+
+index["updated"] = entry.get("published") or datetime.now(timezone.utc).strftime(
+    "%Y-%m-%dT%H:%M:%SZ"
+)
 json.dump(index, open(index_path, "w"), indent=2, ensure_ascii=False)
 open(index_path, "a").write("\n")
 EOF
