@@ -15,11 +15,15 @@ Plan id: [@PLN85](https://github.com/loft-lang/plans/issues/85) · investigation
 > anecdotal silence). That slot is BUILD-BLOCKED BY @PLN25 (the value model defines what
 > ownership is) — see [STABILITY_ROADMAP.md § the wide-release bar](../../STABILITY_ROADMAP.md).
 
-> **▶▶ NEXT SESSION START HERE (2026-06-26):** [NEXT-SESSION-leak-fix.md](NEXT-SESSION-leak-fix.md).
-> #462 CRASH is FIXED (`0ccc756c`, `resize` in-place-grow zeroing); the #462 LEAK is root-caused
-> (the **adopt-and-re-return NRVO chain** — `fn m(){ t=base(); t }` leaks 1 store/call, both
-> backends) but NOT fixed — that handoff doc has the repros, broken-bytecode root cause, fix
-> target (`control.rs` `block_result`/`ref_return`/`nrvo_collapse_tail_set`), and method.
+> **▶▶ NEXT SESSION START HERE (2026-06-29):**
+> [NEXT-SESSION-join-ownership-analysis.md](NEXT-SESSION-join-ownership-analysis.md). The over-free
+> class is now FULLY PROBED and the fix is scoped: it needs ONE ownership fact (Owned / Borrowed /
+> **Join** = the `v[i] ?? d` runtime owned-or-borrow), which IS @PLN25's copy-vs-borrow analysis
+> (`src/use_analysis.rs`) — extend it, don't duplicate. Build it **inert → test separately → use
+> optionally** (the @PLN25 pattern). That handoff has the 3 chokepoints, the corrected root-cause,
+> the acceptance repros (`bytecode-comparisons/462-*`), the fuzz/poison tools, and the staged plan.
+> (The older 2026-06-26 leak handoff — `NEXT-SESSION-leak-fix.md` — is superseded: that adopt-re-return
+> leak is now FIXED; the live class is the borrowed-view over-free mapped here.)
 
 > **▶ ACTIVE D-own slice (2026-06-25): the adopt/free re-derivation collapse — driven by
 > [#457](https://github.com/loft-lang/loft/issues/457).** A `vector<text>` corrupted (wrong len +
