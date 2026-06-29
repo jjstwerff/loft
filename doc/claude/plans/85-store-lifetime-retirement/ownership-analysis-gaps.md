@@ -238,11 +238,24 @@ buffer — the IR-diff against `deliver3` showed that was the bug (`["_mv_items_
 `main` doesn't free the passed `cell` (the original leak). `deliver3` (clean, frees `cell`) is the
 PROMOTION form `if {…fill buffer…}; return null` with `["??"]`; mine is the MATERIALISE form `return
 if {…; __retbuf}` with `attrs` — returning the caller's OWN buffer, so the caller neither adopts nor
-frees the argument. (`["??"]` alone — `Deps::pointer_marker()` — does NOT fix it: with the
-return-the-buffer form it double-adopts and crashes. Both ruled out by capture.) The remaining work is
-the promotion's FORM-conversion for the borrowed-binding case — synthesise an owned local like
-`deliver3`'s `o` (`o = []; o += items; o`) and route through the existing promotion, OR convert
-`return if {…; buf}` → `if {…}; return null` — so `main` frees the argument. Captures + diffs:
+frees the argument.
+
+**SETTLED — the analysis is SUFFICIENT; the fix is purely codegen STRUCTURE (synthesise `o`).**
+Probed the question "can the analysis aid here?": the oracle classifies BOTH `deliver` (materialised)
+and `deliver3` identically — `return=Join(base=buffer)` — so it already greenlights the delivery; it
+is NOT the bottleneck. The decisive diff is the param/attr table:
+- `deliver3` (clean): the buffer arg is a SEPARATE owned local `o` (promoted to the arg), with a
+  DISTINCT `__retbuf` marker attr. Caller types `r:vector["__ref_1"]` → adopts the buffer + frees `cell`.
+- mine: `__retbuf` is the arg AND the marker, CONFLATED (direct-into-buffer delivery). Caller types
+  `r:vector` (empty) → frees nothing → `cell`/`inner` leak.
+Getting `["??"]` to survive the `control.rs:5440` rebuild (pass-stable, via a var-property scan) is
+necessary but NOT sufficient — the conflated PARAM STRUCTURE is the leak, and no return-dep value
+fixes that. So `materialize_vector_arms_into`-into-`__retbuf` is a dead end for the borrowed-binding
+case; only `deliver3`'s structure (separate owned local `o` promoted by the EXISTING promotion) makes
+the caller adopt. **NEXT (the single remaining task): synthesise `o = []; o += <binding>; o` per
+borrowed arm** and let the existing promotion build the `o`-arg + `__retbuf`-marker separation — the
+one blocker is the fresh-vector `o = []` alloc helper (`OpDatabase`+`OpGetField` idiom; the
+`Reference` analog is `materialize_return_into`). Captures + diffs:
 [match_return-emit/](match_return-emit/README.md).
 
 **LAYER PINNED (probe-driven, two earlier guesses corrected).** The interp crash is the
