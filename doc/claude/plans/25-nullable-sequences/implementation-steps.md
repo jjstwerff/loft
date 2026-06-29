@@ -110,11 +110,15 @@ non-null marker, because non-null is simply the default.
 
 ---
 
-## Reconciliation with the in-flight work (branch `fix-crawler`, all UNCOMMITTED)
+## Reconciliation with the in-flight work (historical — origin of the rewrite)
+
+> **Historical.** Captures how the rewrite started (three threads on the long-gone
+> `fix-crawler` branch). The work has since landed: vectors merged via `#412`/`#467`/`#468`,
+> scalars + TIGHTEN are on `lima-default-borrow-elision`. **Live status: [RESUME.md](RESUME.md).**
 
 This rewrite did not start clean — it grew out of the crawler dogfood wave, and three
-threads currently coexist uncommitted on `fix-crawler`. Naming them keeps the breakage
-legible and the merge order safe.
+threads coexisted uncommitted on `fix-crawler`. Naming them kept the breakage legible and
+the merge order safe.
 
 ### The three threads
 
@@ -130,15 +134,20 @@ legible and the merge order safe.
 3. **Design + investigation docs (no code risk).** `formal/types.md` (the `N-*` rules), the
    `@PLN25` design + this plan, the `@PLN85` field-map / site-inventory / cluster-462 / probes.
 
-### Phase status of the in-flight code (where thread 2 actually is)
+### Phase status of the code
+
+> **Live status + the concrete next steps with validation gates: [RESUME.md](RESUME.md).**
+> This table is the phase grid; RESUME.md is the authoritative handoff (branch, suite count,
+> ordered steps). Vectors are merged to `main`; scalars + TIGHTEN are in flight on
+> `lima-default-borrow-elision`.
 
 | Phase | vectors | scalars |
 |---|---|---|
-| 0 EXPAND (`?` syntax) | ✅ done | ✅ **done** (`integer?`/`text?`/`S?` parse, no-op) |
-| 1 MIGRATE (annotate `?`) | ✅ done (merged #467) | ⬜ survey + annotate |
-| 2 CONTRACT (flip default) | ✅ done (merged #467) | ⬜ needs the `τ?` representation decision (below) |
-| 3 TIGHTEN | ⬜ contract-changing — stability-line deadline | ⬜ |
-| 5 CLEANUP (`not null`) | ⬜ | ⬜ |
+| 0 EXPAND (`?` syntax) | ✅ merged `#467` | ✅ done (`integer?`/`text?`/`S?` parse, no-op) |
+| 1 MIGRATE (annotate `?`) | ✅ merged `#467` | ⬜ survey + annotate |
+| 2 CONTRACT (flip default) | ✅ merged `#467` | ⬜ `Type::Optional` decided, **not built**; default still nullable |
+| 3 TIGHTEN | ⬜ | 🔵 **DN4 done** (default-on); DN2 + DN3 ⬜ (measure DN3 first) |
+| 5 CLEANUP (`not null`) | ⬜ | ⬜ 1015 occurrences / 300 `.loft` files |
 
 > **The Phase-2 scalars blocker — DECIDED: `Type::Optional(Box<Type>)`.** Only `Type::Integer`
 > carried a null-flag; the other scalars had no type-level optional marker. The representation is

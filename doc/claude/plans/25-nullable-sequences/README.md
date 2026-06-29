@@ -6,7 +6,10 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # 25 — Nullable sequences (`vector<T>` participates in the null model)
 
 > **Tracker:** `@PLN25` ([loft-lang/plans#25](https://github.com/loft-lang/plans/issues/25),
-> `status:active`). **Branch:** `2026-07-mac` (all phases below committed + pushed there).
+> `status:active`). **Live status + concrete next steps: [RESUME.md](RESUME.md).**
+> **Branch:** `lima-default-borrow-elision` (scalars + TIGHTEN, in flight); the vectors half
+> is merged to `main` (`#412`/`#467`/`#468`). The **dense-default** approach below is LIVE and
+> supersedes the earlier `LOFT_E2_SYNTH` enum-synthesis line (branch `2026-07-mac`, abandoned).
 
 ## Decision (2026-06-17) — finish to FULL coherence; no escape hatch; one final PR
 
