@@ -44,6 +44,11 @@ is a correctness REFERENCE for two of the three shapes — mirror what it does, 
 
 ## The exact gaps — and the compiler action each unblocks
 
+> **UPDATE — Gaps A + B are now CLOSED (Stage 1.5, still inert).** `use_analysis::free_sites`
+> surfaces both missing free sites, each with the freed value's class + the borrow base; the
+> `ownership_surfaces_free_sites` test pins them, and the free sites now correlate EXACTLY with the
+> over-free outcome (see § Stage 1.5 below). The original gap text is kept for the record.
+
 ### Gap A — the analysis classifies VALUES; two of three fixes act at a FREE SITE it doesn't surface
 The over-free decision lives at a free site, and the analysis currently exposes only two of
 the three site kinds:
@@ -84,14 +89,34 @@ Both around an empty `[]` literal used as a `vector<T>` default in a branch/coal
 These block two probe shapes from even reaching the over-free analysis. Documented here
 (branch-internal, stacked on @PLN25); not the join-ownership work — fold or file separately.
 
-## Next step (revised by this validation)
+## Stage 1.5 — the free sites + base, surfaced (DONE, inert)
 
-1. **`local_source` first** — the analysis is COMPLETE for it (`reassign_sites prior=Owned`)
-   and it leaks deterministically on BOTH backends → cleanest both-backend gate. Wire
-   `scopes.rs` free-placement behind `LOFT_JOIN_OWN`.
-2. **Extend the analysis (Stage 1.5, inert)** to surface the append-source-free site +
-   the arm-return delivery site (Gap A) and carry the borrow base (Gap B); test via the
-   dump as in Stage 2.
-3. **Then** wire `elem_accumulate` (interp source-free) and `match_return` (interp
-   delivery), each against its `462-*` repro + the matrix + POISON, mirroring the
-   already-correct native behaviour.
+`use_analysis::free_sites(data, d_nr)` reports, per function (also dumped as `OWN fn=… free …`):
+- **`AppendSource`** — each `OpCopyRecord(src,_,tp)` with the `0x8000` source-free bit, when `src`
+  classifies `Borrowed`/`Join` (the `out += [pick()]` site). `elem_accumulate`'s is `Join`,
+  `base=None` (the source is the inline `pick()` call → materialise = deep-copy the whole value).
+- **`ParamDeliver`** — a heap-parameter return buffer reassigned to a **direct** `Borrowed`/`Join`
+  projection (`base.is_some()`). `match_return`'s is `_mv_items_1 = OpGetField(e,…)`, `class=Borrowed`,
+  `base=e` (the field to copy into the buffer).
+
+The free sites now correlate **exactly** with the over-free outcome across the matrix:
+`elem_accumulate`→`AppendSource`, `match_return`→`ParamDeliver`, `local_source`→the reassign site;
+**every clean shape reports no site.**
+
+**Precision finding (the `base.is_some()` filter on `ParamDeliver`):** `field_reassign`'s `best =
+rows(b)` reassigns the retbuf via a CALL that delivers into it — which MATERIALISES a copy (best is
+genuinely Owned), unlike `match_return`'s raw `OpGetField` projection (which aliases). The
+discriminator is the base: a direct projection has a local base; a retbuf-materialising call has
+none. Filtering `ParamDeliver` to `base.is_some()` drops the clean `field_reassign` false-positive
+(which would otherwise mislead Stage 3 into NOT freeing an owned store → a leak) and guarantees every
+reported site carries a usable materialise base. **Residual (Gap C, deferred):** `match_return scalar`
+still reports `ParamDeliver` (same projection shape) though it runs clean — materialising it is safe
+(a redundant copy); Stage 3 may gate on a record-element type if it matters.
+
+## Next step
+
+1. **`local_source` first** — analysis COMPLETE (`reassign_sites prior=Owned`); deterministic
+   both-backend leak → cleanest gate. Wire `scopes.rs` free-placement behind `LOFT_JOIN_OWN`.
+2. **Then** `elem_accumulate` (interp `AppendSource` source-free) and `match_return` (interp
+   `ParamDeliver` delivery), each against its `462-*` repro + the matrix + POISON, mirroring the
+   already-correct native behaviour. All three sites are now visible in the analysis.

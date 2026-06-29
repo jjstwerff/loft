@@ -81,6 +81,28 @@ fn assert_no_reassign(stderr: &str, func: &str) {
     }
 }
 
+/// Assert a Stage-1.5 free SITE of the given kind in `func` carries the expected
+/// class and borrow base (`OWN fn=n_<func> free kind=<kind> … class=<class> base=<base>`).
+fn assert_free_site(stderr: &str, func: &str, kind: &str, class: &str, base: &str) {
+    let head = format!("OWN fn=n_{func} free kind={kind} ");
+    let line = stderr
+        .lines()
+        .find(|l| l.starts_with(&head))
+        .unwrap_or_else(|| panic!("no OWN free {kind} line for {func}; dump:\n{stderr}"));
+    assert!(
+        line.contains(&format!("class={class}")) && line.ends_with(&format!("base={base}")),
+        "{func} free {kind}: expected class={class} base={base}, got: {line}"
+    );
+}
+
+/// Assert NO free site is reported for `func` (a clean shape has no over-free site).
+fn assert_no_free_site(stderr: &str, func: &str) {
+    let head = format!("OWN fn=n_{func} free ");
+    if let Some(line) = stderr.lines().find(|l| l.starts_with(&head)) {
+        panic!("{func}: expected no free site, got: {line}");
+    }
+}
+
 const SRC: &str = r#"
 struct Sim { tiles: vector<integer> not null, walls: vector<integer> not null }
 
@@ -273,6 +295,10 @@ fn dflt() -> M { M{hp:0, name:""} }
 // to owned) makes both correct regardless of which branch runs.
 fn pick(t: vector<M>, i: integer) -> M { t[i] ?? dflt() }
 
+// elem_accumulate FREE SITE: `out += [pick(t,i)]` lowers to an OpCopyRecord with
+// the 0x8000 source-free bit on pick's Join return — the AppendSource site.
+fn collect(t: vector<M>) -> vector<M> { out: vector<M> = []; for i in 0..len(t) { out += [pick(t, i)]; } out }
+
 // local_source ROOT (#462 leak): `chosen` first OWNS dflt(), then is reassigned to
 // a JOIN — the displaced owned store leaks. The over-free shape = prior Owned, rhs
 // Join. The return itself is Owned (a materialized_view_return mints a fresh store).
@@ -305,10 +331,10 @@ fn whole(v: vector<integer>) -> vector<integer> { v }
 
 fn main() {
   t: vector<M> = []; for k in 0..3 { t += [M{hp:k, name:"m"}]; }
-  a = pick(t, 0); b = pick_cond(t, 1); c = pick_uncond(t, 0);
+  a = pick(t, 0); b = pick_cond(t, 1); c = pick_uncond(t, 0); cc = collect(t);
   cell = Filled { items: [] }; d = deliver(cell);
   bx = Box{ items: [1, 2, 3] }; r = getf(bx); w = whole([4, 5]);
-  print("{a.hp} {b.hp} {c.hp} {len(d)} {len(r)} {len(w)}\n");
+  print("{a.hp} {b.hp} {c.hp} {len(cc)} {len(d)} {len(r)} {len(w)}\n");
 }
 "#;
 
@@ -341,4 +367,31 @@ fn ownership_classifies_the_over_free_shapes() {
     // parameter Borrows — never freed at the return.
     assert_own_return(&stderr, "getf", "Borrowed");
     assert_own_return(&stderr, "whole", "Borrowed");
+}
+
+/// Stage 1.5 (Gaps A+B): the analysis surfaces the FREE SITES the value
+/// classification alone does not — the append element source-free
+/// (`elem_accumulate`) and the return-buffer-aliasing delivery (`match_return`) —
+/// each with the freed value's class and the borrow base to materialise from. Still
+/// inert; this is the context the Stage-3 fix reads. See ownership-analysis-gaps.md.
+#[test]
+fn ownership_surfaces_free_sites() {
+    let stderr = dump(OWN_SRC);
+
+    // elem_accumulate: `out += [pick(t,i)]` source-frees pick's JOIN return. The
+    // source is the inline `pick(…)` call (not a plain var) → base is absent, so
+    // the Stage-3 materialise deep-copies the whole returned value.
+    assert_free_site(&stderr, "collect", "AppendSource", "Join", "-");
+
+    // match_return: the retbuf `_mv_items_1` is reassigned to a BORROWED enum-field
+    // view (`OpGetField(e,…)`) → freeing the buffer over-frees `e`'s field. The
+    // borrow base `e` is carried so the materialise copies the field into the buffer.
+    assert_free_site(&stderr, "deliver", "ParamDeliver", "Borrowed", "e");
+
+    // the clean shapes carry NO over-free site: a returned param borrow is not freed.
+    assert_no_free_site(&stderr, "getf");
+    assert_no_free_site(&stderr, "whole");
+    // local_source's bug is the reassign, not an append/deliver: its pool-build
+    // append lowers WITHOUT the 0x8000 source-free bit, so no AppendSource site.
+    assert_no_free_site(&stderr, "pick_cond");
 }

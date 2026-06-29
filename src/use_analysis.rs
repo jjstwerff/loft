@@ -530,6 +530,40 @@ pub struct ReassignSite {
     pub rhs: Own,
 }
 
+/// The kind of free site the over-free fix acts at — the Gap-A sites the value
+/// classification alone does not surface (see `ownership-analysis-gaps.md`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FreeKind {
+    /// `OpCopyRecord(src, _, tp)` with the `0x8000` source-free bit — frees `src`
+    /// after copying it into a vector element (the `out += [src]` append idiom,
+    /// the `elem_accumulate` chokepoint). A `Borrowed`/`Join` `src` is over-freed.
+    AppendSource,
+    /// A return-delivery buffer (a heap PARAMETER the fn delivers its result
+    /// through) reassigned to a `Borrowed`/`Join` value — the buffer then aliases a
+    /// store it does not own, so freeing it over-frees that store (the
+    /// `match_return` chokepoint: `_mv_items_1 = OpGetField(e, …)`).
+    ParamDeliver,
+}
+
+/// A site where the over-free fix must read the carried ownership instead of
+/// blindly freeing. Carries the value's class AND (Gap B) the borrow base to
+/// materialise from when the borrow is a direct projection in this function.
+#[derive(Clone, Debug)]
+pub struct FreeSite {
+    pub kind: FreeKind,
+    /// The freed source var (`AppendSource`) or the buffer param (`ParamDeliver`);
+    /// `u16::MAX` when the source is not a plain var.
+    pub slot: u16,
+    pub slot_name: String,
+    /// Ownership of the value the site frees/delivers.
+    pub class: Own,
+    /// The base var to materialise from when the borrow arm is a DIRECT projection
+    /// in this fn (`None` when the borrow comes from a call — materialise = deep
+    /// copy the whole returned value — or the value is `Owned`).
+    pub base: Option<u16>,
+    pub base_name: Option<String>,
+}
+
 /// The recursive ownership classifier over the post-lowering `Value` IR. Holds the
 /// op-def numbers it keys on and a memoised, recursion-guarded per-function return
 /// classification (so an interprocedural `pick(t,i)` call resolves to `pick`'s
@@ -538,6 +572,7 @@ struct Ownership<'a> {
     data: &'a Data,
     op_database: u32,
     op_new_record: u32,
+    op_copy_record: u32,
     projections: HashSet<u32>,
     ret_memo: HashMap<u32, Own>,
     visiting: HashSet<u32>,
@@ -582,12 +617,52 @@ fn collect_defs(node: &Value, op_database: u32, out: &mut Defs) {
     }
 }
 
+/// Collect the over-free candidate sites in `node` (recursively):
+/// - `appends`: the `src` of each `OpCopyRecord(src, _, tp)` whose `tp` carries the
+///   `0x8000` source-free bit (the `out += [src]` element-append free).
+/// - `delivers`: each `(param, rhs)` of a `Set` to a HEAP parameter (a
+///   return-delivery buffer reassigned — the `match_return` aliasing site).
+fn collect_free_candidates(
+    node: &Value,
+    op_copy_record: u32,
+    func: &Function,
+    appends: &mut Vec<Value>,
+    delivers: &mut Vec<(u16, Value)>,
+) {
+    match node.unspan() {
+        Value::Call(d, args) if *d == op_copy_record => {
+            if args.len() >= 3
+                && let Value::Int(tp) = args[2].unspan()
+                && tp & 0x8000 != 0
+            {
+                appends.push(args[0].unspan().clone());
+            }
+            for a in args {
+                collect_free_candidates(a, op_copy_record, func, appends, delivers);
+            }
+        }
+        Value::Set(v, rhs) => {
+            if func.is_argument(*v)
+                && func.tp(*v).heap_dep().is_some()
+                && !matches!(rhs.unspan(), Value::Null)
+            {
+                delivers.push((*v, rhs.unspan().clone()));
+            }
+            collect_free_candidates(rhs, op_copy_record, func, appends, delivers);
+        }
+        other => other.for_each_child(&mut |c| {
+            collect_free_candidates(c, op_copy_record, func, appends, delivers)
+        }),
+    }
+}
+
 impl<'a> Ownership<'a> {
     fn new(data: &'a Data) -> Self {
         Ownership {
             data,
             op_database: data.def_nr("OpDatabase"),
             op_new_record: data.def_nr("OpNewRecord"),
+            op_copy_record: data.def_nr("OpCopyRecord"),
             projections: projection_ops(data),
             ret_memo: HashMap::new(),
             visiting: HashSet::new(),
@@ -721,6 +796,111 @@ impl<'a> Ownership<'a> {
             })
             .collect()
     }
+
+    /// The base var a `Borrowed`/`Join` value's borrow arm views, when that arm is
+    /// a DIRECT projection in this function — the store the Stage-3 materialise
+    /// copies FROM (Gap B). `None` when the borrow is produced by a call (the
+    /// materialise deep-copies the whole returned value) or the value is `Owned`.
+    fn borrow_base(&self, node: &Value, func: &Function, defs: &Defs) -> Option<u16> {
+        match node.unspan() {
+            Value::Call(d, args) if self.projections.contains(d) => {
+                match args.first().map(Value::unspan) {
+                    Some(Value::Var(b)) => Some(*b),
+                    Some(inner) => self.borrow_base(inner, func, defs), // nested `o.inner.rows`
+                    None => None,
+                }
+            }
+            Value::Var(v) => {
+                if let Some(rhss) = defs.rhs.get(v) {
+                    rhss.iter()
+                        .rev()
+                        .find_map(|r| self.borrow_base(r, func, defs))
+                } else if func.is_argument(*v) && func.tp(*v).heap_dep().is_some() {
+                    Some(*v) // a borrowed heap param IS its own base (the caller's arg)
+                } else {
+                    None
+                }
+            }
+            Value::If(_, then, els) => self
+                .borrow_base(then, func, defs)
+                .or_else(|| self.borrow_base(els, func, defs)),
+            Value::Block(b) => b
+                .operators
+                .last()
+                .and_then(|t| self.borrow_base(t, func, defs)),
+            Value::Return(v) | Value::BreakWith(_, v) => self.borrow_base(v, func, defs),
+            _ => None,
+        }
+    }
+
+    /// The over-free free SITES in function `d_nr` (Gap A): each append element
+    /// source-free (`AppendSource`) with its source's class + base, and each
+    /// return-buffer reassign to a `Borrowed`/`Join` value (`ParamDeliver`). These
+    /// are the sites the value classification alone does not surface — the Stage-3
+    /// fix reads the class here and frees / materialises accordingly.
+    fn free_sites(&mut self, d_nr: u32) -> Vec<FreeSite> {
+        let def = self.data.def(d_nr);
+        if !matches!(def.def_type, DefType::Function) {
+            return Vec::new();
+        }
+        let func = &def.variables;
+        let mut defs = Defs::default();
+        collect_defs(&def.code, self.op_database, &mut defs);
+        let mut appends = Vec::new();
+        let mut delivers = Vec::new();
+        collect_free_candidates(
+            &def.code,
+            self.op_copy_record,
+            func,
+            &mut appends,
+            &mut delivers,
+        );
+
+        let name = |v: u16| (v != u16::MAX).then(|| func.name(v).to_string());
+        let mut sites = Vec::new();
+        for src in appends {
+            let class = self.classify(&src, func, &defs);
+            // Only a Borrowed/Join source is over-freed; an Owned source-free is
+            // correct (and load-bearing for the owned branch of a Join elsewhere).
+            if !matches!(class, Own::Borrowed | Own::Join) {
+                continue;
+            }
+            let base = self.borrow_base(&src, func, &defs);
+            let slot = match src.unspan() {
+                Value::Var(v) => *v,
+                _ => u16::MAX,
+            };
+            sites.push(FreeSite {
+                kind: FreeKind::AppendSource,
+                slot,
+                slot_name: name(slot).unwrap_or_default(),
+                class,
+                base,
+                base_name: base.and_then(name),
+            });
+        }
+        for (p, rhs) in delivers {
+            let class = self.classify(&rhs, func, &defs);
+            let base = self.borrow_base(&rhs, func, &defs);
+            // A retbuf aliases a store it does not own ONLY when set to a DIRECT
+            // borrow — a raw projection with a known base (`_mv_items_1 =
+            // OpGetField(e,…)`). A call delivering into the retbuf MATERIALISES a
+            // copy (the retbuf is then Owned — the clean `best = rows(b)` shape),
+            // so `base.is_none()` cases are excluded; this also guarantees a usable
+            // materialise base for every reported ParamDeliver.
+            if matches!(class, Own::Borrowed | Own::Join) && base.is_some() {
+                sites.push(FreeSite {
+                    kind: FreeKind::ParamDeliver,
+                    slot: p,
+                    slot_name: func.name(p).to_string(),
+                    class,
+                    base,
+                    base_name: base.and_then(name),
+                });
+            }
+        }
+        sites
+    }
 }
 
 /// Public, test-facing entry: the ownership class of function `d_nr`'s return.
@@ -733,6 +913,14 @@ pub fn return_ownership(data: &Data, d_nr: u32) -> Own {
 #[must_use]
 pub fn reassign_sites(data: &Data, d_nr: u32) -> Vec<ReassignSite> {
     Ownership::new(data).reassign_sites(d_nr)
+}
+
+/// Public, test-facing entry: the over-free free SITES of function `d_nr` (the
+/// append element source-frees + return-buffer-aliasing deliveries, with class +
+/// borrow base) — the Gap-A/B context the Stage-3 fix reads.
+#[must_use]
+pub fn free_sites(data: &Data, d_nr: u32) -> Vec<FreeSite> {
+    Ownership::new(data).free_sites(d_nr)
 }
 
 /// Print every function's verdicts when `LOFT_MATERIALIZE_DUMP` is set. Called from
@@ -764,6 +952,18 @@ pub fn dump_all(data: &Data) {
             eprintln!(
                 "OWN fn={} reassign v={}({}) prior={:?} rhs={:?}",
                 def.name, s.var, s.var_name, s.prior, s.rhs
+            );
+        }
+        // The Stage-1.5 free SITES (Gap A) + borrow base (Gap B), still inert.
+        for s in own.free_sites(d_nr) {
+            eprintln!(
+                "OWN fn={} free kind={:?} slot={}({}) class={:?} base={}",
+                def.name,
+                s.kind,
+                s.slot,
+                s.slot_name,
+                s.class,
+                s.base_name.as_deref().unwrap_or("-")
             );
         }
     }

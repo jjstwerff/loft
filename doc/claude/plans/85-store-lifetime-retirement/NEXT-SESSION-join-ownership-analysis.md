@@ -14,10 +14,13 @@ keystone** = wide-release **gate 1** ([STABILITY_ROADMAP.md § the wide-release 
 > is VALIDATED against the full known-probe set: it is **SOUND (zero misses — no over-freeing value
 > is classified pure-Owned)**, with concrete completeness/precision gaps mapped in
 > [ownership-analysis-gaps.md](ownership-analysis-gaps.md) (instrument: `fuzz/classify_vs_runtime.py`).
-> **NEXT:** wire `local_source` first (analysis COMPLETE for it; deterministic both-backend leak),
-> then a Stage-1.5 inert extension to surface the append-source-free + arm-return-delivery SITES and
-> carry the borrow base (Gaps A+B), then `elem_accumulate` + `match_return` (interp-only over-free —
-> native is already a correctness reference).
+> **Stage 1.5 ✅ DONE** — `use_analysis::free_sites` now surfaces the append-source-free
+> (`AppendSource`) + return-buffer-aliasing (`ParamDeliver`) SITES with class + borrow base (Gaps A+B
+> closed); free sites correlate EXACTLY with the over-free outcome (`ownership_surfaces_free_sites`
+> test; suite byte-identical, 2564 pass). **NEXT = wire the compiler:** `local_source` first
+> (`reassign_sites prior=Owned`, deterministic both-backend leak), then `elem_accumulate` +
+> `match_return` (interp-only over-free — native is the correctness reference). All three sites are
+> now visible in the analysis.
 
 **Reading order:** this file → [over-free-class-study.md](over-free-class-study.md) (the full class
 study + § Root-cause drill-down + § Three chokepoints) → [fuzz-proof-gate.md](fuzz-proof-gate.md)
