@@ -238,8 +238,30 @@ out = OpGetField(buf,0) ; OpAppendVector(out, src, 64) ; OpReplaceVector(buf, ou
 (`ref(E)`). My raw `OpAppendVector(_mv_items_1, …, 65)` lacks the `__vdb`/`OpReplaceVector` wrapper
 (so after the grow-realloc the caller's retbuf ref is stale → a later allocation reuses it) and uses
 tp `65` (`E`, a `vector<E>`-source-into-`vector<ref(E)>`-dst mismatch). Native tolerates both; interp
-needs the full idiom. NEXT: emit the full owned-vector materialise (route through the same machinery
-`out = []` uses, or hand-emit `OpDatabase`+`OpReplaceVector` with tp `64`) so interp matches native.
+needs the full idiom.
+
+**LAYER PINNED (probe-driven, two earlier guesses corrected).** The interp crash is the
+PARSER/IR-generation layer — the return/store **registration** structure — NOT interp execution and
+NOT the tp:
+- **Probe 1 (decisive):** `field_return` (`fn f(b: Box) -> vector { b.rows }`, the proven
+  `copy_borrow_tail_into_retbuf` path) + churn runs CLEAN on interp. So interp executes
+  "copy a borrowed vector into the retbuf" correctly — the bug is in MY IR, not the interpreter.
+- **Probe 2 (`append_elem_tp` instrument):** ruled OUT the tp. Both programs compute
+  `content(own-retbuf-vec-tp)` — mine `content(67)=65`, field_return `content(66)=64`, EACH correct
+  for its own retbuf (the `66`/`67` gap is just per-program type registration). The `__vdb`/
+  `OpReplaceVector` wrapper is also NOT needed — `copy_borrow_tail_into_retbuf` has neither and
+  survives churn.
+- **What's left:** `copy_borrow_tail_into_retbuf` delivers the borrow as the function TAIL and sets
+  `returned = Vector(elm, Deps::attrs([buf_attr]))` + a typed `borrow_tail_copy` block — registering
+  the retbuf as the OWNED return. My materialise appends inside a match ARM and strips deps but never
+  establishes that registration, so under churn the store isn't tracked as the live return and a
+  later allocation reuses it (the corruption).
+
+**NEXT (corrected):** do NOT hand-roll the append. Route the borrowed match-arm delivery through
+`copy_borrow_tail_into_retbuf` (or replicate its FULL output — clear + append + the `returned`/
+block-deps registration), not just the bare `OpAppendVector`. The proven path is the spec; my
+divergence from it (the missing registration) is the defect. The methodology lesson recurs: when a
+proven sibling path exists, diverging from it IS the bug — match it, don't re-derive it.
 
 Then flip default-on once all three sites are green on both backends + the full matrix + POISON. Then
 fold the remaining own-vs-borrow re-derivations (the return-delivery thicket) onto the oracle as cleanup.
