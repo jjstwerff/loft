@@ -10,9 +10,14 @@ Cold-start handoff. Written so a fresh session can `/clear` and build the @PLN85
 keystone** = wide-release **gate 1** ([STABILITY_ROADMAP.md § the wide-release bar](../../STABILITY_ROADMAP.md)).
 
 > **STATUS (branch `tuxedo-pln85-fuzz-proof-gate`):** Stage 1 (inert `Owned|Borrowed|Join`
-> classifier) + Stage 2 (per-shape verdict test) are ✅ DONE — see § The build below. **NEXT = Stage 3**
-> (wire one free site at a time behind a flag). The fact is built, tested, and confirms the
-> diagnosis; nothing emits off it yet.
+> classifier) + Stage 2 (per-shape verdict test) are ✅ DONE — see § The build below. The analysis
+> is VALIDATED against the full known-probe set: it is **SOUND (zero misses — no over-freeing value
+> is classified pure-Owned)**, with concrete completeness/precision gaps mapped in
+> [ownership-analysis-gaps.md](ownership-analysis-gaps.md) (instrument: `fuzz/classify_vs_runtime.py`).
+> **NEXT:** wire `local_source` first (analysis COMPLETE for it; deterministic both-backend leak),
+> then a Stage-1.5 inert extension to surface the append-source-free + arm-return-delivery SITES and
+> carry the borrow base (Gaps A+B), then `elem_accumulate` + `match_return` (interp-only over-free —
+> native is already a correctness reference).
 
 **Reading order:** this file → [over-free-class-study.md](over-free-class-study.md) (the full class
 study + § Root-cause drill-down + § Three chokepoints) → [fuzz-proof-gate.md](fuzz-proof-gate.md)
