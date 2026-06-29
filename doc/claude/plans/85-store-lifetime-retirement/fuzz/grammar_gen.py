@@ -51,6 +51,7 @@ VALUES = {
 CHURN = {
     "none": "",
     "heavy": "acc=0; for f in 0..8 { acc += filler(7); }",
+    "stress": "acc=0; for f in 0..30 { acc += filler(20); }",   # ~600 fills — the slot-reuse scale #462 needs
 }
 
 
@@ -139,9 +140,52 @@ def elem_accumulate(v, c):
         + '  println("ok");\n}\n')
 
 
+def local_source(v, c):
+    # The #462 mon_one shape: return a view of a LOCAL container, assigned CONDITIONALLY.
+    # The study's open root — the retbuf `chosen` aliases the local `pool` because the
+    # borrow-set is not propagated through the conditional view-assign.
+    return (header(v)
+        + "fn one(t: vector<" + v["et"] + ">, salt: integer) -> " + v["et"] + " {\n"
+        + "  pool: vector<" + v["et"] + "> = []; for p in 0..len(t) { pool += [t[p] ?? " + v["default"] + "]; }\n"
+        + "  chosen = " + v["default"] + "; np = len(pool);\n"
+        + "  for wj in 0..np { if salt % np == wj { chosen = pool[wj] ?? " + v["default"] + "; } }\n"
+        + "  chosen\n}\n"
+        + "fn main() {\n  t: vector<" + v["et"] + "> = []; " + build("t", K, v) + "\n"
+        + "  for i in 0..8 { r = one(t, i); " + c
+        + ' assert(len(t)==' + str(K) + ', "src i{i}={len(t)}"); }\n'
+        + '  println("ok");\n}\n')
+
+
+def index_read(v, c):
+    # #426B — return a borrowed INNER-vector view `vv[i]` (the index-read tail deliberately
+    # excluded from the copy funnel because forcing it through __retbuf collides store-nrs).
+    return (header(v)
+        + "fn deliver(vv: vector<vector<" + v["et"] + ">>, i: integer) -> vector<" + v["et"] + "> { vv[i] ?? [] }\n"
+        + "fn main() {\n  vv: vector<vector<" + v["et"] + ">> = [];\n"
+        + "  for g in 0..3 { row: vector<" + v["et"] + "> = []; " + build("row", K, v) + " vv += [row]; }\n"
+        + "  for i in 0..8 { r = deliver(vv, i % 3); " + c
+        + ' assert(len(vv)==3, "vv i{i}={len(vv)}"); assert(len(r)==' + str(K) + ', "r i{i}={len(r)}"); }\n'
+        + '  println("ok");\n}\n')
+
+
+def nested_field(v, c):
+    # P13 — a borrowed view down a nested struct-field chain `o.inner.rows`.
+    return (header(v)
+        + "struct Inner { rows: vector<" + v["et"] + "> }\n"
+        + "struct Outer { inner: Inner }\n"
+        + "fn deliver(o: Outer) -> vector<" + v["et"] + "> { o.inner.rows }\n"
+        + "fn main() {\n  ri: vector<" + v["et"] + "> = []; " + build("ri", K, v) + "\n"
+        + "  o = Outer { inner: Inner { rows: ri } };\n"
+        + "  for i in 0..8 { r = deliver(o); " + c
+        + ' assert(len(o.inner.rows)==' + str(K) + ', "src i{i}={len(o.inner.rows)}");'
+        + ' assert(len(r)==' + str(K) + ', "r i{i}={len(r)}"); }\n'
+        + '  println("ok");\n}\n')
+
+
 SHAPES = {
     "field_return": field_return, "field_local": field_local, "field_reassign": field_reassign,
     "match_return": match_return, "if_return": if_return, "elem_accumulate": elem_accumulate,
+    "local_source": local_source, "index_read": index_read, "nested_field": nested_field,
 }
 
 

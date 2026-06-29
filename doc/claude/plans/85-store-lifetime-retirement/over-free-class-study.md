@@ -131,6 +131,38 @@ reassign), **P14** (enum-field vector borrow via match arm, interp-only), **#462
 they are compact drivers + acceptance tests for the substrate fix. (P4 `?? []` is parked
 Family-A nullability, not this class.)
 
+### Generated boundary map (2026-06-29 — full probe via `fuzz/grammar_gen.py`)
+
+The class is now probed by a GENERATED cross-product (9 source×delivery shapes × {struct, scalar}
+× {none, heavy, stress churn} = 54 cells), run under the differential + `LOFT_POISON` + leak oracle
+on **both backends**. The live boundary is exact and narrow:
+
+| shape | struct | scalar | signature |
+|---|---|---|---|
+| **match_return** (match-arm field view) | 🔴 all churn | clean | interp **SIGABRT** + divergence |
+| **elem_accumulate** (element view → accumulate) | 🔴 all churn | clean | interp **SIGSEGV** + divergence |
+| **local_source** (conditional view-assign of a LOCAL, returned — the **#462 root**) | 🔴 all churn | clean | **LEAK on BOTH backends** (deterministic) |
+| field_return / field_local / field_reassign / if_return / nested_field / index_read (#426B) | clean | clean | — |
+
+**What this pins:**
+- The live class is exactly **struct-value × {match-arm, element-accumulate, conditional-local-view}**
+  — three shapes, three distinct signatures.
+- **`local_source` is the #462 root, reproduced deterministically** — it LEAKS on both backends at
+  none-churn (no slot-reuse needed), confirming the diagnosis above: the borrow-set is not propagated
+  through the conditional view-assign, the retbuf aliases the local, and the free is mis-accounted.
+  This is the minimal driving case for the assignment-borrow-set-propagation chokepoint.
+- **Under `LOFT_POISON` the crash class is churn-INDEPENDENT** (fires at none) — the UAF is always
+  present; churn only changed whether the stale read hit reused data. Poison removes that dependence,
+  so the fix no longer needs a 200-store stress harness to be guarded — a none-churn cell + poison is
+  a deterministic acceptance test.
+- **The field-view family is FIXED** — `field_return/local/reassign`, `if_return`, `nested_field`,
+  and the index-read **#426B** are all clean; instances 1+2 generalised. Only match-arm, accumulate,
+  and the conditional-local shapes remain.
+- **Scalar never fires** — record-store-specific (the @PLN25 value-model dependency).
+
+Remaining ADJACENT axes (not the core vector/field/local class — follow-up): keyed-container element
+views (`hash`/`sorted`), nested-record element values, and `par` worker-store isolation.
+
 ## Recommended next step
 
 Land the **assignment borrow-set propagation** (the one rule) as the chokepoint, with

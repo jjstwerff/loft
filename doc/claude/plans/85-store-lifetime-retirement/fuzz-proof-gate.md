@@ -174,6 +174,18 @@ Driven by the harness `--poison` flag (sets `LOFT_POISON=1` for both backends). 
 elem-accumulate / match-arm bugs); that green is a FUTURE done-criterion, met when the Cluster-C
 chokepoint fix lands. The detector is the instrument; the class is still open.
 
+### Increment 4 — full probe of the over-free class (2026-06-29)
+
+Added the study's missing axes to the generator — `local_source` (the #462 conditional-local-view
+root), `index_read` (#426B), `nested_field` (P13), and a `stress` churn — and ran the **54-cell**
+cross-product under differential + `LOFT_POISON` + leak, both backends. The complete boundary map is
+in [over-free-class-study.md § Generated boundary map](over-free-class-study.md). Result: the live
+class is exactly **struct-value × {match-arm, element-accumulate, conditional-local-view}** with
+three distinct signatures (SIGABRT / SIGSEGV / **leak-on-both-backends**); the field-view family +
+index-read (#426B) + nested-field are all **clean** (fixed). `local_source` is a **deterministic
+both-backends repro of #462** at none-churn — the minimal driving case for the fix. Adjacent axes
+left for follow-up: keyed-container views (`hash`/`sorted`), nested-record values, `par`.
+
 **Next, in order:**
 1. **Correct the stale catalog** — over-free-sweep/README P10 verdict PASS → divergence; mark P3/P9/leak fixed. ✅ done.
 2. **Graduate the generator in-process** — port `grammar_gen.py` to a `fuzz/fuzz_targets/program_ownership.rs` cargo-fuzz target (the full grammar is built; this makes it run in-process/fast under libfuzzer coverage-guidance, no rustc-per-program) and add the `value` axis pieces (enum-payload, nested, hash) as @PLN25 settles them.
