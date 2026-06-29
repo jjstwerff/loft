@@ -760,13 +760,20 @@ impl<'a> Ownership<'a> {
     /// one real def, the class it held before its LAST def and the class of that
     /// def. The `prior = Owned` rows are the displaced-owned-store leak candidates.
     fn reassign_sites(&mut self, d_nr: u32) -> Vec<ReassignSite> {
-        let def = self.data.def(d_nr);
+        let data = self.data;
+        let def = data.def(d_nr);
         if !matches!(def.def_type, DefType::Function) {
             return Vec::new();
         }
-        let func = &def.variables;
+        self.reassign_sites_of(&def.code, &def.variables)
+    }
+
+    /// As [`Self::reassign_sites`] but on a `(code, function)` pair directly — for
+    /// the scope pass, which holds the function being analysed by reference (it is
+    /// not yet written back into `data`).
+    fn reassign_sites_of(&mut self, code: &Value, func: &Function) -> Vec<ReassignSite> {
         let mut defs = Defs::default();
-        collect_defs(&def.code, self.op_database, &mut defs);
+        collect_defs(code, self.op_database, &mut defs);
         // Only HEAP-typed vars can carry the over-free leak: a reassigned scalar
         // loop counter has no store to displace (the class is record-specific —
         // "scalar never fires" per the boundary map). Filter them out.
@@ -913,6 +920,21 @@ pub fn return_ownership(data: &Data, d_nr: u32) -> Own {
 #[must_use]
 pub fn reassign_sites(data: &Data, d_nr: u32) -> Vec<ReassignSite> {
     Ownership::new(data).reassign_sites(d_nr)
+}
+
+/// The `local_source` over-free fix's input: the heap slots that hold an OWNED
+/// store displaced by a later `Borrowed`/`Join` reassignment (`prior=Owned`). The
+/// scope pass strips these slots' deps so the owned path deep-copies + frees them
+/// (the displaced store would otherwise be orphaned — the `chosen = dflt(); … chosen
+/// = pool[wj]` leak). Operates on the pre-scope `(code, function)` directly.
+#[must_use]
+pub fn displaced_owned_slots(code: &Value, function: &Function, data: &Data) -> HashSet<u16> {
+    Ownership::new(data)
+        .reassign_sites_of(code, function)
+        .into_iter()
+        .filter(|s| s.prior == Own::Owned && matches!(s.rhs, Own::Borrowed | Own::Join))
+        .map(|s| s.var)
+        .collect()
 }
 
 /// Public, test-facing entry: the over-free free SITES of function `d_nr` (the

@@ -102,6 +102,12 @@ struct Scopes {
     /// instead (only at the same loop depth: emitting inside a deeper loop
     /// would re-free a viewed store on iterations 2+).
     owned_refs: HashMap<u16, usize>,
+    /// @PLN85 `local_source` over-free fix (gated by `LOFT_JOIN_OWN`): heap slots
+    /// that hold an OWNED store displaced by a later `Borrowed`/`Join` reassignment
+    /// (`use_analysis::displaced_owned_slots`). For these, `scan_set` strips the
+    /// declared deps so the OWNED path deep-copies + frees the slot — otherwise the
+    /// displaced owned store is orphaned and leaks. Empty when the flag is off.
+    displaced_owned: HashSet<u16>,
 }
 
 /// Perform scope analysis on all currently known functions.
@@ -117,6 +123,14 @@ fn run_scan_phase(
     orig_vars: &Function,
     confined: &HashMap<u16, u16>,
 ) {
+    // @PLN85 `local_source` over-free fix (gated): the heap slots whose OWNED store
+    // is displaced by a later borrow/join reassignment. Computed on the pre-scope
+    // code so the dep classification is read before any dep-strip below mutates it.
+    let displaced_owned = if std::env::var_os("LOFT_JOIN_OWN").is_some() {
+        crate::use_analysis::displaced_owned_slots(orig_code, orig_vars, data)
+    } else {
+        HashSet::new()
+    };
     let mut scopes = Scopes {
         d_nr,
         max_scope: 1,
@@ -134,6 +148,7 @@ fn run_scan_phase(
         paired_witness: HashMap::new(),
         witness_buffer: HashMap::new(),
         owned_refs: HashMap::new(),
+        displaced_owned,
     };
     let mut function = Function::copy(orig_vars);
     for a in function.arguments() {
@@ -1104,6 +1119,18 @@ impl Scopes {
             && data.def(*fn_nr).code != Value::Null
         {
             let adopts_fresh_store = data.def(*fn_nr).return_adopts_fresh_store();
+            // @PLN85 `local_source` over-free fix (LOFT_JOIN_OWN): `v` holds an OWNED
+            // store (this adopts-fresh call) that a later borrow/join reassignment
+            // displaces. Strip `v`'s declared deps so it is OWNED everywhere — the
+            // owned path then deep-copies the borrow into `v`'s store and frees it at
+            // scope exit; without this the displaced owned store is orphaned (it was
+            // bound to `v`, not to the source retbuf the cleanup guards) and leaks.
+            if self.displaced_owned.contains(&ov) && !function.tp(v).depend().is_empty() {
+                let deps: Vec<u16> = function.tp(v).depend().clone();
+                for d in deps {
+                    function.make_independent(v, d);
+                }
+            }
             if !adopts_fresh_store {
                 // codegen will take gen_set_first_ref_call_copy —
                 // OpConvRefFromNull +

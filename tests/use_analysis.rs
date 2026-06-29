@@ -395,3 +395,93 @@ fn ownership_surfaces_free_sites() {
     // append lowers WITHOUT the 0x8000 source-free bit, so no AppendSource site.
     assert_no_free_site(&stderr, "pick_cond");
 }
+
+// ── @PLN85 Stage-3 site 1: the `local_source` compiler wiring (LOFT_JOIN_OWN) ───
+// The displaced-owned-store leak: `chosen = dflt()` move-adopts a fresh store into
+// `chosen` (the source retbuf the cleanup guards is left null), then `chosen =
+// pool[wj]` orphans it. The fix strips `chosen`'s flattened `["pool"]` dep so it is
+// OWNED everywhere — the owned path deep-copies the borrow into `chosen`'s store and
+// frees it. VALUE-correct either way (the leak does not corrupt); only the leak
+// differs, so the gate is the `not freed` warning. See ownership-analysis-gaps.md.
+
+const LOCAL_SOURCE_SRC: &str = r#"
+struct M { hp: integer not null, name: text }
+fn dflt() -> M { M{hp:-1, name:"d"} }
+fn pick(t: vector<M>, salt: integer) -> M {
+  pool: vector<M> = []; for p in 0..len(t) { pool += [t[p] ?? dflt()]; }
+  chosen = dflt();
+  np = len(pool);
+  for wj in 0..np { if salt % np == wj { chosen = pool[wj] ?? dflt(); } }
+  chosen
+}
+fn main() {
+  t: vector<M> = []; for k in 0..4 { t += [M{hp:k * 10, name:"m"}]; }
+  // np=4: pick(t, salt) selects pool[salt % 4] -> hp = (salt % 4) * 10.
+  for i in 0..8 {
+    r = pick(t, i);
+    assert(r.hp == (i % 4) * 10, "pick i{i} hp={r.hp} want={(i % 4) * 10}");
+    assert(len(t) == 4, "src corrupted i{i} len={len(t)}");
+  }
+  print("local-source ok\n");
+}
+"#;
+
+/// Run a source on a backend, optionally with `LOFT_JOIN_OWN`; return (stdout, stderr).
+fn run_backend(src: &str, backend: &str, join_own: bool) -> (String, String) {
+    use std::hash::{Hash, Hasher};
+    let dir = std::env::temp_dir().join("loft_join_own");
+    std::fs::create_dir_all(&dir).expect("probe dir");
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    src.hash(&mut h);
+    backend.hash(&mut h);
+    join_own.hash(&mut h);
+    let path = dir.join(format!("probe_{:016x}.loft", h.finish()));
+    std::fs::write(&path, src).expect("write probe");
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_loft"));
+    cmd.args([backend])
+        .arg(&path)
+        .env("LOFT_STORES", "warn")
+        .env("LOFT_NATIVE_LEAK_CHECK", "1")
+        .env("LOFT_NO_CACHE", "1")
+        .env("LOFT_TIMEOUT", "180");
+    if join_own {
+        cmd.env("LOFT_JOIN_OWN", "1");
+    }
+    let out = cmd.output().expect("spawn loft");
+    (
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+/// The fix: under `LOFT_JOIN_OWN` the displaced-owned `local_source` shape is
+/// VALUE-correct AND leak-free on BOTH backends.
+#[test]
+fn join_own_fixes_local_source_both_backends() {
+    for backend in ["--interpret", "--native"] {
+        let (stdout, stderr) = run_backend(LOCAL_SOURCE_SRC, backend, true);
+        assert!(
+            stdout.contains("local-source ok"),
+            "{backend} value-incorrect under LOFT_JOIN_OWN:\nstdout:{stdout}\nstderr:{stderr}"
+        );
+        assert!(
+            !stderr.contains("not freed"),
+            "{backend} still leaks under LOFT_JOIN_OWN:\n{stderr}"
+        );
+    }
+}
+
+/// The GATE: WITHOUT the flag the same shape is value-correct but LEAKS the
+/// displaced owned store — pins that the flag is what closes the leak (so a future
+/// regression that silently stops stripping is caught), on both backends.
+#[test]
+fn local_source_leaks_without_join_own() {
+    for backend in ["--interpret", "--native"] {
+        let (stdout, stderr) = run_backend(LOCAL_SOURCE_SRC, backend, false);
+        assert!(stdout.contains("local-source ok"), "{backend}: {stderr}");
+        assert!(
+            stderr.contains("not freed"),
+            "{backend}: expected the displaced-owned LEAK without the flag, got none:\n{stderr}"
+        );
+    }
+}
