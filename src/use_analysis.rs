@@ -494,27 +494,51 @@ pub fn elision_plans(code: &Value, function: &Function, data: &Data) -> Vec<Elid
 //     owned. Conservative: it can lose an Owned, never invent one.
 // ============================================================================
 
-/// The store-ownership of a value that escapes into an owned position. The one
-/// carried fact the over-free free sites should READ instead of re-deriving.
+/// The store-ownership of a value at an own-vs-borrow decision site — THE one fact
+/// every such site READS instead of re-deriving (the OWNERSHIP_MODEL north star).
+/// `Borrowed`/`Join` carry the `base`: the caller-visible var whose store the value
+/// aliases — the witness the `Join` runtime guard needs and what distinguishes a
+/// borrowed-of-arg value from an owned one. `base` is `u16::MAX` when unresolvable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Own {
     /// A freshly minted store the producer owns (an `OpDatabase`/`OpNewRecord`
-    /// buffer, a struct literal, a call whose return adopts a fresh store).
+    /// buffer, a struct literal, a call whose return adopts a fresh store). Free /
+    /// adopt / set the source-free bit is correct.
     Owned,
-    /// A view into a store owned elsewhere (a vector-element / field projection,
-    /// a returned parameter, or a value that resolves to one).
-    Borrowed,
-    /// Runtime-dependent: owned on one branch, borrowed on the other (a `??` /
-    /// `if-else` whose arms split). No static free decision — the escape must
-    /// materialise the borrow branch to owned, after which free is safe.
-    Join,
+    /// A view into `base`'s store (a vector-element / field projection, a returned
+    /// parameter, or a value that resolves to one). Never free it; to land in an
+    /// owned slot, deep-copy.
+    Borrowed { base: u16 },
+    /// Runtime-dependent: owned on one branch, borrowed-of-`base` on the other (a
+    /// `??` / `if-else` whose arms split). The decision is per-execution — adopt iff
+    /// the value's store ≠ `base`'s store (the owned branch ran), else materialise.
+    Join { base: u16 },
 }
 
 impl Own {
-    /// The lattice join: equal classes collapse; any disagreement is a `Join`.
+    /// The base var a `Borrowed`/`Join` value aliases, or `None` for `Owned`.
+    #[must_use]
+    fn base(self) -> Option<u16> {
+        match self {
+            Own::Owned => None,
+            Own::Borrowed { base } | Own::Join { base } => Some(base),
+        }
+    }
+
+    /// The lattice join of two `??`/`if` arms. Two equal borrows of the SAME base
+    /// stay `Borrowed`; any owned-vs-borrowed split (or differing bases) becomes a
+    /// `Join` witnessed by whichever arm carries a base.
     #[must_use]
     fn join(self, other: Own) -> Own {
-        if self == other { self } else { Own::Join }
+        match (self, other) {
+            (Own::Owned, Own::Owned) => Own::Owned,
+            (Own::Borrowed { base: a }, Own::Borrowed { base: b }) if a == b => {
+                Own::Borrowed { base: a }
+            }
+            _ => Own::Join {
+                base: self.base().or_else(|| other.base()).unwrap_or(u16::MAX),
+            },
+        }
     }
 }
 
@@ -679,10 +703,18 @@ impl<'a> Ownership<'a> {
         let def = self.data.def(d_nr);
         let tail = fn_body_tail(&def.code);
         // No loft body (native op / `#rust` stdlib): no intraprocedural join to
-        // recover — the flattened canonical fact is exact.
+        // recover — the flattened canonical fact is exact. Its base is the first
+        // VISIBLE param the return dep names (in this callee's own var space).
         if tail.is_none() || !matches!(def.def_type, DefType::Function) {
+            let attrs = def.attributes();
             let c = if def.returns_borrowed_view() {
-                Own::Borrowed
+                let base = def
+                    .returned()
+                    .depend()
+                    .iter()
+                    .find(|&&a| (a as usize) < attrs.len() && !attrs[a as usize].hidden)
+                    .map_or(u16::MAX, |&a| a);
+                Own::Borrowed { base }
             } else {
                 Own::Owned
             };
@@ -691,9 +723,9 @@ impl<'a> Ownership<'a> {
         }
         if !self.visiting.insert(d_nr) {
             // Recursion back-edge: conservatively Borrowed (never assume a self-
-            // referential return is freshly owned). Not memoised — the enclosing
-            // frame computes and caches the real class.
-            return Own::Borrowed;
+            // referential return is freshly owned), base unresolved. Not memoised —
+            // the enclosing frame computes and caches the real class.
+            return Own::Borrowed { base: u16::MAX };
         }
         let mut defs = Defs::default();
         collect_defs(&def.code, self.op_database, &mut defs);
@@ -716,25 +748,28 @@ impl<'a> Ownership<'a> {
                     .map(|r| self.classify(r, func, defs))
                     .reduce(Own::join)
                     .unwrap_or(Own::Owned),
-                // No local def: a parameter (caller owns it ⇒ Borrowed) or an
-                // uninitialised local (treat as Owned — nothing to mis-free).
+                // No local def: a parameter (the caller owns it ⇒ Borrowed of itself)
+                // or an uninitialised local (Owned — nothing to mis-free).
                 _ => {
                     if func.is_argument(*v) {
-                        Own::Borrowed
+                        Own::Borrowed { base: *v }
                     } else {
                         Own::Owned
                     }
                 }
             },
-            Value::Call(d, _) => {
+            Value::Call(d, args) => {
                 if *d == self.op_database || *d == self.op_new_record {
                     Own::Owned
                 } else if self.projections.contains(d) {
                     // A projection (`OpGetField`/`OpGetVector*`/`OpGetDbRef`) is a
-                    // view into its base container (arg 0).
-                    Own::Borrowed
+                    // view into its base container (arg 0), rooted at a var.
+                    match self.borrow_base(node, func, defs) {
+                        Some(base) => Own::Borrowed { base },
+                        None => Own::Owned,
+                    }
                 } else {
-                    self.return_ownership(*d)
+                    self.call_ownership(*d, args)
                 }
             }
             // `??` / `if-else` lowers to `If`: the join of its two arms.
@@ -753,6 +788,45 @@ impl<'a> Ownership<'a> {
             // Everything else (literals, scalar/void ops, control with no value
             // payload) is a fresh value or irrelevant to the heap over-free class.
             _ => Own::Owned,
+        }
+    }
+
+    /// The ownership of a `call(args)` result, with the borrow base translated from
+    /// the callee's parameter space into the CALLER's argument (the interprocedural
+    /// piece): the callee's return borrows one of its visible params; map that param
+    /// position to the caller's argument so the `base` is a var the caller can witness.
+    fn call_ownership(&mut self, callee_d: u32, caller_args: &[Value]) -> Own {
+        let callee_own = self.return_ownership(callee_d);
+        let callee_base = match callee_own {
+            Own::Owned => return Own::Owned,
+            Own::Borrowed { base } | Own::Join { base } => base,
+        };
+        let base = self.caller_arg_base(callee_d, callee_base, caller_args);
+        match callee_own {
+            Own::Join { .. } => Own::Join { base },
+            _ => Own::Borrowed { base },
+        }
+    }
+
+    /// Map the callee's borrowed parameter `callee_base` (a var in the callee's
+    /// space) to the CALLER's argument var at the same VISIBLE-parameter position.
+    /// `u16::MAX` when it is not a visible param or the matching arg is not a var.
+    fn caller_arg_base(&self, callee_d: u32, callee_base: u16, caller_args: &[Value]) -> u16 {
+        let attrs = self.data.def(callee_d).attributes();
+        if callee_base == u16::MAX
+            || (callee_base as usize) >= attrs.len()
+            || attrs[callee_base as usize].hidden
+        {
+            return u16::MAX;
+        }
+        // The caller's args align with the callee's VISIBLE params, in order.
+        let arg_index = attrs[..callee_base as usize]
+            .iter()
+            .filter(|a| !a.hidden)
+            .count();
+        match caller_args.get(arg_index).map(Value::unspan) {
+            Some(Value::Var(cv)) => *cv,
+            _ => u16::MAX,
         }
     }
 
@@ -869,10 +943,10 @@ impl<'a> Ownership<'a> {
             let class = self.classify(&src, func, &defs);
             // Only a Borrowed/Join source is over-freed; an Owned source-free is
             // correct (and load-bearing for the owned branch of a Join elsewhere).
-            if !matches!(class, Own::Borrowed | Own::Join) {
+            if !matches!(class, Own::Borrowed { .. } | Own::Join { .. }) {
                 continue;
             }
-            let base = self.borrow_base(&src, func, &defs);
+            let base = class.base().filter(|&b| b != u16::MAX);
             let slot = match src.unspan() {
                 Value::Var(v) => *v,
                 _ => u16::MAX,
@@ -888,14 +962,14 @@ impl<'a> Ownership<'a> {
         }
         for (p, rhs) in delivers {
             let class = self.classify(&rhs, func, &defs);
-            let base = self.borrow_base(&rhs, func, &defs);
+            let base = class.base().filter(|&b| b != u16::MAX);
             // A retbuf aliases a store it does not own ONLY when set to a DIRECT
             // borrow — a raw projection with a known base (`_mv_items_1 =
             // OpGetField(e,…)`). A call delivering into the retbuf MATERIALISES a
             // copy (the retbuf is then Owned — the clean `best = rows(b)` shape),
             // so `base.is_none()` cases are excluded; this also guarantees a usable
             // materialise base for every reported ParamDeliver.
-            if matches!(class, Own::Borrowed | Own::Join) && base.is_some() {
+            if matches!(class, Own::Borrowed { .. } | Own::Join { .. }) && base.is_some() {
                 sites.push(FreeSite {
                     kind: FreeKind::ParamDeliver,
                     slot: p,
@@ -932,7 +1006,10 @@ pub fn displaced_owned_slots(code: &Value, function: &Function, data: &Data) -> 
     Ownership::new(data)
         .reassign_sites_of(code, function)
         .into_iter()
-        .filter(|s| s.prior == Own::Owned && matches!(s.rhs, Own::Borrowed | Own::Join))
+        .filter(|s| {
+            matches!(s.prior, Own::Owned)
+                && matches!(s.rhs, Own::Borrowed { .. } | Own::Join { .. })
+        })
         .map(|s| s.var)
         .collect()
 }
@@ -943,6 +1020,46 @@ pub fn displaced_owned_slots(code: &Value, function: &Function, data: &Data) -> 
 #[must_use]
 pub fn free_sites(data: &Data, d_nr: u32) -> Vec<FreeSite> {
     Ownership::new(data).free_sites(d_nr)
+}
+
+/// THE own-vs-borrow oracle: the ownership of `value` as produced in function
+/// `d_nr`, with the borrow `base` resolved (interprocedurally for a call — the
+/// callee's borrowed param mapped to the caller's argument). This is the ONE fact
+/// every own-vs-borrow chokepoint READS instead of re-deriving — the unification
+/// entry point (the OWNERSHIP_MODEL north star).
+#[must_use]
+pub fn ownership_of(data: &Data, d_nr: u32, value: &Value) -> Own {
+    let def = data.def(d_nr);
+    let mut own = Ownership::new(data);
+    let mut defs = Defs::default();
+    collect_defs(&def.code, own.op_database, &mut defs);
+    own.classify(value, &def.variables, &defs)
+}
+
+/// The bare verdict name (no base) — for the free-site dump's `class=` field.
+fn own_kind(own: Own) -> &'static str {
+    match own {
+        Own::Owned => "Owned",
+        Own::Borrowed { .. } => "Borrowed",
+        Own::Join { .. } => "Join",
+    }
+}
+
+/// A readable `Owned` / `Borrowed(base=<name>)` / `Join(base=<name>)`, resolving the
+/// base var to its name in `func`'s space (`?` when unresolved).
+fn fmt_own(own: Own, func: &Function) -> String {
+    let base = |b: u16| {
+        if b == u16::MAX {
+            "?".to_string()
+        } else {
+            func.name(b).to_string()
+        }
+    };
+    match own {
+        Own::Owned => "Owned".to_string(),
+        Own::Borrowed { base: b } => format!("Borrowed(base={})", base(b)),
+        Own::Join { base: b } => format!("Join(base={})", base(b)),
+    }
 }
 
 /// Print every function's verdicts when `LOFT_MATERIALIZE_DUMP` is set. Called from
@@ -963,28 +1080,35 @@ pub fn dump_all(data: &Data) {
                 def.name, r.var_nr, r.var_name, r.source, r.verdict, r.reason
             );
         }
-        // The Stage-1 ownership fact (inert): the return class + the owned-slot
-        // reassignments. The over-free leak shape is a `prior=Owned rhs=Join` row.
+        // The ownership fact (inert): the return class + the owned-slot
+        // reassignments, each with its borrow base. The over-free leak shape is a
+        // `prior=Owned rhs=Join(...)` row.
+        let fvars = &def.variables;
         eprintln!(
-            "OWN fn={} return={:?}",
+            "OWN fn={} return={}",
             def.name,
-            own.return_ownership(d_nr)
+            fmt_own(own.return_ownership(d_nr), fvars)
         );
         for s in own.reassign_sites(d_nr) {
             eprintln!(
-                "OWN fn={} reassign v={}({}) prior={:?} rhs={:?}",
-                def.name, s.var, s.var_name, s.prior, s.rhs
+                "OWN fn={} reassign v={}({}) prior={} rhs={}",
+                def.name,
+                s.var,
+                s.var_name,
+                fmt_own(s.prior, fvars),
+                fmt_own(s.rhs, fvars)
             );
         }
-        // The Stage-1.5 free SITES (Gap A) + borrow base (Gap B), still inert.
+        // The free SITES (Gap A) + borrow base (Gap B), now interprocedurally
+        // resolved (a call source's base is the CALLER's argument), still inert.
         for s in own.free_sites(d_nr) {
             eprintln!(
-                "OWN fn={} free kind={:?} slot={}({}) class={:?} base={}",
+                "OWN fn={} free kind={:?} slot={}({}) class={} base={}",
                 def.name,
                 s.kind,
                 s.slot,
                 s.slot_name,
-                s.class,
+                own_kind(s.class),
                 s.base_name.as_deref().unwrap_or("-")
             );
         }

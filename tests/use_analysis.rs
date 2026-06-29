@@ -328,13 +328,18 @@ fn deliver(e: Cell) -> vector<E> { match e { Filled { items } => { items }, _ =>
 struct Box { items: vector<integer> }
 fn getf(b: Box) -> vector<integer> { b.items }
 fn whole(v: vector<integer>) -> vector<integer> { v }
+// a nested-field view roots its base through the projection chain to `o`.
+struct Inner { rows: vector<E> }
+struct Outer { inner: Inner }
+fn nested(o: Outer) -> vector<E> { o.inner.rows }
 
 fn main() {
   t: vector<M> = []; for k in 0..3 { t += [M{hp:k, name:"m"}]; }
   a = pick(t, 0); b = pick_cond(t, 1); c = pick_uncond(t, 0); cc = collect(t);
   cell = Filled { items: [] }; d = deliver(cell);
   bx = Box{ items: [1, 2, 3] }; r = getf(bx); w = whole([4, 5]);
-  print("{a.hp} {b.hp} {c.hp} {len(cc)} {len(d)} {len(r)} {len(w)}\n");
+  oo = Outer{ inner: Inner{ rows: [] } }; nn = nested(oo);
+  print("{a.hp} {b.hp} {c.hp} {len(cc)} {len(d)} {len(r)} {len(w)} {len(nn)}\n");
 }
 "#;
 
@@ -379,9 +384,10 @@ fn ownership_surfaces_free_sites() {
     let stderr = dump(OWN_SRC);
 
     // elem_accumulate: `out += [pick(t,i)]` source-frees pick's JOIN return. The
-    // source is the inline `pick(…)` call (not a plain var) → base is absent, so
-    // the Stage-3 materialise deep-copies the whole returned value.
-    assert_free_site(&stderr, "collect", "AppendSource", "Join", "-");
+    // source is the inline `pick(…)` call; the unification oracle resolves its base
+    // INTERPROCEDURALLY to the CALLER's argument `t` (pick's return borrows param `t`)
+    // — exactly the witness the Stage-3 runtime guard needs.
+    assert_free_site(&stderr, "collect", "AppendSource", "Join", "t");
 
     // match_return: the retbuf `_mv_items_1` is reassigned to a BORROWED enum-field
     // view (`OpGetField(e,…)`) → freeing the buffer over-frees `e`'s field. The
@@ -394,6 +400,57 @@ fn ownership_surfaces_free_sites() {
     // local_source's bug is the reassign, not an append/deliver: its pool-build
     // append lowers WITHOUT the 0x8000 source-free bit, so no AppendSource site.
     assert_no_free_site(&stderr, "pick_cond");
+}
+
+/// Assert the FULL ownership of a function's return, base included
+/// (`OWN fn=n_<func> return=<Owned|Borrowed(base=…)|Join(base=…)>`).
+fn assert_return_own(stderr: &str, func: &str, want: &str) {
+    let line = stderr
+        .lines()
+        .find(|l| l.starts_with(&format!("OWN fn=n_{func} return=")))
+        .unwrap_or_else(|| panic!("no OWN return line for {func}; dump:\n{stderr}"));
+    assert!(
+        line.ends_with(&format!("return={want}")),
+        "{func} return: expected {want}, got: {line}"
+    );
+}
+
+/// The unification oracle's BORROW BASE — the witness the Stage-3 runtime guard
+/// needs — compared against hand-computed ground truth across the shapes, including
+/// the INTERPROCEDURAL call→arg translation (the new piece) and the documented
+/// retbuf-delivery approximation. This is the fact every own-vs-borrow site will
+/// read; the test validates it in isolation before any chokepoint consumes it.
+#[test]
+fn ownership_resolves_the_borrow_base() {
+    let stderr = dump(OWN_SRC);
+
+    // direct projection / `??` join roots its base to the borrowed PARAM.
+    assert_return_own(&stderr, "pick", "Join(base=t)"); // t[i] ?? dflt()
+    assert_return_own(&stderr, "deliver", "Join(base=e)"); // match arm of e
+    assert_return_own(&stderr, "nested", "Borrowed(base=o)"); // o.inner.rows — chain → o
+
+    // INTERPROCEDURAL: `out += [pick(t,i)]`'s source is the `pick` CALL; the oracle
+    // maps pick's borrowed param `t` to collect's argument `t`. (Also asserted as a
+    // free site above — pinned here as the return/base contract.)
+    assert_free_site(&stderr, "collect", "AppendSource", "Join", "t");
+
+    // the displaced-owned reassign's borrow arm roots to the local `pool`.
+    assert_reassign(&stderr, "pick_cond", "chosen", "Owned", "Join"); // rhs base = pool
+    let cond_line = stderr
+        .lines()
+        .find(|l| l.contains("fn=n_pick_cond reassign") && l.contains("(chosen)"))
+        .unwrap();
+    assert!(
+        cond_line.ends_with("rhs=Join(base=pool)"),
+        "pick_cond chosen rhs base: {cond_line}"
+    );
+
+    // KNOWN APPROXIMATION (retbuf delivery): a whole-field / whole-arg return is
+    // delivered through `__retbuf`, whose fill is not a tracked Set — so the base
+    // resolves to `__retbuf`, not the true source `b`/`v`. Harmless: these are clean
+    // field-return sites, never an over-free. Pinned so a future fix is a visible diff.
+    assert_return_own(&stderr, "getf", "Borrowed(base=__retbuf)");
+    assert_return_own(&stderr, "whole", "Borrowed(base=__retbuf)");
 }
 
 // ── @PLN85 Stage-3 site 1: the `local_source` compiler wiring (LOFT_JOIN_OWN) ───

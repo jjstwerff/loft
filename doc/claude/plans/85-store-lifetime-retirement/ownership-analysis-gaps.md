@@ -113,7 +113,37 @@ reported site carries a usable materialise base. **Residual (Gap C, deferred):**
 still reports `ParamDeliver` (same projection shape) though it runs clean — materialising it is safe
 (a redundant copy); Stage 3 may gate on a record-element type if it matters.
 
-## Next step
+## The unification — one oracle every site reads (in progress)
+
+The per-site approach hit a wall at `elem_accumulate`: my codegen gate grew to a
+**10-condition thicket** — itself the red flag `STABILITY_METHOD.md` warns about (a fact
+re-derived through a conjunction of proxies). And the validation showed native's *own* inline
+guard re-derives the same decision and gets the owned arm **wrong** (it materialises it →
+`462-elem-accumulate-owned-branch-CLEAN` leaks on native). So both backends carry a wrong
+per-site re-derivation; a third copy — however correct — is the wrong structure.
+
+The fix is the OWNERSHIP_MODEL collapse: **one ownership oracle** every own-vs-borrow site
+*reads* instead of re-deriving (the study's "single unification refactor"). The carried fact is
+`Own { Owned | Borrowed{base} | Join{base} }` — the `base` is the var the value aliases, the
+witness the `Join` runtime guard needs.
+
+**Step 1 — DONE (inert):** `use_analysis::ownership_of` (the consolidation of Stage 1 `classify`
++ Stage 1.5 `borrow_base`) now folds the `base` into `Own` and resolves it
+**interprocedurally** — a call's borrowed-view return maps the callee's borrowed param to the
+CALLER's argument (`collect`'s `out += [pick(t,i)]` source resolves to base `t`, the witness).
+Validated by `ownership_resolves_the_borrow_base` against hand-computed ground truth across the
+shapes (`pick→Join(base=t)`, `deliver→Join(base=e)`, `nested→Borrowed(base=o)`, the `pick_cond`
+reassign borrow arm → `pool`). Suite byte-identical (inert).
+- KNOWN APPROXIMATION (pinned in the test): a whole-field / whole-arg return delivered through
+  `__retbuf` resolves its base to `__retbuf`, not the true source (`getf`/`whole`). Harmless —
+  clean field-return sites, never an over-free — but a precision gap a later fix should close.
+
+**Next:** collapse the chokepoints onto the oracle one at a time (Mode-B byte-identical where the
+verdict matches the old re-derivation; matrix-correct where it differs — the `Join` sites both
+backends get wrong), replacing the interp gates AND native's inline guard with one
+`match ownership_of(value) { … }`.
+
+## Next step (per-site — SUPERSEDED by the unification above for sites 2/3)
 
 1. **`local_source`** — ✅ DONE (commit `a639433d`, behind `LOFT_JOIN_OWN`). Root cause (nailed by an
    FRD runtime trace): `chosen = dflt()` move-adopts the fresh store into `chosen`; the caller's
