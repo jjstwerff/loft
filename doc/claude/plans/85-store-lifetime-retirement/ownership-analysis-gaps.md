@@ -184,13 +184,23 @@ Likely interp-only (native already frees correctly).
 3. The borrowed return makes `main`'s free analysis conservatively SKIP freeing `cell`+`inner` (to
    keep the alias valid) → they leak on interp; native frees them anyway.
 
-**THE FIX POINT (precise):** `ref_return`'s promotion loop — when a promoted local `ls[i]` has a
-NON-EMPTY dep (a borrowed view, `self.vars.tp(v).depend()` non-empty), it must NOT NRVO-rename it onto
-the retbuf; instead MATERIALISE (route it through the existing non-promoted copy path, like the
-`reassign_count ≥ 2` skip already does, so the `__vdb` + return-copy lowering copies it into the
-retbuf → owned return → `cell`/`inner` freed normally). Gated `LOFT_JOIN_OWN`. The earlier
-`materialize_vector_arms_into` attempt missed because the alias is promoted by ref_return, not
-delivered by that function. This is intricate (NRVO machinery) but the fix point is now nailed.
+**THE DISCRIMINATOR (confirmed, surgical):** the promoted candidate's deps. `field_return`/
+`nested_field` promote a PARAMETER (`b`/`o`) with EMPTY deps (the clean borrow-of-param return);
+`match_return` promotes a LOCAL (`_mv_items_1`) with NON-EMPTY deps `[e]` (the problematic alias). So
+"promoted candidate `tp(v).depend()` non-empty" separates them exactly.
+
+**SKIP APPROACH RULED OUT (attempt 2, reverted).** Skipping the NRVO-rename for a non-empty-dep
+candidate (`continue` in the promotion loop, like the `reassign_count ≥ 2` skip) does NOT route it
+through a copy path — it just un-promotes: `deliver` then returns the borrow `_mv_items_1` (`["e"]`)
+with `__retbuf` left UNFILLED → SIGSEGV (matrix `none`), worse than the leak. The reason:
+`vec_match_candidate`/`materialize_vector_arms_into` (the copy delivery, `control.rs:731`) is FALSE
+for `deliver` (it took the ref_return path, not the materialise path), so un-promoting leaves no one
+to fill `__retbuf`. `match_return` therefore needs an **EXPLICIT materialise** — copy `_mv_items_1`'s
+elements into `__retbuf` at the promotion (the fresh-buffer + `OpAppendVector` idiom) and yield
+`__retbuf` — OR a fix to make `vec_match_candidate` fire for `deliver` so the existing materialise
+delivery runs. This is the hardest site: TWO competing return-delivery paths (NRVO promotion vs
+vector-arm materialise), and `deliver` falls into the one that can't materialise. Sites 1+2 stay
+fixed on both backends; `match_return` is left at baseline (its broken attempts fully reverted).
 
 Then flip default-on once all three sites are green on both backends + the full matrix + POISON. Then
 fold the remaining own-vs-borrow re-derivations (the return-delivery thicket) onto the oracle as cleanup.
