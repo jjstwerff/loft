@@ -46,8 +46,19 @@ crash oracle is **insufficient**; the cross-backend value diff is the load-beari
 
 ## The instrument (what to build)
 
-A generative harness that emits **random valid loft programs** over the ownership-composition
-space, runs each through every oracle, and turns any finding into a minimized regression.
+**What already EXISTS — reuse, do not rebuild (inventory 2026-06-29).** The cross-backend ORACLE
+is built: `tests/differential_oracle.rs` (@PLN89) — `divergences(interp, native)` checks normalised
+stdout + exit-code + leak, *with its own positive-control test*; the leak signal is the identical
+string `"stores not freed"` on both backends (`LOFT_NATIVE_LEAK_CHECK=1` for native). A `fuzz/`
+cargo-fuzz crate exists (libfuzzer + `arbitrary`) with *store-level* targets. **The genuine gaps are
+three:** (1) a **program-level generator** (@PLN53 F1/F2, unbuilt); (2) the **`LOFT_POISON`** arena
+poison-on-free detector (@PLN54 S3, unbuilt) — the *only* thing that catches the store double-free/UAF
+class, because loft's arena reuse defeats stock ASan/Miri/Valgrind; (3) **native-backend ASan**
+(@PLN54 S6, unbuilt). So this gate = build the generator (1) + add the arena UAF detector (2), feeding
+the existing oracle.
+
+A generative harness that emits **valid loft programs** over the ownership-composition space, runs
+each through the oracle, and turns any finding into a minimized regression.
 
 - **Generator grammar — seed from the existing corpus.** The `probes/` directory already
   encodes the known dangerous shapes (matrix A–F, borrowed-view, adopt-free, 462, coalesce);
@@ -94,13 +105,40 @@ being settled.
 3. Then the class is **closed by construction** — the wide-release gate-1 definition of
    *stabilized*. Until (1)+(2) hold, the memory model is *quiet*, not *sealed*.
 
-## Status + next action
+## Status — first increment BUILT (2026-06-29): `fuzz/ownership_fuzz.py`
 
-- **Status:** SLOT OPEN (design). Nothing built yet.
-- **Next:** (a) derive the generator grammar from `probes/` + the cluster invariants; (b) stand
-  up the cross-backend + leak + sanitizer oracle; (c) wire onto @PLN53/@PLN54; (d) start on the
-  vectors-settled subset, minimize the first counterexample to a `85-*.loft` regression.
+A first generator + runner: [fuzz/ownership_fuzz.py](fuzz/ownership_fuzz.py). Two-stage per the perf
+split (native compiles via rustc — too slow for a tight loop): **interp fast-loop** with leak check,
+**native replay** on every flagged program (cross-backend divergence + native leak). Mutates the
+**churn axis** — scales every `0..N` loop/pressure bound — because the over-free class only corrupts
+once a freed slot is REUSED. Violation modes: `CRASH` (signal only — a clean `exit=1` that *agrees*
+across backends is not a bug, only a `DIVERGENCE` if they disagree), `LEAK`, `DIVERGENCE`.
+
+**Positive control proven (engineering-rigor: the harness can fail).** `--self-test` requires
+`probes/over-free-sweep/P14-enum-field-vec.loft` to be flagged — interp **SIGSEGV (signal 11)**, native
+passes. It is. A harness silent on P14 would be vacuous.
+
+**Calibration overturned the dated sweep table** — verify against observation, not a stale doc:
+
+| Shape | over-free-sweep/README verdict | ACTUAL on current build (harness) |
+|---|---|---|
+| **P14** (enum-field vector via match arm + churn) | 🔴 open, interp-only | **LIVE** — interp SIGSEGV, native ok (CRASH + DIVERGENCE) |
+| **P10** (accumulate borrowed-view results) | "PASS" | **LIVE** — interp `len(t)=7` (corrupt, own assert fails), native ok (DIVERGENCE) |
+| **P3** (mon_one-cond native leak) | 🟠 leak open | **FIXED** — clean both backends, no leak |
+| **P9** (struct-field vector borrow + churn) | 🔴 open (interp r=0, native crash) | **FIXED** — clean both backends |
+| adopt-re-return NRVO leak (leak-462) | leak open | **FIXED** — no `stores not freed` either backend |
+
+So the live positive controls are **P14 (crash) + P10 (value divergence)**; the leak arm is validated
+by the existing oracle's own positive-control test. Baseline run: **2/28 over-free-sweep probes
+flagged** (P10, P14), churn-mutation reproduces P14 across all variants.
+
+**Next, in order:**
+1. **Correct the stale catalog** — over-free-sweep/README P10 verdict PASS → divergence; mark P3/P9/leak fixed.
+2. **Widen the generator** past the churn axis to the full `delivery × source × value` grammar (@PLN53 F2: `arbitrary`-derived AST → pretty-print), graduating into a `fuzz/fuzz_targets/program_ownership.rs` target so it runs in-process (fast) under the existing cargo-fuzz crate.
+3. **Build `LOFT_POISON`** (@PLN54 S3) — the arena UAF/double-free detector stock sanitizers miss; wire it into the native replay.
+4. **Minimize** P14 + P10 to `tests/scripts/85-*.loft` regressions; wire the harness into the differential-oracle corpus as a standing job (the done-criteria budget).
 - **Method gate:** every M+ step runs the `design-protocol` skill; this doc IS the hypothesis.
+- **Blocked-by reminder:** widen the value axis only as @PLN25 settles it (above).
 
 ## See also
 
