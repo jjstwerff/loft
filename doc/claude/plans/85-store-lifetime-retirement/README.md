@@ -8,6 +8,13 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 Plan id: [@PLN85](https://github.com/loft-lang/plans/issues/85) · investigation-style
 (reading order: Status → Probes → Cluster docs → Roadmap).
 
+> **▶ WIDE-RELEASE GATE 1 — the fuzz-proof:** [fuzz-proof-gate.md](fuzz-proof-gate.md).
+> The "CLOSED" below is the *investigation* + per-cluster fixes — each known shape fixed and
+> guarded. The remaining gate before loft goes to many people is proving the **class closed
+> *by construction*** (a standing fuzz/sanitizer instrument over the ownership invariant, not
+> anecdotal silence). That slot is BUILD-BLOCKED BY @PLN25 (the value model defines what
+> ownership is) — see [STABILITY_ROADMAP.md § the wide-release bar](../../STABILITY_ROADMAP.md).
+
 > **▶▶ NEXT SESSION START HERE (2026-06-26):** [NEXT-SESSION-leak-fix.md](NEXT-SESSION-leak-fix.md).
 > #462 CRASH is FIXED (`0ccc756c`, `resize` in-place-grow zeroing); the #462 LEAK is root-caused
 > (the **adopt-and-re-return NRVO chain** — `fn m(){ t=base(); t }` leaks 1 store/call, both
