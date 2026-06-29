@@ -221,6 +221,26 @@ So the fix is now spec'd precisely: **materialise exactly the `ParamDeliver` arm
 borrowed field into the retbuf), leaving fresh-build arms (`deliver3`) untouched. The analysis side
 is verified; the remaining work is purely the emit (the explicit copy at the retbuf promotion).
 
+**EMIT (in progress — NATIVE complete, INTERP incomplete; gated `LOFT_JOIN_OWN`, off-default →
+suite byte-identical).** `ref_return` (`control.rs`, before the promotion) now materialises a
+borrowed-view candidate: a new `materialise_borrowed_return_local` rewrites the alias Set `v =
+OpGetField(base,…)` (found anywhere in the body) into `OpAppendVector(v, OpGetField(base,…))`, strips
+`v`'s deps, and clears its `skip_free`, so `v` promotes as an OWNED buffer. Two false-positive guards
+were essential and are the lesson: (1) restrict to `self.vars.skip_free(v)` — only match-arm field
+bindings, NOT stdlib `split`/`lines`/`join`'s `result` (which made `result = OpGetField(__vdb,0)`
+the buffer idiom; materialising it broke shared native codegen — `var_result` undefined); (2)
+`base ∈ v.deps` — the borrowed subject, again excluding the `__vdb` buffer. With these, NATIVE is
+fully fixed (462 + matrix `none`/`stress`, both arms, no leak/crash) and the inert gate holds.
+**INTERP still crashes under churn** — diagnosed exactly by diffing against a working owned-vector
+return (`copyv`: `out: vector = []; out += src; out`): the correct idiom is `OpDatabase(buf) ;
+out = OpGetField(buf,0) ; OpAppendVector(out, src, 64) ; OpReplaceVector(buf, out, 64) ; return buf`
+— the `OpReplaceVector` writes the GROWN vector back to a stable store, and the append tp is `64`
+(`ref(E)`). My raw `OpAppendVector(_mv_items_1, …, 65)` lacks the `__vdb`/`OpReplaceVector` wrapper
+(so after the grow-realloc the caller's retbuf ref is stale → a later allocation reuses it) and uses
+tp `65` (`E`, a `vector<E>`-source-into-`vector<ref(E)>`-dst mismatch). Native tolerates both; interp
+needs the full idiom. NEXT: emit the full owned-vector materialise (route through the same machinery
+`out = []` uses, or hand-emit `OpDatabase`+`OpReplaceVector` with tp `64`) so interp matches native.
+
 Then flip default-on once all three sites are green on both backends + the full matrix + POISON. Then
 fold the remaining own-vs-borrow re-derivations (the return-delivery thicket) onto the oracle as cleanup.
 

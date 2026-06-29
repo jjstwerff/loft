@@ -4962,6 +4962,91 @@ impl Parser {
         Some((a_idx as u16, v))
     }
 
+    /// @PLN85 — materialise a borrowed-view return candidate `v` (`v = OpGetField(
+    /// base, …)`, `base != v`) into its OWN store: rewrite that alias Set, wherever it
+    /// sits in `body`, to `clear(v) + append(v, OpGetField(base, …))` so `v` owns a
+    /// COPY of the field. Returns `true` if the alias Set was found and rewritten.
+    fn materialise_borrowed_return_local(
+        &mut self,
+        v: u16,
+        elm: &Type,
+        body: &mut [Value],
+    ) -> bool {
+        // The base the alias borrows (`v = OpGetField(base, …)`) MUST be a var `v`
+        // genuinely depends on — the match subject `e`. This excludes the vector-buffer
+        // idiom `result = OpGetField(__vdb, 0)` (a FRESH `[]`, whose backing `__vdb` is
+        // not a borrow-dep): materialising that would corrupt every `x: vector = []` and
+        // break the shared stdlib (e.g. `join`) on native.
+        let deps: Vec<u16> = self.vars.tp(v).depend().clone();
+        let get_field = self.data.def_nr("OpGetField");
+        let Some(field_read) = body
+            .iter()
+            .find_map(|o| Self::find_field_alias(o, v, get_field, &deps))
+        else {
+            return false;
+        };
+        let rec_tp = self.append_elem_tp(elm);
+        // The retbuf is already emptied by the fn prologue's `OpClearVector(v)`; a
+        // second clear here double-frees its backing store on the interpreter. Append
+        // the field's elements straight into the (empty) retbuf.
+        let append = self.cl(
+            "OpAppendVector",
+            &[Value::Var(v), field_read, Value::Int(rec_tp)],
+        );
+        let materialise = Value::Insert(vec![append]);
+        body.iter_mut()
+            .any(|o| Self::replace_field_alias(o, v, get_field, &deps, &materialise))
+    }
+
+    /// The field-read `Set(v, OpGetField(base, …))` for `v` where `base ∈ deps` (a var
+    /// `v` borrows — the match subject), anywhere in `node`: the borrowed-view alias to
+    /// materialise. The `base ∈ deps` guard excludes the fresh-`[]` `__vdb` buffer idiom.
+    fn find_field_alias(node: &Value, v: u16, get_field: u32, deps: &[u16]) -> Option<Value> {
+        if let Value::Set(sv, sval) = node.unspan()
+            && *sv == v
+            && let Value::Call(d, args) = sval.unspan()
+            && *d == get_field
+            && matches!(args.first().map(Value::unspan), Some(Value::Var(av)) if deps.contains(av))
+        {
+            return Some(sval.unspan().clone());
+        }
+        let mut found = None;
+        node.unspan().for_each_child(&mut |c| {
+            if found.is_none() {
+                found = Self::find_field_alias(c, v, get_field, deps);
+            }
+        });
+        found
+    }
+
+    /// Replace the borrowed-view alias `Set(v, OpGetField(base, …))` (`base ∈ deps`) in
+    /// `node` with `repl`. Returns `true` on the first replacement.
+    fn replace_field_alias(
+        node: &mut Value,
+        v: u16,
+        get_field: u32,
+        deps: &[u16],
+        repl: &Value,
+    ) -> bool {
+        let is_alias = matches!(node.unspan(), Value::Set(sv, sval)
+            if *sv == v
+               && matches!(sval.unspan(), Value::Call(d, args)
+                   if *d == get_field
+                      && matches!(args.first().map(Value::unspan),
+                                   Some(Value::Var(av)) if deps.contains(av))));
+        if is_alias {
+            *node.unspan_mut() = repl.clone();
+            return true;
+        }
+        let mut done = false;
+        node.unspan_mut().for_each_child_mut(&mut |c| {
+            if !done {
+                done = Self::replace_field_alias(c, v, get_field, deps, repl);
+            }
+        });
+        done
+    }
+
     pub(crate) fn ref_return(&mut self, ls: &[u16], body: &mut [Value], site: RetSite) {
         // Plan-57: a returned local that gets a fresh vector literal more than once
         // cannot be NRVO-promoted to the caller's buffer — each `z=[lit]` builds INTO
@@ -5037,6 +5122,35 @@ impl Parser {
                 "[rr] fn={fn_name} pass1={} ls={ls:?} ls_tps={ls_named:?} ret={ret:?}",
                 self.first_pass
             );
+        }
+        // @PLN85 match_return (LOFT_JOIN_OWN): MATERIALISE a borrowed-view candidate
+        // before promotion. A match-field binding `_mv_items_1 = OpGetField(e,…)`
+        // (deps `[e]`) NRVO-promoted onto the retbuf would make the return a BORROW of
+        // `e` — the caller then conservatively skips freeing `e`'s owner → leak. Rewrite
+        // its alias Set to a COPY into the retbuf (clear + append the field's elements)
+        // and strip its deps, so it promotes below as an OWNED buffer. A PARAMETER
+        // candidate (`field_return`'s `b`) or a FRESH-BUILD local (`deliver3`'s `o`) has
+        // EMPTY deps and is untouched — exactly the `ParamDeliver`-free-site discriminator
+        // pinned in `ownership_pins_match_return_resisting_cases`.
+        if std::env::var_os("LOFT_JOIN_OWN").is_some() {
+            for &v in ls {
+                if v < self.vars.count()
+                    && self.vars.skip_free(v)
+                    && let Type::Vector(elm, _) = self.vars.tp(v).clone()
+                    && !self.vars.tp(v).depend().is_empty()
+                {
+                    let elm_ty = (*elm).clone();
+                    if self.materialise_borrowed_return_local(v, &elm_ty, body) {
+                        let ds: Vec<u16> = self.vars.tp(v).depend().clone();
+                        for d in ds {
+                            self.vars.make_independent(v, d);
+                        }
+                        // The binding now OWNS a copy: drop the borrowed-view
+                        // `skip_free` so its store is tracked (else interp reuses it).
+                        self.vars.clear_skip_free(v);
+                    }
+                }
+            }
         }
         // B2-runtime / B3 / B7 unification (2026-04-13): struct-enums
         // (Type::Enum with struct-enum discriminator `true`) live as

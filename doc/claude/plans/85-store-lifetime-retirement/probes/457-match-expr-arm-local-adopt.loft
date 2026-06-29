@@ -1,0 +1,46 @@
+// @PLN85 D-own — LIVE BUG (#457 sibling, both backends + baseline). NOT yet fixed.
+//
+// The match/if-EXPRESSION form `out = match { _ => { v = recurse(); v += [..]; v } }`
+// drops the recursion: build(5) returns len 2 (want 5).  Matrix (both backends):
+//   A match-expr `v = adopt(); v += []`  -> BROKEN (len 2)
+//   B if-expr    `v = adopt(); v += []`  -> BROKEN (len 2)   [NOT match-specific]
+//   C match-expr `v = adopt(); v`        -> ok (no += => no materialise)
+//   D match-expr `v = [lit]; v += []`    -> ok (literal first-set)
+// Trigger = arm-local + first-set is an adopting CALL + a following `+=`.
+//
+// ROOT (traced): an arm-local `v = recurse(..)` ADOPTS the call store but leaves
+// v's dep EMPTY (the `["??"]` marker is stripped by change_var; a pre-declared
+// `v: vector = []` instead keeps its own __vdb).  Then `v += [n]` -> PASS-1
+// `insert_new` (gated by `vector_needs_db`, vectors.rs:2007) sees the empty dep,
+// MINTS a fresh __vdb, sets v's dep to it, and emits `OpDatabase(__vdb); v =
+// field(__vdb)` AFTER the adopt -> re-inits v, DROPPING the recursion (the second
+// arm reuses the dep so it keeps it -> the asymmetry).  NOTE: the `+=` PASS-2
+// `vector_db` (build_vector_list) is downstream of this; the real producer is the
+// pass-1 `insert_new`.
+//
+// FIX ATTEMPT (reverted): a transient per-function marker "v adopted a vector call"
+// (set at the assignment, on the var table) gating `vector_needs_db`/`insert_new`
+// to skip the mint -> v appends to the adopted store IN PLACE.  This FIXED THE
+// VALUE (matrix + this probe correct, both backends).  BUT it exposed the SECOND
+// layer — the arm-local ADOPT/FREE: with no __vdb, v owns the adopt store and
+// out's original __vdb is orphaned, and they are not freed -> a per-recursion
+// LEAK that regressed 5 suite tests (p310/p171/moros/loft_suite/native_scripts).
+//
+// So the complete fix is TWO layers, like PR #459 did for the TAIL but for the
+// match-ARM: (1) value — skip the pass-1 mint for the adopter; (2) free — deliver
+// the arm into out's buffer AND free v's adopted store / out's orphaned __vdb
+// (the arm-delivery free).  Both together, matrix + suite + leak both backends.
+fn churn(k: integer) -> integer { z: vector<u8> = [0]; for i in 0..k { z += [1]; } return len(z); }
+fn build(n: integer) -> vector<integer> {
+  out: vector<integer> = [];
+  if n <= 0 { return out; }
+  out = match n % 2 {
+    0 => { v = build(n - 1); v += [n]; v },
+    _ => { v = build(n - 1); v += [n + 100]; v },
+  };
+  return out;
+}
+fn main() {
+  p = build(5); churn(8);
+  println("match-expr build(5): len={len(p)} (want 5) e0={p[0] ?? -1} e4={p[4] ?? -1}");
+}
