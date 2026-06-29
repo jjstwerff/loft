@@ -35,6 +35,69 @@ days, `L` a plan with phases).  Every M+ design round runs
 [DESIGN_PROTOCOL](DESIGN_PROTOCOL.md) (the `design-protocol` skill); every
 fix runs matrix-first (CLAUDE.md § Debugging policy).
 
+## The wide-release bar — what must be true before loft goes to many people
+
+> This roadmap exists to clear **one** thing: the GOALS.md promise of **"a floor that
+> does not betray you"** ([GOALS.md § The deeper aim](GOALS.md)). The H-register and the
+> live store-lifetime stream below both serve it. This section is the explicit gate —
+> the bar loft must clear before it is handed to a lot of people (and to AI writing
+> loft). In priority order; **gate 1 is the definition of "stabilized," not one item
+> among five.**
+
+1. **Seal the memory model — the non-negotiable gate.** The store-lifetime /
+   return-bind-ownership class (loft's stated #1 weakness, REOPENED 2026-06-21) must be
+   **closed, not merely quiet**. At one dogfooding agent a residual UAF/over-free
+   surfaces occasionally; at many users + AI hitting every composition it surfaces
+   constantly — and a substrate that *sometimes* corrupts invalidates the whole pitch
+   (the language carries correctness so the maker never does — DESIGN_DECISIONS C79/C80).
+   "Closed" = pin the ONE ownership invariant at the `deps` chokepoint (Cluster C / H10,
+   not symptom-by-symptom), THEN prove the class gone *by construction* — graduate the
+   boundary matrices into the fuzz/sanitizer corpora (@PLN53/@PLN54, queue step 9) so the
+   silence is earned, not anecdotal. Live work:
+   [§ Red-flag remediation](#red-flag-remediation--the-live-store-lifetime-stream-2026-06-21-)
+   + @PLN85. **This gate's fuzz-proof IS the definition of stabilized.**
+   **Build-order dependency — gate 1 is blocked by gate 2.** The right ownership invariant
+   cannot be *defined* until the value/null model is settled: ownership flows through the
+   `deps` facts, and what a vector/value *is* (dense vs nullable, how it copies vs borrows)
+   is exactly what @PLN25 decides. The two plans meet at one chokepoint — the dense-default
+   flip is what closed @PLN85's #462 cluster, and Cluster C / #465 is literally the @PLN25
+   copy-vs-borrow `materialization_mode` predicate. So in **build order @PLN85 follows
+   @PLN25**, even though it is the headline gate. (This is why earlier @PLN85 attempts
+   flailed — there wasn't enough of @PLN25 settled to know what to build.)
+
+2. **One coherent null model — and the substrate gate 1 is built on.** Finish @PLN25
+   (nullable sequences / dense-default): vectors are coherent; scalars + DN3 + the `not null`
+   retirement remain. **Dual value:** (a) user-facing — a half-flipped model is a visible
+   incoherence ("null works for `vector<int>` but not `vector<Item>`"), exactly what a
+   newcomer or AI trips over; (b) load-bearing for gate 1 — this model defines the value
+   shapes and `deps` ownership facts the memory-model fix reads, so settling it is what makes
+   gate 1's invariant *knowable*. Ship one model before wide exposure.
+   Handoff: [plans/25-nullable-sequences/RESUME.md](plans/25-nullable-sequences/RESUME.md).
+
+3. **First-contact developer experience.** GOALS' acceptance test is *"done = picking it
+   up is fun,"* and first contact is dominated by what happens when the user is **wrong**.
+   Error messages (@PLN28) + developer experience (@PLN36) are the highest-leverage
+   newcomer/AI investment.
+
+4. **Durability.** The "trust and forget your data" half — opt-in mmap so a crash or edit
+   never loses the store (@PLN43). Skippable for throwaway prototypes, load-bearing for
+   real projects.
+
+5. **A stability contract for scale.** A stated semver / compatibility promise, a
+   **public** bug-intake path (the fix-not-file discipline is internal-only and doesn't
+   reach strangers), and a 1.0 line — what is frozen vs still moving. No plan yet; open
+   one when gate 1 is in sight.
+
+**Sequence — gate 2 LEADS gate 1.** Finish enough of @PLN25 to settle the value model and the
+`deps` ownership facts (vectors done; scalars in flight, PR #469), THEN seal the memory model
+(gate 1) on that foundation — you cannot pin the ownership invariant on a moving value model.
+The two co-evolve at the shared `materialization_mode` chokepoint, with @PLN25 leading. Then
+gate 3 → gates 4–5. Performance (the copy-vs-borrow elision, an @PLN25 sub-thread) is "good
+enough for prototyping" — fold in opportunistically, not a blocker. **Readiness today: gate 2
+is well underway and gate 1 is the one hard problem behind it; the distribution / multi-target
+/ test infrastructure is already release-grade** (4 targets parity-gated, suite green, signed
+registry, 0 open tracked bugs).
+
 ## The queue
 
 The bug-level stability work — the F-family sweep, the armed-corpus residuals,
