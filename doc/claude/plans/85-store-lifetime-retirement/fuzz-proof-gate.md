@@ -132,9 +132,29 @@ So the live positive controls are **P14 (crash) + P10 (value divergence)**; the 
 by the existing oracle's own positive-control test. Baseline run: **2/28 over-free-sweep probes
 flagged** (P10, P14), churn-mutation reproduces P14 across all variants.
 
+### Increment 2 — full grammar BUILT (2026-06-29): `fuzz/grammar_gen.py`
+
+Widens past churn to the cross-product **shape (source × delivery) × value × churn**: 6 grounded
+shapes × {struct, scalar} × {none, heavy} = **24 self-checking programs**, each asserting the
+source-length + delivered-length invariant the over-free violates. Generated programs are valid loft
+(the compiler is the validity oracle; agreed-compile-errors drop out). **3/24 flagged — and the
+grammar LOCALIZES the live class precisely:**
+
+| cell | result |
+|---|---|
+| `match_return × struct × heavy` | CRASH(interp **SIGSEGV**) + divergence — the P14 class, regenerated from a clean grammar (not a mutated probe) |
+| `match_return × struct × none` | CRASH(interp **SIGABRT**) + divergence — **new:** the match-arm borrow is unsound even WITHOUT slot-reuse |
+| `elem_accumulate × struct × heavy` | DIVERGENCE (interp assert-fail, native ok) — the P10 class, regenerated |
+| field_return / field_local / field_reassign / if_return (any value) | clean — the **field-view** shapes are FIXED |
+| every `scalar` cell | clean — the class is **record-store-specific**; `vector<integer>` does not hit it |
+
+So the live over-free is precisely **struct-value × {match-arm, element-accumulate} source**. The
+generator reproduced both live classes from a clean grammar and pinned a new no-churn abort variant —
+this is the boundary-matrix the chokepoint fix (Cluster C) must be measured against.
+
 **Next, in order:**
-1. **Correct the stale catalog** — over-free-sweep/README P10 verdict PASS → divergence; mark P3/P9/leak fixed.
-2. **Widen the generator** past the churn axis to the full `delivery × source × value` grammar (@PLN53 F2: `arbitrary`-derived AST → pretty-print), graduating into a `fuzz/fuzz_targets/program_ownership.rs` target so it runs in-process (fast) under the existing cargo-fuzz crate.
+1. **Correct the stale catalog** — over-free-sweep/README P10 verdict PASS → divergence; mark P3/P9/leak fixed. ✅ done.
+2. **Graduate the generator in-process** — port `grammar_gen.py` to a `fuzz/fuzz_targets/program_ownership.rs` cargo-fuzz target (the full grammar is built; this makes it run in-process/fast under libfuzzer coverage-guidance, no rustc-per-program) and add the `value` axis pieces (enum-payload, nested, hash) as @PLN25 settles them.
 3. **Build `LOFT_POISON`** (@PLN54 S3) — the arena UAF/double-free detector stock sanitizers miss; wire it into the native replay.
 4. **Minimize** P14 + P10 to `tests/scripts/85-*.loft` regressions; wire the harness into the differential-oracle corpus as a standing job (the done-criteria budget).
 - **Method gate:** every M+ step runs the `design-protocol` skill; this doc IS the hypothesis.
