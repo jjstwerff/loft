@@ -124,7 +124,27 @@ still reports `ParamDeliver` (same projection shape) though it runs clean — ma
    dep so the OWNED path deep-copies the borrow into its own store + frees it at scope exit (reusing
    the instances-1/2 `make_independent` pattern). Proven both backends; gate + fix tests in
    `tests/use_analysis.rs`.
-2. **Then** `elem_accumulate` (interp `AppendSource` source-free) and `match_return` (interp
-   `ParamDeliver` delivery), each against its `462-*` repro + the matrix + POISON, mirroring the
-   already-correct native behaviour. Both sites are already surfaced by `free_sites`.
-3. Flip default-on once all three + the full matrix are green on both backends and POISON-clean.
+2. **`elem_accumulate`** — DIAGNOSED (the loft-codegen "prove the working bytecode" step is done);
+   implementation pending. **Interp-only** (native already correct). The divergence is the first-bind
+   of a borrowed-view call return (`__lift_1 = pick(t,i)`, `pick -> M { t[i] ?? m_none() }`):
+   - **Native** runtime-guards it (`generation/dispatch.rs::output_set` ~L358): `let _dst = old; let
+     _src = pick(...); if _src.store_nr == MAX || _src.store_nr == _dst.store_nr { adopt _src } else {
+     OpDatabase(_dst); OpCopyRecord(_src→fresh, NO source-free) }` — then the append source-frees the
+     result. The owned arm (`m_none`) ADOPTS (the append's `0x8000` frees it correctly); the borrow
+     arm (`t[i]`) MATERIALISES a copy (the append frees the copy; `t` intact).
+   - **Interp** (`state/codegen.rs` `owned_ref` first-bind ~L1672): (a) gates the deep-copy on a
+     type-shape proxy ("callee has a visible Reference/Enum param") that MISSES `pick`'s Vector-param
+     borrow — study **instance 1**, fixed in native, NOT interp — AND (b) its deep-copy is an
+     UNCONDITIONAL materialise (`OpDatabase` + `OpCopyRefOrNull`) with no adopt branch.
+   - PROVEN (experiment, reverted): merely aligning the gate to `returns_borrowed_view()` fixes the
+     borrow UAF (`CRASH→clean`) but LEAKS the owned arm (`clean→LEAK`) — the static `is_borrowed_view`
+     suppresses the source-free uniformly (right for borrow, wrong for owned). A static gate cannot
+     work — confirming the study's "the source-free is load-bearing for the owned branch". **The fix
+     must mirror native's RUNTIME store-identity guard**, cleanest as a new interp op
+     `OpBindOrCopy(src, pos, tp)` (adopt if `src.store_nr ∈ {MAX, old_v.store_nr}`, else fresh +
+     deep-copy), emitted for a borrowed-view return in place of the unconditional deep-copy, gated
+     `LOFT_JOIN_OWN`. Interp-only (native does it inline). Add via a `default/*.loft` `#rust` template
+     + `make fill`; validate `462-elem-accumulate-{source-free,owned-branch-CLEAN}` + matrix + POISON
+     on both backends.
+3. **Then** `match_return` (interp `ParamDeliver` delivery) — surfaced by `free_sites`.
+4. Flip default-on once all three + the full matrix are green on both backends and POISON-clean.
