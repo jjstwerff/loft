@@ -274,14 +274,28 @@ type-checks (warns) today; under `(N-Div)`/`(N-Arith)`+`(N-Store)` it must be `�
 `b: integer?`. The runtime is right; the **typing + discharge** is the gap. Its blast
 radius (fit-failing results stored into non-null without `??`) is the gating measurement.
 
-### DN4 — `as` to a narrower type doesn't enforce the range (UB)
-`400 as u8` yields **400** — the cast asserts the *type* but leaves an out-of-range value
-in a `u8` slot (undefined behaviour: a `u8` holding 400). Per `(N-Cast)`/`(N-Cast?)` the
+### DN4 — `as` to a narrower type doesn't enforce the range (UB)  ·  IMPLEMENTED behind `LOFT_DN4` (default off); cutover pending
+`400 as u8` yields **400** by default — the cast asserts the *type* but leaves an
+out-of-range value in a `u8` slot (UB: a `u8` holding 400). Per `(N-Cast)`/`(N-Cast?)` the
 two honest forms are: **`as u8` requires a PROVABLE fit** (so `400 as u8` and `b: integer;
 b as u8` are **compile errors** — "use `as u8?`"), and **`as u8?` is the CHECKED cast**
-(`u8?`, value or `null`, never out-of-range). Falsifier: `(400 as u8) == 400` is true
-today; under the rules `400 as u8` does not compile and `400 as u8?` is `null`. The
-integer-range sibling of DN1–DN3's null work — same "no claim without enforcement."
+(value or `null`, never out-of-range). Falsifier: `(400 as u8) == 400` is true by default;
+with `LOFT_DN4` set, `400 as u8` does not compile and `400 as u8?` is `null`.
+
+**Status (2026-06-28):** the rule is implemented behind the `LOFT_DN4` flag and validated
+on both backends (`tests/dn4_cast.rs`; the value matrix, the compile-error cases, and the
+flag-off-is-inert guard). `as τ?` is a pure parse-time range-guard desugar (`OpLeInt` + `if`
++ `OpConvIntFromNull`) — **no new runtime op and no runtime error**; the result types as a
+full nullable integer (the null sentinel `i64::MIN` needs full width — typing the guard as
+the narrow `τ` made native `i64::MIN as u8 == 0` and lost the null). One item now gates the
+**default-on cutover**: **migrate the remaining in-tree sites** to `as τ?` (measured at
+stdlib 0, crawler 0, tests/scripts 30/9 *before* range-tracking — now fewer, since masked
+casts are exempt). Gate (1) — **range-tracking** so a masked value is provably-fit — is
+**DONE for `&`/`%`** (always-on; `x & 255` types `integer(0,255)`, `(non-neg) % c` types
+`[0,|c|-1]`, both sound + suite-green): `(x & 255) as u8` no longer needs `as u8?`. The
+`(N-Arith)` range arithmetic for `+`/`-`/`*` (overflow → `Integer?`) remains, and lands
+with DN3. Deviation **shrinks but stays open** until cutover. The integer-range sibling of DN1–DN3's
+null work — same "no claim without enforcement."
 
 ### D2 — CLOSED by reconciliation (2026-06-24): `integer` = i64 is a *user-visible* contract met by a *compact* internal encoding
 

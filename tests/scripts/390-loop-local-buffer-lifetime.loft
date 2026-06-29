@@ -9,21 +9,21 @@
 // #405 is fixed.  These are the adjacent SOUND shapes a fix must keep passing —
 // the coverage gap that let #405 ship on a fully-green suite.
 
-fn enc(n: integer) -> vector<u8> { b: vector<u8> = []; b += [n as u8]; return b; }
+fn enc(n: integer) -> vector<u8> { b: vector<u8> = []; b += [(n & 255) as u8]; return b; }
 
 fn main() {
   // reused buffer (allocated ONCE outside the loop, grown inside) — must NOT be
   // confined/freed per iteration
   {
     acc: vector<u8> = [];
-    for i in 0..4 { acc += [i as u8]; }
+    for i in 0..4 { acc += [(i & 255) as u8]; }
     assert(len(acc) == 4, "reused buffer grows across iterations");
     assert(acc[3] == 3, "reused buffer last element");
   }
   // loop-local aliased by a variable that OUTLIVES the loop — must not free early
   {
     out: vector<u8> = [9 as u8];
-    for i in 0..3 { tmp: vector<u8> = []; tmp += [i as u8]; out = tmp; }
+    for i in 0..3 { tmp: vector<u8> = []; tmp += [(i & 255) as u8]; out = tmp; }
     assert(out[0] == 2, "alias to last loop-local survives the loop");
   }
   // fresh buffer ESCAPES via return — must not free at block exit

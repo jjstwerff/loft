@@ -240,8 +240,11 @@ if [ "$DRY" = 1 ]; then
 fi
 if [ "$YES" != 1 ]; then
     n_green=$(awk -F'\t' '$3 == "green"' "$tmp/prs.tsv" | wc -l)
-    read -rp "publish $n_own own lib(s) + merge $n_green green PR(s)? (registry-sign then shows the diff to review + sign) [y/N] " a
-    [ "$a" = y ] || [ "$a" = Y ] || { echo "aborted."; exit 1; }
+    # No prompt here — registry-sign.sh below is the single human gate (it shows the
+    # diff, re-checks each tarball, asks you to confirm/sign, and trust-gates the
+    # push).  A second [y/N] is redundant AND a touch-trap (an idle YubiKey touch
+    # types an OTP, which a `read` would mis-read).  Use --dry-run to preview.
+    echo "publishing $n_own own lib(s) + merging $n_green green PR(s) — registry-sign will review + sign next."
 fi
 
 # ── execute ───────────────────────────────────────────────────────────────────
@@ -276,7 +279,10 @@ done < "$tmp/prs.tsv"
 
 if [ -z "$REG_DIR" ]; then
     REG_DIR="$tmp/registry"
-    git clone --quiet "https://github.com/$ORG/registry.git" "$REG_DIR"
+    # SSH first so the sign+push step (registry-sign.sh, given this checkout)
+    # pushes with your key without an HTTPS password prompt; fall back to HTTPS.
+    git clone --quiet "git@github.com:$ORG/registry.git" "$REG_DIR" 2>/dev/null \
+        || git clone --quiet "https://github.com/$ORG/registry.git" "$REG_DIR"
 else
     git -C "$REG_DIR" pull --ff-only
 fi
@@ -381,6 +387,15 @@ pkg = index["packages"].setdefault(
 if desc_src == "manifest" and desc:
     pkg["description"] = desc
 pkg["versions"][ver] = entry
+# Bump the top-level `updated` so it reflects this publish (REGISTRY_SUBMIT.md).
+# Reuse the entry's own `published` UTC stamp — the precise moment this version
+# was published, already in `YYYY-MM-DDTHH:MM:SSZ` form — falling back to now.
+# Sequential publishes overwrite it, so the last (newest) one wins.
+from datetime import datetime, timezone
+
+index["updated"] = entry.get("published") or datetime.now(timezone.utc).strftime(
+    "%Y-%m-%dT%H:%M:%SZ"
+)
 json.dump(index, open(index_path, "w"), indent=2, ensure_ascii=False)
 open(index_path, "a").write("\n")
 EOF

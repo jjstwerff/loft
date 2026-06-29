@@ -12,9 +12,12 @@
 #     --registry-dir DIR  registry checkout (default: $PWD; if that isn't a
 #                         registry, the live loft-lang/registry is cloned)
 #     --pr N              clone the registry + check out registry PR #N, then sign
-#     --key FILE          Ed25519 private key
+#     --key FILE          Ed25519 private key file (the local-key path)
 #                         (default: $LOFT_REGISTRY_KEY or
 #                          ~/.loft/trust-root/registry-signing-key.bin)
+#     --yubikey           force ON-CARD signing only — fail (don't fall back to a
+#                         file key) if the card doesn't sign.  (or LOFT_REGISTRY_SIGNER=yubikey)
+#     --key FILE-only     LOFT_REGISTRY_SIGNER=file skips the card and uses --key.
 #     --since REF         diff index.json against this git ref (default: auto —
 #                         HEAD if you have uncommitted edits, else HEAD~1)
 #     --notes             also print each release's full notes (gh release body)
@@ -23,6 +26,21 @@
 #     --message MSG       commit message (default: "sign: …"; registry_maintain
 #                         passes "publish: <libs>")
 #     --yes               skip the confirm prompt (scripted use)
+#
+# Signing — DEFAULT is YubiKey-first with a local-key fallback (both end at the
+# same trust gate):
+#   1. Try the YubiKey ON-CARD (PIV slot 9C, Ed25519) for LOFT_YUBIKEY_TIMEOUT
+#      (default 10s) — its PIN + touch are the human-presence proof; the private key
+#      never leaves the card.  Default call is `pkcs11-tool --mechanism EDDSA`
+#      (module auto-found or LOFT_YUBIKEY_PKCS11_MODULE; PIV 9C → id 02 or
+#      LOFT_YUBIKEY_PIV_ID), or override the whole step with LOFT_YUBIKEY_SIGN_CMD
+#      (gets $LOFT_SIG_IN / $LOFT_SIG_OUT).
+#   2. If the card is absent / the tool is missing / it times out, FALL BACK to the
+#      local key file (`--key`) when present.
+#   --yubikey disables the fallback; LOFT_REGISTRY_SIGNER=file disables the card.
+# `--yes` skips the confirmation.  The TRUST GATE always runs: whatever was signed
+# must verify under a key in src/registry_keys.rs::TRUSTED_PUBLIC_KEYS or it is
+# NOT committed/pushed — so a wrong key/module fails safe.
 #
 # On confirm it signs, commits index.json + index.json.sig together (so HEAD's
 # index always matches its signature — #377), pushes, and (for an auto-clone)
@@ -35,11 +53,13 @@ set -euo pipefail
 
 REG_DIR="$PWD"; REG_GIVEN=0; PR=""; SINCE=""; NOTES=0; DOWNLOAD=1; YES=0; PUSH=1; MSG=""
 KEY="${LOFT_REGISTRY_KEY:-$HOME/.loft/trust-root/registry-signing-key.bin}"
+YUBIKEY="${LOFT_REGISTRY_SIGNER:+$([ "$LOFT_REGISTRY_SIGNER" = yubikey ] && echo 1)}"; YUBIKEY="${YUBIKEY:-0}"
 while [ $# -gt 0 ]; do
     case "$1" in
         --registry-dir) REG_DIR="$2"; REG_GIVEN=1; shift;;
         --pr)           PR="$2"; shift;;
         --key)          KEY="$2"; shift;;
+        --yubikey)      YUBIKEY=1;;
         --since)        SINCE="$2"; shift;;
         --notes)        NOTES=1;;
         --no-download)  DOWNLOAD=0;;
@@ -59,13 +79,80 @@ if [ ! -x "$KG" ]; then
     (cd "$here" && cargo build --release --bin loft-keygen --features registry >/dev/null)
 fi
 
+# Try to sign <in> → <out> ON-CARD with the YubiKey (PIV slot 9C, Ed25519), bounded
+# to LOFT_YUBIKEY_TIMEOUT (default 10s) for the PIN + touch.  The private key never
+# leaves the card.  Returns 0 on success (sig written), NON-zero on absent card /
+# missing tool / timeout / failure — so the caller falls back to the local key.
+# The trust gate below re-verifies whatever is produced, so a wrong module/slot/key
+# fails SAFE (no push).  Override the whole step with LOFT_YUBIKEY_SIGN_CMD (gets
+# $LOFT_SIG_IN / $LOFT_SIG_OUT); else a default pkcs11-tool EDDSA call — module
+# auto-found (override LOFT_YUBIKEY_PKCS11_MODULE), PIV 9C → id 02 (override
+# LOFT_YUBIKEY_PIV_ID).
+# Path to the PKCS#11 module (LOFT_YUBIKEY_PKCS11_MODULE, else common locations).
+# Robust to Homebrew prefixes, versioned dylib names (libykcs11.2.dylib), and a
+# pkcs11/ subdir.  Prefers Yubico's ykcs11 (best for YubiKey PIV Ed25519) over
+# OpenSC's opensc-pkcs11.
+yubikey_module() {
+    [ -n "${LOFT_YUBIKEY_PKCS11_MODULE:-}" ] && { echo "$LOFT_YUBIKEY_PKCS11_MODULE"; return; }
+    local d m bp
+    local dirs=(); bp=$(brew --prefix 2>/dev/null) && [ -n "$bp" ] && dirs+=("$bp/lib")
+    dirs+=(/opt/homebrew/lib /usr/local/lib /usr/lib/x86_64-linux-gnu /usr/lib)
+    # ykcs11 first (Yubico), then opensc; allow version suffixes + a pkcs11/ subdir.
+    for d in "${dirs[@]}"; do
+        for m in "$d"/libykcs11*.dylib "$d"/libykcs11*.so \
+                 "$d"/opensc-pkcs11*.so "$d"/opensc-pkcs11*.dylib \
+                 "$d"/pkcs11/libykcs11*.* "$d"/pkcs11/opensc-pkcs11*.*; do
+            [ -e "$m" ] && { echo "$m"; return; }
+        done
+    done
+}
+# Is on-card signing available here?  Decided BEFORE prompting, so an absent card
+# falls straight to the local key instead of making you wait.
+yubikey_available() {
+    [ -n "${LOFT_YUBIKEY_SIGN_CMD:-}" ] && return 0
+    command -v pkcs11-tool >/dev/null 2>&1 && [ -n "$(yubikey_module)" ]
+}
+
+yubikey_sign() {  # <in> <out>  → 0 = signed on-card, non-zero = not signed (fall back)
+    local in="$1" out="$2" t="${LOFT_YUBIKEY_TIMEOUT:-}"
+    local TO=""   # UNBOUNDED by default (take your time); LOFT_YUBIKEY_TIMEOUT=<sec> to bound it
+    if [ -n "$t" ]; then
+        command -v timeout  >/dev/null 2>&1 && TO="timeout $t"
+        [ -z "$TO" ] && command -v gtimeout >/dev/null 2>&1 && TO="gtimeout $t"
+    fi
+    rm -f "$out"
+    if [ -n "${LOFT_YUBIKEY_SIGN_CMD:-}" ]; then
+        LOFT_SIG_IN="$in" LOFT_SIG_OUT="$out" $TO bash -c "$LOFT_YUBIKEY_SIGN_CMD" \
+            || { echo "  YubiKey: LOFT_YUBIKEY_SIGN_CMD failed" >&2; return 1; }
+        [ -s "$out" ] || { echo "  YubiKey: produced no signature" >&2; return 1; }
+        return 0
+    fi
+    local module; module="$(yubikey_module)"
+    local pin_arg=(); [ -n "${LOFT_YUBIKEY_PIN:-}" ] && pin_arg=(--pin "$LOFT_YUBIKEY_PIN")
+    echo "  YubiKey: signing on-card via $module (PIV 9C / id ${LOFT_YUBIKEY_PIV_ID:-02})." >&2
+    echo "           Enter PIN if asked, then TOUCH the key — take your time." >&2
+    # NOTE: output is shown (PIN prompt + errors visible — do NOT suppress it).
+    $TO pkcs11-tool --module "$module" --sign --mechanism EDDSA \
+        --id "${LOFT_YUBIKEY_PIV_ID:-02}" --login ${pin_arg[@]+"${pin_arg[@]}"} \
+        --input-file "$in" --output-file "$out" \
+        || { echo "  YubiKey: pkcs11-tool sign failed — check the id/PIN/slot, or set LOFT_YUBIKEY_SIGN_CMD" >&2; return 1; }
+    [ -s "$out" ] || { echo "  YubiKey: empty signature" >&2; return 1; }
+    return 0
+}
+
 # No explicit checkout and the cwd isn't a registry → clone the live registry, so
 # the routine runs standalone (inspection, or signing a PR via --pr).
 CLONED=0; SIGNED=0; PUSHED=0
 if [ "$REG_GIVEN" != 1 ] && [ ! -f "$REG_DIR/index.json" ]; then
     REG_DIR=$(mktemp -d -t loft-registry.XXXXXX)
     echo "cloning loft-lang/registry → $REG_DIR ..." >&2
-    gh repo clone loft-lang/registry "$REG_DIR" -- -q 2>/dev/null \
+    # SSH first: it pushes with your key and never prompts, so the later
+    # commit+push succeeds unattended.  GitHub no longer accepts an HTTPS
+    # password at the git push prompt, so an HTTPS clone needs a working
+    # credential helper — fall back to it (gh, then plain HTTPS) only when SSH
+    # is unavailable.
+    git clone -q git@github.com:loft-lang/registry.git "$REG_DIR" 2>/dev/null \
+        || gh repo clone loft-lang/registry "$REG_DIR" -- -q 2>/dev/null \
         || git clone -q https://github.com/loft-lang/registry "$REG_DIR"
     CLONED=1
     if [ -n "$PR" ]; then
@@ -90,7 +177,9 @@ trap cleanup EXIT
 
 INDEX="$REG_DIR/index.json"
 [ -f "$INDEX" ] || { echo "no index.json in $REG_DIR — use --registry-dir" >&2; exit 2; }
-[ -f "$KEY" ]   || { echo "signing key not found: $KEY — use --key / set LOFT_REGISTRY_KEY" >&2; exit 2; }
+# No early key-file requirement: the default tries the YubiKey first, so a missing
+# file key is fine when the card can sign.  The sign block errors if NEITHER a card
+# signature nor a local key is available.
 
 # Shape gate: refuse to even look at a non-JSON index.
 python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$INDEX" \
@@ -250,17 +339,74 @@ else
 fi
 echo
 
-if [ "$YES" != 1 ]; then
-    [ "$PUSH" = 1 ] && verb="Sign, commit & push" || verb="Sign & commit (no push)"
-    printf "%s this index with %s ? [y/N] " "$verb" "$(basename "$KEY")"
-    read -r ans
-    case "$ans" in y|Y|yes|YES) ;; *) echo "aborted — NOT signed."; exit 1;; esac
+# Signer policy.  If a YubiKey is available, CONFIRM-BY-TOUCH: go straight to the
+# on-card sign — the PIN + touch ARE the confirmation (no typing), and the wait is
+# UNBOUNDED (take your time; LOFT_YUBIKEY_TIMEOUT=<sec> to bound it).  Only when the
+# card is ABSENT do we fall back to the local key (with a typed 'yes').  --yubikey
+# forces on-card (no fallback); LOFT_REGISTRY_SIGNER=file forces the local key.
+KEY_ONLY=0; [ "${LOFT_REGISTRY_SIGNER:-}" = file ] && KEY_ONLY=1
+USE_CARD=0
+[ "$KEY_ONLY" != 1 ] && { [ "$YUBIKEY" = 1 ] || yubikey_available; } && USE_CARD=1
+if [ "$KEY_ONLY" != 1 ] && [ "$USE_CARD" = 0 ]; then
+    echo "  note: YubiKey signing unavailable here — need pkcs11-tool + a PKCS#11 module" >&2
+    echo "        (macOS: brew install opensc yubico-piv-tool), or set LOFT_YUBIKEY_SIGN_CMD." >&2
+    echo "        Falling through to the local key." >&2
 fi
 
-"$KG" sign --in "$INDEX" --key "$KEY" --out "$SIG"
+SIGNED_VIA=""
+if [ "$USE_CARD" = 1 ]; then
+    [ "$PUSH" = 1 ] && verb="Sign, commit & push" || verb="Sign & commit (no push)"
+    echo "$verb this index — review the diff above, then CONFIRM BY TOUCHING YOUR YUBIKEY."
+    if yubikey_sign "$INDEX" "$SIG"; then
+        SIGNED_VIA="YubiKey (on-card)"
+    elif [ "$YUBIKEY" = 1 ]; then
+        echo "!! --yubikey: card sign failed and fallback is disabled." >&2; exit 4
+    else
+        echo "  card sign didn't complete — falling back to the local key." >&2
+    fi
+fi
+if [ -z "$SIGNED_VIA" ]; then
+    if [ "$YES" != 1 ]; then
+        printf "  sign with the local key %s? type 'yes': " "$(basename "$KEY")"
+        read -r ans
+        case "$ans" in yes|YES) ;; *) echo "aborted — NOT signed."; exit 1;; esac
+    fi
+    [ -f "$KEY" ] || { echo "!! no card signature and no local key at $KEY — nothing to sign with." >&2; exit 2; }
+    "$KG" sign --in "$INDEX" --key "$KEY" --out "$SIG"
+    SIGNED_VIA="local key $(basename "$KEY")"
+fi
 SIGNED=1
-[ -f "$PUB" ] && "$KG" verify --in "$INDEX" --sig "$SIG" --pub "$(cat "$PUB")"
-echo "signed: $SIG"
+echo "signed: $SIG  (via $SIGNED_VIA)"
+
+# Trust gate — the signature must verify under a key that CLIENTS trust
+# (src/registry_keys.rs::TRUSTED_PUBLIC_KEYS), not merely under the key we
+# signed with.  Signing with an untrusted key yields a sig that every
+# `loft install` rejects ("registry index signature INVALID").  The old check
+# verified only against ${KEY}.pub AND was skipped entirely when that file was
+# absent — so a wrong/untrusted key shipped silently (broke the live index
+# 2026-06-28).  Refuse to commit/push unless a trusted key validates it.
+KEYS_RS="$here/src/registry_keys.rs"
+if [ -f "$KEYS_RS" ]; then
+    trusted_hex=$(grep -oE '0x[0-9A-Fa-f]{2}' "$KEYS_RS" | sed 's/0x//' | tr -d '\n')
+    ok=0; i=0
+    while [ "$i" -lt "${#trusted_hex}" ]; do
+        if "$KG" verify --in "$INDEX" --sig "$SIG" --pub "${trusted_hex:$i:64}" >/dev/null 2>&1; then ok=1; break; fi
+        i=$((i + 64))
+    done
+    if [ "$ok" != 1 ]; then
+        echo "!! registry-sign: the new signature verifies under NONE of the trusted" >&2
+        echo "   keys in $KEYS_RS — every 'loft install' would reject this index." >&2
+        echo "   Signing key: $KEY is not a registry trust-root key." >&2
+        echo "   NOT committing/pushing.  Sign with a trusted key (set LOFT_REGISTRY_KEY" >&2
+        echo "   / --key), or add this key's public to TRUSTED_PUBLIC_KEYS and ship a" >&2
+        echo "   new client release first." >&2
+        exit 3
+    fi
+    echo "  trust gate OK — signature verifies under a client-trusted key"
+else
+    echo "  WARNING: $KEYS_RS not found — skipping trust-set verification" >&2
+    [ -f "$PUB" ] && "$KG" verify --in "$INDEX" --sig "$SIG" --pub "$(cat "$PUB")"
+fi
 
 # Automated git: stage index.json AND its signature together, commit, push.
 # Ed25519 is deterministic, so re-signing identical content yields the same bytes
@@ -274,7 +420,22 @@ if git -C "$REG_DIR" diff --cached --quiet; then
     echo "index.json.sig unchanged — nothing to commit."
     PUSHED=1   # nothing outstanding → safe to clean up the clone
 elif [ "$PUSH" = 1 ]; then
-    git -C "$REG_DIR" commit -q -m "${MSG:-sign: commit index.json + regenerate index.json.sig}"
+    # The throwaway registry clone inherits NO identity when the maintainer has
+    # only a per-repo (not global) git config, so a plain `git commit` aborts with
+    # "Author identity unknown".  Resolve one — existing config → gh login → a
+    # stable registry-signer fallback — and pass it inline.  Trust comes from the
+    # Ed25519 signature, not the git author, so a derived/bot identity is fine; we
+    # just need a valid one so the signing commit lands.
+    sign_name=$(git -C "$REG_DIR" config user.name || true)
+    sign_email=$(git -C "$REG_DIR" config user.email || true)
+    if [ -z "$sign_name" ] || [ -z "$sign_email" ]; then
+        gh_login=$(gh api user --jq '.login' 2>/dev/null || true)
+        sign_name="${sign_name:-${gh_login:-loft-registry-signer}}"
+        sign_email="${sign_email:-${gh_login:+$gh_login@users.noreply.github.com}}"
+        sign_email="${sign_email:-loft-registry-signer@users.noreply.github.com}"
+    fi
+    git -C "$REG_DIR" -c user.name="$sign_name" -c user.email="$sign_email" \
+        commit -q -m "${MSG:-sign: commit index.json + regenerate index.json.sig}"
     # Push reusing the gh login as git's credential helper: no username/password
     # prompt on an HTTPS remote (the registry is often cloned over HTTPS), and
     # harmless on an SSH remote (which uses your key).  `gh release create` etc.

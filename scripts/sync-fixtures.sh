@@ -107,6 +107,16 @@ EOF
 #   per Pixel).  The fixture pins `vector<Pixel not null>` to keep the dense
 #   element layout the extension assumes.  Drop this line when loft-libs-graphics
 #   ships an imaging tag carrying the `not null` annotation.
+#
+# - gridmesh/src/gridmesh.loft, hex_world/src/hex_world.loft — @PLN25 DN4
+#   narrowing-cast enforcement: with DN4 ON (`(N-Cast)`) a narrowing cast of a
+#   not-provably-fit value (`kind as u8`, `inew_age as u16`, the loop-bounded
+#   byte writes) is a compile error.  The fixtures mask the operand
+#   (`(kind & 255) as u8`, …) so the value is provably in range and the dense
+#   byte layout is preserved — behaviour-identical for the in-range data these
+#   tests use.  Drop these lines when loft-libs-graphics / loft-libs-world ship
+#   tags carrying the masks and bump PINNED_REFS instead.  (Same shape as the
+#   imaging `not null` patch above — a gate flip the upstream tag predates.)
 LOCAL_PATCHES=$(cat <<'EOF'
 imaging/native/Cargo.toml
 imaging/src/imaging.loft
@@ -115,6 +125,7 @@ imaging/tests/15-regression.loft
 hex_world/tests/hex_world.loft
 hex_world/README.md
 hex_world/src/hex_world.loft
+gridmesh/src/gridmesh.loft
 gridmesh/README.md
 shapes/README.md
 imaging/README.md

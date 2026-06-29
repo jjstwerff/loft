@@ -232,10 +232,37 @@ removes the 27.9s; crawler `surfacetest` returns to baseline-class time on both
 backends. (Independently, the consumer can index `s.tiles[ti]` directly — see §8 — but
 the language fix removes the cliff for *every* consumer of this ubiquitous pattern.)
 
-### Tier 1 — local-struct source with scope dominance
-Extend ¬D3 to `v = x.f` where `x` is a **local** (not a param): borrow iff
-scope-analysis proves `x` (hence `x.f`'s store) outlives `v`'s last use — the `deps` /
-`scopes.rs` dominance fact. Copy when the relation is unproven.
+### Tier 1 — local-struct source, ordering-proven read-only  ✅ IMPLEMENTED (flag `LOFT_ELIDE_T1`, default-off)
+Extend the source from a parameter to a read-only **local** `x` (`v = x.f`). The
+set-based facts (`ineligible`, `written`) CANNOT prove a local unmutated — its own
+construction (`OpDatabase`/`OpNewRecord`/`OpFinishRecord` on `x`) is op-identical to
+a later field write, so both look "written" (probed 2026-06-27: a read-only and a
+mutated local produced byte-identical facts). The fix is an **ordering** fact folded
+into the existing single walk (no extra pass): a pre-order position counter +
+loop-depth. `x` is borrow-safe for `v` iff the copy-fill is **not inside a loop**
+(a back-edge breaks position↔execution order) AND **every non-reader appearance of
+`x` precedes the fill** — i.e. `x` is only constructed, never mutated/freed, after
+the snapshot (¬D2); the inlining itself extends `x`'s lifetime over `v`'s reads
+(¬D3, the new freeable-local-source path Tier 0 never exercised). `OpFreeRef`/`Drop`
+are excluded as benign scope machinery. Conservative: bails on loops, branches with a
+later write, callee-mutation, and rebind.
+
+**Validation (matrix-first, both backends):** `tests/scripts/85-tier1-local-source-matrix.loft`
++ `tests/use_analysis.rs::{tier1_gate_flips_only_readonly_local_source,
+tier1_flips_existing_local_src_cell, tier1_runtime_correct_both_backends}`. Matrix:
+3 safe → Borrow (correct value, IR shows the copy idiom gone), 6 unsafe (D1/D2/D3 +
+callee-mut/rebind/in-loop) → Copy, interpret + native, no leak. Full suite 2561/0
+with the flag off (the layer is dead unless `LOFT_ELIDE_T1` is set).
+
+**Crawler dogfood (2026-06-27):** correct — 46/46 tests pass identically at tier-0
+and tier-1, `surfacetest` output unchanged. **Perf-neutral** on the measured
+workload: tier-1 adds exactly **2 borrows**, both in `sim_new_gen_s` (world-gen,
+`rqs`/`rrs`), not the per-tick hot path — `surfacetest` time is unchanged within
+noise (~17s either way). The hot per-tick accessors were all param-sourced and
+already captured by Tier 0. **Conclusion: do NOT cut Tier 1 over to default-on** —
+there is no measured local-sourced hot copy to capture yet; keep it as the
+turn-on-and-compare flag until a consumer surfaces one (the design's "gate behind a
+measured need"). The layer exists, is correct, and is evaluable in isolation.
 
 ### Tier 2 — mutable source, no intervening aliasing mutation (¬D2)
 Extend to a source that *could* be mutated: borrow iff no write to `s.f`/`s` lies

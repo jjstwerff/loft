@@ -29,7 +29,7 @@ fn relen(h: Holder) -> integer {
 
 fn mk() -> Box {
   bs: vector<u8> = [];
-  for i in 0..8 { bs += [(i + 1) as u8]; }
+  for i in 0..8 { bs += [((i + 1) & 255) as u8]; }
   return Box { value: Bytes { v: bs } };
 }
 
@@ -62,7 +62,7 @@ fn shallow_field_of_local() -> Num { d = mk_num(); return d.value; }
 struct Nested { inner: Box }
 fn mk_nested() -> Nested {
   bs: vector<u8> = [];
-  for i in 0..8 { bs += [(i + 1) as u8]; }
+  for i in 0..8 { bs += [((i + 1) & 255) as u8]; }
   return Nested { inner: Box { value: Bytes { v: bs } } };
 }
 // enum field of an inline-call result.

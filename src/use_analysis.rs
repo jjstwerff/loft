@@ -115,8 +115,27 @@ struct Uses {
     get_field: u32,
     op_append: u32,
     op_database: u32,
+    op_free: u32,
     projections: HashSet<u32>,
     value_readers: HashSet<u32>,
+    /// Pre-order position counter — a total order on nodes that, OUTSIDE loops,
+    /// matches execution order (Tier 1 uses it to prove a source is unmutated
+    /// after the copy-fill). Bumped once per visited node.
+    pos: usize,
+    /// Loop nesting at the current node (`Value::Loop`, which for-loops desugar
+    /// to). Back-edges break the position↔execution correspondence, so Tier 1
+    /// refuses any copy whose fill sits at depth > 0.
+    loop_depth: u32,
+    /// Max position at which a var appeared in a NON-reader (write / escape /
+    /// pass-to-callee) position — EXCLUDING the benign scope ops (`OpFreeRef` /
+    /// `Drop`) and the copy-fill itself. For a source `x`, "all such positions <
+    /// copy-fill position" means `x` is only constructed (never mutated) before
+    /// the snapshot — the Tier-1 ¬D2 fact the set-based `ineligible` can't give.
+    other_max_pos: HashMap<u16, usize>,
+    /// Position of each copy var's `OpAppendVector` fill (the snapshot moment).
+    copyfill_pos: HashMap<u16, usize>,
+    /// Copy vars whose fill sits inside a loop (Tier-1 ineligible).
+    copyfill_in_loop: HashSet<u16>,
     /// Vars that appeared in a non-reader position (⇒ not borrow-eligible). The
     /// copy-fill `OpAppendVector(v, src.f)` is *excluded* — it is the copy machinery,
     /// not a user mutation of `v`.
@@ -153,12 +172,32 @@ pub struct ElidePlan {
 
 impl Uses {
     fn visit(&mut self, node: &Value, ctx: Ctx) {
+        let pos = self.pos;
+        self.pos += 1;
         match node.unspan() {
             Value::Var(v) => {
                 if ctx != Ctx::ReaderArg {
                     self.ineligible.insert(*v);
+                    let e = self.other_max_pos.entry(*v).or_insert(0);
+                    *e = (*e).max(pos);
                 }
             }
+            // A loop body's back-edge can re-execute a write after a read, so the
+            // pre-order position no longer tracks execution order inside it — bump
+            // the depth so Tier 1 can refuse copies filled here.
+            Value::Loop(b) => {
+                self.loop_depth += 1;
+                for op in &b.operators {
+                    self.visit(op, Ctx::Other);
+                }
+                self.loop_depth -= 1;
+            }
+            // Scope machinery, not a user mutation: `OpFreeRef(x)` / `Drop(x)` must
+            // not count as a non-reader use of `x` (a free placed AFTER the last
+            // read is exactly what we want; the scope pass repositions it post-
+            // elision anyway). Visit nothing — recursing would mark the arg `Other`.
+            Value::Call(d, _) if *d == self.op_free => {}
+            Value::Drop(_) => {}
             Value::Set(v, rhs) => {
                 *self.def_count.entry(*v).or_insert(0) += 1;
                 // Fresh-buffer def: `v = OpGetField(vdb, 0, _)` where vdb is OpDatabase'd.
@@ -176,6 +215,10 @@ impl Uses {
                 if let Some(Value::Var(v)) = args.first().map(Value::unspan) {
                     // Copy-fill into a plain local — record the source base; do NOT
                     // mark `v` ineligible (this append IS the copy, not a user write).
+                    self.copyfill_pos.insert(*v, pos);
+                    if self.loop_depth > 0 {
+                        self.copyfill_in_loop.insert(*v);
+                    }
                     let src = args.get(1).and_then(|s| base_var(s, self.get_field));
                     self.append_src.entry(*v).or_default().push(src);
                     if let Some(s) = args.get(1) {
@@ -232,12 +275,21 @@ impl Uses {
     }
 }
 
-/// Compute the borrow-vs-copy verdict for every elidable vector-copy binding in `code`.
-fn analyze_fn(code: &Value, function: &Function, data: &Data) -> (Vec<VerdictRow>, Vec<ElidePlan>) {
+/// Compute the borrow-vs-copy verdict for every elidable vector-copy binding in
+/// `code`, up to `max_tier` (0 = the shipped param-source rule; 1 = also
+/// read-only-local sources, ordering-proven). Higher tiers are additive: a tier-1
+/// run still emits every tier-0 Borrow.
+fn analyze_fn(
+    code: &Value,
+    function: &Function,
+    data: &Data,
+    max_tier: u8,
+) -> (Vec<VerdictRow>, Vec<ElidePlan>) {
     let mut u = Uses {
         get_field: data.def_nr("OpGetField"),
         op_append: data.def_nr("OpAppendVector"),
         op_database: data.def_nr("OpDatabase"),
+        op_free: data.def_nr("OpFreeRef"),
         projections: projection_ops(data),
         value_readers: value_reader_ops(data),
         ineligible: HashSet::new(),
@@ -246,6 +298,11 @@ fn analyze_fn(code: &Value, function: &Function, data: &Data) -> (Vec<VerdictRow
         def_vdb: HashMap::new(),
         append_src: HashMap::new(),
         append_expr: HashMap::new(),
+        pos: 0,
+        loop_depth: 0,
+        other_max_pos: HashMap::new(),
+        copyfill_pos: HashMap::new(),
+        copyfill_in_loop: HashSet::new(),
     };
     u.visit(code, Ctx::Other);
 
@@ -282,10 +339,30 @@ fn analyze_fn(code: &Value, function: &Function, data: &Data) -> (Vec<VerdictRow
         let src_is_param = src.is_some_and(|s| function.is_argument(s));
         let src_unmutated = src.is_some_and(|s| !written.contains(&s));
 
+        // TIER 1 (max_tier >= 1): a read-only LOCAL source. The set-based facts
+        // can't prove a local unmutated (its construction looks like a write), so
+        // use the ordering fact: the copy-fill is on a straight-line path (not in a
+        // loop) AND every non-reader appearance of the source precedes the fill —
+        // i.e. the source is only constructed, never mutated/freed, after the
+        // snapshot (¬D2), and the inlining itself extends the source's lifetime over
+        // v's reads (¬D3). `v` read-only/non-escaping is the same ¬D1 as tier 0.
+        let src_local_stable = max_tier >= 1
+            && src.is_some_and(|s| !function.is_argument(s))
+            && !u.copyfill_in_loop.contains(&v)
+            && match (src, u.copyfill_pos.get(&v)) {
+                (Some(s), Some(&fill)) => u.other_max_pos.get(&s).copied().unwrap_or(0) < fill,
+                _ => false,
+            };
+
         let (verdict, reason) = if single_def && v_readonly && src_is_param && src_unmutated {
             (
                 Verdict::Borrow,
                 "tier0: read-only local, unmutated param source",
+            )
+        } else if single_def && v_readonly && src_local_stable {
+            (
+                Verdict::Borrow,
+                "tier1: read-only local, ordering-proven read-only local source",
             )
         } else if src.is_none() {
             (
@@ -296,8 +373,11 @@ fn analyze_fn(code: &Value, function: &Function, data: &Data) -> (Vec<VerdictRow
             (Verdict::Copy, "reassigned (multiple defs)")
         } else if !v_readonly {
             (Verdict::Copy, "local mutated or escapes")
-        } else if !src_is_param {
-            (Verdict::Copy, "source not a parameter (tier0 limit)")
+        } else if !src_is_param && !src_local_stable {
+            (
+                Verdict::Copy,
+                "source not a parameter / not provably read-only local",
+            )
         } else {
             (Verdict::Copy, "source mutated")
         };
@@ -339,18 +419,43 @@ fn analyze_fn(code: &Value, function: &Function, data: &Data) -> (Vec<VerdictRow
     (rows, plans)
 }
 
-/// Public, test-facing entry: the verdicts for one function by its def number.
+/// The elision tier selected by the environment: 0 (shipped param-source rule,
+/// the default) unless `LOFT_ELIDE_T1` is set, which adds the Tier-1 read-only-
+/// local-source verdicts. Higher tiers can attach more flags here as they land.
+/// Kept here so every consumer (the rewrite, the dump, the tests' default) reads
+/// one source of truth.
 #[must_use]
-pub fn verdicts_for(data: &Data, d_nr: u32) -> Vec<VerdictRow> {
-    let def = data.def(d_nr);
-    analyze_fn(&def.code, &def.variables, data).0
+pub fn env_tier() -> u8 {
+    // Additive flags — each enabled tier raises the ceiling. Later tiers attach
+    // their own flag here (e.g. `LOFT_ELIDE_T2` -> `tier = tier.max(2)`).
+    let mut tier = 0;
+    if std::env::var_os("LOFT_ELIDE_T1").is_some() {
+        tier = tier.max(1);
+    }
+    tier
 }
 
-/// The elision plans (Borrow verdicts) for one function — what the (flagged)
-/// borrow rewrite consumes.
+/// Public, test-facing entry: the verdicts for one function by its def number, at
+/// the env-selected tier (Tier 0 unless `LOFT_ELIDE_T1` is set).
+#[must_use]
+pub fn verdicts_for(data: &Data, d_nr: u32) -> Vec<VerdictRow> {
+    verdicts_for_tier(data, d_nr, env_tier())
+}
+
+/// Public, test-facing entry: the verdicts for one function at an EXPLICIT tier —
+/// lets a test exercise a tier's logic regardless of the environment, so the
+/// not-yet-wired tiers stay evaluable in isolation.
+#[must_use]
+pub fn verdicts_for_tier(data: &Data, d_nr: u32, max_tier: u8) -> Vec<VerdictRow> {
+    let def = data.def(d_nr);
+    analyze_fn(&def.code, &def.variables, data, max_tier).0
+}
+
+/// The elision plans (Borrow verdicts) for one function — what the borrow rewrite
+/// consumes — at the env-selected tier.
 #[must_use]
 pub fn elision_plans(code: &Value, function: &Function, data: &Data) -> Vec<ElidePlan> {
-    analyze_fn(code, function, data).1
+    analyze_fn(code, function, data, env_tier()).1
 }
 
 /// Print every function's verdicts when `LOFT_MATERIALIZE_DUMP` is set. Called from
@@ -364,7 +469,7 @@ pub fn dump_all(data: &Data) {
         if !matches!(def.def_type, DefType::Function) {
             continue;
         }
-        for r in analyze_fn(&def.code, &def.variables, data).0 {
+        for r in analyze_fn(&def.code, &def.variables, data, env_tier()).0 {
             eprintln!(
                 "MAT fn={} v={}({}) src={} verdict={:?} [{}]",
                 def.name, r.var_nr, r.var_name, r.source, r.verdict, r.reason

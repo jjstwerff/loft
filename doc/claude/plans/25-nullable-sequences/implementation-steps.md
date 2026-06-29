@@ -38,8 +38,13 @@ at once.
 - Type system: `τ?` is the optional former; `(N-Opt)`, `(N-Idem)`, `(N-Intro) τ ⤳ τ?`. No
   default changes, no discharge enforcement yet — `τ?` simply *coexists* with today's behaviour.
 - **Test impact: none.** Gate: full suite stays green.
-- Status: vectors **done** (postfix `vector<S?>` parses + works). Scalars `x: integer?` still
-  to add.
+- Status: vectors **done** (postfix `vector<S?>` parses + works). Scalars **done** — `integer?`
+  / `text?` / `S?` parse in every type position (field, param, return, `as`-cast) via a postfix
+  `?` consumer wrapping `parse_type` (the named-type chokepoint; the vector element `?` is
+  consumed earlier in `sub_type_inner`, so it isn't stolen). Today a no-op (plain types are
+  already nullable); for Integer the `?` records `not_null:false` so it survives the Phase-2
+  flip, other scalars accept-and-ignore until Phase 2 adds their optional representation.
+  Regression: `tests/scripts/25-scalar-optional-syntax.loft`. Full suite green.
 
 ## Phase 1 — MIGRATE: annotate nullable sites with `?`  ·  zero breakage  ← the test-saver
 
@@ -105,11 +110,15 @@ non-null marker, because non-null is simply the default.
 
 ---
 
-## Reconciliation with the in-flight work (branch `fix-crawler`, all UNCOMMITTED)
+## Reconciliation with the in-flight work (historical — origin of the rewrite)
+
+> **Historical.** Captures how the rewrite started (three threads on the long-gone
+> `fix-crawler` branch). The work has since landed: vectors merged via `#412`/`#467`/`#468`,
+> scalars + TIGHTEN are on `lima-default-borrow-elision`. **Live status: [RESUME.md](RESUME.md).**
 
 This rewrite did not start clean — it grew out of the crawler dogfood wave, and three
-threads currently coexist uncommitted on `fix-crawler`. Naming them keeps the breakage
-legible and the merge order safe.
+threads coexisted uncommitted on `fix-crawler`. Naming them kept the breakage legible and
+the merge order safe.
 
 ### The three threads
 
@@ -125,15 +134,29 @@ legible and the merge order safe.
 3. **Design + investigation docs (no code risk).** `formal/types.md` (the `N-*` rules), the
    `@PLN25` design + this plan, the `@PLN85` field-map / site-inventory / cluster-462 / probes.
 
-### Phase status of the in-flight code (where thread 2 actually is)
+### Phase status of the code
+
+> **Live status + the concrete next steps with validation gates: [RESUME.md](RESUME.md).**
+> This table is the phase grid; RESUME.md is the authoritative handoff (branch, suite count,
+> ordered steps). Vectors are merged to `main`; scalars + TIGHTEN are in flight on
+> `lima-default-borrow-elision`.
 
 | Phase | vectors | scalars |
 |---|---|---|
-| 0 EXPAND (`?` syntax) | ✅ done | ⬜ not started |
-| 1 MIGRATE (annotate `?`) | ❌ **skipped** → the 4 nullable-feature failures | ⬜ |
-| 2 CONTRACT (flip default) | ✅ done (live) | ⬜ |
-| 3 TIGHTEN | ⬜ | ⬜ |
-| 5 CLEANUP (`not null`) | ⬜ | ⬜ |
+| 0 EXPAND (`?` syntax) | ✅ merged `#467` | ✅ done (`integer?`/`text?`/`S?` parse, no-op) |
+| 1 MIGRATE (annotate `?`) | ✅ merged `#467` | ⬜ survey + annotate |
+| 2 CONTRACT (flip default) | ✅ merged `#467` | ⬜ `Type::Optional` decided, **not built**; default still nullable |
+| 3 TIGHTEN | ⬜ | 🔵 **DN4 done** (default-on); DN2 + DN3 ⬜ (measure DN3 first) |
+| 5 CLEANUP (`not null`) | ⬜ | ⬜ 1015 occurrences / 300 `.loft` files |
+
+> **The Phase-2 scalars blocker — DECIDED: `Type::Optional(Box<Type>)`.** Only `Type::Integer`
+> carried a null-flag; the other scalars had no type-level optional marker. The representation is
+> now settled — a single optional former, **compile-time only** (storage stays sentinel-based, so
+> zero runtime cost / zero runtime errors), chosen because a new variant makes every unhandled
+> `match` a **loud compile error** (vs a silently-ignorable `nullable: bool`). Full rationale +
+> the `IntegerSpec.not_null` reconciliation + landing approach:
+> [scalar-optional-representation.md](scalar-optional-representation.md). Built inside DN1/DN3;
+> **DN4 needs none of it** (integer-only) and ships first.
 
 So the **7 failing tests are exactly "Phase 2 ran ahead of Phase 1"**: 4 nullable-feature tests
 (fixed by doing Phase 1 — annotate `vector<S?>`) + 3 the step-6 ownership over-free (Phase 4).

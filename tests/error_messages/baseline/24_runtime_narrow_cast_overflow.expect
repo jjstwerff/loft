@@ -1,3 +1,10 @@
-==== exit: 0 ====
+==== exit: 1 ====
 ==== stdout ====
-small=10000000000==== stderr ====
+==== stderr ====
+error: narrowing cast from integer(-2147483647, 4294967295) to i32 may not fit at runtime; use `i32?` for a checked cast (value or null), or guard the value (`?? d`, mask, or an `if` range check)
+  --> <cases>/24_runtime_narrow_cast_overflow.loft:3:22
+  |
+3 |   small = big as i32;
+  |                      ^
+
+error: aborting due to 1 previous error

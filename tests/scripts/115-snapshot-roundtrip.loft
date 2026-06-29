@@ -22,7 +22,7 @@ fn main() {
   f += (0x1ECEC0DE as u32);
   f += (7 as u32);
   f += (5 as u32);
-  for i in 0..5 { f += ((100 + i) as u32); }
+  for i in 0..5 { f += (((100 + i) & 0x7FFFFFFF) as u32); }
   f.sync();
  }
  {f = file("test_loft_snap.bin");
@@ -44,14 +44,14 @@ fn main() {
  {f = file("test_loft_snap.bin");
   assert(f#size == 20, "second save size = 4 + 4 + 4 + 2*4 = 20 (truncated)");
   f#format = LittleEndian;
-  magic: u32 = f#read as u32;
+  magic: u32 = (f#read & 0x7FFFFFFF) as u32;
   assert(magic == (0x1ECEC0DE as u32), "magic round-trips");
-  tick: u32 = f#read as u32;
+  tick: u32 = (f#read & 0x7FFFFFFF) as u32;
   assert(tick == (9 as u32), "tick round-trips");
-  count: u32 = f#read as u32;
+  count: u32 = (f#read & 0x7FFFFFFF) as u32;
   assert(count == (2 as u32), "count round-trips");
-  v0: u32 = f#read as u32;
-  v1: u32 = f#read as u32;
+  v0: u32 = (f#read & 0x7FFFFFFF) as u32;
+  v1: u32 = (f#read & 0x7FFFFFFF) as u32;
   assert(v0 == (200 as u32), "payload[0]");
   assert(v1 == (201 as u32), "payload[1]");
  }

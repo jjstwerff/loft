@@ -139,7 +139,7 @@ fn run() -> integer {
 fn par_struct_to_byte_t4() {
     code!(
         "struct Score { value: integer }
-fn small(s: const Score) -> u8 { s.value as u8 }
+fn small(s: const Score) -> u8 { (s.value & 255) as u8 }
 fn run() -> integer {
     sl: vector<Score> = [Score { value: 1 }, Score { value: 2 }, Score { value: 3 }, Score { value: 4 }, Score { value: 5 }];
     sum = 0;

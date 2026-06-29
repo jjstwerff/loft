@@ -15,8 +15,8 @@
 
 fn head(major: integer, arg: integer) -> vector<u8> {
   buf: vector<u8> = [];
-  if arg < 24 { buf += [(major * 32 + arg) as u8]; }
-  else { buf += [(major * 32 + 24) as u8]; buf += [arg as u8]; }
+  if arg < 24 { buf += [((major * 32 + arg) & 255) as u8]; }
+  else { buf += [((major * 32 + 24) & 255) as u8]; buf += [(arg & 255) as u8]; }
   return buf;
 }
 fn blt(a: vector<u8>, b: vector<u8>) -> boolean { return (a[0] ?? 0) < (b[0] ?? 0); }

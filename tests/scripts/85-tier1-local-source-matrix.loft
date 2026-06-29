@@ -1,0 +1,60 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN25 Tier-1 (LOFT_ELIDE_T1) — borrow-elide a vector copy `v = x.f` whose
+// source `x` is a READ-ONLY LOCAL (not a parameter). Tier 0 required a param
+// source because the set-based facts can't prove a local unmutated (its own
+// construction looks like a write); Tier 1 adds an ORDERING fact — the copy-fill
+// is on a straight-line path AND every non-reader use of `x` precedes the fill —
+// to prove ¬D2, while the inlining extends `x`'s lifetime over `v`'s reads (¬D3).
+//
+// This script is VALUE-CORRECT at any tier: a borrow is observably the inlined
+// field access, so every SAFE cell returns the same value whether copied (tier 0,
+// the normal suite) or borrowed (tier 1, the LOFT_ELIDE_T1 Rust guard). The UNSAFE
+// cells (D1/D2/D3 + the adversarial callee-mut / rebind / in-loop shapes) must
+// keep COPY semantics — Tier 1 refuses to borrow them, so they also agree. The
+// values are chosen so a WRONG borrow would diverge (d2 would read 99, not 10).
+// See doc/claude/plans/25-nullable-sequences/copy-elision-design.md § Tier 1.
+
+struct G { c: vector<integer> not null }
+fn bump(g: &G) { g.c[0] = 99; }
+
+// ── SAFE (Tier-1 Borrow) ──────────────────────────────────────────────────────
+fn ro_local() -> integer { x = G { c: [10, 20, 30] }; v = x.c; v[1] ?? -1 }
+fn ro_local_sum() -> integer {
+  x = G { c: [10, 20, 30] }; v = x.c; acc = 0;
+  for k in 0..len(v) { acc += v[k] ?? 0; }
+  acc
+}
+fn ro_local_elem() -> integer {
+  x = G { c: [10, 20, 30] }; v = x.c; e = v[1]; e ?? -1
+}
+
+// ── UNSAFE: divergence events — must stay COPY ─────────────────────────────────
+fn d1_write_v() -> integer { x = G { c: [10, 20, 30] }; v = x.c; v[0] = 99; x.c[0] ?? -1 }
+fn d2_mut_src() -> integer { x = G { c: [10, 20, 30] }; v = x.c; x.c[0] = 99; v[0] ?? -1 }
+fn d3_escape() -> vector<integer> { x = G { c: [10, 20, 30] }; v = x.c; v }
+
+// ── ADVERSARIAL: the cleanest-claim attacks — must stay COPY ───────────────────
+fn callee_mut() -> integer { x = G { c: [10, 20, 30] }; v = x.c; bump(x); v[0] ?? -1 }
+fn rebind() -> integer {
+  x = G { c: [10, 20, 30] }; v = x.c; x = G { c: [77, 88, 99] }; v[0] ?? -1
+}
+fn in_loop() -> integer {
+  acc = 0;
+  for i in 0..3 { x = G { c: [10, 20, 30] }; v = x.c; acc += v[0] ?? 0; }
+  acc
+}
+
+fn main() {
+  assert(ro_local() == 20, "ro_local");
+  assert(ro_local_sum() == 60, "ro_local_sum");
+  assert(ro_local_elem() == 20, "ro_local_elem");
+  assert(d1_write_v() == 10, "d1: write through v must not hit source");
+  assert(d2_mut_src() == 10, "d2: borrow would see 99");
+  assert(len(d3_escape()) == 3, "d3: escaped view valid");
+  assert(callee_mut() == 10, "callee_mut: borrow would see 99");
+  assert(rebind() == 10, "rebind: borrow would dangle/see new");
+  assert(in_loop() == 30, "in_loop sum");
+  println("tier1-local-source-matrix ok");
+}
