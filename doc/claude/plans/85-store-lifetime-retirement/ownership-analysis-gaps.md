@@ -221,24 +221,29 @@ So the fix is now spec'd precisely: **materialise exactly the `ParamDeliver` arm
 borrowed field into the retbuf), leaving fresh-build arms (`deliver3`) untouched. The analysis side
 is verified; the remaining work is purely the emit (the explicit copy at the retbuf promotion).
 
-**EMIT (in progress — NATIVE complete, INTERP incomplete; gated `LOFT_JOIN_OWN`, off-default →
-suite byte-identical).** `ref_return` (`control.rs`, before the promotion) now materialises a
-borrowed-view candidate: a new `materialise_borrowed_return_local` rewrites the alias Set `v =
-OpGetField(base,…)` (found anywhere in the body) into `OpAppendVector(v, OpGetField(base,…))`, strips
-`v`'s deps, and clears its `skip_free`, so `v` promotes as an OWNED buffer. Two false-positive guards
-were essential and are the lesson: (1) restrict to `self.vars.skip_free(v)` — only match-arm field
-bindings, NOT stdlib `split`/`lines`/`join`'s `result` (which made `result = OpGetField(__vdb,0)`
-the buffer idiom; materialising it broke shared native codegen — `var_result` undefined); (2)
-`base ∈ v.deps` — the borrowed subject, again excluding the `__vdb` buffer. With these, NATIVE is
-fully fixed (462 + matrix `none`/`stress`, both arms, no leak/crash) and the inert gate holds.
-**INTERP still crashes under churn** — diagnosed exactly by diffing against a working owned-vector
-return (`copyv`: `out: vector = []; out += src; out`): the correct idiom is `OpDatabase(buf) ;
-out = OpGetField(buf,0) ; OpAppendVector(out, src, 64) ; OpReplaceVector(buf, out, 64) ; return buf`
-— the `OpReplaceVector` writes the GROWN vector back to a stable store, and the append tp is `64`
-(`ref(E)`). My raw `OpAppendVector(_mv_items_1, …, 65)` lacks the `__vdb`/`OpReplaceVector` wrapper
-(so after the grow-realloc the caller's retbuf ref is stale → a later allocation reuses it) and uses
-tp `65` (`E`, a `vector<E>`-source-into-`vector<ref(E)>`-dst mismatch). Native tolerates both; interp
-needs the full idiom.
+**EMIT — NATIVE COMPLETE, INTERP structure recovered, one residual (gated `LOFT_JOIN_OWN`,
+off-default → suite byte-identical). Built FROM the proven IR (`deliver3`), not a hand-roll.**
+`ref_return` (`control.rs`, before the promotion), for a borrowed-view match-field binding (`skip_free`,
+non-empty deps, `v != buf_var`): delivers each arm into the SEPARATE `__retbuf` via the proven
+per-arm machinery `materialize_vector_arms_into` (with a no-free for the `skip_free` borrowed binding
+— it aliases the subject, doesn't own a store), marks the binding to **skip promotion** (in the
+`#306` dep-walk AND the promotion loop, so the owned copy's return doesn't re-acquire the `["e"]`
+borrow), and sets `returned = Vector(elm, Deps::attrs([buf_attr]))` (as `Delivery::Materialize` does).
+The earlier hand-roll (`materialise_borrowed_return_local`, now deleted) reused the binding var AS the
+buffer — the IR-diff against `deliver3` showed that was the bug (`["_mv_items_1"]`-typed vs the proven
+`["__retbuf"]`). **NATIVE: fully clean** (462 + matrix `none`/`stress`, both arms). The IR now matches
+`deliver3`'s structure: separate `__retbuf` buffer, the binding a local, copied per-arm.
+
+**THE ONE INTERP RESIDUAL (precisely diagnosed by the `deliver3` diff — a LEAK, POISON→crash).**
+`main` doesn't free the passed `cell` (the original leak). `deliver3` (clean, frees `cell`) is the
+PROMOTION form `if {…fill buffer…}; return null` with `["??"]`; mine is the MATERIALISE form `return
+if {…; __retbuf}` with `attrs` — returning the caller's OWN buffer, so the caller neither adopts nor
+frees the argument. (`["??"]` alone — `Deps::pointer_marker()` — does NOT fix it: with the
+return-the-buffer form it double-adopts and crashes. Both ruled out by capture.) The remaining work is
+the promotion's FORM-conversion for the borrowed-binding case — synthesise an owned local like
+`deliver3`'s `o` (`o = []; o += items; o`) and route through the existing promotion, OR convert
+`return if {…; buf}` → `if {…}; return null` — so `main` frees the argument. Captures + diffs:
+[match_return-emit/](match_return-emit/README.md).
 
 **LAYER PINNED (probe-driven, two earlier guesses corrected).** The interp crash is the
 PARSER/IR-generation layer — the return/store **registration** structure — NOT interp execution and

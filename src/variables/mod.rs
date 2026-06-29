@@ -1566,14 +1566,6 @@ impl Function {
         self.variables[v as usize].skip_free
     }
 
-    /// Clear `skip_free` — once a borrowed-view binding is MATERIALISED into its own
-    /// store (@PLN85 match_return), it OWNS that store and must be tracked/freed
-    /// normally; leaving it `skip_free` makes the interpreter treat the store as
-    /// untracked and reuse it under a later allocation (a use-after-free).
-    pub fn clear_skip_free(&mut self, v: u16) {
-        self.variables[v as usize].skip_free = false;
-    }
-
     /// Mark a variable as captured by a closure.
     /// Suppresses the "never read" warning without affecting dead-assignment tracking.
     pub fn set_captured(&mut self, v: u16) {

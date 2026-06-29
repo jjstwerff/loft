@@ -728,6 +728,19 @@ impl Parser {
                 && matches!(t, Type::Never | Type::Void | Type::Vector(_, _))
                 && Self::tail_terminal_is_branch(&l[last])
                 && !self.tail_if_has_null_arm(&l[last]);
+            if std::env::var_os("LOFT_DBG_VMC").is_some() && matches!(result, Type::Vector(_, _)) {
+                eprintln!(
+                    "[vmc] fn={} !tup={} !ifu={} !p1={} ctx={context:?} resV={} tOk={} branch={} !null={} => {vec_match_candidate}",
+                    self.vars.name,
+                    !tuple_rewritten,
+                    !if_unified,
+                    !self.first_pass,
+                    matches!(result, Type::Vector(_, _)),
+                    matches!(t, Type::Never | Type::Void | Type::Vector(_, _)),
+                    Self::tail_terminal_is_branch(&l[last]),
+                    !self.tail_if_has_null_arm(&l[last]),
+                );
+            }
             if vec_match_candidate && let Type::Vector(elm, _) = result {
                 // #416 — a match/if branch tail materialises each arm into __retbuf.
                 // Routed through the ONE vector dispatch (Delivery::Materialize); it
@@ -4592,8 +4605,14 @@ impl Parser {
                 // Free the now-dead local backing store(s) the arm built (the
                 // append copied their elements into `w`); without this the
                 // interpreter orphans them. Idempotent with any scope-exit free.
-                for d in deps {
-                    seq.push(self.cl("OpFreeRef", &[Value::Var(d)]));
+                // EXCEPT a `skip_free` arm — a BORROWED VIEW (a match-field binding
+                // `_mv_items_1 = OpGetField(e,…)`) that does NOT own its backing store
+                // (it aliases the subject `e`); freeing its deps would over-free `e`
+                // (@PLN85 match_return). The append already copied its elements into `w`.
+                if !self.vars.skip_free(local) {
+                    for d in deps {
+                        seq.push(self.cl("OpFreeRef", &[Value::Var(d)]));
+                    }
                 }
                 seq.push(Value::Var(w));
                 *op = Value::Insert(seq);
@@ -4962,91 +4981,6 @@ impl Parser {
         Some((a_idx as u16, v))
     }
 
-    /// @PLN85 — materialise a borrowed-view return candidate `v` (`v = OpGetField(
-    /// base, …)`, `base != v`) into its OWN store: rewrite that alias Set, wherever it
-    /// sits in `body`, to `clear(v) + append(v, OpGetField(base, …))` so `v` owns a
-    /// COPY of the field. Returns `true` if the alias Set was found and rewritten.
-    fn materialise_borrowed_return_local(
-        &mut self,
-        v: u16,
-        elm: &Type,
-        body: &mut [Value],
-    ) -> bool {
-        // The base the alias borrows (`v = OpGetField(base, …)`) MUST be a var `v`
-        // genuinely depends on — the match subject `e`. This excludes the vector-buffer
-        // idiom `result = OpGetField(__vdb, 0)` (a FRESH `[]`, whose backing `__vdb` is
-        // not a borrow-dep): materialising that would corrupt every `x: vector = []` and
-        // break the shared stdlib (e.g. `join`) on native.
-        let deps: Vec<u16> = self.vars.tp(v).depend().clone();
-        let get_field = self.data.def_nr("OpGetField");
-        let Some(field_read) = body
-            .iter()
-            .find_map(|o| Self::find_field_alias(o, v, get_field, &deps))
-        else {
-            return false;
-        };
-        let rec_tp = self.append_elem_tp(elm);
-        // The retbuf is already emptied by the fn prologue's `OpClearVector(v)`; a
-        // second clear here double-frees its backing store on the interpreter. Append
-        // the field's elements straight into the (empty) retbuf.
-        let append = self.cl(
-            "OpAppendVector",
-            &[Value::Var(v), field_read, Value::Int(rec_tp)],
-        );
-        let materialise = Value::Insert(vec![append]);
-        body.iter_mut()
-            .any(|o| Self::replace_field_alias(o, v, get_field, &deps, &materialise))
-    }
-
-    /// The field-read `Set(v, OpGetField(base, …))` for `v` where `base ∈ deps` (a var
-    /// `v` borrows — the match subject), anywhere in `node`: the borrowed-view alias to
-    /// materialise. The `base ∈ deps` guard excludes the fresh-`[]` `__vdb` buffer idiom.
-    fn find_field_alias(node: &Value, v: u16, get_field: u32, deps: &[u16]) -> Option<Value> {
-        if let Value::Set(sv, sval) = node.unspan()
-            && *sv == v
-            && let Value::Call(d, args) = sval.unspan()
-            && *d == get_field
-            && matches!(args.first().map(Value::unspan), Some(Value::Var(av)) if deps.contains(av))
-        {
-            return Some(sval.unspan().clone());
-        }
-        let mut found = None;
-        node.unspan().for_each_child(&mut |c| {
-            if found.is_none() {
-                found = Self::find_field_alias(c, v, get_field, deps);
-            }
-        });
-        found
-    }
-
-    /// Replace the borrowed-view alias `Set(v, OpGetField(base, …))` (`base ∈ deps`) in
-    /// `node` with `repl`. Returns `true` on the first replacement.
-    fn replace_field_alias(
-        node: &mut Value,
-        v: u16,
-        get_field: u32,
-        deps: &[u16],
-        repl: &Value,
-    ) -> bool {
-        let is_alias = matches!(node.unspan(), Value::Set(sv, sval)
-            if *sv == v
-               && matches!(sval.unspan(), Value::Call(d, args)
-                   if *d == get_field
-                      && matches!(args.first().map(Value::unspan),
-                                   Some(Value::Var(av)) if deps.contains(av))));
-        if is_alias {
-            *node.unspan_mut() = repl.clone();
-            return true;
-        }
-        let mut done = false;
-        node.unspan_mut().for_each_child_mut(&mut |c| {
-            if !done {
-                done = Self::replace_field_alias(c, v, get_field, deps, repl);
-            }
-        });
-        done
-    }
-
     pub(crate) fn ref_return(&mut self, ls: &[u16], body: &mut [Value], site: RetSite) {
         // Plan-57: a returned local that gets a fresh vector literal more than once
         // cannot be NRVO-promoted to the caller's buffer — each `z=[lit]` builds INTO
@@ -5123,33 +5057,45 @@ impl Parser {
                 self.first_pass
             );
         }
-        // @PLN85 match_return (LOFT_JOIN_OWN): MATERIALISE a borrowed-view candidate
-        // before promotion. A match-field binding `_mv_items_1 = OpGetField(e,…)`
-        // (deps `[e]`) NRVO-promoted onto the retbuf would make the return a BORROW of
-        // `e` — the caller then conservatively skips freeing `e`'s owner → leak. Rewrite
-        // its alias Set to a COPY into the retbuf (clear + append the field's elements)
-        // and strip its deps, so it promotes below as an OWNED buffer. A PARAMETER
-        // candidate (`field_return`'s `b`) or a FRESH-BUILD local (`deliver3`'s `o`) has
-        // EMPTY deps and is untouched — exactly the `ParamDeliver`-free-site discriminator
-        // pinned in `ownership_pins_match_return_resisting_cases`.
-        if std::env::var_os("LOFT_JOIN_OWN").is_some() {
-            for &v in ls {
-                if v < self.vars.count()
-                    && self.vars.skip_free(v)
-                    && let Type::Vector(elm, _) = self.vars.tp(v).clone()
-                    && !self.vars.tp(v).depend().is_empty()
-                {
-                    let elm_ty = (*elm).clone();
-                    if self.materialise_borrowed_return_local(v, &elm_ty, body) {
-                        let ds: Vec<u16> = self.vars.tp(v).depend().clone();
-                        for d in ds {
-                            self.vars.make_independent(v, d);
-                        }
-                        // The binding now OWNS a copy: drop the borrowed-view
-                        // `skip_free` so its store is tracked (else interp reuses it).
-                        self.vars.clear_skip_free(v);
-                    }
-                }
+        // @PLN85 match_return (LOFT_JOIN_OWN): a borrowed-view match-field binding
+        // (`_mv_items_1 = OpGetField(e,…)`, skip_free, deps `[e]`) returned directly must
+        // NOT be NRVO-promoted to BE the retbuf — that aliases the caller's buffer onto
+        // `e` (the over-free) or, materialised in place, reuses the binding var as the
+        // buffer (a `["_mv_items_1"]`-typed store the lifetime analysis never tracks as
+        // the owned return → churn UAF). Instead recover the PROVEN `deliver3` structure:
+        // a SEPARATE canonical `__retbuf` buffer, the binding stays a local, and each arm
+        // COPIES the binding into `__retbuf` via the proven per-arm machinery
+        // (`materialize_vector_arms_into`, no-free for the borrowed binding). Then skip
+        // promoting the binding below (it is now a delivered local, not the return).
+        let mut jo_arm_skip: std::collections::HashSet<u16> = std::collections::HashSet::new();
+        if std::env::var_os("LOFT_JOIN_OWN").is_some()
+            && let Type::Vector(ret_elm, _) = &ret
+            && let Some((buf_attr, buf_var)) = self.return_buffer()
+        {
+            let elm_ty = (**ret_elm).clone();
+            let borrowed: Vec<u16> = ls
+                .iter()
+                .copied()
+                .filter(|&v| {
+                    v < self.vars.count()
+                        && v != buf_var
+                        && self.vars.skip_free(v)
+                        && matches!(self.vars.tp(v), Type::Vector(_, _))
+                        && !self.vars.tp(v).depend().is_empty()
+                })
+                .collect();
+            if !borrowed.is_empty()
+                && let Some(last) = body.last_mut()
+            {
+                self.materialize_vector_arms_into(&elm_ty, last, buf_var);
+                jo_arm_skip.extend(borrowed);
+                // Finalise the return dep to `{__retbuf}` — EXACTLY as the proven
+                // `Delivery::Materialize` path does (`dispatch_vector_delivery`): the
+                // arms now deliver an owned copy into `__retbuf`, so the return is that
+                // buffer. Skipping the promotion dropped this, leaving an empty dep — the
+                // caller then neither adopts nor frees, leaking `cell`+`inner`.
+                self.data.definitions[self.context as usize].returned =
+                    Type::Vector(Box::new(elm_ty.clone()), Deps::attrs(vec![buf_attr]));
             }
         }
         // B2-runtime / B3 / B7 unification (2026-04-13): struct-enums
@@ -5181,6 +5127,13 @@ impl Parser {
                 if v >= self.vars.count() {
                     continue; // foreign dep (e.g. closure work var) — not ours
                 }
+                // @PLN85 match_return: a binding delivered into `__retbuf` above is no
+                // longer the return — do NOT walk its deps into the return type, else
+                // the owned copy's return re-acquires the `["e"]` borrow (the caller then
+                // skips freeing `e`'s owner → leak).
+                if jo_arm_skip.contains(&v) {
+                    continue;
+                }
                 for d in self.vars.tp(v).depend() {
                     if d < self.vars.count() && seen.insert(d) {
                         expanded.push(d);
@@ -5196,6 +5149,12 @@ impl Parser {
             let is_plain_fn = !self.data.def(self.context).name().contains("__lambda")
                 && self.data.def_type(self.context) == crate::data::DefType::Function;
             for (e_idx, v) in expanded.iter().enumerate() {
+                // @PLN85 match_return: a borrowed binding already DELIVERED into a
+                // separate `__retbuf` above (`jo_arm_skip`) is a local, not the return —
+                // promoting it would re-alias the buffer onto the binding var.
+                if jo_arm_skip.contains(v) {
+                    continue;
+                }
                 let transitive = e_idx >= direct_count;
                 let n = self.vars.name(*v);
                 let is_work_ref = n.starts_with("__ref_") || n.starts_with("__rref_");
