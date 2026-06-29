@@ -240,6 +240,28 @@ PROMOTION form `if {…fill buffer…}; return null` with `["??"]`; mine is the 
 if {…; __retbuf}` with `attrs` — returning the caller's OWN buffer, so the caller neither adopts nor
 frees the argument.
 
+**SYNTHESIS LANDED (WIP, gated `LOFT_JOIN_OWN`, off-default → suite byte-identical 746✓) — STRUCTURE
+EXACT, one parser-internals blocker.** `jo_copy_borrowed_arm_yield` (in `parse_match`, after each
+arm body): if the arm yields a `skip_free` vector field binding directly (`Filled { items } => {
+items }`), it wraps the yield in an OWNED copy `{ o = []; o += items; o }` — a fresh local `o` created
+with the OWNED element type (NOT the binding's `["e"]` type, which re-propagates the borrow), `o = []`
+via the existing `vector_db` helper, `o += binding`, yield `o`. Done at PARSE time (re-parsed each
+pass) so the EXISTING `ref_return` promotion then promotes `o`. **RESULT: the deliver IR is now
+IDENTICAL to `deliver3`** — sig `["??"]`, var table (`0 e`, `1 __retbuf` marker, `2 _mv_items_1["e"]`
+source, `3 arg _mvcopy_1` owned buffer), and the CALLER adopts (`r:vector["__ref_1"]`) + frees the
+argument (`OpFreeRef(cell)`). Native fully clean; the simple case (`deliver` alone) is clean + value-
+correct (asserts pass) on interp too. The earlier "POISON crash" was an INSTRUMENT ARTIFACT — `deliver3`
+itself SIGSEGVs under `LOFT_POISON` on this shape.
+**THE BLOCKER (scoped): a two-pass def-numbering corruption when OTHER functions are present.** With
+`e_default`/`filler` also defined, interp SIGSEGVs (`d_nr=u32::MAX` — a corrupted call target); with
+`deliver` alone it is clean. So synthesising at `parse_match` (`create_unique`/`vector_db`/`vector_def`)
+introduces a cross-pass inconsistency in the def/type numbering — pass 2's `vector_db` mints entities
+pass 1 does not, shifting later defs. NEXT: make the synthesis pass-consistent (mint the fresh local +
+its `__vdb`/vector-type identically on BOTH passes — investigate `create_unique`/`vector_def` def
+allocation order), OR move the wrap into the arm-body parse where user `o = []` already does this
+consistently. (The earlier `ref_return` materialise block is now vestigial — the synthesis supersedes
+it; clean it up once this lands.)
+
 **SETTLED — the analysis is SUFFICIENT; the fix is purely codegen STRUCTURE (synthesise `o`).**
 Probed the question "can the analysis aid here?": the oracle classifies BOTH `deliver` (materialised)
 and `deliver3` identically — `return=Join(base=buffer)` — so it already greenlights the delivery; it

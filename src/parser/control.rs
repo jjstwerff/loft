@@ -1933,6 +1933,76 @@ impl Parser {
         merge_dependencies(&true_type, &false_type)
     }
 
+    /// @PLN85 match_return (LOFT_JOIN_OWN): an arm that yields a borrowed-view vector
+    /// FIELD BINDING directly (`Filled { items } => { items }`) returns a view into the
+    /// match subject — which the caller cannot free without an over-free. Wrap the yield
+    /// in an OWNED copy `{ o = []; o += items; o }` (a fresh local `o`), so the value
+    /// escapes OWNED. This is exactly the `deliver3` shape: the existing `ref_return`
+    /// promotion then promotes `o` to the buffer arg + emits the `__retbuf` marker, the
+    /// separate-buffer ABI the caller adopts (and so frees the argument). Done at PARSE
+    /// time (re-parsed each pass) so `create_unique`/`vector_db` stay pass-consistent.
+    /// Returns the new OWNED arm type when it rewrote (for cross-arm unification), else
+    /// `None`. No-op unless the tail is a `skip_free`, non-empty-dep vector binding.
+    #[allow(clippy::question_mark)]
+    fn jo_copy_borrowed_arm_yield(&mut self, arm_body: &mut Value) -> Option<Type> {
+        if std::env::var_os("LOFT_JOIN_OWN").is_none() {
+            return None;
+        }
+        let v = match arm_body.unspan() {
+            Value::Var(v) => *v,
+            Value::Block(bl) => match bl.operators.last().map(Value::unspan) {
+                Some(Value::Var(v)) => *v,
+                _ => return None,
+            },
+            _ => return None,
+        };
+        if v >= self.vars.count()
+            || !self.vars.skip_free(v)
+            || !matches!(self.vars.tp(v), Type::Vector(_, _))
+            || self.vars.tp(v).depend().is_empty()
+        {
+            return None;
+        }
+        let v_type = self.vars.tp(v).clone();
+        let elm = match &v_type {
+            Type::Vector(b, _) => (**b).clone(),
+            _ => return None,
+        };
+        // Create `o` with the OWNED element type (no deps) — NOT `v_type`, which is the
+        // binding's `vector<ref(E)>["e"]`; inheriting that `["e"]` would mark the copy as
+        // borrowing `e` and re-propagate it to the return (the leak). `deliver3`'s `o` is
+        // dep-free.
+        let owned_create = Type::Vector(Box::new(elm.clone()), Deps::none());
+        let o = self.create_unique("mvcopy", &owned_create);
+        if o == u16::MAX {
+            return None;
+        }
+        self.vars.defined(o);
+        // `o = []` (pass-gated: empty on pass 1, the OpDatabase alloc on pass 2 — exactly
+        // as a user-written `o: vector = []` lowers), then `o += <binding>`, then yield o.
+        let mut ops = self.vector_db(&v_type, o);
+        let elem_tp = self.append_elem_tp(&elm);
+        ops.push(self.cl(
+            "OpAppendVector",
+            &[Value::Var(o), Value::Var(v), Value::Int(elem_tp)],
+        ));
+        ops.push(Value::Var(o));
+        let owned_tp = Type::Vector(Box::new(elm), Deps::frame1(o));
+        let copy_block = crate::data::v_block(ops, owned_tp.clone(), "jo_arm_copy");
+        // Replace the WHOLE arm body (a bare `{ items }` yield) with the owned copy
+        // block, NOT just its last op — wrapping inside leaves the outer block typed by
+        // the borrowed binding (`["_mv_items_1"]`), which re-propagates the `["e"]` dep
+        // to the return. Only the single-yield shape (the match-field binding IS the arm
+        // value) is rewritten; a multi-statement arm is left alone.
+        let n = arm_body.unspan_mut();
+        match n {
+            Value::Var(_) => *n = copy_block,
+            Value::Block(bl) if bl.operators.len() == 1 => *n = copy_block,
+            _ => return None,
+        }
+        Some(owned_tp)
+    }
+
     // <match> ::= 'match' <expression> '{' { <pattern> '=>' <expression> } '}'
     // <pattern> ::= '_' | <variant> [ '{' <field> { ',' <field> } '}' ]
     #[allow(clippy::too_many_lines)]
@@ -2366,12 +2436,21 @@ impl Parser {
             let arm_write_state = self.vars.save_and_clear_write_state();
             self.vars.clear_write_state();
             let mut arm_body = Value::Null;
-            let arm_type = if self.lexer.peek_token("{") {
+            let mut arm_type = if self.lexer.peek_token("{") {
                 self.parse_block("match_arm", &mut arm_body, &Type::Unknown(0))
             } else {
                 self.expression(&mut arm_body)
             };
             self.vars.restore_write_state(&arm_write_state);
+            // @PLN85 match_return (LOFT_JOIN_OWN): if this arm yields a borrowed-view
+            // vector field binding DIRECTLY (`Filled { items } => { items }`), wrap it in
+            // an owned copy `{ o = []; o += items; o }` so the value ESCAPES OWNED — the
+            // `deliver3` structure. The existing promotion then builds the separate-buffer
+            // ABI the caller adopts + frees the argument. No-op for non-matching arms.
+            // Updating `arm_type` keeps cross-arm unification reading the OWNED type.
+            if let Some(owned) = self.jo_copy_borrowed_arm_yield(&mut arm_body) {
+                arm_type = owned;
+            }
 
             // S15: restore name mappings after arm body so the next arm can
             // create its own alias for the same field name.
