@@ -420,7 +420,22 @@ if git -C "$REG_DIR" diff --cached --quiet; then
     echo "index.json.sig unchanged — nothing to commit."
     PUSHED=1   # nothing outstanding → safe to clean up the clone
 elif [ "$PUSH" = 1 ]; then
-    git -C "$REG_DIR" commit -q -m "${MSG:-sign: commit index.json + regenerate index.json.sig}"
+    # The throwaway registry clone inherits NO identity when the maintainer has
+    # only a per-repo (not global) git config, so a plain `git commit` aborts with
+    # "Author identity unknown".  Resolve one — existing config → gh login → a
+    # stable registry-signer fallback — and pass it inline.  Trust comes from the
+    # Ed25519 signature, not the git author, so a derived/bot identity is fine; we
+    # just need a valid one so the signing commit lands.
+    sign_name=$(git -C "$REG_DIR" config user.name || true)
+    sign_email=$(git -C "$REG_DIR" config user.email || true)
+    if [ -z "$sign_name" ] || [ -z "$sign_email" ]; then
+        gh_login=$(gh api user --jq '.login' 2>/dev/null || true)
+        sign_name="${sign_name:-${gh_login:-loft-registry-signer}}"
+        sign_email="${sign_email:-${gh_login:+$gh_login@users.noreply.github.com}}"
+        sign_email="${sign_email:-loft-registry-signer@users.noreply.github.com}"
+    fi
+    git -C "$REG_DIR" -c user.name="$sign_name" -c user.email="$sign_email" \
+        commit -q -m "${MSG:-sign: commit index.json + regenerate index.json.sig}"
     # Push reusing the gh login as git's credential helper: no username/password
     # prompt on an HTTPS remote (the registry is often cloned over HTTPS), and
     # harmless on an SSH remote (which uses your key).  `gh release create` etc.
