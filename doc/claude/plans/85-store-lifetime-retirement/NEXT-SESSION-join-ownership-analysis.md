@@ -135,6 +135,22 @@ then free.** Land one site per commit, each gated on its `462-*` repro + the 54-
 - Flip default-on only when all three repros + the full matrix are green on both backends and
   `LOFT_POISON=1` over the corpus is clean — that green is wide-release gate-1 "stabilized".
 
+**Stage-3 GATHER (done, pre-edit — recommend `local_source` as the FIRST site, reordering ahead of
+the list above):** it leaks DETERMINISTICALLY on both backends (no churn/poison needed → easiest to
+gate), and the fact lands cleanly. `LOFT_LEAK_SITES` pins the leak to **`4× M (kt=64)` allocated at
+the `dflt()` body (line 2), one per call** — i.e. the FIRST `chosen = dflt()` store (S2), orphaned
+when `chosen` is reassigned to the `pool[wj] ?? dflt()` join inside the loop. The existing
+`OpFreeRefIfDistinct(__ref_2, chosen)` at the `materialized_view_return` does NOT cover it (the
+displaced store from a conditional/loop reassign escapes that single end-of-body free). **Fix site:**
+`scopes.rs` first-bind/reassign free-placement (~`scopes.rs:1098`, the `Type::Reference|Enum` +
+`Value::Call` adopt-vs-copy block that already reads `return_adopts_fresh_store()`). Extend it to read
+`use_analysis::reassign_sites` — when a heap slot's reassignment has **`prior=Owned`** (and the new
+RHS is a distinct store), emit a free of the displaced store **before** the slot takes the new value,
+gated behind `LOFT_JOIN_OWN`. **Working-bytecode target for the gate:** the BROKEN `462-reassign-*`
+bytecode + that one `OpFreeRefIfDistinct(old_chosen, new_value)` at the reassign point; the WORKING
+single-def repro (already clean) is the no-leak reference. Prove byte-for-byte on both backends, then
+`LOFT_STORES=warn` clean on BROKEN + still-clean on WORKING + the field-view family.
+
 ### The loft-codegen gate (MANDATORY at every emit change)
 Prove the WORKING bytecode beside the broken one, BOTH backends, BEFORE editing (`loft introspect`).
 The `462-*` pairs are that artifact for sites 1–2; capture the match pair for site 3. Do not edit a
