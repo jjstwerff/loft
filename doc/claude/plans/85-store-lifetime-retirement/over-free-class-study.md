@@ -213,6 +213,19 @@ RESEMBLE each other (both reassign a slot from owned → borrow) and may share o
 source-free bit is clearly distinct. **This scopes the fix: it is not a one-line chokepoint patch** —
 the earlier "one rule collapses all" was right about the INVARIANT, optimistic about the FIX.
 
+**Update (2026-06-29) — `elem_accumulate` is NOT a surgical dep-gate either.** Taking it to the
+loft-codegen gate: the append source-free is **load-bearing for the owned branch**. `pick` is
+`t[i] ?? m_none()` — a runtime `??` JOIN (borrow `t[i]` OR owned `m_none()`) with ONE static type
+`M["t"]`. Proven both ways (`bytecode-comparisons/462-elem-accumulate{,-owned-branch-CLEAN}.loft`):
+the all-borrow form over-frees `t`'s element (bug), the all-owned form is **clean BECAUSE the append
+frees `m_none`**. So gating the `OpCopyRecord 0x8000` on `dep.is_empty()` would fix the borrow case and
+**leak the owned case** — same static dep, opposite correct answer. The free decision is genuinely
+**runtime-dependent** (which `??` branch was taken). So `elem_accumulate` shares the owned-or-borrow
+JOIN root with `local_source`; the correct fix is join-aware (materialize the escaping view to owned,
+or a runtime ownership flag), NOT a static bit-gate. **Net: the fuzz-proof + drill-downs have now
+PROVEN the over-free class needs the OWNERSHIP_MODEL substrate (sound owned-or-borrow join), not three
+quick per-site patches** — which is the load-bearing scoping result, reached before any regressing edit.
+
 ## Recommended next step
 
 > **Superseded by § Root-cause drill-down + § Three chokepoints (2026-06-29)** — the lever is the *reassign-frees-displaced-owned*
