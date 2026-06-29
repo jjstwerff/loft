@@ -190,9 +190,32 @@ on both backends, the WORKING pair + the field-view family still clean. Under `L
 churn-independent, so no 200-store stress harness is needed (supersedes the LOFT_UAF_SRC-at-scale
 guard the next-step below proposes).
 
+### Three chokepoints (2026-06-29 — the match_return / elem_accumulate drill-downs)
+
+Drilling the boundary map's other two live shapes (same gate: minimal repro + UAF trace + introspect)
+shows the over-free class is **NOT one chokepoint** — it is (at least) THREE distinct emit sites, each
+deciding own-vs-borrow wrong at a different place. Repros under `bytecode-comparisons/462-*`:
+
+| shape | signature | chokepoint (pinned) |
+|---|---|---|
+| **local_source** | leak, **both backends** | **reassign-free** — a displaced OWNED store is not freed when a var is reassigned to a borrow (`scopes.rs` free-placement) |
+| **elem_accumulate** | interp UAF (SIGSEGV) | **append source-free** — `out += [view]` lowers to `OpCopyRecord(src→elem, 0x8000 source-free) + OpFreeRef(src)` on a BORROWED source (`__lift_1` typed `M["t"]`). `LOFT_UAF_SRC`: freed at `pick` exit (op=152), read at `collect`'s append. The `0x8000` bit fired on a borrow. |
+| **match_return** | interp abort (SIGABRT; downstream `d_nr=u32::MAX` corruption) | **arm-return delivery** — `materialize_vector_arms_into` reassigns the materialize buffer `_mv_items_1` (owned) to `OpGetField(e,4)` (a borrow of the enum field), block dep `["__retbuf","e"]`; the borrowed field is freed downstream |
+
+**Conclusion — the class does NOT collapse to one rule.** All three share the SAME invariant (read the
+carried `deps`: a borrowed source is never freed; a displaced owned store always is) — the
+OWNERSHIP_MODEL north star — but the wrong decision is made at THREE emit sites: the **reassign free**
+(`scopes.rs`), the **append/bind source-free bit** (`OpCopyRecord 0x8000`), and the **arm-return
+delivery** (`materialize_vector_arms_into`). So the fix is either **three targeted dep-reads** (one per
+site) or the **single unification refactor** (route every own-vs-borrow decider through one
+`deps`-reading chokepoint — the bigger OWNERSHIP_MODEL collapse). `local_source` and `match_return`
+RESEMBLE each other (both reassign a slot from owned → borrow) and may share one fix; `elem_accumulate`'s
+source-free bit is clearly distinct. **This scopes the fix: it is not a one-line chokepoint patch** —
+the earlier "one rule collapses all" was right about the INVARIANT, optimistic about the FIX.
+
 ## Recommended next step
 
-> **Superseded by § Root-cause drill-down (2026-06-29)** — the lever is the *reassign-frees-displaced-owned*
+> **Superseded by § Root-cause drill-down + § Three chokepoints (2026-06-29)** — the lever is the *reassign-frees-displaced-owned*
 > rule, not borrow-set propagation (the dep is already propagated). The text below is the prior framing.
 
 Land the **assignment borrow-set propagation** (the one rule) as the chokepoint, with
