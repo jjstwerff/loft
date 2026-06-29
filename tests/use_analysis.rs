@@ -13,9 +13,13 @@ use std::process::Command;
 
 /// Run the loft binary on a source string with the verdict dump on; return stderr.
 fn dump(src: &str) -> String {
+    use std::hash::{Hash, Hasher};
     let dir = std::env::temp_dir().join("loft_use_analysis");
     std::fs::create_dir_all(&dir).expect("probe dir");
-    let path = dir.join("probe.loft");
+    // Key the file on the source so parallel tests don't clobber each other's probe.
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    src.hash(&mut h);
+    let path = dir.join(format!("probe_{:016x}.loft", h.finish()));
     let mut f = std::fs::File::create(&path).expect("write probe");
     f.write_all(src.as_bytes()).expect("write probe body");
     let out = Command::new(env!("CARGO_BIN_EXE_loft"))
@@ -38,6 +42,43 @@ fn assert_verdict(stderr: &str, func: &str, want_verdict: &str) {
         line.contains(&format!("verdict={want_verdict}")),
         "{func}: expected {want_verdict}, got: {line}"
     );
+}
+
+/// Assert the Stage-1 ownership classification of a function's RETURN value
+/// (`OWN fn=n_<func> return=<Owned|Borrowed|Join>`).
+fn assert_own_return(stderr: &str, func: &str, want: &str) {
+    let needle = format!("OWN fn=n_{func} return=");
+    let line = stderr
+        .lines()
+        .find(|l| l.contains(&needle))
+        .unwrap_or_else(|| panic!("no OWN return line for {func}; dump:\n{stderr}"));
+    assert!(
+        line.contains(&format!("return={want}")),
+        "{func} return: expected {want}, got: {line}"
+    );
+}
+
+/// Assert an owned-slot REASSIGNMENT of `var` in `func` carries the expected
+/// prior/rhs classes (`OWN fn=n_<func> reassign v=…(var) prior=… rhs=…`).
+fn assert_reassign(stderr: &str, func: &str, var: &str, prior: &str, rhs: &str) {
+    let head = format!("OWN fn=n_{func} reassign ");
+    let line = stderr
+        .lines()
+        .find(|l| l.starts_with(&head) && l.contains(&format!("({var})")))
+        .unwrap_or_else(|| panic!("no OWN reassign line for {func}/{var}; dump:\n{stderr}"));
+    assert!(
+        line.contains(&format!("prior={prior} rhs={rhs}")),
+        "{func}/{var}: expected prior={prior} rhs={rhs}, got: {line}"
+    );
+}
+
+/// Assert NO owned-slot reassignment is reported for `func` (the WORKING
+/// discriminator — a single-def slot carries no displaced owned store).
+fn assert_no_reassign(stderr: &str, func: &str) {
+    let head = format!("OWN fn=n_{func} reassign ");
+    if let Some(line) = stderr.lines().find(|l| l.starts_with(&head)) {
+        panic!("{func}: expected no reassign site, got: {line}");
+    }
 }
 
 const SRC: &str = r#"
@@ -211,4 +252,93 @@ fn tier1_runtime_correct_both_backends() {
             "{backend} tier1 matrix leaked a store:\n{stderr}"
         );
     }
+}
+
+// ── @PLN85 Stage 1: the Owned|Borrowed|Join ownership classification ───────────
+// The over-free class needs ONE carried fact — for a value escaping into an owned
+// position (return / reassign / append), is its store Owned, Borrowed, or a runtime
+// Join? This pins that classification (still INERT — printed under the same dump,
+// wired into no codegen) on the three live over-free shapes + the FIXED field-view
+// family. Design + boundary map:
+// doc/claude/plans/85-store-lifetime-retirement/{over-free-class-study,NEXT-SESSION-join-ownership-analysis}.md
+
+const OWN_SRC: &str = r#"
+struct M { hp: integer not null, name: text }
+fn dflt() -> M { M{hp:0, name:""} }
+
+// elem_accumulate ROOT: `t[i] ?? dflt()` is owned on the dflt() arm, borrowed on
+// the t[i] arm — a runtime JOIN the flattened return dep (M["t"]) hides. The same
+// `pick` underlies BOTH the source-free (UAF) and the all-owned (CLEAN) repros:
+// they are statically IDENTICAL — Join — and the fix (materialise the borrow arm
+// to owned) makes both correct regardless of which branch runs.
+fn pick(t: vector<M>, i: integer) -> M { t[i] ?? dflt() }
+
+// local_source ROOT (#462 leak): `chosen` first OWNS dflt(), then is reassigned to
+// a JOIN — the displaced owned store leaks. The over-free shape = prior Owned, rhs
+// Join. The return itself is Owned (a materialized_view_return mints a fresh store).
+fn pick_cond(t: vector<M>, salt: integer) -> M {
+  pool: vector<M> = []; for p in 0..len(t) { pool += [t[p] ?? dflt()]; }
+  chosen = dflt();
+  np = len(pool);
+  for wj in 0..np { if salt % np == wj { chosen = pool[wj] ?? dflt(); } }
+  chosen
+}
+// WORKING discriminator: a single-def `chosen` displaces no owned store → no
+// reassign site → no leak.
+fn pick_uncond(t: vector<M>, idx: integer) -> M {
+  pool: vector<M> = []; for p in 0..len(t) { pool += [t[p] ?? dflt()]; }
+  chosen = pool[idx] ?? dflt();
+  chosen
+}
+
+// match_return ROOT: a match arm delivers a borrowed enum-field view; the other
+// arm an empty owned vector → the return is a JOIN.
+struct E { hp: integer not null, name: text }
+enum Cell { Empty, Filled { items: vector<E> } }
+fn deliver(e: Cell) -> vector<E> { match e { Filled { items } => { items }, _ => { [] } } }
+
+// field-view family (all FIXED / clean on the boundary map): a struct-field view
+// and a whole-arg view are plain BORROWS of a parameter — safe to return.
+struct Box { items: vector<integer> }
+fn getf(b: Box) -> vector<integer> { b.items }
+fn whole(v: vector<integer>) -> vector<integer> { v }
+
+fn main() {
+  t: vector<M> = []; for k in 0..3 { t += [M{hp:k, name:"m"}]; }
+  a = pick(t, 0); b = pick_cond(t, 1); c = pick_uncond(t, 0);
+  cell = Filled { items: [] }; d = deliver(cell);
+  bx = Box{ items: [1, 2, 3] }; r = getf(bx); w = whole([4, 5]);
+  print("{a.hp} {b.hp} {c.hp} {len(d)} {len(r)} {len(w)}\n");
+}
+"#;
+
+/// The Stage-1 ownership fact, pinned per over-free shape. This is the VERDICT the
+/// Stage-3 free sites will read; the test gates the analysis in isolation (nothing
+/// emits off it yet), so it can be iterated before any codegen change.
+#[test]
+fn ownership_classifies_the_over_free_shapes() {
+    let stderr = dump(OWN_SRC);
+
+    // dflt mints a fresh struct -> Owned (the owned arm of every `??` join below).
+    assert_own_return(&stderr, "dflt", "Owned");
+
+    // elem_accumulate: `t[i] ?? dflt()` is a runtime Join. (The CLEAN/all-owned
+    // repro uses this SAME `pick` — statically Join too; the static fact cannot
+    // and need not distinguish the runtime branch, and Join-awareness covers both.)
+    assert_own_return(&stderr, "pick", "Join");
+
+    // local_source: the displaced-owned-store leak is `chosen` reassigned from an
+    // OWNED init to a JOIN. The WORKING (single-def) form has no such site.
+    assert_reassign(&stderr, "pick_cond", "chosen", "Owned", "Join");
+    assert_no_reassign(&stderr, "pick_uncond");
+    // pick_cond's RETURN is the fresh materialized store, not the join slot.
+    assert_own_return(&stderr, "pick_cond", "Owned");
+
+    // match_return: borrowed enum-field arm vs empty owned arm -> Join.
+    assert_own_return(&stderr, "deliver", "Join");
+
+    // field-view family (fixed/clean): a field view and a whole-arg view are plain
+    // parameter Borrows — never freed at the return.
+    assert_own_return(&stderr, "getf", "Borrowed");
+    assert_own_return(&stderr, "whole", "Borrowed");
 }

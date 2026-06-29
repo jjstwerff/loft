@@ -458,12 +458,290 @@ pub fn elision_plans(code: &Value, function: &Function, data: &Data) -> Vec<Elid
     analyze_fn(code, function, data, env_tier()).1
 }
 
+// ============================================================================
+// Ownership classification (Owned | Borrowed | Join) — the @PLN85 over-free fact.
+//
+// The over-free class (a borrowed view escapes into an owned position — return,
+// reassign, append — and a free site frees its store while the view is still
+// live) is NOT a per-site bug; it is one missing fact RE-DERIVED at ~16 sites.
+// The fact: for any value that escapes into an owned position, is its store
+//   * Owned     — a freshly minted store the producer owns (free is correct), or
+//   * Borrowed  — a view into a store owned elsewhere (must NOT free here), or
+//   * Join      — owned on one runtime branch, borrowed on the other (the
+//                 `v[i] ?? default` shape) — the decision is runtime-dependent,
+//                 so the escape must MATERIALISE the borrow branch to owned.
+//
+// Crucially the JOIN is the part the flattened return-dep facts
+// (`return_adopts_fresh_store` / `returns_borrowed_view`) LOSE: a `fn pick(t,i)
+// -> M { t[i] ?? m_none() }` flattens to "borrowed view of t", hiding that the
+// `m_none()` arm is owned. So this classifier walks the return EXPRESSION (which
+// recovers the `??`/`if-else` join) rather than reading the collapsed dep.
+//
+// STAGE 1 (this code) is deliberately INERT: it computes the classification and
+// (under `LOFT_MATERIALIZE_DUMP`) prints it, and wires into no codegen. It is
+// tested separately (see the `ownership_*` tests) before any free site reads it.
+// See `doc/claude/plans/85-store-lifetime-retirement/over-free-class-study.md`
+// (§ Three chokepoints) and `NEXT-SESSION-join-ownership-analysis.md`.
+//
+// APPROXIMATIONS (sound for an inert fact; revisited when a free site reads it):
+//   * Var resolution is flow-INSENSITIVE — a var classifies as the join of ALL
+//     its real (non-`= null`-init) defs across the body, not the def that reaches
+//     the point of use. For the over-free shapes (single-def views, owned-then-
+//     reassigned slots) this gives the right answer; a genuinely path-split var
+//     can only over-report Join, never wrongly report Owned.
+//   * A bare PARAMETER used as a value classifies as `Borrowed` (the caller owns
+//     it) — including a retbuf param a callee fills in place, which is really
+//     owned. Conservative: it can lose an Owned, never invent one.
+// ============================================================================
+
+/// The store-ownership of a value that escapes into an owned position. The one
+/// carried fact the over-free free sites should READ instead of re-deriving.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Own {
+    /// A freshly minted store the producer owns (an `OpDatabase`/`OpNewRecord`
+    /// buffer, a struct literal, a call whose return adopts a fresh store).
+    Owned,
+    /// A view into a store owned elsewhere (a vector-element / field projection,
+    /// a returned parameter, or a value that resolves to one).
+    Borrowed,
+    /// Runtime-dependent: owned on one branch, borrowed on the other (a `??` /
+    /// `if-else` whose arms split). No static free decision — the escape must
+    /// materialise the borrow branch to owned, after which free is safe.
+    Join,
+}
+
+impl Own {
+    /// The lattice join: equal classes collapse; any disagreement is a `Join`.
+    #[must_use]
+    fn join(self, other: Own) -> Own {
+        if self == other { self } else { Own::Join }
+    }
+}
+
+/// One owned-slot reassignment (`v = X` where `v` already held a value): the class
+/// of the value `v` held BEFORE this assignment and of the new RHS. A `prior =
+/// Owned`, `rhs = Join`/`Borrowed` row is the over-free leak shape — the displaced
+/// owned store must be freed before `v` takes the borrow (the `local_source` root).
+#[derive(Clone, Debug)]
+pub struct ReassignSite {
+    pub var: u16,
+    pub var_name: String,
+    pub prior: Own,
+    pub rhs: Own,
+}
+
+/// The recursive ownership classifier over the post-lowering `Value` IR. Holds the
+/// op-def numbers it keys on and a memoised, recursion-guarded per-function return
+/// classification (so an interprocedural `pick(t,i)` call resolves to `pick`'s
+/// return class, recovering the `??` join the flattened return dep loses).
+struct Ownership<'a> {
+    data: &'a Data,
+    op_database: u32,
+    op_new_record: u32,
+    projections: HashSet<u32>,
+    ret_memo: HashMap<u32, Own>,
+    visiting: HashSet<u32>,
+}
+
+/// The tail (value) expression of a function body, or `None` for a native/`#rust`
+/// definition (no loft `Block` body — its flattened return dep is then exact).
+fn fn_body_tail(code: &Value) -> Option<&Value> {
+    match code.unspan() {
+        Value::Block(b) => b.operators.last(),
+        _ => None,
+    }
+}
+
+/// A function's def facts: every real definition `v = rhs` (in source order,
+/// skipping `v = null` declaration sentinels) and the vars `OpDatabase` mints a
+/// fresh store into (which are Owned even with no `Set`-def — e.g. a retbuf param
+/// a `materialized_view_return` fills in place).
+#[derive(Default)]
+struct Defs {
+    rhs: HashMap<u16, Vec<Value>>,
+    db_vars: HashSet<u16>,
+}
+
+fn collect_defs(node: &Value, op_database: u32, out: &mut Defs) {
+    match node.unspan() {
+        Value::Set(v, rhs) => {
+            if !matches!(rhs.unspan(), Value::Null) {
+                out.rhs.entry(*v).or_default().push(rhs.unspan().clone());
+            }
+            collect_defs(rhs, op_database, out);
+        }
+        Value::Call(d, args) if *d == op_database => {
+            if let Some(Value::Var(v)) = args.first().map(Value::unspan) {
+                out.db_vars.insert(*v);
+            }
+            for a in args {
+                collect_defs(a, op_database, out);
+            }
+        }
+        other => other.for_each_child(&mut |c| collect_defs(c, op_database, out)),
+    }
+}
+
+impl<'a> Ownership<'a> {
+    fn new(data: &'a Data) -> Self {
+        Ownership {
+            data,
+            op_database: data.def_nr("OpDatabase"),
+            op_new_record: data.def_nr("OpNewRecord"),
+            projections: projection_ops(data),
+            ret_memo: HashMap::new(),
+            visiting: HashSet::new(),
+        }
+    }
+
+    /// The ownership class of the value `d_nr` returns. For a loft-body function it
+    /// classifies the return EXPRESSION (recovering a `??` join); for a native
+    /// definition it falls back to the flattened canonical fact.
+    fn return_ownership(&mut self, d_nr: u32) -> Own {
+        if let Some(&c) = self.ret_memo.get(&d_nr) {
+            return c;
+        }
+        let def = self.data.def(d_nr);
+        let tail = fn_body_tail(&def.code);
+        // No loft body (native op / `#rust` stdlib): no intraprocedural join to
+        // recover — the flattened canonical fact is exact.
+        if tail.is_none() || !matches!(def.def_type, DefType::Function) {
+            let c = if def.returns_borrowed_view() {
+                Own::Borrowed
+            } else {
+                Own::Owned
+            };
+            self.ret_memo.insert(d_nr, c);
+            return c;
+        }
+        if !self.visiting.insert(d_nr) {
+            // Recursion back-edge: conservatively Borrowed (never assume a self-
+            // referential return is freshly owned). Not memoised — the enclosing
+            // frame computes and caches the real class.
+            return Own::Borrowed;
+        }
+        let mut defs = Defs::default();
+        collect_defs(&def.code, self.op_database, &mut defs);
+        let class = self.classify(tail.unwrap(), &def.variables, &defs);
+        self.visiting.remove(&d_nr);
+        self.ret_memo.insert(d_nr, class);
+        class
+    }
+
+    /// Classify a value expression within `func` (using `defs` to resolve local
+    /// vars to their defining RHS). The recursive core of the analysis.
+    fn classify(&mut self, node: &Value, func: &Function, defs: &Defs) -> Own {
+        match node.unspan() {
+            // A var `OpDatabase` minted a fresh store into is Owned regardless of
+            // any other def (the retbuf a `materialized_view_return` fills).
+            Value::Var(v) if defs.db_vars.contains(v) => Own::Owned,
+            Value::Var(v) => match defs.rhs.get(v) {
+                Some(rhss) if !rhss.is_empty() => rhss
+                    .iter()
+                    .map(|r| self.classify(r, func, defs))
+                    .reduce(Own::join)
+                    .unwrap_or(Own::Owned),
+                // No local def: a parameter (caller owns it ⇒ Borrowed) or an
+                // uninitialised local (treat as Owned — nothing to mis-free).
+                _ => {
+                    if func.is_argument(*v) {
+                        Own::Borrowed
+                    } else {
+                        Own::Owned
+                    }
+                }
+            },
+            Value::Call(d, _) => {
+                if *d == self.op_database || *d == self.op_new_record {
+                    Own::Owned
+                } else if self.projections.contains(d) {
+                    // A projection (`OpGetField`/`OpGetVector*`/`OpGetDbRef`) is a
+                    // view into its base container (arg 0).
+                    Own::Borrowed
+                } else {
+                    self.return_ownership(*d)
+                }
+            }
+            // `??` / `if-else` lowers to `If`: the join of its two arms.
+            Value::If(_, then, els) => self
+                .classify(then, func, defs)
+                .join(self.classify(els, func, defs)),
+            // A block's value is its tail; passthrough wrappers forward.
+            Value::Block(b) => b
+                .operators
+                .last()
+                .map_or(Own::Owned, |t| self.classify(t, func, defs)),
+            Value::Insert(ops) => ops
+                .last()
+                .map_or(Own::Owned, |t| self.classify(t, func, defs)),
+            Value::Return(v) | Value::BreakWith(_, v) => self.classify(v, func, defs),
+            // Everything else (literals, scalar/void ops, control with no value
+            // payload) is a fresh value or irrelevant to the heap over-free class.
+            _ => Own::Owned,
+        }
+    }
+
+    /// The owned-slot reassignments in function `d_nr`: for each var with more than
+    /// one real def, the class it held before its LAST def and the class of that
+    /// def. The `prior = Owned` rows are the displaced-owned-store leak candidates.
+    fn reassign_sites(&mut self, d_nr: u32) -> Vec<ReassignSite> {
+        let def = self.data.def(d_nr);
+        if !matches!(def.def_type, DefType::Function) {
+            return Vec::new();
+        }
+        let func = &def.variables;
+        let mut defs = Defs::default();
+        collect_defs(&def.code, self.op_database, &mut defs);
+        // Only HEAP-typed vars can carry the over-free leak: a reassigned scalar
+        // loop counter has no store to displace (the class is record-specific —
+        // "scalar never fires" per the boundary map). Filter them out.
+        let mut vars: Vec<u16> = defs
+            .rhs
+            .keys()
+            .copied()
+            .filter(|v| defs.rhs[v].len() > 1 && func.tp(*v).heap_dep().is_some())
+            .collect();
+        vars.sort_unstable();
+        vars.into_iter()
+            .map(|v| {
+                let rhss = defs.rhs[&v].clone();
+                let n = rhss.len();
+                let prior = rhss[..n - 1]
+                    .iter()
+                    .map(|r| self.classify(r, func, &defs))
+                    .reduce(Own::join)
+                    .unwrap_or(Own::Owned);
+                let rhs = self.classify(&rhss[n - 1], func, &defs);
+                ReassignSite {
+                    var: v,
+                    var_name: func.name(v).to_string(),
+                    prior,
+                    rhs,
+                }
+            })
+            .collect()
+    }
+}
+
+/// Public, test-facing entry: the ownership class of function `d_nr`'s return.
+#[must_use]
+pub fn return_ownership(data: &Data, d_nr: u32) -> Own {
+    Ownership::new(data).return_ownership(d_nr)
+}
+
+/// Public, test-facing entry: the owned-slot reassignment sites of function `d_nr`.
+#[must_use]
+pub fn reassign_sites(data: &Data, d_nr: u32) -> Vec<ReassignSite> {
+    Ownership::new(data).reassign_sites(d_nr)
+}
+
 /// Print every function's verdicts when `LOFT_MATERIALIZE_DUMP` is set. Called from
 /// `scopes::check`; a no-op otherwise. Behaviour-neutral — diagnostics only.
 pub fn dump_all(data: &Data) {
     if std::env::var_os("LOFT_MATERIALIZE_DUMP").is_none() {
         return;
     }
+    let mut own = Ownership::new(data);
     for d_nr in 0..data.definitions() {
         let def = data.def(d_nr);
         if !matches!(def.def_type, DefType::Function) {
@@ -473,6 +751,19 @@ pub fn dump_all(data: &Data) {
             eprintln!(
                 "MAT fn={} v={}({}) src={} verdict={:?} [{}]",
                 def.name, r.var_nr, r.var_name, r.source, r.verdict, r.reason
+            );
+        }
+        // The Stage-1 ownership fact (inert): the return class + the owned-slot
+        // reassignments. The over-free leak shape is a `prior=Owned rhs=Join` row.
+        eprintln!(
+            "OWN fn={} return={:?}",
+            def.name,
+            own.return_ownership(d_nr)
+        );
+        for s in own.reassign_sites(d_nr) {
+            eprintln!(
+                "OWN fn={} reassign v={}({}) prior={:?} rhs={:?}",
+                def.name, s.var, s.var_name, s.prior, s.rhs
             );
         }
     }

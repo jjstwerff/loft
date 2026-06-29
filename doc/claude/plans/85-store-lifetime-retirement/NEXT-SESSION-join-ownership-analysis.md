@@ -9,6 +9,11 @@ Cold-start handoff. Written so a fresh session can `/clear` and build the @PLN85
 **the right way** — without re-deriving anything. This is the **@PLN25 ↔ @PLN85 convergence
 keystone** = wide-release **gate 1** ([STABILITY_ROADMAP.md § the wide-release bar](../../STABILITY_ROADMAP.md)).
 
+> **STATUS (branch `tuxedo-pln85-fuzz-proof-gate`):** Stage 1 (inert `Owned|Borrowed|Join`
+> classifier) + Stage 2 (per-shape verdict test) are ✅ DONE — see § The build below. **NEXT = Stage 3**
+> (wire one free site at a time behind a flag). The fact is built, tested, and confirms the
+> diagnosis; nothing emits off it yet.
+
 **Reading order:** this file → [over-free-class-study.md](over-free-class-study.md) (the full class
 study + § Root-cause drill-down + § Three chokepoints) → [fuzz-proof-gate.md](fuzz-proof-gate.md)
 (the instrument that mapped it) → [OWNERSHIP_MODEL.md](../../OWNERSHIP_MODEL.md) (`deps` = loft's
@@ -97,21 +102,27 @@ base var), `def_count` (reassignment), `append_src`/`append_expr`, the `Uses` pr
 visitor. `Verdict` is currently the binary `{Borrow, Copy}`; consumed (gated) by `scopes.rs:277`
 (`elision_plans`).
 
-### Stage 1 — the inert `Join` fact (behaviour-neutral)
-- Extend the analysis with an ownership classification — `Owned | Borrowed | Join` — for the values
-  that reach a free site (append element source, return value, reassign RHS). Compute it from the
-  facts `Uses` already collects: `database_vars` → Owned; projection-of-a-var → Borrowed of that
-  base; a coalesce/`??` (or `if/else`) whose arms split Owned/Borrowed → **Join**.
-- **Wire into NOTHING.** Print under `LOFT_MATERIALIZE_DUMP` (the existing flag). Full suite stays
-  byte-identical (gate: `make test` green; no IR change).
+### Stage 1 — the inert `Join` fact (behaviour-neutral) — ✅ DONE
+- `enum Own { Owned, Borrowed, Join }` + a recursive classifier `Ownership` in `use_analysis.rs`.
+  It walks the return EXPRESSION (recovering the `??`/`if-else` join the flattened return-dep facts
+  `return_adopts_fresh_store`/`returns_borrowed_view` LOSE), resolving calls interprocedurally
+  (memoised per-fn return class) and vars via their defs (+ `OpDatabase`'d vars = Owned, heap-typed
+  reassigns only).
+- Public entries `return_ownership(data, d_nr)` and `reassign_sites(data, d_nr)`; both printed under
+  `LOFT_MATERIALIZE_DUMP` as `OWN fn=… return=…` / `OWN fn=… reassign v=… prior=… rhs=…`. **Wired
+  into no codegen.** Full suite byte-identical (2564 tests pass; no IR change).
 
-### Stage 2 — test it separately on the cases
-- A unit test (mirror `use_analysis`'s existing tests) asserting the classification on the four
-  `462-*` repros: `accum` source → **Join**, `accum_owned` source → **Owned**, `local_source`'s
-  `chosen` at the reassign → **Join** (owned-init displaced by borrow), the field-view family →
-  **Borrow-of-param** (safe to return, the caller owns it). This tests the VERDICT, not emitted code.
-- Gate: the verdicts match the hand-computed expectation for every cell. Iterate the analysis here,
-  with NOTHING depending on it yet.
+### Stage 2 — test it separately on the cases — ✅ DONE
+- `tests/use_analysis.rs::ownership_classifies_the_over_free_shapes` pins the verdict per shape:
+  `pick` (`t[i] ?? dflt()`) → **Join**; `pick_cond`'s `chosen` reassign → **prior=Owned rhs=Join**
+  (the leak shape) with `pick_uncond` (single-def) having **no** reassign site; `deliver` (match
+  arm) → **Join**; `getf`/`whole` (field-view family) → **Borrowed**. Tests the VERDICT, not code.
+- **CORRECTION to this handoff's earlier Stage-2 line ("`accum_owned` source → Owned"):** the CLEAN
+  repro's `pick` is byte-IDENTICAL to the UAF repro's — statically **Join** in BOTH. The "Owned" was
+  runtime-conflated (the CLEAN case only ever takes the owned `m_none()` arm at runtime). The static
+  fact cannot and need not distinguish them; Join-awareness (materialise the borrow arm to owned)
+  makes both correct regardless of branch — the study's own § "elem_accumulate is NOT a surgical
+  dep-gate" conclusion, now confirmed by the classifier.
 
 ### Stage 3 — use it optionally, one free site at a time
 Behind a flag (the `LOFT_ELIDE_T1` pattern — e.g. `LOFT_JOIN_OWN`). Each site reads the verdict:
