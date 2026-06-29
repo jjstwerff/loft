@@ -553,20 +553,23 @@ fn main() {
 }
 "#;
 
-/// The unification collapse fixes BOTH arms of elem_accumulate on interp (the borrow
-/// arm's UAF and the owned arm's leak) — value-correct and clean under LOFT_JOIN_OWN.
-/// (Interp only for now; the native first-bind is the next collapse.)
+/// The unification collapse fixes BOTH arms of elem_accumulate on BOTH backends (the
+/// borrow arm's interp UAF and the owned arm's leak — native's `_src == _dst` guard
+/// leaked the owned arm too) — value-correct and clean under LOFT_JOIN_OWN, witnessed
+/// by the oracle's interprocedurally-resolved base.
 #[test]
-fn join_own_fixes_elem_accumulate_interp() {
-    let (stdout, stderr) = run_backend(ELEM_SRC, "--interpret", true);
-    assert!(
-        stdout.contains("elem-accumulate ok"),
-        "value-incorrect under LOFT_JOIN_OWN:\nstdout:{stdout}\nstderr:{stderr}"
-    );
-    assert!(
-        !stderr.contains("not freed"),
-        "still leaks under LOFT_JOIN_OWN:\n{stderr}"
-    );
+fn join_own_fixes_elem_accumulate_both_backends() {
+    for backend in ["--interpret", "--native"] {
+        let (stdout, stderr) = run_backend(ELEM_SRC, backend, true);
+        assert!(
+            stdout.contains("elem-accumulate ok"),
+            "{backend} value-incorrect under LOFT_JOIN_OWN:\nstdout:{stdout}\nstderr:{stderr}"
+        );
+        assert!(
+            !stderr.contains("not freed"),
+            "{backend} still leaks under LOFT_JOIN_OWN:\n{stderr}"
+        );
+    }
 }
 
 /// The GATE: WITHOUT the flag the same shape is value-correct but LEAKS the

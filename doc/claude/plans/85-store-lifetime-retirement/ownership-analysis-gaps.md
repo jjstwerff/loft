@@ -151,10 +151,18 @@ shapes + scalar (`pick` returns Owned → no bind) + `local_source` all unaffect
   `add_op` (reads at the pre-push position); the call result must be on the stack first so the
   witness offset accounts for it.
 
-**Next:** the **native** first-bind (`generation/dispatch.rs::output_set`) — its inline guard
-re-derives via `_src.store_nr == _dst.store_nr`, which leaks `elem_accumulate`'s owned arm
-(`owned-branch-CLEAN` leaks on native). Collapse it onto the oracle's base witness too. Then
-`match_return` (the `ParamDeliver` delivery), then flip default-on.
+**Step 3 — DONE (native first-bind collapse, `LOFT_JOIN_OWN`):** `generation/dispatch.rs::output_set`
+now reads the oracle too. For a `Join` return it replaces the buggy `_src.store_nr == _dst.store_nr`
+guard with the oracle's base WITNESS: `adopt iff _src is null OR does not alias var_<witness>`, else
+materialise. This fixes native's owned-arm leak (`owned-branch-CLEAN` was LEAK on native → clean).
+**`elem_accumulate` is now correct on BOTH backends, both arms** — and both backends READ THE SAME
+fact (the oracle), so they cannot diverge on it. `join_own_fixes_elem_accumulate_both_backends` pins
+it; suite green flag-off.
+
+**Next:** `match_return` (the `ParamDeliver` delivery — the retbuf reassigned to a borrowed enum
+field). Then flip default-on once all three sites are green on both backends + the full matrix +
+POISON. Then fold the remaining own-vs-borrow re-derivations (the return-delivery thicket) onto the
+oracle as cleanup.
 
 ## Next step (per-site — SUPERSEDED by the unification above for sites 2/3)
 
