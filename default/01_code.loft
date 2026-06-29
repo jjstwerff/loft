@@ -1163,6 +1163,13 @@ fn OpCopyRecord(data: reference, to: reference, tp: const u16);
 // null into the slot; otherwise deep-copies like OpCopyRecord.  Interpreter-only —
 // the native backend handles the same case inline in `generation::dispatch`.
 fn OpCopyRefOrNull(src: reference, pos: const u16, tp: const u16);
+// @PLN85 — bind a `??`-join call return into an owned slot with a runtime
+// arg-aliasing guard.  `witness` is the argument the return may borrow (the
+// ownership oracle's resolved base); `src` is the call result.  Adopts `src` when
+// it is fresh (the owned arm); deep-copies into a fresh store at `pos` when `src`
+// aliases `witness` (the borrow arm) so the append's source-free hits the copy.
+// Interpreter-only — the native backend does the same inline in `generation::dispatch`.
+fn OpBindOrCopy(witness: reference, src: reference, pos: const u16, tp: const u16);
 fn OpReplaceKeyed(src: reference, dest: reference, tp: const u16);
 // @P307 — clear a keyed-collection STRUCT FIELD (`s.h = []`).  `remove_claims`
 // frees the element records + bucket/tree array and zeroes the field's claim

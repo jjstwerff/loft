@@ -256,6 +256,7 @@ pub const OPERATORS: &[fn(&mut State)] = &[
     append_copy,
     copy_record,
     copy_ref_or_null,
+    bind_or_copy,
     replace_keyed,
     clear_keyed,
     set_keyed,
@@ -2030,6 +2031,10 @@ fn copy_record(s: &mut State) {
 
 fn copy_ref_or_null(s: &mut State) {
     s.copy_ref_or_null();
+}
+
+fn bind_or_copy(s: &mut State) {
+    s.bind_or_copy();
 }
 
 fn replace_keyed(s: &mut State) {

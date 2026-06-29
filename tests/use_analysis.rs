@@ -528,6 +528,47 @@ fn join_own_fixes_local_source_both_backends() {
     }
 }
 
+// ── @PLN85 unification (first chokepoint collapse): elem_accumulate, interp ────
+// `out += [pick(t,i)]` source-frees pick's `t[i] ?? m_none()` JOIN return. The
+// interp first-bind now reads the ownership oracle: OpBindOrCopy adopts the owned
+// `m_none()` arm and materialises the borrowed `t[i]` arm, witnessed by the oracle's
+// interprocedurally-resolved base `t`. BOTH arms must be value-correct + clean.
+const ELEM_SRC: &str = r#"
+struct M { hp: integer not null, name: text }
+fn m_none() -> M { M{hp:-1, name:"n"} }
+fn pick(t: vector<M>, i: integer) -> M { t[i] ?? m_none() }
+fn collect(t: vector<M>) -> vector<M> { out: vector<M> = []; for i in 0..len(t) { out += [pick(t, i)]; } out }
+fn collect_owned(t: vector<M>) -> vector<M> { out: vector<M> = []; for i in 0..3 { out += [pick(t, i + 100)]; } out }
+fn filler(n: integer) -> integer { es: vector<M> = []; for j in 0..n { es += [M{hp:j, name:"f"}]; } return len(es); }
+fn main() {
+  t: vector<M> = []; for k in 0..3 { t += [M{hp:k * 10, name:"m"}]; }
+  for i in 0..6 {
+    r = collect(t); acc = 0; for f in 0..6 { acc += filler(6); }
+    assert(len(t) == 3, "src corrupted i{i}={len(t)}");
+    assert(len(r) == 3, "borrow-arm len i{i}={len(r)}");
+    o = collect_owned(t);
+    assert(len(o) == 3, "owned-arm len i{i}={len(o)}");
+  }
+  print("elem-accumulate ok\n");
+}
+"#;
+
+/// The unification collapse fixes BOTH arms of elem_accumulate on interp (the borrow
+/// arm's UAF and the owned arm's leak) — value-correct and clean under LOFT_JOIN_OWN.
+/// (Interp only for now; the native first-bind is the next collapse.)
+#[test]
+fn join_own_fixes_elem_accumulate_interp() {
+    let (stdout, stderr) = run_backend(ELEM_SRC, "--interpret", true);
+    assert!(
+        stdout.contains("elem-accumulate ok"),
+        "value-incorrect under LOFT_JOIN_OWN:\nstdout:{stdout}\nstderr:{stderr}"
+    );
+    assert!(
+        !stderr.contains("not freed"),
+        "still leaks under LOFT_JOIN_OWN:\n{stderr}"
+    );
+}
+
 /// The GATE: WITHOUT the flag the same shape is value-correct but LEAKS the
 /// displaced owned store — pins that the flag is what closes the leak (so a future
 /// regression that silently stops stripping is caught), on both backends.

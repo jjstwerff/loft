@@ -138,10 +138,23 @@ reassign borrow arm → `pool`). Suite byte-identical (inert).
   `__retbuf` resolves its base to `__retbuf`, not the true source (`getf`/`whole`). Harmless —
   clean field-return sites, never an over-free — but a precision gap a later fix should close.
 
-**Next:** collapse the chokepoints onto the oracle one at a time (Mode-B byte-identical where the
-verdict matches the old re-derivation; matrix-correct where it differs — the `Join` sites both
-backends get wrong), replacing the interp gates AND native's inline guard with one
-`match ownership_of(value) { … }`.
+**Step 2 — DONE (first chokepoint collapse, interp, `LOFT_JOIN_OWN`):** the interp first-bind
+(`state/codegen.rs`, the `owned_ref` call-bind) now READS the oracle instead of the type-shape proxy.
+A `Join` return bound into an owned slot emits `OpBindOrCopy` — the runtime arg-aliasing guard
+**witnessed by the oracle's interprocedurally-resolved base** (collect's `t`): it ADOPTS the owned
+`m_none()` arm (the source-free then frees it) and MATERIALISES the borrowed `t[i]` arm (the
+source-free hits the copy; `t` intact). This FIXES BOTH arms of `elem_accumulate` on interp — the
+thing the per-site re-derivation could not, because the witness needed the interprocedural base only
+the oracle resolves. `join_own_fixes_elem_accumulate_interp` pins it; suite green flag-off; clean
+shapes + scalar (`pick` returns Owned → no bind) + `local_source` all unaffected.
+- The bytecode-stack discipline that bit twice: a PUSH op (`OpVarRef` witness) takes `var_pos` BEFORE
+  `add_op` (reads at the pre-push position); the call result must be on the stack first so the
+  witness offset accounts for it.
+
+**Next:** the **native** first-bind (`generation/dispatch.rs::output_set`) — its inline guard
+re-derives via `_src.store_nr == _dst.store_nr`, which leaks `elem_accumulate`'s owned arm
+(`owned-branch-CLEAN` leaks on native). Collapse it onto the oracle's base witness too. Then
+`match_return` (the `ParamDeliver` delivery), then flip default-on.
 
 ## Next step (per-site — SUPERSEDED by the unification above for sites 2/3)
 

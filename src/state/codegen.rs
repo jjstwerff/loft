@@ -1669,6 +1669,40 @@ impl State {
                 self.code_add(free_pos);
                 stack.add_op("OpFreeRef", self);
             }
+            // @PLN85 unification (first chokepoint collapse, LOFT_JOIN_OWN): read the
+            // ONE carried fact instead of the type-shape proxy below. A `??`-JOIN call
+            // return bound into an owned slot (`__lift_1 = pick(t,i)`, `pick` returns
+            // `t[i] ?? …`) needs the runtime arg-aliasing guard, witnessed by the
+            // oracle's interprocedurally-resolved base: `OpBindOrCopy` adopts the owned
+            // arm (the source-free then frees it) and materialises the borrow arm (the
+            // source-free hits the copy; the borrowed arg is intact). A static gate
+            // cannot — the source-free is load-bearing for the owned branch.
+            if owned_ref
+                && !s1_substituted
+                && !stash_old_for_post_free
+                && std::env::var_os("LOFT_JOIN_OWN").is_some()
+                && let crate::use_analysis::Own::Join { base } =
+                    crate::use_analysis::ownership_of(stack.data, stack.def_nr, value)
+                && base != u16::MAX
+                && let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
+            {
+                let tp_nr = stack.data.def(d_nr).known_type();
+                // The call result (`src`) FIRST, then the witness on top — so the
+                // witness's frame-relative `var_pos` accounts for `src` already on the
+                // eval stack. `OpBindOrCopy` pops witness (top) then src.
+                self.generate(value, stack, false);
+                // Push the witness (the borrowed-arg base) on top of the call result.
+                // A PUSH op reads at the PRE-push position, so `var_pos(base)` is taken
+                // BEFORE `add_op` (matching the pre-Set free above); the POP op's
+                // `var_pos(v)` is taken AFTER `add_op` (post-pop position).
+                let witness_pos = stack.var_pos(base);
+                stack.add_op("OpVarRef", self);
+                self.code_add(witness_pos);
+                stack.add_op("OpBindOrCopy", self);
+                self.code_add(stack.var_pos(v));
+                self.code_add(tp_nr);
+                return;
+            }
             if owned_ref && !s1_substituted {
                 // when the value is a call with visible Ref
                 // params, the callee returns via a hidden __ref_N that is
