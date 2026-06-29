@@ -163,7 +163,37 @@ on **both backends**. The live boundary is exact and narrow:
 Remaining ADJACENT axes (not the core vector/field/local class — follow-up): keyed-container element
 views (`hash`/`sorted`), nested-record element values, and `par` worker-store isolation.
 
+### Root-cause drill-down (2026-06-29): the displaced owned store, NOT a dropped dep
+
+Probing `local_source` to the chokepoint — pair saved at
+`bytecode-comparisons/462-reassign-displaced-own-{BROKEN,WORKING}.loft`, proven on **both
+backends** — **corrects the "Why #462 escapes today" diagnosis above.** The minimal pair:
+- **BROKEN** (`cond`): `chosen = dflt(); for wj { if cond { chosen = pool[wj] ?? dflt(); } } chosen`
+  → **leaks 1 `M`/call**, both backends.
+- **WORKING** (`uncond`): `chosen = pool[idx] ?? dflt(); chosen` → clean, both backends.
+
+The introspect diff shows the dep IS propagated — `chosen(1):ref(M)["pool"]` and a
+`materialized_view_return` fire in BOTH forms. So the earlier "borrow-set not propagated through the
+conditional view-assign / `chosen` keeps empty deps" framing is **wrong**. The actual root: `chosen`
+first OWNS a fresh store (`chosen = dflt()`), then is reassigned to the `pool` borrow — and the
+**displaced owned store is never freed**. `LOFT_LEAK_SITES` pins it: `4× M allocated at line 2` (the
+`dflt()` body), one per call. The deps analysis flattens `chosen` to a single join-dep `["pool"]`,
+losing that a prior assignment was OWNING — so neither the reassign nor scope-exit frees the
+owned-init store.
+
+**Corrected invariant + chokepoint:** a reassignment `v = X` where `v` currently holds an OWNED store
+must FREE that store before `v` takes the new value. The fact it needs is flow-sensitive — *is `v`'s
+current value owned at this reassignment point* — which the join-flattened dep does not carry. The
+fix lives at the **reassign free** (`scopes.rs` free-placement), reading a per-assignment ownership
+fact — NOT a borrow-set-propagation patch. **Deterministic acceptance test:** the BROKEN pair leak-free
+on both backends, the WORKING pair + the field-view family still clean. Under `LOFT_POISON` it is
+churn-independent, so no 200-store stress harness is needed (supersedes the LOFT_UAF_SRC-at-scale
+guard the next-step below proposes).
+
 ## Recommended next step
+
+> **Superseded by § Root-cause drill-down (2026-06-29)** — the lever is the *reassign-frees-displaced-owned*
+> rule, not borrow-set propagation (the dep is already propagated). The text below is the prior framing.
 
 Land the **assignment borrow-set propagation** (the one rule) as the chokepoint, with
 the `mon_one` shape as the driving case. It cannot be blind-patched: #462 reproduces
