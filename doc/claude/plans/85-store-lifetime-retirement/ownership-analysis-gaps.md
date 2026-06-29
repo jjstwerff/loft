@@ -159,10 +159,21 @@ materialise. This fixes native's owned-arm leak (`owned-branch-CLEAN` was LEAK o
 fact (the oracle), so they cannot diverge on it. `join_own_fixes_elem_accumulate_both_backends` pins
 it; suite green flag-off.
 
-**Next:** `match_return` (the `ParamDeliver` delivery — the retbuf reassigned to a borrowed enum
-field). Then flip default-on once all three sites are green on both backends + the full matrix +
-POISON. Then fold the remaining own-vs-borrow re-derivations (the return-delivery thicket) onto the
-oracle as cleanup.
+**Next: `match_return` — DIAGNOSED (a different, deeper mechanism than the first-bind).** Both
+backends ALIAS the retbuf to the enum field (`_mv_items_1 = OpGetField(e,4)`; native emits the same
+`DbRef{..pos+4}` alias). The interp LEAK is NOT the delivery — `LOFT_LEAK_SITES` pins it to `cell`
+(the `Filled` enum) + its `inner` vector in MAIN: because the returned vector aliases `cell`'s field,
+interp's free analysis conservatively SKIPS freeing `cell`/`inner` (to keep the alias valid) → they
+leak. Native aliases too but frees them anyway. So the chokepoint is the over-free class's LEAK
+mirror (a borrow alias suppresses the owner's free), and the fix is to MATERIALISE the Filled arm —
+copy `e`'s items into the cleared retbuf so `deliver` returns OWNED, breaking the alias and letting
+`cell`/`inner` free normally. The `ParamDeliver` site (`Borrowed(base=e)`) is already surfaced by the
+oracle; the collapse is a SCOPES-level rewrite of that Set (alias → `OpAppendVector(retbuf, e.field)`)
+read off `free_sites`, NOT a codegen guard (the arm delivery is generated pre-oracle by
+`materialize_vector_arms_into`). Likely interp-only (native already frees correctly).
+
+Then flip default-on once all three sites are green on both backends + the full matrix + POISON. Then
+fold the remaining own-vs-borrow re-derivations (the return-delivery thicket) onto the oracle as cleanup.
 
 ## Next step (per-site — SUPERSEDED by the unification above for sites 2/3)
 
