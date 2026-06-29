@@ -1,0 +1,50 @@
+fn n_deliver(b:Box, __retbuf:vector<ref(E)>) -> vector<ref(E)>["??"] {#block(1):vector<ref(E)>["b"]
+  [5] return {#borrow_tail_copy_104(2):vector<ref(E)>["__retbuf"]
+    OpClearVector(__retbuf(0));
+    OpAppendVector(__retbuf(0), OpGetField(b(0), 0i32, 66i32), 64i32);
+    __retbuf(0);
+  }#borrow_tail_copy_104(2):vector<ref(E)>["__retbuf"];
+}#block(1):vector<ref(E)>["b"]
+
+byte-code for /tmp/claude/gen/field_return__struct__none.loft:n_deliver(b: ref(Box)[0], __retbuf: vector<ref(E)>[12]) -> vector<ref(E)>["__retbuf"]
+   0[24]: return-address  @abs=7176
+   0[40]: [5] VarVector(var[16]) -> vector type=vector<E> 66 var=__retbuf[16]:vector<ref(E)>
+   3[56]: ClearVector(r: vector)
+   4[40]: VarVector(var[16]) -> vector type=vector<E> 66 var=__retbuf[16]:vector<ref(E)>
+   7[56]: VarRef(var[0]) -> ref(reference) type=Box 67 var=b[0]:ref(Box)
+  10[72]: GetField(v1: ref(reference), fld=0) -> ref(reference) type=vector<E> 66
+  13[72]: AppendVector(r: vector, other: vector, tp=64) type=E 64
+  16[40]: VarVector(var[16]) -> vector type=vector<E> 66 var=__retbuf[16]:vector<ref(E)>
+  19[56]: Return(ret=32, value=12, discard=56)
+
+fn n_main() {#block(1):void
+fn n_deliver(cell: &std::cell::UnsafeCell<Stores>, mut var_b: DbRef, mut var___retbuf: DbRef) -> DbRef { //block_1: vector<ref(E)>["b"]
+  if loft::live_dispatch::live_flipped(5) { return loft::live_dispatch::live_call_ref(cell, 5, |st| { st.put_stack(var_b); st.put_stack(var___retbuf); }); }
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  cr_call_push("deliver", "/tmp/claude/gen/field_return__struct__none.loft", 5);
+  let _call_guard = codegen_runtime::CallGuard;
+  // loft:/tmp/claude/gen/field_return__struct__none.loft:5
+  return { { //borrow_tail_copy_104_2: vector<ref(E)>["__retbuf"]
+    if var___retbuf.rec != 0 { vector::clear_vector(&var___retbuf, &mut stores.allocations); };
+    { let _av_t = var___retbuf; let _av_s = {{ let _v_v1 = (var_b); DbRef {store_nr: _v_v1.store_nr, rec: _v_v1.rec, pos: _v_v1.pos + (0_i64) as u32} }}; stores.vector_add(&_av_t, &_av_s, (64_i64) as u16); };
+    var___retbuf
+    } /*borrow_tail_copy_104_2: vector<ref(E)>["__retbuf"]*/ }
+  } /*block_1: vector<ref(E)>["b"]*/
+
+// loft:/tmp/claude/gen/field_return__struct__none.loft:6
+fn n_main(cell: &std::cell::UnsafeCell<Stores>) { //block_1: void
+fn n_deliver:
+  #    arg  name                 type           scope  slot         live
+  ----------------------------------------------------------------------
+  0    arg  b                    ref(611)       0      [0, 12)      -
+  1    arg  __retbuf             vec<ref(606)>  0      [16, 28)     -
+
+
+fn n_main:
+fn n_deliver -> vector<ref(E)>["__retbuf"]:
+  #    arg  name                     type [deps]
+  ----------------------------------------------------------------------
+  0    arg  b                        ref(Box)
+  1    arg  __retbuf                 vector<ref(E)>
+
+fn n_main -> void:

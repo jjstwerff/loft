@@ -164,6 +164,50 @@ paths even as the matrix cells change. The @PLN85 D-own-1 `block_result` collaps
 the worked example — the corpus stayed byte-identical step by step, and the two
 leaks it surfaced (#448 c5 and its mirror) were closed under the matrix.
 
+## Diff against the proven sibling — when your new path misbehaves
+
+> This is the codegen instance of a **general** design method — *when the answer
+> already exists, capture its artifact and diff* — see the
+> [design-protocol skill § the other half](../../.claude/skills/design-protocol/SKILL.md).
+> For codegen the artifact is the IR; the principle is identical for serialized
+> bytes, store state, or protocol frames.
+
+The bug-fix gate hand-writes the *working* form; the refactor gate diffs *before* vs
+*after*. There is a third, frequently the strongest, instrument: **when a new code
+path misbehaves and a PROVEN sibling path already does the same operation
+correctly, capture both IRs and diff — the residual divergence IS the bug.** You do
+not have to invent the correct output or theorise about the cause; a working
+artifact already exists, so make your IR equal to it.
+
+The discipline — capture THREE IRs into files (not grep snippets), then two diffs:
+
+1. **BEFORE** — your change OFF (old behaviour). **NOW** — your change ON. **PROVEN**
+   — the sibling function that already delivers this operation cleanly (often a
+   simpler shape of the same thing: `fn f(b: Box) -> vector { b.rows }` for a
+   borrowed vector return). Save all three under the plan's
+   [bytecode-comparisons/](plans/85-store-lifetime-retirement/bytecode-comparisons/);
+   one `loft introspect` capture carries IR + interp bytecode + native Rust.
+2. **BEFORE → NOW** answers *"did my change do what I intended, and only that?"*
+3. **NOW → PROVEN** answers *"what is still different = the bug."* Read the divergence
+   structurally (buffer var identity, block dep type, delivery shape), not just op-by-op.
+4. **The captured diff is ground truth; your mental model is not.** Theories you hold
+   without the capture will be wrong, repeatedly — chase the diff, not the theory.
+
+**Worked example — @PLN85 `match_return` interp crash** (captures + finding in
+[bytecode-comparisons/match_return-emit/](plans/85-store-lifetime-retirement/bytecode-comparisons/match_return-emit/README.md)).
+A new materialise emitted IR that ran clean on native and clean on interp *without*
+churn, but corrupted under allocation pressure. BEFORE→NOW confirmed the change was
+semantically right (alias → owned copy, return dep dropped `"e"`). NOW→PROVEN
+(`field_return` via `copy_borrow_tail_into_retbuf`, which survives churn) exposed the
+real divergence: the proven path delivers into a separate canonical `__retbuf` typed
+`["__retbuf"]` (the buffer *attr*), while the new path reused the match-field binding
+`_mv_items_1` *as* the buffer, typed `["_mv_items_1"]` (a *var* dep the store analysis
+does not track as the owned return — so churn reuses its slot). That single diff
+retired three theories held WITHOUT a capture — the append tp (both correct for their
+own retbuf), a `__vdb`/`OpReplaceVector` wrapper (the proven path has neither), and
+`skip_free`. The fix the diff *specifies*: make the delivery `["__retbuf"]`-typed
+(route through the proven machinery), not re-derive a near-miss.
+
 ## What this rules out
 
 - Heuristic forests at the generation site (the `has_ref_params && … && …` shape).
