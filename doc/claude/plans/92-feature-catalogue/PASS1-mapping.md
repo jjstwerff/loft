@@ -5,11 +5,14 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLN92 Pass 1 — proposed `@F`/`@I` mapping (REVIEW DRAFT — nothing created)
 
-**Status: APPROVED — Pass 1 final (creating `loft-lang/features` issues to mint numbers).**
-Approved as the *initial* catalogue; finer features get added later (the system makes
-that cheap). The number → entry map is backfilled here once the issues exist. **No
-source/doc tags yet** — those are Pass 2 / Pass 3. Open granularity calls in
-[§ Decisions for review](#decisions-for-review) were left at "good enough".
+**Status: Pass 1 COMPLETE (2026-07-01).** 80 catalogue issues minted in
+[`loft-lang/features`](https://github.com/loft-lang/features) — **`@F1`–`@F56`** (features)
++ **`@I57`–`@I80`** (subsystems), 0 failed; `kind:feature` / `kind:infra` labels created.
+Those issues (+ `idx features`) are now the **canonical registry**; the grouped list
+below is the proposal/rationale, and [§ Minted numbers](#minted-numbers) is a
+creation-time snapshot. **No source/doc tags yet** — Pass 2 (source) / Pass 3 (docs) next.
+Open granularity calls in [§ Decisions for review](#decisions-for-review) were left at
+"good enough" (finer features added later — cheap).
 
 ## Classification axis (the test)
 
@@ -145,6 +148,94 @@ None has a user-program-author usage example.
 - **Tracker indexer (maintainer tooling)** — `tools/indexer/src/scan.loft`
 
 ---
+
+## Minted numbers
+
+Creation-time snapshot (canonical source: the `loft-lang/features` issues + `idx features`).
+Pass 2 places `// @F<n>` / `// @I<n>` at the source sites for these.
+
+```
+@F1  Nullable value semantics — in-band sentinels + null-fallback arithmetic
+@F2  ?? null-coalescing operator (incl. ?? return)
+@F3  Primitive scalar types (integer, float, single, boolean, character)
+@F4  Ranged/width integer types (u8/i8/u16/i16/i32/u32)
+@F5  Type conversions — implicit, format-only, and explicit `as`
+@F6  vector<T> — append, index, slice, comprehensions, aggregates, map/filter/reduce
+@F7  hash<T[keys]> keyed collection
+@F8  sorted<T[keys]> collection
+@F9  index<T[keys]> B-tree index (asc/desc, multi-key)
+@F10 iterator<T> values
+@F11 Tuples — anonymous fixed-arity (T1, T2, …)
+@F12 Struct records — fields, = default, computed, limit/not null/assert
+@F13 Simple enums (ordered value types)
+@F14 Polymorphic struct-enums (per-variant fields)
+@F15 Enum-scoped variant names + context inference
+@F16 Functions & declarations (pub, parameters, return)
+@F17 Named arguments + default parameter values
+@F18 const parameters
+@F19 Method dispatch via self / both
+@F20 Variant-based dynamic dispatch
+@F21 References &T — parameters + write-back bindings
+@F22 Closures & lambdas (value capture, cross-scope)
+@F23 Function references as first-class values
+@F24 Higher-order functions (map / filter / reduce)
+@F25 Generics — single type variable <T>, inferred
+@F26 Interfaces & bounded generics (<T: A + B>, operator interfaces)
+@F27 if / else as an expression
+@F28 for-in loops — ranges, loop attributes, filtered, rev()
+@F29 Pattern matching — enum/scalar/tuple, guards, or-patterns, exhaustiveness
+@F30 is variant check (+ field capture)
+@F31 break / continue + labelled forms
+@F32 Custom iterators via fn next(self) -> T?
+@F33 par(...) parallel for-loop
+@F34 Coroutines / generators — yield, yield from
+@F35 String literals — {expr} interpolation + backtick multiline
+@F36 String formatting / format specifiers (+ for-expressions)
+@F37 Operator set — arithmetic/comparison/logical/bitwise/unary, **
+@F38 Arithmetic safety — overflow/÷0 → null, nullable peers
+@F39 Math & trigonometry library
+@F40 File & directory I/O (+ durable-store binding)
+@F41 Environment & arguments (env vars, arguments(), program dirs, path resolution)
+@F42 JSON — json_parse, JsonValue, Type.parse, to_json
+@F43 Random numbers (rand_seed / rand / rand_indices)
+@F44 Logging & diagnostics API (log_*, print, assert, panic)
+@F45 sizeof()
+@F46 Type aliases (type X = …)
+@F47 Library imports / module system (use forms, pub)
+@F48 The loft CLI — run a program, --interpret / --native, --timeout, --help
+@F49 REPL — interactive sessions
+@F50 Introspection — loft introspect (bytecode / native Rust / slot tables)
+@F51 Debugger — breakpoints, frame capture, scripted RPC
+@F52 Source formatter — canonical .loft output
+@F53 Native-binary backend (--native → rustc)
+@F54 Browser / WASM target (--html / --native-wasm)
+@F55 Package management (loft install, loft.toml, lockfile)
+@F56 Live code reload — patch a running program
+@I57 Lexer
+@I58 Parser (two-pass recursive descent)
+@I59 Type resolver
+@I60 Scope & dependency/lifetime tracker (deps)
+@I61 Stack slot allocator
+@I62 IR data model (Value/Type/Data)
+@I63 Store-resident IR (reader + handle + materializer)
+@I64 Bytecode compiler (IR -> bytecode)
+@I65 Bytecode code generator
+@I66 Bytecode VM / executor
+@I67 Opcode implementations
+@I68 Native Rust generator
+@I69 Word-addressed store
+@I70 Database — alloc / persistence / journal / snapshot / schema
+@I71 DbRef pointers & collection keys
+@I72 Parallel execution runtime
+@I73 Native function registry
+@I74 CDylib extension loader
+@I75 Diagnostics collector
+@I76 Logger runtime
+@I77 Registry / manifest / lockfile resolution
+@I78 Live-reload dispatch
+@I79 Documentation generator (maintainer tooling)
+@I80 Tracker indexer (maintainer tooling)
+```
 
 ## Decisions for review
 
