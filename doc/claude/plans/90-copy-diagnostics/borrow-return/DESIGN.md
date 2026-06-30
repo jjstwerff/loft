@@ -170,6 +170,44 @@ items out-live the use — but a composition that frees the subject early would 
 caller to materialise, the `deps`/ownership part). **A2** — the struct-field `b.rows` still
 copies via `copy_borrow_tail_into_retbuf`; make it return the alias too.
 
+## A1b — gate-1: the correct IR/native determined (before building)
+
+The temporary-subject UAF is **real and loud**: sharp repro
+[cell-escape-temp.loft](cell-escape-temp.loft) — a fn `h` that returns `g(Filled{…})`,
+where the `Filled` is local to `h` and freed at its scope end, so the escaped borrow
+dangles. Confirmed: interp assertion-fails, native panics, both loud under `LOFT_POISON`.
+References: [A1b-BROKEN-escape-temp.txt](A1b-BROKEN-escape-temp.txt) ·
+[A1b-TARGET-escape-temp.txt](A1b-TARGET-escape-temp.txt).
+
+**The broken mechanism (captured).** `h`'s return is owned (`["__retbuf"]`) and the native
+*already* tries to materialise (`dispatch.rs:396` — `if _src.store == _dst.store { alias }
+else { copy }`). But the **`one_buffer_chain`** optimisation (`control.rs:4906`) reuses one
+store `__ref_1` as **both** the `Filled` subject **and** the return buffer. `g` returns
+`__ref_1.items` (a borrow of that very store), so the materialise's `OpDatabase(_dst=__ref_1,
+64)` **reallocates the store the borrowed `_src` points into — freeing the source before the
+copy.** The "copy" then reads freed memory; churn reuses it → UAF.
+
+**The correct target (PROVEN clean, both backends + POISON).** The working source shape
+[cell-escape-temp-FIXED.loft](cell-escape-temp-FIXED.loft) binds the borrow to a local and
+copies it into a **separate** owned buffer before any free:
+
+```
+r(1):vector["c"] = n_g(c, …)     // the borrow
+OpClearVector(out)                // `out` is a DISTINCT __retbuf store, not the subject
+OpAppendVector(out, r)            // materialise: copy the borrow into `out` while r is live
+OpFreeRef(c)                      // free the subject AFTER the copy
+return out                        // owned, independent of the freed subject
+```
+
+**Fix direction (build phase — not yet built).** Suppress the `one_buffer_chain` store-reuse
+when the chained call returns a **borrow of the chain's own subject-buffer** (the borrowed-
+yield case); emit the separate-buffer materialise above. The invariant: *a borrowed result
+materialised into the return buffer must use a store DISTINCT from the subject it borrows* —
+otherwise reallocating the buffer frees the source. The materialise decision at
+`dispatch.rs:396` is downstream of the wrong buffer choice; the root fix is the buffer, not
+the alias/copy test. This is the F1/F2 caller-materialise of the slice plan, now with the
+exact target IR proven.
+
 ## Connection back
 
 This is the `Borrow`-set growth the @PLN90 north-star is about: field-return moves from

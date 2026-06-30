@@ -1,0 +1,19 @@
+// A1b sharp repro — the result ESCAPES the scope where the temporary subject lives.
+// h builds a temporary `Filled`, g returns a borrow of its items, h returns that borrow.
+// The temporary is freed at h's scope end -> h returns a dangling view -> UAF in the caller.
+struct E { hp: integer not null, name: text }
+enum Cell { Empty, Filled { items: vector<E> } }
+fn g(e: Cell) -> vector<E> { match e { Filled { items } => { items }, _ => { [] } } }
+fn h(seed: integer) -> vector<E> {
+  inner: vector<E> = [];
+  for k in 0..3 { inner += [E{hp: seed + k, name: "e"}]; }
+  g(Filled { items: inner })
+}
+fn main() {
+  a = h(10);
+  assert(len(a) == 3 && a[0].hp == 10 && a[2].hp == 12, "escape-temp");
+  // extra allocation churn AFTER the dangling return, to reuse the freed store
+  j: vector<E> = []; for q in 0..20 { j += [E{hp: q, name: "x"}]; }
+  assert(a[0].hp == 10, "escape-temp after churn: a corrupted (UAF)");
+  println("ok");
+}
