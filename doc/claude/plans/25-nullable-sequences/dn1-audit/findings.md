@@ -283,8 +283,19 @@ flow): `depending`(1503), `deps_ref`(1527), `depend`(1544), `has_lifetime_concer
 `owned_elements`(2099), `compute_intervals`(53), `slot_kind`(70). Validate with leak-check
 (`LOFT_STORES=warn` / `LOFT_NATIVE_LEAK_CHECK`), not value alone.
 
-**Family D — the `text?` return-buffer ABI** (its own sub-thread, the text analog of the landed
-scalar return-site): control.rs 897/4098/4116/5752/6057/6378, operators.rs 657/904, def 850.
+**Family D — the `text?` heap path** (its own sub-thread, the text analog of the landed scalar
+work). Two pieces, both two-backend: **(i) text? LOCALS** and **(ii) the text? return-buffer ABI**
+(control.rs 897/4098/4116/5752/6057/6378, operators.rs 657/904, def 850).
+> **Empirical de-risking of piece (i), text? LOCALS (2026-06-30, probed both backends):** the
+> INTERP half is a single proven peel — `gen_set_first_at_tos` (codegen.rs:2127) routes by
+> `matches!(*tp(v), Type::Text(_))`, which misses `Optional(Text)`; peeling to
+> `matches!(tp(v).base(), Type::Text(_))` routes `text?` to the heap-aware `gen_set_first_text` and
+> makes `s: text? = "…"`, a 50× reassign, and a `text?` tuple-destructure ALL work on interp with
+> NO leak (`LOFT_STORES=warn`). But the NATIVE half then fails E0308 (`String` vs `&str`) in
+> `generation/` — the native local declaration/assignment for `Optional(Text)` gets the wrong
+> String/Str context. So text? locals need the interp peel (proven) PLUS a native `generation/`
+> String/Str fix. Tried-and-reverted this turn (kept the tree clean per the both-backends rule);
+> land it complete in D's focused turn. This is also the gate for Family C's text leaks.
 
 **Family E — the `matches!`-predicate second sweep**: `is_scalar`(dispatch 579, mod 3003),
 coroutine `suitable`(251), RefVar scalar-link(dispatch 158, emit 215), the ~40 `Type::Text(_)`
@@ -360,7 +371,21 @@ native default/typed-null path, ties to `default_native_value` 896); E2 `"{x}"` 
    **NOTE — E1 stays open (Family G):** the tuple-*return*-literal-null
    (`fn f() -> (integer?,integer) { (null,2) }`) is a separate NATIVE generation/ path — a
    null-valued local tuple works on native, only the return-literal-null doesn't. Not fixed here.
-4. **Family C** — deps/leak holes under leak-check on `text?`/`S?` probes.
+4. **Family C — LATENT, must follow Family D (reachability finding, 2026-06-30).** A focused
+   leak hunt (gate-ON, `LOFT_STORES=warn` / `LOFT_NATIVE_LEAK_CHECK`, both backends) found **no
+   reachable leak**: reassigning a `text?` field 100× (h1), null-toggling it (h2), an `S?` local
+   (c5), and a non-self-ref nullable struct field (c6) are ALL clean — the free path already
+   handles Optional(Text/ref) for the reachable constructs. Family C's flagged sites
+   (`slot_kind`, `owned_elements`, `has_lifetime_concern`, the `deps_*` family) bite Optional(Text/
+   ref) **LOCALS / TUPLES / RETURNS**, every one of which is blocked UPSTREAM by the Family D
+   text?-routing panic (`gen_set_first_at_tos` has no Text arm → a `text?` local/tuple-destructure
+   panics; the `text?` return-buffer ABI is broken). So the leaks cannot be FALSIFIED today.
+   Family C touches the deps/ownership system — loft's #1 weakness, where blind symptom-patching
+   is the documented anti-pattern (heap-invariant priority #1). **Therefore: do Family D first
+   (it unblocks the heap-bearing-nullable constructs), THEN Family C with the leak instrument able
+   to validate each fix.** (Not a leak: `Node { next: Node? }` "field has no position" is a
+   PRE-EXISTING recursive-value-struct limitation — non-nullable self-ref fails identically,
+   gate-OFF too — not @PLN25.)
 5. **Family E + F** — the `matches!` sweep and the feature gaps.
 6. **Family D** — the `text?` return-buffer ABI sub-thread.
 7. **Family G** — E1 with the native typed-null peel; decide E2.
