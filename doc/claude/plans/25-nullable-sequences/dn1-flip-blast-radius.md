@@ -85,15 +85,24 @@ correct, not a hack. The stdlib stays byte-identical gate-OFF (`17-min-max-clamp
 the stdlib LOADS and only USER code gets the rejection. At step (f) — DN1 default — the stdlib gets
 properly migrated (`min`/`max` cleaned, the test updated) and the exemption removed.
 
-## ⚠️ KNOWN GAP — the bare-`null` rejection is INCOMPLETE
+## ⚠️ KNOWN GAP (narrowed) — only the IF/MATCH-branch absorbed-null
 
-The DN1 rejection fires on an explicit `return null` (`parse_return`) but MISSES null that gets
-typed-into-a-value before the store check: `fn f() -> integer { if b { 5 } else { null } }` (the
-`else { null }` is coerced to `integer` at the if-branch, so the return sees a plain integer) and
-`S { a: null }` (field-construct — the null is typed before `n_store_violation`). So the enforcement
-is partial. Completing it needs the null-typing flow to keep `Type::Null` visible at these store
-sites (or check the if-branch/field-construct coercion of a bare null into a non-null scalar). This
-is the next DN1 enforcement increment, before the `.loft` sweep + the default flip.
+The DN1 rejection FIRES on every DIRECT bare-`null` store (verified gate-ON, `n_store_violation`
+instrumented): explicit `return null` (`parse_return`), a typed-scalar store (`x: integer = null`,
+caught after `change_var`), and **field-construct** (`S { a: null }` → "null cannot be stored into
+the field of the non-null scalar type `integer`"). My earlier note WRONGLY listed field-construct as
+broken — it works; I had misread the diagnostic.
+
+The ONE remaining gap is an ABSORBED null in an if/match branch: `fn f() -> integer { if b { 5 }
+else { null } }`. `parse_if` (control.rs:1926) parses the `else` with the THEN branch's type
+(`integer`) as expected, so the bare `null` is coerced to the typed-null sentinel at the branch and
+the if-expression types as plain `integer` — the return then sees a non-null integer, nothing to
+reject. It is a MISSING REJECTION, not corruption (the null flows as the sentinel; reads as null).
+**Fix (a focused future increment): under DN1, when one if/match branch is a bare `null` and the
+other is a non-null scalar `τ`, the unified result type is `Optional(τ)`** (then the existing DN3
+`(N-Store)` catches it at the return). Touches `parse_if` (the then-null path at ~1923 + a new
+else-null path) and the match-arm unification; must preserve gate-OFF and handle nested-if. Land it
+before the `.loft` sweep, or accept it as a known under-enforcement for the first DN1 cut.
 
 ## B′. The gate + enforcement — LANDED (gated, opt-in)
 
