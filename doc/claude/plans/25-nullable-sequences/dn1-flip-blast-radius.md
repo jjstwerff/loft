@@ -51,6 +51,35 @@ Flipping `not_null` is NOT a pure type-check toggle; only 8 sites read `.not_nul
    on every `int == null` — the noise the RESUME flagged. This is what makes the test-side
    `== null` sites surface as warnings.
 
+## A′. CORRECTION — the stdlib is NOT clean (the gated flip found the real targets)
+
+Building the gated flip (`LOFT_PLN25_DN1`, the bare-`null`→non-null-scalar rejection extending
+`n_store_violation`) and turning it ON immediately FAILED stdlib load with precise diagnostics:
+`default/01_code.loft` has **null-PROPAGATING functions** declared `-> integer`/`-> single`/
+`-> float` that `return null` (e.g. `min`/`max`/`clamp`: `if !a || !b { return null }`, and the
+`*Nullable` arithmetic operators). My grep missed these — they `return null` INSIDE the fn body,
+not via the `else { null }` / `= null` patterns I searched. **These are the genuine first DN1
+targets, and they are the DN1↔DN3 intertwining the RESUME predicted.**
+
+**The design fork (must decide before migrating them):** under DN1 a plain `integer` is non-null,
+so `min(a, b)` receives non-null inputs and its `if !a || !b { return null }` is DEAD. Two options:
+1. **Drop the null-propagation** — `min`/`max`/`clamp` stay `-> integer` (non-null); delete the
+   `if !a || !b { return null }`. No caller ripple. Loses legacy null-propagation (fine under DN1
+   where inputs can't be null; gate-OFF would change behaviour, so gate it).
+2. **Make them `-> integer?`** — honest about the (now-unreachable-under-DN1) null return, but
+   ripples to EVERY caller of `min`/`max` (must discharge). This is the DN3 "biggest blast radius".
+Recommend **option 1** (drop the dead null-propagation under DN1) — it matches the model (non-null
+inputs ⇒ non-null result) and avoids the ripple. The `*Nullable` ops (`OpDivIntNullable`) genuinely
+fit-fail (`/0`) → those DO want `-> τ?` (true DN3).
+
+## B′. The gate + enforcement — LANDED (gated, opt-in)
+
+`LOFT_PLN25_DN1` added (implies DN3⊃OPT); `n_store_violation` extended with the DN1 branch: a bare
+`Value::Null` into a non-Optional SCALAR target (`is_non_null_scalar`: Integer/Text/Bool/Float/
+Single/Character — heap types stay nullable) is rejected "declare it `τ?`". gate-OFF byte-identical;
+suite green. Gate-ON the stdlib doesn't load yet (the null-propagating fns above must migrate first)
+— expected for an in-progress flip; the gate is opt-in.
+
 ## C. How to pin the precise number
 
 The static survey BOUNDS the sweep (foundation clean; ≤~50 test files). The EXACT count is the

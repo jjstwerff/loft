@@ -324,7 +324,9 @@ pub fn copy_dump_enabled() -> bool {
 pub fn pln25_optional_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| {
-        std::env::var_os("LOFT_PLN25_OPT").is_some() || std::env::var_os("LOFT_PLN25_DN3").is_some()
+        std::env::var_os("LOFT_PLN25_OPT").is_some()
+            || std::env::var_os("LOFT_PLN25_DN3").is_some()
+            || std::env::var_os("LOFT_PLN25_DN1").is_some()
     })
 }
 
@@ -337,7 +339,23 @@ pub fn pln25_optional_enabled() -> bool {
 #[must_use]
 pub fn pln25_dn3_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_PLN25_DN3").is_some())
+    *ON.get_or_init(|| {
+        std::env::var_os("LOFT_PLN25_DN3").is_some() || std::env::var_os("LOFT_PLN25_DN1").is_some()
+    })
+}
+
+/// `LOFT_PLN25_DN1=1` (@PLN25 Phase-2 CONTRACT, IN PROGRESS) — the DEFAULT FLIP: a plain scalar
+/// (`integer`, `text`, `bool`, …) is NON-NULL by default; `τ?` is the only nullable form. Turns
+/// `IntegerSpec.not_null` default `false → true` (and the analog for other scalars rides
+/// `Type::Optional`), so a bare `null` returned/stored into a plain scalar is rejected (beyond the
+/// Optional `(N-Store)` teeth, which only catch `Optional → non-null`). Opt-IN while the `.loft`
+/// sweep migrates the misses to `?`; OFF keeps the nullable-by-default behaviour. Implies
+/// `LOFT_PLN25_DN3` (the `(N-Store)` teeth) and `LOFT_PLN25_OPT` (the `Optional` marker). See
+/// plans/25-nullable-sequences/dn1-flip-blast-radius.md and RESUME.md § Step 3.
+#[must_use]
+pub fn pln25_dn1_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_PLN25_DN1").is_some())
 }
 
 /// `LOFT_UAF_REUSE` (detector b) — at `copy_record`, when the source slot is LIVE

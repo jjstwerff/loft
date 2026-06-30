@@ -1831,8 +1831,11 @@ impl Parser {
     /// comparisons (`x == null`) stay legal. Gated on `LOFT_PLN25_DN3`; returns `true` (and
     /// emits the diagnostic) on a violation. A no-op (returns `false`) off / first pass.
     fn n_store_violation(&mut self, value_tp: &Type, target_tp: &Type, what: &str) -> bool {
+        if self.first_pass {
+            return false;
+        }
+        // DN3: an un-discharged nullable `τ?` (Optional value) into a non-null target.
         if crate::keys::pln25_dn3_enabled()
-            && !self.first_pass
             && let Type::Optional(inner) = value_tp
             && !matches!(
                 target_tp,
@@ -1848,7 +1851,36 @@ impl Parser {
             );
             return true;
         }
+        // DN1 (the default flip): under DN1 a plain scalar is NON-null, so a bare `null` cannot be
+        // stored into a non-Optional scalar target — declare the target `τ?` to allow null.
+        // (Heap types — reference/vector/enum — stay nullable; only the SCALAR default flips.)
+        if crate::keys::pln25_dn1_enabled()
+            && matches!(value_tp, Type::Null)
+            && Self::is_non_null_scalar(target_tp)
+        {
+            let nm = target_tp.name(&self.data);
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "`null` cannot be stored into {what} of the non-null scalar type `{nm}` — declare it `{nm}?` to allow null"
+            );
+            return true;
+        }
         false
+    }
+
+    /// @PLN25 DN1 — the scalar types whose default flips to NON-null (a bare `null` needs `τ?`).
+    /// Heap-nullable types (reference / vector / enum / keyed) are NOT here — they stay nullable.
+    fn is_non_null_scalar(tp: &Type) -> bool {
+        matches!(
+            tp,
+            Type::Integer(_)
+                | Type::Text(_)
+                | Type::Boolean
+                | Type::Float
+                | Type::Single
+                | Type::Character
+        )
     }
 
     fn convert(&mut self, code: &mut Value, is_type: &Type, should: &Type) -> bool {
