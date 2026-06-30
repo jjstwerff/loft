@@ -365,6 +365,15 @@ impl Stores {
             // The other vector has no data
             return;
         }
+        // @PLN90 phase 1 — make the copy visible. A non-empty source means `vector_add`
+        // deep-copies `o_length` elements into the destination store: a real structure
+        // copy. `LOFT_COPY_DUMP` reports it with the element count (the runtime size — the
+        // "hundreds of MB just to be sure" the user cannot see today). No source line here:
+        // `Stores` has no `State`; the source location is the compile-time decision's job
+        // (COPY_DIAGNOSTICS.md phase 2).
+        if keys::copy_dump_enabled() {
+            eprintln!("[copy] vector-append elements={o_length}  tp={known}");
+        }
         // @P376 — when `known` is "linked" (multiple containers share this
         // content type), `vector<known>` was promoted to `Array(known)` in
         // `Stores::finish_type`: storage is a u32 rec-id per element pointing

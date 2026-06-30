@@ -1383,6 +1383,18 @@ impl State {
         if data.store_nr == u16::MAX {
             return;
         }
+        // @PLN90 phase 1 — make the copy visible. A real record deep-copy is about to
+        // run (the no-op-alias and null cases returned above). LOFT_COPY_DUMP prints one
+        // line per executed structure copy so we can inventory every copy + map it to its
+        // source line (the runtime ground truth the compile-time decision must cover).
+        if crate::keys::copy_dump_enabled() {
+            let line = self
+                .line_numbers
+                .range(..=self.code_pos)
+                .next_back()
+                .map_or(0, |(_, &v)| v);
+            eprintln!("[copy] record       line={line}  tp={tp}");
+        }
         // cluster-462 tool-gap #1 — name the premature-free op: when the copy
         // SOURCE is read while its store is still freed (the operand-stack stale
         // ref the LOFT_UAF frame scan misses), report the source, the line that

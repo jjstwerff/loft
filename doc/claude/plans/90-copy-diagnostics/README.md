@@ -10,11 +10,21 @@ Full design + failure-path enumeration: [COPY_DIAGNOSTICS.md](../../COPY_DIAGNOS
 
 ## Status
 
-**Open — design ready, no implementation.** The design is written
-([COPY_DIAGNOSTICS.md](../../COPY_DIAGNOSTICS.md)); nothing is built. Wanted **before
-@PLN85 closes**: we often miss that a copy is happening, and that blind spot is shaping
-what we build (the @PLN85 owned-copy match-return synthesis manufactures copies on a
-near-universal pattern). Surfacing copies first changes those decisions.
+**Phase 1 started — instrument + inventory landed.** The design is written
+([COPY_DIAGNOSTICS.md](../../COPY_DIAGNOSTICS.md)). Phase 1 (make the copy-vs-borrow
+decision cover every emission) has its first step done: the `LOFT_COPY_DUMP` instrument
+(runtime ground truth for every deep structure copy + size), a corpus, and the measured
+coverage gap — see [phase1-inventory.md](phase1-inventory.md). **Key finding:** the
+current verdict covers only vector-copy bindings (`o = src` / `o += src`); **struct/enum
+construction (dominant), whole field-returns, and even a plain `a = s` bind all copy
+silently, outside the decision.** Every copy funnels through two runtime ops
+(`vector_add`, `do_copy_record`), so the remaining phase-1 work is to attribute every
+emission of those to a decision. NEXT: choose route 1 (extend the verdict's domain) vs
+route 2 (classify at emission).
+
+Wanted **before @PLN85 closes**: we often miss that a copy is happening, and that blind
+spot is shaping what we build (the @PLN85 owned-copy match-return synthesis manufactures
+copies on a near-universal pattern). Surfacing copies first changes those decisions.
 
 ## Goal
 

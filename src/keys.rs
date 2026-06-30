@@ -303,6 +303,17 @@ pub fn poison_enabled() -> bool {
     *POISON.get_or_init(|| std::env::var_os("LOFT_POISON").is_some())
 }
 
+/// `LOFT_COPY_DUMP=1` (@PLN90 phase 1) — print one line per executed deep STRUCTURE copy
+/// (a record copy `OpCopyRecord`, or a vector append that deep-copies its source elements
+/// `vector_add`). The instrument that makes copies VISIBLE: it is the runtime ground truth
+/// for every copy + its size, so the compile-time copy-vs-borrow decision can be checked to
+/// cover them all (COPY_DIAGNOSTICS.md). One cached env read; off by default, no hot-path cost.
+#[must_use]
+pub fn copy_dump_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_COPY_DUMP").is_some())
+}
+
 /// `LOFT_UAF_REUSE` (detector b) — at `copy_record`, when the source slot is LIVE
 /// (`free=false`) but structurally invalid for the copy's `tp` (a `validate_claims`
 /// failure), the slot was freed-then-reused as a different record since the source ref
