@@ -29,8 +29,18 @@ borrow-correctly fix); **construction / `OpCopyRecord` → implicit (NOT warned 
 the programmer asked for)**; `assign_field` → eliminated. **North-star primary:** the warning
 serves elimination — drain bucket 2 (avoidable) into bucket 1 (auto-elide), stay quiet on
 bucket 3, never copy "just because" ([COPY_DIAGNOSTICS.md § North-star](../../COPY_DIAGNOSTICS.md)).
-Suite byte-identical (issues 746, use_analysis 16). NEXT: emit the user-facing lint off the
-bucket (warn only Avoidable; located; opt-in), and/or start draining bucket 2 (the P4 fix).
+Suite byte-identical (issues 746, use_analysis 16).
+
+**Phase 2 next — draining bucket 2 (the north-star), starting with field-return = the
+@PLN85 P4 borrow-correctly fix.** Design written:
+[borrow-return/DESIGN.md](borrow-return/DESIGN.md). Invariant: a borrowed-view return
+returns the aliased `DbRef` directly (no return buffer, no copy); the copy **moves to the
+caller**, emitted only where the borrow is unsound (the subject does not out-live the
+result — a caller-side `deps` decision). This eliminates the field-return copy AND fixes
+P4's borrowed-yield crash (the same shape, compiled as a borrow). Slices: (1) callee
+direct-alias-return ABI, (2) caller materialise-on-demand (coupled with 1 — gated until
+both land), (3) retire the callee copy. Each matrix-validated both backends, gated. NEXT:
+capture the target alias-return bytecode (loft-codegen gate), then slice 1.
 
 **North-star (do not lose it):** the warning is the *instrument*, not the goal — the goal is
 the compiler **automatically not copying** when it can prove a borrow is safe (we never copy
