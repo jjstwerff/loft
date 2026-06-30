@@ -835,26 +835,50 @@ impl State {
             stack.position = stack_pos;
             let fp = self.generate_node(f_val, stack, false);
             let false_stack = stack.position;
-            // B5: when both arms are non-divergent but exit at different stack
-            // levels (e.g. match arms with different local allocations), the
-            // shorter arm's result value sits at a lower stack position than
-            // the longer arm's.  Rather than padding (which would bury the
-            // result under garbage), emit the join point at the SHORTER arm's
-            // level and make the longer arm discard its extra bytes before
-            // reaching the join point (its result is already on top of stack).
             if !is_divergent(t_val) && !is_divergent(f_val) && true_stack != false_stack {
+                // B5: both arms produce a value but exit at different stack levels
+                // (e.g. match arms with different local allocations).  The result
+                // sits on top of each arm's stack; join at the SHORTER arm's level
+                // and make the TALLER arm — whichever it is — free its extra bytes
+                // (keeping the result on top) before reaching the join.
+                //
+                // `free_stack(value, discard)` lands `stack_pos` at
+                // `arm_stack - discard + step(value)`, so to reach `target` the
+                // discard must be `(arm_stack - target) + step(ret_size)` — the
+                // STEP-ROUNDED result size, not the raw size.  A 12-byte vector
+                // occupies a 16-byte slot; using the raw size strands the arm 4
+                // bytes high, and never shrinking a taller TRUE arm strands it a
+                // whole result slot.  Either way the function-tail `OpReturn`'s
+                // `discard` (= `stack.position`) ends up short, so `fn_return`
+                // misreads the saved return address → the interpreter derails
+                // (deterministic on Filled, clean on Empty).  See @PLN85 P2.
                 let target = true_stack.min(false_stack);
+                let ret_size = size(stack.data.def(stack.def_nr).returned(), &Context::Argument);
+                let keep = stack.step(ret_size);
                 if false_stack > target {
-                    // Shrink the false arm's stack to match the true arm.
-                    let excess = false_stack - target;
+                    // The false arm is taller; the cursor is at its end, so shrink
+                    // it inline, then aim the true arm's goto at the join below.
                     stack.add_op("OpFreeStack", self);
-                    let ret_size =
-                        size(stack.data.def(stack.def_nr).returned(), &Context::Argument);
                     self.code_add(ret_size as u8);
-                    self.code_add(excess + ret_size);
+                    self.code_add((false_stack - target) + keep);
                     stack.position = target;
+                    self.code_put(end, (self.code_pos - false_pos) as i16);
+                } else {
+                    // The true arm is taller, but its code and join-goto were
+                    // already emitted, so it cannot be shrunk in place.  Route it
+                    // through a shrink trampoline placed after the false arm: the
+                    // false path jumps over the trampoline straight to the join,
+                    // the true path lands in it, frees its excess, falls through.
+                    stack.add_op("OpGotoWord", self);
+                    let skip = self.code_pos;
+                    self.code_add(0i16);
+                    let skip_base = self.code_pos;
+                    self.code_put(end, (skip_base - false_pos) as i16); // true arm → trampoline
+                    stack.add_op("OpFreeStack", self);
+                    self.code_add(ret_size as u8);
+                    self.code_add((true_stack - target) + keep);
+                    self.code_put(skip, (self.code_pos - skip_base) as i16); // false arm → join
                 }
-                self.code_put(end, (self.code_pos - false_pos) as i16);
                 stack.position = target;
             } else {
                 self.code_put(end, (self.code_pos - false_pos) as i16);
