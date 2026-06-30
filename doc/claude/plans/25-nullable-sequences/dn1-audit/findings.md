@@ -286,16 +286,29 @@ flow): `depending`(1503), `deps_ref`(1527), `depend`(1544), `has_lifetime_concer
 **Family D — the `text?` heap path** (its own sub-thread, the text analog of the landed scalar
 work). Two pieces, both two-backend: **(i) text? LOCALS** and **(ii) the text? return-buffer ABI**
 (control.rs 897/4098/4116/5752/6057/6378, operators.rs 657/904, def 850).
-> **Empirical de-risking of piece (i), text? LOCALS (2026-06-30, probed both backends):** the
-> INTERP half is a single proven peel — `gen_set_first_at_tos` (codegen.rs:2127) routes by
-> `matches!(*tp(v), Type::Text(_))`, which misses `Optional(Text)`; peeling to
-> `matches!(tp(v).base(), Type::Text(_))` routes `text?` to the heap-aware `gen_set_first_text` and
-> makes `s: text? = "…"`, a 50× reassign, and a `text?` tuple-destructure ALL work on interp with
-> NO leak (`LOFT_STORES=warn`). But the NATIVE half then fails E0308 (`String` vs `&str`) in
-> `generation/` — the native local declaration/assignment for `Optional(Text)` gets the wrong
-> String/Str context. So text? locals need the interp peel (proven) PLUS a native `generation/`
-> String/Str fix. Tried-and-reverted this turn (kept the tree clean per the both-backends rule);
-> land it complete in D's focused turn. This is also the gate for Family C's text leaks.
+> **Empirical de-risking of piece (i), text? LOCALS (2026-06-30, probed both backends, all
+> tried-and-REVERTED to keep the tree clean — text? locals are NOT yet supported on `main`):**
+> text? locals are a genuine MULTI-SITE, BOTH-BACKEND effort with a heap-text subtlety. What I
+> proved:
+> - **The simple case works with 3 peels.** `s: text? = "lit"; s ?? "default"` runs correct on
+>   BOTH backends after: (a) interp routing — `gen_set_first_at_tos` (codegen.rs:2127)
+>   `matches!(*tp(v),Text)` → `matches!(tp(v).base(),Text)` routes text? to the heap-aware
+>   `gen_set_first_text`; (b) native declaration — `dispatch.rs` `needs_to_string`/`var_tp`
+>   text-checks (≈97/282/445) peel `.base()` so the literal gets `.to_string()`; (c) **the key
+>   reusable chokepoint** — `emit.rs::infer_type` (the Var + Call arms) peel `.base()`, which fixes
+>   ~18 native branch-unification/typed-null/predicate decisions at once (the `??` if-branch
+>   `String`/`&str` unify was failing because `infer_type` returned `Optional(Text)`).
+> - **But REASSIGNMENT is silently WRONG, and comprehensive native still fails.** `a: text? =
+>   "hello"; a = "world"` yields `"helloworld"` on interp — the routing peel sends first-Set to
+>   `gen_set_first_text` but a REASSIGN goes through `set_var`'s `Type::Text => OpAppendText`
+>   (append, no clear-before-set), so it concatenates instead of replacing. (Earlier note misread
+>   this as "50× reassign works" — it was the appended value.) So the interp routing peel ALONE
+>   turns a loud panic into a SILENT-WRONG append — a worse failure mode, hence the full revert.
+>   The comprehensive case (reassign + `==null` compare + tuple) still E0308 on native — more
+>   `matches!(_,Text)` sites remain (this is the Family E text concentration).
+> **So piece (i) = the heap-aware text reassignment path (clear-before-set for text?) + the native
+> `matches!(_,Type::Text)` sweep, with `infer_type` as the high-leverage chokepoint.** Land it
+> complete (not partial — reassignment correctness) in D's focused turn. Gate for Family C's text leaks.
 
 **Family E — the `matches!`-predicate second sweep**: `is_scalar`(dispatch 579, mod 3003),
 coroutine `suitable`(251), RefVar scalar-link(dispatch 158, emit 215), the ~40 `Type::Text(_)`
