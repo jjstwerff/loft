@@ -118,15 +118,37 @@ estimate: very low for the shared surface.**
 
 ### Step 3 — Scalars Phase 2 CONTRACT: flip the scalar/field default to non-null (DN1)
 The default flip. `IntegerSpec.not_null` default `false → true` (and the bool/char/text
-analog); the plain-type parse stops meaning nullable; `not null` becomes an **accepted no-op**
-(DN1).
+analog); the plain-type parse stops meaning nullable; `not null` becomes an **accepted no-op**.
 - **Where:** `src/data.rs` (`not_null` defaults at the `IntegerSpec` constructors, lines
-  ~97–167) + `src/parser/definitions.rs` (the scalar `not null` parse, ~line 1470 — consume +
-  set nothing).
-- **Validation:** the **only** breakage is Phase-1 misses — a nullable site that Step 2 didn't
-  annotate now errors; fix = the one-character `?`. Gate: run `find_problems.sh --bg`, sweep
-  each miss to `?`, re-run to **2564+/0** on both backends. Measured, bounded, each one
-  character.
+  ~93–167) + `src/parser/definitions.rs` (the scalar `not null` parse — consume + set nothing).
+
+> **⚠️ SCOPING (2026-06-30, before flipping) — DN1 is bigger than "flip + one-char sweep",
+> and is intertwined with DN3.** Read this before starting:
+> 1. **The flip alone produces WARNINGS, not the clean errors implied.** The type-checker's
+>    only consumer of a type's nullability is `expr_not_null` → the **redundant-null-check
+>    *warning*** (`operators.rs`, @PLN46 W2). Flipping the default fires that warning on
+>    *every* `int == null`/`int != null` (now "always-redundant") — noise, not the bounded
+>    error-sweep. **The hard rejection of `x: integer = null` is DN3's `(N-Store)` check,
+>    which does not exist yet.** So DN1's flip is only *meaningful + cleanly-bounded* once
+>    `(N-Store)` lands — **DN1 and DN3 are one step, not two.**
+> 2. **Non-Integer scalars (`text`/`bool`/`char`/`float`) have NO `not_null` flag** — their
+>    "non-null analog" must be carried by `Type::Optional` (Step 1) + the `(N-Store)` check,
+>    i.e. it is the *same* type-checker work as DN3, not a separate flag flip.
+> 3. **Prerequisite — wire `τ?` → `Type::optional(τ)`** in the scalar parse (today Phase-0
+>    `?` is a no-op). This is additive, BUT constructing `Optional` exercises **non-exhaustive
+>    `match Type` sites with a `_` arm** (Step 1 fixed only the 8 *exhaustive* ones) — an
+>    `Integer`-special match with a `_` fallthrough would mis-handle `Optional(Integer)`
+>    *silently*. That audit (find the `_`-arm Type matches that must peel) is the real DN1
+>    worklist, and it is a correctness audit, not a one-char sweep — **measured surface:
+>    ~280 `Type::Integer` match-arm sites across 39 files** (`grep -rn 'Type::Integer' src/`).
+> 4. **47 sites read `not_null`**, with double-duty (nullability + bounds).
+>
+> **Recommended approach:** treat **DN1+DN3 as one gated effort** (an `LOFT_NO_DN1` opt-out
+> like DN4, so the suite stays green while sweeping): (a) wire `?`→`Optional`; (b) audit +
+> fix the non-exhaustive `_` Type matches to peel; (c) add the `(N-Store)` reject-null check
+> gated on; (d) flip the default; (e) `find_problems` sweep the `.loft` misses to `?`, both
+> backends; (f) flip the gate default-on. Multi-session; the survey says the *shared-surface*
+> `.loft` sweep is small, but the *compiler* work (b)+(c) is the substance.
 
 ### Step 4 — Phase 3 TIGHTEN, the rest: DN2 then DN3 (the measured blast radius, LAST)
 DN4 already shipped (above). Remaining, least-to-most breaking:
