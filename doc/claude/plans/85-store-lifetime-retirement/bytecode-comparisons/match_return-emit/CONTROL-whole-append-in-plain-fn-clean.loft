@@ -1,0 +1,9 @@
+struct E { hp: integer not null, name: text }
+struct Box { rows: vector<E> }
+fn copyf(b: Box) -> vector<E> { o: vector<E> = []; o += b.rows; return o; }
+fn main() {
+  inner: vector<E> = []; for k in 0..3 { inner += [E{hp:k, name:"e"}]; }
+  bx = Box { rows: inner };
+  for i in 0..8 { r = copyf(bx); j: vector<E> = []; for q in 0..12 { j += [E{hp:q, name:"x"}]; } assert(len(r)==3, "i{i} got {len(r)}"); }
+  println("ok");
+}

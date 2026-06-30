@@ -272,6 +272,25 @@ separate things).**
    or synthesise an element-wise deep copy without a default. (The earlier `ref_return` materialise
    block is vestigial — the synthesis supersedes it; clean up once the copy is deep.)
 
+**CORRECTION — NOT a deep-copy issue either; it is a PRE-EXISTING non-deterministic corruption in
+`o += <match-binding>` inside a match arm.** Reproduced in PLAIN loft (no synthesis, flag-off):
+`match e { Filled { items } => { o: vector<E> = []; o += items; o }, _ => { [] } }` + churn crashes
+interp **non-deterministically** (CRASH / clean / CRASH across identical runs — the uninitialised-mem /
+UAF signature); native clean. Decisive isolations:
+- A heap-free `struct E { hp: integer }` crashes IDENTICALLY → NOT the shallow heap/text copy
+  (`vector_add`'s inline byte-copy was a red herring).
+- The SAME whole-append in a PLAIN function (`copyf`: `fn(b: Box) { o = []; o += b.rows; o }`) is CLEAN
+  → it is the MATCH-ARM context, not the append op.
+- The element-loop (`deliver3`: `o += [items[x] ?? d]`) is CLEAN → it is the WHOLE-vector append
+  specifically, in a match arm, with the `vector<ref(E)>` binding as source.
+Repros: `match_return-emit/PREEXISTING-whole-append-in-match-nondeterministic.loft` (+
+`CONTROL-whole-append-in-plain-fn-clean.loft`). A PRE-EXISTING interp bug independent of the @PLN85
+synthesis (which merely GENERATES this pattern). NEXT: a dedicated debug session (boundary matrix on
+whole-append-in-match-arm + `LOFT_LOG=minimal` to find the uninitialised/UAF op), OR sidestep by having
+the synthesis emit the element-loop (proven clean). Lesson: several wrong targets were chased
+(def-numbering, POISON, deep-copy) — each disproven by an isolation probe; isolate the variable
+(heap-field, match-context, append-shape) BEFORE naming the fix.
+
 **SETTLED — the analysis is SUFFICIENT; the fix is purely codegen STRUCTURE (synthesise `o`).**
 Probed the question "can the analysis aid here?": the oracle classifies BOTH `deliver` (materialised)
 and `deliver3` identically — `return=Join(base=buffer)` — so it already greenlights the delivery; it
