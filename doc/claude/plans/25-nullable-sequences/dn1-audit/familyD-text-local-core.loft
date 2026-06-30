@@ -1,0 +1,12 @@
+// @PLN25 DN1 Family D piece (i) — text? LOCALS core. Gate-ON both backends, leak-clean.
+// Expect: hello reassigned DFLT present false
+fn maybe(b: boolean) -> text? { if b { "present" } else { null } }
+fn main() {
+  dflt = "DFLT";
+  a: text? = "hello";   r1 = a ?? dflt;   // decl
+  a = "reassigned";     r2 = a ?? dflt;   // reassign (CLEAR-before-append; was "helloreassigned")
+  a = maybe(false);     r3 = a ?? dflt;   // reassign from a nullable source -> null
+  c = maybe(true);      r4 = c ?? dflt;   // text? from a fn
+  d = c == null;                          // == null compare
+  print("{r1} {r2} {r3} {r4} {d}");
+}

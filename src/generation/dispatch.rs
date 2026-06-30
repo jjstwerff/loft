@@ -94,7 +94,9 @@ impl Output<'_> {
         // `let mut var_X = …` shadow that arm 1+ cannot see.
         if self.coroutine_persistent_vars.contains(&var) {
             let name = sanitize(variables.name(var));
-            let needs_to_string = matches!(variables.tp(var), Type::Text(_));
+            // @PLN25: a `text?` var stores as `String` like plain `text` — peel so the literal→String
+            // `.to_string()` conversion fires for an Optional(Text) local.
+            let needs_to_string = matches!(variables.tp(var).base(), Type::Text(_));
             write!(w, "self.var_{name} = ")?;
             if needs_to_string {
                 write!(w, "(")?;
@@ -279,7 +281,9 @@ impl Output<'_> {
             self.output_code_inner(w, to)?;
             return Ok(());
         }
-        let needs_to_string = matches!(variables.tp(var), Type::Text(_));
+        // @PLN25: a `text?` var stores as `String` like plain `text` — peel so the literal→String
+        // `.to_string()` conversion fires for an Optional(Text) local.
+        let needs_to_string = matches!(variables.tp(var).base(), Type::Text(_));
         let name = sanitize(variables.name(var));
         // P198 — most operators are wrapped in Value::Span by the parser.
         // Unwrap before pattern-matching so the deep-copy emission below
@@ -442,7 +446,8 @@ impl Output<'_> {
         // any drop(@var) inside the block (e.g., on break) can reference it.
         if !self.declared.contains(&var) && matches!(to, Value::Block(_)) {
             let var_tp = variables.tp(var);
-            if matches!(var_tp, Type::Text(_)) {
+            // @PLN25: peel `Optional(Text)` — a `text?` block-assigned local is `String`-typed.
+            if matches!(var_tp.base(), Type::Text(_)) {
                 self.declared.insert(var);
                 write!(w, "let mut var_{name} = ")?;
                 self.output_code_inner(w, to)?;

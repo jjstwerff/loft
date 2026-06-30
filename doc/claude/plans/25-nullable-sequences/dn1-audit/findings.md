@@ -284,8 +284,24 @@ flow): `depending`(1503), `deps_ref`(1527), `depend`(1544), `has_lifetime_concer
 (`LOFT_STORES=warn` / `LOFT_NATIVE_LEAK_CHECK`), not value alone.
 
 **Family D — the `text?` heap path** (its own sub-thread, the text analog of the landed scalar
-work). Two pieces, both two-backend: **(i) text? LOCALS** and **(ii) the text? return-buffer ABI**
-(control.rs 897/4098/4116/5752/6057/6378, operators.rs 657/904, def 850).
+work). Two pieces, both two-backend: **(i) text? LOCALS — core DONE** and **(ii) the text?
+return-buffer ABI** (control.rs 897/4098/4116/5752/6057/6378, operators.rs 657/904, def 850).
+
+> **Piece (i) text? LOCALS — CORE DONE both backends (5 peels).** `familyD-text-local-core.loft`
+> → `hello reassigned DFLT present false`, leak-clean both backends; gate-OFF byte-identical; full
+> suite green. The peels:
+> - interp first-Set routing: `gen_set_first_at_tos` (codegen.rs:2127) `.base()` → routes `text?`
+>   to the heap-aware `gen_set_first_text`.
+> - **interp clear-before-reassign** (codegen.rs:1606) `.base()` — THE reassignment bug: plain
+>   `text` reassign emits `ClearText` then `OpAppendText`; `text?` missed the `ClearText` and
+>   APPENDED (`"hi"; "x"` → `"hix"`). Found by diffing the bytecode vs plain text.
+> - native declaration (dispatch.rs ≈97/282/445) `.base()` → the literal gets `.to_string()`.
+> - **native `emit.rs::infer_type` chokepoint** (Var + Call arms `.base()`) → fixes ~18
+>   branch-unification / typed-null / predicate decisions at once (the `??` `String`/`&str` unify).
+> **Remaining for piece (i): the inline-tuple-with-null-`text?`-element edge** — `(s,n) = if .. {
+> ("t",1) } else { (null,2) }` builds an INLINE tuple `((), 2_i64)` on native (E1-like, but a
+> different path than the return-buffer `rewrite_tail_tuple` E1 already fixed). Plus the
+> comprehensive sweep of any other `matches!(_,Type::Text)` native gates as more text? shapes appear.
 > **Empirical de-risking of piece (i), text? LOCALS (2026-06-30, probed both backends, all
 > tried-and-REVERTED to keep the tree clean — text? locals are NOT yet supported on `main`):**
 > text? locals are a genuine MULTI-SITE, BOTH-BACKEND effort with a heap-text subtlety. What I

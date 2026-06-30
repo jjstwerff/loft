@@ -1603,7 +1603,10 @@ impl State {
                 self.gen_keyed_null(stack, v, false);
                 return;
             }
-            if matches!(stack.function.tp(v), Type::Text(_)) {
+            // @PLN25: a `text?` reassignment must CLEAR before the append, exactly like plain
+            // `text` (set_var's OpAppendText appends in place) — peel the marker. Without this
+            // `a: text? = "hi"; a = "x"` appended → "hix".
+            if matches!(stack.function.tp(v).base(), Type::Text(_)) {
                 let var_pos = stack.position - pos;
                 stack.add_op("OpClearText", self);
                 self.code_add(var_pos);
@@ -2124,7 +2127,10 @@ impl State {
     }
 
     fn gen_set_first_at_tos(&mut self, stack: &mut Stack, v: u16, value: &Value) {
-        if matches!(*stack.function.tp(v), Type::Text(_)) {
+        // @PLN25: a `text?` local's first-Set routes to the heap-aware text path (same sentinel
+        // storage as plain `text`) — peel the marker. Else an `Optional(Text)` var fell through
+        // to the scalar match below (no Text arm) and panicked "unsupported var type".
+        if matches!(stack.function.tp(v).base(), Type::Text(_)) {
             self.gen_set_first_text(stack, v, value);
         } else if matches!(
             stack.function.tp(v),

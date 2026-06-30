@@ -972,16 +972,21 @@ impl Output<'_> {
                 false,
                 Deps::none(),
             )),
+            // @PLN25: native codegen treats `Optional(τ)` as its base (shared ABI/layout; the
+            // null sentinel is a VALUE, not a separate codegen type) — peel so every
+            // infer_type-based decision (text/bool branch unification, typed-null, predicate
+            // coercion, …) sees through nullability. Gate-OFF inert (Optional never built).
             ValueType::Var => Some(
                 self.data
                     .def(self.def_nr)
                     .variables
                     .tp(node.var_nr())
+                    .base()
                     .clone(),
             ),
             ValueType::Call => {
                 let ret = self.data.def(node.call_to()).returned();
-                (*ret != Type::Void).then(|| ret.clone())
+                (*ret != Type::Void).then(|| ret.base().clone())
             }
             ValueType::Block => {
                 let r = node.as_block().result();
