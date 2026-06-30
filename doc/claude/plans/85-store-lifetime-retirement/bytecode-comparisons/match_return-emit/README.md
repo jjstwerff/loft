@@ -39,3 +39,23 @@ Don't reuse `_mv_items_1` as the buffer. Deliver into a separate canonical `__re
 `["__retbuf"]` — i.e. route the borrowed match-arm through the same per-arm materialise that produces
 a `["__retbuf"]`-typed delivery (the `materialize_vector_arms_into` / `copy_borrow_tail_into_retbuf`
 machinery), rather than promoting the match binding to be the buffer.
+
+## UPDATE — the proven-clean synthesis target (element-loop + inline owned default)
+
+`PROVEN-CLEAN-element-loop-inline-default.loft` (`elC`) is reliably CLEAN on BOTH backends
+(4/4 runs, churn pressure):
+```
+Filled { items } => { o: vector<E> = []; for x in 0..len(items) { o += [items[x] ?? E{hp:0, name:""}]; } o }
+```
+What each variable established (isolation probes):
+- WHOLE-vector append `o += items` in a match arm → pre-existing non-deterministic corruption.
+- element-loop with a BORROWED default (`?? items[0]`) or no default → still crashes (the appended
+  element stays a borrowed ref → shallow).
+- element-loop with an **inline OWNED default** (`?? E{<field defaults>}`) → CLEAN. The owned-typed
+  element forces the deep `OpCopyRecord` path, and the inline default (no helper fn) avoids the
+  separate 2-function pre-existing parser bug.
+So the @PLN85 synthesis must emit THIS — the element-loop with an inline default constructed from the
+element struct's field defaults — NOT the whole-vector append. The remaining work is purely building
+that `Iter`/`Loop`/`OpNewRecord`/`OpCopyRecord`/default IR in `jo_copy_borrowed_arm_yield` (the parser's
+`parse_vector_for`/`build_comprehension_code` consume the lexer, so it must be hand-built or driven
+through a synthetic re-parse).
