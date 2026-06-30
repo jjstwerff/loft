@@ -1204,6 +1204,21 @@ impl Function {
             }
             return self.is_new(var_nr);
         }
+        // @PLN25 (N-Decl): `Optional(τ)` and `τ` share sentinel storage, so storing a
+        // non-null `τ` into a nullable `τ?` slot is NOT a type change — accept and KEEP the
+        // nullable slot type (do not narrow it to non-null). This is what makes nullable
+        // LOCALS usable (`x: integer? = 5`); without it `change_var` rejected the assignment
+        // as "cannot change type from integer? to integer". The reverse (an explicit non-null
+        // target ← `τ?`) is the `(N-Store)` violation, caught at the store site before here.
+        // Gate-OFF inert: the postfix `?` is a no-op so `var_tp` is never `Optional`.
+        if let Type::Optional(inner) = var_tp
+            && (inner.is_equal(type_def) || matches!(type_def, Type::Null))
+        {
+            for on in type_def.depend() {
+                self.depend(var_nr, on);
+            }
+            return self.is_new(var_nr);
+        }
         // Allow assigning an iterator (vector slice) to a vector variable
         // when element types are compatible — the iterator is materialised.
         if let (Type::Vector(_, _), Type::Iterator(_, _)) = (var_tp, type_def) {

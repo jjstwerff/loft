@@ -3707,7 +3707,10 @@ impl State {
             }
         }
         let var_pos = stack.var_pos(var);
-        match stack.function.tp(var) {
+        // @PLN25: an `Optional(τ)` reassignment uses the base put-op (same sentinel storage)
+        // — peel the marker (mirrors the first-Set `gen_set_first_at_tos`). Without this a
+        // nullable local reassignment (`x: integer? = 5; x = 9`) panicked "Unknown var type".
+        match stack.function.tp(var).base() {
             Type::Integer(_) => stack.add_op("OpPutInt", self),
             Type::Function(_, _, _) => {
                 stack.add_op("OpPutFnRef", self);

@@ -332,9 +332,22 @@ native default/typed-null path, ties to `default_native_value` 896); E2 `"{x}"` 
    fitting value — `(254, 200): (u8?, u8?)` errors "cannot implicitly narrow integer to u8" while
    the non-nullable `(u8, u8)` accepts 254. The DN4 narrowing fit-check computes the usable range
    wrong for an Optional target. Not a store/sentinel bug; a DN4-check peel (operators.rs).
-2. **Family B** (`change_var`) — unblock locals; re-run `optional-flow-instrument.loft` extended
-   with nullable LOCALS to see which interp sites (Family, below) become reachable.
-3. **Reachable interp peels** — the now-reachable subset of the 13 (set_var, tuple ops).
+2. **Family B (`change_var`) — DONE for the scalar path.** Two parts: (a) `change_var`
+   (variables/mod.rs) now accepts `Optional(τ) ← τ` and `Optional(τ) ← null` (storing a non-null
+   base or null into a nullable slot is not a type change; keep the nullable type). (b) the
+   now-reachable interp `set_var` (codegen.rs:3710) peel for nullable-local REASSIGNMENT (it
+   panicked "Unknown var type"). Result: **integer/numeric/bool nullable LOCALS are fully usable**
+   on both backends — `familyB-nullable-locals.loft`: decl-with-value, decl-with-null, reassign,
+   narrow `u8?` boundary 254, all → `9 42 254 -9`. Validation: gate-OFF byte-identical, suite
+   green (only chrome #450), instrument green. Gate-OFF inert (Optional never constructed).
+   **DEFERRED — `text?` LOCALS (→ text? sub-thread, Family D):** plain `text` local works but a
+   `text?` local mis-routes into `gen_set_first_at_tos` (no Text arm) → panic. Fixing it needs the
+   heap-aware text first-Set path, not a blind peel — belongs with the text-nullability work.
+   The reverse inference-widening (`τ ← Optional(τ)`) was left as-is (conservative; the explicit
+   non-null target ← `τ?` is the `(N-Store)` violation caught at the store site).
+3. **Reachable interp peels** — the remaining now-reachable subset of the 13 (the tuple-op panics,
+   reachable via inferred-nullable tuple locals like `(g(),5)` → `emit_tuple_put_ops`; the RefVar
+   `&nullable` panics). set_var done in step 2.
 4. **Family C** — deps/leak holes under leak-check on `text?`/`S?` probes.
 5. **Family E + F** — the `matches!` sweep and the feature gaps.
 6. **Family D** — the `text?` return-buffer ABI sub-thread.
