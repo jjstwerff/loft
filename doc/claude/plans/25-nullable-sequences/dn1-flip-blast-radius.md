@@ -96,11 +96,17 @@ nested `else if c {6} else {null}` all REJECT into a non-null return; `-> intege
 discharged (`?? 0`), both-null, and a HEAP-reference null branch (`else { null }` of a `Node`
 return — stays nullable, no Optional) all ACCEPT. gate-OFF byte-identical; suite green.
 
-**Remaining: MATCH arms.** `match d { North => 5, South => null }` returned into `integer` does NOT
-yet reject — `parse_match` (control.rs ~2186) exempts a `Null` arm-type from the unify check and
-leaves `result_type` the scalar. The match VALUE lowers to a nested `if` (so `branch_yields_null`
-would see it), but the result TYPE is computed in the per-handler arm loop. Same widening needs
-applying there (track a null arm, widen `result_type` to `Optional(τ)` under DN1).
+**MATCH arms — DONE for scalar + enum/struct.** A `=> null` arm now widens the match result to
+`Optional(τ)` under DN1 (verified both backends, `dn1-if-match-branch-null.loft`):
+- **enum/struct match** — widened in `parse_match`'s arm loop, checking the USER `arms`
+  (`a.tp == Null` or `branch_yields_null(a.code)`), NOT the lowered value. Crucial finding: an
+  exhaustive match synthesises an unreachable `else OpConv*FromNull` default, so the value-level
+  check would falsely widen EVERY match — `nonull` (no null arm) must NOT widen, and doesn't.
+- **scalar match** — widened at the dispatch via `dn1_widen_branch_null` (value-level): a scalar
+  match's `_` arm is USER-written (no synthesised default), so the value-level check is safe there.
+- **REMAINING (rare): vector/tuple match** null arms — the dispatch returns at control.rs (vector,
+  tuple) are not yet wrapped (the value-level helper may hit a synthesised default for those; needs
+  the arm-loop check like enum if a consumer surfaces it).
 
 ## ⚠️ (historical) KNOWN GAP (narrowed) — the IF/MATCH-branch absorbed-null
 

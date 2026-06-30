@@ -1915,6 +1915,21 @@ impl Parser {
         }
     }
 
+    /// @PLN25 DN1 — widen a value's result type to `Optional(τ)` when its lowered `code` yields a
+    /// bare null and `tp` is a non-null scalar. Safe ONLY where there is no SYNTHESISED unreachable
+    /// `OpConv*FromNull` default (a scalar `match` whose `_` arm is user-written, an `if`); an enum
+    /// `match` must instead inspect its USER `arms` (its exhaustive default is a false positive).
+    fn dn1_widen_branch_null(&self, tp: Type, code: &Value) -> Type {
+        if crate::keys::pln25_dn1_enabled()
+            && Self::is_non_null_scalar(&tp)
+            && self.branch_yields_null(code)
+        {
+            Type::optional(tp)
+        } else {
+            tp
+        }
+    }
+
     pub(crate) fn parse_if(&mut self, code: &mut Value) -> Type {
         let mut test = Value::Null;
         let tp = self.expression(&mut test);
@@ -2109,7 +2124,10 @@ impl Parser {
             | Type::Boolean
             | Type::Character
             | Type::Text(_) => {
-                return self.parse_scalar_match(subject, &subject_type, code);
+                // @PLN25 DN1: a scalar match's `_` arm is USER-written (no synthesised default),
+                // so the value-level widen is safe — a `_ => null` arm makes the match nullable.
+                let tp = self.parse_scalar_match(subject, &subject_type, code);
+                return self.dn1_widen_branch_null(tp, code);
             }
             // vector types — dispatch to vector match handler.
             Type::Vector(_, _) => {
@@ -2692,6 +2710,19 @@ impl Parser {
         // - Plain enum: { match_subj = subject; chain }  (temp var to eval subject once)
         // - Struct enum: chain only  (subject_val is already the original expression/var)
         // L2: hoisted bindings are prepended so field reads happen before the if-chain.
+        // @PLN25 DN1: a user `=> null` arm (or one yielding a bare null) makes the match NULLABLE —
+        // widen the result to `Optional(τ)` (τ the non-null scalar of the other arms), so the
+        // existing DN3 `(N-Store)` forces the caller to declare `τ?` or discharge. Check the USER
+        // `arms`, NOT the lowered `chain`: an exhaustive match synthesises an unreachable
+        // `OpConv*FromNull` default, which would falsely widen EVERY match.
+        if crate::keys::pln25_dn1_enabled()
+            && Self::is_non_null_scalar(&result_type)
+            && arms
+                .iter()
+                .any(|a| matches!(a.tp, Type::Null) || self.branch_yields_null(&a.code))
+        {
+            result_type = Type::optional(result_type);
+        }
         *code = if !hoisted_bindings.is_empty() || preamble.is_some() {
             let mut stmts = Vec::new();
             if let Some((v, init)) = preamble {
