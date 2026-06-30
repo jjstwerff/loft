@@ -7,6 +7,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 Tracker: [@PLN90](https://github.com/loft-lang/plans/issues/90).
 Full design + failure-path enumeration: [COPY_DIAGNOSTICS.md](../../COPY_DIAGNOSTICS.md).
+**Remaining open work before release (issues + optimisations, prioritised): [REMAINING.md](REMAINING.md).**
 
 ## Status
 
