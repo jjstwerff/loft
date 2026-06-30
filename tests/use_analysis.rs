@@ -766,6 +766,13 @@ fn construction_copy_is_covered_by_the_verdict() {
         stderr.contains("construction/field-append copy"),
         "the construction copy should carry the construction reason; dump:\n{stderr}"
     );
+    // @PLN90 phase 2 — a construction copy is FORCED (the field owns its data).
+    assert!(
+        stderr
+            .lines()
+            .any(|l| l.contains("fn=n_make_box ") && l.contains("bucket=forced")),
+        "construction copy should be bucket=forced; dump:\n{stderr}"
+    );
 }
 
 // ── @PLN90 phase 1 — the return-buffer (field / whole-vector return) copy is covered ──
@@ -793,6 +800,15 @@ fn field_return_copy_is_covered_by_the_verdict() {
     assert!(
         stderr.contains("materialised into the return buffer"),
         "the field-return copy should carry the return-buffer reason; dump:\n{stderr}"
+    );
+    // @PLN90 phase 2 — a field-return copy is AVOIDABLE (bucket 2, the elimination
+    // worklist): a borrowed-view return is sound; the copy is only there because the
+    // borrowed return path is not yet correct (@PLN85 P4).
+    assert!(
+        stderr
+            .lines()
+            .any(|l| l.contains("fn=n_field_ret ") && l.contains("bucket=AVOIDABLE")),
+        "field-return copy should be bucket=AVOIDABLE; dump:\n{stderr}"
     );
 }
 

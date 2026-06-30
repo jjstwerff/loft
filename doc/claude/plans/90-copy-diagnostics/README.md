@@ -10,20 +10,38 @@ Full design + failure-path enumeration: [COPY_DIAGNOSTICS.md](../../COPY_DIAGNOS
 
 ## Status
 
-**Phase 1 COMPLETE — the decision covers every structure-copy emission.** The design is
-written ([COPY_DIAGNOSTICS.md](../../COPY_DIAGNOSTICS.md)); phase 1 is done — see
-[phase1-inventory.md](phase1-inventory.md). The `LOFT_COPY_DUMP` instrument gives the
-runtime ground truth; the verdict (`use_analysis`, **route 1** — extend its domain, since
-the facts live only in the post-parse pass) now classifies all four copy idioms:
-**var-buffer** (`o = src`, pre-existing) · **construction / field-append** (`S { f: src }`)
-· **return buffer** (`b.rows` → `__retbuf`) · **`OpCopyRecord`** record copies (`v[i] = e`,
-`?? E{…}`). Parity proven on the corpus (every `LOFT_COPY_DUMP` copy has a `MAT` decision
-row). All additions are diagnostic-only `Copy` rows — never an `ElidePlan`, no codegen
-change; suite byte-identical (issues 746, use_analysis 16). Pinned by
-`use_analysis::{construction,field_return,record}_copy_is_covered_by_the_verdict`.
+**Phase 1 COMPLETE; phase 2 started (avoidable-vs-forced classification).**
 
-NEXT — **phase 2**: emit the user-facing lint off these rows (avoidable vs forced, with the
-`&` / restructure hint). Coarse var/source attribution in some rows is to be sharpened there.
+**Phase 1** — the decision covers every structure-copy emission ([phase1-inventory.md](phase1-inventory.md)).
+`LOFT_COPY_DUMP` is the runtime ground truth; the verdict (`use_analysis`, **route 1** —
+extend its domain, since the facts live only in the post-parse pass) classifies all four
+copy idioms: var-buffer · construction/field-append · return-buffer · `OpCopyRecord`. Parity
+proven on the corpus; all diagnostic-only `Copy` rows (no `ElidePlan`, no codegen change).
+
+**Phase 2** — each `Copy` row now carries a bucket (`VerdictRow.avoidable`): **AVOIDABLE**
+(bucket 2 — a borrow would be sound, the copy is analysis/codegen weakness; the north-star
+elimination worklist) vs **forced** (bucket 3 — the value must be owned). `Borrow` rows are
+`eliminated`. `LOFT_MATERIALIZE_DUMP` shows `bucket=…` per row + a `MAT-WORKLIST
+avoidable=N forced=N` tally. On the corpus: `field_return` → AVOIDABLE (its elimination is
+the @PLN85 P4 borrow-correctly fix), construction / `OpCopyRecord` → forced. **The north-star
+stays primary: the warning serves elimination — drain bucket 2 into bucket 1 (auto-elide),
+never copy "just because"** ([COPY_DIAGNOSTICS.md § North-star](../../COPY_DIAGNOSTICS.md)).
+Suite byte-identical (issues 746, use_analysis 16). NEXT: emit the user-facing lint off the
+bucket (located, opt-in), and/or start draining bucket 2 (grow the `Borrow`→elide set).
+
+**North-star (do not lose it):** the warning is the *instrument*, not the goal — the goal is
+the compiler **automatically not copying** when it can prove a borrow is safe (we never copy
+"just because"). loft already has the engine: a `Borrow` verdict → `ElidePlan` → the borrow
+rewrite elides the copy (var-buffer ships today). Every copy sorts into three buckets:
+**(1) auto-eliminated** (no warning — grow this), **(2) avoidable** (warned — and this set
+IS the worklist for bucket 1), **(3) forced** (warned, informational). See
+[COPY_DIAGNOSTICS.md § North-star](../../COPY_DIAGNOSTICS.md). Notably, **field-return is
+bucket 2** — eliminating it is fixing @PLN85 P4 (borrow-correctly), which closes the loop
+back to that work.
+
+NEXT — **phase 2**: classify each Copy row avoidable vs forced (bucket 2 vs 3 — the
+elimination worklist), then emit the user-facing lint off it (with the `&` / restructure
+hint, opt-in first). Coarse var/source attribution in some rows is to be sharpened there.
 
 Wanted **before @PLN85 closes**: we often miss that a copy is happening, and that blind
 spot is shaping what we build (the @PLN85 owned-copy match-return synthesis manufactures

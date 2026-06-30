@@ -53,6 +53,30 @@ It is both a user-facing perf signal and our own instrument for driving
 [OWNERSHIP_MODEL.md](OWNERSHIP_MODEL.md)'s completeness goal — surfacing the cases we might
 still fix, instead of letting them hide.
 
+## North-star: ELIMINATE the copy, don't just warn about it
+
+The warning is the **instrument, not the goal**. The goal is the compiler *automatically*
+not copying when it can prove a borrow is safe — **we never copy "just because."** loft
+already has the elimination engine: a `Borrow` verdict produces an `ElidePlan` and the
+borrow rewrite inlines the copy away ([OWNERSHIP_MODEL.md](OWNERSHIP_MODEL.md); the var-
+buffer case ships today). The whole arc is to **grow that `Borrow` set** so copies
+disappear with no user action.
+
+So every copy sorts into three buckets, in priority order:
+
+1. **Auto-eliminated** — the analysis proves the borrow is safe → it elides the copy. No
+   copy, no warning. *Growing this bucket is the north-star.*
+2. **Avoidable** — a borrow *would* be safe but the analysis cannot yet prove it (the
+   conservative "just to be sure" default), or a small user restructure would let it.
+   These are warned — and **the warned-avoidable set is precisely the worklist for bucket
+   1**: each is a copy the compiler should learn to eliminate.
+3. **Forced** — the value genuinely must be owned (it escapes, is independently mutated, a
+   field owns its data). A real, unavoidable copy — *indicated clearly, never hidden.*
+
+The diagnostic exists to drain bucket 2 into bucket 1 and to make bucket 3 honest. It is a
+means to *fewer copies*, not an end in itself; a warning that just says "you copied" and
+leaves the copy standing has failed its purpose.
+
 ## This is a perf lint, NOT a borrow checker (reconciliation)
 
 [OWNERSHIP_MODEL.md § Internal and invisible](OWNERSHIP_MODEL.md) records a **decided**
@@ -127,25 +151,28 @@ helper that consults it). Until that holds, the warning is partial and must *say
 This is the OWNERSHIP_MODEL corollary applied to diagnostics: a missed copy-warning is
 never a "warning bug" — it is a **hole in the copy-vs-borrow decision**.
 
-## Forced vs avoidable — the two tiers (the user's explicit requirement)
+## Forced vs avoidable — the warned tiers (buckets 2 and 3)
 
-The verdict's `reason` already splits the world. Surface it as two diagnostic kinds:
+Bucket 1 (auto-eliminated) never warns — the copy is gone. The warning only ever fires for
+buckets 2 and 3, and the verdict's `reason` is what splits them:
 
-- **Avoidable copy** — a borrow would be sound (source outlives the result, no
-  independent mutation) but a copy is emitted, either because the analysis could not
-  *prove* the borrow (the conservative default) or because the code is written in a
-  copy-forcing shape. Diagnostic: *"this copies <T>; a borrow would avoid it — <how:
-  bind the source to a longer-lived name / return the field directly / …>"*. Actionable.
-- **Forced copy** — a borrow is genuinely unsound: the source does **not** outlive the
-  result (a temporary subject), the result is mutated independently, or it crosses a
-  point where the source is freed. Diagnostic: *"a copy of <T> is required here because
-  <reason>; to avoid it, <extend the source's lifetime / restructure>"*. Informational —
+- **Avoidable copy** (bucket 2) — a borrow *would* be sound (source outlives the result, no
+  independent mutation) but a copy is emitted, because the analysis could not yet *prove*
+  the borrow (the conservative default), or a small restructure would let it. Diagnostic:
+  *"this copies <T>; a borrow would avoid it — <how: bind the source to a longer-lived name
+  / return the field directly / …>"*. **This is the north-star worklist:** the goal is to
+  teach the analysis to prove these and move them to bucket 1, so the warning disappears
+  *because the copy did* — not because the user silenced it.
+- **Forced copy** (bucket 3) — a borrow is genuinely unsound: the source does **not**
+  outlive the result (a temporary subject), the result is mutated independently, or it
+  crosses a point where the source is freed; or the value must be owned (a field owns its
+  data). Diagnostic: *"a copy of <T> is required here because <reason>"*. Informational —
   the cost is real and unavoidable as written, **shown, not hidden.**
 
-The distinction is exactly "cannot prevent a copy, but indicate it clearly instead of
-blindly following it." The line between the tiers is whether the lifetime/mutation facts
-(which the `deps` ownership analysis holds) make a borrow *sound* — not whether the
-current analysis happens to prove it.
+The line between them is whether the lifetime/mutation facts (which the `deps` ownership
+analysis holds) make a borrow *sound* — **not** whether the current analysis happens to
+prove it. A copy the analysis is merely too weak to elide is **avoidable**, not forced —
+calling it forced would hide exactly the work the north-star is about.
 
 ## The user's escape hatch — "clearly indicated" cuts both ways
 
