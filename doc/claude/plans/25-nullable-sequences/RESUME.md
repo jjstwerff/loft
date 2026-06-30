@@ -174,6 +174,19 @@ flip the scalar default non-null, sweep the `.loft` misses, then flip the gate d
 This is where the ~280 sites become *live* (plain types → Optional) — the big multi-session
 phase the scoping above describes.
 
+**Slice (c) `(N-Store)` — SCOPED (gate `LOFT_PLN25_DN3` added, implies OPT; check reverted).**
+First attempt put the reject-un-discharged-`τ?` check in `convert()` — **wrong granularity.**
+`convert` also services COMPARISONS, so it wrongly flagged `s.a == null` (the null-CHECK that
+is how you *test* nullability) as an illegal nullable→non-null use. Reverted. **Finding:
+`(N-Store)` must live at the STORE / decl / index / return sites (the design's per-site
+`N-Store`/`N-Decl`/`N-Coal`/`N-Match` checks), and `== null` / `!= null` null-compares must stay
+legal on a nullable.** The probe confirmed the *enforcement direction* is right: an
+un-discharged `bad: integer = e.hp` errors; `e.hp ?? 0` passes; and it surfaced a genuine
+sweep target — `lib/code.loft`'s `definitions[cur_def]` uses the annotated `cur_def: i32?` as a
+non-null index (29 sites) → must discharge post-DN1. The gate `LOFT_PLN25_DN3` is in place for
+the correct store-site implementation. Next: place the check at the store/index/return sites,
+exempting null-compare; then (d) the default flip; (e) sweep; (f) gate default-on.
+
 ### Step 4 — Phase 3 TIGHTEN, the rest: DN2 then DN3 (the measured blast radius, LAST)
 DN4 already shipped (above). Remaining, least-to-most breaking:
 - **DN2** — remove the implicit `τ? ⤳ τ` unwrap in `convert()` (`parser/mod.rs:1585`). After

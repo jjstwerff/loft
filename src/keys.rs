@@ -323,7 +323,21 @@ pub fn copy_dump_enabled() -> bool {
 #[must_use]
 pub fn pln25_optional_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_PLN25_OPT").is_some())
+    *ON.get_or_init(|| {
+        std::env::var_os("LOFT_PLN25_OPT").is_some() || std::env::var_os("LOFT_PLN25_DN3").is_some()
+    })
+}
+
+/// `LOFT_PLN25_DN3=1` (@PLN25 slice c, IN PROGRESS) — the `(N-Store)` teeth: reject an
+/// un-discharged `τ?` (Optional) flowing into a NON-null target (a plain `τ`). The nullable
+/// value must first be discharged with `??` or `match` (which yield the non-null base). Opt-IN
+/// while the enforcement + the DN1 default flip are being built; implies `LOFT_PLN25_OPT` (the
+/// check is meaningless without the real `Optional` marker). OFF keeps the slice-(b)
+/// behaviour-preserving implicit unwrap. See plans/25-nullable-sequences/RESUME.md § Step 3.
+#[must_use]
+pub fn pln25_dn3_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_PLN25_DN3").is_some())
 }
 
 /// `LOFT_UAF_REUSE` (detector b) — at `copy_record`, when the source slot is LIVE

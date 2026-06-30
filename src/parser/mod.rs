@@ -1876,6 +1876,11 @@ impl Parser {
             return self.convert(code, is_type, inner);
         }
         if let Type::Optional(inner) = is_type {
+            // @PLN25 slice (b): the behaviour-preserving implicit unwrap. The `(N-Store)` teeth
+            // (DN3) do NOT belong here — `convert` also services COMPARISONS (`x == null`), so
+            // rejecting an Optional source here wrongly flags the very null-CHECKS that are how
+            // you test nullability. (N-Store) must live at the STORE / decl / index sites (the
+            // design's per-site checks), exempting null-compare. See RESUME.md § Step 3 slice c.
             return self.convert(code, inner, should);
         }
         // Plan-06 phase 4d: tuple-to-tuple convert is element-wise.
