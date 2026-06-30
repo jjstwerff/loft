@@ -14,13 +14,13 @@ probe verdicts) → [implementation-steps.md](implementation-steps.md) (the phas
 
 ---
 
-## TL;DR — where we are (updated 2026-06-29)
+## TL;DR — where we are (updated 2026-06-30)
 
-- **Branch: `lima-default-borrow-elision`**, off `main`, **pushed**. 6 `@PLN25` commits
-  ahead of `origin/main`, **no PR** (the single-final-PR discipline holds).
-- **Suite is fully green: `2564 passed, 0 failed`** (184 skipped) — verified
-  2026-06-29 via `find_problems.sh`. The branch is in a clean, mergeable-at-a-phase-boundary
-  state.
+- **`lima-default-borrow-elision` is MERGED to `main`** (via #467/#468/#469 etc.) and the
+  branch is deleted. Its scalars Phase-0 + DN4 + N-Arith work is now ON `main`.
+- **@PLN25 now continues on `tuxedo-pln85-fuzz-proof-gate`** (the single live branch, off
+  `main`, pushed, no PR). Step 1 (`Type::Optional`) landed here (`d121f94c`).
+- **Suite green** — `find_problems.sh` 0 failures on both backends after Step 1.
 - **The vectors half is DONE and on `main`.** `vector<S>` is dense (`main_vector<S>`,
   no `__nullable`); `vector<S?>` is the nullable opt-in; `v[1] == null` is true; the
   canonical incoherence probe is coherent on both backends. The #465 borrowed-view
@@ -40,10 +40,12 @@ probe verdicts) → [implementation-steps.md](implementation-steps.md) (the phas
   - **N-Arith range-tracking — done.** `&` and `%` narrow the static range so masked/modded
     values are provably-fit (feeds DN4's fit proof). Regression: `389-narrow-alias-ranges`,
     `389-narrow-vector-full-range`.
-  - **Scalar `τ?` representation — DECIDED, NOT YET BUILT.** `Type::Optional(Box<Type>)`,
-    compile-time only (storage stays sentinel-based). The design is in
-    [scalar-optional-representation.md](scalar-optional-representation.md); the variant is
-    **not in `src/data.rs` yet** — it is the first build step of the scalar half.
+  - **Scalar `τ?` representation — BUILT (Step 1, `d121f94c`).** `Type::Optional(Box<Type>)`
+    is in `src/data.rs` with the idempotent `Type::optional` former (N-Idem + normalises
+    `Optional(Never|Null)`) and `peel_optional`/`base`. 8 exhaustive `match Type` sites
+    handled (peel for the layout-agnostic majority; `τ?` rendering in `name()`). Compile-time
+    only, sentinel storage, nothing constructs it yet → additive, suite unchanged. N-Idem
+    pinned by a unit test. Design: [scalar-optional-representation.md](scalar-optional-representation.md).
 - **gridmesh 0.1.2 published (2026-06-29).** The DN4 cutover masked the gridmesh + hex_world
   fixtures and relocked `audience_crystal` to gridmesh 0.1.2; the suite was RED until that
   version was signed into the registry index. It is now published + signed (registry commit
@@ -68,7 +70,7 @@ probe verdicts) → [implementation-steps.md](implementation-steps.md) (the phas
 | Scalars `integer?`/`S?` syntax | 0 EXPAND | ✅ this branch (no-op) |
 | DN4 `as τ` fit-check / `as τ?` | 3 TIGHTEN (early) | ✅ this branch, default-on |
 | N-Arith `&`/`%` range-tracking | 3 support | ✅ this branch |
-| Scalar `τ?` = `Type::Optional` | 0/2 prereq | 🔵 decided, **not built** |
+| Scalar `τ?` = `Type::Optional` | 0/2 prereq | ✅ Step 1 built (`d121f94c`, `tuxedo-pln85`) |
 | Borrow elision Tier 1 (local source) | — | 🔵 implemented, **parked off** by design |
 
 ---
@@ -79,15 +81,14 @@ The remaining critical path to "done" (full null-model coherence) is the **scala
 then **Phase 3 DN3/DN2**, then **Phase 5 cleanup**. Each step ends green; never carry two
 phases' breakage at once.
 
-### Step 1 — Build `Type::Optional(Box<Type>)` (the scalar `τ?` representation)
-The Phase-2 blocker. A single compile-time optional former (storage stays sentinel-based →
-zero runtime cost). A new `Type` variant is chosen precisely so every unhandled `match`
-becomes a **loud compile error** (vs a silently-ignorable `nullable: bool`).
-- **Where:** `src/data.rs` (the `Type` enum) + every `match Type` site the compiler flags.
-  Reconcile with the existing `IntegerSpec.not_null` (`scalar-optional-representation.md`).
-- **Validation:** additive only — `Optional` is constructed by nothing yet, so the gate is
-  **suite stays at 2564/0** on both backends. The win is purely that the type *exists* and
-  `cargo build` is clean (every `match` arm handled).
+### Step 1 — Build `Type::Optional(Box<Type>)` — ✅ DONE (`d121f94c`, `tuxedo-pln85`)
+The variant + idempotent `Type::optional` former (N-Idem; normalises `Optional(Never|Null)`)
++ `peel_optional`/`base` are in `src/data.rs`. 8 flagged `match Type` sites handled: the
+layout-agnostic majority peel to the base (Optional shares the base's sentinel runtime
+layout), `name()`/`short_type` render `τ?`, `for_each_child` visits the child. Compile-time
+only, additive — nothing constructs `Optional` yet, so the suite is unchanged (0 failures,
+both backends); N-Idem pinned by a unit test. `IntegerSpec.not_null` reconciliation deferred
+to DN1/DN3 (per `scalar-optional-representation.md`), as designed.
 
 ### Step 2 — Scalars Phase 1 MIGRATE: annotate nullable scalar/field sites with `?`
 While the scalar default is STILL nullable, mark every site that genuinely holds null.
