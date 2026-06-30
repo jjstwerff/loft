@@ -189,9 +189,28 @@ non-null index (29 sites) → must discharge post-DN1.
 STORE sites — the typed scalar assignment (`expressions.rs`) + field construction
 (`objects.rs`). Right granularity confirmed: the 25-probe (`s.a == null`) is GREEN DN3-ON on
 BOTH backends (the convert false-positive is gone), `bad: integer = e.hp` errors, `?? 0`
-passes. Gated `LOFT_PLN25_DN3`. **Follow-on store sites: the INDEX (`v[e]` — the `cur_def`
-finding, 0 flagged so far) and the RETURN site.** Then (d) the default flip; (e) sweep; (f)
-gate default-on.
+passes. Gated `LOFT_PLN25_DN3`.
+
+**INDEX site DONE (`65ef931e`):** a nullable cannot be a vector index (`fields.rs:783`,
+`n_store_violation(&index_t, &I32, "a vector index")`).
+
+**RETURN site DONE (this commit):** all three return store-paths now run `(N-Store)` — the
+explicit `return e` (`control.rs::parse_return`), the implicit function-tail `{ … e }`
+(`control.rs::block_result`, gated to `context == "return from block"` so an `if`/`match` arm
+whose `result` is legitimately nullable is untouched), and `lhs ?? return e`
+(`operators.rs::build_null_coalesce_return`). Matrix probed on BOTH backends: an un-discharged
+`integer?` returned into a non-null return errors gate-ON (single diagnostic — `convert` still
+peels `Optional`, no double-diagnose); `?? d` / a nullable return type pass; gate-OFF
+byte-identical (the value still flows through as the null sentinel). Artifacts:
+`bytecode-comparisons/25-nstore-return-{LEGAL,VIOLATION}.loft`.
+
+All store sites for the current corpus are now covered. **NEXT = (d) the default flip
+(`IntegerSpec.not_null` `false → true` + the scalar `not null` parse → no-op), (e) the `.loft`
+sweep of the misses to `?` (incl. `lib/code.loft`'s `definitions[cur_def]`, 29 sites), (f) flip
+the gate default-on.** Up to (d) the var-DECL store of a bare `null` into an annotated scalar
+(`x: integer? = null`) still trips the pre-existing "cannot change type … to null" guard — it
+predates the flip (`x: integer = null` errors gate-OFF too) and is the `(N-Decl)` site to settle
+as part of (d), since the flip is what makes `integer?` the canonical null-init form.
 
 ### Step 4 — Phase 3 TIGHTEN, the rest: DN2 then DN3 (the measured blast radius, LAST)
 DN4 already shipped (above). Remaining, least-to-most breaking:

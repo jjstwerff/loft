@@ -755,6 +755,15 @@ impl Parser {
             // TAKEN by a sibling return — so it shares one fresh-owned-vector classifier
             // (`fresh_owned_vector_deps`) and one dispatch with the buffer-free #437/c5
             // rename. See the `tail_ret_owned` block.)
+            // @PLN25 (N-Store): the IMPLICIT function-tail is a STORE into the
+            // caller's non-null return slot, exactly like an explicit `return`.
+            // Only at the genuine function tail (`context == "return from block"`),
+            // not an `if`/`match` arm (whose `result` may legitimately be nullable).
+            // A scalar `τ?` tail hits none of the vector/tuple special cases above,
+            // and `convert` below peels `Optional`, so no double-diagnose.
+            if context == "return from block" {
+                self.n_store_violation(t, result, "the return value");
+            }
             if !tuple_rewritten
                 && !if_unified
                 && !vec_match_candidate
@@ -5611,6 +5620,12 @@ impl Parser {
                     self.rewrite_tail_tuple_to_synthetic_struct(synthetic_d_nr, &mut v);
                     true
                 };
+            // @PLN25 (N-Store): an explicit `return` is a STORE into the caller's
+            // non-null return slot — an un-discharged nullable `τ?` must be
+            // discharged (`?? d` / `match`) first.  Emitted here; `convert` below
+            // still peels `Optional`, so no double-diagnose.  Gate-OFF / first-pass:
+            // a no-op (`n_store_violation` returns `false`).
+            self.n_store_violation(&t, &r_type, "the return value");
             if t == Type::Null {
                 v = self.null(&r_type);
             } else if !tuple_rewritten && !self.convert(&mut v, &t, &r_type) {

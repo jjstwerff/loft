@@ -1336,6 +1336,9 @@ impl Parser {
         if !self.lexer.peek_token(";") && !self.lexer.peek_token("}") {
             let ret_pos = self.lexer.peek_pos().clone();
             let t = self.expression(&mut ret_val);
+            // @PLN25 (N-Store): `lhs ?? return ret` returns `ret` into the caller's
+            // non-null return slot — an un-discharged nullable `ret` is a violation.
+            self.n_store_violation(&t, &r_type, "the return value");
             if t != Type::Null && !self.convert(&mut ret_val, &t, &r_type) && !self.first_pass {
                 self.validate_convert("return", &t, &r_type, &ret_pos);
             }

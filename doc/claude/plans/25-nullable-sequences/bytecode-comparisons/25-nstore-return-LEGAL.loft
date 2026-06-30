@@ -1,0 +1,25 @@
+// @PLN25 slice (c) — (N-Store) at the RETURN site, the LEGAL cells.
+// Runnable on BOTH backends, gate-ON (LOFT_PLN25_DN3=1) AND gate-OFF.
+//   loft --interpret 25-nstore-return-LEGAL.loft   # 0 / ok / 0 / 7
+//   LOFT_PLN25_DN3=1 loft --native 25-nstore-return-LEGAL.loft
+// The violation counterparts are in 25-nstore-return-VIOLATION.loft.
+
+// R2: explicit return discharged with `?? 0`.
+fn r2(x: integer?) -> integer { return x ?? 0; }
+
+// R3: explicit return into a NULLABLE return type (target is `integer?`).
+fn r3(x: integer?) -> integer? { return x; }
+
+// R5: implicit tail discharged.
+fn r5(x: integer?) -> integer { x ?? 0 }
+
+// R6: control — non-null param returned into non-null (no Optional involved).
+fn r6(x: integer) -> integer { return x; }
+
+fn main() {
+  a = r2(null);          // 0
+  b = r3(null) ?? -1;    // -1 (r3 returns the nullable null, discharged for print)
+  c = r5(null);          // 0
+  d = r6(7);             // 7
+  print("{a} {b} {c} {d}");   // 0 -1 0 7
+}
