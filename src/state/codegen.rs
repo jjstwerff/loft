@@ -3370,6 +3370,17 @@ impl State {
                 // a null-ref sentinel so both branches of an if-else reach the join point
                 // with the same stack delta.
                 self.emit_push_sentinel(stack);
+            } else if stack.position == to && to < after {
+                // @PLN85 P3: the block is typed to yield a value but its operators
+                // produced NO result on the eval stack — e.g. a `{ [] }` match arm
+                // that reduced to a bare `Line` marker (the multi-line spelling of an
+                // empty-vector arm; the single-line spelling becomes a Null else that
+                // gen_if already pads).  Without a pushed result the runtime stack is
+                // short by one result slot, so the enclosing join / `OpReturn` discard
+                // over-counts and `fn_return` misreads the saved return address →
+                // interpreter underflow.  Push a typed null of the result, mirroring
+                // gen_if's null-else arm (`emit_typed_null`).
+                self.emit_typed_null(stack, &result);
             }
             stack.position = after;
         }
