@@ -183,9 +183,15 @@ is how you *test* nullability) as an illegal nullable→non-null use. Reverted. 
 legal on a nullable.** The probe confirmed the *enforcement direction* is right: an
 un-discharged `bad: integer = e.hp` errors; `e.hp ?? 0` passes; and it surfaced a genuine
 sweep target — `lib/code.loft`'s `definitions[cur_def]` uses the annotated `cur_def: i32?` as a
-non-null index (29 sites) → must discharge post-DN1. The gate `LOFT_PLN25_DN3` is in place for
-the correct store-site implementation. Next: place the check at the store/index/return sites,
-exempting null-compare; then (d) the default flip; (e) sweep; (f) gate default-on.
+non-null index (29 sites) → must discharge post-DN1.
+
+**Store-site implementation DONE (`def34450`):** a `n_store_violation` helper called at the
+STORE sites — the typed scalar assignment (`expressions.rs`) + field construction
+(`objects.rs`). Right granularity confirmed: the 25-probe (`s.a == null`) is GREEN DN3-ON on
+BOTH backends (the convert false-positive is gone), `bad: integer = e.hp` errors, `?? 0`
+passes. Gated `LOFT_PLN25_DN3`. **Follow-on store sites: the INDEX (`v[e]` — the `cur_def`
+finding, 0 flagged so far) and the RETURN site.** Then (d) the default flip; (e) sweep; (f)
+gate default-on.
 
 ### Step 4 — Phase 3 TIGHTEN, the rest: DN2 then DN3 (the measured blast radius, LAST)
 DN4 already shipped (above). Remaining, least-to-most breaking:
