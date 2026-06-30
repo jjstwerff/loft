@@ -298,10 +298,16 @@ return-buffer ABI** (control.rs 897/4098/4116/5752/6057/6378, operators.rs 657/9
 > - native declaration (dispatch.rs ≈97/282/445) `.base()` → the literal gets `.to_string()`.
 > - **native `emit.rs::infer_type` chokepoint** (Var + Call arms `.base()`) → fixes ~18
 >   branch-unification / typed-null / predicate decisions at once (the `??` `String`/`&str` unify).
+> **Also confirmed working (no new code needed — the piece-(i) peels + the infer_type chokepoint
+> covered them): text? RETURNS** (`-> text?`, incl. if/else-with-null), **text? FIELDS** (struct
+> field, constructed + returned), **text? PARAMS**, and **concat / char-iteration AFTER discharge**
+> (`(s ?? "") + "…"`, `for c in (s ?? "")`). So piece (ii) the text?-return ABI is effectively
+> covered for the shapes tested.
 > **Remaining for piece (i): the inline-tuple-with-null-`text?`-element edge** — `(s,n) = if .. {
 > ("t",1) } else { (null,2) }` builds an INLINE tuple `((), 2_i64)` on native (E1-like, but a
-> different path than the return-buffer `rewrite_tail_tuple` E1 already fixed). Plus the
-> comprehensive sweep of any other `matches!(_,Type::Text)` native gates as more text? shapes appear.
+> different path than the return-buffer `rewrite_tail_tuple` E1 already fixed; needs tuple-element-
+> level if-branch type unification). Plus the Family C text?-reassignment-from-call LEAK (now
+> reachable) + the broad `matches!(_,Type::Text)` native sweep as more text? shapes appear.
 > **Empirical de-risking of piece (i), text? LOCALS (2026-06-30, probed both backends, all
 > tried-and-REVERTED to keep the tree clean — text? locals are NOT yet supported on `main`):**
 > text? locals are a genuine MULTI-SITE, BOTH-BACKEND effort with a heap-text subtlety. What I
@@ -440,6 +446,14 @@ ABI gates in emit.rs/calls.rs. Same `.base()` peel, mechanical.
    to validate each fix.** (Not a leak: `Node { next: Node? }` "field has no position" is a
    PRE-EXISTING recursive-value-struct limitation — non-nullable self-ref fails identically,
    gate-OFF too — not @PLN25.)
+   **UPDATE (Family D piece (i) landed): Family C is now REACHABLE and has a CONFIRMED leak.** With
+   text? locals working, a leak-stress (200× loop: `s = "lit"; s = maybe(false)`) leaks 2 sites on
+   BOTH backends (`LOFT_STORES=warn`), while the SAME loop on plain `text` is clean — so it's a
+   text?-SPECIFIC leak in the reassignment-from-CALL path (a single decl/reassign is leak-clean).
+   This is the deps/ownership work the family describes — now falsifiable by the leak instrument.
+   Pick it up as a focused Family C session (the dangerous deps area; don't rush it at the tail of
+   a long session). The other C sites (`slot_kind`/`owned_elements`/`has_lifetime_concern`) re-audit
+   now that text?/S? flow.
 5. **Family E + F** — the `matches!` sweep and the feature gaps.
 6. **Family D** — the `text?` return-buffer ABI sub-thread.
 7. **Family G** — E1 with the native typed-null peel; decide E2.
