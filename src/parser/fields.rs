@@ -778,6 +778,9 @@ impl Parser {
     ) -> Option<Type> {
         let mut p = Value::Null;
         let index_t = self.parse_in_range(&mut p, code, "$");
+        // @PLN25 (N-Store): a vector index must be non-null — a nullable `τ?` index
+        // (`v[cur_def]` where `cur_def: i32?`) must be discharged first. DN3-gated.
+        self.n_store_violation(&index_t, &I32, "a vector index");
         // Pass-1 deferral: a `vector<S>` whose element `S` is not yet registered
         // (forward-referenced or cross-package, e.g. `vector<WallDef>` indexed
         // before `WallDef` is parsed) yields `type_elm == u32::MAX`, which would
