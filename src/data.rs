@@ -1333,16 +1333,49 @@ pub enum Type {
     Rewritten(Box<Type>),
     /// T1.1: stack-allocated fixed-arity compound type, e.g. `(integer, text)`.
     Tuple(Vec<Type>),
+    /// @PLN25 — a nullable wrapper over any base type (`τ?`). **Compile-time only:**
+    /// `Optional(τ)` and `τ` share the same sentinel-based runtime layout (no wrapper
+    /// alloc, no `__nullable` synth for scalars). Build it with [`Type::optional`] (kept
+    /// idempotent — no `Optional(Optional)` — and normalising `Optional(Never|Null)`); read
+    /// the bit with [`Type::peel_optional`]. A new variant — not a `nullable: bool` flag — so
+    /// every exhaustive `match Type` is a COMPILE ERROR until it handles nullability (loud
+    /// omission). See plans/25-nullable-sequences/scalar-optional-representation.md.
+    Optional(Box<Type>),
 }
 
 impl Type {
+    /// @PLN25 — the idempotent `τ?` former. `Optional(Optional(τ)) → Optional(τ)`
+    /// (N-Idem); `Optional(Never|Null) → Never|Null` (no junk optional over a non-value).
+    /// Everything else becomes `Optional(Box::new(inner))`.
+    pub fn optional(inner: Type) -> Type {
+        match inner {
+            Type::Optional(_) | Type::Never | Type::Null => inner,
+            other => Type::Optional(Box::new(other)),
+        }
+    }
+
+    /// @PLN25 — split a type into its base and whether it was `Optional`. The
+    /// nullability-agnostic majority of `match Type` sites peel through this; only the
+    /// discharge / store / cast checks (N-Store/N-Decl/N-Coal/N-Match) read the bool.
+    pub fn peel_optional(&self) -> (&Type, bool) {
+        match self {
+            Type::Optional(inner) => (inner, true),
+            other => (other, false),
+        }
+    }
+
+    /// @PLN25 — the base type with any `Optional` wrapper removed (the agnostic peel).
+    pub fn base(&self) -> &Type {
+        self.peel_optional().0
+    }
+
     /// Pass-2 keystone, the `Type` twin of `Value::for_each_child`
     /// (STABILITY_PASS2.md): the ONE place that knows which `Type`
     /// variants carry child types.  Exhaustive on purpose — a new
     /// variant forces a decision here and every walker inherits it.
     pub fn for_each_child(&self, f: &mut impl FnMut(&Type)) {
         match self {
-            Type::RefVar(t) | Type::Vector(t, _) | Type::Rewritten(t) => f(t),
+            Type::RefVar(t) | Type::Vector(t, _) | Type::Rewritten(t) | Type::Optional(t) => f(t),
             Type::Iterator(a, b) => {
                 f(a);
                 f(b);
@@ -1626,6 +1659,7 @@ impl Type {
     #[must_use]
     pub fn name(&self, data: &Data) -> String {
         match self {
+            Type::Optional(tp) => format!("{}?", tp.name(data)),
             Type::Rewritten(tp) => tp.name(data),
             Type::RefVar(tp) => format!("&{}", tp.name(data)),
             Type::Enum(t, _, _) | Type::Reference(t, _) => data.def(*t).name.clone(),
@@ -4748,6 +4782,7 @@ impl Data {
     #[must_use]
     pub fn type_name_str(&self, tp: &Type) -> String {
         match tp {
+            Type::Optional(inner) => format!("{}?", self.type_name_str(inner)),
             Type::Unknown(_) => "unknown".to_string(),
             Type::Null => "null".to_string(),
             Type::Void => "void".to_string(),
@@ -5481,5 +5516,22 @@ mod type_name_user_facing_tests {
         let d = Data::new();
         let r = Type::RefVar(Box::new(Type::Text(Deps::none())));
         assert_eq!(r.name(&d), "&text");
+    }
+
+    // @PLN25 — the `τ?` former's invariants: idempotent (N-Idem), normalising over
+    // non-values, renders as `τ?`, and peels back to its base.
+    #[test]
+    fn optional_is_idempotent_normalising_and_renders_with_question_mark() {
+        let d = Data::new();
+        let txt = Type::Text(Deps::none());
+        let o = Type::optional(txt.clone());
+        assert!(matches!(o, Type::Optional(_)));
+        assert_eq!(o.name(&d), "text?"); // renders `τ?`
+        assert!(o.peel_optional().1); // reads as optional
+        assert_eq!(*o.base(), txt); // base is the wrapped type
+        assert_eq!(Type::optional(o.clone()), o); // N-Idem: no Optional(Optional)
+        assert_eq!(Type::optional(Type::Never), Type::Never); // normalise non-values
+        assert_eq!(Type::optional(Type::Null), Type::Null);
+        assert!(!txt.peel_optional().1); // a plain type is not optional
     }
 }

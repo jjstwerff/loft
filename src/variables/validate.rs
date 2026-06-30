@@ -25,6 +25,7 @@ use super::{Function, size};
 
 fn short_type(tp: &Type) -> String {
     match tp {
+        Type::Optional(inner) => format!("{}?", short_type(inner)),
         Type::Unknown(_) => "?".to_string(),
         Type::Null => "null".to_string(),
         Type::Void | Type::Never => "void".to_string(),

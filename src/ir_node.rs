@@ -809,6 +809,8 @@ fn native_value_kind(v: &Value) -> ValueType {
 fn native_type_kind(t: &Type) -> TypeKind {
     use TypeKind as K;
     match t {
+        // @PLN25 Optional shares its base's runtime layout/kind (sentinel storage) — peel.
+        Type::Optional(inner) => native_type_kind(inner),
         Type::Unknown(_) => K::Unknown,
         Type::Null => K::Null,
         Type::Void => K::Void,

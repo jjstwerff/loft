@@ -91,6 +91,8 @@ fn name_list(stores: &mut Stores, slot: &Record, off: u32, names: &[String]) {
 /// Write `ty` into the already-allocated `TypeT` record `slot` (zeroed).
 fn write_type(stores: &mut Stores, slot: &Record, ty: &Type) {
     match ty {
+        // @PLN25 Optional shares its base's runtime TypeT layout (sentinel storage) — peel.
+        Type::Optional(inner) => write_type(stores, slot, inner),
         Type::Unknown(n) => {
             slot.set_discriminant(stores, ds::TY_UNKNOWN);
             slot.set_field_int(stores, ds::TYUNKNOWN_N, i64::from(*n));
