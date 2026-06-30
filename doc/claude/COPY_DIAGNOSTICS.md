@@ -62,20 +62,29 @@ borrow rewrite inlines the copy away ([OWNERSHIP_MODEL.md](OWNERSHIP_MODEL.md); 
 buffer case ships today). The whole arc is to **grow that `Borrow` set** so copies
 disappear with no user action.
 
-So every copy sorts into three buckets, in priority order:
+So every copy sorts into four buckets, in priority order:
 
 1. **Auto-eliminated** — the analysis proves the borrow is safe → it elides the copy. No
    copy, no warning. *Growing this bucket is the north-star.*
 2. **Avoidable** — a borrow *would* be safe but the analysis cannot yet prove it (the
    conservative "just to be sure" default), or a small user restructure would let it.
-   These are warned — and **the warned-avoidable set is precisely the worklist for bucket
-   1**: each is a copy the compiler should learn to eliminate.
-3. **Forced** — the value genuinely must be owned (it escapes, is independently mutated, a
-   field owns its data). A real, unavoidable copy — *indicated clearly, never hidden.*
+   **Warned** — and **the warned-avoidable set is precisely the worklist for bucket 1**:
+   each is a copy the compiler should learn to eliminate.
+3. **Implicit** — the copy is **inherent to the ownership model**: constructing an owning
+   structure (`S { f: src }` — the field owns its data) or assigning into an owning slot
+   (`v[i] = e` — the element owns its record) copies *because that is what the construct
+   means*. The programmer asked for an owning value; it is not a surprise and not something
+   to "fix." **Silent — never warned.** (A copy is only worth flagging when it is *not*
+   the obvious consequence of the code the programmer wrote.)
+4. **Forced** — the value must be owned by *circumstance*, not by an obvious ownership
+   boundary: the source is short-lived (a temporary subject), or mutated later so it cannot
+   be aliased. Required as written, but a restructure could avoid it. **Indicated**
+   (informational), never silent.
 
-The diagnostic exists to drain bucket 2 into bucket 1 and to make bucket 3 honest. It is a
-means to *fewer copies*, not an end in itself; a warning that just says "you copied" and
-leaves the copy standing has failed its purpose.
+The diagnostic exists to drain bucket 2 into bucket 1, keep bucket 3 quiet, and make
+bucket 4 honest. It is a means to *fewer copies*, not an end in itself; and it must not cry
+wolf on bucket 3 — warning on every `S { f: src }` would bury the avoidable copies that
+actually matter (exactly the "almost every match would warn" failure that motivated this).
 
 ## This is a perf lint, NOT a borrow checker (reconciliation)
 
@@ -151,28 +160,32 @@ helper that consults it). Until that holds, the warning is partial and must *say
 This is the OWNERSHIP_MODEL corollary applied to diagnostics: a missed copy-warning is
 never a "warning bug" — it is a **hole in the copy-vs-borrow decision**.
 
-## Forced vs avoidable — the warned tiers (buckets 2 and 3)
+## The three Copy buckets — which warn
 
-Bucket 1 (auto-eliminated) never warns — the copy is gone. The warning only ever fires for
-buckets 2 and 3, and the verdict's `reason` is what splits them:
+Bucket 1 (auto-eliminated) never warns — the copy is gone. Of the remaining three, only
+**Avoidable** is a warning the user should act on; **Implicit** is silent and **Forced** is
+informational:
 
-- **Avoidable copy** (bucket 2) — a borrow *would* be sound (source outlives the result, no
+- **Avoidable** (bucket 2) — a borrow *would* be sound (source outlives the result, no
   independent mutation) but a copy is emitted, because the analysis could not yet *prove*
   the borrow (the conservative default), or a small restructure would let it. Diagnostic:
-  *"this copies <T>; a borrow would avoid it — <how: bind the source to a longer-lived name
-  / return the field directly / …>"*. **This is the north-star worklist:** the goal is to
+  *"this copies <T>; a borrow would avoid it — <how>"*. **This is the north-star worklist:**
   teach the analysis to prove these and move them to bucket 1, so the warning disappears
   *because the copy did* — not because the user silenced it.
-- **Forced copy** (bucket 3) — a borrow is genuinely unsound: the source does **not**
-  outlive the result (a temporary subject), the result is mutated independently, or it
-  crosses a point where the source is freed; or the value must be owned (a field owns its
-  data). Diagnostic: *"a copy of <T> is required here because <reason>"*. Informational —
-  the cost is real and unavoidable as written, **shown, not hidden.**
+- **Implicit** (bucket 3) — the copy is the obvious consequence of the construct: a
+  struct/enum field or a vector slot **owns** its data, so `S { f: src }` and `v[i] = e`
+  copy by definition. The programmer asked for an owning value. **Silent** — warning here
+  would fire on near-every constructor and bury the avoidable copies that matter.
+- **Forced** (bucket 4) — a borrow is unsound by *circumstance*, not by an obvious ownership
+  boundary: the source does **not** outlive the result (a temporary subject), or it is
+  mutated later so it cannot be aliased. Diagnostic: *"a copy of <T> is required here
+  because <reason>"*. Informational — the cost is real and unavoidable as written, shown,
+  not hidden.
 
-The line between them is whether the lifetime/mutation facts (which the `deps` ownership
-analysis holds) make a borrow *sound* — **not** whether the current analysis happens to
-prove it. A copy the analysis is merely too weak to elide is **avoidable**, not forced —
-calling it forced would hide exactly the work the north-star is about.
+The line that matters: **avoidable** is a copy the analysis is merely too weak to elide
+(calling it forced would hide the north-star work); **implicit** is a copy the model
+*defines* (warning it is noise); **forced** is a copy a restructure *could* remove (worth
+saying once). The lifetime/mutation facts the `deps` analysis holds are what sort 2 vs 4.
 
 ## The user's escape hatch — "clearly indicated" cuts both ways
 

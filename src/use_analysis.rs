@@ -34,6 +34,24 @@ pub enum Verdict {
     Copy,
 }
 
+/// @PLN90 — the WARNING bucket for a copy (which `COPY_DIAGNOSTICS.md` drives). The verdict
+/// says *whether* a copy happens; this says *what to do about it*.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CopyClass {
+    /// A `Borrow` — already eliminated, not a copy. No warning.
+    Eliminated,
+    /// Bucket 2 — a borrow WOULD be sound; the copy is only analysis/codegen weakness. The
+    /// north-star elimination worklist. WARN (the actionable "you didn't have to copy").
+    Avoidable,
+    /// Inherent to the ownership model — constructing an owning structure (`S { f: src }`)
+    /// or assigning into an owning slot (`v[i] = e`) *owns* its data. This is exactly what
+    /// the programmer asked for, not a surprise. SILENT (no warning).
+    Implicit,
+    /// Forced by circumstance (a short-lived source, a later mutation) — required as
+    /// written, but the user could restructure. Indicated (informational), never silent.
+    Forced,
+}
+
 /// One row of the analysis result: the verdict for a single vector-copy binding.
 #[derive(Clone, Debug)]
 pub struct VerdictRow {
@@ -44,11 +62,10 @@ pub struct VerdictRow {
     pub verdict: Verdict,
     /// Human-readable justification (for the dump and test diagnostics).
     pub reason: &'static str,
-    /// @PLN90 — for a `Copy`: is it AVOIDABLE (a borrow would be sound; the copy is only
-    /// analysis/codegen weakness — bucket 2, the north-star elimination worklist) or FORCED
-    /// (the value must be owned — escapes, mutated, a field/slot owns it — bucket 3)? Always
-    /// `false` for a `Borrow` (already eliminated — not a copy). See COPY_DIAGNOSTICS.md.
-    pub avoidable: bool,
+    /// @PLN90 — the warning bucket: `Eliminated` (Borrow) · `Avoidable` (warn — the
+    /// worklist) · `Implicit` (model-inherent ownership — silent) · `Forced` (informational).
+    /// See [`CopyClass`] and COPY_DIAGNOSTICS.md.
+    pub class: CopyClass,
 }
 
 fn def_nrs(data: &Data, names: &[&str]) -> HashSet<u32> {
@@ -402,7 +419,7 @@ fn analyze_fn(
                     // AVOIDABLE: returning a borrowed view of the field is sound (the caller
                     // keeps the subject alive); the copy is here only because the borrowed
                     // return path is not yet correct (@PLN85 P4). Eliminating it = that fix.
-                    avoidable: true,
+                    class: CopyClass::Avoidable,
                 });
             }
             continue; // not a single-source local copy — not ours to elide
@@ -428,45 +445,47 @@ fn analyze_fn(
                 _ => false,
             };
 
-        // @PLN90 — `avoidable` (only meaningful for Copy): a borrow would be SOUND but a
-        // copy is emitted because the analysis cannot yet prove it — bucket 2, the
-        // elimination worklist. The one clearly-avoidable Copy here is a read-only,
-        // non-escaping result whose only blocker is an unproven local source (analysis
-        // conservatism). The rest are FORCED: the result escapes/is reassigned (must own),
-        // the source is mutated (cannot alias), or the source is a literal (nothing to
-        // borrow — building, not copying). `Borrow` is already eliminated → not avoidable.
-        let (verdict, reason, avoidable) =
-            if single_def && v_readonly && src_is_param && src_unmutated {
-                (
-                    Verdict::Borrow,
-                    "tier0: read-only local, unmutated param source",
-                    false,
-                )
-            } else if single_def && v_readonly && src_local_stable {
-                (
-                    Verdict::Borrow,
-                    "tier1: read-only local, ordering-proven read-only local source",
-                    false,
-                )
-            } else if src.is_none() {
-                (
-                    Verdict::Copy,
-                    "source is not a plain var/field (e.g. a literal)",
-                    false,
-                )
-            } else if !single_def {
-                (Verdict::Copy, "reassigned (multiple defs)", false)
-            } else if !v_readonly {
-                (Verdict::Copy, "local mutated or escapes", false)
-            } else if !src_is_param && !src_local_stable {
-                (
-                    Verdict::Copy,
-                    "source not a parameter / not provably read-only local",
-                    true,
-                )
-            } else {
-                (Verdict::Copy, "source mutated", false)
-            };
+        // @PLN90 — the warning bucket. Avoidable = a borrow would be sound, blocked only by
+        // analysis conservatism (an unproven read-only local source) — the worklist.
+        // Implicit = a literal source is construction, not a copy of existing data (owned by
+        // the model — silent). Forced = the result escapes / is reassigned / mutated, or the
+        // source is mutated (the value must own its store). `Borrow` is already eliminated.
+        let (verdict, reason, class) = if single_def && v_readonly && src_is_param && src_unmutated
+        {
+            (
+                Verdict::Borrow,
+                "tier0: read-only local, unmutated param source",
+                CopyClass::Eliminated,
+            )
+        } else if single_def && v_readonly && src_local_stable {
+            (
+                Verdict::Borrow,
+                "tier1: read-only local, ordering-proven read-only local source",
+                CopyClass::Eliminated,
+            )
+        } else if src.is_none() {
+            (
+                Verdict::Copy,
+                "source is not a plain var/field (e.g. a literal)",
+                CopyClass::Implicit,
+            )
+        } else if !single_def {
+            (
+                Verdict::Copy,
+                "reassigned (multiple defs)",
+                CopyClass::Forced,
+            )
+        } else if !v_readonly {
+            (Verdict::Copy, "local mutated or escapes", CopyClass::Forced)
+        } else if !src_is_param && !src_local_stable {
+            (
+                Verdict::Copy,
+                "source not a parameter / not provably read-only local",
+                CopyClass::Avoidable,
+            )
+        } else {
+            (Verdict::Copy, "source mutated", CopyClass::Forced)
+        };
 
         if verdict == Verdict::Borrow
             && let Some(vdb) = u.def_vdb.get(&v)
@@ -500,7 +519,7 @@ fn analyze_fn(
             source: src.unwrap_or(u16::MAX),
             verdict,
             reason,
-            avoidable,
+            class,
         });
     }
 
@@ -517,10 +536,10 @@ fn analyze_fn(
             source: src.unwrap_or(u16::MAX),
             verdict: Verdict::Copy,
             reason: "struct/enum field owns its data (construction/field-append copy)",
-            // FORCED: a struct/enum field owns its data; the constructed record out-lives
-            // the source binding, so it cannot alias it. (Phase-2 refinement: a source that
-            // provably out-lives a non-escaping record could become avoidable.)
-            avoidable: false,
+            // IMPLICIT — silent: constructing an owning structure (`S { f: src }`) copying
+            // its field is exactly the model (the field owns its data), what the programmer
+            // asked for, not a surprise. Never warned.
+            class: CopyClass::Implicit,
         });
     }
 
@@ -535,9 +554,9 @@ fn analyze_fn(
             source: src.unwrap_or(u16::MAX),
             verdict: Verdict::Copy,
             reason: "record deep-copy (OpCopyRecord)",
-            // FORCED: the destination slot/element owns the record; it is a distinct store
-            // from the source, so it cannot alias it.
-            avoidable: false,
+            // IMPLICIT — silent: assigning a record into an owning slot/element (`v[i] = e`,
+            // a built element) means the slot owns it. That is the model, not a surprise.
+            class: CopyClass::Implicit,
         });
     }
     (rows, plans)
@@ -1193,22 +1212,26 @@ pub fn dump_all(data: &Data) {
         return;
     }
     let mut own = Ownership::new(data);
-    // @PLN90 — the elimination worklist tally: how many copies the analysis could
-    // (avoidable, bucket 2) vs could-not (forced, bucket 3) plausibly eliminate.
-    let (mut avoidable_copies, mut forced_copies) = (0u32, 0u32);
+    // @PLN90 — the tally: `avoidable` is the north-star elimination worklist; `implicit`
+    // is model-inherent ownership (silent, not a copy-to-fix); `forced` is informational.
+    let (mut avoidable_copies, mut implicit_copies, mut forced_copies) = (0u32, 0u32, 0u32);
     for d_nr in 0..data.definitions() {
         let def = data.def(d_nr);
         if !matches!(def.def_type, DefType::Function) {
             continue;
         }
         for r in analyze_fn(&def.code, &def.variables, data, env_tier()).0 {
-            let bucket = match (r.verdict, r.avoidable) {
-                (Verdict::Borrow, _) => "eliminated",
-                (Verdict::Copy, true) => {
+            let bucket = match r.class {
+                CopyClass::Eliminated => "eliminated",
+                CopyClass::Avoidable => {
                     avoidable_copies += 1;
                     "AVOIDABLE"
                 }
-                (Verdict::Copy, false) => {
+                CopyClass::Implicit => {
+                    implicit_copies += 1;
+                    "implicit"
+                }
+                CopyClass::Forced => {
                     forced_copies += 1;
                     "forced"
                 }
@@ -1252,6 +1275,9 @@ pub fn dump_all(data: &Data) {
         }
     }
     // @PLN90 — the worklist headline: avoidable = the north-star target (teach the analysis
-    // to borrow these so they auto-eliminate); forced = genuinely must own.
-    eprintln!("MAT-WORKLIST avoidable_copies={avoidable_copies} forced_copies={forced_copies}");
+    // to borrow these so they auto-eliminate); implicit = model-inherent ownership (silent);
+    // forced = must own by circumstance (informational).
+    eprintln!(
+        "MAT-WORKLIST avoidable_copies={avoidable_copies} implicit_copies={implicit_copies} forced_copies={forced_copies}"
+    );
 }

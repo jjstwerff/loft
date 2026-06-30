@@ -766,12 +766,13 @@ fn construction_copy_is_covered_by_the_verdict() {
         stderr.contains("construction/field-append copy"),
         "the construction copy should carry the construction reason; dump:\n{stderr}"
     );
-    // @PLN90 phase 2 — a construction copy is FORCED (the field owns its data).
+    // @PLN90 phase 2 — a construction copy is IMPLICIT to the model (the field owns its
+    // data) → silent, NOT warned. It is not the avoidable worklist.
     assert!(
         stderr
             .lines()
-            .any(|l| l.contains("fn=n_make_box ") && l.contains("bucket=forced")),
-        "construction copy should be bucket=forced; dump:\n{stderr}"
+            .any(|l| l.contains("fn=n_make_box ") && l.contains("bucket=implicit")),
+        "construction copy should be bucket=implicit (silent); dump:\n{stderr}"
     );
 }
 

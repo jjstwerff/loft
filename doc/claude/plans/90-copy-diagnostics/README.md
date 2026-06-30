@@ -18,16 +18,19 @@ extend its domain, since the facts live only in the post-parse pass) classifies 
 copy idioms: var-buffer · construction/field-append · return-buffer · `OpCopyRecord`. Parity
 proven on the corpus; all diagnostic-only `Copy` rows (no `ElidePlan`, no codegen change).
 
-**Phase 2** — each `Copy` row now carries a bucket (`VerdictRow.avoidable`): **AVOIDABLE**
-(bucket 2 — a borrow would be sound, the copy is analysis/codegen weakness; the north-star
-elimination worklist) vs **forced** (bucket 3 — the value must be owned). `Borrow` rows are
-`eliminated`. `LOFT_MATERIALIZE_DUMP` shows `bucket=…` per row + a `MAT-WORKLIST
-avoidable=N forced=N` tally. On the corpus: `field_return` → AVOIDABLE (its elimination is
-the @PLN85 P4 borrow-correctly fix), construction / `OpCopyRecord` → forced. **The north-star
-stays primary: the warning serves elimination — drain bucket 2 into bucket 1 (auto-elide),
-never copy "just because"** ([COPY_DIAGNOSTICS.md § North-star](../../COPY_DIAGNOSTICS.md)).
+**Phase 2** — each `Copy` row carries a 4-way `VerdictRow.class` (the warning bucket):
+**Eliminated** (`Borrow`) · **Avoidable** (warn — a borrow would be sound, blocked only by
+analysis weakness; the north-star worklist) · **Implicit** (SILENT — the copy is inherent to
+the model: a struct/enum field or vector slot *owns* its data, e.g. `S { f: src }`, `v[i] =
+e`) · **Forced** (informational — owned by circumstance: temporary source, later mutation).
+`LOFT_MATERIALIZE_DUMP` shows `bucket=…` per row + a `MAT-WORKLIST avoidable=N implicit=N
+forced=N` tally. On the corpus: `field_return` → AVOIDABLE (its elimination IS the @PLN85 P4
+borrow-correctly fix); **construction / `OpCopyRecord` → implicit (NOT warned — it is what
+the programmer asked for)**; `assign_field` → eliminated. **North-star primary:** the warning
+serves elimination — drain bucket 2 (avoidable) into bucket 1 (auto-elide), stay quiet on
+bucket 3, never copy "just because" ([COPY_DIAGNOSTICS.md § North-star](../../COPY_DIAGNOSTICS.md)).
 Suite byte-identical (issues 746, use_analysis 16). NEXT: emit the user-facing lint off the
-bucket (located, opt-in), and/or start draining bucket 2 (grow the `Borrow`→elide set).
+bucket (warn only Avoidable; located; opt-in), and/or start draining bucket 2 (the P4 fix).
 
 **North-star (do not lose it):** the warning is the *instrument*, not the goal — the goal is
 the compiler **automatically not copying** when it can prove a borrow is safe (we never copy
