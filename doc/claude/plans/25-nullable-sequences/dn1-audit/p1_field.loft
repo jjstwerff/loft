@@ -1,0 +1,5 @@
+struct S { a: integer?, b: integer, c: integer? }
+fn main() {
+  s = S { a: 5, b: 7, c: 9 };
+  print("{s.a ?? -1} {s.b} {s.c ?? -1}");   // 5 7 9
+}

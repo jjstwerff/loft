@@ -1,0 +1,51 @@
+// @PLN25 DN1 audit — the EMPIRICAL instrument. Drives `integer?`/`text?`/`boolean?`
+// through every language feature so the compiler surfaces any unpeeled-Optional
+// mishandle directly. Run gate-ON so Optional is constructed but the (N-Store)
+// teeth do NOT reject it (LOFT_PLN25_OPT, not DN3):
+//   LOFT_PLN25_OPT=1 loft --interpret optional-flow-instrument.loft
+//   LOFT_PLN25_OPT=1 loft --native    optional-flow-instrument.loft
+// Expected (both backends): 5 7 9 | 15 10 | 42 -1 | hi none | true false | present missing
+//                           | 6 | 200 1000 | 1 -1 3 | -9 | -1 7 | -1
+// All GREEN today on BOTH backends — these paths are covered by slice (b)'s peels.
+// The KNOWN GAPS are NOT in this file (they abort): see findings.md
+//   - tuple-element `null` typed `integer?`  -> NATIVE E0308 (tuple-null-native-bug.loft)
+//   - direct `"{x}"` of a nullable           -> loud "Cannot format type integer?" both
+//     backends (format-nullable-rejected.loft) — design/ergonomics, not corruption.
+
+struct S { a: integer?, b: integer, c: integer? }
+struct Box { name: text? }
+struct B { flag: boolean? }
+struct N { small: u8?, mid: i32? }
+struct Inner { val: integer? }
+struct Outer { inner: Inner }
+struct Acc { v: integer? }
+enum E { A { n: integer? }, Bv { z: integer } }
+
+fn add10(x: integer?) -> integer { y = x ?? 0; y + 10 }       // discharge + arith
+fn g(b: boolean) -> integer? { if b { 42 } else { null } }    // nullable return (if/else)
+fn pick(t: Box) -> text { t.name ?? "none" }                  // text? field
+fn classify(x: integer?) -> text { if x == null { "missing" } else { "present" } }
+fn arith_nd(x: integer?) -> integer { x + 1 }                 // arith WITHOUT discharge
+fn get(self: Acc) -> integer? { self.v }                      // method nullable return
+fn ret_null(b: boolean) -> integer? { if b { return null; } return 7; }  // explicit return null
+
+fn main() {
+  s = S { a: 5, b: 7, c: 9 };
+  print("{s.a ?? -1} {s.b} {s.c ?? -1}");                     // 5 7 9
+  print("{add10(5)} {add10(null)}");                          // 15 10
+  print("{g(true) ?? -1} {g(false) ?? -1}");                  // 42 -1
+  print("{pick(Box{name:\"hi\"})} {pick(Box{name:null})}");   // hi none
+  bx = B { flag: true }; by = B { flag: null };
+  print("{bx.flag ?? false} {by.flag ?? false}");             // true false
+  print("{classify(5)} {classify(null)}");                    // present missing
+  print("{arith_nd(5)}");                                     // 6
+  n = N { small: 200, mid: 1000 };
+  print("{n.small ?? 0} {n.mid ?? 0}");                       // 200 1000
+  v: vector<integer?> = [1, null, 3];
+  print("{v[0] ?? -1} {v[1] ?? -1} {v[2] ?? -1}");            // 1 -1 3
+  o = Outer { inner: Inner { val: null } };
+  print("{o.inner.val ?? -9}");                               // -9
+  print("{ret_null(true) ?? -1} {ret_null(false) ?? -1}");    // -1 7
+  e = A { n: null };
+  match e { A { n } => print("{n ?? -1}"), Bv { z } => print("{z}") }  // -1
+}

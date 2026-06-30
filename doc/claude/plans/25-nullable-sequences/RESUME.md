@@ -204,13 +204,33 @@ peels `Optional`, no double-diagnose); `?? d` / a nullable return type pass; gat
 byte-identical (the value still flows through as the null sentinel). Artifacts:
 `bytecode-comparisons/25-nstore-return-{LEGAL,VIOLATION}.loft`.
 
-All store sites for the current corpus are now covered. **NEXT = (d) the default flip
-(`IntegerSpec.not_null` `false → true` + the scalar `not null` parse → no-op), (e) the `.loft`
-sweep of the misses to `?` (incl. `lib/code.loft`'s `definitions[cur_def]`, 29 sites), (f) flip
-the gate default-on.** Up to (d) the var-DECL store of a bare `null` into an annotated scalar
-(`x: integer? = null`) still trips the pre-existing "cannot change type … to null" guard — it
-predates the flip (`x: integer = null` errors gate-OFF too) and is the `(N-Decl)` site to settle
-as part of (d), since the flip is what makes `integer?` the canonical null-init form.
+All store sites for the current corpus are now covered.
+
+**DN1 `_`-arm AUDIT — COMPLETE (`dn1-audit/findings.md`).** Before the default flip, the audit
+that the scoping below calls "the real DN1 worklist" is DONE — 5 parallel subsystem audits +
+an empirical instrument (`dn1-audit/optional-flow-instrument.loft`, green both backends). Result:
+**69 NEEDS-FIX** sites where an `Optional(τ)` value silently takes a non-Optional `_` arm
+(panic / wrong size·align·stride / leak / wrong ABI). They collapse into 7 families with ONE
+uniform fix — **peel `.base()` before the type dispatch** (byte-identical gate-OFF, additive):
+- **A — layout/size/align** (SIGSEGV/panic, HIGHEST): the sibling-pair misses where slice (b)
+  fixed one twin and missed the other — `size`✓/`align`✗ (variables 1753), `type_def_nr`✓/
+  `type_elm`✗ (data 4752, the root), `element_align`✓/`tuple_def`-align✗ (data 3971),
+  `generation::rust_type`✓/`Data::rust_type`✗ (data 4832, panic). Fix first.
+- **B — the `(N-Decl)` gate**: `change_var` (variables 1257) rejects `τ ↔ Optional(τ)` as a type
+  change → nullable LOCALS unusable today (`x: integer? = 5` fails — even non-null). This is the
+  local-half gate; it makes most interp-codegen sites latent-but-UNREACHABLE until fixed.
+- **C** deps/leak holes for `Optional(Text/ref)` · **D** the `text?` return-buffer ABI sub-thread
+  · **E** the `matches!`-predicate second sweep (`is_scalar`/`slot_kind`/~40 `Type::Text` ABI
+  gates) · **F** feature gaps (`match`/`for`/`+`/`float? == null`) · **G** the empirical bugs
+  (E1 native `null` tuple-element → `(())`; E2 `"{x}"` format reject). Full rows + the staged
+  fix-sequence in `dn1-audit/findings.md § SYNTHESIS`.
+
+**NEXT = the staged fix-sequence (findings.md): Family A ungated first (`type_elm` neutralises
+downstream), then B (`change_var`) → reachable interp peels → C leak holes → E/F → D text? ABI →
+G → THEN (d) the default flip (`IntegerSpec.not_null` `false → true`), (e) `.loft` sweep of
+misses to `?` (incl. `lib/code.loft`'s `definitions[cur_def]`), (f) flip the gate default-on.**
+The bare-`null` var-DECL (`x: integer? = null`) failure is one face of Family B's `change_var`
+gate (`x: integer = null` errors gate-OFF too) — settle it there.
 
 ### Step 4 — Phase 3 TIGHTEN, the rest: DN2 then DN3 (the measured blast radius, LAST)
 DN4 already shipped (above). Remaining, least-to-most breaking:
