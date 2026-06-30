@@ -6,7 +6,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # match_return emit — the IR-diff-against-the-proven-path capture
 
 These three IR captures are the @PLN85 `match_return` interp-crash diagnosis, done by the
-**IR-diff-against-the-proven-path** method (see [CODEGEN_METHOD.md § Diff the proven path](../../../CODEGEN_METHOD.md)).
+**IR-diff-against-the-proven-path** method (see [CODEGEN_METHOD.md § Diff the proven path](../../../../CODEGEN_METHOD.md)).
 Re-generate with `loft introspect` (one capture carries IR + interp bytecode + native Rust).
 
 | file | what | runtime |

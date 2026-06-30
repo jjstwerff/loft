@@ -12,111 +12,110 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 @PLN85 retires loft's **over-free** store-lifetime bug class by UNIFYING the per-site ownership
 re-derivation onto ONE analysis fact (`src/use_analysis.rs::ownership_of`, the `Owned|Borrowed|Join{base}`
-oracle) that every free chokepoint READS. Three over-free shapes; all fixes are gated behind the
-`LOFT_JOIN_OWN` env var (off-default → suite byte-identical). **`local_source` and `elem_accumulate`
-are DONE on both backends.** `match_return` is the LAST site: the codegen STRUCTURE is correct (it now
-produces the proven `deliver3` IR exactly), but the COPY mechanism it emits is broken. This handoff is
-how to finish it.
+oracle) that every free chokepoint READS. The over-free fixes are gated behind the `LOFT_JOIN_OWN` env var
+(off-default → suite byte-identical); `local_source` and `elem_accumulate` are DONE on both backends.
+`match_return` is the LAST over-free site. Validating it surfaced **two plain-loft codegen bugs** —
+interp-only, flag-OFF, independent of the gate and of the over-free work — that made *every*
+match-return-into-a-buffer shape crash the interpreter, masking the synthesis. **Both are now FIXED and
+ungated: P2 (`2701ad5f`) and P3 (`166cc578`).** What remains is the gated synthesis itself — P1 below.
 
 ## Branch / gate / commits
 
-- **Branch `tuxedo-pln85-fuzz-proof-gate`** (latest `c748e98b`). It is STACKED on @PLN25's unmerged PR —
+- **Branch `tuxedo-pln85-fuzz-proof-gate`** (latest `166cc578`). STACKED on @PLN25's unmerged PR —
   do NOT fork a new branch off `main` (main lacks the foundation). Rebase the stack only after @PLN25 merges.
-- **Gate:** `LOFT_JOIN_OWN` env var. OFF → no over-free code runs → suite byte-identical (verify:
-  `cargo test --release --test issues` = 746 ok, `--test use_analysis` = 11 ok). ON → the fixes activate.
-- DONE both backends (gated): `local_source` (scope-pass dep-strip, `src/scopes.rs`), `elem_accumulate`
-  (first-bind `OpBindOrCopy` interp + native inline guard; `state/io.rs`, `state/codegen.rs`,
-  `generation/dispatch.rs`). The oracle (`use_analysis.rs`) is built + unit-tested (`tests/use_analysis.rs`).
+- **Gate:** `LOFT_JOIN_OWN` controls the OVER-FREE fixes only. The P2/P3 codegen fixes are NOT gated — they
+  are plain-loft correctness fixes that run always (suite green: issues 746, use_analysis 11, wrap, native).
+- DONE both backends, gated: `local_source` (`src/scopes.rs`), `elem_accumulate` (`state/io.rs`,
+  `state/codegen.rs`, `generation/dispatch.rs`). Oracle built + unit-tested (`tests/use_analysis.rs`).
+- DONE both backends, ungated codegen: **P2** + **P3** (see "FIXED" below).
 
-## The match_return state — what is CORRECT, what is BROKEN
+## The match_return synthesis — what it is
 
 The synthesis lives in **`src/parser/control.rs::jo_copy_borrowed_arm_yield`** (called from `parse_match`
 after each arm body, ~line 1947). When an arm yields a `skip_free` vector field binding directly
 (`Filled { items } => { items }`), it wraps the yield in an owned copy and lets the existing `ref_return`
-promotion build the buffer ABI. **The STRUCTURE it produces is EXACTLY `deliver3`** (verified: sig `["??"]`,
-var table `0 e / 1 __retbuf marker / 2 _mv_items_1["e"] source / 3 arg <copy> owned buffer`, caller types
-`r:vector["__ref_1"]` and emits `OpFreeRef(cell)`). The ONLY thing wrong: it emits the whole-vector append
-`o += items`, which is broken (see P1/P2).
+promotion build the buffer ABI; the structure matches the proven `deliver3`. The analysis is SUFFICIENT
+(do not enhance it): the oracle classifies `deliver` (materialised) and `deliver3` IDENTICALLY as
+`return=Join(base=buffer)`.
 
-The analysis is SUFFICIENT (do not enhance it): the oracle classifies `deliver` (materialised) and `deliver3`
-IDENTICALLY as `return=Join(base=buffer)`. The bug is purely the emitted copy.
+## REMAINING WORK
 
-## REMAINING PROBLEMS
+### P1 — re-validate the gated synthesis now that P2/P3 are fixed *(the open @PLN85 deliverable)*
 
-### P1 — emit the element-loop instead of the whole-vector append *(the path to green)*
+P2 and P3 made every match-return-buffer shape crash the interpreter regardless of the synthesis, so the
+synthesis could never be validated. With both fixed, re-run the `LOFT_JOIN_OWN=on` path:
 
-`jo_copy_borrowed_arm_yield` must emit, NOT `o += items`, but the proven-clean element-loop:
-```
-Filled { items } => { o: vector<E> = []; for x in 0..len(items) { o += [items[x] ?? E{<field defaults>}]; } o }
-```
-- **Proven clean both backends, 4/4 under churn**: `match_return-emit/PROVEN-CLEAN-element-loop-inline-default.loft`.
-- Why this exact form (each established by an isolation probe): the OWNED-typed element (the inline default
-  `E{<field defaults>}`) forces the deep `OpCopyRecord` path; a BORROWED default (`?? items[0]`) or none
-  stays a shallow ref and crashes; an INLINE default (vs a helper fn) dodges P3.
-- **Work:** hand-build the `Iter`/`Loop`/`OpNewRecord`/`OpCopyRecord` + default-construction IR. The
-  parser's `parse_vector_for`/`build_comprehension_code` (vectors.rs) consume the LEXER, so they cannot be
-  called directly — build the IR with `v_block`/`v_if`/`Value::Iter`/`Value::Loop`/`self.cl(...)`, or drive
-  a synthetic re-parse. Model it on `deliver3`'s IR (`loft introspect` a `deliver3`-style fn). Substantial
-  but well-specified. The inline default is constructible from the element struct's field defaults
-  (`Definition` parts carry `default: ...`).
+- The synthesis emits the whole-vector append `o += items`. The earlier prediction was "if the plain-loft
+  bug is fixed, the whole-append synthesis just works." Test it now on both backends under churn. If it runs
+  clean, P1 needs **no** element-loop — the simpler whole-append synthesis is enough.
+- The borrowed-direct-yield shape still crashes flag-OFF: `directyield`
+  (`fn f(e: Cell) -> vector<E> { match e { Filled { items } => { items }, _ => { [] } } }`) returns a
+  *borrowed* enum-field binding directly. That is the synthesis INPUT shape the gate rewrites into an owned
+  copy — re-check it under `LOFT_JOIN_OWN=on` once the whole-append path is confirmed.
+- Fallback element-loop form (proven clean both backends, 4/4 under churn):
+  `bytecode-comparisons/match_return-emit/PROVEN-CLEAN-element-loop-inline-default.loft` —
+  `Filled { items } => { o: vector<E> = []; for x in 0..len(items) { o += [items[x] ?? E{<field defaults>}]; } o }`.
+  The OWNED inline default forces the deep `OpCopyRecord`; a borrowed default stays shallow and crashes. To
+  emit it, hand-build the `Iter`/`Loop`/`OpNewRecord`/`OpCopyRecord`/default IR — the parser's
+  `parse_vector_for`/`build_comprehension_code` consume the lexer, so they cannot be called directly.
+- Cleanup once the synthesis lands: the `ref_return` whole-append materialise block (`control.rs`, the
+  `jo_arm_skip` loop ~line 5135 + the promotion-loop/dep-walk skips) is VESTIGIAL.
 
-### P2 — PRE-EXISTING: non-deterministic corruption in match-arm whole-append *(RECOMMENDED to fix; unblocks P1)*
+## FIXED
 
-`match e { Filled { items } => { o: vector<E> = []; o += items; o }, _ => { [] } }` + churn crashes interp
-**NON-deterministically** (CRASH / clean / CRASH across identical runs — the uninitialised-mem / UAF
-signature); native clean. **Plain loft, flag-OFF — independent of @PLN85.**
-- Repro: `match_return-emit/PREEXISTING-whole-append-in-match-nondeterministic.loft`.
-  Control (CLEAN, same append in a PLAIN fn): `CONTROL-whole-append-in-plain-fn-clean.loft`.
-- Isolations (don't re-chase): heap-free `struct E { hp: integer }` crashes IDENTICALLY → NOT a deep-copy
-  of heap fields; the SAME append in a plain fn is clean → it is the MATCH-ARM context; the element-loop is
-  clean → it is the WHOLE-vector append specifically (source is the `vector<ref(E)>` binding).
-- **If P2 is fixed, P1 is unneeded** — the existing whole-append synthesis just works (smaller, more general
-  fix). Debug: boundary matrix on whole-append-in-match-arm + `LOFT_LOG=minimal`/`crash_tail` to find the
-  uninitialised/UAF op. **File as a GitHub issue** (`sev:`/`area:`, both-backend repro).
+### P2 — gen_if arm-join discard *(FIXED `2701ad5f`)*
 
-### P3 — PRE-EXISTING: defining two vector-using functions together crashes interp
+First filed as "non-deterministic corruption in match-arm whole-append." Both halves were wrong. The real
+bug is **deterministic**, in `src/state/codegen.rs::gen_if`'s arm-join (the "B5" branch). When a
+value-yielding `match`'s arms exit at different stack levels, gen_if joins at the shorter arm's level but
+only ever shrank the FALSE arm — a taller TRUE arm was never shrunk (short a whole result slot), and the
+shrink used the raw result size instead of the step-rounded slot (short by the 12→16 padding). Either way
+the function-tail `OpReturn` `discard` came out short, so `fn_return` (`state/mod.rs`) read the saved return
+address from the wrong slot and the interpreter derailed under churn. `--native` is immune — it returns on
+the Rust call stack. Fix: shrink whichever arm is taller, `discard = (arm_stack - target) + step(ret_size)`,
+routing an already-emitted taller true arm through a shrink trampoline. The append itself (`vector_add`) is
+shared by both backends and was never the bug. Regression: `tests/scripts/441-match-return-buffer-stack.loft`.
 
-Defining `e_default` AND `filler` together (BOTH dead code, never called) crashes interp **flag-OFF**;
-either one alone is clean. A def/type-numbering corruption. **This MASKED every matrix file** (all
-`/tmp/claude/gen/match_return*` carry both `e_default`+`filler`), so matrix verdicts were unreliable. **File
-as a GitHub issue.** Reduce: `deliver` (a borrowed-binding match return) + `e_default` + `filler` + a `main`
-that only calls `deliver`.
+### P3 — empty value-block pushes no result *(FIXED `166cc578`)*
 
-### Cleanup (not a bug)
+First filed as "defining two vector-using functions together crashes." Wrong root. The real bug: a
+**multi-line** `_ => { [] }` arm returning into the buffer reduces to a block whose only operator is a bare
+`Line` marker, yet it is typed to yield the vector. `generate_block` set `stack.position = after` (claiming
+the result slot) without emitting any push, so when that empty arm was TAKEN at runtime (`deliver(Empty)`)
+the eval stack was one slot short → the same `fn_return` underflow as P2, from a different site. The
+single-line `_ => { [] }` becomes a Null else that gen_if already pads — that is why ONLY the multi-line
+spelling crashed (formatting changed the parse). Fix: `generate_block` pushes a typed null of the result
+when a value-typed block's operators leave nothing on the eval stack, mirroring gen_if's null-else arm.
+Regression: `tests/scripts/442-match-empty-arm-into-buffer.loft`.
 
-The `ref_return` whole-append materialise block (`control.rs`, the `jo_arm_skip` loop ~line 5135 + the
-promotion-loop/dep-walk skips) is now **VESTIGIAL** — the `parse_match` synthesis supersedes it. Remove
-once the element-loop lands.
+## VALIDATION — how to test
 
-## VALIDATION — how to test (avoid the masking traps)
+- The DEFAULT backend is `--native`; running `loft prog.loft` without `--interpret` tests the wrong side
+  (this masked the whole bug across early reads). Always pass `--interpret` for the interp story.
+- The interp crash is **deterministic in a DEBUG build** (overflow-checked panic at the `fn_return`
+  subtract); a RELEASE build wraps the underflow into nondeterministic heap corruption. Debug is the
+  reliable signal.
+- Build CLEAN repros (just the match fn + `main`); churn pressure inline
+  (`j: vector<E> = []; for q in 0..12 { j += [...] }`). Assert value AND length AND leak (`LOFT_STORES=warn`,
+  `LOFT_NATIVE_LEAK_CHECK=1`) on BOTH `--interpret` and `--native`.
+- Regression: the non-match over-free shapes (`field_return`, `field_local`, `nested_field`,
+  `elem_accumulate`, `local_source`) must stay clean with the gate ON.
 
-- **Do NOT trust the `/tmp/claude/gen/match_return*` matrix files** — they carry `e_default`+`filler` (P3)
-  and crash for that reason. Build CLEAN repros with NO extra functions (just `deliver` + `main`), churn
-  pressure inline (`j: vector<E> = []; for q in 0..12 { j += [...] }`).
-- **Do NOT use `LOFT_POISON` for this family** — it is an ARTIFACT here (`deliver3` itself SIGSEGVs under
-  POISON). Use `LOFT_STORES=warn` (leak) + an `assert(len(r)==N)` (value) + run 3–4× (non-determinism).
-- Both backends: `--interpret` and `--native` (`LOFT_NATIVE_LEAK_CHECK=1`). Native is clean throughout;
-  the whole story is interp.
-- Regression: the non-match shapes (`field_return`, `field_local`, `nested_field`, `elem_accumulate`,
-  `local_source`) must stay clean ON.
+## Method (this stream's spine)
+
+- **The default backend is `--native`.** Testing the interp needs `--interpret`; forgetting it shows a clean
+  run while the real (interp) bug sits untouched.
+- **Isolate the ONE variable before naming the fix.** P2's filed diagnosis ("non-deterministic
+  whole-append") and P3's ("two functions") were BOTH wrong — one-variable probes corrected each.
+- **Capture-and-diff the answer**: the proven sibling (`deliver3`, the plain `copyf`) is the spec.
+- Lessons: `.claude/skills/design-protocol`, `doc/claude/CODEGEN_METHOD.md`.
 
 ## Disproven hypotheses — DO NOT re-chase (each killed by an isolation probe)
 
-1. "Two-pass def-numbering corruption in the synthesis" — the synthesis IS pass-consistent (instrumented).
-2. "POISON crash" — instrument artifact (`deliver3` SIGSEGVs under POISON too).
-3. "Deep-copy of heap/text fields in `vector_add`" — heap-free struct crashes identically.
-4. "`OpAppendVector` shallow for a borrowed field source" — `copyf` (`o += b.rows`) is clean.
-
-## Methodology (this stream's spine — recorded in skills/memory)
-
-- **Isolate the ONE variable before naming the fix.** This bug cost FOUR wrong targets (above); each
-  disproven by a one-variable probe. The lesson is in `.claude/skills/design-protocol` and
-  `doc/claude/CODEGEN_METHOD.md` ("Diff against the proven sibling").
-- **Capture-and-diff the answer**: the proven sibling IR (`deliver3`) is the spec; make yours byte-equal.
-- The analysis is sufficient; the remaining work is purely codegen structure.
-
-## Recommendation
-
-Fix **P2** (the pre-existing match-arm corruption) first — likely the smaller, more general fix, it
-unblocks the simpler whole-append synthesis already in `jo_copy` (no P1 loop-IR needed), and it kills a
-real pre-existing bug. File P2 + P3 as issues regardless. P1 is the fallback if P2 proves deep.
+1. "Non-deterministic UAF" — deterministic; the release-build `u32` underflow wrap made it look random.
+2. "Whole-vector append corruption" — `vector_add` is shared by both backends and is clean; the bug was the
+   surrounding frame `discard`.
+3. "Deep-copy of heap/text fields in `vector_add`" — a heap-free struct crashes identically.
+4. "Two functions defined together" (P3) — it is the multi-line empty arm taken at runtime; one function,
+   one `deliver(Empty)` call suffices.
+5. "POISON crash" — instrument artifact.

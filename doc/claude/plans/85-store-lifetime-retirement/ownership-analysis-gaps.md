@@ -307,7 +307,7 @@ the caller adopt. **NEXT (the single remaining task): synthesise `o = []; o += <
 borrowed arm** and let the existing promotion build the `o`-arg + `__retbuf`-marker separation — the
 one blocker is the fresh-vector `o = []` alloc helper (`OpDatabase`+`OpGetField` idiom; the
 `Reference` analog is `materialize_return_into`). Captures + diffs:
-[match_return-emit/](match_return-emit/README.md).
+[match_return-emit/](bytecode-comparisons/match_return-emit/README.md).
 
 **LAYER PINNED (probe-driven, two earlier guesses corrected).** The interp crash is the
 PARSER/IR-generation layer — the return/store **registration** structure — NOT interp execution and
