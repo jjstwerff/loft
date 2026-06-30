@@ -1045,6 +1045,8 @@ impl Output<'_> {
     /// Emit a typed null sentinel for the given type.
     pub(super) fn write_typed_null(w: &mut dyn Write, tp: &Type) -> std::io::Result<()> {
         match tp {
+            // @PLN25 slice (b): `Optional(τ)`'s null is its base's sentinel (same storage).
+            Type::Optional(inner) => Self::write_typed_null(w, inner),
             Type::Character => write!(w, "i32::MIN"),
             Type::Integer(_) => write!(w, "i64::MIN"),
             Type::Float => write!(w, "f64::NAN"),
