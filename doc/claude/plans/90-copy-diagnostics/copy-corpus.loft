@@ -25,7 +25,10 @@ fn main() {
   assert(len(append_lit()) == 1, "append_lit");
   assert(len(append_vec(s)) == 3, "append_vec");
   assert(len(field_return(bx)) == 3, "field_return");
-  assert(len(match_return(cell)) == 3, "match_return");
+  // match_return is defined above (so the compile-time inventory / MAT dump covers the
+  // borrow shape) but NOT invoked: it is the @PLN85 P4 borrowed-direct-yield, which crashes
+  // the interpreter flag-OFF (mod.rs:748) until the borrow-fix lands. Invoking it would
+  // crash this corpus on --interpret.
   assert(len(build_with_default(s)) == 3, "build_with_default");
   assert(assign_field(bx) == 3, "assign_field");
   println("corpus ok");

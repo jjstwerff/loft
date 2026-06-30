@@ -105,11 +105,36 @@ not a new mechanism — the facts and the IR walk are already there.
    construction copy is often *forced* unless the source provably out-lives the record;
    that reason feeds phase 2's avoidable-vs-forced split).
 
-Next: implement step 1 (construction — the dominant category) and re-run the corpus so
-`LOFT_MATERIALIZE_DUMP` covers the copies `LOFT_COPY_DUMP` shows.
+## Construction coverage — DONE (route 1, step 1)
+
+The verdict now classifies the construction / field-append copy. The visitor records a
+field-target append (`OpAppendVector(OpGetField(rec, fld), src)` — the `else` arm in
+`use_analysis::visit`) as a `construct_copy`, and `analyze_fn` emits a **Copy** `VerdictRow`
+for it: `[struct/enum field owns its data (construction/field-append copy)]`. Diagnostic
+only — always `Copy`, so it never becomes an `ElidePlan`; no codegen change.
+
+Verified: `LOFT_MATERIALIZE_DUMP` on the corpus now shows the two construction copies
+(`bx`, `cell`) alongside the var-buffer copies; suite byte-identical (issues 746,
+use_analysis 14 incl. the new `construction_copy_is_covered_by_the_verdict`); corpus runs
+clean on both backends (`match_return` is defined-but-not-invoked — the P4 borrowed-yield
+crashes interp flag-OFF). The full runtime dump on a clean interp run shows the complete
+copy set: 4 vector-append (append_vec, field_return, bx, cell) + 3 record copies
+(`build_with_default`'s element loop).
+
+## Remaining coverage gaps (next steps)
+
+Two copy shapes still bypass the decision (visible in `LOFT_COPY_DUMP`, absent from
+`LOFT_MATERIALIZE_DUMP`):
+
+1. **field-return** (`b.rows` materialised into `__retbuf`) — the append target IS a var
+   (`__retbuf`) but is not a fresh `OpDatabase` buffer, so the var-buffer idiom skips it.
+   Fix: recognise the return buffer as a fresh buffer.
+2. **`OpCopyRecord`** record copies (`build_with_default`'s `?? E{…}` element loop, element-
+   slot sets `v[i] = e`) — not append-based at all. Fix: record `OpCopyRecord` sites too.
 
 ## Status
 
-DONE this step: instrument (`LOFT_COPY_DUMP`) landed in non-generated code, corpus built,
-inventory + gap measured. Suite green (issues 746); instrument off-by-default and
-byte-identical when off. NEXT: choose route 1 vs 2 for closing the coverage.
+DONE: instrument (`LOFT_COPY_DUMP`), corpus, inventory + gap measured, route picked
+(route 1), and **construction coverage landed + tested** (the dominant gap closed). Suite
+green; diagnostic-only, byte-identical when off. NEXT: close the two remaining gaps
+(field-return buffer, then `OpCopyRecord`) the same way.

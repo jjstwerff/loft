@@ -17,13 +17,13 @@ decision cover every emission) has its first step done: the `LOFT_COPY_DUMP` ins
 coverage gap — see [phase1-inventory.md](phase1-inventory.md). **Key finding:** the
 current verdict covers only vector-copy bindings (`o = src` / `o += src`); **struct/enum
 construction (dominant), whole field-returns, and even a plain `a = s` bind all copy
-silently, outside the decision.** Every copy funnels through two runtime ops
-(`vector_add`, `do_copy_record`), so the remaining phase-1 work is to attribute every
-emission of those to a decision. **Route decided: ROUTE 1 — extend the verdict's domain**
-(the facts live only in the post-parse verdict pass; the emit sites are too early — see
-[phase1-inventory.md](phase1-inventory.md) § Route decision). NEXT: implement step 1
-(construction — the dominant category) so the verdict classifies every copy the dump
-shows.
+silently, outside the decision.** **Route 1 (extend the verdict's domain)** chosen — the facts live only in the post-parse
+verdict pass; the emit sites are too early (see [phase1-inventory.md](phase1-inventory.md)
+§ Route decision). **Step 1 — construction coverage — DONE:** the verdict now emits a Copy
+row for struct/enum-construction / field-append copies (the dominant category), diagnostic
+only (never an `ElidePlan`, no codegen change), pinned by
+`use_analysis::construction_copy_is_covered_by_the_verdict`. NEXT: close the two remaining
+gaps — field-return (the `__retbuf` materialise) and `OpCopyRecord` record copies.
 
 Wanted **before @PLN85 closes**: we often miss that a copy is happening, and that blind
 spot is shaping what we build (the @PLN85 owned-copy match-return synthesis manufactures

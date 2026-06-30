@@ -136,6 +136,11 @@ struct Uses {
     copyfill_pos: HashMap<u16, usize>,
     /// Copy vars whose fill sits inside a loop (Tier-1 ineligible).
     copyfill_in_loop: HashSet<u16>,
+    /// @PLN90 — field-target appends `OpAppendVector(OpGetField(rec, fld), src)`:
+    /// `(base record var, source base var)`. This is the struct/enum-construction copy
+    /// (`S { f: src }`) and `x.field += src` — the source is deep-copied into the field,
+    /// which the var-buffer copy idiom above never sees. Recorded so the decision covers it.
+    construct_copy: Vec<(Option<u16>, Option<u16>)>,
     /// Vars that appeared in a non-reader position (⇒ not borrow-eligible). The
     /// copy-fill `OpAppendVector(v, src.f)` is *excluded* — it is the copy machinery,
     /// not a user mutation of `v`.
@@ -232,6 +237,19 @@ impl Uses {
                     }
                 } else {
                     // Append into a field / non-var target — a real mutation.
+                    // @PLN90 — when the target is a struct/enum FIELD
+                    // (`OpAppendVector(OpGetField(rec, fld), src)`) the source is
+                    // deep-copied into the field: a structure copy the var-buffer idiom
+                    // above never records (struct/enum construction `S { f: src }`, or
+                    // `x.field += src`). Capture (base record, source base) so the
+                    // copy-vs-borrow decision covers it.
+                    if let Some(Value::Call(d0, _)) = args.first().map(Value::unspan)
+                        && *d0 == self.get_field
+                    {
+                        let rec = args.first().and_then(|t| base_var(t, self.get_field));
+                        let src = args.get(1).and_then(|s| base_var(s, self.get_field));
+                        self.construct_copy.push((rec, src));
+                    }
                     for a in args {
                         self.visit(a, Ctx::Other);
                     }
@@ -303,6 +321,7 @@ fn analyze_fn(
         other_max_pos: HashMap::new(),
         copyfill_pos: HashMap::new(),
         copyfill_in_loop: HashSet::new(),
+        construct_copy: Vec::new(),
     };
     u.visit(code, Ctx::Other);
 
@@ -414,6 +433,22 @@ fn analyze_fn(
             source: src.unwrap_or(u16::MAX),
             verdict,
             reason,
+        });
+    }
+
+    // @PLN90 phase 1 — construction / field-append copies. A field-target append
+    // (`S { f: src }` construction, or `x.field += src`) deep-copies the source into the
+    // field, which the var-buffer idiom above does not classify. Emit a Copy row so the
+    // copy-vs-borrow decision COVERS the copy. Diagnostic only: always `Copy`, so it never
+    // produces an `ElidePlan` (no codegen change). The field owns its data, so it is a copy
+    // unless a later (phase 2) lifetime proof shows the source out-lives the record.
+    for &(rec, src) in &u.construct_copy {
+        rows.push(VerdictRow {
+            var_nr: rec.unwrap_or(u16::MAX),
+            var_name: rec.map_or_else(|| "<field>".to_string(), |r| function.name(r).to_string()),
+            source: src.unwrap_or(u16::MAX),
+            verdict: Verdict::Copy,
+            reason: "struct/enum field owns its data (construction/field-append copy)",
         });
     }
     (rows, plans)

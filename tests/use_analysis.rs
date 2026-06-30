@@ -737,3 +737,33 @@ fn join_own_match_return_strips_the_borrow() {
         "with the flag deliver should be owned (no `e` borrow), got: {on}"
     );
 }
+
+// ── @PLN90 phase 1 — construction / field-append copies are covered by the verdict ──
+// A struct/enum field built from an existing vector deep-copies it (the field owns its
+// data). Before @PLN90 the verdict saw only the var-buffer copy idiom (`o = src` / `o +=
+// src`) and missed this dominant category entirely; now it emits a Copy row so the
+// copy-vs-borrow decision covers it (diagnostic only — always Copy, never an ElidePlan).
+
+const CONSTRUCT_SRC: &str = r#"
+struct E { hp: integer not null, name: text }
+struct Box { rows: vector<E> }
+fn make_box(s: vector<E>) -> Box { Box { rows: s } }
+fn main() {
+  s: vector<E> = []; for k in 0..3 { s += [E{hp:k, name:"s"}]; }
+  b = make_box(s);
+  assert(len(b.rows) == 3, "rows");
+  print("construct ok\n");
+}
+"#;
+
+#[test]
+fn construction_copy_is_covered_by_the_verdict() {
+    let stderr = dump(CONSTRUCT_SRC);
+    // `Box { rows: s }` deep-copies `s` into the new record's field — a Copy the verdict
+    // now classifies (it formerly recorded only var-target appends).
+    assert_verdict(&stderr, "make_box", "Copy");
+    assert!(
+        stderr.contains("construction/field-append copy"),
+        "the construction copy should carry the construction reason; dump:\n{stderr}"
+    );
+}
