@@ -1644,7 +1644,8 @@ impl Type {
 
     #[must_use]
     pub fn size(&self, nullable: bool) -> u8 {
-        if let Type::Integer(spec) = self {
+        // @PLN25 slice (b): `Optional(τ)` shares its base's storage width — peel the marker.
+        if let Type::Integer(spec) = self.base() {
             // H6: derive from the ONE range→width home so the field WRITE width
             // (this, via `set_field_check`) cannot drift from the READ width
             // (`IntegerSpec::byte_width`, via `get_val`).  Honours the value

@@ -314,6 +314,18 @@ pub fn copy_dump_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_COPY_DUMP").is_some())
 }
 
+/// `LOFT_PLN25_OPT=1` (@PLN25 slice a, IN PROGRESS) — make the scalar/field postfix `?`
+/// construct the real `Type::Optional` former instead of the Phase-0 no-op. Opt-IN while the
+/// slice-(b) peel audit (the ~280 `match Type` consuming sites that must peel `Optional`) is
+/// incomplete: OFF (default) keeps the suite byte-identical; ON exercises the new marker so
+/// the remaining mis-routes surface. Flip to default-on (or retire the gate) once green on
+/// both backends. See plans/25-nullable-sequences/RESUME.md § Step 3.
+#[must_use]
+pub fn pln25_optional_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_PLN25_OPT").is_some())
+}
+
 /// `LOFT_UAF_REUSE` (detector b) — at `copy_record`, when the source slot is LIVE
 /// (`free=false`) but structurally invalid for the copy's `tp` (a `validate_claims`
 /// failure), the slot was freed-then-reused as a different record since the source ref

@@ -2251,6 +2251,9 @@ impl State {
             }
             let var_pos = stack.var_pos(v);
             let tp = stack.function.tp(v).clone();
+            // @PLN25 slice (b): an `Optional(τ)` var's first-Set uses the base put-op (same
+            // sentinel storage) — peel the marker.
+            let tp = tp.base().clone();
             match tp {
                 Type::Integer(_) => stack.add_op("OpPutInt", self),
                 Type::Character => stack.add_op("OpPutCharacter", self),
@@ -3150,7 +3153,9 @@ impl State {
         let argument = stack.function.is_argument(variable);
         let code = self.code_pos;
         self.vars.insert(code, variable);
-        match stack.function.tp(variable) {
+        // @PLN25 slice (b): an `Optional(τ)` var loads exactly like `τ` (same sentinel
+        // storage) — peel the marker so each op-emission arm sees the base type.
+        match stack.function.tp(variable).base() {
             Type::Integer(_) => stack.add_op("OpVarInt", self),
             Type::Function(_, _, _) => {
                 stack.add_op("OpVarFnRef", self);

@@ -1859,6 +1859,20 @@ impl Parser {
         if let Type::Rewritten(inner) = should {
             return self.convert(code, is_type, inner);
         }
+        // @PLN25 slice (b): `Optional(τ)` is the nullable former. Behaviour-preserving until
+        // DN1/DN3 give it teeth — peel and recurse on the base. A nullable TARGET also accepts
+        // a bare `null`; a nullable SOURCE still implicitly unwraps to its base (DN2 removes
+        // that unwrap later). Both arms converge: `Optional==Optional` is caught by `is_equal`
+        // above, and a differing pair peels each side once.
+        if let Type::Optional(inner) = should {
+            if matches!(is_type, Type::Null) {
+                return true;
+            }
+            return self.convert(code, is_type, inner);
+        }
+        if let Type::Optional(inner) = is_type {
+            return self.convert(code, inner, should);
+        }
         // Plan-06 phase 4d: tuple-to-tuple convert is element-wise.
         // Without this, a value with a `Rewritten(Reference)` element
         // (e.g. `(Inner { … }, 11)` from inline struct construction)
@@ -3989,6 +4003,9 @@ impl Parser {
     fn get_val(&mut self, tp: &Type, nullable: bool, pos: u32, code: Value, alias: u32) -> Value {
         let p = Value::Int(pos as i32);
         match tp {
+            // @PLN25 slice (b): an `Optional(τ)` field shares its base's sentinel storage —
+            // read it exactly as `τ` (the marker is compile-time only).
+            Type::Optional(inner) => self.get_val(inner, nullable, pos, code, alias),
             Type::Integer(spec) => {
                 // Narrow-integer width selection:
                 // * `alias` is set → this is a struct-field read whose
@@ -4441,6 +4458,10 @@ impl Parser {
         emit_check: bool,
     ) -> Value {
         let tp = self.data.attr_type(d_nr, f_nr);
+        // @PLN25 slice (b): an `Optional(τ)` field writes exactly like its base — same
+        // sentinel storage, same set-op. Peel the marker here so the whole emit path is
+        // transparent to it (nullability is read separately via `attr_nullable`).
+        let tp = tp.base().clone();
         let nm = self.data.attr_name(d_nr, f_nr);
         // #318 sink R2: a closure-carrying struct value cannot be
         // copied into another struct's field — the copy's closure

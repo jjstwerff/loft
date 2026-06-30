@@ -1435,20 +1435,25 @@ impl Parser {
         type_name: &str,
         returned: bool,
     ) -> Option<Type> {
-        let tp = self.parse_type_inner(on_d, type_name, returned);
-        if tp.is_some() && self.lexer.has_token("?") {
-            // Integer carries the flag explicitly — record nullable so the marker
-            // survives the Phase-2 default flip (today `not_null` is already
-            // false, so this changes nothing). Other scalars have no type-level
-            // flag yet (Phase 2 adds the representation); accept-and-ignore.
-            if let Some(Type::Integer(spec)) = tp {
+        let t = self.parse_type_inner(on_d, type_name, returned)?;
+        if self.lexer.has_token("?") {
+            // @PLN25 slice (a): the postfix `?` constructs the real `Optional` former
+            // (idempotent + normalising via `Type::optional`). GATED on `LOFT_PLN25_OPT`
+            // while the slice-(b) peel audit is incomplete — OFF keeps the Phase-0 no-op
+            // (suite byte-identical), ON surfaces the remaining consuming-site mis-routes.
+            if crate::keys::pln25_optional_enabled() {
+                return Some(Type::optional(t));
+            }
+            // Gate OFF — Phase-0 behaviour: Integer records nullable explicitly; other
+            // scalars have no flag yet, so accept-and-ignore (the base `t` falls through).
+            if let Type::Integer(spec) = &t {
                 return Some(Type::Integer(IntegerSpec {
                     not_null: false,
-                    ..spec
+                    ..*spec
                 }));
             }
         }
-        tp
+        Some(t)
     }
 
     // `pub(crate)` so the `as`-cast (operators.rs) can parse the target type
