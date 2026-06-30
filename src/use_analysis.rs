@@ -350,7 +350,23 @@ fn analyze_fn(
             .get(&v)
             .is_some_and(|vdb| u.database_vars.contains(vdb));
         if !fresh_buffer || appends.len() != 1 {
-            continue; // not a single-source vector copy — not ours to elide
+            // @PLN90 phase 1 — the return-buffer copy. When the single-append target is
+            // not a fresh local buffer but IS an argument vector, it is the return buffer
+            // (a passed-in buffer the function fills and returns): `fn f(b: Box) -> vector
+            // { b.rows }` materialises `b.rows` into `__retbuf`. The var-buffer idiom skips
+            // it (the buffer is a param, not an `OpDatabase` local), so emit a Copy row for
+            // coverage. Diagnostic only — `continue` below means no `ElidePlan`, so no
+            // codegen change (and eliding it would be the P4 borrowed-return).
+            if appends.len() == 1 && function.is_argument(v) {
+                rows.push(VerdictRow {
+                    var_nr: v,
+                    var_name: function.name(v).to_string(),
+                    source: appends[0].unwrap_or(u16::MAX),
+                    verdict: Verdict::Copy,
+                    reason: "materialised into the return buffer (field / whole-vector return copy)",
+                });
+            }
+            continue; // not a single-source local copy — not ours to elide
         }
         let src = appends[0];
         let single_def = u.def_count.get(&v).copied().unwrap_or(0) == 1;

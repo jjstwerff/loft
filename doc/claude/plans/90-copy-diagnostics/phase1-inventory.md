@@ -121,20 +121,31 @@ crashes interp flag-OFF). The full runtime dump on a clean interp run shows the 
 copy set: 4 vector-append (append_vec, field_return, bx, cell) + 3 record copies
 (`build_with_default`'s element loop).
 
-## Remaining coverage gaps (next steps)
+## Field-return coverage — DONE (route 1, step 2)
 
-Two copy shapes still bypass the decision (visible in `LOFT_COPY_DUMP`, absent from
-`LOFT_MATERIALIZE_DUMP`):
+`fn f(b: Box) -> vector { b.rows }` materialises `b.rows` into the passed-in return buffer
+(`__retbuf`). The append target IS a var, but the buffer is an *argument*, not a fresh
+`OpDatabase` local, so the var-buffer idiom's `fresh_buffer` check skipped it. Now
+`analyze_fn`'s var-loop, in its skip path, emits a **Copy** row when the single-append
+target `is_argument` (the return buffer): `[materialised into the return buffer (field /
+whole-vector return copy)]`. It stays in the `continue` path, so no `ElidePlan` — diagnostic
+only (and eliding it would be the P4 borrowed-return). This also covers stdlib return-buffer
+fills (`text_split`, `File_lines`, …) — correctly, they are copies.
 
-1. **field-return** (`b.rows` materialised into `__retbuf`) — the append target IS a var
-   (`__retbuf`) but is not a fresh `OpDatabase` buffer, so the var-buffer idiom skips it.
-   Fix: recognise the return buffer as a fresh buffer.
-2. **`OpCopyRecord`** record copies (`build_with_default`'s `?? E{…}` element loop, element-
-   slot sets `v[i] = e`) — not append-based at all. Fix: record `OpCopyRecord` sites too.
+Verified: `n_field_return` now shows a Copy row; regression test
+`field_return_copy_is_covered_by_the_verdict`; suite byte-identical (issues 746,
+use_analysis 15).
+
+## Remaining coverage gap (next step)
+
+One copy shape still bypasses the decision (visible in `LOFT_COPY_DUMP`, absent from
+`LOFT_MATERIALIZE_DUMP`): **`OpCopyRecord`** record copies — `build_with_default`'s
+`?? E{…}` element loop and element-slot sets (`v[i] = e`). These are not append-based, so
+neither the var-buffer idiom nor the two new branches see them. Fix: record `OpCopyRecord`
+emission sites and emit a Copy row, the same diagnostic-only way.
 
 ## Status
 
-DONE: instrument (`LOFT_COPY_DUMP`), corpus, inventory + gap measured, route picked
-(route 1), and **construction coverage landed + tested** (the dominant gap closed). Suite
-green; diagnostic-only, byte-identical when off. NEXT: close the two remaining gaps
-(field-return buffer, then `OpCopyRecord`) the same way.
+DONE: instrument, corpus, inventory + gap, route picked, **construction + field-return
+coverage landed + tested** (the two append-based gaps closed). Suite green; diagnostic-only,
+byte-identical when off. NEXT: the last gap — `OpCopyRecord` record copies.

@@ -767,3 +767,31 @@ fn construction_copy_is_covered_by_the_verdict() {
         "the construction copy should carry the construction reason; dump:\n{stderr}"
     );
 }
+
+// ── @PLN90 phase 1 — the return-buffer (field / whole-vector return) copy is covered ──
+// `fn f(b: Box) -> vector { b.rows }` materialises `b.rows` into the passed-in return
+// buffer (`__retbuf`). The buffer is an argument, not a fresh `OpDatabase` local, so the
+// var-buffer copy idiom skipped it; now a Copy row covers it (diagnostic only — eliding it
+// to a borrow would be the P4 borrowed-return).
+const FIELD_RETURN_SRC: &str = r#"
+struct E { hp: integer not null, name: text }
+struct Box { rows: vector<E> }
+fn field_ret(b: Box) -> vector<E> { b.rows }
+fn main() {
+  s: vector<E> = []; for k in 0..3 { s += [E{hp:k, name:"s"}]; }
+  bx = Box { rows: s };
+  r = field_ret(bx);
+  assert(len(r) == 3, "rows");
+  print("field-return ok\n");
+}
+"#;
+
+#[test]
+fn field_return_copy_is_covered_by_the_verdict() {
+    let stderr = dump(FIELD_RETURN_SRC);
+    assert_verdict(&stderr, "field_ret", "Copy");
+    assert!(
+        stderr.contains("materialised into the return buffer"),
+        "the field-return copy should carry the return-buffer reason; dump:\n{stderr}"
+    );
+}

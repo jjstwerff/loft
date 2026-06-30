@@ -19,11 +19,11 @@ current verdict covers only vector-copy bindings (`o = src` / `o += src`); **str
 construction (dominant), whole field-returns, and even a plain `a = s` bind all copy
 silently, outside the decision.** **Route 1 (extend the verdict's domain)** chosen — the facts live only in the post-parse
 verdict pass; the emit sites are too early (see [phase1-inventory.md](phase1-inventory.md)
-§ Route decision). **Step 1 — construction coverage — DONE:** the verdict now emits a Copy
-row for struct/enum-construction / field-append copies (the dominant category), diagnostic
-only (never an `ElidePlan`, no codegen change), pinned by
-`use_analysis::construction_copy_is_covered_by_the_verdict`. NEXT: close the two remaining
-gaps — field-return (the `__retbuf` materialise) and `OpCopyRecord` record copies.
+§ Route decision). **Steps 1–2 DONE:** the verdict now emits a Copy row for (1) struct/enum-construction /
+field-append copies (the dominant category) and (2) field / whole-vector return-buffer
+copies (`b.rows` → `__retbuf`) — both diagnostic only (never an `ElidePlan`, no codegen
+change), pinned by `use_analysis::{construction,field_return}_copy_is_covered_by_the_verdict`.
+NEXT: the last gap — `OpCopyRecord` record copies (`?? E{…}` element loops, `v[i] = e`).
 
 Wanted **before @PLN85 closes**: we often miss that a copy is happening, and that blind
 spot is shaping what we build (the @PLN85 owned-copy match-return synthesis manufactures
