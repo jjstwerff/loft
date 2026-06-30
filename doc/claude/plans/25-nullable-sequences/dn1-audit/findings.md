@@ -345,9 +345,21 @@ native default/typed-null path, ties to `default_native_value` 896); E2 `"{x}"` 
    heap-aware text first-Set path, not a blind peel — belongs with the text-nullability work.
    The reverse inference-widening (`τ ← Optional(τ)`) was left as-is (conservative; the explicit
    non-null target ← `τ?` is the `(N-Store)` violation caught at the store site).
-3. **Reachable interp peels** — the remaining now-reachable subset of the 13 (the tuple-op panics,
-   reachable via inferred-nullable tuple locals like `(g(),5)` → `emit_tuple_put_ops`; the RefVar
-   `&nullable` panics). set_var done in step 2.
+3. **Reachable interp peels — the tuple-op family DONE.** The 10 per-element tuple matches in
+   `state/codegen.rs` (emit_tuple_put_ops, emit_tuple_var_pop_put, emit_tuple_var_push_recursive,
+   emit_tuple_null_init ×2, and the generate_node/generate_var TupleGet/TuplePut element matches)
+   now `match <elem>.base()`. Reachable via inferred-nullable tuple locals (`x=g(); t=(x,5)`),
+   which panicked "unsupported elem" before. Validated both backends with VALUE + NULL + leak
+   (`interp-tuple-nullable.loft` → `42 5 -9 7 42 -9`, no leak via `LOFT_STORES=warn` /
+   `LOFT_NATIVE_LEAK_CHECK`); gate-OFF byte-identical; suite green; read/write peel in lockstep so
+   the round-trip stays consistent. set_var done in step 2.
+   **DEFERRED — `&nullable-scalar` (RefVar(Optional)) sites 3274/3619:** blocked UPSTREAM by
+   `change_var` (the `RefVar(Optional) ← τ` type-change errors before the codegen panic is reached).
+   A rare construct, multi-layer-blocked — needs the `change_var` RefVar-case extension first, then
+   the codegen peels. Latent; revisit if a consumer needs mutable refs to nullable scalars.
+   **NOTE — E1 stays open (Family G):** the tuple-*return*-literal-null
+   (`fn f() -> (integer?,integer) { (null,2) }`) is a separate NATIVE generation/ path — a
+   null-valued local tuple works on native, only the return-literal-null doesn't. Not fixed here.
 4. **Family C** — deps/leak holes under leak-check on `text?`/`S?` probes.
 5. **Family E + F** — the `matches!` sweep and the feature gaps.
 6. **Family D** — the `text?` return-buffer ABI sub-thread.

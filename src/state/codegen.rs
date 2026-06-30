@@ -534,7 +534,7 @@ impl State {
                     let code_pos = self.code_pos;
                     stack.add_op("OpVarRef", self);
                     self.code_add(var_pos);
-                    match &elem_tp {
+                    match elem_tp.base() {
                         Type::Integer(_) | Type::Function(_, _, _) => {
                             stack.add_op("OpGetInt", self);
                         }
@@ -571,7 +571,7 @@ impl State {
                     self.emit_tuple_var_push_recursive(stack, inner_elems, elem_abs_pos);
                     return self.insert_types(elem_tp.clone(), code_pos, stack);
                 }
-                match &elem_tp {
+                match elem_tp.base() {
                     Type::Integer(_) => {
                         stack.add_op("OpVarInt", self);
                     }
@@ -636,7 +636,7 @@ impl State {
                     stack.add_op("OpVarRef", self);
                     self.code_add(var_pos);
                     self.generate_node(value, stack, false);
-                    match &elem_tp {
+                    match elem_tp.base() {
                         Type::Integer(_) | Type::Function(_, _, _) => {
                             stack.add_op("OpSetInt", self);
                         }
@@ -673,7 +673,7 @@ impl State {
                     self.emit_tuple_var_pop_put(stack, inner_elems, elem_abs_pos);
                     return Type::Void;
                 }
-                match &elem_tp {
+                match elem_tp.base() {
                     Type::Integer(_) => {
                         stack.add_op("OpPutInt", self);
                     }
@@ -1219,7 +1219,7 @@ impl State {
                 continue;
             }
             let var_pos = stack.position - elem_abs;
-            match elem {
+            match elem.base() {
                 Type::Integer(_) => {
                     stack.add_op("OpVarInt", self);
                 }
@@ -1270,7 +1270,7 @@ impl State {
                 continue;
             }
             let pos = stack.position - elem_abs;
-            match &elems[i] {
+            match elems[i].base() {
                 Type::Integer(_) => {
                     stack.add_op("OpPutInt", self);
                 }
@@ -1309,7 +1309,7 @@ impl State {
                 self.emit_tuple_null_init(stack, inner_elems, elem_abs);
                 continue;
             }
-            match elem {
+            match elem.base() {
                 Type::Integer(_) | Type::Function(_, _, _) => {
                     stack.add_op("OpConstInt", self);
                     self.code_add(0i64);
@@ -1338,7 +1338,7 @@ impl State {
                 other => panic!("emit_tuple_null_init: unsupported element type {other:?}"),
             }
             let pos = stack.position - elem_abs;
-            match elem {
+            match elem.base() {
                 Type::Integer(_) | Type::Function(_, _, _) => stack.add_op("OpPutInt", self),
                 Type::Boolean => stack.add_op("OpPutBool", self),
                 Type::Single => stack.add_op("OpPutSingle", self),
@@ -2072,6 +2072,13 @@ impl State {
     /// because the inline match in `gen_set_first_at_tos` had no arm
     /// for `Type::Tuple(_)` elements.  Recursion handles arbitrary
     /// nesting depth using the same offset arithmetic.
+    // @PLN25: every per-element tuple op in this file matches `<elem>.base()` — a nullable
+    // `τ?` tuple element stores/reads through its base's OpPut*/OpGet* (same sentinel storage),
+    // mirroring `gen_set_first_at_tos`. Read and write peel in lockstep so the round-trip
+    // (incl. a null element) stays consistent; without it an Optional element panicked
+    // "unsupported elem". The full set: emit_tuple_put_ops, emit_tuple_var_pop_put,
+    // emit_tuple_var_push_recursive, emit_tuple_null_init, and the generate_node/generate_var
+    // TupleGet/TuplePut element matches.
     fn emit_tuple_put_ops(&mut self, stack: &mut Stack, elems: &[Type], tuple_base: u16) {
         let offsets = crate::data::element_offsets(elems);
         for i in (0..elems.len()).rev() {
@@ -2088,7 +2095,7 @@ impl State {
             // time, which is then `stack_pos + size - pos` inside
             // `put_var`).  Mirrors the original flat-tuple loop.
             let pos = stack.position - elem_abs;
-            match &elems[i] {
+            match elems[i].base() {
                 Type::Integer(_) => stack.add_op("OpPutInt", self),
                 // P249 — fn-ref slot is 20 B (8 d_nr + 12 closure
                 // DbRef).  OpPutInt would only pop 8 B and leave the
@@ -3229,7 +3236,7 @@ impl State {
                 let offsets = crate::data::element_offsets(&elems);
                 for (i, elem_tp) in elems.iter().enumerate() {
                     let elem_pos = stack.position - (tuple_base + offsets[i] as u16);
-                    match elem_tp {
+                    match elem_tp.base() {
                         Type::Integer(_) => {
                             stack.add_op("OpVarInt", self);
                         }

@@ -1,0 +1,9 @@
+// @PLN25 DN1: nullable tuple elements via inferred locals — the interp tuple-op peels.
+// Run gate-ON (LOFT_PLN25_OPT=1) both backends. Expect: 42 5 -9 7 42 -9
+// Before the codegen.rs tuple-op .base() peels each PANICKED "unsupported elem".
+fn g(b: boolean) -> integer? { if b { 42 } else { null } }
+fn main() {
+  x = g(true);  t = (x, 5);           print("{t.0 ?? -1} {t.1}");       // 42 5
+  y = g(false); u = (y, 7);           print(" {u.0 ?? -9} {u.1}");      // -9 7
+  a = g(true); b = g(false); v = (a, b); print(" {v.0 ?? -1} {v.1 ?? -9}");  // 42 -9 (a=42, b=null)
+}
