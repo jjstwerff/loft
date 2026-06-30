@@ -19,8 +19,11 @@ current verdict covers only vector-copy bindings (`o = src` / `o += src`); **str
 construction (dominant), whole field-returns, and even a plain `a = s` bind all copy
 silently, outside the decision.** Every copy funnels through two runtime ops
 (`vector_add`, `do_copy_record`), so the remaining phase-1 work is to attribute every
-emission of those to a decision. NEXT: choose route 1 (extend the verdict's domain) vs
-route 2 (classify at emission).
+emission of those to a decision. **Route decided: ROUTE 1 — extend the verdict's domain**
+(the facts live only in the post-parse verdict pass; the emit sites are too early — see
+[phase1-inventory.md](phase1-inventory.md) § Route decision). NEXT: implement step 1
+(construction — the dominant category) so the verdict classifies every copy the dump
+shows.
 
 Wanted **before @PLN85 closes**: we often miss that a copy is happening, and that blind
 spot is shaping what we build (the @PLN85 owned-copy match-return synthesis manufactures

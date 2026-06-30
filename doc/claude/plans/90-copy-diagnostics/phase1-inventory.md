@@ -69,8 +69,44 @@ emission of those two ops to a copy-vs-borrow decision with a reason.** Two rout
 
 Route 1 keeps the decision in one analysis pass (preferred — it matches OWNERSHIP_MODEL's
 "the decision is the `deps` analysis"); route 2 is the fallback if the emit sites carry
-context the analysis cannot reconstruct. Next step: pick the route by checking whether the
-construction + field-return emit sites have the binding/lifetime facts the verdict needs.
+context the analysis cannot reconstruct.
+
+## Route decision — ROUTE 1 (extend the verdict's domain)
+
+Decided by reading where the facts live:
+
+- **The classification facts are only in the post-parse verdict pass.** `analyze_fn`
+  (`use_analysis.rs`) runs after the function is parsed and uses the parser's mature
+  interprocedural mutation analysis (`find_written_vars`) plus ordering and fresh-buffer
+  facts. The copy **emit sites** (`parser/objects.rs::OpAppendVector` for construction,
+  etc.) are **mid-parse and eager** — they do not yet know whether the source is later
+  mutated, escapes, or out-lives the result. Route 2 would have to re-derive exactly what
+  the verdict already computes; that is not "one arbiter."
+- **The verdict already walks the full IR and the right ops.** It tracks
+  `OpAppendVector`/`OpDatabase`/`OpGetField`, and `base_var` already resolves a
+  field-source (`b.rows`) to its base var (`b`). The only reason construction and
+  field-returns fall through is **what it records**, not what it can see:
+  - it records an append only when the **target** is a plain `Value::Var`
+    (`use_analysis.rs` ~line 215) — so construction's field-target
+    `OpAppendVector(OpGetField(freshRec, fld), src)` is skipped;
+  - the fresh-buffer test requires the target var to be an `OpDatabase` local — so the
+    return buffer `__retbuf` (field-return) is skipped.
+
+So extending the verdict is a **broadening of the same analysis** (recognise two more
+copy-idiom shapes: append-into-a-fresh-record-field, and append-into-the-return-buffer),
+not a new mechanism — the facts and the IR walk are already there.
+
+**Extension work (route 1):**
+1. Record appends whose target is a **fresh-record field** (construction), keyed on the
+   record + field, reusing the existing `src` / mutation / ordering facts.
+2. Recognise the **return buffer** as a fresh buffer (field-return).
+3. Classification (`src_is_param` / `src_unmutated` / ordering) is unchanged — but add the
+   forced reasons specific to these shapes (a struct/enum field **owns** its data, so a
+   construction copy is often *forced* unless the source provably out-lives the record;
+   that reason feeds phase 2's avoidable-vs-forced split).
+
+Next: implement step 1 (construction — the dominant category) and re-run the corpus so
+`LOFT_MATERIALIZE_DUMP` covers the copies `LOFT_COPY_DUMP` shows.
 
 ## Status
 
