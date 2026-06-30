@@ -314,8 +314,22 @@ work). Two pieces, both two-backend: **(i) text? LOCALS** and **(ii) the text? r
 coroutine `suitable`(251), RefVar scalar-link(dispatch 158, emit 215), the ~40 `Type::Text(_)`
 ABI gates in emit.rs/calls.rs. Same `.base()` peel, mechanical.
 
-**Family F — feature type-check gaps**: `match` on `integer?`(control 2027), `for x in
-nullable`(control 4065), `text?+` concat(operators 657), `float? == null` NaN(operators 1789).
+**Family F — feature type-check gaps — DONE (the 2 real ones; the other 2 reclassified).**
+- **`match` on `τ?` — FIXED** (control.rs:2027): peel `subject_type.base()` so a `τ?` subject
+  routes to the scalar handler. Works for `integer?` / `text?` / `float?` both backends
+  (`familyF-match-floatnull.loft`). Clean (match READS the value; no heap-write panic).
+- **`float?`/`single? == null` — FIXED** (operators.rs:1791): peel `ctp.base()`/`second_type.base()`
+  in the `float_null` guard. This was a real CORRECTNESS bug — `float? == null` skipped the
+  NaN-validity test and was ALWAYS false (a null float read as "present"); now `nn(null)` →
+  "missing" both backends.
+- **`for x in <τ?>` — NOT A BUG** (dropped): plain `integer` is not iterable either
+  (`for i in 5` → "cannot iterate over integer"; loft uses ranges), so the audit's
+  "Integer→count iterator" was wrong. Peeling `for_type`/`iterator` only routed `text?` to a
+  text-char-iteration path that PANICS (collections.rs:161, a Family D heap issue — a clean
+  rejection became a crash) → reverted.
+- **`text? +` concat — → Family D** (operators.rs:657): peeling routes it to the text `+` path,
+  but the concat then DROPS the appended part (`"hi" + "!"` → `"hi"`; plain text gives `"hiX"`).
+  A text-heap bug, silent-wrong — reverted; belongs with the text? sub-thread.
 
 **Family G — empirical confirmed reachable**: E1 native `null` tuple-element → `(())` (the
 native default/typed-null path, ties to `default_native_value` 896); E2 `"{x}"` format reject

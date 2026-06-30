@@ -2021,6 +2021,10 @@ impl Parser {
         // 1. Parse the subject expression.
         let mut subject = Value::Null;
         let subject_type = self.expression(&mut subject);
+        // @PLN25: a `τ?` subject matches as its base (shared sentinel storage) — peel the marker
+        // so `match` on an `integer?` routes to the scalar handler instead of falling to the `_`
+        // arm ("match requires an enum, struct, or scalar type"). Gate-OFF inert (never Optional).
+        let subject_type = subject_type.base().clone();
 
         // Resolve type info from the subject.
         // Accepts: plain enums, struct-enums, struct-enum variants, and plain structs (T1-18).

@@ -1,0 +1,10 @@
+// @PLN25 DN1 Family F — the landable type-check feature gaps. Gate-ON both backends.
+// Expect:  five other | 1 0 | 1 | present missing
+fn ci(x: integer?) -> text    { match x { 5 => "five", _ => "other" } }   // match on integer?
+fn cs(s: text?)    -> integer { match s { "a" => 1, _ => 0 } }            // match on text?
+fn cf(x: float?)   -> integer { match x { 1.5 => 1, _ => 0 } }            // match on float?
+fn nn(x: float?)   -> text    { if x == null { "missing" } else { "present" } }  // float? == null
+fn main() {
+  print("{ci(5)} {ci(7)} {cs("a")} {cs("b")} {cf(1.5)} {nn(1.5)} {nn(null)}");
+  // five other 1 0 1 present missing
+}

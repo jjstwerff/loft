@@ -1785,9 +1785,15 @@ impl Parser {
             // everything (including itself), so `f == null` can't go through OpEq —
             // it would always be false.  Test validity instead: convert(float, bool)
             // is `!is_nan` (= non-null), so `== null` is its negation.
+            // @PLN25: peel `Optional(τ)` — a `float?`/`single?` shares its base's NaN-sentinel
+            // null. Without the peel `float? == null` skipped this validity test and fell to
+            // OpEqFloat on the NaN sentinel (NaN != everything) → ALWAYS false (a null read as
+            // "present"). `Type::Null` itself is never wrapped, so the Null sides stay bare.
             let float_null = (operator == "==" || operator == "!=")
-                && ((matches!(*ctp, Type::Float | Type::Single) && second_type == Type::Null)
-                    || (*ctp == Type::Null && matches!(second_type, Type::Float | Type::Single)));
+                && ((matches!(ctp.base(), Type::Float | Type::Single)
+                    && second_type == Type::Null)
+                    || (*ctp == Type::Null
+                        && matches!(second_type.base(), Type::Float | Type::Single)));
             // A nullable enum variable holds the reference null sentinel
             // (`store_nr==u16::MAX`), exactly like a struct reference.  Its `== null`
             // must test that sentinel via OpEqRef — the default path reads the
