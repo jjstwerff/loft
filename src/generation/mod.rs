@@ -757,7 +757,8 @@ pub fn rust_type(tp: &Type, context: &Context) -> String {
             let parts: Vec<String> = elems.iter().map(|e| rust_type(e, elem_context)).collect();
             return format!("({})", parts.join(", "));
         }
-        Type::Rewritten(inner) => return rust_type(inner, context),
+        // @PLN25 slice (b): `Optional(τ)` shares its base's Rust type (sentinel storage).
+        Type::Rewritten(inner) | Type::Optional(inner) => return rust_type(inner, context),
         _ => panic!("Incorrect type {tp:?}"),
     }
     .to_string()

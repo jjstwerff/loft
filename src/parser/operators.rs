@@ -1309,6 +1309,10 @@ impl Parser {
             Self::rewrite_outer_arith_to_nullable(code, &self.data);
         }
 
+        // @PLN25 slice (b): a `??` discharges null, so its RESULT is the non-null base. Peel
+        // any `Optional` from the LHS type here so the null-check builder + the result type
+        // see the base (e.g. `Optional<text>` routes exactly as plain `text` did pre-marker).
+        *ctp = ctp.base().clone();
         let lhs_type = ctp.clone();
         // @PLN17: boolean now has a real null sentinel (255), so `??` works — the
         // null-check for a boolean LHS is `lhs == null` (raw `== 255`), NOT the

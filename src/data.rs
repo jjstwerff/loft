@@ -1862,6 +1862,8 @@ pub fn has_lifetime_concern(t: &Type) -> bool {
 #[must_use]
 pub fn element_align(t: &Type) -> u8 {
     match t {
+        // @PLN25 slice (b): `Optional(τ)` aligns like its base (same storage).
+        Type::Optional(inner) => element_align(inner),
         Type::Boolean | Type::Enum(_, false, _) => 1,
         Type::Single | Type::Character => 4,
         // P249 — fn-ref slot layout per `variables::size` and
@@ -1901,6 +1903,8 @@ fn element_offsets_alignment_max(types: &[Type]) -> u8 {
 #[must_use]
 pub fn element_size(t: &Type) -> usize {
     match t {
+        // @PLN25 slice (b): `Optional(τ)` shares its base's sentinel storage size.
+        Type::Optional(inner) => element_size(inner),
         Type::Boolean | Type::Enum(_, false, _) => 1,
         Type::Single | Type::Character => 4,
         // P249 — fn-ref slot is 20 bytes (8 B d_nr + 12 B closure DbRef);
@@ -4703,6 +4707,8 @@ impl Data {
     pub fn type_def_nr(&self, tp: &Type) -> u32 {
         match tp {
             Type::Rewritten(t) => self.type_def_nr(t),
+            // @PLN25 slice (b): `Optional(τ)` resolves to its base's type def.
+            Type::Optional(t) => self.type_def_nr(t),
             Type::Integer(_) => self.source_nr(0, "integer"),
             Type::Boolean => self.source_nr(0, "boolean"),
             Type::Float => self.source_nr(0, "float"),
