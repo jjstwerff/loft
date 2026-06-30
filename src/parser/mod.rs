@@ -1854,7 +1854,11 @@ impl Parser {
         // DN1 (the default flip): under DN1 a plain scalar is NON-null, so a bare `null` cannot be
         // stored into a non-Optional scalar target — declare the target `τ?` to allow null.
         // (Heap types — reference/vector/enum — stay nullable; only the SCALAR default flips.)
+        // EXEMPT the trusted stdlib (`STD_SOURCE`): its legacy null-propagation (`min`/`max`'s
+        // `if !a || !b { return null }`) is DEAD under DN1 (its scalar params are non-null), so the
+        // bare `null` never actually flows. Migrate + un-exempt the stdlib when DN1 lands default.
         if crate::keys::pln25_dn1_enabled()
+            && self.data.source != crate::data::STD_SOURCE
             && matches!(value_tp, Type::Null)
             && Self::is_non_null_scalar(target_tp)
         {

@@ -72,6 +72,29 @@ Recommend **option 1** (drop the dead null-propagation under DN1) — it matches
 inputs ⇒ non-null result) and avoids the ripple. The `*Nullable` ops (`OpDivIntNullable`) genuinely
 fit-fail (`/0`) → those DO want `-> τ?` (true DN3).
 
+## A″. RESOLVED — option 1 realized via STDLIB EXEMPTION (gate-OFF-safe)
+
+Decision: **option 1 (drop the dead null-propagation), realized by EXEMPTING the stdlib**, not by
+editing the `.loft`. Removing `min`/`max`'s `if !a || !b { return null }` from `default/01_code.loft`
+broke `tests/scripts/17-min-max-clamp.loft` (asserts `!min(null, 5)` — null-propagation IS
+gate-OFF-load-bearing), so a pure `.loft` removal changes the DEFAULT — not allowed during the
+GATED phase. Instead: the DN1 bare-`null` rejection now EXEMPTS `STD_SOURCE`
+(`self.data.source != crate::data::STD_SOURCE`). Rationale: the stdlib's null-propagation is DEAD
+under DN1 (its scalar params are non-null, so the bare `null` never flows), so not rejecting it is
+correct, not a hack. The stdlib stays byte-identical gate-OFF (`17-min-max-clamp` passes); under DN1
+the stdlib LOADS and only USER code gets the rejection. At step (f) — DN1 default — the stdlib gets
+properly migrated (`min`/`max` cleaned, the test updated) and the exemption removed.
+
+## ⚠️ KNOWN GAP — the bare-`null` rejection is INCOMPLETE
+
+The DN1 rejection fires on an explicit `return null` (`parse_return`) but MISSES null that gets
+typed-into-a-value before the store check: `fn f() -> integer { if b { 5 } else { null } }` (the
+`else { null }` is coerced to `integer` at the if-branch, so the return sees a plain integer) and
+`S { a: null }` (field-construct — the null is typed before `n_store_violation`). So the enforcement
+is partial. Completing it needs the null-typing flow to keep `Type::Null` visible at these store
+sites (or check the if-branch/field-construct coercion of a bare null into a non-null scalar). This
+is the next DN1 enforcement increment, before the `.loft` sweep + the default flip.
+
 ## B′. The gate + enforcement — LANDED (gated, opt-in)
 
 `LOFT_PLN25_DN1` added (implies DN3⊃OPT); `n_store_violation` extended with the DN1 branch: a bare
