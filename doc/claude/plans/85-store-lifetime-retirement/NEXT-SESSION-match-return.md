@@ -14,20 +14,23 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 re-derivation onto ONE analysis fact (`src/use_analysis.rs::ownership_of`, the `Owned|Borrowed|Join{base}`
 oracle) that every free chokepoint READS. The over-free fixes are gated behind the `LOFT_JOIN_OWN` env var
 (off-default → suite byte-identical); `local_source` and `elem_accumulate` are DONE on both backends.
-`match_return` is the LAST over-free site. Validating it surfaced **two plain-loft codegen bugs** —
-interp-only, flag-OFF, independent of the gate and of the over-free work — that made *every*
-match-return-into-a-buffer shape crash the interpreter, masking the synthesis. **Both are now FIXED and
-ungated: P2 (`2701ad5f`) and P3 (`166cc578`).** What remains is the gated synthesis itself — P1 below.
+`match_return` is the LAST over-free site. Validating it surfaced a family of **plain-loft codegen bugs** —
+interp-only, flag-OFF, independent of the gate and of the over-free work — that made match-return-into-a-
+buffer shapes crash the interpreter, masking the synthesis. **P2 (`2701ad5f`) and P3 (`166cc578`) are
+FIXED**, and the **gated synthesis is VALIDATED** (P1, `7ea31d8c`): with the blockers gone the owned-copy
+synthesis runs clean + leak-free on both backends. One more bug in the same family remains — **P4**, two
+match-return functions over DIFFERENT enum types crash the interpreter together (see REMAINING WORK).
 
 ## Branch / gate / commits
 
-- **Branch `tuxedo-pln85-fuzz-proof-gate`** (latest `166cc578`). STACKED on @PLN25's unmerged PR —
+- **Branch `tuxedo-pln85-fuzz-proof-gate`** (latest `7ea31d8c`). STACKED on @PLN25's unmerged PR —
   do NOT fork a new branch off `main` (main lacks the foundation). Rebase the stack only after @PLN25 merges.
 - **Gate:** `LOFT_JOIN_OWN` controls the OVER-FREE fixes only. The P2/P3 codegen fixes are NOT gated — they
-  are plain-loft correctness fixes that run always (suite green: issues 746, use_analysis 11, wrap, native).
+  are plain-loft correctness fixes that run always (suite green: issues 746, use_analysis 13, wrap, native).
 - DONE both backends, gated: `local_source` (`src/scopes.rs`), `elem_accumulate` (`state/io.rs`,
   `state/codegen.rs`, `generation/dispatch.rs`). Oracle built + unit-tested (`tests/use_analysis.rs`).
 - DONE both backends, ungated codegen: **P2** + **P3** (see "FIXED" below).
+- VALIDATED, gated: **P1** — the match_return synthesis (`tests/use_analysis.rs::join_own_match_return_*`).
 
 ## The match_return synthesis — what it is
 
@@ -40,26 +43,40 @@ promotion build the buffer ABI; the structure matches the proven `deliver3`. The
 
 ## REMAINING WORK
 
-### P1 — re-validate the gated synthesis now that P2/P3 are fixed *(the open @PLN85 deliverable)*
+### P4 — two match-return functions over DIFFERENT enums crash the interpreter together *(OPEN, plain-loft, gate-independent)*
 
-P2 and P3 made every match-return-buffer shape crash the interpreter regardless of the synthesis, so the
-synthesis could never be validated. With both fixed, re-run the `LOFT_JOIN_OWN=on` path:
+A THIRD bug in the P2/P3 family. Two match-return-into-a-buffer functions over DIFFERENT enum types,
+defined and called together, crash the interpreter (`realloc(): invalid next size` / the `fn_return`
+derail). One call each, no churn, no loop. Deterministic on `--interpret` (6/6); `--native` clean.
+Gate-independent (fails OFF and ON). Minimal repro:
+```
+enum Cell { Empty, Filled { items: vector<E> } }
+enum Box2 { Nil,   Has    { zs: vector<E> } }
+fn deliver(e: Cell) -> vector<E> { match e { Filled { items } => { items }, _ => { [] } } }
+fn deliverb(e: Box2) -> vector<E> { match e { Has { zs } => { zs }, _ => { [] } } }
+fn main() { a = deliver(Filled{items: ci}); b = deliverb(Has{zs: zi}); /* assert len==3 */ }
+```
+Two match-return functions over the SAME enum are clean (`tests/scripts/441`, `442`) — the trigger is the
+DIFFERENT enum types. Likely a def/type-numbering or per-enum-offset interaction, same class as P2/P3.
+Isolate-and-fix with the matrix method (the DEBUG build is the deterministic signal; `--native` is the
+clean sibling to diff against). File or fix in-plan per the bug-filing policy.
 
-- The synthesis emits the whole-vector append `o += items`. The earlier prediction was "if the plain-loft
-  bug is fixed, the whole-append synthesis just works." Test it now on both backends under churn. If it runs
-  clean, P1 needs **no** element-loop — the simpler whole-append synthesis is enough.
-- The borrowed-direct-yield shape still crashes flag-OFF: `directyield`
-  (`fn f(e: Cell) -> vector<E> { match e { Filled { items } => { items }, _ => { [] } } }`) returns a
-  *borrowed* enum-field binding directly. That is the synthesis INPUT shape the gate rewrites into an owned
-  copy — re-check it under `LOFT_JOIN_OWN=on` once the whole-append path is confirmed.
-- Fallback element-loop form (proven clean both backends, 4/4 under churn):
-  `bytecode-comparisons/match_return-emit/PROVEN-CLEAN-element-loop-inline-default.loft` —
-  `Filled { items } => { o: vector<E> = []; for x in 0..len(items) { o += [items[x] ?? E{<field defaults>}]; } o }`.
-  The OWNED inline default forces the deep `OpCopyRecord`; a borrowed default stays shallow and crashes. To
-  emit it, hand-build the `Iter`/`Loop`/`OpNewRecord`/`OpCopyRecord`/default IR — the parser's
-  `parse_vector_for`/`build_comprehension_code` consume the lexer, so they cannot be called directly.
-- Cleanup once the synthesis lands: the `ref_return` whole-append materialise block (`control.rs`, the
-  `jo_arm_skip` loop ~line 5135 + the promotion-loop/dep-walk skips) is VESTIGIAL.
+## DONE — P1 (the gated synthesis is validated)
+
+With P2/P3 fixed, the `LOFT_JOIN_OWN` synthesis (`jo_copy_borrowed_arm_yield`) runs clean: the borrowed
+arm yield is rewritten to an owned copy, the emitted return drops the subject borrow
+(`["__retbuf", "e"]` → `["__retbuf"]`), and the result is value-correct + leak-free on BOTH backends. The
+earlier prediction held: **the whole-vector append `o += items` "just works" — no element-loop synthesis
+needed.** Pinned by `tests/use_analysis.rs::join_own_match_return_synthesis_both_backends` (runtime) and
+`::join_own_match_return_strips_the_borrow` (the gate's structural effect).
+
+Leftovers if the gate is ever flipped on by default:
+- The `directyield` borrowed-direct-yield shape is the synthesis INPUT; the gate rewrites it. No separate
+  work — it is covered by the synthesis above.
+- The `ref_return` whole-append materialise block (`control.rs`, the `jo_arm_skip` loop ~line 5135 + the
+  promotion-loop/dep-walk skips) is VESTIGIAL and can be removed.
+- The element-loop fallback (`bytecode-comparisons/match_return-emit/PROVEN-CLEAN-element-loop-inline-default.loft`)
+  is NOT needed now that the whole-append works; keep it only as a reference.
 
 ## FIXED
 
