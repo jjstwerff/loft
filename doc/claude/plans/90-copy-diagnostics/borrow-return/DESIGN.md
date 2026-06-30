@@ -82,6 +82,45 @@ it ships gated until slice 2 lands. Validate with the boundary matrix: subject-o
 (borrow, no copy, len+value+leak) × temporary-subject (materialise) × result-escapes
 (materialise) × both backends.
 
+## Boundary matrix (current behaviour captured, gate off)
+
+Cells: [cell-named.loft](cell-named.loft) (subject out-lives → must borrow),
+[cell-temp.loft](cell-temp.loft) (temporary subject → must materialise),
+[cell-escape.loft](cell-escape.loft) (result escapes through `h` → propagate/materialise).
+
+| cell | interp (gate off) | native (gate off) | target (both) |
+|---|---|---|---|
+| named | **panics (P4)** | clean (valid borrow) | clean borrow, **no copy** |
+| temp | **panics (P4)** | "ok" — but a **latent UAF** (the temporary's store not yet reused) | caller **materialises** → clean |
+| escape | **panics (P4)** | "ok" — latent UAF | propagate the borrow, or materialise |
+
+So interp's P4 crash masks the real correctness question (temp/escape are UAF on native,
+silently). Slice 1+2 must make all six cells correct — value + length + leak (`LOFT_POISON`
+to force the temp UAF loud), both backends.
+
+## Slice-1 edit points + the two-pass complication (found while prepping)
+
+- The `__retbuf` buffer attribute is created in **`src/parser/definitions.rs:992-1015`**,
+  driven by the **return TYPE** (a heap return → a buffer), *before* the body is parsed.
+  But **borrow-ness is a BODY property** (does the tail alias a param?) known only later —
+  so the buffer cannot simply be suppressed at creation time. Options: (a) a first-pass
+  body scan to predict a borrowed return, then suppress on the second pass; (b) retire the
+  buffer attribute (`retire_argument`, already used by `ref_return`) once the return is
+  known borrowed; (c) keep the buffer but make the borrowed-return path through it
+  CONSISTENT (return the alias, fix the P4 frame/discard accounting) — a smaller fix that
+  removes the *big* copy (`f`'s `copy_borrow_tail_into_retbuf` → return the alias) and the
+  crash, leaving only a tiny wasted empty-buffer alloc to optimise later.
+- The tail copy/alias choice is in **`src/parser/control.rs`** — `ref_return`,
+  `copy_borrow_tail_into_retbuf` (the `f` copy to make conditional), `materialize_return_into`.
+- Reuse the **`LOFT_JOIN_OWN`** gate (already wraps the @PLN85 borrowed-yield work).
+- **No safe partial:** slice 1 (callee borrows) without slice 2 (caller materialises on a
+  temporary/escape) is a UAF on the temp/escape cells — so the two ship together, gated;
+  the suite stays byte-identical with the gate off.
+
+Next concrete step: plot the target alias-return bytecode for the `named` cell (hand-write
+the clean `DbRef`-return + the caller binding), prove it standalone, then implement
+option (c) (smallest) behind the gate and walk the matrix.
+
 ## Connection back
 
 This is the `Borrow`-set growth the @PLN90 north-star is about: field-return moves from
