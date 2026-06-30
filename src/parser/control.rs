@@ -1856,6 +1856,17 @@ impl Parser {
             &[Value::Var(w), Value::Int(i32::from(known_type))],
         ));
         for (i, elem) in elements.into_iter().enumerate() {
+            // E1 (pre-existing, gate-OFF too): a bare-`null` tuple element must become the
+            // field's TYPED null (`OpConvIntFromNull` → the i64 sentinel, etc.), exactly as
+            // struct-field construction does. Raw `Value::Null` made native emit `()` into the
+            // typed slot → E0308; interp tolerated it. `self.null` peels `Optional` to the base
+            // sentinel, so a `τ?` element types correctly too.
+            let elem = if matches!(elem.unspan(), Value::Null) {
+                let ftp = self.data.attr_type(synthetic_d_nr, i).clone();
+                self.null(&ftp)
+            } else {
+                elem
+            };
             ops.push(self.set_field_no_check(synthetic_d_nr, i, 0, Value::Var(w), elem));
         }
         ops.push(Value::Var(w));

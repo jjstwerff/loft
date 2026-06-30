@@ -331,9 +331,20 @@ ABI gates in emit.rs/calls.rs. Same `.base()` peel, mechanical.
   but the concat then DROPS the appended part (`"hi" + "!"` → `"hi"`; plain text gives `"hiX"`).
   A text-heap bug, silent-wrong — reverted; belongs with the text? sub-thread.
 
-**Family G — empirical confirmed reachable**: E1 native `null` tuple-element → `(())` (the
-native default/typed-null path, ties to `default_native_value` 896); E2 `"{x}"` format reject
-(collections 1219 / append_data) — a design call.
+**Family G — E1 FIXED; E2 deferred (design call).**
+- **E1 — a `null` element in a declared-type tuple RETURN — FIXED** (control.rs
+  `rewrite_tail_tuple_with_work_ref`). Root cause: the construction stored each element raw, so a
+  bare `Value::Null` element reached the typed `OpSetInt` and native emitted `let v = (())` →
+  E0308 (interp tolerated it). **This was PRE-EXISTING and NOT Optional-specific** — gate-OFF,
+  `(null, 2): (integer, integer)` failed native identically. Fix: type each null element via
+  `self.null(field_type)` (→ `OpConvIntFromNull` / the base sentinel, peeling `Optional`), exactly
+  as struct-field construction does. Validated both backends, both gate states, every position +
+  float?/multiple-null + non-null control (`familyG-tuple-return-null.loft`); full suite green.
+  (Separate, still-open inference edge: a tuple LOCAL with a bare literal null — `t = (null, 2)`
+  with NO declared type — infers the element as `Type::Null` and panics `emit_tuple_put_ops:
+  unsupported elem Null`; that's an inference-can't-type-bare-null limitation, not E1.)
+- **E2 — `"{x}"` format of a nullable rejected** (collections 1219 / append_data) — loud on both
+  backends; a DN1 design call (keep discharge-to-format, or peel-and-format). Deferred.
 
 ### Recommended fix-sequence (each ends green gate-ON, both backends)
 1. **Family A ungated — the 4 sibling-pair misses DONE** (`align`/`tuple_def`-align/`type_elm`/

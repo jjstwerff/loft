@@ -1,0 +1,14 @@
+// @PLN25 DN1 Family G — E1: a `null` element in a declared-type tuple RETURN.
+// Pre-existing native bug (gate-OFF too): the element was stored as a bare `null` →
+// native emitted `let v = (())` (E0308); interp tolerated it. Fixed by typing the
+// element via self.null(field_type) in rewrite_tail_tuple_with_work_ref.
+// Run BOTH backends, gate-ON and gate-OFF — all print the same.
+fn pi() -> (integer?, integer) { (null, 2) }      // -1 2
+fn ip() -> (integer, integer?) { (5, null) }       // 5 -1
+fn fl() -> (float?, integer)   { (null, 9) }       // -1 9
+fn bb() -> (integer?, integer?){ (null, null) }    // -1 -2
+fn nn() -> (integer, integer)  { (7, 8) }          // 7 8 (non-null control)
+fn main() {
+  (a, b) = pi(); (c, d) = ip(); (e, f) = fl(); (g, h) = bb(); (i, j) = nn();
+  print("{a ?? -1} {b} {c} {d ?? -1} {e ?? -1.0} {f} {g ?? -1} {h ?? -2} {i} {j}");
+}
