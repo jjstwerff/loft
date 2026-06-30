@@ -92,6 +92,33 @@ tagging, so it lands early to drive adoption) → 3 (doc generation, rides `gend
 Hygiene (5) folds into 2 and 4. Adoption is a **ratchet, not a big-bang backfill**:
 new bulk code must claim an entry from day one; the existing backlog is chipped down.
 
+## Backfill checklist — adopting the catalogue over the existing tree
+
+The ratchet (above) stops *new* untagged bulk; this is how the *existing* backlog is
+tagged — **three passes, each completed before the next starts**, so the catalogue is
+reviewed as a whole before any tag is written, and source tags land before doc tags.
+
+**Pass 1 — Map source → propose the initial catalogue (no tags, no issues yet).**
+- [ ] Walk the source roots (`src/parser/`, `src/state/`, `src/fill.rs`, `src/generation/`, `src/database/`, `default/*.loft`, …), grouping regions into candidates: user-facing capability → `@F`; internal subsystem → `@I` (coarse — one per subsystem).
+- [ ] For each candidate, draft a value/role **title** and the **source region** it covers.
+- [ ] Emit the proposed mapping as a **review artifact** (region → proposed `@F`/`@I` + title) — written down, nothing created or tagged yet.
+- [ ] Review for **coverage + granularity** (every substantial region claimed; `@I` stays coarse), then **create the approved entries** as `loft-lang/features` issues — this mints the `@F###`/`@I###` numbers.
+
+**Pass 2 — Details pass: write the tags in the SOURCE.**
+- [ ] Write the bare `// @F<n>` / `// @I<n>` at each implementing site (per-function for `@F`, subsystem-level for `@I`).
+- [ ] `make index` + `idx features` / `idx infra` to confirm each tag links to its code site.
+- [ ] Seed the **coverage gate** (strand 4) baseline at the now-current unattributed count; ratchet down from there.
+
+**Pass 3 — Docs pass: write the tags in the DOCUMENTATION.**
+- [ ] Add the matching `<!-- @F<n> -->` / `<!-- @I<n> -->` anchor at each feature's LOFT.md / topic section (the doc side of the dual-anchor).
+- [ ] For `@F`, point the entry at its runnable cross-backend-tested example (spec / demo / status source).
+- [ ] Run the **hygiene checks** (strand 5): every entry declared once + dual-anchored (≥1 doc + ≥1 code); close gaps. Then switch per-feature doc generation (strand 3) onto the tagged `@F` set.
+
+**Why this order:** map-before-tag reviews the catalogue as a whole (right granularity,
+no premature numbers); source-before-docs lets the coverage gate — which measures
+*source* — go green first, so the doc anchors then link into a catalogue that already
+matches the code.
+
 ## Rides existing machinery — why MH, not VH
 
 - `scan.loft` (@PLN42, loft-native) already byte-scans `@P`/`@PLAN` with context and reads PROBLEMS.md for valid ids — the `@F`/`@I` prefix is the same path.
