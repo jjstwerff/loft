@@ -90,16 +90,31 @@ only, additive — nothing constructs `Optional` yet, so the suite is unchanged 
 both backends); N-Idem pinned by a unit test. `IntegerSpec.not_null` reconciliation deferred
 to DN1/DN3 (per `scalar-optional-representation.md`), as designed.
 
-### Step 2 — Scalars Phase 1 MIGRATE: annotate nullable scalar/field sites with `?`
+### Step 2 — Scalars Phase 1 MIGRATE: annotate nullable scalar/field sites with `?` — IN PROGRESS
 While the scalar default is STILL nullable, mark every site that genuinely holds null.
-Under today's default these are **no-ops** — that is the point: pre-position them before the
-flip can surprise them.
-- **Survey first (cheap):** `grep` scalar/field `= null`, `?? `, `for x in …` null-use across
-  `default/*.loft`, `lib/`, `tests/`, and the consumers. The vector survey found ~0 sparse
-  sites in crawler; scalars need their own count — **record the number** (it is the Phase-2
-  blast-radius estimate).
-- **Validation:** **suite stays 2564/0** after annotation (no behaviour change). Annotating an
-  already-nullable site changes nothing.
+Under today's default these are **no-ops** — pre-position them before the flip can surprise them.
+
+**Survey done (2026-06-30) — the blast radius is SMALL.** Raw null-signal counts
+(`= null` / `?? ` / `==/!=null`): **default/ (stdlib) = 0** · **lib/ ≈ 20** · **tests/ ≈ 867**.
+But the raw counts are dominated by sites that are **NOT scalar/field migration targets**:
+- **vector-/lookup-coalescing** (`v[i] ?? d`, `obj.field_lookup ?? d`) — already correct
+  (the vectors half made `v[i] ⇒ τ?`); the `??` discharges it. (~all of audience_crystal's.)
+- **inferred locals** (`nr = def_names[name].nr`, `l = data[index]`, `x = null`) — nullability
+  is *inferred* from the fallible source, not a declared scalar type; inference-governed.
+- **`==/!=null` on references/enums** — heap-nullable already (separate from the scalar flip).
+
+The **genuine MIGRATE targets** are *explicitly-typed scalar fields/vars that hold null*. In
+the **controlled surface (stdlib + lib) there is exactly ONE**: `Code.cur_def: i32` in
+`lib/code.loft` (`self.cur_def = null` at `end_define`) → annotated **`cur_def: i32?`**
+(`i32?`/`text?` verified to parse as a no-op both backends). The stdlib needs none.
+
+So pre-annotation is light; the codebase carries null via fallible-lookup (handled) far more
+than via nullable scalar fields. The remaining test-side sites are mostly intentional null
+tests / inferred locals — left to **Step 3's flip**, which surfaces any genuine miss as a
+loud error fixed one-character (`?`), exactly the design's catch-all. **DN1 blast-radius
+estimate: very low for the shared surface.**
+- **Validation:** suite stays green after annotation (no behaviour change) — ✅ `find_problems`
+  0 failures both backends after the `cur_def` annotation.
 
 ### Step 3 — Scalars Phase 2 CONTRACT: flip the scalar/field default to non-null (DN1)
 The default flip. `IntegerSpec.not_null` default `false → true` (and the bool/char/text
