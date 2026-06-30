@@ -121,6 +121,44 @@ Next concrete step: plot the target alias-return bytecode for the `named` cell (
 the clean `DbRef`-return + the caller binding), prove it standalone, then implement
 option (c) (smallest) behind the gate and walk the matrix.
 
+## P4 derail — ISOLATED (step 1 done) — and it reframes path A
+
+The borrowed-yield crash is **not** an ABI problem; it is a contained `gen_if` frame bug,
+the same family as P2/P3. Captured deterministically (cell-named, gate off, 6/6) by
+instrumenting `fn_return` + the B5 join:
+
+- g returns with `discard=40=span` (internally consistent) yet `fn_return` reads
+  `code_pos=4` — **garbage** (the real return address is ~251). So g's saved return address
+  is corrupted before the return.
+- `B5 def=610 stack_pos=40 true_stack=56 false_stack=40 target=40`: the empty `_ => { [] }`
+  false arm pushes **no result** (`false_stack = stack_pos = 40`, the eval base), while the
+  true arm pushes the alias (`true_stack = 56`). The B5 join takes `target = min = 40`.
+- The trampoline `FreeStack(value=12, discard=(56-40)+16=32)` then slides the 16-byte result
+  from TOS down to `target=40` — landing it at `[24..40]`. **`[24]` is the saved return
+  address slot** (bytecode `0[24]: return-address`). The result overwrites it → `code_pos=4`
+  → execution jumps into garbage → the derail.
+
+Root: an empty/Null value-arm leaves `false_stack` at the eval base, so the B5 join target
+sits below where a result fits without overlapping the frame, and the shrink corrupts the
+return address. Fix (contained, gen_if): when the false arm produces no result for a
+value-returning `if` (`false_stack == stack_pos`), it must deliver a typed result so both
+arms align above the frame — then no shrink, no corruption. (`else ;` here is non-`Null` at
+codegen — it reaches B5, not the null-else pad — which is why P3's fix did not catch it.)
+
+**This reframes path A.** The match-arm borrowed-yield **already returns the alias — it is
+already a borrow, with no copy.** It only *crashes*, on this gen_if bug. So:
+
+- **A1 — fix the gen_if derail** (contained codegen fix): g then runs as a clean borrow for
+  the safe case (subject out-lives the result). Much smaller than the feared ABI change.
+- **A1b — temporary-subject safety**: a borrow of a temporary (`g(Filled{…})`) still
+  dangles — the caller must materialise (the genuine ownership/`deps` part, design slice 2).
+- **A2 — struct-field copy→alias**: `f`'s `copy_borrow_tail_into_retbuf` still *copies*
+  `b.rows` into `__retbuf`; making it return the alias (like g) is the separate ABI piece.
+
+Next: A1 — the gen_if fix (make the empty value-arm deliver a result so B5 cannot slide it
+into the return address), matrix-validated on the cells, gate-independent (it is a
+plain-loft codegen correctness fix, like P2/P3).
+
 ## Connection back
 
 This is the `Borrow`-set growth the @PLN90 north-star is about: field-return moves from
