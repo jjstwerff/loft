@@ -250,6 +250,17 @@ Cluster C / `OWNERSHIP_MODEL.md`). Tier-0 + Tier-1.5 are **default-on, on `main`
 ## Verify / probe commands
 
 ```sh
+# @PLN25 SCALAR-HALF GATES (this session, opt-in; cached OnceLock in src/keys.rs):
+#   LOFT_PLN25_OPT=1  -> the postfix `?` constructs the real Type::Optional (else a no-op)
+#   LOFT_PLN25_DN3=1  -> the (N-Store) teeth (reject un-discharged τ? into non-null); implies OPT
+# gate-OFF (both unset) = byte-identical default. Verify the scalar-Optional path:
+LOFT_PLN25_DN3=1 loft --interpret tests/scripts/25-scalar-optional-syntax.loft   # green both backends
+LOFT_PLN25_DN3=1 loft --native    tests/scripts/25-scalar-optional-syntax.loft
+LOFT_PLN25_DN3=1 loft introspect  lib/code.loft | grep -c "vector index"          # 14 (cur_def index sweep targets)
+# the (N-Store) catch: a nullable used as a non-null store/index errors; `?? d` discharges:
+printf 'fn main(){ v:vector<integer>=[1]; i:integer?=null; x=v[i]; }' > /tmp/n.loft
+LOFT_PLN25_DN3=1 loft --interpret /tmp/n.loft   # error: discharge with `?? <default>`
+
 # dense default + nullable opt-in (the core correctness, already green):
 loft --interpret /tmp/a.loft               # vector<S?>: v[1]==null -> true
 loft introspect /tmp/a.loft | grep main_vector   # vector<S> -> main_vector<S> (dense)
