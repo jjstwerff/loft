@@ -11785,8 +11785,12 @@ fn run() -> integer {
 /// If V1/V2 fail but V3 works (or hangs): the parse path is gated on
 /// `par(...)` syntax.  V3 hanging at runtime would cleanly localise
 /// the bug to the par dispatcher (matching the canary).
+// p4dA2 — the par-dispatch HANG over `vector<fn-ref>` input is FIXED on the interpreter
+// (this test, formerly timing out at 15s, now completes). A SEPARATE residual remains on
+// `--native`: the par-fnref result delivery emits a bare `DbRef` where `(u32, DbRef)` is
+// expected (E0308) — tracked in plans/90-copy-diagnostics/REMAINING.md. This `code!` test is
+// interpreter-only, so it locks in the hang fix without gating on the native codegen gap.
 #[test]
-#[ignore = "p4dA2 — same hang as the full canary (3 elements).  Confirmed via timeout 15s exit 143.  The bug is in par-dispatch with vector<fn-ref> input — consistent with the design's phase 2B path."]
 fn p4d_a2_par_vector_fn_ref_single() {
     code!(
         "fn dbl(x: integer) -> integer { x * 2 }
@@ -15452,13 +15456,11 @@ fn check() -> integer { a = [1, 2, 3]; vamp(a); a[0] }"
     .result(Value::Int(7));
 }
 
-/// @PLN87 #1 — DEFERRED: full `&` write-back support for a CALL/VAR RHS (`o = mk()`,
-/// `o = src`).  Today these are rejected at parse time (see parse_errors
-/// `pln87_amp_writeback_*_rejected`) because the ownership-transfer machinery only
-/// handles an owned LITERAL (`o = Obj{..}`).  When the transfer is generalised to
-/// call/var RHS this lock-in flips to PASS: the write-back must reach the caller.
+/// @PLN87 #1 — `&` write-back from a CALL RHS (`o = mk()`). The ownership-transfer machinery
+/// now routes a call RHS through a transferable owned temp, so the write-back reaches the
+/// caller's place (`a.x` becomes 9). Verified clean on both backends. (Was deferred behind a
+/// parse rejection that no longer exists.)
 #[test]
-#[ignore = "@PLN87 #1 — & write-back from call/var is rejected pending ownership-transfer support; un-ignore when parse_assign_op routes a call/var RHS through a transferable owned temp"]
 fn pln87_amp_writeback_from_call_writes_back() {
     code!("struct Obj { x: integer } fn mk() -> Obj { Obj { x: 9 } } fn f(o: &Obj) { o = mk(); } fn check() -> integer { a = Obj { x: 1 }; f(a); a.x }")
         .expr("check()")

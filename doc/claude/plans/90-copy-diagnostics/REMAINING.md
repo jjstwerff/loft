@@ -27,7 +27,10 @@ dogfood UAF). Three concrete open pieces:
 - **#462 — residual native record leak.** A native-only `MonsterDef×216` *record* leak in
   the borrowed-view shape (Cluster-A/C borrow-over-free family). Reproduces `--native`,
   interp clean. [STABILITY_ROADMAP.md `462-leak`](../../STABILITY_ROADMAP.md) ·
-  [cluster-462](../85-store-lifetime-retirement/cluster-462-slot-reuse-uaf.md). **Effort: S–M.**
+  [cluster-462](../85-store-lifetime-retirement/cluster-462-slot-reuse-uaf.md). **Gate-1
+  note:** same borrow-over-free family as A1b (a borrowed view materialised/freed wrong on
+  native) — **likely subsumed by the A1b buffer fix**; re-check `M-462repro` after A1b lands
+  before treating it as separate. **Effort: S–M.**
 - **Analysis completeness (`O-Complete`).** The `deps`/`ownership_of` analysis is not proven
   **total** — and "an incomplete fact is not a compile error, it is a miscompile or a leak"
   ([OWNERSHIP_MODEL.md § Internal and invisible](../../OWNERSHIP_MODEL.md)). The over-free
@@ -35,22 +38,29 @@ dogfood UAF). Three concrete open pieces:
   fixed) but soundness is not yet *closed*. This is the umbrella the two items above live
   under. **Effort: L (ongoing).**
 
-### 2. `par`-dispatch hang on `vector<fn-ref>` input — `p4dA2`
-`par(...)` over a `vector<fn-ref>` input hangs (confirmed via `timeout 15s exit 143`,
-ignored test `p4dA2`). A genuine threading hang, not perf. Per the design's phase-2B path
-([THREADING.md] / the par plan). **Effort: M.**
+### 2. `par`-dispatch over `vector<fn-ref>` — **hang FIXED; native E0308 residual**
+Gate-1 re-check: the interpreter **hang is GONE** — the `p4dA2` test (formerly `timeout 15s
+exit 143`) now completes in 0.04s and is **un-ignored**. The genuine residual is **native
+only**: par-fnref result delivery emits a bare `DbRef` where `(u32, DbRef)` is expected
+(`error[E0308]`). Target (to determine before building): the native par-dispatch must
+deliver the `(index, value)` tuple the reducer expects, not the bare value. **Effort: S–M
+(native codegen).**
 
-### 3. `&` write-back from a call/var RHS — `@PLN87 #1`
-`& write-back from call/var is rejected pending ownership-transfer support` (ignored test).
-Un-ignore when `parse_assign_op` routes a call/var RHS through a transferable owned temp.
-A real ownership-surface gap (the one sanctioned user-facing ownership lever). **Effort: M.**
+### 3. ~~`&` write-back from a call RHS~~ — **RESOLVED** (`@PLN87 #1`)
+Gate-1 re-check: `o = mk()` (call RHS) **works on both backends** (`check()` writes back 9);
+no parse rejection remains, and the lock-in test `pln87_amp_writeback_from_call_writes_back`
+is **un-ignored** (passes). The ownership-transfer machinery already routes a call RHS
+through a transferable owned temp. **Done — not a blocker.**
 
-### 4. Parser formatting-sensitivity — `_ => { [] }`
-The same source parses to **different IR by formatting**: single-line → `else ;` (Null),
-multi-line → `else { block }` (a real empty block). Confirmed live. P3/P4 fixed the *crash*
-consequences, but **formatting changing semantics is itself a latent bug** (it is what made
-P3/P4 layout-sensitive). Fix: normalise the empty-arm parse so the IR is identical.
-**Effort: S–M.**
+### 4. ~~Parser formatting-sensitivity~~ — DEMOTED (gate-1: not a correctness blocker)
+The same source parses to **different IR tree shape by formatting**: single-line →
+`else ;` (Null), multi-line → `else { block }` (a real empty block). **Gate-1 capture shows
+both lower to IDENTICAL native (`else { DbRef::NULL }`) and identical runtime behaviour** —
+post-A1/P3/P4 both the null-else and the empty-block paths emit the correct typed-null. So
+this is a **latent fragility, not an active miscompile**: it is what made P2/P3/P4
+layout-sensitive, but with those fixed there is no behaviour difference left to gate a
+release. Normalising the empty-arm parse so the IR tree is identical is a **robustness**
+improvement (moved to P1 below), not a P0 blocker. **Effort: S–M.**
 
 ## P1 — important optimisations (lesser priority — correct as-is, do after P0)
 
@@ -73,6 +83,11 @@ automatically not copying ([COPY_DIAGNOSTICS.md § North-star](../../COPY_DIAGNO
   copy and silence the lint. **Effort: S (design) + M.**
 - **Wasted empty-buffer alloc.** A borrowed return still receives a `__retbuf` it ignores (a
   tiny empty-vector alloc). Optimise away once A2/the ABI settles. **Effort: S.**
+- **Normalise the empty-arm parse** (was P0.4). `_ => { [] }` should parse to one canonical
+  IR tree regardless of formatting (single-line `else ;` vs multi-line `else { block }`).
+  No behaviour difference today (both lower to `DbRef::NULL`), but the divergence is the
+  latent fragility that made P2/P3/P4 layout-sensitive — robustness, not correctness.
+  **Effort: S–M.**
 
 ## Sequencing note
 
