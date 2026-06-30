@@ -150,16 +150,29 @@ analog); the plain-type parse stops meaning nullable; `not null` becomes an **ac
 > backends; (f) flip the gate default-on. Multi-session; the survey says the *shared-surface*
 > `.loft` sweep is small, but the *compiler* work (b)+(c) is the substance.
 
-**Slice (a)+(b) STARTED (`c2b22d13`, gated `LOFT_PLN25_OPT` opt-in).** (a) the postfix `?`
-constructs `Type::optional` when the gate is on (OFF = Phase-0 no-op, suite byte-identical).
-(b) the consuming-site peel audit, fixed for the surface `tests/scripts/25-scalar-optional-syntax.loft`
-exercises gate-ON: `convert` (Optional target accepts null + base; source unwraps), `get_val`,
-`gen_set_first_at_tos`, `generate_var`, `set_field_check`, `size(tp,ctx)` + `Type::size` — each
-a behaviour-preserving peel, a no-op gate-OFF. Gate-ON the probe now passes field
-construct/read + var/param/return; **remaining: the `??` null-coalesce over `Optional<text>`**
-(a pre-existing `gen_set_first_at_tos` Text gap the new routing exposes) **+ the broader
-~280-site sweep** — the next slice-(b) iterations. Validation: gate-OFF full suite only the 2
-known pre-existing failures; fmt + both clippy clean.
+**Slice (a)+(b) DONE for the current corpus (`8e279c7c`, gated `LOFT_PLN25_OPT` opt-in).**
+(a) the postfix `?` constructs `Type::optional` gate-ON (OFF = Phase-0 no-op, byte-identical).
+(b) the consuming-site peel audit — **~19 sites peeled** across type-check, layout, interp +
+native codegen: `convert` (incl. the null→typed-null transform for a nullable target),
+`get_val`/`set_field_check`/`gen_set_first_at_tos`/`generate_var`, `size`×2 +
+`element_size`/`element_align` + `typedef` DB-layout (the SIGSEGV — an Optional field got a
+wrong record layout, overflowing an adjacent store), `type_def_nr`, `??`
+(`handle_null_coalesce`), `null(tp)`, and native `rust_type`/`write_typed_null`/the
+`text?`-return ABI. Each behaviour-preserving, a no-op gate-OFF.
+
+**Result: the FULL suite is green gate-ON.** Only **3 `.loft` files** use a `?` annotation
+today (25-scalar-optional-syntax, 81-iterator-protocol, + the lib MIGRATE site), so the
+*exercised* audit surface is small — all pass on BOTH backends gate-ON; `find_problems`
+gate-ON shows no Optional-related failure. The ~280-site count is the THEORETICAL surface
+(live only once DN1 makes plain types Optional); for the current `?`-usage the sweep is
+complete. **The gate stays opt-in** — `?`→Optional default-on is inert until DN1 gives it
+teeth, so flipping it early adds risk (unexercised sites) for no value. Validation: gate-OFF
+byte-identical; fmt + both clippy clean.
+
+**NEXT = slice (c)–(f) = the DN1+DN3 effort:** add the `(N-Store)` reject-null check (gated),
+flip the scalar default non-null, sweep the `.loft` misses, then flip the gate default-on.
+This is where the ~280 sites become *live* (plain types → Optional) — the big multi-session
+phase the scoping above describes.
 
 ### Step 4 — Phase 3 TIGHTEN, the rest: DN2 then DN3 (the measured blast radius, LAST)
 DN4 already shipped (above). Remaining, least-to-most breaking:
