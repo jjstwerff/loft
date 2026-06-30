@@ -1866,6 +1866,11 @@ impl Parser {
         // above, and a differing pair peels each side once.
         if let Type::Optional(inner) = should {
             if matches!(is_type, Type::Null) {
+                // null into a nullable target: run the base's null→typed-null coercion so
+                // `code` becomes the base sentinel op (e.g. `OpConvIntFromNull`, not a bare
+                // `null` that natively renders `()`), but a nullable target ALWAYS accepts
+                // null regardless of the base's own nullability.
+                self.convert(code, is_type, inner);
                 return true;
             }
             return self.convert(code, is_type, inner);
@@ -7646,7 +7651,8 @@ impl Parser {
 
     // <function> ::= 'fn' <identifier> '(' <attributes> ] [ '->' <type> ] (';' <rust> | <code>)
     pub fn null(&mut self, tp: &Type) -> Value {
-        match tp {
+        // @PLN25 slice (b): an `Optional(τ)`'s null is `τ`'s typed null (same sentinel) — peel.
+        match tp.base() {
             Type::Integer(_) => self.cl("OpConvIntFromNull", &[]),
             // `character` is a 4-byte (char-domain) type: its null is `'\0'`
             // (`OpConvCharacterFromNull`), NOT the i64 integer sentinel.  Folding
