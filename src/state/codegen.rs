@@ -834,7 +834,25 @@ impl State {
             self.code_put(code_step, (self.code_pos - true_pos) as i16); // actual step
             stack.position = stack_pos;
             let fp = self.generate_node(f_val, stack, false);
-            let false_stack = stack.position;
+            // @PLN90 P4 — a value-producing `if` whose FALSE arm pushes no result (an empty
+            // `_ => { [] }` arm that elides to nothing, the borrowed-yield's else) leaves
+            // `false_stack` at the eval base. The B5 join below would then take `target` at
+            // the eval base and slide the TRUE arm's result DOWN onto the saved return
+            // address (below the eval base) — the P4 derail. Deliver a typed result on the
+            // false path so both arms exit ABOVE the frame at the same level; B5 then sees
+            // equal levels and never shrinks. (`else ;` reaches here as a non-`Null` arm, so
+            // gen_if's null-else pad does not cover it.)
+            let false_stack = if !is_divergent(f_val)
+                && stack.position == stack_pos
+                && true_stack > stack_pos
+                && !matches!(tp, Type::Void | Type::Never)
+            {
+                self.emit_typed_null(stack, &tp);
+                stack.position = true_stack;
+                true_stack
+            } else {
+                stack.position
+            };
             if !is_divergent(t_val) && !is_divergent(f_val) && true_stack != false_stack {
                 // B5: both arms produce a value but exit at different stack levels
                 // (e.g. match arms with different local allocations).  The result

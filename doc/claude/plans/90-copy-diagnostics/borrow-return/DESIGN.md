@@ -155,9 +155,20 @@ already a borrow, with no copy.** It only *crashes*, on this gen_if bug. So:
 - **A2 — struct-field copy→alias**: `f`'s `copy_borrow_tail_into_retbuf` still *copies*
   `b.rows` into `__retbuf`; making it return the alias (like g) is the separate ABI piece.
 
-Next: A1 — the gen_if fix (make the empty value-arm deliver a result so B5 cannot slide it
-into the return address), matrix-validated on the cells, gate-independent (it is a
-plain-loft codegen correctness fix, like P2/P3).
+**A1 — DONE.** The gen_if fix: when a value-producing `if`'s false arm pushes no result
+(`stack.position == stack_pos` after generating it, true arm taller, `tp` non-Void), emit a
+typed result on the false path and join at `true_stack` — both arms exit above the frame, so
+B5 never shrinks a result into the return address. All three matrix cells now run clean on
+BOTH backends; suite green (issues 746, use_analysis 16, full suite only the two known
+pre-existing failures). Regression: `tests/scripts/443-borrowed-match-return.loft` (crashes
+pre-A1 6/6, clean post-A1). The match-arm borrowed-yield now runs as a clean borrow for the
+common (subject-out-lives) case — the P4 crash is gone and it is a borrow, no copy.
+
+Remaining: **A1b** — temporary-subject safety (a borrow of a temporary whose store is freed
+before the result's last use is a UAF; the simple cells do not trigger it — the temporary's
+items out-live the use — but a composition that frees the subject early would need the
+caller to materialise, the `deps`/ownership part). **A2** — the struct-field `b.rows` still
+copies via `copy_borrow_tail_into_retbuf`; make it return the alias too.
 
 ## Connection back
 
