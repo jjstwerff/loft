@@ -2524,7 +2524,9 @@ impl Parser {
                     // real aliases (i32, u8, etc.) — "integer" is the base type
                     // and its forced_size is 8, which would override the narrow
                     // limit()-based heuristic for `integer limit(0, 255)`.
-                    if matches!(tp, Type::Integer(_)) && id != "integer" {
+                    // @PLN25: peel `Optional(τ)` so a nullable narrow field (`u8?`)
+                    // captures its alias and stores at the narrow width like `u8`.
+                    if matches!(tp.base(), Type::Integer(_)) && id != "integer" {
                         alias_d_nr = self.data.def_nr(&id);
                     }
                     a_type = tp;

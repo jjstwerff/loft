@@ -3086,7 +3086,7 @@ impl Parser {
                     && data.def(new_d).name() == "OpConvBoolFromRef"
                     && new_args.len() == 1
                 {
-                    let conv_name = match concrete {
+                    let conv_name = match concrete.base() {
                         Type::Integer(_) => Some("OpConvBoolFromInt"),
                         Type::Text(_) => Some("OpConvBoolFromText"),
                         Type::Float => Some("OpConvBoolFromFloat"),
@@ -3732,6 +3732,9 @@ impl Parser {
 
     /// I9-vec: compute element store size from the Type alone (no database needed).
     fn type_element_size(tp: &Type, data: &Data) -> i32 {
+        // @PLN25: `Optional(τ)` stores at its base's width (sentinel storage); peel so a
+        // nullable narrow-int / scalar element gets its real stride, not the `_ => 12` DbRef.
+        let tp = tp.base();
         // Post-2c: honor size(N) on integer aliases.
         if matches!(tp, Type::Integer(_)) {
             let alias_nr = data.type_elm(tp);
@@ -3775,7 +3778,10 @@ impl Parser {
     /// no wrapper — the `DbRef` IS the value.
     fn wrap_vector_get_val(code: Value, tp: &Type, data: &Data) -> Value {
         let p = Value::Int(0);
-        let op_name = match tp {
+        // @PLN25: peel `Optional(τ)` — a nullable scalar element needs the SAME value-
+        // extraction op as its base; without this it fell to `_ => return code` (no OpGet)
+        // and the raw slot was read as a DbRef.
+        let op_name = match tp.base() {
             Type::Integer(_) => "OpGetInt",
             Type::Float => "OpGetFloat",
             Type::Single => "OpGetSingle",
@@ -4351,7 +4357,10 @@ impl Parser {
         value: Value,
     ) -> Vec<Value> {
         let pos_v = Value::Int(i32::from(pos));
-        let single = match elem_tp {
+        // @PLN25: peel `Optional(τ)` — a nullable tuple element stores via its base's
+        // OpSet* (sentinel storage); without this it fell to `_` and was REJECTED with
+        // "Tuple struct field cannot contain element of type integer?".
+        let single = match elem_tp.base() {
             Type::Integer(_) => self.cl("OpSetInt", &[ref_code.clone(), pos_v, value]),
             Type::Function(_, _, _) => {
                 // P196: storage holds the 4-byte i32 d_nr only.  Reduce

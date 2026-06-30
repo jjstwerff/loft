@@ -6767,7 +6767,9 @@ impl Parser {
     pub(crate) fn seeds_vector_hint(expected: &Type) -> bool {
         match expected {
             Type::Vector(elem, _) => {
-                matches!(**elem, Type::Integer(_)) || Self::seeds_vector_hint(elem)
+                // @PLN25: peel `Optional(τ)` so a `vector<u8?>` literal seeds its narrow
+                // stride like `vector<u8>` (else #432 stride-reinterpretation corruption).
+                matches!(elem.base(), Type::Integer(_)) || Self::seeds_vector_hint(elem)
             }
             _ => false,
         }

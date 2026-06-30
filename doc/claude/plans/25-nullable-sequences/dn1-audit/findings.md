@@ -307,9 +307,31 @@ native default/typed-null path, ties to `default_native_value` 896); E2 `"{x}"` 
    FIRST — e.g. `(g(),5)` panics at `emit_tuple_put_ops` before `tuple_def` align matters). They
    are validated by construction (twin-parallelism) + byte-identical, not by a flipped probe;
    they must land first so that once the tuple/interp bugs are fixed, correct layout is already
-   underneath (else silent offset corruption replaces a clean panic). The remaining Family A
-   parser layout sites (mod 3742/3778/4354/3089, control 6770, def 2527, data `to_default` 946)
-   are NOT yet done.
+   underneath (else silent offset corruption replaces a clean panic).
+
+   **Batch 2 — the 6 parser layout peels DONE** (`type_element_size` mod 3742, `wrap_vector_get_val`
+   mod 3778, `emit_set_one_element` mod 4354, `substitute_type_in_value` mod 3089, `seeds_vector_hint`
+   control 6770, `parse_field` narrow-alias def 2527) — all `match … → match ….base()`. One was
+   crash-FALSIFIABLE: a struct with a `(integer?, integer)` tuple field was REJECTED
+   ("Tuple struct field cannot contain element of type integer?") → now stores+reads `5 6` both
+   backends. A code-quality hook raised a real hazard — would peeling emit a non-nullable `OpSet*`
+   that mismatches a nullable-aware read opcode? DISPROVEN: there is NO nullable-scalar-store opcode
+   (the `*Nullable` ops are vector/arith only), and `set_field_check` ALSO peels to base — both use
+   the same `OpSet*`. Empirically a `u8?` field round-trips 200 / 254 (max-usable) / null correctly
+   on both backends. Validation: gate-OFF byte-identical, suite green (only chrome #450), instrument
+   green gate-ON.
+
+   **`to_default` (data 946) — DEFERRED, needs a DN1 design decision (NOT guessed).** Today
+   `Optional → _ => Value::Null` (wrong storage width). The fix is a one-liner, but the VALUE is a
+   semantics call: peel-to-base-zero (`Value::Int(0)` — width-correct + matches how plain `integer`
+   already defaults to 0) **vs** the typed null sentinel (an uninitialized nullable defaults to
+   `null`). Recommend settling it WITH the DN1 flip (it's gated behind `change_var` reachability
+   anyway) — leaning peel-to-base-zero for consistency, but it deserves an explicit choice.
+
+   **New finding (DN4 × Optional, → Family F):** a narrow nullable tuple-literal element rejects a
+   fitting value — `(254, 200): (u8?, u8?)` errors "cannot implicitly narrow integer to u8" while
+   the non-nullable `(u8, u8)` accepts 254. The DN4 narrowing fit-check computes the usable range
+   wrong for an Optional target. Not a store/sentinel bug; a DN4-check peel (operators.rs).
 2. **Family B** (`change_var`) — unblock locals; re-run `optional-flow-instrument.loft` extended
    with nullable LOCALS to see which interp sites (Family, below) become reachable.
 3. **Reachable interp peels** — the now-reachable subset of the 13 (set_var, tuple ops).
