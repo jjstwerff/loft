@@ -208,6 +208,18 @@ otherwise reallocating the buffer frees the source. The materialise decision at
 the alias/copy test. This is the F1/F2 caller-materialise of the slice plan, now with the
 exact target IR proven.
 
+**Build site + risk (located).** The merge is emitted by `chain_site_set_shape`
+(`control.rs:4880`), called from the **MidReturn work-ref** legs of the one-buffer NRVO
+machinery (`control.rs:5277` and `:5362`) — the densest ownership logic in the tree
+(@PLN85/@PLN59 Cluster A/C, the STABILITY_ROADMAP **#1 weakness**). The suppression condition:
+the chained `Call(d, args)`'s callee `d` returns a borrow of a parameter (its `returned`
+deps name an attr) **and** that parameter's actual arg is the reuse var `w` → then do NOT
+emit `{ w = call; w }`; instead keep `w` (the subject) and allocate a **separate** return
+buffer, and materialise `OpAppendVector(out, call)`. Because this edits the #1-weakness
+machinery, the build is gated and validated on BOTH the proven matrix (named / temp / escape,
+value + length + leak, `LOFT_POISON`) **and** the full suite (one_buffer_chain is exercised
+across crawler/moros) before landing — not a rushed change.
+
 ## Connection back
 
 This is the `Borrow`-set growth the @PLN90 north-star is about: field-return moves from
