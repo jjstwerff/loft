@@ -446,14 +446,20 @@ ABI gates in emit.rs/calls.rs. Same `.base()` peel, mechanical.
    to validate each fix.** (Not a leak: `Node { next: Node? }` "field has no position" is a
    PRE-EXISTING recursive-value-struct limitation — non-nullable self-ref fails identically,
    gate-OFF too — not @PLN25.)
-   **UPDATE (Family D piece (i) landed): Family C is now REACHABLE and has a CONFIRMED leak.** With
-   text? locals working, a leak-stress (200× loop: `s = "lit"; s = maybe(false)`) leaks 2 sites on
-   BOTH backends (`LOFT_STORES=warn`), while the SAME loop on plain `text` is clean — so it's a
-   text?-SPECIFIC leak in the reassignment-from-CALL path (a single decl/reassign is leak-clean).
-   This is the deps/ownership work the family describes — now falsifiable by the leak instrument.
-   Pick it up as a focused Family C session (the dangerous deps area; don't rush it at the tail of
-   a long session). The other C sites (`slot_kind`/`owned_elements`/`has_lifetime_concern`) re-audit
-   now that text?/S? flow.
+   **RESOLVED (focused Family C session): NO reachable leak. The earlier "confirmed leak" was a
+   FALSE POSITIVE.** With text? locals now working, I built the leak matrix and ran the AUTHORITATIVE
+   checks: native `LOFT_NATIVE_LEAK_CHECK` (prints "stores not freed at program exit") and the interp
+   `tests/leak.rs::leaks_for` harness (`collect_store_leaks()`, gate-ON via `LOFT_PLN25_OPT=1`). A
+   text? local churned 50× in a loop — reassigned from BOTH a literal and a `text?`-returning call,
+   and a text? FIELD reassigned + nulled — are leak-clean on BOTH backends. The instrument fires (48
+   leak tests pass). **The earlier "2 leaks" came from misusing `LOFT_STORES=warn`** — that prints
+   `Dead assignment`/`Variable never read` WARNINGS (whose `-->` location lines my grep counted as
+   leaks), NOT store leaks (the interp leak instrument is `LOFT_STORES=summary` / the `leaks_for`
+   harness). So Family C's static flags (`slot_kind`/`owned_elements`/`has_lifetime_concern`) are
+   CONSERVATIVE-BUT-UNREACHED — the free path handles Optional(Text/ref) correctly in practice
+   (`element_size`/`element_align`/the free machinery peel Optional, or constructs route around the
+   flagged sites). Regression guards added: `tests/leak.rs::pln25_text_opt_{reassign,field_churn}_no_leak`
+   (pass gate-OFF as plain text AND gate-ON as text?). **Family C is a non-issue — close it.**
 5. **Family E + F** — the `matches!` sweep and the feature gaps.
 6. **Family D** — the `text?` return-buffer ABI sub-thread.
 7. **Family G** — E1 with the native typed-null peel; decide E2.
