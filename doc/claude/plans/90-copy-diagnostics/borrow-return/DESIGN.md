@@ -88,4 +88,4 @@ This is the `Borrow`-set growth the @PLN90 north-star is about: field-return mov
 bucket 2 (avoidable, warned) to bucket 1 (auto-eliminated). It is simultaneously @PLN85
 P4's resolution — the same borrowed-yield, compiled correctly as a borrow instead of
 crashing or being copied. See [../phase1-inventory.md](../phase1-inventory.md) and the
-[@PLN85 handoff](../../NEXT-SESSION-match-return.md).
+[@PLN85 handoff](../../85-store-lifetime-retirement/NEXT-SESSION-match-return.md).
