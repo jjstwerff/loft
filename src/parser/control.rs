@@ -1888,6 +1888,33 @@ impl Parser {
     //                '-' | '+' |
     //                '*' | '/' | '%'
     // <operators> ::= <single>  { '.' <field> | '[' <index> ']' } | <operators> <operator> <operators>
+    /// @PLN25 DN1 — does this branch value YIELD null at its tail? A bare `Value::Null`, or the
+    /// typed-null sentinel a bare `null` lowers to when coerced to a scalar (`OpConv*FromNull`).
+    /// Descends `Block`/`Insert`/`Span` to the tail. Used so an `if`/`match` whose branch is a
+    /// bare null widens the result to `Optional(τ)` under DN1 (the absorbed-branch-null fix).
+    fn branch_yields_null(&self, v: &Value) -> bool {
+        match v.unspan() {
+            Value::Null => true,
+            Value::Block(bl) => bl
+                .operators
+                .last()
+                .is_some_and(|o| self.branch_yields_null(o)),
+            Value::Insert(ops) => ops.last().is_some_and(|o| self.branch_yields_null(o)),
+            // A nested `if`/`else if` (and `match`, which lowers to nested `if`) yields null when
+            // ANY arm does — descend both so `else if c { 6 } else { null }` widens the outer if.
+            Value::If(_, then_b, else_b) => {
+                self.branch_yields_null(then_b) || self.branch_yields_null(else_b)
+            }
+            Value::Call(d, args)
+                if args.is_empty() && (*d as usize) < self.data.definitions.len() =>
+            {
+                let n = self.data.def(*d).name();
+                n.starts_with("OpConv") && n.ends_with("FromNull")
+            }
+            _ => false,
+        }
+    }
+
     pub(crate) fn parse_if(&mut self, code: &mut Value) -> Type {
         let mut test = Value::Null;
         let tp = self.expression(&mut test);
@@ -1949,8 +1976,25 @@ impl Parser {
             }
         }
         self.vars.restore_write_state(&write_state);
+        // @PLN25 DN1: a branch that yields a bare `null` makes the if-expression NULLABLE — its
+        // result widens to `Optional(τ)` where τ is the non-null SCALAR sibling's type. The bare
+        // null is otherwise coerced to the sibling's typed-null sentinel and the if types as a
+        // plain `τ`, hiding the nullability; widening here lets the existing DN3 `(N-Store)` force
+        // the caller to declare `τ?` or discharge. Only fires when exactly one branch yields null
+        // and the other is a non-null scalar (heap types stay nullable; both-null stays as-is).
+        let mut result_tp = merge_dependencies(&true_type, &false_type);
+        if crate::keys::pln25_dn1_enabled() && !matches!(result_tp, Type::Optional(_)) {
+            let t_null = self.branch_yields_null(&true_code);
+            let f_null = self.branch_yields_null(&false_code);
+            if t_null != f_null {
+                let other = if t_null { &false_type } else { &true_type };
+                if Self::is_non_null_scalar(other) {
+                    result_tp = Type::optional(other.clone());
+                }
+            }
+        }
         *code = v_if(test, true_code, false_code);
-        merge_dependencies(&true_type, &false_type)
+        result_tp
     }
 
     /// @PLN85 match_return (LOFT_JOIN_OWN): an arm that yields a borrowed-view vector

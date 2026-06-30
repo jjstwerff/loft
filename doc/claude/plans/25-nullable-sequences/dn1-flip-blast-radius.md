@@ -85,7 +85,24 @@ correct, not a hack. The stdlib stays byte-identical gate-OFF (`17-min-max-clamp
 the stdlib LOADS and only USER code gets the rejection. At step (f) — DN1 default — the stdlib gets
 properly migrated (`min`/`max` cleaned, the test updated) and the exemption removed.
 
-## ⚠️ KNOWN GAP (narrowed) — only the IF/MATCH-branch absorbed-null
+## IF-branch absorbed-null — FIXED (match-arm remaining)
+
+**`if`/`else` with an absorbed bare-null branch is now caught under DN1** (`parse_if`, control.rs):
+when exactly one branch yields a bare `null` (detected by `branch_yields_null`, which descends
+`Block`/`Insert`/`Span`/`If`) and the other is a non-null scalar `τ`, the if-expression's result
+type widens to `Optional(τ)` — and the existing DN3 `(N-Store)` then forces the caller to declare
+`τ?` or discharge. Matrix (both backends): `if b {5} else {null}` / `if b {null} else {5}` / the
+nested `else if c {6} else {null}` all REJECT into a non-null return; `-> integer?`, no-null,
+discharged (`?? 0`), both-null, and a HEAP-reference null branch (`else { null }` of a `Node`
+return — stays nullable, no Optional) all ACCEPT. gate-OFF byte-identical; suite green.
+
+**Remaining: MATCH arms.** `match d { North => 5, South => null }` returned into `integer` does NOT
+yet reject — `parse_match` (control.rs ~2186) exempts a `Null` arm-type from the unify check and
+leaves `result_type` the scalar. The match VALUE lowers to a nested `if` (so `branch_yields_null`
+would see it), but the result TYPE is computed in the per-handler arm loop. Same widening needs
+applying there (track a null arm, widen `result_type` to `Optional(τ)` under DN1).
+
+## ⚠️ (historical) KNOWN GAP (narrowed) — the IF/MATCH-branch absorbed-null
 
 The DN1 rejection FIRES on every DIRECT bare-`null` store (verified gate-ON, `n_store_violation`
 instrumented): explicit `return null` (`parse_return`), a typed-scalar store (`x: integer = null`,
