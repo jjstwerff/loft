@@ -252,15 +252,25 @@ source, `3 arg _mvcopy_1` owned buffer), and the CALLER adopts (`r:vector["__ref
 argument (`OpFreeRef(cell)`). Native fully clean; the simple case (`deliver` alone) is clean + value-
 correct (asserts pass) on interp too. The earlier "POISON crash" was an INSTRUMENT ARTIFACT — `deliver3`
 itself SIGSEGVs under `LOFT_POISON` on this shape.
-**THE BLOCKER (scoped): a two-pass def-numbering corruption when OTHER functions are present.** With
-`e_default`/`filler` also defined, interp SIGSEGVs (`d_nr=u32::MAX` — a corrupted call target); with
-`deliver` alone it is clean. So synthesising at `parse_match` (`create_unique`/`vector_db`/`vector_def`)
-introduces a cross-pass inconsistency in the def/type numbering — pass 2's `vector_db` mints entities
-pass 1 does not, shifting later defs. NEXT: make the synthesis pass-consistent (mint the fresh local +
-its `__vdb`/vector-type identically on BOTH passes — investigate `create_unique`/`vector_def` def
-allocation order), OR move the wrap into the arm-body parse where user `o = []` already does this
-consistently. (The earlier `ref_return` materialise block is now vestigial — the synthesis supersedes
-it; clean it up once this lands.)
+**THE BLOCKER — CORRECTED (the "def-numbering" diagnosis below was WRONG; probing untangled THREE
+separate things).**
+1. **The matrix crashes were MASKING a PRE-EXISTING parser bug.** Defining `e_default` AND `filler`
+   together (both DEAD code, never called) crashes interp **flag-OFF** — `deliver`+`e_default` alone is
+   clean, `deliver`+`filler` alone is clean, only BOTH crash (`d_nr=u32::MAX`). EVERY matrix file
+   carries both, so their "match_return CRASH" was largely this bug, not the over-free or my synthesis.
+   → file as a separate issue (a 2-function parser def/type corruption).
+2. **The "POISON crash" was an INSTRUMENT ARTIFACT** — `deliver3` itself SIGSEGVs under `LOFT_POISON`
+   on this shape, so POISON verdicts on this family are unreliable.
+3. **The REAL residual: the copy mechanism is broken, not the structure.** On a CLEAN over-free repro
+   (`mr-clean`: borrowed-binding return + churn pressure, NO `e_default`/`filler`) the synthesis produces
+   the exact `deliver3` IR but is **non-deterministic** (flips clean/crash) and a two-arm variant
+   ASSERTs (wrong length). Cause: `o += items` (whole-vector append of a BORROWED, `skip_free` source)
+   is SHALLOW on interp — `copyv` (`o += <OWNED param>`) is deep and survives churn. So `r` still
+   aliases the subject. `deliver3` deep-copies element-wise via `?? e_default()` — but that needs a
+   default constructor, NOT generally synthesisable. NEXT (the real task): either FIX the interp
+   `OpAppendVector` to deep-copy a borrowed source (general improvement, see `fill.rs::append_vector`),
+   or synthesise an element-wise deep copy without a default. (The earlier `ref_return` materialise
+   block is vestigial — the synthesis supersedes it; clean up once the copy is deep.)
 
 **SETTLED — the analysis is SUFFICIENT; the fix is purely codegen STRUCTURE (synthesise `o`).**
 Probed the question "can the analysis aid here?": the oracle classifies BOTH `deliver` (materialised)
