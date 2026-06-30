@@ -1824,6 +1824,33 @@ impl Parser {
         }
     }
 
+    /// @PLN25 slice (c) — the `(N-Store)` teeth at a STORE site (typed assignment, field
+    /// construction, an index, a return). An un-discharged nullable `τ?` cannot be committed
+    /// to a non-nullable target — discharge it first with `?? <default>` or `match` (both
+    /// yield the non-null base). UNLIKE `convert`, this runs ONLY at store sites, so null-CHECK
+    /// comparisons (`x == null`) stay legal. Gated on `LOFT_PLN25_DN3`; returns `true` (and
+    /// emits the diagnostic) on a violation. A no-op (returns `false`) off / first pass.
+    fn n_store_violation(&mut self, value_tp: &Type, target_tp: &Type, what: &str) -> bool {
+        if crate::keys::pln25_dn3_enabled()
+            && !self.first_pass
+            && let Type::Optional(inner) = value_tp
+            && !matches!(
+                target_tp,
+                Type::Optional(_) | Type::Void | Type::Never | Type::Null
+            )
+        {
+            let nm = inner.name(&self.data);
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "a nullable `{nm}?` cannot be stored into {what} of the non-null type `{}` — discharge it first with `?? <default>` or `match`",
+                target_tp.name(&self.data)
+            );
+            return true;
+        }
+        false
+    }
+
     fn convert(&mut self, code: &mut Value, is_type: &Type, should: &Type) -> bool {
         // @PLAN48 P2: implicitly narrowing a loft `integer` to a smaller explicit
         // width (e.g. `integer` → `i32`) loses data and must be an explicit `as`.
