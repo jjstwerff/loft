@@ -298,8 +298,18 @@ native default/typed-null path, ties to `default_native_value` 896); E2 `"{x}"` 
 (collections 1219 / append_data) — a design call.
 
 ### Recommended fix-sequence (each ends green gate-ON, both backends)
-1. **Family A ungated** — mirror the sibling twins; instrument with the layout/SIGSEGV probes.
-   `type_elm` first (neutralises downstream). Start here: cheapest, certain, highest-stakes.
+1. **Family A ungated — the 4 sibling-pair misses DONE** (`align`/`tuple_def`-align/`type_elm`/
+   `Data::rust_type`, mirror the proven twin). Validation: gate-OFF byte-identical introspect ✓,
+   full suite green (only the pre-existing chrome `html_asyncify` #450 fails — env), instrument
+   green gate-ON both backends ✓, wasm rlib rebuilds clean ✓. **Honest caveat:** these are the
+   latent FOUNDATION layer — not independently crash-falsifiable today (their triggers are
+   routed-around / silent-UB misalignment / masked by the interp+native tuple bugs that crash
+   FIRST — e.g. `(g(),5)` panics at `emit_tuple_put_ops` before `tuple_def` align matters). They
+   are validated by construction (twin-parallelism) + byte-identical, not by a flipped probe;
+   they must land first so that once the tuple/interp bugs are fixed, correct layout is already
+   underneath (else silent offset corruption replaces a clean panic). The remaining Family A
+   parser layout sites (mod 3742/3778/4354/3089, control 6770, def 2527, data `to_default` 946)
+   are NOT yet done.
 2. **Family B** (`change_var`) — unblock locals; re-run `optional-flow-instrument.loft` extended
    with nullable LOCALS to see which interp sites (Family, below) become reachable.
 3. **Reachable interp peels** — the now-reachable subset of the 13 (set_var, tuple ops).

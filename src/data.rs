@@ -3968,7 +3968,10 @@ impl Data {
             // stack-slot inflation (to 20B) happens at read-back, not
             // here — the GROUP's storage view is what matters.
             let sz = element_size(t) as u16;
-            let align = match t {
+            // @PLN25: peel `Optional(τ)` to its base so the inline align matches the
+            // peeled `element_size` above — an `Optional(Integer)` tuple element is sz=8
+            // and must be align=8, not the `_ => 1` that corrupts LinkedFieldGroup offsets.
+            let align = match t.base() {
                 Type::Boolean | Type::Enum(_, false, _) => 1,
                 Type::Single | Type::Character | Type::Function(_, _, _) => 4,
                 Type::Integer(_) | Type::Float => 8,
@@ -4752,6 +4755,10 @@ impl Data {
     pub fn type_elm(&self, tp: &Type) -> u32 {
         match tp {
             Type::Rewritten(t) => self.type_elm(t),
+            // @PLN25: `Optional(τ)` resolves to its base's element def (mirrors the sibling
+            // `type_def_nr`). Missing this returned `u32::MAX` → `data.def(MAX)` panic / a
+            // silently-skipped field for a nullable vector/field element.
+            Type::Optional(t) => self.type_elm(t),
             Type::Integer(_) => self.source_nr(0, "integer"),
             Type::Boolean => self.source_nr(0, "boolean"),
             Type::Float => self.source_nr(0, "float"),
@@ -4864,6 +4871,10 @@ impl Data {
             Type::Unknown(_) => "??",
             Type::Iterator(_, _) => "Iterator",
             Type::Keys => "&[Key]",
+            // @PLN25: `Optional(τ)` shares its base's Rust type (sentinel storage) — mirrors
+            // the `generation::rust_type` twin. Missing this panicked the native bridge
+            // generator on an `integer?`/`text?` attribute.
+            Type::Optional(inner) => return self.rust_type(inner, context),
             _ => panic!("Incorrect type {}", tp.name(self)),
         }
         .to_string()

@@ -1752,6 +1752,10 @@ pub fn size(tp: &Type, context: &Context) -> u16 {
 // S3: called by the aligned V2 allocator (`slots_v2::assign_slots_v2`).
 pub fn align(tp: &Type) -> u8 {
     match tp {
+        // @PLN25: `Optional(τ)` shares its base's sentinel storage — same align as the
+        // base (mirrors `size`, which already peels). Missing this aligned an `integer?`
+        // stack slot to 1 instead of 8 → misaligned i64 reference → UB/SIGSEGV.
+        Type::Optional(inner) => align(inner),
         Type::Boolean | Type::Enum(_, false, _) => 1,
         Type::Single | Type::Character => 4,
         Type::Integer(_) | Type::Float | Type::Function(_, _, _) => 8,
