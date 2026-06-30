@@ -643,3 +643,97 @@ fn local_source_leaks_without_join_own() {
         );
     }
 }
+
+// ── @PLN85 match_return — the gated owned-copy synthesis (P1) ───────────────────
+// `jo_copy_borrowed_arm_yield` (src/parser/control.rs) rewrites a borrowed enum-field
+// arm yield (`Filled { items } => { items }`) into an owned copy
+// (`{ o = []; o += items; o }`), so the return escapes OWNED rather than as a view
+// into the match subject. Two plain-loft codegen bugs blocked it — the gen_if arm-join
+// discard and the empty value-block push (tests/scripts/441 + 442) — and are now fixed,
+// so the whole-append owned copy "just works" (no element-loop synthesis needed).
+
+const MATCH_RETURN_SRC: &str = r#"
+struct E { hp: integer not null, name: text }
+enum Cell { Empty, Filled { items: vector<E> } }
+fn deliver(e: Cell) -> vector<E> { match e { Filled { items } => { items }, _ => { [] } } }
+fn filler(n: integer) -> integer { es: vector<E> = []; for j in 0..n { es += [E{hp:j, name:"f"}]; } return len(es); }
+fn main() {
+  inner: vector<E> = []; for k in 0..3 { inner += [E{hp:k * 10, name:"m"}]; }
+  cell = Filled { items: inner };
+  for i in 0..6 {
+    r = deliver(cell); acc = 0; for f in 0..6 { acc += filler(6); }
+    assert(len(inner) == 3, "src corrupted i{i}={len(inner)}");
+    assert(len(r) == 3, "match-return len i{i}={len(r)}");
+    assert(r[0].hp == 0 && r[2].hp == 20, "match-return values i{i}");
+    e = deliver(Empty {});
+    assert(len(e) == 0, "empty-arm i{i}={len(e)}");
+  }
+  print("match-return ok\n");
+}
+"#;
+
+/// Run `loft introspect` on a source, optionally with `LOFT_JOIN_OWN`; return stdout
+/// (the IR dump, used to read the emitted return-type dependency).
+fn introspect(src: &str, join_own: bool) -> String {
+    use std::hash::{Hash, Hasher};
+    let dir = std::env::temp_dir().join("loft_join_own");
+    std::fs::create_dir_all(&dir).expect("probe dir");
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    src.hash(&mut h);
+    "introspect".hash(&mut h);
+    join_own.hash(&mut h);
+    let path = dir.join(format!("introspect_{:016x}.loft", h.finish()));
+    std::fs::write(&path, src).expect("write probe");
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_loft"));
+    cmd.arg("introspect").arg(&path).env("LOFT_NO_CACHE", "1");
+    if join_own {
+        cmd.env("LOFT_JOIN_OWN", "1");
+    }
+    let out = cmd.output().expect("spawn loft introspect");
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// The `deliver` function's IR signature line from an introspect dump (carries the
+/// top-block dependency set, e.g. `…["__retbuf", "e"]`).
+fn deliver_signature(dump: &str) -> String {
+    dump.lines()
+        .find(|l| l.starts_with("fn n_deliver(e:ref"))
+        .unwrap_or_else(|| panic!("no deliver signature in introspect dump:\n{dump}"))
+        .to_string()
+}
+
+/// The gated synthesis is value-correct AND leak-free on BOTH backends now that the
+/// blocking codegen bugs are fixed — the whole-append owned copy "just works".
+#[test]
+fn join_own_match_return_synthesis_both_backends() {
+    for backend in ["--interpret", "--native"] {
+        let (stdout, stderr) = run_backend(MATCH_RETURN_SRC, backend, true);
+        assert!(
+            stdout.contains("match-return ok"),
+            "{backend} value-incorrect under LOFT_JOIN_OWN:\nstdout:{stdout}\nstderr:{stderr}"
+        );
+        assert!(
+            !stderr.contains("not freed"),
+            "{backend} leaks under LOFT_JOIN_OWN:\n{stderr}"
+        );
+    }
+}
+
+/// The GATE discriminator. The borrowed-arm return BORROWS the match subject `e`
+/// without the flag (`["__retbuf", "e"]`) and is OWNED with it (`["__retbuf"]`). The
+/// runtime is clean either way now (the over-free no longer surfaces as a leak once
+/// the codegen bugs are fixed), so the emitted return dependency is the flag's
+/// observable effect — this pins that the synthesis is what strips the borrow.
+#[test]
+fn join_own_match_return_strips_the_borrow() {
+    let off = deliver_signature(&introspect(MATCH_RETURN_SRC, false));
+    let on = deliver_signature(&introspect(MATCH_RETURN_SRC, true));
+    assert!(
+        off.contains("[\"__retbuf\", \"e\"]"),
+        "without the flag deliver should borrow `e`, got: {off}"
+    );
+    assert!(
+        on.contains("[\"__retbuf\"]"),
+        "with the flag deliver should be owned (no `e` borrow), got: {on}"
+    );
+}
