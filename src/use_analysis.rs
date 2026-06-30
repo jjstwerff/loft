@@ -116,6 +116,10 @@ struct Uses {
     op_append: u32,
     op_database: u32,
     op_free: u32,
+    /// @PLN90 — `OpCopyRecord` def_nr: a record deep-copy (`v[i] = e`, a `?? E{…}` default
+    /// element, a struct copy). Not append-based, so the var-buffer / construction /
+    /// return-buffer branches never see it; recorded here so the decision covers it.
+    op_copy_record: u32,
     projections: HashSet<u32>,
     value_readers: HashSet<u32>,
     /// Pre-order position counter — a total order on nodes that, OUTSIDE loops,
@@ -141,6 +145,10 @@ struct Uses {
     /// (`S { f: src }`) and `x.field += src` — the source is deep-copied into the field,
     /// which the var-buffer copy idiom above never sees. Recorded so the decision covers it.
     construct_copy: Vec<(Option<u16>, Option<u16>)>,
+    /// @PLN90 — `OpCopyRecord` deep-copies: `(target base var, source base var)`. A record
+    /// copy (`v[i] = e`, a `?? E{…}` default element, a struct copy) — not append-based, so
+    /// the branches above miss it. The same-var no-op alias is excluded when recorded.
+    record_copy: Vec<(Option<u16>, Option<u16>)>,
     /// Vars that appeared in a non-reader position (⇒ not borrow-eligible). The
     /// copy-fill `OpAppendVector(v, src.f)` is *excluded* — it is the copy machinery,
     /// not a user mutation of `v`.
@@ -267,6 +275,26 @@ impl Uses {
                     self.visit(a, Ctx::ReaderArg);
                 }
             }
+            Value::Call(d, args) if *d == self.op_copy_record => {
+                // @PLN90 — `OpCopyRecord(target, source, tp)` deep-copies one record. Record
+                // it for coverage, skipping the same-var no-op alias (`OpCopyRecord(x, x)`,
+                // the ref_return-promoted callee whose return aliases its buffer — the
+                // runtime short-circuits it). Visit args exactly as the generic Call arm
+                // would, so no existing fact changes.
+                let tgt = args.first().and_then(|a| base_var(a, self.get_field));
+                let src = args.get(1).and_then(|a| base_var(a, self.get_field));
+                if !(tgt.is_some() && tgt == src) {
+                    self.record_copy.push((tgt, src));
+                }
+                let c = if self.value_readers.contains(d) {
+                    Ctx::ReaderArg
+                } else {
+                    Ctx::Other
+                };
+                for a in args {
+                    self.visit(a, c);
+                }
+            }
             Value::Call(d, args) => {
                 if *d == self.op_database
                     && let Some(Value::Var(vdb)) = args.first().map(Value::unspan)
@@ -308,6 +336,7 @@ fn analyze_fn(
         op_append: data.def_nr("OpAppendVector"),
         op_database: data.def_nr("OpDatabase"),
         op_free: data.def_nr("OpFreeRef"),
+        op_copy_record: data.def_nr("OpCopyRecord"),
         projections: projection_ops(data),
         value_readers: value_reader_ops(data),
         ineligible: HashSet::new(),
@@ -322,6 +351,7 @@ fn analyze_fn(
         copyfill_pos: HashMap::new(),
         copyfill_in_loop: HashSet::new(),
         construct_copy: Vec::new(),
+        record_copy: Vec::new(),
     };
     u.visit(code, Ctx::Other);
 
@@ -465,6 +495,20 @@ fn analyze_fn(
             source: src.unwrap_or(u16::MAX),
             verdict: Verdict::Copy,
             reason: "struct/enum field owns its data (construction/field-append copy)",
+        });
+    }
+
+    // @PLN90 phase 1 — record deep-copies (`OpCopyRecord`): a `v[i] = e` element-slot set,
+    // a `?? E{…}` default element, a struct copy. Not append-based, so the var-buffer /
+    // construction / return-buffer paths above never see them. Emit a Copy row so the
+    // decision covers the copy. Diagnostic only — never an `ElidePlan`, no codegen change.
+    for &(tgt, src) in &u.record_copy {
+        rows.push(VerdictRow {
+            var_nr: tgt.unwrap_or(u16::MAX),
+            var_name: tgt.map_or_else(|| "<record>".to_string(), |t| function.name(t).to_string()),
+            source: src.unwrap_or(u16::MAX),
+            verdict: Verdict::Copy,
+            reason: "record deep-copy (OpCopyRecord)",
         });
     }
     (rows, plans)

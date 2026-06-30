@@ -136,16 +136,37 @@ Verified: `n_field_return` now shows a Copy row; regression test
 `field_return_copy_is_covered_by_the_verdict`; suite byte-identical (issues 746,
 use_analysis 15).
 
-## Remaining coverage gap (next step)
+## Record-copy coverage — DONE (route 1, step 3 — the last gap)
 
-One copy shape still bypasses the decision (visible in `LOFT_COPY_DUMP`, absent from
-`LOFT_MATERIALIZE_DUMP`): **`OpCopyRecord`** record copies — `build_with_default`'s
-`?? E{…}` element loop and element-slot sets (`v[i] = e`). These are not append-based, so
-neither the var-buffer idiom nor the two new branches see them. Fix: record `OpCopyRecord`
-emission sites and emit a Copy row, the same diagnostic-only way.
+`OpCopyRecord` deep-copies one record — `v[i] = e`, a `?? E{…}` default element, a struct
+copy. Not append-based, so none of the branches above saw it. The visitor now has an
+`OpCopyRecord` arm (recording `(target, source)` base vars, skipping the same-var no-op
+alias), and `analyze_fn` emits a Copy row `[record deep-copy (OpCopyRecord)]`. Diagnostic
+only — never an `ElidePlan`. Pinned by `record_copy_is_covered_by_the_verdict`.
+
+## Phase-1 coverage COMPLETE — parity proven
+
+Every copy `LOFT_COPY_DUMP` shows on the corpus now has a `LOFT_MATERIALIZE_DUMP` decision
+row:
+
+| runtime copy (`LOFT_COPY_DUMP`) | decision row (`LOFT_MATERIALIZE_DUMP`) |
+|---|---|
+| vector-append ×4 | `append_vec` Copy · `field_return` Copy (return buffer) · `bx` Copy (construction) · `cell` Copy (construction) |
+| record ×3 (one `OpCopyRecord` site, 3 loop iterations) | `build_with_default` Copy (OpCopyRecord) |
+| (none) | `assign_field` **Borrow** — correctly NOT a copy |
+
+The four copy idioms the decision now classifies: **var-buffer** (`o = src` / `o += src`,
+pre-existing) · **construction / field-append** (`S { f: src }`, `x.field += src`) ·
+**return buffer** (`b.rows` → `__retbuf`) · **`OpCopyRecord`** record copies. Together these
+are the two runtime copy ops (`vector_add`, `do_copy_record`) every structure copy funnels
+through — so the decision covers every emission. *Caveat for phase 2:* var/source
+attribution is sometimes coarse (`<record>` / `u16::MAX` when `base_var` can't resolve a
+complex target) — fine for coverage, to be sharpened for the warning message.
 
 ## Status
 
-DONE: instrument, corpus, inventory + gap, route picked, **construction + field-return
-coverage landed + tested** (the two append-based gaps closed). Suite green; diagnostic-only,
-byte-identical when off. NEXT: the last gap — `OpCopyRecord` record copies.
+**DONE — phase 1 coverage complete.** The copy-vs-borrow decision now classifies every
+structure copy the runtime dump shows (var-buffer + construction + return-buffer +
+`OpCopyRecord`). All additions are diagnostic-only `Copy` rows (never an `ElidePlan`, no
+codegen change); suite byte-identical (issues 746, use_analysis 16). NEXT (phase 2): emit
+the user-facing lint off these rows — avoidable vs forced, with the existing-lever hint.

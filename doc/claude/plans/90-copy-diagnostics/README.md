@@ -10,20 +10,20 @@ Full design + failure-path enumeration: [COPY_DIAGNOSTICS.md](../../COPY_DIAGNOS
 
 ## Status
 
-**Phase 1 started — instrument + inventory landed.** The design is written
-([COPY_DIAGNOSTICS.md](../../COPY_DIAGNOSTICS.md)). Phase 1 (make the copy-vs-borrow
-decision cover every emission) has its first step done: the `LOFT_COPY_DUMP` instrument
-(runtime ground truth for every deep structure copy + size), a corpus, and the measured
-coverage gap — see [phase1-inventory.md](phase1-inventory.md). **Key finding:** the
-current verdict covers only vector-copy bindings (`o = src` / `o += src`); **struct/enum
-construction (dominant), whole field-returns, and even a plain `a = s` bind all copy
-silently, outside the decision.** **Route 1 (extend the verdict's domain)** chosen — the facts live only in the post-parse
-verdict pass; the emit sites are too early (see [phase1-inventory.md](phase1-inventory.md)
-§ Route decision). **Steps 1–2 DONE:** the verdict now emits a Copy row for (1) struct/enum-construction /
-field-append copies (the dominant category) and (2) field / whole-vector return-buffer
-copies (`b.rows` → `__retbuf`) — both diagnostic only (never an `ElidePlan`, no codegen
-change), pinned by `use_analysis::{construction,field_return}_copy_is_covered_by_the_verdict`.
-NEXT: the last gap — `OpCopyRecord` record copies (`?? E{…}` element loops, `v[i] = e`).
+**Phase 1 COMPLETE — the decision covers every structure-copy emission.** The design is
+written ([COPY_DIAGNOSTICS.md](../../COPY_DIAGNOSTICS.md)); phase 1 is done — see
+[phase1-inventory.md](phase1-inventory.md). The `LOFT_COPY_DUMP` instrument gives the
+runtime ground truth; the verdict (`use_analysis`, **route 1** — extend its domain, since
+the facts live only in the post-parse pass) now classifies all four copy idioms:
+**var-buffer** (`o = src`, pre-existing) · **construction / field-append** (`S { f: src }`)
+· **return buffer** (`b.rows` → `__retbuf`) · **`OpCopyRecord`** record copies (`v[i] = e`,
+`?? E{…}`). Parity proven on the corpus (every `LOFT_COPY_DUMP` copy has a `MAT` decision
+row). All additions are diagnostic-only `Copy` rows — never an `ElidePlan`, no codegen
+change; suite byte-identical (issues 746, use_analysis 16). Pinned by
+`use_analysis::{construction,field_return,record}_copy_is_covered_by_the_verdict`.
+
+NEXT — **phase 2**: emit the user-facing lint off these rows (avoidable vs forced, with the
+`&` / restructure hint). Coarse var/source attribution in some rows is to be sharpened there.
 
 Wanted **before @PLN85 closes**: we often miss that a copy is happening, and that blind
 spot is shaping what we build (the @PLN85 owned-copy match-return synthesis manufactures

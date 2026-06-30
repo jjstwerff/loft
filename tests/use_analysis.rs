@@ -795,3 +795,30 @@ fn field_return_copy_is_covered_by_the_verdict() {
         "the field-return copy should carry the return-buffer reason; dump:\n{stderr}"
     );
 }
+
+// ── @PLN90 phase 1 — the `OpCopyRecord` record copy is covered (the last gap) ──
+// `v[i] = e` deep-copies the record `e` into the element slot. This is not append-based,
+// so neither the var-buffer idiom nor the construction / return-buffer branches see it;
+// now a Copy row covers it (diagnostic only). The same-var no-op alias is excluded.
+const RECORD_COPY_SRC: &str = r#"
+struct E { hp: integer not null, name: text }
+fn set_one(v: vector<E>, e: E) -> integer { v[1] = e; return v[1].hp; }
+fn main() {
+  v: vector<E> = []; for k in 0..3 { v += [E{hp:k, name:"v"}]; }
+  e = E{hp:99, name:"z"};
+  r = set_one(v, e);
+  assert(r == 99, "set");
+  print("record-copy ok\n");
+}
+"#;
+
+#[test]
+fn record_copy_is_covered_by_the_verdict() {
+    let stderr = dump(RECORD_COPY_SRC);
+    assert!(
+        stderr
+            .lines()
+            .any(|l| l.contains("fn=n_set_one ") && l.contains("record deep-copy (OpCopyRecord)")),
+        "the `v[i] = e` record copy should be classified Copy [record deep-copy]; dump:\n{stderr}"
+    );
+}
