@@ -714,6 +714,12 @@ jobs:
         run: cargo build --release --bin loft
       - name: Index hygiene (broken @-tags + markdown links)
         run: cargo nextest run --profile ci -E 'binary(index_hygiene)'
+      - name: Feature-catalogue shadow in sync (@PLN92 strand 3)
+        # Regenerates doc/features/ + tests/docs/features/ from the committed
+        # index/features.json snapshot and fails on any diff — the no-drift
+        # guard.  Reuses the release loft binary built above.  Advisory (this
+        # whole job is), so drift shows red without blocking merge.
+        run: make features-check
 
   # Markdown-renderer smoke test (the loft-view HTTP renderer).  Extracted from
   # the per-platform `Test` matrix: it tests platform-independent rendering (no
