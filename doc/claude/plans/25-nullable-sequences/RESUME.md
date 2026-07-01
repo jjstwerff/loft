@@ -177,6 +177,21 @@ tightenings**. In order, each ends green (never carry two phases' breakage):
       `??` OPERATOR, not division; the correct rule is "result is `τ?` iff the fallback is nullable,"
       but flipping it has its own blast radius (every `a ?? nullableVar` currently discharges). `?? null`
       itself is a pathological no-op idiom. Deferred as a distinct `??`-typing slice.
+    - **INDEX (`v[i]`) FLIP — foundation DONE + measured, DEV-GATED (`c0aad2b2`).** `v[i]` types `τ?`
+      (OOB → null sentinel), the last fault-op source. INERT by default (gate `LOFT_INDEX_DEV`; default
+      suite byte-behaviour unchanged) while landing. Mechanism: `parse_vector_index` sets `last_index_fit`,
+      `parse_index` wraps the element `Optional` when unfit. Fit-proofs (`index_provably_fit`, matching the
+      warning walk's skips): non-negative constant; for-loop iter var (via `vars.is_active_loop_var` — no new
+      stack); `if idx < len(vec)` guard (new `index_bounded: Vec<(u16,VecKey)>` fed by REUSING the walk's now-
+      `pub(crate)` `collect_guard_pairs`/`VecKey`/`vec_key`, pushed THEN-only in `parse_if`). **MEASURED
+      (dev-gate ON): 165 undefended-read warnings → just ~8 GENUINE N-Store rejects** — 3 corpus (repro_p356
+      OOB-probes ×2, 85-borrow `xs[i]`), 5 issues (p124 `arr[idx]` ×2, p155, p170 `v[len-1]`, p379). The lib
+      compiler (130 warnings) stores NONE of its v[i] into non-null → 0 rejects. **TO LAND (next):** migrate
+      those ~8 sites (they change test SEMANTICS — return `τ?`/discharge — so careful, not a mechanical `?`);
+      add the len-capture proof (`n=len(v); if i<n`) if migration surfaces it; flip `LOFT_INDEX_DEV` →
+      `pln25_dn1_enabled` + drop the dev-gate; graduate a `tests/scripts/25-index-nullable.loft` accept +
+      `102` reject twin. **Orthogonal gap (separate slice): a nullable passed into a non-null CALL ARG is
+      not an N-Store site** (verified `takes(v[j])` doesn't reject) — affects division equally, not index-specific.
   - **F1c** — ✅ DONE (`85af2b18`): the `change_var` null-local message names `τ?`, no `as`.
   - Gate: `find_problems` green as the DEFAULT (no env) on both backends — ✅ met (exemption in place).
 - **F2 — Retire `not null`** (Phase-5 CLEANUP; ordering load-bearing — AFTER F1). Make the
