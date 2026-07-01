@@ -768,11 +768,17 @@ impl Parser {
             body.push(v_if(not_null, Value::Insert(present), null_set));
             return v_block(body, Type::Void, "nullable_elem_convert");
         }
-        if matches!(f_type, Type::Enum(_, true, _) | Type::Reference(_, _))
+        // @PLN25 index flip — an element WRITE `v[i] = h` is an lvalue slot, not a nullable
+        // read: under the flip `v[i]` types `Optional(Reference/Enum)`, but the slot itself
+        // holds the base record, so a whole-element assign is still a `copy_ref` (OpCopyRecord).
+        // Peel `.base()` so the Optional read-nullability marker doesn't drop it to the generic
+        // op-name path (which errors "Cannot assign to attribute on OpGetVector"). Gate-OFF
+        // inert (no Optional exists → `.base()` is identity → byte-identical).
+        if matches!(f_type.base(), Type::Enum(_, true, _) | Type::Reference(_, _))
             && op == "="
             && !matches!(to, Value::Var(_))
         {
-            return self.copy_ref(to, val, f_type);
+            return self.copy_ref(to, val, f_type.base());
         }
         if matches!(
             *f_type,
