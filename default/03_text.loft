@@ -1,5 +1,6 @@
 // Copyright (c) 2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @F41 — environment & arguments (catalogue anchor, @PLN92)
 // --- Text ---
 // Functions for searching, transforming, and classifying text and character values.
 // Character classification functions return true only if every character in the text satisfies the condition.
@@ -209,7 +210,3 @@ pub fn program_directory(v:  & text = "") -> text;
 pub fn source_dir() -> text;
 #rust"Stores::source_dir_native()"
 #impure(host_io)
-
-// @PLN92 catalogue anchors (kept at file end so tag edits do not shift line
-// numbers that hard-coded tests / generated fixtures reference):
-// @F41
