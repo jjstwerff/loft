@@ -7,8 +7,10 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**Open — `status:next`, active. Runs ALONGSIDE the stabilization work** — tooling over
-docs + source, independent of @PLN85. **Progress:** strand 2 (`scan.loft` `@F`/`@I`
+**DONE — all five strands shipped (2026-07-01); `status:finished` on merge of the
+finishing PR (`Closes @PLN92`).** The catalogue covers the whole language, source-validated,
+with three standing CI guards (drift · example-runs · coverage+hygiene). Was tooling over
+docs + source, run alongside stabilization (independent of @PLN85). **What shipped:** strand 2 (`scan.loft` `@F`/`@I`
 indexing) shipped + verified; Pass 1 done — **80 issues minted** (`@F1`–`@F56`,
 `@I57`–`@I80`) in `loft-lang/features`; **Pass 2 done** — bare `@F`/`@I` source tags at
 the 79/80 implementing sites (build green, comment-only); **Pass 3 authoring done** —
@@ -29,9 +31,10 @@ runnable examples (`tests/docs/features/`), with both CI guards green: no-drift
 Doc hygiene — not a required check). The 90-file debt was driven to **0 uncataloged / 131
 files**: every implementation file now maps to a catalogue entry. **Strand 5 (hygiene)
 SHIPPED** — `scripts/feature_hygiene.sh` (same job) checks dual-anchoring + dangling tags:
-**0 dangling, catalogue fully dual-anchored** bar the `@F43` stub. **Remaining:** only the
-strand-3 follow-on (rendering LOFT.md's per-feature sections + HTML from the issues). This
-README is the single source of truth for per-strand status.
+**0 dangling, catalogue fully dual-anchored** bar the `@F43` stub. **Deferred (optional
+follow-on):** rendering LOFT.md's per-feature sections + HTML from the issues — trigger: if
+those sections start drifting from the issues; LOFT.md's *conceptual* layer stays
+hand-written regardless. This README is the plan's closure record.
 
 ## Goal
 
