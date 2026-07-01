@@ -30,6 +30,19 @@ probe verdicts) → [implementation-steps.md](implementation-steps.md) (the phas
   correctly REJECTED (maybe-null into non-null local); discharge with `?? ""`. **loft has no
   flow-narrowing → that is the eventual ergonomic chokepoint (separate feature).** Regression:
   `tests/scripts/25-nullable-read-consumption.loft` + `tests/pln25_dn1_consumption.rs`.
+- **Sweep (4): the null-using test scripts migrated to `?` (`7b13f5cd`).** ~13 DN1-failing (not
+  ~5). Fix = `?` on the DECLARATION (return type / struct field) that holds null; gate-OFF
+  byte-identical. **9 fully DN1-green** (08-functions, 81-iterator, 79, 84, 91, 299, 32,
+  389-narrow-alias, inline-construct); **2 migrated but with a DN1-native-only codegen gap** (kept +
+  committed, gate-OFF green): 389-h6 (native full-range nullable narrow-int FIELD in a `vector<struct>`
+  not widened to 2-byte → max value swallowed) and 407 (native `character?` null-sentinel E0308);
+  **2 reverted pristine, blocked** on the scalar-`vector<τ?>` slice (292, flagship 25-nullable-sequences).
+- **⚠️ 3 DN1 gaps surfaced by the sweeps (all plan-internal, DN1-gated, NOT GH issues):** (i) scalar
+  `vector<τ?>` element-null is UNWIRED — `e2_nullable_elem` (expressions.rs:2454) only synths
+  `__nullable<S>` for a struct element, drops `?` for scalars → `vector<integer?>` == `vector<integer>`
+  (blocks flagship + 292); (ii) native full-range nullable narrow-int field width in `vector<struct>`
+  (blocks 389-h6 native); (iii) native `character?` null-sentinel E0308 (blocks 407 native). Also: the
+  web consumer `got = raw` store correctly rejects (no flow-narrowing — the eventual ergonomic chokepoint).
 - **`lima-default-borrow-elision` is MERGED to `main`** (via #467/#468/#469 etc.) and the
   branch is deleted. Its scalars Phase-0 + DN4 + N-Arith work is now ON `main`.
 - **@PLN25 now continues on `tuxedo-pln85-fuzz-proof-gate`** (the single live branch, off
