@@ -3739,11 +3739,13 @@ impl Data {
                     arguments[0].name
                 );
             } else {
-                name = format!(
-                    "t_{}{}_{fn_name}",
-                    self.def(type_nr).name.len(),
-                    self.def(type_nr).name
-                );
+                // @PLN25 — the signature key is NULLABILITY-AWARE: a `τ?` receiver/`both`
+                // param appends `?` so `min(τ)` and `min(τ?)` are DISTINCT overloads. The
+                // `type_def_nr` peel still governs LAYOUT (Optional shares the base's
+                // storage); this only distinguishes the def KEY. Gate-OFF no `Optional`
+                // exists, so the name is the base — byte-identical.
+                let sig = Self::sig_type_name(&self.def(type_nr).name, &arguments[0].typedef);
+                name = format!("t_{}{}_{fn_name}", sig.len(), sig);
             }
         } else {
             name = format!("n_{fn_name}");
@@ -3781,13 +3783,22 @@ impl Data {
         }
         if is_self || is_both {
             let type_nr = self.type_def_nr(&arguments[0].typedef);
-            if self.attr(type_nr, fn_name) != usize::MAX {
+            let existing = self.attr(type_nr, fn_name) != usize::MAX;
+            // @PLN25 — a `τ?` overload peels to the base type here, so its type attribute
+            // collides with the `τ` base's (true duplicates were already caught by the
+            // mangled-name check above). The base overload owns the single type attribute;
+            // the `τ?` overload is reachable via its distinct mangled key + the `Dynamic`
+            // dispatcher, so skip re-adding it. (Define the non-null overload first.)
+            if existing && matches!(&arguments[0].typedef, Type::Optional(_)) {
+                // nullability overload — the base owns the type attribute; nothing to add.
+            } else if existing {
                 diagnostic!(lexer, Level::Error, "Cannot redefine field {fn_name}",);
                 return u32::MAX;
+            } else {
+                let a_nr = self.add_attribute(lexer, type_nr, fn_name, Type::Routine(d_nr));
+                self.definitions[type_nr as usize].attributes[a_nr].mutable = false;
+                self.definitions[type_nr as usize].attributes[a_nr].constant = true;
             }
-            let a_nr = self.add_attribute(lexer, type_nr, fn_name, Type::Routine(d_nr));
-            self.definitions[type_nr as usize].attributes[a_nr].mutable = false;
-            self.definitions[type_nr as usize].attributes[a_nr].constant = true;
         }
         if is_both {
             let mut main = self.def_nr(fn_name);
@@ -3803,12 +3814,29 @@ impl Data {
                 arguments[0].typedef,
                 lexer.pos()
             );
-            let name = &self.def(type_nr).name.clone();
-            let a_nr = self.add_attribute(lexer, main, name, Type::Routine(d_nr));
+            // @PLN25 — key the dispatcher attribute by the nullability-aware sig name so a
+            // `min(τ?)` overload lives beside `min(τ)` on the `Dynamic` def.
+            let base = self.def(type_nr).name.clone();
+            let sig = Self::sig_type_name(&base, &arguments[0].typedef);
+            let a_nr = self.add_attribute(lexer, main, &sig, Type::Routine(d_nr));
             self.definitions[main as usize].attributes[a_nr].mutable = false;
             self.definitions[main as usize].attributes[a_nr].constant = true;
         }
         d_nr
+    }
+
+    /// @PLN25 — the nullability-aware signature type-name used to KEY an overload: a `τ?`
+    /// receiver / `both` param appends `?` (so `min(τ)` and `min(τ?)` are distinct def keys),
+    /// else the base type name. The `type_def_nr` peel still governs LAYOUT (Optional shares
+    /// the base's storage); this only distinguishes the def KEY. Gate-OFF no `Optional` is
+    /// constructed, so the result is always the base name — byte-identical.
+    #[must_use]
+    fn sig_type_name(base: &str, typedef: &Type) -> String {
+        if matches!(typedef, Type::Optional(_)) {
+            format!("{base}?")
+        } else {
+            base.to_string()
+        }
     }
 
     #[must_use]
@@ -3817,17 +3845,25 @@ impl Data {
         let is_both = !arguments.is_empty() && arguments[0].name == "both";
         if is_self || is_both {
             let type_nr = self.type_def_nr(&arguments[0].typedef);
-            let name = format!(
-                "t_{}{}_{fn_name}",
-                self.def(type_nr).name.len(),
-                self.def(type_nr).name
-            );
+            let base = self.def(type_nr).name.clone();
+            let sig = Self::sig_type_name(&base, &arguments[0].typedef);
             let struct_source = self.definitions[type_nr as usize].source;
-            let d_nr = self.source_nr(struct_source, &name);
-            if d_nr == u32::MAX {
+            let lookup = |nm: &str| {
+                let d = self.source_nr(struct_source, nm);
                 // Method defined outside the struct's source file (e.g., user extends a
                 // library type). Fall back to the current parse source.
-                self.source_nr(self.source, &name)
+                if d == u32::MAX {
+                    self.source_nr(self.source, nm)
+                } else {
+                    d
+                }
+            };
+            let d_nr = lookup(&format!("t_{}{}_{fn_name}", sig.len(), sig));
+            // @PLN25 — a `τ?` receiver falls back to the base (non-null) overload when no
+            // `τ?` overload exists, so a nullable value still reaches the plain method
+            // (preserves the pre-nullability-key dispatch; inert when sig == base).
+            if d_nr == u32::MAX && sig != base {
+                lookup(&format!("t_{}{}_{fn_name}", base.len(), base))
             } else {
                 d_nr
             }
@@ -3846,14 +3882,19 @@ impl Data {
             // No method dispatch for types like Function; fall back to n_ global.
             return self.source_nr(source, &format!("n_{fn_name}"));
         }
-        let name = format!(
-            "t_{}{}_{fn_name}",
-            self.def(type_nr).name.len(),
-            self.def(type_nr).name
-        );
-        let d_nr = self.source_nr(source, &name);
+        let base = self.def(type_nr).name.clone();
+        let sig = Self::sig_type_name(&base, tp);
+        let d_nr = self.source_nr(source, &format!("t_{}{}_{fn_name}", sig.len(), sig));
         if d_nr != u32::MAX {
             return d_nr;
+        }
+        // @PLN25 — a `τ?` receiver falls back to the base (non-null) overload (inert when
+        // sig == base, i.e. gate-OFF or a non-nullable receiver).
+        if sig != base {
+            let d_nr = self.source_nr(source, &format!("t_{}{}_{fn_name}", base.len(), base));
+            if d_nr != u32::MAX {
+                return d_nr;
+            }
         }
         let d_nr = self.source_nr(source, &format!("n_{fn_name}"));
         if d_nr != u32::MAX {
