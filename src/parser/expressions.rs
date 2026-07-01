@@ -2907,6 +2907,7 @@ use a separate collection or add after the loop"
                 // longer holds once the slot is overwritten.
                 if var_nr != u16::MAX {
                     self.narrowed_non_null.retain(|&x| x != var_nr);
+                    self.divisor_nonzero.retain(|&x| x != var_nr);
                 }
                 if op == "=" && self.last_closure_work_var != u16::MAX && var_nr != u16::MAX {
                     self.closure_vars.insert(var_nr, self.last_closure_work_var);

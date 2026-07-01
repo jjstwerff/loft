@@ -1992,6 +1992,23 @@ impl Parser {
         None
     }
 
+    /// @PLN25 DN3 fault-op — read a non-zero divisor proof out of a parsed `if` condition.
+    /// Returns the var slot proven non-zero in the THEN branch by `if v != 0` (`v` on either
+    /// side of a `0` literal). Only `!= 0` narrows (the else of `if v == 0` is a later slice).
+    fn divisor_proof_from_condition(&self, test: &Value) -> Option<u16> {
+        let Value::Call(op, args) = test.unspan() else {
+            return None;
+        };
+        if !self.data.def(*op).name().starts_with("OpNe") || args.len() != 2 {
+            return None;
+        }
+        let is_zero = |a: &Value| matches!(a.unspan(), Value::Int(0) | Value::Long(0));
+        match (args[0].unspan(), args[1].unspan()) {
+            (Value::Var(v), other) | (other, Value::Var(v)) if is_zero(other) => Some(*v),
+            _ => None,
+        }
+    }
+
     pub(crate) fn parse_if(&mut self, code: &mut Value) -> Type {
         let mut test = Value::Null;
         let tp = self.expression(&mut test);
@@ -2002,6 +2019,13 @@ impl Parser {
         let narrow_base = self.narrowed_non_null.len();
         if let Some((v, true)) = narrow {
             self.narrowed_non_null.push(v);
+        }
+        // @PLN25 DN3 fault-op: `if v != 0` proves the divisor `v` non-zero in the THEN branch,
+        // so `a / v` / `a % v` there is provably fit (types non-null).
+        let divisor = self.divisor_proof_from_condition(&test);
+        let divisor_base = self.divisor_nonzero.len();
+        if let Some(v) = divisor {
+            self.divisor_nonzero.push(v);
         }
         let is_aliases: Vec<(String, Option<u16>)> = self.is_capture_aliases.drain(..).collect();
         let is_bindings: Vec<Value> = self.is_capture_bindings.drain(..).collect();
@@ -2026,6 +2050,8 @@ impl Parser {
         // @PLN25 DN3: leave the then-branch — drop its narrowing; the ELSE gets the `== null`
         // proof (the var is non-null on the else side of `if v == null { … } else { … }`).
         self.narrowed_non_null.truncate(narrow_base);
+        // The `!= 0` divisor proof is THEN-only — the else side has no fit guarantee.
+        self.divisor_nonzero.truncate(divisor_base);
         if let Some((v, false)) = narrow {
             self.narrowed_non_null.push(v);
         }
@@ -2073,6 +2099,7 @@ impl Parser {
         // @PLN25 DN3: both branches parsed — drop any narrowing back to the enclosing level
         // (the proof holds only inside the if/else, not after it).
         self.narrowed_non_null.truncate(narrow_base);
+        self.divisor_nonzero.truncate(divisor_base);
         // @PLN25 DN1: a branch that yields a bare `null` makes the if-expression NULLABLE — its
         // result widens to `Optional(τ)` where τ is the non-null SCALAR sibling's type. The bare
         // null is otherwise coerced to the sibling's typed-null sentinel and the if types as a

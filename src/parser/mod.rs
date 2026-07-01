@@ -403,6 +403,11 @@ pub struct Parser {
     /// Pushed on entry to the proven branch, truncated to the saved length on exit; a
     /// reassignment of `v` inside the branch removes it (the proof no longer holds).
     pub(crate) narrowed_non_null: Vec<u16>,
+    /// @PLN25 DN3 fault-op narrowing — local-var slots PROVEN non-zero by an enclosing
+    /// `if v != 0 { … }` guard. A division/mod whose divisor is in this set (or a constant
+    /// non-zero literal) is provably fit and types NON-null; otherwise it types `τ?`. Same
+    /// push/truncate/invalidate discipline as `narrowed_non_null`.
+    pub(crate) divisor_nonzero: Vec<u16>,
     /// Plan-07 phase 4h — site of the most recently parsed field
     /// read.  Set by `Parser::field()` after each read, taken by
     /// `handle_null_coalesce` to mark the read as defended when
@@ -634,6 +639,7 @@ impl Parser {
             field_read_counts: std::collections::HashMap::new(),
             defended_field_reads: std::collections::HashSet::new(),
             narrowed_non_null: Vec::new(),
+            divisor_nonzero: Vec::new(),
             last_field_read_site: None,
             #[cfg(feature = "registry")]
             advisory_checked: std::collections::HashSet::new(),

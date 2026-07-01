@@ -1700,6 +1700,18 @@ impl Parser {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// @PLN25 DN3 — is a division/mod DIVISOR provably non-zero (so `a / v` cannot fault)?
+    /// True for a constant non-zero integer literal, or a var proven non-zero by an enclosing
+    /// `if v != 0` guard (`divisor_nonzero`). Anything else can be zero → the result is `τ?`.
+    fn divisor_provably_nonzero(&self, divisor: &Value) -> bool {
+        match divisor.unspan() {
+            Value::Int(n) => *n != 0,
+            Value::Long(n) => *n != 0,
+            Value::Var(v) => self.divisor_nonzero.contains(v),
+            _ => false,
+        }
+    }
+
     pub(crate) fn handle_operator(
         &mut self,
         var_tp: &Type,
@@ -1943,12 +1955,22 @@ impl Parser {
                     &[second_type, ctp.clone()],
                 );
             } else {
+                // @PLN25 DN3: integer `/` and `%` PRODUCE null at runtime on a zero divisor
+                // (the C80 sentinel), so the RESULT types `τ?` UNLESS the divisor is provably
+                // non-zero (a constant, or an `if v != 0` guard). The runtime already yields
+                // null; this makes the type carry it so `(N-Store)` forces `?? d` / a `τ?` slot.
+                let div_nullable = (operator == "/" || operator == "%")
+                    && matches!(ctp.base(), Type::Integer(_))
+                    && !self.divisor_provably_nonzero(&second_code);
                 *ctp = self.call_op(
                     code,
                     operator,
                     &[code.clone(), second_code],
                     &[ctp.clone(), second_type],
                 );
+                if div_nullable && crate::keys::pln25_dn1_enabled() {
+                    *ctp = Type::optional(ctp.clone());
+                }
             }
             *parent_tp = tp;
         } else {
@@ -2399,6 +2421,13 @@ impl Parser {
     }
 
     fn emit_undefended_warning(&mut self, kind: FaultKind, ctx: &WarnCtx) {
+        // @PLN25 DN3: division/mod now TYPE `τ?` — the type carries the null and `(N-Store)`
+        // forces discharge, so the runtime-null warning is redundant for them under DN1 (and
+        // fired inconsistently vs the `if b != 0` narrowing). Index ops still type non-null, so
+        // their warning stays until they're flipped too.
+        if crate::keys::pln25_dn1_enabled() && matches!(kind, FaultKind::Div | FaultKind::Rem) {
+            return;
+        }
         let msg = match kind {
             // @P368 — wording: not "integer" (the same `/` warning covers float
             // and single division too).
