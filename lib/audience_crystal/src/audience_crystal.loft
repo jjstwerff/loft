@@ -111,7 +111,7 @@ pub fn palette_r(idx: integer) -> float {
      63.0/255.0, 208.0/255.0, 223.0/255.0,
     230.0/255.0, 124.0/255.0, 156.0/255.0,
   ];
-  rs[idx]
+  rs[idx] ?? 0.0
 }
 pub fn palette_g(idx: integer) -> float {
   gs: vector<float> = [
@@ -120,7 +120,7 @@ pub fn palette_g(idx: integer) -> float {
     200.0/255.0,  70.0/255.0, 216.0/255.0,
     230.0/255.0, 124.0/255.0, 106.0/255.0,
   ];
-  gs[idx]
+  gs[idx] ?? 0.0
 }
 pub fn palette_b(idx: integer) -> float {
   bs: vector<float> = [
@@ -129,7 +129,7 @@ pub fn palette_b(idx: integer) -> float {
     200.0/255.0, 208.0/255.0,  64.0/255.0,
     236.0/255.0, 138.0/255.0,  60.0/255.0,
   ];
-  bs[idx]
+  bs[idx] ?? 0.0
 }
 
 // ── Cell snapshot — input to all crystal generation ──────────────────
@@ -361,8 +361,8 @@ pub fn cell_wz(cy: integer) -> float { cy as float * 1.5 * HEX_SIZE }
 // Per-cell Y height — rises with filled-neighbour count + deterministic
 // jitter (stable across frames).
 pub fn cell_h(snap: CellSnap, ix: integer) -> float {
-  cell_x = snap.xs[ix];
-  cell_y = snap.ys[ix];
+  cell_x = snap.xs[ix] ?? 0;
+  cell_y = snap.ys[ix] ?? 0;
   nbr = snap_nbr_count(snap, cell_x, cell_y);
   base = HEIGHT_BASE + nbr as float * HEIGHT_PER_NBR;
   hh = (cell_x * 73856093) ^ (cell_y * 19349663);
@@ -390,8 +390,8 @@ pub fn cell_h(snap: CellSnap, ix: integer) -> float {
 // count.  Public so consumers (the projector) can precompute centres in
 // O(N) instead of O(N²).
 pub fn cell_h_at(snap: CellSnap, cidx: hash<CellRef[ck]>, ix: integer) -> float {
-  cell_x = snap.xs[ix];
-  cell_y = snap.ys[ix];
+  cell_x = snap.xs[ix] ?? 0;
+  cell_y = snap.ys[ix] ?? 0;
   nbr = nbr_count_idx(cidx, cell_x, cell_y);
   base = HEIGHT_BASE + nbr as float * HEIGHT_PER_NBR;
   hh = (cell_x * 73856093) ^ (cell_y * 19349663);
@@ -430,8 +430,8 @@ fn nbr_colors_idx(snap: CellSnap, cidx: hash<CellRef[ck]>,
   for sa in 0..m {
     for sb in 0..(m - 1) {
       if ixs[sb] > ixs[sb + 1] {
-        ti = ixs[sb];  ixs[sb]  = ixs[sb + 1];  ixs[sb + 1]  = ti;
-        tc = cols[sb]; cols[sb] = cols[sb + 1]; cols[sb + 1] = tc;
+        ti = ixs[sb] ?? 0;  ixs[sb]  = ixs[sb + 1] ?? 0;  ixs[sb + 1]  = ti;
+        tc = cols[sb] ?? 0; cols[sb] = cols[sb + 1] ?? 0; cols[sb + 1] = tc;
       }
     }
   }
