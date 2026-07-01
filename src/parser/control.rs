@@ -1916,6 +1916,31 @@ impl Parser {
         }
     }
 
+    /// @PLN25 DN1 — like [`Self::branch_yields_null`] but does NOT descend into a nested
+    /// `Value::If` (a lowered `match`/`if`). Used by the enum-`match` arm-widening: an arm
+    /// whose value is a DIRECT bare null (`=> null`, lowered to `OpConv*FromNull`, or a block
+    /// ending in one) must widen the match; but an arm whose value is a NESTED match carries
+    /// its own nullability in `a.tp` (folded into `result_type` by the arm-join), and
+    /// descending into its lowered chain would hit its synthesised unreachable
+    /// `OpConv*FromNull` default and falsely widen (p54).
+    fn arm_yields_direct_null(&self, v: &Value) -> bool {
+        match v.unspan() {
+            Value::Null => true,
+            Value::Block(bl) => bl
+                .operators
+                .last()
+                .is_some_and(|o| self.arm_yields_direct_null(o)),
+            Value::Insert(ops) => ops.last().is_some_and(|o| self.arm_yields_direct_null(o)),
+            Value::Call(d, args)
+                if args.is_empty() && (*d as usize) < self.data.definitions.len() =>
+            {
+                let n = self.data.def(*d).name();
+                n.starts_with("OpConv") && n.ends_with("FromNull")
+            }
+            _ => false,
+        }
+    }
+
     /// @PLN25 DN1 — widen a value's result type to `Optional(τ)` when its lowered `code` yields a
     /// bare null and `tp` is a non-null scalar. Safe ONLY where there is no SYNTHESISED unreachable
     /// `OpConv*FromNull` default (a scalar `match` whose `_` arm is user-written, an `if`); an enum
@@ -2717,16 +2742,20 @@ impl Parser {
         // - Plain enum: { match_subj = subject; chain }  (temp var to eval subject once)
         // - Struct enum: chain only  (subject_val is already the original expression/var)
         // L2: hoisted bindings are prepended so field reads happen before the if-chain.
-        // @PLN25 DN1: a user `=> null` arm (or one yielding a bare null) makes the match NULLABLE —
-        // widen the result to `Optional(τ)` (τ the non-null scalar of the other arms), so the
-        // existing DN3 `(N-Store)` forces the caller to declare `τ?` or discharge. Check the USER
-        // `arms`, NOT the lowered `chain`: an exhaustive match synthesises an unreachable
-        // `OpConv*FromNull` default, which would falsely widen EVERY match.
+        // @PLN25 DN1: a user `=> null` arm makes the match NULLABLE — widen the result to
+        // `Optional(τ)` (τ the non-null scalar of the other arms), so the existing DN3
+        // `(N-Store)` forces the caller to declare `τ?` or discharge. Check each USER arm's
+        // TYPE (`a.tp == Null` for a bare-null arm); an arm whose value yields null through its
+        // own sub-expression already carries that in `a.tp`, which the arm-join folded into
+        // `result_type` (so it is `Optional`, and `is_non_null_scalar` is already false).
+        // Do NOT `branch_yields_null(&a.code)` — descending the arm's LOWERED code reaches a
+        // NESTED exhaustive match's synthesised unreachable `OpConv*FromNull` default and
+        // falsely widens (p54: `Wrap { inner } => match inner { Leaf { v } => v }` typed `τ?`).
         if crate::keys::pln25_dn1_enabled()
             && Self::is_non_null_scalar(&result_type)
             && arms
                 .iter()
-                .any(|a| matches!(a.tp, Type::Null) || self.branch_yields_null(&a.code))
+                .any(|a| matches!(a.tp, Type::Null) || self.arm_yields_direct_null(&a.code))
         {
             result_type = Type::optional(result_type);
         }
