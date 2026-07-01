@@ -22,21 +22,31 @@ probe verdicts) → [implementation-steps.md](implementation-steps.md) (the phas
 
 ### ⭐ MOST RECENT — cold-start read this first (branch `tuxedo-pln85-fuzz-proof-gate`)
 
-> **🔴 BRANCH IS RED under a FULL suite run (pre-existing, discovered 2026-07-01b) — the RESUME's
-> per-commit "issues/wrap/format green" claims did NOT cover the whole suite.** A `find_problems`
-> run (DN1 default-on, committed) shows mid-step-f debt, none of it copy-elision:
-> 1. **Store codec does NOT serialize `Type::Optional`** → all `ir_read::*round_trip*` +
->    `ir_schema_roundtrip::corpus_store_codec_round_trips` fail (`t_8integer?_min`'s `Optional(Integer)`
->    reloads as bare `Integer`). A REAL correctness bug (nullable types don't survive save/open);
->    the F1b(b) stdlib `τ?` overloads are the trigger. **Likely blocks the final PR.**
-> 2. **Un-migrated Rust tests** assert pre-DN1/DN3 behavior: `expressions::{call_int_null,call_text_null,
->    bounded_*}`, `exit_codes::div_by_literal_constant_no_warning`, `runtime_warnings::*`,
->    `error_messages::baselines_are_locked_in`, `g2_ir_check::*`.
+> **🟠 BRANCH WAS RED — mid-step-f debt (discovered 2026-07-01b); the whole-suite picture the RESUME's
+> per-commit "issues/wrap/format green" claims never covered. MUCH smaller than a raw `cargo nextest`
+> suggested — run via `find_problems` (it rebuilds cdylibs + clears stale `.loftc`); the
+> multiplayer/viewer/html_asyncify/runtime_warnings failures a raw nextest shows are STALE-FIXTURE /
+> STALE-`.loftc` FALSE FAILURES. The authoritative pre-fix set was 17 real failures, none copy-elision:**
+> 1. **✅ FIXED (`73fe4f6c`) — store codec now serializes `Type::Optional`** (`TyOptional` variant,
+>    disc 25). Cleared all 11: `ir_read::*round_trip*` (9), `ir_schema_roundtrip::corpus_store_codec_round_trips`,
+>    `g2_ir_check`. A nullable type now survives save/open (interp+native+introspect verified).
+> 2. **REMAINING — 6 un-migrated DN1/DN3 Rust tests** (step-f cleanup):
+>    - simple `?`-return migrations: `expressions::{call_int_null, call_text_null}` (return null from a
+>      non-null fn — DN1 correctly rejects; migrate the return type to `τ?`).
+>    - DN3 op-body migrations: `expressions::{bounded_mixed_type_operator, bounded_unary_operator}`
+>      (`self.value / divisor` / `% modulus` — variable divisor → genuinely `integer?`; defend or `-> τ?`).
+>    - `exit_codes::div_by_literal_constant_no_warning` — the constant-divisor fit-proof already WORKS
+>      (`divisor_provably_nonzero`, operators.rs:2023); the failing part is a VARIABLE divisor `c / y`
+>      into `-> integer`, which DN3 (N-Store) now correctly REJECTS instead of the old runtime warning.
+>      **Design question:** is the "division may produce null" runtime warning RETIRED under DN3 (the
+>      type + N-Store supersede it — same call as retiring the index `VectorIndex` warning at flip time)?
+>      Migrate the test accordingly (assert the reject, or use `-> integer?` to keep a warning path).
+>    - golden-baseline refresh: `error_messages::baselines_are_locked_in` (DN1/DN3 message changes).
 > 3. **clippy** — pre-existing `operators.rs:1716 handle_operator` (8/7 args).
-> 4. **Environmental** — multiplayer/viewer (registry republish), html_asyncify (chrome).
 >
-> These are the real @PLN25 green-gate blockers, HIGHER priority than index Steps 2-6 (which all need
-> `find_problems` green). Recommend clearing (1)+(2)+(3) next. Detail: [index-f1a-landing.md](index-f1a-landing.md) § BRANCH IS RED.
+> No new real bug remains after the store-codec fix — the 6 are DN1/DN3 test migrations (step-f cleanup;
+> one carries the div-warning-retirement design call). Then index Steps 2-6.
+> Detail: [index-f1a-landing.md](index-f1a-landing.md) § BRANCH IS RED.
 
 **✅ INDEX F1a Step 1 (copy-elision `Optional`-peel) DONE** — `use_analysis` borrower filter now peels
 `.base()` before reading deps, so a mutated/escaping `e = v[i]: Item?` KEEPS the copy (was a SILENT

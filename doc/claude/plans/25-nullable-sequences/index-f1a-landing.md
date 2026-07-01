@@ -90,22 +90,28 @@ borrower KEEPS the copy). Starting points found this session:
 
 </details>
 
-> **⚠️ BRANCH IS RED (pre-existing, NOT caused by Step 1) — surfaced 2026-07-01 by a full-suite run.**
-> A raw `cargo nextest`/`find_problems` run of the whole suite (DN1 default-on, committed) shows
-> substantial mid-step-f debt that the RESUME's targeted "issues/wrap/format green" claims did not
-> cover. None of it is copy-elision (the failure scan found NO borrow/elision/leak test failing):
-> 1. **Store codec does not serialize `Type::Optional`** — every `ir_read::*round_trip*` +
->    `ir_schema_roundtrip::corpus_store_codec_round_trips` fails: `t_8integer?_min`'s
->    `Optional(Integer)` reloads as bare `Integer` (a REAL correctness bug — nullable types don't
->    survive save/open; the F1b(b) stdlib `τ?` overloads are the trigger). **Likely blocks the final PR.**
-> 2. **Un-migrated Rust tests** assert pre-DN1/DN3 behavior under the now-committed flip:
->    `expressions::{call_int_null, call_text_null, bounded_*}`, `exit_codes::div_by_literal_constant_no_warning`,
->    `runtime_warnings::*`, `error_messages::baselines_are_locked_in`, `g2_ir_check::*`.
+> **🟠 BRANCH WAS RED (pre-existing, NOT caused by Step 1) — surfaced 2026-07-01b by a full-suite run.**
+> Mid-step-f debt the RESUME's targeted "issues/wrap/format green" claims did not cover. **Run via
+> `find_problems`, NOT raw `cargo nextest`** — the wrapper rebuilds cdylibs + clears stale `.loftc`; a
+> raw nextest shows multiplayer/viewer/html_asyncify/runtime_warnings as STALE-FIXTURE FALSE failures.
+> The authoritative pre-fix set was **17 real failures**, none copy-elision:
+> 1. **✅ FIXED (`73fe4f6c`) — store codec now serializes `Type::Optional` (`TyOptional` variant, disc 25).**
+>    Cleared all 11 store-codec failures (`ir_read::*round_trip*`, `corpus_store_codec_round_trips`,
+>    `g2_ir_check`). Root: `ir_store::write_type` peeled the wrapper (persisted `Optional(Integer)` as
+>    `Integer`); read had no arm. Note: a full `extract.py` regen is currently unsafe (the binary's
+>    `--show-rust` now emits `db.dbref()` for struct-ref fields, which extract.py drops + would shift
+>    offsets) — the `TyOptional` schema line is hand-added, `ir.loft` is the source of truth.
+> 2. **REMAINING — 6 un-migrated DN1/DN3 Rust tests** (step-f cleanup, all test migrations — NO new real
+>    bug): `expressions::{call_int_null, call_text_null}` (return null from a non-null fn → `-> τ?`);
+>    `expressions::{bounded_mixed_type_operator, bounded_unary_operator}` (`/`,`%` variable divisor →
+>    defend or `-> τ?`); `exit_codes::div_by_literal_constant_no_warning` (the constant-divisor fit-proof
+>    already WORKS — `divisor_provably_nonzero`; the failing part is a VARIABLE divisor `c / y` into
+>    `-> integer` that DN3 now correctly REJECTS vs the old warning → carries the design call of whether
+>    the runtime div-warning is retired under DN3, like the index warning); `error_messages::baselines_are_locked_in`
+>    (golden refresh).
 > 3. **Pre-existing clippy warning** — `operators.rs:1716 handle_operator` (8/7 args, DN3-division).
-> 4. **Environmental** — multiplayer/viewer (registry web republish, per RESUME), html_asyncify (chrome).
 >
-> These are the real @PLN25 "green gate" blockers — higher priority than index Steps 2-6, which all
-> depend on `find_problems` green. Recommend: clear (1)+(2)+(3) before continuing the index flip.
+> Recommend: the 6 migrations (one carries the div-warning-retirement call) + clippy, then continue the index flip.
 
 **Step 2 — lib compiler migration (`dir`/`last`/`parser_debug`/`wasm_dir`).** Under `LOFT_INDEX_DEV=1`,
 find the `v[i]`-into-non-null sites in `lib/parser.loft` + `lib/code.loft` that reject (or that a
