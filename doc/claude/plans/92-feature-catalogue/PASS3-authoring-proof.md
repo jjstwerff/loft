@@ -142,11 +142,34 @@ fn main() {
 }
 ```
 
-## If the answer is GO
+## Result — GO taken (2026-07-01)
 
-These three are done. Work down the catalogue from here, prioritising the **terse**
-sections where the lift is largest; the strand-3 automation extracts each `Example` into
-`tests/docs/@F<n>.loft` and renders the docs.
+GO, and the full catalogue is now authored: **79/80 issues** (`@F` 55/56 + `@I` 24/24;
+`@F43` random deferred as a library). Each `@F` `## Example` was run byte-identical on
+`--interpret` and `--native` before push. 9 authored by hand, 70 across 6 parallel
+author-agents; spot-checked for the `## What` / `## How` / `## Example` shape + plain
+non-technical prose across the null / functions / math / IR areas — consistent and clean.
+
+**The decisive ROI evidence was a by-product of authoring, not of the format.** Because
+every `## Example` is *run*, authoring surfaced reference errors that un-runnable
+fragments had hidden for a long time:
+
+- **`sizeof(integer)` documented as `4`** (LOFT.md § Sizeof) — it is **8**. Fixed.
+- **`n: integer = null`** shown as a valid annotation (loft-write skill) — the language
+  **rejects** it (`use … 'as'`); the idiom is `null as integer`. Fixed.
+- A third suspected gap — an enum struct-variant inside a vector literal — was a **false
+  alarm**: an agent's probe used non-loft qualified syntax (`Shape.Circle { … }`); the
+  canonical **bare** form (`Circle { … }`) works in every position (assignment, vector
+  literal, call arg). No language gap — the verification loop self-corrected the
+  mis-report.
+
+That is the improvement made concrete: the tested-example format enforces *correctness*,
+not just consistency + a value line — the very thing the [Success criterion](README.md#success-criterion--gated-on-doc-improvement)
+gated on.
+
+**Remaining for @PLN92** (not part of this proof): strand-3 sync automation (render the
+in-project mirror + extract each `## Example` → `tests/docs/@F<n>.loft` + the two CI
+guards), strand-4 coverage gate, strand-5 hygiene.
 
 ## See also
 

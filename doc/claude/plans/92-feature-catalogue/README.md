@@ -10,9 +10,16 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 **Open — `status:next`, active. Runs ALONGSIDE the stabilization work** — tooling over
 docs + source, independent of @PLN85. **Progress:** strand 2 (`scan.loft` `@F`/`@I`
 indexing) shipped + verified; Pass 1 done — **80 issues minted** (`@F1`–`@F56`,
-`@I57`–`@I80`) in `loft-lang/features`. **Design settled:** the *issue is the canonical,
-self-contained doc; everything else derives one-way* (see [The model](#the-model)). This
-README is the single source of truth for per-strand status.
+`@I57`–`@I80`) in `loft-lang/features`; **Pass 2 done** — bare `@F`/`@I` source tags at
+the 79/80 implementing sites (build green, comment-only); **Pass 3 authoring done** —
+**79/80 issues fully authored** (`@F43` random deferred as a library), every `@F`
+`## Example` run byte-identical on `--interpret` + `--native`. **ROI gate cleared** (see
+[Success criterion](#success-criterion--gated-on-doc-improvement)): authoring tested
+examples caught real reference errors, now fixed. **Design settled:** the *issue is the
+canonical, self-contained doc; everything else derives one-way* (see
+[The model](#the-model)). **Remaining:** strand-3 sync automation + CI guards, strand-4
+coverage gate, strand-5 hygiene. This README is the single source of truth for per-strand
+status.
 
 ## Goal
 
@@ -37,6 +44,15 @@ named args, `@F29` match, `@F22` closures) as self-contained what/how/tested-exa
 issues and compare side-by-side with today's LOFT.md sections. **Materially better** →
 build the minimal scaffolding to scale it. **Not** → stop. An afternoon of writing, not
 a build. This is the falsification test for the whole plan.
+
+**Result — GATE CLEARED (2026-07-01).** Pass 3 authored 79/80 issues; the proof
+([PASS3-authoring-proof.md](PASS3-authoring-proof.md)) found the lift *significantly
+better for the terse half, modest for the already-detailed half*. The decisive evidence
+came from the authoring itself: because **every `## Example` is run**, authoring caught
+reference errors a fragment never would — `sizeof(integer)` documented as `4` (it is
+**8**) and an `n: integer = null` idiom the language **rejects** (the form is
+`null as integer`). Both fixed. That is the improvement made concrete — the format
+enforces *correctness*, not just consistency.
 
 ## Effort + design
 
@@ -107,7 +123,7 @@ already have** — not a new testing or doc-rewrite mechanism.
 |---|---|---|
 | **1 — Identity** | **Done** | `loft-lang/features` stood up; **80 issues minted** (`@F1`–`@F56`, `@I57`–`@I80`); `kind:feature`/`kind:infra` labels. |
 | **2 — Scanner / index** | **Shipped** | `scan.loft` indexes `@F`/`@I` (same byte-scan as `@P`, no trailing-letter rule); `idx tag:`/`prefix:` work; verified on match + reject cases. |
-| **3 — Authoring + issue→project sync (the value)** | Open | **Author** the self-contained issues (what/how/tested-example); a generator renders them into a committed in-project mirror (agents `grep`/`idx`) and **extracts each `## Example` into `tests/docs`** (CI-run); LOFT.md per-feature sections + HTML render from the issues. Two CI guards: regen-and-diff (no drift) + example-must-run. **This strand carries the doc-improvement payoff — the plan lives or dies here.** |
+| **3 — Authoring + issue→project sync (the value)** | **Authoring done (79/80); sync open** | ✅ **Authored** the self-contained issues (what/how/tested-example) — 79/80, `@F` examples cross-backend-verified; **ROI gate cleared** (caught + fixed real doc drift). ⬜ Still open: a generator that renders them into a committed in-project mirror (agents `grep`/`idx`) and **extracts each `## Example` into `tests/docs`** (CI-run); LOFT.md per-feature sections + HTML render from the issues; the two CI guards (regen-and-diff, example-must-run). **This strand carried the doc-improvement payoff — the gate is cleared; the automation makes it durable.** |
 | **4 — Source-coverage gate (keystone)** | Open | Per-region span attribution to `@F`/`@I`; per-region threshold *K* + ratcheting residue budget (reuse `.lint_comments_baseline`); CI gate. The only genuinely new mechanism. |
 | **5 — Hygiene** | Open | Every `@F`/`@I` declared once + dual-anchored (≥1 doc + ≥1 code); optionally fold in the cross-doc status-drift check (the @P251 class). |
 
@@ -131,13 +147,13 @@ reviewed as a whole before any tag is written, and source tags land before doc t
 - [ ] Emit the proposed mapping as a **review artifact** (region → proposed `@F`/`@I` + title) — written down, nothing created or tagged yet.
 - [ ] Review for **coverage + granularity** (every substantial region claimed; `@I` stays coarse), then **create the approved entries** as `loft-lang/features` issues — this mints the `@F###`/`@I###` numbers.
 
-**Pass 2 — Details pass: write the tags in the SOURCE.** *(in progress — the `@F17` slice proved the multi-location `idx` footprint; **mostly unrelated to the authoring/ROI gate** — this is coverage + discoverability groundwork)*
-- [ ] Write the bare `// @F<n>` / `// @I<n>` at each implementing site (per-function for `@F`, subsystem-level for `@I`).
-- [ ] `make index` + `idx features` / `idx infra` to confirm each tag links to its code site.
+**Pass 2 — Details pass: write the tags in the SOURCE. ✅ DONE** *(bare `@F`/`@I` tags at the 79/80 implementing sites; build green, comment-only; **unrelated to the authoring/ROI gate** — coverage + discoverability groundwork)*
+- [x] Write the bare `// @F<n>` / `// @I<n>` at each implementing site (per-function for `@F`, subsystem-level for `@I`).
+- [x] `make index` + `idx features` / `idx infra` to confirm each tag links to its code site.
 - [ ] Seed the **coverage gate** (strand 4) baseline at the now-current unattributed count; ratchet down from there.
 
-**Pass 3 — Authoring pass: write the self-contained feature doc IN THE ISSUE.** *(the substantive work — careful prose, not harvest; **this is where the docs improve, and where the ROI gate applies**)*
-- [ ] For each `@F`, author the standalone body — `## What it is` (precise), `## How it aids you` (concrete), `## Example` (inline, runnable) — **zero deferral to the project**. For each `@I`, a full role description + source-region locator.
+**Pass 3 — Authoring pass: write the self-contained feature doc IN THE ISSUE. ✅ AUTHORING DONE** *(the substantive work — careful prose, not harvest; **this is where the docs improve, and where the ROI gate applies**; 79/80 authored, `@F` examples cross-backend-verified — automation + anchors below still open)*
+- [x] For each `@F`, author the standalone body — `## What it is` (precise), `## How it aids you` (concrete), `## Example` (inline, runnable) — **zero deferral to the project**. For each `@I`, a full role description + source-region locator. *(79/80; `@F43` random deferred as a library.)*
 - [ ] Run the strand-3 automation: render the in-project mirror + extract `## Example` → `tests/docs`; the two CI guards (regen-diff, example-runs) must be green.
 - [ ] Place the `<!-- @F<n> -->` doc anchor where the rendered per-feature section lands.
 - [ ] Run the **hygiene checks** (strand 5): every entry declared once + dual-anchored (≥1 doc + ≥1 code).

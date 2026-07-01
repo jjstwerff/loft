@@ -1361,7 +1361,7 @@ Panics at runtime if the condition is false.
 ## Sizeof
 
 ```
-sizeof(integer)    // 4
+sizeof(integer)    // 8
 sizeof(u8)         // 1 (packed field size)
 sizeof(u16)        // 2
 sizeof(MyStruct)   // sum of packed field sizes
