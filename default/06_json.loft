@@ -13,6 +13,7 @@
 /// Typed union of JSON values.  The discriminant (1..6) picks the
 /// active variant; variant data lives in the variant's fields.
 /// Matches the six RFC 8259 kinds.
+// @F42 — JSON (json_parse / JsonValue / Type.parse / to_json)
 pub enum JsonValue {
   JNull,
   JBool   { value: boolean },

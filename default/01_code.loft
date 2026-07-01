@@ -109,6 +109,7 @@ fn OpPutBool(var: const u16, value: boolean);
 #rust"s.put_var(@var, @value);"
 fn OpNot(v1: boolean) -> boolean;
 #rust"@v1 != 1"
+// @F39 — math & trigonometry library
 // --- Math ---
 // Functions for numeric computation.
 // All trigonometric functions work in radians.
@@ -1094,6 +1095,7 @@ fn OpEqBool(v1: boolean, v2: boolean) -> boolean;
 #rust"@v1 == @v2"
 fn OpNeBool(v1: boolean, v2: boolean) -> boolean;
 #rust"@v1 != @v2"
+// @F44 — logging & diagnostics API (log_*, print, assert, panic)
 // --- Output and Diagnostics ---
 fn OpPanic(message: text);
 #rust"panic!(\"{{}}\", @message);"

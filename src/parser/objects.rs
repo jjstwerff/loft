@@ -178,6 +178,7 @@ impl Parser {
             return t;
         }
         if self.lexer.has_token("(") {
+            // @F45 — sizeof()
             if name == "sizeof" {
                 t = self.parse_size(code);
             } else if name == "type_name" {

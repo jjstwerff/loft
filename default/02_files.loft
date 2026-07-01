@@ -49,6 +49,7 @@ pub fn ok(self: FileResult) -> boolean {
 // Fields: path (full path), size (file size in bytes), format (open mode),
 // current (byte position after last read), next (byte position to read next).
 
+// @F40 — file & directory I/O (+ durable-store binding)
 pub struct File {
   path: text,
   // 24

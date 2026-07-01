@@ -433,6 +433,7 @@ impl Parser {
     }
 
     // <typedef> ::= 'type' <identifier> '=' <type_def> [ 'size' '(' <integer> ')' ] ';'
+    // @F46 — type aliases (type X = …)
     pub(crate) fn parse_typedef(&mut self) -> bool {
         if !self.lexer.has_token("type") {
             return false;

@@ -300,6 +300,7 @@ impl Parser {
                 Some("type")
             } else if self.lexer.peek_token("interface") {
                 Some("interface")
+            // @F47 — library imports / module system (use forms, pub)
             } else if self.lexer.peek_token("use") {
                 Some("use")
             } else if self.lexer.peek_token("pub") {
