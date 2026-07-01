@@ -25,8 +25,9 @@ runnable examples (`tests/docs/features/`), with both CI guards green: no-drift
 `tests/native.rs::native_features`). **Strand 4 (source-coverage gate) SHIPPED** —
 `scripts/feature_coverage.sh` ratchets a file-level attribution baseline
 (`.feature_coverage_baseline`): a new implementation file with no `@I`/`@F` tag fails
-`--check` (wired advisory into the index-hygiene CI job). Seeded at **90 uncataloged /
-131 files** — pre-existing debt, now visible + ratcheting down. **Remaining:** strand-5
+`--check` runs in its own red-but-non-blocking **Feature coverage** CI job (same posture
+as Doc hygiene — not a required check). The 90-file debt was driven to **0 uncataloged /
+131 files**: every implementation file now maps to a catalogue entry. **Remaining:** strand-5
 hygiene (and, as a strand-3 follow-on, rendering LOFT.md's per-feature sections + HTML
 from the issues). This README is the single source of truth for per-strand status.
 
@@ -136,7 +137,7 @@ already have** — not a new testing or doc-rewrite mechanism.
 | **1 — Identity** | **Done** | `loft-lang/features` stood up; **80 issues minted** (`@F1`–`@F56`, `@I57`–`@I80`); `kind:feature`/`kind:infra` labels. |
 | **2 — Scanner / index** | **Shipped** | `scan.loft` indexes `@F`/`@I` (same byte-scan as `@P`, no trailing-letter rule); `idx tag:`/`prefix:` work; verified on match + reject cases. |
 | **3 — Authoring + issue→project sync (the value)** | **Shipped (core); LOFT.md/HTML render deferred** | ✅ **Authored** 80/81 self-contained issues (`@F43` deferred as a library); ROI gate cleared (caught + fixed real doc drift). ✅ **Sync automation** — `tools/features/gen.loft` (@I81) reads the committed `index/features.json` snapshot and regenerates the mirror `doc/features/` (agents `grep`/`idx` + a generated TOC) + 45 runnable examples `tests/docs/features/`; fragments (library/syntax examples, no `fn main`) + the unauthored stub are mirrored/skipped, not run-tested. ✅ **Two CI guards green** — no-drift (`make features-check`, wired into the index-hygiene job) + example-must-run on both backends (`tests/features.rs` interpret, `tests/native.rs::native_features`). ⬜ Follow-on: render LOFT.md per-feature sections + user-facing HTML from the issues. |
-| **4 — Source-coverage gate (keystone)** | **Shipped (file-level; advisory)** | `scripts/feature_coverage.sh` — a file is attributed if it carries any `@I` (coarse subsystem) or `@F` (per-capability) tag; an untagged impl file over the `MIN_LINES` floor is uncataloged. Ratchets `.feature_coverage_baseline` (mirrors `lint_comments.sh`: `--baseline`/`--check`/`--prune`); `--check` fails on any NEW uncataloged file, wired advisory into the index-hygiene CI job. Seeded at **90/131**. *Scope note:* file-level (matching coarse `@I`) — it doesn't force a fresh `@F` on a new function inside an already-tagged subsystem; that stays review judgement. Promote to a required check once the baseline is driven down. |
+| **4 — Source-coverage gate (keystone)** | **Shipped (file-level; 0 debt)** | `scripts/feature_coverage.sh` — a file is attributed if it carries any `@I` (coarse subsystem) or `@F` (per-capability) tag; an untagged impl file over the `MIN_LINES` floor is uncataloged. Ratchets `.feature_coverage_baseline` (mirrors `lint_comments.sh`: `--baseline`/`--check`/`--prune`); `--check` fails on any NEW uncataloged file, run in a dedicated red-but-non-blocking **Feature coverage** CI job (not a required check — same posture as Doc hygiene). Baseline driven **90 → 0 / 131**: every impl file maps to a catalogue entry. *Scope note:* file-level (matching coarse `@I`) — it doesn't force a fresh `@F` on a new function inside an already-tagged subsystem; that stays review judgement. |
 | **5 — Hygiene** | Open | Every `@F`/`@I` declared once + dual-anchored (≥1 doc + ≥1 code); optionally fold in the cross-doc status-drift check (the @P251 class). |
 
 ## Phase ordering
