@@ -14,7 +14,9 @@ beside today's LOFT.md.
 
 **Method.** Authored **@F17** (named args), **@F29** (match), **@F22** (closures). Each
 example was run on **both** backends (`--interpret` + `--native`) and produced identical
-output — so they qualify as the tested examples the format requires.
+output. The three drafts are **now live** in
+[`loft-lang/features`](https://github.com/loft-lang/features) issues #17, #29, #22 —
+subjects as their own headers, user-facing prose, no technicalities.
 
 ## Verdict
 
@@ -49,19 +51,23 @@ won't deliver that — depth is writing, feature by feature.
 
 ## The three authored drafts
 
+Live in issues #17 / #29 / #22. Reproduced here as the recorded evidence.
+
 ### @F17 — Named arguments + default parameter values
 
-**## What it is** — Any parameter can be passed by name (`name: value`) instead of by
-position, and any parameter may declare a default (`= expr`) used when the argument is
-omitted. Positionals come first; after the first named argument every argument must be
-named; any skipped parameter must have a default.
+#### What it is
 
-**## How it aids you** — Removes two daily frictions: memorising argument order, and
-passing a long tail of arguments just to reach the one you care about. Call sites
-document themselves (`connect(host: "db", port: 5432)`), and adding a new optional
-parameter with a default never breaks existing calls.
+Pass a function's arguments by name — `connect(host: "db", port: 5432)` — instead of only
+in order, and give parameters default values so callers can leave them out.
 
-**## Example** *(identical on `--interpret` and `--native`)*
+#### How it aids you
+
+Call sites read like their own documentation, and you can set just the one option you
+care about without listing everything before it. Adding a new optional setting later
+never breaks the calls people already wrote.
+
+#### Example
+
 ```loft
 fn connect(host: text, port: integer = 8080, tls: boolean = true) -> text {
     "{host}:{port} tls={tls}"
@@ -75,26 +81,27 @@ fn main() {
 
 ### @F29 — Pattern matching (match)
 
-**## What it is** — `match` chooses one arm by testing a value against patterns and
-evaluates to that arm's expression. Patterns cover enum variants (with field
-destructuring), scalar literals / ranges / `null`, or-patterns (`a | b`), and a `_`
-wildcard; any arm may add an `if` guard. The compiler requires exhaustiveness — every
-case covered, or a `_`.
+#### What it is
 
-**## How it aids you** — Replaces long `if/else if` ladders and manual variant checks
-with one exhaustive, readable dispatch — and exhaustiveness means adding a new enum
-variant turns every incomplete `match` into a *compile error*, not a silent
-fall-through. As an expression it also assigns its result directly instead of mutating a
-variable across branches.
+`match` picks one branch by comparing a value against a list of patterns, and gives back
+that branch's result. A pattern can be a specific value, a range, several options at
+once, or a catch-all. Every possibility has to be covered.
 
-**## Example** *(both backends)*
+#### How it aids you
+
+One clear choice replaces a long chain of `if` / `else if`, and nothing can slip through
+uncovered. The chosen result drops straight into a variable instead of being set piece by
+piece across branches.
+
+#### Example
+
 ```loft
 fn grade(score: integer) -> text {
     match score {
-        null     => "absent",   // null is a first-class pattern
-        90..=100 => "A",        // inclusive range
-        80..90   => "B",        // exclusive range
-        _        => "other"     // required wildcard
+        null     => "absent",
+        90..=100 => "A",
+        80..90   => "B",
+        _        => "other"
     }
 }
 fn main() {
@@ -106,41 +113,43 @@ fn main() {
 
 ### @F22 — Closures & lambdas
 
-**## What it is** — A lambda (`fn(x: T) -> R { … }`) is an anonymous function value you
-can store, pass, and return. When its body references a variable from the enclosing
-scope it becomes a closure: the referenced values are **copied into the closure at the
-point it is defined** (value semantics, like Rust `move`). A function may return a
-closure; the captured values travel with it.
+#### What it is
 
-**## How it aids you** — Build behaviour on the fly — callbacks for `map`/`filter`,
-small strategies, functions that manufacture other functions (`make_adder(5)`) — without
-a named function for each. Copy-at-definition means the closure's behaviour is fixed when
-created: later reassignment of a captured variable can't change it out from under you,
-removing a class of "why did this callback change?" bugs.
+A closure is a small anonymous function you can keep in a variable, hand to another
+function, or return. It remembers the values it uses from around it, taken at the moment
+you create it.
 
-**## Example** *(both backends)*
+#### How it aids you
+
+Write a short piece of behaviour right where you need it — a callback, a quick rule, or a
+function that builds another function — without naming a separate function for each.
+Because it captures its values when it's made, it keeps behaving the same even if those
+values change afterwards.
+
+#### Example
+
 ```loft
 fn make_adder(n: integer) -> fn(integer) -> integer {
-    fn(x: integer) -> integer { n + x }   // captures n by value
+    fn(x: integer) -> integer { n + x }
 }
 fn main() {
     add5 = make_adder(5);
     println("add5(10) = {add5(10)}");      // add5(10) = 15
     greeting = "Hello";
     greet = fn(name: text) -> text { "{greeting}, {name}" };
-    greeting = "Bye";                      // does NOT affect the closure
-    println(greet("world"));               // Hello, world  (captured at definition)
+    greeting = "Bye";
+    println(greet("world"));               // Hello, world
 }
 ```
 
 ## If the answer is GO
 
-These three drafts become the first authored issues (their examples extracted to
-`tests/docs/@F17.loft` etc. by the strand-3 automation). Then work down the catalogue,
-prioritising the **terse** sections where the lift is largest.
+These three are done. Work down the catalogue from here, prioritising the **terse**
+sections where the lift is largest; the strand-3 automation extracts each `Example` into
+`tests/docs/@F<n>.loft` and renders the docs.
 
 ## See also
 
 - [README.md § Success criterion](README.md#success-criterion--gated-on-doc-improvement) — the ROI gate this tests.
-- [README.md § Backfill checklist](README.md) — Pass 3 is the authoring pass.
+- `loft-lang/features` #17 / #29 / #22 — the live authored issues.
 - `@PLN92` — the tracker issue.
