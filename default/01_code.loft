@@ -16,7 +16,6 @@ pub type text size(4);
 pub type character size(4);
 // Integer subtypes for compact storage in struct fields. Behave as integer in expressions.
 // 0 – 255, 1 byte.
-// @F4 — ranged/width integer types (u8/i8/u16/i16/i32/u32) for compact storage
 pub type u8 = integer limit(0, 255) size(1);
 // -128 – 127, 1 byte.
 pub type i8 = integer limit(-128, 127) size(1);
@@ -109,7 +108,6 @@ fn OpPutBool(var: const u16, value: boolean);
 #rust"s.put_var(@var, @value);"
 fn OpNot(v1: boolean) -> boolean;
 #rust"@v1 != 1"
-// @F39 — math & trigonometry library
 // --- Math ---
 // Functions for numeric computation.
 // All trigonometric functions work in radians.
@@ -130,7 +128,6 @@ fn OpPutInt(pos: const u16, value: integer);
 #rust"s.put_var(@pos, @value);"
 fn OpPutCharacter(pos: const u16, value: character);
 #rust"s.put_var(@pos, @value);"
-// @F1 — null model: in-band sentinels (i64::MIN / NaN / bool 255) + null-fallback arithmetic
 fn OpConvIntFromNull() -> integer;
 #rust"i64::MIN"
 fn OpConvBoolFromNull() -> boolean;
@@ -171,7 +168,6 @@ fn OpMinInt(v1: integer, v2: integer) -> integer;
 #rust"ops::op_min_int(@v1, @v2)"
 fn OpMulInt(v1: integer, v2: integer) -> integer;
 #rust"ops::op_mul_int(@v1, @v2)"
-// @F38 — arithmetic safety (overflow / ÷0 → null, nullable peers)
 fn OpDivInt(v1: integer, v2: integer) -> integer;
 #rust"if @v2 == 0 {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::DivideByZero); i64::MIN }} else {{ ops::op_div_int(@v1, @v2) }}"
 fn OpRemInt(v1: integer, v2: integer) -> integer;
@@ -1096,7 +1092,6 @@ fn OpEqBool(v1: boolean, v2: boolean) -> boolean;
 #rust"@v1 == @v2"
 fn OpNeBool(v1: boolean, v2: boolean) -> boolean;
 #rust"@v1 != @v2"
-// @F44 — logging & diagnostics API (log_*, print, assert, panic)
 // --- Output and Diagnostics ---
 fn OpPanic(message: text);
 #rust"panic!(\"{{}}\", @message);"
@@ -1495,3 +1490,7 @@ pub fn to_text(self: boolean) -> text { "{self}" }
 pub fn to_text(self: character) -> text { "{self}" }
 // Returns the text unchanged — the identity case, so `text` satisfies `Printable` too.
 pub fn to_text(self: text) -> text { self }
+
+// @PLN92 catalogue anchors (kept at file end so tag edits do not shift line
+// numbers that hard-coded tests / generated fixtures reference):
+// @F1 @F4 @F38 @F39 @F44

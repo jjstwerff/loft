@@ -155,7 +155,6 @@ pub fn join(self: vector < text >, sep: text) -> text {
   result
 }
 #pure
-// @F41 — environment & arguments (env vars, arguments(), program dirs, path resolution)
 // --- Environment ---
 // Functions for interacting with the host operating system.
 // Returns the script-level arguments passed after the script path.
@@ -210,3 +209,7 @@ pub fn program_directory(v:  & text = "") -> text;
 pub fn source_dir() -> text;
 #rust"Stores::source_dir_native()"
 #impure(host_io)
+
+// @PLN92 catalogue anchors (kept at file end so tag edits do not shift line
+// numbers that hard-coded tests / generated fixtures reference):
+// @F41

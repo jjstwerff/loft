@@ -49,7 +49,6 @@ pub fn ok(self: FileResult) -> boolean {
 // Fields: path (full path), size (file size in bytes), format (open mode),
 // current (byte position after last read), next (byte position to read next).
 
-// @F40 — file & directory I/O (+ durable-store binding)
 pub struct File {
   path: text,
   // 24
@@ -605,3 +604,7 @@ pub fn resolve(self: text, target: text) -> text {
 }
 #pure
 
+
+// @PLN92 catalogue anchors (kept at file end so tag edits do not shift line
+// numbers that hard-coded tests / generated fixtures reference):
+// @F40

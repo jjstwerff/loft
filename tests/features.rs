@@ -17,7 +17,10 @@ fn feature_examples() -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = match std::fs::read_dir("tests/docs/features") {
         Ok(rd) => rd
             .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("loft")))
+            .filter(|p| {
+                p.extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("loft"))
+            })
             .collect(),
         Err(_) => Vec::new(),
     };
