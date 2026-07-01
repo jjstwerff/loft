@@ -720,6 +720,12 @@ jobs:
         # guard.  Reuses the release loft binary built above.  Advisory (this
         # whole job is), so drift shows red without blocking merge.
         run: make features-check
+      - name: Feature-catalogue source coverage (@PLN92 strand 4)
+        # Fails if a NEW implementation file lands with no @I/@F catalogue tag.
+        # .feature_coverage_baseline grandfathers today's uncataloged files; the
+        # ratchet shrinks it. Advisory (this job is) — promote to a required
+        # check once the baseline is driven down and it's proven stable.
+        run: scripts/feature_coverage.sh --check
 
   # Markdown-renderer smoke test (the loft-view HTTP renderer).  Extracted from
   # the per-platform `Test` matrix: it tests platform-independent rendering (no
