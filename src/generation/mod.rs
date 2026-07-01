@@ -900,6 +900,9 @@ pub(super) fn default_native_value(tp: &Type) -> String {
         // @PLN17: a boolean's null default is the 255 sentinel (storage form u8).
         Type::Boolean => "255u8".into(),
         Type::Text(_) => "Str::new(loft::state::STRING_NULL)".into(),
+        // @PLN25 slice (c): `Optional(τ)` has `τ`'s native default (a `text?` null is the
+        // `Str` sentinel, exactly like `text`) — without this it fell to the `0` catch-all.
+        Type::Optional(inner) => default_native_value(inner),
         Type::Routine(_) => "0_u32".into(),
         Type::Function(_, _, _) => "(0_u32, DbRef::NULL)".into(),
         Type::Reference(_, _)

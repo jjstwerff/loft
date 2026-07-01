@@ -895,7 +895,9 @@ impl Parser {
                 let w = self.materialize_view_return(*td, &mut l[last]);
                 self.ref_return(&[w], l, RetSite::BlockTail);
                 self.nrvo_collapse_tail_set(l, &[w]);
-            } else if let Type::Text(ls) = t {
+            } else if let Type::Text(ls) = t.base() {
+                // @PLN25 slice (c): `.base()` — a `-> text?` return dispatches to the same
+                // work-buffer conversion as `-> text` (text_return re-applies the `?`).
                 self.text_return(ls);
             } else if !vec_arm_handled && let Type::Vector(elm, ls) = t {
                 // @PLN85 / D-own-1 — classify ONCE from the deps fact + tail shape,
@@ -4222,8 +4224,23 @@ impl Parser {
     }
 
     pub(crate) fn text_return(&mut self, ls: &[u16]) {
-        if let Type::Text(cur) = &self.data.definitions[self.context as usize].returned {
-            let mut dep = cur.clone();
+        // @PLN25 slice (c): peel `Optional` — a `-> text?` function needs the SAME
+        // work-buffer conversion (`RefVar(Text)` hidden out-param + `__ret_N` capture) as
+        // `-> text`; without it a `text?` tail whose arm is a concat/work-var fell to the
+        // `Return(Null)` synthesis (the value was freed and null returned). The `?` is
+        // re-applied when the returned type is rewritten below.
+        let (mut dep, ret_is_optional) = match &self.data.definitions[self.context as usize].returned
+        {
+            Type::Text(cur) => (cur.clone(), false),
+            Type::Optional(inner) if matches!(**inner, Type::Text(_)) => {
+                let Type::Text(cur) = &**inner else {
+                    unreachable!()
+                };
+                (cur.clone(), true)
+            }
+            _ => return,
+        };
+        {
             for v in ls {
                 let n = self.vars.name(*v);
                 let tp = self.vars.tp(*v);
@@ -4335,7 +4352,12 @@ impl Parser {
                 }
                 dep.push(a as u16);
             }
-            self.data.definitions[self.context as usize].returned = Type::Text(dep);
+            let new_ret = if ret_is_optional {
+                Type::optional(Type::Text(dep))
+            } else {
+                Type::Text(dep)
+            };
+            self.data.definitions[self.context as usize].returned = new_ret;
         }
     }
 

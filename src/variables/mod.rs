@@ -1213,7 +1213,11 @@ impl Function {
         // target ← `τ?`) is the `(N-Store)` violation, caught at the store site before here.
         // Gate-OFF inert: the postfix `?` is a no-op so `var_tp` is never `Optional`.
         if let Type::Optional(inner) = var_tp
-            && (inner.is_equal(type_def) || matches!(type_def, Type::Null))
+            // @PLN25 (N-Idem): peel the SOURCE too — `Optional(τ) ← Optional(τ)` (e.g. a
+            // `text?` local reassigned from a `text?`-typed if-join whose frame-deps differ)
+            // is not a type change. Without `.base()` the source's `Optional` wrapper made
+            // `inner.is_equal` fail and change_var wrongly rejected `text? ← text?`.
+            && (inner.is_equal(type_def.base()) || matches!(type_def, Type::Null))
         {
             for on in type_def.depend() {
                 self.depend(var_nr, on);
