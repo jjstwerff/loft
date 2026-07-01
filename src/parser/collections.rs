@@ -1201,6 +1201,14 @@ use #count instead"
         format: &Value,
         state: OutputState,
     ) {
+        // @PLN25 — format dispatch peels an `Optional` value type (`"{s}"` where
+        // `s: text?`) to its base, matching index/method dispatch which already
+        // peel; inert gate-OFF (no `Optional` is ever constructed). A null-holding
+        // value formats via its base-text/scalar sentinel exactly as gate-OFF.
+        let tp = match tp {
+            Type::Optional(inner) => *inner,
+            other => other,
+        };
         let var = Value::Var(append);
         let start = if matches!(self.vars.tp(append), Type::RefVar(_)) {
             "OpFormatStack"

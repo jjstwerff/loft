@@ -1,0 +1,32 @@
+// @PLN25 DN1 read-consumption regression (the web `try_recv` consumer shape).
+//
+// Every READ of a `text?` after a null-check must behave exactly as a plain
+// `text`: method call, single-index, open-range slice, and format interpolation.
+// Gate-OFF the `?` is a no-op (plain text); gate-ON `recv` returns Optional(Text)
+// and each read peels to its base (parser index/format + native `&str` borrow).
+// Auto-run gate-OFF here; the DN1 path is exercised on both backends by
+// tests/pln25_dn1_consumption.rs. Output must be byte-identical across all four
+// (gate-OFF / DN1) × (interpret / native) configurations.
+fn recv(cond: boolean) -> text? {
+  if cond { return null; }
+  "MAP:hello"
+}
+
+pub fn main() {
+  total = 0;
+  for _i in 0..3 {
+    raw = recv(false);
+    if raw == null { continue; }
+    if raw.starts_with("MAP:") {   // method on text?
+      body = raw[4..];             // open-range slice of text?
+      total += body.len();         // = 5 ("hello")
+      c = raw[0];                  // single char-index of text?  ('M')
+      total += c as integer;       // = 77
+    }
+    println("frame {raw}");        // format a text?
+  }
+  n = recv(true);                  // a genuinely-null text?
+  println("null fmt: {n}");        // format a null text?  -> "null"
+  println("total={total}");        // (5 + 77) * 3 = 246
+  assert(total == 246, "text? read-consumption total should be 246");
+}

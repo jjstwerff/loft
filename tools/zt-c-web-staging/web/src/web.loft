@@ -202,7 +202,7 @@ pub fn pump(self: WsHandler, on_message: fn(text)) -> integer {
 // single iteration of pump without the callback — useful when the
 // receiver wants to drive its own loop and accumulate messages
 // locally without capturing state inside a closure.
-pub fn try_recv(self: WsHandler) -> text {
+pub fn try_recv(self: WsHandler) -> text? {
   if !ws_client_recv_native(self.id) { return null; }
   ws_client_message_native()
 }

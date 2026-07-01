@@ -225,9 +225,14 @@ impl Output<'_> {
                     // @PLN87 L1 — a local scalar `&`-link holds `*mut T` (raw); deref
                     // to read the linked source's current value.
                     return write!(w, "unsafe {{ *var_{var_name} }}");
-                } else if matches!(variables.tp(var), Type::Text(_)) && !self.tuple_text_to_string {
+                } else if matches!(variables.tp(var).base(), Type::Text(_))
+                    && !self.tuple_text_to_string
+                {
                     // Text locals are `String` — `&` coerces to `&str`.  Inside a
                     // (String, …) tuple-return literal (@P330) emit the bare name.
+                    // @PLN25 — `.base()` peels a `text?` local so an indexed/sliced
+                    // nullable text receiver (`raw: text?; raw[i]`, `raw[a..b]`) is
+                    // borrowed to `&str` too; inert gate-OFF (no `Optional` exists).
                     return write!(w, "&var_{var_name}");
                 }
                 return write!(w, "var_{var_name}");

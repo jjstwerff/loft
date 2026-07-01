@@ -623,6 +623,12 @@ impl Parser {
         let mut t = tp.clone();
         let mut p = Value::Null;
         self.un_ref(&mut t, &mut p);
+        // @PLN25 — index/slice dispatch peels an `Optional` receiver (`s: text?;
+        // s[i]`, `s[a..b]`) to its base, mirroring method dispatch which already
+        // peels (`s.starts_with(..)` works on a `text?`). Inert gate-OFF: no
+        // `Optional` is ever constructed, so `.base()` is a no-op. A null-check
+        // discharges the value; indexing the null sentinel behaves as gate-OFF.
+        t = t.base().clone();
         let mut elm_type = self.index_type(&t);
         for on in t.depend() {
             elm_type = elm_type.depending(on);
