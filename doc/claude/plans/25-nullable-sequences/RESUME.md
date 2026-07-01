@@ -20,6 +20,32 @@ probe verdicts) → [implementation-steps.md](implementation-steps.md) (the phas
 > The model is built + gated + both-backends-validated; what's left is landing the flip as the
 > default (F1) + retiring `not null` (F2) + closing DN5/DN6/DN4 (F3–F5) + the final PR (F6).
 
+### ⭐ MOST RECENT — cold-start read this first (branch `tuxedo-pln85-fuzz-proof-gate`, all pushed, tree clean)
+
+The **DN1 flip is DEFAULT-ON** (`LOFT_PLN25_OFF` opts out; gate-OFF is now DEAD — F1b(b)'s `τ?`
+min/max overloads collide with it). Full detail per topic is in **§ FINISH LINE → F1a/F1b** below.
+Latest work, newest first (all on this branch, both backends, suites green unless noted):
+
+1. **F1b(b) CLOSED (`e7c0f17b`)** — min/max/clamp non-null bodies cleaned + STD_SOURCE (N-Store)
+   exemption REMOVED; 7 issues field-null tests + 17-min-max-clamp migrated to `τ?`.
+2. **DN3-division ROOT-CAUSE FIXED (`7042d94c`)** — the `ecd4cab3` "division slice" wrap was DEAD
+   CODE (wrong `handle_operator` branch); MOVED to the arithmetic branch, so `a/b`/`a%b` finally
+   type `integer?`. Closed the reported gaps #1 (const-fold) + #2 (via-var). Else-side divisor
+   narrowing added. Regressions: `25-division-nullable.loft` + a `102` reject twin.
+3. **INDEX (`v[i]`) FLIP — foundation built + measured, DEV-GATED, landing BACKED OFF (`c58d7623`).**
+   Mechanism + 3 fit-proofs (const via `const_int` / iter-var via `vars.is_active_loop_var` / `if
+   idx<len(v)` guard) all work under `LOFT_INDEX_DEV`. **Do NOT just flip the gate + migrate 8 sites
+   — the reject-count measurement UNDERCOUNTED.** Gate-ON breaks 6 wrap tests incl. a SILENT
+   copy-elision wrong-answer. Landing = a proper F1a-style phase (see F1b index note for the 6 steps).
+
+**Two known DN3 holes, both DEFERRED as their own slices (see F1b notes):** gap #3 (`??` discharges
+regardless of fallback nullability — `x ?? null` unsoundly non-null); and N-Store is NOT enforced at
+CALL ARGS (`takes(v[j])` doesn't reject — affects division equally).
+
+**Next-session pick (recommended order):** either the **index F1a landing phase** (start with the
+copy-elision `Optional`-peel — the load-bearing + riskiest piece), or the smaller **gap #3 `??`-typing**
+slice, or the **call-arg N-Store** slice (closes a hole across all fault-ops at once). Then F2–F6.
+
 - **PR #471 MERGED to `main` (squash `03d8899f`, 2026-07-01)** — the whole scalars-half:
   `Type::Optional` + slice 3a/b/c (N-Store) + the gated DN1 flip + enforcement + sweep(1)
   lib/lexer. All behind opt-in `LOFT_PLN25_OPT` / `_DN3` / `_DN1`; gate-OFF byte-identical.
