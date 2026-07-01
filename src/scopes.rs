@@ -1881,7 +1881,11 @@ impl Scopes {
                 }
                 continue;
             }
-            if matches!(function.tp(v), Type::Text(_)) {
+            if matches!(function.tp(v).base(), Type::Text(_)) {
+                // @PLN25 slice (c): peel `Optional` — a `text?` local owns the same heap
+                // text as `text` and must be freed identically (else its interval is not
+                // extended and the slot allocator aliases it — the `text? = text?` copy
+                // read back empty).
                 // @PLAN52 cluster I iteration 2 (2026-05-30): honor skip_free
                 // for text vars too.  The file-level "Text exception"
                 // doc-comment ("OpFreeText is always emitted ... regardless
@@ -1909,7 +1913,9 @@ impl Scopes {
             | Type::Sorted(_, _, dep)
             | Type::Hash(_, _, dep)
             | Type::Index(_, _, dep)
-            | Type::Spacial(_, _, dep) = function.tp(v)
+            // @PLN25 slice (c): peel `Optional` so an owned `vector?`/`reference?` local is
+            // still freed at scope exit (same reasoning as the `text?` case above).
+            | Type::Spacial(_, _, dep) = function.tp(v).base()
             {
                 // H2 step 5 (DEPS_INVENTORY): the declared return type's
                 // dep list is DEF-space — attr indices from `ref_return`,

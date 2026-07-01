@@ -691,7 +691,10 @@ impl Output<'_> {
                 let text_local_clone = needs_to_string
                     && matches!(to.unspan(), Value::Var(v) if {
                         let vars = self.data.def(self.def_nr).variables();
-                        !vars.is_argument(*v) && matches!(vars.tp(*v), Type::Text(_))
+                        // @PLN25 slice (c): `.base()` — a `text?` local source is a `String`
+                        // just like plain `text`, so it must emit `var.clone()` here. Without
+                        // the peel it fell through to `&var.to_string()` (E0308: `&String`).
+                        !vars.is_argument(*v) && matches!(vars.tp(*v).base(), Type::Text(_))
                     });
                 // @P283 — source is a `RefVar(Text)` argument (`&mut String`).
                 // `output_code_inner` for `Value::Var` in this case emits
