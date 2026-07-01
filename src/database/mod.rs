@@ -1,5 +1,6 @@
 // Copyright (c) 2024-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I70 — Database (alloc/persistence/journal/snapshot)
 //! Database operations on stores
 #![allow(dead_code)]
 

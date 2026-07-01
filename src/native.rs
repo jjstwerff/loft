@@ -1,5 +1,6 @@
 //! Native function registry: Rust implementations of loft built-ins.
 //! Naming: `n_<name>` for globals, `t_<LEN><Type>_<method>` for methods.
+// @I73 — native function registry
 #![allow(non_snake_case)]
 use crate::database::Stores;
 use crate::keys::{DbRef, Str};

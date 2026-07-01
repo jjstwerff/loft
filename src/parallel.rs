@@ -1,5 +1,6 @@
 // Copyright (c) 2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I72 — Parallel execution runtime
 
 //! Parallel execution: dispatch a worker function over vector elements using OS threads.
 //!

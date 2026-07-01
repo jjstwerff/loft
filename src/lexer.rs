@@ -1,5 +1,6 @@
 // Copyright (c) 2022-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I57 — Lexer (source to LexItems)
 
 //! Change a text into symbols to use in the parser.
 //! It is possible to link to the current position in the lexer (link) and return to it (revert)

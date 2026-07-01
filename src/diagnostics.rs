@@ -1,5 +1,6 @@
 // Copyright (c) 2022-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I75 — Diagnostics collector
 
 use std::fmt::{Arguments, Debug, Display, Formatter};
 

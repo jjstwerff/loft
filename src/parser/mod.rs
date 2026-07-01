@@ -1,5 +1,6 @@
 // Copyright (c) 2022-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I58 — Parser (two-pass recursive descent to IR)
 
 //! Parse scripts and create internal code from it.
 //! Including type checking.
