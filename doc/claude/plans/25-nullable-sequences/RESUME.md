@@ -186,12 +186,26 @@ tightenings**. In order, each ends green (never carry two phases' breakage):
       `pub(crate)` `collect_guard_pairs`/`VecKey`/`vec_key`, pushed THEN-only in `parse_if`). **MEASURED
       (dev-gate ON): 165 undefended-read warnings → just ~8 GENUINE N-Store rejects** — 3 corpus (repro_p356
       OOB-probes ×2, 85-borrow `xs[i]`), 5 issues (p124 `arr[idx]` ×2, p155, p170 `v[len-1]`, p379). The lib
-      compiler (130 warnings) stores NONE of its v[i] into non-null → 0 rejects. **TO LAND (next):** migrate
-      those ~8 sites (they change test SEMANTICS — return `τ?`/discharge — so careful, not a mechanical `?`);
-      add the len-capture proof (`n=len(v); if i<n`) if migration surfaces it; flip `LOFT_INDEX_DEV` →
-      `pln25_dn1_enabled` + drop the dev-gate; graduate a `tests/scripts/25-index-nullable.loft` accept +
-      `102` reject twin. **Orthogonal gap (separate slice): a nullable passed into a non-null CALL ARG is
-      not an N-Store site** (verified `takes(v[j])` doesn't reject) — affects division equally, not index-specific.
+      compiler (130 warnings) stores NONE of its v[i] into non-null → 0 rejects.
+    - **⚠️ LANDING ATTEMPT (`<const_int commit>`) — the reject-count measurement UNDERCOUNTED; flip BACKED
+      OFF to dev-gate, tree green.** Two enhancements KEPT (inert under the dev-gate): (a) `index_provably_fit`
+      now trusts ANY compile-time-constant index via `const_int` (pub(crate)) — positive OR negative, so the
+      `v[-1]` Python last-element idiom is fit and repro_p356 needs no migration (`-1` lowers to a negation, not
+      an `Int(-1)` literal); (b) that fixed 2 of the 3 corpus rejects. BUT flipping the gate ON revealed the
+      real blast radius is FAR beyond the ~8 compile rejects — **6 wrap tests fail**: `dir`/`last`/`parser_debug`/
+      `wasm_dir` (the loft-in-loft COMPILER ripple through lib/parser.loft + lib/code.loft — same class as the
+      DN1 flip's F1a phase), `library_suite` (audience_crystal), and `loft_suite`. **The killer is SILENT, not a
+      reject:** `v[i]` typing `Item?` mis-classifies a MUTATED/ESCAPING element borrower (`e = v[i]; e.x = …`)
+      in the copy-elision analysis (`use_analysis::ElidePlan` / `scopes`), so the copy-keep decision flips and
+      the mutation LEAKS to the source (85-borrow `mut_elem` fails both backends — a wrong-answer, not an error).
+      **LESSON: counting compile REJECTS undercounts a type-flip's blast radius — silent behaviour changes
+      (copy-elision keyed on the element type) + downstream compiler-tests are invisible to a reject scan.**
+      **TO LAND (proper F1a-style phase, NOT a quick migrate):** (1) make copy-elision peel `Optional` when
+      classifying element borrowers (deps subsystem — loft's #1 weakness, delicate, both backends); (2) migrate
+      the lib compiler v[i] sites (the dir/last/parser_debug ripple); (3) audience_crystal; (4) the ~8 direct
+      rejects; (5) add len-capture proof if surfaced; (6) flip gate + graduate `25-index-nullable.loft`.
+      **Orthogonal gap (separate slice): a nullable passed into a non-null CALL ARG is not an N-Store site**
+      (verified `takes(v[j])` doesn't reject) — affects division equally, not index-specific.
   - **F1c** — ✅ DONE (`85af2b18`): the `change_var` null-local message names `τ?`, no `as`.
   - Gate: `find_problems` green as the DEFAULT (no env) on both backends — ✅ met (exemption in place).
 - **F2 — Retire `not null`** (Phase-5 CLEANUP; ordering load-bearing — AFTER F1). Make the

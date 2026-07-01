@@ -659,10 +659,16 @@ impl Parser {
                 return value;
             }
             // @PLN25 DN3 (index): a scalar `v[i]` read is nullable (OOB → the null sentinel) unless
-            // the index is provably in-bounds (`parse_vector_index` set `last_index_fit`). Wrap the
-            // element type `Optional` so `(N-Store)` forces a `?? d` / `τ?` slot / guard at the store.
-            // DEV-GATED (`LOFT_INDEX_DEV`) while the remaining fit-proofs (guard, len-capture) are
-            // built out and the blast radius is measured; folds into the DN1 gate once complete.
+            // the index is provably in-bounds (`parse_vector_index` set `last_index_fit` from a
+            // constant / for-loop iter var / `if idx < len(v)` guard). Wrap the element type
+            // `Optional` so `(N-Store)` forces a `?? d` / `τ?` slot / guard at the store site.
+            // STILL DEV-GATED (`LOFT_INDEX_DEV`): the gate-on flip surfaced blast radius BEYOND the
+            // ~8 compile-reject sites — it also breaks the loft-in-loft compiler (lib/parser.loft +
+            // lib/code.loft ripple the `dir`/`last`/`parser_debug`/`wasm_dir` tests), the
+            // audience_crystal LIBRARY, and — SILENTLY — copy-elision (a mutated/escaping element
+            // borrower `e = v[i]; e.x = …` mis-classifies once `e` is `Item?`, so the copy-keep
+            // decision in `use_analysis`/`scopes` flips and the mutation leaks to the source). The
+            // reject-count measurement undercounted these; landing needs a proper F1a-style phase.
             if std::env::var_os("LOFT_INDEX_DEV").is_some()
                 && crate::keys::pln25_dn1_enabled()
                 && !self.last_index_fit
@@ -742,9 +748,15 @@ impl Parser {
     /// (a general var, a computed index) can overrun → the read types `τ?`. Mirrors the pass-2
     /// warning walk's skip patterns 2/3; the `i < len(v)` guard (pattern 5) is added separately.
     fn index_provably_fit(&self, index: &Value, vec: &Value) -> bool {
+        // A compile-time-constant index — positive OR negative (`v[-1]` is the Python-style
+        // last-element idiom; `-1` lowers to a negation, so use `const_int`, not a literal match)
+        // — is the developer's explicit contract: trust it, exactly as the runtime does (a genuine
+        // overrun still raises the recoverable OOB fault). A variable index carries no such
+        // contract, so it stays `τ?` unless proven fit below.
+        if self.const_int(index).is_some() {
+            return true;
+        }
         match index.unspan() {
-            Value::Int(n) => *n >= 0,
-            Value::Long(n) => *n >= 0,
             Value::Var(v) => {
                 // A for-loop iteration variable (`for i in <range> { v[i] }`) — the vars system
                 // already tracks the active loop stack, so no separate parse-time stack is needed.

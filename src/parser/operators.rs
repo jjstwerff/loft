@@ -1672,7 +1672,7 @@ impl Parser {
     }
 
     /// The constant integer value of `code`, if it is one (literal or const-foldable).
-    fn const_int(&self, code: &Value) -> Option<i64> {
+    pub(crate) fn const_int(&self, code: &Value) -> Option<i64> {
         match code.unspan() {
             Value::Int(n) => Some(i64::from(*n)),
             Value::Long(n) => Some(*n),
