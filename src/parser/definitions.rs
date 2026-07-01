@@ -2302,6 +2302,7 @@ impl Parser {
     /// This first-pass implementation registers the interface definition and
     /// verifies syntax; semantic satisfaction checking comes in I5/I6.
     #[allow(clippy::too_many_lines)]
+    // @F26 — interfaces & bounded generics (<T: A + B>, operator interfaces)
     pub(crate) fn parse_interface(&mut self) -> bool {
         if !self.lexer.has_token("interface") {
             return false;

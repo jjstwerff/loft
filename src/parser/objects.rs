@@ -1386,6 +1386,7 @@ impl Parser {
         vec_type
     }
 
+    // @F35 — string literals ({expr} interpolation + backtick multiline)
     pub(crate) fn parse_string(&mut self, code: &mut Value, string: &str) -> Type {
         let mut append_value = u16::MAX;
         *code = Value::str(string);

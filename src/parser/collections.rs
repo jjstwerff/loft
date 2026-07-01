@@ -1494,6 +1494,7 @@ use #count instead"
         (iter_var, pre_var, for_var, if_step, create_iter, iter_next)
     }
 
+    // @F28 — for-in loops (ranges, loop attributes, filtered, rev())
     pub(crate) fn parse_for(&mut self, code: &mut Value) {
         // P235: tuple destructure — `for (a, b, ...) in items { ... }`.
         // Parse the parenthesised name list now; later (after the iter

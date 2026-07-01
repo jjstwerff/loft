@@ -632,6 +632,7 @@ impl Parser {
         } else if self.lexer.has_token("while") {
             self.parse_while(val);
             Type::Void
+        // @F31 — break / continue (+ labelled forms)
         } else if self.lexer.has_token("continue") {
             if !self.in_loop {
                 diagnostic!(self.lexer, Level::Error, "Cannot continue outside a loop");

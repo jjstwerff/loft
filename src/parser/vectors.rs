@@ -533,6 +533,7 @@ impl Parser {
 
     // <lambda> ::= 'fn' '(' [<params>] ')' ['->' <type>] '{' <body> '}'
     // Produces Type::Function; runtime representation is d_nr as i32, same as fn-ref.
+    // @F22 — closures & lambdas (value capture, cross-scope)
     pub(crate) fn parse_lambda(&mut self, code: &mut Value) -> Type {
         let lambda_name = format!("__lambda_{}", self.lambda_counter);
         self.lambda_counter += 1;

@@ -1931,6 +1931,7 @@ impl Parser {
         }
     }
 
+    // @F27 — if / else as an expression
     pub(crate) fn parse_if(&mut self, code: &mut Value) -> Type {
         let mut test = Value::Null;
         let tp = self.expression(&mut test);
@@ -2090,6 +2091,7 @@ impl Parser {
     // <match> ::= 'match' <expression> '{' { <pattern> '=>' <expression> } '}'
     // <pattern> ::= '_' | <variant> [ '{' <field> { ',' <field> } '}' ]
     #[allow(clippy::too_many_lines)]
+    // @F29 — pattern matching (enum/scalar/tuple, guards, or-patterns, exhaustiveness)
     pub(crate) fn parse_match(&mut self, code: &mut Value) -> Type {
         // Save position of the match keyword for exhaustiveness diagnostics.
         let match_pos = self.lexer.pos().clone();
@@ -3918,6 +3920,7 @@ impl Parser {
     /// `expr is VariantName` — generates a boolean discriminant check.
     /// For plain enums: `OpConvIntFromEnum(expr) == disc`.
     /// For struct-enums: `OpConvIntFromEnum(OpGetEnum(expr, 0)) == disc`.
+    // @F30 — is variant check (+ field capture)
     pub(crate) fn parse_is_variant(
         &mut self,
         code: &mut Value,
@@ -6926,6 +6929,7 @@ impl Parser {
 
     /// Parse `parallel { arm1; arm2; ... }`.
     /// Each semicolon-separated expression in the block becomes one concurrent arm.
+    // @F33 — par(...) parallel for-loop
     pub(crate) fn parse_parallel(&mut self, code: &mut Value) {
         self.lexer.token("{");
         // INVARIANT (load-bearing — the capture check below depends on it).
