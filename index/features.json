@@ -484,5 +484,41 @@
     "title": "Feature-catalogue sync generator (issues → in-project mirror + example tests)",
     "kind": "infra",
     "body": "## What it does\n\nKeeps the in-project copy of the feature catalogue in step with this issue tracker. It reads a committed snapshot of the issues and regenerates, one-way, a browsable mirror of every entry plus a runnable test file for each feature's example. Agents and CI then work from the issues without anything being written down twice: the issue is the single source, and two guards keep the copy honest — one fails if the mirror drifts from the snapshot, the other fails if any extracted example stops running.\n\n## Where it lives\n\n`tools/features/gen.loft` (the generator), the `Makefile` targets `features-fetch` / `features-gen` / `features-check`, and the example-runs guards in `tests/features.rs` (interpret) and `tests/native.rs::native_features` (native). Realizes strand 3 of @PLN92.\n"
+  },
+  {
+    "number": 82,
+    "title": "Sandbox policy & enforcement",
+    "kind": "infra",
+    "body": "## What it does\n\nDefines what a running loft program is allowed to touch — filesystem, network, environment, subprocesses — as named capability groups, and enforces those limits at the boundary where the program meets the host. It is how a program can be run with least privilege instead of unrestricted access to the machine.\n\n## Where it lives\n\n`src/sandbox.rs`\n"
+  },
+  {
+    "number": 83,
+    "title": "Dev server (--serve / --rpc)",
+    "kind": "infra",
+    "body": "## What it does\n\nRuns loft as a long-lived local server. `--serve` exposes an HTTP + WebSocket endpoint for browser-facing development; `--rpc` speaks a line-delimited JSON protocol so an editor or debugger can drive a session programmatically. Both keep one interpreter alive across many requests instead of starting fresh each time.\n\n## Where it lives\n\n`src/serve.rs` (HTTP / WebSocket), `src/rpc.rs` (NDJSON request/response)\n"
+  },
+  {
+    "number": 84,
+    "title": "Coroutine runtime / yield codec",
+    "kind": "infra",
+    "body": "## What it does\n\nThe machinery behind suspendable functions: it lays out a coroutine's saved state and encodes each yielded value so the side that suspends and the side that resumes agree on the exact bytes crossing the yield boundary. Both the interpreter and the native backend share this one layout, so a coroutine behaves identically on either.\n\n## Where it lives\n\n`src/coroutine_layout.rs`\n"
+  },
+  {
+    "number": 85,
+    "title": "Engine-host kernel natives",
+    "kind": "infra",
+    "body": "## What it does\n\nThe set of low-level host primitives the engine exposes to running loft code — the kernel-level mechanisms, beyond ordinary stdlib functions, that let a program reach into the engine itself. It is the controlled boundary between loft-level code and the host runtime's internals.\n\n## Where it lives\n\n`src/engine_host.rs`\n"
+  },
+  {
+    "number": 86,
+    "title": "Startup cache & embedded stdlib",
+    "kind": "infra",
+    "body": "## What it does\n\nMakes start-up fast. The standard library is embedded directly into the binary, and a cache lets a later run skip re-parsing and re-compiling that stdlib by restoring the previous result. Without it, every run would pay the full standard-library compile cost before the program even starts.\n\n## Where it lives\n\n`src/stdlib_sources.rs` (embedded `default/*.loft` sources), `src/cache.rs` + `src/startup_cache.rs` (the cache)\n"
+  },
+  {
+    "number": 87,
+    "title": "Auto-use / lazy library triggers",
+    "kind": "infra",
+    "body": "## What it does\n\nLets a program use a library's names without writing an explicit import. A lightweight pre-scan of the source works out which library each otherwise-unresolved name belongs to and arranges to load that library the first time the name is used. It keeps small programs terse while still resolving to exactly the right library.\n\n## Where it lives\n\n`src/libscan.rs` (the pre-scan), `src/triggers.rs` (per-library load triggers)\n"
   }
 ]

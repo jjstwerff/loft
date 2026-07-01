@@ -99,3 +99,9 @@ canonical; these pages are its generated shadow. Regenerate with
 | [@I79](I79.md) | Documentation generator (maintainer tooling) |
 | [@I80](I80.md) | Tracker indexer (maintainer tooling) |
 | [@I81](I81.md) | Feature-catalogue sync generator (issues → in-project mirror + example tests) |
+| [@I82](I82.md) | Sandbox policy & enforcement |
+| [@I83](I83.md) | Dev server (--serve / --rpc) |
+| [@I84](I84.md) | Coroutine runtime / yield codec |
+| [@I85](I85.md) | Engine-host kernel natives |
+| [@I86](I86.md) | Startup cache & embedded stdlib |
+| [@I87](I87.md) | Auto-use / lazy library triggers |

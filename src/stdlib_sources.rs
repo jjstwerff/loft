@@ -1,4 +1,5 @@
 //! The standard-library sources (`default/*.loft`) embedded into the binary via
+//! @I86 — Startup cache & embedded stdlib
 //! `include_str!` — one home for the stdlib source set.
 //!
 //! Two consumers read the SAME embedded source: the WASM runtime loads it into

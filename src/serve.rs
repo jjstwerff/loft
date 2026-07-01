@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I83 — Dev server (--serve / --rpc)
 
 //! @PLN16 M5e slice 1 — the **`--serve` foundation**: a local HTTP + WebSocket server
 //! that puts the debugger's wire protocol ([`crate::rpc`]) in a browser.  `GET /` returns

@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I86 — Startup cache & embedded stdlib
 
 //! Startup cache — skip re-parsing the `default/` standard library on
 //! every run.

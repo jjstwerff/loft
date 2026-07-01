@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I87 — Auto-use / lazy library triggers
 
 //! Tier-0 lazy auto-`use`: a lightweight pre-scan of a loft source file for
 //! `lib::…` references (lib_plans/59-lazy-stdlib).

@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I86 — Startup cache & embedded stdlib
 
 //! @PLN11 arc D / D2b — opt-in stdlib startup cache wiring.
 //!
