@@ -189,7 +189,7 @@
     "number": 32,
     "title": "Custom iterators via `fn next(self) -> T?`",
     "kind": "feature",
-    "body": "## What it is\n\nYou can make a type of your own work in a `for` loop by giving it a `next` method: it returns the following value each time it is asked, and `null` once there are no more.\n\n## How it aids you\n\nYour own types loop with the same `for x in thing` syntax as the built-in collections, so callers iterate over them without knowing or caring how each value is produced.\n\n## Example\n\n```loft\nstruct Countdown {\n    n: integer\n}\n\n// Return the next value, or null when there is nothing left.\nfn next(self: Countdown) -> integer {\n    if self.n <= 0 { return null; }\n    v = self.n;\n    self.n = v - 1;\n    v\n}\n\nfn main() {\n    c = Countdown { n: 3 };\n    for x in c {\n        println(\"{x}\");   // 3, then 2, then 1\n    }\n}\n```\n"
+    "body": "## What it is\n\nYou can make a type of your own work in a `for` loop by giving it a `next` method: it returns the following value each time it is asked, and `null` once there are no more.\n\n## How it aids you\n\nYour own types loop with the same `for x in thing` syntax as the built-in collections, so callers iterate over them without knowing or caring how each value is produced.\n\n## Example\n\n```loft\nstruct Countdown {\n    n: integer\n}\n\n// Return the next value, or null when there is nothing left.\nfn next(self: Countdown) -> integer? {\n    if self.n <= 0 { return null; }\n    v = self.n;\n    self.n = v - 1;\n    v\n}\n\nfn main() {\n    c = Countdown { n: 3 };\n    for x in c {\n        println(\"{x}\");   // 3, then 2, then 1\n    }\n}\n```\n"
   },
   {
     "number": 33,
