@@ -408,6 +408,17 @@ pub struct Parser {
     /// non-zero literal) is provably fit and types NON-null; otherwise it types `τ?`. Same
     /// push/truncate/invalidate discipline as `narrowed_non_null`.
     pub(crate) divisor_nonzero: Vec<u16>,
+    /// @PLN25 DN3 fault-op (index) — set by `parse_vector_index` for each SCALAR `v[i]` read
+    /// (true = the index is provably in-bounds: a non-negative constant, a for-loop iter var, or
+    /// a var proven `< len(v)` by an enclosing guard), read immediately after by `parse_index` to
+    /// decide whether the element type wraps `Optional`. Write-then-read per read; nested reads
+    /// (`v[w[j]]`) set inner-then-outer so the outer read sees the outer index's fit.
+    pub(crate) last_index_fit: bool,
+    /// @PLN25 DN3 fault-op (index) — the `(idx_var, vec)` pairs proven in-bounds by an enclosing
+    /// `if idx < len(vec) { … }` guard (skip-pattern 5). A `vec[idx]` whose pair is here types
+    /// NON-null. Pushed for the THEN branch in `parse_if`, truncated on exit — same discipline as
+    /// `divisor_nonzero`, but keyed on the (index, vector) pair via `VecKey`.
+    pub(crate) index_bounded: Vec<(u16, crate::parser::operators::VecKey)>,
     /// Plan-07 phase 4h — site of the most recently parsed field
     /// read.  Set by `Parser::field()` after each read, taken by
     /// `handle_null_coalesce` to mark the read as defended when
@@ -640,6 +651,8 @@ impl Parser {
             defended_field_reads: std::collections::HashSet::new(),
             narrowed_non_null: Vec::new(),
             divisor_nonzero: Vec::new(),
+            last_index_fit: false,
+            index_bounded: Vec::new(),
             last_field_read_site: None,
             #[cfg(feature = "registry")]
             advisory_checked: std::collections::HashSet::new(),

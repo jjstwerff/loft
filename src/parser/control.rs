@@ -2042,6 +2042,15 @@ impl Parser {
         if let Some((v, true)) = divisor {
             self.divisor_nonzero.push(v);
         }
+        // @PLN25 DN3 fault-op (index): `if idx < len(vec) { … }` proves `vec[idx]` in-bounds in the
+        // THEN branch (skip-pattern 5) — reuse the warning walk's guard-pair extractor. THEN-only
+        // (the else side has idx >= len, no fit). The len-capture form (`n = len(v); if idx < n`)
+        // needs the capture map, deferred — pass an empty map, so inline `len(vec)` guards match.
+        let empty_caps = std::collections::HashMap::new();
+        let index_base = self.index_bounded.len();
+        let index_pairs =
+            crate::parser::operators::collect_guard_pairs(&test, &self.data, &empty_caps);
+        self.index_bounded.extend(index_pairs);
         let is_aliases: Vec<(String, Option<u16>)> = self.is_capture_aliases.drain(..).collect();
         let is_bindings: Vec<Value> = self.is_capture_bindings.drain(..).collect();
         let mut true_code = Value::Null;
@@ -2068,6 +2077,8 @@ impl Parser {
         // Leaving the THEN branch, drop its `!= 0` divisor proof; an `== 0` condition instead
         // proves the divisor non-zero on the ELSE side, pushed just below with the else narrowing.
         self.divisor_nonzero.truncate(divisor_base);
+        // Leaving the THEN branch — drop its `idx < len(vec)` in-bounds proofs (THEN-only).
+        self.index_bounded.truncate(index_base);
         if let Some((v, false)) = narrow {
             self.narrowed_non_null.push(v);
         }
@@ -2119,6 +2130,10 @@ impl Parser {
         // (the proof holds only inside the if/else, not after it).
         self.narrowed_non_null.truncate(narrow_base);
         self.divisor_nonzero.truncate(divisor_base);
+        // Belt-and-suspenders: `index_bounded` was already restored after the THEN block (it is
+        // THEN-only, no else-push), so this is a no-op today — kept for parity with the two
+        // narrowings above and to stay correct if an else-side in-bounds proof is added later.
+        self.index_bounded.truncate(index_base);
         // @PLN25 DN1: a branch that yields a bare `null` makes the if-expression NULLABLE — its
         // result widens to `Optional(τ)` where τ is the non-null SCALAR sibling's type. The bare
         // null is otherwise coerced to the sibling's typed-null sentinel and the if types as a

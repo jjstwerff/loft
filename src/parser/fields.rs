@@ -658,6 +658,17 @@ impl Parser {
             if let Some(value) = iter_value {
                 return value;
             }
+            // @PLN25 DN3 (index): a scalar `v[i]` read is nullable (OOB → the null sentinel) unless
+            // the index is provably in-bounds (`parse_vector_index` set `last_index_fit`). Wrap the
+            // element type `Optional` so `(N-Store)` forces a `?? d` / `τ?` slot / guard at the store.
+            // DEV-GATED (`LOFT_INDEX_DEV`) while the remaining fit-proofs (guard, len-capture) are
+            // built out and the blast radius is measured; folds into the DN1 gate once complete.
+            if std::env::var_os("LOFT_INDEX_DEV").is_some()
+                && crate::keys::pln25_dn1_enabled()
+                && !self.last_index_fit
+            {
+                elm_type = Type::optional(elm_type);
+            }
         } else if matches!(t, Type::Text(_)) {
             let index_t = if self.lexer.peek_token("..") {
                 p = Value::Int(0);
@@ -723,6 +734,33 @@ impl Parser {
             self.expression(&mut p);
         }
         elm_type
+    }
+
+    /// @PLN25 DN3 (index) — is a vector index provably in-bounds, so `v[i]` cannot be OOB-null?
+    /// True for a non-negative constant literal (the developer typed it), or a for-loop iteration
+    /// variable (`for i in <range> { v[i] }` — the loop's bound is the contract). Everything else
+    /// (a general var, a computed index) can overrun → the read types `τ?`. Mirrors the pass-2
+    /// warning walk's skip patterns 2/3; the `i < len(v)` guard (pattern 5) is added separately.
+    fn index_provably_fit(&self, index: &Value, vec: &Value) -> bool {
+        match index.unspan() {
+            Value::Int(n) => *n >= 0,
+            Value::Long(n) => *n >= 0,
+            Value::Var(v) => {
+                // A for-loop iteration variable (`for i in <range> { v[i] }`) — the vars system
+                // already tracks the active loop stack, so no separate parse-time stack is needed.
+                if self.vars.is_active_loop_var(*v) {
+                    return true;
+                }
+                // An `if idx < len(vec) { vec[idx] }` guard proved the (idx, vec) pair in-bounds
+                // for this branch — match `v` AND the indexed vector's `VecKey`.
+                crate::parser::operators::vec_key(vec, &self.data).is_some_and(|vk| {
+                    self.index_bounded
+                        .iter()
+                        .any(|(iv, ik)| *iv == *v && *ik == vk)
+                })
+            }
+            _ => false,
+        }
     }
 
     pub(crate) fn index_type(&mut self, t: &Type) -> Type {
@@ -883,6 +921,11 @@ impl Parser {
             diagnostic!(self.lexer, Level::Error, "Invalid iterator expression");
             return None;
         }
+        // @PLN25 DN3 (index): decide this scalar read's element nullability. A `v[i]` is nullable
+        // (OOB → the null sentinel) UNLESS the index is provably in-bounds — a non-negative constant
+        // (the developer typed a literal), or a for-loop iteration variable (the loop's bound is the
+        // contract). `parse_index` reads this flag to wrap the element type `Optional` when unfit.
+        self.last_index_fit = self.index_provably_fit(&p, code);
         if !self.first_pass && !self.convert(&mut p, &index_t, &I32) {
             diagnostic!(
                 self.lexer,

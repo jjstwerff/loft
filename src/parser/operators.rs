@@ -2162,7 +2162,7 @@ enum FaultKind {
 /// read COPIES post-@PLN85 #415, so the old `loc = self.v` alias trick is
 /// gone and value-correct code indexes the field directly.)
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum VecKey {
+pub(crate) enum VecKey {
     Var(u16),
     Field(u16, i32, i32),
 }
@@ -2170,7 +2170,7 @@ enum VecKey {
 /// `VecKey` of an expression used as a vector — the indexing's first arg
 /// or a `len(...)` arg.  `Some` for a bare `Var` or an
 /// `OpGetField(Var(base), Int(off), Int(tp))`; `None` otherwise.
-fn vec_key(v: &Value, data: &Data) -> Option<VecKey> {
+pub(crate) fn vec_key(v: &Value, data: &Data) -> Option<VecKey> {
     match v.unspan() {
         Value::Var(n) => Some(VecKey::Var(*n)),
         Value::Call(def_nr, args) => {
@@ -2732,7 +2732,7 @@ fn guard_pair_with_ctx(
 /// like `if a < len(u) and b < len(v) { ... }`.  Caller pushes each
 /// returned pair onto `ctx.guarded_pairs` for the duration of the
 /// then-block, then pops them.
-fn collect_guard_pairs(
+pub(crate) fn collect_guard_pairs(
     cond: &Value,
     data: &Data,
     captures: &std::collections::HashMap<u16, VecKey>,
