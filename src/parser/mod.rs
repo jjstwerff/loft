@@ -397,6 +397,12 @@ pub struct Parser {
     /// suppresses the `not null` hint regardless of read count — the
     /// developer has explicitly acknowledged null is possible.
     pub(crate) defended_field_reads: std::collections::HashSet<(u32, u32)>,
+    /// @PLN25 DN3 flow-narrowing — the stack of local-var slots PROVEN non-null by an
+    /// enclosing guard (`if v != null { … }` / `if v { … }`, the `== null` else-arm).
+    /// A read of `Var(v)` while `v ∈ this` types as the peeled (non-null) base, not `τ?`.
+    /// Pushed on entry to the proven branch, truncated to the saved length on exit; a
+    /// reassignment of `v` inside the branch removes it (the proof no longer holds).
+    pub(crate) narrowed_non_null: Vec<u16>,
     /// Plan-07 phase 4h — site of the most recently parsed field
     /// read.  Set by `Parser::field()` after each read, taken by
     /// `handle_null_coalesce` to mark the read as defended when
@@ -627,6 +633,7 @@ impl Parser {
             trace_types_lines: Vec::new(),
             field_read_counts: std::collections::HashMap::new(),
             defended_field_reads: std::collections::HashSet::new(),
+            narrowed_non_null: Vec::new(),
             last_field_read_site: None,
             #[cfg(feature = "registry")]
             advisory_checked: std::collections::HashSet::new(),

@@ -2901,6 +2901,13 @@ use a separate collection or add after the loop"
                 // NOTE: must come AFTER parse_assign_op because that is where the RHS
                 // lambda is parsed and last_closure_work_var gets set by emit_lambda_code.
                 let result = self.parse_assign_op(code, op, &f_type, &to, parent_tp, var_nr);
+                // @PLN25 DN3: reassigning a proven-non-null var invalidates its narrowing. The
+                // RHS above was parsed WITH the narrowing (so `if a!=null { a = a+1 }` reads `a`
+                // non-null), but any read AFTER this point widens back to `τ?` — the proof no
+                // longer holds once the slot is overwritten.
+                if var_nr != u16::MAX {
+                    self.narrowed_non_null.retain(|&x| x != var_nr);
+                }
                 if op == "=" && self.last_closure_work_var != u16::MAX && var_nr != u16::MAX {
                     self.closure_vars.insert(var_nr, self.last_closure_work_var);
                     // store mapping in Function struct for native codegen.

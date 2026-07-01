@@ -1959,10 +1959,50 @@ impl Parser {
     }
 
     // @F27 — if / else as an expression
+    /// @PLN25 DN3 flow-narrowing — read a non-null proof out of a parsed `if` condition.
+    /// Returns `(var, non_null_in_then)`: `v != null` / `if v` (truthy) narrow `v` in the
+    /// THEN branch (`true`); `v == null` narrows `v` in the ELSE branch (`false`). The null
+    /// side of a comparison is any `OpConv*FromNull()` (the parser's typed-null lowering).
+    fn narrowing_from_condition(&self, test: &Value) -> Option<(u16, bool)> {
+        let Value::Call(op, args) = test.unspan() else {
+            return None;
+        };
+        let name = self.data.def(*op).name();
+        let is_null_conv = |a: &Value| {
+            matches!(a.unspan(), Value::Call(c, ca)
+                if ca.is_empty() && self.data.def(*c).name().ends_with("FromNull"))
+        };
+        // `v == null` / `v != null` (Var on either side of the null literal).
+        if (name.starts_with("OpEq") || name.starts_with("OpNe")) && args.len() == 2 {
+            let pair = match (args[0].unspan(), args[1].unspan()) {
+                (Value::Var(v), other) | (other, Value::Var(v)) if is_null_conv(other) => Some(*v),
+                _ => None,
+            };
+            if let Some(v) = pair {
+                return Some((v, name.starts_with("OpNe")));
+            }
+        }
+        // `if v` (truthy) — a bare nullable read converted to boolean → non-null in THEN.
+        if name.starts_with("OpConvBoolFrom")
+            && args.len() == 1
+            && let Value::Var(v) = args[0].unspan()
+        {
+            return Some((*v, true));
+        }
+        None
+    }
+
     pub(crate) fn parse_if(&mut self, code: &mut Value) -> Type {
         let mut test = Value::Null;
         let tp = self.expression(&mut test);
         self.convert(&mut test, &tp, &Type::Boolean);
+        // @PLN25 DN3: a non-null proof from the condition narrows the proven var inside the
+        // matching branch (then for `!= null`/truthy, else for `== null`).
+        let narrow = self.narrowing_from_condition(&test);
+        let narrow_base = self.narrowed_non_null.len();
+        if let Some((v, true)) = narrow {
+            self.narrowed_non_null.push(v);
+        }
         let is_aliases: Vec<(String, Option<u16>)> = self.is_capture_aliases.drain(..).collect();
         let is_bindings: Vec<Value> = self.is_capture_bindings.drain(..).collect();
         let mut true_code = Value::Null;
@@ -1982,6 +2022,12 @@ impl Parser {
             } else {
                 self.vars.remove_name(name);
             }
+        }
+        // @PLN25 DN3: leave the then-branch — drop its narrowing; the ELSE gets the `== null`
+        // proof (the var is non-null on the else side of `if v == null { … } else { … }`).
+        self.narrowed_non_null.truncate(narrow_base);
+        if let Some((v, false)) = narrow {
+            self.narrowed_non_null.push(v);
         }
         let mut false_type = Type::Void;
         let mut false_code = Value::Null;
@@ -2024,6 +2070,9 @@ impl Parser {
             }
         }
         self.vars.restore_write_state(&write_state);
+        // @PLN25 DN3: both branches parsed — drop any narrowing back to the enclosing level
+        // (the proof holds only inside the if/else, not after it).
+        self.narrowed_non_null.truncate(narrow_base);
         // @PLN25 DN1: a branch that yields a bare `null` makes the if-expression NULLABLE — its
         // result widens to `Optional(τ)` where τ is the non-null SCALAR sibling's type. The bare
         // null is otherwise coerced to the sibling's typed-null sentinel and the if types as a

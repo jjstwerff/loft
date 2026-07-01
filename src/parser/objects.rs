@@ -257,6 +257,11 @@ impl Parser {
                 } else {
                     t = self.vars.tp(v_nr).depending(v_nr);
                 }
+                // @PLN25 DN3 flow-narrowing: a read of a var PROVEN non-null by an enclosing
+                // guard types as the peeled base, not `τ?` (see `narrowed_non_null`).
+                if self.narrowed_non_null.contains(&v_nr) {
+                    t = t.base().clone();
+                }
                 self.var_usages(v_nr, true);
                 if let Type::Reference(d_nr, _) = self.vars.tp(*into)
                     && let Type::Reference(vd_nr, _) = self.vars.tp(v_nr)
@@ -276,6 +281,10 @@ impl Parser {
             } else {
                 let v_nr = self.vars.var(name);
                 t = self.vars.tp(v_nr).depending(v_nr);
+                // @PLN25 DN3 flow-narrowing: proven non-null in this branch → peeled base.
+                if self.narrowed_non_null.contains(&v_nr) {
+                    t = t.base().clone();
+                }
                 self.var_usages(v_nr, true);
                 *code = Value::Var(v_nr);
             }
