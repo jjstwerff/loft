@@ -1,0 +1,21 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @F32 — GENERATED from loft-lang/features#32 by tools/features/gen.loft — DO NOT EDIT.
+struct Countdown {
+    n: integer
+}
+
+// Return the next value, or null when there is nothing left.
+fn next(self: Countdown) -> integer {
+    if self.n <= 0 { return null; }
+    v = self.n;
+    self.n = v - 1;
+    v
+}
+
+fn main() {
+    c = Countdown { n: 3 };
+    for x in c {
+        println("{x}");   // 3, then 2, then 1
+    }
+}

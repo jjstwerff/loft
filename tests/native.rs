@@ -773,6 +773,36 @@ fn native_dir() -> std::io::Result<()> {
     run_native_jobs(jobs, rlib_info)
 }
 
+/// Compile and run every extracted feature example in `tests/docs/features/`
+/// through the native backend — the native half of @PLN92 strand-3's
+/// "example-must-run" guard (@I81).  These files are generated from
+/// `loft-lang/features` issues by `tools/features/gen.loft`; only complete-program
+/// examples land here (library / syntax fragments are mirrored but not tested).
+/// Silent no-op if the directory is absent; skips silently if `rustc` is absent.
+#[test]
+fn native_features() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    let mut files: Vec<PathBuf> = match std::fs::read_dir("tests/docs/features") {
+        Ok(rd) => rd
+            .filter_map(|f| f.ok().map(|e| e.path()))
+            .filter(|p| {
+                p.extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("loft"))
+            })
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    files.sort();
+    let rlib_info = find_loft_rlib();
+    let mut jobs = Vec::new();
+    for entry in files {
+        jobs.push(prepare_native_test(&entry)?);
+    }
+    run_native_jobs(jobs, rlib_info)
+}
+
 /// Compile and run every `.loft` file in `tests/scripts/` through the native Rust
 /// backend (`--native` mode), skipping files listed in `SCRIPTS_NATIVE_SKIP`.
 ///

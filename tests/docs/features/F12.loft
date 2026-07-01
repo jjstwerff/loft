@@ -1,0 +1,8 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @F12 — GENERATED from loft-lang/features#12 by tools/features/gen.loft — DO NOT EDIT.
+struct Point { x: integer, y: integer }
+fn main() {
+    p = Point { x: 3, y: 4 };
+    println("({p.x}, {p.y})");    // (3, 4)
+}

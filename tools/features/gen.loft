@@ -1,0 +1,147 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @I81 — feature-catalogue sync generator (strand 3 of @PLN92)
+//
+// Reads the committed snapshot `index/features.json` (fetched from the
+// loft-lang/features issue tracker by `make features-fetch`) and regenerates,
+// deterministically and offline, the in-project shadow of that catalogue:
+//
+//   doc/features/@F<n>.md / @I<n>.md   — the mirror agents grep + scan.loft indexes
+//   doc/features/README.md             — a generated table of contents
+//   tests/docs/features/@F<n>.loft     — every @F `## Example`, run cross-backend in CI
+//
+// The GitHub issue is the single source of truth; this writes its one-way
+// shadow.  Never edit the generated files — edit the issue, then
+// `make features-fetch && make features-gen`.  Two CI guards keep the shadow
+// honest: `make features-check` regenerates and fails on any diff (no silent
+// drift), and the extracted examples must run on both backends.
+//
+// @PLN9: repo-root tool — its file() paths resolve against the working
+// directory (the repo root), so `#cwd` opts out of the program-relative default.
+#cwd
+
+// The unauthored Pass-1 stub marker.  Issues still carrying it have no real
+// documentation yet, so they get neither a mirror nor a test.
+fn is_stub(body: text) -> boolean {
+  body.contains("Catalogue entry from @PLN92 Pass 1")
+}
+
+// Extract the first ```loft fenced block from an issue body, trimmed.
+// Returns "" when the body has no loft example — infra entries, and the
+// toolchain features whose examples are shell commands, not `.loft` programs.
+fn extract_loft(body: text) -> text {
+  op = body.find("```loft");
+  if op < 0 { return ""; }
+  after = body[op + 7..];
+  cl = after.find("```");
+  if cl < 0 { return ""; }
+  after[0..cl].trim()
+}
+
+// Truncate-then-write: create-or-replace with exactly `content`.
+fn write_file(path: text, content: text) {
+  f = file(path);
+  f.set_file_size(0);
+  f += content;
+}
+
+fn main() {
+  root = json_parse(file("index/features.json").content());
+  mkdir_all("doc/features");
+  mkdir_all("tests/docs/features");
+
+  mirrors = 0;
+  examples = 0;
+  fragments = 0;
+  skipped = 0;
+  feat_toc = "";
+  infra_toc = "";
+
+  match root {
+    JArray { items } => {
+      for it in items {
+        number = it.field("number").as_long();
+        title = it.field("title").as_text();
+        kind = it.field("kind").as_text();
+        body = it.field("body").as_text();
+
+        if is_stub(body) {
+          println("  skip #{number} (unauthored stub)");
+          skipped += 1;
+          continue;
+        }
+
+        prefix = "I";
+        if kind == "feature" { prefix = "F"; }
+        // `slug` names files (F42) — `@` is invalid in a Rust crate name, which
+        // the native backend derives from the filename.  `tag` (@F42) is the
+        // grep/scan anchor and lives in file content only.
+        slug = "{prefix}{number}";
+        tag = "@{slug}";
+
+        // 1. Mirror page — SPDX header, a bare `@tag` anchor for scan.loft,
+        //    then the issue body verbatim.
+        md = "<!--\n";
+        md += "Copyright (c) 2026 Jurjen Stellingwerff\n";
+        md += "SPDX-License-Identifier: LGPL-3.0-or-later\n";
+        md += "GENERATED from loft-lang/features#{number} by tools/features/gen.loft — DO NOT EDIT.\n";
+        md += "Source of truth is the issue; edit there, then `make features-fetch && make features-gen`.\n";
+        md += "-->\n";
+        md += "<!-- {tag} -->\n\n";
+        md += "# {tag} — {title}\n\n";
+        md += body;
+        md += "\n";
+        write_file("doc/features/{slug}.md", md);
+        mirrors += 1;
+
+        // Table-of-contents row (escape any pipe in the title).
+        row = "| [{tag}]({slug}.md) | {title.replace("|", "\\|")} |\n";
+        if kind == "feature" { feat_toc += row; } else { infra_toc += row; }
+
+        // 2. Runnable example — extract only when the fence holds a complete
+        //    program (a `fn main`).  Library / syntax fragments (e.g. @F47's
+        //    module-system example is a `pub fn` library file, not an
+        //    executable) are mirrored above but not run-tested: the native
+        //    backend requires a `main`, so a fragment can't be a cross-backend
+        //    guard.  The example-runs guard therefore covers exactly the
+        //    complete-program examples.
+        code = extract_loft(body);
+        if code.len() > 0 {
+          if code.contains("fn main") {
+            tf = "// Copyright (c) 2026 Jurjen Stellingwerff\n";
+            tf += "// SPDX-License-Identifier: LGPL-3.0-or-later\n";
+            tf += "// {tag} — GENERATED from loft-lang/features#{number} by tools/features/gen.loft — DO NOT EDIT.\n";
+            tf += code;
+            tf += "\n";
+            write_file("tests/docs/features/{slug}.loft", tf);
+            examples += 1;
+          } else {
+            println("  fragment #{number} {tag} (example has no fn main — mirrored, not run-tested)");
+            fragments += 1;
+          }
+        }
+      }
+    },
+    _ => { println("error: index/features.json is not a JSON array"); }
+  }
+
+  // 3. Generated table of contents.
+  toc = "<!--\n";
+  toc += "Copyright (c) 2026 Jurjen Stellingwerff\n";
+  toc += "SPDX-License-Identifier: LGPL-3.0-or-later\n";
+  toc += "GENERATED by tools/features/gen.loft — DO NOT EDIT.\n";
+  toc += "-->\n\n";
+  toc += "# loft feature & infra catalogue\n\n";
+  toc += "One-way mirror of the `loft-lang/features` issue tracker (@PLN92). The issue is\n";
+  toc += "canonical; these pages are its generated shadow. Regenerate with\n";
+  toc += "`make features-fetch && make features-gen`.\n\n";
+  toc += "## Features (`@F`)\n\n";
+  toc += "| Tag | Title |\n|-----|-------|\n";
+  toc += feat_toc;
+  toc += "\n## Infrastructure (`@I`)\n\n";
+  toc += "| Tag | Title |\n|-----|-------|\n";
+  toc += infra_toc;
+  write_file("doc/features/README.md", toc);
+
+  println("features-gen: {mirrors} mirrors, {examples} runnable examples, {fragments} fragment(s), {skipped} stub(s) skipped");
+}

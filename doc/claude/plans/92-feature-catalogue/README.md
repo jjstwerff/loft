@@ -17,9 +17,14 @@ the 79/80 implementing sites (build green, comment-only); **Pass 3 authoring don
 [Success criterion](#success-criterion--gated-on-doc-improvement)): authoring tested
 examples caught real reference errors, now fixed. **Design settled:** the *issue is the
 canonical, self-contained doc; everything else derives one-way* (see
-[The model](#the-model)). **Remaining:** strand-3 sync automation + CI guards, strand-4
-coverage gate, strand-5 hygiene. This README is the single source of truth for per-strand
-status.
+[The model](#the-model)). **Strand 3 (issue→project sync) SHIPPED** —
+`tools/features/gen.loft` (the @I81 generator) reads the committed `index/features.json`
+snapshot and renders the 81 issues into a committed mirror (`doc/features/`) plus 45
+runnable examples (`tests/docs/features/`), with both CI guards green: no-drift
+(`make features-check`) + example-must-run on both backends (`tests/features.rs`,
+`tests/native.rs::native_features`). **Remaining:** strand-4 coverage gate, strand-5
+hygiene (and, as a strand-3 follow-on, rendering LOFT.md's per-feature sections + HTML
+from the issues). This README is the single source of truth for per-strand status.
 
 ## Goal
 
@@ -123,7 +128,7 @@ already have** — not a new testing or doc-rewrite mechanism.
 |---|---|---|
 | **1 — Identity** | **Done** | `loft-lang/features` stood up; **80 issues minted** (`@F1`–`@F56`, `@I57`–`@I80`); `kind:feature`/`kind:infra` labels. |
 | **2 — Scanner / index** | **Shipped** | `scan.loft` indexes `@F`/`@I` (same byte-scan as `@P`, no trailing-letter rule); `idx tag:`/`prefix:` work; verified on match + reject cases. |
-| **3 — Authoring + issue→project sync (the value)** | **Authoring done (79/80); sync open** | ✅ **Authored** the self-contained issues (what/how/tested-example) — 79/80, `@F` examples cross-backend-verified; **ROI gate cleared** (caught + fixed real doc drift). ⬜ Still open: a generator that renders them into a committed in-project mirror (agents `grep`/`idx`) and **extracts each `## Example` into `tests/docs`** (CI-run); LOFT.md per-feature sections + HTML render from the issues; the two CI guards (regen-and-diff, example-must-run). **This strand carried the doc-improvement payoff — the gate is cleared; the automation makes it durable.** |
+| **3 — Authoring + issue→project sync (the value)** | **Shipped (core); LOFT.md/HTML render deferred** | ✅ **Authored** 80/81 self-contained issues (`@F43` deferred as a library); ROI gate cleared (caught + fixed real doc drift). ✅ **Sync automation** — `tools/features/gen.loft` (@I81) reads the committed `index/features.json` snapshot and regenerates the mirror `doc/features/` (agents `grep`/`idx` + a generated TOC) + 45 runnable examples `tests/docs/features/`; fragments (library/syntax examples, no `fn main`) + the unauthored stub are mirrored/skipped, not run-tested. ✅ **Two CI guards green** — no-drift (`make features-check`, wired into the index-hygiene job) + example-must-run on both backends (`tests/features.rs` interpret, `tests/native.rs::native_features`). ⬜ Follow-on: render LOFT.md per-feature sections + user-facing HTML from the issues. |
 | **4 — Source-coverage gate (keystone)** | Open | Per-region span attribution to `@F`/`@I`; per-region threshold *K* + ratcheting residue budget (reuse `.lint_comments_baseline`); CI gate. The only genuinely new mechanism. |
 | **5 — Hygiene** | Open | Every `@F`/`@I` declared once + dual-anchored (≥1 doc + ≥1 code); optionally fold in the cross-doc status-drift check (the @P251 class). |
 
@@ -154,8 +159,8 @@ reviewed as a whole before any tag is written, and source tags land before doc t
 
 **Pass 3 — Authoring pass: write the self-contained feature doc IN THE ISSUE. ✅ AUTHORING DONE** *(the substantive work — careful prose, not harvest; **this is where the docs improve, and where the ROI gate applies**; 79/80 authored, `@F` examples cross-backend-verified — automation + anchors below still open)*
 - [x] For each `@F`, author the standalone body — `## What it is` (precise), `## How it aids you` (concrete), `## Example` (inline, runnable) — **zero deferral to the project**. For each `@I`, a full role description + source-region locator. *(79/80; `@F43` random deferred as a library.)*
-- [ ] Run the strand-3 automation: render the in-project mirror + extract `## Example` → `tests/docs`; the two CI guards (regen-diff, example-runs) must be green.
-- [ ] Place the `<!-- @F<n> -->` doc anchor where the rendered per-feature section lands.
+- [x] Run the strand-3 automation: render the in-project mirror + extract `## Example` → `tests/docs`; the two CI guards (regen-diff, example-runs) must be green. *(shipped: `tools/features/gen.loft` @I81; guards `make features-check` + `tests/features.rs` + `native_features`.)*
+- [x] Place the `<!-- @F<n> -->` doc anchor where the rendered per-feature section lands. *(the generator emits `<!-- @F<n> -->` + a `# @F<n>` header into each `doc/features/<slug>.md`.)*
 - [ ] Run the **hygiene checks** (strand 5): every entry declared once + dual-anchored (≥1 doc + ≥1 code).
 
 **Why this order:** map-before-tag reviews the catalogue as a whole (right granularity,
