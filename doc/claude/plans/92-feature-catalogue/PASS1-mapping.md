@@ -310,6 +310,40 @@ mechanism(s) an `area:` touches.
 
 ---
 
+## `@F`/`@I` ↔ `@PLN` map (provenance / roadmap)
+
+Which [loft-lang/plans](https://github.com/loft-lang/plans) plan **built or is
+evolving** each entry — the *future/provenance* axis, complementing the
+*settled-past* DESIGN_DECISIONS anchors and the *proof* axis (the `**Catalogue:**`
+lines now in `formal/*.md`). Numbers are the canonical `@PLN` issue ids (verified
+against the tracker — **not** the legacy local plan-dir numbers, which collide).
+`[C]` closed · `[O]` open/in-flight.
+
+| catalogue entry | plan(s) |
+|---|---|
+| @F1 null model | @PLN17 [C] three-state bool · @PLN25 [O] nullable seq / dense-null |
+| @F3 scalar types · @F4 width integers | @PLN1 [C] integer-width · @PLN88 [O] one-i64 model · @PLN17 [C] |
+| @F5 type conversions | @PLN88 [O] one-i64 model · @PLN25 [O] narrowing-cast |
+| @F6 vector | @PLN2 [C] store-lifetime watermark · @PLN25 [O] nullable sequences |
+| @F7 hash · @F8 sorted · @F9 index | @PLN31 [O] keyed-collection validation · @PLN38 [O] slicing sorted/index |
+| @F21 references `&T` | @PLN87 [O] reference-default `&` · @PLN85 [O] store-lifetime retirement |
+| @F29 pattern matching | @PLN29 [O] match validation · @PLN35 [O] PEG patterns |
+| @F34 coroutines | @PLN5 [C] coroutine validation |
+| @F38 arithmetic safety · @F44 logging/diagnostics | @PLN28 [O] better error messages |
+| @F51 debugger | @PLN34 [O] native GDB/LLDB |
+| @F53 native backend | @PLN11 [C] data-as-store · @PLN21 [C] prebuilt native libs · @PLN26 [C] C-ABI linking |
+| @F55 package management | @PLN21 [C] prebuilt native libs |
+| @I60 deps · @I69 store · @I70 database — Goal E | @PLN2 [C] watermark · @PLN85 [O] store-lifetime retirement |
+| @I63 store-resident IR · @I68 native generator | @PLN11 [C] data-as-store · @PLN26 [C] C-ABI |
+| @I79 doc generator · @I80 tracker indexer | @PLN42 [O] tracker index · @PLN92 [O] this catalogue |
+
+Not every entry has an owning plan — much of the stable core predates the plan
+tracker; rows are added as plans touch an entry. Cross-cutting stabilization
+(program-level fuzzing, the @PLN89 differential oracle) serves Goals A/D across
+*all* entries rather than owning one, so it is not tabled here.
+
+---
+
 ## Decisions for review
 
 1. **Applied:** the toolchain (CLI, REPL, introspect, debugger, formatter, backends,

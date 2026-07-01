@@ -5,6 +5,8 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # formal/ownership.md — the `deps` ownership / borrow system (strict, aspirational)
 
+**Catalogue:** @F21 (references `&T`), @I60 (deps / lifetime tracker) — Goal E. Roadmap: @PLN85, @PLN87.
+
 > **Rules then deviations** (see [README](README.md)). ⚠️ **This area is aspirational by
 > design.** The rules below are the model loft *steers toward* — they are mostly **not
 > implemented yet**, so the deviation list is large and *is* the active migration
