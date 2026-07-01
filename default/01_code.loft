@@ -557,16 +557,13 @@ fn OpFormatStackFloat(pos: const u16, val: float, width: integer, precision: int
 // --- min / max / clamp ---
 // @PLN25 F1b(b): each has a NON-NULL overload (`-> τ`) and a `τ?` overload (`-> τ?`). The call
 // dispatch picks the `τ?` overload whenever ANY argument is STATICALLY nullable, so an explicit
-// `integer?`/`single?`/`float?` argument gets a correctly-typed nullable RESULT instead of the
-// unsound `-> τ` (which returned null only via the STD_SOURCE exemption). The non-null bodies
-// keep the `if !a || !b { return null }` guard so a runtime-null (e.g. `1 / 0`, still statically
-// `integer`) still propagates — that path stays on the exemption until division is retyped `τ?`.
-// Returns null if either argument is null (consistent with all binary arithmetic operations).
+// `integer?`/`single?`/`float?` argument — INCLUDING a division result (`1 / z`, now typed `τ?`
+// under DN3) — gets a correctly-typed nullable RESULT and routes to the `τ?` body. The non-null
+// bodies are therefore CLEAN (no `return null` guard): they only ever receive truly-non-null args,
+// so they no longer rely on the STD_SOURCE (N-Store) exemption, which is now retired. The `τ?`
+// overloads carry the propagation: null if either argument is null.
 // Smallest of two integer values.
 pub fn min(both: integer, b: integer) -> integer {
-  if !both || !b {
-    return null;
-  }
   if both <= b {
     both
   } else {
@@ -588,9 +585,6 @@ pub fn min(both: integer?, b: integer?) -> integer? {
 #pure
 // Largest of two integer values.
 pub fn max(both: integer, b: integer) -> integer {
-  if !both || !b {
-    return null;
-  }
   if both >= b {
     both
   } else {
@@ -623,9 +617,6 @@ pub fn clamp(both: integer?, lo: integer?, hi: integer?) -> integer? {
 
 // Smallest of two single-precision float values.
 pub fn min(both: single, b: single) -> single {
-  if !both || !b {
-    return null;
-  }
   if both <= b {
     both
   } else {
@@ -647,9 +638,6 @@ pub fn min(both: single?, b: single?) -> single? {
 #pure
 // Largest of two single-precision float values.
 pub fn max(both: single, b: single) -> single {
-  if !both || !b {
-    return null;
-  }
   if both >= b {
     both
   } else {
@@ -681,9 +669,6 @@ pub fn clamp(both: single?, lo: single?, hi: single?) -> single? {
 #pure
 // Smallest of two double-precision float values.
 pub fn min(both: float, b: float) -> float {
-  if !both || !b {
-    return null;
-  }
   if both <= b {
     both
   } else {
@@ -705,9 +690,6 @@ pub fn min(both: float?, b: float?) -> float? {
 #pure
 // Largest of two double-precision float values.
 pub fn max(both: float, b: float) -> float {
-  if !both || !b {
-    return null;
-  }
   if both >= b {
     both
   } else {

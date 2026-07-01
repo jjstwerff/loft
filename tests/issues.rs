@@ -510,12 +510,18 @@ fn test() {
 // Fix: `parse_assign_op` now calls `convert()` when s_type==Type::Null and op=="=",
 // substituting OpConvIntFromNull (or the appropriate FromNull op) before towards_set.
 
+// @PLN25 DN1: this cluster exercises the null-SENTINEL storage/roundtrip mechanism,
+// which under the dense/non-null model is reached through a `τ?` field (a plain scalar
+// field is now NON-null and rejects `= null`). The fields carry `?` so the mechanism —
+// not the retired pre-DN1 "plain scalar field is nullable-by-default" behaviour — is what
+// is tested. (These snippets compile at STD_SOURCE, so they formerly rode the now-removed
+// F1b(b) (N-Store) exemption; real user code, source ≥1, was always held to DN1.)
 // Exact T0-1 reproduction: method sets an integer field to null via reference param.
 // Previously panicked with "store_nr=60" in `set_int`.
 #[test]
 fn set_int_field_null_via_ref() {
     code!(
-        "struct S { cur: integer }
+        "struct S { cur: integer? }
 fn clear(self: S) { self.cur = null }
 fn test() {
     s = S { cur: 42 };
@@ -530,7 +536,7 @@ fn test() {
 #[test]
 fn set_int_field_null_direct() {
     code!(
-        "struct S { cur: integer }
+        "struct S { cur: integer? }
 fn test() {
     s = S { cur: 7 };
     s.cur = null;
@@ -544,7 +550,7 @@ fn test() {
 #[test]
 fn set_long_field_null_via_ref() {
     code!(
-        "struct S { val: integer }
+        "struct S { val: integer? }
 fn clear(self: S) { self.val = null }
 fn test() {
     s = S { val: 1000000 };
@@ -559,7 +565,7 @@ fn test() {
 #[test]
 fn set_multiple_scalar_fields_null() {
     code!(
-        "struct S { a: integer, b: integer }
+        "struct S { a: integer?, b: integer? }
 fn clear(self: S) {
     self.a = null;
     self.b = null;
@@ -578,7 +584,7 @@ fn test() {
 #[test]
 fn null_then_reassign_integer_field() {
     code!(
-        "struct S { cur: integer }
+        "struct S { cur: integer? }
 fn clear(self: S) { self.cur = null }
 fn test() {
     s = S { cur: 10 };
@@ -15118,7 +15124,7 @@ fn run() -> integer {
 #[test]
 fn issue_332_nullable_narrow_field_null_roundtrip() {
     code!(
-        "struct N { a: i16, c: i32, d: integer, tail: integer not null }
+        "struct N { a: i16?, c: i32?, d: integer?, tail: integer not null }
 fn run() -> integer {
     n = N { tail: 1 };
     om = 0;
@@ -15149,7 +15155,7 @@ fn run() -> integer {
 #[test]
 fn issue_334_nullable_byte_field_null_roundtrip() {
     code!(
-        "struct N { b: u8, tail: integer not null }
+        "struct N { b: u8?, tail: integer not null }
 fn run() -> integer {
     n = N { tail: 1 };
     n.b = null;

@@ -4305,17 +4305,17 @@ impl Parser {
         // `-> text`; without it a `text?` tail whose arm is a concat/work-var fell to the
         // `Return(Null)` synthesis (the value was freed and null returned). The `?` is
         // re-applied when the returned type is rewritten below.
-        let (mut dep, ret_is_optional) = match &self.data.definitions[self.context as usize].returned
-        {
-            Type::Text(cur) => (cur.clone(), false),
-            Type::Optional(inner) if matches!(**inner, Type::Text(_)) => {
-                let Type::Text(cur) = &**inner else {
-                    unreachable!()
-                };
-                (cur.clone(), true)
-            }
-            _ => return,
-        };
+        let (mut dep, ret_is_optional) =
+            match &self.data.definitions[self.context as usize].returned {
+                Type::Text(cur) => (cur.clone(), false),
+                Type::Optional(inner) if matches!(**inner, Type::Text(_)) => {
+                    let Type::Text(cur) = &**inner else {
+                        unreachable!()
+                    };
+                    (cur.clone(), true)
+                }
+                _ => return,
+            };
         {
             for v in ls {
                 let n = self.vars.name(*v);

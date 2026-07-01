@@ -652,7 +652,8 @@ impl Parser {
                                 // KEEP parse_append_text's return type — it carries the fresh
                                 // work-text's `frame1` dep, without which the text-return
                                 // conversion sees an empty work-var list and returns null.
-                                let ct = self.parse_append_text(&mut concat, &base_text, &ls, u16::MAX);
+                                let ct =
+                                    self.parse_append_text(&mut concat, &base_text, &ls, u16::MAX);
                                 let n = null_arm(self);
                                 *code = v_if(is_not_null, concat, n);
                                 return Type::optional(ct);

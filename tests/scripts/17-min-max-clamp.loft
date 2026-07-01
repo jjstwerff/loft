@@ -1,6 +1,12 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // min, max, clamp for integer, long, single, and float.
+
+// A runtime (non-constant) division whose divisor is not provably non-zero: the
+// result types `integer?` (DN3), so `nulldiv(0)` yields null at runtime rather than
+// raising, and flows through the `τ?` min/max/clamp overloads.
+fn nulldiv(b: integer) -> integer? { 1 / b }
+
 fn main() {
   // --- integer min ---
   assert(min(3, 5) == 3, "int min(3,5)");
@@ -22,8 +28,11 @@ fn main() {
   assert(clamp(10, 1, 10) == 10, "int clamp at hi");
   assert(clamp(-5, -10, -1) == -5, "int clamp all negative");
   // --- integer null propagation ---
-  z = 0;
-  n = 1 / z ?? null;
+  // @PLN25 DN3/F1b(b): an `integer?` argument routes to the `τ?` overload of
+  // min/max/clamp, which propagates null. (This replaced the retired non-null
+  // crutch, where the `-> τ` body caught a runtime sentinel via the STD_SOURCE
+  // (N-Store) exemption — now removed.)
+  n: integer? = null;
   assert(!min(n, 5), "int min null left is null");
   assert(!min(5, n), "int min null right is null");
   assert(!max(n, 5), "int max null left is null");
@@ -31,13 +40,15 @@ fn main() {
   assert(!clamp(n, 1, 10), "int clamp null v is null");
   assert(!clamp(5, n, 10), "int clamp null lo is null");
   assert(!clamp(5, 1, n), "int clamp null hi is null");
+  // A RUNTIME division-by-zero result is typed `integer?` (DN3) and likewise routes
+  // to the `τ?` overload — F1b(b)'s specific win. `nulldiv(0)` yields null at runtime.
+  assert(!max(nulldiv(0), 5), "int max runtime-div-null propagates");
   // --- long min/max/clamp ---
   assert(min(3, 5) == 3, "long min");
   assert(max(3, 5) == 5, "long max");
   assert(clamp(12, 1, 10) == 10, "long clamp above hi");
   assert(clamp(5, 1, 10) == 5, "long clamp inside");
-  zl = 0;
-  nl = 1 / zl ?? null;
+  nl: integer? = null;
   assert(!min(nl, 5), "long min null propagation");
   assert(!max(nl, 5), "long max null propagation");
   assert(!clamp(nl, 1, 10), "long clamp null propagation");
@@ -47,17 +58,19 @@ fn main() {
   assert(clamp(0.5f, 1.0f, 3.0f) == 1.0f, "single clamp below lo");
   assert(clamp(2.0f, 1.0f, 3.0f) == 2.0f, "single clamp inside");
   assert(clamp(4.0f, 1.0f, 3.0f) == 3.0f, "single clamp above hi");
-  assert(!min((0.0f / 0.0f ?? null), 2.0f), "single min null propagation");
-  assert(!max((0.0f / 0.0f ?? null), 2.0f), "single max null propagation");
+  ns: single? = null;
+  assert(!min(ns, 2.0f), "single min null propagation");
+  assert(!max(ns, 2.0f), "single max null propagation");
   // --- float min/max/clamp ---
   assert(min(1.0, 2.0) == 1.0, "float min");
   assert(max(1.0, 2.0) == 2.0, "float max");
   assert(clamp(0.5, 1.0, 3.0) == 1.0, "float clamp below lo");
   assert(clamp(2.0, 1.0, 3.0) == 2.0, "float clamp inside");
   assert(clamp(4.0, 1.0, 3.0) == 3.0, "float clamp above hi");
-  assert(!min((0.0 / 0.0 ?? null), 2.0), "float min null propagation");
-  assert(!max((0.0 / 0.0 ?? null), 2.0), "float max null propagation");
-  assert(!clamp((0.0 / 0.0 ?? null), 1.0, 3.0), "float clamp null propagation");
+  nf: float? = null;
+  assert(!min(nf, 2.0), "float min null propagation");
+  assert(!max(nf, 2.0), "float max null propagation");
+  assert(!clamp(nf, 1.0, 3.0), "float clamp null propagation");
   // --- min/max with negative values across types ---
   assert(min(-100, 100) == -100, "int min extremes");
   assert(max(-100, 100) == 100, "int max extremes");

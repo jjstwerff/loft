@@ -1868,13 +1868,10 @@ impl Parser {
         // DN1 (the default flip): under DN1 a plain scalar is NON-null, so a bare `null` cannot be
         // stored into a non-Optional scalar target — declare the target `τ?` to allow null.
         // (Heap types — reference/vector/enum — stay nullable; only the SCALAR default flips.)
-        // EXEMPT the trusted stdlib (`STD_SOURCE`): `min`/`max`/`clamp` gained `τ?` overloads
-        // (F1b(b)) that give explicit-nullable args a sound `-> τ?` result, but their non-null
-        // bodies still `return null` on a runtime-null arg (e.g. `1 / 0`, statically `integer`)
-        // and so STILL rely on this. Full un-exemption is a broader migration (retype division-
-        // null to `τ?`, then remaining null-field sites); keep the exemption until that lands.
+        // The stdlib is held to the SAME rule (no STD_SOURCE exemption): F1b(b)'s `min`/`max`/`clamp`
+        // non-null bodies are now clean (nullable args — including DN3-typed division results —
+        // route to the `τ?` overload), so no trusted-source `return null` remains to exempt.
         if crate::keys::pln25_dn1_enabled()
-            && self.data.source != crate::data::STD_SOURCE
             && matches!(value_tp, Type::Null)
             && Self::is_non_null_scalar(target_tp)
         {

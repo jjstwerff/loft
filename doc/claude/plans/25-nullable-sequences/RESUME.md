@@ -146,9 +146,29 @@ tightenings**. In order, each ends green (never carry two phases' breakage):
     `e29cb6f6`); `time.loft` parse/combine `-> integer?` (`a65a28e2`); the nested-exhaustive-match
     false-widening (`arm_yields_direct_null` — `d5402391`). (`31-ref-forward` was environmental —
     registry DNS.)
-  - **F1b — NEXT** — migrate the stdlib `min`/`max`/`clamp` (drop the dead-under-DN1 null-prop
-    `if !a||!b {return null}`) + **remove the `STD_SOURCE` exemption** in `n_store_violation`.
-    The suite is green WITH the exemption, so this is the last piece before committing the flip.
+  - **F1b — ✅ DONE** — the six non-null `min`/`max`/`clamp` bodies are CLEAN (dead-under-DN3
+    null-prop `if !a||!b {return null}` dropped; a nullable arg — explicit `τ?` OR a DN3-typed
+    division result — routes to the `τ?` overload instead), and the **`STD_SOURCE` exemption is
+    REMOVED** from `n_store_violation`: the stdlib is now held to the SAME DN1 rule as user code.
+    Fallout migrated: 7 `issues.rs` field-null tests were pre-DN1 (non-null scalar field `= null`,
+    kept alive ONLY by the source-0 quirk of `code!`) → declared `τ?` so they exercise the real
+    DN1-reachable null-sentinel roundtrip; `tests/scripts/17-min-max-clamp.loft` null-prop section
+    rewritten to explicit `τ?` inputs + one runtime-division case (`nulldiv(0)`). issues 748/0,
+    wrap 51/0, format 11/0, both backends.
+    - **DN3-division completeness gaps surfaced here (pre-existing, NOT regressions; the un-exempt
+      removed the non-null crutch that masked them). Track for the DN3 `/`,`%` follow-up:**
+      1. **constant-fold** — `1/0` with a *constant/literal* divisor folds to a sentinel typed
+         `integer` (the `handle_operator` `τ?` wrap is never reached), so `max(1/z,5)` with a local
+         `z=0` returns 5, not null. Only RUNTIME division (`a/z`, param divisor) types `τ?`.
+      2. **via-var Optional-drop** — an inferred `d = a/z` (runtime) infers `d: integer`, dropping
+         the division's `Optional`. So `d = a/z; return d` (non-null return) **unsoundly ACCEPTS**,
+         and `max(d,5)` → 5. The wrap survives ARG capture (`max(a/z,5)` → null) but not the
+         inferred-assignment type (`change_var` at `parse_assign_op`, expressions.rs:1627 — s_type
+         from `parse_operators` is `integer` there, not `integer?`; root not yet localized).
+      3. **`?? null` discharge** — `x ?? null` (null fallback) discharges `integer?` to `integer`
+         instead of staying nullable.
+      #2 is the soundness one (undefended division survives into a non-null return via a var);
+      it's the most valuable next DN3-division slice.
   - **F1c** — ✅ DONE (`85af2b18`): the `change_var` null-local message names `τ?`, no `as`.
   - Gate: `find_problems` green as the DEFAULT (no env) on both backends — ✅ met (exemption in place).
 - **F2 — Retire `not null`** (Phase-5 CLEANUP; ordering load-bearing — AFTER F1). Make the
