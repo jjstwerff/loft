@@ -14,8 +14,22 @@ probe verdicts) → [implementation-steps.md](implementation-steps.md) (the phas
 
 ---
 
-## TL;DR — where we are (updated 2026-06-30)
+## TL;DR — where we are (updated 2026-07-01)
 
+- **PR #471 MERGED to `main` (squash `03d8899f`, 2026-07-01)** — the whole scalars-half:
+  `Type::Optional` + slice 3a/b/c (N-Store) + the gated DN1 flip + enforcement + sweep(1)
+  lib/lexer. All behind opt-in `LOFT_PLN25_OPT` / `_DN3` / `_DN1`; gate-OFF byte-identical.
+  Branch `tuxedo-pln85-fuzz-proof-gate` reset onto merged main; new sweep work stacks on it.
+- **Sweep (2): web.loft DONE + 3 read-peels harvested (`c9f512c5`).** web `try_recv` →
+  `-> text?` (repo fixture + zt-c staging copies; registry needs a republish for the
+  multiplayer DN1 suite). The migration surfaced the consumer ripple: text? READ sites
+  (index/slice/format) didn't peel `Optional(Text)` like method dispatch does — fixed all 3
+  (parser index+format, native `&str` borrow), both backends, gate-OFF byte-identical. Every
+  text? READ (method/index/slice/format/fn-arg) now behaves as plain text. The ONE remaining
+  consumer pattern — `got = raw` reassigning text? into an existing `text` local — is
+  correctly REJECTED (maybe-null into non-null local); discharge with `?? ""`. **loft has no
+  flow-narrowing → that is the eventual ergonomic chokepoint (separate feature).** Regression:
+  `tests/scripts/25-nullable-read-consumption.loft` + `tests/pln25_dn1_consumption.rs`.
 - **`lima-default-borrow-elision` is MERGED to `main`** (via #467/#468/#469 etc.) and the
   branch is deleted. Its scalars Phase-0 + DN4 + N-Arith work is now ON `main`.
 - **@PLN25 now continues on `tuxedo-pln85-fuzz-proof-gate`** (the single live branch, off
