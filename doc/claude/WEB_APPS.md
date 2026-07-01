@@ -48,6 +48,14 @@ loft --html hello.loft        # writes hello.html next to the source
 Open `hello.html` in any modern browser (2020+). The text appears in a `<pre>`
 box on the page. The file is fully self-contained — no server, no other files.
 
+**The engine is opt-in.** A program that uses no graphics/audio compiles to a
+**minimal engine-less page**: a small wasm plus a ~10-line inline shim — no
+WebGL2 context, no asyncify, no canvas, none of the `loft-gl-wasm.js` engine.
+`loft --html` picks this automatically (it reports `· minimal engine-less
+shell`) and only emits the full engine page when the program actually uses the
+canvas/audio/frame-loop. So "a small standalone web module" is the default, and
+"a game engine in the page" is what you opt into by using it.
+
 ## 3. What a `--html` program can and cannot do (the host surface)
 
 A `--html` program talks to the browser through a small, fixed set of **host
@@ -58,6 +66,8 @@ on native.
 **Available today:**
 
 - **Text output** — `print` / `println` go to a `<pre>` box (or the JS console).
+- **Text input** — `host_input()` reads the bytes JavaScript hands in (§5). The
+  mirror of `print`; the input channel for a headless compute module.
 - **Graphics + input** — the full WebGL2 canvas surface (`lib/graphics`): draw
   calls, shaders, textures, plus keyboard and mouse polling. This is what games
   use.
@@ -67,11 +77,12 @@ on native.
 **NOT available in `--html`** (these silently do nothing or return empty):
 
 - **No filesystem** — `file(...)` returns "not found".
-- **No program arguments** — `arguments()` returns an empty list.
+- **No program arguments** — `arguments()` returns an empty list. (Use
+  `host_input()` for JavaScript-supplied input instead — §5.)
 - **No HTTP client** — `web`'s `http_get` / `http_post` / … are **native-only**;
   they do not work in the browser. WebSocket is the only browser network
-  transport today. (Let JavaScript do `fetch` and hand loft the bytes — §5.)
-- **No generic "bytes in from JavaScript" yet** — see §5.
+  transport today. (Let JavaScript do `fetch` and hand loft the bytes via
+  `host_input()` — §5.)
 
 > This closed surface is the thing the first browser consumer had to discover by
 > dumping the WASM imports. That is exactly what this section is for — you should
@@ -137,18 +148,42 @@ any JavaScript.
 
 This is the "loft as a browser compute service" shape: JavaScript owns the page
 and the network, calls a pure-loft kernel with some input, and shows the result.
+This is a standalone module (§2) — the minimal engine-less page, no canvas, no
+frame loop.
 
-- **Output — works today.** The kernel `print`s its result; the page reads it.
-- **Input — the current gap.** There is no shipped generic "hand bytes from
-  JavaScript to a running loft program" channel under `--html` yet. The designed
-  primitive is `host_input()` — see
-  [BROWSER_INTEROP.md § the input half](BROWSER_INTEROP.md). Until it ships, feed
-  input by baking it into the program, or with a small per-app `[wasm.bridge]`
-  crate (the WebSocket bridge in §4b is the template).
+```loft
+// kernel.loft — reads the input, computes, prints the result.
+fn main() {
+  spec = host_input();               // the bytes JS handed in
+  // ... parse spec, compute ...
+  println("{result}");               // JS reads this off the page / print hook
+}
+```
 
-The kernel itself stays pure loft and runs unchanged on every target — you
-develop and test it on `--interpret` / `--native` / `--native-wasm` (§7) and
-only the browser leg waits on `host_input`.
+- **Output** — the kernel `print`s its result; the page's `<pre>` (or your own
+  `loft_host_print` hook) receives it.
+- **Input** — `host_input()` returns the bytes JavaScript set on
+  `globalThis.loftInput` before the program ran. `loft_start` builds fresh state
+  each call, so a Web Worker can instantiate the wasm once and call it per
+  request:
+
+```js
+globalThis.loftInput = "52.0,5.0;52.009,5.0";   // set input, then run
+const { instance } = await WebAssembly.instantiate(wasmBytes, {
+  loft_io: {
+    loft_host_print: (p, l) => { out += dec.decode(new Uint8Array(mem.buffer, p, l)); },
+    loft_host_input_len: () => inputBytes.length,
+    loft_host_input_copy: (ptr) => new Uint8Array(mem.buffer, ptr, inputBytes.length).set(inputBytes),
+  }
+});
+mem = instance.exports.memory;
+instance.exports.loft_start();                   // out now holds the result
+```
+
+The kernel stays pure loft and runs unchanged on every target: develop and test
+it on `--interpret` / `--native` / `--native-wasm` by feeding the same bytes on
+**stdin** (`host_input()` reads stdin off the browser), then ship the browser leg
+— identical output (§7).
 
 ## 5. Getting data in and out — the byte channel
 
@@ -156,13 +191,14 @@ The model is simple and one-directional in each direction: **the browser host
 moves only opaque bytes** between loft and JavaScript; neither side reads the
 other's data structures. Your loft library decides the meaning.
 
-- **loft → JavaScript (out):** `println` is the shipped path; the page appends the
-  text. A library can serialize any value to JSON or bytes and push it the same
-  way.
-- **JavaScript → loft (in):** `host_input()` (designed — §4c). Until it ships,
-  browser input needs a per-app bridge.
+- **loft → JavaScript (out):** `println` / `print` (the `loft_io.loft_host_print`
+  host import); the page appends the text. A library can serialize any value to
+  JSON or bytes and push it the same way.
+- **JavaScript → loft (in):** `host_input()` (the `loft_io.loft_host_input_len` +
+  `loft_host_input_copy` host imports — loft sizes the buffer, the host fills it).
+  The mirror of `print`; set `globalThis.loftInput` before the program runs (§4c).
 - **Networking:** let JavaScript do it. JS `fetch(...)` is trivial; hand the
-  response bytes to loft through the channel. loft stays pure compute and needs no
+  response bytes to loft via `host_input()`. loft stays pure compute and needs no
   HTTP in the browser at all.
 
 ## 6. Build, size, and serve

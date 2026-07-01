@@ -122,9 +122,15 @@ fn print_help() {
     println!("  --native-wasm [out.wasm]      compile to WebAssembly (wasm32-wasip2)");
     println!("                                (default: .loft/<script>.wasm beside the script)");
     println!("                                for headless/WASI (wasmtime); NOT the browser build");
-    println!("  --html [out.html]             compile to a self-contained browser page (the browser");
-    println!("                                target: WebGL2 canvas + keyboard/mouse, println output;");
-    println!("                                default: <script>.html) — guide: doc/claude/WEB_APPS.md");
+    println!(
+        "  --html [out.html]             compile to a self-contained browser page (the browser"
+    );
+    println!(
+        "                                target: WebGL2 canvas + keyboard/mouse, println output;"
+    );
+    println!(
+        "                                default: <script>.html) — guide: doc/claude/WEB_APPS.md"
+    );
     println!(
         "  --tests [dir]                 discover and run fn test*() functions in .loft files"
     );
@@ -5820,12 +5826,19 @@ fn main() {
 // callable module (loft_start builds fresh Stores each call, so JS can invoke
 // it per request).  A program that uses graphics/audio/a frame loop gets the
 // full engine page instead.
-const wasmBytes=Uint8Array.from(atob("{wasm_b64}"),c=>c.charCodeAt(0));
+const wasmB64="{wasm_b64}";
+const wasmBytes=Uint8Array.from(atob(wasmB64),c=>c.charCodeAt(0));
 const out=document.getElementById('out');
 const dec=new TextDecoder();
 let mem;
+// JS -> loft input: set globalThis.loftInput (a string) before this runs and
+// host_input() reads it (len+copy).  Or instantiate the wasm yourself in a Web
+// Worker with these same loft_io imports and feed inputBytes per request.
+let inputBytes=new TextEncoder().encode(globalThis.loftInput!=null?String(globalThis.loftInput):"");
 const imports={{loft_io:{{
-  loft_host_print:(ptr,len)=>{{out.textContent+=dec.decode(new Uint8Array(mem.buffer,ptr,len));}}
+  loft_host_print:(ptr,len)=>{{out.textContent+=dec.decode(new Uint8Array(mem.buffer,ptr,len));}},
+  loft_host_input_len:()=>inputBytes.length,
+  loft_host_input_copy:(ptr)=>{{new Uint8Array(mem.buffer,ptr,inputBytes.length).set(inputBytes);}}
 }}}};
 WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
   mem=r.instance.exports.memory;
@@ -5835,7 +5848,7 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
             )
         } else {
             format!(
-            r#"<!DOCTYPE html>
+                r#"<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>{title}</title>
 <style>body{{margin:0;background:#000;display:flex;justify-content:center;align-items:center;height:100vh}}canvas{{display:block}}pre{{color:#0f0;font-size:14px}}</style>
 </head><body>

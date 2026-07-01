@@ -108,6 +108,9 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_env_variables", n_env_variables),
     // @PLN10 Phase 2 — env_variable dest-passing (os_variable now owns its String).
     ("n_env_variable_dest", n_env_variable_dest),
+    // host_input dest-passing — reads all program input as one text (stdin on
+    // native/WASI; the JS host on --html).  Non-null ("" when empty).
+    ("n_host_input_dest", n_host_input_dest),
     ("t_4text_byte_at", t_4text_byte_at),
     ("t_4text_starts_with", t_4text_starts_with),
     ("t_4text_ends_with", t_4text_ends_with),
@@ -911,6 +914,20 @@ fn n_env_variable_dest(stores: &mut Stores, stack: &mut DbRef) {
     let dest = *stores.get::<DbRef>(stack);
     let v_name = *stores.get::<Str>(stack);
     let value = stores.os_variable(v_name.str());
+    stores
+        .store_mut(&dest)
+        .addr_mut::<String>(dest.rec, dest.pos)
+        .push_str(&value);
+}
+
+// Reads all program input as one text: stdin on native/WASI, the JS host on
+// --html (via the loft_io host-import branch in the #rust template — the
+// interpreter never runs under --html, so this dest variant always reads
+// stdin).  Non-null ("" when empty), so it writes straight into the caller's
+// buffer.  Routed by `is_text_dest_native`.  Sibling of n_env_variable_dest.
+fn n_host_input_dest(stores: &mut Stores, stack: &mut DbRef) {
+    let dest = *stores.get::<DbRef>(stack);
+    let value = stores.host_input_native();
     stores
         .store_mut(&dest)
         .addr_mut::<String>(dest.rec, dest.pos)

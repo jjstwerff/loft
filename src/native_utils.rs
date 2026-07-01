@@ -512,7 +512,9 @@ pub(crate) fn html_wasm_import_modules(wasm: &[u8]) -> Option<std::collections::
         p += 1;
         let size = usize::try_from(read_uleb(wasm, &mut p)?).ok()?;
         let section_start = p;
-        let section_end = section_start.checked_add(size).filter(|e| *e <= wasm.len())?;
+        let section_end = section_start
+            .checked_add(size)
+            .filter(|e| *e <= wasm.len())?;
         if id == 2 {
             let mut ip = section_start;
             let count = read_uleb(wasm, &mut ip)?;

@@ -38,6 +38,13 @@
 #[link(wasm_import_module = "loft_io")]
 unsafe extern "C" {
     pub(crate) safe fn loft_host_print(ptr: *const u8, len: usize);
+    // Input mirror of `loft_host_print`: `host_input()` pulls the bytes the JS
+    // host set before `loft_start`.  Two calls because loft must size the buffer
+    // before the host fills it — `len` then `copy` (the pattern `web`'s
+    // `ws_msg_len`/`ws_msg_copy` bridge already proves).  Used by
+    // `Stores::host_input_native`'s browser branch (`src/database/format.rs`).
+    pub(crate) safe fn loft_host_input_len() -> usize;
+    pub(crate) safe fn loft_host_input_copy(ptr: *mut u8);
 }
 
 #[macro_use]
