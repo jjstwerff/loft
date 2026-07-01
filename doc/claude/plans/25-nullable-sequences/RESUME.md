@@ -16,6 +16,10 @@ probe verdicts) → [implementation-steps.md](implementation-steps.md) (the phas
 
 ## TL;DR — where we are (updated 2026-07-01)
 
+> **Remaining steps to close @PLN25: see [§ FINISH LINE](#finish-line--the-remaining-steps-to-close-pln25-2026-07-01) below.**
+> The model is built + gated + both-backends-validated; what's left is landing the flip as the
+> default (F1) + retiring `not null` (F2) + closing DN5/DN6/DN4 (F3–F5) + the final PR (F6).
+
 - **PR #471 MERGED to `main` (squash `03d8899f`, 2026-07-01)** — the whole scalars-half:
   `Type::Optional` + slice 3a/b/c (N-Store) + the gated DN1 flip + enforcement + sweep(1)
   lib/lexer. All behind opt-in `LOFT_PLN25_OPT` / `_DN3` / `_DN1`; gate-OFF byte-identical.
@@ -111,11 +115,56 @@ probe verdicts) → [implementation-steps.md](implementation-steps.md) (the phas
 | DN4 `as τ` fit-check / `as τ?` | 3 TIGHTEN (early) | ✅ this branch, default-on |
 | N-Arith `&`/`%` range-tracking | 3 support | ✅ this branch |
 | Scalar `τ?` = `Type::Optional` | 0/2 prereq | ✅ Step 1 built (`d121f94c`, `tuxedo-pln85`) |
+| Scalar `(N-Store)` teeth (return/field/typed-store/index) | 3c CONTRACT | ✅ gated, on `main` (`#471`) |
+| DN1 flip + enforcement (opt-in `LOFT_PLN25_DN1`) | 3 CONTRACT | ✅ gated, on `main` (`#471`) |
+| text? read-peels (index/slice/format) | 3 support | ✅ this branch (`c9f512c5`) |
+| scalar `vector<τ?>` element-null | 3 support | ✅ this branch (`73c45ade`) |
+| native `character?` null-sentinel | 3 support | ✅ this branch (`08f3837d`) |
+| native narrow-field struct-size in `vector<struct>` | 3 support | ✅ this branch (`af7d80eb`) |
+| sweeps: lexer / web / 13 test-scripts migrated | 3e | ✅ this branch (all DN1-green) |
+| `change_var` null-local message (names `τ?`, no `as`) | 3f step b | ✅ this branch (`85af2b18`) |
+| the flip default-on (`keys.rs`) | 3f / step f | 🟡 **prototyped + measured, WIP uncommitted** |
 | Borrow elision Tier 1 (local source) | — | 🔵 implemented, **parked off** by design |
 
 ---
 
-## NEXT STEPS — concrete, in order, each with its validation gate
+## FINISH LINE — the remaining steps to CLOSE @PLN25 (2026-07-01)
+
+The whole model is **built + gated + validated on both backends** (scalars `Optional`,
+`(N-Store)` teeth, `vector<τ?>` incl. scalar elements, text?, character?, narrow-field,
+DN4 range-check). What remains is **landing the flip as the default + the cleanup
+tightenings**. In order, each ends green (never carry two phases' breakage):
+
+- **F1 — Land the flip (make DN1 the default).** `keys.rs` default-on (`LOFT_PLN25_OFF`
+  opts out) is prototyped + blast-radius-measured (WIP, uncommitted). To land:
+  - **F1a** — triage + fix the red tests under the flip (`wrap`: `dir`/`last`/`parser_debug`
+    + the `wasm_dir` env one; `issues`: `p54_nested_struct_enum`) against
+    [DN1-MITIGATION.md](DN1-MITIGATION.md) (likely §1/§2/§6 casualties).
+  - **F1b** — migrate the stdlib `min`/`max`/`clamp` (drop the dead-under-DN1 null-prop
+    `if !a||!b {return null}`) + **remove the `STD_SOURCE` exemption** in `n_store_violation`.
+  - **F1c** — ✅ DONE (`85af2b18`): the `change_var` null-local message names `τ?`, no `as`.
+  - Gate: `find_problems` green as the DEFAULT (no env) on both backends.
+- **F2 — Retire `not null`** (Phase-5 CLEANUP; ordering load-bearing — AFTER F1). Make the
+  scalar `not null` parse an accepted no-op (`definitions.rs`) and drop it from the fixtures;
+  non-null is already the default so it carries nothing.
+- **F3 — Close DN5** (the `as` laundering hole): `null` / `τ?` `as <non-null scalar>` must be
+  a compile error → `as τ?` / `??`. The **nullness sibling of DN4** — unify one fit-check;
+  scope to `target is_non_null_scalar ∧ source ∈ {Null,Optional}` (`null as S` stays legal).
+- **F4 — Close DN6** (inferred null-join): make `change_var` join `Null ⊔ τ = τ?` so the
+  unannotated `a = null; a = 5` widens to `integer?` per `(N-Join)` instead of erroring — the
+  ergonomic escape valve, and it removes a class of F1a churn.
+- **F5 — DN4 cutover** (the range sibling of F3): flip `as`-range enforcement default-on
+  (today opt-in `LOFT_DN4`) + migrate remaining in-tree `as τ` → `as τ?`. Fold with F3 if convenient.
+- **F6 — Final PR: `Closes @PLN25`.** Update `formal/types.md` deviations (DN1 + DN2 →
+  CLOSED; DN5/DN6 closed by F3/F4; DN4 by F5) + `CHANGELOG`.
+
+**Deferred (a SEPARATE feature, NOT blocking the @PLN25 close):** flow-narrowing (`if x != null
+{ x : τ }`), the ergonomic chokepoint for the `got = raw`-style N-Store cases. Tracked in
+DN1-MITIGATION §3 (turns those from a diagnostic into a silent semantic auto-fix).
+
+---
+
+## NEXT STEPS (detailed history — Steps 1–4 are the record of the built model)
 
 The remaining critical path to "done" (full null-model coherence) is the **scalars half**,
 then **Phase 3 DN3/DN2**, then **Phase 5 cleanup**. Each step ends green; never carry two
