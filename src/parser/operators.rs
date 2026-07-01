@@ -587,7 +587,9 @@ impl Parser {
                             current_type.clone()
                         }
                     } else {
-                        current_type.clone()
+                        // @PLN25 slice (c): peel `Optional` so a `text?` accumulator enters
+                        // the concat path (the nullable-left propagate wrap fires below).
+                        current_type.base().clone()
                     };
                     if matches!(effective_type, Type::Text(_) | Type::Character) {
                         if current_type == Type::Character {
@@ -624,6 +626,50 @@ impl Parser {
                         } else {
                             orig_var
                         };
+                        // @PLN25 slice (c): nullable LEFT accumulator (`text? + …`) PROPAGATES —
+                        // if the left is null the whole concat is null (people must be aware of
+                        // nulls, not have them silently swept into "\0"/"null"). Build the concat
+                        // into a FRESH work-text off the left, then wrap:
+                        //   if is_not_null(left) { concat } else { null } : text?
+                        // (proven equivalent to `if s==null {null} else {(s??"")+parts}`).
+                        if matches!(&current_type, Type::Optional(inner) if matches!(**inner, Type::Text(_)))
+                        {
+                            let base_text = Type::Text(crate::data::Deps::none());
+                            // The null arm must WRITE the null-text sentinel (`OpConvTextFromNull`),
+                            // not a bare `Value::Null` — for a buffer-backed return the bare null
+                            // leaves the return buffer empty and interp reads "" back instead of
+                            // null (the normal `else { null }` flow converts it the same way).
+                            let null_arm = |this: &mut Self| {
+                                let mut n = Value::Null;
+                                this.convert(&mut n, &Type::Null, &base_text);
+                                n
+                            };
+                            if matches!(code.unspan(), Value::Var(_)) {
+                                // simple var — reading twice is side-effect-free
+                                let mut is_not_null = code.clone();
+                                self.convert(&mut is_not_null, &base_text, &Type::Boolean);
+                                let mut concat = code.clone();
+                                // KEEP parse_append_text's return type — it carries the fresh
+                                // work-text's `frame1` dep, without which the text-return
+                                // conversion sees an empty work-var list and returns null.
+                                let ct = self.parse_append_text(&mut concat, &base_text, &ls, u16::MAX);
+                                let n = null_arm(self);
+                                *code = v_if(is_not_null, concat, n);
+                                return Type::optional(ct);
+                            }
+                            // non-trivial left — materialise into a temp to avoid double-eval
+                            let tmp = self.create_unique("_nlhs", &current_type);
+                            let set_tmp = v_set(tmp, code.clone());
+                            let mut is_not_null = Value::Var(tmp);
+                            self.convert(&mut is_not_null, &base_text, &Type::Boolean);
+                            let mut concat = Value::Var(tmp);
+                            let ct = self.parse_append_text(&mut concat, &base_text, &ls, u16::MAX);
+                            let opt = Type::optional(ct);
+                            let n = null_arm(self);
+                            let if_expr = v_if(is_not_null, concat, n);
+                            *code = v_block(vec![set_tmp, if_expr], opt.clone(), "nullable_concat");
+                            return opt;
+                        }
                         return self.parse_append_text(code, &current_type, &ls, effective_orig);
                     } else if matches!(current_type, Type::Vector(_, _)) {
                         return self.parse_append_vector(code, &current_type, &ls, orig_var);
@@ -653,7 +699,10 @@ impl Parser {
                     current_type.clone()
                 }
             } else {
-                current_type.clone()
+                // @PLN25 slice (c): peel `Optional` so a nullable LEFT operand of `+`
+                // (`text?`) accumulates into the concat instead of falling to the generic
+                // operator lookup (the "No matching operator '+' on 'text?'" reject).
+                current_type.base().clone()
             };
             if operator == "+"
                 && matches!(

@@ -212,14 +212,36 @@ impl Output<'_> {
             // raises E0502 — mutable and immutable borrows of the same
             // place.  Hoist the RHS through a fresh `String` so the
             // self-borrow never overlaps the `+=` target.
+            // @PLN25 slice (c): a nullable dest (`text?` local, an owned `String`) skips the
+            // append when it holds the null sentinel — `s += x` on a null `s` stays null
+            // (propagate). Gated on `Optional` so plain-text / `&mut String` work-buffer
+            // appends (never null, and not always owned Strings) keep the bare emission.
+            let dest_nullable = matches!(
+                self.data.def(self.def_nr).variables().tp(*nr),
+                Type::Optional(_)
+            );
             if val.reads_var(*nr) {
-                write!(
-                    w,
-                    "{{ let __p222_tmp: String = (&*({val_expr})).to_string(); var_{s_nr} += &__p222_tmp; }}"
-                )?;
+                if dest_nullable {
+                    write!(
+                        w,
+                        "{{ let __p222_tmp: String = (&*({val_expr})).to_string(); if var_{s_nr}.as_str() != loft::state::STRING_NULL {{ var_{s_nr} += &__p222_tmp; }} }}"
+                    )?;
+                } else {
+                    write!(
+                        w,
+                        "{{ let __p222_tmp: String = (&*({val_expr})).to_string(); var_{s_nr} += &__p222_tmp; }}"
+                    )?;
+                }
                 return Ok(());
             }
-            write!(w, "var_{s_nr} += &*({val_expr})")?;
+            if dest_nullable {
+                write!(
+                    w,
+                    "{{ let __app_tmp: &str = &*({val_expr}); if var_{s_nr}.as_str() != loft::state::STRING_NULL {{ var_{s_nr} += __app_tmp; }} }}"
+                )?;
+            } else {
+                write!(w, "var_{s_nr} += &*({val_expr})")?;
+            }
             return Ok(());
         }
         panic!("Could not parse {vals:?}");

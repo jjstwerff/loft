@@ -1659,7 +1659,11 @@ use a separate collection or add after the loop"
                     }
                 })
                 .is_some();
-        if matches!(f_type, Type::Text(_)) && !is_boxed_text_lhs {
+        if matches!(f_type.base(), Type::Text(_)) && !is_boxed_text_lhs {
+            // @PLN25 slice (c): `.base()` so a `text?` accumulator routes to assign_text
+            // (`OpAppendText`) like plain text. `s += x` on a null `text?` is ignored at
+            // runtime (the append skips a null dest — a non-null text can never be null);
+            // a non-null `text?` appends normally. Propagate: null stays null.
             // auto-promote text argument to local String on first mutation.
             let effective_var = if self.first_pass
                 && var_nr != u16::MAX
