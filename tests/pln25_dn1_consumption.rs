@@ -98,6 +98,8 @@ const DN1_SVEC_SCRIPTS: &[&str] = &[
     "tests/scripts/25-nullable-vector-scalar-element.loft",
     "tests/scripts/25-nullable-sequences.loft",
     "tests/scripts/292-pln17-three-state-boolean.loft",
+    // @PLN25 `character?` native null-sentinel wrap (Call / Var / Block / TupleGet).
+    "tests/scripts/25-nullable-character.loft",
 ];
 
 #[test]
