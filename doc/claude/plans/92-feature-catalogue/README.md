@@ -7,10 +7,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**Open — `status:next`, wanted soon. Runs ALONGSIDE the stabilization work** — it is
-tooling over docs + source, not a store/codegen change, so it is **independent of
-@PLN85** and does not wait on it. No implementation yet. This README is the single
-source of truth for per-strand status; `@PLN92` carries the summary + labels.
+**Open — `status:next`, active. Runs ALONGSIDE the stabilization work** — tooling over
+docs + source, independent of @PLN85. **Progress:** strand 2 (`scan.loft` `@F`/`@I`
+indexing) shipped + verified; Pass 1 done — **80 issues minted** (`@F1`–`@F56`,
+`@I57`–`@I80`) in `loft-lang/features`. **Design settled:** the *issue is the canonical,
+self-contained doc; everything else derives one-way* (see [The model](#the-model)). This
+README is the single source of truth for per-strand status.
 
 ## Goal
 
@@ -20,11 +22,27 @@ title and — for features — a runnable, cross-backend-tested example; per-fea
 docs are generated from those entries, and a **source-coverage gate** proves the
 catalogue is complete to within a few lines, directly from loft's source.
 
+## Success criterion — gated on doc improvement
+
+**The only justification is significantly better language documentation.** All the
+machinery (`@F`/`@I` tags, `idx`, coverage gate, sync automation) is *scaffolding* — it
+*enforces* completeness, no-drift, tested examples, and findability, but it does **not
+write a good doc**. **The value is the authoring** — a consistent, complete, tested
+`## What it is` / `## How it aids you` / `## Example` per feature; the scaffolding only
+keeps authored docs good. Machinery without authoring = a beautifully-tracked catalogue
+of thin docs, and **not worth the effort**.
+
+**Go/no-go (cheap, before more machinery):** author 2–3 features fully (e.g. `@F17`
+named args, `@F29` match, `@F22` closures) as self-contained what/how/tested-example
+issues and compare side-by-side with today's LOFT.md sections. **Materially better** →
+build the minimal scaffolding to scale it. **Not** → stop. An afternoon of writing, not
+a build. This is the falsification test for the whole plan.
+
 ## Effort + design
 
 - **Effort:** MH — most of it rides existing machinery; the genuinely new piece is the coverage gate's per-region span attribution.
-- **Design:** ~ (design converged over the originating discussion; per-strand detail pending).
-- **Last touched:** 2026-06-30.
+- **Design:** ✓ (doc-source architecture settled: self-contained zero-deferral issues, one-way derive, sync automation with drift + example CI guards).
+- **Last touched:** 2026-07-01.
 
 ## Composition matrix — Stage A
 
@@ -52,21 +70,30 @@ already have** — not a new testing or doc-rewrite mechanism.
   `@F<n>` = user feature, `@I<n>` = infrastructure. The number is opaque (can't go
   stale); a kind-prefix is acceptable because *kind* is stable (a flip is a rare,
   deliberate reclassification), unlike a descriptive slug.
-- **Per-entry:** number + **title** (the user-value sentence for `@F`; the role for
-  `@I`) + for `@F` a **runnable, cross-backend-tested example** that is simultaneously
-  the spec, the "how it works" demo, and the **status source** — status is *derived*
-  from the example's per-backend pass (read from the existing `tests/docs` CI run), not
-  hand-maintained.
-- **Dual-anchor:** bare `@F<n>` / `@I<n>` references in the docs and at the
-  implementing source; the gh issue is the declaration (number + title). `idx` joins
-  declaration ↔ references — exactly the `@P###` split (PROBLEMS.md row = declaration,
-  in-code `@P` = reference).
-- **Two-layer, kind-filtered docs:** `@F` → **generated** per-feature *user* pages
-  (rides `gendoc`, from the ticket + tested example); `@I` → an *internal* architecture
-  map (dev/agent docs), **never the user-facing site**; the conceptual/guide layer
-  (models, `learn-loft`, comparisons) stays **curated prose** — stable, reshuffle-
-  immune, and not assemblable from examples. This collapses today's per-feature
-  triplication (LOFT.md prose / topic source / generated HTML) to one source.
+- **The issue is the canonical, self-contained documentation — ZERO deferral.** Each
+  entry is a complete standalone doc that **never points at the project for any of its
+  content**: the **title** (value sentence) plus, in the body, **`## What it is`**
+  (precise prose, not keywords), **`## How it aids you`** (concrete), and **`## Example`**
+  (inline, runnable, cross-backend). `@I` entries carry a full role description + a
+  source-region *locator* (a pointer, not deferred content). Opening the issue tells you
+  the whole feature without leaving it. This is the locked issue-body template.
+- **Everything else derives one-way, by automation.** A generator pulls the issues and
+  writes a **committed in-project mirror** — per-feature docs that agents `grep` and
+  `scan.loft` indexes, and each `## Example` **extracted into `tests/docs/@F<n>.loft`**
+  so CI runs it cross-backend. LOFT.md's per-feature sections + the user-facing HTML are
+  **rendered from the issues** too; only LOFT.md's conceptual/guide layer stays
+  hand-written. The issue never references the mirror — the mirror is its shadow. Two
+  **anti-drift guards (Goal E):** (1) a CI check regenerates the mirror and **fails on
+  any diff** — the copy can't silently lag; (2) the extracted example is a real test —
+  **every example must run or CI is red**. So "fully filled" is *machine-verified*, not
+  trusted. This is the per-feature triplication (LOFT.md / topic source / HTML) collapsed
+  to one source: the issue.
+- **Status is derived** — read from the extracted example's per-backend `tests/docs`
+  pass, never hand-maintained. `@F` → user docs; `@I` → an internal architecture map,
+  **never the user-facing site**.
+- **Dual-anchor (the *locator* layer):** bare `@F<n>` / `@I<n>` in the docs +
+  implementing source; `idx` joins them — the `@P###` split. This says *where the feature
+  lives*; the issue says *what it is*. Two separate layers, both from the one number.
 - **Source-coverage gate (the keystone):** every substantive source region is
   attributed to an `@F` (per-capability) or `@I` (coarse, subsystem-level) entry; the
   residue — attributed to **neither** — must stay under a **ratcheting budget** (the
@@ -78,9 +105,9 @@ already have** — not a new testing or doc-rewrite mechanism.
 
 | Item | Status | Notes |
 |---|---|---|
-| **1 — Identity** | Open | Stand up `loft-lang/features`; `@F###`/`@I###` = issue number, kind from label; ticket shape (number + title + `@F` example + status label). = the `@PLN` bootstrap. |
-| **2 — Scanner / index** | Open | Extend `scan.loft` for the `@F`/`@I` prefixes (same byte-scan as `@P`); resolve titles; emit `idx features` / `idx infra` (number → title → doc + code sites). **Cheap discoverability win.** |
-| **3 — Doc generation (two-layer, kind-filtered)** | Open | `@F` → generated user pages via `gendoc`; `@I` → internal architecture map; concept/guide layer stays curated. Collapses the triplication. |
+| **1 — Identity** | **Done** | `loft-lang/features` stood up; **80 issues minted** (`@F1`–`@F56`, `@I57`–`@I80`); `kind:feature`/`kind:infra` labels. |
+| **2 — Scanner / index** | **Shipped** | `scan.loft` indexes `@F`/`@I` (same byte-scan as `@P`, no trailing-letter rule); `idx tag:`/`prefix:` work; verified on match + reject cases. |
+| **3 — Authoring + issue→project sync (the value)** | Open | **Author** the self-contained issues (what/how/tested-example); a generator renders them into a committed in-project mirror (agents `grep`/`idx`) and **extracts each `## Example` into `tests/docs`** (CI-run); LOFT.md per-feature sections + HTML render from the issues. Two CI guards: regen-and-diff (no drift) + example-must-run. **This strand carries the doc-improvement payoff — the plan lives or dies here.** |
 | **4 — Source-coverage gate (keystone)** | Open | Per-region span attribution to `@F`/`@I`; per-region threshold *K* + ratcheting residue budget (reuse `.lint_comments_baseline`); CI gate. The only genuinely new mechanism. |
 | **5 — Hygiene** | Open | Every `@F`/`@I` declared once + dual-anchored (≥1 doc + ≥1 code); optionally fold in the cross-doc status-drift check (the @P251 class). |
 
@@ -98,21 +125,22 @@ The ratchet (above) stops *new* untagged bulk; this is how the *existing* backlo
 tagged — **three passes, each completed before the next starts**, so the catalogue is
 reviewed as a whole before any tag is written, and source tags land before doc tags.
 
-**Pass 1 — Map source → propose the initial catalogue (no tags, no issues yet).**
+**Pass 1 — Map source → propose → create issues. ✅ DONE** (mapping reviewed; 80 issues minted).
 - [ ] Walk the source roots (`src/parser/`, `src/state/`, `src/fill.rs`, `src/generation/`, `src/database/`, `default/*.loft`, …), grouping regions into candidates: user-facing capability → `@F`; internal subsystem → `@I` (coarse — one per subsystem).
 - [ ] For each candidate, draft a value/role **title** and the **source region** it covers.
 - [ ] Emit the proposed mapping as a **review artifact** (region → proposed `@F`/`@I` + title) — written down, nothing created or tagged yet.
 - [ ] Review for **coverage + granularity** (every substantial region claimed; `@I` stays coarse), then **create the approved entries** as `loft-lang/features` issues — this mints the `@F###`/`@I###` numbers.
 
-**Pass 2 — Details pass: write the tags in the SOURCE.**
+**Pass 2 — Details pass: write the tags in the SOURCE.** *(in progress — the `@F17` slice proved the multi-location `idx` footprint; **mostly unrelated to the authoring/ROI gate** — this is coverage + discoverability groundwork)*
 - [ ] Write the bare `// @F<n>` / `// @I<n>` at each implementing site (per-function for `@F`, subsystem-level for `@I`).
 - [ ] `make index` + `idx features` / `idx infra` to confirm each tag links to its code site.
 - [ ] Seed the **coverage gate** (strand 4) baseline at the now-current unattributed count; ratchet down from there.
 
-**Pass 3 — Docs pass: write the tags in the DOCUMENTATION.**
-- [ ] Add the matching `<!-- @F<n> -->` / `<!-- @I<n> -->` anchor at each feature's LOFT.md / topic section (the doc side of the dual-anchor).
-- [ ] For `@F`, point the entry at its runnable cross-backend-tested example (spec / demo / status source).
-- [ ] Run the **hygiene checks** (strand 5): every entry declared once + dual-anchored (≥1 doc + ≥1 code); close gaps. Then switch per-feature doc generation (strand 3) onto the tagged `@F` set.
+**Pass 3 — Authoring pass: write the self-contained feature doc IN THE ISSUE.** *(the substantive work — careful prose, not harvest; **this is where the docs improve, and where the ROI gate applies**)*
+- [ ] For each `@F`, author the standalone body — `## What it is` (precise), `## How it aids you` (concrete), `## Example` (inline, runnable) — **zero deferral to the project**. For each `@I`, a full role description + source-region locator.
+- [ ] Run the strand-3 automation: render the in-project mirror + extract `## Example` → `tests/docs`; the two CI guards (regen-diff, example-runs) must be green.
+- [ ] Place the `<!-- @F<n> -->` doc anchor where the rendered per-feature section lands.
+- [ ] Run the **hygiene checks** (strand 5): every entry declared once + dual-anchored (≥1 doc + ≥1 code).
 
 **Why this order:** map-before-tag reviews the catalogue as a whole (right granularity,
 no premature numbers); source-before-docs lets the coverage gate — which measures
@@ -136,8 +164,8 @@ attributed/unattributed tally in `scan.loft`.
 2. **Attribution granularity + "meaningful line"** — per-function unit (point-tags don't span); exclude blanks/comments/`use`/derives/braces. Definition is fuzzy (as in any coverage tool) but tractable.
 3. **Budget shape** — per-region threshold *K* (forces bulk, lets trivia dodge); also a global cap?
 4. **`@I` discipline** — even as a named citizen, keep it from bloating: `@I` is **coarse** (one per subsystem), entries reviewed, possibly a cap on `@I` growth. This is what keeps the gate honest.
-5. **Title home** — gh issue title as canonical (no second copy) vs a cached `FEATURES.md`; is the generated `index/features.json` the registry-of-record?
-6. **`@F` page richness** — terse generated reference (title + example) vs an optional short notes field; keep tickets lightweight, push richness to the curated guide layer.
+5. **~~Title/home~~ — RESOLVED:** the **issue** is the canonical, self-contained home (title + `## What` / `## How` / `## Example`, zero deferral); the in-project mirror + `index/features.json` are generated, drift-guarded shadows.
+6. **~~`@F` page richness~~ — RESOLVED:** the issue is a *full* self-contained doc (not terse) — the rendered page is its shadow. One source, richness in the issue.
 7. **Status-drift check** — fold the @P251-class cross-doc status check into strand 5, or keep separate? The indexer already reads PROBLEMS.md.
 8. **Rust-now / loft-later** — the comment-tag + region-detection model must survive the Rust→loft source transition (@PLN91); it is language-agnostic by design.
 
