@@ -1956,7 +1956,11 @@ impl Parser {
         }
         let mut false_type = Type::Void;
         let mut false_code = Value::Null;
-        if self.lexer.has_token("else") {
+        // @PLN25 DN1: whether there is a REAL user `else`. An if-WITHOUT-else in value position is
+        // already an error and synthesises a `null` else for recovery; the DN1 widening below must
+        // NOT treat that synthesised null as a nullable branch (it would add a spurious `τ?`).
+        let had_else = self.lexer.has_token("else");
+        if had_else {
             self.vars.restore_write_state(&write_state);
             self.vars.clear_write_state();
             if self.lexer.has_token("if") {
@@ -1998,7 +2002,7 @@ impl Parser {
         // the caller to declare `τ?` or discharge. Only fires when exactly one branch yields null
         // and the other is a non-null scalar (heap types stay nullable; both-null stays as-is).
         let mut result_tp = merge_dependencies(&true_type, &false_type);
-        if crate::keys::pln25_dn1_enabled() && !matches!(result_tp, Type::Optional(_)) {
+        if had_else && crate::keys::pln25_dn1_enabled() && !matches!(result_tp, Type::Optional(_)) {
             let t_null = self.branch_yields_null(&true_code);
             let f_null = self.branch_yields_null(&false_code);
             if t_null != f_null {

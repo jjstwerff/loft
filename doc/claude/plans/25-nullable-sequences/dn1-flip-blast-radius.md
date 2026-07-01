@@ -135,6 +135,27 @@ Single/Character — heap types stay nullable) is rejected "declare it `τ?`". g
 suite green. Gate-ON the stdlib doesn't load yet (the null-propagating fns above must migrate first)
 — expected for an in-progress flip; the gate is opt-in.
 
+## C′. MEASURED — the precise blast radius (gate-ON suite run, 2026-07-01)
+
+`LOFT_PLN25_DN1=1 cargo nextest run` (enforcement complete): **2557 passed, 24 failed** (well below
+the ~30–50 estimate). Of the 24, ONE is the pre-existing chrome env test (`html_asyncify`); the
+other 23 are the blast radius, and they trace to a SMALL, CONCENTRATED set of `.loft` sources —
+NOT 30–50 scattered files. The failing TESTS cascade from a few shared libraries:
+- **`lib/lexer.loft` — ~23 distinct sites** (the dominant source). The lexer's tokenizer fns return
+  `null` from scalar returns (`integer`/`text`/`single`/`float`). It is loaded by the multiplayer
+  v2/v3/v5, viewer_markdown, native, and most `wrap::*` tests — so fixing this ONE file clears the
+  bulk of the 23 failures.
+- **the `web-0.2.1` registry lib** (`src/web.loft`) — a few sites (the multiplayer websocket tests).
+- **~5 test scripts**: `tests/docs/{10-sorted,11-index,13-file}.loft`, `tests/scripts/{08-functions,
+  10-match}.loft`, plus `38_import_unknown_file`, `81-iterator-protocol`, `p54_nested_struct_enum`.
+
+So the SWEEP is ~30 sites across ~7 files, dominated by one library. Each is a scalar-returning-null
+fn (or a nullable scalar field) → migrate to `-> τ?` / `τ?` and discharge at call sites, OR (where a
+scalar fn returns null purely as an error signal) rework to a non-null return. **A found enforcement
+bug fixed along the way:** an if-WITHOUT-else synthesises a `null` else for recovery, which the DN1
+widening mis-read as a nullable branch (`if_expr_without_else` failed "Cannot format type integer?").
+Fixed with a `had_else` guard — the widening only fires for a REAL user `else`.
+
 ## C. How to pin the precise number
 
 The static survey BOUNDS the sweep (foundation clean; ≤~50 test files). The EXACT count is the
