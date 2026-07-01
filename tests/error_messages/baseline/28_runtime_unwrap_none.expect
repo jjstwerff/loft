@@ -1,11 +1,6 @@
 ==== exit: 1 ====
 ==== stdout ====
 ==== stderr ====
-warning: division may produce null on divide-by-zero with no defensive check; consider `a / b ?? 0` or wrap in `if b != 0 { ... }`
-  --> <cases>/28_runtime_unwrap_none.loft:3:10
-  |
-3 |   x = 1 / z;
-  |          ^
 error: assertion failed: expected non-null but got null sentinel
   --> <cases>/28_runtime_unwrap_none.loft:4:1
   |

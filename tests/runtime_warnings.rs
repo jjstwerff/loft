@@ -74,8 +74,13 @@ fn run_with_w4(name: &str, source: &str) -> (String, String, Option<i32>) {
 
 // ── Warning fires on every undefended fault site ────────────────────────────
 
+// @PLN25 DN3 — `/` and `%` now TYPE `integer?` (the null is in the type and `(N-Store)`
+// forces discharge at stores), so the redundant runtime-null warning is RETIRED under DN1
+// (operators.rs::emit_undefended_warning early-returns for Div/Rem). An inferred local
+// absorbs the nullability, so the division still runs. These guard that the retirement
+// holds — the index warnings below stay until the index flip lands.
 #[test]
-fn undefended_div_by_var_warns() {
+fn div_by_var_no_warn_retired_dn3() {
     let source = "\
 fn main() {
   z = 5;
@@ -83,15 +88,19 @@ fn main() {
   print(\"x={x}\\n\");
 }
 ";
-    let (_stdout, diag, _code) = run_with_warnings("undef_div", source);
+    let (stdout, diag, _code) = run_with_warnings("undef_div", source);
     assert!(
-        diag.contains("warning: division may produce null"),
-        "expected div warning; got stdout={diag:?}"
+        !diag.contains("division may produce null"),
+        "div warning is retired under DN1 (the type carries the null); got {diag:?}"
+    );
+    assert!(
+        stdout.contains("x=2"),
+        "the division still runs (10/5=2); got {stdout:?}"
     );
 }
 
 #[test]
-fn undefended_mod_by_var_warns() {
+fn mod_by_var_no_warn_retired_dn3() {
     let source = "\
 fn main() {
   z = 5;
@@ -99,10 +108,14 @@ fn main() {
   print(\"x={x}\\n\");
 }
 ";
-    let (_stdout, diag, _code) = run_with_warnings("undef_mod", source);
+    let (stdout, diag, _code) = run_with_warnings("undef_mod", source);
     assert!(
-        diag.contains("warning: modulus may produce null"),
-        "expected mod warning; got stdout={diag:?}"
+        !diag.contains("modulus may produce null"),
+        "mod warning is retired under DN1 (the type carries the null); got {diag:?}"
+    );
+    assert!(
+        stdout.contains("x=0"),
+        "the modulus still runs (10%5=0); got {stdout:?}"
     );
 }
 
@@ -860,7 +873,10 @@ fn main() {
         !diag.contains("division may produce null"),
         "@P368b: non-zero named-const divisor must NOT warn; got stderr={diag:?}"
     );
-    // a genuine variable divisor still warns.
+    // @PLN25 DN3 — a variable divisor no longer warns either: `/` now TYPES `integer?`,
+    // so the null lives in the type and `(N-Store)` is the enforcement; the runtime-null
+    // warning is retired for Div/Rem under DN1. (The const case above is subsumed but kept
+    // as documentation of the fit-proof path.)
     let source2 = "\
 fn main() {
   x = 10.0;
@@ -871,8 +887,8 @@ fn main() {
 ";
     let (_o2, diag2, _c2) = run_with_warnings("named_const_div_neg", source2);
     assert!(
-        diag2.contains("division may produce null"),
-        "a variable divisor must still warn; got stderr={diag2:?}"
+        !diag2.contains("division may produce null"),
+        "the div warning is retired under DN1 (the type carries the null); got stderr={diag2:?}"
     );
 }
 

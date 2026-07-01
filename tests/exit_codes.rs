@@ -1032,13 +1032,15 @@ fn div_by_literal_constant_no_warning() {
         "literal-constant divisors must not warn; got stderr={stderr}"
     );
 
-    // A variable divisor is genuinely unchecked — the warning MUST still fire,
-    // and must read "division" (not "integer division").
+    // @PLN25 DN3 — a variable divisor no longer WARNS: `c / y` now TYPES `integer?`,
+    // so the null lives in the type and `(N-Store)` is the enforcement (the runtime-null
+    // warning is retired for Div/Rem under DN1). An inferred local absorbs the nullability,
+    // so an undefended division compiles and runs with no warning. (Storing it into a
+    // non-null slot is a hard `(N-Store)` error, covered by 102-expected-errors.)
     let unsafe_ = dir.join("loft_p368_unsafe.loft");
     std::fs::write(
         &unsafe_,
-        "fn calc(c: integer, y: integer) -> integer { c / y }\n\
-         fn main() { println(\"{calc(10, 2)}\"); }\n",
+        "fn main() { c = 10; y = 2; d = c / y; println(\"{d}\"); }\n",
     )
     .expect("write temp file");
     let out = Command::new(loft_bin())
@@ -1049,12 +1051,8 @@ fn div_by_literal_constant_no_warning() {
         .expect("failed to invoke loft binary");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("division may produce null on divide-by-zero"),
-        "variable divisor must still warn; got stderr={stderr}"
-    );
-    assert!(
-        !stderr.contains("integer division may produce null"),
-        "warning must not say 'integer division'; got stderr={stderr}"
+        !stderr.contains("division may produce null"),
+        "the div warning is retired under DN1 (the type carries the null); got stderr={stderr}"
     );
 }
 
