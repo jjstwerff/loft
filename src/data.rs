@@ -2195,8 +2195,8 @@ impl Display for Type {
 pub struct Argument {
     pub name: String,
     pub typedef: Type,
-    pub default: Value,
-    pub constant: bool,
+    pub default: Value, // @F17 — default parameter value
+    pub constant: bool, // @F18 — const parameters (compile-time mutation check)
 }
 
 #[derive(Clone)]

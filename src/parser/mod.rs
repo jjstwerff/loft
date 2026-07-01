@@ -3834,6 +3834,7 @@ impl Parser {
         Value::Call(d, vec![code, p])
     }
 
+    // @F17 — resolve named args into positional slots + fill omitted defaults
     /// Resolve named arguments into positional slots, then delegate to `call_nr`.
     #[allow(clippy::too_many_arguments)]
     fn call_with_named(

@@ -38,6 +38,7 @@ impl Parser {
         }
     }
 
+    // @F20 — variant-based dynamic dispatch (synthesised enum dispatcher)
     pub(crate) fn create_enum_dispatch_fn(&mut self, e_nr: u32, nrs: &[usize]) {
         let from_nr = nrs[0] as u32;
         let name = self.data.def(from_nr).original_name().clone();
@@ -596,6 +597,7 @@ impl Parser {
     }
 
     #[allow(clippy::too_many_lines)]
+    // @F16 — functions & declarations (pub, parameters, return)
     pub(crate) fn parse_function(&mut self) -> bool {
         if !self.lexer.has_token("fn") {
             return false;

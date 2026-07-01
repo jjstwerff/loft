@@ -6192,6 +6192,7 @@ impl Parser {
         let mut named_args: Vec<(String, Value, Type)> = Vec::new();
         let mut in_named = false;
         loop {
+            // @F17 — collect named arguments (`name: expr`) at the call site
             // Check for named argument: `name: expr`
             if let Some(arg_name) = self.lexer.peek_named_arg() {
                 in_named = true;

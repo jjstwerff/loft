@@ -1500,6 +1500,7 @@ impl Lexer {
         }
     }
 
+    // @F17 — named-argument detection (two-token lookahead)
     /// Peek two tokens ahead to detect `identifier :` (named argument syntax).
     /// Returns `Some(name)` if the pattern matches, without consuming any tokens.
     /// Returns `None` if the current token is not an identifier followed by `:`.
