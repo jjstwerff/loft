@@ -115,24 +115,38 @@ borrower KEEPS the copy). Starting points found this session:
 >
 > The compiler-side green gate is MET. Continue with the index flip (Steps 2-6 below), OR the registry republish.
 
-**Step 2 — lib compiler migration (`dir`/`last`/`parser_debug`/`wasm_dir`).** Under `LOFT_INDEX_DEV=1`,
-find the `v[i]`-into-non-null sites in `lib/parser.loft` + `lib/code.loft` that reject (or that a
-compiler test surfaces), and defend each: `?? default`, an `if idx < len(v)` guard, or a `τ?`
-declaration. Mirror the DN1 F1a lib-lexer sweep (`d620d77a`) — most were `-> τ?` on token accessors.
+> **PROGRESS (2026-07-02) — the compiler mechanism + corpus are done; audience_crystal is the last grind.**
+> Measured under `LOFT_INDEX_DEV=1` after Step 1: **wrap PASSES** (Step 1's copy-elision fix already
+> resolved the dir/last/parser_debug/wasm_dir lib-compiler ripple — lib/parser.loft + lib/code.loft do
+> NOT reject), so **Step 2 is effectively DONE**. Committed since:
+> - **✅ Element-WRITE mechanism (`81641e7d`)** — `v[i] = h` (moros_map:115, p379) errored "Cannot assign
+>   to attribute on OpGetVector" because `towards_set`'s copy_ref gate didn't peel the `Optional(Reference)`
+>   read-marker. Fixed: peel `.base()` in the copy_ref decision (collections.rs:761). An element-write is
+>   an lvalue SLOT, not a nullable read. Gate-OFF byte-identical; issues 748/0.
+> - **✅ Step 4 direct read-rejects (`b46413d0`)** — issues p124×2 (`arr[idx] ?? 0.0`), p155 (`?? H {}`,
+>   SEGV/undo aliasing preserved), p170 (`p170_bs[len-1] ?? P170Bag {}`), 85-borrow esc_elem (discharge
+>   `xs[i] ?? Item {}`, keep `-> Item`). p379 fixed by the element-write mechanism, not a migration.
+> - **⚠️ DEFERRED DEPS GAP** — a bare `-> Item?` escaping-BORROWER return (esc_elem's naive form) LEAKS
+>   (the Optional-return × copy-elision interaction; a plain `-> S?` struct return is leak-clean, so it's
+>   specific to an escaping vector-copy element). Avoided via the discharge migration; the underlying
+>   free-path peel is a separate deps-subsystem fix.
+> - **🟡 Step 3 audience_crystal (`cc7cb722`, PARTIAL)** — palettes + cell_h/cell_h_at + sort-swap
+>   discharged; a few `-> integer` accessor sites remain (n_store_violation line attribution is
+>   MIS-ATTRIBUTED to fn signatures — read the body by hand; the loop-var fit-proof is fine, verified).
+>   Large index-heavy library; gate-OFF compiles clean, library_suite green.
+> - **Step 5 (len-capture): NOT surfaced** — no site needed it (const / iter-var / `??` covered all).
+> - **Step 6: NOT STARTED** — needs audience_crystal finished + a full under-flip corpus/library sweep first.
 
-**Step 3 — audience_crystal library** (`lib/audience_crystal/…`) — the `library_suite` failure. Same
-treatment; check whether it's a real `v[i]` reject or the field-defense warning escalating.
+**Step 2 — lib compiler migration** — ✅ DONE (resolved by Step 1; wrap passes under the flip).
 
-**Step 4 — the direct N-Store rejects.** `85-borrow` `esc_elem` (returns the element itself → honest
-`-> Item?`, BUT only after Step 1, since the `Optional`-heap-return interacts with elision — the
-naive `-> Item?` broke `mut_elem` before Step 1); issues `p124` `arr[idx]` ×2 (→ `-> float?` +
-adapt callers), `p155`, `p170` (`v[len-1]` computed index), `p379`. These change test SEMANTICS —
-migrate with care, not a mechanical `?`.
+**Step 3 — audience_crystal library** — 🟡 PARTIAL (`cc7cb722`). Finish the remaining `-> integer`
+accessor discharges (read bodies by hand past the mis-attributed line numbers), then measure the rest
+of the corpus/libraries under `LOFT_INDEX_DEV=1` (only issues/wrap/85-borrow/audience_crystal measured).
 
-**Step 5 — len-capture proof, IF Step 2/4 surfaces it.** `n = len(v); if idx < n { v[idx] }`. The
-extractor already supports it: `collect_guard_pairs` takes a `captures: &HashMap<u16, VecKey>` — at
-parse time, populate it by tracking `Set(local, Call(len,[vec]))` (mirror the warning walk's
-`len_captures`), and pass it instead of the empty map in `parse_if`.
+**Step 4 — the direct N-Store rejects** — ✅ DONE (`b46413d0`): issues p124×2/p155/p170 + 85-borrow.
+p379 resolved by the element-write mechanism fix (`81641e7d`).
+
+**Step 5 — len-capture proof** — not needed (no site surfaced it).
 
 **Step 6 — flip the gate + retire the warning + graduate.** Change the fields.rs gate
 `LOFT_INDEX_DEV` → `pln25_dn1_enabled`; RETIRE the now-redundant `FaultKind::VectorIndex` /

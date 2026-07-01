@@ -45,8 +45,18 @@ probe verdicts) → [implementation-steps.md](implementation-steps.md) (the phas
 >   (sandbox DNS to the registry — golden left as-committed, passes on CI).
 >
 > So the compiler-side @PLN25 green gate is MET; the multiplayer/viewer suites wait on the registry republish.
-> NEXT = index Steps 2-6 (the copy-elision Step 1 is done), OR the registry republish (user-gated).
 > Detail: [index-f1a-landing.md](index-f1a-landing.md) § BRANCH IS RED.
+
+**INDEX FLIP (Steps 2-6) IN PROGRESS (2026-07-02) — compiler mechanism + corpus done, audience_crystal is
+the last grind.** Under `LOFT_INDEX_DEV=1`: wrap PASSES (Step 1 resolved the lib-compiler ripple → Step 2
+DONE). Committed: element-WRITE mechanism `v[i] = h` peel (`81641e7d`, collections.rs:761 — was "Cannot
+assign to attribute on OpGetVector"); Step 4 direct read-rejects issues p124/p155/p170 + 85-borrow
+(`b46413d0`, discharge `?? d`); audience_crystal PARTIAL (`cc7cb722` — palettes/cell_h/sort done, a few
+`-> integer` accessors remain, line attribution mis-attributed → read bodies by hand). **DEFERRED DEPS GAP:**
+a bare `-> Item?` escaping-BORROWER return leaks (Optional-return × copy-elision; plain `-> S?` is clean) —
+avoided via discharge. **NEXT = finish audience_crystal + sweep the rest of the corpus/libs under the flip,
+THEN Step 6** (flip `LOFT_INDEX_DEV` → `pln25_dn1_enabled` + retire the VectorIndex/TextIndex warning +
+graduate `25-index-nullable.loft` + 102 reject twin). Full detail: [index-f1a-landing.md](index-f1a-landing.md) § PROGRESS.
 
 **✅ INDEX F1a Step 1 (copy-elision `Optional`-peel) DONE** — `use_analysis` borrower filter now peels
 `.base()` before reading deps, so a mutated/escaping `e = v[i]: Item?` KEEPS the copy (was a SILENT
