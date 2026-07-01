@@ -1,0 +1,63 @@
+// @PLN25 scalar-nullable-vector-element regression (the slice that wires
+// `vector<τ?>` for a SCALAR element τ). A dense scalar vector element rides the
+// typed-sentinel null (integer i64::MIN, float NaN, character 0, boolean 255,
+// text ref-sentinel); `vector<τ?>` marks the element `Optional(τ)` (same dense
+// storage) so `v[i] = null` is legal under DN1 and `v[i] == null` detects it.
+//
+// Gate-OFF the `?` is a no-op (a bare scalar vector is nullable pre-DN1 anyway),
+// so this file self-asserts identically gate-OFF (auto-run script sweep) and
+// gate-ON (tests/pln25_dn1_consumption.rs drives LOFT_PLN25_DN1=1 both backends).
+
+fn check_int() {
+  vi: vector<integer?> = [10, 20, 30];
+  vi[1] = null;
+  assert(vi[1] == null, "int: null element");
+  assert(vi[0] == 10 && vi[2] == 30, "int: neighbours intact");
+  c = 0; for _x in vi { c += 1; }
+  assert(c == 3, "int: full iteration past null");
+}
+
+fn check_float() {
+  vf: vector<float?> = [1.5, 2.5, 3.5];
+  vf[1] = null;
+  assert(vf[1] == null, "float: NaN null detected");
+  assert(!(vf[0] == null), "float: neighbour not null");
+  c = 0; for _x in vf { c += 1; }
+  assert(c == 3, "float: full iteration");
+}
+
+fn check_bool() {
+  vb: vector<boolean?> = [true, false, true];
+  vb[0] = null;
+  assert(vb[0] == null, "bool: null element");
+  assert(!(vb[1] == null), "bool: neighbour not null");
+}
+
+fn check_char() {
+  vc: vector<character?> = ['a', 'b', 'c'];
+  vc[1] = null;
+  assert(vc[1] == null, "char: null element");
+  assert(!(vc[0] == null), "char: neighbour not null");
+}
+
+fn check_text() {
+  vt: vector<text?> = ["alpha", "beta", "gamma"];
+  vt[1] = null;
+  assert(vt[1] == null, "text: null element");
+  assert(vt[2] == "gamma", "text: neighbour value intact");
+  // churn: reassign + null repeatedly must free each displaced heap string
+  for i in 0..30 {
+    vt[0] = "a reallocating heap string long enough to actually allocate here";
+    vt[0] = null;
+  }
+  assert(vt[0] == null, "text: churn ends null");
+}
+
+fn main() {
+  check_int();
+  check_float();
+  check_bool();
+  check_char();
+  check_text();
+  print("scalar-nullable-vector-element: ok\n");
+}

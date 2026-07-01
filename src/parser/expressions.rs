@@ -2453,6 +2453,30 @@ use a separate collection or add after the loop"
             return Type::Enum(syn, true, Deps::none());
         }
         let Type::Reference(struct_d, _) = &elem else {
+            // @PLN25 — a SCALAR nullable element (`vector<integer?>`, `vector<float?>`,
+            // `vector<text?>`, …) has no `__nullable<S>` synth (that's for a struct /
+            // enum ref); it rides the `Optional(τ)` marker instead, which shares the
+            // base scalar's dense inline storage + typed-sentinel null (element_size /
+            // element_align / type_elm all peel `Optional`). Wrapping here makes the
+            // element type nullable, so the index store-check allows `v[i] = null` and
+            // the read `v[i]` types as `τ?`. GATED on `pln25_optional_enabled` (unlike
+            // the struct `__nullable<S>` synth, which is the default-on vectors-half):
+            // gate-OFF a scalar `vector<τ?>` stays `== vector<τ>` (byte-identical),
+            // which is behaviourally fine there since a bare scalar vector is still
+            // nullable pre-DN1; the `?`↔non-null distinction only bites under DN1.
+            if crate::keys::pln25_optional_enabled()
+                && matches!(
+                    elem,
+                    Type::Integer(_)
+                        | Type::Float
+                        | Type::Single
+                        | Type::Boolean
+                        | Type::Character
+                        | Type::Text(_)
+                )
+            {
+                return Type::optional(elem);
+            }
             return elem;
         };
         let struct_d = *struct_d;
