@@ -101,17 +101,19 @@ borrower KEEPS the copy). Starting points found this session:
 >    `Integer`); read had no arm. Note: a full `extract.py` regen is currently unsafe (the binary's
 >    `--show-rust` now emits `db.dbref()` for struct-ref fields, which extract.py drops + would shift
 >    offsets) — the `TyOptional` schema line is hand-added, `ir.loft` is the source of truth.
-> 2. **REMAINING — 6 un-migrated DN1/DN3 Rust tests** (step-f cleanup, all test migrations — NO new real
->    bug): `expressions::{call_int_null, call_text_null}` (return null from a non-null fn → `-> τ?`);
->    `expressions::{bounded_mixed_type_operator, bounded_unary_operator}` (`/`,`%` variable divisor →
->    defend or `-> τ?`); `exit_codes::div_by_literal_constant_no_warning` (the constant-divisor fit-proof
->    already WORKS — `divisor_provably_nonzero`; the failing part is a VARIABLE divisor `c / y` into
->    `-> integer` that DN3 now correctly REJECTS vs the old warning → carries the design call of whether
->    the runtime div-warning is retired under DN3, like the index warning); `error_messages::baselines_are_locked_in`
->    (golden refresh).
-> 3. **Pre-existing clippy warning** — `operators.rs:1716 handle_operator` (8/7 args, DN3-division).
+> 2. **✅ DONE (`fa698799`) — 9 DN1/DN3 Rust-test migrations + div-warning retirement + clippy.**
+>    `expressions::{call_int_null,call_text_null}` → `-> τ?`; `{bounded_mixed,bounded_unary}` → `?? 0`;
+>    the div/mod runtime warning is RETIRED under DN1 (already in code) — `runtime_warnings` +
+>    `exit_codes::div_by_literal_constant_no_warning` migrated to assert its absence; `error_messages`
+>    goldens 17/18/19/28 regenerated; `handle_operator` clippy allow. (The constant-divisor fit-proof
+>    already worked — `divisor_provably_nonzero`; the migration was the variable-divisor case.)
 >
-> Recommend: the 6 migrations (one carries the div-warning-retirement call) + clippy, then continue the index flip.
+> **REMAINING is NOT core — registry-gated + environmental:** multiplayer(v2/v3/v5) + viewer_markdown
+> fail on DN1 rejects in the `web-0.2.1` / `server-0.2.0` REGISTRY libs (`return null` into `-> text`) —
+> needs the `text?` migration + a touch-gated republish (loft-ship; USER-GATED). `html_asyncify` (chrome +
+> stale GL cdylib) + `error_messages::38_import_unknown` (sandbox DNS) are environmental.
+>
+> The compiler-side green gate is MET. Continue with the index flip (Steps 2-6 below), OR the registry republish.
 
 **Step 2 — lib compiler migration (`dir`/`last`/`parser_debug`/`wasm_dir`).** Under `LOFT_INDEX_DEV=1`,
 find the `v[i]`-into-non-null sites in `lib/parser.loft` + `lib/code.loft` that reject (or that a

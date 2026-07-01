@@ -22,30 +22,30 @@ probe verdicts) → [implementation-steps.md](implementation-steps.md) (the phas
 
 ### ⭐ MOST RECENT — cold-start read this first (branch `tuxedo-pln85-fuzz-proof-gate`)
 
-> **🟠 BRANCH WAS RED — mid-step-f debt (discovered 2026-07-01b); the whole-suite picture the RESUME's
-> per-commit "issues/wrap/format green" claims never covered. MUCH smaller than a raw `cargo nextest`
-> suggested — run via `find_problems` (it rebuilds cdylibs + clears stale `.loftc`); the
-> multiplayer/viewer/html_asyncify/runtime_warnings failures a raw nextest shows are STALE-FIXTURE /
-> STALE-`.loftc` FALSE FAILURES. The authoritative pre-fix set was 17 real failures, none copy-elision:**
-> 1. **✅ FIXED (`73fe4f6c`) — store codec now serializes `Type::Optional`** (`TyOptional` variant,
->    disc 25). Cleared all 11: `ir_read::*round_trip*` (9), `ir_schema_roundtrip::corpus_store_codec_round_trips`,
->    `g2_ir_check`. A nullable type now survives save/open (interp+native+introspect verified).
-> 2. **REMAINING — 6 un-migrated DN1/DN3 Rust tests** (step-f cleanup):
->    - simple `?`-return migrations: `expressions::{call_int_null, call_text_null}` (return null from a
->      non-null fn — DN1 correctly rejects; migrate the return type to `τ?`).
->    - DN3 op-body migrations: `expressions::{bounded_mixed_type_operator, bounded_unary_operator}`
->      (`self.value / divisor` / `% modulus` — variable divisor → genuinely `integer?`; defend or `-> τ?`).
->    - `exit_codes::div_by_literal_constant_no_warning` — the constant-divisor fit-proof already WORKS
->      (`divisor_provably_nonzero`, operators.rs:2023); the failing part is a VARIABLE divisor `c / y`
->      into `-> integer`, which DN3 (N-Store) now correctly REJECTS instead of the old runtime warning.
->      **Design question:** is the "division may produce null" runtime warning RETIRED under DN3 (the
->      type + N-Store supersede it — same call as retiring the index `VectorIndex` warning at flip time)?
->      Migrate the test accordingly (assert the reject, or use `-> integer?` to keep a warning path).
->    - golden-baseline refresh: `error_messages::baselines_are_locked_in` (DN1/DN3 message changes).
-> 3. **clippy** — pre-existing `operators.rs:1716 handle_operator` (8/7 args).
+> **🟢 CORE/IN-TREE SUITE NOW GREEN — the mid-step-f DN1/DN3 debt is cleared (2026-07-01b). Run the full
+> suite via `find_problems`, NOT raw `cargo nextest`** (it rebuilds cdylibs + clears stale `.loftc`; a raw
+> run shows stale-fixture FALSE failures). What was fixed this session (all committed + pushed):
+> 1. **✅ store codec serializes `Type::Optional`** (`73fe4f6c`, `TyOptional` variant disc 25) — cleared
+>    all 11 store-codec failures (`ir_read::*round_trip*`, `corpus_store_codec_round_trips`, `g2_ir_check`).
+> 2. **✅ 9 DN1/DN3 Rust-test migrations + div-warning retirement + clippy** (`fa698799`): `expressions::
+>    {call_int_null,call_text_null}` → `-> τ?`; `{bounded_mixed,bounded_unary}` → `?? 0`; the div/mod
+>    runtime warning is RETIRED under DN1 (already in code — `emit_undefended_warning` early-returns for
+>    Div/Rem; `runtime_warnings` + `exit_codes::div_by_literal_constant_no_warning` migrated to assert the
+>    absence + the type/N-Store enforcement); `error_messages` goldens 17/18/19/28 regenerated; clippy
+>    `handle_operator` allow.
 >
-> No new real bug remains after the store-codec fix — the 6 are DN1/DN3 test migrations (step-f cleanup;
-> one carries the div-warning-retirement design call). Then index Steps 2-6.
+> **REMAINING (NOT core — registry-gated + environmental, none is compiler DN1/DN3 debt):**
+> - **Registry republish gates multiplayer(v2/v3/v5) + viewer_markdown** — the `web-0.2.1` (`web.loft:206
+>   ws_client_recv_native → return null`) and `server-0.2.0` (`server.loft:180`) registry libs still
+>   `return null` into `-> text`. The in-tree web *fixture* is migrated but the REGISTRY copies need the
+>   `text?` migration + a **touch-gated republish** (loft-ship; canonical home loft-libs-net) — USER-GATED.
+>   The in-tree `game_protocol` example server (`tictactoe_server_v2.loft`) also needs the `text?` sweep,
+>   but fixing it alone won't green multiplayer (server-0.2.0 still rejects).
+> - **Environmental**: `html_asyncify` (chrome timeout + a stale GL cdylib), `error_messages::38_import_unknown`
+>   (sandbox DNS to the registry — golden left as-committed, passes on CI).
+>
+> So the compiler-side @PLN25 green gate is MET; the multiplayer/viewer suites wait on the registry republish.
+> NEXT = index Steps 2-6 (the copy-elision Step 1 is done), OR the registry republish (user-gated).
 > Detail: [index-f1a-landing.md](index-f1a-landing.md) § BRANCH IS RED.
 
 **✅ INDEX F1a Step 1 (copy-elision `Optional`-peel) DONE** — `use_analysis` borrower filter now peels
