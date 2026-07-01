@@ -215,6 +215,9 @@ pub struct IrSchemaIds {
     pub ty_text: u16,
     /// `known_type` of `TyTuple`.
     pub ty_tuple: u16,
+    /// `known_type` of `TyOptional` (@PLN25). HAND-ADDED — see the `t182` block in
+    /// `register_ir_schema` (extract.py regen drift; `ir.loft` is the source of truth).
+    pub ty_optional: u16,
     /// `known_type` of `TyUnknown`.
     pub ty_unknown: u16,
     /// `known_type` of `TyVector`.
@@ -271,6 +274,13 @@ pub fn register_ir_schema(db: &mut Stores) -> IrSchemaIds {
     let t98 = db.structure("TyFunction", 22);
     let t99 = db.structure("TyRewritten", 23);
     let t100 = db.structure("TyTuple", 24);
+    // @PLN25 HAND-ADD — TyOptional (`τ?`, disc 25, box-of-one child like TyRefVar).
+    // A full extract.py regen is currently unsafe: this loft binary's `--show-rust`
+    // now emits `db.dbref()` for struct-ref fields (block/body), which extract.py
+    // drops (dangling `dbref_*`) AND which would change field offsets. So this one
+    // variant is hand-added in the generated style; `ir.loft` carries it as the
+    // source of truth. Remove once extract.py handles `db.dbref()` and regen is clean.
+    let t182 = db.structure("TyOptional", 25);
     let t101 = db.structure("NdNull", 1);
     let t102 = db.structure("NdLine", 2);
     let t103 = db.structure("NdSpan", 3);
@@ -459,6 +469,11 @@ pub fn register_ir_schema(db: &mut Stores) -> IrSchemaIds {
     db.field(t100, "enum", byte_enum);
     let vec_elems = db.vector(t64);
     db.field(t100, "elems", vec_elems);
+    // @PLN25 HAND-ADD — TyOptional fields (enum byte @0, inner child @4), mirroring TyRefVar.
+    let byte_enum = db.byte(0, false);
+    db.field(t182, "enum", byte_enum);
+    let vec_inner = db.vector(t64);
+    db.field(t182, "inner", vec_inner);
     let byte_enum = db.byte(0, false);
     db.field(t101, "enum", byte_enum);
     let byte_enum = db.byte(0, false);
@@ -867,6 +882,7 @@ pub fn register_ir_schema(db: &mut Stores) -> IrSchemaIds {
     db.value(t64, "TyFunction", t98);
     db.value(t64, "TyRewritten", t99);
     db.value(t64, "TyTuple", t100);
+    db.value(t64, "TyOptional", t182); // @PLN25 HAND-ADD (see the t182 structure block)
     db.value(t65, "NdNull", t101);
     db.value(t65, "NdLine", t102);
     db.value(t65, "NdSpan", t103);
@@ -1022,6 +1038,7 @@ pub fn register_ir_schema(db: &mut Stores) -> IrSchemaIds {
         ty_spacial: t95,
         ty_text: t83,
         ty_tuple: t100,
+        ty_optional: t182, // @PLN25 HAND-ADD
         ty_unknown: t74,
         ty_vector: t89,
         ty_void: t76,

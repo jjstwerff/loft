@@ -92,8 +92,15 @@ fn name_list(stores: &mut Stores, slot: &Record, off: u32, names: &[String]) {
 /// Write `ty` into the already-allocated `TypeT` record `slot` (zeroed).
 fn write_type(stores: &mut Stores, slot: &Record, ty: &Type) {
     match ty {
-        // @PLN25 Optional shares its base's runtime TypeT layout (sentinel storage) — peel.
-        Type::Optional(inner) => write_type(stores, slot, inner),
+        // @PLN25 — the `τ?` nullability marker persists as its own variant (a
+        // box-of-one child, like RefVar) so a nullable type survives the store
+        // round-trip and keeps its N-Store contract. The runtime LAYOUT is still
+        // the base's sentinel storage (peeled at every layout site); only the codec
+        // keeps the marker.
+        Type::Optional(inner) => {
+            slot.set_discriminant(stores, ds::TY_OPTIONAL);
+            type_child(stores, slot, ds::TYOPTIONAL_INNER, inner);
+        }
         Type::Unknown(n) => {
             slot.set_discriminant(stores, ds::TY_UNKNOWN);
             slot.set_field_int(stores, ds::TYUNKNOWN_N, i64::from(*n));

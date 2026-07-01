@@ -165,6 +165,7 @@ pub(crate) const TY_HASH: u8 = 21;
 pub(crate) const TY_FUNCTION: u8 = 22;
 pub(crate) const TY_REWRITTEN: u8 = 23;
 pub(crate) const TY_TUPLE: u8 = 24;
+pub(crate) const TY_OPTIONAL: u8 = 25; // @PLN25 `τ?` — box-of-one child like RefVar
 
 /// Element strides for the non-`Node` vectors the TypeT half uses.
 pub(crate) const TYPET_STRIDE: u32 = 33; // `TypeT` enum record size
@@ -208,6 +209,7 @@ pub(crate) const TYFUNC_RESULT: u32 = 8;
 pub(crate) const TYFUNC_DEP: u32 = 12;
 pub(crate) const TYREWRITTEN_INNER: u32 = 4;
 pub(crate) const TYTUPLE_ELEMS: u32 = 4;
+pub(crate) const TYOPTIONAL_INNER: u32 = 4; // @PLN25 `Optional(τ)` child (like RefVar)
 
 /// `SortKey` / `NameRef` element fields.
 pub(crate) const SORTKEY_NAME: u32 = 0;
@@ -488,6 +490,7 @@ pub enum TypeKind {
     Function,
     Rewritten,
     Tuple,
+    Optional,
     Other(u8),
 }
 
@@ -519,6 +522,7 @@ pub fn type_kind(disc: u8) -> TypeKind {
         TY_FUNCTION => TypeKind::Function,
         TY_REWRITTEN => TypeKind::Rewritten,
         TY_TUPLE => TypeKind::Tuple,
+        TY_OPTIONAL => TypeKind::Optional,
         other => TypeKind::Other(other),
     }
 }
@@ -1202,6 +1206,7 @@ mod tests {
         assert_eq!(disc(ids.ty_function), TY_FUNCTION);
         assert_eq!(disc(ids.ty_rewritten), TY_REWRITTEN);
         assert_eq!(disc(ids.ty_tuple), TY_TUPLE);
+        assert_eq!(disc(ids.ty_optional), TY_OPTIONAL);
 
         // Field offsets — every baked offset against its computed position.
         let pos = |tp: u16, f: &str| u32::from(stores.position(tp, f));
@@ -1322,6 +1327,7 @@ mod tests {
         assert_eq!(pos(ids.ty_function, "dep"), TYFUNC_DEP);
         assert_eq!(pos(ids.ty_rewritten, "inner"), TYREWRITTEN_INNER);
         assert_eq!(pos(ids.ty_tuple, "elems"), TYTUPLE_ELEMS);
+        assert_eq!(pos(ids.ty_optional, "inner"), TYOPTIONAL_INNER);
 
         // Non-Node element strides + sub-struct fields.
         assert_eq!(u32::from(stores.size(ids.type_t)), TYPET_STRIDE);
