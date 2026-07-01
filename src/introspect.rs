@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @F50 — introspection (bytecode / native Rust / slot tables)
 
 //! Plan-08 phase 01: introspection CLI.
 //!

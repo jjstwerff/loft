@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @F51 — debugger (breakpoints, frame capture, scripted RPC)
 
 //! @PLN16 debugger — breakpoint registry + captured-frame records.
 //!

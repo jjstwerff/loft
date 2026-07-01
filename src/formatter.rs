@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @F52 — source formatter (canonical .loft output)
 
 //! Standalone token-stream formatter for `.loft` source files.
 //!
