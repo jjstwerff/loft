@@ -34,10 +34,13 @@ fn mut_elem(g: G, i: integer) -> integer {
 }
 
 // escaping borrower — must KEEP COPY (the returned view would otherwise alias the
-// source element).
+// source element).  @PLN25 index flip: `xs[i]` is nullable (OOB → null); discharge at the
+// borrow with `?? Item {}` so the escaping return stays `-> Item` (a bare `-> Item?`
+// escaping-borrower return currently leaks — the Optional-return × copy-elision deps
+// interaction, deferred).
 fn esc_elem(g: G, i: integer) -> Item {
   xs = g.c;
-  e = xs[i];
+  e = xs[i] ?? Item {};
   e
 }
 

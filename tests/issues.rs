@@ -3138,8 +3138,10 @@ fn test() {
 #[test]
 fn p124_function_returning_inline_array_index() {
     code!(
+        // @PLN25 index flip — a variable-index `arr[i]` is nullable (OOB → null); discharge
+        // with `?? 0.0` so it stores into the non-null `-> float` return.
         "fn pick(p124_idx: integer) -> float {
-  [0.9, 0.2, 0.3][p124_idx]
+  [0.9, 0.2, 0.3][p124_idx] ?? 0.0
 }
 fn test() {
   assert(pick(0) > 0.85, \"0\");
@@ -3157,7 +3159,7 @@ fn p124_local_array_index_workaround_works() {
     code!(
         "fn pick(p124w_idx: integer) -> float {
   options = [0.9, 0.2, 0.3];
-  options[p124w_idx]
+  options[p124w_idx] ?? 0.0
 }
 fn test() {
   assert(pick(0) > 0.85, \"0\");
@@ -9917,7 +9919,7 @@ fn p155_segv_undo_redo_midassert() {
 struct Elm { prev: H }
 struct Ct { items: vector<H> }
 struct Ss { undo: vector<Elm>, redo: vector<Elm> }
-fn read_at(c: Ct, idx: integer) -> H { c.items[idx] }
+fn read_at(c: Ct, idx: integer) -> H { c.items[idx] ?? H {} }
 fn test() {
     c = Ct { items: [H{}, H{}, H{}, H{}, H{}, H{}] };
     s = Ss { undo: [], redo: [] };
@@ -10057,7 +10059,7 @@ fn test() {
     p170_bs: vector<P170Bag> = [];
     p170_x = P170Bag {};
     p170_bs += [P170Bag {}];
-    p170_x = p170_bs[len(p170_bs) - 1];
+    p170_x = p170_bs[len(p170_bs) - 1] ?? P170Bag {};
     p170_mutate_bag(p170_x, 1);
     assert(len(p170_bs[0].items) == 1, \"mutated through alias\");
 }"
