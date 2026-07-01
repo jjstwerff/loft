@@ -155,7 +155,7 @@ tightenings**. In order, each ends green (never carry two phases' breakage):
     DN1-reachable null-sentinel roundtrip; `tests/scripts/17-min-max-clamp.loft` null-prop section
     rewritten to explicit `τ?` inputs + one runtime-division case (`nulldiv(0)`). issues 748/0,
     wrap 51/0, format 11/0, both backends.
-    - **DN3-division ROOT-CAUSE FIXED (`<pending>`): the `ecd4cab3` "division slice" wrap was DEAD
+    - **DN3-division ROOT-CAUSE FIXED (`7042d94c`): the `ecd4cab3` "division slice" wrap was DEAD
       CODE.** It sat in the COMPARISON-operator branch of `handle_operator` (the `else` handling
       `<`/`<=`), where `div_nullable` (checking `operator == "/"`) is always false — so `a / b`
       NEVER actually typed `integer?` in ANY context. Everything that "worked" (`ret`/discharged/
