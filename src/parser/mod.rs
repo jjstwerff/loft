@@ -1855,9 +1855,11 @@ impl Parser {
         // DN1 (the default flip): under DN1 a plain scalar is NON-null, so a bare `null` cannot be
         // stored into a non-Optional scalar target — declare the target `τ?` to allow null.
         // (Heap types — reference/vector/enum — stay nullable; only the SCALAR default flips.)
-        // EXEMPT the trusted stdlib (`STD_SOURCE`): its legacy null-propagation (`min`/`max`'s
-        // `if !a || !b { return null }`) is DEAD under DN1 (its scalar params are non-null), so the
-        // bare `null` never actually flows. Migrate + un-exempt the stdlib when DN1 lands default.
+        // EXEMPT the trusted stdlib (`STD_SOURCE`): `min`/`max`/`clamp` gained `τ?` overloads
+        // (F1b(b)) that give explicit-nullable args a sound `-> τ?` result, but their non-null
+        // bodies still `return null` on a runtime-null arg (e.g. `1 / 0`, statically `integer`)
+        // and so STILL rely on this. Full un-exemption is a broader migration (retype division-
+        // null to `τ?`, then remaining null-field sites); keep the exemption until that lands.
         if crate::keys::pln25_dn1_enabled()
             && self.data.source != crate::data::STD_SOURCE
             && matches!(value_tp, Type::Null)
@@ -2447,15 +2449,21 @@ impl Parser {
         let mut d_nr = if self.default && is_op(name) {
             self.data.def_nr(name)
         } else {
-            self.data.find_fn(
-                source,
-                name,
-                if types.is_empty() || types[0] == Type::Null {
-                    &Type::Unknown(0)
-                } else {
-                    &types[0]
-                },
-            )
+            // @PLN25 F1b(b): a `both`/`self`-dispatched function takes uniform-nullability
+            // params, so dispatch on whether ANY argument is nullable — not just arg0. This
+            // routes `max(5, a?)` to the `τ?` overload the same as `max(a?, 5)`, so null
+            // propagates regardless of position. (arg0-only dispatch missed the arg1 case.)
+            let unknown = Type::Unknown(0);
+            let nullable_holder;
+            let dispatch_tp: &Type = if types.is_empty() || types[0] == Type::Null {
+                &unknown
+            } else if types.iter().any(|t| matches!(t, Type::Optional(_))) {
+                nullable_holder = Type::optional(types[0].base().clone());
+                &nullable_holder
+            } else {
+                &types[0]
+            };
+            self.data.find_fn(source, name, dispatch_tp)
         };
         // Trace point: post-find_fn dispatch state.  Captures the most
         // common debugging vantage — what name resolved to which

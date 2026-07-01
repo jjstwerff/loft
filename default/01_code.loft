@@ -555,6 +555,12 @@ fn OpLeFloat(v1: float, v2: float) -> boolean;
 fn OpFormatFloat(pos: const u16, val: float, width: integer, precision: integer, dir: const i8);
 fn OpFormatStackFloat(pos: const u16, val: float, width: integer, precision: integer, dir: const i8);
 // --- min / max / clamp ---
+// @PLN25 F1b(b): each has a NON-NULL overload (`-> τ`) and a `τ?` overload (`-> τ?`). The call
+// dispatch picks the `τ?` overload whenever ANY argument is STATICALLY nullable, so an explicit
+// `integer?`/`single?`/`float?` argument gets a correctly-typed nullable RESULT instead of the
+// unsound `-> τ` (which returned null only via the STD_SOURCE exemption). The non-null bodies
+// keep the `if !a || !b { return null }` guard so a runtime-null (e.g. `1 / 0`, still statically
+// `integer`) still propagates — that path stays on the exemption until division is retyped `τ?`.
 // Returns null if either argument is null (consistent with all binary arithmetic operations).
 // Smallest of two integer values.
 pub fn min(both: integer, b: integer) -> integer {
@@ -568,8 +574,19 @@ pub fn min(both: integer, b: integer) -> integer {
   }
 }
 #pure
+// Smallest of two nullable integer values; null if either is null.
+pub fn min(both: integer?, b: integer?) -> integer? {
+  if !both || !b {
+    return null;
+  }
+  if both <= b {
+    both
+  } else {
+    b
+  }
+}
+#pure
 // Largest of two integer values.
-
 pub fn max(both: integer, b: integer) -> integer {
   if !both || !b {
     return null;
@@ -581,15 +598,30 @@ pub fn max(both: integer, b: integer) -> integer {
   }
 }
 #pure
+// Largest of two nullable integer values; null if either is null.
+pub fn max(both: integer?, b: integer?) -> integer? {
+  if !both || !b {
+    return null;
+  }
+  if both >= b {
+    both
+  } else {
+    b
+  }
+}
+#pure
 // Clamps v into the inclusive range [lo, hi]. Returns null if any argument is null.
-
 pub fn clamp(both: integer, lo: integer, hi: integer) -> integer {
+  min(max(both, lo), hi)
+}
+#pure
+// Clamps a nullable v into [lo, hi]; null if any argument is null.
+pub fn clamp(both: integer?, lo: integer?, hi: integer?) -> integer? {
   min(max(both, lo), hi)
 }
 #pure
 
 // Smallest of two single-precision float values.
-
 pub fn min(both: single, b: single) -> single {
   if !both || !b {
     return null;
@@ -601,8 +633,19 @@ pub fn min(both: single, b: single) -> single {
   }
 }
 #pure
+// Smallest of two nullable single values; null if either is null.
+pub fn min(both: single?, b: single?) -> single? {
+  if !both || !b {
+    return null;
+  }
+  if both <= b {
+    both
+  } else {
+    b
+  }
+}
+#pure
 // Largest of two single-precision float values.
-
 pub fn max(both: single, b: single) -> single {
   if !both || !b {
     return null;
@@ -614,28 +657,8 @@ pub fn max(both: single, b: single) -> single {
   }
 }
 #pure
-// Clamps v into the inclusive range [lo, hi]. Returns null if any argument is null.
-
-pub fn clamp(both: single, lo: single, hi: single) -> single {
-  min(max(both, lo), hi)
-}
-#pure
-// Smallest of two double-precision float values.
-
-pub fn min(both: float, b: float) -> float {
-  if !both || !b {
-    return null;
-  }
-  if both <= b {
-    both
-  } else {
-    b
-  }
-}
-#pure
-// Largest of two double-precision float values.
-
-pub fn max(both: float, b: float) -> float {
+// Largest of two nullable single values; null if either is null.
+pub fn max(both: single?, b: single?) -> single? {
   if !both || !b {
     return null;
   }
@@ -647,8 +670,70 @@ pub fn max(both: float, b: float) -> float {
 }
 #pure
 // Clamps v into the inclusive range [lo, hi]. Returns null if any argument is null.
-
+pub fn clamp(both: single, lo: single, hi: single) -> single {
+  min(max(both, lo), hi)
+}
+#pure
+// Clamps a nullable v into [lo, hi]; null if any argument is null.
+pub fn clamp(both: single?, lo: single?, hi: single?) -> single? {
+  min(max(both, lo), hi)
+}
+#pure
+// Smallest of two double-precision float values.
+pub fn min(both: float, b: float) -> float {
+  if !both || !b {
+    return null;
+  }
+  if both <= b {
+    both
+  } else {
+    b
+  }
+}
+#pure
+// Smallest of two nullable float values; null if either is null.
+pub fn min(both: float?, b: float?) -> float? {
+  if !both || !b {
+    return null;
+  }
+  if both <= b {
+    both
+  } else {
+    b
+  }
+}
+#pure
+// Largest of two double-precision float values.
+pub fn max(both: float, b: float) -> float {
+  if !both || !b {
+    return null;
+  }
+  if both >= b {
+    both
+  } else {
+    b
+  }
+}
+#pure
+// Largest of two nullable float values; null if either is null.
+pub fn max(both: float?, b: float?) -> float? {
+  if !both || !b {
+    return null;
+  }
+  if both >= b {
+    both
+  } else {
+    b
+  }
+}
+#pure
+// Clamps v into the inclusive range [lo, hi]. Returns null if any argument is null.
 pub fn clamp(both: float, lo: float, hi: float) -> float {
+  min(max(both, lo), hi)
+}
+#pure
+// Clamps a nullable v into [lo, hi]; null if any argument is null.
+pub fn clamp(both: float?, lo: float?, hi: float?) -> float? {
   min(max(both, lo), hi)
 }
 #pure

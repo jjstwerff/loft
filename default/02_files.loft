@@ -57,7 +57,7 @@ pub struct File {
   // 0
   format: Format,
   // 32
-  ref: i32,
+  ref: i32?,
   // 28
   current: integer,
   // 8
