@@ -120,3 +120,43 @@ fn dn1_scalar_vector_element_native() {
         dn1_script_exits_zero("--native", s);
     }
 }
+
+/// @PLN25 DN6-adjacent — the `change_var` message for a `null` ↔ non-null-scalar local
+/// must name the real fix (`integer?`) and NEVER suggest `as` (which would launder null
+/// into the non-null slot — the DN5 hole). Regression for the fixed diagnostic.
+#[test]
+fn dn1_null_local_message_names_optional_not_as() {
+    let dir = std::env::temp_dir();
+    let src = dir.join("pln25_null_local_msg.loft");
+    std::fs::write(&src, "fn t() { a: integer = null; }\nfn main() { }\n")
+        .expect("write temp source");
+    let out = Command::new(loft_bin())
+        .arg("--interpret")
+        .arg(&src)
+        .current_dir(workspace_root())
+        .env("LOFT_PLN25_DN1", "1")
+        .output()
+        .expect("failed to invoke loft binary");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "`a: integer = null` must be rejected under DN1; stderr={stderr:?}"
+    );
+    assert!(
+        stderr.contains("declare it `integer?`"),
+        "message must name the `integer?` fix; got: {stderr:?}"
+    );
+    // Must not be the generic type-mismatch message. Guard BOTH tells additively:
+    // its phrasing ("use a new variable name") AND — the actual DN5 hazard — that it
+    // never SUGGESTS an `as` cast. The suggestion form is the connector "or cast with"
+    // ("… or cast with 'as'"); our helpful message says "do NOT cast with `as`", which
+    // is a prohibition and correctly does not contain "or cast with".
+    assert!(
+        !stderr.contains("use a new variable name"),
+        "message must be the nullability-specific one, not the generic mismatch; got: {stderr:?}"
+    );
+    assert!(
+        !stderr.contains("or cast with"),
+        "message must NOT suggest an `as` cast (the DN5 laundering hole); got: {stderr:?}"
+    );
+}

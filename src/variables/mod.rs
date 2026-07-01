@@ -1270,14 +1270,55 @@ impl Function {
             {
                 return self.is_new(var_nr);
             }
-            diagnostic!(
-                lexer,
-                Level::Error,
-                "Variable '{}' cannot change type from {} to {}; use a new variable name or cast with 'as'",
-                self.name(var_nr),
-                self.variables[var_nr as usize].type_def.name(data),
-                type_def.name(data)
-            );
+            // @PLN25 (N-Decl / DN6) — a `null` ↔ non-null-scalar transition is the
+            // NULLABILITY case, not a generic type mismatch: `a: integer = null` (the
+            // slot is committed non-null) or the inferred `a = null; a = 5` (the slot
+            // was `null`). Name the real fix (`τ?`) and NEVER suggest `as` — `x as
+            // integer` would LAUNDER the null into the non-null slot (the DN5 hole).
+            // (Once `(N-Join)`/DN6 lands, the inferred direction widens silently instead
+            // of erroring.) DN1-gated so gate-OFF stays byte-identical: gate-OFF the bare
+            // `null` is coerced to the scalar sentinel before here, so `Type::Null` never
+            // reaches `change_var` and this branch is unreachable.
+            let is_null_scalar = |t: &Type| {
+                matches!(
+                    t,
+                    Type::Integer(_)
+                        | Type::Text(_)
+                        | Type::Boolean
+                        | Type::Float
+                        | Type::Single
+                        | Type::Character
+                )
+            };
+            let nullable_mix = crate::keys::pln25_dn1_enabled()
+                && ((is_null_scalar(var_tp) && matches!(type_def, Type::Null))
+                    || (matches!(var_tp, Type::Null) && is_null_scalar(type_def)));
+            if nullable_mix {
+                let scalar = if is_null_scalar(var_tp) {
+                    var_tp
+                } else {
+                    type_def
+                };
+                let scalar_name = scalar.name(data);
+                diagnostic!(
+                    lexer,
+                    Level::Error,
+                    "Variable '{}' cannot hold both `null` and the non-null scalar type `{}` — declare it `{}?` to allow null (do NOT cast with `as`: `null as {}` would store null into a non-null slot)",
+                    self.name(var_nr),
+                    scalar_name,
+                    scalar_name,
+                    scalar_name
+                );
+            } else {
+                diagnostic!(
+                    lexer,
+                    Level::Error,
+                    "Variable '{}' cannot change type from {} to {}; use a new variable name or cast with 'as'",
+                    self.name(var_nr),
+                    self.variables[var_nr as usize].type_def.name(data),
+                    type_def.name(data)
+                );
+            }
         }
         self.trace_type_change(var_nr, type_def, "change_var_type");
         self.variables[var_nr as usize].type_def = type_def.clone();
