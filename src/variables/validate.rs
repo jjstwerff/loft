@@ -1,5 +1,6 @@
 // Copyright (c) 2024-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I61 — Stack slot allocator
 
 //! Slot validation and variable table dump: assert no overlapping live intervals,
 //! scope-parent analysis, and debug output.

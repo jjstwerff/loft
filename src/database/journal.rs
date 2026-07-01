@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I70 — Database subsystem (alloc / persistence / journal / snapshot / schema)
 
 //! @PLN16.J — store change journal (two-artifact binary model).
 //!

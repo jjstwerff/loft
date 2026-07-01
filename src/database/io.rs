@@ -1,5 +1,6 @@
 // Copyright (c) 2024-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I70 — Database subsystem (alloc / persistence / journal / snapshot / schema)
 //! File I/O: reading and writing database content to/from files.
 
 use crate::database::{Parts, Stores};

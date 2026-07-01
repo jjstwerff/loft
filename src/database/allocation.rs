@@ -1,5 +1,6 @@
 // Copyright (c) 2024-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I70 — Database subsystem (alloc / persistence / journal / snapshot / schema)
 //! Memory/store allocation helpers and claim management.
 
 use crate::database::{Parts, Stores, WorkerStores};

@@ -1,5 +1,6 @@
 // Copyright (c) 2024-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I70 — Database subsystem (alloc / persistence / journal / snapshot / schema)
 //! Display/debug formatting: `show`, `show_value`, `dump` functions.
 
 use crate::database::{Field, Parts, ShowDb, Stores};

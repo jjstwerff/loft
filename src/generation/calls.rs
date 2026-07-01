@@ -1,5 +1,6 @@
 // Copyright (c) 2024-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I68 — Native Rust generator
 
 //! Function call code generation: user-defined functions and `#rust` template calls.
 
