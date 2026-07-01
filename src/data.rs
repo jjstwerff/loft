@@ -970,6 +970,13 @@ pub fn to_default(tp: &Type, data: &Data) -> Value {
         // integer)` lands as `("", 0)`.  Recurses through nested
         // tuples and other compound element types.
         Type::Tuple(elems) => Value::Tuple(elems.iter().map(|e| to_default(e, data)).collect()),
+        // @PLN25 — an `Optional(τ)` FIELD with no explicit default takes its base type's
+        // default (base-zero: `integer? → 0`, `bool? → false`, `text? → ""`), NOT a bare
+        // `null`. `null` would fall to the `_` arm below and render as native `(())` (unit)
+        // into the scalar's slot (E0308) — and base-zero is the settled design call (the
+        // nullable field is still writable to null via an explicit `= null`). Inert gate-OFF
+        // (no `Optional` is constructed there).
+        Type::Optional(inner) => to_default(inner, data),
         _ => Value::Null,
     }
 }
