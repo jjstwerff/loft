@@ -500,8 +500,14 @@ fn analyze_fn(
             // borrowed `v` — when every borrower is itself read-only and
             // non-escaping (∉ ineligible); otherwise eliding would route the
             // borrower's write/escape onto the live source, so keep the copy.
+            // @PLN25 — deps are a lifetime property, agnostic to the `Optional`
+            // nullability marker; peel it (`.base()`) so a nullable element
+            // borrower (`e = v[i]` typing `Item?` under the DN1 index flip) is
+            // still recognised as borrowing `v`. Without the peel its dep is
+            // invisible here, so a mutated/escaping borrower is missed and the
+            // copy is wrongly elided (the mutation leaks to the source).
             let borrowers: Vec<u16> = (0..function.next_var())
-                .filter(|&e| e != v && function.tp(e).depend().contains(&v))
+                .filter(|&e| e != v && function.tp(e).base().depend().contains(&v))
                 .collect();
             if borrowers.iter().all(|e| !u.ineligible.contains(e)) {
                 plans.push(ElidePlan {

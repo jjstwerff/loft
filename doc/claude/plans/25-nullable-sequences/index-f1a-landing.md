@@ -49,10 +49,33 @@ build, then run and read FAILURES (asserts / panics / wrong values), both backen
 Then REVERT the gate flip and work under `LOFT_INDEX_DEV=1` per step. (Keep the gate dev-gated until
 Step 6 so the tree stays green between commits.)
 
-**Step 1 — copy-elision `Optional`-peel (deps subsystem; DO FIRST — riskiest).** Make the element-
-borrower classification peel `Optional` so `e = v[i]` where `e: Item?` is still recognized as
-borrowing `v`, and its mutation/escape is still detected (so a mutated/escaping borrower KEEPS the
-copy). Starting points found this session:
+**Step 1 — ✅ DONE (copy-elision `Optional`-peel).** Fix = peel `.base()` before reading the
+borrower's deps in `use_analysis` (the `borrowers` filter, `analyze_fn` ~504): `function.tp(e)
+.base().depend().contains(&v)`. `Type::depend()` has no `Optional` arm (it recurses only through
+`RefVar`/`Tuple`), and the index flip attaches the element's dep to the INNER type before the
+`Optional` wrap (`parse_index` fields.rs 632-676 → `Optional(Reference(Item, [xs]))`), so without
+the peel a nullable element borrower's dep was invisible → a mutated/escaping `e = v[i]` was missed,
+the copy wrongly elided, and the mutation LEAKED to the source (SILENT wrong-answer).
+- **Why detection-only is the whole fix (no re-point change needed):** the peel makes a mutated/
+  escaping borrower `∈ ineligible` → the plan is REFUSED → copy kept (the fix). A read-only borrower
+  is now detected + planned, but the re-point (`make_independent`/`depending`, also `Optional`-opaque)
+  no-ops — which is BENIGN: `elide_rewrite` inlines the source into the borrower's def (`e = g.c[i]`),
+  reads use that stored ref (not `e`'s dep), and the free pass already peels `Optional`. Proven on the
+  boundary matrix (read-only elides+reads right / mutated keeps copy / escaping keeps copy) + a
+  read-only stress set (late read, two borrowers, into-call), value+leak, BOTH backends, both gates.
+- **Safe-by-construction for the default suite:** `.base()` is identity for non-`Optional` types;
+  for an `Optional` borrower it can only ADD a detection, which only ever REFUSES a plan (keeps a
+  copy — always correct) or adds a harmless read-only detection. It cannot introduce a wrong answer.
+- **Regression:** `tests/scripts/25-index-elision-borrower.loft` (self-asserting; gate-OFF
+  byte-identical) + `tests/pln25_dn1_consumption.rs::index_dev_elision_borrower_{interpret,native}`
+  (runs it under `LOFT_INDEX_DEV=1`, both backends). NOT touched: `depend()`/`depending()`/`deps_ref()`
+  globally (74/31/3 callers, DN1-default-live — wider than the failing region, no correctness gain).
+
+<details><summary>Original Step-1 notes (starting points)</summary>
+
+Make the element-borrower classification peel `Optional` so `e = v[i]` where `e: Item?` is still
+recognized as borrowing `v`, and its mutation/escape is still detected (so a mutated/escaping
+borrower KEEPS the copy). Starting points found this session:
 - `src/use_analysis.rs` — `ElidePlan` (struct ~195; `borrowers` field ~202 "Vars that BORROW `v`
   (`e = v[i]` …)"; `visit` ~210; the re-point comment ~498). The plan is only emitted when "every
   borrower is read-only and non-escaping" — that read-only/escaping classification is what breaks
@@ -64,6 +87,25 @@ copy). Starting points found this session:
   fix is almost certainly a `.base()`/`peel_optional` at the point the classifier reads the
   borrower's type or matches the `e = v[i]` shape — but PROVE it on the matrix, don't guess (this
   is the deps system; symptom-patching it is how the heap model became loft's #1 weakness).
+
+</details>
+
+> **⚠️ BRANCH IS RED (pre-existing, NOT caused by Step 1) — surfaced 2026-07-01 by a full-suite run.**
+> A raw `cargo nextest`/`find_problems` run of the whole suite (DN1 default-on, committed) shows
+> substantial mid-step-f debt that the RESUME's targeted "issues/wrap/format green" claims did not
+> cover. None of it is copy-elision (the failure scan found NO borrow/elision/leak test failing):
+> 1. **Store codec does not serialize `Type::Optional`** — every `ir_read::*round_trip*` +
+>    `ir_schema_roundtrip::corpus_store_codec_round_trips` fails: `t_8integer?_min`'s
+>    `Optional(Integer)` reloads as bare `Integer` (a REAL correctness bug — nullable types don't
+>    survive save/open; the F1b(b) stdlib `τ?` overloads are the trigger). **Likely blocks the final PR.**
+> 2. **Un-migrated Rust tests** assert pre-DN1/DN3 behavior under the now-committed flip:
+>    `expressions::{call_int_null, call_text_null, bounded_*}`, `exit_codes::div_by_literal_constant_no_warning`,
+>    `runtime_warnings::*`, `error_messages::baselines_are_locked_in`, `g2_ir_check::*`.
+> 3. **Pre-existing clippy warning** — `operators.rs:1716 handle_operator` (8/7 args, DN3-division).
+> 4. **Environmental** — multiplayer/viewer (registry web republish, per RESUME), html_asyncify (chrome).
+>
+> These are the real @PLN25 "green gate" blockers — higher priority than index Steps 2-6, which all
+> depend on `find_problems` green. Recommend: clear (1)+(2)+(3) before continuing the index flip.
 
 **Step 2 — lib compiler migration (`dir`/`last`/`parser_debug`/`wasm_dir`).** Under `LOFT_INDEX_DEV=1`,
 find the `v[i]`-into-non-null sites in `lib/parser.loft` + `lib/code.loft` that reject (or that a

@@ -121,6 +121,46 @@ fn dn1_scalar_vector_element_native() {
     }
 }
 
+/// Run a self-asserting script under `LOFT_INDEX_DEV=1` (the index-flip dev gate;
+/// DN1 is default-on, so the gate constructs `Optional` element types for a
+/// not-provably-fit `v[i]`) and require a clean exit. Used for the index-flip
+/// F1a slices whose value is their own asserts.
+fn index_dev_script_exits_zero(backend: &str, rel_path: &str) {
+    let script = workspace_root().join(rel_path);
+    let out = Command::new(loft_bin())
+        .arg(backend)
+        .arg(&script)
+        .current_dir(workspace_root())
+        .env("LOFT_INDEX_DEV", "1")
+        .env("LOFT_TIMEOUT", "180")
+        .output()
+        .expect("failed to invoke loft binary");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "index-flip {backend} {rel_path} failed (exit {:?}); stdout={stdout:?}; stderr={stderr:?}",
+        out.status.code()
+    );
+}
+
+/// @PLN25 index-flip F1a Step 1 — copy-elision must peel `Optional` when reading a
+/// nullable element borrower's deps, so a mutated/escaping `e = v[i]` (typing
+/// `Item?`) KEEPS the copy instead of silently leaking the mutation to the source.
+/// Guards the silent copy-elision wrong-answer on both backends.
+#[test]
+fn index_dev_elision_borrower_interpret() {
+    index_dev_script_exits_zero(
+        "--interpret",
+        "tests/scripts/25-index-elision-borrower.loft",
+    );
+}
+
+#[test]
+fn index_dev_elision_borrower_native() {
+    index_dev_script_exits_zero("--native", "tests/scripts/25-index-elision-borrower.loft");
+}
+
 /// @PLN25 DN6-adjacent — the `change_var` message for a `null` ↔ non-null-scalar local
 /// must name the real fix (`integer?`) and NEVER suggest `as` (which would launder null
 /// into the non-null slot — the DN5 hole). Regression for the fixed diagnostic.

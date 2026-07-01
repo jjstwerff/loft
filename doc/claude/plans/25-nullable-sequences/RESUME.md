@@ -20,7 +20,29 @@ probe verdicts) → [implementation-steps.md](implementation-steps.md) (the phas
 > The model is built + gated + both-backends-validated; what's left is landing the flip as the
 > default (F1) + retiring `not null` (F2) + closing DN5/DN6/DN4 (F3–F5) + the final PR (F6).
 
-### ⭐ MOST RECENT — cold-start read this first (branch `tuxedo-pln85-fuzz-proof-gate`, all pushed, tree clean)
+### ⭐ MOST RECENT — cold-start read this first (branch `tuxedo-pln85-fuzz-proof-gate`)
+
+> **🔴 BRANCH IS RED under a FULL suite run (pre-existing, discovered 2026-07-01b) — the RESUME's
+> per-commit "issues/wrap/format green" claims did NOT cover the whole suite.** A `find_problems`
+> run (DN1 default-on, committed) shows mid-step-f debt, none of it copy-elision:
+> 1. **Store codec does NOT serialize `Type::Optional`** → all `ir_read::*round_trip*` +
+>    `ir_schema_roundtrip::corpus_store_codec_round_trips` fail (`t_8integer?_min`'s `Optional(Integer)`
+>    reloads as bare `Integer`). A REAL correctness bug (nullable types don't survive save/open);
+>    the F1b(b) stdlib `τ?` overloads are the trigger. **Likely blocks the final PR.**
+> 2. **Un-migrated Rust tests** assert pre-DN1/DN3 behavior: `expressions::{call_int_null,call_text_null,
+>    bounded_*}`, `exit_codes::div_by_literal_constant_no_warning`, `runtime_warnings::*`,
+>    `error_messages::baselines_are_locked_in`, `g2_ir_check::*`.
+> 3. **clippy** — pre-existing `operators.rs:1716 handle_operator` (8/7 args).
+> 4. **Environmental** — multiplayer/viewer (registry republish), html_asyncify (chrome).
+>
+> These are the real @PLN25 green-gate blockers, HIGHER priority than index Steps 2-6 (which all need
+> `find_problems` green). Recommend clearing (1)+(2)+(3) next. Detail: [index-f1a-landing.md](index-f1a-landing.md) § BRANCH IS RED.
+
+**✅ INDEX F1a Step 1 (copy-elision `Optional`-peel) DONE** — `use_analysis` borrower filter now peels
+`.base()` before reading deps, so a mutated/escaping `e = v[i]: Item?` KEEPS the copy (was a SILENT
+leak-to-source). Boundary matrix + stress, both backends, both gates, leak-clean; safe-by-construction
+for the default suite (only ever refuses a plan = keeps a copy). Regression: `25-index-elision-borrower.loft`
++ `pln25_dn1_consumption::index_dev_elision_borrower_*`. Detail in [index-f1a-landing.md](index-f1a-landing.md) § Step 1.
 
 The **DN1 flip is DEFAULT-ON** (`LOFT_PLN25_OFF` opts out; gate-OFF is now DEAD — F1b(b)'s `τ?`
 min/max overloads collide with it). Full detail per topic is in **§ FINISH LINE → F1a/F1b** below.
