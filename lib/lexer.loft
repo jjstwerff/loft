@@ -302,7 +302,7 @@ pub fn position(self: Lexer) -> text {
 }
 // Get an identifier and skip it.
 
-pub fn identifier(self: Lexer) -> text {
+pub fn identifier(self: Lexer) -> text? {
   if self.scanned != Identifier {
     return null;
   }
@@ -316,7 +316,7 @@ pub fn identifier(self: Lexer) -> text {
 }
 // Get an integer and skip it.
 
-pub fn int(self: Lexer) -> integer {
+pub fn int(self: Lexer) -> integer? {
   if self.scanned != Integer {
     return null;
   }
@@ -330,7 +330,7 @@ pub fn int(self: Lexer) -> integer {
 }
 // Get a long and skip it.
 
-pub fn long_int(self: Lexer) -> integer {
+pub fn long_int(self: Lexer) -> integer? {
   if self.scanned != Long && self.scanned != Integer {
     return null;
   }
@@ -348,7 +348,7 @@ pub fn long_int(self: Lexer) -> integer {
 }
 // Get a float
 
-pub fn get_float(self: Lexer) -> float {
+pub fn get_float(self: Lexer) -> float? {
   if self.scanned != Float {
     return null;
   }
@@ -362,7 +362,7 @@ pub fn get_float(self: Lexer) -> float {
 }
 // Get a single length float
 
-pub fn get_single(self: Lexer) -> single {
+pub fn get_single(self: Lexer) -> single? {
   if self.scanned != Float {
     return null;
   }
@@ -403,7 +403,7 @@ fn escaped(self: Lexer, i: integer) -> character {
   }
 }
 
-pub fn constant_text(self: Lexer) -> text {
+pub fn constant_text(self: Lexer) -> text? {
   if self.scanned != Text {
     return null;
   }
