@@ -49,6 +49,13 @@ probe verdicts) → [implementation-steps.md](implementation-steps.md) (the phas
   THREE gaps closed; every sweep(4) script is fully DN1-green on both backends; NO native gap remains.**
   Also: the web consumer `got = raw` store correctly rejects (no flow-narrowing — the eventual
   ergonomic chokepoint, a separate feature).
+- **Step f (the flip) is prototyped + measured.** `keys.rs` default-on (`LOFT_PLN25_OFF` opts out)
+  works; the invalidation catalogue + per-case mitigation (auto-fix vs precise-diagnostic vs
+  semantic-fix) is [DN1-MITIGATION.md](DN1-MITIGATION.md). Landing needs: the `change_var` local-null
+  message fix (it wrongly suggests `as`), the stdlib min/max/clamp migration + `STD_SOURCE`-exemption
+  removal, and the two newly-tracked deviations **DN5** (`as` launders `null`/`τ?` into a non-null
+  scalar — the nullness sibling of DN4) + **DN6** (inferred `a = null; a = 5` should widen to `τ?`
+  per `(N-Join)` but rejects). Both are "enforcement incomplete", closed AFTER the flip lands.
 - **`lima-default-borrow-elision` is MERGED to `main`** (via #467/#468/#469 etc.) and the
   branch is deleted. Its scalars Phase-0 + DN4 + N-Arith work is now ON `main`.
 - **@PLN25 now continues on `tuxedo-pln85-fuzz-proof-gate`** (the single live branch, off

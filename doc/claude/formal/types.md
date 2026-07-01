@@ -251,7 +251,8 @@ overflows *at runtime* yields **null and keeps running** (operational.md `E-Unco
 
 ## Deviations
 
-OPEN: **4** (the nullability flip + UB-rooting — §25 in progress)
+OPEN: **6** (the nullability flip + UB-rooting — §25 in progress). Per-situation
+mitigation catalogue: [../plans/25-nullable-sequences/DN1-MITIGATION.md](../plans/25-nullable-sequences/DN1-MITIGATION.md).
 
 ### DN1 — scalar / field storage is still nullable-by-default
 The `(N-Dense)` / non-null-default rule holds for `vector` elements (flipped: dense default,
@@ -260,6 +261,15 @@ still admits `null` (verified: `a.x = null` on `x: integer` succeeds), and `not 
 opt-out rather than a no-op. Falsifier: `struct A { x: integer }  …  a.x = null` type-checks
 today; under the rule it must require `x: integer?`. Closes when the scalar default flips +
 `not null` becomes the no-op.
+
+**Status (2026-07-01): the flip is the active @PLN25 step-f, prototyped + blast-radius-measured.**
+The `keys.rs` default-on flip (`LOFT_PLN25_OFF` opts out) + the `n_store_violation` enforcement of
+`(N-Store)`/`(N-Decl)` at return / field / typed-store / vector-index sites are validated; the
+scalar-vector-element + `character?` + narrow-field-in-vector native gaps are closed. Landing is
+gated on: (a) resolving the remaining red tests (measured, small); (b) fixing the `change_var`
+local-null message (it wrongly suggests `as`; must name `integer?` — see the mitigation doc §2);
+(c) migrating the stdlib `min`/`max`/`clamp` dead null-prop + removing the `STD_SOURCE` exemption;
+(d) closing DN5 + DN6 below. Full sequence: [DN1-MITIGATION.md](../plans/25-nullable-sequences/DN1-MITIGATION.md).
 
 ### DN2 — implicit `S? ⤳ S` unwrap still exists
 Code still performs the implicit `Enum(__nullable<S>) ⤳ Reference(S)` unwrap (the old
@@ -298,6 +308,27 @@ casts are exempt). Gate (1) — **range-tracking** so a masked value is provably
 `(N-Arith)` range arithmetic for `+`/`-`/`*` (overflow → `Integer?`) remains, and lands
 with DN3. Deviation **shrinks but stays open** until cutover. The integer-range sibling of DN1–DN3's
 null work — same "no claim without enforcement."
+
+### DN5 — `as τ` launders `null` / `τ?` into a non-null scalar (the nullness sibling of DN4)
+`as` currently strips nullability without enforcing fit, so it **bypasses `(N-Store)`**: `null as
+integer`, `x:integer? as integer`, and `return null as integer` all type-check and store `null`
+into a non-null `integer` (verified: `a: integer = null as integer` yields `a == null`). Per
+`(N-Cast)` — "`as τ` requires a PROVABLE fit; the honest maybe-miss form is `as τ?`" — a `Null`/
+`Optional` source into a non-null scalar target must be a **compile error** directing to `as τ?`
+(checked → `null`) or `?? d`. Falsifier: `(null as integer) == null` is `true` today; under
+`(N-Cast)` it does not compile. This is the **nullness dimension of DN4** (which is the range
+dimension) — one rule, one fit-check, one gate. *Explicit* opt-in (you must write `as integer`),
+so a tightening not a foundation crack; close it AFTER the scalar flip (DN1) lands, scoped to
+`target is_non_null_scalar ∧ source ∈ {Null, Optional}` (a `null as S` heap ref stays legal).
+
+### DN6 — inferred `null`-join is rejected instead of widening to `τ?`
+Per `(N-Join)` an inferred `a = null; a = 5` (no annotation) must infer `a : integer?` — the join
+of `null` and `integer`, made optional. The implementation instead **rejects** it (`change_var`:
+"cannot change type from null to integer") rather than joining. Falsifier: `a = null; a = 5; a ?? 0`
+is `(N-Join)`-legal (`a : integer?`) but errors today. This is the *inferred* escape valve the
+model promises — nullable **for free** where no annotation committed you to non-null, the
+ergonomic counterpart to `(N-Decl)`'s rejection of annotated `a: integer = null`. Closes when
+`change_var` joins `Null ⊔ τ = τ?` for an unannotated local.
 
 ### D2 — CLOSED by reconciliation (2026-06-24): `integer` = i64 is a *user-visible* contract met by a *compact* internal encoding
 
