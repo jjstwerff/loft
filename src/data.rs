@@ -1284,6 +1284,7 @@ impl Deps {
 ///
 /// This governs the freeing logic in [`crate::scopes`].  See also
 /// [`Function::depend`](crate::variables::Function) which adds entries.
+// @F3 — primitive scalar types (integer/float/single/boolean/character) — the static Type model
 pub enum Type {
     /// The type of this parse result is unknown, possibly linked to a yet unknown type (if != 0).
     Unknown(u32),

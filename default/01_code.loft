@@ -16,6 +16,7 @@ pub type text size(4);
 pub type character size(4);
 // Integer subtypes for compact storage in struct fields. Behave as integer in expressions.
 // 0 – 255, 1 byte.
+// @F4 — ranged/width integer types (u8/i8/u16/i16/i32/u32) for compact storage
 pub type u8 = integer limit(0, 255) size(1);
 // -128 – 127, 1 byte.
 pub type i8 = integer limit(-128, 127) size(1);
@@ -128,6 +129,7 @@ fn OpPutInt(pos: const u16, value: integer);
 #rust"s.put_var(@pos, @value);"
 fn OpPutCharacter(pos: const u16, value: character);
 #rust"s.put_var(@pos, @value);"
+// @F1 — null model: in-band sentinels (i64::MIN / NaN / bool 255) + null-fallback arithmetic
 fn OpConvIntFromNull() -> integer;
 #rust"i64::MIN"
 fn OpConvBoolFromNull() -> boolean;
