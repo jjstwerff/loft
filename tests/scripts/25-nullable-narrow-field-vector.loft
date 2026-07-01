@@ -1,0 +1,36 @@
+// @PLN25 regression — a full-range nullable NARROW-int field inside a
+// `vector<struct>` (the native struct-size / element-stride gap).
+//
+// A `u8?` / `integer limit(0,255)?` field is full-range: it widens to 2-byte
+// storage (ShortFull) so it holds both its max value and the null sentinel. The
+// native db-setup emit missed this for a struct FIELD whose type is
+// `Optional(narrow int)` — it sized the field (and thus the struct) at 8 bytes
+// while field ACCESS used 2-byte ops. In a `vector<struct>` that meant elements
+// were appended at 8-byte stride but read at 2-byte stride, so every element past
+// index 0 read back null. Fixed by peeling the `Optional` + folding it into
+// `nullable` in `emit_field` (generation/mod.rs) so the field takes the narrow
+// `db.short(min, true)` path. Gate-OFF the `?` is a no-op → identical.
+
+struct FullU8  { x: integer limit(0, 255)? }
+struct FullU16 { y: integer limit(0, 65535)? }
+struct AliasU8 { z: u8? }
+
+fn main() {
+  // multi-element vector: EVERY element (not just index 0) must round-trip,
+  // including the range-edge max value (255 / 65535) and interleaved null.
+  v = [FullU8 { x: 100 }, FullU8 { x: null }, FullU8 { x: 255 }];
+  assert(v[0].x == 100, "u8 vec[0] value");
+  assert(v[1].x == null, "u8 vec[1] null");
+  assert(v[2].x == 255, "u8 vec[2] MAX (was swallowed as null)");
+
+  w = [FullU16 { y: 1 }, FullU16 { y: 65535 }, FullU16 { y: null }];
+  assert(w[0].y == 1, "u16 vec[0] value");
+  assert(w[1].y == 65535, "u16 vec[1] MAX");
+  assert(w[2].y == null, "u16 vec[2] null");
+
+  a = [AliasU8 { z: 5 }, AliasU8 { z: 254 }];
+  assert(a[0].z == 5, "u8-alias vec[0]");
+  assert(a[1].z == 254, "u8-alias vec[1]");
+
+  print("nullable-narrow-field-vector: ok\n");
+}

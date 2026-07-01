@@ -100,6 +100,11 @@ const DN1_SVEC_SCRIPTS: &[&str] = &[
     "tests/scripts/292-pln17-three-state-boolean.loft",
     // @PLN25 `character?` native null-sentinel wrap (Call / Var / Block / TupleGet).
     "tests/scripts/25-nullable-character.loft",
+    // @PLN25 full-range nullable narrow-int FIELD in a vector<struct> (native
+    // struct-size / element-stride) — the previously native-blocked 389-h6 + 407.
+    "tests/scripts/25-nullable-narrow-field-vector.loft",
+    "tests/scripts/389-h6-nullable-full-range-narrow.loft",
+    "tests/scripts/407-cluster-d-null-sentinel-roundtrip.loft",
 ];
 
 #[test]

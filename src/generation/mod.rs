@@ -2523,6 +2523,17 @@ extern crate loft;"
         bare_io: &[(u16, BareIo)],
         bare_emitted: &mut [bool],
     ) -> std::io::Result<()> {
+        // @PLN25 — an `Optional(τ)` field carries its nullability in the wrapper;
+        // peel it so the type-dispatch below sees the base type, and fold the
+        // wrapper into `nullable` so a nullable NARROW int (`x: u8?` /
+        // `integer limit(..)?`) takes the `db.byte`/`db.short`/`db.int` path (correct
+        // 1/2/4-byte storage width) instead of falling through to an 8-byte type
+        // ref. Without this the struct sized to 8 bytes on native (but 2 on interp),
+        // so a `vector<struct>` appended elements at 8-byte stride while reads used
+        // the 2-byte access stride → every element past index 0 read back null. Inert
+        // gate-OFF (no `Optional` is ever constructed, so `.base()` is a no-op).
+        let nullable = nullable || matches!(typedef, Type::Optional(_));
+        let typedef = typedef.base();
         if let Type::Vector(c, _) = typedef {
             // when the element `Type::Integer` carries a
             // `forced_size` annotation that `vector_narrow_width`
