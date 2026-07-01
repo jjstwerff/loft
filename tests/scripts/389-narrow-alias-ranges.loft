@@ -19,10 +19,10 @@
 // the inline construct-and-read of a byte field hits a separate, pre-existing
 // native pre-eval gap (tracked apart from this storage design).
 
-struct U8N  { x: u8 }            struct U8NN  { x: u8 not null }
-struct I8N  { y: i8 }            struct I8NN  { y: i8 not null }
-struct U16N { z: u16 }           struct U16NN { z: u16 not null }
-struct I16N { w: i16 }           struct I16NN { w: i16 not null }
+struct U8N  { x: u8? }           struct U8NN  { x: u8 not null }
+struct I8N  { y: i8? }           struct I8NN  { y: i8 not null }
+struct U16N { z: u16? }          struct U16NN { z: u16 not null }
+struct I16N { w: i16? }          struct I16NN { w: i16 not null }
 
 fn main() {
   // ── nullable: usable edges + null round-trip (symmetric signed) ──

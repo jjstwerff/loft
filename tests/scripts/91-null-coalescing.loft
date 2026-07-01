@@ -55,7 +55,7 @@ fn test_call_with_null() {
   assert(!r, "call with null is null");
 }
 
-fn text_or_null(a: integer) -> text {
+fn text_or_null(a: integer) -> text? {
   if a > 2 { return null }
   "#{a}#"
 }
@@ -65,7 +65,7 @@ fn test_call_text_null() {
   assert(!r, "text null");
 }
 
-fn int_or_null(a: integer) -> integer {
+fn int_or_null(a: integer) -> integer? {
   if a > 2 { return null }
   a + 1
 }
@@ -111,7 +111,7 @@ fn side_effect_int(counter: &integer) -> integer {
   42
 }
 
-fn side_effect_null(counter: &integer) -> integer {
+fn side_effect_null(counter: &integer) -> integer? {
   counter += 1;
   null
 }

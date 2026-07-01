@@ -67,7 +67,7 @@ fn is_odd(n: integer) -> boolean {
 }
 // Returns null when a > 2, otherwise a+1.
 
-fn maybe_inc(a: integer) -> integer {
+fn maybe_inc(a: integer) -> integer? {
   if a > 2 {
     return null;
   }
@@ -75,7 +75,7 @@ fn maybe_inc(a: integer) -> integer {
 }
 // Returns text or null depending on flag.
 
-fn maybe_str(a: integer) -> text {
+fn maybe_str(a: integer) -> text? {
   if a > 2 {
     return null;
   }
