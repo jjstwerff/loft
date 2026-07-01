@@ -5,6 +5,8 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # formal/operational.md — small-step semantics for the stable core (strict)
 
+**Catalogue:** @F38 (arithmetic safety), @F1 (null model), @F3 (scalar core) — the Goal-D backend contract. Roadmap: @PLN28, @PLN89.
+
 > **Rules then deviations** (see [README](README.md)). This is a small-step evaluation
 > relation for loft's **stable scalar core**, written for one purpose: to be the **shared
 > contract both backends must satisfy**. Today the interpreter (`src/state/`) *is* the

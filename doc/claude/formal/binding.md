@@ -5,6 +5,8 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # formal/binding.md — reference types & `&` (strict)
 
+**Catalogue:** @F21 (references `&T`). Roadmap: @PLN87.
+
 > **Rules then deviations** (see [README](README.md)). The governing rule: **`&` is a
 > TYPE ANNOTATION, not an operator.** `&τ` is a *reference type* (a live link to a
 > τ-lvalue); the `&` belongs to the **variable's type**, fixed at its binding — it is

@@ -38,9 +38,17 @@ Each entry has:
 4. **Revisit when** — the concrete trigger that would warrant
    reconsideration.
 
+An entry that bounds a catalogued feature also carries a **`Catalogue:`**
+line right under its header, listing the `@F###`/`@I###` entries it limits or
+shapes. This is the cost/bound side of the feature catalogue (@PLN92): `idx
+tag:@F<n>` then surfaces a feature's design bounds alongside its code and doc
+anchors, with no per-feature `## Cost` prose to maintain.
+
 ---
 
 ## C3 — WASM `par()` runs sequentially
+
+**Catalogue:** @F33 (par), @F54 (WASM/browser target).
 
 **Question.** Should browser WASM builds parallelise `par()` loops
 across a Web Worker pool?
@@ -67,6 +75,8 @@ trace.
 ---
 
 ## C38 — Closure capture is copy-at-definition
+
+**Catalogue:** @F22 (closures & lambdas).
 
 **Question.** Should lambda captures be by reference (like Rust
 borrows) instead of by value (like Rust `move`)?
@@ -121,6 +131,8 @@ alternatives considered are in `DISCUSSION.md` alongside.
 
 ## C54.D — Rust-style numeric literal suffixes
 
+**Catalogue:** @F4 (width integers), @F5 (type conversions — `as`).
+
 **Question.** Should loft accept `34u8`, `4948u32`, `100i32` as
 literal syntax for explicit-width integer constants?
 
@@ -150,6 +162,8 @@ syntax.  "I wrote it in Rust that way" is not sufficient evidence.
 ---
 
 ## C62 — No type annotations in `|x|` shorthand lambdas
+
+**Catalogue:** @F22 (closures & lambdas).
 
 **Question.** Should loft accept type annotations on shorthand
 `|x|` lambda parameters (e.g. `|x: integer, y: integer| { x + y }`)?
@@ -193,6 +207,8 @@ altogether (i.e. a fundamental rewrite of the lambda story).
 ---
 
 ## C63 — No nested `fn` definitions inside fn bodies
+
+**Catalogue:** @F16 (functions & declarations).
 
 **Question.** Should loft accept `fn` declarations inside another
 function's body (e.g. `fn outer() { fn helper(x: integer) -> integer
@@ -255,6 +271,8 @@ stdlib never need local-helper recursion.
 
 ## C64 — Tuple struct-ref elements use MOVE semantics (not copy + null)
 
+**Catalogue:** @F11 (tuples).
+
 **Question.** When a tuple element is a struct reference
 (`Type::Reference`), what semantics apply at scope exit and on
 destructuring?  Two candidates:
@@ -311,6 +329,8 @@ in the move/copy axis.
 
 ## C65 — Tuple "structure value" element type folded into reference (E5 = E6)
 
+**Catalogue:** @F11 (tuples).
+
 **Question.** Should the validation matrix carry a separate E6
 element type for "structure value" (an inline by-value struct
 copied into the tuple slot, distinct from `Type::Reference`)?
@@ -335,6 +355,8 @@ value structs (none on the roadmap) would re-open the row.
 ---
 
 ## C66 — Production loft programs never abort on user-attributable edge cases (development may halt)
+
+**Catalogue:** @F38 (arithmetic safety), @F44 (logging — panic/assert).
 
 > **Revised by [C80](#c80--the-spreadsheet-fault-model-nothing-stops-a-running-calculation)
 > (2026-06-24).** The "development *may halt*" half no longer applies to **calculation**
@@ -572,6 +594,8 @@ is needed and not yet in place.
 
 ## C67 — Fail at startup, not at runtime (no programmer-side try/catch for internal bugs)
 
+**Catalogue:** @F44 (logging — panic/assert).
+
 ### Question
 
 When a loft program hits an internal-bug runtime panic (a
@@ -698,6 +722,8 @@ mirror: `feedback_fail_at_startup_not_runtime.md`.
 
 ## C68 — Keyed collections dedup on insert (`+=` AND `coll[key]=value`)
 
+**Catalogue:** @F7 (hash), @F8 (sorted), @F9 (index).
+
 > **REVERSED & IMPLEMENTED (2026-05-21).**  The original decision below
 > (close @P306 as a `+=`-append-vs-`[key]=`-upsert split) was reversed the
 > same day on **new evidence**: the world-chunk index is `hash<Chunk[cx,cy,cz]>`
@@ -774,6 +800,8 @@ C09/C10 document the append-no-dedup behaviour this decision blesses).
 ---
 
 ## C69 — `!x` on a non-boolean is a null test, not logical-not
+
+**Catalogue:** @F37 (operators — unary `!`), @F1 (null model).
 
 ### Question
 
@@ -884,6 +912,8 @@ Pointer from the source:
 ---
 
 ## C71 — Native libraries compile, scripts interpret — the steady-state execution model
+
+**Catalogue:** @F53 (native backend), @F55 (package management).
 
 > *Build-plan seed:* the engine-host design exploration —
 > [plans/18-engine-host/ENGINE_HOST.md](plans/18-engine-host/ENGINE_HOST.md) (tier model per
@@ -1087,6 +1117,8 @@ separate model, always AOT).
 
 ## C72 — REPL session resume does not persist RNG generator state
 
+**Catalogue:** @F49 (REPL), @F43 (random numbers).
+
 **Question.** Should REPL auto-resume snapshot and restore the random
 generator's internal state, so the random stream continues identically across a
 stop/resume (exact-deterministic resume)?
@@ -1114,6 +1146,8 @@ continuation across resume that an explicit seed cannot satisfy.
 ---
 
 ## C73 — `boolean` is three-state (false / true / null); `==` is raw, truthiness coerces
+
+**Catalogue:** @F3 (scalar types — boolean), @F1 (null model).
 
 **Question.** `boolean` was the only common-value scalar whose zero-value collided with
 its null sentinel (null *was* `false`), so a nullable boolean couldn't distinguish
@@ -1174,6 +1208,8 @@ cluttering active tables.
 
 ## C74 — A mutated scalar may be captured by only ONE closure
 
+**Catalogue:** @F22 (closures & lambdas).
+
 **Question.** Should a bare scalar local that one closure mutates be
 sharable with other closures (`run2(fn() { print(t) },
 fn() { t = t + 1 })`) — JS/Python-style shared upvalues?
@@ -1217,6 +1253,8 @@ on evidence.
 
 ## C75 — Closure-carrying struct values are frame-bound
 
+**Catalogue:** @F22 (closures & lambdas).
+
 **Question.** May a struct holding a capturing closure leave the function
 whose frame owns the captures — be returned, written into an argument's
 field, or stored in a collection?
@@ -1253,6 +1291,8 @@ verified on both backends.
 
 ## C76 — Selective imports group with `()`, not Rust-style `{}`; flat comma list dropped
 
+**Catalogue:** @F47 (library imports / module system).
+
 **Question.** How does a `use` import multiple names from one library — a flat
 top-level comma list (`use lib::a, b, c;`), Rust-style braces
 (`use lib::{a, b, c};`), or parentheses (`use lib::(a, b, c);`)?
@@ -1278,6 +1318,8 @@ express (e.g. `use a::(b::c, d)`), with a parse that doesn't collide with the
 struct-literal or call grammar.
 
 ## C77 — Binding ownership: heap aliases by default; `&` binds a live reference
+
+**Catalogue:** @F21 (references `&T`).
 
 > **CORRECTED (2026-06-23, @PLN87).** The "`&` makes a *reassignment write back*" reading
 > below is superseded: **`&` binds a live REFERENCE** (read- and write-through to an
@@ -1462,6 +1504,8 @@ reused" **alone is not sufficient** — that is force 1, which forces 2 and 3 ov
 
 ## C79 — Ownership is internal; no user-facing borrow checker
 
+**Catalogue:** @F21 (references `&T`).
+
 ### Question
 
 loft's ownership/`deps` system is described as "loft's borrow checker, Rust as the reference
@@ -1500,6 +1544,8 @@ single case, never the general Rust model.
 ---
 
 ## C80 — The spreadsheet fault model: nothing stops a running calculation
+
+**Catalogue:** @F38 (arithmetic safety), @F1 (null model), @F44 (logging — panic/assert).
 
 ### Question
 
@@ -1619,6 +1665,8 @@ never a halt.
 
 ## C81 — `&` stays one token, disambiguated by position (bitwise-and vs reference)
 
+**Catalogue:** @F21 (references `&T`), @F37 (operators — bitwise `&`).
+
 ### Question
 
 `&` does double duty: an **infix** `&` is bitwise-and (precedence level 6, `a & b`), a
@@ -1686,6 +1734,8 @@ loft's parser) **and** the context-sensitive points can be expressed without unb
 backtracking.
 
 ## C83 — The internal representation follows the user-visible contract; never widen storage for implementation convenience
+
+**Catalogue:** @F3 (scalar types — integer), @F4 (width integers).
 
 ### Question
 

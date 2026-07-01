@@ -5,6 +5,8 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # formal/types.md — type system & conversion relation (strict)
 
+**Catalogue:** @F3 (scalar types), @F4 (width integers), @F5 (type conversions), @F1 (null / Optional). Roadmap: @PLN88, @PLN25.
+
 > **Rules then deviations** (see [README](README.md)). The rules are the target loft's
 > front end should satisfy; the deviations are where today's code breaks them, to be
 > driven to zero. Analysis/rationale lives in [../TYPING_RELATION.md](../TYPING_RELATION.md)

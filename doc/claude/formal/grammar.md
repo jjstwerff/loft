@@ -5,6 +5,8 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # formal/grammar.md — concrete grammar & operator precedence (strict)
 
+**Catalogue:** @I58 (parser), @F37 (operator precedence). Context-sensitive points: @F35 (string interpolation), @F12 (struct literals).
+
 > **Rules then deviations** (see [README](README.md)). This area pins what the informal
 > grammar in [LOFT.md § Summary of grammar](../LOFT.md) leaves out — **operator
 > precedence and associativity** — and records where the surface is *not* context-free.
