@@ -1,0 +1,10 @@
+fn g(b: boolean) -> integer? { if b { 42 } else { null } }
+fn main() {
+  a: integer? = 5;          // decl non-null
+  b: integer? = null;       // decl null
+  c: u8? = 254;             // narrow nullable local
+  a = 9;                    // reassign non-null
+  b = g(true);              // reassign from nullable source (non-null)
+  d: integer? = 7; d = g(false);   // reassign to null
+  print("{a ?? -1} {b ?? -1} {c ?? -1} {d ?? -9}");   // 9 42 254 -9
+}

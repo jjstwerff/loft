@@ -1,0 +1,14 @@
+struct M { hp: integer not null, name: text }
+fn dflt() -> M { M{hp:0, name:""} }
+fn pick(t: vector<M>, salt: integer) -> M {
+  pool: vector<M> = []; for p in 0..len(t) { pool += [t[p] ?? dflt()]; }
+  chosen = dflt();
+  np = len(pool);
+  for wj in 0..np { if salt % np == wj { chosen = pool[wj] ?? dflt(); } }
+  chosen
+}
+fn main() {
+  t: vector<M> = []; for k in 0..3 { t += [M{hp:k, name:"m"}]; }
+  for i in 0..4 { r = pick(t, i); }
+  println("ok");
+}

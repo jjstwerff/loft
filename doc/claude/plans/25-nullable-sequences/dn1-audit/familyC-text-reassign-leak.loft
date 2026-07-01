@@ -1,0 +1,9 @@
+fn maybe(b: boolean) -> text? { if b { "allocated heap string each iteration here" } else { null } }
+fn main() {
+  s: text? = "init";
+  for i in 0..200 {
+    s = "a reallocating heap string that must be freed each loop iteration";
+    s = maybe(false);
+  }
+  print("{s ?? "done"}");
+}

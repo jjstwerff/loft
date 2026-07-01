@@ -804,6 +804,13 @@ impl State {
         let var = self.code::<u16>();
         let db_tp = self.code::<u16>();
         let code_pos = self.code_pos;
+        self.alloc_record_at(var, db_tp, code_pos);
+    }
+
+    /// Allocate a fresh `db_tp` record into variable slot `var`, reusing the slot's
+    /// current store in place (`clear` + `claim`) or a fresh store when the slot is
+    /// null/sentinel. The core of `OpDatabase`; also used by `bind_or_copy` (@PLN85).
+    fn alloc_record_at(&mut self, var: u16, db_tp: u16, code_pos: u32) {
         // B2-runtime: for EnumValue types, the record must be large enough
         // for the parent enum's largest variant.  The parent's size covers
         // all variants; the variant's own size may be smaller (unit variants).
@@ -1376,6 +1383,18 @@ impl State {
         if data.store_nr == u16::MAX {
             return;
         }
+        // @PLN90 phase 1 — make the copy visible. A real record deep-copy is about to
+        // run (the no-op-alias and null cases returned above). LOFT_COPY_DUMP prints one
+        // line per executed structure copy so we can inventory every copy + map it to its
+        // source line (the runtime ground truth the compile-time decision must cover).
+        if crate::keys::copy_dump_enabled() {
+            let line = self
+                .line_numbers
+                .range(..=self.code_pos)
+                .next_back()
+                .map_or(0, |(_, &v)| v);
+            eprintln!("[copy] record       line={line}  tp={tp}");
+        }
         // cluster-462 tool-gap #1 — name the premature-free op: when the copy
         // SOURCE is read while its store is still freed (the operand-stack stale
         // ref the LOFT_UAF frame scan misses), report the source, the line that
@@ -1572,6 +1591,37 @@ impl State {
         }
         let dst = *self.get_var::<DbRef>(pos);
         self.do_copy_record(src, dst, raw_tp);
+    }
+
+    /// @PLN85 `OpBindOrCopy` — bind a `Join` call return into the owned slot `pos`
+    /// with the runtime arg-aliasing GUARD the `ownership_of` oracle witnesses.
+    /// Stack (top first): `witness` (the argument the return may borrow, = the
+    /// oracle's resolved `base`), then `src` (the call result).
+    ///
+    /// - `src` aliases `witness`'s store → it is the BORROW arm of the `??` join:
+    ///   deep-copy into a fresh store at `pos` so the append's source-free hits the
+    ///   copy, not the borrowed element;
+    /// - else `src` is fresh (the OWNED arm) → adopt it directly, so the source-free
+    ///   correctly frees this owned store.
+    ///
+    /// A static gate cannot choose — the same call returns owned on one branch,
+    /// borrowed on the other; the store-identity check resolves it per execution.
+    pub fn bind_or_copy(&mut self) {
+        let pos = self.code::<u16>();
+        let raw_tp = self.code::<u16>();
+        let code_pos = self.code_pos;
+        let witness = *self.get_stack::<DbRef>();
+        let src = *self.get_stack::<DbRef>();
+        if src.store_nr != u16::MAX && src.store_nr == witness.store_nr {
+            // BORROW arm — materialise: `raw_tp`'s `0x8000` source-free bit applies to
+            // the COPY, not the fresh allocation, so mask it for `alloc_record_at`.
+            self.alloc_record_at(pos, raw_tp & 0x7fff, code_pos);
+            let new_dst = *self.get_var::<DbRef>(pos);
+            self.do_copy_record(src, new_dst, raw_tp);
+        } else {
+            // OWNED arm (or null) — adopt the store directly.
+            *self.mut_var::<DbRef>(pos) = src;
+        }
     }
 
     /// @P295 — deep-copy a keyed collection (`sorted`/`hash`/`index`) into a

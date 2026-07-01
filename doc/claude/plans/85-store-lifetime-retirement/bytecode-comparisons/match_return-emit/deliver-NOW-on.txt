@@ -1,0 +1,66 @@
+fn n_deliver(e:ref(Cell), _mv_items_1:vector<ref(E)>) -> vector<ref(E)>["??"] {#block(1):vector<ref(E)>["__retbuf"]
+  OpClearVector(_mv_items_1(0));
+  [5] return if OpEqInt(OpConvIntFromEnum(OpGetEnum(e(0), 0i32)), 2i32) {#match_arm(2):vector<ref(E)>["_mv_items_1"]
+    OpAppendVector(_mv_items_1(0), OpGetField(e(0), 4i32, 67i32), 65i32);
+    {#block(3):vector<ref(E)>["_mv_items_1"]
+      _mv_items_1(0);
+    }#block(3):vector<ref(E)>["_mv_items_1"];
+  }#match_arm(2):vector<ref(E)>["_mv_items_1"] else ;
+}#block(1):vector<ref(E)>["__retbuf"]
+
+byte-code for /home/jurjens/workspace/loft/doc/claude/plans/85-store-lifetime-retirement/bytecode-comparisons/462-match-arm-delivery.loft:n_deliver(e: ref(Cell)[0], _mv_items_1: vector<ref(E)>[12]) -> vector<ref(E)>["__retbuf"]
+   0[24]: return-address  @abs=7176
+   0[40]: VarVector(var[16]) -> vector type=vector<E> 67 var=_mv_items_1[16]:vector<ref(E)>
+   3[56]: ClearVector(r: vector)
+   4[40]: [5] VarRef(var[0]) -> ref(reference) type=Cell 64 var=e[0]:ref(Cell)
+   7[56]: GetEnum(v1: ref(reference), fld=0) -> i_parse_errors
+  10[48]: ConvIntFromEnum(v1: i_parse_errors) -> integer
+  11[48]: ConstInt(val=2) -> integer
+  20[56]: EqInt(v1: integer, v2: integer) -> boolean
+  21[48]: GotoFalseWord(jump=:POS42, if_false: boolean)
+  24[40]: VarVector(var[16]) -> vector type=vector<E> 67 var=_mv_items_1[16]:vector<ref(E)>
+  27[56]: VarRef(var[0]) -> ref(reference) type=Cell 64 var=e[0]:ref(Cell)
+  30[72]: GetField(v1: ref(reference), fld=4) -> ref(reference) type=vector<E> 67
+  33[72]: AppendVector(r: vector, other: vector, tp=65) type=E 65
+  36[40]: VarVector(var[16]) -> vector type=vector<E> 67 var=_mv_items_1[16]:vector<ref(E)>
+  39[56]: GotoWord(jump=:POS42)
+:POS42
+  42[40]: Return(ret=32, value=12, discard=40)
+
+fn n_main() {#block(1):void
+fn n_deliver(cell: &std::cell::UnsafeCell<Stores>, mut var_e: DbRef, mut var__mv_items_1: DbRef) -> DbRef { //block_1: vector<ref(E)>["__retbuf"]
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  cr_call_push("deliver", "/home/jurjens/workspace/loft/doc/claude/plans/85-store-lifetime-retirement/bytecode-comparisons/462-match-arm-delivery.loft", 5);
+  let _call_guard = codegen_runtime::CallGuard;
+  if var__mv_items_1.rec != 0 { vector::clear_vector(&var__mv_items_1, &mut stores.allocations); };
+  // loft:/home/jurjens/workspace/loft/doc/claude/plans/85-store-lifetime-retirement/bytecode-comparisons/462-match-arm-delivery.loft:5
+  let _pre_4 = {{let db = (var_e); if db.rec == 0 { 0u8 } else { let r = stores.store(&db).get_byte(db.rec, db.pos + (0_i64) as u32, 0); if r < 0 { 255u8 } else { r as u8 } }}};
+  return if (((({{ let _v_v1 = ((_pre_4) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64) == ((2_i64) as i64)) as u8) == 1 { //match_arm_2: vector<ref(E)>["_mv_items_1"]
+    { let _av_t = var__mv_items_1; let _av_s = {{ let _v_v1 = (var_e); DbRef {store_nr: _v_v1.store_nr, rec: _v_v1.rec, pos: _v_v1.pos + (4_i64) as u32} }}; stores.vector_add(&_av_t, &_av_s, (65_i64) as u16); };
+    { //block_3: vector<ref(E)>["_mv_items_1"]
+      var__mv_items_1
+      } /*block_3: vector<ref(E)>["_mv_items_1"]*/
+    } /*match_arm_2: vector<ref(E)>["_mv_items_1"]*/ else { //block_4: vector<ref(E)>["_mv_items_1"]
+    DbRef::NULL
+    } /*block_4: vector<ref(E)>["_mv_items_1"]*/
+  } /*block_1: vector<ref(E)>["__retbuf"]*/
+
+// loft:/home/jurjens/workspace/loft/doc/claude/plans/85-store-lifetime-retirement/bytecode-comparisons/462-match-arm-delivery.loft:6
+fn n_main(cell: &std::cell::UnsafeCell<Stores>) { //block_1: void
+fn n_deliver:
+  #    arg  name                 type           scope  slot         live
+  ----------------------------------------------------------------------
+  0    arg  e                    enum(611)      0      [0, 12)      -
+  1         __retbuf             vec<ref(606)>  -      -            -
+  2    arg  _mv_items_1          vec<ref(606)>  0      [16, 28)     -
+
+
+fn n_main:
+fn n_deliver -> vector<ref(E)>["__retbuf"]:
+  #    arg  name                     type [deps]
+  ----------------------------------------------------------------------
+  0    arg  e                        ref(Cell)
+  1         __retbuf                 vector<ref(E)>
+  2    arg  _mv_items_1              vector<ref(E)>
+
+fn n_main -> void:

@@ -1,0 +1,468 @@
+<!--
+Copyright (c) 2026 Jurjen Stellingwerff
+SPDX-License-Identifier: LGPL-3.0-or-later
+-->
+
+# @PLN25 DN1 `_`-arm audit — findings
+
+The DN1 default-flip phase makes `integer?` (and `text?`/`bool?`/…) first-class and
+pervasive, so an `Optional(τ)` `Type` can flow anywhere a scalar type flows. Any
+**non-exhaustive** `match`-on-`Type` with a scalar arm + `_` fallthrough that does NOT
+peel (`tp.base()` / `tp.peel_optional()`) and has no `Type::Optional` arm will silently
+mishandle `Optional(τ)` in its `_` arm. (Exhaustive matches were force-handled by Step 1.)
+This audit finds those sites. Two complementary halves:
+
+- **Empirical** — drive `τ?` through every feature gate-ON, let the compiler surface
+  reachable mishandles (`optional-flow-instrument.loft`). HIGH confidence, exercised paths.
+- **Static** — enumerate + classify every `_`-arm `Type::Integer` match across `src/`.
+  COMPLETE coverage, reachability is a judgment.
+
+## Method note (reproduce)
+
+Gate with `LOFT_PLN25_OPT=1` (Optional is constructed, the `(N-Store)` teeth are OFF so
+Optional propagates through codegen instead of being rejected). `LOFT_PLN25_DN3=1` would
+reject un-discharged Optional at the store sites and mask the flow.
+
+---
+
+## Empirical findings (both backends)
+
+### CONFIRMED NEEDS-FIX
+
+**E1 — native: a `null` tuple-element typed `τ?` is codegen'd as `()` not the sentinel.**
+`fn pair() -> (integer?, integer) { (null, 2) }` (and `(integer, integer?) { (1, null) }`)
+runs correct on `--interpret` (`-1 2`) but `--native` emits invalid Rust and fails to
+compile (E0308):
+```
+{{let db = (var___ref_1); let v = (()); stores.store_mut(&db).set_int(db.rec, db.pos + (0_i64) as u32, v);}};
+                                  ^^^^ expected i64, found ()
+```
+The tuple-element store path emits the `null` literal as `()` (unit) instead of the base
+type's i64 null sentinel — it does not peel `Optional(Integer)` to find the sentinel. A
+non-null tuple element (`(5, 1)`) and a plain tuple (`(1, 2)`) are both fine, so the trigger
+is specifically `Value::Null` into an `Optional` tuple-element slot in NATIVE codegen.
+Repro: `dn1-audit/tuple-null-native-bug.loft`. Site: native tuple-construction /
+typed-null path in `src/generation/` (does not peel Optional for the per-element null).
+
+### LOUD ERROR — design/ergonomics, NOT silent corruption
+
+**E2 — both backends: direct `"{x}"` interpolation of `x: τ?` is rejected.**
+`fn f(x: integer?) -> text { "{x}" }` → `error: Cannot format type integer?` on BOTH
+backends. The format type-check rejects `Optional`; the user must discharge (`x ?? d`) to
+format. Consistent across backends, loud (not a corruption). Decision for DN1: either keep
+the loud error (discharge-to-format) or peel-and-format-the-value/null. Repro:
+`dn1-audit/format-nullable-rejected.loft`.
+
+### CONFIRMED WORKING on BOTH backends (slice (b) coverage validated)
+
+Captured as the regression instrument `dn1-audit/optional-flow-instrument.loft`: struct
+field (incl. narrow `u8?`/`i32?`), parameter, return (implicit tail / explicit / if-else),
+arithmetic with AND without discharge, `== null` compare, `??` discharge, `as τ?` cast,
+method (`t_`) nullable return, `vector<integer?>` element, `[for …]` map producing
+optionals, nested optional struct fields, enum optional payload field, direct
+field-assign-`null`, explicit `return null`. All green — the common paths peel correctly.
+
+---
+
+## Static findings (the `_`-arm enumeration)
+
+> Filled from the 5 subsystem audits (native codegen / interp codegen+exec / parser-core /
+> parser-collections / data+types+IR). Each site: `file:line | fn | class | reason | fix`.
+
+### ROOT CAUSE (highest leverage) — `src/data.rs` `type_elm` lacks an Optional arm
+
+`type_elm` (≈`data.rs:4752`) returns `u32::MAX` for `Optional(τ)` via its `_` arm, whereas
+its sibling `type_def_nr` (≈4711) already peels Optional. That single upstream gap is what
+turns the downstream `vector<integer?>` element-size / db-type-id sites into real layout
+corruption (`collections.rs:3964`, `fields.rs:795/807`, `vectors.rs:2724`). **Fix `type_elm`
+to peel (mirror `type_def_nr`) and several downstream NEEDS-FIX rows are neutralised at the
+producer.** Start here (see memory: start-at-the-producer-of-the-wrong-fact). The parser-local
+peels are still needed for the rows that don't route through `type_elm`.
+
+### Group 4 — parser collections / objects (agent: 8 NEEDS-FIX, 1 SAFE-UNREACHABLE, 2 SAFE-BENIGN)
+
+```
+vectors.rs:2724     | get_type          | NEEDS-FIX | Optional→`_ => u16::MAX` not the db-type id → OOB panic / mis-strided vector store | match in_t.base() or add Optional arm
+vectors.rs:2893     | cell_struct_name  | NEEDS-FIX | Optional→`_ => None`: mutated `integer?` capture gets no __cell box → mutation may not propagate | peel before matching
+vectors.rs:2930     | cell_value_type   | NEEDS-FIX | `other => other.clone()` keeps Optional as cell value type → non-canonical, flows into get_type crash | peel so value field is canonical I32/I64
+objects.rs:840      | ensure_io_type    | NEEDS-FIX | `_ => {}` skips byte/short db registration for `integer?` file write (companion if-let at 897 too) | peel at entry `t = t.base()`
+collections.rs:115  | narrow_route_for  | NEEDS-FIX | `_ => None` routes `integer?`/narrow par return through wide u64 queue → width/stride mismatch | peel ret_type at entry
+collections.rs:1219 | append_data       | NEEDS-FIX | `_` arm = the E2 "Cannot format type integer?" error; base is formattable | peel + dispatch on base
+collections.rs:3862 | (FieldValue refl) | NEEDS-FIX | `_ => continue` silently OMITS nullable-scalar struct fields from reflection | peel `attr_type.base()` → FvInt/FvLong
+collections.rs:3964 | element_store_size| NEEDS-FIX | `_ => 12` (DbRef) for `vector<integer?>` element not 8 → stride corruption (downstream of type_elm) | peel elm at entry
+objects.rs:553      | (cell OpGet sel)  | SAFE-UNREACHABLE | value_tp is a __cell value field, never Optional — IFF cell_struct_name/cell_value_type stay peeled | none (depends on the two cell fixes)
+builtins.rs:93      | (par form 2)      | SAFE-BENIGN | no scalar arm; Optional rejected identically to plain Integer | none
+builtins.rs:281     | (nullable-par)    | SAFE-BENIGN | detects the OLD `__nullable<S>` enum, not the sentinel scalar; Optional needs no wrapper | none
+```
+fields.rs: ZERO formal rows; but `fields.rs:795`+if-let@807 mis-size `vector<integer?>`
+elements via the same `type_elm` gap (cross-cutting, fixed at the root).
+Companion `matches!`/`if let` sites (same `.base()` fix, not counted): `vectors.rs:3039`,
+`vectors.rs:2480`, `fields.rs:807`, `objects.rs:897/922`.
+
+### ⚠️ Reconciliation discipline (static NEEDS-FIX vs empirical reachability)
+
+The agents were told to mark NEEDS-FIX when reachability is uncertain (conservative). Before
+fixing any row, cross-check it against the empirical instrument — some flagged sites are not
+reached in practice:
+- **`collections.rs:3964` / `fields.rs:795` (`vector<integer?>` element size)** is flagged
+  stride-corruption, yet `optional-flow-instrument.loft` runs `vector<integer?> = [1,null,3]`
+  and `[for …]`-mapped optionals GREEN on both backends. The dense-vectors half (`vector<S?>`,
+  already on `main`) very likely routes `vector<τ?>` around the scalar-Optional element path,
+  so these may be SAFE-in-practice (or reachable only by an unusual route). **Resolve each by
+  instrumenting the actual path before editing — verify the site is reached, don't patch on the
+  static flag alone.** `type_elm` itself is still worth peeling (cheap, mirrors `type_def_nr`,
+  removes the latent producer), but its *downstream* rows need the reachability check.
+- Confirmed-reachable empirically: **E1 native tuple-null** (a real bug) and **E2 append_data
+  format** (= `collections.rs:1219`, loud error both backends).
+
+### SECOND RISK CLASS — the `matches!(Type, Type::Text|Integer|…)` predicate family
+
+Beyond `match`-blocks, a large family of `matches!(<Type>, Type::Text(_) | Type::Integer(_) |
+…)` predicates returns `false` for any `Optional`, mis-routing a nullable scalar onto the
+wrong (heap/store) path. Slice (b) peeled the load-bearing signature ones (`mod.rs:645/668`).
+Highest-risk remaining (native): `coroutine.rs:251` `suitable` (Optional persistent local
+dropped → loses value across yields — silent), `dispatch.rs:579` + `mod.rs:3003` `is_scalar`
+(Optional treated non-scalar → leak/E0425), `dispatch.rs:158` + `emit.rs:215`
+(`RefVar(Optional(scalar))` misses `*mut T`), and the ~40 `matches!(returned(), Type::Text(_))`
+ABI gates in `emit.rs`/`calls.rs` (Optional(Text) skips String-wrap/ptr-len → E0308). **The
+uniform fix is the same `.base()` peel; this family needs its own sweep alongside the
+match-block rows.** (The interp/parser agents were scoped to `match` blocks too — expect a
+parallel `matches!` family in those subsystems.)
+
+### Group 1 — native codegen (agent: 14 NEEDS-FIX, 2 SAFE-UNREACHABLE, 5 SAFE-BENIGN)
+
+Uniform fix for every row below: match/peel on `.base()`. Most are in paths the empirical
+instrument did NOT exercise (wasm/cdylib externs, coroutines, direct `#native` calls) → genuinely latent.
+```
+mod.rs:579   | narrow_int_cast        | NEEDS-FIX | narrow Optional (byte?/u8?) → `_ => None` → width coercion skipped at return/store/arg/tail seams → E0308/wrong-width
+mod.rs:896   | default_native_value   | NEEDS-FIX | Optional(Float)→"0" not "0.0_f64", Optional(Text)→"0", Optional(Bool)→"0" not "255u8" → wrong-typed default → E0308 (tuple arm @928 same) ★ likely E1 root
+mod.rs:1213  | emit_file_header (wasm param)  | NEEDS-FIX | Optional extern param ABI: wide-int→i32 truncate, Float→i32, Text→i32 not ptr,len
+mod.rs:1240  | emit_file_header (wasm return) | NEEDS-FIX | Optional extern return ABI: wide-int→i32 truncate, Float→i32, Single→i32
+mod.rs:1336  | emit_file_header (cdylib param)| NEEDS-FIX | same as 1213 for cdylib extern params
+mod.rs:1359  | emit_file_header (cdylib ret)  | NEEDS-FIX | cdylib extern return ABI corruption (wide-int truncate, Float→i32, Text→i32 not LoftStr)
+mod.rs:3548  | output_native_direct_call (arg) | NEEDS-FIX | Optional arg drops `as _`/`!= 0` coercion, Text emits 1 arg not ptr,len → ABI/segfault
+mod.rs:3742  | vector_elem_rust_type  | NEEDS-FIX | Optional elem → `_ => u8` → vector<integer?> to #native gets *const u8 not *const i64 → stride corruption
+coroutine.rs:316  | emit_struct_def (ForLoop __values elem) | NEEDS-FIX | Optional(Text) yield → "i64" not "String" → Vec<i64> stores text → corruption
+coroutine.rs:358  | emit_factory_fn (field init)    | NEEDS-FIX | Optional(Text) param omits .to_string() → &str into String field → E0308
+coroutine.rs:643  | emit_next_i64 (shadow-bind)     | NEEDS-FIX | Optional(Text) moves String out of &self → E0507
+coroutine.rs:1067 | emit_for_body_factory (init)    | NEEDS-FIX | same as 358 → E0308
+dispatch.rs:1025  | tuple_has_text_leaf    | NEEDS-FIX | Optional(Text) tuple elem not counted → to_string wrap missing → E0308
+dispatch.rs:1043  | tuple_has_non_copy_leaf| NEEDS-FIX | Optional(Text) tuple elem treated Copy → .clone() skipped → E0507 (Optional(Integer) genuinely Copy, benign)
+coroutine.rs:294  | emit_struct_def (persistent field) | SAFE-UNREACHABLE | gated out by suitable@251; peels if reached. COUPLED: fix with 251
+coroutine.rs:384  | persistent_default     | SAFE-UNREACHABLE | gated by 251; `_ => "0_i64"` would mishandle Optional(Text/Bool/Float) → fix WITH 251
+mod.rs:1082/1096  | live_entry_check       | SAFE-BENIGN | Optional → None → live-reload skipped (degradation, no corruption); optional peel to re-enable
+mod.rs:3391       | direct_call browser stub ret | SAFE-BENIGN | `_ => Default::default()` infers the peeled return type → correct
+coroutine.rs:284/959 | emit_struct_def/for_body param | SAFE-BENIGN | `other => rust_type(...)`/rebind already peels → correct
+```
+Already-safe reference (explicit Optional arm): `mod.rs:763` rust_type, `emit.rs:1049` write_typed_null.
+
+### Group 2 — interp codegen + exec — _pending_
+### ★ GATING FINDING — the `change_var` guard blocks nullable LOCALS (the `(N-Decl)` seam)
+
+`variables/mod.rs:1257` (`change_var`) errors *"Variable 'x' cannot change type from integer?
+to integer"* whenever a base-typed value meets an `Optional`-typed slot (or vice versa).
+Empirically reconciled (gate-ON, both backends): `x: integer? = 5` (a NON-null literal!),
+`y = seed; y = 9`, `&x` on `x: integer?`, and `t: (integer?,integer) = (5,6)` ALL fail with
+this one error. So **nullable locals and local tuples are essentially unusable today** — only
+nullable PARAMS / FIELDS / RETURNS work (slice (b) peeled those; locals were not).
+
+Consequence for sequencing: **most of the interp-codegen NEEDS-FIX rows are latent-but-
+UNREACHABLE** because you cannot construct the nullable local that would reach them
+(`set_var:3710`, the 9 tuple panics, the refvar panics). `take(null)` (param) works (`-7`),
+`(null,2)` tuple RETURN works on interp — both confirmed. **Fix `change_var` to treat `τ` and
+`Optional(τ)` as layout-compatible FIRST (the `(N-Decl)`/`(N-Store)` coercion); only then do the
+downstream interp peels become reachable and necessary.** This guard is the true gate of the
+local half, parallel to the return-site `(N-Store)` already landed.
+
+### ★ HIGH-CERTAINTY CLASS — sibling-pair misses (slice (b) fixed one twin, missed the other)
+
+The cleanest, highest-confidence fixes — a peeled sibling proves the intended shape; the twin
+was simply missed. All layout/crash/leak class:
+```
+data.rs: size(1648)✓ / align — variables/mod.rs:1753 ✗  → Optional(Int) align 1 not 8 → misaligned i64 slot → UB/SIGSEGV
+data.rs: type_def_nr(4711)✓ / type_elm(4752) ✗          → Optional → u32::MAX → data.def(MAX) panic / field skipped
+data.rs: element_align(1866)✓ / tuple_def inline-align(3971) ✗ → size 8 / align 1 mismatch → LinkedFieldGroup offset corruption (SIGSEGV class)
+generation::rust_type(mod.rs:763)✓ / Data::rust_type(data.rs:4832) ✗ → Optional → panic!("Incorrect type") HARD CRASH (native bridge gen)
+```
+Fix each by mirroring its peeled twin. These should land first (cheap, certain, highest stakes).
+
+### Group 2 — interp codegen + exec (agent: 13 NEEDS-FIX, 5 SAFE-UNREACHABLE, 9 SAFE-BENIGN)
+
+All 13 NEEDS-FIX in `state/codegen.rs`; uniform fix = `match <type>.base()` (mirror the
+already-peeled `generate_var:3158` / `gen_set_first_at_tos:2256`). **Reachability gated by the
+`change_var` finding above** — re-verify each is reachable after that lands.
+```
+codegen.rs:1527 | emit_typed_null    | NEEDS-FIX(reconcile) | Optional → `_ => push 12-byte DbRef` not 8-byte i64::MIN → slot-width/sentinel. BUT take(null) works empirically → verify reach
+codegen.rs:3710 | set_var (reassign) | NEEDS-FIX(gated)     | Optional → `_ => panic!` on nullable-local reassign — BLOCKED upstream by change_var today
+codegen.rs:3619/3274 | set_var/generate_var RefVar | NEEDS-FIX(gated) | &nullable-scalar (RefVar(Optional)) → panic — blocked by change_var
+codegen.rs:538/574/639/676/1222/1273/1312/2091/3232 | tuple element ops | NEEDS-FIX(gated) | Optional tuple element → panic — needs a nullable-element tuple LOCAL (blocked by change_var)
+```
+SAFE: add_const(3444), compile.rs const/Goto sites (operator operands never Optional), debug
+renderers (mod.rs:2528/3199/2466, debug.rs:702/1715) = display/debugger-only, no corruption.
+`fill.rs`/`state/io.rs`/`state/text.rs` = ZERO `Type::` sites.
+
+### Group 5 — data + types + IR + misc (agent: 15 NEEDS-FIX, 9 SAFE-BENIGN, 2 SAFE-UNREACHABLE)
+```
+variables/mod.rs:1753 | align            | NEEDS-FIX(HIGH) | Optional(Int) → 1 not 8 → misaligned i64 slot UB/SIGSEGV (sibling pair, above)
+data.rs:3971  | tuple_def align table   | NEEDS-FIX(HIGH) | size8/align1 mismatch → LinkedFieldGroup offset corruption (use element_align)
+data.rs:4832  | Data::rust_type         | NEEDS-FIX(HIGH) | Optional → panic! HARD CRASH (native bridge gen, create.rs:89/206/215)
+data.rs:4752  | Data::type_elm          | NEEDS-FIX(HIGH) | Optional → u32::MAX → data.def(MAX) panic / field skipped (the ROOT-CAUSE row)
+slots_v2.rs:70| slot_kind               | NEEDS-FIX(HIGH) | Optional(Text/ref) → Inline not RefSlot → drop op not emitted → LEAK
+data.rs:946   | to_default              | NEEDS-FIX | Optional → Value::Null not base default → wrong storage width
+data.rs:1503  | depending               | NEEDS-FIX | Optional(Text/ref) deps not rebased onto frame var → borrow hole
+data.rs:1527  | deps_ref                | NEEDS-FIX | Optional(Text/ref) → None drops dep list → borrow hole
+data.rs:1544  | depend                  | NEEDS-FIX | Optional(Text/ref) → empty deps → lost borrows
+data.rs:1840  | has_lifetime_concern    | NEEDS-FIX | Optional(Text/ref) return ownership rewrite skipped → leak/UAF
+data.rs:2099  | owned_elements          | NEEDS-FIX | Optional(Text/ref) tuple elem not in scope-exit cleanup → LEAK
+intervals.rs:53| compute_intervals      | NEEDS-FIX | Optional(Text/ref) → needs_early_first_def wrongly false → slot-order corruption
+main.rs:2759/2822 | native bridge gen   | NEEDS-FIX | Optional param/ret → `() /* not supported */` → broken FFI shim (loud, not silent)
+```
+SAFE-BENIGN: data.rs display/show/argument/Display(1574/1720/1791/2176), narrow_vector_content
+(3051, loses narrowing opt only), extensions.rs compute_sig family (fail-closed None), main.rs
+field-offset comment. SAFE-UNREACHABLE: ir_read.rs:164 / ir_schema.rs:366 (write_type peels →
+no Optional discriminant ever written; lossy-but-consistent round-trip — revisit when the
+marker gains teeth at DN1/DN3). `typedef.rs`/`ir_store.rs`/`ir_node.rs`/`variables/validate.rs`
+= ZERO unguarded sites (all already peel).
+
+### Group 3 — parser type-check core (agent: 19 NEEDS-FIX, 10 SAFE-UNREACHABLE, 18 SAFE-BENIGN, 2 INTENTIONAL)
+
+Two root-cause families. **(i) layout/codegen mishandling `Optional(Integer)`** (resolve_type_var
+hands an un-peeled `concrete`): mod.rs 3089/3257/3742/3778/4354. **(ii) the `text?` return-buffer
+ABI** (whole text-return work-buffer setup skipped → SIGSEGV — the text analog of the landed
+scalar return-site): control.rs 897/4098/4116/5752/6057/6378, operators.rs 657/904, definitions.rs:850.
+```
+mod.rs:3089       | substitute_type_in_value | NEEDS-FIX | `_ => None` keeps OpConvBoolFromRef on i64 Optional loop var → SIGSEGV/E0610 | concrete.base()
+mod.rs:3257       | is_primitive_vector_element_target | NEEDS-FIX(matches!) | false for Optional → parametric OpCopyRecord left on i64 elem → corruption | matches!(tp.base(),…)
+mod.rs:3742       | type_element_size | NEEDS-FIX | `_ => 12` (DbRef) not 8 → wrong vector stride / inline struct size | tp.base() + forced_size guard
+mod.rs:3778       | wrap_vector_get_val | NEEDS-FIX | `_ =>` emits NO OpGetInt → raw slot read as DbRef → crash | tp.base()
+mod.rs:4354       | emit_set_one_element | NEEDS-FIX | `_` Level::Error rejects (integer?,text) + writes Null | elem_tp.base()
+definitions.rs:2527 | parse_field | NEEDS-FIX(matches!) | narrow-int alias not captured for u8?/u16? field → wider storage than non-? twin | matches!(tp.base(),Int) + capture from base
+operators.rs:657  | parse_operators | NEEDS-FIX(matches!) | text?/char? LHS of + not routed to append_text → valid `text?+x` REJECTED | eff_type_for_plus.base()
+operators.rs:1789 | handle_operator | NEEDS-FIX(matches!) | float?/single? == null skips NaN-sentinel → OpEqFloat on NaN → always-false (correctness) | peel ctp+second_type in float_null guard
+operators.rs:904  | parse_part | NEEDS-FIX(matches!) | chained call → Optional(Text): no work_text buffer → SIGSEGV (P227) | matches!(ret_type.base(),Text)
+control.rs:897    | block_result | NEEDS-FIX | Optional(Text) return fails Text if-let → text_return ABI not set up | t.base()
+control.rs:1364   | rewrite_dep_in_type | NEEDS-FIX | Optional(Text(deps)) → `_ => None` → inner deps never rewritten in work-ref unification → stale | Optional(inner)=>recurse
+control.rs:2027   | parse_match | NEEDS-FIX | `match` on integer? → subject falls to `_` → "match requires enum/struct/scalar" ABORT | add Optional(scalar) or subject.base()
+control.rs:4065   | for_type | NEEDS-FIX | `for x in nullable` misses Text/Integer arms → "Unknown in expression type" | peel in_type
+control.rs:4098   | text_return | NEEDS-FIX | `-> text?` if-let fails → text-return dep/work-buffer skipped → dangling ABI (pair w/ definitions.rs:850) | returned.base()
+control.rs:4116   | text_return | NEEDS-FIX(matches!) | Optional(Text) dep var hoisted as plain param not RefVar(Text) work-buffer | matches!(tp.base(),Text)
+control.rs:5752   | parse_return | NEEDS-FIX | explicit `return <text?>` misses text_return + Vector-buffer → no owned-copy/dep delivery | t.base()
+control.rs:6057   | parse_call (fn-ref) | NEEDS-FIX(matches!) | text?-returning fn-ref: no work_text buffer → empty-slot read → SIGSEGV (P227) | matches!(ret_type.base(),Text)
+control.rs:6378   | try_fn_ref_call | NEEDS-FIX(matches!) | same P227: text?-returning fn-ref → zero work buffers → SIGSEGV | matches!(ret_type.base(),Text)
+control.rs:6770   | seeds_vector_hint | NEEDS-FIX(matches!) | vector<u8?> literal: elem not seeded narrow stride → #432 stride corruption | matches!(elem.base(),Int)
+```
+SAFE: mod.rs get_val(4042)/set_field_check(4548)/null(7687) already peel; n_store_violation(1833)
++ handle_null_coalesce(1315) INTENTIONAL; the rest diagnostic/range-opt/fail-closed.
+**Coupling:** (1) mod.rs:3293 MUST gain `.base()` the moment 3257 is fixed (else returns None on
+a now-rewritable Optional); (2) definitions.rs:850 + control.rs:4098 must be peeled TOGETHER
+(interface-stub vs concrete-impl `__work_1` arg counts must agree).
+
+---
+
+## SYNTHESIS — 69 NEEDS-FIX, the root-cause families, and the staged fix-sequence
+
+Totals: native 14 · interp 13 · collections 8 · data/IR 15 · parser-core 19 = **69 NEEDS-FIX**
+(`match` blocks + the `matches!`/`if-let` dispatch of the identical hazard). Plus the gating
+`change_var` seam and the `matches!`-predicate second class. Uniform fix idiom everywhere:
+**peel with `.base()` before the type dispatch** (or add an explicit `Type::Optional(inner) =>`
+arm that recurses). Every fix is byte-identical gate-OFF (the Optional arm is dead code until an
+Optional is constructed), so the layout/leak fixes can land UNGATED and additive.
+
+**Family A — layout/size/align (HIGHEST stakes: SIGSEGV / panic / corruption).** The
+sibling-pair misses + the parser layout sites: `align`(variables 1753), `tuple_def`-align(data
+3971), `type_elm`(data 4752, the root), `Data::rust_type`(data 4832, panic), `to_default`(946),
+`type_element_size`(mod 3742), `wrap_vector_get_val`(mod 3778), `emit_set_one_element`(mod 4354),
+`substitute_type_in_value`(mod 3089), `seeds_vector_hint`(control 6770), `parse_field` narrow
+alias(def 2527). Cheapest + most certain (mirror a proven twin).
+
+**Family B — the `(N-Decl)` gate** (`change_var`, variables 1257). Unblocks nullable LOCALS;
+gates the reachability of the whole interp-codegen group. Re-run the instrument after it lands.
+
+**Family C — deps / lifetime / leak holes for `Optional(Text/ref)`** (matter once `text?`/`S?`
+flow): `depending`(1503), `deps_ref`(1527), `depend`(1544), `has_lifetime_concern`(1840),
+`owned_elements`(2099), `compute_intervals`(53), `slot_kind`(70). Validate with leak-check
+(`LOFT_STORES=warn` / `LOFT_NATIVE_LEAK_CHECK`), not value alone.
+
+**Family D — the `text?` heap path** (its own sub-thread, the text analog of the landed scalar
+work). Two pieces, both two-backend: **(i) text? LOCALS — core DONE** and **(ii) the text?
+return-buffer ABI** (control.rs 897/4098/4116/5752/6057/6378, operators.rs 657/904, def 850).
+
+> **Piece (i) text? LOCALS — CORE DONE both backends (5 peels).** `familyD-text-local-core.loft`
+> → `hello reassigned DFLT present false`, leak-clean both backends; gate-OFF byte-identical; full
+> suite green. The peels:
+> - interp first-Set routing: `gen_set_first_at_tos` (codegen.rs:2127) `.base()` → routes `text?`
+>   to the heap-aware `gen_set_first_text`.
+> - **interp clear-before-reassign** (codegen.rs:1606) `.base()` — THE reassignment bug: plain
+>   `text` reassign emits `ClearText` then `OpAppendText`; `text?` missed the `ClearText` and
+>   APPENDED (`"hi"; "x"` → `"hix"`). Found by diffing the bytecode vs plain text.
+> - native declaration (dispatch.rs ≈97/282/445) `.base()` → the literal gets `.to_string()`.
+> - **native `emit.rs::infer_type` chokepoint** (Var + Call arms `.base()`) → fixes ~18
+>   branch-unification / typed-null / predicate decisions at once (the `??` `String`/`&str` unify).
+> **Also confirmed working (no new code needed — the piece-(i) peels + the infer_type chokepoint
+> covered them): text? RETURNS** (`-> text?`, incl. if/else-with-null), **text? FIELDS** (struct
+> field, constructed + returned), **text? PARAMS**, and **concat / char-iteration AFTER discharge**
+> (`(s ?? "") + "…"`, `for c in (s ?? "")`). So piece (ii) the text?-return ABI is effectively
+> covered for the shapes tested.
+> **Remaining for piece (i): the inline-tuple-with-null-`text?`-element edge** — `(s,n) = if .. {
+> ("t",1) } else { (null,2) }` builds an INLINE tuple `((), 2_i64)` on native (E1-like, but a
+> different path than the return-buffer `rewrite_tail_tuple` E1 already fixed; needs tuple-element-
+> level if-branch type unification). Plus the Family C text?-reassignment-from-call LEAK (now
+> reachable) + the broad `matches!(_,Type::Text)` native sweep as more text? shapes appear.
+> **Empirical de-risking of piece (i), text? LOCALS (2026-06-30, probed both backends, all
+> tried-and-REVERTED to keep the tree clean — text? locals are NOT yet supported on `main`):**
+> text? locals are a genuine MULTI-SITE, BOTH-BACKEND effort with a heap-text subtlety. What I
+> proved:
+> - **The simple case works with 3 peels.** `s: text? = "lit"; s ?? "default"` runs correct on
+>   BOTH backends after: (a) interp routing — `gen_set_first_at_tos` (codegen.rs:2127)
+>   `matches!(*tp(v),Text)` → `matches!(tp(v).base(),Text)` routes text? to the heap-aware
+>   `gen_set_first_text`; (b) native declaration — `dispatch.rs` `needs_to_string`/`var_tp`
+>   text-checks (≈97/282/445) peel `.base()` so the literal gets `.to_string()`; (c) **the key
+>   reusable chokepoint** — `emit.rs::infer_type` (the Var + Call arms) peel `.base()`, which fixes
+>   ~18 native branch-unification/typed-null/predicate decisions at once (the `??` if-branch
+>   `String`/`&str` unify was failing because `infer_type` returned `Optional(Text)`).
+> - **But REASSIGNMENT is silently WRONG, and comprehensive native still fails.** `a: text? =
+>   "hello"; a = "world"` yields `"helloworld"` on interp — the routing peel sends first-Set to
+>   `gen_set_first_text` but a REASSIGN goes through `set_var`'s `Type::Text => OpAppendText`
+>   (append, no clear-before-set), so it concatenates instead of replacing. (Earlier note misread
+>   this as "50× reassign works" — it was the appended value.) So the interp routing peel ALONE
+>   turns a loud panic into a SILENT-WRONG append — a worse failure mode, hence the full revert.
+>   The comprehensive case (reassign + `==null` compare + tuple) still E0308 on native — more
+>   `matches!(_,Text)` sites remain (this is the Family E text concentration).
+> **So piece (i) = the heap-aware text reassignment path (clear-before-set for text?) + the native
+> `matches!(_,Type::Text)` sweep, with `infer_type` as the high-leverage chokepoint.** Land it
+> complete (not partial — reassignment correctness) in D's focused turn. Gate for Family C's text leaks.
+
+**Family E — the `matches!`-predicate second sweep**: `is_scalar`(dispatch 579, mod 3003),
+coroutine `suitable`(251), RefVar scalar-link(dispatch 158, emit 215), the ~40 `Type::Text(_)`
+ABI gates in emit.rs/calls.rs. Same `.base()` peel, mechanical.
+
+**Family F — feature type-check gaps — DONE (the 2 real ones; the other 2 reclassified).**
+- **`match` on `τ?` — FIXED** (control.rs:2027): peel `subject_type.base()` so a `τ?` subject
+  routes to the scalar handler. Works for `integer?` / `text?` / `float?` both backends
+  (`familyF-match-floatnull.loft`). Clean (match READS the value; no heap-write panic).
+- **`float?`/`single? == null` — FIXED** (operators.rs:1791): peel `ctp.base()`/`second_type.base()`
+  in the `float_null` guard. This was a real CORRECTNESS bug — `float? == null` skipped the
+  NaN-validity test and was ALWAYS false (a null float read as "present"); now `nn(null)` →
+  "missing" both backends.
+- **`for x in <τ?>` — NOT A BUG** (dropped): plain `integer` is not iterable either
+  (`for i in 5` → "cannot iterate over integer"; loft uses ranges), so the audit's
+  "Integer→count iterator" was wrong. Peeling `for_type`/`iterator` only routed `text?` to a
+  text-char-iteration path that PANICS (collections.rs:161, a Family D heap issue — a clean
+  rejection became a crash) → reverted.
+- **`text? +` concat — → Family D** (operators.rs:657): peeling routes it to the text `+` path,
+  but the concat then DROPS the appended part (`"hi" + "!"` → `"hi"`; plain text gives `"hiX"`).
+  A text-heap bug, silent-wrong — reverted; belongs with the text? sub-thread.
+
+**Family G — E1 FIXED; E2 deferred (design call).**
+- **E1 — a `null` element in a declared-type tuple RETURN — FIXED** (control.rs
+  `rewrite_tail_tuple_with_work_ref`). Root cause: the construction stored each element raw, so a
+  bare `Value::Null` element reached the typed `OpSetInt` and native emitted `let v = (())` →
+  E0308 (interp tolerated it). **This was PRE-EXISTING and NOT Optional-specific** — gate-OFF,
+  `(null, 2): (integer, integer)` failed native identically. Fix: type each null element via
+  `self.null(field_type)` (→ `OpConvIntFromNull` / the base sentinel, peeling `Optional`), exactly
+  as struct-field construction does. Validated both backends, both gate states, every position +
+  float?/multiple-null + non-null control (`familyG-tuple-return-null.loft`); full suite green.
+  (Separate, still-open inference edge: a tuple LOCAL with a bare literal null — `t = (null, 2)`
+  with NO declared type — infers the element as `Type::Null` and panics `emit_tuple_put_ops:
+  unsupported elem Null`; that's an inference-can't-type-bare-null limitation, not E1.)
+- **E2 — `"{x}"` format of a nullable rejected** (collections 1219 / append_data) — loud on both
+  backends; a DN1 design call (keep discharge-to-format, or peel-and-format). Deferred.
+
+### Recommended fix-sequence (each ends green gate-ON, both backends)
+1. **Family A ungated — the 4 sibling-pair misses DONE** (`align`/`tuple_def`-align/`type_elm`/
+   `Data::rust_type`, mirror the proven twin). Validation: gate-OFF byte-identical introspect ✓,
+   full suite green (only the pre-existing chrome `html_asyncify` #450 fails — env), instrument
+   green gate-ON both backends ✓, wasm rlib rebuilds clean ✓. **Honest caveat:** these are the
+   latent FOUNDATION layer — not independently crash-falsifiable today (their triggers are
+   routed-around / silent-UB misalignment / masked by the interp+native tuple bugs that crash
+   FIRST — e.g. `(g(),5)` panics at `emit_tuple_put_ops` before `tuple_def` align matters). They
+   are validated by construction (twin-parallelism) + byte-identical, not by a flipped probe;
+   they must land first so that once the tuple/interp bugs are fixed, correct layout is already
+   underneath (else silent offset corruption replaces a clean panic).
+
+   **Batch 2 — the 6 parser layout peels DONE** (`type_element_size` mod 3742, `wrap_vector_get_val`
+   mod 3778, `emit_set_one_element` mod 4354, `substitute_type_in_value` mod 3089, `seeds_vector_hint`
+   control 6770, `parse_field` narrow-alias def 2527) — all `match … → match ….base()`. One was
+   crash-FALSIFIABLE: a struct with a `(integer?, integer)` tuple field was REJECTED
+   ("Tuple struct field cannot contain element of type integer?") → now stores+reads `5 6` both
+   backends. A code-quality hook raised a real hazard — would peeling emit a non-nullable `OpSet*`
+   that mismatches a nullable-aware read opcode? DISPROVEN: there is NO nullable-scalar-store opcode
+   (the `*Nullable` ops are vector/arith only), and `set_field_check` ALSO peels to base — both use
+   the same `OpSet*`. Empirically a `u8?` field round-trips 200 / 254 (max-usable) / null correctly
+   on both backends. Validation: gate-OFF byte-identical, suite green (only chrome #450), instrument
+   green gate-ON.
+
+   **`to_default` (data 946) — DEFERRED, needs a DN1 design decision (NOT guessed).** Today
+   `Optional → _ => Value::Null` (wrong storage width). The fix is a one-liner, but the VALUE is a
+   semantics call: peel-to-base-zero (`Value::Int(0)` — width-correct + matches how plain `integer`
+   already defaults to 0) **vs** the typed null sentinel (an uninitialized nullable defaults to
+   `null`). Recommend settling it WITH the DN1 flip (it's gated behind `change_var` reachability
+   anyway) — leaning peel-to-base-zero for consistency, but it deserves an explicit choice.
+
+   **New finding (DN4 × Optional, → Family F):** a narrow nullable tuple-literal element rejects a
+   fitting value — `(254, 200): (u8?, u8?)` errors "cannot implicitly narrow integer to u8" while
+   the non-nullable `(u8, u8)` accepts 254. The DN4 narrowing fit-check computes the usable range
+   wrong for an Optional target. Not a store/sentinel bug; a DN4-check peel (operators.rs).
+2. **Family B (`change_var`) — DONE for the scalar path.** Two parts: (a) `change_var`
+   (variables/mod.rs) now accepts `Optional(τ) ← τ` and `Optional(τ) ← null` (storing a non-null
+   base or null into a nullable slot is not a type change; keep the nullable type). (b) the
+   now-reachable interp `set_var` (codegen.rs:3710) peel for nullable-local REASSIGNMENT (it
+   panicked "Unknown var type"). Result: **integer/numeric/bool nullable LOCALS are fully usable**
+   on both backends — `familyB-nullable-locals.loft`: decl-with-value, decl-with-null, reassign,
+   narrow `u8?` boundary 254, all → `9 42 254 -9`. Validation: gate-OFF byte-identical, suite
+   green (only chrome #450), instrument green. Gate-OFF inert (Optional never constructed).
+   **DEFERRED — `text?` LOCALS (→ text? sub-thread, Family D):** plain `text` local works but a
+   `text?` local mis-routes into `gen_set_first_at_tos` (no Text arm) → panic. Fixing it needs the
+   heap-aware text first-Set path, not a blind peel — belongs with the text-nullability work.
+   The reverse inference-widening (`τ ← Optional(τ)`) was left as-is (conservative; the explicit
+   non-null target ← `τ?` is the `(N-Store)` violation caught at the store site).
+3. **Reachable interp peels — the tuple-op family DONE.** The 10 per-element tuple matches in
+   `state/codegen.rs` (emit_tuple_put_ops, emit_tuple_var_pop_put, emit_tuple_var_push_recursive,
+   emit_tuple_null_init ×2, and the generate_node/generate_var TupleGet/TuplePut element matches)
+   now `match <elem>.base()`. Reachable via inferred-nullable tuple locals (`x=g(); t=(x,5)`),
+   which panicked "unsupported elem" before. Validated both backends with VALUE + NULL + leak
+   (`interp-tuple-nullable.loft` → `42 5 -9 7 42 -9`, no leak via `LOFT_STORES=warn` /
+   `LOFT_NATIVE_LEAK_CHECK`); gate-OFF byte-identical; suite green; read/write peel in lockstep so
+   the round-trip stays consistent. set_var done in step 2.
+   **DEFERRED — `&nullable-scalar` (RefVar(Optional)) sites 3274/3619:** blocked UPSTREAM by
+   `change_var` (the `RefVar(Optional) ← τ` type-change errors before the codegen panic is reached).
+   A rare construct, multi-layer-blocked — needs the `change_var` RefVar-case extension first, then
+   the codegen peels. Latent; revisit if a consumer needs mutable refs to nullable scalars.
+   **NOTE — E1 stays open (Family G):** the tuple-*return*-literal-null
+   (`fn f() -> (integer?,integer) { (null,2) }`) is a separate NATIVE generation/ path — a
+   null-valued local tuple works on native, only the return-literal-null doesn't. Not fixed here.
+4. **Family C — LATENT, must follow Family D (reachability finding, 2026-06-30).** A focused
+   leak hunt (gate-ON, `LOFT_STORES=warn` / `LOFT_NATIVE_LEAK_CHECK`, both backends) found **no
+   reachable leak**: reassigning a `text?` field 100× (h1), null-toggling it (h2), an `S?` local
+   (c5), and a non-self-ref nullable struct field (c6) are ALL clean — the free path already
+   handles Optional(Text/ref) for the reachable constructs. Family C's flagged sites
+   (`slot_kind`, `owned_elements`, `has_lifetime_concern`, the `deps_*` family) bite Optional(Text/
+   ref) **LOCALS / TUPLES / RETURNS**, every one of which is blocked UPSTREAM by the Family D
+   text?-routing panic (`gen_set_first_at_tos` has no Text arm → a `text?` local/tuple-destructure
+   panics; the `text?` return-buffer ABI is broken). So the leaks cannot be FALSIFIED today.
+   Family C touches the deps/ownership system — loft's #1 weakness, where blind symptom-patching
+   is the documented anti-pattern (heap-invariant priority #1). **Therefore: do Family D first
+   (it unblocks the heap-bearing-nullable constructs), THEN Family C with the leak instrument able
+   to validate each fix.** (Not a leak: `Node { next: Node? }` "field has no position" is a
+   PRE-EXISTING recursive-value-struct limitation — non-nullable self-ref fails identically,
+   gate-OFF too — not @PLN25.)
+   **RESOLVED (focused Family C session): NO reachable leak. The earlier "confirmed leak" was a
+   FALSE POSITIVE.** With text? locals now working, I built the leak matrix and ran the AUTHORITATIVE
+   checks: native `LOFT_NATIVE_LEAK_CHECK` (prints "stores not freed at program exit") and the interp
+   `tests/leak.rs::leaks_for` harness (`collect_store_leaks()`, gate-ON via `LOFT_PLN25_OPT=1`). A
+   text? local churned 50× in a loop — reassigned from BOTH a literal and a `text?`-returning call,
+   and a text? FIELD reassigned + nulled — are leak-clean on BOTH backends. The instrument fires (48
+   leak tests pass). **The earlier "2 leaks" came from misusing `LOFT_STORES=warn`** — that prints
+   `Dead assignment`/`Variable never read` WARNINGS (whose `-->` location lines my grep counted as
+   leaks), NOT store leaks (the interp leak instrument is `LOFT_STORES=summary` / the `leaks_for`
+   harness). So Family C's static flags (`slot_kind`/`owned_elements`/`has_lifetime_concern`) are
+   CONSERVATIVE-BUT-UNREACHED — the free path handles Optional(Text/ref) correctly in practice
+   (`element_size`/`element_align`/the free machinery peel Optional, or constructs route around the
+   flagged sites). Regression guards added: `tests/leak.rs::pln25_text_opt_{reassign,field_churn}_no_leak`
+   (pass gate-OFF as plain text AND gate-ON as text?). **Family C is a non-issue — close it.**
+5. **Family E + F** — the `matches!` sweep and the feature gaps.
+6. **Family D** — the `text?` return-buffer ABI sub-thread.
+7. **Family G** — E1 with the native typed-null peel; decide E2.
+8. THEN the DN1 default flip (`IntegerSpec.not_null`) + the `.loft` sweep + gate default-on.
+
+All behind `LOFT_PLN25_OPT`/`DN3` except Family A/C/E layout+leak peels (gate-OFF-inert, additive).

@@ -1,0 +1,18 @@
+// @PLN25 DN1 — if/match branch absorbed-null widening. Run gate-ON (LOFT_PLN25_DN1=1).
+// Each REJECT fn alone is a compile error ("a nullable `integer?` cannot be stored into the
+// return value..."); the `?`-return / discharged / no-null forms compile + run. Both backends.
+enum Dir { North, South }
+// REJECT (uncomment one at a time): a null branch into a NON-null scalar return.
+//   fn ri(b: boolean)        -> integer { if b { 5 } else { null } }
+//   fn rn(b,c: boolean)      -> integer { if b { 5 } else if c { 6 } else { null } }
+//   fn rm(d: Dir)            -> integer { match d { North => 5, South => null } }
+//   fn rs(x: integer)        -> integer { match x { 0 => 5, _ => null } }
+// ACCEPT — the model-correct forms:
+fn oi(b: boolean) -> integer? { if b { 5 } else { null } }              // -> τ?
+fn od(b: boolean) -> integer  { (if b { 5 } else { null }) ?? -1 }       // discharged
+fn oh(b: boolean) -> integer  { if b { 5 } else { 6 } }                  // no null
+fn om(d: Dir)     -> integer? { match d { North => 5, South => null } }  // match -> τ?
+fn os(x: integer) -> integer  { match x { 0 => 5, _ => 6 } }            // match no null
+fn main() {
+  print("{oi(false) ?? -9} {od(false)} {oh(true)} {om(South) ?? -9} {os(0)}");  // -9 -1 5 -9 5
+}

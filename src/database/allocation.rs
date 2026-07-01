@@ -548,13 +548,15 @@ impl Stores {
         // S36: clear the lock before marking free.
         let store = &mut self.allocations[al as usize];
         store.unlock();
-        // LOFT_LOG=poison_free: overwrite the freed buffer with a
-        // recognisable pattern so subsequent stale-DbRef reads hit
-        // loud garbage (0xDEADBEEF repeated) instead of whatever bytes
-        // the allocator happens to have left.  Skip the size-header
-        // word (offset 0..8) so the bitmap/housekeeping can still read
-        // the "freed" marker; start poisoning from offset 8.
-        if self.poison_free {
+        // LOFT_POISON=1 (@PLN54 S3) or LOFT_LOG=poison_free: overwrite the
+        // freed buffer with a recognisable pattern so subsequent stale-DbRef
+        // reads hit loud garbage (0xDEADBEEF repeated) instead of whatever
+        // bytes the allocator happens to have left.  Skip the size-header
+        // word (offset 0..8) so the bitmap/housekeeping can still read the
+        // "freed" marker; start poisoning from offset 8.  The env flag is the
+        // dedicated front door (works on BOTH backends — native calls this
+        // same free); the struct flag is the LOFT_LOG=poison_free path.
+        if self.poison_free || crate::keys::poison_enabled() {
             let cap_bytes = store.capacity_words() as usize * 8;
             if cap_bytes > 8 {
                 unsafe {

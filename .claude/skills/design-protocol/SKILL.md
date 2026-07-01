@@ -101,6 +101,26 @@ name in the abstract is legible in one worked instance.
   band the boundary cuts, drop the full-in / full-out ones). Only pinpointable after a
   throwaway prototype *produced* it — then ported unchanged.
 
+**When the answer already EXISTS — capture its artifact and diff.** The cheapest
+"plot the answer" is a **working sibling that already produces the construction** for a
+near-identical case. Then you neither prototype nor theorise: **capture the sibling's
+artifact and your broken one's — into files, not glances — and `diff`.** The residual
+divergence *is* the construction to recover; you read it **off the diff**, not out of
+your head. Three captures sharpen it: BEFORE (your change off) → NOW (your change)
+confirms you changed what you meant; NOW → PROVEN-sibling isolates the bug. The failure
+this prevents is **symptom-chasing a near-miss**: holding a theory of the difference
+*without* the capture, patching one manifestation, and finding the next — motion near a
+point it never lands on. *Earned.* A borrowed store-delivery corrupted only under
+allocation pressure; three theories held without a capture — a stride-type, a missing
+wrapper op, a lifetime flag — were each wrong. Capturing the proven sibling (a simpler
+shape that survives the same stress) beside the broken output showed the one real
+difference in a line: the proven path delivered into a **canonical owned buffer**, the
+broken one reused an incidental local **as** the buffer — a dep the lifetime analysis
+never tracked as the return, so a later allocation reused its slot. The captured diff
+landed on the point the three patches kept circling. (For a captured-artifact domain —
+IR, serialized bytes, store state, protocol frames — this beats prototyping: the answer
+is already running; make yours byte-equal to it.)
+
 **A sharp distinction from the bug side.** The matrix law is *"the truth is in the
 class, invisible in the instance"* — beware acting on one instance. This does **not**
 contradict "plot one concrete instance," because the instances are opposites: an

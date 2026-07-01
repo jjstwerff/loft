@@ -728,6 +728,19 @@ impl Parser {
                 && matches!(t, Type::Never | Type::Void | Type::Vector(_, _))
                 && Self::tail_terminal_is_branch(&l[last])
                 && !self.tail_if_has_null_arm(&l[last]);
+            if std::env::var_os("LOFT_DBG_VMC").is_some() && matches!(result, Type::Vector(_, _)) {
+                eprintln!(
+                    "[vmc] fn={} !tup={} !ifu={} !p1={} ctx={context:?} resV={} tOk={} branch={} !null={} => {vec_match_candidate}",
+                    self.vars.name,
+                    !tuple_rewritten,
+                    !if_unified,
+                    !self.first_pass,
+                    matches!(result, Type::Vector(_, _)),
+                    matches!(t, Type::Never | Type::Void | Type::Vector(_, _)),
+                    Self::tail_terminal_is_branch(&l[last]),
+                    !self.tail_if_has_null_arm(&l[last]),
+                );
+            }
             if vec_match_candidate && let Type::Vector(elm, _) = result {
                 // #416 — a match/if branch tail materialises each arm into __retbuf.
                 // Routed through the ONE vector dispatch (Delivery::Materialize); it
@@ -742,6 +755,15 @@ impl Parser {
             // TAKEN by a sibling return — so it shares one fresh-owned-vector classifier
             // (`fresh_owned_vector_deps`) and one dispatch with the buffer-free #437/c5
             // rename. See the `tail_ret_owned` block.)
+            // @PLN25 (N-Store): the IMPLICIT function-tail is a STORE into the
+            // caller's non-null return slot, exactly like an explicit `return`.
+            // Only at the genuine function tail (`context == "return from block"`),
+            // not an `if`/`match` arm (whose `result` may legitimately be nullable).
+            // A scalar `τ?` tail hits none of the vector/tuple special cases above,
+            // and `convert` below peels `Optional`, so no double-diagnose.
+            if context == "return from block" {
+                self.n_store_violation(t, result, "the return value");
+            }
             if !tuple_rewritten
                 && !if_unified
                 && !vec_match_candidate
@@ -1834,6 +1856,17 @@ impl Parser {
             &[Value::Var(w), Value::Int(i32::from(known_type))],
         ));
         for (i, elem) in elements.into_iter().enumerate() {
+            // E1 (pre-existing, gate-OFF too): a bare-`null` tuple element must become the
+            // field's TYPED null (`OpConvIntFromNull` → the i64 sentinel, etc.), exactly as
+            // struct-field construction does. Raw `Value::Null` made native emit `()` into the
+            // typed slot → E0308; interp tolerated it. `self.null` peels `Optional` to the base
+            // sentinel, so a `τ?` element types correctly too.
+            let elem = if matches!(elem.unspan(), Value::Null) {
+                let ftp = self.data.attr_type(synthetic_d_nr, i).clone();
+                self.null(&ftp)
+            } else {
+                elem
+            };
             ops.push(self.set_field_no_check(synthetic_d_nr, i, 0, Value::Var(w), elem));
         }
         ops.push(Value::Var(w));
@@ -1855,6 +1888,48 @@ impl Parser {
     //                '-' | '+' |
     //                '*' | '/' | '%'
     // <operators> ::= <single>  { '.' <field> | '[' <index> ']' } | <operators> <operator> <operators>
+    /// @PLN25 DN1 — does this branch value YIELD null at its tail? A bare `Value::Null`, or the
+    /// typed-null sentinel a bare `null` lowers to when coerced to a scalar (`OpConv*FromNull`).
+    /// Descends `Block`/`Insert`/`Span` to the tail. Used so an `if`/`match` whose branch is a
+    /// bare null widens the result to `Optional(τ)` under DN1 (the absorbed-branch-null fix).
+    fn branch_yields_null(&self, v: &Value) -> bool {
+        match v.unspan() {
+            Value::Null => true,
+            Value::Block(bl) => bl
+                .operators
+                .last()
+                .is_some_and(|o| self.branch_yields_null(o)),
+            Value::Insert(ops) => ops.last().is_some_and(|o| self.branch_yields_null(o)),
+            // A nested `if`/`else if` (and `match`, which lowers to nested `if`) yields null when
+            // ANY arm does — descend both so `else if c { 6 } else { null }` widens the outer if.
+            Value::If(_, then_b, else_b) => {
+                self.branch_yields_null(then_b) || self.branch_yields_null(else_b)
+            }
+            Value::Call(d, args)
+                if args.is_empty() && (*d as usize) < self.data.definitions.len() =>
+            {
+                let n = self.data.def(*d).name();
+                n.starts_with("OpConv") && n.ends_with("FromNull")
+            }
+            _ => false,
+        }
+    }
+
+    /// @PLN25 DN1 — widen a value's result type to `Optional(τ)` when its lowered `code` yields a
+    /// bare null and `tp` is a non-null scalar. Safe ONLY where there is no SYNTHESISED unreachable
+    /// `OpConv*FromNull` default (a scalar `match` whose `_` arm is user-written, an `if`); an enum
+    /// `match` must instead inspect its USER `arms` (its exhaustive default is a false positive).
+    fn dn1_widen_branch_null(&self, tp: Type, code: &Value) -> Type {
+        if crate::keys::pln25_dn1_enabled()
+            && Self::is_non_null_scalar(&tp)
+            && self.branch_yields_null(code)
+        {
+            Type::optional(tp)
+        } else {
+            tp
+        }
+    }
+
     pub(crate) fn parse_if(&mut self, code: &mut Value) -> Type {
         let mut test = Value::Null;
         let tp = self.expression(&mut test);
@@ -1881,7 +1956,11 @@ impl Parser {
         }
         let mut false_type = Type::Void;
         let mut false_code = Value::Null;
-        if self.lexer.has_token("else") {
+        // @PLN25 DN1: whether there is a REAL user `else`. An if-WITHOUT-else in value position is
+        // already an error and synthesises a `null` else for recovery; the DN1 widening below must
+        // NOT treat that synthesised null as a nullable branch (it would add a spurious `τ?`).
+        let had_else = self.lexer.has_token("else");
+        if had_else {
             self.vars.restore_write_state(&write_state);
             self.vars.clear_write_state();
             if self.lexer.has_token("if") {
@@ -1916,8 +1995,95 @@ impl Parser {
             }
         }
         self.vars.restore_write_state(&write_state);
+        // @PLN25 DN1: a branch that yields a bare `null` makes the if-expression NULLABLE — its
+        // result widens to `Optional(τ)` where τ is the non-null SCALAR sibling's type. The bare
+        // null is otherwise coerced to the sibling's typed-null sentinel and the if types as a
+        // plain `τ`, hiding the nullability; widening here lets the existing DN3 `(N-Store)` force
+        // the caller to declare `τ?` or discharge. Only fires when exactly one branch yields null
+        // and the other is a non-null scalar (heap types stay nullable; both-null stays as-is).
+        let mut result_tp = merge_dependencies(&true_type, &false_type);
+        if had_else && crate::keys::pln25_dn1_enabled() && !matches!(result_tp, Type::Optional(_)) {
+            let t_null = self.branch_yields_null(&true_code);
+            let f_null = self.branch_yields_null(&false_code);
+            if t_null != f_null {
+                let other = if t_null { &false_type } else { &true_type };
+                if Self::is_non_null_scalar(other) {
+                    result_tp = Type::optional(other.clone());
+                }
+            }
+        }
         *code = v_if(test, true_code, false_code);
-        merge_dependencies(&true_type, &false_type)
+        result_tp
+    }
+
+    /// @PLN85 match_return (LOFT_JOIN_OWN): an arm that yields a borrowed-view vector
+    /// FIELD BINDING directly (`Filled { items } => { items }`) returns a view into the
+    /// match subject — which the caller cannot free without an over-free. Wrap the yield
+    /// in an OWNED copy `{ o = []; o += items; o }` (a fresh local `o`), so the value
+    /// escapes OWNED. This is exactly the `deliver3` shape: the existing `ref_return`
+    /// promotion then promotes `o` to the buffer arg + emits the `__retbuf` marker, the
+    /// separate-buffer ABI the caller adopts (and so frees the argument). Done at PARSE
+    /// time (re-parsed each pass) so `create_unique`/`vector_db` stay pass-consistent.
+    /// Returns the new OWNED arm type when it rewrote (for cross-arm unification), else
+    /// `None`. No-op unless the tail is a `skip_free`, non-empty-dep vector binding.
+    #[allow(clippy::question_mark)]
+    fn jo_copy_borrowed_arm_yield(&mut self, arm_body: &mut Value) -> Option<Type> {
+        if std::env::var_os("LOFT_JOIN_OWN").is_none() {
+            return None;
+        }
+        let v = match arm_body.unspan() {
+            Value::Var(v) => *v,
+            Value::Block(bl) => match bl.operators.last().map(Value::unspan) {
+                Some(Value::Var(v)) => *v,
+                _ => return None,
+            },
+            _ => return None,
+        };
+        if v >= self.vars.count()
+            || !self.vars.skip_free(v)
+            || !matches!(self.vars.tp(v), Type::Vector(_, _))
+            || self.vars.tp(v).depend().is_empty()
+        {
+            return None;
+        }
+        let v_type = self.vars.tp(v).clone();
+        let elm = match &v_type {
+            Type::Vector(b, _) => (**b).clone(),
+            _ => return None,
+        };
+        // Create `o` with the OWNED element type (no deps) — NOT `v_type`, which is the
+        // binding's `vector<ref(E)>["e"]`; inheriting that `["e"]` would mark the copy as
+        // borrowing `e` and re-propagate it to the return (the leak). `deliver3`'s `o` is
+        // dep-free.
+        let owned_create = Type::Vector(Box::new(elm.clone()), Deps::none());
+        let o = self.create_unique("mvcopy", &owned_create);
+        if o == u16::MAX {
+            return None;
+        }
+        self.vars.defined(o);
+        // `o = []` (pass-gated: empty on pass 1, the OpDatabase alloc on pass 2 — exactly
+        // as a user-written `o: vector = []` lowers), then `o += <binding>`, then yield o.
+        let mut ops = self.vector_db(&v_type, o);
+        let elem_tp = self.append_elem_tp(&elm);
+        ops.push(self.cl(
+            "OpAppendVector",
+            &[Value::Var(o), Value::Var(v), Value::Int(elem_tp)],
+        ));
+        ops.push(Value::Var(o));
+        let owned_tp = Type::Vector(Box::new(elm), Deps::frame1(o));
+        let copy_block = crate::data::v_block(ops, owned_tp.clone(), "jo_arm_copy");
+        // Replace the WHOLE arm body (a bare `{ items }` yield) with the owned copy
+        // block, NOT just its last op — wrapping inside leaves the outer block typed by
+        // the borrowed binding (`["_mv_items_1"]`), which re-propagates the `["e"]` dep
+        // to the return. Only the single-yield shape (the match-field binding IS the arm
+        // value) is rewritten; a multi-statement arm is left alone.
+        let n = arm_body.unspan_mut();
+        match n {
+            Value::Var(_) => *n = copy_block,
+            Value::Block(bl) if bl.operators.len() == 1 => *n = copy_block,
+            _ => return None,
+        }
+        Some(owned_tp)
     }
 
     // <match> ::= 'match' <expression> '{' { <pattern> '=>' <expression> } '}'
@@ -1929,6 +2095,10 @@ impl Parser {
         // 1. Parse the subject expression.
         let mut subject = Value::Null;
         let subject_type = self.expression(&mut subject);
+        // @PLN25: a `τ?` subject matches as its base (shared sentinel storage) — peel the marker
+        // so `match` on an `integer?` routes to the scalar handler instead of falling to the `_`
+        // arm ("match requires an enum, struct, or scalar type"). Gate-OFF inert (never Optional).
+        let subject_type = subject_type.base().clone();
 
         // Resolve type info from the subject.
         // Accepts: plain enums, struct-enums, struct-enum variants, and plain structs (T1-18).
@@ -1958,7 +2128,10 @@ impl Parser {
             | Type::Boolean
             | Type::Character
             | Type::Text(_) => {
-                return self.parse_scalar_match(subject, &subject_type, code);
+                // @PLN25 DN1: a scalar match's `_` arm is USER-written (no synthesised default),
+                // so the value-level widen is safe — a `_ => null` arm makes the match nullable.
+                let tp = self.parse_scalar_match(subject, &subject_type, code);
+                return self.dn1_widen_branch_null(tp, code);
             }
             // vector types — dispatch to vector match handler.
             Type::Vector(_, _) => {
@@ -2353,12 +2526,21 @@ impl Parser {
             let arm_write_state = self.vars.save_and_clear_write_state();
             self.vars.clear_write_state();
             let mut arm_body = Value::Null;
-            let arm_type = if self.lexer.peek_token("{") {
+            let mut arm_type = if self.lexer.peek_token("{") {
                 self.parse_block("match_arm", &mut arm_body, &Type::Unknown(0))
             } else {
                 self.expression(&mut arm_body)
             };
             self.vars.restore_write_state(&arm_write_state);
+            // @PLN85 match_return (LOFT_JOIN_OWN): if this arm yields a borrowed-view
+            // vector field binding DIRECTLY (`Filled { items } => { items }`), wrap it in
+            // an owned copy `{ o = []; o += items; o }` so the value ESCAPES OWNED — the
+            // `deliver3` structure. The existing promotion then builds the separate-buffer
+            // ABI the caller adopts + frees the argument. No-op for non-matching arms.
+            // Updating `arm_type` keeps cross-arm unification reading the OWNED type.
+            if let Some(owned) = self.jo_copy_borrowed_arm_yield(&mut arm_body) {
+                arm_type = owned;
+            }
 
             // S15: restore name mappings after arm body so the next arm can
             // create its own alias for the same field name.
@@ -2532,6 +2714,19 @@ impl Parser {
         // - Plain enum: { match_subj = subject; chain }  (temp var to eval subject once)
         // - Struct enum: chain only  (subject_val is already the original expression/var)
         // L2: hoisted bindings are prepended so field reads happen before the if-chain.
+        // @PLN25 DN1: a user `=> null` arm (or one yielding a bare null) makes the match NULLABLE —
+        // widen the result to `Optional(τ)` (τ the non-null scalar of the other arms), so the
+        // existing DN3 `(N-Store)` forces the caller to declare `τ?` or discharge. Check the USER
+        // `arms`, NOT the lowered `chain`: an exhaustive match synthesises an unreachable
+        // `OpConv*FromNull` default, which would falsely widen EVERY match.
+        if crate::keys::pln25_dn1_enabled()
+            && Self::is_non_null_scalar(&result_type)
+            && arms
+                .iter()
+                .any(|a| matches!(a.tp, Type::Null) || self.branch_yields_null(&a.code))
+        {
+            result_type = Type::optional(result_type);
+        }
         *code = if !hoisted_bindings.is_empty() || preamble.is_some() {
             let mut stmts = Vec::new();
             if let Some((v, init)) = preamble {
@@ -4592,8 +4787,14 @@ impl Parser {
                 // Free the now-dead local backing store(s) the arm built (the
                 // append copied their elements into `w`); without this the
                 // interpreter orphans them. Idempotent with any scope-exit free.
-                for d in deps {
-                    seq.push(self.cl("OpFreeRef", &[Value::Var(d)]));
+                // EXCEPT a `skip_free` arm — a BORROWED VIEW (a match-field binding
+                // `_mv_items_1 = OpGetField(e,…)`) that does NOT own its backing store
+                // (it aliases the subject `e`); freeing its deps would over-free `e`
+                // (@PLN85 match_return). The append already copied its elements into `w`.
+                if !self.vars.skip_free(local) {
+                    for d in deps {
+                        seq.push(self.cl("OpFreeRef", &[Value::Var(d)]));
+                    }
                 }
                 seq.push(Value::Var(w));
                 *op = Value::Insert(seq);
@@ -5038,6 +5239,47 @@ impl Parser {
                 self.first_pass
             );
         }
+        // @PLN85 match_return (LOFT_JOIN_OWN): a borrowed-view match-field binding
+        // (`_mv_items_1 = OpGetField(e,…)`, skip_free, deps `[e]`) returned directly must
+        // NOT be NRVO-promoted to BE the retbuf — that aliases the caller's buffer onto
+        // `e` (the over-free) or, materialised in place, reuses the binding var as the
+        // buffer (a `["_mv_items_1"]`-typed store the lifetime analysis never tracks as
+        // the owned return → churn UAF). Instead recover the PROVEN `deliver3` structure:
+        // a SEPARATE canonical `__retbuf` buffer, the binding stays a local, and each arm
+        // COPIES the binding into `__retbuf` via the proven per-arm machinery
+        // (`materialize_vector_arms_into`, no-free for the borrowed binding). Then skip
+        // promoting the binding below (it is now a delivered local, not the return).
+        let mut jo_arm_skip: std::collections::HashSet<u16> = std::collections::HashSet::new();
+        if std::env::var_os("LOFT_JOIN_OWN").is_some()
+            && let Type::Vector(ret_elm, _) = &ret
+            && let Some((buf_attr, buf_var)) = self.return_buffer()
+        {
+            let elm_ty = (**ret_elm).clone();
+            let borrowed: Vec<u16> = ls
+                .iter()
+                .copied()
+                .filter(|&v| {
+                    v < self.vars.count()
+                        && v != buf_var
+                        && self.vars.skip_free(v)
+                        && matches!(self.vars.tp(v), Type::Vector(_, _))
+                        && !self.vars.tp(v).depend().is_empty()
+                })
+                .collect();
+            if !borrowed.is_empty()
+                && let Some(last) = body.last_mut()
+            {
+                self.materialize_vector_arms_into(&elm_ty, last, buf_var);
+                jo_arm_skip.extend(borrowed);
+                // Finalise the return dep to `{__retbuf}` — EXACTLY as the proven
+                // `Delivery::Materialize` path does (`dispatch_vector_delivery`): the
+                // arms now deliver an owned copy into `__retbuf`, so the return is that
+                // buffer. Skipping the promotion dropped this, leaving an empty dep — the
+                // caller then neither adopts nor frees, leaking `cell`+`inner`.
+                self.data.definitions[self.context as usize].returned =
+                    Type::Vector(Box::new(elm_ty.clone()), Deps::attrs(vec![buf_attr]));
+            }
+        }
         // B2-runtime / B3 / B7 unification (2026-04-13): struct-enums
         // (Type::Enum with struct-enum discriminator `true`) live as
         // heap-allocated records just like Reference and Vector do, so
@@ -5067,6 +5309,13 @@ impl Parser {
                 if v >= self.vars.count() {
                     continue; // foreign dep (e.g. closure work var) — not ours
                 }
+                // @PLN85 match_return: a binding delivered into `__retbuf` above is no
+                // longer the return — do NOT walk its deps into the return type, else
+                // the owned copy's return re-acquires the `["e"]` borrow (the caller then
+                // skips freeing `e`'s owner → leak).
+                if jo_arm_skip.contains(&v) {
+                    continue;
+                }
                 for d in self.vars.tp(v).depend() {
                     if d < self.vars.count() && seen.insert(d) {
                         expanded.push(d);
@@ -5082,6 +5331,12 @@ impl Parser {
             let is_plain_fn = !self.data.def(self.context).name().contains("__lambda")
                 && self.data.def_type(self.context) == crate::data::DefType::Function;
             for (e_idx, v) in expanded.iter().enumerate() {
+                // @PLN85 match_return: a borrowed binding already DELIVERED into a
+                // separate `__retbuf` above (`jo_arm_skip`) is a local, not the return —
+                // promoting it would re-alias the buffer onto the binding var.
+                if jo_arm_skip.contains(v) {
+                    continue;
+                }
                 let transitive = e_idx >= direct_count;
                 let n = self.vars.name(*v);
                 let is_work_ref = n.starts_with("__ref_") || n.starts_with("__rref_");
@@ -5459,6 +5714,12 @@ impl Parser {
                     self.rewrite_tail_tuple_to_synthetic_struct(synthetic_d_nr, &mut v);
                     true
                 };
+            // @PLN25 (N-Store): an explicit `return` is a STORE into the caller's
+            // non-null return slot — an un-discharged nullable `τ?` must be
+            // discharged (`?? d` / `match`) first.  Emitted here; `convert` below
+            // still peels `Optional`, so no double-diagnose.  Gate-OFF / first-pass:
+            // a no-op (`n_store_violation` returns `false`).
+            self.n_store_violation(&t, &r_type, "the return value");
             if t == Type::Null {
                 v = self.null(&r_type);
             } else if !tuple_rewritten && !self.convert(&mut v, &t, &r_type) {
@@ -6600,7 +6861,9 @@ impl Parser {
     pub(crate) fn seeds_vector_hint(expected: &Type) -> bool {
         match expected {
             Type::Vector(elem, _) => {
-                matches!(**elem, Type::Integer(_)) || Self::seeds_vector_hint(elem)
+                // @PLN25: peel `Optional(τ)` so a `vector<u8?>` literal seeds its narrow
+                // stride like `vector<u8>` (else #432 stride-reinterpretation corruption).
+                matches!(elem.base(), Type::Integer(_)) || Self::seeds_vector_hint(elem)
             }
             _ => false,
         }

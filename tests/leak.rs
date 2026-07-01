@@ -1600,3 +1600,52 @@ fn pln87_struct_amp_literal_writeback_no_leak() {
     );
     assert!(l.is_empty(), "struct & literal write-back leaked: {l:?}");
 }
+
+/// @PLN25 Family D — a `text?` LOCAL reassigned in a tight loop, both from a literal and from a
+/// `text?`-returning call, must free each displaced heap string (no leak). Requires
+/// `LOFT_PLN25_OPT=1` so `text?` constructs `Optional(Text)`; gate-OFF it is plain `text`.
+#[test]
+fn pln25_text_opt_reassign_no_leak() {
+    let l = leaks_for(
+        r#"
+fn maybe(b: boolean) -> text? { if b { "a heap string from the maybe call path here" } else { null } }
+pub fn test() {
+  s: text? = "a heap string long enough to actually allocate on the store here";
+  for i in 0..50 {
+    s = "a reallocating heap string that must be freed each loop iteration here";
+    s = maybe(false);
+  }
+  assert((s ?? "x") == "x", "s should be null at the end");
+}
+"#,
+    );
+    assert!(
+        l.is_empty(),
+        "PLN25 text? reassign leaked {} store(s): {l:?}",
+        l.len()
+    );
+}
+
+/// @PLN25 Family D — a `text?` struct FIELD churned in a loop (reassign + null) frees each
+/// displaced heap string. Requires `LOFT_PLN25_OPT=1`; gate-OFF it is plain `text`.
+#[test]
+fn pln25_text_opt_field_churn_no_leak() {
+    let l = leaks_for(
+        r#"
+struct Box { name: text? }
+pub fn test() {
+  b = Box { name: "a heap string long enough to allocate on the store here" };
+  for i in 0..50 {
+    b.name = "a reallocating heap field string that must be freed each iteration";
+    b.name = null;
+  }
+  assert((b.name ?? "x") == "x", "field should be null");
+}
+"#,
+    );
+    assert!(
+        l.is_empty(),
+        "PLN25 text? field churn leaked {} store(s): {l:?}",
+        l.len()
+    );
+}

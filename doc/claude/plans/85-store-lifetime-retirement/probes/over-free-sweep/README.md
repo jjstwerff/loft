@@ -28,6 +28,14 @@ done
 
 ## Status matrix (HEAD = fix-crawler after the two A.3 / borrow-tail fixes)
 
+> **▶ RE-VERIFIED 2026-06-29 on the CURRENT build** via [../../fuzz/ownership_fuzz.py](../../fuzz/ownership_fuzz.py)
+> (the @PLN85 fuzz-proof harness). The dated table below drifted — current truth:
+> **P3, P9, and the adopt-re-return NRVO leak (leak-462) are now FIXED** (clean on both backends,
+> no leak); **P14 is still LIVE** (interp SIGSEGV, native ok); and **P10 is now LIVE** — it reads
+> `len(t)=7` on interp (its own assert fails) while native is correct, a value-divergence the old
+> "✅ guard" verdict missed. P14 + P10 are the harness's live positive controls. Treat the
+> per-row cells below as the historical fix-crawler snapshot, not current state.
+
 | Probe | Exercises | main interp | HEAD interp | HEAD native | verdict |
 |---|---|---|---|---|---|
 | P1 | struct-field view return via local + reassign + pressure | PASS | PASS | PASS | ✅ guard |

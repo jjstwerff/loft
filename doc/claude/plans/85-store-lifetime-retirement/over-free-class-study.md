@@ -131,7 +131,105 @@ reassign), **P14** (enum-field vector borrow via match arm, interp-only), **#462
 they are compact drivers + acceptance tests for the substrate fix. (P4 `?? []` is parked
 Family-A nullability, not this class.)
 
+### Generated boundary map (2026-06-29 — full probe via `fuzz/grammar_gen.py`)
+
+The class is now probed by a GENERATED cross-product (9 source×delivery shapes × {struct, scalar}
+× {none, heavy, stress churn} = 54 cells), run under the differential + `LOFT_POISON` + leak oracle
+on **both backends**. The live boundary is exact and narrow:
+
+| shape | struct | scalar | signature |
+|---|---|---|---|
+| **match_return** (match-arm field view) | 🔴 all churn | clean | interp **SIGABRT** + divergence |
+| **elem_accumulate** (element view → accumulate) | 🔴 all churn | clean | interp **SIGSEGV** + divergence |
+| **local_source** (conditional view-assign of a LOCAL, returned — the **#462 root**) | 🔴 all churn | clean | **LEAK on BOTH backends** (deterministic) |
+| field_return / field_local / field_reassign / if_return / nested_field / index_read (#426B) | clean | clean | — |
+
+**What this pins:**
+- The live class is exactly **struct-value × {match-arm, element-accumulate, conditional-local-view}**
+  — three shapes, three distinct signatures.
+- **`local_source` is the #462 root, reproduced deterministically** — it LEAKS on both backends at
+  none-churn (no slot-reuse needed), confirming the diagnosis above: the borrow-set is not propagated
+  through the conditional view-assign, the retbuf aliases the local, and the free is mis-accounted.
+  This is the minimal driving case for the assignment-borrow-set-propagation chokepoint.
+- **Under `LOFT_POISON` the crash class is churn-INDEPENDENT** (fires at none) — the UAF is always
+  present; churn only changed whether the stale read hit reused data. Poison removes that dependence,
+  so the fix no longer needs a 200-store stress harness to be guarded — a none-churn cell + poison is
+  a deterministic acceptance test.
+- **The field-view family is FIXED** — `field_return/local/reassign`, `if_return`, `nested_field`,
+  and the index-read **#426B** are all clean; instances 1+2 generalised. Only match-arm, accumulate,
+  and the conditional-local shapes remain.
+- **Scalar never fires** — record-store-specific (the @PLN25 value-model dependency).
+
+Remaining ADJACENT axes (not the core vector/field/local class — follow-up): keyed-container element
+views (`hash`/`sorted`), nested-record element values, and `par` worker-store isolation.
+
+### Root-cause drill-down (2026-06-29): the displaced owned store, NOT a dropped dep
+
+Probing `local_source` to the chokepoint — pair saved at
+`bytecode-comparisons/462-reassign-displaced-own-{BROKEN,WORKING}.loft`, proven on **both
+backends** — **corrects the "Why #462 escapes today" diagnosis above.** The minimal pair:
+- **BROKEN** (`cond`): `chosen = dflt(); for wj { if cond { chosen = pool[wj] ?? dflt(); } } chosen`
+  → **leaks 1 `M`/call**, both backends.
+- **WORKING** (`uncond`): `chosen = pool[idx] ?? dflt(); chosen` → clean, both backends.
+
+The introspect diff shows the dep IS propagated — `chosen(1):ref(M)["pool"]` and a
+`materialized_view_return` fire in BOTH forms. So the earlier "borrow-set not propagated through the
+conditional view-assign / `chosen` keeps empty deps" framing is **wrong**. The actual root: `chosen`
+first OWNS a fresh store (`chosen = dflt()`), then is reassigned to the `pool` borrow — and the
+**displaced owned store is never freed**. `LOFT_LEAK_SITES` pins it: `4× M allocated at line 2` (the
+`dflt()` body), one per call. The deps analysis flattens `chosen` to a single join-dep `["pool"]`,
+losing that a prior assignment was OWNING — so neither the reassign nor scope-exit frees the
+owned-init store.
+
+**Corrected invariant + chokepoint:** a reassignment `v = X` where `v` currently holds an OWNED store
+must FREE that store before `v` takes the new value. The fact it needs is flow-sensitive — *is `v`'s
+current value owned at this reassignment point* — which the join-flattened dep does not carry. The
+fix lives at the **reassign free** (`scopes.rs` free-placement), reading a per-assignment ownership
+fact — NOT a borrow-set-propagation patch. **Deterministic acceptance test:** the BROKEN pair leak-free
+on both backends, the WORKING pair + the field-view family still clean. Under `LOFT_POISON` it is
+churn-independent, so no 200-store stress harness is needed (supersedes the LOFT_UAF_SRC-at-scale
+guard the next-step below proposes).
+
+### Three chokepoints (2026-06-29 — the match_return / elem_accumulate drill-downs)
+
+Drilling the boundary map's other two live shapes (same gate: minimal repro + UAF trace + introspect)
+shows the over-free class is **NOT one chokepoint** — it is (at least) THREE distinct emit sites, each
+deciding own-vs-borrow wrong at a different place. Repros under `bytecode-comparisons/462-*`:
+
+| shape | signature | chokepoint (pinned) |
+|---|---|---|
+| **local_source** | leak, **both backends** | **reassign-free** — a displaced OWNED store is not freed when a var is reassigned to a borrow (`scopes.rs` free-placement) |
+| **elem_accumulate** | interp UAF (SIGSEGV) | **append source-free** — `out += [view]` lowers to `OpCopyRecord(src→elem, 0x8000 source-free) + OpFreeRef(src)` on a BORROWED source (`__lift_1` typed `M["t"]`). `LOFT_UAF_SRC`: freed at `pick` exit (op=152), read at `collect`'s append. The `0x8000` bit fired on a borrow. |
+| **match_return** | interp abort (SIGABRT; downstream `d_nr=u32::MAX` corruption) | **arm-return delivery** — `materialize_vector_arms_into` reassigns the materialize buffer `_mv_items_1` (owned) to `OpGetField(e,4)` (a borrow of the enum field), block dep `["__retbuf","e"]`; the borrowed field is freed downstream |
+
+**Conclusion — the class does NOT collapse to one rule.** All three share the SAME invariant (read the
+carried `deps`: a borrowed source is never freed; a displaced owned store always is) — the
+OWNERSHIP_MODEL north star — but the wrong decision is made at THREE emit sites: the **reassign free**
+(`scopes.rs`), the **append/bind source-free bit** (`OpCopyRecord 0x8000`), and the **arm-return
+delivery** (`materialize_vector_arms_into`). So the fix is either **three targeted dep-reads** (one per
+site) or the **single unification refactor** (route every own-vs-borrow decider through one
+`deps`-reading chokepoint — the bigger OWNERSHIP_MODEL collapse). `local_source` and `match_return`
+RESEMBLE each other (both reassign a slot from owned → borrow) and may share one fix; `elem_accumulate`'s
+source-free bit is clearly distinct. **This scopes the fix: it is not a one-line chokepoint patch** —
+the earlier "one rule collapses all" was right about the INVARIANT, optimistic about the FIX.
+
+**Update (2026-06-29) — `elem_accumulate` is NOT a surgical dep-gate either.** Taking it to the
+loft-codegen gate: the append source-free is **load-bearing for the owned branch**. `pick` is
+`t[i] ?? m_none()` — a runtime `??` JOIN (borrow `t[i]` OR owned `m_none()`) with ONE static type
+`M["t"]`. Proven both ways (`bytecode-comparisons/462-elem-accumulate{,-owned-branch-CLEAN}.loft`):
+the all-borrow form over-frees `t`'s element (bug), the all-owned form is **clean BECAUSE the append
+frees `m_none`**. So gating the `OpCopyRecord 0x8000` on `dep.is_empty()` would fix the borrow case and
+**leak the owned case** — same static dep, opposite correct answer. The free decision is genuinely
+**runtime-dependent** (which `??` branch was taken). So `elem_accumulate` shares the owned-or-borrow
+JOIN root with `local_source`; the correct fix is join-aware (materialize the escaping view to owned,
+or a runtime ownership flag), NOT a static bit-gate. **Net: the fuzz-proof + drill-downs have now
+PROVEN the over-free class needs the OWNERSHIP_MODEL substrate (sound owned-or-borrow join), not three
+quick per-site patches** — which is the load-bearing scoping result, reached before any regressing edit.
+
 ## Recommended next step
+
+> **Superseded by § Root-cause drill-down + § Three chokepoints (2026-06-29)** — the lever is the *reassign-frees-displaced-owned*
+> rule, not borrow-set propagation (the dep is already propagated). The text below is the prior framing.
 
 Land the **assignment borrow-set propagation** (the one rule) as the chokepoint, with
 the `mon_one` shape as the driving case. It cannot be blind-patched: #462 reproduces

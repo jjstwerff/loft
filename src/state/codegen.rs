@@ -534,7 +534,7 @@ impl State {
                     let code_pos = self.code_pos;
                     stack.add_op("OpVarRef", self);
                     self.code_add(var_pos);
-                    match &elem_tp {
+                    match elem_tp.base() {
                         Type::Integer(_) | Type::Function(_, _, _) => {
                             stack.add_op("OpGetInt", self);
                         }
@@ -571,7 +571,7 @@ impl State {
                     self.emit_tuple_var_push_recursive(stack, inner_elems, elem_abs_pos);
                     return self.insert_types(elem_tp.clone(), code_pos, stack);
                 }
-                match &elem_tp {
+                match elem_tp.base() {
                     Type::Integer(_) => {
                         stack.add_op("OpVarInt", self);
                     }
@@ -636,7 +636,7 @@ impl State {
                     stack.add_op("OpVarRef", self);
                     self.code_add(var_pos);
                     self.generate_node(value, stack, false);
-                    match &elem_tp {
+                    match elem_tp.base() {
                         Type::Integer(_) | Type::Function(_, _, _) => {
                             stack.add_op("OpSetInt", self);
                         }
@@ -673,7 +673,7 @@ impl State {
                     self.emit_tuple_var_pop_put(stack, inner_elems, elem_abs_pos);
                     return Type::Void;
                 }
-                match &elem_tp {
+                match elem_tp.base() {
                     Type::Integer(_) => {
                         stack.add_op("OpPutInt", self);
                     }
@@ -834,27 +834,69 @@ impl State {
             self.code_put(code_step, (self.code_pos - true_pos) as i16); // actual step
             stack.position = stack_pos;
             let fp = self.generate_node(f_val, stack, false);
-            let false_stack = stack.position;
-            // B5: when both arms are non-divergent but exit at different stack
-            // levels (e.g. match arms with different local allocations), the
-            // shorter arm's result value sits at a lower stack position than
-            // the longer arm's.  Rather than padding (which would bury the
-            // result under garbage), emit the join point at the SHORTER arm's
-            // level and make the longer arm discard its extra bytes before
-            // reaching the join point (its result is already on top of stack).
+            // @PLN90 P4 — a value-producing `if` whose FALSE arm pushes no result (an empty
+            // `_ => { [] }` arm that elides to nothing, the borrowed-yield's else) leaves
+            // `false_stack` at the eval base. The B5 join below would then take `target` at
+            // the eval base and slide the TRUE arm's result DOWN onto the saved return
+            // address (below the eval base) — the P4 derail. Deliver a typed result on the
+            // false path so both arms exit ABOVE the frame at the same level; B5 then sees
+            // equal levels and never shrinks. (`else ;` reaches here as a non-`Null` arm, so
+            // gen_if's null-else pad does not cover it.)
+            let false_stack = if !is_divergent(f_val)
+                && stack.position == stack_pos
+                && true_stack > stack_pos
+                && !matches!(tp, Type::Void | Type::Never)
+            {
+                self.emit_typed_null(stack, &tp);
+                stack.position = true_stack;
+                true_stack
+            } else {
+                stack.position
+            };
             if !is_divergent(t_val) && !is_divergent(f_val) && true_stack != false_stack {
+                // B5: both arms produce a value but exit at different stack levels
+                // (e.g. match arms with different local allocations).  The result
+                // sits on top of each arm's stack; join at the SHORTER arm's level
+                // and make the TALLER arm — whichever it is — free its extra bytes
+                // (keeping the result on top) before reaching the join.
+                //
+                // `free_stack(value, discard)` lands `stack_pos` at
+                // `arm_stack - discard + step(value)`, so to reach `target` the
+                // discard must be `(arm_stack - target) + step(ret_size)` — the
+                // STEP-ROUNDED result size, not the raw size.  A 12-byte vector
+                // occupies a 16-byte slot; using the raw size strands the arm 4
+                // bytes high, and never shrinking a taller TRUE arm strands it a
+                // whole result slot.  Either way the function-tail `OpReturn`'s
+                // `discard` (= `stack.position`) ends up short, so `fn_return`
+                // misreads the saved return address → the interpreter derails
+                // (deterministic on Filled, clean on Empty).  See @PLN85 P2.
                 let target = true_stack.min(false_stack);
+                let ret_size = size(stack.data.def(stack.def_nr).returned(), &Context::Argument);
+                let keep = stack.step(ret_size);
                 if false_stack > target {
-                    // Shrink the false arm's stack to match the true arm.
-                    let excess = false_stack - target;
+                    // The false arm is taller; the cursor is at its end, so shrink
+                    // it inline, then aim the true arm's goto at the join below.
                     stack.add_op("OpFreeStack", self);
-                    let ret_size =
-                        size(stack.data.def(stack.def_nr).returned(), &Context::Argument);
                     self.code_add(ret_size as u8);
-                    self.code_add(excess + ret_size);
+                    self.code_add((false_stack - target) + keep);
                     stack.position = target;
+                    self.code_put(end, (self.code_pos - false_pos) as i16);
+                } else {
+                    // The true arm is taller, but its code and join-goto were
+                    // already emitted, so it cannot be shrunk in place.  Route it
+                    // through a shrink trampoline placed after the false arm: the
+                    // false path jumps over the trampoline straight to the join,
+                    // the true path lands in it, frees its excess, falls through.
+                    stack.add_op("OpGotoWord", self);
+                    let skip = self.code_pos;
+                    self.code_add(0i16);
+                    let skip_base = self.code_pos;
+                    self.code_put(end, (skip_base - false_pos) as i16); // true arm → trampoline
+                    stack.add_op("OpFreeStack", self);
+                    self.code_add(ret_size as u8);
+                    self.code_add((true_stack - target) + keep);
+                    self.code_put(skip, (self.code_pos - skip_base) as i16); // false arm → join
                 }
-                self.code_put(end, (self.code_pos - false_pos) as i16);
                 stack.position = target;
             } else {
                 self.code_put(end, (self.code_pos - false_pos) as i16);
@@ -1177,7 +1219,7 @@ impl State {
                 continue;
             }
             let var_pos = stack.position - elem_abs;
-            match elem {
+            match elem.base() {
                 Type::Integer(_) => {
                     stack.add_op("OpVarInt", self);
                 }
@@ -1228,7 +1270,7 @@ impl State {
                 continue;
             }
             let pos = stack.position - elem_abs;
-            match &elems[i] {
+            match elems[i].base() {
                 Type::Integer(_) => {
                     stack.add_op("OpPutInt", self);
                 }
@@ -1267,7 +1309,7 @@ impl State {
                 self.emit_tuple_null_init(stack, inner_elems, elem_abs);
                 continue;
             }
-            match elem {
+            match elem.base() {
                 Type::Integer(_) | Type::Function(_, _, _) => {
                     stack.add_op("OpConstInt", self);
                     self.code_add(0i64);
@@ -1296,7 +1338,7 @@ impl State {
                 other => panic!("emit_tuple_null_init: unsupported element type {other:?}"),
             }
             let pos = stack.position - elem_abs;
-            match elem {
+            match elem.base() {
                 Type::Integer(_) | Type::Function(_, _, _) => stack.add_op("OpPutInt", self),
                 Type::Boolean => stack.add_op("OpPutBool", self),
                 Type::Single => stack.add_op("OpPutSingle", self),
@@ -1561,7 +1603,10 @@ impl State {
                 self.gen_keyed_null(stack, v, false);
                 return;
             }
-            if matches!(stack.function.tp(v), Type::Text(_)) {
+            // @PLN25: a `text?` reassignment must CLEAR before the append, exactly like plain
+            // `text` (set_var's OpAppendText appends in place) — peel the marker. Without this
+            // `a: text? = "hi"; a = "x"` appended → "hix".
+            if matches!(stack.function.tp(v).base(), Type::Text(_)) {
                 let var_pos = stack.position - pos;
                 stack.add_op("OpClearText", self);
                 self.code_add(var_pos);
@@ -1668,6 +1713,40 @@ impl State {
                 stack.add_op("OpVarRef", self);
                 self.code_add(free_pos);
                 stack.add_op("OpFreeRef", self);
+            }
+            // @PLN85 unification (first chokepoint collapse, LOFT_JOIN_OWN): read the
+            // ONE carried fact instead of the type-shape proxy below. A `??`-JOIN call
+            // return bound into an owned slot (`__lift_1 = pick(t,i)`, `pick` returns
+            // `t[i] ?? …`) needs the runtime arg-aliasing guard, witnessed by the
+            // oracle's interprocedurally-resolved base: `OpBindOrCopy` adopts the owned
+            // arm (the source-free then frees it) and materialises the borrow arm (the
+            // source-free hits the copy; the borrowed arg is intact). A static gate
+            // cannot — the source-free is load-bearing for the owned branch.
+            if owned_ref
+                && !s1_substituted
+                && !stash_old_for_post_free
+                && std::env::var_os("LOFT_JOIN_OWN").is_some()
+                && let crate::use_analysis::Own::Join { base } =
+                    crate::use_analysis::ownership_of(stack.data, stack.def_nr, value)
+                && base != u16::MAX
+                && let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
+            {
+                let tp_nr = stack.data.def(d_nr).known_type();
+                // The call result (`src`) FIRST, then the witness on top — so the
+                // witness's frame-relative `var_pos` accounts for `src` already on the
+                // eval stack. `OpBindOrCopy` pops witness (top) then src.
+                self.generate(value, stack, false);
+                // Push the witness (the borrowed-arg base) on top of the call result.
+                // A PUSH op reads at the PRE-push position, so `var_pos(base)` is taken
+                // BEFORE `add_op` (matching the pre-Set free above); the POP op's
+                // `var_pos(v)` is taken AFTER `add_op` (post-pop position).
+                let witness_pos = stack.var_pos(base);
+                stack.add_op("OpVarRef", self);
+                self.code_add(witness_pos);
+                stack.add_op("OpBindOrCopy", self);
+                self.code_add(stack.var_pos(v));
+                self.code_add(tp_nr);
+                return;
             }
             if owned_ref && !s1_substituted {
                 // when the value is a call with visible Ref
@@ -1996,6 +2075,13 @@ impl State {
     /// because the inline match in `gen_set_first_at_tos` had no arm
     /// for `Type::Tuple(_)` elements.  Recursion handles arbitrary
     /// nesting depth using the same offset arithmetic.
+    // @PLN25: every per-element tuple op in this file matches `<elem>.base()` — a nullable
+    // `τ?` tuple element stores/reads through its base's OpPut*/OpGet* (same sentinel storage),
+    // mirroring `gen_set_first_at_tos`. Read and write peel in lockstep so the round-trip
+    // (incl. a null element) stays consistent; without it an Optional element panicked
+    // "unsupported elem". The full set: emit_tuple_put_ops, emit_tuple_var_pop_put,
+    // emit_tuple_var_push_recursive, emit_tuple_null_init, and the generate_node/generate_var
+    // TupleGet/TuplePut element matches.
     fn emit_tuple_put_ops(&mut self, stack: &mut Stack, elems: &[Type], tuple_base: u16) {
         let offsets = crate::data::element_offsets(elems);
         for i in (0..elems.len()).rev() {
@@ -2012,7 +2098,7 @@ impl State {
             // time, which is then `stack_pos + size - pos` inside
             // `put_var`).  Mirrors the original flat-tuple loop.
             let pos = stack.position - elem_abs;
-            match &elems[i] {
+            match elems[i].base() {
                 Type::Integer(_) => stack.add_op("OpPutInt", self),
                 // P249 — fn-ref slot is 20 B (8 d_nr + 12 closure
                 // DbRef).  OpPutInt would only pop 8 B and leave the
@@ -2041,7 +2127,10 @@ impl State {
     }
 
     fn gen_set_first_at_tos(&mut self, stack: &mut Stack, v: u16, value: &Value) {
-        if matches!(*stack.function.tp(v), Type::Text(_)) {
+        // @PLN25: a `text?` local's first-Set routes to the heap-aware text path (same sentinel
+        // storage as plain `text`) — peel the marker. Else an `Optional(Text)` var fell through
+        // to the scalar match below (no Text arm) and panicked "unsupported var type".
+        if matches!(stack.function.tp(v).base(), Type::Text(_)) {
             self.gen_set_first_text(stack, v, value);
         } else if matches!(
             stack.function.tp(v),
@@ -2175,6 +2264,9 @@ impl State {
             }
             let var_pos = stack.var_pos(v);
             let tp = stack.function.tp(v).clone();
+            // @PLN25 slice (b): an `Optional(τ)` var's first-Set uses the base put-op (same
+            // sentinel storage) — peel the marker.
+            let tp = tp.base().clone();
             match tp {
                 Type::Integer(_) => stack.add_op("OpPutInt", self),
                 Type::Character => stack.add_op("OpPutCharacter", self),
@@ -3074,7 +3166,9 @@ impl State {
         let argument = stack.function.is_argument(variable);
         let code = self.code_pos;
         self.vars.insert(code, variable);
-        match stack.function.tp(variable) {
+        // @PLN25 slice (b): an `Optional(τ)` var loads exactly like `τ` (same sentinel
+        // storage) — peel the marker so each op-emission arm sees the base type.
+        match stack.function.tp(variable).base() {
             Type::Integer(_) => stack.add_op("OpVarInt", self),
             Type::Function(_, _, _) => {
                 stack.add_op("OpVarFnRef", self);
@@ -3148,7 +3242,7 @@ impl State {
                 let offsets = crate::data::element_offsets(&elems);
                 for (i, elem_tp) in elems.iter().enumerate() {
                     let elem_pos = stack.position - (tuple_base + offsets[i] as u16);
-                    match elem_tp {
+                    match elem_tp.base() {
                         Type::Integer(_) => {
                             stack.add_op("OpVarInt", self);
                         }
@@ -3312,6 +3406,17 @@ impl State {
                 // a null-ref sentinel so both branches of an if-else reach the join point
                 // with the same stack delta.
                 self.emit_push_sentinel(stack);
+            } else if stack.position == to && to < after {
+                // @PLN85 P3: the block is typed to yield a value but its operators
+                // produced NO result on the eval stack — e.g. a `{ [] }` match arm
+                // that reduced to a bare `Line` marker (the multi-line spelling of an
+                // empty-vector arm; the single-line spelling becomes a Null else that
+                // gen_if already pads).  Without a pushed result the runtime stack is
+                // short by one result slot, so the enclosing join / `OpReturn` discard
+                // over-counts and `fn_return` misreads the saved return address →
+                // interpreter underflow.  Push a typed null of the result, mirroring
+                // gen_if's null-else arm (`emit_typed_null`).
+                self.emit_typed_null(stack, &result);
             }
             stack.position = after;
         }
@@ -3615,7 +3720,10 @@ impl State {
             }
         }
         let var_pos = stack.var_pos(var);
-        match stack.function.tp(var) {
+        // @PLN25: an `Optional(τ)` reassignment uses the base put-op (same sentinel storage)
+        // — peel the marker (mirrors the first-Set `gen_set_first_at_tos`). Without this a
+        // nullable local reassignment (`x: integer? = 5; x = 9`) panicked "Unknown var type".
+        match stack.function.tp(var).base() {
             Type::Integer(_) => stack.add_op("OpPutInt", self),
             Type::Function(_, _, _) => {
                 stack.add_op("OpPutFnRef", self);

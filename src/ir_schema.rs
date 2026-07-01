@@ -120,6 +120,9 @@ pub fn type_to_json(ty: &Type) -> String {
 
 fn write_type(out: &mut String, ty: &Type) {
     match ty {
+        // @PLN25 Optional is compile-time only (same layout as its base) — peel for now;
+        // the schema gains an explicit nullable marker when DN1/DN3 actually produce it.
+        Type::Optional(inner) => write_type(out, inner),
         Type::Unknown(n) => {
             let _ = write!(out, "{{\"k\":\"Unknown\",\"n\":{n}}}");
         }

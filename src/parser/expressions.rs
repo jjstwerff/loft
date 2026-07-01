@@ -2284,11 +2284,18 @@ use a separate collection or add after the loop"
         } else {
             f_type
         };
-        if op == "="
+        // @PLN25 (N-Store): a typed scalar STORE — an un-discharged nullable into a non-null
+        // target is a violation (emitted here; `convert` below still unwraps, so no
+        // double-diagnose). This is a store site, NOT a comparison, so `x == null` is unaffected.
+        let typed_scalar_store = op == "="
             && scalar_target
             && !self.first_pass
             && !f_type.is_unknown()
-            && !s_type.is_unknown()
+            && !s_type.is_unknown();
+        if typed_scalar_store {
+            self.n_store_violation(&s_type, f_type, "the assignment target");
+        }
+        if typed_scalar_store
             && !matches!(s_type, Type::Null)
             && !f_type.is_equal(&s_type)
             && !self.convert(code, &s_type, f_type)

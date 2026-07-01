@@ -1,0 +1,15 @@
+// @PLN25 slice (c) — (N-Store) at the RETURN site, the VIOLATION cells.
+// Each function alone is a COMPILE ERROR gate-ON (LOFT_PLN25_DN3=1):
+//   "a nullable `integer?` cannot be stored into the return value of the
+//    non-null type `integer` — discharge it first with `?? <default>` or `match`"
+// Gate-OFF the `?` is a no-op and these silently return `null` (the pre-fix
+// behaviour the teeth replace).  Uncomment ONE function + its `main` call to see
+// the diagnostic (two in one file would just report the first).
+
+// R1: explicit return of an un-discharged `integer?` into a non-null return.
+// fn r1(x: integer?) -> integer { return x; }
+
+// R4: implicit tail — an un-discharged `integer?` is the function's last expr.
+// fn r4(x: integer?) -> integer { x }
+
+fn main() { print("uncomment a violation above"); }

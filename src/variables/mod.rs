@@ -1204,6 +1204,21 @@ impl Function {
             }
             return self.is_new(var_nr);
         }
+        // @PLN25 (N-Decl): `Optional(τ)` and `τ` share sentinel storage, so storing a
+        // non-null `τ` into a nullable `τ?` slot is NOT a type change — accept and KEEP the
+        // nullable slot type (do not narrow it to non-null). This is what makes nullable
+        // LOCALS usable (`x: integer? = 5`); without it `change_var` rejected the assignment
+        // as "cannot change type from integer? to integer". The reverse (an explicit non-null
+        // target ← `τ?`) is the `(N-Store)` violation, caught at the store site before here.
+        // Gate-OFF inert: the postfix `?` is a no-op so `var_tp` is never `Optional`.
+        if let Type::Optional(inner) = var_tp
+            && (inner.is_equal(type_def) || matches!(type_def, Type::Null))
+        {
+            for on in type_def.depend() {
+                self.depend(var_nr, on);
+            }
+            return self.is_new(var_nr);
+        }
         // Allow assigning an iterator (vector slice) to a vector variable
         // when element types are compatible — the iterator is materialised.
         if let (Type::Vector(_, _), Type::Iterator(_, _)) = (var_tp, type_def) {
@@ -1559,6 +1574,13 @@ impl Function {
         self.variables[v as usize].skip_free = true;
     }
 
+    /// Is `v` marked `skip_free`? Match-arm field bindings (`_mv_<field> =
+    /// OpGetField(subject,…)`) are, being borrowed views of the match subject.
+    #[must_use]
+    pub fn skip_free(&self, v: u16) -> bool {
+        self.variables[v as usize].skip_free
+    }
+
     /// Mark a variable as captured by a closure.
     /// Suppresses the "never read" warning without affecting dead-assignment tracking.
     pub fn set_captured(&mut self, v: u16) {
@@ -1706,6 +1728,8 @@ impl Function {
 
 pub fn size(tp: &Type, context: &Context) -> u16 {
     match tp {
+        // @PLN25 slice (b): `Optional(τ)` shares its base's sentinel storage — same size.
+        Type::Optional(inner) => size(inner, context),
         Type::Integer(s) if context == &Context::Constant && s.range() - 1 <= 256 => 1,
         Type::Integer(s) if context == &Context::Constant && s.range() - 1 <= 65536 => 2,
         Type::Boolean | Type::Enum(_, false, _) => 1,
@@ -1743,6 +1767,10 @@ pub fn size(tp: &Type, context: &Context) -> u16 {
 // S3: called by the aligned V2 allocator (`slots_v2::assign_slots_v2`).
 pub fn align(tp: &Type) -> u8 {
     match tp {
+        // @PLN25: `Optional(τ)` shares its base's sentinel storage — same align as the
+        // base (mirrors `size`, which already peels). Missing this aligned an `integer?`
+        // stack slot to 1 instead of 8 → misaligned i64 reference → UB/SIGSEGV.
+        Type::Optional(inner) => align(inner),
         Type::Boolean | Type::Enum(_, false, _) => 1,
         Type::Single | Type::Character => 4,
         Type::Integer(_) | Type::Float | Type::Function(_, _, _) => 8,

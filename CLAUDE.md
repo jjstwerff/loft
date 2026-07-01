@@ -102,9 +102,17 @@ src/main.rs            CLI; loads default/ then user file
    over. If a protected branch blocks a commit, surface it and ask — don't invent a branch.
 4. With an **open PR**, hold non-blocking pushes for the user's consent (force-push/rebase/surprise
    commits) — EXCEPT a push that unblocks a red required check (allowed; it can't merge while red).
-5. Branch from `main` with a **general name**; prefix agent branches with the hostname
-   (`<host>-work`). The active cycle's long-lived branch is the **monthly release branch** `YYYY-MM`.
-   Only a substantial design-doc'd plan earns a specific name.
+5. **While a PR is unmerged, branch from the TIP of that in-flight work — NEVER fork a fresh
+   branch off `main`.** `main` lacks the unmerged foundation, so a `main`-based branch can't build
+   on it and **development there is impossible** (new work almost always needs what's still in the
+   open PR — e.g. @PLN85's fuzz-proof needs @PLN25, which sits in the PR). Stack the new branch on
+   the PR branch; rebase the whole stack onto `main` only AFTER the PR merges. Fork from `main`
+   only when there is no in-flight work to build on. **Trade-off (respect it):** stacking couples
+   the new work to the PR's merge clock — a clean PR merges in minutes, but a problematic one
+   blocks everything stacked on it for **hours**, so keep the PR mergeable and land it promptly.
+   General branch name; prefix agent branches with the hostname (`<host>-work`); the cycle's
+   long-lived branch is the **monthly release branch** `YYYY-MM`; only a substantial design-doc'd
+   plan earns a specific name.
 6. **Before opening a PR and before requesting merge, verify the head is current on `origin/main`**
    (`git fetch`; `git merge-base --is-ancestor origin/main <head>`). `mergeStateStatus: BEHIND`
    merges as BLOCKED even when `mergeable=MERGEABLE` — rebase + re-push first.

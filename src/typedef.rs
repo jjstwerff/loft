@@ -634,6 +634,10 @@ pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
             continue;
         }
         let a_type = data.attr_type(d_nr, a_nr);
+        // @PLN25 slice (b): an `Optional(τ)` field lays out exactly like `τ` (same sentinel
+        // storage) — peel the marker here so the whole DB-layout path (the `db_type` match +
+        // `size`) is transparent to it. Nullability is read separately via `attr_nullable`.
+        let a_type = a_type.base().clone();
         let t_nr = data.type_elm(&a_type);
         let nullable = data.attr_nullable(d_nr, a_nr);
         if t_nr < u32::MAX {

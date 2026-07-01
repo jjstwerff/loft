@@ -189,6 +189,41 @@ separation forces the three different judgments to each happen with full
 information: *what exists* (pass 1), *where it belongs* (pass 2), *what can
 go* (pass 3).
 
+## The precondition — the consolidation is only as safe as the test corpus it answers to
+
+Pass 2 replaces many sites that each re-derive a fact with ONE analysis the sites
+read.  That replacement is safe **only when a body of working examples already
+exists that a *wrong* version of the new analysis would visibly fail against** —
+otherwise the unified analysis is as brittle as the scar tissue it replaces, just
+with fewer lines and more confidence (and confident-and-wrong hides longer, so it
+is worse).  The go/no-go before generalizing is therefore not "do I understand the
+fact?" — a clean story is always available — but *"is there a corpus where a wrong
+me fails?"*  If the corpus cannot falsify a wrong version, the consolidation is
+premature, regardless of how clear the invariant looks.
+
+The corpus is not separate work — it is what the instance-era *produced*.  Each
+symptom-fix in the bug history (#316/#323's five free-sites; the over-free class's
+~16) shipped with a regression test, and **those tests are the durable
+specification, decoupled from the implementation that motivated them**: a test pins
+a *behaviour* (leak-free + value-correct + both backends), not a code path.  So the
+unified analysis is correct precisely because it must satisfy every accumulated pin
+at once.  Two consequences for pass 3 (remove the duplications):
+
+- **Delete the fix, keep its test.**  The scattered code is disposable; its test is
+  the constraint.  Removing a test with the code it guarded silently reopens the hole.
+- **The generalization is only as sound as the corpus's ground truth.**  A pin
+  validated by a weak test — agreement-between-two-binaries, or leak-only that misses
+  value corruption (cluster V: interp-clean + leak-free still hid native corruption) —
+  is a blind spot a brittle analysis passes while feeling safe.  Audit inherited pins
+  for value AND length AND leak on BOTH backends before trusting them as spec.
+
+This is why the order cannot be reversed: the heap model's specification had to be
+*discovered* one failing case at a time, and the tests are where the discovery got
+recorded.  @PLN85's join-aware ownership analysis (`src/use_analysis.rs` — built
+inert, validated against an 87-cell boundary matrix *plus* the accumulated per-fix
+regression suite, then landed gated off-by-default) is the worked example; see
+[plans/85-store-lifetime-retirement/ownership-analysis-gaps.md](plans/85-store-lifetime-retirement/ownership-analysis-gaps.md).
+
 ## Relation to the rest of the method stack
 
 - [GOALS.md](GOALS.md) Goal E — the destination this method walks toward;

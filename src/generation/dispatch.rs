@@ -94,7 +94,9 @@ impl Output<'_> {
         // `let mut var_X = …` shadow that arm 1+ cannot see.
         if self.coroutine_persistent_vars.contains(&var) {
             let name = sanitize(variables.name(var));
-            let needs_to_string = matches!(variables.tp(var), Type::Text(_));
+            // @PLN25: a `text?` var stores as `String` like plain `text` — peel so the literal→String
+            // `.to_string()` conversion fires for an Optional(Text) local.
+            let needs_to_string = matches!(variables.tp(var).base(), Type::Text(_));
             write!(w, "self.var_{name} = ")?;
             if needs_to_string {
                 write!(w, "(")?;
@@ -279,7 +281,9 @@ impl Output<'_> {
             self.output_code_inner(w, to)?;
             return Ok(());
         }
-        let needs_to_string = matches!(variables.tp(var), Type::Text(_));
+        // @PLN25: a `text?` var stores as `String` like plain `text` — peel so the literal→String
+        // `.to_string()` conversion fires for an Optional(Text) local.
+        let needs_to_string = matches!(variables.tp(var).base(), Type::Text(_));
         let name = sanitize(variables.name(var));
         // P198 — most operators are wrapped in Value::Span by the parser.
         // Unwrap before pattern-matching so the deep-copy emission below
@@ -356,6 +360,23 @@ impl Output<'_> {
             // P198 — the inner user-fn call uses the new `cell` ABI; the
             // outer OpCopyRecord wraps `cell` to a fresh `&mut Stores`.
             let callee = self.data.def(*fn_nr);
+            // @PLN85 unification — collapse the native first-bind onto the ownership
+            // oracle. A `??`-JOIN return needs the runtime ARG-ALIASING guard
+            // witnessed by the oracle's interprocedurally-resolved base (the borrowed
+            // arg): adopt the owned arm (`_src` fresh, not aliasing the witness) and
+            // materialise the borrow arm (`_src` aliases the witness). The old
+            // `_src == _dst` guard re-derived this and LEAKED the owned arm — `_src`
+            // (a fresh `m_none()`) never equals `_dst` (the old slot), so it
+            // materialised + dropped the owned store.
+            let join_witness = if std::env::var_os("LOFT_JOIN_OWN").is_some()
+                && let crate::use_analysis::Own::Join { base } =
+                    crate::use_analysis::ownership_of(self.data, self.def_nr, to)
+                && base != u16::MAX
+            {
+                Some(sanitize(variables.name(base)))
+            } else {
+                None
+            };
             write!(
                 w,
                 "{{ let _dst = var_{name}; let _src = {}(cell",
@@ -370,15 +391,19 @@ impl Output<'_> {
                 write!(w, ", ")?;
                 self.emit_call_arg(w, callee, idx, arg)?;
             }
-            // A null return (`_src` is the null sentinel, store_nr == u16::MAX)
-            // must NOT be deep-copied — `OpCopyRecord` would index
-            // `allocations[u16::MAX]` and panic.  Bind the sentinel straight into
-            // the destination (as the same-store alias arm does), so the variable
-            // reads as null.  Covers any heap-param callee returning struct-or-null
-            // (`fn f(s: S) -> Box { … null … }`), the ABI-B caller path.
+            // The ADOPT condition. Default (`_src == _dst`): adopt a null return or
+            // a same-store NRVO alias, else deep-copy. JOIN (witnessed): adopt a
+            // null/fresh `_src` that does NOT alias the borrowed arg `witness`, else
+            // (it aliases the witness) materialise — the join's owned/borrow split.
+            let adopt = match &join_witness {
+                Some(witness) => {
+                    format!("_src.store_nr == u16::MAX || _src.store_nr != var_{witness}.store_nr")
+                }
+                None => "_src.store_nr == u16::MAX || _src.store_nr == _dst.store_nr".to_string(),
+            };
             write!(
                 w,
-                "); if _src.store_nr == u16::MAX || _src.store_nr == _dst.store_nr {{ var_{name} = _src; }} \
+                "); if {adopt} {{ var_{name} = _src; }} \
                  else {{ var_{name} = OpDatabase(cell, _dst, {tp_nr}_i32); \
                  OpCopyRecord(cell,_src, var_{name}, {tp_with_free}_i32); }} }}"
             )?;
@@ -421,7 +446,8 @@ impl Output<'_> {
         // any drop(@var) inside the block (e.g., on break) can reference it.
         if !self.declared.contains(&var) && matches!(to, Value::Block(_)) {
             let var_tp = variables.tp(var);
-            if matches!(var_tp, Type::Text(_)) {
+            // @PLN25: peel `Optional(Text)` — a `text?` block-assigned local is `String`-typed.
+            if matches!(var_tp.base(), Type::Text(_)) {
                 self.declared.insert(var);
                 write!(w, "let mut var_{name} = ")?;
                 self.output_code_inner(w, to)?;

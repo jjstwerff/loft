@@ -34,6 +34,24 @@ pub enum Verdict {
     Copy,
 }
 
+/// @PLN90 — the WARNING bucket for a copy (which `COPY_DIAGNOSTICS.md` drives). The verdict
+/// says *whether* a copy happens; this says *what to do about it*.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CopyClass {
+    /// A `Borrow` — already eliminated, not a copy. No warning.
+    Eliminated,
+    /// Bucket 2 — a borrow WOULD be sound; the copy is only analysis/codegen weakness. The
+    /// north-star elimination worklist. WARN (the actionable "you didn't have to copy").
+    Avoidable,
+    /// Inherent to the ownership model — constructing an owning structure (`S { f: src }`)
+    /// or assigning into an owning slot (`v[i] = e`) *owns* its data. This is exactly what
+    /// the programmer asked for, not a surprise. SILENT (no warning).
+    Implicit,
+    /// Forced by circumstance (a short-lived source, a later mutation) — required as
+    /// written, but the user could restructure. Indicated (informational), never silent.
+    Forced,
+}
+
 /// One row of the analysis result: the verdict for a single vector-copy binding.
 #[derive(Clone, Debug)]
 pub struct VerdictRow {
@@ -44,6 +62,10 @@ pub struct VerdictRow {
     pub verdict: Verdict,
     /// Human-readable justification (for the dump and test diagnostics).
     pub reason: &'static str,
+    /// @PLN90 — the warning bucket: `Eliminated` (Borrow) · `Avoidable` (warn — the
+    /// worklist) · `Implicit` (model-inherent ownership — silent) · `Forced` (informational).
+    /// See [`CopyClass`] and COPY_DIAGNOSTICS.md.
+    pub class: CopyClass,
 }
 
 fn def_nrs(data: &Data, names: &[&str]) -> HashSet<u32> {
@@ -116,6 +138,10 @@ struct Uses {
     op_append: u32,
     op_database: u32,
     op_free: u32,
+    /// @PLN90 — `OpCopyRecord` def_nr: a record deep-copy (`v[i] = e`, a `?? E{…}` default
+    /// element, a struct copy). Not append-based, so the var-buffer / construction /
+    /// return-buffer branches never see it; recorded here so the decision covers it.
+    op_copy_record: u32,
     projections: HashSet<u32>,
     value_readers: HashSet<u32>,
     /// Pre-order position counter — a total order on nodes that, OUTSIDE loops,
@@ -136,6 +162,15 @@ struct Uses {
     copyfill_pos: HashMap<u16, usize>,
     /// Copy vars whose fill sits inside a loop (Tier-1 ineligible).
     copyfill_in_loop: HashSet<u16>,
+    /// @PLN90 — field-target appends `OpAppendVector(OpGetField(rec, fld), src)`:
+    /// `(base record var, source base var)`. This is the struct/enum-construction copy
+    /// (`S { f: src }`) and `x.field += src` — the source is deep-copied into the field,
+    /// which the var-buffer copy idiom above never sees. Recorded so the decision covers it.
+    construct_copy: Vec<(Option<u16>, Option<u16>)>,
+    /// @PLN90 — `OpCopyRecord` deep-copies: `(target base var, source base var)`. A record
+    /// copy (`v[i] = e`, a `?? E{…}` default element, a struct copy) — not append-based, so
+    /// the branches above miss it. The same-var no-op alias is excluded when recorded.
+    record_copy: Vec<(Option<u16>, Option<u16>)>,
     /// Vars that appeared in a non-reader position (⇒ not borrow-eligible). The
     /// copy-fill `OpAppendVector(v, src.f)` is *excluded* — it is the copy machinery,
     /// not a user mutation of `v`.
@@ -232,6 +267,19 @@ impl Uses {
                     }
                 } else {
                     // Append into a field / non-var target — a real mutation.
+                    // @PLN90 — when the target is a struct/enum FIELD
+                    // (`OpAppendVector(OpGetField(rec, fld), src)`) the source is
+                    // deep-copied into the field: a structure copy the var-buffer idiom
+                    // above never records (struct/enum construction `S { f: src }`, or
+                    // `x.field += src`). Capture (base record, source base) so the
+                    // copy-vs-borrow decision covers it.
+                    if let Some(Value::Call(d0, _)) = args.first().map(Value::unspan)
+                        && *d0 == self.get_field
+                    {
+                        let rec = args.first().and_then(|t| base_var(t, self.get_field));
+                        let src = args.get(1).and_then(|s| base_var(s, self.get_field));
+                        self.construct_copy.push((rec, src));
+                    }
                     for a in args {
                         self.visit(a, Ctx::Other);
                     }
@@ -247,6 +295,26 @@ impl Uses {
                 }
                 for a in it {
                     self.visit(a, Ctx::ReaderArg);
+                }
+            }
+            Value::Call(d, args) if *d == self.op_copy_record => {
+                // @PLN90 — `OpCopyRecord(target, source, tp)` deep-copies one record. Record
+                // it for coverage, skipping the same-var no-op alias (`OpCopyRecord(x, x)`,
+                // the ref_return-promoted callee whose return aliases its buffer — the
+                // runtime short-circuits it). Visit args exactly as the generic Call arm
+                // would, so no existing fact changes.
+                let tgt = args.first().and_then(|a| base_var(a, self.get_field));
+                let src = args.get(1).and_then(|a| base_var(a, self.get_field));
+                if !(tgt.is_some() && tgt == src) {
+                    self.record_copy.push((tgt, src));
+                }
+                let c = if self.value_readers.contains(d) {
+                    Ctx::ReaderArg
+                } else {
+                    Ctx::Other
+                };
+                for a in args {
+                    self.visit(a, c);
                 }
             }
             Value::Call(d, args) => {
@@ -290,6 +358,7 @@ fn analyze_fn(
         op_append: data.def_nr("OpAppendVector"),
         op_database: data.def_nr("OpDatabase"),
         op_free: data.def_nr("OpFreeRef"),
+        op_copy_record: data.def_nr("OpCopyRecord"),
         projections: projection_ops(data),
         value_readers: value_reader_ops(data),
         ineligible: HashSet::new(),
@@ -303,6 +372,8 @@ fn analyze_fn(
         other_max_pos: HashMap::new(),
         copyfill_pos: HashMap::new(),
         copyfill_in_loop: HashSet::new(),
+        construct_copy: Vec::new(),
+        record_copy: Vec::new(),
     };
     u.visit(code, Ctx::Other);
 
@@ -331,7 +402,27 @@ fn analyze_fn(
             .get(&v)
             .is_some_and(|vdb| u.database_vars.contains(vdb));
         if !fresh_buffer || appends.len() != 1 {
-            continue; // not a single-source vector copy — not ours to elide
+            // @PLN90 phase 1 — the return-buffer copy. When the single-append target is
+            // not a fresh local buffer but IS an argument vector, it is the return buffer
+            // (a passed-in buffer the function fills and returns): `fn f(b: Box) -> vector
+            // { b.rows }` materialises `b.rows` into `__retbuf`. The var-buffer idiom skips
+            // it (the buffer is a param, not an `OpDatabase` local), so emit a Copy row for
+            // coverage. Diagnostic only — `continue` below means no `ElidePlan`, so no
+            // codegen change (and eliding it would be the P4 borrowed-return).
+            if appends.len() == 1 && function.is_argument(v) {
+                rows.push(VerdictRow {
+                    var_nr: v,
+                    var_name: function.name(v).to_string(),
+                    source: appends[0].unwrap_or(u16::MAX),
+                    verdict: Verdict::Copy,
+                    reason: "materialised into the return buffer (field / whole-vector return copy)",
+                    // AVOIDABLE: returning a borrowed view of the field is sound (the caller
+                    // keeps the subject alive); the copy is here only because the borrowed
+                    // return path is not yet correct (@PLN85 P4). Eliminating it = that fix.
+                    class: CopyClass::Avoidable,
+                });
+            }
+            continue; // not a single-source local copy — not ours to elide
         }
         let src = appends[0];
         let single_def = u.def_count.get(&v).copied().unwrap_or(0) == 1;
@@ -354,32 +445,46 @@ fn analyze_fn(
                 _ => false,
             };
 
-        let (verdict, reason) = if single_def && v_readonly && src_is_param && src_unmutated {
+        // @PLN90 — the warning bucket. Avoidable = a borrow would be sound, blocked only by
+        // analysis conservatism (an unproven read-only local source) — the worklist.
+        // Implicit = a literal source is construction, not a copy of existing data (owned by
+        // the model — silent). Forced = the result escapes / is reassigned / mutated, or the
+        // source is mutated (the value must own its store). `Borrow` is already eliminated.
+        let (verdict, reason, class) = if single_def && v_readonly && src_is_param && src_unmutated
+        {
             (
                 Verdict::Borrow,
                 "tier0: read-only local, unmutated param source",
+                CopyClass::Eliminated,
             )
         } else if single_def && v_readonly && src_local_stable {
             (
                 Verdict::Borrow,
                 "tier1: read-only local, ordering-proven read-only local source",
+                CopyClass::Eliminated,
             )
         } else if src.is_none() {
             (
                 Verdict::Copy,
                 "source is not a plain var/field (e.g. a literal)",
+                CopyClass::Implicit,
             )
         } else if !single_def {
-            (Verdict::Copy, "reassigned (multiple defs)")
+            (
+                Verdict::Copy,
+                "reassigned (multiple defs)",
+                CopyClass::Forced,
+            )
         } else if !v_readonly {
-            (Verdict::Copy, "local mutated or escapes")
+            (Verdict::Copy, "local mutated or escapes", CopyClass::Forced)
         } else if !src_is_param && !src_local_stable {
             (
                 Verdict::Copy,
                 "source not a parameter / not provably read-only local",
+                CopyClass::Avoidable,
             )
         } else {
-            (Verdict::Copy, "source mutated")
+            (Verdict::Copy, "source mutated", CopyClass::Forced)
         };
 
         if verdict == Verdict::Borrow
@@ -414,6 +519,44 @@ fn analyze_fn(
             source: src.unwrap_or(u16::MAX),
             verdict,
             reason,
+            class,
+        });
+    }
+
+    // @PLN90 phase 1 — construction / field-append copies. A field-target append
+    // (`S { f: src }` construction, or `x.field += src`) deep-copies the source into the
+    // field, which the var-buffer idiom above does not classify. Emit a Copy row so the
+    // copy-vs-borrow decision COVERS the copy. Diagnostic only: always `Copy`, so it never
+    // produces an `ElidePlan` (no codegen change). The field owns its data, so it is a copy
+    // unless a later (phase 2) lifetime proof shows the source out-lives the record.
+    for &(rec, src) in &u.construct_copy {
+        rows.push(VerdictRow {
+            var_nr: rec.unwrap_or(u16::MAX),
+            var_name: rec.map_or_else(|| "<field>".to_string(), |r| function.name(r).to_string()),
+            source: src.unwrap_or(u16::MAX),
+            verdict: Verdict::Copy,
+            reason: "struct/enum field owns its data (construction/field-append copy)",
+            // IMPLICIT — silent: constructing an owning structure (`S { f: src }`) copying
+            // its field is exactly the model (the field owns its data), what the programmer
+            // asked for, not a surprise. Never warned.
+            class: CopyClass::Implicit,
+        });
+    }
+
+    // @PLN90 phase 1 — record deep-copies (`OpCopyRecord`): a `v[i] = e` element-slot set,
+    // a `?? E{…}` default element, a struct copy. Not append-based, so the var-buffer /
+    // construction / return-buffer paths above never see them. Emit a Copy row so the
+    // decision covers the copy. Diagnostic only — never an `ElidePlan`, no codegen change.
+    for &(tgt, src) in &u.record_copy {
+        rows.push(VerdictRow {
+            var_nr: tgt.unwrap_or(u16::MAX),
+            var_name: tgt.map_or_else(|| "<record>".to_string(), |t| function.name(t).to_string()),
+            source: src.unwrap_or(u16::MAX),
+            verdict: Verdict::Copy,
+            reason: "record deep-copy (OpCopyRecord)",
+            // IMPLICIT — silent: assigning a record into an owning slot/element (`v[i] = e`,
+            // a built element) means the slot owns it. That is the model, not a surprise.
+            class: CopyClass::Implicit,
         });
     }
     (rows, plans)
@@ -458,22 +601,683 @@ pub fn elision_plans(code: &Value, function: &Function, data: &Data) -> Vec<Elid
     analyze_fn(code, function, data, env_tier()).1
 }
 
+// ============================================================================
+// Ownership classification (Owned | Borrowed | Join) — the @PLN85 over-free fact.
+//
+// The over-free class (a borrowed view escapes into an owned position — return,
+// reassign, append — and a free site frees its store while the view is still
+// live) is NOT a per-site bug; it is one missing fact RE-DERIVED at ~16 sites.
+// The fact: for any value that escapes into an owned position, is its store
+//   * Owned     — a freshly minted store the producer owns (free is correct), or
+//   * Borrowed  — a view into a store owned elsewhere (must NOT free here), or
+//   * Join      — owned on one runtime branch, borrowed on the other (the
+//                 `v[i] ?? default` shape) — the decision is runtime-dependent,
+//                 so the escape must MATERIALISE the borrow branch to owned.
+//
+// Crucially the JOIN is the part the flattened return-dep facts
+// (`return_adopts_fresh_store` / `returns_borrowed_view`) LOSE: a `fn pick(t,i)
+// -> M { t[i] ?? m_none() }` flattens to "borrowed view of t", hiding that the
+// `m_none()` arm is owned. So this classifier walks the return EXPRESSION (which
+// recovers the `??`/`if-else` join) rather than reading the collapsed dep.
+//
+// STAGE 1 (this code) is deliberately INERT: it computes the classification and
+// (under `LOFT_MATERIALIZE_DUMP`) prints it, and wires into no codegen. It is
+// tested separately (see the `ownership_*` tests) before any free site reads it.
+// See `doc/claude/plans/85-store-lifetime-retirement/over-free-class-study.md`
+// (§ Three chokepoints) and `NEXT-SESSION-join-ownership-analysis.md`.
+//
+// APPROXIMATIONS (sound for an inert fact; revisited when a free site reads it):
+//   * Var resolution is flow-INSENSITIVE — a var classifies as the join of ALL
+//     its real (non-`= null`-init) defs across the body, not the def that reaches
+//     the point of use. For the over-free shapes (single-def views, owned-then-
+//     reassigned slots) this gives the right answer; a genuinely path-split var
+//     can only over-report Join, never wrongly report Owned.
+//   * A bare PARAMETER used as a value classifies as `Borrowed` (the caller owns
+//     it) — including a retbuf param a callee fills in place, which is really
+//     owned. Conservative: it can lose an Owned, never invent one.
+// ============================================================================
+
+/// The store-ownership of a value at an own-vs-borrow decision site — THE one fact
+/// every such site READS instead of re-deriving (the OWNERSHIP_MODEL north star).
+/// `Borrowed`/`Join` carry the `base`: the caller-visible var whose store the value
+/// aliases — the witness the `Join` runtime guard needs and what distinguishes a
+/// borrowed-of-arg value from an owned one. `base` is `u16::MAX` when unresolvable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Own {
+    /// A freshly minted store the producer owns (an `OpDatabase`/`OpNewRecord`
+    /// buffer, a struct literal, a call whose return adopts a fresh store). Free /
+    /// adopt / set the source-free bit is correct.
+    Owned,
+    /// A view into `base`'s store (a vector-element / field projection, a returned
+    /// parameter, or a value that resolves to one). Never free it; to land in an
+    /// owned slot, deep-copy.
+    Borrowed { base: u16 },
+    /// Runtime-dependent: owned on one branch, borrowed-of-`base` on the other (a
+    /// `??` / `if-else` whose arms split). The decision is per-execution — adopt iff
+    /// the value's store ≠ `base`'s store (the owned branch ran), else materialise.
+    Join { base: u16 },
+}
+
+impl Own {
+    /// The base var a `Borrowed`/`Join` value aliases, or `None` for `Owned`.
+    #[must_use]
+    fn base(self) -> Option<u16> {
+        match self {
+            Own::Owned => None,
+            Own::Borrowed { base } | Own::Join { base } => Some(base),
+        }
+    }
+
+    /// The lattice join of two `??`/`if` arms. Two equal borrows of the SAME base
+    /// stay `Borrowed`; any owned-vs-borrowed split (or differing bases) becomes a
+    /// `Join` witnessed by whichever arm carries a base.
+    #[must_use]
+    fn join(self, other: Own) -> Own {
+        match (self, other) {
+            (Own::Owned, Own::Owned) => Own::Owned,
+            (Own::Borrowed { base: a }, Own::Borrowed { base: b }) if a == b => {
+                Own::Borrowed { base: a }
+            }
+            _ => Own::Join {
+                base: self.base().or_else(|| other.base()).unwrap_or(u16::MAX),
+            },
+        }
+    }
+}
+
+/// One owned-slot reassignment (`v = X` where `v` already held a value): the class
+/// of the value `v` held BEFORE this assignment and of the new RHS. A `prior =
+/// Owned`, `rhs = Join`/`Borrowed` row is the over-free leak shape — the displaced
+/// owned store must be freed before `v` takes the borrow (the `local_source` root).
+#[derive(Clone, Debug)]
+pub struct ReassignSite {
+    pub var: u16,
+    pub var_name: String,
+    pub prior: Own,
+    pub rhs: Own,
+}
+
+/// The kind of free site the over-free fix acts at — the Gap-A sites the value
+/// classification alone does not surface (see `ownership-analysis-gaps.md`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FreeKind {
+    /// `OpCopyRecord(src, _, tp)` with the `0x8000` source-free bit — frees `src`
+    /// after copying it into a vector element (the `out += [src]` append idiom,
+    /// the `elem_accumulate` chokepoint). A `Borrowed`/`Join` `src` is over-freed.
+    AppendSource,
+    /// A return-delivery buffer (a heap PARAMETER the fn delivers its result
+    /// through) reassigned to a `Borrowed`/`Join` value — the buffer then aliases a
+    /// store it does not own, so freeing it over-frees that store (the
+    /// `match_return` chokepoint: `_mv_items_1 = OpGetField(e, …)`).
+    ParamDeliver,
+}
+
+/// A site where the over-free fix must read the carried ownership instead of
+/// blindly freeing. Carries the value's class AND (Gap B) the borrow base to
+/// materialise from when the borrow is a direct projection in this function.
+#[derive(Clone, Debug)]
+pub struct FreeSite {
+    pub kind: FreeKind,
+    /// The freed source var (`AppendSource`) or the buffer param (`ParamDeliver`);
+    /// `u16::MAX` when the source is not a plain var.
+    pub slot: u16,
+    pub slot_name: String,
+    /// Ownership of the value the site frees/delivers.
+    pub class: Own,
+    /// The base var to materialise from when the borrow arm is a DIRECT projection
+    /// in this fn (`None` when the borrow comes from a call — materialise = deep
+    /// copy the whole returned value — or the value is `Owned`).
+    pub base: Option<u16>,
+    pub base_name: Option<String>,
+}
+
+/// The recursive ownership classifier over the post-lowering `Value` IR. Holds the
+/// op-def numbers it keys on and a memoised, recursion-guarded per-function return
+/// classification (so an interprocedural `pick(t,i)` call resolves to `pick`'s
+/// return class, recovering the `??` join the flattened return dep loses).
+struct Ownership<'a> {
+    data: &'a Data,
+    op_database: u32,
+    op_new_record: u32,
+    op_copy_record: u32,
+    projections: HashSet<u32>,
+    ret_memo: HashMap<u32, Own>,
+    visiting: HashSet<u32>,
+}
+
+/// The tail (value) expression of a function body, or `None` for a native/`#rust`
+/// definition (no loft `Block` body — its flattened return dep is then exact).
+fn fn_body_tail(code: &Value) -> Option<&Value> {
+    match code.unspan() {
+        Value::Block(b) => b.operators.last(),
+        _ => None,
+    }
+}
+
+/// A function's def facts: every real definition `v = rhs` (in source order,
+/// skipping `v = null` declaration sentinels) and the vars `OpDatabase` mints a
+/// fresh store into (which are Owned even with no `Set`-def — e.g. a retbuf param
+/// a `materialized_view_return` fills in place).
+#[derive(Default)]
+struct Defs {
+    rhs: HashMap<u16, Vec<Value>>,
+    db_vars: HashSet<u16>,
+}
+
+fn collect_defs(node: &Value, op_database: u32, out: &mut Defs) {
+    match node.unspan() {
+        Value::Set(v, rhs) => {
+            if !matches!(rhs.unspan(), Value::Null) {
+                out.rhs.entry(*v).or_default().push(rhs.unspan().clone());
+            }
+            collect_defs(rhs, op_database, out);
+        }
+        Value::Call(d, args) if *d == op_database => {
+            if let Some(Value::Var(v)) = args.first().map(Value::unspan) {
+                out.db_vars.insert(*v);
+            }
+            for a in args {
+                collect_defs(a, op_database, out);
+            }
+        }
+        other => other.for_each_child(&mut |c| collect_defs(c, op_database, out)),
+    }
+}
+
+/// Collect the over-free candidate sites in `node` (recursively):
+/// - `appends`: the `src` of each `OpCopyRecord(src, _, tp)` whose `tp` carries the
+///   `0x8000` source-free bit (the `out += [src]` element-append free).
+/// - `delivers`: each `(param, rhs)` of a `Set` to a HEAP parameter (a
+///   return-delivery buffer reassigned — the `match_return` aliasing site).
+fn collect_free_candidates(
+    node: &Value,
+    op_copy_record: u32,
+    func: &Function,
+    appends: &mut Vec<Value>,
+    delivers: &mut Vec<(u16, Value)>,
+) {
+    match node.unspan() {
+        Value::Call(d, args) if *d == op_copy_record => {
+            if args.len() >= 3
+                && let Value::Int(tp) = args[2].unspan()
+                && tp & 0x8000 != 0
+            {
+                appends.push(args[0].unspan().clone());
+            }
+            for a in args {
+                collect_free_candidates(a, op_copy_record, func, appends, delivers);
+            }
+        }
+        Value::Set(v, rhs) => {
+            if func.is_argument(*v)
+                && func.tp(*v).heap_dep().is_some()
+                && !matches!(rhs.unspan(), Value::Null)
+            {
+                delivers.push((*v, rhs.unspan().clone()));
+            }
+            collect_free_candidates(rhs, op_copy_record, func, appends, delivers);
+        }
+        other => other.for_each_child(&mut |c| {
+            collect_free_candidates(c, op_copy_record, func, appends, delivers)
+        }),
+    }
+}
+
+impl<'a> Ownership<'a> {
+    fn new(data: &'a Data) -> Self {
+        Ownership {
+            data,
+            op_database: data.def_nr("OpDatabase"),
+            op_new_record: data.def_nr("OpNewRecord"),
+            op_copy_record: data.def_nr("OpCopyRecord"),
+            projections: projection_ops(data),
+            ret_memo: HashMap::new(),
+            visiting: HashSet::new(),
+        }
+    }
+
+    /// The ownership class of the value `d_nr` returns. For a loft-body function it
+    /// classifies the return EXPRESSION (recovering a `??` join); for a native
+    /// definition it falls back to the flattened canonical fact.
+    fn return_ownership(&mut self, d_nr: u32) -> Own {
+        if let Some(&c) = self.ret_memo.get(&d_nr) {
+            return c;
+        }
+        let def = self.data.def(d_nr);
+        let tail = fn_body_tail(&def.code);
+        // No loft body (native op / `#rust` stdlib): no intraprocedural join to
+        // recover — the flattened canonical fact is exact. Its base is the first
+        // VISIBLE param the return dep names (in this callee's own var space).
+        if tail.is_none() || !matches!(def.def_type, DefType::Function) {
+            let attrs = def.attributes();
+            let c = if def.returns_borrowed_view() {
+                let base = def
+                    .returned()
+                    .depend()
+                    .iter()
+                    .find(|&&a| (a as usize) < attrs.len() && !attrs[a as usize].hidden)
+                    .map_or(u16::MAX, |&a| a);
+                Own::Borrowed { base }
+            } else {
+                Own::Owned
+            };
+            self.ret_memo.insert(d_nr, c);
+            return c;
+        }
+        if !self.visiting.insert(d_nr) {
+            // Recursion back-edge: conservatively Borrowed (never assume a self-
+            // referential return is freshly owned), base unresolved. Not memoised —
+            // the enclosing frame computes and caches the real class.
+            return Own::Borrowed { base: u16::MAX };
+        }
+        let mut defs = Defs::default();
+        collect_defs(&def.code, self.op_database, &mut defs);
+        let class = self.classify(tail.unwrap(), &def.variables, &defs);
+        self.visiting.remove(&d_nr);
+        self.ret_memo.insert(d_nr, class);
+        class
+    }
+
+    /// Classify a value expression within `func` (using `defs` to resolve local
+    /// vars to their defining RHS). The recursive core of the analysis.
+    fn classify(&mut self, node: &Value, func: &Function, defs: &Defs) -> Own {
+        match node.unspan() {
+            // A var `OpDatabase` minted a fresh store into is Owned regardless of
+            // any other def (the retbuf a `materialized_view_return` fills).
+            Value::Var(v) if defs.db_vars.contains(v) => Own::Owned,
+            Value::Var(v) => match defs.rhs.get(v) {
+                Some(rhss) if !rhss.is_empty() => rhss
+                    .iter()
+                    .map(|r| self.classify(r, func, defs))
+                    .reduce(Own::join)
+                    .unwrap_or(Own::Owned),
+                // No local def: a parameter (the caller owns it ⇒ Borrowed of itself)
+                // or an uninitialised local (Owned — nothing to mis-free).
+                _ => {
+                    if func.is_argument(*v) {
+                        Own::Borrowed { base: *v }
+                    } else {
+                        Own::Owned
+                    }
+                }
+            },
+            Value::Call(d, args) => {
+                if *d == self.op_database || *d == self.op_new_record {
+                    Own::Owned
+                } else if self.projections.contains(d) {
+                    // A projection (`OpGetField`/`OpGetVector*`/`OpGetDbRef`) is a
+                    // view into its base container (arg 0), rooted at a var.
+                    match self.borrow_base(node, func, defs) {
+                        Some(base) => Own::Borrowed { base },
+                        None => Own::Owned,
+                    }
+                } else {
+                    self.call_ownership(*d, args)
+                }
+            }
+            // `??` / `if-else` lowers to `If`: the join of its two arms.
+            Value::If(_, then, els) => self
+                .classify(then, func, defs)
+                .join(self.classify(els, func, defs)),
+            // A block's value is its tail; passthrough wrappers forward.
+            Value::Block(b) => b
+                .operators
+                .last()
+                .map_or(Own::Owned, |t| self.classify(t, func, defs)),
+            Value::Insert(ops) => ops
+                .last()
+                .map_or(Own::Owned, |t| self.classify(t, func, defs)),
+            Value::Return(v) | Value::BreakWith(_, v) => self.classify(v, func, defs),
+            // Everything else (literals, scalar/void ops, control with no value
+            // payload) is a fresh value or irrelevant to the heap over-free class.
+            _ => Own::Owned,
+        }
+    }
+
+    /// The ownership of a `call(args)` result, with the borrow base translated from
+    /// the callee's parameter space into the CALLER's argument (the interprocedural
+    /// piece): the callee's return borrows one of its visible params; map that param
+    /// position to the caller's argument so the `base` is a var the caller can witness.
+    fn call_ownership(&mut self, callee_d: u32, caller_args: &[Value]) -> Own {
+        let callee_own = self.return_ownership(callee_d);
+        let callee_base = match callee_own {
+            Own::Owned => return Own::Owned,
+            Own::Borrowed { base } | Own::Join { base } => base,
+        };
+        let base = self.caller_arg_base(callee_d, callee_base, caller_args);
+        match callee_own {
+            Own::Join { .. } => Own::Join { base },
+            _ => Own::Borrowed { base },
+        }
+    }
+
+    /// Map the callee's borrowed parameter `callee_base` (a var in the callee's
+    /// space) to the CALLER's argument var at the same VISIBLE-parameter position.
+    /// `u16::MAX` when it is not a visible param or the matching arg is not a var.
+    fn caller_arg_base(&self, callee_d: u32, callee_base: u16, caller_args: &[Value]) -> u16 {
+        let attrs = self.data.def(callee_d).attributes();
+        if callee_base == u16::MAX
+            || (callee_base as usize) >= attrs.len()
+            || attrs[callee_base as usize].hidden
+        {
+            return u16::MAX;
+        }
+        // The caller's args align with the callee's VISIBLE params, in order.
+        let arg_index = attrs[..callee_base as usize]
+            .iter()
+            .filter(|a| !a.hidden)
+            .count();
+        match caller_args.get(arg_index).map(Value::unspan) {
+            Some(Value::Var(cv)) => *cv,
+            _ => u16::MAX,
+        }
+    }
+
+    /// The owned-slot reassignments in function `d_nr`: for each var with more than
+    /// one real def, the class it held before its LAST def and the class of that
+    /// def. The `prior = Owned` rows are the displaced-owned-store leak candidates.
+    fn reassign_sites(&mut self, d_nr: u32) -> Vec<ReassignSite> {
+        let data = self.data;
+        let def = data.def(d_nr);
+        if !matches!(def.def_type, DefType::Function) {
+            return Vec::new();
+        }
+        self.reassign_sites_of(&def.code, &def.variables)
+    }
+
+    /// As [`Self::reassign_sites`] but on a `(code, function)` pair directly — for
+    /// the scope pass, which holds the function being analysed by reference (it is
+    /// not yet written back into `data`).
+    fn reassign_sites_of(&mut self, code: &Value, func: &Function) -> Vec<ReassignSite> {
+        let mut defs = Defs::default();
+        collect_defs(code, self.op_database, &mut defs);
+        // Only HEAP-typed vars can carry the over-free leak: a reassigned scalar
+        // loop counter has no store to displace (the class is record-specific —
+        // "scalar never fires" per the boundary map). Filter them out.
+        let mut vars: Vec<u16> = defs
+            .rhs
+            .keys()
+            .copied()
+            .filter(|v| defs.rhs[v].len() > 1 && func.tp(*v).heap_dep().is_some())
+            .collect();
+        vars.sort_unstable();
+        vars.into_iter()
+            .map(|v| {
+                let rhss = defs.rhs[&v].clone();
+                let n = rhss.len();
+                let prior = rhss[..n - 1]
+                    .iter()
+                    .map(|r| self.classify(r, func, &defs))
+                    .reduce(Own::join)
+                    .unwrap_or(Own::Owned);
+                let rhs = self.classify(&rhss[n - 1], func, &defs);
+                ReassignSite {
+                    var: v,
+                    var_name: func.name(v).to_string(),
+                    prior,
+                    rhs,
+                }
+            })
+            .collect()
+    }
+
+    /// The base var a `Borrowed`/`Join` value's borrow arm views, when that arm is
+    /// a DIRECT projection in this function — the store the Stage-3 materialise
+    /// copies FROM (Gap B). `None` when the borrow is produced by a call (the
+    /// materialise deep-copies the whole returned value) or the value is `Owned`.
+    fn borrow_base(&self, node: &Value, func: &Function, defs: &Defs) -> Option<u16> {
+        match node.unspan() {
+            Value::Call(d, args) if self.projections.contains(d) => {
+                match args.first().map(Value::unspan) {
+                    Some(Value::Var(b)) => Some(*b),
+                    Some(inner) => self.borrow_base(inner, func, defs), // nested `o.inner.rows`
+                    None => None,
+                }
+            }
+            Value::Var(v) => {
+                if let Some(rhss) = defs.rhs.get(v) {
+                    rhss.iter()
+                        .rev()
+                        .find_map(|r| self.borrow_base(r, func, defs))
+                } else if func.is_argument(*v) && func.tp(*v).heap_dep().is_some() {
+                    Some(*v) // a borrowed heap param IS its own base (the caller's arg)
+                } else {
+                    None
+                }
+            }
+            Value::If(_, then, els) => self
+                .borrow_base(then, func, defs)
+                .or_else(|| self.borrow_base(els, func, defs)),
+            Value::Block(b) => b
+                .operators
+                .last()
+                .and_then(|t| self.borrow_base(t, func, defs)),
+            Value::Return(v) | Value::BreakWith(_, v) => self.borrow_base(v, func, defs),
+            _ => None,
+        }
+    }
+
+    /// The over-free free SITES in function `d_nr` (Gap A): each append element
+    /// source-free (`AppendSource`) with its source's class + base, and each
+    /// return-buffer reassign to a `Borrowed`/`Join` value (`ParamDeliver`). These
+    /// are the sites the value classification alone does not surface — the Stage-3
+    /// fix reads the class here and frees / materialises accordingly.
+    fn free_sites(&mut self, d_nr: u32) -> Vec<FreeSite> {
+        let def = self.data.def(d_nr);
+        if !matches!(def.def_type, DefType::Function) {
+            return Vec::new();
+        }
+        let func = &def.variables;
+        let mut defs = Defs::default();
+        collect_defs(&def.code, self.op_database, &mut defs);
+        let mut appends = Vec::new();
+        let mut delivers = Vec::new();
+        collect_free_candidates(
+            &def.code,
+            self.op_copy_record,
+            func,
+            &mut appends,
+            &mut delivers,
+        );
+
+        let name = |v: u16| (v != u16::MAX).then(|| func.name(v).to_string());
+        let mut sites = Vec::new();
+        for src in appends {
+            let class = self.classify(&src, func, &defs);
+            // Only a Borrowed/Join source is over-freed; an Owned source-free is
+            // correct (and load-bearing for the owned branch of a Join elsewhere).
+            if !matches!(class, Own::Borrowed { .. } | Own::Join { .. }) {
+                continue;
+            }
+            let base = class.base().filter(|&b| b != u16::MAX);
+            let slot = match src.unspan() {
+                Value::Var(v) => *v,
+                _ => u16::MAX,
+            };
+            sites.push(FreeSite {
+                kind: FreeKind::AppendSource,
+                slot,
+                slot_name: name(slot).unwrap_or_default(),
+                class,
+                base,
+                base_name: base.and_then(name),
+            });
+        }
+        for (p, rhs) in delivers {
+            let class = self.classify(&rhs, func, &defs);
+            let base = class.base().filter(|&b| b != u16::MAX);
+            // A retbuf aliases a store it does not own ONLY when set to a DIRECT
+            // borrow — a raw projection with a known base (`_mv_items_1 =
+            // OpGetField(e,…)`). A call delivering into the retbuf MATERIALISES a
+            // copy (the retbuf is then Owned — the clean `best = rows(b)` shape),
+            // so `base.is_none()` cases are excluded; this also guarantees a usable
+            // materialise base for every reported ParamDeliver.
+            if matches!(class, Own::Borrowed { .. } | Own::Join { .. }) && base.is_some() {
+                sites.push(FreeSite {
+                    kind: FreeKind::ParamDeliver,
+                    slot: p,
+                    slot_name: func.name(p).to_string(),
+                    class,
+                    base,
+                    base_name: base.and_then(name),
+                });
+            }
+        }
+        sites
+    }
+}
+
+/// Public, test-facing entry: the ownership class of function `d_nr`'s return.
+#[must_use]
+pub fn return_ownership(data: &Data, d_nr: u32) -> Own {
+    Ownership::new(data).return_ownership(d_nr)
+}
+
+/// Public, test-facing entry: the owned-slot reassignment sites of function `d_nr`.
+#[must_use]
+pub fn reassign_sites(data: &Data, d_nr: u32) -> Vec<ReassignSite> {
+    Ownership::new(data).reassign_sites(d_nr)
+}
+
+/// The `local_source` over-free fix's input: the heap slots that hold an OWNED
+/// store displaced by a later `Borrowed`/`Join` reassignment (`prior=Owned`). The
+/// scope pass strips these slots' deps so the owned path deep-copies + frees them
+/// (the displaced store would otherwise be orphaned — the `chosen = dflt(); … chosen
+/// = pool[wj]` leak). Operates on the pre-scope `(code, function)` directly.
+#[must_use]
+pub fn displaced_owned_slots(code: &Value, function: &Function, data: &Data) -> HashSet<u16> {
+    Ownership::new(data)
+        .reassign_sites_of(code, function)
+        .into_iter()
+        .filter(|s| {
+            matches!(s.prior, Own::Owned)
+                && matches!(s.rhs, Own::Borrowed { .. } | Own::Join { .. })
+        })
+        .map(|s| s.var)
+        .collect()
+}
+
+/// Public, test-facing entry: the over-free free SITES of function `d_nr` (the
+/// append element source-frees + return-buffer-aliasing deliveries, with class +
+/// borrow base) — the Gap-A/B context the Stage-3 fix reads.
+#[must_use]
+pub fn free_sites(data: &Data, d_nr: u32) -> Vec<FreeSite> {
+    Ownership::new(data).free_sites(d_nr)
+}
+
+/// THE own-vs-borrow oracle: the ownership of `value` as produced in function
+/// `d_nr`, with the borrow `base` resolved (interprocedurally for a call — the
+/// callee's borrowed param mapped to the caller's argument). This is the ONE fact
+/// every own-vs-borrow chokepoint READS instead of re-deriving — the unification
+/// entry point (the OWNERSHIP_MODEL north star).
+#[must_use]
+pub fn ownership_of(data: &Data, d_nr: u32, value: &Value) -> Own {
+    let def = data.def(d_nr);
+    let mut own = Ownership::new(data);
+    let mut defs = Defs::default();
+    collect_defs(&def.code, own.op_database, &mut defs);
+    own.classify(value, &def.variables, &defs)
+}
+
+/// The bare verdict name (no base) — for the free-site dump's `class=` field.
+fn own_kind(own: Own) -> &'static str {
+    match own {
+        Own::Owned => "Owned",
+        Own::Borrowed { .. } => "Borrowed",
+        Own::Join { .. } => "Join",
+    }
+}
+
+/// A readable `Owned` / `Borrowed(base=<name>)` / `Join(base=<name>)`, resolving the
+/// base var to its name in `func`'s space (`?` when unresolved).
+fn fmt_own(own: Own, func: &Function) -> String {
+    let base = |b: u16| {
+        if b == u16::MAX {
+            "?".to_string()
+        } else {
+            func.name(b).to_string()
+        }
+    };
+    match own {
+        Own::Owned => "Owned".to_string(),
+        Own::Borrowed { base: b } => format!("Borrowed(base={})", base(b)),
+        Own::Join { base: b } => format!("Join(base={})", base(b)),
+    }
+}
+
 /// Print every function's verdicts when `LOFT_MATERIALIZE_DUMP` is set. Called from
 /// `scopes::check`; a no-op otherwise. Behaviour-neutral — diagnostics only.
 pub fn dump_all(data: &Data) {
     if std::env::var_os("LOFT_MATERIALIZE_DUMP").is_none() {
         return;
     }
+    let mut own = Ownership::new(data);
+    // @PLN90 — the tally: `avoidable` is the north-star elimination worklist; `implicit`
+    // is model-inherent ownership (silent, not a copy-to-fix); `forced` is informational.
+    let (mut avoidable_copies, mut implicit_copies, mut forced_copies) = (0u32, 0u32, 0u32);
     for d_nr in 0..data.definitions() {
         let def = data.def(d_nr);
         if !matches!(def.def_type, DefType::Function) {
             continue;
         }
         for r in analyze_fn(&def.code, &def.variables, data, env_tier()).0 {
+            let bucket = match r.class {
+                CopyClass::Eliminated => "eliminated",
+                CopyClass::Avoidable => {
+                    avoidable_copies += 1;
+                    "AVOIDABLE"
+                }
+                CopyClass::Implicit => {
+                    implicit_copies += 1;
+                    "implicit"
+                }
+                CopyClass::Forced => {
+                    forced_copies += 1;
+                    "forced"
+                }
+            };
             eprintln!(
-                "MAT fn={} v={}({}) src={} verdict={:?} [{}]",
-                def.name, r.var_nr, r.var_name, r.source, r.verdict, r.reason
+                "MAT fn={} v={}({}) src={} verdict={:?} bucket={} [{}]",
+                def.name, r.var_nr, r.var_name, r.source, r.verdict, bucket, r.reason
+            );
+        }
+        // The ownership fact (inert): the return class + the owned-slot
+        // reassignments, each with its borrow base. The over-free leak shape is a
+        // `prior=Owned rhs=Join(...)` row.
+        let fvars = &def.variables;
+        eprintln!(
+            "OWN fn={} return={}",
+            def.name,
+            fmt_own(own.return_ownership(d_nr), fvars)
+        );
+        for s in own.reassign_sites(d_nr) {
+            eprintln!(
+                "OWN fn={} reassign v={}({}) prior={} rhs={}",
+                def.name,
+                s.var,
+                s.var_name,
+                fmt_own(s.prior, fvars),
+                fmt_own(s.rhs, fvars)
+            );
+        }
+        // The free SITES (Gap A) + borrow base (Gap B), now interprocedurally
+        // resolved (a call source's base is the CALLER's argument), still inert.
+        for s in own.free_sites(d_nr) {
+            eprintln!(
+                "OWN fn={} free kind={:?} slot={}({}) class={} base={}",
+                def.name,
+                s.kind,
+                s.slot,
+                s.slot_name,
+                own_kind(s.class),
+                s.base_name.as_deref().unwrap_or("-")
             );
         }
     }
+    // @PLN90 — the worklist headline: avoidable = the north-star target (teach the analysis
+    // to borrow these so they auto-eliminate); implicit = model-inherent ownership (silent);
+    // forced = must own by circumstance (informational).
+    eprintln!(
+        "MAT-WORKLIST avoidable_copies={avoidable_copies} implicit_copies={implicit_copies} forced_copies={forced_copies}"
+    );
 }

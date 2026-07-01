@@ -1824,6 +1824,69 @@ impl Parser {
         }
     }
 
+    /// @PLN25 slice (c) — the `(N-Store)` teeth at a STORE site (typed assignment, field
+    /// construction, an index, a return). An un-discharged nullable `τ?` cannot be committed
+    /// to a non-nullable target — discharge it first with `?? <default>` or `match` (both
+    /// yield the non-null base). UNLIKE `convert`, this runs ONLY at store sites, so null-CHECK
+    /// comparisons (`x == null`) stay legal. Gated on `LOFT_PLN25_DN3`; returns `true` (and
+    /// emits the diagnostic) on a violation. A no-op (returns `false`) off / first pass.
+    fn n_store_violation(&mut self, value_tp: &Type, target_tp: &Type, what: &str) -> bool {
+        if self.first_pass {
+            return false;
+        }
+        // DN3: an un-discharged nullable `τ?` (Optional value) into a non-null target.
+        if crate::keys::pln25_dn3_enabled()
+            && let Type::Optional(inner) = value_tp
+            && !matches!(
+                target_tp,
+                Type::Optional(_) | Type::Void | Type::Never | Type::Null
+            )
+        {
+            let nm = inner.name(&self.data);
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "a nullable `{nm}?` cannot be stored into {what} of the non-null type `{}` — discharge it first with `?? <default>` or `match`",
+                target_tp.name(&self.data)
+            );
+            return true;
+        }
+        // DN1 (the default flip): under DN1 a plain scalar is NON-null, so a bare `null` cannot be
+        // stored into a non-Optional scalar target — declare the target `τ?` to allow null.
+        // (Heap types — reference/vector/enum — stay nullable; only the SCALAR default flips.)
+        // EXEMPT the trusted stdlib (`STD_SOURCE`): its legacy null-propagation (`min`/`max`'s
+        // `if !a || !b { return null }`) is DEAD under DN1 (its scalar params are non-null), so the
+        // bare `null` never actually flows. Migrate + un-exempt the stdlib when DN1 lands default.
+        if crate::keys::pln25_dn1_enabled()
+            && self.data.source != crate::data::STD_SOURCE
+            && matches!(value_tp, Type::Null)
+            && Self::is_non_null_scalar(target_tp)
+        {
+            let nm = target_tp.name(&self.data);
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "`null` cannot be stored into {what} of the non-null scalar type `{nm}` — declare it `{nm}?` to allow null"
+            );
+            return true;
+        }
+        false
+    }
+
+    /// @PLN25 DN1 — the scalar types whose default flips to NON-null (a bare `null` needs `τ?`).
+    /// Heap-nullable types (reference / vector / enum / keyed) are NOT here — they stay nullable.
+    fn is_non_null_scalar(tp: &Type) -> bool {
+        matches!(
+            tp,
+            Type::Integer(_)
+                | Type::Text(_)
+                | Type::Boolean
+                | Type::Float
+                | Type::Single
+                | Type::Character
+        )
+    }
+
     fn convert(&mut self, code: &mut Value, is_type: &Type, should: &Type) -> bool {
         // @PLAN48 P2: implicitly narrowing a loft `integer` to a smaller explicit
         // width (e.g. `integer` → `i32`) loses data and must be an explicit `as`.
@@ -1858,6 +1921,30 @@ impl Parser {
         }
         if let Type::Rewritten(inner) = should {
             return self.convert(code, is_type, inner);
+        }
+        // @PLN25 slice (b): `Optional(τ)` is the nullable former. Behaviour-preserving until
+        // DN1/DN3 give it teeth — peel and recurse on the base. A nullable TARGET also accepts
+        // a bare `null`; a nullable SOURCE still implicitly unwraps to its base (DN2 removes
+        // that unwrap later). Both arms converge: `Optional==Optional` is caught by `is_equal`
+        // above, and a differing pair peels each side once.
+        if let Type::Optional(inner) = should {
+            if matches!(is_type, Type::Null) {
+                // null into a nullable target: run the base's null→typed-null coercion so
+                // `code` becomes the base sentinel op (e.g. `OpConvIntFromNull`, not a bare
+                // `null` that natively renders `()`), but a nullable target ALWAYS accepts
+                // null regardless of the base's own nullability.
+                self.convert(code, is_type, inner);
+                return true;
+            }
+            return self.convert(code, is_type, inner);
+        }
+        if let Type::Optional(inner) = is_type {
+            // @PLN25 slice (b): the behaviour-preserving implicit unwrap. The `(N-Store)` teeth
+            // (DN3) do NOT belong here — `convert` also services COMPARISONS (`x == null`), so
+            // rejecting an Optional source here wrongly flags the very null-CHECKS that are how
+            // you test nullability. (N-Store) must live at the STORE / decl / index sites (the
+            // design's per-site checks), exempting null-compare. See RESUME.md § Step 3 slice c.
+            return self.convert(code, inner, should);
         }
         // Plan-06 phase 4d: tuple-to-tuple convert is element-wise.
         // Without this, a value with a `Rewritten(Reference)` element
@@ -3035,7 +3122,7 @@ impl Parser {
                     && data.def(new_d).name() == "OpConvBoolFromRef"
                     && new_args.len() == 1
                 {
-                    let conv_name = match concrete {
+                    let conv_name = match concrete.base() {
                         Type::Integer(_) => Some("OpConvBoolFromInt"),
                         Type::Text(_) => Some("OpConvBoolFromText"),
                         Type::Float => Some("OpConvBoolFromFloat"),
@@ -3681,6 +3768,9 @@ impl Parser {
 
     /// I9-vec: compute element store size from the Type alone (no database needed).
     fn type_element_size(tp: &Type, data: &Data) -> i32 {
+        // @PLN25: `Optional(τ)` stores at its base's width (sentinel storage); peel so a
+        // nullable narrow-int / scalar element gets its real stride, not the `_ => 12` DbRef.
+        let tp = tp.base();
         // Post-2c: honor size(N) on integer aliases.
         if matches!(tp, Type::Integer(_)) {
             let alias_nr = data.type_elm(tp);
@@ -3724,7 +3814,10 @@ impl Parser {
     /// no wrapper — the `DbRef` IS the value.
     fn wrap_vector_get_val(code: Value, tp: &Type, data: &Data) -> Value {
         let p = Value::Int(0);
-        let op_name = match tp {
+        // @PLN25: peel `Optional(τ)` — a nullable scalar element needs the SAME value-
+        // extraction op as its base; without this it fell to `_ => return code` (no OpGet)
+        // and the raw slot was read as a DbRef.
+        let op_name = match tp.base() {
             Type::Integer(_) => "OpGetInt",
             Type::Float => "OpGetFloat",
             Type::Single => "OpGetSingle",
@@ -3989,6 +4082,9 @@ impl Parser {
     fn get_val(&mut self, tp: &Type, nullable: bool, pos: u32, code: Value, alias: u32) -> Value {
         let p = Value::Int(pos as i32);
         match tp {
+            // @PLN25 slice (b): an `Optional(τ)` field shares its base's sentinel storage —
+            // read it exactly as `τ` (the marker is compile-time only).
+            Type::Optional(inner) => self.get_val(inner, nullable, pos, code, alias),
             Type::Integer(spec) => {
                 // Narrow-integer width selection:
                 // * `alias` is set → this is a struct-field read whose
@@ -4297,7 +4393,10 @@ impl Parser {
         value: Value,
     ) -> Vec<Value> {
         let pos_v = Value::Int(i32::from(pos));
-        let single = match elem_tp {
+        // @PLN25: peel `Optional(τ)` — a nullable tuple element stores via its base's
+        // OpSet* (sentinel storage); without this it fell to `_` and was REJECTED with
+        // "Tuple struct field cannot contain element of type integer?".
+        let single = match elem_tp.base() {
             Type::Integer(_) => self.cl("OpSetInt", &[ref_code.clone(), pos_v, value]),
             Type::Function(_, _, _) => {
                 // P196: storage holds the 4-byte i32 d_nr only.  Reduce
@@ -4441,6 +4540,10 @@ impl Parser {
         emit_check: bool,
     ) -> Value {
         let tp = self.data.attr_type(d_nr, f_nr);
+        // @PLN25 slice (b): an `Optional(τ)` field writes exactly like its base — same
+        // sentinel storage, same set-op. Peel the marker here so the whole emit path is
+        // transparent to it (nullability is read separately via `attr_nullable`).
+        let tp = tp.base().clone();
         let nm = self.data.attr_name(d_nr, f_nr);
         // #318 sink R2: a closure-carrying struct value cannot be
         // copied into another struct's field — the copy's closure
@@ -7625,7 +7728,8 @@ impl Parser {
 
     // <function> ::= 'fn' <identifier> '(' <attributes> ] [ '->' <type> ] (';' <rust> | <code>)
     pub fn null(&mut self, tp: &Type) -> Value {
-        match tp {
+        // @PLN25 slice (b): an `Optional(τ)`'s null is `τ`'s typed null (same sentinel) — peel.
+        match tp.base() {
             Type::Integer(_) => self.cl("OpConvIntFromNull", &[]),
             // `character` is a 4-byte (char-domain) type: its null is `'\0'`
             // (`OpConvCharacterFromNull`), NOT the i64 integer sentinel.  Folding

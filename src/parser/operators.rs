@@ -1309,6 +1309,10 @@ impl Parser {
             Self::rewrite_outer_arith_to_nullable(code, &self.data);
         }
 
+        // @PLN25 slice (b): a `??` discharges null, so its RESULT is the non-null base. Peel
+        // any `Optional` from the LHS type here so the null-check builder + the result type
+        // see the base (e.g. `Optional<text>` routes exactly as plain `text` did pre-marker).
+        *ctp = ctp.base().clone();
         let lhs_type = ctp.clone();
         // @PLN17: boolean now has a real null sentinel (255), so `??` works — the
         // null-check for a boolean LHS is `lhs == null` (raw `== 255`), NOT the
@@ -1332,6 +1336,9 @@ impl Parser {
         if !self.lexer.peek_token(";") && !self.lexer.peek_token("}") {
             let ret_pos = self.lexer.peek_pos().clone();
             let t = self.expression(&mut ret_val);
+            // @PLN25 (N-Store): `lhs ?? return ret` returns `ret` into the caller's
+            // non-null return slot — an un-discharged nullable `ret` is a violation.
+            self.n_store_violation(&t, &r_type, "the return value");
             if t != Type::Null && !self.convert(&mut ret_val, &t, &r_type) && !self.first_pass {
                 self.validate_convert("return", &t, &r_type, &ret_pos);
             }
@@ -1778,9 +1785,15 @@ impl Parser {
             // everything (including itself), so `f == null` can't go through OpEq —
             // it would always be false.  Test validity instead: convert(float, bool)
             // is `!is_nan` (= non-null), so `== null` is its negation.
+            // @PLN25: peel `Optional(τ)` — a `float?`/`single?` shares its base's NaN-sentinel
+            // null. Without the peel `float? == null` skipped this validity test and fell to
+            // OpEqFloat on the NaN sentinel (NaN != everything) → ALWAYS false (a null read as
+            // "present"). `Type::Null` itself is never wrapped, so the Null sides stay bare.
             let float_null = (operator == "==" || operator == "!=")
-                && ((matches!(*ctp, Type::Float | Type::Single) && second_type == Type::Null)
-                    || (*ctp == Type::Null && matches!(second_type, Type::Float | Type::Single)));
+                && ((matches!(ctp.base(), Type::Float | Type::Single)
+                    && second_type == Type::Null)
+                    || (*ctp == Type::Null
+                        && matches!(second_type.base(), Type::Float | Type::Single)));
             // A nullable enum variable holds the reference null sentinel
             // (`store_nr==u16::MAX`), exactly like a struct reference.  Its `== null`
             // must test that sentinel via OpEqRef — the default path reads the

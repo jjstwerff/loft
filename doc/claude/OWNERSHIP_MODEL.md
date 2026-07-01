@@ -176,6 +176,31 @@ Every one is a missing or incomplete ownership fact. The class closes when the f
 is complete; it cannot be closed by adding more codegen conditions (that is what the
 9 reverted @PLN85 attempts proved).
 
+### The unification — `ownership_of` as the ONE carried fact (@PLN85, `LOFT_JOIN_OWN`)
+
+`src/use_analysis.rs` now computes the ownership oracle once — `ownership_of(data, d_nr,
+value) -> Own { Owned | Borrowed{base} | Join{base} }`, carrying the interprocedural
+borrow `base` (the witness a runtime guard needs) — and the over-free chokepoints READ
+it instead of re-deriving. Each site is collapsed behind `LOFT_JOIN_OWN` (off-default →
+suite byte-identical) and validated on BOTH backends:
+
+- **`local_source`** — ✅ both backends (scope-pass dep-strip of the displaced-owned slot).
+- **`elem_accumulate`** — ✅ both backends (interp `OpBindOrCopy` + native inline guard, both
+  reading the oracle's `base` as the runtime witness).
+- **`match_return`** — ⏳ NATIVE done; INTERP pending. `ref_return` materialises a borrowed-view
+  return candidate (guarded by `skip_free(v)` + `base ∈ deps`, so only match-field bindings, not
+  stdlib `result` buffers). The interp gap is now PROBE-PINNED to the parser layer: the proven
+  `copy_borrow_tail_into_retbuf` path survives churn, so the defect is that the hand-rolled append
+  OMITS that path's return **registration** (`returned = Vector(elm, Deps::attrs([buf_attr]))` +
+  the typed `borrow_tail_copy` block). Fix = route through / replicate the proven path, not a bare
+  `OpAppendVector`. (Not the tp, not interp execution — both ruled out by probe.)
+
+**The methodology that made this work** (vs the 9 thrash attempts): build the fact INERT and
+validate it against a ground-truth corpus FIRST (the accumulated per-fix regression tests ARE the
+spec), then collapse one chokepoint per commit reading that fact — and when a proven sibling path
+already exists for a delivery, MATCH it rather than re-derive it (diverging from the proven path is
+itself the defect). See `plans/85-store-lifetime-retirement/ownership-analysis-gaps.md`.
+
 ## Rust as the reference model
 
 Rust is this beacon already realized — which is why it is the design reference:

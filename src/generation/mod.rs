@@ -641,7 +641,8 @@ pub(crate) fn def_returns_owned_text(def: &crate::data::Definition) -> bool {
     // decided solely by the presence of the work-buffer attribute.  emit.rs only
     // ever runs this on Block bodies, so a non-Block (FFI-direct / `#rust` / Null)
     // body is correctly excluded here and handled by the other owned-String signals.
-    matches!(def.returned(), Type::Text(_))
+    // @PLN25 slice (b): peel `Optional` — a `text?` return uses the same owned-text ABI.
+    matches!(def.returned().base(), Type::Text(_))
         && matches!(def.code(), Value::Block(_))
         && !def.name().starts_with("Op")
         && !def
@@ -663,7 +664,8 @@ pub(crate) fn def_returns_owned_text(def: &crate::data::Definition) -> bool {
 ///   `native()` set, main's C71 consumer build) returns `Str`, not `String`;
 /// - a bufferless ("nwb") user text fn (`def_returns_owned_text`).
 pub(crate) fn returns_owned_string(def: &crate::data::Definition) -> bool {
-    matches!(def.returned(), Type::Text(_))
+    // @PLN25 slice (b): peel `Optional` — a `text?` return uses the same owned-String ABI.
+    matches!(def.returned().base(), Type::Text(_))
         && (native_returns_owned_string(def.name())
             || (*def.code() == Value::Null && !def.native().is_empty())
             || def_returns_owned_text(def))
@@ -757,7 +759,8 @@ pub fn rust_type(tp: &Type, context: &Context) -> String {
             let parts: Vec<String> = elems.iter().map(|e| rust_type(e, elem_context)).collect();
             return format!("({})", parts.join(", "));
         }
-        Type::Rewritten(inner) => return rust_type(inner, context),
+        // @PLN25 slice (b): `Optional(τ)` shares its base's Rust type (sentinel storage).
+        Type::Rewritten(inner) | Type::Optional(inner) => return rust_type(inner, context),
         _ => panic!("Incorrect type {tp:?}"),
     }
     .to_string()

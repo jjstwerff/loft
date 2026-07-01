@@ -13,9 +13,13 @@ use std::process::Command;
 
 /// Run the loft binary on a source string with the verdict dump on; return stderr.
 fn dump(src: &str) -> String {
+    use std::hash::{Hash, Hasher};
     let dir = std::env::temp_dir().join("loft_use_analysis");
     std::fs::create_dir_all(&dir).expect("probe dir");
-    let path = dir.join("probe.loft");
+    // Key the file on the source so parallel tests don't clobber each other's probe.
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    src.hash(&mut h);
+    let path = dir.join(format!("probe_{:016x}.loft", h.finish()));
     let mut f = std::fs::File::create(&path).expect("write probe");
     f.write_all(src.as_bytes()).expect("write probe body");
     let out = Command::new(env!("CARGO_BIN_EXE_loft"))
@@ -38,6 +42,65 @@ fn assert_verdict(stderr: &str, func: &str, want_verdict: &str) {
         line.contains(&format!("verdict={want_verdict}")),
         "{func}: expected {want_verdict}, got: {line}"
     );
+}
+
+/// Assert the Stage-1 ownership classification of a function's RETURN value
+/// (`OWN fn=n_<func> return=<Owned|Borrowed|Join>`).
+fn assert_own_return(stderr: &str, func: &str, want: &str) {
+    let needle = format!("OWN fn=n_{func} return=");
+    let line = stderr
+        .lines()
+        .find(|l| l.contains(&needle))
+        .unwrap_or_else(|| panic!("no OWN return line for {func}; dump:\n{stderr}"));
+    assert!(
+        line.contains(&format!("return={want}")),
+        "{func} return: expected {want}, got: {line}"
+    );
+}
+
+/// Assert an owned-slot REASSIGNMENT of `var` in `func` carries the expected
+/// prior/rhs classes (`OWN fn=n_<func> reassign v=…(var) prior=… rhs=…`).
+fn assert_reassign(stderr: &str, func: &str, var: &str, prior: &str, rhs: &str) {
+    let head = format!("OWN fn=n_{func} reassign ");
+    let line = stderr
+        .lines()
+        .find(|l| l.starts_with(&head) && l.contains(&format!("({var})")))
+        .unwrap_or_else(|| panic!("no OWN reassign line for {func}/{var}; dump:\n{stderr}"));
+    assert!(
+        line.contains(&format!("prior={prior} rhs={rhs}")),
+        "{func}/{var}: expected prior={prior} rhs={rhs}, got: {line}"
+    );
+}
+
+/// Assert NO owned-slot reassignment is reported for `func` (the WORKING
+/// discriminator — a single-def slot carries no displaced owned store).
+fn assert_no_reassign(stderr: &str, func: &str) {
+    let head = format!("OWN fn=n_{func} reassign ");
+    if let Some(line) = stderr.lines().find(|l| l.starts_with(&head)) {
+        panic!("{func}: expected no reassign site, got: {line}");
+    }
+}
+
+/// Assert a Stage-1.5 free SITE of the given kind in `func` carries the expected
+/// class and borrow base (`OWN fn=n_<func> free kind=<kind> … class=<class> base=<base>`).
+fn assert_free_site(stderr: &str, func: &str, kind: &str, class: &str, base: &str) {
+    let head = format!("OWN fn=n_{func} free kind={kind} ");
+    let line = stderr
+        .lines()
+        .find(|l| l.starts_with(&head))
+        .unwrap_or_else(|| panic!("no OWN free {kind} line for {func}; dump:\n{stderr}"));
+    assert!(
+        line.contains(&format!("class={class}")) && line.ends_with(&format!("base={base}")),
+        "{func} free {kind}: expected class={class} base={base}, got: {line}"
+    );
+}
+
+/// Assert NO free site is reported for `func` (a clean shape has no over-free site).
+fn assert_no_free_site(stderr: &str, func: &str) {
+    let head = format!("OWN fn=n_{func} free ");
+    if let Some(line) = stderr.lines().find(|l| l.starts_with(&head)) {
+        panic!("{func}: expected no free site, got: {line}");
+    }
 }
 
 const SRC: &str = r#"
@@ -211,4 +274,568 @@ fn tier1_runtime_correct_both_backends() {
             "{backend} tier1 matrix leaked a store:\n{stderr}"
         );
     }
+}
+
+// ── @PLN85 Stage 1: the Owned|Borrowed|Join ownership classification ───────────
+// The over-free class needs ONE carried fact — for a value escaping into an owned
+// position (return / reassign / append), is its store Owned, Borrowed, or a runtime
+// Join? This pins that classification (still INERT — printed under the same dump,
+// wired into no codegen) on the three live over-free shapes + the FIXED field-view
+// family. Design + boundary map:
+// doc/claude/plans/85-store-lifetime-retirement/{over-free-class-study,NEXT-SESSION-join-ownership-analysis}.md
+
+const OWN_SRC: &str = r#"
+struct M { hp: integer not null, name: text }
+fn dflt() -> M { M{hp:0, name:""} }
+
+// elem_accumulate ROOT: `t[i] ?? dflt()` is owned on the dflt() arm, borrowed on
+// the t[i] arm — a runtime JOIN the flattened return dep (M["t"]) hides. The same
+// `pick` underlies BOTH the source-free (UAF) and the all-owned (CLEAN) repros:
+// they are statically IDENTICAL — Join — and the fix (materialise the borrow arm
+// to owned) makes both correct regardless of which branch runs.
+fn pick(t: vector<M>, i: integer) -> M { t[i] ?? dflt() }
+
+// elem_accumulate FREE SITE: `out += [pick(t,i)]` lowers to an OpCopyRecord with
+// the 0x8000 source-free bit on pick's Join return — the AppendSource site.
+fn collect(t: vector<M>) -> vector<M> { out: vector<M> = []; for i in 0..len(t) { out += [pick(t, i)]; } out }
+
+// local_source ROOT (#462 leak): `chosen` first OWNS dflt(), then is reassigned to
+// a JOIN — the displaced owned store leaks. The over-free shape = prior Owned, rhs
+// Join. The return itself is Owned (a materialized_view_return mints a fresh store).
+fn pick_cond(t: vector<M>, salt: integer) -> M {
+  pool: vector<M> = []; for p in 0..len(t) { pool += [t[p] ?? dflt()]; }
+  chosen = dflt();
+  np = len(pool);
+  for wj in 0..np { if salt % np == wj { chosen = pool[wj] ?? dflt(); } }
+  chosen
+}
+// WORKING discriminator: a single-def `chosen` displaces no owned store → no
+// reassign site → no leak.
+fn pick_uncond(t: vector<M>, idx: integer) -> M {
+  pool: vector<M> = []; for p in 0..len(t) { pool += [t[p] ?? dflt()]; }
+  chosen = pool[idx] ?? dflt();
+  chosen
+}
+
+// match_return ROOT: a match arm delivers a borrowed enum-field view; the other
+// arm an empty owned vector → the return is a JOIN.
+struct E { hp: integer not null, name: text }
+enum Cell { Empty, Filled { items: vector<E> } }
+fn deliver(e: Cell) -> vector<E> { match e { Filled { items } => { items }, _ => { [] } } }
+
+// field-view family (all FIXED / clean on the boundary map): a struct-field view
+// and a whole-arg view are plain BORROWS of a parameter — safe to return.
+struct Box { items: vector<integer> }
+fn getf(b: Box) -> vector<integer> { b.items }
+fn whole(v: vector<integer>) -> vector<integer> { v }
+// a nested-field view roots its base through the projection chain to `o`.
+struct Inner { rows: vector<E> }
+struct Outer { inner: Inner }
+fn nested(o: Outer) -> vector<E> { o.inner.rows }
+
+fn main() {
+  t: vector<M> = []; for k in 0..3 { t += [M{hp:k, name:"m"}]; }
+  a = pick(t, 0); b = pick_cond(t, 1); c = pick_uncond(t, 0); cc = collect(t);
+  cell = Filled { items: [] }; d = deliver(cell);
+  bx = Box{ items: [1, 2, 3] }; r = getf(bx); w = whole([4, 5]);
+  oo = Outer{ inner: Inner{ rows: [] } }; nn = nested(oo);
+  print("{a.hp} {b.hp} {c.hp} {len(cc)} {len(d)} {len(r)} {len(w)} {len(nn)}\n");
+}
+"#;
+
+/// The Stage-1 ownership fact, pinned per over-free shape. This is the VERDICT the
+/// Stage-3 free sites will read; the test gates the analysis in isolation (nothing
+/// emits off it yet), so it can be iterated before any codegen change.
+#[test]
+fn ownership_classifies_the_over_free_shapes() {
+    let stderr = dump(OWN_SRC);
+
+    // dflt mints a fresh struct -> Owned (the owned arm of every `??` join below).
+    assert_own_return(&stderr, "dflt", "Owned");
+
+    // elem_accumulate: `t[i] ?? dflt()` is a runtime Join. (The CLEAN/all-owned
+    // repro uses this SAME `pick` — statically Join too; the static fact cannot
+    // and need not distinguish the runtime branch, and Join-awareness covers both.)
+    assert_own_return(&stderr, "pick", "Join");
+
+    // local_source: the displaced-owned-store leak is `chosen` reassigned from an
+    // OWNED init to a JOIN. The WORKING (single-def) form has no such site.
+    assert_reassign(&stderr, "pick_cond", "chosen", "Owned", "Join");
+    assert_no_reassign(&stderr, "pick_uncond");
+    // pick_cond's RETURN is the fresh materialized store, not the join slot.
+    assert_own_return(&stderr, "pick_cond", "Owned");
+
+    // match_return: borrowed enum-field arm vs empty owned arm -> Join.
+    assert_own_return(&stderr, "deliver", "Join");
+
+    // field-view family (fixed/clean): a field view and a whole-arg view are plain
+    // parameter Borrows — never freed at the return.
+    assert_own_return(&stderr, "getf", "Borrowed");
+    assert_own_return(&stderr, "whole", "Borrowed");
+}
+
+/// Stage 1.5 (Gaps A+B): the analysis surfaces the FREE SITES the value
+/// classification alone does not — the append element source-free
+/// (`elem_accumulate`) and the return-buffer-aliasing delivery (`match_return`) —
+/// each with the freed value's class and the borrow base to materialise from. Still
+/// inert; this is the context the Stage-3 fix reads. See ownership-analysis-gaps.md.
+#[test]
+fn ownership_surfaces_free_sites() {
+    let stderr = dump(OWN_SRC);
+
+    // elem_accumulate: `out += [pick(t,i)]` source-frees pick's JOIN return. The
+    // source is the inline `pick(…)` call; the unification oracle resolves its base
+    // INTERPROCEDURALLY to the CALLER's argument `t` (pick's return borrows param `t`)
+    // — exactly the witness the Stage-3 runtime guard needs.
+    assert_free_site(&stderr, "collect", "AppendSource", "Join", "t");
+
+    // match_return: the retbuf `_mv_items_1` is reassigned to a BORROWED enum-field
+    // view (`OpGetField(e,…)`) → freeing the buffer over-frees `e`'s field. The
+    // borrow base `e` is carried so the materialise copies the field into the buffer.
+    assert_free_site(&stderr, "deliver", "ParamDeliver", "Borrowed", "e");
+
+    // the clean shapes carry NO over-free site: a returned param borrow is not freed.
+    assert_no_free_site(&stderr, "getf");
+    assert_no_free_site(&stderr, "whole");
+    // local_source's bug is the reassign, not an append/deliver: its pool-build
+    // append lowers WITHOUT the 0x8000 source-free bit, so no AppendSource site.
+    assert_no_free_site(&stderr, "pick_cond");
+}
+
+/// Assert the FULL ownership of a function's return, base included
+/// (`OWN fn=n_<func> return=<Owned|Borrowed(base=…)|Join(base=…)>`).
+fn assert_return_own(stderr: &str, func: &str, want: &str) {
+    let line = stderr
+        .lines()
+        .find(|l| l.starts_with(&format!("OWN fn=n_{func} return=")))
+        .unwrap_or_else(|| panic!("no OWN return line for {func}; dump:\n{stderr}"));
+    assert!(
+        line.ends_with(&format!("return={want}")),
+        "{func} return: expected {want}, got: {line}"
+    );
+}
+
+/// The unification oracle's BORROW BASE — the witness the Stage-3 runtime guard
+/// needs — compared against hand-computed ground truth across the shapes, including
+/// the INTERPROCEDURAL call→arg translation (the new piece) and the documented
+/// retbuf-delivery approximation. This is the fact every own-vs-borrow site will
+/// read; the test validates it in isolation before any chokepoint consumes it.
+#[test]
+fn ownership_resolves_the_borrow_base() {
+    let stderr = dump(OWN_SRC);
+
+    // direct projection / `??` join roots its base to the borrowed PARAM.
+    assert_return_own(&stderr, "pick", "Join(base=t)"); // t[i] ?? dflt()
+    assert_return_own(&stderr, "deliver", "Join(base=e)"); // match arm of e
+    assert_return_own(&stderr, "nested", "Borrowed(base=o)"); // o.inner.rows — chain → o
+
+    // INTERPROCEDURAL: `out += [pick(t,i)]`'s source is the `pick` CALL; the oracle
+    // maps pick's borrowed param `t` to collect's argument `t`. (Also asserted as a
+    // free site above — pinned here as the return/base contract.)
+    assert_free_site(&stderr, "collect", "AppendSource", "Join", "t");
+
+    // the displaced-owned reassign's borrow arm roots to the local `pool`.
+    assert_reassign(&stderr, "pick_cond", "chosen", "Owned", "Join"); // rhs base = pool
+    let cond_line = stderr
+        .lines()
+        .find(|l| l.contains("fn=n_pick_cond reassign") && l.contains("(chosen)"))
+        .unwrap();
+    assert!(
+        cond_line.ends_with("rhs=Join(base=pool)"),
+        "pick_cond chosen rhs base: {cond_line}"
+    );
+
+    // KNOWN APPROXIMATION (retbuf delivery): a whole-field / whole-arg return is
+    // delivered through `__retbuf`, whose fill is not a tracked Set — so the base
+    // resolves to `__retbuf`, not the true source `b`/`v`. Harmless: these are clean
+    // field-return sites, never an over-free. Pinned so a future fix is a visible diff.
+    assert_return_own(&stderr, "getf", "Borrowed(base=__retbuf)");
+    assert_return_own(&stderr, "whole", "Borrowed(base=__retbuf)");
+}
+
+// ── @PLN85 match_return — the resisting case, pinned against the oracle ─────────
+// The match_return codegen collapse is still open (the retbuf-promotion site). These
+// tests pin what the NEW routine (`ownership_of`) classifies for the resisting
+// variants, so the fix has a VERIFIED SPEC and the precise discriminator is locked.
+// Key finding: the RETURN verdict `Join` is NOT the discriminator — it over-classifies
+// the fresh-build case (`deliver3 → Join(base=o)`, the retbuf-param approximation,
+// runtime-clean). The precise fix signal is the `ParamDeliver` FREE SITE: a retbuf
+// reassigned to a borrowed enum-field view (base = an EXTERNAL var `e`), which the
+// genuinely-leaking arms have and the fresh-build does not.
+const MATCH_VARIANTS_SRC: &str = r#"
+struct E { hp: integer not null, name: text }
+fn e_default() -> E { E{hp:0, name:""} }
+// V1: Filled arm borrows `e`; else arm is owned `[]` — a runtime JOIN (LEAKS today).
+enum Cell { Empty, Filled { items: vector<E> } }
+fn deliver(e: Cell) -> vector<E> { match e { Filled { items } => { items }, _ => { [] } } }
+// V2: BOTH field arms borrow `e` (+ implicit owned default) — also a borrow-of-`e`.
+enum Two { A { xs: vector<E> }, B { ys: vector<E> } }
+fn deliver2(e: Two) -> vector<E> { match e { A { xs } => { xs }, B { ys } => { ys } } }
+// V3: the Filled arm builds a FRESH owned vector `o` — owned, runtime-clean. The
+// oracle over-classifies its RETURN as Join(base=o) (the retbuf approximation), but
+// it has NO ParamDeliver site (the precise discriminator excludes it).
+fn deliver3(e: Cell) -> vector<E> {
+  match e { Filled { items } => { o: vector<E> = []; for x in 0..len(items) { o += [items[x] ?? e_default()]; } o }, _ => { [] } }
+}
+fn main() {
+  c = Filled { items: [] }; r = deliver(c);
+  t = A { xs: [] }; r2 = deliver2(t);
+  r3 = deliver3(c);
+  print("{len(r)} {len(r2)} {len(r3)}\n");
+}
+"#;
+
+/// The match_return resisting cases pinned against the oracle. The `ParamDeliver`
+/// FREE SITE — a retbuf aliased to a borrowed enum-field view whose base is an
+/// EXTERNAL var — is the precise fix discriminator; the `Join` RETURN verdict alone
+/// is not (it over-classifies the fresh-build `deliver3`). This is the verified spec
+/// the still-open codegen fix must act on: materialise exactly the ParamDeliver arms.
+#[test]
+fn ownership_pins_match_return_resisting_cases() {
+    let stderr = dump(MATCH_VARIANTS_SRC);
+
+    // V1/V2 — the GENUINE over-free arms: the retbuf is aliased to a borrowed
+    // enum-field view of the EXTERNAL subject `e`. The ParamDeliver site (base=e) is
+    // the precise fix signal; the return verdict is Join(base=e).
+    assert_free_site(&stderr, "deliver", "ParamDeliver", "Borrowed", "e");
+    assert_return_own(&stderr, "deliver", "Join(base=e)");
+    assert_free_site(&stderr, "deliver2", "ParamDeliver", "Borrowed", "e");
+    assert_return_own(&stderr, "deliver2", "Join(base=e)");
+
+    // V3 — the FRESH-BUILD arm: owned, runtime-clean. The oracle OVER-classifies its
+    // RETURN as Join(base=o) (the retbuf-param approximation — `o` is the owned retbuf
+    // classified as borrowed-of-itself), but there is NO ParamDeliver site. So the fix,
+    // keyed on ParamDeliver (NOT the return verdict), correctly LEAVES deliver3 ALONE.
+    assert_return_own(&stderr, "deliver3", "Join(base=o)"); // documented over-classification
+    assert_no_free_site(&stderr, "deliver3"); // the precise discriminator excludes it
+}
+
+// ── @PLN85 Stage-3 site 1: the `local_source` compiler wiring (LOFT_JOIN_OWN) ───
+// The displaced-owned-store leak: `chosen = dflt()` move-adopts a fresh store into
+// `chosen` (the source retbuf the cleanup guards is left null), then `chosen =
+// pool[wj]` orphans it. The fix strips `chosen`'s flattened `["pool"]` dep so it is
+// OWNED everywhere — the owned path deep-copies the borrow into `chosen`'s store and
+// frees it. VALUE-correct either way (the leak does not corrupt); only the leak
+// differs, so the gate is the `not freed` warning. See ownership-analysis-gaps.md.
+
+const LOCAL_SOURCE_SRC: &str = r#"
+struct M { hp: integer not null, name: text }
+fn dflt() -> M { M{hp:-1, name:"d"} }
+fn pick(t: vector<M>, salt: integer) -> M {
+  pool: vector<M> = []; for p in 0..len(t) { pool += [t[p] ?? dflt()]; }
+  chosen = dflt();
+  np = len(pool);
+  for wj in 0..np { if salt % np == wj { chosen = pool[wj] ?? dflt(); } }
+  chosen
+}
+fn main() {
+  t: vector<M> = []; for k in 0..4 { t += [M{hp:k * 10, name:"m"}]; }
+  // np=4: pick(t, salt) selects pool[salt % 4] -> hp = (salt % 4) * 10.
+  for i in 0..8 {
+    r = pick(t, i);
+    assert(r.hp == (i % 4) * 10, "pick i{i} hp={r.hp} want={(i % 4) * 10}");
+    assert(len(t) == 4, "src corrupted i{i} len={len(t)}");
+  }
+  print("local-source ok\n");
+}
+"#;
+
+/// Run a source on a backend, optionally with `LOFT_JOIN_OWN`; return (stdout, stderr).
+fn run_backend(src: &str, backend: &str, join_own: bool) -> (String, String) {
+    use std::hash::{Hash, Hasher};
+    let dir = std::env::temp_dir().join("loft_join_own");
+    std::fs::create_dir_all(&dir).expect("probe dir");
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    src.hash(&mut h);
+    backend.hash(&mut h);
+    join_own.hash(&mut h);
+    let path = dir.join(format!("probe_{:016x}.loft", h.finish()));
+    std::fs::write(&path, src).expect("write probe");
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_loft"));
+    cmd.args([backend])
+        .arg(&path)
+        .env("LOFT_STORES", "warn")
+        .env("LOFT_NATIVE_LEAK_CHECK", "1")
+        .env("LOFT_NO_CACHE", "1")
+        .env("LOFT_TIMEOUT", "180");
+    if join_own {
+        cmd.env("LOFT_JOIN_OWN", "1");
+    }
+    let out = cmd.output().expect("spawn loft");
+    (
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+/// The fix: under `LOFT_JOIN_OWN` the displaced-owned `local_source` shape is
+/// VALUE-correct AND leak-free on BOTH backends.
+#[test]
+fn join_own_fixes_local_source_both_backends() {
+    for backend in ["--interpret", "--native"] {
+        let (stdout, stderr) = run_backend(LOCAL_SOURCE_SRC, backend, true);
+        assert!(
+            stdout.contains("local-source ok"),
+            "{backend} value-incorrect under LOFT_JOIN_OWN:\nstdout:{stdout}\nstderr:{stderr}"
+        );
+        assert!(
+            !stderr.contains("not freed"),
+            "{backend} still leaks under LOFT_JOIN_OWN:\n{stderr}"
+        );
+    }
+}
+
+// ── @PLN85 unification (first chokepoint collapse): elem_accumulate, interp ────
+// `out += [pick(t,i)]` source-frees pick's `t[i] ?? m_none()` JOIN return. The
+// interp first-bind now reads the ownership oracle: OpBindOrCopy adopts the owned
+// `m_none()` arm and materialises the borrowed `t[i]` arm, witnessed by the oracle's
+// interprocedurally-resolved base `t`. BOTH arms must be value-correct + clean.
+const ELEM_SRC: &str = r#"
+struct M { hp: integer not null, name: text }
+fn m_none() -> M { M{hp:-1, name:"n"} }
+fn pick(t: vector<M>, i: integer) -> M { t[i] ?? m_none() }
+fn collect(t: vector<M>) -> vector<M> { out: vector<M> = []; for i in 0..len(t) { out += [pick(t, i)]; } out }
+fn collect_owned(t: vector<M>) -> vector<M> { out: vector<M> = []; for i in 0..3 { out += [pick(t, i + 100)]; } out }
+fn filler(n: integer) -> integer { es: vector<M> = []; for j in 0..n { es += [M{hp:j, name:"f"}]; } return len(es); }
+fn main() {
+  t: vector<M> = []; for k in 0..3 { t += [M{hp:k * 10, name:"m"}]; }
+  for i in 0..6 {
+    r = collect(t); acc = 0; for f in 0..6 { acc += filler(6); }
+    assert(len(t) == 3, "src corrupted i{i}={len(t)}");
+    assert(len(r) == 3, "borrow-arm len i{i}={len(r)}");
+    o = collect_owned(t);
+    assert(len(o) == 3, "owned-arm len i{i}={len(o)}");
+  }
+  print("elem-accumulate ok\n");
+}
+"#;
+
+/// The unification collapse fixes BOTH arms of elem_accumulate on BOTH backends (the
+/// borrow arm's interp UAF and the owned arm's leak — native's `_src == _dst` guard
+/// leaked the owned arm too) — value-correct and clean under LOFT_JOIN_OWN, witnessed
+/// by the oracle's interprocedurally-resolved base.
+#[test]
+fn join_own_fixes_elem_accumulate_both_backends() {
+    for backend in ["--interpret", "--native"] {
+        let (stdout, stderr) = run_backend(ELEM_SRC, backend, true);
+        assert!(
+            stdout.contains("elem-accumulate ok"),
+            "{backend} value-incorrect under LOFT_JOIN_OWN:\nstdout:{stdout}\nstderr:{stderr}"
+        );
+        assert!(
+            !stderr.contains("not freed"),
+            "{backend} still leaks under LOFT_JOIN_OWN:\n{stderr}"
+        );
+    }
+}
+
+/// The GATE: WITHOUT the flag the same shape is value-correct but LEAKS the
+/// displaced owned store — pins that the flag is what closes the leak (so a future
+/// regression that silently stops stripping is caught), on both backends.
+#[test]
+fn local_source_leaks_without_join_own() {
+    for backend in ["--interpret", "--native"] {
+        let (stdout, stderr) = run_backend(LOCAL_SOURCE_SRC, backend, false);
+        assert!(stdout.contains("local-source ok"), "{backend}: {stderr}");
+        assert!(
+            stderr.contains("not freed"),
+            "{backend}: expected the displaced-owned LEAK without the flag, got none:\n{stderr}"
+        );
+    }
+}
+
+// ── @PLN85 match_return — the gated owned-copy synthesis (P1) ───────────────────
+// `jo_copy_borrowed_arm_yield` (src/parser/control.rs) rewrites a borrowed enum-field
+// arm yield (`Filled { items } => { items }`) into an owned copy
+// (`{ o = []; o += items; o }`), so the return escapes OWNED rather than as a view
+// into the match subject. Two plain-loft codegen bugs blocked it — the gen_if arm-join
+// discard and the empty value-block push (tests/scripts/441 + 442) — and are now fixed,
+// so the whole-append owned copy "just works" (no element-loop synthesis needed).
+
+const MATCH_RETURN_SRC: &str = r#"
+struct E { hp: integer not null, name: text }
+enum Cell { Empty, Filled { items: vector<E> } }
+fn deliver(e: Cell) -> vector<E> { match e { Filled { items } => { items }, _ => { [] } } }
+fn filler(n: integer) -> integer { es: vector<E> = []; for j in 0..n { es += [E{hp:j, name:"f"}]; } return len(es); }
+fn main() {
+  inner: vector<E> = []; for k in 0..3 { inner += [E{hp:k * 10, name:"m"}]; }
+  cell = Filled { items: inner };
+  for i in 0..6 {
+    r = deliver(cell); acc = 0; for f in 0..6 { acc += filler(6); }
+    assert(len(inner) == 3, "src corrupted i{i}={len(inner)}");
+    assert(len(r) == 3, "match-return len i{i}={len(r)}");
+    assert(r[0].hp == 0 && r[2].hp == 20, "match-return values i{i}");
+    e = deliver(Empty {});
+    assert(len(e) == 0, "empty-arm i{i}={len(e)}");
+  }
+  print("match-return ok\n");
+}
+"#;
+
+/// Run `loft introspect` on a source, optionally with `LOFT_JOIN_OWN`; return stdout
+/// (the IR dump, used to read the emitted return-type dependency).
+fn introspect(src: &str, join_own: bool) -> String {
+    use std::hash::{Hash, Hasher};
+    let dir = std::env::temp_dir().join("loft_join_own");
+    std::fs::create_dir_all(&dir).expect("probe dir");
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    src.hash(&mut h);
+    "introspect".hash(&mut h);
+    join_own.hash(&mut h);
+    let path = dir.join(format!("introspect_{:016x}.loft", h.finish()));
+    std::fs::write(&path, src).expect("write probe");
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_loft"));
+    cmd.arg("introspect").arg(&path).env("LOFT_NO_CACHE", "1");
+    if join_own {
+        cmd.env("LOFT_JOIN_OWN", "1");
+    }
+    let out = cmd.output().expect("spawn loft introspect");
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// The `deliver` function's IR signature line from an introspect dump (carries the
+/// top-block dependency set, e.g. `…["__retbuf", "e"]`).
+fn deliver_signature(dump: &str) -> String {
+    dump.lines()
+        .find(|l| l.starts_with("fn n_deliver(e:ref"))
+        .unwrap_or_else(|| panic!("no deliver signature in introspect dump:\n{dump}"))
+        .to_string()
+}
+
+/// The gated synthesis is value-correct AND leak-free on BOTH backends now that the
+/// blocking codegen bugs are fixed — the whole-append owned copy "just works".
+#[test]
+fn join_own_match_return_synthesis_both_backends() {
+    for backend in ["--interpret", "--native"] {
+        let (stdout, stderr) = run_backend(MATCH_RETURN_SRC, backend, true);
+        assert!(
+            stdout.contains("match-return ok"),
+            "{backend} value-incorrect under LOFT_JOIN_OWN:\nstdout:{stdout}\nstderr:{stderr}"
+        );
+        assert!(
+            !stderr.contains("not freed"),
+            "{backend} leaks under LOFT_JOIN_OWN:\n{stderr}"
+        );
+    }
+}
+
+/// The GATE discriminator. The borrowed-arm return BORROWS the match subject `e`
+/// without the flag (`["__retbuf", "e"]`) and is OWNED with it (`["__retbuf"]`). The
+/// runtime is clean either way now (the over-free no longer surfaces as a leak once
+/// the codegen bugs are fixed), so the emitted return dependency is the flag's
+/// observable effect — this pins that the synthesis is what strips the borrow.
+#[test]
+fn join_own_match_return_strips_the_borrow() {
+    let off = deliver_signature(&introspect(MATCH_RETURN_SRC, false));
+    let on = deliver_signature(&introspect(MATCH_RETURN_SRC, true));
+    assert!(
+        off.contains("[\"__retbuf\", \"e\"]"),
+        "without the flag deliver should borrow `e`, got: {off}"
+    );
+    assert!(
+        on.contains("[\"__retbuf\"]"),
+        "with the flag deliver should be owned (no `e` borrow), got: {on}"
+    );
+}
+
+// ── @PLN90 phase 1 — construction / field-append copies are covered by the verdict ──
+// A struct/enum field built from an existing vector deep-copies it (the field owns its
+// data). Before @PLN90 the verdict saw only the var-buffer copy idiom (`o = src` / `o +=
+// src`) and missed this dominant category entirely; now it emits a Copy row so the
+// copy-vs-borrow decision covers it (diagnostic only — always Copy, never an ElidePlan).
+
+const CONSTRUCT_SRC: &str = r#"
+struct E { hp: integer not null, name: text }
+struct Box { rows: vector<E> }
+fn make_box(s: vector<E>) -> Box { Box { rows: s } }
+fn main() {
+  s: vector<E> = []; for k in 0..3 { s += [E{hp:k, name:"s"}]; }
+  b = make_box(s);
+  assert(len(b.rows) == 3, "rows");
+  print("construct ok\n");
+}
+"#;
+
+#[test]
+fn construction_copy_is_covered_by_the_verdict() {
+    let stderr = dump(CONSTRUCT_SRC);
+    // `Box { rows: s }` deep-copies `s` into the new record's field — a Copy the verdict
+    // now classifies (it formerly recorded only var-target appends).
+    assert_verdict(&stderr, "make_box", "Copy");
+    assert!(
+        stderr.contains("construction/field-append copy"),
+        "the construction copy should carry the construction reason; dump:\n{stderr}"
+    );
+    // @PLN90 phase 2 — a construction copy is IMPLICIT to the model (the field owns its
+    // data) → silent, NOT warned. It is not the avoidable worklist.
+    assert!(
+        stderr
+            .lines()
+            .any(|l| l.contains("fn=n_make_box ") && l.contains("bucket=implicit")),
+        "construction copy should be bucket=implicit (silent); dump:\n{stderr}"
+    );
+}
+
+// ── @PLN90 phase 1 — the return-buffer (field / whole-vector return) copy is covered ──
+// `fn f(b: Box) -> vector { b.rows }` materialises `b.rows` into the passed-in return
+// buffer (`__retbuf`). The buffer is an argument, not a fresh `OpDatabase` local, so the
+// var-buffer copy idiom skipped it; now a Copy row covers it (diagnostic only — eliding it
+// to a borrow would be the P4 borrowed-return).
+const FIELD_RETURN_SRC: &str = r#"
+struct E { hp: integer not null, name: text }
+struct Box { rows: vector<E> }
+fn field_ret(b: Box) -> vector<E> { b.rows }
+fn main() {
+  s: vector<E> = []; for k in 0..3 { s += [E{hp:k, name:"s"}]; }
+  bx = Box { rows: s };
+  r = field_ret(bx);
+  assert(len(r) == 3, "rows");
+  print("field-return ok\n");
+}
+"#;
+
+#[test]
+fn field_return_copy_is_covered_by_the_verdict() {
+    let stderr = dump(FIELD_RETURN_SRC);
+    assert_verdict(&stderr, "field_ret", "Copy");
+    assert!(
+        stderr.contains("materialised into the return buffer"),
+        "the field-return copy should carry the return-buffer reason; dump:\n{stderr}"
+    );
+    // @PLN90 phase 2 — a field-return copy is AVOIDABLE (bucket 2, the elimination
+    // worklist): a borrowed-view return is sound; the copy is only there because the
+    // borrowed return path is not yet correct (@PLN85 P4).
+    assert!(
+        stderr
+            .lines()
+            .any(|l| l.contains("fn=n_field_ret ") && l.contains("bucket=AVOIDABLE")),
+        "field-return copy should be bucket=AVOIDABLE; dump:\n{stderr}"
+    );
+}
+
+// ── @PLN90 phase 1 — the `OpCopyRecord` record copy is covered (the last gap) ──
+// `v[i] = e` deep-copies the record `e` into the element slot. This is not append-based,
+// so neither the var-buffer idiom nor the construction / return-buffer branches see it;
+// now a Copy row covers it (diagnostic only). The same-var no-op alias is excluded.
+const RECORD_COPY_SRC: &str = r#"
+struct E { hp: integer not null, name: text }
+fn set_one(v: vector<E>, e: E) -> integer { v[1] = e; return v[1].hp; }
+fn main() {
+  v: vector<E> = []; for k in 0..3 { v += [E{hp:k, name:"v"}]; }
+  e = E{hp:99, name:"z"};
+  r = set_one(v, e);
+  assert(r == 99, "set");
+  print("record-copy ok\n");
+}
+"#;
+
+#[test]
+fn record_copy_is_covered_by_the_verdict() {
+    let stderr = dump(RECORD_COPY_SRC);
+    assert!(
+        stderr
+            .lines()
+            .any(|l| l.contains("fn=n_set_one ") && l.contains("record deep-copy (OpCopyRecord)")),
+        "the `v[i] = e` record copy should be classified Copy [record deep-copy]; dump:\n{stderr}"
+    );
 }

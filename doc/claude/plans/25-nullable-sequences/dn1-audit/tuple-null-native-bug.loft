@@ -1,0 +1,2 @@
+fn pair() -> (integer?, integer) { (null, 2) }
+fn main() { (a, c) = pair(); print("{a ?? -1} {c}"); }

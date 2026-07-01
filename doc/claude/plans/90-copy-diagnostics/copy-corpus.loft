@@ -1,0 +1,35 @@
+// @PLN90 phase 1 — one function per structure-copy-emitting shape. Used to inventory
+// every OpCopyRecord / copying-OpAppendVector the compiler emits and which the
+// copy-vs-borrow verdict covers. main runs them all so it is also an end-to-end check.
+struct E { hp: integer not null, name: text }
+struct Box { rows: vector<E> }
+enum Cell { Empty, Filled { items: vector<E> } }
+
+// 1. append a record literal into a vector (element copy into the store)
+fn append_lit() -> vector<E> { o: vector<E> = []; o += [E{hp:1, name:"a"}]; o }
+// 2. append one vector into another (whole-vector element copy)
+fn append_vec(src: vector<E>) -> vector<E> { o: vector<E> = []; o += src; return o; }
+// 3. struct-field whole return (materialises into the return buffer today)
+fn field_return(b: Box) -> vector<E> { b.rows }
+// 4. match arm yields a borrowed field directly (true borrow today — P4)
+fn match_return(e: Cell) -> vector<E> { match e { Filled { items } => { items }, _ => { [] } } }
+// 5. build a vector by copying elements from a source with a default
+fn build_with_default(src: vector<E>) -> vector<E> { o: vector<E> = []; for i in 0..len(src) { o += [src[i] ?? E{hp:0, name:""}]; } o }
+// 6. assign one struct's field vector into a fresh local
+fn assign_field(b: Box) -> integer { o: vector<E> = b.rows; return len(o); }
+
+fn main() {
+  s: vector<E> = []; for k in 0..3 { s += [E{hp:k, name:"s"}]; }
+  bx = Box { rows: s };
+  cell = Filled { items: s };
+  assert(len(append_lit()) == 1, "append_lit");
+  assert(len(append_vec(s)) == 3, "append_vec");
+  assert(len(field_return(bx)) == 3, "field_return");
+  // match_return is defined above (so the compile-time inventory / MAT dump covers the
+  // borrow shape) but NOT invoked: it is the @PLN85 P4 borrowed-direct-yield, which crashes
+  // the interpreter flag-OFF (mod.rs:748) until the borrow-fix lands. Invoking it would
+  // crash this corpus on --interpret.
+  assert(len(build_with_default(s)) == 3, "build_with_default");
+  assert(assign_field(bx) == 3, "assign_field");
+  println("corpus ok");
+}

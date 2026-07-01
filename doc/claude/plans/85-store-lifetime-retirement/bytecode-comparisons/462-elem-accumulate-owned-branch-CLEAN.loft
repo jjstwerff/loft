@@ -1,0 +1,10 @@
+struct M { hp: integer not null, name: text }
+fn m_none() -> M { M{hp:0,name:""} }
+fn pick(t: vector<M>, i: integer) -> M { t[i] ?? m_none() }
+fn collect(t: vector<M>) -> vector<M> { out: vector<M> = []; for i in 0..3 { out += [pick(t, i + 100)]; } out }
+fn filler(n: integer) -> integer { es: vector<M> = []; for j in 0..n { es += [M{hp:j,name:"f"}]; } return len(es); }
+fn main() {
+  t: vector<M> = []; for k in 0..3 { t += [M{hp:k,name:"m"}]; }
+  for i in 0..6 { r = collect(t); acc=0; for f in 0..6 { acc += filler(6); } assert(len(r)==3,"r{i}={len(r)}"); }
+  println("ok");
+}

@@ -1,0 +1,2 @@
+fn f(x: integer?) -> text { "{x}" }
+fn main() { print("{f(5)} / {f(null)}"); }

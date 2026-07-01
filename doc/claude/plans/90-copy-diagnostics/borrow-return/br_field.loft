@@ -1,0 +1,4 @@
+struct E { hp: integer not null, name: text }
+struct Box { rows: vector<E> }
+fn f(b: Box) -> vector<E> { b.rows }
+fn main() { ti: vector<E>=[]; for k in 0..3 { ti+=[E{hp:k,name:"t"}]; } bx=Box{rows:ti}; a=f(bx); assert(len(a)==3,"a"); println("ok"); }

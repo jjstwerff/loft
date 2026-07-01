@@ -288,6 +288,76 @@ pub fn uaf_any_enabled() -> bool {
     uaf_check_enabled() || uaf_src_enabled()
 }
 
+/// `LOFT_POISON=1` (@PLN54 S3) — the arena poison-on-free keystone. When on, `free_named`
+/// overwrites a freed store's payload (past the 8-byte size header) with `0xDEADBEEF`, so a
+/// dangling-`DbRef` read after free hits loud, deterministic garbage — an out-of-range
+/// `store_nr` that trips the read guards — instead of silent stale data. This is the
+/// store-internal use-after-free blind spot Miri/ASan/Valgrind all share, because loft's
+/// arena "free" is not a libc `free()`. Works on BOTH backends (native-generated code calls
+/// the same `free_named`), on any rustc, no nightly. One cached env read; off by default.
+/// (The buried `LOFT_LOG=poison_free` path still flips the same poison; this is its dedicated,
+/// documented front door, and the one the fuzz-proof harness drives.)
+#[must_use]
+pub fn poison_enabled() -> bool {
+    static POISON: OnceLock<bool> = OnceLock::new();
+    *POISON.get_or_init(|| std::env::var_os("LOFT_POISON").is_some())
+}
+
+/// `LOFT_COPY_DUMP=1` (@PLN90 phase 1) — print one line per executed deep STRUCTURE copy
+/// (a record copy `OpCopyRecord`, or a vector append that deep-copies its source elements
+/// `vector_add`). The instrument that makes copies VISIBLE: it is the runtime ground truth
+/// for every copy + its size, so the compile-time copy-vs-borrow decision can be checked to
+/// cover them all (COPY_DIAGNOSTICS.md). One cached env read; off by default, no hot-path cost.
+#[must_use]
+pub fn copy_dump_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_COPY_DUMP").is_some())
+}
+
+/// `LOFT_PLN25_OPT=1` (@PLN25 slice a, IN PROGRESS) — make the scalar/field postfix `?`
+/// construct the real `Type::Optional` former instead of the Phase-0 no-op. Opt-IN while the
+/// slice-(b) peel audit (the ~280 `match Type` consuming sites that must peel `Optional`) is
+/// incomplete: OFF (default) keeps the suite byte-identical; ON exercises the new marker so
+/// the remaining mis-routes surface. Flip to default-on (or retire the gate) once green on
+/// both backends. See plans/25-nullable-sequences/RESUME.md § Step 3.
+#[must_use]
+pub fn pln25_optional_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var_os("LOFT_PLN25_OPT").is_some()
+            || std::env::var_os("LOFT_PLN25_DN3").is_some()
+            || std::env::var_os("LOFT_PLN25_DN1").is_some()
+    })
+}
+
+/// `LOFT_PLN25_DN3=1` (@PLN25 slice c, IN PROGRESS) — the `(N-Store)` teeth: reject an
+/// un-discharged `τ?` (Optional) flowing into a NON-null target (a plain `τ`). The nullable
+/// value must first be discharged with `??` or `match` (which yield the non-null base). Opt-IN
+/// while the enforcement + the DN1 default flip are being built; implies `LOFT_PLN25_OPT` (the
+/// check is meaningless without the real `Optional` marker). OFF keeps the slice-(b)
+/// behaviour-preserving implicit unwrap. See plans/25-nullable-sequences/RESUME.md § Step 3.
+#[must_use]
+pub fn pln25_dn3_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var_os("LOFT_PLN25_DN3").is_some() || std::env::var_os("LOFT_PLN25_DN1").is_some()
+    })
+}
+
+/// `LOFT_PLN25_DN1=1` (@PLN25 Phase-2 CONTRACT, IN PROGRESS) — the DEFAULT FLIP: a plain scalar
+/// (`integer`, `text`, `bool`, …) is NON-NULL by default; `τ?` is the only nullable form. Turns
+/// `IntegerSpec.not_null` default `false → true` (and the analog for other scalars rides
+/// `Type::Optional`), so a bare `null` returned/stored into a plain scalar is rejected (beyond the
+/// Optional `(N-Store)` teeth, which only catch `Optional → non-null`). Opt-IN while the `.loft`
+/// sweep migrates the misses to `?`; OFF keeps the nullable-by-default behaviour. Implies
+/// `LOFT_PLN25_DN3` (the `(N-Store)` teeth) and `LOFT_PLN25_OPT` (the `Optional` marker). See
+/// plans/25-nullable-sequences/dn1-flip-blast-radius.md and RESUME.md § Step 3.
+#[must_use]
+pub fn pln25_dn1_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_PLN25_DN1").is_some())
+}
+
 /// `LOFT_UAF_REUSE` (detector b) — at `copy_record`, when the source slot is LIVE
 /// (`free=false`) but structurally invalid for the copy's `tp` (a `validate_claims`
 /// failure), the slot was freed-then-reused as a different record since the source ref
