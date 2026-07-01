@@ -25,11 +25,13 @@ runnable examples (`tests/docs/features/`), with both CI guards green: no-drift
 `tests/native.rs::native_features`). **Strand 4 (source-coverage gate) SHIPPED** —
 `scripts/feature_coverage.sh` ratchets a file-level attribution baseline
 (`.feature_coverage_baseline`): a new implementation file with no `@I`/`@F` tag fails
-`--check` runs in its own red-but-non-blocking **Feature coverage** CI job (same posture
-as Doc hygiene — not a required check). The 90-file debt was driven to **0 uncataloged /
-131 files**: every implementation file now maps to a catalogue entry. **Remaining:** strand-5
-hygiene (and, as a strand-3 follow-on, rendering LOFT.md's per-feature sections + HTML
-from the issues). This README is the single source of truth for per-strand status.
+`--check` runs in the red-but-non-blocking **Feature catalogue** CI job (same posture as
+Doc hygiene — not a required check). The 90-file debt was driven to **0 uncataloged / 131
+files**: every implementation file now maps to a catalogue entry. **Strand 5 (hygiene)
+SHIPPED** — `scripts/feature_hygiene.sh` (same job) checks dual-anchoring + dangling tags:
+**0 dangling, catalogue fully dual-anchored** bar the `@F43` stub. **Remaining:** only the
+strand-3 follow-on (rendering LOFT.md's per-feature sections + HTML from the issues). This
+README is the single source of truth for per-strand status.
 
 ## Goal
 
@@ -138,7 +140,7 @@ already have** — not a new testing or doc-rewrite mechanism.
 | **2 — Scanner / index** | **Shipped** | `scan.loft` indexes `@F`/`@I` (same byte-scan as `@P`, no trailing-letter rule); `idx tag:`/`prefix:` work; verified on match + reject cases. |
 | **3 — Authoring + issue→project sync (the value)** | **Shipped (core); LOFT.md/HTML render deferred** | ✅ **Authored** 80/81 self-contained issues (`@F43` deferred as a library); ROI gate cleared (caught + fixed real doc drift). ✅ **Sync automation** — `tools/features/gen.loft` (@I81) reads the committed `index/features.json` snapshot and regenerates the mirror `doc/features/` (agents `grep`/`idx` + a generated TOC) + 45 runnable examples `tests/docs/features/`; fragments (library/syntax examples, no `fn main`) + the unauthored stub are mirrored/skipped, not run-tested. ✅ **Two CI guards green** — no-drift (`make features-check`, wired into the index-hygiene job) + example-must-run on both backends (`tests/features.rs` interpret, `tests/native.rs::native_features`). ⬜ Follow-on: render LOFT.md per-feature sections + user-facing HTML from the issues. |
 | **4 — Source-coverage gate (keystone)** | **Shipped (file-level; 0 debt)** | `scripts/feature_coverage.sh` — a file is attributed if it carries any `@I` (coarse subsystem) or `@F` (per-capability) tag; an untagged impl file over the `MIN_LINES` floor is uncataloged. Ratchets `.feature_coverage_baseline` (mirrors `lint_comments.sh`: `--baseline`/`--check`/`--prune`); `--check` fails on any NEW uncataloged file, run in a dedicated red-but-non-blocking **Feature coverage** CI job (not a required check — same posture as Doc hygiene). Baseline driven **90 → 0 / 131**: every impl file maps to a catalogue entry. *Scope note:* file-level (matching coarse `@I`) — it doesn't force a fresh `@F` on a new function inside an already-tagged subsystem; that stays review judgement. |
-| **5 — Hygiene** | Open | Every `@F`/`@I` declared once + dual-anchored (≥1 doc + ≥1 code); optionally fold in the cross-doc status-drift check (the @P251 class). |
+| **5 — Hygiene** | **Shipped** | `scripts/feature_hygiene.sh` — every `@F`/`@I` dual-anchored (≥1 code + ≥1 doc site) + no dangling tag (a ref to a number with no catalogue entry). Runs in the **Feature catalogue** CI job (red-but-non-blocking) beside coverage. Current: **0 dangling, 0 missing-doc, 1 missing-code** (the `@F43` stub) — the catalogue is fully dual-anchored. The cross-doc status-drift check (@P251 class) is moot here — the mirror is generated, so it can't drift from the issue. |
 
 ## Phase ordering
 
@@ -169,7 +171,7 @@ reviewed as a whole before any tag is written, and source tags land before doc t
 - [x] For each `@F`, author the standalone body — `## What it is` (precise), `## How it aids you` (concrete), `## Example` (inline, runnable) — **zero deferral to the project**. For each `@I`, a full role description + source-region locator. *(79/80; `@F43` random deferred as a library.)*
 - [x] Run the strand-3 automation: render the in-project mirror + extract `## Example` → `tests/docs`; the two CI guards (regen-diff, example-runs) must be green. *(shipped: `tools/features/gen.loft` @I81; guards `make features-check` + `tests/features.rs` + `native_features`.)*
 - [x] Place the `<!-- @F<n> -->` doc anchor where the rendered per-feature section lands. *(the generator emits `<!-- @F<n> -->` + a `# @F<n>` header into each `doc/features/<slug>.md`.)*
-- [ ] Run the **hygiene checks** (strand 5): every entry declared once + dual-anchored (≥1 doc + ≥1 code).
+- [x] Run the **hygiene checks** (strand 5): every entry declared once + dual-anchored (≥1 doc + ≥1 code). *(shipped: `scripts/feature_hygiene.sh`; 0 dangling, fully dual-anchored bar the `@F43` stub.)*
 
 **Why this order:** map-before-tag reviews the catalogue as a whole (right granularity,
 no premature numbers); source-before-docs lets the coverage gate — which measures
