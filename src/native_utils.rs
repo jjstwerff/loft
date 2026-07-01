@@ -459,6 +459,88 @@ pub(crate) fn html_wasm_import_modules_ok(wasm: &[u8]) -> Result<(), Vec<String>
     }
 }
 
+/// Return the distinct import-module names of a `loft --html` wasm, or `None`
+/// if the module can't be walked (bad magic, truncated/unknown shape).
+///
+/// `--html` uses this to pick the page shell. A wasm that imports only
+/// `loft_io` needs nothing but text I/O, so it gets the minimal engine-less
+/// page (a tiny inline shim — no WebGL2, no asyncify, no canvas). Any other
+/// module means the program opted into something bigger — `loft_gl` for
+/// graphics/audio, or a `loft_<lib>` library bridge — which needs the full
+/// engine page. On `None` the caller falls back to the full page, the shell
+/// that satisfies every import. Same import-section walk as
+/// [`html_wasm_import_modules_ok`], collecting names instead of judging them.
+pub(crate) fn html_wasm_import_modules(wasm: &[u8]) -> Option<std::collections::BTreeSet<String>> {
+    fn read_uleb(b: &[u8], p: &mut usize) -> Option<u64> {
+        let mut result: u64 = 0;
+        let mut shift = 0u32;
+        loop {
+            let byte = *b.get(*p)?;
+            *p += 1;
+            result |= u64::from(byte & 0x7f) << shift;
+            if byte & 0x80 == 0 {
+                return Some(result);
+            }
+            shift += 7;
+            if shift >= 64 {
+                return None;
+            }
+        }
+    }
+    fn read_name<'a>(b: &'a [u8], p: &mut usize) -> Option<&'a [u8]> {
+        let len = usize::try_from(read_uleb(b, p)?).ok()?;
+        let s = b.get(*p..p.checked_add(len)?)?;
+        *p += len;
+        Some(s)
+    }
+    fn skip_limits(b: &[u8], p: &mut usize) -> Option<()> {
+        let flag = *b.get(*p)?;
+        *p += 1;
+        read_uleb(b, p)?; // min
+        if flag & 1 == 1 {
+            read_uleb(b, p)?; // max
+        }
+        Some(())
+    }
+    if wasm.len() < 8 || &wasm[0..4] != b"\0asm" {
+        return None;
+    }
+    let mut p = 8;
+    let mut modules = std::collections::BTreeSet::new();
+    while p < wasm.len() {
+        let id = *wasm.get(p)?;
+        p += 1;
+        let size = usize::try_from(read_uleb(wasm, &mut p)?).ok()?;
+        let section_start = p;
+        let section_end = section_start.checked_add(size).filter(|e| *e <= wasm.len())?;
+        if id == 2 {
+            let mut ip = section_start;
+            let count = read_uleb(wasm, &mut ip)?;
+            for _ in 0..count {
+                let module = read_name(wasm, &mut ip)?;
+                let _field = read_name(wasm, &mut ip)?;
+                let kind = *wasm.get(ip)?;
+                ip += 1;
+                match kind {
+                    0 => {
+                        read_uleb(wasm, &mut ip)?; // func: typeidx
+                    }
+                    1 => {
+                        ip += 1; // table: reftype byte
+                        skip_limits(wasm, &mut ip)?;
+                    }
+                    2 => skip_limits(wasm, &mut ip)?, // mem: limits
+                    3 => ip += 2,                     // global: valtype + mut bytes
+                    _ => return None,                 // unknown kind — bail safe
+                }
+                modules.insert(String::from_utf8_lossy(module).into_owned());
+            }
+        }
+        p = section_end;
+    }
+    Some(modules)
+}
+
 pub(crate) fn project_dir() -> String {
     let Ok(prog) = env::current_exe() else {
         return String::new();
