@@ -271,6 +271,45 @@ zero-deferral issue bodies.)
 
 ---
 
+## `area:*` ↔ `@F`/`@I` map (defect history)
+
+GitHub bug issues ([loft-lang/loft](https://github.com/loft-lang/loft/issues))
+carry an `area:*` label, **not** a feature tag. This crosswalk joins each
+`area:` to the catalogue entries it covers, so a feature's *defect history* is
+one query away — closures' past bugs are
+`gh issue list --repo loft-lang/loft --state closed --label area:closures`.
+**Open** bugs surface the same way (`--state open`); at the 2026-07-01 snapshot
+there are **zero open issues** (0 open PRs) — the live health view is all-green,
+so the value here is the *history* below plus a standing join for future bugs.
+
+| `area:` label | catalogue entries | closed-bug history (snapshot 2026-07-01) |
+|---|---|---|
+| `area:store-lifetime` | @I69 store · @I70 database · @I60 deps · @I71 keys — Goal E | 27 |
+| `area:codegen` | @I64 bytecode compiler · @I65 generator · @I68 native gen | 27 |
+| `area:native` | @F53 native backend · @I68 native generator | 22 |
+| `area:runtime` | @I66 bytecode VM · @I67 opcode impls | 17 |
+| `area:packages` | @F55 packages · @F47 imports · @I74 cdylib loader · @I77 registry | 15 |
+| `area:parser` | @I57 lexer · @I58 parser · @I59 type resolver | 12 |
+| `area:closures` | @F22 closures · @F23 fn-refs · @F24 higher-order | 9 |
+| `area:stdlib` | @F39–@F46 (math · I/O · env · JSON · random · logging · sizeof · aliases) | 7 |
+| `area:wasm` | @F54 WASM/browser target · @I66 VM/state | 5 |
+
+Snapshot: **122 closed issues** (39 `sev:high` · 51 `sev:medium` · 16 `sev:low`);
+13 carry no `area:` label (uncategorised — mostly process/meta). Areas overlap
+(one issue may span store-lifetime + codegen), so column sums exceed 122.
+Regenerate: `gh issue list --repo loft-lang/loft --state closed --limit 500
+--json number,labels` grouped by `area:`.
+
+**Reading (Goal A/E lens).** store-lifetime + codegen + native carry **76 of
+122** closed bugs — the memory model and the two backends are the fragile
+surfaces, matching [STABILITY_HOTSPOTS.md](../../STABILITY_HOTSPOTS.md). Several
+rows are `@I`-only on purpose: a mechanism can own a whole area's bug history
+without any single `@F` owning it, so this map does **not** invert the
+`@F`↔`@I` map above — it routes a bug to *both* the feature(s) and the
+mechanism(s) an `area:` touches.
+
+---
+
 ## Decisions for review
 
 1. **Applied:** the toolchain (CLI, REPL, introspect, debugger, formatter, backends,
