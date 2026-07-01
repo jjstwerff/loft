@@ -542,7 +542,7 @@ index:  ## Refresh index/tags.json via the loft scanner
 index-install-hook:
 	@./tools/indexer/install-hook.sh
 
-# ── @PLN92 feature catalogue sync (strand 3) ────────────────────
+# ── @I81 · @PLN92 feature catalogue sync (strand 3) — sync tooling ──
 # The `loft-lang/features` issues are the canonical, self-contained docs; these
 # targets keep the in-project shadow one-way: the mirror (doc/features/) that
 # agents grep + scan.loft indexes, and the runnable examples (tests/docs/features/)
