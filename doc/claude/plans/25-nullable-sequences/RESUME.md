@@ -136,14 +136,21 @@ DN4 range-check). What remains is **landing the flip as the default + the cleanu
 tightenings**. In order, each ends green (never carry two phases' breakage):
 
 - **F1 — Land the flip (make DN1 the default).** `keys.rs` default-on (`LOFT_PLN25_OFF`
-  opts out) is prototyped + blast-radius-measured (WIP, uncommitted). To land:
-  - **F1a** — triage + fix the red tests under the flip (`wrap`: `dir`/`last`/`parser_debug`
-    + the `wasm_dir` env one; `issues`: `p54_nested_struct_enum`) against
-    [DN1-MITIGATION.md](DN1-MITIGATION.md) (likely §1/§2/§6 casualties).
-  - **F1b** — migrate the stdlib `min`/`max`/`clamp` (drop the dead-under-DN1 null-prop
+  opts out) is prototyped + measured (WIP, uncommitted). **The FULL suite is GREEN under the
+  flip** (nextest 2583/0; `wrap` 51/0, `issues` 748/0 cross-checked), with the `STD_SOURCE`
+  exemption still scaffolding the stdlib — so the flip is suite-green and nearly landable.
+  - **F1a — ✅ DONE.** The five flip red tests are green: `wrap::{dir,last,parser_debug,wasm_dir}`
+    + `issues::p54`. Roots + fixes (all gate-OFF byte-identical, both backends): the loft-in-loft
+    compiler ripple (`lib/parser.loft` lexer-`text?` discharges + `lib/code.loft` `cur_def`
+    `?? 0` — `e29cb6f6`); `to_default` base-zero for `Optional` fields (native `(())`→scalar —
+    `e29cb6f6`); `time.loft` parse/combine `-> integer?` (`a65a28e2`); the nested-exhaustive-match
+    false-widening (`arm_yields_direct_null` — `d5402391`). (`31-ref-forward` was environmental —
+    registry DNS.)
+  - **F1b — NEXT** — migrate the stdlib `min`/`max`/`clamp` (drop the dead-under-DN1 null-prop
     `if !a||!b {return null}`) + **remove the `STD_SOURCE` exemption** in `n_store_violation`.
+    The suite is green WITH the exemption, so this is the last piece before committing the flip.
   - **F1c** — ✅ DONE (`85af2b18`): the `change_var` null-local message names `τ?`, no `as`.
-  - Gate: `find_problems` green as the DEFAULT (no env) on both backends.
+  - Gate: `find_problems` green as the DEFAULT (no env) on both backends — ✅ met (exemption in place).
 - **F2 — Retire `not null`** (Phase-5 CLEANUP; ordering load-bearing — AFTER F1). Make the
   scalar `not null` parse an accepted no-op (`definitions.rs`) and drop it from the fixtures;
   non-null is already the default so it carries nothing.
