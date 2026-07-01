@@ -1313,28 +1313,28 @@ pub enum Type {
     /// A reference to a variable on stack.
     RefVar(Box<Type>),
     /// A dynamic vector of a specific type
-    Vector(Box<Type>, Deps),
+    Vector(Box<Type>, Deps), // @F6 — vector<T> (dynamic array + comprehensions + aggregates)
     /// A dynamic routine, from a routine definition without code.
     /// The actual code is a routine with this routine as a parent or just a Block for a lambda function.
     Routine(u32),
     /// Iterator with a certain result, the first type is the result per step.
     /// The second is the internal iterator value or `Type::Null` for structure iterator: `(i32,i32)`
-    Iterator(Box<Type>, Box<Type>),
+    Iterator(Box<Type>, Box<Type>), // @F10 — iterator<T> values
     /// An ordered vector on a record, second is the key [field name, ascending]
-    Sorted(u32, Vec<(String, bool)>, Deps),
+    Sorted(u32, Vec<(String, bool)>, Deps), // @F8 — sorted<T[keys]> collection
     /// An index towards other records. The key is [field name, ascending]
-    Index(u32, Vec<(String, bool)>, Deps),
+    Index(u32, Vec<(String, bool)>, Deps), // @F9 — index<T[keys]> B-tree (asc/desc, multi-key)
     /// An index towards other records. The second is [field name]
     Spacial(u32, Vec<String>, Deps),
     /// A hash table towards other records. The second is the hash function per [field name].
-    Hash(u32, Vec<String>, Deps),
+    Hash(u32, Vec<String>, Deps), // @F7 — hash<T[keys]> keyed collection
     /// A function reference allowing for closures. Argument types, result, and deps.
     /// The dep list tracks ownership of the closure record embedded in the fn-ref slot.
     Function(Vec<Type>, Box<Type>, Deps),
     /// A rewritten type into append statements (mostly Text or structures)
     Rewritten(Box<Type>),
     /// T1.1: stack-allocated fixed-arity compound type, e.g. `(integer, text)`.
-    Tuple(Vec<Type>),
+    Tuple(Vec<Type>), // @F11 — tuples (anonymous fixed-arity)
     /// @PLN25 — a nullable wrapper over any base type (`τ?`). **Compile-time only:**
     /// `Optional(τ)` and `τ` share the same sentinel-based runtime layout (no wrapper
     /// alloc, no `__nullable` synth for scalars). Build it with [`Type::optional`] (kept
