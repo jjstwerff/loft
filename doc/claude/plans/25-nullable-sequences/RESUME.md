@@ -155,20 +155,28 @@ tightenings**. In order, each ends green (never carry two phases' breakage):
     DN1-reachable null-sentinel roundtrip; `tests/scripts/17-min-max-clamp.loft` null-prop section
     rewritten to explicit `τ?` inputs + one runtime-division case (`nulldiv(0)`). issues 748/0,
     wrap 51/0, format 11/0, both backends.
-    - **DN3-division completeness gaps surfaced here (pre-existing, NOT regressions; the un-exempt
-      removed the non-null crutch that masked them). Track for the DN3 `/`,`%` follow-up:**
-      1. **constant-fold** — `1/0` with a *constant/literal* divisor folds to a sentinel typed
-         `integer` (the `handle_operator` `τ?` wrap is never reached), so `max(1/z,5)` with a local
-         `z=0` returns 5, not null. Only RUNTIME division (`a/z`, param divisor) types `τ?`.
-      2. **via-var Optional-drop** — an inferred `d = a/z` (runtime) infers `d: integer`, dropping
-         the division's `Optional`. So `d = a/z; return d` (non-null return) **unsoundly ACCEPTS**,
-         and `max(d,5)` → 5. The wrap survives ARG capture (`max(a/z,5)` → null) but not the
-         inferred-assignment type (`change_var` at `parse_assign_op`, expressions.rs:1627 — s_type
-         from `parse_operators` is `integer` there, not `integer?`; root not yet localized).
-      3. **`?? null` discharge** — `x ?? null` (null fallback) discharges `integer?` to `integer`
-         instead of staying nullable.
-      #2 is the soundness one (undefended division survives into a non-null return via a var);
-      it's the most valuable next DN3-division slice.
+    - **DN3-division ROOT-CAUSE FIXED (`<pending>`): the `ecd4cab3` "division slice" wrap was DEAD
+      CODE.** It sat in the COMPARISON-operator branch of `handle_operator` (the `else` handling
+      `<`/`<=`), where `div_nullable` (checking `operator == "/"`) is always false — so `a / b`
+      NEVER actually typed `integer?` in ANY context. Everything that "worked" (`ret`/discharged/
+      inferred `== null`) rode the runtime sentinel + declared `integer?` return types; the claimed
+      "undefended `a/b` into non-null → rejects" was never real (dn3div never called the `bad` fn).
+      **Fix = MOVE the wrap to the ARITHMETIC branch** (the `} else {` where `/`/`%` route through
+      `call_op`): capture `div_nullable` before `call_op` consumes `second_code`, wrap `*ctp` after
+      the range-narrowing. Now `a / b` types `integer?` everywhere → `(N-Store)` catches undefended
+      stores. This ONE move closed **gaps #1 (constant-fold) AND #2 (via-var)** — both were the same
+      dead-wrap root, not two bugs. Plus the divisor narrowing gained the ELSE side: `if v == 0 { … }
+      else { a / v }` now proves `v != 0` in the else (was THEN-only) — `divisor_proof_from_condition`
+      → `Option<(u16, bool)>`. Real blast radius was ONE site (`83-return-in-if-expr` `safe_div_true`,
+      the else-idiom — fixed by the else-narrowing, not migrated). Regressions:
+      `tests/scripts/25-division-nullable.loft` (accept: const/mod/then-guard/else-guard/`??`/honest,
+      both backends) + a reject twin in `102-expected-errors.loft`. issues 748/0, wrap 51/0, full suite clean.
+    - **REMAINING gap #3 — `??` discharges regardless of the fallback's nullability** (`handle_null_coalesce`
+      operators.rs:1366 `*ctp = ctp.base()`). `x ?? null` (and `x ?? nullableVar`) types `integer`
+      though it can be null → `y: integer = x ?? null` unsoundly accepts + holds null. This is the
+      `??` OPERATOR, not division; the correct rule is "result is `τ?` iff the fallback is nullable,"
+      but flipping it has its own blast radius (every `a ?? nullableVar` currently discharges). `?? null`
+      itself is a pathological no-op idiom. Deferred as a distinct `??`-typing slice.
   - **F1c** — ✅ DONE (`85af2b18`): the `change_var` null-local message names `τ?`, no `as`.
   - Gate: `find_problems` green as the DEFAULT (no env) on both backends — ✅ met (exemption in place).
 - **F2 — Retire `not null`** (Phase-5 CLEANUP; ordering load-bearing — AFTER F1). Make the

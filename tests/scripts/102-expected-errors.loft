@@ -232,3 +232,12 @@ enum hash { Pln22A, Pln22B }
 // @EXPECT_ERROR: Expect type definitions to be in camel case style
 // @EXPECT_ERROR: conflicts with a type
 type sorted = integer;
+
+// @PLN25 DN3: integer `/` types `integer?` (the divisor may be zero → null at runtime), so an
+// UNDEFENDED result stored into a non-null return is a violation — the developer must guard
+// (`if b != 0`), discharge (`a / b ?? d`), or declare the return `integer?`. The accept twins
+// live in 25-division-nullable.loft.
+// @EXPECT_ERROR: nullable `integer?` cannot be stored
+fn test_undefended_division_into_nonnull(a: integer, b: integer) -> integer {
+  a / b
+}

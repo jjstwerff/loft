@@ -1995,16 +1995,30 @@ impl Parser {
     /// @PLN25 DN3 fault-op — read a non-zero divisor proof out of a parsed `if` condition.
     /// Returns the var slot proven non-zero in the THEN branch by `if v != 0` (`v` on either
     /// side of a `0` literal). Only `!= 0` narrows (the else of `if v == 0` is a later slice).
-    fn divisor_proof_from_condition(&self, test: &Value) -> Option<u16> {
+    /// @PLN25 DN3 fault-op — read a "divisor `v` is non-zero" proof from an `if` condition, with
+    /// the branch it holds in: `v != 0` proves it in the THEN branch (`Some((v, true))`); `v == 0`
+    /// proves it in the ELSE branch (`Some((v, false))`) — the common `if b == 0 { … } else { a / b }`
+    /// safe-division idiom. Mirrors `narrowing_from_condition`'s then/else convention.
+    fn divisor_proof_from_condition(&self, test: &Value) -> Option<(u16, bool)> {
         let Value::Call(op, args) = test.unspan() else {
             return None;
         };
-        if !self.data.def(*op).name().starts_with("OpNe") || args.len() != 2 {
+        let name = self.data.def(*op).name();
+        let then_branch = if name.starts_with("OpNe") {
+            true
+        } else if name.starts_with("OpEq") {
+            false
+        } else {
+            return None;
+        };
+        if args.len() != 2 {
             return None;
         }
         let is_zero = |a: &Value| matches!(a.unspan(), Value::Int(0) | Value::Long(0));
         match (args[0].unspan(), args[1].unspan()) {
-            (Value::Var(v), other) | (other, Value::Var(v)) if is_zero(other) => Some(*v),
+            (Value::Var(v), other) | (other, Value::Var(v)) if is_zero(other) => {
+                Some((*v, then_branch))
+            }
             _ => None,
         }
     }
@@ -2020,11 +2034,12 @@ impl Parser {
         if let Some((v, true)) = narrow {
             self.narrowed_non_null.push(v);
         }
-        // @PLN25 DN3 fault-op: `if v != 0` proves the divisor `v` non-zero in the THEN branch,
-        // so `a / v` / `a % v` there is provably fit (types non-null).
+        // @PLN25 DN3 fault-op: `if v != 0` proves the divisor `v` non-zero in the THEN branch
+        // (and `if v == 0 … else` in the ELSE branch), so `a / v` / `a % v` there is provably fit
+        // (types non-null). The THEN proof is pushed now; the ELSE proof is pushed below.
         let divisor = self.divisor_proof_from_condition(&test);
         let divisor_base = self.divisor_nonzero.len();
-        if let Some(v) = divisor {
+        if let Some((v, true)) = divisor {
             self.divisor_nonzero.push(v);
         }
         let is_aliases: Vec<(String, Option<u16>)> = self.is_capture_aliases.drain(..).collect();
@@ -2050,10 +2065,14 @@ impl Parser {
         // @PLN25 DN3: leave the then-branch — drop its narrowing; the ELSE gets the `== null`
         // proof (the var is non-null on the else side of `if v == null { … } else { … }`).
         self.narrowed_non_null.truncate(narrow_base);
-        // The `!= 0` divisor proof is THEN-only — the else side has no fit guarantee.
+        // Leaving the THEN branch, drop its `!= 0` divisor proof; an `== 0` condition instead
+        // proves the divisor non-zero on the ELSE side, pushed just below with the else narrowing.
         self.divisor_nonzero.truncate(divisor_base);
         if let Some((v, false)) = narrow {
             self.narrowed_non_null.push(v);
+        }
+        if let Some((v, false)) = divisor {
+            self.divisor_nonzero.push(v);
         }
         let mut false_type = Type::Void;
         let mut false_code = Value::Null;

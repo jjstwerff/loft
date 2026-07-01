@@ -1956,22 +1956,12 @@ impl Parser {
                     &[second_type, ctp.clone()],
                 );
             } else {
-                // @PLN25 DN3: integer `/` and `%` PRODUCE null at runtime on a zero divisor
-                // (the C80 sentinel), so the RESULT types `τ?` UNLESS the divisor is provably
-                // non-zero (a constant, or an `if v != 0` guard). The runtime already yields
-                // null; this makes the type carry it so `(N-Store)` forces `?? d` / a `τ?` slot.
-                let div_nullable = (operator == "/" || operator == "%")
-                    && matches!(ctp.base(), Type::Integer(_))
-                    && !self.divisor_provably_nonzero(&second_code);
                 *ctp = self.call_op(
                     code,
                     operator,
                     &[code.clone(), second_code],
                     &[ctp.clone(), second_type],
                 );
-                if div_nullable && crate::keys::pln25_dn1_enabled() {
-                    *ctp = Type::optional(ctp.clone());
-                }
             }
             *parent_tp = tp;
         } else {
@@ -2022,6 +2012,15 @@ impl Parser {
             } else {
                 (None, None, false)
             };
+            // @PLN25 DN3: integer `/` and `%` PRODUCE null at runtime on a zero divisor (the C80
+            // sentinel), so the RESULT types `τ?` UNLESS the divisor is provably non-zero — a
+            // constant non-zero literal (`a / 2`) or a var proven non-zero by an `if v != 0` guard
+            // (the `divisor_nonzero` narrowing stack). Captured HERE, before `call_op` consumes
+            // `second_code`; the `τ?` wrap is applied after the range-narrowing below. DN1-gated.
+            // Makes the type carry the null so `(N-Store)` forces `?? d` / a `τ?` slot at the store.
+            let div_nullable = (operator == "/" || operator == "%")
+                && matches!(ctp.base(), Type::Integer(_))
+                && !self.divisor_provably_nonzero(&second_code);
             *ctp = self.call_op(
                 code,
                 operator,
@@ -2057,6 +2056,9 @@ impl Parser {
                         ..*s
                     });
                 }
+            }
+            if div_nullable && crate::keys::pln25_dn1_enabled() {
+                *ctp = Type::optional(ctp.clone());
             }
             // Plan-07 phase 1, step 1.B.1 — wrap binary fault-prone
             // arithmetic ops in `Value::Span` so runtime errors
