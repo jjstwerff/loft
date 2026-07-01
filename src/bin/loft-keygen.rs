@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I77 — Registry / manifest / lockfile resolution
 
 //! `loft-keygen` — Ed25519 keypair generator for the registry trust root.
 //!

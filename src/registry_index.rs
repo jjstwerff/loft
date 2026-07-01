@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I77 — Registry / manifest / lockfile resolution
 
 // Included by BOTH the library crate (where install.rs + the search/info
 // CLI subcommands use the full API) AND the binary crate (where

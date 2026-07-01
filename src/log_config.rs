@@ -1,5 +1,6 @@
 // Copyright (c) 2022-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I76 — Logger runtime
 
 // The public API of this module is consumed by the test crate, not by the
 // loft binary.  Suppress the dead_code lint that fires for the binary.

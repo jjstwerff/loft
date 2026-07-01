@@ -55,6 +55,7 @@ list_files() {
 collect() {
   list_files | while read -r f; do
     [ -f "$f" ] || continue
+    head -4 "$f" | grep -qiE '@generated|DO NOT EDIT' && continue  # generated — its generator carries the tag
     grep -qE '@[FI][0-9]' "$f" && continue            # catalogued
     nb=$(grep -cvE '^[[:space:]]*$' "$f")
     [ "$nb" -lt "$MIN_LINES" ] && continue            # trivial — dodge

@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I75 — Diagnostics collector
 
 //! Plan-07 phase 2 — pretty diagnostic renderer.
 //!

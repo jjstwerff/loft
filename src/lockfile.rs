@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I77 — Registry / manifest / lockfile resolution
 
 // Included by BOTH the library crate (where install.rs uses every fn)
 // AND the binary crate (where parser/mod.rs::probe_registry_installed

@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I75 — Diagnostics collector
 //
 // Minimal crash reporter: installs a SIGSEGV / SIGABRT / SIGBUS
 // signal handler that prints the last-executed opcode, bytecode

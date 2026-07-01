@@ -1,4 +1,5 @@
 //! Rust code generator for native function bodies and operator dispatch.
+//\! @I68 — Native Rust generator
 //!
 //! - [`generate_lib`] — writes `tests/generated/text.rs` with the native
 //!   function table from `#rust` annotations in `default/*.loft`.

@@ -1,4 +1,5 @@
 //! USE-analysis (first version) — derive a per-binding copy-vs-borrow VERDICT from
+//\! @I60 — Scope & dependency/lifetime tracker (deps)
 //! how a variable is *used*, not from the shape of its right-hand side.
 //!
 //! This is the dependable layer the copy-vs-borrow elision builds on; see

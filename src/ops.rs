@@ -1,5 +1,6 @@
 // Copyright (c) 2022-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I67 — Opcode implementations
 
 //! Pure Rust scalar operations used by the bytecode executor (`fill.rs`) and
 //! by native function implementations (`native.rs`).

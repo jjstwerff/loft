@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I64 — Bytecode compiler (IR -> bytecode)
 
 //! Compile-time constant folding for the O8 bulk initialisation optimisation.
 //!

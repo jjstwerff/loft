@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I76 — Logger runtime
 
 //! Loft trace points — env-var-gated, near-zero-overhead diagnostic
 //! infrastructure for compile-time debugging across the parser, type

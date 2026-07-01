@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I63 — Store-resident IR (reader / handle / materializer)
 
 //! @PLN11 arc B — native IR → store materializer (the write path).
 //!

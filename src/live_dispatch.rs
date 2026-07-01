@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I78 — Live-reload dispatch
 
 //! @PLN18 08-S2 — live function dispatch: a compiled binary that can push
 //! individual functions to the interpreter at runtime.
