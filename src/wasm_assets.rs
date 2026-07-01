@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @F54 — Browser / WASM target (--html / --native-wasm)
 
 //! @lib_plan-29 W1d — generic browser-WASM asset table accessor.
 //!

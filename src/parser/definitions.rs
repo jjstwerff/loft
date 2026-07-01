@@ -38,6 +38,7 @@ impl Parser {
         }
     }
 
+    // @F20 — variant-based dynamic dispatch (synthesised enum dispatcher)
     pub(crate) fn create_enum_dispatch_fn(&mut self, e_nr: u32, nrs: &[usize]) {
         let from_nr = nrs[0] as u32;
         let name = self.data.def(from_nr).original_name().clone();
@@ -364,6 +365,9 @@ impl Parser {
     }
 
     // <enum> ::= 'enum' <identifier> '{' <value> {, <value>} '}' [';']
+    // @F13 — simple enums (ordered value types)
+    // @F14 — polymorphic struct-enums (per-variant fields)
+    // @F15 — enum-scoped variant names + context inference
     pub(crate) fn parse_enum(&mut self) -> bool {
         if !self.lexer.has_token("enum") {
             return false;
@@ -429,6 +433,7 @@ impl Parser {
     }
 
     // <typedef> ::= 'type' <identifier> '=' <type_def> [ 'size' '(' <integer> ')' ] ';'
+    // @F46 — type aliases (type X = …)
     pub(crate) fn parse_typedef(&mut self) -> bool {
         if !self.lexer.has_token("type") {
             return false;
@@ -593,6 +598,7 @@ impl Parser {
     }
 
     #[allow(clippy::too_many_lines)]
+    // @F16 — functions & declarations (pub, parameters, return)
     pub(crate) fn parse_function(&mut self) -> bool {
         if !self.lexer.has_token("fn") {
             return false;
@@ -612,6 +618,7 @@ impl Parser {
             );
         }
         // detect `<T>` type parameter after function name.
+        // @F25 — generics: single type variable <T>, inferred
         let mut is_generic = false;
         let mut type_var_name = String::new();
         // I4: bound names collected from `<T: A + B>` — resolved to def_nrs in the second pass.
@@ -1103,6 +1110,7 @@ impl Parser {
             let is_stub = {
                 let def = &self.data.definitions[self.context as usize];
                 let body_empty = matches!(def.code(), Value::Block(bl) if bl.operators.is_empty());
+                // @F19 — method dispatch via self / both
                 let first_is_self = def.attributes().first().is_some_and(|a| a.name == "self");
                 body_empty && first_is_self
             };
@@ -2117,6 +2125,7 @@ impl Parser {
         }
     }
 
+    // @F12 — struct records (fields, `= default`, `computed`, `limit`/`not null`/`assert`)
     pub(crate) fn parse_struct(&mut self) -> bool {
         if !self.lexer.has_token("struct") {
             return false;
@@ -2295,6 +2304,7 @@ impl Parser {
     /// This first-pass implementation registers the interface definition and
     /// verifies syntax; semantic satisfaction checking comes in I5/I6.
     #[allow(clippy::too_many_lines)]
+    // @F26 — interfaces & bounded generics (<T: A + B>, operator interfaces)
     pub(crate) fn parse_interface(&mut self) -> bool {
         if !self.lexer.has_token("interface") {
             return false;

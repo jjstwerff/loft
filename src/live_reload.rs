@@ -1,5 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @F56 — live code reload (patch a running program)
+// @I78 — Live-reload dispatch
 
 //! @PLN18 phase 02 — tier 0 of the execution tiers: **live per-function
 //! reload** of a RUNNING program (`LOFT_LIVE_RELOAD=1`).

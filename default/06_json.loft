@@ -231,3 +231,7 @@ pub fn struct_to_json(self_ref: JsonValue, struct_kt: integer) -> text;
 /// As `struct_to_json` but produces a pretty (2-space-indent, one
 /// element per line) form.  Same field-type matrix.
 pub fn struct_to_json_pretty(self_ref: JsonValue, struct_kt: integer) -> text;
+
+// @PLN92 catalogue anchors (kept at file end so tag edits do not shift line
+// numbers that hard-coded tests / generated fixtures reference):
+// @F42

@@ -1,0 +1,542 @@
+[
+  {
+    "number": 1,
+    "title": "Nullable value semantics — in-band sentinels + null-fallback arithmetic",
+    "kind": "feature",
+    "body": "## What it is\n\nA value can be present or absent. An absent value is `null`. Doing arithmetic with a `null` simply produces `null` again instead of stopping your program.\n\n## How it aids you\n\nMissing data — a lookup that found nothing, a field never filled in — no longer has to be a special case that crashes. The absence flows through your calculation as `null`, so you can carry on and decide what to do about it at the end rather than guarding every step.\n\n## Example\n\n```loft\nfn main() {\n    a = null as integer;   // a holds no value\n    b = a + 10;            // arithmetic on null gives null, no crash\n    println(\"{a} {b}\");    // null null\n    println(\"still running\");\n}\n```\n"
+  },
+  {
+    "number": 2,
+    "title": "`??` null-coalescing operator (incl. `?? return`)",
+    "kind": "feature",
+    "body": "## What it is\n\nThe `??` operator supplies a fallback: `value ?? fallback` gives you `value` when it has one, and `fallback` when `value` is null.\n\n## How it aids you\n\nIt turns \"this might be missing\" into \"here is a sensible default\" in a single, readable step — no `if`-checks around every optional value. You state the backup once, right where the value is used.\n\n## Example\n\n```loft\nfn main() {\n    missing = null as integer;\n    count = missing ?? 0;       // use 0 when the value is null\n    name = \"Ada\" ?? \"unknown\";  // keeps the real value when present\n    println(\"{count} {name}\");  // 0 Ada\n}\n```\n"
+  },
+  {
+    "number": 3,
+    "title": "Primitive scalar types (integer, float, single, boolean, character)",
+    "kind": "feature",
+    "body": "## What it is\n\nThe everyday value types every loft program uses: whole numbers (`integer`), decimals (`float`), yes/no (`boolean`), and single characters (`character`).\n\n## How it aids you\n\nThese are the building blocks you reach for constantly. Each variable says which one it holds, so the meaning of your data is clear and a slip like putting text where a number belongs is caught for you.\n\n## Example\n\n```loft\nfn main() {\n    count: integer = 42;\n    ratio: float = 3.5;\n    ok: boolean = true;\n    letter: character = 'A';\n    println(\"{count} {ratio} {ok} {letter}\");   // 42 3.5 true A\n}\n```"
+  },
+  {
+    "number": 4,
+    "title": "Ranged/width integer types (u8/i8/u16/i16/i32/u32)",
+    "kind": "feature",
+    "body": "## What it is\n\nBesides the everyday `integer`, loft offers smaller number types sized to their range: `u8`, `i8`, `u16`, `i16`, `i32`, `u32`. Each holds whole numbers within fixed bounds and takes up less space.\n\n## How it aids you\n\nWhen you store many numbers you know stay small — a colour channel (0..255), an age, a year — these compact types keep your data small and your intent clear, while you still write and read them like ordinary numbers.\n\n## Example\n\n```loft\nfn main() {\n    level: u8 = 200;      // fits in a single byte (0..255)\n    year: u16 = 2026;     // fits in two bytes\n    temp: i8 = -40;       // small signed value\n    println(\"{level} {year} {temp}\");   // 200 2026 -40\n}\n```\n"
+  },
+  {
+    "number": 5,
+    "title": "Type conversions — implicit, format-only, and explicit `as`",
+    "kind": "feature",
+    "body": "## What it is\n\nThe `as` cast converts a value from one type to another on purpose: `pi as integer`, `\"42\" as integer`, `'A' as integer`. You ask for the conversion, so it happens exactly where you write it.\n\n## How it aids you\n\nYou get to move between types deliberately — round a decimal down to a whole number, read a number out of text, get a character's code — with the conversion visible in the code. Nothing silently changes type behind your back.\n\n## Example\n\n```loft\nfn main() {\n    pi: float = 3.75;\n    whole = pi as integer;     // 3  (drops the fraction)\n    parsed = \"42\" as integer;  // text turned into a number\n    code = 'A' as integer;     // 65 (the character's code)\n    println(\"{whole} {parsed} {code}\");   // 3 42 65\n}\n```\n"
+  },
+  {
+    "number": 6,
+    "title": "`vector<T>` — append, index, slice, comprehensions, aggregates, map/filter/reduce",
+    "kind": "feature",
+    "body": "## What it is\n\nA growable list of values of one type. Add to it with `+=`, read an item by position (`v[0]`), ask its length with `len(v)`, and build a new list from an existing one with a comprehension.\n\n## How it aids you\n\nIt is the go-to container for \"a bunch of things\" — a list you grow as you go and transform in a single line, without keeping track of the size yourself.\n\n## Example\n\n```loft\nfn main() {\n    v: vector<integer> = [1, 2, 3];\n    v += [4];                              // grow\n    doubled = [for x in v { x * 2 }];      // build a new list from it\n    println(\"first={v[0]} len={len(v)} doubled_first={doubled[0]}\");\n    // first=1 len=4 doubled_first=2\n}\n```"
+  },
+  {
+    "number": 7,
+    "title": "`hash<T[keys]>` keyed collection",
+    "kind": "feature",
+    "body": "## What it is\n\nA collection of records that you look up by a key field. You give it a value for that field and it hands back the matching record straight away, with no searching through a list.\n\n## How it aids you\n\nWhen you need to find \"the record with this name\" over and over, a hash gives you the answer directly instead of scanning everything each time. You declare which field is the key, so every lookup reads naturally.\n\n## Example\n\n```loft\nstruct Person { name: text, age: integer }\nstruct Directory { people: hash<Person[name]> }\nfn main() {\n    dir = Directory { };\n    dir.people = [ {name: \"Ada\", age: 36}, {name: \"Bo\", age: 20} ];\n    dir.people += [ {name: \"Cy\", age: 51} ];\n    println(\"Ada is {dir.people[\"Ada\"].age}, Cy is {dir.people[\"Cy\"].age}\");\n    // Ada is 36, Cy is 51\n}\n```\n"
+  },
+  {
+    "number": 8,
+    "title": "`sorted<T[keys]>` collection",
+    "kind": "feature",
+    "body": "## What it is\n\nA collection of records that stays in sorted order by a key field you choose. New records drop into the right position on their own, and looping over the collection visits them in that order. A leading `-` on the key means order it the other way round.\n\n## How it aids you\n\nYou never have to re-sort by hand. Add records whenever you like and the collection is always in order — ideal for leaderboards, rankings, or anything you want to read back highest-first or lowest-first.\n\n## Example\n\n```loft\nstruct Item { name: text, score: integer }\nstruct Board { items: sorted<Item[-score]> }\nfn main() {\n    b = Board { items: [\n        Item { name: \"Ada\", score: 30 },\n        Item { name: \"Bo\", score: 90 },\n        Item { name: \"Cy\", score: 60 }\n    ] };\n    for it in b.items {\n        println(\"{it.name}: {it.score}\");\n    }\n    // Bo: 90\n    // Cy: 60\n    // Ada: 30\n}\n```\n"
+  },
+  {
+    "number": 9,
+    "title": "`index<T[keys]>` B-tree index (asc/desc, multi-key)",
+    "kind": "feature",
+    "body": "## What it is\n\nA collection of records kept in order by one or more key fields. You can jump straight to a record by its keys, and you can also walk through a whole ordered range of them. A leading `-` on a key orders it the other way round.\n\n## How it aids you\n\nIt combines instant lookup with ordered iteration over more than one field at once — group by a primary key, break ties with a second, and read the records back in order.\n\n## Example\n\n```loft\nstruct Row { group: integer, name: text }\nstruct Db { rows: index<Row[group, name]> }\nfn main() {\n    db = Db { rows: [\n        Row { group: 2, name: \"b\" },\n        Row { group: 1, name: \"a\" },\n        Row { group: 1, name: \"c\" }\n    ] };\n    for r in db.rows {\n        println(\"{r.group}-{r.name}\");\n    }\n    println(\"lookup 1,a -> {db.rows[1, \"a\"].group}\");\n    // 1-a\n    // 1-c\n    // 2-b\n    // lookup 1,a -> 1\n}\n```\n"
+  },
+  {
+    "number": 10,
+    "title": "`iterator<T>` values",
+    "kind": "feature",
+    "body": "## What it is\n\nA lazy sequence of values you can loop over one at a time. It produces each value on demand as the loop asks for it, instead of building a whole list up front. The `for` loops you write over ranges and vectors are powered by iterators.\n\n## How it aids you\n\nYou can walk through a sequence — a range of numbers, the items of a collection — without ever building or storing the full list, so a loop over a million values costs no extra memory.\n\n## Example\n\n```loft\nfn main() {\n    total = 0;\n    for i in 1..5 {          // steps through 1, 2, 3, 4 one at a time\n        total += i;\n    }\n    println(\"total={total}\");\n    // total=10\n}\n```\n"
+  },
+  {
+    "number": 11,
+    "title": "Tuples — anonymous fixed-arity `(T1, T2, …)`",
+    "kind": "feature",
+    "body": "## What it is\n\nA fixed-size group of values that can each be a different type, written in parentheses like `(3, \"three\")`. You read the parts by position with `.0`, `.1`, and so on.\n\n## How it aids you\n\nWhen you want to pass or return a few related values together — a low and a high, or a code and a message — a tuple does it in one step, with no need to define a named type first.\n\n## Example\n\n```loft\nfn min_max(a: integer, b: integer) -> (integer, integer) {\n    if a <= b { (a, b) } else { (b, a) }\n}\nfn main() {\n    pair: (integer, text) = (3, \"three\");\n    println(\"{pair.0} = {pair.1}\");\n    (lo, hi) = min_max(9, 4);\n    println(\"lo={lo} hi={hi}\");\n    // 3 = three\n    // lo=4 hi=9\n}\n```\n"
+  },
+  {
+    "number": 12,
+    "title": "Struct records — fields, `= default`, `computed`, `limit`/`not null`/`assert`",
+    "kind": "feature",
+    "body": "## What it is\n\nA named type that groups related values together as fields. Create one by naming its fields; read a field with a dot.\n\n## How it aids you\n\nInstead of juggling several loose variables that belong together, you keep them in one named thing — easier to pass around, and the field names say what each value means.\n\n## Example\n\n```loft\nstruct Point { x: integer, y: integer }\nfn main() {\n    p = Point { x: 3, y: 4 };\n    println(\"({p.x}, {p.y})\");    // (3, 4)\n}\n```"
+  },
+  {
+    "number": 13,
+    "title": "Simple enums (ordered value types)",
+    "kind": "feature",
+    "body": "## What it is\n\nA type that is exactly one of a fixed set of named options.\n\n## How it aids you\n\nWhen something can only be one of a few choices, an enum names them all in one place — you can't use an invalid value, and a `match` can make sure you have handled every case.\n\n## Example\n\n```loft\nenum Direction { North, East, South, West }\nfn main() {\n    d: Direction = East;\n    label = match d { North | South => \"vertical\", East | West => \"horizontal\" };\n    println(label);    // horizontal\n}\n```"
+  },
+  {
+    "number": 14,
+    "title": "Polymorphic struct-enums (per-variant fields)",
+    "kind": "feature",
+    "body": "## What it is\n\nAn enum whose choices each carry their own fields. One `Shape` type can be a `Circle` with a radius or a `Rect` with a width and height — every variant keeps exactly the data it needs.\n\n## How it aids you\n\nYou keep a family of related shapes under one type, and you can give each variant its own version of a method. Calling `area()` runs the right one automatically, so your code stays simple no matter which variant it is holding.\n\n## Example\n\n```loft\nenum Shape {\n    Circle { radius: float },\n    Rect { width: float, height: float }\n}\nfn area(self: Circle) -> float { 3.14 * self.radius * self.radius }\nfn area(self: Rect) -> float { self.width * self.height }\nfn main() {\n    c = Circle { radius: 2.0 };\n    r = Rect { width: 3.0, height: 4.0 };\n    println(\"circle={c.area()} rect={r.area()}\");\n    // circle=12.56 rect=12\n}\n```\n"
+  },
+  {
+    "number": 15,
+    "title": "Enum-scoped variant names + context inference",
+    "kind": "feature",
+    "body": "## What it is\n\nWhen the type is already known — a variable's declared type, a function parameter, a return value — you can write a variant name on its own, like `East`, without repeating the enum name. Loft works out which enum it belongs to from the surrounding context.\n\n## How it aids you\n\nYour code reads cleaner: no need to spell out `Direction.East` every time when it is already clear a `Direction` is expected. It is shorter to write and easier to read, and the compiler still checks the name is a real variant of that enum.\n\n## Example\n\n```loft\nenum Direction { North, East, South, West }\nfn turn_around(d: Direction) -> Direction {\n    match d { North => South, South => North, East => West, West => East }\n}\nfn main() {\n    d: Direction = East;\n    println(\"{turn_around(d)}\");\n    // West\n}\n```\n"
+  },
+  {
+    "number": 16,
+    "title": "Functions & declarations (`pub`, parameters, return)",
+    "kind": "feature",
+    "body": "## What it is\n\nA function is a named piece of logic you can run whenever you like. You list what it takes in, say what it gives back, and write the steps once — then call it by name as often as you want. Mark a function `pub` to share it so other files can use it too.\n\n## How it aids you\n\nWrite a calculation or task in one place and reuse it everywhere, instead of copying the same lines around. Each function has a clear name and a clear result, so your program reads as a list of intentions rather than a wall of detail — and `pub` lets you build a toolbox that other parts of your code can call.\n\n## Example\n\n```loft\npub fn square(n: integer) -> integer {\n    n * n\n}\nfn greet(name: text) -> text {\n    \"Hello, {name}\"\n}\nfn main() {\n    println(greet(\"world\"));               // Hello, world\n    println(\"square(6) = {square(6)}\");    // square(6) = 36\n}\n```\n"
+  },
+  {
+    "number": 17,
+    "title": "Named arguments + default parameter values",
+    "kind": "feature",
+    "body": "## What it is\n\nPass a function's arguments by name — `connect(host: \"db\", port: 5432)` — instead of only in order, and give parameters default values so callers can leave them out.\n\n## How it aids you\n\nCall sites read like their own documentation, and you can set just the one option you care about without listing everything before it. Adding a new optional setting later never breaks the calls people already wrote.\n\n## Example\n\n```loft\nfn connect(host: text, port: integer = 8080, tls: boolean = true) -> text {\n    \"{host}:{port} tls={tls}\"\n}\nfn main() {\n    println(connect(\"example.com\"));              // example.com:8080 tls=true\n    println(connect(\"example.com\", tls: false));  // example.com:8080 tls=false\n    println(connect(host: \"db\", port: 5432));     // db:5432 tls=true\n}\n```"
+  },
+  {
+    "number": 18,
+    "title": "`const` parameters",
+    "kind": "feature",
+    "body": "## What it is\n\nPut `const` in front of a parameter's type to promise the function will never change that value. It is a guarantee written right in the signature, and Loft holds you to it — trying to change it is an error.\n\n## How it aids you\n\nAnyone reading the function knows at a glance that this input is safe: it goes in and comes back untouched. You can hand over your data without worrying it will be altered behind your back, and if the code ever tries to change it, you find out straight away instead of chasing a surprise later.\n\n## Example\n\n```loft\nstruct Account {\n    balance: integer\n}\nfn describe(acct: const Account) -> text {\n    \"balance is {acct.balance}\"\n}\nfn main() {\n    a = Account { balance: 500 };\n    println(describe(a));           // balance is 500\n    println(\"still {a.balance}\");   // still 500\n}\n```\n"
+  },
+  {
+    "number": 19,
+    "title": "Method dispatch via `self` / `both`",
+    "kind": "feature",
+    "body": "## What it is\n\nA method is a function that belongs to a value. Its first parameter is named `self`, which stands for the value you call it on, and you run it with a dot: `value.method()`.\n\n## How it aids you\n\nRelated actions live together with the data they work on, so you write `circle.area()` instead of passing the circle into a loose function. Your code reads left to right like a sentence, and it is easy to find every action a value knows how to do.\n\n## Example\n\n```loft\nstruct Circle {\n    radius: float\n}\nfn area(self: Circle) -> float {\n    3.14159 * self.radius * self.radius\n}\nfn main() {\n    c = Circle { radius: 2.0 };\n    println(\"area = {c.area()}\");    // area = 12.56636\n}\n```\n"
+  },
+  {
+    "number": 20,
+    "title": "Variant-based dynamic dispatch",
+    "kind": "feature",
+    "body": "## What it is\n\nWhen a value can be one of several shapes — a Shape is either a Circle or a Rect — you write one version of a method for each shape, all with the same name. Loft runs the right one automatically, based on which shape the value actually holds.\n\n## How it aids you\n\nYou call `shape.area()` and get the correct answer without checking which kind of shape it is yourself. Add a new shape later and you simply add its version of the method — the code that does the calling stays exactly the same.\n\n## Example\n\n```loft\nenum Shape {\n    Circle { radius: float },\n    Rect { width: float, height: float }\n}\nfn area(self: Circle) -> float {\n    3.14159 * self.radius * self.radius\n}\nfn area(self: Rect) -> float {\n    self.width * self.height\n}\nfn main() {\n    c = Circle { radius: 2.0 };\n    r = Rect { width: 3.0, height: 4.0 };\n    println(\"circle area = {c.area()}\");   // circle area = 12.56636\n    println(\"rect area = {r.area()}\");     // rect area = 12\n}\n```\n"
+  },
+  {
+    "number": 21,
+    "title": "References `&T` — parameters + write-back bindings",
+    "kind": "feature",
+    "body": "## What it is\n\nPut `&` before a parameter's type to pass a variable by reference. The function then works on your actual variable, so any change it makes stays after the call returns. Without `&`, the function only sees a copy and your original is left alone.\n\n## How it aids you\n\nLet a function update your data in place — add to a running total, adjust a counter, fill in a field — without you having to catch a result and assign it back. It is the clear, visible way to say \"this function will change what I hand it.\"\n\n## Example\n\n```loft\nfn add_to(x: &integer, amount: integer) {\n    x += amount;\n}\nfn main() {\n    total = 10;\n    add_to(total, 5);\n    add_to(total, 100);\n    println(\"total = {total}\");    // total = 115\n}\n```\n"
+  },
+  {
+    "number": 22,
+    "title": "Closures & lambdas (value capture, cross-scope)",
+    "kind": "feature",
+    "body": "## What it is\n\nA closure is a small anonymous function you can keep in a variable, hand to another function, or return. It remembers the values it uses from around it, taken at the moment you create it.\n\n## How it aids you\n\nWrite a short piece of behaviour right where you need it — a callback, a quick rule, or a function that builds another function — without naming a separate function for each. Because it captures its values when it's made, it keeps behaving the same even if those values change afterwards.\n\n## Example\n\n```loft\nfn make_adder(n: integer) -> fn(integer) -> integer {\n    fn(x: integer) -> integer { n + x }\n}\nfn main() {\n    add5 = make_adder(5);\n    println(\"add5(10) = {add5(10)}\");      // add5(10) = 15\n    greeting = \"Hello\";\n    greet = fn(name: text) -> text { \"{greeting}, {name}\" };\n    greeting = \"Bye\";\n    println(greet(\"world\"));               // Hello, world\n}\n```"
+  },
+  {
+    "number": 23,
+    "title": "Function references as first-class values",
+    "kind": "feature",
+    "body": "## What it is\n\nA function's name can be used as a value all by itself. Store it in a variable, pass it to another function, or keep it for later — all without the parentheses that would run it right away.\n\n## How it aids you\n\nChoose behaviour while your program is running and pass it around like any other value: pick which action to apply, or hand a function to a helper like `map` to run over your data. Your code gets to decide not just what data to use but which action to take.\n\n## Example\n\n```loft\nfn double(x: integer) -> integer {\n    x * 2\n}\nfn main() {\n    f = double;\n    println(\"f(21) = {f(21)}\");        // f(21) = 42\n    doubled = map([1, 2, 3], double);\n    println(\"{doubled}\");              // [2,4,6]\n}\n```\n"
+  },
+  {
+    "number": 24,
+    "title": "Higher-order functions (map / filter / reduce)",
+    "kind": "feature",
+    "body": "## What it is\n\nThree ready-made tools for working with a whole vector at once. `map` makes a new vector by transforming every element, `filter` keeps only the elements that pass a test, and `reduce` combines all the elements into a single value.\n\n## How it aids you\n\nSay what you want done to the list — double each one, keep the even ones, add them all up — instead of writing the loop and the bookkeeping by hand. It is shorter to write, harder to get wrong, and each line reads as one clear step.\n\n## Example\n\n```loft\nfn main() {\n    nums = [1, 2, 3, 4, 5];\n    doubled = map(nums, |x| { x * 2 });\n    evens = filter(nums, |x| { x % 2 == 0 });\n    total = reduce(nums, 0, |acc, x| { acc + x });\n    println(\"{doubled}\");          // [2,4,6,8,10]\n    println(\"{evens}\");            // [2,4]\n    println(\"total = {total}\");    // total = 15\n}\n```\n"
+  },
+  {
+    "number": 25,
+    "title": "Generics — single type variable `<T>`, inferred",
+    "kind": "feature",
+    "body": "## What it is\n\nA generic function uses a stand-in type, written `<T>`, so one function works for any type. Write \"give me the first element of a vector\" once, and it works for numbers, for words, or for anything else you pass in.\n\n## How it aids you\n\nWrite a piece of logic a single time instead of keeping one near-identical copy per type. Loft fills in the real type for each call, so you get the convenience of one function together with the safety of exact type checking.\n\n## Example\n\n```loft\nfn first<T>(v: vector<T>) -> T {\n    v[0]\n}\nfn main() {\n    ints = [10, 20, 30];\n    words = [\"alpha\", \"beta\", \"gamma\"];\n    println(\"{first(ints)}\");     // 10\n    println(\"{first(words)}\");    // alpha\n}\n```\n"
+  },
+  {
+    "number": 26,
+    "title": "Interfaces & bounded generics (`<T: A + B>`, operator interfaces)",
+    "kind": "feature",
+    "body": "## What it is\n\nA bound like `<T: Ordered>` lets a generic function require that its type can do certain things — here, be compared with `<` and `>`. An interface names a group of abilities (Ordered for comparing, Addable for adding, and so on) that a type either has or does not.\n\n## How it aids you\n\nWrite one function that works for every type that can be compared — numbers, text, and more — while Loft guarantees you only use abilities each type genuinely has. You get broad reuse without giving up the checks that catch mistakes early.\n\n## Example\n\n```loft\nfn largest<T: Ordered>(a: T, b: T) -> T {\n    if a > b { a } else { b }\n}\nfn main() {\n    println(\"{largest(3, 7)}\");        // 7\n    println(\"{largest(2.5, 1.5)}\");    // 2.5\n    best = largest(\"apple\", \"pear\");\n    println(best);                     // pear\n}\n```\n"
+  },
+  {
+    "number": 27,
+    "title": "`if` / `else` as an expression",
+    "kind": "feature",
+    "body": "## What it is\n\n`if` / `else` chooses between two branches — and it gives back a value, so you can assign the result directly.\n\n## How it aids you\n\nYou set a variable to one thing or another in a single readable line, instead of declaring it first and reassigning it inside separate branches.\n\n## Example\n\n```loft\nfn main() {\n    x = 7;\n    kind = if x % 2 == 0 { \"even\" } else { \"odd\" };\n    println(kind);    // odd\n}\n```"
+  },
+  {
+    "number": 28,
+    "title": "`for`-in loops — ranges, loop attributes, filtered, `rev()`",
+    "kind": "feature",
+    "body": "## What it is\n\nRepeat a block once for each item in a collection, or for each number in a range.\n\n## How it aids you\n\nWalk a list or count through a range without managing an index by hand — you name the current item and the loop hands you each one in turn.\n\n## Example\n\n```loft\nfn main() {\n    total = 0;\n    for i in 1..=5 { total = total + i; }\n    println(\"sum 1..=5 = {total}\");    // sum 1..=5 = 15\n}\n```"
+  },
+  {
+    "number": 29,
+    "title": "Pattern matching — enum/scalar/tuple, guards, or-patterns, exhaustiveness",
+    "kind": "feature",
+    "body": "## What it is\n\n`match` picks one branch by comparing a value against a list of patterns, and gives back that branch's result. A pattern can be a specific value, a range, several options at once, or a catch-all. Every possibility has to be covered.\n\n## How it aids you\n\nOne clear choice replaces a long chain of `if` / `else if`, and nothing can slip through uncovered. The chosen result drops straight into a variable instead of being set piece by piece across branches.\n\n## Example\n\n```loft\nfn grade(score: integer) -> text {\n    match score {\n        null     => \"absent\",\n        90..=100 => \"A\",\n        80..90   => \"B\",\n        _        => \"other\"\n    }\n}\nfn main() {\n    println(grade(95));  // A\n    println(grade(85));  // B\n    println(grade(50));  // other\n}\n```"
+  },
+  {
+    "number": 30,
+    "title": "`is` variant check (+ field capture)",
+    "kind": "feature",
+    "body": "## What it is\n\n`is` tests whether an enum value is a particular variant — and, in the same step, can pull that variant's own fields out into named values you use right there.\n\n## How it aids you\n\nYou check what a value is and reach its data in a single line, with no separate lookup or cast. Whatever you name in the braces is in scope inside the block, and only there.\n\n## Example\n\n```loft\nenum Shape {\n    Circle { radius: integer },\n    Square { side: integer }\n}\n\nfn describe(s: Shape) -> text {\n    if s is Circle { radius } {\n        return \"circle of radius {radius}\";\n    }\n    if s is Square { side } {\n        return \"square of side {side}\";\n    }\n    \"unknown\"\n}\n\nfn main() {\n    println(describe(Circle { radius: 5 }));  // circle of radius 5\n    println(describe(Square { side: 3 }));    // square of side 3\n}\n```\n"
+  },
+  {
+    "number": 31,
+    "title": "`break` / `continue` + labelled forms",
+    "kind": "feature",
+    "body": "## What it is\n\n`break` stops a loop early and `continue` skips straight to its next turn. To act on an outer loop from inside a nested one, name that loop's variable: `i#break` breaks the loop over `i`, and `i#continue` skips to its next turn.\n\n## How it aids you\n\nYou leave a loop the moment you have what you need instead of running it to the end, and you can jump right out of several nested loops at once — no extra flags or bookkeeping.\n\n## Example\n\n```loft\nfn main() {\n    // continue: skip the value 3, add the rest\n    sum = 0;\n    for n in 1..=5 {\n        if n == 3 { continue; }\n        sum += n;\n    }\n    println(\"sum without 3: {sum}\");                     // sum without 3: 12\n\n    // break out of the OUTER loop from inside the inner one\n    found = \"\";\n    for i in 1..=3 {\n        for j in 1..=3 {\n            if i * j == 4 {\n                found = \"{i} and {j}\";\n                i#break;\n            }\n        }\n    }\n    println(\"first pair whose product is 4: {found}\");   // first pair whose product is 4: 2 and 2\n}\n```\n"
+  },
+  {
+    "number": 32,
+    "title": "Custom iterators via `fn next(self) -> T?`",
+    "kind": "feature",
+    "body": "## What it is\n\nYou can make a type of your own work in a `for` loop by giving it a `next` method: it returns the following value each time it is asked, and `null` once there are no more.\n\n## How it aids you\n\nYour own types loop with the same `for x in thing` syntax as the built-in collections, so callers iterate over them without knowing or caring how each value is produced.\n\n## Example\n\n```loft\nstruct Countdown {\n    n: integer\n}\n\n// Return the next value, or null when there is nothing left.\nfn next(self: Countdown) -> integer {\n    if self.n <= 0 { return null; }\n    v = self.n;\n    self.n = v - 1;\n    v\n}\n\nfn main() {\n    c = Countdown { n: 3 };\n    for x in c {\n        println(\"{x}\");   // 3, then 2, then 1\n    }\n}\n```\n"
+  },
+  {
+    "number": 33,
+    "title": "`par(...)` parallel for-loop",
+    "kind": "feature",
+    "body": "## What it is\n\nAdding a `par(...)` clause to a `for` loop runs its work across several threads at once. Each item is handed to a worker function, and the loop body then sees that worker's result.\n\n## How it aids you\n\nIndependent, repeated work finishes faster by using more than one processor core — with no manual thread handling. You write an ordinary loop and add one clause.\n\n## Example\n\n```loft\nfn square(n: integer) -> integer {\n    n * n\n}\n\nfn main() {\n    // Each number is squared on a worker thread; b holds the result.\n    total = 0;\n    for a in 1..=5 par(b = square(a), 4) {\n        total += b;\n    }\n    println(\"sum of squares 1..5: {total}\");   // sum of squares 1..5: 55\n}\n```\n"
+  },
+  {
+    "number": 34,
+    "title": "Coroutines / generators — `yield`, `yield from`",
+    "kind": "feature",
+    "body": "## What it is\n\nA generator is a function whose return type is `iterator<T>`. Instead of building a whole list up front, it hands back values one at a time with `yield`, pausing after each and resuming where it left off when the next value is asked for.\n\n## How it aids you\n\nYou get a stream of values on demand — computed only as far as you actually consume it — and you drive it with the same `for` loop you use for any collection, with no intermediate list held in memory.\n\n## Example\n\n```loft\n// A generator: its return type is iterator<T>, and it produces\n// values one at a time with yield.\nfn count_up(start: integer, stop: integer) -> iterator<integer> {\n    for i in start..stop {\n        yield i;\n    }\n}\n\nfn main() {\n    for n in count_up(1, 4) {\n        println(\"{n}\");   // 1, then 2, then 3\n    }\n}\n```\n"
+  },
+  {
+    "number": 35,
+    "title": "String literals — `{expr}` interpolation + backtick multiline",
+    "kind": "feature",
+    "body": "## What it is\n\nText can carry values directly: write `{expr}` inside a string and its value is dropped in place. Strings in backticks may also span several lines, so the text you write looks like the text you get.\n\n## How it aids you\n\nBuilding messages stays simple and readable — no clumsy joining of pieces with `+`. And multi-line strings let you lay out an email, a template, or a block of output exactly as it should appear.\n\n## Example\n\n```loft\nfn main() {\n    name: text = \"world\";\n    n: integer = 3;\n    println(\"Hello, {name}. You have {n} messages.\");\n    note: text = `first line\nsecond line mentions {name}`;\n    println(note);\n}\n// Output:\n// Hello, world. You have 3 messages.\n// first line\n// second line mentions world\n```\n"
+  },
+  {
+    "number": 36,
+    "title": "String formatting / format specifiers (+ for-expressions)",
+    "kind": "feature",
+    "body": "## What it is\n\nInside `{...}` you can add a format after a colon to control how a value looks: pad it to a width, zero-fill it, fix the number of decimals, align it, or show it in hex, octal, or binary.\n\n## How it aids you\n\nYou get tidy, aligned output — tables, reports, invoices, hex dumps — without hand-counting spaces or writing rounding code. The look of each value is described right next to it.\n\n## Example\n\n```loft\nfn main() {\n    n: integer = 255;\n    pi: float = 3.14159;\n    label: text = \"hi\";\n    println(\"{n:#x} {n:05} {pi:6.2} {label:>6}\");   // 0xff 00255   3.14     hi\n}\n```\n"
+  },
+  {
+    "number": 37,
+    "title": "Operator set — arithmetic/comparison/logical/bitwise/unary, `**`",
+    "kind": "feature",
+    "body": "## What it is\n\nThe usual operators, all built in: arithmetic (`+ - * / %` and `**` for powers), comparison (`== \\!= < <= > >=`), logic (`and`, `or`, `\\!`), and bit operations (`| & ^ << >>`).\n\n## How it aids you\n\nEverything you expect for calculating and comparing is there with familiar spelling and sensible precedence, so expressions read the way you would say them aloud — and one line can do real work.\n\n## Example\n\n```loft\nfn main() {\n    a: integer = 7;\n    b: integer = 2;\n    println(\"{a + b} {a - b} {a * b} {a / b} {a % b} {a ** b}\");   // 9 5 14 3 1 49\n    println(\"{a > b} {a == b} {a > 0 and b > 0} {a | b} {a & b}\"); // true false true 7 2\n}\n```\n"
+  },
+  {
+    "number": 38,
+    "title": "Arithmetic safety — overflow/÷0 → null, nullable peers",
+    "kind": "feature",
+    "body": "## What it is\n\nWhen a calculation cannot give a real answer — a number grows too big to hold, or you divide by zero — loft produces `null` for that result and keeps running, instead of crashing.\n\n## How it aids you\n\nOne bad calculation no longer takes down the whole program. The trouble spot becomes a `null` you can spot and handle (often with `??` to supply a fallback), the way a spreadsheet shows an error in one cell while the rest of the sheet still works.\n\n## Example\n\n```loft\nfn main() {\n    big: integer = 9_000_000_000_000_000_000;\n    total = big + big;          // overflow -> null, no crash\n    println(\"{total}\");         // null\n    divisor: integer = 0;\n    safe = 100 / divisor ?? -1; // divide by zero -> null -> fallback\n    println(\"{safe}\");          // -1\n    println(\"done\");            // program keeps running\n}\n```\n"
+  },
+  {
+    "number": 39,
+    "title": "Math & trigonometry library",
+    "kind": "feature",
+    "body": "## What it is\n\nA set of ready-made number functions: absolute value, the smaller or larger of two values (`min` / `max`), square root, powers (`pow`), the trigonometry functions (`sin` / `cos` / `tan`), rounding (`floor` / `ceil` / `round`), logarithms, and the constant `PI`.\n\n## How it aids you\n\nReach for the operation you need by name instead of spelling out the formula by hand — one call for a square root, a power, or an angle — so numeric code stays short and reads the way you would say it out loud.\n\n## Example\n\n```loft\nfn main() {\n    println(\"abs: {abs(-7)}\");            // abs: 7\n    println(\"min/max: {min(3, 9)} {max(3, 9)}\");  // min/max: 3 9\n    println(\"sqrt: {sqrt(144.0)}\");       // sqrt: 12\n    println(\"pow: {pow(2.0, 10.0)}\");     // pow: 1024\n    println(\"cos(0): {cos(0.0)}\");        // cos(0): 1\n    println(\"pi: {PI}\");                  // pi: 3.141592653589793\n}\n```\n"
+  },
+  {
+    "number": 40,
+    "title": "File & directory I/O (+ durable-store binding)",
+    "kind": "feature",
+    "body": "## What it is\n\nRead and write files on disk. Open a path with `file(...)`, `write(...)` text into it, read it back with `content()`, check whether a path `exists(...)`, and remove it with `delete(...)`. You can also list what is in a folder with `list_dir(...)`.\n\n## How it aids you\n\nSave results and load them back on the next run — settings, saved games, reports — with plain calls that take a path and hand you the contents, so your program remembers things between runs instead of starting from scratch every time.\n\n## Example\n\n```loft\nfn main() {\n    note = file(\"greeting.txt\");\n    note.write(\"hello from loft\");\n    reloaded = file(\"greeting.txt\");\n    println(\"read back: {reloaded.content()}\");   // read back: hello from loft\n    println(\"exists: {exists(\"greeting.txt\")}\");  // exists: true\n    delete(\"greeting.txt\");\n    println(\"exists after delete: {exists(\"greeting.txt\")}\");  // exists after delete: false\n}\n```\n"
+  },
+  {
+    "number": 41,
+    "title": "Environment & arguments (env vars, arguments(), program dirs, path resolution)",
+    "kind": "feature",
+    "body": "## What it is\n\nRead the settings the program was started with: environment variables via `env_variable(name)`, and the extra words typed after the program name on the command line via `arguments()`.\n\n## How it aids you\n\nLet the outside world shape a run without editing code — a value from the environment, a filename or option passed on the command line — so the same program adapts to each invocation.\n\n## Example\n\n```loft\nfn main() {\n    // run with:  GREET_NAME=world  loft greet.loft\n    name = env_variable(\"GREET_NAME\");\n    println(\"hello, {name}\");                         // hello, world\n    println(\"extra arguments: {arguments().len()}\");  // extra arguments: 0\n}\n```\n"
+  },
+  {
+    "number": 42,
+    "title": "JSON — json_parse, JsonValue, Type.parse, to_json",
+    "kind": "feature",
+    "body": "## What it is\n\nTurn JSON text into a value with `json_parse(...)`, then read from it: `field(name)` for an object member, `item(index)` for a list entry, and `as_text` / `as_long` / `as_number` / `as_bool` to get a plain value back. `len()` counts a list, and there are matching builders (`json_object`, `json_array`, `json_string`, ...) plus `to_json()` to produce JSON text.\n\n## How it aids you\n\nWork with config files and web responses directly — ask for a field by name or an item by position and get it back in the type you expect — instead of picking the raw text apart yourself.\n\n## Example\n\n```loft\nfn main() {\n    raw = \"{{\\\"name\\\": \\\"loft\\\", \\\"version\\\": 2, \\\"tags\\\": [\\\"fast\\\", \\\"typed\\\"]}}\";\n    doc = json_parse(raw);\n    println(\"name: {doc.field(\"name\").as_text()}\");        // name: loft\n    println(\"version: {doc.field(\"version\").as_long()}\");  // version: 2\n    println(\"first tag: {doc.field(\"tags\").item(0).as_text()}\");  // first tag: fast\n    println(\"tag count: {doc.field(\"tags\").len()}\");       // tag count: 2\n}\n```\n"
+  },
+  {
+    "number": 43,
+    "title": "Random numbers (rand_seed / rand / rand_indices)",
+    "kind": "feature",
+    "body": "User-facing loft feature (@F). Catalogue entry from @PLN92 Pass 1; the title is the canonical user-value statement. Source region + doc: doc/claude/plans/92-feature-catalogue/PASS1-mapping.md. Runnable cross-backend example: TBD (Pass 2/3). Referenced bare as @F + this issue number in source + docs. Plan: loft-lang/plans#92."
+  },
+  {
+    "number": 44,
+    "title": "Logging & diagnostics API (log_*, print, assert, panic)",
+    "kind": "feature",
+    "body": "## What it is\n\nThe everyday ways a program reports what it is doing: `print` and `println` write to the screen, the `log_info` / `log_warn` / `log_error` family records diagnostic notes to a log, `assert(condition, message)` stops with a message if the condition is false, and `panic(message)` stops right away.\n\n## How it aids you\n\nSee what your program is doing and catch bad states early — a printed line while you develop, a logged note in a finished tool, an assertion that fails loudly the moment an assumption breaks — instead of chasing a silent wrong answer later.\n\n## Example\n\n```loft\nfn main() {\n    print(\"loading\");\n    print(\"...\");\n    println(\" done\");              // loading... done\n    log_info(\"startup complete\");  // recorded to the log when logging is configured\n    steps = 3;\n    assert(steps > 0, \"need at least one step\");\n    println(\"ran {steps} steps\");  // ran 3 steps\n}\n```\n"
+  },
+  {
+    "number": 45,
+    "title": "`sizeof()`",
+    "kind": "feature",
+    "body": "## What it is\n\n`sizeof(...)` tells you how many bytes a type or value takes up when it is packed for storage — for a built-in type, one of your own structs, or a variable.\n\n## How it aids you\n\nKnow the storage footprint of your data before you write it out — useful when you save records to a file or reason about how much space a large collection will need.\n\n## Example\n\n```loft\nstruct Point { x: integer, y: integer }\n\nfn main() {\n    println(\"integer: {sizeof(integer)}\");  // integer: 8\n    println(\"u8: {sizeof(u8)}\");            // u8: 1\n    println(\"u16: {sizeof(u16)}\");          // u16: 2\n    println(\"Point: {sizeof(Point)}\");      // Point: 16\n}\n```\n"
+  },
+  {
+    "number": 46,
+    "title": "Type aliases (`type X = …`)",
+    "kind": "feature",
+    "body": "## What it is\n\n`type Name = ...` gives an existing type a second, friendlier name. The alias and the original are the same type, so anywhere one works the other does too. It works for simple types, tuple types, and function types.\n\n## How it aids you\n\nName a type for what it means in your program — `Celsius` instead of `float`, `Pair` instead of `(integer, text)` — so signatures read clearly and the intent is obvious at a glance.\n\n## Example\n\n```loft\ntype Celsius = float;\ntype Pair = (integer, text);\n\nfn describe(temp: Celsius) -> text {\n    \"{temp} degrees\"\n}\n\nfn main() {\n    here: Celsius = 21.5;\n    println(describe(here));         // 21.5 degrees\n    basket: Pair = (3, \"apples\");\n    println(\"{basket.0} {basket.1}\");  // 3 apples\n}\n```\n"
+  },
+  {
+    "number": 47,
+    "title": "Library imports / module system (`use` forms, `pub`)",
+    "kind": "feature",
+    "body": "## What it is\n\n`use` brings names — functions and types — from another `.loft` file or an installed library into your file, so you can call them directly. Put `use` lines at the top of the file.\n\n## How it aids you\n\nSplit a program across files and pull in shared code — your own helpers or a published library — without copying it, so each file stays focused and the same code is written once and reused.\n\n## Example\n\nTwo files side by side. `greetlib.loft` offers a public function; `main.loft` imports it:\n\n```loft\n// greetlib.loft\npub fn greet(name: text) -> text {\n    \"hello, {name}\"\n}\n```\n\n```loft\n// main.loft  — imports greet from greetlib\nuse greetlib::greet;\n\nfn main() {\n    println(greet(\"loft\"));   // hello, loft\n}\n```\n\nThe common forms of `use`:\n\n```loft\nuse mathlib;                 // bring in every public name\nuse mathlib::sqrt;           // bring in just one name\nuse mathlib::(sqrt, pow);    // bring in several (parentheses required)\nuse mathlib::sqrt as root;   // rename on import\nuse mathlib as m;            // reach names as m::sqrt\n```\n"
+  },
+  {
+    "number": 48,
+    "title": "The `loft` CLI — run a program, `--interpret` / `--native`, `--timeout`, `--help`",
+    "kind": "feature",
+    "body": "## What it is\n\nThe `loft` command runs a program written in loft. Point it at a source file and it compiles and runs the program in one step. By default it builds a fast native binary; `--interpret` runs the program through the built-in interpreter instead. `--timeout` caps how long a run may take, and `--help` lists everything the command can do.\n\n## How it aids you\n\nOne command takes you from a `.loft` file to a running program — there is no separate build or install step to manage. You switch between the quick-starting interpreter and the faster native build with a single flag, and `--timeout` stops a runaway program instead of letting it tie up your terminal.\n\n## Example\n\n```\n$ loft hello.loft                 # compile and run (native backend, the default)\nHello, world!\n\n$ loft --interpret hello.loft     # run through the interpreter instead\nHello, world!\n\n$ loft --timeout 60 slow.loft     # hard-kill the run after 60 seconds (0 = no limit)\n\n$ loft --help                     # list every option and subcommand\n```"
+  },
+  {
+    "number": 49,
+    "title": "REPL — interactive sessions",
+    "kind": "feature",
+    "body": "## What it is\n\nAn interactive session you start with `loft repl` (or just `loft` with no file). You type loft one line at a time and see each result straight away. It reopens your last session automatically; `loft repl --fresh` starts from a clean slate.\n\n## How it aids you\n\nYou can try an expression, check what a function returns, or shape a struct without writing a whole program first. Whatever you define — variables, functions, types — stays available for the rest of the session, so you build an idea up step by step. It is the quickest way to answer \"what does this do?\".\n\n## Example\n\n```\n$ loft repl\nloft REPL — :help for commands, :quit to exit\nloft> x = 40 + 2\nloft> x\n42\nloft> fn dbl(n: integer) -> integer { n + n }\nloft> dbl(x)\n84\nloft> :quit\n```"
+  },
+  {
+    "number": 50,
+    "title": "Introspection — `loft introspect` (bytecode / native Rust / slot tables)",
+    "kind": "feature",
+    "body": "## What it is\n\n`loft introspect prog.loft` shows you how loft sees your program: the bytecode the interpreter runs, the Rust source the native backend generates, the stack-slot layout, and the resolved types. By default it prints every section; flags like `--show-bytecode`, `--show-rust`, or `--fn <name>` narrow it down.\n\n## How it aids you\n\nIt turns \"what is the compiler actually doing with my code?\" into something you can read. When a program behaves unexpectedly, or you want to understand the cost of a construct, you can look straight at the generated code instead of guessing. `--fn` focuses on a single function so you are not wading through the whole program.\n\n## Example\n\n```\n$ loft introspect prog.loft                   # bytecode + generated Rust + slots + types\n\n$ loft introspect --show-bytecode prog.loft   # just the bytecode section\n$ loft introspect --show-rust prog.loft       # just the generated Rust\n$ loft introspect --fn main prog.loft         # only the function `main`\n```"
+  },
+  {
+    "number": 51,
+    "title": "Debugger — breakpoints, frame capture, scripted RPC",
+    "kind": "feature",
+    "body": "## What it is\n\n`loft debug prog.loft:12` runs your program and pauses it at line 12, dropping you into an interactive `(dbg)` prompt. From there you inspect variables (type a name to see its value), advance one line at a time with `:step` / `:next`, resume with `:continue`, and leave with `:quit`.\n\n## How it aids you\n\nInstead of scattering print statements through your code and re-running, you stop the program where it matters and look at the real values in the live frame. You can watch state change line by line, which makes it far easier to see where a result first goes wrong.\n\n## Example\n\n```\n$ loft debug prog.loft:12\nloft debugger — break at prog.loft:12.  :help for commands, :continue to run, :quit to exit\n(dbg) total          # inspect a local by name\n42\n(dbg) :step          # run the next line\n(dbg) :continue      # resume until the program ends\n(dbg) :quit\n```"
+  },
+  {
+    "number": 52,
+    "title": "Source formatter — canonical `.loft` output",
+    "kind": "feature",
+    "body": "## What it is\n\nA built-in source formatter. `loft --format file.loft` rewrites the file in canonical loft style in place; `loft --format-check file.loft` leaves the file alone and just exits non-zero if it is not already formatted. `loft --format -` reads from standard input and writes the result to standard output.\n\n## How it aids you\n\nEveryone's loft looks the same, so you never argue about spacing or indentation and diffs stay small and meaningful. `--format-check` plugs into a commit hook or CI to keep a whole project consistent automatically, and the `-` form lets an editor format a file or selection on demand.\n\n## Example\n\n```\n$ loft --format main.loft          # reformat the file in place\n\n$ loft --format-check main.loft    # exit 1 if it is not already canonical (for CI)\n\n$ cat main.loft | loft --format -  # format from stdin to stdout\n```"
+  },
+  {
+    "number": 53,
+    "title": "Native-binary backend (`--native` → rustc)",
+    "kind": "feature",
+    "body": "## What it is\n\nThe native backend. `loft --native prog.loft` translates your program to Rust and compiles it with `rustc` into a real machine-code binary, then runs it. It is already the default when you run `loft prog.loft`; `--native-release` builds an optimised binary, and `--native-emit` writes out the generated Rust for you to keep.\n\n## How it aids you\n\nYou get compiled-language speed from the same source you were interpreting, with no rewrite and no separate toolchain to wire up. Reach for `--native-release` when you want the fastest possible run, and use `--native-emit` when you want to see or reuse the Rust that loft produced.\n\n## Example\n\n```\n$ loft --native prog.loft          # compile via rustc and run (this is the default)\n\n$ loft --native-release prog.loft  # optimised build (rustc -O), for benchmarking\n\n$ loft --native-emit prog.loft     # write the generated Rust and exit (no run)\n```"
+  },
+  {
+    "number": 54,
+    "title": "Browser / WASM target (`--html` / `--native-wasm`)",
+    "kind": "feature",
+    "body": "## What it is\n\nThe browser target. `loft --html prog.loft` compiles your program to WebAssembly and bundles it into a single self-contained HTML file you can open in any browser. `loft --native-wasm prog.loft` emits just the `.wasm` module when you want to embed it yourself.\n\n## How it aids you\n\nThe same loft program that runs on your machine can run on a web page, with nothing to install for whoever opens it — one HTML file is the whole deliverable. It is the simplest way to share a demo, a tool, or a game that people can try with a single click.\n\n## Example\n\n```\n$ loft --html game.loft            # write a self-contained game.html\n$ # open game.html in a browser — no server or install needed\n\n$ loft --native-wasm game.loft     # emit just game.wasm to embed yourself\n```"
+  },
+  {
+    "number": 55,
+    "title": "Package management (`loft install`, `loft.toml`, lockfile)",
+    "kind": "feature",
+    "body": "## What it is\n\nloft's package manager. `loft install <name>` downloads a library from the registry and installs it for use; a `loft.toml` file records the packages your project depends on, and a lockfile pins the exact versions so builds stay reproducible. `loft new <name>` scaffolds a fresh library, and `loft update` refreshes the pinned versions.\n\n## How it aids you\n\nYou reuse other people's libraries instead of reinventing them, and the lockfile means the versions you tested are the versions everyone else — and your CI — gets. Declaring dependencies in `loft.toml` keeps a project's requirements in one place that travels with the code.\n\n## Example\n\n```\n$ loft new mytool                  # scaffold loft.toml + src/ + tests/\n$ loft install markdown            # fetch a library from the registry\n$ loft install markdown@1.2.0      # or pin a specific version\n$ loft update                      # refresh the lockfile to the latest allowed versions\n```"
+  },
+  {
+    "number": 56,
+    "title": "Live code reload — patch a running program",
+    "kind": "feature",
+    "body": "## What it is\n\nLive code reload. With reload enabled, loft watches your source file while the program runs and swaps in edited functions on the fly, so your changes take effect without stopping and restarting the program. It is opt-in via the `LOFT_LIVE_RELOAD` setting.\n\n## How it aids you\n\nYou keep the program's current state — the game you are part-way through, the data you loaded, the window you opened — and still see code edits apply immediately. That tightens the edit-and-see loop and removes the restart-and-get-back-to-where-you-were tax when you are iterating on behaviour.\n\n## Example\n\n```\n$ LOFT_LIVE_RELOAD=1 loft game.loft\n# the program keeps running; edit and save game.loft in your editor…\n# …the changed functions are hot-swapped into the live program automatically\n```"
+  },
+  {
+    "number": 57,
+    "title": "Lexer",
+    "kind": "infra",
+    "body": "## What it does\n\nTurns raw loft source text into a stream of tokens — keywords, names, numbers, operators, punctuation — that the parser can consume. It is the first stage of the pipeline and handles character-level details such as comments, string literals, and string interpolation, so later stages never touch raw text.\n\n## Where it lives\n\n`src/lexer.rs`"
+  },
+  {
+    "number": 58,
+    "title": "Parser (two-pass recursive descent)",
+    "kind": "infra",
+    "body": "## What it does\n\nReads the lexer's tokens and builds the program's intermediate representation (IR) using a two-pass recursive-descent grammar: a first pass registers every definition (types, functions), so a second pass can resolve references regardless of the order they appear in the source. This is where loft syntax becomes a structured tree.\n\n## Where it lives\n\n`src/parser/` (entry point `src/parser/mod.rs`)"
+  },
+  {
+    "number": 59,
+    "title": "Type resolver",
+    "kind": "infra",
+    "body": "## What it does\n\nResolves every type name to a concrete definition and works out each type's memory layout — its size and the byte offset of each field. This gives the rest of the compiler the fixed shapes it needs to lay out values and to generate field access.\n\n## Where it lives\n\n`src/typedef.rs`"
+  },
+  {
+    "number": 60,
+    "title": "Scope & dependency/lifetime tracker (deps)",
+    "kind": "infra",
+    "body": "## What it does\n\nTracks which names are visible in each scope and follows how values borrow from and depend on one another, so the compiler knows when each value can safely be freed. This dependency (\"deps\") information is the backbone of loft's ownership and memory-safety model.\n\n## Where it lives\n\n`src/scopes.rs`"
+  },
+  {
+    "number": 61,
+    "title": "Stack slot allocator",
+    "kind": "infra",
+    "body": "## What it does\n\nAssigns each local variable and temporary a fixed slot on the runtime stack, deciding the layout of every function's stack frame. Stable slot numbers let both the interpreter and the native backend read and write locals by position.\n\n## Where it lives\n\n`src/variables/` (entry point `src/variables/mod.rs`)"
+  },
+  {
+    "number": 62,
+    "title": "IR data model (Value/Type/Data)",
+    "kind": "infra",
+    "body": "## What it does\n\nDefines the core data types the whole compiler passes around: `Value` (an IR node), `Type` (a static type), and `Data` (the table of all named definitions). It is the shared vocabulary that the parser produces and every later stage consumes.\n\n## Where it lives\n\n`src/data.rs`"
+  },
+  {
+    "number": 63,
+    "title": "Store-resident IR (reader + handle + materializer)",
+    "kind": "infra",
+    "body": "## What it does\n\nProvides a form of the IR that lives directly in the word-addressed store, along with the reader, handle, and materializer used to access it. This lets a program's definitions be persisted and loaded without rebuilding them from source each time.\n\n## Where it lives\n\n`src/data_store.rs`"
+  },
+  {
+    "number": 64,
+    "title": "Bytecode compiler (IR -> bytecode)",
+    "kind": "infra",
+    "body": "## What it does\n\nLowers the parser's tree-shaped IR into a flat stream of bytecode instructions for the interpreter, and initialises the native-function registry. It is the bridge between the structured IR and the linear form the VM executes.\n\n## Where it lives\n\n`src/compile.rs`"
+  },
+  {
+    "number": 65,
+    "title": "Bytecode code generator",
+    "kind": "infra",
+    "body": "## What it does\n\nEmits the individual bytecode instructions during compilation — the routines that decide which opcodes and operands represent each expression and statement. It is the writing end of the bytecode pipeline that the VM later reads.\n\n## Where it lives\n\n`src/state/codegen.rs`"
+  },
+  {
+    "number": 66,
+    "title": "Bytecode VM / executor",
+    "kind": "infra",
+    "body": "## What it does\n\nThe virtual machine that runs the compiled bytecode: it holds the instruction stream and the runtime stack and drives the main execute loop that steps through opcodes. This is the engine of the interpreter backend.\n\n## Where it lives\n\n`src/state/mod.rs` (the `State` type and its execute loop)"
+  },
+  {
+    "number": 67,
+    "title": "Opcode implementations",
+    "kind": "infra",
+    "body": "## What it does\n\nHolds the actual behaviour of each bytecode operation — the per-opcode routines the VM dispatches to for arithmetic, comparisons, text and collection operations, and the rest. The file is generated from the `#rust\"...\"` operator templates in the standard library.\n\n## Where it lives\n\n`src/fill.rs`"
+  },
+  {
+    "number": 68,
+    "title": "Native Rust generator",
+    "kind": "infra",
+    "body": "## What it does\n\nThe `--native` backend: translates the program's IR into Rust source code, which `rustc` then compiles into a fast standalone binary. It produces the same behaviour as the interpreter along a different, compile-to-machine-code path.\n\n## Where it lives\n\n`src/generation/` (entry point `src/generation/mod.rs`)"
+  },
+  {
+    "number": 69,
+    "title": "Word-addressed store",
+    "kind": "infra",
+    "body": "## What it does\n\nThe raw heap: a flat, word-addressed block of memory that holds every value's bytes. Higher layers place records and collections into it and reference them by position. It is the lowest level of loft's memory model.\n\n## Where it lives\n\n`src/store.rs`"
+  },
+  {
+    "number": 70,
+    "title": "Database — alloc / persistence / journal / snapshot / schema",
+    "kind": "infra",
+    "body": "## What it does\n\nManages all of a program's stores together with their schema, and provides allocation, persistence, journaling, and snapshotting on top of the raw heap. It is what makes loft's heap durable and recoverable rather than purely in-memory.\n\n## Where it lives\n\n`src/database/` (entry point `src/database/mod.rs`)"
+  },
+  {
+    "number": 71,
+    "title": "DbRef pointers & collection keys",
+    "kind": "infra",
+    "body": "## What it does\n\nDefines `DbRef`, loft's universal pointer — a triple of store number, record, and position that locates any value in the store — together with the key types used to index collections. Everything that refers to heap data does so through these.\n\n## Where it lives\n\n`src/keys.rs`"
+  },
+  {
+    "number": 72,
+    "title": "Parallel execution runtime",
+    "kind": "infra",
+    "body": "## What it does\n\nRuns loft's parallel constructs (parallel loops and tasks) across multiple threads, coordinating the work and access to the shared store safely. It is the machinery behind the language's `par` features.\n\n## Where it lives\n\n`src/parallel.rs`"
+  },
+  {
+    "number": 73,
+    "title": "Native function registry",
+    "kind": "infra",
+    "body": "## What it does\n\nRegisters the built-in (\"native\") functions and methods — the parts of the standard library backed by Rust — and maps each loft-level name to its Rust implementation, so both backends can call it.\n\n## Where it lives\n\n`src/native.rs`"
+  },
+  {
+    "number": 74,
+    "title": "CDylib extension loader",
+    "kind": "infra",
+    "body": "## What it does\n\nLoads compiled native extension libraries (cdylibs) at runtime and connects their exported functions into the running program, letting a loft program call into prebuilt native code.\n\n## Where it lives\n\n`src/extensions.rs`"
+  },
+  {
+    "number": 75,
+    "title": "Diagnostics collector",
+    "kind": "infra",
+    "body": "## What it does\n\nGathers the errors and warnings produced across the compiler stages and holds them in one place, so they can be reported to the user consistently with source locations attached.\n\n## Where it lives\n\n`src/diagnostics.rs`"
+  },
+  {
+    "number": 76,
+    "title": "Logger runtime",
+    "kind": "infra",
+    "body": "## What it does\n\nImplements the runtime logging system — the machinery behind loft's log and diagnostic output and the `LOFT_LOG` controls — routing messages to the right destinations at the configured verbosity.\n\n## Where it lives\n\n`src/logger.rs`"
+  },
+  {
+    "number": 77,
+    "title": "Registry / manifest / lockfile resolution",
+    "kind": "infra",
+    "body": "## What it does\n\nResolves package dependencies for the package manager: it reads each project's manifest (`loft.toml`), consults the registry, and computes the lockfile that pins exact versions. It is the dependency-resolution brain behind `loft install`.\n\n## Where it lives\n\n`src/registry.rs`"
+  },
+  {
+    "number": 78,
+    "title": "Live-reload dispatch",
+    "kind": "infra",
+    "body": "## What it does\n\nThe mechanism behind live code reload: it watches the source and, when a function changes, swaps the new version into the already-running program without a restart.\n\n## Where it lives\n\n`src/live_reload.rs`"
+  },
+  {
+    "number": 79,
+    "title": "Documentation generator (maintainer tooling)",
+    "kind": "infra",
+    "body": "## What it does\n\nMaintainer tooling that generates the project's HTML documentation from the source and standard library (the `gendoc` binary), keeping the published docs in sync with the code.\n\n## Where it lives\n\n`src/gendoc.rs`"
+  },
+  {
+    "number": 80,
+    "title": "Tracker indexer (maintainer tooling)",
+    "kind": "infra",
+    "body": "## What it does\n\nMaintainer tooling that scans the repository for `@`-prefixed tracker tags and builds the index that `scripts/idx` queries (`index/tags.json`). It is itself written in loft.\n\n## Where it lives\n\n`tools/indexer/` (scanner `tools/indexer/src/scan.loft`, query CLI `tools/indexer/src/idx.loft`)"
+  },
+  {
+    "number": 81,
+    "title": "Feature-catalogue sync generator (issues → in-project mirror + example tests)",
+    "kind": "infra",
+    "body": "## What it does\n\nKeeps the in-project copy of the feature catalogue in step with this issue tracker. It reads a committed snapshot of the issues and regenerates, one-way, a browsable mirror of every entry plus a runnable test file for each feature's example. Agents and CI then work from the issues without anything being written down twice: the issue is the single source, and two guards keep the copy honest — one fails if the mirror drifts from the snapshot, the other fails if any extracted example stops running.\n\n## Where it lives\n\n`tools/features/gen.loft` (the generator), the `Makefile` targets `features-fetch` / `features-gen` / `features-check`, and the example-runs guards in `tests/features.rs` (interpret) and `tests/native.rs::native_features` (native). Realizes strand 3 of @PLN92.\n"
+  },
+  {
+    "number": 82,
+    "title": "Sandbox policy & enforcement",
+    "kind": "infra",
+    "body": "## What it does\n\nDefines what a running loft program is allowed to touch — filesystem, network, environment, subprocesses — as named capability groups, and enforces those limits at the boundary where the program meets the host. It is how a program can be run with least privilege instead of unrestricted access to the machine.\n\n## Where it lives\n\n`src/sandbox.rs`\n"
+  },
+  {
+    "number": 83,
+    "title": "Dev server (--serve / --rpc)",
+    "kind": "infra",
+    "body": "## What it does\n\nRuns loft as a long-lived local server. `--serve` exposes an HTTP + WebSocket endpoint for browser-facing development; `--rpc` speaks a line-delimited JSON protocol so an editor or debugger can drive a session programmatically. Both keep one interpreter alive across many requests instead of starting fresh each time.\n\n## Where it lives\n\n`src/serve.rs` (HTTP / WebSocket), `src/rpc.rs` (NDJSON request/response)\n"
+  },
+  {
+    "number": 84,
+    "title": "Coroutine runtime / yield codec",
+    "kind": "infra",
+    "body": "## What it does\n\nThe machinery behind suspendable functions: it lays out a coroutine's saved state and encodes each yielded value so the side that suspends and the side that resumes agree on the exact bytes crossing the yield boundary. Both the interpreter and the native backend share this one layout, so a coroutine behaves identically on either.\n\n## Where it lives\n\n`src/coroutine_layout.rs`\n"
+  },
+  {
+    "number": 85,
+    "title": "Engine-host kernel natives",
+    "kind": "infra",
+    "body": "## What it does\n\nThe set of low-level host primitives the engine exposes to running loft code — the kernel-level mechanisms, beyond ordinary stdlib functions, that let a program reach into the engine itself. It is the controlled boundary between loft-level code and the host runtime's internals.\n\n## Where it lives\n\n`src/engine_host.rs`\n"
+  },
+  {
+    "number": 86,
+    "title": "Startup cache & embedded stdlib",
+    "kind": "infra",
+    "body": "## What it does\n\nMakes start-up fast. The standard library is embedded directly into the binary, and a cache lets a later run skip re-parsing and re-compiling that stdlib by restoring the previous result. Without it, every run would pay the full standard-library compile cost before the program even starts.\n\n## Where it lives\n\n`src/stdlib_sources.rs` (embedded `default/*.loft` sources), `src/cache.rs` + `src/startup_cache.rs` (the cache)\n"
+  },
+  {
+    "number": 87,
+    "title": "Auto-use / lazy library triggers",
+    "kind": "infra",
+    "body": "## What it does\n\nLets a program use a library's names without writing an explicit import. A lightweight pre-scan of the source works out which library each otherwise-unresolved name belongs to and arranges to load that library the first time the name is used. It keeps small programs terse while still resolving to exactly the right library.\n\n## Where it lives\n\n`src/libscan.rs` (the pre-scan), `src/triggers.rs` (per-library load triggers)\n"
+  },
+  {
+    "number": 88,
+    "title": "Stack traces (stack_trace)",
+    "kind": "feature",
+    "body": "## What it is\n\n`stack_trace()` hands a running program its own call stack — a list of frames, outermost call first, each carrying the function name, source location, and the live arguments and variables at that point. It lets code look at how it got to where it is.\n\n## How it aids you\n\nYou can print a diagnostic dump, log the path into a failure, or build a custom error report without reaching for a debugger — the same call-stack information a debugger shows, made available to the program itself.\n\n## Example\n\n```loft\nfn inner() {\n    for frame in stack_trace() {\n        println(frame.function);   // outermost first: main, then outer, then inner\n    }\n}\nfn outer() { inner(); }\nfn main() { outer(); }\n```\n"
+  },
+  {
+    "number": 89,
+    "title": "Test runner (fn test_*, loft --tests / loft test)",
+    "kind": "feature",
+    "body": "## What it is\n\nloft finds and runs your tests for you: any function named `test_*` is a test. `loft --tests <file>` (or `loft test` in a package) discovers them, runs each, and reports which passed. An `assert(...)` that fails marks the test failed.\n\n## How it aids you\n\nThere is no test framework to install and no runner to wire up — name a function `test_something`, put `assert`s in it, and it runs. Tests sit right next to the code they check.\n\n## Example\n\n```\n// mymath.loft\nfn add(a: integer, b: integer) -> integer { a + b }\n\nfn test_add()  { assert(add(2, 3) == 5); }\nfn test_zero() { assert(add(0, 0) == 0); }\n```\n\nRun them with `loft --tests mymath.loft` — every `test_*` runs and its pass/fail is reported.\n"
+  },
+  {
+    "number": 90,
+    "title": "Shared utilities & data structures",
+    "kind": "infra",
+    "body": "## What it does\n\nA grab-bag of small, dependency-free building blocks the rest of the engine reuses: base64 encoding, hashing, a radix tree, a generic tree, and cross-platform helpers. None is a feature on its own — they are the shared primitives other subsystems are built from.\n\n## Where it lives\n\n`src/base64.rs`, `src/hash.rs`, `src/radix_tree.rs`, `src/tree.rs`, `src/platform.rs`\n"
+  }
+]

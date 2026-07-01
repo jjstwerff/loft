@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I83 — Dev server (--serve / --rpc)
 
 //! @PLN16 M5d phase 2 — the **`--rpc` debug server**: an NDJSON request/response + event
 //! stream over the [wire protocol](../../doc/claude/plans/16-debugger/PROTOCOL.md) that

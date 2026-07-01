@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I74 — CDylib extension loader / generator
 
 //! @PLN11 Arc N / N2 — auto-generate a native cdylib from a library's functions.
 //!

@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I61 — Stack slot allocator
 
 //! Plan-04 Phase 2 / @PLAN53 cluster 2 — single-pool, scope-blind,
 //! **aligned** slot allocator.

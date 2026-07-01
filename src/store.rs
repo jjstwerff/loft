@@ -1,5 +1,6 @@
 // Copyright (c) 2022-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I69 — Word-addressed store
 
 // @PLAN38 phase 01: this module is now `pub mod store` (was `mod store`).
 // Promoting the module surfaced clippy::pedantic lints on existing

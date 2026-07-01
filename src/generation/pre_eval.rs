@@ -1,5 +1,6 @@
 // Copyright (c) 2024-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I68 — Native Rust generator
 
 //! Pre-evaluation pass: hoist complex subexpressions into temp variables
 //! before emitting the main code.  This avoids nested borrow conflicts in

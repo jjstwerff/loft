@@ -1,5 +1,6 @@
 // Copyright (c) 2024-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I65 — Bytecode code generator
 
 //! Bytecode generation stack — tracks the compile-time stack position.
 //!

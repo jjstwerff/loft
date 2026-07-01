@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @F49 — REPL (interactive sessions)
 
 //! @PLN12 phase 03 — interactive REPL session.
 //!

@@ -1,5 +1,6 @@
 // Copyright (c) 2022-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I58 — Parser (two-pass recursive descent to IR)
 
 //! Parse scripts and create internal code from it.
 //! Including type checking.
@@ -3833,6 +3834,7 @@ impl Parser {
         Value::Call(d, vec![code, p])
     }
 
+    // @F17 — resolve named args into positional slots + fill omitted defaults
     /// Resolve named arguments into positional slots, then delegate to `call_nr`.
     #[allow(clippy::too_many_arguments)]
     fn call_with_named(

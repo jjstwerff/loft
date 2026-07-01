@@ -1924,6 +1924,7 @@ fn fill_rs_up_to_date() {
     );
 }
 
+// @I67 — opcode implementations (this generates the @generated src/fill.rs from the default `#rust` bodies)
 // Regenerate src/fill.rs from the default library definitions.
 // Run with: cargo test regen_fill_rs -- --ignored --nocapture
 #[test]

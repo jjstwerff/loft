@@ -1,0 +1,15 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @F14 — GENERATED from loft-lang/features#14 by tools/features/gen.loft — DO NOT EDIT.
+enum Shape {
+    Circle { radius: float },
+    Rect { width: float, height: float }
+}
+fn area(self: Circle) -> float { 3.14 * self.radius * self.radius }
+fn area(self: Rect) -> float { self.width * self.height }
+fn main() {
+    c = Circle { radius: 2.0 };
+    r = Rect { width: 3.0, height: 4.0 };
+    println("circle={c.area()} rect={r.area()}");
+    // circle=12.56 rect=12
+}

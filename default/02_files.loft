@@ -604,3 +604,7 @@ pub fn resolve(self: text, target: text) -> text {
 }
 #pure
 
+
+// @PLN92 catalogue anchors (kept at file end so tag edits do not shift line
+// numbers that hard-coded tests / generated fixtures reference):
+// @F40

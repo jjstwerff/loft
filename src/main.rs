@@ -3686,6 +3686,7 @@ fn main() {
             let path = argv.get(i).cloned().unwrap_or_default();
             i += 1;
             format_mode = Some(("check", path));
+        // @F48 — the loft CLI (run a program; --interpret / --native, --timeout, --help)
         } else if a == "--interpret" || a == "--bytecode" {
             native_mode = false;
         } else if let Some(rest) = a.strip_prefix("--errors=") {
@@ -3748,6 +3749,7 @@ fn main() {
             }
         } else if a == "--all-fns" {
             introspect_all_fns = true;
+        // @F53 — native-binary backend (--native → rustc)
         } else if a == "--native" {
             native_mode = true;
             native_requested = true;
@@ -3794,6 +3796,7 @@ fn main() {
             } else {
                 String::new() // sentinel: compute default from file_name later
             });
+        // @F54 — browser / WASM target (--html / --native-wasm)
         } else if a == "--html" {
             // single-file HTML export with compiled browser WASM.
             html_out = Some(if argv.get(i).is_some_and(|s| is_output_path(s)) {
@@ -3954,6 +3957,7 @@ fn main() {
             if !native_requested {
                 native_mode = false;
             }
+        // @F55 — package management (loft install, loft.toml, lockfile)
         } else if a == "install" {
             // Collect flags + positional in any order.
             #[cfg(feature = "registry")]

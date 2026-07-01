@@ -1,5 +1,6 @@
 // Copyright (c) 2024-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I61 — Stack slot allocator
 
 //! Live-interval analysis: walk the IR tree and record first-def / last-use
 //! sequence numbers for every variable.

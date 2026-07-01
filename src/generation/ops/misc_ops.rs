@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I68 — Native Rust generator
 
 //! Miscellaneous pass-through Op emitters, relocated VERBATIM from the
 //! `output_call_inner` match (`src/generation/dispatch.rs`) to retire that

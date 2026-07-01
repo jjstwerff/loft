@@ -714,6 +714,12 @@ jobs:
         run: cargo build --release --bin loft
       - name: Index hygiene (broken @-tags + markdown links)
         run: cargo nextest run --profile ci -E 'binary(index_hygiene)'
+      - name: Feature-catalogue shadow in sync (@PLN92 strand 3)
+        # Regenerates doc/features/ + tests/docs/features/ from the committed
+        # index/features.json snapshot and fails on any diff — the no-drift
+        # guard.  Reuses the release loft binary built above.  Advisory (this
+        # whole job is), so drift shows red without blocking merge.
+        run: make features-check
 
   # Markdown-renderer smoke test (the loft-view HTTP renderer).  Extracted from
   # the per-platform `Test` matrix: it tests platform-independent rendering (no
@@ -1050,6 +1056,26 @@ jobs:
             scripts/check_doc_drift.sh -q 2>&1 || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # Feature catalogue — a standalone RED-but-non-blocking check (@PLN92 strands
+  # 4 + 5), same posture as the Doc hygiene job above: NOT in the required-
+  # status-checks list, so a failure shows red on the PR without blocking merge.
+  #   Coverage (strand 4): red when a new implementation file lands with no @I
+  #     subsystem / @F feature tag (not in .feature_coverage_baseline).  Fix: tag
+  #     the file (see doc/claude/plans/92-feature-catalogue/) then run
+  #     `scripts/feature_coverage.sh --prune`.
+  #   Hygiene (strand 5): red on a dangling @F<n>/@I<n> tag — one referencing a
+  #     number with no catalogue entry (a typo or stale number).
+  # Both are pure shell — no build needed.
+  feature-catalogue:
+    name: Feature catalogue
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Coverage — every implementation file maps to a catalogue entry
+        run: scripts/feature_coverage.sh --check
+      - name: Hygiene — no dangling @F/@I tag
+        run: scripts/feature_hygiene.sh --check
 
   # Library catalogue staleness guard.  doc/claude/LIBRARIES.md is the in-repo,
   # agent-facing list of every installable registry library — its whole value is

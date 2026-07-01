@@ -466,6 +466,7 @@ impl Parser {
                     return iter_next;
                 }
                 _ => {
+                    // @F32 — custom iterators via fn next(self) -> T?
                     // I13: custom iterator protocol — check for fn next(&T) -> Item?
                     let next_d_nr = self.data.find_fn(u16::MAX, "next", is_type);
                     if next_d_nr != u32::MAX {
@@ -1494,6 +1495,7 @@ use #count instead"
         (iter_var, pre_var, for_var, if_step, create_iter, iter_next)
     }
 
+    // @F28 — for-in loops (ranges, loop attributes, filtered, rev())
     pub(crate) fn parse_for(&mut self, code: &mut Value) {
         // P235: tuple destructure — `for (a, b, ...) in items { ... }`.
         // Parse the parenthesised name list now; later (after the iter
@@ -3537,6 +3539,7 @@ use #count instead"
     /// Compiler special-case for `map(v: vector<T>, f: fn(T) -> U) -> vector<U>`.
     /// Generates inline bytecode equivalent to `[for elm in v { f(elm) }]`.
     #[allow(clippy::too_many_lines)]
+    // @F24 — higher-order functions (map / filter / reduce)
     pub(crate) fn parse_map(&mut self, val: &mut Value, list: &[Value], types: &[Type]) -> Type {
         let placeholder = Type::Vector(Box::new(Type::Unknown(0)), crate::data::Deps::none());
         // On first pass, return the concrete output vector type derived from the function's

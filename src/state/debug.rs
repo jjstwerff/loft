@@ -1,5 +1,6 @@
 // Copyright (c) 2024-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I66 — Bytecode VM / executor
 
 use super::{STRING_NULL, State};
 use crate::data::{Attribute, Context, Data, DefType, Definition, Deps, I32, IntegerSpec, Type};

@@ -1,0 +1,13 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @F16 — GENERATED from loft-lang/features#16 by tools/features/gen.loft — DO NOT EDIT.
+pub fn square(n: integer) -> integer {
+    n * n
+}
+fn greet(name: text) -> text {
+    "Hello, {name}"
+}
+fn main() {
+    println(greet("world"));               // Hello, world
+    println("square(6) = {square(6)}");    // square(6) = 36
+}

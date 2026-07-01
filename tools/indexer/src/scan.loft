@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I80 — Tracker indexer
 //
 // @PLAN37 phase 07 — loft-native tracker-index scanner.
 //
@@ -397,6 +398,8 @@ const BYTE_AT       = 64;   // '@'
 const BYTE_P_UPPER  = 80;   // 'P'
 const BYTE_G_UPPER  = 71;   // 'G'
 const BYTE_H_UPPER  = 72;   // 'H'
+const BYTE_F_UPPER  = 70;   // 'F'  (@F<n> — loft-lang/features feature)
+const BYTE_I_UPPER  = 73;   // 'I'  (@I<n> — loft-lang/features infrastructure)
 const BYTE_P_LOWER  = 112;  // 'p'
 const BYTE_L        = 76;   // 'L'
 const BYTE_A        = 65;   // 'A'
@@ -514,6 +517,28 @@ fn scan_line(file_path: text, line_no: integer, line: text, out: vector<RawRef>)
             }
             // Trailing boundary failed; skip past `@GH` and resume.
             i = i + 3;
+            continue;
+        }
+        // @F<digits> / @I<digits> — loft-lang/features catalogue refs
+        // (user feature / infrastructure).  Number-only identity
+        // (gh-minted, can't go stale); NO optional trailing letter
+        // (unlike @P); same trailing-`\b` rule as @GH.  Validity +
+        // title resolve against the features tracker, not a local
+        // file, so tag_is_valid accepts them via its fallthrough.
+        if i + 3 <= n
+            && (line.byte_at(i + 1) == BYTE_F_UPPER || line.byte_at(i + 1) == BYTE_I_UPPER)
+            && is_digit_b(line.byte_at(i + 2)) {
+            j = i + 2;
+            while j < n && is_digit_b(line.byte_at(j)) { j = j + 1; }
+            if j == n || !is_word_char_b(line.byte_at(j)) {
+                tag = line[i..j];
+                if !ctx_escaped { ctx_esc = json_escape(line); ctx_escaped = true; }
+                out += [RawRef{tag: tag, file: file_path, line: line_no, ctx_escaped: ctx_esc}];
+                i = j;
+                continue;
+            }
+            // Trailing boundary failed; skip past `@F`/`@I` and resume.
+            i = i + 2;
             continue;
         }
         }  // end if b == BYTE_AT

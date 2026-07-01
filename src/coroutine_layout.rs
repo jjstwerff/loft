@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I84 — Coroutine runtime / yield codec
 
 //! Layout-driven yield codec — the single source both ends of a native
 //! coroutine's value channel derive from (`plans/16-coroutine-validation/`,

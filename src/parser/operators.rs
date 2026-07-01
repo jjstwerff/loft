@@ -457,6 +457,7 @@ impl Parser {
         }
     }
 
+    // @F37 — operator set (arithmetic/comparison/logical/bitwise/unary, precedence, **)
     pub(crate) fn parse_operators(
         &mut self,
         var_tp: &Type,
@@ -1660,8 +1661,10 @@ impl Parser {
         operator: &str,
         op_pos: &Position,
     ) -> Option<Type> {
+        // @F2 — ?? null-coalescing operator (incl. `?? return`)
         if operator == "??" {
             self.handle_null_coalesce(var_tp, code, parent_tp, precedence, ctp);
+        // @F5 — type conversions: explicit `as` cast (+ implicit / format-only OpConv*)
         } else if operator == "as" {
             self.expr_not_null = false;
             if let Some(tps) = self.lexer.has_identifier() {

@@ -209,3 +209,7 @@ pub fn program_directory(v:  & text = "") -> text;
 pub fn source_dir() -> text;
 #rust"Stores::source_dir_native()"
 #impure(host_io)
+
+// @PLN92 catalogue anchors (kept at file end so tag edits do not shift line
+// numbers that hard-coded tests / generated fixtures reference):
+// @F41

@@ -1,5 +1,6 @@
 // Copyright (c) 2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I61 — Stack slot allocator
 
 //! Per-function variable table and stack slot assignment.
 //!

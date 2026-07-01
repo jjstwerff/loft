@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I77 — Registry / manifest / lockfile resolution
 
 //! Minimal `loft.toml` manifest reader for external package support (T2-11).
 //! Phase 1: pure-loft package layout.  A simple line-scanner is sufficient

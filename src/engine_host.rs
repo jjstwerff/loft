@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I85 — Engine-host kernel natives
 
 //! @PLN18 phase 01 — the **engine-host kernel natives**: the Rust mechanics behind
 //! the kernel's loft library (`lib/engine_host`).  The host-boundary principle

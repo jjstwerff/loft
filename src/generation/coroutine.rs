@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I68 — Native Rust generator
 
 //! N8b.1 + N8b.2 + N8b.3: Native coroutine state-machine code generation.
 //! Translates loft generator functions (returning `iterator<T>`) into Rust

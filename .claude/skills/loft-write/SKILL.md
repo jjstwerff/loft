@@ -91,7 +91,7 @@ f = 3.14;
 Explicit type annotations (sometimes required for empty collections):
 ```loft
 v: vector<integer> = [];
-n: integer = null;
+n: integer = null as integer;   // a null integer must be cast; bare `= null` is rejected
 ```
 
 ### `const` variables

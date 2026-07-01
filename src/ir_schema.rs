@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I63 — Store-resident IR (reader / handle / materializer)
 
 //! Interim native-IR ↔ JSON codec — @PLAN28 startup-cache bootstrap.
 //!

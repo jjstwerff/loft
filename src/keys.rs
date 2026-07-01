@@ -1,5 +1,6 @@
 // Copyright (c) 2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I71 — DbRef pointers & collection keys
 
 //! Runtime value types for store pointers, string views, and collection keys.
 //!

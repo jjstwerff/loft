@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @F54 — Browser / WASM target (--html / --native-wasm)
 
 //! WASM entry point and host-bridge stubs for the `wasm` Cargo feature.
 //!

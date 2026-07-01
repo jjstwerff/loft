@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I90 — Shared utilities & data structures
 
 //! Built-in base64 encoder kept in the compiler crate for one
 //! compiler-internal use: `main.rs::wasm_b64` base64-encodes the

@@ -102,7 +102,7 @@ ifeq ($(shell id -u),0)
 AS_USER := $(if $(SUDO_USER),sudo -u $(SUDO_USER) -H,)
 endif
 
-.PHONY: gate ci-miri all check-targets doctor install install-artifacts uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-package-native-tests test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game crystal-editor play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook libcatalogue
+.PHONY: gate ci-miri all check-targets doctor install install-artifacts uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-package-native-tests test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game crystal-editor play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook libcatalogue features-fetch features-gen features-check
 
 # Print the overview at the top of this file.  Useful when you land on a
 # fresh checkout and want to know what buttons are available without
@@ -541,6 +541,37 @@ index:  ## Refresh index/tags.json via the loft scanner
 
 index-install-hook:
 	@./tools/indexer/install-hook.sh
+
+# ── @I81 · @PLN92 feature catalogue sync (strand 3) — sync tooling ──
+# The `loft-lang/features` issues are the canonical, self-contained docs; these
+# targets keep the in-project shadow one-way: the mirror (doc/features/) that
+# agents grep + scan.loft indexes, and the runnable examples (tests/docs/features/)
+# that CI runs cross-backend.  See doc/claude/plans/92-feature-catalogue/.
+FEATURES_REPO ?= loft-lang/features
+
+features-fetch:  ## Refresh index/features.json from the loft-lang/features tracker (network; gh + jq)
+	@gh issue list -R $(FEATURES_REPO) --state all --limit 200 \
+	    --json number,title,labels,body \
+	  | jq 'sort_by(.number) | map({number, title, kind: ((.labels|map(.name)|map(select(startswith("kind:")))|.[0]) // "kind:unknown" | sub("^kind:";"")), body})' \
+	  > index/features.json
+	@echo "index/features.json: $$(jq length index/features.json) issues"
+
+features-gen:  ## Regenerate the shadow (doc/features/ + tests/docs/features/) from the snapshot
+	@if [ ! -x target/release/loft ]; then \
+	    echo "host loft binary missing; run: cargo build --release --bin loft"; exit 1; \
+	fi
+	@rm -rf doc/features tests/docs/features
+	@./target/release/loft --interpret tools/features/gen.loft
+
+features-check: features-gen  ## Drift guard: fail if the committed shadow is stale vs the snapshot
+	@out=$$(git status --porcelain -- doc/features tests/docs/features); \
+	if [ -n "$$out" ]; then \
+	    echo "ERROR: doc/features / tests/docs/features drifted from index/features.json."; \
+	    echo "Run 'make features-gen' and commit the result. Offending paths:"; \
+	    echo "$$out"; \
+	    exit 1; \
+	fi
+	@echo "features shadow in sync with index/features.json."
 
 view: view-refresh
 	@if [ ! -f tools/viewer/src/main.loft ]; then \

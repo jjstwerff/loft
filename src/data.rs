@@ -1,5 +1,6 @@
 // Copyright (c) 2022 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I62 — IR data model (Value/Type/Data)
 
 //! Hold all definitions
 //! Those are the combinations of types, records, and routines.
@@ -532,10 +533,10 @@ pub enum Value {
     // T1.4: Write value to element idx of tuple variable var_nr.
     TuplePut(u16, u16, Box<Value>),
     // CO1.3c: Yield a value from a generator function.
-    Yield(Box<Value>),
+    Yield(Box<Value>), // @F34 — coroutines / generators (yield, yield from)
     // Construct a 16-byte fn-ref on the stack: push d_nr (4B via OpConstInt)
     // then push the closure DbRef (12B via OpVarRef of clos_var_nr). No new opcode.
-    FnRef(i32, u16, Box<Type>),
+    FnRef(i32, u16, Box<Type>), // @F23 — function references as first-class values
     // P215: project the d_nr (i64, first 8B of slot) from a fn-ref Var.
     // Used when writing a captured non-capturing fn-ref into a 4B-int
     // field (closure record) — the source's closure DbRef is the null
@@ -1283,6 +1284,7 @@ impl Deps {
 ///
 /// This governs the freeing logic in [`crate::scopes`].  See also
 /// [`Function::depend`](crate::variables::Function) which adds entries.
+// @F3 — primitive scalar types (integer/float/single/boolean/character) — the static Type model
 pub enum Type {
     /// The type of this parse result is unknown, possibly linked to a yet unknown type (if != 0).
     Unknown(u32),
@@ -1311,28 +1313,28 @@ pub enum Type {
     /// A reference to a variable on stack.
     RefVar(Box<Type>),
     /// A dynamic vector of a specific type
-    Vector(Box<Type>, Deps),
+    Vector(Box<Type>, Deps), // @F6 — vector<T> (dynamic array + comprehensions + aggregates)
     /// A dynamic routine, from a routine definition without code.
     /// The actual code is a routine with this routine as a parent or just a Block for a lambda function.
     Routine(u32),
     /// Iterator with a certain result, the first type is the result per step.
     /// The second is the internal iterator value or `Type::Null` for structure iterator: `(i32,i32)`
-    Iterator(Box<Type>, Box<Type>),
+    Iterator(Box<Type>, Box<Type>), // @F10 — iterator<T> values
     /// An ordered vector on a record, second is the key [field name, ascending]
-    Sorted(u32, Vec<(String, bool)>, Deps),
+    Sorted(u32, Vec<(String, bool)>, Deps), // @F8 — sorted<T[keys]> collection
     /// An index towards other records. The key is [field name, ascending]
-    Index(u32, Vec<(String, bool)>, Deps),
+    Index(u32, Vec<(String, bool)>, Deps), // @F9 — index<T[keys]> B-tree (asc/desc, multi-key)
     /// An index towards other records. The second is [field name]
     Spacial(u32, Vec<String>, Deps),
     /// A hash table towards other records. The second is the hash function per [field name].
-    Hash(u32, Vec<String>, Deps),
+    Hash(u32, Vec<String>, Deps), // @F7 — hash<T[keys]> keyed collection
     /// A function reference allowing for closures. Argument types, result, and deps.
     /// The dep list tracks ownership of the closure record embedded in the fn-ref slot.
     Function(Vec<Type>, Box<Type>, Deps),
     /// A rewritten type into append statements (mostly Text or structures)
     Rewritten(Box<Type>),
     /// T1.1: stack-allocated fixed-arity compound type, e.g. `(integer, text)`.
-    Tuple(Vec<Type>),
+    Tuple(Vec<Type>), // @F11 — tuples (anonymous fixed-arity)
     /// @PLN25 — a nullable wrapper over any base type (`τ?`). **Compile-time only:**
     /// `Optional(τ)` and `τ` share the same sentinel-based runtime layout (no wrapper
     /// alloc, no `__nullable` synth for scalars). Build it with [`Type::optional`] (kept
@@ -2193,8 +2195,8 @@ impl Display for Type {
 pub struct Argument {
     pub name: String,
     pub typedef: Type,
-    pub default: Value,
-    pub constant: bool,
+    pub default: Value, // @F17 — default parameter value
+    pub constant: bool, // @F18 — const parameters (compile-time mutation check)
 }
 
 #[derive(Clone)]

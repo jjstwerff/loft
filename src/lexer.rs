@@ -1,5 +1,6 @@
 // Copyright (c) 2022-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I57 — Lexer (source to LexItems)
 
 //! Change a text into symbols to use in the parser.
 //! It is possible to link to the current position in the lexer (link) and return to it (revert)
@@ -19,6 +20,7 @@ use std::vec::IntoIter;
 pub enum Mode {
     /// Expect code with spaces, line ends and remarks removed.
     Code,
+    // @F36 — string formatting / format specifiers (+ for-expressions)
     /// Expect formatting expressions, when encountering a closing bracket continue with a string.
     Formatting,
 }
@@ -1499,6 +1501,7 @@ impl Lexer {
         }
     }
 
+    // @F17 — named-argument detection (two-token lookahead)
     /// Peek two tokens ahead to detect `identifier :` (named argument syntax).
     /// Returns `Some(name)` if the pattern matches, without consuming any tokens.
     /// Returns `None` if the current token is not an identifier followed by `:`.

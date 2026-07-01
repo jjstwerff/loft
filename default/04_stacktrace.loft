@@ -68,3 +68,7 @@ pub fn stack_trace() -> vector<StackFrame>;
 // touch parent state, so par-safe; flagged impure because each
 // call observes a different host snapshot (non-deterministic).
 #impure(host_io)
+
+// @PLN92 catalogue anchors (kept at file end so tag edits do not shift line
+// numbers that hard-coded tests / generated fixtures reference):
+// @F88

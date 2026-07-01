@@ -1,5 +1,6 @@
 // Copyright (c) 2024-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I68 — Native Rust code generator (--native)
 
 use crate::data::{Context, Data, DefType, IntegerSpec, Type, Value};
 use crate::data_store::ValueType;

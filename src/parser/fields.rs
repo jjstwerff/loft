@@ -1,5 +1,6 @@
 // Copyright (c) 2022-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I58 — Parser (two-pass recursive descent)
 
 use super::{DefType, I32, Level, Parser, Parts, Type, Value, diagnostic_format, v_block, v_set};
 

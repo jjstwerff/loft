@@ -1,5 +1,6 @@
 // Copyright (c) 2024-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I70 — Database subsystem (alloc / persistence / journal / snapshot / schema)
 //! Structure allocation, initialization, field get/set, parsing operations.
 
 use crate::database::{Field, Parts, Stores};

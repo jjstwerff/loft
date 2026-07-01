@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @F42 — JSON (json_parse / JsonValue / to_json)
 //
 // JSON parser used by the `json_parse` native function in
 // `src/native.rs`.  Walks UTF-8 text once and returns a `Parsed`

@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I82 — Sandbox policy & enforcement
 
 //! @PLN86 step 1.1 — the sandbox **policy model**: capability-group allow-lists
 //! plus the coarse bans, and the `loft.toml` `[sandbox]` / `[profile.*]` parser
