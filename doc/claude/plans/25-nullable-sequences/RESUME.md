@@ -40,12 +40,15 @@ probe verdicts) → [implementation-steps.md](implementation-steps.md) (the phas
 - **DN1 gaps surfaced by the sweeps (all plan-internal, DN1-gated, NOT GH issues):** (i) ✅ **DONE
   (`73c45ade`)** — scalar `vector<τ?>` element-null: `e2_nullable_elem` now wraps scalar elements in
   `Optional` (OPT-gated, byte-identical gate-OFF; storage unchanged — sentinel null + Optional peels).
-  Unblocked the flagship + 292 (both now fully DN1-green). (ii) native full-range nullable narrow-int
-  field width in `vector<struct>` — blocks 389-h6 AND 407 native (407 line 101 `FullU8 { x: 255 }`).
-  (iii) ✅ **DONE (`08f3837d`)** — native `character?` null-sentinel E0308: peel `.base()` on the four
-  char-wrap type checks in calls.rs (Call/Var/TupleGet/Block) so an `Optional(Character)` arg gets the
-  `ops::to_char` wrap. **So the ONE remaining native gap is (ii)**, blocking 389-h6 + 407. Also: the web
-  consumer `got = raw` store correctly rejects (no flow-narrowing — the eventual ergonomic chokepoint).
+  Unblocked the flagship + 292 (both now fully DN1-green). (ii) ✅ **DONE (`af7d80eb`)** — native
+  full-range nullable narrow-int FIELD in `vector<struct>`: `emit_field` (generation/mod.rs) missed
+  `Optional(Integer)` so the struct sized to 8 bytes (2 on interp) → vector appended at 8-byte stride,
+  read at 2-byte → elements past index 0 read null. Fixed by folding Optional into `nullable` + peeling
+  `typedef` to base in emit_field. Unblocks 389-h6 + 407. (iii) ✅ **DONE (`08f3837d`)** — native
+  `character?` null-sentinel E0308: peel `.base()` on the four char-wrap type checks in calls.rs. **ALL
+  THREE gaps closed; every sweep(4) script is fully DN1-green on both backends; NO native gap remains.**
+  Also: the web consumer `got = raw` store correctly rejects (no flow-narrowing — the eventual
+  ergonomic chokepoint, a separate feature).
 - **`lima-default-borrow-elision` is MERGED to `main`** (via #467/#468/#469 etc.) and the
   branch is deleted. Its scalars Phase-0 + DN4 + N-Arith work is now ON `main`.
 - **@PLN25 now continues on `tuxedo-pln85-fuzz-proof-gate`** (the single live branch, off
