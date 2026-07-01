@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @F48 — loft CLI (--timeout execution watchdog)
 
 //! @PLAN49 T1+T3 — process-wide execution timeout with a watchdog
 //! thread and a shared breadcrumb.

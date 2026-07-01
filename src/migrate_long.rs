@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @F48 — loft CLI (--migrate-long source rewriter)
 
 //! `--migrate-long` — source rewriter for the C54 deprecation of `long`.
 //!

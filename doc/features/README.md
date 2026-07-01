@@ -69,6 +69,8 @@ canonical; these pages are its generated shadow. Regenerate with
 | [@F54](F54.md) | Browser / WASM target (`--html` / `--native-wasm`) |
 | [@F55](F55.md) | Package management (`loft install`, `loft.toml`, lockfile) |
 | [@F56](F56.md) | Live code reload — patch a running program |
+| [@F88](F88.md) | Stack traces (stack_trace) |
+| [@F89](F89.md) | Test runner (fn test_*, loft --tests / loft test) |
 
 ## Infrastructure (`@I`)
 
@@ -105,3 +107,4 @@ canonical; these pages are its generated shadow. Regenerate with
 | [@I85](I85.md) | Engine-host kernel natives |
 | [@I86](I86.md) | Startup cache & embedded stdlib |
 | [@I87](I87.md) | Auto-use / lazy library triggers |
+| [@I90](I90.md) | Shared utilities & data structures |

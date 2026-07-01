@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @F54 — Browser / WASM target (--html / --native-wasm)
 
 //! GL6.1–GL6.3: WebGL2 bridge for WASM builds.
 //!

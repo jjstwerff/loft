@@ -520,5 +520,23 @@
     "title": "Auto-use / lazy library triggers",
     "kind": "infra",
     "body": "## What it does\n\nLets a program use a library's names without writing an explicit import. A lightweight pre-scan of the source works out which library each otherwise-unresolved name belongs to and arranges to load that library the first time the name is used. It keeps small programs terse while still resolving to exactly the right library.\n\n## Where it lives\n\n`src/libscan.rs` (the pre-scan), `src/triggers.rs` (per-library load triggers)\n"
+  },
+  {
+    "number": 88,
+    "title": "Stack traces (stack_trace)",
+    "kind": "feature",
+    "body": "## What it is\n\n`stack_trace()` hands a running program its own call stack — a list of frames, outermost call first, each carrying the function name, source location, and the live arguments and variables at that point. It lets code look at how it got to where it is.\n\n## How it aids you\n\nYou can print a diagnostic dump, log the path into a failure, or build a custom error report without reaching for a debugger — the same call-stack information a debugger shows, made available to the program itself.\n\n## Example\n\n```loft\nfn inner() {\n    for frame in stack_trace() {\n        println(frame.function);   // outermost first: main, then outer, then inner\n    }\n}\nfn outer() { inner(); }\nfn main() { outer(); }\n```\n"
+  },
+  {
+    "number": 89,
+    "title": "Test runner (fn test_*, loft --tests / loft test)",
+    "kind": "feature",
+    "body": "## What it is\n\nloft finds and runs your tests for you: any function named `test_*` is a test. `loft --tests <file>` (or `loft test` in a package) discovers them, runs each, and reports which passed. An `assert(...)` that fails marks the test failed.\n\n## How it aids you\n\nThere is no test framework to install and no runner to wire up — name a function `test_something`, put `assert`s in it, and it runs. Tests sit right next to the code they check.\n\n## Example\n\n```\n// mymath.loft\nfn add(a: integer, b: integer) -> integer { a + b }\n\nfn test_add()  { assert(add(2, 3) == 5); }\nfn test_zero() { assert(add(0, 0) == 0); }\n```\n\nRun them with `loft --tests mymath.loft` — every `test_*` runs and its pass/fail is reported.\n"
+  },
+  {
+    "number": 90,
+    "title": "Shared utilities & data structures",
+    "kind": "infra",
+    "body": "## What it does\n\nA grab-bag of small, dependency-free building blocks the rest of the engine reuses: base64 encoding, hashing, a radix tree, a generic tree, and cross-platform helpers. None is a feature on its own — they are the shared primitives other subsystems are built from.\n\n## Where it lives\n\n`src/base64.rs`, `src/hash.rs`, `src/radix_tree.rs`, `src/tree.rs`, `src/platform.rs`\n"
   }
 ]

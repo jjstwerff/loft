@@ -1,5 +1,6 @@
 // Copyright (c) 2022-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @F89 — Test runner (fn test_*, loft --tests)
 
 //! Test runner: discover and run callable functions in `.loft` files.
 
