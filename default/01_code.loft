@@ -1,5 +1,6 @@
 // Copyright (c) 2022-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @F1 @F4 @F38 @F39 @F44 — catalogue anchors (@PLN92); see loft-lang/features
 // --- Types ---
 // Primitive types built into lav.
 // True or false value.
@@ -1490,7 +1491,3 @@ pub fn to_text(self: boolean) -> text { "{self}" }
 pub fn to_text(self: character) -> text { "{self}" }
 // Returns the text unchanged — the identity case, so `text` satisfies `Printable` too.
 pub fn to_text(self: text) -> text { self }
-
-// @PLN92 catalogue anchors (kept at file end so tag edits do not shift line
-// numbers that hard-coded tests / generated fixtures reference):
-// @F1 @F4 @F38 @F39 @F44

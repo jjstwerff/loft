@@ -1,5 +1,6 @@
 // Copyright (c) 2024 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @F40 — file & directory I/O (catalogue anchor, @PLN92)
 // --- File System ---
 // Types and functions for reading and writing files.
 // A File value is obtained via file() and carries the path, format, and an internal reference.
@@ -604,7 +605,3 @@ pub fn resolve(self: text, target: text) -> text {
 }
 #pure
 
-
-// @PLN92 catalogue anchors (kept at file end so tag edits do not shift line
-// numbers that hard-coded tests / generated fixtures reference):
-// @F40

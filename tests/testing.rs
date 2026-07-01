@@ -17,6 +17,35 @@ use loft::log_config::LogConfig;
 use std::fs::File;
 use std::io::Write;
 
+/// Normalise standard-library source locations in a diagnostic line: any
+/// `*.loft:LINE:COL` collapses to `*.loft`, so tests do NOT hard-code (and break
+/// on) `default/*.loft` line numbers when the stdlib shifts — e.g. when a
+/// catalogue tag is inserted anywhere in a stdlib file.  User code is referenced
+/// by test name, not a `.loft` path, so only stdlib references are affected.
+fn normalize_loft_loc(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(pos) = rest.find(".loft:") {
+        out.push_str(&rest[..pos]);
+        out.push_str(".loft");
+        let tail = &rest[pos + ".loft:".len()..];
+        let line_len = tail.chars().take_while(|c| c.is_ascii_digit()).count();
+        let after_line = &tail[line_len..];
+        if line_len > 0 && after_line.starts_with(':') {
+            let col = &after_line[1..];
+            let col_len = col.chars().take_while(|c| c.is_ascii_digit()).count();
+            if col_len > 0 {
+                rest = &col[col_len..]; // dropped ":LINE:COL"
+                continue;
+            }
+        }
+        out.push(':'); // a ".loft:" not followed by LINE:COL — keep it verbatim
+        rest = tail;
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Evaluate the given code.
 /// When a result is given, there should be a present @test routine returning this result.
 /// When a type is also given, this result should be of that type.
@@ -461,19 +490,22 @@ impl Test {
     fn assert_diagnostics(&self, p: &Parser) {
         let mut expected = BTreeSet::new();
         for w in &self.warnings {
-            expected.insert(format!("Warning: {w}"));
+            expected.insert(normalize_loft_loc(&format!("Warning: {w}")));
         }
         for w in &self.errors {
-            expected.insert(format!("Error: {w}"));
+            expected.insert(normalize_loft_loc(&format!("Error: {w}")));
         }
         for w in &self.fatal {
-            expected.insert(format!("Fatal: {w}"));
+            expected.insert(normalize_loft_loc(&format!("Fatal: {w}")));
         }
         let mut found = "".to_string();
         for l in &p.diagnostics.lines() {
             if l.starts_with("Debug: ") {
                 continue; // Debug-level diagnostics are not surfaced in tests
             }
+            // Stdlib source locations are location-agnostic in assertions
+            // (@PLN92): match the normalized form used to build `expected`.
+            let l = normalize_loft_loc(l);
             // Plan-07 phase 4e.2 / 4h — filter the undefended-fault-
             // site compile-time warning AND the not-null field
             // reminder hint so the existing diagnostic-comparison
@@ -489,15 +521,15 @@ impl Test {
                 || l.starts_with("Warning: `v[i]` may produce null")
                 || l.starts_with("Warning: `s[i]` may produce null")
                 || l.starts_with("Warning: field ");
-            if expected.contains(l) {
-                expected.remove(l);
+            if expected.contains(&l) {
+                expected.remove(&l);
             } else if is_runtime_warning {
                 continue;
             } else {
                 if !found.is_empty() {
                     found += "|";
                 }
-                found += l;
+                found += &l;
             }
         }
         let mut was = "".to_string();

@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @F42 — JSON (catalogue anchor, @PLN92)
 //
 // First-class JSON as a typed tree.
 //
@@ -231,7 +232,3 @@ pub fn struct_to_json(self_ref: JsonValue, struct_kt: integer) -> text;
 /// As `struct_to_json` but produces a pretty (2-space-indent, one
 /// element per line) form.  Same field-type matrix.
 pub fn struct_to_json_pretty(self_ref: JsonValue, struct_kt: integer) -> text;
-
-// @PLN92 catalogue anchors (kept at file end so tag edits do not shift line
-// numbers that hard-coded tests / generated fixtures reference):
-// @F42
