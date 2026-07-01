@@ -115,6 +115,8 @@ already have** — not a new testing or doc-rewrite mechanism.
 - **Dual-anchor (the *locator* layer):** bare `@F<n>` / `@I<n>` in the docs +
   implementing source; `idx` joins them — the `@P###` split. This says *where the feature
   lives*; the issue says *what it is*. Two separate layers, both from the one number.
+  `idx tag:@F<n> --code` / `--doc` splits a tag's references into implementation vs
+  documentation (the mirror `doc/features/<slug>.md` is the canonical doc anchor).
 - **Source-coverage gate (the keystone):** every substantive source region is
   attributed to an `@F` (per-capability) or `@I` (coarse, subsystem-level) entry; the
   residue — attributed to **neither** — must stay under a **ratcheting budget** (the

@@ -22,6 +22,12 @@
 #                                   non-existent files (phase 09)
 #   idx help                      — print this usage block
 #
+# Ref selectors (apply to tag:/gh:/incoming:@ forms; ignored elsewhere).
+# Split a tag's references by where they live — implementation vs docs:
+#   --code           — keep only code refs (non-.md: src/, default/, .loft, …)
+#   --doc            — keep only doc refs (.md files)
+#   (omit both)      — all references.  Combine with the context flags below.
+#
 # Context flags (apply to tag: form; ignored elsewhere).
 # Adds an `excerpt` field per ref:
 #   --before N       — include N lines BEFORE the tag's line
@@ -51,6 +57,7 @@ BEFORE=0
 AFTER=0
 PARA=0
 MAX_BYTES=4096
+SELECT=""          # --code / --doc ref-kind filter (empty = all)
 QUERY=""
 
 while [ $# -gt 0 ]; do
@@ -60,6 +67,8 @@ while [ $# -gt 0 ]; do
     --lines)     AFTER="$2"; shift 2 ;;   # back-compat alias
     --para)      PARA="$2"; shift 2 ;;
     --max-bytes) MAX_BYTES="$2"; shift 2 ;;
+    --code)      SELECT="code"; shift ;;
+    --doc)       SELECT="doc"; shift ;;
     -*|--help|help|"") QUERY="${QUERY:-$1}"; shift ;;
     *)           if [ -z "$QUERY" ]; then QUERY="$1"; shift
                  else echo "scripts/idx: extra arg '$1'" >&2; exit 2; fi ;;
@@ -127,6 +136,17 @@ extract_excerpt() {
   ' "$1"
 }
 
+# Filter a JSON array of refs by kind: --code keeps implementation files
+# (non-.md), --doc keeps documentation (.md).  No-op when SELECT is empty.
+# Only the flat-array forms (tag:/gh:/incoming:@) are filtered.
+filter_kind() {
+  case "$SELECT" in
+    code) jq 'map(select(.file | endswith(".md") | not))' ;;
+    doc)  jq 'map(select(.file | endswith(".md")))' ;;
+    *)    cat ;;
+  esac
+}
+
 # Apply context-extraction to a JSON array of refs.
 add_excerpts() {
   if [ "$BEFORE" -eq 0 ] && [ "$AFTER" -eq 0 ] && [ "$PARA" -eq 0 ]; then
@@ -166,13 +186,13 @@ case "$QUERY" in
     if [[ "$t" =~ ^@GH([0-9]+)$ ]]; then
       echo "→ https://github.com/loft-lang/loft/issues/${BASH_REMATCH[1]}  (issue or PR — GitHub redirects)"
     fi
-    jq --arg t "$t" '.[$t] // []' "$IDX" | add_excerpts
+    jq --arg t "$t" '.[$t] // []' "$IDX" | filter_kind | add_excerpts
     ;;
   gh:*)
     # idx gh:247 → the issue/PR URL + every @GH247 reference (offline).
     n="${QUERY#gh:}"
     echo "→ https://github.com/loft-lang/loft/issues/${n}  (issue or PR — GitHub redirects)"
-    jq --arg t "@GH${n}" '.[$t] // []' "$IDX" | add_excerpts
+    jq --arg t "@GH${n}" '.[$t] // []' "$IDX" | filter_kind | add_excerpts
     ;;
   prefix:*)
     # prefix returns an OBJECT; flatten refs across all matching
@@ -208,7 +228,7 @@ case "$QUERY" in
     Q="${QUERY#incoming:}"
     case "$Q" in
       @*)
-        jq --arg t "$Q" '.[$t] // []' "$IDX" | add_excerpts
+        jq --arg t "$Q" '.[$t] // []' "$IDX" | filter_kind | add_excerpts
         ;;
       *)
         # Try the path verbatim first; then with /README.md
@@ -246,7 +266,9 @@ case "$QUERY" in
     jq '.broken_links // []' "$IDX"
     ;;
   ""|-h|--help|help)
-    sed -n '2,30p' "$0"
+    # Print the whole leading comment block (from line 2 to the first
+    # non-comment line) so the usage stays complete as it grows.
+    awk 'NR==1{next} /^#/{print; next} {exit}' "$0"
     ;;
   *)
     echo "scripts/idx: unknown query '$QUERY' (try: idx help)" >&2
