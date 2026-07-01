@@ -37,12 +37,13 @@ probe verdicts) → [implementation-steps.md](implementation-steps.md) (the phas
   committed, gate-OFF green): 389-h6 (native full-range nullable narrow-int FIELD in a `vector<struct>`
   not widened to 2-byte → max value swallowed) and 407 (native `character?` null-sentinel E0308);
   **2 reverted pristine, blocked** on the scalar-`vector<τ?>` slice (292, flagship 25-nullable-sequences).
-- **⚠️ 3 DN1 gaps surfaced by the sweeps (all plan-internal, DN1-gated, NOT GH issues):** (i) scalar
-  `vector<τ?>` element-null is UNWIRED — `e2_nullable_elem` (expressions.rs:2454) only synths
-  `__nullable<S>` for a struct element, drops `?` for scalars → `vector<integer?>` == `vector<integer>`
-  (blocks flagship + 292); (ii) native full-range nullable narrow-int field width in `vector<struct>`
-  (blocks 389-h6 native); (iii) native `character?` null-sentinel E0308 (blocks 407 native). Also: the
-  web consumer `got = raw` store correctly rejects (no flow-narrowing — the eventual ergonomic chokepoint).
+- **DN1 gaps surfaced by the sweeps (all plan-internal, DN1-gated, NOT GH issues):** (i) ✅ **DONE
+  (`73c45ade`)** — scalar `vector<τ?>` element-null: `e2_nullable_elem` now wraps scalar elements in
+  `Optional` (OPT-gated, byte-identical gate-OFF; storage unchanged — sentinel null + Optional peels).
+  Unblocked the flagship + 292 (both now fully DN1-green). (ii) native full-range nullable narrow-int
+  field width in `vector<struct>` (blocks 389-h6 native); (iii) native `character?` null-sentinel E0308
+  (blocks 407 native). Also: the web consumer `got = raw` store correctly rejects (no flow-narrowing —
+  the eventual ergonomic chokepoint).
 - **`lima-default-borrow-elision` is MERGED to `main`** (via #467/#468/#469 etc.) and the
   branch is deleted. Its scalars Phase-0 + DN4 + N-Arith work is now ON `main`.
 - **@PLN25 now continues on `tuxedo-pln85-fuzz-proof-gate`** (the single live branch, off
