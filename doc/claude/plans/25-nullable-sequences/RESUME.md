@@ -42,9 +42,12 @@ Latest work, newest first (all on this branch, both backends, suites green unles
 regardless of fallback nullability — `x ?? null` unsoundly non-null); and N-Store is NOT enforced at
 CALL ARGS (`takes(v[j])` doesn't reject — affects division equally).
 
-**Next-session pick (recommended order):** either the **index F1a landing phase** (start with the
-copy-elision `Optional`-peel — the load-bearing + riskiest piece), or the smaller **gap #3 `??`-typing**
-slice, or the **call-arg N-Store** slice (closes a hole across all fault-ops at once). Then F2–F6.
+**NEXT SESSION = the index F1a landing phase.** Step-by-step instrument (with the exact copy-elision
+starting points, the 6-test failure map, and the migration inventory) is in a dedicated doc:
+**[index-f1a-landing.md](index-f1a-landing.md) — start there.** Step 1 is the load-bearing +
+riskiest piece: the copy-elision `Optional`-peel in the deps subsystem (`use_analysis::ElidePlan` /
+`scopes`), proven on the 85-borrow read/mut/esc matrix, both backends. (Deferred alternatives if you
+want a smaller unit instead: **gap #3 `??`-typing**, or the **call-arg N-Store** slice.) Then F2–F6.
 
 - **PR #471 MERGED to `main` (squash `03d8899f`, 2026-07-01)** — the whole scalars-half:
   `Type::Optional` + slice 3a/b/c (N-Store) + the gated DN1 flip + enforcement + sweep(1)
