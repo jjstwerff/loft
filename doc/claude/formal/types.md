@@ -266,10 +266,10 @@ today; under the rule it must require `x: integer?`. Closes when the scalar defa
 The `keys.rs` default-on flip (`LOFT_PLN25_OFF` opts out) + the `n_store_violation` enforcement of
 `(N-Store)`/`(N-Decl)` at return / field / typed-store / vector-index sites are validated; the
 scalar-vector-element + `character?` + narrow-field-in-vector native gaps are closed. Landing is
-gated on: (a) resolving the remaining red tests (measured, small); (b) fixing the `change_var`
-local-null message (it wrongly suggests `as`; must name `integer?` — see the mitigation doc §2);
-(c) migrating the stdlib `min`/`max`/`clamp` dead null-prop + removing the `STD_SOURCE` exemption;
-(d) closing DN5 + DN6 below. Full sequence: [DN1-MITIGATION.md](../plans/25-nullable-sequences/DN1-MITIGATION.md).
+gated on: (a) resolving the remaining red tests (measured, small); (b) ✅ DONE (`85af2b18`) — the
+`change_var` local-null message now names `integer?` and no longer suggests `as`; (c) migrating the
+stdlib `min`/`max`/`clamp` dead null-prop + removing the `STD_SOURCE` exemption; (d) closing DN5 + DN6
+below. Full sequence: [DN1-MITIGATION.md](../plans/25-nullable-sequences/DN1-MITIGATION.md).
 
 ### DN2 — implicit `S? ⤳ S` unwrap still exists
 Code still performs the implicit `Enum(__nullable<S>) ⤳ Reference(S)` unwrap (the old

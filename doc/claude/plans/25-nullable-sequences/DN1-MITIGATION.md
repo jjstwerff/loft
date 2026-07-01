@@ -79,13 +79,14 @@ we must not auto-widen `integer` to `integer?` here. **The annotation must keep 
 promise**, so this stays a **diagnostic**, not an auto-fix. The human writes
 `a: integer? = null` if nullable was intended.
 
-> ⚠️ **Open message bug (fix before the flip lands).** The local path routes through
-> `change_var`, whose message is:
-> `Variable 'a' cannot change type from integer to null; use a new variable name or cast with 'as'`
-> This is wrong twice: (a) it does **not** name the real fix (`a: integer?`), and (b) it
-> **suggests `as`** — which is the laundering hole of §6. It should emit the same
-> `(N-Store)` message as the field/return sites ("declare it `integer?` to allow null"),
-> and must NOT suggest `as`. **This is the single highest-value diagnostic fix in the flip.**
+> ✅ **Message fixed (`85af2b18`).** The local path used to route through `change_var`'s
+> generic message (`… cannot change type from integer to null; use a new variable name or
+> cast with 'as'`) — wrong twice: it didn't name `integer?`, and it *suggested `as`* (the §6
+> hole). It now emits, DN1-gated, `Variable 'a' cannot hold both `null` and the non-null
+> scalar type `integer` — declare it `integer?` to allow null (do NOT cast with `as`: `null
+> as integer` would store null into a non-null slot)`. Gate-OFF byte-identical (the branch is
+> behind `pln25_dn1_enabled`; gate-OFF `null` is coerced before `change_var`). Regression:
+> `pln25_dn1_consumption.rs::dn1_null_local_message_names_optional_not_as`.
 
 ### 3. An un-discharged `τ?` stored into a `τ` slot → discharge (`??` / `match`)  ·  strategy **D** (auto only with narrowing)
 
