@@ -364,6 +364,9 @@ impl Parser {
     }
 
     // <enum> ::= 'enum' <identifier> '{' <value> {, <value>} '}' [';']
+    // @F13 — simple enums (ordered value types)
+    // @F14 — polymorphic struct-enums (per-variant fields)
+    // @F15 — enum-scoped variant names + context inference
     pub(crate) fn parse_enum(&mut self) -> bool {
         if !self.lexer.has_token("enum") {
             return false;
@@ -2117,6 +2120,7 @@ impl Parser {
         }
     }
 
+    // @F12 — struct records (fields, `= default`, `computed`, `limit`/`not null`/`assert`)
     pub(crate) fn parse_struct(&mut self) -> bool {
         if !self.lexer.has_token("struct") {
             return false;
