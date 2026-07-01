@@ -618,6 +618,7 @@ impl Parser {
             );
         }
         // detect `<T>` type parameter after function name.
+        // @F25 — generics: single type variable <T>, inferred
         let mut is_generic = false;
         let mut type_var_name = String::new();
         // I4: bound names collected from `<T: A + B>` — resolved to def_nrs in the second pass.
@@ -1109,6 +1110,7 @@ impl Parser {
             let is_stub = {
                 let def = &self.data.definitions[self.context as usize];
                 let body_empty = matches!(def.code(), Value::Block(bl) if bl.operators.is_empty());
+                // @F19 — method dispatch via self / both
                 let first_is_self = def.attributes().first().is_some_and(|a| a.name == "self");
                 body_empty && first_is_self
             };

@@ -2542,6 +2542,7 @@ use a separate collection or add after the loop"
             // @PLN87 #2 — a `&` in the declared type (`b: &T = src`) makes `b` a
             // reference to the addressable `src` — the same as `b = &src`, just with
             // the `&` on the type instead of the value.  Mirror the param parser.
+            // @F21 — references &T (parameters + write-back bindings)
             let is_ref = self.lexer.has_token("&");
             let mut got_annotation = false;
             if let Some(tp) = self.parse_type_full(u32::MAX, false)

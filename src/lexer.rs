@@ -20,6 +20,7 @@ use std::vec::IntoIter;
 pub enum Mode {
     /// Expect code with spaces, line ends and remarks removed.
     Code,
+    // @F36 — string formatting / format specifiers (+ for-expressions)
     /// Expect formatting expressions, when encountering a closing bracket continue with a string.
     Formatting,
 }

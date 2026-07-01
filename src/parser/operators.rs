@@ -457,6 +457,7 @@ impl Parser {
         }
     }
 
+    // @F37 — operator set (arithmetic/comparison/logical/bitwise/unary, precedence, **)
     pub(crate) fn parse_operators(
         &mut self,
         var_tp: &Type,

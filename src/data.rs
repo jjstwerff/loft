@@ -533,10 +533,10 @@ pub enum Value {
     // T1.4: Write value to element idx of tuple variable var_nr.
     TuplePut(u16, u16, Box<Value>),
     // CO1.3c: Yield a value from a generator function.
-    Yield(Box<Value>),
+    Yield(Box<Value>), // @F34 — coroutines / generators (yield, yield from)
     // Construct a 16-byte fn-ref on the stack: push d_nr (4B via OpConstInt)
     // then push the closure DbRef (12B via OpVarRef of clos_var_nr). No new opcode.
-    FnRef(i32, u16, Box<Type>),
+    FnRef(i32, u16, Box<Type>), // @F23 — function references as first-class values
     // P215: project the d_nr (i64, first 8B of slot) from a fn-ref Var.
     // Used when writing a captured non-capturing fn-ref into a 4B-int
     // field (closure record) — the source's closure DbRef is the null

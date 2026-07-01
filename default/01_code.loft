@@ -171,6 +171,7 @@ fn OpMinInt(v1: integer, v2: integer) -> integer;
 #rust"ops::op_min_int(@v1, @v2)"
 fn OpMulInt(v1: integer, v2: integer) -> integer;
 #rust"ops::op_mul_int(@v1, @v2)"
+// @F38 — arithmetic safety (overflow / ÷0 → null, nullable peers)
 fn OpDivInt(v1: integer, v2: integer) -> integer;
 #rust"if @v2 == 0 {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::DivideByZero); i64::MIN }} else {{ ops::op_div_int(@v1, @v2) }}"
 fn OpRemInt(v1: integer, v2: integer) -> integer;
