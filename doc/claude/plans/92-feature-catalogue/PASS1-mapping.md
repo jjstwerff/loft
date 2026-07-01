@@ -82,7 +82,7 @@ Counts as drafted: **`@F` ≈ 57** (incl. toolchain) · **`@I` ≈ 24** pure-int
 - **Custom iterators (`fn next`)** — LOFT.md §Custom iterators — *(fold?)*
 
 ### Concurrency
-- **`par(...)` parallel for-loop** — LOFT.md §Parallel / THREADING.md — *(mechanism: @I parallel runtime)*
+- **`par(...)` parallel for-loop** — LOFT.md §Parallel / THREADING.md — *(mechanism: @I72 parallel runtime)*
 - **Coroutines / generators (`yield`, `yield from`)** — COROUTINE.md
 
 ### Strings, operators
@@ -97,7 +97,7 @@ Counts as drafted: **`@F` ≈ 57** (incl. toolchain) · **`@I` ≈ 24** pure-int
 - **Environment & args (env vars, `arguments()`, program dirs, path resolution)** — LOFT.md §Environment
 - **JSON (json_parse / JsonValue / `Type.parse` / to_json)** — LOFT.md §Parsing
 - **Random numbers** — LOFT.md §Random numbers
-- **Logging & diagnostics API (log_*, print, assert, panic)** — LOFT.md §Logging — *(runtime: @I logger)*
+- **Logging & diagnostics API (log_*, print, assert, panic)** — LOFT.md §Logging — *(runtime: @I76 logger)*
 - **`sizeof()`** — LOFT.md §Sizeof — *(fold into types?)*
 - **Type aliases** — LOFT.md §Declarations — *(fold into types?)*
 
@@ -110,10 +110,10 @@ Counts as drafted: **`@F` ≈ 57** (incl. toolchain) · **`@I` ≈ 24** pure-int
 - **Introspection — `loft introspect` (bytecode / native Rust / slot tables)** — surface: `src/introspect.rs`
 - **Debugger — breakpoints, frame capture, scripted RPC** — surface: `src/debugger.rs`
 - **Source formatter — canonical `.loft` output** — surface: `src/formatter.rs`
-- **Native-binary backend (`--native` → rustc)** — *(mechanism: @I native generator)*
-- **Browser / WASM target (`--html` / `--native-wasm`)** — *(mechanism across generation/ + state)*
-- **Package management (`loft install`, `loft.toml`, lockfile)** — *(mechanism: @I registry/manifest)*
-- **Live code reload (patch a running program)** — *(mechanism: @I live-reload dispatch)*
+- **Native-binary backend (`--native` → rustc)** — *(mechanism: @I68 native generator)*
+- **Browser / WASM target (`--html` / `--native-wasm`)** — *(mechanism: @I68 native generator + @I66 VM/state)*
+- **Package management (`loft install`, `loft.toml`, lockfile)** — *(mechanism: @I77 registry/manifest + @I74 cdylib loader)*
+- **Live code reload (patch a running program)** — *(mechanism: @I78 live-reload dispatch)*
 
 ---
 
@@ -133,17 +133,17 @@ None has a user-program-author usage example.
 - **Bytecode code generator** — `src/state/codegen.rs`
 - **Bytecode VM / executor** — `src/state/mod.rs` (+ text.rs, io.rs, debug.rs)
 - **Opcode implementations** — `src/fill.rs`
-- **Native Rust generator** *(mechanism of the native backend `@F`)* — `src/generation/*`
+- **Native Rust generator** *(mechanism of the native backend @F53)* — `src/generation/*`
 - **Word-addressed store** — `src/store.rs`
 - **Database — alloc / persistence / journal / snapshot / schema** — `src/database/*`
 - **DbRef pointers & collection keys** — `src/keys.rs`
-- **Parallel execution runtime** *(mechanism of `par` `@F`)* — `src/parallel.rs`
+- **Parallel execution runtime** *(mechanism of `par` @F33)* — `src/parallel.rs`
 - **Native function registry** — `src/native.rs`
-- **CDylib extension loader** *(mechanism of package loading)* — `src/extensions.rs`
+- **CDylib extension loader** *(mechanism of package loading — @F55)* — `src/extensions.rs`
 - **Diagnostics collector** *(mechanism behind user-facing error messages)* — `src/diagnostics.rs`
-- **Logger runtime** *(mechanism of the logging `@F`)* — `src/logger.rs`
-- **Registry / manifest / lockfile resolution** *(mechanism of package mgmt `@F`)* — `src/registry.rs`, `src/manifest.rs`, `src/lockfile.rs`
-- **Live-reload dispatch** *(mechanism of live reload `@F`)* — `src/live_reload.rs`, `src/live_dispatch.rs`
+- **Logger runtime** *(mechanism of the logging @F44)* — `src/logger.rs`
+- **Registry / manifest / lockfile resolution** *(mechanism of package mgmt @F55)* — `src/registry.rs`, `src/manifest.rs`, `src/lockfile.rs`
+- **Live-reload dispatch** *(mechanism of live reload @F56)* — `src/live_reload.rs`, `src/live_dispatch.rs`
 - **Documentation generator (maintainer tooling)** — `src/gendoc.rs`, `src/documentation.rs`
 - **Tracker indexer (maintainer tooling)** — `tools/indexer/src/scan.loft`
 
@@ -236,6 +236,40 @@ Pass 2 places `// @F<n>` / `// @I<n>` at the source sites for these.
 @I79 Documentation generator (maintainer tooling)
 @I80 Tracker indexer (maintainer tooling)
 ```
+
+## `@F` ↔ `@I` mechanism map
+
+The catalogue keeps a user **capability** (`@F`) and its implementing
+**mechanism** (`@I`) as separate entries (see the classification axis above);
+this table is the canonical join between them, so `idx tag:@F33` and
+`idx tag:@I72` surface each other. It is derived from the `*(mechanism …)*`
+annotations in the `@F`/`@I` lists above, now carrying minted numbers.
+
+Only clean *"this `@I` **is the mechanism of** that `@F`"* pairs are listed.
+Cross-cutting subsystems — lexer (@I57), parser (@I58), type resolver (@I59),
+slot allocator (@I61), IR model (@I62), bytecode compiler/generator
+(@I64/@I65), opcode impls (@I67), word-addressed store (@I69) — implement
+*most* features and are deliberately left unpaired (pairing them would join
+everything to everything).
+
+| user feature `@F` | implementing mechanism `@I` |
+|---|---|
+| @F7 hash · @F8 sorted · @F9 index (keyed collections) | @I71 DbRef pointers & collection keys · @I70 database |
+| @F21 references `&T` | @I60 scope & dependency/lifetime tracker (`deps`) |
+| @F33 par | @I72 parallel execution runtime |
+| @F40 file & directory I/O (durable-store binding) | @I70 database (alloc/persistence/journal) |
+| @F44 logging & diagnostics API | @I76 logger runtime |
+| @F53 native-binary backend | @I68 native Rust generator |
+| @F54 browser / WASM target | @I68 native Rust generator · @I66 bytecode VM/state |
+| @F55 package management | @I77 registry/manifest/lockfile · @I74 cdylib extension loader |
+| @F56 live code reload | @I78 live-reload dispatch |
+
+Add a row when a new `@I` is genuinely one feature's mechanism; leave
+cross-cutting infrastructure unpaired. (This is the in-repo join layer, like
+the `**Catalogue:**` anchors in DESIGN_DECISIONS.md — not content added to the
+zero-deferral issue bodies.)
+
+---
 
 ## Decisions for review
 
