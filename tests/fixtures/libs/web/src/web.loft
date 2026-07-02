@@ -273,12 +273,12 @@ pub fn byte_at(idx: integer, t: text) -> integer;
 //   }
 
 pub struct WsGroupEvent {
-  handle: integer,
+  handle: integer not null,
   message: text
 }
 
 pub struct WsGroup {
-  _dummy: integer   // no state on loft side; Rust owns the list
+  _dummy: integer not null   // no state on loft side; Rust owns the list
 }
 
 fn ws_group_clear_native();

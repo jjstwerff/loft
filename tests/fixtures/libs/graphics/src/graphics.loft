@@ -35,9 +35,9 @@ pub fn color_a(color: integer) -> integer {
 // Pixels are stored row-major: data[y * width + x].
 
 pub struct Canvas {
-  width: integer,
-  height: integer,
-  data: vector<integer>
+  width: integer not null,
+  height: integer not null,
+  data: vector<integer> not null
 }
 
 // Create a canvas filled with a solid color.
@@ -564,16 +564,16 @@ pub fn gl_upload_vertices(data: vector<single>, stride: integer) -> integer;
 // moros terrain renderer is the next.  GL calls cannot run headless, so this is
 // validated by those consumers, not a unit test.
 struct GroupVbo {
-  gk:    integer,   // group key (NOT 'key' — reserved in hash-value structs)
-  vao:   integer,
-  count: integer,   // vertices = floats / stride
+  gk:    integer not null,   // group key (NOT 'key' — reserved in hash-value structs)
+  vao:   integer not null,
+  count: integer not null,   // vertices = floats / stride
   min_x: single, min_z: single, max_x: single, max_z: single,   // world bounds (future cull)
 }
 
 pub struct GroupVboSet {
   slots:     hash<GroupVbo[gk]>,
-  stride:    integer,   // floats per vertex (e.g. 14 crystal, 10 ground)
-  draw_mode: integer,   // DRAW_TRIANGLES / DRAW_LINES / …
+  stride:    integer not null,   // floats per vertex (e.g. 14 crystal, 10 ground)
+  draw_mode: integer not null,   // DRAW_TRIANGLES / DRAW_LINES / …
 }
 
 // Create an empty set for a fixed vertex stride + draw mode.
@@ -926,13 +926,13 @@ void main() {{
 /// A sprite sheet backed by a Canvas atlas uploaded as a GL texture.
 /// Sprites are arranged in a grid of `ss_cols` x `ss_rows` cells.
 pub struct SpriteSheet {
-  ss_tex: integer,      // GL texture handle
-  ss_shader: integer,   // textured quad shader
-  ss_vao: integer,      // unit quad VAO (shared)
-  ss_cols: integer,
-  ss_rows: integer,
-  ss_cell_w: integer,
-  ss_cell_h: integer,
+  ss_tex: integer not null,      // GL texture handle
+  ss_shader: integer not null,   // textured quad shader
+  ss_vao: integer not null,      // unit quad VAO (shared)
+  ss_cols: integer not null,
+  ss_rows: integer not null,
+  ss_cell_w: integer not null,
+  ss_cell_h: integer not null,
 }
 
 /// Create a sprite sheet from a Canvas atlas.
@@ -1035,9 +1035,9 @@ void main() {{
 /// projection. Create once per window with `create_painter_2d`, then use
 /// `draw_rect_at`, `draw_sprite_at`, and `draw_texture_at` to render.
 pub struct Painter2D {
-  p2_flat: integer,        // flat color shader
-  p2_tex: integer,         // textured quad shader (V-flipped)
-  p2_vao: integer,         // shared unit-quad VAO
+  p2_flat: integer not null,        // flat color shader
+  p2_tex: integer not null,         // textured quad shader (V-flipped)
+  p2_vao: integer not null,         // shared unit-quad VAO
   p2_proj: vector<float>,           // orthographic projection (16 floats)
 }
 

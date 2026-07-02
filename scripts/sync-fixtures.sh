@@ -117,6 +117,12 @@ EOF
 #   tests use.  Drop these lines when loft-libs-graphics / loft-libs-world ship
 #   tags carrying the masks and bump PINNED_REFS instead.  (Same shape as the
 #   imaging `not null` patch above — a gate flip the upstream tag predates.)
+#
+# - web/src/web.loft — @PLN25 DN1 (non-null default): `try_recv` genuinely
+#   returns null on no-frame, so under DN1 its return type must be `text?`;
+#   the pinned web-v0.1.1 tag predates the flip (`-> text` + `return null`
+#   rejects).  Drop this line when loft-libs-net ships the `text?` migration
+#   (the web/server republish) and bump PINNED_REFS instead.
 LOCAL_PATCHES=$(cat <<'EOF'
 imaging/native/Cargo.toml
 imaging/src/imaging.loft
@@ -130,6 +136,7 @@ gridmesh/README.md
 shapes/README.md
 imaging/README.md
 web/README.md
+web/src/web.loft
 EOF
 )
 

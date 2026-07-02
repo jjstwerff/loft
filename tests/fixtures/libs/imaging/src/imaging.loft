@@ -6,9 +6,9 @@
 // Data per pixel of a PNG image.
 // Fields r, g, b hold red, green and blue intensity, each 0–255.
 pub struct Pixel {
-  r: integer limit(0, 255),
-  g: integer limit(0, 255),
-  b: integer limit(0, 255)
+  r: integer limit(0, 255) not null,
+  g: integer limit(0, 255) not null,
+  b: integer limit(0, 255) not null
 }
 
 // Returns the pixel colour as a packed 24-bit integer (0xRRGGBB).
@@ -28,7 +28,7 @@ pub struct Image {
   // by raw pointer at the same 3-byte stride.  A native-managed raw-byte vector must keep the dense
   // element layout the extension assumes — the nullable-by-default wrapping would change the stride
   // and crash the FFI byte-copy.
-  data: vector<Pixel>
+  data: vector<Pixel not null>
 }
 
 // Native function: decode a PNG file into an Image struct.

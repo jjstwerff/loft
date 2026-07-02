@@ -918,7 +918,7 @@ fn main() {
             br_mus_step = TRACK_C_DUR;
           }
           if br_mnote > 0 {
-            graphics::sfx_beep(br_mnote as single, br_mus_step, MUSIC_VOL);
+            graphics::sfx_beep((br_mnote ?? 0) as single, br_mus_step, MUSIC_VOL);
           }
           br_mus_t = br_mus_step;
           br_mus_idx += 1;
@@ -1114,9 +1114,9 @@ fn main() {
                       br_pt_vy[br_pf] = br_spd * sin(br_angle);
                       br_pt_t[br_pf] = PARTICLE_LIFE;
                       // Color from row
-                      br_pt_r[br_pf] = br_pcr[br_row_ci];
-                      br_pt_g[br_pf] = br_pcg[br_row_ci];
-                      br_pt_b[br_pf] = br_pcb[br_row_ci];
+                      br_pt_r[br_pf] = br_pcr[br_row_ci] ?? 0.0;
+                      br_pt_g[br_pf] = br_pcg[br_row_ci] ?? 0.0;
+                      br_pt_b[br_pf] = br_pcb[br_row_ci] ?? 0.0;
                       break;
                     }
                   }
@@ -1128,7 +1128,7 @@ fn main() {
                     if br_pk_on[br_ps] == 0 {
                       br_pk_x[br_ps] = bk_x(br_cc) + BRICK_W / 2.0 - PICKUP_W / 2.0;
                       br_pk_y[br_ps] = bk_y(br_cr);
-                      br_pk_type[br_ps] = br_specials[br_ci];
+                      br_pk_type[br_ps] = br_specials[br_ci] ?? SP_NONE;
                       br_pk_on[br_ps] = 1;
                       break;
                     }
