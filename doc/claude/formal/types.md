@@ -254,37 +254,34 @@ overflows *at runtime* yields **null and keeps running** (operational.md `E-Unco
 OPEN: **6** (the nullability flip + UB-rooting — §25 in progress). Per-situation
 mitigation catalogue: [../plans/25-nullable-sequences/DN1-MITIGATION.md](../plans/25-nullable-sequences/DN1-MITIGATION.md).
 
-### DN1 — scalar / field storage is still nullable-by-default
-The `(N-Dense)` / non-null-default rule holds for `vector` elements (flipped: dense default,
-`vector<τ?>` opt-in) but **not yet for scalars and struct fields**: a plain `integer` field
-still admits `null` (verified: `a.x = null` on `x: integer` succeeds), and `not null` is the
-opt-out rather than a no-op. Falsifier: `struct A { x: integer }  …  a.x = null` type-checks
-today; under the rule it must require `x: integer?`. Closes when the scalar default flips +
-`not null` becomes the no-op.
+### DN1 — CLOSED (2026-07-02): scalar / field storage is non-null by default
+`(N-Dense)` now holds for scalars + struct fields, not just vector elements: a plain
+`integer`/`text`/`bool`/`float`/`char` field/local/return is NON-null by default (nullability
+rides `?`/`Optional`), and `not null` is a redundant no-op — stripped from in-tree source; the
+parser still ACCEPTS it for backward compat pending the registry republish (task #4). `a.x = null`
+on `x: integer` is now a compile error ("declare it `integer?`"). Landed: the DN1 default flip
+(PR #471, default-on; `LOFT_PLN25_OFF` opts the whole model out) + the F2 field-attribute flip for
+ALL scalars + the `not null` source strip + parser no-op. Enforced by `(N-Store)`/`(N-Decl)` at
+return / field / typed-store / index sites. Both backends.
 
-**Status (2026-07-01): the flip is the active @PLN25 step-f, prototyped + blast-radius-measured.**
-The `keys.rs` default-on flip (`LOFT_PLN25_OFF` opts out) + the `n_store_violation` enforcement of
-`(N-Store)`/`(N-Decl)` at return / field / typed-store / vector-index sites are validated; the
-scalar-vector-element + `character?` + narrow-field-in-vector native gaps are closed. Landing is
-gated on: (a) resolving the remaining red tests (measured, small); (b) ✅ DONE (`85af2b18`) — the
-`change_var` local-null message now names `integer?` and no longer suggests `as`; (c) migrating the
-stdlib `min`/`max`/`clamp` dead null-prop + removing the `STD_SOURCE` exemption; (d) closing DN5 + DN6
-below. Full sequence: [DN1-MITIGATION.md](../plans/25-nullable-sequences/DN1-MITIGATION.md).
+### DN2 — CLOSED (2026-07-02): no implicit `S? ⤳ S` unwrap
+The implicit `Enum(__nullable<S>) ⤳ Reference(S)` (and scalar `τ? ⤳ τ`) unwrap is gone — a `τ?`
+cannot reach a `τ` slot without a discharge. Verified: `x: S? = …; y: S = x` (no `?`) is a compile
+error ("cannot change type from S to S?"); `?? default` / `match` are the only elims
+(`(N-Coal)`/`(N-Match)`). Closed by the `(N-Store)` / `change_var` teeth (DN1) + the DN5 `as`-cast
+closure. Both backends.
 
-### DN2 — implicit `S? ⤳ S` unwrap still exists
-Code still performs the implicit `Enum(__nullable<S>) ⤳ Reference(S)` unwrap (the old
-`(C-Var)` dual), violating `(N-Store)` / the no-implicit-elim rule — a `τ?` can reach a `τ`
-slot without a `??`/`match`. Falsifier: an `S?` value assigned to an `S` binding with no
-discharge. Closes when the unwrap is removed and `(N-Coal)`/`(N-Match)` are the only elims.
-
-### DN3 — fit-failing ops warn + propagate instead of yielding `τ?`
-`a / b`, `a % b`, `parse_*`, and overflowing `a*b` already produce **null at runtime**
-(correct per the model — null is the doesn't-fit value, `E-Uncomp`/C80), but the **type**
-doesn't carry it: they're typed non-null and only *warn* ("division may produce null"),
-so an un-discharged null flows into non-null storage. Falsifier: `b = a / x` with no `??`
-type-checks (warns) today; under `(N-Div)`/`(N-Arith)`+`(N-Store)` it must be `… ?? 0` or
-`b: integer?`. The runtime is right; the **typing + discharge** is the gap. Its blast
-radius (fit-failing results stored into non-null without `??`) is the gating measurement.
+### DN3 — MOSTLY CLOSED (2026-07-02): fit-failing ops type `τ?`  ·  parse + overflow-arith residual
+A fit-failing op now TYPES its result `τ?` (the runtime already nulled per `E-Uncomp`/C80), so an
+un-discharged result stored into non-null storage is a compile error — the developer must guard,
+`?? d`, or declare the target `τ?`. **DONE:** integer `/` and `%` (the division root-cause fix — the
+`handle_operator` arithmetic-branch wrap) and `v[i]` / `s[i]` indexing (the index flip, default-on,
+with const / iter-var / `if i < len` guard fit-proofs). The runtime "may produce null" warnings are
+RETIRED (the type + `(N-Store)` is the enforcement). Regressions: `25-division-nullable.loft`,
+`25-index-nullable.loft` + `102` reject twins; both backends. **RESIDUAL (still typed non-null — do
+NOT yet yield `τ?`):** (a) text→int **parse** (`s as integer` fails → null but types `integer`);
+(b) **overflow arithmetic** `a*b` / `a+b` / `a-b` (the `(N-Arith)` range→overflow→`τ?` tightening).
+Both are fit-failing ops per the model — the last DN3 sub-items before a full `Closes @PLN25`.
 
 ### DN4 — CLOSED (2026-07-02, F5 cutover): `as` to a narrower type enforces the range
 `400 as u8` was UB (the cast asserted the *type* but left an out-of-range value in a `u8`

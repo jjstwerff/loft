@@ -25,17 +25,20 @@ Closing a row means the implementation obeys the rule (then the deviation entry 
 
 | area | open | what's left |
 |---|---|---|
-| [types.md](types.md) | 0 | ✓ closed — D2 closed by reconciliation (C83): `integer` is i64 user-visibly via a compact internal encoding |
+| [types.md](types.md) | 2 | **@PLN25 value/null model landed (2026-07-02): DN1/DN2/DN4/DN5/DN6 CLOSED**, D2 closed (C83). **DN3 residual (2):** text→int **parse** + **overflow-arith** (`a*b`/`a+b`/`a-b`) still type non-null — should yield `τ?` (the runtime already nulls, per C80); the last fit-failing-op sub-items |
 | [binding.md](binding.md) | 0 | ✓ closed — D-bind-7 (reject bare `&a;` / block-final `{ &a }`) landed |
 | [grammar.md](grammar.md) | 0 | ✓ closed — D-gram-1/3 landed; D-gram-2 (non-CFG) + D-gram-4 (`&` overload) resolved as decided edges → DESIGN_DECISIONS C81/C82 |
 | [operational.md](operational.md) | 2 | D-op-1/2 the differential oracle (@PLN89) — D-op-4 the spreadsheet runtime (C80) is **CLOSED** (formalize4); the oracle SEED landed (`tests/oracle/`) |
 | [ownership.md](ownership.md) | 5 | the `deps` borrow checker — **★ ACTIVE NOW (next days): the code-simplification exploration**, see [OWNERSHIP_MODEL.md § ACTIVE](../OWNERSHIP_MODEL.md#active--the-simplification-exploration-next-days-exploratory--revertable). Typed `Deps` (D-own-3) first |
 | [capabilities.md](capabilities.md) | 3 | sandbox admission — call gate + field read/update/append **enforced** (@PLN86 F1–F6); remaining: the parameter `#default` lock (D-cap-1, @PLN86 6.9), the capturing-closure residual (D-cap-2), the owned-vs-host dependency on ownership D-own-2 (D-cap-3) |
 
-Binding, type, and grammar are closed. The active focus for the next days is the
-**ownership simplification** — collapse the per-site `deps` thicket onto the one beacon fact
-(OWNERSHIP_MODEL.md), exploratory + revertable, guarded by the @PLN89 differential oracle.
-The operational differential oracle (D-op-1/2) grows alongside it as the safety net.
+Binding + grammar are closed; **types is nearly closed** — the @PLN25 value/null model landed
+(2026-07-02), leaving only the 2 DN3 fit-op residuals (parse + overflow-arith). The active focus
+for the next days is the **ownership simplification** — collapse the per-site `deps` thicket onto
+the one beacon fact (OWNERSHIP_MODEL.md), exploratory + revertable, guarded by the @PLN89
+differential oracle. The operational differential oracle (D-op-1/2) grows alongside it as the
+safety net. **@PLN25 unblocks ownership** (GATE 1): the value/null model is settled, so the
+ownership invariant can now be defined at `materialization_mode` (the two met there).
 
 ---
 
