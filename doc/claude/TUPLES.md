@@ -65,19 +65,17 @@ calling convention.
 Plan-14 closure (2026-05-11) validated 40 cells across 5 element
 types (E1, E1n, E2, E3, E5) and 3 destinations (D1 local, D2 stack,
 D3 struct field) under the cross-mode harness — every cell asserts
-byte-identical output between interpreter and `--native`.  Two
-narrow shapes are gated behind P-issues:
-
-| Bug | Shape | Workaround |
-|---|---|---|
-| @P250 | `for { (q1, q2) = make_pair(pa, pb); }` reads `null` for whichever destructured variable picked up the FIRST argument on iterations >0 | Hoist destructure out of loop, or use a struct field |
-| @P251 | Storing `(fn-ref, …)` INTO a struct field rejects native compilation with rustc E0605 | Store the fn-ref in a separate field, not nested in a tuple struct field |
+byte-identical output between interpreter and `--native`.  The two
+shapes that were briefly gated behind P-issues are both closed
+(@P250 loop-body destructure and @P251 fn-ref tuples in struct
+fields, both fixed 2026-05-11 on both backends — see PROBLEMS.md);
+no workaround is needed for either.
 
 E4 (closure element) calling — `t.0(args)` and `s.field.0(args)` —
 was the open phase-03 / phase-05 question; the layered fix (20-byte
 fn-ref tuple-element layout in six codegen sites + `__fn_ref_tmp`
-skip_free) closed it for D1 / D2 (@P249).  The struct-field call
-shape is the residual @P251.
+skip_free) closed it for D1 / D2 (@P249), and the struct-field call
+shape closed with @P251.
 
 ---
 
@@ -172,7 +170,7 @@ Tuple match on a local variable, parameter, or literal is independent and can la
 ```
 tuple-match     ::= 'match' tuple-expr '{' tuple-arm+ '}'
 
-tuple-arm       ::= tuple-pattern [ guard ] '->' expression
+tuple-arm       ::= tuple-pattern [ guard ] '=>' expression
 
 tuple-pattern   ::= '_'                                  // total wildcard
                   | '(' elem-pattern { ',' elem-pattern } ')'
@@ -198,43 +196,43 @@ t: (integer, text) = (42, "hello")
 
 // Basic binding and wildcard
 match t {
-    (0, msg)  -> println("zero: {msg}")
-    (n, "")   -> println("empty text at {n}")
-    (n, msg)  -> println("{n}: {msg}")
+    (0, msg)  => println("zero: {msg}")
+    (n, "")   => println("empty text at {n}")
+    (n, msg)  => println("{n}: {msg}")
 }
 
 // Range on first element
 match t {
-    (0..10, _) -> println("single digit")
-    (10..100, name) -> println("two digits: {name}")
-    _ -> println("large or negative")
+    (0..10, _) => println("single digit")
+    (10..100, name) => println("two digits: {name}")
+    _ => println("large or negative")
 }
 
 // Or-pattern in element position
 match t {
-    (1 | 2 | 3, _) -> println("one, two, or three")
-    (0, _) | (_, "") -> println("zero or empty")  // ERROR — arm-level | not supported
-    _ -> println("other")
+    (1 | 2 | 3, _) => println("one, two, or three")
+    (0, _) | (_, "") => println("zero or empty")  // ERROR — arm-level | not supported
+    _ => println("other")
 }
 
 // Nested tuple
 coords: ((float, float), boolean) = ((1.0, 2.0), true)
 match coords {
-    ((0.0, 0.0), _)    -> println("origin")
-    ((x, y), true)     -> println("active: {x},{y}")
-    ((x, y), false)    -> println("inactive: {x},{y}")
+    ((0.0, 0.0), _)    => println("origin")
+    ((x, y), true)     => println("active: {x},{y}")
+    ((x, y), false)    => println("inactive: {x},{y}")
 }
 
 // Guard
 match t {
-    (n, msg) if n > 100 -> println("large: {msg}")
-    (n, msg)            -> println("normal: {n} {msg}")
+    (n, msg) if n > 100 => println("large: {msg}")
+    (n, msg)            => println("normal: {n} {msg}")
 }
 ```
 
 ### What is NOT supported (T1.9 scope)
 
-- **Or-patterns at arm level**: `(1, _) | (2, _) -> ...` — only `|` inside an element
+- **Or-patterns at arm level**: `(1, _) | (2, _) => ...` — only `|` inside an element
   position is supported (reuses existing scalar or-pattern). A full arm-level or-pattern
   requires restructuring the arm-building loop (deferred to T1.10 if needed).
 - **Rest patterns**: `(first, ..)` — tuple arity is fixed and known at compile time;
@@ -257,7 +255,7 @@ No condition generated. A new variable `name` of the element's type is declared 
 bound to `tuple_var.i` at the start of the arm body.
 
 ```loft
-(n, msg) ->          // n bound to t.0, msg bound to t.1
+(n, msg) =>          // n bound to t.0, msg bound to t.1
 ```
 
 Binding a name that already exists in scope re-uses that variable if the type matches;
@@ -361,8 +359,8 @@ runs unconditionally (with only bindings + guard if present).
 
 ```loft
 match t {
-    (0, msg) -> println("zero: {msg}")
-    (n, _)   -> println("{n}")
+    (0, msg) => println("zero: {msg}")
+    (n, _)   => println("{n}")
 }
 ```
 
@@ -387,8 +385,8 @@ If(
 
 ```loft
 match coords {                    // coords: ((float, float), boolean)
-    ((0.0, 0.0), _) -> "origin"
-    ((x, y), active) -> "{x},{y},{active}"
+    ((0.0, 0.0), _) => "origin"
+    ((x, y), active) => "{x},{y},{active}"
 }
 ```
 
@@ -465,7 +463,7 @@ fn parse_tuple_match(
             // Total wildcard arm
             has_wildcard = true;
             let guard = self.parse_optional_guard();
-            self.lexer.token("->");
+            self.lexer.token("=>");
             let mut body = Value::Null;
             let bt = self.expression(&mut body);
             result_type = self.merge_types(result_type, bt);
@@ -496,7 +494,7 @@ fn parse_tuple_match(
                 has_wildcard = false;  // guard may fail
             }
 
-            self.lexer.token("->");
+            self.lexer.token("=>");
             let mut body = Value::Null;
             let bt = self.expression(&mut body);
             result_type = self.merge_types(result_type, bt);
@@ -613,7 +611,7 @@ fn parse_tuple_elem_pattern(
 **`try_parse_binding_identifier`**: peeks at the next token. Returns `Some(name)` if it
 is a lower-case identifier that is not a keyword and does not look like the start of a
 literal or operator. Returns `None` if the next token is a literal, `null`, `(`, or a
-keyword. This distinguishes `(n, msg) ->` (bindings) from `(0, "foo") ->` (literals).
+keyword. This distinguishes `(n, msg) =>` (bindings) from `(0, "foo") =>` (literals).
 
 Heuristic: if `lexer.peek()` is `LexItem::Identifier(name)` → binding. If it is
 `LexItem::Integer`, `LexItem::Text`, `LexItem::Boolean` → literal (use scalar pattern).
@@ -648,14 +646,14 @@ New test file `tests/tuple_match.rs` or additions to `tests/match.rs`:
 
 | Test | Coverage |
 |---|---|
-| `tuple_match_binding` | `(n, msg) ->` — all bindings, exhaustive |
-| `tuple_match_literal` | `(0, "x") ->` — exact literals on both elements |
+| `tuple_match_binding` | `(n, msg) =>` — all bindings, exhaustive |
+| `tuple_match_literal` | `(0, "x") =>` — exact literals on both elements |
 | `tuple_match_wildcard` | `(0, _)` and `_` arm — exhaustive via wildcard |
-| `tuple_match_range` | `(1..10, _) ->` — range on first element |
-| `tuple_match_or_elem` | `(1 \| 2 \| 3, _) ->` — or-pattern in element position |
-| `tuple_match_guard` | `(n, msg) if n > 0 ->` — guard, with fallthrough arm |
-| `tuple_match_nested` | `((x, y), true) ->` — nested tuple pattern |
-| `tuple_match_three` | `(a, b, c) ->` — three-element tuple |
+| `tuple_match_range` | `(1..10, _) =>` — range on first element |
+| `tuple_match_or_elem` | `(1 \| 2 \| 3, _) =>` — or-pattern in element position |
+| `tuple_match_guard` | `(n, msg) if n > 0 =>` — guard, with fallthrough arm |
+| `tuple_match_nested` | `((x, y), true) =>` — nested tuple pattern |
+| `tuple_match_three` | `(a, b, c) =>` — three-element tuple |
 | `tuple_match_as_expr` | `val = match t { ... }` — match produces a value |
 | `tuple_match_not_exhaustive` | No total arm → compile error |
 | `tuple_match_guarded_not_total` | Guarded all-binding arm → still requires unguarded arm |
@@ -670,11 +668,11 @@ New test file `tests/tuple_match.rs` or additions to `tests/match.rs`:
 
 fn classify(t: (integer, text)) -> text {
     match t {
-        (0, _)            -> "zero"
-        (1..10, "")       -> "small-empty"
-        (1..10, s)        -> "small: {s}"
-        (n, msg) if n < 0 -> "negative: {n} {msg}"
-        (n, msg)          -> "{n}: {msg}"
+        (0, _)            => "zero"
+        (1..10, "")       => "small-empty"
+        (1..10, s)        => "small: {s}"
+        (n, msg) if n < 0 => "negative: {n} {msg}"
+        (n, msg)          => "{n}: {msg}"
     }
 }
 
@@ -688,9 +686,9 @@ fn main() {
     // Nested tuple match
     coords: ((float, float), boolean) = ((0.0, 0.0), true)
     result = match coords {
-        ((0.0, 0.0), _) -> "origin"
-        ((x, y), true)  -> "active {x},{y}"
-        ((x, y), false) -> "inactive {x},{y}"
+        ((0.0, 0.0), _) => "origin"
+        ((x, y), true)  => "active {x},{y}"
+        ((x, y), false) => "inactive {x},{y}"
     }
     assert(result == "origin", "nested tuple: {result}");
 }

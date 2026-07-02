@@ -557,17 +557,16 @@ fn v5_t4_catch_up_after_reconnect() {
 /// (production constants are 5 min / 0.5 s / 30 s at 10 Hz —
 /// same algebraic shape, different units).
 ///
-/// @PLAN12 Phase 6b — temporarily ignored after Stage B removed
-/// `lib/web/`, `lib/server/`, `lib/game_protocol/` from the
-/// monorepo.  `v5_t5_world_timings.loft` uses `use hex_world;` which
-/// still resolves via the monorepo's `lib/hex_world/`, but the test
-/// harness invokes loft from `tests/integration/multiplayer/`
-/// (a different project root), so the parser's walk-up no longer
-/// finds `lib/hex_world/` as a sibling.  Un-ignore when Phase 6w
-/// extracts `hex_world` to a chunk (then it resolves via the
-/// registry alongside web/server/game_protocol).
+/// The original blocker (hex_world unresolvable after Stage B removed
+/// the monorepo libs) is gone — the registry auto-installs `hex_world`
+/// from loft-lang/loft-libs-world.  The NEW blocker: the published
+/// hex_world 0.1.1 no longer compiles under the current narrowing-cast
+/// enforcement ("narrowing cast from integer to u16 may not fit at
+/// runtime", hex_world.loft:252/:341 — the check post-dates the
+/// publish).  Un-ignore when hex_world is republished with checked
+/// casts.
 #[test]
-#[ignore = "@PLAN12 Phase 6b — hex_world dep unresolvable from tests/integration/; un-ignore when Phase 6w extracts loft-libs-world"]
+#[ignore = "published hex_world 0.1.1 breaks on current narrowing-cast enforcement — un-ignore after a hex_world republish"]
 fn v5_t5_world_tick_and_decay() {
     let mut cmd = Command::new(loft_bin());
     cmd.arg("--interpret")

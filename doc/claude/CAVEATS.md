@@ -47,47 +47,35 @@ still build.  `--interpret` keeps its existing (silent, last-loaded) behavior.
 
 - **Workaround:** rename one of the colliding `#native` symbols (when you own the
   package); the error names the symbol.
-- **Deferred fix** ([@PLN26 phase 1](https://github.com/loft-lang/plans/issues/26)):
-  per-package symbol namespacing so same-symbol packages coexist — touches the
-  cdylib export, the interpreter registry, and codegen in lockstep; only needed to
-  *call* a symbol two un-renameable packages both export (uncommon).
+- **Deferred fix** (canonical home: [NATIVE.md § Open work](NATIVE.md) —
+  @PLN26 and its successor loft#388 are both closed/parked): per-package symbol
+  namespacing so same-symbol packages coexist — touches the cdylib export, the
+  interpreter registry, and codegen in lockstep; only needed to *call* a symbol
+  two un-renameable packages both export (uncommon).
 - **Repro / guards:** `tests/lib/collide_a` + `collide_b` (both export
   `collide_shared`), `collide_main` (calls both → rejected) / `collide_unused`
   (unused → builds); in-crate `native_symbol_collision_across_packages_detected`.
 
 ---
 
-## Open problems — the mixed interpret↔native boundary (2026-06-26)
+## The mixed interpret↔native boundary — closed 2026-06-27 (kept for the mode rule)
 
-These are the only open `sev:high` issues. They all live at one place: a program
-that **mixes** modes — an interpreted caller into a native shared-store library
-(`loft_shared_*` cdylib), or a `--interpret` run whose entry package was marked
-for native dispatch. **Uniform modes are sound** — both whole-program `--native`
-and whole-program `--interpret` produce correct results and agree (verified on
-the moros GLB 3-way matrix). So the practical rule for a project today: **run one
-mode end to end.**
+The 2026-06-26 wave of `sev:high` mixed-mode issues is fully closed —
+[#460](https://github.com/loft-lang/loft/issues/460) (entry-package cdylib
+dispatch; fixed via #464, guard
+`tests/n3_use_native.rs::entry_package_is_never_auto_native_compiled`),
+[#461](https://github.com/loft-lang/loft/issues/461) (struct-arg marshalling
+across the interpret→native call; fixed via #466, guard
+`moros_glb_cli_end_to_end`), and [#462](https://github.com/loft-lang/loft/issues/462)
+including its borrowed-view-of-a-local residual leak (fixed via #466, guard
+`tests/leak_cases/clean/p462_cond_reassign_retbuf.loft`).  No open `sev:high`
+issue remains.
 
-- **[#461](https://github.com/loft-lang/loft/issues/461) — a complex struct arg
-  is corrupted across the interpret→native call.** An interpreted function passing
-  a deeply nested struct (e.g. a `Scene` of vectors-of-meshes/materials) into a
-  native shared-store library fn marshals the aggregate wrong; the callee produces
-  corrupt output (moros GLB: version 0 / +28 bytes). **Scalar args are fine.**
-  *Workaround (verified both ends):* run uniform — `--native`, or `--interpret`
-  with `LOFT_NO_NATIVE_LIBS=1` (forces deps to interpret too). Both write the
-  correct output.
-- **[#460](https://github.com/loft-lang/loft/issues/460) — `--interpret` can
-  abort when a main-program fn is marked for cdylib dispatch with no cdylib
-  built.** The marked call lands on a panic stub (exit 101). *Workaround:* run
-  `--native` (the cdylib exists), or force whole-program interpretation. Note:
-  could not be reproduced on 2026-06-26 (a previously-built cdylib satisfies the
-  symbol and hides it) — a clean checkout with no built artifacts is needed to
-  confirm whether it still bites.
-- **[#462](https://github.com/loft-lang/loft/issues/462) residual — a native-only
-  store leak.** The original crash (world-gen SIGSEGV) and the adopt-and-re-return
-  vector leak are **fixed**; what remains is a `--native`-only leak of struct
-  records returned as a **borrowed view of a local** (the `mon_*` "pick one of a
-  pool" shape). It leaks memory over a long run; it does **not** corrupt or crash.
-  Interp is leak-free. No workaround needed for correctness.
+What stays worth knowing: mixed-mode programs (an interpreted caller into a
+native shared-store library) exercise the marshalling boundary that uniform
+modes never touch, so when debugging a suspected boundary issue, compare
+against a uniform run — whole-program `--native`, or `--interpret` with
+`LOFT_NO_NATIVE_LIBS=1` — to isolate which side owns the fault.
 
 ---
 
@@ -177,10 +165,10 @@ literal no longer parses.  Use `integer` (i64) and plain literals.
   `--native`/`--check`.  Fixed by keying `vector_elem_rust_type` off
   `IntegerSpec::vector_narrow_width()` (storage stride): plain
   `vector<integer>` → `i64`, narrow aliases keep their forced width.
-- **26 duplicate `Op*Long` opcodes still in the bytecode
-  surface.**  Phase 5 (opcode reclamation) deletes them; until
-  then dispatch table size stays 268 instead of 242.  Affects
-  no semantics; just dispatch cache density.
+- **The duplicate `Op*Long` opcodes are gone** (post-2c round 10d —
+  see `default/01_code.loft`); the current opcode count is 246.  Only
+  `OpConstLongText` (a text op, unrelated) still carries "Long" in its
+  name.
 - **`Type::Long` enum variant removed** (@PLAN01 phase 4, 2026-04-21).
   All integer-family values flow through `Type::Integer(IntegerSpec)`
   with i64 arithmetic on the stack and per-field storage width via
@@ -566,18 +554,15 @@ if earlier args also had defaults).
 `p91_default_overridden_by_caller`,
 `p91_chained_defaults_reference_earlier_args`.
 
-### P54 — `json_items` returns opaque `vector<text>`
-The typeless API contradicts loft's type-system promise.  **Decision:**
-replace the text-based JSON surface (`json_items`, `json_nested`,
-`json_long`, `json_float`, `json_bool`) with a first-class
-`JsonValue` enum — `JObject` / `JArray` / `JString` / `JNumber` /
-`JBool` / `JNull`.  `json_parse(text) -> JsonValue` is the one entry
-point; `MyStruct.parse` accepts only `JsonValue` and rejects bare
-text at compile time with a fix-it hint.  Full design in
-[QUALITY.md § P54](QUALITY.md#active-sprint--p54-jsonvalue-enum).  The earlier `JsonBody`
-newtype half-measure is withdrawn — doing the parse once into a
-typed tree is simpler, faster, and covers the dynamic-shape case
-that a newtype-over-text cannot.
+### ~~P54~~ — typed `JsonValue` tree — SHIPPED
+The decided fix is live: `default/06_json.loft` defines the
+`JsonValue` enum (`JObject` / `JArray` / `JString` / `JNumber` /
+`JBool` / `JNull`) and `json_parse(text) -> JsonValue` is the one
+entry point, working on both backends.  The old text-based surface
+(`json_items` etc.) is gone — calling it is an "Unknown function"
+error.  The residual JSON gap is diagnostics on the one-stage
+auto-wrap `Struct.parse(text)` (Q1 — see
+[QUALITY.md § Open work](QUALITY.md#open-work--actionable-summary)).
 
 ### ~~C7 / P22~~ — `spacial<T>` diagnostic — DONE
 Diagnostic updated to surface the 1.1+ timeline: *"spacial<T> is
