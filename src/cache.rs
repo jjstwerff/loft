@@ -216,7 +216,7 @@ pub fn stdlib_cache_key(stdlib_sources: &[(String, String)]) -> [u8; 32] {
 #[must_use]
 fn semantic_gate_signature() -> String {
     const SEMANTIC_GATES: &[&str] = &[
-        "LOFT_JOIN_OWN",
+        "LOFT_NO_JOIN_OWN",
         "LOFT_PLN25_OFF",
         "LOFT_NO_BORROW_ELIDE",
         "LOFT_POISON",

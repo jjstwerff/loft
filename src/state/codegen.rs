@@ -1728,7 +1728,7 @@ impl State {
             if owned_ref
                 && !s1_substituted
                 && !stash_old_for_post_free
-                && std::env::var_os("LOFT_JOIN_OWN").is_some()
+                && crate::keys::join_own_enabled()
                 && let crate::use_analysis::Own::Join { base } =
                     crate::use_analysis::ownership_of(stack.data, stack.def_nr, value)
                 && base != u16::MAX

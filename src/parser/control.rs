@@ -2177,7 +2177,7 @@ impl Parser {
     /// `None`. No-op unless the tail is a `skip_free`, non-empty-dep vector binding.
     #[allow(clippy::question_mark)]
     fn jo_copy_borrowed_arm_yield(&mut self, arm_body: &mut Value) -> Option<Type> {
-        if std::env::var_os("LOFT_JOIN_OWN").is_none() {
+        if !crate::keys::join_own_enabled() {
             return None;
         }
         let v = match arm_body.unspan() {
@@ -5538,7 +5538,7 @@ impl Parser {
         // (`materialize_vector_arms_into`, no-free for the borrowed binding). Then skip
         // promoting the binding below (it is now a delivered local, not the return).
         let mut jo_arm_skip: std::collections::HashSet<u16> = std::collections::HashSet::new();
-        if std::env::var_os("LOFT_JOIN_OWN").is_some()
+        if crate::keys::join_own_enabled()
             && let Type::Vector(ret_elm, _) = &ret
             && let Some((buf_attr, buf_var)) = self.return_buffer()
         {

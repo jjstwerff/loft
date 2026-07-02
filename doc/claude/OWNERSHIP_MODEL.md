@@ -176,13 +176,17 @@ Every one is a missing or incomplete ownership fact. The class closes when the f
 is complete; it cannot be closed by adding more codegen conditions (that is what the
 9 reverted @PLN85 attempts proved).
 
-### The unification — `ownership_of` as the ONE carried fact (@PLN85, `LOFT_JOIN_OWN`)
+### The unification — `ownership_of` as the ONE carried fact (@PLN85, DEFAULT-ON)
 
-`src/use_analysis.rs` now computes the ownership oracle once — `ownership_of(data, d_nr,
+`src/use_analysis.rs` computes the ownership oracle once — `ownership_of(data, d_nr,
 value) -> Own { Owned | Borrowed{base} | Join{base} }`, carrying the interprocedural
 borrow `base` (the witness a runtime guard needs) — and the over-free chokepoints READ
-it instead of re-deriving. Each site is collapsed behind `LOFT_JOIN_OWN` (off-default →
-suite byte-identical) and validated on BOTH backends:
+it instead of re-deriving. **FLIPPED DEFAULT-ON (2026-07-02, `keys.rs::join_own_enabled`;
+`LOFT_NO_JOIN_OWN` opts out).** Evidence at the flip: the 54-cell over-free map 6/54
+opt-out → **0/54 default** (value + divergence + leak + poison, both backends); full
+suite green both legs; `tests/use_analysis.rs` pins both legs (the oracle ground-truth
+dumps read the RAW shapes via the opt-out; the synthesis's observable effect has its own
+two-leg discriminator). Each site validated on BOTH backends:
 
 - **`local_source`** — ✅ both backends (scope-pass dep-strip of the displaced-owned slot).
 - **`elem_accumulate`** — ✅ both backends (interp `OpBindOrCopy` + native inline guard, both

@@ -369,7 +369,7 @@ impl Output<'_> {
             // `_src == _dst` guard re-derived this and LEAKED the owned arm — `_src`
             // (a fresh `m_none()`) never equals `_dst` (the old slot), so it
             // materialised + dropped the owned store.
-            let join_witness = if std::env::var_os("LOFT_JOIN_OWN").is_some()
+            let join_witness = if crate::keys::join_own_enabled()
                 && let crate::use_analysis::Own::Join { base } =
                     crate::use_analysis::ownership_of(self.data, self.def_nr, to)
                 && base != u16::MAX

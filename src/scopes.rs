@@ -127,7 +127,7 @@ fn run_scan_phase(
     // @PLN85 `local_source` over-free fix (gated): the heap slots whose OWNED store
     // is displaced by a later borrow/join reassignment. Computed on the pre-scope
     // code so the dep classification is read before any dep-strip below mutates it.
-    let displaced_owned = if std::env::var_os("LOFT_JOIN_OWN").is_some() {
+    let displaced_owned = if crate::keys::join_own_enabled() {
         crate::use_analysis::displaced_owned_slots(orig_code, orig_vars, data)
     } else {
         HashSet::new()
