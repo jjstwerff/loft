@@ -241,3 +241,12 @@ type sorted = integer;
 fn test_undefended_division_into_nonnull(a: integer, b: integer) -> integer {
   a / b
 }
+
+// @PLN25 index flip: `v[i]` types `τ?` (OOB → null) for a not-provably-fit index, so an
+// UNDEFENDED element stored into a non-null return is a violation — the developer must guard
+// (`if i < len(v)`), discharge (`v[i] ?? d`), or declare the return `integer?`. The accept twins
+// (const / iter-var / guard / `??` / honest `τ?`) live in 25-index-nullable.loft.
+// @EXPECT_ERROR: nullable `integer?` cannot be stored
+fn test_undefended_index_into_nonnull(v: vector<integer>, i: integer) -> integer {
+  v[i]
+}
