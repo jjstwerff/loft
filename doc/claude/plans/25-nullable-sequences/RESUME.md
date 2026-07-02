@@ -379,9 +379,15 @@ tightenings**. In order, each ends green (never carry two phases' breakage):
     where plain fields are still attr-nullable); (c) **`issue_328`** + **`errors_accessor_{nested_
     path,path_on_failure}`** — separate (survived the format fix; need checking); (d) `wrap
     loft_suite`/`native_scripts` roll-ups of (a).
-  - **TO LAND F2 (remaining):** (1) ✅ done. (2) the 389 byte-sentinel case; (3) issue_328 + accessor;
-    (4) retire the `not null` hint (at the flip); (5) flip `LOFT_PLN25_F2` default-on once F2-on
-    green; (6) strip `not null` from `.loft` (~873 sites, redundant) → remove from parser. Then F6.
+  - **TO LAND F2 (remaining):** (1) ✅ struct-format fix (`ac432914`). (2) ✅ 389 byte-sentinel —
+    test-premise migration to `u8?`/`u16?` (`208f9c87`; not a code bug — plain narrow reads 255
+    fine). (3) ✅ accessor tests → `integer?` (`2e04920c`) + ✅ issue_328 — a cross-statement
+    `expr_not_null` leak (`edee7ec8`, general @PLN46 hygiene fix: reset the transient flag per
+    statement in `parse_block`; the within-statement `?? d`/`== null` tracking is untouched). So
+    the ONLY remaining F2-ON failure is **(4) `hint_4h`** — the `not null` read-count hint (moot
+    under F2; retire it AT the default-on flip, since retiring under DN1 now would break the
+    F2-OFF default tree where plain fields are still attr-nullable). Then (5) flip `LOFT_PLN25_F2`
+    default-on; (6) strip `not null` from `.loft` (~873 sites, redundant) → remove from parser. Then F6.
     **Separate slice (Part 2) — the NULLABLE-NARROW REPRESENTATION is inconsistent across backends,
     a DESIGN decision that blocks several gaps:** a `u8?` FIELD silently swallows literal `255`→null
     while a `u8?` LOCAL keeps 255; and (found 2026-07-02 while evaluating `i as u8?`) INTERP
