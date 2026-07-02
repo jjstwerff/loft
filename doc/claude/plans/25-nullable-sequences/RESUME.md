@@ -382,8 +382,24 @@ tightenings**. In order, each ends green (never carry two phases' breakage):
   - **TO LAND F2 (remaining):** (1) ✅ done. (2) the 389 byte-sentinel case; (3) issue_328 + accessor;
     (4) retire the `not null` hint (at the flip); (5) flip `LOFT_PLN25_F2` default-on once F2-on
     green; (6) strip `not null` from `.loft` (~873 sites, redundant) → remove from parser. Then F6.
-    **Separate slice:** `u8?` FIELD silently swallows literal `255`→null (should error) while a `u8?`
-    LOCAL keeps 255 — packed-nullable-narrow consistency (Part 2).
+    **Separate slice (Part 2) — the NULLABLE-NARROW REPRESENTATION is inconsistent across backends,
+    a DESIGN decision that blocks several gaps:** a `u8?` FIELD silently swallows literal `255`→null
+    while a `u8?` LOCAL keeps 255; and (found 2026-07-02 while evaluating `i as u8?`) INTERP
+    represents `u8?` FULL-WIDTH (holds 255-as-value AND null=`i64::MIN` distinctly) while NATIVE
+    represents it NARROW-PACKED (1 byte → 0..254 + null; 255 IS the sentinel). A narrow byte only has
+    256 codes, so a narrow `u8?` fundamentally **cannot hold both 255 and null**. Consequences:
+    - **`fn f(i) -> u8? { i as u8? }` errors** ("cannot implicitly narrow integer to u8") — the
+      checked cast (`dn4_checked_cast`) yields a FULL-WIDTH value (null = `i64::MIN`) that can't be
+      returned into the declared narrow `u8?` (interp tolerates via full-width; native truncates,
+      `i64::MIN as u8 == 0`, losing the null). Attempted fix (type the expr `Optional(u8)`): interp
+      OK, native E0308 — REVERTED (not landable, both-backends rule). The working forms are fine:
+      `255 as u8` = 255, `255 as u8? ?? 0` = 255, `300 as u8? ?? 0` = 0 (255 is NOT a null situation
+      — only `>255` goes null); `i as u8 ?? 0` (no `?`) does NOT work, must be `i as u8? ?? 0`.
+    - **The DECISION to settle first:** (A) `u8?` is narrow (0..254 + null; 255 unrepresentable in
+      the nullable form — make interp match native) — compact; or (B) `u8?` is full-width (0..255 +
+      `i64::MIN` null; nullable-narrow FIELDS grow past 1 byte — make native match interp). Pick one,
+      make interp/native consistent, THEN the `-> u8?` return gap AND the `u8?`-field-255 swallow both
+      fall out. Substantial storage change (loft's #1-weakness area) — its own focused effort.
 - **F3 — Close DN5** (the `as` laundering hole) — 🟡 **IN PROGRESS (2026-07-02).** `null` / `τ?`
   `as <non-null scalar>` silently launders the null → now a compile error (`as τ?` / `??`).
   **Broadened per user directive** ("every integer has a range — detect out-of-range values
