@@ -29,17 +29,18 @@ Closing a row means the implementation obeys the rule (then the deviation entry 
 | [binding.md](binding.md) | 0 | ✓ closed — D-bind-7 (reject bare `&a;` / block-final `{ &a }`) landed |
 | [grammar.md](grammar.md) | 0 | ✓ closed — D-gram-1/3 landed; D-gram-2 (non-CFG) + D-gram-4 (`&` overload) resolved as decided edges → DESIGN_DECISIONS C81/C82 |
 | [operational.md](operational.md) | 2 | D-op-1/2 the differential oracle (@PLN89) — D-op-4 the spreadsheet runtime (C80) is **CLOSED** (formalize4); the oracle SEED landed (`tests/oracle/`) |
-| [ownership.md](ownership.md) | 5 | the `deps` borrow checker — **★ ACTIVE NOW (next days): the code-simplification exploration**, see [OWNERSHIP_MODEL.md § ACTIVE](../OWNERSHIP_MODEL.md#active--the-simplification-exploration-next-days-exploratory--revertable). Typed `Deps` (D-own-3) first |
+| [ownership.md](ownership.md) | 4 | the `deps` borrow checker — **★ ACTIVE (recounted 2026-07-03)**: D-own-3 (typed `Deps`) CLOSED; the `ownership_of` oracle chokepoints are **DEFAULT-ON** (the D-own-1 flip, `LOFT_NO_JOIN_OWN` opts out; over-free map 6/54→0/54). Remaining: D-own-1 (the reduced per-site thicket), D-own-2 (completeness — now default-path exposure), D-own-4 (#415 reversal), D-own-5 (the `&` fact, folds into D-own-1) |
 | [capabilities.md](capabilities.md) | 3 | sandbox admission — call gate + field read/update/append **enforced** (@PLN86 F1–F6); remaining: the parameter `#default` lock (D-cap-1, @PLN86 6.9), the capturing-closure residual (D-cap-2), the owned-vs-host dependency on ownership D-own-2 (D-cap-3) |
 
 Binding + grammar + **types are closed** — the @PLN25 value/null model landed (2026-07-02); DN3
 fully closed with the text→numeric parse flip (`(N-Parse)` types `τ?`), overflow-arith reclassified
-as a decided edge (C85, not a deviation). The active focus
-for the next days is the **ownership simplification** — collapse the per-site `deps` thicket onto
-the one beacon fact (OWNERSHIP_MODEL.md), exploratory + revertable, guarded by the @PLN89
-differential oracle. The operational differential oracle (D-op-1/2) grows alongside it as the
-safety net. **@PLN25 unblocks ownership** (GATE 1): the value/null model is settled, so the
-ownership invariant can now be defined at `materialization_mode` (the two met there).
+as a decided edge (C85, not a deviation). Ownership crossed its watershed (2026-07-02/03):
+typed `Deps` (D-own-3) is CLOSED and the `ownership_of` oracle chokepoints run **BY DEFAULT**
+(the D-own-1 flip; over-free map 6/54 → 0/54, suite fully green). The active focus is the
+D-own-1 REMAINDER — the reduced (not deleted) per-site thicket, the D-own-4 #415 reversal,
+and D-own-2 completeness, whose exposure the flip RAISED (an incomplete fact is now a
+default-path miscompile; the incompleteness contract is conservative-`None`). The @PLN89
+differential oracle + LOFT_POISON grow alongside as the safety net.
 
 ---
 
@@ -70,7 +71,7 @@ The real weight. Each is a `loft-lang/plans` issue, sequenced.
 | # | deviation(s) | project | plan | size |
 |---|---|---|---|---|
 | C1 | **D2** | integer model i64 end-to-end. **AUDITED** ([plans/88-integer-i64.md](../plans/88-integer-i64.md)) — reframed: do NOT widen `Value::Int` (the runtime is already i64; `Int(i32)`/`Long(i64)` is a compact value-size encoding). The change is `IntegerSpec` bounds → i64 + template unify + an `int_const(i64)` keystone (compact `Int` if it fits, else `Long`). | **[@PLN88](https://github.com/loft-lang/plans/issues/88)** | M–L |
-| C2 | **D-own-3** | typed `Deps` (replace the overloaded `Vec<u16>`) — the substrate the rest of ownership reads | H2 ([DEPS_INVENTORY.md](../DEPS_INVENTORY.md)); *no issue yet* | M |
+| ~~C2~~ **DONE** | ~~**D-own-3**~~ | typed `Deps` landed (H2 steps 1–5, 2026-06-12: newtype + named constructors + space-checked queries + the `CALLEE_FRAME_BIT` value tag) — recounted into ownership.md 2026-07-03 | H2 ([DEPS_INVENTORY.md](../DEPS_INVENTORY.md)) | M, landed |
 | C3 | **D-own-1, D-own-2, D-own-5, D-own-4** | the `deps` borrow checker: ownership computed once per binding/path; free/copy/move derive from one `deps` fact; `&`-borrow source tracked in `deps`; reverse the #415 copy-on-bind stopgap | **[@PLN85](https://github.com/loft-lang/plans/issues/85)** | L (the north star) |
 | C4 | **D-cap-1, D-cap-2** | capability admission: field read/update/append are **landed** (F3–F6); remaining is the `…#default` parameter lock — gate a non-default argument at a sandboxed call site (D-cap-1, 6.9) — plus group-existence + `member_access` IR persistence (6.8); and carry a capturing closure's host references into the reachable-set (D-cap-2). **D-cap-3 folds into C3** — `Cap-Own` reads ownership's owned-vs-host fact. | **[@PLN86](https://github.com/loft-lang/plans/issues/86)** (§7 6.8/6.9) | S–M |
 
@@ -89,8 +90,8 @@ The real weight. Each is a `loft-lang/plans` issue, sequenced.
 decided edges C82/C81; grammar.md at 0) **·** binding.md + grammar.md + **types.md (@PLN25 CLOSED —
 DN1–DN6, D2 reconciled; DN3 parse-flip landed)** + **~~D2~~ (D-op-4 spreadsheet runtime,
 formalize4)** now **closed** **·** NEXT: the tracked arcs
-**C2 (typed Deps) → C3 (@PLN85)** ownership, and the operational **D1** (differential oracle, @PLN89)
-— the only open deviations left.
+**~~C2~~ (typed Deps, DONE) → C3 (@PLN85: the D-own-1 remainder + D-own-4 reversal)** ownership,
+and the operational **D1** (differential oracle, @PLN89) — the only open deviations left.
 
 ## What is NOT on this list (already clean or decided)
 

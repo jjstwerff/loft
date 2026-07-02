@@ -86,8 +86,11 @@ exactly what makes the operational rules hold on native as well as interp.
 
 ## Deviations
 
-OPEN: **5** — and unlike the other areas, here the deviations are the *bulk* of the
-reality: the model is the beacon, the code is mid-migration.
+OPEN: **4** — and unlike the other areas, here the deviations are the *bulk* of the
+reality: the model is the beacon, the code is mid-migration.  **Recounted 2026-07-03**
+after the D-own-1 flip: D-own-3 (typed `Deps`) is CLOSED; D-own-1 is substantially
+narrowed (the `ownership_of` oracle chokepoints are now DEFAULT-ON) but the per-site
+thicket is reduced, not deleted, so it stays open.
 
 ### D-own-1 — ownership is re-derived per-site by codegen, not carried as one `deps` fact
 - **Violates:** O-Derived / O-Deps
@@ -96,7 +99,17 @@ reality: the model is the beacon, the code is mid-migration.
   Each fix added a codegen condition rather than completing a fact.
 - **Effect:** the recurring store-lifetime bugs (Cluster A, #426, #429, …) — "N forests,
   one root". The class cannot be closed by more conditions.
-- **Status:** OPEN — the active @PLN85 work.
+- **Status:** OPEN — substantially NARROWED (2026-07-03).  Landed: the return-delivery
+  collapse (the vector sub-thicket behind ONE `Delivery` selector/dispatch, the
+  Reference sub-thicket behind `RefDelivery`; the #416/#448 cells folded; the class
+  swept dry over ~41 probes), and the `ownership_of` oracle chokepoints are
+  **DEFAULT-ON** (`keys.rs::join_own_enabled`, 2026-07-02 flip: `local_source`
+  displaced-owned dep-strip — arguments excluded, `elem_accumulate` `OpBindOrCopy` +
+  the native inline guard, the `match_return` owned-copy synthesis; `borrow_base`
+  cycle-guarded).  Evidence: the 54-cell over-free map 6/54 opt-out → 0/54 default;
+  suite 2595/2595.  REMAINING: `block_result`'s non-vector arms still carry per-site
+  helpers; `scan_set`/free placement is partially heuristic; D-own-5's `&`-borrow fact
+  folds in here.
 - **Removal:** make every free/copy/move read `deps`; delete the per-site heuristics.
 
 ### D-own-2 — incomplete: not every binding/path has a computed ownership fact
@@ -106,18 +119,22 @@ reality: the model is the beacon, the code is mid-migration.
   CLOSED — #415, a7 — but the general framing is open: [OWNERSHIP_MODEL.md § holes](../OWNERSHIP_MODEL.md).)
 - **Effect:** the uncovered paths fall back to a heuristic or a stopgap (D-own-4); a
   divergence hides until a test hits the path (operational.md D-op-2).
-- **Status:** OPEN.
+- **Status:** OPEN.  The oracle (`ownership_of`) now runs BY DEFAULT at its chokepoints
+  (the D-own-1 flip), which raises this deviation's exposure: an incomplete fact is now a
+  default-path miscompile, not a gated one.  The incompleteness contract is explicit —
+  `borrow_base` yields `None` on a cyclic def-chain (no single base) and every consumer
+  must handle `None` conservatively (copy, not adopt).
 - **Removal:** compute ownership for every binding on every path (set-and-reconcile across
   `match`/`if` arms).
 
-### D-own-3 — `deps` is an untyped `Vec<u16>` with overloaded markers
-- **Violates:** O-Deps relying on `deps` as a sound, readable fact
-- **Where:** the dep list is a `Vec<u16>` whose entries overload five meanings across two
-  address spaces ([DEPS_INVENTORY.md](../DEPS_INVENTORY.md), H2).
-- **Effect:** the "one fact" is hard to read correctly and easy to mis-derive — feeding
-  D-own-1.
-- **Status:** OPEN — the typed-`Deps` migration.
-- **Removal:** a typed `Deps` representation so the fact is unambiguous.
+### D-own-3 — CLOSED (2026-06-12, recounted into the register 2026-07-03): typed `Deps`
+The dep list was a raw `Vec<u16>` overloading five meanings across two address spaces.
+The H2 migration ([DEPS_INVENTORY.md](../DEPS_INVENTORY.md), steps 1–5) landed the
+`Deps` newtype with named constructors at every creation site, space-checked queries
+(`frame_vars` / `as_attr_indices`, debug space tags), and the `CALLEE_FRAME_BIT` VALUE
+tag (0x8000) so the one cross-space provenance (the vectors.rs lambda propagation)
+survives the IR codec unambiguously.  Residual (not a deviation): the newtype `Deref`s
+to `Vec<u16>` for read convenience — writes go through the typed constructors.
 
 ### D-own-4 — stopgaps that contradict reference-default
 - **Violates:** O-Borrow (a borrow should view, not copy) where a stopgap copies
