@@ -58,11 +58,23 @@ REMAINING index-flip failures:** (1) **lib/code.loft** — 4 cast-from-nullable 
 Block/If/If/Loop` (the loft-in-loft codegen, DELICATE; needs a `nullable as T` discharge idiom, keep DN5
 closed) — lib/parser.loft is clean; (2) html_wasm moros_editor; (3) runtime_warnings
 skip_loop_bounded_arithmetic (`sum += m[i*4+j]` loop-bounded ARITH index → migrate `?? 0.0`); (4)
-loft_suite (one corpus script). Pre-existing/environmental (NOT index): error_messages 38 DNS,
-html_asyncify chrome, multiplayer registry. **NEXT = migrate lib/code.loft (delicate) + html_wasm +
-runtime_warnings + loft_suite, THEN Step 6** (flip `LOFT_INDEX_DEV`→`pln25_dn1_enabled` + retire
-VectorIndex/TextIndex warning + graduate 25-index-nullable.loft + 102 reject twin). Detail:
-[index-f1a-landing.md](index-f1a-landing.md) § PROGRESS.
+loft_suite. Pre-existing/environmental (NOT index): error_messages 38 DNS, html_asyncify chrome,
+multiplayer registry.
+
+**lib/code.loft cast-from-nullable FIXED (`0cae0a6d`) — but a DEEPER runtime corruption surfaced.**
+The 4 downcast sites `self.code[b] as Block/If/If/Loop` (b=blocks[len-1]) now use the GUARD idiom:
+`b = self.blocks[len-1] ?? 0; if b < len(self.code) { bl = self.code[b] as Block; bl.field = ... }`.
+The guard (NOT `?? default`) is required — it keeps `bl` a MUTABLE BORROW so the field writes write
+back; a `?? <variant>` fallback LEAKS (proven). gate-OFF safe (wrap dir/last/parser_debug/wasm_dir +
+loft_suite 5/5); lib/code.loft + lib/parser.loft compile 0 rejects under the flip. **⚠️ BUT clearing
+the casts UNMASKED a DEEPER runtime corruption:** under the flip the loft-in-loft compiler produces a
+GARBAGE token position ("Expected : on :281479271743489" at lib/lexer.loft:476) — a SILENT wrong-value
+(NOT a compile reject; lexer/parser/code all compile clean). The corrupt value (~2^48+2^32) smells like
+an Optional-wrapped NARROW-INT (u16 position) read at the wrong width, or a v[i] carrying the OOB
+sentinel into a position. **NEXT = a focused DEBUG session** to trace which v[i]/narrow read corrupts
+(delicate self-hosting; LOFT_LOG/bisect the loft-in-loft run on a minimal doc test), then html_wasm +
+runtime_warnings (`?? 0.0`) + loft_suite, THEN Step 6 (flip gate + retire VectorIndex/TextIndex warning
++ graduate 25-index-nullable.loft + 102 reject twin). Detail: [index-f1a-landing.md](index-f1a-landing.md) § PROGRESS.
 
 **✅ INDEX F1a Step 1 (copy-elision `Optional`-peel) DONE** — `use_analysis` borrower filter now peels
 `.base()` before reading deps, so a mutated/escaping `e = v[i]: Item?` KEEPS the copy (was a SILENT
