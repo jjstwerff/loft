@@ -1834,6 +1834,18 @@ impl Parser {
                 {
                     rt = Type::optional(rt.base().clone());
                 }
+                // @PLN25 DN3 — a text→numeric PARSE is fit-failing: unparseable input yields the
+                // null sentinel at runtime (C80, no trap), so the result TYPES `τ?` (like `/` and
+                // `v[i]`). A REACHABLE fault (bad user/file input), unlike overflow which is the
+                // decided edge C84. `s as integer` is `integer?` → discharge with `?? d` or
+                // declare the target `τ?`.
+                if !nullable_cast
+                    && crate::keys::pln25_dn1_enabled()
+                    && matches!(ctp, Type::Text(_))
+                    && matches!(rt.base(), Type::Integer(_) | Type::Float | Type::Single)
+                {
+                    rt = Type::optional(rt.base().clone());
+                }
                 for d in ctp.depend() {
                     rt = rt.depending(d);
                 }

@@ -44,8 +44,8 @@ fn parse_qr(payload: text) -> (integer, integer) {
   if i == null {
     (0, 0)
   } else {
-    q = payload[..i] as integer;
-    r = payload[i + 1..] as integer;
+    q = payload[..i] as integer ?? 0;
+    r = payload[i + 1..] as integer ?? 0;
     (q, r)
   }
 }
@@ -61,8 +61,8 @@ fn parse_qrc(payload: text) -> (integer, integer, integer) {
     if j == null {
       (q, 0, 0)
     } else {
-      r = rest[..j] as integer;
-      c = rest[j + 1..] as integer;
+      r = rest[..j] as integer ?? 0;
+      c = rest[j + 1..] as integer ?? 0;
       (q, r, c)
     }
   }
@@ -122,7 +122,7 @@ fn handle_message(world: World, cid: integer, msg_id: integer, payload: text) {
     println("audience server: [snapshot req cid={cid}] cells={world.cells.len()}");
     replay_world_to(cid, world);
   } else if msg_id == 3 {
-    c = payload as integer;
+    c = payload as integer ?? 0;
     p = world.players[cid];
     if p == null {
       world.players += [Player{pk: cid, color: c, lq: 0, lr: 0}];

@@ -505,9 +505,21 @@ Simple variable reads skip the temporary since they have no side effects.
 
 Used for explicit type casts and conversions:
 ```
-3.14 as integer          // float to integer (truncates toward zero)
+3.14 as integer          // numeric cast: float to integer (truncates toward zero) → integer
 "json-text" as Program   // deserialize text as a struct
 ```
+
+**`as` has two different jobs — a numeric cast vs. a fallible parse.** When the left
+operand is a *number*, `as` reinterprets it (truncate/narrow/widen). When the left
+operand is **text**, `as integer` / `as float` / `as single` is a **parse that can
+fail**, so it types `integer?` / `float?` / `single?` — you get `null` on a bad parse
+and must discharge it:
+```
+n = "42" as integer          // n : integer?   (NOT integer — the parse can fail)
+n = "42" as integer ?? 0     // n : integer    (discharge with a default)
+n = s as integer?            // n : integer?   (keep it nullable, discharge later)
+```
+(This is the @PLN25 `(N-Parse)` rule — a bad parse is a reachable fault like `÷0`/OOB.)
 
 ### Type-conversion rules — when does loft convert automatically?
 
@@ -527,7 +539,7 @@ do by looking up the pair in this table:
 | `i32` / narrow int → `integer`     | Implicit      | widening; a 4-byte `i32` (or `u8`/`u16`/`i8`/`i16`) widens into the 8-byte `integer` with no loss |
 | `integer` → `i32` / `u8`/`u16`/`i8`/`i16` | Explicit `as` at storage sites | NARROWING — a plain `integer` is 64-bit; writing one into a narrow **struct field** (or other narrow storage) requires `as` ("cannot implicitly narrow integer to u16 … cast explicitly").  A **constant that provably fits** the target is exempt (`x: i32 = 5`, `f(200)`).  Note the rule binds where the value is *stored*, not at local annotations: `m: i32 = n` with a runtime `n` currently compiles and `m` silently keeps the full 64-bit value.  (@PLAN48 / @P370) |
 | `float` → integer                  | Explicit `as` | `pi as integer` truncates toward zero; preserves the current sentinel semantics |
-| `text` → integer / float           | Explicit `as` | `"42" as integer`; returns null on parse failure |
+| `text` → integer / float / single  | Explicit `as` — **a PARSE, types `τ?`** | `"42" as integer` is a fallible parse, so it types **`integer?`** (`float?` / `single?`), not `integer`. A non-numeric text yields `null`. You MUST discharge before storing into non-null: `"42" as integer ?? 0`, `s as integer?` (keep it nullable), or `match`. This is `(N-Parse)` — a bad parse is a reachable fault, exactly like `÷0` and out-of-bounds indexing (§ @PLN25). Contrast the *numeric* casts above (`float`→`integer`, width narrowing), which reinterpret an existing number rather than parse text |
 | Integer / float / boolean → `text` | **Format-only** | `"n={m}"` renders the value inline; `t = m` with `t: text` is a compile error.  If you want the rendered form as a standalone text value, assign through interpolation: `t = "{m}"` |
 | `character` → `integer` (codepoint)| Explicit `as` | `'a' as integer` yields 97 |
 | `character` ↔ `text`               | See § String literals | Indexing vs. slicing asymmetry; concatenation via interpolation |

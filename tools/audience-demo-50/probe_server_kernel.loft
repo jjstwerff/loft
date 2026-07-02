@@ -70,10 +70,10 @@ fn parse_input(payload: text) -> InputParts {
     return InputParts { cid: 0, x: 0.0, y: 0.0, z: 0.0, ok: false };
   }
   InputParts {
-    cid: parts[0] as integer,
-    x:   parts[1] as float,
-    y:   parts[2] as float,
-    z:   parts[3] as float,
+    cid: parts[0] as integer ?? 0,
+    x:   parts[1] as float ?? 0.0,
+    y:   parts[2] as float ?? 0.0,
+    z:   parts[3] as float ?? 0.0,
     ok:  true,
   }
 }
@@ -157,7 +157,7 @@ fn main() {
       } else if ev.kind == 1 {
         i = ev.payload.find(":");
         if i != null {
-          handle_message(world, ev.cid, ev.payload[..i] as integer, ev.payload[i + 1..]);
+          handle_message(world, ev.cid, ev.payload[..i] as integer ?? 0, ev.payload[i + 1..]);
         }
       }
     },

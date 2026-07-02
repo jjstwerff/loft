@@ -5800,10 +5800,12 @@ fn inc17_float_to_integer_requires_as() {
 
 #[test]
 fn inc17_text_to_integer_requires_as() {
+    // Under @PLN25 DN3 a text→int parse yields `integer?` (the parse can fail);
+    // the non-null return forces the discharge — `as` alone no longer suffices.
     code!(
         "fn run_parse() -> integer {
     s_p = \"42\";
-    s_p as integer
+    s_p as integer ?? 0
 }"
     )
     .expr("run_parse()")

@@ -37,7 +37,7 @@ fn string_scope() {
       t+=\"2\";
     };
     b += t+\" \";
-    a += t as integer
+    a += t as integer ?? 0
   };
   \"{a} via {b}\"
 "
@@ -49,50 +49,58 @@ fn string_scope() {
     // clear-before-evaluate text-Set semantics don't destroy the
     // accumulator.  See `parser/expressions.rs:1273-1295`.
     // @PLAN53 — aligned layout: every slot step rounds up to 8.
+    // @PLN25 DN3: `t as integer` now yields `integer?`; the `?? 0` discharge
+    // adds a null-coalesce block (`ncc:14` / `__ncc_1`) at the tail.
     .slots(
         "\
   block:1
-  __work_5+24=8 [0..145]
-  __work_4+24=32 [3..144]
-  __work_3+24=56 [6..143]
-  __work_2+24=80 [9..142]
-  __work_1+24=104 [12..141]
-  test_value+24=128 [15..140]
+  __work_5+24=8 [0..150]
+  __work_4+24=32 [3..149]
+  __work_3+24=56 [6..148]
+  __work_2+24=80 [9..147]
+  __work_1+24=104 [12..146]
+  test_value+24=128 [15..145]
   │ block:2
-  │ a+8=152 [17..102]
-  │ b+24=160 [18..119]
+  │ a+8=152 [17..107]
+  │ b+24=160 [18..124]
   │ │ for:3
-  │ │ n#index+8=184 [22..98]
-  │ │ │ loop:4L [seq 23..99]
+  │ │ n#index+8=184 [22..103]
+  │ │ │ loop:4L [seq 23..104]
   │ │ │ n+8=192 [35..81]
   │ │ │ │ block:6
-  │ │ │ │ t+24=200 [36..98]
+  │ │ │ │ t+24=200 [36..103]
   │ │ │ │ │ for:9
   │ │ │ │ │ _m#index+8=224 [65..81]
   │ │ │ │ │ │ loop:10L [seq 66..82]
-  │ │ │ │ │ │ _m+8=232 [78..78]",
+  │ │ │ │ │ │ _m+8=232 [78..78]
+  │ │ │ │ │ │ │ ncc:14
+  │ │ │ │ │ │ │ __ncc_1+8=240 [96..99]",
     )
     .result(Value::str("136 via n:1=1 n:2=12 n:3=122 "));
 }
 
 #[test]
 fn loop_variable() {
-    expr!("a = 0; for _t in 1..5 { b = \"123\"; a += b as integer; if a > 200 { break; }}; a")
+    expr!("a = 0; for _t in 1..5 { b = \"123\"; a += b as integer ?? 0; if a > 200 { break; }}; a")
         // @PLAN53 — aligned layout; `test_value` sorts last as its 8-rounded
         // slot lands above the loop body.
+        // @PLN25 DN3: `b as integer` now yields `integer?`, so `?? 0` discharges it
+        // — that adds a null-coalesce block (`ncc:7` / `__ncc_1`) to the layout.
         .slots(
             "\
   block:1
-  __work_1+24=8 [0..56]
+  __work_1+24=8 [0..61]
   │ block:2
-  │ a+8=32 [4..33]
+  │ a+8=32 [4..38]
   │ │ for:3
-  │ │ _t#index+8=40 [6..32]
-  │ │ │ loop:4L [seq 7..33]
+  │ │ _t#index+8=40 [6..37]
+  │ │ │ loop:4L [seq 7..38]
   │ │ │ _t+8=48 [19..19]
+  │ │ │ │ │ ncc:7
+  │ │ │ │ │ __ncc_1+8=48 [26..29]
   │ │ │ │ block:6
-  │ │ │ │ b+24=56 [20..32]
-  test_value+8=80 [34..41]",
+  │ │ │ │ b+24=56 [20..37]
+  test_value+8=80 [39..46]",
         )
         .result(Value::Int(246));
 }

@@ -22,6 +22,41 @@ probe verdicts) → [implementation-steps.md](implementation-steps.md) (the phas
 
 ### ⭐ MOST RECENT — cold-start read this first (branch `tuxedo-pln85-fuzz-proof-gate`)
 
+> **🟢 DN3-PARSE FLIP LANDED (2026-07-02) — the LAST types.md deviation is CLOSED; formal spec updated.**
+> `text as integer` / `as float` / `as single` is a **fallible PARSE**, so it now TYPES `τ?`
+> (`(N-Parse)`), exactly like `÷0` and `v[i]`. The `as` handler (`parser/operators.rs`) wraps a
+> `Text`-source numeric cast in `Optional`; discharge with `?? d`, `as τ?`, or `match`.
+> **Measured blast radius by running the full suite** ([[measure-flip-by-running-suite]]): 11 gated
+> tests → all migrated + GREEN on both backends. Committed set:
+> - **core:** `src/parser/operators.rs` (the parse-nullable wrap, under `pln25_dn1_enabled()`).
+> - **lib:** `lib/lexer.loft:395` escape decoder `nr = total as integer ?? 0` (the `\x` cascade that
+>   fed `nr as character` → 16-parser via `use parser`).
+> - **suite-gated servers:** `tools/audience-demo/server_kernel.loft` (audience test kernel leg) +
+>   `tools/audience-demo-50/probe_server_kernel.loft` (udp test) — protocol parses `?? 0`. The
+>   audience **original leg auto-skips** when registry `server-0.2.0` rejects (`server_available()`
+>   gate) → **no republish needed for green**.
+> - **tests:** `03-text.loft`, `29-strings.loft` (`?? 0`); `strings.rs` loop_variable/string_scope
+>   (`?? 0` + slot refresh — the `?? 0` adds an `ncc` null-coalesce block); `issues.rs` inc17.
+> - **docs:** `formal/types.md` (DN3 → CLOSED), `formal/ROADMAP.md` (types.md **1 → 0**),
+>   `LOFT.md` + `loft-write` skill (parse-is-fallible `τ?` guidance — user-asked).
+>
+> **Formal state: types.md is now 0 open** — @PLN25 DN1–DN6 + D2 all CLOSED. Overflow-arith stays a
+> DECIDED EDGE (C84, non-null, no trap). **types.md joins binding.md + grammar.md at 0.**
+>
+> **DEMO-TOOL @PLN25 DEBT (deferred, non-gated, NOT this commit):** several `tools/*` demos have
+> MULTI-DN stragglers beyond parse — `crystal_stress.loft` (`per_build / segs` = **division**),
+> `brick-buster` (`br_now / 11` division), `projector.loft` (registry `gridmesh` + palette), `server.loft`
+> + `probe_client_kernel.loft` (registry `use server` / remaining rejects), `bench/08_word_count`
+> (a `text?` field). These need a full @PLN25 sweep (parse + division + float + registry), not a
+> parse-only patch, so partial edits were reverted to keep this commit focused + complete. Also stale:
+> `loft-write` skill line ~300 still says tuple `integer` elements "default to nullable / use `not null`"
+> (pre-DN1 — needs the @PLN25 default-non-null + `not null`-retired update).
+>
+> **⚠️ ANOMALY FIXED:** working tree had an uncommitted regression in the GENERATED `tests/docs/features/
+> F1.loft` + `F2.loft` (`null as integer?` → `null as integer`, which DN5-rejects). Restored to the
+> committed `null as integer?` (via `git show HEAD:` → write, NOT `checkout`). If `tools/features/gen.loft`
+> reproduces the broken form, the GENERATOR needs the `?` — check before regenerating features.
+
 > **🟢 CORE/IN-TREE SUITE NOW GREEN — the mid-step-f DN1/DN3 debt is cleared (2026-07-01b). Run the full
 > suite via `find_problems`, NOT raw `cargo nextest`** (it rebuilds cdylibs + clears stale `.loftc`; a raw
 > run shows stale-fixture FALSE failures). What was fixed this session (all committed + pushed):

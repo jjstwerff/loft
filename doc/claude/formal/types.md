@@ -271,19 +271,23 @@ error ("cannot change type from S to S?"); `?? default` / `match` are the only e
 (`(N-Coal)`/`(N-Match)`). Closed by the `(N-Store)` / `change_var` teeth (DN1) + the DN5 `as`-cast
 closure. Both backends.
 
-### DN3 — MOSTLY CLOSED (2026-07-02): fit-failing ops type `τ?`  ·  parse + overflow-arith residual
+### DN3 — CLOSED (2026-07-02): fit-failing ops type `τ?`  ·  overflow-arith = decided edge
 A fit-failing op now TYPES its result `τ?` (the runtime already nulled per `E-Uncomp`/C80), so an
 un-discharged result stored into non-null storage is a compile error — the developer must guard,
 `?? d`, or declare the target `τ?`. **DONE:** integer `/` and `%` (the division root-cause fix — the
-`handle_operator` arithmetic-branch wrap) and `v[i]` / `s[i]` indexing (the index flip, default-on,
-with const / iter-var / `if i < len` guard fit-proofs). The runtime "may produce null" warnings are
-RETIRED (the type + `(N-Store)` is the enforcement). Regressions: `25-division-nullable.loft`,
-`25-index-nullable.loft` + `102` reject twins; both backends. **RESIDUAL (1) — to close:** text→int
-**parse** (`s as integer` fails → null but types `integer`; a reachable fault → should be `τ?`,
-like division/index). **DECIDED EDGE (not a deviation) — overflow arithmetic** `a*b`/`a+b`/`a-b`
-stays NON-null: overflow → the null sentinel + continue (C80, no trap), NOT `τ?`. The fault is
-extraordinary (operands ~3×10⁹) while the op is ubiquitous, so forcing discharge on all arithmetic
-is disproportionate + (given no traps) would block a game over a fault its player never hits —
+`handle_operator` arithmetic-branch wrap); `v[i]` / `s[i]` indexing (the index flip, default-on,
+with const / iter-var / `if i < len` guard fit-proofs); and **text→numeric parse** (`(N-Parse)`:
+`s as integer` / `as float` / `as single` now type `integer?` / `float?` / `single?` — a bad parse
+is a reachable fault, exactly like `÷0` and OOB). The `as` handler in `parser/operators.rs` wraps a
+`Text`-source numeric cast in `Optional`; discharge with `?? d`, `as τ?`, or `match`. In-tree
+consumers migrated (lib/lexer number/escape accessors already return `τ?`; the test scripts +
+audience-demo servers `?? 0`). The runtime "may produce null" warnings are RETIRED (the type +
+`(N-Store)` is the enforcement). Regressions: `25-division-nullable.loft`, `25-index-nullable.loft`,
+`inc17_text_to_integer_requires_as` + `102` reject twins; both backends. **DECIDED EDGE (not a
+deviation) — overflow arithmetic** `a*b`/`a+b`/`a-b` stays NON-null: overflow → the null sentinel +
+continue (C80, no trap), NOT `τ?`. The fault is extraordinary (operands ~3×10⁹) while the op is
+ubiquitous, so forcing discharge on all arithmetic is disproportionate + (given no traps) would
+block a game over a fault its player never hits —
 [DESIGN_DECISIONS C85](../DESIGN_DECISIONS.md#c85--overflow-arithmetic-types-non-null-the-game-keeps-running-dont-force-integer-on-every--). Range-tracking keeps provably-fit multiplies exact.
 
 ### DN4 — CLOSED (2026-07-02, F5 cutover): `as` to a narrower type enforces the range

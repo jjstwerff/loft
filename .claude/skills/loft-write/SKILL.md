@@ -56,7 +56,16 @@ landing exactly on `i64::MIN` also reads as `null` (the in-band sentinel).
 Defend a site with `?? <fallback>` to turn the null into a value; an *unguarded*
 divide-by-zero additionally logs a Warn (overflow is silent — the null is the
 signal).  A function returning `integer` may `return null` (it yields `i64::MIN`,
-detectable with `!result`).  Use `not null` fields when a slot must reject null.
+detectable with `!result`).
+
+**Parsing text is fallible, so `text as integer` types `integer?`** (`as float` →
+`float?`, `as single` → `single?`).  `"42" as integer` is a **parse**, not a numeric
+cast — a non-numeric string yields `null`, so the compiler types the result nullable
+and **rejects storing it into a non-null slot**.  Discharge at the parse site:
+`n = s as integer ?? 0` (default), `n = s as integer?` (keep it nullable), or `match`.
+This is the same reachable-fault rule as `÷0` / out-of-bounds indexing (@PLN25
+`(N-Parse)`).  A *numeric* `as` (`3.14 as integer`, `x as u8`) is not a parse and does
+not add `?` on its own (a narrowing numeric cast that can miss uses `as u8?`).
 
 **`text` vs `string`:** The canonical string type is `text`. Using `string` in struct fields causes errors.
 
