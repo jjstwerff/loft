@@ -4972,23 +4972,73 @@ impl Parser {
     /// (fixing the interp orphan leak) while staying native-compilable. `null` arms
     /// (an exhaustive match's unreachable fall-through) are left untouched.
     fn materialize_vector_arms_into(&mut self, elm: &Type, op: &mut Value, w: u16) -> bool {
+        let mut consumed = Vec::new();
+        self.materialize_vector_arms_collect(elm, op, w, &mut consumed)
+    }
+
+    /// Insert `OpFreeRef(local)` into an arm that did NOT consume `local` — the
+    /// cross-arm half of the owned-fresh consume below: the preamble owned-init
+    /// allocates the local's store on EVERY path, so the path that never appends
+    /// from it must still free it (an already-freed/null ref free is a no-op).
+    fn push_arm_free(&mut self, arm: &mut Value, local: u16) {
+        let free = self.cl("OpFreeRef", &[Value::Var(local)]);
+        match arm {
+            Value::Span(b) => self.push_arm_free(&mut b.1, local),
+            Value::Insert(ops) if !ops.is_empty() => {
+                ops.insert(ops.len() - 1, free);
+            }
+            Value::Block(bl) if !bl.operators.is_empty() => {
+                let n = bl.operators.len() - 1;
+                bl.operators.insert(n, free);
+            }
+            other => {
+                let value = std::mem::replace(other, Value::Null);
+                *other = Value::Insert(vec![free, value]);
+            }
+        }
+    }
+
+    fn materialize_vector_arms_collect(
+        &mut self,
+        elm: &Type,
+        op: &mut Value,
+        w: u16,
+        consumed: &mut Vec<u16>,
+    ) -> bool {
         match op {
-            Value::Span(b) => self.materialize_vector_arms_into(elm, &mut b.1, w),
+            Value::Span(b) => self.materialize_vector_arms_collect(elm, &mut b.1, w, consumed),
             Value::Return(inner) | Value::Drop(inner) => {
-                self.materialize_vector_arms_into(elm, inner, w)
+                self.materialize_vector_arms_collect(elm, inner, w, consumed)
             }
             Value::If(_, t, f) => {
-                let a = self.materialize_vector_arms_into(elm, t, w);
-                let b2 = self.materialize_vector_arms_into(elm, f, w);
+                let mut ct = Vec::new();
+                let mut cf = Vec::new();
+                let a = self.materialize_vector_arms_collect(elm, t, w, &mut ct);
+                let b2 = self.materialize_vector_arms_collect(elm, f, w, &mut cf);
+                // An owned-fresh local consumed in ONE arm was preamble-allocated on
+                // BOTH paths — free it on the sibling path too, else that path leaks
+                // the untouched store (the `?? [literal]` then-path).
+                for &l in &ct {
+                    if !cf.contains(&l) {
+                        self.push_arm_free(f, l);
+                    }
+                }
+                for &l in &cf {
+                    if !ct.contains(&l) {
+                        self.push_arm_free(t, l);
+                    }
+                }
+                consumed.append(&mut ct);
+                consumed.append(&mut cf);
                 a || b2
             }
             Value::Block(bl) => bl
                 .operators
                 .last_mut()
-                .is_some_and(|last| self.materialize_vector_arms_into(elm, last, w)),
+                .is_some_and(|last| self.materialize_vector_arms_collect(elm, last, w, consumed)),
             Value::Insert(ops) => ops
                 .last_mut()
-                .is_some_and(|last| self.materialize_vector_arms_into(elm, last, w)),
+                .is_some_and(|last| self.materialize_vector_arms_collect(elm, last, w, consumed)),
             Value::Var(v) if *v != w && matches!(self.vars.tp(*v), Type::Vector(_, _)) => {
                 let local = *v;
                 let deps = self.vars.tp(local).depend();
@@ -5007,8 +5057,31 @@ impl Parser {
                 // (it aliases the subject `e`); freeing its deps would over-free `e`
                 // (@PLN85 match_return). The append already copied its elements into `w`.
                 if !self.vars.skip_free(local) {
-                    for d in deps {
-                        seq.push(self.cl("OpFreeRef", &[Value::Var(d)]));
+                    if deps.is_empty()
+                        && self.vars.is_work_ref(local)
+                        && !self.vars.is_argument(local)
+                    {
+                        // OWNED-FRESH local (dep-cleared — e.g. the `?? [literal]`
+                        // default work-vector): it OWNS its store, and its only use
+                        // is INSIDE this arm, which runs AFTER the pre-return frees
+                        // scopes emits.  Consume it HERE (the append copied it into
+                        // `w`); the matching pre-return free is DROPPED by
+                        // `insert_free`'s reads-filter (scopes.rs) — NOT via
+                        // skip_free, which would also suppress the work-ref
+                        // preamble owned-alloc (`gen_set_first_vector_null` reads
+                        // skip_free as "borrows, no store") and crash the arm's
+                        // PreAlloc on a null store.  The early free was a genuine
+                        // use-after-free: interp read the freed store silently
+                        // (LOFT_POISON SIGSEGVs), native crashed on the 65535
+                        // sentinel.  Any residual scope-exit free stays idempotent
+                        // (a second free of the sentinelled ref is a no-op).
+                        seq.push(self.cl("OpFreeRef", &[Value::Var(local)]));
+                        self.vars.set_arm_consumed(local);
+                        consumed.push(local);
+                    } else {
+                        for d in deps {
+                            seq.push(self.cl("OpFreeRef", &[Value::Var(d)]));
+                        }
                     }
                 }
                 seq.push(Value::Var(w));

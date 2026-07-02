@@ -1435,7 +1435,18 @@ impl Parser {
     ) {
         let mut rhs = Value::Null;
         let rhs_pos = self.lexer.peek_pos().clone();
-        let rhs_type = self.parse_operators(var_tp, &mut rhs, parent_tp, precedence + 1);
+        // Thread the LHS BASE type as the default's hint when the context gives
+        // none (`var_tp` unknown/null — e.g. a RETURN-TAIL `v[i] ?? []`, where
+        // parse_return's `[`-led vector hint cannot fire).  Without it an EMPTY
+        // vector default types Unknown and collapses to `null` (the P365 family),
+        // which downstream classifies the ncc `if` as a null-arm shape — the
+        // return delivery then skips materialisation and native emits `()`.
+        let rhs_hint = if matches!(var_tp, Type::Unknown(_) | Type::Null) {
+            lhs_type.base()
+        } else {
+            var_tp
+        };
+        let rhs_type = self.parse_operators(rhs_hint, &mut rhs, parent_tp, precedence + 1);
         self.known_var_or_type(&rhs, &rhs_pos);
 
         // The default may be a vector literal (`?? []`, `?? [99]`) that builds into

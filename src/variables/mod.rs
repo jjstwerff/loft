@@ -221,6 +221,13 @@ pub struct Function {
     work_texts: BTreeSet<u16>,
     // Work variables for stores
     work_refs: BTreeSet<u16>,
+    /// Vars the return-delivery materializer CONSUMED inside a branch arm
+    /// (free-after-append on every path, incl. cross-arm frees).  Gates
+    /// `insert_free`'s reads-filter: a pre-return free is dropped ONLY when
+    /// the returned tail still reads the var AND an in-arm free covers it —
+    /// dropping on reads alone leaks any read-but-unconsumed buffer (the
+    /// `?? call()` hidden __ref, gate-ON elem_accumulate).
+    arm_consumed: BTreeSet<u16>,
     // Subset of work_refs: inline-ref temporaries created by parse_part to capture
     // the result of a ref-returning method call that is immediately chained (e.g.
     // `p.shifted(1.0, 0.0).x`).  These need their preamble null-init inserted
@@ -284,6 +291,7 @@ impl Function {
             annotated: HashSet::new(),
             work_texts: BTreeSet::new(),
             work_refs: BTreeSet::new(),
+            arm_consumed: BTreeSet::new(),
             inline_ref_vars: BTreeSet::new(),
             names: HashMap::new(),
             loop_scopes: HashSet::new(),
@@ -423,6 +431,8 @@ impl Function {
         self.work_vdb = 0;
         self.work_texts.clear();
         self.work_refs.clear();
+        self.arm_consumed.clear();
+        self.arm_consumed.clone_from(&other.arm_consumed);
         self.inline_ref_vars.clear();
         self.inline_ref_vars.clone_from(&other.inline_ref_vars);
         self.names.clear();
@@ -454,6 +464,7 @@ impl Function {
             loops: other.loops.clone(),
             variables: other.variables.clone(),
             annotated: other.annotated.clone(),
+            arm_consumed: other.arm_consumed.clone(),
             work_text: 0,
             work_ref: 0,
             work_vdb: 0,
@@ -1435,6 +1446,27 @@ impl Function {
     /// and codegen panics with "Incorrect var __ncc_N[65535]".
     pub fn register_work_ref(&mut self, var_nr: u16) {
         self.work_refs.insert(var_nr);
+    }
+
+    /// Whether `var_nr` is a registered work-ref temporary (a generated
+    /// preamble-allocated buffer such as a vector-literal `_vec_N`) — the
+    /// discriminator the return-delivery materializer uses to CONSUME an
+    /// owned-fresh arm local: a plain param/user var is also deps-empty but
+    /// is caller-owned and must never be freed by the arm.
+    #[must_use]
+    pub fn is_work_ref(&self, var_nr: u16) -> bool {
+        self.work_refs.contains(&var_nr)
+    }
+
+    /// Mark a var as consumed in-arm by the return-delivery materializer.
+    pub fn set_arm_consumed(&mut self, var_nr: u16) {
+        self.arm_consumed.insert(var_nr);
+    }
+
+    /// Whether the return-delivery materializer consumed this var in-arm.
+    #[must_use]
+    pub fn is_arm_consumed(&self, var_nr: u16) -> bool {
+        self.arm_consumed.contains(&var_nr)
     }
 
     /// Remove a work-ref from the preamble registry after the one-buffer
