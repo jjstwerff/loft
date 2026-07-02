@@ -80,14 +80,22 @@ pinned it: appending a struct-with-a-heap-field to the vector field of an Option
 structapp.loft). Then the doc/fixture consumers migrated (`e8fb2019` 25-generics `-> T?` + p248_pkg;
 `a40fb977` moros_editor) + `doc/examples.js` regenerated (`1a746f9b`, doc_hygiene green).
 **RESULT: wrap dir/last/parser_debug/wasm_dir + loft_suite 5/5 BOTH gate-OFF and under LOFT_INDEX_DEV=1.**
-**REBASED (2026-07-02) onto fetched origin/main @ 64a1be71** (2 new commits #476 html modules + #474 @PLN92;
-55 commits replayed clean, no conflicts; force-pushed). **NEXT = Step 6 (the gate flip):** flip
-`LOFT_INDEX_DEV`→`pln25_dn1_enabled` (fields.rs:672) + retire the VectorIndex/TextIndex warning
-(operators.rs:2432, add to the Div|Rem early-return) + migrate the ~6 index-warning tests in
-runtime_warnings.rs (the "warns" ones flip to "absent (retired)", like the div tests; discharge their
-programs) + graduate `25-index-nullable.loft` + a `102-expected-errors.loft` reject twin, then full suite
-green under the now-default flip. Re-run the full under-flip suite (was stopped for the rebase) to reconfirm.
-Full detail: [index-f1a-landing.md](index-f1a-landing.md) § DEBUG FINDINGS.
+**REBASED (2026-07-02) onto fetched origin/main @ 64a1be71** (#476 html modules + #474 @PLN92; 55 commits
+replayed clean; force-pushed).
+
+**✅✅ INDEX FLIP COMPLETE — Step 6 LANDED (2026-07-02): `v[i]`/`s[i]` type `τ?` by DEFAULT.**
+Gate flipped (`74fb229d`, fields.rs now just `pln25_dn1_enabled()`); the VectorIndex/TextIndex fault
+warnings RETIRED (joining Div/Rem — the type + N-Store is the enforcement); graduate `25-index-nullable.loft`
+(accept: const/iter-var/guard/`??`/honest) runs in loft_suite; `102-expected-errors.loft` undefended-`v[i]`
+reject twin added (`9951d9ca`). **FULL DEFAULT SUITE GREEN** — the only failures are pre-existing
+ENVIRONMENTAL: multiplayer_v2/v5 (registry republish of web/server, task #4) + html_asyncify (chrome).
+runtime_warnings 44/0, error_messages 2/0 (22_runtime_index_negative baseline regenerated), clippy clean.
+**⚠️ CONSEQUENCE: `#null_safe` (@PLN46 W2/W3) is SUPERSEDED under DN1** — its only effect was suppressing
+these fault warnings (all four now retired), so it is moot; the affected runtime_warnings tests are migrated
+to assert the retirement (and wrong_field_guard → the stronger N-Store REJECT). A follow-up should formally
+deprecate/remove #null_safe. **NEXT for @PLN25: F2 retire `not null` · F3 DN5 · F4 DN6 · F5 DN4 cutover · F6
+final PR (Closes @PLN25)** — see § FINISH LINE. (The index flip was the last fault-op source; the model's
+fault-op TYPES are now complete.) Full detail: [index-f1a-landing.md](index-f1a-landing.md).
 
 **✅ INDEX F1a Step 1 (copy-elision `Optional`-peel) DONE** — `use_analysis` borrower filter now peels
 `.base()` before reading deps, so a mutated/escaping `e = v[i]: Item?` KEEPS the copy (was a SILENT
