@@ -58,3 +58,75 @@ fn test_generic_walk_cap() {
   for gc_w in gw_walk(gc_root, 2) { gc_count += 1; }
   assert(gc_count == 2, "cap: {gc_count}");
 }
+
+// ── The STDLIB construction: `tree_walk` over the `Walkable` bound ──────
+// Same contract as the local gw_walk above, provided by default/01_code.loft.
+// The stdlib landing was blocked by #483 (a generic template's parse
+// registered a placeholder vector row, shifting the runtime type table for
+// every later registration); `vector_of` now bakes the MAX sentinel inside
+// templates instead of registering.
+
+struct SwNode { swn_v: integer, swn_kids: vector<SwNode> }
+fn children(self: SwNode) -> vector<SwNode> { return self.swn_kids; }
+
+fn test_stdlib_tree_walk_level_order() {
+  st_n4 = SwNode { swn_v: 4, swn_kids: [] };
+  st_n5 = SwNode { swn_v: 5, swn_kids: [] };
+  st_n6 = SwNode { swn_v: 6, swn_kids: [] };
+  st_n2 = SwNode { swn_v: 2, swn_kids: [st_n4, st_n5] };
+  st_n3 = SwNode { swn_v: 3, swn_kids: [st_n6] };
+  st_n1 = SwNode { swn_v: 1, swn_kids: [st_n2, st_n3] };
+  st_seq = "";
+  for st_w in tree_walk(st_n1, 1000) {
+    st_seq = "{st_seq}{st_w.swn_v},";
+  }
+  assert(st_seq == "1,2,3,4,5,6,", "stdlib level order: {st_seq}");
+}
+
+fn test_stdlib_tree_walk_cap() {
+  sc_leaf = SwNode { swn_v: 20, swn_kids: [] };
+  sc_root = SwNode { swn_v: 5, swn_kids: [sc_leaf, sc_leaf, sc_leaf] };
+  sc_n = 0;
+  for sc_w in tree_walk(sc_root, 2) { sc_n += 1; }
+  assert(sc_n == 2, "stdlib cap: {sc_n}");
+}
+
+// ── The two-vector (stack + order) DFS variant — the #482 leak shape ────
+// Binding an interface method's vector<Self> result and appending its
+// elements into a second local leaked one store per call: the T-stub's
+// returned type carried no {__retbuf} dep (ref_return finalises it on
+// concrete impls), so the bind was OWNED instead of a borrow of the
+// caller-side buffer.  The wrap harness leak-checks this test.
+
+fn gw_walk_dfs<T: GwKidded>(gd_root: T, gd_cap: integer) -> vector<T> {
+  gd_order: vector<T> = [];
+  gd_stack = [gd_root];
+  for gd_i in 0..gd_cap {
+    gd_n = len(gd_stack);
+    if gd_n == 0 { gd_i#break; }
+    gd_cur = gd_stack[gd_n - 1] ?? gd_root;
+    gd_stack.remove(gd_n - 1);
+    gd_order += [gd_cur];
+    gd_kids = gd_cur.gw_kids();
+    gd_kn = len(gd_kids);
+    for gd_j in 0..gd_kn {
+      gd_kid = gd_kids[gd_kn - 1 - gd_j] ?? gd_cur;
+      gd_stack += [gd_kid];
+    }
+  }
+  return gd_order;
+}
+
+fn test_dfs_walk_preorder_no_leak() {
+  df_n4 = GwNode { gwn_v: 4, gwn_kids: [] };
+  df_n5 = GwNode { gwn_v: 5, gwn_kids: [] };
+  df_n6 = GwNode { gwn_v: 6, gwn_kids: [] };
+  df_n2 = GwNode { gwn_v: 2, gwn_kids: [df_n4, df_n5] };
+  df_n3 = GwNode { gwn_v: 3, gwn_kids: [df_n6] };
+  df_n1 = GwNode { gwn_v: 1, gwn_kids: [df_n2, df_n3] };
+  df_seq = "";
+  for df_w in gw_walk_dfs(df_n1, 1000) {
+    df_seq = "{df_seq}{df_w.gwn_v},";
+  }
+  assert(df_seq == "1,2,4,5,3,6,", "dfs pre-order: {df_seq}");
+}

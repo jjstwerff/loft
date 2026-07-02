@@ -212,6 +212,30 @@ Operations on `vector<T>` — the primary ordered collection type.
 | `min_of(v: vector<integer>) -> integer` | Smallest element. |
 | `max_of(v: vector<integer>) -> integer` | Largest element. |
 
+### Tree traversal — `tree_walk` and the `Walkable` interface
+
+`tree_walk<T: Walkable>(root: T, cap: integer) -> vector<T>` visits a tree
+without recursion and returns the visitation order — breadth-first (level
+order): every parent before its children, siblings left to right.  A type
+opts in by satisfying `Walkable`:
+
+```loft
+interface Walkable {
+  fn children(self: Self) -> vector<Self>
+}
+
+struct Node { val: integer, kids: vector<Node> }
+fn children(self: Node) -> vector<Node> { return self.kids; }
+
+for n in tree_walk(root, 1000) { visit(n.val); }
+```
+
+`cap` bounds the visited-node count, so the walk is total on any input —
+an over-cap (or cyclic) structure yields the first `cap` nodes.  The
+recursion-free shape is the sanctioned tree traversal for sandboxed code
+(sandbox admission rejects recursion and unbounded loops; consuming the
+result is an ordinary bounded `for`).
+
 Vectors are grown by appending with `+=` and elements are accessed by index. Removal and insertion are handled by the parser's built-in operators.
 
 | Operation | Description |

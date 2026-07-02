@@ -5247,6 +5247,9 @@ fn main() {
         );
         std::process::exit(0);
     }
+    if std::env::var_os("LOFT_DUMP_TYPES").is_some() {
+        p.database.dump_types();
+    }
     let mut state = State::new(p.database);
     // Set source_dir for the source_dir() built-in.
     state.database.source_dir = std::path::Path::new(&abs_file)
