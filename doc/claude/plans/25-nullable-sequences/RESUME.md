@@ -360,9 +360,20 @@ tightenings**. In order, each ends green (never carry two phases' breakage):
   multiplayer/viewer reds are the known registry/DN1 server-lib migration (task #4) — engine_host
   + web libs compile 0 errors under DN5. **DN5 is effectively CLOSED (default-on, enforced,
   fallout migrated).**
-- **F4 — Close DN6** (inferred null-join): make `change_var` join `Null ⊔ τ = τ?` so the
-  unannotated `a = null; a = 5` widens to `integer?` per `(N-Join)` instead of erroring — the
-  ergonomic escape valve, and it removes a class of F1a churn.
+- **F4 — Close DN6** (inferred null-join) — ✅ **DONE (2026-07-02).** `change_var_type`
+  (`variables/mod.rs`) now joins `Null ⊔ τ = τ?`: an INFERRED local first assigned a bare
+  `null`, then a non-null INLINE scalar `τ`, widens to `τ?` instead of erroring (the canonical
+  `a = null; if … { a = 5 }` idiom). `var_tp == Null` is inherently the inferred case (a var
+  cannot be annotated `null`), so an annotated `a: integer = null` still rejects (case-1
+  nullable-mix), as does the reverse `a = 5; a = null`; a widened `τ?` into a non-null slot still
+  requires discharge. **SOUNDNESS BOUNDARY (found via the matrix): INLINE scalars only**
+  (Integer/Boolean/Float/Single/Character). `Text` — the one heap-backed scalar — is EXCLUDED:
+  the Null inline slot cannot be retroactively widened to a text?-heap slot (it underflowed
+  `fn_return`'s discard / native E0308); a text null-start must annotate `s: text? = null` and
+  `s = null; s = "hi"` falls to the existing "declare it `text?`" error. Verified both backends
+  (integer/float/char widen; return/arith/discharge; leak-clean). Graduate `25-null-join.loft` +
+  two reject twins (annotated + text-boundary) in `102-expected-errors.loft`. Full suite: 13
+  pre-existing failures, ZERO new. DN1-gated.
 - **F5 — DN4 cutover** (the range sibling of F3): flip `as`-range enforcement default-on
   (today opt-in `LOFT_DN4`) + migrate remaining in-tree `as τ` → `as τ?`. Fold with F3 if convenient.
 - **F6 — Final PR: `Closes @PLN25`.** Update `formal/types.md` deviations (DN1 + DN2 →

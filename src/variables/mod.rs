@@ -1224,6 +1224,40 @@ impl Function {
             }
             return self.is_new(var_nr);
         }
+        // @PLN25 DN6 (N-Join): an INFERRED local first assigned a bare `null`, then a
+        // non-null INLINE scalar `τ`, widens to `Null ⊔ τ = τ?` instead of erroring — the
+        // ergonomic escape valve for `a = null; a = 5` (a now `integer?`, so a later
+        // `b: integer = a` still requires a discharge).  `var_tp == Null` is INHERENTLY the
+        // inferred-from-null case: a variable cannot be ANNOTATED `null`, so this never
+        // overrides an explicit non-null contract — `a: integer = null` carries
+        // `var_tp == integer` and is the case-1 nullable-mix reject below.  Scoped to this
+        // ONE direction (the reverse `a = 5; a = null` cannot be told apart from an
+        // annotated `a: integer = null` here, so it keeps rejecting).  DN1-gated.
+        //
+        // SOUNDNESS BOUNDARY — INLINE scalars ONLY (Integer/Boolean/Float/Single/Character).
+        // The retroactive widen keeps the slot allocated by the FIRST `= null`; that slot is
+        // sound for a τ? only when Null and τ? share it.  Inline scalars carry the null as an
+        // in-slot sentinel, so `null`→`τ?` reuses the same inline slot.  `Text` (the only
+        // heap-backed scalar here) needs a heap-ref slot with text-position tracking that the
+        // Null slot is NOT — widening it corrupts `fn_return`'s discard accounting (interp
+        // underflow / native E0308).  A text null-start must annotate `s: text? = null` so the
+        // slot is heap from the start; `s = null; s = "hi"` falls through to the case-1
+        // nullable-mix error, which already says "declare it `text?`".
+        if crate::keys::pln25_dn1_enabled()
+            && matches!(var_tp, Type::Null)
+            && matches!(
+                type_def,
+                Type::Integer(_) | Type::Boolean | Type::Float | Type::Single | Type::Character
+            )
+        {
+            let widened = Type::optional(type_def.clone());
+            self.trace_type_change(var_nr, &widened, "change_var_type(N-Join)");
+            self.variables[var_nr as usize].type_def = widened;
+            for on in type_def.depend() {
+                self.depend(var_nr, on);
+            }
+            return self.is_new(var_nr);
+        }
         // Allow assigning an iterator (vector slice) to a vector variable
         // when element types are compatible — the iterator is materialised.
         if let (Type::Vector(_, _), Type::Iterator(_, _)) = (var_tp, type_def) {
