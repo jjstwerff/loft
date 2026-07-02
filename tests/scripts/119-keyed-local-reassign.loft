@@ -16,9 +16,9 @@
 // latent hash-copy bugs (remove_claims off-by-one, copy_claims_hash_body
 // under-copy).
 
-struct Item { k: integer not null }
-struct HRec { name: text not null, v: integer not null }
-struct IRec { n: integer not null }
+struct Item { k: integer }
+struct HRec { name: text, v: integer }
+struct IRec { n: integer }
 
 fn main() {
   // --- sorted local: build + reassign-from-loop-local (insertion-sort

@@ -6,7 +6,7 @@ fn p05_bar() -> integer {
   p05_a + 1     // returns null
 }
 
-fn p05_takes_not_null(x: integer not null) {
+fn p05_takes_not_null(x: integer) {
   println("VERDICT: probe_05 received x = {x}");
 }
 

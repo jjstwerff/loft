@@ -2,7 +2,7 @@
 // vector delivery via OpReplaceVector; does the same multi-arm adopt-and-return work
 // for a STRUCT local? `out` is reassigned to a recursive struct return in BOTH arms,
 // then a field is set, then `return out`; a trailing churn reoccupies a freed slot.
-struct Box { tag: integer not null, name: text }
+struct Box { tag: integer, name: text }
 fn churn(k: integer) -> integer { b: vector<u8> = [0]; for i in 0..k { b += [1]; } return len(b); }
 fn build(n: integer) -> Box {
   out = Box { tag: 0, name: "seed" };

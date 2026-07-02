@@ -12,7 +12,7 @@
 // literal (`1.0f`), an explicit `as single` cast, or a single-typed variable.
 
 struct V { a: vector<single> }
-struct Ent { k: integer not null, m: V }
+struct Ent { k: integer, m: V }
 
 fn isum(v: vector<single>) -> integer {
   // exact-value checksum: each single quantised at f32 resolution

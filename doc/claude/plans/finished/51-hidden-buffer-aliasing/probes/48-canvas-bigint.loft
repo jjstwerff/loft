@@ -18,8 +18,8 @@
 //
 // On a small int value this is invisible.  On a value > 2^32 it shows.
 
-struct P { tag: integer not null }
-struct Canvas { data: vector<integer>, w: integer not null }
+struct P { tag: integer }
+struct Canvas { data: vector<integer>, w: integer }
 
 fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
   cv = Canvas { data: [], w: w };

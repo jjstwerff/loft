@@ -10,7 +10,7 @@
 // width from the field's declared type, symmetric with `f += s.field`.
 // @PLN9: cwd-relative paths — this test creates and reads scratch files in the cwd.
 #cwd
-struct LhsTarget { a: i32 not null, b: u8 not null, c: u16 not null }
+struct LhsTarget { a: i32, b: u8, c: u16 }
 
 fn cleanup() { delete("test_loft_inferred.bin"); }
 

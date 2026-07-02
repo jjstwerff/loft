@@ -22,9 +22,9 @@ struct Product {
 // Fields you omit in a constructor receive zero (or null for nullable fields) by default.
 
 struct Colour {
-  r: integer limit(0, 255) not null,
-  g: integer limit(0, 255) not null,
-  b: integer limit(0, 255) not null
+  r: integer limit(0, 255),
+  g: integer limit(0, 255),
+  b: integer limit(0, 255)
 }
 // ## Methods
 // A method is a function whose first parameter is named 'self'.

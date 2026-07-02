@@ -2,12 +2,12 @@
 // both `f` and `g` have mixed return paths.  Also probes the case
 // where the OUTER call's arg is the result of an INNER inline-lift.
 
-struct Inner { n: integer not null }
+struct Inner { n: integer }
 struct Container { items: vector<Inner> }
 struct Wrapper { w: Container }
 struct Holder {
   w:        Wrapper,
-  sentinel: integer not null,
+  sentinel: integer,
 }
 
 fn first_inner(c: Container, idx: integer) -> Inner {

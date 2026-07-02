@@ -21,9 +21,9 @@ struct Area {
 }
 
 struct Point {
-  r: integer limit(0, 255) not null,
-  g: integer limit(0, 255) not null,
-  b: integer limit(0, 255) not null
+  r: integer limit(0, 255),
+  g: integer limit(0, 255),
+  b: integer limit(0, 255)
 }
 
 fn value(self: Point) -> integer {
@@ -46,7 +46,7 @@ struct Circle {
 }
 
 struct Counter {
-  count: integer not null
+  count: integer
 }
 
 fn inc(self: Counter) {
@@ -189,9 +189,9 @@ fn test_special_fields() {
 }
 
 struct CPoint {
-  r: integer limit(0, 255) not null,
-  g: integer limit(0, 255) not null,
-  b: integer limit(0, 255) not null
+  r: integer limit(0, 255),
+  g: integer limit(0, 255),
+  b: integer limit(0, 255)
 }
 
 fn value(self: CPoint) -> integer {

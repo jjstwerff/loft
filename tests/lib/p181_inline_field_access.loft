@@ -7,11 +7,11 @@
 //
 // Origin: `doc/claude/plans/finished/00-inline-lift-safety/snippets/01_field_access.loft`.
 
-struct P181Inner { n: integer not null }
+struct P181Inner { n: integer }
 struct P181Container { items: vector<P181Inner> }
 struct P181Holder {
   c:        P181Container,
-  sentinel: integer not null,
+  sentinel: integer,
 }
 
 fn p181_first_inner(c: P181Container) -> P181Inner {

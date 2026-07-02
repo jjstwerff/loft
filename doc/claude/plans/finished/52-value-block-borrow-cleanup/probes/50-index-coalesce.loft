@@ -6,7 +6,7 @@
 // Pairing: 22 (Hash), 41 (Sorted), 51 (Spacial).
 // Status: cluster IV completion probe (3rd of 4 keyed-collection types).
 
-struct Entry { name: text, value: integer not null }
+struct Entry { name: text, value: integer }
 struct W { items: index<Entry[name]> }
 
 fn fb() -> index<Entry[name]> {

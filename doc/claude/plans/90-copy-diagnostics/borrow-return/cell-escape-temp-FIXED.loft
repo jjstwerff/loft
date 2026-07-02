@@ -1,7 +1,7 @@
 // A1b — the WORKING form (the target). h binds the borrow to a local, then explicitly
 // copies it into an owned buffer before returning. The owned copy is independent of the
 // local Filled, so it survives the local being freed at h's scope end.
-struct E { hp: integer not null, name: text }
+struct E { hp: integer, name: text }
 enum Cell { Empty, Filled { items: vector<E> } }
 fn g(e: Cell) -> vector<E> { match e { Filled { items } => { items }, _ => { [] } } }
 fn h(seed: integer) -> vector<E> {

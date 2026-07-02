@@ -13,10 +13,10 @@
 // (interpreter `state/io.rs` + native `codegen_runtime.rs`) by sizing the record
 // to 1 + size.div_ceil(8) words.  This test simply COMPLETING proves no hang.
 
-struct Inner { q: integer not null, r: integer not null, kind: text not null }
-struct G8 { c1: integer not null, c2: integer not null, c3: integer not null, c4: integer not null, c5: integer not null, c6: integer not null, c7: integer not null, cv: vector<Inner> }
-struct IntVec8 { d1: integer not null, d2: integer not null, d3: integer not null, d4: integer not null, d5: integer not null, d6: integer not null, d7: integer not null, dv: vector<integer> }
-struct Big { a1: integer not null, a2: integer not null, a3: integer not null, a4: integer not null, a5: integer not null, a6: integer not null, a7: integer not null, a8: integer not null, a9: integer not null, a10: integer not null, a11: integer not null, a12: integer not null, av: vector<Inner> }
+struct Inner { q: integer, r: integer, kind: text }
+struct G8 { c1: integer, c2: integer, c3: integer, c4: integer, c5: integer, c6: integer, c7: integer, cv: vector<Inner> }
+struct IntVec8 { d1: integer, d2: integer, d3: integer, d4: integer, d5: integer, d6: integer, d7: integer, dv: vector<integer> }
+struct Big { a1: integer, a2: integer, a3: integer, a4: integer, a5: integer, a6: integer, a7: integer, a8: integer, a9: integer, a10: integer, a11: integer, a12: integer, av: vector<Inner> }
 
 fn main() {
   g8 = `{{"c1":1,"c2":2,"c3":3,"c4":4,"c5":5,"c6":6,"c7":7,"cv":[{{"q":0,"r":0,"kind":"grass"}}]}}` as G8;

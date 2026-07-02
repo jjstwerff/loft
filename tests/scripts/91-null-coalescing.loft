@@ -83,7 +83,7 @@ fn test_if_typing() {
   assert(!r2, "if typing null");
 }
 
-struct NNCounter { count: integer not null }
+struct NNCounter { count: integer }
 
 // @EXPECT_WARNING: Redundant null check
 fn test_redundant_null_eq() {

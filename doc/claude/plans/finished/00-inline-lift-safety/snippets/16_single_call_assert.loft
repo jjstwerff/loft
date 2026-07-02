@@ -2,11 +2,11 @@
 // one in message), or just ONE?  Same shape as variant 07 but the
 // assert's message is a plain literal — no inline interpolation.
 
-struct Inner { n: integer not null }
+struct Inner { n: integer }
 struct Container { items: vector<Inner> }
 struct Holder {
   c:        Container,
-  sentinel: integer not null,
+  sentinel: integer,
 }
 
 fn first_or_empty(c: Container, idx: integer) -> Inner {

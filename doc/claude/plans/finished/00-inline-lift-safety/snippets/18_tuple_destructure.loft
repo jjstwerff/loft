@@ -3,11 +3,11 @@
 // even when the individual tuple elements came from a `gen_set_first_ref_call_copy`
 // (codegen.rs:~1284) site.  Single inline path per call via the Phase 1b gate.
 
-struct Inner { n: integer not null }
+struct Inner { n: integer }
 struct Container { items: vector<Inner> }
 struct Holder {
   c:        Container,
-  sentinel: integer not null,
+  sentinel: integer,
 }
 
 fn first_or_empty(c: Container, idx: integer) -> Inner {

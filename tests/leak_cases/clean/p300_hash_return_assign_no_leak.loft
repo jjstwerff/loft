@@ -2,7 +2,7 @@
 // call.  `OpReplaceKeyed` deep-copies the callee's return store into
 // `x`'s freshly-allocated store and frees the source temp (0x8000 bit);
 // `x`'s own store is freed at scope exit.  No store may leak.
-struct R { ck: integer not null, v: integer }
+struct R { ck: integer, v: integer }
 fn mk() -> hash<R[ck]> {
   h: hash<R[ck]> = [];
   h += [R{ck: 5, v: 9}];

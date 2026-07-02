@@ -13,8 +13,8 @@
 // Identical to Canvas (vector header is also 4-byte u32) — so the same
 // stack/storage divergence applies.
 
-struct P { tag: integer not null }
-struct Named { id: integer not null, name: text }
+struct P { tag: integer }
+struct Named { id: integer, name: text }
 
 fn make_named(id_in: integer, label: text) -> Named {
   Named { id: id_in, name: label }

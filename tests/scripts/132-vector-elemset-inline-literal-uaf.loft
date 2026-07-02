@@ -14,13 +14,13 @@
 struct V { a: vector<integer> }
 struct Cont { m: V }
 
-fn mk(n: integer not null) -> V {
+fn mk(n: integer) -> V {
   v: vector<integer> = [];
   for j in 0..n { v += [j]; }
   V{a: v}
 }
 
-fn mkc(n: integer not null) -> Cont {
+fn mkc(n: integer) -> Cont {
   Cont{m: mk(n)}
 }
 

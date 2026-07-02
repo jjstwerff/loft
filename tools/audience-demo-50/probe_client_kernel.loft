@@ -26,10 +26,10 @@ use engine_host;
 const TICK_US: integer = 33333;   // 30 Hz, the server's grid
 
 struct Stats {
-  tick_n:       integer not null,
-  poses:        integer not null,
-  echoes:       integer not null,
-  last_echo_us: integer not null,
+  tick_n:       integer,
+  poses:        integer,
+  echoes:       integer,
+  last_echo_us: integer,
   tot:          vector<integer>,   // t6 - t0, one clock
   hold:         vector<integer>,   // t5 - t1, server clock
 }

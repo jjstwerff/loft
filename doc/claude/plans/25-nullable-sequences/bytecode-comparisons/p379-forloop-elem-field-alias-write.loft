@@ -1,6 +1,6 @@
 struct Hex { h_height: integer, h_material: integer }
 struct Chunk { ck_cx: integer, ck_hexes: vector<Hex> }
-struct World { chunks: vector<Chunk> not null }
+struct World { chunks: vector<Chunk> }
 fn build_chunk(cx: integer) -> Chunk {
   hexes: vector<Hex> = [];
   for _ in 0..4 { hexes += [Hex {h_height:0,h_material:0}]; }

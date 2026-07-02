@@ -13,7 +13,7 @@
 // This also fixed the general `array`/`ordered` deep-copy (any struct that
 // owns one).
 
-struct Ent { ck: integer not null, v: integer not null }
+struct Ent { ck: integer, v: integer }
 struct S { s: sorted<Ent[ck]> }
 struct I { i: index<Ent[ck]> }     // its existence makes Ent index-backed
 struct SBox { s: sorted<Ent[ck]> }

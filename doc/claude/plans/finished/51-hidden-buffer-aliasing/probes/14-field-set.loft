@@ -15,8 +15,8 @@
 //
 // Expected: ? — depends on field-Set codegen.
 
-struct P { tag: integer not null }
-struct Canvas { data: vector<integer>, w: integer not null }
+struct P { tag: integer }
+struct Canvas { data: vector<integer>, w: integer }
 
 fn make_vec(seed: integer) -> vector<integer> {
   v: vector<integer> = [];

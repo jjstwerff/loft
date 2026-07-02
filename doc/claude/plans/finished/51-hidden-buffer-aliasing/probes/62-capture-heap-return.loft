@@ -7,7 +7,7 @@
 // Captures the `tag_base` integer; returns a Canvas whose vector
 // data depends on the captured value.
 
-struct Canvas { data: vector<integer>, w: integer not null }
+struct Canvas { data: vector<integer>, w: integer }
 
 fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
   cv = Canvas { data: [], w: w };

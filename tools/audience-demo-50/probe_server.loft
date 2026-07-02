@@ -35,11 +35,11 @@ const SIGHT_RANGE: float = 80.0;
 const SIGHT_RANGE_SQ: float = 6400.0;
 
 struct Plane {
-  cid: integer not null,
-  x:   float not null,
-  y:   float not null,
-  z:   float not null,
-  seq: integer not null,   // pose-frame sequence number for this plane
+  cid: integer,
+  x:   float,
+  y:   float,
+  z:   float,
+  seq: integer,   // pose-frame sequence number for this plane
 }
 
 // Per-recipient visibility ledger: for each (recipient, peer) pair, was
@@ -50,28 +50,28 @@ struct Plane {
 // For ≤30 clients × ≤30 peers, the inner vector linear-scan is
 // fine — the probe isn't measuring iteration cost.
 struct SightEntry {
-  peer_cid: integer not null,
-  in_range: boolean not null,
+  peer_cid: integer,
+  in_range: boolean,
 }
 struct Vis {
-  cid:   integer not null,
+  cid:   integer,
   peers: vector<SightEntry>,
 }
 
 // @PLN18 00c — one pending turn-around echo: who asked, their t0 (verbatim),
 // and the server clock when the request was DRAINED (t1).
 struct EchoReq {
-  cid: integer not null,
-  t0:  text not null,
-  t1:  integer not null,
+  cid: integer,
+  t0:  text,
+  t1:  integer,
 }
 
 struct World {
   planes:       hash<Plane[cid]>,
   vis:          hash<Vis[cid]>,
   srv:          server::Server,
-  last_tick_us: integer not null,
-  tick:         integer not null,
+  last_tick_us: integer,
+  tick:         integer,
   echoes:       vector<EchoReq>,
 }
 
@@ -86,11 +86,11 @@ fn dist_sq(ax: float, ay: float, az: float, bx: float, by: float, bz: float) -> 
 // 4-tuple-shaped struct (loft doesn't do real tuples here so we use a
 // small holder).
 struct InputParts {
-  cid: integer not null,
-  x:   float not null,
-  y:   float not null,
-  z:   float not null,
-  ok:  boolean not null,
+  cid: integer,
+  x:   float,
+  y:   float,
+  z:   float,
+  ok:  boolean,
 }
 
 fn parse_input(payload: text) -> InputParts {

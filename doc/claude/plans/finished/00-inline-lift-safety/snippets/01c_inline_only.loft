@@ -2,7 +2,7 @@
 // If this also SEGFAULTs, the crash is the inline-lift by itself,
 // not anything about the sentinel / sibling corruption check.
 
-struct Inner { n: integer not null }
+struct Inner { n: integer }
 struct Container { items: vector<Inner> }
 struct Holder { c: Container }
 

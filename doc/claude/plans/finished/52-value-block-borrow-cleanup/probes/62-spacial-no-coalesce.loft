@@ -8,7 +8,7 @@
 // Pairing: 51 (same type with `??` — hangs).
 // Status: IV-Spacial isolation probe.
 
-struct Point { name: text, x: float not null, y: float not null }
+struct Point { name: text, x: float, y: float }
 struct W { points: spacial<Point[name]> }
 
 fn main() {

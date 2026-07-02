@@ -9,8 +9,8 @@
 // call-in-both-branches), or does it depend on the args?  If this also
 // panics, confirms it's the shape; if not, args matter.
 
-struct P { tag: integer not null }
-struct Canvas { data: vector<integer>, w: integer not null }
+struct P { tag: integer }
+struct Canvas { data: vector<integer>, w: integer }
 
 fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
   cv = Canvas { data: [], w: w };

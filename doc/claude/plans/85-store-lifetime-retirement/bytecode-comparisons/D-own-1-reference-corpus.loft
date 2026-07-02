@@ -1,6 +1,6 @@
 // @PLN85 D-own-1 Reference return sub-thicket — one fn per delivery path, for the
 // byte-identical before/after gate of the classify_reference_delivery collapse.
-struct S { a: integer not null, b: integer not null, name: text }
+struct S { a: integer, b: integer, name: text }
 fn s_none() -> S { S { a: 0, b: 0, name: "" } }
 
 // path A — owned-fresh construction returned (ls empty / recover-hidden-refs + rename)

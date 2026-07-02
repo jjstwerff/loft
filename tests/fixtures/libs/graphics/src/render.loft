@@ -113,17 +113,17 @@ void main() {{
 // ── Renderer struct ──────────────────────────────────────────────────────
 
 pub struct Renderer {
-  width: integer not null,
-  height: integer not null,
-  pbr_shader: integer not null,
-  shadow_shader: integer not null,
-  shadow_fbo: integer not null,
-  shadow_tex: integer not null,
-  shadow_size: integer not null,
-  start_tick: integer not null,
+  width: integer,
+  height: integer,
+  pbr_shader: integer,
+  shadow_shader: integer,
+  shadow_fbo: integer,
+  shadow_tex: integer,
+  shadow_size: integer,
+  start_tick: integer,
   vaos: vector<integer>,
   vert_counts: vector<integer>,
-  uploaded: boolean not null
+  uploaded: boolean
 }
 
 // Create a renderer with a window.  Compiles built-in shaders, allocates

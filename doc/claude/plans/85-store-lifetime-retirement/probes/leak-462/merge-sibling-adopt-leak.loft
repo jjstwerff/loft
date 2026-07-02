@@ -1,4 +1,4 @@
-struct Def { a: integer not null, name: text }
+struct Def { a: integer, name: text }
 fn base() -> vector<Def> { t: vector<Def> = []; t += [Def{a:1,name:"b"}]; t }
 fn bun() -> vector<Def> { t: vector<Def> = []; t += [Def{a:3,name:"u"}]; t }
 fn merged() -> vector<Def> {

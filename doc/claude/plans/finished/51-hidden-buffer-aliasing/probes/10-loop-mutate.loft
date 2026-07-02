@@ -19,8 +19,8 @@
 // today).  If FAIL, alloc_canvas itself would be broken, and the gridmesh
 // tests would already fail.
 
-struct P { tag: integer not null }
-struct Canvas { data: vector<integer>, w: integer not null }
+struct P { tag: integer }
+struct Canvas { data: vector<integer>, w: integer }
 
 fn render_loop_mutate(p: P) -> Canvas {
   cv = Canvas { data: [], w: 4 };

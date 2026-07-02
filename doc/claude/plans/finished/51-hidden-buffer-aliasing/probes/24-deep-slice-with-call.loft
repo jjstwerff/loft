@@ -11,9 +11,9 @@
 // borrow stays valid across other allocations.  This mirrors the
 // `lib/moros_map/map_get_hex` shape inside a render loop.
 
-struct Hex { x: integer not null, y: integer not null }
+struct Hex { x: integer, y: integer }
 struct Container { items: vector<Hex>, name: text }
-struct Canvas { data: vector<integer>, w: integer not null }
+struct Canvas { data: vector<integer>, w: integer }
 
 fn get_first(m: Container) -> Hex {
   return m.items[0];

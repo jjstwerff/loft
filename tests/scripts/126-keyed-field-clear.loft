@@ -13,9 +13,9 @@
 // `codegen_runtime::OpClearKeyed`, both calling `remove_claims`), and
 // recognising it as a first-arg write in `check_ref_mutations`.
 
-struct HRec { ck: integer not null, v: integer not null }
-struct SRec { sk: integer not null }
-struct IRec { ik: integer not null }
+struct HRec { ck: integer, v: integer }
+struct SRec { sk: integer }
+struct IRec { ik: integer }
 
 // All three keyed kinds as fields, mutated through a `&` param.
 struct Bag {

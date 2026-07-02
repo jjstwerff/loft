@@ -30,15 +30,15 @@ const DENSE_HZ:   float = 60.0;    // reconstruct at 60 fps (typical render rate
 const PASS_THRESHOLD_M: float = 0.10;  // max position error to PASS (≈ 10 cm)
 
 struct Pose {
-  t:  float not null,
-  x:  float not null, y:  float not null, z:  float not null,
-  vx: float not null, vy: float not null, vz: float not null,
+  t:  float,
+  x:  float, y:  float, z:  float,
+  vx: float, vy: float, vz: float,
 }
 
 struct ErrorReport {
-  max_m:  float not null,
-  mean_m: float not null,
-  count:  integer not null,
+  max_m:  float,
+  mean_m: float,
+  count:  integer,
 }
 
 // ── Trajectory generators (ground truth, analytical) ─────────────────────

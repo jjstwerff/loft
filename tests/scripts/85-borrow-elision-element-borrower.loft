@@ -13,8 +13,8 @@
 // the source is unchanged); (3) the escaping borrower keeps copy semantics. Both
 // backends, no leak. See copy-elision-design.md § Tier-1.5.
 
-struct Item { v: integer not null }
-struct G { c: vector<Item> not null }
+struct Item { v: integer }
+struct G { c: vector<Item> }
 
 // read-only element borrower — ELIDES (xs inlined; e borrows the live g.c element)
 fn read_elem(g: G, i: integer) -> integer {

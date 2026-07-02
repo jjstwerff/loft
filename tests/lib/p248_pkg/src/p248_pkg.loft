@@ -10,8 +10,8 @@
 // slot in the interpreter and landed the field write on CONST_STORE).
 
 pub struct P248State {
-  ps_keys: vector<boolean> not null,
-  ps_scalar: integer not null
+  ps_keys: vector<boolean>,
+  ps_scalar: integer
 }
 
 pub fn p248_new(seed: integer) -> P248State {

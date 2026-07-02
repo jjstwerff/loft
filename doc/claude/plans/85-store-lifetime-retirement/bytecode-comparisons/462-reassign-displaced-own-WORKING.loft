@@ -1,4 +1,4 @@
-struct M { hp: integer not null, name: text }
+struct M { hp: integer, name: text }
 fn dflt() -> M { M{hp:0, name:""} }
 fn pick(t: vector<M>, idx: integer) -> M {
   pool: vector<M> = []; for p in 0..len(t) { pool += [t[p] ?? dflt()]; }

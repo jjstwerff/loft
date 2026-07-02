@@ -9,7 +9,7 @@
 //
 // Status aligned: CURRENTLY FAIL (empty) ; AFTER 2b FIX -> PASS.  Flag-OFF: PASS.
 
-struct Item { k: integer not null }
+struct Item { k: integer }
 
 fn build() -> sorted<Item[k]> {
   s: sorted<Item[k]> = [];

@@ -34,9 +34,9 @@ fn env_int(name: text, dflt: integer) -> integer {
 }
 
 struct Counts {
-  poses:    integer not null,
-  exits:    integer not null,
-  garbled:  integer not null,
+  poses:    integer,
+  exits:    integer,
+  garbled:  integer,
 }
 
 // @PLN18 00c — turn-around samples (client 0 only; kind-5 echo replies).
@@ -92,7 +92,7 @@ fn count_for(h: web::WsHandler, tot: vector<integer>, hold: vector<integer>) -> 
 }
 
 // Grid placement: client_i at (col*20, row*20, 0) on a 6-wide grid.
-struct GridPos { x: float not null, y: float not null }
+struct GridPos { x: float, y: float }
 fn grid_pos(i: integer) -> GridPos {
   col = i - (i / 6) * 6;
   row = i / 6;

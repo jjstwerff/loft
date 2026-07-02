@@ -18,7 +18,7 @@
 // native: garbage). Same root as #405 (cluster II), far simpler trigger.
 // Do NOT graduate to tests/scripts/ until the cluster-II fix lands.
 
-enum CV { CN, CI { value: integer not null } }
+enum CV { CN, CI { value: integer } }
 
 fn enc(c: CV) -> vector<u8> {
   return match c { CN => [0 as u8], CI { value } => [value as u8] };

@@ -8,9 +8,9 @@
 // field.  Fixed by routing the default through field_ref(to, rec_tp, field),
 // exactly as the non-empty path does via record_new.
 
-struct Item { x: integer not null }
-struct Box { name: text not null, items: vector<Item> }
-struct IntBox { name: text not null, nums: vector<integer> }
+struct Item { x: integer }
+struct Box { name: text, items: vector<Item> }
+struct IntBox { name: text, nums: vector<integer> }
 
 fn main() {
   // field-then-empty-[] — the broken shape

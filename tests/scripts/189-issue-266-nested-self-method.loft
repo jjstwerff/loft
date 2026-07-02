@@ -22,7 +22,7 @@
 // non-zero field offsets, inner-takes-args, value-returning inner, the
 // free-function (explicit-receiver) form, and a re-borrowed nested-struct field.
 
-struct St { s_nw: vector<boolean> not null, s_pv: vector<boolean> not null }
+struct St { s_nw: vector<boolean>, s_pv: vector<boolean> }
 
 fn st_new() -> St {
   a: vector<boolean> = [];

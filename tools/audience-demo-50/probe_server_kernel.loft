@@ -20,34 +20,34 @@ const TICK_INTERVAL_US: integer = 33333;   // 30 Hz
 const SIGHT_RANGE_SQ: float = 6400.0;      // 80 m sight range, squared
 
 struct Plane {
-  cid: integer not null,
-  x:   float not null,
-  y:   float not null,
-  z:   float not null,
-  seq: integer not null,
+  cid: integer,
+  x:   float,
+  y:   float,
+  z:   float,
+  seq: integer,
 }
 
 struct SightEntry {
-  peer_cid: integer not null,
-  in_range: boolean not null,
+  peer_cid: integer,
+  in_range: boolean,
 }
 struct Vis {
-  cid:   integer not null,
+  cid:   integer,
   peers: vector<SightEntry>,
 }
 
 // One pending turn-around echo: requester, their t0 (verbatim), and the
 // server clock when the request was DRAINED (t1).
 struct EchoReq {
-  cid: integer not null,
-  t0:  text not null,
-  t1:  integer not null,
+  cid: integer,
+  t0:  text,
+  t1:  integer,
 }
 
 struct World {
   planes: hash<Plane[cid]>,
   vis:    hash<Vis[cid]>,
-  tick:   integer not null,
+  tick:   integer,
   echoes: vector<EchoReq>,
 }
 
@@ -57,11 +57,11 @@ fn dist_sq(ax: float, ay: float, az: float, bx: float, by: float, bz: float) -> 
 }
 
 struct InputParts {
-  cid: integer not null,
-  x:   float not null,
-  y:   float not null,
-  z:   float not null,
-  ok:  boolean not null,
+  cid: integer,
+  x:   float,
+  y:   float,
+  z:   float,
+  ok:  boolean,
 }
 
 fn parse_input(payload: text) -> InputParts {

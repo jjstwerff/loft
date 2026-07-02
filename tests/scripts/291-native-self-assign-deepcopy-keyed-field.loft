@@ -12,9 +12,9 @@
 // `--interpret` compiled the same source to a plain pointer pass-through and
 // was always correct; the fix makes native evaluate the call first, then
 // pointer-pass-through when the result already lives in the destination's store.
-struct CornerRef { rk: text not null, x: integer not null }
+struct CornerRef { rk: text, x: integer }
 struct G { look: hash<CornerRef[rk]> }
-struct V { items: vector<CornerRef> not null }
+struct V { items: vector<CornerRef> }
 
 fn id_g(g: G) -> G { return g; }
 fn id_v(v: V) -> V { return v; }

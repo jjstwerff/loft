@@ -13,7 +13,7 @@
 //
 // The hash-key field (`text`) must be UNIQUE — a hash holds one record per key.
 
-struct Word { text: text not null, count: integer }
+struct Word { text: text, count: integer }
 struct H { by: hash<Word[text]> }
 struct V { v: vector<integer> }
 struct Counter { ordered: vector<Word>, by_text: hash<Word[text]> }

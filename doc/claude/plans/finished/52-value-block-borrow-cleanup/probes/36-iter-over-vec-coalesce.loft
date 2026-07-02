@@ -13,7 +13,7 @@
 // Pairing: diff against 21 (direct element projection).
 // Status: cluster IV chained-consumer probe.
 
-struct Inner { tag: integer not null }
+struct Inner { tag: integer }
 struct Outer { lists: vector<vector<Inner>> }
 
 fn main() {

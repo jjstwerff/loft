@@ -245,7 +245,7 @@ fn tag_is_valid(tag: text, valid_pids: vector<text>, valid_plans: vector<text>) 
 // per-tag arrays in `index/tags.json`-shape JSON.  Same trick
 // for link targets.  Slot is a one-field wrapper because loft
 // `sorted<>` keys must come from a struct field.
-struct TagSlot { name: text not null }
+struct TagSlot { name: text }
 
 // Wrapper so the `sorted` collection can be a STRUCT FIELD —
 // loft's two-pass parser infers `sorted<TagSlot[name]>` more
@@ -276,10 +276,10 @@ fn is_indexable_ext(name: text) -> boolean {
 // the valid-IDs sets — at which point we can attach the
 // `valid` field directly without a re-parse round trip.
 struct RawRef {
-    tag: text not null,
-    file: text not null,
-    line: integer not null,
-    ctx_escaped: text not null
+    tag: text,
+    file: text,
+    line: integer,
+    ctx_escaped: text
 }
 
 // Markdown-link row collected during the scan.  Mirrors the
@@ -291,11 +291,11 @@ struct RawRef {
 // resolved repo-relative path; `anchor` is the optional
 // `#fragment` portion (empty when absent).
 struct LinkRef {
-    target: text not null,
-    file: text not null,
-    line: integer not null,
-    anchor: text not null,
-    ctx_escaped: text not null
+    target: text,
+    file: text,
+    line: integer,
+    anchor: text,
+    ctx_escaped: text
 }
 
 // Directory names to skip during the recursive walk.  Any
@@ -984,21 +984,21 @@ fn is_fence_marker(stripped: text) -> text {
 // separate re-walk pass.  Mirrors the count fields scan.sh's tail
 // `echo` block computes via `jq '.X | length'`.
 struct Summary {
-    distinct_tags: integer not null,
-    new_form: integer not null,
-    legacy_form: integer not null,
-    total_refs: integer not null,
-    link_targets: integer not null,
-    inbound_links: integer not null,
-    problems_open: integer not null,
-    problems_recent: integer not null,
-    plans_active: integer not null,
-    plans_future: integer not null,
-    plans_deferred: integer not null,
-    plans_recent: integer not null,
-    lib_plans_future: integer not null,
-    broken_refs: integer not null,
-    broken_links: integer not null,
+    distinct_tags: integer,
+    new_form: integer,
+    legacy_form: integer,
+    total_refs: integer,
+    link_targets: integer,
+    inbound_links: integer,
+    problems_open: integer,
+    problems_recent: integer,
+    plans_active: integer,
+    plans_future: integer,
+    plans_deferred: integer,
+    plans_recent: integer,
+    lib_plans_future: integer,
+    broken_refs: integer,
+    broken_links: integer,
 }
 
 // Print the summary stats line(s) to stderr — companion to the
@@ -1352,9 +1352,9 @@ fn is_problems_row(line: text) -> boolean {
 //          (fallback to slug if no README or no heading)
 
 struct PlanEntry {
-    slug: text not null,
-    path: text not null,
-    title: text not null,
+    slug: text,
+    path: text,
+    title: text,
 }
 struct PlanSet {
     entries: sorted<PlanEntry[slug]>,
@@ -1509,10 +1509,10 @@ fn find_last_closed_date(body: text) -> text {
 // Slot struct + wrapper for `sorted<...[-closed]>` (descending
 // by date).  Loft sorted<> must be a struct field, not a local.
 struct ProblemRecent {
-    tag: text not null,
-    line_no: integer not null,
-    closed: text not null,
-    summary: text not null,
+    tag: text,
+    line_no: integer,
+    closed: text,
+    summary: text,
 }
 struct RecentSet {
     items: sorted<ProblemRecent[-closed]>,
@@ -1600,8 +1600,8 @@ fn emit_problems_open_array() -> integer {
 // `link_target_exists` walks ~1000 redundant `stat()` calls.
 // One-pass memo: build cache keyed by target, then read.
 struct TargetExists {
-    target: text not null,
-    exists: boolean not null,
+    target: text,
+    exists: boolean,
 }
 struct TargetCache {
     seen: hash<TargetExists[target]>,

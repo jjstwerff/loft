@@ -16,8 +16,8 @@
 // pattern doesn't match either Set (penultimate is Set(b, annotate(a))
 // which IS Set→Var(b) pattern, but a is also a hidden-buffer return).
 
-struct P { tag: integer not null }
-struct Canvas { data: vector<integer>, w: integer not null }
+struct P { tag: integer }
+struct Canvas { data: vector<integer>, w: integer }
 
 fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
   cv = Canvas { data: [], w: w };

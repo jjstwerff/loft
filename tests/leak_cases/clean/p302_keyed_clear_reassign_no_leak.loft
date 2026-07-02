@@ -2,7 +2,7 @@
 // in place (no-op + leak before the fix).  Asserts the clear takes effect
 // and re-population works; the `clean/` harness asserts no store leaks on
 // either backend.
-struct R { ck: integer not null, v: integer not null }
+struct R { ck: integer, v: integer }
 fn test() {
   s: hash<R[ck]> = [];
   s += [R{ck: 1, v: 10}];

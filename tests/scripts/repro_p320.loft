@@ -16,7 +16,7 @@
 // `&` ref to the caller (the whole point of the `&`).  OpHashRemove serves hash
 // / index / sorted alike, so a hash and an index variant are both covered.
 
-struct P320Ent  { k: integer not null, v: integer }
+struct P320Ent  { k: integer, v: integer }
 struct P320Hash { data: hash<P320Ent[k]> }
 
 // The shape that used to be rejected: a `&` param whose ONLY mutation is a
@@ -35,7 +35,7 @@ fn test_p320_hash_keyed_remove() {
   assert(e2.v == 20, "p320 hash: key 2 v={e2.v} (want 20)");
 }
 
-struct P320Rec   { id: integer not null, w: integer }
+struct P320Rec   { id: integer, w: integer }
 struct P320Index { rows: index<P320Rec[id]> }
 
 fn p320_drop_index(ix: &P320Index, target: integer) { ix.rows[target] = null; }

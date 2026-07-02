@@ -13,7 +13,7 @@
 // alive.  The interesting question is whether iterating-while-reading
 // triggers any corruption.
 
-struct Hex { x: integer not null, y: integer not null }
+struct Hex { x: integer, y: integer }
 struct Container { items: vector<Hex>, name: text }
 
 fn get_first(m: Container) -> Hex {

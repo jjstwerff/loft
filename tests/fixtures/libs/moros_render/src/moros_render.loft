@@ -642,12 +642,12 @@ pub fn emit_grand_arc_stair(
 // the usual perspective-projection knobs.  `up` is world up.
 pub struct RenderCamera {
   target:    Vec3,
-  azimuth:   float not null,
-  elevation: float not null,
-  distance:  float not null,
-  fov_y:     float not null,
-  near:      float not null,
-  far:       float not null,
+  azimuth:   float,
+  elevation: float,
+  distance:  float,
+  fov_y:     float,
+  near:      float,
+  far:       float,
   up:        Vec3,
 }
 
@@ -1261,10 +1261,10 @@ pub OCCLUSION_FAR_MARGIN = 0.3;         // skip last 30% near target
 pub struct ViewCone {
   vc_apex:       Vec3,
   vc_axis:       Vec3,              // unit vector
-  vc_length:     float not null,    // |eye → target|
-  vc_tan_half:   float not null,    // tan(half-angle)
-  vc_t_near:     float not null,    // normalised axis position [0, 1]
-  vc_t_far:      float not null,
+  vc_length:     float,    // |eye → target|
+  vc_tan_half:   float,    // tan(half-angle)
+  vc_t_near:     float,    // normalised axis position [0, 1]
+  vc_t_far:      float,
 }
 
 pub fn view_cone(eye: Vec3, target: Vec3, half_angle_deg: float) -> ViewCone {

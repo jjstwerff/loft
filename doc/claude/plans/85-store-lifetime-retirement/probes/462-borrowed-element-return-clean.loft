@@ -12,12 +12,12 @@
 // accumulated slot-reuse interleaving. The issue author's standalone attempts and
 // these two probes agree: the bug does not shrink below the full world-gen context.
 struct MD {
-  m_hp: integer not null, m_dam: integer not null, m_rarity: integer not null,
+  m_hp: integer, m_dam: integer, m_rarity: integer,
   m_habitat: integer, m_glyph: text, m_key: text, m_name: text, m_tags: integer,
 }
 struct En {
-  q: integer not null, r: integer not null, hp: integer not null, dam: integer not null,
-  glyph: text, key: text, name: text, alive: boolean not null,
+  q: integer, r: integer, hp: integer, dam: integer,
+  glyph: text, key: text, name: text, alive: boolean,
 }
 fn mon_none() -> MD { MD { m_hp: 0, m_dam: 0, m_rarity: 0, m_habitat: 0, m_glyph: "", m_key: "", m_name: "", m_tags: 0 } }
 fn mk_md(i: integer) -> MD {

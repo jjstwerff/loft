@@ -2,7 +2,7 @@
 // If this passes, confirms the bug is specifically about non-Var
 // (expression) args slipping the lock filter.
 
-struct Inner { n: integer not null }
+struct Inner { n: integer }
 struct Container { items: vector<Inner> }
 
 fn first_inner(c: Container) -> Inner {

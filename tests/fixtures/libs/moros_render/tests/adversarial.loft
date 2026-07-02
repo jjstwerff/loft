@@ -32,14 +32,14 @@ fn test_adv_unary_neg_self_assign() {
 // ── Probe 2: struct-enum variant dispatch via `is Variant { f }` ──
 
 enum StairKind {
-  Linear { from: Vec3, to: Vec3, width: float not null, steps: integer not null },
+  Linear { from: Vec3, to: Vec3, width: float, steps: integer },
   Spiral {
     centre:    Vec3,
-    inner_r:   float not null,
-    outer_r:   float not null,
-    rise:      float not null,
-    steps:     integer not null,
-    angle_deg: float not null
+    inner_r:   float,
+    outer_r:   float,
+    rise:      float,
+    steps:     integer,
+    angle_deg: float
   }
 }
 

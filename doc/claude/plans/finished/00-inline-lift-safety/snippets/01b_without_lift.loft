@@ -5,11 +5,11 @@
 // pattern — it's about something more basic (the call + vector
 // access itself, or the Holder struct layout).
 
-struct Inner { n: integer not null }
+struct Inner { n: integer }
 struct Container { items: vector<Inner> }
 struct Holder {
   c:        Container,
-  sentinel: integer not null,
+  sentinel: integer,
 }
 
 fn first_inner(c: Container) -> Inner {

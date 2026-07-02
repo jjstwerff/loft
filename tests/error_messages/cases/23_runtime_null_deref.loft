@@ -4,7 +4,7 @@
 // (Historic: this case used `reference<Node>`, which the value-cycle
 // checker wrongly rejected — and whose field layout is unfinished; see
 // the reference-field layout issue.)
-struct Player { pk: integer not null, color: integer not null }
+struct Player { pk: integer, color: integer }
 struct World { players: hash<Player[pk]> }
 fn main() {
   w = World { players: [] };

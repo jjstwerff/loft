@@ -17,7 +17,7 @@
 pub enum JsonValue {
   JNull,
   JBool   { value: boolean },
-  JNumber { value: float not null },
+  JNumber { value: float },
   JString { value: text },
   JArray  { items: vector<JsonValue> },
   JObject { fields: vector<JsonField> }

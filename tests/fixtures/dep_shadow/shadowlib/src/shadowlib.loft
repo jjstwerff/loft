@@ -4,7 +4,7 @@
 // Dep-shadowing regression fixture — the library side.
 
 pub struct Probe {
-  val: integer not null,
+  val: integer,
 }
 
 pub fn make(v: integer) -> Probe {

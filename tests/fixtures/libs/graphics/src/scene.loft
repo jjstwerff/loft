@@ -10,12 +10,12 @@ use mesh;
 // A simple PBR-like material.
 pub struct Material {
   name: text,
-  base_color_r: float not null,
-  base_color_g: float not null,
-  base_color_b: float not null,
-  base_color_a: float not null,
-  metallic: float not null,
-  roughness: float not null
+  base_color_r: float,
+  base_color_g: float,
+  base_color_b: float,
+  base_color_a: float,
+  metallic: float,
+  roughness: float
 }
 
 pub fn material(mname: text) -> Material {
@@ -53,8 +53,8 @@ pub fn set_color(self: Material, scr: float, scg: float, scb: float) {
 // A node in the scene graph with a mesh, material, and transform.
 pub struct Node {
   name: text,
-  mesh_idx: integer not null,
-  material_idx: integer not null,
+  mesh_idx: integer,
+  material_idx: integer,
   transform: math::Mat4
 }
 
@@ -71,9 +71,9 @@ pub fn node_at(nn: text, nm: integer, nmat: integer, xf: math::Mat4) -> Node {
 
 pub struct Camera {
   name: text,
-  fov: float not null,
-  near: float not null,
-  far: float not null,
+  fov: float,
+  near: float,
+  far: float,
   position: math::Vec3,
   target: math::Vec3
 }
@@ -93,11 +93,11 @@ pub enum LightType { Directional, Point, Spot }
 
 pub struct Light {
   name: text,
-  light_type: LightType not null,
-  color_r: float not null,
-  color_g: float not null,
-  color_b: float not null,
-  intensity: float not null,
+  light_type: LightType,
+  color_r: float,
+  color_g: float,
+  color_b: float,
+  intensity: float,
   position: math::Vec3,
   direction: math::Vec3
 }

@@ -15,8 +15,8 @@
 // So this layout SHOULD be consistent.  Failing here would mean the
 // bug is broader than just "consecutive Refs".
 
-struct P { tag: integer not null }
-struct Canvas { data: vector<integer>, w: integer not null }
+struct P { tag: integer }
+struct Canvas { data: vector<integer>, w: integer }
 
 fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
   cv = Canvas { data: [], w: w };

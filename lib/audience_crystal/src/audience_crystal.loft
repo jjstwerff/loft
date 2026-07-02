@@ -814,7 +814,7 @@ pub fn crystal_segments_aged_tuned(snap: CellSnap, state: CrystalState, tick: in
 // copy_claims_hash_body re-inserts via hash::add).  This in-place build stays
 // because it is also faster (no deep-copy of a populated field).
 
-struct ChunkMeshEntry { ck: integer not null, mesh: SegMesh }
+struct ChunkMeshEntry { ck: integer, mesh: SegMesh }
 
 // Per-CHUNK cached meshes are the source of truth + the CPU-reuse unit:
 // crystal_incr_rebuild re-runs the rule for ONLY the dirty chunks and reuses

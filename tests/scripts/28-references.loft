@@ -45,7 +45,7 @@ fn test_vec_field_append_scalar() {
 
 // ── Method returns new struct record (Issue 1) ──────────────────────────────
 
-struct RColor { r: integer not null }
+struct RColor { r: integer }
 
 fn rdouble(self: RColor) -> RColor { RColor { r: self.r * 2 } }
 

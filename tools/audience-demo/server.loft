@@ -48,8 +48,8 @@ use server;
 
 // Hex cell — stored under key "q,r" in a hash on the World struct.
 struct Cell {
-  ck:    text not null,         // "q,r" — primary key in World.cells
-  color: integer not null,      // 0 = empty (but empty cells are GC'd on clear),
+  ck:    text,         // "q,r" — primary key in World.cells
+  color: integer,      // 0 = empty (but empty cells are GC'd on clear),
                                 // 1-9 = palette index
 }
 
@@ -59,10 +59,10 @@ struct Cell {
 // are reused; an old entry's color gets overwritten by the next user
 // of that cid via color_select.
 struct Player {
-  pk:    integer not null,      // cid (primary key)
-  color: integer not null,      // 0 = cleared, 1-9 = palette
-  lq:    integer not null,      // last-painted q
-  lr:    integer not null,      // last-painted r
+  pk:    integer,      // cid (primary key)
+  color: integer,      // 0 = cleared, 1-9 = palette
+  lq:    integer,      // last-painted q
+  lr:    integer,      // last-painted r
 }
 
 struct World {

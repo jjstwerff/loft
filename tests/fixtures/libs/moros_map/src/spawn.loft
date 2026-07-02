@@ -9,10 +9,10 @@ use types;
 pub struct SpawnPoint {
   sp_hex:       HexAddress,
   sp_kind:      text,
-  sp_creature:  integer not null,
-  sp_npc_id:    integer not null,
-  sp_count:     integer not null,
-  sp_facing:    integer not null,
+  sp_creature:  integer,
+  sp_npc_id:    integer,
+  sp_count:     integer,
+  sp_facing:    integer,
   sp_condition: text,
 }
 
@@ -22,16 +22,16 @@ pub struct SpawnPoint {
 pub struct NpcWaypoint {
   wp_hex:        HexAddress,
   wp_activity:   text,
-  wp_time_start: integer not null,
-  wp_time_end:   integer not null,
-  wp_facing:     integer not null,
+  wp_time_start: integer,
+  wp_time_end:   integer,
+  wp_facing:     integer,
   wp_note:       text,
 }
 
 // An NPC's complete daily routine: name, creature template, waypoints.
 pub struct NpcRoutine {
-  nr_npc_id:    integer not null,
+  nr_npc_id:    integer,
   nr_name:      text,
-  nr_creature:  integer not null,
+  nr_creature:  integer,
   nr_waypoints: vector<NpcWaypoint>,
 }

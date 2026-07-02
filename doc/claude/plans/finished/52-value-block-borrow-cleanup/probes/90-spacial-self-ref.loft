@@ -24,8 +24,8 @@
 
 struct Node {
   name: text,
-  x: float not null,
-  y: float not null,
+  x: float,
+  y: float,
   // children: spacial<Node[name]>,   // ← uncomment if probe 89 hangs
                                        //   to test self-reference dimension
 }

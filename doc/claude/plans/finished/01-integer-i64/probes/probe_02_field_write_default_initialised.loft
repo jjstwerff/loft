@@ -3,7 +3,7 @@
 // path adds any extra check.
 
 struct P02S {
-  v: integer not null = 0,
+  v: integer = 0,
 }
 
 fn test_probe_02_field_write_default_initialised() {

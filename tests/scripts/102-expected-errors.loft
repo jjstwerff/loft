@@ -272,3 +272,12 @@ fn test_inferred_text_null_start_not_widened() {
   s = "hi";
   assert(s == "hi", "unreached");
 }
+
+// @PLN25/DN1: a NON-null return with a missing code path is a compile error — the else path
+// yields void, and a non-null `text` return requires a value. Formerly a `-> text not null` fn
+// got a lenient "may return null" WARNING; with `not null` retired (scalars non-null by
+// default) that leniency is gone (moved here from 38-parse-warnings.loft's `pe_classify`).
+// @EXPECT_ERROR: got void on return from block
+fn pe_missing_return_path(n: integer) -> text {
+  if n > 0 { return "pos"; }
+}

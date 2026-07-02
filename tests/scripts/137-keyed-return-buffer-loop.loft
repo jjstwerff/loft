@@ -16,8 +16,8 @@
 // no-op while they alias (the buffer stays reserved across iterations and is
 // freed once at function exit), a real free in the fresh-store case.
 
-struct Item { ik: integer not null }
-struct Bag { items: hash<Item[ik]> not null }
+struct Item { ik: integer }
+struct Bag { items: hash<Item[ik]> }
 
 fn alloc_bag(seed: integer) -> Bag {
   b = Bag { items: [] };

@@ -5,7 +5,7 @@ fn p10_inner(x: &integer) {
   x = x + 1;         // mutation satisfies the "& never modified" check
 }
 
-fn p10_outer(y: &integer not null) {
+fn p10_outer(y: &integer) {
   p10_inner(y);
   println("VERDICT: probe_10 after inner, y = {y}");
 }

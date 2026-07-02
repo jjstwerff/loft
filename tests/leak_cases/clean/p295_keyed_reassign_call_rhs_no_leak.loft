@@ -1,4 +1,4 @@
-struct Item { k: integer not null }
+struct Item { k: integer }
 fn build(n: integer) -> sorted<Item[k]> {
   r: sorted<Item[k]> = [];
   for i in 0..n { r += [Item{k: n - i}]; }

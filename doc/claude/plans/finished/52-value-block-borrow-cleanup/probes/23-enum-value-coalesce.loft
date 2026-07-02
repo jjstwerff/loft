@@ -18,7 +18,7 @@
 
 enum Tagged {
   Named { name: text },
-  Anon { dummy: integer not null }
+  Anon { dummy: integer }
 }
 
 struct Box { items: vector<Tagged> }

@@ -19,7 +19,7 @@
 // Pairing: 51 (text key, hangs), 62 (text key without ??, also hangs).
 // Status: cluster IV-Spacial isolation probe.
 
-struct Point { id: integer not null, x: float not null, y: float not null }
+struct Point { id: integer, x: float, y: float }
 struct W { points: spacial<Point[id]> }
 
 fn main() {

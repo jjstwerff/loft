@@ -1,7 +1,7 @@
 // A1b sharp repro — the result ESCAPES the scope where the temporary subject lives.
 // h builds a temporary `Filled`, g returns a borrow of its items, h returns that borrow.
 // The temporary is freed at h's scope end -> h returns a dangling view -> UAF in the caller.
-struct E { hp: integer not null, name: text }
+struct E { hp: integer, name: text }
 enum Cell { Empty, Filled { items: vector<E> } }
 fn g(e: Cell) -> vector<E> { match e { Filled { items } => { items }, _ => { [] } } }
 fn h(seed: integer) -> vector<E> {

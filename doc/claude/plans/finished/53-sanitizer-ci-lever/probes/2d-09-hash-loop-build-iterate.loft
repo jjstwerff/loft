@@ -12,7 +12,7 @@
 //
 // Status aligned: CURRENTLY FAIL (count 11) ; AFTER FIX -> PASS.  Flag-OFF: PASS.
 
-struct Sc { id: integer not null, value: integer }
+struct Sc { id: integer, value: integer }
 
 fn main() {
   h: hash<Sc[id]> = [];

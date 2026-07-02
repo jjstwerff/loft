@@ -23,7 +23,7 @@ fn read_pair(pair: &(integer, integer)) -> integer {
 }
 
 // T1.7: integer not null annotation.
-fn double_nn(a: integer not null, b: integer not null) -> integer not null {
+fn double_nn(a: integer, b: integer) -> integer {
   a + b
 }
 

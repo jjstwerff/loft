@@ -1537,7 +1537,7 @@ pub enum FieldValue {
 
 // Represents a single struct field during compile-time iteration.
 pub struct StructField {
-  name:  text not null,
+  name:  text,
   value: FieldValue,
 }
 

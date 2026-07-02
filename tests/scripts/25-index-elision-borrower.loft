@@ -18,8 +18,8 @@
 // under `LOFT_INDEX_DEV=1` it exercises the `Item?` borrower path. Both backends,
 // no leak. See plans/25-nullable-sequences/index-f1a-landing.md § Step 1.
 
-struct Item { v: integer not null }
-struct G { c: vector<Item> not null }
+struct Item { v: integer }
+struct G { c: vector<Item> }
 
 // (1) read-only element borrower — ELIDES and reads the live element (== 90).
 fn read_elem(g: G, i: integer) -> integer {

@@ -1,7 +1,7 @@
 // @PLN90 phase 1 — one function per structure-copy-emitting shape. Used to inventory
 // every OpCopyRecord / copying-OpAppendVector the compiler emits and which the
 // copy-vs-borrow verdict covers. main runs them all so it is also an end-to-end check.
-struct E { hp: integer not null, name: text }
+struct E { hp: integer, name: text }
 struct Box { rows: vector<E> }
 enum Cell { Empty, Filled { items: vector<E> } }
 

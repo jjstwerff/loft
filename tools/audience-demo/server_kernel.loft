@@ -19,15 +19,15 @@
 use engine_host;
 
 struct Cell {
-  ck:    text not null,
-  color: integer not null,
+  ck:    text,
+  color: integer,
 }
 
 struct Player {
-  pk:    integer not null,
-  color: integer not null,
-  lq:    integer not null,
-  lr:    integer not null,
+  pk:    integer,
+  color: integer,
+  lq:    integer,
+  lr:    integer,
 }
 
 struct World {

@@ -15,11 +15,11 @@
 // because h.sentinel reads as something other than 42.
 // Expected post-fix: all three assertions pass.
 
-struct Inner { n: integer not null }
+struct Inner { n: integer }
 struct Container { items: vector<Inner> }
 struct Holder {
   c:        Container,
-  sentinel: integer not null,
+  sentinel: integer,
 }
 
 // Accessor-style callee: returns a view into its arg's vector.

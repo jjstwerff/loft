@@ -2,11 +2,11 @@
 // the RHS of a first-assignment / reassignment / compound
 // assignment.
 
-struct Inner { n: integer not null }
+struct Inner { n: integer }
 struct Container { items: vector<Inner> }
 struct Holder {
   c:        Container,
-  sentinel: integer not null,
+  sentinel: integer,
 }
 
 fn first_inner(c: Container) -> Inner {

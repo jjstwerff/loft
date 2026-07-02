@@ -17,8 +17,8 @@
 // tier and the full bridge tax is measured when the dispatch table exists.
 
 struct Ent {
-  x:  float not null,  y:  float not null,
-  vx: float not null,  vy: float not null,
+  x:  float,  y:  float,
+  vx: float,  vy: float,
 }
 
 const N_ENTS: integer = 100;

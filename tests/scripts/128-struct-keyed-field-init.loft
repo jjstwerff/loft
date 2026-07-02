@@ -11,7 +11,7 @@
 // HASH only — sorted/index struct-field deep-copy is tracked as @P309
 // (a content-struct-mutation hang); not exercised here.
 
-struct Ent { ck: integer not null, v: integer not null }
+struct Ent { ck: integer, v: integer }
 struct F { h: hash<Ent[ck]> }
 
 fn mk() -> hash<Ent[ck]> {

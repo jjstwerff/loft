@@ -11,10 +11,10 @@ use moros_map;
 // ue_batch_id groups edits together; 0 = standalone, >0 = batch id
 // shared by all edits inside one `batch_begin` / `batch_end` pair.
 pub struct UndoEntry {
-  ue_q:        integer not null,
-  ue_r:        integer not null,
-  ue_cy:       integer not null,
-  ue_batch_id: integer not null,
+  ue_q:        integer,
+  ue_r:        integer,
+  ue_cy:       integer,
+  ue_batch_id: integer,
   ue_prev:     Hex,
 }
 
@@ -24,8 +24,8 @@ pub struct UndoEntry {
 pub struct UndoStack {
   us_entries:  vector<UndoEntry>,
   us_redo:     vector<UndoEntry>,
-  us_batch_id: integer not null,
-  us_next_id:  integer not null,
+  us_batch_id: integer,
+  us_next_id:  integer,
 }
 
 pub fn undo_empty() -> UndoStack {
@@ -210,16 +210,16 @@ pub fn slope_path_with_undo(s: &UndoStack, m: &Map, q1: integer, r1: integer, q2
 
 pub enum EditKind {
   HexEdit {
-    ek_q:    integer not null,
-    ek_r:    integer not null,
-    ek_cy:   integer not null,
+    ek_q:    integer,
+    ek_r:    integer,
+    ek_cy:   integer,
     ek_prev: Hex
   },
   SpawnAdd {
-    ek_q:      integer not null,
-    ek_r:      integer not null,
-    ek_cy:     integer not null,
-    ek_npc_id: integer not null
+    ek_q:      integer,
+    ek_r:      integer,
+    ek_cy:     integer,
+    ek_npc_id: integer
   },
   SpawnRemove {
     ek_sp: SpawnPoint
@@ -262,23 +262,23 @@ pub fn edit_kind_undo(e: EditKind, m: &Map) {
 // stencil origin.  A value of 0 means "leave unchanged" for material,
 // item, and walls in overlay mode.
 pub struct StencilHex {
-  sh_dq:            integer not null,
-  sh_dr:            integer not null,
-  sh_height:        integer not null,
-  sh_material:      integer not null,
-  sh_item:          integer not null,
-  sh_item_rotation: integer not null,
-  sh_wall_n:        integer not null,
-  sh_wall_ne:       integer not null,
-  sh_wall_se:       integer not null,
+  sh_dq:            integer,
+  sh_dr:            integer,
+  sh_height:        integer,
+  sh_material:      integer,
+  sh_item:          integer,
+  sh_item_rotation: integer,
+  sh_wall_n:        integer,
+  sh_wall_ne:       integer,
+  sh_wall_se:       integer,
 }
 
 // A named stamp template.
 pub struct StencilDef {
   sd_name:     text,
   sd_category: text,
-  sd_origin_q: integer not null,
-  sd_origin_r: integer not null,
+  sd_origin_q: integer,
+  sd_origin_r: integer,
   sd_hexes:    vector<StencilHex>,
 }
 

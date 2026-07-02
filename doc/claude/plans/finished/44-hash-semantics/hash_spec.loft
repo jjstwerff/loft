@@ -2,7 +2,7 @@
 // FAIL want=<>/got=<>.  Runtime-evaluable cases only (compile-error
 // expectations live in /tmp/hash_probe_*.loft).  Run on BOTH backends.
 
-struct Ent { ck: integer not null, v: integer }
+struct Ent { ck: integer, v: integer }
 struct Bag { d: hash<Ent[ck]> }
 
 fn ck(id: text, ok: boolean) {

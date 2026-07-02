@@ -9,12 +9,12 @@
 // dryopea-faithful multi-const + write-through-other-param shape.
 // (dryopea's residual filing was probed against a stale binary.)
 
-struct Item   { v: integer not null }
-struct PWorld { items: hash<Item[v]> not null }
-struct MWorld { items: hash<Item[v]> not null }
-struct Delta   { q: integer not null, kind: integer not null }
-struct Entry   { ds: vector<Delta> not null }
-struct History { entries: vector<Entry> not null }
+struct Item   { v: integer }
+struct PWorld { items: hash<Item[v]> }
+struct MWorld { items: hash<Item[v]> }
+struct Delta   { q: integer, kind: integer }
+struct Entry   { ds: vector<Delta> }
+struct History { entries: vector<Entry> }
 
 fn snap_and_record(pw: const PWorld, mw: const MWorld, h: History) {
   e = Entry { ds: [] };

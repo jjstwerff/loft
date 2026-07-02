@@ -19,7 +19,7 @@
 // verified here — the single → float field assignment is the concrete
 // trigger we hit while writing the mouse-look tests.
 
-struct P180Box { a: float not null, b: integer not null }
+struct P180Box { a: float, b: integer }
 
 fn test_single_literal_into_float_field() {
   // Baseline construction works (numeric literal `1.0` is `float`).

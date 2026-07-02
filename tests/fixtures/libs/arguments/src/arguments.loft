@@ -23,9 +23,9 @@ struct Args {
   // LOFT_DENY_WARNINGS=1.  Safe: `create` initialises each to `[]`
   // (non-null empty), and the only writers append/index-assign —
   // neither path produces null.
-  options: vector<Arg> not null,
-  results: vector<text> not null,
-  positionals: vector<text> not null,
+  options: vector<Arg>,
+  results: vector<text>,
+  positionals: vector<text>,
   err: text
 }
 

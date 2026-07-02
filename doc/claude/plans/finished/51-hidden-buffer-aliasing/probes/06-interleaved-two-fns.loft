@@ -19,9 +19,9 @@
 // tests/scripts/140-p377-corruption-oracle.loft as the primary
 // regression).
 
-struct P { tag: integer not null }
-struct Q { tag: integer not null }
-struct Canvas { data: vector<integer>, w: integer not null }
+struct P { tag: integer }
+struct Q { tag: integer }
+struct Canvas { data: vector<integer>, w: integer }
 
 fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
   cv = Canvas { data: [], w: w };

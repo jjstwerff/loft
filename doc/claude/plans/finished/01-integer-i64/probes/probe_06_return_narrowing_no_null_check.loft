@@ -2,7 +2,7 @@
 // called with a nullable argument.  Tests whether the return-path enforces
 // non-null.
 
-fn p06_passthrough(x: integer) -> integer not null {
+fn p06_passthrough(x: integer) -> integer {
   x
 }
 

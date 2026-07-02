@@ -11,11 +11,11 @@
 // was reused under heavier churn.
 
 struct V { a: vector<integer> }
-struct Cont { k: integer not null, m: V }
+struct Cont { k: integer, m: V }
 struct Src { items: vector<integer> }
 struct Holder { src: Src, chunks: hash<Cont[k]> }
 
-fn mk(n: integer not null) -> V {
+fn mk(n: integer) -> V {
   v: vector<integer> = [];
   for j in 0..n { v += [j]; }
   V{a: v}

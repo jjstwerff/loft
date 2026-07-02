@@ -16,9 +16,9 @@
 // then `OpCopyRecord` into that field sub-ref — mirroring the `Type::Reference`
 // arm directly above it.
 
-enum CV { CInt { value: integer not null } }
+enum CV { CInt { value: integer } }
 struct Entry { key: CV, value: CV }
-struct Mix { count: integer not null, k: CV }
+struct Mix { count: integer, k: CV }
 struct Tri { a: CV, b: CV, c: CV }
 
 fn mk(x: integer) -> CV { return CInt { value: x }; }

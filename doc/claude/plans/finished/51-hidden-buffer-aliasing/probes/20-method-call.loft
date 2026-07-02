@@ -15,8 +15,8 @@
 // fn.  `both: Canvas` makes cloned() invokable as `base.cloned()`.
 // Does S1 / S2 handle the method-call ALC the same as a free-fn call?
 
-struct P { tag: integer not null }
-struct Canvas { data: vector<integer>, w: integer not null }
+struct P { tag: integer }
+struct Canvas { data: vector<integer>, w: integer }
 
 fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
   cv = Canvas { data: [], w: w };

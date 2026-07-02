@@ -17,9 +17,9 @@
 // Expected: PASS on both --interpret and --native.
 // Status: closes @P377 (LEAK + CORRUPTION).
 
-struct P { tag: integer not null }
-struct Q { tag: integer not null }
-struct Canvas { data: vector<integer>, w: integer not null }
+struct P { tag: integer }
+struct Q { tag: integer }
+struct Canvas { data: vector<integer>, w: integer }
 
 fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
   cv = Canvas { data: [], w: w };

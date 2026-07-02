@@ -1,4 +1,4 @@
-struct M { hp: integer not null, depth: integer not null, name: text }
+struct M { hp: integer, depth: integer, name: text }
 fn m_none() -> M { M { hp: 0, depth: 0, name: "" } }
 fn filler(k: integer) -> integer { es: vector<M> = []; for j in 0..k { es += [M{hp:j,depth:j,name:"f"}]; } return len(es); }
 fn pool_of(t: vector<M>) -> vector<M> { out: vector<M> = []; for i in 0..len(t) { out += [t[i] ?? m_none()]; } out }

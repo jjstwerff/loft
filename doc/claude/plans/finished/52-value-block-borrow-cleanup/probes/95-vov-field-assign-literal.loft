@@ -18,7 +18,7 @@
 // on native).
 // Status: cluster IV-Vec-nested-field-push workaround probe.
 
-struct Inner { tag: integer not null }
+struct Inner { tag: integer }
 struct Outer { lists: vector<vector<Inner>> }
 
 fn main() {

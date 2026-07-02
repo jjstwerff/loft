@@ -13,14 +13,14 @@
 //   p179_two_refs(o.a, o.b): BOTH mutations lost — output struct
 //     unchanged.
 
-pub struct P179Inner { pin_n: integer not null }
+pub struct P179Inner { pin_n: integer }
 
 pub struct P179Outer {
   po_a: P179Inner,
   po_b: P179Inner,
 }
 
-pub struct P179Mix { pm_x: P179Inner, pm_q: integer not null }
+pub struct P179Mix { pm_x: P179Inner, pm_q: integer }
 
 pub fn p179_int_ref  (n: integer,   r: &P179Inner) { r.pin_n = n; }
 pub fn p179_2int_ref (a: integer, b: integer, r: &P179Inner) { r.pin_n = a + b; }

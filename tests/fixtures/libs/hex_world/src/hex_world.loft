@@ -32,17 +32,17 @@
 // c_color = 0 means "empty" (no crystal, no TTT mark).  Both clients
 // treat 0 as background; non-zero as live content.
 pub struct Cell {
-  c_color:  u8 not null,
-  c_height: u8 not null,
-  c_age:    u16 not null,
+  c_color:  u8,
+  c_height: u8,
+  c_age:    u16,
 }
 
 // 32x32 grid at chunk coords (ck_cx, ck_cz).  Index into ck_cells:
 // hx * 32 + hz where hx, hz ∈ [0, 31].  Same shape as moros_map's
 // Chunk minus the cy layer (this world is single-layer).
 pub struct Chunk {
-  ck_cx:    integer not null,
-  ck_cz:    integer not null,
+  ck_cx:    integer,
+  ck_cz:    integer,
   ck_cells: vector<Cell>,
 }
 
@@ -50,8 +50,8 @@ pub struct Chunk {
 // non-empty cell live in `chunks`; empty chunks are removed by the
 // tick loop's GC pass.  `tick` is monotonic per server lifetime.
 pub struct World {
-  chunks: vector<Chunk> not null,
-  tick:   integer not null,
+  chunks: vector<Chunk>,
+  tick:   integer,
 }
 
 // ── Addressing helpers ────────────────────────────────────────────

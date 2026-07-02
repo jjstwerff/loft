@@ -26,14 +26,14 @@
 // ── Vec3 + AABB primitives ───────────────────────────────────────────────
 
 struct Vec3 {
-  x: float not null,
-  y: float not null,
-  z: float not null,
+  x: float,
+  y: float,
+  z: float,
 }
 
 struct AABB {
-  cx: float not null, cy: float not null, cz: float not null,   // centre
-  hx: float not null, hy: float not null, hz: float not null,   // half-extents
+  cx: float, cy: float, cz: float,   // centre
+  hx: float, hy: float, hz: float,   // half-extents
 }
 
 fn aabb_overlap(a: AABB, b: AABB) -> boolean {
@@ -133,9 +133,9 @@ fn plane_overlaps(pos: Vec3, facing: integer, wall: AABB) -> boolean {
 //                    part of B.  Drives B's score.
 
 struct PairContact {
-  hit:            boolean not null,
-  contact_a_on_b: integer not null,  // parts of B touched by A
-  contact_b_on_a: integer not null,  // parts of A touched by B
+  hit:            boolean,
+  contact_a_on_b: integer,  // parts of B touched by A
+  contact_b_on_a: integer,  // parts of A touched by B
 }
 
 fn pair_contact(pos_a: Vec3, fac_a: integer, pos_b: Vec3, fac_b: integer) -> PairContact {
@@ -189,10 +189,10 @@ fn contact_label(bits: integer) -> text {
 const FORECAST_DT_MS: integer = 5;
 
 struct Forecast {
-  hit:        boolean not null,
-  t_ms:       integer not null,    // when collision is predicted (0 if !hit)
+  hit:        boolean,
+  t_ms:       integer,    // when collision is predicted (0 if !hit)
   pos_at_hit: Vec3,
-  contact:    integer not null,    // bitfield: which plane parts contacted
+  contact:    integer,    // bitfield: which plane parts contacted
 }
 
 fn forecast(plane_pos: Vec3, plane_vel: Vec3, facing: integer, wall: AABB, lookahead_ms: integer) -> Forecast {
@@ -214,12 +214,12 @@ fn forecast(plane_pos: Vec3, plane_vel: Vec3, facing: integer, wall: AABB, looka
 // ── Pair forecast / simulate (plane-on-plane) ───────────────────────────
 
 struct PairForecast {
-  hit:            boolean not null,
-  t_ms:           integer not null,
+  hit:            boolean,
+  t_ms:           integer,
   pos_a:          Vec3,
   pos_b:          Vec3,
-  contact_a_on_b: integer not null,
-  contact_b_on_a: integer not null,
+  contact_a_on_b: integer,
+  contact_b_on_a: integer,
 }
 
 fn pair_forecast(pos_a: Vec3, vel_a: Vec3, fac_a: integer,
@@ -255,10 +255,10 @@ const INPUT_PULL_UP:  integer = 2;   // vz gains +10 m/s
 const INPUT_HARD_PUSH: integer = 3;  // velocity flips toward -x (hard pull)
 
 struct SimResult {
-  hit:        boolean not null,
-  t_ms:       integer not null,
+  hit:        boolean,
+  t_ms:       integer,
   pos_at_hit: Vec3,
-  contact:    integer not null,    // contact classification at hit moment
+  contact:    integer,    // contact classification at hit moment
 }
 
 fn simulate(plane_pos: Vec3, plane_vel: Vec3, facing: integer, wall: AABB, lookahead_ms: integer,

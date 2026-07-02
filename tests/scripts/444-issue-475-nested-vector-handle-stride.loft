@@ -45,7 +45,7 @@ fn test_local_iteration() {
 
 // The reporter's exact shape: struct with a hash field beside the nested vector,
 // mutated through a `&` reference parameter.
-struct Ent { coord: text not null, idx: integer not null }
+struct Ent { coord: text, idx: integer }
 struct G { m: hash<Ent[coord]>, adj: vector<vector<integer>> }
 fn add(g: &G, i: integer, x: integer) { g.adj[i] += [x]; }
 

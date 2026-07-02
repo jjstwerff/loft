@@ -12,7 +12,7 @@
 // NOTE: 3+ deep element-of-element compound-assign (`vvv[0][0] += [...]`) is the
 // SEPARATE #250 type-id-divergence bug and is deliberately not exercised here.
 
-struct Holder { vv: vector<vector<integer>>, tag: integer not null }
+struct Holder { vv: vector<vector<integer>>, tag: integer }
 
 fn main() {
   // basic

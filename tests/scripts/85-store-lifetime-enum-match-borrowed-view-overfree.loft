@@ -12,7 +12,7 @@
 //      fires for a struct-enum (`Type::Enum(_, true, _)`) binding, not only
 //      `Type::Reference`, so it deep-copies a borrowed-view return.
 enum CborValue {
-  CNull, CInt { value: integer not null },
+  CNull, CInt { value: integer },
   CBytes { value: vector<u8> }, CText { value: text },
   CArray { items: vector<CborValue> }, CMap { entries: vector<CborEntry> },
 }

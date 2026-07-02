@@ -16,7 +16,7 @@
 // Pairing: diff against 10 (Reference shape).
 // Status: cluster IV completion probe.
 
-struct Inner { tag: integer not null }
+struct Inner { tag: integer }
 struct Outer { lists: vector<vector<Inner>> }
 
 fn main() {
