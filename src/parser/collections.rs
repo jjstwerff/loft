@@ -293,6 +293,15 @@ impl Parser {
                         // content type, which would make every element read
                         // alias element 0 (or read across boundaries).
                         4
+                    } else if let Type::Vector(inner, _) = &**vtp {
+                        // #475: iterating the OUTER of a nested vector — its
+                        // element is a rec-id handle.  Stride by the inner scalar
+                        // width (matching the index's `elm_size_raw.max(4)` in
+                        // parser/fields.rs and the construction), NOT `size(db_tp)`
+                        // which resolves to the `main_vector` wrapper size (16)
+                        // and reads every other element (the silent-wrong
+                        // iteration in #475).
+                        (crate::data::element_size(inner) as u16).max(4)
                     } else {
                         self.database.size(db_tp)
                     };
