@@ -357,6 +357,9 @@ the export model documented above.
 
 ## See also
 
+- [WEB_APPS.md](WEB_APPS.md) — **start here to build a web app**: the
+  task-oriented guide (which target, the exact `--html` host surface, a recipe per
+  app kind). This doc is the pipeline internals underneath it.
 - [BROWSER_INTEROP.md](BROWSER_INTEROP.md) — **design**: how a
   `--html` program and its libraries talk to the browser/JS —
   the engine as an agnostic byte-mover, the four tiers, and the

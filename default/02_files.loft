@@ -433,6 +433,14 @@ pub fn env_variables() -> vector < EnvVariable > env#read;
 pub fn env_variable(name: text) -> text env#read;
 #rust"stores.os_variable(@name)"
 #impure(host_io)
+// Reads all input handed to the program as one text: from stdin on native and
+// --native-wasm (WASI), and from the JS host on --html (the page sets it before
+// loft_start runs). Use for a headless compute module — read the input, compute,
+// print the result — the mirror of print (loft_io output). Empty when there is
+// no input. The engine only moves opaque bytes; the program parses them.
+pub fn host_input() -> text;
+#rust"stores.host_input_native()"
+#impure(host_io)
 // --- Time ---
 // Returns the current wall-clock time as milliseconds since the Unix epoch
 // (00:00 UTC on 1 Jan 1970). Use for timestamps and logging.

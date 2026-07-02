@@ -94,7 +94,9 @@ in-world text field and a settings dialog alike. The engine gains general
 **New** (the proposed additions this design names):
 
 1. A generic **byte channel** as an engine service — push bytes out to JS, poll
-   bytes in from JS — declared as host imports that carry only `(ptr, len)`.
+   bytes in from JS — declared as host imports that carry only `(ptr, len)`. The
+   input half has a concrete, code-anchored design below (*The input half as a
+   shipped engine primitive*).
 2. The **input-service surface** the engine is missing for any text UI: typed
    text + IME compose state + clipboard read/write, backed JS-side by a hidden
    editable element. General I/O services, not document features.
@@ -118,6 +120,91 @@ So loft's `src/` needs **zero change** — the lone conditional touch (a *blocki
 suspend import → the asyncify `--pass-arg` list in `src/main.rs`) is avoided by
 keeping every service poll-based. The *Verifiable build steps* below are the
 proof: each runs against the stock installed loft.
+
+---
+
+## The input half as a shipped engine primitive — `host_input`
+
+The byte channel's **output** half already ships as an engine primitive:
+`loft_host_print` is hard-coded into the `--html` host-import set under the
+`loft_io` module (`src/generation/mod.rs:1152`), and the stdlib reaches it through
+the per-target `#rust` body of `OpPrint` (`default/01_code.loft:1125`). Its
+**input** half is missing: under `--html`, `arguments()` and `file()` return
+empty — both return heap values, so codegen emits them as graceful stubs
+(`src/generation/mod.rs:1187`), which the first browser consumer confirmed by
+dumping the WASM imports. So a headless `--html` program can emit a result but
+**cannot receive its input**. This is now **shipped** as `host_input()`, closing
+that gap for the **headless one-shot** shape: JavaScript owns the loop, and the
+input is complete before compute starts (a request/response kernel).
+
+**Why an engine primitive, not a library, for this shape.** The invariant above
+lists "one generic byte channel" as an *engine* service, and output already
+honours it. Input should be symmetric. The library route (a `#native` +
+`wasm/host.js`, zero core change — see *Verified stronger*) stays right for the
+**streaming, loft-owns-the-loop** shape, where the channel is polled each frame
+across the asyncify yield. But for a headless one-shot read a library is both
+wider (every consumer installs it and registers a `host.js`) and mis-tiered (input
+in a library while its sibling output lives in the engine). The two shapes differ
+— input complete at start vs arriving per frame — so one mechanism should not
+cover both: `host_input` is the one-shot read; a future `host_poll` is the
+streaming sibling.
+
+**The one invariant it rests on.** A pure-loft program that reads `host_input()`
+and emits a transform of it produces byte-identical output on `--interpret`,
+`--native`, `--native-wasm`, and `--html` for the same input — because on each
+target `host_input()` resolves to that target's own input source, and the engine
+never reads the bytes.
+
+**The named brittleness: four backings, each silent if wrong.** The primitive is
+small, but its correctness lives in one body per target (the shape `print`
+carries), each a silent empty string if wrong:
+
+| Target | `host_input()` reads | If the backing is missing |
+|---|---|---|
+| `--interpret` | stdin (or an injected capture buffer) | returns empty — **silent** |
+| `--native` | stdin to EOF | returns empty — **silent** |
+| `--native-wasm` (WASI) | WASI stdin | returns empty — **silent** |
+| `--html` | the JavaScript-supplied blob, via the `loft_io` host imports | returns empty — **silent** |
+
+Every omission is silent (an empty string, not a compile error) — that is the real
+risk, and the parity gate below is its cure: it turns a missing backing into a
+loud test failure.
+
+**The surface — three layers, as shipped.**
+
+- *Engine host imports.* Declared in the loft library's `--html` extern block
+  (`src/lib.rs`, beside `loft_host_print`): `loft_host_input_len() -> usize` and
+  `loft_host_input_copy(ptr: *mut u8)`. Two calls, because input has a sizing step
+  output does not: loft learns the length, allocates a buffer, then has the host
+  fill it — the `web` library already proves this host-owns-buffer → loft-`text`
+  pattern (`ws_msg_len`/`ws_msg_copy`).
+- *Stdlib + runtime.* `pub fn host_input() -> text` (`default/02_files.loft`,
+  beside `env_variable`), a **native builtin** (`n_host_input`), **not** an
+  operator. It backs onto `Stores::host_input_native` (`src/database/format.rs`),
+  whose per-target `cfg` arms are the backings above: stdin on native/WASI, the
+  `loft_io` host imports on `--html`, empty on the IDE `wasm` build. The
+  interpreter routes it through the dest-passing native registry
+  (`n_host_input_dest` in `src/native.rs`, listed in `is_text_dest_native`) — and
+  that is *why* it is a native builtin, not an operator: interpreter text values
+  on the stack are borrowed `&str`, so a freshly-read `String` can't cross
+  `put_stack`; the dest-passing path (`env_variable`'s exact shape) allocates it
+  into the store instead. Native codegen inlines the `#rust` body
+  `stores.host_input_native()`, whose `--html` `cfg` arm calls the host imports.
+- *JavaScript bridge.* `loft_host_input_len` / `loft_host_input_copy` in both the
+  minimal engine-less shell (`src/main.rs`) and `buildLoftImports`
+  (`doc/loft-gl-wasm.js`) read the bytes JS set on `globalThis.loftInput` before
+  `loft_start`. A headless Web-Worker consumer supplies the same few lines in its
+  own imports object — no bridge crate. `loft_start` builds fresh `Stores` each
+  call (`src/generation/mod.rs:1567`), so one instance serves many requests (set
+  the input, call, read the output, repeat).
+
+**The acceptance gate (the cure for the four silent backings).** `tests/host_input.rs`
+guards the interpreter == native byte-parity (plus the empty and UTF-8 cases) by
+feeding the same bytes on stdin. The `--html` leg — JS sets `globalThis.loftInput`,
+the wasm prints the same result — is proven with the Node harness recorded in
+[WEB_APPS.md](WEB_APPS.md); the WASI leg shares the native stdin backing. Extending
+the Rust gate to drive `--html` under headless Chromium (the `tests/html_wasm.rs`
+shape) would close the last automated corner.
 
 ---
 
@@ -297,6 +384,9 @@ a future need forces a blocking primitive, that one-line list addition is the
 
 ## See also
 
+- [WEB_APPS.md](WEB_APPS.md) — the task-oriented on-ramp: which target to pick,
+  the exact `--html` host surface, and one recipe per kind of web app. Start here
+  if you are building a web app rather than designing the interop.
 - [HTML_EXPORT.md](HTML_EXPORT.md) — the shipped `--html` pipeline: cdylib
   codegen, the WebGL2 bridge, the asyncify resume loop, the frame-yield contract
   this design builds on.

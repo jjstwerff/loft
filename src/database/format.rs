@@ -405,6 +405,43 @@ impl Stores {
         crate::wasm::host_env_variable(name)
     }
 
+    /// Read all program input as one text — the headless input channel for a
+    /// compute program: read it, compute, print the result.  Backs the
+    /// `host_input()` stdlib function.  The source is per-target: stdin to EOF on
+    /// native and WASI; the JS host on `--html`; empty on the IDE `make wasm`
+    /// build.  Empty string when there is no input.
+    #[cfg(all(
+        not(feature = "wasm"),
+        any(not(target_arch = "wasm32"), target_os = "wasi")
+    ))]
+    #[must_use]
+    pub fn host_input_native(&mut self) -> String {
+        use std::io::Read as _;
+        let mut s = String::new();
+        let _ = std::io::stdin().read_to_string(&mut s);
+        s
+    }
+
+    /// `--html` build: pull the bytes the JS host set before `loft_start`, via
+    /// the `loft_io` `len`+`copy` host imports (declared in `src/lib.rs`).
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
+    #[must_use]
+    pub fn host_input_native(&mut self) -> String {
+        let n = crate::loft_host_input_len();
+        let mut buf = vec![0u8; n];
+        if n > 0 {
+            crate::loft_host_input_copy(buf.as_mut_ptr());
+        }
+        String::from_utf8_lossy(&buf).into_owned()
+    }
+
+    /// WASM (IDE `make wasm`) build: no OS stdin, so an empty channel.
+    #[cfg(feature = "wasm")]
+    #[must_use]
+    pub fn host_input_native(&mut self) -> String {
+        String::new()
+    }
+
     /**
     Get the current directory
     # Panics

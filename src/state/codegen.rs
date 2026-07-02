@@ -83,6 +83,8 @@ pub(crate) fn is_text_dest_native(name: &str) -> bool {
             | "t_9JsonValue_as_text"
             // @PLN10 Phase 2 — env_variable (non-null; os_variable owns its String).
             | "n_env_variable"
+            // host_input — non-null program-input reader (stdin / --html host).
+            | "n_host_input"
             // text_from_bytes — owned text decoded from a vector<u8>.
             | "n_text_from_bytes"
     )

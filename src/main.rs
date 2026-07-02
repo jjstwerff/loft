@@ -121,6 +121,16 @@ fn print_help() {
     println!("                                (default: .loft/<script>.rs beside the script)");
     println!("  --native-wasm [out.wasm]      compile to WebAssembly (wasm32-wasip2)");
     println!("                                (default: .loft/<script>.wasm beside the script)");
+    println!("                                for headless/WASI (wasmtime); NOT the browser build");
+    println!(
+        "  --html [out.html]             compile to a self-contained browser page (the browser"
+    );
+    println!(
+        "                                target: WebGL2 canvas + keyboard/mouse, println output;"
+    );
+    println!(
+        "                                default: <script>.html) — guide: doc/claude/WEB_APPS.md"
+    );
     println!(
         "  --tests [dir]                 discover and run fn test*() functions in .loft files"
     );
@@ -5796,8 +5806,49 @@ fn main() {
             }
             s
         };
-        let html = format!(
-            r#"<!DOCTYPE html>
+        // Pick the page shell by what the wasm actually imports — minimal by
+        // default, bigger only when the program uses it.  A wasm that imports
+        // only `loft_io` is pure text I/O, so it ships the tiny engine-less
+        // shim (no WebGL2, no asyncify, no canvas).  `loft_gl` (graphics/audio)
+        // or a `loft_<lib>` bridge means the program opted into the full engine
+        // page.  Unparsable → full page (the shell that satisfies every import).
+        let minimal_page = crate::native_utils::html_wasm_import_modules(&wasm_bytes)
+            .is_some_and(|mods| mods.iter().all(|m| m == "loft_io"));
+        let html = if minimal_page {
+            format!(
+                r#"<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>{title}</title>
+<style>body{{margin:0;font:14px/1.5 monospace;background:#111;color:#0f0}}pre{{margin:0;padding:1rem;white-space:pre-wrap;word-break:break-word}}</style>
+</head><body><pre id="out"></pre>
+<script>
+// Minimal engine-less loft page: a small wasm + this tiny shim.  No WebGL2, no
+// asyncify, no canvas — only `loft_io` (text out).  JS owns the page; loft is a
+// callable module (loft_start builds fresh Stores each call, so JS can invoke
+// it per request).  A program that uses graphics/audio/a frame loop gets the
+// full engine page instead.
+const wasmB64="{wasm_b64}";
+const wasmBytes=Uint8Array.from(atob(wasmB64),c=>c.charCodeAt(0));
+const out=document.getElementById('out');
+const dec=new TextDecoder();
+let mem;
+// JS -> loft input: set globalThis.loftInput (a string) before this runs and
+// host_input() reads it (len+copy).  Or instantiate the wasm yourself in a Web
+// Worker with these same loft_io imports and feed inputBytes per request.
+let inputBytes=new TextEncoder().encode(globalThis.loftInput!=null?String(globalThis.loftInput):"");
+const imports={{loft_io:{{
+  loft_host_print:(ptr,len)=>{{out.textContent+=dec.decode(new Uint8Array(mem.buffer,ptr,len));}},
+  loft_host_input_len:()=>inputBytes.length,
+  loft_host_input_copy:(ptr)=>{{new Uint8Array(mem.buffer,ptr,inputBytes.length).set(inputBytes);}}
+}}}};
+WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
+  mem=r.instance.exports.memory;
+  r.instance.exports.loft_start();
+}}).catch(e=>{{out.textContent+="\n[loft] "+e;}});
+</script></body></html>"#
+            )
+        } else {
+            format!(
+                r#"<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>{title}</title>
 <style>body{{margin:0;background:#000;display:flex;justify-content:center;align-items:center;height:100vh}}canvas{{display:block}}pre{{color:#0f0;font-size:14px}}</style>
 </head><body>
@@ -5851,14 +5902,20 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
   }}
 }});
 </script></body></html>"#
-        );
+            )
+        };
         if let Err(e) = std::fs::write(&html_path, &html) {
             eprintln!("loft: cannot write HTML to '{html_path}': {e}");
             std::process::exit(1);
         }
         let wasm_kb = wasm_bytes.len() / 1024;
         let html_kb = html.len() / 1024;
-        println!("wrote {html_path} ({html_kb} KB, WASM {wasm_kb} KB)");
+        let shell = if minimal_page {
+            " · minimal engine-less shell"
+        } else {
+            " · full engine shell"
+        };
+        println!("wrote {html_path} ({html_kb} KB, WASM {wasm_kb} KB{shell})");
         return;
     }
 

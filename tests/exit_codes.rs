@@ -233,9 +233,13 @@ fn w1_1_html_export_produces_file() {
         html.contains("loft_start"),
         "HTML should reference loft_start entry point"
     );
+    // A compute program (no graphics) now gets the minimal engine-less page, so
+    // the GL bridge (`buildLoftImports`) is absent by design.  The `loft_io`
+    // output host import is present in BOTH the minimal and the full GL page —
+    // assert that instead, to confirm the I/O bridge is wired.
     assert!(
-        html.contains("buildLoftImports"),
-        "HTML should contain the GL bridge"
+        html.contains("loft_host_print"),
+        "HTML should wire the loft_io host import"
     );
     // WASM binary is embedded as base64 — file should be substantial
     assert!(

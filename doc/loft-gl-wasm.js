@@ -181,7 +181,19 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
 
   return {
     loft_io: coerceArgs({
-      loft_host_print(ptr, len) { output.textContent += readStr(ptr, len); }
+      loft_host_print(ptr, len) { output.textContent += readStr(ptr, len); },
+      // JS -> loft input, the mirror of loft_host_print.  host_input() reads the
+      // bytes JS set on globalThis.loftInput (a string) before loft_start, via
+      // len+copy (loft sizes the buffer, then the host fills it).
+      loft_host_input_len() {
+        if (!globalThis.__loftInputBytes) globalThis.__loftInputBytes =
+          new TextEncoder().encode(globalThis.loftInput != null ? String(globalThis.loftInput) : "");
+        return globalThis.__loftInputBytes.length;
+      },
+      loft_host_input_copy(ptr) {
+        const b = globalThis.__loftInputBytes || new Uint8Array(0);
+        new Uint8Array(getMem().buffer, ptr, b.length).set(b);
+      }
     }),
     loft_gl: coerceArgs({
       loft_gl_create_window(w, h, tp, tl) {
