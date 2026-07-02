@@ -251,6 +251,36 @@ fn test_undefended_index_into_nonnull(v: vector<integer>, i: integer) -> integer
   v[i]
 }
 
+// @PLN25 (N-Store) tuples: a tuple stores ELEMENT-WISE, so an un-discharged `τ?` (or a
+// bare `null`) element cannot slip into a non-null element slot of a tuple RETURN (the
+// synthetic `__tuple<…>` rewrite) or a tuple FIELD. The accept twins (discharged /
+// declared-`τ?`-element / nested) live in 25-tuple-nstore.loft.
+// @EXPECT_ERROR: nullable `integer?` cannot be stored into element 0 of the return value
+fn test_tuple_return_undischarged_elem(s: text) -> (integer, integer) {
+  tr_q = s as integer;
+  (tr_q, 1)
+}
+
+// @EXPECT_ERROR: `null` cannot be stored into element 0 of the return value
+fn test_tuple_return_null_elem() -> (integer, integer) {
+  (null, 2)
+}
+
+struct TupleFieldBox { t: (integer, integer) }
+
+// @EXPECT_ERROR: nullable `integer?` cannot be stored into element 0 of the field
+fn test_tuple_field_undischarged_elem(s: text) -> integer {
+  tf_q = s as integer;
+  tf_b = TupleFieldBox { t: (tf_q, 1) };
+  tf_b.t.1
+}
+
+// @EXPECT_ERROR: cannot be stored into element 0 of element 0 of the return value
+fn test_tuple_nested_undischarged_elem(s: text) -> ((integer, integer), integer) {
+  tn_q = s as integer;
+  ((tn_q, 1), 2)
+}
+
 // @PLN25 DN6 (N-Join): the inferred null-start widen (`a = null; a = 5` ⇒ `integer?`,
 // accepted — see 25-null-join.loft) applies ONLY to an INFERRED local (`var_tp == null`
 // is the inferred marker). An ANNOTATED non-null scalar still REJECTS a stored `null` —

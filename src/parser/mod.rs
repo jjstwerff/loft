@@ -1877,6 +1877,39 @@ impl Parser {
         if self.first_pass {
             return false;
         }
+        // Tuples store ELEMENT-WISE, so `(N-Store)` applies per position: an Optional (DN3)
+        // or bare-null (DN1) element cannot slip into a non-null element slot just because
+        // the enclosing tuple type isn't itself `Optional`. A tuple type appears either as
+        // a literal `Type::Tuple` (a field / typed assign) or as the synthetic-struct
+        // rewrite `Reference(__tuple<…>)` (a tuple RETURN type, rewritten by
+        // `parse_function`; elements = the def's attribute typedefs, the same normalization
+        // as the destructure reader in expressions.rs). Normalize both sides and recurse
+        // (nested tuples included); each element rides the same DN3/DN1 checks below.
+        // Arity mismatches are left to the regular type checker.
+        fn tuple_elems(data: &crate::data::Data, tp: &Type) -> Option<Vec<Type>> {
+            match tp {
+                Type::Tuple(elems) => Some(elems.clone()),
+                Type::Reference(d, _) if data.def(*d).name().starts_with("__tuple<") => Some(
+                    data.def(*d)
+                        .attributes
+                        .iter()
+                        .map(|a| a.typedef.clone())
+                        .collect(),
+                ),
+                _ => None,
+            }
+        }
+        if let (Some(v_elems), Some(t_elems)) = (
+            tuple_elems(&self.data, value_tp),
+            tuple_elems(&self.data, target_tp),
+        ) && v_elems.len() == t_elems.len()
+        {
+            let mut hit = false;
+            for (i, (ve, te)) in v_elems.iter().zip(t_elems.iter()).enumerate() {
+                hit |= self.n_store_violation(ve, te, &format!("element {i} of {what}"));
+            }
+            return hit;
+        }
         // DN3: an un-discharged nullable `τ?` (Optional value) into a non-null target.
         if crate::keys::pln25_dn3_enabled()
             && let Type::Optional(inner) = value_tp
