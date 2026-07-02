@@ -213,8 +213,11 @@ jobs:
             echo "::notice title=Windows (daily)::No completed daily Windows run found yet — nothing to mirror (reporting green)."
             exit 0
           fi
+          # Two jobs share this name (the real matrix leg + the PR placeholder,
+          # which exists-but-skipped on scheduled runs and can sort first), so
+          # ignore skipped conclusions — only a job that actually ran counts.
           concl=$(gh run view "$run_id" --repo "$REPO" --json jobs \
-                    --jq 'first(.jobs[] | select(.name=="Test (windows-latest)") | .conclusion) // empty' \
+                    --jq 'first(.jobs[] | select(.name=="Test (windows-latest)" and .conclusion != "skipped") | .conclusion) // empty' \
                     2>/dev/null || true)
           url="https://github.com/$REPO/actions/runs/$run_id"
           echo "Latest daily Windows leg: ${concl:-unknown}  ($url)"
@@ -1095,8 +1098,11 @@ jobs:
       - name: Regenerate from snapshot and fail on drift
         run: python3 scripts/gen-library-catalogue.py --index doc/claude/registry-index-snapshot.json --check
 
-  # @PLAN53 — surface the latest nightly (Miri / ASan / toolchain-matrix, see
-  # miri.yml) health as a sticky PR comment.  INFORMATIONAL, never a merge gate:
+  # @PLAN53 — surface the latest nightly health as a sticky PR comment, from
+  # BOTH nightly sources: miri.yml (Miri / ASan / toolchain-matrix) and the
+  # scheduled daily full-matrix CI run (the only place Windows runs — a red
+  # Windows leg must show up here, not only in the Actions tab).
+  # INFORMATIONAL, never a merge gate:
   # the job always succeeds (continue-on-error + a try/catch that never throws),
   # and it is not a required check.  A red nightly is a fact the reviewer weighs
   # for THIS PR — not a block.  Reads per-JOB conclusions (not the run
@@ -1119,37 +1125,56 @@ jobs:
             const marker = '<!-- nightly-status-comment -->';
             let attentionNeeded = false;
             try {
-              const runs = await github.rest.actions.listWorkflowRuns({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                workflow_id: 'miri.yml',
-                branch: context.payload.repository.default_branch,
-                status: 'completed',
-                per_page: 1,
-              });
+              const icon = (c) => c === 'success' ? '✅'
+                : (c === 'skipped' || c === 'cancelled') ? '⤵️' : '❌';
+              const isBad = (j) => j.conclusion
+                && !['success', 'skipped', 'cancelled'].includes(j.conclusion);
+              const latestRun = async (workflow_id, extra) => {
+                const runs = await github.rest.actions.listWorkflowRuns({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  workflow_id, branch: context.payload.repository.default_branch,
+                  status: 'completed', per_page: 1, ...extra,
+                });
+                return runs.data.workflow_runs[0];
+              };
+              const runJobs = async (run) => (await github.rest.actions.listJobsForWorkflowRun({
+                owner: context.repo.owner, repo: context.repo.repo,
+                run_id: run.id, per_page: 100,
+              })).data.jobs;
+              const sections = [];
+              // miri.yml nightly — few jobs, show each one.
+              const miri = await latestRun('miri.yml', {});
+              if (miri) {
+                const jobs = await runJobs(miri);
+                if (jobs.some(isBad)) attentionNeeded = true;
+                sections.push(`**miri nightly** (${miri.created_at.slice(0, 10)}): `
+                  + jobs.map((j) => `${icon(j.conclusion)} ${j.name}`).join(' · ')
+                  + ` — [run #${miri.run_number}](${miri.html_url})`);
+              }
+              // Scheduled daily full-matrix CI — the only place Windows runs.
+              // ~20 jobs, so name the failures and count the rest.
+              const daily = await latestRun('ci.yml', { event: 'schedule' });
+              if (daily) {
+                const jobs = await runJobs(daily);
+                const bad = jobs.filter(isBad);
+                if (bad.length) attentionNeeded = true;
+                const okCount = jobs.filter((j) => j.conclusion === 'success').length;
+                sections.push(`**daily full CI incl. Windows** (${daily.created_at.slice(0, 10)}): `
+                  + (bad.length
+                    ? bad.map((j) => `❌ ${j.name}`).join(' · ') + ` · ✅ ${okCount} green`
+                    : `✅ all ${okCount} jobs`)
+                  + ` — [run #${daily.run_number}](${daily.html_url})`);
+              }
               let body;
-              if (!runs.data.workflow_runs.length) {
+              if (!sections.length) {
                 body = `${marker}\n🌙 **Nightly health** — no completed nightly run yet. `
                   + `Informational; not a merge gate.`;
               } else {
-                const run = runs.data.workflow_runs[0];
-                const jobs = await github.rest.actions.listJobsForWorkflowRun({
-                  owner: context.repo.owner, repo: context.repo.repo,
-                  run_id: run.id, per_page: 100,
-                });
-                const icon = (c) => c === 'success' ? '✅'
-                  : (c === 'skipped' || c === 'cancelled') ? '⤵️' : '❌';
-                const lines = jobs.data.jobs
-                  .map((j) => `${icon(j.conclusion)} ${j.name}`).join(' · ');
-                const attention = jobs.data.jobs.some(
-                  (j) => j.conclusion && !['success', 'skipped', 'cancelled'].includes(j.conclusion));
-                attentionNeeded = attention;
-                const date = run.created_at.slice(0, 10);
-                body = `${marker}\n🌙 **Nightly health** (${date}): `
-                  + `${attention ? '⚠️ needs attention' : 'all clear'}\n\n`
-                  + `${lines}\n\n[run #${run.run_number}](${run.html_url}) — per-*job* status `
-                  + `(sees through the toolchain matrix's \`continue-on-error\`). `
-                  + `Informational; **not a merge gate**.`;
+                body = `${marker}\n🌙 **Nightly health**: `
+                  + `${attentionNeeded ? '⚠️ needs attention' : 'all clear'}\n\n`
+                  + sections.join('\n')
+                  + `\n\nPer-*job* status (sees through the toolchain matrix's `
+                  + `\`continue-on-error\`). Informational; **not a merge gate**.`;
               }
               const { data: comments } = await github.rest.issues.listComments({
                 owner: context.repo.owner, repo: context.repo.repo,
