@@ -366,6 +366,16 @@ impl Parser {
             if self.enum_context(result) {
                 self.expected = result.clone();
             }
+            // @PLN46/@PLN25: `expr_not_null` is a TRANSIENT marker — "the field access just
+            // parsed is non-null" — used by the very next operator (`p.field ?? d`'s defended
+            // read, the redundant-null-check on `p.field == null`). A field access that ENDS a
+            // statement (`m.value = 20;`) leaves it set with nothing to consume it, so it would
+            // leak into a LATER statement's null-check and mis-fire "redundant null check" on an
+            // unrelated operand (surfaced by F2: `m.value`/`cur.value` became non-null, so
+            // `while cur != null` wrongly warned "always true" naming the stale 'value'). Reset
+            // it at each statement boundary; the within-statement `?? d` / `== null` tracking is
+            // untouched (both operand and consumer parse inside this one `self.expression`).
+            self.expr_not_null = false;
             t = self.expression(&mut n);
             self.expected = saved_expected;
             // Track unconditional terminators at block scope.
