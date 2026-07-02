@@ -2691,13 +2691,19 @@ extern crate loft;"
                     &format!("db.byte({min}, {nullable})"),
                 )?;
             } else if field_size == 2 {
-                emit_db_field(
-                    w,
-                    s_var,
-                    field_name,
-                    "short",
-                    &format!("db.short({min}, {nullable})"),
-                )?;
+                // Match the ONE width→op home (`NarrowIntKind::of(2, nullable, false)`): a
+                // NULLABLE 2-byte field is `db.short` (the `+1` sentinel encoding), a NON-null
+                // one is `db.short_raw` (direct — the `ShortFull` write is `OpSetShortRaw`).
+                // Using `db.short` for a non-null field made the schema READ (`ShowDb`/to_json/
+                // store round-trip) apply the `+1` shift the direct write never did → a non-null
+                // `u16` field read back off-by-one / `i32::MIN` (interp fixed in typedef.rs; this
+                // is the native db-setup twin).
+                let (label, ctor) = if nullable {
+                    ("short", format!("db.short({min}, {nullable})"))
+                } else {
+                    ("short_raw", format!("db.short_raw({min}, {nullable})"))
+                };
+                emit_db_field(w, s_var, field_name, label, &ctor)?;
             } else if field_size == 4 {
                 emit_db_field(
                     w,
