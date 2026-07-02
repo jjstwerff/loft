@@ -1,0 +1,60 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+
+// Recursion-free generic tree walk — the full composition the sandbox-side
+// `walk` construction needs (bounded loop + grow-only worklist + `??` on
+// generic T + iterating an interface method's vector<Self> result).  The
+// grow-only single-vector shape is the leak-free one; the two-vector
+// stack/order variant currently orphans one store per call on the
+// interpreter (instantiated generics lose the retbuf borrow dep) — see the
+// issue filed from this probe family before promoting a stdlib walk.
+//
+//        1
+//      /   \
+//     2     3
+//    / \     \
+//   4   5     6   → level order 1,2,3,4,5,6
+
+interface GwKidded {
+  fn gw_kids(self: Self) -> vector<Self>
+  fn gw_worth(self: Self) -> integer
+}
+struct GwNode { gwn_v: integer, gwn_kids: vector<GwNode> }
+fn gw_kids(self: GwNode) -> vector<GwNode> { return self.gwn_kids; }
+fn gw_worth(self: GwNode) -> integer { return self.gwn_v; }
+
+fn gw_walk<T: GwKidded>(gw_root: T, gw_cap: integer) -> vector<T> {
+  gw_order = [gw_root];
+  for gw_i in 0..gw_cap {
+    if gw_i >= len(gw_order) { gw_i#break; }
+    gw_cur = gw_order[gw_i] ?? gw_root;
+    for gw_kid in gw_cur.gw_kids() {
+      if len(gw_order) < gw_cap {
+        gw_order += [gw_kid];
+      }
+    }
+  }
+  return gw_order;
+}
+
+fn test_generic_walk_level_order() {
+  gt_n4 = GwNode { gwn_v: 4, gwn_kids: [] };
+  gt_n5 = GwNode { gwn_v: 5, gwn_kids: [] };
+  gt_n6 = GwNode { gwn_v: 6, gwn_kids: [] };
+  gt_n2 = GwNode { gwn_v: 2, gwn_kids: [gt_n4, gt_n5] };
+  gt_n3 = GwNode { gwn_v: 3, gwn_kids: [gt_n6] };
+  gt_n1 = GwNode { gwn_v: 1, gwn_kids: [gt_n2, gt_n3] };
+  gt_seq = "";
+  for gt_w in gw_walk(gt_n1, 1000) {
+    gt_seq = "{gt_seq}{gt_w.gwn_v},";
+  }
+  assert(gt_seq == "1,2,3,4,5,6,", "level order: {gt_seq}");
+}
+
+fn test_generic_walk_cap() {
+  gc_leaf = GwNode { gwn_v: 20, gwn_kids: [] };
+  gc_root = GwNode { gwn_v: 5, gwn_kids: [gc_leaf, gc_leaf, gc_leaf] };
+  gc_count = 0;
+  for gc_w in gw_walk(gc_root, 2) { gc_count += 1; }
+  assert(gc_count == 2, "cap: {gc_count}");
+}

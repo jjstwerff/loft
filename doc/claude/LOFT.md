@@ -525,7 +525,7 @@ do by looking up the pair in this table:
 | Integer → `single`                 | Implicit      | `[1, 2]` is a valid `vector<single>` |
 | `float` → `single`                 | Explicit `as` | NARROWING (64→32-bit loses precision).  A bare decimal literal is `float`; write a **`single` literal** with the `f` suffix (`1.0f`) or cast (`x as single`).  This is enforced element-wise: a `vector<single>` literal must be `[1.0f, 2.0f]` or `[a as single, …]` — `[1.0, 2.0]` (float literals) is a compile error ("would lose precision"), never a silent truncation |
 | `i32` / narrow int → `integer`     | Implicit      | widening; a 4-byte `i32` (or `u8`/`u16`/`i8`/`i16`) widens into the 8-byte `integer` with no loss |
-| `integer` → `i32` / `u8`/`u16`/`i8`/`i16` | Explicit `as` | NARROWING — a plain `integer` is 64-bit; casting to a smaller explicit width drops the high bits, so `x = n as i32` is required.  A **constant that provably fits** the target is exempt (`x: i32 = 5`, `f(200)`).  (@PLAN48 / @P370) |
+| `integer` → `i32` / `u8`/`u16`/`i8`/`i16` | Explicit `as` at storage sites | NARROWING — a plain `integer` is 64-bit; writing one into a narrow **struct field** (or other narrow storage) requires `as` ("cannot implicitly narrow integer to u16 … cast explicitly").  A **constant that provably fits** the target is exempt (`x: i32 = 5`, `f(200)`).  Note the rule binds where the value is *stored*, not at local annotations: `m: i32 = n` with a runtime `n` currently compiles and `m` silently keeps the full 64-bit value.  (@PLAN48 / @P370) |
 | `float` → integer                  | Explicit `as` | `pi as integer` truncates toward zero; preserves the current sentinel semantics |
 | `text` → integer / float           | Explicit `as` | `"42" as integer`; returns null on parse failure |
 | Integer / float / boolean → `text` | **Format-only** | `"n={m}"` renders the value inline; `t = m` with `t: text` is a compile error.  If you want the rendered form as a standalone text value, assign through interpolation: `t = "{m}"` |
@@ -1044,8 +1044,10 @@ struct-enum, so pattern matching is the canonical way to dispatch on a parsed
 JSON value.  Each arm names a variant; the destructured field exposes the
 inner payload (`items` for `JArray`, `fields` for `JObject`, `value` for the
 primitive variants).  A wildcard or `JNull` arm covers parse failures.
-Assign the parse result to a variable first — `match json_parse(raw)` inline
-does not work yet (codegen limitation).
+Assign the parse result to a variable first, as below — the inline form
+`match json_parse(raw) { … }` compiles and dispatches correctly, but the
+interpreter currently leaks one store per inline parse (the hoisted
+temporary is never freed), so the assign-first form is the reliable one.
 
 ```
 v = json_parse(raw);
@@ -1159,18 +1161,19 @@ v[..end]                    // open-start slice from 0 to end (exclusive)
 [for n in 1..10 if n % 2 == 0 { n }]  // comprehension with filter
 ```
 
-**Slices return iterators, not vectors.**  `v[lo..hi]` can be used in
-`for x in v[lo..hi] { … }` and wherever an iterator is accepted, but it
-cannot be assigned to a `vector<T>` local or passed where a `vector<T>`
-argument is expected.  To materialise a slice into a fresh vector, pair
-it with a comprehension: `sub = [for x in v[lo..hi] { x }]`.
+**Slices are iterators, materialised on assignment.**  `v[lo..hi]` can
+be used in `for x in v[lo..hi] { … }` and wherever an iterator is
+accepted, and assigning it to a local (`sub = v[lo..hi]` or
+`sub: vector<T> = v[lo..hi]`) materialises a fresh vector.  It still
+cannot be passed directly where a `vector<T>` **argument** is expected
+("expected vector<integer>, got iterator<integer>") — materialise first
+via a local, or a comprehension: `f([for x in v[lo..hi] { x }])`.
 
-**Negative indices are not supported.**  `v[2..-1]` yields an empty
-iterator today (the range `2..-1` is empty), not "all but the last
-element."  To get "everything except the last", write
-`v[0..len(v) - 1]`.  Early drafts of this doc claimed negative indices
-counted from the end; the claim was aspirational and the form was
-never implemented.
+**Negative slice bounds count from the end (@P384).**  `v[2..-1]` is
+"element 2 up to (not including) the last": on `[10, 20, 30, 40, 50]`
+it yields `30, 40`.  `v[-2..]` yields the last two elements.  A
+negative bound is shorthand for `len(v) + bound`, so `v[0..len(v) - 1]`
+and `v[0..-1]` are the same slice.
 
 **Struct elements: reads are views, writes are copies — never swap
 in-place via a temp (#338).**  For a `vector<STRUCT>`, `tmp = v[j]` yields

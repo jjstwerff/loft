@@ -21,13 +21,14 @@ struct User {
 
 // ## Parsing — JSON to struct
 // Call 'Type.parse(text)' to create a struct from JSON text.
-// Text arguments are auto-wrapped through 'json_parse' internally,
-// so malformed input lands in 'json_errors()' rather than silently
-// corrupting the struct.  Missing fields get null sentinels.
+// Text arguments are auto-wrapped through 'json_parse' internally.
+// Missing fields get null sentinels.  Caveat (Q1): the auto-wrap
+// form currently DROPS diagnostics — malformed input and schema
+// mismatches leave fields null with 'json_errors()' empty.  For
+// error reporting, stage explicitly: 'User.parse(json_parse(text))'
+// — that form pushes both parse and schema errors to 'json_errors()'.
 //
 //   user = User.parse(json_text)
-//
-// Callers wanting explicit staging can write 'User.parse(json_parse(text))'
 // to inspect 'json_errors()' between the two steps.
 //
 // ## Vectors

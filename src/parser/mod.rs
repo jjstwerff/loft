@@ -2805,7 +2805,12 @@ impl Parser {
             .collect();
         let tmpl_vars = self.data.definitions[g_nr as usize].variables.clone();
         let tmpl_pos = self.data.definitions[g_nr as usize].position.clone();
-        let new_code = Self::substitute_type_in_value(tmpl_code, tv_nr, &concrete, &self.data);
+        // The per-element iteration stride for vector<T=concrete> — from the
+        // ONE home (`vector_elem_iter_stride`), threaded into the fixup so the
+        // generic path can never drift from the direct-emission stride again.
+        let iter_stride = i32::from(self.vector_elem_iter_stride(&concrete));
+        let new_code =
+            Self::substitute_type_in_value(tmpl_code, tv_nr, &concrete, iter_stride, &self.data);
         // `from_tv` computed on the PRE-substitution template return, identically to
         // `predict_generic_return_type`, so the second-pass instantiated return type
         // matches the first-pass prediction (the cross-pass H5 contract).
@@ -2952,7 +2957,21 @@ impl Parser {
             return Self::resolve_type_var(template_tp, tv_nr, inner);
         }
         match template_tp {
-            Type::Reference(d, _) if *d == tv_nr => concrete_tp.clone(),
+            // Same principle as the `Rewritten` strip above: the call-site
+            // argument's dep list records what THAT expression borrows in the
+            // CALLER's frame — not part of the data shape.  Bound verbatim, it
+            // is baked into the instantiated def's attr/return types where the
+            // indices are misread as callee attr deps: the instantiation's
+            // return then claims to borrow its argument, so the caller never
+            // frees the fresh store the method's `__retbuf` delivered (one
+            // record leaked per call).
+            Type::Reference(d, _) if *d == tv_nr => match concrete_tp {
+                Type::Reference(cd, _) => Type::Reference(*cd, crate::data::Deps::none()),
+                Type::Vector(inner, _) => Type::Vector(inner.clone(), crate::data::Deps::none()),
+                Type::Enum(cd, mixed, _) => Type::Enum(*cd, *mixed, crate::data::Deps::none()),
+                Type::Text(_) => Type::Text(crate::data::Deps::none()),
+                other => other.clone(),
+            },
             Type::Vector(inner, _) => {
                 if let Type::Vector(c_inner, _) = concrete_tp {
                     Self::resolve_type_var(inner, tv_nr, c_inner)
@@ -3061,12 +3080,18 @@ impl Parser {
     /// Walks a generic-template's IR and substitutes the type variable
     /// `tv_nr` with the concrete `concrete` type, both in variable types
     /// and in IR-shape decisions that depend on T's resolved shape.
-    fn substitute_type_in_value(val: Value, tv_nr: u32, concrete: &Type, data: &Data) -> Value {
+    fn substitute_type_in_value(
+        val: Value,
+        tv_nr: u32,
+        concrete: &Type,
+        iter_stride: i32,
+        data: &Data,
+    ) -> Value {
         match val {
             Value::Call(d, args) => {
                 let new_args: Vec<_> = args
                     .into_iter()
-                    .map(|a| Self::substitute_type_in_value(a, tv_nr, concrete, data))
+                    .map(|a| Self::substitute_type_in_value(a, tv_nr, concrete, iter_stride, data))
                     .collect();
                 // Re-resolve call target if it references the type variable.
                 let new_d = Self::re_resolve_call(d, tv_nr, concrete, data);
@@ -3095,7 +3120,10 @@ impl Parser {
                     } else {
                         0
                     };
-                    let elm_size = Self::type_element_size(concrete, data);
+                    // The stride comes from `vector_elem_iter_stride` (the one
+                    // home, computed by the caller) — NOT a re-derived byte-sum;
+                    // see that helper for why the two drifted.
+                    let elm_size = iter_stride;
                     if elm_size != cur_size {
                         let mut fixed = new_args;
                         fixed[1] = Value::Int(elm_size);
@@ -3158,7 +3186,7 @@ impl Parser {
                 let recursed: Vec<Value> = bl
                     .operators
                     .into_iter()
-                    .map(|v| Self::substitute_type_in_value(v, tv_nr, concrete, data))
+                    .map(|v| Self::substitute_type_in_value(v, tv_nr, concrete, iter_stride, data))
                     .collect();
                 Value::Block(Box::new(crate::data::Block {
                     operators: recursed,
@@ -3170,21 +3198,49 @@ impl Parser {
             }
             Value::Set(v, expr) => Value::Set(
                 v,
-                Box::new(Self::substitute_type_in_value(*expr, tv_nr, concrete, data)),
+                Box::new(Self::substitute_type_in_value(
+                    *expr,
+                    tv_nr,
+                    concrete,
+                    iter_stride,
+                    data,
+                )),
             ),
             Value::Return(expr) => Value::Return(Box::new(Self::substitute_type_in_value(
-                *expr, tv_nr, concrete, data,
+                *expr,
+                tv_nr,
+                concrete,
+                iter_stride,
+                data,
             ))),
             Value::If(cond, t, f) => Value::If(
-                Box::new(Self::substitute_type_in_value(*cond, tv_nr, concrete, data)),
-                Box::new(Self::substitute_type_in_value(*t, tv_nr, concrete, data)),
-                Box::new(Self::substitute_type_in_value(*f, tv_nr, concrete, data)),
+                Box::new(Self::substitute_type_in_value(
+                    *cond,
+                    tv_nr,
+                    concrete,
+                    iter_stride,
+                    data,
+                )),
+                Box::new(Self::substitute_type_in_value(
+                    *t,
+                    tv_nr,
+                    concrete,
+                    iter_stride,
+                    data,
+                )),
+                Box::new(Self::substitute_type_in_value(
+                    *f,
+                    tv_nr,
+                    concrete,
+                    iter_stride,
+                    data,
+                )),
             ),
             Value::Loop(bl) => Value::Loop(Box::new(crate::data::Block {
                 operators: bl
                     .operators
                     .into_iter()
-                    .map(|v| Self::substitute_type_in_value(v, tv_nr, concrete, data))
+                    .map(|v| Self::substitute_type_in_value(v, tv_nr, concrete, iter_stride, data))
                     .collect(),
                 result: Self::substitute_type(bl.result, tv_nr, concrete),
                 name: bl.name,
@@ -3192,26 +3248,45 @@ impl Parser {
                 var_size: bl.var_size,
             })),
             Value::Drop(expr) => Value::Drop(Box::new(Self::substitute_type_in_value(
-                *expr, tv_nr, concrete, data,
+                *expr,
+                tv_nr,
+                concrete,
+                iter_stride,
+                data,
             ))),
             Value::Insert(ops) => Value::Insert(
                 ops.into_iter()
-                    .map(|v| Self::substitute_type_in_value(v, tv_nr, concrete, data))
+                    .map(|v| Self::substitute_type_in_value(v, tv_nr, concrete, iter_stride, data))
                     .collect(),
             ),
             Value::Iter(name, create, next, extra) => Value::Iter(
                 name,
                 Box::new(Self::substitute_type_in_value(
-                    *create, tv_nr, concrete, data,
+                    *create,
+                    tv_nr,
+                    concrete,
+                    iter_stride,
+                    data,
                 )),
-                Box::new(Self::substitute_type_in_value(*next, tv_nr, concrete, data)),
                 Box::new(Self::substitute_type_in_value(
-                    *extra, tv_nr, concrete, data,
+                    *next,
+                    tv_nr,
+                    concrete,
+                    iter_stride,
+                    data,
+                )),
+                Box::new(Self::substitute_type_in_value(
+                    *extra,
+                    tv_nr,
+                    concrete,
+                    iter_stride,
+                    data,
                 )),
             ),
             Value::Span(b) => {
                 let (pos, inner) = *b;
-                let new_inner = Self::substitute_type_in_value(inner, tv_nr, concrete, data);
+                let new_inner =
+                    Self::substitute_type_in_value(inner, tv_nr, concrete, iter_stride, data);
                 Value::with_span(pos, new_inner)
             }
             // P237: tuple-constructor elements may contain calls to
@@ -3223,25 +3298,41 @@ impl Parser {
             Value::Tuple(elems) => Value::Tuple(
                 elems
                     .into_iter()
-                    .map(|e| Self::substitute_type_in_value(e, tv_nr, concrete, data))
+                    .map(|e| Self::substitute_type_in_value(e, tv_nr, concrete, iter_stride, data))
                     .collect(),
             ),
             Value::TuplePut(v, idx, val) => Value::TuplePut(
                 v,
                 idx,
-                Box::new(Self::substitute_type_in_value(*val, tv_nr, concrete, data)),
+                Box::new(Self::substitute_type_in_value(
+                    *val,
+                    tv_nr,
+                    concrete,
+                    iter_stride,
+                    data,
+                )),
             ),
             Value::BreakWith(n, val) => Value::BreakWith(
                 n,
-                Box::new(Self::substitute_type_in_value(*val, tv_nr, concrete, data)),
+                Box::new(Self::substitute_type_in_value(
+                    *val,
+                    tv_nr,
+                    concrete,
+                    iter_stride,
+                    data,
+                )),
             ),
             Value::Yield(val) => Value::Yield(Box::new(Self::substitute_type_in_value(
-                *val, tv_nr, concrete, data,
+                *val,
+                tv_nr,
+                concrete,
+                iter_stride,
+                data,
             ))),
             Value::CallRef(v_nr, args) => Value::CallRef(
                 v_nr,
                 args.into_iter()
-                    .map(|a| Self::substitute_type_in_value(a, tv_nr, concrete, data))
+                    .map(|a| Self::substitute_type_in_value(a, tv_nr, concrete, iter_stride, data))
                     .collect(),
             ),
             other => other,

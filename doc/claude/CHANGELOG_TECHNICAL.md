@@ -636,7 +636,9 @@ a *bare* `Insert`, so `Span(Insert)` fell through to the brace-less `Insert` arm
 Fix: S35 unspans `to` before the Insert check.  moros_ui 4/4 files native + interp.
 Regression: `tests/scripts/repro_p321g.loft`.
 
-**@P321c `imaging` — DIAGNOSED, needs design, NOT fixed**
+**@P321c `imaging` — DIAGNOSED, needs design, NOT fixed** *(status as of
+this 2026-05-23 entry — closed three days later; see the 2026-05-26
+"@P321c native dimension closed" entry above, commit `8095f4ba`)*
 
 `output_native_direct_call` (`src/generation/mod.rs:2181`) cannot express a
 store-MUTATING `#native` fn: `load_png` decodes a PNG, allocates the pixel vector, and
