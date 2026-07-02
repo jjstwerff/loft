@@ -32,7 +32,7 @@ The parser **rejects** code that violates these rules.
 | `integer` | **64-bit** signed int (the base integer type; i64 at rest) | `i64::MIN` |
 | `float` | 64-bit float; literal must contain `.`: `1.0` | `NaN` |
 | `single` | 32-bit float; literal suffix `f`: `1.0f` | `NaN` (32-bit) |
-| `boolean` | `true` / `false` / `null` (three-state, @PLN17) | byte `255` (test with `b == null`; `!b` is true for both `null` and `false`; `null == false` is `false`).  `boolean not null` is 2-state. |
+| `boolean` | `true` / `false` (2-state by default under DN1; **`boolean?`** adds `null` → three-state, @PLN17) | `boolean?` null is byte `255` (test with `b == null`; `!b` is true for both `null` and `false`; `null == false` is `false`) |
 | `character` | Single Unicode char; literal: `'a'`, `'😊'`; `c as integer` → codepoint | `'\0'` |
 | `text` | UTF-8 string (primary string type) | internal null pointer |
 
@@ -67,6 +67,14 @@ This is the same reachable-fault rule as `÷0` / out-of-bounds indexing (@PLN25
 `(N-Parse)`).  A *numeric* `as` (`3.14 as integer`, `x as u8`) is not a parse and does
 not add `?` on its own (a narrowing numeric cast that can miss uses `as u8?`).
 
+**Nullability defaults (@PLN25 DN1) — every scalar and vector is NON-NULL by default.** A plain
+`integer` / `float` / `single` / `boolean` / `character` / `text` (and `vector<T>`) field, local, or
+return REJECTS `null`: storing `null` — or an undischarged `τ?` from a fit-failing op (parse, `/`,
+`v[i]`) — into it is a compile error. To ALLOW null, append `?` to the type (`integer?`, `text?`,
+`vector<T>?`). A `vector<T>` field defaults to `[]` (empty, non-null). **The old `not null` modifier
+is a RETIRED accepted no-op** — it now means what the default already is, so don't write it; write
+`?` when (and only when) you want the slot to hold null.
+
 **`text` vs `string`:** The canonical string type is `text`. Using `string` in struct fields causes errors.
 
 ---
@@ -75,15 +83,17 @@ not add `?` on its own (a narrowing numeric cast that can miss uses `as u8?`).
 
 ```loft
 struct Point {
-    x: float not null,
-    y: float not null,
+    x: float,                    // non-null by default (DN1) — no `not null` needed
+    y: float,
     r: integer limit(0, 255),
     label: text = "default",
     area: float virtual($.x * $.y),
+    note: text?,                 // append `?` to ALLOW null
 }
 ```
 
-Modifiers: `not null`, `limit(min, max)`, `default(expr)` / `= expr`, `virtual(expr)`
+Modifiers: `limit(min, max)`, `default(expr)` / `= expr`, `virtual(expr)`.  (`not null` still parses
+but is a retired no-op — see the DN1 defaults note above; use `?` for the nullable case.)
 
 ---
 
@@ -242,7 +252,7 @@ implementation.
 ## Structs
 
 ```loft
-struct Item { name: text, count: integer not null }
+struct Item { name: text, count: integer }
 item = Item { name: "foo", count: 0 };
 item.count += 1;
 ```
@@ -296,8 +306,9 @@ flag         = nested.1;          // true
 - **No named tuple fields** — use a struct.
 - **No tuple iteration / whole-tuple formatting** — access elements one
   by one.
-- **`integer` elements default to nullable** — use `integer not null` if
-  the slot must reject null.
+- **Scalar elements are NON-NULL by default (@PLN25 DN1)** — a tuple
+  `integer` / `text` / … element rejects `null`; append `?` to the element
+  type (`(integer?, text)`) to allow it. (`not null` is a retired no-op.)
 - **Compound assignment on tuple LHS is rejected** — `(a, b) += (1, 2)`
   is a compile error; rewrite as `a += 1; b += 2;` or rebuild the tuple.
 
@@ -330,8 +341,8 @@ bare `Red` resolves by its context enum.
 Struct-enum (each variant has fields; polymorphic dispatch via methods):
 ```loft
 enum Shape {
-    Circle { radius: float not null },
-    Rect   { w: float not null, h: float not null },
+    Circle { radius: float },
+    Rect   { w: float, h: float },
 }
 fn area(self: Circle) -> float { 3.14159 * self.radius * self.radius }
 fn area(self: Rect)   -> float { self.w * self.h }
@@ -778,8 +789,8 @@ Notes:
 - **Always cast scalar writes to the intended width.**  Bare
   `f += int_var` writes 8 bytes (loft stores integers as i64).  To
   write 4 bytes use `f += (int_var as i32)`; for 1 / 2 bytes use
-  `as u8` / `as u16`.  Strongly-typed struct fields (`u8`, `u16`,
-  `integer not null` with range) write at their declared width
+  `as u8` / `as u16`.  Strongly-typed struct fields (`u8`, `u16`, or a
+  range-limited `integer limit(0, 255)`) write at their declared width
   automatically.
 - `f += expr` appends `expr` to the file, respecting the `#format`
   endianness.  `text` → raw bytes, `vector<T>` → each element in
@@ -805,29 +816,25 @@ When `LOFT_DENY_WARNINGS=1` (set by the canonical chunk-repo
 sweep.  These are the patterns to reach for first.  Sourced from the
 `loft-libs-core::arguments` sweep, 2026-05-30.
 
-### `not null` on vector fields safe-to-default-to-`[]`
+### Vector fields are non-null (`[]`) by default — no `not null` needed
 
-The parser emits a field-level "field `X.f` is read N times and never
-defended with `??` or `if x.f != null`" warning when a struct field
-is read repeatedly without a null check.  For **vector fields whose
-constructor initialises to `[]` and whose only writers append /
-index-assign**, declaring the field `not null` is safe and silences
-the warning at the source.
+**Obsolete under @PLN25 DN1.** A plain `vector<T>` field is already non-null
+and defaults to `[]`, and reading a non-null field never triggers the old
+@PLN46 "read N times and never defended" warning (that warning only ever
+concerned NULLABLE fields, and there are none by default now).  So just
+declare the field plainly:
 
 ```loft
 struct Args {
-  // Initialised to `[]` in create(); writers only append or
-  // index-assign — never produce null.  `not null` is the right
-  // marker: it makes the constructor enforce non-null at write-time.
-  options: vector<Arg> not null,
-  results: vector<text> not null,
-  positionals: vector<text> not null,
+  options: vector<Arg>,     // non-null, defaults to []
+  results: vector<text>,
+  positionals: vector<text>,
 }
 ```
 
-Don't apply `not null` blindly — only when the constructor and
-every writer demonstrably never produce null.  Otherwise the
-runtime gets a null-write panic later.
+Write `vector<T>?` only when the field must genuinely be able to hold `null`
+(distinct from empty).  The `not null` modifier still parses but is a retired
+no-op — don't add it.
 
 ### Capture-into-local before indexing (skip-pattern 5)
 
