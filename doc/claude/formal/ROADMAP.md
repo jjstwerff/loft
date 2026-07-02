@@ -25,7 +25,7 @@ Closing a row means the implementation obeys the rule (then the deviation entry 
 
 | area | open | what's left |
 |---|---|---|
-| [types.md](types.md) | 2 | **@PLN25 value/null model landed (2026-07-02): DN1/DN2/DN4/DN5/DN6 CLOSED**, D2 closed (C83). **DN3 residual (2):** text→int **parse** + **overflow-arith** (`a*b`/`a+b`/`a-b`) still type non-null — should yield `τ?` (the runtime already nulls, per C80); the last fit-failing-op sub-items |
+| [types.md](types.md) | 1 | **@PLN25 value/null model landed (2026-07-02): DN1/DN2/DN4/DN5/DN6 CLOSED**, D2 closed (C83). **DN3 residual (1):** text→int **parse** should yield `τ?` (reachable fault). Overflow-arith (`a*b`) is a **decided edge** — non-null, overflow→null+continue (C85), NOT `τ?` |
 | [binding.md](binding.md) | 0 | ✓ closed — D-bind-7 (reject bare `&a;` / block-final `{ &a }`) landed |
 | [grammar.md](grammar.md) | 0 | ✓ closed — D-gram-1/3 landed; D-gram-2 (non-CFG) + D-gram-4 (`&` overload) resolved as decided edges → DESIGN_DECISIONS C81/C82 |
 | [operational.md](operational.md) | 2 | D-op-1/2 the differential oracle (@PLN89) — D-op-4 the spreadsheet runtime (C80) is **CLOSED** (formalize4); the oracle SEED landed (`tests/oracle/`) |

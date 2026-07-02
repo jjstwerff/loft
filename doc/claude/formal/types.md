@@ -278,10 +278,13 @@ un-discharged result stored into non-null storage is a compile error — the dev
 `handle_operator` arithmetic-branch wrap) and `v[i]` / `s[i]` indexing (the index flip, default-on,
 with const / iter-var / `if i < len` guard fit-proofs). The runtime "may produce null" warnings are
 RETIRED (the type + `(N-Store)` is the enforcement). Regressions: `25-division-nullable.loft`,
-`25-index-nullable.loft` + `102` reject twins; both backends. **RESIDUAL (still typed non-null — do
-NOT yet yield `τ?`):** (a) text→int **parse** (`s as integer` fails → null but types `integer`);
-(b) **overflow arithmetic** `a*b` / `a+b` / `a-b` (the `(N-Arith)` range→overflow→`τ?` tightening).
-Both are fit-failing ops per the model — the last DN3 sub-items before a full `Closes @PLN25`.
+`25-index-nullable.loft` + `102` reject twins; both backends. **RESIDUAL (1) — to close:** text→int
+**parse** (`s as integer` fails → null but types `integer`; a reachable fault → should be `τ?`,
+like division/index). **DECIDED EDGE (not a deviation) — overflow arithmetic** `a*b`/`a+b`/`a-b`
+stays NON-null: overflow → the null sentinel + continue (C80, no trap), NOT `τ?`. The fault is
+extraordinary (operands ~3×10⁹) while the op is ubiquitous, so forcing discharge on all arithmetic
+is disproportionate + (given no traps) would block a game over a fault its player never hits —
+[DESIGN_DECISIONS C85](../DESIGN_DECISIONS.md#c85--overflow-arithmetic-types-non-null-the-game-keeps-running-dont-force-integer-on-every--). Range-tracking keeps provably-fit multiplies exact.
 
 ### DN4 — CLOSED (2026-07-02, F5 cutover): `as` to a narrower type enforces the range
 `400 as u8` was UB (the cast asserted the *type* but left an out-of-range value in a `u8`
