@@ -1276,7 +1276,21 @@ use #count instead"
             Type::Vector(cont, _) => {
                 let fmt = format.clone();
                 let d_nr = self.data.type_def_nr(&cont);
-                let db_tp = self.data.def(d_nr).known_type();
+                // #250's recursive resolution, the FORMAT twin of `db_type`'s
+                // Vector arm, for NESTED content only: `vector<vector<X>>`
+                // content must resolve recursively — the def-level
+                // `known_type()` fallback returns whichever vector row
+                // registered first, a layout-coincident id that broke (#483
+                // SIGSEGV in `ShowDb::write_list`) as soon as new stdlib
+                // content shifted the type table.  Non-vector content keeps
+                // `known_type()`: an enum's row carries the VARIANT NAMES the
+                // format needs, where `db_type` returns the generic byte
+                // storage row.
+                let db_tp = if matches!(*cont, Type::Vector(_, _)) {
+                    self.database.db_type(&cont, &self.data)
+                } else {
+                    self.data.def(d_nr).known_type()
+                };
                 let vec_tp = if db_tp == u16::MAX {
                     0
                 } else {

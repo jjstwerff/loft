@@ -1169,6 +1169,28 @@ impl ShowDb<'_> {
         res
     }
 
+    /// The format walk's element step — `Stores::next` with #477's stride
+    /// rule for NESTED vector elements: when the content is itself a vector,
+    /// the element row is an `element_size(inner).max(4)` handle (matching
+    /// the parser's `vector_elem_iter_stride` and the construction), not the
+    /// content row's own 4-byte size.  Stepping by the row size walked INSIDE
+    /// the first element, so every later element rendered empty — and under a
+    /// shifted type table read a null sentinel as a record id (#483 SIGSEGV).
+    /// Scoped to the FORMAT walk on purpose: runtime search/iteration
+    /// consumers of `Stores::next` bake their strides at parse time and are
+    /// self-consistent.
+    fn next_element(&self, data: &DbRef, pos: &mut i32) -> DbRef {
+        if let Parts::Vector(c) | Parts::Sorted(c, _) =
+            &self.stores.types[self.known_type as usize].parts
+            && let Parts::Vector(ci) = &self.stores.types[*c as usize].parts
+        {
+            let step = self.stores.types[*ci as usize].size.max(4);
+            vector::vector_next(data, pos, step, &self.stores.allocations);
+            return self.stores.element_reference(data, *pos);
+        }
+        self.stores.next(data, pos, self.known_type)
+    }
+
     fn write_list(&self, s: &mut String, content: u16, indent: u16) {
         let data = DbRef {
             store_nr: self.store,
@@ -1198,7 +1220,7 @@ impl ShowDb<'_> {
             if data.rec == 0 {
                 break;
             }
-            let rec = self.stores.next(&data, &mut pos, self.known_type);
+            let rec = self.next_element(&data, &mut pos);
             if rec.rec == 0 {
                 break;
             }
@@ -1824,7 +1846,7 @@ impl ShowDb<'_> {
             if data.rec == 0 {
                 break;
             }
-            let rec = self.stores.next(&data, &mut pos, self.known_type);
+            let rec = self.next_element(&data, &mut pos);
             if rec.rec == 0 {
                 break;
             }
