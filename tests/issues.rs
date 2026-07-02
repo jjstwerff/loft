@@ -2707,7 +2707,7 @@ fn test() {
 #[test]
 fn errors_accessor_path_on_failure() {
     code!(
-        r#"struct Score { value: integer }
+        r#"struct Score { value: integer? }
 fn test() {
     bad = Score.parse(`not_json`);
     err = bad#errors;
@@ -2726,7 +2726,7 @@ fn test() {
 #[test]
 fn errors_accessor_nested_path() {
     code!(
-        r#"struct Inner { x: integer }
+        r#"struct Inner { x: integer? }
 struct Outer { name: text, data: Inner }
 fn test() {
     bad = Outer.parse(`{{"name": "ok", "data": "not_an_object"}}`);
