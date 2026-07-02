@@ -605,7 +605,7 @@ Last retested: **2026-04-12** against commit `2aaba5a` (main branch).
 | ~~C58/P135~~ | — | **Done** — canonical `(0, 0) = screen-top-left`; upload no longer pre-flips rows; convention locked in lib_plans/58-graphics/README.md.  Regression: 2×2 atlas corner check in `tests/scripts/snap_smoke.sh` / `make test-gl-golden` |
 | ~~C60~~ | — | **Done** 2026-04-13 — `for kv in hash` yields a `HashEntry` with `.key` / `.value` in insertion/deletion-aware order via the internal ordered index.  See CAVEATS.md § C60 long-form |
 | ~~C61.local~~ | — | **Done** — pass-1 reject via `was_loop_var`; stdlib docs cleaned up; unblocked by #139 |
-| P54    | 0.9.0     | First-class `JsonValue` enum + `json_parse`; old text-based JSON surface withdrawn |
+| ~~P54~~ | — | **Done** — first-class `JsonValue` enum + `json_parse` shipped (`default/06_json.loft`); old text-based JSON surface withdrawn.  Residual: Q1 auto-wrap diagnostics (QUALITY.md § Open work) |
 | P344   | —         | Accepted — one slot+type per name in the flat per-function table; distinct names for different-typed loops.  Regression: `tests/parse_errors.rs::shadow_different_type` |
 | ~~P91~~ | — | **Done** — call-site substitution of `Var(arg_index)` in stored default tree; 4 regression tests |
 | ~~P137~~ | — | **Done** — `Instant::now()` / `n_ticks` gated on `target_arch = "wasm32"`; `host_time_now()` returns 0 on wasm32-without-wasm-feature.  Regression: 4 guards in `tests/html_wasm.rs` behind a serial mutex |
