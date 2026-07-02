@@ -356,14 +356,34 @@ tightenings**. In order, each ends green (never carry two phases' breakage):
     hint — MOOT under F2, retire like `#null_safe`); `wrap::{dir,structs,loft_suite}` +
     `native_scripts` (roll-ups of 06-structs/08-struct, the formatter bug); `issues::issue_328` +
     `errors_accessor_{nested_path,path_on_failure}` (unchecked — likely the same width desync).
-  - **TO LAND F2 (the dedicated effort):** (1) fix the struct-format read-width for narrow
-    `not_null` fields + audit the OTHER read paths (field-access already correct — find the ones
-    that aren't, same class as DN1 gap-ii); (2) retire the `not null` read-count hint; (3) check
-    issue_328 + the accessor tests; (4) flip `LOFT_PLN25_F2` default-on once F2-on is green; (5)
-    strip `not null` from all `.loft` source (mechanical, ~873 sites, now redundant) → remove from
-    the parser (syntax retirement). Then F6. **Also a separate slice:** `u8?` FIELD silently
-    swallows literal `255`→null (should error) while a `u8?` LOCAL keeps 255 — the packed-nullable
-    -narrow consistency (Part 2).
+  - **✅ (1) STRUCT-FORMAT READ-WIDTH FIXED (`ac432914`) — a PRE-EXISTING corruption, not F2-only.**
+    Root (both backends): a NON-null 2-byte narrow field (`u16 not null`/`i16 not null`, and under
+    F2 a plain `u16`) had its DB schema built as `Parts::Short` (the `+1` sentinel encoding) while
+    the codegen picks the op via the ONE width→op home `NarrowIntKind::of(2, non-null, false)` =
+    `ShortFull` — writing DIRECT (`OpSetShortRaw`) + reading field-access DIRECT (`OpGetShortFull`).
+    So field access was correct but EVERY schema-driven read (whole-struct `{x}`, `to_json`,
+    `show_loft`, the debugger, **store round-trip**) applied the `+1` shift the write never did →
+    off-by-one (`7→6`) / `i32::MIN` at the top of range (a silent reload corruption). Fix = align
+    the schema Part with the codegen op: non-null 2-byte → `Parts::ShortRaw` (direct). Interp
+    `typedef.rs`; native `generation/mod.rs::emit_field`. Regression `25-narrow-field-format.loft`
+    (value + boundary, both backends). F2-OFF suite: 13 pre-existing, ZERO new (the fixed values
+    were previously wrong, not asserted). This is a real `main`-bound bug fix, landed ungated.
+  - **BLAST RADIUS RE-MEASURED after the format fix (`LOFT_PLN25_F2=1`): 6 NEW** (2575/2594; was 8).
+    The format fix cleared 06-structs/08-struct/wrap-dir/wrap-structs. Remaining 6:
+    (a) **`389-narrow-runtime-collision`** ("runtime byte sentinel collision reads back null") — a
+    BYTE-level sentinel case the reconciliation touches (new signal, separate from the short fix —
+    likely the same schema/codegen encoding class for `Parts::Byte` vs a byte full-range, OR a test
+    whose whole point is the pre-F2 sentinel behavior → migrate); (b) **`hint_4h`** the `not null`
+    read-count hint — MOOT under F2 (a plain field is non-null; you'd never suggest `not null` for a
+    `?`), retire at the default-on flip (retiring under DN1 now would break the F2-OFF default tree,
+    where plain fields are still attr-nullable); (c) **`issue_328`** + **`errors_accessor_{nested_
+    path,path_on_failure}`** — separate (survived the format fix; need checking); (d) `wrap
+    loft_suite`/`native_scripts` roll-ups of (a).
+  - **TO LAND F2 (remaining):** (1) ✅ done. (2) the 389 byte-sentinel case; (3) issue_328 + accessor;
+    (4) retire the `not null` hint (at the flip); (5) flip `LOFT_PLN25_F2` default-on once F2-on
+    green; (6) strip `not null` from `.loft` (~873 sites, redundant) → remove from parser. Then F6.
+    **Separate slice:** `u8?` FIELD silently swallows literal `255`→null (should error) while a `u8?`
+    LOCAL keeps 255 — packed-nullable-narrow consistency (Part 2).
 - **F3 — Close DN5** (the `as` laundering hole) — 🟡 **IN PROGRESS (2026-07-02).** `null` / `τ?`
   `as <non-null scalar>` silently launders the null → now a compile error (`as τ?` / `??`).
   **Broadened per user directive** ("every integer has a range — detect out-of-range values
