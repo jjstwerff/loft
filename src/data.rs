@@ -1523,6 +1523,12 @@ impl Type {
             Type::Vector(t, _) => Type::Vector(Box::new(*t.clone()), v),
             Type::Function(params, ret, _) => Type::Function(params.clone(), ret.clone(), v),
             Type::RefVar(tp) => Type::RefVar(Box::new(tp.depending(on))),
+            // @PLN25 — `Optional` is a compile-time nullability marker over the base's
+            // runtime representation; deps are a lifetime property, agnostic to it, so a
+            // borrow attaches to the base and the wrapper is transparent (like `RefVar`).
+            // Without this an `Optional`-typed borrow (`e = v[i]` under DN1) silently loses
+            // its dep, and the deps pass treats it as OWNING → wrong store alloc / corruption.
+            Type::Optional(tp) => Type::optional(tp.depending(on)),
             Type::Tuple(elems) => Type::Tuple(elems.iter().map(|e| e.depending(on)).collect()),
             _ => self.clone(),
         }
@@ -1544,7 +1550,8 @@ impl Type {
             | Type::Enum(_, _, dep)
             | Type::Vector(_, dep)
             | Type::Function(_, _, dep) => Some(dep),
-            Type::RefVar(tp) => tp.deps_ref(),
+            // @PLN25 — `Optional` is dep-transparent (see `depending`).
+            Type::RefVar(tp) | Type::Optional(tp) => tp.deps_ref(),
             _ => None,
         }
     }
@@ -1562,7 +1569,8 @@ impl Type {
             | Type::Enum(_, _, dep)
             | Type::Vector(_, dep)
             | Type::Function(_, _, dep) => v.append(&mut dep.clone()),
-            Type::RefVar(tp) => return tp.depend(),
+            // @PLN25 — `Optional` is dep-transparent (see `depending`).
+            Type::RefVar(tp) | Type::Optional(tp) => return tp.depend(),
             // P197: a tuple's effective dependencies are the union of
             // its elements'.  Dedup to keep the vector compact.
             Type::Tuple(elems) => {
