@@ -151,11 +151,29 @@ borrower KEEPS the copy). Starting points found this session:
 > - **Step 5 (len-capture): NOT surfaced** — no site needed it (const / iter-var / `??` covered all).
 > - **Step 6: NOT STARTED** — needs audience_crystal finished + a full under-flip corpus/library sweep first.
 
-**Step 2 — lib compiler migration** — 🟡 NOT done (earlier "wrap passes" was a measurement error).
-lib/parser.loft is CLEAN, but **lib/code.loft** has 4 cast-from-nullable rejects (`self.code[b] as
-Block/If/If/Loop`, code.loft:228 etc.) — the loft-in-loft codegen. Needs a discharge idiom for
-`nullable as T` (discharge THEN cast; keep DN5 closed). DELICATE — mis-migration breaks self-hosting;
-prove the loft-in-loft compiler still round-trips (wrap dir/last/parser_debug/wasm_dir) after.
+**Step 2 — lib compiler migration** — 🟡 casts FIXED (`0cae0a6d`), but a DEEPER memory corruption blocks it.
+The 4 cast-from-nullable rejects (`self.code[b] as Block/If/If/Loop`) are fixed with the guard idiom
+(gate-OFF wrap 5/5). But running the now-compiling loft-in-loft compiler under the flip **SIGSEGVs / corrupts**.
+
+> **🔬 DEBUG FINDINGS (2026-07-02, session) — the loft-in-loft memory corruption under the flip.**
+> - **Repro (minimal):** `parser::parse("s", "struct S {{ x: integer }}"); parser::parse("shape", "enum
+>   Shape {{ Circle {{ radius: float }} }}")` under `LOFT_INDEX_DEV=1`. First parse corrupts memory; the
+>   second reports a GARBAGE position `Expected : on :281479271743489:1` (interp) or **SIGSEGV** (debugger,
+>   opcode 206, at lib/lexer.loft:476). gate-OFF: clean (`shape:1:60`).
+> - **Trigger (sharp):** a struct WITH A FIELD. `struct S {{}}` (empty) and `fn f(){{}}` are BOTH clean;
+>   only a field triggers it → the corruption is in the **struct-field storage**.
+> - **Site:** `Code.field` (lib/code.loft:133-135): `in_type = self.definitions[self.cur_def ?? 0].typedef;
+>   self.types[in_type].type_fields += [Field {{…}}]`. Under the flip `self.definitions[…]` / `self.types[…]`
+>   are `Optional`-wrapped element reads; a store/ref goes bad and corrupts the def/type tables (a write to
+>   wrong memory — hence SIGSEGV later, and the corrupt value `0x0001_0001_0001_0001` = four u16=1 packed).
+> - **Ruled out (isolated probes all PASS under the flip):** narrow (u16) field READ of an Optional element
+>   (`toks[i].line ?? 0`); scalar field WRITE (`defs[i].typedef = tp`, adjacent field intact); vector-field
+>   APPEND of an Optional element (`defs[i].fields += [v]`). So it is EMERGENT — a deps/store-lifetime
+>   corruption in the full context (loft's #1 weakness), not a simple width bug.
+> - **NEXT (focused deps investigation):** matrix-first on the STORE — LOFT_LOG=ref_debug / a debug build to
+>   name opcode 206 + the exact corrupting write; likely a dangling/wrong DbRef from an Optional-wrapped
+>   `v[i]` element whose store-lifetime the deps pass mishandles. Fix at the deps chokepoint (OWNERSHIP_MODEL.md),
+>   then re-run wrap dir/last/parser_debug/wasm_dir + loft_suite under the flip. This is the real Step-2 blocker.
 
 **Step 3 — audience_crystal library** — 🟡 PARTIAL (`cc7cb722`). Finish the remaining `-> integer`
 accessor discharges (read bodies by hand past the mis-attributed line numbers), then measure the rest

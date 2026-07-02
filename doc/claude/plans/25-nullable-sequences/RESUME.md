@@ -69,12 +69,17 @@ back; a `?? <variant>` fallback LEAKS (proven). gate-OFF safe (wrap dir/last/par
 loft_suite 5/5); lib/code.loft + lib/parser.loft compile 0 rejects under the flip. **⚠️ BUT clearing
 the casts UNMASKED a DEEPER runtime corruption:** under the flip the loft-in-loft compiler produces a
 GARBAGE token position ("Expected : on :281479271743489" at lib/lexer.loft:476) — a SILENT wrong-value
-(NOT a compile reject; lexer/parser/code all compile clean). The corrupt value (~2^48+2^32) smells like
-an Optional-wrapped NARROW-INT (u16 position) read at the wrong width, or a v[i] carrying the OOB
-sentinel into a position. **NEXT = a focused DEBUG session** to trace which v[i]/narrow read corrupts
-(delicate self-hosting; LOFT_LOG/bisect the loft-in-loft run on a minimal doc test), then html_wasm +
-runtime_warnings (`?? 0.0`) + loft_suite, THEN Step 6 (flip gate + retire VectorIndex/TextIndex warning
-+ graduate 25-index-nullable.loft + 102 reject twin). Detail: [index-f1a-landing.md](index-f1a-landing.md) § PROGRESS.
+(it's a MEMORY corruption — the debugger SIGSEGVs, opcode 206). **DEBUG SESSION DONE (localized, not fixed):**
+minimal repro `parse("s","struct S {x:integer}"); parse("shape","enum Shape {Circle {radius:float}}")` under
+`LOFT_INDEX_DEV=1`. Trigger SHARP = a struct WITH A FIELD (empty struct + plain fn are clean). Site =
+`Code.field` (lib/code.loft:133-135): `in_type = self.definitions[cur_def ?? 0].typedef; self.types[in_type]
+.type_fields += [Field]` — Optional-wrapped element reads corrupt the def/type tables (0x0001_0001_0001_0001 =
+four u16=1 packed). EMERGENT deps/store bug — isolated probes (narrow-field read, scalar-field write,
+vector-field append of an Optional element) ALL PASS; only the full context corrupts (loft's #1 weakness).
+**NEXT = focused matrix-first on the STORE** (LOFT_LOG=ref_debug / debug build to name opcode 206 + the
+corrupting write; likely a dangling DbRef from an Optional-wrapped v[i] element the deps pass mishandles;
+fix at the deps chokepoint per OWNERSHIP_MODEL.md), then wrap/loft_suite, then html_wasm + runtime_warnings
+(`?? 0.0`), THEN Step 6. Full detail: [index-f1a-landing.md](index-f1a-landing.md) § DEBUG FINDINGS.
 
 **✅ INDEX F1a Step 1 (copy-elision `Optional`-peel) DONE** — `use_analysis` borrower filter now peels
 `.base()` before reading deps, so a mutated/escaping `e = v[i]: Item?` KEEPS the copy (was a SILENT
