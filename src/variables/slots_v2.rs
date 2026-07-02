@@ -70,6 +70,12 @@ pub struct SlotAssignment {
 /// `Inline`.
 pub fn slot_kind(tp: &Type) -> SlotKind {
     match tp {
+        // @PLN25 slice (c): `Optional(τ)` shares `τ`'s storage (same size/align per
+        // `size`/`align`), so it MUST carry `τ`'s slot kind. Missing this mis-classified a
+        // heap-backed `text?`/`vector?` local as `Inline` — losing its drop opcode, which in
+        // turn left its live interval un-extended so the allocator coalesced two live
+        // nullable locals onto one slot (interp read the wiped slot back empty).
+        Type::Optional(inner) => slot_kind(inner),
         Type::Text(_)
         | Type::Reference(_, _)
         | Type::Vector(_, _)

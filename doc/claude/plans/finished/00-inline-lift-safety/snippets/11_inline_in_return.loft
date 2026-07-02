@@ -1,7 +1,7 @@
 // Variant 11 — Phase 2a shape: inline struct-returning call in a
 // `return expr` statement.
 
-struct Inner { n: integer not null }
+struct Inner { n: integer }
 struct Container { items: vector<Inner> }
 
 fn first_inner(c: Container) -> Inner {

@@ -16,8 +16,8 @@
 //
 // Expected: PASS on both backends.
 
-struct P { tag: integer not null }
-struct Canvas { data: vector<integer>, w: integer not null }
+struct P { tag: integer }
+struct Canvas { data: vector<integer>, w: integer }
 
 fn fill_canvas(cv: &Canvas, p: P) {
   cv.data = [];

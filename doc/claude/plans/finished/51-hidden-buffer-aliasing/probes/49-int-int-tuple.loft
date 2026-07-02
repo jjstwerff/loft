@@ -5,7 +5,7 @@
 // and element_align match the storage values: group-based layout and
 // simple-packer layout yield identical positions/sizes.
 
-struct P { tag: integer not null }
+struct P { tag: integer }
 
 fn split_ii(p: P) -> (integer, integer) {
   (p.tag, p.tag * 100)

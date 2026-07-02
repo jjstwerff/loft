@@ -5,7 +5,7 @@
 // backends.  The NRVO collapse now redirects the inner call to deliver into the
 // fn's return buffer directly (no orphan), for the immediate `t = f(); t` shape
 // AND the `t = f(); t += …; t` merge shape (`game_items()`/`game_monsters()`).
-struct Def { a: integer not null, name: text }
+struct Def { a: integer, name: text }
 
 fn base() -> vector<Def> { t: vector<Def> = []; t += [Def { a: 1, name: "b" }]; t }
 fn bun() -> vector<Def> { t: vector<Def> = []; t += [Def { a: 3, name: "u" }]; t }

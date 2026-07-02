@@ -8,7 +8,7 @@
 // one record per key, so feed it distinct keys.
 
 struct Word {
-  text: text not null,
+  text: text,
   count: integer,
 }
 

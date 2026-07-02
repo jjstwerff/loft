@@ -88,7 +88,7 @@ pub struct Code {
   cur_def: i32?,
   // not null: `255` is a meaningful sentinel ("no current arg"), not the
   // null-encoding — a nullable `u8` would reject `255` (its usable range is 0..=254).
-  cur_arg: u8 not null
+  cur_arg: u8
 }
 
 pub fn get_type(self: Code, name: text) -> u16 {
@@ -122,7 +122,7 @@ pub fn define(self: Code, public: boolean, name: text, tp: Structure, file: u16,
 }
 
 pub fn set_type(self: Code, tp: u16) {
-  self.definitions[self.cur_def].typedef = tp;
+  self.definitions[self.cur_def ?? 0].typedef = tp;
 }
 
 pub fn finish_define(self: Code) {
@@ -131,18 +131,18 @@ pub fn finish_define(self: Code) {
 }
 
 pub fn field(self: Code, name: text, tp: u16) {
-  in_type = self.definitions[self.cur_def].typedef;
+  in_type = self.definitions[self.cur_def ?? 0].typedef;
   self.types[in_type].type_fields +=[Field {name: name, typedef: tp }];
 }
 
 pub fn argument(self: Code, name: text, tp: u16) {
-  self.cur_arg = (self.definitions[self.cur_def].variables.len() & 255) as u8;
-  self.definitions[self.cur_def].variables +=[Variable {name: name, nr: self.cur_arg, typedef: tp }];
+  self.cur_arg = (self.definitions[self.cur_def ?? 0].variables.len() & 255) as u8;
+  self.definitions[self.cur_def ?? 0].variables +=[Variable {name: name, nr: self.cur_arg, typedef: tp }];
 }
 
 pub fn int_value(self: Code, v: integer) {
   if self.cur_arg < 255 {
-    self.definitions[self.cur_def].variables[self.cur_arg].default +=[Integer {v: v }];
+    self.definitions[self.cur_def ?? 0].variables[self.cur_arg].default +=[Integer {v: v }];
   } else {
     self.code +=[Integer {v: v }];
   }
@@ -150,7 +150,7 @@ pub fn int_value(self: Code, v: integer) {
 
 pub fn enum_value(self: Code, tp: u16, v: u8) {
   if self.cur_arg < 255 {
-    self.definitions[self.cur_def].variables[self.cur_arg].default +=[EnumValue {v: v, typedef: tp }];
+    self.definitions[self.cur_def ?? 0].variables[self.cur_arg].default +=[EnumValue {v: v, typedef: tp }];
   } else {
     self.code +=[EnumValue {v: v, typedef: tp }];
   }
@@ -158,7 +158,7 @@ pub fn enum_value(self: Code, tp: u16, v: u8) {
 
 pub fn long_value(self: Code, v: integer) {
   if self.cur_arg < 255 {
-    self.definitions[self.cur_def].variables[self.cur_arg].default +=[Long {v: v }];
+    self.definitions[self.cur_def ?? 0].variables[self.cur_arg].default +=[Long {v: v }];
   } else {
     self.code +=[Long {v: v }];
   }
@@ -166,7 +166,7 @@ pub fn long_value(self: Code, v: integer) {
 
 pub fn float_value(self: Code, v: float) {
   if self.cur_arg < 255 {
-    self.definitions[self.cur_def].variables[self.cur_arg].default +=[Float {v: v }];
+    self.definitions[self.cur_def ?? 0].variables[self.cur_arg].default +=[Float {v: v }];
   } else {
     self.code +=[Float {v: v }];
   }
@@ -174,7 +174,7 @@ pub fn float_value(self: Code, v: float) {
 
 pub fn single_value(self: Code, v: single) {
   if self.cur_arg < 255 {
-    self.definitions[self.cur_def].variables[self.cur_arg].default +=[Single {v: v }];
+    self.definitions[self.cur_def ?? 0].variables[self.cur_arg].default +=[Single {v: v }];
   } else {
     self.code +=[Single {v: v }];
   }
@@ -182,7 +182,7 @@ pub fn single_value(self: Code, v: single) {
 
 pub fn text_value(self: Code, v: text) {
   if self.cur_arg < 255 {
-    self.definitions[self.cur_def].variables[self.cur_arg].default +=[Text {v: v }];
+    self.definitions[self.cur_def ?? 0].variables[self.cur_arg].default +=[Text {v: v }];
   } else {
     self.code +=[Text {v: v }];
   }
@@ -190,7 +190,7 @@ pub fn text_value(self: Code, v: text) {
 
 pub fn boolean_value(self: Code, v: boolean) {
   if self.cur_arg < 255 {
-    self.definitions[self.cur_def].variables[self.cur_arg].default +=[Boolean {v: v }];
+    self.definitions[self.cur_def ?? 0].variables[self.cur_arg].default +=[Boolean {v: v }];
   } else {
     self.code +=[Boolean {v: v }];
   }
@@ -198,7 +198,7 @@ pub fn boolean_value(self: Code, v: boolean) {
 
 pub fn null_value(self: Code, v: boolean) {
   if self.cur_arg < 255 {
-    self.definitions[self.cur_def].variables[self.cur_arg].default +=[Boolean {v: v }];
+    self.definitions[self.cur_def ?? 0].variables[self.cur_arg].default +=[Boolean {v: v }];
   } else {
     self.code +=[Boolean {v: v }];
   }
@@ -206,14 +206,14 @@ pub fn null_value(self: Code, v: boolean) {
 
 pub fn call_fn(self: Code, to: text, parameters: u8) {
   if self.cur_arg < 255 {
-    self.definitions[self.cur_def].variables[self.cur_arg].default +=[CallFn {to: to, parameters: parameters }];
+    self.definitions[self.cur_def ?? 0].variables[self.cur_arg].default +=[CallFn {to: to, parameters: parameters }];
   }
   self.code +=[CallFn {to: to, parameters: parameters }];
 }
 
 pub fn id(self: Code, name: text) {
   if self.cur_arg < 255 {
-    self.definitions[self.cur_def].variables[self.cur_arg].default +=[Id {name: name }];
+    self.definitions[self.cur_def ?? 0].variables[self.cur_arg].default +=[Id {name: name }];
   } else {
     self.code +=[Id {name: name }];
   }
@@ -223,26 +223,38 @@ pub fn add_block(self: Code, id: text) {
   self.code +=[Block {length: 0, id: id }];
 }
 
+// @PLN25 index flip — `self.blocks[len-1]` and `self.code[b]` are nullable (computed
+// indices). Discharge the block-stack top (`?? 0`) and GUARD the code access with
+// `if b < len(self.code)`: the guard proves `self.code[b]` in-bounds → non-null → the
+// `as Block` downcast works AND `bl` stays a mutable borrow so the field writes below
+// still write back (a `?? default` fallback would leak). The guard is always true here
+// (the top block always points at a live code slot).
 pub fn end_block(self: Code, tp: u16) {
-  b = self.blocks[self.blocks.len() - 1];
-  bl = self.code[b] as Block;
-  bl.length = ((self.code.len() - b) & 65535) as u16;
-  bl.into = tp;
+  b = self.blocks[self.blocks.len() - 1] ?? 0;
+  if b < len(self.code) {
+    bl = self.code[b] as Block;
+    bl.length = ((self.code.len() - b) & 65535) as u16;
+    bl.into = tp;
+  }
   self.blocks.remove(-1);
 }
 
 pub fn else_if(self: Code) {
-  b = self.blocks[self.blocks.len() - 1];
-  i = self.code[b] as If;
-  i.yes = ((self.code.len() - b) & 65535) as u16;
+  b = self.blocks[self.blocks.len() - 1] ?? 0;
+  if b < len(self.code) {
+    i = self.code[b] as If;
+    i.yes = ((self.code.len() - b) & 65535) as u16;
+  }
 }
 
 pub fn end_if(self: Code, tp: u16) {
-  b = self.blocks[self.blocks.len() - 1];
-  i = self.code[b] as If;
-  y = i.yes;
-  i.no = ((self.code.len() - y) & 65535) as u16;
-  i.into = tp;
+  b = self.blocks[self.blocks.len() - 1] ?? 0;
+  if b < len(self.code) {
+    i = self.code[b] as If;
+    y = i.yes;
+    i.no = ((self.code.len() - y) & 65535) as u16;
+    i.into = tp;
+  }
   self.blocks.remove(-1);
 }
 
@@ -251,9 +263,11 @@ pub fn add_loop(self: Code, id: text) {
 }
 
 pub fn end_loop(self: Code) {
-  b = self.blocks[self.blocks.len() - 1];
-  l = self.code[b] as Loop;
-  l.length = ((self.code.len() - b) & 65535) as u16;
+  b = self.blocks[self.blocks.len() - 1] ?? 0;
+  if b < len(self.code) {
+    l = self.code[b] as Loop;
+    l.length = ((self.code.len() - b) & 65535) as u16;
+  }
   self.blocks.remove(-1);
 }
 

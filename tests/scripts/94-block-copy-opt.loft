@@ -3,8 +3,8 @@
 // Regression tests for block copy optimizations O-B1 and O-B2.
 
 struct BcPoint {
-  x: float not null,
-  y: float not null
+  x: float,
+  y: float
 }
 
 struct BcRect {

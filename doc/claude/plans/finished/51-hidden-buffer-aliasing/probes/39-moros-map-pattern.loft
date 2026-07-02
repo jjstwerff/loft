@@ -30,19 +30,19 @@
 // the actual two-level nesting.
 
 struct Hex {
-  h_height:        integer not null,
-  h_material:      integer not null,
-  h_item:          integer not null,
-  h_item_rotation: integer not null,
-  h_wall_n:        integer not null,
-  h_wall_ne:       integer not null,
-  h_wall_se:       integer not null,
+  h_height:        integer,
+  h_material:      integer,
+  h_item:          integer,
+  h_item_rotation: integer,
+  h_wall_n:        integer,
+  h_wall_ne:       integer,
+  h_wall_se:       integer,
 }
 
 struct Chunk {
-  ck_cx:    integer not null,
-  ck_cy:    integer not null,
-  ck_cz:    integer not null,
+  ck_cx:    integer,
+  ck_cy:    integer,
+  ck_cz:    integer,
   ck_hexes: vector<Hex>,
 }
 

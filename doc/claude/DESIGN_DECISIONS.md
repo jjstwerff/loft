@@ -1836,3 +1836,51 @@ A **real consumer** hits a concrete wall that primitives-plus-`match` cannot rea
 e.g. a genuine need for pluggable auth or automatic TLS certificate management in a shipping loft
 program. Bring that consumer's use case as the evidence; scope the *specific* piece it needs (auth,
 or TLS, or static serving) as its own addition, not the whole framework at once.
+## C85 — Overflow arithmetic types NON-null; the game keeps running (don't force `integer?` on every `*`/`+`/`-`)
+
+**Catalogue:** @F38 (arithmetic safety), @F1 (null model). Refines [C80](#c80--the-spreadsheet-fault-model-nothing-stops-a-running-calculation) and the @PLN25 `(N-Div)`/`(N-Arith)` rules (formal/types.md § DN3).
+
+### Question
+
+@PLN25/DN3 types a fit-failing op as `τ?` so an un-discharged null can't reach a non-null
+slot: `a / b` and `v[i]` are `integer?`, forcing a `?? d` / guard / `τ?` declaration. Integer
+overflow (`a*b`, `a+b`, `a-b` exceeding i64) is *also* a fit-failing op — per C80 it yields
+`null` at runtime. So should `a * b` type `integer?` too, i.e. should EVERY multiply/add/subtract
+return a nullable integer?
+
+### Evaluation
+
+**No.** Consistency argues yes, but it's the wrong call — the deciding factor is *fault
+reachability vs. op frequency*, and overflow is the one place they're badly mismatched:
+
+- **The fault is extraordinary.** i64 overflow needs both operands near 3×10⁹. Division-by-zero,
+  out-of-bounds index, and bad parse happen with *everyday* values; `a*b` overflow essentially
+  never does in normal code. `τ?`'s ergonomic cost is worth paying only for reachable faults.
+- **The op is ubiquitous.** `*`/`+`/`-` are in nearly every arithmetic expression. `integer?`
+  would propagate through *all* of them — `x = a*b + c*d` becomes nullable, every accumulator and
+  loop needs `??`. It poisons the common path to guard a case that ~never fires. Division/index
+  are far rarer, so their `τ?` doesn't metastasize.
+- **Traps are OFF the table** (a firm maker rule): a running program NEVER halts because a
+  calculation faulted — a player does not want the game to stop because the compiler decided
+  stopping was better than continuing (C80, the spreadsheet). So overflow → `null` + continue,
+  never a trap and never a silent two's-complement wrap (which would be a wrong value, violating
+  C80's honesty).
+- **Range-tracking keeps the safe cases exact for free** — `u8*u8` (→ 40000), `i32*i32` (fits
+  i64), `limit(...)`-bounded operands are provably-fit → non-null. Only the default
+  `integer*integer` is even in question.
+
+The residual is a bounded soundness edge: a non-null `integer` result of `*`/`+`/`-` may hold the
+overflow sentinel in the extraordinary overflow case — exactly parallel to a non-null `float`
+holding `NaN`/`inf` from float ops. `?` is for *declared* absence; an overflow is an *exceptional
+arithmetic result*, not a declared nullable. The `?? d` escape still works opt-in for code that
+genuinely runs in the extraordinary regime (`(a*b) ?? d` fires on the sentinel).
+
+### Decision
+
+`a*b` / `a+b` / `a-b` type **non-null** `integer` (range-tracking narrows the provably-fit cases).
+Overflow yields the `null` sentinel at runtime and execution continues (C80) — no trap, no wrap.
+This is a **deliberate exception** to DN3's "fit-failing ops yield `τ?`": that rule stays for the
+*reachable-fault* ops (`/`, `%`, `v[i]`, `s[i]`, and text→int **parse**, which SHOULD be `τ?`);
+overflow-arith is a decided edge, not a deviation to close. Forcing nullability on every
+arithmetic operation would be consistency at the expense of good taste — and, given no traps, it
+would make the compiler block a game over a fault its player will never hit.

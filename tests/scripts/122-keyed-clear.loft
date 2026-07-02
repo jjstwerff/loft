@@ -12,9 +12,9 @@
 // store is freed.  Re-populating after a clear must still work (the
 // self-dep stays, so `+=` re-inits in place).
 
-struct Item { k: integer not null }
-struct HRec { ck: integer not null, v: integer not null }
-struct IRec { n: integer not null }
+struct Item { k: integer }
+struct HRec { ck: integer, v: integer }
+struct IRec { n: integer }
 
 fn main() {
   // --- sorted: populate, clear, re-populate ---

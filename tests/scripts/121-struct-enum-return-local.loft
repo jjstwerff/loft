@@ -17,7 +17,7 @@
 // codegen limitation, out of scope here.
 
 enum IntE { A { v: integer }, B { w: integer } }
-enum FloatE { F { v: float not null }, G { s: text } }
+enum FloatE { F { v: float }, G { s: text } }
 enum SingleE { S { v: integer } }
 
 // tail-expression local return (the biting form)

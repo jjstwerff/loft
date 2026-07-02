@@ -33,7 +33,7 @@ struct Cont { m: V }
 struct Scalar { n: integer }
 struct SCont { m: Scalar }
 
-fn mk(n: integer not null) -> V {
+fn mk(n: integer) -> V {
   v: vector<integer> = [];
   for j in 0..n { v += [j]; }
   V{a: v}

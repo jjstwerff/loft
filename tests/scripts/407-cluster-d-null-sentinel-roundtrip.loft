@@ -20,16 +20,16 @@
 
 struct S      { x: integer }
 enum Shape    { Circle { r: integer }, Square { s: integer } }  // value enum (heap)
-struct FullU8 { x: integer limit(0, 255) }
-struct FullI8 { x: integer limit(-128, 127) }
+struct FullU8 { x: integer limit(0, 255)? }
+struct FullI8 { x: integer limit(-128, 127)? }
 
 // scalar return-null encoders
-fn n_int()    -> integer   { return null; }
-fn n_float()  -> float     { return null; }
-fn n_single() -> single    { return null; }
-fn n_bool()   -> boolean   { return null; }
-fn n_char()   -> character { return null; }   // the E0308 regression cell
-fn n_text()   -> text      { return null; }
+fn n_int()    -> integer?   { return null; }
+fn n_float()  -> float?     { return null; }
+fn n_single() -> single?    { return null; }
+fn n_bool()   -> boolean?   { return null; }
+fn n_char()   -> character? { return null; }   // the E0308 regression cell
+fn n_text()   -> text?      { return null; }
 
 // heap-ref return-null encoders (DbRef::NULL on both backends)
 fn n_struct(c: boolean) -> S               { if c { S { x: 1 } } else { null } }
@@ -37,7 +37,7 @@ fn n_vec(c: boolean)    -> vector<integer> { if c { [1, 2] } else { null } }
 fn n_enumv(c: boolean)  -> Shape           { if c { Circle { r: 3 } } else { null } }
 
 // character null in an if-branch (write_typed_null's Character arm)
-fn pick_char(c: boolean) -> character { if c { 'a' } else { null } }
+fn pick_char(c: boolean) -> character? { if c { 'a' } else { null } }
 
 fn main() {
   // scalars: null round-trips, real value is not swallowed

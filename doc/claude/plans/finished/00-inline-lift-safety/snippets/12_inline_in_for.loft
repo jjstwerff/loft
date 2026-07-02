@@ -8,7 +8,7 @@
 // it; if the lift happens via a different codegen path, we find
 // a new site to audit.
 
-struct Inner { n: integer not null }
+struct Inner { n: integer }
 struct Container { items: vector<Inner> }
 
 fn items_of(c: Container) -> vector<Inner> {

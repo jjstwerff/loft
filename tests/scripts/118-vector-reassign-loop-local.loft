@@ -11,7 +11,7 @@
 // AND struct element types, with indexed reads (the shape that
 // surfaced the bug in projector.loft::pick_centers).
 
-struct Pt { x: integer not null, y: integer not null }
+struct Pt { x: integer, y: integer }
 
 fn main() {
   // --- integer vector: rebuild-from-loop-local, read by index. ---

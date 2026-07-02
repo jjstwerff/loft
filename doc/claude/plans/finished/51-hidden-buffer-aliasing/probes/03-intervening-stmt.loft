@@ -25,9 +25,9 @@
 //
 // Status: known broken.  Same root mechanism as probe 02.
 
-struct P { tag: integer not null }
-struct Q { tag: integer not null }
-struct Canvas { data: vector<integer>, w: integer not null }
+struct P { tag: integer }
+struct Q { tag: integer }
+struct Canvas { data: vector<integer>, w: integer }
 
 fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
   cv = Canvas { data: [], w: w };

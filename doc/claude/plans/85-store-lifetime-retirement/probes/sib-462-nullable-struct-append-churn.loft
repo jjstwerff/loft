@@ -1,6 +1,6 @@
 // SIBLING of #462 — nullable-element struct append WITH interleaved churn to force
 // slot reuse minimally (the #462 mechanism is stale-DbRef-after-slot-reuse).
-struct Big { a: integer not null, b: text, c: integer not null, d: text }
+struct Big { a: integer, b: text, c: integer, d: text }
 fn mk(src: Big, i: integer) -> Big { Big { a: i, b: src.b, c: src.c + i, d: src.d } }
 fn churn(k: integer) -> integer { b: vector<u8> = [0]; for i in 0..k { b += [1]; } return len(b); }
 fn peek(v: vector<Big>, i: integer) -> Big { v[i] ?? v[0] }

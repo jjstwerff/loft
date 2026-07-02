@@ -14,9 +14,9 @@
 // a fresh vector<Pair> → wrap → `{w:j}`.  Pulling any step apart already
 // worked; this is the combination that corrupted.
 
-struct Pair { q: integer not null, r: integer not null, kind: u8 not null, direction: u8 not null }
+struct Pair { q: integer, r: integer, kind: u8, direction: u8 }
 struct Bag { items: hash<Pair[q, r]> }
-struct Wrapper { version: integer not null, name: text not null, items: vector<Pair> }
+struct Wrapper { version: integer, name: text, items: vector<Pair> }
 
 fn main() {
   bag = Bag { items: [] };

@@ -900,6 +900,9 @@ pub(super) fn default_native_value(tp: &Type) -> String {
         // @PLN17: a boolean's null default is the 255 sentinel (storage form u8).
         Type::Boolean => "255u8".into(),
         Type::Text(_) => "Str::new(loft::state::STRING_NULL)".into(),
+        // @PLN25 slice (c): `Optional(τ)` has `τ`'s native default (a `text?` null is the
+        // `Str` sentinel, exactly like `text`) — without this it fell to the `0` catch-all.
+        Type::Optional(inner) => default_native_value(inner),
         Type::Routine(_) => "0_u32".into(),
         Type::Function(_, _, _) => "(0_u32, DbRef::NULL)".into(),
         Type::Reference(_, _)
@@ -2523,6 +2526,17 @@ extern crate loft;"
         bare_io: &[(u16, BareIo)],
         bare_emitted: &mut [bool],
     ) -> std::io::Result<()> {
+        // @PLN25 — an `Optional(τ)` field carries its nullability in the wrapper;
+        // peel it so the type-dispatch below sees the base type, and fold the
+        // wrapper into `nullable` so a nullable NARROW int (`x: u8?` /
+        // `integer limit(..)?`) takes the `db.byte`/`db.short`/`db.int` path (correct
+        // 1/2/4-byte storage width) instead of falling through to an 8-byte type
+        // ref. Without this the struct sized to 8 bytes on native (but 2 on interp),
+        // so a `vector<struct>` appended elements at 8-byte stride while reads used
+        // the 2-byte access stride → every element past index 0 read back null. Inert
+        // gate-OFF (no `Optional` is ever constructed, so `.base()` is a no-op).
+        let nullable = nullable || matches!(typedef, Type::Optional(_));
+        let typedef = typedef.base();
         if let Type::Vector(c, _) = typedef {
             // when the element `Type::Integer` carries a
             // `forced_size` annotation that `vector_narrow_width`
@@ -2677,13 +2691,19 @@ extern crate loft;"
                     &format!("db.byte({min}, {nullable})"),
                 )?;
             } else if field_size == 2 {
-                emit_db_field(
-                    w,
-                    s_var,
-                    field_name,
-                    "short",
-                    &format!("db.short({min}, {nullable})"),
-                )?;
+                // Match the ONE width→op home (`NarrowIntKind::of(2, nullable, false)`): a
+                // NULLABLE 2-byte field is `db.short` (the `+1` sentinel encoding), a NON-null
+                // one is `db.short_raw` (direct — the `ShortFull` write is `OpSetShortRaw`).
+                // Using `db.short` for a non-null field made the schema READ (`ShowDb`/to_json/
+                // store round-trip) apply the `+1` shift the direct write never did → a non-null
+                // `u16` field read back off-by-one / `i32::MIN` (interp fixed in typedef.rs; this
+                // is the native db-setup twin).
+                let (label, ctor) = if nullable {
+                    ("short", format!("db.short({min}, {nullable})"))
+                } else {
+                    ("short_raw", format!("db.short_raw({min}, {nullable})"))
+                };
+                emit_db_field(w, s_var, field_name, label, &ctor)?;
             } else if field_size == 4 {
                 emit_db_field(
                     w,

@@ -121,9 +121,15 @@ pub fn type_to_json(ty: &Type) -> String {
 
 fn write_type(out: &mut String, ty: &Type) {
     match ty {
-        // @PLN25 Optional is compile-time only (same layout as its base) — peel for now;
-        // the schema gains an explicit nullable marker when DN1/DN3 actually produce it.
-        Type::Optional(inner) => write_type(out, inner),
+        // @PLN25 — `Optional(τ)` shares its base's LAYOUT but carries the nullability that
+        // DN1 type-checking depends on, so the schema PRESERVES it (a peel would round-trip
+        // `integer?` back to a non-null `integer`). The `inner` is never itself `Optional`
+        // (`Type::optional` is idempotent, N-Idem).
+        Type::Optional(inner) => {
+            out.push_str("{\"k\":\"Optional\",\"inner\":");
+            write_type(out, inner);
+            out.push('}');
+        }
         Type::Unknown(n) => {
             let _ = write!(out, "{{\"k\":\"Unknown\",\"n\":{n}}}");
         }
@@ -385,6 +391,8 @@ fn type_from_parsed(p: &Parsed) -> Result<Type, TypeDecodeError> {
         ),
         "Reference" => Type::Reference(as_u32(field(p, "n")?)?, deps(field(p, "dep")?)?),
         "RefVar" => Type::RefVar(Box::new(type_from_parsed(field(p, "t")?)?)),
+        // @PLN25 — preserve the nullable marker (write side pairs it under "inner").
+        "Optional" => Type::Optional(Box::new(type_from_parsed(field(p, "inner")?)?)),
         "Vector" => Type::Vector(
             Box::new(type_from_parsed(field(p, "t")?)?),
             deps(field(p, "dep")?)?,

@@ -1,4 +1,4 @@
-struct E { hp: integer not null, name: text }
+struct E { hp: integer, name: text }
 enum Cell { Empty, Filled { items: vector<E> } }
 fn deliver(e: Cell) -> vector<E> { match e { Filled { items } => { o: vector<E> = []; o += items; o }, _ => { [] } } }
 fn main() {

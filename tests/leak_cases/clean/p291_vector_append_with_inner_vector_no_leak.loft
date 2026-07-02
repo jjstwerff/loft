@@ -1,6 +1,6 @@
-struct Cell { c_color: u8 not null, c_height: u8 not null, c_age: u16 not null }
-struct Chunk { ck_cx: integer not null, ck_cz: integer not null, ck_cells: vector<Cell> }
-struct World { chunks: vector<Chunk>, tick: integer not null }
+struct Cell { c_color: u8, c_height: u8, c_age: u16 }
+struct Chunk { ck_cx: integer, ck_cz: integer, ck_cells: vector<Cell> }
+struct World { chunks: vector<Chunk>, tick: integer }
 fn cell_empty() -> Cell { Cell{c_color: 0, c_height: 0, c_age: 0} }
 fn build_chunk(cx: integer, cz: integer) -> Chunk {
   cs: vector<Cell> = [];

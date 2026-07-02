@@ -59,6 +59,42 @@ fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> Arc<Mutex<String>> {
     buf
 }
 
+/// @PLN25 / registry-republish gate (same as the multiplayer harnesses): the
+/// viewer `use`s REGISTRY packages (web).  A registry copy predating the DN1
+/// null model rejects at compile time, so the viewer can never listen and the
+/// smoke would burn its 240s timeout on a known, documented condition (the
+/// loft-libs-net republish, @PLN25 task #4).  Probe with `--dump` (compile
+/// only) and SKIP loudly when the failure lies inside the registry copy; an
+/// in-tree failure still runs (and fails) the smoke.  Self-healing after the
+/// republish.
+fn registry_predates_dn1() -> bool {
+    let out = Command::new(loft_bin())
+        .arg("--dump")
+        .arg("--lib")
+        .arg(project_root().join("lib"))
+        .arg(project_root().join("tools/viewer/src/main.loft"))
+        .current_dir(project_root())
+        .output();
+    let Ok(out) = out else { return false };
+    if out.status.success() {
+        return false;
+    }
+    let err = String::from_utf8_lossy(&out.stderr);
+    if err.contains("/.loft/registry/") {
+        eprintln!(
+            "SKIP viewer smoke: the installed registry package predates the DN1 null \
+             model (awaiting the web/server republish — @PLN25 task #4):\n{}",
+            err.lines()
+                .filter(|l| l.contains("/.loft/registry/"))
+                .take(2)
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        return true;
+    }
+    false
+}
+
 struct ViewerGuard {
     child: Option<Child>,
     stderr: Arc<Mutex<String>>,
@@ -160,6 +196,9 @@ fn http_get(path: &str, port: u16) -> String {
 /// and the viewer once env var support lands.
 #[test]
 fn markdown_renderer_pins_high_impact_features() {
+    if registry_predates_dn1() {
+        return;
+    }
     // Skip when the binary isn't built (e.g. fresh clone).  The
     // dev workflow `cargo test --release` builds the bin first.
     if !loft_bin().exists() {

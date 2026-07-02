@@ -2,7 +2,7 @@
 // non-null.  Expected CLEAN — the `??` is the intended mechanism to
 // discharge nullability.
 
-fn p07_with_default(x: integer) -> integer not null {
+fn p07_with_default(x: integer) -> integer {
   x ?? 0
 }
 

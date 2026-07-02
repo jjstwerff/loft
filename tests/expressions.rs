@@ -38,17 +38,22 @@ fn call_with_null() {
 
 #[test]
 fn call_text_null() {
-    code!("fn routine(a: integer) -> text { if a > 2 { return null }; \"#{a}#\"}")
+    // @PLN25 DN1 — a fn that can `return null` must declare a nullable result `text?`
+    // (returning null into a non-null `text` is now an `(N-Store)` error); the call
+    // then types `Optional(Text)` and still yields null at runtime.
+    code!("fn routine(a: integer) -> text? { if a > 2 { return null }; \"#{a}#\"}")
         .expr("routine(5)")
-        .tp(Type::Text(loft::data::Deps::none()))
+        .tp(Type::optional(Type::Text(loft::data::Deps::none())))
         .result(Value::Null);
 }
 
 #[test]
 fn call_int_null() {
-    code!("fn routine(a: integer) -> integer { if a > 2 { return null }; a+1 }")
+    // @PLN25 DN1 — `return null` requires a nullable result `integer?`; the call types
+    // `Optional(Integer)` and still yields null at runtime.
+    code!("fn routine(a: integer) -> integer? { if a > 2 { return null }; a+1 }")
         .expr("routine(5)")
-        .tp(INTEGER)
+        .tp(Type::optional(INTEGER))
         .result(Value::Null);
 }
 
@@ -1168,9 +1173,11 @@ fn bounded_operator_self_return_type() {
 #[test]
 fn bounded_mixed_type_operator() {
     code!(
+        // @PLN25 DN3 — `self.value / divisor` types `integer?` (a variable divisor can be
+        // 0); discharge with `?? 0` so the `op / -> integer` body returns a non-null value.
         "interface Divisible { op / (self: Self, divisor: integer) -> integer }
          struct Score { value: integer }
-         fn OpDiv(self: Score, divisor: integer) -> integer { self.value / divisor }
+         fn OpDiv(self: Score, divisor: integer) -> integer { self.value / divisor ?? 0 }
          fn halve<T: Divisible>(v: T, n: integer) -> integer { v / n }"
     )
     .expr("halve(Score{value:42}, 6)")
@@ -1185,9 +1192,10 @@ fn bounded_mixed_type_operator() {
 #[test]
 fn bounded_unary_operator() {
     code!(
+        // @PLN25 DN3 — `self.value % modulus` types `integer?`; discharge with `?? 0`.
         "interface Modular { op % (self: Self, modulus: integer) -> integer }
          struct Score { value: integer }
-         fn OpRem(self: Score, modulus: integer) -> integer { self.value % modulus }
+         fn OpRem(self: Score, modulus: integer) -> integer { self.value % modulus ?? 0 }
          fn mod_measure<T: Modular>(v: T, m: integer) -> integer { v % m }"
     )
     .expr("mod_measure(Score{value:42}, 10)")

@@ -16,11 +16,11 @@
 // needs a real fix (extend the lock filter to collect vars from
 // field-access expressions, or similar).
 
-struct Inner { n: integer not null }
+struct Inner { n: integer }
 struct Bucket { items: vector<Inner> }
 struct Holder {
   b:        Bucket,
-  sentinel: integer not null,
+  sentinel: integer,
 }
 
 // Owned return (fresh Inner), mutates the `&Bucket` arg.

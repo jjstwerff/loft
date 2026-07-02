@@ -11,7 +11,7 @@
 // mismatch corrupted enum-discriminant reads on BOTH backends.  Fixed by routing both
 // resolvers through ONE home (`typedef::nullable_vector_elem`).  This guard READS the
 // fields (no append) so it stays leak-free; the @P377 append-leak is a separate issue.
-enum CV { CN, CI { value: integer not null }, CM { entries: vector<Entry> } }
+enum CV { CN, CI { value: integer }, CM { entries: vector<Entry> } }
 struct Entry { key: CV, value: CV }
 
 fn val(c: CV) -> integer { match c { CN => 0, CI { value } => value, CM { entries } => 99, } }

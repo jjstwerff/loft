@@ -9,7 +9,7 @@
 // alias must reach the caller's struct, reads through both the alias and the
 // original must agree, and the alias must be forwardable as a `&ref` argument.
 
-struct Foo { a: integer not null, b: integer not null }
+struct Foo { a: integer, b: integer }
 
 // write through the alias reaches the caller's record
 fn set_a(s: &Foo) { snap = s; snap.a = 7; }

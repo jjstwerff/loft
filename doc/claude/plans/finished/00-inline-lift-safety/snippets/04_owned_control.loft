@@ -9,7 +9,7 @@
 // we expect THIS one to say `-> Inner` (no `["x"]` suffix) because
 // the return depends on nothing in the arg list.
 
-struct Inner { n: integer not null }
+struct Inner { n: integer }
 
 fn make_inner(x: integer) -> Inner {
   Inner { n: x }

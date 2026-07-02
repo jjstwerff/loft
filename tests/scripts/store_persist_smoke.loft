@@ -13,8 +13,8 @@
 // round-trip.
 
 struct Entry {
-  key: integer not null,
-  value: integer not null,
+  key: integer,
+  value: integer,
 }
 
 fn record_keys(h: hash<Entry[key]>) -> text {

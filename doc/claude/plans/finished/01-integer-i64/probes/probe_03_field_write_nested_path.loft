@@ -2,7 +2,7 @@
 // whether nested field paths get the same enforcement as direct ones.
 
 struct P03B {
-  v: integer not null,
+  v: integer,
 }
 
 struct P03A {

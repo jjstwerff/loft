@@ -7,7 +7,7 @@
 // Different from probe 19 (struct wrapping single call) — multiple calls
 // nested inside a collection literal.
 
-struct Canvas { data: vector<integer>, w: integer not null }
+struct Canvas { data: vector<integer>, w: integer }
 
 fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
   cv = Canvas { data: [], w: w };

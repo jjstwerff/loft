@@ -1,0 +1,68 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN25 index-flip F1a Step 1 — copy-elision correctness when a vector index
+// `v[i]` types `Item?` (the DN1 index flip, `LOFT_INDEX_DEV=1`). A nullable
+// element borrower (`e = v[i]`) must still be recognised as borrowing the vector
+// so a MUTATED / ESCAPING borrower KEEPS the copy (value semantics) while a
+// read-only borrower elides and reads the live element.
+//
+// The bug this guards: `Optional` is a compile-time nullability marker, but the
+// deps machinery (`Type::depend`) did not peel it, so an `Item?` borrower's dep
+// was invisible — the copy-vs-borrow classifier missed a mutated/escaping
+// borrower, wrongly elided the copy, and the mutation LEAKED to the source (a
+// SILENT wrong-answer, not a compile error). Fixed by peeling `.base()` before
+// reading the borrower's deps in `use_analysis`.
+//
+// Runs gate-OFF as a normal elision test (byte-identical — no `Optional` exists);
+// under `LOFT_INDEX_DEV=1` it exercises the `Item?` borrower path. Both backends,
+// no leak. See plans/25-nullable-sequences/index-f1a-landing.md § Step 1.
+
+struct Item { v: integer }
+struct G { c: vector<Item> }
+
+// (1) read-only element borrower — ELIDES and reads the live element (== 90).
+fn read_elem(g: G, i: integer) -> integer {
+  xs = g.c;
+  e = xs[i];
+  e.v
+}
+
+// (2) mutated borrower — must KEEP COPY: `e.v = 99` hits the discarded snapshot,
+// so the source stays 50. A wrongly-elided copy would leak the write (return 99).
+fn mut_elem(g: G, i: integer) -> integer {
+  xs = g.c;
+  e = xs[i];
+  e.v = 99;
+  g.c[i].v
+}
+
+// (3) escaping borrower — must KEEP COPY (the returned view must not alias the
+// source). Declared `-> Item?` so it compiles under the flip (an OOB `v[i]` is
+// nullable); discharged below.
+fn esc_elem(g: G, i: integer) -> Item? {
+  xs = g.c;
+  e = xs[i];
+  e
+}
+
+// read-only borrower used AFTER intervening work + a second borrower of the same
+// source (stresses that the read-only elide path reads the right element).
+fn read_late(g: G, i: integer) -> integer {
+  xs = g.c;
+  e = xs[i];
+  other = xs[0];
+  other.v + e.v
+}
+
+fn main() {
+  g = G { c: [Item { v: 50 }, Item { v: 90 }] };
+  assert(read_elem(g, 1) == 90, "read-only element borrow reads the live element");
+  assert(mut_elem(g, 0) == 50, "mutated borrower keeps copy semantics (source unchanged)");
+  esc = esc_elem(g, 1) ?? Item { v: 0 };
+  assert(esc.v == 90, "escaping borrower yields the element value");
+  assert(read_late(g, 1) == 140, "late read-only borrow: other(50)+e(90)=140");
+  assert(g.c[0].v == 50, "source element 0 intact");
+  assert(g.c[1].v == 90, "source element 1 intact");
+  println("index-elision-borrower ok");
+}

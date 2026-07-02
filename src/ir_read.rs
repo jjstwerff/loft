@@ -254,6 +254,13 @@ pub fn read_type(stores: &Stores, slot: Record) -> Type {
             stores,
             slot.field_recvec(ds::TYTUPLE_ELEMS, ds::TYPET_STRIDE),
         )),
+        // @PLN25 — the `τ?` marker (a box-of-one child, like RefVar). `Type::optional`
+        // is the idempotent former (N-Idem); a real in-memory `Optional` never wraps
+        // Never/Null, so this reconstructs the written type exactly.
+        TypeKind::Optional => Type::optional(read_type_child(
+            stores,
+            slot.field_recvec(ds::TYOPTIONAL_INNER, ds::TYPET_STRIDE),
+        )),
         TypeKind::Other(d) => panic!("ir_read: unknown TypeT discriminant {d}"),
     }
 }
@@ -1457,6 +1464,52 @@ mod tests {
             "cap must survive the store round-trip"
         );
         crate::ir_schema::compare_data(&fresh, &loaded).expect("round-trip equal incl. cap");
+    }
+
+    /// @PLN25 — the `Optional` (`τ?`) nullability marker survives the store round-trip.
+    /// Before the `TyOptional` codec variant, `write_type` peeled the wrapper (persisting
+    /// `Optional(Integer)` as bare `Integer`), so a reloaded nullable type silently lost
+    /// its N-Store contract — the root of the `*_round_trip` failures once F1b(b) put
+    /// `integer?` overloads in the stdlib.
+    #[cfg(feature = "mmap")]
+    #[test]
+    fn optional_type_survives_store_round_trip() {
+        use crate::data::{Data, Type};
+
+        let mut p = crate::parser::Parser::new();
+        p.parse_dir("default", true, false).expect("parse stdlib");
+        let src = "fn optret() -> integer? { null }\n";
+        let lpath = std::env::temp_dir().join(format!("loft_opt_rt_{}.loft", std::process::id()));
+        std::fs::write(&lpath, src).unwrap();
+        p.parse(lpath.to_str().unwrap(), false);
+        let _ = std::fs::remove_file(&lpath);
+
+        let nr = p.data.def_nr("n_optret");
+        assert!(
+            p.data.def(nr).returned.peel_optional().1,
+            "sanity: `integer?` return parses as Optional under DN1"
+        );
+
+        let fresh = p.data;
+        let spath = std::env::temp_dir().join(format!("loft_opt_rt_{}.store", std::process::id()));
+        let spath_str = spath.to_str().unwrap();
+        fresh.save(spath_str).expect("Data::save");
+        let loaded = Data::open(spath_str).expect("Data::open");
+        let _ = std::fs::remove_file(&spath);
+
+        let (base, is_opt) = loaded
+            .def(loaded.def_nr("n_optret"))
+            .returned
+            .peel_optional();
+        assert!(
+            is_opt,
+            "the `Optional` marker must survive the store round-trip (was dropped pre-TyOptional)"
+        );
+        assert!(
+            matches!(base, Type::Integer(_)),
+            "base type preserved through the round-trip"
+        );
+        crate::ir_schema::compare_data(&fresh, &loaded).expect("round-trip equal incl. Optional");
     }
 
     /// @PLN86 F8b — a member's `group#right` capability links survive the store

@@ -2,9 +2,9 @@
 // variable-sourced, struct appended to a vector. Tests whether #412 closed only
 // the Enum arm or the whole deep-copy family (vector field, sub-struct field,
 // nested collection). Control = direct (non-vector) read for each.
-struct HasVec { id: integer not null, data: vector<integer> }
-struct Inner { a: integer not null }
-struct HasStruct { id: integer not null, inner: Inner }
+struct HasVec { id: integer, data: vector<integer> }
+struct Inner { a: integer }
+struct HasStruct { id: integer, inner: Inner }
 fn main() {
   // (1) struct with a VECTOR field, appended to a vector
   hv = HasVec { id: 9, data: [10, 20, 30] };

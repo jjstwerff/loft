@@ -623,6 +623,12 @@ impl Parser {
         let mut t = tp.clone();
         let mut p = Value::Null;
         self.un_ref(&mut t, &mut p);
+        // @PLN25 — index/slice dispatch peels an `Optional` receiver (`s: text?;
+        // s[i]`, `s[a..b]`) to its base, mirroring method dispatch which already
+        // peels (`s.starts_with(..)` works on a `text?`). Inert gate-OFF: no
+        // `Optional` is ever constructed, so `.base()` is a no-op. A null-check
+        // discharges the value; indexing the null sentinel behaves as gate-OFF.
+        t = t.base().clone();
         let mut elm_type = self.index_type(&t);
         for on in t.depend() {
             elm_type = elm_type.depending(on);
@@ -651,6 +657,15 @@ impl Parser {
             self.expr_not_null_name.clear();
             if let Some(value) = iter_value {
                 return value;
+            }
+            // @PLN25 DN3 (index): a scalar `v[i]` read is nullable (OOB → the null sentinel) unless
+            // the index is provably in-bounds (`parse_vector_index` set `last_index_fit` from a
+            // constant / for-loop iter var / `if idx < len(v)` guard). Wrap the element type
+            // `Optional` so `(N-Store)` forces a `?? d` / `τ?` slot / guard at the store site.
+            // The F1a landing (deps Optional-transparency + the corpus/lib migrations) cleared the
+            // blast radius, so this is now folded into the DN1 default (was DEV-GATED `LOFT_INDEX_DEV`).
+            if crate::keys::pln25_dn1_enabled() && !self.last_index_fit {
+                elm_type = Type::optional(elm_type);
             }
         } else if matches!(t, Type::Text(_)) {
             let index_t = if self.lexer.peek_token("..") {
@@ -719,6 +734,39 @@ impl Parser {
         elm_type
     }
 
+    /// @PLN25 DN3 (index) — is a vector index provably in-bounds, so `v[i]` cannot be OOB-null?
+    /// True for a non-negative constant literal (the developer typed it), or a for-loop iteration
+    /// variable (`for i in <range> { v[i] }` — the loop's bound is the contract). Everything else
+    /// (a general var, a computed index) can overrun → the read types `τ?`. Mirrors the pass-2
+    /// warning walk's skip patterns 2/3; the `i < len(v)` guard (pattern 5) is added separately.
+    fn index_provably_fit(&self, index: &Value, vec: &Value) -> bool {
+        // A compile-time-constant index — positive OR negative (`v[-1]` is the Python-style
+        // last-element idiom; `-1` lowers to a negation, so use `const_int`, not a literal match)
+        // — is the developer's explicit contract: trust it, exactly as the runtime does (a genuine
+        // overrun still raises the recoverable OOB fault). A variable index carries no such
+        // contract, so it stays `τ?` unless proven fit below.
+        if self.const_int(index).is_some() {
+            return true;
+        }
+        match index.unspan() {
+            Value::Var(v) => {
+                // A for-loop iteration variable (`for i in <range> { v[i] }`) — the vars system
+                // already tracks the active loop stack, so no separate parse-time stack is needed.
+                if self.vars.is_active_loop_var(*v) {
+                    return true;
+                }
+                // An `if idx < len(vec) { vec[idx] }` guard proved the (idx, vec) pair in-bounds
+                // for this branch — match `v` AND the indexed vector's `VecKey`.
+                crate::parser::operators::vec_key(vec, &self.data).is_some_and(|vk| {
+                    self.index_bounded
+                        .iter()
+                        .any(|(iv, ik)| *iv == *v && *ik == vk)
+                })
+            }
+            _ => false,
+        }
+    }
+
     pub(crate) fn index_type(&mut self, t: &Type) -> Type {
         if let Type::Vector(v_t, _) = t {
             *v_t.clone()
@@ -779,9 +827,11 @@ impl Parser {
     ) -> Option<Type> {
         let mut p = Value::Null;
         let index_t = self.parse_in_range(&mut p, code, "$");
-        // @PLN25 (N-Store): a vector index must be non-null — a nullable `τ?` index
-        // (`v[cur_def]` where `cur_def: i32?`) must be discharged first. DN3-gated.
-        self.n_store_violation(&index_t, &I32, "a vector index");
+        // @PLN25 — a nullable `τ?` INDEX is ACCEPTED (not an (N-Store) violation): `v[i]`
+        // is already `τ?` (out-of-bounds → null), so the caller must null-check the result
+        // regardless, and a null index just propagates to that null result. (N-Store) governs
+        // storing null INTO a non-null slot (decl/field/return/typed-store), not passing a
+        // nullable THROUGH an op whose result stays honestly nullable. So no rejection here.
         // Pass-1 deferral: a `vector<S>` whose element `S` is not yet registered
         // (forward-referenced or cross-package, e.g. `vector<WallDef>` indexed
         // before `WallDef` is parsed) yields `type_elm == u32::MAX`, which would
@@ -875,6 +925,11 @@ impl Parser {
             diagnostic!(self.lexer, Level::Error, "Invalid iterator expression");
             return None;
         }
+        // @PLN25 DN3 (index): decide this scalar read's element nullability. A `v[i]` is nullable
+        // (OOB → the null sentinel) UNLESS the index is provably in-bounds — a non-negative constant
+        // (the developer typed a literal), or a for-loop iteration variable (the loop's bound is the
+        // contract). `parse_index` reads this flag to wrap the element type `Optional` when unfit.
+        self.last_index_fit = self.index_provably_fit(&p, code);
         if !self.first_pass && !self.convert(&mut p, &index_t, &I32) {
             diagnostic!(
                 self.lexer,

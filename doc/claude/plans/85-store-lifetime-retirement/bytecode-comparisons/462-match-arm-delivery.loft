@@ -1,4 +1,4 @@
-struct E { hp: integer not null, name: text }
+struct E { hp: integer, name: text }
 fn e_default() -> E { E{hp:0, name:""} }
 fn filler(n: integer) -> integer { es: vector<E> = []; for j in 0..n { es += [E{hp:j, name:"e"}]; } return len(es); }
 enum Cell { Empty, Filled { items: vector<E> } }

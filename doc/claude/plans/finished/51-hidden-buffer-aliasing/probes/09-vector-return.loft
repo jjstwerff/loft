@@ -18,7 +18,7 @@
 // `v = []` line.  If `v` is null initially (work-ref's typical state),
 // the free is a no-op.  No corruption expected.
 
-struct P { tag: integer not null }
+struct P { tag: integer }
 
 fn make_vec(p: P) -> vector<integer> {
   v: vector<integer> = [];

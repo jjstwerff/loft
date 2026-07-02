@@ -1,4 +1,4 @@
-struct E { hp: integer not null, name: text }
+struct E { hp: integer, name: text }
 enum Two { A, B }
 fn f(t: Two) -> vector<E> { match t { A => { [E{hp:1, name:"a"}] }, B => { [E{hp:2, name:"b"}, E{hp:3, name:"c"}] } } }
 fn churn(n: integer) -> integer { es: vector<E> = []; for j in 0..n { es += [E{hp:j, name:"e"}]; } return len(es); }

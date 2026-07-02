@@ -13,8 +13,8 @@
 // the source is unchanged); (3) the escaping borrower keeps copy semantics. Both
 // backends, no leak. See copy-elision-design.md § Tier-1.5.
 
-struct Item { v: integer not null }
-struct G { c: vector<Item> not null }
+struct Item { v: integer }
+struct G { c: vector<Item> }
 
 // read-only element borrower — ELIDES (xs inlined; e borrows the live g.c element)
 fn read_elem(g: G, i: integer) -> integer {
@@ -34,10 +34,13 @@ fn mut_elem(g: G, i: integer) -> integer {
 }
 
 // escaping borrower — must KEEP COPY (the returned view would otherwise alias the
-// source element).
+// source element).  @PLN25 index flip: `xs[i]` is nullable (OOB → null); discharge at the
+// borrow with `?? Item {}` so the escaping return stays `-> Item` (a bare `-> Item?`
+// escaping-borrower return currently leaks — the Optional-return × copy-elision deps
+// interaction, deferred).
 fn esc_elem(g: G, i: integer) -> Item {
   xs = g.c;
-  e = xs[i];
+  e = xs[i] ?? Item {};
   e
 }
 

@@ -463,8 +463,10 @@ impl Output<'_> {
                 // ops::to_char() because the template expects a `char`, not `i32`.
                 if matches!(a.typedef, Type::Character)
                     && let Value::Var(n) = vals[a_nr]
+                    // @PLN25 — `.base()` so a `character?` local (`Optional(Character)`,
+                    // e.g. `cif = if c { 'a' } else { null }; cif == null`) also wraps.
                     && matches!(
-                        self.data.def(self.def_nr).variables().tp(n),
+                        self.data.def(self.def_nr).variables().tp(n).base(),
                         Type::Character
                     )
                 {
@@ -484,7 +486,8 @@ impl Output<'_> {
                     && let Type::Tuple(elems) = self.data.def(self.def_nr).variables().tp(*v)
                     && elems
                         .get(*idx as usize)
-                        .is_some_and(|e| matches!(e, Type::Character))
+                        // @PLN25 — `.base()` so an `Optional(Character)` tuple element wraps too.
+                        .is_some_and(|e| matches!(e.base(), Type::Character))
                 {
                     let inner = self.generate_expr_buf(&vals[a_nr])?;
                     res = res.replace(&name, &format!("(ops::to_char({inner}))"));
@@ -492,9 +495,12 @@ impl Output<'_> {
                 }
                 // For character-typed parameters, a call returning character yields `i32`
                 // (due to the `as u32 as i32` auto-cast), so wrap with ops::to_char().
-                if matches!(a.typedef, Type::Character)
+                // @PLN25 — `.base()` so a `character?`-returning call (`Optional(Character)`,
+                // e.g. `pick_char(..) == null`) also gets the wrap; without it the
+                // `OpConvIntFromCharacter` template compares `i32 == char::from(0)` → E0308.
+                if matches!(a.typedef.base(), Type::Character)
                     && let Value::Call(d, _) = vals[a_nr].unspan()
-                    && matches!(self.data.def(*d).returned(), Type::Character)
+                    && matches!(self.data.def(*d).returned().base(), Type::Character)
                 {
                     let inner = self.generate_expr_buf(&vals[a_nr])?;
                     res = res.replace(&name, &format!("(ops::to_char({inner}))"));
@@ -514,7 +520,8 @@ impl Output<'_> {
                 // produces `i32` even though loft types it `Character`.
                 if matches!(a.typedef, Type::Character)
                     && let Value::Block(b) = vals[a_nr].unspan()
-                    && matches!(b.result, Type::Character)
+                    // @PLN25 — `.base()` so a block whose result is `Optional(Character)` wraps too.
+                    && matches!(b.result.base(), Type::Character)
                 {
                     let inner = self.generate_expr_buf(&vals[a_nr])?;
                     res = res.replace(&name, &format!("(ops::to_char({inner}))"));

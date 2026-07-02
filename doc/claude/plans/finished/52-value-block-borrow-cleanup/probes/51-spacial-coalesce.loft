@@ -14,7 +14,7 @@
 // Pairing: 22, 41, 50 — completes the keyed-collection IV matrix.
 // Status: cluster IV completion probe (4th of 4 keyed-collection types).
 
-struct Point { name: text, x: float not null, y: float not null }
+struct Point { name: text, x: float, y: float }
 struct W { points: spacial<Point[name]> }
 
 fn fb() -> spacial<Point[name]> {

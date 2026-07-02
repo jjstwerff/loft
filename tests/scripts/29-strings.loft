@@ -63,19 +63,19 @@ fn test_call() {
 
 fn test_work_loop() {
   a = 0;
-  for t in 1..4 { a += "0{t}0" as integer }
+  for t in 1..4 { a += "0{t}0" as integer ?? 0 }
   assert(a == 60, "work loop");
 }
 
 fn test_loop_variable() {
   a = 0;
-  for _t in 1..5 { b = "123"; a += b as integer; if a > 200 { break; } }
+  for _t in 1..5 { b = "123"; a += b as integer ?? 0; if a > 200 { break; } }
   assert(a == 246, "loop variable");
 }
 
 fn res() -> integer {
   a = 0;
-  for _t in 1..5 { b = "123"; a += b as integer; if a > 200 { return a; } }
+  for _t in 1..5 { b = "123"; a += b as integer ?? 0; if a > 200 { return a; } }
   0
 }
 
@@ -125,7 +125,7 @@ fn test_string_scope() {
       t += "2";
     }
     b += t + " ";
-    a += t as integer;
+    a += t as integer ?? 0;
   }
   assert("{a} via {b}" == "136 via n:1=1 n:2=12 n:3=122 ", "string scope");
 }

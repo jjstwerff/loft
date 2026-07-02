@@ -13,7 +13,7 @@
 // See doc/claude/plans/25-nullable-sequences/materialization-algorithm-design.md
 // (the copy oracle) and use-analysis-prework-design.md.
 
-struct Grid { cells: vector<integer> not null, edges: vector<integer> not null }
+struct Grid { cells: vector<integer>, edges: vector<integer> }
 
 // ── SAFE shapes (analysis verdict: Borrow) — copy-form ≡ borrow-form ──────────
 

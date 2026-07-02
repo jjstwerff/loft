@@ -3,11 +3,11 @@
 // is "two calls in one assert" or "two calls in any format-string
 // context".
 
-struct Inner { n: integer not null }
+struct Inner { n: integer }
 struct Container { items: vector<Inner> }
 struct Holder {
   c:        Container,
-  sentinel: integer not null,
+  sentinel: integer,
 }
 
 fn first_or_empty(c: Container, idx: integer) -> Inner {

@@ -14,20 +14,20 @@
 // Runs on all three backends via the tests/scripts sweep (interp + native +
 // wasm) with the store-leak gate, so a copy/remove leak fails here too.
 
-struct ItemT { name: text not null, n: integer not null }
-struct EntK  { k: integer not null, name: text not null }
-struct HEnt  { k: text not null, v: integer not null }
+struct ItemT { name: text, n: integer }
+struct EntK  { k: integer, name: text }
+struct HEnt  { k: text, v: integer }
 
 // Each container kind as a struct field, copied via a fn round-trip (copy_claims)
 // then dropped via reassignment (remove_claims).
-struct VBox { items: vector<ItemT> not null }
-struct HBox { by: hash<HEnt[k]> not null }
-struct SBox { s: sorted<EntK[k]> not null }
-struct IBox { i: index<EntK[k]> not null, s: sorted<EntK[k]> not null }
-struct MBox { label: text not null, nums: vector<integer> not null, by: hash<HEnt[k]> not null }
+struct VBox { items: vector<ItemT> }
+struct HBox { by: hash<HEnt[k]> }
+struct SBox { s: sorted<EntK[k]> }
+struct IBox { i: index<EntK[k]>, s: sorted<EntK[k]> }
+struct MBox { label: text, nums: vector<integer>, by: hash<HEnt[k]> }
 
 enum Maybe { Has { s: text }, Gone { n: integer } }
-struct EBox { items: vector<Maybe> not null }
+struct EBox { items: vector<Maybe> }
 
 fn id_v(b: VBox) -> VBox { return b; }
 fn id_h(b: HBox) -> HBox { return b; }

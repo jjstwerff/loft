@@ -1,0 +1,202 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+
+//! @PLN25 DN1 read-consumption regression (both backends).
+//!
+//! Exercises the `text?` READ-consumption paths surfaced by the web `try_recv`
+//! consumer sweep — method call, single char-index, open-range slice, and format
+//! interpolation on a nullable text after a null-check. Under `LOFT_PLN25_DN1=1`
+//! the value is `Optional(Text)` and each read must peel to its base (the parser
+//! index/format peels + the native `&str` borrow peel). The output must match the
+//! gate-OFF run of the same script byte-for-byte, on BOTH the interpreter and the
+//! `--native` backend.
+//!
+//! The gate-OFF path is covered by the normal script sweep (the file self-asserts
+//! `total == 246`); this binary drives the gate-ON path a subprocess at a time so
+//! the `LOFT_PLN25_DN1` `OnceLock` starts fresh for each run.
+
+use std::process::Command;
+
+fn loft_bin() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_BIN_EXE_loft"))
+}
+
+fn workspace_root() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+}
+
+fn run_dn1(backend: &str) -> String {
+    let script = workspace_root().join("tests/scripts/25-nullable-read-consumption.loft");
+    let out = Command::new(loft_bin())
+        .arg(backend)
+        .arg(&script)
+        .current_dir(workspace_root())
+        .env("LOFT_PLN25_DN1", "1")
+        // rustc can hang on the native path; bound it (0 = off is the default).
+        .env("LOFT_TIMEOUT", "180")
+        .output()
+        .expect("failed to invoke loft binary");
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "DN1 {backend} run failed (exit {:?}); stdout={stdout:?}; stderr={stderr:?}",
+        out.status.code()
+    );
+    stdout
+}
+
+/// The expected output — identical across gate-OFF/DN1 × interpret/native.
+const EXPECTED: &str =
+    "frame MAP:hello\nframe MAP:hello\nframe MAP:hello\nnull fmt: null\ntotal=246\n";
+
+#[test]
+fn dn1_text_read_consumption_interpret() {
+    let stdout = run_dn1("--interpret");
+    assert_eq!(
+        stdout, EXPECTED,
+        "DN1 interpret output must match the gate-OFF byte-identical baseline"
+    );
+}
+
+#[test]
+fn dn1_text_read_consumption_native() {
+    let stdout = run_dn1("--native");
+    assert_eq!(
+        stdout, EXPECTED,
+        "DN1 native output must match the gate-OFF byte-identical baseline"
+    );
+}
+
+/// Run a self-asserting script under `LOFT_PLN25_DN1=1` and require a clean exit
+/// (exit 0 = every internal `assert` passed). Used for the scripts whose value is
+/// their own asserts rather than a stdout signature.
+fn dn1_script_exits_zero(backend: &str, rel_path: &str) {
+    let script = workspace_root().join(rel_path);
+    let out = Command::new(loft_bin())
+        .arg(backend)
+        .arg(&script)
+        .current_dir(workspace_root())
+        .env("LOFT_PLN25_DN1", "1")
+        .env("LOFT_TIMEOUT", "180")
+        .output()
+        .expect("failed to invoke loft binary");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "DN1 {backend} {rel_path} failed (exit {:?}); stdout={stdout:?}; stderr={stderr:?}",
+        out.status.code()
+    );
+}
+
+/// @PLN25 scalar-nullable-vector-element slice: `vector<τ?>` for a scalar τ must
+/// store/read/iterate the typed-sentinel null under DN1, on both backends. These
+/// scripts self-assert; the flagship + three-state-boolean were previously blocked
+/// on this slice and now go green.
+const DN1_SVEC_SCRIPTS: &[&str] = &[
+    "tests/scripts/25-nullable-vector-scalar-element.loft",
+    "tests/scripts/25-nullable-sequences.loft",
+    "tests/scripts/292-pln17-three-state-boolean.loft",
+    // @PLN25 `character?` native null-sentinel wrap (Call / Var / Block / TupleGet).
+    "tests/scripts/25-nullable-character.loft",
+    // @PLN25 full-range nullable narrow-int FIELD in a vector<struct> (native
+    // struct-size / element-stride) — the previously native-blocked 389-h6 + 407.
+    "tests/scripts/25-nullable-narrow-field-vector.loft",
+    "tests/scripts/389-h6-nullable-full-range-narrow.loft",
+    "tests/scripts/407-cluster-d-null-sentinel-roundtrip.loft",
+];
+
+#[test]
+fn dn1_scalar_vector_element_interpret() {
+    for s in DN1_SVEC_SCRIPTS {
+        dn1_script_exits_zero("--interpret", s);
+    }
+}
+
+#[test]
+fn dn1_scalar_vector_element_native() {
+    for s in DN1_SVEC_SCRIPTS {
+        dn1_script_exits_zero("--native", s);
+    }
+}
+
+/// Run a self-asserting script under `LOFT_INDEX_DEV=1` (the index-flip dev gate;
+/// DN1 is default-on, so the gate constructs `Optional` element types for a
+/// not-provably-fit `v[i]`) and require a clean exit. Used for the index-flip
+/// F1a slices whose value is their own asserts.
+fn index_dev_script_exits_zero(backend: &str, rel_path: &str) {
+    let script = workspace_root().join(rel_path);
+    let out = Command::new(loft_bin())
+        .arg(backend)
+        .arg(&script)
+        .current_dir(workspace_root())
+        .env("LOFT_INDEX_DEV", "1")
+        .env("LOFT_TIMEOUT", "180")
+        .output()
+        .expect("failed to invoke loft binary");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "index-flip {backend} {rel_path} failed (exit {:?}); stdout={stdout:?}; stderr={stderr:?}",
+        out.status.code()
+    );
+}
+
+/// @PLN25 index-flip F1a Step 1 — copy-elision must peel `Optional` when reading a
+/// nullable element borrower's deps, so a mutated/escaping `e = v[i]` (typing
+/// `Item?`) KEEPS the copy instead of silently leaking the mutation to the source.
+/// Guards the silent copy-elision wrong-answer on both backends.
+#[test]
+fn index_dev_elision_borrower_interpret() {
+    index_dev_script_exits_zero(
+        "--interpret",
+        "tests/scripts/25-index-elision-borrower.loft",
+    );
+}
+
+#[test]
+fn index_dev_elision_borrower_native() {
+    index_dev_script_exits_zero("--native", "tests/scripts/25-index-elision-borrower.loft");
+}
+
+/// @PLN25 DN6-adjacent — the `change_var` message for a `null` ↔ non-null-scalar local
+/// must name the real fix (`integer?`) and NEVER suggest `as` (which would launder null
+/// into the non-null slot — the DN5 hole). Regression for the fixed diagnostic.
+#[test]
+fn dn1_null_local_message_names_optional_not_as() {
+    let dir = std::env::temp_dir();
+    let src = dir.join("pln25_null_local_msg.loft");
+    std::fs::write(&src, "fn t() { a: integer = null; }\nfn main() { }\n")
+        .expect("write temp source");
+    let out = Command::new(loft_bin())
+        .arg("--interpret")
+        .arg(&src)
+        .current_dir(workspace_root())
+        .env("LOFT_PLN25_DN1", "1")
+        .output()
+        .expect("failed to invoke loft binary");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "`a: integer = null` must be rejected under DN1; stderr={stderr:?}"
+    );
+    assert!(
+        stderr.contains("declare it `integer?`"),
+        "message must name the `integer?` fix; got: {stderr:?}"
+    );
+    // Must not be the generic type-mismatch message. Guard BOTH tells additively:
+    // its phrasing ("use a new variable name") AND — the actual DN5 hazard — that it
+    // never SUGGESTS an `as` cast. The suggestion form is the connector "or cast with"
+    // ("… or cast with 'as'"); our helpful message says "do NOT cast with `as`", which
+    // is a prohibition and correctly does not contain "or cast with".
+    assert!(
+        !stderr.contains("use a new variable name"),
+        "message must be the nullability-specific one, not the generic mismatch; got: {stderr:?}"
+    );
+    assert!(
+        !stderr.contains("or cast with"),
+        "message must NOT suggest an `as` cast (the DN5 laundering hole); got: {stderr:?}"
+    );
+}

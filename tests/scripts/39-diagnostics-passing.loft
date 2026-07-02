@@ -42,7 +42,7 @@ fn test_all_paths_return_if_else() {
   assert(pe_classify_int(5) == 1, "ok");
 }
 
-fn pe_always() -> integer not null {
+fn pe_always() -> integer {
   return 42;
 }
 
@@ -50,7 +50,7 @@ fn test_direct_return_not_null() {
   assert(pe_always() == 42, "ok");
 }
 
-fn pe_dbl(n: integer) -> integer not null {
+fn pe_dbl(n: integer) -> integer {
   n * 2
 }
 

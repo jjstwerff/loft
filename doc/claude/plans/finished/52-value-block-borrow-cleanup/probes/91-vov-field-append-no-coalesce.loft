@@ -24,7 +24,7 @@
 // Pairing: 21 (same shape + ??), 92 (local var instead of struct field), 93 (primitive inner).
 // Status: cluster IV-Vec-nested-field-push baseline.
 
-struct Inner { tag: integer not null }
+struct Inner { tag: integer }
 struct Outer { lists: vector<vector<Inner>> }
 
 fn main() {

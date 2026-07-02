@@ -1,4 +1,4 @@
-struct M { hp: integer not null, depth: integer not null, name: text }
+struct M { hp: integer, depth: integer, name: text }
 struct Inner { rows: vector<M> }
 struct Outer { inner: Inner }
 fn m_none() -> M { M{hp:0,depth:0,name:""} }

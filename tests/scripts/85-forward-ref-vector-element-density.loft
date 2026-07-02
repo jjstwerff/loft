@@ -18,8 +18,8 @@
 // `Reference(S)`, resolved with S later). Both backends.
 
 // Forward-referenced, recursive, DENSE element (the #465 shape).
-enum V { CNull, CInt { value: integer not null }, CMap { entries: vector<Entry> } }
-struct Entry { key: V, value: integer not null }
+enum V { CNull, CInt { value: integer }, CMap { entries: vector<Entry> } }
+struct Entry { key: V, value: integer }
 
 fn first_key(m: V) -> integer {
   match m {
@@ -30,12 +30,12 @@ fn first_key(m: V) -> integer {
 
 // Forward-referenced, DENSE struct-field element.
 struct Holder { items: vector<Item> }
-struct Item { v: integer not null }
+struct Item { v: integer }
 fn first_item(h: Holder) -> integer { h.items[0].v }
 
 // Forward-referenced, NULLABLE struct-field element (`?` carried through fwd-ref).
 struct NHolder { nitems: vector<NItem?> }
-struct NItem { v: integer not null }
+struct NItem { v: integer }
 
 fn main() {
   es: vector<Entry> = [];

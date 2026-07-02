@@ -125,7 +125,7 @@ fn main() {
   // --- String as integer via format ---
   sum_fmt = 0;
   for t in 1..4 {
-    sum_fmt += "0{t}0" as integer;
+    sum_fmt += "0{t}0" as integer ?? 0;
   }
   assert(sum_fmt == 60, "\"0{{t}}0\" as integer sum 010+020+030=60: {sum_fmt}");
   // join is the canonical method form `vec.join(sep)` — tested below under "join".

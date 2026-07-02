@@ -587,7 +587,9 @@ impl Parser {
                             current_type.clone()
                         }
                     } else {
-                        current_type.clone()
+                        // @PLN25 slice (c): peel `Optional` so a `text?` accumulator enters
+                        // the concat path (the nullable-left propagate wrap fires below).
+                        current_type.base().clone()
                     };
                     if matches!(effective_type, Type::Text(_) | Type::Character) {
                         if current_type == Type::Character {
@@ -624,6 +626,51 @@ impl Parser {
                         } else {
                             orig_var
                         };
+                        // @PLN25 slice (c): nullable LEFT accumulator (`text? + …`) PROPAGATES —
+                        // if the left is null the whole concat is null (people must be aware of
+                        // nulls, not have them silently swept into "\0"/"null"). Build the concat
+                        // into a FRESH work-text off the left, then wrap:
+                        //   if is_not_null(left) { concat } else { null } : text?
+                        // (proven equivalent to `if s==null {null} else {(s??"")+parts}`).
+                        if matches!(&current_type, Type::Optional(inner) if matches!(**inner, Type::Text(_)))
+                        {
+                            let base_text = Type::Text(crate::data::Deps::none());
+                            // The null arm must WRITE the null-text sentinel (`OpConvTextFromNull`),
+                            // not a bare `Value::Null` — for a buffer-backed return the bare null
+                            // leaves the return buffer empty and interp reads "" back instead of
+                            // null (the normal `else { null }` flow converts it the same way).
+                            let null_arm = |this: &mut Self| {
+                                let mut n = Value::Null;
+                                this.convert(&mut n, &Type::Null, &base_text);
+                                n
+                            };
+                            if matches!(code.unspan(), Value::Var(_)) {
+                                // simple var — reading twice is side-effect-free
+                                let mut is_not_null = code.clone();
+                                self.convert(&mut is_not_null, &base_text, &Type::Boolean);
+                                let mut concat = code.clone();
+                                // KEEP parse_append_text's return type — it carries the fresh
+                                // work-text's `frame1` dep, without which the text-return
+                                // conversion sees an empty work-var list and returns null.
+                                let ct =
+                                    self.parse_append_text(&mut concat, &base_text, &ls, u16::MAX);
+                                let n = null_arm(self);
+                                *code = v_if(is_not_null, concat, n);
+                                return Type::optional(ct);
+                            }
+                            // non-trivial left — materialise into a temp to avoid double-eval
+                            let tmp = self.create_unique("_nlhs", &current_type);
+                            let set_tmp = v_set(tmp, code.clone());
+                            let mut is_not_null = Value::Var(tmp);
+                            self.convert(&mut is_not_null, &base_text, &Type::Boolean);
+                            let mut concat = Value::Var(tmp);
+                            let ct = self.parse_append_text(&mut concat, &base_text, &ls, u16::MAX);
+                            let opt = Type::optional(ct);
+                            let n = null_arm(self);
+                            let if_expr = v_if(is_not_null, concat, n);
+                            *code = v_block(vec![set_tmp, if_expr], opt.clone(), "nullable_concat");
+                            return opt;
+                        }
                         return self.parse_append_text(code, &current_type, &ls, effective_orig);
                     } else if matches!(current_type, Type::Vector(_, _)) {
                         return self.parse_append_vector(code, &current_type, &ls, orig_var);
@@ -653,7 +700,10 @@ impl Parser {
                     current_type.clone()
                 }
             } else {
-                current_type.clone()
+                // @PLN25 slice (c): peel `Optional` so a nullable LEFT operand of `+`
+                // (`text?`) accumulates into the concat instead of falling to the generic
+                // operator lookup (the "No matching operator '+' on 'text?'" reject).
+                current_type.base().clone()
             };
             if operator == "+"
                 && matches!(
@@ -1622,7 +1672,7 @@ impl Parser {
     }
 
     /// The constant integer value of `code`, if it is one (literal or const-foldable).
-    fn const_int(&self, code: &Value) -> Option<i64> {
+    pub(crate) fn const_int(&self, code: &Value) -> Option<i64> {
         match code.unspan() {
             Value::Int(n) => Some(i64::from(*n)),
             Value::Long(n) => Some(*n),
@@ -1651,6 +1701,19 @@ impl Parser {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// @PLN25 DN3 — is a division/mod DIVISOR provably non-zero (so `a / v` cannot fault)?
+    /// True for a constant non-zero integer literal, or a var proven non-zero by an enclosing
+    /// `if v != 0` guard (`divisor_nonzero`). Anything else can be zero → the result is `τ?`.
+    fn divisor_provably_nonzero(&self, divisor: &Value) -> bool {
+        match divisor.unspan() {
+            Value::Int(n) => *n != 0,
+            Value::Long(n) => *n != 0,
+            Value::Var(v) => self.divisor_nonzero.contains(v),
+            _ => false,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn handle_operator(
         &mut self,
         var_tp: &Type,
@@ -1676,25 +1739,61 @@ impl Parser {
                     return Some(Type::Null);
                 };
                 let nullable_cast = self.lexer.has_token("?");
-                let narrowing = Self::is_narrowing_int(ctp, &tp);
-                // @PLAN48 P2: an explicit `as <narrow-int>` is the sanctioned way to
-                // narrow `integer` → `i32`/`u8`/… so the implicit-narrowing
-                // diagnostic in `convert` does NOT fire on an explicit cast.
+                // @PLN25 DN4/DN5 — a scalar cast target has a DOMAIN: its integer value
+                // RANGE, and (when it is a plain non-null scalar) that domain EXCLUDES null.
+                // A value fits `as τ` (no `?`) only if it lies in the domain on BOTH
+                // dimensions.  `null` is simply the reserved out-of-domain element — not a
+                // special case — so the range fit (DN4) and the nullness fit (DN5) are ONE
+                // containment test.  Peel `Optional` first so the RANGE check sees the
+                // underlying integer: a nullable source otherwise slips past
+                // `is_narrowing_int` entirely, laundering BOTH dimensions
+                // (`integer? as u8` skipped the range check AND the null check).
                 //
-                // @PLN25 DN4 (default ON; opt-out LOFT_NO_DN4) — `(N-Cast)`/`(N-Cast?)`:
-                // a narrowing cast whose value is NOT provably in range is no longer a
-                // silent 8-byte width-tag (`400 as u8 == 400`). `as τ` errors (the
-                // value may not fit — use `as τ?`); `as τ?` lowers to a range guard
-                // that yields the value if it fits, else the integer null. The fit
-                // path (and the opt-out) keep the old accept-as-width-tag.
-                if narrowing {
-                    if !self.first_pass
-                        && std::env::var_os("LOFT_NO_DN4").is_none()
-                        && !self.int_value_fits(code, &tp)
-                    {
+                // @PLAN48 P2: an explicit `as <narrow-int>` is the sanctioned way to narrow
+                // `integer` → `i32`/`u8`/…, so the implicit-narrowing diagnostic in `convert`
+                // does NOT fire on an explicit cast.  `as τ?` is the single CHECKED form: it
+                // lowers to a range guard yielding the value or the null sentinel, and (below)
+                // types as `Optional<τ>` so the laundering stays closed downstream.
+                let src_base = ctp.base().clone();
+                let src_may_be_null = matches!(ctp, Type::Optional(_) | Type::Null);
+                let narrowing = Self::is_narrowing_int(&src_base, &tp);
+                if !self.first_pass
+                    && crate::keys::pln25_dn1_enabled()
+                    && src_may_be_null
+                    && !nullable_cast
+                    && Self::is_non_null_scalar(&tp)
+                {
+                    // DN5 — the nullness dimension: a possibly-null value cast to a non-null
+                    // scalar.  (Heap targets stay nullable, so `null as SomeStruct` is legal
+                    // and never reaches here — `is_non_null_scalar` is scalar-only.)
+                    if matches!(ctp, Type::Null) {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "cannot cast `null` to the non-null `{tps}` — cast to `{tps}?` \
+                             (a typed null), or use a real value",
+                        );
+                    } else {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "cannot cast a possibly-null `{}` to the non-null `{tps}` — it may \
+                             be null; use `as {tps}?` for a checked cast (value or null), or \
+                             discharge first with `?? <default>`",
+                            ctp.name(&self.data),
+                        );
+                    }
+                    // Keep `tp` (the non-null target) as the result to bound the cascade.
+                } else if narrowing {
+                    // @PLN25 DN4 (F5 cutover — UNCONDITIONAL, no opt-out): a narrowing cast
+                    // whose value is NOT provably in range is a fit violation, exactly like
+                    // DN5's nullness dimension (its sibling, also unconditional). The old
+                    // `LOFT_NO_DN4` escape reverted to a SILENT 8-byte width-tag
+                    // (`400 as u8 == 400`) — the very truncation the model eliminates — so it
+                    // is retired. `as τ` errors (use `as τ?`); `as τ?` is the checked cast.
+                    if !self.first_pass && !self.int_value_fits(code, &tp) {
                         if nullable_cast {
-                            let src = ctp.clone();
-                            tp = self.dn4_checked_cast(code, &tp, &src);
+                            tp = self.dn4_checked_cast(code, &tp, &src_base);
                         } else {
                             diagnostic!(
                                 self.lexer,
@@ -1702,7 +1801,7 @@ impl Parser {
                                 "narrowing cast from {} to {tps} may not fit at runtime; \
                                  use `{tps}?` for a checked cast (value or null), or guard \
                                  the value (`?? d`, mask, or an `if` range check)",
-                                self.int_type_name(ctp),
+                                self.int_type_name(&src_base),
                             );
                         }
                     }
@@ -1725,6 +1824,28 @@ impl Parser {
                     self.last_cast_alias = alias_nr;
                 }
                 let mut rt = tp;
+                // @PLN25 — `as τ?` yields `Optional<τ>`: the checked form's domain includes
+                // null, so downstream sees a nullable and `(N-Store)` keeps the hole closed
+                // (a later `z: τ = (e as τ?)` still requires a discharge).  `base()` guards
+                // against a double-wrap from `dn4_checked_cast`.
+                if nullable_cast
+                    && crate::keys::pln25_dn1_enabled()
+                    && Self::is_non_null_scalar(rt.base())
+                {
+                    rt = Type::optional(rt.base().clone());
+                }
+                // @PLN25 DN3 — a text→numeric PARSE is fit-failing: unparseable input yields the
+                // null sentinel at runtime (C80, no trap), so the result TYPES `τ?` (like `/` and
+                // `v[i]`). A REACHABLE fault (bad user/file input), unlike overflow which is the
+                // decided edge C85. `s as integer` is `integer?` → discharge with `?? d` or
+                // declare the target `τ?`.
+                if !nullable_cast
+                    && crate::keys::pln25_dn1_enabled()
+                    && matches!(ctp, Type::Text(_))
+                    && matches!(rt.base(), Type::Integer(_) | Type::Float | Type::Single)
+                {
+                    rt = Type::optional(rt.base().clone());
+                }
                 for d in ctp.depend() {
                     rt = rt.depending(d);
                 }
@@ -1950,6 +2071,15 @@ impl Parser {
             } else {
                 (None, None, false)
             };
+            // @PLN25 DN3: integer `/` and `%` PRODUCE null at runtime on a zero divisor (the C80
+            // sentinel), so the RESULT types `τ?` UNLESS the divisor is provably non-zero — a
+            // constant non-zero literal (`a / 2`) or a var proven non-zero by an `if v != 0` guard
+            // (the `divisor_nonzero` narrowing stack). Captured HERE, before `call_op` consumes
+            // `second_code`; the `τ?` wrap is applied after the range-narrowing below. DN1-gated.
+            // Makes the type carry the null so `(N-Store)` forces `?? d` / a `τ?` slot at the store.
+            let div_nullable = (operator == "/" || operator == "%")
+                && matches!(ctp.base(), Type::Integer(_))
+                && !self.divisor_provably_nonzero(&second_code);
             *ctp = self.call_op(
                 code,
                 operator,
@@ -1985,6 +2115,9 @@ impl Parser {
                         ..*s
                     });
                 }
+            }
+            if div_nullable && crate::keys::pln25_dn1_enabled() {
+                *ctp = Type::optional(ctp.clone());
             }
             // Plan-07 phase 1, step 1.B.1 — wrap binary fault-prone
             // arithmetic ops in `Value::Span` so runtime errors
@@ -2088,7 +2221,7 @@ enum FaultKind {
 /// read COPIES post-@PLN85 #415, so the old `loc = self.v` alias trick is
 /// gone and value-correct code indexes the field directly.)
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum VecKey {
+pub(crate) enum VecKey {
     Var(u16),
     Field(u16, i32, i32),
 }
@@ -2096,7 +2229,7 @@ enum VecKey {
 /// `VecKey` of an expression used as a vector — the indexing's first arg
 /// or a `len(...)` arg.  `Some` for a bare `Var` or an
 /// `OpGetField(Var(base), Int(off), Int(tp))`; `None` otherwise.
-fn vec_key(v: &Value, data: &Data) -> Option<VecKey> {
+pub(crate) fn vec_key(v: &Value, data: &Data) -> Option<VecKey> {
     match v.unspan() {
         Value::Var(n) => Some(VecKey::Var(*n)),
         Value::Call(def_nr, args) => {
@@ -2350,6 +2483,18 @@ impl Parser {
     }
 
     fn emit_undefended_warning(&mut self, kind: FaultKind, ctx: &WarnCtx) {
+        // @PLN25 DN3: the fault ops now TYPE `τ?` — the type carries the null and `(N-Store)`
+        // forces discharge, so the runtime-null warning is redundant under DN1 (and fired
+        // inconsistently vs the `if b != 0` / `if i < len` narrowing). Division/mod flipped
+        // first; the index ops (`v[i]`/`s[i]`) are now flipped too (F1a landed), so retire all four.
+        if crate::keys::pln25_dn1_enabled()
+            && matches!(
+                kind,
+                FaultKind::Div | FaultKind::Rem | FaultKind::VectorIndex | FaultKind::TextIndex
+            )
+        {
+            return;
+        }
         let msg = match kind {
             // @P368 — wording: not "integer" (the same `/` warning covers float
             // and single division too).
@@ -2651,7 +2796,7 @@ fn guard_pair_with_ctx(
 /// like `if a < len(u) and b < len(v) { ... }`.  Caller pushes each
 /// returned pair onto `ctx.guarded_pairs` for the duration of the
 /// then-block, then pops them.
-fn collect_guard_pairs(
+pub(crate) fn collect_guard_pairs(
     cond: &Value,
     data: &Data,
     captures: &std::collections::HashMap<u16, VecKey>,

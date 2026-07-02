@@ -13,7 +13,7 @@
 //
 // Fix: `generate_block` pushes a typed null of the result when a value-typed block's
 // operators leave nothing on the eval stack — mirroring `gen_if`'s null-else arm.
-struct E { hp: integer not null, name: text }
+struct E { hp: integer, name: text }
 enum Cell { Empty, Filled { items: vector<E> } }
 
 // Empty arm SECOND (the `_` wildcard).

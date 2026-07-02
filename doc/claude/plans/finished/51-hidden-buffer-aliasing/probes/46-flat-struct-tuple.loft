@@ -20,8 +20,8 @@
 // the corruption is pure copy_block truncation: Flat2.y reads as 0
 // (uninitialised destination) instead of the source value.
 
-struct P { tag: integer not null }
-struct Flat { x: integer not null, y: integer not null }
+struct P { tag: integer }
+struct Flat { x: integer, y: integer }
 
 fn make_flat(xv: integer, yv: integer) -> Flat {
   Flat { x: xv, y: yv }

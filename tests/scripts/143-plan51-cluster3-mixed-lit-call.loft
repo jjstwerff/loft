@@ -20,9 +20,9 @@
 // Status: known broken.  Possibly same fix surface as probe 02 (extended
 // S1 / parse-time substitution for struct-literal RHS into hidden buffer).
 
-struct P { tag: integer not null }
-struct Q { tag: integer not null }
-struct Canvas { data: vector<integer>, w: integer not null }
+struct P { tag: integer }
+struct Q { tag: integer }
+struct Canvas { data: vector<integer>, w: integer }
 
 fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
   cv = Canvas { data: [], w: w };

@@ -6,5 +6,5 @@
 // package's cdylib by C-ABI (`add_native_extern_flags`); on Windows that means
 // the import-library link + DLL staging of @PLN26 phase 4.
 // Bare `#native` → symbol `n_native_answer` by convention (the fn name).
-pub fn native_answer() -> integer not null;
+pub fn native_answer() -> integer;
 #native

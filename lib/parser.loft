@@ -494,7 +494,7 @@ fn parameter(self: Parser) {
 // <type_def> ::= <identifier> [ '<' { <type_def> [ '[' { [ '-' ] <identifier> [ ',' ] } ']'] [ ',' ] } '>' ] [ 'limit' '(' { <integer> [ ',' ] } ')' ]
 
 fn type_def(self: Parser, define: boolean) -> u16 {
-  id = self.lexer.identifier();
+  id = self.lexer.identifier() ?? "";
   parameters =[];
   flds =[];
   if self.lexer.matches("<") {
@@ -502,7 +502,7 @@ fn type_def(self: Parser, define: boolean) -> u16 {
     for parameter in 0..256 {
       p = self.type_def(false);
       parameters +=[p];
-      id += self.code.type_name(p);
+      id += self.code.type_name(p) ?? "";
       if self.lexer.matches("[") {
         id += "[";
         for field in 0..256 {
@@ -511,7 +511,7 @@ fn type_def(self: Parser, define: boolean) -> u16 {
           if desc {
             f = "-";
           }
-          f += self.lexer.identifier();
+          f += self.lexer.identifier() ?? "";
           id += f;
           flds +=[f];
           if !self.lexer.matches(",") {
@@ -535,9 +535,9 @@ fn type_def(self: Parser, define: boolean) -> u16 {
   }
   if self.lexer.matches("limit") {
     self.expect("(");
-    from = self.lexer.int();
+    from = self.lexer.int() ?? 0;
     self.expect(",");
-    till = self.lexer.int();
+    till = self.lexer.int() ?? 0;
     self.expect(")");
     id += "{from}..{till}";
   }

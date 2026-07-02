@@ -9,7 +9,7 @@
 // dedup-insert idiom.  Fixed with a new `OpSetKeyed(coll, value, tp)` op
 // (find-or-insert, dedup by value's key) emitted for keyed `coll[key] =`.
 
-struct Ent { ck: integer not null, v: integer not null }
+struct Ent { ck: integer, v: integer }
 struct Bag { h: hash<Ent[ck]> }
 
 // `coll[key] = value` through a `&`-param collection.

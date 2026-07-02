@@ -14,8 +14,8 @@
 // The leak is detected by `tests/wrap.rs::run_test`'s exit-time
 // "stores not freed" gate (Canvas×9 under the loop below).
 
-struct P { a: integer not null }
-struct Canvas { data: vector<integer>, w: integer not null }
+struct P { a: integer }
+struct Canvas { data: vector<integer>, w: integer }
 
 fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
   cv = Canvas { data: [], w: w };

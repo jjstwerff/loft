@@ -694,7 +694,22 @@ pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
                     if s == 1 {
                         database.byte(minimum, field_nullable)
                     } else if s == 2 {
-                        database.short(minimum, field_nullable)
+                        // The schema Part MUST match the op the codegen chose via the ONE
+                        // width→op home (`NarrowIntKind::of(2, nullable, narrow_vec=false)`):
+                        // a NULLABLE 2-byte field is `Short` (the `+1` sentinel encoding), a
+                        // NON-null one is `ShortFull` (direct, written via `OpSetShortRaw`).
+                        // The schema READ (`ShowDb`/`to_json`/store round-trip) uses this Part,
+                        // so a non-null field MUST be `Parts::ShortRaw` (direct decode) — using
+                        // `Parts::Short` here made the read apply the `+1` shift the direct
+                        // write never did, so a non-null `u16` field read back off-by-one
+                        // (`7 → 6`) / as `i32::MIN` at the boundary, while field access (which
+                        // already uses `OpGetShortFull`) was correct.  Pre-existing for
+                        // `u16 not null`; F2 exposed it for plain `u16` (now non-null).
+                        if field_nullable {
+                            database.short(minimum, field_nullable)
+                        } else {
+                            database.short_raw(minimum, field_nullable)
+                        }
                     } else if s == 4 {
                         database.int(minimum, field_nullable)
                     } else {

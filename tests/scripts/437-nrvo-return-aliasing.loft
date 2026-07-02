@@ -22,7 +22,7 @@ fn head(major: integer, arg: integer) -> vector<u8> {
 fn blt(a: vector<u8>, b: vector<u8>) -> boolean { return (a[0] ?? 0) < (b[0] ?? 0); }
 
 // --- I-a: raw multi-arm match, every arm tail-calls a __retbuf fn ---
-enum Cia { CiaNull, CiaInt { value: integer not null } }
+enum Cia { CiaNull, CiaInt { value: integer } }
 fn encode_ia(v: Cia) -> vector<u8> {
   match v { CiaNull => head(7, 22), CiaInt { value } => head(0, value) }
 }
@@ -34,7 +34,7 @@ fn test_437_ia_raw_multiarm_match() {
 }
 
 // --- I-b: a block-bodied arm forces the match to MATERIALIZE ---
-enum Cib { CibNull, CibInt { value: integer not null }, CibBytes { value: vector<u8> } }
+enum Cib { CibNull, CibInt { value: integer }, CibBytes { value: vector<u8> } }
 fn encode_ib(v: Cib) -> vector<u8> {
   match v {
     CibNull => head(7, 22),
@@ -51,7 +51,7 @@ fn test_437_ib_materialized_match() {
 
 // --- I-c: `buf = head()` adopts the NRVO buffer; coexisting CMap encode ---
 struct Ent { k: integer, v: integer }
-enum Cic { CicInt { value: integer not null }, CicMap { entries: vector<Ent> } }
+enum Cic { CicInt { value: integer }, CicMap { entries: vector<Ent> } }
 fn encode_map_ic(entries: vector<Ent>) -> vector<u8> {
   n = len(entries);
   buf = head(5, n);

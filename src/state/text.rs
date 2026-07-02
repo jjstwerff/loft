@@ -88,6 +88,14 @@ impl State {
                 .insert(self.stack_cur.pos + self.stack_pos + size_ptr() - u32::from(pos));
         }
         let v1 = self.string_mut(pos - size_ptr() as u16);
+        // @PLN25 slice (c): a null `text?` accumulator (the STRING_NULL sentinel) IGNORES the
+        // append, so `s += x` on a null `s` stays null (propagate — nulls stay visible, never
+        // swept into "\0x"). A non-null text is never the sentinel, so this never fires for it.
+        // DN1-gated so gate-OFF (the legacy nullable model, where a plain text can still be
+        // STRING_NULL) keeps its byte-identical append behaviour.
+        if crate::keys::pln25_dn1_enabled() && v1.as_str() == super::STRING_NULL {
+            return;
+        }
         *v1 += text.str();
     }
 

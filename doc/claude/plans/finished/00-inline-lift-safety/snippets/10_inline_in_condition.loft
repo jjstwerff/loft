@@ -12,11 +12,11 @@
 // handles consistent-view callees (first_inner) but not mixed-
 // return (Phase 1b).  Run both to see which phase catches this.
 
-struct Inner { n: integer not null }
+struct Inner { n: integer }
 struct Container { items: vector<Inner> }
 struct Holder {
   c:        Container,
-  sentinel: integer not null,
+  sentinel: integer,
 }
 
 fn first_inner(c: Container) -> Inner {

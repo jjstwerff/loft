@@ -11,11 +11,11 @@
 // hidden-ref-arg mechanism for Reference returns and never emits
 // 0x8000 directly.
 
-struct Inner { n: integer not null }
+struct Inner { n: integer }
 struct Container { items: vector<Inner> }
 struct Holder {
   c:        Container,
-  sentinel: integer not null,
+  sentinel: integer,
 }
 
 fn first_or_empty(c: Container, idx: integer) -> Inner {

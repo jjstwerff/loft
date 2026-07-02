@@ -11,8 +11,8 @@
 // on BOTH backends (not in SCRIPTS_NATIVE_SKIP), so the native compile is the
 // E0503 guard.
 
-struct Sub { halo: integer not null }
-struct Bag { items: vector<integer>, sub: Sub, tag: integer not null }
+struct Sub { halo: integer }
+struct Bag { items: vector<integer>, sub: Sub, tag: integer }
 
 fn bag_push(b: &Bag, v: integer) { b.items += [v]; }   // mutates → stays `&`
 fn read_tag(b: Bag) -> integer { b.tag }

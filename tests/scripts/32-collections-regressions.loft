@@ -142,7 +142,7 @@ fn test_to_lowercase_in_format() {
 
 // ── Issue 27: self.field = null codegen ──────────────────────────────────────
 
-struct NullS { cur: integer }
+struct NullS { cur: integer? }
 
 fn ns_clear(self: NullS) { self.cur = null }
 
@@ -158,7 +158,7 @@ fn test_set_int_field_null_direct() {
   assert(s.cur == null, "expected null after direct");
 }
 
-struct NullLS { val: integer }
+struct NullLS { val: integer? }
 
 fn nls_clear(self: NullLS) { self.val = null }
 
@@ -168,7 +168,7 @@ fn test_set_long_field_null_via_ref() {
   assert(s.val == null, "expected null");
 }
 
-struct NullMS { a: integer, b: integer }
+struct NullMS { a: integer?, b: integer? }
 
 fn nms_clear(self: NullMS) { self.a = null; self.b = null; }
 

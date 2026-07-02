@@ -1,5 +1,5 @@
-struct Cell { c_color: u8 not null, c_height: u8 not null, c_age: u16 not null }
-struct Chunk { ck_cx: integer not null, ck_cz: integer not null, ck_cells: vector<Cell> }
+struct Cell { c_color: u8, c_height: u8, c_age: u16 }
+struct Chunk { ck_cx: integer, ck_cz: integer, ck_cells: vector<Cell> }
 fn build_chunk(cx: integer, cz: integer) -> Chunk {
   Chunk{ck_cx: cx, ck_cz: cz, ck_cells: []}
 }

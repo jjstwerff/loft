@@ -232,3 +232,82 @@ enum hash { Pln22A, Pln22B }
 // @EXPECT_ERROR: Expect type definitions to be in camel case style
 // @EXPECT_ERROR: conflicts with a type
 type sorted = integer;
+
+// @PLN25 DN3: integer `/` types `integer?` (the divisor may be zero → null at runtime), so an
+// UNDEFENDED result stored into a non-null return is a violation — the developer must guard
+// (`if b != 0`), discharge (`a / b ?? d`), or declare the return `integer?`. The accept twins
+// live in 25-division-nullable.loft.
+// @EXPECT_ERROR: nullable `integer?` cannot be stored
+fn test_undefended_division_into_nonnull(a: integer, b: integer) -> integer {
+  a / b
+}
+
+// @PLN25 index flip: `v[i]` types `τ?` (OOB → null) for a not-provably-fit index, so an
+// UNDEFENDED element stored into a non-null return is a violation — the developer must guard
+// (`if i < len(v)`), discharge (`v[i] ?? d`), or declare the return `integer?`. The accept twins
+// (const / iter-var / guard / `??` / honest `τ?`) live in 25-index-nullable.loft.
+// @EXPECT_ERROR: nullable `integer?` cannot be stored
+fn test_undefended_index_into_nonnull(v: vector<integer>, i: integer) -> integer {
+  v[i]
+}
+
+// @PLN25 (N-Store) tuples: a tuple stores ELEMENT-WISE, so an un-discharged `τ?` (or a
+// bare `null`) element cannot slip into a non-null element slot of a tuple RETURN (the
+// synthetic `__tuple<…>` rewrite) or a tuple FIELD. The accept twins (discharged /
+// declared-`τ?`-element / nested) live in 25-tuple-nstore.loft.
+// @EXPECT_ERROR: nullable `integer?` cannot be stored into element 0 of the return value
+fn test_tuple_return_undischarged_elem(s: text) -> (integer, integer) {
+  tr_q = s as integer;
+  (tr_q, 1)
+}
+
+// @EXPECT_ERROR: `null` cannot be stored into element 0 of the return value
+fn test_tuple_return_null_elem() -> (integer, integer) {
+  (null, 2)
+}
+
+struct TupleFieldBox { t: (integer, integer) }
+
+// @EXPECT_ERROR: nullable `integer?` cannot be stored into element 0 of the field
+fn test_tuple_field_undischarged_elem(s: text) -> integer {
+  tf_q = s as integer;
+  tf_b = TupleFieldBox { t: (tf_q, 1) };
+  tf_b.t.1
+}
+
+// @EXPECT_ERROR: cannot be stored into element 0 of element 0 of the return value
+fn test_tuple_nested_undischarged_elem(s: text) -> ((integer, integer), integer) {
+  tn_q = s as integer;
+  ((tn_q, 1), 2)
+}
+
+// @PLN25 DN6 (N-Join): the inferred null-start widen (`a = null; a = 5` ⇒ `integer?`,
+// accepted — see 25-null-join.loft) applies ONLY to an INFERRED local (`var_tp == null`
+// is the inferred marker). An ANNOTATED non-null scalar still REJECTS a stored `null` —
+// the explicit non-null contract wins; declare it `integer?` to allow null.
+// @EXPECT_ERROR: cannot hold both `null` and the non-null scalar
+fn test_annotated_nonnull_rejects_null() {
+  a: integer = null;
+  a = 5;
+  assert(a == 5, "unreached");
+}
+
+// @PLN25 DN6 soundness boundary: the widen is INLINE-scalar only. `text` is the one
+// heap-backed scalar — its Null slot cannot be retroactively widened to a text? heap-ref
+// slot — so an inferred text null-start is NOT widened; it must annotate `s: text? = null`.
+// (Guard: if `Text` were ever added to the DN6 widen set this would start ACCEPTING.)
+// @EXPECT_ERROR: cannot hold both `null` and the non-null scalar
+fn test_inferred_text_null_start_not_widened() {
+  s = null;
+  s = "hi";
+  assert(s == "hi", "unreached");
+}
+
+// @PLN25/DN1: a NON-null return with a missing code path is a compile error — the else path
+// yields void, and a non-null `text` return requires a value. Formerly a `-> text not null` fn
+// got a lenient "may return null" WARNING; with `not null` retired (scalars non-null by
+// default) that leniency is gone (moved here from 38-parse-warnings.loft's `pe_classify`).
+// @EXPECT_ERROR: got void on return from block
+fn pe_missing_return_path(n: integer) -> text {
+  if n > 0 { return "pos"; }
+}

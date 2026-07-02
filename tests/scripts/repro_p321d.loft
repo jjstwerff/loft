@@ -1,7 +1,7 @@
 // @P321d regression: nested vector indexing `m.a[0].b[2]` must not emit two
 // simultaneous `&mut stores` borrows under --native (E0499).  The OpGetVector /
 // OpVectorRef `#rust` templates bind the vector ref to a local before the call.
-struct Hex { h_height: integer not null }
+struct Hex { h_height: integer }
 struct Chunk { ck_hexes: vector<Hex> }
 struct Map { m_chunks: vector<Chunk> }
 

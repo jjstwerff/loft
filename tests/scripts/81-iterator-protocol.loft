@@ -11,7 +11,7 @@ fn new_counter(limit: integer) -> Counter {
   Counter { current: 0, limit: limit }
 }
 
-fn next(self: Counter) -> integer {
+fn next(self: Counter) -> integer? {
   val = self.current;
   self.current = val + 1;
   if val >= self.limit { return null; }

@@ -1,8 +1,3 @@
 ==== exit: 0 ====
 ==== stdout ====
 x=3==== stderr ====
-warning: `v[i]` may produce null on out-of-bounds with no defensive check; consider `v[i] ?? <fallback>`, `if i < len(v) { v[i] }`, or `x = v[i]; if x != null { ... }`
-  --> <cases>/22_runtime_index_negative.loft:3:9
-  |
-3 |   x = v[-1];
-  |         ^

@@ -13,9 +13,9 @@
 // call as a field initialiser.  Related to probe 04 (struct-lit-then-call)
 // in that both involve struct literals + heap-call interaction.
 
-struct P { tag: integer not null }
-struct Canvas { data: vector<integer>, w: integer not null }
-struct Wrapper { canvas: Canvas, tag: integer not null }
+struct P { tag: integer }
+struct Canvas { data: vector<integer>, w: integer }
+struct Wrapper { canvas: Canvas, tag: integer }
 
 fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
   cv = Canvas { data: [], w: w };

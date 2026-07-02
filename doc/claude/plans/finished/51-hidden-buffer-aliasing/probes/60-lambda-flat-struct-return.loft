@@ -9,7 +9,7 @@
 // return through a lambda), not by the presence of nested heap.
 // If this PASSES: V-c needs nested heap to fire.
 
-struct Flat { x: integer not null, y: integer not null }
+struct Flat { x: integer, y: integer }
 
 fn main() {
   make_flat = fn(t: integer) -> Flat { Flat { x: t, y: t * 10 } };

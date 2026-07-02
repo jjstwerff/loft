@@ -7,7 +7,7 @@
 // Pairing: 21/22/23/40 — completes the IV-Type matrix.
 // Status: cluster IV completion probe.
 
-struct Entry { name: text, value: integer not null }
+struct Entry { name: text, value: integer }
 struct W { items: sorted<Entry[name]> }
 
 fn fb() -> sorted<Entry[name]> {

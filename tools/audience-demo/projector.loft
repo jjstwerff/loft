@@ -61,15 +61,15 @@ FRAME_US = 16667;
 // scheme as the server side so a `4:x,y,c` delta updates the right
 // record by parsing back the integers.
 struct Cell {
-  ck:          text not null,    // "x,y" — primary key
-  x:           integer not null, // offset coord (matches phone client)
-  y:           integer not null,
-  color:       integer not null, // 1..9 (palette index; 0 means deleted)
-  paint_tick:  integer not null, // monotonic per-paint counter for ORDER —
+  ck:          text,    // "x,y" — primary key
+  x:           integer, // offset coord (matches phone client)
+  y:           integer,
+  color:       integer, // 1..9 (palette index; 0 means deleted)
+  paint_tick:  integer, // monotonic per-paint counter for ORDER —
                                  // used to build the CellSnap in placement
                                  // order so audience_crystal's centre-vs-
                                  // supporter rules see the right first-paint.
-  birth_frame: integer not null, // render-frame number when the cell was
+  birth_frame: integer, // render-frame number when the cell was
                                  // painted.  Drives the GPU growth shader
                                  // (the crystal blooms from this cell's
                                  // centre over GROWTH_FRAMES); set in
@@ -203,11 +203,11 @@ void main() {{
 // be re-emitted at decreasing alpha for FADE_FRAMES.  Keyed by "x,y" (same
 // scheme as Cell) so a re-paint can cancel an in-flight fade by key.
 struct FadeCell {
-  ck:    text not null,
-  x:     integer not null,
-  y:     integer not null,
-  color: integer not null,
-  start: integer not null,    // frame number when the fade began
+  ck:    text,
+  x:     integer,
+  y:     integer,
+  color: integer,
+  start: integer,    // frame number when the fade began
 }
 
 // Removal fade duration in frames (~600 ms at 60 fps — matches the
@@ -216,8 +216,8 @@ FADE_FRAMES = 36;
 
 struct World {
   cells:           hash<Cell[ck]>,
-  version:         integer not null,
-  paint_tick_next: integer not null,
+  version:         integer,
+  paint_tick_next: integer,
   fades:           hash<FadeCell[ck]>,
 }
 
@@ -267,11 +267,11 @@ fn snapshot_cells(world: World) -> Snapshot {
   for sc_pass in 0..n {
     for sc_j in 0..(n - 1) {
       if buf.ticks[sc_j] > buf.ticks[sc_j + 1] {
-        ta = buf.ticks[sc_j];  buf.ticks[sc_j]  = buf.ticks[sc_j + 1];  buf.ticks[sc_j + 1]  = ta;
-        xa = buf.xs[sc_j];     buf.xs[sc_j]     = buf.xs[sc_j + 1];     buf.xs[sc_j + 1]     = xa;
-        ya = buf.ys[sc_j];     buf.ys[sc_j]     = buf.ys[sc_j + 1];     buf.ys[sc_j + 1]     = ya;
-        ca = buf.colors[sc_j]; buf.colors[sc_j] = buf.colors[sc_j + 1]; buf.colors[sc_j + 1] = ca;
-        ba = buf.births[sc_j]; buf.births[sc_j] = buf.births[sc_j + 1]; buf.births[sc_j + 1] = ba;
+        ta = buf.ticks[sc_j] ?? 0;  buf.ticks[sc_j]  = buf.ticks[sc_j + 1] ?? 0;  buf.ticks[sc_j + 1]  = ta;
+        xa = buf.xs[sc_j] ?? 0;     buf.xs[sc_j]     = buf.xs[sc_j + 1] ?? 0;     buf.xs[sc_j + 1]     = xa;
+        ya = buf.ys[sc_j] ?? 0;     buf.ys[sc_j]     = buf.ys[sc_j + 1] ?? 0;     buf.ys[sc_j + 1]     = ya;
+        ca = buf.colors[sc_j] ?? 0; buf.colors[sc_j] = buf.colors[sc_j + 1] ?? 0; buf.colors[sc_j + 1] = ca;
+        ba = buf.births[sc_j] ?? 0; buf.births[sc_j] = buf.births[sc_j + 1] ?? 0; buf.births[sc_j + 1] = ba;
       }
     }
   }
@@ -456,9 +456,9 @@ fn bake_crystal_group(cm: SegMesh, births: vector<single>) -> vector<single> {
     // @PLN6 two-phase growth: a MAIN anchors at its SRC (= the existing
     // crystal's centre) and grows from BIRTH; a SIDE branch's birth is delayed
     // by GROWTH_FRAMES so the hex only FILLS after the connection has landed.
-    seg_birth = births[own];
+    seg_birth = births[own] ?? 0.0f;
     if cm.kinds[bcg_i] != KIND_MAIN {
-      seg_birth = (births[own] as float + GROWTH_FRAMES) as single;
+      seg_birth = ((births[own] ?? 0.0f) as float + GROWTH_FRAMES) as single;
     }
     emit_beam(verts,
       cm.x0s[bcg_i], cm.z0s[bcg_i], cm.y0s[bcg_i],
@@ -507,8 +507,8 @@ struct AutoCam {
   rotation: float,           // current rotation, radians
   end_rot:  float,           // destination rotation (= direction toward last edit, frozen at edit-time)
   tilt:     float,           // current tilt, 0..1
-  edit_tick:  integer not null, // frame number when the latest edit was recorded (drives the fade-in)
-  ready_tick: integer not null, // frame when rotation + tilt first reached "settled" after the latest edit;
+  edit_tick:  integer, // frame number when the latest edit was recorded (drives the fade-in)
+  ready_tick: integer, // frame when rotation + tilt first reached "settled" after the latest edit;
                                 // -1 while not yet settled.  Position only lerps once
                                 // (tick - ready_tick) >= CAMERA_PAUSE_FRAMES.
 }
@@ -755,22 +755,22 @@ fn apply_frame(world: World, cryst: &CrystalIncr, crystal_births: &vector<single
 // the births vector, whose handle reassigns on growth) lives HERE, behind
 // the one record both closures share.
 struct Proj {
-  frames:             integer not null,
-  delta_count:        integer not null,
-  last_built_version: integer not null,
-  ground_vao:         integer not null,
-  ground_vert_count:  integer not null,
-  fading_vao:         integer not null,
-  cell_shader:        integer not null,
-  crystal_shader:     integer not null,
-  qr_tex:             integer not null,
-  win_w:              integer not null,
-  win_h:              integer not null,
-  shot_path:          text not null,
-  shot_done:          boolean not null,
-  snapshot_retry_at:  integer not null,
-  snapshot_retries:   integer not null,
-  closing:            boolean not null,
+  frames:             integer,
+  delta_count:        integer,
+  last_built_version: integer,
+  ground_vao:         integer,
+  ground_vert_count:  integer,
+  fading_vao:         integer,
+  cell_shader:        integer,
+  crystal_shader:     integer,
+  qr_tex:             integer,
+  win_w:              integer,
+  win_h:              integer,
+  shot_path:          text,
+  shot_done:          boolean,
+  snapshot_retry_at:  integer,
+  snapshot_retries:   integer,
+  closing:            boolean,
   crystal_births:     vector<single>,
 }
 

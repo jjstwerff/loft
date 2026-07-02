@@ -225,9 +225,14 @@ impl Output<'_> {
                     // @PLN87 L1 — a local scalar `&`-link holds `*mut T` (raw); deref
                     // to read the linked source's current value.
                     return write!(w, "unsafe {{ *var_{var_name} }}");
-                } else if matches!(variables.tp(var), Type::Text(_)) && !self.tuple_text_to_string {
+                } else if matches!(variables.tp(var).base(), Type::Text(_))
+                    && !self.tuple_text_to_string
+                {
                     // Text locals are `String` — `&` coerces to `&str`.  Inside a
                     // (String, …) tuple-return literal (@P330) emit the bare name.
+                    // @PLN25 — `.base()` peels a `text?` local so an indexed/sliced
+                    // nullable text receiver (`raw: text?; raw[i]`, `raw[a..b]`) is
+                    // borrowed to `&str` too; inert gate-OFF (no `Optional` exists).
                     return write!(w, "&var_{var_name}");
                 }
                 return write!(w, "var_{var_name}");
@@ -347,7 +352,10 @@ impl Output<'_> {
                     }
                 } else if let Value::If(test, true_v, false_v) = &**val {
                     self.pre_declare_branch_vars(w, true_v, false_v)?;
-                    let returns_text = matches!(returned, Type::Text(_));
+                    // @PLN25 slice (c): `.base()` — a `-> text?` return is `Str`-typed just
+                    // like `-> text`, so its buffer-backed return still needs the `Str::new(…)`
+                    // wrap (without the peel it emitted a raw `&String` → E0308).
+                    let returns_text = matches!(returned.base(), Type::Text(_));
                     let narrow = narrow_int_cast(returned);
                     let wrap_text = returns_text;
                     // @P386: when an if-branch is a Text-result Block whose
@@ -418,7 +426,10 @@ impl Output<'_> {
                         write!(w, ") as {cast}")?;
                     }
                 } else {
-                    let returns_text = matches!(returned, Type::Text(_));
+                    // @PLN25 slice (c): `.base()` — a `-> text?` return is `Str`-typed just
+                    // like `-> text`, so its buffer-backed return still needs the `Str::new(…)`
+                    // wrap (without the peel it emitted a raw `&String` → E0308).
+                    let returns_text = matches!(returned.base(), Type::Text(_));
                     let narrow = narrow_int_cast(returned);
                     // #433 — widen a narrow-int value-block returned from a plain
                     // `integer` (i64) function back to i64 (see block_needs_i64_widen).

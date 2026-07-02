@@ -99,7 +99,7 @@ fn test_is_with_negation() {
 
 // ── &vector mutation detection ──────────────────────────────────
 
-struct MutItem { mv: integer not null }
+struct MutItem { mv: integer }
 
 fn double_all_items(items: &vector<MutItem>) {
   for it in items {
@@ -131,7 +131,7 @@ fn test_ref_vector_append_and_mutate() {
 
 // ── v[i] as & parameter (P160) ──────────────────────────────────
 
-struct P160Item { px: integer not null }
+struct P160Item { px: integer }
 
 fn set_p160(item: &P160Item, val: integer) { item.px = val; }
 
@@ -184,7 +184,7 @@ fn test_filter_on_ref_vector() {
 
 // ── for over &vector<T> (P161) ──────────────────────────────────
 
-struct P161Item { pv: integer not null }
+struct P161Item { pv: integer }
 
 fn sum_p161(items: &vector<P161Item>) -> integer {
   items += [P161Item { pv: 100 }];
@@ -230,7 +230,7 @@ fn test_struct_enum_json_roundtrip_rect() {
 
 // Error test: `break value` in void fn → see 101-enhancement-errors.loft
 
-struct BVItem { bvn: text, bvv: integer not null }
+struct BVItem { bvn: text, bvv: integer }
 
 fn find_bv_val(items: vector<BVItem>, target: text) -> integer {
   for it in items {

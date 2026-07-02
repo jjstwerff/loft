@@ -3,39 +3,39 @@
 // Test return null from functions of every nullable return type.
 // Exercises native codegen: return null must emit the correct null sentinel.
 
-fn maybe_int(x: integer) -> integer {
+fn maybe_int(x: integer) -> integer? {
   if x < 0 { return null; }
   x * 2
 }
 
-fn maybe_long(x: integer) -> integer {
+fn maybe_long(x: integer) -> integer? {
   if x < 0 { return null; }
   x as integer * 1000000
 }
 
-fn maybe_float(x: integer) -> float {
+fn maybe_float(x: integer) -> float? {
   if x < 0 { return null; }
   x as float * 1.5
 }
 
-fn maybe_text(x: integer) -> text {
+fn maybe_text(x: integer) -> text? {
   if x < 0 { return null; }
   "value={x}"
 }
 
 // return null from if-expression (C16 + null sentinel)
-fn if_expr_null(x: integer) -> integer {
+fn if_expr_null(x: integer) -> integer? {
   val = if x > 0 { x * 10 } else { return null; };
   val + 1
 }
 
-fn if_expr_null_true(x: integer) -> integer {
+fn if_expr_null_true(x: integer) -> integer? {
   val = if x < 0 { return null; } else { x * 10 };
   val + 1
 }
 
 // chained early returns
-fn clamp_or_null(x: integer, lo: integer, hi: integer) -> integer {
+fn clamp_or_null(x: integer, lo: integer, hi: integer) -> integer? {
   if x < lo { return null; }
   if x > hi { return null; }
   x

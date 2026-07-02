@@ -32,8 +32,8 @@
 // Status: regression-tracking probe — confirms S1+S2 keep working as we
 // extend coverage.  If this fails, we've broken the canonical case.
 
-struct P { tag: integer not null }
-struct Canvas { data: vector<integer>, w: integer not null }
+struct P { tag: integer }
+struct Canvas { data: vector<integer>, w: integer }
 
 fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
   cv = Canvas { data: [], w: w };

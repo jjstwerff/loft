@@ -10,11 +10,11 @@
 // in the real-world `map_get_hex` call).
 // Status POST-Phase-1b: all three assertions pass.
 
-struct Inner { n: integer not null }
+struct Inner { n: integer }
 struct Container { items: vector<Inner> }
 struct Holder {
   c:        Container,
-  sentinel: integer not null,
+  sentinel: integer,
 }
 
 // Mirrors `map_get_hex`'s shape: view when found, owned when not.

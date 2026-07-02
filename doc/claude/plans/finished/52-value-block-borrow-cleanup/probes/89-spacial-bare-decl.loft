@@ -17,7 +17,7 @@
 // Pairing: 51, 62 (both used wrapper-struct fields).
 // Status: cluster IV-Spacial isolation probe.
 
-struct Point { name: text, x: float not null, y: float not null }
+struct Point { name: text, x: float, y: float }
 
 fn main() {
   s: spacial<Point[name]> = [];

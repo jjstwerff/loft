@@ -397,6 +397,28 @@ pub struct Parser {
     /// suppresses the `not null` hint regardless of read count — the
     /// developer has explicitly acknowledged null is possible.
     pub(crate) defended_field_reads: std::collections::HashSet<(u32, u32)>,
+    /// @PLN25 DN3 flow-narrowing — the stack of local-var slots PROVEN non-null by an
+    /// enclosing guard (`if v != null { … }` / `if v { … }`, the `== null` else-arm).
+    /// A read of `Var(v)` while `v ∈ this` types as the peeled (non-null) base, not `τ?`.
+    /// Pushed on entry to the proven branch, truncated to the saved length on exit; a
+    /// reassignment of `v` inside the branch removes it (the proof no longer holds).
+    pub(crate) narrowed_non_null: Vec<u16>,
+    /// @PLN25 DN3 fault-op narrowing — local-var slots PROVEN non-zero by an enclosing
+    /// `if v != 0 { … }` guard. A division/mod whose divisor is in this set (or a constant
+    /// non-zero literal) is provably fit and types NON-null; otherwise it types `τ?`. Same
+    /// push/truncate/invalidate discipline as `narrowed_non_null`.
+    pub(crate) divisor_nonzero: Vec<u16>,
+    /// @PLN25 DN3 fault-op (index) — set by `parse_vector_index` for each SCALAR `v[i]` read
+    /// (true = the index is provably in-bounds: a non-negative constant, a for-loop iter var, or
+    /// a var proven `< len(v)` by an enclosing guard), read immediately after by `parse_index` to
+    /// decide whether the element type wraps `Optional`. Write-then-read per read; nested reads
+    /// (`v[w[j]]`) set inner-then-outer so the outer read sees the outer index's fit.
+    pub(crate) last_index_fit: bool,
+    /// @PLN25 DN3 fault-op (index) — the `(idx_var, vec)` pairs proven in-bounds by an enclosing
+    /// `if idx < len(vec) { … }` guard (skip-pattern 5). A `vec[idx]` whose pair is here types
+    /// NON-null. Pushed for the THEN branch in `parse_if`, truncated on exit — same discipline as
+    /// `divisor_nonzero`, but keyed on the (index, vector) pair via `VecKey`.
+    pub(crate) index_bounded: Vec<(u16, crate::parser::operators::VecKey)>,
     /// Plan-07 phase 4h — site of the most recently parsed field
     /// read.  Set by `Parser::field()` after each read, taken by
     /// `handle_null_coalesce` to mark the read as defended when
@@ -627,6 +649,10 @@ impl Parser {
             trace_types_lines: Vec::new(),
             field_read_counts: std::collections::HashMap::new(),
             defended_field_reads: std::collections::HashSet::new(),
+            narrowed_non_null: Vec::new(),
+            divisor_nonzero: Vec::new(),
+            last_index_fit: false,
+            index_bounded: Vec::new(),
             last_field_read_site: None,
             #[cfg(feature = "registry")]
             advisory_checked: std::collections::HashSet::new(),
@@ -1127,7 +1153,15 @@ impl Parser {
     /// is user code, not the host library.
     fn emit_not_null_hints(&mut self) {
         const HINT_NOT_NULL_THRESHOLD: u32 = 10;
-        if std::env::var("LOFT_NO_HINT_NOT_NULL").is_ok_and(|v| v == "1" || v == "true") {
+        // @PLN25 DN1/F2: the `not null` hint is RETIRED. Under the dense model a plain scalar is
+        // NON-null by default (nullability rides `?`/`Optional`), so `not null` is redundant (and
+        // being retired), and the only nullable form left is `τ?` — for which suggesting
+        // `not null` is contradictory. Superseded like the div/index fault warnings. (Also, under
+        // F2 a heavily-read plain field is non-null → never accrues, so the hint would only ever
+        // fire on a `?` field.)
+        if crate::keys::pln25_dn1_enabled()
+            || std::env::var("LOFT_NO_HINT_NOT_NULL").is_ok_and(|v| v == "1" || v == "true")
+        {
             self.field_read_counts.clear();
             self.defended_field_reads.clear();
             return;
@@ -1798,6 +1832,14 @@ impl Parser {
         let Type::Integer(spec) = dst else {
             return None;
         };
+        // @PLN25 F2 (range reconciliation): a plain (non-`Optional`) narrow integer is NON-null
+        // under DN1, so it uses the FULL width — no reserved sentinel, nothing to reject. `dst`
+        // here is a `Type::Integer` (an `Optional` target hit the let-else above), i.e. exactly
+        // the non-null narrow that F2 makes full-range. (Reserving the sentinel for an `Optional`
+        // narrow — rejecting the literal `255` into a `u8?` — is a separate Part-2 slice.)
+        if crate::keys::pln25_f2_enabled() {
+            return None;
+        }
         if spec.not_null {
             return None;
         }
@@ -1835,6 +1877,39 @@ impl Parser {
         if self.first_pass {
             return false;
         }
+        // Tuples store ELEMENT-WISE, so `(N-Store)` applies per position: an Optional (DN3)
+        // or bare-null (DN1) element cannot slip into a non-null element slot just because
+        // the enclosing tuple type isn't itself `Optional`. A tuple type appears either as
+        // a literal `Type::Tuple` (a field / typed assign) or as the synthetic-struct
+        // rewrite `Reference(__tuple<…>)` (a tuple RETURN type, rewritten by
+        // `parse_function`; elements = the def's attribute typedefs, the same normalization
+        // as the destructure reader in expressions.rs). Normalize both sides and recurse
+        // (nested tuples included); each element rides the same DN3/DN1 checks below.
+        // Arity mismatches are left to the regular type checker.
+        fn tuple_elems(data: &crate::data::Data, tp: &Type) -> Option<Vec<Type>> {
+            match tp {
+                Type::Tuple(elems) => Some(elems.clone()),
+                Type::Reference(d, _) if data.def(*d).name().starts_with("__tuple<") => Some(
+                    data.def(*d)
+                        .attributes
+                        .iter()
+                        .map(|a| a.typedef.clone())
+                        .collect(),
+                ),
+                _ => None,
+            }
+        }
+        if let (Some(v_elems), Some(t_elems)) = (
+            tuple_elems(&self.data, value_tp),
+            tuple_elems(&self.data, target_tp),
+        ) && v_elems.len() == t_elems.len()
+        {
+            let mut hit = false;
+            for (i, (ve, te)) in v_elems.iter().zip(t_elems.iter()).enumerate() {
+                hit |= self.n_store_violation(ve, te, &format!("element {i} of {what}"));
+            }
+            return hit;
+        }
         // DN3: an un-discharged nullable `τ?` (Optional value) into a non-null target.
         if crate::keys::pln25_dn3_enabled()
             && let Type::Optional(inner) = value_tp
@@ -1855,11 +1930,10 @@ impl Parser {
         // DN1 (the default flip): under DN1 a plain scalar is NON-null, so a bare `null` cannot be
         // stored into a non-Optional scalar target — declare the target `τ?` to allow null.
         // (Heap types — reference/vector/enum — stay nullable; only the SCALAR default flips.)
-        // EXEMPT the trusted stdlib (`STD_SOURCE`): its legacy null-propagation (`min`/`max`'s
-        // `if !a || !b { return null }`) is DEAD under DN1 (its scalar params are non-null), so the
-        // bare `null` never actually flows. Migrate + un-exempt the stdlib when DN1 lands default.
+        // The stdlib is held to the SAME rule (no STD_SOURCE exemption): F1b(b)'s `min`/`max`/`clamp`
+        // non-null bodies are now clean (nullable args — including DN3-typed division results —
+        // route to the `τ?` overload), so no trusted-source `return null` remains to exempt.
         if crate::keys::pln25_dn1_enabled()
-            && self.data.source != crate::data::STD_SOURCE
             && matches!(value_tp, Type::Null)
             && Self::is_non_null_scalar(target_tp)
         {
@@ -2447,15 +2521,21 @@ impl Parser {
         let mut d_nr = if self.default && is_op(name) {
             self.data.def_nr(name)
         } else {
-            self.data.find_fn(
-                source,
-                name,
-                if types.is_empty() || types[0] == Type::Null {
-                    &Type::Unknown(0)
-                } else {
-                    &types[0]
-                },
-            )
+            // @PLN25 F1b(b): a `both`/`self`-dispatched function takes uniform-nullability
+            // params, so dispatch on whether ANY argument is nullable — not just arg0. This
+            // routes `max(5, a?)` to the `τ?` overload the same as `max(a?, 5)`, so null
+            // propagates regardless of position. (arg0-only dispatch missed the arg1 case.)
+            let unknown = Type::Unknown(0);
+            let nullable_holder;
+            let dispatch_tp: &Type = if types.is_empty() || types[0] == Type::Null {
+                &unknown
+            } else if types.iter().any(|t| matches!(t, Type::Optional(_))) {
+                nullable_holder = Type::optional(types[0].base().clone());
+                &nullable_holder
+            } else {
+                &types[0]
+            };
+            self.data.find_fn(source, name, dispatch_tp)
         };
         // Trace point: post-find_fn dispatch state.  Captures the most
         // common debugging vantage — what name resolved to which

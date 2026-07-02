@@ -13,11 +13,11 @@
 // Status PRE-Phase-1c: if the code path triggers, likely SIGSEGV.
 // Status POST-Phase-1c: test passes.
 
-struct Inner { n: integer not null }
+struct Inner { n: integer }
 struct Container { items: vector<Inner> }
 struct Holder {
   c:        Container,
-  sentinel: integer not null,
+  sentinel: integer,
 }
 
 fn first_inner(c: Container) -> Inner {

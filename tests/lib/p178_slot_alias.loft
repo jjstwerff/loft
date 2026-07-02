@@ -15,10 +15,10 @@
 // variant's actual field value.
 
 pub enum P178Ui {
-  P178UhToolButton { tb_id: integer not null },
+  P178UhToolButton { tb_id: integer },
 }
 
-struct P178FakeTools { ft_cur: integer not null }
+struct P178FakeTools { ft_cur: integer }
 
 pub fn p178_hit_test() -> P178Ui {
   P178UhToolButton { tb_id: 2 }

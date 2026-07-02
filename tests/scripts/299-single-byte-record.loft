@@ -10,8 +10,8 @@
 // release, caught by the armed-assert build (`store.rs` `valid()`).
 // Cross-mode: interpreter + --native must agree.
 
-struct OneBool { on: boolean }
-struct TwoBool { a: boolean, b: boolean }
+struct OneBool { on: boolean? }
+struct TwoBool { a: boolean, b: boolean? }
 
 fn main() {
   // 1-byte struct record: construct, read, overwrite, read back.

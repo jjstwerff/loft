@@ -42,11 +42,11 @@ PORT = 18083;
 // ── World + client state ─────────────────────────────────────────────────────
 
 struct Cell {
-  ck:         text not null,
-  x:          i32 not null,    // typed at field declaration → `f += c.x` writes 4 bytes
-  y:          i32 not null,    // automatically, no `as i32` cast at the write site
-  color:      u8 not null,
-  birth_tick: u32 not null,    // world.tick at creation — age = world.tick - birth_tick.
+  ck:         text,
+  x:          i32,    // typed at field declaration → `f += c.x` writes 4 bytes
+  y:          i32,    // automatically, no `as i32` cast at the write site
+  color:      u8,
+  birth_tick: u32,    // world.tick at creation — age = world.tick - birth_tick.
                                // 10 Hz tick rate ⇒ u32 won't wrap for ~13 years of
                                // continuous run.  Reset on a true re-paint (seed
                                // that creates a brand-new Cell); preserved across
@@ -58,34 +58,34 @@ struct Cell {
 // tracks what the application needs: the replay cursor and the last-painted
 // position for the active-player heartbeat.
 struct Player {
-  cid:              integer not null,   // event-pump client id (hash key)
-  lx:               integer not null,   // last-painted x (active-player signal)
-  ly:               integer not null,
-  last_active_tick: integer not null,   // world.tick of this player's last
+  cid:              integer,   // event-pump client id (hash key)
+  lx:               integer,   // last-painted x (active-player signal)
+  ly:               integer,
+  last_active_tick: integer,   // world.tick of this player's last
                                         // paint — 0 = never painted (1.7)
   // Incremental replay (@PLN6-1.8): on connect we snapshot the current cell
   // keys here and stream them a budget at a time from the main loop, so a
   // new client never blocks the pump on a full O(cells) world dump.
   replay_keys:      vector<text>,
-  replay_pos:       integer not null,   // next index into replay_keys to send
+  replay_pos:       integer,   // next index into replay_keys to send
 }
 
 struct World {
   cells:        hash<Cell[ck]>,
   players:      hash<Player[cid]>,   // event-pump clients, keyed by cid
   srv:          server::Server,      // for broadcast / send_to fan-out
-  dirty:        boolean not null,    // mutated since last snapshot?
-  last_save_us: integer not null,    // ticks() (µs, i32) of last successful save
+  dirty:        boolean,    // mutated since last snapshot?
+  last_save_us: integer,    // ticks() (µs, i32) of last successful save
                                      // — wraps every ~35 min, harmless for a 5 s
                                      // window: a wrap during the window just skips
                                      // one snapshot until the next dirty event
-  tick:         integer not null,    // monotonic 10 Hz wall-clock counter.
+  tick:         integer,    // monotonic 10 Hz wall-clock counter.
                                      // Each non-empty cell records its birth_tick so
                                      // age = world.tick - birth_tick (in 100 ms units).
-  last_tick_us: integer not null,    // ticks() of the most recent tick-advance —
+  last_tick_us: integer,    // ticks() of the most recent tick-advance —
                                      // same wrap caveat as last_save_us; a wrap
                                      // simply delays the next tick by one window.
-  last_active_us: integer not null,  // ticks() of the last active-player
+  last_active_us: integer,  // ticks() of the last active-player
                                      // heartbeat emit (sub-task 1.7, 1 Hz)
 }
 

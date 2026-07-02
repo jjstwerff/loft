@@ -1042,11 +1042,24 @@ impl Function {
     pub fn add_variable(&mut self, name: &str, type_def: &Type, lexer: &mut Lexer) -> u16 {
         // Due to 2 passes through the code, we will add the same variable a second time.
         if let Some(nr) = self.names.get(name) {
-            if self.variables[*nr as usize].type_def.is_unknown() {
-                self.trace_type_change(*nr, type_def, "add_variable(reuse)");
-                self.variables[*nr as usize].type_def = type_def.clone();
+            let nr = *nr;
+            let existing = &self.variables[nr as usize].type_def;
+            // Refine an unknown; and for GENERATED temps (`__`-prefixed) let PASS 2 WIN
+            // on a type CONFLICT: the `__ncc_N`/`__work_N` counters can diverge across
+            // the two passes (a `??` that stays trivial in pass 1 materialises a temp in
+            // pass 2), so the same NAME can denote a DIFFERENT site per pass. Keeping
+            // pass 1's type then hands pass-2 code a contradicting temp — the routing
+            // `add_tile` corruption: `txs as integer ?? -1`'s temp kept a pass-1
+            // `ref(Img)` type, mis-emitting native (`E0605 as DbRef`) AND mis-reading
+            // interp (a silent wrong value). A user variable keeps the old behaviour
+            // (its name IS its cross-pass identity; type evolution has its own checks).
+            if existing.is_unknown()
+                || (name.starts_with("__") && !type_def.is_unknown() && existing != type_def)
+            {
+                self.trace_type_change(nr, type_def, "add_variable(reuse)");
+                self.variables[nr as usize].type_def = type_def.clone();
             }
-            return *nr;
+            return nr;
         }
         self.new_var(name, type_def, lexer)
     }
@@ -1057,7 +1070,13 @@ impl Function {
     pub fn add_temp_var(&mut self, name: &str, type_def: &Type) -> u16 {
         if let Some(nr) = self.names.get(name) {
             let nr = *nr;
-            if self.variables[nr as usize].type_def.is_unknown() {
+            let existing = &self.variables[nr as usize].type_def;
+            // Same pass-2-wins rule as `add_variable` (see there): a generated
+            // temp's cross-pass identity is name+type, so a conflicting re-add
+            // re-types instead of handing back a contradicting temp.
+            if existing.is_unknown()
+                || (name.starts_with("__") && !type_def.is_unknown() && existing != type_def)
+            {
                 self.trace_type_change(nr, type_def, "add_temp_var(reuse)");
                 self.variables[nr as usize].type_def = type_def.clone();
             }
@@ -1213,8 +1232,46 @@ impl Function {
         // target ← `τ?`) is the `(N-Store)` violation, caught at the store site before here.
         // Gate-OFF inert: the postfix `?` is a no-op so `var_tp` is never `Optional`.
         if let Type::Optional(inner) = var_tp
-            && (inner.is_equal(type_def) || matches!(type_def, Type::Null))
+            // @PLN25 (N-Idem): peel the SOURCE too — `Optional(τ) ← Optional(τ)` (e.g. a
+            // `text?` local reassigned from a `text?`-typed if-join whose frame-deps differ)
+            // is not a type change. Without `.base()` the source's `Optional` wrapper made
+            // `inner.is_equal` fail and change_var wrongly rejected `text? ← text?`.
+            && (inner.is_equal(type_def.base()) || matches!(type_def, Type::Null))
         {
+            for on in type_def.depend() {
+                self.depend(var_nr, on);
+            }
+            return self.is_new(var_nr);
+        }
+        // @PLN25 DN6 (N-Join): an INFERRED local first assigned a bare `null`, then a
+        // non-null INLINE scalar `τ`, widens to `Null ⊔ τ = τ?` instead of erroring — the
+        // ergonomic escape valve for `a = null; a = 5` (a now `integer?`, so a later
+        // `b: integer = a` still requires a discharge).  `var_tp == Null` is INHERENTLY the
+        // inferred-from-null case: a variable cannot be ANNOTATED `null`, so this never
+        // overrides an explicit non-null contract — `a: integer = null` carries
+        // `var_tp == integer` and is the case-1 nullable-mix reject below.  Scoped to this
+        // ONE direction (the reverse `a = 5; a = null` cannot be told apart from an
+        // annotated `a: integer = null` here, so it keeps rejecting).  DN1-gated.
+        //
+        // SOUNDNESS BOUNDARY — INLINE scalars ONLY (Integer/Boolean/Float/Single/Character).
+        // The retroactive widen keeps the slot allocated by the FIRST `= null`; that slot is
+        // sound for a τ? only when Null and τ? share it.  Inline scalars carry the null as an
+        // in-slot sentinel, so `null`→`τ?` reuses the same inline slot.  `Text` (the only
+        // heap-backed scalar here) needs a heap-ref slot with text-position tracking that the
+        // Null slot is NOT — widening it corrupts `fn_return`'s discard accounting (interp
+        // underflow / native E0308).  A text null-start must annotate `s: text? = null` so the
+        // slot is heap from the start; `s = null; s = "hi"` falls through to the case-1
+        // nullable-mix error, which already says "declare it `text?`".
+        if crate::keys::pln25_dn1_enabled()
+            && matches!(var_tp, Type::Null)
+            && matches!(
+                type_def,
+                Type::Integer(_) | Type::Boolean | Type::Float | Type::Single | Type::Character
+            )
+        {
+            let widened = Type::optional(type_def.clone());
+            self.trace_type_change(var_nr, &widened, "change_var_type(N-Join)");
+            self.variables[var_nr as usize].type_def = widened;
             for on in type_def.depend() {
                 self.depend(var_nr, on);
             }
@@ -1270,14 +1327,55 @@ impl Function {
             {
                 return self.is_new(var_nr);
             }
-            diagnostic!(
-                lexer,
-                Level::Error,
-                "Variable '{}' cannot change type from {} to {}; use a new variable name or cast with 'as'",
-                self.name(var_nr),
-                self.variables[var_nr as usize].type_def.name(data),
-                type_def.name(data)
-            );
+            // @PLN25 (N-Decl / DN6) — a `null` ↔ non-null-scalar transition is the
+            // NULLABILITY case, not a generic type mismatch: `a: integer = null` (the
+            // slot is committed non-null) or the inferred `a = null; a = 5` (the slot
+            // was `null`). Name the real fix (`τ?`) and NEVER suggest `as` — `x as
+            // integer` would LAUNDER the null into the non-null slot (the DN5 hole).
+            // (Once `(N-Join)`/DN6 lands, the inferred direction widens silently instead
+            // of erroring.) DN1-gated so gate-OFF stays byte-identical: gate-OFF the bare
+            // `null` is coerced to the scalar sentinel before here, so `Type::Null` never
+            // reaches `change_var` and this branch is unreachable.
+            let is_null_scalar = |t: &Type| {
+                matches!(
+                    t,
+                    Type::Integer(_)
+                        | Type::Text(_)
+                        | Type::Boolean
+                        | Type::Float
+                        | Type::Single
+                        | Type::Character
+                )
+            };
+            let nullable_mix = crate::keys::pln25_dn1_enabled()
+                && ((is_null_scalar(var_tp) && matches!(type_def, Type::Null))
+                    || (matches!(var_tp, Type::Null) && is_null_scalar(type_def)));
+            if nullable_mix {
+                let scalar = if is_null_scalar(var_tp) {
+                    var_tp
+                } else {
+                    type_def
+                };
+                let scalar_name = scalar.name(data);
+                diagnostic!(
+                    lexer,
+                    Level::Error,
+                    "Variable '{}' cannot hold both `null` and the non-null scalar type `{}` — declare it `{}?` to allow null (do NOT cast with `as`: `null as {}` would store null into a non-null slot)",
+                    self.name(var_nr),
+                    scalar_name,
+                    scalar_name,
+                    scalar_name
+                );
+            } else {
+                diagnostic!(
+                    lexer,
+                    Level::Error,
+                    "Variable '{}' cannot change type from {} to {}; use a new variable name or cast with 'as'",
+                    self.name(var_nr),
+                    self.variables[var_nr as usize].type_def.name(data),
+                    type_def.name(data)
+                );
+            }
         }
         self.trace_type_change(var_nr, type_def, "change_var_type");
         self.variables[var_nr as usize].type_def = type_def.clone();

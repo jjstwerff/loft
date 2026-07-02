@@ -16,7 +16,7 @@
 // reads from [int@0, text@8] (simple-packer offsets), reading
 // either field returns the wrong value.
 
-struct P { tag: integer not null }
+struct P { tag: integer }
 
 fn split_ti(p: P) -> (text, integer) {
   ("tag-{p.tag}", p.tag * 100)

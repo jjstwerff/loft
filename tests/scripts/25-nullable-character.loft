@@ -1,0 +1,30 @@
+// @PLN25 `character?` regression — the native char-null-sentinel gap.
+//
+// A `character` in native is the i32 domain; the `OpConvIntFromCharacter`
+// null-comparison template emits `if _v_v1 == char::from(0)`, which needs its
+// argument wrapped `ops::to_char(..)` so it compares `char == char` and not
+// `i32 == char` (E0308). That wrap fired for a bare `Type::Character` value but
+// missed `Optional(Character)` (a `character?`), so `pick() == null` / `cif ==
+// null` etc. failed to COMPILE on native under DN1. Fixed by peeling `.base()`
+// on the char-wrap type checks (Call / Var / Block / TupleGet shapes).
+//
+// Gate-OFF the `?` is a no-op, so this self-asserts identically gate-OFF (script
+// sweep) and gate-ON (tests/pln25_dn1_consumption.rs, both backends).
+
+fn nc() -> character? { return null; }
+fn pick(c: boolean) -> character? { if c { 'a' } else { null } }
+
+fn main() {
+  assert(nc() == null, "return-null path == null");            // Call shape
+  assert((nc() ?? 'z') == 'z', "?? discharges to default");    // Block/?? shape
+  assert(pick(false) == null, "if-branch null == null");       // Call shape
+  assert(pick(true) == 'a', "if-branch value intact");
+  cif = if false { 'a' } else { null };                        // Var shape
+  assert(cif == null, "character? local null == null");
+  civ = if true { 'b' } else { null };
+  assert(civ == 'b', "character? local value intact");
+  t = ('a', nc());                                             // TupleGet shape
+  assert(t.1 == null, "tuple character? element null");
+  assert(t.0 == 'a', "tuple character element value");
+  print("character? null-sentinel: ok\n");
+}

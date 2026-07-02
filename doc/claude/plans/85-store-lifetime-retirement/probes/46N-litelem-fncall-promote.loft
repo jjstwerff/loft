@@ -3,7 +3,7 @@
 // declared `vector<S>` return mismatches. A direct struct-LITERAL element is fine —
 // element nullability is decided on syntactic literal-ness, not the element's type.
 // This is why crawler tables go nullable on `[mk_thing(...)]`. Should compile + R=1.
-struct S { a: integer not null, b: text }
+struct S { a: integer, b: text }
 fn mk_s(i: integer) -> S { S { a: i, b: "n" } }
 fn build() -> vector<S> { [mk_s(1)] }
 fn main() {

@@ -3,10 +3,11 @@
 // Error tests moved to 102-expected-errors.loft
 // Compile-time warning detection tests.
 
-// @EXPECT_WARNING: Not all code paths return
-fn pe_classify(n: integer) -> text not null {
-  if n > 0 { return "pos"; }
-}
+// @PLN25/DN1: a non-null return with a missing code path is now a compile ERROR (moved to
+// 102-expected-errors.loft as `pe_missing_return_path`). It was formerly a lenient "Not all
+// code paths return — may return null" WARNING, produced ONLY by the `not null` return
+// downgrade; with `not null` retired and scalars non-null by default, the missing path
+// yields void → an error, not a warning.
 
 // --- Unused loop variable warnings ---
 

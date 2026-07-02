@@ -1659,7 +1659,11 @@ use a separate collection or add after the loop"
                     }
                 })
                 .is_some();
-        if matches!(f_type, Type::Text(_)) && !is_boxed_text_lhs {
+        if matches!(f_type.base(), Type::Text(_)) && !is_boxed_text_lhs {
+            // @PLN25 slice (c): `.base()` so a `text?` accumulator routes to assign_text
+            // (`OpAppendText`) like plain text. `s += x` on a null `text?` is ignored at
+            // runtime (the append skips a null dest — a non-null text can never be null);
+            // a non-null `text?` appends normally. Propagate: null stays null.
             // auto-promote text argument to local String on first mutation.
             let effective_var = if self.first_pass
                 && var_nr != u16::MAX
@@ -2453,6 +2457,30 @@ use a separate collection or add after the loop"
             return Type::Enum(syn, true, Deps::none());
         }
         let Type::Reference(struct_d, _) = &elem else {
+            // @PLN25 — a SCALAR nullable element (`vector<integer?>`, `vector<float?>`,
+            // `vector<text?>`, …) has no `__nullable<S>` synth (that's for a struct /
+            // enum ref); it rides the `Optional(τ)` marker instead, which shares the
+            // base scalar's dense inline storage + typed-sentinel null (element_size /
+            // element_align / type_elm all peel `Optional`). Wrapping here makes the
+            // element type nullable, so the index store-check allows `v[i] = null` and
+            // the read `v[i]` types as `τ?`. GATED on `pln25_optional_enabled` (unlike
+            // the struct `__nullable<S>` synth, which is the default-on vectors-half):
+            // gate-OFF a scalar `vector<τ?>` stays `== vector<τ>` (byte-identical),
+            // which is behaviourally fine there since a bare scalar vector is still
+            // nullable pre-DN1; the `?`↔non-null distinction only bites under DN1.
+            if crate::keys::pln25_optional_enabled()
+                && matches!(
+                    elem,
+                    Type::Integer(_)
+                        | Type::Float
+                        | Type::Single
+                        | Type::Boolean
+                        | Type::Character
+                        | Type::Text(_)
+                )
+            {
+                return Type::optional(elem);
+            }
             return elem;
         };
         let struct_d = *struct_d;
@@ -2873,6 +2901,14 @@ use a separate collection or add after the loop"
                 // NOTE: must come AFTER parse_assign_op because that is where the RHS
                 // lambda is parsed and last_closure_work_var gets set by emit_lambda_code.
                 let result = self.parse_assign_op(code, op, &f_type, &to, parent_tp, var_nr);
+                // @PLN25 DN3: reassigning a proven-non-null var invalidates its narrowing. The
+                // RHS above was parsed WITH the narrowing (so `if a!=null { a = a+1 }` reads `a`
+                // non-null), but any read AFTER this point widens back to `τ?` — the proof no
+                // longer holds once the slot is overwritten.
+                if var_nr != u16::MAX {
+                    self.narrowed_non_null.retain(|&x| x != var_nr);
+                    self.divisor_nonzero.retain(|&x| x != var_nr);
+                }
                 if op == "=" && self.last_closure_work_var != u16::MAX && var_nr != u16::MAX {
                     self.closure_vars.insert(var_nr, self.last_closure_work_var);
                     // store mapping in Function struct for native codegen.

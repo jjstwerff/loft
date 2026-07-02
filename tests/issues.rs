@@ -510,12 +510,18 @@ fn test() {
 // Fix: `parse_assign_op` now calls `convert()` when s_type==Type::Null and op=="=",
 // substituting OpConvIntFromNull (or the appropriate FromNull op) before towards_set.
 
+// @PLN25 DN1: this cluster exercises the null-SENTINEL storage/roundtrip mechanism,
+// which under the dense/non-null model is reached through a `τ?` field (a plain scalar
+// field is now NON-null and rejects `= null`). The fields carry `?` so the mechanism —
+// not the retired pre-DN1 "plain scalar field is nullable-by-default" behaviour — is what
+// is tested. (These snippets compile at STD_SOURCE, so they formerly rode the now-removed
+// F1b(b) (N-Store) exemption; real user code, source ≥1, was always held to DN1.)
 // Exact T0-1 reproduction: method sets an integer field to null via reference param.
 // Previously panicked with "store_nr=60" in `set_int`.
 #[test]
 fn set_int_field_null_via_ref() {
     code!(
-        "struct S { cur: integer }
+        "struct S { cur: integer? }
 fn clear(self: S) { self.cur = null }
 fn test() {
     s = S { cur: 42 };
@@ -530,7 +536,7 @@ fn test() {
 #[test]
 fn set_int_field_null_direct() {
     code!(
-        "struct S { cur: integer }
+        "struct S { cur: integer? }
 fn test() {
     s = S { cur: 7 };
     s.cur = null;
@@ -544,7 +550,7 @@ fn test() {
 #[test]
 fn set_long_field_null_via_ref() {
     code!(
-        "struct S { val: integer }
+        "struct S { val: integer? }
 fn clear(self: S) { self.val = null }
 fn test() {
     s = S { val: 1000000 };
@@ -559,7 +565,7 @@ fn test() {
 #[test]
 fn set_multiple_scalar_fields_null() {
     code!(
-        "struct S { a: integer, b: integer }
+        "struct S { a: integer?, b: integer? }
 fn clear(self: S) {
     self.a = null;
     self.b = null;
@@ -578,7 +584,7 @@ fn test() {
 #[test]
 fn null_then_reassign_integer_field() {
     code!(
-        "struct S { cur: integer }
+        "struct S { cur: integer? }
 fn clear(self: S) { self.cur = null }
 fn test() {
     s = S { cur: 10 };
@@ -2701,7 +2707,7 @@ fn test() {
 #[test]
 fn errors_accessor_path_on_failure() {
     code!(
-        r#"struct Score { value: integer }
+        r#"struct Score { value: integer? }
 fn test() {
     bad = Score.parse(`not_json`);
     err = bad#errors;
@@ -2720,7 +2726,7 @@ fn test() {
 #[test]
 fn errors_accessor_nested_path() {
     code!(
-        r#"struct Inner { x: integer }
+        r#"struct Inner { x: integer? }
 struct Outer { name: text, data: Inner }
 fn test() {
     bad = Outer.parse(`{{"name": "ok", "data": "not_an_object"}}`);
@@ -3132,8 +3138,10 @@ fn test() {
 #[test]
 fn p124_function_returning_inline_array_index() {
     code!(
+        // @PLN25 index flip — a variable-index `arr[i]` is nullable (OOB → null); discharge
+        // with `?? 0.0` so it stores into the non-null `-> float` return.
         "fn pick(p124_idx: integer) -> float {
-  [0.9, 0.2, 0.3][p124_idx]
+  [0.9, 0.2, 0.3][p124_idx] ?? 0.0
 }
 fn test() {
   assert(pick(0) > 0.85, \"0\");
@@ -3151,7 +3159,7 @@ fn p124_local_array_index_workaround_works() {
     code!(
         "fn pick(p124w_idx: integer) -> float {
   options = [0.9, 0.2, 0.3];
-  options[p124w_idx]
+  options[p124w_idx] ?? 0.0
 }
 fn test() {
   assert(pick(0) > 0.85, \"0\");
@@ -5792,10 +5800,12 @@ fn inc17_float_to_integer_requires_as() {
 
 #[test]
 fn inc17_text_to_integer_requires_as() {
+    // Under @PLN25 DN3 a text→int parse yields `integer?` (the parse can fail);
+    // the non-null return forces the discharge — `as` alone no longer suffices.
     code!(
         "fn run_parse() -> integer {
     s_p = \"42\";
-    s_p as integer
+    s_p as integer ?? 0
 }"
     )
     .expr("run_parse()")
@@ -6095,7 +6105,7 @@ fn q4_constructor_kind_cross_check_string() {
 fn q4_constructor_kind_cross_check_nan_is_jnull() {
     code!(
         "fn run_q4cknan() -> text {
-    json_number(null as float).kind()
+    json_number(null as float?).kind()
 }"
     )
     .expr("run_q4cknan()")
@@ -6949,7 +6959,7 @@ fn q4_json_number_negative_finite() {
 fn q4_json_number_nan_becomes_jnull() {
     code!(
         "fn run_q4nn3() -> integer {
-    nan_val_q4 = null as float;
+    nan_val_q4 = null as float?;
     v_q4nn3 = json_number(nan_val_q4);
     match v_q4nn3 { JNull => 1, _ => 0 }
 }"
@@ -7151,7 +7161,7 @@ fn q3_to_json_of_jnumber_fractional() {
 fn q3_to_json_of_nan_becomes_null() {
     code!(
         "fn run_q3tnn() -> text {
-    nan_q3 = null as float;
+    nan_q3 = null as float?;
     v_q3tnn = json_number(nan_q3);
     v_q3tnn.to_json()
 }"
@@ -9911,7 +9921,7 @@ fn p155_segv_undo_redo_midassert() {
 struct Elm { prev: H }
 struct Ct { items: vector<H> }
 struct Ss { undo: vector<Elm>, redo: vector<Elm> }
-fn read_at(c: Ct, idx: integer) -> H { c.items[idx] }
+fn read_at(c: Ct, idx: integer) -> H { c.items[idx] ?? H {} }
 fn test() {
     c = Ct { items: [H{}, H{}, H{}, H{}, H{}, H{}] };
     s = Ss { undo: [], redo: [] };
@@ -10051,7 +10061,7 @@ fn test() {
     p170_bs: vector<P170Bag> = [];
     p170_x = P170Bag {};
     p170_bs += [P170Bag {}];
-    p170_x = p170_bs[len(p170_bs) - 1];
+    p170_x = p170_bs[len(p170_bs) - 1] ?? P170Bag {};
     p170_mutate_bag(p170_x, 1);
     assert(len(p170_bs[0].items) == 1, \"mutated through alias\");
 }"
@@ -15118,7 +15128,7 @@ fn run() -> integer {
 #[test]
 fn issue_332_nullable_narrow_field_null_roundtrip() {
     code!(
-        "struct N { a: i16, c: i32, d: integer, tail: integer not null }
+        "struct N { a: i16?, c: i32?, d: integer?, tail: integer not null }
 fn run() -> integer {
     n = N { tail: 1 };
     om = 0;
@@ -15149,7 +15159,7 @@ fn run() -> integer {
 #[test]
 fn issue_334_nullable_byte_field_null_roundtrip() {
     code!(
-        "struct N { b: u8, tail: integer not null }
+        "struct N { b: u8?, tail: integer not null }
 fn run() -> integer {
     n = N { tail: 1 };
     n.b = null;

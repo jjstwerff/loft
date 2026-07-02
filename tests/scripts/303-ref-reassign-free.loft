@@ -43,7 +43,7 @@ fn test_tuple_whole_loop() {
   assert(acc == 18, "whole-tuple acc={acc} expect 18");
 }
 
-struct R3 { v: integer not null }
+struct R3 { v: integer }
 
 fn mk_r3(n: integer) -> R3 { s = R3 { v: n }; s }
 
@@ -59,7 +59,7 @@ fn pick_r3(c: integer) -> R3 {
 // destination reuse.
 fn grow_r3(x: R3) -> R3 { s = R3 { v: x.v + 1 }; s }
 
-struct N3 { name: text, v: integer not null }
+struct N3 { name: text, v: integer }
 
 fn grow_n3(x: N3) -> N3 { t = N3 { name: x.name + "x", v: x.v + 1 }; t }
 

@@ -692,8 +692,7 @@ fn main() {
   br_hs_file = file(HIGHSCORE_PATH);
   if br_hs_file.exists() {
     br_hs_txt = br_hs_file.content();
-    br_highscore = br_hs_txt as integer;
-    if !br_highscore { br_highscore = 0; }
+    br_highscore = br_hs_txt as integer ?? 0;
   }
   br_won = false;
   br_lost = false;
@@ -891,7 +890,7 @@ fn main() {
       if br_mus_lvl != br_level {
         br_mus_lvl    = br_level;
         br_mus_played = 0;
-        br_mus_song   = ((br_now / 11) as integer) % MUSIC_TRACKS;
+        br_mus_song   = (((br_now / 11) as integer) % MUSIC_TRACKS) ?? 0;
         br_mus_idx    = 0;
         br_mus_resting = true;
         // Random 2-6 s silence before the first song.
@@ -919,7 +918,7 @@ fn main() {
             br_mus_step = TRACK_C_DUR;
           }
           if br_mnote > 0 {
-            graphics::sfx_beep(br_mnote as single, br_mus_step, MUSIC_VOL);
+            graphics::sfx_beep((br_mnote ?? 0) as single, br_mus_step, MUSIC_VOL);
           }
           br_mus_t = br_mus_step;
           br_mus_idx += 1;
@@ -927,7 +926,7 @@ fn main() {
             // End of track — advance the queue and schedule a random
             // silence before the next song (or forever if done).
             br_mus_played += 1;
-            br_mus_song = (br_mus_song + 1) % MUSIC_TRACKS;
+            br_mus_song = ((br_mus_song + 1) % MUSIC_TRACKS) ?? 0;
             br_mus_resting = true;
             if br_mus_played >= MUSIC_TRACKS {
               br_mus_t = 9999.0f;
@@ -1022,7 +1021,7 @@ fn main() {
           br_pdy = br_cy - br_pcly;
           if br_pdx * br_pdx + br_pdy * br_pdy < BALL_RADIUS * BALL_RADIUS {
             br_ball_dy[br_bi] = 0.0 - abs(br_ball_dy[br_bi]);
-            br_bh = (br_cx - br_px) / br_pw;
+            br_bh = (br_cx - br_px) / br_pw ?? 0.0;
             br_ball_dx[br_bi] = br_ball_speed * (br_bh - 0.5) * 1.8;
             br_ball_y[br_bi] = PADDLE_Y - BALL_SIZE;
             br_cy = br_ball_y[br_bi] + BALL_SIZE / 2.0;
@@ -1115,9 +1114,9 @@ fn main() {
                       br_pt_vy[br_pf] = br_spd * sin(br_angle);
                       br_pt_t[br_pf] = PARTICLE_LIFE;
                       // Color from row
-                      br_pt_r[br_pf] = br_pcr[br_row_ci];
-                      br_pt_g[br_pf] = br_pcg[br_row_ci];
-                      br_pt_b[br_pf] = br_pcb[br_row_ci];
+                      br_pt_r[br_pf] = br_pcr[br_row_ci] ?? 0.0;
+                      br_pt_g[br_pf] = br_pcg[br_row_ci] ?? 0.0;
+                      br_pt_b[br_pf] = br_pcb[br_row_ci] ?? 0.0;
                       break;
                     }
                   }
@@ -1129,7 +1128,7 @@ fn main() {
                     if br_pk_on[br_ps] == 0 {
                       br_pk_x[br_ps] = bk_x(br_cc) + BRICK_W / 2.0 - PICKUP_W / 2.0;
                       br_pk_y[br_ps] = bk_y(br_cr);
-                      br_pk_type[br_ps] = br_specials[br_ci];
+                      br_pk_type[br_ps] = br_specials[br_ci] ?? SP_NONE;
                       br_pk_on[br_ps] = 1;
                       break;
                     }
@@ -1518,7 +1517,7 @@ fn main() {
       br_shake_t -= br_dt;
       if br_shake_t < 0.0 { br_shake_t = 0.0; }
       // Linear decay of magnitude — strongest at trigger, zero at end.
-      br_shake_amp = br_shake_mag * (br_shake_t / br_shake_d);
+      br_shake_amp = br_shake_mag * ((br_shake_t / br_shake_d) ?? 0.0);
       // Pseudo-random offsets keyed off br_now so neighbouring
       // frames get different values without the overhead of a real
       // RNG.  The modulus keeps the magnitude bounded.
@@ -1534,8 +1533,8 @@ fn main() {
     // Push the shake offset into the painter's orthographic
     // projection so every world-space draw inherits it automatically.
     // Restored to identity before HUD / overlay draws below.
-    br_painter.p2_proj[12] = -1.0 + br_shake_x * 2.0 / SCREEN_W;
-    br_painter.p2_proj[13] =  1.0 - br_shake_y * 2.0 / SCREEN_H;
+    br_painter.p2_proj[12] = (-1.0 + br_shake_x * 2.0 / SCREEN_W) ?? 0.0;
+    br_painter.p2_proj[13] =  (1.0 - br_shake_y * 2.0 / SCREEN_H) ?? 0.0;
 
     // Bricks — flat color + sprite icon overlay for specials
     for br_dr in 0..br_rows {
@@ -1650,7 +1649,7 @@ fn main() {
           br_ft_x[br_ft_head]   = br_ball_x[br_ftb];
           br_ft_y[br_ft_head]   = br_ball_y[br_ftb];
           br_ft_age[br_ft_head] = 0;
-          br_ft_head = (br_ft_head + 1) % MAX_TRAIL;
+          br_ft_head = ((br_ft_head + 1) % MAX_TRAIL) ?? 0;
           break;
         }
       }
@@ -1708,7 +1707,7 @@ fn main() {
       br_dw = BALL_SIZE;
       br_dh = BALL_SIZE;
       if br_sqt > 0.0 {
-        br_phase = 1.0 - br_sqt / BALL_SQUASH_DURATION;  // 0..1
+        br_phase = (1.0 - br_sqt / BALL_SQUASH_DURATION) ?? 0.0;  // 0..1
         // Bounces in this game are rarely axis-aligned — the paddle
         // kicks the ball out at any angle — so the squash should
         // stretch in the ball's actual motion direction, not a fixed
@@ -1719,8 +1718,8 @@ fn main() {
         br_dvy = abs(br_ball_dy[br_bd]);
         br_vmag = br_dvx + br_dvy;
         if br_vmag < 1.0 { br_vmag = 1.0; }
-        br_vxf = br_dvx / br_vmag;  // 0=vertical motion, 1=horizontal
-        br_vyf = br_dvy / br_vmag;
+        br_vxf = br_dvx / br_vmag ?? 0.0;  // 0=vertical motion, 1=horizontal
+        br_vyf = br_dvy / br_vmag ?? 0.0;
         // Strength triangle: 0 at phase 0/1, peaks at phase 0.5.
         br_str = br_phase * 2.0;
         if br_phase > 0.5 { br_str = (1.0 - br_phase) * 2.0; }
@@ -1753,7 +1752,7 @@ fn main() {
     // Particles — alpha fades with remaining life
     for br_pd in 0..MAX_PARTICLES {
       if br_pt_t[br_pd] > 0.0 {
-        br_pa = br_pt_t[br_pd] / PARTICLE_LIFE;
+        br_pa = br_pt_t[br_pd] / PARTICLE_LIFE ?? 0.0;
         graphics::draw_rect_at(br_painter,
           br_pt_x[br_pd], br_pt_y[br_pd], 4.0, 4.0,
           br_pt_r[br_pd], br_pt_g[br_pd], br_pt_b[br_pd], br_pa);
@@ -1943,7 +1942,7 @@ fn main() {
 
     // Screen flash overlay
     if br_flash_timer > 0.0 {
-      br_fa = br_flash_timer / FLASH_DURATION * 0.4;
+      br_fa = br_flash_timer / FLASH_DURATION * 0.4 ?? 0.0;
       graphics::draw_rect_at(br_painter,
         0.0, 0.0, SCREEN_W, SCREEN_H, br_flash_r, br_flash_g, br_flash_b, br_fa);
     }

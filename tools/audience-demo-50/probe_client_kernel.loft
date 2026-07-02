@@ -26,10 +26,10 @@ use engine_host;
 const TICK_US: integer = 33333;   // 30 Hz, the server's grid
 
 struct Stats {
-  tick_n:       integer not null,
-  poses:        integer not null,
-  echoes:       integer not null,
-  last_echo_us: integer not null,
+  tick_n:       integer,
+  poses:        integer,
+  echoes:       integer,
+  last_echo_us: integer,
   tot:          vector<integer>,   // t6 - t0, one clock
   hold:         vector<integer>,   // t5 - t1, server clock
 }
@@ -48,8 +48,8 @@ fn sort_us(v: vector<integer>) {
 
 fn pctl(v: vector<integer>, p: integer) -> integer {
   if v.len() == 0 { return 0; }
-  idx = (v.len() - 1) * p / 100;
-  v[idx]
+  idx = (v.len() - 1) * p / 100 ?? 0;
+  v[idx] ?? 0
 }
 
 // "5:t0,t1,t5" → record total + hold.
@@ -57,12 +57,12 @@ fn note_echo(st: Stats, payload: text) {
   body = payload[2..];
   i = body.find(",");
   if i == null { return; }
-  t0 = body[..i] as integer;
+  t0 = body[..i] as integer ?? 0;
   rest = body[i + 1..];
   j = rest.find(",");
   if j == null { return; }
-  t1 = rest[..j] as integer;
-  t5 = rest[j + 1..] as integer;
+  t1 = rest[..j] as integer ?? 0;
+  t5 = rest[j + 1..] as integer ?? 0;
   st.tot += [ticks() - t0];
   st.hold += [t5 - t1];
   st.echoes = st.echoes + 1;

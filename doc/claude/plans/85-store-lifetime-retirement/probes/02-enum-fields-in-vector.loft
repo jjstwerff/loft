@@ -2,7 +2,7 @@
 // appended to a vector (copy_claims path). #406's crash was fixed in #412, but
 // its own thread reports two-enum-field READBACK is still corrupt. Reachable in
 // pure loft (no FFI gap). Control = direct (non-vector) read.
-enum CV { CInt { value: integer not null } }
+enum CV { CInt { value: integer } }
 struct E1 { key: CV }
 struct E2 { key: CV, value: CV }
 fn mk(x: integer) -> CV { return CInt { value: x }; }

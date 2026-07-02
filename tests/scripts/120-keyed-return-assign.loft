@@ -10,9 +10,9 @@
 // keeps it on a first assignment (store init) and elides it on a
 // reassignment (bare `OpReplaceKeyed` reuses the existing store).
 
-struct Item { k: integer not null }
-struct HRec { ck: integer not null, v: integer not null }
-struct IRec { n: integer not null }
+struct Item { k: integer }
+struct HRec { ck: integer, v: integer }
+struct IRec { n: integer }
 
 fn mk_hash() -> hash<HRec[ck]> {
   h: hash<HRec[ck]> = [];

@@ -25,17 +25,21 @@ Closing a row means the implementation obeys the rule (then the deviation entry 
 
 | area | open | what's left |
 |---|---|---|
-| [types.md](types.md) | 0 | ✓ closed — D2 closed by reconciliation (C83): `integer` is i64 user-visibly via a compact internal encoding |
+| [types.md](types.md) | 0 | ✓ closed — **@PLN25 value/null model landed (2026-07-02): DN1/DN2/DN3/DN4/DN5/DN6 CLOSED**, D2 closed (C83). DN3 fully closed: text→numeric **parse** now types `τ?` (`(N-Parse)`, reachable fault, like `÷0`/OOB). Overflow-arith (`a*b`) is a **decided edge** — non-null, overflow→null+continue (C85), NOT `τ?` |
 | [binding.md](binding.md) | 0 | ✓ closed — D-bind-7 (reject bare `&a;` / block-final `{ &a }`) landed |
 | [grammar.md](grammar.md) | 0 | ✓ closed — D-gram-1/3 landed; D-gram-2 (non-CFG) + D-gram-4 (`&` overload) resolved as decided edges → DESIGN_DECISIONS C81/C82 |
 | [operational.md](operational.md) | 2 | D-op-1/2 the differential oracle (@PLN89) — D-op-4 the spreadsheet runtime (C80) is **CLOSED** (formalize4); the oracle SEED landed (`tests/oracle/`) |
 | [ownership.md](ownership.md) | 5 | the `deps` borrow checker — **★ ACTIVE NOW (next days): the code-simplification exploration**, see [OWNERSHIP_MODEL.md § ACTIVE](../OWNERSHIP_MODEL.md#active--the-simplification-exploration-next-days-exploratory--revertable). Typed `Deps` (D-own-3) first |
 | [capabilities.md](capabilities.md) | 3 | sandbox admission — call gate + field read/update/append **enforced** (@PLN86 F1–F6); remaining: the parameter `#default` lock (D-cap-1, @PLN86 6.9), the capturing-closure residual (D-cap-2), the owned-vs-host dependency on ownership D-own-2 (D-cap-3) |
 
-Binding, type, and grammar are closed. The active focus for the next days is the
-**ownership simplification** — collapse the per-site `deps` thicket onto the one beacon fact
-(OWNERSHIP_MODEL.md), exploratory + revertable, guarded by the @PLN89 differential oracle.
-The operational differential oracle (D-op-1/2) grows alongside it as the safety net.
+Binding + grammar + **types are closed** — the @PLN25 value/null model landed (2026-07-02); DN3
+fully closed with the text→numeric parse flip (`(N-Parse)` types `τ?`), overflow-arith reclassified
+as a decided edge (C85, not a deviation). The active focus
+for the next days is the **ownership simplification** — collapse the per-site `deps` thicket onto
+the one beacon fact (OWNERSHIP_MODEL.md), exploratory + revertable, guarded by the @PLN89
+differential oracle. The operational differential oracle (D-op-1/2) grows alongside it as the
+safety net. **@PLN25 unblocks ownership** (GATE 1): the value/null model is settled, so the
+ownership invariant can now be defined at `materialization_mode` (the two met there).
 
 ---
 
@@ -74,7 +78,7 @@ The real weight. Each is a `loft-lang/plans` issue, sequenced.
 
 | # | deviation(s) | project | direction |
 |---|---|---|---|
-| D1 | **D-op-1, D-op-2** | **DECIDED (2026-06): a differential oracle** — run a growing corpus on BOTH backends and assert they agree (value / null / halt / stdout / leak); the operational.md rules guide coverage. Turns the interp/native divergence class (D4/#433) from a coverage lottery into a caught failure. Switchable later to an executable shared semantics; the rules reuse either way. Tracked: **[@PLN89](https://github.com/loft-lang/plans/issues/89)**. | code→spec (the chosen model) |
+| D1 | **D-op-1, D-op-2** | **DECIDED (2026-06): a differential oracle** — run a growing corpus on BOTH backends and assert they agree (value / null / halt / stdout / leak); the operational.md rules guide coverage. Turns the interp/native divergence class (D4/#433) from a coverage lottery into a caught failure. Switchable later to an executable shared semantics; the rules reuse either way. **Scope addition (2026-07-02, routing feedback): DRIVER agreement — well-typedness is ONE static judgment, so accept/reject must agree across `--interpret` / `--dump` / `--native` / `--native-wasm` for every corpus program** (the reported `--dump` divergence traced to mixed binaries, but the property needs a guard, not an assumption; a first-pass abort already makes the *diagnostic set* phase-dependent). Tracked: **[@PLN89](https://github.com/loft-lang/plans/issues/89)**. | code→spec (the chosen model) |
 | ~~D2~~ **DONE** | ~~**D-op-4**~~ | **BUILT the spreadsheet runtime** (formalize4). Div/mod-by-zero and integer overflow now yield the null sentinel and CONTINUE on both backends (`raise_recoverable` + `checked_long!`→`i64::MIN`); OOB already complied; `NullDereference` was never raised. Two refinements vs the original plan: an UNGUARDED div0 reports a Warn log (`E-Report`), overflow is silent (rustc-release default). The `??` trap-suppression mode is gone behaviourally (the `*Nullable` op split is now dead code — separable cleanup). Guard: `tests/scripts/184-i333-div-zero-null-continues.loft`. | code→spec (C80), landed |
 
 ---
@@ -82,8 +86,9 @@ The real weight. Each is a `loft-lang/plans` issue, sequenced.
 ## Resolving order, in one line
 
 **~~A1~~ ~~A2~~ ~~A3~~** clears Phase A **·** **~~B1~~ ~~B2~~ ~~B3~~** all decided (D-gram-2/4 →
-decided edges C82/C81; grammar.md at 0) **·** binding.md + grammar.md + types.md (D2 reconciled)
-+ **~~D2~~ (D-op-4 spreadsheet runtime, formalize4)** now **closed** **·** NEXT: the tracked arcs
+decided edges C82/C81; grammar.md at 0) **·** binding.md + grammar.md + **types.md (@PLN25 CLOSED —
+DN1–DN6, D2 reconciled; DN3 parse-flip landed)** + **~~D2~~ (D-op-4 spreadsheet runtime,
+formalize4)** now **closed** **·** NEXT: the tracked arcs
 **C2 (typed Deps) → C3 (@PLN85)** ownership, and the operational **D1** (differential oracle, @PLN89)
 — the only open deviations left.
 

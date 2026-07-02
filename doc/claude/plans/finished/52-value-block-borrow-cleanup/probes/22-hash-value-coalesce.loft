@@ -15,8 +15,8 @@
 // Pairing: diff against 10 (Reference) and 21 (Vector).
 // Status: cluster IV completion probe.
 
-struct Entry { name: text, value: integer not null }
-struct W1 { tag: integer not null, items: hash<Entry[name]> }
+struct Entry { name: text, value: integer }
+struct W1 { tag: integer, items: hash<Entry[name]> }
 
 fn fallback_hash() -> hash<Entry[name]> {
   h: hash<Entry[name]> = [];

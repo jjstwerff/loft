@@ -15,7 +15,7 @@
 // universal first-bind form.  Dense-element vectors (`vector<M>`) only — the
 // shape the proxy never covered.
 
-struct M { hp: integer not null, depth: integer not null, name: text }
+struct M { hp: integer, depth: integer, name: text }
 
 fn m_none() -> M { M { hp: 0, depth: 0, name: "" } }
 

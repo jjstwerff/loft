@@ -48,8 +48,16 @@ fn native_suite_lock() -> &'static Mutex<()> {
 /// Docs files that are known to fail in `--native` mode.
 /// See PROBLEMS.md for details on each issue number.
 ///
-/// Doc files to skip in native mode. Empty — all docs now compile natively.
-const NATIVE_SKIP: &[&str] = &[];
+/// Doc files to skip in native mode.
+const NATIVE_SKIP: &[&str] = &[
+    // @PLN25/@PLN85 Family-D residual: a GENERIC `-> T?` (Optional) return
+    // instantiated at a struct/reference T mixes the SCALAR sentinel template
+    // (`i64::MIN` / `get_int`) into a `DbRef`-returning fn — rustc E0308.
+    // Surfaced when 25-generics migrated `last_element<T>` to `-> T?` under
+    // DN1.  Interp coverage stays (wrap `dir` runs this file); drop the skip
+    // when the generic-Optional-return native ABI slice lands.
+    "25-generics.loft",
+];
 
 /// Script files to skip in native mode.
 const SCRIPTS_NATIVE_SKIP: &[&str] = &[

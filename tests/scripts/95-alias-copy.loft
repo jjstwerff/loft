@@ -3,8 +3,8 @@
 // O-B2 safety: function WITH ref param must deep copy (prevent aliasing).
 
 struct AcPoint {
-  x: float not null,
-  y: float not null
+  x: float,
+  y: float
 }
 
 fn ac_make(ac_x: float, ac_y: float) -> AcPoint {

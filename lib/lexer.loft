@@ -392,7 +392,7 @@ fn escaped(self: Lexer, i: integer) -> character {
   } else if c == 'x' {
     // ascii token
     total = "0" + self.data[i + 1..i + 4];
-    nr = total as integer;
+    nr = total as integer ?? 0;
     nr as character
   } else if c == 'u' {
     // not implemented yet unicode token

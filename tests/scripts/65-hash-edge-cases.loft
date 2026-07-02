@@ -14,7 +14,7 @@ struct HecMap {
 }
 
 struct HecNum {
-  id: integer not null,
+  id: integer,
   label: text
 }
 

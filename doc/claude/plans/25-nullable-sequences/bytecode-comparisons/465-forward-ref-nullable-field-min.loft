@@ -1,5 +1,5 @@
 struct Holder { items: vector<Item?> }
-struct Item { v: integer not null }
+struct Item { v: integer }
 fn main() {
   xs: vector<Item?> = [ Item{v:7}, null ];
   h = Holder { items: xs };

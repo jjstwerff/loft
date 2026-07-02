@@ -20,9 +20,9 @@
 
 // One pumped event.  kind: 0 = connect, 1 = message, 2 = disconnect.
 pub struct Event {
-  cid:     integer not null,
-  kind:    integer not null,
-  payload: text not null,
+  cid:     integer,
+  kind:    integer,
+  payload: text,
 }
 
 fn kernel_listen(port: integer, tick_interval_us: integer) -> boolean;

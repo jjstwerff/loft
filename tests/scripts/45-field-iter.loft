@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // A10: Field iteration — for f in s#fields
 
-struct Point { x: float not null, y: float not null, z: float not null }
+struct Point { x: float, y: float, z: float }
 
 struct Mixed {
   name: text,

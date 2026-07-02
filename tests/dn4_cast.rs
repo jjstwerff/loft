@@ -1,11 +1,12 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// @PLN25 DN4 (default ON; opt-out LOFT_NO_DN4) — `(N-Cast)` / `(N-Cast?)`: a
+// @PLN25 DN4 (F5 cutover — UNCONDITIONAL, no opt-out) — `(N-Cast)` / `(N-Cast?)`: a
 // narrowing integer cast whose value is not provably in range stops being a silent
 // 8-byte width-tag (`400 as u8 == 400`). `as τ` is a compile error (use `as τ?`);
-// `as τ?` is a checked cast — value if it fits, else the integer null. Validated
-// here on BOTH backends. Design:
+// `as τ?` is a checked cast — value if it fits, else the integer null. The old
+// `LOFT_NO_DN4` escape hatch is retired (see `dn4_no_optout_flag_is_retired`).
+// Validated here on BOTH backends. Design:
 // doc/claude/plans/25-nullable-sequences/implementation-steps.md § Phase 3 / DN4
 // and doc/claude/formal/types.md § DN4.
 
@@ -99,22 +100,26 @@ fn dn4_rejects_non_fit_nonnull_cast() {
     }
 }
 
-/// With the flag OFF (the default), DN4 is inert — the old width-tag behaviour
-/// stands (`300 as u8 == 300`, no error). Guards the `LOFT_NO_DN4` escape hatch.
+/// @PLN25 F5 cutover: the `LOFT_NO_DN4` escape hatch is RETIRED — DN4 is now
+/// unconditional, so setting the (now-dead) env var does NOT revert to the old silent
+/// width-tag; `300 as u8` still errors. Guards against the opt-out being reintroduced.
 #[test]
-fn dn4_off_keeps_old_behaviour() {
-    let path = write_probe("off.loft", "fn main(){ x = 300 as u8; println(\"{x}\"); }");
+fn dn4_no_optout_flag_is_retired() {
+    let path = write_probe(
+        "no_optout.loft",
+        "fn main(){ x = 300 as u8; println(\"{x}\"); }",
+    );
     let out = Command::new(env!("CARGO_BIN_EXE_loft"))
-        .args(["--interpret"])
+        .args(["--check"])
         .arg(&path)
         .env("LOFT_NO_DN4", "1")
         .env("LOFT_NO_CACHE", "1")
         .output()
         .expect("spawn loft");
-    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stdout.contains("300"),
-        "flag-off DN4 should keep 300 as u8 == 300; got:\nstdout:{stdout}\nstderr:{}",
-        String::from_utf8_lossy(&out.stderr)
+        stderr.contains("narrowing cast"),
+        "LOFT_NO_DN4 must no longer disable DN4 (opt-out retired); expected a narrowing-cast error, got:\nstderr:{stderr}\nstdout:{}",
+        String::from_utf8_lossy(&out.stdout)
     );
 }

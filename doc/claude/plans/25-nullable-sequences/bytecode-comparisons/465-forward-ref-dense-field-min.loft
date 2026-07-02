@@ -1,4 +1,4 @@
-enum V { CNull, CInt { value: integer not null }, CText { value: text }, CMap { entries: vector<Entry> } }
+enum V { CNull, CInt { value: integer }, CText { value: text }, CMap { entries: vector<Entry> } }
 struct Entry { key: V, value: V }
 fn first_key(m: V) -> integer {
   match m {

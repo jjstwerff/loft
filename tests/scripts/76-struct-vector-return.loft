@@ -23,8 +23,8 @@ fn test_p104_direct_return() {
 
 // P105 FIXED: nested struct field access on vector elements
 struct SvInner {
-  ix: float not null,
-  iy: float not null
+  ix: float,
+  iy: float
 }
 
 struct SvOuter {
@@ -40,7 +40,7 @@ fn test_p105_inline_struct_in_vector() {
 }
 
 // P105: deeper nesting — struct containing struct in vector
-struct SvP2 { x: float not null, y: float not null }
+struct SvP2 { x: float, y: float }
 struct SvSeg { start: SvP2, end_p: SvP2 }
 struct SvSegList { segs: vector<SvSeg> }
 

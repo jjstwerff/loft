@@ -1,4 +1,4 @@
-struct E { hp: integer not null, name: text }
+struct E { hp: integer, name: text }
 struct Box { rows: vector<E> }
 fn copyf(b: Box) -> vector<E> { o: vector<E> = []; o += b.rows; return o; }
 fn main() {

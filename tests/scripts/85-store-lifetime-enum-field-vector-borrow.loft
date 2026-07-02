@@ -9,7 +9,7 @@
 // (`tail_borrows_arg`) through CopyBorrow → copy_borrow_tail_into_retbuf, the
 // same copy the struct-field tail (#415) and whole-arg tail (a2) already use.
 
-struct M { hp: integer not null, depth: integer not null, name: text }
+struct M { hp: integer, depth: integer, name: text }
 enum Cell { Empty, Filled { items: vector<M> } }
 
 fn m_none() -> M { M { hp: 0, depth: 0, name: "" } }

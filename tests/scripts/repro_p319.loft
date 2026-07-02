@@ -56,7 +56,7 @@ fn p319_offset0() {
 
 // Non-zero-offset variant: a scalar field precedes the vector, so the vector
 // header sits at a non-zero offset.  Pre-fix symptom: SIGSEGV in new_record.
-struct P319MeshB { tag: integer not null, verts: vector<P319Vtx> }
+struct P319MeshB { tag: integer, verts: vector<P319Vtx> }
 
 fn p319_offset_nonzero() {
   m_b = P319MeshB { tag: 7, verts: [] };

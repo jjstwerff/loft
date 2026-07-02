@@ -78,7 +78,11 @@ enum TypeT {
   TyHash { n: integer, names: vector<NameRef>, dep: vector<integer> },
   TyFunction { args: vector<TypeT>, result: vector<TypeT>, dep: vector<integer> },
   TyRewritten { inner: vector<TypeT> },
-  TyTuple { elems: vector<TypeT> }
+  TyTuple { elems: vector<TypeT> },
+  // @PLN25 — the `τ?` nullability marker. A box-of-one child like TyRefVar; the
+  // runtime layout is the base's (sentinel storage), but the marker is persisted
+  // so a nullable type survives the store round-trip (its N-Store contract).
+  TyOptional { inner: vector<TypeT> }
 }
 
 // ---- Value (34 variants) ----------------------------------------------------

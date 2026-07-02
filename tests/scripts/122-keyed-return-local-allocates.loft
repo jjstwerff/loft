@@ -23,8 +23,8 @@
 // All sections must run clean (correct result + no store leak at exit) on BOTH
 // the interpreter and --native.
 
-struct Item { k: integer not null }
-struct HRec { ck: integer not null, v: integer not null }
+struct Item { k: integer }
+struct HRec { ck: integer, v: integer }
 
 // --- OWNS: keyed return-local. The store is allocated in mk_* and transferred
 //     on return; the receiving local must read a real (allocated) store. ---

@@ -13,7 +13,7 @@
 // 85-store-lifetime-vector-view-call-bind-overfree, which was native-only).
 // The EXPLICIT-return form was already correct; this guards the IMPLICIT tail.
 
-struct M { hp: integer not null, name: text }
+struct M { hp: integer, name: text }
 struct Box { rows: vector<M> }
 
 fn view_rows(b: Box) -> vector<M> { b.rows }   // borrowed implicit-tail vector view

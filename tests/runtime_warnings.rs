@@ -74,8 +74,13 @@ fn run_with_w4(name: &str, source: &str) -> (String, String, Option<i32>) {
 
 // ── Warning fires on every undefended fault site ────────────────────────────
 
+// @PLN25 DN3 — `/` and `%` now TYPE `integer?` (the null is in the type and `(N-Store)`
+// forces discharge at stores), so the redundant runtime-null warning is RETIRED under DN1
+// (operators.rs::emit_undefended_warning early-returns for Div/Rem). An inferred local
+// absorbs the nullability, so the division still runs. These guard that the retirement
+// holds — the index warnings below stay until the index flip lands.
 #[test]
-fn undefended_div_by_var_warns() {
+fn div_by_var_no_warn_retired_dn3() {
     let source = "\
 fn main() {
   z = 5;
@@ -83,15 +88,19 @@ fn main() {
   print(\"x={x}\\n\");
 }
 ";
-    let (_stdout, diag, _code) = run_with_warnings("undef_div", source);
+    let (stdout, diag, _code) = run_with_warnings("undef_div", source);
     assert!(
-        diag.contains("warning: division may produce null"),
-        "expected div warning; got stdout={diag:?}"
+        !diag.contains("division may produce null"),
+        "div warning is retired under DN1 (the type carries the null); got {diag:?}"
+    );
+    assert!(
+        stdout.contains("x=2"),
+        "the division still runs (10/5=2); got {stdout:?}"
     );
 }
 
 #[test]
-fn undefended_mod_by_var_warns() {
+fn mod_by_var_no_warn_retired_dn3() {
     let source = "\
 fn main() {
   z = 5;
@@ -99,15 +108,24 @@ fn main() {
   print(\"x={x}\\n\");
 }
 ";
-    let (_stdout, diag, _code) = run_with_warnings("undef_mod", source);
+    let (stdout, diag, _code) = run_with_warnings("undef_mod", source);
     assert!(
-        diag.contains("warning: modulus may produce null"),
-        "expected mod warning; got stdout={diag:?}"
+        !diag.contains("modulus may produce null"),
+        "mod warning is retired under DN1 (the type carries the null); got {diag:?}"
+    );
+    assert!(
+        stdout.contains("x=0"),
+        "the modulus still runs (10%5=0); got {stdout:?}"
     );
 }
 
+// @PLN25 index flip — `v[i]` / `s[i]` now TYPE `τ?` (the OOB null is in the type and
+// `(N-Store)` forces discharge at stores), so the redundant runtime-null warning is RETIRED
+// under DN1 (operators.rs::emit_undefended_warning early-returns for VectorIndex/TextIndex).
+// An inferred local absorbs the nullability, so the undefended index still runs. These guard
+// that the retirement holds (constant / iter-var / guard fit-proofs stay non-null below).
 #[test]
-fn undefended_vec_index_by_var_warns() {
+fn vec_index_by_var_no_warn_retired() {
     let source = "\
 fn main() {
   v = [10, 20, 30];
@@ -116,15 +134,19 @@ fn main() {
   print(\"x={x}\\n\");
 }
 ";
-    let (_stdout, diag, _code) = run_with_warnings("undef_vec", source);
+    let (stdout, diag, _code) = run_with_warnings("undef_vec", source);
     assert!(
-        diag.contains("warning: `v[i]` may produce null"),
-        "expected vec OOB warning; got stdout={diag:?}"
+        !diag.contains("warning: `v[i]` may produce null"),
+        "the v[i] warning is retired under DN1 (the type carries the null); got {diag:?}"
+    );
+    assert!(
+        stdout.contains("x=20"),
+        "the index still reads v[1]=20; got {stdout:?}"
     );
 }
 
 #[test]
-fn undefended_text_index_by_var_warns() {
+fn text_index_by_var_no_warn_retired() {
     let source = "\
 fn main() {
   s = \"abc\";
@@ -133,10 +155,14 @@ fn main() {
   print(\"c={c}\\n\");
 }
 ";
-    let (_stdout, diag, _code) = run_with_warnings("undef_text", source);
+    let (stdout, diag, _code) = run_with_warnings("undef_text", source);
     assert!(
-        diag.contains("warning: `s[i]` may produce null"),
-        "expected text OOB warning; got stdout={diag:?}"
+        !diag.contains("warning: `s[i]` may produce null"),
+        "the s[i] warning is retired under DN1 (the type carries the null); got {diag:?}"
+    );
+    assert!(
+        stdout.contains("c=b"),
+        "the index still reads s[1]='b'; got {stdout:?}"
     );
 }
 
@@ -351,7 +377,7 @@ fn main() {
 fn fmt43_genuine_null_renders_bare_null() {
     let source = "\
 fn main() {
-  z = null as integer;
+  z = null as integer?;
   print(\"a={z}\\n\");
 }
 ";
@@ -580,10 +606,13 @@ fn main() {
 
 // ── Plan-07 phase 4h — `not null` field-reminder hint ──────────────────
 
-/// A struct field read 10+ times with no `??` defense triggers the
-/// `not null` hint at the struct declaration.
+/// @PLN25 DN1/F2 — the `not null` field-reminder hint is RETIRED. A struct field read 10+
+/// times with no `??` defense used to trigger a "consider marking it `not null`" hint; under
+/// the dense model a plain scalar is NON-null by default (nullability rides `?`), so `not null`
+/// is redundant (being retired) and suggesting it is moot — superseded like the div/index fault
+/// warnings. This formerly-hinted case must now produce NO such hint.
 #[test]
-fn hint_4h_high_read_count_suggests_not_null() {
+fn hint_4h_high_read_count_hint_retired() {
     let source = "\
 struct Player {
   id: integer,
@@ -621,8 +650,8 @@ fn main() {
     .into_owned();
     assert_eq!(code, Some(0), "must not halt; got code={code:?}");
     assert!(
-        diag.contains("field `Player.id`") && diag.contains("consider marking it `not null`"),
-        "expected not-null hint for Player.id; got diag={diag:?}"
+        !diag.contains("consider marking it `not null`"),
+        "the `not null` hint is RETIRED under DN1/F2 — expected NO hint for Player.id; got diag={diag:?}"
     );
 }
 
@@ -768,21 +797,22 @@ fn main() {
     );
 }
 
-// ── Skip pattern 4 — loop-bounded arithmetic index ──────────────────────────
+// ── Index-warning retirement — loop-bounded arithmetic vs mixed index ────────
 //
-// Generalises skip-pattern 3 (a bare loop var) to integer arithmetic over
-// loop counters — `m[i * 4 + j]` where i, j are active for-loop vars is as
-// trustworthy as a bare `m[i]`.  Surfaced by the graphics matrix kernels
-// (lib/graphics/src/math.loft::mat4_mul).
+// @PLN25 index flip — `v[i]` now TYPES `τ?`, so the runtime-null warning is RETIRED
+// under DN1 for EVERY index shape (a bare loop var, loop-bounded arithmetic `m[i*4+j]`,
+// AND a mixed `v[base+k]`). The fit-proof still keeps the bare loop var / const / guard
+// non-null (so those never even need discharge); a not-provably-fit index is `τ?` and the
+// developer discharges it (`?? d`) — which is the enforcement the warning used to hint at.
 #[test]
-fn skip_loop_bounded_arithmetic_index() {
+fn loop_arith_index_no_warn_retired() {
     let source = "\
 fn main() {
   m = [for k in 0..16 { k * 1.0 }];
   sum = 0.0;
   for i in 0..4 {
     for j in 0..4 {
-      sum += m[i * 4 + j];
+      sum += m[i * 4 + j] ?? 0.0;
     }
   }
   print(\"sum={sum}\\n\");
@@ -791,21 +821,22 @@ fn main() {
     let (_stdout, diag, _code) = run_with_warnings("skip_loop_arith", source);
     assert!(
         !diag.contains("warning: `v[i]` may produce null"),
-        "loop-bounded arithmetic index must NOT warn; got stderr={diag:?}"
+        "the v[i] warning is retired under DN1; got stderr={diag:?}"
     );
-    // An index mixing in a non-loop value (a parameter / field) still warns.
+    // A mixed index `v[base + k]` (base a parameter) is `integer?` and discharged with `?? 0`;
+    // it no longer WARNS either — the type + N-Store is the enforcement now.
     let source2 = "\
 fn at(v: vector<integer>, base: integer) -> integer {
   total = 0;
-  for k in 0..3 { total += v[base + k]; }
+  for k in 0..3 { total += v[base + k] ?? 0; }
   total
 }
 fn main() { print(\"{at([1,2,3,4], 1)}\\n\"); }
 ";
     let (_o2, diag2, _c2) = run_with_warnings("skip_loop_arith_neg", source2);
     assert!(
-        diag2.contains("warning: `v[i]` may produce null"),
-        "index mixing a non-loop value (base) must still warn; got stderr={diag2:?}"
+        !diag2.contains("warning: `v[i]` may produce null"),
+        "the v[i] warning is retired under DN1; got stderr={diag2:?}"
     );
 }
 
@@ -860,7 +891,10 @@ fn main() {
         !diag.contains("division may produce null"),
         "@P368b: non-zero named-const divisor must NOT warn; got stderr={diag:?}"
     );
-    // a genuine variable divisor still warns.
+    // @PLN25 DN3 — a variable divisor no longer warns either: `/` now TYPES `integer?`,
+    // so the null lives in the type and `(N-Store)` is the enforcement; the runtime-null
+    // warning is retired for Div/Rem under DN1. (The const case above is subsumed but kept
+    // as documentation of the fit-proof path.)
     let source2 = "\
 fn main() {
   x = 10.0;
@@ -871,8 +905,8 @@ fn main() {
 ";
     let (_o2, diag2, _c2) = run_with_warnings("named_const_div_neg", source2);
     assert!(
-        diag2.contains("division may produce null"),
-        "a variable divisor must still warn; got stderr={diag2:?}"
+        !diag2.contains("division may produce null"),
+        "the div warning is retired under DN1 (the type carries the null); got stderr={diag2:?}"
     );
 }
 
@@ -921,7 +955,10 @@ fn main() {
 }
 
 #[test]
-fn undefended_field_vec_index_warns() {
+fn field_vec_index_no_warn_retired() {
+    // @PLN25 — an UNguarded `self.v[i]` types `text?`; the runtime-null warning is retired
+    // (the type + N-Store enforce). An inferred local absorbs it, and the `x != null` check
+    // narrows it — the DN1 idiom the warning used to hint at.
     let source = "\
 struct S { v: vector<text> not null }
 fn rd(self: S, i: integer) -> boolean {
@@ -933,17 +970,24 @@ fn main() {
   print(\"{rd(s, 0)}\\n\");
 }
 ";
-    let (_stdout, diag, _code) = run_with_warnings("undef_field", source);
+    let (stdout, diag, _code) = run_with_warnings("undef_field", source);
     assert!(
-        diag.contains("may produce null on out-of-bounds"),
-        "an UNguarded `self.v[i]` must still warn; got stderr={diag:?}"
+        !diag.contains("may produce null on out-of-bounds"),
+        "the self.v[i] warning is retired under DN1; got stderr={diag:?}"
+    );
+    assert!(
+        stdout.contains("true"),
+        "rd(s,0) reads a present element; got {stdout:?}"
     );
 }
 
 #[test]
-fn wrong_field_guard_still_warns() {
-    // Guard proves `i < len(self.v)` but the index is on a DIFFERENT field
-    // `self.w` — the VecKey differs, so the warning must still fire.
+fn wrong_field_guard_still_rejects() {
+    // @PLN25 index flip — a guard proves `i < len(self.v)` but the index is on a DIFFERENT
+    // field `self.w` (different VecKey), so `self.w[i]` stays `text?`. The runtime-null
+    // warning is retired; the TYPE now enforces it HARDER — returning the `text?` into the
+    // non-null `-> text` is an `(N-Store)` REJECT. (A correct `i < len(self.w)` guard, or a
+    // `?? ""` discharge, compiles.)
     let source = "\
 struct S { v: vector<text> not null, w: vector<text> not null }
 fn rd(self: S, i: integer) -> text {
@@ -956,8 +1000,8 @@ fn main() {
 ";
     let (_stdout, diag, _code) = run_with_warnings("wrong_field_guard", source);
     assert!(
-        diag.contains("may produce null on out-of-bounds"),
-        "a guard on a DIFFERENT field must still warn; got stderr={diag:?}"
+        diag.contains("cannot be stored into the return value"),
+        "a guard on a DIFFERENT field does not prove fit → the `text?` is an N-Store reject; got stderr={diag:?}"
     );
 }
 
@@ -990,9 +1034,12 @@ fn scan(line: text, j: integer) -> boolean { no_annotation(line[j]) }
 fn main() -> integer { 0 }
 ";
     let (_stdout, diag, _code) = run_with_warnings("w2_unannotated", source);
+    // @PLN25 — the fault warning is RETIRED under DN1 (the type + N-Store enforce), so
+    // `#null_safe` warning-suppression is now moot: an undischarged index is `τ?` regardless
+    // of the annotation. Neither annotated nor unannotated warns.
     assert!(
-        diag.contains("may produce null"),
-        "an index passed to an UNannotated param must still warn; got stderr={diag:?}"
+        !diag.contains("may produce null"),
+        "the index warning is retired under DN1 (#null_safe superseded); got stderr={diag:?}"
     );
 }
 
@@ -1009,9 +1056,10 @@ fn scan(line: text, j: integer) -> boolean { outer(raw(line[j])) }
 fn main() -> integer { 0 }
 ";
     let (_stdout, diag, _code) = run_with_warnings("w2_nested", source);
+    // @PLN25 — fault warning retired under DN1 (#null_safe superseded); no warning fires.
     assert!(
-        diag.contains("may produce null"),
-        "an index inside a nested NON-null-safe call must still warn; got stderr={diag:?}"
+        !diag.contains("may produce null"),
+        "the index warning is retired under DN1; got stderr={diag:?}"
     );
 }
 
@@ -1027,15 +1075,13 @@ fn raw(line: text, j: integer) -> character { line[j] }
 fn main() -> integer { 0 }
 ";
     let (_stdout, diag, _code) = run_with_warnings("w2_stdlib_isnum", source);
-    // exactly the raw site warns; the is_numeric receiver does not.
-    assert!(
-        diag.contains("may produce null"),
-        "the raw `line[j]` must still warn; got stderr={diag:?}"
-    );
+    // @PLN25 — the fault warning is retired under DN1 (#null_safe superseded): neither the
+    // raw `line[j]` nor the `is_numeric(s[i])` receiver warns; both are `character?` and the
+    // type + N-Store is the enforcement.
     assert_eq!(
         diag.matches("may produce null").count(),
-        1,
-        "only the raw site should warn — `is_numeric(s[i])` is #null_safe; got stderr={diag:?}"
+        0,
+        "the index warning is retired under DN1; got stderr={diag:?}"
     );
 }
 
@@ -1068,9 +1114,11 @@ fn use_h(line: text, j: integer) -> boolean { h('x', line[j]) }
 fn main() -> integer { 0 }
 ";
     let (_stdout, diag, _code) = run_with_warnings("w3_partial", source);
+    // @PLN25 — fault warning retired under DN1 (#null_safe inference superseded); `line[j]`
+    // is `character?` and no longer warns regardless of the callee's guard shape.
     assert!(
-        diag.contains("may produce null"),
-        "an arg to an UNguarded param must still warn (no over-inference); got stderr={diag:?}"
+        !diag.contains("may produce null"),
+        "the index warning is retired under DN1; got stderr={diag:?}"
     );
 }
 

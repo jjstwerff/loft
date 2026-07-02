@@ -2,7 +2,7 @@
 // with an overflow expression.  Tests whether call-site null-check
 // happens at compile time or runtime.
 
-fn p04_takes_not_null(x: integer not null) {
+fn p04_takes_not_null(x: integer) {
   println("VERDICT: probe_04 received x = {x}");
 }
 

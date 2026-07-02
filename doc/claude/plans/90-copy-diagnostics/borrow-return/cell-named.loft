@@ -1,4 +1,4 @@
-struct E { hp: integer not null, name: text }
+struct E { hp: integer, name: text }
 enum Cell { Empty, Filled { items: vector<E> } }
 fn g(e: Cell) -> vector<E> { match e { Filled { items } => { items }, _ => { [] } } }
 fn main(){ ti: vector<E>=[]; for k in 0..3 { ti+=[E{hp:k,name:"t"}]; } c=Filled{items:ti}; a=g(c); assert(len(a)==3 && a[0].hp==0,"named"); println("named ok"); }

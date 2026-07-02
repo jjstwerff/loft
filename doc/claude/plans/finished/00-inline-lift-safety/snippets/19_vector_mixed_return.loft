@@ -15,11 +15,11 @@
 // Expected status: if VECTOR arm class of bug reproduces → SIGSEGV.
 // Otherwise PASS (the Phase 1b deferral was safe).
 
-struct Inner { n: integer not null }
+struct Inner { n: integer }
 struct Container { items: vector<Inner> }
 struct Holder {
   c:        Container,
-  sentinel: integer not null,
+  sentinel: integer,
 }
 
 fn first_items_or_empty(c: Container) -> vector<Inner> {

@@ -14,22 +14,22 @@
 // cluster-462-slot-reuse-uaf.md. Keep as the boundary marker: if a future fix
 // makes THIS crash, the fix over-reached.
 struct MD {
-  m_hp: integer not null, m_dam: integer not null, m_xp: integer not null,
-  m_depth: integer not null, m_vision: integer not null, m_flags: integer not null,
-  m_speed: integer not null, m_cr: integer not null, m_cg: integer not null, m_cb: integer not null,
+  m_hp: integer, m_dam: integer, m_xp: integer,
+  m_depth: integer, m_vision: integer, m_flags: integer,
+  m_speed: integer, m_cr: integer, m_cg: integer, m_cb: integer,
   m_glyph: text, m_key: text, m_name: text, m_tags: integer,
 }
 struct En {
-  cur_q: integer not null, cur_r: integer not null, tgt_q: integer not null, tgt_r: integer not null,
-  hp: integer not null, maxhp: integer not null, dam: integer not null, xp: integer not null,
-  mlvl: integer not null, vision: integer not null, flags: integer not null, tags: integer not null,
-  awake: boolean not null, speed: integer not null, energy: integer not null,
-  slow_until: integer not null, stun_until: integer not null,
-  cr: integer not null, cg: integer not null, cb: integer not null,
-  glyph: text, key: text, name: text, alive: boolean not null,
-  role: integer not null, hq: integer not null, hr: integer not null,
-  wq2: integer not null, wr2: integer not null, aq2: integer not null, ar2: integer not null,
-  c1g: integer not null, c2g: integer not null,
+  cur_q: integer, cur_r: integer, tgt_q: integer, tgt_r: integer,
+  hp: integer, maxhp: integer, dam: integer, xp: integer,
+  mlvl: integer, vision: integer, flags: integer, tags: integer,
+  awake: boolean, speed: integer, energy: integer,
+  slow_until: integer, stun_until: integer,
+  cr: integer, cg: integer, cb: integer,
+  glyph: text, key: text, name: text, alive: boolean,
+  role: integer, hq: integer, hr: integer,
+  wq2: integer, wr2: integer, aq2: integer, ar2: integer,
+  c1g: integer, c2g: integer,
 }
 fn mk_md(i: integer) -> MD {
   MD { m_hp: 5 + i, m_dam: 2, m_xp: 3, m_depth: 1, m_vision: 4, m_flags: 0,

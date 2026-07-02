@@ -1,4 +1,4 @@
-struct Cell { ck: text not null, x: integer not null, y: integer not null }
+struct Cell { ck: text, x: integer, y: integer }
 struct World { cells: hash<Cell[ck]> }
 fn snap_xs(w: World) -> integer {
   count = 0;

@@ -11,7 +11,7 @@
 //
 // Guards: correct independent values + no store leak on BOTH backends.
 
-enum CV { CN, CI { value: integer not null } }
+enum CV { CN, CI { value: integer } }
 
 fn enc(c: CV) -> vector<u8> {
   return match c { CN => [0 as u8], CI { value } => [(value & 255) as u8] };

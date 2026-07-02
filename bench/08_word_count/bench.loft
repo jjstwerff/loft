@@ -11,7 +11,7 @@ fn main() {
   db = WordDb { freq: [] };
   total = 0;
   for wc_i in 0..n {
-    w = words[wc_i % 18];
+    w = words[wc_i % 18] ?? "";
     existing = db.freq[w];
     if existing == null {
       db.freq += [Word { word: w, count: 1 }];

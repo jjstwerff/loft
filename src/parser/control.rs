@@ -366,6 +366,16 @@ impl Parser {
             if self.enum_context(result) {
                 self.expected = result.clone();
             }
+            // @PLN46/@PLN25: `expr_not_null` is a TRANSIENT marker — "the field access just
+            // parsed is non-null" — used by the very next operator (`p.field ?? d`'s defended
+            // read, the redundant-null-check on `p.field == null`). A field access that ENDS a
+            // statement (`m.value = 20;`) leaves it set with nothing to consume it, so it would
+            // leak into a LATER statement's null-check and mis-fire "redundant null check" on an
+            // unrelated operand (surfaced by F2: `m.value`/`cur.value` became non-null, so
+            // `while cur != null` wrongly warned "always true" naming the stale 'value'). Reset
+            // it at each statement boundary; the within-statement `?? d` / `== null` tracking is
+            // untouched (both operand and consumer parse inside this one `self.expression`).
+            self.expr_not_null = false;
             t = self.expression(&mut n);
             self.expected = saved_expected;
             // Track unconditional terminators at block scope.
@@ -895,7 +905,9 @@ impl Parser {
                 let w = self.materialize_view_return(*td, &mut l[last]);
                 self.ref_return(&[w], l, RetSite::BlockTail);
                 self.nrvo_collapse_tail_set(l, &[w]);
-            } else if let Type::Text(ls) = t {
+            } else if let Type::Text(ls) = t.base() {
+                // @PLN25 slice (c): `.base()` — a `-> text?` return dispatches to the same
+                // work-buffer conversion as `-> text` (text_return re-applies the `?`).
                 self.text_return(ls);
             } else if !vec_arm_handled && let Type::Vector(elm, ls) = t {
                 // @PLN85 / D-own-1 — classify ONCE from the deps fact + tail shape,
@@ -1916,6 +1928,31 @@ impl Parser {
         }
     }
 
+    /// @PLN25 DN1 — like [`Self::branch_yields_null`] but does NOT descend into a nested
+    /// `Value::If` (a lowered `match`/`if`). Used by the enum-`match` arm-widening: an arm
+    /// whose value is a DIRECT bare null (`=> null`, lowered to `OpConv*FromNull`, or a block
+    /// ending in one) must widen the match; but an arm whose value is a NESTED match carries
+    /// its own nullability in `a.tp` (folded into `result_type` by the arm-join), and
+    /// descending into its lowered chain would hit its synthesised unreachable
+    /// `OpConv*FromNull` default and falsely widen (p54).
+    fn arm_yields_direct_null(&self, v: &Value) -> bool {
+        match v.unspan() {
+            Value::Null => true,
+            Value::Block(bl) => bl
+                .operators
+                .last()
+                .is_some_and(|o| self.arm_yields_direct_null(o)),
+            Value::Insert(ops) => ops.last().is_some_and(|o| self.arm_yields_direct_null(o)),
+            Value::Call(d, args)
+                if args.is_empty() && (*d as usize) < self.data.definitions.len() =>
+            {
+                let n = self.data.def(*d).name();
+                n.starts_with("OpConv") && n.ends_with("FromNull")
+            }
+            _ => false,
+        }
+    }
+
     /// @PLN25 DN1 — widen a value's result type to `Optional(τ)` when its lowered `code` yields a
     /// bare null and `tp` is a non-null scalar. Safe ONLY where there is no SYNTHESISED unreachable
     /// `OpConv*FromNull` default (a scalar `match` whose `_` arm is user-written, an `if`); an enum
@@ -1932,10 +1969,98 @@ impl Parser {
     }
 
     // @F27 — if / else as an expression
+    /// @PLN25 DN3 flow-narrowing — read a non-null proof out of a parsed `if` condition.
+    /// Returns `(var, non_null_in_then)`: `v != null` / `if v` (truthy) narrow `v` in the
+    /// THEN branch (`true`); `v == null` narrows `v` in the ELSE branch (`false`). The null
+    /// side of a comparison is any `OpConv*FromNull()` (the parser's typed-null lowering).
+    fn narrowing_from_condition(&self, test: &Value) -> Option<(u16, bool)> {
+        let Value::Call(op, args) = test.unspan() else {
+            return None;
+        };
+        let name = self.data.def(*op).name();
+        let is_null_conv = |a: &Value| {
+            matches!(a.unspan(), Value::Call(c, ca)
+                if ca.is_empty() && self.data.def(*c).name().ends_with("FromNull"))
+        };
+        // `v == null` / `v != null` (Var on either side of the null literal).
+        if (name.starts_with("OpEq") || name.starts_with("OpNe")) && args.len() == 2 {
+            let pair = match (args[0].unspan(), args[1].unspan()) {
+                (Value::Var(v), other) | (other, Value::Var(v)) if is_null_conv(other) => Some(*v),
+                _ => None,
+            };
+            if let Some(v) = pair {
+                return Some((v, name.starts_with("OpNe")));
+            }
+        }
+        // `if v` (truthy) — a bare nullable read converted to boolean → non-null in THEN.
+        if name.starts_with("OpConvBoolFrom")
+            && args.len() == 1
+            && let Value::Var(v) = args[0].unspan()
+        {
+            return Some((*v, true));
+        }
+        None
+    }
+
+    /// @PLN25 DN3 fault-op — read a non-zero divisor proof out of a parsed `if` condition.
+    /// Returns the var slot proven non-zero in the THEN branch by `if v != 0` (`v` on either
+    /// side of a `0` literal). Only `!= 0` narrows (the else of `if v == 0` is a later slice).
+    /// @PLN25 DN3 fault-op — read a "divisor `v` is non-zero" proof from an `if` condition, with
+    /// the branch it holds in: `v != 0` proves it in the THEN branch (`Some((v, true))`); `v == 0`
+    /// proves it in the ELSE branch (`Some((v, false))`) — the common `if b == 0 { … } else { a / b }`
+    /// safe-division idiom. Mirrors `narrowing_from_condition`'s then/else convention.
+    fn divisor_proof_from_condition(&self, test: &Value) -> Option<(u16, bool)> {
+        let Value::Call(op, args) = test.unspan() else {
+            return None;
+        };
+        let name = self.data.def(*op).name();
+        let then_branch = if name.starts_with("OpNe") {
+            true
+        } else if name.starts_with("OpEq") {
+            false
+        } else {
+            return None;
+        };
+        if args.len() != 2 {
+            return None;
+        }
+        let is_zero = |a: &Value| matches!(a.unspan(), Value::Int(0) | Value::Long(0));
+        match (args[0].unspan(), args[1].unspan()) {
+            (Value::Var(v), other) | (other, Value::Var(v)) if is_zero(other) => {
+                Some((*v, then_branch))
+            }
+            _ => None,
+        }
+    }
+
     pub(crate) fn parse_if(&mut self, code: &mut Value) -> Type {
         let mut test = Value::Null;
         let tp = self.expression(&mut test);
         self.convert(&mut test, &tp, &Type::Boolean);
+        // @PLN25 DN3: a non-null proof from the condition narrows the proven var inside the
+        // matching branch (then for `!= null`/truthy, else for `== null`).
+        let narrow = self.narrowing_from_condition(&test);
+        let narrow_base = self.narrowed_non_null.len();
+        if let Some((v, true)) = narrow {
+            self.narrowed_non_null.push(v);
+        }
+        // @PLN25 DN3 fault-op: `if v != 0` proves the divisor `v` non-zero in the THEN branch
+        // (and `if v == 0 … else` in the ELSE branch), so `a / v` / `a % v` there is provably fit
+        // (types non-null). The THEN proof is pushed now; the ELSE proof is pushed below.
+        let divisor = self.divisor_proof_from_condition(&test);
+        let divisor_base = self.divisor_nonzero.len();
+        if let Some((v, true)) = divisor {
+            self.divisor_nonzero.push(v);
+        }
+        // @PLN25 DN3 fault-op (index): `if idx < len(vec) { … }` proves `vec[idx]` in-bounds in the
+        // THEN branch (skip-pattern 5) — reuse the warning walk's guard-pair extractor. THEN-only
+        // (the else side has idx >= len, no fit). The len-capture form (`n = len(v); if idx < n`)
+        // needs the capture map, deferred — pass an empty map, so inline `len(vec)` guards match.
+        let empty_caps = std::collections::HashMap::new();
+        let index_base = self.index_bounded.len();
+        let index_pairs =
+            crate::parser::operators::collect_guard_pairs(&test, &self.data, &empty_caps);
+        self.index_bounded.extend(index_pairs);
         let is_aliases: Vec<(String, Option<u16>)> = self.is_capture_aliases.drain(..).collect();
         let is_bindings: Vec<Value> = self.is_capture_bindings.drain(..).collect();
         let mut true_code = Value::Null;
@@ -1955,6 +2080,20 @@ impl Parser {
             } else {
                 self.vars.remove_name(name);
             }
+        }
+        // @PLN25 DN3: leave the then-branch — drop its narrowing; the ELSE gets the `== null`
+        // proof (the var is non-null on the else side of `if v == null { … } else { … }`).
+        self.narrowed_non_null.truncate(narrow_base);
+        // Leaving the THEN branch, drop its `!= 0` divisor proof; an `== 0` condition instead
+        // proves the divisor non-zero on the ELSE side, pushed just below with the else narrowing.
+        self.divisor_nonzero.truncate(divisor_base);
+        // Leaving the THEN branch — drop its `idx < len(vec)` in-bounds proofs (THEN-only).
+        self.index_bounded.truncate(index_base);
+        if let Some((v, false)) = narrow {
+            self.narrowed_non_null.push(v);
+        }
+        if let Some((v, false)) = divisor {
+            self.divisor_nonzero.push(v);
         }
         let mut false_type = Type::Void;
         let mut false_code = Value::Null;
@@ -1997,6 +2136,14 @@ impl Parser {
             }
         }
         self.vars.restore_write_state(&write_state);
+        // @PLN25 DN3: both branches parsed — drop any narrowing back to the enclosing level
+        // (the proof holds only inside the if/else, not after it).
+        self.narrowed_non_null.truncate(narrow_base);
+        self.divisor_nonzero.truncate(divisor_base);
+        // Belt-and-suspenders: `index_bounded` was already restored after the THEN block (it is
+        // THEN-only, no else-push), so this is a no-op today — kept for parity with the two
+        // narrowings above and to stay correct if an else-side in-bounds proof is added later.
+        self.index_bounded.truncate(index_base);
         // @PLN25 DN1: a branch that yields a bare `null` makes the if-expression NULLABLE — its
         // result widens to `Optional(τ)` where τ is the non-null SCALAR sibling's type. The bare
         // null is otherwise coerced to the sibling's typed-null sentinel and the if types as a
@@ -2717,16 +2864,20 @@ impl Parser {
         // - Plain enum: { match_subj = subject; chain }  (temp var to eval subject once)
         // - Struct enum: chain only  (subject_val is already the original expression/var)
         // L2: hoisted bindings are prepended so field reads happen before the if-chain.
-        // @PLN25 DN1: a user `=> null` arm (or one yielding a bare null) makes the match NULLABLE —
-        // widen the result to `Optional(τ)` (τ the non-null scalar of the other arms), so the
-        // existing DN3 `(N-Store)` forces the caller to declare `τ?` or discharge. Check the USER
-        // `arms`, NOT the lowered `chain`: an exhaustive match synthesises an unreachable
-        // `OpConv*FromNull` default, which would falsely widen EVERY match.
+        // @PLN25 DN1: a user `=> null` arm makes the match NULLABLE — widen the result to
+        // `Optional(τ)` (τ the non-null scalar of the other arms), so the existing DN3
+        // `(N-Store)` forces the caller to declare `τ?` or discharge. Check each USER arm's
+        // TYPE (`a.tp == Null` for a bare-null arm); an arm whose value yields null through its
+        // own sub-expression already carries that in `a.tp`, which the arm-join folded into
+        // `result_type` (so it is `Optional`, and `is_non_null_scalar` is already false).
+        // Do NOT `branch_yields_null(&a.code)` — descending the arm's LOWERED code reaches a
+        // NESTED exhaustive match's synthesised unreachable `OpConv*FromNull` default and
+        // falsely widens (p54: `Wrap { inner } => match inner { Leaf { v } => v }` typed `τ?`).
         if crate::keys::pln25_dn1_enabled()
             && Self::is_non_null_scalar(&result_type)
             && arms
                 .iter()
-                .any(|a| matches!(a.tp, Type::Null) || self.branch_yields_null(&a.code))
+                .any(|a| matches!(a.tp, Type::Null) || self.arm_yields_direct_null(&a.code))
         {
             result_type = Type::optional(result_type);
         }
@@ -4193,8 +4344,23 @@ impl Parser {
     }
 
     pub(crate) fn text_return(&mut self, ls: &[u16]) {
-        if let Type::Text(cur) = &self.data.definitions[self.context as usize].returned {
-            let mut dep = cur.clone();
+        // @PLN25 slice (c): peel `Optional` — a `-> text?` function needs the SAME
+        // work-buffer conversion (`RefVar(Text)` hidden out-param + `__ret_N` capture) as
+        // `-> text`; without it a `text?` tail whose arm is a concat/work-var fell to the
+        // `Return(Null)` synthesis (the value was freed and null returned). The `?` is
+        // re-applied when the returned type is rewritten below.
+        let (mut dep, ret_is_optional) =
+            match &self.data.definitions[self.context as usize].returned {
+                Type::Text(cur) => (cur.clone(), false),
+                Type::Optional(inner) if matches!(**inner, Type::Text(_)) => {
+                    let Type::Text(cur) = &**inner else {
+                        unreachable!()
+                    };
+                    (cur.clone(), true)
+                }
+                _ => return,
+            };
+        {
             for v in ls {
                 let n = self.vars.name(*v);
                 let tp = self.vars.tp(*v);
@@ -4306,7 +4472,12 @@ impl Parser {
                 }
                 dep.push(a as u16);
             }
-            self.data.definitions[self.context as usize].returned = Type::Text(dep);
+            let new_ret = if ret_is_optional {
+                Type::optional(Type::Text(dep))
+            } else {
+                Type::Text(dep)
+            };
+            self.data.definitions[self.context as usize].returned = new_ret;
         }
     }
 

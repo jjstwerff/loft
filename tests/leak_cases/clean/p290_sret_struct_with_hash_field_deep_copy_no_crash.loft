@@ -1,6 +1,6 @@
-struct Cell { ck: text not null, x: integer not null, y: integer not null }
+struct Cell { ck: text, x: integer, y: integer }
 struct World { cells: hash<Cell[ck]> }
-struct ChunkRef { ck: text not null, cx: integer not null, cy: integer not null }
+struct ChunkRef { ck: text, cx: integer, cy: integer }
 struct ChunkSet { chunks: hash<ChunkRef[ck]> }
 fn collect(w: World) -> ChunkSet {
   cs = ChunkSet{chunks: []};

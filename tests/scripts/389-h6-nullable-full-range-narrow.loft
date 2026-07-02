@@ -11,12 +11,12 @@
 // read back as `max-1` (e.g. `255`/`126`).  Both backends must agree.
 
 // Full byte range (256 distinct values) — must widen to hold the null sentinel.
-struct FullU8  { x: integer limit(0, 255) }      // min 0
-struct FullI8  { x: integer limit(-128, 127) }   // min < 0
+struct FullU8  { x: integer limit(0, 255)? }     // min 0
+struct FullI8  { x: integer limit(-128, 127)? }  // min < 0
 // One short of full (255 distinct) — stays 1 byte, was already correct.
-struct NearU8  { x: integer limit(0, 254) }
+struct NearU8  { x: integer limit(0, 254)? }
 // Full short range (65536 distinct) — the 2-byte analogue.
-struct FullU16 { x: integer limit(0, 65535) }
+struct FullU16 { x: integer limit(0, 65535)? }
 
 fn main() {
   // ── null round-trips for a full-range nullable narrow field ──

@@ -15,7 +15,7 @@
 // Status: cluster IV-Vec-nested-field-push variant; surfaces a separate
 //         native deep-copy bug in the same code path family.
 
-struct Inner { tag: integer not null }
+struct Inner { tag: integer }
 struct Outer { lists: vector<vector<Inner>> }
 
 fn main() {

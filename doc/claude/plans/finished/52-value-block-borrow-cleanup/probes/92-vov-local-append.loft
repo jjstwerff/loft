@@ -16,7 +16,7 @@
 // Pairing: 91 (struct field variant, FAILs).
 // Status: cluster IV-Vec-nested-field-push control / reference probe.
 
-struct Inner { tag: integer not null }
+struct Inner { tag: integer }
 
 fn main() {
   inner: vector<Inner> = [Inner { tag: 42 }];

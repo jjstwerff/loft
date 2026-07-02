@@ -18,7 +18,7 @@
 // Semantics: the vector keeps EVERY appended record (insertion order, duplicates
 // included); the hash keeps ONE record per key — the LATEST appended.
 
-struct Word { text: text not null, count: integer }
+struct Word { text: text, count: integer }
 struct Counter { ordered: vector<Word>, by_text: hash<Word[text]> }
 struct ByCount { ordered: vector<Word>, by_count: hash<Word[count]> }
 

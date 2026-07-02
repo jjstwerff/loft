@@ -86,21 +86,21 @@ fn element_null() {
     // type-locked to its first element type, which the native backend rejects.
     // integer (the loop counts iterations; it must not touch the possibly-null
     // element value in arithmetic — the null sentinel is i64::MIN).
-    vi: vector<integer> = [10, 20, 30];
+    vi: vector<integer?> = [10, 20, 30];
     vi[1] = null;
     ci = 0; for xi in vi { ci += 1; }
     assert(ci == 3 && len(vi) == 3, "int: full iteration past a null element");
     assert(vi[1] == null && vi[0] == 10 && vi[2] == 30, "int: null element, others intact");
 
     // float — NaN null is detected by ==null, not by equality
-    vf: vector<float> = [1.5, 2.5, 3.5];
+    vf: vector<float?> = [1.5, 2.5, 3.5];
     vf[1] = null;
     cf = 0; for xf in vf { cf += 1; }
     assert(cf == 3, "float: full iteration past a null element");
     assert(vf[1] == null && !(vf[0] == null), "float: NaN null detected");
 
     // text — iteration must not break at the null element.
-    vt: vector<text> = ["a", "b", "c"];
+    vt: vector<text?> = ["a", "b", "c"];
     vt[1] = null;
     ct = 0; for xt in vt { ct += 1; }
     assert(ct == 3, "text: full iteration past a null element");

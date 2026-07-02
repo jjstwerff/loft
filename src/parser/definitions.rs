@@ -666,12 +666,44 @@ impl Parser {
             // register the type variable as a struct so parse_type
             // resolves it to Reference(d, []).  The definition is never
             // compiled — it only exists for the template's type resolution.
-            if is_generic && self.first_pass && self.data.def_nr(&type_var_name) == u32::MAX {
-                let tv_nr = self
-                    .data
-                    .add_def(&type_var_name, self.lexer.pos(), DefType::Struct);
-                self.data
-                    .set_returned(tv_nr, Type::Reference(tv_nr, crate::data::Deps::none()));
+            if is_generic {
+                let existing = self.data.def_nr(&type_var_name);
+                // A prior generic's type-var placeholder is an attribute-less `Struct`, safe to
+                // reuse (that is how `<T>` is shared across functions). Any OTHER existing def
+                // — a constant (e.g. `E`), a function, an enum, or a real struct/type — is a
+                // COLLISION: loft has one flat namespace, so a generic parameter cannot share a
+                // name. Report it (mirroring the `type X conflicts with …` diagnostic) instead
+                // of silently binding the parameter to that def and panicking later in
+                // `predict_generic_return_type`.
+                let collision = existing != u32::MAX
+                    && !(self.data.def(existing).def_type() == DefType::Struct
+                        && self.data.def(existing).attributes().is_empty());
+                if collision {
+                    if self.first_pass {
+                        let ed = self.data.def(existing);
+                        let prev_pos = ed.position().clone();
+                        let prev_kind = format!("{:?}", ed.def_type()).to_lowercase();
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "generic type parameter '{type_var_name}' conflicts with a \
+                             {prev_kind} of the same name already defined at {prev_pos} — \
+                             pick a different name"
+                        );
+                    }
+                    // Stop treating the function as generic so the unresolved parameter never
+                    // reaches the generic type-resolution path (which would panic).
+                    is_generic = false;
+                } else if self.first_pass && existing == u32::MAX {
+                    // register the type variable as a struct so parse_type
+                    // resolves it to Reference(d, []).  The definition is never
+                    // compiled — it only exists for the template's type resolution.
+                    let tv_nr =
+                        self.data
+                            .add_def(&type_var_name, self.lexer.pos(), DefType::Struct);
+                    self.data
+                        .set_returned(tv_nr, Type::Reference(tv_nr, crate::data::Deps::none()));
+                }
             }
             // @PLN25 E2 — record the type-var def_nr (valid in both passes: the
             // stub was just added in the first pass, already exists in the
@@ -2520,7 +2552,12 @@ impl Parser {
         let mut alias_d_nr: u32 = u32::MAX;
         loop {
             if self.lexer.has_keyword("not") {
-                // This field cannot be null, this allows for 256 values in a byte
+                // @PLN25 F2 — `not null` is RETIRED but still ACCEPTED as a no-op. A scalar field
+                // is non-null by DEFAULT now (F2 sets the attribute non-null via `is_optional`
+                // below; the `not_null` flag is stamped for the range), so the annotation carries
+                // nothing.  In-tree source is stripped of it; kept accepted here for backward
+                // compat with not-yet-republished registry libraries (they still use `not null`).
+                // A hard "retired" error is blocked on that republish (task #4).
                 self.lexer.token("null");
                 nullable = false;
             }
@@ -2614,6 +2651,17 @@ impl Parser {
             );
         }
         if self.first_pass {
+            // @PLN25 F2: a scalar field's nullability is carried by its `Optional` wrapper (DN1's
+            // single source of truth), NOT the pre-DN1 parser default (`nullable = true`) or the
+            // `not null` keyword.  So a plain scalar field is NON-null (an Integer field also gets
+            // the FULL range — no reserved sentinel; only a `u8?` field reserves the top value),
+            // and `not null` is redundant on EVERY scalar field — the prerequisite for retiring
+            // it.  Now covers all scalars (Integer/Text/Boolean/Float/Single/Character): the
+            // attribute flag was the last place a plain non-Integer scalar field still read as
+            // nullable (inconsistently — `(N-Store)` already rejected a `null` store into it).
+            if crate::keys::pln25_f2_enabled() && Self::is_non_null_scalar(a_type.base()) {
+                nullable = matches!(a_type, Type::Optional(_));
+            }
             // H6: stamp the field's nullability onto its integer spec so the
             // STORED attribute type is self-describing.  The alias path
             // (`u8 not null`) otherwise leaves `not_null` at the alias default

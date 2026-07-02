@@ -2,12 +2,12 @@
 // and one call hits the OWNED path while the other hits the VIEW path.
 // Covers the 2a-multi-inline-lifts class for vectors specifically.
 
-struct Inner { n: integer not null }
+struct Inner { n: integer }
 struct Container { items: vector<Inner> }
 struct Holder {
   c:        Container,
   empty_c:  Container,   // has len(items) == 0, triggers the owned fallback
-  sentinel: integer not null,
+  sentinel: integer,
 }
 
 fn first_items_or_empty(c: Container) -> vector<Inner> {
