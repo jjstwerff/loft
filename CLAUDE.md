@@ -42,7 +42,11 @@ For any multi-failure refactor, start `find_problems.sh --bg` before editing (de
 ## Tracker tags <!--noindex-->
 
 `@`-prefixed so regex is unambiguous: **`@P259`** P-issues; **`@PLN3`** = a `loft-lang/plans` issue
-(canonical; plan id = issue number); **`@PLAN22`** = legacy local plan dir (migrating to `@PLN`).
+(canonical; plan id = issue number); **`@PLAN22`** = legacy local plan dir (migrating to `@PLN`);
+**`@F7`/`@I81`** = a `loft-lang/features` issue (the feature/infra catalogue, @PLN92) — the ISSUE
+is canonical; `index/features.json` + `doc/features/` + `tests/docs/features/*.loft` are its
+GENERATED shadow (never edit them: edit the issue, then `make features-fetch && make features-gen`;
+the `features-check` drift guard fails on hand-edits).
 File a NEW plan as a `loft-lang/plans` issue with one `status:*` + one `subject:*` label. Look refs
 up with `./scripts/idx` (`make index` first if stale; `./scripts/idx help` for queries).
 
