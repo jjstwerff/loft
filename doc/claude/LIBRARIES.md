@@ -65,7 +65,7 @@ A package may appear under more than one category (it is listed under each of it
   · loft install game_protocol · `use game_protocol;` · [source](https://github.com/loft-lang/loft-libs-net/tree/main/game_protocol)
 - **server** `0.2.0` — HTTP + WebSocket server — TCP sockets + tungstenite via cdylib.
   · loft install server · `use server;` · [source](https://github.com/loft-lang/loft-libs-net/tree/main/server)
-- **web** `0.2.0` — HTTP client + WebSocket client — ureq + tungstenite via cdylib.
+- **web** `0.2.1` — HTTP client + WebSocket client (native + browser) — ureq + tungstenite via cdylib; browser WS via `wasm.bridge`.
   · loft install web · `use web;` · [source](https://github.com/loft-lang/loft-libs-net/tree/main/web)
 
 ## random
