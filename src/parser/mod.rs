@@ -2952,7 +2952,21 @@ impl Parser {
             return Self::resolve_type_var(template_tp, tv_nr, inner);
         }
         match template_tp {
-            Type::Reference(d, _) if *d == tv_nr => concrete_tp.clone(),
+            // Same principle as the `Rewritten` strip above: the call-site
+            // argument's dep list records what THAT expression borrows in the
+            // CALLER's frame — not part of the data shape.  Bound verbatim, it
+            // is baked into the instantiated def's attr/return types where the
+            // indices are misread as callee attr deps: the instantiation's
+            // return then claims to borrow its argument, so the caller never
+            // frees the fresh store the method's `__retbuf` delivered (one
+            // record leaked per call).
+            Type::Reference(d, _) if *d == tv_nr => match concrete_tp {
+                Type::Reference(cd, _) => Type::Reference(*cd, crate::data::Deps::none()),
+                Type::Vector(inner, _) => Type::Vector(inner.clone(), crate::data::Deps::none()),
+                Type::Enum(cd, mixed, _) => Type::Enum(*cd, *mixed, crate::data::Deps::none()),
+                Type::Text(_) => Type::Text(crate::data::Deps::none()),
+                other => other.clone(),
+            },
             Type::Vector(inner, _) => {
                 if let Type::Vector(c_inner, _) = concrete_tp {
                     Self::resolve_type_var(inner, tv_nr, c_inner)

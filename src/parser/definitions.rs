@@ -864,6 +864,33 @@ impl Parser {
                                 ))),
                             );
                         }
+                        // The @PLAN59 twin of the I9-text arm: a concrete method
+                        // returning Reference / Vector / struct-Enum carries the
+                        // hidden `__retbuf` attribute (the H1 heap-return ABI,
+                        // added at signature parse), so the stub must carry it
+                        // too — otherwise the template call site parses one
+                        // argument short of the concrete implementation that
+                        // `re_resolve_call` substitutes, and byte_code's arity
+                        // assert fires ("Too few parameters … got 2, need 3").
+                        // `add_defaults` fills the slot with a caller-side
+                        // work-ref exactly like a direct call; when T
+                        // instantiates to a primitive whose operator has no
+                        // `__retbuf` (a `#rust` op), the trailing-argument trim
+                        // in `substitute_type_in_value` drops it again.
+                        if matches!(
+                            t_ret_type,
+                            crate::data::Type::Reference(_, _)
+                                | crate::data::Type::Vector(_, _)
+                                | crate::data::Type::Enum(_, true, _)
+                        ) {
+                            let a = self.data.add_attribute(
+                                &mut self.lexer,
+                                t_stub_nr,
+                                "__retbuf",
+                                t_ret_type.clone(),
+                            );
+                            self.data.definitions[t_stub_nr as usize].attributes[a].hidden = true;
+                        }
                     }
                 }
             }

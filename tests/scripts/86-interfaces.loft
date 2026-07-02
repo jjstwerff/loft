@@ -96,3 +96,49 @@ fn test_bounded_for_loop_struct() {
   assert(if_count_valid(if_loop_data) == 2, "bounded for-loop count");
 }
 // This crashes with use-after-free (P136). Uncomment when fixed.
+
+// ── Self-returning dispatch on a USER struct (the `__retbuf` stub cells) ──
+// A concrete method returning Reference / Vector / struct-Enum carries the
+// hidden `__retbuf` attribute (the @PLAN59 heap-return ABI), so the bounded
+// T-stub must carry it too — without it byte_code's arity assert fired
+// ("Too few parameters on t_2Vz_OpMul (got 2, need 3)").  The int/float
+// operator tests above dispatch to `#rust` ops with no `__retbuf`, so only
+// user-struct cells reach this path.  The paired hazard: binding T must not
+// adopt the call-site argument's dep list, or the instantiation's return
+// claims to borrow its argument and the fresh `__retbuf` store leaks.
+
+interface IfStretchy {
+  op * (self: Self, if_factor: float) -> Self
+}
+interface IfJoinable {
+  op + (self: Self, if_other: Self) -> Self
+}
+interface IfBendy {
+  fn if_bend(self: Self, if_factor: float) -> Self
+}
+
+struct IfVec { if_x: float }
+fn OpMul(self: IfVec, if_factor: float) -> IfVec { IfVec { if_x: self.if_x * if_factor } }
+struct IfSum { if_v: integer }
+fn OpAdd(self: IfSum, if_other: IfSum) -> IfSum { IfSum { if_v: self.if_v + if_other.if_v } }
+struct IfRod { if_x: float }
+fn if_bend(self: IfRod, if_factor: float) -> IfRod { IfRod { if_x: self.if_x * if_factor } }
+
+fn if_scale<T: IfStretchy>(if_item: T) -> T { return if_item * 2.0; }
+fn if_join<T: IfJoinable>(if_a: T, if_b: T) -> T { return if_a + if_b; }
+fn if_bend_it<T: IfBendy>(if_item: T) -> T { return if_item.if_bend(3.0); }
+
+fn test_self_return_operator_struct() {
+  if_r = if_scale(IfVec { if_x: 3.0 });
+  assert(if_r.if_x == 6.0, "self-return op*: {if_r.if_x}");
+}
+
+fn test_self_param_operator_struct() {
+  if_s = if_join(IfSum { if_v: 4 }, IfSum { if_v: 7 });
+  assert(if_s.if_v == 11, "self-param op+: {if_s.if_v}");
+}
+
+fn test_self_return_method_struct() {
+  if_m = if_bend_it(IfRod { if_x: 3.0 });
+  assert(if_m.if_x == 9.0, "self-return method: {if_m.if_x}");
+}
