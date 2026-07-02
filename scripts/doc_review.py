@@ -57,7 +57,7 @@ CORPORA = [
     ("B. Guide pages  (code runs via `make test` docs suite)", "tests/docs/*.loft", set()),
     ("C. Comparison / performance  (hand-maintained; scheduled recheck)",
      ["doc/00-vs-rust.html", "doc/00-vs-python.html", "doc/00-performance.html"], {"recheck"}),
-    ("D. Other user prose", ["doc/learn-loft.md", "doc/DEVELOPERS.md", "doc/library-catalog.md"], set()),
+    ("D. Other user prose", ["doc/learn-loft.md", "doc/DEVELOPERS.md"], set()),
     ("E. Flags & routines  (Makefile help / CLI — references resolved)", ["Makefile"], set()),
     ("F. Language reference — fault/limitation claims (anchored + recheck)",
      ["doc/claude/LOFT.md"], {"claims", "recheck"}),

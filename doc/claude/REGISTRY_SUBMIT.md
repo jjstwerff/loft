@@ -98,9 +98,9 @@ loft package
 Output in cwd:
 
 ```text
-Package created:
-  tarball:  my-lib-0.1.0.tar.gz
-  size:     <N> bytes
+my-lib-0.1.0.tar.gz
+  package:  my-lib v0.1.0
+  size:     <N> bytes (<N.N> kB)
   sha256:   <hex>
 
 Index entry to paste into loft-lang/registry/index.json (PKG_REGISTRY.md schema):
@@ -183,11 +183,17 @@ full reference.
 > unicode as `\uXXXX`, so `ensure_ascii=False` rewrites *every* description line
 > and buries your one-line change in a full-file diff.
 >
-> **Maintainer step — re-sign before merge.** An author PR edits `index.json` but
-> cannot sign it; before merging, the maintainer re-signs with the trust-root key
-> and commits the `.sig` **together with** the index (one atomic change).
-> Skipping this leaves a stale signature that fails verification for *all*
-> installs (see [REGISTRY_RECOVERY.md](REGISTRY_RECOVERY.md)):
+> **Maintainer step — merge first, then re-sign.** An author PR edits
+> `index.json` but cannot sign it. `registry_maintain.sh` merges the green
+> PR into `main` **first** (so a merge that fails partway never blocks the
+> run before it reaches the signing step) — `main` briefly carries a merged
+> `index.json` and a now-**stale** `index.json.sig`, a deliberate transient
+> window — then, at the very end of the same run, re-signs via
+> `scripts/registry-sign.sh`, which commits the fresh `.sig` **together
+> with** the index (one atomic change). Skipping that final re-sign leaves
+> the stale signature in place and fails verification for *all* installs
+> (see [REGISTRY_RECOVERY.md](REGISTRY_RECOVERY.md)). The raw signing
+> commands, for manual recovery:
 >
 > ```
 > loft-keygen sign   --in index.json --key ~/.loft/trust-root/registry-signing-key.bin --out index.json.sig
@@ -225,10 +231,10 @@ the underlying cause, push to your PR branch, CI re-runs.
 
 When all four gates pass, a registry maintainer reviews the
 PR — typically a sanity check on the description, homepage URL,
-and tarball provenance.  After approval, the maintainer signs
-the new `index.json` locally (see
-[PKG_REGISTRY.md § Why laptop signing](PKG_REGISTRY.md#why-laptop-signing-not-ci))
-and merges.
+and tarball provenance.  After approval, `registry_maintain.sh`
+merges the PR into `main` and, at the end of that same run,
+re-signs the resulting `index.json` locally (see
+[PKG_REGISTRY.md § Why laptop signing](PKG_REGISTRY.md#why-laptop-signing-not-ci)).
 
 **Once merged, `loft install my-lib` works for everyone.**
 Typical time-to-publish from PR open to merge: hours to days

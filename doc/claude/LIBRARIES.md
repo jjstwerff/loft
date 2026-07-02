@@ -2,7 +2,7 @@
 
 # Installable libraries (loft registry)
 
-**20 libraries are installable from the registry — check here BEFORE implementing functionality, so you don't reimplement existing code.**
+**21 libraries are installable from the registry — check here BEFORE implementing functionality, so you don't reimplement existing code.**
 
 How to use one: `loft install <name>`, then `use <name>;` in your program — or, for an auto-use library, just call the method (no `use` needed).
 
@@ -10,88 +10,93 @@ A package may appear under more than one category (it is listed under each of it
 
 ## asset-format
 
-- **glb** `0.1.0` — glTF 2.0 binary (.glb) writer — exports Mesh / Scene as a glb file readable by Blender, three.js, gltf-validator.  Standalone (pure-loft, no GPU).
+- **glb** — glTF 2.0 binary (.glb) writer — exports Mesh / Scene as a glb file readable by Blender, three.js, gltf-validator.  Standalone (pure-loft, no GPU).
   · loft install glb · `use glb;` · [source](https://github.com/loft-lang/loft-libs-assets/tree/main/glb)
 
 ## cli
 
-- **arguments** `0.1.1` — CLI argument parsing — positional args + flags + auto-generated --help.
+- **arguments** — CLI argument parsing — positional args + flags + auto-generated --help.
   · loft install arguments · `use arguments;` · [source](https://github.com/loft-lang/loft-libs-core/tree/main/arguments)
 
 ## crypto
 
-- **crypto** `0.3.1` — Cryptographic primitives — SHA-256, HMAC, base64; Ed25519, X25519, HPKE (RFC 9180), ChaCha20-Poly1305 / XChaCha20-Poly1305 / AES-256-GCM, HKDF, OS CSPRNG.
+- **crypto** — Cryptographic primitives — SHA-256, HMAC, base64; Ed25519, X25519, HPKE (RFC 9180), ChaCha20-Poly1305 / XChaCha20-Poly1305 / AES-256-GCM, HKDF, OS CSPRNG.
   · loft install crypto · `use crypto;` · [source](https://github.com/loft-lang/loft-libs-core/tree/main/crypto)
+
+## encoding
+
+- **cbor** — Signable canonical CBOR (RFC 8949) - pure loft. Encode with canonical map-key ordering + full decode (int/negint/bytes/text/array/map/bool/null); encode->decode->encode byte-identical, native == wasm.
+  · loft install cbor · `use cbor;` · [source](https://github.com/loft-lang/loft-libs-core/tree/main/cbor)
 
 ## game
 
-- **game_protocol** `0.1.2` — Packet framing + ack/retransmit for loft game-networking demos.
+- **game_protocol** — Packet framing + ack/retransmit for loft game-networking demos.
   · loft install game_protocol · `use game_protocol;` · [source](https://github.com/loft-lang/loft-libs-net/tree/main/game_protocol)
-- **input** `0.1.0` — Game input for loft — action/axis bindings resolved to per-tick input state.
+- **input** — Game input for loft — action/axis bindings resolved to per-tick input state.
   · loft install input · `use input;` · [source](https://github.com/loft-lang/loft-libs-game/tree/main/input)
-- **time** `0.1.0` — Date/time arithmetic on millisecond-since-epoch integers — proleptic Gregorian, same model as JavaScript Date.  Pure-loft; identical results on interp, --native, WASM.
+- **time** — Date/time arithmetic on millisecond-since-epoch integers — proleptic Gregorian, same model as JavaScript Date.  Pure-loft; identical results on interp, --native, WASM.
   · loft install time · `use time;` · [source](https://github.com/loft-lang/loft-libs-game/tree/main/time)
 
 ## geometry
 
-- **hex_grid** `0.1.0` — Hex-grid geometry — axial/pixel conversion, neighbours, distance, and corner offsets.
+- **hex_grid** — Hex-grid geometry — axial/pixel conversion, neighbours, distance, and corner offsets.
   · loft install hex_grid · `use hex_grid;` · [source](https://github.com/loft-lang/loft-libs-world/tree/main/hex_grid)
-- **mesh3d** `0.1.0` — 3D geometry primitives — Vec/Mat, Mesh, Scene, Camera, Light.  Standalone (pure-loft, no GPU).
+- **mesh3d** — 3D geometry primitives — Vec/Mat, Mesh, Scene, Camera, Light.  Standalone (pure-loft, no GPU).
   · loft install mesh3d · `use mesh3d;` · [source](https://github.com/loft-lang/loft-libs-assets/tree/main/mesh3d)
-- **shapes** `0.2.0` — 2D geometry primitives — Rect, Circle, overlap tests, clamp.  Pure-loft, no other deps.
+- **shapes** — 2D geometry primitives — Rect, Circle, overlap tests, clamp.  Pure-loft, no other deps.
   · loft install shapes · `use shapes;` · [source](https://github.com/loft-lang/loft-libs-graphics/tree/main/shapes)
 
 ## graphics
 
-- **glb** `0.1.0` — glTF 2.0 binary (.glb) writer — exports Mesh / Scene as a glb file readable by Blender, three.js, gltf-validator.  Standalone (pure-loft, no GPU).
+- **glb** — glTF 2.0 binary (.glb) writer — exports Mesh / Scene as a glb file readable by Blender, three.js, gltf-validator.  Standalone (pure-loft, no GPU).
   · loft install glb · `use glb;` · [source](https://github.com/loft-lang/loft-libs-assets/tree/main/glb)
-- **graphics** `0.3.0` — 2D canvas + 3D rendering for loft (Canvas pixel surface, Mesh / Scene / glTF, OpenGL bindings).
+- **graphics** — 2D canvas + 3D rendering for loft (Canvas pixel surface, Mesh / Scene / glTF, OpenGL bindings).
   · loft install graphics · `use graphics;` · [source](https://github.com/loft-lang/loft-libs-graphics/tree/main/graphics)
-- **gridmesh** `0.1.1` — Chunk-local mesh-generation primitives for world-building algorithms.
+- **gridmesh** — Chunk-local mesh-generation primitives for world-building algorithms.
   · loft install gridmesh · `use gridmesh;` · [source](https://github.com/loft-lang/loft-libs-graphics/tree/main/gridmesh)
-- **imaging** `0.2.0` — PNG load/save + pixel manipulation for loft (Stage A — interpreter + native; wasm bridge deferred pending loft-host-ffi crate).
+- **imaging** — PNG load/save + pixel manipulation for loft (Stage A — interpreter + native; wasm bridge deferred pending loft-host-ffi crate).
   · loft install imaging · `use imaging;` · [source](https://github.com/loft-lang/loft-libs-graphics/tree/main/imaging)
-- **mesh3d** `0.1.0` — 3D geometry primitives — Vec/Mat, Mesh, Scene, Camera, Light.  Standalone (pure-loft, no GPU).
+- **mesh3d** — 3D geometry primitives — Vec/Mat, Mesh, Scene, Camera, Light.  Standalone (pure-loft, no GPU).
   · loft install mesh3d · `use mesh3d;` · [source](https://github.com/loft-lang/loft-libs-assets/tree/main/mesh3d)
 
 ## math
 
-- **random** `0.2.1` — Pseudo-random number generation — PCG-64 thread-local PRNG with rand_seed reproducibility.
+- **random** — Pseudo-random number generation — PCG-64 thread-local PRNG with rand_seed reproducibility.
   · loft install random · `use random;` · [source](https://github.com/loft-lang/loft-libs-core/tree/main/random)
 
 ## net
 
-- **game_protocol** `0.1.2` — Packet framing + ack/retransmit for loft game-networking demos.
+- **game_protocol** — Packet framing + ack/retransmit for loft game-networking demos.
   · loft install game_protocol · `use game_protocol;` · [source](https://github.com/loft-lang/loft-libs-net/tree/main/game_protocol)
-- **server** `0.2.0` — HTTP + WebSocket server — TCP sockets + tungstenite via cdylib.
+- **server** — HTTP + WebSocket server — TCP sockets + tungstenite via cdylib.
   · loft install server · `use server;` · [source](https://github.com/loft-lang/loft-libs-net/tree/main/server)
-- **web** `0.2.1` — HTTP client + WebSocket client (native + browser) — ureq + tungstenite via cdylib; browser WS via `wasm.bridge`.
+- **web** — HTTP client + WebSocket client — ureq + tungstenite via cdylib.
   · loft install web · `use web;` · [source](https://github.com/loft-lang/loft-libs-net/tree/main/web)
 
 ## random
 
-- **random** `0.2.1` — Pseudo-random number generation — PCG-64 thread-local PRNG with rand_seed reproducibility.
+- **random** — Pseudo-random number generation — PCG-64 thread-local PRNG with rand_seed reproducibility.
   · loft install random · `use random;` · [source](https://github.com/loft-lang/loft-libs-core/tree/main/random)
 
 ## text
 
-- **html** `0.1.0` — HTML escaping helpers for loft.
+- **html** — HTML escaping helpers for loft.
   · loft install html · `use html;` · [source](https://github.com/loft-lang/loft-libs-docs/tree/main/html)
-- **markdown** `0.1.0` — Markdown-to-HTML rendering for loft — headings, inline spans, slugify, link rewriting.
+- **markdown** — Markdown-to-HTML rendering for loft — headings, inline spans, slugify, link rewriting.
   · loft install markdown · `use markdown;` · [source](https://github.com/loft-lang/loft-libs-docs/tree/main/markdown)
-- **regex** `0.2.0` — Small-script regex: matches / find / split / match_groups / replace, with a thread-local pattern cache.
+- **regex** — Small-script regex: matches / find / split / match_groups / replace, with a thread-local pattern cache.
   · loft install regex · auto-use (no `use` needed) · [source](https://github.com/loft-lang/loft-libs-core/tree/main/regex)
 
 ## time
 
-- **time** `0.1.0` — Date/time arithmetic on millisecond-since-epoch integers — proleptic Gregorian, same model as JavaScript Date.  Pure-loft; identical results on interp, --native, WASM.
+- **time** — Date/time arithmetic on millisecond-since-epoch integers — proleptic Gregorian, same model as JavaScript Date.  Pure-loft; identical results on interp, --native, WASM.
   · loft install time · `use time;` · [source](https://github.com/loft-lang/loft-libs-game/tree/main/time)
 
 ## world
 
-- **gridmesh** `0.1.1` — Chunk-local mesh-generation primitives for world-building algorithms.
+- **gridmesh** — Chunk-local mesh-generation primitives for world-building algorithms.
   · loft install gridmesh · `use gridmesh;` · [source](https://github.com/loft-lang/loft-libs-graphics/tree/main/gridmesh)
-- **hex_terrain** `0.1.0` — The OVERLAND terrain layer of the `hex_*` family: a coarse overland hex lattice
+- **hex_terrain** — The OVERLAND terrain layer of the `hex_*` family: a coarse overland hex lattice
   · loft install hex_terrain · `use hex_terrain;` · [source](https://github.com/loft-lang/loft-libs-world/tree/main/hex_terrain)
-- **hex_world** `0.1.1` — Sparse 32x32-chunk hex-grid world data model — Cell / Chunk / World with binary save/load.
+- **hex_world** — Sparse 32x32-chunk hex-grid world data model — Cell / Chunk / World with binary save/load.
   · loft install hex_world · `use hex_world;` · [source](https://github.com/loft-lang/loft-libs-world/tree/main/hex_world)

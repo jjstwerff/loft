@@ -227,7 +227,7 @@ replaces, or leaves alone) so the plan neither reinvents nor silently drops a to
 | `api_lint.py`, `doc_review.py`, `loft doc`, `loft api` | **REUSE** — the `[auto]` lints + docs build library-ci gates on; folded into Q4 (REPORT-only). |
 | `loft --tests` (interp/native), `loft test --deps`, `<pkg>/native` `cargo test` | **REUSE** — the correctness tiers Q4 runs (mirror library-ci, B4). |
 | In-repo lib harness — `make test-packages` / `test-package-native-tests` / `rebuild-native-cdylibs`, `tests/native.rs::native_library_suite`, `n2_cdylib`/`n3_use_native`/`native_ext`/`native_loader`/`multilib`/`d2b_stdlib_cache` | **ADJACENT — leave alone.** These already gate the in-repo `lib/*` against loft on every loft PR; the audit is their **external-repo counterpart**, not a replacement. |
-| `gen_library_catalog.py`, `tests/api_discovery.rs`, `lint_comments.sh` | **ADJACENT** — catalog / API discovery / `lib/**/src/` comment quality; the audit reports against the same package set but does not own them. |
+| `gen-library-catalogue.py`, `tests/api_discovery.rs`, `lint_comments.sh` | **ADJACENT** — catalogue / API discovery / `lib/**/src/` comment quality; the audit reports against the same package set but does not own them. |
 | `.github` — `ci.yml`'s `registry-coverage` + fixture-drift jobs, `miri.yml` | **REUSE pattern** — the advisory-job and nightly-schedule precedents for P6. |
 | `loft package`/`publish`/`new`/`generate`, `loft-keygen` | **OUT OF SCOPE** — author/publish/sign flow; the audit detects "needs publishing" but never signs. |
 

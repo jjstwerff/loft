@@ -53,7 +53,7 @@ set -euo pipefail
 
 REG_DIR="$PWD"; REG_GIVEN=0; PR=""; SINCE=""; NOTES=0; DOWNLOAD=1; YES=0; PUSH=1; MSG=""
 KEY="${LOFT_REGISTRY_KEY:-$HOME/.loft/trust-root/registry-signing-key.bin}"
-YUBIKEY="${LOFT_REGISTRY_SIGNER:+$([ "$LOFT_REGISTRY_SIGNER" = yubikey ] && echo 1)}"; YUBIKEY="${YUBIKEY:-0}"
+YUBIKEY=0; [ "${LOFT_REGISTRY_SIGNER:-}" = yubikey ] && YUBIKEY=1  # set -e safe: file/unset/other => 0 (local-key path)
 while [ $# -gt 0 ]; do
     case "$1" in
         --registry-dir) REG_DIR="$2"; REG_GIVEN=1; shift;;

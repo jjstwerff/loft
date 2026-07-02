@@ -200,11 +200,11 @@ Everything else is repo-internal infrastructure for keeping
           "deps": {
             "<dep_pkg>": ">=0.1"
           },
-          "conflicts": [],
-          "replaces": [],
-          "provides": [],
-          "binaries": {},
-          "prerelease": false,
+          "triggers": ["matches:text", …],
+          "api": [
+            { "sig": "pub fn slugify(s: text) -> text", "doc": "One-line summary." },
+            …
+          ],
           "published": "2026-05-24T08:00:00Z"
         },
         …
@@ -214,6 +214,11 @@ Everything else is repo-internal infrastructure for keeping
   }
 }
 ```
+
+`conflicts` / `replaces` / `provides` / `binaries` / `prerelease` are reserved
+schema slots (resolver + pre-built-binary support deferred, see the field
+reference below) — every version in the live index omits them; a publisher
+only sets one explicitly once the corresponding feature ships.
 
 ### Field reference
 
@@ -231,11 +236,13 @@ Everything else is repo-internal infrastructure for keeping
 | `…loft` | yes | Required loft interpreter version.  `>=0.8` syntax mirrors `loft.toml::[package] loft`. |
 | `…subpath` | for monorepos | Package directory within the release repo (e.g. `crypto` inside `loft-libs-core`).  The loft-lang libraries are **domain monorepos** (`loft-libs-core`/`-net`/`-graphics`/`-game`/`-world`/`-assets`/`-docs`) tagged `<pkg>-v<version>`, so `subpath` tells the installer where the package lives in the unpacked tarball.  Omit for a one-repo-per-package layout. |
 | `…deps` | no | Inter-package dependencies.  Resolved during install; failures abort before any download. |
-| `…conflicts` | no | **(Schema slot — resolver support deferred.)** Array of package names + version constraints that cannot coexist with this version in the same dependency graph.  Inspired by Debian's `Conflicts:`.  Reserved field so the schema doesn't need a bump when the resolver gains support. |
-| `…replaces` | no | **(Schema slot — resolver support deferred.)** Array of packages this version takes over from (rename / fork takeover).  Inspired by Debian's `Replaces:`. |
-| `…provides` | no | **(Schema slot — resolver support deferred.)** Array of virtual capability names this version supplies.  Lets a different package satisfy the same `deps` constraint — e.g. `crypto-bcrypt` and `crypto-argon2` both provide `password-hash`.  Inspired by Debian's `Provides:`. |
-| `…binaries` | no | **(Schema slot — pre-built distribution deferred.)** Map of `<target-triple>` → `{url, sha256}` pointing at pre-built cdylibs.  When present and a triple matches, `loft install` skips the local `cargo build` step.  When absent, consumer builds from the `native/` source in the tarball.  Inspired by Debian's per-arch `.deb` files. |
-| `…prerelease` | no | Boolean.  `true` for beta / rc versions.  `loft install <pkg>` (no version) skips prereleases by default; `loft install <pkg>@<v>` honours an explicit pin; `loft install <pkg>@beta` resolves the latest prerelease.  Inspired by Debian's `testing` / `unstable` release pockets. |
+| `…triggers` | no | Array of `"name:receiver"` strings (e.g. `"matches:text"`) — Tier-1 lazy-load triggers derived from this version's `pub fn` method surface at publish time, so a consumer's resolver can map `obj.method()` to the owning package without having the source.  Populated when the package opts into `[triggers]`; globally unique across the registry (enforced at PR gate 4, see REGISTRY_SUBMIT.md § Trigger uniqueness). |
+| `…api` | no | Array of `{sig, doc}` — one entry per `pub` item (struct/fn) in this version's source, extracted by the same `parse_pkg_api` `loft api` uses, so `loft search` can answer "is there a function that does X, and how do I call it" without the source.  Per-version (an old pin still describes what it actually shipped); re-derived by the registry from source so it can't drift.  Empty for indexes published before this field existed. |
+| `…conflicts` | no | **(Schema slot — resolver support deferred.)** Array of package names + version constraints that cannot coexist with this version in the same dependency graph.  Inspired by Debian's `Conflicts:`.  Reserved field so the schema doesn't need a bump when the resolver gains support.  Omitted (not emitted as `[]`) on every version in the live index today. |
+| `…replaces` | no | **(Schema slot — resolver support deferred.)** Array of packages this version takes over from (rename / fork takeover).  Inspired by Debian's `Replaces:`.  Omitted today, same as `conflicts`. |
+| `…provides` | no | **(Schema slot — resolver support deferred.)** Array of virtual capability names this version supplies.  Lets a different package satisfy the same `deps` constraint — e.g. `crypto-bcrypt` and `crypto-argon2` both provide `password-hash`.  Inspired by Debian's `Provides:`.  Omitted today, same as `conflicts`. |
+| `…binaries` | no | **(Schema slot — pre-built distribution deferred.)** Map of `<target-triple>` → `{url, sha256}` pointing at pre-built cdylibs.  When present and a triple matches, `loft install` skips the local `cargo build` step.  When absent, consumer builds from the `native/` source in the tarball.  Inspired by Debian's per-arch `.deb` files.  Omitted today, same as `conflicts`. |
+| `…prerelease` | no | Boolean.  `true` for beta / rc versions.  `loft install <pkg>` (no version) skips prereleases by default; `loft install <pkg>@<v>` honours an explicit pin; `loft install <pkg>@beta` resolves the latest prerelease.  Inspired by Debian's `testing` / `unstable` release pockets.  Omitted (defaults to `false`) on every version in the live index today. |
 | `…published` | yes | ISO-8601 publish timestamp.  Audit trail. |
 
 ### Why JSON not TOML
@@ -605,12 +612,26 @@ Borrowed from Debian's `Release.gpg` / `InRelease`.
    embedded for rotation or for multi-maintainer setups; clients
    accept signatures from any listed key.
 3. **Signing happens locally on the maintainer's laptop**, NOT in
-   CI.  Per accepted PR against `loft-lang/registry`:
-   - Maintainer reviews + checks out the PR branch.
-   - Maintainer runs `loft-keygen sign --in index.json --key
-     <private>.bin --out index.json.sig` to produce a raw
-     64-byte Ed25519 signature.
-   - Maintainer commits `index.json.sig` and merges the PR.
+   CI, via `scripts/registry-sign.sh` — DEFAULT is **on-card**: a
+   YubiKey holds the Ed25519 key non-extractably (PIV slot 9C) and
+   signs over PKCS#11 (`pkcs11-tool --mechanism EDDSA`); the private
+   key never leaves the card, and PIN + touch are the confirmation.
+   If no card is present, signing **falls back to a local key file**
+   (`~/.loft/trust-root/registry-signing-key.bin`) behind a typed
+   `yes` prompt. Either way:
+   - Maintainer reviews the diff `registry-sign.sh` prints (raw
+     `index.json` diff + each changed release's provenance +
+     re-downloaded tarball sha256) before confirming.
+   - The script signs (on-card, or `loft-keygen sign --in index.json
+     --key <private>.bin --out index.json.sig` for the local-key
+     path) to produce a raw 64-byte Ed25519 signature.
+   - **Trust gate**: the new signature must verify against a key
+     already listed in `src/registry_keys.rs::TRUSTED_PUBLIC_KEYS`
+     — if it doesn't, `registry-sign.sh` refuses to commit or push
+     (a wrong/untrusted key would otherwise ship a signature every
+     `loft install` rejects).
+   - Maintainer commits `index.json` + `index.json.sig` **together**
+     (so HEAD's index always matches its signature) and pushes.
 4. Clients fetch both files.  Verify the signature over the bytes
    of `index.json`.  Refuse to use an unsigned/invalid-sig index
    unless `--allow-unsigned` is passed.
@@ -839,7 +860,7 @@ by actual ecosystem growth.  The MVP commits to neither.
 | **R1** | `loft package` CLI — produce tarball + sha256 from a `loft.toml` package | S | **DONE 2026-05-24** — `src/package.rs` + `loft package` subcommand.  4 unit tests + smoke-tested on `lib/crypto` (5.6 kB) and `lib/web` (21.5 kB), sha256 stable across runs. |
 | **R2** | `loft.lock` reader/writer | S | **DONE 2026-05-24** — `src/lockfile.rs` (NOT feature-gated; lockfile is read on every loft invocation).  Atomic-rename writer, schema_version pin, 11 unit tests. |
 | **R3** | Registry repo bootstrap docs | XS | **DONE 2026-05-24** — `doc/claude/REGISTRY_BOOTSTRAP.md` runbook + `doc/claude/registry_sample.json` template.  The actual GitHub repo creation is a maintainer-driven manual op. |
-| **R3.5** | Index signing (Ed25519) | S | **DONE 2026-05-24; trust root BOOTSTRAPPED 2026-06-14 (PR #371)** — `src/registry_keys.rs` `TRUSTED_PUBLIC_KEYS` now holds **3 independent keys** (1 software laptop + 2 on-card YubiKeys; [REGISTRY_BOOTSTRAP.md](REGISTRY_BOOTSTRAP.md)), `src/registry_signing.rs` `verify_index` (4 tests). Live index signed; `scripts/registry-sign.sh` is the review-then-sign path. Activates on the next loft release. |
+| **R3.5** | Index signing (Ed25519) | S | **DONE 2026-05-24; trust root BOOTSTRAPPED 2026-06-14 (PR #371)** — `src/registry_keys.rs` `TRUSTED_PUBLIC_KEYS` now holds **4 independent keys** (2 software laptop signers `K_laptop`/`K_laptop_tuxedo` + 2 on-card YubiKeys `K_yubiA`/`K_yubiB`; [REGISTRY_BOOTSTRAP.md](REGISTRY_BOOTSTRAP.md)), `src/registry_signing.rs` `verify_index` (4 tests). Live index signed; `scripts/registry-sign.sh` is the review-then-sign path (default on-card, local-key fallback, trust-gated against `TRUSTED_PUBLIC_KEYS`). Activates on the next loft release. |
 | **R4** | `loft install <name>[@<v>]` — index fetch, sig verify, resolve, download, extract | M | **DONE 2026-05-24** — `src/registry_index.rs` (schema + parser + version constraint resolver + HTTPS fetcher + tarball extractor, 12 tests) + `src/install.rs` (orchestrator, 3 tests).  CLI flags wired: `--refresh`, `--offline`, `--prerelease`, `--allow-unsigned`, `--require-signature`.  Falls back to legacy text-format registry when `LOFT_LEGACY_REGISTRY` is set (preserves existing tooling). |
 | **R5** | `loft install` (no args; reads project loft.toml) | S | **DONE 2026-05-24** (subsumed by R4 — `install_one` consults project `loft.toml`'s `[dependencies]` via the resolver, writes `loft.lock` atomically). |
 | **R6** | `loft update [<name>]` | S | **DEFERRED** — re-runs the R4 flow with `--refresh`; needs a one-line subcommand to invalidate the lockfile pin for `<name>` before resolution.  Trivial extension once the registry is live; not blocking other phases. |

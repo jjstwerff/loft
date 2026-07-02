@@ -33,12 +33,23 @@ exactly where a hand publish goes wrong. Use the routines:
 **The signing gate (why the key never enters CI).** A fully-automatic "push → signed release" is
 impossible: the trust-root key must never leave the maintainer's machine (a wrong/stale signature
 breaks *every* `loft install` — see the foot-gun below), so signing is **inherently local and
-human-gated**. The gate: the **local key does the crypto**, and a **YubiKey TOUCH is the
-confirmation** — on touch the YubiKey types its one-time OTP, which the prompt reads as the "yes."
-It **waits 10s for the touch, else falls back to a typed `yes`**. Set `LOFT_YUBIKEY_PREFIX` to your
-OTP public-id (first ~12 chars) to pin the gate to *your* key. `--yes` skips it (scripted use
-only). So the whole release is: **you push a tag, then you touch your key once** — the routine gets
-everything between right.
+human-gated**. The default path is **on-card**: a YubiKey holds the Ed25519 key in PIV slot 9C
+and signs over PKCS#11 (`pkcs11-tool --mechanism EDDSA`) — the private key never leaves the card,
+and PIN + touch ARE the confirmation (no typed `yes`). The wait is **unbounded by default**
+(`LOFT_YUBIKEY_TIMEOUT=<sec>` to bound it); the module is auto-found or set via
+`LOFT_YUBIKEY_PKCS11_MODULE`, the PIV id defaults to `02` (`LOFT_YUBIKEY_PIV_ID`), a PIN can be
+pre-supplied via `LOFT_YUBIKEY_PIN`, and the whole step can be replaced with
+`LOFT_YUBIKEY_SIGN_CMD`. If no card is available, signing **falls back to the local key file**
+(`--key`, default `~/.loft/trust-root/registry-signing-key.bin`) behind a **typed `yes`** prompt
+(`LOFT_REGISTRY_SIGNER=file` forces this path; `--yubikey` disables the fallback). Either way, a
+**trust gate** then verifies the new signature against
+`src/registry_keys.rs::TRUSTED_PUBLIC_KEYS` before anything is committed or pushed — a signature
+from a key not on that list is refused, fail-safe. (Reading an idle YubiKey touch's typed
+one-time-password as the confirmation "yes" is the exact hazard this on-card design avoids —
+see `registry_maintain.sh`'s note above its sign step — not a feature of it.) `--yes` skips the
+local-key prompt for scripted use; the trust gate still runs regardless. So the whole release is:
+**you push a tag, then you touch your key once** (or type `yes` if no card is present) — the
+routine gets everything between right.
 
 ## The steps — what the routine does under the hood (and the manual fallback)
 
@@ -58,22 +69,30 @@ consumer's loft itself carries the needed compiler support.)
    gh release create <pkg>-v<version> --repo <org>/<repo> --target main \
      <pkg>-<version>.tar.gz --title "<pkg> v<version>" --notes "…"
    ```
-4. **Registry PR** — clone `loft-lang/registry`, then:
-   - Add the version under `packages.<pkg>.versions.<version>` (the printed entry **plus**
-     `subpath` + `deps` + a `published` ISO-8601 UTC timestamp), and bump the top-level
-     `updated`.
+4. **Registry update** — the destination depends on who's publishing:
+   - **Own libs** (the maintainer, who holds the signing key): `registry_maintain.sh` clones
+     `loft-lang/registry` on its default branch, adds the version under
+     `packages.<pkg>.versions.<version>` (the printed entry **plus** `subpath` + `deps` + a
+     `published` ISO-8601 UTC timestamp), bumps the top-level `updated`, then hands off to
+     `registry-sign.sh`, which stages `index.json` + `index.json.sig` **together**, signs, and
+     **commits + pushes DIRECTLY to `main` — no PR**.
+   - **Foreign submissions** (an author without signing access): open a **branch + PR** against
+     `loft-lang/registry` instead (see [REGISTRY_SUBMIT.md](../../../../doc/claude/REGISTRY_SUBMIT.md)'s
+     5-step flow). The maintainer merges the green PR and the registry stays unsigned for that
+     entry until the next `registry_maintain.sh` run re-signs the merged result.
+   Either way, editing the JSON:
    - **Edit the JSON with `ensure_ascii=True`** (Python's default): the index escapes unicode as
      `\uXXXX`, so `ensure_ascii=False` rewrites *every* description line and makes the diff
      unreviewable — keep it to your entry + `updated`.
    - **Re-sign, then verify** (the maintainer key; this is the step that breaks all installs if
      skipped — see below). The routine above (`registry-sign.sh`) wraps these two with the
-     touch-gated confirmation; the raw commands are:
+     signing-gate confirmation described above; the raw commands are:
      ```
      loft-keygen sign   --in index.json --key ~/.loft/trust-root/registry-signing-key.bin --out index.json.sig
      loft-keygen verify --in index.json --sig index.json.sig --pub "$(cat ~/.loft/trust-root/registry-signing-key.pub)"
      ```
-   - **Commit `index.json` + `index.json.sig` TOGETHER** (one atomic change), push a branch,
-     open the PR against `loft-lang/registry`.
+   - **Commit `index.json` + `index.json.sig` TOGETHER** (one atomic change) — direct to `main`
+     for an own lib, or as part of the PR branch for a foreign submission.
 
 ## The re-sign foot-gun (internalize this)
 

@@ -24,6 +24,34 @@
           "size": 4865,
           "subpath": "arguments",
           "url": "https://github.com/loft-lang/loft-libs-core/releases/download/arguments-v0.1.1/arguments-0.1.1.tar.gz"
+        },
+        "0.1.2": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-06-21T17:04:38Z",
+          "sha256": "f676f22df63f0d61588b66a647185f0bdf585d112636d455050a712822dbc2ee",
+          "size": 4920,
+          "subpath": "arguments",
+          "url": "https://github.com/loft-lang/loft-libs-core/releases/download/arguments-v0.1.2/arguments-0.1.2.tar.gz"
+        }
+      },
+      "yanked": []
+    },
+    "cbor": {
+      "categories": [
+        "encoding"
+      ],
+      "description": "Signable canonical CBOR (RFC 8949) - pure loft. Encode with canonical map-key ordering + full decode (int/negint/bytes/text/array/map/bool/null); encode->decode->encode byte-identical, native == wasm.",
+      "homepage": "https://github.com/loft-lang/loft-libs-core/tree/main/cbor",
+      "versions": {
+        "0.1.0": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-06-21T16:45:48Z",
+          "sha256": "5e4d4d74433e9be73e1533b44f5d6863c85a524e91f1e86d8cf85af9eee18f81",
+          "size": 4799,
+          "subpath": "cbor",
+          "url": "https://github.com/loft-lang/loft-libs-core/releases/download/cbor-v0.1.0/cbor-0.1.0.tar.gz"
         }
       },
       "yanked": []
@@ -61,6 +89,33 @@
           "size": 20742,
           "subpath": "crypto",
           "url": "https://github.com/loft-lang/loft-libs-core/releases/download/crypto-v0.3.1/crypto-0.3.1.tar.gz"
+        },
+        "0.3.2": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-06-21T14:34:05Z",
+          "sha256": "39a72aa79a4112d766d5ce1e3293bac0104ebcde8e1c0ee9792143d68627f1b3",
+          "size": 37981,
+          "subpath": "crypto",
+          "url": "https://github.com/loft-lang/loft-libs-core/releases/download/crypto-v0.3.2/crypto-0.3.2.tar.gz"
+        },
+        "0.3.3": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-06-22T05:53:34Z",
+          "sha256": "cb403eebb2dc725822d1f37c0fdedc9de940c65752fc1be95c444715843a50a6",
+          "size": 38766,
+          "subpath": "crypto",
+          "url": "https://github.com/loft-lang/loft-libs-core/releases/download/crypto-v0.3.3/crypto-0.3.3.tar.gz"
+        },
+        "0.3.4": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-06-24T19:53:23Z",
+          "sha256": "4f19515a93e89f65b9841e07997a66894a0073a71a1bca0e3697c9da9bbf2c01",
+          "size": 46506,
+          "subpath": "crypto",
+          "url": "https://github.com/loft-lang/loft-libs-core/releases/download/crypto-v0.3.4/crypto-0.3.4.tar.gz"
         }
       },
       "yanked": []
@@ -205,6 +260,145 @@
           "size": 11903,
           "subpath": "gridmesh",
           "url": "https://github.com/loft-lang/loft-libs-graphics/releases/download/gridmesh-v0.1.1/gridmesh-0.1.1.tar.gz"
+        },
+        "0.1.2": {
+          "api": [
+            {
+              "doc": "A coord→cell-index reference, stored in the spatial-index hash keyed on\nthe encoded coordinate `ck`.",
+              "sig": "pub struct CellRef"
+            },
+            {
+              "doc": "Encode an offset coord into one integer key.  The hex world is small;\n±2^20 per axis covers it with room to spare and stays within i64.",
+              "sig": "pub fn enc_coord(x: integer, y: integer) -> integer"
+            },
+            {
+              "doc": "Build the coord→cell-index spatial index for a placement-ordered cell\nlist given as parallel (xs, ys).  O(N), built once and reusable across\nneighbour/on-axis queries.  (@P300 — assigning a hash-returning call's\nresult to a local — was fixed 2026-05-21, so this helper replaces the\nold inline-build workaround the consumers used.)",
+              "sig": "pub fn build_index(xs: vector<integer>, ys: vector<integer>) -> hash<CellRef[ck]>"
+            },
+            {
+              "doc": "Axial unit-direction components for hex axis d (0..5), via 60°·d.\nBranch form avoids per-call vector-literal allocation.",
+              "sig": "pub fn axial_dq(d: integer) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn axial_dr(d: integer) -> integer"
+            },
+            {
+              "doc": "Offset coord `k` steps from (x, y) along hex axis `d`.",
+              "sig": "pub fn step_x(x: integer, y: integer, d: integer, k: integer) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn step_y(_x: integer, y: integer, d: integer, k: integer) -> integer"
+            },
+            {
+              "doc": "snap index of the cell at (x, y), or -1 if none.  (`cidx` not `index`\n— `index` is a reserved keyed-collection-type keyword in loft.)",
+              "sig": "pub fn idx_at(cidx: hash<CellRef[ck]>, x: integer, y: integer) -> integer"
+            },
+            {
+              "doc": "Index-backed filled-neighbour count (distance 1) — the 6 axis-1 cells.",
+              "sig": "pub fn nbr_count_idx(cidx: hash<CellRef[ck]>, cx: integer, cy: integer) -> integer"
+            },
+            {
+              "doc": "── B1: SegMesh accumulator ──────────────────────────────────────────\n\nStruct-of-arrays line-segment mesh for segment/ribbon consumers (the\ncrystal rule).  Each segment is a 3D line (x0,y0,z0)→(x1,y1,z1) with a\nkind, a colour, and the OWNING cell index (`cell_ix`) — the latter lets\na consumer attribute a segment back to its cell (e.g. GPU bloom-from-\ncentre keyed by cell age) and lets the dirty-rebuild find-and-replace a\ncell's segments.  Coordinates are `single` (f32 — the GPU VBO format,\nno precision loss vs what is rendered) and kind/colour are `u8`\n(M1 narrowing: ~60 % less memory than the i64/f64 prototype).",
+              "sig": "pub struct SegMesh"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn seg_mesh_new() -> SegMesh"
+            },
+            {
+              "doc": "Append one segment owned by cell `owner`.  Callers pass `float` coords\nand `integer` kind/colour; they are narrowed to the storage width here.",
+              "sig": "pub fn emit_segment(m: &SegMesh, kind: integer,"
+            },
+            {
+              "doc": "Number of segments in the mesh.",
+              "sig": "pub fn seg_len(m: SegMesh) -> integer"
+            },
+            {
+              "doc": "Append all of `src`'s segments onto `dst` (concatenate the nine parallel\narrays).  Used to assemble a render-group mesh from its chunks' CACHED\nmeshes and to concatenate chunk meshes into a full build — order-preserving,\nso the consumer can rely on a stable per-group draw order.",
+              "sig": "pub fn seg_mesh_append(dst: &SegMesh, src: SegMesh)"
+            },
+            {
+              "doc": "A chunk-space coordinate.  `ck = enc_coord(cx, cy)` is its identity for\ndedup in the dirty index.",
+              "sig": "pub struct ChunkKey"
+            },
+            {
+              "doc": "The chunk owning offset coord (x, y) for a field with `shift`\n(chunk = 1<<shift cells per axis; shift 5 = the moros 32×32 chunk).",
+              "sig": "pub fn chunk_of(x: integer, y: integer, shift: integer) -> ChunkKey"
+            },
+            {
+              "doc": "",
+              "sig": "pub struct ChunkField"
+            },
+            {
+              "doc": "Build a field from placement-ordered coords.  The dirty index starts\nempty; the spatial index (cidx) and the chunk->cell partition (buckets)\nare built once (O(N)) and maintained incrementally thereafter\n(field_add_cell), so a later collect_dirty_inputs is O(dirty), not O(N).",
+              "sig": "pub fn field_new(layout: integer, xs: vector<integer>, ys: vector<integer>,"
+            },
+            {
+              "doc": "Edit — append a new cell (its index = old len(xs)), add it to its chunk's\nbucket (O(1) amortised), and mark its chunk (+ halo-border neighbours)\ndirty.  Keeping the bucket current here is what makes collect_dirty_inputs\nO(dirty) rather than a full re-partition.",
+              "sig": "pub fn field_add_cell(f: &ChunkField, x: integer, y: integer)"
+            },
+            {
+              "doc": "Edit — RECOLOUR an existing cell: mark its chunk (+ halo border) dirty\nwithout touching the coord arrays or index (the cell stays; only its\nconsumer-side payload — colour/height — changed).  Erase uses\nfield_remove_cell instead (it must also drop the cell from the index).",
+              "sig": "pub fn field_mark_dirty(f: &ChunkField, x: integer, y: integer)"
+            },
+            {
+              "doc": "Edit — REMOVE an existing cell: drop it from the spatial index (cidx) and\nits chunk bucket, then mark its chunk (+ halo border) dirty.  The MIRROR of\nfield_add_cell, sharing mark_borders so a removal flows through the IDENTICAL\nincremental rebuild path as a paint.  The coord slot in xs/ys is deliberately\nLEFT in place (not compacted): cell indices the field already handed out stay\nstable, so a consumer's parallel per-cell arrays (e.g. the projector's bloom\nbirths, indexed by cell index) are not invalidated.  The orphaned slot is\nnever read again — its index is in no bucket and no longer in cidx — and\nre-painting the same coord allocates a FRESH index (field_add_cell appends),\nso identity is never reused.",
+              "sig": "pub fn field_remove_cell(f: &ChunkField, x: integer, y: integer)"
+            },
+            {
+              "doc": "Clear the dirty index after a rebuild (@P307 OpClearKeyed: in-place free).",
+              "sig": "pub fn clear_dirty(f: &ChunkField)"
+            },
+            {
+              "doc": "Number of chunks currently dirty (verification / O(dirty) sizing).",
+              "sig": "pub fn dirty_count(f: ChunkField) -> integer"
+            },
+            {
+              "doc": "Is the chunk owning (x, y) currently marked dirty?",
+              "sig": "pub fn chunk_is_dirty(f: ChunkField, x: integer, y: integer) -> boolean"
+            },
+            {
+              "doc": "── B3: ChunkInput + per-chunk gather ─────────────────────────────────\n\nWhat a per-cell RULE needs for ONE chunk: the indices of the cells it\nOWNS (emit geometry for these) + the ≤halo_k border-neighbour cells in\nOTHER chunks it may READ as context.  COMPACT — no payload, and NO copy\nof the shared spatial index (`cidx`).  The rule receives `cidx`\nSEPARATELY as a read-only ref (keyed params don't deep-copy) and `par`\nforwards it as a context arg, so the per-chunk working set stays small\nand cache-resident (copying the whole index per chunk would be O(N)).",
+              "sig": "pub struct ChunkInput"
+            },
+            {
+              "doc": "One ChunkInput per chunk that holds cells (the full-build work-list).\nReads the wired-in `f.buckets` (no re-partition).",
+              "sig": "pub fn all_inputs(f: ChunkField, halo_k: integer) -> vector<ChunkInput>"
+            },
+            {
+              "doc": "One ChunkInput per DIRTY chunk (the incremental-rebuild work-list).\nIterates ONLY the dirty set and looks up each dirty chunk's bucket — so\nthe cost is O(dirty chunks × their cells), independent of total N.  A\ndirty chunk with no owned cells (a halo-marked empty neighbour) is\nskipped.  Clear the dirty index after rebuilding.",
+              "sig": "pub fn collect_dirty_inputs(f: ChunkField, halo_k: integer) -> vector<ChunkInput>"
+            },
+            {
+              "doc": "",
+              "sig": "pub struct GroupKey"
+            },
+            {
+              "doc": "The chunk ck's a group contains that actually hold cells (the assemble\nwork-list).  No mesh here — gridmesh partitions; the consumer owns meshes.",
+              "sig": "pub struct GroupInput"
+            },
+            {
+              "doc": "The group owning CHUNK coord (cx, cy): chunk-space divided by group_dim.\nUses chunk_div so any group_dim works (not just powers of two) — a free dial.",
+              "sig": "pub fn group_of(cx: integer, cy: integer, group_dim: integer) -> GroupKey"
+            },
+            {
+              "doc": "One GroupInput per group that holds cells (the full-build work-list).\nO(chunks): each non-empty chunk dedups into its group's chunk list.",
+              "sig": "pub fn all_groups(f: ChunkField, group_dim: integer) -> vector<GroupInput>"
+            },
+            {
+              "doc": "One GroupInput per DIRTY group (the incremental re-upload work-list).\nA group is dirty if any of its chunks is dirty; its chunk_cks lists ALL its\nmember chunks that hold cells (so the consumer reassembles the group's VBO\nfrom those chunks' CACHED meshes — unchanged chunks copied, not rebuilt).\n\nFLAT COST: derives the dirty groups from f.dirty (O(dirty)), then for each\nenumerates its group_dim × group_dim member chunk coords analytically and\nprobes f.buckets — O(dirty groups × group_dim²), independent of total N.\n(Never scans all chunks, which would make per-edit cost grow with N.)",
+              "sig": "pub fn collect_dirty_groups(f: ChunkField, group_dim: integer) -> vector<GroupInput>"
+            }
+          ],
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-06-29T08:18:05Z",
+          "sha256": "97ac4a990c4501982e05f8a2bd65d6010527f3ace6b3f7598a262ef03ebe6b26",
+          "size": 11907,
+          "subpath": "gridmesh",
+          "url": "https://github.com/loft-lang/loft-libs-graphics/releases/download/gridmesh-v0.1.2/gridmesh-0.1.2.tar.gz"
         }
       },
       "yanked": []
@@ -502,6 +696,135 @@
           "size": 17726,
           "subpath": "server",
           "url": "https://github.com/loft-lang/loft-libs-net/releases/download/server-v0.2.0/server-0.2.0.tar.gz"
+        },
+        "0.2.1": {
+          "api": [
+            {
+              "doc": "",
+              "sig": "pub struct Server"
+            },
+            {
+              "doc": "",
+              "sig": "pub struct WebSocket"
+            },
+            {
+              "doc": "",
+              "sig": "pub struct Request"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn listen(port: integer) -> Server"
+            },
+            {
+              "doc": "Non-blocking variant of `next()`.  Returns null immediately if no\nconnection is pending.  Use this when the server interleaves HTTP\naccept with multi-client WS polling on a single port (single_port\naudience demo / future TTT-style multi-tab apps).",
+              "sig": "pub fn next_nonblocking(self: Server) -> Request"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn next(self: Server) -> Request"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn respond(self: Request, status: integer, body: text)"
+            },
+            {
+              "doc": "Send an HTTP response with a caller-specified Content-Type and\nclose the connection.  Use for HTML / CSS / JSON / WASM payloads;\n`respond` defaults to `text/plain`.",
+              "sig": "pub fn respond_typed(self: Request, status: integer, body: text, content_type: text)"
+            },
+            {
+              "doc": "Convenience wrappers for the common cases TTT v3 needs.",
+              "sig": "pub fn respond_html(self: Request, body: text)"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn respond_css(self: Request, body: text)"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn respond_js(self: Request, body: text)"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn respond_loft(self: Request, body: text)"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn respond_404(self: Request)"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn close(self: Server)"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn ws_upgrade() -> WebSocket"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn next(self: WebSocket) -> text"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn send(self: WebSocket, msg: text) -> boolean"
+            },
+            {
+              "doc": "Send `msg` as a binary WebSocket frame (opcode 2).  Loft\n`text` is a byte buffer — pack u8/u16/i32/etc. into it via\n`to_bytes` style code, then ship it.",
+              "sig": "pub fn send_binary(self: WebSocket, msg: text) -> boolean"
+            },
+            {
+              "doc": "Opcode of the last frame returned by `next` on this socket.\nUse after `next` to decide whether to interpret the payload\nas utf-8 text or as a binary blob.",
+              "sig": "pub fn last_opcode(self: WebSocket) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn close(self: WebSocket)"
+            },
+            {
+              "doc": "Event delivered to the on_event handler.  `connected` and\n`message` are mutually-exclusive booleans for fast dispatch\nwithout an integer enum.  Wire format `<msg_id>:<payload>`\nis parsed by `run` so msg_id and payload come pre-split.",
+              "sig": "pub struct WsEvent"
+            },
+            {
+              "doc": "Block forever, draining events and calling the handler.\nMalformed message frames are logged at warn level and silently\ndropped — the handler never sees them.",
+              "sig": "pub fn run(self: Server, on_event: fn(WsEvent))"
+            },
+            {
+              "doc": "Non-blocking single-event drain — returns the next WsEvent, or null\nwhen nothing is pending.  Lets a server that also needs a periodic\ntick (timers, decay, snapshots) run its OWN loop while still using the\nefficient Rust-side event pump: drain `poll_event` in a batch, do the\nperiodic work, idle-sleep when a pass produced nothing.  `run` above is\nthe convenience wrapper for servers that only react to events.\n\nDisconnect (kind 2) and malformed message frames are skipped internally\n(the caller never sees them), so a null return always means \"idle\".",
+              "sig": "pub fn poll_event(self: Server) -> WsEvent"
+            },
+            {
+              "doc": "Reply to the HTTP request currently parked by a `http` WsEvent and\nclose it.  Call exactly once from the handler for an `ev.http` event.",
+              "sig": "pub fn respond_html(self: Server, body: text)"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn respond_typed(self: Server, status: integer, body: text, content_type: text)"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn respond_404(self: Server)"
+            },
+            {
+              "doc": "Send a frame to a specific client.  Returns true on success.",
+              "sig": "pub fn send_to(self: Server, client_id: integer, msg: text) -> boolean"
+            },
+            {
+              "doc": "Send a frame to every active client.  Returns the count of\nsuccessful sends.  Iteration happens entirely in Rust.",
+              "sig": "pub fn broadcast(self: Server, msg: text) -> integer"
+            },
+            {
+              "doc": "Forcefully close one client's connection.  The slot is freed\nfor reuse by future accepts.",
+              "sig": "pub fn disconnect(self: Server, client_id: integer)"
+            }
+          ],
+          "deps": {
+            "web": ">=0.1"
+          },
+          "loft": ">=0.8",
+          "published": "2026-07-02T11:59:45Z",
+          "sha256": "b76f0f2cd79026573fb5f74297268e449f0c5c2b44cae361d056da5615394530",
+          "size": 19705,
+          "subpath": "server",
+          "url": "https://github.com/loft-lang/loft-libs-net/releases/download/server-v0.2.1/server-0.2.1.tar.gz"
         }
       },
       "yanked": []
@@ -591,11 +914,29 @@
           "size": 23472,
           "subpath": "web",
           "url": "https://github.com/loft-lang/loft-libs-net/releases/download/web-v0.2.0/web-0.2.0.tar.gz"
+        },
+        "0.2.1": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-06-21T18:43:07Z",
+          "sha256": "e8a73ed6ca26ee0b865d232645ab80472a6f9bf962aed5ac61da0933fa7c0fb9",
+          "size": 29277,
+          "subpath": "web",
+          "url": "https://github.com/loft-lang/loft-libs-net/releases/download/web-v0.2.1/web-0.2.1.tar.gz"
+        },
+        "0.2.2": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-06-24T22:03:05Z",
+          "sha256": "59518a562b865dac388b017651701a36f9160d1c2de987b4d410a0675222085c",
+          "size": 29571,
+          "subpath": "web",
+          "url": "https://github.com/loft-lang/loft-libs-net/releases/download/web-v0.2.2/web-0.2.2.tar.gz"
         }
       },
       "yanked": []
     }
   },
   "schema_version": 1,
-  "updated": "2026-06-18T17:22:09Z"
+  "updated": "2026-07-02T11:59:45Z"
 }
