@@ -35,7 +35,9 @@ fn test_pick_second() {
 fn first_element<T>(gen_v: vector<T>) -> T {
   gen_v[0]
 }
-fn last_element<T>(gen_v: vector<T>) -> T {
+// @PLN25 index flip — a computed index `gen_v.len() - 1` is not provably in-bounds, so the
+// read is nullable; a generic has no `?? default`, so the honest result type is `T?`.
+fn last_element<T>(gen_v: vector<T>) -> T? {
   gen_v[gen_v.len() - 1]
 }
 fn test_vector_generics() {
