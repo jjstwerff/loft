@@ -87,8 +87,8 @@ fn parse_qr(payload: text) -> (integer, integer) {
   if i == null {
     (0, 0)
   } else {
-    q = payload[..i] as integer;
-    r = payload[i + 1..] as integer;
+    q = payload[..i] as integer ?? 0;
+    r = payload[i + 1..] as integer ?? 0;
     (q, r)
   }
 }
@@ -100,14 +100,14 @@ fn parse_qrc(payload: text) -> (integer, integer, integer) {
   if i == null {
     (0, 0, 0)
   } else {
-    q = payload[..i] as integer;
+    q = payload[..i] as integer ?? 0;
     rest = payload[i + 1..];
     j = rest.find(",");
     if j == null {
       (q, 0, 0)
     } else {
-      r = rest[..j] as integer;
-      c = rest[j + 1..] as integer;
+      r = rest[..j] as integer ?? 0;
+      c = rest[j + 1..] as integer ?? 0;
       (q, r, c)
     }
   }
@@ -213,7 +213,7 @@ fn main() {
         replay_world_to(srv, ev.cid, world);
       } else if ev.msg_id == 3 {
         // color_select: "color"
-        c = ev.payload as integer;
+        c = ev.payload as integer ?? 0;
         p = world.players[ev.cid];
         if p == null {
           world.players += [Player{pk: ev.cid, color: c, lq: 0, lr: 0}];

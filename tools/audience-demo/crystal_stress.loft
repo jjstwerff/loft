@@ -116,9 +116,9 @@ fn main() {
         if len(cm.kinds) < 0 { print("unreachable"); }
       }
       t1 = ticks();
-      per_build = (t1 - t0) / reps;
+      per_build = (t1 - t0) / reps ?? 0;
       us_seg = 0;
-      if segs > 0 { us_seg = per_build / segs; }
+      if segs > 0 { us_seg = per_build / segs ?? 0; }
       quad = per_build * 1000 / (n * n);
       print("{n}\t{segs}\t{per_build}\t{us_seg}\t{quad}\n");
       // Stop this pattern's ramp once a single build blows ~10× the

@@ -854,7 +854,7 @@ fn render_md_table_row(file_path: text, line_n: integer) -> text {
     i = 0;
     while i < nc {
         label = "Col " + n_to_text(i + 1);
-        if i < nh { label = headers[i]; }
+        if i < nh { label = headers[i] ?? ""; }
         cell = cells[i];
         if cell == "" {
             i = i + 1;

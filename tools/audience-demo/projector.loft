@@ -267,11 +267,11 @@ fn snapshot_cells(world: World) -> Snapshot {
   for sc_pass in 0..n {
     for sc_j in 0..(n - 1) {
       if buf.ticks[sc_j] > buf.ticks[sc_j + 1] {
-        ta = buf.ticks[sc_j];  buf.ticks[sc_j]  = buf.ticks[sc_j + 1];  buf.ticks[sc_j + 1]  = ta;
-        xa = buf.xs[sc_j];     buf.xs[sc_j]     = buf.xs[sc_j + 1];     buf.xs[sc_j + 1]     = xa;
-        ya = buf.ys[sc_j];     buf.ys[sc_j]     = buf.ys[sc_j + 1];     buf.ys[sc_j + 1]     = ya;
-        ca = buf.colors[sc_j]; buf.colors[sc_j] = buf.colors[sc_j + 1]; buf.colors[sc_j + 1] = ca;
-        ba = buf.births[sc_j]; buf.births[sc_j] = buf.births[sc_j + 1]; buf.births[sc_j + 1] = ba;
+        ta = buf.ticks[sc_j] ?? 0;  buf.ticks[sc_j]  = buf.ticks[sc_j + 1] ?? 0;  buf.ticks[sc_j + 1]  = ta;
+        xa = buf.xs[sc_j] ?? 0;     buf.xs[sc_j]     = buf.xs[sc_j + 1] ?? 0;     buf.xs[sc_j + 1]     = xa;
+        ya = buf.ys[sc_j] ?? 0;     buf.ys[sc_j]     = buf.ys[sc_j + 1] ?? 0;     buf.ys[sc_j + 1]     = ya;
+        ca = buf.colors[sc_j] ?? 0; buf.colors[sc_j] = buf.colors[sc_j + 1] ?? 0; buf.colors[sc_j + 1] = ca;
+        ba = buf.births[sc_j] ?? 0; buf.births[sc_j] = buf.births[sc_j + 1] ?? 0; buf.births[sc_j + 1] = ba;
       }
     }
   }
@@ -456,9 +456,9 @@ fn bake_crystal_group(cm: SegMesh, births: vector<single>) -> vector<single> {
     // @PLN6 two-phase growth: a MAIN anchors at its SRC (= the existing
     // crystal's centre) and grows from BIRTH; a SIDE branch's birth is delayed
     // by GROWTH_FRAMES so the hex only FILLS after the connection has landed.
-    seg_birth = births[own];
+    seg_birth = births[own] ?? 0.0f;
     if cm.kinds[bcg_i] != KIND_MAIN {
-      seg_birth = (births[own] as float + GROWTH_FRAMES) as single;
+      seg_birth = ((births[own] ?? 0.0f) as float + GROWTH_FRAMES) as single;
     }
     emit_beam(verts,
       cm.x0s[bcg_i], cm.z0s[bcg_i], cm.y0s[bcg_i],
