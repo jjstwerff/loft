@@ -69,17 +69,25 @@ back; a `?? <variant>` fallback LEAKS (proven). gate-OFF safe (wrap dir/last/par
 loft_suite 5/5); lib/code.loft + lib/parser.loft compile 0 rejects under the flip. **⚠️ BUT clearing
 the casts UNMASKED a DEEPER runtime corruption:** under the flip the loft-in-loft compiler produces a
 GARBAGE token position ("Expected : on :281479271743489" at lib/lexer.loft:476) — a SILENT wrong-value
-(it's a MEMORY corruption — the debugger SIGSEGVs, opcode 206). **DEBUG SESSION DONE (localized, not fixed):**
-minimal repro `parse("s","struct S {x:integer}"); parse("shape","enum Shape {Circle {radius:float}}")` under
-`LOFT_INDEX_DEV=1`. Trigger SHARP = a struct WITH A FIELD (empty struct + plain fn are clean). Site =
-`Code.field` (lib/code.loft:133-135): `in_type = self.definitions[cur_def ?? 0].typedef; self.types[in_type]
-.type_fields += [Field]` — Optional-wrapped element reads corrupt the def/type tables (0x0001_0001_0001_0001 =
-four u16=1 packed). EMERGENT deps/store bug — isolated probes (narrow-field read, scalar-field write,
-vector-field append of an Optional element) ALL PASS; only the full context corrupts (loft's #1 weakness).
-**NEXT = focused matrix-first on the STORE** (LOFT_LOG=ref_debug / debug build to name opcode 206 + the
-corrupting write; likely a dangling DbRef from an Optional-wrapped v[i] element the deps pass mishandles;
-fix at the deps chokepoint per OWNERSHIP_MODEL.md), then wrap/loft_suite, then html_wasm + runtime_warnings
-(`?? 0.0`), THEN Step 6. Full detail: [index-f1a-landing.md](index-f1a-landing.md) § DEBUG FINDINGS.
+(it was a MEMORY corruption). **✅ ROOT-CAUSE FIXED (`9a5ec692`) — `Type` is now Optional-dep-transparent.**
+The debug session pinned it: `Type::depend()`/`depending()`/`deps_ref()` recursed through `RefVar` but NOT
+`Optional`, so a borrow whose type is `Optional`-wrapped (`e = v[i]`, or a field-append target
+`self.types[in_type].type_fields += [Field]`) LOST its lifetime dep → the deps pass treated the element ref
+as OWNING → spurious `OpDatabase` + the record constructed in the wrong slot, clobbering adjacent fields
+(SIGSEGV / 0x0001_0001_0001_0001). Fix: recurse through `Optional` like `RefVar` (deps are a lifetime
+property, agnostic to the nullability marker). gate-OFF byte-identical; issues 748/0. Minimal repro that
+pinned it: appending a struct-with-a-heap-field to the vector field of an Optional element (scratch:
+structapp.loft). Then the doc/fixture consumers migrated (`e8fb2019` 25-generics `-> T?` + p248_pkg;
+`a40fb977` moros_editor) + `doc/examples.js` regenerated (`1a746f9b`, doc_hygiene green).
+**RESULT: wrap dir/last/parser_debug/wasm_dir + loft_suite 5/5 BOTH gate-OFF and under LOFT_INDEX_DEV=1.**
+**REBASED (2026-07-02) onto fetched origin/main @ 64a1be71** (2 new commits #476 html modules + #474 @PLN92;
+55 commits replayed clean, no conflicts; force-pushed). **NEXT = Step 6 (the gate flip):** flip
+`LOFT_INDEX_DEV`→`pln25_dn1_enabled` (fields.rs:672) + retire the VectorIndex/TextIndex warning
+(operators.rs:2432, add to the Div|Rem early-return) + migrate the ~6 index-warning tests in
+runtime_warnings.rs (the "warns" ones flip to "absent (retired)", like the div tests; discharge their
+programs) + graduate `25-index-nullable.loft` + a `102-expected-errors.loft` reject twin, then full suite
+green under the now-default flip. Re-run the full under-flip suite (was stopped for the rebase) to reconfirm.
+Full detail: [index-f1a-landing.md](index-f1a-landing.md) § DEBUG FINDINGS.
 
 **✅ INDEX F1a Step 1 (copy-elision `Optional`-peel) DONE** — `use_analysis` borrower filter now peels
 `.base()` before reading deps, so a mutated/escaping `e = v[i]: Item?` KEEPS the copy (was a SILENT
