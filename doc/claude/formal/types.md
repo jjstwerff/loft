@@ -286,49 +286,42 @@ type-checks (warns) today; under `(N-Div)`/`(N-Arith)`+`(N-Store)` it must be `�
 `b: integer?`. The runtime is right; the **typing + discharge** is the gap. Its blast
 radius (fit-failing results stored into non-null without `??`) is the gating measurement.
 
-### DN4 — `as` to a narrower type doesn't enforce the range (UB)  ·  IMPLEMENTED behind `LOFT_DN4` (default off); cutover pending
-`400 as u8` yields **400** by default — the cast asserts the *type* but leaves an
-out-of-range value in a `u8` slot (UB: a `u8` holding 400). Per `(N-Cast)`/`(N-Cast?)` the
-two honest forms are: **`as u8` requires a PROVABLE fit** (so `400 as u8` and `b: integer;
-b as u8` are **compile errors** — "use `as u8?`"), and **`as u8?` is the CHECKED cast**
-(value or `null`, never out-of-range). Falsifier: `(400 as u8) == 400` is true by default;
-with `LOFT_DN4` set, `400 as u8` does not compile and `400 as u8?` is `null`.
+### DN4 — CLOSED (2026-07-02, F5 cutover): `as` to a narrower type enforces the range
+`400 as u8` was UB (the cast asserted the *type* but left an out-of-range value in a `u8`
+slot). Now per `(N-Cast)`/`(N-Cast?)`: **`as u8` requires a PROVABLE fit** (`400 as u8`, and
+`b: integer; b as u8`, are **compile errors** — "use `as u8?`"), and **`as u8?` is the CHECKED
+cast** (value or `null`, never out-of-range) — a pure parse-time range-guard desugar (`OpLeInt`
++ `if` + `OpConvIntFromNull`, no new runtime op; the guard types as a full nullable integer so
+the `i64::MIN` sentinel keeps full width). Range-tracking makes masked values provably-fit, so
+`(x & 255) as u8` / `(non-neg) % c as u8` need no `?`. **Enforcement is UNCONDITIONAL** — the
+interim `LOFT_NO_DN4` opt-out (which reverted to the silent width-tag) is RETIRED, so DN4 is
+consistent with its nullness sibling DN5. Validated both backends (`tests/dn4_cast.rs`: the
+value matrix, the compile-error cases, and the opt-out-retired guard).
 
-**Status (2026-06-28):** the rule is implemented behind the `LOFT_DN4` flag and validated
-on both backends (`tests/dn4_cast.rs`; the value matrix, the compile-error cases, and the
-flag-off-is-inert guard). `as τ?` is a pure parse-time range-guard desugar (`OpLeInt` + `if`
-+ `OpConvIntFromNull`) — **no new runtime op and no runtime error**; the result types as a
-full nullable integer (the null sentinel `i64::MIN` needs full width — typing the guard as
-the narrow `τ` made native `i64::MIN as u8 == 0` and lost the null). One item now gates the
-**default-on cutover**: **migrate the remaining in-tree sites** to `as τ?` (measured at
-stdlib 0, crawler 0, tests/scripts 30/9 *before* range-tracking — now fewer, since masked
-casts are exempt). Gate (1) — **range-tracking** so a masked value is provably-fit — is
-**DONE for `&`/`%`** (always-on; `x & 255` types `integer(0,255)`, `(non-neg) % c` types
-`[0,|c|-1]`, both sound + suite-green): `(x & 255) as u8` no longer needs `as u8?`. The
-`(N-Arith)` range arithmetic for `+`/`-`/`*` (overflow → `Integer?`) remains, and lands
-with DN3. Deviation **shrinks but stays open** until cutover. The integer-range sibling of DN1–DN3's
-null work — same "no claim without enforcement."
+### DN5 — CLOSED (2026-07-02, F3): `as τ` no longer launders `null` / `τ?` into a non-null scalar
+`null as integer`, `x:integer? as integer`, `(a/b) as integer`, `v[i] as integer` used to
+type-check and store `null` into a non-null slot (bypassing `(N-Store)`). Now a `Null`/`Optional`
+source cast to a non-null scalar (no `?`) is a **compile error** directing to `as τ?` (checked →
+`null`) or `?? d`; `as τ?` types `Optional<τ>` so the laundering stays closed downstream
+(`z: τ = (e as τ?)` still requires a discharge). This is the **nullness dimension of DN4** — the
+two are ONE domain-containment fit-check at the `as` chokepoint (`operators.rs`): a scalar
+target's domain is its value RANGE × nullness, and `null` is the reserved out-of-domain element
+(so `is_narrowing_int` peels `Optional` — a nullable source no longer slips past the range
+check). A `null as S` heap ref stays legal (`is_non_null_scalar` is scalar-only). Regression:
+`tests/scripts/102-expected-errors.loft` twins + the `25-*-nullable.loft` accept paths.
 
-### DN5 — `as τ` launders `null` / `τ?` into a non-null scalar (the nullness sibling of DN4)
-`as` currently strips nullability without enforcing fit, so it **bypasses `(N-Store)`**: `null as
-integer`, `x:integer? as integer`, and `return null as integer` all type-check and store `null`
-into a non-null `integer` (verified: `a: integer = null as integer` yields `a == null`). Per
-`(N-Cast)` — "`as τ` requires a PROVABLE fit; the honest maybe-miss form is `as τ?`" — a `Null`/
-`Optional` source into a non-null scalar target must be a **compile error** directing to `as τ?`
-(checked → `null`) or `?? d`. Falsifier: `(null as integer) == null` is `true` today; under
-`(N-Cast)` it does not compile. This is the **nullness dimension of DN4** (which is the range
-dimension) — one rule, one fit-check, one gate. *Explicit* opt-in (you must write `as integer`),
-so a tightening not a foundation crack; close it AFTER the scalar flip (DN1) lands, scoped to
-`target is_non_null_scalar ∧ source ∈ {Null, Optional}` (a `null as S` heap ref stays legal).
-
-### DN6 — inferred `null`-join is rejected instead of widening to `τ?`
-Per `(N-Join)` an inferred `a = null; a = 5` (no annotation) must infer `a : integer?` — the join
-of `null` and `integer`, made optional. The implementation instead **rejects** it (`change_var`:
-"cannot change type from null to integer") rather than joining. Falsifier: `a = null; a = 5; a ?? 0`
-is `(N-Join)`-legal (`a : integer?`) but errors today. This is the *inferred* escape valve the
-model promises — nullable **for free** where no annotation committed you to non-null, the
-ergonomic counterpart to `(N-Decl)`'s rejection of annotated `a: integer = null`. Closes when
-`change_var` joins `Null ⊔ τ = τ?` for an unannotated local.
+### DN6 — CLOSED (2026-07-02, F4): the inferred `null`-join widens to `τ?` instead of rejecting
+Per `(N-Join)` an INFERRED `a = null; a = 5` (no annotation) now infers `a : integer?` — the join
+of `null` and the scalar — via `change_var_type` (`variables/mod.rs`). `var_tp == null` is
+inherently the inferred case (a variable cannot be annotated `null`), so the widen never overrides
+an explicit non-null contract: annotated `a: integer = null` still rejects, as does the reverse
+`a = 5; a = null`; a widened `τ?` into a non-null slot still requires a discharge. **Scoped to
+INLINE scalars** (Integer/Boolean/Float/Single/Character): the retroactive widen reuses the slot
+the first `= null` allocated, sound only when Null and `τ?` share it (an in-slot sentinel).
+`Text` — the one heap-backed scalar — is EXCLUDED (its Null slot is not a text?-heap slot;
+widening it underflowed `fn_return`'s discard / native E0308), so a text null-start must annotate
+`s: text? = null`. Regression: `tests/scripts/25-null-join.loft` + reject twins in
+`102-expected-errors.loft`.
 
 ### D2 — CLOSED by reconciliation (2026-06-24): `integer` = i64 is a *user-visible* contract met by a *compact* internal encoding
 

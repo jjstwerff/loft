@@ -1785,10 +1785,13 @@ impl Parser {
                     }
                     // Keep `tp` (the non-null target) as the result to bound the cascade.
                 } else if narrowing {
-                    if !self.first_pass
-                        && std::env::var_os("LOFT_NO_DN4").is_none()
-                        && !self.int_value_fits(code, &tp)
-                    {
+                    // @PLN25 DN4 (F5 cutover — UNCONDITIONAL, no opt-out): a narrowing cast
+                    // whose value is NOT provably in range is a fit violation, exactly like
+                    // DN5's nullness dimension (its sibling, also unconditional). The old
+                    // `LOFT_NO_DN4` escape reverted to a SILENT 8-byte width-tag
+                    // (`400 as u8 == 400`) — the very truncation the model eliminates — so it
+                    // is retired. `as τ` errors (use `as τ?`); `as τ?` is the checked cast.
+                    if !self.first_pass && !self.int_value_fits(code, &tp) {
                         if nullable_cast {
                             tp = self.dn4_checked_cast(code, &tp, &src_base);
                         } else {

@@ -185,8 +185,8 @@ want a smaller unit instead: **gap #3 `??`-typing**, or the **call-arg N-Store**
   - **Scalars Phase 0 (EXPAND) — done.** `integer?` / `text?` / `S?` parse in every type
     position (decl, param, return, `as`-cast, nested). Today a no-op (plain types are still
     nullable). Regression: `tests/scripts/25-scalar-optional-syntax.loft`.
-  - **DN4 (narrowing-cast enforcement) — done, default-ON** (opt-out `LOFT_NO_DN4`,
-    `operators.rs:1674`). A narrowing integer cast of a not-provably-fit value is a compile
+  - **DN4 (narrowing-cast enforcement) — done, UNCONDITIONAL** (F5 cutover 2026-07-02 retired
+    the `LOFT_NO_DN4` opt-out). A narrowing integer cast of a not-provably-fit value is a compile
     error; `as τ?` is the checked form. DN4 is integer-range-only, needs none of the scalar
     `τ?` representation, so it **shipped ahead of the scalar default flip**. The error
     baseline caught a real silent overflow (`big as i32` was `10000000000`). Regression:
@@ -374,10 +374,18 @@ tightenings**. In order, each ends green (never carry two phases' breakage):
   (integer/float/char widen; return/arith/discharge; leak-clean). Graduate `25-null-join.loft` +
   two reject twins (annotated + text-boundary) in `102-expected-errors.loft`. Full suite: 13
   pre-existing failures, ZERO new. DN1-gated.
-- **F5 — DN4 cutover** (the range sibling of F3): flip `as`-range enforcement default-on
-  (today opt-in `LOFT_DN4`) + migrate remaining in-tree `as τ` → `as τ?`. Fold with F3 if convenient.
-- **F6 — Final PR: `Closes @PLN25`.** Update `formal/types.md` deviations (DN1 + DN2 →
-  CLOSED; DN5/DN6 closed by F3/F4; DN4 by F5) + `CHANGELOG`.
+- **F5 — DN4 cutover** (the range sibling of F3) — ✅ **DONE (2026-07-02).** The premise was
+  STALE: DN4 was already default-on (opt-**out** `LOFT_NO_DN4`, no `LOFT_DN4` opt-in), and the
+  267 in-tree `as <narrow>` casts are all provably-fit (masked `& 255`/`& 65535`, constants,
+  `len() & N`) which DN4 ACCEPTS — so the flip + migration were already complete. The cutover
+  finalized it: the `LOFT_NO_DN4` opt-out (which reverted to the silent width-tag `400 as u8 ==
+  400` — the truncation the model eliminates) is **RETIRED**, making DN4 UNCONDITIONAL and
+  consistent with its nullness sibling DN5 (no opt-out). `tests/dn4_cast.rs` escape-hatch guard
+  converted to `dn4_no_optout_flag_is_retired` (asserts `LOFT_NO_DN4=1` no longer disables DN4).
+  formal/types.md DN4/DN5/DN6 marked CLOSED. Verified both backends; dn4_cast 3/3.
+- **F6 — Final PR: `Closes @PLN25`.** formal/types.md deviations DN4/DN5/DN6 already marked
+  CLOSED (F3/F4/F5, 2026-07-02); remaining: confirm DN1+DN2 CLOSED + `CHANGELOG` + F2 (retire
+  `not null`, blocked on the range reconciliation — see F2 above).
 
 **Deferred (a SEPARATE feature, NOT blocking the @PLN25 close):** flow-narrowing (`if x != null
 { x : τ }`), the ergonomic chokepoint for the `got = raw`-style N-Store cases. Tracked in
@@ -615,7 +623,7 @@ loft --interpret /tmp/a.loft               # vector<S?>: v[1]==null -> true
 loft introspect /tmp/a.loft | grep main_vector   # vector<S> -> main_vector<S> (dense)
 # DN4 enforcement (default-on):
 echo 'fn main(){ x = 400 as u8; print("{x}"); }' > /tmp/dn4.loft
-loft --interpret /tmp/dn4.loft             # -> compile error: use `as u8?`  (LOFT_NO_DN4 opts out)
+loft --interpret /tmp/dn4.loft             # -> compile error: use `as u8?`  (DN4 unconditional; opt-out retired F5)
 # full baseline (expect green: 2564/0):
 ./scripts/find_problems.sh --bg ; ./scripts/find_problems.sh --wait
 ```
