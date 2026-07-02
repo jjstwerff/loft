@@ -560,6 +560,12 @@ fn run_backend(src: &str, backend: &str, join_own: bool) -> (String, String) {
         .env("LOFT_TIMEOUT", "180");
     if join_own {
         cmd.env("LOFT_JOIN_OWN", "1");
+    } else {
+        // The gate-OFF control leg must ACTIVELY remove the var — an ambient
+        // `LOFT_JOIN_OWN=1` (e.g. a whole-suite gate-ON measurement run)
+        // otherwise leaks into the child and the "without the flag" premise
+        // silently inverts (5 contract tests false-failed exactly that way).
+        cmd.env_remove("LOFT_JOIN_OWN");
     }
     let out = cmd.output().expect("spawn loft");
     (

@@ -47,6 +47,11 @@ def run(mode: str, path: str):
     """Run one program on one backend; return (exit_code, normalised_stdout, leaked)."""
     env = dict(os.environ)
     env["LOFT_TIMEOUT"] = TO_INTERP if mode == "--interpret" else TO_NATIVE
+    # Gate hygiene: the bytecode cache key does NOT include semantic env gates
+    # (LOFT_JOIN_OWN et al) — a gate-ON sweep otherwise poisons a later gate-OFF
+    # sweep of the SAME probe files with stale-gate bytecode (observed: a 6/54
+    # gate-OFF map read 0/54 right after a gate-ON run).  Never trust the cache.
+    env["LOFT_NO_CACHE"] = "1"
     if mode == "--native":
         env["LOFT_NATIVE_LEAK_CHECK"] = "1"
     try:

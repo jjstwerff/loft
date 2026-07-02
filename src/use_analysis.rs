@@ -1159,6 +1159,14 @@ pub fn displaced_owned_slots(code: &Value, function: &Function, data: &Data) -> 
         .filter(|s| {
             matches!(s.prior, Own::Owned)
                 && matches!(s.rhs, Own::Borrowed { .. } | Own::Join { .. })
+                // A retbuf-promoted PARAM slot is NOT this fix's territory: the
+                // dep-strip would disable the dep-carrying explicit reassign-free
+                // (the p462 `_rb_w_` witness partner) while codegen's dep-empty
+                // pre-Set free excludes arguments — the displaced first store
+                // then leaks one per call (p462_cond_reassign_retbuf under
+                // gate-ON, M×N).  Param-slot displaced frees stay with the
+                // witness mechanism.
+                && !function.is_argument(s.var)
         })
         .map(|s| s.var)
         .collect()

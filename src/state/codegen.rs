@@ -1735,6 +1735,17 @@ impl State {
                 && let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
             {
                 let tp_nr = stack.data.def(d_nr).known_type();
+                // Free the DISPLACED old store first — this branch REPLACES the
+                // plain owned-reassign path (which frees it just above), and
+                // `OpBindOrCopy` overwrites `v` without releasing its previous
+                // store: each conditional reassign otherwise orphans one store
+                // (the p462_cond_reassign_retbuf gate-ON leak, M×N per call
+                // site).  Safe here: `\!stash_old_for_post_free` means the RHS
+                // does not read `v`, and a first-Set's null ref free is a no-op.
+                let old_pos = stack.var_pos(v);
+                stack.add_op("OpVarRef", self);
+                self.code_add(old_pos);
+                stack.add_op("OpFreeRef", self);
                 // The call result (`src`) FIRST, then the witness on top — so the
                 // witness's frame-relative `var_pos` accounts for `src` already on the
                 // eval stack. `OpBindOrCopy` pops witness (top) then src.
