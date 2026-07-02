@@ -58,3 +58,35 @@ fn test_generic_walk_cap() {
   for gc_w in gw_walk(gc_root, 2) { gc_count += 1; }
   assert(gc_count == 2, "cap: {gc_count}");
 }
+
+// ── The STDLIB construction: `tree_walk` over the `Walkable` bound ──────
+// Same contract as the local gw_walk above, provided by default/01_code.loft.
+// The stdlib landing was blocked by #483 (a generic template's parse
+// registered a placeholder vector row, shifting the runtime type table for
+// every later registration); `vector_of` now bakes the MAX sentinel inside
+// templates instead of registering.
+
+struct SwNode { swn_v: integer, swn_kids: vector<SwNode> }
+fn children(self: SwNode) -> vector<SwNode> { return self.swn_kids; }
+
+fn test_stdlib_tree_walk_level_order() {
+  st_n4 = SwNode { swn_v: 4, swn_kids: [] };
+  st_n5 = SwNode { swn_v: 5, swn_kids: [] };
+  st_n6 = SwNode { swn_v: 6, swn_kids: [] };
+  st_n2 = SwNode { swn_v: 2, swn_kids: [st_n4, st_n5] };
+  st_n3 = SwNode { swn_v: 3, swn_kids: [st_n6] };
+  st_n1 = SwNode { swn_v: 1, swn_kids: [st_n2, st_n3] };
+  st_seq = "";
+  for st_w in tree_walk(st_n1, 1000) {
+    st_seq = "{st_seq}{st_w.swn_v},";
+  }
+  assert(st_seq == "1,2,3,4,5,6,", "stdlib level order: {st_seq}");
+}
+
+fn test_stdlib_tree_walk_cap() {
+  sc_leaf = SwNode { swn_v: 20, swn_kids: [] };
+  sc_root = SwNode { swn_v: 5, swn_kids: [sc_leaf, sc_leaf, sc_leaf] };
+  sc_n = 0;
+  for sc_w in tree_walk(sc_root, 2) { sc_n += 1; }
+  assert(sc_n == 2, "stdlib cap: {sc_n}");
+}

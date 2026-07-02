@@ -1691,6 +1691,21 @@ impl Parser {
         // the default integer slot (0) so the vector type still
         // registers correctly.  The content's own fill pass will
         // update once it runs.
+        //
+        // EXCEPT inside a generic template: there the unresolved content is
+        // the type VARIABLE, which never fills.  Registering the placeholder
+        // `vector<integer>` row from the template's parse SHIFTS the runtime
+        // type table for everything registered after it, silently breaking
+        // the layout-coincident derivations downstream (#483 — a stdlib
+        // generic made an unrelated nested-vector literal read garbage).
+        // Bake the MAX sentinel without registering anything; the
+        // instantiation fixups re-derive the concrete ids.
+        if c_tp == u16::MAX
+            && self.context != u32::MAX
+            && self.data.def_type(self.context) == DefType::Generic
+        {
+            return u16::MAX;
+        }
         let resolved = if c_tp == u16::MAX { 0 } else { c_tp };
         self.database.vector(resolved)
     }

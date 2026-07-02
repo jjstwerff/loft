@@ -1522,6 +1522,27 @@ pub fn sum<T: Addable>(v: vector<T>, init: T) -> T {
 }
 #pure
 
+
+
+pub interface Walkable {
+  fn children(self: Self) -> vector<Self>
+}
+
+pub fn tree_walk<T: Walkable>(wk_root: T, cap: integer) -> vector<T> {
+  wk_order = [wk_root];
+  for wk_i in 0..cap {
+    if wk_i >= len(wk_order) { wk_i#break; }
+    wk_cur = wk_order[wk_i] ?? wk_root;
+    for wk_kid in wk_cur.children() {
+      if len(wk_order) < cap {
+        wk_order += [wk_kid];
+      }
+    }
+  }
+  wk_order
+}
+#pure
+
 // --- Field iteration support types ---
 
 // Wraps a field value in a type-discriminated enum for compile-time field iteration.
