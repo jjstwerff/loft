@@ -512,6 +512,11 @@ pub struct Output<'a> {
     /// `Vec<String>` (text-yielding generator) and the `Value::Yield`
     /// emission wraps the value in `.to_string()` instead of `as i64`.
     pub yield_collect_text: bool,
+    /// @P326 twin for the eager-collect emitter: the generator yields a
+    /// DbRef-shaped value (Reference / Vector / struct-Enum), so a yield
+    /// inside a ForLoopBody pushes the DbRef as-is — `as i64` there was
+    /// the #481 native E0308/E0605.
+    pub yield_collect_dbref: bool,
     /// P224: when emitting a coroutine state-machine method body
     /// (`emit_next_i64` / `emit_next_text`), each `var_nr` listed here
     /// is a function-local that lives as a struct field on the
@@ -1022,6 +1027,7 @@ impl<'a> Output<'a> {
             next_format_count: 0,
             yield_collect: false,
             yield_collect_text: false,
+            yield_collect_dbref: false,
             coroutine_persistent_vars: HashSet::new(),
             fn_ref_context: false,
             i32_literal_context: false,
