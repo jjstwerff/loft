@@ -171,9 +171,6 @@ fn drain_with_timeout(mut child: Child, timeout: Duration) -> (String, Option<i3
     (stdout_text, exit_status)
 }
 
-/// Auto-kills its server child on drop.  Avoids leaking a listener
-/// when an assertion panics.
-
 /// @PLN25 / registry-republish gate: the server scripts `use web` — a REGISTRY
 /// package.  A registry copy predating the DN1 null model (`-> text` +
 /// `return null`) REJECTS at compile time, so the server can never listen and
@@ -209,6 +206,8 @@ fn registry_predates_dn1(server_script: &str) -> bool {
     false
 }
 
+/// Auto-kills its server child on drop.  Avoids leaking a listener
+/// when an assertion panics.
 struct ServerGuard {
     child: Option<Child>,
     port: u16,
