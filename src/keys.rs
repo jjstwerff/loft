@@ -350,7 +350,6 @@ pub fn pln25_dn3_enabled() -> bool {
 /// sweep migrates the misses to `?`; OFF keeps the nullable-by-default behaviour. Implies
 /// `LOFT_PLN25_DN3` (the `(N-Store)` teeth) and `LOFT_PLN25_OPT` (the `Optional` marker). See
 /// plans/25-nullable-sequences/dn1-flip-blast-radius.md and RESUME.md § Step 3.
-#[must_use]
 /// @PLN85 D-own-1 — THE FLIP (2026-07-02): the `deps`-driven ownership fixes
 /// (`local_source` displaced-owned, `elem_accumulate` source-free,
 /// `match_return` owned-copy synthesis, the `OpBindOrCopy` join delivery) are
@@ -364,6 +363,7 @@ pub fn join_own_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_NO_JOIN_OWN").is_none())
 }
 
+#[must_use]
 pub fn pln25_dn1_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     // @PLN25 step f — THE FLIP: the dense/non-null scalar model is now the DEFAULT.
