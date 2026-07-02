@@ -244,6 +244,26 @@ branches for LNK1181 and "required to be available in rlib format" are removed;
 
 ## Previously fixed Windows-only issues (for context)
 
+- **#460 skip missed on Windows — verbatim vs plain path representation
+  (fixed 2026-07-02, probed via the windows-probe loop).**  The class: on
+  Windows `fs::canonicalize` returns an extended-length `\\?\D:\…` verbatim
+  path, and a verbatim path never equals or prefix-matches its plain twin
+  (`VerbatimDisk` vs `Disk` prefix components), for `Path::starts_with` and
+  string prefix checks alike.  `abs_file` deliberately sheds the prefix
+  (@P296), but the `lib_dirs` canonicalization in `src/main.rs` re-introduced
+  it, so every path derived from `lib_dirs` (use-candidates, the package dirs
+  recorded into `pending_native_compile`) was verbatim while the entry path
+  was plain — the #460 entry-package skip compared plain vs verbatim,
+  `starts_with=false`, and the entry package auto-native-compiled after all
+  (`entry_package_is_never_auto_native_compiled` red on `windows-latest`
+  since it landed in #464; earlier same-class instance: P244's malformed
+  verbatim concat in `auto_build_native`).  The rule: **one path
+  representation everywhere — every canonicalized path entering the shared
+  path space goes through `strip_verbatim_disk` (src/main.rs)**.  Probe
+  evidence (runs 28602820918 / 28603951574): before,
+  `pkg_dir=\\?\D:\…\selfpkg starts_with=false`; after,
+  `pkg_dir=D:\…\selfpkg starts_with=true`, no `native-auto/`, both entries
+  clean.
 - **`@P229b` — server cannot bind on Windows (closed 2026-05-29; re-verified
   on a local host 2026-05-30).** The 10
   `multiplayer_v{2,3,5}.rs` scenarios marked `#[cfg_attr(target_os = "windows",

@@ -1232,6 +1232,25 @@ fn update_packages(opts: &UpdateOpts) -> i32 {
     0
 }
 
+/// One path representation everywhere (@P296 / #460): on Windows,
+/// `fs::canonicalize` returns an extended-length `\\?\D:\…` verbatim path,
+/// while the rest of the pipeline (library `use` resolution, the #460
+/// entry-package skip, `def.position().file` prefix checks) builds and
+/// compares plain paths.  A verbatim path never equals or prefix-matches its
+/// plain twin (`VerbatimDisk` vs `Disk` components), so every canonicalized
+/// path entering the shared path space must shed the prefix.  No-op on
+/// Linux/macOS; only the `\\?\D:\…` disk form is stripped, not verbatim-UNC
+/// (`\\?\UNC\…`), which has no plain equivalent.
+fn strip_verbatim_disk(path: String) -> String {
+    if let Some(rest) = path.strip_prefix(r"\\?\")
+        && rest.as_bytes().get(1) == Some(&b':')
+    {
+        rest.to_string()
+    } else {
+        path
+    }
+}
+
 /// Walk up from `start` looking for the nearest directory that
 /// contains a `loft.toml`.  Returns `None` when reaching the
 /// filesystem root with no match.  Mirrors
@@ -4750,16 +4769,8 @@ fn main() {
     // path while the same module loaded via `use` uses the plain form —
     // the two sources don't dedup → "Dual definition of <lib>" on
     // Windows (crystal_gold CI).  Strip the verbatim-disk prefix so every
-    // path shares one representation.  No-op on Linux/macOS (paths never
-    // begin with `\\?\`); only the `\\?\D:\…` disk form is stripped, not
-    // verbatim-UNC (`\\?\UNC\…`), which has no plain equivalent.
-    let abs_file = if let Some(rest) = abs_file.strip_prefix(r"\\?\")
-        && rest.as_bytes().get(1) == Some(&b':')
-    {
-        rest.to_string()
-    } else {
-        abs_file
-    };
+    // path shares one representation (see `strip_verbatim_disk`).
+    let abs_file = strip_verbatim_disk(abs_file);
     // --project: change working directory so file I/O is sandboxed to the project root.
     if let Some(ref proj) = project {
         if let Err(e) = env::set_current_dir(proj) {
@@ -4832,14 +4843,23 @@ fn main() {
     }
 
     // Canonicalize library paths so relative --lib dirs resolve correctly
-    // regardless of working directory changes during parsing.
+    // regardless of working directory changes during parsing.  Strip the
+    // Windows verbatim prefix afterwards: everything downstream of
+    // `lib_dirs` — `use` candidates, the package dirs recorded into
+    // `pending_native_compile`, `def.position().file` prefix checks — must
+    // share `abs_file`'s plain representation.  A verbatim entry here is
+    // how the #460 entry-package skip (`entry_path.starts_with(pkg_dir)`)
+    // silently missed on Windows: plain entry vs verbatim pkg_dir never
+    // prefix-match, so the entry package auto-native-compiled after all.
     let lib_dirs: Vec<String> = lib_dirs
         .into_iter()
         .map(|d| {
-            std::fs::canonicalize(&d)
-                .unwrap_or_else(|_| std::path::PathBuf::from(&d))
-                .to_string_lossy()
-                .into_owned()
+            strip_verbatim_disk(
+                std::fs::canonicalize(&d)
+                    .unwrap_or_else(|_| std::path::PathBuf::from(&d))
+                    .to_string_lossy()
+                    .into_owned(),
+            )
         })
         .collect();
     let mut p = parser::Parser::new();
