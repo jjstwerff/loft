@@ -1042,11 +1042,24 @@ impl Function {
     pub fn add_variable(&mut self, name: &str, type_def: &Type, lexer: &mut Lexer) -> u16 {
         // Due to 2 passes through the code, we will add the same variable a second time.
         if let Some(nr) = self.names.get(name) {
-            if self.variables[*nr as usize].type_def.is_unknown() {
-                self.trace_type_change(*nr, type_def, "add_variable(reuse)");
-                self.variables[*nr as usize].type_def = type_def.clone();
+            let nr = *nr;
+            let existing = &self.variables[nr as usize].type_def;
+            // Refine an unknown; and for GENERATED temps (`__`-prefixed) let PASS 2 WIN
+            // on a type CONFLICT: the `__ncc_N`/`__work_N` counters can diverge across
+            // the two passes (a `??` that stays trivial in pass 1 materialises a temp in
+            // pass 2), so the same NAME can denote a DIFFERENT site per pass. Keeping
+            // pass 1's type then hands pass-2 code a contradicting temp — the routing
+            // `add_tile` corruption: `txs as integer ?? -1`'s temp kept a pass-1
+            // `ref(Img)` type, mis-emitting native (`E0605 as DbRef`) AND mis-reading
+            // interp (a silent wrong value). A user variable keeps the old behaviour
+            // (its name IS its cross-pass identity; type evolution has its own checks).
+            if existing.is_unknown()
+                || (name.starts_with("__") && !type_def.is_unknown() && existing != type_def)
+            {
+                self.trace_type_change(nr, type_def, "add_variable(reuse)");
+                self.variables[nr as usize].type_def = type_def.clone();
             }
-            return *nr;
+            return nr;
         }
         self.new_var(name, type_def, lexer)
     }
@@ -1057,7 +1070,13 @@ impl Function {
     pub fn add_temp_var(&mut self, name: &str, type_def: &Type) -> u16 {
         if let Some(nr) = self.names.get(name) {
             let nr = *nr;
-            if self.variables[nr as usize].type_def.is_unknown() {
+            let existing = &self.variables[nr as usize].type_def;
+            // Same pass-2-wins rule as `add_variable` (see there): a generated
+            // temp's cross-pass identity is name+type, so a conflicting re-add
+            // re-types instead of handing back a contradicting temp.
+            if existing.is_unknown()
+                || (name.starts_with("__") && !type_def.is_unknown() && existing != type_def)
+            {
                 self.trace_type_change(nr, type_def, "add_temp_var(reuse)");
                 self.variables[nr as usize].type_def = type_def.clone();
             }

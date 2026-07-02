@@ -245,3 +245,31 @@ tool-gap #1: records each store's freeing pc and, when `do_copy_record` reads a 
 SOURCE, reports the source store + the line that freed it + the copy site + both function
 `d_nr`s. Unlike full `LOFT_UAF` it skips the per-op frame scan, so it runs to the fault at
 real-consumer scale. It is what pinned instance 3 to `mon_one:258` → `mon_choose:269`.
+
+## New class member (2026-07-02, routing add_tile distillation): heap-`??`-discharge × call churn leaks
+
+Surfaced while distilling the routing `add_tile` cross-pass ncc-temp bug (fixed in
+variables/mod.rs — pass-2-wins re-type). The DISTILLED shape leaks **one store per
+program** once the fn is called a SECOND time via an early-return path:
+
+```
+fn add_tile(acc: &vector<integer>, key: text) {
+  parts = key.split('/');
+  if len(parts) \!= 3 { return; }          // second call exits here
+  … text ??-discharges + as-integer parses …
+  img = make_img(true) ?? Img { };        // the heap-typed ?? discharge
+  …
+}
+main: add_tile(acc, "12/34/56"); add_tile(acc, "bad-key");   // Img×1 not freed
+```
+
+- ONE call: leak-free. TWO calls (2nd early-returns): `Img×1` leaked (interp store
+  summary; probe `85-ncc-temp-crosspass-type.loft` keeps ONE call deliberately).
+- **PRE-EXISTING** — reproduces byte-identically on installed loft 2026.6.0.
+- **NOT closed by `LOFT_JOIN_OWN=1`** — outside the gated local_source/elem_accumulate/
+  match-return fixes: a NEW class member.
+- The isolated `?? Img{}` (no parses / no early returns / one call) is clean — the leak
+  needs the composition, i.e. it's the churn/frame-reuse axis again.
+- **Fuzz-gate note:** the generator's `value` axis should gain a heap-`??`-discharge
+  cell (`x = f() ?? S{}`) × the existing churn axis — this member was NOT in the
+  54-cell map's reachable space.

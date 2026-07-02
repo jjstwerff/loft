@@ -1665,7 +1665,7 @@ impl Scopes {
             result.extend(ls);
             result.push(Value::Return(Box::new(Value::Var(tmp))));
             return result;
-        } else if is_return && matches!(tp, Type::Text(_)) && !expr_is_terminal {
+        } else if is_return && matches!(tp.base(), Type::Text(_)) && !expr_is_terminal {
             // B5-L3 extension for text returns: save the expression's text
             // to a `__ret_N` temp, run free ops, then return the temp.  The
             // temp's String holds an OWN copy (OpAppendText copies bytes),
@@ -2611,8 +2611,14 @@ fn expr_ends_in_return(expr: &Value) -> bool {
 /// for now — their ownership transfer interacts with `OpFreeRef` emission
 /// and needs a separate design pass.
 fn is_value_return_type(tp: &Type) -> bool {
+    // @PLN25: peel `Optional` — a `float?`/`integer?`/… return is the same
+    // value-return shape (native reps it as the sentinel-carrying scalar).
+    // Without the peel a `-> τ?` tail call with pending free-ops fell through
+    // the B5-L3 wrap: the call was emitted as a DISCARDED statement + a
+    // fabricated `return null`, which native materialised as `return 0.0`
+    // — a silent NON-NULL corruption (the routing elevation-kernel bug).
     matches!(
-        tp,
+        tp.base(),
         Type::Integer(_)
             | Type::Float
             | Type::Single
