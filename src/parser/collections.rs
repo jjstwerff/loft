@@ -293,6 +293,14 @@ impl Parser {
                         // content type, which would make every element read
                         // alias element 0 (or read across boundaries).
                         4
+                    } else if matches!(&**vtp, Type::Vector(_, _)) {
+                        // #475: a nested-vector element is a 4-byte rec-id HANDLE.
+                        // `database.size(db_tp)` here resolves to the wrapper/inner
+                        // size (16), striding iteration wrong (reads every other
+                        // element).  The handle is 4; `OpGetField(slot, 0, elem)`
+                        // below extracts the inner vector.  Matches the index +
+                        // construction sites.
+                        4
                     } else {
                         self.database.size(db_tp)
                     };

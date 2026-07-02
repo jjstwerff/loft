@@ -2356,9 +2356,14 @@ impl Parser {
             // handle size (4).  Integer/single (≥4) and the inner scalar append
             // (`in_t` not a vector) are untouched.
             let elem_known = lhs_known.unwrap_or_else(|| self.vector_of(in_t));
-            let known_tp = if matches!(in_t, Type::Vector(_, _))
-                && self.database.size(self.database.content(elem_known)) < 4
-            {
+            // #475: a nested-vector element (`in_t` a vector) is a 4-byte rec-id
+            // HANDLE, whatever its inner width.  `vector_of(in_t)` yields the
+            // ELEMENT type (content = inner scalar), so `record_new` would stride
+            // the outer slot by the inner size (8 for `integer`); pass the OUTER
+            // vector type so it strides by the handle (4), matching the index +
+            // iteration sites.  The earlier `< 4` guard corrected only the
+            // `boolean` (inner<4) overlap and left inner≥4 striding wrong.
+            let known_tp = if matches!(in_t, Type::Vector(_, _)) {
                 self.database.vector(elem_known)
             } else {
                 elem_known
