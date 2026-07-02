@@ -662,17 +662,9 @@ impl Parser {
             // the index is provably in-bounds (`parse_vector_index` set `last_index_fit` from a
             // constant / for-loop iter var / `if idx < len(v)` guard). Wrap the element type
             // `Optional` so `(N-Store)` forces a `?? d` / `τ?` slot / guard at the store site.
-            // STILL DEV-GATED (`LOFT_INDEX_DEV`): the gate-on flip surfaced blast radius BEYOND the
-            // ~8 compile-reject sites — it also breaks the loft-in-loft compiler (lib/parser.loft +
-            // lib/code.loft ripple the `dir`/`last`/`parser_debug`/`wasm_dir` tests), the
-            // audience_crystal LIBRARY, and — SILENTLY — copy-elision (a mutated/escaping element
-            // borrower `e = v[i]; e.x = …` mis-classifies once `e` is `Item?`, so the copy-keep
-            // decision in `use_analysis`/`scopes` flips and the mutation leaks to the source). The
-            // reject-count measurement undercounted these; landing needs a proper F1a-style phase.
-            if std::env::var_os("LOFT_INDEX_DEV").is_some()
-                && crate::keys::pln25_dn1_enabled()
-                && !self.last_index_fit
-            {
+            // The F1a landing (deps Optional-transparency + the corpus/lib migrations) cleared the
+            // blast radius, so this is now folded into the DN1 default (was DEV-GATED `LOFT_INDEX_DEV`).
+            if crate::keys::pln25_dn1_enabled() && !self.last_index_fit {
                 elm_type = Type::optional(elm_type);
             }
         } else if matches!(t, Type::Text(_)) {

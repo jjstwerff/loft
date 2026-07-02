@@ -2425,11 +2425,16 @@ impl Parser {
     }
 
     fn emit_undefended_warning(&mut self, kind: FaultKind, ctx: &WarnCtx) {
-        // @PLN25 DN3: division/mod now TYPE `τ?` — the type carries the null and `(N-Store)`
-        // forces discharge, so the runtime-null warning is redundant for them under DN1 (and
-        // fired inconsistently vs the `if b != 0` narrowing). Index ops still type non-null, so
-        // their warning stays until they're flipped too.
-        if crate::keys::pln25_dn1_enabled() && matches!(kind, FaultKind::Div | FaultKind::Rem) {
+        // @PLN25 DN3: the fault ops now TYPE `τ?` — the type carries the null and `(N-Store)`
+        // forces discharge, so the runtime-null warning is redundant under DN1 (and fired
+        // inconsistently vs the `if b != 0` / `if i < len` narrowing). Division/mod flipped
+        // first; the index ops (`v[i]`/`s[i]`) are now flipped too (F1a landed), so retire all four.
+        if crate::keys::pln25_dn1_enabled()
+            && matches!(
+                kind,
+                FaultKind::Div | FaultKind::Rem | FaultKind::VectorIndex | FaultKind::TextIndex
+            )
+        {
             return;
         }
         let msg = match kind {
