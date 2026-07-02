@@ -2552,7 +2552,12 @@ impl Parser {
         let mut alias_d_nr: u32 = u32::MAX;
         loop {
             if self.lexer.has_keyword("not") {
-                // This field cannot be null, this allows for 256 values in a byte
+                // @PLN25 F2 — `not null` is RETIRED but still ACCEPTED as a no-op. A scalar field
+                // is non-null by DEFAULT now (F2 sets the attribute non-null via `is_optional`
+                // below; the `not_null` flag is stamped for the range), so the annotation carries
+                // nothing.  In-tree source is stripped of it; kept accepted here for backward
+                // compat with not-yet-republished registry libraries (they still use `not null`).
+                // A hard "retired" error is blocked on that republish (task #4).
                 self.lexer.token("null");
                 nullable = false;
             }

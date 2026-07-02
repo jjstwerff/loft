@@ -390,9 +390,15 @@ tightenings**. In order, each ends green (never carry two phases' breakage):
     `hint_4h` migrated to assert the retirement. **THE DEFAULT SUITE IS GREEN under F2-on: 2581
     passed, 13 pre-existing, ZERO new** (both backends via find_problems). So the range
     reconciliation is now the DEFAULT: a plain non-`Optional` narrow scalar is non-null/full-range,
-    `not null` is redundant. **REMAINING to close F2:** (6) strip `not null` from `.loft` (~873
-    sites, now a redundant no-op) → make the parser accept-then-ignore, then remove it (syntax
-    retirement). Then F6.
+    `not null` is redundant. (6) ✅ **`not null` STRIPPED from .loft source** (`5af21e84`: ~992
+    code sites / 313 files; comments+strings left; pe_classify moved to a 102 expected-error since
+    a non-null return's missing path is now an error, not the retired "may return null" warning)
+    + **parser retirement = ACCEPTED NO-OP** (`not null` still parses, does nothing under F2).
+    **A HARD "retired" error is BLOCKED on the registry republish (task #4):** the registry libs
+    (graphics/web/gridmesh/crypto/cbor) still carry ~103 code `not null`, and green tests load
+    them — a hard error would break those. Once task #4 republishes them without `not null`, the
+    parser can reject it. **REMAINING to close F2:** F6 (the deviation-register + CHANGELOG update
+    is the only thing left; the model is functionally complete).
     **Separate slice (Part 2) — the NULLABLE-NARROW REPRESENTATION is inconsistent across backends,
     a DESIGN decision that blocks several gaps:** a `u8?` FIELD silently swallows literal `255`→null
     while a `u8?` LOCAL keeps 255; and (found 2026-07-02 while evaluating `i as u8?`) INTERP
