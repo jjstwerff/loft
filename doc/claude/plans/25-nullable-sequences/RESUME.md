@@ -333,8 +333,37 @@ tightenings**. In order, each ends green (never carry two phases' breakage):
   slice): `u8?` is INCONSISTENT** — a `u8?` FIELD silently swallows literal `255`→null (both
   backends), a `u8?` LOCAL keeps `255` as a value; the packed-nullable-narrow-field should
   *compile-error* on the sentinel literal, not silently null.
-  - **REORDERED (path B, 2026-07-02): doing F3+F4 first** (independent, low-risk, no storage
+  - **REORDERED (path B, 2026-07-02): did F3+F4+F5 first** (independent, low-risk, no storage
     touch), THEN the range-reconciliation-and-retire as a dedicated focused F2.
+  - **🟡 F2 STARTED (2026-07-02) — gated CHECKPOINT committed, NOT default-on.** The invariant
+    is installed behind opt-in **`LOFT_PLN25_F2`** (`keys.rs::pln25_f2_enabled`, default OFF so
+    the tree stays green): **reserve the null sentinel iff the type is `Optional`-wrapped** — a
+    plain (non-`Optional`) narrow scalar is non-null → FULL range. Two gated chokepoint changes:
+    (a) field attr-`nullable` = `matches!(a_type, Optional)` for Integer fields (`definitions.rs`
+    field parse) → plain narrow field = full-range storage; (b) `nullable_sentinel_hint`
+    (`parser/mod.rs`) returns `None` for a non-`Optional` narrow (fit-check accepts the top value).
+    Matrix verified BOTH backends: F2-off unchanged (plain rejects 255), F2-on reconciled (plain
+    narrow field/local full-range; `not null` redundant; `u8?` still reserves); single-struct
+    read-back correct.
+  - **BLAST RADIUS MEASURED (`LOFT_PLN25_F2=1 find_problems`): 8 NEW failures** (2573/2594 vs the
+    13-pre-existing baseline) — SMALL + mostly additive (stdlib narrow fields all use `not null`
+    already, so it barely moves). But **one is a real storage bug, root-caused (both backends):**
+    the WHOLE-STRUCT FORMATTER (`{x}`) reads a narrow `not_null:true` field at the WRONG WIDTH →
+    prints `i32::MIN` (integer-null sentinel) instead of the value, while direct field access
+    (`.height`) reads it correctly. So F2's `not_null` change desyncs read paths that derive field
+    width from nullability — the struct-format desugar is one; likely others. The rest of the 8:
+    `runtime_warnings::hint_4h_high_read_count_suggests_not_null` (the @PLN46 "suggest `not null`"
+    hint — MOOT under F2, retire like `#null_safe`); `wrap::{dir,structs,loft_suite}` +
+    `native_scripts` (roll-ups of 06-structs/08-struct, the formatter bug); `issues::issue_328` +
+    `errors_accessor_{nested_path,path_on_failure}` (unchecked — likely the same width desync).
+  - **TO LAND F2 (the dedicated effort):** (1) fix the struct-format read-width for narrow
+    `not_null` fields + audit the OTHER read paths (field-access already correct — find the ones
+    that aren't, same class as DN1 gap-ii); (2) retire the `not null` read-count hint; (3) check
+    issue_328 + the accessor tests; (4) flip `LOFT_PLN25_F2` default-on once F2-on is green; (5)
+    strip `not null` from all `.loft` source (mechanical, ~873 sites, now redundant) → remove from
+    the parser (syntax retirement). Then F6. **Also a separate slice:** `u8?` FIELD silently
+    swallows literal `255`→null (should error) while a `u8?` LOCAL keeps 255 — the packed-nullable
+    -narrow consistency (Part 2).
 - **F3 — Close DN5** (the `as` laundering hole) — 🟡 **IN PROGRESS (2026-07-02).** `null` / `τ?`
   `as <non-null scalar>` silently launders the null → now a compile error (`as τ?` / `??`).
   **Broadened per user directive** ("every integer has a range — detect out-of-range values

@@ -361,6 +361,21 @@ pub fn pln25_dn1_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_PLN25_OFF").is_none())
 }
 
+/// `LOFT_PLN25_F2=1` (@PLN25 F2 — the deferred RANGE RECONCILIATION, IN PROGRESS) — a plain
+/// (non-`Optional`) narrow integer is NON-null under DN1, so its usable range is the FULL width
+/// (no reserved null sentinel); only an `Optional`-wrapped narrow (`u8?`) reserves the top value
+/// as the sentinel. This completes DN1 for the *range* dimension (the `IntegerSpec.not_null`
+/// default that DN1 left at `false` for narrow scalars, deferring the storage change), which makes
+/// `not null` redundant — the prerequisite for retiring it. Opt-IN while the blast radius (~47
+/// `not_null` readers + store-codec baked layouts + narrow-int field storage, near loft's #1
+/// weakness) is measured + migrated; OFF keeps the current (pre-F2) sentinel reservation for plain
+/// narrow fields/locals. See plans/25-nullable-sequences/RESUME.md § FINISH LINE F2.
+#[must_use]
+pub fn pln25_f2_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| pln25_dn1_enabled() && std::env::var_os("LOFT_PLN25_F2").is_some())
+}
+
 /// `LOFT_UAF_REUSE` (detector b) — at `copy_record`, when the source slot is LIVE
 /// (`free=false`) but structurally invalid for the copy's `tp` (a `validate_claims`
 /// failure), the slot was freed-then-reused as a different record since the source ref

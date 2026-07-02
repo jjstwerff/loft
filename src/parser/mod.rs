@@ -1824,6 +1824,14 @@ impl Parser {
         let Type::Integer(spec) = dst else {
             return None;
         };
+        // @PLN25 F2 (range reconciliation): a plain (non-`Optional`) narrow integer is NON-null
+        // under DN1, so it uses the FULL width — no reserved sentinel, nothing to reject. `dst`
+        // here is a `Type::Integer` (an `Optional` target hit the let-else above), i.e. exactly
+        // the non-null narrow that F2 makes full-range. (Reserving the sentinel for an `Optional`
+        // narrow — rejecting the literal `255` into a `u8?` — is a separate Part-2 slice.)
+        if crate::keys::pln25_f2_enabled() {
+            return None;
+        }
         if spec.not_null {
             return None;
         }

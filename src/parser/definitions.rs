@@ -2646,6 +2646,16 @@ impl Parser {
             );
         }
         if self.first_pass {
+            // @PLN25 F2 (range reconciliation): a scalar field's nullability is carried by its
+            // `Optional` wrapper (DN1's single source of truth), NOT the pre-DN1 parser default
+            // (`nullable = true`) or the `not null` keyword.  So a plain narrow `u8` field is
+            // NON-null → the FULL range (no reserved sentinel), and only a `u8?` field reserves
+            // the top value.  This makes `not null` redundant on narrow fields — the prerequisite
+            // for retiring it (F2).  Scoped to Integer fields (the sentinel-range concern); other
+            // scalar fields keep their current attribute flag until the broader DN1 field sweep.
+            if crate::keys::pln25_f2_enabled() && matches!(a_type.base(), Type::Integer(_)) {
+                nullable = matches!(a_type, Type::Optional(_));
+            }
             // H6: stamp the field's nullability onto its integer spec so the
             // STORED attribute type is self-describing.  The alias path
             // (`u8 not null`) otherwise leaves `not_null` at the alias default
