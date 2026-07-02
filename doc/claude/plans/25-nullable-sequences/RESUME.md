@@ -41,7 +41,7 @@ probe verdicts) → [implementation-steps.md](implementation-steps.md) (the phas
 >   `LOFT.md` + `loft-write` skill (parse-is-fallible `τ?` guidance — user-asked).
 >
 > **Formal state: types.md is now 0 open** — @PLN25 DN1–DN6 + D2 all CLOSED. Overflow-arith stays a
-> DECIDED EDGE (C84, non-null, no trap). **types.md joins binding.md + grammar.md at 0.**
+> DECIDED EDGE (C85, non-null, no trap). **types.md joins binding.md + grammar.md at 0.**
 >
 > **DEMO-TOOL SWEEP + SKILL DN1 PASS — DONE (`b32771ad` demos, `90023008` skill).** The `tools/*` +
 > `bench/*` demos carried MULTI-DN stragglers (parse + division `a/var`,`a%var` + `v[i]` index); all

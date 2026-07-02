@@ -34,7 +34,7 @@ Closing a row means the implementation obeys the rule (then the deviation entry 
 
 Binding + grammar + **types are closed** — the @PLN25 value/null model landed (2026-07-02); DN3
 fully closed with the text→numeric parse flip (`(N-Parse)` types `τ?`), overflow-arith reclassified
-as a decided edge (C84, not a deviation). The active focus
+as a decided edge (C85, not a deviation). The active focus
 for the next days is the **ownership simplification** — collapse the per-site `deps` thicket onto
 the one beacon fact (OWNERSHIP_MODEL.md), exploratory + revertable, guarded by the @PLN89
 differential oracle. The operational differential oracle (D-op-1/2) grows alongside it as the

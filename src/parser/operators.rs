@@ -1837,7 +1837,7 @@ impl Parser {
                 // @PLN25 DN3 — a text→numeric PARSE is fit-failing: unparseable input yields the
                 // null sentinel at runtime (C80, no trap), so the result TYPES `τ?` (like `/` and
                 // `v[i]`). A REACHABLE fault (bad user/file input), unlike overflow which is the
-                // decided edge C84. `s as integer` is `integer?` → discharge with `?? d` or
+                // decided edge C85. `s as integer` is `integer?` → discharge with `?? d` or
                 // declare the target `τ?`.
                 if !nullable_cast
                     && crate::keys::pln25_dn1_enabled()
