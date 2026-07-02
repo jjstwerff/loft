@@ -115,10 +115,24 @@ borrower KEEPS the copy). Starting points found this session:
 >
 > The compiler-side green gate is MET. Continue with the index flip (Steps 2-6 below), OR the registry republish.
 
-> **PROGRESS (2026-07-02) — the compiler mechanism + corpus are done; audience_crystal is the last grind.**
-> Measured under `LOFT_INDEX_DEV=1` after Step 1: **wrap PASSES** (Step 1's copy-elision fix already
-> resolved the dir/last/parser_debug/wasm_dir lib-compiler ripple — lib/parser.loft + lib/code.loft do
-> NOT reject), so **Step 2 is effectively DONE**. Committed since:
+> **PROGRESS (2026-07-02) — mechanism + issues/85-borrow/audience_crystal done; a full corpus sweep
+> mapped the rest.** ⚠️ CORRECTION: an earlier note claimed "wrap PASSES → Step 2 done" — that was a
+> DEAD-BACKGROUND-RUN measurement error (an empty log misread as a pass; [[measure-flip-by-running-suite]]).
+> The authoritative full sweep (`LOFT_INDEX_DEV=1 find_problems`) shows the REMAINING index-flip failures:
+> - **wrap dir/last/parser_debug/wasm_dir** — the loft-in-loft compiler: **lib/code.loft** has 4
+>   cast-from-nullable rejects `self.code[b] as Block/If/If/Loop` (b = `self.blocks[len-1]` computed →
+>   `self.code[b]` is `Value?` → `as Block` = "Unknown cast from Value? to Block"). lib/parser.loft is
+>   CLEAN. This is the loft-in-loft codegen — DELICATE (mis-migration breaks self-hosting); needs a
+>   discharge idiom for `nullable as T` (NOT laundering — DN5 stays closed; discharge THEN cast).
+> - **html_wasm moros_editor_html_smoke** — a moros consumer with v[i] sites (unmeasured).
+> - **runtime_warnings skip_loop_bounded_arithmetic_index** — `sum += m[i*4+j]` (loop-bounded ARITHMETIC
+>   index, not a bare loop var → not fit → `float?` into `sum`); migrate (`?? 0.0`) — the fit-proof
+>   deliberately doesn't do range analysis on `i*4+j`.
+> - **loft_suite** — one corpus script rejects under the flip (identify + migrate).
+> - Pre-existing/environmental (NOT index): error_messages(38 DNS), html_asyncify(chrome), multiplayer(registry).
+>
+> So Step 2 (lib/code.loft) is REAL + delicate, and there's more corpus (html_wasm, loft_suite,
+> runtime_warnings) before Step 6. Committed so far:
 > - **✅ Element-WRITE mechanism (`81641e7d`)** — `v[i] = h` (moros_map:115, p379) errored "Cannot assign
 >   to attribute on OpGetVector" because `towards_set`'s copy_ref gate didn't peel the `Optional(Reference)`
 >   read-marker. Fixed: peel `.base()` in the copy_ref decision (collections.rs:761). An element-write is
@@ -137,7 +151,11 @@ borrower KEEPS the copy). Starting points found this session:
 > - **Step 5 (len-capture): NOT surfaced** — no site needed it (const / iter-var / `??` covered all).
 > - **Step 6: NOT STARTED** — needs audience_crystal finished + a full under-flip corpus/library sweep first.
 
-**Step 2 — lib compiler migration** — ✅ DONE (resolved by Step 1; wrap passes under the flip).
+**Step 2 — lib compiler migration** — 🟡 NOT done (earlier "wrap passes" was a measurement error).
+lib/parser.loft is CLEAN, but **lib/code.loft** has 4 cast-from-nullable rejects (`self.code[b] as
+Block/If/If/Loop`, code.loft:228 etc.) — the loft-in-loft codegen. Needs a discharge idiom for
+`nullable as T` (discharge THEN cast; keep DN5 closed). DELICATE — mis-migration breaks self-hosting;
+prove the loft-in-loft compiler still round-trips (wrap dir/last/parser_debug/wasm_dir) after.
 
 **Step 3 — audience_crystal library** — 🟡 PARTIAL (`cc7cb722`). Finish the remaining `-> integer`
 accessor discharges (read bodies by hand past the mis-attributed line numbers), then measure the rest

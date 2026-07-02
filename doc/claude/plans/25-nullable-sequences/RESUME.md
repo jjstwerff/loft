@@ -47,16 +47,22 @@ probe verdicts) → [implementation-steps.md](implementation-steps.md) (the phas
 > So the compiler-side @PLN25 green gate is MET; the multiplayer/viewer suites wait on the registry republish.
 > Detail: [index-f1a-landing.md](index-f1a-landing.md) § BRANCH IS RED.
 
-**INDEX FLIP (Steps 2-6) IN PROGRESS (2026-07-02) — compiler mechanism + corpus done, audience_crystal is
-the last grind.** Under `LOFT_INDEX_DEV=1`: wrap PASSES (Step 1 resolved the lib-compiler ripple → Step 2
-DONE). Committed: element-WRITE mechanism `v[i] = h` peel (`81641e7d`, collections.rs:761 — was "Cannot
-assign to attribute on OpGetVector"); Step 4 direct read-rejects issues p124/p155/p170 + 85-borrow
-(`b46413d0`, discharge `?? d`); audience_crystal PARTIAL (`cc7cb722` — palettes/cell_h/sort done, a few
-`-> integer` accessors remain, line attribution mis-attributed → read bodies by hand). **DEFERRED DEPS GAP:**
-a bare `-> Item?` escaping-BORROWER return leaks (Optional-return × copy-elision; plain `-> S?` is clean) —
-avoided via discharge. **NEXT = finish audience_crystal + sweep the rest of the corpus/libs under the flip,
-THEN Step 6** (flip `LOFT_INDEX_DEV` → `pln25_dn1_enabled` + retire the VectorIndex/TextIndex warning +
-graduate `25-index-nullable.loft` + 102 reject twin). Full detail: [index-f1a-landing.md](index-f1a-landing.md) § PROGRESS.
+**INDEX FLIP (Steps 2-6) IN PROGRESS (2026-07-02).** DONE + pushed: element-WRITE mechanism `v[i] = h`
+peel (`81641e7d`, collections.rs:761); Step 4 issues p124/p155/p170 + 85-borrow (`b46413d0`, discharge
+`?? d`); audience_crystal FULLY migrated (`cc7cb722`+`f6d1c8d2` — src 0 rejects under flip, library_suite
+green); graduate test `25-index-nullable.loft` written. **DEFERRED DEPS GAP:** bare `-> Item?` escaping-
+BORROWER return leaks (Optional-return × copy-elision; plain `-> S?` clean) — avoided via discharge.
+**⚠️ CORRECTION:** an earlier "wrap PASSES → Step 2 done" was a DEAD-BACKGROUND-RUN measurement error
+([[measure-flip-by-running-suite]]). **A full corpus sweep (`LOFT_INDEX_DEV=1 find_problems`) mapped the
+REMAINING index-flip failures:** (1) **lib/code.loft** — 4 cast-from-nullable rejects `self.code[b] as
+Block/If/If/Loop` (the loft-in-loft codegen, DELICATE; needs a `nullable as T` discharge idiom, keep DN5
+closed) — lib/parser.loft is clean; (2) html_wasm moros_editor; (3) runtime_warnings
+skip_loop_bounded_arithmetic (`sum += m[i*4+j]` loop-bounded ARITH index → migrate `?? 0.0`); (4)
+loft_suite (one corpus script). Pre-existing/environmental (NOT index): error_messages 38 DNS,
+html_asyncify chrome, multiplayer registry. **NEXT = migrate lib/code.loft (delicate) + html_wasm +
+runtime_warnings + loft_suite, THEN Step 6** (flip `LOFT_INDEX_DEV`→`pln25_dn1_enabled` + retire
+VectorIndex/TextIndex warning + graduate 25-index-nullable.loft + 102 reject twin). Detail:
+[index-f1a-landing.md](index-f1a-landing.md) § PROGRESS.
 
 **✅ INDEX F1a Step 1 (copy-elision `Optional`-peel) DONE** — `use_analysis` borrower filter now peels
 `.base()` before reading deps, so a mutated/escaping `e = v[i]: Item?` KEEPS the copy (was a SILENT
