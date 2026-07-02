@@ -828,16 +828,8 @@ impl Parser {
         // handles overlap on read.  Clamp to ≥4, matching the construction-side
         // `known` fix in `new_record`.  A no-op for ≥4 strides; no classification
         // change (`known` / is_base / is_linked / deref type are untouched).
-        // #475: a vector-typed element is a 4-byte rec-id HANDLE, whatever its
-        // inner scalar width — the outer vector strides by the handle, and the
-        // `OpGetField(slot, 0, elem)` read / `vector_append` slot-update already
-        // handle that at stride 4.  `elm_size_raw` is the inner scalar size; the
-        // old `.max(4)` corrected only inner<4 (boolean) and left inner>4
-        // (`vector<vector<integer>>`) striding at 8 → walked off the stride-4
-        // storage.  Fixed here + at the construction (`new_record`) and iteration
-        // (`collections.rs`) sites.
         let elm_size = if matches!(elm_type, Type::Vector(_, _)) {
-            4
+            elm_size_raw.max(4)
         } else {
             elm_size_raw
         };

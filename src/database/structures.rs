@@ -80,7 +80,22 @@ impl Stores {
                 vector::sorted_new(&d, u32::from(self.size(c)), &mut self.allocations)
             }
             Parts::Vector(c) => {
-                vector::vector_append(&d, u32::from(self.size(c)), &mut self.allocations)
+                // #475: when the content `c` is itself a vector (a nested vector
+                // like `vector<vector<T>>`), stride the OUTER slot by the inner
+                // scalar width — the de-facto stride the index
+                // (`elm_size_raw.max(4)` in parser/fields.rs), iteration, and
+                // local construction all use.  `self.size(c)` is the 4-byte rec-id
+                // handle; a struct-field nested vector would stride the outer slot
+                // by 4 and mismatch the stride-8 index → #475 crash.
+                let stride = if matches!(
+                    self.types[c as usize].parts,
+                    Parts::Vector(_) | Parts::Array(_)
+                ) {
+                    u32::from(self.size(self.content(c))).max(4)
+                } else {
+                    u32::from(self.size(c))
+                };
+                vector::vector_append(&d, stride, &mut self.allocations)
             }
             Parts::Array(c)
             | Parts::Ordered(c, _)

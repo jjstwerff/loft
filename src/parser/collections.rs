@@ -293,14 +293,15 @@ impl Parser {
                         // content type, which would make every element read
                         // alias element 0 (or read across boundaries).
                         4
-                    } else if matches!(&**vtp, Type::Vector(_, _)) {
-                        // #475: a nested-vector element is a 4-byte rec-id HANDLE.
-                        // `database.size(db_tp)` here resolves to the wrapper/inner
-                        // size (16), striding iteration wrong (reads every other
-                        // element).  The handle is 4; `OpGetField(slot, 0, elem)`
-                        // below extracts the inner vector.  Matches the index +
-                        // construction sites.
-                        4
+                    } else if let Type::Vector(inner, _) = &**vtp {
+                        // #475: iterating the OUTER of a nested vector — its
+                        // element is a rec-id handle.  Stride by the inner scalar
+                        // width (matching the index's `elm_size_raw.max(4)` in
+                        // parser/fields.rs and the construction), NOT `size(db_tp)`
+                        // which resolves to the `main_vector` wrapper size (16)
+                        // and reads every other element (the silent-wrong
+                        // iteration in #475).
+                        (crate::data::element_size(inner) as u16).max(4)
                     } else {
                         self.database.size(db_tp)
                     };
