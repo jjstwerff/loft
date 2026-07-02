@@ -596,11 +596,11 @@ pub fn pick_segment_color(self_c: integer,
   two_n = len(two_away);
   if bucket < 95 && one_n > 0 {
     one_ix = pick_seed - (pick_seed / one_n) * one_n;
-    return one_away[one_ix];
+    return one_away[one_ix] ?? self_c;
   }
   if two_n > 0 {
     two_ix = pick_seed - (pick_seed / two_n) * two_n;
-    return two_away[two_ix];
+    return two_away[two_ix] ?? self_c;
   }
   self_c
 }

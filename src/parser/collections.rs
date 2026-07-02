@@ -774,8 +774,10 @@ impl Parser {
         // Peel `.base()` so the Optional read-nullability marker doesn't drop it to the generic
         // op-name path (which errors "Cannot assign to attribute on OpGetVector"). Gate-OFF
         // inert (no Optional exists → `.base()` is identity → byte-identical).
-        if matches!(f_type.base(), Type::Enum(_, true, _) | Type::Reference(_, _))
-            && op == "="
+        if matches!(
+            f_type.base(),
+            Type::Enum(_, true, _) | Type::Reference(_, _)
+        ) && op == "="
             && !matches!(to, Value::Var(_))
         {
             return self.copy_ref(to, val, f_type.base());
