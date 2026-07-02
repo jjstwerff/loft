@@ -43,14 +43,20 @@ probe verdicts) → [implementation-steps.md](implementation-steps.md) (the phas
 > **Formal state: types.md is now 0 open** — @PLN25 DN1–DN6 + D2 all CLOSED. Overflow-arith stays a
 > DECIDED EDGE (C84, non-null, no trap). **types.md joins binding.md + grammar.md at 0.**
 >
-> **DEMO-TOOL @PLN25 DEBT (deferred, non-gated, NOT this commit):** several `tools/*` demos have
-> MULTI-DN stragglers beyond parse — `crystal_stress.loft` (`per_build / segs` = **division**),
-> `brick-buster` (`br_now / 11` division), `projector.loft` (registry `gridmesh` + palette), `server.loft`
-> + `probe_client_kernel.loft` (registry `use server` / remaining rejects), `bench/08_word_count`
-> (a `text?` field). These need a full @PLN25 sweep (parse + division + float + registry), not a
-> parse-only patch, so partial edits were reverted to keep this commit focused + complete. Also stale:
-> `loft-write` skill line ~300 still says tuple `integer` elements "default to nullable / use `not null`"
-> (pre-DN1 — needs the @PLN25 default-non-null + `not null`-retired update).
+> **DEMO-TOOL SWEEP + SKILL DN1 PASS — DONE (`b32771ad` demos, `90023008` skill).** The `tools/*` +
+> `bench/*` demos carried MULTI-DN stragglers (parse + division `a/var`,`a%var` + `v[i]` index); all
+> LOCAL fit-op sites discharged (`?? 0`/`0.0`/`""`; `??` binds looser than `/`). COMPILE CLEAN:
+> bench/08_word_count, crystal_stress, probe_client_kernel (indexer/scan already clean). REGISTRY-BLOCKED
+> (bodies now DN1-clean; only registry-pkg errors remain, pending task #4): server + viewer/main
+> (`web-0.2.1`), projector (`gridmesh-0.1.1`), brick-buster (`shapes`/`graphics`) — brick-buster is the
+> gallery showpiece so `doc/gallery-examples.js` was regenerated. The **`loft-write` skill** DN1
+> consistency pass rewrote every stale `not null`/"default nullable" line (scalars/tuples/vectors are
+> non-null by default; `?` for nullable; `not null` = retired no-op; plain `boolean` 2-state vs
+> `boolean?` 3-state; the vector-field-`not null`-to-silence-warning idiom is obsolete — that warning no
+> longer fires). Each claim verified against the binary first. **A subtle GAP the sweep surfaced (not
+> fixed, noted): `server.loft` parse results feed non-null TUPLE-return elements without rejecting** —
+> the `(N-Store)` teeth don't cover tuple-element positions in a return (only a later scalar reassign
+> rejected); discharged defensively. Worth a separate look if tuple-element null-soundness matters.
 >
 > **⚠️ ANOMALY FIXED:** working tree had an uncommitted regression in the GENERATED `tests/docs/features/
 > F1.loft` + `F2.loft` (`null as integer?` → `null as integer`, which DN5-rejects). Restored to the
