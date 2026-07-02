@@ -123,6 +123,11 @@ EOF
 #   the pinned web-v0.1.1 tag predates the flip (`-> text` + `return null`
 #   rejects).  Drop this line when loft-libs-net ships the `text?` migration
 #   (the web/server republish) and bump PINNED_REFS instead.
+#
+# - time/src/time.loft — @PLN25 DN1: `parse`/`combine` return null on a bad
+#   time string, so their return types must be `integer?`; the pinned
+#   time-v0.1.0 tag predates the flip.  Drop when loft-libs-game ships the
+#   migration and PINNED_REFS bumps.
 LOCAL_PATCHES=$(cat <<'EOF'
 imaging/native/Cargo.toml
 imaging/src/imaging.loft
@@ -137,6 +142,7 @@ shapes/README.md
 imaging/README.md
 web/README.md
 web/src/web.loft
+time/src/time.loft
 EOF
 )
 
