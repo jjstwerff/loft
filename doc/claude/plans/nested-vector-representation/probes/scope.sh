@@ -8,6 +8,12 @@ LOFT="${LOFT:-target/debug/loft}"
 D="$TMPDIR/scope475"; mkdir -p "$D"
 NAMES=(); EXPECT=(); CLUSTER=()
 cell() { local n="$1"; cat > "$D/$n.loft"; NAMES+=("$n"); EXPECT+=("$2"); CLUSTER+=("$3"); }
+# NOTE: exit 1 covers BOTH a runtime panic AND a compile/parse error, so a
+# "CRASH(1)" cell must be re-run WITHOUT `2>/dev/null` before you trust it — my
+# first pass mis-scored two cells as #475 crashes when they were probe bugs
+# (a Python-style `[e | i in r]` that never parsed, and a `fn sum` that
+# collided with the stdlib `sum`).  Likewise: hand-verify EXPECT — a wrong
+# oracle value (`10 285` for what is really `20 135`) reads as WRONG, not PASS.
 classify() { if [ "$1" -eq 124 ]; then echo TIMEOUT; elif [ "$1" -ne 0 ]; then echo "CRASH($1)"; elif [ "$2" = "$3" ]; then echo PASS; else echo "WRONG[$2]"; fi; }
 
 # ---- Cluster A: inner scalar width (local, append, n=300, sum adj[j][0]=Σ0..299=44850) ----
@@ -68,8 +74,8 @@ cell C-literal-big '100 4950' C <<'EOF'
 fn main() { z: vector<vector<integer>> = [];
   for i in 0..100 { z += [[i]]; } t=0; s=0; for j in 0..100 { t+=len(z[j]); s+=z[j][0]; } println("{t} {s}"); }
 EOF
-cell C-comprehension '10 285' C <<'EOF'
-fn main() { z: vector<vector<integer>> = [ [i, i*2] | i in 0..10 ];
+cell C-comprehension '20 135' C <<'EOF'
+fn main() { z: vector<vector<integer>> = [for i in 0..10 { [i, i*2] }];
   t=0; s=0; for j in 0..10 { t+=len(z[j]); s+=z[j][0]+z[j][1]; } println("{t} {s}"); }
 EOF
 cell C-copy-assign '2 2' C <<'EOF'
@@ -95,9 +101,9 @@ fn main() { adj: vector<vector<integer>> = [];
   c=0; for j in 0..200 { if adj[j][0]==j { c+=1; } } println("{c}"); }
 EOF
 cell D-pass-inner '44850' D <<'EOF'
-fn sum(v: vector<integer>) -> integer { s=0; for x in v { s+=x; } s }
+fn vsum(v: vector<integer>) -> integer { s=0; for x in v { s+=x; } s }
 fn main() { adj: vector<vector<integer>> = [];
-  for i in 0..300 { adj += [[i]]; } t=0; for j in 0..300 { t += sum(adj[j]); } println("{t}"); }
+  for i in 0..300 { adj += [[i]]; } t=0; for j in 0..300 { t += vsum(adj[j]); } println("{t}"); }
 EOF
 
 # ---- Cluster E: nesting depth / other collections ----
