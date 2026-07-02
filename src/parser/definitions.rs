@@ -922,6 +922,31 @@ impl Parser {
                                 t_ret_type.clone(),
                             );
                             self.data.definitions[t_stub_nr as usize].attributes[a].hidden = true;
+                            // Mirror ref_return's finalisation on concrete
+                            // implementations ("returned = {__retbuf}"): the
+                            // stub RETURNS its retbuf, so the returned type's
+                            // deps must name the retbuf attribute.  The call
+                            // site then binds the result as a BORROW of the
+                            // caller-side buffer (one free at scope end).
+                            // Without it the bind was owned — the buffer's
+                            // store was freed twice-in-name and the second
+                            // local vector's store never freed (#482, one
+                            // main_vector leaked per call).  `returned` is a
+                            // set-once field, so write the dep directly.
+                            let dep = crate::data::Deps::attrs(vec![a as u16]);
+                            let dep_ret = match t_ret_type.clone() {
+                                crate::data::Type::Reference(d, _) => {
+                                    crate::data::Type::Reference(d, dep)
+                                }
+                                crate::data::Type::Vector(e, _) => {
+                                    crate::data::Type::Vector(e, dep)
+                                }
+                                crate::data::Type::Enum(d, m, _) => {
+                                    crate::data::Type::Enum(d, m, dep)
+                                }
+                                other => other,
+                            };
+                            self.data.definitions[t_stub_nr as usize].returned = dep_ret;
                         }
                     }
                 }
