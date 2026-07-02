@@ -189,6 +189,39 @@ impl Parser {
     }
 
     #[allow(clippy::too_many_lines)] // sorted/index/spacial iterator setup — splitting would lose context
+    /// The ONE home for a vector's per-element ITERATION stride — the byte
+    /// step `vector::get_vector(size, idx)` walks per element.  Both the
+    /// direct for-loop emission (the `Type::Vector` arm below) and the
+    /// generic-instantiation elm-size fixup (`substitute_type_in_value`)
+    /// read this; a second derivation is how the generic path silently
+    /// drifted (it hand-summed struct field widths → 20 where the schema
+    /// strides 4 for a linked struct, so iterating a bounded-generic
+    /// method's `vector<Self>` result read garbage past element 0).
+    ///
+    /// The decision chain, in precedence order:
+    /// - linked db type (structs holding vectors/text etc.) → 4-byte rec-id
+    /// - narrow-int element → its forced 1/2/4-byte storage width
+    /// - fn-ref element → the 4-byte d_nr (@P343)
+    /// - nested vector element → the inner scalar width, min 4 (#475)
+    /// - else → the schema's `database.size(db_tp)`
+    pub(crate) fn vector_elem_iter_stride(&mut self, vtp: &Type) -> u16 {
+        let vec_tp = self.data.type_def_nr(vtp);
+        let db_tp = self.data.def(vec_tp).known_type();
+        if self.database.is_linked(db_tp) {
+            4
+        } else if let Type::Integer(spec) = vtp
+            && let Some(n) = spec.vector_narrow_width()
+        {
+            u16::from(n)
+        } else if matches!(vtp, Type::Function(_, _, _)) {
+            4
+        } else if let Type::Vector(inner, _) = vtp {
+            (crate::data::element_size(inner) as u16).max(4)
+        } else {
+            self.database.size(db_tp)
+        }
+    }
+
     pub(crate) fn iterator(
         &mut self,
         code: &mut Value,
@@ -272,39 +305,7 @@ impl Parser {
                     let i = Value::Var(iter_var);
                     let vec_tp = self.data.type_def_nr(vtp);
                     let db_tp = self.data.def(vec_tp).known_type();
-                    // narrow vector element iteration uses
-                    // the forced_size stride so the generated
-                    // `vector::get_vector(size, idx)` matches the actual
-                    // 1/2/4-byte storage.  Without this, `database.size(db_tp)`
-                    // returns 8 (plain `integer`) and reads stray across
-                    // element boundaries.
-                    let size = if self.database.is_linked(db_tp) {
-                        4
-                    } else if let Type::Integer(spec) = &**vtp
-                        && let Some(n) = spec.vector_narrow_width()
-                    {
-                        u16::from(n)
-                    } else if matches!(&**vtp, Type::Function(_, _, _)) {
-                        // @P343: a `vector<fn(...)>` element stores only the
-                        // 4-byte i32 d_nr (non-capturing fn-ref — the same
-                        // layout the index-apply path reads via
-                        // `OpGetVector(fs, 4, i)` in parser/fields.rs:725).
-                        // `database.size(db_tp)` returns 0 for the function
-                        // content type, which would make every element read
-                        // alias element 0 (or read across boundaries).
-                        4
-                    } else if let Type::Vector(inner, _) = &**vtp {
-                        // #475: iterating the OUTER of a nested vector — its
-                        // element is a rec-id handle.  Stride by the inner scalar
-                        // width (matching the index's `elm_size_raw.max(4)` in
-                        // parser/fields.rs and the construction), NOT `size(db_tp)`
-                        // which resolves to the `main_vector` wrapper size (16)
-                        // and reads every other element (the silent-wrong
-                        // iteration in #475).
-                        (crate::data::element_size(inner) as u16).max(4)
-                    } else {
-                        self.database.size(db_tp)
-                    };
+                    let size = self.vector_elem_iter_stride(vtp);
                     // Plan-07 phase 4 step 4.6 — for-loop iteration uses
                     // the *Nullable* peers; OOB returns a null DbRef which
                     // the loop's pre-body null-check
