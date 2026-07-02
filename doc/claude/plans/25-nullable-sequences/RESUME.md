@@ -318,12 +318,48 @@ tightenings**. In order, each ends green (never carry two phases' breakage):
       (verified `takes(v[j])` doesn't reject) — affects division equally, not index-specific.
   - **F1c** — ✅ DONE (`85af2b18`): the `change_var` null-local message names `τ?`, no `as`.
   - Gate: `find_problems` green as the DEFAULT (no env) on both backends — ✅ met (exemption in place).
-- **F2 — Retire `not null`** (Phase-5 CLEANUP; ordering load-bearing — AFTER F1). Make the
-  scalar `not null` parse an accepted no-op (`definitions.rs`) and drop it from the fixtures;
-  non-null is already the default so it carries nothing.
-- **F3 — Close DN5** (the `as` laundering hole): `null` / `τ?` `as <non-null scalar>` must be
-  a compile error → `as τ?` / `??`. The **nullness sibling of DN4** — unify one fit-check;
-  scope to `target is_non_null_scalar ∧ source ∈ {Null,Optional}` (`null as S` stays legal).
+- **F2 — Retire `not null`** (Phase-5 CLEANUP; ordering load-bearing). **⚠️ PREMISE CORRECTED
+  (2026-07-02): `not null` does NOT "carry nothing" — it carries the FULL-RANGE meaning.** A
+  boundary matrix (field/local/param/return × plain/`not null`/`?`, value 255) proved: a plain
+  narrow scalar (`u8` field or local) still RESERVES the null sentinel (`255` rejected: *"reserved
+  as the null sentinel of a nullable u8"*), and `not null` is the ONLY declaration-level opt-in to
+  the full range. The range machinery keys off `IntegerSpec.not_null` (`typedef.rs:685`
+  `field_nullable = nullable && !not_null`; the literal-fit check; `database/types.rs`), which the
+  DN1 flip left ALONE (DN1 moved *nullability* to `Type::Optional` but not the *range*). So
+  retiring `not null` REQUIRES the deferred **range reconciliation** first: under DN1 a non-`Optional`
+  narrow scalar is non-null and should be full-range; only `?` reserves the sentinel — i.e. the
+  `IntegerSpec.not_null` default-flip (`keys.rs:347`) the flip punted on. This is a delicate
+  narrow-int STORAGE/range change next to loft's #1 weakness. **Also surfaced (latent bug, own
+  slice): `u8?` is INCONSISTENT** — a `u8?` FIELD silently swallows literal `255`→null (both
+  backends), a `u8?` LOCAL keeps `255` as a value; the packed-nullable-narrow-field should
+  *compile-error* on the sentinel literal, not silently null.
+  - **REORDERED (path B, 2026-07-02): doing F3+F4 first** (independent, low-risk, no storage
+    touch), THEN the range-reconciliation-and-retire as a dedicated focused F2.
+- **F3 — Close DN5** (the `as` laundering hole) — 🟡 **IN PROGRESS (2026-07-02).** `null` / `τ?`
+  `as <non-null scalar>` silently launders the null → now a compile error (`as τ?` / `??`).
+  **Broadened per user directive** ("every integer has a range — detect out-of-range values
+  generally"): the cast target is a DOMAIN (value range × nullness); DN4 (range) and DN5 (nullness)
+  are ONE containment test, and `null` is just the reserved out-of-domain element. Concrete bug it
+  fixed: `is_narrowing_int` bailed on an `Optional` source, so `integer? as u8` slipped past the
+  range check ENTIRELY — fixed by peeling `Optional` for the range dimension + adding the null
+  dimension at the `as` chokepoint (`operators.rs`), and `as τ?` now types `Optional<τ>` so the
+  hole stays closed downstream (`z: τ = (e as τ?)` still requires discharge). Rides
+  `pln25_dn1_enabled()`. Matrix green both backends; DN4 checked-cast regression clean both
+  backends; heap `null as S` stays legal. Raw grep over-predicted blast radius — the index-flip
+  fit-proofs (const index, loop iter-var, guard) already make most `v[i] as T` sources non-null
+  (audience_crystal 0 errors, glb uses const indices). **BLAST RADIUS MEASURED (full suite):
+  exactly 8 DN5-caused failures, ALL the `null as <scalar>` typed-null idiom → migrated to `null
+  as <scalar>?`:** `tests/scripts/01-integers.loft` (6 casts, null-preservation section),
+  `tests/issues.rs` q3/q4×2 NaN JSON tests (`null as float?`), `tests/runtime_warnings.rs` fmt43,
+  and the two GENERATED feature examples F1/F2 (bridge-edited — see follow-up). All 8 pass both
+  backends; fmt + clippy clean. **Follow-ups (NOT DN5 regressions, do NOT block):** (a) feature
+  ISSUES loft-lang/features#1/#2 need the same `null as integer?` update + `make features-gen`
+  regen (else the F1/F2 `.loft` bridge edits drift on next gen — flagged, external); (b)
+  `native_dir` red is PRE-EXISTING (`25-generics` `last_element<T> -> T?` native generic-`Optional`-
+  return ABI gap — no `as` cast, DN5-independent, Family-D thread); (c) engine_host_kernel +
+  multiplayer/viewer reds are the known registry/DN1 server-lib migration (task #4) — engine_host
+  + web libs compile 0 errors under DN5. **DN5 is effectively CLOSED (default-on, enforced,
+  fallout migrated).**
 - **F4 — Close DN6** (inferred null-join): make `change_var` join `Null ⊔ τ = τ?` so the
   unannotated `a = null; a = 5` widens to `integer?` per `(N-Join)` instead of erroring — the
   ergonomic escape valve, and it removes a class of F1a churn.

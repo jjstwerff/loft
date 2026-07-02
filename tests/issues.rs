@@ -6103,7 +6103,7 @@ fn q4_constructor_kind_cross_check_string() {
 fn q4_constructor_kind_cross_check_nan_is_jnull() {
     code!(
         "fn run_q4cknan() -> text {
-    json_number(null as float).kind()
+    json_number(null as float?).kind()
 }"
     )
     .expr("run_q4cknan()")
@@ -6957,7 +6957,7 @@ fn q4_json_number_negative_finite() {
 fn q4_json_number_nan_becomes_jnull() {
     code!(
         "fn run_q4nn3() -> integer {
-    nan_val_q4 = null as float;
+    nan_val_q4 = null as float?;
     v_q4nn3 = json_number(nan_val_q4);
     match v_q4nn3 { JNull => 1, _ => 0 }
 }"
@@ -7159,7 +7159,7 @@ fn q3_to_json_of_jnumber_fractional() {
 fn q3_to_json_of_nan_becomes_null() {
     code!(
         "fn run_q3tnn() -> text {
-    nan_q3 = null as float;
+    nan_q3 = null as float?;
     v_q3tnn = json_number(nan_q3);
     v_q3tnn.to_json()
 }"

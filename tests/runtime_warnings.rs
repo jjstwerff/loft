@@ -377,7 +377,7 @@ fn main() {
 fn fmt43_genuine_null_renders_bare_null() {
     let source = "\
 fn main() {
-  z = null as integer;
+  z = null as integer?;
   print(\"a={z}\\n\");
 }
 ";

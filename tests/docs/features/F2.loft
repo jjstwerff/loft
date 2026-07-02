@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // @F2 — GENERATED from loft-lang/features#2 by tools/features/gen.loft — DO NOT EDIT.
 fn main() {
-    missing = null as integer;
+    missing = null as integer?;
     count = missing ?? 0;       // use 0 when the value is null
     name = "Ada" ?? "unknown";  // keeps the real value when present
     println("{count} {name}");  // 0 Ada

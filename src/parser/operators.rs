@@ -1739,25 +1739,58 @@ impl Parser {
                     return Some(Type::Null);
                 };
                 let nullable_cast = self.lexer.has_token("?");
-                let narrowing = Self::is_narrowing_int(ctp, &tp);
-                // @PLAN48 P2: an explicit `as <narrow-int>` is the sanctioned way to
-                // narrow `integer` → `i32`/`u8`/… so the implicit-narrowing
-                // diagnostic in `convert` does NOT fire on an explicit cast.
+                // @PLN25 DN4/DN5 — a scalar cast target has a DOMAIN: its integer value
+                // RANGE, and (when it is a plain non-null scalar) that domain EXCLUDES null.
+                // A value fits `as τ` (no `?`) only if it lies in the domain on BOTH
+                // dimensions.  `null` is simply the reserved out-of-domain element — not a
+                // special case — so the range fit (DN4) and the nullness fit (DN5) are ONE
+                // containment test.  Peel `Optional` first so the RANGE check sees the
+                // underlying integer: a nullable source otherwise slips past
+                // `is_narrowing_int` entirely, laundering BOTH dimensions
+                // (`integer? as u8` skipped the range check AND the null check).
                 //
-                // @PLN25 DN4 (default ON; opt-out LOFT_NO_DN4) — `(N-Cast)`/`(N-Cast?)`:
-                // a narrowing cast whose value is NOT provably in range is no longer a
-                // silent 8-byte width-tag (`400 as u8 == 400`). `as τ` errors (the
-                // value may not fit — use `as τ?`); `as τ?` lowers to a range guard
-                // that yields the value if it fits, else the integer null. The fit
-                // path (and the opt-out) keep the old accept-as-width-tag.
-                if narrowing {
+                // @PLAN48 P2: an explicit `as <narrow-int>` is the sanctioned way to narrow
+                // `integer` → `i32`/`u8`/…, so the implicit-narrowing diagnostic in `convert`
+                // does NOT fire on an explicit cast.  `as τ?` is the single CHECKED form: it
+                // lowers to a range guard yielding the value or the null sentinel, and (below)
+                // types as `Optional<τ>` so the laundering stays closed downstream.
+                let src_base = ctp.base().clone();
+                let src_may_be_null = matches!(ctp, Type::Optional(_) | Type::Null);
+                let narrowing = Self::is_narrowing_int(&src_base, &tp);
+                if !self.first_pass
+                    && crate::keys::pln25_dn1_enabled()
+                    && src_may_be_null
+                    && !nullable_cast
+                    && Self::is_non_null_scalar(&tp)
+                {
+                    // DN5 — the nullness dimension: a possibly-null value cast to a non-null
+                    // scalar.  (Heap targets stay nullable, so `null as SomeStruct` is legal
+                    // and never reaches here — `is_non_null_scalar` is scalar-only.)
+                    if matches!(ctp, Type::Null) {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "cannot cast `null` to the non-null `{tps}` — cast to `{tps}?` \
+                             (a typed null), or use a real value",
+                        );
+                    } else {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "cannot cast a possibly-null `{}` to the non-null `{tps}` — it may \
+                             be null; use `as {tps}?` for a checked cast (value or null), or \
+                             discharge first with `?? <default>`",
+                            ctp.name(&self.data),
+                        );
+                    }
+                    // Keep `tp` (the non-null target) as the result to bound the cascade.
+                } else if narrowing {
                     if !self.first_pass
                         && std::env::var_os("LOFT_NO_DN4").is_none()
                         && !self.int_value_fits(code, &tp)
                     {
                         if nullable_cast {
-                            let src = ctp.clone();
-                            tp = self.dn4_checked_cast(code, &tp, &src);
+                            tp = self.dn4_checked_cast(code, &tp, &src_base);
                         } else {
                             diagnostic!(
                                 self.lexer,
@@ -1765,7 +1798,7 @@ impl Parser {
                                 "narrowing cast from {} to {tps} may not fit at runtime; \
                                  use `{tps}?` for a checked cast (value or null), or guard \
                                  the value (`?? d`, mask, or an `if` range check)",
-                                self.int_type_name(ctp),
+                                self.int_type_name(&src_base),
                             );
                         }
                     }
@@ -1788,6 +1821,16 @@ impl Parser {
                     self.last_cast_alias = alias_nr;
                 }
                 let mut rt = tp;
+                // @PLN25 — `as τ?` yields `Optional<τ>`: the checked form's domain includes
+                // null, so downstream sees a nullable and `(N-Store)` keeps the hole closed
+                // (a later `z: τ = (e as τ?)` still requires a discharge).  `base()` guards
+                // against a double-wrap from `dn4_checked_cast`.
+                if nullable_cast
+                    && crate::keys::pln25_dn1_enabled()
+                    && Self::is_non_null_scalar(rt.base())
+                {
+                    rt = Type::optional(rt.base().clone());
+                }
                 for d in ctp.depend() {
                     rt = rt.depending(d);
                 }
