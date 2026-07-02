@@ -1791,3 +1791,48 @@ field handling) costs more than the bandwidth it saves — at which point a *mea
 truncation is ever found (a value a user can observe being clipped), fix that narrow path — still
 without blanket widening; the contract failing is the trigger, not the representation being
 non-uniform.
+
+## C84 — `server` ships as minimal TCP/WS primitives, not a fully-featured HTTP framework
+
+**Catalogue:** the `server` library (`loft-lang/loft-libs-net`); see
+[LIBRARIES.md](LIBRARIES.md). Supersedes the declined design once held by
+`lib_plans/future/08-server/`.
+
+### Question
+
+The `08-server` design specified "a fully featured HTTP server library" — an `App` object with
+`route`/`get`/`post` registration, a `Middleware` enum, `AuthConfig` (JWT / session / API-key /
+Basic), `TlsConfig` + ACME / Let's Encrypt, `serve_dir` static serving, `parse_json` body parsing,
+sessions, CORS, and rate-limiting, spread across 12 loft source files. Should `server` ship that
+framework surface?
+
+### Evaluation
+
+Every real consumer (the audience generative-art demos, the tic-tac-toe / multiplayer-editor
+milestones, the routing consumer) needed only two things: answer an HTTP request, and run a
+WebSocket connection — the routing itself is a `match` on `req.path`, which loft already expresses
+cleanly. The framework layer (an `App`/route/middleware abstraction over that `match`) added a
+large surface with no consumer pulling on it, and the heavy pieces (JWT/session auth, ACME/TLS
+automation, rate-limiting) are each their own library-sized problem better solved when a consumer
+actually needs them, on evidence, than pre-built into the base server. The dogfood loop pointed at
+primitives, not a framework.
+
+So the shipped library is one file (`server/src/server.loft`) over a thin native socket +
+`tungstenite` layer: `listen` / `next` / `next_nonblocking` + typed `respond*` helpers for HTTP,
+single-client WebSocket (`ws_upgrade` / `next` / `send` / `send_binary`), and a Rust-driven
+multi-client event pump (`run(on_event: fn(WsEvent))` / `poll_event` / `broadcast` / `send_to` /
+`disconnect`). Small, legible, and exactly what the consumers exercise.
+
+### Decision
+
+**DECLINED — the fully-featured HTTP-framework design for `server` (2026-07-02).** `server`
+ships as minimal TCP/WS primitives; applications route with their own `match`. `08-server` is
+closed as a declined design (not deferred work). The `App`/routing/middleware/auth/TLS/sessions
+surface is not on any roadmap.
+
+### Revisit when
+
+A **real consumer** hits a concrete wall that primitives-plus-`match` cannot reasonably clear —
+e.g. a genuine need for pluggable auth or automatic TLS certificate management in a shipping loft
+program. Bring that consumer's use case as the evidence; scope the *specific* piece it needs (auth,
+or TLS, or static serving) as its own addition, not the whole framework at once.
