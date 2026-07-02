@@ -604,16 +604,11 @@ fn v5_t4_catch_up_after_reconnect() {
 /// (production constants are 5 min / 0.5 s / 30 s at 10 Hz —
 /// same algebraic shape, different units).
 ///
-/// The original blocker (hex_world unresolvable after Stage B removed
-/// the monorepo libs) is gone — the registry auto-installs `hex_world`
-/// from loft-lang/loft-libs-world.  The NEW blocker: the published
-/// hex_world 0.1.1 no longer compiles under the current narrowing-cast
-/// enforcement ("narrowing cast from integer to u16 may not fit at
-/// runtime", hex_world.loft:252/:341 — the check post-dates the
-/// publish).  Un-ignore when hex_world is republished with checked
-/// casts.
+/// `hex_world` resolves via the registry (loft-lang/loft-libs-world);
+/// 0.1.2 republished 2026-07-02 with value-preserving casts for the
+/// narrowing-cast enforcement that had broken 0.1.1, un-blocking this
+/// test (it had been ignored since Stage B removed the monorepo libs).
 #[test]
-#[ignore = "published hex_world 0.1.1 breaks on current narrowing-cast enforcement — un-ignore after a hex_world republish"]
 fn v5_t5_world_tick_and_decay() {
     let mut cmd = Command::new(loft_bin());
     cmd.arg("--interpret")

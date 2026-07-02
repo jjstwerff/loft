@@ -24,3 +24,10 @@ url = "https://github.com/loft-lang/loft-libs-net/releases/download/game_protoco
 sha256 = "de63087a7cda78e3121e9a8c08e94b2a3c92ca8d0edc11e88d6719cfc16bef56"
 source = "registry"
 deps = ["server", "web"]
+
+[[package]]
+name = "hex_world"
+version = "0.1.2"
+url = "https://github.com/loft-lang/loft-libs-world/releases/download/hex_world-v0.1.2/hex_world-0.1.2.tar.gz"
+sha256 = "894bae52ac73c404e5efdbc0501ace7fe16b4a793cceccf948b9223b448201a1"
+source = "registry"
