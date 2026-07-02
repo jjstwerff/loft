@@ -57,6 +57,30 @@ fn sandboxed_capability_violation_is_rejected() {
     );
 }
 
+/// Sandboxed recursion is rejected at admission — and the fix-it hands the
+/// user the supported path (Goal F): the stdlib's recursion-free traversal
+/// (`Walkable` + `tree_walk`), since a tree walk is what most rejected
+/// recursion is doing.
+#[test]
+fn sandboxed_recursion_rejection_names_tree_walk() {
+    let prog = "struct Tn { t_v: integer, t_kids: vector<Tn> }\n\
+                fn scripted(sn: Tn) -> integer {\n\
+                  st = sn.t_v;\n\
+                  for sk in sn.t_kids { st += scripted(sk); }\n\
+                  return st;\n\
+                }\n\
+                fn main() -> integer { scripted(Tn { t_v: 5, t_kids: [] }) }\n";
+    let (ok, err) = run("recur", prog, POLICY, false);
+    assert!(!ok, "sandboxed recursion must be rejected");
+    assert!(
+        err.contains("recursion is not permitted")
+            && err.contains("fix:")
+            && err.contains("tree_walk")
+            && err.contains("Walkable"),
+        "the rejection must name the recursion-free traversal; stderr: {err}"
+    );
+}
+
 /// A clean sandboxed program (only `code`-library arithmetic) is admitted and
 /// runs (force-interpreted).
 #[test]

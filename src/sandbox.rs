@@ -986,7 +986,11 @@ pub fn describe_totality_violation(data: &Data, v: &TotalityViolation) -> String
             format!(
                 "sandboxed recursion is not permitted (the script must be provably total): \
                  the call cycle `{chain} → {tail}` is unbounded.\n  fix: replace the \
-                 recursion with a bounded `for` loop over the work to do."
+                 recursion with a bounded `for` loop over the work to do.  Walking a tree? \
+                 Use the stdlib's recursion-free traversal: satisfy `Walkable` \
+                 (`fn children(self: Self) -> vector<Self>`) and iterate \
+                 `for n in tree_walk(root, cap) {{ … }}` — level order, total by \
+                 construction."
             )
         }
         TotalityViolation::PartialOp { def, op, position } => {
