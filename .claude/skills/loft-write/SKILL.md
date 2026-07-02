@@ -312,11 +312,9 @@ flag         = nested.1;          // true
 - **Compound assignment on tuple LHS is rejected** — `(a, b) += (1, 2)`
   is a compile error; rewrite as `a += 1; b += 2;` or rebuild the tuple.
 
-**Known native bug (P207):** comparing a `character` element read from a
-tuple against a character literal under `--native` fails to compile
-(`t.0 == 'a'` where `t` is `(character, integer)`).  Workaround: cast to
-integer (`t.0 as integer == 97`) or destructure first
-(`(c, _) = t; c == 'a'`).
+Comparing a tuple-element `character` against a literal (`t.0 == 'a'`)
+works on both backends — the old P207 native E0308 was fixed 2026-05-04;
+no cast or destructure workaround is needed.
 
 ---
 
@@ -374,7 +372,7 @@ v[i];                // index read
 
 **Empty vectors** need a type annotation so the compiler knows the element type.
 
-**Slices return iterators, not vectors.** `arr[lo..hi]` cannot be passed where a `vector<T>` is expected — pass the array with index bounds instead.
+**Slices are iterators, materialised on assignment.** `sub = arr[lo..hi]` (annotated or not) builds a fresh vector, and negative bounds count from the end (`arr[2..-1]`, @P384).  A slice still cannot be passed directly where a `vector<T>` **argument** is expected — assign to a local first, or pass the array with index bounds.
 
 **Never swap `vector<STRUCT>` elements in-place via a temp (#338).** `tmp = v[j]` is a VIEW of slot j (not a copy), but `v[j] = v[k]` COPIES into the slot — so `tmp = v[j]; v[j] = v[k]; v[k] = tmp;` silently loses j's record and duplicates k's. Swap scalar fields one by one, or build a fresh vector (selection instead of in-place insertion sort).
 
@@ -928,7 +926,7 @@ when-to-reach-for-which:
 | `match arm separator is \`=>\`, not \`->\`` | Replace `->` with `=>` in the arm.  (P206 — was a parser hang before the recovery helper landed.) |
 | `'fn' definitions must be at file scope, not inside a function or block` | Move the helper fn out of the enclosing fn body.  Lambdas (`|x| { … }` or `fn(x: T) { … }`) are the only function-shaped values allowed inside a fn body. |
 | `compound assignment is not supported for tuple destructuring — use (a, b) = expr instead` | Rebuild the tuple: `(a, b) = (a + 1, b + 2)` — or update each element directly. |
-| Native E0308 on `t.0 == 'a'` where `t` is `(character, …)` | P207 — known native codegen bug.  Workaround: cast to integer (`t.0 as integer == 97`) or destructure first (`(c, _) = t; c == 'a'`). |
+| Native E0308 on `t.0 == 'a'` where `t` is `(character, …)` | Fixed (P207, 2026-05-04) — if seen on an old build, update loft; current builds compile this on both backends. |
 
 ---
 
@@ -962,4 +960,3 @@ loft --native-wasm out.wasm --path /path/to/repo/ file.loft # compile to wasm
 - [ ] No single-element tuples; `(integer)` is just `integer`
 - [ ] Tuple element access uses an integer literal (`t.0`, not `t.i`)
 - [ ] No compound assignment on a tuple LHS (`(a, b) +=` is rejected)
-- [ ] If comparing a tuple-element `character` against a literal under `--native`, cast to integer first (P207 workaround)
