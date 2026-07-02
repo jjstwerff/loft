@@ -103,24 +103,21 @@ upgrade) but at least one backup (YubiKey or paper) is intact.
    ```sh
    # Build the loft-keygen helper from the loft source tree.
    cargo build --release --bin loft-keygen
-   # Sign a known test message with the restored private key,
-   # verify with the public key from src/registry_keys.rs.
+   # Sign a known test message with the restored private key, then
+   # verify it against the matching public key embedded in
+   # src/registry_keys.rs::TRUSTED_PUBLIC_KEYS with `loft-keygen verify`.
    echo -n "test message" > /tmp/test.bin
-   # (loft-keygen doesn't yet ship a one-shot verify command,
-   # so use Python's cryptography lib if available, or write a
-   # 10-line Rust harness using ed25519-dalek directly.)
-   python3 -c "
-   from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
-   sk = Ed25519PrivateKey.from_private_bytes(open('registry-signing-key.bin', 'rb').read())
-   msg = b'test message'
-   sig = sk.sign(msg)
-   # Replace with your actual embedded public key bytes:
-   pk_hex = 'PASTE-FROM-src/registry_keys.rs-HERE'
-   pk = Ed25519PublicKey.from_public_bytes(bytes.fromhex(pk_hex))
-   pk.verify(sig, msg)
-   print('OK — restored key matches embedded public')
-   "
+   ./target/release/loft-keygen sign \
+       --in  /tmp/test.bin \
+       --key registry-signing-key.bin \
+       --out /tmp/test.bin.sig
+   ./target/release/loft-keygen verify \
+       --in  /tmp/test.bin \
+       --sig /tmp/test.bin.sig \
+       --pub "<hex for this key, from src/registry_keys.rs>"
    ```
+
+   Expect `OK — signature valid`.
 
 6. [ ] Move `registry-signing-key.bin` into your new daily-use
        location (e.g. `~/.loft/trust-root/`, chmod 600, inside
@@ -208,24 +205,41 @@ invalid" on fresh installs until they upgrade.
    > by either key during the transition.  See
    > REGISTRY_RECOVERY.md § Scenario B for context.
 
-5. [ ] **Re-sign `index.json` locally with the new key**, push:
+5. [ ] **Re-sign `index.json` locally with the new key**, via
+       `scripts/registry-sign.sh` — NOT a raw `loft-keygen sign` +
+       `git add index.json.sig` (that stages only the `.sig` and
+       skips the trust-gate; #377 was exactly this failure mode:
+       an uncommitted/changed `index.json` sat alongside a
+       committed `.sig` that verified against content that never
+       landed):
 
    ```sh
-   cd loft-lang/registry
-   git pull
-   loft-keygen sign \
-       --in  index.json \
+   scripts/registry-sign.sh --registry-dir loft-lang/registry \
        --key <new-key>.bin \
-       --out index.json.sig
-   git add index.json.sig
-   git commit -m "sign: re-sign index.json with new trust root (Scenario B rotation)"
-   git push
+       --message "sign: re-sign index.json with new trust root (Scenario B rotation)"
    ```
 
-   `loft-keygen sign` always overwrites the existing `.sig`
-   atomically.  Clients fetching the new `.sig` verify it
-   against either the old or the new key in
-   `TRUSTED_PUBLIC_KEYS` — both pass during the transition.
+   `registry-sign.sh` shows the diff, re-checks each tarball's
+   sha256, signs, then verifies the new signature against
+   `src/registry_keys.rs::TRUSTED_PUBLIC_KEYS` (refusing to
+   commit/push if it doesn't match a trusted key), stages
+   `index.json` + `index.json.sig` **together** in one commit, and
+   pushes.  Clients fetching the new `.sig` verify it against
+   either the old or the new key in `TRUSTED_PUBLIC_KEYS` — both
+   pass during the transition.
+
+   > **Note — the current trust root is multiple independent keys,
+   > not one.**  Since the 2026-06-14 bootstrap,
+   > `TRUSTED_PUBLIC_KEYS` holds 4 independent signers (2 software
+   > laptop keys + 2 on-card YubiKeys; see PKG_REGISTRY.md § R3.5),
+   > not a single rotating trust-root key.  When only ONE signer's
+   > key is lost (this scenario) and the others are intact, the
+   > simpler fix is usually **revocation**: delete that key's entry
+   > from `TRUSTED_PUBLIC_KEYS` and ship a release — the surviving
+   > keys keep signing, so there is no add-new-key / wait / drop-old
+   > transition to run.  The rotation below is still the right shape
+   > when you want to add a brand-new signer, or when every existing
+   > key needs replacing at once.
 7. [ ] **Wait for ecosystem adoption.**  Six months is a safe
        transition window.  Watch `loft --version` distribution
        via your own analytics if available; otherwise just
@@ -338,25 +352,32 @@ new installs to malicious tarballs.
    > pinned builds remain safe — the lockfile records each
    > tarball's sha256, which the compromised key cannot forge.
 
-6. [ ] **Re-sign `index.json` locally with the new key**, push:
+6. [ ] **Re-sign `index.json` locally with the new key**, via
+       `scripts/registry-sign.sh` — NOT a raw `loft-keygen sign` +
+       `git add index.json.sig` (that skips the trust-gate and can
+       leave `index.json` uncommitted while a signed `.sig` ships,
+       see #377):
 
    ```sh
-   cd loft-lang/registry
-   git pull
-   loft-keygen sign \
-       --in  index.json \
+   scripts/registry-sign.sh --registry-dir loft-lang/registry \
        --key <new-key>.bin \
-       --out index.json.sig
-   git add index.json.sig
-   git commit -m "sign: EMERGENCY re-sign with new trust root (CVE-YYYY-NNNN)"
-   git push
+       --message "sign: EMERGENCY re-sign with new trust root (CVE-YYYY-NNNN)"
    ```
 
-   The new `.sig` file invalidates anything signed by the
-   compromised key.  Clients on the emergency loft patch
-   release verify against ONLY the new key, so any forged
-   index from the attacker (signed by the compromised key)
-   is rejected.
+   `registry-sign.sh` signs, verifies the result against
+   `src/registry_keys.rs::TRUSTED_PUBLIC_KEYS` (refusing to push
+   otherwise), stages `index.json` + `index.json.sig` together, and
+   pushes.  The new `.sig` file invalidates anything signed by the
+   compromised key.  Clients on the emergency loft patch release
+   verify against ONLY the new key, so any forged index from the
+   attacker (signed by the compromised key) is rejected.
+
+   > **Note — independent-key model.**  With `TRUSTED_PUBLIC_KEYS`
+   > holding 4 independent signers (PKG_REGISTRY.md § R3.5), a
+   > single compromised key can be handled as pure **revocation** —
+   > drop that entry, ship a release, done — without necessarily
+   > minting a replacement in the same emergency release; add a new
+   > signer separately once you've re-established a clean device.
 8. [ ] **Audit `index.json` history** in the registry repo:
 
    ```sh

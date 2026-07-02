@@ -309,11 +309,6 @@ Per PKG_REGISTRY.md § Publishing flow.
    +        "size": 5717,
    +        "loft": ">=0.8",
    +        "deps": {},
-   +        "conflicts": [],
-   +        "replaces": [],
-   +        "provides": [],
-   +        "binaries": {},
-   +        "prerelease": false,
    +        "published": "2026-05-24T08:00:00Z"
    +      }
    +    }
@@ -373,21 +368,33 @@ publishes, that's negligible.
 
 ## Step 5 — First key-rotation drill (R10.5)
 
-Before the key is needed in anger, run a drill while no real
-compromise is happening:
+Before a key is lost/compromised for real, run a drill.  Signing
+never runs in CI (see Step 3 § "Why no CI signing" above) — there is
+no `sign-and-commit.yml` and no GitHub secret to touch; the model is
+`src/registry_keys.rs::TRUSTED_PUBLIC_KEYS` holding **N independent
+keys** verified with OR semantics, and re-signs always run locally
+via `scripts/registry-sign.sh`:
 
 1. Generate a new keypair (Step 1).
-2. Embed the new public key alongside the old one in
-   `TRUSTED_PUBLIC_KEYS`.  Ship a loft release.
-3. Add the new private key as a GitHub secret next to the old one.
-4. Update `sign-and-commit.yml` to sign with both keys (produce
-   `index.json.sig` containing concatenated signatures; client
-   verifies any).
-5. Wait 3 months for the ecosystem to adopt the loft release with
-   both keys.
-6. Drop the old key from `sign-and-commit.yml`.  Drop the old key
-   from `TRUSTED_PUBLIC_KEYS` in the next loft release.
-7. Old private key: securely destroyed (overwrite + physical
+2. Embed the new public key **alongside** the existing ones in
+   `TRUSTED_PUBLIC_KEYS` (a one-line slice append, per
+   [PKG_REGISTRY.md § Multi-maintainer support](PKG_REGISTRY.md#multi-maintainer-support)).
+   Ship a loft release.
+3. Re-sign `index.json` locally with the new key:
+   `scripts/registry-sign.sh --key <new-key>.bin`.  It stages
+   `index.json` + `index.json.sig` together, then trust-gates the
+   result against the just-updated `TRUSTED_PUBLIC_KEYS` before
+   pushing — a wrong/untrusted key refuses to push rather than
+   shipping a signature every `loft install` would reject.
+4. If retiring an old key (not just adding a new signer), wait for
+   ecosystem adoption of the loft release that trusts the new key
+   before dropping the old one — 3 months is a safe window.
+5. **Retire the drill's throwaway key by revocation**: delete its
+   entry from `TRUSTED_PUBLIC_KEYS` and ship a release.  This is
+   revocation, not rotation — the *other* keys were already signing
+   independently, so removing one doesn't require an immediate
+   re-sign; the next ordinary publish carries the updated trust set.
+6. Old private key: securely destroyed (overwrite + physical
    destruction of any backup media).
 
 Document any issues that emerged during the drill in this file under
