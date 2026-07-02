@@ -53,10 +53,18 @@ probe verdicts) → [implementation-steps.md](implementation-steps.md) (the phas
 > consistency pass rewrote every stale `not null`/"default nullable" line (scalars/tuples/vectors are
 > non-null by default; `?` for nullable; `not null` = retired no-op; plain `boolean` 2-state vs
 > `boolean?` 3-state; the vector-field-`not null`-to-silence-warning idiom is obsolete — that warning no
-> longer fires). Each claim verified against the binary first. **A subtle GAP the sweep surfaced (not
-> fixed, noted): `server.loft` parse results feed non-null TUPLE-return elements without rejecting** —
-> the `(N-Store)` teeth don't cover tuple-element positions in a return (only a later scalar reassign
-> rejected); discharged defensively. Worth a separate look if tuple-element null-soundness matters.
+> longer fires). Each claim verified against the binary first. **The tuple-element gap the sweep
+> surfaced is now FIXED (`4698ee52`): `n_store_violation` recurses ELEMENT-WISE** — it normalizes both
+> sides to element lists (literal `Type::Tuple` OR the `Reference(__tuple<…>)` synthetic-struct rewrite
+> a tuple RETURN type takes; elements = the def's attribute typedefs) and each element rides the
+> existing DN3/DN1 checks ("element 0 of the return value", nested chains compose). Matrix both
+> backends: return(tail/explicit)/field/nested/bare-null REJECT; discharged/`τ?`-element ACCEPT.
+> Suite: ZERO new failures (the sweep's defensive discharges were exactly the now-required sites).
+> Guards: 25-tuple-nstore.loft + 4 reject twins in 102. Call-ARG stays the known separate slice.
+> **Formal addendum (`ad517fe1`): ROADMAP D1 (@PLN89 oracle) scope now includes DRIVER agreement**
+> (accept/reject identical across --interpret/--dump/--native/--native-wasm; a reported --dump
+> divergence traced to MIXED BINARIES — PATH loft 2026.6.0 predates DN1 — but the one-static-judgment
+> property now has a guard home; investigation: routing/docs/loft-feedback.md § 2026-07-02).
 >
 > **⚠️ ANOMALY FIXED:** working tree had an uncommitted regression in the GENERATED `tests/docs/features/
 > F1.loft` + `F2.loft` (`null as integer?` → `null as integer`, which DN5-rejects). Restored to the
