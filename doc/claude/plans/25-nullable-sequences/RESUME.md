@@ -384,10 +384,15 @@ tightenings**. In order, each ends green (never carry two phases' breakage):
     fine). (3) ✅ accessor tests → `integer?` (`2e04920c`) + ✅ issue_328 — a cross-statement
     `expr_not_null` leak (`edee7ec8`, general @PLN46 hygiene fix: reset the transient flag per
     statement in `parse_block`; the within-statement `?? d`/`== null` tracking is untouched). So
-    the ONLY remaining F2-ON failure is **(4) `hint_4h`** — the `not null` read-count hint (moot
-    under F2; retire it AT the default-on flip, since retiring under DN1 now would break the
-    F2-OFF default tree where plain fields are still attr-nullable). Then (5) flip `LOFT_PLN25_F2`
-    default-on; (6) strip `not null` from `.loft` (~873 sites, redundant) → remove from parser. Then F6.
+    (4) ✅ **`not null` read-count hint RETIRED** + (5) ✅ **`LOFT_PLN25_F2` FLIPPED DEFAULT-ON**
+    (both in the flip commit) — `pln25_f2_enabled` now rides `pln25_dn1_enabled`;
+    `emit_not_null_hints` early-returns under DN1 (superseded like the div/index warnings);
+    `hint_4h` migrated to assert the retirement. **THE DEFAULT SUITE IS GREEN under F2-on: 2581
+    passed, 13 pre-existing, ZERO new** (both backends via find_problems). So the range
+    reconciliation is now the DEFAULT: a plain non-`Optional` narrow scalar is non-null/full-range,
+    `not null` is redundant. **REMAINING to close F2:** (6) strip `not null` from `.loft` (~873
+    sites, now a redundant no-op) → make the parser accept-then-ignore, then remove it (syntax
+    retirement). Then F6.
     **Separate slice (Part 2) — the NULLABLE-NARROW REPRESENTATION is inconsistent across backends,
     a DESIGN decision that blocks several gaps:** a `u8?` FIELD silently swallows literal `255`→null
     while a `u8?` LOCAL keeps 255; and (found 2026-07-02 while evaluating `i as u8?`) INTERP

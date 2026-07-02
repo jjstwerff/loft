@@ -606,10 +606,13 @@ fn main() {
 
 // ── Plan-07 phase 4h — `not null` field-reminder hint ──────────────────
 
-/// A struct field read 10+ times with no `??` defense triggers the
-/// `not null` hint at the struct declaration.
+/// @PLN25 DN1/F2 — the `not null` field-reminder hint is RETIRED. A struct field read 10+
+/// times with no `??` defense used to trigger a "consider marking it `not null`" hint; under
+/// the dense model a plain scalar is NON-null by default (nullability rides `?`), so `not null`
+/// is redundant (being retired) and suggesting it is moot — superseded like the div/index fault
+/// warnings. This formerly-hinted case must now produce NO such hint.
 #[test]
-fn hint_4h_high_read_count_suggests_not_null() {
+fn hint_4h_high_read_count_hint_retired() {
     let source = "\
 struct Player {
   id: integer,
@@ -647,8 +650,8 @@ fn main() {
     .into_owned();
     assert_eq!(code, Some(0), "must not halt; got code={code:?}");
     assert!(
-        diag.contains("field `Player.id`") && diag.contains("consider marking it `not null`"),
-        "expected not-null hint for Player.id; got diag={diag:?}"
+        !diag.contains("consider marking it `not null`"),
+        "the `not null` hint is RETIRED under DN1/F2 — expected NO hint for Player.id; got diag={diag:?}"
     );
 }
 

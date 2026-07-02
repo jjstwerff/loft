@@ -361,19 +361,18 @@ pub fn pln25_dn1_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_PLN25_OFF").is_none())
 }
 
-/// `LOFT_PLN25_F2=1` (@PLN25 F2 — the deferred RANGE RECONCILIATION, IN PROGRESS) — a plain
+/// @PLN25 F2 — the RANGE RECONCILIATION, FLIPPED DEFAULT-ON (2026-07-02): a plain
 /// (non-`Optional`) narrow integer is NON-null under DN1, so its usable range is the FULL width
 /// (no reserved null sentinel); only an `Optional`-wrapped narrow (`u8?`) reserves the top value
 /// as the sentinel. This completes DN1 for the *range* dimension (the `IntegerSpec.not_null`
-/// default that DN1 left at `false` for narrow scalars, deferring the storage change), which makes
-/// `not null` redundant — the prerequisite for retiring it. Opt-IN while the blast radius (~47
-/// `not_null` readers + store-codec baked layouts + narrow-int field storage, near loft's #1
-/// weakness) is measured + migrated; OFF keeps the current (pre-F2) sentinel reservation for plain
-/// narrow fields/locals. See plans/25-nullable-sequences/RESUME.md § FINISH LINE F2.
+/// default DN1 had left at `false` for narrow scalars), making `not null` redundant — the
+/// prerequisite for retiring it. Rides `pln25_dn1_enabled` like the other @PLN25 gates
+/// (`LOFT_PLN25_OFF` opts the whole model out; the interim opt-in `LOFT_PLN25_F2` is now a no-op).
+/// Flip prerequisites all landed: the struct-format read-width fix (`ac432914`), the
+/// cross-statement `expr_not_null` leak (`edee7ec8`), and the `not null` hint retirement (below).
 #[must_use]
 pub fn pln25_f2_enabled() -> bool {
-    static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| pln25_dn1_enabled() && std::env::var_os("LOFT_PLN25_F2").is_some())
+    pln25_dn1_enabled()
 }
 
 /// `LOFT_UAF_REUSE` (detector b) — at `copy_record`, when the source slot is LIVE

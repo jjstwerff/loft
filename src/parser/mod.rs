@@ -1153,7 +1153,15 @@ impl Parser {
     /// is user code, not the host library.
     fn emit_not_null_hints(&mut self) {
         const HINT_NOT_NULL_THRESHOLD: u32 = 10;
-        if std::env::var("LOFT_NO_HINT_NOT_NULL").is_ok_and(|v| v == "1" || v == "true") {
+        // @PLN25 DN1/F2: the `not null` hint is RETIRED. Under the dense model a plain scalar is
+        // NON-null by default (nullability rides `?`/`Optional`), so `not null` is redundant (and
+        // being retired), and the only nullable form left is `τ?` — for which suggesting
+        // `not null` is contradictory. Superseded like the div/index fault warnings. (Also, under
+        // F2 a heavily-read plain field is non-null → never accrues, so the hint would only ever
+        // fire on a `?` field.)
+        if crate::keys::pln25_dn1_enabled()
+            || std::env::var("LOFT_NO_HINT_NOT_NULL").is_ok_and(|v| v == "1" || v == "true")
+        {
             self.field_read_counts.clear();
             self.defended_field_reads.clear();
             return;
