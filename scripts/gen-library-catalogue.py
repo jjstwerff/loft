@@ -7,10 +7,10 @@
 # discoverability: an agent working in this repo must SEE that a registered
 # library already does X before reimplementing it (duplicate code, new bugs).
 #
-# This is distinct from scripts/gen_library_catalog.py → doc/library-catalog.md,
-# which is the USER-facing browseable catalogue (a category table for humans).
-# Same source, two audiences: that one orients a human reader; this one stops an
-# agent from reinventing a published library.
+# This is the single registry catalogue kept in-repo — it stops an agent from
+# reinventing a published library.  (A separate user-facing table generator,
+# scripts/gen_library_catalog.py → doc/library-catalog.md, was retired
+# 2026-07-02: it was a stale, un-CI-guarded duplicate of this one.)
 #
 # Source order:
 #   1. --index <path>        explicit local index.json (CI uses the committed snapshot)
@@ -132,7 +132,13 @@ def render(index: dict[str, Any]) -> str:
                 "auto-use (no `use` needed)" if triggers else f"`use {name};`"
             )
 
-            lines.append(f"- **{name}** `{latest}` — {description}")
+            # Version is deliberately NOT shown: an agent needs to know a
+            # capability EXISTS (name + description), not its exact version —
+            # `loft install` resolves the version at use time.  Emitting versions
+            # only created drift + a treadmill (every registry release forced a
+            # regen), so they're dropped.  `latest`/`entry` are still computed
+            # above for the auto-use (`triggers`) hint.
+            lines.append(f"- **{name}** — {description}")
             lines.append(
                 f"  · loft install {name} · {hint} · [source]({homepage})"
             )
