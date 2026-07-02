@@ -359,8 +359,8 @@ pub fn stencil_house_small() -> StencilDef {
   // Ring of 6 — axial neighbours with walls.
   neighbours: vector<integer> = [1, 0, 0, 1, -1, 1, -1, 0, 0, -1, 1, -1];
   for i in 0..6 {
-    dq = neighbours[i * 2];
-    dr = neighbours[i * 2 + 1];
+    dq = neighbours[i * 2] ?? 0;
+    dr = neighbours[i * 2 + 1] ?? 0;
     hexes += [StencilHex {
       sh_dq: dq, sh_dr: dr,
       sh_height: 0, sh_material: 1, sh_item: 0, sh_item_rotation: 0,
