@@ -402,9 +402,21 @@ impl Output<'_> {
                 }
                 None => "_src.store_nr == u16::MAX || _src.store_nr == _dst.store_nr".to_string(),
             };
+            // @PLN85 (the adopt-arm placeholder leak) — the ADOPT arm replaces
+            // `var_{name}`'s slot with `_src`, orphaning `_dst` when it is a
+            // REAL store (the first-bind `null_named` pre-allocation, or a
+            // displaced prior store on reassignment): one store leaked per
+            // adopting bind (`d = choose(..)`).  Free the real, distinct
+            // placeholder first — the same exclusive-ownership assumption the
+            // COPY arm already makes (it clears `_dst` in place via
+            // `OpDatabase`).  A same-store adopt (the NRVO alias) and the
+            // null-sentinel `_dst` are excluded by the guard.
             write!(
                 w,
-                "); if {adopt} {{ var_{name} = _src; }} \
+                "); if {adopt} {{ if _dst.store_nr != u16::MAX \
+                 && _dst.store_nr != _src.store_nr \
+                 {{ OpFreeRef(cell, _dst, \"{name}(displaced)\"); }} \
+                 var_{name} = _src; }} \
                  else {{ var_{name} = OpDatabase(cell, _dst, {tp_nr}_i32); \
                  OpCopyRecord(cell,_src, var_{name}, {tp_with_free}_i32); }} }}"
             )?;

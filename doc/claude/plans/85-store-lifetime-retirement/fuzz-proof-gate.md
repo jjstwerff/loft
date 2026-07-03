@@ -273,14 +273,14 @@ it — fixes par_struct_to_struct_enum_t4.
   record-typed local's free at such a site (`OpFreeRefIfDistinct(v, ret_var)`;
   distinct stores free exactly as before).  Interp + native value-correct,
   interp leak-free.
-- **NEW visible cell — the native adopt-arm placeholder leak:** with the
-  over-free gone, `d = choose(..)` on native shows a 1-store leak per adopting
-  bind: the destination's `stores.null_named` pre-allocation is ORPHANED when
-  the adopt arm runs (`var_d = _src` without freeing the placeholder; the
-  copy arm reuses it via `OpDatabase`).  A LEAK, visible without poison —
-  strictly better than the over-free it replaced.  Route: the native
-  adopt/copy dispatch (`gen_set_first_ref_call_copy` family) frees the real
-  placeholder before adopting.
+- **The native adopt-arm placeholder leak — FIXED (same day):** the ADOPT arm
+  replaced the destination slot with `_src`, orphaning `_dst` when real (the
+  first-bind `null_named` pre-allocation, or a displaced prior store on
+  reassignment).  The arm now frees the real, distinct placeholder first
+  (`generation/dispatch.rs` — the same exclusive-ownership assumption the
+  COPY arm already makes by clearing `_dst` in place); a same-store NRVO
+  adopt and the null-sentinel `_dst` are guard-excluded.  The i306 bisect
+  cells + 150-i306 are leak-free on both backends.
 - `85-store-lifetime-enum-match-borrowed-view-overfree` (native only, poison):
   still open — the #429 guard's Holder tag reads poisoned after the walk.
 - (`html_asyncify` under a loaded box is a chrome-harness timeout flake, not a
