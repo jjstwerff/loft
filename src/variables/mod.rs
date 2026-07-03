@@ -1705,15 +1705,16 @@ impl Function {
     /// Mark a variable so that `get_free_vars` will not emit `OpFreeRef` for it.
     /// Used for borrowed references (e.g. par-loop result variables that point
     /// into the result vector store).
+    #[track_caller]
     pub fn set_skip_free(&mut self, v: u16) {
         if let Ok(want) = std::env::var("LOFT_SKIPFREE_TRACE")
             && self.variables[v as usize].name == want
         {
             eprintln!(
-                "[skip_free] {} (var={v}) in {}\n{}",
+                "[skip_free] {} (var={v}) in {} @ {}",
                 want,
                 self.name,
-                std::backtrace::Backtrace::force_capture()
+                std::panic::Location::caller()
             );
         }
         self.variables[v as usize].skip_free = true;

@@ -964,24 +964,53 @@ impl Parser {
                 self.lexer.token("]");
             } else if self.lexer.has_token("(") {
                 // chained call on a Type::Function expression — expr(args).
-                if let Type::Function(param_types, ret_type, _) = t.clone() {
+                if let Type::Function(param_types, ret_type, fn_deps) = t.clone() {
+                    // @PLN85 t1 — does the SOURCE fn-ref OWN a freshly-minted
+                    // closure?  A closure-factory return (`make_greeter(..)`) carries
+                    // a `CalleeFrame` dep (the lambda's `___clos_N` work var); a
+                    // borrowed pass-through (`passthru(g)`) or a non-capturing lambda
+                    // returns EMPTY deps.  Owned ⇒ this immediately-invoked temp is
+                    // the SOLE owner of the freshly-minted closure store (nobody else
+                    // frees it), so it must KEEP the ownership dep and be freed at
+                    // scope exit; borrowed ⇒ skip_free (the source var frees it, else
+                    // a double-free).
+                    // Does the SOURCE fn-ref OWN a freshly-minted closure?  A
+                    // closure-factory return (`make_greeter(..)`) carries a
+                    // `CalleeFrame` dep (the lambda's `___clos_N` work var); a
+                    // borrowed pass-through (`passthru(g)`) or a non-capturing lambda
+                    // returns EMPTY deps.  Pass 1's type does NOT yet carry the dep
+                    // (the lambda propagation runs later), so this reads FALSE there —
+                    // fine, because pass-1 IR is discarded and the stamp below is
+                    // pass-2-only.
+                    let owns_closure = fn_deps
+                        .entries()
+                        .any(|e| matches!(e, crate::data::DepEntry::CalleeFrame(_)));
                     let fn_type = Type::Function(
                         param_types.clone(),
                         ret_type.clone(),
-                        crate::data::Deps::none(),
+                        if owns_closure {
+                            fn_deps.clone()
+                        } else {
+                            crate::data::Deps::none()
+                        },
                     );
                     // Allocate temp variable on BOTH passes (consistent unique counter).
                     let fn_work = self.create_unique("__fn_ref_tmp", &fn_type);
                     self.vars.defined(fn_work);
-                    // The fn_work temp is a borrowed copy of an existing
-                    // fn-ref: its closure DbRef aliases the source's
-                    // closure store, so emitting OpFreeRef on it would
-                    // double-free.  Mark `skip_free` so scope-exit cleanup
-                    // leaves the closure alone.  Also blocks the
-                    // insert_free Return-wrap path that would otherwise
-                    // wrap the trailing OpFreeRef in `return`, returning
-                    // `()` from a value-returning block (P249-mirror).
-                    self.vars.set_skip_free(fn_work);
+                    // @PLN85 t1 — stamp `skip_free` ONLY in pass 2 and ONLY for a
+                    // BORROWED source.  `skip_free` is a GLOBAL per-var bit that
+                    // persists across passes; a pass-1 stamp (where `owns_closure`
+                    // reads FALSE for a fresh closure factory, its dep not yet
+                    // propagated) poisons the pass-2 role — the counter-coupling
+                    // hazard, cf. t3/p179.  An OWNED source (`make_greeter(..)(..)`)
+                    // makes this temp the SOLE owner of the freshly-minted closure
+                    // store, so it must be freed at scope exit (no stamp); a BORROWED
+                    // source's closure DbRef aliases the source's store, so stamping
+                    // avoids a double-free (and blocks the insert_free Return-wrap
+                    // that would return `()` from a value block, P249-mirror).
+                    if !self.first_pass && !owns_closure {
+                        self.vars.set_skip_free(fn_work);
+                    }
                     // P227: one work-buffer per text-returning fn-ref
                     // call (the return-value buffer the lambda fills via
                     // its hidden RefVar(Text) attr).  Previously
