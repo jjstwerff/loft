@@ -1292,11 +1292,16 @@ use a separate collection or add after the loop"
                 let inner = self.vars.tp(src).clone();
                 let is_ref = matches!(inner, Type::Reference(..));
                 *code = self.cl("OpCreateStack", &[Value::Var(src)]);
-                s_type = Type::RefVar(Box::new(inner));
-                // L5 — a heap whole-value alias is NON-OWNING: the source frees the record.
-                if is_ref && var_nr != u16::MAX {
-                    self.vars.set_skip_free(var_nr);
-                }
+                // @PLN85 D-own-5 — the borrow fact rides `deps` (O-Borrow), not a
+                // side-flag: a heap whole-value alias (`p = &o`, L5) is NON-OWNING
+                // because its type deps name the source, and the free suppression
+                // derives from `owns = dep.is_empty()` (`scopes::get_free_vars`) —
+                // the same read every other borrow uses (this replaced the
+                // `set_skip_free(var_nr)` side-channel).  A scalar inner carries
+                // no `Deps` slot (`depending` is the identity there), which is
+                // consistent: a scalar `&` binder owns no store, so there is no
+                // free decision to derive.
+                s_type = Type::RefVar(Box::new(if is_ref { inner.depending(src) } else { inner }));
             } else if let Some(eref) = heap_ref {
                 // `c`/`r` holds the field/element DbRef; interp reads/writes it via the
                 // uniform RefVar deref (`OpGet*/OpSet*(c,0)`), and native keys its

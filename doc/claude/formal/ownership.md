@@ -86,13 +86,14 @@ exactly what makes the operational rules hold on native as well as interp.
 
 ## Deviations
 
-OPEN: **3** — and unlike the other areas, here the deviations are the *bulk* of the
+OPEN: **2** — and unlike the other areas, here the deviations are the *bulk* of the
 reality: the model is the beacon, the code is mid-migration.  **Recounted 2026-07-03**
 after the D-own-1 flip: D-own-3 (typed `Deps`) is CLOSED; D-own-4 RECLASSIFIED as the
-decided edge C86 (whole-value binds copy; aliasing is a last-use elision — its residual
-folds into D-own-1); D-own-1 is substantially narrowed (the `ownership_of` oracle
-chokepoints are now DEFAULT-ON) but the per-site thicket is reduced, not deleted, so it
-stays open.
+decided edge C86 (whole-value binds copy; aliasing is a last-use elision — its bind-site
+residual is DONE, `classify_vec_bind`); D-own-5 CLOSED by the fold (the `&` borrow rides
+`deps`; scalar-place sliver recorded under D-own-1); D-own-1 is substantially narrowed
+(the `ownership_of` oracle chokepoints are now DEFAULT-ON, the return-delivery funnel is
+selector-collapsed) but the per-site thicket is reduced, not deleted, so it stays open.
 
 ### D-own-1 — ownership is re-derived per-site by codegen, not carried as one `deps` fact
 - **Violates:** O-Derived / O-Deps
@@ -160,18 +161,23 @@ live post-parse (`elision_plans` → `scopes::elide_borrows`).  What remains of 
 here: the mid-parse deps read and the post-parse oracle are two implementations of one
 fact — they unify when ownership is carried as one typed `deps` fact end-to-end.
 
-### D-own-5 — the `&` borrow is built but not yet a `deps`-tracked borrow
-- **Violates:** O-Deps for the explicit-link case
-- **Where:** @PLN87 (PR#436, merged) **landed** the ladder L1–L6 — scalar/field/element/param
-  references read + write through, leak-free ([binding.md](binding.md), verified). So `&`
-  realises a live reference. What remains is the *checker* side: the `&τ` borrow's source is
-  not yet carried as one `deps` fact the borrow checker reads — it shares the per-site
-  ownership re-derivation of [D-own-1](#d-own-1).
-- **Effect:** `&` works and is leak-free, but its lifetime is enforced by the existing
-  store-lifetime machinery, not derived from a single `deps` borrow fact.
-- **Status:** OPEN — folds into D-own-1 (one `deps` fact); the surface (binding.md) is closed.
-- **Removal:** the `&τ` borrow carries its source in `deps` like any other borrow (O-Borrow),
-  so free placement for a referenced lvalue derives from that fact.
+### D-own-5 — CLOSED (2026-07-03, folded): the `&` borrow now carries its source in `deps`
+- **Was:** @PLN87's ladder L1–L6 realised live references ([binding.md](binding.md),
+  verified), but the `&τ` borrow's source was carried by a side-flag (`skip_free` on the
+  L5 heap whole-value alias), not the `deps` fact the checker reads.
+- **The fold (executed):** the L5 bind (`p = &o`, the only `&` binder with a free
+  decision) now types `p: &Reference(td, [o])` via the standard `depending()` carrier —
+  free suppression derives from `owns = dep.is_empty()` (`scopes::get_free_vars`), the
+  same O-Borrow read every other borrow uses; the `set_skip_free` side-channel at the
+  bind is deleted.  Proof: the ladder introspects change ONLY in the type display
+  (`&ref(Pair)` → `&ref(Pair)["whole"]`) — zero op changes, both backends green,
+  leak-gated (434-pln87-scalar-reference, 28-references, 87-store-leaks).
+- **Residual sliver (recorded under [D-own-1](#d-own-1)):** a scalar-place ref
+  (`c = &v[0]`, `r = &s.x`) holds a DbRef into the source's store, but a scalar inner
+  carries no `Deps` slot (`depending()` is the identity), so the link is not a readable
+  fact — vacuous for FREE placement (the binder owns no store) but unavailable to any
+  future lifetime check until `Deps` is carried type-wide (the D-own-1/D-own-2
+  completion).
 
 ---
 
