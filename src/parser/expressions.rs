@@ -1316,6 +1316,22 @@ use a separate collection or add after the loop"
         // already-reported error) cannot leak the flag into the NEXT statement and
         // wrongly turn `y = scalarvar` into a reference.
         self.amp_pending = false;
+        // @PLN85 poison-green — a fn-ref FIELD READ bound to a local
+        // (`c = k.cb`) is a BORROWED fn-ref: its closure half points at the
+        // base struct's child record, OWNED by the struct.  Without the mark,
+        // `get_free_vars`' Function arm frees the closure through the alias at
+        // scope exit ("fn-ref variables OWN their closure store") — freeing
+        // the CALLER's record; the next `k.cb` read hit poisoned memory
+        // (d_nr = 0xDEADBEEF, the issue_313 cross-fn shape).  `skip_free` is
+        // the established borrowed-fn-ref carrier (the vector-element read
+        // path marks its `__fn_ref_tmp` the same way).
+        if op == "="
+            && var_nr != u16::MAX
+            && matches!(&s_type, Type::Function(_, _, _))
+            && matches!(code, Value::Block(b) if b.name == "fn_ref_field_read")
+        {
+            self.vars.set_skip_free(var_nr);
+        }
         if amp_vector_replace {
             let clear = self.cl("OpClearVector", &[Value::Var(var_nr)]);
             *code = Value::Insert(vec![clear, code.clone()]);

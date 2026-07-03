@@ -1626,7 +1626,15 @@ impl Scopes {
         // native).  Recurse through `Insert` (which scopes wraps Return in
         // for free-vars cleanup) and `Block`.
         let expr_is_terminal = expr_ends_in_return(expr);
-        if ls.is_empty() || matches!(expr, Value::Null | Value::Var(_)) {
+        // @PLN85 poison-green — a bare-Var tail is free-safe (its slot holds
+        // the value) EXCEPT a `&τ` place ref (`RefVar`): returning it DEREFS
+        // the place DbRef at the Return, after `ls`'s frees released the
+        // source store (the @PLN87 L3/L4 live-read shapes under LOFT_POISON).
+        // Exclude it from the fast path so it takes the B5-L3 hoist below —
+        // `Set(__ret_N, Var(r))` performs the deref BEFORE the frees.
+        let var_is_place_ref = !ls.is_empty()
+            && matches!(expr, Value::Var(v) if matches!(function.tp(*v), Type::RefVar(_)));
+        if ls.is_empty() || (matches!(expr, Value::Null | Value::Var(_)) && !var_is_place_ref) {
             if is_return && !expr_is_terminal {
                 ls.push(Value::Return(Box::new(expr.clone())));
             } else if matches!(expr, Value::Null) {
@@ -1635,7 +1643,7 @@ impl Scopes {
                 ls.push(expr.clone());
             }
         } else if let Value::Block(bl) = expr {
-            return insert_free(bl, &ls, is_return, data, function);
+            return self.insert_free(bl, &ls, is_return, data, function);
         } else if expr_is_terminal {
             // expr is already a `Return(...)` (or `Insert(...)` ending in
             // one) — the cleanup was emitted alongside it by the inner
@@ -2555,85 +2563,137 @@ fn scope_free_op_var(op: &Value, data: &Data) -> Option<u16> {
     None
 }
 
-fn insert_free(
-    block: &Block,
-    free: &[Value],
-    is_return: bool,
-    data: &Data,
-    function: &Function,
-) -> Vec<Value> {
-    let mut res = Vec::new();
-    let mut ls = Vec::new();
-    for (o_nr, o) in block.operators.iter().enumerate() {
-        if o_nr + 1 == block.operators.len() {
-            if let Value::Block(bl) = &block.operators[o_nr] {
-                for v in insert_free(bl, free, is_return, data, function) {
-                    ls.push(v);
-                }
-            } else if block.result == Type::Void {
-                // @P322 — when the function body ends with a nested
-                // Void-result block whose last op is `Return(...)` (the
-                // iterator-generator shape: `for n in […] { yield n; }
-                // return null;`), the OUTER-scope frees passed in via
-                // `free` must run BEFORE the return so function-scope
-                // owned locals (`__vdb_*` vector backings, etc.) get
-                // cleaned up.  Prior to this fix the void branch
-                // dropped `free` entirely and only emitted the inner
-                // `Return` + a redundant trailing `Return(Null)`, so
-                // function-scope vectors leaked at program exit.
-                let o_is_terminal = expr_ends_in_return(o);
-                if o_is_terminal {
-                    for v in free {
-                        ls.push(v.clone());
+impl Scopes {
+    fn insert_free(
+        &mut self,
+        block: &Block,
+        free: &[Value],
+        is_return: bool,
+        data: &Data,
+        function: &mut Function,
+    ) -> Vec<Value> {
+        let mut res = Vec::new();
+        let mut ls = Vec::new();
+        for (o_nr, o) in block.operators.iter().enumerate() {
+            if o_nr + 1 == block.operators.len() {
+                if let Value::Block(bl) = &block.operators[o_nr] {
+                    for v in self.insert_free(bl, free, is_return, data, function) {
+                        ls.push(v);
                     }
-                    ls.push(o.clone());
+                } else if block.result == Type::Void {
+                    // @P322 — when the function body ends with a nested
+                    // Void-result block whose last op is `Return(...)` (the
+                    // iterator-generator shape: `for n in […] { yield n; }
+                    // return null;`), the OUTER-scope frees passed in via
+                    // `free` must run BEFORE the return so function-scope
+                    // owned locals (`__vdb_*` vector backings, etc.) get
+                    // cleaned up.  Prior to this fix the void branch
+                    // dropped `free` entirely and only emitted the inner
+                    // `Return` + a redundant trailing `Return(Null)`, so
+                    // function-scope vectors leaked at program exit.
+                    let o_is_terminal = expr_ends_in_return(o);
+                    if o_is_terminal {
+                        for v in free {
+                            ls.push(v.clone());
+                        }
+                        ls.push(o.clone());
+                    } else {
+                        ls.push(o.clone());
+                        for v in free {
+                            ls.push(v.clone());
+                        }
+                        ls.push(Value::Return(Box::new(Value::Null)));
+                    }
                 } else {
-                    ls.push(o.clone());
+                    // @PLN85 poison-green — the B5-L3 invariant extended INTO
+                    // block tails: return-site frees must not run before the tail
+                    // expression EVALUATES.  The non-block leg (free_vars) has
+                    // always hoisted a value tail into a `__ret_N` temp before the
+                    // frees; this leg emitted `frees; Return(tail)` — the tail
+                    // then evaluated AFTER the frees, and any store it still read
+                    // (directly or through an alias no fact carries, e.g. a
+                    // fn-ref read out of a struct field calling a closure record
+                    // the host struct's free just cascaded) was a use-after-free:
+                    // silent stale data without LOFT_POISON, deterministic
+                    // garbage with it (the closure/field-capture family).
+                    // A bare-Var tail is free-safe (its slot holds the value) —
+                    // EXCEPT a `&τ` place ref (`RefVar`): returning it DEREFS the
+                    // place DbRef at the Return, after the frees released the
+                    // source store (the @PLN87 L3/L4 live-read shapes under
+                    // poison).  Hoisting `Set(__ret_N, Var(r))` performs the
+                    // deref NOW, before the frees.
+                    let tail_needs_eval = match o.unspan() {
+                        Value::Null => false,
+                        Value::Var(v) => matches!(function.tp(*v), Type::RefVar(_)),
+                        _ => true,
+                    };
+                    // Text results take the same hoist with the text-leg
+                    // mechanics: the temp's String owns a byte copy, and
+                    // `skip_free` keeps its OpFreeText out of the scope exit
+                    // (the caller copies bytes immediately on return — the
+                    // established `__ret_N` text contract pre_eval/native read).
+                    let is_text_result = matches!(block.result.base(), Type::Text(_));
+                    let mut hoist_tmp: Option<u16> = None;
+                    if is_return
+                        && !free.is_empty()
+                        && (is_value_return_type(&block.result) || is_text_result)
+                        && tail_needs_eval
+                        && !expr_ends_in_return(o)
+                    {
+                        self.ret_temp_counter += 1;
+                        let name = format!("__ret_{}", self.ret_temp_counter);
+                        let tmp = function.add_temp_var(&name, &block.result);
+                        if is_text_result {
+                            function.set_skip_free(tmp);
+                        }
+                        self.var_scope.insert(tmp, self.scope);
+                        self.var_order.push(tmp);
+                        ls.push(v_set(tmp, o.clone()));
+                        hoist_tmp = Some(tmp);
+                    }
                     for v in free {
+                        // A free of a var the RETURNED tail expression still READS
+                        // cannot run before it — that is a use-after-free (the
+                        // `?? [literal]` return-tail class: interp read the freed
+                        // store silently — LOFT_POISON turns it into a SIGSEGV —
+                        // and native crashed on the 65535 sentinel).  Its freeing
+                        // is owned INSIDE the expression instead: the return-
+                        // delivery materializer consumes an owned-fresh arm local
+                        // after its append, on EVERY path (cross-arm frees).  So
+                        // the pre-return free is DROPPED here, not moved (even
+                        // under the hoist — the materializer already freed the
+                        // consumed store inside the expression; re-emitting the
+                        // free after the temp would double-free it).
+                        if is_return
+                            && let Some(fv) = scope_free_op_var(v, data)
+                            && o.reads_var(fv)
+                            && function.is_arm_consumed(fv)
+                        {
+                            continue;
+                        }
                         ls.push(v.clone());
                     }
-                    ls.push(Value::Return(Box::new(Value::Null)));
+                    if let Some(tmp) = hoist_tmp {
+                        ls.push(Value::Return(Box::new(Value::Var(tmp))));
+                    } else if is_return {
+                        ls.push(Value::Return(Box::new(o.clone())));
+                    } else {
+                        ls.push(o.clone());
+                    }
                 }
             } else {
-                for v in free {
-                    // A free of a var the RETURNED tail expression still READS
-                    // cannot run before it — that is a use-after-free (the
-                    // `?? [literal]` return-tail class: interp read the freed
-                    // store silently — LOFT_POISON turns it into a SIGSEGV —
-                    // and native crashed on the 65535 sentinel).  Its freeing
-                    // is owned INSIDE the expression instead: the return-
-                    // delivery materializer consumes an owned-fresh arm local
-                    // after its append, on EVERY path (cross-arm frees).  So
-                    // the pre-return free is DROPPED here, not moved — and for
-                    // any shape the materializer does not cover, a visible
-                    // leak strictly beats a silent stale read.
-                    if is_return
-                        && let Some(fv) = scope_free_op_var(v, data)
-                        && o.reads_var(fv)
-                        && function.is_arm_consumed(fv)
-                    {
-                        continue;
-                    }
-                    ls.push(v.clone());
-                }
-                if is_return {
-                    ls.push(Value::Return(Box::new(o.clone())));
-                } else {
-                    ls.push(o.clone());
-                }
+                ls.push(o.clone());
             }
-        } else {
-            ls.push(o.clone());
         }
+        res.push(Value::Block(Box::new(Block {
+            name: block.name,
+            operators: ls,
+            result: block.result.clone(),
+            scope: block.scope,
+            var_size: 0,
+        })));
+        res
     }
-    res.push(Value::Block(Box::new(Block {
-        name: block.name,
-        operators: ls,
-        result: block.result.clone(),
-        scope: block.scope,
-        var_size: 0,
-    })));
-    res
 }
 
 /// True when `expr` is a `Return` (or recursively ends with one through

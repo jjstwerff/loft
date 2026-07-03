@@ -212,7 +212,30 @@ left for follow-up: keyed-container views (`hash`/`sorted`), nested-record value
 **Next, in order:**
 1. **Correct the stale catalog** — over-free-sweep/README P10 verdict PASS → divergence; mark P3/P9/leak fixed. ✅ done.
 2. **Graduate the generator in-process** — port `grammar_gen.py` to a `fuzz/fuzz_targets/program_ownership.rs` cargo-fuzz target (the full grammar is built; this makes it run in-process/fast under libfuzzer coverage-guidance, no rustc-per-program) and add the `value` axis pieces (enum-payload, nested, hash) as @PLN25 settles them.  **Still open** — the standing job (done-criterion 1) runs the python harness; the port is a coverage upgrade, not a gate requirement.
-3. **Build `LOFT_POISON`** (@PLN54 S3) — ✅ done — wired (`keys.rs::poison_enabled` + `allocation.rs` free path), both backends, harness `--poison`; positive control proven. Follow-up: poison freed STACK slots too (S3's second half).  **`LOFT_POISON=1 cargo test` is NOT green (measured 2026-07-03)** — the 54-cell map is poison-clean, but the FULL suite under poison surfaces a latent stale-read family the differential oracle missed (~13 failures): closure/field captures (issue_313, p213 ×2, p227 text-fn-ref field capture, p241 singleton-text), struct-enum multi-call flow (p54), the @PLN87 `&`-link L3/L4 element/field LIVE-READ tests (consistent with the D-own-5 scalar-place sliver — the place DbRef has no carried lifetime fact), a closure-capture leak test, the @PLN85 nullable-return caller-binding test, and `par` struct→struct-enum (threading_chars t4, reads 0 ≠ 30).  One failure is an ENV CONFLICT, not a bug: `poison_free_default_off_leaves_buffer` asserts the default-OFF behavior and inverts under a global `LOFT_POISON=1`.  This list is the poison-green WORKLIST — a named open cell (route: @PLN85/@PLN54), each item a candidate real UAF read of a freed-not-yet-reused store.
+3. **Build `LOFT_POISON`** (@PLN54 S3) — ✅ done — wired (`keys.rs::poison_enabled` + `allocation.rs` free path), both backends, harness `--poison`; positive control proven. Follow-up: poison freed STACK slots too (S3's second half).  **The poison-green worklist (measured 2026-07-03) — 10 of 13 FIXED same-day**, root: the
+return-tail UAF family (return-site frees ran BEFORE the tail expression evaluated —
+silent stale reads without poison).  Three fixes, guard
+`tests/scripts/85-poison-return-tail-uaf.loft`:
+(1) the B5-L3 hoist extended INTO block tails (`scopes::insert_free` — `Set(__ret_N,
+tail); frees; Return(__ret_N)`) for value AND text results — fixes the closure/field
+captures (p213 ×2, p227, p241) and the general class;
+(2) a `RefVar`-typed Var tail derefs its place DbRef AT the Return → excluded from the
+fast path so it hoists too — fixes the @PLN87 L3/L4 live reads + amp_rhs (the D-own-5
+scalar-place sliver made real);
+(3) a fn-ref FIELD READ bound to a local (`c = k.cb`) is a BORROWED fn-ref → marked
+`skip_free` (the established convention) so scope exit never frees the CALLER's closure
+record through the alias — fixes issue_313 cross-fn + the p15 leak test.
+The env-conflict test now self-skips under ambient `LOFT_POISON`.
+**STILL OPEN — one named class (3 tests):** heap-RECORD (Reference / struct-enum)
+if/match-arm returns deliver via a freed store on the TOS channel instead of the
+`__retbuf` (the callee builds `__ref_1`, frees it, `return null`; the caller adopts the
+freed store — works stale, poison-nulls it).  Repros: p54_struct_enum_multi_call_flow
+(`/tmp` minimal: enum match-return), pln85_nullable_return_caller_binding_freed
+(`maybe_row` — nullable Reference if-return), threading_chars par_struct_to_struct_enum_t4
+(the par face).  This is the @PLN85 P4 / match_return-for-records delivery cell
+(NEXT-SESSION-match-return.md) — the jo pre-pass and the vector delivery machinery gate
+on `Type::Vector`; Reference/Enum(true) arm-returns need the same materialise-into-buffer
+treatment.  Design-sized; owns the last 3 poison failures.
 4. **Minimize + wire as a standing job** — ✅ done (2026-07-03): the historical shapes are pinned as 25 graduated `tests/scripts/85-store-lifetime-*.loft` guards; the harness runs in `cargo test` via `tests/ownership_fuzz_gate.rs` (fast loop + control pairs un-ignored, full both-backends replay `--ignored` as the release sweep).  **Self-test re-pinned (2026-07-03):** the join_own default-ON flip cleaned the P14 probe file on BOTH configs, so the positive control re-anchored on generated cells that still reproduce gate-OFF — a crash/divergence-channel control (`elem_accumulate__struct__heavy`) + a leak-channel control (`local_source__struct__none`), each as a buggy(flagged)/fixed(clean) PAIR, so a flip regression fails the self-test too.
 - **Method gate:** every M+ step runs the `design-protocol` skill; this doc IS the hypothesis.
 - **Blocked-by reminder:** widen the value axis only as @PLN25 settles it (above).
