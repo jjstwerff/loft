@@ -264,19 +264,28 @@ it — fixes par_struct_to_struct_enum_t4.
   program bug: a file-backed (`store_persist_bind` mmap) store's memory IS the
   file, so poison-on-free persisted `0xDEADBEEF` into durable state.  Fix:
   `free` skips poisoning file-backed stores (`Store::is_file_backed`).
-**Newly visible (attributed PRE-EXISTING — both reproduce on the pre-P4 build
-8f746dbd; each emission change shifts allocation order and the poison lens sees a
-different slice of the latent tail):**
-- `150-i306-view-return-ownership` (wrap suite, interp): `choose`'s
-  `best = m_none(); cand = pick_local(..); if .. { best = cand; }; best` — the
-  #462 local_source face (owned→view reassignment escaping through the return)
-  still stale-reads under poison on iter 0.
-- `85-store-lifetime-enum-match-borrowed-view-overfree` (native only): the #429
-  guard's Holder tag reads poisoned after the walk — a native-side over-free of
-  the borrowed view under poison.
+**Poison round 3 (2026-07-03): 150-i306 FIXED; one leak cell surfaced by the fix.**
+- `150-i306-view-return-ownership` — root: at a record-returning return site the
+  P4 conditional-free swap covered only `__ref_N` work refs; a NAMED record
+  local aliased into the hidden return-buffer param (`best = cand` — the NRVO
+  buffer keeps raw-alias Sets by design) kept its UNCONDITIONAL free, killing
+  the returned store on the reassigned path.  Fix: the swap covers ANY
+  record-typed local's free at such a site (`OpFreeRefIfDistinct(v, ret_var)`;
+  distinct stores free exactly as before).  Interp + native value-correct,
+  interp leak-free.
+- **NEW visible cell — the native adopt-arm placeholder leak:** with the
+  over-free gone, `d = choose(..)` on native shows a 1-store leak per adopting
+  bind: the destination's `stores.null_named` pre-allocation is ORPHANED when
+  the adopt arm runs (`var_d = _src` without freeing the placeholder; the
+  copy arm reuses it via `OpDatabase`).  A LEAK, visible without poison —
+  strictly better than the over-free it replaced.  Route: the native
+  adopt/copy dispatch (`gen_set_first_ref_call_copy` family) frees the real
+  placeholder before adopting.
+- `85-store-lifetime-enum-match-borrowed-view-overfree` (native only, poison):
+  still open — the #429 guard's Holder tag reads poisoned after the walk.
 - (`html_asyncify` under a loaded box is a chrome-harness timeout flake, not a
   cell.)
-The next poison round owns those two.
+The next round owns the adopt-placeholder leak + the enum-match native cell.
 4. **Minimize + wire as a standing job** — ✅ done (2026-07-03): the historical shapes are pinned as 25 graduated `tests/scripts/85-store-lifetime-*.loft` guards; the harness runs in `cargo test` via `tests/ownership_fuzz_gate.rs` (fast loop + control pairs un-ignored, full both-backends replay `--ignored` as the release sweep).  **Self-test re-pinned (2026-07-03):** the join_own default-ON flip cleaned the P14 probe file on BOTH configs, so the positive control re-anchored on generated cells that still reproduce gate-OFF — a crash/divergence-channel control (`elem_accumulate__struct__heavy`) + a leak-channel control (`local_source__struct__none`), each as a buggy(flagged)/fixed(clean) PAIR, so a flip regression fails the self-test too.
 - **Method gate:** every M+ step runs the `design-protocol` skill; this doc IS the hypothesis.
 - **Blocked-by reminder:** widen the value axis only as @PLN25 settles it (above).

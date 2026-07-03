@@ -1666,11 +1666,18 @@ impl Scopes {
             let free_nr = data.def_nr("OpFreeRef");
             let free_if = data.def_nr("OpFreeRefIfDistinct");
             for op in &mut ls {
+                // ANY record-typed local's store may BE the returned store —
+                // not only a parser-minted work ref: a NAMED local aliased
+                // into the hidden return-buffer param (`best = cand` — the
+                // NRVO buffer keeps raw-alias Sets by design) had its
+                // unconditional free kill the returned store on the
+                // reassigned path (the 150-i306 `choose` shape; poison read
+                // the caller's field as 0xDEADBEEF).  Distinct stores free
+                // exactly as before.
                 if let Value::Call(d, args) = op
                     && *d == free_nr
                     && let Some(a0) = args.first()
                     && let Value::Var(w) = a0.unspan()
-                    && function.name(*w).starts_with("__ref_")
                     && matches!(
                         function.tp(*w),
                         Type::Reference(_, _) | Type::Enum(_, true, _)
