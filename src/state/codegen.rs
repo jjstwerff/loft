@@ -3614,30 +3614,35 @@ impl State {
                 self.code_add(var_pos);
                 return;
             }
-            // @PLN87 P2.2 — a `&`-param write-back of an OWNED construction
-            // (`o = Obj{..}`; the RHS is the transferred skip_free temp from
-            // `parse_object`'s new_object branch) must FREE the DISPLACED caller
-            // store before installing the new value, else the old store orphans
-            // (the pre-P2.2 leak).  Read it live through `o` (`OpGetStackRef`) so
-            // the free is PATH-SENSITIVE — only on the path that runs the
-            // write-back — keeping conditional `&` reassignment sound without a
-            // witness.  Heap inner type only; scalar `&` has no store to free.
-            if stack.function.is_argument(var)
+            // @PLN87 P2.2 / @PLN85 t4 — a `&`-param whole-record write-back that
+            // installs a fresh OWNED store (`o = Obj{..}` literal OR `o = mk()`
+            // owned-returning call) must FREE the DISPLACED caller store, else it
+            // orphans.  P2.2 covered only the literal (via `is_skip_free`); t4 is
+            // the call twin, whose NRVO buffer `__ref_N` is NOT skip_free — the
+            // ownership oracle's `Own::Owned` names both.  Aliasing-safe: stash
+            // `*o`'s OLD store BY VALUE (`OpGetStackRef` reads it, and the value
+            // survives the set), install the new store, then `OpFreeRefIfDistinct`
+            // — a self-reading RHS (`o = mk_from(o)`) keeps the old store live
+            // across the eval (no free-before UAF, unlike the old P2.2 emission)
+            // and a same-store install degrades to a no-op.  Path-sensitive (the
+            // ops sit on the write-back branch only).  Heap inner type only; scalar
+            // `&` has no store to free.
+            let amp_owned_writeback = stack.function.is_argument(var)
                 && matches!(
                     *tp,
                     Type::Vector(_, _) | Type::Reference(_, _) | Type::Enum(_, true, _)
                 )
-                && {
-                    let src = value.result_var();
-                    src != u16::MAX && stack.function.is_skip_free(src)
-                }
-            {
+                && matches!(
+                    crate::use_analysis::ownership_of(stack.data, stack.def_nr, value),
+                    crate::use_analysis::Own::Owned
+                );
+            if amp_owned_writeback {
+                // stash OLD = *o (by value — survives the SetStackRef below)
                 let var_pos = stack.var_pos(var);
                 stack.add_op("OpVarRef", self);
                 self.code_add(var_pos);
                 stack.add_op("OpGetStackRef", self);
                 self.code_add(0u16);
-                stack.add_op("OpFreeRef", self);
             }
             let var_pos = stack.var_pos(var);
             stack.add_op("OpVarRef", self);
@@ -3655,6 +3660,15 @@ impl State {
                 _ => panic!("Unknown reference variable type"),
             }
             self.code_add(0u16);
+            if amp_owned_writeback {
+                // free OLD unless the install kept it (witness = *o's NEW store)
+                let var_pos = stack.var_pos(var);
+                stack.add_op("OpVarRef", self);
+                self.code_add(var_pos);
+                stack.add_op("OpGetStackRef", self);
+                self.code_add(0u16);
+                stack.add_op("OpFreeRefIfDistinct", self);
+            }
             return;
         }
         // destination-passing — avoid scratch buffer for text-returning natives.
