@@ -103,19 +103,22 @@ wants a live reference instead of the default copy/alias. That is the entire sur
 user-facing borrow checker is **declined** ([DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)) — it
 would fight loft's *fun-on-pickup* goal ([GOALS.md](GOALS.md)).
 
-## The law — heap aliases by default; `&` binds a live REFERENCE
+## The law — whole-value binds COPY, projections view; `&` binds a live REFERENCE
 
-> **CORRECTED (2026-06-23, @PLN87).** The earlier reading — "`&` makes a whole-binding
-> *reassignment write back*" — was wrong and is superseded by this section. `&` binds a
-> **live reference**; it is a binding marker, not a reassignment annotation. See
-> [plans/87-reference-default-binding.md](plans/87-reference-default-binding.md).
+> **CORRECTED (2026-07-03, C86 — maker's call).** The earlier text ("a binding to a heap
+> value aliases; it does not copy") was empirically FALSE on both backends for whole-value
+> binds and never matched the ecosystem's behaviour. The 2026-06-23 correction (the `&`
+> reading) stands. See [DESIGN_DECISIONS C86](DESIGN_DECISIONS.md#c86--whole-value-heap-binds-copy-aliasing-is-a-last-use-elision-the-rustc-rule)
+> and [plans/87-reference-default-binding.md](plans/87-reference-default-binding.md).
 
-A binding or parameter to a heap value — struct, vector, element — **aliases** the
-source; it does not copy. In-place mutation *through* the alias reaches the original,
-because they share one store: `o.field = x`, `o.v[i] = y`, and `a = vv[0]; a[i] = z` all
-write through — no annotation. That is loft's actual model (verified on both backends),
-and `a = vv[0]` being a view is a **feature**, not the #426 bug it was first read as. A
-**scalar** binding, by contrast, is a by-value **copy**.
+**Whole-value heap binds COPY** — `p = o` (struct), `b = x` (vector), `af = bx.v` (a
+field read bound to a local) all give the new binding its OWN store: value semantics,
+verified on both backends. The compiler may **ELIDE the copy to an alias only when the
+source is provably dead afterwards** (the rustc last-use rule — `use_analysis::ElidePlan`
+is exactly this analysis): an *optimization*, never an observable semantic.
+**Projection reads are VIEWS** — `a = vv[0]; a[i] = z` writes through (the #426 decided
+feature), and in-place mutation through a *path* (`o.field = x`, `o.v[i] = y`) reaches
+the source. A **scalar** binding is a by-value **copy**.
 
 **`&` binds a live REFERENCE** to its source — a variable, struct field, or vector
 element. Every operation goes *through* the reference to the source: a read sees the

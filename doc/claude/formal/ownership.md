@@ -86,11 +86,13 @@ exactly what makes the operational rules hold on native as well as interp.
 
 ## Deviations
 
-OPEN: **4** — and unlike the other areas, here the deviations are the *bulk* of the
+OPEN: **3** — and unlike the other areas, here the deviations are the *bulk* of the
 reality: the model is the beacon, the code is mid-migration.  **Recounted 2026-07-03**
-after the D-own-1 flip: D-own-3 (typed `Deps`) is CLOSED; D-own-1 is substantially
-narrowed (the `ownership_of` oracle chokepoints are now DEFAULT-ON) but the per-site
-thicket is reduced, not deleted, so it stays open.
+after the D-own-1 flip: D-own-3 (typed `Deps`) is CLOSED; D-own-4 RECLASSIFIED as the
+decided edge C86 (whole-value binds copy; aliasing is a last-use elision — its residual
+folds into D-own-1); D-own-1 is substantially narrowed (the `ownership_of` oracle
+chokepoints are now DEFAULT-ON) but the per-site thicket is reduced, not deleted, so it
+stays open.
 
 ### D-own-1 — ownership is re-derived per-site by codegen, not carried as one `deps` fact
 - **Violates:** O-Derived / O-Deps
@@ -136,14 +138,19 @@ tag (0x8000) so the one cross-space provenance (the vectors.rs lambda propagatio
 survives the IR codec unambiguously.  Residual (not a deviation): the newtype `Deref`s
 to `Vec<u16>` for read convenience — writes go through the typed constructors.
 
-### D-own-4 — stopgaps that contradict reference-default
-- **Violates:** O-Borrow (a borrow should view, not copy) where a stopgap copies
-- **Where:** #415 makes a STRUCT vector-field read COPY on bind — a narrowed store-lifetime
-  stopgap, not the dep-driven view the end-state wants ([OWNERSHIP_MODEL.md:152](../OWNERSHIP_MODEL.md));
-  it also blocks [binding.md D-bind-3](binding.md).
-- **Effect:** correct-but-pessimistic (an extra copy) and inconsistent with reference-default.
-- **Status:** OPEN — reverse once the dep-driven view (D-own-2) lands.
-- **Removal:** struct-field reads become views via `deps`; delete the copy-on-bind branch.
+### D-own-4 — RECLASSIFIED (2026-07-03, C86): the #415 copy IS the semantic; derive it, don't reverse it
+The entry claimed the #415 struct-vector-field copy-on-bind was a stopgap contradicting
+reference-default.  The reversal attempt found the premise false: on BOTH backends every
+WHOLE-VALUE heap bind copies (`p = o`, `b = x`, `af = bx.v`) and only projections alias —
+the written law, not the code, was wrong.  The maker's call
+([DESIGN_DECISIONS C86](../DESIGN_DECISIONS.md#c86--whole-value-heap-binds-copy-aliasing-is-a-last-use-elision-the-rustc-rule)):
+whole-value binds COPY by contract; `p = o` becomes an alias only when the source is
+provably dead afterwards — the rustc last-use rule, as an OPTIMIZATION
+(`use_analysis::ElidePlan` is that analysis).  `O-Borrow` scopes to projections /
+params / `&τ`.  (binding.md D-bind-3 was already closed — the old "blocks" claim was
+stale.)  The implementable RESIDUAL — the copy/alias/elide decision at the bind site
+derives from `ownership_of` + last-use instead of the syntactic `struct_vec_field`
+branch — folds into **D-own-1**.
 
 ### D-own-5 — the `&` borrow is built but not yet a `deps`-tracked borrow
 - **Violates:** O-Deps for the explicit-link case
