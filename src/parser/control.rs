@@ -5781,6 +5781,18 @@ impl Parser {
                     Type::Vector(Box::new(elm_ty.clone()), Deps::attrs(vec![buf_attr]));
             }
         }
+        // @PLN85 L3 — re-read `ret` AFTER the jo pre-pass: the finalization
+        // below rebuilds `returned` from this clone's deps, and the stale
+        // pre-pass-less clone CLOBBERED the `{__retbuf}` dep the pre-pass just
+        // finalised (every promotion candidate is jo_arm_skip'd, so the loop
+        // re-adds nothing).  With empty returned deps the caller typed the
+        // result OWNED: it double-freed the delivered buffer (result + buffer
+        // var, same store) and — when a `??`-discharge read made scan_set's
+        // dep-prefix null-init the result var at entry — the entry-allocated
+        // store was orphaned by the call assignment (the corpus L3 leak).
+        let ret = self.data.definitions[self.context as usize]
+            .returned
+            .clone();
         // B2-runtime / B3 / B7 unification (2026-04-13): struct-enums
         // (Type::Enum with struct-enum discriminator `true`) live as
         // heap-allocated records just like Reference and Vector do, so
@@ -6548,6 +6560,9 @@ impl Parser {
                 if let Type::Function(param_types, ret_type, _) = self.vars.tp(v_nr).clone()
                     && param_types.is_empty()
                 {
+                    // @PLN85 L1 — callee-attr-space deps must not leak into the
+                    // caller (see `fnref_result_type`).
+                    let ret_type = Box::new(Self::fnref_result_type(*ret_type, &[]));
                     // P227: text-returning fn-ref calls need exactly ONE
                     // work-buffer at caller-function scope (the return-value
                     // buffer that the lambda fills via its hidden RefVar(Text)
@@ -6874,6 +6889,10 @@ impl Parser {
         let Type::Function(param_types, ret_type, _) = self.vars.tp(v_nr).clone() else {
             return None;
         };
+        // @PLN85 L1 — callee-attr-space deps must not leak into the caller
+        // (see `fnref_result_type`): map visible-param deps through the actual
+        // argument types, drop hidden/grown indices (the value arrives OWNED).
+        let ret_type = Box::new(Self::fnref_result_type(*ret_type, types));
         // P227: one work-buffer per text-returning fn-ref call.
         // The fn-ref TYPE's `Type::Text(deps)` is always `deps = []`,
         // so the previous deps-derived count was zero — leaving the

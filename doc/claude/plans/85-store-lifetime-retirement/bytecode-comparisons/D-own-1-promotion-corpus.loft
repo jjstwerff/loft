@@ -4,15 +4,13 @@
 // per-verdict sentinel (control.rs), not assumed — see the plan doc's slice-3
 // section for the verdict ↔ fn map this file must keep firing.
 //
-// KNOWN PRE-EXISTING LEAKS this corpus pins (plan doc slice-3 § leak cells; fix
-// lands AFTER the byte-identical collapse, on the clean structure):
-//   L1 r10  — lambda Grow promotion leaks the grown buffer (BOTH backends).
-//   L2 r10b — lambda SkipReassigned local leaks (native only).
-//   L3 r7 + main's `g0[1] ?? E7{..}` — the delivered match-return vector leaks
-//        (BOTH backends; allocation-order-sensitive — the heap-??-discharge ×
-//        churn cell's minimal repro).
-// So: LOFT_STORES=warn / LOFT_NATIVE_LEAK_CHECK report vector<integer>×1-2 +
-// vector<E7>×1 at exit — expected until the leak cells close.
+// The leak cells L1-L3 this corpus surfaced are FIXED (2026-07-03) — the file
+// must run leak-free on BOTH backends (LOFT_STORES=warn /
+// LOFT_NATIVE_LEAK_CHECK); the graduated guard is
+// tests/scripts/85-fnref-lambda-return-ownership.loft.  Mechanisms: L1
+// fnref_result_type (callee attr-space deps no longer leak into callers), L2
+// per-arm lazy `__vc_hbuf` in the native dispatch, L3 ref_return's stale-`ret`
+// finalization clobber of the jo pre-pass dep.
 
 struct S2 { v: vector<integer>, tag: integer }
 enum Cell { Empty, Filled { items: vector<integer> } }

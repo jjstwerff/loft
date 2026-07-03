@@ -5492,6 +5492,40 @@ impl Parser {
         }
     }
 
+    /// @PLN85 L1 — the def→frame dep conversion for FN-REF call results.
+    /// A fn-ref/lambda call's declared return type carries the CALLEE's
+    /// attr-space deps (e.g. a grown hidden work-buffer's index).  Read
+    /// verbatim in the caller they alias arbitrary caller attrs/frame vars —
+    /// the L1 leak: a lambda's hidden-buffer index 1 read as the CALLER's
+    /// attr 1 (`__retbuf`) made `ref_return` believe the CallRef tail already
+    /// rode the buffer, so no delivery was emitted and the store
+    /// `fn_call_ref` allocates at runtime leaked on both backends.  Convert
+    /// exactly as plain calls do (`call_dependencies`): map visible-param
+    /// indices through the actual argument types; out-of-range (hidden /
+    /// grown) indices drop — the adaptive fn-ref ABI allocates those buffers
+    /// at runtime, so the value arrives OWNED.
+    fn fnref_result_type(ret: Type, types: &[Type]) -> Type {
+        match ret {
+            Type::Text(d) => {
+                Type::Text(Deps::frame(Self::resolve_deps(types, d.as_attr_indices())))
+            }
+            Type::Vector(to, d) => Type::Vector(
+                to,
+                Deps::frame(Self::resolve_deps(types, d.as_attr_indices())),
+            ),
+            Type::Reference(to, d) => Type::Reference(
+                to,
+                Deps::frame(Self::resolve_deps(types, d.as_attr_indices())),
+            ),
+            Type::Enum(to, true, d) => Type::Enum(
+                to,
+                true,
+                Deps::frame(Self::resolve_deps(types, d.as_attr_indices())),
+            ),
+            other => other,
+        }
+    }
+
     /// THE def→frame dep converter (H2 / DEPS_INVENTORY): maps the
     /// callee's ATTR-INDEX deps through the actual argument types at a
     /// call site into caller FRAME var deps.  `d` must be attr-space

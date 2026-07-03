@@ -317,17 +317,34 @@ MergeOnly guards it first); keep the verdict variant in the collapse but mark it
 unreachable-suspected. (b) SkipReassigned/Grow are lambda-only — no suite script
 exercised them before this corpus.
 
-**Leak cells the corpus surfaced (pre-existing, fix AFTER the byte-identical
-collapse, on the clean structure):**
-- **L1** — lambda `Grow` promotion leaks the grown buffer: `f = fn(x){ q = [x, x+1]; q }; f(n)`
-  leaks `vector<integer>×1` on BOTH backends.
-- **L2** — lambda `SkipReassigned` local (`q = [x]; q += [..]; q`) leaks on
-  NATIVE only.
-- **L3** — a delivered match-return vector (`r7_jo`, jo_arm_skip) whose element
-  is then discharged caller-side (`g0[1] ?? E7{..}`) leaks the returned
-  `vector<E7>` on BOTH backends, allocation-order-sensitive (native shows it in
-  the 2-fn repro but not the 14-fn corpus) — the minimal repro for the known
-  heap-`??`-discharge × churn cell.
+**Leak cells the corpus surfaced — ALL FIXED (2026-07-03, after the collapse
+landed; guard: `tests/scripts/85-fnref-lambda-return-ownership.loft`):**
+- **L1** (both backends) — root: a fn-ref/lambda call's result type carried the
+  CALLEE's attr-space deps verbatim (`try_fn_ref_call` returned `*ret_type`
+  raw); a grown hidden-buffer index misread in the caller as its own attr 1
+  (`__retbuf`) faked `MergeAttr` ("already delivered"), so the store
+  `fn_call_ref` adaptively allocates was returned by value with no owner.
+  Fix: `fnref_result_type` (parser/mod.rs) — the same def→frame conversion
+  plain calls get via `call_dependencies`: visible-param deps map through the
+  actual argument types, hidden/grown indices drop (the value arrives OWNED).
+  Side benefit: `t5_lambda_ref` in the text corpus lost a spurious promoted
+  `&text` param (its `cap` local was hoisted off the same misread borrow).
+- **L2** (native only) — root: the fn-ref dispatch pre-allocated ONE
+  `__vc_hbuf` before the candidate match; every taken arm without a hidden
+  buffer leaked it.  Fix (generation/emit.rs): the buffer allocates INSIDE
+  each arm that needs it — the gate mirrors the synthetic-args predicate (ALL
+  hidden heap attrs: Reference candidates cross-match vector dispatches via
+  the shared DbRef ABI) — and an arm whose candidate does not RETURN the
+  buffer (returned deps don't name it) frees it after the call.
+- **L3** (both backends) — root: `ref_return`'s finalization rebuilt
+  `returned` from the `ret` clone taken BEFORE the jo pre-pass finalized the
+  `{__retbuf}` dep — with every candidate jo_arm_skip'd, the dep reverted to
+  `[]`.  Callers typed the result OWNED: double-freed the delivered buffer
+  (result + buffer var, same store — a latent UAF, "clean" on net count), and
+  a `??`-discharge read (`g0[1] ?? E7{..}`) triggered scan_set's dep-prefix
+  entry null-init on the OWNED-typed result var → the entry `InitRef +
+  Database` store was orphaned by the call assignment (the visible leak).
+  Fix: re-read `ret` after the pre-pass (control.rs).
 
 The byte-identical bar applies per verdict cell; the leak cells are pinned as
 CURRENT behavior until their own fix slices.
