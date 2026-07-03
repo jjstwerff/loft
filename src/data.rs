@@ -1824,7 +1824,14 @@ impl Type {
     fn dep_att(data: &Data, d_nr: u32, dep: &Vec<u16>) -> Vec<String> {
         let mut ls = BTreeSet::new();
         for d in dep {
-            ls.insert(data.def(d_nr).attributes[*d as usize].name.clone());
+            // A dep list is attribute-indexed only at parse time; after scopes
+            // runs it holds FRAME var numbers, which this display helper cannot
+            // resolve (no Function at hand).  Render those positionally instead
+            // of indexing out of bounds (par-synthesized defs hit this).
+            match data.def(d_nr).attributes.get(*d as usize) {
+                Some(a) => ls.insert(a.name.clone()),
+                None => ls.insert(format!("#{d}")),
+            };
         }
         let mut res = Vec::new();
         for v in ls {

@@ -1662,8 +1662,12 @@ impl Store {
     pub fn valid(&self, rec: u32, fld: u32) -> bool {
         // S29/P1-R3: locked (worker) stores have empty claims by design — skip the
         // claims check.  Records in worker stores are valid copies of the originals.
+        // Likewise a REOPENED file-backed (mmap) store: `claims` is in-memory
+        // bookkeeping and is not persisted, so a fresh `Store::open` of an
+        // existing image has an empty set while its records are live (the same
+        // reason poison skips file-backed stores).
         debug_assert!(
-            self.read_only || self.claims.contains(&rec),
+            self.read_only || self.is_file_backed() || self.claims.contains(&rec),
             "Unknown record {rec}"
         );
         // Read size before any multiplication to avoid overflow when fld 0 is negative

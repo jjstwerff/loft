@@ -253,6 +253,54 @@ left for follow-up: keyed-container views (`hash`/`sorted`), nested-record value
      (test-profile builds compile it out per the Cargo.toml override); the
      one-off class check is `RUSTFLAGS="-C debug-assertions=on" cargo test
      --release`.
+     **The DA CALIBRATION RUN (F1's class check — the first time the whole
+     suite ever executed with lib debug-assertions ON) found the FULL lazy-
+     append law plus a latent-assert inventory.**  Harness note first: a
+     non-standard target dir needs `target-da/release/default → ../../default`
+     (`project_dir()` hardcodes `target/release|debug`), else every CLI-
+     spawning test fails on a missing stdlib.  The one law behind all H5
+     firings — *pass 2 may append name-keyed synthetic facts that pass 1
+     could not know; every pass-1 def number and attr index stays frozen* —
+     now encoded in `assert_pass2_def_attr_stable` as FOUR documented lazy
+     forms (each verified long-latent by reproducing on an origin/main
+     control build in a throwaway worktree):
+     1. `vector<T>`/`main_vector<T>` wrapper defs (the original F1 fix);
+     2. generic-INSTANTIATION defs (`t_<LEN><Type>_<fn>` whose `n_<fn>`
+        template is `DefType::Generic`) — pass-2-only BY DESIGN
+        (`parse_call`: pass 1 predicts the return type only; instantiating
+        there would capture the template's still-being-built body IR);
+        found via `repro_p205.loft`;
+     3. the `__closure` hidden attr (`parse_lambda*` adds it `!first_pass`
+        from pass 1's closure record — captures unknown until the body
+        parses); minimal repro: a lambda capturing a mutated local
+        (`f = fn() { frames += 1; }`), attr 0→1;
+     4. a trailing `__work_N` text-return work-buffer promotion the pass-1
+        classify could not yet see (repro:
+        `tests/scripts/111-format-string-self-slice.loft`, `n_render` 3→4 —
+        the self-slice-reassigned text param earns a second work buffer in
+        pass 2 only).
+     `__ref_N` / `__retbuf` growth — the ref_return drift class the assert
+     was BUILT for — stays fatal, as does any non-synthetic append.
+     **Latent-assert inventory fixed on the spot:** journal unit tests used
+     `Store::new` without `free = false` (→ `new_in_use`, the documented
+     entry point); `Store::valid()`'s claims assert now skips FILE-BACKED
+     stores (claims are in-memory bookkeeping, not persisted — a reopened
+     mmap image has an empty set; same reason poison skips them; fixes
+     `ir_read::mmap_file_round_trip_stdlib`); `translate_passes_through_unmapped`
+     now tests the PARENT-SHARED row honestly (`with_parent_count(6)`) and a
+     new `translate_cross_worker_is_a_debug_panic` twin pins the D11c
+     debug-panic/release-passthrough split via
+     `cfg_attr(debug_assertions, should_panic)`; `Type::dep_att` (display
+     helper) no longer indexes out of bounds when a dep list holds
+     post-scopes FRAME numbers (p235 par defs) — unknown indices render
+     positionally (`#7`).
+     **OPEN cells routed to the DA-inventory worklist** (each needs its own
+     matrix session): the 4 "Database N not correctly freed" exit-leak tests
+     (`expressions::closure_capture_text`, `issues::n8/p179/pln87` — real
+     store leaks, visible only under DA); the `sorted<>`-return store leaking
+     at exit (seen on the p188 CLI probe); `format.rs:1213` OOB via the
+     `code!()` expr harness (p188 suite path); the `[set_var]` width-mismatch
+     warning flood (stdlib slots: `i_parse_errors` 16→12B, boolean 8→1B).
    - **F2 — the literal-`??`-default join leak — FIXED (2026-07-03 night,
      the fuzzer's first ownership catch).**  The matrix redrew the axis:
      LITERAL default vs CALL default (nested-vs-flat was irrelevant).  A

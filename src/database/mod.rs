@@ -987,7 +987,11 @@ mod store_rebase_tests {
 
     #[test]
     fn translate_passes_through_unmapped() {
-        let r = StoreRebase::new();
+        // PARENT-SHARED pass-through (D11c row 2): unmapped but below the
+        // parent store count.  An unmapped ref at/above the count is the
+        // CROSS-WORKER row — debug-panic, not pass-through — covered by
+        // `translate_cross_worker_is_a_debug_panic` below.
+        let r = StoreRebase::with_parent_count(6);
         let db = DbRef {
             store_nr: 5,
             rec: 10,
@@ -997,6 +1001,23 @@ mod store_rebase_tests {
         assert_eq!(out.store_nr, 5);
         assert_eq!(out.rec, 10);
         assert_eq!(out.pos, 8);
+    }
+
+    /// D11c row 3 — a DbRef that is neither mapped nor parent-shared is a
+    /// codegen bug: debug builds panic at the fault, release builds log and
+    /// pass through (graceful degradation).  Pin BOTH profiles.
+    #[test]
+    #[cfg_attr(debug_assertions, should_panic(expected = "cross-worker DbRef"))]
+    fn translate_cross_worker_is_a_debug_panic() {
+        let r = StoreRebase::new();
+        let db = DbRef {
+            store_nr: 5,
+            rec: 10,
+            pos: 8,
+        };
+        let out = r.translate(&db);
+        // Only reached in release builds (debug_assertions off).
+        assert_eq!(out.store_nr, 5, "release path passes through unchanged");
     }
 
     #[test]

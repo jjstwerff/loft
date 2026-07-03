@@ -381,7 +381,7 @@ mod tests {
     /// A `Stores` with one fresh heap store holding one claimed `words`-word record.
     fn store_with_record(words: u32) -> (Stores, u16, u32) {
         let mut stores = Stores::default();
-        stores.allocations.push(Store::new(256));
+        stores.allocations.push(Store::new_in_use(256));
         let store_nr = (stores.allocations.len() - 1) as u16;
         let rec = stores.allocations[store_nr as usize].claim(words);
         (stores, store_nr, rec)
@@ -402,7 +402,7 @@ mod tests {
     #[test]
     fn claim_is_deterministic_from_history() {
         fn claim_sequence() -> Vec<u32> {
-            let mut s = Store::new(64);
+            let mut s = Store::new_in_use(64);
             let mut pos = Vec::new();
             let a = s.claim(4);
             pos.push(a);
@@ -521,7 +521,7 @@ mod tests {
     #[test]
     fn cross_store_changes() {
         let (mut stores, sn_a, rec_a) = store_with_record(4);
-        stores.allocations.push(Store::new(256));
+        stores.allocations.push(Store::new_in_use(256));
         let sn_b = (stores.allocations.len() - 1) as u16;
         let rec_b = stores.allocations[sn_b as usize].claim(4);
 
@@ -598,7 +598,7 @@ mod tests {
     /// bytes survived for undo.)
     #[test]
     fn freelist_repurposes_a_freed_blocks_body() {
-        let mut s = Store::new(64);
+        let mut s = Store::new_in_use(64);
         let rec = s.claim(4);
         s.set_u32_raw(rec, 4, 0xDEAD_BEEF); // where a vector's length lives
         s.set_u32_raw(rec, 8, 0x0BAD_F00D); // where element 0 lives
@@ -629,7 +629,7 @@ mod tests {
         use crate::vector::{vector_append, vector_finish};
 
         let size = 4u32;
-        let mut stores = vec![Store::new(64)];
+        let mut stores = vec![Store::new_in_use(64)];
         let container = stores[0].claim(2);
         stores[0].set_u32_raw(container, 8, 0); // empty-vector pointer cell
         let db = DbRef {
@@ -687,7 +687,7 @@ mod tests {
     #[test]
     fn deferred_free_pointer_flip_round_trips() {
         let size = 4u32;
-        let mut s = Store::new(64);
+        let mut s = Store::new_in_use(64);
         let container = s.claim(2);
 
         let old = s.claim(4); // pre-grow vector: len 2, elements [11, 22]
@@ -730,7 +730,7 @@ mod tests {
     #[test]
     #[allow(clippy::many_single_char_names)] // a/b/c/d are the four geometric records
     fn claim_at_carves_a_mid_block_region() {
-        let mut s = Store::new(64);
+        let mut s = Store::new_in_use(64);
         let a = s.claim(3);
         let b = s.claim(4);
         let c = s.claim(5);
@@ -809,7 +809,7 @@ mod tests {
             }
         };
 
-        let mut s = Store::new(64);
+        let mut s = Store::new_in_use(64);
 
         // ---- baseline: five records with distinctive bytes ----
         let mut base: Vec<(u32, u32)> = Vec::new(); // (pos, actual size)
@@ -960,7 +960,7 @@ mod tests {
             0x3141_5926_5358_9793,
         ] {
             let mut rng = Rng(seed);
-            let mut s = Store::new(48);
+            let mut s = Store::new_in_use(48);
             let mut tag = 0u32;
 
             // baseline (not logged)
@@ -1173,10 +1173,9 @@ mod tests {
     #[test]
     fn stores_recording_drains_to_journal() {
         let mut stores = Stores::default();
-        stores.allocations.push(Store::new(64));
+        stores.allocations.push(Store::new_in_use(64));
         let sn = (stores.allocations.len() - 1) as u16;
         let si = sn as usize;
-        stores.allocations[si].free = false; // mark in-use (real heap stores are; gates recording)
 
         // pre-existing records (claimed before recording -> not journaled).
         let keeper = stores.allocations[si].claim(2);
