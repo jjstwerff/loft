@@ -254,7 +254,7 @@ native (the dangling `__ret_N` Str — pre_eval's B5-L3 gate missed `optional(te
 fixed with the `.base()` peel, guarded by `85-text-optional-null-return.loft`).
 The classify/apply split now covers all three return-type families.
 
-## Slice 3 (DESIGNED, not built) — `ref_return` → `classify_ret_promotion` (2026-07-03)
+## Slice 3 (BUILT 2026-07-03) — `ref_return` → `classify_ret_promotion`
 
 The remaining funnel: **`ref_return` is 473 lines, 13 callers** — larger than
 post-collapse `block_result` (320).  Full read done; the anatomy is the selector
@@ -331,6 +331,24 @@ collapse, on the clean structure):**
 
 The byte-identical bar applies per verdict cell; the leak cells are pinned as
 CURRENT behavior until their own fix slices.
+
+**The cut (landed):** `RetPromotion` (9 variants — `SkipDelivered / SkipReassigned /
+MergeAttr{a, chain_site} / MergeOnly / SkipInnerRef / Rename{buf_attr, chain_site} /
+Bind{buf_attr, buf_var, substitute} / Grow`) + `RetPromoCtx` (site, ret, site_value,
+is_plain_fn, newrecord_nr, jo_arm_skip) + the pure `classify_ret_promotion(v,
+transitive, body, dep, &ctx)` — `dep` is the ACCUMULATED return-dep list, so
+classification is per-var in-loop (a later candidate's `Rename` is suppressed once an
+earlier site chained into the placeholder), exactly the text_return pattern.
+`reassign_count` hoisted out of `ref_return` to an assoc fn.  The `LOFT_TRACE_RR`
+sentinel now prints the verdict Debug at ONE site.
+
+**Proof:** introspect BEFORE == AFTER (0 diff) on ALL FOUR corpora (promotion,
+reference, text, block_result), re-verified post-`cargo fmt`; corpus runs on both
+backends with the SAME values and the SAME pinned leak signature (L1-L3 unchanged);
+clippy `-D warnings` clean; full suite green (see commit).
+
+**Size:** `ref_return` 473 → 309 lines; verdict logic = 107-line pure selector +
+47-line hoisted Plan-57 walk; the apply loop carries mechanics only.
 
 
 
