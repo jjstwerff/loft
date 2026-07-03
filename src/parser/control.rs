@@ -4860,6 +4860,32 @@ impl Parser {
             Value::Call(d, args) if *d == self.data.def_nr("OpGetField") => {
                 match args.first().map(Value::unspan) {
                     Some(Value::Var(b)) => Some(*b),
+                    // @PLN85 (the chained field-of-local face) — a CHAINED
+                    // projection (`return t.inner.value`) roots at the inner
+                    // chain's base var (the #488/#489 recursion pattern).
+                    // Single-hop-only here let the NRVO rename take `t` as
+                    // the promotion candidate: the buffer was renamed onto
+                    // the container local, the tail was DISCARDED, and
+                    // native returned the typed null (interp survived via
+                    // the eval-stack channel — a silent backend divergence
+                    // LOFT_POISON made loud).
+                    Some(inner @ Value::Call(bd, _)) if *bd == self.data.def_nr("OpGetField") => {
+                        self.return_field_base_var(inner)
+                    }
+                    // An inline-ref capture block in base position
+                    // (`mk().inner` captured to an owned `w` copy) roots at
+                    // the block's tail var.
+                    Some(inner @ (Value::Block(_) | Value::Insert(_))) => {
+                        self.return_field_base_var(inner).or_else(|| {
+                            if let Value::Block(bl) = inner
+                                && let Some(Value::Var(w)) = bl.operators.last().map(Value::unspan)
+                            {
+                                Some(*w)
+                            } else {
+                                None
+                            }
+                        })
+                    }
                     _ => None,
                 }
             }

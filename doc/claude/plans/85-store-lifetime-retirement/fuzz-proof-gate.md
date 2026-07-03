@@ -287,35 +287,33 @@ it — fixes par_struct_to_struct_enum_t4.
 - (`html_asyncify` / `html_wasm` under a loaded box are chrome-harness timeout
   flakes, not cells — serial-green every time.)
 
-**The LAST poison cell (one script, BOTH backends): the chained
-field-of-call return** — `85-store-lifetime-return-field-of-local`'s
-`inline_chained_field() -> Holder { return mk_nested().inner.value; }`.
-The emission (introspect, minimal repro `/tmp`-style in the round notes):
-```
-{#inline ref: __lift_1 = mk_nested(__ref_1);
-              __ref_2  = OpGetField(__lift_1, 0);   // .inner — a VIEW
-              OpFreeRef(__lift_1);                   // the source freed HERE
-              __ref_2 }
-__ref_2 = OpGetField(<the dangling view>, 8);        // .value — reads freed
-return __ref_2;
-```
-Root: `scan_args`' lift temp registers at the INLINE block's scope, so its
-free lands between the two projections; the buffer var is then repurposed as
-a raw view-holder (`chain_site_set_shape`'s Call arm wraps ANY tail Call —
-including a PROJECTION — as `Set(w, call)`, an alias, where a projection
-needs the materialise-copy).  Plain-green by stale luck on both backends.
-Candidate chokepoints for the fix session (each shifts ownership accounting —
-needs the full matrix: chain depth × arg-vs-return position × loop × backend):
-(a) lift-at-parent-scope + the return-site conditional free (transfers the
-    store; the caller side then needs the adopt/deps story for the leak);
-(b) classify: a projection-of-call tail takes the Bind-COPY leg
-    (`materialize_return_into`) — but the copy must run BEFORE the inline
-    block's free, so the block-value record-materialise (the record twin of
-    the round-2 text hoist) is needed with it;
-(c) the record block-value hoist generalised (OpCopyRecord into an owned
-    temp before block-exit frees) — the most general, largest surface.
-Once this cell falls, `LOFT_POISON=1 cargo test` is fully green — the
-deferred @PLN54-S3 done-criterion.
+**The LAST poison cell — CLOSED (2026-07-03 night): the chained
+field-of-call class.**  The boundary matrix REDREW the filed scope: chain
+depth ≥ 2 rooted at a call result read freed memory at ANY consumption site
+(bind / argument / return / implicit tail / loop) on BOTH backends — plus a
+second face where `return t.inner.value` (chained field of a named LOCAL)
+NRVO-renamed the buffer onto the container and DISCARDED the tail (interp
+survived via the eval-stack channel; native returned the typed null — a
+silent backend divergence).  Two producer fixes, with depth-1's
+`materialized_view_return` emission (copy-then-free) as the captured spec:
+(1) `operators.rs` — the inline-ref capture COPIES a projection of a call
+    (`OpDatabase` + `OpCopyRecord`, the C86 escape rule) instead of aliasing
+    it into an owning work-ref that argument-lifting later frees mid-chain;
+    a direct call result still binds raw (it genuinely adopts the store);
+(2) `control.rs::return_field_base_var` — the #425 base walk recurses through
+    chained projections and capture blocks (the #489 pattern), so the
+    chained-field-of-local return takes the Bind-COPY leg instead of the
+    container rename.
+Guard: `tests/scripts/85-chained-field-of-call.loft` (t1-t6 + the loop faces,
+poison-proven both backends).
+
+**`LOFT_POISON=1 cargo test` IS FULLY GREEN (2026-07-03 21:15 run: 2600/2602,
+the two fails are the chrome-harness timeout flakes, both serial-green) — the
+deferred @PLN54-S3 done-criterion is MET.**  The poison campaign closed 23
+latent memory bugs across four rounds; the memory model is sealed on every
+axis the instruments currently see (residual instrument gaps: poison skips
+file-backed stores by design; freed STACK slots are S3's unpoisoned second
+half).
 4. **Minimize + wire as a standing job** — ✅ done (2026-07-03): the historical shapes are pinned as 25 graduated `tests/scripts/85-store-lifetime-*.loft` guards; the harness runs in `cargo test` via `tests/ownership_fuzz_gate.rs` (fast loop + control pairs un-ignored, full both-backends replay `--ignored` as the release sweep).  **Self-test re-pinned (2026-07-03):** the join_own default-ON flip cleaned the P14 probe file on BOTH configs, so the positive control re-anchored on generated cells that still reproduce gate-OFF — a crash/divergence-channel control (`elem_accumulate__struct__heavy`) + a leak-channel control (`local_source__struct__none`), each as a buggy(flagged)/fixed(clean) PAIR, so a flip regression fails the self-test too.
 - **Method gate:** every M+ step runs the `design-protocol` skill; this doc IS the hypothesis.
 - **Blocked-by reminder:** widen the value axis only as @PLN25 settles it (above).

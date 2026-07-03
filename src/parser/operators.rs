@@ -909,11 +909,46 @@ impl Parser {
                     // therefore freed before them (LIFO).
                     self.vars.mark_inline_ref(w);
                     let orig = code.clone();
-                    *code = v_block(
-                        vec![v_set(w, orig), Value::Var(w)],
-                        Type::Reference(d_nr, crate::data::Deps::frame1(w)),
-                        "inline ref",
-                    );
+                    // @PLN85 (the chained field-of-call class) — a PROJECTION
+                    // of the value must COPY into `w`, not alias: argument
+                    // lifting later splits the inner call into a `__lift_N`
+                    // whose scope-exit free runs INSIDE this block, so an
+                    // aliasing `Set(w, GetField(call, ..))` left `w` (and
+                    // every further projection) dangling into the freed
+                    // store — chain depth ≥ 2 read stale data at ANY
+                    // consumption site (bind / argument / return / loop) on
+                    // BOTH backends; the depth-1 `materialized_view_return`
+                    // path was already copy-then-free and is the spec this
+                    // mirrors (the C86 escape rule: a view outliving its
+                    // dying temporary materialises).  A direct CALL result
+                    // (not a projection) still binds raw — `w` genuinely
+                    // adopts that fresh store.
+                    let is_projection = matches!(orig.unspan(), Value::Call(pd, _)
+                        if matches!(self.data.def(*pd).name(),
+                            "OpGetField" | "OpGetVector" | "OpVectorRef" | "OpGetDbRef"));
+                    let kt = self.data.def(d_nr).known_type();
+                    if is_projection && kt != u16::MAX {
+                        let copy_d = self.data.def_nr("OpCopyRecord");
+                        *code = v_block(
+                            vec![
+                                v_set(w, Value::Null),
+                                self.cl("OpDatabase", &[Value::Var(w), Value::Int(i32::from(kt))]),
+                                Value::Call(
+                                    copy_d,
+                                    vec![orig, Value::Var(w), Value::Int(i32::from(kt))],
+                                ),
+                                Value::Var(w),
+                            ],
+                            Type::Reference(d_nr, crate::data::Deps::frame1(w)),
+                            "inline ref copy",
+                        );
+                    } else {
+                        *code = v_block(
+                            vec![v_set(w, orig), Value::Var(w)],
+                            Type::Reference(d_nr, crate::data::Deps::frame1(w)),
+                            "inline ref",
+                        );
+                    }
                     t = Type::Reference(d_nr, crate::data::Deps::frame1(w));
                 }
             } else if self.lexer.has_token("[") {
