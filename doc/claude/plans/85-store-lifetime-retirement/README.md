@@ -12,8 +12,14 @@ Plan id: [@PLN85](https://github.com/loft-lang/plans/issues/85) · investigation
 > The "CLOSED" below is the *investigation* + per-cluster fixes — each known shape fixed and
 > guarded. The remaining gate before loft goes to many people is proving the **class closed
 > *by construction*** (a standing fuzz/sanitizer instrument over the ownership invariant, not
-> anecdotal silence). That slot is BUILD-BLOCKED BY @PLN25 (the value model defines what
-> ownership is) — see [STABILITY_ROADMAP.md § the wide-release bar](../../STABILITY_ROADMAP.md).
+> anecdotal silence). **The instrument now EXISTS and is live (2026-07):** the standing
+> `tests/ownership_fuzz_gate.rs` job, the in-process libfuzzer target
+> (`cargo +nightly fuzz run program_ownership`, H5 + poison fully live — it caught F1+F2 in
+> its first five minutes; both FIXED), `LOFT_POISON=1 cargo test` green (the @PLN54-S3
+> criterion), and the debug-assertions calibration run
+> ([DEBUG.md](../../DEBUG.md#the-debug-assertions-calibration-run-target-da)).  What remains
+> in the gate doc: the open DA-inventory cells (§ final honest DA map) and the unfuzzed
+> axes list — see [STABILITY_ROADMAP.md § the wide-release bar](../../STABILITY_ROADMAP.md).
 
 > **▶▶ NEXT SESSION START HERE (2026-06-29):**
 > [NEXT-SESSION-join-ownership-analysis.md](NEXT-SESSION-join-ownership-analysis.md). The over-free

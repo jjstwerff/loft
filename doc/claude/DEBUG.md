@@ -19,6 +19,7 @@ LOFT_LOG=full cargo test -- my_test 2>&1
 - [Preset Guide](#preset-guide)
 - [Debugging a Parse Error or Wrong IR](#debugging-a-parse-error-or-wrong-ir)
 - [Debugging a Runtime Crash or Wrong Result](#debugging-a-runtime-crash-or-wrong-result)
+- [The debug-assertions calibration run (`target-da`)](#the-debug-assertions-calibration-run-target-da)
 - [Debugging a validate_slots Panic](#debugging-a-validate_slots-panic)
 - [Debugging a Scope Analysis Bug](#debugging-a-scope-analysis-bug)
 - [Using the Test Framework for Quick Iteration](#using-the-test-framework-for-quick-iteration)
@@ -552,6 +553,54 @@ the backend), use `zero_claim` to classify the non-determinism, then `--native-e
 + `LOFT_STORES=log` to pin the site.  Mirror the @P311/@P313 fix shape (a
 missing/spurious `0x8000` free-source bit or a `null_named`-vs-sentinel
 choice in `src/generation/dispatch.rs::emit_null_dbref`).
+
+---
+
+## The debug-assertions calibration run (`target-da`)
+
+**Every lib-side `debug_assert!` / `#[cfg(debug_assertions)]` check is compiled
+OUT of every ordinary build** — dev, test, AND `--release` —
+by `[profile.dev.package.loft] debug-assertions = false` (dev/test) and the
+release profile default.  That covers the H5 two-pass contract
+(`assert_pass2_def_attr_stable`), `Store::valid`/`Store::validate`, the
+`keys.rs`/`store.rs` boundary guards, codegen sanity asserts
+(`generate_set`/`generate_call`), the `get_stack` corrupt-DbRef guard, and the
+`[set_var]` width warnings.  The only standing build that checks them is the
+cargo-fuzz target.  So for any claim guarded by a debug assert, "the suite is
+green" is a **calibration failure** — the instrument is not installed in that
+build.  The first-ever full calibration (2026-07-03, @PLN85) found four
+long-latent H5 producers plus a latent-assert inventory; the open cells live in
+`plans/85-store-lifetime-retirement/fuzz-proof-gate.md` § final honest DA map.
+
+Run the calibration in a **separate target dir** (one-time ~full rebuild,
+then incremental):
+
+```bash
+# one-time: the CLI resolves the stdlib relative to the exe, and
+# project_dir() hardcodes target/release|debug — non-standard dirs miss it
+ln -sfn ../../default target-da/release/default
+
+RUSTFLAGS="-C debug-assertions=on" CARGO_TARGET_DIR=target-da \
+  cargo test --release --no-fail-fast
+```
+
+**Never set `RUSTFLAGS` against the MAIN target dir.**  Cargo keeps BOTH
+flag-generations of every dep in `target/release/deps/` — including two
+`libloft_ffi-*.rlib` — and anything that sweeps `deps/` (the cdylib
+auto-builds pass `--extern` for every rlib there) then dies on
+`colliding StableCrateId values`, while `loft-ffi`'s fingerprint change
+invalidates every cached cdylib.  Recovery, in order: `cargo clean --release`
+→ full `cargo build --release` → `make rebuild-native-cdylibs` → rebuild the
+registry graphics cdylib (`cd ~/.loft/registry/graphics-*/native && cargo
+build --release`) → clear `~/.loft/build-cache` and any failing package's
+`native-auto/` → rebuild the wasm rlib (the `html_wasm` staleness guard
+checks it against source mtimes).
+
+Reading the results: CLI-spawning tests fail en masse if the stdlib symlink
+is missing (lens artifact, not a finding); confirm any surprising cell
+against an `origin/main` control build in a throwaway worktree before
+calling it a regression — most DA findings are long-latent, first seen the
+day the assert is first *checked*, not the day it was written.
 
 ---
 

@@ -56,6 +56,14 @@ fix runs matrix-first (CLAUDE.md § Debugging policy).
    silence is earned, not anecdotal. Live work:
    [§ Red-flag remediation](#red-flag-remediation--the-live-store-lifetime-stream-2026-06-21-)
    + @PLN85. **This gate's fuzz-proof IS the definition of stabilized.**
+   **Instrument status (2026-07):** the fuzz-proof instrument is BUILT and live —
+   the standing `tests/ownership_fuzz_gate.rs` job, the in-process libfuzzer target
+   (caught + closed 2 real bugs in its first five minutes), `LOFT_POISON=1 cargo test`
+   fully green (24 latent memory bugs fixed across the poison campaign), and the
+   debug-assertions calibration run
+   ([DEBUG.md](DEBUG.md#the-debug-assertions-calibration-run-target-da)).  The residue
+   is enumerated, not anecdotal: the open DA cells + unfuzzed axes in
+   [plans/85 fuzz-proof-gate.md](plans/85-store-lifetime-retirement/fuzz-proof-gate.md).
    **Build-order dependency — gate 1 is blocked by gate 2.** The right ownership invariant
    cannot be *defined* until the value/null model is settled: ownership flows through the
    `deps` facts, and what a vector/value *is* (dense vs nullable, how it copies vs borrows)

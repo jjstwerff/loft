@@ -1477,8 +1477,18 @@ All three are zero-cost in release builds.
 
 > **Note:** `[profile.dev.package.loft] debug-assertions = false` opts the
 > loft package itself out of `debug_assertions` even in dev/test builds (for
-> hot-path performance).  The boundary checks above are therefore **silent
-> on every platform** during ordinary `cargo test` runs.  Latent
+> hot-path performance).  The boundary checks above — and EVERY other
+> lib-side `debug_assert!` / `#[cfg(debug_assertions)]` check (the H5
+> two-pass contract, `Store::valid`/`validate`, codegen sanity asserts, the
+> `[set_var]` width warnings) — are therefore **silent on every platform**
+> during ordinary `cargo test` runs, in both dev AND `--release` profiles.
+> The only builds that check them are the cargo-fuzz target (which forces
+> `-Cdebug-assertions`) and an explicit calibration run — see
+> [DEBUG.md § The debug-assertions calibration run](DEBUG.md#the-debug-assertions-calibration-run-target-da).
+> The first-ever such calibration (2026-07-03, @PLN85) found four
+> long-latent H5 producers and a latent-assert inventory; believing "the
+> suite is green" for a DA-gated invariant is a calibration failure — the
+> instrument is not installed in that build.  Latent
 > out-of-bounds writes inside `Store` are tolerated by Linux's allocator
 > slack (16-byte chunk minimum) but caught by Windows as
 > `STATUS_HEAP_CORRUPTION (0xc0000374)` at deallocation — see the valgrind
