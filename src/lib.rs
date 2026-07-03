@@ -45,6 +45,11 @@ unsafe extern "C" {
     // `Stores::host_input_native`'s browser branch (`src/database/format.rs`).
     pub(crate) safe fn loft_host_input_len() -> usize;
     pub(crate) safe fn loft_host_input_copy(ptr: *mut u8);
+    // Output mirror of `host_input` for STRUCTURED host messages (requests to
+    // the JS shell — e.g. "fetch this URL"), distinct from user-facing
+    // `loft_host_print`.  Used by `Stores::host_output_native`'s browser
+    // branch; the page routes it to `globalThis.loftOutput(msg)`.
+    pub(crate) safe fn loft_host_output(ptr: *const u8, len: usize);
 }
 
 #[macro_use]

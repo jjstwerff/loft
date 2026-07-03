@@ -18,11 +18,15 @@
 // Closures are passed as ARGUMENTS (not struct fields) per the probed crash
 // boundary in loft-lang/loft#313.
 
-// One pumped event.  kind: 0 = connect, 1 = message, 2 = disconnect.
+// One pumped event.  kind: 0 = connect, 1 = message, 2 = disconnect,
+// 3 = http completion (cid = the request id `http_fetch` returned,
+// status = the HTTP status — negative on transport error / timeout —
+// payload = the response body; status is 0 for every other kind).
 pub struct Event {
   cid:     integer,
   kind:    integer,
   payload: text,
+  status:  integer,
 }
 
 fn kernel_listen(port: integer, tick_interval_us: integer) -> boolean;
@@ -43,6 +47,9 @@ fn kernel_event_kind() -> integer;
 fn kernel_event_payload() -> text;
 #native
 
+fn kernel_event_status() -> integer;
+#native
+
 fn kernel_tick_due() -> boolean;
 #native
 
@@ -54,6 +61,17 @@ pub fn send(cid: integer, msg: text) -> boolean;
 // Broadcast a text frame to every live client; returns the delivery count.
 pub fn broadcast(msg: text) -> integer;
 #native "n_kernel_broadcast"
+
+// Begin a NON-BLOCKING outbound HTTP request from inside the engine loop;
+// returns a request id immediately (no network I/O happens on this call).
+// The completion arrives as an ordinary kind-3 Event through the same
+// queue as every other event: cid = this id, status = the HTTP status
+// (negative on transport error; requests time out engine-side at 30 s),
+// payload = the response body.  `headers` is newline-separated
+// `Name: value` lines; an empty `body` sends a bodyless request.
+// The loop never blocks or polls — handle the completion in `on_event`.
+pub fn http_fetch(method: text, url: text, body: text, headers: text) -> integer;
+#native "n_kernel_http_fetch"
 
 // @PLN18 08-S2 — push one function to the interpreter (on=true) or back to
 // compiled (on=false), live.  Real only in a compiled build started under
@@ -266,6 +284,7 @@ pub fn run(port: integer, tick_interval_us: integer,
         cid:     kernel_event_cid(),
         kind:    kernel_event_kind(),
         payload: kernel_event_payload(),
+        status:  kernel_event_status(),
       };
       on_event(ev);
       work = work + 1;
@@ -326,6 +345,9 @@ fn kernel_client_event_cid() -> integer;
 #native
 
 fn kernel_client_event_payload() -> text;
+#native
+
+fn kernel_client_event_status() -> integer;
 #native
 
 fn kernel_client_tick_due() -> boolean;
@@ -444,6 +466,7 @@ fn client_loop(on_event: fn(Event), on_tick: fn()) {
         cid:     kernel_client_event_cid(),
         kind:    kernel_client_event_kind(),
         payload: kernel_client_event_payload(),
+        status:  kernel_client_event_status(),
       };
       on_event(ev);
       work = work + 1;

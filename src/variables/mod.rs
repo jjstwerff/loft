@@ -1311,8 +1311,12 @@ impl Function {
             // type from never to Cell".
             && !matches!(var_tp, Type::Never)
         {
+            // @PLN25 DN1: peel an `Optional` source — `&text ← text?` is the hoisted
+            // work-buffer local (control.rs return-deps hoist) re-assigned from a
+            // nullable call result; `Optional(τ)` shares `τ`'s sentinel storage, so the
+            // buffer carries the null (`STRING_NULL`) without a type change.
             if let Type::RefVar(in_tp) = var_tp
-                && in_tp.is_equal(type_def)
+                && in_tp.is_equal(type_def.base())
             {
                 return self.is_new(var_nr);
             }

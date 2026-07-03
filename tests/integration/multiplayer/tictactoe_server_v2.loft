@@ -44,9 +44,9 @@ fn pack(id: integer, payload: text) -> text {
 // ── Game state ──────────────────────────────────────────────
 
 struct Game {
-  cells: vector<text>,
+  cells: vector<text?>,
   turn: integer,
-  winner: text
+  winner: text?
 }
 
 fn new_game() -> Game {
@@ -57,7 +57,7 @@ fn new_game() -> Game {
   // and ran into P220 — `""` round-tripping as `null` through
   // the struct's deep-copy.  P220 closed 2026-05-05 in
   // `Stores::copy_claims`; either sentinel now works.)
-  cs: vector<text> = [];
+  cs: vector<text?> = [];
   for _ in 0..9 { cs += [null]; }
   Game { cells: cs, turn: 0, winner: null }
 }
@@ -71,7 +71,7 @@ fn cell_empty(g: Game, idx: integer) -> boolean {
 fn line_winner(g: Game, i: integer, j: integer, k: integer) -> text {
   a = g.cells[i];
   if a != null && a == g.cells[j] && a == g.cells[k] {
-    return a;
+    return a ?? "";
   }
   ""
 }

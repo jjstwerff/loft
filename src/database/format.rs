@@ -442,6 +442,34 @@ impl Stores {
         String::new()
     }
 
+    /// `host_output(msg)` — the outbound mirror of `host_input`: a STRUCTURED
+    /// message to the host shell (e.g. a fetch request the JS page performs),
+    /// distinct from user-facing print.  Per target: a line on stderr for
+    /// native and WASI (machine channel, scriptable by the invoking process);
+    /// the `loft_io.loft_host_output` import on `--html` (the page routes it
+    /// to `globalThis.loftOutput`); a no-op on the IDE wasm build.
+    #[cfg(all(
+        not(feature = "wasm"),
+        any(not(target_arch = "wasm32"), target_os = "wasi")
+    ))]
+    pub fn host_output_native(&mut self, msg: &str) {
+        use std::io::Write as _;
+        let mut err = std::io::stderr().lock();
+        let _ = writeln!(err, "{msg}");
+    }
+
+    /// `--html` build: hand the message to the JS host.
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
+    pub fn host_output_native(&mut self, msg: &str) {
+        crate::loft_host_output(msg.as_ptr(), msg.len());
+    }
+
+    /// WASM (IDE `make wasm`) build: no host shell — a no-op.
+    #[cfg(feature = "wasm")]
+    pub fn host_output_native(&mut self, msg: &str) {
+        let _ = msg;
+    }
+
     /**
     Get the current directory
     # Panics

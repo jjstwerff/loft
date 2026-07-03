@@ -58,6 +58,16 @@ binary.  The exported `loft_start` is what the JS bridge calls.
 
 ## JS bridge — host imports
 
+> **This list is COMPLETE.**  An `--html` bundle imports print, `host_input`
+> (JS→loft input QUEUE, #476 — seed `globalThis.loftInput`, push live
+> messages with `globalThis.loftPush(msg)`, one pop per call),
+> `host_output` (loft→JS structured messages → `globalThis.loftOutput(msg)`),
+> the GL set, the frame yield — plus whatever `[wasm.bridge]` routes a used
+> library ships (e.g. `web`'s WebSocket).  **There is no filesystem, no
+> `arguments()`, no env**: those stdlib calls compile to in-wasm stubs
+> returning empty.  (The `globalThis.loftHost` bridges in [WASM.md](WASM.md)
+> belong to the wasm-bindgen IDE build, not to `--html`.)
+
 The HTML loader passes a JS `imports` object into the WASM
 instance.  The shape:
 

@@ -111,6 +111,7 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     // host_input dest-passing — reads all program input as one text (stdin on
     // native/WASI; the JS host on --html).  Non-null ("" when empty).
     ("n_host_input_dest", n_host_input_dest),
+    ("n_host_output", n_host_output),
     ("t_4text_byte_at", t_4text_byte_at),
     ("t_4text_starts_with", t_4text_starts_with),
     ("t_4text_ends_with", t_4text_ends_with),
@@ -276,6 +277,21 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_kernel_tick_due", crate::engine_host::n_kernel_tick_due),
     #[cfg(not(target_arch = "wasm32"))]
     ("n_kernel_send", crate::engine_host::n_kernel_send),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_http_fetch",
+        crate::engine_host::n_kernel_http_fetch,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_event_status",
+        crate::engine_host::n_kernel_event_status,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    (
+        "n_kernel_client_event_status",
+        crate::engine_host::n_kernel_client_event_status,
+    ),
     #[cfg(not(target_arch = "wasm32"))]
     ("n_kernel_broadcast", crate::engine_host::n_kernel_broadcast),
     #[cfg(not(target_arch = "wasm32"))]
@@ -925,6 +941,11 @@ fn n_env_variable_dest(stores: &mut Stores, stack: &mut DbRef) {
 // interpreter never runs under --html, so this dest variant always reads
 // stdin).  Non-null ("" when empty), so it writes straight into the caller's
 // buffer.  Routed by `is_text_dest_native`.  Sibling of n_env_variable_dest.
+fn n_host_output(stores: &mut Stores, stack: &mut DbRef) {
+    let msg = stores.get::<Str>(stack).str().to_owned();
+    stores.host_output_native(&msg);
+}
+
 fn n_host_input_dest(stores: &mut Stores, stack: &mut DbRef) {
     let dest = *stores.get::<DbRef>(stack);
     let value = stores.host_input_native();

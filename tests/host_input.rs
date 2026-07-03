@@ -68,6 +68,56 @@ fn host_input_empty() {
     assert_eq!(run("--native", ""), "echo=[] len=0\n");
 }
 
+/// `host_output(msg)` — the outbound mirror.  On native/WASI it writes one
+/// line per message to STDERR (the machine channel, scriptable by the
+/// invoking process), never to stdout — and byte-identically on both
+/// backends.  (The `--html` leg — globalThis.loftOutput — rides the same
+/// Node/browser harness as the input leg.)
+#[test]
+fn host_output_goes_to_stderr_on_both_backends() {
+    let fixture = r#"fn main() {
+  host_output("req 1 GET http://x/");
+  host_output("req 2 GET http://y/");
+  println("done");
+}
+"#;
+    for backend in ["--interpret", "--native"] {
+        let id = SEQ.fetch_add(1, Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("loft_host_output_{}_{id}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join("ho.loft");
+        std::fs::write(&path, fixture).expect("write fixture");
+        let out = Command::new(env!("CARGO_BIN_EXE_loft"))
+            .args([backend, path.to_str().unwrap()])
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .expect("run loft");
+        let _ = std::fs::remove_dir_all(&dir);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(
+            stdout,
+            "done
+",
+            "{backend} stdout: {stdout:?}"
+        );
+        assert!(
+            stderr.contains(
+                "req 1 GET http://x/
+"
+            ) && stderr.contains(
+                "req 2 GET http://y/
+"
+            ),
+            "{backend} stderr: {stderr:?}"
+        );
+    }
+}
+
 /// Bytes pass through verbatim, including a UTF-8 multi-byte char (len is bytes).
 #[test]
 fn host_input_utf8_passthrough() {

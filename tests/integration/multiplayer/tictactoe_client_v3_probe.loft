@@ -31,7 +31,7 @@ use web;
 // explicit `return` so the parser accepts the loop-then-fallthrough
 // shape (a bare trailing `null` literal infers as `null`, not
 // `text`, which `-> text` then rejects).
-fn next_msg(h: web::WsHandler) -> text {
+fn next_msg(h: web::WsHandler) -> text? {
   attempts = 0;
   while attempts < 400 {
     raw = h.try_recv();
@@ -46,7 +46,7 @@ fn next_msg(h: web::WsHandler) -> text {
 // returning the trailing payload (the bit after the prefix).  On
 // any failure prints a diagnostic and returns null.
 fn click_and_expect(h: web::WsHandler, r: integer, c: integer,
-                     want_prefix: text) -> text {
+                     want_prefix: text) -> text? {
   ok = h.send("click:{r},{c}");
   if !ok {
     web::sleep_ms(100);

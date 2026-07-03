@@ -6,11 +6,25 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # Browser interaction model — the engine as an agnostic service provider
 
 How a loft `--html` program and its libraries interact with the browser and
-with JavaScript. This is a **design doc**, not yet a shipped reference: the
-asyncify yield and the host-import bridge it builds on are shipped (see
-[HTML_EXPORT.md](HTML_EXPORT.md)); the agnostic byte-channel service and the
-input-service surface below are the proposed additions. Where a claim is
-already proven, this doc says so and points at the running code.
+with JavaScript.
+
+> **STATUS.**  *Shipped today:* the asyncify yield, the host-import bridge
+> (see [HTML_EXPORT.md](HTML_EXPORT.md)), the `web` WebSocket
+> `[wasm.bridge]`, `loft_host_print` (output), **`host_input()`** — since
+> #476, and QUEUE-shaped since 2026-07-03: JS seeds it with
+> `globalThis.loftInput` and pushes live messages any time via
+> `globalThis.loftPush(msg)`; each call pops one message — and
+> **`host_output(msg)`**, the outbound mirror: a structured message to
+> `globalThis.loftOutput(msg)` (stderr on native/WASI).  Together they ARE
+> the push/poll byte channel this doc designs: loft `host_output`s a request,
+> the JS shell acts on it (`fetch()` etc.) and `loftPush`es the completion
+> for `host_input()` to pop — JS owns the network, loft stays pure compute.
+> Round-trip proven headlessly:
+> `tests/html_wasm.rs::host_output_input_roundtrip_queue`.
+> *Not shipped:* NAMED multi-channel routing (one queue today — frame your
+> own message ids, as the engine's kind-3 events do) and any browser HTTP in
+> wasm (by design — the network stays in JS).  Where a claim is proven, this
+> doc says so and points at the running code.
 
 **Motivating consumer.** The zero-trust browser client (a `--html` page that
 runs the same platform-blind loft core as the native binary, behind a clickable
