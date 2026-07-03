@@ -162,13 +162,13 @@ fn handle_request(req: server::Request) {
 // ── Game state (v1-style single-game per WS session) ───────────────
 
 struct Game {
-  cells:  vector<text>,    // 9 entries; null = empty, "X" / "O" placed
+  cells:  vector<text?>,   // 9 entries; null = empty, "X" / "O" placed
   turn:   integer,         // moves played so far
-  winner: text             // null until set; then "X" / "O" / "draw"
+  winner: text?            // null until set; then "X" / "O" / "draw"
 }
 
 fn new_game() -> Game {
-  cs: vector<text> = [];
+  cs: vector<text?> = [];
   for _ in 0..9 { cs += [null]; }
   Game { cells: cs, turn: 0, winner: null }
 }
@@ -182,7 +182,7 @@ fn cell_empty(g: Game, idx: integer) -> boolean {
 fn line_winner(g: Game, i: integer, j: integer, k: integer) -> text {
   a = g.cells[i];
   if a != null && a == g.cells[j] && a == g.cells[k] {
-    return a;
+    return a ?? "";
   }
   ""
 }

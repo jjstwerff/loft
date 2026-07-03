@@ -4377,7 +4377,15 @@ impl Parser {
                 if self.captured_names.iter().any(|(name, _)| name == n) {
                     continue;
                 }
-                if matches!(tp, Type::Text(_)) {
+                // @PLN25 DN1: an `Optional(Text)` local shares `Text`'s sentinel storage
+                // (a null `text?` IS `STRING_NULL` in the same slot), so it hoists to the
+                // SAME hidden `RefVar(Text)` work buffer.  Without the `.base()` peel it
+                // fell through to the generic else-arm below, which promotes the local to
+                // a VISIBLE VALUE parameter — call sites then push a `null` placeholder
+                // into a frame laid out for a work buffer, corrupting the callee's stack
+                // (the exact hazard the @P330 tuple comment describes; surfaced as
+                // `realloc(): invalid next size` in the multiplayer/ws consumers).
+                if matches!(tp.base(), Type::Text(_)) {
                     // create a new attribute with this name
                     let a = self.data.add_attribute(
                         &mut self.lexer,

@@ -63,7 +63,7 @@ fn pack(id: integer, payload: text) -> text {
 fn parse_id(raw: text) -> integer {
   i = raw.find(":");
   if i == null { return -1; }
-  raw[..i] as integer
+  raw[..i] as integer ?? -1
 }
 
 fn parse_payload(raw: text) -> text {
