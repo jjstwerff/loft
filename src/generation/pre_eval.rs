@@ -220,7 +220,12 @@ impl Output<'_> {
                 matches!(op.unspan(), Value::Return(v) if matches!(v.as_ref().unspan(), Value::Var(target) if
                     variables.name(*target).starts_with("__ret_")
                     && variables.is_skip_free(*target)
-                    && matches!(variables.tp(*target), Type::Text(_))))
+                    // @PLN25/@PLN85: peel `Optional` — a `-> text?` fn's null-path
+                    // ret-temp is `optional(text)` and rides the SAME B5-L3 collapse;
+                    // unmatched, the local `String` temp survives to `return
+                    // Str::new(&local)` and the caller memcpy's a dangling/null ptr
+                    // (ptr::copy_nonoverlapping UB — the D-own-1 text-corpus t4 cell).
+                    && matches!(variables.tp(*target).base(), Type::Text(_))))
             })
             .map(|p| p + ret_search_from)
         {
