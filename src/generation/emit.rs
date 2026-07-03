@@ -143,6 +143,28 @@ impl Output<'_> {
                     self.output_code_node(w, node.yield_inner())?;
                     if self.yield_collect_text {
                         write!(w, ").to_string())")?;
+                    } else if self.yield_collect_dbref {
+                        // The factory collects EAGERLY: the whole loop runs up
+                        // front and the consumer reads the pushed DbRefs
+                        // afterwards.  For struct/vector yields that is
+                        // unsound in general — a per-iteration construction
+                        // (or any rebound local) reuses its record, so every
+                        // pushed DbRef aliases the FINAL state, silently
+                        // (probe: three yields of {7,17,27} summed to 81 on
+                        // native vs the interpreter's lazy 51).  Even view
+                        // yields are only sound when each iteration's view
+                        // targets a distinct persistent record — not
+                        // emit-decidable.  Until the native for-body factory
+                        // preserves per-yield snapshots (copy or true lazy
+                        // suspension), reject the shape loudly; the
+                        // interpreter carries the full semantics and
+                        // straight-line (non-loop) struct yields keep
+                        // working (each pushes a distinct site once).
+                        write!(w, "))")?;
+                        write!(
+                            w,
+                            "; compile_error!(\"loft --native: yielding a struct/vector value from a generator's LOOP body is not supported natively yet — the eager collector cannot preserve per-yield snapshots (values would silently alias). Run interpreted, yield from straight-line code, or materialise with a worklist (e.g. the stdlib tree_walk) instead of a generator.\")"
+                        )?;
                     } else {
                         write!(w, ") as i64)")?;
                     }

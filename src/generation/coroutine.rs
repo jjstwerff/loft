@@ -994,6 +994,7 @@ impl Output<'_> {
         // Run each for-loop body with yield_collect enabled.
         self.yield_collect = true;
         self.yield_collect_text = is_text;
+        self.yield_collect_dbref = is_dbref;
         for seg in segments {
             match seg {
                 YieldSegment::ForLoopBody { pre, body } => {
@@ -1061,6 +1062,7 @@ impl Output<'_> {
         }
         self.yield_collect = false;
         self.yield_collect_text = false;
+        self.yield_collect_dbref = false;
         writeln!(w, "    Box::new({struct_name} {{")?;
         writeln!(w, "        state: 0,")?;
         for attr in attrs {

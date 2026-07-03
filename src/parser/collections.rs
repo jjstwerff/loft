@@ -1910,6 +1910,31 @@ use #count instead"
             } else {
                 u16::MAX
             };
+            // #481 (the #306-message half): a heap-ref coroutine yield is a
+            // DbRef INTO the generator's state store — both for yielded views
+            // of generator locals AND for records constructed in the
+            // generator (they allocate in the state store, which is freed
+            // with the generator).  Bind the loop var as a BORROW of the
+            // generator (dep on gen_var): the consumer's scope machinery
+            // must never emit a per-iteration OpFreeRef for it, which
+            // whole-store-freed the generator's state store (the store
+            // recycled under allocation pressure → corrupted worklists) and
+            // tripped the #306 stack-store guard on the exhausted null.
+            if gen_var != u16::MAX
+                && matches!(in_type, Type::Iterator(_, _))
+                && matches!(
+                    var_tp,
+                    Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
+                )
+            {
+                let dep_tp = match var_tp.clone() {
+                    Type::Reference(d, _) => Type::Reference(d, crate::data::Deps::frame1(gen_var)),
+                    Type::Enum(d, m, _) => Type::Enum(d, m, crate::data::Deps::frame1(gen_var)),
+                    Type::Vector(e, _) => Type::Vector(e, crate::data::Deps::frame1(gen_var)),
+                    other => other,
+                };
+                self.change_var_type(for_var, &dep_tp);
+            }
             // For length-based vector termination below: pull the collection the
             // element fetch actually reads from (the materialised iteration temp),
             // not the original collection expression.  Re-reading the original each
