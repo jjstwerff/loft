@@ -6057,7 +6057,21 @@ impl Parser {
                         if ref1_var != u16::MAX && self.vars.is_argument(ref1_var) {
                             (self.return_buffer().map_or(u16::MAX, |(a, _)| a), ref1_var)
                         } else if let Some((a, bv)) = self.return_buffer()
-                            && dep.iter().any(|&d| d != bv && self.vars.is_argument(d))
+                            && dep.iter().any(|&d| {
+                                d != bv
+                                    && (self.vars.is_argument(d)
+                                        // #488: a field VIEW into a non-argument LOCAL
+                                        // (`return r.pts` — dep is the STRUCT local, freed at
+                                        // scope exit) needs the same element-copy into the
+                                        // caller's buffer as the field-of-param case; without
+                                        // it the value is emitted as a discarded statement and
+                                        // the fn returns null (empty on native — the interpreter
+                                        // masked it by reading top-of-stack, with a UAF + leak).
+                                        // A fresh local VECTOR (`return o` — the dep IS the
+                                        // vector) keeps the no-copy path: copying would orphan
+                                        // the local on a mid-body return (see above).
+                                        || !matches!(self.vars.tp(d).base(), Type::Vector(_, _)))
+                            })
                         {
                             (a, bv)
                         } else {
