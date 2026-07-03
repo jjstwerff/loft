@@ -1578,7 +1578,7 @@ impl Scopes {
         tp: &Type,
         to_scope: u16,
     ) -> Vec<Value> {
-        let ret_var = returned_var(expr);
+        let ret_var = returned_var_null_unified(expr, data.def_nr("OpNullRefSentinel"));
         // @PLN85 cluster II / A.1 part i (OWNERSHIP_MODEL row 100, invariant #5
         // "per binding, per path, complete") — the return-source SET, not the
         // single `returned_var`, drives free-suppression.  `returned_var`
@@ -1597,6 +1597,7 @@ impl Scopes {
         // over-suppresses and LEAKS the dead-path allocation (repro_p365's
         // `via_local`/`nested`, 25-nullable's `maybe_row`).  So the set is passed
         // down, not stamped onto the variable.
+        let mut null_arm_record_sources: Vec<u16> = Vec::new();
         let return_sources: HashSet<u16> = if is_return {
             let mut sources = Vec::new();
             collect_return_sources(expr, &mut sources);
@@ -1608,32 +1609,108 @@ impl Scopes {
             // NRVO-delivered, not orphaned).  See `return_has_null_arm`.
             let null_sentinel_nr = data.def_nr("OpNullRefSentinel");
             if return_has_null_arm(expr, null_sentinel_nr) {
-                sources.retain(|&v| {
-                    !matches!(
+                // @PLN85 P4-records: a record source with a reachable NULL arm
+                // is a runtime JOIN — transferred to the caller on the present
+                // path, an orphan (its preamble null-init ALLOCATES on interp)
+                // on the null path.  The old design freed it unconditionally
+                // (no orphan, but the present path returned a FREED store off
+                // the eval stack — the poison-visible UAF).  Keep it
+                // SUPPRESSED here and record it; the return leg below hoists
+                // the value to `__ret_N` and emits
+                // `OpFreeRefIfDistinct(src, __ret_N)` — the runtime decides.
+                for &v in &sources {
+                    if matches!(
                         function.tp(v),
                         Type::Reference(_, _) | Type::Enum(_, true, _)
-                    )
-                });
+                    ) {
+                        null_arm_record_sources.push(v);
+                    }
+                }
             }
             sources.into_iter().collect()
         } else {
             HashSet::new()
         };
         let mut ls = self.get_free_vars(function, data, to_scope, tp, ret_var, &return_sources);
+        // @PLN85 P4-records — at a RETURN site, a record work-ref's store may
+        // BE the returned store: a named local adopts the arm's fresh Object
+        // (`v: E = Pass{..}; if c { v = Fail{..} }; v` — two candidate stores,
+        // one winner at runtime), and an unconditional OpFreeRef frees the
+        // winner too — the caller then reads a freed store (silently stale
+        // without LOFT_POISON; the par t4 catch).  Make every record work-ref
+        // free at a return CONDITIONAL on not being the returned store — for
+        // an unrelated work-ref the stores are distinct and the free runs
+        // exactly as before.
+        if is_return
+            && ret_var != u16::MAX
+            && (ret_var as usize) < function.count() as usize
+            && matches!(
+                function.tp(ret_var),
+                Type::Reference(_, _) | Type::Enum(_, true, _)
+            )
+        {
+            let free_nr = data.def_nr("OpFreeRef");
+            let free_if = data.def_nr("OpFreeRefIfDistinct");
+            for op in &mut ls {
+                if let Value::Call(d, args) = op
+                    && *d == free_nr
+                    && let Some(a0) = args.first()
+                    && let Value::Var(w) = a0.unspan()
+                    && function.name(*w).starts_with("__ref_")
+                    && matches!(
+                        function.tp(*w),
+                        Type::Reference(_, _) | Type::Enum(_, true, _)
+                    )
+                {
+                    *op = Value::Call(free_if, vec![Value::Var(*w), Value::Var(ret_var)]);
+                }
+            }
+        }
         // The B5-L3 wrap (Set(__ret_N, expr); free ops; Return(Var(__ret_N)))
         // must not fire when `expr` is already a `Return` or contains one
         // at its tail — otherwise we'd emit `let _ret = return …` (E0308 in
         // native).  Recurse through `Insert` (which scopes wraps Return in
         // for free-vars cleanup) and `Block`.
         let expr_is_terminal = expr_ends_in_return(expr);
+        // @PLN85 P4-records — a null-arm record return: hoist the value to a
+        // `__ret_N` temp, then free each suppressed JOIN source CONDITIONALLY
+        // (`OpFreeRefIfDistinct(src, __ret_N)`): the present arm returns the
+        // source's store (not distinct → kept, transferred to the caller); the
+        // null arm returns the sentinel (distinct → the preamble-allocated
+        // placeholder is freed — no orphan).  Runs FIRST: the fast path would
+        // otherwise emit `Return(expr)` with the sources leaking on the null
+        // path (frees suppressed above), and the legacy path would re-open the
+        // eval-stack UAF.
+        if is_return && !expr_is_terminal && !null_arm_record_sources.is_empty() {
+            self.ret_temp_counter += 1;
+            let name = format!("__ret_{}", self.ret_temp_counter);
+            let tmp = function.add_temp_var(&name, tp);
+            self.var_scope.insert(tmp, self.scope);
+            self.var_order.push(tmp);
+            let free_if = data.def_nr("OpFreeRefIfDistinct");
+            let mut result = Vec::with_capacity(ls.len() + null_arm_record_sources.len() + 2);
+            result.push(v_set(tmp, expr.clone()));
+            for &src in &null_arm_record_sources {
+                result.push(Value::Call(free_if, vec![Value::Var(src), Value::Var(tmp)]));
+            }
+            result.append(&mut ls);
+            result.push(Value::Return(Box::new(Value::Var(tmp))));
+            return result;
+        }
         // @PLN85 poison-green — a bare-Var tail is free-safe (its slot holds
         // the value) EXCEPT a `&τ` place ref (`RefVar`): returning it DEREFS
         // the place DbRef at the Return, after `ls`'s frees released the
         // source store (the @PLN87 L3/L4 live-read shapes under LOFT_POISON).
         // Exclude it from the fast path so it takes the B5-L3 hoist below —
         // `Set(__ret_N, Var(r))` performs the deref BEFORE the frees.
+        // (Text-inner RefVars are EXCLUDED from the exclusion: a `&text` tail
+        // is the promoted out-BUFFER returned per the text-return contract —
+        // the buffer lives in the caller, so returning it raw is free-safe,
+        // and hoisting it emitted a native `Str::new(&local_String)` dangle.)
         let var_is_place_ref = !ls.is_empty()
-            && matches!(expr, Value::Var(v) if matches!(function.tp(*v), Type::RefVar(_)));
+            && matches!(expr, Value::Var(v)
+                if matches!(function.tp(*v), Type::RefVar(inner)
+                    if !matches!(inner.base(), Type::Text(_))));
         if ls.is_empty() || (matches!(expr, Value::Null | Value::Var(_)) && !var_is_place_ref) {
             if is_return && !expr_is_terminal {
                 ls.push(Value::Return(Box::new(expr.clone())));
@@ -2624,7 +2701,12 @@ impl Scopes {
                     // deref NOW, before the frees.
                     let tail_needs_eval = match o.unspan() {
                         Value::Null => false,
-                        Value::Var(v) => matches!(function.tp(*v), Type::RefVar(_)),
+                        // A `&τ` place ref derefs at the Return (hoist) —
+                        // EXCEPT a `&text`: the promoted out-buffer returned
+                        // per the text-return contract (alive in the caller;
+                        // hoisting it broke native's buffer materialization).
+                        Value::Var(v) => matches!(function.tp(*v), Type::RefVar(inner)
+                            if !matches!(inner.base(), Type::Text(_))),
                         _ => true,
                     };
                     // Text results take the same hoist with the text-leg
@@ -2728,33 +2810,58 @@ fn is_value_return_type(tp: &Type) -> bool {
     )
 }
 
-fn returned_var(expr: &Value) -> u16 {
+/// A branch whose TAIL is literally null — `Value::Null` or the
+/// `OpNullRefSentinel()` fall-through `parse_match` injects.  Deliberately does
+/// NOT recurse into `If`: a branch that merely CONTAINS a null sub-arm is not a
+/// null terminal (unifying through it would lose the other sub-arm's value).
+fn is_null_terminal(expr: &Value, null_nr: u32) -> bool {
+    match expr.unspan() {
+        Value::Null => true,
+        Value::Call(d, _) => *d == null_nr,
+        Value::Block(bl) => bl
+            .operators
+            .last()
+            .is_some_and(|o| is_null_terminal(o, null_nr)),
+        Value::Insert(ops) => ops.last().is_some_and(|o| is_null_terminal(o, null_nr)),
+        Value::Return(inner) | Value::Drop(inner) => is_null_terminal(inner, null_nr),
+        _ => false,
+    }
+}
+
+/// P236 extension (@PLN85 P4-records): `returned_var` with a NULL-arm terminal
+/// unifying as a WILDCARD against the other arm's var.  The work-ref null-inits
+/// at function entry and a null arm never allocates into it, so
+/// `Return(Var(v))` yields the same null the sentinel did — while the PRESENT
+/// arm's record now rides the var instead of the freed-TOS channel (the
+/// record match/if-arm UAF the poison sweep exposed: the legacy pattern freed
+/// the arm's store, then `Return(Null)` handed the caller the freed store's
+/// bytes off the eval stack — silently stale without LOFT_POISON, null with).
+fn returned_var_null_unified(expr: &Value, null_nr: u32) -> u16 {
     match expr {
         Value::Var(v) => *v,
         Value::Block(bl) => {
             let mut v = u16::MAX;
             for o in &bl.operators {
-                v = returned_var(o);
+                v = returned_var_null_unified(o, null_nr);
             }
             v
         }
-        Value::Return(inner) | Value::Drop(inner) => returned_var(inner),
-        Value::Insert(ops) => ops.last().map_or(u16::MAX, returned_var),
-        // P236: when both branches of a tail If terminate with the SAME
-        // var (via the work-ref unification done in `block_result`'s
-        // `unify_if_branches_work_refs`), report it so `get_free_vars`
-        // skips OpFreeRef on it — same handling Block-with-tail-Var
-        // returns get for single-branch reference returns.
+        Value::Return(inner) | Value::Drop(inner) => returned_var_null_unified(inner, null_nr),
+        Value::Insert(ops) => ops
+            .last()
+            .map_or(u16::MAX, |o| returned_var_null_unified(o, null_nr)),
         Value::If(_, t, f) => {
-            let t_var = returned_var(t);
-            let f_var = returned_var(f);
-            if t_var == f_var && t_var != u16::MAX {
+            let t_var = returned_var_null_unified(t, null_nr);
+            let f_var = returned_var_null_unified(f, null_nr);
+            if t_var == f_var || (f_var == u16::MAX && is_null_terminal(f, null_nr)) {
                 t_var
+            } else if t_var == u16::MAX && is_null_terminal(t, null_nr) {
+                f_var
             } else {
                 u16::MAX
             }
         }
-        Value::Span(b) => returned_var(&b.1),
+        Value::Span(b) => returned_var_null_unified(&b.1, null_nr),
         _ => u16::MAX,
     }
 }
@@ -2883,7 +2990,7 @@ fn check_text_return(ir: &Value, function: &Function, fn_name: &str, ret_type: &
         return;
     }
 
-    let ret_var = returned_var(ir);
+    let ret_var = returned_var_null_unified(ir, data.def_nr("OpNullRefSentinel"));
     if ret_var == u16::MAX {
         return;
     }
@@ -2955,7 +3062,7 @@ fn check_ref_leaks(
     // whose return type is Reference) passes ownership to the caller — no FreeRef is
     // emitted for it and that is correct.  Exclude it so check_ref_leaks does not
     // false-positive on `fn foo() -> S { S { ... } }`.
-    let direct_ret_var = returned_var(ir);
+    let direct_ret_var = returned_var_null_unified(ir, data.def_nr("OpNullRefSentinel"));
     // Transitive: if the returned variable depends on another variable, that
     // variable's store must also survive — include it in ret_deps.
     if direct_ret_var != u16::MAX {

@@ -226,16 +226,32 @@ scalar-place sliver made real);
 `skip_free` (the established convention) so scope exit never frees the CALLER's closure
 record through the alias — fixes issue_313 cross-fn + the p15 leak test.
 The env-conflict test now self-skips under ambient `LOFT_POISON`.
-**STILL OPEN — one named class (3 tests):** heap-RECORD (Reference / struct-enum)
-if/match-arm returns deliver via a freed store on the TOS channel instead of the
-`__retbuf` (the callee builds `__ref_1`, frees it, `return null`; the caller adopts the
-freed store — works stale, poison-nulls it).  Repros: p54_struct_enum_multi_call_flow
-(`/tmp` minimal: enum match-return), pln85_nullable_return_caller_binding_freed
-(`maybe_row` — nullable Reference if-return), threading_chars par_struct_to_struct_enum_t4
-(the par face).  This is the @PLN85 P4 / match_return-for-records delivery cell
-(NEXT-SESSION-match-return.md) — the jo pre-pass and the vector delivery machinery gate
-on `Type::Vector`; Reference/Enum(true) arm-returns need the same materialise-into-buffer
-treatment.  Design-sized; owns the last 3 poison failures.
+**The P4-records class — FIXED (2026-07-03, the last 3 of the original 13).**  Root: a
+record (Reference / struct-enum) arm-return's store fate is a runtime JOIN — transferred
+to the caller on the present/winning arm, an orphan on the other path — and the old
+emission resolved it statically-wrong in both directions (unconditional free → the
+present path returned a freed store off the eval stack; suppression → the null path
+orphaned the preamble store).  Three coordinated mechanisms (scopes.rs), guard
+`tests/scripts/85-record-arm-return-join.loft`:
+(1) `returned_var_null_unified` — a NULL-arm terminal (`Value::Null` /
+`OpNullRefSentinel()`) unifies as a WILDCARD with the other arm's var (P236 extension;
+the strict `is_null_terminal` walker refuses to unify through a complex arm), so the
+match/if value rides `Return(Var)` / `Return(expr)` instead of the freed-TOS channel —
+fixes p54 (+ its layout-sensitivity: multi-line vs single-line match arms only changed
+poison VISIBILITY via allocation order, never the bug);
+(2) the null-arm record sources stay SUPPRESSED and the return leg hoists the value to
+`__ret_N` then frees each source via `OpFreeRefIfDistinct(src, __ret_N)` — the runtime
+decides (present: kept/transferred; null: the preamble-allocated placeholder freed, no
+orphan) — fixes pln85_nullable_return_caller_binding_freed leak-free on both backends;
+(3) at any record-returning return site, every record work-ref `OpFreeRef` becomes
+`OpFreeRefIfDistinct(w, ret_var)` — a named local adopting one of TWO candidate arm
+stores (`v = Pass{..}; if c { v = Fail{..} }; v`) no longer has the winner freed under
+it — fixes par_struct_to_struct_enum_t4.
+**Poison-green residual (4 cells, all plain-green / poison-only, measured post-fix):**
+`p241_singleton_text`, `pln25_dn1_consumption::index_dev_elision_borrower_{interpret,native}`,
+`store_persist_loft::fresh_then_reload_round_trip` — pre-existing stale reads whose
+poison visibility shifted with allocation order (the conditional-free swap only reduces
+freeing, so it cannot mint a UAF).  The next poison round owns these four.
 4. **Minimize + wire as a standing job** — ✅ done (2026-07-03): the historical shapes are pinned as 25 graduated `tests/scripts/85-store-lifetime-*.loft` guards; the harness runs in `cargo test` via `tests/ownership_fuzz_gate.rs` (fast loop + control pairs un-ignored, full both-backends replay `--ignored` as the release sweep).  **Self-test re-pinned (2026-07-03):** the join_own default-ON flip cleaned the P14 probe file on BOTH configs, so the positive control re-anchored on generated cells that still reproduce gate-OFF — a crash/divergence-channel control (`elem_accumulate__struct__heavy`) + a leak-channel control (`local_source__struct__none`), each as a buggy(flagged)/fixed(clean) PAIR, so a flip regression fails the self-test too.
 - **Method gate:** every M+ step runs the `design-protocol` skill; this doc IS the hypothesis.
 - **Blocked-by reminder:** widen the value axis only as @PLN25 settles it (above).
