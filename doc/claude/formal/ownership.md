@@ -149,8 +149,16 @@ provably dead afterwards — the rustc last-use rule, as an OPTIMIZATION
 (`use_analysis::ElidePlan` is that analysis).  `O-Borrow` scopes to projections /
 params / `&τ`.  (binding.md D-bind-3 was already closed — the old "blocks" claim was
 stale.)  The implementable RESIDUAL — the copy/alias/elide decision at the bind site
-derives from `ownership_of` + last-use instead of the syntactic `struct_vec_field`
-branch — folds into **D-own-1**.
+derives from the ownership fact instead of the syntactic `struct_vec_field` branch —
+folds into **D-own-1**.  **Narrowed 2026-07-03:** the decision is now the pure
+`classify_vec_bind` selector (`VecBind`, parser/expressions.rs — byte-identical
+extraction over the C86 bind corpus): the verdict reads the base var's
+incrementally-maintained `deps` (the same fact `ownership_of` reconstructs post-parse
+via its whole-body `Defs` walk — Owned ⇒ copy, Borrowed/Join ⇒ view; agreement
+witnessed by `LOFT_MATERIALIZE_DUMP` over the corpus), and the ELIDE half is already
+live post-parse (`elision_plans` → `scopes::elide_borrows`).  What remains of D-own-1
+here: the mid-parse deps read and the post-parse oracle are two implementations of one
+fact — they unify when ownership is carried as one typed `deps` fact end-to-end.
 
 ### D-own-5 — the `&` borrow is built but not yet a `deps`-tracked borrow
 - **Violates:** O-Deps for the explicit-link case
