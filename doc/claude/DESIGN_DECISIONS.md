@@ -1913,6 +1913,22 @@ optimization.**  Concretely:
   path mutation (`o.field = x`, `o.v[i] = y`) writes through.
 - `&` remains the explicit live-reference opt-in (@PLN87, unchanged).
 
+### Rationale (maker, verbatim)
+
+> "In my head that is the easiest to remember rule for programmers: variables are
+> their own thing, and you do not have to remember how they are constructed too much
+> for their semantics."
+
+A variable's semantics should not depend on its construction provenance — `af = bx.v`
+behaves like `b = x` behaves like `p = o`: you own what you bound, full stop.  The
+alias is the compiler's business (elision on provable last-use), never the
+programmer's memory burden.  This serves the fun-on-pickup goal
+([GOALS.md](GOALS.md)) the same way the no-traps rule (C80) does: fewer rules to
+carry, no spooky action at a distance.  The principle's one deliberate boundary is
+projection reads (`a = vv[0]` views, #426): an element read is understood as
+*reaching into* the container rather than *taking* from it — if that distinction ever
+proves a recurring source of user surprise, that is a #426 revisit, not a C86 one.
+
 ### Consequences
 
 - formal/ownership.md **D-own-4 reclassifies**: the #415 copy is correct; the
