@@ -1095,7 +1095,12 @@ use #count instead"
             let s = format!("{w}");
             let mut split = s.split('.');
             a_width = Value::Int(split.next().unwrap().parse::<i32>().unwrap());
-            p_rec = Value::Int(split.next().unwrap().parse::<i32>().unwrap());
+            // `{m:1.0}` — precision ZERO: the dotted spec was parsed into a
+            // FLOAT whose Display drops the trailing `.0`, so the fraction
+            // part is absent here.  Absent means a zero fraction (a dotted
+            // spec is the only way the width arrives as Float), not "no
+            // precision" — unwrapping it was a parser ICE on `:N.0`.
+            p_rec = Value::Int(split.next().map_or(0, |p| p.parse::<i32>().unwrap_or(0)));
         }
         if state.float {
             p_rec = a_width;
