@@ -211,7 +211,39 @@ left for follow-up: keyed-container views (`hash`/`sorted`), nested-record value
 
 **Next, in order:**
 1. **Correct the stale catalog** — over-free-sweep/README P10 verdict PASS → divergence; mark P3/P9/leak fixed. ✅ done.
-2. **Graduate the generator in-process** — port `grammar_gen.py` to a `fuzz/fuzz_targets/program_ownership.rs` cargo-fuzz target (the full grammar is built; this makes it run in-process/fast under libfuzzer coverage-guidance, no rustc-per-program) and add the `value` axis pieces (enum-payload, nested, hash) as @PLN25 settles them.  **Still open** — the standing job (done-criterion 1) runs the python harness; the port is a coverage upgrade, not a gate requirement.
+2. **Graduate the generator in-process** — ✅ **DONE (2026-07-03 night):**
+   `fuzz/fuzz_targets/program_ownership.rs` — the grammar port, in-process
+   (parse → scopes → bytecode → interpret, cloned-cache stdlib, arena
+   `poison_free` on), driven by `Arbitrary` past the python grid: variable
+   source lengths, churn scales, and SHAPE COMPOSITION (two shapes interleaved
+   in one program), plus the @PLN25-settled value axes (single-payload ENUM
+   elements, NESTED-record elements; keyed containers remain a follow-up).
+   Findings panic (libfuzzer artifacts); oracle = compile-ICE / any runtime
+   fault in the total, self-checking programs / store leak at exit.
+   Run: `cargo +nightly fuzz run program_ownership` (seed corpus committed:
+   the 9×4 grid + composition samples).
+   **The port caught TWO REAL BUGS in its first five minutes:**
+   - **F1 — the preloaded-stdlib H5 cross-pass divergence:** parsing a
+     generated program on a CLONED-cache stdlib trips
+     `assert_pass2_def_attr_stable` (+2 defs in pass 2) for several shapes;
+     the single-session CLI parse does not.  `parse_str` diverges the same
+     way through its own reset discipline (REPL-facing).  Latent everywhere:
+     release builds compile the assert out.  Artifacts kept under
+     `fuzz/artifacts/program_ownership/`; the fuzzer sets `LOFT_H5_OFF`
+     (a documented escape in `assert_pass2_def_attr_stable` — panic=abort
+     makes catch_unwind useless) so the signal doesn't drown the ownership
+     oracle; every other path keeps the assert live.  NEEDS ITS OWN
+     INVESTIGATION (def re-mint under preloaded data).
+   - **F2 — the `?? <nested-struct-literal>` default leak:** shape
+     `elem_accumulate` × the NESTED value kind —
+     `t[i] ?? N{vs:[], id:0}` leaks the default arm's Object work-ref
+     (`check_ref_leaks`: "`__ref_1` registered in an inner block scope not
+     reachable from function-exit cleanup"; the release CLI measurably leaks
+     one untyped store — repro `/tmp`-style in the round notes).  A REAL
+     @PLN85-class bug no grid cell or suite test covers.  The target
+     re-finds it within seconds, so fix F2 FIRST — until then fuzz budgets
+     stop at this artifact (a fuzzer blocked by its own day-one catch is the
+     instrument working).
 3. **Build `LOFT_POISON`** (@PLN54 S3) — ✅ done — wired (`keys.rs::poison_enabled` + `allocation.rs` free path), both backends, harness `--poison`; positive control proven. Follow-up: poison freed STACK slots too (S3's second half).  **The poison-green worklist (measured 2026-07-03) — 10 of 13 FIXED same-day**, root: the
 return-tail UAF family (return-site frees ran BEFORE the tail expression evaluated —
 silent stale reads without poison).  Three fixes, guard

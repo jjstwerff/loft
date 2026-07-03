@@ -34,3 +34,10 @@ path = "fuzz_targets/vector_collection.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "program_ownership"
+path = "fuzz_targets/program_ownership.rs"
+test = false
+doc = false
+bench = false
