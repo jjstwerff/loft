@@ -65,6 +65,131 @@ struct Event {
     cid: i64,
     kind: i64,
     payload: String,
+    /// HTTP completion status for kind-3 events (negative = transport
+    /// error / timeout; -2 = http support not compiled in); 0 otherwise.
+    status: i64,
+}
+
+// ── Non-blocking outbound HTTP (the events-class integration) ─────────────
+//
+// The one invariant: `http_fetch` returns BEFORE any network I/O happens,
+// and the completion is delivered through the SAME queue / drain / budget
+// as every other event — a slow or stalled request can never stall the
+// loop.  The kernel is thread_local, so workers park completions in this
+// global queue; each pump turn drains it into the host's event queue as
+// ordinary kind-3 events (cid = the request id).
+
+#[cfg(not(target_arch = "wasm32"))]
+static HTTP_NEXT_ID: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(1);
+#[cfg(not(target_arch = "wasm32"))]
+static HTTP_DONE: std::sync::Mutex<Vec<HttpDone>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(not(target_arch = "wasm32"))]
+struct HttpDone {
+    id: i64,
+    status: i64,
+    body: String,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// Outbound requests time out here (no knob — the F-principle: the engine
+/// takes the correct path unasked; a stalled socket must not leak workers
+/// forever).  Generous enough for Overpass-style upstreams (`timeout:25`).
+const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
+
+#[cfg(not(target_arch = "wasm32"))]
+/// Move every finished request into the host's event queue.  Called at the
+/// top of BOTH pumps (server kernel + client/windowed), so whichever host
+/// this process runs sees its completions as ordinary events.
+fn drain_http_done(events: &mut VecDeque<Event>) {
+    let mut done = HTTP_DONE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for d in done.drain(..) {
+        events.push_back(Event {
+            cid: d.id,
+            kind: 3,
+            payload: d.body,
+            status: d.status,
+        });
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// `http_fetch(method, url, body, headers) -> integer` — begin a
+/// non-blocking outbound HTTP request; returns the request id immediately.
+/// The completion arrives as a kind-3 event: cid = this id, status = the
+/// HTTP status (negative on transport error / timeout), payload = the
+/// response body.  `headers` is newline-separated `Name: value` lines;
+/// an empty `body` sends a bodyless request.
+pub fn n_kernel_http_fetch(stores: &mut Stores, stack: &mut DbRef) {
+    let headers = stores.get::<Str>(stack).str().to_owned();
+    let body = stores.get::<Str>(stack).str().to_owned();
+    let url = stores.get::<Str>(stack).str().to_owned();
+    let method = stores.get::<Str>(stack).str().to_owned();
+    let id = http_fetch_impl(method, url, body, headers);
+    stores.put(stack, id);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// The fetch body shared by both calling conventions (see `listen_impl`).
+fn http_fetch_impl(method: String, url: String, body: String, headers: String) -> i64 {
+    let id = HTTP_NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    #[cfg(feature = "registry")]
+    std::thread::spawn(move || {
+        let agent = ureq::AgentBuilder::new().timeout(HTTP_TIMEOUT).build();
+        let mut req = agent.request(&method, &url);
+        for line in headers.lines() {
+            if let Some((name, value)) = line.split_once(':') {
+                req = req.set(name.trim(), value.trim());
+            }
+        }
+        let result = if body.is_empty() {
+            req.call()
+        } else {
+            req.send_string(&body)
+        };
+        let (status, text) = match result {
+            Ok(resp) => (
+                i64::from(resp.status()),
+                resp.into_string().unwrap_or_default(),
+            ),
+            // Non-2xx is a COMPLETION, not a transport error — the handler
+            // decides what a 404 means.
+            Err(ureq::Error::Status(code, resp)) => {
+                (i64::from(code), resp.into_string().unwrap_or_default())
+            }
+            Err(e) => (-1, e.to_string()),
+        };
+        HTTP_DONE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(HttpDone {
+                id,
+                status,
+                body: text,
+            });
+    });
+    #[cfg(not(feature = "registry"))]
+    {
+        let _ = (&headers, &body, &url, &method);
+        HTTP_DONE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(HttpDone {
+                id,
+                status: -2,
+                body: "http support not compiled in (registry feature)".to_string(),
+            });
+    }
+    id
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// `kernel_event_status() -> integer` — the status of the last-popped event.
+pub fn n_kernel_event_status(stores: &mut Stores, stack: &mut DbRef) {
+    let v = with_kernel(|k| k.last.status).unwrap_or(0);
+    stores.put(stack, v);
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -547,6 +672,7 @@ fn listen_impl(port: i64, tick_us: i64) -> bool {
                         cid: -1,
                         kind: -1,
                         payload: String::new(),
+                        status: 0,
                     },
                     last_sync: (-1, -1, String::new()),
                     start: Instant::now(),
@@ -694,6 +820,7 @@ pub fn n_kernel_pump(stores: &mut Stores, stack: &mut DbRef) {
 /// The pump body, shared by both calling conventions.
 #[cfg(not(target_arch = "wasm32"))]
 fn pump_kernel(k: &mut Kernel) -> i64 {
+    drain_http_done(&mut k.events);
     {
         let mut added = 0i64;
         // Accept every pending connection this turn.
@@ -722,6 +849,7 @@ fn pump_kernel(k: &mut Kernel) -> i64 {
                             cid: cid as i64,
                             kind: 0,
                             payload: String::new(),
+                            status: 0,
                         });
                         added += 1;
                     }
@@ -758,6 +886,7 @@ fn pump_kernel(k: &mut Kernel) -> i64 {
                                 cid: cid as i64,
                                 kind: 1,
                                 payload,
+                                status: 0,
                             });
                             added += 1;
                         }
@@ -787,6 +916,7 @@ fn disconnect(k: &mut Kernel, cid: usize) {
         cid: cid as i64,
         kind: 2,
         payload: String::new(),
+        status: 0,
     });
 }
 
@@ -983,6 +1113,7 @@ fn post_impl(msg: &str) -> bool {
         cid: -1,
         kind: 1,
         payload,
+        status: 0,
     };
     if with_client(|c| c.events.push_back(ev(msg.to_string()))).is_some() {
         return true;
@@ -1258,6 +1389,7 @@ fn local_init(tick_us: i64) {
                 cid: -1,
                 kind: -1,
                 payload: String::new(),
+                status: 0,
             },
             start: Instant::now(),
             tick_interval_us: tick_us.max(1),
@@ -1353,6 +1485,7 @@ fn client_connect(host: &str, port: u16, tick_us: i64) -> Option<()> {
                     cid: 0,
                     kind: 0,
                     payload: String::new(),
+                    status: 0,
                 });
                 q
             },
@@ -1360,6 +1493,7 @@ fn client_connect(host: &str, port: u16, tick_us: i64) -> Option<()> {
                 cid: -1,
                 kind: -1,
                 payload: String::new(),
+                status: 0,
             },
             start: Instant::now(),
             tick_interval_us: tick_us.max(1),
@@ -1451,6 +1585,7 @@ pub fn n_kernel_client_pump(stores: &mut Stores, stack: &mut DbRef) {
 #[cfg(not(target_arch = "wasm32"))]
 fn pump_client(c: &mut ClientKernel) -> i64 {
     pump_ctl(c); // the debug control endpoint rides every pump (incl. pauses)
+    drain_http_done(&mut c.events);
     {
         let mut added = 0i64;
         // WS frames: events from the server — except `S:`-framed keyframes,
@@ -1479,6 +1614,7 @@ fn pump_client(c: &mut ClientKernel) -> i64 {
                         cid: 0,
                         kind: 1,
                         payload,
+                        status: 0,
                     });
                     added += 1;
                 }
@@ -1489,6 +1625,7 @@ fn pump_client(c: &mut ClientKernel) -> i64 {
                         cid: 0,
                         kind: 2,
                         payload: String::new(),
+                        status: 0,
                     });
                     added += 1;
                 }
@@ -1593,6 +1730,13 @@ pub fn n_kernel_client_event_kind(stores: &mut Stores, stack: &mut DbRef) {
 /// `kernel_client_event_cid() -> integer` — the last event's origin: `0` =
 /// the server, `-1` = a local `post` (window input).  Connector events were
 /// all server-origin before `post` existed; the cid keeps them apart.
+pub fn n_kernel_client_event_status(stores: &mut Stores, stack: &mut DbRef) {
+    let v = with_client(|c| c.last.status).unwrap_or(0);
+    stores.put(stack, v);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// `kernel_client_event_cid() -> integer`.
 pub fn n_kernel_client_event_cid(stores: &mut Stores, stack: &mut DbRef) {
     let v = with_client(|c| c.last.cid).unwrap_or(-1);
     stores.put(stack, v);
@@ -1692,6 +1836,7 @@ fn client_send_impl(c: &mut ClientKernel, msg: &str, sync: bool) -> bool {
             cid: 0,
             kind: 2,
             payload: String::new(),
+            status: 0,
         });
         return false;
     }
@@ -2192,6 +2337,7 @@ pub mod browser {
                 cid: -1,
                 kind: 1,
                 payload: msg.clone(),
+                status: 0,
             });
         })
         .is_some();
@@ -2222,6 +2368,7 @@ pub mod browser {
                     cid: -1,
                     kind: -1,
                     payload: String::new(),
+                    status: 0,
                 },
                 slots: Vec::new(),
                 last_sync: (-1, String::new()),
@@ -2253,6 +2400,7 @@ pub mod browser {
                         cid: -1,
                         kind: -1,
                         payload: String::new(),
+                        status: 0,
                     },
                     slots: Vec::new(),
                     last_sync: (-1, String::new()),
@@ -2277,6 +2425,7 @@ pub mod browser {
                     cid: 0,
                     kind: 0,
                     payload: String::new(),
+                    status: 0,
                 });
                 added += 1;
                 for msg in std::mem::take(&mut c.outbox) {
@@ -2302,6 +2451,7 @@ pub mod browser {
                     cid: 0,
                     kind: 1,
                     payload,
+                    status: 0,
                 });
                 added += 1;
             }
@@ -2339,6 +2489,13 @@ pub mod browser {
     }
 
     /// Origin of the last event: `0` = the server, `-1` = a local `post`.
+    pub fn n_kernel_client_event_status(stores: &mut Stores, stack: &mut DbRef) {
+        let v = with_client(|c| c.last.status).unwrap_or(0);
+        stores.put(stack, v);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    /// `kernel_client_event_cid() -> integer`.
     pub fn n_kernel_client_event_cid(stores: &mut Stores, stack: &mut DbRef) {
         let v = with_client(|c| c.last.cid).unwrap_or(-1);
         stores.put(stack, v);
@@ -2497,6 +2654,26 @@ pub mod typed {
     }
     pub fn n_kernel_event_payload(_cell: &UnsafeCell<Stores>) -> String {
         with_kernel(|k| k.last.payload.clone()).unwrap_or_default()
+    }
+    pub fn n_kernel_event_status(_cell: &UnsafeCell<Stores>) -> i64 {
+        with_kernel(|k| k.last.status).unwrap_or(0)
+    }
+    pub fn n_kernel_client_event_status(_cell: &UnsafeCell<Stores>) -> i64 {
+        with_client(|c| c.last.status).unwrap_or(0)
+    }
+    pub fn n_kernel_http_fetch(
+        _cell: &UnsafeCell<Stores>,
+        method: &str,
+        url: &str,
+        body: &str,
+        headers: &str,
+    ) -> i64 {
+        http_fetch_impl(
+            method.to_owned(),
+            url.to_owned(),
+            body.to_owned(),
+            headers.to_owned(),
+        )
     }
     pub fn n_kernel_tick_due(_cell: &UnsafeCell<Stores>) -> u8 {
         u8::from(with_kernel(tick_due_kernel).unwrap_or(false))

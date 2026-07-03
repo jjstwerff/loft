@@ -276,6 +276,18 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_kernel_tick_due", crate::engine_host::n_kernel_tick_due),
     #[cfg(not(target_arch = "wasm32"))]
     ("n_kernel_send", crate::engine_host::n_kernel_send),
+    (
+        "n_kernel_http_fetch",
+        crate::engine_host::n_kernel_http_fetch,
+    ),
+    (
+        "n_kernel_event_status",
+        crate::engine_host::n_kernel_event_status,
+    ),
+    (
+        "n_kernel_client_event_status",
+        crate::engine_host::n_kernel_client_event_status,
+    ),
     #[cfg(not(target_arch = "wasm32"))]
     ("n_kernel_broadcast", crate::engine_host::n_kernel_broadcast),
     #[cfg(not(target_arch = "wasm32"))]
