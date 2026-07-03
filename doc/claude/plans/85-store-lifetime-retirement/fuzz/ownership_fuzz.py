@@ -20,9 +20,17 @@ Violation modes (the four the invariant can break into):
   LEAK        : "stores not freed" on a backend's stderr
   DIVERGENCE  : interp stdout != native stdout, or success disagrees (silent two-owner corruption)
 
-Positive control (--self-test): probes/over-free-sweep/P14-enum-field-vec.loft must be FLAGGED
-(interp SIGSEGV, native passes). A harness that does not flag P14 is vacuous — its silence on
-generated programs would mean nothing. (engineering-rigor: prove the harness can fail.)
+Positive control (--self-test) — CONTROL PAIRS, re-pinned 2026-07-03 after the join_own
+default-ON flip (and this week's ungated fixes) cleaned the P14 probe file on BOTH
+configurations.  The controls anchor on GENERATED cells that still reproduce on the
+preserved raw path (measured 6/54 under LOFT_NO_JOIN_OWN=1), one per detector channel:
+  crash/divergence : elem_accumulate__struct__heavy — SIGSEGV + divergence gate-OFF,
+                     clean on the default gate;
+  leak             : local_source__struct__none — both-backends LEAK gate-OFF,
+                     clean on the default gate.
+Each is a PAIR: (1) the buggy config must be FLAGGED (the detector can fire — not vacuous);
+(2) the default gate must be CLEAN (pins the join_own fix; a flip regression fails here).
+(engineering-rigor: prove the harness can fail — and that the fix it validated stays landed.)
 
 Usage:
   ownership_fuzz.py --self-test                       # prove the harness can fail (P14)
@@ -133,12 +141,40 @@ def main():
         sys.exit(f"no loft binary at {LOFT} (build: cargo build --release)")
 
     if args.self_test:
-        p14 = "doc/claude/plans/85-store-lifetime-retirement/probes/over-free-sweep/P14-enum-field-vec.loft"
-        v = judge(p14, native_replay=True)
-        ok = any("CRASH(interp" in x for x in v)
-        print(f"positive control P14: {v or 'CLEAN'}")
-        print("SELF-TEST PASS — harness flags the live bug" if ok
-              else "SELF-TEST FAIL — harness is VACUOUS (did not flag P14)")
+        # Generate the two control cells fresh (deterministic grammar output).
+        gen = os.path.join(os.path.dirname(os.path.abspath(__file__)), "grammar_gen.py")
+        with tempfile.TemporaryDirectory() as td:
+            subprocess.run([sys.executable, gen, "--out", td], check=True,
+                           capture_output=True, text=True)
+            crash_cell = os.path.join(td, "elem_accumulate__struct__heavy.loft")
+            leak_cell = os.path.join(td, "local_source__struct__none.loft")
+            # (1) buggy config — the preserved raw path (join_own opt-out) still
+            # carries the class; each channel's detector MUST fire.
+            os.environ["LOFT_NO_JOIN_OWN"] = "1"
+            v_crash = judge(crash_cell, native_replay=True)
+            v_leak = judge(leak_cell, native_replay=True)
+            del os.environ["LOFT_NO_JOIN_OWN"]
+            crash_fires = any("CRASH" in x or "DIVERGENCE" in x for x in v_crash)
+            leak_fires = any("LEAK" in x for x in v_leak)
+            print(f"crash-control (LOFT_NO_JOIN_OWN=1) elem_accumulate/struct/heavy: "
+                  f"{v_crash or 'CLEAN'}")
+            print(f"leak-control  (LOFT_NO_JOIN_OWN=1) local_source/struct/none:    "
+                  f"{v_leak or 'CLEAN'}")
+            # (2) fixed config — the default gate must be CLEAN on both cells.
+            f_crash = judge(crash_cell, native_replay=True)
+            f_leak = judge(leak_cell, native_replay=True)
+            print(f"fixed-config  (default gate) elem_accumulate: {f_crash or 'CLEAN'}; "
+                  f"local_source: {f_leak or 'CLEAN'}")
+        ok = crash_fires and leak_fires and not f_crash and not f_leak
+        if ok:
+            print("SELF-TEST PASS — both detector channels fire on the preserved bug "
+                  "AND the default fix holds")
+        elif not (crash_fires and leak_fires):
+            print("SELF-TEST FAIL — harness is VACUOUS "
+                  f"(crash channel fires={crash_fires}, leak channel fires={leak_fires})")
+        else:
+            print("SELF-TEST FAIL — the DEFAULT gate regressed (a control cell flagged "
+                  "without the opt-out)")
         sys.exit(0 if ok else 1)
 
     seeds = collect(args.corpus)

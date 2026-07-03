@@ -5,8 +5,10 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Fuzz-proof gate — prove the store-lifetime class closed *by construction*
 
-> **Part of [@PLN85](README.md)** (store-lifetime retirement). **Status:** SLOT OPEN —
-> design, not built. **This is wide-release gate 1** (the floor that does not betray you,
+> **Part of [@PLN85](README.md)** (store-lifetime retirement). **Status:** STANDING —
+> the harness is built, the positive controls are live pairs, and the gate runs in
+> `cargo test` (`tests/ownership_fuzz_gate.rs`); see § Done criteria for the recorded
+> budget and the explicitly-open expansions. **This is wide-release gate 1** (the floor that does not betray you,
 > [GOALS.md § The deeper aim](../../GOALS.md); the bar lives in
 > [STABILITY_ROADMAP.md § the wide-release bar](../../STABILITY_ROADMAP.md)). Written as a
 > `design-protocol` hypothesis: the fuzz-proof is the **falsification instrument** for the
@@ -94,16 +96,37 @@ fuzz-proof can **start now on the vectors-settled subset** and **expand as scala
 whole instrument on @PLN25 being 100% done; gate each composition axis on its value-model piece
 being settled.
 
-## Done criteria — what "gate met" means
+## Done criteria — what "gate met" means, and where it stands (2026-07-03)
 
-1. The harness runs as a standing job (CI or scheduled) with **zero findings across all four
-   oracles, both backends**, over a meaningful budget (N programs / M cpu-hours — set the number
-   when the generator exists; record it, no silent cap).
-2. **Coverage is non-vacuous:** every historical cluster shape (II / III / V / C / 462) is
-   provably within the generator's reachable space, so zero-findings means "covers the known
-   class," not "the grammar is too narrow to express the bug."
-3. Then the class is **closed by construction** — the wide-release gate-1 definition of
-   *stabilized*. Until (1)+(2) hold, the memory model is *quiet*, not *sealed*.
+1. The harness runs as a standing job with **zero findings across all four oracles, both
+   backends**, over a recorded budget — **MET** for the vectors-settled subset.  The standing
+   job is `tests/ownership_fuzz_gate.rs`:
+   - **every `cargo test` run**: the positive-control PAIRS (2 generated cells × 2 configs,
+     both backends — § self-test below) + the **54-cell interp+poison fast loop**
+     (crash / leak / poison-UAF channels; native runs only on a flagged cell, so the clean
+     path costs no rustc);
+   - **the release-gate sweep** (`cargo test --release --test ownership_fuzz_gate --
+     --ignored`): the full 54-cell map with `--poison --native-replay` — all four channels
+     on BOTH backends.  Current reading: **0/54** (default gate; 2026-07-03).
+   The recorded budget is exactly that — 54 deterministic cells + 4 control runs per CI
+   pass, full both-backends replay per release; **no silent cap** (the axes still to add
+   are listed under *Open expansions* below).
+2. **Coverage is non-vacuous — MET:** the grammar's 9 shapes contain every historical
+   cluster shape — match_return (P14 / cluster C), elem_accumulate (P10),
+   local_source (the #462 conditional-local-view root), the field-view family
+   (clusters II/III), if_return (cluster V), index_read (#426B), nested_field (P13) —
+   and the self-test proves the detectors FIRE on exactly those shapes via the preserved
+   `LOFT_NO_JOIN_OWN=1` path (measured 6/54 gate-OFF vs 0/54 default, so zero-findings is
+   a property of the FIX, not of a narrow grammar).  The historical shapes are also each
+   pinned by a graduated `tests/scripts/85-store-lifetime-*.loft` guard (25 as of today).
+3. The class is **closed by construction** for the settled composition space; the memory
+   model is *sealed on the mapped axes*.  **Open expansions (explicit, not silent):**
+   the value axis lacks enum-payload / nested-record / hash pieces (widen as @PLN25-adjacent
+   pieces settle), keyed-container views + `par` churn are unmapped, the in-process
+   libfuzzer port (below) would add coverage-guided composition BEYOND the grid — and the
+   FULL-SUITE poison run is a named open worklist (item 3 below): the mapped axes are
+   poison-clean, but `LOFT_POISON=1 cargo test` surfaces ~13 latent stale-reads in
+   closure-capture / `&`-place / `par` shapes the grid does not yet generate.
 
 ## Status — first increment BUILT (2026-06-29): `fuzz/ownership_fuzz.py`
 
@@ -188,9 +211,9 @@ left for follow-up: keyed-container views (`hash`/`sorted`), nested-record value
 
 **Next, in order:**
 1. **Correct the stale catalog** — over-free-sweep/README P10 verdict PASS → divergence; mark P3/P9/leak fixed. ✅ done.
-2. **Graduate the generator in-process** — port `grammar_gen.py` to a `fuzz/fuzz_targets/program_ownership.rs` cargo-fuzz target (the full grammar is built; this makes it run in-process/fast under libfuzzer coverage-guidance, no rustc-per-program) and add the `value` axis pieces (enum-payload, nested, hash) as @PLN25 settles them.
-3. **Build `LOFT_POISON`** (@PLN54 S3) — the arena UAF/double-free detector stock sanitizers miss. ✅ done — wired (`keys.rs::poison_enabled` + `allocation.rs` free path), both backends, harness `--poison`; positive control proven. Follow-up: poison freed STACK slots too (S3's second half), and drive `LOFT_POISON=1 cargo test` to green once Cluster C lands.
-4. **Minimize** P14 + P10 to `tests/scripts/85-*.loft` regressions; wire the harness into the differential-oracle corpus as a standing job (the done-criteria budget).
+2. **Graduate the generator in-process** — port `grammar_gen.py` to a `fuzz/fuzz_targets/program_ownership.rs` cargo-fuzz target (the full grammar is built; this makes it run in-process/fast under libfuzzer coverage-guidance, no rustc-per-program) and add the `value` axis pieces (enum-payload, nested, hash) as @PLN25 settles them.  **Still open** — the standing job (done-criterion 1) runs the python harness; the port is a coverage upgrade, not a gate requirement.
+3. **Build `LOFT_POISON`** (@PLN54 S3) — ✅ done — wired (`keys.rs::poison_enabled` + `allocation.rs` free path), both backends, harness `--poison`; positive control proven. Follow-up: poison freed STACK slots too (S3's second half).  **`LOFT_POISON=1 cargo test` is NOT green (measured 2026-07-03)** — the 54-cell map is poison-clean, but the FULL suite under poison surfaces a latent stale-read family the differential oracle missed (~13 failures): closure/field captures (issue_313, p213 ×2, p227 text-fn-ref field capture, p241 singleton-text), struct-enum multi-call flow (p54), the @PLN87 `&`-link L3/L4 element/field LIVE-READ tests (consistent with the D-own-5 scalar-place sliver — the place DbRef has no carried lifetime fact), a closure-capture leak test, the @PLN85 nullable-return caller-binding test, and `par` struct→struct-enum (threading_chars t4, reads 0 ≠ 30).  One failure is an ENV CONFLICT, not a bug: `poison_free_default_off_leaves_buffer` asserts the default-OFF behavior and inverts under a global `LOFT_POISON=1`.  This list is the poison-green WORKLIST — a named open cell (route: @PLN85/@PLN54), each item a candidate real UAF read of a freed-not-yet-reused store.
+4. **Minimize + wire as a standing job** — ✅ done (2026-07-03): the historical shapes are pinned as 25 graduated `tests/scripts/85-store-lifetime-*.loft` guards; the harness runs in `cargo test` via `tests/ownership_fuzz_gate.rs` (fast loop + control pairs un-ignored, full both-backends replay `--ignored` as the release sweep).  **Self-test re-pinned (2026-07-03):** the join_own default-ON flip cleaned the P14 probe file on BOTH configs, so the positive control re-anchored on generated cells that still reproduce gate-OFF — a crash/divergence-channel control (`elem_accumulate__struct__heavy`) + a leak-channel control (`local_source__struct__none`), each as a buggy(flagged)/fixed(clean) PAIR, so a flip regression fails the self-test too.
 - **Method gate:** every M+ step runs the `design-protocol` skill; this doc IS the hypothesis.
 - **Blocked-by reminder:** widen the value axis only as @PLN25 settles it (above).
 
