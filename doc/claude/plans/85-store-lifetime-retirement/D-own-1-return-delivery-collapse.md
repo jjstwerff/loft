@@ -254,6 +254,49 @@ native (the dangling `__ret_N` Str — pre_eval's B5-L3 gate missed `optional(te
 fixed with the `.base()` peel, guarded by `85-text-optional-null-return.loft`).
 The classify/apply split now covers all three return-type families.
 
+## Slice 3 (DESIGNED, not built) — `ref_return` → `classify_ret_promotion` (2026-07-03)
+
+The remaining funnel: **`ref_return` is 473 lines, 13 callers** — larger than
+post-collapse `block_result` (320).  Full read done; the anatomy is the selector
+shape one level richer:
+
+**The carried facts it computes (shape-walks to keep or fold):**
+`reassign_count(body, v)` (Plan-57, ≥2 fresh literals ⇒ no NRVO) ·
+`site_value_ref(tail)` (which ref carries the site's value) ·
+`return_field_base_var(tail)` (#425 field-projection-of-local) ·
+`bound_already` (dep already names the buffer attr) ·
+the #306 transitive dep expansion (direct vs transitive boundary) ·
+the `jo_arm_skip` pre-pass (the join_own borrowed-binding delivery).
+
+**The per-var verdict ladder (each `continue`-guard is a verdict):**
+
+| # | verdict | today's guard |
+|---|---|---|
+| 1 | `SkipDelivered` | `jo_arm_skip` (borrowed binding already delivered to `__retbuf`) |
+| 2 | `SkipReassigned` | Plan-57 count ≥ 2 — EXCEPT the #355 named-local + plain-fn + BlockTail + vector case (falls through to deliver) |
+| 3 | `MergeAttr { a, chain_mid_site }` | name already an attribute; #356 MidReturn work-ref re-chains the site value |
+| 4 | `MergeOnly` | transitively-reached (#306) — dep merge, never promote |
+| 5 | `SkipInnerRef` | inner work-ref ≠ site value and not adopted by it (cluster I-d exception: site ADOPTS `v` ⇒ do not skip) |
+| 6 | `RenameToBuffer` | `allow_rename` = NOT(bound_already ∥ reassigned ∥ returns_own_field #425 ∥ MidReturn-vector) — the @PLAN59 attr-rename NRVO |
+| 7 | `BindToBuffer { Substitute ∥ Copy }` | the ONE-BUFFER invariant: work-ref ⇒ substitute + unregister + chain; named local ⇒ `materialize_return_into` / `materialize_vector_return_into` copy |
+| 8 | `GrowLambda` | lambda-only hidden-attr growth (pass-1-only for plain fns, asserted) |
+
+**The post-loop tail phase** (BlockTail + vector + buffer-bound): `deliver_mid_vector_returns`
++ the #457 implicit-tail `OpReplaceVector` adopt-fix + the clear-on-entry, then the
+`Deps::attrs` return finalization.
+
+**The collapse:** `classify_ret_promotion(v, &RetCtx) -> RetPromotion` (pure) + one
+apply loop, mirroring `TextDep`/`Delivery`/`RefDelivery`.  `RetCtx` carries
+{site, ret, site_value, direct_count, jo_arm_skip, buffer, is_plain_fn}.
+
+**Instrument gap to close FIRST:** the existing corpora do not cover — mid-return
+work-ref chains (#356), reassigned locals (Plan-57 + the #355 exception), lambda
+growth (P227 twin), the #457 reassigned-adopt implicit tail, and #425
+field-of-local (covered by the suite script, not the corpus).  Extend
+`D-own-1-reference-corpus.loft` (or add a promotion corpus) with one fn per
+verdict row BEFORE cutting; the byte-identical bar applies per verdict cell.
+
+
 
 **Behaviour-PRESERVING.** Corpus `bytecode-comparisons/D-own-1-reference-corpus.loft` (one fn
 per Reference-return path: owned-fresh, wrap-call, return-views-local #306, nullable-unwrap,
