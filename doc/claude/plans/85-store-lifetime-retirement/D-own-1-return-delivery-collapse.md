@@ -242,6 +242,18 @@ per-var rules, not a tail-shape selector; a different collapse shape), the
 `return_buffer`/`nrvo` plumbing helpers, and the C86 bind-site derivation residual
 (expressions.rs `struct_vec_field`).
 
+## Slice 2c — `text_return`'s per-var ladder → the pure `classify_text_dep` selector (2026-07-03)
+
+The text family's collapse has a different shape (per-VAR rules, not tail shapes) —
+so its selector classifies the RETURN-DEP VAR: `TextDep { Attr(idx), SkipCaptured,
+SkipTupleLocal (@P330), PromoteHidden, PromotePlain }`, applied by one loop; rule
+rationale on the variants, emission mechanics at the arms. Byte-identical on BOTH
+corpora (text + reference, 0 diff incl. post-fmt), suite 2596/2596 fully green.
+**Bonus find:** building the corpus surfaced a UB-class `-> text?` null-path bug on
+native (the dangling `__ret_N` Str — pre_eval's B5-L3 gate missed `optional(text)`;
+fixed with the `.base()` peel, guarded by `85-text-optional-null-return.loft`).
+The classify/apply split now covers all three return-type families.
+
 
 **Behaviour-PRESERVING.** Corpus `bytecode-comparisons/D-own-1-reference-corpus.loft` (one fn
 per Reference-return path: owned-fresh, wrap-call, return-views-local #306, nullable-unwrap,
