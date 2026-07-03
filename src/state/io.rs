@@ -1558,7 +1558,7 @@ impl State {
         // otherwise leak because is_ret_work_ref suppresses its OpFreeRef.
         if free_source
             && data.store_nr != to.store_nr
-            && data.store_nr != 0
+            && !self.database.is_stack_store(data.store_nr)
             && !self.database.allocations[data.store_nr as usize].free
             && !self.database.allocations[data.store_nr as usize].read_only
             && !self.database.allocations[data.store_nr as usize].free_protected
@@ -1648,7 +1648,7 @@ impl State {
         }
         if free_source
             && src.store_nr != dest.store_nr
-            && src.store_nr != 0
+            && !self.database.is_stack_store(src.store_nr)
             && !self.database.allocations[src.store_nr as usize].free
             && !self.database.allocations[src.store_nr as usize].read_only
             && !self.database.allocations[src.store_nr as usize].free_protected

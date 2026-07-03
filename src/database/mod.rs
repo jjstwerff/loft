@@ -216,7 +216,10 @@ pub struct Stores {
     /// of slot 0: such a ref is always a stack-allocated record
     /// (`OpCreateStack`) wrongly treated as an owned heap store, and the
     /// free would destroy every live frame.  Bare `Stores` (unit tests,
-    /// tooling) keep `false` — there slot 0 is an ordinary store.
+    /// tooling) and the NATIVE runtime keep `false` — there slot 0 is an
+    /// ordinary heap store that must stay freeable and leak-checkable
+    /// (#490/#491).  Always test via [`Stores::is_stack_store`], never a
+    /// bare `store_nr == 0`.
     pub stack_store_at_zero: bool,
     #[cfg(not(feature = "wasm"))]
     pub files: Vec<Option<std::fs::File>>,

@@ -1,0 +1,27 @@
+// #490 — a user fn returning a heap enum through a hidden `__ref_N` work-ref
+// (`fn f() -> H { mk().x }`), used INLINE as a call argument or DISCARDED,
+// leaked one enum store per use on NATIVE.  The caller passes `__ref_N` by
+// value; the callee reallocates it and returns the fresh store, but the
+// by-value copy is never delivered back, so the caller's scope-exit
+// `OpFreeRef(__ref_N)` freed the stale NULL while the reallocated store
+// leaked.  Fixed by lifting such returns to a `__lift_N` temp (guard:
+// `!returns_borrowed_view()` — owned/hidden-buffer returns lift; a borrowed
+// view of a visible param stays unlifted).  The `clean/` harness asserts no
+// store leaks on either backend, for the inline-arg, the discard, AND the
+// borrowed-view (must-stay-valid, no over-free) shapes.
+enum Holder { Bytes { v: vector<u8> } }
+struct Box { value: Holder }
+fn relen(h: Holder) -> integer { match h { Bytes { v } => len(v) } }
+fn mk() -> Box {
+  bs: vector<u8> = [];
+  for i in 0..8 { bs += [((i + 1) & 255) as u8]; }
+  return Box { value: Bytes { v: bs } };
+}
+fn field_of_arg(d: Box) -> Holder { return d.value; }   // borrowed view — must NOT lift
+fn inline_enum_field() -> Holder { return mk().value; }  // hidden buffer — must lift
+fn test() {
+  b = mk();
+  assert(relen(field_of_arg(b)) == 8, "borrowed-view field stays valid");
+  assert(relen(inline_enum_field()) == 8, "inline-arg hidden-buffer return");
+  inline_enum_field();                                    // discarded
+}

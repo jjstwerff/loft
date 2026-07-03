@@ -886,7 +886,38 @@ impl Scopes {
             Value::Insert(ops) => {
                 Value::Insert(ops.iter().map(|v| self.scan(v, function, data)).collect())
             }
-            Value::Drop(inner) => Value::Drop(Box::new(self.scan(inner, function, data))),
+            Value::Drop(inner) => {
+                let scanned = self.scan(inner, function, data);
+                // #490 — a discarded statement result that owns a fresh store
+                // (`json_parse(x);`, `mk();`) lowers to a plain stack-pop
+                // (`FreeStack` on the interpreter, a dropped Rust return value
+                // on native), which never frees the store — once per iteration
+                // inside a loop.  Bind it to a `__lift_N` temp instead, so
+                // `get_free_vars` emits the store's `OpFreeRef` at scope exit —
+                // the same machinery `scan_args` uses for owned call-argument
+                // temps.  A `Set` consumes the value, so the `Drop` wrapper is
+                // dropped with it.
+                if let Value::Insert(mut ops) = scanned {
+                    // A call whose arguments were themselves lifted arrives as
+                    // `Insert([Set(__lift_i, …)…, call])` — the owned result is
+                    // the final op.
+                    if let Some(last) = ops.last()
+                        && let Some(tp) = Self::inline_struct_return(last, data, u32::MAX)
+                    {
+                        let tmp = self.new_lift_var(function, &tp);
+                        let last = ops.pop().unwrap();
+                        ops.push(v_set(tmp, last));
+                        Value::Insert(ops)
+                    } else {
+                        Value::Drop(Box::new(Value::Insert(ops)))
+                    }
+                } else if let Some(tp) = Self::inline_struct_return(&scanned, data, u32::MAX) {
+                    let tmp = self.new_lift_var(function, &tp);
+                    v_set(tmp, scanned)
+                } else {
+                    Value::Drop(Box::new(scanned))
+                }
+            }
             Value::Iter(idx, create, next, extra) => {
                 let scanned_create = self.scan(create, function, data);
                 // #316 — `next`/`extra` execute once per iteration: drop any
@@ -2423,13 +2454,7 @@ impl Scopes {
                 && Self::inline_struct_return(&scanned, data, outer_call).is_none()
                 && let Some(tp) = Self::heap_call_return(&scanned, data)
             {
-                self.lift_counter += 1;
-                let name = format!("__lift_{}", self.lift_counter);
-                let tmp = function.add_temp_var(&name, &tp);
-                function.mark_inline_ref(tmp);
-                self.var_scope.insert(tmp, self.scope);
-                self.var_order.push(tmp);
-                self.lift_vars.push(tmp);
+                let tmp = self.new_lift_var(function, &tp);
                 preamble.push(v_set(tmp, scanned));
                 ls.push(Value::Var(tmp));
                 continue;
@@ -2471,13 +2496,7 @@ impl Scopes {
                     // the remaining Call may also be struct-returning
                     // (e.g. normalize3(__lift_1) inside add_dir).  Lift it too.
                     if let Some(tp) = Self::inline_struct_return(&final_val, data, outer_call) {
-                        self.lift_counter += 1;
-                        let name = format!("__lift_{}", self.lift_counter);
-                        let tmp = function.add_temp_var(&name, &tp);
-                        function.mark_inline_ref(tmp);
-                        self.var_scope.insert(tmp, self.scope);
-                        self.var_order.push(tmp);
-                        self.lift_vars.push(tmp);
+                        let tmp = self.new_lift_var(function, &tp);
                         preamble.push(v_set(tmp, final_val));
                         ls.push(Value::Var(tmp));
                     } else {
@@ -2497,13 +2516,7 @@ impl Scopes {
                 // generate_set (reassignment) on subsequent loop iterations.
                 // get_free_vars emits OpFreeRef(tmp) at scope exit because
                 // the dep is empty (owned).
-                self.lift_counter += 1;
-                let name = format!("__lift_{}", self.lift_counter);
-                let tmp = function.add_temp_var(&name, &tp);
-                function.mark_inline_ref(tmp);
-                self.var_scope.insert(tmp, self.scope);
-                self.var_order.push(tmp);
-                self.lift_vars.push(tmp);
+                let tmp = self.new_lift_var(function, &tp);
                 preamble.push(v_set(tmp, scanned));
                 ls.push(Value::Var(tmp));
             } else {
@@ -2511,6 +2524,23 @@ impl Scopes {
             }
         }
         (preamble, ls)
+    }
+
+    /// Create a `__lift_N` temporary that OWNS an inline call result, so
+    /// `get_free_vars` emits its `OpFreeRef` at scope exit.  Registers the
+    /// var in the current scope and in `lift_vars` (which drives the
+    /// function-entry `Set(v, Null)` slot reservation).  The caller emits
+    /// the `Set(tmp, call)` itself — as an arg preamble (`scan_args`) or as
+    /// the statement replacing a `Drop` (#490).
+    fn new_lift_var(&mut self, function: &mut Function, tp: &Type) -> u16 {
+        self.lift_counter += 1;
+        let name = format!("__lift_{}", self.lift_counter);
+        let tmp = function.add_temp_var(&name, tp);
+        function.mark_inline_ref(tmp);
+        self.var_scope.insert(tmp, self.scope);
+        self.var_order.push(tmp);
+        self.lift_vars.push(tmp);
+        tmp
     }
 
     /// #248 — does this scanned argument lower to an inline call (or an
@@ -2568,16 +2598,26 @@ impl Scopes {
                 if let Type::Reference(d_nr, _) = &def.returned {
                     return Some(Type::Reference(*d_nr, Deps::none()));
                 }
-                // @P303 — a user fn returning a struct-enum by FRESH owned
-                // store (empty dep) leaks its result temp when used directly
-                // as a call argument; lift it like the Reference case above so
-                // `get_free_vars` emits its `OpFreeRef`.  A NON-empty dep means
-                // a hidden-param return (@P301 via-local: ownership handled by
-                // `add_defaults`'s `__ref_N` work-ref) or a borrowed view — must
-                // NOT be lifted here.  Matches the native-constructor Enum
-                // branch's `dep.is_empty()` guard below.
-                if let Type::Enum(d_nr, true, dep) = &def.returned
-                    && dep.is_empty()
+                // @P303 / #490 — a user fn returning a heap struct-enum that the
+                // caller OWNS leaks its result temp when used directly as a call
+                // argument (or discarded); lift it like the Reference case above
+                // so `get_free_vars` emits its `OpFreeRef`.  The owned-vs-borrowed
+                // split is the canonical `returns_borrowed_view()` fact:
+                //   - EMPTY dep (`fn mk() -> H { Bytes{…} }`) — fresh, owned.
+                //   - HIDDEN work-ref dep (`fn f() -> H { mk().x }`, dep → the
+                //     `__ref_N`/`__retbuf` the callee reallocated) — a fresh store
+                //     delivered through the caller's hidden buffer; the caller owns
+                //     it and the lift's copy-path free (`0x8000` source-free) claims
+                //     it exactly like the `h = f()` bound case does.
+                // Both are `returns_borrowed_view() == false` → lift.  A dep naming
+                // a VISIBLE param (`fn field_of_arg(d) -> H { d.value }`) IS a
+                // borrow → true → must NOT lift (freeing it dangles the caller's
+                // arg).  Was `dep.is_empty()`, which missed the hidden-work-ref
+                // case: on native the caller freed the by-value-stale `__ref_N`
+                // (never delivered back) instead of the reallocated store, leaking
+                // one enum store per inline use (#490 kt=65).
+                if let Type::Enum(d_nr, true, _) = &def.returned
+                    && !def.returns_borrowed_view()
                 {
                     return Some(Type::Enum(*d_nr, true, Deps::none()));
                 }
@@ -2624,14 +2664,12 @@ impl Scopes {
                 return Some(Type::Vector(elem.clone(), Deps::none()));
             }
         }
-        // The native-constructor branches below are intentionally matched on the
-        // BARE call only (no unspan).  Broadening them to span-wrapped calls
-        // lifts a native constructor used as a method receiver (e.g.
-        // `file(...).sync()`), which exposes native-codegen gaps for the lifted
-        // method-receiver shape (wrong ABI arg / type mismatch).  They keep
-        // their original reach: the chained-builtin case (`v.keys().len()`)
-        // where the receiver is already a bare `Value::Call`.
-        if let Value::Call(fn_nr, _) = val {
+        // Native-constructor calls arrive BARE when chained onto a builtin
+        // (`v.keys().len()`) and Span-wrapped when passed as a call argument or
+        // method receiver (`jt(json_parse(x), n)`, `json_parse(x).field(n)`), so
+        // match through the span — an unlifted native-constructor temp owns a
+        // fresh store nothing ever frees (#490).
+        if let Value::Call(fn_nr, _) = val.unspan() {
             let def = data.def(*fn_nr);
             // Native struct-enum constructors: no body (code == Null), return type
             // is a struct-enum with empty dep (allocates a new store, doesn't borrow).

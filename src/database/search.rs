@@ -484,7 +484,7 @@ impl Stores {
         }
         if free_source
             && value.store_nr != coll.store_nr
-            && value.store_nr != 0
+            && !self.is_stack_store(value.store_nr)
             && !self.allocations[value.store_nr as usize].free
             && !self.allocations[value.store_nr as usize].read_only
             && !self.allocations[value.store_nr as usize].free_protected

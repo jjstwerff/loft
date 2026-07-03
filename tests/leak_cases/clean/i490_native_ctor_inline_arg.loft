@@ -1,0 +1,12 @@
+// #490 — a native-constructor result (a fresh owned store, e.g. `json_parse`)
+// passed directly as a call argument arrives Span-wrapped in `scan_args`, so
+// the native-constructor lift never fired and the temp's store leaked on both
+// backends (the native half was masked by the slot-0 leak-checker bug, same
+// issue).  The `clean/` harness asserts no store leaks on either backend.
+fn jt(obj: JsonValue, name: text) -> text {
+  v = obj.field(name);
+  if v.kind() == "JString" { v.as_text() } else { "" }
+}
+fn test() {
+  assert(jt(json_parse("{{\"b\":\"world\"}}"), "b") == "world", "inline arg temp value");
+}

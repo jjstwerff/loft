@@ -3778,7 +3778,7 @@ impl State {
                 let mut by_site: std::collections::BTreeMap<(u32, u16), usize> =
                     std::collections::BTreeMap::new();
                 for (s_nr, s) in self.database.allocations.iter().enumerate() {
-                    if s_nr == 0
+                    if (s_nr == 0 && self.database.stack_store_at_zero)
                         || s.is_locked()
                         || self.const_refs.iter().any(|cr| cr.store_nr == s_nr as u16)
                         || s.free
@@ -3825,7 +3825,7 @@ impl State {
         let mut by_type: std::collections::BTreeMap<(u16, &str), usize> =
             std::collections::BTreeMap::new();
         for (s_nr, s) in self.database.allocations.iter().enumerate() {
-            if s_nr == 0 {
+            if s_nr == 0 && self.database.stack_store_at_zero {
                 continue; // stack store — always alive
             }
             if s.is_locked() || self.const_refs.iter().any(|cr| cr.store_nr == s_nr as u16) {

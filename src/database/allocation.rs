@@ -252,6 +252,17 @@ impl Stores {
         }
     }
 
+    /// True when `store_nr` is the interpreter's protected eval-stack store
+    /// (slot 0 with `stack_store_at_zero` set by `State::new`).  The native
+    /// runtime has no stack store — its slot 0 is an ordinary heap store that
+    /// must stay freeable and leak-checkable, so every "skip the stack store"
+    /// guard must use this predicate instead of a bare `store_nr == 0`
+    /// (#490 hid the first leaked native store; #491 made it unfreeable).
+    #[must_use]
+    pub fn is_stack_store(&self, store_nr: u16) -> bool {
+        store_nr == 0 && self.stack_store_at_zero
+    }
+
     /**
     Try to allocate a new store.
     # Panics
@@ -719,8 +730,10 @@ impl Stores {
     /// runtime can run the same check — the generated `main` bootstrap
     /// calls this when `LOFT_NATIVE_LEAK_CHECK` is set so leak
     /// regressions surface on `--native` as well as `--interpret`.
-    /// Same filtering: skip the stack store (#0), locked constants /
-    /// worker borrows, and `const_refs`.
+    /// Same filtering: skip the stack store when one occupies slot 0
+    /// (`stack_store_at_zero` — interp only; the native runtime's
+    /// slot 0 is an ordinary heap store and MUST be checked, #490),
+    /// locked constants / worker borrows, and `const_refs`.
     #[must_use]
     /// @P317 — leaked stores grouped BY TYPE, most-leaked first.  The previous
     /// per-store `N(bc:created_at)` listing (truncated to 5 by the leak-check
@@ -732,7 +745,7 @@ impl Stores {
         let mut by_type: std::collections::BTreeMap<(u16, &str), usize> =
             std::collections::BTreeMap::new();
         for (s_nr, s) in self.allocations.iter().enumerate() {
-            if s_nr == 0 {
+            if s_nr == 0 && self.stack_store_at_zero {
                 continue; // stack store — always alive
             }
             if s.is_locked() || self.const_refs.iter().any(|cr| cr.store_nr == s_nr as u16) {

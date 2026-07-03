@@ -1,0 +1,7 @@
+// #490 — a native-constructor result used directly as a method receiver
+// (`json_parse(x).field(n)`) was excluded from the lift by the bare-`Call`
+// match in `inline_struct_return` (a stale native-ABI precaution), so its
+// fresh store leaked on both backends.
+fn test() {
+  assert(json_parse("{{\"z\":\"zed\"}}").field("z").as_text() == "zed", "receiver temp value");
+}
