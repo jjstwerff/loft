@@ -171,7 +171,11 @@ impl Journal {
     /// # Errors
     /// Returns the I/O error if the temp blob file cannot be created.
     pub fn create() -> io::Result<Journal> {
-        let mut index = Store::new(64);
+        // `new_in_use`: the journal owns this private store outright — it is
+        // never registered into a `Stores` (registration is what normally
+        // clears the `free` flag), and the grow path's `validate()` rejects a
+        // `free`-flagged store under debug-assertions.
+        let mut index = Store::new_in_use(64);
         let rec = index.claim(16); // 128 bytes — room for ~5 entries before the first grow
         index.set_u32_raw(rec, 4, 0); // durable entry count starts at 0
         Ok(Journal {

@@ -294,13 +294,40 @@ left for follow-up: keyed-container views (`hash`/`sorted`), nested-record value
      helper) no longer indexes out of bounds when a dep list holds
      post-scopes FRAME numbers (p235 par defs) — unknown indices render
      positionally (`#7`).
+     **The FINAL honest DA map** (after the fixes above; three passes —
+     53 → 26 → 9 failed targets, the drop from 26 being these fixes): the
+     journal `index_grows` cell traced to PRODUCTION code — `Journal::create`
+     built its private index store with `Store::new` (`free: true` by
+     contract; registration into a `Stores`, which never happens for this
+     store, is what clears it) → `new_in_use`; verified 17/17 under DA.
+     Post-fix fuzz smoke with the complete law: 2879 execs / 120 s, zero
+     findings.
      **OPEN cells routed to the DA-inventory worklist** (each needs its own
-     matrix session): the 4 "Database N not correctly freed" exit-leak tests
-     (`expressions::closure_capture_text`, `issues::n8/p179/pln87` — real
-     store leaks, visible only under DA); the `sorted<>`-return store leaking
-     at exit (seen on the p188 CLI probe); `format.rs:1213` OOB via the
-     `code!()` expr harness (p188 suite path); the `[set_var]` width-mismatch
-     warning flood (stdlib slots: `i_parse_errors` 16→12B, boolean 8→1B).
+     matrix session; all reproduce ONLY under a DA lib build):
+     - the 4 "Database N not correctly freed" exit-leak tests
+       (`expressions::closure_capture_text`, `issues::n8/p179/pln87`) plus
+       the `sorted<>`-return store leaking at exit (p188 CLI probe) — real
+       store leaks, @PLN85 core;
+     - `[set_var]` width mismatches in stdlib text fns (`_elm_N
+       (i_parse_errors)` pushes 16B into a 12B slot in `t_4File_lines` /
+       `t_4text_split*`; `prev_cr`/`walked` booleans 8B→1B) — ONE producer
+       to find; its warning FLOOD also contaminates every output-comparison
+       test under DA (`error_messages::baselines`, `exit_codes::p196`,
+       `store_persist_loft`, `wrap::dir` stderr) — fixing the width bug
+       clears those as a class;
+     - `[generate_set] first-assignment of 'c' contains a Var(0)
+       self-reference — parser bug` (the assert's own wording; fires in
+       `native_scripts` + `loft_suite`);
+     - `generate_call [n_main]: mutable arg expected 8B, generate(Text)
+       pushed 16B` (a typed-slot mismatch on a suite script);
+     - `get_stack<DbRef>: OOB store_nr=30 (allocations.len()=3) — corrupt
+       DbRef on the interpreter stack` (`wrap::dir`);
+     - `format.rs:1213` indexes `types[65535]` — a `known_type` left at the
+       `u16::MAX` sentinel reaching `next_element` (p188 via the `code!()`
+       expr harness).
+     Lens artifacts (not bugs): the `target-da` stdlib symlink (above) and
+     the stale-wasm-rlib guard in `html_wasm` (rebuild the wasm rlib after
+     lib edits).
    - **F2 — the literal-`??`-default join leak — FIXED (2026-07-03 night,
      the fuzzer's first ownership catch).**  The matrix redrew the axis:
      LITERAL default vs CALL default (nested-vs-flat was irrelevant).  A
