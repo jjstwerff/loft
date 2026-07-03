@@ -1,0 +1,8 @@
+fn make_greeter(prefix: text) -> fn(text) -> text {
+    fn(name: text) -> text { "{prefix} {name}" }
+}
+fn main() {
+    r = make_greeter("Hello")("world");
+    assert(r == "Hello world", "got {r}");
+    println("t1 ok");
+}

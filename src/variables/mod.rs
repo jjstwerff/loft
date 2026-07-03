@@ -1706,6 +1706,16 @@ impl Function {
     /// Used for borrowed references (e.g. par-loop result variables that point
     /// into the result vector store).
     pub fn set_skip_free(&mut self, v: u16) {
+        if let Ok(want) = std::env::var("LOFT_SKIPFREE_TRACE")
+            && self.variables[v as usize].name == want
+        {
+            eprintln!(
+                "[skip_free] {} (var={v}) in {}\n{}",
+                want,
+                self.name,
+                std::backtrace::Backtrace::force_capture()
+            );
+        }
         self.variables[v as usize].skip_free = true;
     }
 

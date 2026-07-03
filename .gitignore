@@ -88,3 +88,4 @@ registry-signing-key.bin
 # Transient lib-test artifact-isolation dirs (tests/wrap.rs run_lib_test_in_temp_cwd)
 lib/.loft_test_tmp_*
 native-auto/
+/target-da/

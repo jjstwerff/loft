@@ -21,7 +21,17 @@ Plan id: [@PLN85](https://github.com/loft-lang/plans/issues/85) · investigation
 > in the gate doc: the open DA-inventory cells (§ final honest DA map) and the unfuzzed
 > axes list — see [STABILITY_ROADMAP.md § the wide-release bar](../../STABILITY_ROADMAP.md).
 
-> **▶▶ NEXT SESSION START HERE (2026-06-29):**
+> **▶▶ NEXT SESSION START HERE (2026-07-04):**
+> [NEXT-SESSION-da-leak-cells.md](NEXT-SESSION-da-leak-cells.md) — the DA-calibration leak
+> cells: t3/p179 FIXED (the pass-1 `skip_free` poison on a name-pooled work-ref —
+> counter-coupling instance #4) with the class-residual decision open (pass-boundary
+> bit-clear vs per-site gates); t4/pln87 ROOT-CAUSED (un-freed displaced record on the
+> `&`-param whole-record writeback), t1 closure-record + t2 eager-null-init unexplored;
+> probes in `probes/da-leak-cells/`, instrument = `LOFT_SKIPFREE_TRACE=<var>`.  (The
+> 2026-06-29 join-ownership handoff below stays valid for the D-own-1/2 deps-carried-join
+> completion — the F2 residual.)
+>
+> Older handoff (2026-06-29):
 > [NEXT-SESSION-join-ownership-analysis.md](NEXT-SESSION-join-ownership-analysis.md). The over-free
 > class is now FULLY PROBED and the fix is scoped: it needs ONE ownership fact (Owned / Borrowed /
 > **Join** = the `v[i] ?? d` runtime owned-or-borrow), which IS @PLN25's copy-vs-borrow analysis

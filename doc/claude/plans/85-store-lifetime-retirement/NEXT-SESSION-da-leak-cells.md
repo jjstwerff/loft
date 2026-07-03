@@ -1,0 +1,116 @@
+# NEXT SESSION — the DA-inventory leak cells (@PLN85, task: DA calibration residue)
+
+State as of 2026-07-04 (branch `tuxedo-pln85-ownership`).  This is the live
+worklist from [fuzz-proof-gate.md](fuzz-proof-gate.md) § the final honest DA
+map.  Probes live in [`probes/da-leak-cells/`](probes/da-leak-cells/) — tiny
+standalone programs derived from the four failing tests; run them with a plain
+`target/release/loft` (the exit-leak WARNING is not DA-gated — only the test
+harness's exit-leak PANIC is, so the CLI has always shown these).
+
+```bash
+target/release/loft --interpret probes/da-leak-cells/t3_p179.loft         # etc.
+LOFT_NATIVE_LEAK_CHECK=1 target/release/loft --native <probe>             # native leak read
+LOFT_SKIPFREE_TRACE=__ref_1 target/release/loft --interpret <probe>       # who stamps skip_free
+```
+
+`LOFT_SKIPFREE_TRACE=<var-name>` (permanent instrument, `src/variables/mod.rs
+::set_skip_free`) prints every stamping of that variable with a backtrace —
+built for this class, keep using it.
+
+## Cell t3 — p179 `&`-field arg: **FIXED + verified (this session)**
+
+- Test: `issues::p179_ref_field_arg_corrupts_sibling`.  Leak was `P179Inner ×1`
+  on BOTH backends.
+- Root cause (proven with the trace): `convert`'s complex-expression by-ref
+  arm (`src/parser/mod.rs`, the `Insert(Set(wv, orig); OpCreateStack(wv))`
+  emission) stamped `set_skip_free(wv)` in **pass 1 too**.  `skip_free` is a
+  GLOBAL per-var bit; `wv` is a NAME-pooled `__ref_N` (counter-numbered per
+  pass, pass 2 re-finds pass-1 vars by name); the bit persists in the stored
+  var table across the pass boundary.  The two passes' `work_refs` sequences
+  differ, so pass 1's carrier NAME (`__ref_1`) was pass 2's OWNED
+  nested-struct-literal temp — the stamp disarmed its scope-exit free.
+  **Instance #4 of the counter-coupling hazard**
+  ([COMPILER.md § Synthesised-identity stability](../../COMPILER.md)).
+- Fix: gate that one stamp on `!self.first_pass` (pass-1 IR is discarded; the
+  stamp's only lasting effect WAS the poison).  The nullable twin arm above it
+  was already pass-gated.
+- Verified: `t3` clean both backends; `t3a_bare` (nested literal, no call —
+  was always clean) still clean; `t3b_loop` (100× `&`-field calls in a loop —
+  the case the stamp legitimately guards, "freed once per call" dangling)
+  clean on both backends; `issues p179` + `leak_cases` + `expressions
+  closure_capture` green.
+- **Class residual (OPEN, decide next session):** ANY parser site that stamps
+  `skip_free` in pass 1 on a counter-named work var can poison a pass-2 role
+  the same way.  Stampers: `parser/expressions.rs:1333` (fn_ref_field_read
+  bind), `objects.rs:2077` (rebind witness — also `mark_inline_ref`, which
+  would additionally break a pass-2 owner's null-init ALLOCATION!),
+  `objects.rs:2200` (RefVar-set transfer), `vectors.rs:1762/2552/2643`.
+  Options: (a) audit + gate each on `!first_pass` where pass-1 stamping is
+  purposeless; (b) the chokepoint fix — CLEAR all `skip_free`/`inline_ref`
+  bits at the pass boundary (Function reload) so pass 2 re-derives them;
+  verify first that every stamping site actually re-runs in pass 2.  (b) kills
+  the class; prefer it if the verification holds.
+
+## Cell t4 — pln87 `&`-param whole-record writeback: **ROOT-CAUSED, not fixed**
+
+- Test: `issues::pln87_amp_writeback_from_call_writes_back`.  Leak `Obj ×1`,
+  BOTH backends.  Probe `t4_pln87.loft`.
+- Emission (read via `introspect`): `fn f(o: &Obj) { o = mk(); }` lowers to
+  `o = n_mk(__ref_1)` via `SetStackRef(o-place, result)` — it REPOINTS the
+  caller's owning place `a` at mk's fresh store **without freeing the
+  displaced record** (`a`'s original `Obj{x:1}`).  A plain local reassignment
+  gets a displaced-free; this `&`-writeback path misses it.
+- Note the comment at `parser/objects.rs:2200` claims "codegen's RefVar-set
+  lowering frees the displaced caller store first" — empirically it does NOT
+  for this shape (or this shape bypasses that lowering).  Start there: find
+  the RefVar-set lowering on both backends, check which side should emit the
+  displaced-free (`OpFreeRefIfDistinct(old, new)` is the established runtime-
+  join tool if aliasing is possible), matrix: fresh-record RHS (`mk()`),
+  same-record RHS (`o = o`-ish aliases), null RHS, loop repetition, both
+  backends, value+length+leak.
+
+## Cell t1 — closure record of a discarded fn-ref: **UNEXPLORED**
+
+- Test: `expressions::closure_capture_text`.  Leak `__closure_0 ×1`, BOTH
+  backends.  Probe `t1_closure.loft` — the immediately-invoked shape
+  `make_greeter("Hello")("world")`: the returned fn-ref (16-byte slot carrying
+  the closure DbRef) is a discarded TEMP; nobody frees the closure record it
+  carries.
+- Likely relatives: loft2's #491 "Drop-arm lift for discarded owned results"
+  (merged, `5ec5497c`) — the fn-ref temp may need the same drop treatment,
+  reading the embedded closure DbRef out of the 16-byte slot.  Also check the
+  non-discarded control (`g = make_greeter(..); g("world")` then g dies at
+  scope exit) — does THAT free the closure record?
+
+## Cell t2 — n8 `&Data = null` default: **interp-only, kt=65535 ×2**
+
+- Test: `issues::n8_no_empty_pre_eval_binding`.  Probe `t2_n8.loft`.  Native
+  is CLEAN — matches the documented eager-`OpInitRef` class (DEBUG.md § leak
+  debugging: interp null-init allocates, native lowers to `DbRef::NULL`), but
+  ×2 untyped stores for ONE call pair suggests the `&Data = null` default
+  param's hidden buffer allocates per CALL SITE and never frees.  Read the
+  emission first (`introspect`), then decide whether it folds into the eager-
+  null-init retirement or needs its own free.
+
+## Also open from the DA map (not leak cells)
+
+- stdlib slot-width producer (`i_parse_errors` 16B→12B `_elm_N`, booleans
+  8B→1B) — ONE producer; its warning flood contaminates output-comparison
+  tests under DA as a class.
+- `generate_set` Var(0) self-reference parser bug (`native_scripts`,
+  `loft_suite`).
+- `generate_call` 8B/16B typed-slot mismatch.
+- `wrap::dir` `get_stack<DbRef>` OOB (corrupt DbRef, store_nr=30 of 3).
+- `format.rs:1213` `types[65535]` — `known_type` u16::MAX sentinel reaching
+  `next_element` (p188 via the `code!()` harness; the CLI probe instead shows
+  a `sorted<>`-return exit leak — possibly the same underlying object).
+
+## How to re-verify the whole surface
+
+```bash
+# the DA lens (target-da has the default symlink already):
+RUSTFLAGS="-C debug-assertions=on" CARGO_TARGET_DIR=target-da \
+  cargo test --release --no-fail-fast --test issues --test expressions --lib
+# never set RUSTFLAGS against the MAIN target (deps double-generation —
+# recovery documented in DEBUG.md § the calibration run).
+```

@@ -2303,8 +2303,21 @@ impl Parser {
                     // be decremented once per call and eventually
                     // reach ref_count 0, dangling the caller's
                     // owning reference across loop iterations.
+                    //
+                    // Pass-2 ONLY: `skip_free` is a GLOBAL per-var bit on a
+                    // NAME-pooled work-ref (`__ref_N`, counter-numbered per
+                    // pass), and it persists in the stored var table across
+                    // the pass boundary.  When the two passes' `work_refs`
+                    // call sequences differ, pass 1's carrier NAME can be
+                    // pass 2's OWNED literal temp — the pass-1 stamp then
+                    // disarms that temp's scope-exit free and its store
+                    // leaks (the p179 `&`-field-arg cell; the counter-
+                    // coupling hazard, COMPILER.md).  Pass-1 IR is discarded,
+                    // so the stamp's only lasting effect IS the poison.
                     let wv = self.vars.work_refs(is_type, &mut self.lexer);
-                    self.vars.set_skip_free(wv);
+                    if !self.first_pass {
+                        self.vars.set_skip_free(wv);
+                    }
                     *code = Value::Insert(vec![
                         v_set(wv, orig),
                         self.cl("OpCreateStack", &[Value::Var(wv)]),
