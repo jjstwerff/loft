@@ -17,9 +17,9 @@ use loft::store::Store;
 
 #[derive(Arbitrary, Debug)]
 enum Op {
-    Claim(u8),       // claim a record of 1..=16 words
-    Delete(u8),      // delete the live record at index % len
-    Resize(u8, u8),  // resize the live record at index % len to 1..=16 words
+    Claim(u8),      // claim a record of 1..=16 words
+    Delete(u8),     // delete the live record at index % len
+    Resize(u8, u8), // resize the live record at index % len to 1..=16 words
 }
 
 /// A record we currently hold: its offset, its actual claimed word count
@@ -76,7 +76,11 @@ fuzz_target!(|ops: Vec<Op>| {
                 } else {
                     None
                 };
-                live.push(Live { rec, words: actual, sentinel });
+                live.push(Live {
+                    rec,
+                    words: actual,
+                    sentinel,
+                });
             }
             Op::Delete(i) => {
                 if live.is_empty() {

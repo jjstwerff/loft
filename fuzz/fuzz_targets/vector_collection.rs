@@ -30,7 +30,11 @@ fuzz_target!(|ops: Vec<Op>| {
     let mut stores = vec![Store::new_in_use(64)];
     let handle_rec = stores[0].claim(2);
     stores[0].set_u32_raw(handle_rec, 8, 0);
-    let db = DbRef { store_nr: 0, rec: handle_rec, pos: 8 };
+    let db = DbRef {
+        store_nr: 0,
+        rec: handle_rec,
+        pos: 8,
+    };
 
     let mut model: Vec<i64> = Vec::new();
 
@@ -55,7 +59,11 @@ fuzz_target!(|ops: Vec<Op>| {
                         "get({idx}) value mismatch",
                     );
                 } else {
-                    assert!(r.rec == 0, "get({idx}) returned non-null past end (len={})", model.len());
+                    assert!(
+                        r.rec == 0,
+                        "get({idx}) returned non-null past end (len={})",
+                        model.len()
+                    );
                 }
             }
             Op::Remove(raw) => {
@@ -65,7 +73,11 @@ fuzz_target!(|ops: Vec<Op>| {
                     assert!(ok, "remove({idx}) failed on a live element");
                     model.remove(idx);
                 } else {
-                    assert!(!ok, "remove({idx}) succeeded past end (len={})", model.len());
+                    assert!(
+                        !ok,
+                        "remove({idx}) succeeded past end (len={})",
+                        model.len()
+                    );
                 }
             }
         }
