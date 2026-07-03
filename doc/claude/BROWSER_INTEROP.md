@@ -6,11 +6,16 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # Browser interaction model — the engine as an agnostic service provider
 
 How a loft `--html` program and its libraries interact with the browser and
-with JavaScript. This is a **design doc**, not yet a shipped reference: the
-asyncify yield and the host-import bridge it builds on are shipped (see
-[HTML_EXPORT.md](HTML_EXPORT.md)); the agnostic byte-channel service and the
-input-service surface below are the proposed additions. Where a claim is
-already proven, this doc says so and points at the running code.
+with JavaScript.
+
+> **STATUS.**  *Shipped today:* the asyncify yield, the host-import bridge
+> (see [HTML_EXPORT.md](HTML_EXPORT.md)), the `web` WebSocket
+> `[wasm.bridge]`, `loft_host_print` (output), and — since #476 —
+> **`host_input()`**, the generic JS→loft input primitive (§ "The input half
+> as a shipped engine primitive" below).  *Not shipped:* the multi-channel
+> push/poll byte service and any browser HTTP in wasm — JS owns the network
+> and hands loft the bytes via `host_input`.  Where a claim is proven, this
+> doc says so and points at the running code.
 
 **Motivating consumer.** The zero-trust browser client (a `--html` page that
 runs the same platform-blind loft core as the native binary, behind a clickable

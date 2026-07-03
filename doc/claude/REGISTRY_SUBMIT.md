@@ -178,10 +178,13 @@ full reference.
 > **Two things a programmatic edit gets wrong** (learned publishing crypto
 > 0.3.3): for a **multi-package repo** (e.g. `loft-libs-core`), copy the existing
 > entries' **`subpath`** field (`"subpath": "crypto"`) — `loft package` omits it.
-> And if you edit `index.json` with a script, keep **ASCII-escaped JSON**
-> (Python's default `json.dump(..., ensure_ascii=True)`): the index escapes
-> unicode as `\uXXXX`, so `ensure_ascii=False` rewrites *every* description line
-> and buries your one-line change in a full-file diff.
+> And if you edit `index.json` with a script, **match the file's CURRENT
+> unicode convention** — check whether descriptions carry raw `—` or escaped
+> `—` and pass the matching `ensure_ascii` to `json.dump`, then verify
+> with `git diff` that ONLY your entry changed.  (The convention has flipped
+> once already: this note used to say "always `ensure_ascii=True`", and
+> following it against a raw-unicode index rewrote every description line —
+> the mirror image of the failure it warned about.)
 >
 > **Maintainer step — merge first, then re-sign.** An author PR edits
 > `index.json` but cannot sign it. `registry_maintain.sh` merges the green
