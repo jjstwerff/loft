@@ -4798,6 +4798,38 @@ impl Parser {
         }
     }
 
+    /// #488 — true when the returned expression is a field VIEW rooted at a
+    /// non-argument LOCAL `Var` (`return r.pts`, `return r.a.b`): the local is
+    /// freed at scope exit, so the view must be element-copied into the
+    /// caller's return buffer.  Argument-rooted views (`return b.v`) are the
+    /// dep-driven case the vector buffer gate already handles; call-rooted
+    /// views are `return_field_base_is_call`.  Pure field chains only — a
+    /// match/if/vector construction is NOT a view and must keep its NRVO
+    /// delivery (its Insert block cannot sit in OpAppendVector's argument
+    /// position; the 85-store-lifetime-vector-match-return shape).
+    fn return_field_base_is_local_var(&self, tail: &Value) -> bool {
+        match tail.unspan() {
+            Value::Return(inner) | Value::Drop(inner) => self.return_field_base_is_local_var(inner),
+            Value::Block(bl) => bl
+                .operators
+                .last()
+                .is_some_and(|t| self.return_field_base_is_local_var(t)),
+            Value::Insert(ops) => ops
+                .last()
+                .is_some_and(|t| self.return_field_base_is_local_var(t)),
+            Value::Call(d, args) if *d == self.data.def_nr("OpGetField") => {
+                match args.first().map(Value::unspan) {
+                    Some(Value::Var(base)) => !self.vars.is_argument(*base),
+                    Some(inner) if matches!(inner, Value::Call(bd, _) if *bd == self.data.def_nr("OpGetField")) => {
+                        self.return_field_base_is_local_var(inner)
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
     fn site_value_ref(&self, tail: &Value) -> Option<u16> {
         match tail.unspan() {
             Value::Var(v) => Some(*v),
@@ -6057,21 +6089,19 @@ impl Parser {
                         if ref1_var != u16::MAX && self.vars.is_argument(ref1_var) {
                             (self.return_buffer().map_or(u16::MAX, |(a, _)| a), ref1_var)
                         } else if let Some((a, bv)) = self.return_buffer()
-                            && dep.iter().any(|&d| {
-                                d != bv
-                                    && (self.vars.is_argument(d)
-                                        // #488: a field VIEW into a non-argument LOCAL
-                                        // (`return r.pts` — dep is the STRUCT local, freed at
-                                        // scope exit) needs the same element-copy into the
-                                        // caller's buffer as the field-of-param case; without
-                                        // it the value is emitted as a discarded statement and
-                                        // the fn returns null (empty on native — the interpreter
-                                        // masked it by reading top-of-stack, with a UAF + leak).
-                                        // A fresh local VECTOR (`return o` — the dep IS the
-                                        // vector) keeps the no-copy path: copying would orphan
-                                        // the local on a mid-body return (see above).
-                                        || !matches!(self.vars.tp(d).base(), Type::Vector(_, _)))
-                            })
+                            && (dep.iter().any(|&d| d != bv && self.vars.is_argument(d))
+                                // #488: a field VIEW rooted at a non-argument LOCAL
+                                // (`return r.pts` — the struct local is freed at scope
+                                // exit) needs the same element-copy into the caller's
+                                // buffer as the field-of-param case; without it the value
+                                // was emitted as a discarded statement and the fn returned
+                                // null (empty on native — the interpreter masked it by
+                                // reading top-of-stack, with a UAF read + a store leak).
+                                // Shape-matched, NOT dep-matched: a `return match {…}` /
+                                // fresh-local return also carries local deps but must keep
+                                // its NRVO delivery (its construction block cannot sit in
+                                // OpAppendVector's argument position).
+                                || self.return_field_base_is_local_var(&v))
                         {
                             (a, bv)
                         } else {
