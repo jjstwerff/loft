@@ -222,6 +222,27 @@ inline sub-cases of the `Type::Reference(td, ls)` arm (#120 hidden-ref recovery 
 return_views_local copy / plain rename) are now cells of one selector; the separate
 nullable-unwrap arm is left as-is (its own earlier `block_result` branch).
 
+## Slice 2b — the nullable-unwrap arm folds into the ONE dispatch (2026-07-03)
+
+The `tail_is_nullable_unwrap` arm (block_result's last pre-selector Reference path)
+carried the `MaterializeView` mechanism INLINE — character-for-character the
+`RefDelivery::MaterializeView` dispatch body. Folded: the arm keeps its own entry
+(it keys on the DECLARED result + the unwrap tail shape, which the `t == Reference`
+arm cannot see) and its body is now `dispatch_reference_delivery(MaterializeView)`
+— the #416/#448 mechanism-through-one-dispatch pattern on the Reference side.
+Byte-identical on `D-own-1-reference-corpus.loft` (0 diff lines, IR + bytecode +
+native Rust), corpus runs clean both backends, suite green.
+
+**Instrument re-read at this point (post-flip, post-fold):** `block_result` is
+**320 lines** (was 459), ~24 helper calls (was 45); every VECTOR mechanism flows
+through `dispatch_vector_delivery`, every REFERENCE mechanism through
+`dispatch_reference_delivery`. Remaining thicket: the TEXT sub-story (the
+`text_return` work-buffer promotion + the cross-phase B5-L3/`__ret_text` family —
+per-var rules, not a tail-shape selector; a different collapse shape), the
+`return_buffer`/`nrvo` plumbing helpers, and the C86 bind-site derivation residual
+(expressions.rs `struct_vec_field`).
+
+
 **Behaviour-PRESERVING.** Corpus `bytecode-comparisons/D-own-1-reference-corpus.loft` (one fn
 per Reference-return path: owned-fresh, wrap-call, return-views-local #306, nullable-unwrap,
 arg-borrow). Verified: bytecode + native Rust byte-identical before/after (the only introspect

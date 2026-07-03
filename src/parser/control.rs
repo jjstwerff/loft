@@ -901,10 +901,12 @@ impl Parser {
                 && !l.is_empty()
                 && self.tail_is_nullable_unwrap(&l[l.len() - 1])
             {
-                let last = l.len() - 1;
-                let w = self.materialize_view_return(*td, &mut l[last]);
-                self.ref_return(&[w], l, RetSite::BlockTail);
-                self.nrvo_collapse_tail_set(l, &[w]);
+                // @PLN85 D-own-1 — the nullable-unwrap arm keeps its own entry
+                // (it keys on the DECLARED result + the unwrap tail shape, which
+                // the `t == Reference` arm below cannot see), but its MECHANISM
+                // is the selector's `MaterializeView` cell — one dispatch emits,
+                // like the #416/#448 fold on the vector side.
+                self.dispatch_reference_delivery(RefDelivery::MaterializeView, *td, l);
             } else if let Type::Text(ls) = t.base() {
                 // @PLN25 slice (c): `.base()` — a `-> text?` return dispatches to the same
                 // work-buffer conversion as `-> text` (text_return re-applies the `?`).
