@@ -53,6 +53,21 @@ enum Delivery {
 /// rename the tail's work-ref(s) onto `__retbuf`, or materialise-copy a tail that
 /// borrows a LOCAL (#306) before it escapes. (The nullable-unwrap tail is handled by
 /// its own earlier `block_result` arm and is NOT routed here.)
+/// @PLN85 D-own-1 — the per-var verdict for `text_return`'s promotion of a
+/// return-dep variable (see `classify_text_dep`).
+enum TextDep {
+    /// Already an attribute — record its index in the return dep.
+    Attr(u16),
+    /// Captured closure var — read from the closure record; never promoted.
+    SkipCaptured,
+    /// A tuple LOCAL (@P330) — no hoist; the B5-L3 temp covers the copy.
+    SkipTupleLocal,
+    /// A text local — promote to a hidden `RefVar(Text)` work-buffer param.
+    PromoteHidden,
+    /// Any other dep type — promote as a plain (visible) parameter.
+    PromotePlain,
+}
+
 enum RefDelivery {
     /// Promote the tail's work-ref(s) to BE `__retbuf` — `ref_return(ws) +
     /// nrvo_collapse_tail_set(ws)`. Covers #120 hidden-ref recovery (`ls` empty,
@@ -4345,6 +4360,45 @@ impl Parser {
         }
     }
 
+    /// @PLN85 D-own-1 — the per-var verdict of `text_return`'s promotion loop,
+    /// as a PURE selector (the classify/apply split `classify_vector_delivery` /
+    /// `classify_reference_delivery` use for tail shapes, applied to the per-var
+    /// rule ladder).  One variant per documented rule; `text_return` applies.
+    fn classify_text_dep(&self, v: u16) -> TextDep {
+        let n = self.vars.name(v);
+        // A name that is already an attribute records its index in the return
+        // dep (dedup at the apply site).
+        if let Some(a) = self.data.def(self.context).attr_names.get(n) {
+            return TextDep::Attr(*a as u16);
+        }
+        // A captured text variable is read from the closure record at runtime —
+        // it must NOT become a hidden RefVar(Text) work-buffer argument (that
+        // would shift `__closure` to a wrong stack position).
+        if self.captured_names.iter().any(|(name, _)| name == n) {
+            return TextDep::SkipCaptured;
+        }
+        let tp = self.vars.tp(v);
+        // A text local promotes to a HIDDEN RefVar(Text) out-param buffer.
+        // @PLN25 DN1 (#487 / 449): `.base()` peel — an `Optional(Text)` local
+        // shares `Text`'s sentinel storage (a null `text?` IS `STRING_NULL` in
+        // the same slot), so it hoists to the SAME hidden buffer.  Without the
+        // peel it fell to the plain-VALUE promotion below and call sites
+        // pushed a `null` placeholder into a frame laid out for a work buffer
+        // (`realloc(): invalid next size` in the multiplayer/ws consumers).
+        if matches!(tp.base(), Type::Text(_)) {
+            TextDep::PromoteHidden
+        } else if matches!(tp, Type::Tuple(_)) {
+            // @P330: a tuple local must NOT hoist to a parameter — call sites
+            // would push a 12-byte null DbRef where the slot is 16+ bytes per
+            // text element, corrupting the callee frame.  The dep drops; the
+            // B5-L3 `__ret_N` deep-copy temp (scopes.rs) covers the value.
+            TextDep::SkipTupleLocal
+        } else {
+            // Any other dep type promotes as a plain (visible) parameter.
+            TextDep::PromotePlain
+        }
+    }
+
     pub(crate) fn text_return(&mut self, ls: &[u16]) {
         // @PLN25 slice (c): peel `Optional` — a `-> text?` function needs the SAME
         // work-buffer conversion (`RefVar(Text)` hidden out-param + `__ret_N` capture) as
@@ -4363,77 +4417,54 @@ impl Parser {
                 _ => return,
             };
         {
+            // @PLN85 D-own-1 — classify ONCE per var (the pure selector), then
+            // apply the one mechanism per verdict.  The rule rationale lives on
+            // the `TextDep` variants; the arms carry only emission mechanics.
             for v in ls {
-                let n = self.vars.name(*v);
-                let tp = self.vars.tp(*v);
-                // skip related variables that are already attributes
-                if let Some(a) = self.data.def(self.context).attr_names.get(n) {
-                    if !dep.contains(&(*a as u16)) {
-                        dep.push(*a as u16);
+                match self.classify_text_dep(*v) {
+                    TextDep::Attr(a) => {
+                        if !dep.contains(&a) {
+                            dep.push(a);
+                        }
                     }
-                    continue;
-                }
-                // captured text variables are read from the closure record at
-                // runtime — they must NOT be registered as hidden RefVar(Text) work-buffer
-                // arguments.  Adding them would shift __closure to a wrong stack position.
-                if self.captured_names.iter().any(|(name, _)| name == n) {
-                    continue;
-                }
-                // @PLN25 DN1: an `Optional(Text)` local shares `Text`'s sentinel storage
-                // (a null `text?` IS `STRING_NULL` in the same slot), so it hoists to the
-                // SAME hidden `RefVar(Text)` work buffer.  Without the `.base()` peel it
-                // fell through to the generic else-arm below, which promotes the local to
-                // a VISIBLE VALUE parameter — call sites then push a `null` placeholder
-                // into a frame laid out for a work buffer, corrupting the callee's stack
-                // (the exact hazard the @P330 tuple comment describes; surfaced as
-                // `realloc(): invalid next size` in the multiplayer/ws consumers).
-                if matches!(tp.base(), Type::Text(_)) {
-                    // create a new attribute with this name
-                    let a = self.data.add_attribute(
-                        &mut self.lexer,
-                        self.context,
-                        n,
-                        Type::RefVar(Box::new(Type::Text(Deps::none()))),
-                    );
-                    // @P387 zero-cost: mark the work-buffer HIDDEN so it rides the
-                    // same adaptive hidden-return-buffer dispatch struct/vector use
-                    // (`fn_call_ref` pushes one per hidden buf — 0 for a fn with no
-                    // promotable local).  This replaces the static `cref_work_buf`
-                    // injection and keeps the buffer out of the fn-ref TYPE without
-                    // the deps-based exclusion that wrongly dropped returned params.
-                    self.data.definitions[self.context as usize].attributes[a].hidden = true;
-                    self.vars.become_argument(*v);
-                    dep.push(a as u16);
-                    self.vars
-                        .set_type(*v, Type::RefVar(Box::new(Type::Text(Deps::none()))));
-                } else if matches!(tp, Type::Tuple(_)) {
-                    // @P330: a tuple local hoisted to a tuple parameter
-                    // doesn't have a well-defined caller-side null-init —
-                    // call sites would push a 12-byte null DbRef placeholder
-                    // where the parameter slot is 16+ bytes per text element,
-                    // corrupting the callee's frame layout.  Skip the hoist
-                    // entirely: do NOT add an attribute, do NOT promote the
-                    // local to an argument, and do NOT propagate the dep to
-                    // the return type.  The function's return type loses
-                    // the dep on this local, which lets `scopes::free_vars`
-                    // (B5-L3 single-text branch, src/scopes.rs:961-988) save
-                    // the body's tail expression to a `__ret_N: text` temp
-                    // via `Set` (lowers to `OpAppendText`, deep-copying the
-                    // text-element bytes into an owned String) before the
-                    // local is freed.  Same logical fix family as @P329,
-                    // applied one layer up: @P329 fixed tuple-of-text
-                    // RETURN values via deep-copy temps; @P330 fixes
-                    // single-text returns derived from tuple-element access
-                    // on a local tuple variable via the same B5-L3 pattern,
-                    // just by NOT hoisting the tuple local to a parameter
-                    // (which is the wrong escape hatch).  No-op body —
-                    // the local stays a local, the dep is dropped.
-                } else {
-                    let a = self
-                        .data
-                        .add_attribute(&mut self.lexer, self.context, n, tp.clone());
-                    self.vars.become_argument(*v);
-                    dep.push(a as u16);
+                    TextDep::SkipCaptured | TextDep::SkipTupleLocal => {
+                        // SkipTupleLocal (@P330): the dep drops on purpose — the
+                        // return type loses this local, which lets scopes'
+                        // B5-L3 single-text branch deep-copy the tail into a
+                        // `__ret_N` temp before the local frees (the @P329
+                        // family one layer up; hoisting the tuple local was
+                        // the wrong escape hatch — call sites would push a
+                        // 12-byte null DbRef where the slot is 16+ bytes).
+                    }
+                    TextDep::PromoteHidden => {
+                        let n = self.vars.name(*v);
+                        let a = self.data.add_attribute(
+                            &mut self.lexer,
+                            self.context,
+                            n,
+                            Type::RefVar(Box::new(Type::Text(Deps::none()))),
+                        );
+                        // @P387 zero-cost: mark the work-buffer HIDDEN so it rides the
+                        // same adaptive hidden-return-buffer dispatch struct/vector use
+                        // (`fn_call_ref` pushes one per hidden buf — 0 for a fn with no
+                        // promotable local).  This replaces the static `cref_work_buf`
+                        // injection and keeps the buffer out of the fn-ref TYPE without
+                        // the deps-based exclusion that wrongly dropped returned params.
+                        self.data.definitions[self.context as usize].attributes[a].hidden = true;
+                        self.vars.become_argument(*v);
+                        dep.push(a as u16);
+                        self.vars
+                            .set_type(*v, Type::RefVar(Box::new(Type::Text(Deps::none()))));
+                    }
+                    TextDep::PromotePlain => {
+                        let n = self.vars.name(*v);
+                        let tp = self.vars.tp(*v).clone();
+                        let a = self
+                            .data
+                            .add_attribute(&mut self.lexer, self.context, n, tp);
+                        self.vars.become_argument(*v);
+                        dep.push(a as u16);
+                    }
                 }
             }
             // P227: ensure every text-returning LAMBDA has at least one
