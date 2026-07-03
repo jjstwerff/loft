@@ -38,9 +38,7 @@ struct Guard(Option<Child>);
 impl Drop for Guard {
     fn drop(&mut self) {
         if let Some(mut c) = self.0.take() {
-            unsafe {
-                libc_kill(-(c.id() as i32));
-            }
+            libc_kill(-(c.id() as i32));
             let _ = c.wait();
         }
     }

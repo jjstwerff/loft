@@ -2488,14 +2488,13 @@ pub mod browser {
         stores.put(stack, v);
     }
 
-    /// Origin of the last event: `0` = the server, `-1` = a local `post`.
+    /// Status of the last event (kind-3 http completions carry it; `0` otherwise).
     pub fn n_kernel_client_event_status(stores: &mut Stores, stack: &mut DbRef) {
         let v = with_client(|c| c.last.status).unwrap_or(0);
         stores.put(stack, v);
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    /// `kernel_client_event_cid() -> integer`.
+    /// Origin of the last event: `0` = the server, `-1` = a local `post`.
     pub fn n_kernel_client_event_cid(stores: &mut Stores, stack: &mut DbRef) {
         let v = with_client(|c| c.last.cid).unwrap_or(-1);
         stores.put(stack, v);
