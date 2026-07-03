@@ -81,9 +81,11 @@ consumer's loft itself carries the needed compiler support.)
      5-step flow). The maintainer merges the green PR and the registry stays unsigned for that
      entry until the next `registry_maintain.sh` run re-signs the merged result.
    Either way, editing the JSON:
-   - **Edit the JSON with `ensure_ascii=True`** (Python's default): the index escapes unicode as
-     `\uXXXX`, so `ensure_ascii=False` rewrites *every* description line and makes the diff
-     unreviewable — keep it to your entry + `updated`.
+   - **Match the index's CURRENT unicode convention** when editing with a script: check whether
+     descriptions carry raw `—` or escaped `\uXXXX` and pass the matching `ensure_ascii` to
+     `json.dump`, then verify with `git diff` that ONLY your entry (+ `updated`) changed.  The
+     convention has flipped once (a hard "always ensure_ascii=True" rule here rewrote every
+     description line against a raw-unicode index) — the diff check is the invariant, not the flag.
    - **Re-sign, then verify** (the maintainer key; this is the step that breaks all installs if
      skipped — see below). The routine above (`registry-sign.sh`) wraps these two with the
      signing-gate confirmation described above; the raw commands are:

@@ -289,12 +289,48 @@ the `jo_arm_skip` pre-pass (the join_own borrowed-binding delivery).
 apply loop, mirroring `TextDep`/`Delivery`/`RefDelivery`.  `RetCtx` carries
 {site, ret, site_value, direct_count, jo_arm_skip, buffer, is_plain_fn}.
 
-**Instrument gap to close FIRST:** the existing corpora do not cover — mid-return
-work-ref chains (#356), reassigned locals (Plan-57 + the #355 exception), lambda
-growth (P227 twin), the #457 reassigned-adopt implicit tail, and #425
-field-of-local (covered by the suite script, not the corpus).  Extend
-`D-own-1-reference-corpus.loft` (or add a promotion corpus) with one fn per
-verdict row BEFORE cutting; the byte-identical bar applies per verdict cell.
+**Instrument: BUILT (2026-07-03).** `D-own-1-promotion-corpus.loft` — one fn per
+verdict rung, coverage PROVEN with the `LOFT_TRACE_RR` per-verdict sentinel now in
+`ref_return` (trace-only, env-gated; one line per continue-guard):
+
+| corpus fn | verdict(s) it fires |
+|---|---|
+| r1_param / r6_wrap | MergeAttr (param) |
+| r2_lit / r6_mk | RenameToBuffer (work var) |
+| r3_nrvo, r4_reassigned, r8_mid | BindCopy (`+=`/reassign counts as Plan-57 reassigned → #355 fall-through) + MergeOnly (`__vdb`) |
+| r5_own_field | BindCopy via #425 returns_own_field |
+| r6_inner | RenameToBuffer (outer call ref) — the inner ref never reaches direct `ls` |
+| r7_jo (vector\<STRUCT\> match, `[]` arm) | SkipDelivered (jo_arm_skip) |
+| r9_rec | BindCopy + MergeOnly (the #457 adopt tail) |
+| r10_lambda | Grow (single-assignment lambda local) |
+| r10b_lambda | SkipReassigned (lambda — #355 exception is plain-fn-only) |
+| r11_trans | RenameToBuffer + BindSubstitute |
+| r12_ref | RenameToBuffer (Reference family) |
+
+**Sentinel sweep over ALL 346 `tests/scripts/*.loft` (compile via introspect):**
+BindCopy 2114 · MergeOnly 1057 · MergeAttr 831 · RenameToBuffer 819 ·
+BindSubstitute 27 · SkipDelivered 1 · **SkipInnerRef 0 · SkipReassigned 0 ·
+Grow 0**.  So: (a) `SkipInnerRef` is DEAD-IN-PRACTICE suite-wide — gate-ON and
+gate-OFF probes (nested calls, two-borrow callees, `??` joins) could not reach it
+either, because a non-site-value work ref only ever arrives TRANSITIVELY (→
+MergeOnly guards it first); keep the verdict variant in the collapse but mark it
+unreachable-suspected. (b) SkipReassigned/Grow are lambda-only — no suite script
+exercised them before this corpus.
+
+**Leak cells the corpus surfaced (pre-existing, fix AFTER the byte-identical
+collapse, on the clean structure):**
+- **L1** — lambda `Grow` promotion leaks the grown buffer: `f = fn(x){ q = [x, x+1]; q }; f(n)`
+  leaks `vector<integer>×1` on BOTH backends.
+- **L2** — lambda `SkipReassigned` local (`q = [x]; q += [..]; q`) leaks on
+  NATIVE only.
+- **L3** — a delivered match-return vector (`r7_jo`, jo_arm_skip) whose element
+  is then discharged caller-side (`g0[1] ?? E7{..}`) leaks the returned
+  `vector<E7>` on BOTH backends, allocation-order-sensitive (native shows it in
+  the 2-fn repro but not the 14-fn corpus) — the minimal repro for the known
+  heap-`??`-discharge × churn cell.
+
+The byte-identical bar applies per verdict cell; the leak cells are pinned as
+CURRENT behavior until their own fix slices.
 
 
 

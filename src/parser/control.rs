@@ -5651,11 +5651,18 @@ impl Parser {
             let site_value = body.last().and_then(|t| self.site_value_ref(t));
             let is_plain_fn = !self.data.def(self.context).name().contains("__lambda")
                 && self.data.def_type(self.context) == crate::data::DefType::Function;
+            // @PLN85 D-own-1 slice 3 — the per-var verdict sentinel (trace only):
+            // one line per promotion verdict so the corpus's coverage of every
+            // ladder rung is PROVEN before the classify_ret_promotion cut.
+            let rr = std::env::var("LOFT_TRACE_RR").is_ok();
             for (e_idx, v) in expanded.iter().enumerate() {
                 // @PLN85 match_return: a borrowed binding already DELIVERED into a
                 // separate `__retbuf` above (`jo_arm_skip`) is a local, not the return —
                 // promoting it would re-alias the buffer onto the binding var.
                 if jo_arm_skip.contains(v) {
+                    if rr {
+                        eprintln!("[rr]   v={} verdict=SkipDelivered", self.vars.name(*v));
+                    }
                     continue;
                 }
                 let transitive = e_idx >= direct_count;
@@ -5679,11 +5686,17 @@ impl Parser {
                         && site == RetSite::BlockTail
                         && matches!(&ret, Type::Vector(_, _)))
                 {
+                    if rr {
+                        eprintln!("[rr]   v={n} verdict=SkipReassigned");
+                    }
                     continue;
                 }
                 // skip related variables that are already attributes
                 if let Some(a) = self.data.def(self.context).attr_names.get(n) {
                     let a = *a as u16;
+                    if rr {
+                        eprintln!("[rr]   v={n} verdict=MergeAttr({a})");
+                    }
                     if !dep.contains(&a) {
                         dep.push(a);
                     }
@@ -5703,6 +5716,9 @@ impl Parser {
                     continue;
                 }
                 if transitive {
+                    if rr {
+                        eprintln!("[rr]   v={n} verdict=MergeOnly");
+                    }
                     continue; // merge-only for transitively-reached vars (see above)
                 }
                 // An inner work ref that is not the site's value stays a
@@ -5722,6 +5738,9 @@ impl Parser {
                 let site_adopts_v =
                     site_value.is_some_and(|sv| self.vars.tp(sv).depend().contains(v));
                 if is_work_ref && site_value.is_some() && site_value != Some(*v) && !site_adopts_v {
+                    if rr {
+                        eprintln!("[rr]   v={n} verdict=SkipInnerRef");
+                    }
                     continue;
                 }
                 // @PLAN59 / H1: bind the promoted local to the
@@ -5763,6 +5782,9 @@ impl Parser {
                 if allow_rename
                     && let Some(&buf_attr) = self.data.def(self.context).attr_names.get("__retbuf")
                 {
+                    if rr {
+                        eprintln!("[rr]   v={n} verdict=RenameToBuffer");
+                    }
                     let def = &mut self.data.definitions[self.context as usize];
                     def.attributes[buf_attr].name = n.to_string();
                     def.attr_names.remove("__retbuf");
@@ -5817,6 +5839,9 @@ impl Parser {
                     && buf_var != *v
                 {
                     if is_work_ref {
+                        if rr {
+                            eprintln!("[rr]   v={n} verdict=BindSubstitute");
+                        }
                         for op in body.iter_mut() {
                             Self::substitute_work_ref(op, *v, buf_var);
                         }
@@ -5830,6 +5855,9 @@ impl Parser {
                             Self::chain_site_set_shape(&ret, tail, buf_var);
                         }
                     } else if let Some(tail) = body.last_mut() {
+                        if rr {
+                            eprintln!("[rr]   v={n} verdict=BindCopy");
+                        }
                         // Named local: keep its own store; deliver a COPY in
                         // the buffer at the return.  #425 — a struct-enum
                         // (heap `Type::Enum`) field-of-local return copies the
@@ -5860,6 +5888,9 @@ impl Parser {
                 // name); PASS-2 growth on a plain fn must never happen —
                 // callers compiled in pass 2 before the growth would hold
                 // a short arg list.
+                if rr {
+                    eprintln!("[rr]   v={n} verdict=Grow");
+                }
                 debug_assert!(
                     self.first_pass
                         || self.data.def(self.context).name().contains("__lambda")
