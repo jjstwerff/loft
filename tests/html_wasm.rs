@@ -925,3 +925,33 @@ fn pln26_phase3_native_package_runs_on_wasm() {
         String::from_utf8_lossy(&run.stderr)
     );
 }
+
+/// Tier 1 + 2 of the browser byte channel, round-tripped headlessly:
+/// `host_output` (loft->JS structured message) is echoed back by the
+/// harness loopback as `echo:<msg>` into the input QUEUE, and
+/// `host_input()` pops exactly one message per call — the second read is
+/// empty.  This is the whole "JS owns the network" request/response
+/// pattern with the fetch replaced by a deterministic echo.
+#[test]
+fn host_output_input_roundtrip_queue() {
+    let src = r#"fn main() {
+  host_output("fetch http://unit.test/tile");
+  reply = host_input();
+  println("reply=[{reply}]");
+  second = host_input();
+  println("second=[{second}]");
+}
+"#;
+    let Some((stdout, stderr, ok)) = run_html_wasm("host_roundtrip", src) else {
+        return; // prerequisites missing — skipped with a note
+    };
+    assert!(ok, "wasm run failed; stderr: {stderr}");
+    assert!(
+        stdout.contains("reply=[echo:fetch http://unit.test/tile]"),
+        "loopback reply missing; stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("second=[]"),
+        "queue must be empty after one pop; stdout: {stdout}"
+    );
+}

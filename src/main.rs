@@ -5854,14 +5854,23 @@ const wasmBytes=Uint8Array.from(atob(wasmB64),c=>c.charCodeAt(0));
 const out=document.getElementById('out');
 const dec=new TextDecoder();
 let mem;
-// JS -> loft input: set globalThis.loftInput (a string) before this runs and
-// host_input() reads it (len+copy).  Or instantiate the wasm yourself in a Web
-// Worker with these same loft_io imports and feed inputBytes per request.
-let inputBytes=new TextEncoder().encode(globalThis.loftInput!=null?String(globalThis.loftInput):"");
+// JS -> loft input is a QUEUE: seed it with globalThis.loftInput (a string)
+// before this runs, push live messages any time with globalThis.loftPush(msg)
+// (e.g. fetch() completions) — each host_input() call pops one message
+// (len+copy pairs; the copy pops).  loft -> JS structured messages arrive at
+// globalThis.loftOutput(msg) (host_output(); default: console.log) — the
+// request/response pattern: loft host_output's a request, JS acts on it and
+// loftPush'es the completion.
+const enc=new TextEncoder();
+const inQ=[];
+if(globalThis.loftInput!=null)inQ.push(enc.encode(String(globalThis.loftInput)));
+globalThis.loftPush=(m)=>{{inQ.push(enc.encode(String(m)));}};
 const imports={{loft_io:{{
   loft_host_print:(ptr,len)=>{{out.textContent+=dec.decode(new Uint8Array(mem.buffer,ptr,len));}},
-  loft_host_input_len:()=>inputBytes.length,
-  loft_host_input_copy:(ptr)=>{{new Uint8Array(mem.buffer,ptr,inputBytes.length).set(inputBytes);}}
+  loft_host_input_len:()=>inQ.length?inQ[0].length:0,
+  loft_host_input_copy:(ptr)=>{{const b=inQ.shift();if(b)new Uint8Array(mem.buffer,ptr,b.length).set(b);}},
+  loft_host_output:(ptr,len)=>{{const m=dec.decode(new Uint8Array(mem.buffer,ptr,len));
+    if(globalThis.loftOutput)globalThis.loftOutput(m);else console.log("[loft:out]",m);}}
 }}}};
 WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
   mem=r.instance.exports.memory;

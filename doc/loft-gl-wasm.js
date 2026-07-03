@@ -182,17 +182,33 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
   return {
     loft_io: coerceArgs({
       loft_host_print(ptr, len) { output.textContent += readStr(ptr, len); },
-      // JS -> loft input, the mirror of loft_host_print.  host_input() reads the
-      // bytes JS set on globalThis.loftInput (a string) before loft_start, via
-      // len+copy (loft sizes the buffer, then the host fills it).
+      // JS -> loft input is a QUEUE, the mirror of loft_host_print: seed it
+      // with globalThis.loftInput (a string) before loft_start, push live
+      // messages any time with globalThis.loftPush(msg) — e.g. fetch()
+      // completions.  Each host_input() call pops one message via a
+      // len+copy pair (loft sizes the buffer, the copy pops).
       loft_host_input_len() {
-        if (!globalThis.__loftInputBytes) globalThis.__loftInputBytes =
-          new TextEncoder().encode(globalThis.loftInput != null ? String(globalThis.loftInput) : "");
-        return globalThis.__loftInputBytes.length;
+        if (!globalThis.__loftInQ) {
+          globalThis.__loftInQ = [];
+          if (globalThis.loftInput != null)
+            globalThis.__loftInQ.push(new TextEncoder().encode(String(globalThis.loftInput)));
+          globalThis.loftPush = (m) =>
+            globalThis.__loftInQ.push(new TextEncoder().encode(String(m)));
+        }
+        const q = globalThis.__loftInQ;
+        return q.length ? q[0].length : 0;
       },
       loft_host_input_copy(ptr) {
-        const b = globalThis.__loftInputBytes || new Uint8Array(0);
-        new Uint8Array(getMem().buffer, ptr, b.length).set(b);
+        const b = (globalThis.__loftInQ || []).shift();
+        if (b) new Uint8Array(getMem().buffer, ptr, b.length).set(b);
+      },
+      // loft -> JS structured messages (host_output()): the page handles
+      // them in globalThis.loftOutput(msg) — the request/response pattern is
+      // host_output a request, act on it in JS, loftPush the completion.
+      loft_host_output(ptr, len) {
+        const m = readStr(ptr, len);
+        if (globalThis.loftOutput) globalThis.loftOutput(m);
+        else console.log("[loft:out]", m);
       }
     }),
     loft_gl: coerceArgs({

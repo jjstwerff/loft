@@ -40,7 +40,7 @@ Bridge API and concluded `--html` has a filesystem; it does not):
 
 | Build | Target | Host surface | Use it for |
 |---|---|---|---|
-| **`--html`** | `wasm32-unknown-unknown` cdylib, raw `extern "C"` (no wasm-bindgen), driven by `doc/loft-gl-wasm.js` | ONLY `loft_io.loft_host_print`, `loft_io.host_input`, `loft_gl.*`, plus any `[wasm.bridge]` routes a used library ships (e.g. `web`'s WebSocket).  **No filesystem, no args, no env.** | The browser.  Small: ~1.1 MB (~330 KB gz) for a real kernel |
+| **`--html`** | `wasm32-unknown-unknown` cdylib, raw `extern "C"` (no wasm-bindgen), driven by `doc/loft-gl-wasm.js` | ONLY `loft_io.loft_host_print`, `loft_io` input queue + `host_output`, `loft_gl.*`, plus any `[wasm.bridge]` routes a used library ships (e.g. `web`'s WebSocket).  **No filesystem, no args, no env.** | The browser.  Small: ~1.1 MB (~330 KB gz) for a real kernel |
 | **`--native-wasm`** | `wasm32-wasip2`, full `std` + WASI + component adapter | WASI (a real fs, args, env via the runtime) | Headless/server wasm.  **Compile-only** — needs an external runtime (wasmtime).  ~4× heavier than `--html` (measured 5.4 MB / 1.5 MB gz on the same kernel) — do not ship it to a browser |
 | **IDE `make wasm`** | wasm-bindgen build (`wasm` Cargo feature) | the `globalThis.loftHost` bridges **this document describes** | The in-browser IDE/playground |
 

@@ -171,6 +171,11 @@ function basename(p) {
   return p.split(/[\\/]/).pop();
 }
 
+// JS->loft input queue for the loft_io bridge below (seed via $LOFT_INPUT).
+const inQ = [];
+if (process.env.LOFT_INPUT)
+  inQ.push(new TextEncoder().encode(process.env.LOFT_INPUT));
+
 // Expected host imports for a `loft --html` bundle.  Loose stubs —
 // we don't care what they return; we only care whether a trap fires
 // during loft_start.  The proxy answers anything unrecognised with 0.
@@ -201,6 +206,26 @@ const stubs = {
         const s = new TextDecoder().decode(bytes);
         if (!enableTrace) process.stdout.write(s);
       }
+    },
+    // The JS->loft input QUEUE (host_input pops one message per call):
+    // seeded from $LOFT_INPUT, extended by the loft_host_output loopback
+    // below — the headless stand-in for a page's loftPush().
+    loft_host_input_len: () => (inQ.length ? inQ[0].length : 0),
+    loft_host_input_copy: (ptr) => {
+      const b = inQ.shift();
+      if (b && instance)
+        new Uint8Array(instance.exports.memory.buffer, ptr, b.length).set(b);
+    },
+    // loft->JS structured messages (host_output): the harness LOOPBACK —
+    // every message is echoed straight back into the input queue as
+    // "echo:<msg>", a deterministic stand-in for "the page acts on the
+    // request (fetch etc.) and loftPush'es the completion".
+    loft_host_output: (ptr, len) => {
+      if (!instance) return;
+      const s = new TextDecoder().decode(
+        new Uint8Array(instance.exports.memory.buffer, ptr, len));
+      if (enableTrace) trace.push(`loft_host_output(${JSON.stringify(s)})`);
+      inQ.push(new TextEncoder().encode("echo:" + s));
     },
   },
   loft_gl: new Proxy(loftGlExplicit, {

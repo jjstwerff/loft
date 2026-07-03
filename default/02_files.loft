@@ -433,13 +433,25 @@ pub fn env_variables() -> vector < EnvVariable > env#read;
 pub fn env_variable(name: text) -> text env#read;
 #rust"stores.os_variable(@name)"
 #impure(host_io)
-// Reads all input handed to the program as one text: from stdin on native and
-// --native-wasm (WASI), and from the JS host on --html (the page sets it before
-// loft_start runs). Use for a headless compute module — read the input, compute,
-// print the result — the mirror of print (loft_io output). Empty when there is
-// no input. The engine only moves opaque bytes; the program parses them.
+// Pops the next pending host message as one text; empty when there is none.
+// The source is per-target: stdin (read once, to EOF) on native and
+// --native-wasm (WASI); the JS host's input QUEUE on --html — seed it with
+// globalThis.loftInput before loft_start, and push live messages any time
+// with globalThis.loftPush(msg) (e.g. fetch() completions).  Use for a
+// headless compute module or a polled input loop — the inbound mirror of
+// host_output.  The engine only moves opaque bytes; the program parses them.
 pub fn host_input() -> text;
 #rust"stores.host_input_native()"
+#impure(host_io)
+// Sends one STRUCTURED message to the host shell — the outbound mirror of
+// host_input, distinct from user-facing print.  Per target: a line on stderr
+// (native and WASI — the invoking process can script it); the page's
+// globalThis.loftOutput(msg) handler on --html.  The browser pattern for
+// loft-initiated work: host_output a request (e.g. "fetch <url>"), the JS
+// shell acts on it, and pushes the completion back via loftPush for
+// host_input to pop — JS owns the network, loft stays pure compute.
+pub fn host_output(msg: text);
+#rust"stores.host_output_native(@msg)"
 #impure(host_io)
 // --- Time ---
 // Returns the current wall-clock time as milliseconds since the Unix epoch
