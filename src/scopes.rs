@@ -1672,6 +1672,29 @@ impl Scopes {
                     }
                 }
             }
+            // @PLN85 F2 (the fuzzer's catch: `t[i] ?? N{..}`) — a
+            // MULTI-source return mixing an OWNED record work-ref arm with
+            // view arms is a runtime JOIN even WITHOUT a null arm: the owned
+            // arm's store transfers only when ITS branch ran, else its
+            // (interp-allocating) preamble store orphans.  The CALL-default
+            // twin never hits this — a Call arm contributes no source var, so
+            // the work-ref keeps its plain free.  Route the owned sources
+            // through the same hoist + `OpFreeRefIfDistinct` leg the null-arm
+            // join uses; view sources (non-empty deps) stay suppressed as
+            // borrows.
+            if sources.len() > 1 {
+                for &v in &sources {
+                    if matches!(
+                        function.tp(v),
+                        Type::Reference(_, _) | Type::Enum(_, true, _)
+                    ) && function.tp(v).depend().is_empty()
+                        && !function.is_argument(v)
+                        && !null_arm_record_sources.contains(&v)
+                    {
+                        null_arm_record_sources.push(v);
+                    }
+                }
+            }
             sources.into_iter().collect()
         } else {
             HashSet::new()

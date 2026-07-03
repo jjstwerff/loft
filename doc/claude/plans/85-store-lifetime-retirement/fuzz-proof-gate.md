@@ -234,16 +234,28 @@ left for follow-up: keyed-container views (`hash`/`sorted`), nested-record value
      makes catch_unwind useless) so the signal doesn't drown the ownership
      oracle; every other path keeps the assert live.  NEEDS ITS OWN
      INVESTIGATION (def re-mint under preloaded data).
-   - **F2 — the `?? <nested-struct-literal>` default leak:** shape
-     `elem_accumulate` × the NESTED value kind —
-     `t[i] ?? N{vs:[], id:0}` leaks the default arm's Object work-ref
-     (`check_ref_leaks`: "`__ref_1` registered in an inner block scope not
-     reachable from function-exit cleanup"; the release CLI measurably leaks
-     one untyped store — repro `/tmp`-style in the round notes).  A REAL
-     @PLN85-class bug no grid cell or suite test covers.  The target
-     re-finds it within seconds, so fix F2 FIRST — until then fuzz budgets
-     stop at this artifact (a fuzzer blocked by its own day-one catch is the
-     instrument working).
+   - **F2 — the literal-`??`-default join leak — FIXED (2026-07-03 night,
+     the fuzzer's first ownership catch).**  The matrix redrew the axis:
+     LITERAL default vs CALL default (nested-vs-flat was irrelevant).  A
+     return joining a borrowed element view with an owned struct-LITERAL
+     default (`t[i] ?? N{..}`) put the literal arm's work-ref into
+     `return_sources`, whose suppression dropped its free entirely — the
+     PRESENT path leaked the (interp-allocating) preamble store once per
+     call.  The CALL-default twin was always clean: a Call arm contributes
+     no source var, so the work-ref kept its plain pre-return free (the
+     captured working emission).  Fix (scopes.rs): a MULTI-source return
+     mixing an owned record work-ref with view arms is a runtime JOIN even
+     without a null arm — the owned sources route through the same hoist +
+     `OpFreeRefIfDistinct` leg as the null-arm join.  Guard:
+     `tests/scripts/85-ncc-literal-default-join.loft`.
+     **Recorded residual:** when the literal DEFAULT arm actually RUNS, the
+     transferred store leaks at the interp CALLER (the fn's returned deps
+     type the join as a pure borrow of `t`; native's adopt machinery is
+     clean) — the deps-carried-join completion, D-own-1/D-own-2 territory.
+     Note the grammar never takes the default path (in-range indices only) —
+     an unfuzzed axis, listed, not silent.
+     **Post-fix budget: 5,534 executions in 180 s, ZERO findings** (~31
+     exec/s in-process — ~150× the rustc-per-program harness).
 3. **Build `LOFT_POISON`** (@PLN54 S3) — ✅ done — wired (`keys.rs::poison_enabled` + `allocation.rs` free path), both backends, harness `--poison`; positive control proven. Follow-up: poison freed STACK slots too (S3's second half).  **The poison-green worklist (measured 2026-07-03) — 10 of 13 FIXED same-day**, root: the
 return-tail UAF family (return-site frees ran BEFORE the tail expression evaluated —
 silent stale reads without poison).  Three fixes, guard
