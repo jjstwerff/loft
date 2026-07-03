@@ -462,8 +462,16 @@ impl Output<'_> {
                     // owned `String`, not `Str`); a `return nwb_helper()` must be
                     // re-wrapped to this fn's return type instead (owned→owned for
                     // an nwb outer, owned→buffer/scratch for a buffered outer).
+                    // `.unspan()` on both call-shape probes: a TAIL-expression return
+                    // (scopes' free_vars wraps the block tail, Span and all) reaches
+                    // here as `Span(Call(..))`, which a bare `Value::Call` match
+                    // misses — the nwb inner then skipped the scratch/buffer route
+                    // and emitted `Str::new(<String>)` (E0308; the routing `jtext`
+                    // tail-call bug, feedback 2026-07-02).  parse_return-created
+                    // Returns carry the call bare, which is why an explicit
+                    // `return helper();` never reproduced it.
                     let inner_already_str = matches!(
-                        &**val,
+                        (**val).unspan(),
                         Value::Call(d, _) if (*d as usize) < self.data.definitions.len()
                             && matches!(self.data.def(*d).returned(), Type::Text(_))
                             && self.data.def(*d).rust().is_empty()
@@ -478,7 +486,7 @@ impl Output<'_> {
                     // hand back a `Str` pointing into it.  `Str::new(String)` would
                     // fail E0308.
                     let inner_is_nwb_call = matches!(
-                        &**val,
+                        (**val).unspan(),
                         Value::Call(d, _) if (*d as usize) < self.data.definitions.len()
                             && super::def_returns_owned_text(self.data.def(*d))
                     );
