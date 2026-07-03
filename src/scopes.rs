@@ -67,6 +67,12 @@ struct Scopes {
     /// `OpFreeRef(__lift_N)` at function exit reads a slot that was never
     /// allocated along every execution path.
     lift_vars: Vec<u16>,
+    /// Text temps minted mid-scan (the block-VALUE `__blk_N` hoists) whose
+    /// `String` must be DECLARED at function scope on native — a block-local
+    /// `String` behind the block's `Str` value is E0597 ("dropped while
+    /// still borrowed").  Each gets a `Set(tmp, Text(""))` prepended at the
+    /// function root (the `lift_vars` mechanism, text-typed).
+    lift_texts: Vec<u16>,
     /// Counter for `__ret_N` temporaries used by `free_vars` to hold a
     /// non-trivial tail expression's value while free ops run (B5-L3 fix).
     ret_temp_counter: u16,
@@ -145,6 +151,7 @@ fn run_scan_phase(
         scan_depth: 0,
         lift_counter: 0,
         lift_vars: Vec::new(),
+        lift_texts: Vec::new(),
         ret_temp_counter: 0,
         paired_witness: HashMap::new(),
         witness_buffer: HashMap::new(),
@@ -164,6 +171,13 @@ fn run_scan_phase(
     {
         for &v in scopes.lift_vars.iter().rev() {
             bl.operators.insert(0, v_set(v, Value::Null));
+        }
+    }
+    if !scopes.lift_texts.is_empty()
+        && let Value::Block(bl) = &mut code
+    {
+        for &v in scopes.lift_texts.iter().rev() {
+            bl.operators.insert(0, v_set(v, Value::Text(String::new())));
         }
     }
     data.definitions[d_nr as usize].code = code;
@@ -1875,6 +1889,41 @@ impl Scopes {
             result.push(Value::Return(Box::new(v_if(Value::Var(cond_tmp), *t, *f))));
             return result;
         } else {
+            // @PLN85 poison-green — the block-VALUE variant of the B5-L3 rule:
+            // a non-Void block's exit frees run AFTER the tail expression but
+            // BEFORE the enclosing consumer copies the value out
+            // (`test_value = { mk()[0] }` — the text tail borrows the
+            // block-local vector's element bytes; the block-exit OpFreeRef
+            // poisons them before the Set's byte copy).  Hoist the value to a
+            // temp: `Set(__blk_N, expr)` deep-copies the bytes (OpAppendText)
+            // while the source store is still live, the frees run, and the
+            // temp is the block's value.  Text-typed only — the one shape
+            // where the Set IS a deep copy; record/vector block values keep
+            // their existing paths.
+            // (A branch tail — if/match — is EXCLUDED: its arms are unified
+            // to write the assignment target directly, so the hoist's Set
+            // would append the branch's value a SECOND time onto what the arm
+            // already wrote — `if c { null } else { "error" }` read back
+            // "errorerror".  Branch tails keep their existing arm-delivery.)
+            if !is_return
+                && !ls.is_empty()
+                && matches!(tp.base(), Type::Text(_))
+                && !matches!(expr, Value::Null | Value::Var(_))
+                && !Self::tail_is_branch(expr)
+                && !expr_is_terminal
+            {
+                self.ret_temp_counter += 1;
+                let name = format!("__blk_{}", self.ret_temp_counter);
+                let tmp = function.add_temp_var(&name, tp);
+                self.var_scope.insert(tmp, self.scope);
+                self.var_order.push(tmp);
+                self.lift_texts.push(tmp);
+                let mut result = Vec::with_capacity(ls.len() + 2);
+                result.push(v_set(tmp, expr.clone()));
+                result.append(&mut ls);
+                result.push(Value::Var(tmp));
+                return result;
+            }
             ls.insert(0, expr.clone());
             if is_return {
                 // P236: when `expr` is an `If/Match` whose unified
@@ -2814,6 +2863,20 @@ fn is_value_return_type(tp: &Type) -> bool {
 /// `OpNullRefSentinel()` fall-through `parse_match` injects.  Deliberately does
 /// NOT recurse into `If`: a branch that merely CONTAINS a null sub-arm is not a
 /// null terminal (unifying through it would lose the other sub-arm's value).
+impl Scopes {
+    /// The tail of `expr` is an `If` (a lowered if/match) — its arms deliver
+    /// into the assignment target via the arm-unification machinery.
+    fn tail_is_branch(expr: &Value) -> bool {
+        match expr {
+            Value::If(_, _, _) => true,
+            Value::Block(bl) => bl.operators.last().is_some_and(Self::tail_is_branch),
+            Value::Insert(ops) => ops.last().is_some_and(Self::tail_is_branch),
+            Value::Span(b) => Self::tail_is_branch(&b.1),
+            _ => false,
+        }
+    }
+}
+
 fn is_null_terminal(expr: &Value, null_nr: u32) -> bool {
     match expr.unspan() {
         Value::Null => true,

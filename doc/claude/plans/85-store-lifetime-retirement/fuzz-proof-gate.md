@@ -247,11 +247,36 @@ orphan) — fixes pln85_nullable_return_caller_binding_freed leak-free on both b
 `OpFreeRefIfDistinct(w, ret_var)` — a named local adopting one of TWO candidate arm
 stores (`v = Pass{..}; if c { v = Fail{..} }; v`) no longer has the winner freed under
 it — fixes par_struct_to_struct_enum_t4.
-**Poison-green residual (4 cells, all plain-green / poison-only, measured post-fix):**
-`p241_singleton_text`, `pln25_dn1_consumption::index_dev_elision_borrower_{interpret,native}`,
-`store_persist_loft::fresh_then_reload_round_trip` — pre-existing stale reads whose
-poison visibility shifted with allocation order (the conditional-free swap only reduces
-freeing, so it cannot mint a UAF).  The next poison round owns these four.
+**Poison round 2 (2026-07-03, same day): the 4 residual cells FIXED, 2 more surfaced.**
+- `p241_singleton_text` — the block-VALUE variant of the B5-L3 rule: a non-Void
+  block's exit frees ran before the enclosing consumer copied the value out
+  (`test_value = { mk()[0] }` — the text tail borrowed the block-local vector's
+  element bytes).  Fix: hoist to a `__blk_N` temp (the Set deep-copies the bytes),
+  text-typed only; the temp's `String` is LIFTED to function scope (`lift_texts`,
+  the `lift_vars` mechanism) because a block-local `String` behind the block's
+  `Str` value is E0597 on native (caught by `native_dir`'s 29_match).
+- `index_dev_elision_borrower_{interpret,native}` — `block_result`'s Reference arm
+  matched raw `Type::Reference`, so a `-> Item?` (`Optional(Reference)`) escaping
+  borrowed view fell through every delivery arm and was returned raw while its
+  block-local copy store was freed.  Fix: the `.base()` peel on the arm (the same
+  peel family as maybe_row / the `-> text?` gate).
+- `store_persist_loft::fresh_then_reload_round_trip` — an INSTRUMENT bug, not a
+  program bug: a file-backed (`store_persist_bind` mmap) store's memory IS the
+  file, so poison-on-free persisted `0xDEADBEEF` into durable state.  Fix:
+  `free` skips poisoning file-backed stores (`Store::is_file_backed`).
+**Newly visible (attributed PRE-EXISTING — both reproduce on the pre-P4 build
+8f746dbd; each emission change shifts allocation order and the poison lens sees a
+different slice of the latent tail):**
+- `150-i306-view-return-ownership` (wrap suite, interp): `choose`'s
+  `best = m_none(); cand = pick_local(..); if .. { best = cand; }; best` — the
+  #462 local_source face (owned→view reassignment escaping through the return)
+  still stale-reads under poison on iter 0.
+- `85-store-lifetime-enum-match-borrowed-view-overfree` (native only): the #429
+  guard's Holder tag reads poisoned after the walk — a native-side over-free of
+  the borrowed view under poison.
+- (`html_asyncify` under a loaded box is a chrome-harness timeout flake, not a
+  cell.)
+The next poison round owns those two.
 4. **Minimize + wire as a standing job** — ✅ done (2026-07-03): the historical shapes are pinned as 25 graduated `tests/scripts/85-store-lifetime-*.loft` guards; the harness runs in `cargo test` via `tests/ownership_fuzz_gate.rs` (fast loop + control pairs un-ignored, full both-backends replay `--ignored` as the release sweep).  **Self-test re-pinned (2026-07-03):** the join_own default-ON flip cleaned the P14 probe file on BOTH configs, so the positive control re-anchored on generated cells that still reproduce gate-OFF — a crash/divergence-channel control (`elem_accumulate__struct__heavy`) + a leak-channel control (`local_source__struct__none`), each as a buggy(flagged)/fixed(clean) PAIR, so a flip regression fails the self-test too.
 - **Method gate:** every M+ step runs the `design-protocol` skill; this doc IS the hypothesis.
 - **Blocked-by reminder:** widen the value axis only as @PLN25 settles it (above).

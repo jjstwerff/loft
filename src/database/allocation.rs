@@ -557,7 +557,11 @@ impl Stores {
         // "freed" marker; start poisoning from offset 8.  The env flag is the
         // dedicated front door (works on BOTH backends — native calls this
         // same free); the struct flag is the LOFT_LOG=poison_free path.
-        if self.poison_free || crate::keys::poison_enabled() {
+        // A FILE-BACKED store's memory IS the mmap'd file: poisoning it
+        // persists 0xDEADBEEF into durable state (the store_persist reload
+        // read back an empty hash under LOFT_POISON).  The detector targets
+        // in-memory stale reads; durable bytes are out of its scope.
+        if (self.poison_free || crate::keys::poison_enabled()) && !store.is_file_backed() {
             let cap_bytes = store.capacity_words() as usize * 8;
             if cap_bytes > 8 {
                 unsafe {

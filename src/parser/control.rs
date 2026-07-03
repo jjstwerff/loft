@@ -1002,11 +1002,17 @@ impl Parser {
                 let delivery = self.classify_vector_delivery(ls, l, context);
                 let elm_ty = (**elm).clone();
                 self.dispatch_vector_delivery(delivery, &elm_ty, l);
-            } else if let Type::Reference(td, ls) = t {
+            } else if let Type::Reference(td, ls) = t.base() {
                 // @PLN85 D-own-1 — Reference return sub-thicket: classify ONCE from
                 // the deps fact + tail shape, then dispatch to the ONE mechanism
                 // (rename via ref_return, or materialise-copy a borrowed-local view).
                 // Mirrors the vector `classify_vector_delivery` collapse.
+                // `.base()` peel (@PLN85 poison-green): a `-> Item?` return is
+                // `Optional(Reference)` and takes the SAME delivery — without
+                // the peel it fell through EVERY arm, so an escaping borrowed
+                // view (`xs = g.c; e = xs[i]; e`) was returned raw while its
+                // block-local copy store was freed (the elision-borrower UAF;
+                // silently stale without LOFT_POISON).
                 let td = *td;
                 let delivery = self.classify_reference_delivery(ls, l);
                 self.dispatch_reference_delivery(delivery, td, l);

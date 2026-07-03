@@ -269,6 +269,20 @@ impl Drop for Store {
 
 #[allow(dead_code)]
 impl Store {
+    /// True when this store's memory IS a memory-mapped file
+    /// (`store_persist_bind`) — its bytes are DURABLE state.
+    #[must_use]
+    pub fn is_file_backed(&self) -> bool {
+        #[cfg(feature = "mmap")]
+        {
+            self.file.is_some()
+        }
+        #[cfg(not(feature = "mmap"))]
+        {
+            false
+        }
+    }
+
     /// Total capacity of this store in bytes.
     #[must_use]
     pub fn byte_capacity(&self) -> u64 {
