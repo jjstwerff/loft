@@ -223,17 +223,36 @@ left for follow-up: keyed-container views (`hash`/`sorted`), nested-record value
    Run: `cargo +nightly fuzz run program_ownership` (seed corpus committed:
    the 9×4 grid + composition samples).
    **The port caught TWO REAL BUGS in its first five minutes:**
-   - **F1 — the preloaded-stdlib H5 cross-pass divergence:** parsing a
-     generated program on a CLONED-cache stdlib trips
-     `assert_pass2_def_attr_stable` (+2 defs in pass 2) for several shapes;
-     the single-session CLI parse does not.  `parse_str` diverges the same
-     way through its own reset discipline (REPL-facing).  Latent everywhere:
-     release builds compile the assert out.  Artifacts kept under
-     `fuzz/artifacts/program_ownership/`; the fuzzer sets `LOFT_H5_OFF`
-     (a documented escape in `assert_pass2_def_attr_stable` — panic=abort
-     makes catch_unwind useless) so the signal doesn't drown the ownership
-     oracle; every other path keeps the assert live.  NEEDS ITS OWN
-     INVESTIGATION (def re-mint under preloaded data).
+   - **F1 — the H5 lazy-wrapper mint — FIXED (2026-07-03, at the CONTRACT).**
+     Every early theory fell to the instrument.  Not preloaded-stdlib, not
+     the fuzzer, not `parse_str`, not even release-vs-debug behavior: the
+     divergence is in the BARE stdlib parse in EVERY build, and the "only
+     the fuzzer trips" mirage was pure assert placement —
+     `[profile.dev.package.loft] debug-assertions = false` compiles the H5
+     assert OUT of the lib in every dev/test build, so only cargo-fuzz
+     (forces `-Cdebug-assertions`) and explicit
+     `RUSTFLAGS="-C debug-assertions=on" cargo test --release` builds ever
+     CHECK it (calibration failure: the instrument was absent where we
+     believed it green).  A mint-site trace named the producer:
+     `parse_reduce` (and the whole reduce/map/filter builtin family)
+     early-returns the result type on pass 1 and runs the full desugar on
+     pass 2 only, whose iterator machinery lazily mints synthetic
+     `vector<T>` + `main_vector<T>` wrapper defs (`Data::vector_def`) —
+     `sum_of`'s `reduce(v, 0, __add_int)` minted `vector<integer>` pass-2-
+     only (`01_code.loft:1500`, pass1=438 → pass2=440, identical in debug).
+     Symmetric pass-1 minting is STRUCTURALLY impossible for the family
+     (`map`'s output-element wrapper is the lambda's return type, unresolved
+     in pass 1), and the mints are name-keyed idempotent APPENDS — every
+     pass-1 def number is untouched, so H5's numbering contract holds.  Fix:
+     `assert_pass2_def_attr_stable` now exempts EXACTLY that form (trailing
+     `DefType::Vector` named `vector<…>` / `DefType::Struct` named
+     `main_vector<…>`); any other pass-2-only def still fails, named.  The
+     `LOFT_H5_OFF` escape is REMOVED — the fuzzer runs with H5 fully live
+     (post-fix smoke: 2218 execs / 90 s, zero findings).  Standing coverage
+     note: the cargo-fuzz build is the ONLY standing job that checks H5
+     (test-profile builds compile it out per the Cargo.toml override); the
+     one-off class check is `RUSTFLAGS="-C debug-assertions=on" cargo test
+     --release`.
    - **F2 — the literal-`??`-default join leak — FIXED (2026-07-03 night,
      the fuzzer's first ownership catch).**  The matrix redrew the axis:
      LITERAL default vs CALL default (nested-vs-flat was irrelevant).  A

@@ -1117,22 +1117,30 @@ impl Parser {
     /// caught here, because that spurious attr is itself an attribute-count divergence.
     #[cfg(debug_assertions)]
     fn assert_pass2_def_attr_stable(&self, pass1_attr_counts: &[usize]) {
-        // LOFT_H5_OFF — the program-ownership FUZZER's escape hatch (it builds
-        // with panic=abort, so it cannot catch_unwind this): parsing on a
-        // PRELOADED (cloned-cache) stdlib trips a +2 def-count divergence for
-        // some generated shapes — the port's first catch, filed in
-        // fuzz-proof-gate.md for its own investigation.  Only the fuzz target
-        // sets this; every test/CLI path keeps the assert live.
-        if std::env::var_os("LOFT_H5_OFF").is_some() {
-            return;
+        // Pass-2 def GROWTH has exactly one legal form (the fuzzer's F1 catch):
+        // the reduce/map/filter builtin family desugars on pass 2 only — pass 1
+        // early-returns the result type because unresolved lambda/forward types
+        // make the full desugar impossible there — and the desugar machinery
+        // lazily mints synthetic vector wrapper defs (`vector<T>` +
+        // `main_vector<T>`, `Data::vector_def`) that pass 1 never reached.  For
+        // `map` the OUTPUT element wrapper is unknowable in pass 1 (the lambda's
+        // return type), so symmetric pass-1 minting is structurally impossible.
+        // These mints are name-keyed, idempotent APPENDS: every pass-1 def
+        // number is untouched, so the numbering contract H5 protects holds.
+        // Anything else appearing only in pass 2 is a real cross-pass bug.
+        for d in pass1_attr_counts.len()..self.data.definitions.len() {
+            let name = self.data.def(d as u32).name();
+            let dt = self.data.def_type(d as u32);
+            let lazy_wrapper = (matches!(dt, DefType::Vector) && name.starts_with("vector<"))
+                || (matches!(dt, DefType::Struct) && name.starts_with("main_vector<"));
+            debug_assert!(
+                lazy_wrapper,
+                "H5: pass-2-only definition `{name}` (#{d}, {dt:?}) is not a lazy vector \
+                 wrapper — a real cross-pass divergence (pass1={}, pass2={})",
+                pass1_attr_counts.len(),
+                self.data.definitions.len(),
+            );
         }
-        debug_assert_eq!(
-            pass1_attr_counts.len(),
-            self.data.definitions.len(),
-            "H5: definition COUNT diverged across passes (pass1={}, pass2={})",
-            pass1_attr_counts.len(),
-            self.data.definitions.len(),
-        );
         for (d, &c1) in pass1_attr_counts.iter().enumerate() {
             let c2 = self.data.attributes(d as u32);
             debug_assert_eq!(

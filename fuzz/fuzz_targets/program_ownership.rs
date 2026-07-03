@@ -348,10 +348,6 @@ static STDLIB: OnceLock<(Data, Stores)> = OnceLock::new();
 
 fn stdlib() -> (Data, Stores) {
     let (data, db) = STDLIB.get_or_init(|| {
-        // See `assert_pass2_def_attr_stable` — the preloaded-stdlib H5
-        // divergence is filed; gated here so it does not abort the run
-        // (panic=abort makes catch_unwind useless).
-        unsafe { std::env::set_var("LOFT_H5_OFF", "1") };
         let mut p = Parser::new();
         // cargo-fuzz may run with cwd at the repo root or at `fuzz/`.
         let dir = if std::path::Path::new("default").is_dir() {
@@ -361,6 +357,14 @@ fn stdlib() -> (Data, Stores) {
         };
         p.parse_dir(dir, true, false)
             .expect("stdlib parse (run from the loft repo root or fuzz/)");
+        if std::env::var_os("LOFT_FUZZ_DUMP").is_some() {
+            eprintln!(
+                "[stdlib] dir={dir} cwd={:?} defs={} diagnostics={}",
+                std::env::current_dir().ok(),
+                p.data.definitions(),
+                p.diagnostics.lines().len()
+            );
+        }
         (p.data, p.database)
     });
     (data.clone(), db.clone())
@@ -473,5 +477,8 @@ fn run_oracle(src: &str) {
 
 fuzz_target!(|spec: Spec| {
     let src = generate(&spec);
+    if std::env::var_os("LOFT_FUZZ_DUMP").is_some() {
+        eprintln!("--- generated program ({spec:?}) ---\n{src}\n---");
+    }
     run_oracle(&src);
 });
