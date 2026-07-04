@@ -1,0 +1,15 @@
+// calls.md F-Param* — the by-TYPE parameter contract both backends must agree on
+// (VERIFICATION worklist Stage 1/2): scalar params COPY; heap params SHARE
+// (mutate-through visible); a whole-value param reassign is LOCAL; returns independent.
+struct E { h: integer }
+fn inc_scalar(n: integer) { n = n + 1; }                 // scalar copy — caller unchanged
+fn mutate_heap(e: E) { e.h = 99; }                       // heap share — caller sees it
+fn reassign_heap(v: vector<integer>) { v = [7, 7]; }     // whole reassign — local, no write-back
+fn make() -> vector<integer> { [1, 2, 3] }               // independent return
+fn main() {
+    x = 5; inc_scalar(x);                                 // x stays 5
+    o = E { h: 1 }; mutate_heap(o);                       // o.h becomes 99
+    w = [1, 2]; reassign_heap(w);                         // w[0] stays 1
+    a = make(); a[0] = 88; b = make();                    // b independent of a
+    println("x={x} o_h={o.h} w0={w[0]} b0={b[0]}");       // 5 99 1 1
+}

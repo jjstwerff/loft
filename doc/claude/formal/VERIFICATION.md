@@ -43,11 +43,17 @@ plan for the new rules — the oracle already guards each *area*; this drives it
 
 ---
 
-> **Stage 1 (2026-07-04) — the worklist earned its keep.** Two real findings on the top
-> priorities: (1) **H-Copy was imprecise** — a struct-typed projection is a VIEW, not a copy
-> (heap.md corrected: added `H-View`); (2) **coroutine laziness diverges** for LOOP-based yields
-> (native eager) — reclassified as a DECIDED EDGE (a rustc restriction, the maker's accepted
-> trade-off), not a bug. F-ParamRebind and `par` N-independence verified ✓ on both backends.
+> **Stage 1–2 (2026-07-04) — the worklist earned its keep.** Two real findings: (1) **H-Copy was
+> imprecise** — a struct-typed projection is a VIEW, not a copy (heap.md corrected: added
+> `H-View`); (2) **coroutine laziness diverges** for LOOP-based yields (native eager) —
+> reclassified as a DECIDED EDGE (a rustc restriction, the maker's accepted trade-off), not a bug.
+> Everything else on the priority + runtime + static-reject rows verified ✓ on BOTH backends
+> (F-ParamRebind incl. native, `par` N-independence, null/OOB-continue, range/reduce-left/map-fresh,
+> and the static rejects — exhaustiveness / tuple-OOB / wildcard-not-last reject identically).
+>
+> **Graduated to standing oracle guards (nightly gate, both-backends + leak + driver-agreement):**
+> `tests/oracle/24-heap-copy-vs-view.loft` (H-Copy/H-View), `25-parameter-binding.loft` (F-Param*),
+> `26-coroutine-laziness.loft` (straight-line G-Call/G-Next). The full `--ignored` sweep passes.
 
 ## heap.md
 

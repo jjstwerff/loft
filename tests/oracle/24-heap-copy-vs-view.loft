@@ -1,0 +1,29 @@
+// heap.md H-Copy vs H-View — the copy-vs-alias boundary both backends must agree on
+// (VERIFICATION worklist Stage 1). A whole-value / vector bind COPIES; a struct-typed
+// projection is a VIEW. The native DbRef ABI and the interp store must agree.
+struct In { v: integer }
+struct Out { i: In, items: vector<integer> }
+fn main() {
+    o = Out { i: In { v: 1 }, items: [10, 20] };
+
+    // COPY: whole-value local struct bind — independent
+    cs = o;
+    cs.i.v = 99;
+
+    // COPY: vector-valued field projection — independent
+    fv = o.items;
+    fv[0] = 88;
+
+    // VIEW: struct-typed field projection — aliases
+    vi = o.i;
+    vi.v = 77;
+
+    // VIEW: struct element of a vector — aliases
+    vec = [In { v: 5 }, In { v: 6 }];
+    se = vec[0];
+    se.v = 66;
+
+    // cs copied (o.i.v back to the vi-view value), fv copied (o.items[0] unchanged),
+    // vi aliased (o.i.v == 77), se aliased (vec[0].v == 66)
+    println("o_i_v={o.i.v} o_items0={o.items[0]} vec0={vec[0].v}");
+}
