@@ -126,12 +126,37 @@ store; a BORROW reassign frees the tracked owned store it displaces (never r's n
 view) and NULLs it; the scope-exit `OpFreeRef` (generation/ops/ref_ops.rs) frees
 `_own_store_<name>`. So the copy is freed on the empty-loop path and the view is
 never freed on the loop-ran path. `collect_witness_vars` (generation/mod.rs)
-scopes it to one owned assign + ≥1 ncc-borrow reassign — 5/372 scripts trigger it,
-all genuine ownership-transition cases; interp is untouched (was already correct).
-RESIDUAL (excluded, documented): a var with a SECOND owned assign (an owned
-reassign whose in-place store reuse would itself need the witness). Validated:
+scopes it to `owned >= 1 && borrow >= 1` — 4 scripts trigger it, all genuine
+ownership-transition cases; interp is untouched (was already correct). Validated:
 dn2batch 6/6, guard `tests/scripts/85-runtime-join-loop-copy-view.loft`, full
-suite + native_scripts + poison + native leak-check + C86 mutation preserved.
+suite 2600/2600 + native_scripts + poison + native leak-check + C86 mutation.
+
+### Sweep of the transition class (commit a4bcad5b + probes)
+
+Probed six shapes on both backends; found + fixed **two** live native over-frees,
+confirmed **four** safe:
+
+| shape | owned/borrow | result |
+|---|---|---|
+| `r=x; for{ r=v[i]??x }` (loop) | 1 / ≥1 | LIVE → fixed (#495, 44fd7d72) |
+| `r=x; for{ r=v[i]??x; r=Box{..} }` (mixed owned reassign) | ≥2 / ≥1 | LIVE → fixed (a4bcad5b) |
+| `first = items[0]??d; first.v` (borrow-only) | 0 / ≥1 | SAFE — borrow-TYPED, never a candidate |
+| `r=x; for{ r=pick(v,i) }` (borrow via call) | 1 / ≥1 | clean |
+| `r=x; if c { r=v[0]??x }` (conditional, non-loop) | 1 / ≥1 | clean |
+| `r=x; for{ r=pick(v,i) }` with pick's OWNED arm running | 1 / ≥1 | clean (no leak, correct value) |
+
+The **owned>=2 fix** (a4bcad5b): the 2nd owned assign, on the reassign path, ran
+`owned_ref_reassign` / `OpDatabase(var_r)` in-place reuse against a var_r HOLDING A
+BORROWED VIEW. `output_set_witnessed` now resets var_r to the null sentinel before
+the value so it allocates fresh (never reusing/freeing the view), frees the tracked
+owned store it displaces, and tracks the new owned store. Probes:
+`probes/d-own-2/loop-copy-view-native-divergence.loft` (owned==1),
+`owned-reassign-mixed-native-divergence.loft` (owned>=2).
+
+RESIDUAL (latent, safe): a call whose return is a runtime owned/borrow Join
+(`pick` = `v[i] ?? Box{..}`) is classified conservatively as borrow; the OWNED-arm
+store is not tracked, but empirically neither leaks nor corrupts (materialised via
+the return-buffer machinery) — the deps-carried-join, unfuzzed axis, still open.
 
 Original root-cause below.
 
