@@ -6058,6 +6058,35 @@ impl Parser {
                     *first = Value::Insert(vec![clear, old]);
                 }
             }
+            // @PLN85 D-own-2 — prune a STALE visible-param return dep that no pass-2
+            // return source justifies.  `r = x` on a struct is a C86 COPY (`r` owns
+            // its store), but the copy dep-strip is pass-2-only, so PASS 1 records the
+            // source param `x` in the return dep and PASS 2 carries it via
+            // `cur.clone()` above — into a pass where `r` is owned and `x` is NOT in
+            // `expanded` (the pass-2 transitive return-source set).  A VISIBLE attr the
+            // caller reads through `returns_borrowed_view()` MUST name a real pass-2
+            // borrow source; a stale one makes the caller treat an owned copy return as
+            // a borrow and never free it (the struct-copy-return native leak, interp
+            // clean).  `expanded` already includes transitive deps, so a GENUINE borrow
+            // (`fn id(x) -> Box { x }`, or a returned view of `x`) keeps `x`; only the
+            // unreachable stale entry drops.  Hidden buffer attrs are never pruned.
+            let stale_visible: Vec<u16> = {
+                let attrs = self.data.def(self.context).attributes();
+                dep.iter()
+                    .copied()
+                    .filter_map(|a| {
+                        attrs
+                            .get(a as usize)
+                            .filter(|at| !at.hidden)
+                            .map(|at| (a, at.name.clone()))
+                    })
+                    .collect::<Vec<_>>()
+            }
+            .into_iter()
+            .filter(|(_, name)| !expanded.contains(&self.vars.var(name)))
+            .map(|(a, _)| a)
+            .collect();
+            dep.retain(|d| !stale_visible.contains(d));
             // H2: the rebuilt return-type deps are ATTRIBUTE indices —
             // tag them so `as_attr_indices` readers verify in debug builds.
             let dep = Deps::attrs(dep.to_vec());
