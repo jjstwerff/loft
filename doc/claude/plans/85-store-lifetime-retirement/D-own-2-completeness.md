@@ -113,11 +113,27 @@ leak (`3f0330c1`) and the delivery value (`f88833c2`, #492); the class swept dry
 all types × bindings × control.  The only remaining D-own-2 item is the latent + safe
 free-side/oracle three-valued-fact unification → @PLN90.
 
-## @PLN90 slice — the runtime-Join witness (loft#495, 2026-07-04)
+## @PLN90 slice — the runtime-Join witness (loft#495, 2026-07-04) — **FIXED**
 
 Probing the free-side completeness on the @PLN90 branch surfaced a LIVE native
-miscompile (filed **loft#495**), the concrete first slice of the runtime-Join
-witness residual forward-homed at @PLN85 close-out.
+miscompile (filed **loft#495**, **FIXED commit 44fd7d72**), the concrete first
+slice of the runtime-Join witness residual forward-homed at @PLN85 close-out.
+
+**The fix — a native runtime owned-store witness** (`_own_store_<name>: DbRef`,
+prologue-declared per runtime-Join local). `output_set` (generation/dispatch.rs)
+routes such vars through the tracker: an OWNED assign points it at r's fresh
+store; a BORROW reassign frees the tracked owned store it displaces (never r's new
+view) and NULLs it; the scope-exit `OpFreeRef` (generation/ops/ref_ops.rs) frees
+`_own_store_<name>`. So the copy is freed on the empty-loop path and the view is
+never freed on the loop-ran path. `collect_witness_vars` (generation/mod.rs)
+scopes it to one owned assign + ≥1 ncc-borrow reassign — 5/372 scripts trigger it,
+all genuine ownership-transition cases; interp is untouched (was already correct).
+RESIDUAL (excluded, documented): a var with a SECOND owned assign (an owned
+reassign whose in-place store reuse would itself need the witness). Validated:
+dn2batch 6/6, guard `tests/scripts/85-runtime-join-loop-copy-view.loft`, full
+suite + native_scripts + poison + native leak-check + C86 mutation preserved.
+
+Original root-cause below.
 
 Shape: `r = x (C86 copy);  for i { r = v[i] ?? x }` — a Reference local that starts
 OWNED then is reassigned to a **view** each iteration. `ownership_of(v[i] ?? x)` =
