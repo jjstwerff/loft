@@ -1106,7 +1106,7 @@ impl Scopes {
                 RefRhs::Owned => {
                     self.owned_refs.insert(v, self.loops.len());
                 }
-                RefRhs::View | RefRhs::Unknown => {
+                RefRhs::View => {
                     self.owned_refs.remove(&v);
                 }
             }
@@ -2728,15 +2728,14 @@ fn call(to: &'static str, v: u16, data: &Data) -> Value {
 }
 
 /// #316 — what kind of store does the RHS of a `Set` into a Reference var
-/// yield?  Conservative: anything not provably one of the two certain shapes
-/// is `Unknown` (no ownership-transition free is emitted for it).
+/// yield?  Derived from the `ownership_of` oracle (@PLN90 fold): `Own::Owned`
+/// maps to `Owned`, `Borrowed`/`Join` to `View` — the oracle's `_ => Owned`
+/// fallback means there is no third "unprovable" case at this site.
 enum RefRhs {
     /// A store the variable will own (safe to free on a later transition).
     Owned,
     /// A borrowed view into someone else's store (must never be freed).
     View,
-    /// Not provable either way.
-    Unknown,
 }
 
 /// If `op` is a scope-exit free (`OpFreeRef` / `OpFreeText` /

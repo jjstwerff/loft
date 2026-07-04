@@ -14,8 +14,69 @@ use super::{
 };
 
 impl Output<'_> {
-    #[allow(clippy::too_many_lines)]
+    /// @PLN90 #495 — variable-assignment entry.  A "runtime-Join" local (owned
+    /// init + ≥1 ncc-borrow reassign; see [`Output::witness_vars`]) is routed
+    /// through the owned-store-tracker path so neither free-site whole-store-frees
+    /// a borrowed view.  Every other var goes straight to [`Self::output_set_body`].
     pub(super) fn output_set(
+        &mut self,
+        w: &mut dyn Write,
+        var: u16,
+        to: &Value,
+    ) -> std::io::Result<()> {
+        if crate::keys::join_own_enabled() && self.witness_vars.contains(&var) {
+            return self.output_set_witnessed(w, var, to);
+        }
+        self.output_set_body(w, var, to)
+    }
+
+    /// The owned-store-tracker emission for a runtime-Join local.  An OWNED assign
+    /// (the init) emits normally, then points `_own_store_<name>` at the store r
+    /// now owns.  A BORROW reassign (the ncc) emits the plain assignment, frees the
+    /// tracked OWNED store it displaces (never r's new view), and NULLs the tracker.
+    fn output_set_witnessed(
+        &mut self,
+        w: &mut dyn Write,
+        var: u16,
+        to: &Value,
+    ) -> std::io::Result<()> {
+        let variables = self.data.def(self.def_nr).variables();
+        let name = sanitize(variables.name(var));
+        // A whole-value Var-copy OWNS its fresh store (C86) even though the oracle
+        // reports the SOURCE var as Borrowed — mirror collect_witness_vars.
+        let is_var_copy = matches!(
+            to.unspan(),
+            Value::Var(src) if variables.tp(*src).heap_def_nr().is_some()
+        );
+        let owned = is_var_copy
+            || matches!(
+                crate::use_analysis::ownership_of(self.data, self.def_nr, to),
+                crate::use_analysis::Own::Owned
+            );
+        let reassign = self.declared.contains(&var);
+        if reassign && !owned {
+            write!(w, "{{ ")?;
+            self.output_set_inner(w, var, to)?;
+            write!(
+                w,
+                "; if _own_store_{name}.store_nr != u16::MAX \
+                 && _own_store_{name}.store_nr != var_{name}.store_nr \
+                 {{ OpFreeRef(cell, _own_store_{name}, \"{name}(owned)\"); }} \
+                 _own_store_{name} = DbRef::NULL; }}"
+            )?;
+            return Ok(());
+        }
+        self.output_set_body(w, var, to)?;
+        if owned {
+            // The single owned assign (the init) — point the tracker at r's fresh
+            // store.  `collect_witness_vars` guarantees no prior owned store here.
+            write!(w, "; _own_store_{name} = var_{name}")?;
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_lines)]
+    pub(super) fn output_set_body(
         &mut self,
         w: &mut dyn Write,
         var: u16,
