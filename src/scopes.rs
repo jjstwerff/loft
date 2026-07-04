@@ -1087,7 +1087,7 @@ impl Scopes {
             && matches!(function.tp(v), Type::Reference(_, d) if !d.is_empty())
             && self.owned_refs.get(&v) == Some(&self.loops.len())
             && matches!(
-                Self::ref_rhs_ownership(value, function, data, v),
+                Self::ref_rhs_ownership(value, data, self.d_nr),
                 RefRhs::View
             )
             // `value` is pre-scan IR: reads may name the original id (`ov`)
@@ -1102,7 +1102,7 @@ impl Scopes {
         }
         // Track the LATEST assignment's ownership for this var.
         if matches!(function.tp(v), Type::Reference(_, _)) {
-            match Self::ref_rhs_ownership(value, function, data, v) {
+            match Self::ref_rhs_ownership(value, data, self.d_nr) {
                 RefRhs::Owned => {
                     self.owned_refs.insert(v, self.loops.len());
                 }
@@ -1387,49 +1387,22 @@ impl Scopes {
     /// both first assignment and reassignment).  A `Block` whose result type
     /// carries deps is a view — unless a dep names `v` itself (the new value
     /// might point into the store about to be freed).
-    fn ref_rhs_ownership(value: &Value, function: &Function, data: &Data, v: u16) -> RefRhs {
-        match value.unspan() {
-            Value::Call(d, _)
-                if (*d as usize) < data.definitions.len()
-                    && data.def(*d).name().starts_with("n_") =>
-            {
-                // @PLN85 D-own-1 — read the CANONICAL borrowed-view fact the
-                // return-delivery side already uses (`returns_borrowed_view`: a
-                // VISIBLE-attr return dep borrows it → View; a hidden/empty dep
-                // owns → Owned), instead of re-deriving the identical visible-dep
-                // scan inline here.  Same verdict on the same values (for a
-                // Reference return `depend()` is the raw dep list); one fewer
-                // per-site ownership re-derivation on the free side.
-                if matches!(data.def(*d).returned(), Type::Reference(_, _)) {
-                    if data.def(*d).returns_borrowed_view() {
-                        RefRhs::View
-                    } else {
-                        RefRhs::Owned
-                    }
-                } else {
-                    RefRhs::Unknown
-                }
+    /// The free-side owned-vs-view verdict for a Reference reassignment RHS,
+    /// read from the CANONICAL `ownership_of` oracle (@PLN90 D-own-1 — the last
+    /// per-site ownership re-derivation, folded onto the one fact the delivery
+    /// side already reads).  Owned → track the var as owned.  Borrowed AND Join →
+    /// View: a reassignment whose new value is a borrow OR a runtime join
+    /// DISPLACES the var's prior owned store (freed by the #316 transition-free),
+    /// and the var must NOT be tracked as owned afterward (a join might be a
+    /// borrow — tracking it owned would over-free the NEXT transition).  So Join
+    /// folds to View, not "don't-track" — the p462 conditional
+    /// `chosen = t[i] ?? m_none()` reassign needs the prior-store free.
+    fn ref_rhs_ownership(value: &Value, data: &Data, d_nr: u32) -> RefRhs {
+        match crate::use_analysis::ownership_of(data, d_nr, value) {
+            crate::use_analysis::Own::Owned => RefRhs::Owned,
+            crate::use_analysis::Own::Borrowed { .. } | crate::use_analysis::Own::Join { .. } => {
+                RefRhs::View
             }
-            Value::Var(src)
-                if *src < function.count()
-                    && matches!(
-                        (function.tp(v), function.tp(*src)),
-                        (Type::Reference(a, _), Type::Reference(b, _)) if a == b
-                    ) =>
-            {
-                RefRhs::Owned
-            }
-            Value::Block(bl) => match &bl.result {
-                Type::Reference(_, deps) if !deps.is_empty() => {
-                    if deps.contains(&v) {
-                        RefRhs::Unknown
-                    } else {
-                        RefRhs::View
-                    }
-                }
-                _ => RefRhs::Unknown,
-            },
-            _ => RefRhs::Unknown,
         }
     }
 
