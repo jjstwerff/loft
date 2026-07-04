@@ -106,13 +106,21 @@ selector-collapsed) but the per-site thicket is reduced, not deleted, so it stay
   the load-bearing re-derivations are ELIMINATED (return-delivery + reassign thicket
   collapsed behind `classify_X`/`dispatch_X`; the `ownership_of` oracle default-on, 0/54
   over-free; the free side reads `returns_borrowed_view()`) and no re-derivation produces
-  a live bug (closed by construction: fuzz/poison/DA + leak-gate).  But this DEVIATION
-  stays OPEN by the area's own criterion (*every* decision is one `deps` read over a
-  complete fact): ONE re-derivation remains — `scan_set`'s owned-vs-view TRACKER needs
-  "unclassifiable ⇒ don't-own" conservatism opposite the oracle's default — plus the
-  `??`-JOIN inherently-runtime witness.  Latent + SAFE (measured 8997 divergences, 100%
-  one-directional, zero miscompiles), forward-homed to **@PLN90** (copy-diagnostics).
-  Closing the deviation = folding the free-side tracker onto a three-valued oracle.
+  a live bug (closed by construction: fuzz/poison/DA + leak-gate).
+- **@PLN90 note (2026-07-04):** the LAST per-site ownership re-derivation is now GONE —
+  `scan_set`'s owned-vs-view TRACKER (`ref_rhs_ownership`) no longer re-derives from the
+  RHS shape; it reads the ONE canonical `ownership_of` oracle (Owned → track; Borrowed
+  AND Join → View, since a borrow/join reassignment displaces the prior owned store and
+  must not be tracked as owned).  So O-Derived is SATISFIED: every store-lifetime
+  decision now reads the one canonical fact, not a per-site shape scan.  Validated: full
+  suite + `native_scripts` + DA + `LOFT_POISON` + differential oracle green; the p462
+  conditional `?? m_none()` transition and the C86 copy-return cases all clean both
+  backends.  **What REMAINS is D-own-2, not D-own-1:** the oracle's fact is not fully
+  COMPLETE (its `_ => Owned` fallback for unclassifiable values, and the value-vs-bind
+  gap where `r = x` COPIES but the oracle reads the value as a borrow).  These are latent
+  + SAFE today (the fold passes every gate) and are the three-valued-oracle / bind-
+  ownership completion tracked under D-own-2.  O-Derived: **CLOSED** — the re-derivation
+  is deleted; the deviation's residual is O-Complete (D-own-2).
 - **Status:** OPEN — substantially NARROWED (2026-07-04).  Landed: the return-delivery
   collapse is COMPLETE — `block_result` 459→328 lines, **45→21 helper calls**, the 15
   tail-shape classifiers down to ~3 genuinely-distinct entry guards; EVERY delivery
