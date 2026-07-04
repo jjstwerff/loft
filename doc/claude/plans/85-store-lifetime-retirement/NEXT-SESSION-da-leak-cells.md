@@ -1,5 +1,34 @@
 # NEXT SESSION — the DA-inventory leak cells (@PLN85, task: DA calibration residue)
 
+> **▶▶ ALL FOUR LEAK CELLS CLOSED (2026-07-04, branch `tuxedo-pln85-ownership`).**
+> t3/p179 (prior), t4/pln87, t1/closure, t2/n8 — each fixed on BOTH backends,
+> verified under the DA gate, with a graduated `tests/scripts/85-*` guard.  The
+> `skip_free` pass-poison class residual is RESOLVED (§ below).  Remaining DA-map
+> items are NON-leak (format.rs:1213 p188, generate_set/call slot-width,
+> wrap::dir, stdlib slot-width) — see [fuzz-proof-gate.md](fuzz-proof-gate.md)
+> § the final honest DA map.
+>
+> | Cell | Fix | Guard |
+> |---|---|---|
+> | t4/pln87 | displaced-free the `&`-param whole-record writeback CALL twin (ownership-oracle gate + aliasing-safe `OpFreeRefIfDistinct`); interp `codegen.rs` + native `dispatch.rs` | `85-amp-writeback-displaced-free.loft` |
+> | t1/closure | discarded closure-factory temp keeps its `CalleeFrame` ownership dep + is freed; `skip_free` stamped pass-2-only (owns_closure) — `operators.rs` | `85-closure-factory-discarded-free.loft` |
+> | t2/n8 | a `skip_free` var sentinel-inits (no owned placeholder) — `codegen.rs gen_set_first_ref_null` | `85-amp-default-null-buffer-free.loft` |
+> | t3/p179 | pass-1 `skip_free` stamp gated `!first_pass` (prior session) | (in `issues`) |
+>
+> **skip_free pass-poison class residual — RESOLVED (decision):** the poison bites
+> ONLY when an H5 lazy-append SHIFTS the work-ref counter between passes, remapping
+> a pass-1-`skip_free`'d `__ref_N` to a different pass-2 role (t1 = closure-dep
+> append; t3 = nested-literal).  Fix approach **(a) per-site `!first_pass` gates**
+> for the two instances (landed).  The remaining stampers were AUDITED non-vulnerable:
+> `expressions.rs:1333` (user var, stable role), `objects.rs:2077` (memoised witness,
+> already `mark_inline_ref`-safe), `vectors.rs:2552` (non-capturing `FnRefDnr`, null
+> closure), `vectors.rs:2643` (pass-2-only), `vectors.rs:1762` + `fields.rs:463`
+> (stable roles, empirically leak-free both backends).  The **chokepoint fix (b)**
+> (clear all `skip_free` at the pass boundary) is **DECLINED**: variable tables
+> persist across the stdlib↔user parse boundary in one shared `Data`, so a blanket
+> clear at the user pass boundary would wrongly wipe the stdlib's finalised bits —
+> per-file scoping would be more complex + riskier than the residual it addresses.
+
 State as of 2026-07-04 (branch `tuxedo-pln85-ownership`).  This is the live
 worklist from [fuzz-proof-gate.md](fuzz-proof-gate.md) § the final honest DA
 map.  Probes live in [`probes/da-leak-cells/`](probes/da-leak-cells/) — tiny

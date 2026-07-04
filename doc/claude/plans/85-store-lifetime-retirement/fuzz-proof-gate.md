@@ -304,10 +304,15 @@ left for follow-up: keyed-container views (`hash`/`sorted`), nested-record value
      findings.
      **OPEN cells routed to the DA-inventory worklist** (each needs its own
      matrix session; all reproduce ONLY under a DA lib build):
-     - the 4 "Database N not correctly freed" exit-leak tests
-       (`expressions::closure_capture_text`, `issues::n8/p179/pln87`) plus
-       the `sorted<>`-return store leaking at exit (p188 CLI probe) — real
-       store leaks, @PLN85 core;
+     - ~~the 4 "Database N not correctly freed" exit-leak tests
+       (`expressions::closure_capture_text`, `issues::n8/p179/pln87`)~~ —
+       **ALL FOUR CLOSED (2026-07-04)**, both backends + DA gate + graduated
+       `tests/scripts/85-*` guards; see
+       [NEXT-SESSION-da-leak-cells.md](NEXT-SESSION-da-leak-cells.md) for the
+       fix table + the resolved `skip_free` pass-poison class decision.  The
+       `sorted<>`-return store leaking at exit (p188 CLI probe) — real store
+       leak, still OPEN, likely the same object as the `format.rs:1213` cell
+       below;
      - `[set_var]` width mismatches in stdlib text fns (`_elm_N
        (i_parse_errors)` pushes 16B into a 12B slot in `t_4File_lines` /
        `t_4text_split*`; `prev_cr`/`walked` booleans 8B→1B) — ONE producer
