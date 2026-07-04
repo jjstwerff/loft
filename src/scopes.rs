@@ -1393,12 +1393,15 @@ impl Scopes {
                 if (*d as usize) < data.definitions.len()
                     && data.def(*d).name().starts_with("n_") =>
             {
-                if let Type::Reference(_, deps) = data.def(*d).returned() {
-                    let attrs = data.def(*d).attributes();
-                    let visible_dep = deps
-                        .iter()
-                        .any(|&i| (i as usize) >= attrs.len() || !attrs[i as usize].hidden);
-                    if visible_dep {
+                // @PLN85 D-own-1 — read the CANONICAL borrowed-view fact the
+                // return-delivery side already uses (`returns_borrowed_view`: a
+                // VISIBLE-attr return dep borrows it → View; a hidden/empty dep
+                // owns → Owned), instead of re-deriving the identical visible-dep
+                // scan inline here.  Same verdict on the same values (for a
+                // Reference return `depend()` is the raw dep list); one fewer
+                // per-site ownership re-derivation on the free side.
+                if matches!(data.def(*d).returned(), Type::Reference(_, _)) {
+                    if data.def(*d).returns_borrowed_view() {
                         RefRhs::View
                     } else {
                         RefRhs::Owned
