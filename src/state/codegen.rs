@@ -1163,11 +1163,20 @@ impl State {
             _ => Deps::none(),
         };
         if dep.is_empty() {
-            if stack.function.is_inline_ref(v) {
+            if stack.function.is_inline_ref(v) || stack.function.is_skip_free(v) {
                 // Inline-ref temporaries must not allocate a database store at null-init
                 // time.  A real store is assigned later via OpPutRef when the method
                 // returns.  Writes DbRef{store_nr:u16::MAX} at slot; Stores::free
                 // treats it as a no-op if the var is never assigned.
+                //
+                // @PLN85 t2 — the same holds for a `skip_free` var: its store is
+                // owned/freed ELSEWHERE (a `&`-param write-back's transfer buffer
+                // `__ref_N` — objects.rs:2200 — or a borrowed alias), so an eager
+                // owned placeholder here would ORPHAN on the path that never
+                // materialises the real store (the `if !r { r = … }` write-back not
+                // taken → the interp-only kt=65535 leak; native already lowers null
+                // to DbRef::NULL).  Sentinel-init: OpDatabase allocates fresh when
+                // the real store IS assigned, and the free is a no-op if it is not.
                 stack.add_op("OpInitRefSentinel", self);
                 self.code_add(slot_offset);
             } else {
