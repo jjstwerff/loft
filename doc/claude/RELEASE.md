@@ -130,24 +130,51 @@ current `main` tip before working the list.
 - [ ] **Zero-leak gate** — wrap `loft_suite` emits no `stores not freed`
   warnings across the script corpus (both backends).
 
-**B. Public face — the website must not look broken (elevated 2026-07-04):**
+**B. Public face — the website must not ship stale or broken (elevated 2026-07-04):**
 
-- [ ] **Brick Buster** (`tools/brick-buster/25-brick-buster.loft`) — the
-  website **hero** (`doc/images/hero-brick-buster.png`, `doc/brick-buster.html`)
-  and a gallery centrepiece, and it is *almost continually broken*. **Confirmed
-  stale 2026-07-04:** the published `doc/brick-buster.html` was built 2026-06-20
-  but the source moved 2026-07-02 — the website is 12 days behind the code.
-  Verify it runs clean on **both** backends and its six golden screenshots match
-  (title / playing / paused / gameover / explosion / powerups — see
-  GAME_TESTING.md), then rebuild the HTML (`make game`) and re-run the browser
-  WebGL gate (`make test-html-render` → `brick_buster_browser_renders_without_console_errors`).
-  Depends on `lib/graphics` (native cdylib) + registry, so it also exercises the
-  library path below. **Root problem: verification is display/browser-bound with
-  no cheap standing gate — that is *why* it drifts broken. The durable fix is a
-  headless render gate in CI, not a one-off manual check.**
+- [ ] **Rebuild the stale browser artefacts from the release source.** The
+  committed browser bundles drift from source and one is provably stale right
+  now: `doc/brick-buster.html` was built 2026-06-20, source moved 2026-07-02 —
+  the website hero (`doc/images/hero-brick-buster.png`, `doc/brick-buster.html`)
+  is 12 days behind the code. Rebuild both pipelines from the release tip
+  (`make game` + `make gallery`) and confirm the committed `doc/brick-buster.html`
+  + `doc/pkg/*` are fresh. **Structural fix (retires the whole class): build these
+  in a CI step and deploy from CI instead of committing 2.3 MB artefacts — then
+  "stale committed bundle" cannot exist.** See the CI-hardening note below.
+- [ ] **Brick Buster visual gate — via the CPU Canvas atlas, not the browser.**
+  Every sprite (ball / paddle / bricks / power-ups / particles) is drawn by
+  `build_atlas()` → `graphics::Canvas` (`fill_rect`/`fill_circle`/…): the
+  **software rasterizer, zero GL**. So golden-test `build_atlas().save_png()`
+  (fuzzy-MAE, headless, deterministic — the existing `lib/graphics/native/tests/gold.rs`
+  harness) — that exercises exactly the drawing primitives that regress (GL is
+  stable; the primitives inside it break), at ~one PNG diff, no display. Keep one
+  browser WebGL confirmation (`make test-html-render`) as a release-time check,
+  but it is not the gating one.
 - [ ] **Gallery** — regenerate and verify `doc/gallery.html` examples run
   (`scripts/build-gallery-examples.loft`, `gallery-examples.js`); GALLERY_CI
-  green.
+  green (both bundles instantiate — the `gallery` job's Node probe already gates
+  js↔wasm consistency).
+
+**CI hardening (this cycle — retires the recurring "broke the WASM bundle /
+stale website" class; theme-aligned with `2026-07` library hardening):**
+
+- [ ] **Add the missing freshness gate to the per-PR `gallery` job.** The Node
+  instantiate-probe (`tests/html_wasm.rs` for `--html`; the `gallery` job's
+  "Probe committed wasm/js pair" for `doc/pkg/`) already catches js↔wasm
+  *consistency* deterministically — but not *freshness*: a stale-but-consistent
+  bundle passes (proven by the 12-day-stale `doc/brick-buster.html` being green).
+  Add a rebuild-then-`git diff --exit-code` (or drop the committed artefact and
+  build+deploy in CI). This is the one missing piece — the failure class
+  GALLERY_CI.md fights ("a PR skipped the rebuild") is a freshness failure the
+  consistency probe structurally cannot see.
+- [ ] **Move the flaky browser render off the blocking PR path.** The
+  Chrome + SwiftShader gate (`test-html-render`, wired into `cargo test --release`)
+  is GPU/shader-flaky — demote it to a **nightly, retry-tolerant** job. Replace
+  its everyday value with the deterministic Canvas atlas golden above + wiring
+  `gold.rs`'s primitive corpus (line/rect/triangle/text/blend/pixels) into the
+  nightly gate next to the differential oracle. Net: the per-PR WASM gate becomes
+  100% deterministic (clean rebuild + Node-instantiate + freshness-diff); the
+  brittle pixel render never blocks a PR.
 
 **C. Library ecosystem — a coherent registry on day one:**
 
