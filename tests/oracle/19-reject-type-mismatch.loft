@@ -1,0 +1,11 @@
+// Driver-agreement REJECT side (the #433-inverse): a well-typedness judgment is
+// ONE static fact, so an ill-typed program must be REJECTED identically by every
+// driver — `--dump`, `--interpret`, and `--native`. This program is deliberately
+// ill-typed (`integer + text` has no operator); the oracle asserts all three
+// drivers reject it (none runs, same diagnostic), exercising the reject facet the
+// all-accept corpus never touches.
+fn main() {
+    x = 1;
+    y = x + "text";
+    println("{y}");
+}

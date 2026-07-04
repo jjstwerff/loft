@@ -1,0 +1,28 @@
+// Nullability (@PLN25 value/null model) — the interpreter's null sentinel and the
+// native representation are distinct; null must propagate identically. Covers the
+// div/mod fault contract (`a / 0` → null, C80), `??`-discharge, an honestly-
+// nullable return, out-of-range indexing, an optional struct field, and null
+// threaded through arithmetic.
+//
+// (The nested-ncc optional-text VECTOR return — `(v[0] ?? d).tag ?? "none"` — is
+// held out: it is a live native E0308 divergence, filed as loft#500; add it back
+// as a corpus program once fixed.)
+struct Slot { id: integer, tag: text? }
+
+fn honest_div(a: integer, b: integer) -> integer? { a / b }
+
+fn main() {
+    // div-by-zero yields null and CONTINUES (both backends); ?? discharges it.
+    println("d0={honest_div(10, 0) ?? -1} d2={honest_div(10, 2) ?? -1}");
+    // a chain of ?? over out-of-range indexing
+    xs = [1, 2, 3];
+    println("oob={xs[9] ?? -7} in={xs[1] ?? -7}");
+    // optional field: null vs present, discharged directly
+    slots = [Slot { id: 1, tag: null }, Slot { id: 2, tag: "gold" }];
+    a = slots[0] ?? Slot { id: 0, tag: "?" };
+    b = slots[1] ?? Slot { id: 0, tag: "?" };
+    println("tag0={a.tag ?? "NULL"} tag1={b.tag ?? "NULL"} id={a.id}");
+    // null threaded through arithmetic then discharged
+    n: integer? = null;
+    println("nullarith={(n ?? 0) + 5} sum={honest_div(20, 4) ?? 0}");
+}
