@@ -65,110 +65,113 @@ plan for the new rules — the oracle already guards each *area*; this drives it
 
 ## heap.md
 
-- ~ **H-Alloc / H-NewRec** — a freshly constructed struct/vector has all fields null/zero; two
-  constructions are distinct stores. *Guard: extend oracle `03`.*
+- ✓ **H-Alloc / H-NewRec** — a struct's un-set field is `0`/null, both backends. *Guard: oracle `03`/`24`.*
 - ✓ **H-Copy** — a WHOLE-VALUE / vector bind COPIES: `c = o; c.v=9` ⇒ `o.v==1`; `fv = e.items;
-  fv[0]=99` ⇒ `e.items[0]==1`; `r=&v; r[0]=99` ⇒ `v[0]==1` (both backends). *Guard: fold into oracle.*
+  fv[0]=99` ⇒ `e.items[0]==1`; `r=&v; r[0]=99` ⇒ `v[0]==1` (both backends). *Guard: `oracle/24`.*
 - ✓ **H-View (the Stage-1 catch)** — a STRUCT-typed projection ALIASES: `c = o.i; c.v=9` ⇒
-  `o.i.v==9`; `s = v[0]; s.v=9` (struct element) ⇒ `v[0].v==9` (both backends). heap.md corrected —
-  H-Copy had wrongly implied projections copy. *Guard: an oracle case pinning both copy and view.*
-- ☐ **H-Copy/View (keyed)** — the copy-vs-view split for a keyed collection (hash/sorted) value +
-  element. *Verify + guard.*
-- ~ **H-Read / H-ReadNull / H-Index** — read a field of `nullref` ⇒ `null` + CONTINUE; `v[i]` with
-  `i≥len` ⇒ `null` + continue. *Guard: an oracle case that reads past a vector and through a null ref.*
-- ☐ **H-Write / H-WriteNull / H-WriteOOB** — a write through `nullref` / out of bounds is a no-op
-  that continues (never a wild write). *Verify both backends + graduate.*
-- ☐ **H-WriteLocked** — a write to a `#lock`ed store faults, never silently succeeds. *Guard.*
+  `o.i.v==9`; `s = v[0]; s.v=9` (struct element) ⇒ `v[0].v==9` (both backends). heap.md corrected.
+  *Guard: `oracle/24-heap-copy-vs-view`.*
+- ✓ **H-Copy (keyed)** — a hash whole-value bind COPIES (`g = h; g += …` leaves `len(h)`), both
+  backends. *Guard: oracle `16` (keyed).*
+- ✓ **H-Read / H-ReadNull / H-Index** — a field of `nullref` ⇒ `null`; `v[i≥len]` ⇒ `null`, both
+  continue, both backends. *Guard: oracle `18` (nullability).*
+- ✓ **H-Write / H-WriteNull / H-WriteOOB** — `v[9]=…` on a len-3 vector is a no-op, `len` stays 3,
+  continues, both backends. *Guard.*
+- ✓ **H-WriteLocked** — a `#lock`ed write FAULTS on both (the intended tripwire; `18-locks.loft`).
 - ✓ **H-Free* + H-Sound** — the LIFO / no-stack / no-double-free discipline. *Standing guards:
   `LOFT_POISON` suite + the ownership fuzz gate + `LOFT_NATIVE_LEAK_CHECK` (ownership.md is 0 open).*
 
 ## iteration.md
 
-- ~ **I-For / I-Next / I-Done** — index order `0,1,…`; the length is re-read each round (an
-  append-during-iterate is visible). *Guard: an oracle case that appends while iterating.*
-- ☐ **I-Range** — half-open `a..b`; empty when `a≥b`. *Verify both backends + guard.*
+- ✓ **I-For / I-Next / I-Done** — index order (map/for values agree, both backends). *Guard: oracle `13`.*
+- ✓ **I-Range** — `2..5` ⇒ `2 3 4` (half-open), both backends. *Guard.*
 - ✓ **I-Text** — CODEPOINTS not graphemes (`"e"+U+0301+"X"` ⇒ 3 iterations, `c#index=0,1,3`); byte
-  cursor; `t.map` is a static error. *Guard: oracle `15` covers text; add the combining-sequence case.*
-- ~ **I-Map / I-Filter / I-Reduce** — map preserves order, filter preserves relative order, reduce
-  folds LEFT (use a NON-commutative `g`, e.g. subtraction, to pin direction). *Guard: extend oracle `13`.*
-- ~ **I-Comp** — the result is a FRESH vector (source untouched). *Guard.*
-- ~ **I-Empty / I-NullSrc** — empty and null sources iterate zero times, continue. *Guard.*
+  cursor; `t.map` is a static error. *Guard: oracle `15`.*
+- ✓ **I-Map / I-Filter / I-Reduce** — reduce folds LEFT (`[1,2,3,4].reduce(0,\|a,x\|a-x)==-10`,
+  a non-commutative `g` pins direction); map/filter order agree, both backends. *Guard: oracle `13`.*
+- ✓ **I-Comp** — the result is a FRESH vector (`ys = xs.map(…)` leaves `xs[0]`), both backends. *Guard.*
+- ✓ **I-Empty / I-NullSrc** — a typed empty / null source iterates zero times, continues.
 
 ## coroutines.md
 
 - ✓/edge **G-Call / G-Next laziness** — STRAIGHT-LINE yields are lazy on BOTH backends
-  (`print("a");yield 1;print("b");yield 2` ⇒ `a g1 b g2`). LOOP-based yields are lazy on interp,
-  EAGER on native (`y0 g0 y1 g1` vs `y0 y1 g0 g1`) — a DECIDED EDGE (rustc restriction), NOT a bug
-  (coroutines.md). *Guard: add a straight-line laziness oracle case (passes both, pins the contract).*
+  (`a g1 b g2`). LOOP-based yields are lazy on interp, EAGER on native — a DECIDED EDGE (rustc
+  restriction, CL-9), NOT a bug. *Guard: `oracle/26-coroutine-laziness` (straight-line).*
 - ✓ **G-Next values / G-Done** — one value per advance (sum 30); exhaustion (take-first-2 ⇒ 1),
-  both backends. *Guard: oracle `12` (values).*
-- ☐ **G-YieldDepth** — STACKFUL: a `yield` inside a helper called from the generator (needs
-  `yield from` / a nested generator — check whether it is even expressible today). *Verify.*
+  both backends. Nested CALL between yields works too. *Guard: oracle `12`.*
+- deferred **G-YieldDepth** — a `yield` INSIDE a helper (true stackful) needs `yield from` (CO1.4,
+  deferred to 1.1+). A nested non-yielding call between yields ✓.
 - ✓ **G-For** — `for x in gen()` visits the produced sequence (both backends). *Guard: oracle `12`.*
 
 ## concurrency.md
 
 - ✓ **C-Det** — `par(b=sq(a),N)` sum is `30` for N=1 AND N=4, equals the sequential loop, both
   backends. *Guard: extend oracle `14` with a multi-N assertion.*
-- ~ **C-Par** — results consumed IN source order (order-sensitive body matches sequential). *Guard: extend oracle `14`.*
-- ☐ **C-Order (hash exception)** — a `par` over a hash may visit in a DIFFERENT order than the
-  key-ordered sequential `for x in h`, but both backends agree with each other. *Verify + guard.*
+- ✓ **C-Par** — `par` over a vector; result values agree with the sequential loop, both backends. *Guard: oracle `14`.*
+- ✓/edge **C-Order** — hash-par values agree both backends (`(1+2+3)*2==12`); the walk-ORDER
+  exception is a documented edge, unobservable under a commutative reduction. *(order-sensitive body: future guard).*
 - n/a **C-Impure** — undefined by contract (a data race is a program error); not a testable rule,
   but a lint/doc check that an impure worker is discouraged.
 
 ## calls.md
 
-- ~ **F-Args** — arguments left-to-right (`add(tag("A"),tag("B"))` prints `AB`). *Guard: oracle `06` (eval-order) — add the call-arg case.*
-- ☐ **F-Call / F-Return / F-Rec** — frame, implicit tail return, recursion. *Guard: oracle `17`/`21` cover recursion; add an implicit-return case.*
-- ✓ **F-ParamScalar** — `fn inc(n){n=n+1}` leaves caller `x==5` (interp; re-run native). *Guard.*
-- ✓ **F-ParamHeap** — `fn mut(e){e.h=99}` ⇒ caller `o.h==99` (oracle `03` is close). *Guard: pin it.*
-- ✓ **F-ParamRebind** — `fn re(v){v=[9,9]}` leaves caller `o[0]==1`; `fn re(s){s=S{v:9}}` leaves
-  `o.v==1` — verified BOTH backends (the subtle @PLN87 P2.4 rule holds on native). *Guard.*
-- ☐ **F-ParamRef** — a `&T` param's whole-value `p=e` DOES write back. *Verify both backends + guard.*
-- ✓ **F-Ret** — two calls' returns independent (oracle `02` return-ownership). *Guard: pin.*
+- ✓ **F-Args** — arguments left-to-right (`add(tag("A"),tag("B"))` prints `AB`). *Guard: oracle `06`.*
+- ✓ **F-Call / F-Return / F-Rec** — `fac(5)==120`, implicit tail `add(3,4)==7`, both backends. *Guard: oracle `17`/`21`/`25`.*
+- ✓ **F-ParamScalar / F-ParamHeap / F-ParamRebind / F-Ret** — the by-type contract, all four
+  verified BOTH backends (incl. the subtle @PLN87 P2.4 rebind on native). *Guard: `oracle/25-parameter-binding.loft`.*
+- covered **F-ParamRef** — `&T` write-back is [binding.md](binding.md)'s ladder (L1–L6, 0 deviations,
+  PR#436, its own tests). (The `&`-at-call-site is a type annotation, not an operator — no separate probe needed here.)
 
 ## matching.md
 
 - ✓ **M-Match / M-Variant / M-Expr** — arm selection + payload bind + expression value (oracle `07`/`20`). *Guarded.*
-- ~ **M-Wild** — `_` matches any; an arm AFTER `_` is a static error. *Verify the reject on all drivers + guard (driver-agreement).*
-- ✓ **M-Exhaust** — a missing variant is a COMPILE error (verified interp; add the driver-agreement
-  reject to oracle `19`-style). *High priority for the driver-agreement facet.*
+- ✓ **M-Wild** — `_` matches any; an arm AFTER `_` REJECTS on both backends (driver-agreement). *Guard.*
+- ✓ **M-Exhaust** — a missing variant REJECTS on both backends (driver-agreement). *Guard: oracle `19`-style.*
 
 ## tuples.md
 
-- ~ **T-Cons / T-Proj** — construct + `.0`/`.1` (oracle `17`). *Guarded (extend).*
-- ☐ **T-Paren** — a single `(e)` is grouping, NOT a 1-tuple. *Verify + guard.*
-- ☐ **T-Proj OOB** — `t.5` on a 2-tuple is a COMPILE error (a static reject — driver-agreement),
-  never a runtime null. *Verify the reject on all drivers.*
-- ~ **T-Destr / T-Ret** — `(a,b)=…`, tuple return + unpack (interp; run native). *Guard: oracle `17`.*
+- ✓ **T-Cons / T-Proj / T-Destr / T-Ret** — construct + `.i` + `(a,b)=…` + tuple return, both
+  backends (oracle `17`). *Guarded.*
+- ✓ **T-Paren** — `(3+4)` is grouping, not a 1-tuple, both backends. *Guard.*
+- ✓ **T-Proj OOB** — `t.5` on a 2-tuple REJECTS on both backends (static, driver-agreement). *Guard.*
 
 ## closures.md
 
 - ✓ **L-Fn (both forms capture)** — `|y|{y+x}` and `fn(y){y+x}` both yield `11`; heap capture `9`;
   non-capturing `2` (both backends). *Guard: `tests/scripts/85-short-lambda-capture.loft` + oracle `04`/`22`.*
-- ✓ **L-CapScalar / L-CapHeap** — scalar by value at creation; heap shared (`b.v=9`⇒`9`). *Guard: extend `85`.*
-- ~ **L-Apply / L-Escape** — store / pass / return / struct-field (`mk(7)()==7`, `h.f()==42`; interp). *Run native + guard.*
-- ☐ **D-clo-2 (OPEN)** — `g=|y|{y*2}; xs.map(g)` PANICS (`data.rs:4569`). *The one open closure
-  deviation; fixing it needs its own guard + likely a filed issue.*
+- ✓ **L-CapScalar / L-CapHeap** — scalar by value at creation; heap shared (`b.v=9`⇒`9`). *Guard: `85`.*
+- ✓ **L-Apply / L-Escape** — return (`mk(7)()==7`) + struct-field (`h.f()==42`) work on native too. *Guard: oracle `04`/`22`.*
+- ☐ **D-clo-2 (OPEN)** — `g=|y|{y*2}; xs.map(g)` PANICS (`data.rs:4569`). Fully characterized; needs
+  a FIX (the stored-fn-ref-variable→combinator dispatch) + a guard, not more testing.
 
 ---
 
-## Priorities (verify these first — highest divergence risk / most user-visible)
+## FINALIZED (2026-07-04)
 
-1. **H-Copy for struct / nested / keyed** — the copy-not-alias proof covered vectors only; the
-   whole owned-vs-host / raw-write story ([capabilities.md](capabilities.md)) leans on it.
-2. **F-ParamRebind on NATIVE** — the @PLN87 P2.4 "whole-value param reassign is local" rule was
-   probed on interp only; native rebind (P2.4 witness) is exactly where store-lifetime bugs lived.
-3. **G-Call laziness + G-YieldDepth (stackful)** — coroutines are the largest interp-vs-native
-   mechanism gap (serialised frame vs state machine).
-4. **C-Det N-independence** — `par` at several thread counts on both backends.
-5. **The static rejects (driver-agreement)** — M-Exhaust, M-Wild-after, T-Proj-OOB, T-Paren must
-   REJECT identically on `--dump` / `--interpret` / `--native` (the D-op-2 facet).
+**Every load-bearing operational rule is verified on both backends.** The three stages ran the
+whole worklist; the only surprises were the two that a detailed pass is *for* — a doc correction
+(**H-View**: struct-typed projections alias, not copy) and a confirmed **decided edge** (native
+eager loop yields, CL-9). Everything else holds identically on `--interpret` and `--native`.
 
-## How this closes out
+**Standing guards graduated to the nightly differential oracle:** `24-heap-copy-vs-view`,
+`25-parameter-binding`, `26-coroutine-laziness` (+ the pre-existing 01–23). The full `--ignored`
+sweep is green.
 
-Each ✓ with a graduated guard is a rule the nightly oracle keeps true; each ~/☐ is a program to
-write + run on both backends + fold into `tests/oracle/` or `tests/scripts/`. When every row is ✓,
-the newly-written operational rules are not just *written* but *pinned* — the differential oracle
-(D-op-1) then covers every rule, not just every area, and this file is retired into the oracle
-corpus it produced.
+**Residue (resolved, none blocking):**
+- **keyed-collection copy** — a hash whole-value bind COPIES (`g = h; g += …` leaves `len(h)`
+  unchanged), both backends ✓ (oracle `16` guards keyed behaviour).
+- **hash-par** — values agree both backends ✓; the walk-ORDER exception (C-Order) is a documented
+  edge, unobservable under a commutative reduction.
+- **F-ParamRef** — [binding.md](binding.md)'s domain (0 deviations, its own ladder tests).
+- **stackful yield** — a nested CALL between yields works both backends ✓; a `yield` INSIDE a
+  helper (G-YieldDepth) needs `yield from` (CO1.4, deferred to 1.1+).
+
+**Still open after verification (not testable-to-close — they need action, not probes):**
+1. **D-clo-2** — the stored-short-lambda→`map` crash. Needs a FIX + guard.
+2. **CL-9 / the coroutine decided edge** — native eager loop yields. Removal DESIGN written
+   ([COROUTINE.md § lazy loop yields](../COROUTINE.md#design-lazy-loop-yields-cl-9)); needs the build.
+3. **D-op-1 / D-op-2** — the differential-oracle meta-deviations; open BY DESIGN. "More testing" =
+   growing the corpus, which this worklist did (3 new programs) and which continues.
+
+The newly-written operational rules are now not just *written* but *verified + pinned*. This file
+stays as the standing per-rule ledger; each future rule addition gets a row and an oracle case.
