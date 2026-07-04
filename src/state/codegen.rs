@@ -3783,7 +3783,15 @@ impl State {
             Type::Vector(_, _)
             | Type::Reference(_, _)
             | Type::Enum(_, true, _)
-            | Type::Iterator(_, _) => {
+            | Type::Iterator(_, _)
+            // @PLN85 p188 — the keyed heap collections are DbRef-backed stores
+            // like Vector, so a plain DbRef put binds them; needed for the
+            // discarded-owned `sorted<>`-return `__lift_N` temp (get_free_vars
+            // then frees the store).
+            | Type::Sorted(_, _, _)
+            | Type::Index(_, _, _)
+            | Type::Hash(_, _, _)
+            | Type::Spacial(_, _, _) => {
                 stack.add_op("OpPutRef", self);
             }
             Type::Tuple(elems) => {

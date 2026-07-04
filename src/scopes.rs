@@ -2679,12 +2679,34 @@ impl Scopes {
         // receiver = arg0).
         if let Value::Call(fn_nr, _) = val.unspan() {
             let def = data.def(*fn_nr);
-            if (def.name.starts_with("n_") || def.name.starts_with("t_"))
-                && def.code != Value::Null
-                && let Type::Vector(elem, dep) = &def.returned
-                && dep.is_empty()
+            if (def.name.starts_with("n_") || def.name.starts_with("t_")) && def.code != Value::Null
             {
-                return Some(Type::Vector(elem.clone(), Deps::none()));
+                match &def.returned {
+                    Type::Vector(elem, dep) if dep.is_empty() => {
+                        return Some(Type::Vector(elem.clone(), Deps::none()));
+                    }
+                    // @PLN85 p188 — a discarded (or inline-unbound) owned KEYED
+                    // collection return (`build() -> sorted<T[k]>`, and the
+                    // index/hash/spacial siblings) leaks its by-value store exactly
+                    // like the vector case above — the `Drop` lift binds it to a
+                    // `__lift_N` temp so `get_free_vars` emits the store's
+                    // `OpFreeRef` (both backends).  Empty dep = OWNED (fresh); a
+                    // borrowed view / NRVO'd hidden-buffer return carries a
+                    // non-empty dep and is excluded (no double-free / UAF).
+                    Type::Sorted(d, keys, dep) if dep.is_empty() => {
+                        return Some(Type::Sorted(*d, keys.clone(), Deps::none()));
+                    }
+                    Type::Index(d, keys, dep) if dep.is_empty() => {
+                        return Some(Type::Index(*d, keys.clone(), Deps::none()));
+                    }
+                    Type::Hash(d, keys, dep) if dep.is_empty() => {
+                        return Some(Type::Hash(*d, keys.clone(), Deps::none()));
+                    }
+                    Type::Spacial(d, keys, dep) if dep.is_empty() => {
+                        return Some(Type::Spacial(*d, keys.clone(), Deps::none()));
+                    }
+                    _ => {}
+                }
             }
         }
         // Native-constructor calls arrive BARE when chained onto a builtin
