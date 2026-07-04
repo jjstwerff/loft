@@ -141,10 +141,27 @@ not been unified into a single `deps` read; substantially narrowed, not deleted.
   (`ref_rhs_ownership`) and codegen's owned-ref reassign gate now call
   `returns_borrowed_view()` instead of re-scanning the return deps inline (2026-07-04,
   both byte-identical over the 8 D-own-1/C86/462 corpora).
-  REMAINING: (1) `scan_set`'s owned-vs-view tracker now folds onto the oracle —
-  `ref_rhs_ownership` is a pure `ownership_of` read and `RefRhs::Unknown` is DELETED
-  (dead once the oracle covers every value); what stays is only that the three
-  cooperating free mechanisms are not yet ONE `deps` read; (2) the `??`-JOIN
+  **AUDIT 2026-07-04 — the consumption side is now ~fully fact-reading.** A sweep of
+  every store-lifetime DECISION site (dispatch.rs, state/codegen.rs, ops/ref_ops.rs,
+  scopes.rs, control.rs) found the free/copy/adopt/drop decisions read the canonical
+  fact (`ownership_of` / `returns_borrowed_view` / `return_adopts_fresh_store`)
+  everywhere but ONE genuine residual, plus two non-violations:
+  - **THE ONE RESIDUAL — `state/codegen.rs:1786-1789`**: the interp `v = call()`
+    deep-copy path still gates on an inline *visible-ref-param scan* to decide
+    adopt-vs-deep-copy, while the NATIVE sibling (`dispatch.rs:405`) already reads
+    `return_adopts_fresh_store()`.  For a fresh-return-with-ref-param callee
+    (`fn mk_from(seed) -> Box { Box{..} }`) interp deep-copies where native adopts —
+    same value + leak-clean on both, but a mechanism divergence.  Unifying it onto
+    the fact is a COPY-ELIMINATION small-step (adopt instead of deep-copy), not
+    byte-identical — best done as a dedicated @PLN90 slice on this most-reverted
+    path, with the corpus+matrix gate, NOT rushed.
+  - NOT violations: `dispatch.rs:403-404` (`.starts_with("n_")` / `code()!=Null` are
+    call-KIND eligibility filters, the ownership decision reads the fact at 405);
+    `scopes.rs collect_return_sources` (the return-source SET is the row-268 fact
+    PRODUCER for the match/if union, not a consumption re-derivation).
+  REMAINING: (1) the single copy-elim unification above + the architectural funnel of
+  the 3 return paths (row 273) into one return-ownership computation — mechanical, no
+  live bug; (2) the `??`-JOIN
   runtime witness (`OpBindOrCopy`/`OpFreeRefIfDistinct`/`_own_store`) is inherently
   runtime (the
   arm taken is unknown at compile time), not a re-derivation to delete.  D-own-5's
