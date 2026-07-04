@@ -57,18 +57,31 @@ this is a deliberate, both-backends-shared choice). The loop is a pure desugarin
 ```
   (I-Range)    for x in a..b { body }   iterates the integers a, a+1, …, b-1 (empty if a ≥ b);
                                         x is the value, not an index.
-  (I-Text)     for c in t { body }      iterates t's characters left to right; the cursor is a
-                                        BYTE position advanced by each character's width, so
-                                        `c#index` is the byte offset and `c#next` the next one
-                                        (multi-byte characters advance by >1).
+  (I-Text)     for c in t { body }      binds c : character to each Unicode CODEPOINT of t, left
+                                        to right — one iteration PER CODEPOINT, NOT per grapheme
+                                        cluster.  The cursor is a BYTE position advanced by the
+                                        codepoint's UTF-8 width (1–4), so `c#index` is that
+                                        codepoint's starting byte offset and `c#next = c#index +
+                                        width`.
 ```
 
 **In words.** A range `a..b` yields the half-open integer sequence (never includes `b`); an
-empty range (`a ≥ b`) runs the body zero times. Text iterates **characters** (not bytes): the
-cursor is a byte position that jumps by each character's encoded width, so a 4-byte character
-advances the position by 4 — which is why `c#index`/`c#next` expose byte offsets, and why the
-sequence of offsets is not `0,1,2,…` for non-ASCII text. Both are the same cursor shape as a
-vector, differing only in `elem` and the stride.
+empty range (`a ≥ b`) runs the body zero times. Text iterates by **Unicode codepoint** — each
+`c` is a `character` (a scalar value), and a combining sequence is **multiple** iterations, NOT
+one: `for c in "e" + U+0301 + "X"` runs **three** times with `c#index = 0, 1, 3` (the combining
+accent is its own codepoint at byte 1, 2 bytes wide), because loft iterates **codepoints, not
+grapheme clusters**. This is the load-bearing text choice — it is what both backends must agree
+on (a grapheme-cluster walk in either one would be a divergence). The cursor is a byte position
+that jumps by each codepoint's UTF-8 width (a 4-byte emoji advances by 4), so `c#index`/`c#next`
+expose byte offsets and the offset sequence is not `0,1,2,…` for non-ASCII text. Same cursor
+shape as a vector, differing only in `elem` (decode one codepoint) and the stride (its width).
+
+> **Combinators are vector methods, not text methods.** `t.map(…)` / `t.filter(…)` are **not**
+> valid — `.map`/`.filter`/`.reduce` (`I-Map`/`I-Filter`/`I-Reduce`) dispatch on a vector (or a
+> keyed collection), and text is `Unknown field text.map`. Text participates in the combinator
+> world only as a **comprehension source**: `[for c in t { f(c) }]` builds a `vector<…>` of
+> per-codepoint results (this IS how you "map over text"). So text is a first-class `for` /
+> comprehension source but never a `.method` combinator receiver.
 
 ### Combinators desugar to a comprehension over the same loop
 
@@ -130,8 +143,11 @@ OPEN: **0** (a *rules* doc — it shrinks operational.md's D-op-1, adds no code 
   that order, length 6, on both backends; `filter(|x| x%2==0)` is `[2,4,6]`, relative order kept.
 - **Left fold (`I-Reduce`)** — `[1,2,3,4].reduce(0, |a,x| a+x)` is `10`; a non-commutative `g`
   (e.g. subtraction) exposes the fold direction and must match.
-- **Text width (`I-Text`)** — `for c in "1😊8"` visits 3 characters whose `c#index` values are
-  `0, 1, 5` (the emoji is 4 bytes), not `0,1,2` — both backends must agree on the byte cursor.
+- **Text codepoints + byte cursor (`I-Text`)** — `for c in "1😊8"` visits 3 codepoints whose
+  `c#index` values are `0, 1, 5` (the emoji is 4 bytes), not `0,1,2`. And the codepoint-vs-grapheme
+  case: `for c in "e" + U+0301 + "X"` visits **3** codepoints (`c#index = 0, 1, 3`), not 2
+  graphemes — proven identical on both backends. `t.map(…)` is a static error (`Unknown field
+  text.map`); `[for c in t { … }]` is how you map over text.
 - **Empty/null (`I-Empty` / `I-NullSrc`)** — `for x in [] { … }` and a `for` over a null
   collection both run the body zero times and continue.
 - **Fresh result (`I-Comp`)** — `ys = xs.map(f)` leaves `xs` unchanged (a new store, `H-Alloc`).
