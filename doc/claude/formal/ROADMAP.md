@@ -29,18 +29,19 @@ Closing a row means the implementation obeys the rule (then the deviation entry 
 | [binding.md](binding.md) | 0 | ✓ closed — D-bind-7 (reject bare `&a;` / block-final `{ &a }`) landed |
 | [grammar.md](grammar.md) | 0 | ✓ closed — D-gram-1/3 landed; D-gram-2 (non-CFG) + D-gram-4 (`&` overload) resolved as decided edges → DESIGN_DECISIONS C81/C82 |
 | [operational.md](operational.md) | 2 | D-op-1/2 the differential oracle (@PLN89) — D-op-4 the spreadsheet runtime (C80) is **CLOSED** (formalize4); the oracle SEED landed (`tests/oracle/`) |
-| [ownership.md](ownership.md) | 2 | the `deps` borrow checker — **★ ACTIVE (recounted 2026-07-03)**: D-own-3 (typed `Deps`) CLOSED; D-own-4 RECLASSIFIED → decided edge **C86** (whole-value binds COPY; aliasing = last-use elision, the rustc rule; bind-site residual DONE — `classify_vec_bind`); D-own-5 CLOSED (the `&` borrow rides `deps` — the L5 alias types `&Reference(td,[src])`, free suppression derives from the O-Borrow read; scalar-place sliver under D-own-1); the `ownership_of` oracle chokepoints are **DEFAULT-ON** (the D-own-1 flip; over-free map 6/54→0/54); the return-delivery funnel is selector-collapsed (block_result 459→320, ref_return 473→309). Remaining: D-own-1 (the reduced per-site thicket), D-own-2 (completeness — default-path exposure) |
+| [ownership.md](ownership.md) | 0 | the `deps` borrow checker — **✓ CLOSED (2026-07-04)**: all five D-own deviations resolved. D-own-3 (typed `Deps`) CLOSED; D-own-4 → decided edge **C86**; D-own-5 (`&` rides `deps`) CLOSED; **D-own-2 (completeness) CLOSED** — the fact is total (oracle over every value + the `_own_store` runtime-Join witness, @PLN90 loft#495); **D-own-1 (O-Deps) CLOSED** — an audit + the `0234cbbb` unification landed the last shipped shape-scan (interp adopt-vs-deep-copy) onto `return_adopts_fresh_store()`, so every store-lifetime decision reads the ONE fact on the shipped path. Floor (non-deviation cleanup): the `LOFT_NO_JOIN_OWN` opt-out scans + one physical return-funnel. Validated: suite 2601/2601, native_scripts, poison, fuzz-gate controls, differential oracle, fuzzer |
 | [capabilities.md](capabilities.md) | 3 | sandbox admission — call gate + field read/update/append **enforced** (@PLN86 F1–F6); remaining: the parameter `#default` lock (D-cap-1, @PLN86 6.9), the capturing-closure residual (D-cap-2), the owned-vs-host dependency on ownership D-own-2 (D-cap-3) |
 
 Binding + grammar + **types are closed** — the @PLN25 value/null model landed (2026-07-02); DN3
 fully closed with the text→numeric parse flip (`(N-Parse)` types `τ?`), overflow-arith reclassified
-as a decided edge (C85, not a deviation). Ownership crossed its watershed (2026-07-02/03):
-typed `Deps` (D-own-3) is CLOSED and the `ownership_of` oracle chokepoints run **BY DEFAULT**
-(the D-own-1 flip; over-free map 6/54 → 0/54, suite fully green). The active focus is the
-D-own-1 REMAINDER — the reduced (not deleted) per-site thicket, the D-own-4 #415 reversal,
-and D-own-2 completeness, whose exposure the flip RAISED (an incomplete fact is now a
-default-path miscompile; the incompleteness contract is conservative-`None`). The @PLN89
-differential oracle + LOFT_POISON grow alongside as the safety net.
+as a decided edge (C85, not a deviation). **Ownership is now CLOSED (2026-07-04):** typed
+`Deps` (D-own-3), C86 (D-own-4), the `&`-borrow fact (D-own-5), the TOTAL fact — oracle over
+every value + the `_own_store` runtime-Join witness (D-own-2, @PLN90 loft#495), and finally
+**D-own-1 (O-Deps)** — an audit + the `0234cbbb` unification put every shipped store-lifetime
+decision on the ONE `deps` fact (the last inline shape-scan, interp adopt-vs-deep-copy, now
+reads `return_adopts_fresh_store()` like native). The only open formal deviations left are the
+operational **D1** (differential oracle, @PLN89) and the three capabilities rows (@PLN86). The
+@PLN89 differential oracle + LOFT_POISON grow alongside as the safety net.
 
 ---
 
@@ -90,8 +91,9 @@ The real weight. Each is a `loft-lang/plans` issue, sequenced.
 decided edges C82/C81; grammar.md at 0) **·** binding.md + grammar.md + **types.md (@PLN25 CLOSED —
 DN1–DN6, D2 reconciled; DN3 parse-flip landed)** + **~~D2~~ (D-op-4 spreadsheet runtime,
 formalize4)** now **closed** **·** NEXT: the tracked arcs
-**~~C2~~ (typed Deps, DONE) → C3 (@PLN85: the D-own-1 remainder + D-own-4 reversal)** ownership,
-and the operational **D1** (differential oracle, @PLN89) — the only open deviations left.
+**~~C2~~ (typed Deps) → ~~C3~~ (@PLN85/@PLN90: ownership — all five D-own CLOSED 2026-07-04)** ·
+NEXT: the operational **D1** (differential oracle, @PLN89) and **C4** (capabilities, @PLN86) —
+the only open deviations left.
 
 ## What is NOT on this list (already clean or decided)
 

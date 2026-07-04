@@ -391,6 +391,17 @@ impl Parser {
             // literals get their element type threaded through `var_tp`.
             let hint = self.vector_hint();
             self.expected = Type::Unknown(0);
+            // #501 — a vector literal parsed as an assignment RHS reuses the LHS var
+            // (`val`) as its build accumulator (the watermark optimisation for
+            // `v = [..]`).  Remember it, so that after parsing we can detect a trailing
+            // `.method(..)` chain that makes the literal a RECEIVER — where that reuse
+            // is wrong (the chain's result, assigned to the same LHS, would be
+            // discarded → interpret #306 / native E0425).
+            let orig_lhs = if let Value::Var(n) = val {
+                Some(*n)
+            } else {
+                None
+            };
             let seeded;
             let elem_tp = if var_tp.is_unknown() && matches!(hint, Type::Vector(_, _)) {
                 seeded = hint;
@@ -398,7 +409,45 @@ impl Parser {
             } else {
                 var_tp
             };
-            self.parse_vector(elem_tp, val, parent_tp)
+            let t = self.parse_vector(elem_tp, val, parent_tp);
+            // The literal is now fully parsed (a safe point to peek — no lexer
+            // backtrack).  If it reused the LHS var AND a `.method(..)` chain follows
+            // (`[1,2,3].map(..)`), rename the accumulator to a fresh synthetic local so
+            // the LHS is free to receive the chain's result, and wrap the (now void,
+            // in-place) build so it YIELDS that local — making a literal receiver behave
+            // exactly like a variable one.  Scoped to a `.` method chain: `.map` /
+            // `.filter` / `.reduce` route the receiver through `parse_vector_method`,
+            // and the map/filter cases keep the vector's element type so the LHS's
+            // parsed type stays valid across passes.  (A trailing `[i]` index yields a
+            // SCALAR, so the LHS's parsed vector type would clash with the index result
+            // on the second pass — that rarer form keeps its existing clean "cannot
+            // change type" diagnostic.)  Runs in both passes so `create_unique`
+            // numbering stays aligned.
+            if let Some(lhs) = orig_lhs
+                && self.lexer.peek_token(".")
+            {
+                // Inherit the LHS's parsed vector type — it carries the `["__vdb_N"]`
+                // borrow dep on the literal's backing store, so the chain BORROWS the
+                // receiver and the backing is freed once at scope exit (matching a
+                // variable receiver) instead of being double-owned (a store leak).
+                let recv_tp = self.vars.tp(lhs).clone();
+                let recv = self.create_unique("vec", &recv_tp);
+                self.vars.defined(recv);
+                // The renamed build immediately assigns `recv` (`recv = OpGetField(__vdb,0)`),
+                // so its null-init must be a NON-allocating sentinel — otherwise the eager
+                // `OpInitRef` store is orphaned when the build reassigns it (a 1-store leak).
+                self.vars.mark_inline_ref(recv);
+                crate::parser::collections::rename_var(val, lhs, recv);
+                // The literal poisoned the LHS's inferred type (it typed it as the
+                // vector); clear it so the outer assignment re-infers from the CHAIN
+                // result.
+                self.vars.set_type(lhs, Type::Unknown(0));
+                let build = std::mem::replace(val, Value::Null);
+                *val = v_block(vec![build, Value::Var(recv)], recv_tp.clone(), "Vector");
+                recv_tp
+            } else {
+                t
+            }
         } else if self.lexer.has_token("if") {
             self.parse_if(val)
         } else if self.lexer.has_token("match") {

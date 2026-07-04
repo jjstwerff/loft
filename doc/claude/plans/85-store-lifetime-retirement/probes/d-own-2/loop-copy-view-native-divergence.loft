@@ -1,0 +1,42 @@
+struct Box { v: integer }
+struct Node { v: integer, kids: vector<Node> }
+
+// loop-accumulate: copy then repeatedly view-reassign (transition each iter)
+fn loop_cv(x: Box, v: vector<Box>) -> integer {
+    r = x;
+    total = 0;
+    for i in 0..len(v) {
+        r = v[i] ?? x;
+        total += r.v;
+    }
+    total
+}
+
+// cyclic def-chain (borrow_base None -> copy conservatively): self-referential
+fn build_tree(n: integer) -> Node {
+    root = Node { v: n, kids: [] };
+    root.kids += [Node { v: n + 1, kids: [] }];
+    root
+}
+
+// borrow-through a nested projection reassigned into an owned local
+fn deep_pick(t: vector<Node>, i: integer) -> Node {
+    chosen = Node { v: 0, kids: [] };
+    if len(t) > 0 { chosen = t[i % len(t) ?? 0] ?? Node { v: 0, kids: [] }; }
+    chosen
+}
+
+fn main() {
+    a = Box { v: 5 };
+    vs = [Box { v: 1 }, Box { v: 2 }, Box { v: 3 }];
+    assert(loop_cv(a, vs) == 6, "loop_cv {loop_cv(a, vs)}");
+
+    tr = build_tree(10);
+    assert(tr.v == 10 && len(tr.kids) == 1, "tree {tr.v} {len(tr.kids)}");
+
+    ts = [Node { v: 7, kids: [] }, Node { v: 8, kids: [] }];
+    dp = deep_pick(ts, 1);
+    assert(dp.v == 8 && len(ts) == 2, "deep {dp.v} {len(ts)}");
+
+    println("dn2batch ok");
+}

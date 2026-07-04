@@ -475,6 +475,17 @@ pub struct Output<'a> {
     /// `_old != _rb_w_<name>`, so it never frees the caller's buffer — closing
     /// the cluster-462 native record leak without an over-free.
     pub retbuf_witness: HashSet<u16>,
+    /// @PLN90 #495 — "runtime-Join" locals: an owned-typed Reference/Enum local
+    /// that is INITIALISED owned (a whole-value copy / owned call) but then
+    /// REASSIGNED to a borrow (the `r = v[i] ?? x` ncc) at least once.  r's
+    /// runtime ownership then differs per path (owned copy on the empty-loop
+    /// path, a borrowed view once the reassign runs), so BOTH the in-loop
+    /// displaced-free and the scope-exit `OpFreeRef(r)` — which key on r's owned
+    /// TYPE — would whole-store-free a caller-owned view.  For each such var a
+    /// prologue `_own_store_<name>: DbRef` tracks the store r actually OWNS (NULL
+    /// once r holds a borrow); the two free-sites free `_own_store_<name>`, never
+    /// the view.  Scoped to exactly one owned assign + ≥1 ncc-borrow reassign.
+    pub witness_vars: HashSet<u16>,
     /// #260 Fix B: `__vdb` store locals declared up front in the function
     /// prologue (sentinel-bound, no allocation).  The first body
     /// `Set(v, Null)` consumes its entry so it still emits the named-store
@@ -1019,6 +1030,7 @@ impl<'a> Output<'a> {
             indent: 0,
             declared: HashSet::new(),
             retbuf_witness: HashSet::new(),
+            witness_vars: HashSet::new(),
             predeclared: HashSet::new(),
             active_pre_eval: HashMap::new(),
             reachable: HashSet::new(),
@@ -1043,6 +1055,109 @@ impl<'a> Output<'a> {
             live_fns: Vec::new(),
         }
     }
+}
+
+/// @PLN90 #495 — collect the "runtime-Join" locals of function `def_nr` (see
+/// [`Output::witness_vars`]).  A var qualifies iff it is an owned-typed
+/// Reference / struct-Enum local with ≥1 owned-producing assignment (a whole-value
+/// copy, or an owned call / struct literal) AND ≥1 borrow-producing reassignment
+/// (an `?? `/ncc block whose value borrows a view or a param).  That owned + borrow
+/// mix is precisely the runtime JOIN: r owns a store on the path where an owned
+/// assign last ran, and borrows on the path where the ncc last ran — so a static
+/// owned-type free would whole-store-free the view.  A SECOND owned assign (an
+/// owned reassign) is handled too: `output_set` resets r to the null sentinel
+/// before the value so it allocates fresh instead of reusing / freeing the view r
+/// currently holds.
+fn collect_witness_vars(data: &crate::data::Data, def_nr: u32) -> HashSet<u16> {
+    if !crate::keys::join_own_enabled() {
+        return HashSet::new();
+    }
+    // (owned_count, borrow_count) per candidate var.
+    let mut counts: HashMap<u16, (u32, u32)> = HashMap::new();
+    fn classify_set(
+        data: &crate::data::Data,
+        def_nr: u32,
+        v: u16,
+        to: &Value,
+        counts: &mut HashMap<u16, (u32, u32)>,
+    ) {
+        let vars = data.def(def_nr).variables();
+        let is_candidate = !vars.is_argument(v)
+            && matches!(vars.tp(v), Type::Reference(_, _) | Type::Enum(_, true, _))
+            && vars.tp(v).depend().is_empty();
+        if !is_candidate {
+            return;
+        }
+        let owned = match to.unspan() {
+            // A whole-value copy of another heap var — native emits `OpCopyRecord`
+            // into a fresh store, so r OWNS the result (C86), regardless of the
+            // source's own ownership.
+            Value::Var(src) if vars.tp(*src).heap_def_nr().is_some() => true,
+            // An owned call / struct literal is Owned; an `?? `/ncc block is a
+            // Borrow/Join view — the oracle carries the distinction.
+            Value::Block(_) | Value::Call(_, _) | Value::Insert(_) => matches!(
+                crate::use_analysis::ownership_of(data, def_nr, to),
+                crate::use_analysis::Own::Owned
+            ),
+            // Not a heap-store-producing assign (scalar, null, …).
+            _ => return,
+        };
+        let e = counts.entry(v).or_insert((0, 0));
+        if owned {
+            e.0 += 1;
+        } else {
+            e.1 += 1;
+        }
+    }
+    fn walk(
+        data: &crate::data::Data,
+        def_nr: u32,
+        node: &Value,
+        counts: &mut HashMap<u16, (u32, u32)>,
+    ) {
+        match node {
+            Value::Set(v, to) => {
+                classify_set(data, def_nr, *v, to, counts);
+                walk(data, def_nr, to, counts);
+            }
+            Value::Span(b) => walk(data, def_nr, &b.1, counts),
+            Value::Block(b) | Value::Loop(b) => {
+                for op in &b.operators {
+                    walk(data, def_nr, op, counts);
+                }
+            }
+            Value::Insert(ops) | Value::Parallel(ops) => {
+                for op in ops {
+                    walk(data, def_nr, op, counts);
+                }
+            }
+            Value::If(c, t, e) => {
+                walk(data, def_nr, c, counts);
+                walk(data, def_nr, t, counts);
+                walk(data, def_nr, e, counts);
+            }
+            Value::Iter(_, a, b2, c) => {
+                walk(data, def_nr, a, counts);
+                walk(data, def_nr, b2, counts);
+                walk(data, def_nr, c, counts);
+            }
+            Value::Return(v) | Value::BreakWith(_, v) | Value::Drop(v) | Value::Yield(v) => {
+                walk(data, def_nr, v, counts);
+            }
+            Value::Call(_, args) => {
+                for a in args {
+                    walk(data, def_nr, a, counts);
+                }
+            }
+            _ => {}
+        }
+    }
+    walk(data, def_nr, data.def(def_nr).code(), &mut counts);
+    counts
+        .into_iter()
+        .filter(|(_, (owned, borrow))| *owned >= 1 && *borrow >= 1)
+        .map(|(v, _)| v)
+        .collect()
 }
 
 impl Output<'_> {
@@ -1071,6 +1186,7 @@ impl Output<'_> {
         self.indent = 0;
         self.declared.clear();
         self.retbuf_witness.clear();
+        self.witness_vars.clear();
         self.predeclared.clear();
         self.next_format_count = 0;
     }
@@ -3016,6 +3132,21 @@ extern crate loft;"
                         self.retbuf_witness.insert(av);
                     }
                 }
+            }
+            // @PLN90 #495 — the runtime-Join owned-store tracker.  For each
+            // "runtime-Join" local (owned init + ≥1 ncc-borrow reassign) declare
+            // `_own_store_<name>: DbRef` (NULL sentinel).  `output_set` keeps it
+            // pointed at the store r actually OWNS (var_r after an owned assign,
+            // NULL once r holds a borrow); the in-loop displaced-free and the
+            // scope-exit `OpFreeRef` (ops/ref_ops.rs) free THIS, never r's view.
+            self.witness_vars = collect_witness_vars(self.data, def_nr);
+            for &wv in &self.witness_vars {
+                use std::fmt::Write as _;
+                let nm = sanitize(vars.name(wv));
+                let _ = write!(
+                    vdb_prologue,
+                    "\n  let mut _own_store_{nm}: DbRef = DbRef::NULL;"
+                );
             }
             // #354: hoist block-crossing locals into the prologue — loft
             // locals are function-scoped frame slots, so a `let` at the

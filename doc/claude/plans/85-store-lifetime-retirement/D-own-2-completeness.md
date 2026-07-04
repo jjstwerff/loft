@@ -3,12 +3,26 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# @PLN85 / D-own-2 — complete the ownership fact for every binding/path
+# @PLN85 / D-own-2 — complete the ownership fact for every binding/path — **CLOSED 2026-07-04**
 
 The completeness deviation ([formal/ownership.md D-own-2](../../formal/ownership.md)):
 *not every binding/path has a computed ownership fact; uncovered paths fall back to
-a heuristic/stopgap, and a divergence hides until a test hits the path.*  This doc
-records the 2026-07-04 measurement + the one concrete live bug it surfaced.
+a heuristic/stopgap, and a divergence hides until a test hits the path.*
+
+**CLOSED 2026-07-04 (@PLN90).**  The ownership fact is now TOTAL: (1) `ownership_of`
+computes an `Own` for every value (the `_ => Owned` tail covers only fresh-owned /
+scalar / payload-less values — not a hole); (2) the free side reads that one fact
+(`ref_rhs_ownership` is a pure oracle read, `RefRhs::Unknown` deleted); (3) the
+inherently-runtime JOIN is completed per-path by the `_own_store` witness (loft#495,
+commits 44fd7d72 + a4bcad5b).  The transition class was swept dry over 6 shapes (2 live
+over-frees fixed, 4 safe); the value-vs-bind + deps-carried-join residuals are computed
++ safe (probed both backends, `probes/d-own-2/value-vs-bind-inert.loft`,
+`call-owned-arm-join-safe.loft`); validated by the full suite 2600/2600 + native_scripts
++ poison + native leak-check + DA + differential oracle + the `program_ownership` fuzzer
+(3108 execs, 0 findings).  The single-fact UNIFICATION (three cooperating mechanisms →
+one `deps` read) rides D-own-1; the adopt-vs-view OPTIMISATION is @PLN90's copy-lint.
+
+This doc records the 2026-07-04 measurement + the concrete live bugs it surfaced.
 
 ## Measurement 1 — the free-side classifier vs the oracle (latent, not a bug)
 
@@ -112,3 +126,74 @@ probe `probes/d-own-2/join-vector-return-append.loft`.
 leak (`3f0330c1`) and the delivery value (`f88833c2`, #492); the class swept dry across
 all types × bindings × control.  The only remaining D-own-2 item is the latent + safe
 free-side/oracle three-valued-fact unification → @PLN90.
+
+## @PLN90 slice — the runtime-Join witness (loft#495, 2026-07-04) — **FIXED**
+
+Probing the free-side completeness on the @PLN90 branch surfaced a LIVE native
+miscompile (filed **loft#495**, **FIXED commit 44fd7d72**), the concrete first
+slice of the runtime-Join witness residual forward-homed at @PLN85 close-out.
+
+**The fix — a native runtime owned-store witness** (`_own_store_<name>: DbRef`,
+prologue-declared per runtime-Join local). `output_set` (generation/dispatch.rs)
+routes such vars through the tracker: an OWNED assign points it at r's fresh
+store; a BORROW reassign frees the tracked owned store it displaces (never r's new
+view) and NULLs it; the scope-exit `OpFreeRef` (generation/ops/ref_ops.rs) frees
+`_own_store_<name>`. So the copy is freed on the empty-loop path and the view is
+never freed on the loop-ran path. `collect_witness_vars` (generation/mod.rs)
+scopes it to `owned >= 1 && borrow >= 1` — 4 scripts trigger it, all genuine
+ownership-transition cases; interp is untouched (was already correct). Validated:
+dn2batch 6/6, guard `tests/scripts/85-runtime-join-loop-copy-view.loft`, full
+suite 2600/2600 + native_scripts + poison + native leak-check + C86 mutation.
+
+### Sweep of the transition class (commit a4bcad5b + probes)
+
+Probed six shapes on both backends; found + fixed **two** live native over-frees,
+confirmed **four** safe:
+
+| shape | owned/borrow | result |
+|---|---|---|
+| `r=x; for{ r=v[i]??x }` (loop) | 1 / ≥1 | LIVE → fixed (#495, 44fd7d72) |
+| `r=x; for{ r=v[i]??x; r=Box{..} }` (mixed owned reassign) | ≥2 / ≥1 | LIVE → fixed (a4bcad5b) |
+| `first = items[0]??d; first.v` (borrow-only) | 0 / ≥1 | SAFE — borrow-TYPED, never a candidate |
+| `r=x; for{ r=pick(v,i) }` (borrow via call) | 1 / ≥1 | clean |
+| `r=x; if c { r=v[0]??x }` (conditional, non-loop) | 1 / ≥1 | clean |
+| `r=x; for{ r=pick(v,i) }` with pick's OWNED arm running | 1 / ≥1 | clean (no leak, correct value) |
+
+The **owned>=2 fix** (a4bcad5b): the 2nd owned assign, on the reassign path, ran
+`owned_ref_reassign` / `OpDatabase(var_r)` in-place reuse against a var_r HOLDING A
+BORROWED VIEW. `output_set_witnessed` now resets var_r to the null sentinel before
+the value so it allocates fresh (never reusing/freeing the view), frees the tracked
+owned store it displaces, and tracks the new owned store. Probes:
+`probes/d-own-2/loop-copy-view-native-divergence.loft` (owned==1),
+`owned-reassign-mixed-native-divergence.loft` (owned>=2).
+
+RESIDUAL (latent, safe): a call whose return is a runtime owned/borrow Join
+(`pick` = `v[i] ?? Box{..}`) is classified conservatively as borrow; the OWNED-arm
+store is not tracked, but empirically neither leaks nor corrupts (materialised via
+the return-buffer machinery) — the deps-carried-join, unfuzzed axis, still open.
+
+Original root-cause below.
+
+Shape: `r = x (C86 copy);  for i { r = v[i] ?? x }` — a Reference local that starts
+OWNED then is reassigned to a **view** each iteration. `ownership_of(v[i] ?? x)` =
+`Join{base=v}` (owned on neither arm). Native over-frees the borrowed views at BOTH
+free-sites: (1) the in-loop `owned_ref_reassign` displaced-free (`dispatch.rs`)
+fires every iteration and releases `v[i-1]` (a live element store); (2) the
+scope-exit `OpFreeRef(var_r)` releases r's final view. Both gates key on
+`tp(r).depend().is_empty()` (r is typed owned). Interp stays clean (no in-loop free
++ lenient interior-ref free). Heisenbug: a `println` in the loop shifts allocation
+order and hides it; needs a 3-function program (allocation-order sensitive).
+
+Empirically proven (both attempts land in the plan, both fail):
+- a store-aliasing witness guard against the Join base is INEFFECTIVE —
+  `vector<ref(T)>` elements are separate stores from the vector, so `_old.store_nr
+  != var_v.store_nr` is always true;
+- suppressing ONLY the in-loop free still panics 5/5 — the scope-exit free alone
+  corrupts.
+
+Why static cannot close it: r's ownership is a genuine runtime JOIN (owned copy on
+the empty-loop path, borrow on the loop-ran path). The correct fix is a **runtime
+owned-witness** (per-var flag: r owns iff its last executed assignment produced an
+owned store) gating BOTH native free-sites — the inline-ncc-reassign twin of the
+`OpBindOrCopy` witness that already covers the CALL-result bind (`g = pick(t,i)`).
+Repro: `probes/d-own-2/loop-copy-view-native-divergence.loft`.

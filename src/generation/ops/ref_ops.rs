@@ -68,6 +68,24 @@ impl OpEmitter for OpFreeRefEmitter {
                 )?;
                 return Ok(());
             }
+            // @PLN90 #495 — a runtime-Join local's scope-exit free targets the
+            // store r actually OWNS (`_own_store_<name>`, NULL once r holds a
+            // borrowed view), NOT var_<name> — which on the loop-ran path IS the
+            // view, and freeing it would whole-store-free a caller-owned element.
+            if let Value::Var(v) = db_val
+                && ctx.output.witness_vars.contains(v)
+            {
+                let nm = super::super::sanitize(
+                    ctx.output.data.def(ctx.output.def_nr).variables().name(*v),
+                );
+                write!(
+                    ctx.w,
+                    "if _own_store_{nm}.store_nr != u16::MAX {{ \
+                     OpFreeRef(cell,_own_store_{nm}, \"var_{nm}(owned)\"); }} \
+                     _own_store_{nm}.store_nr = u16::MAX; var_{nm}.store_nr = u16::MAX"
+                )?;
+                return Ok(());
+            }
             let var_name = if let Value::Var(v) = db_val {
                 format!(
                     "var_{}",

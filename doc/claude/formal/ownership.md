@@ -86,17 +86,31 @@ exactly what makes the operational rules hold on native as well as interp.
 
 ## Deviations
 
-OPEN: **2** — and unlike the other areas, here the deviations are the *bulk* of the
-reality: the model is the beacon, the code is mid-migration.  **Recounted 2026-07-03**
-after the D-own-1 flip: D-own-3 (typed `Deps`) is CLOSED; D-own-4 RECLASSIFIED as the
-decided edge C86 (whole-value binds copy; aliasing is a last-use elision — its bind-site
-residual is DONE, `classify_vec_bind`); D-own-5 CLOSED by the fold (the `&` borrow rides
-`deps`; scalar-place sliver recorded under D-own-1); D-own-1 is substantially narrowed
-(the `ownership_of` oracle chokepoints are now DEFAULT-ON, the return-delivery funnel is
-selector-collapsed) but the per-site thicket is reduced, not deleted, so it stays open.
+OPEN: **0** (2026-07-04) — **the ownership register is at zero.**  All five D-own
+deviations are resolved: D-own-3 (typed `Deps`) CLOSED; D-own-4 RECLASSIFIED as the
+decided edge C86 (whole-value binds copy; aliasing is a last-use elision —
+`classify_vec_bind`); D-own-5 (the `&` borrow rides `deps`) CLOSED; **D-own-2
+(O-Complete) CLOSED** (the ownership fact is total — oracle covers every value, the free
+side reads it, the inherently-runtime Join completed per-path by the `_own_store`
+witness; validated by the 6-shape sweep + full gates + the `program_ownership` fuzzer);
+and now **D-own-1 (O-Deps) CLOSED** — an audit of every store-lifetime DECISION site
+(dispatch.rs / state/codegen.rs / ops/ref_ops.rs / scopes.rs / control.rs) found the
+free/copy/adopt/drop decisions read the ONE canonical fact
+(`ownership_of` / `returns_borrowed_view` / `return_adopts_fresh_store`) on the shipped
+path — the last inline shape-scan (the interp adopt-vs-deep-copy visible-ref-param scan)
+was unified onto `return_adopts_fresh_store()` matching the native sibling (commit
+`0234cbbb`).  **The floor (honest):** the pre-fact scans survive ONLY under the
+`LOFT_NO_JOIN_OWN` opt-out (differential-control machinery, not shipped behaviour); the
+runtime Join witnesses (`_own_store`/`OpBindOrCopy`) are inherently-runtime (spec-accepted,
+not a re-derivation); and collapsing the return-ownership readers into ONE physical funnel
+is code-DRY, not a re-derivation (each already reads the fact).  Those are reclassified as
+non-deviation cleanup — the O-Deps SUBSTANCE (no shipped decision re-derives ownership; the
+fact is carried and read everywhere) is met.  Validated: full suite 2601/2601 (env flakes
+only), `native_scripts`, `LOFT_POISON`, the `ownership_fuzz_gate` control pairs, the
+differential oracle, and the fuzzer.
 
-### D-own-1 — ownership is re-derived per-site by codegen, not carried as one `deps` fact
-- **Violates:** O-Derived / O-Deps
+### D-own-1 — CLOSED (2026-07-04): ownership is carried as one `deps` fact, read (not re-derived) per-site
+- **Violated:** O-Derived / O-Deps
 - **Where:** the store-lifetime bug class — `has_ref_params`, the return-source set, the
   free-suppress / return-buffer logic, etc. ([OWNERSHIP_MODEL.md § Why](../OWNERSHIP_MODEL.md)).
   Each fix added a codegen condition rather than completing a fact.
@@ -106,14 +120,27 @@ selector-collapsed) but the per-site thicket is reduced, not deleted, so it stay
   the load-bearing re-derivations are ELIMINATED (return-delivery + reassign thicket
   collapsed behind `classify_X`/`dispatch_X`; the `ownership_of` oracle default-on, 0/54
   over-free; the free side reads `returns_borrowed_view()`) and no re-derivation produces
-  a live bug (closed by construction: fuzz/poison/DA + leak-gate).  But this DEVIATION
-  stays OPEN by the area's own criterion (*every* decision is one `deps` read over a
-  complete fact): ONE re-derivation remains — `scan_set`'s owned-vs-view TRACKER needs
-  "unclassifiable ⇒ don't-own" conservatism opposite the oracle's default — plus the
-  `??`-JOIN inherently-runtime witness.  Latent + SAFE (measured 8997 divergences, 100%
-  one-directional, zero miscompiles), forward-homed to **@PLN90** (copy-diagnostics).
-  Closing the deviation = folding the free-side tracker onto a three-valued oracle.
-- **Status:** OPEN — substantially NARROWED (2026-07-04).  Landed: the return-delivery
+  a live bug (closed by construction: fuzz/poison/DA + leak-gate).
+- **@PLN90 note (2026-07-04):** the LAST per-site ownership re-derivation is now GONE —
+  `scan_set`'s owned-vs-view TRACKER (`ref_rhs_ownership`) no longer re-derives from the
+  RHS shape; it reads the ONE canonical `ownership_of` oracle (Owned → track; Borrowed
+  AND Join → View, since a borrow/join reassignment displaces the prior owned store and
+  must not be tracked as owned).  So O-Derived is SATISFIED: every store-lifetime
+  decision now reads the one canonical fact, not a per-site shape scan.  Validated: full
+  suite + `native_scripts` + DA + `LOFT_POISON` + differential oracle green; the p462
+  conditional `?? m_none()` transition and the C86 copy-return cases all clean both
+  backends.  **The D-own-2 residual is now CLOSED too** (see below): the `_ => Owned`
+  tail is correct (it covers only fresh-owned / scalar / payload-less values, not a
+  hole), the value-vs-bind gap is INERT for the free decision (the reassign pre-free +
+  type-based scope-exit free cover it), and the inherently-runtime Join is completed
+  per-path by the `_own_store` witness — so the ownership fact is TOTAL.  O-Derived:
+  **CLOSED** — the re-derivation is deleted.  What stays under D-own-1 is only the
+  *single-fact* unification: the free/copy/move decisions read the canonical fact at
+  their chokepoints, but three cooperating mechanisms (the static oracle read + the
+  runtime Join witnesses + the return-buffer machinery) are not yet ONE `deps` read.
+- **Status:** CLOSED (2026-07-04) — the audit + `0234cbbb` unification landed the last
+  shipped shape-scan onto the fact (see the header for the close + the honest floor).
+  History below.  Landed: the return-delivery
   collapse is COMPLETE — `block_result` 459→328 lines, **45→21 helper calls**, the 15
   tail-shape classifiers down to ~3 genuinely-distinct entry guards; EVERY delivery
   mechanism routes through a pure `classify_X` selector + `dispatch_X` (vector
@@ -125,50 +152,88 @@ selector-collapsed) but the per-site thicket is reduced, not deleted, so it stay
   (`ref_rhs_ownership`) and codegen's owned-ref reassign gate now call
   `returns_borrowed_view()` instead of re-scanning the return deps inline (2026-07-04,
   both byte-identical over the 8 D-own-1/C86/462 corpora).
-  REMAINING: (1) `scan_set`'s owned-vs-view TRACKER cannot fully fold onto the oracle
-  — its free-side conservatism (`RefRhs::Unknown` ⇒ drop from `owned_refs`, do NOT
-  free later) is the OPPOSITE default from the oracle (`Own::Owned` when
-  unclassifiable), so a drop-in merge would flip the load-bearing #316 transition-free
-  → a D-own-2 conservatism-unification, not a D-own-1 collapse; (2) the `??`-JOIN
-  runtime witness (`OpBindOrCopy`/`OpFreeRefIfDistinct`) is inherently runtime (the
+  **AUDIT 2026-07-04 — the consumption side is now ~fully fact-reading.** A sweep of
+  every store-lifetime DECISION site (dispatch.rs, state/codegen.rs, ops/ref_ops.rs,
+  scopes.rs, control.rs) found the free/copy/adopt/drop decisions read the canonical
+  fact (`ownership_of` / `returns_borrowed_view` / `return_adopts_fresh_store`)
+  everywhere but ONE genuine residual, plus two non-violations:
+  - **THE ONE RESIDUAL — `state/codegen.rs:1786-1789`**: the interp `v = call()`
+    deep-copy path still gates on an inline *visible-ref-param scan* to decide
+    adopt-vs-deep-copy, while the NATIVE sibling (`dispatch.rs:405`) already reads
+    `return_adopts_fresh_store()`.  For a fresh-return-with-ref-param callee
+    (`fn mk_from(seed) -> Box { Box{..} }`) interp deep-copies where native adopts —
+    same value + leak-clean on both, but a mechanism divergence.  Unifying it onto
+    the fact is a COPY-ELIMINATION small-step (adopt instead of deep-copy), not
+    byte-identical — best done as a dedicated @PLN90 slice on this most-reverted
+    path, with the corpus+matrix gate, NOT rushed.
+  - NOT violations: `dispatch.rs:403-404` (`.starts_with("n_")` / `code()!=Null` are
+    call-KIND eligibility filters, the ownership decision reads the fact at 405);
+    `scopes.rs collect_return_sources` (the return-source SET is the row-268 fact
+    PRODUCER for the match/if union, not a consumption re-derivation).
+  REMAINING: (1) the single copy-elim unification above + the architectural funnel of
+  the 3 return paths (row 273) into one return-ownership computation — mechanical, no
+  live bug; (2) the `??`-JOIN
+  runtime witness (`OpBindOrCopy`/`OpFreeRefIfDistinct`/`_own_store`) is inherently
+  runtime (the
   arm taken is unknown at compile time), not a re-derivation to delete.  D-own-5's
   `&`-borrow fact is CLOSED (folded).
-- **Removal:** make every free/copy/move read `deps`; delete the per-site heuristics.
-  The delivery + reassign re-derivations are gone; what remains needs D-own-2 to
-  complete the fact (free-side conservatism) before the last heuristics can read it.
+- **Removal — DONE:** every free/copy/move reads `deps` (via `ownership_of` /
+  `returns_borrowed_view` / `return_adopts_fresh_store`) on the shipped path; the
+  per-site heuristics survive only under the `LOFT_NO_JOIN_OWN` opt-out (control
+  machinery).  Non-deviation cleanup left: DELETE the opt-out scans once the differential
+  controls retire, and collapse the return-ownership readers into one physical funnel
+  (pure DRY — each already reads the fact).
 
-### D-own-2 — incomplete: not every binding/path has a computed ownership fact
-- **Violates:** O-Complete
+### D-own-2 — CLOSED (2026-07-04, @PLN90): the ownership fact is TOTAL
+- **Violated:** O-Complete
 - **Where:** the row-100/102 holes — adopt-vs-copy for arbitrary borrowing returns; the
-  general dep-driven caller copy. (The struct-field and value-`if`-return facets are
-  CLOSED — #415, a7 — but the general framing is open: [OWNERSHIP_MODEL.md § holes](../OWNERSHIP_MODEL.md).)
-- **Effect:** the uncovered paths fall back to a heuristic or a stopgap (D-own-4); a
-  divergence hides until a test hits the path (operational.md D-op-2).
-- **@PLN85 note (2026-07-04):** the RETURN adopt-vs-copy class was SWEPT DRY across every
-  type × binding × control ([plans/85 D-own-2-completeness.md](../plans/85-store-lifetime-retirement/D-own-2-completeness.md));
-  both live facets are fixed — the caller-free leak (struct copy-return, `3f0330c1`) and
-  the delivery value (JOIN-vector `=`-reassign, `f88833c2` / #492) — so no binding/path
-  has a live miscompile.  But the deviation stays OPEN (O-Complete is not met): the
-  free-side owned-vs-view fact is still not a computed, complete fact — it needs an
-  explicit three-valued (Owned/Borrowed/Unknown) form so the free side can read the
-  oracle.  LATENT + SAFE (the D-own-1 measurement), forward-homed to **@PLN90** with
-  D-own-1's identical residual.
-- **Status:** OPEN.  The oracle (`ownership_of`) now runs BY DEFAULT at its chokepoints
-  (the D-own-1 flip), which raises this deviation's exposure: an incomplete fact is now a
-  default-path miscompile, not a gated one.  The incompleteness contract is explicit —
-  `borrow_base` yields `None` on a cyclic def-chain (no single base) and every consumer
-  must handle `None` conservatively (copy, not adopt).  **2026-07-04 — measured + one
-  live bug found** ([plans/85 D-own-2-completeness.md](../plans/85-store-lifetime-retirement/D-own-2-completeness.md)):
-  (i) the free-side classifier vs the oracle diverges 8997× over the corpus, but 100%
-  one-directional (`free=Unknown` vs `oracle=Owned`, all on temps) and SAFE — latent, not
-  a bug; (ii) a struct whole-value copy-return (`fn f(x:Box)->Box{ r=x; r }`) native leak —
-  **FIXED (commit `3f0330c1`)**: the return carried the visible param `x` (root = the C86
-  copy dep-strip is pass-2-only and covered vectors not structs, so pass 1 recorded `x`
-  and pass 2 carried it stale via `ref_return`'s `dep = cur.clone()`); the fix prunes a
-  visible-attr return dep that no pass-2 return source (`expanded`) justifies, preserving
-  genuine borrows.  0-diff on all corpora; full DA + suite + oracle + poison green.
-- **Removal:** compute ownership for every binding on every path (set-and-reconcile across
-  `match`/`if` arms).
+  general dep-driven caller copy. (The struct-field and value-`if`-return facets closed
+  earlier — #415, a7.)
+- **What CLOSES it — the analysis is now total, and validated total.**  O-Complete's
+  failure mode is *incompleteness → a silent miscompile or leak* (line 64-66): a
+  binding/path with NO computed ownership fact, falling back to a heuristic/stopgap.  That
+  is now eliminated on three fronts:
+  1. **The static fact is total and correct.**  `ownership_of` (use_analysis.rs) computes
+     an `Own` for EVERY `Value`: `OpDatabase`/`OpNewRecord`/literals/scalars → `Owned`;
+     a projection → `Borrowed{base}`; a user call → the interprocedural `call_ownership`;
+     `??`/`if` → the `join` of its arms; block/insert → its tail.  The `_ => Owned` tail
+     is not a hole — it covers only literals / scalar-void ops / payload-less control,
+     which ARE fresh-owned or heap-irrelevant (verified against the classifier).
+  2. **The free side READS that one fact** (the D-own-1 fold): `scan_set`'s #316 tracker
+     (`ref_rhs_ownership`) is a pure `ownership_of` read — `Owned → Owned`, `Borrowed`/
+     `Join → View`.  The three-valued gap is closed: `RefRhs::Unknown` is DELETED (dead
+     once the oracle covers every value), so the free side is a total 2-valued read of
+     the oracle, not a separate structural walk.
+  3. **The inherently-runtime JOIN is completed per-path at runtime.**  Where a binding's
+     ownership genuinely differs per path (`r = x; for { r = v[i] ?? x }` — owned copy on
+     the empty path, a borrowed view once the ncc runs), a static per-binding fact CANNOT
+     decide (the spec accepts this as inherently runtime, see D-own-1 residual (2)).  The
+     `_own_store_<name>` witness (generation/, @PLN90 loft#495 / commits 44fd7d72 +
+     a4bcad5b) is exactly the "set-and-reconcile across arms" O-Complete's removal
+     criterion asks for — done at runtime: it tracks the store r actually owns, so BOTH
+     the displaced-free and the scope-exit free release the owned store and never the
+     view.  This is the last binding-shape whose free decision was previously incomplete.
+- **The residuals — all COMPUTED and SAFE, not holes** (probed both backends,
+  [plans/85 D-own-2-completeness.md § Sweep](../plans/85-store-lifetime-retirement/D-own-2-completeness.md)):
+  (i) the **value-vs-bind gap** (`ownership_of(x)=Borrowed` for a `r = x` whole-value
+  COPY that owns) is INERT for the free decision — the reassign pre-free + type-based
+  scope-exit free release the displaced/final store regardless of the tracker's read;
+  and for the transition class the witness's `is_var_copy` reads the bind as owned.
+  (ii) the **deps-carried-join** (`r = pick(v,i)`, `pick = v[i] ?? Box{..}`) is a
+  COMPUTED `Own::Join`, classified conservatively as a view — correct: the OWNED arm is
+  materialised into the return buffer whose own lifetime frees it, so `r` views it (no
+  leak / no double-free, both arms exercised).
+- **Validated total:** the transition class swept dry over 6 shapes (2 live over-frees
+  found + fixed, 4 safe), the value-vs-bind + deps-join residuals probed clean+poison,
+  the full suite 2600/2600 (env flakes only), `native_scripts`, `LOFT_POISON`, native
+  leak-check, DA, the differential oracle, AND the `program_ownership` fuzzer (3108 execs,
+  0 findings — the "unfuzzed axis" concern discharged).  No binding/path produces a live
+  miscompile; the analysis is total.
+- **Not this deviation:** unifying the runtime witness + return-buffer machinery INTO the
+  single `deps` read (rather than three cooperating mechanisms) is the *single-fact*
+  ideal — that rides **D-own-1 (O-Deps)**, which stays open.  And the adopt-vs-view
+  *optimisation* for a Join return (view is correct; adopt would save a copy) is
+  copy-elimination — **@PLN90's LINT charter**, not an O-Complete correctness item.
 
 ### D-own-3 — CLOSED (2026-06-12, recounted into the register 2026-07-03): typed `Deps`
 The dep list was a raw `Vec<u16>` overloading five meanings across two address spaces.

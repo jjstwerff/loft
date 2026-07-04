@@ -1,0 +1,24 @@
+// Keyed collections (hash / sorted) — their word-addressed storage + the sorted
+// walk order are intricate codegen; the reduction and the ORDER must agree across
+// backends (native's over-free bugs in this class motivated @PLN85's leak fixes).
+struct HRec { ck: integer, v: integer }
+struct SRec { sk: integer }
+fn build_hash() -> hash<HRec[ck]> {
+    h: hash<HRec[ck]> = [];
+    h += [HRec { ck: 5, v: 50 }];
+    h += [HRec { ck: 8, v: 80 }];
+    h += [HRec { ck: 2, v: 20 }];
+    h
+}
+fn build_sorted() -> sorted<SRec[sk]> {
+    s: sorted<SRec[sk]> = [];
+    s += [SRec { sk: 3 }]; s += [SRec { sk: 1 }]; s += [SRec { sk: 2 }];
+    s
+}
+fn main() {
+    h = build_hash();
+    total = 0; for r in h { total += r.v; }        // 150 (order-independent sum)
+    s = build_sorted();
+    order = ""; for e in s { order = order + "{e.sk}"; }  // "123" (sorted ascending)
+    println("hash_sum={total} sorted_order={order}");
+}

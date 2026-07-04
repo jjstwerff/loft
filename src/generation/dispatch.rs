@@ -14,8 +14,88 @@ use super::{
 };
 
 impl Output<'_> {
-    #[allow(clippy::too_many_lines)]
+    /// @PLN90 #495 — variable-assignment entry.  A "runtime-Join" local (owned
+    /// init + ≥1 ncc-borrow reassign; see [`Output::witness_vars`]) is routed
+    /// through the owned-store-tracker path so neither free-site whole-store-frees
+    /// a borrowed view.  Every other var goes straight to [`Self::output_set_body`].
     pub(super) fn output_set(
+        &mut self,
+        w: &mut dyn Write,
+        var: u16,
+        to: &Value,
+    ) -> std::io::Result<()> {
+        if crate::keys::join_own_enabled() && self.witness_vars.contains(&var) {
+            return self.output_set_witnessed(w, var, to);
+        }
+        self.output_set_body(w, var, to)
+    }
+
+    /// The owned-store-tracker emission for a runtime-Join local.  An OWNED assign
+    /// (the init) emits normally, then points `_own_store_<name>` at the store r
+    /// now owns.  A BORROW reassign (the ncc) emits the plain assignment, frees the
+    /// tracked OWNED store it displaces (never r's new view), and NULLs the tracker.
+    fn output_set_witnessed(
+        &mut self,
+        w: &mut dyn Write,
+        var: u16,
+        to: &Value,
+    ) -> std::io::Result<()> {
+        let variables = self.data.def(self.def_nr).variables();
+        let name = sanitize(variables.name(var));
+        // A whole-value Var-copy OWNS its fresh store (C86) even though the oracle
+        // reports the SOURCE var as Borrowed — mirror collect_witness_vars.
+        let is_var_copy = matches!(
+            to.unspan(),
+            Value::Var(src) if variables.tp(*src).heap_def_nr().is_some()
+        );
+        let owned = is_var_copy
+            || matches!(
+                crate::use_analysis::ownership_of(self.data, self.def_nr, to),
+                crate::use_analysis::Own::Owned
+            );
+        let reassign = self.declared.contains(&var);
+        if reassign && !owned {
+            write!(w, "{{ ")?;
+            self.output_set_inner(w, var, to)?;
+            write!(
+                w,
+                "; if _own_store_{name}.store_nr != u16::MAX \
+                 && _own_store_{name}.store_nr != var_{name}.store_nr \
+                 {{ OpFreeRef(cell, _own_store_{name}, \"{name}(owned)\"); }} \
+                 _own_store_{name} = DbRef::NULL; }}"
+            )?;
+            return Ok(());
+        }
+        if reassign && owned {
+            // An OWNED reassign of a runtime-Join local (a 2nd+ owned assign).
+            // r currently holds a store that may be a BORROWED view — so free the
+            // tracked OWNED store this displaces, then RESET var_r to the null
+            // sentinel so `output_set_body`'s in-place `OpDatabase(var_r)` reuse /
+            // `owned_ref_reassign` displaced-free allocate FRESH and no-op the
+            // free (never touching the view).  The new owned store becomes the
+            // tracked one.
+            write!(
+                w,
+                "{{ if _own_store_{name}.store_nr != u16::MAX \
+                 {{ OpFreeRef(cell, _own_store_{name}, \"{name}(owned)\"); }} \
+                 var_{name}.store_nr = u16::MAX; "
+            )?;
+            self.output_set_body(w, var, to)?;
+            write!(w, "; _own_store_{name} = var_{name}; }}")?;
+            return Ok(());
+        }
+        // First-decl.  `collect_witness_vars` requires ≥1 owned assign, and the
+        // init is owned (a `first = v[i] ?? d` borrow-only local is borrow-TYPED,
+        // never a candidate), so this is the owned init — a fresh store, no prior.
+        self.output_set_body(w, var, to)?;
+        if owned {
+            write!(w, "; _own_store_{name} = var_{name}")?;
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_lines)]
+    pub(super) fn output_set_body(
         &mut self,
         w: &mut dyn Write,
         var: u16,

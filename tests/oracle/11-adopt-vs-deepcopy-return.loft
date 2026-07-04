@@ -1,0 +1,39 @@
+// @PLN90 D-own-1 — the adopt-vs-deep-copy MECHANISM divergence (commit 0234cbbb).
+//
+// For `v = call()` where the callee returns a genuinely-fresh store with a visible
+// ref param (`fn mk_from(seed) -> Box { Box{..} }`), the interp deep-copied (an
+// inline visible-ref-param scan) while native ADOPTED (it read the
+// `return_adopts_fresh_store()` fact). Same value + leak-clean on both, but a
+// mechanism divergence — the exact "backends kept in agreement only by tests"
+// class the oracle exists to make a caught property. Unifying interp onto the fact
+// removed the divergence. Both backends must agree on value AND leak-freedom.
+
+struct Box { v: integer }
+struct Node { v: integer, kids: vector<Node> }
+
+// fresh return + visible ref param — was deep-copy (interp) vs adopt (native)
+fn mk_from(seed: Box) -> Box { Box { v: seed.v + 1 } }
+// borrowed-view return (returns the param) — both deep-copy
+fn id_g(g: Box) -> Box { return g; }
+// hidden-buffer return: a NEW struct built from the param
+fn wrap(seed: Box) -> Node { Node { v: seed.v, kids: [Node { v: seed.v * 2, kids: [] }] } }
+// ??-JOIN return (owned literal OR borrowed view)
+fn pick(v: vector<Box>, i: integer) -> Box { v[i] ?? Box { v: 0 } }
+
+fn main() {
+    s = Box { v: 5 };
+    a = mk_from(s);
+    b = id_g(s);
+    e = wrap(s);
+    vs = [Box { v: 1 }, Box { v: 2 }];
+    f = pick(vs, 0);
+    // chained: mk_from feeding mk_from (the stash / reads-self shape)
+    g = mk_from(s); g = mk_from(g);
+    // reassign-in-loop of an owned-call result
+    r = s; total = 0;
+    for i in 0..3 { r = mk_from(r); total += r.v; }
+    println("a={a.v} b={b.v}");                       // 6 5
+    println("wrap={e.v} kid={(e.kids[0] ?? Node { v: 0, kids: [] }).v}"); // 5 10
+    println("pick={f.v} chain={g.v} loop={total}");   // 1 7 21
+    println("src={s.v} vs={len(vs)}");                // 5 2  (sources survive — copies, not aliases)
+}

@@ -1,0 +1,12 @@
+// Parallel loops — the par dispatcher partitions + runs chunks concurrently on
+// native, sequentially on interp; an order-independent reduction (sum/count) must
+// give the same result on both. Covers the (index,value) delivery + the reduce.
+fn sq(x: integer) -> integer { x * x }
+fn main() {
+    data = [1, 2, 3, 4, 5, 6, 7, 8];
+    total = 0;
+    for item in data par(r = sq(item), 4) { total += r; }   // 1+4+9+...+64 = 204
+    count = 0;
+    for item in data par(r2 = sq(item), 2) { if r2 % 2 == 0 { count += 1; } }  // even squares: 4,16,36,64 = 4
+    println("par_sum={total} even_count={count}");
+}

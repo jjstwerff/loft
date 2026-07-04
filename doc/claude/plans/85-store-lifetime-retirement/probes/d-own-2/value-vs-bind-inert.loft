@@ -1,0 +1,15 @@
+struct Box { v: integer }
+fn mk(n: integer) -> Box { Box { v: n } }
+fn vvb(x: Box) -> integer {
+    r = x;            // C86 copy — r OWNS copy1; oracle(x)=Borrowed (value-vs-bind gap)
+    r = mk(7);        // owned reassign — copy1 displaced, must be freed (not leaked)
+    r.v
+}
+fn vvb2(x: Box) -> integer {
+    r = x;            // copy1, never reassigned — pure owned, freed at scope-exit
+    r.v
+}
+fn main() {
+    a = Box { v: 5 };
+    println("vvb={vvb(a)} (expect 7)  vvb2={vvb2(a)} (expect 5)");
+}

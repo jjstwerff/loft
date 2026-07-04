@@ -4368,6 +4368,89 @@ use #count instead"
     }
 }
 
+/// Recursively rename variable `from` to `to` everywhere in `val` — as a READ
+/// (`Value::Var` and the other var-carrying reads) AND as a BINDING TARGET (the
+/// slot of `Set`/`BreakWith`/`TuplePut`/`Iter` and a block's `scope`).  Unlike
+/// `replace_var_in_ir` (which rewrites reads only, leaving binding targets), this
+/// is a total substitution: after it, `from` no longer appears anywhere.
+///
+/// Used by the vector-literal receiver fix (loft#501): when a literal reused the
+/// outer assignment LHS as its build accumulator but a `.`/`[` chain follows, the
+/// accumulator is renamed to a fresh synthetic local so the LHS is free to receive
+/// the chain's result.
+pub(crate) fn rename_var(val: &mut Value, from: u16, to: u16) {
+    match val {
+        Value::Var(v) | Value::TupleGet(v, _) | Value::FnRefDnr(v) | Value::FnRef(_, v, _) => {
+            if *v == from {
+                *v = to;
+            }
+        }
+        Value::Int(_)
+        | Value::Long(_)
+        | Value::Float(_)
+        | Value::Single(_)
+        | Value::Boolean(_)
+        | Value::Text(_)
+        | Value::Enum(_, _)
+        | Value::Line(_)
+        | Value::Break(_)
+        | Value::Continue(_)
+        | Value::Keys(_)
+        | Value::Null
+        | Value::RawExpr(_) => {}
+        Value::CallRef(v, args) => {
+            if *v == from {
+                *v = to;
+            }
+            for a in args.iter_mut() {
+                rename_var(a, from, to);
+            }
+        }
+        Value::Call(_, args) | Value::Insert(args) | Value::Tuple(args) | Value::Parallel(args) => {
+            for a in args.iter_mut() {
+                rename_var(a, from, to);
+            }
+        }
+        Value::Block(bl) | Value::Loop(bl) => {
+            if bl.scope == from {
+                bl.scope = to;
+            }
+            for op in &mut bl.operators {
+                rename_var(op, from, to);
+            }
+        }
+        Value::Set(t, body) | Value::BreakWith(t, body) | Value::TuplePut(t, _, body) => {
+            if *t == from {
+                *t = to;
+            }
+            rename_var(body, from, to);
+        }
+        Value::Return(body) | Value::Drop(body) | Value::Yield(body) => {
+            rename_var(body, from, to);
+        }
+        Value::If(cond, t, f) => {
+            rename_var(cond, from, to);
+            rename_var(t, from, to);
+            rename_var(f, from, to);
+        }
+        Value::Iter(t, a, b, c) => {
+            if *t == from {
+                *t = to;
+            }
+            rename_var(a, from, to);
+            rename_var(b, from, to);
+            rename_var(c, from, to);
+        }
+        Value::Span(b) => rename_var(&mut b.1, from, to),
+        Value::ParFor(b) => {
+            rename_var(&mut b.input, from, to);
+            rename_var(&mut b.worker, from, to);
+            rename_var(&mut b.threads, from, to);
+            rename_var(&mut b.body, from, to);
+        }
+    }
+}
+
 /// Plan-04 B.3 follow-up v2: recursively walk `val` and replace every
 /// `Value::Var(target)` with a clone of `replacement`.  Used by
 /// `build_parallel_for_ir` to inline-expand the par loop variable `b`

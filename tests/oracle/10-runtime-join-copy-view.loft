@@ -1,0 +1,48 @@
+// @PLN90 loft#495 — the runtime-Join over-free that DIVERGED across backends.
+//
+// A Reference local COPIED then VIEW-reassigned in a loop (`r = x; for { r = v[i]
+// ?? x }`) owns the copy on the empty-loop path but borrows a view once the ncc
+// runs. Native's owned-TYPE free-sites whole-store-freed the borrowed view — a
+// heisenbug corruption needing a 3-function program (allocation-order sensitive);
+// interp was correct. The `_own_store` runtime-Join witness fixed native. This is
+// exactly the interp/native mechanism-divergence class the oracle guards: both
+// backends must now print the same values with no leak.
+
+struct Box { v: integer }
+struct Node { v: integer, kids: vector<Node> }
+
+fn loop_cv(x: Box, v: vector<Box>) -> integer {
+    r = x;
+    total = 0;
+    for i in 0..len(v) { r = v[i] ?? x; total += r.v; }
+    total
+}
+
+// owned>=2: an owned literal reassign alongside the ncc-borrow reassign.
+fn mixed(x: Box, v: vector<Box>) -> integer {
+    r = x;
+    total = 0;
+    for i in 0..len(v) {
+        r = v[i] ?? x;
+        total += r.v;
+        r = Box { v: total };
+        total += r.v;
+    }
+    total
+}
+
+fn build_tree(n: integer) -> Node { root = Node { v: n, kids: [] }; root.kids += [Node { v: n + 1, kids: [] }]; root }
+fn deep_pick(t: vector<Node>, i: integer) -> Node { chosen = Node { v: 0, kids: [] }; if len(t) > 0 { chosen = t[i % len(t) ?? 0] ?? Node { v: 0, kids: [] }; } chosen }
+
+fn main() {
+    a = Box { v: 5 };
+    vs = [Box { v: 1 }, Box { v: 2 }, Box { v: 3 }];
+    tr = build_tree(10);
+    ts = [Node { v: 7, kids: [] }, Node { v: 8, kids: [] }];
+    dp = deep_pick(ts, 1);
+    println("loop_cv={loop_cv(a, vs)}");        // 6
+    println("mixed={mixed(a, vs)}");            // 22
+    println("empty={loop_cv(a, [])}");          // 0 (empty-loop path frees the copy)
+    println("tree={tr.v} kids={len(tr.kids)}"); // 10 1
+    println("deep={dp.v} vs={len(vs)}");        // 8 3
+}
