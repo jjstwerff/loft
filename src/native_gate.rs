@@ -71,10 +71,11 @@ pub fn scalar_dispatchable(data: &Data) -> HashSet<u32> {
 
 /// A type that passes the interpreter↔native boundary by value, with no store
 /// reference — the trivially-marshallable set.  (Plain enums, `Text`, vectors and
-/// references are deliberately excluded from this first slice.)
+/// references are deliberately excluded from this first slice.)  `Optional(τ)`
+/// shares τ's sentinel layout (@PLN25), so it classifies as its base type.
 fn is_scalar_type(t: &Type) -> bool {
     matches!(
-        t,
+        t.base(),
         Type::Integer(_) | Type::Boolean | Type::Float | Type::Single | Type::Character
     )
 }
@@ -105,7 +106,9 @@ pub fn shared_store_dispatchable(data: &Data) -> HashSet<u32> {
         .into_iter()
         .filter(|&d| {
             let def = data.def(d);
-            let ret = def.returned();
+            // `Optional(τ)` rides the same sentinel layout as τ (@PLN25) — gate on
+            // the peeled type so a nullable return/param stays dispatchable.
+            let ret = def.returned().base();
             // A vector return uses `--native`'s hidden destination param (the bridge
             // allocates it); a struct `reference` return does NOT (the body
             // allocates the record fresh and returns its `DbRef` —
@@ -171,7 +174,7 @@ pub fn classify_bridge_attr(a: &crate::data::Attribute, ret_text: bool) -> Optio
         // HiddenDest arm resolves the store type via `hidden_dest_type_id`,
         // which already covers all three.  (Was Vector-only by accident.)
         return matches!(
-            a.typedef,
+            a.typedef.base(),
             Type::Vector(_, _) | Type::Reference(_, _) | Type::Enum(_, true, _)
         )
         .then_some(BridgeAttrKind::HiddenDest);
@@ -180,7 +183,7 @@ pub fn classify_bridge_attr(a: &crate::data::Attribute, ret_text: bool) -> Optio
         // Valid iff the function actually returns text.
         return ret_text.then_some(BridgeAttrKind::WorkText);
     }
-    if matches!(a.typedef, Type::Function(_, _, _)) {
+    if matches!(a.typedef.base(), Type::Function(_, _, _)) {
         return None; // closures — not handled (was a '__' name test)
     }
     is_bridge_type(&a.typedef).then_some(BridgeAttrKind::Marshal)
@@ -194,10 +197,10 @@ pub fn classify_bridge_attr(a: &crate::data::Attribute, ret_text: bool) -> Optio
 /// buffer, not just a slot.)
 fn is_bridge_type(t: &Type) -> bool {
     // Enum(_, _, _): a plain (tag-only) enum (a u8 tag) or a data enum (a DbRef);
-    // `bridge_read` distinguishes them.
+    // `bridge_read` distinguishes them.  Peel `Optional` — same layout as the base.
     is_scalar_type(t)
         || matches!(
-            t,
+            t.base(),
             Type::Text(_)
                 | Type::Enum(_, _, _)
                 | Type::Vector(_, _)

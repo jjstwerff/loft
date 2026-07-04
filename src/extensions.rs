@@ -313,7 +313,12 @@ fn compute_sig(data: &crate::data::Data, d_nr: u32) -> Option<NativeSig> {
     let def = data.def(d_nr);
     let mut params = Vec::new();
     for attr in &def.attributes {
-        let t = match &attr.typedef {
+        // Marshal classification is layout-based, and `Optional(τ)` shares τ's
+        // sentinel layout (@PLN25) — classify the peeled type, here and for the
+        // return below.  Without the peel, a `#native` fn declaring `integer?`
+        // silently classified as unmarshallable and was never wired (the call
+        // then hit the stale-cdylib panic stub).
+        let t = match attr.typedef.base() {
             // @P370: a plain loft `integer` is 64-bit (8-byte slot) — it must
             // marshal as I64.  Only an EXPLICIT narrow integer (`u8/i8/u16/i16/
             // i32`, which carry `forced_size`) or a `Character` (4-byte
@@ -338,7 +343,7 @@ fn compute_sig(data: &crate::data::Data, d_nr: u32) -> Option<NativeSig> {
         };
         params.push(t);
     }
-    let ret = match &def.returned {
+    let ret = match def.returned.base() {
         Type::Void | Type::Null => None,
         // @P370: plain loft `integer` is 64-bit → I64; only explicit narrow
         // ints (`forced_size`) and `Character` are ≤4 bytes → I32.
@@ -366,7 +371,8 @@ fn compute_sig(data: &crate::data::Data, d_nr: u32) -> Option<NativeSig> {
 #[cfg(feature = "native-extensions")]
 fn marshal_arg_t(t: &crate::data::Type) -> Option<ArgT> {
     use crate::data::Type;
-    Some(match t {
+    // `Optional(τ)` rides τ's sentinel layout (@PLN25) — marshal as the base type.
+    Some(match t.base() {
         // @P370: plain loft `integer` is 64-bit → I64; only explicit narrow
         // ints (`forced_size`) and `Character` are ≤4 bytes → I32.
         Type::Integer(s) if s.forced_size.is_none() => ArgT::I64,
@@ -396,7 +402,7 @@ fn compute_shared_sig(data: &crate::data::Data, d_nr: u32) -> Option<SharedSig> 
     use crate::data::Type;
     use crate::native_gate::{BridgeAttrKind, classify_bridge_attr};
     let def = data.def(d_nr);
-    let ret_text = matches!(def.returned(), Type::Text(_));
+    let ret_text = matches!(def.returned().base(), Type::Text(_));
     let mut pops = Vec::new();
     let mut forward = Vec::new();
     let mut text_workbuf = None;
@@ -428,7 +434,7 @@ fn compute_shared_sig(data: &crate::data::Data, d_nr: u32) -> Option<SharedSig> 
             }
         }
     }
-    let ret = match def.returned() {
+    let ret = match def.returned().base() {
         Type::Void | Type::Null => None,
         t => Some(marshal_arg_t(t)?),
     };

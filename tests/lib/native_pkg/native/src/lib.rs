@@ -174,6 +174,24 @@ pub unsafe extern "C" fn n_ext_make_box(store: LoftStore, v: i64) -> LoftRef {
     rec
 }
 
+// Pattern 10: NULLABLE scalar return (`-> integer?`).  `Optional(integer)`
+// rides the plain-integer sentinel layout, so the marshal signature is a bare
+// i64 and null crosses as i64::MIN.  Negative input → null; else x + 1.
+#[loft_native]
+#[unsafe(no_mangle)]
+pub extern "C" fn n_ext_maybe(x: i64) -> i64 {
+    if x < 0 { i64::MIN } else { x + 1 }
+}
+
+// Pattern 11: WIDE/NEGATIVE integer round-trip.  A plain loft `integer` is
+// 64-bit at the boundary; values beyond i32 and negatives must arrive and
+// return untruncated (the i32-extern regression class).
+#[loft_native]
+#[unsafe(no_mangle)]
+pub extern "C" fn n_ext_echo(x: i64) -> i64 {
+    x
+}
+
 // ── Registration ─────────────────────────────────────────────────────
 // The loft decls bind `#native "loft_ext_*"`, so register the raw `n_ext_*`
 // symbols under those names (`loft_register_v1`, for the dlsym-priority and
@@ -190,6 +208,8 @@ loft_ffi::loft_register! {
     loft_ext_loop_vec_sum => n_ext_loop_vec_sum,
     loft_ext_make_bytes => n_ext_make_bytes,
     loft_ext_make_box => n_ext_make_box,
+    loft_ext_maybe => n_ext_maybe,
+    loft_ext_echo => n_ext_echo,
 }
 
 loft_ffi::loft_register_bridges! {
@@ -202,4 +222,6 @@ loft_ffi::loft_register_bridges! {
     "loft_ext_loop_vec_sum" => n_ext_loop_vec_sum__loft_bridge,
     "loft_ext_make_bytes" => n_ext_make_bytes__loft_bridge,
     "loft_ext_make_box" => n_ext_make_box__loft_bridge,
+    "loft_ext_maybe" => n_ext_maybe__loft_bridge,
+    "loft_ext_echo" => n_ext_echo__loft_bridge,
 }

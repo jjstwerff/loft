@@ -357,6 +357,67 @@ fn shared_cdylib_with_native_package_emits_cabi_extern() {
     );
 }
 
+/// The C-ABI extern decl must state the cdylib's REAL integer width: a plain
+/// loft `integer` is i64 at the package boundary (the same @P370 judgment the
+/// interpreter marshal uses — `forced_size`, not value range), and a nullable
+/// `integer?` peels to the same i64 (Optional shares the sentinel layout).
+/// Pre-fix the decl said `i32`, silently truncating i64 traffic — the null
+/// sentinel (i64::MIN) arrived as 0 (loft-libs-core#14, `random.rand`).
+#[test]
+fn cabi_extern_declares_i64_for_plain_and_optional_integers() {
+    if std::env::var("LOFT_NATIVE_CABI").as_deref() == Ok("0") {
+        println!("skip: LOFT_NATIVE_CABI=0 forces the legacy rlib path");
+        return;
+    }
+    let _lock = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    let (data, db) = cached_default();
+    let mut p = loft::parser::Parser::new();
+    p.data = data;
+    p.database = db;
+    // A body-less `#native` decl with plain-integer params and a NULLABLE
+    // integer return, called from a shared-store-dispatchable pub fn so the
+    // native is reachable and the extern block is emitted.
+    p.parse_str(
+        "fn roll(lo: integer, hi: integer) -> integer?;\n\
+         #native \"loft_roll\"\n\
+         \n\
+         pub fn roll_grid(grid: vector<integer>) -> vector<integer> {\n\
+         \x20 roll(1, 6);\n\
+         \x20 grid\n\
+         }\n",
+        "lib",
+        false,
+    );
+    loft::scopes::check(&mut p.data);
+    p.data.native_packages.push((
+        "loft-roll-native".to_string(),
+        "/nonexistent/roll".to_string(),
+    ));
+    p.data
+        .native_symbol_crates
+        .insert("loft_roll".to_string(), "loft_roll_native".to_string());
+
+    let shared = loft::native_gate::shared_store_dispatchable(&p.data);
+    let fn_nr = p.data.def_nr("n_roll_grid");
+    assert!(
+        shared.contains(&fn_nr),
+        "roll_grid should be shared-store-dispatchable (its callee's `integer?` peels to a marshallable i64)"
+    );
+    let export: std::collections::HashSet<u32> = std::iter::once(fn_nr).collect();
+
+    let mut state = loft::state::State::new(p.database);
+    loft::compile::byte_code(&mut state, &mut p.data);
+    let src = loft::native_lib::generate_shared_cdylib_lib_rs(&p.data, &state.database, &export);
+
+    assert!(
+        src.contains("fn __cabi_loft_roll(lo: i64, hi: i64) -> i64;"),
+        "extern decl must be i64 throughout (plain integer params, Optional-integer return):\n{src}"
+    );
+}
+
 // Plan-74: the scalar-slice DISPATCH tests are gone.  They drove a
 // zero-registration scalar cdylib (`generate_cdylib_lib_rs` output, raw
 // `extern "C"` exports, no `loft_register_bridges_v1`) through the legacy

@@ -41,3 +41,13 @@ pub fn ext_make_bytes(n: integer) -> vector<u8>;
 pub struct ExtBox { v: integer }
 pub fn ext_make_box(v: integer) -> ExtBox;
 #native "loft_ext_make_box"
+
+// Pattern 10: nullable scalar return — `integer?` marshals as the plain-i64
+// sentinel layout; null (i64::MIN) crosses the boundary intact.
+pub fn ext_maybe(x: integer) -> integer?;
+#native "loft_ext_maybe"
+
+// Pattern 11: wide/negative integer round-trip — plain `integer` is i64 at
+// the C-ABI; beyond-i32 and negative values must not truncate.
+pub fn ext_echo(x: integer) -> integer;
+#native "loft_ext_echo"

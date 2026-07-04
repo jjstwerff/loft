@@ -430,7 +430,7 @@ fn shared_bridge_wrapper(data: &Data, dups: &HashSet<String>, d_nr: u32) -> Stri
     let mut body = String::new();
     let mut fwd = String::new();
     let mut slot = 0usize; // next public-arg LibArg slot
-    let ret_text = matches!(def.returned(), Type::Text(_));
+    let ret_text = matches!(def.returned().base(), Type::Text(_));
     for (i, a) in def.attributes().iter().enumerate() {
         let var = format!("p{i}");
         // #303 — the ONE marshallability judgment (shared with the gate and the
@@ -537,7 +537,7 @@ fn shared_bridge_wrapper(data: &Data, dups: &HashSet<String>, d_nr: u32) -> Stri
 /// caller's (@PLAN59: a lib-side constant id produced `claim(size=0)` /
 /// "Incomplete record" aborts once struct dests became universal).
 fn hidden_dest_type_name(data: &Data, t: &Type) -> Option<String> {
-    match t {
+    match t.base() {
         Type::Vector(elm, _) => Some(format!("main_vector<{}>", elm.name(data))),
         Type::Reference(td, _) | Type::Enum(td, true, _) => Some(data.def(*td).name().to_string()),
         _ => None,
@@ -547,7 +547,8 @@ fn hidden_dest_type_name(data: &Data, t: &Type) -> Option<String> {
 /// Rust expression reading an argument of loft type `t` out of `LibArg` slot
 /// `slot` (e.g. `"a[0]"`), at the inner fn's argument-context type.
 fn bridge_read(t: &Type, slot: &str) -> String {
-    match t {
+    // `Optional(τ)` rides τ's sentinel layout (@PLN25) — read as the base type.
+    match t.base() {
         Type::Integer(s) if s.forced_size.is_none() => format!("{slot}.scalar"),
         Type::Integer(_) => format!("{slot}.scalar as {}", rust_type(t, &Context::Argument)),
         Type::Character => format!("{slot}.scalar as i32"),
@@ -584,7 +585,8 @@ fn bridge_read(t: &Type, slot: &str) -> String {
 /// (nwb / FFI-direct / curated) and those returning a buffer-backed `Str`, and the
 /// bridge must borrow `&str` from the right one (`String` has no `.str()`).
 fn bridge_write_ret(t: &Type, expr: &str, inner_owned: bool) -> String {
-    match t {
+    // `Optional(τ)` rides τ's sentinel layout (@PLN25) — write as the base type.
+    match t.base() {
         Type::Void | Type::Null => format!("let _ = {expr};"),
         // Plain (tag-only) enum returns a `u8` tag → widen into the scalar slot.
         Type::Integer(_) | Type::Character | Type::Boolean | Type::Enum(_, false, _) => {
