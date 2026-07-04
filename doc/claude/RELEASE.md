@@ -134,11 +134,17 @@ current `main` tip before working the list.
 
 - [ ] **Brick Buster** (`tools/brick-buster/25-brick-buster.loft`) — the
   website **hero** (`doc/images/hero-brick-buster.png`, `doc/brick-buster.html`)
-  and a gallery centrepiece, and it is *almost continually broken*. Verify it
-  runs clean on **both** backends and its six golden screenshots match
+  and a gallery centrepiece, and it is *almost continually broken*. **Confirmed
+  stale 2026-07-04:** the published `doc/brick-buster.html` was built 2026-06-20
+  but the source moved 2026-07-02 — the website is 12 days behind the code.
+  Verify it runs clean on **both** backends and its six golden screenshots match
   (title / playing / paused / gameover / explosion / powerups — see
-  GAME_TESTING.md). Depends on `lib/graphics` (native cdylib) + registry, so it
-  also exercises the library path below.
+  GAME_TESTING.md), then rebuild the HTML (`make game`) and re-run the browser
+  WebGL gate (`make test-html-render` → `brick_buster_browser_renders_without_console_errors`).
+  Depends on `lib/graphics` (native cdylib) + registry, so it also exercises the
+  library path below. **Root problem: verification is display/browser-bound with
+  no cheap standing gate — that is *why* it drifts broken. The durable fix is a
+  headless render gate in CI, not a one-off manual check.**
 - [ ] **Gallery** — regenerate and verify `doc/gallery.html` examples run
   (`scripts/build-gallery-examples.loft`, `gallery-examples.js`); GALLERY_CI
   green.
