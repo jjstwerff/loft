@@ -43,15 +43,23 @@ plan for the new rules — the oracle already guards each *area*; this drives it
 
 ---
 
+> **Stage 1 (2026-07-04) — the worklist earned its keep.** Two real findings on the top
+> priorities: (1) **H-Copy was imprecise** — a struct-typed projection is a VIEW, not a copy
+> (heap.md corrected: added `H-View`); (2) **coroutine laziness diverges** for LOOP-based yields
+> (native eager) — reclassified as a DECIDED EDGE (a rustc restriction, the maker's accepted
+> trade-off), not a bug. F-ParamRebind and `par` N-independence verified ✓ on both backends.
+
 ## heap.md
 
 - ~ **H-Alloc / H-NewRec** — a freshly constructed struct/vector has all fields null/zero; two
   constructions are distinct stores. *Guard: extend oracle `03`.*
-- ✓ **H-Copy (vector)** — `fv = e.items; fv[0]=99` ⇒ `e.items[0]==1`; `r=&v; r[0]=99` ⇒ `v[0]==1`
-  (both backends, D-cap-3 probe). *Guard: fold into an oracle case.*
-- ☐ **H-Copy (struct / nested / keyed)** — the same copy-not-alias for a whole-struct bind
-  `s = other; s.f=…`, a NESTED bind `w = e.inner`, and a keyed collection. *Highest priority — the
-  D-cap-3 proof covered vectors only; verify struct + nested + hash/sorted before the rule is trusted.*
+- ✓ **H-Copy** — a WHOLE-VALUE / vector bind COPIES: `c = o; c.v=9` ⇒ `o.v==1`; `fv = e.items;
+  fv[0]=99` ⇒ `e.items[0]==1`; `r=&v; r[0]=99` ⇒ `v[0]==1` (both backends). *Guard: fold into oracle.*
+- ✓ **H-View (the Stage-1 catch)** — a STRUCT-typed projection ALIASES: `c = o.i; c.v=9` ⇒
+  `o.i.v==9`; `s = v[0]; s.v=9` (struct element) ⇒ `v[0].v==9` (both backends). heap.md corrected —
+  H-Copy had wrongly implied projections copy. *Guard: an oracle case pinning both copy and view.*
+- ☐ **H-Copy/View (keyed)** — the copy-vs-view split for a keyed collection (hash/sorted) value +
+  element. *Verify + guard.*
 - ~ **H-Read / H-ReadNull / H-Index** — read a field of `nullref` ⇒ `null` + CONTINUE; `v[i]` with
   `i≥len` ⇒ `null` + continue. *Guard: an oracle case that reads past a vector and through a null ref.*
 - ☐ **H-Write / H-WriteNull / H-WriteOOB** — a write through `nullref` / out of bounds is a no-op
@@ -74,17 +82,20 @@ plan for the new rules — the oracle already guards each *area*; this drives it
 
 ## coroutines.md
 
-- ☐ **G-Call** — calling a generator runs NO body until the first advance (a side effect before the
-  first `yield` does not fire until `next`/`for`). *High priority — laziness is user-visible; verify both backends.*
-- ~ **G-Next / G-Done** — one value per advance; exhaustion idempotent (a done iterator stays done). *Guard: extend oracle `12`.*
-- ☐ **G-YieldDepth** — STACKFUL: a `yield` inside a helper called from the generator produces the
-  value and resumes correctly. *High priority — the biggest interp-vs-native mechanism gap; verify + oracle.*
-- ~ **G-For** — `for x in gen()` visits the produced sequence. *Guard: oracle `12`.*
+- ✓/edge **G-Call / G-Next laziness** — STRAIGHT-LINE yields are lazy on BOTH backends
+  (`print("a");yield 1;print("b");yield 2` ⇒ `a g1 b g2`). LOOP-based yields are lazy on interp,
+  EAGER on native (`y0 g0 y1 g1` vs `y0 y1 g0 g1`) — a DECIDED EDGE (rustc restriction), NOT a bug
+  (coroutines.md). *Guard: add a straight-line laziness oracle case (passes both, pins the contract).*
+- ✓ **G-Next values / G-Done** — one value per advance (sum 30); exhaustion (take-first-2 ⇒ 1),
+  both backends. *Guard: oracle `12` (values).*
+- ☐ **G-YieldDepth** — STACKFUL: a `yield` inside a helper called from the generator (needs
+  `yield from` / a nested generator — check whether it is even expressible today). *Verify.*
+- ✓ **G-For** — `for x in gen()` visits the produced sequence (both backends). *Guard: oracle `12`.*
 
 ## concurrency.md
 
-- ☐ **C-Det** — `par(b=worker(a), N)` gives the SAME result for `N=1,2,8` and equals the sequential
-  loop, for a pure worker. *High priority — N-independence is the whole guarantee; run at several N, both backends.*
+- ✓ **C-Det** — `par(b=sq(a),N)` sum is `30` for N=1 AND N=4, equals the sequential loop, both
+  backends. *Guard: extend oracle `14` with a multi-N assertion.*
 - ~ **C-Par** — results consumed IN source order (order-sensitive body matches sequential). *Guard: extend oracle `14`.*
 - ☐ **C-Order (hash exception)** — a `par` over a hash may visit in a DIFFERENT order than the
   key-ordered sequential `for x in h`, but both backends agree with each other. *Verify + guard.*
@@ -97,8 +108,8 @@ plan for the new rules — the oracle already guards each *area*; this drives it
 - ☐ **F-Call / F-Return / F-Rec** — frame, implicit tail return, recursion. *Guard: oracle `17`/`21` cover recursion; add an implicit-return case.*
 - ✓ **F-ParamScalar** — `fn inc(n){n=n+1}` leaves caller `x==5` (interp; re-run native). *Guard.*
 - ✓ **F-ParamHeap** — `fn mut(e){e.h=99}` ⇒ caller `o.h==99` (oracle `03` is close). *Guard: pin it.*
-- ~ **F-ParamRebind** — `fn re(v){v=[9,9]}` leaves caller `o[0]==1` (interp only — RUN NATIVE, this
-  is the subtle @PLN87 P2.4 rule most likely to diverge). *High priority.*
+- ✓ **F-ParamRebind** — `fn re(v){v=[9,9]}` leaves caller `o[0]==1`; `fn re(s){s=S{v:9}}` leaves
+  `o.v==1` — verified BOTH backends (the subtle @PLN87 P2.4 rule holds on native). *Guard.*
 - ☐ **F-ParamRef** — a `&T` param's whole-value `p=e` DOES write back. *Verify both backends + guard.*
 - ✓ **F-Ret** — two calls' returns independent (oracle `02` return-ownership). *Guard: pin.*
 

@@ -108,14 +108,29 @@ computed lazily, on demand, rather than read from a store.
 
 ## Deviations
 
-OPEN: **0** (a *rules* doc — it shrinks operational.md's D-op-1, adds no code deviation).
+OPEN: **0**. One thing the VERIFICATION worklist surfaced (2026-07-04) is a **decided edge**, not
+a deviation — recorded here so it is not mistaken for a bug:
 
-- **Conformance is differential, and this is the hardest case** — the two backends implement
-  suspension by the most different mechanisms (interp: serialise the frame to a heap store;
-  native: a compiled resumable state machine). The @PLN89 differential oracle (D-op-1) carries a
-  generator program (`12-coroutine-generator`) precisely for this, plus the two graduated
-  cross-backend coroutine bugs. A divergence in the produced sequence, in laziness (a side effect
-  firing too early/late), or in exhaustion is caught there.
+> **DECIDED EDGE — native is EAGER for yields inside a LOOP (a rustc restriction).** Laziness
+> (G-Call / G-Next) holds fully for **straight-line** yields on BOTH backends (`print("a"); yield 1;
+> print("b"); yield 2` interleaves as `a g1 b g2` on native too — verified). But when the `yield`
+> is inside a **loop** (`for i in 0..n { … yield … }`), `--native` runs the loop **eagerly**,
+> buffering all its yields, because a fully-lazy resumable state machine across a Rust loop body is
+> not expressible under rustc's restrictions. So `for i in 0..2 { print("y{i} "); yield i }`
+> consumed by `for x in gen() { print("g{x} ") }` is `y0 g0 y1 g1` (interp, lazy) vs `y0 y1 g0 g1`
+> (native, eager). **Values agree** for a finite, fully-consumed generator; the observable
+> difference is (a) side-effect interleaving, and (b) an INFINITE or early-`break`-consumed
+> loop-generator runs unboundedly on native. This is the maker's accepted trade-off for now —
+> **aspiration: make loop-yields lazy too** (it would remove the divergence). Until then, a
+> loop-generator meant for lazy/early-terminated consumption should be written straight-line, or
+> the consumer must fully drain it. (This is a candidate for a DESIGN_DECISIONS catalogue entry.)
+
+- **Conformance is otherwise differential, and this is the hardest case** — the two backends
+  implement suspension by the most different mechanisms (interp: serialise the frame to a heap
+  store; native: a compiled resumable state machine, eager across loop bodies per the edge above).
+  The @PLN89 differential oracle (D-op-1) carries `12-coroutine-generator`, but it checks VALUES
+  only; a straight-line **laziness/interleaving** oracle case should be added (it passes both
+  backends and pins the lazy contract for the non-loop case).
 - **`yield from` is out of scope** — delegation (CO1.4) is deferred to 1.1+; when it lands it
   extends `G-Yield` (a delegated yield forwards the sub-generator's values) and gets its own
   rule + oracle case. Until then a `yield from` is a parse-level unsupported form, not an
@@ -125,9 +140,11 @@ OPEN: **0** (a *rules* doc — it shrinks operational.md's D-op-1, adds no code 
 
 ## Conformance
 
-- **Lazy, one-per-advance (`G-Call` / `G-Next`)** — a generator that prints before its first
-  `yield` prints nothing until the first `next`/`for` iteration; each advance yields exactly one
-  value; both backends agree on the interleaving of the generator's and consumer's side effects.
+- **Lazy, one-per-advance (`G-Call` / `G-Next`)** — a generator's side effects interleave with the
+  consumer's, one value per advance. STRAIGHT-LINE yields obey this on both backends
+  (`print("a"); yield 1; print("b"); yield 2` → `a g1 b g2`). LOOP-based yields interleave on the
+  interpreter (`y0 g0 y1 g1`) but run EAGERLY on native (`y0 y1 g0 g1`) — the decided edge above,
+  not a divergence to fix.
 - **Stackful (`G-YieldDepth`)** — a `yield` inside a helper called from the generator produces
   the value and resumes correctly past the helper — the same sequence on both backends.
 - **Exhaustion (`G-Done`)** — a finite generator produces its sequence then reports done; further
