@@ -251,7 +251,8 @@ overflows *at runtime* yields **null and keeps running** (operational.md `E-Unco
 
 ## Deviations
 
-OPEN: **6** (the nullability flip + UB-rooting — §25 in progress). Per-situation
+OPEN: **0** — the nullability flip (DN1–DN6) landed 2026-07-02 and D1/D2/D4 are closed
+by fix/reconciliation; every entry below is CLOSED, retained as the record.  Per-situation
 mitigation catalogue: [../plans/25-nullable-sequences/DN1-MITIGATION.md](../plans/25-nullable-sequences/DN1-MITIGATION.md).
 
 ### DN1 — CLOSED (2026-07-02): scalar / field storage is non-null by default
