@@ -124,6 +124,10 @@ a deviation — recorded here so it is not mistaken for a bug:
 > **aspiration: make loop-yields lazy too** (it would remove the divergence). Until then, a
 > loop-generator meant for lazy/early-terminated consumption should be written straight-line, or
 > the consumer must fully drain it. (This is a candidate for a DESIGN_DECISIONS catalogue entry.)
+> **Removal design written** — [COROUTINE.md § Design: lazy loop yields (CL-9)](../COROUTINE.md#design-lazy-loop-yields-cl-9):
+> persist the loop cursor in the coroutine frame (the existing `coroutine_persistent_*` machinery)
+> and decompose `ForLoopBody` from the eager `Vec` buffer into resumable header/body states. When
+> that lands, this edge closes.
 
 - **Conformance is otherwise differential, and this is the hardest case** — the two backends
   implement suspension by the most different mechanisms (interp: serialise the frame to a heap
