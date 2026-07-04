@@ -1,0 +1,140 @@
+<!--
+Copyright (c) 2026 Jurjen Stellingwerff
+SPDX-License-Identifier: LGPL-3.0-or-later
+-->
+
+# formal/iteration.md — small-step semantics for iteration (strict)
+
+**Catalogue:** @F3 (scalar/collection core), @PLN89 (differential oracle).
+
+> **Rules then deviations** (see [README](README.md)). This is the small-step relation for
+> loft's **iteration**: the `for … in …` loop, the iterator protocol it desugars to, ranges
+> and text iteration, and the collection **combinators** (`map` / `filter` / `reduce` and the
+> `[for … { … }]` comprehension). It extends [operational.md](operational.md)'s scalar core
+> and reads/writes the heap via [heap.md](heap.md). It is another written contract for a part
+> operational.md's D-op-1 named unwritten — the piece where the two backends differ most
+> (interp walks a store index; native emits a Rust loop).
+>
+> Scope: **sequential** iteration. The parallel form `par(…)` reorders and is its own contract
+> — see [concurrency.md](concurrency.md).
+
+## Notation
+
+Uses [operational.md](operational.md)'s `⟨e, σ⟩ → ⟨e', σ'⟩` and [heap.md](heap.md)'s heap `H`.
+
+- An **iterator** is a pair `it = ⟨i, src⟩`: a cursor `i` (an integer index, or a text byte
+  position) into a source `src` (a vector/collection reference, a range, or a text value).
+- `len(src)` is the element count; `elem(src, i)` reads the `i`-th element via `H-Index`
+  ([heap.md](heap.md)); both are `null` past the end (they never fault).
+- `x` is the loop variable, bound fresh each round; `body` is the loop body.
+
+---
+
+## Rules
+
+### The `for` loop desugars to an index cursor
+
+```
+  (I-For)      for x in src { body }
+                 ≡  it := ⟨0, src⟩ ;
+                    loop { if i ≥ len(src) { break } ;
+                           x := elem(src, i) ; i := i + 1 ;
+                           body }
+  (I-Next)     ⟨next(it), σ⟩ → ⟨elem(src, i), σ⟩   then i ← i+1        when i < len(src)
+  (I-Done)     ⟨next(it), σ⟩ → ⟨done, σ⟩                                when i ≥ len(src)
+```
+
+**In words.** `for x in src { … }` runs the body once per element, **in index order 0, 1, 2, …**,
+binding `x` to each element, and stops exactly when the cursor reaches the length. The cursor is
+re-read each round, so it observes the length **as it is at that step** — a body that appends to
+the very collection it iterates keeps seeing the new elements (loft does not snapshot the length;
+this is a deliberate, both-backends-shared choice). The loop is a pure desugaring to
+[operational.md](operational.md)'s `loop`/`break`/`if`, so its control flow is already pinned;
+`I-For` only fixes the ORDER and the stop condition.
+
+### Ranges and text iterate the same shape
+
+```
+  (I-Range)    for x in a..b { body }   iterates the integers a, a+1, …, b-1 (empty if a ≥ b);
+                                        x is the value, not an index.
+  (I-Text)     for c in t { body }      iterates t's characters left to right; the cursor is a
+                                        BYTE position advanced by each character's width, so
+                                        `c#index` is the byte offset and `c#next` the next one
+                                        (multi-byte characters advance by >1).
+```
+
+**In words.** A range `a..b` yields the half-open integer sequence (never includes `b`); an
+empty range (`a ≥ b`) runs the body zero times. Text iterates **characters** (not bytes): the
+cursor is a byte position that jumps by each character's encoded width, so a 4-byte character
+advances the position by 4 — which is why `c#index`/`c#next` expose byte offsets, and why the
+sequence of offsets is not `0,1,2,…` for non-ASCII text. Both are the same cursor shape as a
+vector, differing only in `elem` and the stride.
+
+### Combinators desugar to a comprehension over the same loop
+
+```
+  (I-Map)      src.map(f)         ≡  [ for x in src { f(x) } ]
+  (I-Filter)   src.filter(p)      ≡  [ for x in src { if p(x) { x } } ]     (keeps x where p(x))
+  (I-Reduce)   src.reduce(a, g)   ≡  { acc := a ; for x in src { acc := g(acc, x) } ; acc }
+  (I-Comp)     [ for x in src { e } ]
+                 ≡  out := alloc(vector) ;                    (a FRESH store, heap.md H-Alloc)
+                    for x in src { append(out, e) } ;         (per element, heap.md H-NewRec)
+                    out
+```
+
+**In words.** The combinators are not primitive — each is the same left-to-right `for` loop
+building a **fresh** result vector (`I-Comp`): `map` appends `f(x)` for every element; `filter`
+appends `x` only where the predicate holds; `reduce` folds a running accumulator and yields it
+(not a vector). The result is a new store ([heap.md](heap.md) `H-Alloc`), so the source is
+untouched — `xs.map(f)` never mutates `xs`. Because they all lower to `I-For`, they inherit its
+**deterministic order**: `map` preserves order, `filter` preserves relative order, `reduce`
+folds left. The lambda `f`/`p`/`g` is an ordinary closure ([capabilities.md](capabilities.md)
+gates its body when sandboxed). A combinator on a LITERAL receiver (`[1,2,3].map(f)`) is the
+same rule — the literal is a fresh source value (`#501` fixed the parser so the literal is a
+self-contained receiver, not a reuse of the assignment target).
+
+### Empty and null sources
+
+```
+  (I-Empty)    for x in src { body }   runs body ZERO times when len(src) = 0.
+  (I-NullSrc)  for x in nullref { body }   runs body ZERO times (a null source is empty,
+                                           consistent with heap.md H-ReadNull — no halt).
+```
+
+**In words.** An empty vector, an empty range, or a **null** source all iterate zero times and
+fall through — never a fault. A null source is treated as empty (the same null-continue
+discipline as a read through `nullref`), so a `for` over a possibly-null collection is safe
+without a guard.
+
+---
+
+## Deviations
+
+OPEN: **0** (a *rules* doc — it shrinks operational.md's D-op-1, adds no code deviation).
+
+- **Conformance is differential** — the iteration steps are enforced across the two backends by
+  the @PLN89 differential oracle (D-op-1). Its corpus explicitly covers the combinators
+  (`13-collections-map-filter`), comprehensions, and text iteration, precisely because the
+  interpreter (a store-index walk) and native (an emitted Rust loop) implement them by the most
+  different mechanisms. A divergence in order, length, or element value is caught there.
+- **Order is a hard part of the contract, not incidental** — `map`/`filter` preserving order
+  and `reduce` folding left are pinned here so a "faster" reordering in either backend is a
+  definitional error, not an optimisation. The one place order is deliberately given up is
+  `par(…)` ([concurrency.md](concurrency.md)).
+
+---
+
+## Conformance
+
+- **Order + length (`I-For` / `I-Map`)** — `[1,2,3,4,5,6].map(|x| x*2)` is `[2,4,6,8,10,12]` in
+  that order, length 6, on both backends; `filter(|x| x%2==0)` is `[2,4,6]`, relative order kept.
+- **Left fold (`I-Reduce`)** — `[1,2,3,4].reduce(0, |a,x| a+x)` is `10`; a non-commutative `g`
+  (e.g. subtraction) exposes the fold direction and must match.
+- **Text width (`I-Text`)** — `for c in "1😊8"` visits 3 characters whose `c#index` values are
+  `0, 1, 5` (the emoji is 4 bytes), not `0,1,2` — both backends must agree on the byte cursor.
+- **Empty/null (`I-Empty` / `I-NullSrc`)** — `for x in [] { … }` and a `for` over a null
+  collection both run the body zero times and continue.
+- **Fresh result (`I-Comp`)** — `ys = xs.map(f)` leaves `xs` unchanged (a new store, `H-Alloc`).
+
+Any program where the interpreter and `--native` disagree on an iteration's order, length,
+element values, or the source's immutability is the definitional error this doc names.

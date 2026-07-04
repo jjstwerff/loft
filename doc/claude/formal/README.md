@@ -61,14 +61,24 @@ not duplicate: a deviation entry links to the lens analysis instead of re-explai
 
 ## Areas
 
+The **static** areas are all at **0 open deviations** (2026-07-04). The **operational** area is
+one small-step contract split across files: the scalar core (operational.md) plus the heap,
+iteration, coroutines, and concurrency (added 2026-07-04) — these hold **0 open deviations of
+their own** and shrink operational.md's single meta-deviation (D-op-1: conformance is *differential*
+via the @PLN89 oracle, not a second executable definition).
+
 | doc | area | status |
 |---|---|---|
-| [types.md](types.md) | type system + conversion relation (incl. integer width) | **started** |
-| [binding.md](binding.md) | reference types & `&` (the bind-site link law) | **mostly landed** — `&` is a TYPE ANNOTATION (`&τ` = `Type::RefVar`), not an operator; the @PLN87 ladder L1–L6 (scalar/field/element/param read+write-through) landed via PR#436 and is verified; **1 deviation** left (D-bind-7: a bare `&a;` statement not yet parse-rejected) |
-| [grammar.md](grammar.md) | concrete grammar + operator precedence | **started** — the 12-level precedence ladder (left-associative except `**`, now right-assoc) the written grammar omits; the prefix-`&` (reference) vs infix-`&` (bitwise-and) overload; 3 deviations |
-| [operational.md](operational.md) | small-step semantics for the stable core | **started** — the scalar core as the shared interp/native contract (values/null sentinels, left-to-right order, the **uncomputable→null** discipline [the spreadsheet model, C80] + `??` fallback, state steps); 3 deviations (no shared semantics → divergence is structural, #433; the trap→null runtime change is D-op-4) |
-| [ownership.md](ownership.md) | the `deps` / borrow **checker** (lifetimes) — distinct from binding.md's surface | **0 deviations open** (2026-07-04) — the 5 sound+complete invariants we steer toward (the rules); D-own-1/2/3/4/5 ALL CLOSED. Every store-lifetime decision reads the one `deps` fact on the shipped path (audit + the `0234cbbb` unification); the fact is total (D-own-2). Written deliberately ahead of the implementation: the target steered the work to done |
-| [capabilities.md](capabilities.md) | sandbox **admission** — what a restricted caller may do (call / parameter / field rights) | **started (aspirational + conditional)** — a 6-rule authorization judgment `P;ctx ⊢ e ✓`, gated on a sandbox profile (vacuous for trusted code); the call gate is enforced, field rights + the parameter lock are the 3 deviations (@PLN86 F4–F7). Cites ownership.md for the owned-vs-host predicate |
+| [types.md](types.md) | type system + conversion relation (incl. integer width) | **0 open** — @PLN25 value/null model landed; DN1–DN6 + D2 closed |
+| [binding.md](binding.md) | reference types & `&` (the bind-site link law) | **0 open** — `&` is a TYPE ANNOTATION (`&τ` = `Type::RefVar`); the @PLN87 ladder L1–L6 landed (PR#436); D-bind-7 (bare `&a;` reject) closed |
+| [grammar.md](grammar.md) | concrete grammar + operator precedence | **0 open** — the 12-level precedence ladder written; the prefix-`&`/infix-`&` overload + non-CFG surface resolved as decided edges (C81/C82) |
+| [operational.md](operational.md) | small-step semantics — the scalar core | **rules complete for the core, 2 open** — values/null sentinels, left-to-right order, uncomputable→null (C80) + `??`, state steps; the 2 open are the META deviation D-op-1/2 (differential-not-definitional conformance), inherited by every operational file below |
+| [heap.md](heap.md) | store steps — alloc / read / write / **copy** / free | **rules written (2026-07-04), 0 own** — the `DbRef`/`Store` model; the whole-value COPY (C86); the LIFO free discipline whose soundness is ownership.md; conformance via the oracle (D-op-1) |
+| [iteration.md](iteration.md) | `for`, ranges, text iteration, the map/filter/reduce/comprehension combinators | **rules written (2026-07-04), 0 own** — index-cursor `for`, deterministic combinator order, fresh result vector; conformance via the oracle |
+| [coroutines.md](coroutines.md) | generators — `yield` / `next`, stackful suspension | **rules written (2026-07-04), 0 own** — lazy one-value-per-advance, whole-stack suspend; the biggest interp/native mechanism gap; conformance via the oracle |
+| [concurrency.md](concurrency.md) | `par` — the one parallel construct | **rules written (2026-07-04), 0 own** — a parallel map consumed in source order; determinism CONDITIONAL on a pure worker; conformance via the oracle |
+| [ownership.md](ownership.md) | the `deps` / borrow **checker** (lifetimes) — distinct from binding.md's surface | **0 open** (2026-07-04) — D-own-1/2/3/4/5 ALL CLOSED; every store-lifetime decision reads the one total `deps` fact. The soundness proof heap.md's free rules rest on |
+| [capabilities.md](capabilities.md) | sandbox **admission** — what a restricted caller may do (call / parameter / field / mutation rights) | **0 open** (2026-07-04) — the 6-rule judgment `P;ctx ⊢ e ✓` fully enforced; D-cap-1/2/3 CLOSED, each with a RED/GREEN adversarial pair. Cites ownership.md/heap.md for the owned-vs-host fact |
 
 ## Roadmap
 
