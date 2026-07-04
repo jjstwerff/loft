@@ -5776,25 +5776,64 @@ impl Parser {
         RetPromotion::Grow
     }
 
-    /// Does any `return` in `body` READ `var`?  A param a mid-body `return`
-    /// genuinely BORROWS must not be pruned from the return dep as a stale
-    /// copy-return artifact: the tail-source `expanded` set is built from the
-    /// TAIL return sources only, so it misses a param a mid-body `return`
-    /// borrows (`if c { return t[i] ?? d; }`) — 150-i306 native corruption when
-    /// that genuine borrow was wrongly pruned.
-    fn body_return_borrows(body: &[Value], var: u16) -> bool {
-        fn walk(op: &Value, var: u16) -> bool {
+    /// Does any `return` in `body` READ `var` — directly, OR through a LOCAL
+    /// that holds a VIEW of `var`?  A param a mid-body `return` genuinely
+    /// BORROWS must not be pruned from the return dep as a stale copy-return
+    /// artifact: the tail-source `expanded` set is built from the TAIL return
+    /// sources only, so it misses a param a mid-body `return` borrows — either
+    /// DIRECTLY (`if c { return t[i] ?? d; }` — 150-i306) or INDIRECTLY through
+    /// a view local (`m = table[i]; return m as M;` — #496: the return names
+    /// `m`, not `table`, yet `m: Reference(M, [table])` is a live view of the
+    /// param; wrongly pruning `table` made the caller free the borrowed vector).
+    ///
+    /// A struct-COPY local (`r = x; return r`) carries EMPTY deps after the
+    /// pass-2 copy-strip, so it is not a view of `x` and a stale copy-return
+    /// dep still prunes — the D-own-2 behaviour this guard was added to keep.
+    fn body_return_borrows(&self, body: &[Value], var: u16) -> bool {
+        // Frame vars that ARE `var` or transitively hold a view of it (their
+        // type deps reach `var`).  Fixpoint so a chain `a = t[i]; b = a; return b`
+        // still counts `t` as borrowed.
+        let mut borrowers: std::collections::HashSet<u16> = std::collections::HashSet::new();
+        borrowers.insert(var);
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for w in 0..self.vars.count() {
+                if borrowers.contains(&w) {
+                    continue;
+                }
+                if self
+                    .vars
+                    .tp(w)
+                    .depend()
+                    .iter()
+                    .any(|d| borrowers.contains(d))
+                {
+                    borrowers.insert(w);
+                    changed = true;
+                }
+            }
+        }
+        fn walk(op: &Value, borrowers: &std::collections::HashSet<u16>) -> bool {
             match op {
-                Value::Return(inner) | Value::BreakWith(_, inner) => inner.reads_var(var),
-                Value::Span(b) => walk(&b.1, var),
-                Value::Insert(ops) | Value::Parallel(ops) => ops.iter().any(|o| walk(o, var)),
-                Value::Block(bl) | Value::Loop(bl) => bl.operators.iter().any(|o| walk(o, var)),
-                Value::If(c, t, e) => walk(c, var) || walk(t, var) || walk(e, var),
-                Value::Iter(_, c, n, e) => walk(c, var) || walk(n, var) || walk(e, var),
+                Value::Return(inner) | Value::BreakWith(_, inner) => {
+                    borrowers.iter().any(|&w| inner.reads_var(w))
+                }
+                Value::Span(b) => walk(&b.1, borrowers),
+                Value::Insert(ops) | Value::Parallel(ops) => ops.iter().any(|o| walk(o, borrowers)),
+                Value::Block(bl) | Value::Loop(bl) => {
+                    bl.operators.iter().any(|o| walk(o, borrowers))
+                }
+                Value::If(c, t, e) => {
+                    walk(c, borrowers) || walk(t, borrowers) || walk(e, borrowers)
+                }
+                Value::Iter(_, c, n, e) => {
+                    walk(c, borrowers) || walk(n, borrowers) || walk(e, borrowers)
+                }
                 _ => false,
             }
         }
-        body.iter().any(|s| walk(s, var))
+        body.iter().any(|s| walk(s, &borrowers))
     }
 
     pub(crate) fn ref_return(&mut self, ls: &[u16], body: &mut [Value], site: RetSite) {
@@ -6132,7 +6171,7 @@ impl Parser {
                 // (`fn f(t) -> M { if c { return t[i] ?? d; } d }` — the `t` view is
                 // genuine, not a stale copy-return artifact; 150-i306 native
                 // corruption when it was wrongly pruned).
-                !expanded.contains(&var) && !Self::body_return_borrows(body, var)
+                !expanded.contains(&var) && !self.body_return_borrows(body, var)
             })
             .map(|(a, _)| a)
             .collect();

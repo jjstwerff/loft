@@ -1737,6 +1737,17 @@ impl State {
             if owned_ref
                 && !s1_substituted
                 && !stash_old_for_post_free
+                // The runtime adopt-vs-copy guard is for a FRESH runtime-Join value
+                // — a call return (`__lift = pick(t,i)`) or an ncc/`??` reassign
+                // (`r = v[i] ?? x`, #495/test 85): `OpBindOrCopy` adopts the owned
+                // arm and materialises the borrow arm.  A plain `Value::Var` RHS is
+                // a REUSED named local (`md = sb`); loft value semantics require
+                // COPYING it — adopting would move `sb`'s store into `md`, then
+                // `md`'s owned `OpFreeRef` would kill `sb` (#496 interp clobber:
+                // `md = sa; if c { md = sb }`).  The `Var` case falls through to the
+                // #306 whole-struct copy below.  (Native's join-own in
+                // `generation/dispatch.rs` never reaches a bare-Var RHS either.)
+                && !matches!(value.unspan(), Value::Var(_))
                 && crate::keys::join_own_enabled()
                 && let crate::use_analysis::Own::Join { base } =
                     crate::use_analysis::ownership_of(stack.data, stack.def_nr, value)
