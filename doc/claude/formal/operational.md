@@ -145,9 +145,13 @@ OPEN: **2**
   not "obeys the semantics". The unwritten parts (heap/store steps, iterators, coroutines)
   have no spec but the interpreter's code.
 - **Status:** OPEN — **the oracle is BUILT and growing (@PLN89).** `tests/differential_oracle.rs`
-  runs `tests/oracle/*.loft` (11 programs) on BOTH backends and asserts they AGREE on stdout
+  runs `tests/oracle/*.loft` (17 programs) on BOTH backends and asserts they AGREE on stdout
   (value/null), exit code (halt), and leak-freedom, with a positive control proving the detector
-  fires.  **2026-07-04 — the DRIVER-AGREEMENT scope addition landed**: well-typedness is one static
+  fires.  **2026-07-04 coverage push** — the corpus now spans the divergence-prone areas where the
+  two backends use the most different mechanisms: coroutines/generators (native state machine vs
+  interp suspend), collection combinators (map/filter/comprehension), parallel reductions (par
+  dispatch vs sequential), text (Rust String vs interp store), keyed collections (hash/sorted walk
+  order + storage), and tuples/recursion — plus the two graduated cross-backend bugs (10/11).  **2026-07-04 — the DRIVER-AGREEMENT scope addition landed**: well-typedness is one static
   judgment, so `--dump` (pure parse+typecheck) / `--interpret` / `--native` must agree on
   accept-vs-reject; `statically_rejected()` (empty-stdout guard so a runtime panic isn't mistaken
   for a static reject) makes the #433 class — interp accepts what native rejects at rustc — a
