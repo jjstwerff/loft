@@ -1118,6 +1118,20 @@ impl Parser {
             } else {
                 self.lexer.has_token("=")
             };
+            // D-key-1: a keyed range slice yields a `for`-only iterator (`Value::Iter`).
+            // In a value position it would leave an un-consumed Iter (a parse-time panic in
+            // `set_loop`, or a codegen "Iter should have been rewritten" panic) — emit one
+            // clean diagnostic instead.  `set_loop` tolerates the missing loop so parsing
+            // reaches here rather than panicking.
+            if !self.first_pass && !self.iterable_context {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "a keyed range slice is a `for`-loop iterator, not a value — iterate it \
+                     directly (`for x in coll[lo..hi] {{ … }}`) or materialise a vector with a \
+                     comprehension (`[for x in coll[lo..hi] {{ x }}]`)"
+                );
+            }
             let iter = self.create_unique("iter", &crate::data::I64);
             let mut ls = Vec::new();
             if !self.first_pass {
@@ -1181,6 +1195,17 @@ impl Parser {
         {
             // partial-key match — rewrite idx[k1] as idx[k1..=k1].
             // Uses the existing inclusive-range iteration path with from=till=key.
+            // D-key-1: like the range branch, a partial-key match yields a `for`-only
+            // iterator — reject it in a value position with the same clean diagnostic.
+            if !self.first_pass && !self.iterable_context {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "a keyed partial-key match is a `for`-loop iterator, not a value — iterate \
+                     it directly (`for x in coll[key] {{ … }}`) or give every key field for a \
+                     single-record lookup"
+                );
+            }
             let inclusive = true;
             let iter = self.create_unique("iter", &crate::data::I64);
             let mut ls = Vec::new();

@@ -1891,6 +1891,12 @@ impl Parser {
             // rev(col[lo..hi]) passes the flag through parse_key → fill_iter.
             self.reverse_iterator = true;
         }
+        // D-key-1: mark that we are parsing the *iterable* of a `for`/comprehension, so a
+        // keyed range / partial-key subscript in this position is legitimate (it produces a
+        // `for`-only `Value::Iter`).  Restored immediately after, so the loop BODY parsed
+        // later by the caller sees it false — `x = coll[lo..hi]` in a body is still rejected.
+        let prev_iterable_context = self.iterable_context;
+        self.iterable_context = true;
         let in_type = if self.lexer.peek_token("..") || self.lexer.peek_token("..=") {
             // Open-start range: treat missing start as 0.
             *expr = Value::Int(0);
@@ -1898,6 +1904,7 @@ impl Parser {
         } else {
             self.expression(expr)
         };
+        self.iterable_context = prev_iterable_context;
         if !self.lexer.has_token("..") {
             if reverse {
                 // if the inner expression was a subscript that already produced

@@ -1609,3 +1609,21 @@ fn pln87_d_bind_7_block_final_amp_is_error() {
     code!("fn mk() -> integer { a = 5; &a } fn test() { print(\"{mk()}\\n\"); }")
         .error("`&` is not a general operator — it binds a reference only as the whole right-hand side of an assignment (`a = &b`); a bare `&a` discards the reference. Drop it, or write `name = &a` to bind one at pln87_d_bind_7_block_final_amp_is_error:1:29");
 }
+
+// D-key-1 — a keyed range / partial-key subscript yields a `for`-only iterator
+// (`Value::Iter`).  In a VALUE position (`x = coll[lo..hi]`) it used to panic — at
+// parse time in `set_loop` (range) or at codegen "Iter should have been rewritten"
+// (partial key).  Both now emit a clean diagnostic that aborts the compile.
+#[test]
+fn keyed_range_slice_in_value_position_is_error() {
+    code!("struct Item { nr: integer, val: integer } struct DB { idx: index<Item[nr]> } fn test() { db = DB { idx: [ Item{nr:10,val:1} ] }; x = db.idx[10..=30]; }")
+        .error("a keyed range slice is a `for`-loop iterator, not a value — iterate it directly (`for x in coll[lo..hi] { … }`) or materialise a vector with a comprehension (`[for x in coll[lo..hi] { x }]`) at keyed_range_slice_in_value_position_is_error:1:148")
+        .warning("Variable x is never read at keyed_range_slice_in_value_position_is_error:1:133");
+}
+
+#[test]
+fn keyed_partial_key_in_value_position_is_error() {
+    code!("struct Item { nr: integer, label: text, val: integer } struct DB { idx: index<Item[nr, label]> } fn test() { db = DB { idx: [ Item{nr:10,label:\"a\",val:1} ] }; x = db.idx[10]; }")
+        .error("a keyed partial-key match is a `for`-loop iterator, not a value — iterate it directly (`for x in coll[key] { … }`) or give every key field for a single-record lookup at keyed_partial_key_in_value_position_is_error:1:174")
+        .warning("Variable x is never read at keyed_partial_key_in_value_position_is_error:1:163");
+}

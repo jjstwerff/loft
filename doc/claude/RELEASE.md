@@ -115,13 +115,17 @@ current `main` tip before working the list.
 
 **A. Safety gate — hard blockers (a crash/leak slips the tag, no exceptions):**
 
-- [ ] **D-key-1 — parser crash on an un-annotated keyed range-slice bind.**
-  `sub = idx[lo..hi]` (no `vector<T>` annotation, keyed receiver) panics at
-  `src/variables/mod.rs:524` (`index 65535`, an unresolved `u16::MAX` type)
-  instead of erroring cleanly. Found 2026-07-04. Narrow (workaround: annotate,
-  or use it in a `for` / comprehension) but it is a compiler panic on
-  plausible input — same class as the D-clo-2 crash fixed this cycle. **Fix
-  crash → clean diagnostic + regression guard; file the issue.**
+- [x] **D-key-1 — parser crash on a value-position keyed slice.** ✅ FIXED
+  2026-07-04. A keyed range slice (`x = idx[lo..hi]`) panicked at
+  `src/variables/mod.rs:524` (`set_loop` with no active loop); a partial-key
+  match (`x = idx[k1]` on a multi-key index) panicked later at codegen
+  ("Iter should have been rewritten"). Both are a `for`-only iterator used in a
+  value position — now a clean diagnostic. Fix: a save/restore `iterable_context`
+  flag around the iterable parse in `parse_in_range`, `set_loop` tolerates the
+  missing loop, and `parse_key` rejects both subscript forms in a value position.
+  Guards: `tests/parse_errors.rs::keyed_{range_slice,partial_key}_in_value_position_is_error`
+  + `tests/scripts/502-keyed-slice-for-only.loft` (the legit for/comprehension/
+  exact-lookup paths, both backends). full parse_errors (157) + wrap (51) green.
 - [ ] **Re-verify the full safety suite on the tag candidate** (post-rebase
   `main`): `./scripts/find_problems.sh --bg --wait` (full `--no-fail-fast`),
   the `LOFT_POISON=1` suite, `LOFT_NATIVE_LEAK_CHECK`, and the ownership fuzz

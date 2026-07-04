@@ -521,6 +521,14 @@ impl Function {
     }
 
     pub fn set_loop(&mut self, on: u8, db_tp: u16, value: &Value) {
+        // D-key-1: a keyed range / partial-key subscript used in a VALUE position (not a
+        // `for`/comprehension iterable) reaches `fill_iter` with no active loop.  Skip the
+        // loop-slot write instead of indexing `loops[u16::MAX]` and panicking — `parse_key`
+        // emits a clean "keyed slice is a for-only iterator" diagnostic that aborts the
+        // compile before this never-consumed loop state could matter.
+        if self.current_loop == u16::MAX || self.current_loop as usize >= self.loops.len() {
+            return;
+        }
         let l = &mut self.loops[self.current_loop as usize];
         l.on = on;
         l.db_tp = db_tp;

@@ -272,6 +272,12 @@ pub struct Parser {
     /// Set by `parse_in_range` when `rev(collection)` (without a `..` range) is parsed.
     /// Consumed by `fill_iter` to add the reverse bit (64) into the `on` byte of OpIterate/OpStep.
     reverse_iterator: bool,
+    /// D-key-1: true only while parsing the *iterable* of a `for`/comprehension (set with
+    /// save/restore around the iterable expression in `parse_in_range`).  A keyed range /
+    /// partial-key subscript produces a `for`-only iterator (`Value::Iter`); `parse_key`
+    /// reads this flag to reject that subscript in a value position (`x = coll[lo..hi]`)
+    /// with a clean diagnostic instead of a parse/codegen panic.
+    iterable_context: bool,
     /// O8.5: range bounds captured by `parse_in_range_body` for const-unroll detection.
     pub(crate) last_range_from: Option<Value>,
     pub(crate) last_range_till: Option<Value>,
@@ -609,6 +615,7 @@ impl Parser {
             context: u32::MAX,
             first_pass: true,
             reverse_iterator: false,
+            iterable_context: false,
             last_range_from: None,
             last_range_till: None,
             vars: Function::new("", "none"),
@@ -1073,6 +1080,7 @@ impl Parser {
         if lvl != Level::Error && lvl != Level::Fatal {
             self.first_pass = false;
             self.reverse_iterator = false;
+            self.iterable_context = false;
             self.applied_imports.clear();
             self.deferred_unknown.clear();
             self.data.reset();
