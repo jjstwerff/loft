@@ -22,9 +22,13 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > uncomputable→null discipline, evaluation order, assignment, `if`, sequencing). The rest of
 > the operational semantics is split into sibling files (all 2026-07-04): [heap.md](heap.md)
 > (store alloc/read/write/copy/free), [iteration.md](iteration.md) (`for` + combinators),
-> [coroutines.md](coroutines.md) (generators), [concurrency.md](concurrency.md) (`par`). Still
-> NOT written — the interpreter remains their spec (tracked under D-op-1): function
-> **call/return**, `match`/pattern binding, closure capture/apply, tuples, and text formatting.
+> [coroutines.md](coroutines.md) (generators), [concurrency.md](concurrency.md) (`par`),
+> [calls.md](calls.md) (function call/return + parameter binding), [matching.md](matching.md)
+> (`match` + exhaustiveness), [tuples.md](tuples.md). Still NOT written — the interpreter remains
+> their spec (tracked under D-op-1): **closure** capture/apply (a rough area — capture reads work
+> in the `fn(){}` form but the short-lambda-in-`map` capture and reassign-after-capture are
+> limited; needs its own investigation before a clean contract), **text formatting** (`"{x}"`
+> interpolation), and **generics/interfaces** (a static/typing concern → types.md).
 
 ## Notation
 
