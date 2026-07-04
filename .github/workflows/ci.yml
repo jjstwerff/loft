@@ -494,8 +494,29 @@ jobs:
         shell: bash
         run: |
           FILTER="not binary(index_hygiene) and not binary(viewer_markdown)"
+          # The Chrome + SwiftShader browser-render tests (html_render, and the
+          # headless-page asyncify resume in html_asyncify) are GPU/headless-browser
+          # FLAKY — they gate the PR path with noise for a layer (WebGL/shader) that
+          # rarely regresses independently.  Keep them OFF the per-PR run; they run
+          # nightly below (like the differential oracle).  The DETERMINISTIC,
+          # node-based html_wasm instantiate-probe (catches the LinkError / import-
+          # mismatch class) STAYS on the PR path — it does not flake.
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            FILTER="$FILTER and not binary(html_render) and not binary(html_asyncify)"
+          fi
           echo "nextest filter: $FILTER"
           cargo nextest run --profile ci -E "$FILTER"
+
+      # Browser-render cross-check (Chrome + SwiftShader): the GPU/headless-browser
+      # tests demoted off the per-PR path just above.  Runs on the DAILY schedule +
+      # push-to-main ONLY, Linux-only, retry-tolerant (the `ci` profile's retries=1),
+      # so a real WebGL/asyncify regression is visible within a day without the flaky
+      # browser render ever blocking a PR.  Self-skips cleanly when the runner has no
+      # chrome/node (recorded in the skip ledger surfaced below).
+      - name: Browser render (nightly — off the flaky PR path)
+        if: github.event_name != 'pull_request' && matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: cargo nextest run --profile ci -E 'binary(html_render) or binary(html_asyncify)'
 
       # @PLN89 differential oracle (formal/operational.md D-op-1/2): the full
       # cross-backend agreement sweep — every `tests/oracle/*.loft` run on BOTH

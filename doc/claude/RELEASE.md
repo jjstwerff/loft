@@ -199,14 +199,17 @@ stale website" class; theme-aligned with `2026-07` library hardening):**
   rebuilds the currently-stale `doc/brick-buster.html`**. The gallery wasm bundle
   (whole compiler → wasm) stays covered by the job's rebuild + Node-instantiate,
   not this gate (its "source" is all of `src/`).
-- [ ] **Move the flaky browser render off the blocking PR path.** The
-  Chrome + SwiftShader gate (`test-html-render`, wired into `cargo test --release`)
-  is GPU/shader-flaky — demote it to a **nightly, retry-tolerant** job. Replace
-  its everyday value with the deterministic Canvas atlas golden above + wiring
-  `gold.rs`'s primitive corpus (line/rect/triangle/text/blend/pixels) into the
-  nightly gate next to the differential oracle. Net: the per-PR WASM gate becomes
-  100% deterministic (clean rebuild + Node-instantiate + freshness-diff); the
-  brittle pixel render never blocks a PR.
+- [x] **Move the flaky browser render off the blocking PR path — LANDED
+  2026-07-04.** The GPU/headless-browser-flaky binaries (`html_render` =
+  Chrome + SwiftShader WebGL; `html_asyncify` = headless-page asyncify resume) are
+  now excluded from the per-PR `test` run (a `pull_request`-only filter addition)
+  and run in a new **nightly + push-to-main, Linux-only, retry-tolerant** step,
+  mirroring the differential-oracle pattern already in the same job. The
+  DETERMINISTIC node-based `html_wasm` instantiate-probe (the LinkError /
+  import-mismatch catch) STAYS on the PR path — it does not flake. Net: the per-PR
+  browser surface is now deterministic-only; the brittle pixel render is visible
+  daily but never blocks a PR. *(The Canvas atlas golden that replaces its everyday
+  value is the ready-to-build gate scoped in item B above.)*
 
 **C. Library ecosystem — a coherent registry on day one:**
 
