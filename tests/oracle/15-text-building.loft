@@ -1,0 +1,14 @@
+// Text — native lowers to Rust String / &str, interp to its own text store; the
+// build/split/case operations must produce identical bytes. Covers concat in a
+// loop, replace, case, formatted interpolation, and split length.
+fn main() {
+    s = "";
+    for i in 0..4 { s = s + "ab{i}-"; }
+    r = s.replace("ab", "X");
+    up = "hello world".to_uppercase();
+    parts = "a,b,c,d".split(',');
+    n = 42; f = "val={n} hex done";
+    println("built={s}");
+    println("replaced={r} upper={up}");
+    println("parts_len={len(parts)} first={parts[0] ?? \"?\"} fmt={f}");
+}

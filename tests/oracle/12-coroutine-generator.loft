@@ -1,0 +1,18 @@
+// Coroutines/generators — the native state-machine lowering vs the interpreter's
+// suspend/resume are two very different mechanisms; their observable sequence must
+// agree. Covers a loop-driven numeric generator, a text generator, argument reads
+// across yields, and early consumption.
+fn squares(n: integer) -> iterator<integer> { for i in 0..n { yield i * i; } }
+fn labels(prefix: text, n: integer) -> iterator<text> { for i in 0..n { yield prefix + "{i}"; } }
+fn main() {
+    sum = 0;
+    for s in squares(5) { sum += s; }        // 0+1+4+9+16 = 30
+    println("squares_sum={sum}");
+    out = "";
+    for l in labels("k", 3) { out = out + l + ","; }
+    println("labels={out}");                  // k0,k1,k2,
+    // take only the first two of a longer generator
+    seen = 0; acc = 0;
+    for s in squares(100) { if seen >= 2 { } else { acc += s; seen += 1; } }
+    println("first_all={acc}");               // first two squares: 0+1 = 1
+}
