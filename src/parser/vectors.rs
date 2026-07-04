@@ -583,6 +583,20 @@ impl Parser {
     // <lambda> ::= 'fn' '(' [<params>] ')' ['->' <type>] '{' <body> '}'
     // Produces Type::Function; runtime representation is d_nr as i32, same as fn-ref.
     // @F22 — closures & lambdas (value capture, cross-scope)
+    /// @PLN86 D-cap-2 — a lambda created inside a sandboxed def is itself restricted:
+    /// mark its def sandboxed under the enclosing def's profile so the admission walk
+    /// DESCENDS into its body (checks its calls / fn-refs / raw-writes precisely) instead
+    /// of treating it as an untagged leaf and rejecting every sandboxed lambda wholesale.
+    /// Nested lambdas inherit transitively (each reads its immediate enclosing context's
+    /// entry). A captured host fn-ref is still gated at its creation site in the enclosing
+    /// def (the `cap = host_fn` Set that `referenced_defs` records). No-op outside a sandbox
+    /// (`def_sandbox` is empty). Re-derived each pass, so verdicts stay pass-stable.
+    fn mark_lambda_sandboxed(&mut self, enclosing: u32, lambda: u32) {
+        if let Some(profile) = self.def_sandbox.get(&enclosing).cloned() {
+            self.def_sandbox.insert(lambda, profile);
+        }
+    }
+
     pub(crate) fn parse_lambda(&mut self, code: &mut Value) -> Type {
         let lambda_name = format!("__lambda_{}", self.lambda_counter);
         self.lambda_counter += 1;
@@ -618,6 +632,7 @@ impl Parser {
             return Type::Unknown(0);
         }
         let d_nr = self.context;
+        self.mark_lambda_sandboxed(outer_context, d_nr);
 
         // Parse optional return type annotation.
         let result = if self.lexer.has_token("->") {
@@ -850,6 +865,7 @@ impl Parser {
             return Type::Unknown(0);
         }
         let d_nr = self.context;
+        self.mark_lambda_sandboxed(outer_context, d_nr);
 
         // return-type annotations are not allowed in |x| short-form lambdas.
         let has_arrow = self.lexer.has_token("->");

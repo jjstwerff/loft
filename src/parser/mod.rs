@@ -9983,6 +9983,22 @@ mod plan86_admission_tests {
                     "struct In { hp: integer }\nstruct Ent { it: In }\nfn evil(e: Ent) -> integer { e.it.hp = 0; e.it.hp }\n",
                 ),
             ),
+            (
+                // @PLN86 D-cap-2 — a lambda BODY reaching an ungranted host cap. The
+                // admission walk now DESCENDS into the lambda def (it is marked
+                // sandboxed under the enclosing profile), so the reach is checked and
+                // rejected — instead of the lambda escaping, OR being wholesale-rejected
+                // as an untagged leaf without naming the real reach.
+                "cap: lambda body reaches ungranted host (D-cap-2)",
+                adm(
+                    &["fn:evil"],
+                    &["code"],
+                    &[],
+                    &format!(
+                        "{secret}fn evil() -> integer {{ v = [1].map(|y| {{ secret() }}); v[0] }}\n"
+                    ),
+                ),
+            ),
         ];
         for (name, e) in &escapes {
             assert!(!e.is_empty(), "ESCAPE NOT REJECTED — {name}");
@@ -10033,6 +10049,19 @@ mod plan86_admission_tests {
                     &["code"],
                     &["danger#read"],
                     &format!("{secret}fn ok() -> integer {{ secret() }}\n"),
+                ),
+            ),
+            (
+                // @PLN86 D-cap-2 — a lambda whose body touches ONLY script-owned data is
+                // now usable in sandboxed code: the admission walk descends into the
+                // lambda def and finds no host reach, so it admits (previously EVERY
+                // lambda was rejected wholesale as an untagged `__lambda_N` leaf).
+                "script-only lambda is usable (D-cap-2)",
+                adm(
+                    &["fn:ok"],
+                    &["code"],
+                    &[],
+                    "fn ok() -> integer { s = 0; for x in [1,2,3].map(|y| { y * 2 }) { s += x } s }\n",
                 ),
             ),
         ];
@@ -10130,6 +10159,18 @@ mod plan86_admission_tests {
             "capability world\ncapability spawn.count\n\
              fn spawn(kind: text, count: integer = 1 spawn.count#default) -> integer world#append;\n#native\n\
              fn f() -> integer { spawn(\"g\", 5) }\n",
+        );
+
+        // ── @PLN86 D-cap-2: a lambda BODY reaching a host cap — gated by descending
+        //    into the lambda def (marked sandboxed under the enclosing profile) ──
+        twin(
+            "lambda body reaches host cap (D-cap-2)",
+            &["code"],
+            "danger#read",
+            &[],
+            &["danger#read"],
+            "capability danger\nfn secret() -> integer danger#read;\n#native\n\
+             fn f() -> integer { v = [1].map(|y| { secret() }); v[0] }\n",
         );
 
         // ── undeclared capability link (typo) — RED + corrected-spelling GREEN twin ──

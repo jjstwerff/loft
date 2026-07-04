@@ -13,12 +13,13 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 >    satisfies the judgment vacuously (`Cap-Trusted`). The judgment is parameterized by a
 >    profile `P` — it is a refinement *layered on* the core under a policy, not part of what
 >    every program obeys.
-> 2. **Aspirational.** The call gate, the field-level rights, AND the parameter `#default`
->    lock are enforced today (`src/sandbox.rs`: `admit_capabilities`, `field_*_violations`,
->    `param_lock_violations`); the remaining deviations are the capturing-closure residual and
->    the owned-vs-host classification's completeness ([@PLN86 §7](../plans/86-sandbox-subset-flag/README.md)).
->    Writing the rules now is direction: it turns "what exactly may a mod do?" into a relation
->    the admission walk is checked against.
+> 2. **Aspirational.** The call gate (incl. closures — a lambda body is descended into), the
+>    field-level rights, AND the parameter `#default` lock are enforced today (`src/sandbox.rs`:
+>    `admit_capabilities`, `field_*_violations`, `param_lock_violations`; `parser`:
+>    `mark_lambda_sandboxed`); the one remaining deviation is the owned-vs-host classification's
+>    completeness ([@PLN86 §7](../plans/86-sandbox-subset-flag/README.md)). Writing the rules now
+>    is direction: it turns "what exactly may a mod do?" into a relation the admission walk is
+>    checked against.
 >
 > The model with worked examples lives in [SANDBOX.md S10](../SANDBOX.md) +
 > [@PLN86 §7](../plans/86-sandbox-subset-flag/README.md); this doc is the **rule**. The
@@ -111,10 +112,9 @@ edge the rules can't express, i.e. a signal the *rule* is wrong (README), not a 
 
 ## Deviations
 
-OPEN: **2**. `Cap-Call` (the call gate), `Cap-Read`/`Cap-Write` (the field rights), AND
-`Cap-Set` (the parameter `#default` lock) are all enforced today; the two remaining deviations
-are the capturing-closure residual (`Cap-Call` completeness) and the owned-vs-host
-classification's completeness (`Cap-Own` soundness).
+OPEN: **1**. `Cap-Call` (the call gate + closures), `Cap-Read`/`Cap-Write` (the field rights),
+AND `Cap-Set` (the parameter `#default` lock) are all enforced today; the one remaining deviation
+is the owned-vs-host classification's completeness (`Cap-Own` soundness).
 
 **`Cap-Set` (the parameter `#default` lock) — CLOSED (2026-07-04).** A `group#default` link on a
 parameter (`count: integer = 1 spawn.count#default`) now parses (`definitions.rs`, first pass →
@@ -126,18 +126,33 @@ RED/GREEN twin `param #default lock override` in `access_corpus_red_green` (`src
 `spawn("g", 5)` is rejected under `world#append` alone and admitted once `spawn.count#default` is
 granted.
 
-### D-cap-2 — a closure may carry authority across the boundary
+### D-cap-2 — a closure may carry authority across the boundary — CLOSED (2026-07-04)
 - **Violates:** Cap-Call (completeness — an indirect call must resolve to its callee's gate)
-- **Where:** the L4 fn-ref surface ([@PLN86](../plans/86-sandbox-subset-flag/README.md) 1.3).
-  A non-capturing fn-ref is recorded at its creation site and so cannot escape the call
-  check; a **closure that captures host state** and is invoked later is the residual not yet
-  closed.
-- **Effect:** a captured host capability could be exercised through a closure without the
-  call site that smuggled it being re-checked.
-- **Status:** OPEN — partially closed (non-capturing fn-refs caught); the capturing-closure
-  case is its own pass.
-- **Removal:** carry a closure's captured host references into the reachable-set so its
-  invocation is gated as the original reach was.
+- **What it WAS (corrected by probing — the earlier framing was off).** A lambda def created in
+  a sandboxed body was never added to `def_sandbox`, so the admission walk treated it as an
+  **untagged leaf** (`sandboxed \`f\` reaches \`__lambda_N\` … neither an allowed library nor a
+  granted capability`). That was SOUND (no escape — every lambda rejected) but a **blunt
+  over-reject**: even a script-only `[1,2,3].map(|y| y*2)` was rejected, making lambdas unusable
+  in sandboxed code, and a lambda that DID reach a host cap was rejected without naming the real
+  reach.
+- **The fix (`src/parser/vectors.rs::mark_lambda_sandboxed`, called from `parse_lambda` /
+  `parse_lambda_short`).** A lambda created while its enclosing def is sandboxed is itself marked
+  sandboxed under the SAME profile, so the admission walk **DESCENDS into its body** (checks its
+  calls / fn-refs / raw-writes precisely) instead of stopping at an untagged leaf. Nested lambdas
+  inherit transitively; a no-op outside a sandbox (`def_sandbox` empty), so non-sandbox lowering
+  is byte-identical.
+- **Why this is complete for the closure class** (probed): (1) a host call in the lambda body →
+  caught by descending, naming the reach; (2) a captured host **fn-ref** (`cap = host_fn; …|y|
+  cap()…`) → gated at its CREATION site in the enclosing def (the `cap = host_fn` Set that
+  `referenced_defs` records — the capture cannot outrun that); (3) a raw write to a captured host
+  **struct** is not an escape — writing a captured struct field is an unsupported construct that
+  panics codegen on BOTH backends, so it can never run. A fn-ref laundered through a host-call
+  RETURN then captured is the separate L4-return residual (`sandbox.rs::referenced_defs` §RESIDUAL,
+  not closure-specific), not D-cap-2.
+- **Proven by:** the escape `cap: lambda body reaches ungranted host (D-cap-2)` + the control
+  `script-only lambda is usable (D-cap-2)` in `admission_escape_suite_rejects_every_breakout`, and
+  the non-vacuous RED/GREEN twin `lambda body reaches host cap (D-cap-2)` in
+  `access_corpus_red_green`.
 
 ### D-cap-3 — `Cap-Own`'s owned-vs-host split is a conservative syntactic heuristic, not the fact
 - **Violates:** Cap-Own (completeness — a script-owned mutation should be admitted, not rejected)
