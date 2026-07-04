@@ -3,12 +3,26 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# @PLN85 / D-own-2 — complete the ownership fact for every binding/path
+# @PLN85 / D-own-2 — complete the ownership fact for every binding/path — **CLOSED 2026-07-04**
 
 The completeness deviation ([formal/ownership.md D-own-2](../../formal/ownership.md)):
 *not every binding/path has a computed ownership fact; uncovered paths fall back to
-a heuristic/stopgap, and a divergence hides until a test hits the path.*  This doc
-records the 2026-07-04 measurement + the one concrete live bug it surfaced.
+a heuristic/stopgap, and a divergence hides until a test hits the path.*
+
+**CLOSED 2026-07-04 (@PLN90).**  The ownership fact is now TOTAL: (1) `ownership_of`
+computes an `Own` for every value (the `_ => Owned` tail covers only fresh-owned /
+scalar / payload-less values — not a hole); (2) the free side reads that one fact
+(`ref_rhs_ownership` is a pure oracle read, `RefRhs::Unknown` deleted); (3) the
+inherently-runtime JOIN is completed per-path by the `_own_store` witness (loft#495,
+commits 44fd7d72 + a4bcad5b).  The transition class was swept dry over 6 shapes (2 live
+over-frees fixed, 4 safe); the value-vs-bind + deps-carried-join residuals are computed
++ safe (probed both backends, `probes/d-own-2/value-vs-bind-inert.loft`,
+`call-owned-arm-join-safe.loft`); validated by the full suite 2600/2600 + native_scripts
++ poison + native leak-check + DA + differential oracle + the `program_ownership` fuzzer
+(3108 execs, 0 findings).  The single-fact UNIFICATION (three cooperating mechanisms →
+one `deps` read) rides D-own-1; the adopt-vs-view OPTIMISATION is @PLN90's copy-lint.
+
+This doc records the 2026-07-04 measurement + the concrete live bugs it surfaced.
 
 ## Measurement 1 — the free-side classifier vs the oracle (latent, not a bug)
 

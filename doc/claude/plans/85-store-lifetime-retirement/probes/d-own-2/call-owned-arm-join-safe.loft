@@ -1,0 +1,14 @@
+struct Box { v: integer }
+fn pick(v: vector<Box>, i: integer) -> Box { v[i] ?? Box { v: 99 } }
+fn call_join(x: Box, v: vector<Box>) -> integer {
+    r = x;                       // owned init
+    total = 0;
+    // indices 0,1,2 in range (borrow); index 5 out of range -> owned Box{99}
+    for i in [0, 5, 1] { r = pick(v, i); total += r.v; }
+    total
+}
+fn main() {
+    a = Box { v: 5 }; vs = [Box { v: 1 }, Box { v: 2 }, Box { v: 3 }];
+    // i=0 ->1, i=5 ->99, i=1 ->2 : total 102
+    println("call_join={call_join(a, vs)} (expect 102)");
+}
