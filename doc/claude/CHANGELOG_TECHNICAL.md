@@ -9,6 +9,34 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### #497: reassignment-path adopt-vs-copy — a borrowed call return freed the lender's store (2026-07-04)
+
+A struct-returning call REASSIGNED into an owned Reference local took the
+plain-adopt path whenever the callee had no visible Reference/struct-Enum
+param — the old `has_ref_params`-style proxy missed a callee borrowing from a
+visible VECTOR param (`return cs[i]`). The local then aliased the borrowed
+element, and its owned pre-Set free whole-store-freed the LENDER's backing
+store: crawler's `build_walls` lost `cs` mid-function — silent wrong data
+first (writebacks vanished; the #496 face), SIGSEGV once store recycling
+reused the number (the #497 face; the scale-dependence and heisenbug were
+pure visibility artifacts — `LOFT_LOG=poison_free` reproduces it in the small
+hand-built level deterministically). The one-axis trigger: the call-assignment
+sitting inside a nested `if` (its first-set is the hoisted init, so the Set is
+a REASSIGNMENT; the first-Set path already read the carried fact and was
+correct).
+
+- Fix at the A.3 chokepoint (OWNERSHIP_MODEL row 102/270): the reassignment
+  gate in `state/codegen.rs` now reads the ONE carried adopt-vs-copy fact,
+  `return_adopts_fresh_store()`, exactly like the first-Set path — and gains
+  the #429 struct-Enum parity the first-Set path already had.
+- The raw path is preserved behind `LOFT_NO_REASSIGN_COPY` (the
+  `LOFT_NO_JOIN_OWN` preservation pattern) so the ownership fuzz gate's
+  crash-channel positive control stays non-vacuous; the self-test's buggy
+  config now disables both gates (control re-pinned).
+- Guards: `tests/scripts/497-reassign-borrowed-elem-copy.loft` (the minimal
+  if-wrapped shape + the two-captures build_walls composition, both backends);
+  the 54-cell fuzz map is 0/54 flagged on the default gate.
+
 ### Nightly registry validation — published packages vs loft@main (2026-07-04)
 
 New `registry-validation.yml` workflow (04:30 UTC + `workflow_dispatch`): one

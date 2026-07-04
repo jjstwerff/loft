@@ -22,8 +22,10 @@ Violation modes (the four the invariant can break into):
 
 Positive control (--self-test) — CONTROL PAIRS, re-pinned 2026-07-03 after the join_own
 default-ON flip (and this week's ungated fixes) cleaned the P14 probe file on BOTH
-configurations.  The controls anchor on GENERATED cells that still reproduce on the
-preserved raw path (measured 6/54 under LOFT_NO_JOIN_OWN=1), one per detector channel:
+configurations; re-pinned again 2026-07-04 when the #497 reassignment deep-copy closed
+every crash cell even under LOFT_NO_JOIN_OWN=1 — the buggy config now disables BOTH
+preservation gates (LOFT_NO_JOIN_OWN + LOFT_NO_REASSIGN_COPY).  The controls anchor on
+GENERATED cells that still reproduce on the preserved raw path, one per detector channel:
   crash/divergence : elem_accumulate__struct__heavy — SIGSEGV + divergence gate-OFF,
                      clean on the default gate;
   leak             : local_source__struct__none — both-backends LEAK gate-OFF,
@@ -150,15 +152,21 @@ def main():
             leak_cell = os.path.join(td, "local_source__struct__none.loft")
             # (1) buggy config — the preserved raw path (join_own opt-out) still
             # carries the class; each channel's detector MUST fire.
+            # #497 added a second preservation gate (LOFT_NO_REASSIGN_COPY —
+            # the static reassignment deep-copy that closed every crash cell
+            # even with join_own off); the buggy config disables BOTH so the
+            # raw class stays reproducible.
             os.environ["LOFT_NO_JOIN_OWN"] = "1"
+            os.environ["LOFT_NO_REASSIGN_COPY"] = "1"
             v_crash = judge(crash_cell, native_replay=True)
             v_leak = judge(leak_cell, native_replay=True)
             del os.environ["LOFT_NO_JOIN_OWN"]
+            del os.environ["LOFT_NO_REASSIGN_COPY"]
             crash_fires = any("CRASH" in x or "DIVERGENCE" in x for x in v_crash)
             leak_fires = any("LEAK" in x for x in v_leak)
-            print(f"crash-control (LOFT_NO_JOIN_OWN=1) elem_accumulate/struct/heavy: "
+            print(f"crash-control (raw path: NO_JOIN_OWN+NO_REASSIGN_COPY) elem_accumulate/struct/heavy: "
                   f"{v_crash or 'CLEAN'}")
-            print(f"leak-control  (LOFT_NO_JOIN_OWN=1) local_source/struct/none:    "
+            print(f"leak-control  (raw path: NO_JOIN_OWN+NO_REASSIGN_COPY) local_source/struct/none: "
                   f"{v_leak or 'CLEAN'}")
             # (2) fixed config — the default gate must be CLEAN on both cells.
             f_crash = judge(crash_cell, native_replay=True)
