@@ -154,13 +154,24 @@ current `main` tip before working the list.
   "stale committed bundle" cannot exist.** See the CI-hardening note below.
 - [ ] **Brick Buster visual gate — via the CPU Canvas atlas, not the browser.**
   Every sprite (ball / paddle / bricks / power-ups / particles) is drawn by
-  `build_atlas()` → `graphics::Canvas` (`fill_rect`/`fill_circle`/…): the
-  **software rasterizer, zero GL**. So golden-test `build_atlas().save_png()`
-  (fuzzy-MAE, headless, deterministic — the existing `lib/graphics/native/tests/gold.rs`
-  harness) — that exercises exactly the drawing primitives that regress (GL is
-  stable; the primitives inside it break), at ~one PNG diff, no display. Keep one
-  browser WebGL confirmation (`make test-html-render`) as a release-time check,
-  but it is not the gating one.
+  `build_atlas()` → `graphics::Canvas` (`fill_rect`/`fill_circle`/`vline`/`hline`,
+  no 3D — verified 2026-07-04): the **software rasterizer, zero GL**. So golden-test
+  `build_atlas().save_png()` (fuzzy-MAE, headless, deterministic) — it exercises
+  exactly the drawing primitives that regress (GL is stable; the primitives inside
+  it break), at ~one PNG diff, no display. **Ready-made recipe (de-risked this
+  session):** the harness already exists — `graphics`'s `native/tests/gold.rs`
+  (`gold_compare(example, gold_name, max_abs, mean_abs)`, runs the example under
+  `--interpret` so no GL/native-compile, decodes both PNGs, fuzzy-MAE compare,
+  `UPDATE_GOLD=1` to capture). Add an `examples/25-brick-buster-atlas.loft` (copy
+  `build_atlas()` verbatim + `at.save_png("25-brick-buster-atlas.png")`) and a
+  `brick_buster_atlas_matches_gold()` case. **WHERE it must run:** the graphics
+  library is *extracted* to `loft-libs-graphics` and its `graphics.loft` depends on
+  the `math`/`mesh`/`scene` packages, so rendering needs a **working graphics
+  install** — build it in the graphics library's own **library-CI** (or a monorepo
+  job that `loft install graphics` first). It CANNOT run in an offline monorepo
+  checkout (no registry ⇒ `use graphics` can't resolve its deps — confirmed
+  2026-07-04). Keep one browser WebGL confirmation (`make test-html-render`) as a
+  release-time check, but it is not the gating one.
 - [ ] **Gallery** — regenerate and verify `doc/gallery.html` examples run
   (`scripts/build-gallery-examples.loft`, `gallery-examples.js`); GALLERY_CI
   green (both bundles instantiate — the `gallery` job's Node probe already gates
