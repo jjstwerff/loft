@@ -3731,7 +3731,35 @@ impl State {
                 // design, the same family as the fn-ref compensation above.
                 let text_conversion =
                     matches!(var_tp, Type::Text(_)) && pushed == size(&var_tp, &Context::Argument);
-                if pushed != slot && pushed != 0 && !text_conversion {
+                // #493: the `pushed == slot` model holds only for RAW fixed-width
+                // puts (`OpPutInt`/`Float`/`Character`/`Single`/plain-enum), which
+                // copy the pushed bytes verbatim — the family the SIGSEGV that
+                // motivated this check belonged to (an 8 B integer overrunning a
+                // 4 B `i32` slot).  A CONVERTING put normalises the value to the
+                // slot width on store, so a wider eval-stack push is by design and
+                // cannot overrun the neighbouring slot:
+                //   * DbRef-family dests below (`OpPutRef`): store a 12 B DbRef, so
+                //     an interior-record push (`OpNewRecord`, 16 B, `t_4File_lines`
+                //     `_elm`) or a record/File call result is normalised.
+                //   * `Boolean` (`OpPutBool`): the value travels as an 8 B stack
+                //     bool; only the low byte is stored (`prev_cr` / `walked`).
+                // Text and fn-ref are the two already taught above/excluded.  This
+                // clears the DA warning flood these stdlib fns produced without
+                // weakening the raw-put overflow detection.
+                let converting_put = matches!(
+                    var_tp.base(),
+                    Type::Reference(_, _)
+                        | Type::Vector(_, _)
+                        | Type::Enum(_, true, _)
+                        | Type::Iterator(_, _)
+                        | Type::Sorted(_, _, _)
+                        | Type::Index(_, _, _)
+                        | Type::Hash(_, _, _)
+                        | Type::Spacial(_, _, _)
+                        | Type::RefVar(_)
+                        | Type::Boolean
+                );
+                if pushed != slot && pushed != 0 && !text_conversion && !converting_put {
                     // The model (pushed == Variable-slot width) is
                     // INCOMPLETE for several put-op families that pop a
                     // different width than the slot and compensate (the
