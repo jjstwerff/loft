@@ -13,13 +13,13 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 >    satisfies the judgment vacuously (`Cap-Trusted`). The judgment is parameterized by a
 >    profile `P` — it is a refinement *layered on* the core under a policy, not part of what
 >    every program obeys.
-> 2. **Aspirational.** The call gate (incl. closures — a lambda body is descended into), the
->    field-level rights, AND the parameter `#default` lock are enforced today (`src/sandbox.rs`:
->    `admit_capabilities`, `field_*_violations`, `param_lock_violations`; `parser`:
->    `mark_lambda_sandboxed`); the one remaining deviation is the owned-vs-host classification's
->    completeness ([@PLN86 §7](../plans/86-sandbox-subset-flag/README.md)). Writing the rules now
->    is direction: it turns "what exactly may a mod do?" into a relation the admission walk is
->    checked against.
+> 2. **Was aspirational, now BUILT.** The call gate (incl. closures — a lambda body is descended
+>    into), the field-level rights, the parameter `#default` lock, AND the owned-vs-host write
+>    classification are all enforced today (`src/sandbox.rs`: `admit_capabilities`,
+>    `field_*_violations`, `param_lock_violations`; `parser`: `mark_lambda_sandboxed`,
+>    `raw_write_is_host_owned`) — the deviation list ([@PLN86 §7](../plans/86-sandbox-subset-flag/README.md))
+>    reached 0. Writing the rules first was direction: it turned "what exactly may a mod do?" into a
+>    relation the admission walk is checked against.
 >
 > The model with worked examples lives in [SANDBOX.md S10](../SANDBOX.md) +
 > [@PLN86 §7](../plans/86-sandbox-subset-flag/README.md); this doc is the **rule**. The
@@ -112,9 +112,11 @@ edge the rules can't express, i.e. a signal the *rule* is wrong (README), not a 
 
 ## Deviations
 
-OPEN: **1**. `Cap-Call` (the call gate + closures), `Cap-Read`/`Cap-Write` (the field rights),
-AND `Cap-Set` (the parameter `#default` lock) are all enforced today; the one remaining deviation
-is the owned-vs-host classification's completeness (`Cap-Own` soundness).
+OPEN: **0** — ✓ the capabilities area is now FORMAL. `Cap-Call` (the call gate + closures),
+`Cap-Read`/`Cap-Write` (the field rights), `Cap-Set` (the parameter `#default` lock), AND `Cap-Own`
+(script-owned mutation, incl. vector-element writes) are all enforced today, each with a RED/GREEN
+adversarial pair. Every host-touching operation in a restricted context is decided by exactly one
+of the six rules.
 
 **`Cap-Set` (the parameter `#default` lock) — CLOSED (2026-07-04).** A `group#default` link on a
 parameter (`count: integer = 1 spawn.count#default`) now parses (`definitions.rs`, first pass →
@@ -154,40 +156,32 @@ granted.
   the non-vacuous RED/GREEN twin `lambda body reaches host cap (D-cap-2)` in
   `access_corpus_red_green`.
 
-### D-cap-3 — `Cap-Own`'s owned-vs-host split is a conservative syntactic heuristic, not the fact
+### D-cap-3 — script-owned vector-element writes were rejected — CLOSED (2026-07-04)
 - **Violates:** Cap-Own (completeness — a script-owned mutation should be admitted, not rejected)
-- **Where:** `src/parser/expressions.rs::raw_write_is_host_owned` — the classifier that gates a raw
-  field/index write BEFORE it is recorded. It already admits the common owned case (`s.f = v` where
-  `s`'s root is a non-parameter local of a **script-defined** struct type → `Cap-Own`), and rejects
-  host data (a parameter root, or any host-library struct — the type catches aliasing like
-  `x = player; x.health = …`). But it is a **syntactic type-provenance heuristic**, deliberately
-  conservative ("when ownership can't be proven script, treat as host"), NOT ownership.md's
-  `ownership_of` fact. The dependency has CHANGED: `D-own-2` (O-Complete) is now **CLOSED**
-  (2026-07-04, @PLN90 loft#495), so a total provenance fact now EXISTS to replace the heuristic.
-- **Effect:** admission is SOUND (the heuristic never admits a host write) but INCOMPLETE — it
-  under-admits genuinely-script-owned writes the syntax can't prove: notably a **script-owned
-  vector/collection element write** (`v[i] = e` — the classifier requires a `Reference(struct)`
-  root, so any owned vector/scalar target falls to host), and any owned root whose script
-  provenance is only visible in the ownership fact, not the declared type.
-- **Status:** OPEN — the dependency (D-own-2) is now met; the residual is sandbox-side: widen the
-  classifier from the syntactic heuristic to the `ownership_of` fact so every genuinely-owned
-  target is admitted, host targets still rejected.
-- **Removal:** `raw_write_is_host_owned` consults `ownership_of` for the write target's root —
-  admit when the root is script-owned (incl. owned vectors/collections), reject only a host-rooted
-  write. Add GREEN twins to the escape suite: a sandboxed `v[i] = e` / `s.f = v` on locally-owned
-  data is admitted; the host-aliasing RED still rejects.
-- **Design note (the load-bearing invariant, probe before building — it is the security
-  boundary).** The candidate invariant is *a raw write is admissible iff its target store is
-  `Owned` (not a borrow of host state)* — which `ownership_of` gives directly. This is SOUND only
-  because of **C86** (a whole-value heap bind COPIES): `x = player; x.health = …` produces an
-  OWNED copy, so the write cannot reach the host `player` — the exact aliasing case the current
-  type-heuristic rejects, now admissible *because it is provably a copy*. The residual risk is any
-  case where `ownership_of` returns `Owned` yet the store still aliases host state (a view/
-  projection mis-classified as owned) — that would be a sandbox ESCAPE, not just an over-reject.
-  So the build must be gated by adversarial escape-suite probes: for every shape where a script
-  value could still reference host state (`&`-borrow, projection `p = host.inner`, a view returned
-  from a host call), a raw write must still hit `Cap-Deny`. Do NOT widen the boundary until each of
-  those RED probes is proven to still reject under the `ownership_of` gate.
+- **What it WAS.** `src/parser/expressions.rs::raw_write_is_host_owned` gates a raw field/index
+  write before it is recorded. It admitted the common owned case (`s.f = v` on a non-parameter
+  local of a script-defined struct) but rejected EVERY write whose root type was not a
+  `Reference(struct)` — so a **script-owned vector element write** `v[i] = e` on a local `v`
+  fell to host and was rejected. Sound but incomplete.
+- **The probe redrew the boundary (the design note's `ownership_of` plan was NOT needed).** The
+  adversarial matrix + behavioural tests on BOTH backends proved that a local vector NEVER aliases
+  host state: every whole-value vector bind COPIES — a literal, a copy `c = v`, a projection
+  `fv = e.items`, AND even a `r = &v` ref-bind all leave the source untouched (`r[0] = 99` ⇒ the
+  caller's `orig[0] == 1`). The ONLY write that mutates host/caller state is a DIRECT write to a
+  **parameter** root (`v[i] = …` ⇒ caller's `orig[0] == 99`), whose root is an argument. So the
+  invariant is simply *a raw write is host iff its target root is a host parameter (or a host-typed
+  struct local)* — the `arguments()` check already IS the vector boundary; no `ownership_of`
+  consultation, no aliasing residual to fear (the feared `&`/projection cases are provably copies).
+- **The fix.** `raw_write_is_host_owned` gained a `Type::Vector(..) => false` (owned) arm: a
+  non-parameter local vector is script-owned, so `v[i] = e` is `Cap-Own`. A `&`/`RefVar` borrow, a
+  scalar, or an unresolvable base still falls to the conservative host default; a parameter root is
+  still caught by the `arguments()` check first. The struct handling is unchanged.
+- **Proven by:** the escape `raw-write: index` (a `v[i] = …` on a PARAMETER root → rejected, the
+  host effect) + the new control `script-owned vector element write (D-cap-3)` (a `v[i] = …` on a
+  LOCAL → admitted) in `admission_escape_suite_rejects_every_breakout`; 39 plan86 + 625 lib +
+  interp suite green. RESIDUAL (conservative, safe): a `v[i] = …` on a locally-owned KEYED
+  collection (hash/sorted/…) still falls to the host default — rarer, and an over-reject not an
+  escape; widen the arm the same way if a consumer needs it.
 
 ---
 
@@ -203,7 +197,8 @@ controls (a granted call, a read, a script-owned mutation) are the `Cap-Call` / 
 non-default value to a locked parameter) — each a program whose admission flips to the exact rule
 above, its GREEN twin proving the rejection is the rule firing, not an incidental reject.
 
-The area is **formal when OPEN reaches 0**: every host-touching operation in a restricted
-context decided by exactly one of the six rules, over a complete provenance fact (D-cap-3) —
-at which point an admitted script provably performs no host effect outside its profile, by
-construction.
+The area is **formal — OPEN has reached 0** (2026-07-04): every host-touching operation in a
+restricted context is decided by exactly one of the six rules — the call gate (incl. closures),
+field read/update/append, the parameter `#default` lock, and script-owned mutation — so an
+admitted script provably performs no host effect outside its profile, by construction. The
+falsifying escape suite + the RED/GREEN access corpus are the standing evidence.

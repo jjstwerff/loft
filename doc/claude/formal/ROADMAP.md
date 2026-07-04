@@ -30,7 +30,7 @@ Closing a row means the implementation obeys the rule (then the deviation entry 
 | [grammar.md](grammar.md) | 0 | ✓ closed — D-gram-1/3 landed; D-gram-2 (non-CFG) + D-gram-4 (`&` overload) resolved as decided edges → DESIGN_DECISIONS C81/C82 |
 | [operational.md](operational.md) | 2 | D-op-1/2 the differential oracle (@PLN89) — D-op-4 the spreadsheet runtime (C80) is **CLOSED** (formalize4); the oracle SEED landed (`tests/oracle/`) |
 | [ownership.md](ownership.md) | 0 | the `deps` borrow checker — **✓ CLOSED (2026-07-04)**: all five D-own deviations resolved. D-own-3 (typed `Deps`) CLOSED; D-own-4 → decided edge **C86**; D-own-5 (`&` rides `deps`) CLOSED; **D-own-2 (completeness) CLOSED** — the fact is total (oracle over every value + the `_own_store` runtime-Join witness, @PLN90 loft#495); **D-own-1 (O-Deps) CLOSED** — an audit + the `0234cbbb` unification landed the last shipped shape-scan (interp adopt-vs-deep-copy) onto `return_adopts_fresh_store()`, so every store-lifetime decision reads the ONE fact on the shipped path. Floor (non-deviation cleanup): the `LOFT_NO_JOIN_OWN` opt-out scans + one physical return-funnel. Validated: suite 2601/2601, native_scripts, poison, fuzz-gate controls, differential oracle, fuzzer |
-| [capabilities.md](capabilities.md) | 1 | sandbox admission — call gate (incl. closures) + field read/update/append + the parameter `#default` lock **enforced** (@PLN86 F1–F7; **D-cap-1 + D-cap-2 CLOSED 2026-07-04** — the `#default` lock via `param_lock_violations`; the closure descent via `mark_lambda_sandboxed`, so a script-only lambda is now usable and a lambda reaching a host cap is rejected naming the reach); remaining: the owned-vs-host classification's completeness (D-cap-3 — its dependency ownership D-own-2 is now CLOSED, so this is the sandbox reading the now-total fact for raw writes) |
+| [capabilities.md](capabilities.md) | 0 | the `deps` borrow checker's sibling — **✓ CLOSED (2026-07-04)**: sandbox admission enforces all six rules, each with a RED/GREEN pair. **D-cap-1** the parameter `#default` lock (`param_lock_violations`); **D-cap-2** the closure descent (`mark_lambda_sandboxed` — a script-only lambda is usable, a host-reaching one is rejected naming the reach); **D-cap-3** the owned-vs-host write split (`raw_write_is_host_owned` gained a `Type::Vector` owned arm — a probe proved a local vector never aliases host, every whole-value bind incl. `&` COPIES, so only a PARAMETER-root write is a host effect and the `arguments()` check already IS that boundary; the feared `ownership_of` consultation was NOT needed) |
 
 Binding + grammar + **types are closed** — the @PLN25 value/null model landed (2026-07-02); DN3
 fully closed with the text→numeric parse flip (`(N-Parse)` types `τ?`), overflow-arith reclassified
@@ -39,10 +39,10 @@ as a decided edge (C85, not a deviation). **Ownership is now CLOSED (2026-07-04)
 every value + the `_own_store` runtime-Join witness (D-own-2, @PLN90 loft#495), and finally
 **D-own-1 (O-Deps)** — an audit + the `0234cbbb` unification put every shipped store-lifetime
 decision on the ONE `deps` fact (the last inline shape-scan, interp adopt-vs-deep-copy, now
-reads `return_adopts_fresh_store()` like native). The only open formal deviations left are the
-operational **D1** (differential oracle, @PLN89) and **one** capabilities row (@PLN86 — D-cap-1
-the parameter `#default` lock + D-cap-2 the closure descent both CLOSED 2026-07-04; only D-cap-3,
-the sandbox reading the now-total owned-vs-host fact, remains). The @PLN89 differential oracle +
+reads `return_adopts_fresh_store()` like native). **Capabilities is now CLOSED too (2026-07-04 —
+D-cap-1/2/3 all resolved), so every static area is at 0.** The ONLY open formal deviation left is
+the operational **D1** (differential oracle, @PLN89) — an inherently open-ended coverage instrument,
+not a one-shot close. The @PLN89 differential oracle +
 LOFT_POISON grow alongside as the safety net.
 
 ---
@@ -76,7 +76,7 @@ The real weight. Each is a `loft-lang/plans` issue, sequenced.
 | C1 | **D2** | integer model i64 end-to-end. **AUDITED** ([plans/88-integer-i64.md](../plans/88-integer-i64.md)) — reframed: do NOT widen `Value::Int` (the runtime is already i64; `Int(i32)`/`Long(i64)` is a compact value-size encoding). The change is `IntegerSpec` bounds → i64 + template unify + an `int_const(i64)` keystone (compact `Int` if it fits, else `Long`). | **[@PLN88](https://github.com/loft-lang/plans/issues/88)** | M–L |
 | ~~C2~~ **DONE** | ~~**D-own-3**~~ | typed `Deps` landed (H2 steps 1–5, 2026-06-12: newtype + named constructors + space-checked queries + the `CALLEE_FRAME_BIT` value tag) — recounted into ownership.md 2026-07-03 | H2 ([DEPS_INVENTORY.md](../DEPS_INVENTORY.md)) | M, landed |
 | C3 | **D-own-1, D-own-2, D-own-5** | the `deps` borrow checker: ownership computed once per binding/path; free/copy/move derive from one `deps` fact; `&`-borrow source tracked in `deps`; the bind-site copy/alias/elide decision reads `ownership_of` + last-use (the C86 residual — #415's copy is the SEMANTIC, D-own-4 reclassified) | **[@PLN85](https://github.com/loft-lang/plans/issues/85)** | L (the north star) |
-| C4 | ~~**D-cap-1**~~ **DONE**, ~~**D-cap-2**~~ **DONE** | capability admission: field read/update/append (F3–F6), the `…#default` parameter lock (D-cap-1), AND the closure descent (D-cap-2 — `mark_lambda_sandboxed` marks a sandboxed-body lambda restricted so the admission walk descends into it; script-only lambdas usable, host-reaching lambdas rejected naming the reach; captured fn-refs gated at their creation site) are all **landed**. **D-cap-3 was C3's dependency** — ownership's owned-vs-host fact (D-own-2) is now CLOSED; D-cap-3's residual is the sandbox reading that total fact for raw writes. | **[@PLN86](https://github.com/loft-lang/plans/issues/86)** (§7 6.8/6.9) | S–M |
+| ~~C4~~ **DONE** | ~~**D-cap-1/2/3**~~ **ALL CLOSED** | capability admission fully landed: field read/update/append (F3–F6), the `…#default` parameter lock (D-cap-1), the closure descent (D-cap-2 — `mark_lambda_sandboxed`), AND the owned-vs-host write split (D-cap-3 — `raw_write_is_host_owned` `Type::Vector` owned arm; a probe proved a local vector never aliases host so only a parameter-root write is a host effect, no `ownership_of` needed). Each with a RED/GREEN adversarial pair. | **[@PLN86](https://github.com/loft-lang/plans/issues/86)** | S–M, landed |
 
 ## Phase D — the operational arc (two projects: oracle + spreadsheet runtime)
 
@@ -94,9 +94,9 @@ decided edges C82/C81; grammar.md at 0) **·** binding.md + grammar.md + **types
 DN1–DN6, D2 reconciled; DN3 parse-flip landed)** + **~~D2~~ (D-op-4 spreadsheet runtime,
 formalize4)** now **closed** **·** NEXT: the tracked arcs
 **~~C2~~ (typed Deps) → ~~C3~~ (@PLN85/@PLN90: ownership — all five D-own CLOSED 2026-07-04)** ·
-NEXT: the operational **D1** (differential oracle, @PLN89) and **C4** (capabilities, @PLN86 —
-D-cap-1 the parameter `#default` lock + D-cap-2 the closure descent both CLOSED 2026-07-04; only
-D-cap-3 remains) — the only open deviations left.
+**~~C4~~ (capabilities, @PLN86 — D-cap-1/2/3 all CLOSED 2026-07-04)** · every static area now at 0 ·
+NEXT: only the operational **D1** (differential oracle, @PLN89) remains — an open-ended coverage
+instrument, not a one-shot close.
 
 ## What is NOT on this list (already clean or decided)
 

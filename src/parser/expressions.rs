@@ -2581,20 +2581,37 @@ use a separate collection or add after the loop"
         let Some(root) = lhs_root_var(lhs) else {
             return true;
         };
+        // A PARAMETER root is host data — `v[i] = …` / `e.f = …` on a parameter mutates the
+        // CALLER's value (proven: `fn f(v){ v[0]=99 }` leaves the caller's `orig[0]==99`).
         if self.vars.arguments().contains(&root) {
             return true;
         }
-        let Type::Reference(struct_def, _) = self.vars.tp(root) else {
-            return true;
-        };
-        let Some(lib) = crate::sandbox::def_library(&self.data, *struct_def) else {
-            return true;
-        };
-        let profile = self
-            .def_sandbox
-            .get(&self.context)
-            .and_then(|n| self.sandbox.profiles.get(n));
-        profile.is_none_or(|p| p.allows_lib(&lib))
+        match self.vars.tp(root) {
+            // A script-defined struct LOCAL is the mod's own (mutable); a host-library struct
+            // local (or one the profile does not include) is host — the TYPE catches aliasing
+            // like `x = player; x.health = …`.
+            Type::Reference(struct_def, _) => {
+                let Some(lib) = crate::sandbox::def_library(&self.data, *struct_def) else {
+                    return true;
+                };
+                let profile = self
+                    .def_sandbox
+                    .get(&self.context)
+                    .and_then(|n| self.sandbox.profiles.get(n));
+                profile.is_none_or(|p| p.allows_lib(&lib))
+            }
+            // @PLN86 D-cap-3 — a NON-parameter local VECTOR is script-owned. Every whole-value
+            // vector bind COPIES (proven on BOTH backends — a literal, a copy `c = v`, a
+            // projection `fv = e.items`, and even a `r = &v` ref-bind all leave the source
+            // untouched: `r[0]=99` gives `orig[0]==1`), so a local vector NEVER aliases host
+            // state — writing its elements is `Cap-Own`. The only host-vector write is a DIRECT
+            // write to a PARAMETER root (`v[i] = …` / `e.items[i] = …`), whose root is an
+            // argument and is already rejected by the `arguments()` check above. Closes the
+            // owned-collection-element gap without an aliasing escape.
+            Type::Vector(..) => false,
+            // A `&`/`RefVar` borrow, a scalar, or an unresolvable base → host, conservatively.
+            _ => true,
+        }
     }
 
     // <assign> ::= <operators> [ '=' | '+=' | '-=' | '*=' | '%=' | '/=' <operators> ]

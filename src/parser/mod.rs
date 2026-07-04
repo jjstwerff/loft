@@ -10064,6 +10064,19 @@ mod plan86_admission_tests {
                     "fn ok() -> integer { s = 0; for x in [1,2,3].map(|y| { y * 2 }) { s += x } s }\n",
                 ),
             ),
+            (
+                // @PLN86 D-cap-3 — a write to a SCRIPT-OWNED vector element is Cap-Own. A local
+                // vector never aliases host state (every whole-value bind copies), so `v[i] = …`
+                // on a local is admitted — the twin of the `raw-write: index` ESCAPE above, whose
+                // `v[i] = …` is on a PARAMETER root (which DOES mutate the caller, so it rejects).
+                "script-owned vector element write (D-cap-3)",
+                adm(
+                    &["fn:ok"],
+                    &["code"],
+                    &[],
+                    "fn ok() -> integer { v = [1, 2, 3]; v[0] = 9; v[0] }\n",
+                ),
+            ),
         ];
         for (name, e) in &controls {
             assert!(e.is_empty(), "CLEAN SCRIPT REJECTED — {name}: {e:?}");
