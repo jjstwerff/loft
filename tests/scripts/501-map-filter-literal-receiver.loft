@@ -1,0 +1,45 @@
+// loft#501 regression guard — a collection method / index on a vector LITERAL
+// receiver (`[1,2,3].map(..)`, `[1,2,3,4].filter(..)`, `[10,20,30][1]`). When such a
+// literal was assigned (`d = [..].map(..)`), it reused the outer LHS `d` as its own
+// build accumulator, binding `d` to the literal's store; the chain's result — also
+// assigned to `d` — was then discarded, so the interpreter hit BUG #306 (freeing a
+// stack store) and native failed to compile (E0425 `cannot find value var_d`). An
+// index chain surfaced the same reuse as a spurious "cannot change type". Found by
+// the @PLN89 differential oracle while building program 22. Fix: when a `.`/`[` chain
+// follows a literal, build it into a fresh synthetic local (the same fresh-temp path
+// the already-working inline forms — `for x in [..].map(..)`, a call argument — use),
+// so the literal receiver behaves identically to a variable receiver. Both backends.
+fn vsum(v: vector<integer>) -> integer { s = 0; for x in v { s += x; } s }
+
+fn main() {
+    // map on a literal receiver, assigned
+    doubled = [1, 2, 3].map(|x| { x * 2 });
+    assert(vsum(doubled) == 12, "map sum {vsum(doubled)}");
+    assert(len(doubled) == 3, "map len {len(doubled)}");
+
+    // filter on a literal receiver, assigned
+    evens = [1, 2, 3, 4, 5, 6].filter(|x| { x % 2 == 0 });
+    assert(vsum(evens) == 12, "filter sum {vsum(evens)}");
+    assert(len(evens) == 3, "filter len {len(evens)}");
+
+    // reduce on a literal receiver (a scalar result, via the method path)
+    total = [1, 2, 3, 4].reduce(0, |acc, x| { acc + x });
+    assert(total == 10, "reduce {total}");
+
+    // typed target — the declared type describes the CHAIN result, not the literal
+    picked: vector<integer> = [7, 8, 9, 10].filter(|x| { x > 8 });
+    assert(vsum(picked) == 19, "typed filter {vsum(picked)}");
+
+    // inline (no LHS var to reuse) — already worked; pinned so both paths agree
+    inline = 0; for v in [1, 2, 3].map(|x| { x * 10 }) { inline += v; }
+    assert(inline == 60, "inline {inline}");
+
+    // literal receiver as a call argument
+    assert(vsum([2, 4, 6].map(|x| { x + 1 })) == 15, "arg map");
+
+    // a plain literal assignment (no chain) must be UNCHANGED by the fix
+    plain = [1, 2, 3];
+    assert(vsum(plain) == 6, "plain {vsum(plain)}");
+
+    println("501-map-filter-literal-receiver ok");
+}
