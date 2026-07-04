@@ -54,6 +54,14 @@ plan for the new rules — the oracle already guards each *area*; this drives it
 > **Graduated to standing oracle guards (nightly gate, both-backends + leak + driver-agreement):**
 > `tests/oracle/24-heap-copy-vs-view.loft` (H-Copy/H-View), `25-parameter-binding.loft` (F-Param*),
 > `26-coroutine-laziness.loft` (straight-line G-Call/G-Next). The full `--ignored` sweep passes.
+>
+> **Stage 3 — remaining rows, no new divergences.** Verified ✓ both backends: H-Alloc zero-init,
+> H-WriteLocked (a `#lock`ed write FAULTS on both — the intended tripwire), F-Rec (factorial),
+> F-Return (implicit tail), T-Paren (`(e)` is grouping), L-Escape (a returned closure works on
+> native). Still ☐ / covered-elsewhere: **F-ParamRef** (`&` write-back — binding.md's domain, 0
+> deviations, PR#436), **C-Order hash-par** (a documented edge; probe syntax pending),
+> **G-YieldDepth** (stackful yield — likely needs `yield from`, deferred to 1.1+), **D-clo-2**
+> (the open closure crash). The load-bearing rules are now pinned; the residue is edge/deferred.
 
 ## heap.md
 
