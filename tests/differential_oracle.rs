@@ -128,6 +128,44 @@ fn divergences(interp: &ModeRun, native: &ModeRun) -> Vec<String> {
     d
 }
 
+/// A driver STATICALLY REJECTED the program — it failed parse / type / compile
+/// BEFORE running, as opposed to running and hitting a runtime fault. A static
+/// reject carries a diagnostic (a loft `error:` line, or a rustc `error[E…]` /
+/// "could not compile") AND never produced program output; the empty-stdout guard
+/// is what keeps a runtime panic (partial stdout + "thread … panicked") from
+/// reading as a static reject.
+fn statically_rejected(run: &ModeRun) -> bool {
+    run.exit_code != Some(0)
+        && normalise_stdout(&run.stdout).is_empty()
+        && (run.stderr.contains("error[E")
+            || run.stderr.contains("could not compile")
+            || run
+                .stderr
+                .lines()
+                .any(|l| l.trim_start().starts_with("error:")))
+}
+
+/// Every driver must agree on accept-vs-reject: well-typedness is ONE static
+/// judgment, so `--dump` (the pure parse+typecheck, no run), `--interpret`, and
+/// `--native` (which includes the rustc compile) must reach the SAME verdict. The
+/// #433 class is exactly this property failing — `--interpret` accepts a program
+/// `--native` rejects at rustc (E0308). Returns the disagreements for one program.
+fn driver_agreement(dump: &ModeRun, interp: &ModeRun, native: &ModeRun) -> Vec<String> {
+    let (rd, ri, rn) = (
+        statically_rejected(dump),
+        statically_rejected(interp),
+        statically_rejected(native),
+    );
+    if rd == ri && ri == rn {
+        Vec::new()
+    } else {
+        vec![format!(
+            "accept/reject disagrees (well-typedness is one judgment): \
+             --dump rejected={rd}, --interpret rejected={ri}, --native rejected={rn}"
+        )]
+    }
+}
+
 /// The corpus: every `.loft` under `tests/oracle/`, in alphabetical order.
 fn corpus() -> Vec<PathBuf> {
     let dir = workspace_root().join("tests/oracle");
@@ -154,9 +192,11 @@ fn oracle_corpus_agrees_across_backends() {
     let mut report = Vec::new();
     for path in corpus() {
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let dump = run_mode("--dump", &path, &[]);
         let interp = run_mode("--interpret", &path, &[]);
         let native = run_mode("--native", &path, &[("LOFT_NATIVE_LEAK_CHECK", "1")]);
-        let d = divergences(&interp, &native);
+        let mut d = divergences(&interp, &native);
+        d.extend(driver_agreement(&dump, &interp, &native));
         if !d.is_empty() {
             report.push(format!("✗ {name}\n  {}", d.join("\n  ")));
         }
@@ -224,6 +264,59 @@ mod tests {
         assert!(
             !divergences(&run("x=1\n", "Warning: 1 stores not freed", Some(0)), &base).is_empty(),
             "an interpreter store leak must be caught"
+        );
+    }
+
+    /// Driver-agreement positive control — the accept/reject verdict must AGREE
+    /// across drivers, a runtime fault must NOT read as a static reject, and the
+    /// #433 class (one backend rejects what the others accept) must be caught.
+    #[test]
+    fn positive_control_driver_disagreement_is_detected() {
+        let accepted = run("out\n", "", Some(0));
+        let rejected = run(
+            "",
+            "error: No matching operator '+' on 'integer' and 'text'",
+            Some(1),
+        );
+        let rustc_reject = run(
+            "",
+            "error[E0308]: mismatched types\nerror: could not compile",
+            Some(1),
+        );
+        // a runtime fault: the program RAN (partial stdout) then panicked.
+        let runtime_fault = run(
+            "partial\n",
+            "thread 'main' panicked at src/…: assert",
+            Some(101),
+        );
+
+        // a runtime fault is a RUNTIME outcome, never a static reject
+        assert!(
+            !statically_rejected(&runtime_fault),
+            "a runtime panic (partial stdout + panic) must not read as a static reject"
+        );
+        assert!(
+            statically_rejected(&rejected),
+            "a loft type-error reject must be detected"
+        );
+        assert!(
+            statically_rejected(&rustc_reject),
+            "a rustc compile reject (#433) must be detected"
+        );
+
+        // all-accept and all-reject AGREE (no false positive)
+        assert!(driver_agreement(&accepted, &accepted, &accepted).is_empty());
+        assert!(driver_agreement(&rejected, &rejected, &rejected).is_empty());
+        // #433: --dump + --interpret accept, --native rejects at rustc → CAUGHT
+        assert!(
+            !driver_agreement(&accepted, &accepted, &rustc_reject).is_empty(),
+            "native rejecting a program the others accept must be caught"
+        );
+        // a runtime fault on one backend is NOT an accept/reject disagreement
+        // (it is a runtime divergence, caught by `divergences`, not here)
+        assert!(
+            driver_agreement(&accepted, &runtime_fault, &accepted).is_empty(),
+            "a runtime fault must not be reported as an accept/reject disagreement"
         );
     }
 
