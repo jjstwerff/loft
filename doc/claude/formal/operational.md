@@ -144,14 +144,24 @@ OPEN: **2**
 - **Effect:** correctness for native means "matches the interpreter on the tests we ran",
   not "obeys the semantics". The unwritten parts (heap/store steps, iterators, coroutines)
   have no spec but the interpreter's code.
-- **Status:** OPEN — **direction chosen (2026-06): a differential oracle.**
+- **Status:** OPEN — **the oracle is BUILT and growing (@PLN89).** `tests/differential_oracle.rs`
+  runs `tests/oracle/*.loft` (11 programs) on BOTH backends and asserts they AGREE on stdout
+  (value/null), exit code (halt), and leak-freedom, with a positive control proving the detector
+  fires.  **2026-07-04 — the DRIVER-AGREEMENT scope addition landed**: well-typedness is one static
+  judgment, so `--dump` (pure parse+typecheck) / `--interpret` / `--native` must agree on
+  accept-vs-reject; `statically_rejected()` (empty-stdout guard so a runtime panic isn't mistaken
+  for a static reject) makes the #433 class — interp accepts what native rejects at rustc — a
+  first-class caught property.  The session's fixed cross-backend divergences graduated into the
+  corpus (10 = the #495 runtime-Join, 11 = the D-own-1 adopt-vs-deep-copy).  Stays OPEN: the corpus
+  keeps growing toward the operational rules' coverage (heap/store steps, iterators, coroutines),
+  and the sweep is `#[ignore]` (rustc per program) — a manual gate, not yet CI-wired.
 - **Removal:** build a **differential oracle** — run a growing program corpus on BOTH
   backends and assert they AGREE (value / null / halt / stdout / leak); these rules stay the
   written contract that GUIDES the corpus (what behaviour to cover), not a third
   implementation. A mismatch is then a divergence caught before ship, and every fixed
   divergence grows the corpus. *Chosen for now over an executable shared semantics (both
   backends conforming to one definition) — switchable to that later; these rules are reused
-  either way.*  Open follow-up: a plan issue for the oracle + corpus (none yet).
+  either way.*
 
 ### D-op-2 — interp/native divergences are test-caught, not definition-caught
 - **Violates:** E-Op / E-Uncomp / the shared-contract premise
@@ -162,7 +172,10 @@ OPEN: **2**
 - **Effect:** every codegen fix this session (the bool-arg E0308, the `__native_tail_ret`
   lift) was a backend disagreeing with the interpreter; under a shared semantics each is a
   definitional error, found before shipping.
-- **Status:** OPEN — downstream of D-op-1 (the differential oracle).
+- **Status:** OPEN — downstream of D-op-1 (the differential oracle).  The oracle now covers
+  BOTH facets of "backends disagree": the run-both-and-compare (value/halt/leak) for a program
+  both ACCEPT, and — as of 2026-07-04 — the accept-vs-reject *driver-agreement* for the #433
+  facet itself (interp accepts a program native rejects at rustc). Closes with D-op-1.
 - **Removal:** the differential oracle (D-op-1) makes "interp and native disagree on a
   program both accept" a *caught* failure (run-both-and-compare), not a coverage lottery —
   the corpus, not luck, decides what is exercised.
