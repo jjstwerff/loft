@@ -132,12 +132,15 @@ current `main` tip before working the list.
   2/2, `LOFT_POISON=1` leak suite 49/49, the D-key-1 area poison-clean on both
   backends. **No SIGSEGV, no signal crash, no compile/link failure, no `stores
   not freed`.** The 3 failures are all ENVIRONMENTAL, not safety-gate items and
-  not regressions: `error_messages::baselines_are_locked_in` (the sandbox has no
-  DNS, so `38_import_unknown_file` prints an extra `[registry] auto-install
-  failed … Dns Failed` line absent from the golden), and `html_wasm` /
-  `html_asyncify` (browser/asyncify, need node + a headless browser — the brittle
-  class §CI-hardening addresses). Re-run on a networked+browser CI runner to
-  clear all three before tag; none block the safety gate.
+  not regressions. ✅ `error_messages::baselines_are_locked_in` **FIXED**
+  2026-07-04 — it was a network-dependent flake (a `use unknown_module`
+  auto-install attempt prints a `[registry] … Dns Failed` line offline / a
+  registry-not-found line online, neither in the golden); `normalise()` now strips
+  `[registry]` lines, so the baseline is deterministic across CI / offline / the
+  sandbox (suite green offline). Remaining 2 are browser-only: `html_wasm` /
+  `html_asyncify` (need node + a headless browser — the brittle class
+  §CI-hardening addresses); re-run on a browser CI runner to clear before tag.
+  None block the safety gate.
 - [x] **Zero-leak gate** — ✅ no `stores not freed` warnings across the suite
   run above (both backends); the `LOFT_POISON` leak suite is green.
 
