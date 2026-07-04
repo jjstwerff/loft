@@ -5756,6 +5756,27 @@ impl Parser {
         RetPromotion::Grow
     }
 
+    /// Does any `return` in `body` READ `var`?  A param a mid-body `return`
+    /// genuinely BORROWS must not be pruned from the return dep as a stale
+    /// copy-return artifact: the tail-source `expanded` set is built from the
+    /// TAIL return sources only, so it misses a param a mid-body `return`
+    /// borrows (`if c { return t[i] ?? d; }`) — 150-i306 native corruption when
+    /// that genuine borrow was wrongly pruned.
+    fn body_return_borrows(body: &[Value], var: u16) -> bool {
+        fn walk(op: &Value, var: u16) -> bool {
+            match op {
+                Value::Return(inner) | Value::BreakWith(_, inner) => inner.reads_var(var),
+                Value::Span(b) => walk(&b.1, var),
+                Value::Insert(ops) | Value::Parallel(ops) => ops.iter().any(|o| walk(o, var)),
+                Value::Block(bl) | Value::Loop(bl) => bl.operators.iter().any(|o| walk(o, var)),
+                Value::If(c, t, e) => walk(c, var) || walk(t, var) || walk(e, var),
+                Value::Iter(_, c, n, e) => walk(c, var) || walk(n, var) || walk(e, var),
+                _ => false,
+            }
+        }
+        body.iter().any(|s| walk(s, var))
+    }
+
     pub(crate) fn ref_return(&mut self, ls: &[u16], body: &mut [Value], site: RetSite) {
         let newrecord_nr = self.data.def_nr("OpNewRecord");
         let ret = self.data.definitions[self.context as usize]
@@ -6083,7 +6104,16 @@ impl Parser {
                     .collect::<Vec<_>>()
             }
             .into_iter()
-            .filter(|(_, name)| !expanded.contains(&self.vars.var(name)))
+            .filter(|(_, name)| {
+                let var = self.vars.var(name);
+                // NOT in the tail-source `expanded` set AND not borrowed by a
+                // MID-BODY `return` either.  `expanded` is built from the TAIL
+                // return sources, so it misses a param a mid-body `return` borrows
+                // (`fn f(t) -> M { if c { return t[i] ?? d; } d }` — the `t` view is
+                // genuine, not a stale copy-return artifact; 150-i306 native
+                // corruption when it was wrongly pruned).
+                !expanded.contains(&var) && !Self::body_return_borrows(body, var)
+            })
             .map(|(a, _)| a)
             .collect();
             dep.retain(|d| !stale_visible.contains(d));
