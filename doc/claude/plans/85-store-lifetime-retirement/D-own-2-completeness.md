@@ -68,12 +68,36 @@ fn choose(cond, x: Box) -> Box { r = x; if cond { r = Box{..}; } r }  // the JOI
   copy+mutate / genuine borrow / nested-field / the JOIN `choose` / loop).  Root
   probes retained under `probes/d-own-2/`.
 
+## Measurement 3 — the return adopt-vs-copy class SWEPT (the finish)
+
+Swept the return adopt-vs-copy class across the composition axes (the D-own-1
+"swept-dry" method), BOTH backends, value + leak:
+
+- **Types:** struct (Reference), enum, vector, sorted (keyed), tuple, text.
+- **Bindings:** copy (`r = x`), direct borrow (`x`), field-read (`o.f`),
+  method-result, call-result, deep projection (`o.m.i`).
+- **Control:** straight-line, `if`-JOIN (borrow-arm / owned-arm), `match`-arm,
+  call-chain, reassign-then-return.
+
+**All CLEAN** (leak-free, value-correct) EXCEPT one facet: a JOIN **vector** return
+whose owned arm is a `=` literal reassignment delivers the WRONG VALUE — the literal
+APPENDS to the buffer the borrow-arm's `r = x` filled instead of REPLACING it (returned
+`len` 5, not 2; `len(r)` computed INSIDE the fn is correct).  Root: `build_vector_list`
+(`vectors.rs:1848`) gates the clearing `vector_db` on `dep.is_empty()` with no clear
+fallback, so a `=` reassign on a vector that already OWNS content (the NRVO buffer)
+appends.  This is the DELIVERY-value facet (distinct from the caller-free/leak facet
+fixed above), needing the `=`-vs-`+=` clear routing, not a return-dep change.  **Filed
+[loft#492](https://github.com/loft-lang/loft/issues/492)** (sev:medium, root-caused);
+probe `probes/d-own-2/join-vector-return-append.loft`.
+
 ## Status
 
 - [x] Measured the free-side/oracle incompleteness — latent + safe (one-directional).
-- [x] Root-caused the live struct-copy-return native leak (cross-pass stale `x`).
-- [x] **FIXED (locus 2 — `ref_return` visible-attr prune).**  `idcopy`
-      `Box["r","x"]`→`Box["r"]` (owned); `iddirect` stays `Box["x"]` (borrow).  0-diff
-      on all 8 corpora; full DA issues+expressions + suite + oracle + poison green.
+- [x] Root-caused + **FIXED** the live struct-copy-return native leak (locus 2 —
+      `ref_return` visible-attr prune; `idcopy` `Box["r","x"]`→`Box["r"]`, `iddirect`
+      stays `Box["x"]`; 0-diff on 8 corpora; full DA + suite + oracle + poison green).
+- [x] Swept the return adopt-vs-copy class dry (all types × bindings × control) — one
+      residual facet found: the JOIN-vector-return DELIVERY value bug, filed as #492.
+- [ ] loft#492 — the JOIN-vector `=`-reassign clear (delivery facet).
 - [ ] Free-side/oracle unification (Measurement 1) — the three-valued-fact completion,
       latent, folds into @PLN90.

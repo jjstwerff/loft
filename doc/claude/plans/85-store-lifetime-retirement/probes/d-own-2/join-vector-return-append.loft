@@ -1,0 +1,25 @@
+// @PLN85 D-own-2 — a JOIN vector return (borrow one arm, owned literal the other)
+// delivers the WRONG value on BOTH backends: the `=` literal reassignment in the
+// second arm APPENDS to the buffer the first arm's `r = x` filled, instead of
+// replacing it.  `len(r)` computed INSIDE the fn is correct (2); only the RETURNED
+// vector is wrong (5).  Root: build_vector_list gates `vector_db` (which clears /
+// allocates fresh) on `dep.is_empty()` with no clear fallback, so a `=` literal
+// reassign on a vector that already OWNS content (the NRVO buffer) skips the clear
+// and appends.  The `=` case is meant to route through create_vector (unconditional
+// vector_db), but the conditional JOIN arm does not.  Pre-existing on main.
+fn f(x: vector<integer>) -> vector<integer> {
+    r = x;                    // whole-value COPY of the param -> r owns [1,2,3]
+    if true { r = [9, 9]; }   // `=` reassign: MUST replace -> [9,9]  (len 2)
+    r
+}
+fn g(x: vector<integer>) -> integer {
+    r = x;
+    if true { r = [9, 9]; }
+    len(r)                    // computed INSIDE: correct (2)
+}
+fn main() {
+    a = [1, 2, 3];
+    assert(len(f(a)) == 2, "returned len {len(f(a))}");  // FAILS: 5
+    assert(g(a) == 2, "inside len {g(a)}");              // passes: 2
+    println("ok");
+}
