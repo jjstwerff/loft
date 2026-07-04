@@ -3412,9 +3412,17 @@ impl Parser {
         } else {
             self.expression(&mut lit)
         };
-        if !self.first_pass && lit_type != Type::Null && !lit_type.is_same(subject_type) {
-            self.can_convert(&lit_type, subject_type);
-        }
+        // #493 — a pattern whose type cannot convert to the subject type (a text
+        // literal against an integer subject, say) can never match.  Track it and
+        // emit a dead `false` condition below so control falls through to the
+        // wildcard, instead of a type-mismatched comparison (`OpEqInt(int,
+        // "text")`) that pushes a 16 B Str into an 8 B slot — stack corruption
+        // that trips the generate_call width assert under debug-assertions.
+        // Preserves the existing lenient "silently doesn't match" behaviour.
+        let incompatible = !self.first_pass
+            && lit_type != Type::Null
+            && !lit_type.is_same(subject_type)
+            && !self.can_convert(&lit_type, subject_type);
         // check for range pattern `lo..hi` or `lo..=hi`.
         if self.lexer.has_token("..") {
             let inclusive = self.lexer.has_token("=");
@@ -3450,8 +3458,20 @@ impl Parser {
                 &[subject_type.clone(), subject_type.clone()],
             );
             let range_cond = v_if(lo_cond, hi_cond, Value::Boolean(false));
+            // An incompatible pattern type can never match (see above): the range
+            // bounds were consumed for a clean parse, but the condition is dead.
+            let cond = if incompatible {
+                Value::Boolean(false)
+            } else {
+                range_cond
+            };
             (
-                v_block(vec![range_cond], Type::Boolean, "range_pattern"),
+                v_block(vec![cond], Type::Boolean, "range_pattern"),
+                Type::Boolean,
+            )
+        } else if incompatible {
+            (
+                v_block(vec![Value::Boolean(false)], Type::Boolean, "range_pattern"),
                 Type::Boolean,
             )
         } else {

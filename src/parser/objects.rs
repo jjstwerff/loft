@@ -1035,6 +1035,17 @@ impl Parser {
         if d_nr == u32::MAX && source != u16::MAX {
             d_nr = self.data.variant_in_source(source, name);
         }
+        // #493 — a QUALIFIED `Enum::UnknownVariant` (a typo like `Color::Bleu`)
+        // that resolves to no variant: recover as a null enum value.  Without
+        // this `code` keeps the caller's default (the assignment target itself),
+        // so `c = Color::Bleu` lowered to `c = c` — a first-Set self-reference
+        // that reads an uninitialised slot (a garbage DbRef under a normal build,
+        // a codegen self-ref assert under debug-assertions).  A `{`-construction
+        // keeps resolving below (a struct-variant literal).
+        if qualifier_enum != u32::MAX && d_nr == u32::MAX && !self.lexer.peek_token("{") {
+            *code = Value::Null;
+            return self.data.def(qualifier_enum).returned().clone();
+        }
         // @PLN22 Phase 1 — a BARE variant used as a VALUE (not qualified, not a
         // `{ … }` construction) resolves ONLY via context: defer to parse_var's
         // context branches, which resolve it against the expected enum or error
