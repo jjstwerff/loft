@@ -130,7 +130,33 @@ fn normalise(raw: &str, case_name: &str, entry: &Path) -> String {
     // is a defence-in-depth — even if a future code path leaks
     // RUST_BACKTRACE, the comparison still works.
     s = strip_stack_backtrace(&s);
+    // Registry auto-install diagnostics are ENVIRONMENT-DEPENDENT and not part
+    // of the error under test.  A `use unknown_module` first triggers an
+    // auto-install attempt; its failure line differs by network — offline it is
+    // a DNS error (`… Dns Failed: … Temporary failure in name resolution`),
+    // online a registry not-found, and it is absent entirely on a machine with a
+    // warm registry.  The contract the case asserts is the "Library not found"
+    // diagnostic that follows.  Strip every `[registry] …` line so the baseline
+    // is deterministic across CI, offline dev, and the sandbox.
+    s = strip_registry_diagnostics(&s);
     s
+}
+
+/// Remove `[registry] …` lines (network-dependent auto-install diagnostics).
+/// Mirrors `strip_stack_backtrace`'s trailing-newline handling.
+fn strip_registry_diagnostics(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for line in s.lines() {
+        if line.trim_start().starts_with("[registry]") {
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    if !s.ends_with('\n') && out.ends_with('\n') {
+        out.pop();
+    }
+    out
 }
 
 /// Remove "stack backtrace:" + everything until the next blank line.

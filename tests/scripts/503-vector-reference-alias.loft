@@ -1,0 +1,48 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// binding.md B-Ref-Alias / B-Copy: a `&` bind of a heap lvalue ALIASES (writes
+// through); a PLAIN bind COPIES (H-Copy). Before the fix, `&` was silently
+// ignored for a vector — `d = &v; d[i]=x` copied, so no write reached the source
+// (this is what broke every Canvas drawing method: `d = self.data; d[i]=color`).
+
+struct Grid { cells: vector<integer> }
+
+// The graphics-library pattern: bind the vector FIELD to a local via `&`, mutate.
+fn bump_all(self: Grid, by: integer) {
+  row = &self.cells;
+  for i in 0..len(row) { row[i] = row[i] + by; }
+}
+
+fn main() {
+  // (D) `&` on a vector FIELD writes through.
+  g = Grid { cells: [1, 2, 3] };
+  bump_all(g, 100);
+  assert(g.cells[0] == 101, "field &: cells[0]={g.cells[0]}");
+  assert(g.cells[2] == 103, "field &: cells[2]={g.cells[2]}");
+
+  // `&` on a bare local vector writes through + reads live.
+  v = [10, 20, 30];
+  d = &v;
+  d[1] = 99;
+  assert(v[1] == 99, "bare &: v[1]={v[1]}");
+  assert(d[0] == 10, "bare & read-through: d[0]={d[0]}");
+
+  // grow through the alias (`+=`) reaches the source.
+  d += [40];
+  assert(len(v) == 4, "grow via &: len(v)={len(v)}");
+  assert(v[3] == 40, "grow via &: v[3]={v[3]}");
+
+  // (C/F) a PLAIN bind still COPIES — H-Copy is intact, no `&`.
+  base = [5, 6, 7];
+  copy = base;
+  copy[0] = 1;
+  assert(base[0] == 5, "plain bind copies: base[0]={base[0]}");
+
+  h = Grid { cells: [8, 9] };
+  cc = h.cells;
+  cc[0] = 0;
+  assert(h.cells[0] == 8, "plain field bind copies: cells[0]={h.cells[0]}");
+
+  print("503-vector-reference-alias ok\n");
+}

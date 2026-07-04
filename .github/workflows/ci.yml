@@ -494,8 +494,29 @@ jobs:
         shell: bash
         run: |
           FILTER="not binary(index_hygiene) and not binary(viewer_markdown)"
+          # The Chrome + SwiftShader browser-render tests (html_render, and the
+          # headless-page asyncify resume in html_asyncify) are GPU/headless-browser
+          # FLAKY — they gate the PR path with noise for a layer (WebGL/shader) that
+          # rarely regresses independently.  Keep them OFF the per-PR run; they run
+          # nightly below (like the differential oracle).  The DETERMINISTIC,
+          # node-based html_wasm instantiate-probe (catches the LinkError / import-
+          # mismatch class) STAYS on the PR path — it does not flake.
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            FILTER="$FILTER and not binary(html_render) and not binary(html_asyncify)"
+          fi
           echo "nextest filter: $FILTER"
           cargo nextest run --profile ci -E "$FILTER"
+
+      # Browser-render cross-check (Chrome + SwiftShader): the GPU/headless-browser
+      # tests demoted off the per-PR path just above.  Runs on the DAILY schedule +
+      # push-to-main ONLY, Linux-only, retry-tolerant (the `ci` profile's retries=1),
+      # so a real WebGL/asyncify regression is visible within a day without the flaky
+      # browser render ever blocking a PR.  Self-skips cleanly when the runner has no
+      # chrome/node (recorded in the skip ledger surfaced below).
+      - name: Browser render (nightly — off the flaky PR path)
+        if: github.event_name != 'pull_request' && matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: cargo nextest run --profile ci -E 'binary(html_render) or binary(html_asyncify)'
 
       # @PLN89 differential oracle (formal/operational.md D-op-1/2): the full
       # cross-backend agreement sweep — every `tests/oracle/*.loft` run on BOTH
@@ -738,6 +759,33 @@ jobs:
         # guard.  Reuses the release loft binary built above.  Advisory (this
         # whole job is), so drift shows red without blocking merge.
         run: make features-check
+
+  # Browser-bundle freshness — a change set that edits a committed browser
+  # bundle's SOURCE (currently the Brick Buster .loft) must rebuild + commit the
+  # bundle in the SAME set, or the deployed website goes stale — the recurring
+  # failure documented in doc/claude/GALLERY_CI.md, and the reason the featured
+  # doc/brick-buster.html has drifted behind its source before.  Deterministic +
+  # git-only (no build, so it can NEVER flake on wasm build non-determinism, unlike
+  # a byte-diff of a rebuilt bundle) and PR-scoped (fails only a set that itself
+  # introduces staleness, never an innocent PR).  ADVISORY: not in the
+  # required-status-checks list, so it shows red without blocking the merge until
+  # an admin promotes it to required.  Catches staleness a change INTRODUCES; the
+  # existing stale-bundle debt is a one-off rebuild (release checklist item B).
+  bundle-fresh:
+    name: browser bundle freshness (ubuntu, advisory)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Committed browser bundle rebuilt when its source changes
+        run: |
+          base="${{ github.event.pull_request.base.sha }}"
+          if [ -z "$base" ]; then
+            git fetch --no-tags origin main >/dev/null 2>&1 || true
+            base="origin/main"
+          fi
+          scripts/check_bundle_fresh.sh "$base"
 
   # Markdown-renderer smoke test (the loft-view HTTP renderer).  Extracted from
   # the per-platform `Test` matrix: it tests platform-independent rendering (no

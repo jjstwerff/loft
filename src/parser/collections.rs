@@ -3662,6 +3662,33 @@ use #count instead"
             );
             return placeholder;
         }
+        // D-clo-2 — a stored short `|x|` lambda whose types could not be inferred (it was
+        // assigned without a type context — `g = |y| { y*2 }`) arrives here as
+        // `Function([Unknown], Unknown)`.  Building a result vector of an Unknown element type
+        // panics in `build_comprehension_code` (`def(u32::MAX)`).  Emit the SAME guiding
+        // diagnostic the lambda already gets when used standalone / called directly, instead of
+        // crashing — the inline `.map(|y| …)` form (which has the element-type hint) is unaffected.
+        // D-clo-2 — a stored short `|x|` lambda assigned without a type context (`g = |y| {…}`)
+        // is un-inferrable: it arrives here with a GARBAGE signature (a `text`/`void` default,
+        // or `Unknown`).  `map`'s result element is the lambda's return type, so a `void`/unknown
+        // return builds a `vector<void>` and panics in `build_comprehension_code`
+        // (`def(u32::MAX)`).  Emit the SAME guiding diagnostic the lambda already gets standalone,
+        // instead of crashing.  The inline `.map(|y| …)` form has the element-type hint and a
+        // real return type, so it is unaffected.
+        if !self.first_pass
+            && (fn_ret_type.is_unknown()
+                || matches!(fn_ret_type, Type::Void)
+                || fn_param_types.iter().any(Type::is_unknown))
+        {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "cannot infer the type of the function passed to `map` — a short `|x|` lambda \
+                 stored in a variable has no type context. Pass it inline to `.map(…)`, or use \
+                 the long form `fn(x: <type>) -> <ret> {{ … }}` which declares its types"
+            );
+            return placeholder;
+        }
         // accept both static fn-refs (Value::Int) and fn-ref variables/lambdas.
         let fn_d_nr = if let Value::Int(d) = &list[1] {
             Some(*d as u32)

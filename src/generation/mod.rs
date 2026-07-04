@@ -1317,10 +1317,18 @@ extern crate loft;"
                 // marshal it — NOT a raw `(ptr, count)` pair.  `heap_dep()` is the
                 // canonical set of those types (the same union the interpreter
                 // groups in `compute_sig`); reuse it so the two backends agree.
-                let has_ref_arg = def
-                    .attributes()
-                    .iter()
-                    .any(|a| !a.name.starts_with("__") && a.typedef.heap_dep().is_some());
+                // D-html-vec (2026-07-04): a `vector<T>` arg IS a valid host import —
+                // it marshals as `(ptr, count)` (declared just below), which the JS glue
+                // reads as `new Float32Array(mem, ptr, count)`.  Only NON-vector heap args
+                // (Reference / keyed collections) need a LoftRef handle a host import can't
+                // take, so only those skip.  #423 broadened this to EVERY heap_dep and
+                // silently dropped gl_upload_vertices / gl_upload_canvas / gl_set_mat4 host
+                // imports → Brick Buster (and any --html WebGL program) rendered blank.
+                let has_ref_arg = def.attributes().iter().any(|a| {
+                    !a.name.starts_with("__")
+                        && a.typedef.heap_dep().is_some()
+                        && !matches!(a.typedef, Type::Vector(_, _))
+                });
                 if stores_loft_ref || has_ref_arg {
                     continue;
                 }
@@ -3536,13 +3544,17 @@ extern crate loft;"
             if let Some(target) = bridge_target {
                 return Self::output_wasm_bridge_call(w, def, &target);
             }
-            // A heap-typed arg (Reference / Vector / data-enum / sorted / hash /
-            // index / spacial) makes this a store-touching native — `heap_dep()`
-            // is the canonical set (same union the C-ABI path keys on above).
-            let first_ref_arg = def
-                .attributes
-                .iter()
-                .find(|a| !a.name.starts_with("__") && a.typedef.base().heap_dep().is_some());
+            // A NON-vector heap arg (Reference / data-enum / sorted / hash / index /
+            // spacial) makes this a store-touching native with no host-import shape →
+            // graceful stub.  D-html-vec: a `vector<T>` arg is EXCLUDED — it is a real
+            // host import marshalled as `(ptr, count)` below (the pre-#423 behaviour the
+            // GL upload/matrix natives rely on); #423 lumped it in here and stubbed the
+            // upload calls, so nothing ever reached WebGL.
+            let first_ref_arg = def.attributes.iter().find(|a| {
+                !a.name.starts_with("__")
+                    && a.typedef.base().heap_dep().is_some()
+                    && !matches!(a.typedef.base(), Type::Vector(_, _))
+            });
             let returns_loft_ref = matches!(
                 def.returned().base(),
                 Type::Vector(_, _) | Type::Reference(_, _)
@@ -3595,12 +3607,28 @@ extern crate loft;"
             if attr.name.starts_with("__") {
                 continue;
             }
-            if let Type::Vector(_, _) = attr.typedef.base() {
+            if let Type::Vector(elem_tp, _) = attr.typedef.base() {
                 let var = sanitize(&attr.name);
                 writeln!(
                     w,
                     "  let _vr_{var} = loft::keys::store(&var_{var}, &stores.allocations).get_u32_raw(var_{var}.rec, var_{var}.pos);"
                 )?;
+                // D-html-vec: the browser host import takes the raw `(ptr, count)` of the
+                // vector's element data — the JS glue reads it as `new Float32Array(mem,
+                // ptr, count)`, NOT a LoftStore/LoftRef (the wasm binary has no cdylib
+                // runtime).  Pre-declare the element count + a pointer into the store's
+                // linear memory so the call arm can pass them (pre-#423 behaviour).
+                if self.wasm_browser {
+                    let elem = Self::vector_elem_rust_type(elem_tp);
+                    writeln!(
+                        w,
+                        "  let _vc_{var} = if _vr_{var} == 0 {{ 0u32 }} else {{ loft::keys::store(&var_{var}, &stores.allocations).get_u32_raw(_vr_{var}, 4) }};"
+                    )?;
+                    writeln!(
+                        w,
+                        "  let _vp_{var}: *const {elem} = if _vr_{var} == 0 {{ std::ptr::null() }} else {{ loft::keys::store(&var_{var}, &stores.allocations).addr::<{elem}>(_vr_{var}, 8) as *const {elem} }};"
+                    )?;
+                }
             }
         }
 
@@ -3638,10 +3666,15 @@ extern crate loft;"
         // (a marshalled vector carries that tag too).  `heap_dep()` is the
         // canonical heap set; the outer DbRef's `.store_nr` is the store for
         // both Reference and Vector args.
-        let first_ref_arg = def
-            .attributes
-            .iter()
-            .find(|a| !a.name.starts_with("__") && a.typedef.base().heap_dep().is_some());
+        // D-html-vec: for the browser, a `vector` arg does NOT pin a LoftStore — it is
+        // passed as a raw `(ptr, count)` pair (below), so it must not force the cdylib
+        // `_ls` store-handle machinery.  Exclude it from the store-pin decision in the
+        // wasm path only; the native cdylib path keeps #423's LoftRef convention.
+        let first_ref_arg = def.attributes.iter().find(|a| {
+            !a.name.starts_with("__")
+                && a.typedef.base().heap_dep().is_some()
+                && !(self.wasm_browser && matches!(a.typedef.base(), Type::Vector(_, _)))
+        });
         // `returns_loft_ref` drives the RETURN conversion (`from_loft_ref`);
         // `needs_loft_store` drives the store-handle + guard + `_ls` first arg.
         // They diverge for a Reference-arg fn with a scalar return (imaging's
@@ -3725,6 +3758,20 @@ extern crate loft;"
                     }
                     first = false;
                     write!(w, "var_{var}.as_ptr(), var_{var}.len()")?;
+                }
+                Type::Vector(_, _) if self.wasm_browser => {
+                    // D-html-vec: the browser host import takes the raw `(ptr, count)`
+                    // of the element data (`_vp_{var}` / `_vc_{var}` from the pre-declare
+                    // block), matching the declared `ptr: *const T, count: u32` extern and
+                    // the JS glue's `new Float32Array(mem, ptr, count)`.  This is the
+                    // pre-#423 path #423 replaced with the LoftRef ABI below — which the
+                    // wasm binary has no cdylib runtime to honour (→ the calls were stubbed
+                    // out and Brick Buster rendered blank).
+                    if !first {
+                        write!(w, ", ")?;
+                    }
+                    first = false;
+                    write!(w, "_vp_{var}, _vc_{var}")?;
                 }
                 Type::Vector(_, _) => {
                     // A `vector` arg rides as a `LoftStore` + `LoftRef`, NOT a

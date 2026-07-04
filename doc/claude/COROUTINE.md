@@ -5,6 +5,9 @@
 # Coroutine Design
 
 > **Status: completed in 0.8.3.** CO1.1–CO1.6 implemented; `yield from` (CO1.4) deferred to 1.1+.
+> Open enhancement: **native lazy loop yields** ([Design: lazy loop yields (CL-9)](#design-lazy-loop-yields-cl-9))
+> — make a `yield` inside a loop lazy on `--native` (it is eager today), closing the
+> [formal/coroutines.md](formal/coroutines.md) decided edge.
 
 Coroutines give loft programs generator functions: functions that can suspend
 execution with `yield`, return a value to the caller, and resume from the same
@@ -1135,6 +1138,7 @@ Implement the suspend/resume cycle.
 | CL-5 | Serialisation cost per yield is O(frame depth); deeply recursive `yield from` chains are slow | Flatten recursive generators iteratively using an explicit `vector` stack local |
 | CL-6 | Mutable-reference parameters (`&vector<T>`) in a generator function are not visible to the frame copy | Pass collections by value or use `reference<T>` and write through the reference |
 | CL-8 | On `--native`, a generator yielding a tuple with a **text element** (`iterator<(text, integer)>`) does not yet compile — a yielded `text` is a `&str`, so riding the unified yield codec needs a store intern (`db_from_text`) with a lifetime question still open. Scalar and DbRef-ref tuple elements (`(integer, float)`, `(vector, integer)`, …) work on both backends. | Yield the text from a separate single-`text` generator, or wrap the pair in a record and yield its `reference<S>` |
+| CL-9 | On `--native`, a `yield` **inside a loop** (`for` / `loop` / `while`) is evaluated **EAGERLY** — the `ForLoopBody` segment runs the loop to completion and buffers every yield into a `Vec<i64>` (`generation/coroutine.rs`), then serves them one at a time. Straight-line yields are lazy; the interpreter is fully lazy. So a loop-generator's side effects interleave differently across backends, and an INFINITE or early-`break`-consumed loop-generator runs unboundedly on native. Values agree for a finite, fully-consumed generator. Formal decided edge: [formal/coroutines.md](formal/coroutines.md). | Use **straight-line** yields where laziness matters, or fully drain the loop-generator. The removal design is **[Lazy loop yields (CL-9)](#design-lazy-loop-yields-cl-9)** below. |
 
 ### Native yield codec — status (@PLAN16 phase 02)
 
@@ -1150,6 +1154,105 @@ text-*element* tuples (CL-8), the tuple-through-higher-order / comprehension cel
 `next_dbref` channels once every shape routes through the codec (pure subtraction).
 Full record: the @PLAN16 closure doc at
 [`plans/finished/16-coroutine-validation/README.md`](plans/finished/16-coroutine-validation/README.md).
+
+---
+
+## Design: lazy loop yields (CL-9)
+
+> **Status: designed, not built (2026-07-04).** The removal path for CL-9 — the native
+> eager-loop-yield limitation and the [formal/coroutines.md](formal/coroutines.md) decided edge.
+> A tracked enhancement, M-sized; no dedicated `loft-lang/plans` issue yet (file one when it is
+> scheduled). Written as a *testable design* (an invariant + its failure axes), per the
+> design-protocol skill.
+
+### The problem, precisely
+
+Native coroutine lowering (`generation/coroutine.rs`) scans a generator body into **segments**
+(`Simple`, `YieldFrom`, `ForLoopBody`) and emits a state machine (`LoftCoroutine::next_i64`).
+`Simple` (a straight-line `yield`) is a real **lazy state-machine step** — control returns to the
+consumer at the yield and resumes after it. `ForLoopBody` is the shortcut: it **runs the loop
+eagerly and buffers every yield into a `Vec<i64>`**, then serves the buffer — chosen (the code
+comment) to avoid "a full state-machine decomposition of the range-iteration IR." The interpreter,
+by contrast, serialises the whole frame at each yield and is lazy everywhere. CL-9 is exactly this
+gap.
+
+### The invariant (the hypothesis to build against)
+
+> **A `yield` returns control to the consumer BEFORE the next generator statement runs — in a
+> loop body no less than in straight-line code.** Equivalently: the generator's observable step
+> sequence is `next()`-driven, one body-slice per advance, with the loop's *cursor* (index /
+> iterator position) and any loop-carried locals PERSISTED in the coroutine frame across advances.
+
+If that invariant holds, `--native` matches the interpreter and formal G-Call/G-Next, and the
+decided edge closes.
+
+### The mechanism (the lever — persist the loop cursor, decompose the loop into states)
+
+The two halves are already in the tree:
+
+1. **State persistence — REUSE the existing machinery.** `coroutine_persistent_locals` /
+   `coroutine_persistent_vars` (`generation/coroutine.rs`, `dispatch.rs`) already lift a
+   generator's locals that live across a yield into the coroutine **struct** (a heap record —
+   the same heap-state-persistence approach a **closure record** uses; the coroutine struct *is*
+   the analog). The fix ADDS the loop's **cursor** (the `#index` / range counter / iterator
+   position) and any loop-carried locals to that persistent set — literally "add the loop
+   variable to the coroutine state to remember through a pass."
+2. **Control decomposition — the new work.** Replace the `ForLoopBody` eager-buffer segment with
+   **resumable states**: a *loop-header* state (test the condition / advance the cursor from its
+   persisted value), a *body* state that runs to the `yield`, writes the value to the yield codec,
+   and returns (leaving the cursor persisted), and a *back-edge* so the next `next_i64` re-enters
+   the header. This is the standard `async`/`await` loop-to-state-machine transform — Rust
+   expresses it fine; loft simply has not decomposed loops yet.
+
+### Failure axes (probe each before trusting the transform — where it gets hard)
+
+The single-yield range/vector loop is easy; the transform's cost is dominated by these axes, each
+a state the decomposition must model:
+
+- **A1 — single `yield` in a `for i in 0..n` / `for x in vec`** — one header + one body state,
+  persist the index. The 80% case; do this first.
+- **A2 — multiple yields per iteration** (`for … { yield a; yield b }`) — each yield is its own
+  state; the back-edge targets the header, but re-entry lands at the *next* yield-state.
+- **A3 — a `yield` inside an `if`/`match` inside the loop** — conditional states; the resume point
+  depends on which branch yielded.
+- **A4 — nested loops with yields** — a cursor per loop level, all persisted; the state graph is
+  the product.
+- **A5 — `while` / bare `loop` (not just `for`)** — the header is a general condition, and a bare
+  `loop { yield }` is the infinite-generator case CL-9's hazard names — the whole point of lazy.
+- **A6 — text / tuple yields in a loop** — interacts with CL-8 (a yielded text is a `&str`); a
+  store-derived text live across the loop back-edge must be interned/persisted (CL-2b / CL-7).
+
+### The incremental plan (ship a slice, keep the fallback)
+
+1. **Slice 1 — A1 only.** Decompose a single-yield `for` over a range or vector into header+body
+   states, persist the index. Keep the eager `Vec` buffer as the FALLBACK for A2–A6 (a
+   segment-scanner predicate: "simple single-yield counted loop → lazy; else → eager"). This
+   closes CL-9 for the common case and shrinks the decided edge to "only complex loops."
+2. **Slice 2 — A2/A3** (multiple + conditional yields): generalise the segment scanner to emit one
+   state per yield within the loop body.
+3. **Slice 3 — A4/A5** (nested + `while`/`loop`): a cursor stack; the infinite-generator case then
+   works lazily on native (the biggest user win).
+4. **Slice 4 — A6**: fold in the CL-8/CL-2b text-in-loop interning.
+
+Each slice keeps the eager fallback for the axes it hasn't reached, so no generator regresses.
+
+### Verification (how each slice is proven)
+
+The falsifying program is a **side-effect interleaving** check the value-only oracle currently
+misses: `fn g() -> iterator<integer> { for i in 0..3 { print("y{i} "); yield i } }` consumed by
+`for x in g() { print("g{x} ") }` must print **`y0 g0 y1 g1 y2 g2`** (lazy) on `--native`, not
+`y0 y1 y2 g0 g1 g2` (eager). Graduate it to `tests/oracle/` beside the straight-line
+`26-coroutine-laziness.loft` guard; add an **infinite-generator + early `break`** case (must
+terminate on native) once Slice 3 lands. `tests/coroutine_matrix.rs` + the differential oracle
+guard the value equality throughout.
+
+### Reassertion-site count (the design-protocol tell)
+
+The invariant is asserted at ONE place — the segment scanner's "lazy-vs-eager" predicate +
+the `ForLoopBody` codegen it feeds. Persistence rides the existing `coroutine_persistent_*`
+chokepoint (one place). So `N ≈ 1` re-assertion site with the eager fallback as the explicit,
+loud default — the transform is additive, not a spray. That is the signal this is a bounded
+enhancement, not an open-ended rewrite.
 
 ---
 

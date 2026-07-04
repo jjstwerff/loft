@@ -1,0 +1,15 @@
+// coroutines.md G-Call/G-Next — STRAIGHT-LINE yields are LAZY on both backends: the
+// generator's side effects interleave with the consumer's, one value per advance.
+// (Loop-based yields are eager on native — a documented decided edge, NOT tested here.)
+fn steps() -> iterator<integer> {
+    print("a ");
+    yield 1;
+    print("b ");
+    yield 2;
+    print("c ");
+    yield 3;
+}
+fn main() {
+    for x in steps() { print("g{x} "); }                  // a g1 b g2 c g3
+    print("\n");
+}

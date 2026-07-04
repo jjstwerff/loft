@@ -589,6 +589,29 @@ pub fn test() {
     );
 }
 
+/// D-clo-2 (formal/closures.md) — a stored short `|x|` lambda passed to `.map` used to
+/// PANIC at `data.rs:4569` (building a `vector<void>` result of the un-inferrable return
+/// type of a lambda assigned without a type context).  It now emits a clean "cannot infer"
+/// diagnostic instead.  Parsing to completion (NO PANIC) is the regression guard; the
+/// diagnostic assertion proves the guard fired rather than accidentally compiling.
+#[test]
+fn dclo2_stored_short_lambda_map_no_crash() {
+    let mut p = Parser::new();
+    let (data, db) = cached_default();
+    p.data = data;
+    p.database = db;
+    p.parse_str(
+        "fn test() { g = |y| { y * 2 }; r = [1, 2, 3].map(g); r[0] }",
+        "dclo2",
+        false,
+    );
+    let fired = p.diagnostics.entries().iter().any(|e| {
+        e.to_string_compact()
+            .contains("cannot infer the type of the function passed to")
+    });
+    assert!(fired, "D-clo-2 guard diagnostic did not fire (crash risk)");
+}
+
 /// P290 sibling — off-by-one in `copy_claims_hash_body` SEGV.  After
 /// the lock-broadening fix above unblocked the callee, deep-copying
 /// the returned struct (which contains a populated `hash<T[key]>`

@@ -272,6 +272,12 @@ pub struct Parser {
     /// Set by `parse_in_range` when `rev(collection)` (without a `..` range) is parsed.
     /// Consumed by `fill_iter` to add the reverse bit (64) into the `on` byte of OpIterate/OpStep.
     reverse_iterator: bool,
+    /// D-key-1: true only while parsing the *iterable* of a `for`/comprehension (set with
+    /// save/restore around the iterable expression in `parse_in_range`).  A keyed range /
+    /// partial-key subscript produces a `for`-only iterator (`Value::Iter`); `parse_key`
+    /// reads this flag to reject that subscript in a value position (`x = coll[lo..hi]`)
+    /// with a clean diagnostic instead of a parse/codegen panic.
+    iterable_context: bool,
     /// O8.5: range bounds captured by `parse_in_range_body` for const-unroll detection.
     pub(crate) last_range_from: Option<Value>,
     pub(crate) last_range_till: Option<Value>,
@@ -609,6 +615,7 @@ impl Parser {
             context: u32::MAX,
             first_pass: true,
             reverse_iterator: false,
+            iterable_context: false,
             last_range_from: None,
             last_range_till: None,
             vars: Function::new("", "none"),
@@ -1073,6 +1080,7 @@ impl Parser {
         if lvl != Level::Error && lvl != Level::Fatal {
             self.first_pass = false;
             self.reverse_iterator = false;
+            self.iterable_context = false;
             self.applied_imports.clear();
             self.deferred_unknown.clear();
             self.data.reset();
@@ -9983,6 +9991,22 @@ mod plan86_admission_tests {
                     "struct In { hp: integer }\nstruct Ent { it: In }\nfn evil(e: Ent) -> integer { e.it.hp = 0; e.it.hp }\n",
                 ),
             ),
+            (
+                // @PLN86 D-cap-2 — a lambda BODY reaching an ungranted host cap. The
+                // admission walk now DESCENDS into the lambda def (it is marked
+                // sandboxed under the enclosing profile), so the reach is checked and
+                // rejected — instead of the lambda escaping, OR being wholesale-rejected
+                // as an untagged leaf without naming the real reach.
+                "cap: lambda body reaches ungranted host (D-cap-2)",
+                adm(
+                    &["fn:evil"],
+                    &["code"],
+                    &[],
+                    &format!(
+                        "{secret}fn evil() -> integer {{ v = [1].map(|y| {{ secret() }}); v[0] }}\n"
+                    ),
+                ),
+            ),
         ];
         for (name, e) in &escapes {
             assert!(!e.is_empty(), "ESCAPE NOT REJECTED — {name}");
@@ -10033,6 +10057,32 @@ mod plan86_admission_tests {
                     &["code"],
                     &["danger#read"],
                     &format!("{secret}fn ok() -> integer {{ secret() }}\n"),
+                ),
+            ),
+            (
+                // @PLN86 D-cap-2 — a lambda whose body touches ONLY script-owned data is
+                // now usable in sandboxed code: the admission walk descends into the
+                // lambda def and finds no host reach, so it admits (previously EVERY
+                // lambda was rejected wholesale as an untagged `__lambda_N` leaf).
+                "script-only lambda is usable (D-cap-2)",
+                adm(
+                    &["fn:ok"],
+                    &["code"],
+                    &[],
+                    "fn ok() -> integer { s = 0; for x in [1,2,3].map(|y| { y * 2 }) { s += x } s }\n",
+                ),
+            ),
+            (
+                // @PLN86 D-cap-3 — a write to a SCRIPT-OWNED vector element is Cap-Own. A local
+                // vector never aliases host state (every whole-value bind copies), so `v[i] = …`
+                // on a local is admitted — the twin of the `raw-write: index` ESCAPE above, whose
+                // `v[i] = …` is on a PARAMETER root (which DOES mutate the caller, so it rejects).
+                "script-owned vector element write (D-cap-3)",
+                adm(
+                    &["fn:ok"],
+                    &["code"],
+                    &[],
+                    "fn ok() -> integer { v = [1, 2, 3]; v[0] = 9; v[0] }\n",
                 ),
             ),
         ];
@@ -10130,6 +10180,18 @@ mod plan86_admission_tests {
             "capability world\ncapability spawn.count\n\
              fn spawn(kind: text, count: integer = 1 spawn.count#default) -> integer world#append;\n#native\n\
              fn f() -> integer { spawn(\"g\", 5) }\n",
+        );
+
+        // ── @PLN86 D-cap-2: a lambda BODY reaching a host cap — gated by descending
+        //    into the lambda def (marked sandboxed under the enclosing profile) ──
+        twin(
+            "lambda body reaches host cap (D-cap-2)",
+            &["code"],
+            "danger#read",
+            &[],
+            &["danger#read"],
+            "capability danger\nfn secret() -> integer danger#read;\n#native\n\
+             fn f() -> integer { v = [1].map(|y| { secret() }); v[0] }\n",
         );
 
         // ── undeclared capability link (typo) — RED + corrected-spelling GREEN twin ──

@@ -1,6 +1,6 @@
 [package]
 name = "loft"
-version = "2026.6.0"
+version = "2026.7.0"
 edition = "2024"
 authors = ["Jurjen Stellingwerff"]
 license = "LGPL-3.0-or-later"

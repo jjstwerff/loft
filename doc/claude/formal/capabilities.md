@@ -13,10 +13,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 >    satisfies the judgment vacuously (`Cap-Trusted`). The judgment is parameterized by a
 >    profile `P` — it is a refinement *layered on* the core under a policy, not part of what
 >    every program obeys.
-> 2. **Aspirational.** The call gate is enforced today (`src/sandbox.rs::admit_capabilities`);
->    the field-level rights and the parameter lock are **designed, not built** — so the
->    deviation list is the active work ([@PLN86 §7](../plans/86-sandbox-subset-flag/README.md)
->    F4–F7). Writing the rules now is direction: it turns "what exactly may a mod do?" into a
+> 2. **Was aspirational, now BUILT.** The call gate (incl. closures — a lambda body is descended
+>    into), the field-level rights, the parameter `#default` lock, AND the owned-vs-host write
+>    classification are all enforced today (`src/sandbox.rs`: `admit_capabilities`,
+>    `field_*_violations`, `param_lock_violations`; `parser`: `mark_lambda_sandboxed`,
+>    `raw_write_is_host_owned`) — the deviation list ([@PLN86 §7](../plans/86-sandbox-subset-flag/README.md))
+>    reached 0. Writing the rules first was direction: it turned "what exactly may a mod do?" into a
 >    relation the admission walk is checked against.
 >
 > The model with worked examples lives in [SANDBOX.md S10](../SANDBOX.md) +
@@ -110,49 +112,76 @@ edge the rules can't express, i.e. a signal the *rule* is wrong (README), not a 
 
 ## Deviations
 
-OPEN: **3**. The call gate (`Cap-Call`) is enforced today; the rest is designed-not-built,
-so the deviations are the migration.
+OPEN: **0** — ✓ the capabilities area is now FORMAL. `Cap-Call` (the call gate + closures),
+`Cap-Read`/`Cap-Write` (the field rights), `Cap-Set` (the parameter `#default` lock), AND `Cap-Own`
+(script-owned mutation, incl. vector-element writes) are all enforced today, each with a RED/GREEN
+adversarial pair. Every host-touching operation in a restricted context is decided by exactly one
+of the six rules.
 
-### D-cap-1 — the parameter `#default` lock is not enforced (Cap-Read/Write are now done)
-- **Violates:** Cap-Set
-- **Where:** `src/parser/` + `src/sandbox.rs`. **Cap-Read / Cap-Write are now enforced** —
-  field `#read` (`field_read_violations`), `#update` (`field_update_violations`), and `#append`
-  (`field_append_violations`) gate per-field, parsed by `parse_field_links` into `member_access`
-  ([@PLN86 §7](../plans/86-sandbox-subset-flag/README.md) F3–F6, landed). What remains is
-  **Cap-Set**: the `…#default` parameter lock does not yet parse or gate (the §7 6.9 / F7 work),
-  so an argument override is never restricted.
-- **Effect:** a host can mark a function callable but cannot yet pin a specific argument to its
-  default — `spawn(count: 5)` is not gated even when the host wants `spawn.count#default`.
-- **Status:** OPEN — @PLN86 6.9 (the parameter-lock check). Group-existence validation +
-  `member_access` IR persistence (6.8) ride alongside it.
-- **Removal:** parse a `…#default` link onto a parameter; at a sandboxed call site, check a
-  non-default argument's lock token against `P`.
+**`Cap-Set` (the parameter `#default` lock) — CLOSED (2026-07-04).** A `group#default` link on a
+parameter (`count: integer = 1 spawn.count#default`) now parses (`definitions.rs`, first pass →
+`pending_param_locks` → `param_locks`) and gates at a sandboxed call site: an argument that
+DIFFERS from the parameter's default without the lock granted is a violation
+(`param_lock_violations`; an argument equal to the default is not an override). Group-existence
+validation + `member_access` IR persistence (6.8) landed alongside. Proven by the non-vacuous
+RED/GREEN twin `param #default lock override` in `access_corpus_red_green` (`src/parser/mod.rs`):
+`spawn("g", 5)` is rejected under `world#append` alone and admitted once `spawn.count#default` is
+granted.
 
-### D-cap-2 — a closure may carry authority across the boundary
+### D-cap-2 — a closure may carry authority across the boundary — CLOSED (2026-07-04)
 - **Violates:** Cap-Call (completeness — an indirect call must resolve to its callee's gate)
-- **Where:** the L4 fn-ref surface ([@PLN86](../plans/86-sandbox-subset-flag/README.md) 1.3).
-  A non-capturing fn-ref is recorded at its creation site and so cannot escape the call
-  check; a **closure that captures host state** and is invoked later is the residual not yet
-  closed.
-- **Effect:** a captured host capability could be exercised through a closure without the
-  call site that smuggled it being re-checked.
-- **Status:** OPEN — partially closed (non-capturing fn-refs caught); the capturing-closure
-  case is its own pass.
-- **Removal:** carry a closure's captured host references into the reachable-set so its
-  invocation is gated as the original reach was.
+- **What it WAS (corrected by probing — the earlier framing was off).** A lambda def created in
+  a sandboxed body was never added to `def_sandbox`, so the admission walk treated it as an
+  **untagged leaf** (`sandboxed \`f\` reaches \`__lambda_N\` … neither an allowed library nor a
+  granted capability`). That was SOUND (no escape — every lambda rejected) but a **blunt
+  over-reject**: even a script-only `[1,2,3].map(|y| y*2)` was rejected, making lambdas unusable
+  in sandboxed code, and a lambda that DID reach a host cap was rejected without naming the real
+  reach.
+- **The fix (`src/parser/vectors.rs::mark_lambda_sandboxed`, called from `parse_lambda` /
+  `parse_lambda_short`).** A lambda created while its enclosing def is sandboxed is itself marked
+  sandboxed under the SAME profile, so the admission walk **DESCENDS into its body** (checks its
+  calls / fn-refs / raw-writes precisely) instead of stopping at an untagged leaf. Nested lambdas
+  inherit transitively; a no-op outside a sandbox (`def_sandbox` empty), so non-sandbox lowering
+  is byte-identical.
+- **Why this is complete for the closure class** (probed): (1) a host call in the lambda body →
+  caught by descending, naming the reach; (2) a captured host **fn-ref** (`cap = host_fn; …|y|
+  cap()…`) → gated at its CREATION site in the enclosing def (the `cap = host_fn` Set that
+  `referenced_defs` records — the capture cannot outrun that); (3) a raw write to a captured host
+  **struct** is not an escape — writing a captured struct field is an unsupported construct that
+  panics codegen on BOTH backends, so it can never run. A fn-ref laundered through a host-call
+  RETURN then captured is the separate L4-return residual (`sandbox.rs::referenced_defs` §RESIDUAL,
+  not closure-specific), not D-cap-2.
+- **Proven by:** the escape `cap: lambda body reaches ungranted host (D-cap-2)` + the control
+  `script-only lambda is usable (D-cap-2)` in `admission_escape_suite_rejects_every_breakout`, and
+  the non-vacuous RED/GREEN twin `lambda body reaches host cap (D-cap-2)` in
+  `access_corpus_red_green`.
 
-### D-cap-3 — `Cap-Own` rests on an incomplete owned-vs-host classification
-- **Violates:** Cap-Own (soundness — the owned/host split must be total to be trusted)
-- **Where:** the provenance predicate is [ownership.md](ownership.md)'s, whose `D-own-2`
-  (not every binding/path has a computed ownership fact) is OPEN. Where provenance is
-  unknown, `Cap-Own` cannot be decided soundly and admission must fall back to "treat as
-  host" (conservative) — which is safe but rejects legitimate script-owned mutation.
-- **Effect:** capability soundness is bounded by ownership completeness — the same @PLN85
-  dependency [SANDBOX.md](../SANDBOX.md) names ("admission narrows the language; the store
-  work removes the escape hatch").
-- **Status:** OPEN — tracks ownership.md D-own-2; closes with it.
-- **Removal:** a complete owned-vs-host fact per binding (ownership.md O-Complete), which
-  `Cap-Own` then reads.
+### D-cap-3 — script-owned vector-element writes were rejected — CLOSED (2026-07-04)
+- **Violates:** Cap-Own (completeness — a script-owned mutation should be admitted, not rejected)
+- **What it WAS.** `src/parser/expressions.rs::raw_write_is_host_owned` gates a raw field/index
+  write before it is recorded. It admitted the common owned case (`s.f = v` on a non-parameter
+  local of a script-defined struct) but rejected EVERY write whose root type was not a
+  `Reference(struct)` — so a **script-owned vector element write** `v[i] = e` on a local `v`
+  fell to host and was rejected. Sound but incomplete.
+- **The probe redrew the boundary (the design note's `ownership_of` plan was NOT needed).** The
+  adversarial matrix + behavioural tests on BOTH backends proved that a local vector NEVER aliases
+  host state: every whole-value vector bind COPIES — a literal, a copy `c = v`, a projection
+  `fv = e.items`, AND even a `r = &v` ref-bind all leave the source untouched (`r[0] = 99` ⇒ the
+  caller's `orig[0] == 1`). The ONLY write that mutates host/caller state is a DIRECT write to a
+  **parameter** root (`v[i] = …` ⇒ caller's `orig[0] == 99`), whose root is an argument. So the
+  invariant is simply *a raw write is host iff its target root is a host parameter (or a host-typed
+  struct local)* — the `arguments()` check already IS the vector boundary; no `ownership_of`
+  consultation, no aliasing residual to fear (the feared `&`/projection cases are provably copies).
+- **The fix.** `raw_write_is_host_owned` gained a `Type::Vector(..) => false` (owned) arm: a
+  non-parameter local vector is script-owned, so `v[i] = e` is `Cap-Own`. A `&`/`RefVar` borrow, a
+  scalar, or an unresolvable base still falls to the conservative host default; a parameter root is
+  still caught by the `arguments()` check first. The struct handling is unchanged.
+- **Proven by:** the escape `raw-write: index` (a `v[i] = …` on a PARAMETER root → rejected, the
+  host effect) + the new control `script-owned vector element write (D-cap-3)` (a `v[i] = …` on a
+  LOCAL → admitted) in `admission_escape_suite_rejects_every_breakout`; 39 plan86 + 625 lib +
+  interp suite green. RESIDUAL (conservative, safe): a `v[i] = …` on a locally-owned KEYED
+  collection (hash/sorted/…) still falls to the host default — rarer, and an over-reject not an
+  escape; widen the arm the same way if a consumer needs it.
 
 ---
 
@@ -163,12 +192,13 @@ This area's **falsifying programs** are the adversarial escape suite
 program that *tries* to perform a host operation outside its grants — an ungranted call, an
 indirect fn-ref call, a raw write — and the rule it must hit is `Cap-Deny`. The positive
 controls (a granted call, a read, a script-owned mutation) are the `Cap-Call` / `Cap-Read` /
-`Cap-Own` side. As F4–F7 land, the suite gains the field-right and parameter-lock breakouts
-(update a read-only field; append where only update is granted; pass a non-default value to a
-locked parameter) — each a program whose admission must flip from today's coarse verdict to
-the exact rule above.
+`Cap-Own` side. The field-right and parameter-lock breakouts have landed as RED/GREEN twins in
+`access_corpus_red_green` (update a read-only field; append where only update is granted; pass a
+non-default value to a locked parameter) — each a program whose admission flips to the exact rule
+above, its GREEN twin proving the rejection is the rule firing, not an incidental reject.
 
-The area is **formal when OPEN reaches 0**: every host-touching operation in a restricted
-context decided by exactly one of the six rules, over a complete provenance fact (D-cap-3) —
-at which point an admitted script provably performs no host effect outside its profile, by
-construction.
+The area is **formal — OPEN has reached 0** (2026-07-04): every host-touching operation in a
+restricted context is decided by exactly one of the six rules — the call gate (incl. closures),
+field read/update/append, the parameter `#default` lock, and script-owned mutation — so an
+admitted script provably performs no host effect outside its profile, by construction. The
+falsifying escape suite + the RED/GREEN access corpus are the standing evidence.

@@ -18,10 +18,17 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > Rough spot #3 from [FORMALIZATION.md](../FORMALIZATION.md). Pinned-behaviour sources:
 > [LOFT.md § null](../LOFT.md) (in-band sentinels) and [LOFT.md § Arithmetic safety](../LOFT.md)
 > (overflow / divide-by-zero — under C80, these yield **null and continue**; `??` is the
-> null-fallback). Scope note: this covers the scalar core (values, arithmetic, the
-> uncomputable→null discipline, evaluation order, assignment, `if`, sequencing). Heap/store
-> steps, iterators, and coroutines are **not yet** written — the interpreter remains their
-> spec (D-op-1).
+> null-fallback). Scope note: this file covers the scalar core (values, arithmetic, the
+> uncomputable→null discipline, evaluation order, assignment, `if`, sequencing). The rest of
+> the operational semantics is split into sibling files (all 2026-07-04): [heap.md](heap.md)
+> (store alloc/read/write/copy/free), [iteration.md](iteration.md) (`for` + combinators),
+> [coroutines.md](coroutines.md) (generators), [concurrency.md](concurrency.md) (`par`),
+> [calls.md](calls.md) (function call/return + parameter binding), [matching.md](matching.md)
+> (`match` + exhaustiveness), [tuples.md](tuples.md), [closures.md](closures.md) (lambdas /
+> closures / fn-refs — written WITH 2 open deviations, the only operational file that has them).
+> Still NOT written — the interpreter remains their spec (tracked under D-op-1): **text
+> formatting** (`"{x}"` interpolation) and **generics/interfaces** (a static/typing concern →
+> types.md).
 
 ## Notation
 

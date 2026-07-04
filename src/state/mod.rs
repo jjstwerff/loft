@@ -3544,6 +3544,13 @@ impl State {
         crate::timeout::checkpoint_fn("run-interpret", "<entry>", "", 0);
         let _ = name;
         let d_nr = data.def_nr(&format!("n_{name}"));
+        // A missing entry function (e.g. running a file with no `fn main()`, or a
+        // test-runner entry that did not survive compilation) must be a clean message,
+        // not a `def(u32::MAX)` "Unknown definition" panic.
+        if d_nr == u32::MAX {
+            eprintln!("loft: no `{name}` function to run");
+            return;
+        }
         let pos = data.def(d_nr).code_position;
 
         // Expose bytecode, library, and Data to native functions

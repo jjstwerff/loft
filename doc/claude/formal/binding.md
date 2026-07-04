@@ -28,8 +28,9 @@ SPDX-License-Identifier: LGPL-3.0-or-later
   element `v[i]`.
 - **`&τ`** — the **reference type**: the type of a variable that is a live link to a
   τ-lvalue (read- **and** write-through). A type constructor, like `vector<τ>`.
-- **alias** — heap reference-default: a binding to a heap value shares the source;
-  field/element mutation writes through, with no `&` needed.
+- **alias** — a binding that SHARES the source (field/element mutation writes through).
+  A plain bind is NOT an alias (it copies, `B-Copy`); you get one with `&` (`d = &v`,
+  `B-Ref-Alias`), or for free when reading a struct-typed projection (`B-View`).
 
 ---
 
@@ -96,15 +97,32 @@ source's current value; write it and the source changes (`a=3; b=&a; b=4` leaves
 because it lives in the type. (In the type system, this read-through is the conversion
 rule `C-Ref` in [types.md](types.md): a `&τ` is accepted wherever a `τ` is.)
 
-### `&` vs reference-default — where the annotation is load-bearing
+### `&` vs the default — a plain bind COPIES; `&` links; a struct projection views
 
 ```
-  (B-HeapAlias)   a heap-typed binding ALREADY aliases the source (reference-default),
-                  so for a heap field/element mutation the `&τ` annotation is REDUNDANT
-                  (the W4 lint, not an error).
-  (B-ScalarCopy)  a scalar-typed binding COPIES; the `&τ` annotation is exactly what
-                  makes a scalar binding a link instead of a copy.
+  (B-Copy)        a PLAIN bind COPIES the source — a scalar (`d = a`) AND a heap
+                  WHOLE-VALUE (`d = v`, `d = self.data`): the bound variable is
+                  INDEPENDENT, and mutating it does NOT reach the source.  This is
+                  [heap.md](heap.md) H-Copy (`fv = e.items; fv[0]=99` leaves `e.items[0]`).
+  (B-Ref-Alias)   the `&τ` annotation makes ANY binding — scalar OR heap — a live LINK
+                  to the source instead of a copy.  `d = &v` / `d = &self.data` ALIAS the
+                  vector: `d[i] = x` (and `d += …`) write THROUGH to the source, which is
+                  NON-OWNING (the source frees the store).  `&` is how you OPT INTO
+                  aliasing; without it a heap bind copies.  This is B-Ref-Write for a
+                  vector lvalue.
+  (B-View)        a STRUCT-typed PROJECTION (`s = o.inner`, `e = v[i]` where the element
+                  IS a struct) is a VIEW that aliases WITHOUT `&` ([heap.md](heap.md)
+                  H-View: `c = o.i; c.v=9` ⇒ `o.i.v==9`) — the one place aliasing is the
+                  default, because a struct projection names an interior place, not a
+                  fresh whole value.
 ```
+
+**In words.** Binding copies by default — a scalar and a whole vector alike (`d = v`
+gives you an independent copy). Writing `&` at the bind turns it into a live link, so
+`d = &self.data; d[i] = x` writes through to the source (a game can grab a sub-vector and
+mutate it in place). The one exception is reading a *struct-typed* field or element
+(`o.inner`, `v[i]`): that is a view onto the interior, and mutating it is already
+visible — no `&` needed there.
 
 ---
 
