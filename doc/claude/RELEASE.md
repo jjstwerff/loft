@@ -257,13 +257,16 @@ stale website" class; theme-aligned with `2026-07` library hardening):**
 
 **C. Library ecosystem — a coherent registry on day one:**
 
-- [ ] Merge PR #18 (`lima-default-random-0.3.0`) and **re-publish** the four
-  type-flip-migrated libs pinned to `>=2026.7`: `arguments` 0.1.3, `random`
-  0.3.0, `regex` 0.2.1, `cbor` 0.1.1 (all verified green interp+native
-  2026-07-04). Libraries follow their own cadence and do **not** gate the
-  language tag (§ Explicitly out of scope), but shipping the July registry with
-  them red would undercut the cycle's own "library hardening" theme.
-- [ ] `loft install` end-to-end smoke against the updated signed index.
+- [x] **Merge PR #18 + republish — DONE 2026-07-04.** PR #18
+  (`lima-default-random-0.3.0`) merged to `loft-libs-core` main (commit 2a8aed5b,
+  by jjstwerff). Registry republished via `registry_maintain.sh` (commit `bb191e7`
+  on `loft-lang/registry`): `arguments` 0.1.3, `random` 0.3.0, `regex` 0.2.1,
+  `cbor` 0.1.1, **and** `crypto` 0.3.5 (also stale) — 5 GitHub releases cut, each
+  sha256-verified against its tarball, the index re-signed (trust-gate verified,
+  the re-sign foot-gun avoided) and pushed. Coverage check now **0 findings across
+  21 libraries** — the July registry is coherent.
+- [ ] `loft install` end-to-end smoke against the updated signed index (allow ~1h
+  CDN propagation for `@latest`; pin the exact version to verify sooner).
 
 **D. Release hygiene:**
 
