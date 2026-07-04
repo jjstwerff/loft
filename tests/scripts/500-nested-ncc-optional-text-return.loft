@@ -17,9 +17,9 @@ fn main() {
     a = first_tag([Slot { id: 1, tag: null }]);
     b = first_tag([Slot { id: 2, tag: "gold" }]);
     c = first_tag([]);
-    assert(a == "none", "null-tag {a}");
-    assert(b == "gold", "present-tag {b}");
-    assert(c == "none", "empty-vec {c}");
+    assert(a == "none", "null-tag {a}");         // present element, null tag -> "none"
+    assert(b == "gold", "present-tag {b}");       // present element, present tag
+    assert(c == "?", "empty-vec {c}");            // OOB -> default Slot{tag:"?"}, tag non-null -> "?"
     assert(direct_tag(Slot { id: 3, tag: null }) == "none", "direct null");
     assert(direct_tag(Slot { id: 4, tag: "silver" }) == "silver", "direct present");
     println("500-nested-ncc-optional-text-return ok");
