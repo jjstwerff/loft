@@ -16,17 +16,19 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > the Deviations are exactly where today's implementation falls short — written so they can be
 > driven to zero.
 
-## The two forms — one captures, one does not
+## The two forms — pure syntactic sugar (both capture)
 
-loft has two lambda syntaxes, and the difference is **capture**:
+loft has two lambda syntaxes, and (since 2026-07-04, D-clo-1 closed) they are **pure syntactic
+sugar for the same thing** — both capture outer variables identically. The only difference is
+ergonomics:
 
-| form | captures outer locals? | use |
+| form | captures outer locals? | ergonomics |
 |---|---|---|
-| `fn(p: T, …) -> R { body }` | **yes** — a full closure | store, pass, return, capture the environment |
-| `\|p, …\| { body }` / `\|\| { body }` | **no** — params + globals only | the lightweight `map`/`filter` argument |
+| `fn(p: T, …) -> R { body }` | **yes** | explicit parameter + return types; use anywhere |
+| `\|p, …\| { body }` / `\|\| { body }` | **yes** | parameter types INFERRED from context (a `map`/`filter` callee's element type); no `->` return annotation |
 
 A bare function name (`f`, not `f()`) is a **function reference** — a first-class value of type
-`fn(T…) -> R`, the non-capturing degenerate case.
+`fn(T…) -> R`, a closure with an empty environment.
 
 ## Notation
 
@@ -41,20 +43,18 @@ pair `⟨code, env⟩`: the lambda body plus a captured environment (the outer v
 ### Construction — a closure captures the outer variables it names
 
 ```
-  (L-Fn)     fn(p₁…pₙ) -> R { body }   evaluates to a closure ⟨body, env⟩ where env captures every
-             OUTER variable the body references but does not bind — its environment.
-  (L-Short)  |p₁…pₙ| { body }  /  || { body }   evaluates to a NON-capturing lambda: its body may
-             reference only its own parameters and GLOBAL functions (a fn-ref environment).
+  (L-Fn)     fn(p₁…pₙ) -> R { body }  AND  |p₁…pₙ| { body } / || { body }   both evaluate to a
+             closure ⟨body, env⟩ where env captures every OUTER variable the body references but
+             does not bind.  The two forms are equivalent modulo type-annotation ergonomics.
   (L-Ref)    a bare function name f (in a value position / fn-typed context) is a fn-ref value —
              a closure with an empty environment.
 ```
 
-**In words.** Writing `fn(y) -> integer { y + x }` builds a closure that **captures** `x` from the
-surrounding scope; writing `|y| { y + x }` builds a lightweight lambda that does **not** capture —
-its body sees only `y` and globals. A bare `f` (a function's name used as a value) is a
-first-class function reference. Which form to use is a real choice: the `|…|` form for a
-`map`/`filter` callback that needs nothing from outside; the `fn(){}` form when the body must
-close over a local.
+**In words.** Both `fn(y) -> integer { y + x }` and `|y| { y + x }` build a closure that
+**captures** `x` from the surrounding scope — they are the same construct, differing only in that
+the `|…|` form infers its parameter types from context (so it is the ergonomic `map`/`filter`
+callback) while the `fn(){}` form spells them out (so it works where no type context is
+available). A bare `f` (a function's name used as a value) is a first-class function reference.
 
 ### Capture semantics — scalar by value at creation, heap shared
 
@@ -92,23 +92,18 @@ with the closure's environment in scope.
 
 ## Deviations
 
-OPEN: **2**. (The Rules above are the target; these are where the code breaks them.)
+OPEN: **1**. (The Rules above are the target; the remaining one is where the code breaks them.)
 
-### D-clo-1 — the `|…|` lambda cannot capture, and says so unhelpfully
-- **Violates:** L-Fn / L-Short (the two forms should differ in *ergonomics*, not leave a user
-  stuck) — arguably the split is intended (a lightweight non-capturing lambda), but the boundary
-  is a **bare error**, not a guided one.
-- **Where:** `src/parser/vectors.rs::parse_lambda_short`. A `|y| { y + x }` referencing an outer
-  local `x` fails with `Unknown variable 'x'` — the same message as a genuine typo, with no hint
-  that the `fn(){}` form captures.
-- **Effect:** a user who writes `xs.map(|y| { y + captured })` gets "Unknown variable", not "short
-  lambdas don't capture — use `fn(y) -> … { … }`". The capability EXISTS (the `fn(){}` form), but
-  the short form gives no path to it.
-- **Status:** OPEN — decide whether the short form SHOULD capture (then implement it in
-  `parse_lambda_short`, matching `parse_lambda`) or STAY non-capturing (then the diagnostic must
-  guide to the `fn(){}` form). Either resolves it; the bare "Unknown variable" is the deviation.
-- **Removal:** either extend `parse_lambda_short` to capture (its sibling `parse_lambda` already
-  does), or emit a capture-specific diagnostic pointing at the `fn(){}` form.
+> **D-clo-1 — CLOSED (2026-07-04).** The `|…|` short form now captures outer variables exactly
+> like the `fn(){}` form — the two are pure syntactic sugar (L-Fn), the maker's intent.
+> `parse_lambda_short` gained the closure-param setup block its sibling `parse_lambda` already
+> had (add the `__closure` attribute + set `closure_param` so the body reads captures from the
+> closure record), and builds its public `Function` type from the DECLARED params only (excluding
+> the hidden `__closure`, so a `.map(f)` arity check still sees one param). Inert for a
+> non-capturing lambda (no captures ⇒ no closure record ⇒ the block is a no-op). Guard
+> `tests/scripts/85-short-lambda-capture.loft` (scalar + heap capture, both backends); 625 lib +
+> native_scripts + interp suite green. (Residual, minor: a zero-arg `|| { … }` closure *assigned
+> then called* has a separate parse edge — the `.map`/inline capturing forms all work.)
 
 ### D-clo-2 — a stored `|…|` lambda passed to a combinator PANICS
 - **Violates:** L-Apply / L-Escape (a lambda value must be applicable through a variable)
@@ -128,15 +123,16 @@ OPEN: **2**. (The Rules above are the target; these are where the code breaks th
 
 ## Conformance
 
-- **`fn(){}` captures, `|…|` does not (`L-Fn` / `L-Short`)** — `x=10; f=fn()->integer{x}; f()` is
-  `10`; `x=10; fn(y)->integer{y+x}` in a `map` yields `11`; the same body as `|y| { y+x }` is a
-  compile error (D-clo-1).
+- **Both forms capture identically (`L-Fn`)** — `x=10; [1].map(|y| { y+x })[0]` is `11`, and the
+  long form `[1].map(fn(y:integer)->integer{y+x})[0]` is also `11`; a captured heap value is shared
+  (`b.v=8; [1].map(|z| { z+b.v })[0]` is `9`). A non-capturing `[1,2,3].map(|x| { x*2 })` is
+  unchanged (`2`). (Guard `tests/scripts/85-short-lambda-capture.loft`.)
 - **Capture semantics (`L-CapScalar` / `L-CapHeap`)** — a captured scalar reads its
   creation-time value; a captured struct reads its *current* field value (`b.v=9` ⇒ `9`).
 - **First-class (`L-Escape`)** — a closure returned from a function, or stored in a struct field,
   works: `mk(7)()` is `7`; `h.f()` is `42`.
-- **The open edges** — `|y| { y+outer }` (D-clo-1) and `g = |y|{…}; xs.map(g)` (D-clo-2) are the
-  two falsifying programs this doc tracks to zero.
+- **The remaining open edge** — `g = |y|{…}; xs.map(g)` (D-clo-2, a stored short lambda passed to
+  a combinator) is the one falsifying program this doc still tracks to zero.
 
-When D-clo-1 and D-clo-2 close, this area joins the rest at 0 open, and closures are a full,
-uniform first-class contract.
+When D-clo-2 closes, this area joins the rest at 0 open, and closures are a full, uniform
+first-class contract.

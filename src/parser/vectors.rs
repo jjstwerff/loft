@@ -919,7 +919,29 @@ impl Parser {
             }
         }
 
+        // Mirror `parse_lambda` (the `fn(){}` form): on the second pass, add the
+        // `__closure` attribute + set `closure_param` so the body reads captured
+        // outer variables from the closure record.  Without this the short `|x|`
+        // form could not capture (formal D-clo-1) — the two lambda syntaxes are now
+        // captured identically (pure sugar), matching what a user expects.  INERT for
+        // a non-capturing lambda: no captures ⇒ no closure record ⇒ `closure_rec ==
+        // u32::MAX` ⇒ the block is a no-op, so an ordinary `|x| { x*2 }` map callback
+        // lowers exactly as before.
+        let outer_closure_param = self.closure_param;
+        if !self.first_pass {
+            let closure_rec = self.data.def(d_nr).closure_record();
+            if closure_rec != u32::MAX {
+                let closure_tp = Type::Reference(closure_rec, Deps::none());
+                self.data
+                    .add_attribute(&mut self.lexer, d_nr, "__closure", closure_tp.clone());
+                let v_nr = self.create_var("__closure", &closure_tp);
+                self.vars.become_argument(v_nr);
+                self.closure_param = v_nr;
+            }
+        }
+
         self.parse_code();
+        self.closure_param = outer_closure_param;
         self.data.op_code(d_nr);
         self.data.definitions[d_nr as usize]
             .variables
@@ -982,8 +1004,16 @@ impl Parser {
 
         self.emit_lambda_code(code, d_nr);
 
-        let n_args = self.data.attributes(d_nr);
-        let arg_types: Vec<Type> = (0..n_args).map(|a| self.data.attr_type(d_nr, a)).collect();
+        // The public Function type is the DECLARED parameters only — the first
+        // `param_names.len()` attributes.  Later attributes are hidden injections
+        // (text `__work_*` work-refs, the `__closure` record param added above for a
+        // capturing lambda) and must NOT appear in the type, or the arity check at a
+        // `.map(f)` call site would see the extra param and reject (matches the
+        // `fn(){}` form, which builds its type from `arguments`, not `data.attributes`).
+        let n_params = param_names.len();
+        let arg_types: Vec<Type> = (0..n_params)
+            .map(|a| self.data.attr_type(d_nr, a))
+            .collect();
         let ret_type = self.data.def(d_nr).returned().clone();
         // include closure work var dep (same as fn-form lambda).
         let dep = if self.last_closure_work_var == u16::MAX {
