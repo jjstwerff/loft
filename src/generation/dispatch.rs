@@ -66,10 +66,29 @@ impl Output<'_> {
             )?;
             return Ok(());
         }
+        if reassign && owned {
+            // An OWNED reassign of a runtime-Join local (a 2nd+ owned assign).
+            // r currently holds a store that may be a BORROWED view — so free the
+            // tracked OWNED store this displaces, then RESET var_r to the null
+            // sentinel so `output_set_body`'s in-place `OpDatabase(var_r)` reuse /
+            // `owned_ref_reassign` displaced-free allocate FRESH and no-op the
+            // free (never touching the view).  The new owned store becomes the
+            // tracked one.
+            write!(
+                w,
+                "{{ if _own_store_{name}.store_nr != u16::MAX \
+                 {{ OpFreeRef(cell, _own_store_{name}, \"{name}(owned)\"); }} \
+                 var_{name}.store_nr = u16::MAX; "
+            )?;
+            self.output_set_body(w, var, to)?;
+            write!(w, "; _own_store_{name} = var_{name}; }}")?;
+            return Ok(());
+        }
+        // First-decl.  `collect_witness_vars` requires ≥1 owned assign, and the
+        // init is owned (a `first = v[i] ?? d` borrow-only local is borrow-TYPED,
+        // never a candidate), so this is the owned init — a fresh store, no prior.
         self.output_set_body(w, var, to)?;
         if owned {
-            // The single owned assign (the init) — point the tracker at r's fresh
-            // store.  `collect_witness_vars` guarantees no prior owned store here.
             write!(w, "; _own_store_{name} = var_{name}")?;
         }
         Ok(())

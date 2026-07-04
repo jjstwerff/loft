@@ -26,6 +26,21 @@ fn loop_cv(x: Box, v: vector<Box>) -> integer {
     total
 }
 
+// The owned>=2 facet: an owned copy init, a per-iteration ncc-borrow reassign,
+// AND a per-iteration OWNED literal reassign (a 2nd owned assign).  The owned
+// reassign must allocate fresh — never reuse/free the borrowed view r just held.
+fn mixed(x: Box, v: vector<Box>) -> integer {
+    r = x;
+    total = 0;
+    for i in 0..len(v) {
+        r = v[i] ?? x;          // borrow reassign
+        total += r.v;
+        r = Box { v: total };   // owned reassign (fresh store, not the view)
+        total += r.v;
+    }
+    total
+}
+
 // Self-referential def-chain (borrow_base None → conservative copy).
 fn build_tree(n: integer) -> Node {
     root = Node { v: n, kids: [] };
@@ -51,6 +66,10 @@ fn main() {
     // The empty-loop path: r keeps the owned copy, freed at scope exit (no leak).
     empty = [];
     assert(loop_cv(a, empty) == 0, "loop_cv empty {loop_cv(a, empty)}");
+
+    // owned>=2 facet: i0 +1=1,+1=2 ; i1 +2=4,+4=8 ; i2 +3=11,+11=22.
+    assert(mixed(a, vs) == 22, "mixed {mixed(a, vs)}");
+    assert(len(vs) == 3 && (vs[1] ?? a).v == 2, "vs survives mixed {len(vs)}");
 
     tr = build_tree(10);
     assert(tr.v == 10 && len(tr.kids) == 1, "tree {tr.v} {len(tr.kids)}");

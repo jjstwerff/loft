@@ -1059,15 +1059,15 @@ impl<'a> Output<'a> {
 
 /// @PLN90 #495 — collect the "runtime-Join" locals of function `def_nr` (see
 /// [`Output::witness_vars`]).  A var qualifies iff it is an owned-typed
-/// Reference / struct-Enum local with EXACTLY ONE owned-producing assignment (a
-/// whole-value copy, or an owned call / struct literal) AND at least one
-/// borrow-producing reassignment (an `?? `/ncc block whose value borrows a view
-/// or a param).  That one-owned + ≥1-borrow shape is precisely the runtime JOIN:
-/// r owns a store on the path where only the init runs, and borrows once the
-/// reassign runs — so a static owned-type free would whole-store-free the view.
-/// Vars with a second owned assign (an owned reassign whose in-place store reuse
-/// would itself need the witness) are conservatively EXCLUDED — a documented
-/// residual, not this slice.
+/// Reference / struct-Enum local with ≥1 owned-producing assignment (a whole-value
+/// copy, or an owned call / struct literal) AND ≥1 borrow-producing reassignment
+/// (an `?? `/ncc block whose value borrows a view or a param).  That owned + borrow
+/// mix is precisely the runtime JOIN: r owns a store on the path where an owned
+/// assign last ran, and borrows on the path where the ncc last ran — so a static
+/// owned-type free would whole-store-free the view.  A SECOND owned assign (an
+/// owned reassign) is handled too: `output_set` resets r to the null sentinel
+/// before the value so it allocates fresh instead of reusing / freeing the view r
+/// currently holds.
 fn collect_witness_vars(data: &crate::data::Data, def_nr: u32) -> HashSet<u16> {
     if !crate::keys::join_own_enabled() {
         return HashSet::new();
@@ -1155,7 +1155,7 @@ fn collect_witness_vars(data: &crate::data::Data, def_nr: u32) -> HashSet<u16> {
     walk(data, def_nr, data.def(def_nr).code(), &mut counts);
     counts
         .into_iter()
-        .filter(|(_, (owned, borrow))| *owned == 1 && *borrow >= 1)
+        .filter(|(_, (owned, borrow))| *owned >= 1 && *borrow >= 1)
         .map(|(v, _)| v)
         .collect()
 }
