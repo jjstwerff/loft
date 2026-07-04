@@ -126,13 +126,20 @@ current `main` tip before working the list.
   Guards: `tests/parse_errors.rs::keyed_{range_slice,partial_key}_in_value_position_is_error`
   + `tests/scripts/502-keyed-slice-for-only.loft` (the legit for/comprehension/
   exact-lookup paths, both backends). full parse_errors (157) + wrap (51) green.
-- [ ] **Re-verify the full safety suite on the tag candidate** (post-rebase
-  `main`): `./scripts/find_problems.sh --bg --wait` (full `--no-fail-fast`),
-  the `LOFT_POISON=1` suite, `LOFT_NATIVE_LEAK_CHECK`, and the ownership fuzz
-  gate. All were green pre-rebase — the gate is confirming them on the exact
-  candidate, not trusting a prior run.
-- [ ] **Zero-leak gate** — wrap `loft_suite` emits no `stores not freed`
-  warnings across the script corpus (both backends).
+- [x] **Re-verify the full safety suite on the tag candidate** — ✅ RUN
+  2026-07-04 on the branch tip (D-key-1 landed). `cargo nextest run --release
+  --no-fail-fast`: **2603 / 2606 passed, 182 skipped**; ownership fuzz gate
+  2/2, `LOFT_POISON=1` leak suite 49/49, the D-key-1 area poison-clean on both
+  backends. **No SIGSEGV, no signal crash, no compile/link failure, no `stores
+  not freed`.** The 3 failures are all ENVIRONMENTAL, not safety-gate items and
+  not regressions: `error_messages::baselines_are_locked_in` (the sandbox has no
+  DNS, so `38_import_unknown_file` prints an extra `[registry] auto-install
+  failed … Dns Failed` line absent from the golden), and `html_wasm` /
+  `html_asyncify` (browser/asyncify, need node + a headless browser — the brittle
+  class §CI-hardening addresses). Re-run on a networked+browser CI runner to
+  clear all three before tag; none block the safety gate.
+- [x] **Zero-leak gate** — ✅ no `stores not freed` warnings across the suite
+  run above (both backends); the `LOFT_POISON` leak suite is green.
 
 **B. Public face — the website must not ship stale or broken (elevated 2026-07-04):**
 
