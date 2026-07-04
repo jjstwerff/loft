@@ -53,7 +53,9 @@ fn dhtml_vector_arg_gl_host_import_is_emitted() {
         return;
     }
     if !wasm32_installed() {
-        eprintln!("SKIP dhtml_vector_arg_gl_host_import_is_emitted: wasm32-unknown-unknown target not installed");
+        eprintln!(
+            "SKIP dhtml_vector_arg_gl_host_import_is_emitted: wasm32-unknown-unknown target not installed"
+        );
         return;
     }
     let root = repo_root();
