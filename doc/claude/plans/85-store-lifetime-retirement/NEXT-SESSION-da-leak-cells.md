@@ -121,18 +121,33 @@ built for this class, keep using it.
   emission first (`introspect`), then decide whether it folds into the eager-
   null-init retirement or needs its own free.
 
-## Also open from the DA map (not leak cells)
+## Also open from the DA map — a SEPARATE codegen-slot-correctness class (NOT leaks, NOT @PLN85's store-lifetime charter)
 
-- stdlib slot-width producer (`i_parse_errors` 16B→12B `_elm_N`, booleans
-  8B→1B) — ONE producer; its warning flood contaminates output-comparison
-  tests under DA as a class.
+These are the residual DA cells after the five leak cells closed.  They are
+slot-width / type-resolution / stale-DbRef bugs surfaced by the debug-assertions
+width-assert + exit dumper — **not** store-lifetime leaks — and all reproduce
+ONLY under a DA lib build (dev/release/CI have debug-assertions off, so none of
+these affect a shipped build).  Route as a distinct follow-up; @PLN85's leak
+retirement does not own them.
+
+- **stdlib slot-width producer** (`t_4File_lines` / `t_4text_split*`): `_elm_N`
+  for a text-slice append is MIS-TYPED `i_parse_errors` (a native fn's return
+  type) → pushes a 16 B text handle into a 12 B slot; `prev_cr`/`walked`
+  booleans push 8 B into 1 B.  ONE producer; its `[set_var] width mismatch`
+  warning FLOOD contaminates every output-comparison test under DA as a class
+  (`error_messages::baselines_are_locked_in`, `store_persist_loft`,
+  `exit_codes`/`wrap::dir` stderr).  Fixing the element-temp typing clears the
+  whole class.  (Standalone slice-append `myline` does NOT reproduce — the
+  mistyping is specific to the stdlib fns' resolution context.)
+- `exit_codes::p196_native_codegen_projects_fn_ref_d_nr` — native fn-ref d_nr
+  projection.
 - `generate_set` Var(0) self-reference parser bug (`native_scripts`,
   `loft_suite`).
 - `generate_call` 8B/16B typed-slot mismatch.
 - `wrap::dir` `get_stack<DbRef>` OOB (corrupt DbRef, store_nr=30 of 3).
-- `format.rs:1213` `types[65535]` — `known_type` u16::MAX sentinel reaching
-  `next_element` (p188 via the `code!()` harness; the CLI probe instead shows
-  a `sorted<>`-return exit leak — possibly the same underlying object).
+- ~~`format.rs:1213` `types[65535]`~~ — **FIXED** as a byproduct of the p188
+  leak fix: the panic was the DA exit dumper rendering a leaked sentinel-typed
+  `sorted<>` store; removing the leak removes the render.
 
 ## How to re-verify the whole surface
 

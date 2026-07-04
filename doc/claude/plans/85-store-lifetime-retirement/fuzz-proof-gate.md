@@ -327,9 +327,15 @@ left for follow-up: keyed-container views (`hash`/`sorted`), nested-record value
        pushed 16B` (a typed-slot mismatch on a suite script);
      - `get_stack<DbRef>: OOB store_nr=30 (allocations.len()=3) — corrupt
        DbRef on the interpreter stack` (`wrap::dir`);
-     - `format.rs:1213` indexes `types[65535]` — a `known_type` left at the
-       `u16::MAX` sentinel reaching `next_element` (p188 via the `code!()`
-       expr harness).
+     - ~~`format.rs:1213` indexes `types[65535]`~~ — **FIXED (2026-07-04)** as
+       a byproduct of the p188 leak fix: the panic was the DA exit dumper
+       rendering a LEAKED sentinel-typed `sorted<>` store (the discarded
+       owned keyed-collection return); freeing the leak removes the render.
+     The four items above (stdlib slot-width, `generate_set`/`generate_call`,
+     `wrap::dir`) are a SEPARATE codegen-slot-correctness class, NOT leaks —
+     see [NEXT-SESSION-da-leak-cells.md](NEXT-SESSION-da-leak-cells.md)
+     § "Also open from the DA map".  @PLN85's store-lifetime LEAK class is
+     retired (all five DA leak cells closed).
      Lens artifacts (not bugs): the `target-da` stdlib symlink (above) and
      the stale-wasm-rlib guard in `html_wasm` (rebuild the wasm rlib after
      lib edits).

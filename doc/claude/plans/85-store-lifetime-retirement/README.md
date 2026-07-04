@@ -21,15 +21,20 @@ Plan id: [@PLN85](https://github.com/loft-lang/plans/issues/85) · investigation
 > in the gate doc: the open DA-inventory cells (§ final honest DA map) and the unfuzzed
 > axes list — see [STABILITY_ROADMAP.md § the wide-release bar](../../STABILITY_ROADMAP.md).
 
-> **▶▶ NEXT SESSION START HERE (2026-07-04):**
-> [NEXT-SESSION-da-leak-cells.md](NEXT-SESSION-da-leak-cells.md) — the DA-calibration leak
-> cells: t3/p179 FIXED (the pass-1 `skip_free` poison on a name-pooled work-ref —
-> counter-coupling instance #4) with the class-residual decision open (pass-boundary
-> bit-clear vs per-site gates); t4/pln87 ROOT-CAUSED (un-freed displaced record on the
-> `&`-param whole-record writeback), t1 closure-record + t2 eager-null-init unexplored;
-> probes in `probes/da-leak-cells/`, instrument = `LOFT_SKIPFREE_TRACE=<var>`.  (The
-> 2026-06-29 join-ownership handoff below stays valid for the D-own-1/2 deps-carried-join
-> completion — the F2 residual.)
+> **▶▶ DA-CALIBRATION LEAK CELLS — ALL CLOSED (2026-07-04).**
+> [NEXT-SESSION-da-leak-cells.md](NEXT-SESSION-da-leak-cells.md) — the five DA-inventory
+> leak cells (t1 closure / t2 `&`-default null-init / t3/p179 skip_free poison / t4/pln87
+> displaced-record writeback / p188 discarded keyed-collection return) are each FIXED on
+> BOTH backends, verified under the debug-assertions gate, with a graduated
+> `tests/scripts/85-*` guard.  The `skip_free` pass-poison class residual is RESOLVED
+> (per-site `!first_pass` gates for the two H5-counter-shift instances; the pass-boundary
+> bit-clear DECLINED — variable tables persist across the stdlib↔user parse boundary).
+> Dev suite 2603/2603, `LOFT_POISON=1` gate green.  The **store-lifetime LEAK class is
+> retired**; the residual DA cells (stdlib slot-width, `generate_set/call`, `wrap::dir`)
+> are a SEPARATE codegen-slot-correctness class, DA-only, NOT this plan's charter.
+> Instrument = `LOFT_SKIPFREE_TRACE=<var>` (now prints the `#[track_caller]` location).
+> (The 2026-06-29 join-ownership handoff below stays valid for the D-own-1/2
+> deps-carried-join completion — the F2 residual.)
 >
 > Older handoff (2026-06-29):
 > [NEXT-SESSION-join-ownership-analysis.md](NEXT-SESSION-join-ownership-analysis.md). The over-free
