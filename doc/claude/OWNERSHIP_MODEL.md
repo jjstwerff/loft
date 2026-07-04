@@ -103,19 +103,22 @@ wants a live reference instead of the default copy/alias. That is the entire sur
 user-facing borrow checker is **declined** ([DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)) — it
 would fight loft's *fun-on-pickup* goal ([GOALS.md](GOALS.md)).
 
-## The law — heap aliases by default; `&` binds a live REFERENCE
+## The law — whole-value binds COPY, projections view; `&` binds a live REFERENCE
 
-> **CORRECTED (2026-06-23, @PLN87).** The earlier reading — "`&` makes a whole-binding
-> *reassignment write back*" — was wrong and is superseded by this section. `&` binds a
-> **live reference**; it is a binding marker, not a reassignment annotation. See
-> [plans/87-reference-default-binding.md](plans/87-reference-default-binding.md).
+> **CORRECTED (2026-07-03, C86 — maker's call).** The earlier text ("a binding to a heap
+> value aliases; it does not copy") was empirically FALSE on both backends for whole-value
+> binds and never matched the ecosystem's behaviour. The 2026-06-23 correction (the `&`
+> reading) stands. See [DESIGN_DECISIONS C86](DESIGN_DECISIONS.md#c86--whole-value-heap-binds-copy-aliasing-is-a-last-use-elision-the-rustc-rule)
+> and [plans/87-reference-default-binding.md](plans/87-reference-default-binding.md).
 
-A binding or parameter to a heap value — struct, vector, element — **aliases** the
-source; it does not copy. In-place mutation *through* the alias reaches the original,
-because they share one store: `o.field = x`, `o.v[i] = y`, and `a = vv[0]; a[i] = z` all
-write through — no annotation. That is loft's actual model (verified on both backends),
-and `a = vv[0]` being a view is a **feature**, not the #426 bug it was first read as. A
-**scalar** binding, by contrast, is a by-value **copy**.
+**Whole-value heap binds COPY** — `p = o` (struct), `b = x` (vector), `af = bx.v` (a
+field read bound to a local) all give the new binding its OWN store: value semantics,
+verified on both backends. The compiler may **ELIDE the copy to an alias only when the
+source is provably dead afterwards** (the rustc last-use rule — `use_analysis::ElidePlan`
+is exactly this analysis): an *optimization*, never an observable semantic.
+**Projection reads are VIEWS** — `a = vv[0]; a[i] = z` writes through (the #426 decided
+feature), and in-place mutation through a *path* (`o.field = x`, `o.v[i] = y`) reaches
+the source. A **scalar** binding is a by-value **copy**.
 
 **`&` binds a live REFERENCE** to its source — a variable, struct field, or vector
 element. Every operation goes *through* the reference to the source: a read sees the
@@ -176,13 +179,17 @@ Every one is a missing or incomplete ownership fact. The class closes when the f
 is complete; it cannot be closed by adding more codegen conditions (that is what the
 9 reverted @PLN85 attempts proved).
 
-### The unification — `ownership_of` as the ONE carried fact (@PLN85, `LOFT_JOIN_OWN`)
+### The unification — `ownership_of` as the ONE carried fact (@PLN85, DEFAULT-ON)
 
-`src/use_analysis.rs` now computes the ownership oracle once — `ownership_of(data, d_nr,
+`src/use_analysis.rs` computes the ownership oracle once — `ownership_of(data, d_nr,
 value) -> Own { Owned | Borrowed{base} | Join{base} }`, carrying the interprocedural
 borrow `base` (the witness a runtime guard needs) — and the over-free chokepoints READ
-it instead of re-deriving. Each site is collapsed behind `LOFT_JOIN_OWN` (off-default →
-suite byte-identical) and validated on BOTH backends:
+it instead of re-deriving. **FLIPPED DEFAULT-ON (2026-07-02, `keys.rs::join_own_enabled`;
+`LOFT_NO_JOIN_OWN` opts out).** Evidence at the flip: the 54-cell over-free map 6/54
+opt-out → **0/54 default** (value + divergence + leak + poison, both backends); full
+suite green both legs; `tests/use_analysis.rs` pins both legs (the oracle ground-truth
+dumps read the RAW shapes via the opt-out; the synthesis's observable effect has its own
+two-leg discriminator). Each site validated on BOTH backends:
 
 - **`local_source`** — ✅ both backends (scope-pass dep-strip of the displaced-owned slot).
 - **`elem_accumulate`** — ✅ both backends (interp `OpBindOrCopy` + native inline guard, both
@@ -264,6 +271,7 @@ cannot diverge.
 | ~~field read binds without an owner~~ ✅ CLOSED | `a = x.v` / `a = getv(x)` aliased the field's store | RESOLVED @PLN85 (#415): a STRUCT vector-field read now COPIES on bind (the @P292/@P394 bind-site branch admits a struct-field OpGetField) and on implicit-tail return (block_result copies a struct-field-of-argument return into `__retbuf`). Both narrowed to struct-field reads — a vector INDEX read (`vv[i]`) keeps its existing nested-stride path. Guard: `tests/scripts/85-store-lifetime-field-read-copy.loft`. (Copy-on-bind/return, the row-102 adopt-vs-copy fact instantiated for struct fields; a general dep-driven caller copy for arbitrary borrowing returns remains row 102's broader work.) |
 | ~~value-`if`-return promotes ONE arm's buffer~~ ✅ CLOSED (a7) | `fn f(c) -> vector { if c { [..] } else { [..] } }` lost the true arm (interp read the sibling, native read empty — backends DIVERGED); struct/ref 3-arm `if` read the LAST arm on native | RESOLVED @PLN85 (a7): two facets of the row-100 `match`/`if` hole, for the `if` tail. (i) The function-return PROMOTION (`ref_return`/`text_return` renaming `__retbuf` to a body-tail local) is now gated to the GENUINE return context (`context == "return from block"`) — an `if`/`match` ARM is not the function tail, so no arm's `__vdb_N` is promoted; the fn-body tail delivers every arm into `__retbuf` (the `match` path). (ii) `unify_if_branches_work_refs` now collects EVERY arm's terminal work-ref across the whole if-tree and unifies them to one slot, so an `else if` chain (3+ arms) shares the return buffer like the 2-arm case. Guard: `tests/scripts/85-store-lifetime-if-return-owned-arms.loft`. (The `match` tail was already correct; this brings the `if` tail to parity. The row-100 "return-source set" remains the general framing.) |
 | 3 return paths (`BlockTail`/`MidReturn`/native-forwarder) | each re-derives; fixes miss paths | funnel to ONE return-ownership computation. **A.2 partial:** the borrow-tail copy (a value backed by a visible param/field returned implicitly) now funnels to ONE helper `copy_borrow_tail_into_retbuf` shared by the struct-field tail (#415) and the whole-arg tail (`fn idv(v) -> vector { v }`), gated to `context == "return from block"` — both copy into `__retbuf` instead of `ref_return` recording a borrow dep. Guard `tests/scripts/85-store-lifetime-implicit-param-return-copy.loft`. The `if`-return buffer-model case (matrix a7) is **CLOSED (a7)** — see the row above. |
+| ~~inline/discarded owned heap return leaks on native~~ ✅ CLOSED (#490/#491) | a heap value produced for inline use — a native-constructor temp (`jt(json_parse(x), n)`), a discarded statement (`json_parse(x);`), or a hidden-`__ref_N` enum return used un-bound (`relen(mk().x)`) — leaked its store on native (and some on interp) | RESOLVED: three converging holes in the same "who frees a temporary the caller never named" class. (i) `inline_struct_return` now matches through `Span` (native-constructor result used as call arg / method receiver) so its lift fires. (ii) `scan`'s `Drop` arm lifts a discarded owned result to a `__lift_N` temp (was a bare stack-pop that freed nothing — once per loop iteration). (iii) the enum-arm lift guard widened from `dep.is_empty()` to `!returns_borrowed_view()`, so a hidden-work-ref enum return (`returns_borrowed_view()==false`, the caller-reallocated `__ref_N` the by-value native ABI never delivers back) lifts and is freed via the bound-case copy path, while a genuine borrowed view of a VISIBLE param (`fn field_of_arg(d) -> H { d.value }`) stays unlifted — no UAF. Underpinning both: `is_stack_store()` replaced every bare `store_nr == 0` source-free / leak-check guard — the native runtime has NO eval-stack store at slot 0, so those guards were hiding + refusing-to-free the first native heap store. Guards: `tests/leak_cases/clean/i490_*`, `i491_file_ctor_receiver.loft` (both backends). |
 | `"??"` deps | unresolved ownership | compute the dep completely, no placeholder |
 
 (The typed-`Deps` newtype work in [DEPS_INVENTORY.md](DEPS_INVENTORY.md) is the

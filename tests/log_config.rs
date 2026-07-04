@@ -606,6 +606,14 @@ fn poison_free_overwrites_freed_buffer() {
 fn poison_free_default_off_leaves_buffer() {
     use loft::database::Stores;
 
+    // This test pins the DEFAULT-OFF contract; under an ambient LOFT_POISON=1
+    // (the fuzz-gate poison sweep runs the whole suite that way) the premise
+    // is externally inverted — skip rather than fail on a true environment.
+    if std::env::var_os("LOFT_POISON").is_some() {
+        eprintln!("skipped: ambient LOFT_POISON is set");
+        return;
+    }
+
     let mut stores = Stores::new();
     assert!(!stores.poison_free);
 

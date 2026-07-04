@@ -214,6 +214,32 @@ Every source file is parsed **twice**:
 
 The two-pass approach allows forward references — a struct or function can be used before it is defined.
 
+### The H5 two-pass contract — the lazy-append law
+
+`assert_pass2_def_attr_stable` (`src/parser/mod.rs`, debug-assertions only —
+see [DEBUG.md § the calibration run](DEBUG.md#the-debug-assertions-calibration-run-target-da)
+for why ordinary builds never check it) pins the cross-pass contract:
+
+> **Pass-1 facts are frozen — every pass-1 def number and attr index must be
+> identical after pass 2.  Pass 2 may only APPEND name-keyed synthetic facts
+> that pass 1 could not know.**
+
+The four legal lazy-append forms (all verified long-latent on an
+`origin/main` control build when the 2026-07 calibration first checked them):
+
+| Form | Producer | Why pass 1 cannot mint it |
+|---|---|---|
+| `vector<T>` / `main_vector<T>` wrapper defs | the reduce/map/filter desugar machinery (`Data::vector_def`) | the family early-returns on pass 1 (unresolved lambda/forward types); `map`'s OUTPUT wrapper is the lambda's return type |
+| generic-instantiation defs (`t_<LEN><Type>_<fn>` with an `n_<fn>` `DefType::Generic` template) | `try_generic_instantiation` | pass 1 only predicts the return type — instantiating there would capture the template's still-being-built body IR |
+| the `__closure` hidden attr | `parse_lambda*` (added `!first_pass` from pass 1's closure record) | captures are only known after the body parses |
+| a trailing `__work_N` attr | a `text_return` work-buffer promotion the pass-1 classify could not yet see | body facts (e.g. a self-slice-reassigned text param) resolve on pass 2 |
+
+Everything else stays fatal — notably `__ref_N` / `__retbuf` growth, the
+`ref_return` drift class the assert was built for, and any non-synthetic
+pass-2-only def or attr.  The appends are safe precisely because they are
+name-keyed and trailing: call sites are re-parsed in pass 2 against the final
+attr list, and no pass-1 number moves.
+
 ### Synthesised-identity stability — the counter-coupling hazard
 
 A recurring bug class spans the parser **and** the native backend. Both synthesise

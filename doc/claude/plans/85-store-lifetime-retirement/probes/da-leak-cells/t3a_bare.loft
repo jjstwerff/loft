@@ -1,0 +1,7 @@
+struct P179Inner { pin_n: integer not null }
+struct P179Outer { po_x: P179Inner, po_q: integer not null }
+fn main() {
+    o = P179Outer { po_x: P179Inner { pin_n: 7 }, po_q: 0 };
+    assert(o.po_x.pin_n == 7, "got {o.po_x.pin_n}");
+    println("t3a ok");
+}

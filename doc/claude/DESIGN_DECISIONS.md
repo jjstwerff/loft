@@ -1884,3 +1884,64 @@ This is a **deliberate exception** to DN3's "fit-failing ops yield `τ?`": that 
 overflow-arith is a decided edge, not a deviation to close. Forcing nullability on every
 arithmetic operation would be consistency at the expense of good taste — and, given no traps, it
 would make the compiler block a game over a fault its player will never hit.
+
+## C86 — Whole-value heap binds COPY; aliasing is a last-use ELISION (the rustc rule)
+
+**Catalogue:** @F21 (references), @I60 (deps) — the ownership model's bind semantics.
+Corrects [OWNERSHIP_MODEL.md § The law](OWNERSHIP_MODEL.md#the-law--whole-value-binds-copy-projections-view--binds-a-live-reference);
+reclassifies formal/ownership.md D-own-4.
+
+### Question
+
+`OWNERSHIP_MODEL § The law` claimed a binding to a heap value "aliases; it does not
+copy" — but on BOTH backends `p = o` (struct), `b = x` (vector), and `af = bx.v`
+(the #415 field read) all COPY, and only projection reads (`a = vv[0]`) alias.  Should
+the code migrate to the written law (everything aliases), or the law to the code?
+
+### Decision (maker, 2026-07-03)
+
+**The law migrates to the code.** `p = o` is a COPY by contract; it becomes `p = &o`
+(an alias) **only when `o` is not used afterwards — the rustc rule — as an
+optimization.**  Concretely:
+
+- **Whole-value heap binds COPY** (struct, vector, and a field read bound to a local —
+  the #415 behaviour is the *correct* semantic, not a stopgap).
+- **The copy may be ELIDED to an alias when the source is provably dead afterwards**
+  (`use_analysis::ElidePlan` — the existing last-use elision).  Elision is never
+  observable: a mutated or escaping source keeps the copy.
+- **Projection reads stay VIEWS** (`a = vv[0]` — the #426 decided feature); in-place
+  path mutation (`o.field = x`, `o.v[i] = y`) writes through.
+- `&` remains the explicit live-reference opt-in (@PLN87, unchanged).
+
+### Rationale (maker, verbatim)
+
+> "In my head that is the easiest to remember rule for programmers: variables are
+> their own thing, and you do not have to remember how they are constructed too much
+> for their semantics."
+
+A variable's semantics should not depend on its construction provenance — `af = bx.v`
+behaves like `b = x` behaves like `p = o`: you own what you bound, full stop.  The
+alias is the compiler's business (elision on provable last-use), never the
+programmer's memory burden.  This serves the fun-on-pickup goal
+([GOALS.md](GOALS.md)) the same way the no-traps rule (C80) does: fewer rules to
+carry, no spooky action at a distance.  The principle's one deliberate boundary is
+projection reads (`a = vv[0]` views, #426): an element read is understood as
+*reaching into* the container rather than *taking* from it — if that distinction ever
+proves a recurring source of user surprise, that is a #426 revisit, not a C86 one.
+
+### Consequences
+
+- formal/ownership.md **D-own-4 reclassifies**: the #415 copy is correct; the
+  implementable residual — derive the copy/alias/elide decision from the
+  `ownership_of` fact + last-use instead of the syntactic `struct_vec_field`
+  branch — folds into D-own-1.
+- `O-Borrow`'s "a value aliasing another" scopes to projections/params/`&τ`, not
+  whole-value binds.
+- The ecosystem keeps its semantics (every consumer was built on copy-on-bind); the
+  doc-only correction costs zero runtime change.
+
+### Revisit when
+
+A profiler shows bind-copies dominating a real consumer AND the elision's coverage
+cannot be extended — that argues for widening `ElidePlan`, never for flipping the
+semantic.

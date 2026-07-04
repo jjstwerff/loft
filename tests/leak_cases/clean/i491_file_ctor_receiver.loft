@@ -1,0 +1,11 @@
+// #491 — `file(...)` used inline as a method receiver leaked its File store
+// on NATIVE only: `OpCopyRecord`'s source-free skipped `store_nr == 0`
+// (intended as "never free the interpreter's eval-stack store"), but the
+// native runtime has no stack store — its slot 0 is an ordinary heap store.
+// So a native-constructor temp that happened to land in slot 0 was never
+// freed.  Fixed by gating the source-free on `is_stack_store` (false on
+// native) instead of a bare `store_nr == 0`.  The `clean/` harness asserts
+// no store leaks on either backend.
+fn test() {
+  assert(file("__i491_missing__").exists() == false, "missing file probe");
+}

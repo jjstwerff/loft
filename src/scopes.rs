@@ -67,6 +67,12 @@ struct Scopes {
     /// `OpFreeRef(__lift_N)` at function exit reads a slot that was never
     /// allocated along every execution path.
     lift_vars: Vec<u16>,
+    /// Text temps minted mid-scan (the block-VALUE `__blk_N` hoists) whose
+    /// `String` must be DECLARED at function scope on native — a block-local
+    /// `String` behind the block's `Str` value is E0597 ("dropped while
+    /// still borrowed").  Each gets a `Set(tmp, Text(""))` prepended at the
+    /// function root (the `lift_vars` mechanism, text-typed).
+    lift_texts: Vec<u16>,
     /// Counter for `__ret_N` temporaries used by `free_vars` to hold a
     /// non-trivial tail expression's value while free ops run (B5-L3 fix).
     ret_temp_counter: u16,
@@ -127,7 +133,7 @@ fn run_scan_phase(
     // @PLN85 `local_source` over-free fix (gated): the heap slots whose OWNED store
     // is displaced by a later borrow/join reassignment. Computed on the pre-scope
     // code so the dep classification is read before any dep-strip below mutates it.
-    let displaced_owned = if std::env::var_os("LOFT_JOIN_OWN").is_some() {
+    let displaced_owned = if crate::keys::join_own_enabled() {
         crate::use_analysis::displaced_owned_slots(orig_code, orig_vars, data)
     } else {
         HashSet::new()
@@ -145,6 +151,7 @@ fn run_scan_phase(
         scan_depth: 0,
         lift_counter: 0,
         lift_vars: Vec::new(),
+        lift_texts: Vec::new(),
         ret_temp_counter: 0,
         paired_witness: HashMap::new(),
         witness_buffer: HashMap::new(),
@@ -164,6 +171,13 @@ fn run_scan_phase(
     {
         for &v in scopes.lift_vars.iter().rev() {
             bl.operators.insert(0, v_set(v, Value::Null));
+        }
+    }
+    if !scopes.lift_texts.is_empty()
+        && let Value::Block(bl) = &mut code
+    {
+        for &v in scopes.lift_texts.iter().rev() {
+            bl.operators.insert(0, v_set(v, Value::Text(String::new())));
         }
     }
     data.definitions[d_nr as usize].code = code;
@@ -872,7 +886,38 @@ impl Scopes {
             Value::Insert(ops) => {
                 Value::Insert(ops.iter().map(|v| self.scan(v, function, data)).collect())
             }
-            Value::Drop(inner) => Value::Drop(Box::new(self.scan(inner, function, data))),
+            Value::Drop(inner) => {
+                let scanned = self.scan(inner, function, data);
+                // #490 — a discarded statement result that owns a fresh store
+                // (`json_parse(x);`, `mk();`) lowers to a plain stack-pop
+                // (`FreeStack` on the interpreter, a dropped Rust return value
+                // on native), which never frees the store — once per iteration
+                // inside a loop.  Bind it to a `__lift_N` temp instead, so
+                // `get_free_vars` emits the store's `OpFreeRef` at scope exit —
+                // the same machinery `scan_args` uses for owned call-argument
+                // temps.  A `Set` consumes the value, so the `Drop` wrapper is
+                // dropped with it.
+                if let Value::Insert(mut ops) = scanned {
+                    // A call whose arguments were themselves lifted arrives as
+                    // `Insert([Set(__lift_i, …)…, call])` — the owned result is
+                    // the final op.
+                    if let Some(last) = ops.last()
+                        && let Some(tp) = Self::inline_struct_return(last, data, u32::MAX)
+                    {
+                        let tmp = self.new_lift_var(function, &tp);
+                        let last = ops.pop().unwrap();
+                        ops.push(v_set(tmp, last));
+                        Value::Insert(ops)
+                    } else {
+                        Value::Drop(Box::new(Value::Insert(ops)))
+                    }
+                } else if let Some(tp) = Self::inline_struct_return(&scanned, data, u32::MAX) {
+                    let tmp = self.new_lift_var(function, &tp);
+                    v_set(tmp, scanned)
+                } else {
+                    Value::Drop(Box::new(scanned))
+                }
+            }
             Value::Iter(idx, create, next, extra) => {
                 let scanned_create = self.scan(create, function, data);
                 // #316 — `next`/`extra` execute once per iteration: drop any
@@ -1348,12 +1393,15 @@ impl Scopes {
                 if (*d as usize) < data.definitions.len()
                     && data.def(*d).name().starts_with("n_") =>
             {
-                if let Type::Reference(_, deps) = data.def(*d).returned() {
-                    let attrs = data.def(*d).attributes();
-                    let visible_dep = deps
-                        .iter()
-                        .any(|&i| (i as usize) >= attrs.len() || !attrs[i as usize].hidden);
-                    if visible_dep {
+                // @PLN85 D-own-1 — read the CANONICAL borrowed-view fact the
+                // return-delivery side already uses (`returns_borrowed_view`: a
+                // VISIBLE-attr return dep borrows it → View; a hidden/empty dep
+                // owns → Owned), instead of re-deriving the identical visible-dep
+                // scan inline here.  Same verdict on the same values (for a
+                // Reference return `depend()` is the raw dep list); one fewer
+                // per-site ownership re-derivation on the free side.
+                if matches!(data.def(*d).returned(), Type::Reference(_, _)) {
+                    if data.def(*d).returns_borrowed_view() {
                         RefRhs::View
                     } else {
                         RefRhs::Owned
@@ -1578,7 +1626,7 @@ impl Scopes {
         tp: &Type,
         to_scope: u16,
     ) -> Vec<Value> {
-        let ret_var = returned_var(expr);
+        let ret_var = returned_var_null_unified(expr, data.def_nr("OpNullRefSentinel"));
         // @PLN85 cluster II / A.1 part i (OWNERSHIP_MODEL row 100, invariant #5
         // "per binding, per path, complete") — the return-source SET, not the
         // single `returned_var`, drives free-suppression.  `returned_var`
@@ -1597,6 +1645,7 @@ impl Scopes {
         // over-suppresses and LEAKS the dead-path allocation (repro_p365's
         // `via_local`/`nested`, 25-nullable's `maybe_row`).  So the set is passed
         // down, not stamped onto the variable.
+        let mut null_arm_record_sources: Vec<u16> = Vec::new();
         let return_sources: HashSet<u16> = if is_return {
             let mut sources = Vec::new();
             collect_return_sources(expr, &mut sources);
@@ -1608,25 +1657,139 @@ impl Scopes {
             // NRVO-delivered, not orphaned).  See `return_has_null_arm`.
             let null_sentinel_nr = data.def_nr("OpNullRefSentinel");
             if return_has_null_arm(expr, null_sentinel_nr) {
-                sources.retain(|&v| {
-                    !matches!(
+                // @PLN85 P4-records: a record source with a reachable NULL arm
+                // is a runtime JOIN — transferred to the caller on the present
+                // path, an orphan (its preamble null-init ALLOCATES on interp)
+                // on the null path.  The old design freed it unconditionally
+                // (no orphan, but the present path returned a FREED store off
+                // the eval stack — the poison-visible UAF).  Keep it
+                // SUPPRESSED here and record it; the return leg below hoists
+                // the value to `__ret_N` and emits
+                // `OpFreeRefIfDistinct(src, __ret_N)` — the runtime decides.
+                for &v in &sources {
+                    if matches!(
                         function.tp(v),
                         Type::Reference(_, _) | Type::Enum(_, true, _)
-                    )
-                });
+                    ) {
+                        null_arm_record_sources.push(v);
+                    }
+                }
+            }
+            // @PLN85 F2 (the fuzzer's catch: `t[i] ?? N{..}`) — a
+            // MULTI-source return mixing an OWNED record work-ref arm with
+            // view arms is a runtime JOIN even WITHOUT a null arm: the owned
+            // arm's store transfers only when ITS branch ran, else its
+            // (interp-allocating) preamble store orphans.  The CALL-default
+            // twin never hits this — a Call arm contributes no source var, so
+            // the work-ref keeps its plain free.  Route the owned sources
+            // through the same hoist + `OpFreeRefIfDistinct` leg the null-arm
+            // join uses; view sources (non-empty deps) stay suppressed as
+            // borrows.
+            if sources.len() > 1 {
+                for &v in &sources {
+                    if matches!(
+                        function.tp(v),
+                        Type::Reference(_, _) | Type::Enum(_, true, _)
+                    ) && function.tp(v).depend().is_empty()
+                        && !function.is_argument(v)
+                        && !null_arm_record_sources.contains(&v)
+                    {
+                        null_arm_record_sources.push(v);
+                    }
+                }
             }
             sources.into_iter().collect()
         } else {
             HashSet::new()
         };
         let mut ls = self.get_free_vars(function, data, to_scope, tp, ret_var, &return_sources);
+        // @PLN85 P4-records — at a RETURN site, a record work-ref's store may
+        // BE the returned store: a named local adopts the arm's fresh Object
+        // (`v: E = Pass{..}; if c { v = Fail{..} }; v` — two candidate stores,
+        // one winner at runtime), and an unconditional OpFreeRef frees the
+        // winner too — the caller then reads a freed store (silently stale
+        // without LOFT_POISON; the par t4 catch).  Make every record work-ref
+        // free at a return CONDITIONAL on not being the returned store — for
+        // an unrelated work-ref the stores are distinct and the free runs
+        // exactly as before.
+        if is_return
+            && ret_var != u16::MAX
+            && (ret_var as usize) < function.count() as usize
+            && matches!(
+                function.tp(ret_var),
+                Type::Reference(_, _) | Type::Enum(_, true, _)
+            )
+        {
+            let free_nr = data.def_nr("OpFreeRef");
+            let free_if = data.def_nr("OpFreeRefIfDistinct");
+            for op in &mut ls {
+                // ANY record-typed local's store may BE the returned store —
+                // not only a parser-minted work ref: a NAMED local aliased
+                // into the hidden return-buffer param (`best = cand` — the
+                // NRVO buffer keeps raw-alias Sets by design) had its
+                // unconditional free kill the returned store on the
+                // reassigned path (the 150-i306 `choose` shape; poison read
+                // the caller's field as 0xDEADBEEF).  Distinct stores free
+                // exactly as before.
+                if let Value::Call(d, args) = op
+                    && *d == free_nr
+                    && let Some(a0) = args.first()
+                    && let Value::Var(w) = a0.unspan()
+                    && matches!(
+                        function.tp(*w),
+                        Type::Reference(_, _) | Type::Enum(_, true, _)
+                    )
+                {
+                    *op = Value::Call(free_if, vec![Value::Var(*w), Value::Var(ret_var)]);
+                }
+            }
+        }
         // The B5-L3 wrap (Set(__ret_N, expr); free ops; Return(Var(__ret_N)))
         // must not fire when `expr` is already a `Return` or contains one
         // at its tail — otherwise we'd emit `let _ret = return …` (E0308 in
         // native).  Recurse through `Insert` (which scopes wraps Return in
         // for free-vars cleanup) and `Block`.
         let expr_is_terminal = expr_ends_in_return(expr);
-        if ls.is_empty() || matches!(expr, Value::Null | Value::Var(_)) {
+        // @PLN85 P4-records — a null-arm record return: hoist the value to a
+        // `__ret_N` temp, then free each suppressed JOIN source CONDITIONALLY
+        // (`OpFreeRefIfDistinct(src, __ret_N)`): the present arm returns the
+        // source's store (not distinct → kept, transferred to the caller); the
+        // null arm returns the sentinel (distinct → the preamble-allocated
+        // placeholder is freed — no orphan).  Runs FIRST: the fast path would
+        // otherwise emit `Return(expr)` with the sources leaking on the null
+        // path (frees suppressed above), and the legacy path would re-open the
+        // eval-stack UAF.
+        if is_return && !expr_is_terminal && !null_arm_record_sources.is_empty() {
+            self.ret_temp_counter += 1;
+            let name = format!("__ret_{}", self.ret_temp_counter);
+            let tmp = function.add_temp_var(&name, tp);
+            self.var_scope.insert(tmp, self.scope);
+            self.var_order.push(tmp);
+            let free_if = data.def_nr("OpFreeRefIfDistinct");
+            let mut result = Vec::with_capacity(ls.len() + null_arm_record_sources.len() + 2);
+            result.push(v_set(tmp, expr.clone()));
+            for &src in &null_arm_record_sources {
+                result.push(Value::Call(free_if, vec![Value::Var(src), Value::Var(tmp)]));
+            }
+            result.append(&mut ls);
+            result.push(Value::Return(Box::new(Value::Var(tmp))));
+            return result;
+        }
+        // @PLN85 poison-green — a bare-Var tail is free-safe (its slot holds
+        // the value) EXCEPT a `&τ` place ref (`RefVar`): returning it DEREFS
+        // the place DbRef at the Return, after `ls`'s frees released the
+        // source store (the @PLN87 L3/L4 live-read shapes under LOFT_POISON).
+        // Exclude it from the fast path so it takes the B5-L3 hoist below —
+        // `Set(__ret_N, Var(r))` performs the deref BEFORE the frees.
+        // (Text-inner RefVars are EXCLUDED from the exclusion: a `&text` tail
+        // is the promoted out-BUFFER returned per the text-return contract —
+        // the buffer lives in the caller, so returning it raw is free-safe,
+        // and hoisting it emitted a native `Str::new(&local_String)` dangle.)
+        let var_is_place_ref = !ls.is_empty()
+            && matches!(expr, Value::Var(v)
+                if matches!(function.tp(*v), Type::RefVar(inner)
+                    if !matches!(inner.base(), Type::Text(_))));
+        if ls.is_empty() || (matches!(expr, Value::Null | Value::Var(_)) && !var_is_place_ref) {
             if is_return && !expr_is_terminal {
                 ls.push(Value::Return(Box::new(expr.clone())));
             } else if matches!(expr, Value::Null) {
@@ -1635,7 +1798,7 @@ impl Scopes {
                 ls.push(expr.clone());
             }
         } else if let Value::Block(bl) = expr {
-            return insert_free(bl, &ls, is_return);
+            return self.insert_free(bl, &ls, is_return, data, function);
         } else if expr_is_terminal {
             // expr is already a `Return(...)` (or `Insert(...)` ending in
             // one) — the cleanup was emitted alongside it by the inner
@@ -1790,6 +1953,41 @@ impl Scopes {
             result.push(Value::Return(Box::new(v_if(Value::Var(cond_tmp), *t, *f))));
             return result;
         } else {
+            // @PLN85 poison-green — the block-VALUE variant of the B5-L3 rule:
+            // a non-Void block's exit frees run AFTER the tail expression but
+            // BEFORE the enclosing consumer copies the value out
+            // (`test_value = { mk()[0] }` — the text tail borrows the
+            // block-local vector's element bytes; the block-exit OpFreeRef
+            // poisons them before the Set's byte copy).  Hoist the value to a
+            // temp: `Set(__blk_N, expr)` deep-copies the bytes (OpAppendText)
+            // while the source store is still live, the frees run, and the
+            // temp is the block's value.  Text-typed only — the one shape
+            // where the Set IS a deep copy; record/vector block values keep
+            // their existing paths.
+            // (A branch tail — if/match — is EXCLUDED: its arms are unified
+            // to write the assignment target directly, so the hoist's Set
+            // would append the branch's value a SECOND time onto what the arm
+            // already wrote — `if c { null } else { "error" }` read back
+            // "errorerror".  Branch tails keep their existing arm-delivery.)
+            if !is_return
+                && !ls.is_empty()
+                && matches!(tp.base(), Type::Text(_))
+                && !matches!(expr, Value::Null | Value::Var(_))
+                && !Self::tail_is_branch(expr)
+                && !expr_is_terminal
+            {
+                self.ret_temp_counter += 1;
+                let name = format!("__blk_{}", self.ret_temp_counter);
+                let tmp = function.add_temp_var(&name, tp);
+                self.var_scope.insert(tmp, self.scope);
+                self.var_order.push(tmp);
+                self.lift_texts.push(tmp);
+                let mut result = Vec::with_capacity(ls.len() + 2);
+                result.push(v_set(tmp, expr.clone()));
+                result.append(&mut ls);
+                result.push(Value::Var(tmp));
+                return result;
+            }
             ls.insert(0, expr.clone());
             if is_return {
                 // P236: when `expr` is an `If/Match` whose unified
@@ -2282,13 +2480,7 @@ impl Scopes {
                 && Self::inline_struct_return(&scanned, data, outer_call).is_none()
                 && let Some(tp) = Self::heap_call_return(&scanned, data)
             {
-                self.lift_counter += 1;
-                let name = format!("__lift_{}", self.lift_counter);
-                let tmp = function.add_temp_var(&name, &tp);
-                function.mark_inline_ref(tmp);
-                self.var_scope.insert(tmp, self.scope);
-                self.var_order.push(tmp);
-                self.lift_vars.push(tmp);
+                let tmp = self.new_lift_var(function, &tp);
                 preamble.push(v_set(tmp, scanned));
                 ls.push(Value::Var(tmp));
                 continue;
@@ -2330,13 +2522,7 @@ impl Scopes {
                     // the remaining Call may also be struct-returning
                     // (e.g. normalize3(__lift_1) inside add_dir).  Lift it too.
                     if let Some(tp) = Self::inline_struct_return(&final_val, data, outer_call) {
-                        self.lift_counter += 1;
-                        let name = format!("__lift_{}", self.lift_counter);
-                        let tmp = function.add_temp_var(&name, &tp);
-                        function.mark_inline_ref(tmp);
-                        self.var_scope.insert(tmp, self.scope);
-                        self.var_order.push(tmp);
-                        self.lift_vars.push(tmp);
+                        let tmp = self.new_lift_var(function, &tp);
                         preamble.push(v_set(tmp, final_val));
                         ls.push(Value::Var(tmp));
                     } else {
@@ -2356,13 +2542,7 @@ impl Scopes {
                 // generate_set (reassignment) on subsequent loop iterations.
                 // get_free_vars emits OpFreeRef(tmp) at scope exit because
                 // the dep is empty (owned).
-                self.lift_counter += 1;
-                let name = format!("__lift_{}", self.lift_counter);
-                let tmp = function.add_temp_var(&name, &tp);
-                function.mark_inline_ref(tmp);
-                self.var_scope.insert(tmp, self.scope);
-                self.var_order.push(tmp);
-                self.lift_vars.push(tmp);
+                let tmp = self.new_lift_var(function, &tp);
                 preamble.push(v_set(tmp, scanned));
                 ls.push(Value::Var(tmp));
             } else {
@@ -2370,6 +2550,23 @@ impl Scopes {
             }
         }
         (preamble, ls)
+    }
+
+    /// Create a `__lift_N` temporary that OWNS an inline call result, so
+    /// `get_free_vars` emits its `OpFreeRef` at scope exit.  Registers the
+    /// var in the current scope and in `lift_vars` (which drives the
+    /// function-entry `Set(v, Null)` slot reservation).  The caller emits
+    /// the `Set(tmp, call)` itself — as an arg preamble (`scan_args`) or as
+    /// the statement replacing a `Drop` (#490).
+    fn new_lift_var(&mut self, function: &mut Function, tp: &Type) -> u16 {
+        self.lift_counter += 1;
+        let name = format!("__lift_{}", self.lift_counter);
+        let tmp = function.add_temp_var(&name, tp);
+        function.mark_inline_ref(tmp);
+        self.var_scope.insert(tmp, self.scope);
+        self.var_order.push(tmp);
+        self.lift_vars.push(tmp);
+        tmp
     }
 
     /// #248 — does this scanned argument lower to an inline call (or an
@@ -2427,16 +2624,26 @@ impl Scopes {
                 if let Type::Reference(d_nr, _) = &def.returned {
                     return Some(Type::Reference(*d_nr, Deps::none()));
                 }
-                // @P303 — a user fn returning a struct-enum by FRESH owned
-                // store (empty dep) leaks its result temp when used directly
-                // as a call argument; lift it like the Reference case above so
-                // `get_free_vars` emits its `OpFreeRef`.  A NON-empty dep means
-                // a hidden-param return (@P301 via-local: ownership handled by
-                // `add_defaults`'s `__ref_N` work-ref) or a borrowed view — must
-                // NOT be lifted here.  Matches the native-constructor Enum
-                // branch's `dep.is_empty()` guard below.
-                if let Type::Enum(d_nr, true, dep) = &def.returned
-                    && dep.is_empty()
+                // @P303 / #490 — a user fn returning a heap struct-enum that the
+                // caller OWNS leaks its result temp when used directly as a call
+                // argument (or discarded); lift it like the Reference case above
+                // so `get_free_vars` emits its `OpFreeRef`.  The owned-vs-borrowed
+                // split is the canonical `returns_borrowed_view()` fact:
+                //   - EMPTY dep (`fn mk() -> H { Bytes{…} }`) — fresh, owned.
+                //   - HIDDEN work-ref dep (`fn f() -> H { mk().x }`, dep → the
+                //     `__ref_N`/`__retbuf` the callee reallocated) — a fresh store
+                //     delivered through the caller's hidden buffer; the caller owns
+                //     it and the lift's copy-path free (`0x8000` source-free) claims
+                //     it exactly like the `h = f()` bound case does.
+                // Both are `returns_borrowed_view() == false` → lift.  A dep naming
+                // a VISIBLE param (`fn field_of_arg(d) -> H { d.value }`) IS a
+                // borrow → true → must NOT lift (freeing it dangles the caller's
+                // arg).  Was `dep.is_empty()`, which missed the hidden-work-ref
+                // case: on native the caller freed the by-value-stale `__ref_N`
+                // (never delivered back) instead of the reallocated store, leaking
+                // one enum store per inline use (#490 kt=65).
+                if let Type::Enum(d_nr, true, _) = &def.returned
+                    && !def.returns_borrowed_view()
                 {
                     return Some(Type::Enum(*d_nr, true, Deps::none()));
                 }
@@ -2475,22 +2682,42 @@ impl Scopes {
         // receiver = arg0).
         if let Value::Call(fn_nr, _) = val.unspan() {
             let def = data.def(*fn_nr);
-            if (def.name.starts_with("n_") || def.name.starts_with("t_"))
-                && def.code != Value::Null
-                && let Type::Vector(elem, dep) = &def.returned
-                && dep.is_empty()
+            if (def.name.starts_with("n_") || def.name.starts_with("t_")) && def.code != Value::Null
             {
-                return Some(Type::Vector(elem.clone(), Deps::none()));
+                match &def.returned {
+                    Type::Vector(elem, dep) if dep.is_empty() => {
+                        return Some(Type::Vector(elem.clone(), Deps::none()));
+                    }
+                    // @PLN85 p188 — a discarded (or inline-unbound) owned KEYED
+                    // collection return (`build() -> sorted<T[k]>`, and the
+                    // index/hash/spacial siblings) leaks its by-value store exactly
+                    // like the vector case above — the `Drop` lift binds it to a
+                    // `__lift_N` temp so `get_free_vars` emits the store's
+                    // `OpFreeRef` (both backends).  Empty dep = OWNED (fresh); a
+                    // borrowed view / NRVO'd hidden-buffer return carries a
+                    // non-empty dep and is excluded (no double-free / UAF).
+                    Type::Sorted(d, keys, dep) if dep.is_empty() => {
+                        return Some(Type::Sorted(*d, keys.clone(), Deps::none()));
+                    }
+                    Type::Index(d, keys, dep) if dep.is_empty() => {
+                        return Some(Type::Index(*d, keys.clone(), Deps::none()));
+                    }
+                    Type::Hash(d, keys, dep) if dep.is_empty() => {
+                        return Some(Type::Hash(*d, keys.clone(), Deps::none()));
+                    }
+                    Type::Spacial(d, keys, dep) if dep.is_empty() => {
+                        return Some(Type::Spacial(*d, keys.clone(), Deps::none()));
+                    }
+                    _ => {}
+                }
             }
         }
-        // The native-constructor branches below are intentionally matched on the
-        // BARE call only (no unspan).  Broadening them to span-wrapped calls
-        // lifts a native constructor used as a method receiver (e.g.
-        // `file(...).sync()`), which exposes native-codegen gaps for the lifted
-        // method-receiver shape (wrong ABI arg / type mismatch).  They keep
-        // their original reach: the chained-builtin case (`v.keys().len()`)
-        // where the receiver is already a bare `Value::Call`.
-        if let Value::Call(fn_nr, _) = val {
+        // Native-constructor calls arrive BARE when chained onto a builtin
+        // (`v.keys().len()`) and Span-wrapped when passed as a call argument or
+        // method receiver (`jt(json_parse(x), n)`, `json_parse(x).field(n)`), so
+        // match through the span — an unlifted native-constructor temp owns a
+        // fresh store nothing ever frees (#490).
+        if let Value::Call(fn_nr, _) = val.unspan() {
             let def = data.def(*fn_nr);
             // Native struct-enum constructors: no body (code == Null), return type
             // is a struct-enum with empty dep (allocates a new store, doesn't borrow).
@@ -2539,61 +2766,158 @@ enum RefRhs {
     Unknown,
 }
 
-fn insert_free(block: &Block, free: &[Value], is_return: bool) -> Vec<Value> {
-    let mut res = Vec::new();
-    let mut ls = Vec::new();
-    for (o_nr, o) in block.operators.iter().enumerate() {
-        if o_nr + 1 == block.operators.len() {
-            if let Value::Block(bl) = &block.operators[o_nr] {
-                for v in insert_free(bl, free, is_return) {
-                    ls.push(v);
-                }
-            } else if block.result == Type::Void {
-                // @P322 — when the function body ends with a nested
-                // Void-result block whose last op is `Return(...)` (the
-                // iterator-generator shape: `for n in […] { yield n; }
-                // return null;`), the OUTER-scope frees passed in via
-                // `free` must run BEFORE the return so function-scope
-                // owned locals (`__vdb_*` vector backings, etc.) get
-                // cleaned up.  Prior to this fix the void branch
-                // dropped `free` entirely and only emitted the inner
-                // `Return` + a redundant trailing `Return(Null)`, so
-                // function-scope vectors leaked at program exit.
-                let o_is_terminal = expr_ends_in_return(o);
-                if o_is_terminal {
-                    for v in free {
-                        ls.push(v.clone());
-                    }
-                    ls.push(o.clone());
-                } else {
-                    ls.push(o.clone());
-                    for v in free {
-                        ls.push(v.clone());
-                    }
-                    ls.push(Value::Return(Box::new(Value::Null)));
-                }
-            } else {
-                for v in free {
-                    ls.push(v.clone());
-                }
-                if is_return {
-                    ls.push(Value::Return(Box::new(o.clone())));
-                } else {
-                    ls.push(o.clone());
-                }
-            }
-        } else {
-            ls.push(o.clone());
+/// If `op` is a scope-exit free (`OpFreeRef` / `OpFreeText` /
+/// `OpFreeRefIfDistinct`), return the var it frees.  The scopes-side twin of
+/// `pre_eval::free_op_var` (generation is not depended on from here).
+fn scope_free_op_var(op: &Value, data: &Data) -> Option<u16> {
+    if let Value::Call(d, args) = op.unspan() {
+        let name = data.def(*d).name();
+        if matches!(name, "OpFreeRef" | "OpFreeText" | "OpFreeRefIfDistinct")
+            && let Some(arg0) = args.first()
+            && let Value::Var(v) = arg0.unspan()
+        {
+            return Some(*v);
         }
     }
-    res.push(Value::Block(Box::new(Block {
-        name: block.name,
-        operators: ls,
-        result: block.result.clone(),
-        scope: block.scope,
-        var_size: 0,
-    })));
-    res
+    None
+}
+
+impl Scopes {
+    fn insert_free(
+        &mut self,
+        block: &Block,
+        free: &[Value],
+        is_return: bool,
+        data: &Data,
+        function: &mut Function,
+    ) -> Vec<Value> {
+        let mut res = Vec::new();
+        let mut ls = Vec::new();
+        for (o_nr, o) in block.operators.iter().enumerate() {
+            if o_nr + 1 == block.operators.len() {
+                if let Value::Block(bl) = &block.operators[o_nr] {
+                    for v in self.insert_free(bl, free, is_return, data, function) {
+                        ls.push(v);
+                    }
+                } else if block.result == Type::Void {
+                    // @P322 — when the function body ends with a nested
+                    // Void-result block whose last op is `Return(...)` (the
+                    // iterator-generator shape: `for n in […] { yield n; }
+                    // return null;`), the OUTER-scope frees passed in via
+                    // `free` must run BEFORE the return so function-scope
+                    // owned locals (`__vdb_*` vector backings, etc.) get
+                    // cleaned up.  Prior to this fix the void branch
+                    // dropped `free` entirely and only emitted the inner
+                    // `Return` + a redundant trailing `Return(Null)`, so
+                    // function-scope vectors leaked at program exit.
+                    let o_is_terminal = expr_ends_in_return(o);
+                    if o_is_terminal {
+                        for v in free {
+                            ls.push(v.clone());
+                        }
+                        ls.push(o.clone());
+                    } else {
+                        ls.push(o.clone());
+                        for v in free {
+                            ls.push(v.clone());
+                        }
+                        ls.push(Value::Return(Box::new(Value::Null)));
+                    }
+                } else {
+                    // @PLN85 poison-green — the B5-L3 invariant extended INTO
+                    // block tails: return-site frees must not run before the tail
+                    // expression EVALUATES.  The non-block leg (free_vars) has
+                    // always hoisted a value tail into a `__ret_N` temp before the
+                    // frees; this leg emitted `frees; Return(tail)` — the tail
+                    // then evaluated AFTER the frees, and any store it still read
+                    // (directly or through an alias no fact carries, e.g. a
+                    // fn-ref read out of a struct field calling a closure record
+                    // the host struct's free just cascaded) was a use-after-free:
+                    // silent stale data without LOFT_POISON, deterministic
+                    // garbage with it (the closure/field-capture family).
+                    // A bare-Var tail is free-safe (its slot holds the value) —
+                    // EXCEPT a `&τ` place ref (`RefVar`): returning it DEREFS the
+                    // place DbRef at the Return, after the frees released the
+                    // source store (the @PLN87 L3/L4 live-read shapes under
+                    // poison).  Hoisting `Set(__ret_N, Var(r))` performs the
+                    // deref NOW, before the frees.
+                    let tail_needs_eval = match o.unspan() {
+                        Value::Null => false,
+                        // A `&τ` place ref derefs at the Return (hoist) —
+                        // EXCEPT a `&text`: the promoted out-buffer returned
+                        // per the text-return contract (alive in the caller;
+                        // hoisting it broke native's buffer materialization).
+                        Value::Var(v) => matches!(function.tp(*v), Type::RefVar(inner)
+                            if !matches!(inner.base(), Type::Text(_))),
+                        _ => true,
+                    };
+                    // Text results take the same hoist with the text-leg
+                    // mechanics: the temp's String owns a byte copy, and
+                    // `skip_free` keeps its OpFreeText out of the scope exit
+                    // (the caller copies bytes immediately on return — the
+                    // established `__ret_N` text contract pre_eval/native read).
+                    let is_text_result = matches!(block.result.base(), Type::Text(_));
+                    let mut hoist_tmp: Option<u16> = None;
+                    if is_return
+                        && !free.is_empty()
+                        && (is_value_return_type(&block.result) || is_text_result)
+                        && tail_needs_eval
+                        && !expr_ends_in_return(o)
+                    {
+                        self.ret_temp_counter += 1;
+                        let name = format!("__ret_{}", self.ret_temp_counter);
+                        let tmp = function.add_temp_var(&name, &block.result);
+                        if is_text_result {
+                            function.set_skip_free(tmp);
+                        }
+                        self.var_scope.insert(tmp, self.scope);
+                        self.var_order.push(tmp);
+                        ls.push(v_set(tmp, o.clone()));
+                        hoist_tmp = Some(tmp);
+                    }
+                    for v in free {
+                        // A free of a var the RETURNED tail expression still READS
+                        // cannot run before it — that is a use-after-free (the
+                        // `?? [literal]` return-tail class: interp read the freed
+                        // store silently — LOFT_POISON turns it into a SIGSEGV —
+                        // and native crashed on the 65535 sentinel).  Its freeing
+                        // is owned INSIDE the expression instead: the return-
+                        // delivery materializer consumes an owned-fresh arm local
+                        // after its append, on EVERY path (cross-arm frees).  So
+                        // the pre-return free is DROPPED here, not moved (even
+                        // under the hoist — the materializer already freed the
+                        // consumed store inside the expression; re-emitting the
+                        // free after the temp would double-free it).
+                        if is_return
+                            && let Some(fv) = scope_free_op_var(v, data)
+                            && o.reads_var(fv)
+                            && function.is_arm_consumed(fv)
+                        {
+                            continue;
+                        }
+                        ls.push(v.clone());
+                    }
+                    if let Some(tmp) = hoist_tmp {
+                        ls.push(Value::Return(Box::new(Value::Var(tmp))));
+                    } else if is_return {
+                        ls.push(Value::Return(Box::new(o.clone())));
+                    } else {
+                        ls.push(o.clone());
+                    }
+                }
+            } else {
+                ls.push(o.clone());
+            }
+        }
+        res.push(Value::Block(Box::new(Block {
+            name: block.name,
+            operators: ls,
+            result: block.result.clone(),
+            scope: block.scope,
+            var_size: 0,
+        })));
+        res
+    }
 }
 
 /// True when `expr` is a `Return` (or recursively ends with one through
@@ -2628,33 +2952,72 @@ fn is_value_return_type(tp: &Type) -> bool {
     )
 }
 
-fn returned_var(expr: &Value) -> u16 {
+/// A branch whose TAIL is literally null — `Value::Null` or the
+/// `OpNullRefSentinel()` fall-through `parse_match` injects.  Deliberately does
+/// NOT recurse into `If`: a branch that merely CONTAINS a null sub-arm is not a
+/// null terminal (unifying through it would lose the other sub-arm's value).
+impl Scopes {
+    /// The tail of `expr` is an `If` (a lowered if/match) — its arms deliver
+    /// into the assignment target via the arm-unification machinery.
+    fn tail_is_branch(expr: &Value) -> bool {
+        match expr {
+            Value::If(_, _, _) => true,
+            Value::Block(bl) => bl.operators.last().is_some_and(Self::tail_is_branch),
+            Value::Insert(ops) => ops.last().is_some_and(Self::tail_is_branch),
+            Value::Span(b) => Self::tail_is_branch(&b.1),
+            _ => false,
+        }
+    }
+}
+
+fn is_null_terminal(expr: &Value, null_nr: u32) -> bool {
+    match expr.unspan() {
+        Value::Null => true,
+        Value::Call(d, _) => *d == null_nr,
+        Value::Block(bl) => bl
+            .operators
+            .last()
+            .is_some_and(|o| is_null_terminal(o, null_nr)),
+        Value::Insert(ops) => ops.last().is_some_and(|o| is_null_terminal(o, null_nr)),
+        Value::Return(inner) | Value::Drop(inner) => is_null_terminal(inner, null_nr),
+        _ => false,
+    }
+}
+
+/// P236 extension (@PLN85 P4-records): `returned_var` with a NULL-arm terminal
+/// unifying as a WILDCARD against the other arm's var.  The work-ref null-inits
+/// at function entry and a null arm never allocates into it, so
+/// `Return(Var(v))` yields the same null the sentinel did — while the PRESENT
+/// arm's record now rides the var instead of the freed-TOS channel (the
+/// record match/if-arm UAF the poison sweep exposed: the legacy pattern freed
+/// the arm's store, then `Return(Null)` handed the caller the freed store's
+/// bytes off the eval stack — silently stale without LOFT_POISON, null with).
+fn returned_var_null_unified(expr: &Value, null_nr: u32) -> u16 {
     match expr {
         Value::Var(v) => *v,
         Value::Block(bl) => {
             let mut v = u16::MAX;
             for o in &bl.operators {
-                v = returned_var(o);
+                v = returned_var_null_unified(o, null_nr);
             }
             v
         }
-        Value::Return(inner) | Value::Drop(inner) => returned_var(inner),
-        Value::Insert(ops) => ops.last().map_or(u16::MAX, returned_var),
-        // P236: when both branches of a tail If terminate with the SAME
-        // var (via the work-ref unification done in `block_result`'s
-        // `unify_if_branches_work_refs`), report it so `get_free_vars`
-        // skips OpFreeRef on it — same handling Block-with-tail-Var
-        // returns get for single-branch reference returns.
+        Value::Return(inner) | Value::Drop(inner) => returned_var_null_unified(inner, null_nr),
+        Value::Insert(ops) => ops
+            .last()
+            .map_or(u16::MAX, |o| returned_var_null_unified(o, null_nr)),
         Value::If(_, t, f) => {
-            let t_var = returned_var(t);
-            let f_var = returned_var(f);
-            if t_var == f_var && t_var != u16::MAX {
+            let t_var = returned_var_null_unified(t, null_nr);
+            let f_var = returned_var_null_unified(f, null_nr);
+            if t_var == f_var || (f_var == u16::MAX && is_null_terminal(f, null_nr)) {
                 t_var
+            } else if t_var == u16::MAX && is_null_terminal(t, null_nr) {
+                f_var
             } else {
                 u16::MAX
             }
         }
-        Value::Span(b) => returned_var(&b.1),
+        Value::Span(b) => returned_var_null_unified(&b.1, null_nr),
         _ => u16::MAX,
     }
 }
@@ -2783,7 +3146,7 @@ fn check_text_return(ir: &Value, function: &Function, fn_name: &str, ret_type: &
         return;
     }
 
-    let ret_var = returned_var(ir);
+    let ret_var = returned_var_null_unified(ir, data.def_nr("OpNullRefSentinel"));
     if ret_var == u16::MAX {
         return;
     }
@@ -2855,7 +3218,7 @@ fn check_ref_leaks(
     // whose return type is Reference) passes ownership to the caller — no FreeRef is
     // emitted for it and that is correct.  Exclude it so check_ref_leaks does not
     // false-positive on `fn foo() -> S { S { ... } }`.
-    let direct_ret_var = returned_var(ir);
+    let direct_ret_var = returned_var_null_unified(ir, data.def_nr("OpNullRefSentinel"));
     // Transitive: if the returned variable depends on another variable, that
     // variable's store must also survive — include it in ret_deps.
     if direct_ret_var != u16::MAX {

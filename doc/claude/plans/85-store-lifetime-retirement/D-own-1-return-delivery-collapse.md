@@ -222,6 +222,161 @@ inline sub-cases of the `Type::Reference(td, ls)` arm (#120 hidden-ref recovery 
 return_views_local copy / plain rename) are now cells of one selector; the separate
 nullable-unwrap arm is left as-is (its own earlier `block_result` branch).
 
+## Slice 2b — the nullable-unwrap arm folds into the ONE dispatch (2026-07-03)
+
+The `tail_is_nullable_unwrap` arm (block_result's last pre-selector Reference path)
+carried the `MaterializeView` mechanism INLINE — character-for-character the
+`RefDelivery::MaterializeView` dispatch body. Folded: the arm keeps its own entry
+(it keys on the DECLARED result + the unwrap tail shape, which the `t == Reference`
+arm cannot see) and its body is now `dispatch_reference_delivery(MaterializeView)`
+— the #416/#448 mechanism-through-one-dispatch pattern on the Reference side.
+Byte-identical on `D-own-1-reference-corpus.loft` (0 diff lines, IR + bytecode +
+native Rust), corpus runs clean both backends, suite green.
+
+**Instrument re-read at this point (post-flip, post-fold):** `block_result` is
+**320 lines** (was 459), ~24 helper calls (was 45); every VECTOR mechanism flows
+through `dispatch_vector_delivery`, every REFERENCE mechanism through
+`dispatch_reference_delivery`. Remaining thicket: the TEXT sub-story (the
+`text_return` work-buffer promotion + the cross-phase B5-L3/`__ret_text` family —
+per-var rules, not a tail-shape selector; a different collapse shape), the
+`return_buffer`/`nrvo` plumbing helpers, and the C86 bind-site derivation residual
+(**DONE 2026-07-03** — `classify_vec_bind`/`VecBind` in parser/expressions.rs: the
+whole-value vector-bind verdict as a pure selector (SelfAssign / CopyVar /
+CopyOwnedField / NotABind), C86 contract + p379 borrowed-base view + #426
+routed-forward exclusions on the variants; byte-identical over the NEW
+`C86-bind-corpus.loft` (b1-b8, one fn per verdict face) + the four prior corpora;
+oracle agreement witnessed via `LOFT_MATERIALIZE_DUMP` — every Copy verdict shows a
+`MAT verdict=Copy` row, view binds none; the elide half was already post-parse
+`elide_borrows`)
+(expressions.rs `struct_vec_field`).
+
+## Slice 2c — `text_return`'s per-var ladder → the pure `classify_text_dep` selector (2026-07-03)
+
+The text family's collapse has a different shape (per-VAR rules, not tail shapes) —
+so its selector classifies the RETURN-DEP VAR: `TextDep { Attr(idx), SkipCaptured,
+SkipTupleLocal (@P330), PromoteHidden, PromotePlain }`, applied by one loop; rule
+rationale on the variants, emission mechanics at the arms. Byte-identical on BOTH
+corpora (text + reference, 0 diff incl. post-fmt), suite 2596/2596 fully green.
+**Bonus find:** building the corpus surfaced a UB-class `-> text?` null-path bug on
+native (the dangling `__ret_N` Str — pre_eval's B5-L3 gate missed `optional(text)`;
+fixed with the `.base()` peel, guarded by `85-text-optional-null-return.loft`).
+The classify/apply split now covers all three return-type families.
+
+## Slice 3 (BUILT 2026-07-03) — `ref_return` → `classify_ret_promotion`
+
+The remaining funnel: **`ref_return` is 473 lines, 13 callers** — larger than
+post-collapse `block_result` (320).  Full read done; the anatomy is the selector
+shape one level richer:
+
+**The carried facts it computes (shape-walks to keep or fold):**
+`reassign_count(body, v)` (Plan-57, ≥2 fresh literals ⇒ no NRVO) ·
+`site_value_ref(tail)` (which ref carries the site's value) ·
+`return_field_base_var(tail)` (#425 field-projection-of-local) ·
+`bound_already` (dep already names the buffer attr) ·
+the #306 transitive dep expansion (direct vs transitive boundary) ·
+the `jo_arm_skip` pre-pass (the join_own borrowed-binding delivery).
+
+**The per-var verdict ladder (each `continue`-guard is a verdict):**
+
+| # | verdict | today's guard |
+|---|---|---|
+| 1 | `SkipDelivered` | `jo_arm_skip` (borrowed binding already delivered to `__retbuf`) |
+| 2 | `SkipReassigned` | Plan-57 count ≥ 2 — EXCEPT the #355 named-local + plain-fn + BlockTail + vector case (falls through to deliver) |
+| 3 | `MergeAttr { a, chain_mid_site }` | name already an attribute; #356 MidReturn work-ref re-chains the site value |
+| 4 | `MergeOnly` | transitively-reached (#306) — dep merge, never promote |
+| 5 | `SkipInnerRef` | inner work-ref ≠ site value and not adopted by it (cluster I-d exception: site ADOPTS `v` ⇒ do not skip) |
+| 6 | `RenameToBuffer` | `allow_rename` = NOT(bound_already ∥ reassigned ∥ returns_own_field #425 ∥ MidReturn-vector) — the @PLAN59 attr-rename NRVO |
+| 7 | `BindToBuffer { Substitute ∥ Copy }` | the ONE-BUFFER invariant: work-ref ⇒ substitute + unregister + chain; named local ⇒ `materialize_return_into` / `materialize_vector_return_into` copy |
+| 8 | `GrowLambda` | lambda-only hidden-attr growth (pass-1-only for plain fns, asserted) |
+
+**The post-loop tail phase** (BlockTail + vector + buffer-bound): `deliver_mid_vector_returns`
++ the #457 implicit-tail `OpReplaceVector` adopt-fix + the clear-on-entry, then the
+`Deps::attrs` return finalization.
+
+**The collapse:** `classify_ret_promotion(v, &RetCtx) -> RetPromotion` (pure) + one
+apply loop, mirroring `TextDep`/`Delivery`/`RefDelivery`.  `RetCtx` carries
+{site, ret, site_value, direct_count, jo_arm_skip, buffer, is_plain_fn}.
+
+**Instrument: BUILT (2026-07-03).** `D-own-1-promotion-corpus.loft` — one fn per
+verdict rung, coverage PROVEN with the `LOFT_TRACE_RR` per-verdict sentinel now in
+`ref_return` (trace-only, env-gated; one line per continue-guard):
+
+| corpus fn | verdict(s) it fires |
+|---|---|
+| r1_param / r6_wrap | MergeAttr (param) |
+| r2_lit / r6_mk | RenameToBuffer (work var) |
+| r3_nrvo, r4_reassigned, r8_mid | BindCopy (`+=`/reassign counts as Plan-57 reassigned → #355 fall-through) + MergeOnly (`__vdb`) |
+| r5_own_field | BindCopy via #425 returns_own_field |
+| r6_inner | RenameToBuffer (outer call ref) — the inner ref never reaches direct `ls` |
+| r7_jo (vector\<STRUCT\> match, `[]` arm) | SkipDelivered (jo_arm_skip) |
+| r9_rec | BindCopy + MergeOnly (the #457 adopt tail) |
+| r10_lambda | Grow (single-assignment lambda local) |
+| r10b_lambda | SkipReassigned (lambda — #355 exception is plain-fn-only) |
+| r11_trans | RenameToBuffer + BindSubstitute |
+| r12_ref | RenameToBuffer (Reference family) |
+
+**Sentinel sweep over ALL 346 `tests/scripts/*.loft` (compile via introspect):**
+BindCopy 2114 · MergeOnly 1057 · MergeAttr 831 · RenameToBuffer 819 ·
+BindSubstitute 27 · SkipDelivered 1 · **SkipInnerRef 0 · SkipReassigned 0 ·
+Grow 0**.  So: (a) `SkipInnerRef` is DEAD-IN-PRACTICE suite-wide — gate-ON and
+gate-OFF probes (nested calls, two-borrow callees, `??` joins) could not reach it
+either, because a non-site-value work ref only ever arrives TRANSITIVELY (→
+MergeOnly guards it first); keep the verdict variant in the collapse but mark it
+unreachable-suspected. (b) SkipReassigned/Grow are lambda-only — no suite script
+exercised them before this corpus.
+
+**Leak cells the corpus surfaced — ALL FIXED (2026-07-03, after the collapse
+landed; guard: `tests/scripts/85-fnref-lambda-return-ownership.loft`):**
+- **L1** (both backends) — root: a fn-ref/lambda call's result type carried the
+  CALLEE's attr-space deps verbatim (`try_fn_ref_call` returned `*ret_type`
+  raw); a grown hidden-buffer index misread in the caller as its own attr 1
+  (`__retbuf`) faked `MergeAttr` ("already delivered"), so the store
+  `fn_call_ref` adaptively allocates was returned by value with no owner.
+  Fix: `fnref_result_type` (parser/mod.rs) — the same def→frame conversion
+  plain calls get via `call_dependencies`: visible-param deps map through the
+  actual argument types, hidden/grown indices drop (the value arrives OWNED).
+  Side benefit: `t5_lambda_ref` in the text corpus lost a spurious promoted
+  `&text` param (its `cap` local was hoisted off the same misread borrow).
+- **L2** (native only) — root: the fn-ref dispatch pre-allocated ONE
+  `__vc_hbuf` before the candidate match; every taken arm without a hidden
+  buffer leaked it.  Fix (generation/emit.rs): the buffer allocates INSIDE
+  each arm that needs it — the gate mirrors the synthetic-args predicate (ALL
+  hidden heap attrs: Reference candidates cross-match vector dispatches via
+  the shared DbRef ABI) — and an arm whose candidate does not RETURN the
+  buffer (returned deps don't name it) frees it after the call.
+- **L3** (both backends) — root: `ref_return`'s finalization rebuilt
+  `returned` from the `ret` clone taken BEFORE the jo pre-pass finalized the
+  `{__retbuf}` dep — with every candidate jo_arm_skip'd, the dep reverted to
+  `[]`.  Callers typed the result OWNED: double-freed the delivered buffer
+  (result + buffer var, same store — a latent UAF, "clean" on net count), and
+  a `??`-discharge read (`g0[1] ?? E7{..}`) triggered scan_set's dep-prefix
+  entry null-init on the OWNED-typed result var → the entry `InitRef +
+  Database` store was orphaned by the call assignment (the visible leak).
+  Fix: re-read `ret` after the pre-pass (control.rs).
+
+The byte-identical bar applies per verdict cell; the leak cells are pinned as
+CURRENT behavior until their own fix slices.
+
+**The cut (landed):** `RetPromotion` (9 variants — `SkipDelivered / SkipReassigned /
+MergeAttr{a, chain_site} / MergeOnly / SkipInnerRef / Rename{buf_attr, chain_site} /
+Bind{buf_attr, buf_var, substitute} / Grow`) + `RetPromoCtx` (site, ret, site_value,
+is_plain_fn, newrecord_nr, jo_arm_skip) + the pure `classify_ret_promotion(v,
+transitive, body, dep, &ctx)` — `dep` is the ACCUMULATED return-dep list, so
+classification is per-var in-loop (a later candidate's `Rename` is suppressed once an
+earlier site chained into the placeholder), exactly the text_return pattern.
+`reassign_count` hoisted out of `ref_return` to an assoc fn.  The `LOFT_TRACE_RR`
+sentinel now prints the verdict Debug at ONE site.
+
+**Proof:** introspect BEFORE == AFTER (0 diff) on ALL FOUR corpora (promotion,
+reference, text, block_result), re-verified post-`cargo fmt`; corpus runs on both
+backends with the SAME values and the SAME pinned leak signature (L1-L3 unchanged);
+clippy `-D warnings` clean; full suite green (see commit).
+
+**Size:** `ref_return` 473 → 309 lines; verdict logic = 107-line pure selector +
+47-line hoisted Plan-57 walk; the apply loop carries mechanics only.
+
+
+
 **Behaviour-PRESERVING.** Corpus `bytecode-comparisons/D-own-1-reference-corpus.loft` (one fn
 per Reference-return path: owned-fresh, wrap-call, return-views-local #306, nullable-unwrap,
 arg-borrow). Verified: bytecode + native Rust byte-identical before/after (the only introspect
@@ -229,3 +384,39 @@ diff was the scope-id label + variable-table columns, proven NON-DETERMINISTIC b
 the same binary twice). Full suite 2542 green both backends; differential oracle green. No
 behaviour change — organisational collapse (the Reference arm was clean; this readies it for
 the carried-fact model and shrinks the thicket toward the beacon).
+
+## Slice 4 — the FREE side reads the canonical fact (2026-07-04)
+
+The delivery + `ref_return` collapse left the FREE side (`scan_set` / codegen
+reassign) still re-deriving ownership from shape.  Two inline re-derivations of the
+canonical `Definition::returns_borrowed_view()` fact — the SAME "a visible-attr
+return dep borrows it" scan the delivery side already reads — folded onto the fact:
+
+- `scopes.rs::ref_rhs_ownership` (drives the #316 owned→view transition-free +
+  `owned_refs` tracker): its `n_`-call arm re-scanned the return deps for a visible
+  attr inline → now calls `returns_borrowed_view()`.
+- `state/codegen.rs` owned-Reference reassign gate (the #360 borrowed-view
+  pass-through): the identical inline dep-scan → `returns_borrowed_view()` (siblings
+  at 1845/2582 already read it).
+
+Both byte-identical (0-diff, IR + bytecode + native Rust) over all eight
+D-own-1/C86/462 corpora; the #316 transition probe + `tests/scripts/291` clean both
+backends; suite + differential oracle (incl. `--ignored`) + `LOFT_POISON` green.
+
+**Instrument re-read + the honest finish line.** `block_result` is **328 lines / 21
+helper calls** (from 459 / 45), the 15 tail-shape classifiers down to ~3
+entry-guards; every delivery mechanism flows through one `classify_X`/`dispatch_X`.
+The delivery + reassign re-derivations are GONE.  What remains is NOT more D-own-1
+collapse:
+
+1. `scan_set`'s owned-vs-view TRACKER (`ref_rhs_ownership` → `owned_refs`) cannot
+   fully fold onto `ownership_of`: the free side needs "unclassifiable ⇒ don't-own,
+   don't-free-later" conservatism (`RefRhs::Unknown` drops from `owned_refs`), the
+   OPPOSITE of the oracle's `Own::Owned` default.  Merging would flip the
+   load-bearing #316 transition-free — a **D-own-2** conservatism-unification.
+2. The `??`-JOIN witness (`OpBindOrCopy` / `OpFreeRefIfDistinct`) is inherently
+   runtime (which arm ran is unknown at compile time) — a genuine runtime fact, not
+   a shape re-derivation to delete.
+
+So D-own-1's *collapse* charter is essentially met; the tail is D-own-2 (complete
+the free-side fact) + the runtime Join, both of which are @PLN90's reframing.

@@ -1,0 +1,55 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN85 D-own-2 — a struct whole-value COPY returned by value (`fn f(x:Box)->Box{ r=x; r }`)
+// leaked its owned copy on NATIVE (interp clean).  Per C86, `r = x` COPIES, so `r` OWNS
+// its store and the return does NOT borrow `x` — but the return type carried the VISIBLE
+// param `x` (`Box["r","x"]`), so the caller's `returns_borrowed_view()` read true and
+// never freed the copy.  Root: the C86 copy dep-strip is pass-2-only (and covered vectors,
+// not structs), so PASS 1 recorded `x` as a return source and PASS 2 carried it stale via
+// `ref_return`'s `dep = cur.clone()`.  Fix (control.rs ref_return): prune a VISIBLE-attr
+// return dep that NO pass-2 return source justifies (`expanded`, which includes transitive
+// deps — a GENUINE borrow like `fn id(x)->Box{x}` keeps `x`).  Values assert on both
+// backends; the wrap leak-gate proves the owned copies are freed.
+
+struct Box { v: integer }
+struct Pair { a: Box, b: Box }
+
+// (1) the bug: whole-value copy returned by value — owns, must be freed.
+fn cp(x: Box) -> Box { r = x; r }
+// (2) copy then mutate — still owns; mutation must not touch the caller's x.
+fn cp_mut(x: Box) -> Box { r = x; r.v = r.v + 1; r }
+// (3) a GENUINE borrow return — the return DOES borrow x; must stay borrowed (no double-free).
+fn borrow_ret(x: Box) -> Box { x }
+// (4) nested field copy returned.
+fn nested(p: Pair) -> Box { r = p.a; r }
+// (5) the JOIN face: borrow on the false arm, fresh owned on the true arm.
+fn choose(cond: boolean, x: Box) -> Box { r = x; if cond { r = Box { v: 99 }; } r }
+
+fn main() {
+    a = Box { v: 10 };
+
+    r1 = cp(a);
+    assert(r1.v == 10 && a.v == 10, "cp {r1.v} {a.v}");
+
+    r2 = cp_mut(a);
+    assert(r2.v == 11 && a.v == 10, "cp_mut {r2.v} {a.v}");
+
+    r3 = borrow_ret(a);
+    assert(r3.v == 10 && a.v == 10, "borrow {r3.v}");
+
+    p = Pair { a: Box { v: 1 }, b: Box { v: 2 } };
+    r4 = nested(p);
+    assert(r4.v == 1, "nested {r4.v}");
+
+    b = Box { v: 5 };
+    rf = choose(false, b);
+    rt = choose(true, b);
+    assert(rf.v == 5 && rt.v == 99 && b.v == 5, "choose {rf.v} {rt.v}");
+
+    // repeated copy-returns in a loop — no per-iteration leak.
+    total = 0;
+    for i in 0..30 { total += cp(Box { v: i }).v; }
+    assert(total == 435, "loop {total}");
+
+    println("struct-copy-return-owned ok");
+}

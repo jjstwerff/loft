@@ -1,0 +1,158 @@
+// @PLN85 D-own-1 slice 3 — ref_return promotion-verdict corpus: one fn per rung
+// of the per-var verdict ladder, for the byte-identical before/after gate of the
+// classify_ret_promotion collapse.  Coverage is PROVEN via the LOFT_TRACE_RR
+// per-verdict sentinel (control.rs), not assumed — see the plan doc's slice-3
+// section for the verdict ↔ fn map this file must keep firing.
+//
+// The leak cells L1-L3 this corpus surfaced are FIXED (2026-07-03) — the file
+// must run leak-free on BOTH backends (LOFT_STORES=warn /
+// LOFT_NATIVE_LEAK_CHECK); the graduated guard is
+// tests/scripts/85-fnref-lambda-return-ownership.loft.  Mechanisms: L1
+// fnref_result_type (callee attr-space deps no longer leak into callers), L2
+// per-arm lazy `__vc_hbuf` in the native dispatch, L3 ref_return's stale-`ret`
+// finalization clobber of the jo pre-pass dep.
+
+struct S2 { v: vector<integer>, tag: integer }
+enum Cell { Empty, Filled { items: vector<integer> } }
+
+// r1 — MergeAttr: the returned var is a parameter (name already an attribute).
+fn r1_param(v: vector<integer>) -> vector<integer> { v }
+
+// r2 — BindSubstitute: a parser-minted work ref (vector literal tail) binds to
+// the one signature-time buffer.
+fn r2_lit() -> vector<integer> { [7, 8, 9] }
+
+// r3 — RenameToBuffer: the classic NRVO — a named local, single assignment,
+// grown in place, returned at the body tail.
+fn r3_nrvo(n: integer) -> vector<integer> {
+  r = [1, 2];
+  r += [n];
+  r
+}
+
+// r4 — SkipReassigned → the #355 named-local exception falls through to
+// BindCopy (plain fn + BlockTail + vector): two distinct fresh literals.
+fn r4_reassigned(c: boolean) -> vector<integer> {
+  r = [1, 2];
+  if c {
+    r = [3, 4, 5];
+  }
+  r
+}
+
+// r5 — #425 returns_own_field: a field projection of THIS local suppresses the
+// rename; the candidate falls to BindCopy (materialize into the buffer).
+fn r5_own_field(n: integer) -> vector<integer> {
+  s = S2 { v: [n, n + 1], tag: n };
+  s.v
+}
+
+// r6 — SkipInnerRef: `return wrap(mk(x))` carries TWO work refs; the inner
+// call's ref is not the site's value and stays a plain local.
+fn r6_mk(n: integer) -> vector<integer> { [n, n + 1] }
+fn r6_wrap(v: vector<integer>) -> vector<integer> { v }
+fn r6_inner(n: integer) -> vector<integer> { r6_wrap(r6_mk(n)) }
+
+// r7 — SkipDelivered (jo_arm_skip): a borrowed match-field binding (vector of
+// STRUCT) returned directly, vs an owned `[]` arm — the join_own pre-pass
+// delivers it into a separate __retbuf (the match_return ROOT shape).
+struct E7 { hp: integer not null, name: text }
+enum Cell7 { Nil, Filled7 { items: vector<E7> } }
+fn r7_jo(c: Cell7) -> vector<E7> {
+  match c {
+    Filled7 { items } => { items },
+    _ => { [] },
+  }
+}
+
+// r8 — MidReturn of a named local + the deliver_mid_vector_returns tail phase.
+fn r8_mid(c: boolean) -> vector<integer> {
+  r = [1, 2];
+  if c {
+    return r;
+  }
+  r += [3];
+  r
+}
+
+// r9 — the #457 adopt tail: the named local reassigned to a recursive call in
+// an arm, returned as the implicit tail (OpReplaceVector delivery).
+fn r9_rec(n: integer) -> vector<integer> {
+  r = [n];
+  if n > 0 {
+    r = r9_rec(n - 1);
+    r += [n];
+  }
+  r
+}
+
+// r10 — Grow (lambda-only arity growth): a lambda with a single-assignment
+// promotable local (a `+=` would count as reassignment → skip, pinned in r10b).
+fn r10_lambda(n: integer) -> vector<integer> {
+  f = fn(x: integer) -> vector<integer> {
+    q = [x, x + 1];
+    q
+  };
+  f(n)
+}
+
+// r10b — SkipReassigned inside a lambda (not a plain fn, so the #355
+// exception does NOT apply — the reassigned local is simply skipped).
+fn r10b_lambda(n: integer) -> vector<integer> {
+  g = fn(x: integer) -> vector<integer> {
+    q = [x];
+    q += [x + 1];
+    q
+  };
+  g(n)
+}
+
+// r11 — MergeOnly (#306 transitive): the returned view's deps transitively
+// reach the local pool — merged into the return deps, never promoted.
+fn r11_trans(seed: integer) -> S2 {
+  pool: vector<S2> = [];
+  pool += [S2 { v: [seed], tag: seed }];
+  found = pool[0] ?? S2 { v: [], tag: 0 };
+  found
+}
+
+// r12 — the Reference-return family through the same ladder (struct NRVO).
+fn r12_ref(n: integer) -> S2 {
+  s = S2 { v: [n], tag: n };
+  s.tag += 1;
+  s
+}
+
+fn main() {
+  a = r1_param([1, 2, 3]);
+  b = r2_lit();
+  c = r3_nrvo(9);
+  d0 = r4_reassigned(false);
+  d1 = r4_reassigned(true);
+  e = r5_own_field(4);
+  f = r6_inner(6);
+  g0 = r7_jo(Filled7 { items: [E7 { hp: 5, name: "a" }, E7 { hp: 6, name: "b" }] });
+  g1 = r7_jo(Nil);
+  h0 = r8_mid(true);
+  h1 = r8_mid(false);
+  i = r9_rec(3);
+  j = r10_lambda(2);
+  jb = r10b_lambda(2);
+  k = r11_trans(8);
+  l = r12_ref(10);
+  assert(len(a) == 3 && a[2] == 3, "r1: {a}");
+  assert(len(b) == 3 && b[0] == 7, "r2: {b}");
+  assert(len(c) == 3 && c[2] == 9, "r3: {c}");
+  assert(len(d0) == 2 && len(d1) == 3 && d1[2] == 5, "r4: {d0} {d1}");
+  assert(len(e) == 2 && e[1] == 5, "r5: {e}");
+  assert(len(f) == 2 && f[1] == 7, "r6: {f}");
+  g0e = g0[1] ?? E7 { hp: 0, name: "" };
+  assert(len(g0) == 2 && g0e.hp == 6 && len(g1) == 0, "r7: {len(g0)} {g0e.hp}");
+  assert(len(h0) == 2 && len(h1) == 3 && h1[2] == 3, "r8: {h0} {h1}");
+  assert(len(i) == 4 && i[0] == 0 && i[3] == 3, "r9: {i}");
+  assert(len(j) == 2 && j[1] == 3, "r10: {j}");
+  assert(len(jb) == 2 && jb[1] == 3, "r10b: {jb}");
+  assert(k.tag == 8 && len(k.v) == 1, "r11: {k.tag}");
+  assert(l.tag == 11 && l.v[0] == 10, "r12: {l.tag}");
+  println("promotion-corpus ok");
+}

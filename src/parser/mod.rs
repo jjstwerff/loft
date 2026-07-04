@@ -1117,15 +1117,63 @@ impl Parser {
     /// caught here, because that spurious attr is itself an attribute-count divergence.
     #[cfg(debug_assertions)]
     fn assert_pass2_def_attr_stable(&self, pass1_attr_counts: &[usize]) {
-        debug_assert_eq!(
-            pass1_attr_counts.len(),
-            self.data.definitions.len(),
-            "H5: definition COUNT diverged across passes (pass1={}, pass2={})",
-            pass1_attr_counts.len(),
-            self.data.definitions.len(),
-        );
+        // Pass-2 def GROWTH has exactly one legal form (the fuzzer's F1 catch):
+        // the reduce/map/filter builtin family desugars on pass 2 only — pass 1
+        // early-returns the result type because unresolved lambda/forward types
+        // make the full desugar impossible there — and the desugar machinery
+        // lazily mints synthetic vector wrapper defs (`vector<T>` +
+        // `main_vector<T>`, `Data::vector_def`) that pass 1 never reached.  For
+        // `map` the OUTPUT element wrapper is unknowable in pass 1 (the lambda's
+        // return type), so symmetric pass-1 minting is structurally impossible.
+        // These mints are name-keyed, idempotent APPENDS: every pass-1 def
+        // number is untouched, so the numbering contract H5 protects holds.
+        // Anything else appearing only in pass 2 is a real cross-pass bug.
+        // The second legal append: a GENERIC INSTANTIATION.  Instantiation is
+        // pass-2-only BY DESIGN (`parse_call`: pass 1 only predicts the return
+        // type — instantiating there would capture the template's still-being-
+        // built body IR), so the monomorphised `t_<LEN><Type>_<fn>` def first
+        // exists in pass 2.  Recognized precisely: the mangled tail must name
+        // an existing `n_<fn>` template of `DefType::Generic`.
+        for d in pass1_attr_counts.len()..self.data.definitions.len() {
+            let name = self.data.def(d as u32).name();
+            let dt = self.data.def_type(d as u32);
+            let lazy_wrapper = (matches!(dt, DefType::Vector) && name.starts_with("vector<"))
+                || (matches!(dt, DefType::Struct) && name.starts_with("main_vector<"));
+            let lazy_instantiation =
+                matches!(dt, DefType::Function) && self.h5_names_a_generic_template(name);
+            debug_assert!(
+                lazy_wrapper || lazy_instantiation,
+                "H5: pass-2-only definition `{name}` (#{d}, {dt:?}) is not a lazy vector \
+                 wrapper or generic instantiation — a real cross-pass divergence \
+                 (pass1={}, pass2={})",
+                pass1_attr_counts.len(),
+                self.data.definitions.len(),
+            );
+        }
         for (d, &c1) in pass1_attr_counts.iter().enumerate() {
             let c2 = self.data.attributes(d as u32);
+            // The attr-level lazy appends (both PROVEN identical on origin/main,
+            // i.e. long-latent, when the DA calibration first checked them):
+            // `__closure` — the capture hidden-arg is positioned in pass 2 from
+            // pass 1's closure record (`parse_lambda*`: captures are only known
+            // after the body parses); `__work_N` — a text-return work-buffer
+            // promotion the pass-1 classify could not yet see.  Both are
+            // name-keyed TRAILING appends: every pass-1 attr keeps its index.
+            // Anything else — notably `__ref_N` / `__retbuf` growth, the
+            // ref_return drift class this assert was built for — stays fatal.
+            if c2 > c1 {
+                for a in c1..c2 {
+                    let n = self.data.attr_name(d as u32, a);
+                    debug_assert!(
+                        n == "__closure" || n.starts_with("__work_"),
+                        "H5 two-pass contract: def `{}` (#{d}) grew a pass-2-only \
+                         attribute `{n}` (pass1={c1}, pass2={c2}) that is not a \
+                         documented lazy append — a real cross-pass divergence",
+                        self.data.def(d as u32).name(),
+                    );
+                }
+                continue;
+            }
             debug_assert_eq!(
                 c1,
                 c2,
@@ -1134,6 +1182,31 @@ impl Parser {
                 self.data.def(d as u32).name(),
             );
         }
+    }
+
+    /// H5 helper: does `name` carry the instantiation mangling
+    /// `t_<LEN><SafeType>_<fn>` (see `try_generic_instantiation`) AND does the
+    /// `n_<fn>` template exist as a `DefType::Generic`?  Only such defs are
+    /// legal pass-2-only appends of the Function kind — a source-declared
+    /// method parses in pass 1 and can never appear as a trailing pass-2 def.
+    #[cfg(debug_assertions)]
+    fn h5_names_a_generic_template(&self, name: &str) -> bool {
+        let Some(rest) = name.strip_prefix("t_") else {
+            return false;
+        };
+        let digits = rest.chars().take_while(char::is_ascii_digit).count();
+        let Ok(type_len) = rest[..digits].parse::<usize>() else {
+            return false;
+        };
+        let after = &rest[digits..];
+        if after.len() <= type_len || !after.is_char_boundary(type_len) {
+            return false;
+        }
+        let Some(fn_name) = after[type_len..].strip_prefix('_') else {
+            return false;
+        };
+        let g_nr = self.data.def_nr(&format!("n_{fn_name}"));
+        g_nr != u32::MAX && matches!(self.data.def_type(g_nr), DefType::Generic)
     }
 
     /// Plan-07 phase 4h — walk user struct definitions and emit
@@ -2230,8 +2303,21 @@ impl Parser {
                     // be decremented once per call and eventually
                     // reach ref_count 0, dangling the caller's
                     // owning reference across loop iterations.
+                    //
+                    // Pass-2 ONLY: `skip_free` is a GLOBAL per-var bit on a
+                    // NAME-pooled work-ref (`__ref_N`, counter-numbered per
+                    // pass), and it persists in the stored var table across
+                    // the pass boundary.  When the two passes' `work_refs`
+                    // call sequences differ, pass 1's carrier NAME can be
+                    // pass 2's OWNED literal temp — the pass-1 stamp then
+                    // disarms that temp's scope-exit free and its store
+                    // leaks (the p179 `&`-field-arg cell; the counter-
+                    // coupling hazard, COMPILER.md).  Pass-1 IR is discarded,
+                    // so the stamp's only lasting effect IS the poison.
                     let wv = self.vars.work_refs(is_type, &mut self.lexer);
-                    self.vars.set_skip_free(wv);
+                    if !self.first_pass {
+                        self.vars.set_skip_free(wv);
+                    }
                     *code = Value::Insert(vec![
                         v_set(wv, orig),
                         self.cl("OpCreateStack", &[Value::Var(wv)]),
@@ -5489,6 +5575,40 @@ impl Parser {
             )
         } else {
             tp
+        }
+    }
+
+    /// @PLN85 L1 — the def→frame dep conversion for FN-REF call results.
+    /// A fn-ref/lambda call's declared return type carries the CALLEE's
+    /// attr-space deps (e.g. a grown hidden work-buffer's index).  Read
+    /// verbatim in the caller they alias arbitrary caller attrs/frame vars —
+    /// the L1 leak: a lambda's hidden-buffer index 1 read as the CALLER's
+    /// attr 1 (`__retbuf`) made `ref_return` believe the CallRef tail already
+    /// rode the buffer, so no delivery was emitted and the store
+    /// `fn_call_ref` allocates at runtime leaked on both backends.  Convert
+    /// exactly as plain calls do (`call_dependencies`): map visible-param
+    /// indices through the actual argument types; out-of-range (hidden /
+    /// grown) indices drop — the adaptive fn-ref ABI allocates those buffers
+    /// at runtime, so the value arrives OWNED.
+    fn fnref_result_type(ret: Type, types: &[Type]) -> Type {
+        match ret {
+            Type::Text(d) => {
+                Type::Text(Deps::frame(Self::resolve_deps(types, d.as_attr_indices())))
+            }
+            Type::Vector(to, d) => Type::Vector(
+                to,
+                Deps::frame(Self::resolve_deps(types, d.as_attr_indices())),
+            ),
+            Type::Reference(to, d) => Type::Reference(
+                to,
+                Deps::frame(Self::resolve_deps(types, d.as_attr_indices())),
+            ),
+            Type::Enum(to, true, d) => Type::Enum(
+                to,
+                true,
+                Deps::frame(Self::resolve_deps(types, d.as_attr_indices())),
+            ),
+            other => other,
         }
     }
 

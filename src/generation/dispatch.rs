@@ -113,38 +113,50 @@ impl Output<'_> {
         {
             if to != &Value::Null {
                 let name = sanitize(variables.name(var));
-                // @PLN87 P2.2 — a `&`-param write-back of an OWNED construction
-                // (the RHS is the transferred skip_free temp) must FREE the
-                // DISPLACED caller store (`*var_o`) before installing the new
-                // value, else the old store orphans (the pre-P2.2 leak).  The
-                // native twin of the interp `OpGetStackRef`+`OpFreeRef` at the
-                // RefVar-set site (codegen.rs); `OpFreeRef` no-ops on the null
-                // sentinel.  Heap inner type only; a `RefVar(Text)` buffer has no
-                // such displaced store.
-                let src = to.result_var();
-                if src != u16::MAX
-                    && variables.is_skip_free(src)
-                    && matches!(
-                        **inner,
-                        Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
-                    )
-                {
-                    write!(w, "OpFreeRef(cell, *var_{name}, \"var_{name}\"); ")?;
-                }
-                write!(w, "*var_{name} = ")?;
+                // @PLN87 P2.2 / @PLN85 t4 — a `&`-param whole-record write-back that
+                // installs a fresh OWNED store (`o = Obj{..}` literal OR `o = mk()`
+                // owned-returning call) must FREE the DISPLACED caller store
+                // (`*var_o`), else it orphans.  P2.2 covered only the literal (via
+                // `is_skip_free`); t4 is the call twin, whose NRVO buffer `__ref_N`
+                // is not skip_free — the ownership oracle's `Own::Owned` names both.
+                // Aliasing-safe: stash the OLD DbRef by value, install the new store,
+                // then free the old one only if distinct — a self-reading RHS
+                // (`o = mk_from(o)`) keeps the old store live across the eval (no
+                // free-before UAF) and a same-store install is a no-op.  The native
+                // twin of the interp stash + `OpFreeRefIfDistinct` at the RefVar-set
+                // site (codegen.rs).  Heap inner type only; a `RefVar(Text)` buffer
+                // has no such displaced store.
+                let amp_owned_writeback = matches!(
+                    **inner,
+                    Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+                ) && matches!(
+                    crate::use_analysis::ownership_of(self.data, self.def_nr, to),
+                    crate::use_analysis::Own::Owned
+                );
                 let needs_text_coerce = matches!(**inner, Type::Text(_));
-                if needs_text_coerce {
-                    // P223: wrap the RHS in `(...)` so that `.to_string()`
-                    // attaches to the whole expression — without parens
-                    // an inner `Var(text_local)` (which emits `&var_x`)
-                    // would parse as `&(var_x.to_string())` (E0308:
-                    // `&String` vs `String`) per Rust method-call
-                    // precedence.  The parens are harmless for other
-                    // RHS shapes that already produce `String`/`&str`.
-                    write!(w, "(")?;
+                if amp_owned_writeback {
+                    write!(w, "{{ let _old_disp = *var_{name}; *var_{name} = ")?;
+                } else {
+                    write!(w, "*var_{name} = ")?;
+                    if needs_text_coerce {
+                        // P223: wrap the RHS in `(...)` so that `.to_string()`
+                        // attaches to the whole expression — without parens
+                        // an inner `Var(text_local)` (which emits `&var_x`)
+                        // would parse as `&(var_x.to_string())` (E0308:
+                        // `&String` vs `String`) per Rust method-call
+                        // precedence.  The parens are harmless for other
+                        // RHS shapes that already produce `String`/`&str`.
+                        write!(w, "(")?;
+                    }
                 }
                 self.output_code_inner(w, to)?;
-                if needs_text_coerce {
+                if amp_owned_writeback {
+                    write!(
+                        w,
+                        "; if _old_disp.store_nr != var_{name}.store_nr {{ \
+                         OpFreeRef(cell, _old_disp, \"_old_disp\"); }} }}"
+                    )?;
+                } else if needs_text_coerce {
                     write!(w, ").to_string()")?;
                 }
             }
@@ -369,7 +381,7 @@ impl Output<'_> {
             // `_src == _dst` guard re-derived this and LEAKED the owned arm — `_src`
             // (a fresh `m_none()`) never equals `_dst` (the old slot), so it
             // materialised + dropped the owned store.
-            let join_witness = if std::env::var_os("LOFT_JOIN_OWN").is_some()
+            let join_witness = if crate::keys::join_own_enabled()
                 && let crate::use_analysis::Own::Join { base } =
                     crate::use_analysis::ownership_of(self.data, self.def_nr, to)
                 && base != u16::MAX
@@ -402,9 +414,21 @@ impl Output<'_> {
                 }
                 None => "_src.store_nr == u16::MAX || _src.store_nr == _dst.store_nr".to_string(),
             };
+            // @PLN85 (the adopt-arm placeholder leak) — the ADOPT arm replaces
+            // `var_{name}`'s slot with `_src`, orphaning `_dst` when it is a
+            // REAL store (the first-bind `null_named` pre-allocation, or a
+            // displaced prior store on reassignment): one store leaked per
+            // adopting bind (`d = choose(..)`).  Free the real, distinct
+            // placeholder first — the same exclusive-ownership assumption the
+            // COPY arm already makes (it clears `_dst` in place via
+            // `OpDatabase`).  A same-store adopt (the NRVO alias) and the
+            // null-sentinel `_dst` are excluded by the guard.
             write!(
                 w,
-                "); if {adopt} {{ var_{name} = _src; }} \
+                "); if {adopt} {{ if _dst.store_nr != u16::MAX \
+                 && _dst.store_nr != _src.store_nr \
+                 {{ OpFreeRef(cell, _dst, \"{name}(displaced)\"); }} \
+                 var_{name} = _src; }} \
                  else {{ var_{name} = OpDatabase(cell, _dst, {tp_nr}_i32); \
                  OpCopyRecord(cell,_src, var_{name}, {tp_with_free}_i32); }} }}"
             )?;

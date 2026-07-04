@@ -1,0 +1,71 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN85 D-own-1 — the TEXT-return promotion corpus: one fn per `text_return`
+// rule arm (the per-var classification this collapse makes a pure selector).
+// Used as the Mode-B byte-identical instrument: `loft introspect` BEFORE ==
+// AFTER proves a text_return refactor changed nothing emitted.
+
+// PROMOTE-HIDDEN: an owned work-text local in the return deps becomes a hidden
+// RefVar(Text) out-param.
+fn t1_work_text(n: integer) -> text {
+  s = "a";
+  s += "b{n}";
+  s
+}
+
+// ls-empty control: a literal tail promotes nothing.
+fn t2_literal() -> text {
+  "lit"
+}
+
+// ALREADY-ATTR: a text PARAM in the return deps records its attribute index.
+fn t3_param_borrow(p: text) -> text {
+  p
+}
+
+// The `-> text?` optional twin — same promotion, `?` re-applied.
+fn t4_optional(n: integer) -> text? {
+  if n < 0 {
+    return null;
+  }
+  s = "v";
+  s += "{n}";
+  s
+}
+
+// TUPLE-SKIP (@P330): a text read from a LOCAL tuple element must NOT hoist the
+// tuple local to a parameter; the B5-L3 `__ret_N` temp covers the copy instead.
+fn t6_tuple_elem() -> text {
+  t = ("aa", 1);
+  t.0
+}
+
+// PROMOTE-PLAIN: a non-text, non-tuple dep local (a struct the text borrows
+// from) promotes as a plain (non-hidden) parameter.
+struct Named { name: text, id: integer }
+
+fn t8_struct_field() -> text {
+  bx = Named { name: "nm", id: 3 };
+  bx.name
+}
+
+// The LAMBDA uniform-ABI rule (P227/@P387): a text-returning lambda gets one
+// hidden `__work_ret` RefVar(Text) buffer even when its body needs none — and
+// a CAPTURED text var is read from the closure record, never promoted.
+fn t5_lambda_ref(n: integer) -> text {
+  cap = "c{n}";
+  f = fn(x: integer) -> text { "{cap}:{x}" };
+  f(n)
+}
+
+fn main() {
+  assert(t1_work_text(7) == "ab7", "t1={t1_work_text(7)}");
+  assert(t2_literal() == "lit", "t2");
+  assert(t3_param_borrow("pp") == "pp", "t3");
+  assert((t4_optional(5) ?? "MISS") == "v5", "t4 value");
+  assert(t4_optional(-1) == null, "t4 null");
+  assert(t6_tuple_elem() == "aa", "t6={t6_tuple_elem()}");
+  assert(t8_struct_field() == "nm", "t8={t8_struct_field()}");
+  assert(t5_lambda_ref(2) == "c2:2", "t5={t5_lambda_ref(2)}");
+  println("text-corpus ok");
+}

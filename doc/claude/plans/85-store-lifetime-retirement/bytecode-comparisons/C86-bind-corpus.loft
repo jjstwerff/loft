@@ -1,0 +1,92 @@
+// @PLN85 D-own-1 / C86 bind-site residual — one fn per verdict of the
+// whole-value VECTOR bind decision in `parse_assign_op` (the former inline
+// `struct_vec_field` branch), for the byte-identical gate of the
+// classify_vec_bind selector extraction.  C86: whole-value heap binds COPY by
+// contract; aliasing is a last-use ELISION (`use_analysis::elision_plans` →
+// `scopes::elide_borrows`, post-parse); projections stay views (#426).
+
+struct BX { v: vector<integer>, tag: integer }
+struct Inner { v: vector<integer> }
+struct Outer { inner: Inner }
+
+// b1 — CopyVar: `b = a` whole-var vector bind copies (P292 dangle / P394 slot).
+fn b1_var_copy(n: integer) -> integer {
+  a = [n, n + 1];
+  b = a;
+  a += [7];
+  // b is independent of a's growth (copy semantics).
+  len(a) * 10 + len(b)
+}
+
+// b2 — CopyOwnedField: `af = bx.v` with an OWNED base copies (#415).
+fn b2_owned_field(n: integer) -> integer {
+  bx = BX { v: [n, n + 1], tag: n };
+  af = bx.v;
+  af += [9];
+  // bx.v is untouched by af's growth.
+  len(bx.v) * 10 + len(af)
+}
+
+// b3 — borrowed-base field read stays a VIEW (p379): the for-element borrows
+// the outer vector, so `cells = sc.v` must write through to the source.
+fn b3_borrowed_field() -> integer {
+  grid: vector<BX> = [];
+  grid += [BX { v: [1, 2], tag: 0 }];
+  for sc in grid {
+    cells = sc.v;
+    cells[0] = 9;
+  }
+  g0 = grid[0] ?? BX { v: [], tag: -1 };
+  g0.v[0] ?? -1
+}
+
+// b4 — vector INDEX read stays a view (#426 routed forward: the store-reuse
+// substrate blocks widening the copy to index reads).
+fn b4_index_read(n: integer) -> integer {
+  vv: vector<vector<integer>> = [];
+  vv += [[n, n + 1]];
+  a = vv[0];
+  len(a)
+}
+
+// b5 — NESTED field read stays a view (#426 routed forward).
+fn b5_nested_read(n: integer) -> integer {
+  o = Outer { inner: Inner { v: [n, n + 1, n + 2] } };
+  c = o.inner.v;
+  len(c)
+}
+
+// b6 — SelfAssign: `v = v` emits nothing (freeing + re-appending off the same
+// storage would corrupt).
+fn b6_self_assign(n: integer) -> integer {
+  v = [n, n];
+  v = v;
+  len(v)
+}
+
+// b7 — CopyVar on REASSIGNMENT: v already owns a store → clear + refill.
+fn b7_reassign(n: integer) -> integer {
+  v = [9, 9, 9];
+  a = [n];
+  v = a;
+  len(v) * 10 + len(a)
+}
+
+// b8 — CopyVar from a PARAM source: b copies the caller's vector.
+fn b8_param_copy(a: vector<integer>) -> integer {
+  b = a;
+  b += [5];
+  len(a) * 10 + len(b)
+}
+
+fn main() {
+  assert(b1_var_copy(1) == 32, "b1: {b1_var_copy(1)}");
+  assert(b2_owned_field(1) == 23, "b2: {b2_owned_field(1)}");
+  assert(b3_borrowed_field() == 9, "b3: {b3_borrowed_field()}");
+  assert(b4_index_read(4) == 2, "b4: {b4_index_read(4)}");
+  assert(b5_nested_read(1) == 3, "b5: {b5_nested_read(1)}");
+  assert(b6_self_assign(2) == 2, "b6: {b6_self_assign(2)}");
+  assert(b7_reassign(3) == 11, "b7: {b7_reassign(3)}");
+  assert(b8_param_copy([1, 2]) == 23, "b8: {b8_param_copy([1, 2])}");
+  println("c86-bind-corpus ok");
+}

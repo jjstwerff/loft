@@ -1163,11 +1163,20 @@ impl State {
             _ => Deps::none(),
         };
         if dep.is_empty() {
-            if stack.function.is_inline_ref(v) {
+            if stack.function.is_inline_ref(v) || stack.function.is_skip_free(v) {
                 // Inline-ref temporaries must not allocate a database store at null-init
                 // time.  A real store is assigned later via OpPutRef when the method
                 // returns.  Writes DbRef{store_nr:u16::MAX} at slot; Stores::free
                 // treats it as a no-op if the var is never assigned.
+                //
+                // @PLN85 t2 — the same holds for a `skip_free` var: its store is
+                // owned/freed ELSEWHERE (a `&`-param write-back's transfer buffer
+                // `__ref_N` — objects.rs:2200 — or a borrowed alias), so an eager
+                // owned placeholder here would ORPHAN on the path that never
+                // materialises the real store (the `if !r { r = … }` write-back not
+                // taken → the interp-only kt=65535 leak; native already lowers null
+                // to DbRef::NULL).  Sentinel-init: OpDatabase allocates fresh when
+                // the real store IS assigned, and the free is a no-op if it is not.
                 stack.add_op("OpInitRefSentinel", self);
                 self.code_add(slot_offset);
             } else {
@@ -1728,13 +1737,24 @@ impl State {
             if owned_ref
                 && !s1_substituted
                 && !stash_old_for_post_free
-                && std::env::var_os("LOFT_JOIN_OWN").is_some()
+                && crate::keys::join_own_enabled()
                 && let crate::use_analysis::Own::Join { base } =
                     crate::use_analysis::ownership_of(stack.data, stack.def_nr, value)
                 && base != u16::MAX
                 && let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
             {
                 let tp_nr = stack.data.def(d_nr).known_type();
+                // Free the DISPLACED old store first — this branch REPLACES the
+                // plain owned-reassign path (which frees it just above), and
+                // `OpBindOrCopy` overwrites `v` without releasing its previous
+                // store: each conditional reassign otherwise orphans one store
+                // (the p462_cond_reassign_retbuf gate-ON leak, M×N per call
+                // site).  Safe here: `\!stash_old_for_post_free` means the RHS
+                // does not read `v`, and a first-Set's null ref free is a no-op.
+                let old_pos = stack.var_pos(v);
+                stack.add_op("OpVarRef", self);
+                self.code_add(old_pos);
+                stack.add_op("OpFreeRef", self);
                 // The call result (`src`) FIRST, then the witness on top — so the
                 // witness's frame-relative `var_pos` accounts for `src` already on the
                 // eval stack. `OpBindOrCopy` pops witness (top) then src.
@@ -1777,13 +1797,11 @@ impl State {
                     // the returned DbRef and the stash's FreeRefIfDistinct
                     // no-ops on the same store, exactly the (correct)
                     // behaviour the over-broad S1 match used to produce.
-                    && !(stash_old_for_post_free && {
-                        let def = stack.data.def(*fn_nr);
-                        def.returned().depend().iter().any(|&a| {
-                            (a as usize) >= def.attributes().len()
-                                || !def.attributes()[a as usize].hidden
-                        })
-                    })
+                    // @PLN85 D-own-1 — the canonical borrowed-view fact (its
+                    // returned dep names a VISIBLE param), not the inline visible-dep
+                    // scan; identical verdict, one fewer per-site re-derivation
+                    // (siblings at 1845/2582 already read it).
+                    && !(stash_old_for_post_free && stack.data.def(*fn_nr).returns_borrowed_view())
                 {
                     let tp_nr = stack.data.def(d_nr).known_type();
                     // Plan-04 Phase B.3.f: allocate fresh store directly
@@ -3603,30 +3621,35 @@ impl State {
                 self.code_add(var_pos);
                 return;
             }
-            // @PLN87 P2.2 — a `&`-param write-back of an OWNED construction
-            // (`o = Obj{..}`; the RHS is the transferred skip_free temp from
-            // `parse_object`'s new_object branch) must FREE the DISPLACED caller
-            // store before installing the new value, else the old store orphans
-            // (the pre-P2.2 leak).  Read it live through `o` (`OpGetStackRef`) so
-            // the free is PATH-SENSITIVE — only on the path that runs the
-            // write-back — keeping conditional `&` reassignment sound without a
-            // witness.  Heap inner type only; scalar `&` has no store to free.
-            if stack.function.is_argument(var)
+            // @PLN87 P2.2 / @PLN85 t4 — a `&`-param whole-record write-back that
+            // installs a fresh OWNED store (`o = Obj{..}` literal OR `o = mk()`
+            // owned-returning call) must FREE the DISPLACED caller store, else it
+            // orphans.  P2.2 covered only the literal (via `is_skip_free`); t4 is
+            // the call twin, whose NRVO buffer `__ref_N` is NOT skip_free — the
+            // ownership oracle's `Own::Owned` names both.  Aliasing-safe: stash
+            // `*o`'s OLD store BY VALUE (`OpGetStackRef` reads it, and the value
+            // survives the set), install the new store, then `OpFreeRefIfDistinct`
+            // — a self-reading RHS (`o = mk_from(o)`) keeps the old store live
+            // across the eval (no free-before UAF, unlike the old P2.2 emission)
+            // and a same-store install degrades to a no-op.  Path-sensitive (the
+            // ops sit on the write-back branch only).  Heap inner type only; scalar
+            // `&` has no store to free.
+            let amp_owned_writeback = stack.function.is_argument(var)
                 && matches!(
                     *tp,
                     Type::Vector(_, _) | Type::Reference(_, _) | Type::Enum(_, true, _)
                 )
-                && {
-                    let src = value.result_var();
-                    src != u16::MAX && stack.function.is_skip_free(src)
-                }
-            {
+                && matches!(
+                    crate::use_analysis::ownership_of(stack.data, stack.def_nr, value),
+                    crate::use_analysis::Own::Owned
+                );
+            if amp_owned_writeback {
+                // stash OLD = *o (by value — survives the SetStackRef below)
                 let var_pos = stack.var_pos(var);
                 stack.add_op("OpVarRef", self);
                 self.code_add(var_pos);
                 stack.add_op("OpGetStackRef", self);
                 self.code_add(0u16);
-                stack.add_op("OpFreeRef", self);
             }
             let var_pos = stack.var_pos(var);
             stack.add_op("OpVarRef", self);
@@ -3644,6 +3667,15 @@ impl State {
                 _ => panic!("Unknown reference variable type"),
             }
             self.code_add(0u16);
+            if amp_owned_writeback {
+                // free OLD unless the install kept it (witness = *o's NEW store)
+                let var_pos = stack.var_pos(var);
+                stack.add_op("OpVarRef", self);
+                self.code_add(var_pos);
+                stack.add_op("OpGetStackRef", self);
+                self.code_add(0u16);
+                stack.add_op("OpFreeRefIfDistinct", self);
+            }
             return;
         }
         // destination-passing — avoid scratch buffer for text-returning natives.
@@ -3749,7 +3781,15 @@ impl State {
             Type::Vector(_, _)
             | Type::Reference(_, _)
             | Type::Enum(_, true, _)
-            | Type::Iterator(_, _) => {
+            | Type::Iterator(_, _)
+            // @PLN85 p188 — the keyed heap collections are DbRef-backed stores
+            // like Vector, so a plain DbRef put binds them; needed for the
+            // discarded-owned `sorted<>`-return `__lift_N` temp (get_free_vars
+            // then frees the store).
+            | Type::Sorted(_, _, _)
+            | Type::Index(_, _, _)
+            | Type::Hash(_, _, _)
+            | Type::Spacial(_, _, _) => {
                 stack.add_op("OpPutRef", self);
             }
             Type::Tuple(elems) => {

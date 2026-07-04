@@ -1033,19 +1033,41 @@ impl<'a> Ownership<'a> {
     /// copies FROM (Gap B). `None` when the borrow is produced by a call (the
     /// materialise deep-copies the whole returned value) or the value is `Owned`.
     fn borrow_base(&self, node: &Value, func: &Function, defs: &Defs) -> Option<u16> {
+        let mut visited = Vec::new();
+        self.borrow_base_guarded(node, func, defs, &mut visited)
+    }
+
+    /// The recursive worker with CYCLE protection: a var whose def-chain reaches
+    /// itself (`bs += […]` reads `bs`; two-var swaps) otherwise recursed forever
+    /// — a stack-overflow SIGSEGV once the oracle ran by default (the D-own-1
+    /// flip; loft_suite's 85-store-lifetime-return-field-of-local under the wrap
+    /// harness).  A revisited var yields `None`: a cyclic chain has no single
+    /// borrow base, and every caller handles `None` conservatively.
+    fn borrow_base_guarded(
+        &self,
+        node: &Value,
+        func: &Function,
+        defs: &Defs,
+        visited: &mut Vec<u16>,
+    ) -> Option<u16> {
         match node.unspan() {
             Value::Call(d, args) if self.projections.contains(d) => {
                 match args.first().map(Value::unspan) {
                     Some(Value::Var(b)) => Some(*b),
-                    Some(inner) => self.borrow_base(inner, func, defs), // nested `o.inner.rows`
+                    // nested `o.inner.rows`
+                    Some(inner) => self.borrow_base_guarded(inner, func, defs, visited),
                     None => None,
                 }
             }
             Value::Var(v) => {
+                if visited.contains(v) {
+                    return None;
+                }
+                visited.push(*v);
                 if let Some(rhss) = defs.rhs.get(v) {
                     rhss.iter()
                         .rev()
-                        .find_map(|r| self.borrow_base(r, func, defs))
+                        .find_map(|r| self.borrow_base_guarded(r, func, defs, visited))
                 } else if func.is_argument(*v) && func.tp(*v).heap_dep().is_some() {
                     Some(*v) // a borrowed heap param IS its own base (the caller's arg)
                 } else {
@@ -1053,13 +1075,15 @@ impl<'a> Ownership<'a> {
                 }
             }
             Value::If(_, then, els) => self
-                .borrow_base(then, func, defs)
-                .or_else(|| self.borrow_base(els, func, defs)),
+                .borrow_base_guarded(then, func, defs, visited)
+                .or_else(|| self.borrow_base_guarded(els, func, defs, visited)),
             Value::Block(b) => b
                 .operators
                 .last()
-                .and_then(|t| self.borrow_base(t, func, defs)),
-            Value::Return(v) | Value::BreakWith(_, v) => self.borrow_base(v, func, defs),
+                .and_then(|t| self.borrow_base_guarded(t, func, defs, visited)),
+            Value::Return(v) | Value::BreakWith(_, v) => {
+                self.borrow_base_guarded(v, func, defs, visited)
+            }
             _ => None,
         }
     }
@@ -1159,6 +1183,14 @@ pub fn displaced_owned_slots(code: &Value, function: &Function, data: &Data) -> 
         .filter(|s| {
             matches!(s.prior, Own::Owned)
                 && matches!(s.rhs, Own::Borrowed { .. } | Own::Join { .. })
+                // A retbuf-promoted PARAM slot is NOT this fix's territory: the
+                // dep-strip would disable the dep-carrying explicit reassign-free
+                // (the p462 `_rb_w_` witness partner) while codegen's dep-empty
+                // pre-Set free excludes arguments — the displaced first store
+                // then leaks one per call (p462_cond_reassign_retbuf under
+                // gate-ON, M×N).  Param-slot displaced frees stay with the
+                // witness mechanism.
+                && !function.is_argument(s.var)
         })
         .map(|s| s.var)
         .collect()

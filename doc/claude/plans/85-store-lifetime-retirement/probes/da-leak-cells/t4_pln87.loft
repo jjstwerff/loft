@@ -1,0 +1,9 @@
+struct Obj { x: integer }
+fn mk() -> Obj { Obj { x: 9 } }
+fn f(o: &Obj) { o = mk(); }
+fn main() {
+    a = Obj { x: 1 };
+    f(a);
+    assert(a.x == 9, "got {a.x}");
+    println("t4 ok");
+}

@@ -462,8 +462,16 @@ impl Output<'_> {
                     // owned `String`, not `Str`); a `return nwb_helper()` must be
                     // re-wrapped to this fn's return type instead (owned→owned for
                     // an nwb outer, owned→buffer/scratch for a buffered outer).
+                    // `.unspan()` on both call-shape probes: a TAIL-expression return
+                    // (scopes' free_vars wraps the block tail, Span and all) reaches
+                    // here as `Span(Call(..))`, which a bare `Value::Call` match
+                    // misses — the nwb inner then skipped the scratch/buffer route
+                    // and emitted `Str::new(<String>)` (E0308; the routing `jtext`
+                    // tail-call bug, feedback 2026-07-02).  parse_return-created
+                    // Returns carry the call bare, which is why an explicit
+                    // `return helper();` never reproduced it.
                     let inner_already_str = matches!(
-                        &**val,
+                        (**val).unspan(),
                         Value::Call(d, _) if (*d as usize) < self.data.definitions.len()
                             && matches!(self.data.def(*d).returned(), Type::Text(_))
                             && self.data.def(*d).rust().is_empty()
@@ -478,7 +486,7 @@ impl Output<'_> {
                     // hand back a `Str` pointing into it.  `Str::new(String)` would
                     // fail E0308.
                     let inner_is_nwb_call = matches!(
-                        &**val,
+                        (**val).unspan(),
                         Value::Call(d, _) if (*d as usize) < self.data.definitions.len()
                             && super::def_returns_owned_text(self.data.def(*d))
                     );
@@ -902,12 +910,11 @@ impl Output<'_> {
         } else {
             None
         };
-        let heap_hbuf_expr: String = if let Some(tp) = vec_hbuf_tp {
-            write!(
-                w,
-                "let mut __vc_hbuf: DbRef = stores.null_named(\"__vc_hbuf\"); \
-                 __vc_hbuf = OpDatabase(cell, __vc_hbuf, {tp}_i32); "
-            )?;
+        // @PLN85 L2 — the buffer is allocated INSIDE each arm that needs it
+        // (lazily), never before the match: a pre-match allocation leaked one
+        // store per call through every candidate arm that takes no buffer
+        // (a plain lambda body returns its own fresh store by value).
+        let heap_hbuf_expr: String = if vec_hbuf_tp.is_some() {
             "__vc_hbuf".to_string()
         } else {
             "loft::keys::DbRef::NULL".to_string()
@@ -927,6 +934,49 @@ impl Output<'_> {
             // expression has consumed it.
             if is_text_return {
                 write!(w, "(")?;
+            }
+            // @PLN85 L2 — a candidate with a hidden Vector buffer gets an
+            // in-arm allocation.  Whether the arm must also FREE it is
+            // statically known from the candidate's returned deps: a
+            // buffer-DELIVERING candidate returns the buffer (the result IS
+            // the store — the caller frees it as the owned result), while a
+            // candidate whose returned deps do not name the buffer (a
+            // CallRef-tail body returns its own store by value) leaves the
+            // buffer behind — free it right after the call.
+            let cand_def_pre = self.data.def(*d_nr);
+            // ALL hidden heap attrs — the same predicate the synthetic-args
+            // loop below uses to emit `heap_hbuf_expr`, so every arm that
+            // references `__vc_hbuf` also binds it (a Reference-returning
+            // candidate cross-matches a vector dispatch — same DbRef ABI —
+            // and its hidden attr is Reference-typed, not Vector).
+            let hidden_heap_attrs: Vec<usize> = cand_def_pre
+                .attributes
+                .iter()
+                .enumerate()
+                .filter(|(_, a)| {
+                    a.hidden
+                        && matches!(
+                            a.typedef,
+                            Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+                        )
+                })
+                .map(|(i, _)| i)
+                .collect();
+            let arm_allocs_buf = vec_hbuf_tp.is_some() && !hidden_heap_attrs.is_empty();
+            let arm_frees_buf = arm_allocs_buf
+                && !matches!(cand_def_pre.returned(),
+                    Type::Vector(_, d) | Type::Reference(_, d) | Type::Enum(_, true, d)
+                    if d.as_attr_indices().iter().any(|i| hidden_heap_attrs.contains(&(*i as usize))));
+            if arm_allocs_buf {
+                let tp = vec_hbuf_tp.unwrap_or_default();
+                write!(
+                    w,
+                    "{{ let mut __vc_hbuf: DbRef = stores.null_named(\"__vc_hbuf\"); \
+                     __vc_hbuf = OpDatabase(cell, __vc_hbuf, {tp}_i32); "
+                )?;
+                if arm_frees_buf {
+                    write!(w, "let __vc_r = ")?;
+                }
             }
             // Build synthetic args matching this candidate's attribute list.
             // The candidate's attrs are interleaved: user params, then
@@ -975,6 +1025,13 @@ impl Output<'_> {
             // (or DefaultEmitter::user_fn_call_body when no emitter is
             // registered for this candidate).
             self.output_call_user_fn(w, candidate_def, &synthetic)?;
+            if arm_allocs_buf {
+                if arm_frees_buf {
+                    write!(w, "; OpFreeRef(cell, __vc_hbuf, \"__vc_hbuf\"); __vc_r }}")?;
+                } else {
+                    write!(w, " }}")?;
+                }
+            }
             if is_text_return {
                 write!(w, ").to_string()")?;
             }

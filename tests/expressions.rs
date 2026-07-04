@@ -760,20 +760,24 @@ fn par_light_extra_args() {
 
 // ── S28 — debug generation counter for stale DbRef across coroutine yield ─────
 
-/// S28: Mutating a struct store between coroutine next() calls should fire the
-/// debug-mode generation-counter assertion.  The generator holds a `const Item`
-/// reference (a DbRef into the `Items` store); between the two yields the
-/// consumer pushes a new element into the same store, incrementing its
-/// generation.  On the second resume, `coroutine_next` detects the mismatch and
-/// panics with "stale DbRef".
+/// S28: mutating a struct store between coroutine `next()` calls trips the
+/// debug-mode generation-counter guard.  @P324/#218 DEMOTED that guard from a
+/// panic to a non-fatal `eprintln!` warning (the snapshot over-approximates —
+/// it flags every mutated store, not just ones the suspended frame's DbRefs
+/// reach — so a panic false-positived on plain `out += [v]` integer-generator
+/// idioms).  So under debug_assertions the stale-store shape now WARNS on stderr
+/// and RUNS TO COMPLETION rather than panicking; this pins that the DA-armed
+/// build reaches the correct result (no UAF/store-corruption panic).  The
+/// release twin `p324_integer_generator_with_concurrent_store_mutation_no_longer_panics`
+/// covers the same shape with the guard compiled out.
 #[test]
 #[cfg(debug_assertions)]
-#[should_panic(expected = "stale DbRef")]
 fn coroutine_stale_store_guard() {
     // The generator count_up has no DbRef parameters; the stale-store check is a
     // heuristic that fires on ANY store mutation between yields.  We pre-create a
     // struct store before the loop so it is included in the yield snapshot, then
-    // claim a new record (Box{}) inside the loop to increment its generation.
+    // claim a new record (Box{}) inside the loop to increment its generation —
+    // which emits the S28 warning without halting execution.
     code!(
         "struct Box { val: integer }
          struct BoxList { items: vector<Box> }
@@ -790,7 +794,7 @@ fn coroutine_stale_store_guard() {
          }"
     )
     .expr("run_stale()")
-    .result(Value::Int(6)); // never reached — debug_assert fires on second resume
+    .result(Value::Int(6));
 }
 
 // ── S22 — claim/delete on a locked store panics in all build profiles ─────────

@@ -1,0 +1,2 @@
+fn vcopy(x: vector<integer>) -> vector<integer> { r = x; r }
+fn main() { a = [1, 2, 3]; r = vcopy(a); assert(len(r) == 3 && len(a) == 3, "v {len(r)}"); println("vcopy ok"); }

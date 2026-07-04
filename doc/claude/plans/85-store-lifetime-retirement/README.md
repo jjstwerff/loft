@@ -8,14 +8,52 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 Plan id: [@PLN85](https://github.com/loft-lang/plans/issues/85) · investigation-style
 (reading order: Status → Probes → Cluster docs → Roadmap).
 
+> ## ✅✅ CLOSED (2026-07-04) — the store-lifetime bug class is retired.
+> **Charter met:** outcome (b) — the clusters are independent, each invariant enforced at
+> its chokepoint, with a standing instrument (fuzz + `LOFT_POISON` + DA-calibration +
+> leak-gate + ASan/Miri) that keeps the class closed *by construction*.  **All live bugs
+> fixed:** the 5 DA-inventory leak cells (t1–t4 + p188), the `skip_free` pass-poison class,
+> and both D-own-2 return adopt-vs-copy facets (the struct copy-return leak + the
+> JOIN-vector delivery, #492).  **The ownership model:** D-own-1's delivery/reassign
+> re-derivation thicket collapsed behind pure `classify_X`/`dispatch_X` selectors with the
+> `ownership_of` oracle default-on (0/54 over-free); D-own-2's return adopt-vs-copy class
+> swept dry.  D-own-3/4/5 + the types.md deviations already CLOSED.
+> **Forward-homed** (per the closure policy): the free-side/oracle three-valued-fact
+> unification (latent + SAFE — measured 100% one-directional, no miscompile) and the
+> runtime `??`-JOIN witness → **[@PLN90](https://github.com/loft-lang/plans/issues/90)**
+> (copy-diagnostics); the DA-only codegen-slot class (`t_4File_lines` slot-width,
+> `generate_set/call`, `wrap::dir` — not leaks, no shipped-build impact) → a `loft` issue.
+> The detail below is retained as the investigation + close-out record.
+
 > **▶ WIDE-RELEASE GATE 1 — the fuzz-proof:** [fuzz-proof-gate.md](fuzz-proof-gate.md).
 > The "CLOSED" below is the *investigation* + per-cluster fixes — each known shape fixed and
 > guarded. The remaining gate before loft goes to many people is proving the **class closed
 > *by construction*** (a standing fuzz/sanitizer instrument over the ownership invariant, not
-> anecdotal silence). That slot is BUILD-BLOCKED BY @PLN25 (the value model defines what
-> ownership is) — see [STABILITY_ROADMAP.md § the wide-release bar](../../STABILITY_ROADMAP.md).
+> anecdotal silence). **The instrument now EXISTS and is live (2026-07):** the standing
+> `tests/ownership_fuzz_gate.rs` job, the in-process libfuzzer target
+> (`cargo +nightly fuzz run program_ownership`, H5 + poison fully live — it caught F1+F2 in
+> its first five minutes; both FIXED), `LOFT_POISON=1 cargo test` green (the @PLN54-S3
+> criterion), and the debug-assertions calibration run
+> ([DEBUG.md](../../DEBUG.md#the-debug-assertions-calibration-run-target-da)).  What remains
+> in the gate doc: the open DA-inventory cells (§ final honest DA map) and the unfuzzed
+> axes list — see [STABILITY_ROADMAP.md § the wide-release bar](../../STABILITY_ROADMAP.md).
 
-> **▶▶ NEXT SESSION START HERE (2026-06-29):**
+> **▶▶ DA-CALIBRATION LEAK CELLS — ALL CLOSED (2026-07-04).**
+> [NEXT-SESSION-da-leak-cells.md](NEXT-SESSION-da-leak-cells.md) — the five DA-inventory
+> leak cells (t1 closure / t2 `&`-default null-init / t3/p179 skip_free poison / t4/pln87
+> displaced-record writeback / p188 discarded keyed-collection return) are each FIXED on
+> BOTH backends, verified under the debug-assertions gate, with a graduated
+> `tests/scripts/85-*` guard.  The `skip_free` pass-poison class residual is RESOLVED
+> (per-site `!first_pass` gates for the two H5-counter-shift instances; the pass-boundary
+> bit-clear DECLINED — variable tables persist across the stdlib↔user parse boundary).
+> Dev suite 2603/2603, `LOFT_POISON=1` gate green.  The **store-lifetime LEAK class is
+> retired**; the residual DA cells (stdlib slot-width, `generate_set/call`, `wrap::dir`)
+> are a SEPARATE codegen-slot-correctness class, DA-only, NOT this plan's charter.
+> Instrument = `LOFT_SKIPFREE_TRACE=<var>` (now prints the `#[track_caller]` location).
+> (The 2026-06-29 join-ownership handoff below stays valid for the D-own-1/2
+> deps-carried-join completion — the F2 residual.)
+>
+> Older handoff (2026-06-29):
 > [NEXT-SESSION-join-ownership-analysis.md](NEXT-SESSION-join-ownership-analysis.md). The over-free
 > class is now FULLY PROBED and the fix is scoped: it needs ONE ownership fact (Owned / Borrowed /
 > **Join** = the `v[i] ?? d` runtime owned-or-borrow), which IS @PLN25's copy-vs-borrow analysis

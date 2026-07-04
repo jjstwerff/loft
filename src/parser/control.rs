@@ -53,6 +53,90 @@ enum Delivery {
 /// rename the tail's work-ref(s) onto `__retbuf`, or materialise-copy a tail that
 /// borrows a LOCAL (#306) before it escapes. (The nullable-unwrap tail is handled by
 /// its own earlier `block_result` arm and is NOT routed here.)
+/// @PLN85 D-own-1 — the per-var verdict for `text_return`'s promotion of a
+/// return-dep variable (see `classify_text_dep`).
+enum TextDep {
+    /// Already an attribute — record its index in the return dep.
+    Attr(u16),
+    /// Captured closure var — read from the closure record; never promoted.
+    SkipCaptured,
+    /// A tuple LOCAL (@P330) — no hoist; the B5-L3 temp covers the copy.
+    SkipTupleLocal,
+    /// A text local — promote to a hidden `RefVar(Text)` work-buffer param.
+    PromoteHidden,
+    /// Any other dep type — promote as a plain (visible) parameter.
+    PromotePlain,
+}
+
+/// @PLN85 D-own-1 slice 3 — the per-var verdict of `ref_return`'s NRVO /
+/// promotion ladder (see `classify_ret_promotion`).  One variant per rule; the
+/// apply loop in `ref_return` carries only the emission mechanics.
+#[derive(Debug)]
+enum RetPromotion {
+    /// Already DELIVERED into a separate `__retbuf` by the jo_arm pre-pass
+    /// (@PLN85 match_return) — a local now, not the return; promoting it would
+    /// re-alias the buffer onto the binding var.
+    SkipDelivered,
+    /// Plan-57 reassigned local, and the #355 named-local fall-through does not
+    /// apply — never NRVO-promoted (each fresh literal would build INTO the
+    /// buffer; the second would append, not replace).
+    SkipReassigned,
+    /// Name already an attribute — merge its index into the return deps.
+    /// `chain_site` = the #356 mid-body bare-call site must have its value made
+    /// explicit each pass (native loses it to the Return(Null) fall-through
+    /// once argument lifting decomposes the call).
+    MergeAttr { a: u16, chain_site: bool },
+    /// Transitively-reached (#306) — dep merge only, never promote: hidden-ref
+    /// promotion would change the call ABI for locals the NRVO machinery
+    /// cannot host (e.g. a call-result vector).
+    MergeOnly,
+    /// An inner work ref that is not — and is not ADOPTED by (cluster I-d) —
+    /// the site's value: stays a plain local; the outer call deep-copies its
+    /// record into the destination before scope exit frees it.  Sentinel sweep
+    /// 2026-07-03: 0 firings suite-wide (a non-site-value work ref only ever
+    /// arrives transitively) — unreachable-suspected, kept as the guard.
+    SkipInnerRef,
+    /// @PLAN59/H1 NRVO — rename the signature-time `__retbuf` ATTR to this
+    /// local's name (the attr↔var coupling is by name, probe C3) and retire
+    /// the placeholder argument var (same last frame slot by var-number order,
+    /// probe C6).  `chain_site` as in `MergeAttr` (#356).
+    Rename { buf_attr: usize, chain_site: bool },
+    /// ONE-BUFFER invariant (stability roadmap #1): a plain fn's arity is
+    /// FIXED at signature parse — the site BINDS to the one existing buffer.
+    /// `substitute` — a parser-minted work ref (referenced only at its own
+    /// return site) is substituted BY the buffer var so the call writes
+    /// directly into the caller's buffer (return paths are mutually
+    /// exclusive); a named local (readable by sibling return sites —
+    /// substitution could alias the buffer into another site's argument list)
+    /// keeps its own store and is deep-copied into the buffer at the return.
+    Bind {
+        buf_attr: u16,
+        buf_var: u16,
+        substitute: bool,
+    },
+    /// Vector / struct-Enum returns on LAMBDAS still grow the arity in place:
+    /// a lambda is defined at its literal site and invoked via CallRef, so no
+    /// earlier caller can hold a short arg list.  PASS-1 growth on a plain fn
+    /// is sound (pass 2 re-parses every caller against the final arity);
+    /// PASS-2 growth on a plain fn must never happen (asserted at the apply).
+    Grow,
+}
+
+/// Shared per-return-site context for `classify_ret_promotion`.
+struct RetPromoCtx<'a> {
+    site: RetSite,
+    ret: &'a Type,
+    /// The ref carrying THE SITE'S VALUE (a tail call's buffer arg / a plain
+    /// Var tail).  Only this ref may bind to the fn's one return buffer; an
+    /// INNER call's work ref (`return wrap(mk(x))` carries two) must stay a
+    /// plain local — binding both would alias the outer call's destination
+    /// with its own argument.
+    site_value: Option<u16>,
+    is_plain_fn: bool,
+    newrecord_nr: u32,
+    jo_arm_skip: &'a std::collections::HashSet<u16>,
+}
+
 enum RefDelivery {
     /// Promote the tail's work-ref(s) to BE `__retbuf` — `ref_return(ws) +
     /// nrvo_collapse_tail_set(ws)`. Covers #120 hidden-ref recovery (`ls` empty,
@@ -901,10 +985,12 @@ impl Parser {
                 && !l.is_empty()
                 && self.tail_is_nullable_unwrap(&l[l.len() - 1])
             {
-                let last = l.len() - 1;
-                let w = self.materialize_view_return(*td, &mut l[last]);
-                self.ref_return(&[w], l, RetSite::BlockTail);
-                self.nrvo_collapse_tail_set(l, &[w]);
+                // @PLN85 D-own-1 — the nullable-unwrap arm keeps its own entry
+                // (it keys on the DECLARED result + the unwrap tail shape, which
+                // the `t == Reference` arm below cannot see), but its MECHANISM
+                // is the selector's `MaterializeView` cell — one dispatch emits,
+                // like the #416/#448 fold on the vector side.
+                self.dispatch_reference_delivery(RefDelivery::MaterializeView, *td, l);
             } else if let Type::Text(ls) = t.base() {
                 // @PLN25 slice (c): `.base()` — a `-> text?` return dispatches to the same
                 // work-buffer conversion as `-> text` (text_return re-applies the `?`).
@@ -916,11 +1002,17 @@ impl Parser {
                 let delivery = self.classify_vector_delivery(ls, l, context);
                 let elm_ty = (**elm).clone();
                 self.dispatch_vector_delivery(delivery, &elm_ty, l);
-            } else if let Type::Reference(td, ls) = t {
+            } else if let Type::Reference(td, ls) = t.base() {
                 // @PLN85 D-own-1 — Reference return sub-thicket: classify ONCE from
                 // the deps fact + tail shape, then dispatch to the ONE mechanism
                 // (rename via ref_return, or materialise-copy a borrowed-local view).
                 // Mirrors the vector `classify_vector_delivery` collapse.
+                // `.base()` peel (@PLN85 poison-green): a `-> Item?` return is
+                // `Optional(Reference)` and takes the SAME delivery — without
+                // the peel it fell through EVERY arm, so an escaping borrowed
+                // view (`xs = g.c; e = xs[i]; e`) was returned raw while its
+                // block-local copy store was freed (the elision-borrower UAF;
+                // silently stale without LOFT_POISON).
                 let td = *td;
                 let delivery = self.classify_reference_delivery(ls, l);
                 self.dispatch_reference_delivery(delivery, td, l);
@@ -2177,7 +2269,7 @@ impl Parser {
     /// `None`. No-op unless the tail is a `skip_free`, non-empty-dep vector binding.
     #[allow(clippy::question_mark)]
     fn jo_copy_borrowed_arm_yield(&mut self, arm_body: &mut Value) -> Option<Type> {
-        if std::env::var_os("LOFT_JOIN_OWN").is_none() {
+        if !crate::keys::join_own_enabled() {
             return None;
         }
         let v = match arm_body.unspan() {
@@ -4343,6 +4435,45 @@ impl Parser {
         }
     }
 
+    /// @PLN85 D-own-1 — the per-var verdict of `text_return`'s promotion loop,
+    /// as a PURE selector (the classify/apply split `classify_vector_delivery` /
+    /// `classify_reference_delivery` use for tail shapes, applied to the per-var
+    /// rule ladder).  One variant per documented rule; `text_return` applies.
+    fn classify_text_dep(&self, v: u16) -> TextDep {
+        let n = self.vars.name(v);
+        // A name that is already an attribute records its index in the return
+        // dep (dedup at the apply site).
+        if let Some(a) = self.data.def(self.context).attr_names.get(n) {
+            return TextDep::Attr(*a as u16);
+        }
+        // A captured text variable is read from the closure record at runtime —
+        // it must NOT become a hidden RefVar(Text) work-buffer argument (that
+        // would shift `__closure` to a wrong stack position).
+        if self.captured_names.iter().any(|(name, _)| name == n) {
+            return TextDep::SkipCaptured;
+        }
+        let tp = self.vars.tp(v);
+        // A text local promotes to a HIDDEN RefVar(Text) out-param buffer.
+        // @PLN25 DN1 (#487 / 449): `.base()` peel — an `Optional(Text)` local
+        // shares `Text`'s sentinel storage (a null `text?` IS `STRING_NULL` in
+        // the same slot), so it hoists to the SAME hidden buffer.  Without the
+        // peel it fell to the plain-VALUE promotion below and call sites
+        // pushed a `null` placeholder into a frame laid out for a work buffer
+        // (`realloc(): invalid next size` in the multiplayer/ws consumers).
+        if matches!(tp.base(), Type::Text(_)) {
+            TextDep::PromoteHidden
+        } else if matches!(tp, Type::Tuple(_)) {
+            // @P330: a tuple local must NOT hoist to a parameter — call sites
+            // would push a 12-byte null DbRef where the slot is 16+ bytes per
+            // text element, corrupting the callee frame.  The dep drops; the
+            // B5-L3 `__ret_N` deep-copy temp (scopes.rs) covers the value.
+            TextDep::SkipTupleLocal
+        } else {
+            // Any other dep type promotes as a plain (visible) parameter.
+            TextDep::PromotePlain
+        }
+    }
+
     pub(crate) fn text_return(&mut self, ls: &[u16]) {
         // @PLN25 slice (c): peel `Optional` — a `-> text?` function needs the SAME
         // work-buffer conversion (`RefVar(Text)` hidden out-param + `__ret_N` capture) as
@@ -4361,77 +4492,54 @@ impl Parser {
                 _ => return,
             };
         {
+            // @PLN85 D-own-1 — classify ONCE per var (the pure selector), then
+            // apply the one mechanism per verdict.  The rule rationale lives on
+            // the `TextDep` variants; the arms carry only emission mechanics.
             for v in ls {
-                let n = self.vars.name(*v);
-                let tp = self.vars.tp(*v);
-                // skip related variables that are already attributes
-                if let Some(a) = self.data.def(self.context).attr_names.get(n) {
-                    if !dep.contains(&(*a as u16)) {
-                        dep.push(*a as u16);
+                match self.classify_text_dep(*v) {
+                    TextDep::Attr(a) => {
+                        if !dep.contains(&a) {
+                            dep.push(a);
+                        }
                     }
-                    continue;
-                }
-                // captured text variables are read from the closure record at
-                // runtime — they must NOT be registered as hidden RefVar(Text) work-buffer
-                // arguments.  Adding them would shift __closure to a wrong stack position.
-                if self.captured_names.iter().any(|(name, _)| name == n) {
-                    continue;
-                }
-                // @PLN25 DN1: an `Optional(Text)` local shares `Text`'s sentinel storage
-                // (a null `text?` IS `STRING_NULL` in the same slot), so it hoists to the
-                // SAME hidden `RefVar(Text)` work buffer.  Without the `.base()` peel it
-                // fell through to the generic else-arm below, which promotes the local to
-                // a VISIBLE VALUE parameter — call sites then push a `null` placeholder
-                // into a frame laid out for a work buffer, corrupting the callee's stack
-                // (the exact hazard the @P330 tuple comment describes; surfaced as
-                // `realloc(): invalid next size` in the multiplayer/ws consumers).
-                if matches!(tp.base(), Type::Text(_)) {
-                    // create a new attribute with this name
-                    let a = self.data.add_attribute(
-                        &mut self.lexer,
-                        self.context,
-                        n,
-                        Type::RefVar(Box::new(Type::Text(Deps::none()))),
-                    );
-                    // @P387 zero-cost: mark the work-buffer HIDDEN so it rides the
-                    // same adaptive hidden-return-buffer dispatch struct/vector use
-                    // (`fn_call_ref` pushes one per hidden buf — 0 for a fn with no
-                    // promotable local).  This replaces the static `cref_work_buf`
-                    // injection and keeps the buffer out of the fn-ref TYPE without
-                    // the deps-based exclusion that wrongly dropped returned params.
-                    self.data.definitions[self.context as usize].attributes[a].hidden = true;
-                    self.vars.become_argument(*v);
-                    dep.push(a as u16);
-                    self.vars
-                        .set_type(*v, Type::RefVar(Box::new(Type::Text(Deps::none()))));
-                } else if matches!(tp, Type::Tuple(_)) {
-                    // @P330: a tuple local hoisted to a tuple parameter
-                    // doesn't have a well-defined caller-side null-init —
-                    // call sites would push a 12-byte null DbRef placeholder
-                    // where the parameter slot is 16+ bytes per text element,
-                    // corrupting the callee's frame layout.  Skip the hoist
-                    // entirely: do NOT add an attribute, do NOT promote the
-                    // local to an argument, and do NOT propagate the dep to
-                    // the return type.  The function's return type loses
-                    // the dep on this local, which lets `scopes::free_vars`
-                    // (B5-L3 single-text branch, src/scopes.rs:961-988) save
-                    // the body's tail expression to a `__ret_N: text` temp
-                    // via `Set` (lowers to `OpAppendText`, deep-copying the
-                    // text-element bytes into an owned String) before the
-                    // local is freed.  Same logical fix family as @P329,
-                    // applied one layer up: @P329 fixed tuple-of-text
-                    // RETURN values via deep-copy temps; @P330 fixes
-                    // single-text returns derived from tuple-element access
-                    // on a local tuple variable via the same B5-L3 pattern,
-                    // just by NOT hoisting the tuple local to a parameter
-                    // (which is the wrong escape hatch).  No-op body —
-                    // the local stays a local, the dep is dropped.
-                } else {
-                    let a = self
-                        .data
-                        .add_attribute(&mut self.lexer, self.context, n, tp.clone());
-                    self.vars.become_argument(*v);
-                    dep.push(a as u16);
+                    TextDep::SkipCaptured | TextDep::SkipTupleLocal => {
+                        // SkipTupleLocal (@P330): the dep drops on purpose — the
+                        // return type loses this local, which lets scopes'
+                        // B5-L3 single-text branch deep-copy the tail into a
+                        // `__ret_N` temp before the local frees (the @P329
+                        // family one layer up; hoisting the tuple local was
+                        // the wrong escape hatch — call sites would push a
+                        // 12-byte null DbRef where the slot is 16+ bytes).
+                    }
+                    TextDep::PromoteHidden => {
+                        let n = self.vars.name(*v);
+                        let a = self.data.add_attribute(
+                            &mut self.lexer,
+                            self.context,
+                            n,
+                            Type::RefVar(Box::new(Type::Text(Deps::none()))),
+                        );
+                        // @P387 zero-cost: mark the work-buffer HIDDEN so it rides the
+                        // same adaptive hidden-return-buffer dispatch struct/vector use
+                        // (`fn_call_ref` pushes one per hidden buf — 0 for a fn with no
+                        // promotable local).  This replaces the static `cref_work_buf`
+                        // injection and keeps the buffer out of the fn-ref TYPE without
+                        // the deps-based exclusion that wrongly dropped returned params.
+                        self.data.definitions[self.context as usize].attributes[a].hidden = true;
+                        self.vars.become_argument(*v);
+                        dep.push(a as u16);
+                        self.vars
+                            .set_type(*v, Type::RefVar(Box::new(Type::Text(Deps::none()))));
+                    }
+                    TextDep::PromotePlain => {
+                        let n = self.vars.name(*v);
+                        let tp = self.vars.tp(*v).clone();
+                        let a = self
+                            .data
+                            .add_attribute(&mut self.lexer, self.context, n, tp);
+                        self.vars.become_argument(*v);
+                        dep.push(a as u16);
+                    }
                 }
             }
             // P227: ensure every text-returning LAMBDA has at least one
@@ -4752,6 +4860,32 @@ impl Parser {
             Value::Call(d, args) if *d == self.data.def_nr("OpGetField") => {
                 match args.first().map(Value::unspan) {
                     Some(Value::Var(b)) => Some(*b),
+                    // @PLN85 (the chained field-of-local face) — a CHAINED
+                    // projection (`return t.inner.value`) roots at the inner
+                    // chain's base var (the #488/#489 recursion pattern).
+                    // Single-hop-only here let the NRVO rename take `t` as
+                    // the promotion candidate: the buffer was renamed onto
+                    // the container local, the tail was DISCARDED, and
+                    // native returned the typed null (interp survived via
+                    // the eval-stack channel — a silent backend divergence
+                    // LOFT_POISON made loud).
+                    Some(inner @ Value::Call(bd, _)) if *bd == self.data.def_nr("OpGetField") => {
+                        self.return_field_base_var(inner)
+                    }
+                    // An inline-ref capture block in base position
+                    // (`mk().inner` captured to an owned `w` copy) roots at
+                    // the block's tail var.
+                    Some(inner @ (Value::Block(_) | Value::Insert(_))) => {
+                        self.return_field_base_var(inner).or_else(|| {
+                            if let Value::Block(bl) = inner
+                                && let Some(Value::Var(w)) = bl.operators.last().map(Value::unspan)
+                            {
+                                Some(*w)
+                            } else {
+                                None
+                            }
+                        })
+                    }
                     _ => None,
                 }
             }
@@ -4972,23 +5106,73 @@ impl Parser {
     /// (fixing the interp orphan leak) while staying native-compilable. `null` arms
     /// (an exhaustive match's unreachable fall-through) are left untouched.
     fn materialize_vector_arms_into(&mut self, elm: &Type, op: &mut Value, w: u16) -> bool {
+        let mut consumed = Vec::new();
+        self.materialize_vector_arms_collect(elm, op, w, &mut consumed)
+    }
+
+    /// Insert `OpFreeRef(local)` into an arm that did NOT consume `local` — the
+    /// cross-arm half of the owned-fresh consume below: the preamble owned-init
+    /// allocates the local's store on EVERY path, so the path that never appends
+    /// from it must still free it (an already-freed/null ref free is a no-op).
+    fn push_arm_free(&mut self, arm: &mut Value, local: u16) {
+        let free = self.cl("OpFreeRef", &[Value::Var(local)]);
+        match arm {
+            Value::Span(b) => self.push_arm_free(&mut b.1, local),
+            Value::Insert(ops) if !ops.is_empty() => {
+                ops.insert(ops.len() - 1, free);
+            }
+            Value::Block(bl) if !bl.operators.is_empty() => {
+                let n = bl.operators.len() - 1;
+                bl.operators.insert(n, free);
+            }
+            other => {
+                let value = std::mem::replace(other, Value::Null);
+                *other = Value::Insert(vec![free, value]);
+            }
+        }
+    }
+
+    fn materialize_vector_arms_collect(
+        &mut self,
+        elm: &Type,
+        op: &mut Value,
+        w: u16,
+        consumed: &mut Vec<u16>,
+    ) -> bool {
         match op {
-            Value::Span(b) => self.materialize_vector_arms_into(elm, &mut b.1, w),
+            Value::Span(b) => self.materialize_vector_arms_collect(elm, &mut b.1, w, consumed),
             Value::Return(inner) | Value::Drop(inner) => {
-                self.materialize_vector_arms_into(elm, inner, w)
+                self.materialize_vector_arms_collect(elm, inner, w, consumed)
             }
             Value::If(_, t, f) => {
-                let a = self.materialize_vector_arms_into(elm, t, w);
-                let b2 = self.materialize_vector_arms_into(elm, f, w);
+                let mut ct = Vec::new();
+                let mut cf = Vec::new();
+                let a = self.materialize_vector_arms_collect(elm, t, w, &mut ct);
+                let b2 = self.materialize_vector_arms_collect(elm, f, w, &mut cf);
+                // An owned-fresh local consumed in ONE arm was preamble-allocated on
+                // BOTH paths — free it on the sibling path too, else that path leaks
+                // the untouched store (the `?? [literal]` then-path).
+                for &l in &ct {
+                    if !cf.contains(&l) {
+                        self.push_arm_free(f, l);
+                    }
+                }
+                for &l in &cf {
+                    if !ct.contains(&l) {
+                        self.push_arm_free(t, l);
+                    }
+                }
+                consumed.append(&mut ct);
+                consumed.append(&mut cf);
                 a || b2
             }
             Value::Block(bl) => bl
                 .operators
                 .last_mut()
-                .is_some_and(|last| self.materialize_vector_arms_into(elm, last, w)),
+                .is_some_and(|last| self.materialize_vector_arms_collect(elm, last, w, consumed)),
             Value::Insert(ops) => ops
                 .last_mut()
-                .is_some_and(|last| self.materialize_vector_arms_into(elm, last, w)),
+                .is_some_and(|last| self.materialize_vector_arms_collect(elm, last, w, consumed)),
             Value::Var(v) if *v != w && matches!(self.vars.tp(*v), Type::Vector(_, _)) => {
                 let local = *v;
                 let deps = self.vars.tp(local).depend();
@@ -5007,8 +5191,31 @@ impl Parser {
                 // (it aliases the subject `e`); freeing its deps would over-free `e`
                 // (@PLN85 match_return). The append already copied its elements into `w`.
                 if !self.vars.skip_free(local) {
-                    for d in deps {
-                        seq.push(self.cl("OpFreeRef", &[Value::Var(d)]));
+                    if deps.is_empty()
+                        && self.vars.is_work_ref(local)
+                        && !self.vars.is_argument(local)
+                    {
+                        // OWNED-FRESH local (dep-cleared — e.g. the `?? [literal]`
+                        // default work-vector): it OWNS its store, and its only use
+                        // is INSIDE this arm, which runs AFTER the pre-return frees
+                        // scopes emits.  Consume it HERE (the append copied it into
+                        // `w`); the matching pre-return free is DROPPED by
+                        // `insert_free`'s reads-filter (scopes.rs) — NOT via
+                        // skip_free, which would also suppress the work-ref
+                        // preamble owned-alloc (`gen_set_first_vector_null` reads
+                        // skip_free as "borrows, no store") and crash the arm's
+                        // PreAlloc on a null store.  The early free was a genuine
+                        // use-after-free: interp read the freed store silently
+                        // (LOFT_POISON SIGSEGVs), native crashed on the 65535
+                        // sentinel.  Any residual scope-exit free stays idempotent
+                        // (a second free of the sentinelled ref is a no-op).
+                        seq.push(self.cl("OpFreeRef", &[Value::Var(local)]));
+                        self.vars.set_arm_consumed(local);
+                        consumed.push(local);
+                    } else {
+                        for d in deps {
+                            seq.push(self.cl("OpFreeRef", &[Value::Var(d)]));
+                        }
                     }
                 }
                 seq.push(Value::Var(w));
@@ -5378,68 +5585,200 @@ impl Parser {
         Some((a_idx as u16, v))
     }
 
-    pub(crate) fn ref_return(&mut self, ls: &[u16], body: &mut [Value], site: RetSite) {
-        // Plan-57: a returned local that gets a fresh vector literal more than once
-        // cannot be NRVO-promoted to the caller's buffer — each `z=[lit]` builds INTO
-        // the buffer (`OpNewRecord(z, …)`), so the second literal appends rather than
-        // replaces, leaving the FIRST value (`z=[a]; z=[b]; z` returned [a]).  Each
-        // literal uses a DISTINCT element-temp (`Set(_elm_k, OpNewRecord(z, …))`), so
-        // the count of distinct element-temps building into `z` is the number of
-        // literal assignments; ≥2 ⇒ reassigned ⇒ leave it a normal local (the `__vdb`
-        // + return-copy path explicit return uses, which handles reassignment).  This
-        // is visible on the FIRST pass (where the promotion happens), unlike the
-        // later `OpPreAllocVector` form.
-        let newrecord_nr = self.data.def_nr("OpNewRecord");
-        fn reassign_count(body: &[Value], v: u16, nr: u32) -> usize {
-            fn collect(node: &Value, v: u16, nr: u32, temps: &mut std::collections::HashSet<u16>) {
-                if let Value::Set(w, val) = node
-                    && let Value::Call(op, args) = val.unspan()
-                    && *op == nr
-                    && matches!(args.first().map(Value::unspan), Some(Value::Var(s)) if *s == v)
-                {
-                    temps.insert(*w);
-                }
-                match node {
-                    Value::Set(_, val) => collect(val, v, nr, temps),
-                    Value::Call(_, args)
-                    | Value::Insert(args)
-                    | Value::Tuple(args)
-                    | Value::Parallel(args) => {
-                        for a in args {
-                            collect(a, v, nr, temps);
-                        }
-                    }
-                    Value::Block(bl) | Value::Loop(bl) => {
-                        for o in &bl.operators {
-                            collect(o, v, nr, temps);
-                        }
-                    }
-                    Value::If(c, t, e) => {
-                        collect(c, v, nr, temps);
-                        collect(t, v, nr, temps);
-                        collect(e, v, nr, temps);
-                    }
-                    Value::Iter(_, c, n, e) => {
-                        collect(c, v, nr, temps);
-                        collect(n, v, nr, temps);
-                        collect(e, v, nr, temps);
-                    }
-                    Value::Return(x)
-                    | Value::Drop(x)
-                    | Value::Yield(x)
-                    | Value::BreakWith(_, x) => {
-                        collect(x, v, nr, temps);
-                    }
-                    Value::Span(b) => collect(&b.1, v, nr, temps),
-                    _ => {}
-                }
+    /// Plan-57: the count of DISTINCT element-temps (`Set(_elm_k,
+    /// OpNewRecord(v, …))`) building into `v` — each fresh vector literal uses
+    /// one, so ≥2 ⇒ the local is reassigned.  Visible on the FIRST pass (where
+    /// promotion happens), unlike the later `OpPreAllocVector` form.
+    fn reassign_count(body: &[Value], v: u16, nr: u32) -> usize {
+        fn collect(node: &Value, v: u16, nr: u32, temps: &mut std::collections::HashSet<u16>) {
+            if let Value::Set(w, val) = node
+                && let Value::Call(op, args) = val.unspan()
+                && *op == nr
+                && matches!(args.first().map(Value::unspan), Some(Value::Var(s)) if *s == v)
+            {
+                temps.insert(*w);
             }
-            let mut temps = std::collections::HashSet::new();
-            for o in body {
-                collect(o, v, nr, &mut temps);
+            match node {
+                Value::Set(_, val) => collect(val, v, nr, temps),
+                Value::Call(_, args)
+                | Value::Insert(args)
+                | Value::Tuple(args)
+                | Value::Parallel(args) => {
+                    for a in args {
+                        collect(a, v, nr, temps);
+                    }
+                }
+                Value::Block(bl) | Value::Loop(bl) => {
+                    for o in &bl.operators {
+                        collect(o, v, nr, temps);
+                    }
+                }
+                Value::If(c, t, e) => {
+                    collect(c, v, nr, temps);
+                    collect(t, v, nr, temps);
+                    collect(e, v, nr, temps);
+                }
+                Value::Iter(_, c, n, e) => {
+                    collect(c, v, nr, temps);
+                    collect(n, v, nr, temps);
+                    collect(e, v, nr, temps);
+                }
+                Value::Return(x) | Value::Drop(x) | Value::Yield(x) | Value::BreakWith(_, x) => {
+                    collect(x, v, nr, temps);
+                }
+                Value::Span(b) => collect(&b.1, v, nr, temps),
+                _ => {}
             }
-            temps.len()
         }
+        let mut temps = std::collections::HashSet::new();
+        for o in body {
+            collect(o, v, nr, &mut temps);
+        }
+        temps.len()
+    }
+
+    /// @PLN85 D-own-1 slice 3 — the per-var verdict of `ref_return`'s
+    /// promotion loop as a PURE selector (the classify/apply split
+    /// `classify_text_dep` / `classify_vector_delivery` use, applied to the
+    /// NRVO/promotion ladder).  Rule rationale lives on the `RetPromotion`
+    /// variants; ORDER of the rungs is load-bearing (e.g. `MergeOnly` guards
+    /// `SkipInnerRef` — a transitive work ref must merge, not skip).
+    ///
+    /// `dep` is the return-dep list AS ACCUMULATED so far — a later
+    /// candidate's `Rename` is suppressed once ANY earlier site chained into
+    /// the placeholder (`bound_already`), so classification is per-var
+    /// in-loop, not a pre-pass.
+    fn classify_ret_promotion(
+        &self,
+        v: u16,
+        transitive: bool,
+        body: &[Value],
+        dep: &[u16],
+        ctx: &RetPromoCtx,
+    ) -> RetPromotion {
+        if ctx.jo_arm_skip.contains(&v) {
+            return RetPromotion::SkipDelivered;
+        }
+        let n = self.vars.name(v);
+        let is_work_ref = n.starts_with("__ref_") || n.starts_with("__rref_");
+        // A reassigned returned local must NOT be NRVO-promoted — but a NAMED
+        // local at a vector fn's body tail still DELIVERS: it falls through to
+        // the `Bind` copy leg (reassignment is irrelevant to a single
+        // copy-at-exit).  Skipping it entirely leaves the fn value-returning
+        // while callers — who can only consult the signature (a forward caller
+        // parses before this body) — assume buffer delivery and free the
+        // buffer alone: the returned store leaks (#355 fallout, the 93-vsort
+        // suite leak).
+        let reassigned = Self::reassign_count(body, v, ctx.newrecord_nr) >= 2;
+        if reassigned
+            && !(!is_work_ref
+                && ctx.is_plain_fn
+                && ctx.site == RetSite::BlockTail
+                && matches!(ctx.ret, Type::Vector(_, _)))
+        {
+            return RetPromotion::SkipReassigned;
+        }
+        if let Some(a) = self.data.def(self.context).attr_names.get(n) {
+            let a = *a as u16;
+            // #356: pass 2 re-finds a pass-1-promoted site work ref by name
+            // here — the site STILL needs its value made explicit each pass.
+            let chain_site = ctx.site == RetSite::MidReturn
+                && is_work_ref
+                && !transitive
+                && self.data.def(self.context).attributes()[a as usize].hidden;
+            return RetPromotion::MergeAttr { a, chain_site };
+        }
+        if transitive {
+            return RetPromotion::MergeOnly;
+        }
+        // Cluster I-d (@PLN85 cluster V) EXCEPTION — the site value ADOPTS this
+        // work ref: `buf = head(.., __ref_1); …; return buf`, where `buf`'s dep
+        // is `__ref_1` (buf aliases head's returned store).  Here `buf ==
+        // __ref_1` at runtime, so promoting `__ref_1` to `__retbuf` makes
+        // `buf == __retbuf` (true NRVO) — the same end-state the `buf = []`
+        // literal path reaches directly.  Left un-promoted the fn returns a
+        // FRESH adopt store while a `["??"]` caller (e.g. a `match` wrapper)
+        // frees the unused buffer and the adopted store LEAKS (the I-c
+        // face-flip).  Only skip when the site value does NOT adopt `v`.
+        let site_adopts_v = ctx
+            .site_value
+            .is_some_and(|sv| self.vars.tp(sv).depend().contains(&v));
+        if is_work_ref && ctx.site_value.is_some() && ctx.site_value != Some(v) && !site_adopts_v {
+            return RetPromotion::SkipInnerRef;
+        }
+        // A MID-BODY vector return never renames: the rename makes the site's
+        // local the fn-wide buffer, which is only sound at the body tail (the
+        // 01b breakage) — vector mid-returns bind through `Bind` instead.  And
+        // once ANY earlier site chained into the placeholder (`dep` already
+        // names the buffer attr), renaming would retire the placeholder var
+        // those sites reference — the later candidate must copy instead.
+        let bound_already = self.return_buffer().is_some_and(|(a, _)| dep.contains(&a));
+        // #425 — the return value is a struct/enum FIELD projection of THIS
+        // candidate (`return d.value`, where `d` is the container local).
+        // Renaming `d` to the return buffer is wrong: `d` holds the WHOLE
+        // record while the fn returns its inner field, so the promoted buffer
+        // would be the container, the field sub-ref dropped, and `d` freed at
+        // scope exit — the returned value dangles (native re-encodes to 0
+        // bytes).  Suppress the rename so the candidate falls through to the
+        // `Bind` copy leg (`materialize_return_into` deep-copies `d.value`
+        // into the separate `__retbuf`).  A field-of-ARGUMENT never reaches
+        // here (a true parameter hits the earlier `MergeAttr`), and a
+        // local-bind (`v = d.value; return v`) returns `v` itself (not a
+        // projection), so this is field-projection-of-a-local only.
+        let returns_own_field =
+            self.return_field_base_var(body.last().unwrap_or(&Value::Null)) == Some(v);
+        let allow_rename = !(bound_already
+            || reassigned
+            || returns_own_field
+            || (ctx.site == RetSite::MidReturn && matches!(ctx.ret, Type::Vector(_, _))));
+        if allow_rename
+            && let Some(&buf_attr) = self.data.def(self.context).attr_names.get("__retbuf")
+        {
+            return RetPromotion::Rename {
+                buf_attr,
+                chain_site: ctx.site == RetSite::MidReturn && is_work_ref,
+            };
+        }
+        if ctx.is_plain_fn
+            && matches!(
+                ctx.ret,
+                Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+            )
+            && let Some((buf_attr, buf_var)) = self.return_buffer()
+            && buf_var != v
+        {
+            return RetPromotion::Bind {
+                buf_attr,
+                buf_var,
+                substitute: is_work_ref,
+            };
+        }
+        RetPromotion::Grow
+    }
+
+    /// Does any `return` in `body` READ `var`?  A param a mid-body `return`
+    /// genuinely BORROWS must not be pruned from the return dep as a stale
+    /// copy-return artifact: the tail-source `expanded` set is built from the
+    /// TAIL return sources only, so it misses a param a mid-body `return`
+    /// borrows (`if c { return t[i] ?? d; }`) — 150-i306 native corruption when
+    /// that genuine borrow was wrongly pruned.
+    fn body_return_borrows(body: &[Value], var: u16) -> bool {
+        fn walk(op: &Value, var: u16) -> bool {
+            match op {
+                Value::Return(inner) | Value::BreakWith(_, inner) => inner.reads_var(var),
+                Value::Span(b) => walk(&b.1, var),
+                Value::Insert(ops) | Value::Parallel(ops) => ops.iter().any(|o| walk(o, var)),
+                Value::Block(bl) | Value::Loop(bl) => bl.operators.iter().any(|o| walk(o, var)),
+                Value::If(c, t, e) => walk(c, var) || walk(t, var) || walk(e, var),
+                Value::Iter(_, c, n, e) => walk(c, var) || walk(n, var) || walk(e, var),
+                _ => false,
+            }
+        }
+        body.iter().any(|s| walk(s, var))
+    }
+
+    pub(crate) fn ref_return(&mut self, ls: &[u16], body: &mut [Value], site: RetSite) {
+        let newrecord_nr = self.data.def_nr("OpNewRecord");
         let ret = self.data.definitions[self.context as usize]
             .returned
             .clone();
@@ -5465,7 +5804,7 @@ impl Parser {
         // (`materialize_vector_arms_into`, no-free for the borrowed binding). Then skip
         // promoting the binding below (it is now a delivered local, not the return).
         let mut jo_arm_skip: std::collections::HashSet<u16> = std::collections::HashSet::new();
-        if std::env::var_os("LOFT_JOIN_OWN").is_some()
+        if crate::keys::join_own_enabled()
             && let Type::Vector(ret_elm, _) = &ret
             && let Some((buf_attr, buf_var)) = self.return_buffer()
         {
@@ -5495,6 +5834,18 @@ impl Parser {
                     Type::Vector(Box::new(elm_ty.clone()), Deps::attrs(vec![buf_attr]));
             }
         }
+        // @PLN85 L3 — re-read `ret` AFTER the jo pre-pass: the finalization
+        // below rebuilds `returned` from this clone's deps, and the stale
+        // pre-pass-less clone CLOBBERED the `{__retbuf}` dep the pre-pass just
+        // finalised (every promotion candidate is jo_arm_skip'd, so the loop
+        // re-adds nothing).  With empty returned deps the caller typed the
+        // result OWNED: it double-freed the delivered buffer (result + buffer
+        // var, same store) and — when a `??`-discharge read made scan_set's
+        // dep-prefix null-init the result var at entry — the entry-allocated
+        // store was orphaned by the call assignment (the corpus L3 leak).
+        let ret = self.data.definitions[self.context as usize]
+            .returned
+            .clone();
         // B2-runtime / B3 / B7 unification (2026-04-13): struct-enums
         // (Type::Enum with struct-enum discriminator `true`) live as
         // heap-allocated records just like Reference and Vector do, so
@@ -5545,235 +5896,133 @@ impl Parser {
             let site_value = body.last().and_then(|t| self.site_value_ref(t));
             let is_plain_fn = !self.data.def(self.context).name().contains("__lambda")
                 && self.data.def_type(self.context) == crate::data::DefType::Function;
+            // @PLN85 D-own-1 slice 3 — the per-var verdict sentinel (trace only):
+            // one line per promotion verdict so the corpus's coverage of every
+            // ladder rung is PROVEN before the classify_ret_promotion cut.
+            let rr = std::env::var("LOFT_TRACE_RR").is_ok();
+            // @PLN85 D-own-1 slice 3 — classify ONCE per var (the pure
+            // selector), then apply the one mechanism per verdict.  The rule
+            // rationale lives on the `RetPromotion` variants; the arms carry
+            // only emission mechanics.
+            let ctx = RetPromoCtx {
+                site,
+                ret: &ret,
+                site_value,
+                is_plain_fn,
+                newrecord_nr,
+                jo_arm_skip: &jo_arm_skip,
+            };
             for (e_idx, v) in expanded.iter().enumerate() {
-                // @PLN85 match_return: a borrowed binding already DELIVERED into a
-                // separate `__retbuf` above (`jo_arm_skip`) is a local, not the return —
-                // promoting it would re-alias the buffer onto the binding var.
-                if jo_arm_skip.contains(v) {
-                    continue;
+                let verdict =
+                    self.classify_ret_promotion(*v, e_idx >= direct_count, body, &dep, &ctx);
+                if rr {
+                    eprintln!("[rr]   v={} verdict={verdict:?}", self.vars.name(*v));
                 }
-                let transitive = e_idx >= direct_count;
-                let n = self.vars.name(*v);
-                let is_work_ref = n.starts_with("__ref_") || n.starts_with("__rref_");
-                // A reassigned returned local must NOT be NRVO-promoted (see
-                // above) — but a NAMED local at a vector fn's body tail still
-                // DELIVERS: it falls through to the one-buffer branch below,
-                // whose named-local leg copies the final value into the
-                // buffer at the return (reassignment is irrelevant to a
-                // single copy-at-exit).  Skipping it entirely leaves the fn
-                // value-returning while callers — who can only consult the
-                // signature (a forward caller parses before this body) —
-                // assume buffer delivery and free the buffer alone: the
-                // returned store leaks (#355 fallout, the 93-vsort suite
-                // leak).
-                let reassigned = reassign_count(body, *v, newrecord_nr) >= 2;
-                if reassigned
-                    && !(!is_work_ref
-                        && is_plain_fn
-                        && site == RetSite::BlockTail
-                        && matches!(&ret, Type::Vector(_, _)))
-                {
-                    continue;
-                }
-                // skip related variables that are already attributes
-                if let Some(a) = self.data.def(self.context).attr_names.get(n) {
-                    let a = *a as u16;
-                    if !dep.contains(&a) {
-                        dep.push(a);
-                    }
-                    // #356: pass 2 re-finds a pass-1-promoted site work ref
-                    // by name here — the site STILL needs its value made
-                    // explicit each pass (a mid-body bare-call tail loses
-                    // its value to the Return(Null) fall-through on native
-                    // once argument lifting decomposes it).
-                    if site == RetSite::MidReturn
-                        && is_work_ref
-                        && !transitive
-                        && self.data.def(self.context).attributes()[a as usize].hidden
-                        && let Some(tail) = body.last_mut()
-                    {
-                        Self::chain_site_set_shape(&ret, tail, *v);
-                    }
-                    continue;
-                }
-                if transitive {
-                    continue; // merge-only for transitively-reached vars (see above)
-                }
-                // An inner work ref that is not the site's value stays a
-                // plain local: the outer call deep-copies its record into
-                // the destination before scope exit frees it.
-                //
-                // Cluster I-d (@PLN85 cluster V) EXCEPTION — the site value ADOPTS this
-                // work ref: `buf = head(.., __ref_1); …; return buf`, where
-                // `buf`'s dep is `__ref_1` (buf aliases head's returned store).
-                // Here `buf == __ref_1` at runtime, so promoting `__ref_1` to
-                // `__retbuf` makes `buf == __retbuf` (true NRVO) — the same
-                // end-state the `buf = []` literal path reaches directly.  Left
-                // un-promoted the fn returns a FRESH adopt store while a `["??"]`
-                // caller (e.g. a `match` wrapper) frees the unused buffer and
-                // the adopted store LEAKS (the I-c face-flip).  Only skip when
-                // the site value does NOT adopt `v`.
-                let site_adopts_v =
-                    site_value.is_some_and(|sv| self.vars.tp(sv).depend().contains(v));
-                if is_work_ref && site_value.is_some() && site_value != Some(*v) && !site_adopts_v {
-                    continue;
-                }
-                // @PLAN59 / H1: bind the promoted local to the
-                // signature-time `__retbuf` buffer instead of GROWING the
-                // signature — rename the ATTR to the local's name (the
-                // attr↔var coupling is by name, probe C3; pass 2's
-                // `attr_names` lookup above then hits directly) and retire
-                // the placeholder argument var (the promoted local takes
-                // the same last frame slot by var-number order, probe C6).
-                // A MID-BODY vector return never renames: the rename makes
-                // the site's local the fn-wide buffer, which is only sound
-                // at the body tail (the 01b breakage) — vector mid-returns
-                // bind through the one-buffer branch below instead.  And
-                // once ANY earlier site chained into the placeholder
-                // (`dep` already names the buffer attr), renaming would
-                // retire the placeholder var those sites reference — the
-                // later candidate must copy instead.
-                let bound_already = self.return_buffer().is_some_and(|(a, _)| dep.contains(&a));
-                // #425 — the return value is a struct/enum FIELD projection of THIS
-                // candidate (`return d.value`, where `d` is the container local).
-                // Renaming `d` to the return buffer is wrong: `d` holds the WHOLE
-                // record (`Decoded`) while the fn returns its inner field
-                // (`CborValue`), so the promoted buffer would be the container, the
-                // field sub-ref would be dropped, and `d` freed at scope exit — the
-                // returned value dangles (native re-encodes to 0 bytes). Suppress the
-                // rename so `d` stays an ordinary local and the candidate falls
-                // through to the copy-into-buffer leg below (`materialize_return_into`
-                // deep-copies `d.value` into the separate `__retbuf`). A field-of-
-                // ARGUMENT never reaches here (a true parameter hits the earlier
-                // `attr_names` continue), and a local-bind (`v = d.value; return v`)
-                // returns `v` itself (not a projection), so this is field-projection-
-                // of-a-local only.
-                let returns_own_field =
-                    self.return_field_base_var(body.last().unwrap_or(&Value::Null)) == Some(*v);
-                let allow_rename = !(bound_already
-                    || reassigned
-                    || returns_own_field
-                    || (site == RetSite::MidReturn && matches!(&ret, Type::Vector(_, _))));
-                if allow_rename
-                    && let Some(&buf_attr) = self.data.def(self.context).attr_names.get("__retbuf")
-                {
-                    let def = &mut self.data.definitions[self.context as usize];
-                    def.attributes[buf_attr].name = n.to_string();
-                    def.attr_names.remove("__retbuf");
-                    def.attr_names.insert(n.to_string(), buf_attr);
-                    let placeholder = self.vars.var("__retbuf");
-                    if placeholder != u16::MAX {
-                        self.vars.retire_argument(placeholder);
-                    }
-                    self.vars.become_argument(*v);
-                    dep.push(buf_attr as u16);
-                    // #356: a mid-body `return f(g(x))` site loses its value
-                    // on native once argument lifting decomposes the bare
-                    // call — give the freshly bound site the explicit
-                    // `Set + Var` shape.  Body-tail sites keep their NRVO /
-                    // unify wiring untouched (wrapping there broke if-arm
-                    // emission).
-                    if site == RetSite::MidReturn
-                        && is_work_ref
-                        && let Some(tail) = body.last_mut()
-                    {
-                        Self::chain_site_set_shape(&ret, tail, *v);
-                    }
-                    continue;
-                }
-                // ONE-BUFFER invariant (stability roadmap #1): a plain fn's
-                // arity is FIXED at signature parse — never grow it here.
-                // Growth crashes forward callers (a caller parsed earlier
-                // holds a short arg list), diverges on recursion
-                // (buffers(f) = k + buffers(f) has no finite fixpoint), and
-                // leaks the buffer count into the user-facing fn TYPE (two
-                // fns with the same declared signature could not share a
-                // fn-ref variable).  Instead the site BINDS to the one
-                // existing buffer:
-                //   - a parser-minted work ref (`__ref_N` — referenced only
-                //     at its own return site) is SUBSTITUTED by the buffer
-                //     var, so the site's call writes directly into the
-                //     caller's buffer (return paths are mutually exclusive,
-                //     so sharing one buffer is sound);
-                //   - a named local (readable by sibling return sites —
-                //     substitution could alias the buffer into another
-                //     site's argument list) keeps its own store and is
-                //     deep-copied into the buffer at the return.
-                // Lambdas keep in-place growth: they are defined at their
-                // literal site and invoked via CallRef, so no earlier
-                // caller can hold a short arg list.
-                if is_plain_fn
-                    && matches!(
-                        &ret,
-                        Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
-                    )
-                    && let Some((buf_attr, buf_var)) = self.return_buffer()
-                    && buf_var != *v
-                {
-                    if is_work_ref {
-                        for op in body.iter_mut() {
-                            Self::substitute_work_ref(op, *v, buf_var);
+                match verdict {
+                    RetPromotion::SkipDelivered
+                    | RetPromotion::SkipReassigned
+                    | RetPromotion::MergeOnly
+                    | RetPromotion::SkipInnerRef => {}
+                    RetPromotion::MergeAttr { a, chain_site } => {
+                        if !dep.contains(&a) {
+                            dep.push(a);
                         }
-                        // The substituted-out ref must not get a null-init
-                        // preamble or a scope-exit free (see
-                        // `unregister_work_ref`).
-                        self.vars.unregister_work_ref(*v);
-                        // A bare-call site tail needs its value made
-                        // explicit (see `chain_site_set_shape`).
-                        if let Some(tail) = body.last_mut() {
-                            Self::chain_site_set_shape(&ret, tail, buf_var);
+                        if chain_site && let Some(tail) = body.last_mut() {
+                            Self::chain_site_set_shape(&ret, tail, *v);
                         }
-                    } else if let Some(tail) = body.last_mut() {
-                        // Named local: keep its own store; deliver a COPY in
-                        // the buffer at the return.  #425 — a struct-enum
-                        // (heap `Type::Enum`) field-of-local return copies the
-                        // same way as a Reference: `materialize_return_into`
-                        // emits `OpCopyRecord(d.field → buf)` (the record copy
-                        // works for any heap record, enum or struct).
-                        match ret.clone() {
-                            Type::Reference(td, _) | Type::Enum(td, true, _) => {
-                                self.materialize_return_into(td, tail, buf_var);
+                    }
+                    RetPromotion::Rename {
+                        buf_attr,
+                        chain_site,
+                    } => {
+                        let n = self.vars.name(*v);
+                        let def = &mut self.data.definitions[self.context as usize];
+                        def.attributes[buf_attr].name = n.to_string();
+                        def.attr_names.remove("__retbuf");
+                        def.attr_names.insert(n.to_string(), buf_attr);
+                        let placeholder = self.vars.var("__retbuf");
+                        if placeholder != u16::MAX {
+                            self.vars.retire_argument(placeholder);
+                        }
+                        self.vars.become_argument(*v);
+                        dep.push(buf_attr as u16);
+                        // #356: give the freshly bound mid-body site the
+                        // explicit `Set + Var` shape.  Body-tail sites keep
+                        // their NRVO / unify wiring untouched (wrapping there
+                        // broke if-arm emission).
+                        if chain_site && let Some(tail) = body.last_mut() {
+                            Self::chain_site_set_shape(&ret, tail, *v);
+                        }
+                    }
+                    RetPromotion::Bind {
+                        buf_attr,
+                        buf_var,
+                        substitute,
+                    } => {
+                        if substitute {
+                            for op in body.iter_mut() {
+                                Self::substitute_work_ref(op, *v, buf_var);
                             }
-                            Type::Vector(elm, _) => {
-                                self.materialize_vector_return_into(&elm, tail, buf_var);
+                            // The substituted-out ref must not get a null-init
+                            // preamble or a scope-exit free (see
+                            // `unregister_work_ref`).
+                            self.vars.unregister_work_ref(*v);
+                            // A bare-call site tail needs its value made
+                            // explicit (see `chain_site_set_shape`).
+                            if let Some(tail) = body.last_mut() {
+                                Self::chain_site_set_shape(&ret, tail, buf_var);
                             }
-                            _ => {}
+                        } else if let Some(tail) = body.last_mut() {
+                            // Named local: keep its own store; deliver a COPY
+                            // in the buffer at the return.  #425 — a
+                            // struct-enum (heap `Type::Enum`) field-of-local
+                            // return copies the same way as a Reference:
+                            // `materialize_return_into` emits
+                            // `OpCopyRecord(d.field → buf)` (the record copy
+                            // works for any heap record, enum or struct).
+                            match ret.clone() {
+                                Type::Reference(td, _) | Type::Enum(td, true, _) => {
+                                    self.materialize_return_into(td, tail, buf_var);
+                                }
+                                Type::Vector(elm, _) => {
+                                    self.materialize_vector_return_into(&elm, tail, buf_var);
+                                }
+                                _ => {}
+                            }
+                        } else {
+                            // No body tail to rewrite (defensive) — keep the
+                            // local unpromoted; the return-copy path handles
+                            // it.
                         }
-                    } else {
-                        // No body tail to rewrite (defensive) — keep the
-                        // local unpromoted; the return-copy path handles it.
+                        if !dep.contains(&buf_attr) {
+                            dep.push(buf_attr);
+                        }
                     }
-                    if !dep.contains(&buf_attr) {
-                        dep.push(buf_attr);
+                    RetPromotion::Grow => {
+                        debug_assert!(
+                            self.first_pass
+                                || self.data.def(self.context).name().contains("__lambda")
+                                || self.data.def_type(self.context)
+                                    != crate::data::DefType::Function,
+                            "@PLAN59: arity grew in PASS 2 on plain fn '{}'",
+                            self.data.def(self.context).name()
+                        );
+                        let n = self.vars.name(*v);
+                        let a =
+                            self.data
+                                .add_attribute(&mut self.lexer, self.context, n, ret.clone());
+                        // mark as hidden return-mechanism parameter
+                        self.data.definitions[self.context as usize].attributes[a].hidden = true;
+                        self.vars.become_argument(*v);
+                        dep.push(a as u16);
+                        // Growth here is lambda-only (asserted in the classify
+                        // rationale): a lambda is defined at its literal site
+                        // and invoked via CallRef (fn-ref dispatch, never an
+                        // arity-filled Call), so no earlier caller can hold a
+                        // short arg list — the #339 retro-patch this branch
+                        // once needed is deleted (@PLAN59 phase 2).
                     }
-                    continue;
                 }
-                // Vector / struct-Enum returns and lambdas still grow.
-                // PASS-1 growth is sound (pass 2 re-parses every caller
-                // against the final arity and re-finds the grown attr by
-                // name); PASS-2 growth on a plain fn must never happen —
-                // callers compiled in pass 2 before the growth would hold
-                // a short arg list.
-                debug_assert!(
-                    self.first_pass
-                        || self.data.def(self.context).name().contains("__lambda")
-                        || self.data.def_type(self.context) != crate::data::DefType::Function,
-                    "@PLAN59: arity grew in PASS 2 on plain fn '{}'",
-                    self.data.def(self.context).name()
-                );
-                let a = self
-                    .data
-                    .add_attribute(&mut self.lexer, self.context, n, ret.clone());
-                // mark as hidden return-mechanism parameter
-                self.data.definitions[self.context as usize].attributes[a].hidden = true;
-                self.vars.become_argument(*v);
-                dep.push(a as u16);
-                // Growth here is lambda-only (asserted above): a lambda is
-                // defined at its literal site and invoked via CallRef
-                // (fn-ref dispatch, never an arity-filled Call), so no
-                // earlier caller can hold a short arg list — the #339
-                // retro-patch this branch once needed is deleted
-                // (@PLAN59 phase 2).
             }
             // A buffer-bound vector fn must deliver at EVERY return site —
             // callers (a forward caller in particular) can only consult the
@@ -5830,6 +6079,44 @@ impl Parser {
                     *first = Value::Insert(vec![clear, old]);
                 }
             }
+            // @PLN85 D-own-2 — prune a STALE visible-param return dep that no pass-2
+            // return source justifies.  `r = x` on a struct is a C86 COPY (`r` owns
+            // its store), but the copy dep-strip is pass-2-only, so PASS 1 records the
+            // source param `x` in the return dep and PASS 2 carries it via
+            // `cur.clone()` above — into a pass where `r` is owned and `x` is NOT in
+            // `expanded` (the pass-2 transitive return-source set).  A VISIBLE attr the
+            // caller reads through `returns_borrowed_view()` MUST name a real pass-2
+            // borrow source; a stale one makes the caller treat an owned copy return as
+            // a borrow and never free it (the struct-copy-return native leak, interp
+            // clean).  `expanded` already includes transitive deps, so a GENUINE borrow
+            // (`fn id(x) -> Box { x }`, or a returned view of `x`) keeps `x`; only the
+            // unreachable stale entry drops.  Hidden buffer attrs are never pruned.
+            let stale_visible: Vec<u16> = {
+                let attrs = self.data.def(self.context).attributes();
+                dep.iter()
+                    .copied()
+                    .filter_map(|a| {
+                        attrs
+                            .get(a as usize)
+                            .filter(|at| !at.hidden)
+                            .map(|at| (a, at.name.clone()))
+                    })
+                    .collect::<Vec<_>>()
+            }
+            .into_iter()
+            .filter(|(_, name)| {
+                let var = self.vars.var(name);
+                // NOT in the tail-source `expanded` set AND not borrowed by a
+                // MID-BODY `return` either.  `expanded` is built from the TAIL
+                // return sources, so it misses a param a mid-body `return` borrows
+                // (`fn f(t) -> M { if c { return t[i] ?? d; } d }` — the `t` view is
+                // genuine, not a stale copy-return artifact; 150-i306 native
+                // corruption when it was wrongly pruned).
+                !expanded.contains(&var) && !Self::body_return_borrows(body, var)
+            })
+            .map(|(a, _)| a)
+            .collect();
+            dep.retain(|d| !stale_visible.contains(d));
             // H2: the rebuilt return-type deps are ATTRIBUTE indices —
             // tag them so `as_attr_indices` readers verify in debug builds.
             let dep = Deps::attrs(dep.to_vec());
@@ -6364,6 +6651,9 @@ impl Parser {
                 if let Type::Function(param_types, ret_type, _) = self.vars.tp(v_nr).clone()
                     && param_types.is_empty()
                 {
+                    // @PLN85 L1 — callee-attr-space deps must not leak into the
+                    // caller (see `fnref_result_type`).
+                    let ret_type = Box::new(Self::fnref_result_type(*ret_type, &[]));
                     // P227: text-returning fn-ref calls need exactly ONE
                     // work-buffer at caller-function scope (the return-value
                     // buffer that the lambda fills via its hidden RefVar(Text)
@@ -6690,6 +6980,10 @@ impl Parser {
         let Type::Function(param_types, ret_type, _) = self.vars.tp(v_nr).clone() else {
             return None;
         };
+        // @PLN85 L1 — callee-attr-space deps must not leak into the caller
+        // (see `fnref_result_type`): map visible-param deps through the actual
+        // argument types, drop hidden/grown indices (the value arrives OWNED).
+        let ret_type = Box::new(Self::fnref_result_type(*ret_type, types));
         // P227: one work-buffer per text-returning fn-ref call.
         // The fn-ref TYPE's `Type::Text(deps)` is always `deps = []`,
         // so the previous deps-derived count was zero — leaving the

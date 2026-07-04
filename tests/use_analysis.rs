@@ -27,6 +27,12 @@ fn dump(src: &str) -> String {
         .arg(&path)
         .env("LOFT_MATERIALIZE_DUMP", "1")
         .env("LOFT_NO_CACHE", "1")
+        // The oracle assertions are hand-computed against the RAW shapes; the
+        // (now default-on) match-return synthesis rewrites the borrowed arm to
+        // an owned copy (`_mvcopy_N`) before the oracle reads it.  Opt out so
+        // the ground truth stays expressible; the synthesis's own observable
+        // effect is pinned separately (join_own_match_return_strips_the_borrow).
+        .env("LOFT_NO_JOIN_OWN", "1")
         .output()
         .expect("spawn loft");
     String::from_utf8_lossy(&out.stderr).into_owned()
@@ -197,7 +203,9 @@ fn dump_at_tier(src: &str, tier: u8) -> String {
     cmd.args(["--interpret", "--check"])
         .arg(&path)
         .env("LOFT_MATERIALIZE_DUMP", "1")
-        .env("LOFT_NO_CACHE", "1");
+        .env("LOFT_NO_CACHE", "1")
+        // Same raw-shape contract as `dump` — see the note there.
+        .env("LOFT_NO_JOIN_OWN", "1");
     if tier >= 1 {
         cmd.env("LOFT_ELIDE_T1", "1");
     }
@@ -559,7 +567,12 @@ fn run_backend(src: &str, backend: &str, join_own: bool) -> (String, String) {
         .env("LOFT_NO_CACHE", "1")
         .env("LOFT_TIMEOUT", "180");
     if join_own {
-        cmd.env("LOFT_JOIN_OWN", "1");
+        // Post-flip the fixes are DEFAULT-ON: the on-leg actively removes the
+        // opt-out so an ambient `LOFT_NO_JOIN_OWN` cannot invert the premise.
+        cmd.env_remove("LOFT_NO_JOIN_OWN");
+    } else {
+        // The control leg (the documented pre-fix behaviour) opts out.
+        cmd.env("LOFT_NO_JOIN_OWN", "1");
     }
     let out = cmd.output().expect("spawn loft");
     (
@@ -687,7 +700,9 @@ fn introspect(src: &str, join_own: bool) -> String {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_loft"));
     cmd.arg("introspect").arg(&path).env("LOFT_NO_CACHE", "1");
     if join_own {
-        cmd.env("LOFT_JOIN_OWN", "1");
+        cmd.env_remove("LOFT_NO_JOIN_OWN");
+    } else {
+        cmd.env("LOFT_NO_JOIN_OWN", "1");
     }
     let out = cmd.output().expect("spawn loft introspect");
     String::from_utf8_lossy(&out.stdout).into_owned()

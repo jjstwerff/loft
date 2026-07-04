@@ -192,6 +192,7 @@ pub fn stdlib_cache_key(stdlib_sources: &[(String, String)]) -> [u8; 32] {
     put(BUILD_ID.as_bytes());
     put(target_triple().as_bytes());
     put(feature_signature().as_bytes());
+    put(semantic_gate_signature().as_bytes());
     // Number of stdlib files, then each (name, content).
     h.update((stdlib_sources.len() as u64).to_le_bytes());
     for (name, content) in stdlib_sources {
@@ -203,6 +204,37 @@ pub fn stdlib_cache_key(stdlib_sources: &[(String, String)]) -> [u8; 32] {
         field(content.as_bytes());
     }
     h.finalize().into()
+}
+
+/// The values of every env gate that changes EMITTED CODE (not just logging):
+/// two runs differing in any of these must never share cached bytecode.  A
+/// gate-ON sweep otherwise poisons a later gate-OFF run of the same file with
+/// stale-gate bytecode (observed: the @PLN85 54-cell over-free map read 0/54
+/// gate-OFF right after a gate-ON run — the real gate-OFF count was 6/54).
+/// Keep this list in sync when adding a semantic gate; a LOGGING-only var
+/// (LOFT_LOG, dump tuning) must NOT be here or warm starts vanish.
+#[must_use]
+fn semantic_gate_signature() -> String {
+    const SEMANTIC_GATES: &[&str] = &[
+        "LOFT_NO_JOIN_OWN",
+        "LOFT_PLN25_OFF",
+        "LOFT_NO_BORROW_ELIDE",
+        "LOFT_POISON",
+        "LOFT_UAF",
+        "LOFT_UAF_GEN",
+        "LOFT_UAF_REUSE",
+        "LOFT_CODEGEN_STORE",
+    ];
+    let mut sig = String::new();
+    for g in SEMANTIC_GATES {
+        sig.push_str(g);
+        sig.push('=');
+        if let Some(v) = std::env::var_os(g) {
+            sig.push_str(&v.to_string_lossy());
+        }
+        sig.push(';');
+    }
+    sig
 }
 
 /// The target triple this binary was built for, e.g.

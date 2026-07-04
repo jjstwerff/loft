@@ -1,0 +1,16 @@
+// #490 — a discarded statement result that owns a fresh store
+// (`json_parse(x);`, `mk();`) lowered to a plain stack-pop (`FreeStack` on
+// the interpreter, an ignored Rust return on native) that never freed the
+// store — once per iteration inside a loop.  The `Drop` scan arm now lifts
+// the result to a `__lift_N` temp freed at scope exit.
+fn mk() -> JsonValue { json_parse("{{\"j\":\"jay\"}}") }
+fn sel(o: JsonValue) -> JsonValue { json_parse(o.field("a").to_json()) }
+fn test() {
+  json_parse("{{\"x\":\"gone\"}}");   // native-constructor discard
+  mk();                              // user-fn owned-result discard
+  sel(json_parse("{{\"a\":5}}"));    // discard with a lifted arg AND owned return
+  for i in 0..3 {
+    json_parse("{{\"n\":{i}}}");     // one leak per iteration before the fix
+  };
+  assert(mk().kind() == "JObject", "owned temps consumed");
+}

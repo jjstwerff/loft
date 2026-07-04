@@ -212,7 +212,27 @@ impl Parser {
                     // vector_db ops together, ahead of the body (prefix first).
                     let mut front = prefix;
                     if !body_allocates && !body_adopts_call {
-                        front.extend(self.vector_db(tp, var_nr));
+                        let db_ops = self.vector_db(tp, var_nr);
+                        // @PLN85 #492 — `vector_db` no-ops on a non-rebind ARGUMENT (the
+                        // NRVO return buffer IS the caller's store, so it cannot get a
+                        // fresh backing).  Without a fresh store, a `=` NON-EMPTY literal
+                        // reassignment on the buffer (`r = [9,9]` in a JOIN arm, after an
+                        // earlier arm's `r = x` filled it) would APPEND to the stale
+                        // content instead of REPLACING — the returned vector piles both
+                        // arms (`[1,2,3,9,9]`).  Clear the buffer first: `=` is a replace,
+                        // so this is correct on a fresh buffer (a no-op) and a filled one.
+                        // The empty-literal `v = []` reassign is handled by the
+                        // `ls.is_empty()` clear below; a rebind param gets a fresh backing
+                        // (`db_ops` non-empty), so neither reaches here.
+                        if db_ops.is_empty()
+                            && !self.first_pass
+                            && self.vars.is_argument(var_nr)
+                            && !ls.is_empty()
+                        {
+                            front.push(self.cl("OpClearVector", &[Value::Var(var_nr)]));
+                        } else {
+                            front.extend(db_ops);
+                        }
                     }
                     for (i, p) in front.into_iter().enumerate() {
                         ls.insert(i, p);
@@ -909,11 +929,46 @@ impl Parser {
                     // therefore freed before them (LIFO).
                     self.vars.mark_inline_ref(w);
                     let orig = code.clone();
-                    *code = v_block(
-                        vec![v_set(w, orig), Value::Var(w)],
-                        Type::Reference(d_nr, crate::data::Deps::frame1(w)),
-                        "inline ref",
-                    );
+                    // @PLN85 (the chained field-of-call class) — a PROJECTION
+                    // of the value must COPY into `w`, not alias: argument
+                    // lifting later splits the inner call into a `__lift_N`
+                    // whose scope-exit free runs INSIDE this block, so an
+                    // aliasing `Set(w, GetField(call, ..))` left `w` (and
+                    // every further projection) dangling into the freed
+                    // store — chain depth ≥ 2 read stale data at ANY
+                    // consumption site (bind / argument / return / loop) on
+                    // BOTH backends; the depth-1 `materialized_view_return`
+                    // path was already copy-then-free and is the spec this
+                    // mirrors (the C86 escape rule: a view outliving its
+                    // dying temporary materialises).  A direct CALL result
+                    // (not a projection) still binds raw — `w` genuinely
+                    // adopts that fresh store.
+                    let is_projection = matches!(orig.unspan(), Value::Call(pd, _)
+                        if matches!(self.data.def(*pd).name(),
+                            "OpGetField" | "OpGetVector" | "OpVectorRef" | "OpGetDbRef"));
+                    let kt = self.data.def(d_nr).known_type();
+                    if is_projection && kt != u16::MAX {
+                        let copy_d = self.data.def_nr("OpCopyRecord");
+                        *code = v_block(
+                            vec![
+                                v_set(w, Value::Null),
+                                self.cl("OpDatabase", &[Value::Var(w), Value::Int(i32::from(kt))]),
+                                Value::Call(
+                                    copy_d,
+                                    vec![orig, Value::Var(w), Value::Int(i32::from(kt))],
+                                ),
+                                Value::Var(w),
+                            ],
+                            Type::Reference(d_nr, crate::data::Deps::frame1(w)),
+                            "inline ref copy",
+                        );
+                    } else {
+                        *code = v_block(
+                            vec![v_set(w, orig), Value::Var(w)],
+                            Type::Reference(d_nr, crate::data::Deps::frame1(w)),
+                            "inline ref",
+                        );
+                    }
                     t = Type::Reference(d_nr, crate::data::Deps::frame1(w));
                 }
             } else if self.lexer.has_token("[") {
@@ -929,24 +984,53 @@ impl Parser {
                 self.lexer.token("]");
             } else if self.lexer.has_token("(") {
                 // chained call on a Type::Function expression — expr(args).
-                if let Type::Function(param_types, ret_type, _) = t.clone() {
+                if let Type::Function(param_types, ret_type, fn_deps) = t.clone() {
+                    // @PLN85 t1 — does the SOURCE fn-ref OWN a freshly-minted
+                    // closure?  A closure-factory return (`make_greeter(..)`) carries
+                    // a `CalleeFrame` dep (the lambda's `___clos_N` work var); a
+                    // borrowed pass-through (`passthru(g)`) or a non-capturing lambda
+                    // returns EMPTY deps.  Owned ⇒ this immediately-invoked temp is
+                    // the SOLE owner of the freshly-minted closure store (nobody else
+                    // frees it), so it must KEEP the ownership dep and be freed at
+                    // scope exit; borrowed ⇒ skip_free (the source var frees it, else
+                    // a double-free).
+                    // Does the SOURCE fn-ref OWN a freshly-minted closure?  A
+                    // closure-factory return (`make_greeter(..)`) carries a
+                    // `CalleeFrame` dep (the lambda's `___clos_N` work var); a
+                    // borrowed pass-through (`passthru(g)`) or a non-capturing lambda
+                    // returns EMPTY deps.  Pass 1's type does NOT yet carry the dep
+                    // (the lambda propagation runs later), so this reads FALSE there —
+                    // fine, because pass-1 IR is discarded and the stamp below is
+                    // pass-2-only.
+                    let owns_closure = fn_deps
+                        .entries()
+                        .any(|e| matches!(e, crate::data::DepEntry::CalleeFrame(_)));
                     let fn_type = Type::Function(
                         param_types.clone(),
                         ret_type.clone(),
-                        crate::data::Deps::none(),
+                        if owns_closure {
+                            fn_deps.clone()
+                        } else {
+                            crate::data::Deps::none()
+                        },
                     );
                     // Allocate temp variable on BOTH passes (consistent unique counter).
                     let fn_work = self.create_unique("__fn_ref_tmp", &fn_type);
                     self.vars.defined(fn_work);
-                    // The fn_work temp is a borrowed copy of an existing
-                    // fn-ref: its closure DbRef aliases the source's
-                    // closure store, so emitting OpFreeRef on it would
-                    // double-free.  Mark `skip_free` so scope-exit cleanup
-                    // leaves the closure alone.  Also blocks the
-                    // insert_free Return-wrap path that would otherwise
-                    // wrap the trailing OpFreeRef in `return`, returning
-                    // `()` from a value-returning block (P249-mirror).
-                    self.vars.set_skip_free(fn_work);
+                    // @PLN85 t1 — stamp `skip_free` ONLY in pass 2 and ONLY for a
+                    // BORROWED source.  `skip_free` is a GLOBAL per-var bit that
+                    // persists across passes; a pass-1 stamp (where `owns_closure`
+                    // reads FALSE for a fresh closure factory, its dep not yet
+                    // propagated) poisons the pass-2 role — the counter-coupling
+                    // hazard, cf. t3/p179.  An OWNED source (`make_greeter(..)(..)`)
+                    // makes this temp the SOLE owner of the freshly-minted closure
+                    // store, so it must be freed at scope exit (no stamp); a BORROWED
+                    // source's closure DbRef aliases the source's store, so stamping
+                    // avoids a double-free (and blocks the insert_free Return-wrap
+                    // that would return `()` from a value block, P249-mirror).
+                    if !self.first_pass && !owns_closure {
+                        self.vars.set_skip_free(fn_work);
+                    }
                     // P227: one work-buffer per text-returning fn-ref
                     // call (the return-value buffer the lambda fills via
                     // its hidden RefVar(Text) attr).  Previously
@@ -1435,7 +1519,18 @@ impl Parser {
     ) {
         let mut rhs = Value::Null;
         let rhs_pos = self.lexer.peek_pos().clone();
-        let rhs_type = self.parse_operators(var_tp, &mut rhs, parent_tp, precedence + 1);
+        // Thread the LHS BASE type as the default's hint when the context gives
+        // none (`var_tp` unknown/null — e.g. a RETURN-TAIL `v[i] ?? []`, where
+        // parse_return's `[`-led vector hint cannot fire).  Without it an EMPTY
+        // vector default types Unknown and collapses to `null` (the P365 family),
+        // which downstream classifies the ncc `if` as a null-arm shape — the
+        // return delivery then skips materialisation and native emits `()`.
+        let rhs_hint = if matches!(var_tp, Type::Unknown(_) | Type::Null) {
+            lhs_type.base()
+        } else {
+            var_tp
+        };
+        let rhs_type = self.parse_operators(rhs_hint, &mut rhs, parent_tp, precedence + 1);
         self.known_var_or_type(&rhs, &rhs_pos);
 
         // The default may be a vector literal (`?? []`, `?? [99]`) that builds into

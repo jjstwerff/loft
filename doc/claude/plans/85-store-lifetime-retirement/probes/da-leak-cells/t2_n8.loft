@@ -1,0 +1,14 @@
+struct Data { num: integer, values: vector<integer> }
+fn add(r: &Data = null, val: integer) {
+    if !r { r = Data { num: 0 }; }
+    r.num += val;
+    r.values += [val];
+}
+fn main() {
+    v = Data { num: 1 };
+    add(v, 2);
+    add(v, 3);
+    assert(v.num == 6, "num {v.num}");
+    assert(len(v.values) == 2, "len {len(v.values)}");
+    println("t2 ok");
+}

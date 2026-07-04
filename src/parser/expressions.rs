@@ -292,6 +292,39 @@ pub(crate) fn substitute_value(into: &mut Value, from: &Value, to: &Value) {
     }
 }
 
+/// @PLN85 D-own-1 / C86 — the whole-value VECTOR bind verdict (see
+/// `classify_vec_bind`).  DESIGN_DECISIONS C86: a whole-value heap bind
+/// COPIES by contract; aliasing exists only as the post-parse last-use
+/// ELISION (`use_analysis::elision_plans` → `scopes::elide_borrows` —
+/// the rustc rule, as an optimization).  Projections stay views (#426).
+enum VecBind {
+    /// `v = v` — the identity: emit nothing (a clear + re-append off the
+    /// same storage would free the store the RHS is about to read).
+    SelfAssign,
+    /// `b = a` — a whole-var vector bind COPIES: give `b` its own store
+    /// and deep-copy `a`'s elements (aliasing dangled when `a`'s scope
+    /// exited, P292, and left `b` slot-less on first assignment, P394).
+    CopyVar,
+    /// `af = bx.v` where the base struct OWNS its store (empty deps) —
+    /// the #415 whole-value field bind copies like `b = a` (C86).  A
+    /// BORROWED base (non-empty deps) never reaches this verdict: its
+    /// field read stays a view so an in-place write-through
+    /// (`cells = sc.v; cells[i] = h`) reaches the source (@PLN25 p379).
+    /// The owns-vs-borrows split is the `deps` ownership fact — the same
+    /// answer `use_analysis::ownership_of` reconstructs post-parse
+    /// (Owned ⇒ copy, Borrowed/Join ⇒ view); the parser reads the var's
+    /// incrementally-maintained deps because the oracle's whole-body
+    /// `Defs` walk does not exist mid-parse.
+    CopyOwnedField,
+    /// Not a whole-value vector bind: vector INDEX reads (`a = vv[0]`)
+    /// and NESTED field reads (`c = o.inner.v`) stay ALIASED until the
+    /// store-reuse substrate is fixed (#426 routed forward — widening
+    /// the copy freed the source at the read and a 3-deep build into
+    /// the recycled store corrupted, `185-nested-boolean-vector`), and
+    /// every other RHS shape belongs to a different branch.
+    NotABind,
+}
+
 impl Parser {
     /// @PLN10 — wrap every text-dest native called in *value position* in a
     /// scope-bound work-text temp, so its result lives in a freed local instead
@@ -1015,6 +1048,49 @@ use a separate collection or add after the loop"
     /// then rewrite `code` into the assignment IR. Returns `Type::Void`.
     // threads LHS context (to, f_type, parent_tp, var_nr) alongside op and &mut self
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    /// The pure selector for the C86 whole-value vector bind at
+    /// `parse_assign_op`'s copy branch — rule rationale on the `VecBind`
+    /// variants; the branch applies mechanics only.  Fires on BOTH passes
+    /// (`change_var` re-types per pass; emission is pass-2).
+    fn classify_vec_bind(
+        &self,
+        code: &Value,
+        op: &str,
+        var_nr: u16,
+        f_type: &Type,
+        s_type: &Type,
+    ) -> VecBind {
+        if op != "="
+            || var_nr == u16::MAX
+            || !matches!(f_type, Type::Unknown(_) | Type::Vector(_, _))
+            || !matches!(s_type, Type::Vector(_, _))
+        {
+            return VecBind::NotABind;
+        }
+        // The bare-Var test is deliberately NOT unspanned (a Span-wrapped RHS
+        // lowers elsewhere); the field-read and self-assign tests are.
+        let is_bare_var = matches!(code, Value::Var(_));
+        let owned_field_read = if let Value::Call(d, args) = code.unspan()
+            && *d == self.data.def_nr("OpGetField")
+            && let Some(Value::Var(bv)) = args.first().map(Value::unspan)
+            && matches!(self.vars.tp(*bv), Type::Reference(_, _))
+        {
+            self.vars.tp(*bv).depend().is_empty()
+        } else {
+            false
+        };
+        if is_bare_var {
+            if matches!(code.unspan(), Value::Var(rhs) if *rhs == var_nr) {
+                return VecBind::SelfAssign;
+            }
+            return VecBind::CopyVar;
+        }
+        if owned_field_read {
+            return VecBind::CopyOwnedField;
+        }
+        VecBind::NotABind
+    }
+
     pub(crate) fn parse_assign_op(
         &mut self,
         code: &mut Value,
@@ -1216,11 +1292,16 @@ use a separate collection or add after the loop"
                 let inner = self.vars.tp(src).clone();
                 let is_ref = matches!(inner, Type::Reference(..));
                 *code = self.cl("OpCreateStack", &[Value::Var(src)]);
-                s_type = Type::RefVar(Box::new(inner));
-                // L5 — a heap whole-value alias is NON-OWNING: the source frees the record.
-                if is_ref && var_nr != u16::MAX {
-                    self.vars.set_skip_free(var_nr);
-                }
+                // @PLN85 D-own-5 — the borrow fact rides `deps` (O-Borrow), not a
+                // side-flag: a heap whole-value alias (`p = &o`, L5) is NON-OWNING
+                // because its type deps name the source, and the free suppression
+                // derives from `owns = dep.is_empty()` (`scopes::get_free_vars`) —
+                // the same read every other borrow uses (this replaced the
+                // `set_skip_free(var_nr)` side-channel).  A scalar inner carries
+                // no `Deps` slot (`depending` is the identity there), which is
+                // consistent: a scalar `&` binder owns no store, so there is no
+                // free decision to derive.
+                s_type = Type::RefVar(Box::new(if is_ref { inner.depending(src) } else { inner }));
             } else if let Some(eref) = heap_ref {
                 // `c`/`r` holds the field/element DbRef; interp reads/writes it via the
                 // uniform RefVar deref (`OpGet*/OpSet*(c,0)`), and native keys its
@@ -1235,6 +1316,22 @@ use a separate collection or add after the loop"
         // already-reported error) cannot leak the flag into the NEXT statement and
         // wrongly turn `y = scalarvar` into a reference.
         self.amp_pending = false;
+        // @PLN85 poison-green — a fn-ref FIELD READ bound to a local
+        // (`c = k.cb`) is a BORROWED fn-ref: its closure half points at the
+        // base struct's child record, OWNED by the struct.  Without the mark,
+        // `get_free_vars`' Function arm frees the closure through the alias at
+        // scope exit ("fn-ref variables OWN their closure store") — freeing
+        // the CALLER's record; the next `k.cb` read hit poisoned memory
+        // (d_nr = 0xDEADBEEF, the issue_313 cross-fn shape).  `skip_free` is
+        // the established borrowed-fn-ref carrier (the vector-element read
+        // path marks its `__fn_ref_tmp` the same way).
+        if op == "="
+            && var_nr != u16::MAX
+            && matches!(&s_type, Type::Function(_, _, _))
+            && matches!(code, Value::Block(b) if b.name == "fn_ref_field_read")
+        {
+            self.vars.set_skip_free(var_nr);
+        }
         if amp_vector_replace {
             let clear = self.cl("OpClearVector", &[Value::Var(var_nr)]);
             *code = Value::Insert(vec![clear, code.clone()]);
@@ -1867,62 +1964,24 @@ use a separate collection or add after the loop"
         // on the second), so the __vdb_N dep is created consistently, exactly as
         // the materialise path at lines ~995 does.  Element type is read from the
         // RHS (s_type) so an untyped `b = a` (f_type Unknown) is covered too.
-        // #415 — a STRUCT vector-field read (`af = bx.v`) bound to a fresh local
-        // must deep-copy like `a = x`, not alias the field's store. Narrow to a
-        // struct field read (base is a `Reference`): a vector INDEX read (`vv[2]`,
-        // base is a `Vector`) is also an `OpGetField` but reaches a nested element
-        // whose stride the append-copy here would mishandle (plan-58 nested-bool),
-        // and it already binds correctly elsewhere — so it is deliberately excluded.
-        //
-        // #426 (A.1) attempted to generalize this to the dep-driven rule "any
-        // `OpGetField` whose result type carries a borrow dep ⇒ copy" — covering
-        // the vector INDEX read (`a = vv[0]`) and the nested-field read
-        // (`c = o.inner.v`).  Per-case the copy is correct, BUT it makes the
-        // source store DEAD at the read (the alias is stripped), so it is freed at
-        // the read site — and a subsequent NESTED (3-deep) vector build into the
-        // recycled store-nr corrupts (the pre-existing store-reuse-after-free
-        // substrate bug `185-nested-boolean-vector` exercises; the struct-field
-        // copy already hits it latently, but no test followed it with a 3-deep
-        // append).  Widening here turned that latent corruption into a real
-        // regression, so the index / nested cases stay ALIASED until the
-        // store-reuse substrate is fixed (routed forward, the case-B / a7 class).
-        // The #415 deep-copy fires only when the base struct OWNS its store
-        // (empty deps).  When the base BORROWS a live source (non-empty deps —
-        // e.g. a for-loop element of an outer vector, or another borrowed view),
-        // its vector field must ALIAS so an in-place write-through (`cells =
-        // sc.v; cells[i] = h`) reaches the source, and the borrow is recognised
-        // as a mutation of the source.  Pre-dense the nullable element wrap made
-        // `sc.v` a DOUBLE `OpGetField` (base = a Call, not a Var), so this rule
-        // never fired on a borrowed element; the dense flip collapsed it to a
-        // single `OpGetField(Var, …)`, which mis-took the borrow for an owned
-        // copy → deep-copy into a fresh store → write lost / null-ref crash
-        // (@PLN25 p379).  The owns-vs-borrows split is the `deps` ownership fact,
-        // not the syntactic shape.
-        let struct_vec_field = if let Value::Call(d, args) = code.unspan()
-            && *d == self.data.def_nr("OpGetField")
-            && let Some(Value::Var(bv)) = args.first().map(Value::unspan)
-            && matches!(self.vars.tp(*bv), Type::Reference(_, _))
-        {
-            self.vars.tp(*bv).depend().is_empty()
-        } else {
-            false
-        };
-        if op == "="
-            && var_nr != u16::MAX
-            && (matches!(code, Value::Var(_)) || struct_vec_field)
-            && matches!(f_type, Type::Unknown(_) | Type::Vector(_, _))
+        // @PLN85 D-own-1 / C86 — classify ONCE (the pure selector), then apply
+        // the one mechanism per verdict.  Rule rationale lives on the `VecBind`
+        // variants (the C86 whole-value-copy contract, the p379 borrowed-base
+        // view, the #426 routed-forward exclusions).
+        let vec_bind = self.classify_vec_bind(code, op, var_nr, f_type, &s_type);
+        if !matches!(vec_bind, VecBind::NotABind)
             && let Type::Vector(elm_tp, _) = &s_type
         {
             // `v = v` self-assign — emit nothing rather than clear+reappend
             // off the same storage.
-            if matches!(code.unspan(), Value::Var(rhs_var) if *rhs_var == var_nr) {
+            if matches!(vec_bind, VecBind::SelfAssign) {
                 *code = Value::Insert(Vec::new());
                 return Type::Void;
             }
             let elm_tp_clone = (**elm_tp).clone();
             let vec_tp = Type::Vector(Box::new(elm_tp_clone.clone()), Deps::none());
             self.change_var(to, &vec_tp);
-            let field_read = !matches!(code.unspan(), Value::Var(_));
+            let field_read = matches!(vec_bind, VecBind::CopyOwnedField);
             // #426 — a struct vector-FIELD read (`af = bx.v`, `field_read`) must
             // strip `af`'s inherited base dep on BOTH passes, then consume one
             // `elm`-name slot on both.  `Function::unique`'s per-prefix counter has
