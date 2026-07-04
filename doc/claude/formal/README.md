@@ -91,6 +91,12 @@ areas — sequenced into the order to resolve them, each flagged **code→spec**
 or **spec-may-adjust** (where the rule itself is the decision). Start there to see the path
 to a spec-conformant implementation; the per-area docs hold the detail.
 
+[VERIFICATION.md](VERIFICATION.md) is the companion worklist for the operational rules
+written 2026-07-04 (heap / iteration / coroutines / concurrency / calls / matching / tuples /
+closures): per-rule, the single falsifiable claim, its both-backends status, and the standing
+guard that pins it. Where ROADMAP tracks *deviations to close*, VERIFICATION tracks *rules to
+pin* — the concrete plan to drive the differential oracle down from every area to every rule.
+
 ## Deviation entry format
 
 ```
