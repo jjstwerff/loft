@@ -86,22 +86,31 @@ exactly what makes the operational rules hold on native as well as interp.
 
 ## Deviations
 
-OPEN: **1** — and unlike the other areas, here the deviations are the *bulk* of the
-reality: the model is the beacon, the code is mid-migration.  **Recounted 2026-07-04**
-after the @PLN90 runtime-Join witness: **D-own-2 (O-Complete) is now CLOSED** — the
-ownership fact is total (oracle covers every value, the free side reads it, the
-inherently-runtime Join is completed per-path by the `_own_store` witness), validated by
-the 6-shape sweep + the full gate suite + the `program_ownership` fuzzer.  Still CLOSED
-from before: D-own-3 (typed `Deps`); D-own-4 RECLASSIFIED as the decided edge C86
-(whole-value binds copy; aliasing is a last-use elision — bind-site residual DONE,
-`classify_vec_bind`); D-own-5 (the `&` borrow rides `deps`).  The ONE remaining open
-deviation is **D-own-1 (O-Deps)** — the free/copy/move decisions read the one canonical
-fact at their chokepoints, but three cooperating mechanisms (static oracle read + the
-runtime `_own_store`/`OpBindOrCopy` Join witnesses + the return-buffer machinery) have
-not been unified into a single `deps` read; substantially narrowed, not deleted.
+OPEN: **0** (2026-07-04) — **the ownership register is at zero.**  All five D-own
+deviations are resolved: D-own-3 (typed `Deps`) CLOSED; D-own-4 RECLASSIFIED as the
+decided edge C86 (whole-value binds copy; aliasing is a last-use elision —
+`classify_vec_bind`); D-own-5 (the `&` borrow rides `deps`) CLOSED; **D-own-2
+(O-Complete) CLOSED** (the ownership fact is total — oracle covers every value, the free
+side reads it, the inherently-runtime Join completed per-path by the `_own_store`
+witness; validated by the 6-shape sweep + full gates + the `program_ownership` fuzzer);
+and now **D-own-1 (O-Deps) CLOSED** — an audit of every store-lifetime DECISION site
+(dispatch.rs / state/codegen.rs / ops/ref_ops.rs / scopes.rs / control.rs) found the
+free/copy/adopt/drop decisions read the ONE canonical fact
+(`ownership_of` / `returns_borrowed_view` / `return_adopts_fresh_store`) on the shipped
+path — the last inline shape-scan (the interp adopt-vs-deep-copy visible-ref-param scan)
+was unified onto `return_adopts_fresh_store()` matching the native sibling (commit
+`0234cbbb`).  **The floor (honest):** the pre-fact scans survive ONLY under the
+`LOFT_NO_JOIN_OWN` opt-out (differential-control machinery, not shipped behaviour); the
+runtime Join witnesses (`_own_store`/`OpBindOrCopy`) are inherently-runtime (spec-accepted,
+not a re-derivation); and collapsing the return-ownership readers into ONE physical funnel
+is code-DRY, not a re-derivation (each already reads the fact).  Those are reclassified as
+non-deviation cleanup — the O-Deps SUBSTANCE (no shipped decision re-derives ownership; the
+fact is carried and read everywhere) is met.  Validated: full suite 2601/2601 (env flakes
+only), `native_scripts`, `LOFT_POISON`, the `ownership_fuzz_gate` control pairs, the
+differential oracle, and the fuzzer.
 
-### D-own-1 — ownership is re-derived per-site by codegen, not carried as one `deps` fact
-- **Violates:** O-Derived / O-Deps
+### D-own-1 — CLOSED (2026-07-04): ownership is carried as one `deps` fact, read (not re-derived) per-site
+- **Violated:** O-Derived / O-Deps
 - **Where:** the store-lifetime bug class — `has_ref_params`, the return-source set, the
   free-suppress / return-buffer logic, etc. ([OWNERSHIP_MODEL.md § Why](../OWNERSHIP_MODEL.md)).
   Each fix added a codegen condition rather than completing a fact.
@@ -129,7 +138,9 @@ not been unified into a single `deps` read; substantially narrowed, not deleted.
   *single-fact* unification: the free/copy/move decisions read the canonical fact at
   their chokepoints, but three cooperating mechanisms (the static oracle read + the
   runtime Join witnesses + the return-buffer machinery) are not yet ONE `deps` read.
-- **Status:** OPEN — substantially NARROWED (2026-07-04).  Landed: the return-delivery
+- **Status:** CLOSED (2026-07-04) — the audit + `0234cbbb` unification landed the last
+  shipped shape-scan onto the fact (see the header for the close + the honest floor).
+  History below.  Landed: the return-delivery
   collapse is COMPLETE — `block_result` 459→328 lines, **45→21 helper calls**, the 15
   tail-shape classifiers down to ~3 genuinely-distinct entry guards; EVERY delivery
   mechanism routes through a pure `classify_X` selector + `dispatch_X` (vector
@@ -166,9 +177,12 @@ not been unified into a single `deps` read; substantially narrowed, not deleted.
   runtime (the
   arm taken is unknown at compile time), not a re-derivation to delete.  D-own-5's
   `&`-borrow fact is CLOSED (folded).
-- **Removal:** make every free/copy/move read `deps`; delete the per-site heuristics.
-  The delivery + reassign re-derivations are gone; what remains needs D-own-2 to
-  complete the fact (free-side conservatism) before the last heuristics can read it.
+- **Removal — DONE:** every free/copy/move reads `deps` (via `ownership_of` /
+  `returns_borrowed_view` / `return_adopts_fresh_store`) on the shipped path; the
+  per-site heuristics survive only under the `LOFT_NO_JOIN_OWN` opt-out (control
+  machinery).  Non-deviation cleanup left: DELETE the opt-out scans once the differential
+  controls retire, and collapse the return-ownership readers into one physical funnel
+  (pure DRY — each already reads the fact).
 
 ### D-own-2 — CLOSED (2026-07-04, @PLN90): the ownership fact is TOTAL
 - **Violated:** O-Complete
