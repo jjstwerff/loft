@@ -1,0 +1,20 @@
+// Nested text in heap structures — a vector of structs with a text field AND a
+// vector-of-struct-with-text field, with text built/returned from nested access.
+// This is the shape family where #495/#500-class text-return + copy bugs live;
+// the built strings and lengths must agree with no leak.
+struct Tag { label: text }
+struct Item { name: text, tags: vector<Tag> }
+fn first_label(it: Item) -> text { (it.tags[0] ?? Tag { label: "none" }).label }
+fn describe(it: Item) -> text { it.name + ":" + first_label(it) }
+fn main() {
+    items = [
+        Item { name: "sword", tags: [Tag { label: "sharp" }, Tag { label: "steel" }] },
+        Item { name: "shield", tags: [] },
+    ];
+    out = "";
+    for i in 0..len(items) {
+        it = items[i] ?? Item { name: "?", tags: [] };
+        out = out + describe(it) + "|";
+    }
+    println("out={out} n={len(items)} first0={first_label(items[0] ?? Item { name: "?", tags: [] })}");
+}

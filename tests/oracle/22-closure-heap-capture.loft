@@ -1,0 +1,22 @@
+// Higher-order + heap-capturing closures — the native closure record (a heap
+// struct holding captures) vs the interpreter's closure frame, especially when a
+// STRUCT is captured and a closure is passed to another function and re-applied.
+// Results must agree with no leak.
+struct Base { v: integer }
+fn make_scaler(b: Base, factor: integer) -> fn(integer) -> integer {
+    return fn(x: integer) -> integer { b.v + x * factor };
+}
+fn apply_all(f: fn(integer) -> integer, xs: vector<integer>) -> integer {
+    total = 0;
+    for i in 0..len(xs) { total += f(xs[i] ?? 0); }
+    total
+}
+fn main() {
+    s = make_scaler(Base { v: 10 }, 3);
+    t = make_scaler(Base { v: 100 }, 2);   // a second record must not reuse the first's store
+    // s: (10+3)+(10+6)+(10+9)=48 ; t: (100+2)+(100+4)=206
+    println("s={apply_all(s, [1, 2, 3])} t={apply_all(t, [1, 2])}");
+    // a stored closure applied twice — the record must survive between calls
+    inc = make_scaler(Base { v: 0 }, 1);
+    println("inc={inc(5) + inc(5)}");       // 5 + 5 = 10
+}
