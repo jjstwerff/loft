@@ -104,6 +104,72 @@ satisfied by `2026.6.0`.
 **Scope (frozen):** what is on `main` + the `../loft2` flat-namespace break +
 bug fixes only — no other new features.
 
+### `2026-07` — candidate release blockers
+
+The gate is **stability + public face**, not features (see § Safety gate). As
+of 2026-07-04 the filed-bug tracker is **empty** (`loft-lang/loft` has 0 open
+issues; highest is #501, all closed), so the list below is the concrete
+must-close set before the `2026-07` tag — grouped hard-blocker → public-face →
+ecosystem → hygiene. The `2026-07` branch already exists; rebase it onto the
+current `main` tip before working the list.
+
+**A. Safety gate — hard blockers (a crash/leak slips the tag, no exceptions):**
+
+- [ ] **D-key-1 — parser crash on an un-annotated keyed range-slice bind.**
+  `sub = idx[lo..hi]` (no `vector<T>` annotation, keyed receiver) panics at
+  `src/variables/mod.rs:524` (`index 65535`, an unresolved `u16::MAX` type)
+  instead of erroring cleanly. Found 2026-07-04. Narrow (workaround: annotate,
+  or use it in a `for` / comprehension) but it is a compiler panic on
+  plausible input — same class as the D-clo-2 crash fixed this cycle. **Fix
+  crash → clean diagnostic + regression guard; file the issue.**
+- [ ] **Re-verify the full safety suite on the tag candidate** (post-rebase
+  `main`): `./scripts/find_problems.sh --bg --wait` (full `--no-fail-fast`),
+  the `LOFT_POISON=1` suite, `LOFT_NATIVE_LEAK_CHECK`, and the ownership fuzz
+  gate. All were green pre-rebase — the gate is confirming them on the exact
+  candidate, not trusting a prior run.
+- [ ] **Zero-leak gate** — wrap `loft_suite` emits no `stores not freed`
+  warnings across the script corpus (both backends).
+
+**B. Public face — the website must not look broken (elevated 2026-07-04):**
+
+- [ ] **Brick Buster** (`tools/brick-buster/25-brick-buster.loft`) — the
+  website **hero** (`doc/images/hero-brick-buster.png`, `doc/brick-buster.html`)
+  and a gallery centrepiece, and it is *almost continually broken*. Verify it
+  runs clean on **both** backends and its six golden screenshots match
+  (title / playing / paused / gameover / explosion / powerups — see
+  GAME_TESTING.md). Depends on `lib/graphics` (native cdylib) + registry, so it
+  also exercises the library path below.
+- [ ] **Gallery** — regenerate and verify `doc/gallery.html` examples run
+  (`scripts/build-gallery-examples.loft`, `gallery-examples.js`); GALLERY_CI
+  green.
+
+**C. Library ecosystem — a coherent registry on day one:**
+
+- [ ] Merge PR #18 (`lima-default-random-0.3.0`) and **re-publish** the four
+  type-flip-migrated libs pinned to `>=2026.7`: `arguments` 0.1.3, `random`
+  0.3.0, `regex` 0.2.1, `cbor` 0.1.1 (all verified green interp+native
+  2026-07-04). Libraries follow their own cadence and do **not** gate the
+  language tag (§ Explicitly out of scope), but shipping the July registry with
+  them red would undercut the cycle's own "library hardening" theme.
+- [ ] `loft install` end-to-end smoke against the updated signed index.
+
+**D. Release hygiene:**
+
+- [ ] **CHANGELOG `2026-07`** — headline is the **breaking type migration**:
+  `text as int/float/single` → `τ?` (fallible parse), and the nullable
+  parse/return contract (@PLN25). The four libs' root-cause fixes are the
+  migration recipe; lead with it so upgraders see it first.
+- [ ] Bump `Cargo.toml` `2026.6.0` → `2026.7.0`; run the § Per-release ship
+  checklist (tag, crates.io publish, per-OS binaries + stdlib checksums).
+
+**Explicitly NOT `2026-07` blockers** (recorded so they are not re-litigated on
+release day): open plans/features (@PLN86/87/88/90/91, …) — the release is
+stability-gated, not feature-gated; the formal **D-op-1/2** operational
+meta-deviations (differential-vs-definitional conformance, not bugs); the
+**P54 auto-wrap diagnostic-drop** gap (medium diagnostic-quality, not a crash —
+the two-stage `Struct.parse(json_parse(t))` form reports correctly); and the
+other demo apps (server / game-client / scene) which ship on their own cadence.
+
 ## What each milestone means
 
 **0.9.0 — Fully working loft language.**
