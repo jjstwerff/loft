@@ -1,0 +1,12 @@
+// Tuples + recursion — the tuple slot layout and the recursive call/return stack
+// are lowered very differently (native Rust stack vs interp frame); values agree.
+fn fib(n: integer) -> integer { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } }
+fn divmod(a: integer, b: integer) -> (integer, integer) { (a / b ?? 0, a % b ?? 0) }
+fn main() {
+    println("fib10={fib(10)}");                 // 55
+    dm = divmod(17, 5);
+    println("div={dm.0} mod={dm.1}");           // 3 2
+    // recursion accumulating into a running total
+    total = 0; for i in 0..8 { total += fib(i); }
+    println("fib_sum={total}");                 // 0+1+1+2+3+5+8+13 = 33
+}
