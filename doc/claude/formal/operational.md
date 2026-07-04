@@ -24,11 +24,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > (store alloc/read/write/copy/free), [iteration.md](iteration.md) (`for` + combinators),
 > [coroutines.md](coroutines.md) (generators), [concurrency.md](concurrency.md) (`par`),
 > [calls.md](calls.md) (function call/return + parameter binding), [matching.md](matching.md)
-> (`match` + exhaustiveness), [tuples.md](tuples.md). Still NOT written — the interpreter remains
-> their spec (tracked under D-op-1): **closure** capture/apply (a rough area — capture reads work
-> in the `fn(){}` form but the short-lambda-in-`map` capture and reassign-after-capture are
-> limited; needs its own investigation before a clean contract), **text formatting** (`"{x}"`
-> interpolation), and **generics/interfaces** (a static/typing concern → types.md).
+> (`match` + exhaustiveness), [tuples.md](tuples.md), [closures.md](closures.md) (lambdas /
+> closures / fn-refs — written WITH 2 open deviations, the only operational file that has them).
+> Still NOT written — the interpreter remains their spec (tracked under D-op-1): **text
+> formatting** (`"{x}"` interpolation) and **generics/interfaces** (a static/typing concern →
+> types.md).
 
 ## Notation
 
