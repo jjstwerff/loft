@@ -141,12 +141,12 @@ selector-collapsed) but the per-site thicket is reduced, not deleted, so it stay
   live bug found** ([plans/85 D-own-2-completeness.md](../plans/85-store-lifetime-retirement/D-own-2-completeness.md)):
   (i) the free-side classifier vs the oracle diverges 8997× over the corpus, but 100%
   one-directional (`free=Unknown` vs `oracle=Owned`, all on temps) and SAFE — latent, not
-  a bug; (ii) a LIVE native leak: a struct whole-value copy-return (`fn f(x:Box)->Box{ r=x; r }`)
-  carries the visible param `x` in its return dep, so the caller's `returns_borrowed_view()`
-  never frees the owned copy.  Root = the C86 copy dep-strip covers VECTORS
-  (`classify_vec_bind`) not STRUCTS, and is pass-2-only, so pass 1 records `x` and pass 2
-  carries it stale (`ref_return` seeds `dep = cur.clone()`).  The concrete next slice;
-  deferred (foundation-level pass-timing change, careful validation) rather than rushed.
+  a bug; (ii) a struct whole-value copy-return (`fn f(x:Box)->Box{ r=x; r }`) native leak —
+  **FIXED (commit `3f0330c1`)**: the return carried the visible param `x` (root = the C86
+  copy dep-strip is pass-2-only and covered vectors not structs, so pass 1 recorded `x`
+  and pass 2 carried it stale via `ref_return`'s `dep = cur.clone()`); the fix prunes a
+  visible-attr return dep that no pass-2 return source (`expanded`) justifies, preserving
+  genuine borrows.  0-diff on all corpora; full DA + suite + oracle + poison green.
 - **Removal:** compute ownership for every binding on every path (set-and-reconcile across
   `match`/`if` arms).
 

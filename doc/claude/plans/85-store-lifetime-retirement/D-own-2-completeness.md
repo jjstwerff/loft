@@ -53,21 +53,27 @@ fn choose(cond, x: Box) -> Box { r = x; if cond { r = Box{..}; } r }  // the JOI
   vector path does not hit this (its `ref_return` handling yields the `["??"]`
   one-buffer owned marker); the struct/Reference path does.
 - **The fact to complete (D-own-2):** `r = x` on a struct is a COPY → the return
-  OWNS `r`'s store and does NOT borrow `x`.  Two candidate fix loci, both needing
-  care in the store-lifetime foundation (hence deferred, not rushed):
-  1. Give the STRUCT whole-value copy the same C86 dep-strip vectors get, and make it
-     run in pass 1 too (a Reference bind has no vector elm-var counter, so the
-     pass-1 drift the vector comment guards against may not apply — VERIFY).
-  2. In `ref_return`, do not carry a VISIBLE-attr return dep that NO pass-2 return
-     source justifies (guard against H5 — pass-1 facts are otherwise frozen).
-- **Guard:** `probes/d-own-2/{struct-copy-return-leak,join-copy-return-leak}.loft`
-  (leak on native) + `vector-copy-return-clean.loft` (the clean vector control).
-  NOT graduated to `tests/scripts/` yet — the wrap leak-gate would go red until the
-  fix lands.
+  OWNS `r`'s store and does NOT borrow `x`.
+- **FIX — LANDED (2026-07-04, commit `3f0330c1`, locus 2):** in `ref_return`, before
+  the return-dep finalization, PRUNE any VISIBLE-attr return dep whose var is NOT in
+  `expanded` (the pass-2 transitive return-source set).  A visible attr the caller
+  reads through `returns_borrowed_view()` MUST name a real pass-2 borrow source; the
+  stale pass-1 `x` (carried by `dep = cur.clone()`) names none, so it drops.
+  `expanded` already includes transitive deps, so a GENUINE borrow (`fn id(x)->Box{x}`
+  keeps `Box["x"]`; a returned view of `x` keeps `x`) is preserved; hidden buffer
+  attrs are never pruned.  Chose locus 2 over locus 1 (a pass-1 struct copy-strip)
+  because it is surgical (touches only the return-dep, not the bind-site / pass
+  counter) and provably behaviour-preserving where there is no stale dep.
+- **Guard:** `tests/scripts/85-struct-copy-return-owned.loft` (graduated — copy /
+  copy+mutate / genuine borrow / nested-field / the JOIN `choose` / loop).  Root
+  probes retained under `probes/d-own-2/`.
 
 ## Status
 
 - [x] Measured the free-side/oracle incompleteness — latent + safe (one-directional).
 - [x] Root-caused the live struct-copy-return native leak (cross-pass stale `x`).
-- [ ] Fix (locus 1 or 2 above) — the concrete D-own-2 slice; careful pass-timing +
-      both-backends + oracle validation required.  Folds into @PLN90.
+- [x] **FIXED (locus 2 — `ref_return` visible-attr prune).**  `idcopy`
+      `Box["r","x"]`→`Box["r"]` (owned); `iddirect` stays `Box["x"]` (borrow).  0-diff
+      on all 8 corpora; full DA issues+expressions + suite + oracle + poison green.
+- [ ] Free-side/oracle unification (Measurement 1) — the three-valued-fact completion,
+      latent, folds into @PLN90.
