@@ -1,15 +1,13 @@
 // Nullability (@PLN25 value/null model) — the interpreter's null sentinel and the
 // native representation are distinct; null must propagate identically. Covers the
 // div/mod fault contract (`a / 0` → null, C80), `??`-discharge, an honestly-
-// nullable return, out-of-range indexing, an optional struct field, and null
-// threaded through arithmetic.
-//
-// (The nested-ncc optional-text VECTOR return — `(v[0] ?? d).tag ?? "none"` — is
-// held out: it is a live native E0308 divergence, filed as loft#500; add it back
-// as a corpus program once fixed.)
+// nullable return, out-of-range indexing, an optional struct field, null threaded
+// through arithmetic, and — the shape that FOUND loft#500 — a nested-ncc
+// optional-text VECTOR return (`(v[0] ?? d).tag ?? "none"`), fixed and now agreeing.
 struct Slot { id: integer, tag: text? }
 
 fn honest_div(a: integer, b: integer) -> integer? { a / b }
+fn first_tag(v: vector<Slot>) -> text { (v[0] ?? Slot { id: 0, tag: "?" }).tag ?? "none" }
 
 fn main() {
     // div-by-zero yields null and CONTINUES (both backends); ?? discharges it.
@@ -21,7 +19,7 @@ fn main() {
     slots = [Slot { id: 1, tag: null }, Slot { id: 2, tag: "gold" }];
     a = slots[0] ?? Slot { id: 0, tag: "?" };
     b = slots[1] ?? Slot { id: 0, tag: "?" };
-    println("tag0={a.tag ?? "NULL"} tag1={b.tag ?? "NULL"} id={a.id}");
+    println("tag0={a.tag ?? "NULL"} tag1={b.tag ?? "NULL"} first={first_tag(slots)}");
     // null threaded through arithmetic then discharged
     n: integer? = null;
     println("nullarith={(n ?? 0) + 5} sum={honest_div(20, 4) ?? 0}");

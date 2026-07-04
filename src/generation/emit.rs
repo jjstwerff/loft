@@ -1609,10 +1609,19 @@ impl Output<'_> {
             });
         let has_trailing_void =
             return_idx.is_some_and(|i| i < last_op_idx) || has_ncc_skip_free_temp;
-        // If the captured "return value" is a Return(…) expression, it diverges —
-        // we emit it directly and skip the `_ret` tail.
+        // If the captured "return value" DIVERGES — it is a `Return(…)` OR a
+        // Block/Insert whose TAIL is a `Return` — we emit it directly and skip the
+        // `_ret` tail.  loft#500: a `??`-value-block that allocates (`(v[i] ?? E{…})
+        // .f ?? d`) gets `scopes::free_vars`' Set+free+Return dance INSIDE the ncc
+        // block, so the block ends in `return …` but is NOT itself a `Return` node;
+        // the `.unspan()`-only check missed it, so `let _ret = { … return … }; then
+        // `Str::new(_ret)` emitted a dead, wrong-typed (`Str` vs `-> String`) tail
+        // (E0308).  `.tail()` descends Block/Insert/Span to the divergence.
         let return_value_is_return = has_trailing_void
-            && return_idx.is_some_and(|i| matches!(operators[i].unspan(), Value::Return(_)));
+            && return_idx.is_some_and(|i| {
+                matches!(operators[i].unspan(), Value::Return(_))
+                    || matches!(operators[i].tail(), Value::Return(_))
+            });
         for (vnr, v) in operators.iter().enumerate() {
             // DX-source-map: surface line comments at the
             // statement-list level so rustc errors map back to .loft
@@ -1703,11 +1712,14 @@ impl Output<'_> {
             // produces the same counter values as collect_pre_evals did above.
             self.counter = counter_before;
             if has_trailing_void && return_idx == Some(vnr) {
-                // If the captured "return value" is itself a Return(…) expression,
-                // emitting `let _ret = return expr;` produces an unreachable `_ret`
-                // binding of type `!` that fails a later `_ret as T` cast.
-                // Emit the return directly instead; the function exits here.
-                if matches!(v.unspan(), Value::Return(_)) {
+                // If the captured "return value" DIVERGES (a `Return(…)`, or a
+                // Block/Insert whose tail is a `Return` — loft#500), emitting
+                // `let _ret = { … return … };` binds `_ret: !` and the trailing
+                // `Str::new(_ret)` is a dead, wrong-typed tail (E0308).  Emit the
+                // value directly instead; the function exits via its own return.
+                // Uses the block-level `return_value_is_return` so this direct-emit
+                // and the tail-skip at the block close stay in lock-step.
+                if return_value_is_return {
                     self.indent += 1;
                     self.output_code_inner(w, v)?;
                     self.indent -= 1;
