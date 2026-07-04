@@ -212,7 +212,27 @@ impl Parser {
                     // vector_db ops together, ahead of the body (prefix first).
                     let mut front = prefix;
                     if !body_allocates && !body_adopts_call {
-                        front.extend(self.vector_db(tp, var_nr));
+                        let db_ops = self.vector_db(tp, var_nr);
+                        // @PLN85 #492 — `vector_db` no-ops on a non-rebind ARGUMENT (the
+                        // NRVO return buffer IS the caller's store, so it cannot get a
+                        // fresh backing).  Without a fresh store, a `=` NON-EMPTY literal
+                        // reassignment on the buffer (`r = [9,9]` in a JOIN arm, after an
+                        // earlier arm's `r = x` filled it) would APPEND to the stale
+                        // content instead of REPLACING — the returned vector piles both
+                        // arms (`[1,2,3,9,9]`).  Clear the buffer first: `=` is a replace,
+                        // so this is correct on a fresh buffer (a no-op) and a filled one.
+                        // The empty-literal `v = []` reassign is handled by the
+                        // `ls.is_empty()` clear below; a rebind param gets a fresh backing
+                        // (`db_ops` non-empty), so neither reaches here.
+                        if db_ops.is_empty()
+                            && !self.first_pass
+                            && self.vars.is_argument(var_nr)
+                            && !ls.is_empty()
+                        {
+                            front.push(self.cl("OpClearVector", &[Value::Var(var_nr)]));
+                        } else {
+                            front.extend(db_ops);
+                        }
                     }
                     for (i, p) in front.into_iter().enumerate() {
                         ls.insert(i, p);
