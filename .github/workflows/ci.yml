@@ -739,6 +739,33 @@ jobs:
         # whole job is), so drift shows red without blocking merge.
         run: make features-check
 
+  # Browser-bundle freshness — a change set that edits a committed browser
+  # bundle's SOURCE (currently the Brick Buster .loft) must rebuild + commit the
+  # bundle in the SAME set, or the deployed website goes stale — the recurring
+  # failure documented in doc/claude/GALLERY_CI.md, and the reason the featured
+  # doc/brick-buster.html has drifted behind its source before.  Deterministic +
+  # git-only (no build, so it can NEVER flake on wasm build non-determinism, unlike
+  # a byte-diff of a rebuilt bundle) and PR-scoped (fails only a set that itself
+  # introduces staleness, never an innocent PR).  ADVISORY: not in the
+  # required-status-checks list, so it shows red without blocking the merge until
+  # an admin promotes it to required.  Catches staleness a change INTRODUCES; the
+  # existing stale-bundle debt is a one-off rebuild (release checklist item B).
+  bundle-fresh:
+    name: browser bundle freshness (ubuntu, advisory)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Committed browser bundle rebuilt when its source changes
+        run: |
+          base="${{ github.event.pull_request.base.sha }}"
+          if [ -z "$base" ]; then
+            git fetch --no-tags origin main >/dev/null 2>&1 || true
+            base="origin/main"
+          fi
+          scripts/check_bundle_fresh.sh "$base"
+
   # Markdown-renderer smoke test (the loft-view HTTP renderer).  Extracted from
   # the per-platform `Test` matrix: it tests platform-independent rendering (no
   # value running it 3×), and it is an HTTP smoke test whose interpreted viewer

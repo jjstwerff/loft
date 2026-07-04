@@ -183,15 +183,22 @@ current `main` tip before working the list.
 **CI hardening (this cycle — retires the recurring "broke the WASM bundle /
 stale website" class; theme-aligned with `2026-07` library hardening):**
 
-- [ ] **Add the missing freshness gate to the per-PR `gallery` job.** The Node
+- [x] **The missing freshness gate — LANDED 2026-07-04.** The Node
   instantiate-probe (`tests/html_wasm.rs` for `--html`; the `gallery` job's
-  "Probe committed wasm/js pair" for `doc/pkg/`) already catches js↔wasm
-  *consistency* deterministically — but not *freshness*: a stale-but-consistent
-  bundle passes (proven by the 12-day-stale `doc/brick-buster.html` being green).
-  Add a rebuild-then-`git diff --exit-code` (or drop the committed artefact and
-  build+deploy in CI). This is the one missing piece — the failure class
-  GALLERY_CI.md fights ("a PR skipped the rebuild") is a freshness failure the
-  consistency probe structurally cannot see.
+  "Probe committed wasm/js pair") already catches js↔wasm *consistency* but not
+  *freshness*: a stale-but-consistent bundle passes (proven by the 12-day-stale
+  `doc/brick-buster.html` being green). Rather than a rebuild-then-`git diff
+  --exit-code` (which risks *flaking* on wasm build non-determinism — the exact
+  brittleness that killed the last attempt), the gate is `scripts/check_bundle_fresh.sh`
+  + an advisory `bundle-fresh` CI job: **git-only, deterministic** (no build), and
+  **PR-scoped** — it fails only a change set that edits a bundle's source
+  (`tools/brick-buster/25-brick-buster.loft`) without rebuilding the bundle in the
+  same set, so it can never flake and never blocks an innocent PR. Tested on real
+  history (flags the current staleness; passes a clean set; skips on an
+  unresolvable base). Advisory now; **promote to a required check once item B
+  rebuilds the currently-stale `doc/brick-buster.html`**. The gallery wasm bundle
+  (whole compiler → wasm) stays covered by the job's rebuild + Node-instantiate,
+  not this gate (its "source" is all of `src/`).
 - [ ] **Move the flaky browser render off the blocking PR path.** The
   Chrome + SwiftShader gate (`test-html-render`, wired into `cargo test --release`)
   is GPU/shader-flaky — demote it to a **nightly, retry-tolerant** job. Replace
