@@ -224,9 +224,10 @@ impl Output<'_> {
                     loop {
                         match probe {
                             Value::CallRef(vr, _) => {
+                                // @PLN25 — `.base()` so a `text?` return derefs too.
                                 break matches!(
                                     self.data.def(self.def_nr).variables().tp(*vr),
-                                    Type::Function(_, ret, _) if matches!(**ret, Type::Text(_))
+                                    Type::Function(_, ret, _) if matches!(ret.base(), Type::Text(_))
                                 );
                             }
                             Value::Block(b) => match b.operators.last() {
@@ -254,15 +255,19 @@ impl Output<'_> {
                 // with `&*` (which derefs both `String` and `Str` to
                 // `&str`).  Same idea as the existing CallRef detection
                 // above, just applied at the Block level.
+                // @PLN25 — `.base()` throughout: an `Optional(Text)` return /
+                // param shares the same `String`/`Str` shapes, so a `text?`
+                // call result passed to a `&str` param needs the identical
+                // `&*` deref (else rustc E0308 "expected &str, found String").
                 let arg_is_text_block_string = matches!(v_unspanned, Value::Block(b)
-                        if matches!(b.result, Type::Text(_))
+                        if matches!(b.result.base(), Type::Text(_))
                             && self.block_contains_ncc_skip_free(b));
                 let needs_deref = idx < def_fn.attributes().len()
-                    && matches!(def_fn.attributes()[idx].typedef, Type::Text(_))
+                    && matches!(def_fn.attributes()[idx].typedef.base(), Type::Text(_))
                     && (arg_is_text_callref
                         || arg_is_text_block_string
                         || matches!(v_unspanned, Value::Call(d, _) if
-                                matches!(self.data.def(*d).returned(), Type::Text(_))
+                                matches!(self.data.def(*d).returned().base(), Type::Text(_))
                                 && !self.data.def(*d).name().starts_with("Op")));
                 // Post-2c: Op* runtime helpers (defined in
                 // `src/codegen_runtime.rs`) keep hand-written i32 params
@@ -529,9 +534,10 @@ impl Output<'_> {
                 }
                 // Text-typed parameters: all text-returning calls produce `Str` or `String`,
                 // but templates expect `&str`. Deref with `&*` to get `&str` in all cases.
-                if matches!(a.typedef, Type::Text(_))
+                // @PLN25 — `.base()` so `text?` params/returns take the same deref.
+                if matches!(a.typedef.base(), Type::Text(_))
                     && let Value::Call(d, _) = vals[a_nr].unspan()
-                    && matches!(self.data.def(*d).returned(), Type::Text(_))
+                    && matches!(self.data.def(*d).returned().base(), Type::Text(_))
                 {
                     let inner = self.generate_expr_buf(&vals[a_nr])?;
                     res = res.replace(&name, &format!("(&*({inner}))"));
