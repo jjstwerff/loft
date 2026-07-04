@@ -146,15 +146,25 @@ current `main` tip before working the list.
 
 **B. Public face — the website must not ship stale or broken (elevated 2026-07-04):**
 
-- [ ] **Rebuild the stale browser artefacts from the release source.** The
-  committed browser bundles drift from source and one is provably stale right
-  now: `doc/brick-buster.html` was built 2026-06-20, source moved 2026-07-02 —
-  the website hero (`doc/images/hero-brick-buster.png`, `doc/brick-buster.html`)
-  is 12 days behind the code. Rebuild both pipelines from the release tip
-  (`make game` + `make gallery`) and confirm the committed `doc/brick-buster.html`
-  + `doc/pkg/*` are fresh. **Structural fix (retires the whole class): build these
-  in a CI step and deploy from CI instead of committing 2.3 MB artefacts — then
-  "stale committed bundle" cannot exist.** See the CI-hardening note below.
+- [ ] **🔴 BLOCKER — Brick Buster `--html` render REGRESSED; the hero cannot be
+  freshly rebuilt.** Investigated 2026-07-04 (network + headless chromium): the
+  committed `doc/brick-buster.html` (last good build ~2026-06-13) renders
+  correctly (headless render gate PASSES, 128 distinct colours), but **`make game`
+  from current source produces a bundle whose canvas renders BLANK** — it clears
+  to the background colour and draws NO sprites/content (render gate: `canvas.blank`,
+  1 distinct colour, 6 s wait, SwiftShader on). Confirmed a real regression, not a
+  timing/GPU artefact, by rendering old-vs-new side by side. **So the staleness was
+  a symptom: the hero was frozen at the last working build because rebuilding breaks
+  it.** Most likely window: the **@PLN25 null/dense value-model landing (#480+,
+  ~07-02)** — the release's headline change — altering how the game's data (the
+  Canvas pixel `vector` / the sprite-atlas → GL-texture path / vertex buffers) is
+  laid out for the wasm/WebGL backend; the sprite draw silently no-ops while the
+  clear works. **Do NOT commit a rebuilt hero until this is fixed** (I did not —
+  kept the working committed build; broken rebuild saved at `/tmp/bb-fresh.html`).
+  Needs a focused investigation (file an issue; bisect the game's --html render
+  across the @PLN25 window / graphics-0.3.0). Once fixed, rebuild + the render gate
+  must pass, then the freshness gate (§CI-hardening) keeps it honest. **Structural
+  fix still applies: build+deploy the bundle from CI instead of committing it.**
 - [ ] **Brick Buster visual gate — via the CPU Canvas atlas, not the browser.**
   Every sprite (ball / paddle / bricks / power-ups / particles) is drawn by
   `build_atlas()` → `graphics::Canvas` (`fill_rect`/`fill_circle`/`vline`/`hline`,
