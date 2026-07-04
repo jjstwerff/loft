@@ -155,14 +155,24 @@ current `main` tip before working the list.
   1 distinct colour, 6 s wait, SwiftShader on). Confirmed a real regression, not a
   timing/GPU artefact, by rendering old-vs-new side by side. **So the staleness was
   a symptom: the hero was frozen at the last working build because rebuilding breaks
-  it.** Most likely window: the **@PLN25 null/dense value-model landing (#480+,
-  ~07-02)** — the release's headline change — altering how the game's data (the
-  Canvas pixel `vector` / the sprite-atlas → GL-texture path / vertex buffers) is
-  laid out for the wasm/WebGL backend; the sprite draw silently no-ops while the
-  clear works. **Do NOT commit a rebuilt hero until this is fixed** (I did not —
-  kept the working committed build; broken rebuild saved at `/tmp/bb-fresh.html`).
-  Needs a focused investigation (file an issue; bisect the game's --html render
-  across the @PLN25 window / graphics-0.3.0). Once fixed, rebuild + the render gate
+  it.** **ROOT CAUSE CONFIRMED 2026-07-04 (NOT @PLN25 — predates it):** the
+  `--html`/wasm codegen **drops every `#native` host-import CALL that takes a
+  `vector` argument.** Proof — the wasm import table of the last-good build lists
+  `loft_gl_upload_vertices` (vertex buffer, `vector<single>`), `loft_gl_upload_canvas`
+  (atlas texture pixels, `vector<integer>`), and `loft_gl_set_mat4` (matrix uniform,
+  `vector<float>`); a fresh build's import table is MISSING exactly those three,
+  while every scalar-arg GL fn (`gl_draw`, `gl_bind_texture`, `gl_set_uniform_float`,
+  …) survives. Runtime confirms it: instrumenting the fresh page shows `loft_gl_draw`
+  fires (n=6) but `loft_gl_upload_vertices` is **never called** — so `ss_vao` is never
+  populated and every `gl_draw(ss_vao, 6)` no-ops. No vertices, no atlas texture, no
+  matrices ever reach WebGL → clear works, nothing draws. **The buffers aren't handled
+  wrong — the buffer-upload calls are ELIDED.** Fix lives in the `--html` host-import
+  codegen (`src/generation/` — the reachability / host-import declaration path,
+  `reachable_functions` at `generation/mod.rs:345`): a host import with a `vector<T>`
+  param must marshal it to the `(ptr, count)` the `loft-gl-wasm.js` side already
+  expects (`new Float32Array(mem, ptr, count)`), not drop the call. **Do NOT commit a
+  rebuilt hero until this is fixed** (I did not — kept the working committed build;
+  broken rebuild saved at `/tmp/bb-fresh.html`). Once fixed, rebuild + the render gate
   must pass, then the freshness gate (§CI-hardening) keeps it honest. **Structural
   fix still applies: build+deploy the bundle from CI instead of committing it.**
 - [ ] **Brick Buster visual gate — via the CPU Canvas atlas, not the browser.**
