@@ -155,10 +155,16 @@ OPEN: **2**
   judgment, so `--dump` (pure parse+typecheck) / `--interpret` / `--native` must agree on
   accept-vs-reject; `statically_rejected()` (empty-stdout guard so a runtime panic isn't mistaken
   for a static reject) makes the #433 class — interp accepts what native rejects at rustc — a
-  first-class caught property.  The session's fixed cross-backend divergences graduated into the
-  corpus (10 = the #495 runtime-Join, 11 = the D-own-1 adopt-vs-deep-copy).  Stays OPEN: the corpus
-  keeps growing toward the operational rules' coverage (heap/store steps, iterators, coroutines),
-  and the sweep is `#[ignore]` (rustc per program) — a manual gate, not yet CI-wired.
+  first-class caught property.  The oracle now catches real divergences in practice — three
+  found this cycle: **#495** (runtime-Join over-free, FIXED), **#500** (native E0308 on a
+  nested-ncc optional-text return, FIXED), **#501** (`.map`/`.filter` on a vector literal
+  receiver, FILED).  Corpus is **23 programs** spanning coroutines / collections / parallel /
+  text / keyed collections / tuples / nullability / nested enums / recursion / closures + the
+  graduated bugs.  **NIGHTLY CI GATE WIRED (ci.yml, commit `971150dd`)**: the full
+  `--ignored` sweep runs on the 03:00 UTC schedule + push-to-main (Linux-only, never on a PR),
+  failing the nightly on any cross-backend divergence — the manual `-- --ignored` run is now
+  a standing automatic guard.  Stays OPEN (the deviation closes only when a shared executable
+  semantics replaces "the interpreter is the spec", or is reconciled): the corpus keeps growing.
 - **Removal:** build a **differential oracle** — run a growing program corpus on BOTH
   backends and assert they AGREE (value / null / halt / stdout / leak); these rules stay the
   written contract that GUIDES the corpus (what behaviour to cover), not a third
