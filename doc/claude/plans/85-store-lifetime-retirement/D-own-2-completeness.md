@@ -98,6 +98,17 @@ probe `probes/d-own-2/join-vector-return-append.loft`.
       stays `Box["x"]`; 0-diff on 8 corpora; full DA + suite + oracle + poison green).
 - [x] Swept the return adopt-vs-copy class dry (all types × bindings × control) — one
       residual facet found: the JOIN-vector-return DELIVERY value bug, filed as #492.
-- [ ] loft#492 — the JOIN-vector `=`-reassign clear (delivery facet).
+- [x] **loft#492 FIXED** (commit `f88833c2`): `create_vector`'s `=` path emits
+      `OpClearVector` when `vector_db` no-ops on an argument buffer for a non-empty
+      literal — the buffer can't get a fresh backing, and `=` is a replace, so the clear
+      is correct on a fresh buffer (no-op) and a filled one (JOIN arm / loop re-pass).
+      `+=` untouched.  Guard `tests/scripts/85-join-vector-return-replace.loft`; 7/8
+      corpora 0-diff (promotion adds one clear, behaviour-neutral); full DA + suite +
+      oracle green.
 - [ ] Free-side/oracle unification (Measurement 1) — the three-valued-fact completion,
       latent, folds into @PLN90.
+
+**D-own-2 return adopt-vs-copy class: CLOSED.**  Both live facets fixed — the caller-free
+leak (`3f0330c1`) and the delivery value (`f88833c2`, #492); the class swept dry across
+all types × bindings × control.  The only remaining D-own-2 item is the latent + safe
+free-side/oracle three-valued-fact unification → @PLN90.
