@@ -92,7 +92,9 @@ with the closure's environment in scope.
 
 ## Deviations
 
-OPEN: **1**. (The Rules above are the target; the remaining one is where the code breaks them.)
+OPEN: **0** — ✓ closures are a full, uniform first-class contract. Both lambda forms capture
+identically (D-clo-1), and the stored-short-lambda combinator crash is now a clean diagnostic
+(D-clo-2). Both closed 2026-07-04.
 
 > **D-clo-1 — CLOSED (2026-07-04).** The `|…|` short form now captures outer variables exactly
 > like the `fn(){}` form — the two are pure syntactic sugar (L-Fn), the maker's intent.
@@ -105,19 +107,19 @@ OPEN: **1**. (The Rules above are the target; the remaining one is where the cod
 > native_scripts + interp suite green. (Residual, minor: a zero-arg `|| { … }` closure *assigned
 > then called* has a separate parse edge — the `.map`/inline capturing forms all work.)
 
-### D-clo-2 — a stored `|…|` lambda passed to a combinator PANICS
-- **Violates:** L-Apply / L-Escape (a lambda value must be applicable through a variable)
-- **Where:** the combinator dispatch on a fn-ref VARIABLE whose value is a short lambda —
-  `g = |y| { y*2 }; xs.map(g)` panics at `src/data.rs:4569` (`assertion left != right`). The
-  INLINE `xs.map(|y| { y*2 })` works, and the LONG form `g = fn(y) -> … { y*2 }; xs.map(g)` works —
-  only a *stored short lambda* passed to a combinator crashes.
-- **Effect:** a crash (not a clean error) on a reasonable program. Both backends via the parser
-  path; a minimal repro is `fn main() { g = |y| { y*2 }; r = [1,2,3].map(g); println("{r[0]}") }`.
-- **Status:** OPEN — a real crash reproducible on `main`; should also be filed as a GitHub issue
-  per the bug-filing policy (a minimal both-backends repro), with this deviation as its formal
-  tracking.
-- **Removal:** fix the fn-ref-variable combinator dispatch so a stored short lambda applies like
-  the long form (which already works); add the repro to `tests/scripts/` as the guard.
+> **D-clo-2 — CLOSED (2026-07-04).** A stored short `|x|` lambda whose types could not be inferred
+> (assigned without a type context, `g = |y| { y*2 }`) got a GARBAGE signature (a `text`/`void`
+> default), and passing it to `.map` built a `vector<void>` result → a panic at `data.rs:4569`
+> (`def(u32::MAX)`). The root cause was a crash where a **clean diagnostic** was already the intended
+> outcome (the same lambda used standalone / called directly already errors "Cannot infer type for
+> lambda parameter"). Fix: `parse_map` now guards a `void`/`Unknown` return (or `Unknown` param)
+> from an un-inferrable fn-ref and emits the guiding "pass it inline / use `fn(x: T) -> R`"
+> diagnostic instead of building the invalid result vector. The inline `.map(|y| …)` form (which
+> has the element-type hint) and the long `fn(y: T) -> R` form are unaffected. Regression guard:
+> `tests/leak.rs::dclo2_stored_short_lambda_map_no_crash` (parses without panicking, the guard
+> diagnostic fires); 625 lib + interp + native_scripts green. (Making it *work* — inferring the
+> stored lambda's types from the later `.map` source — is cross-statement inference, a separate
+> enhancement; the crash → clean error is the fix.)
 
 ---
 
@@ -131,8 +133,8 @@ OPEN: **1**. (The Rules above are the target; the remaining one is where the cod
   creation-time value; a captured struct reads its *current* field value (`b.v=9` ⇒ `9`).
 - **First-class (`L-Escape`)** — a closure returned from a function, or stored in a struct field,
   works: `mk(7)()` is `7`; `h.f()` is `42`.
-- **The remaining open edge** — `g = |y|{…}; xs.map(g)` (D-clo-2, a stored short lambda passed to
-  a combinator) is the one falsifying program this doc still tracks to zero.
+- **No-crash on an un-inferrable stored lambda (D-clo-2)** — `g = |y|{…}; xs.map(g)` now emits a
+  clean "cannot infer" diagnostic on both backends, not a panic (guard
+  `tests/leak.rs::dclo2_stored_short_lambda_map_no_crash`).
 
-When D-clo-2 closes, this area joins the rest at 0 open, and closures are a full, uniform
-first-class contract.
+Closures are now a full, uniform first-class contract — this area is at 0 open, like the rest.

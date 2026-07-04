@@ -141,8 +141,8 @@ plan for the new rules — the oracle already guards each *area*; this drives it
   non-capturing `2` (both backends). *Guard: `tests/scripts/85-short-lambda-capture.loft` + oracle `04`/`22`.*
 - ✓ **L-CapScalar / L-CapHeap** — scalar by value at creation; heap shared (`b.v=9`⇒`9`). *Guard: `85`.*
 - ✓ **L-Apply / L-Escape** — return (`mk(7)()==7`) + struct-field (`h.f()==42`) work on native too. *Guard: oracle `04`/`22`.*
-- ☐ **D-clo-2 (OPEN)** — `g=|y|{y*2}; xs.map(g)` PANICS (`data.rs:4569`). Fully characterized; needs
-  a FIX (the stored-fn-ref-variable→combinator dispatch) + a guard, not more testing.
+- ✓ **D-clo-2 (CLOSED 2026-07-04)** — `g=|y|{y*2}; xs.map(g)` no longer panics; parse_map guards a
+  `void`/Unknown fn-ref return and emits the clean "cannot infer" diagnostic. *Guard: `tests/leak.rs::dclo2_stored_short_lambda_map_no_crash`.*
 
 ---
 
