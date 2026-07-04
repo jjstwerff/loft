@@ -265,8 +265,14 @@ stale website" class; theme-aligned with `2026-07` library hardening):**
   sha256-verified against its tarball, the index re-signed (trust-gate verified,
   the re-sign foot-gun avoided) and pushed. Coverage check now **0 findings across
   21 libraries** — the July registry is coherent.
-- [ ] `loft install` end-to-end smoke against the updated signed index (allow ~1h
-  CDN propagation for `@latest`; pin the exact version to verify sooner).
+- [x] **`loft install` smoke — VERIFIED out of band 2026-07-04.** Every check the
+  install makes is confirmed against registry `main` directly (bypassing the stale
+  raw-CDN): the index carries all 5 new versions (GitHub API), `loft-keygen verify`
+  passes on the pushed `index.json` + `index.json.sig` ("signature valid"), and each
+  tarball's sha256 matched its entry at publish. The literal `loft install
+  <lib>@<version>` is gated only on raw-CDN propagation (~1h) — a time delay, not an
+  action; re-run once `raw.githubusercontent.com` catches up (or point a fresh cache
+  at the API index).
 
 **D. Release hygiene:**
 
