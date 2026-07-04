@@ -1797,13 +1797,11 @@ impl State {
                     // the returned DbRef and the stash's FreeRefIfDistinct
                     // no-ops on the same store, exactly the (correct)
                     // behaviour the over-broad S1 match used to produce.
-                    && !(stash_old_for_post_free && {
-                        let def = stack.data.def(*fn_nr);
-                        def.returned().depend().iter().any(|&a| {
-                            (a as usize) >= def.attributes().len()
-                                || !def.attributes()[a as usize].hidden
-                        })
-                    })
+                    // @PLN85 D-own-1 — the canonical borrowed-view fact (its
+                    // returned dep names a VISIBLE param), not the inline visible-dep
+                    // scan; identical verdict, one fewer per-site re-derivation
+                    // (siblings at 1845/2582 already read it).
+                    && !(stash_old_for_post_free && stack.data.def(*fn_nr).returns_borrowed_view())
                 {
                     let tp_nr = stack.data.def(d_nr).known_type();
                     // Plan-04 Phase B.3.f: allocate fresh store directly
