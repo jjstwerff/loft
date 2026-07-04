@@ -1,0 +1,3 @@
+struct Box { v: integer }
+fn choose(cond: boolean, x: Box) -> Box { r = x; if cond { r = Box { v: 99 }; } r }
+fn main() { a = Box { v: 5 }; r1 = choose(false, a); r2 = choose(true, a); assert(r1.v == 5 && r2.v == 99 && a.v == 5, "f {r1.v} {r2.v}"); println("dn2f ok"); }

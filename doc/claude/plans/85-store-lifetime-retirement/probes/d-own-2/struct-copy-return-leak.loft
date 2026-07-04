@@ -1,0 +1,3 @@
+struct Box { v: integer }
+fn idcopy(x: Box) -> Box { r = x; r }
+fn main() { a = Box { v: 5 }; r = idcopy(a); assert(r.v == 5, "c {r.v}"); println("idcopy ok"); }
