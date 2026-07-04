@@ -6671,14 +6671,14 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
         let mut test_names: Vec<String> = Vec::new();
         for d_nr in start_def..p.data.definitions() {
             let def = p.data.def(d_nr);
-            // A `test_*()` entry, matching the `--tests` convention ("fn test*()").
-            // WITHOUT the `n_test` gate this collected ANY zero-param void function,
-            // including a used LIBRARY's `#native` host imports (`gl_swap_buffers`,
-            // `gl_destroy_window`, …) — which have no loft body, so running them via
-            // `execute_argv` hit a `def(u32::MAX)` "Unknown definition" panic.  `#native`
-            // is excluded belt-and-braces (a non-`test` native could not survive here now,
-            // but a test-named native still has no body to run).
-            if def.name.starts_with("n_test")
+            // The no-`main` fallback runs every zero-param void user function
+            // (the #358 contract — see `tests/arc_e_program_cache.rs`).  The one
+            // exclusion is `#native` host imports: a used LIBRARY's zero-param
+            // host imports (`gl_swap_buffers`, `gl_destroy_window`, …) have no
+            // loft body, so running one via `execute_argv` hit a `def(u32::MAX)`
+            // "Unknown definition" panic.  `def.native.is_empty()` filters them
+            // out — the name is NOT gated (a bare `check_me()` must still run).
+            if def.name.starts_with("n_")
                 && !def.name.starts_with("n___lambda_")
                 && matches!(def.def_type, data::DefType::Function)
                 && def.native.is_empty()
