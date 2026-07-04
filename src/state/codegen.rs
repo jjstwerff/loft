@@ -1772,20 +1772,44 @@ impl State {
                 return;
             }
             if owned_ref && !s1_substituted {
-                // when the value is a call with visible Ref
-                // params, the callee returns via a hidden __ref_N that is
-                // reused across calls.  OpPutRef would alias v with __ref_N;
-                // the next FreeRef would free __ref_N's store → use-after-free.
-                // Deep-copy into a fresh store instead; do NOT free the source
-                // so __ref_N stays valid for the next call.
-                if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
+                // when the value is a call whose return is tied to a passed
+                // buffer/param, the callee returns via a hidden __ref_N that is
+                // reused across calls — or a BORROW of a param's store (e.g.
+                // `return cs[i]` from a vector param).  OpPutRef would alias v
+                // with that store; the next FreeRef (v's owned pre-Set free)
+                // would whole-store-free it → use-after-free of the lender
+                // (#497: build_walls' cs died through a reassigned corner_at
+                // result borrowing a VECTOR param element; #496 is the same
+                // class through `md = sa; md = sb`).  Deep-copy into a fresh
+                // store instead; do NOT free the source.
+                //
+                // Cluster A.3 (OWNERSHIP_MODEL row 102/270): read the ONE
+                // carried adopt-vs-copy fact, `return_adopts_fresh_store()`,
+                // exactly like the first-Set path (gen_set_first_at_tos).
+                // The old visible-Reference/Enum param scan was the coarse
+                // `has_ref_params` proxy this fact replaced — it MISSED a
+                // callee borrowing from a visible VECTOR param, taking the
+                // plain-adopt path for a borrowed return.
+                if let Type::Reference(d_nr, _) | Type::Enum(d_nr, true, _) =
+                    stack.function.tp(v).clone()
                     && !stack.function.is_argument(v)
                     && let Value::Call(fn_nr, _) = value.unspan()
                     && stack.data.def(*fn_nr).name().starts_with("n_")
                     && *stack.data.def(*fn_nr).code() != Value::Null
-                    && stack.data.def(*fn_nr).attributes().iter().any(|a| {
-                        !a.hidden
-                            && matches!(a.typedef, Type::Reference(_, _) | Type::Enum(_, true, _))
+                    && (if crate::keys::reassign_copy_enabled() {
+                        // The carried A.3 fact (see the comment above).
+                        !stack.data.def(*fn_nr).return_adopts_fresh_store()
+                    } else {
+                        // Preserved raw path (LOFT_NO_REASSIGN_COPY) — the old
+                        // visible-Reference/Enum proxy, kept ONLY so the fuzz
+                        // gate's crash control can still reproduce the class.
+                        stack.data.def(*fn_nr).attributes().iter().any(|a| {
+                            !a.hidden
+                                && matches!(
+                                    a.typedef,
+                                    Type::Reference(_, _) | Type::Enum(_, true, _)
+                                )
+                        })
                     })
                     // #360 follow-up: when the RHS call READS v AND the
                     // callee returns a BORROWED view (its returned dep names

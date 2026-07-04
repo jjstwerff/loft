@@ -363,6 +363,19 @@ pub fn join_own_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_NO_JOIN_OWN").is_none())
 }
 
+/// #497 — the reassignment-path adopt-vs-copy fix: a Reference local
+/// REASSIGNED from a `!return_adopts_fresh_store()` call deep-copies
+/// (parity with the first-Set path) instead of adopting a possibly
+/// borrowed store the owned pre-Set free then whole-store-frees.
+/// `LOFT_NO_REASSIGN_COPY` preserves the raw path so the fuzz gate's
+/// crash-channel positive control stays non-vacuous — the same
+/// preservation pattern as `LOFT_NO_JOIN_OWN` above.
+#[must_use]
+pub fn reassign_copy_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_REASSIGN_COPY").is_none())
+}
+
 #[must_use]
 pub fn pln25_dn1_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
