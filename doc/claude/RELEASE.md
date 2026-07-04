@@ -192,10 +192,12 @@ stale website" class; theme-aligned with `2026-07` library hardening):**
 
 **D. Release hygiene:**
 
-- [ ] **CHANGELOG `2026-07`** — headline is the **breaking type migration**:
-  `text as int/float/single` → `τ?` (fallible parse), and the nullable
-  parse/return contract (@PLN25). The four libs' root-cause fixes are the
-  migration recipe; lead with it so upgraders see it first.
+- [x] **CHANGELOG `2026-07`** — ✅ DRAFTED 2026-07-04 (review before tag). Leads
+  with the **breaking type migration** (`text as int/float/single` → `τ?` fallible
+  parse, with the `?? default` upgrade recipe), then the retired store-lifetime bug
+  class, dense vectors, `&`-binding, the sandbox, browser/`--html`, and a fixes
+  round-up incl. the four migrated libs. Verify the prose against the final scope
+  before tagging.
 - [ ] Bump `Cargo.toml` `2026.6.0` → `2026.7.0`; run the § Per-release ship
   checklist (tag, crates.io publish, per-OS binaries + stdlib checksums).
 

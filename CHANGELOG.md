@@ -12,6 +12,88 @@ invariants, internal phase numbers)?  See
 
 ---
 
+## 2026-07
+
+The **stability and type-safety** release. Two things anchor it: parsing text into a
+number is now *honestly fallible* (it hands you a nullable instead of quietly
+inventing a `0`), and a long-standing class of heap / memory bugs — leaks and
+use-after-free corruption around returns, reassignment, and `match` — has been
+retired wholesale and is now guarded on every night's CI. The registry, the sandbox,
+and reference binding all move forward too.
+
+### Parsing a number can fail — `text as integer` now gives you a nullable
+
+This is the one change most existing code will need to look at.
+
+- `"42" as integer` used to *always* hand back an integer, silently producing `0`
+  when the text wasn't actually a number — a wrong answer that looked like a real
+  one. Casting text to a number is now an honest **fallible parse**: `text as
+  integer`, `text as float`, and `text as single` return a **nullable** (`integer?`,
+  `float?`, `single?`), and yield `null` when the text isn't a valid number.
+- `"42" as integer` is `42`; `"oops" as integer` is `null`.
+- Handle the `null` at the cast site, most often with `??`:
+  `count = field as integer ?? 0`, or keep the `integer?` and test it
+  (`n = field as integer; if n { … }`).
+
+> **Upgrading:** anywhere you wrote `x = some_text as integer` (or `as float` /
+> `as single`) and then used `x` as a plain number, add a default —
+> `x = some_text as integer ?? 0` — or give `x` a nullable type. The parse silently
+> returning `0` on bad input is exactly the bug this closes, so the compiler now
+> makes you say what should happen. `null as integer?` is how you write an explicit
+> typed null.
+
+### A whole class of memory bugs is gone
+
+loft stores structs, vectors, and keyed collections on a managed heap. That heap had
+a long tail of hard-to-see faults — a store leaked once per loop iteration, or a
+value was freed while something still pointed at it (use-after-free) — clustered
+around returning a value, reassigning one, and binding records out of `match` arms.
+This release **retires that class**: whole-value binds copy and projections stay
+views under one consistent rule, and the lifetime checker that decides when a store
+is freed now reads a single source of truth instead of re-deriving it per site.
+
+It stays fixed because three independent guards run continuously: a
+poison-allocator test suite (every freed store is scribbled over, so any later read
+is caught), an `Arbitrary`-driven program fuzzer, and a **nightly differential
+oracle** that runs a growing corpus through *both* the interpreter and the `--native`
+compiler and fails CI on any divergence in output, exit, or leak.
+
+### Dense vectors and predictable copies
+
+Vectors now default to dense storage, and the copy-versus-view model is spelled out
+and enforced: a whole-value bind (`b = a`) **copies**, while a projection (`a.field`,
+`v[i]` of a struct) stays a **view** onto the original. Narrowing casts are checked
+rather than silently truncating.
+
+### `&` — references you can write back through
+
+A `&`-annotated binding creates a reference: pass `f(&x)` and the function can write
+back to your `x`, or bind `a = &b` to alias a value for in-place update. It works on
+scalars, heap values, and parameters, on both backends.
+
+### Running untrusted code — the sandbox subset
+
+A new compile-time **sandbox** lets you run untrusted loft with capability limits —
+what a restricted caller may call, which parameters and fields it may touch, and what
+it may mutate — enforced as a compile-time admission check, with an adversarial
+escape suite proving the boundary holds.
+
+### Games and the browser
+
+`--html` gains **engine-less web modules** (a plain loft program compiles to a
+self-contained WASM page), a `host_input()` primitive for feeding browser input in,
+and asyncify resume that keeps running in headless / hidden tabs. A WebSocket WASM
+bridge brings networked (and zero-trust crypto) programs to the browser.
+
+### A pile of fixes
+
+Among them: a keyed range or partial-key slice used as a value (`x = idx[lo..hi]`)
+is now a clear compile error instead of a crash; `.map` on a literal receiver, a
+nested-vector element-stride mismatch, and a native miscompile that returned an empty
+vector from a struct field are all fixed. The four utility libraries touched by the
+parse change — `arguments`, `random`, `regex`, and `cbor` — are migrated to the new
+nullable-parse contract and republished.
+
 ## 2026-06
 
 **New versioning.** Starting here, loft moves to a **monthly,
