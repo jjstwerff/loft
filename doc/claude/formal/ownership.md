@@ -102,18 +102,29 @@ selector-collapsed) but the per-site thicket is reduced, not deleted, so it stay
   Each fix added a codegen condition rather than completing a fact.
 - **Effect:** the recurring store-lifetime bugs (Cluster A, #426, #429, …) — "N forests,
   one root". The class cannot be closed by more conditions.
-- **Status:** OPEN — substantially NARROWED (2026-07-03).  Landed: the return-delivery
-  collapse (the vector sub-thicket behind ONE `Delivery` selector/dispatch, the
-  Reference sub-thicket behind `RefDelivery`; the #416/#448 cells folded; the class
-  swept dry over ~41 probes), and the `ownership_of` oracle chokepoints are
-  **DEFAULT-ON** (`keys.rs::join_own_enabled`, 2026-07-02 flip: `local_source`
-  displaced-owned dep-strip — arguments excluded, `elem_accumulate` `OpBindOrCopy` +
-  the native inline guard, the `match_return` owned-copy synthesis; `borrow_base`
-  cycle-guarded).  Evidence: the 54-cell over-free map 6/54 opt-out → 0/54 default;
-  suite 2595/2595.  REMAINING: `block_result`'s non-vector arms still carry per-site
-  helpers; `scan_set`/free placement is partially heuristic; D-own-5's `&`-borrow fact
-  folds in here.
+- **Status:** OPEN — substantially NARROWED (2026-07-04).  Landed: the return-delivery
+  collapse is COMPLETE — `block_result` 459→328 lines, **45→21 helper calls**, the 15
+  tail-shape classifiers down to ~3 genuinely-distinct entry guards; EVERY delivery
+  mechanism routes through a pure `classify_X` selector + `dispatch_X` (vector
+  `Delivery`, Reference `RefDelivery`, text `TextDep`, `ref_return`'s
+  `classify_ret_promotion`); the #416/#448 cells folded; class swept dry over ~41
+  probes.  The `ownership_of` oracle chokepoints are **DEFAULT-ON**
+  (`keys.rs::join_own_enabled`; 54-cell over-free map 0/54 default).  And the FREE
+  side began reading the canonical fact: `scan_set`'s #316 ownership tracker
+  (`ref_rhs_ownership`) and codegen's owned-ref reassign gate now call
+  `returns_borrowed_view()` instead of re-scanning the return deps inline (2026-07-04,
+  both byte-identical over the 8 D-own-1/C86/462 corpora).
+  REMAINING: (1) `scan_set`'s owned-vs-view TRACKER cannot fully fold onto the oracle
+  — its free-side conservatism (`RefRhs::Unknown` ⇒ drop from `owned_refs`, do NOT
+  free later) is the OPPOSITE default from the oracle (`Own::Owned` when
+  unclassifiable), so a drop-in merge would flip the load-bearing #316 transition-free
+  → a D-own-2 conservatism-unification, not a D-own-1 collapse; (2) the `??`-JOIN
+  runtime witness (`OpBindOrCopy`/`OpFreeRefIfDistinct`) is inherently runtime (the
+  arm taken is unknown at compile time), not a re-derivation to delete.  D-own-5's
+  `&`-borrow fact is CLOSED (folded).
 - **Removal:** make every free/copy/move read `deps`; delete the per-site heuristics.
+  The delivery + reassign re-derivations are gone; what remains needs D-own-2 to
+  complete the fact (free-side conservatism) before the last heuristics can read it.
 
 ### D-own-2 — incomplete: not every binding/path has a computed ownership fact
 - **Violates:** O-Complete

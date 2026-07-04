@@ -384,3 +384,39 @@ diff was the scope-id label + variable-table columns, proven NON-DETERMINISTIC b
 the same binary twice). Full suite 2542 green both backends; differential oracle green. No
 behaviour change — organisational collapse (the Reference arm was clean; this readies it for
 the carried-fact model and shrinks the thicket toward the beacon).
+
+## Slice 4 — the FREE side reads the canonical fact (2026-07-04)
+
+The delivery + `ref_return` collapse left the FREE side (`scan_set` / codegen
+reassign) still re-deriving ownership from shape.  Two inline re-derivations of the
+canonical `Definition::returns_borrowed_view()` fact — the SAME "a visible-attr
+return dep borrows it" scan the delivery side already reads — folded onto the fact:
+
+- `scopes.rs::ref_rhs_ownership` (drives the #316 owned→view transition-free +
+  `owned_refs` tracker): its `n_`-call arm re-scanned the return deps for a visible
+  attr inline → now calls `returns_borrowed_view()`.
+- `state/codegen.rs` owned-Reference reassign gate (the #360 borrowed-view
+  pass-through): the identical inline dep-scan → `returns_borrowed_view()` (siblings
+  at 1845/2582 already read it).
+
+Both byte-identical (0-diff, IR + bytecode + native Rust) over all eight
+D-own-1/C86/462 corpora; the #316 transition probe + `tests/scripts/291` clean both
+backends; suite + differential oracle (incl. `--ignored`) + `LOFT_POISON` green.
+
+**Instrument re-read + the honest finish line.** `block_result` is **328 lines / 21
+helper calls** (from 459 / 45), the 15 tail-shape classifiers down to ~3
+entry-guards; every delivery mechanism flows through one `classify_X`/`dispatch_X`.
+The delivery + reassign re-derivations are GONE.  What remains is NOT more D-own-1
+collapse:
+
+1. `scan_set`'s owned-vs-view TRACKER (`ref_rhs_ownership` → `owned_refs`) cannot
+   fully fold onto `ownership_of`: the free side needs "unclassifiable ⇒ don't-own,
+   don't-free-later" conservatism (`RefRhs::Unknown` drops from `owned_refs`), the
+   OPPOSITE of the oracle's `Own::Owned` default.  Merging would flip the
+   load-bearing #316 transition-free — a **D-own-2** conservatism-unification.
+2. The `??`-JOIN witness (`OpBindOrCopy` / `OpFreeRefIfDistinct`) is inherently
+   runtime (which arm ran is unknown at compile time) — a genuine runtime fact, not
+   a shape re-derivation to delete.
+
+So D-own-1's *collapse* charter is essentially met; the tail is D-own-2 (complete
+the free-side fact) + the runtime Join, both of which are @PLN90's reframing.
