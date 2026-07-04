@@ -50,13 +50,15 @@ fn native_suite_lock() -> &'static Mutex<()> {
 ///
 /// Doc files to skip in native mode.
 const NATIVE_SKIP: &[&str] = &[
-    // @PLN25/@PLN85 Family-D residual: a GENERIC `-> T?` (Optional) return
-    // instantiated at a struct/reference T mixes the SCALAR sentinel template
-    // (`i64::MIN` / `get_int`) into a `DbRef`-returning fn — rustc E0308.
-    // Surfaced when 25-generics migrated `last_element<T>` to `-> T?` under
-    // DN1.  Interp coverage stays (wrap `dir` runs this file); drop the skip
-    // when the generic-Optional-return native ABI slice lands.
-    "25-generics.loft",
+    // (empty) — "25-generics.loft" was skipped here for the @PLN25/@PLN85
+    // Family-D residual (a generic `-> T?` (Optional) return kept the
+    // parametric `Optional(Reference(tv))` type instead of substituting T,
+    // mistyping the return slot — rustc E0308 on native).  FIXED by #493
+    // cell 5 (commit 64d94c50: `substitute_type` gained an `Optional` arm).
+    // Verified both the scalar-T (`last_element<integer/text>`, already in
+    // this file) and a struct-T instantiation compile + run correctly on
+    // `--native`; the skip is removed so `native_dir` now gates this file
+    // as a regression guard for cell 5.
 ];
 
 /// Script files to skip in native mode.
