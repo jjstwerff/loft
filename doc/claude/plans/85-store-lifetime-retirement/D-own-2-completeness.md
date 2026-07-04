@@ -112,3 +112,33 @@ probe `probes/d-own-2/join-vector-return-append.loft`.
 leak (`3f0330c1`) and the delivery value (`f88833c2`, #492); the class swept dry across
 all types × bindings × control.  The only remaining D-own-2 item is the latent + safe
 free-side/oracle three-valued-fact unification → @PLN90.
+
+## @PLN90 slice — the runtime-Join witness (loft#495, 2026-07-04)
+
+Probing the free-side completeness on the @PLN90 branch surfaced a LIVE native
+miscompile (filed **loft#495**), the concrete first slice of the runtime-Join
+witness residual forward-homed at @PLN85 close-out.
+
+Shape: `r = x (C86 copy);  for i { r = v[i] ?? x }` — a Reference local that starts
+OWNED then is reassigned to a **view** each iteration. `ownership_of(v[i] ?? x)` =
+`Join{base=v}` (owned on neither arm). Native over-frees the borrowed views at BOTH
+free-sites: (1) the in-loop `owned_ref_reassign` displaced-free (`dispatch.rs`)
+fires every iteration and releases `v[i-1]` (a live element store); (2) the
+scope-exit `OpFreeRef(var_r)` releases r's final view. Both gates key on
+`tp(r).depend().is_empty()` (r is typed owned). Interp stays clean (no in-loop free
++ lenient interior-ref free). Heisenbug: a `println` in the loop shifts allocation
+order and hides it; needs a 3-function program (allocation-order sensitive).
+
+Empirically proven (both attempts land in the plan, both fail):
+- a store-aliasing witness guard against the Join base is INEFFECTIVE —
+  `vector<ref(T)>` elements are separate stores from the vector, so `_old.store_nr
+  != var_v.store_nr` is always true;
+- suppressing ONLY the in-loop free still panics 5/5 — the scope-exit free alone
+  corrupts.
+
+Why static cannot close it: r's ownership is a genuine runtime JOIN (owned copy on
+the empty-loop path, borrow on the loop-ran path). The correct fix is a **runtime
+owned-witness** (per-var flag: r owns iff its last executed assignment produced an
+owned store) gating BOTH native free-sites — the inline-ncc-reassign twin of the
+`OpBindOrCopy` witness that already covers the CALL-result bind (`g = pick(t,i)`).
+Repro: `probes/d-own-2/loop-copy-view-native-divergence.loft`.
