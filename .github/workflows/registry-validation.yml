@@ -1,0 +1,82 @@
+# Nightly REGISTRY validation — every published package against loft@main +
+# current stable rustc.
+#
+# The chunk repos' library-ci gates their own pushes, and the registry repo's
+# pr-validate gates schema + sha256 — but NOTHING re-checks a released tarball
+# after loft moves.  That gap is how registry random 0.2.1 sat broken on the
+# 2026.6 toolchain until a consumer hit it (loft-lang/loft-libs-core#14).
+# This workflow closes it: install each package exactly as a user would
+# (tarball + sha256 + dep resolution), build its native crate on current
+# stable rustc, and run its shipped test suite on BOTH backends.
+#
+# One matrix leg per package (fail-fast off) → a red night names the exact
+# packages that rotted.  Runs at 04:30 UTC, after the 03:00 full-matrix CI,
+# so a red here with a green CI points at package rot, not a loft break.
+name: registry-validation
+
+on:
+  schedule:
+    - cron: '30 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      packages: ${{ steps.list.outputs.packages }}
+    steps:
+      - name: List registry packages
+        id: list
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/loft-lang/registry/main/index.json -o index.json
+          # Every package with at least one non-yanked version.
+          packages=$(jq -c '[.packages | to_entries[]
+                             | select((.value.versions | keys | length) > (.value.yanked | length))
+                             | .key]' index.json)
+          echo "packages=$packages" >> "$GITHUB_OUTPUT"
+          echo "validating: $packages"
+
+  validate:
+    needs: discover
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJson(needs.discover.outputs.packages) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mold (loft's pinned linker)
+        run: sudo apt-get update -y && sudo apt-get install -y mold
+
+      - name: Update to latest stable rustc
+        run: rustup update stable && rustc --version
+
+      - name: Cache cargo registry + loft build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: registry-validation-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            registry-validation-
+
+      - name: Build loft from main
+        # `--lib --bin loft` builds BOTH: without `--lib`, libloft.rlib lands
+        # only in target/release/deps/ and `loft --native` fails to resolve
+        # transitive crates (E0463) — same recipe as the chunk repos'
+        # library-ci.yml.
+        run: |
+          cargo build --release --lib --bin loft
+          echo "$PWD/target/release" >> "$GITHUB_PATH"
+
+      - name: Validate ${{ matrix.package }}
+        run: scripts/registry_validate.sh ${{ matrix.package }}

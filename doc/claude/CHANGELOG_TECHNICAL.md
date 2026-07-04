@@ -9,6 +9,20 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Nightly registry validation — published packages vs loft@main (2026-07-04)
+
+New `registry-validation.yml` workflow (04:30 UTC + `workflow_dispatch`): one
+matrix leg per non-yanked registry package, each installed from the LIVE
+registry exactly as a user gets it and validated against loft built from main
+on the runner's current stable rustc — `loft install` (tarball + sha256 +
+deps), `cargo build` of the shipped `native/` crate, and the package's own
+tests on both backends via the new `scripts/registry_validate.sh` (also
+runnable locally). Closes the gap where a released tarball rots unnoticed
+after loft moves (the loft-libs-core#14 class); the first live sample caught
+cbor 0.1.0 (DN1 type error) and crypto 0.3.4 (machine-local `path =` deps in
+the published `native/Cargo.toml`). See PKG_REGISTRY.md § Nightly toolchain
+validation.
+
 ### `#native` boundary: nullable scalars marshal, C-ABI externs are i64 (2026-07-04)
 
 Found via loft-libs-core#14 (`random.rand` declaring the honest `-> integer?`

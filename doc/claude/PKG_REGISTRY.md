@@ -768,7 +768,34 @@ it's a CI workflow addition.
 
 ---
 
-## Comparison to Debian — what we adopted, what we didn't
+## Nightly toolchain validation — every published package vs loft@main
+
+The chunk repos' `library-ci` gates their own pushes, and the registry's
+`pr-validate` gates schema + sha256 — but nothing re-checks a released
+tarball after loft moves.  `registry-validation.yml` (in the loft repo,
+04:30 UTC nightly + `workflow_dispatch`) closes that gap: one matrix leg
+per non-yanked package, each running `scripts/registry_validate.sh <pkg>`
+against loft built from main and the runner's current stable rustc.
+
+The script validates the PUBLISHED artifact, exactly as a user gets it:
+`loft install` (index fetch + tarball + sha256 + dep resolution), a
+`cargo build --release` of the shipped `native/` crate if present, then
+the package's own test suite on BOTH backends (`--interpret` and
+`--native`; a testless package gets a `use <pkg>;` smoke run).  It is a
+FUNCTIONAL gate — no `LOFT_DENY_WARNINGS`; warning-cleanliness stays the
+source repo's job.  Run it locally the same way:
+
+```bash
+LOFT=target/release/loft scripts/registry_validate.sh crypto
+```
+
+Rot classes it catches (all three found in the first live sample,
+2026-07-04): a released package the new toolchain rejects (cbor 0.1.0,
+DN1 type error), a machine-local `path =` dependency leaked into a
+published `native/Cargo.toml` (crypto 0.3.4 — unbuildable anywhere but
+the publisher's machine), and toolchain-driven native-crate breakage
+(the loft-libs-core#14 class).  A red leg means "publish a fixed
+version", not "edit the registry".
 
 Surveyed Debian/apt's ecosystem for prior art.  Decisions:
 
