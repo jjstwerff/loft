@@ -95,13 +95,24 @@ residual is DONE, `classify_vec_bind`); D-own-5 CLOSED by the fold (the `&` borr
 (the `ownership_of` oracle chokepoints are now DEFAULT-ON, the return-delivery funnel is
 selector-collapsed) but the per-site thicket is reduced, not deleted, so it stays open.
 
-### D-own-1 — ownership is re-derived per-site by codegen, not carried as one `deps` fact
+### D-own-1 — ownership is re-derived per-site by codegen, not carried as one `deps` fact — CLOSED (2026-07-04, @PLN85 close-out; latent residual → @PLN90)
 - **Violates:** O-Derived / O-Deps
 - **Where:** the store-lifetime bug class — `has_ref_params`, the return-source set, the
   free-suppress / return-buffer logic, etc. ([OWNERSHIP_MODEL.md § Why](../OWNERSHIP_MODEL.md)).
   Each fix added a codegen condition rather than completing a fact.
 - **Effect:** the recurring store-lifetime bugs (Cluster A, #426, #429, …) — "N forests,
   one root". The class cannot be closed by more conditions.
+- **Reconciliation (CLOSED for the store-lifetime bug class):** the load-bearing per-site
+  re-derivations are ELIMINATED — the return-delivery + reassign thicket is collapsed
+  behind pure `classify_X`/`dispatch_X` selectors, the `ownership_of` oracle is default-on
+  at its chokepoints (0/54 over-free), and the free side reads the canonical
+  `returns_borrowed_view()` fact.  No re-derivation produces a live bug; the class is
+  closed by construction (standing fuzz/poison/DA + leak-gate).  The ONE remaining
+  re-derivation — `scan_set`'s owned-vs-view TRACKER, which needs "unclassifiable ⇒
+  don't-own" conservatism opposite the oracle's default — is LATENT and SAFE (measured:
+  8997 divergences, 100% one-directional, zero miscompiles) and the `??`-JOIN witness is
+  inherently runtime.  Both forward-homed to **@PLN90** (copy-diagnostics) as a
+  completeness refinement, not a bug.
 - **Status:** OPEN — substantially NARROWED (2026-07-04).  Landed: the return-delivery
   collapse is COMPLETE — `block_result` 459→328 lines, **45→21 helper calls**, the 15
   tail-shape classifiers down to ~3 genuinely-distinct entry guards; EVERY delivery
@@ -126,13 +137,21 @@ selector-collapsed) but the per-site thicket is reduced, not deleted, so it stay
   The delivery + reassign re-derivations are gone; what remains needs D-own-2 to
   complete the fact (free-side conservatism) before the last heuristics can read it.
 
-### D-own-2 — incomplete: not every binding/path has a computed ownership fact
+### D-own-2 — incomplete: not every binding/path has a computed ownership fact — CLOSED (2026-07-04, @PLN85 close-out; latent residual → @PLN90)
 - **Violates:** O-Complete
 - **Where:** the row-100/102 holes — adopt-vs-copy for arbitrary borrowing returns; the
   general dep-driven caller copy. (The struct-field and value-`if`-return facets are
   CLOSED — #415, a7 — but the general framing is open: [OWNERSHIP_MODEL.md § holes](../OWNERSHIP_MODEL.md).)
 - **Effect:** the uncovered paths fall back to a heuristic or a stopgap (D-own-4); a
   divergence hides until a test hits the path (operational.md D-op-2).
+- **Reconciliation (CLOSED for the return adopt-vs-copy class):** the class was SWEPT DRY
+  across every type × binding × control (2026-07-04, [plans/85 D-own-2-completeness.md](../plans/85-store-lifetime-retirement/D-own-2-completeness.md));
+  both live facets it surfaced are fixed — the caller-free leak (struct copy-return,
+  `3f0330c1`) and the delivery value (JOIN-vector `=`-reassign, `f88833c2` / #492).  No
+  binding/path is left with a live miscompile.  The only remaining incompleteness — the
+  free-side owned-vs-view fact needing an explicit three-valued (Owned/Borrowed/Unknown)
+  form so the free side can read the oracle — is LATENT and SAFE (the D-own-1 measurement)
+  and forward-homed to **@PLN90**, together with D-own-1's identical residual.
 - **Status:** OPEN.  The oracle (`ownership_of`) now runs BY DEFAULT at its chokepoints
   (the D-own-1 flip), which raises this deviation's exposure: an incomplete fact is now a
   default-path miscompile, not a gated one.  The incompleteness contract is explicit —

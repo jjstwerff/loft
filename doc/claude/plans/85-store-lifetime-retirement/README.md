@@ -8,6 +8,23 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 Plan id: [@PLN85](https://github.com/loft-lang/plans/issues/85) · investigation-style
 (reading order: Status → Probes → Cluster docs → Roadmap).
 
+> ## ✅✅ CLOSED (2026-07-04) — the store-lifetime bug class is retired.
+> **Charter met:** outcome (b) — the clusters are independent, each invariant enforced at
+> its chokepoint, with a standing instrument (fuzz + `LOFT_POISON` + DA-calibration +
+> leak-gate + ASan/Miri) that keeps the class closed *by construction*.  **All live bugs
+> fixed:** the 5 DA-inventory leak cells (t1–t4 + p188), the `skip_free` pass-poison class,
+> and both D-own-2 return adopt-vs-copy facets (the struct copy-return leak + the
+> JOIN-vector delivery, #492).  **The ownership model:** D-own-1's delivery/reassign
+> re-derivation thicket collapsed behind pure `classify_X`/`dispatch_X` selectors with the
+> `ownership_of` oracle default-on (0/54 over-free); D-own-2's return adopt-vs-copy class
+> swept dry.  D-own-3/4/5 + the types.md deviations already CLOSED.
+> **Forward-homed** (per the closure policy): the free-side/oracle three-valued-fact
+> unification (latent + SAFE — measured 100% one-directional, no miscompile) and the
+> runtime `??`-JOIN witness → **[@PLN90](https://github.com/loft-lang/plans/issues/90)**
+> (copy-diagnostics); the DA-only codegen-slot class (`t_4File_lines` slot-width,
+> `generate_set/call`, `wrap::dir` — not leaks, no shipped-build impact) → a `loft` issue.
+> The detail below is retained as the investigation + close-out record.
+
 > **▶ WIDE-RELEASE GATE 1 — the fuzz-proof:** [fuzz-proof-gate.md](fuzz-proof-gate.md).
 > The "CLOSED" below is the *investigation* + per-cluster fixes — each known shape fixed and
 > guarded. The remaining gate before loft goes to many people is proving the **class closed
