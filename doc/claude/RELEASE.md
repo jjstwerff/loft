@@ -146,16 +146,31 @@ current `main` tip before working the list.
 
 **B. Public face — the website must not ship stale or broken (elevated 2026-07-04):**
 
-- [ ] **🟠 BLOCKER — Brick Buster `--html` render: root cause FIXED, one residual.**
-  The vector-arg host-import elision is **FIXED** (commit e8e13234, `src/generation/`):
-  a fresh `make game` now imports all 3 GL buffer natives and the render went from
-  BLANK (1 colour) to the brick grid + paddle drawing (6 colours). Regression guard:
-  `tests/html_gl_imports.rs` + `tools/wasm_imports.mjs` (browser-free — parses the wasm
-  import table; skips offline). **Residual before the hero can ship:** the render is
-  6 colours, still under the gate's 20 — sprites/text draw dim/untextured, likely the
-  atlas `vector<integer>` upload (`gl_upload_canvas`) or the `integer` i32→i64 width in
-  the texture-pixel path. Keep NOT committing a rebuilt hero until the render gate
-  passes (≥20). Original investigation below.
+- [ ] **🟢 BLOCKER — Brick Buster `--html` render: BOTH root causes FIXED; pending
+  merge + rebuild.** Two layered bugs, both fixed:
+  1. **Vector-arg host-import elision** (commit e8e13234, `src/generation/`) — the
+     `--html` codegen dropped every `#native` call taking a `vector` (`gl_upload_vertices`
+     / `gl_upload_canvas` / `gl_set_mat4`), so no buffers reached WebGL (blank canvas).
+     Fixed → geometry draws. Guard `tests/html_gl_imports.rs` + `tools/wasm_imports.mjs`
+     (browser-free import-table check).
+  2. **Canvas mutations lost** (the "6-colour" residual) — root-caused with a direct GL
+     texture probe: every `Canvas` draw method did `d = self.data; d[i]=…`, which C86
+     H-Copy COPIES, so the whole software rasterizer silently drew nothing (the atlas /
+     text textures were blank). The maker surfaced a formal contradiction (binding.md
+     `B-HeapAlias` "heap aliases" vs heap.md `H-Copy` "heap copies"); a both-backends
+     boundary matrix proved H-Copy, and that `&`-write-through was silently ignored for
+     a vector lvalue. **Fixed by making `& vector` a writable alias** (commit 348a37f5 —
+     a genuine language feature: `d = &self.data; d[i]=…` writes through, non-owning;
+     plain bind still copies). binding.md corrected (`B-Copy`/`B-Ref-Alias`/`B-View`);
+     guard `tests/scripts/503-vector-reference-alias.loft`. Graphics library adopts it in
+     **PR loft-libs-graphics#10** (6 Canvas sites → `&self.data`); proven end-to-end (a
+     red|blue `fill_rect` now reads back blue). Also fixed a pre-existing no-`main`
+     test-runner crash surfaced en route (commit 0d967c62).
+  **Remaining (merge-gated, no code left):** land the loft compiler changes → merge
+  graphics PR#10 + republish graphics → rebuild `doc/brick-buster.html` (`make game`) in
+  a graphics-enabled env → confirm the render gate passes (≥20 colours) → commit the fresh
+  hero. Keep NOT committing a rebuilt hero until that gate is green. Original
+  investigation below.
 - [ ] ~~**🔴 render REGRESSED; hero cannot be freshly rebuilt.**~~ Investigated 2026-07-04 (network + headless chromium): the
   committed `doc/brick-buster.html` (last good build ~2026-06-13) renders
   correctly (headless render gate PASSES, 128 distinct colours), but **`make game`

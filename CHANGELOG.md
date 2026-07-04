@@ -71,6 +71,23 @@ A `&`-annotated binding creates a reference: pass `f(&x)` and the function can w
 back to your `x`, or bind `a = &b` to alias a value for in-place update. It works on
 scalars, heap values, and parameters, on both backends.
 
+**Now including whole vectors.** A plain `d = v` (or `d = self.data`) *copies* the
+vector — bind it, and the copy is independent. Write `d = &v` (or `d = &self.data`) and
+you get a live, writable window instead: `d[i] = x` and `d += […]` write **through** to
+the source. This is the ergonomic primitive for vector-heavy code — grab a sub-vector,
+mutate it in place, no copy:
+
+```loft
+fn bump(self: Grid) {
+  row = &self.cells;                 // a writable view of the field, not a copy
+  for i in 0..len(row) { row[i] = row[i] + 1; }
+}
+```
+
+The rule is one sentence now: **a plain bind copies; a `&` bind aliases** — the same for
+scalars and vectors. (Reading a struct-typed field or element is still a view without
+`&`, since it names an interior place, not a whole value.)
+
 ### Running untrusted code — the sandbox subset
 
 A new compile-time **sandbox** lets you run untrusted loft with capability limits —
