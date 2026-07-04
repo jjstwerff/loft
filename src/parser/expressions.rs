@@ -1226,6 +1226,14 @@ use a separate collection or add after the loop"
         let rhs_pos = self.lexer.peek_pos().clone();
         let mut s_type = self.parse_operators(f_type, code, &mut parent_tp, 0);
         self.expected = prev_read_target;
+        // A `& vector` bind (`d = &v` / `d = &self.data`): the source is a vector lvalue
+        // and the `&` opts INTO aliasing (B-Ref-Write — the write-through "north star" —
+        // for a vector, which plain `d = v` deliberately does NOT give: it COPIES,
+        // H-Copy).  Capture it BEFORE `amp_pending` is cleared below so the vector-copy
+        // classifier is told to SHARE instead — `d` binds to the source's DbRef with no
+        // deep copy and is NON-OWNING (its dep names the source, so `owns = dep.is_empty()`
+        // is false and it never frees the source's store).  `d[i] = x` then writes THROUGH.
+        let amp_vector_bind = op == "=" && self.amp_pending && matches!(s_type, Type::Vector(_, _));
         // @PLN87 L1 / #2 — a local `&`-binding to a SCALAR lvalue (`b = &a` or
         // `b: &integer = a`) makes `b` a LIVE reference to the source's stack slot:
         // lower it to `b: &T = OpCreateStack(a)` — the SAME stack-ref mechanism a `&T`
@@ -1968,7 +1976,14 @@ use a separate collection or add after the loop"
         // the one mechanism per verdict.  Rule rationale lives on the `VecBind`
         // variants (the C86 whole-value-copy contract, the p379 borrowed-base
         // view, the #426 routed-forward exclusions).
-        let vec_bind = self.classify_vec_bind(code, op, var_nr, f_type, &s_type);
+        // A `& vector` bind opts into aliasing (B-Ref-Write): SKIP the C86 deep-copy so
+        // the plain-assign path shares the source's DbRef and marks `d` non-owning (its
+        // dep names the source).  Plain `d = v` (no `&`) still classifies + copies.
+        let vec_bind = if amp_vector_bind {
+            VecBind::NotABind
+        } else {
+            self.classify_vec_bind(code, op, var_nr, f_type, &s_type)
+        };
         if !matches!(vec_bind, VecBind::NotABind)
             && let Type::Vector(elm_tp, _) = &s_type
         {
