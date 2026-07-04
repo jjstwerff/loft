@@ -2739,6 +2739,28 @@ impl State {
                     stack.add_op("OpVarRef", self);
                     self.code_add(var_pos);
                     tps.push(a.typedef.clone());
+                } else if stack.data.def(op).name() == "OpSetInt4"
+                    && let Value::TupleGet(tvar, tidx) = parameters[a_nr].unspan()
+                    && let Type::Tuple(elems) = stack.function.tp(*tvar).clone()
+                    && (*tidx as usize) < elems.len()
+                    && matches!(elems[*tidx as usize].base(), Type::Function(_, _, _))
+                {
+                    // #493 — a fn-ref TUPLE ELEMENT stored into a 4-byte d_nr
+                    // struct field (OpSetInt4): project only the 8-byte d_nr, not
+                    // the full 20-byte fn-ref.  The default `generate()` would emit
+                    // OpVarFnRef (20B) which overruns the 8-byte value slot and
+                    // imbalances the eval stack — a garbage d_nr plus a corrupted
+                    // FOLLOWING store (silent under a normal build; a generate_call
+                    // width assert under debug-assertions).  Mirrors native's
+                    // fn-ref-element projection (`generation/calls.rs`) and the
+                    // TupleGet Integer arm; the d_nr is the first 8 bytes of the
+                    // element slot, so `OpVarInt` at its offset reads exactly it.
+                    let offsets = crate::data::element_offsets(&elems);
+                    let elem_abs = stack.function.stack(*tvar) + offsets[*tidx as usize] as u16;
+                    let var_pos = stack.position - elem_abs;
+                    stack.add_op("OpVarInt", self);
+                    self.code_add(var_pos);
+                    tps.push(crate::data::I64.clone());
                 } else {
                     tps.push(self.generate(&parameters[a_nr], stack, false));
                     // When a Value::Null is passed as a typed argument, generate()
@@ -3725,41 +3747,29 @@ impl State {
             if !matches!(var_tp, Type::Tuple(_) | Type::Function(_, _, _)) {
                 let pushed = stack.position.saturating_sub(stack_before);
                 let slot = size(&var_tp, &Context::Variable);
-                // Text: the value travels as a 16 B `Str` view; the put is
-                // the CONVERTING op (`OpAppendText` family) deep-copying
-                // into the 24 B owned `String` slot — pushed != slot by
-                // design, the same family as the fn-ref compensation above.
-                let text_conversion =
-                    matches!(var_tp, Type::Text(_)) && pushed == size(&var_tp, &Context::Argument);
-                // #493: the `pushed == slot` model holds only for RAW fixed-width
-                // puts (`OpPutInt`/`Float`/`Character`/`Single`/plain-enum), which
-                // copy the pushed bytes verbatim — the family the SIGSEGV that
-                // motivated this check belonged to (an 8 B integer overrunning a
-                // 4 B `i32` slot).  A CONVERTING put normalises the value to the
-                // slot width on store, so a wider eval-stack push is by design and
-                // cannot overrun the neighbouring slot:
-                //   * DbRef-family dests below (`OpPutRef`): store a 12 B DbRef, so
-                //     an interior-record push (`OpNewRecord`, 16 B, `t_4File_lines`
-                //     `_elm`) or a record/File call result is normalised.
-                //   * `Boolean` (`OpPutBool`): the value travels as an 8 B stack
-                //     bool; only the low byte is stored (`prev_cr` / `walked`).
-                // Text and fn-ref are the two already taught above/excluded.  This
-                // clears the DA warning flood these stdlib fns produced without
-                // weakening the raw-put overflow detection.
-                let converting_put = matches!(
-                    var_tp.base(),
-                    Type::Reference(_, _)
-                        | Type::Vector(_, _)
-                        | Type::Enum(_, true, _)
-                        | Type::Iterator(_, _)
-                        | Type::Sorted(_, _, _)
-                        | Type::Index(_, _, _)
-                        | Type::Hash(_, _, _)
-                        | Type::Spacial(_, _, _)
-                        | Type::RefVar(_)
-                        | Type::Boolean
-                );
-                if pushed != slot && pushed != 0 && !text_conversion && !converting_put {
+                // #493: the `pushed == slot` model holds ONLY for the RAW
+                // fixed-width stores — `OpPutInt` / `OpPutFloat` — which copy the
+                // pushed bytes verbatim and so can overrun a narrower neighbour
+                // (the SIGSEGV that motivated this check: an over-wide value in an
+                // integer slot).  EVERY other put NORMALISES the value to the slot
+                // width on store, so a wider (8-stepped) eval-stack push is by
+                // design and cannot overrun the neighbour:
+                //   * `OpPutRef` (Reference/Vector/keyed/Enum-payload/Iterator):
+                //     stores a 12 B DbRef — an `OpNewRecord` interior ref or a
+                //     record/File call result (16 B) is normalised.
+                //   * `OpPutBool` (1 B), `OpPutEnum` (plain enum, 1 B),
+                //     `OpPutSingle` (4 B), `OpPutCharacter` (4 B): store a fixed
+                //     narrow width from the 8 B stack value.
+                //   * `OpAppendText` (Text, incl. `text?`): deep-copies the 16 B
+                //     `Str` view into the 24 B `String` slot.
+                //   * fn-ref / tuple are excluded above.
+                // Restricting the check to the raw-put family clears the DA
+                // warning flood (t_4File_lines `_elm`, plain enums, `single`,
+                // `text?`, …) WITHOUT weakening the integer-overflow detection: an
+                // integer slot is 8 B, so a correct store matches and only a
+                // genuinely over-wide value (a 16 B text into an int slot) trips.
+                let raw_put = matches!(var_tp.base(), Type::Integer(_) | Type::Float);
+                if raw_put && pushed != slot && pushed != 0 {
                     // The model (pushed == Variable-slot width) is
                     // INCOMPLETE for several put-op families that pop a
                     // different width than the slot and compensate (the
