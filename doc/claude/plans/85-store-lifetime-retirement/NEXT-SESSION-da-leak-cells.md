@@ -121,33 +121,64 @@ built for this class, keep using it.
   emission first (`introspect`), then decide whether it folds into the eager-
   null-init retirement or needs its own free.
 
-## Also open from the DA map — a SEPARATE codegen-slot-correctness class (NOT leaks, NOT @PLN85's store-lifetime charter)
+## Also open from the DA map — a SEPARATE codegen-slot-correctness class (NOT leaks, NOT @PLN85's store-lifetime charter) — **filed as #493**
 
-These are the residual DA cells after the five leak cells closed.  They are
-slot-width / type-resolution / stale-DbRef bugs surfaced by the debug-assertions
-width-assert + exit dumper — **not** store-lifetime leaks — and all reproduce
-ONLY under a DA lib build (dev/release/CI have debug-assertions off, so none of
-these affect a shipped build).  Route as a distinct follow-up; @PLN85's leak
-retirement does not own them.
+These were the residual DA cells after the five leak cells closed: slot-width /
+type-resolution / stale-DbRef bugs surfaced by the debug-assertions width-assert +
+codegen asserts — **not** store-lifetime leaks — and all reproduce ONLY under a DA
+lib build (dev/release/CI have debug-assertions off, so none affect a shipped
+build).  Tracked as issue **#493**; the five enumerated cells are **CLOSED**
+(2026-07-04):
 
-- **stdlib slot-width producer** (`t_4File_lines` / `t_4text_split*`): `_elm_N`
-  for a text-slice append is MIS-TYPED `i_parse_errors` (a native fn's return
-  type) → pushes a 16 B text handle into a 12 B slot; `prev_cr`/`walked`
-  booleans push 8 B into 1 B.  ONE producer; its `[set_var] width mismatch`
-  warning FLOOD contaminates every output-comparison test under DA as a class
-  (`error_messages::baselines_are_locked_in`, `store_persist_loft`,
-  `exit_codes`/`wrap::dir` stderr).  Fixing the element-temp typing clears the
-  whole class.  (Standalone slice-append `myline` does NOT reproduce — the
-  mistyping is specific to the stdlib fns' resolution context.)
-- `exit_codes::p196_native_codegen_projects_fn_ref_d_nr` — native fn-ref d_nr
-  projection.
-- `generate_set` Var(0) self-reference parser bug (`native_scripts`,
-  `loft_suite`).
-- `generate_call` 8B/16B typed-slot mismatch.
-- `wrap::dir` `get_stack<DbRef>` OOB (corrupt DbRef, store_nr=30 of 3).
-- ~~`format.rs:1213` `types[65535]`~~ — **FIXED** as a byproduct of the p188
-  leak fix: the panic was the DA exit dumper rendering a leaked sentinel-typed
-  `sorted<>` store; removing the leak removes the render.
+- **width-mismatch FLOOD** (`t_4File_lines` / `t_4text_split*` `_elm`, plain
+  enums, `single`, `text?`, …) — **FIXED** (`codegen.rs` set_var width-check).
+  NB the original diagnosis was off: the `i_parse_errors` label is a harmless
+  `Reference(0)` fallback (def 0 renders as `i_parse_errors`), NOT the cause, and
+  retyping `_elm` would not silence it (a `Reference` slot is always 12 B).  The
+  warning is a **width-check false-positive**: `pushed` is the 8-stepped
+  eval-stack width, `slot` is the raw type size, so they disagree for every
+  CONVERTING put (OpPutRef 12 B, OpPutBool/Enum 1 B, OpPutSingle/Char 4 B,
+  OpAppendText).  Fix: restrict the check to the RAW-put family (`Integer`/
+  `Float` — the only stores that copy pushed bytes verbatim and can overrun),
+  which clears the whole flood and keeps the integer-overflow detection.
+- **`exit_codes::p196`** native fn-ref d_nr projection — **FIXED**: the
+  interpreter lowered a fn-ref tuple element into a 4 B d_nr field (OpSetInt4)
+  with OpVarFnRef (20 B); project only the d_nr with OpVarInt (`codegen.rs`
+  generate_call), mirroring native's `generation/calls.rs`.
+- **`generate_set` Var(0) self-reference** — **FIXED** (two roots): the `v = v[a..b]`
+  self-slice accumulator was freed uninitialised on an empty slice (null-init it
+  before the loop, `expressions.rs::materialize_iterator`); and an unknown
+  qualified enum variant (`Color::Bleu`) lowered to `c = c` (recover as a null
+  enum value, `objects.rs::parse_constant_value`).
+- **`generate_call` 8B/16B mismatch** — **FIXED**: a match arm whose pattern type
+  cannot convert to the subject (text literal vs int subject) emitted
+  `OpEqInt(int, "text")`; use the discarded `can_convert` result to emit a dead
+  `false` condition (`control.rs::parse_match_pattern`).
+- **`wrap::dir` `get_stack<DbRef>` OOB** — **FIXED**: `substitute_type` had no
+  `Optional` arm, so a generic `-> T?` kept the parametric `Optional(Reference(tv))`
+  return and mis-typed the return slot; add the `Optional`/`Tuple` arms
+  (`parser/mod.rs`, `variables/mod.rs`).
+- ~~`format.rs:1213` `types[65535]`~~ — FIXED earlier as a byproduct of the p188
+  leak fix.
+
+**Still open (beyond #493's enumerated scope — all PRE-EXISTING, verified panicking
+identically on `origin/main` 49baf726, so NOT regressions from the #493 fixes;
+they were masked in `wrap::loft_suite` by the p390 abort that now passes):**
+
+- `scopes.rs:2162` "H2 step-5 sentinel" `debug_assert!` — 6 scripts
+  (`450-struct-field-vector-return`, four `85-store-lifetime-*` return/borrow
+  cases, `repro_p365`).  Two of them use no slice/match at all, confirming it is
+  independent of the #493 fixes.
+- `state/text.rs:334` free_text "double free" — `85-store-lifetime-enum-match-borrowed-view-overfree`.
+- `compile.rs:303` — `75-native-stub`.
+
+DA-gate failures that are ENVIRONMENTAL, not code bugs: `store_persist_loft`
+(`store.rs:1838` store-reload assert when the spawned DA binary reloads);
+`wrap::library_suite` (audience_crystal); and `baselines_are_locked_in` (offline:
+registry auto-install DNS failure on `38_import_unknown_file`; and, when run via a
+`target-da/release/default` symlink, a stdlib path mismatch in error messages).
+
+To re-verify each standalone: `target-da/release/loft --path <repo> --interpret <script>`.
 
 ## How to re-verify the whole surface
 

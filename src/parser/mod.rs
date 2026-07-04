@@ -3252,6 +3252,15 @@ impl Parser {
                     .map(|e| Self::substitute_type(e, tv_nr, concrete))
                     .collect(),
             ),
+            // #493 — substitute through an `Optional` wrapper so a generic
+            // `<T>` returning `T?` (or with a `T?` param) monomorphises: without
+            // this arm `last_element<T>(…) -> T?` kept the parametric
+            // `Optional(Reference(tv))` return, typing the return slot as a 12 B
+            // DbRef while the body yields the 8 B scalar — a stale/garbage DbRef
+            // read on the interpreter (DA `get_stack<DbRef>` OOB) and an E0308 on
+            // native.  Mirrors the Vector/Tuple arms above; `Type::optional` is
+            // idempotent so it never double-wraps.
+            Type::Optional(inner) => Type::optional(Self::substitute_type(*inner, tv_nr, concrete)),
             other => other,
         }
     }

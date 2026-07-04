@@ -842,6 +842,18 @@ impl Function {
             Type::Vector(inner, deps) => {
                 Type::Vector(Box::new(Self::subst_type(*inner, tv_nr, concrete)), deps)
             }
+            // #493 — substitute through `Optional`/`Tuple` wrappers too, so a
+            // generic body with a `T?` / `(T, …)` local monomorphises like the
+            // signature does (mirrors `Parser::substitute_type`).  Missing this,
+            // such a local kept the parametric `Reference(tv)` form and read the
+            // wrong slot width at runtime.
+            Type::Optional(inner) => Type::optional(Self::subst_type(*inner, tv_nr, concrete)),
+            Type::Tuple(elems) => Type::Tuple(
+                elems
+                    .into_iter()
+                    .map(|e| Self::subst_type(e, tv_nr, concrete))
+                    .collect(),
+            ),
             _ => tp,
         }
     }

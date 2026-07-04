@@ -3467,6 +3467,17 @@ use a separate collection or add after the loop"
                 stmts.push(self.cl("OpClearVector", &[Value::Var(var_nr)]));
             }
             stmts.push(*init);
+            // #493 — null-init the transient accumulator BEFORE the loop.  The
+            // slice iterator's exhaustion branch frees the accumulator
+            // (`OpFreeText(for_var)`), which on an EMPTY slice (loop body never
+            // runs) would otherwise hit an uninitialised frame slot: garbage
+            // DbRef under a normal build, a first-Set self-reference + free_text
+            // double-free assert under debug-assertions.  Only text carries the
+            // free; the null-init also makes the loop's `for_var = next` a
+            // reassignment (text replace), not a self-referencing first-Set.
+            if matches!(elm_tp, Type::Text(_)) {
+                stmts.push(v_set(for_var, Value::Text(String::new())));
+            }
             stmts.push(v_loop(lp, "Slice materialise"));
             if needs_db {
                 let db = self.insert_new(var_nr, elm_var, &elm_tp, &mut stmts);
