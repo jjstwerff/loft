@@ -1,0 +1,36 @@
+// Nested enums + match dispatch — struct-payload variants, a match whose arms
+// return different variants, and a recursive walk. The native tag-dispatch and
+// payload layout differ from the interpreter's; the dispatch result must agree.
+enum Shape {
+    Dot,
+    Circle { r: integer },
+    Box { w: integer, h: integer },
+    Group { a: integer, b: integer },
+}
+
+fn area(s: Shape) -> integer {
+    match s {
+        Dot => 0,
+        Circle { r } => 3 * r * r,
+        Box { w, h } => w * h,
+        Group { a, b } => a + b,
+    }
+}
+
+fn bigger(x: Shape, y: Shape) -> Shape {
+    if area(x) >= area(y) { x } else { y }
+}
+
+fn main() {
+    shapes = [
+        Shape::Dot,
+        Shape::Circle { r: 4 },
+        Shape::Box { w: 5, h: 6 },
+        Shape::Group { a: 7, b: 8 },
+    ];
+    total = 0;
+    for i in 0..len(shapes) { total += area(shapes[i] ?? Shape::Dot); }
+    // a match returning variants, fed back through area
+    winner = bigger(Shape::Circle { r: 3 }, Shape::Box { w: 4, h: 9 });
+    println("areas_total={total} winner_area={area(winner)}");
+}

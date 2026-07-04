@@ -1,0 +1,24 @@
+// Deep recursion + large data — the native Rust call stack vs the interpreter's
+// frame stack, and a large vector-of-structs built and reduced. Exercises stack
+// depth, per-call frame lifetime, and heavy allocation/free; the reduced value
+// and the length must agree with no leak.
+struct Acc { n: integer, sum: integer }
+
+fn sum_to(n: integer) -> integer { if n <= 0 { 0 } else { n + sum_to(n - 1) } }
+
+fn build(n: integer) -> vector<Acc> {
+    out: vector<Acc> = [];
+    running = 0;
+    for i in 0..n { running += i; out += [Acc { n: i, sum: running }]; }
+    out
+}
+
+fn main() {
+    // deep-ish recursion (400 frames) — sum 1..400 = 80200
+    println("recur={sum_to(400)}");
+    // a large vector of structs, reduced two ways
+    v = build(300);
+    tot_n = 0;
+    for j in 0..len(v) { e = v[j] ?? Acc { n: 0, sum: 0 }; tot_n += e.n; }
+    println("len={len(v)} tot_n={tot_n} last_sum={(v[299] ?? Acc { n: 0, sum: 0 }).sum}");
+}
