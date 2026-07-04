@@ -497,6 +497,21 @@ jobs:
           echo "nextest filter: $FILTER"
           cargo nextest run --profile ci -E "$FILTER"
 
+      # @PLN89 differential oracle (formal/operational.md D-op-1/2): the full
+      # cross-backend agreement sweep — every `tests/oracle/*.loft` run on BOTH
+      # backends, asserting value / halt / leak AND accept-vs-reject (driver)
+      # agreement across `--dump` / `--interpret` / `--native`.  It is `#[ignore]`
+      # in the default suite (rustc per program is too heavy for the per-PR path),
+      # so it runs HERE on the DAILY schedule + push-to-main ONLY — never on a PR —
+      # and Linux-only (the comparison is platform-independent, no value 3×).  A
+      # caught divergence fails the nightly, visible within a day and off the PR
+      # critical path.  This is the automatic gate for the oracle that the manual
+      # `-- --ignored` run was standing in for.
+      - name: Differential oracle (nightly cross-backend sweep)
+        if: github.event_name != 'pull_request' && matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: cargo test --release --test differential_oracle -- --ignored --nocapture
+
       # A test that passed only on retry (`retries = 1` in the ci profile) is
       # a FINDING, not noise: the retry converted an intermittent real bug
       # into a green run (the scratch-reclaimer race was nearly invisible this
