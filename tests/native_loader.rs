@@ -160,6 +160,68 @@ fn main() {
     state.execute_argv("main", &p.data, &[]);
 }
 
+/// A `#native` fn declared with a NULLABLE scalar (`-> integer?`) must still
+/// wire: `Optional(τ)` shares τ's sentinel layout, so the marshal signature is
+/// the plain i64 and null (i64::MIN) crosses the boundary intact.  Pre-fix,
+/// the signature classified as un-marshallable, the symbol was never wired,
+/// and the call hit the stale-cdylib panic stub (found via loft-libs-core's
+/// `random.rand -> integer?`, loft-libs-core#14).  Wide/negative values ride
+/// the same i64 lane (`ext_echo`).
+#[test]
+fn wires_optional_integer_return_and_wide_values() {
+    use loft::compile::byte_code;
+    use loft::extensions;
+    use loft::scopes;
+    use loft::state::State;
+
+    let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let lib_path = match fixture_lib_path() {
+        Some(p) => p,
+        None => {
+            eprintln!(
+                "skipping: fixture cdylib not built — run: cd tests/lib/native_pkg/native && cargo build --release"
+            );
+            return;
+        }
+    };
+
+    let native_decl = r#"
+pub fn ext_maybe(x: integer) -> integer?;
+#native "loft_ext_maybe"
+pub fn ext_echo(x: integer) -> integer;
+#native "loft_ext_echo"
+"#;
+    let source = r#"
+fn main() {
+    assert(ext_maybe(41) == 42, "ext_maybe(41) should be 42, got {ext_maybe(41)}");
+    n = ext_maybe(-1);
+    assert(!n, "ext_maybe(-1) should be null (the i64::MIN sentinel must survive marshalling)");
+    assert(ext_echo(1099511627776) == 1099511627776, "2^40 must round-trip untruncated");
+    assert(ext_echo(-1099511627776) == -1099511627776, "-2^40 must round-trip untruncated");
+}
+"#;
+    let mut p = Parser::new();
+    let (data, db) = cached_default();
+    p.data = data;
+    p.database = db;
+    p.parse_str(native_decl, "native_decl", false);
+    p.parse_str(source, "test", false);
+    assert!(
+        p.diagnostics.is_empty(),
+        "diagnostics: {:?}",
+        p.diagnostics.lines()
+    );
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+
+    extensions::load_all(&mut state, vec![lib_path]);
+    extensions::wire_native_fns(&mut state, &p.data);
+
+    state.execute_argv("main", &p.data, &[]);
+}
+
 /// loft-lang/loft#409: a `vector<u8>` returned by an FFI bridge (built with
 /// `alloc_vector_from_bytes` — the null-store alloc path the crypto/imaging
 /// libs use) must survive an in-place `+=` by the caller.  Pre-fix the append

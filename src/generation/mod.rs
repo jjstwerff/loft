@@ -1318,12 +1318,14 @@ extern crate loft;"
                 // canonical set of heap types — the same union the interpreter
                 // marshals as a `LoftRef` handle (`compute_sig`); reuse it so
                 // both backends pass the identical ABI.
-                let returns_ref =
-                    matches!(def.returned(), Type::Vector(_, _) | Type::Reference(_, _));
+                let returns_ref = matches!(
+                    def.returned().base(),
+                    Type::Vector(_, _) | Type::Reference(_, _)
+                );
                 let has_ref_arg = def
                     .attributes()
                     .iter()
-                    .any(|a| !a.name.starts_with("__") && a.typedef.heap_dep().is_some());
+                    .any(|a| !a.name.starts_with("__") && a.typedef.base().heap_dep().is_some());
                 let mut sig = String::new();
                 if returns_ref || has_ref_arg {
                     sig.push_str("store: loft_ffi::LoftStore");
@@ -1339,15 +1341,23 @@ extern crate loft;"
                     // A heap-typed arg is passed by `LoftRef` handle — matched
                     // first so Vector and the keyed collections share the
                     // Reference convention (the interpreter's `ArgT::Ref`/`Vec`).
-                    if attr.typedef.heap_dep().is_some() {
+                    // ABI classification is layout-based, and `Optional(τ)` shares
+                    // τ's sentinel layout — classify the peeled type throughout.
+                    if attr.typedef.base().heap_dep().is_some() {
                         let _ = write!(sig, "{n}: loft_ffi::LoftRef");
                         continue;
                     }
-                    match &attr.typedef {
+                    match attr.typedef.base() {
                         Type::Text(_) => {
                             let _ = write!(sig, "{n}_ptr: *const u8, {n}_len: usize");
                         }
-                        Type::Integer(s) if s.is_wide() => {
+                        // A plain loft `integer` is 64-bit at the package C-ABI —
+                        // the SAME judgment as the interpreter marshal
+                        // (`extensions::compute_sig`, @P370): only an explicit
+                        // narrow integer (`forced_size`) is 4 bytes.  Deciding by
+                        // `is_wide()` here declared `i32` against an i64 cdylib,
+                        // silently truncating i64 values (the null sentinel → 0).
+                        Type::Integer(s) if s.forced_size.is_none() => {
                             let _ = write!(sig, "{n}: i64");
                         }
                         Type::Float => {
@@ -1366,9 +1376,9 @@ extern crate loft;"
                         }
                     }
                 }
-                let ret = match def.returned() {
+                let ret = match def.returned().base() {
                     Type::Void => String::new(),
-                    Type::Integer(s) if s.is_wide() => " -> i64".to_string(),
+                    Type::Integer(s) if s.forced_size.is_none() => " -> i64".to_string(),
                     Type::Integer(_) | Type::Character => " -> i32".to_string(),
                     Type::Float => " -> f64".to_string(),
                     Type::Single => " -> f32".to_string(),
@@ -3401,9 +3411,11 @@ extern crate loft;"
             let first_ref_arg = def
                 .attributes
                 .iter()
-                .find(|a| !a.name.starts_with("__") && a.typedef.heap_dep().is_some());
-            let returns_loft_ref =
-                matches!(def.returned(), Type::Vector(_, _) | Type::Reference(_, _));
+                .find(|a| !a.name.starts_with("__") && a.typedef.base().heap_dep().is_some());
+            let returns_loft_ref = matches!(
+                def.returned().base(),
+                Type::Vector(_, _) | Type::Reference(_, _)
+            );
             if returns_loft_ref || first_ref_arg.is_some() {
                 // Phase 1 fallback: graceful loft-aware stub for any
                 // store-mutating #native fn that doesn't have a bridge
@@ -3415,7 +3427,7 @@ extern crate loft;"
                     "  // @P321c browser-WASM Phase 1 stub: graceful no-op (no bridge registered for {})",
                     def.native()
                 )?;
-                match def.returned() {
+                match def.returned().base() {
                     Type::Void => {}
                     Type::Boolean => writeln!(w, "  0u8")?, // @PLN17: u8 storage form
                     Type::Integer(_) | Type::Float | Type::Single => writeln!(w, "  0")?,
@@ -3452,7 +3464,7 @@ extern crate loft;"
             if attr.name.starts_with("__") {
                 continue;
             }
-            if let Type::Vector(_, _) = &attr.typedef {
+            if let Type::Vector(_, _) = attr.typedef.base() {
                 let var = sanitize(&attr.name);
                 writeln!(
                     w,
@@ -3498,12 +3510,15 @@ extern crate loft;"
         let first_ref_arg = def
             .attributes
             .iter()
-            .find(|a| !a.name.starts_with("__") && a.typedef.heap_dep().is_some());
+            .find(|a| !a.name.starts_with("__") && a.typedef.base().heap_dep().is_some());
         // `returns_loft_ref` drives the RETURN conversion (`from_loft_ref`);
         // `needs_loft_store` drives the store-handle + guard + `_ls` first arg.
         // They diverge for a Reference-arg fn with a scalar return (imaging's
         // `load_png` returns `boolean`): store handle yes, return conversion no.
-        let returns_loft_ref = matches!(def.returned(), Type::Vector(_, _) | Type::Reference(_, _));
+        let returns_loft_ref = matches!(
+            def.returned().base(),
+            Type::Vector(_, _) | Type::Reference(_, _)
+        );
         let needs_loft_store = returns_loft_ref || first_ref_arg.is_some();
         if needs_loft_store {
             // Order matters: extract `store_nr` as a SEPARATE statement so it
@@ -3531,10 +3546,10 @@ extern crate loft;"
             )?;
         }
 
-        let needs_ret_cast = matches!(def.returned(), Type::Integer(_));
+        let needs_ret_cast = matches!(def.returned().base(), Type::Integer(_));
         // @PLN17: external Rust fns use `bool`; loft's boolean storage form is u8.
         // Wrap a boolean return `(call) as u8`; boolean args coerce `u8 -> bool` below.
-        let needs_bool_ret = matches!(def.returned(), Type::Boolean);
+        let needs_bool_ret = matches!(def.returned().base(), Type::Boolean);
         // P244 / @PLN10 N2: `text`-returning natives return `loft_ffi::LoftStr`
         // from the extern.  Capture it as a typed local, copy its bytes into an
         // OWNED `String`, and return that directly — the wrapper signature is
@@ -3542,7 +3557,7 @@ extern crate loft;"
         // caller bridges `String` → `Str` via `Deref` (the @P304 path).  The
         // original P244 fix borrowed a `Str` from `stores.scratch`; N2 retired
         // the scratch hop (owned, freed at scope end — no program-lifetime leak).
-        let needs_text_wrap = matches!(def.returned(), Type::Text(_));
+        let needs_text_wrap = matches!(def.returned().base(), Type::Text(_));
         if needs_ret_cast || needs_bool_ret {
             write!(w, "  (unsafe {{ {qualified_symbol}(")?;
         } else if needs_text_wrap {
@@ -3572,7 +3587,7 @@ extern crate loft;"
                 continue;
             }
             let var = sanitize(&attr.name);
-            match &attr.typedef {
+            match attr.typedef.base() {
                 Type::Text(_) => {
                     if !first {
                         write!(w, ", ")?;
