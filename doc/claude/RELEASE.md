@@ -146,8 +146,17 @@ current `main` tip before working the list.
 
 **B. Public face — the website must not ship stale or broken (elevated 2026-07-04):**
 
-- [ ] **🔴 BLOCKER — Brick Buster `--html` render REGRESSED; the hero cannot be
-  freshly rebuilt.** Investigated 2026-07-04 (network + headless chromium): the
+- [ ] **🟠 BLOCKER — Brick Buster `--html` render: root cause FIXED, one residual.**
+  The vector-arg host-import elision is **FIXED** (commit e8e13234, `src/generation/`):
+  a fresh `make game` now imports all 3 GL buffer natives and the render went from
+  BLANK (1 colour) to the brick grid + paddle drawing (6 colours). Regression guard:
+  `tests/html_gl_imports.rs` + `tools/wasm_imports.mjs` (browser-free — parses the wasm
+  import table; skips offline). **Residual before the hero can ship:** the render is
+  6 colours, still under the gate's 20 — sprites/text draw dim/untextured, likely the
+  atlas `vector<integer>` upload (`gl_upload_canvas`) or the `integer` i32→i64 width in
+  the texture-pixel path. Keep NOT committing a rebuilt hero until the render gate
+  passes (≥20). Original investigation below.
+- [ ] ~~**🔴 render REGRESSED; hero cannot be freshly rebuilt.**~~ Investigated 2026-07-04 (network + headless chromium): the
   committed `doc/brick-buster.html` (last good build ~2026-06-13) renders
   correctly (headless render gate PASSES, 128 distinct colours), but **`make game`
   from current source produces a bundle whose canvas renders BLANK** — it clears
