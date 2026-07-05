@@ -862,18 +862,22 @@ fn record_copy_is_covered_by_the_verdict() {
 // (`_`-prefixed) is `Internal` — a developer-worklist copy excluded from the user report.
 const SURVIVAL_SRC: &str = r#"
 struct Wrap { data: vector<integer> }
-fn mk() -> Wrap { Wrap { data: [1, 2, 3] } }
 fn cmove() { inner: vector<integer> = [1,2,3]; s = Wrap { data: inner }; print("{s.data[0]}\n"); }
 fn csurv() { inner: vector<integer> = [1,2,3]; s = Wrap { data: inner }; print("{inner[0]} {s.data[0]}\n"); }
 fn cmut()  { inner: vector<integer> = [1,2,3]; s = Wrap { data: inner }; inner += [4]; print("{s.data[0]} {inner[3]}\n"); }
-fn internal_src(v: vector<Wrap>) -> vector<Wrap> { r = v; r += [mk()]; r }
+fn nested_internal() {
+    // The inner `[..]` of a nested-vector comprehension materialises into a compiler temp
+    // (`_elm_N`), which is then the SOURCE of the element copy → Internal (item 1).
+    vv: vector<vector<integer>> = [for i in 0..4 { [i, i * 2] }];
+    print("{len(vv)}\n");
+}
 fn recset() {
     v: vector<Wrap> = [Wrap { data: [0] }];
     e = Wrap { data: [1, 2, 3] };
     v[0] = e;
     print("{v[0].data[0]}\n");
 }
-fn main() { cmove(); csurv(); cmut(); a = internal_src([]); recset(); print("{len(a)}\n"); }
+fn main() { cmove(); csurv(); cmut(); nested_internal(); recset(); }
 "#;
 
 /// Like `dump`, but with the survival split flag on.
@@ -914,7 +918,7 @@ fn survival_split_bound_vs_unbound_and_internal() {
     assert_bucket(&stderr, "cmove", "implicit"); // move: source consumed
     assert_bucket(&stderr, "csurv", "AVOIDABLE"); // unbound, read-only survivor
     assert_bucket(&stderr, "cmut", "forced"); // unbound, mutated after
-    assert_bucket(&stderr, "internal_src", "internal"); // `_`-prefixed (mk() result) source
+    assert_bucket(&stderr, "nested_internal", "internal"); // `_elm_N` inner-comprehension source
 
     // Item 1: the Internal row must NOT leak into the user-facing worklist tally — the
     // internal copy is counted separately, never as avoidable/forced for the user.

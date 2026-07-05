@@ -109,6 +109,36 @@ fn projection_ops(data: &Data) -> HashSet<u32> {
     )
 }
 
+/// @PLN90 item 3 — ops that WRITE THROUGH THEIR FIRST ARGUMENT (mirrors the
+/// `first_arg_write` set in `parser::find_written_vars`). Used to build `mut_max_pos`,
+/// the position-aware "the source is mutated after the copy" fact. `OpCopyRecord` writes
+/// its SECOND arg (the dest), handled separately.
+fn first_arg_write_ops(data: &Data) -> HashSet<u32> {
+    let mut s = HashSet::new();
+    for d in 0..data.definitions() {
+        let n = data.def(d).name();
+        if n.starts_with("OpSet")
+            || n.starts_with("OpAppendStack")
+            || n.starts_with("OpClearStack")
+            || matches!(
+                n,
+                "OpNewRecord"
+                    | "OpAppendCopy"
+                    | "OpAppendVector"
+                    | "OpClearVector"
+                    | "OpClearKeyed"
+                    | "OpSetKeyed"
+                    | "OpHashRemove"
+                    | "OpInsertVector"
+                    | "OpRemoveVector"
+            )
+        {
+            s.insert(d);
+        }
+    }
+    s
+}
+
 /// VALUE-READER ops return a fresh value, not a reference into a container — their
 /// arguments are pure reads regardless of the surrounding context.
 fn value_reader_ops(data: &Data) -> HashSet<u32> {
@@ -157,6 +187,8 @@ struct Uses {
     op_copy_record: u32,
     projections: HashSet<u32>,
     value_readers: HashSet<u32>,
+    /// @PLN90 item 3 — ops that write through their first argument (see `first_arg_write_ops`).
+    write_first_arg: HashSet<u32>,
     /// Pre-order position counter — a total order on nodes that, OUTSIDE loops,
     /// matches execution order (Tier 1 uses it to prove a source is unmutated
     /// after the copy-fill). Bumped once per visited node.
@@ -173,6 +205,14 @@ struct Uses {
     /// (`OpAppendVector` / `OpCopyRecord`) carry no span themselves, so a copy site borrows the
     /// most recent spanned node's position. Updated (when `track_pos`) at every spanned node.
     cur_pos: Option<Position>,
+    /// @PLN90 item 3 — the max position at which a var is actually WRITTEN (a `Set` target, an
+    /// append/insert target, a record-copy target). Unlike `other_max_pos` (any non-reader use,
+    /// which counts a read-only pass-to-callee or being another copy's source), this counts only
+    /// real mutations — so "the source is mutated AFTER the copy" (⇒ a borrow is unsound ⇒
+    /// Forced) is precise, and a read-only survivor stays Avoidable. Only tracked when
+    /// `track_pos` (read solely by `survival_class`); `other_max_pos` is left untouched so the
+    /// shipped var-buffer elision stays byte-identical.
+    mut_max_pos: HashMap<u16, usize>,
     /// Max position at which a var appeared in a NON-reader (write / escape /
     /// pass-to-callee) position — EXCLUDING the benign scope ops (`OpFreeRef` /
     /// `Drop`) and the copy-fill itself. For a source `x`, "all such positions <
@@ -236,6 +276,17 @@ pub struct ElidePlan {
 }
 
 impl Uses {
+    /// @PLN90 item 3 — record a real WRITE of `base` at `pos` (max). Only tracked when
+    /// `track_pos` (read solely by `survival_class`), so the default path is unaffected.
+    fn mark_write(&mut self, base: Option<u16>, pos: usize) {
+        if self.track_pos
+            && let Some(v) = base
+        {
+            let e = self.mut_max_pos.entry(v).or_insert(0);
+            *e = (*e).max(pos);
+        }
+    }
+
     fn visit(&mut self, node: &Value, ctx: Ctx) {
         let pos = self.pos;
         self.pos += 1;
@@ -245,6 +296,16 @@ impl Uses {
             && let Some(p) = node.span_pos()
         {
             self.cur_pos = Some(p.clone());
+        }
+        // @PLN90 item 3 — record a REAL write of a var at this position, for `mut_max_pos` (the
+        // Forced test). Covers every write op (first-arg family + `OpCopyRecord`'s second-arg
+        // dest); the `Set` arm below adds reassign targets. Gated inside `mark_write`.
+        if let Value::Call(d, args) = node.unspan() {
+            if self.write_first_arg.contains(d) {
+                self.mark_write(args.first().and_then(|a| base_var(a, self.get_field)), pos);
+            } else if *d == self.op_copy_record {
+                self.mark_write(args.get(1).and_then(|a| base_var(a, self.get_field)), pos);
+            }
         }
         match node.unspan() {
             Value::Var(v) => {
@@ -275,6 +336,9 @@ impl Uses {
             Value::Drop(_) => {}
             Value::Set(v, rhs) => {
                 *self.def_count.entry(*v).or_insert(0) += 1;
+                // @PLN90 item 3 — a `Set` writes `v` (its def is before any copy of it; a
+                // reassign after a copy is the mutation that forces the copy to be independent).
+                self.mark_write(Some(*v), pos);
                 // Fresh-buffer def: `v = OpGetField(vdb, 0, _)` where vdb is OpDatabase'd.
                 if let Value::Call(d, args) = rhs.unspan()
                     && *d == self.get_field
@@ -286,7 +350,8 @@ impl Uses {
                 self.visit(rhs, Ctx::ReaderArg);
             }
             Value::Call(d, args) if *d == self.op_append => {
-                // `OpAppendVector(target, src, rec_tp)`.
+                // `OpAppendVector(target, src, rec_tp)`. (The append target's write is recorded
+                // by the general write-mark at the top of `visit`.)
                 if let Some(Value::Var(v)) = args.first().map(Value::unspan) {
                     // Copy-fill into a plain local — record the source base; do NOT
                     // mark `v` ineligible (this append IS the copy, not a user write).
@@ -352,14 +417,15 @@ impl Uses {
                 }
             }
             Value::Call(d, args) if *d == self.op_copy_record => {
-                // @PLN90 — `OpCopyRecord(target, source, tp)` deep-copies one record. Record
-                // it for coverage, skipping the same-var no-op alias (`OpCopyRecord(x, x)`,
-                // the ref_return-promoted callee whose return aliases its buffer — the
-                // runtime short-circuits it). Visit args exactly as the generic Call arm
-                // would, so no existing fact changes.
-                let tgt = args.first().and_then(|a| base_var(a, self.get_field));
-                let src = args.get(1).and_then(|a| base_var(a, self.get_field));
-                let record = !(tgt.is_some() && tgt == src);
+                // @PLN90 — `OpCopyRecord(source, dest, tp)` deep-copies one record: arg 0 is the
+                // SOURCE (`data`), arg 1 is the DEST (`to`) — verified against `State::copy_record`
+                // (io.rs) and `parser::find_written_vars` (dest = second arg). The survival split
+                // classifies the SOURCE's fate, and the row's target/name is the DEST. Skip the
+                // same-var no-op alias (`OpCopyRecord(x, x)` — the runtime short-circuits it).
+                // The dest's write is recorded by the general write-mark at the top of `visit`.
+                let src = args.first().and_then(|a| base_var(a, self.get_field));
+                let dest = args.get(1).and_then(|a| base_var(a, self.get_field));
+                let record = !(dest.is_some() && dest == src);
                 let in_loop = self.loop_depth > 0;
                 let c = if self.value_readers.contains(d) {
                     Ctx::ReaderArg
@@ -370,10 +436,11 @@ impl Uses {
                     self.visit(a, c);
                 }
                 // Position AFTER the args: a later use of the source ⇒ it survives. The
-                // `OpCopyRecord` carries no span, so borrow the nearest enclosing one.
+                // `OpCopyRecord` carries no span, so borrow the nearest enclosing one. The row's
+                // target/name is the DEST; the classified var is the SOURCE (`src`).
                 if record {
                     self.record_copy
-                        .push((tgt, src, self.pos, in_loop, self.cur_pos.clone()));
+                        .push((dest, src, self.pos, in_loop, self.cur_pos.clone()));
                 }
             }
             Value::Call(d, args) => {
@@ -423,6 +490,7 @@ fn analyze_fn(
         op_copy_record: data.def_nr("OpCopyRecord"),
         projections: projection_ops(data),
         value_readers: value_reader_ops(data),
+        write_first_arg: first_arg_write_ops(data),
         ineligible: HashSet::new(),
         def_count: HashMap::new(),
         database_vars: HashSet::new(),
@@ -433,6 +501,7 @@ fn analyze_fn(
         loop_depth: 0,
         track_pos: survival_on,
         cur_pos: None,
+        mut_max_pos: HashMap::new(),
         other_max_pos: HashMap::new(),
         copyfill_pos: HashMap::new(),
         copyfill_in_loop: HashSet::new(),
@@ -700,15 +769,21 @@ fn survival_class(
                 "move: source consumed at the copy — its single backing transfers",
             );
         }
-    } else if u.other_max_pos.get(&s).is_some_and(|&p| p > copy_end) {
-        // A non-reader use (write / escape / pass-to-mutating-callee) after the copy means the
-        // source cannot be safely aliased → the independent copy is forced.
+    } else if u.mut_max_pos.get(&s).is_some_and(|&p| p > copy_end) {
+        // @PLN90 item 3 — the source is genuinely WRITTEN after the copy (reassigned, appended
+        // to, record-copied into): a borrow would let that mutation leak into the copy's owner,
+        // so the independent copy is forced. This is precise — unlike the old `other_max_pos`
+        // test it does NOT count a read-only pass-to-callee or being another copy's source.
+        // (Residual, conservative-toward-Avoidable: a field-write / mutating-callee on a
+        // single-def LOCAL is not caught here → shows Avoidable; the phase-B elision analysis
+        // is the real borrow checker and rejects an unsound candidate, so a false-Avoidable is
+        // safe for the worklist.)
         (
             CopyClass::Forced,
-            "unbound: source survives AND is mutated/escapes after — an independent copy is required",
+            "unbound: source survives AND is written after — an independent copy is required",
         )
     } else {
-        // A read-only survivor — the avoidable worklist (a borrow would have sufficed).
+        // A read-only survivor (read, or passed read-only) — the avoidable worklist.
         (
             CopyClass::Avoidable,
             "unbound: source survives read-only — a borrow/move would avoid this copy",

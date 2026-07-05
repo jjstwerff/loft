@@ -7,12 +7,13 @@
 //   construct_survives      → AVOIDABLE (unbound — source survives read-only; a borrow would avoid it)
 //   construct_survives_mut  → forced    (unbound — source survives AND is mutated after)
 //   construct_literal       → (no row — a literal source is born-owned, nothing duplicated)
-//   internal_src            → internal  (item 1: the copy's source is a compiler temp, mk()'s
-//                                        result; a developer-worklist copy excluded from the user report)
+//   nested_internal         → internal  (item 1: the inner `[..]` of a nested-vector comprehension
+//                                        materialises into a `_elm_N` temp that is the copy SOURCE;
+//                                        a developer-worklist copy excluded from the user report)
+// construct_survives_mut is FORCED because item 3's write fact (`mut_max_pos`) catches the
+// `inner += [4]` append; a read-only survivor (construct_survives) stays Avoidable.
 // Flag OFF → every construction copy stays Implicit (byte-identical to phase 1).
 struct Wrap { data: vector<integer> }
-
-fn mk() -> Wrap { Wrap { data: [1, 2, 3] } }
 
 fn construct_move() {
     inner: vector<integer> = [1, 2, 3];
@@ -34,16 +35,16 @@ fn construct_literal() {
     s = Wrap { data: [7, 8, 9] };        // literal source → born-owned (silent)
     println("{s.data[0]}");
 }
-fn internal_src(v: vector<Wrap>) -> vector<Wrap> {
-    r = v;
-    r += [mk()];                         // source = mk()'s result (a compiler temp) → INTERNAL
-    r
+fn nested_internal() {
+    // The inner `[..]` materialises into a compiler temp (`_elm_N`), which is the SOURCE of the
+    // element copy into `vv` → INTERNAL (excluded from the user report).
+    vv: vector<vector<integer>> = [for i in 0..4 { [i, i * 2] }];
+    println("{vv.len()}");
 }
 fn main() {
     construct_move();
     construct_survives();
     construct_survives_mut();
     construct_literal();
-    a = internal_src([]);
-    println("{a.len()}");
+    nested_internal();
 }

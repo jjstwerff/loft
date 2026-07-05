@@ -36,15 +36,24 @@ survives+mutated → forced (both backends, value-clean).
 
 ## The survey — 371 `tests/scripts/*.loft`, deduped
 
-| bucket | rows (pre item 1) | rows (**after item 1**) | meaning |
-|---|---|---|---|
-| **Forced** | 152 | **29** | unbound copy, source mutated/escapes after — required as written |
-| **Implicit** (move/literal) | 73 | 73 | silent — no unbound structure produced |
-| **Avoidable** | 21 | **6** | a borrow/move would remove it — the drain worklist |
-| **Internal** (item 1) | — | **139** | copy of a compiler-generated source — developer worklist, **not** user-facing |
+| bucket | pre item 1 | after item 1 | **after item 3** | meaning |
+|---|---|---|---|---|
+| **Forced** | 152 | 29 | **1** | unbound copy, source **written** after — required as written |
+| **Implicit** (move/literal) | 73 | 73 | **203** | silent — no unbound structure produced |
+| **Avoidable** | 21 | 6 | **39** | a borrow/move would remove it — the drain worklist |
+| **Internal** (item 1) | — | 139 | **10** | copy of a compiler-generated source — developer worklist, **not** user-facing |
 
-The **user-facing indicated set** (Avoidable + Forced) is now **35** rows (was 173): item 1
-moved 139 compiler-generated-source copies out of the user report and into `Internal`.
+The **user-facing indicated set** (Avoidable + Forced) is now **40** rows.
+
+> **Item 3 uncovered a latent phase-1 bug — the `OpCopyRecord` source/dest were swapped.**
+> `OpCopyRecord(source=arg0, dest=arg1)` (verified against `State::copy_record` + `find_written_vars`),
+> but the phase-1 `record_copy` recorder labelled `tgt=arg0, src=arg1` — so the survival split had
+> been classifying the **destination**, not the source. Fixing the swap re-drew every bucket: most
+> record-copy sources are literals/moves → `implicit` (73→203); the true compiler-generated
+> **sources** are only 10 (not 139 — that was the mislabelled dests); and the genuine read-only
+> survivors surface as a real 39-row `Avoidable` worklist. `Forced` collapsing to 1 is correct —
+> "copy a value then mutate the source" is genuinely rare. Codegen unaffected (record rows never
+> produce an `ElidePlan`); full suite green.
 
 - **stdlib baseline = 0.** An empty program emits **no** unbound construction/record copies —
   the stdlib's own construct/record copies are all moves/literals. The split does not indict
@@ -82,12 +91,19 @@ issue, not a soundness one:
    a *nearest-statement* approximation, not a precise sub-expression span. Guard extended:
    `survival_split_bound_vs_unbound_and_internal` asserts a located `recset` copy row + that the
    flag-off dump carries no ` at ` suffix (byte-identical).
-3. **Tighten the Avoidable/Forced split (the 152 Forced is inflated).** `mutated/escapes after`
-   keys on `other_max_pos > copy_end`, which counts **any** non-reader use after the copy —
-   including passing `src` to a read-only callee. That over-classifies genuine avoidables as
-   Forced. The bound/unbound cut is unaffected; only the sub-split (worklist vs informational)
-   needs the mutation fact sharpened (reuse the parser's interprocedural `find_written_vars`
-   for the source, as the var-buffer path already does for `¬D2`).
+3. **~~Tighten the Avoidable/Forced split.~~ ✅ DONE (commit pending).** The old test keyed on
+   `other_max_pos > copy_end` (**any** non-reader use — a read-only pass-to-callee or being
+   another copy's source counted as "escape"), inflating Forced. Replaced with a **position-aware
+   write fact** `mut_max_pos` — the max position a var is actually *written* (a `Set` target, or
+   any first-arg-write op / `OpCopyRecord` dest, via a new `write_first_arg` set mirroring
+   `find_written_vars`). Forced now = source survives **and is written after the copy**;
+   read-only survivors (incl. read-only callee args) are Avoidable. `other_max_pos` is left
+   untouched so the shipped var-buffer elision stays byte-identical. **En route this fixed the
+   `OpCopyRecord` source/dest swap** (see the survey table note) — the two together re-drew the
+   distribution to Forced=1 / Avoidable=39 / Internal=10. Residual (conservative-toward-Avoidable,
+   safe): a source passed to a *mutating callee* after the copy isn't caught (a false-Avoidable
+   the phase-B elision — the real borrow checker — rejects). Guard: the corpus `cmut`
+   (`inner += [4]`) → Forced pins the write-detection.
 4. **Real in-loop survival (the caveat rows).** The `in-loop copy` reason conservatively marks a
    loop-body copy as surviving. A per-iteration *local* source (`for i { x = mk(); v[i] = x }`)
    is actually a move; only a source defined **outside** the loop truly survives. Needs the
