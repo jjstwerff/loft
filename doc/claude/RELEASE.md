@@ -579,6 +579,30 @@ Do not push release tags, trigger release workflows, draft GitHub Releases, or
 run `cargo publish` programmatically.  Always wait for the owner to do this
 manually after completing the validation checklist below.
 
+### Tag & publish — the mechanics (draft-first, under immutable releases)
+
+The org enforces **immutable releases**: a release's assets freeze the moment it
+is published and cannot be added afterwards.  So the four platform bundles MUST be
+attached while the release is still a **draft**.  The pipeline is built around this
+ordering — the owner never publishes an empty release and then waits for binaries:
+
+1. **Push the annotated tag** — `git tag -a vX.Y.Z -m "…" && git push origin vX.Y.Z`.
+   The tag push (not a published release) is what triggers `release.yml`.
+2. **Let CI build the draft.**  `release.yml` builds all four targets (linux-musl,
+   macos-x64, macos-arm64, windows-msvc) and creates the GitHub release as a
+   **draft** with every bundle + `.sha256` attached and notes generated.  If any
+   build leg fails, no draft appears — investigate, don't ship a partial release.
+3. **Review, then publish.**  Open the draft: confirm the four bundles are present
+   (smoke-test each per step 10), edit the title/body if wanted, then click
+   **Publish**.  Only this click freezes the release — by which point the binaries
+   are already attached.  Publishing an existing-tag draft does not re-trigger the
+   build.
+
+**Never** create-and-publish a release in one step (the pre-2026.7 flow):
+publishing creates the tag and freezes the release before the binaries are built,
+so immutable releases then reject the upload — v2026.7.0 shipped binary-less
+exactly this way.
+
 ---
 
 ## Pre-Release Documentation Review
@@ -759,14 +783,16 @@ The registry ([PKG_REGISTRY.md](PKG_REGISTRY.md)) is the trusted distribution
 point, so the toolchain itself ships through it — signed, with checksums users
 can verify offline.
 
-- **Build a release `loft` binary per supported target** (per-OS CI runners or a
-  cross toolchain):
-  - `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`
+- **Build a release bundle per supported target.**  `release.yml` does this
+  automatically on a tag push (see § "Tag & publish" above) via
+  `scripts/make-release.sh`, building the four shipped triples:
+  - `x86_64-unknown-linux-musl`
   - `x86_64-apple-darwin`, `aarch64-apple-darwin`
   - `x86_64-pc-windows-msvc`
-  - `cargo build --release --bin loft --target <triple>` (same `--lib --bin loft`
-    rlib caveat as `library-ci.yml.example` if native-compiling is exercised).
-- **Attach each binary to the GitHub release** as `loft-<version>-<triple>(.exe)`.
+  - (no `aarch64-unknown-linux-*` yet — add a matrix row when it is needed.)
+- **Each bundle is a self-contained zip** — `bin/loft` + `default/` stdlib +
+  examples + `loft-reference.pdf` + `stdlib.manifest` + `SHA256SUMS` — attached to
+  the **draft** release as `loft-<version>-<triple>.zip` (+ its `.zip.sha256`).
 - **Checksums:**
   - sha256 of every binary.
   - sha256 of the bundled stdlib — a manifest over `default/*.loft` (each file +
@@ -779,9 +805,11 @@ can verify offline.
   Verify a clean-host `loft install` (or self-update) resolves a binary, checks its
   signature + sha256, and the stdlib digest matches.
 
-This is `[build]` — the per-OS build matrix + the registry release-entry schema +
-the stdlib-manifest tool do not exist yet (open work; cross-link from
-PKG_REGISTRY.md § Open work).
+The **build + attach + per-bundle checksum + stdlib manifest** half is
+implemented in `release.yml` (draft-first — see § "Tag & publish").  Still
+`[build]` (open work): the registry release-entry schema (the signed `index.json`
+entry above) and the automated `loft install` / self-update path — cross-link
+from PKG_REGISTRY.md § Open work.
 
 ---
 
