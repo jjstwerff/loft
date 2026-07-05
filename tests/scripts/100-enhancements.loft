@@ -133,7 +133,9 @@ fn test_ref_vector_append_and_mutate() {
 
 struct P160Item { px: integer }
 
-fn set_p160(item: &P160Item, val: integer) { item.px = val; }
+// A vector element passed by value still aliases the caller's element (reference-default),
+// so field mutation propagates without `&` — this is the P160 contract.
+fn set_p160(item: P160Item, val: integer) { item.px = val; }
 
 fn test_vec_element_as_ref_param() {
   items: vector<P160Item> = [P160Item { px: 0 }, P160Item { px: 0 }, P160Item { px: 0 }];

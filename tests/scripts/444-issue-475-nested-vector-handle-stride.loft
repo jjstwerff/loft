@@ -47,7 +47,7 @@ fn test_local_iteration() {
 // mutated through a `&` reference parameter.
 struct Ent { coord: text, idx: integer }
 struct G { m: hash<Ent[coord]>, adj: vector<vector<integer>> }
-fn add(g: &G, i: integer, x: integer) { g.adj[i] += [x]; }
+fn add(g: G, i: integer, x: integer) { g.adj[i] += [x]; }
 
 fn test_struct_ref_with_hash() {
   n = 300;

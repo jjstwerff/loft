@@ -206,7 +206,7 @@ pub fn lookup_main_birth(state: CrystalState,
 // that hasn't been recorded yet.  Caller invokes this whenever the
 // world changes (paint added, paint cleared) with the current tick.
 // `parent` comes from `assign_cells(snap)`.
-pub fn update_state(state: &CrystalState, snap: CellSnap, tick: integer) {
+pub fn update_state(state: CrystalState, snap: CellSnap, tick: integer) {
   parent = assign_cells(snap);
   for us_i in 0..len(snap.xs) {
     if parent[us_i] != us_i { continue; }   // skip supporters
@@ -641,7 +641,7 @@ pub const CRYSTAL_HALO_K      = 2;   // crystal reads neighbours ≤ dist 2
 // is contextual-only for this rule — reads go through `cidx` directly.
 pub fn crystal_cell_segments(snap: CellSnap, cidx: hash<CellRef[ck]>,
                              state: CrystalState, tick: integer,
-                             cs_i: integer, m: &SegMesh) {
+                             cs_i: integer, m: SegMesh) {
   branch_base = HEX_SIZE * BRANCH_LEN_BASE;
   branch_spacing_world = HEX_SIZE * BRANCH_SPACING;
   deg30 = PI / 6.0;
@@ -831,7 +831,7 @@ pub struct CrystalIncr {
 
 // Re-run the rule for the given chunk inputs, upserting each into the cache
 // (unchanged chunks are left untouched = reused).
-fn crystal_incr_rebuild_chunks(c: &CrystalIncr, inputs: vector<ChunkInput>,
+fn crystal_incr_rebuild_chunks(c: CrystalIncr, inputs: vector<ChunkInput>,
                                state: CrystalState, tick: integer) {
   for ci in inputs {
     cm = build_crystal_chunk(c.snap, c.field.cidx, state, tick, ci);
@@ -872,7 +872,7 @@ pub fn crystal_incr_new(snap: CellSnap, chunk_shift: integer, group_dim: integer
 
 // Paint one cell — appends to the snapshot AND the field (marks the cell's
 // chunk + halo-border neighbours dirty).  Rebuild applies the change.
-pub fn crystal_incr_paint(c: &CrystalIncr, x: integer, y: integer, color: integer) {
+pub fn crystal_incr_paint(c: CrystalIncr, x: integer, y: integer, color: integer) {
   c.snap.xs += [x]; c.snap.ys += [y]; c.snap.colors += [color];
   field_add_cell(c.field, x, y);
 }
@@ -882,7 +882,7 @@ pub fn crystal_incr_paint(c: &CrystalIncr, x: integer, y: integer, color: intege
 // rebuild re-emits the affected chunks WITHOUT it.  Flows through the SAME
 // crystal_incr_rebuild path as a paint.  The snap slot is left orphaned (cell
 // indices stay stable — the projector's per-cell bloom births key on them).
-pub fn crystal_incr_erase(c: &CrystalIncr, x: integer, y: integer) {
+pub fn crystal_incr_erase(c: CrystalIncr, x: integer, y: integer) {
   field_remove_cell(c.field, x, y);
 }
 
@@ -890,7 +890,7 @@ pub fn crystal_incr_erase(c: &CrystalIncr, x: integer, y: integer) {
 // the field's cell index) and mark the cell's chunk dirty so the next rebuild
 // re-emits it with the new colour.  The cell stays in place (no index change),
 // so this is cheaper than an erase+paint.  A miss (no cell at (x,y)) is a no-op.
-pub fn crystal_incr_recolor(c: &CrystalIncr, x: integer, y: integer, color: integer) {
+pub fn crystal_incr_recolor(c: CrystalIncr, x: integer, y: integer, color: integer) {
   ix = idx_at(c.field.cidx, x, y);
   if ix >= 0 {
     c.snap.colors[ix] = color;
@@ -900,7 +900,7 @@ pub fn crystal_incr_recolor(c: &CrystalIncr, x: integer, y: integer, color: inte
 
 // Re-run ONLY the dirty chunks, then clear dirty.  O(dirty chunks · density),
 // flat in N under bounded density.
-pub fn crystal_incr_rebuild(c: &CrystalIncr, state: CrystalState, tick: integer) {
+pub fn crystal_incr_rebuild(c: CrystalIncr, state: CrystalState, tick: integer) {
   // @P312 fixed (2026-05-22) — inline form is fine (see crystal_incr_new).
   crystal_incr_rebuild_chunks(c, collect_dirty_inputs(c.field, c.field.halo_k), state, tick);
   clear_dirty(c.field);

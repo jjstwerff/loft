@@ -125,7 +125,24 @@ Design + rationale: [OWNERSHIP_MODEL.md § The law](../OWNERSHIP_MODEL.md) +
 [DESIGN_DECISIONS.md C77](../DESIGN_DECISIONS.md). Builds on @PLN85 (the store-lifetime
 cluster); the W4 lint joins the @PLN46 warning family.
 
-## Status & handoff (2026-06-22; P2 start 2026-06-23) — READ FIRST after a context reset
+## Status & handoff — READ FIRST after a context reset
+
+> **CURRENT STATE (2026-07-05): COMPLETE — plan CLOSED (#87 status:finished).**
+> P0/P1/P2 all DONE and verified on interp + native + native-wasm; `formal/binding.md` at
+> **0 open deviations**. The full P2 reassignment-locality matrix (`{struct, vector, scalar} ×
+> {non-&, &} × {reassign, field/element}`) is green + leak-free; `&`-write-back from a CALL/var
+> RHS landed (ownership transfer). **P3.2 — W4 redundant-`&` lint FLIPPED on-by-default**
+> (`operators.rs::warn_redundant_amp`): the message now names the efficiency cost (a `&`-reference
+> is double-indirect / slower), silenceable via `LOFT_NO_WARN_RUNTIME`. Ecosystem cleaned — the
+> example/demo code (`audience_crystal` + its `.allow_warnings` removed) and the incidental core
+> scripts modernised (drop the redundant `&`); a couple were UPGRADED to validate the write-back
+> indirection (`434`, the maker's idea). Residual noise: a handful of deliberate `&`-codegen/
+> lifetime regression guards keep `&` on purpose and emit a tolerated warning (internal tests,
+> not example code) — no per-site silence directive was added (loft is entering maintenance;
+> avoid new surface). **Residual bug filed loft#506:** `&`-write-back to a vector-ELEMENT arg
+> silently drops on both backends (caller-side store-back missing) — rare/latent, guarded by
+> `tests/scripts/87-amp-element-writeback-limitation.loft`, routed for the eventual codegen fix.
+> The dated notes below are the build history.
 
 **P0 ✅ DONE + committed.** Migration sweep across the whole ecosystem (stdlib + all 10 registry
 libs + the entire zero-trust-shared-files app) found **zero** real propagation-reliance sites →
@@ -166,7 +183,7 @@ field-read copy, so it is the next actionable @PLN87 work on `main`. WIP committ
 `operators.rs`/`expressions.rs`/`mod.rs` = P1; `main.rs`/`scopes.rs` = the throwaway P0 sweep (strip
 before PR, D2).
 
-### P2 — STRUCT + SCALAR cells DONE on both backends (2026-06-23); vector cell remains
+### P2 — ✅ COMPLETE on both backends (struct + scalar + vector; the full matrix is green)
 
 **Struct reassignment-locality is implemented, sound, and verified interp == native.** Baseline was
 `9 9` (both overwrote — `&` on heap was a no-op); now `1 9` (non-`&` rebinds locally, `&` writes
@@ -264,15 +281,15 @@ program-exit leak gate) with the three former gaps' lock-ins un-ignored:
 
 **Post-merge probing — `&` write-back RHS shapes (2026-06-23).** The P2 matrix tested the LITERAL
 forms only; probing the others found two gaps and a latent concern:
-- **#1 (was a LEAK) — ✅ FIXED via clean rejection.** `&`-struct write-back from a CALL (`o = mk()`)
-  or VARIABLE (`o = src`) leaked the displaced caller store (the P2.2 displaced-free fires only when
-  the RHS `result_var` is the skip_free construction temp, i.e. only `o = Obj{..}`). A `Block`/`Insert`
-  temp-wrap to reuse that path collided with fragile RefVar-assignment transforms (the `Set(o,…)`
-  write-back got dropped), so full ownership-transfer support is DEFERRED. Until then these shapes are
-  **rejected at parse time** with a clear message (no silent leak): `parser/expressions.rs`,
-  gated on `RefVar(Reference|Vector)` + non-skip_free RHS. Lock-ins: `parse_errors`
-  `pln87_amp_writeback_*_rejected`, `leak::pln87_struct_amp_literal_writeback_no_leak`, and the
-  ignored `issues::pln87_amp_writeback_from_call_writes_back` (flips to PASS when full support lands).
+- **#1 (was a LEAK, then a rejection) — ✅ FULLY LANDED.** `&`-struct write-back from a CALL
+  (`o = mk()`) or VARIABLE (`o = src`) originally leaked the displaced caller store (the P2.2
+  displaced-free fired only when the RHS `result_var` was the skip_free construction temp, i.e. only
+  `o = Obj{..}`). It was first shipped as a clean parse rejection (no silent leak), then the full
+  **ownership-transfer** support landed: a call/var RHS is routed through a transferable owned temp,
+  so the write-back reaches the caller (`a.x == 9`) — verified clean on **both backends**. The parse
+  rejection is gone. Lock-in: `issues::pln87_amp_writeback_from_call_writes_back` is now an **active,
+  passing** test (was ignored); `leak::pln87_struct_amp_literal_writeback_no_leak` still guards the
+  literal path.
 - **#2 (was a WRONG MESSAGE) — ✅ FIXED.** `&vector = otherVector` reported the misleading
   "`&` but is never modified"; now the same clear write-back-not-supported error. The duplicate
   "never modified" is suppressed via `Parser::writeback_rejected` (cleared per function).
