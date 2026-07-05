@@ -30,9 +30,13 @@ verbatim, so the default dump and the whole suite are **byte-identical** (full s
 Validated on `bytecode-comparisons/survival-corpus.loft`: move → implicit, survives → avoidable,
 survives+mutated → forced (both backends, value-clean).
 
-**Reproduce the survey:**
+**The developer dump** (raw, all classes incl. Internal + var-buffer):
 `LOFT_COPY_SURVIVAL=1 LOFT_MATERIALIZE_DUMP=1 loft --interpret prog.loft 2>&1 | grep '^MAT'`
-— per-fn rows + a `MAT-WORKLIST avoidable=… implicit=… forced=…` rollup.
+— per-fn rows + a `MAT-WORKLIST avoidable=… implicit=… forced=… internal=…` rollup.
+
+**The user-facing report** (Step 5 — only the unbound survival-split copies the user made):
+`loft --report-copies prog.loft` — per-site rows (location · copied type · reason) + a rollup +
+the Avoidable worklist. Stdlib / return-buffer copies are excluded (they are the developer dump's).
 
 ## The survey — 371 `tests/scripts/*.loft`, deduped
 

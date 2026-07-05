@@ -302,11 +302,14 @@ This feature is **not** a permanent always-on warning; it is a flag we turn on t
 data, then drive to a close. The stages (full recipe:
 [plans/90-copy-diagnostics/unbound-copy-lint.md](plans/90-copy-diagnostics/unbound-copy-lint.md)):
 
-1. **Survey (flag-gated report).** Ship the correct classification (the bound/unbound survival
-   split) behind a flag that prints a **report** — per-site rows + an aggregate rollup — over a
-   whole library or program. It answers two questions: *what still copies that we can fix* (the
-   Avoidable worklist — for us) and *where the hidden cost is* (the survey — for lib authors and
-   users). **Off by default.**
+1. **Survey (flag-gated report) — LANDED.** The correct classification (the bound/unbound
+   survival split) ships behind **`loft --report-copies`** (`LOFT_REPORT_COPIES=1`), which prints
+   a **report** — per-site rows (location · copied type · reason) + an aggregate rollup + the
+   Avoidable worklist — over a whole library or program. It answers two questions: *what still
+   copies that we can fix* (the Avoidable worklist — for us) and *where the hidden cost is* (the
+   survey — for lib authors and users). It shows only the user's source-duplication copies (the
+   var-buffer/return-buffer class stays in the developer dump `LOFT_MATERIALIZE_DUMP`).
+   **Off by default.**
 2. **Drain.** Grow the auto-elision engine (`Borrow` → `ElidePlan`) to remove the Avoidable
    copies the survey surfaces — the worklist shrinks toward the genuinely-forced remainder.
 3. **Accept the remainder.** The copies that truly cannot borrow/move are accepted; a library

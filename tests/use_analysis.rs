@@ -965,3 +965,63 @@ fn survival_split_bound_vs_unbound_and_internal() {
         "flag-off dump must carry no ` at <loc>` suffix (byte-identical); dump:\n{off}"
     );
 }
+
+// ── @PLN90 Step 5 — the user-facing `--report-copies` report ──
+const REPORT_SRC: &str = r#"
+struct Item { tags: vector<integer> }
+fn main() {
+    base: vector<integer> = [1, 2, 3];
+    a = Item { tags: base };                 // base survives → avoidable (construction copy)
+    print("{a.tags[0]} {base[0]}\n");
+    v: vector<Item> = [Item { tags: [0] }];
+    e = Item { tags: [9] };
+    v[0] = e;                                 // e survives → avoidable (record copy, located)
+    print("{v[0].tags[0]} {e.tags[0]}\n");
+}
+"#;
+
+/// Spawn `loft --report-copies --check` and return its stderr (the report).
+fn report(src: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let dir = std::env::temp_dir().join("loft_use_analysis");
+    std::fs::create_dir_all(&dir).expect("probe dir");
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    src.hash(&mut h);
+    "report".hash(&mut h);
+    let path = dir.join(format!("probe_{:016x}.loft", h.finish()));
+    std::fs::write(&path, src).expect("write probe");
+    let out = Command::new(env!("CARGO_BIN_EXE_loft"))
+        .args(["--report-copies", "--interpret", "--check"])
+        .arg(&path)
+        .env("LOFT_NO_CACHE", "1")
+        .output()
+        .expect("spawn loft");
+    String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+#[test]
+fn report_copies_is_user_facing_and_prints_once() {
+    let out = report(REPORT_SRC);
+    // Printed exactly ONCE (from main after the whole program is loaded — not per file-load).
+    assert_eq!(
+        out.matches("loft copy report").count(),
+        1,
+        "the report must print exactly once; stderr:\n{out}"
+    );
+    // The user's copies appear (the record copy `v[0] = e` names `Item`).
+    assert!(
+        out.contains("fn n_main") && out.contains("copies Item"),
+        "the user's copies should be reported; stderr:\n{out}"
+    );
+    // Stdlib copies are excluded — the report is only the survival-split (source-duplication)
+    // class, and the stdlib's survival baseline is 0. No return-buffer rows, no `t_*` fns.
+    assert!(
+        !out.contains("return buffer") && !out.contains("fn t_"),
+        "the report must exclude stdlib / return-buffer copies; stderr:\n{out}"
+    );
+    // The rollup line is present.
+    assert!(
+        out.contains("unbound cop") && out.contains("avoidable"),
+        "the report should carry a rollup; stderr:\n{out}"
+    );
+}

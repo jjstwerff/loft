@@ -79,6 +79,11 @@ pub struct VerdictRow {
     /// op carries a span. Makes a `<record>` element-set copy (no named target var)
     /// actionable in the report. `None` when the op is unspanned.
     pub loc: Option<Position>,
+    /// @PLN90 Step 5 — true for a SURVIVAL-SPLIT row (a construction / record copy classified by
+    /// its source's fate — "you duplicated a live value"). The user-facing `report_copies` shows
+    /// only these; the var-buffer / return-buffer copies (a separate elision/`__retbuf` class,
+    /// which is where the stdlib's copies land) stay in the developer dump.
+    pub survival: bool,
 }
 
 fn def_nrs(data: &Data, names: &[&str]) -> HashSet<u32> {
@@ -521,9 +526,11 @@ fn analyze_fn(
     data: &Data,
     max_tier: u8,
 ) -> (Vec<VerdictRow>, Vec<ElidePlan>) {
-    // @PLN90 — the survival split + its report locations are only produced under this flag;
-    // read once so both the walk (`track_pos`) and the classification below agree.
-    let survival_on = std::env::var_os("LOFT_COPY_SURVIVAL").is_some();
+    // @PLN90 — the survival split + its report locations are produced under LOFT_COPY_SURVIVAL
+    // (the raw dev dump) OR the user-facing report (`report_copies`); read once so both the walk
+    // (`track_pos`) and the classification below agree.
+    let survival_on =
+        std::env::var_os("LOFT_COPY_SURVIVAL").is_some() || crate::keys::report_copies_enabled();
     let mut u = Uses {
         get_field: data.def_nr("OpGetField"),
         op_append: data.def_nr("OpAppendVector"),
@@ -599,6 +606,7 @@ fn analyze_fn(
                     // return path is not yet correct (@PLN85 P4). Eliminating it = that fix.
                     class: CopyClass::Avoidable,
                     loc: None,
+                    survival: false,
                 });
             }
             continue; // not a single-source local copy — not ours to elide
@@ -706,6 +714,7 @@ fn analyze_fn(
             reason,
             class,
             loc: None,
+            survival: false,
         });
     }
 
@@ -736,6 +745,7 @@ fn analyze_fn(
             reason,
             class,
             loc: entry.4.clone(),
+            survival: true,
         });
     }
 
@@ -760,6 +770,7 @@ fn analyze_fn(
             reason,
             class,
             loc: entry.4.clone(),
+            survival: true,
         });
     }
     (rows, plans)
@@ -1607,4 +1618,95 @@ pub fn dump_all(data: &Data) {
     eprintln!(
         "MAT-WORKLIST avoidable_copies={avoidable_copies} implicit_copies={implicit_copies} forced_copies={forced_copies} internal_copies={internal_copies}"
     );
+}
+
+/// @PLN90 Step 5 — the USER-FACING copy report (`LOFT_REPORT_COPIES` / `--report-copies`).
+///
+/// Unlike `dump_all` (the raw developer trace), this surfaces ONLY the *unbound* structure
+/// copies the user can act on — `Avoidable` (a borrow/move would remove it — the worklist) and
+/// `Forced` (required as written, informational) — each with a source location, the copied
+/// type, and a fix hint, followed by a rollup and the ranked Avoidable worklist. `Implicit`
+/// (moves / literals) and `Internal` (compiler-generated sources) are excluded — they are not
+/// the user's to fix. Diagnostic only; called from `scopes::check`, a no-op unless enabled.
+pub fn report_copies(data: &Data) {
+    if !crate::keys::report_copies_enabled() {
+        return;
+    }
+    struct Row {
+        fname: String,
+        loc: String,
+        ty: String,
+        avoidable: bool,
+        reason: &'static str,
+    }
+    let mut rows: Vec<Row> = Vec::new();
+    for d_nr in 0..data.definitions() {
+        let def = data.def(d_nr);
+        if !matches!(def.def_type, DefType::Function) {
+            continue;
+        }
+        for r in analyze_fn(&def.code, &def.variables, data, env_tier()).0 {
+            // Only survival-split copies (source duplications) are user-facing; the var-buffer /
+            // return-buffer copies are a separate elision class (and where the stdlib's copies
+            // land — the survival baseline is 0), kept to the developer dump.
+            if !r.survival {
+                continue;
+            }
+            let avoidable = match r.class {
+                CopyClass::Avoidable => true,
+                CopyClass::Forced => false,
+                // Eliminated / Implicit (move, literal) / Internal (compiler-gen) — not the
+                // user's to act on.
+                _ => continue,
+            };
+            let loc = r
+                .loc
+                .as_ref()
+                .map_or_else(|| "<location unknown>".to_string(), Position::to_string);
+            let ty = if r.source == u16::MAX {
+                "a structure".to_string()
+            } else {
+                data.type_name_str(def.variables.tp(r.source))
+            };
+            rows.push(Row {
+                fname: def.name.clone(),
+                loc,
+                ty,
+                avoidable,
+                reason: r.reason,
+            });
+        }
+    }
+
+    eprintln!(
+        "loft copy report — unbound structure copies (a copy the alias-default did not make silently)"
+    );
+    if rows.is_empty() {
+        eprintln!("  none — every structure copy is a move, a literal, or already borrowed.");
+        return;
+    }
+    for row in &rows {
+        let tag = if row.avoidable {
+            "avoidable"
+        } else {
+            "forced "
+        };
+        eprintln!(
+            "  {}  fn {}  copies {}  [{tag}]  {}",
+            row.loc, row.fname, row.ty, row.reason
+        );
+    }
+    let avoidable = rows.iter().filter(|r| r.avoidable).count();
+    let forced = rows.len() - avoidable;
+    eprintln!(
+        "  ── {} unbound {}: {avoidable} avoidable, {forced} forced (moves & literals are silent)",
+        rows.len(),
+        if rows.len() == 1 { "copy" } else { "copies" }
+    );
+    if avoidable > 0 {
+        eprintln!("  Avoidable — a `&` borrow or a small restructure would remove these:");
+        for row in rows.iter().filter(|r| r.avoidable) {
+            eprintln!("    {}  {}", row.loc, row.ty);
+        }
+    }
 }

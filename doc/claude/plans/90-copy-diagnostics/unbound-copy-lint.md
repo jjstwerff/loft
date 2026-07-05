@@ -113,12 +113,19 @@ instead of move) → keep it in the developer DUMP under a distinct reason
 (`"move lowered as copy"`) so it stays on *our* worklist without adding user noise. The
 user-facing lint fires only on the *survives* subset; the DUMP sees all.
 
-> **STATUS 2026-07-05 — Steps 0–4 LANDED (gated).** The survival split is implemented in
-> `use_analysis.rs` behind `LOFT_COPY_SURVIVAL` (default off, suite byte-identical, full suite
-> green). The first survey over 371 test scripts is in [survey-findings.md](survey-findings.md)
-> — including the four reporting-fidelity items to resolve before flipping (synthetic-temp
-> exclusion, copy-site source locations, tightening the Avoidable/Forced split, real in-loop
-> survival). Steps 5–6 (the user-facing `--report-copies` report + graduation) are next.
+> **STATUS 2026-07-05 — Steps 0–5 LANDED (gated).** The survival split + the four
+> resolve-before-flip items (items 1–4 in [survey-findings.md](survey-findings.md)) are done, and
+> **Step 5 — the user-facing `--report-copies` report** ships: `loft --report-copies prog.loft`
+> (or `LOFT_REPORT_COPIES=1`) prints, ONCE (from `main` after the whole program is loaded), the
+> *unbound* structure copies the user made — `Avoidable` (a `&`/restructure would remove it) and
+> `Forced` — each with a location, the copied type and its reason, then a rollup + the Avoidable
+> worklist. It shows only the SURVIVAL-SPLIT class (source duplications, `VerdictRow.survival`);
+> the var-buffer / return-buffer copies (the elision/`__retbuf` class, where the stdlib's copies
+> land — survival baseline 0) stay in the developer dump, so the report is user-only. All still
+> gated + diagnostic-only (default off, suite byte-identical + green). Guard
+> `report_copies_is_user_facing_and_prints_once`. **Remaining: Step 6 — graduation is DEFERRED to
+> phases B–D** (drain Avoidable → auto-elision; accept the remainder behind the sparse per-site
+> opt-out; only then flip to an enforced library-PR gate). Do NOT flip the default on here.
 
 ## Verifiable steps (each: run the check on BOTH backends)
 

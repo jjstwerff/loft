@@ -429,6 +429,8 @@ pub fn check(data: &mut Data) {
     // Behaviour-neutral USE-analysis dump (LOFT_MATERIALIZE_DUMP) — the
     // copy-vs-borrow verdict per binding, before any codegen consumes it.
     crate::use_analysis::dump_all(data);
+    // @PLN90 Step 5 — the user-facing copy report (`--report-copies`) is emitted ONCE from
+    // main after the whole program is loaded (not here — `check` runs per file-load).
     // Tier-0 borrow elision (DEFAULT ON; opt-out LOFT_NO_BORROW_ELIDE). Inlines
     // Borrow-verdict vector copies before the scope/free passes. `elide_borrows`
     // refuses to elide a `v` that another var borrows (its `deps` point at `v`),
