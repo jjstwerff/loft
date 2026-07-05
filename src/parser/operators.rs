@@ -2380,21 +2380,22 @@ impl Parser {
     /// REASSIGNS.  For a heap param, field mutation (`o.x = 9`) already propagates
     /// to the caller (reference-default); `&` only changes a WHOLE-BINDING
     /// reassignment (`o = X`) into a write-back.  So a `&Obj` that is only
-    /// field-mutated or read gains nothing from the `&` — usually a leftover of the
-    /// old "`&Object` needed to mutate" misconception.  Scalar `&` (always
-    /// load-bearing) and never-read params (already covered by `test_used`) are not
-    /// flagged.  Stdlib exempt; silenceable via `LOFT_NO_WARN_RUNTIME`.
+    /// field-mutated or read gains nothing from the `&` — and it is not free: a
+    /// `&`-reference is a DOUBLE-INDIRECT `RefVar` (every access dereferences twice),
+    /// materially slower than a plain heap binding that aliases directly.  So the
+    /// redundant `&` is a silent efficiency footgun, not just a style nit — hence ON
+    /// by default.  Scalar `&` (always load-bearing) and never-read params (already
+    /// covered by `test_used`) are not flagged.  Stdlib exempt; silenceable via
+    /// `LOFT_NO_WARN_RUNTIME`.
     pub(crate) fn warn_redundant_amp(&mut self, body: &Value) {
         if self.default || self.context == u32::MAX {
             return;
         }
-        // OPT-IN (off by default): reference-default (P2) only just made `&` on a
-        // field-mutated heap param redundant, so a large body of existing code —
-        // ~20 `&` ref-param regression tests + several scripts — still uses the
-        // pattern intentionally.  Enabling this by default would flag all of them
-        // at once; until that ecosystem is cleaned (or each acknowledges the
-        // warning), gate it behind `LOFT_WARN_REDUNDANT_AMP=1`.
-        if !std::env::var("LOFT_WARN_REDUNDANT_AMP").is_ok_and(|v| v == "1" || v == "true") {
+        // ON by default (P3.2): the redundant `&` costs real runtime (double-indirect
+        // RefVar access), so users need to see it.  Silenceable with the runtime-warning
+        // family switch when a `&` is kept deliberately (e.g. a codegen regression test
+        // that exercises the RefVar path).
+        if std::env::var("LOFT_NO_WARN_RUNTIME").is_ok_and(|v| v == "1" || v == "true") {
             return;
         }
         let attrs = self.data.def(self.context).attributes().to_vec();
@@ -2426,9 +2427,10 @@ impl Parser {
             diagnostic!(
                 self.lexer,
                 Level::Warning,
-                "`&` on parameter `{}` has no effect here — field mutation already \
-                 propagates to the caller; `&` only matters when you REASSIGN the \
-                 whole binding (`{} = …`)",
+                "`&` on parameter `{}` only slows it down here — a `&`-reference is \
+                 double-indirect (slower on every access), and field mutation already \
+                 propagates to the caller without it. Drop the `&` unless you REASSIGN \
+                 the whole binding (`{} = …`), which is the one thing `&` is for.",
                 a.name,
                 a.name,
             );

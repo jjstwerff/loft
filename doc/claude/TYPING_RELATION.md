@@ -172,6 +172,7 @@ This is a **lens**, not a migration plan. Concretely, the cheap wins it points a
    the storage ops, `usable_min`/`usable_max`) off i32 — ~36 sites, mapped in formal/types.md
    § D2 Removal (two carry a silent-truncation hazard; do it as one focused pass).
 
-Defer anything ownership/`deps`-shaped until @PLN85/@PLN87 close — per
-[FORMALIZATION.md](FORMALIZATION.md) § Recommendation, the type's own contents are
-still moving, and a typing relation over a moving type is premature.
+The ownership/`deps` deferral has since lifted: @PLN85/@PLN87 closed, so `deps` is now a typed,
+total fact and the ownership rules are written ([formal/ownership.md](formal/ownership.md), 0 open).
+The typing relation is no longer written over a moving type — this doc's R1–R3 are DONE, with only
+the i64-storage migration (D2 → @PLN88) outstanding.

@@ -53,7 +53,7 @@ fn derive(s: Src) -> vector<integer> {
   out
 }
 
-fn fill(c: &Holder) {
+fn fill(c: Holder) {
   ks = derive(c.src);
   for k in ks {
     cm = mk(12);

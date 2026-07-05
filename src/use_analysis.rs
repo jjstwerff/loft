@@ -23,6 +23,7 @@
 //! can only *lose* an elision, never produce a wrong borrow.
 
 use crate::data::{Data, DefType, Value};
+use crate::lexer::Position;
 use crate::variables::Function;
 use std::collections::{HashMap, HashSet};
 
@@ -51,6 +52,13 @@ pub enum CopyClass {
     /// Forced by circumstance (a short-lived source, a later mutation) — required as
     /// written, but the user could restructure. Indicated (informational), never silent.
     Forced,
+    /// @PLN90 (item 1) — an UNBOUND copy whose SOURCE is a compiler-generated temporary
+    /// (`_`-prefixed: `__ref_N`, `___par_mat_e_N`, `_comp_N`, …; `is_compiler_generated`).
+    /// A real copy and a candidate for US to eliminate (the developer worklist), but NOT
+    /// user-actionable — the user never wrote the source, so the user-facing report must
+    /// exclude it. Distinct from `Implicit` (genuinely no unbound copy) and from
+    /// `Avoidable`/`Forced` (which name a source the user can act on).
+    Internal,
 }
 
 /// One row of the analysis result: the verdict for a single vector-copy binding.
@@ -67,6 +75,15 @@ pub struct VerdictRow {
     /// worklist) · `Implicit` (model-inherent ownership — silent) · `Forced` (informational).
     /// See [`CopyClass`] and COPY_DIAGNOSTICS.md.
     pub class: CopyClass,
+    /// @PLN90 item 2 — the copy site's source location (`file:line:pos`), when the emitting
+    /// op carries a span. Makes a `<record>` element-set copy (no named target var)
+    /// actionable in the report. `None` when the op is unspanned.
+    pub loc: Option<Position>,
+    /// @PLN90 Step 5 — true for a SURVIVAL-SPLIT row (a construction / record copy classified by
+    /// its source's fate — "you duplicated a live value"). The user-facing `report_copies` shows
+    /// only these; the var-buffer / return-buffer copies (a separate elision/`__retbuf` class,
+    /// which is where the stdlib's copies land) stay in the developer dump.
+    pub survival: bool,
 }
 
 fn def_nrs(data: &Data, names: &[&str]) -> HashSet<u32> {
@@ -95,6 +112,36 @@ fn projection_ops(data: &Data) -> HashSet<u32> {
             "OpGetDbRef",
         ],
     )
+}
+
+/// @PLN90 item 3 — ops that WRITE THROUGH THEIR FIRST ARGUMENT (mirrors the
+/// `first_arg_write` set in `parser::find_written_vars`). Used to build `mut_max_pos`,
+/// the position-aware "the source is mutated after the copy" fact. `OpCopyRecord` writes
+/// its SECOND arg (the dest), handled separately.
+fn first_arg_write_ops(data: &Data) -> HashSet<u32> {
+    let mut s = HashSet::new();
+    for d in 0..data.definitions() {
+        let n = data.def(d).name();
+        if n.starts_with("OpSet")
+            || n.starts_with("OpAppendStack")
+            || n.starts_with("OpClearStack")
+            || matches!(
+                n,
+                "OpNewRecord"
+                    | "OpAppendCopy"
+                    | "OpAppendVector"
+                    | "OpClearVector"
+                    | "OpClearKeyed"
+                    | "OpSetKeyed"
+                    | "OpHashRemove"
+                    | "OpInsertVector"
+                    | "OpRemoveVector"
+            )
+        {
+            s.insert(d);
+        }
+    }
+    s
 }
 
 /// VALUE-READER ops return a fresh value, not a reference into a container — their
@@ -145,6 +192,8 @@ struct Uses {
     op_copy_record: u32,
     projections: HashSet<u32>,
     value_readers: HashSet<u32>,
+    /// @PLN90 item 3 — ops that write through their first argument (see `first_arg_write_ops`).
+    write_first_arg: HashSet<u32>,
     /// Pre-order position counter — a total order on nodes that, OUTSIDE loops,
     /// matches execution order (Tier 1 uses it to prove a source is unmutated
     /// after the copy-fill). Bumped once per visited node.
@@ -153,6 +202,31 @@ struct Uses {
     /// to). Back-edges break the position↔execution correspondence, so Tier 1
     /// refuses any copy whose fill sits at depth > 0.
     loop_depth: u32,
+    /// @PLN90 item 2 — track source locations for the report. Only ON when
+    /// `LOFT_COPY_SURVIVAL` is set (positions are needed only for the survival report), so the
+    /// default hot path pays no `Position` clone and stays byte-identical.
+    track_pos: bool,
+    /// @PLN90 item 2 — the nearest ENCLOSING span position (breadcrumb). The copy ops
+    /// (`OpAppendVector` / `OpCopyRecord`) carry no span themselves, so a copy site borrows the
+    /// most recent spanned node's position. Updated (when `track_pos`) at every spanned node.
+    cur_pos: Option<Position>,
+    /// @PLN90 item 3 — the max position at which a var is actually WRITTEN (a `Set` target, an
+    /// append/insert target, a record-copy target). Unlike `other_max_pos` (any non-reader use,
+    /// which counts a read-only pass-to-callee or being another copy's source), this counts only
+    /// real mutations — so "the source is mutated AFTER the copy" (⇒ a borrow is unsound ⇒
+    /// Forced) is precise, and a read-only survivor stays Avoidable. Only tracked when
+    /// `track_pos` (read solely by `survival_class`); `other_max_pos` is left untouched so the
+    /// shipped var-buffer elision stays byte-identical.
+    mut_max_pos: HashMap<u16, usize>,
+    /// @PLN90 item 4 — the position of each var's FIRST definition (`Set`). Compared against a
+    /// copy's enclosing-loop entry to tell a source defined OUTSIDE the loop (duplicated every
+    /// iteration → unbound) from a per-iteration LOCAL (consumed each pass → a move). Tracked
+    /// only when `track_pos`.
+    first_def_pos: HashMap<u16, usize>,
+    /// @PLN90 item 4 — a stack of enclosing-loop entry positions (the `Value::Loop` node's pos).
+    /// A source whose first def is `< loop_entry` existed before the loop (outside); `>=` means
+    /// it is defined inside the loop body (per-iteration). Tracked only when `track_pos`.
+    loop_entry: Vec<usize>,
     /// Max position at which a var appeared in a NON-reader (write / escape /
     /// pass-to-callee) position — EXCLUDING the benign scope ops (`OpFreeRef` /
     /// `Drop`) and the copy-fill itself. For a source `x`, "all such positions <
@@ -163,15 +237,25 @@ struct Uses {
     copyfill_pos: HashMap<u16, usize>,
     /// Copy vars whose fill sits inside a loop (Tier-1 ineligible).
     copyfill_in_loop: HashSet<u16>,
+    /// @PLN90 (bound-vs-unbound survival split) — max position at which a var appeared in
+    /// ANY position (reader OR non-reader), i.e. its last use. Unlike `other_max_pos` (which
+    /// tracks only non-reader uses) this includes plain reads, so "does the source survive
+    /// (a use strictly after the copy site)?" — the move-vs-copy discriminator — can be
+    /// answered. See `survival_class`.
+    last_use_pos: HashMap<u16, usize>,
     /// @PLN90 — field-target appends `OpAppendVector(OpGetField(rec, fld), src)`:
-    /// `(base record var, source base var)`. This is the struct/enum-construction copy
-    /// (`S { f: src }`) and `x.field += src` — the source is deep-copied into the field,
-    /// which the var-buffer copy idiom above never sees. Recorded so the decision covers it.
-    construct_copy: Vec<(Option<u16>, Option<u16>)>,
-    /// @PLN90 — `OpCopyRecord` deep-copies: `(target base var, source base var)`. A record
-    /// copy (`v[i] = e`, a `?? E{…}` default element, a struct copy) — not append-based, so
-    /// the branches above miss it. The same-var no-op alias is excluded when recorded.
-    record_copy: Vec<(Option<u16>, Option<u16>)>,
+    /// `(base record var, source base var, copy-site-end pos, loop-survives, source location)`.
+    /// This is the struct/enum-construction copy (`S { f: src }`) and `x.field += src` — the
+    /// source is deep-copied into the field, which the var-buffer copy idiom above never sees.
+    /// The position (taken AFTER the args are walked) + `loop_survives` (item 4: the source
+    /// outlives the enclosing loop) drive the survival split; the location (item 2) is for the
+    /// report.
+    construct_copy: Vec<(Option<u16>, Option<u16>, usize, bool, Option<Position>)>,
+    /// @PLN90 — `OpCopyRecord` deep-copies: `(dest base var, SOURCE base var, copy-site-end pos,
+    /// loop-survives, source location)`. A record copy (`v[i] = e`, a `?? E{…}` default element,
+    /// a struct copy) — not append-based, so the branches above miss it. The same-var no-op
+    /// alias is excluded when recorded.
+    record_copy: Vec<(Option<u16>, Option<u16>, usize, bool, Option<Position>)>,
     /// Vars that appeared in a non-reader position (⇒ not borrow-eligible). The
     /// copy-fill `OpAppendVector(v, src.f)` is *excluded* — it is the copy machinery,
     /// not a user mutation of `v`.
@@ -207,11 +291,59 @@ pub struct ElidePlan {
 }
 
 impl Uses {
+    /// @PLN90 item 3 — record a real WRITE of `base` at `pos` (max). Only tracked when
+    /// `track_pos` (read solely by `survival_class`), so the default path is unaffected.
+    fn mark_write(&mut self, base: Option<u16>, pos: usize) {
+        if self.track_pos
+            && let Some(v) = base
+        {
+            let e = self.mut_max_pos.entry(v).or_insert(0);
+            *e = (*e).max(pos);
+        }
+    }
+
+    /// @PLN90 item 4 — is a copy of `src` at the current site a repeated duplicate of a value
+    /// that lives OUTSIDE the enclosing loop (⇒ unbound, one copy per iteration), rather than a
+    /// per-iteration local consumed each pass (⇒ a move)? False outside any loop. A source with
+    /// no `Set` def (a parameter) is outside by definition.
+    fn loop_survives(&self, src: Option<u16>) -> bool {
+        if self.loop_depth == 0 {
+            return false;
+        }
+        let Some(&entry) = self.loop_entry.last() else {
+            return false;
+        };
+        match src {
+            None => false,
+            Some(s) => self.first_def_pos.get(&s).is_none_or(|&d| d < entry),
+        }
+    }
+
     fn visit(&mut self, node: &Value, ctx: Ctx) {
         let pos = self.pos;
         self.pos += 1;
+        // @PLN90 item 2 — breadcrumb the nearest enclosing span position (only when tracking,
+        // so the default path pays nothing). A copy op borrows this for its report location.
+        if self.track_pos
+            && let Some(p) = node.span_pos()
+        {
+            self.cur_pos = Some(p.clone());
+        }
+        // @PLN90 item 3 — record a REAL write of a var at this position, for `mut_max_pos` (the
+        // Forced test). Covers every write op (first-arg family + `OpCopyRecord`'s second-arg
+        // dest); the `Set` arm below adds reassign targets. Gated inside `mark_write`.
+        if let Value::Call(d, args) = node.unspan() {
+            if self.write_first_arg.contains(d) {
+                self.mark_write(args.first().and_then(|a| base_var(a, self.get_field)), pos);
+            } else if *d == self.op_copy_record {
+                self.mark_write(args.get(1).and_then(|a| base_var(a, self.get_field)), pos);
+            }
+        }
         match node.unspan() {
             Value::Var(v) => {
+                // @PLN90 — last use in ANY position (the survival discriminator).
+                let lu = self.last_use_pos.entry(*v).or_insert(0);
+                *lu = (*lu).max(pos);
                 if ctx != Ctx::ReaderArg {
                     self.ineligible.insert(*v);
                     let e = self.other_max_pos.entry(*v).or_insert(0);
@@ -223,8 +355,16 @@ impl Uses {
             // the depth so Tier 1 can refuse copies filled here.
             Value::Loop(b) => {
                 self.loop_depth += 1;
+                // @PLN90 item 4 — the loop's entry position: a source whose first def is < this
+                // lives outside the loop (copied every iteration); >= means a per-iteration local.
+                if self.track_pos {
+                    self.loop_entry.push(pos);
+                }
                 for op in &b.operators {
                     self.visit(op, Ctx::Other);
+                }
+                if self.track_pos {
+                    self.loop_entry.pop();
                 }
                 self.loop_depth -= 1;
             }
@@ -236,6 +376,13 @@ impl Uses {
             Value::Drop(_) => {}
             Value::Set(v, rhs) => {
                 *self.def_count.entry(*v).or_insert(0) += 1;
+                // @PLN90 item 3 — a `Set` writes `v` (its def is before any copy of it; a
+                // reassign after a copy is the mutation that forces the copy to be independent).
+                self.mark_write(Some(*v), pos);
+                // @PLN90 item 4 — remember where `v` was FIRST defined (loop-inside vs -outside).
+                if self.track_pos {
+                    self.first_def_pos.entry(*v).or_insert(pos);
+                }
                 // Fresh-buffer def: `v = OpGetField(vdb, 0, _)` where vdb is OpDatabase'd.
                 if let Value::Call(d, args) = rhs.unspan()
                     && *d == self.get_field
@@ -247,7 +394,8 @@ impl Uses {
                 self.visit(rhs, Ctx::ReaderArg);
             }
             Value::Call(d, args) if *d == self.op_append => {
-                // `OpAppendVector(target, src, rec_tp)`.
+                // `OpAppendVector(target, src, rec_tp)`. (The append target's write is recorded
+                // by the general write-mark at the top of `visit`.)
                 if let Some(Value::Var(v)) = args.first().map(Value::unspan) {
                     // Copy-fill into a plain local — record the source base; do NOT
                     // mark `v` ineligible (this append IS the copy, not a user write).
@@ -273,16 +421,32 @@ impl Uses {
                     // deep-copied into the field: a structure copy the var-buffer idiom
                     // above never records (struct/enum construction `S { f: src }`, or
                     // `x.field += src`). Capture (base record, source base) so the
-                    // copy-vs-borrow decision covers it.
-                    if let Some(Value::Call(d0, _)) = args.first().map(Value::unspan)
+                    // copy-vs-borrow decision + survival split cover it.
+                    let cc = if let Some(Value::Call(d0, _)) = args.first().map(Value::unspan)
                         && *d0 == self.get_field
                     {
                         let rec = args.first().and_then(|t| base_var(t, self.get_field));
                         let src = args.get(1).and_then(|s| base_var(s, self.get_field));
-                        self.construct_copy.push((rec, src));
-                    }
+                        Some((rec, src))
+                    } else {
+                        None
+                    };
                     for a in args {
                         self.visit(a, Ctx::Other);
+                    }
+                    // Position taken AFTER the args are walked: a use strictly greater is a
+                    // use of the source AFTER this copy (⇒ the source survives). The copy op
+                    // carries no span, so borrow the nearest enclosing one (item 2). `loop_surv`
+                    // (item 4) = the source outlives the enclosing loop (copied every iteration).
+                    if let Some((rec, src)) = cc {
+                        let loop_surv = self.loop_survives(src);
+                        self.construct_copy.push((
+                            rec,
+                            src,
+                            self.pos,
+                            loop_surv,
+                            self.cur_pos.clone(),
+                        ));
                     }
                 }
             }
@@ -299,16 +463,15 @@ impl Uses {
                 }
             }
             Value::Call(d, args) if *d == self.op_copy_record => {
-                // @PLN90 — `OpCopyRecord(target, source, tp)` deep-copies one record. Record
-                // it for coverage, skipping the same-var no-op alias (`OpCopyRecord(x, x)`,
-                // the ref_return-promoted callee whose return aliases its buffer — the
-                // runtime short-circuits it). Visit args exactly as the generic Call arm
-                // would, so no existing fact changes.
-                let tgt = args.first().and_then(|a| base_var(a, self.get_field));
-                let src = args.get(1).and_then(|a| base_var(a, self.get_field));
-                if !(tgt.is_some() && tgt == src) {
-                    self.record_copy.push((tgt, src));
-                }
+                // @PLN90 — `OpCopyRecord(source, dest, tp)` deep-copies one record: arg 0 is the
+                // SOURCE (`data`), arg 1 is the DEST (`to`) — verified against `State::copy_record`
+                // (io.rs) and `parser::find_written_vars` (dest = second arg). The survival split
+                // classifies the SOURCE's fate, and the row's target/name is the DEST. Skip the
+                // same-var no-op alias (`OpCopyRecord(x, x)` — the runtime short-circuits it).
+                // The dest's write is recorded by the general write-mark at the top of `visit`.
+                let src = args.first().and_then(|a| base_var(a, self.get_field));
+                let dest = args.get(1).and_then(|a| base_var(a, self.get_field));
+                let record = !(dest.is_some() && dest == src);
                 let c = if self.value_readers.contains(d) {
                     Ctx::ReaderArg
                 } else {
@@ -316,6 +479,15 @@ impl Uses {
                 };
                 for a in args {
                     self.visit(a, c);
+                }
+                // Position AFTER the args: a later use of the source ⇒ it survives. The
+                // `OpCopyRecord` carries no span, so borrow the nearest enclosing one. The row's
+                // target/name is the DEST; the classified var is the SOURCE (`src`). `loop_surv`
+                // (item 4) = the source outlives the enclosing loop (copied every iteration).
+                if record {
+                    let loop_surv = self.loop_survives(src);
+                    self.record_copy
+                        .push((dest, src, self.pos, loop_surv, self.cur_pos.clone()));
                 }
             }
             Value::Call(d, args) => {
@@ -354,6 +526,11 @@ fn analyze_fn(
     data: &Data,
     max_tier: u8,
 ) -> (Vec<VerdictRow>, Vec<ElidePlan>) {
+    // @PLN90 — the survival split + its report locations are produced under LOFT_COPY_SURVIVAL
+    // (the raw dev dump) OR the user-facing report (`report_copies`); read once so both the walk
+    // (`track_pos`) and the classification below agree.
+    let survival_on =
+        std::env::var_os("LOFT_COPY_SURVIVAL").is_some() || crate::keys::report_copies_enabled();
     let mut u = Uses {
         get_field: data.def_nr("OpGetField"),
         op_append: data.def_nr("OpAppendVector"),
@@ -362,6 +539,7 @@ fn analyze_fn(
         op_copy_record: data.def_nr("OpCopyRecord"),
         projections: projection_ops(data),
         value_readers: value_reader_ops(data),
+        write_first_arg: first_arg_write_ops(data),
         ineligible: HashSet::new(),
         def_count: HashMap::new(),
         database_vars: HashSet::new(),
@@ -370,9 +548,15 @@ fn analyze_fn(
         append_expr: HashMap::new(),
         pos: 0,
         loop_depth: 0,
+        track_pos: survival_on,
+        cur_pos: None,
+        mut_max_pos: HashMap::new(),
+        first_def_pos: HashMap::new(),
+        loop_entry: Vec::new(),
         other_max_pos: HashMap::new(),
         copyfill_pos: HashMap::new(),
         copyfill_in_loop: HashSet::new(),
+        last_use_pos: HashMap::new(),
         construct_copy: Vec::new(),
         record_copy: Vec::new(),
     };
@@ -421,6 +605,8 @@ fn analyze_fn(
                     // keeps the subject alive); the copy is here only because the borrowed
                     // return path is not yet correct (@PLN85 P4). Eliminating it = that fix.
                     class: CopyClass::Avoidable,
+                    loc: None,
+                    survival: false,
                 });
             }
             continue; // not a single-source local copy — not ours to elide
@@ -527,6 +713,8 @@ fn analyze_fn(
             verdict,
             reason,
             class,
+            loc: None,
+            survival: false,
         });
     }
 
@@ -534,19 +722,30 @@ fn analyze_fn(
     // (`S { f: src }` construction, or `x.field += src`) deep-copies the source into the
     // field, which the var-buffer idiom above does not classify. Emit a Copy row so the
     // copy-vs-borrow decision COVERS the copy. Diagnostic only: always `Copy`, so it never
-    // produces an `ElidePlan` (no codegen change). The field owns its data, so it is a copy
-    // unless a later (phase 2) lifetime proof shows the source out-lives the record.
-    for &(rec, src) in &u.construct_copy {
+    // produces an `ElidePlan` (no codegen change). Phase 2 (the bound-vs-unbound survival
+    // split, `survival_class`) sorts Implicit/Avoidable/Forced — gated on `LOFT_COPY_SURVIVAL`
+    // (`survival_on`, read once at the top of `analyze_fn`).
+    for entry in &u.construct_copy {
+        let (rec, src, copy_end, loop_surv) = (entry.0, entry.1, entry.2, entry.3);
+        // Flag OFF → the original phase-1 classification verbatim (byte-identical). Flag ON →
+        // the bound-vs-unbound survival split.
+        let (class, reason) = if survival_on {
+            survival_class(src, copy_end, loop_surv, &u, function)
+        } else {
+            (
+                CopyClass::Implicit,
+                "struct/enum field owns its data (construction/field-append copy)",
+            )
+        };
         rows.push(VerdictRow {
             var_nr: rec.unwrap_or(u16::MAX),
             var_name: rec.map_or_else(|| "<field>".to_string(), |r| function.name(r).to_string()),
             source: src.unwrap_or(u16::MAX),
             verdict: Verdict::Copy,
-            reason: "struct/enum field owns its data (construction/field-append copy)",
-            // IMPLICIT — silent: constructing an owning structure (`S { f: src }`) copying
-            // its field is exactly the model (the field owns its data), what the programmer
-            // asked for, not a surprise. Never warned.
-            class: CopyClass::Implicit,
+            reason,
+            class,
+            loc: entry.4.clone(),
+            survival: true,
         });
     }
 
@@ -554,19 +753,105 @@ fn analyze_fn(
     // a `?? E{…}` default element, a struct copy. Not append-based, so the var-buffer /
     // construction / return-buffer paths above never see them. Emit a Copy row so the
     // decision covers the copy. Diagnostic only — never an `ElidePlan`, no codegen change.
-    for &(tgt, src) in &u.record_copy {
+    for entry in &u.record_copy {
+        let (tgt, src, copy_end, loop_surv) = (entry.0, entry.1, entry.2, entry.3);
+        // Flag OFF → the original phase-1 classification verbatim (byte-identical). Flag ON →
+        // the bound-vs-unbound survival split.
+        let (class, reason) = if survival_on {
+            survival_class(src, copy_end, loop_surv, &u, function)
+        } else {
+            (CopyClass::Implicit, "record deep-copy (OpCopyRecord)")
+        };
         rows.push(VerdictRow {
             var_nr: tgt.unwrap_or(u16::MAX),
             var_name: tgt.map_or_else(|| "<record>".to_string(), |t| function.name(t).to_string()),
             source: src.unwrap_or(u16::MAX),
             verdict: Verdict::Copy,
-            reason: "record deep-copy (OpCopyRecord)",
-            // IMPLICIT — silent: assigning a record into an owning slot/element (`v[i] = e`,
-            // a built element) means the slot owns it. That is the model, not a surprise.
-            class: CopyClass::Implicit,
+            reason,
+            class,
+            loc: entry.4.clone(),
+            survival: true,
         });
     }
     (rows, plans)
+}
+
+/// @PLN90 — the bound-vs-unbound survival split for a construction / record copy. The
+/// silent/indicate line is keyed on the copy's SOURCE FATE, never on the emitting op
+/// (COPY_DIAGNOSTICS.md § bound vs unbound):
+///
+/// - **bound → `Implicit` (silent):** a literal / freshly-built source (nothing pre-existing
+///   is duplicated), or a **move** (the source is consumed at the copy — no use strictly
+///   after the copy site — so its single backing transfers).
+/// - **unbound → indicated:** a still-live source is duplicated into an independent structure.
+///   `Avoidable` when the survivor is read-only (a borrow/move would have avoided the copy —
+///   the worklist); `Forced` when the source is mutated after the copy (an independent copy is
+///   genuinely required). `loop_surv` (item 4): a copy inside a loop whose source is defined
+///   OUTSIDE the loop is a duplicate made every iteration → also a survivor (indicated); a
+///   per-iteration local source is a move (silent).
+///
+/// Called only when `LOFT_COPY_SURVIVAL` is set — the flag-OFF path keeps the original
+/// phase-1 classification verbatim at the call site, so the default dump stays byte-identical.
+fn survival_class(
+    src: Option<u16>,
+    copy_end: usize,
+    loop_surv: bool,
+    u: &Uses,
+    function: &Function,
+) -> (CopyClass, &'static str) {
+    let Some(s) = src else {
+        return (
+            CopyClass::Implicit,
+            "born-owned: literal / freshly-built source — no live structure duplicated",
+        );
+    };
+    // The copy's OWN read of the source is at a position <= copy_end, so a use strictly after
+    // is a genuine later use — the source survives, an independent duplicate now coexists.
+    let survives_straight = u.last_use_pos.get(&s).is_some_and(|&p| p > copy_end);
+    if !survives_straight && !loop_surv {
+        // A move — the source is consumed here (a per-iteration local, in the loop case). Bound,
+        // silent for everyone; not a copy to eliminate.
+        return (
+            CopyClass::Implicit,
+            "move: source consumed at the copy — its single backing transfers",
+        );
+    }
+    let (class, reason) = if u.mut_max_pos.get(&s).is_some_and(|&p| p > copy_end) {
+        // @PLN90 item 3 — the source is genuinely WRITTEN after the copy (reassigned, appended
+        // to, record-copied into): a borrow would let that mutation leak into the copy's owner,
+        // so the independent copy is forced. This is precise — unlike the old `other_max_pos`
+        // test it does NOT count a read-only pass-to-callee or being another copy's source.
+        // (Residual, conservative-toward-Avoidable: a mutating-callee on a single-def LOCAL is
+        // not caught → shows Avoidable; the phase-B elision analysis is the real borrow checker
+        // and rejects an unsound candidate, so a false-Avoidable is safe for the worklist.)
+        (
+            CopyClass::Forced,
+            "unbound: source survives AND is written after — an independent copy is required",
+        )
+    } else if loop_surv && !survives_straight {
+        // @PLN90 item 4 — a value defined outside the loop, copied every iteration.
+        (
+            CopyClass::Avoidable,
+            "in-loop copy of a value defined outside the loop — duplicated every iteration; a borrow would avoid it",
+        )
+    } else {
+        // A read-only survivor (read, or passed read-only) — the avoidable worklist.
+        (
+            CopyClass::Avoidable,
+            "unbound: source survives read-only — a borrow/move would avoid this copy",
+        )
+    };
+    // @PLN90 item 1 — an INDICATED copy whose SOURCE is a compiler-generated temporary
+    // (`_`-prefixed) is not user-actionable: the user never wrote `__ref_N` / `_comp_N`. Route
+    // it to `Internal` so the user-facing report excludes it while the developer worklist still
+    // counts it (it may be a copy WE can eliminate).
+    if function.is_compiler_generated(s) {
+        return (
+            CopyClass::Internal,
+            "compiler-internal source (_-prefixed) — a copy we may eliminate; excluded from the user report",
+        );
+    }
+    (class, reason)
 }
 
 /// The elision tier selected by the environment: 0 (shipped param-source rule,
@@ -1252,8 +1537,11 @@ pub fn dump_all(data: &Data) {
     }
     let mut own = Ownership::new(data);
     // @PLN90 — the tally: `avoidable` is the north-star elimination worklist; `implicit`
-    // is model-inherent ownership (silent, not a copy-to-fix); `forced` is informational.
-    let (mut avoidable_copies, mut implicit_copies, mut forced_copies) = (0u32, 0u32, 0u32);
+    // is model-inherent ownership (silent, not a copy-to-fix); `forced` is informational;
+    // `internal` is a copy of a compiler-generated source — a developer-worklist copy we may
+    // eliminate, but excluded from the user-facing report (item 1).
+    let (mut avoidable_copies, mut implicit_copies, mut forced_copies, mut internal_copies) =
+        (0u32, 0u32, 0u32, 0u32);
     for d_nr in 0..data.definitions() {
         let def = data.def(d_nr);
         if !matches!(def.def_type, DefType::Function) {
@@ -1274,10 +1562,20 @@ pub fn dump_all(data: &Data) {
                     forced_copies += 1;
                     "forced"
                 }
+                CopyClass::Internal => {
+                    internal_copies += 1;
+                    "internal"
+                }
             };
+            // @PLN90 item 2 — the copy-site location, when the emitting op carried a span.
+            // Makes a `<record>` element-set copy (no named target) actionable.
+            let at = r
+                .loc
+                .as_ref()
+                .map_or_else(String::new, |p| format!(" at {p}"));
             eprintln!(
-                "MAT fn={} v={}({}) src={} verdict={:?} bucket={} [{}]",
-                def.name, r.var_nr, r.var_name, r.source, r.verdict, bucket, r.reason
+                "MAT fn={} v={}({}) src={} verdict={:?} bucket={} [{}]{}",
+                def.name, r.var_nr, r.var_name, r.source, r.verdict, bucket, r.reason, at
             );
         }
         // The ownership fact (inert): the return class + the owned-slot
@@ -1315,8 +1613,100 @@ pub fn dump_all(data: &Data) {
     }
     // @PLN90 — the worklist headline: avoidable = the north-star target (teach the analysis
     // to borrow these so they auto-eliminate); implicit = model-inherent ownership (silent);
-    // forced = must own by circumstance (informational).
+    // forced = must own by circumstance (informational); internal = compiler-generated source
+    // (developer worklist, excluded from the user-facing report).
     eprintln!(
-        "MAT-WORKLIST avoidable_copies={avoidable_copies} implicit_copies={implicit_copies} forced_copies={forced_copies}"
+        "MAT-WORKLIST avoidable_copies={avoidable_copies} implicit_copies={implicit_copies} forced_copies={forced_copies} internal_copies={internal_copies}"
     );
+}
+
+/// @PLN90 Step 5 — the USER-FACING copy report (`LOFT_REPORT_COPIES` / `--report-copies`).
+///
+/// Unlike `dump_all` (the raw developer trace), this surfaces ONLY the *unbound* structure
+/// copies the user can act on — `Avoidable` (a borrow/move would remove it — the worklist) and
+/// `Forced` (required as written, informational) — each with a source location, the copied
+/// type, and a fix hint, followed by a rollup and the ranked Avoidable worklist. `Implicit`
+/// (moves / literals) and `Internal` (compiler-generated sources) are excluded — they are not
+/// the user's to fix. Diagnostic only; called from `scopes::check`, a no-op unless enabled.
+pub fn report_copies(data: &Data) {
+    if !crate::keys::report_copies_enabled() {
+        return;
+    }
+    struct Row {
+        fname: String,
+        loc: String,
+        ty: String,
+        avoidable: bool,
+        reason: &'static str,
+    }
+    let mut rows: Vec<Row> = Vec::new();
+    for d_nr in 0..data.definitions() {
+        let def = data.def(d_nr);
+        if !matches!(def.def_type, DefType::Function) {
+            continue;
+        }
+        for r in analyze_fn(&def.code, &def.variables, data, env_tier()).0 {
+            // Only survival-split copies (source duplications) are user-facing; the var-buffer /
+            // return-buffer copies are a separate elision class (and where the stdlib's copies
+            // land — the survival baseline is 0), kept to the developer dump.
+            if !r.survival {
+                continue;
+            }
+            let avoidable = match r.class {
+                CopyClass::Avoidable => true,
+                CopyClass::Forced => false,
+                // Eliminated / Implicit (move, literal) / Internal (compiler-gen) — not the
+                // user's to act on.
+                _ => continue,
+            };
+            let loc = r
+                .loc
+                .as_ref()
+                .map_or_else(|| "<location unknown>".to_string(), Position::to_string);
+            let ty = if r.source == u16::MAX {
+                "a structure".to_string()
+            } else {
+                data.type_name_str(def.variables.tp(r.source))
+            };
+            rows.push(Row {
+                fname: def.name.clone(),
+                loc,
+                ty,
+                avoidable,
+                reason: r.reason,
+            });
+        }
+    }
+
+    eprintln!(
+        "loft copy report — unbound structure copies (a copy the alias-default did not make silently)"
+    );
+    if rows.is_empty() {
+        eprintln!("  none — every structure copy is a move, a literal, or already borrowed.");
+        return;
+    }
+    for row in &rows {
+        let tag = if row.avoidable {
+            "avoidable"
+        } else {
+            "forced "
+        };
+        eprintln!(
+            "  {}  fn {}  copies {}  [{tag}]  {}",
+            row.loc, row.fname, row.ty, row.reason
+        );
+    }
+    let avoidable = rows.iter().filter(|r| r.avoidable).count();
+    let forced = rows.len() - avoidable;
+    eprintln!(
+        "  ── {} unbound {}: {avoidable} avoidable, {forced} forced (moves & literals are silent)",
+        rows.len(),
+        if rows.len() == 1 { "copy" } else { "copies" }
+    );
+    if avoidable > 0 {
+        eprintln!("  Avoidable — a `&` borrow or a small restructure would remove these:");
+        for row in rows.iter().filter(|r| r.avoidable) {
+            eprintln!("    {}  {}", row.loc, row.ty);
+        }
+    }
 }

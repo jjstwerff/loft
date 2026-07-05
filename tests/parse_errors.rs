@@ -10,14 +10,14 @@ mod testing;
 #[test]
 fn wrong_parameter() {
     code!("fn def(i: integer) { }\nfn test() { def(true); }")
-        .error("expected integer, got boolean on call to def at wrong_parameter:1:35")
+        .error("expected integer, got boolean on call to def at wrong_parameter:2:17")
         .warning("Parameter i is never read at wrong_parameter:1:21");
 }
 
 #[test]
 fn wrong_boolean() {
     code!("enum EType{ Val }\nfn def(t: EType) {}\nfn test() { def(true); }")
-        .error("expected EType, got boolean on call to def at wrong_boolean:2:33")
+        .error("expected EType, got boolean on call to def at wrong_boolean:3:17")
         .warning("Parameter t is never read at wrong_boolean:2:19");
 }
 
@@ -98,7 +98,7 @@ fn p07_no_suggest_distant_name() {
 fn p07_no_suggest_sibling_fn_scope() {
     code!("fn other() { cousin = 99; }\nfn test() { cousn == 1 }")
         .warning("Variable cousin is never read at p07_no_suggest_sibling_fn_scope:1:22")
-        .error("Unknown variable 'cousn' at p07_no_suggest_sibling_fn_scope:1:32");
+        .error("Unknown variable 'cousn' at p07_no_suggest_sibling_fn_scope:2:13");
 }
 
 // Field-suggestion paths (struct-literal + field-access) and the

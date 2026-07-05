@@ -25,10 +25,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > [coroutines.md](coroutines.md) (generators), [concurrency.md](concurrency.md) (`par`),
 > [calls.md](calls.md) (function call/return + parameter binding), [matching.md](matching.md)
 > (`match` + exhaustiveness), [tuples.md](tuples.md), [closures.md](closures.md) (lambdas /
-> closures / fn-refs — written WITH 2 open deviations, the only operational file that has them).
-> Still NOT written — the interpreter remains their spec (tracked under D-op-1): **text
-> formatting** (`"{x}"` interpolation) and **generics/interfaces** (a static/typing concern →
-> types.md).
+> closures / fn-refs), [formatting.md](formatting.md) (`"{x}"` interpolation + value→text
+> rendering), and [interfaces.md](interfaces.md) (interfaces + generics — a static/typing area).
+> Every sibling file is now at **0 own deviations** (closures' D-clo-1/2 closed 2026-07-04;
+> formatting + interfaces written 2026-07-05). The operational contract is now written across the
+> whole family — nothing is left to "the interpreter is the spec" except the differential-oracle
+> meta-deviation (D-op-1) itself.
 
 ## Notation
 
@@ -145,14 +147,23 @@ OPEN: **2**
 
 ### D-op-1 — there is no shared operational semantics; the interpreter is the spec
 - **Violates:** the premise of this doc (a single evaluation relation both backends obey)
-- **Where:** `src/state/` (the interpreter) is the de-facto definition; `src/generation/`
-  (native) is a *separate* generator. No rules above are mechanically checked against
-  either — they are a written contract the code is *supposed* to meet.
+- **Where:** `src/state/` (the interpreter) is the de-facto *executable* definition;
+  `src/generation/` (native) is a *separate* generator. The rules across this operational
+  family — this file's scalar core plus [heap](heap.md) / [iteration](iteration.md) /
+  [coroutines](coroutines.md) / [concurrency](concurrency.md) / [calls](calls.md) /
+  [matching](matching.md) / [tuples](tuples.md) / [closures](closures.md), all written
+  2026-07-04 and each at 0 own deviations — are a written contract the code is *supposed* to
+  meet, but none is mechanically checked against either backend.
 - **Effect:** correctness for native means "matches the interpreter on the tests we ran",
-  not "obeys the semantics". The unwritten parts (heap/store steps, iterators, coroutines)
-  have no spec but the interpreter's code.
+  not "obeys the semantics". As of 2026-07-04 the gap is **no longer missing rules** — the
+  operational rules are now written for every core area (store alloc/read/write/copy/free,
+  iteration + combinators, coroutines, `par`, calls, `match`, tuples, closures, text
+  formatting, interfaces/generics — the last two added 2026-07-05). What remains is that those
+  written rules are not enforced against a *single evaluation relation both backends share*:
+  they GUIDE the differential oracle rather than mechanically defining agreement. Nothing is
+  left "spec = the interpreter's code" now — only the differential-vs-definitional gap itself.
 - **Status:** OPEN — **the oracle is BUILT and growing (@PLN89).** `tests/differential_oracle.rs`
-  runs `tests/oracle/*.loft` (17 programs) on BOTH backends and asserts they AGREE on stdout
+  runs `tests/oracle/*.loft` (26 programs) on BOTH backends and asserts they AGREE on stdout
   (value/null), exit code (halt), and leak-freedom, with a positive control proving the detector
   fires.  **2026-07-04 coverage push** — the corpus now spans the divergence-prone areas where the
   two backends use the most different mechanisms: coroutines/generators (native state machine vs
@@ -165,7 +176,7 @@ OPEN: **2**
   first-class caught property.  The oracle now catches real divergences in practice — three
   found this cycle: **#495** (runtime-Join over-free, FIXED), **#500** (native E0308 on a
   nested-ncc optional-text return, FIXED), **#501** (`.map`/`.filter` on a vector literal
-  receiver, FILED).  Corpus is **23 programs** spanning coroutines / collections / parallel /
+  receiver, FILED).  Corpus is **26 programs** spanning coroutines / collections / parallel /
   text / keyed collections / tuples / nullability / nested enums / recursion / closures + the
   graduated bugs.  **NIGHTLY CI GATE WIRED (ci.yml, commit `971150dd`)**: the full
   `--ignored` sweep runs on the 03:00 UTC schedule + push-to-main (Linux-only, never on a PR),

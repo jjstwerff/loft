@@ -51,9 +51,9 @@ fn run_with_warnings(name: &str, source: &str) -> (String, String, Option<i32>) 
     )
 }
 
-/// @PLN87 P3 (W4) — the redundant-`&` lint is OPT-IN (`LOFT_WARN_REDUNDANT_AMP=1`)
-/// until the ecosystem's now-redundant `&` usages are cleaned up, so its tests
-/// must enable it explicitly.
+/// @PLN87 P3 (W4) — the redundant-`&` lint is ON by default (P3.2 flip); a redundant
+/// `&`-reference is double-indirect and materially slower, so users see it without
+/// opting in. `LOFT_NO_WARN_RUNTIME=1` silences it (the runtime-warning family switch).
 fn run_with_w4(name: &str, source: &str) -> (String, String, Option<i32>) {
     let script_path = std::env::temp_dir().join(format!("loft_w4_{name}.loft"));
     std::fs::write(&script_path, source).expect("write temp script");
@@ -1135,7 +1135,7 @@ fn main() { a = Obj { x: 0 }; f(&a); print(\"{a.x}\\n\"); }
 ";
     let (_stdout, diag, _code) = run_with_w4("w4_redundant", source);
     assert!(
-        diag.contains("has no effect here") && diag.contains("REASSIGN"),
+        diag.contains("only slows it down") && diag.contains("REASSIGN"),
         "redundant & must warn (W4); got stderr={diag:?}"
     );
 }
@@ -1151,7 +1151,7 @@ fn main() { a = Obj { x: 0 }; f(&a); print(\"{a.x}\\n\"); }
 ";
     let (_stdout, diag, _code) = run_with_w4("w4_writeback", source);
     assert!(
-        !diag.contains("has no effect here"),
+        !diag.contains("only slows it down"),
         "a reassigned & is load-bearing — W4 must NOT fire; got stderr={diag:?}"
     );
 }
@@ -1165,7 +1165,7 @@ fn main() { x = 0; f(&x); print(\"{x}\\n\"); }
 ";
     let (_stdout, diag, _code) = run_with_w4("w4_scalar", source);
     assert!(
-        !diag.contains("has no effect here"),
+        !diag.contains("only slows it down"),
         "scalar & is always needed — W4 must NOT fire; got stderr={diag:?}"
     );
 }

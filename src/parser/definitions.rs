@@ -1198,6 +1198,15 @@ impl Parser {
                 let first_is_self = def.attributes().first().is_some_and(|a| a.name == "self");
                 body_empty && first_is_self
             };
+            // Each warning pass below seeks the lexer to a diagnostic site
+            // (`lexer.to(..)`) without rewinding the actual read cursor.
+            // `to()` only moves the *reporting* line/pos, but the tokenizer
+            // increments that line on every subsequent physical line it
+            // pulls — so a backward seek here silently offsets the line
+            // number of every diagnostic emitted for the code that follows
+            // (e.g. a later dead-assignment).  Save the true position and
+            // restore it once the passes finish so they are position-neutral.
+            let warn_pos = self.lexer.at();
             if !is_stub {
                 self.vars.test_used(&mut self.lexer, &self.data);
             }
@@ -1222,6 +1231,7 @@ impl Parser {
             // @PLN46 W3 — auto-infer `#null_safe` from entry guards (after the warn
             // pass, so this fn's flag is set for LATER callers' walks).
             self.infer_function_null_safe(&body);
+            self.lexer.to(warn_pos);
         }
         self.lexer.has_token(";");
         self.parse_rust();

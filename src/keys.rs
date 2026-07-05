@@ -315,6 +315,17 @@ pub fn copy_dump_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_COPY_DUMP").is_some())
 }
 
+/// `LOFT_REPORT_COPIES=1` (or the `--report-copies` CLI flag) — @PLN90 Step 5. The USER-FACING
+/// copy report: the *unbound* structure copies (Avoidable + Forced) with a source location, the
+/// copied type, and a fix hint, plus a rollup + the ranked Avoidable worklist. Enables the
+/// bound-vs-unbound survival classification (like `LOFT_COPY_SURVIVAL`) so the buckets are real.
+/// Off by default, one cached env read. See `use_analysis::report_copies`, COPY_DIAGNOSTICS.md.
+#[must_use]
+pub fn report_copies_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_REPORT_COPIES").is_some())
+}
+
 /// `LOFT_PLN25_OPT=1` (@PLN25 slice a, IN PROGRESS) — make the scalar/field postfix `?`
 /// construct the real `Type::Optional` former instead of the Phase-0 no-op. Opt-IN while the
 /// slice-(b) peel audit (the ~280 `match Type` consuming sites that must peel `Optional`) is

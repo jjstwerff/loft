@@ -854,3 +854,174 @@ fn record_copy_is_covered_by_the_verdict() {
         "the `v[i] = e` record copy should be classified Copy [record deep-copy]; dump:\n{stderr}"
     );
 }
+
+// ── @PLN90 phase A — the bound-vs-unbound survival split (items 1–4) ──
+// Under `LOFT_COPY_SURVIVAL` a construction / record copy is classified by its SOURCE FATE:
+// a MOVE (source consumed) is silent (Implicit); a still-live source duplicated is indicated
+// (Avoidable read-only / Forced written-after). Item 4: a copy inside a loop whose source is
+// defined OUTSIDE the loop is duplicated every iteration → Avoidable; a per-iteration LOCAL
+// source is a move → Implicit. (Item 1's `Internal` — a compiler-generated `_`-prefixed source
+// that genuinely SURVIVES — is real but does not fire in this corpus: every compiler temp here
+// is a per-iteration move; the tally still carries `internal_copies=`.)
+const SURVIVAL_SRC: &str = r#"
+struct Wrap { data: vector<integer> }
+fn mk(n: integer) -> Wrap { Wrap { data: [n] } }
+fn cmove() { inner: vector<integer> = [1,2,3]; s = Wrap { data: inner }; print("{s.data[0]}\n"); }
+fn csurv() { inner: vector<integer> = [1,2,3]; s = Wrap { data: inner }; print("{inner[0]} {s.data[0]}\n"); }
+fn cmut()  { inner: vector<integer> = [1,2,3]; s = Wrap { data: inner }; inner += [4]; print("{s.data[0]} {inner[3]}\n"); }
+fn loop_outside() {
+    x = mk(9);                              // defined OUTSIDE the loop
+    v: vector<Wrap> = [mk(0), mk(0), mk(0)];
+    for i in 0..3 { v[i] = x; }             // x duplicated every iteration → Avoidable (item 4)
+    print("{v[0].data[0]}\n");
+}
+fn loop_local() {
+    v: vector<Wrap> = [mk(0), mk(0), mk(0)];
+    for i in 0..3 { y = mk(i); v[i] = y; }  // y is a fresh per-iteration local → move → Implicit
+    print("{v[1].data[0]}\n");
+}
+fn recset() {
+    v: vector<Wrap> = [Wrap { data: [0] }];
+    e = Wrap { data: [1, 2, 3] };
+    v[0] = e;
+    print("{v[0].data[0]}\n");
+}
+fn main() { cmove(); csurv(); cmut(); loop_outside(); loop_local(); recset(); }
+"#;
+
+/// Like `dump`, but with the survival split flag on.
+fn dump_survival(src: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let dir = std::env::temp_dir().join("loft_use_analysis");
+    std::fs::create_dir_all(&dir).expect("probe dir");
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    src.hash(&mut h);
+    "survival".hash(&mut h);
+    let path = dir.join(format!("probe_{:016x}.loft", h.finish()));
+    std::fs::write(&path, src).expect("write probe");
+    let out = Command::new(env!("CARGO_BIN_EXE_loft"))
+        .args(["--interpret", "--check"])
+        .arg(&path)
+        .env("LOFT_MATERIALIZE_DUMP", "1")
+        .env("LOFT_COPY_SURVIVAL", "1")
+        .env("LOFT_NO_CACHE", "1")
+        .env("LOFT_NO_JOIN_OWN", "1")
+        .output()
+        .expect("spawn loft");
+    String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+fn assert_bucket(stderr: &str, func: &str, bucket: &str) {
+    assert!(
+        stderr.lines().any(
+            |l| l.contains(&format!("fn=n_{func} ")) && l.contains(&format!("bucket={bucket}"))
+        ),
+        "{func}: expected a copy row bucket={bucket}; dump:\n{stderr}"
+    );
+}
+
+#[test]
+fn survival_split_bound_vs_unbound_and_internal() {
+    let stderr = dump_survival(SURVIVAL_SRC);
+    // Bound → silent; unbound → indicated.
+    assert_bucket(&stderr, "cmove", "implicit"); // move: source consumed
+    assert_bucket(&stderr, "csurv", "AVOIDABLE"); // unbound, read-only survivor
+    assert_bucket(&stderr, "cmut", "forced"); // unbound, written after
+    // Item 4 — loop source scope: outside the loop ⇒ duplicated every iteration (Avoidable);
+    // a per-iteration local ⇒ a move (Implicit).
+    assert_bucket(&stderr, "loop_outside", "AVOIDABLE");
+    assert_bucket(&stderr, "loop_local", "implicit");
+
+    // Item 1: the Internal mechanism is present in the tally (a compiler-generated surviving
+    // source would land there, excluded from the user-facing avoidable/forced set). It does not
+    // fire in this corpus (every compiler temp here is a per-iteration move → Implicit).
+    assert!(
+        stderr
+            .lines()
+            .any(|l| l.contains("MAT-WORKLIST") && l.contains("internal_copies=")),
+        "the worklist tally must carry an internal_copies count; dump:\n{stderr}"
+    );
+
+    // Item 2: a `v[i] = e` record copy carries its source location `at <file>:<line>:<col>`,
+    // so a row that has no useful target name is still actionable. The exact target
+    // attribution varies with lowering, so key only on a LOCATED Copy row in `recset`.
+    assert!(
+        stderr.lines().any(|l| l.contains("fn=n_recset ")
+            && l.contains("verdict=Copy")
+            && l.contains(" at ")
+            && l.contains(".loft:")),
+        "the record-set copy row should carry an `at <file>:<line>` location; dump:\n{stderr}"
+    );
+
+    // Default (flag OFF) keeps every construction copy Implicit AND emits no location suffix
+    // (position tracking is gated) — byte-identical to the phase-1 dump.
+    let off = dump(SURVIVAL_SRC);
+    for f in ["cmove", "csurv", "cmut"] {
+        assert_bucket(&off, f, "implicit");
+    }
+    assert!(
+        !off.lines()
+            .any(|l| l.contains("MAT fn=") && l.contains(" at ")),
+        "flag-off dump must carry no ` at <loc>` suffix (byte-identical); dump:\n{off}"
+    );
+}
+
+// ── @PLN90 Step 5 — the user-facing `--report-copies` report ──
+const REPORT_SRC: &str = r#"
+struct Item { tags: vector<integer> }
+fn main() {
+    base: vector<integer> = [1, 2, 3];
+    a = Item { tags: base };                 // base survives → avoidable (construction copy)
+    print("{a.tags[0]} {base[0]}\n");
+    v: vector<Item> = [Item { tags: [0] }];
+    e = Item { tags: [9] };
+    v[0] = e;                                 // e survives → avoidable (record copy, located)
+    print("{v[0].tags[0]} {e.tags[0]}\n");
+}
+"#;
+
+/// Spawn `loft --report-copies --check` and return its stderr (the report).
+fn report(src: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let dir = std::env::temp_dir().join("loft_use_analysis");
+    std::fs::create_dir_all(&dir).expect("probe dir");
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    src.hash(&mut h);
+    "report".hash(&mut h);
+    let path = dir.join(format!("probe_{:016x}.loft", h.finish()));
+    std::fs::write(&path, src).expect("write probe");
+    let out = Command::new(env!("CARGO_BIN_EXE_loft"))
+        .args(["--report-copies", "--interpret", "--check"])
+        .arg(&path)
+        .env("LOFT_NO_CACHE", "1")
+        .output()
+        .expect("spawn loft");
+    String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+#[test]
+fn report_copies_is_user_facing_and_prints_once() {
+    let out = report(REPORT_SRC);
+    // Printed exactly ONCE (from main after the whole program is loaded — not per file-load).
+    assert_eq!(
+        out.matches("loft copy report").count(),
+        1,
+        "the report must print exactly once; stderr:\n{out}"
+    );
+    // The user's copies appear (the record copy `v[0] = e` names `Item`).
+    assert!(
+        out.contains("fn n_main") && out.contains("copies Item"),
+        "the user's copies should be reported; stderr:\n{out}"
+    );
+    // Stdlib copies are excluded — the report is only the survival-split (source-duplication)
+    // class, and the stdlib's survival baseline is 0. No return-buffer rows, no `t_*` fns.
+    assert!(
+        !out.contains("return buffer") && !out.contains("fn t_"),
+        "the report must exclude stdlib / return-buffer copies; stderr:\n{out}"
+    );
+    // The rollup line is present.
+    assert!(
+        out.contains("unbound cop") && out.contains("avoidable"),
+        "the report should carry a rollup; stderr:\n{out}"
+    );
+}

@@ -3807,6 +3807,16 @@ fn main() {
             unsafe {
                 std::env::set_var("LOFT_DEV_SOFT_HALT", "1");
             }
+        } else if a == "--report-copies" {
+            // @PLN90 Step 5 — the user-facing copy report: every UNBOUND structure copy
+            // (Avoidable / Forced) with its location, type and fix hint + a rollup. Off by
+            // default; a perf lint, never an error (COPY_DIAGNOSTICS.md).
+            //
+            // SAFETY: as for --dev-soft-halt — set BEFORE any analysis runs; the gate reads it
+            // via a OnceLock captured on first call, so no concurrent reads are in flight.
+            unsafe {
+                std::env::set_var("LOFT_REPORT_COPIES", "1");
+            }
         } else if a == "--native-emit" {
             // Optional path: consume next arg only if it looks like an output path
             native_emit = Some(if argv.get(i).is_some_and(|s| is_output_path(s)) {
@@ -5067,6 +5077,9 @@ fn main() {
         }
     }
     scopes::check(&mut p.data);
+    // @PLN90 Step 5 — the user-facing copy report, emitted ONCE here (the whole program is now
+    // loaded + checked) rather than per file-load. Gated on `--report-copies`; a no-op otherwise.
+    loft::use_analysis::report_copies(&p.data);
     // @PLN11 Arc N / N3 (Step 2) — auto-compile `use`d libraries that opted in via
     // `[library] compile = "native"`, **build-before-mark**: build each library's
     // cdylib from the post-parse type schema FIRST, then mark its functions native

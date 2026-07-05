@@ -87,7 +87,7 @@ struct Accum {
   total: integer
 }
 
-fn accumulate(r:  & Accum, val: integer) {
+fn accumulate(r: Accum, val: integer) {
   r.total += val;
 }
 // Mutable vector reference with empty-vector default.

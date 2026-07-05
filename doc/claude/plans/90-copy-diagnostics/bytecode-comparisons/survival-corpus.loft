@@ -1,0 +1,57 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN90 phase A — the bound-vs-unbound survival split, one function per bucket.
+// Run: LOFT_COPY_SURVIVAL=1 LOFT_MATERIALIZE_DUMP=1 loft --interpret --check survival-corpus.loft 2>&1 | grep '^MAT'
+//   construct_move          → implicit  (move — source consumed at the copy)
+//   construct_survives      → AVOIDABLE (unbound — source survives read-only; a borrow would avoid it)
+//   construct_survives_mut  → forced    (item 3: source survives AND is WRITTEN after — `inner += [4]`)
+//   construct_literal       → (no row — a literal source is born-owned, nothing duplicated)
+//   loop_outside            → AVOIDABLE (item 4: source defined OUTSIDE the loop, copied every iter)
+//   loop_local              → implicit  (item 4: a per-iteration LOCAL source is a move)
+// (Item 1's `internal` — a compiler-generated source that genuinely survives — is real but does
+//  not fire here: every compiler temp in this corpus is a per-iteration move.)
+// Flag OFF → every construction/record copy stays Implicit (byte-identical to phase 1).
+struct Wrap { data: vector<integer> }
+
+fn mk(n: integer) -> Wrap { Wrap { data: [n] } }
+
+fn construct_move() {
+    inner: vector<integer> = [1, 2, 3];
+    s = Wrap { data: inner };            // inner consumed here → MOVE (silent)
+    println("{s.data[0]}");
+}
+fn construct_survives() {
+    inner: vector<integer> = [1, 2, 3];
+    s = Wrap { data: inner };            // inner read again below → UNBOUND (avoidable)
+    println("{inner[0]} {s.data[0]}");
+}
+fn construct_survives_mut() {
+    inner: vector<integer> = [1, 2, 3];
+    s = Wrap { data: inner };
+    inner += [4];                        // inner mutated after → UNBOUND (forced)
+    println("{s.data[0]} {inner[3]}");
+}
+fn construct_literal() {
+    s = Wrap { data: [7, 8, 9] };        // literal source → born-owned (silent)
+    println("{s.data[0]}");
+}
+fn loop_outside() {
+    x = mk(9);                               // defined OUTSIDE the loop
+    v: vector<Wrap> = [mk(0), mk(0), mk(0)];
+    for i in 0..3 { v[i] = x; }              // x duplicated every iteration → AVOIDABLE (item 4)
+    println("{v[0].data[0]}");
+}
+fn loop_local() {
+    v: vector<Wrap> = [mk(0), mk(0), mk(0)];
+    for i in 0..3 { y = mk(i); v[i] = y; }   // y is a fresh per-iteration local → move (implicit)
+    println("{v[1].data[0]}");
+}
+fn main() {
+    construct_move();
+    construct_survives();
+    construct_survives_mut();
+    construct_literal();
+    loop_outside();
+    loop_local();
+}
