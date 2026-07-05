@@ -14,7 +14,8 @@ imprecisions were caught exactly by re-checking a written rule in detail:
 - `I-Text` said "characters" — a detailed check (`"e" + U+0301`) proved it is **codepoints, not
   grapheme clusters**, and the rule was wrong-because-vague.
 - `closures.md` claimed `|…|` is non-capturing — a detailed check proved it *should* capture
-  (pure sugar), surfacing **D-clo-1** (fixed) and **D-clo-2** (still open, a crash).
+  (pure sugar), surfacing **D-clo-1** (fixed) and **D-clo-2** (fixed — the stored-short-lambda
+  crash is now a clean diagnostic). Both closed 2026-07-04.
 
 This worklist drives that detailed pass over **every rule**: for each, the single falsifiable
 claim, its status on **BOTH backends**, and the standing guard (an [oracle](../../tests/oracle/)
@@ -60,8 +61,9 @@ plan for the new rules — the oracle already guards each *area*; this drives it
 > F-Return (implicit tail), T-Paren (`(e)` is grouping), L-Escape (a returned closure works on
 > native). Still ☐ / covered-elsewhere: **F-ParamRef** (`&` write-back — binding.md's domain, 0
 > deviations, PR#436), **C-Order hash-par** (a documented edge; probe syntax pending),
-> **G-YieldDepth** (stackful yield — likely needs `yield from`, deferred to 1.1+), **D-clo-2**
-> (the open closure crash). The load-bearing rules are now pinned; the residue is edge/deferred.
+> **G-YieldDepth** (stackful yield — likely needs `yield from`, deferred to 1.1+). (**D-clo-2**
+> — the stored-short-lambda crash — is now CLOSED, see below.) The load-bearing rules are now
+> pinned; the residue is edge/deferred.
 
 ## heap.md
 
@@ -167,11 +169,13 @@ sweep is green.
   helper (G-YieldDepth) needs `yield from` (CO1.4, deferred to 1.1+).
 
 **Still open after verification (not testable-to-close — they need action, not probes):**
-1. **D-clo-2** — the stored-short-lambda→`map` crash. Needs a FIX + guard.
-2. **CL-9 / the coroutine decided edge** — native eager loop yields. Removal DESIGN written
+1. **CL-9 / the coroutine decided edge** — native eager loop yields. Removal DESIGN written
    ([COROUTINE.md § lazy loop yields](../COROUTINE.md#design-lazy-loop-yields-cl-9)); needs the build.
-3. **D-op-1 / D-op-2** — the differential-oracle meta-deviations; open BY DESIGN. "More testing" =
+2. **D-op-1 / D-op-2** — the differential-oracle meta-deviations; open BY DESIGN. "More testing" =
    growing the corpus, which this worklist did (3 new programs) and which continues.
+
+(**D-clo-2** — the stored-short-lambda→`map` crash — was on this list; CLOSED 2026-07-04 with a
+clean diagnostic + `dclo2_stored_short_lambda_map_no_crash` guard, verified on both backends.)
 
 The newly-written operational rules are now not just *written* but *verified + pinned*. This file
 stays as the standing per-rule ledger; each future rule addition gets a row and an oracle case.

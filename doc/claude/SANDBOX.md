@@ -40,17 +40,19 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > declares a `[sandbox]` policy in `loft.toml`; designated functions are admitted
 > only if proven safe at LOAD, and rejected with actionable errors otherwise.
 > Surface: `Parser::sandbox_admission_errors` (+ `has_sandboxed_defs`),
-> `src/sandbox.rs`. **Checks S1–S5 are now GREEN; S7/S8 are partially closed**
-> (statuses updated per-invariant below). The four arcs an admitted script
-> satisfies: **capability** (reaches only allow-listed libraries/groups),
-> **termination** (bounded loops + acyclic recursion + total ops), **data
-> integrity** (no raw writes to host data), **backend** (no external FFI; the
-> proof itself is backend-agnostic — the former force-interpret was dropped).
-> The next arcs are **DESIGNED, compile-only** (S9–S10 below): a **data envelope**
-> (a load-time peak-heap bound) and **per-member access** (independent read/update/append
-> rights per field + enum variant, declared as groups in the loft type defs). Per the
-> **compile-only decision**, the transactional world (S7) and runtime guards are **dropped**;
-> `run_script` (S8) survives only as the unknown-unknown backstop — see the plan's § Open work.
+> `src/sandbox.rs`. **@PLN86 is COMPLETE (closed 2026-07-05): S1–S10 all GREEN** (statuses
+> updated per-invariant below). The four arcs an admitted script satisfies: **capability**
+> (reaches only allow-listed libraries/groups), **termination** (bounded loops + acyclic
+> recursion + total ops), **data integrity** (no raw writes to host data + per-field
+> read/update/append rights, S10), **backend** (no external FFI; the proof itself is
+> backend-agnostic — the former force-interpret was dropped). The **data envelope** (S9 — a
+> load-time peak-heap bound, `coeff · max_input_n^degree ≤ data_budget`) is GREEN too. The one
+> deferred, fail-safe item is F8b (member-links IR-persistence *wiring*, lands with the first
+> cached capability-gated library). Per the
+> **compile-only decision there are NO runtime checks** — the border is the admission set and a
+> game is never stopped at it; the transactional world (S7) and every runtime guard are
+> **dropped**, and S8 is *sandbox integration* (a load-time gate + direct calls), not a
+> `run_script` runtime boundary — see the plan's § Open work.
 
 ## The model — validate before allow, don't isolate after
 
@@ -201,29 +203,38 @@ live world is untouched until explicitly committed. "Break everything" becomes
   commit-or-discard at the script boundary.
 - **Check:** run a script that mangles state in the sandbox, then discard → the
   live world is byte-identical to before; commit → the changes apply atomically.
-- **Status: 🟡 PARTIAL (@PLN86 2.4) + substrate exists.** Admission now forbids **raw
+- **Status: 🟢 GREEN by construction (the runtime half is decided OUT).** Admission forbids **raw
   writes** to host data (`e.health = 0` / `v[i] = 9` → rejected; `sandbox::RawWriteViolation`)
   — a script mutates host data only through allow-listed `*.write` ops, so it cannot corrupt
   an invariant in the first place. The *transactional rollback* (run against a journal,
-  commit-or-discard) is the remaining runtime piece; substrate is there
-  (`journal.rs::snapshot` + `copy_block_cross_store`).
+  commit-or-discard) is **dropped** per the compile-only / no-runtime-checks decision below;
+  containment is by construction (S9/S10), not by rollback.
 
-### S8 — Fault isolation (the host survives any script fault)
-A script that errors / overflows / hangs is caught at the *embedding boundary* and
-surfaced as a value; the host's next operation still runs. The host embeds loft and
-gets a `Result`, never an `exit()` / abort / segfault.
-- **Chokepoint:** an embedding entry — `run_script(src, policy, world) -> Result<_,
-  ScriptError>` — that catches runtime errors + fuel-exhaustion (S4) and never runs
-  on an unparsed-safe input (S5).
-- **Check:** a script doing OOB / div-by-zero / `while true {}` returns a
-  script-level error and the host continues serving.
-- **Status: 🟡 PARTIAL → much stronger (@PLN86).** An *admitted* script is now proven not
-  to fault: total ops (3.3 — div-by-zero → `null`, OOB → `null`), no unbounded loop (3.1),
-  no recursion (3.2), and the explicit-abort ops `assert`/`panic`/`log_fatal` are **excluded
-  at admission**. The two former crash paths are closed for sandboxed code (parser guard S5,
-  loop-rejection S4). *Remaining:* an embedding `run_script(src, policy) -> Result<_,
-  ScriptError>` boundary so a host (not the CLI) gets the fault as a value — belt-and-
-  suspenders for an interpreter bug.
+### S8 — Sandbox integration (how a host runs an admitted subset)
+Integration is entirely at **LOAD**, never at runtime. The host designates a script subset,
+admission proves it safe **once at load**, and — because admission already proves totality — the
+admitted subset is then **called like any ordinary function**, in-process, sharing the live
+`Stores` at full `DbRef` speed. There is **no runtime boundary, no `run_script(...) -> Result`
+wrapper, no fault interception, no per-frame guard**: a game is **never stopped at a sandbox
+border**. The border is the admission set, decided before the first instruction runs.
+- **Chokepoint:** the embedding checks admission at mod-load — `Parser::sandbox_admission_errors`
+  / `has_sandboxed_defs` over the loaded IR. A rejection is a **load-time decision** (the host
+  declines to integrate the mod and reports why); an admitted subset's entry points are plain
+  `def_nr` calls the host makes directly in its own loop. Nothing is injected into the running
+  script.
+- **Check:** a host loads a mod → runs admission (pass ⇒ the mod's functions are callable; fail ⇒
+  the mod is simply not integrated and the running game is untouched) → calls an admitted entry
+  each frame. The call runs to completion at trusted speed with **zero injected runtime checks**.
+  There is nothing to catch: admission excludes the abort ops (`assert`/`panic`/`log_fatal`),
+  unbounded loops, and recursion, and total ops make the residual faults yield `null` and
+  continue (C80) rather than halt.
+- **Status: 🟢 MODEL COMPLETE (no runtime work by decision).** The load-time gate exists
+  (`sandbox_admission_errors` + the `loft sandbox-check` CLI); a host embedding loft calls the
+  same surface at mod-load. What remains is purely **ergonomic** — a documented host-entry
+  pattern (*designate → admit-at-load → call directly*) and, if wanted, a thin
+  `admit(program, policy) -> Result<Admitted, Vec<Rejection>>` helper wrapping the existing
+  check. **No `catch_unwind`, no fuel, no runtime resource guard** — those are decided OUT: the
+  sandbox does not stop a game at its border, so there is no runtime mechanism to build.
 
 ### S9 — Data envelope (compile-time footprint bound)
 An admitted script's peak heap is bounded at LOAD by a host-declared budget: the closed-form
@@ -237,9 +248,15 @@ becomes a load-time concern.
 - **Check:** a per-entity struct-building loop reports `coeff·n`; a script whose worst case
   exceeds `data_budget`, or whose allocation size can't be tied to a declared bound (uncapped
   string, host-value-sized alloc), is rejected at admission with the figure + fix.
-- **Status: 🟡 DESIGNED ([@PLN86 P7](plans/86-sandbox-subset-flag/README.md)).** The degree is
-  computed today; the coefficient + budget compare + static-sizing gate are the build. Pure
-  compile-time; no @PLN85 dependency (it was only the dropped runtime layer).
+- **Status: 🟢 GREEN (@PLN86 P7, F9–F11).** Built + verified end-to-end. `data_envelope_violations`
+  (`src/sandbox.rs`) proves `coeff · max_input_n^degree ≤ data_budget` over the
+  `sandbox_space_footprint` `(degree, coeff)` and rejects otherwise: **OverBudget** names the
+  figure (e.g. `12 · 1000000^1 = 12000000 bytes > data_budget 1024`), **UnboundedAlloc** rejects
+  a degree > 0 with `max_input_n` unset (unprovable → deny-by-default), and F10 rejects an
+  uncapped growing string unless `max_string_len` is set. Wired into `sandbox_admission_errors`
+  (`parser/mod.rs`); guards `data_budget_rejects_over_envelope_and_admits_under`,
+  `space_footprint_reports_degree_and_record_coefficient`, `parses_data_envelope_fields`. Pure
+  compile-time.
 
 ### S10 — Capabilities: what a restricted caller may do
 A capability is a permission the **host/library** requires of a **restricted caller**: the
@@ -259,19 +276,27 @@ Three surfaces:
 - **Check:** an ungranted call, a non-default override of a locked parameter, or an ungranted
   field update/append is a **load error** naming the symbol + right + group; reads and untagged
   parameters admit. Script-owned data is unrestricted (the §2.4 ownership split).
-- **Status: 🟡 DESIGNED ([@PLN86 P6](plans/86-sandbox-subset-flag/README.md)).** Pure
-  compile-time, no runtime cost / rollback. The **same `capability`/`group#right` mechanism
-  carries the S1 *function* capability surface** (the shipped `#cap "fs.read"` strings →
-  signature `fs#read` / `fs#update`) — pre-customer, so functions, parameters, and fields land
-  on one validated model. (Enum-variant *construction* gating is a separate question, not
-  folded into read/update/append.)
+- **Status: 🟢 GREEN (@PLN86 P6, verified).** Pure compile-time, no runtime cost / rollback.
+  Independent read/update/append rights per field (`field_{read,update,append}_violations`),
+  parameter `#default` locks (`param_lock_violations`), and group-existence validation
+  (`sandbox_undeclared_links`) all landed; the **same `capability`/`group#right` mechanism
+  carries the S1 *function* capability surface** (`#cap "fs.read"` → signature `fs#read`), so
+  functions, parameters, and fields sit on one validated model. Guards
+  `field_read_gates_private_field_admits_unlinked`, `field_update_gates_writable_fields_unlinked_read_only`,
+  `field_append_gates_collection_grow`, `admission_escape_suite_rejects_every_breakout`.
+  **Deferred, fail-safe:** F8b member-links IR-persistence *wiring* (infrastructure round-trips;
+  lands with the first cached capability-gated library). (Enum-variant *construction* gating is a
+  separate question, not folded into read/update/append.)
 
-> **The compile-only decision (finalizes S7/S8).** Effect containment is now **by
-> construction** — a script can only touch members it is granted (S10), never more (S9) —
-> **not by rollback**: the transactional world (S7) and any runtime resource guard are
-> **dropped** (the perf tax + a rollback/exception path in the language are both rejected).
-> `run_script() -> Result` (S8) remains **only** as the alarmed backstop for the
-> unknown-unknown interpreter bug, never as a data-limit or write-containment mechanism.
+> **The compile-only decision (finalizes S7/S8) — NO runtime checks.** The sandbox border is
+> the **compile-time admission set**, and a game is **never stopped at that border** at runtime.
+> Effect containment is **by construction** — a script can only touch members it is granted
+> (S10), never more (S9) — **not by rollback**: the transactional world (S7) and **every**
+> runtime resource guard are **dropped** (the per-access perf tax + a rollback/exception path in
+> the language are both rejected). `run_script() -> Result` is **not built either**: S8 is
+> *sandbox integration* — a load-time gate plus direct in-process calls (an admitted subset is
+> proven total, so there is nothing to catch at runtime). No `catch_unwind`, no fuel, no
+> per-frame guard.
 
 ---
 
@@ -280,9 +305,10 @@ Three surfaces:
 > **✅ Executed by [@PLN86 v1](plans/86-sandbox-subset-flag/README.md).** This was
 > the original first-slice plan; the admission half is now built and CLI-enforced.
 > Items 1 (parser guard), 3 (interpret-only + no-FFI), and 6 (capability allowlist —
-> grown into the full library-first model) are DONE; items 2/4/5 (a committed
-> regression suite, the `run_script` embedding boundary, runtime op-budget) are the
-> remaining runtime-side work. Kept below as the historical decomposition.
+> grown into the full library-first model) are DONE. Item 2 (a committed regression suite)
+> stands; items 4/5 (the `run_script` embedding boundary + runtime op-budget) are **decided
+> OUT** — no runtime checks (S8 is load-time integration, not a runtime boundary). Kept below
+> as the historical decomposition.
 
 These are XS/S, individually validatable, and need none of the big pieces
 (transactional world, wasm tier, full fuel). Each flips a RED Check above to

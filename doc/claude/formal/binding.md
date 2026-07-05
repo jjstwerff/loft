@@ -154,9 +154,11 @@ last residual D-bind-7 are all closed and verified below.
 >   in `tests/parse_errors.rs` (bare statement · bare field statement · block-final). The
 >   caret points at the `&`.
 >
-> One known **deferred** case (not a leak): `&`-write-back from a CALL/var RHS needs ownership
-> transfer — `tests/issues.rs` ignored `pln87_amp_writeback_from_call_writes_back`, tracked in
-> the @PLN87 plan, consistent with `&` on a non-lvalue being rejected.
+> The former deferred case has **landed**: `&`-write-back from a CALL/var RHS
+> (`fn f(o: &Obj){ o = mk() }`) now routes the RHS through a transferable owned temp, so the
+> write-back reaches the caller (`a.x == 9`) — verified on interp **and** native. The parse
+> rejection is gone; `tests/issues.rs::pln87_amp_writeback_from_call_writes_back` is an active,
+> passing test (no longer `#[ignore]`d).
 
 ---
 

@@ -63,9 +63,11 @@ not duplicate: a deviation entry links to the lens analysis instead of re-explai
 
 The **static** areas are all at **0 open deviations** (2026-07-04). The **operational** area is
 one small-step contract split across files: the scalar core (operational.md) plus the heap,
-iteration, coroutines, and concurrency (added 2026-07-04) — these hold **0 open deviations of
-their own** and shrink operational.md's single meta-deviation (D-op-1: conformance is *differential*
-via the @PLN89 oracle, not a second executable definition).
+iteration, coroutines, concurrency, calls, matching, tuples, closures (2026-07-04), and the last
+two — **text formatting** and **interfaces/generics** (2026-07-05) — so the operational contract is
+now written across the *whole* family. Each sibling holds **0 open deviations of their own** and
+shrinks operational.md's single meta-deviation (D-op-1: conformance is *differential* via the
+@PLN89 oracle, not a second executable definition).
 
 | doc | area | status |
 |---|---|---|
@@ -81,6 +83,8 @@ via the @PLN89 oracle, not a second executable definition).
 | [matching.md](matching.md) | `match` — enum-variant dispatch + payload binding | **rules written (2026-07-04), 0 own** — an expression; struct-payload patterns bind by name; `_` is the final catch-all; **compile-time exhaustiveness** (a missing variant does not compile) |
 | [tuples.md](tuples.md) | tuples — construct / project / destructure | **rules written (2026-07-04), 0 own** — positional products (n≥2); `.i` a compile-time index; `(a,b) = …` destructuring; tuple returns |
 | [closures.md](closures.md) | lambdas / closures / fn-refs — capture + apply | **0 open** (2026-07-04) — the `fn(){}` and `\|…\|` forms capture IDENTICALLY (pure sugar, D-clo-1); first-class (store/pass/return/escape); scalar-by-value / heap-shared capture; a stored un-inferrable short lambda in `map` is now a clean diagnostic, not a crash (D-clo-2) |
+| [formatting.md](formatting.md) | text formatting — `"{x}"` interpolation + value→text rendering | **rules written (2026-07-05), 0 own** — arbitrary-expression interpolation, `{{`/`}}` escape, per-type render (null → `"null"`, char-0 → nothing), the width/align/pad/precision/radix specs, and fault-safe interpolation (`{a/b}` → `null(/0)`, never a halt); one rendering sink → backend parity; conformance via the oracle |
+| [interfaces.md](interfaces.md) | interfaces (traits) + generics — bounds, satisfaction, monomorphization | **rules written (2026-07-05), 0 own** — `interface I { fn m(self: Self,…) }`, STRUCTURAL satisfaction (no `impl`), bounded `fn f<T: I>(…)`, parser-side monomorphization (one copy per concrete type → both backends identical), static satisfaction check (`'C' does not satisfy interface 'I': missing m`); compile-time only (no dynamic dispatch / inheritance / associated types — decided edges) |
 | [ownership.md](ownership.md) | the `deps` / borrow **checker** (lifetimes) — distinct from binding.md's surface | **0 open** (2026-07-04) — D-own-1/2/3/4/5 ALL CLOSED; every store-lifetime decision reads the one total `deps` fact. The soundness proof heap.md's free rules rest on |
 | [capabilities.md](capabilities.md) | sandbox **admission** — what a restricted caller may do (call / parameter / field / mutation rights) | **0 open** (2026-07-04) — the 6-rule judgment `P;ctx ⊢ e ✓` fully enforced; D-cap-1/2/3 CLOSED, each with a RED/GREEN adversarial pair. Cites ownership.md/heap.md for the owned-vs-host fact |
 

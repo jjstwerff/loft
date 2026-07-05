@@ -4,9 +4,12 @@
 
 # Interfaces — Design and Implementation Plan
 
-> **Status: implemented (I1–I9).**  P136 fixed; `tests/scripts/86-interfaces.loft`
-> covers the generics+for-loop+struct vector case in both interpreter and
-> native-compiled suites.
+> **Status: implemented (I1–I9).**  P136 (use-after-free in a bounded for-loop over a
+> struct vector) is fixed — re-verified clean on both backends, poison-clean, 2026-07-05.
+> `tests/scripts/86-interfaces.loft` is the guard suite; note its
+> `test_bounded_for_loop_struct` is still **commented out** behind a now-stale "crashes"
+> note and should be re-enabled (the case it guards passes). Strict spec:
+> [formal/interfaces.md](formal/interfaces.md).
 
 Structural interfaces for loft: implicit satisfaction, static dispatch only.
 Primarily motivated by enabling bounded generic functions (`<T: Ordered>`).

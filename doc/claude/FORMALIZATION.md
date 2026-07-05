@@ -19,16 +19,34 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > rough spots the red-flag map structurally misses, because that map is scoped to
 > runtime/memory/codegen, not syntax/types.
 
-## Per-layer readiness
+## Status (2026-07-05) — the lens's recommendations were carried out
 
-| Layer | Verdict | Why |
+> **The verdicts below were true when written; they have since been overtaken by the work
+> they recommended.** The ownership model (rough spot #1, the blocker) closed — @PLN85 and
+> @PLN87 landed — which unblocked writing the rest down. The strict formal definition now
+> exists as [formal/](formal/README.md): every **static** area is at **0 open deviations**
+> (grammar, types, binding, ownership, capabilities), and the **operational** contract is
+> written across the sibling files (heap, iteration, coroutines, concurrency, calls, matching,
+> tuples, closures, formatting, interfaces/generics), each at **0 own deviations**. The single
+> remaining open deviation is the operational **D-op-1/2** meta-gap: conformance is
+> *differential* (the @PLN89 oracle runs a corpus on both backends and asserts agreement),
+> not yet a second executable definition.
+>
+> So this doc has done its job — the rough spots it named below became the formal/ files. It
+> is kept as the **lens** (why the pass was worth it, and the reasoning that ranked the work),
+> with each spot annotated with where it landed. For the live picture read
+> [formal/ROADMAP.md](formal/ROADMAP.md); for the per-area rules read [formal/README.md](formal/README.md).
+
+## Per-layer readiness (as-was → now)
+
+| Layer | Verdict (when written) | Now |
 |---|---|---|
-| 1. Grammar | describable, in flux | Informal EBNF exists ([LOFT.md](LOFT.md) § Summary of grammar) but defers all operator precedence + context-sensitivity to the backtracking parser |
-| 2. Type system | describable, in flux | The `Type` enum is enumerable, but the typing *relation* is implemented-only (the `convert`/`cast`/`can_convert` trio + a conversion table), and `Deps` is fused INTO the type and mid-migration |
-| 3. Dynamic semantics | not ready (encoding sub-layer ready) | "The interpreter is the spec" — no operational rules; but null-sentinel encoding + overflow trapping ARE pinned in prose ([LOFT.md](LOFT.md) § null / integer) |
-| 4. Ownership / `deps` | not ready | [OWNERSHIP_MODEL.md](OWNERSHIP_MODEL.md) self-labels "aspirational… not fully implemented," with open holes in its own table |
-| 5. Inconsistencies | specifiable now | Mostly decided-and-guarded edges; one genuinely open design gap (const on struct fields, [INCONSISTENCIES.md](INCONSISTENCIES.md)) |
-| 6. Stability | not ready (ownership) / ready (rest) | Store-lifetime class reopened 2026-06-21 (@PLN85); the rest is low-bug |
+| 1. Grammar | describable, in flux | **written** — [formal/grammar.md](formal/grammar.md), 0 open: the 12-level precedence ladder + associativity are pinned; the non-CFG surface + `&` overload are decided edges (C81/C82) |
+| 2. Type system | describable, in flux | **written** — [formal/types.md](formal/types.md), 0 open: the bidirectional `⇒`/`⇐` judgment + range-containment conversion relation ([TYPING_RELATION.md](TYPING_RELATION.md) R1–R3 DONE); interfaces/generics in [formal/interfaces.md](formal/interfaces.md) |
+| 3. Dynamic semantics | not ready (encoding sub-layer ready) | **written** — [formal/operational.md](formal/operational.md) scalar core + the sibling family (heap/iteration/coroutines/concurrency/calls/matching/tuples/closures/formatting/interfaces); conformance is the differential oracle (D-op-1), not "the interpreter is the spec" |
+| 4. Ownership / `deps` | not ready | **written + closed** — [formal/ownership.md](formal/ownership.md), 0 open: D-own-1…5 all closed (@PLN85/@PLN90); the one total `deps` fact. [OWNERSHIP_MODEL.md](OWNERSHIP_MODEL.md)'s invariants became the soundness rules heap.md's free discipline rests on |
+| 5. Inconsistencies | specifiable now | **decided edges** — the register is [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md) (C80–C86) + [INCONSISTENCIES.md](INCONSISTENCIES.md) |
+| 6. Stability | not ready (ownership) / ready (rest) | store-lifetime class **retired** — @PLN85 merged to main; the ownership deviations are closed |
 
 ## The rough spots, ranked by leverage
 
@@ -37,6 +55,8 @@ SPDX-License-Identifier: LGPL-3.0-or-later
    fact. You cannot write a stable typing relation while the type's own contents are
    still moving. This is already the active work (red-flag clusters A/C, @PLN85;
    the `&`-binding law @PLN87). Everything below is partly downstream of it.
+   **→ CLOSED:** `deps` is now a typed, total fact read once by the checker —
+   [formal/ownership.md](formal/ownership.md), 0 open (D-own-1…5 all closed, @PLN85/@PLN90).
 
 2. **The typing / conversion relation is a *table*, not rules.** There are no
    typing judgments; the closest artifact is the conversion trio + an 11-pair table.
@@ -53,6 +73,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
      variable whose *type* is inferred narrow across branches. A principled "the type
      of a multiply-assigned local is the join of its assigned types" rule is what is
      missing.
+   **→ CLOSED:** written as rules in [TYPING_RELATION.md](TYPING_RELATION.md) (R1–R3 DONE) and
+   [formal/types.md](formal/types.md), 0 open — the bidirectional `⇒`/`⇐` judgment replaced the
+   four `*_hint` side-channels, `⤳` became range containment, and the `(I-Join)` rule closed the
+   multiply-assigned-local case (guard `433-ijoin-multiply-assigned.loft`). Residual: the i64
+   storage migration (D2 → @PLN88).
 
 3. **No shared operational semantics → interp/native divergence is structural.**
    The interpreter is the spec; the native backend is a *separate* generator kept in
@@ -60,17 +85,29 @@ SPDX-License-Identifier: LGPL-3.0-or-later
    E0308, interpreter fine), and its residual still is (`--interpret` + `loft test`
    stay green; only the native binary breaks). A small-step semantics both backends
    must satisfy would make that divergence a definitional error, not a test-caught one.
+   **→ ADDRESSED (the remaining open deviation):** the rules are written
+   ([formal/operational.md](formal/operational.md) + family) and the chosen conformance model is
+   a **differential oracle** (@PLN89, nightly-gated) that runs a corpus on both backends and
+   asserts agreement — tracked as D-op-1/2, the one open formal deviation. A shared *executable*
+   semantics is the later option; the rules are reused either way.
 
 4. **The grammar under-specifies precedence and is not context-free.** The informal
    EBNF collapses all binary operators into one rule — real precedence lives only in
    `src/parser/operators.rs`. The lexer's Formatting mode and speculative backtracking
    (type-vs-variable, struct-init-vs-block) make the surface context-sensitive. Stable,
    but unwritten: reasoning about precedence today means reading the parser.
+   **→ CLOSED:** [formal/grammar.md](formal/grammar.md), 0 open — the 12-level precedence ladder
+   is written (also lifted into [LOFT.md § Operators](LOFT.md)); the non-CFG surface and the
+   prefix/infix `&` overload are accepted as decided edges (C82/C81).
 
 5. **Local irregularities.** `Enum(u32, bool, Deps)` overloads a bool for
    value-vs-reference; narrow-int nullability shrinks the value range to steal a
    sentinel; `const` silently does not apply to struct fields (the one genuinely open
    design gap, [INCONSISTENCIES.md](INCONSISTENCIES.md)).
+   **→ MOSTLY DECIDED:** the sentinel/encoding choices are recorded as decided edges
+   ([DESIGN_DECISIONS.md](DESIGN_DECISIONS.md) C80–C86, [formal/operational.md](formal/operational.md)
+   E-Null); const-on-struct-fields remains the one open design gap in
+   [INCONSISTENCIES.md](INCONSISTENCIES.md).
 
 ## The meta-insight
 
@@ -81,17 +118,24 @@ are NOT — the red-flag map is scoped to runtime/memory/codegen. #432 is the pr
 was not any red-flag cluster; it was an unwritten typing rule. So a formalization pass
 is a *complementary* instrument to the red-flag sweep, not a duplicate.
 
-## Recommendation — formalize as a layer-by-layer instrument, not a deliverable
+## Recommendation — DONE (the pass was run layer by layer, as recommended)
 
-- **Highest leverage: write the typing / conversion relation as actual rules**
-  (spot 2). It would force the four expected-type side-channels into one rule and
-  surface the remaining coercion gaps (the next #432 / #433-residual) as *unprovable
-  cases* before they ship.
-- **Write a small-step operational semantics for the stable core** (spot 3) as the
-  shared contract interp and native must both satisfy — turning interp-vs-native
-  parity from a test invariant into a definitional one.
-- **Pin the grammar with precedence** (spot 4) — cheap, mechanical, removes a
-  "read the parser" tax.
-- **Defer the ownership-model formalization** (spot 1) until @PLN85 / @PLN87 close.
-  At that point [OWNERSHIP_MODEL.md](OWNERSHIP_MODEL.md)'s named invariants become the
-  soundness theorems to formalize *against*, not guesses to write down.
+Every recommendation below was carried out; each now points to where it landed. The order
+held: ownership closed first (the blocker), then the layers it had been blocking.
+
+- ~~**Highest leverage: write the typing / conversion relation as actual rules**~~ **DONE**
+  (spot 2). The four expected-type side-channels are one `Parser.expected` (`⇐`) channel;
+  `⤳` is range containment; the `(I-Join)` rule closed the #433-residual.
+  → [TYPING_RELATION.md](TYPING_RELATION.md), [formal/types.md](formal/types.md) (0 open).
+- ~~**Write a small-step operational semantics for the stable core**~~ **DONE** (spot 3) —
+  [formal/operational.md](formal/operational.md) + the sibling family. Conformance is the
+  differential oracle (@PLN89, D-op-1); a shared *executable* semantics is the later switch.
+- ~~**Pin the grammar with precedence**~~ **DONE** (spot 4) —
+  [formal/grammar.md](formal/grammar.md), 0 open (12-level ladder; non-CFG accepted, C82).
+- ~~**Defer the ownership-model formalization**~~ **now DONE** (spot 1) — @PLN85 / @PLN87
+  closed, so [OWNERSHIP_MODEL.md](OWNERSHIP_MODEL.md)'s invariants became the soundness rules
+  in [formal/ownership.md](formal/ownership.md) (0 open) that heap.md's free discipline rests on.
+
+**Net:** the "premature as a deliverable" thesis held only until the ownership blocker closed.
+It has, and the deliverable now exists as [formal/](formal/README.md) at 0 open static deviations,
+one open operational meta-deviation (the oracle). The lens is retained as the record of *why*.
