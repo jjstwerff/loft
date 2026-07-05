@@ -163,15 +163,23 @@ struct Uses {
     copyfill_pos: HashMap<u16, usize>,
     /// Copy vars whose fill sits inside a loop (Tier-1 ineligible).
     copyfill_in_loop: HashSet<u16>,
+    /// @PLN90 (bound-vs-unbound survival split) — max position at which a var appeared in
+    /// ANY position (reader OR non-reader), i.e. its last use. Unlike `other_max_pos` (which
+    /// tracks only non-reader uses) this includes plain reads, so "does the source survive
+    /// (a use strictly after the copy site)?" — the move-vs-copy discriminator — can be
+    /// answered. See `survival_class`.
+    last_use_pos: HashMap<u16, usize>,
     /// @PLN90 — field-target appends `OpAppendVector(OpGetField(rec, fld), src)`:
-    /// `(base record var, source base var)`. This is the struct/enum-construction copy
-    /// (`S { f: src }`) and `x.field += src` — the source is deep-copied into the field,
-    /// which the var-buffer copy idiom above never sees. Recorded so the decision covers it.
-    construct_copy: Vec<(Option<u16>, Option<u16>)>,
-    /// @PLN90 — `OpCopyRecord` deep-copies: `(target base var, source base var)`. A record
-    /// copy (`v[i] = e`, a `?? E{…}` default element, a struct copy) — not append-based, so
-    /// the branches above miss it. The same-var no-op alias is excluded when recorded.
-    record_copy: Vec<(Option<u16>, Option<u16>)>,
+    /// `(base record var, source base var, copy-site-end pos, in-loop)`. This is the
+    /// struct/enum-construction copy (`S { f: src }`) and `x.field += src` — the source is
+    /// deep-copied into the field, which the var-buffer copy idiom above never sees. The
+    /// position (taken AFTER the args are walked) + loop flag drive the survival split.
+    construct_copy: Vec<(Option<u16>, Option<u16>, usize, bool)>,
+    /// @PLN90 — `OpCopyRecord` deep-copies: `(target base var, source base var, copy-site-end
+    /// pos, in-loop)`. A record copy (`v[i] = e`, a `?? E{…}` default element, a struct copy)
+    /// — not append-based, so the branches above miss it. The same-var no-op alias is
+    /// excluded when recorded.
+    record_copy: Vec<(Option<u16>, Option<u16>, usize, bool)>,
     /// Vars that appeared in a non-reader position (⇒ not borrow-eligible). The
     /// copy-fill `OpAppendVector(v, src.f)` is *excluded* — it is the copy machinery,
     /// not a user mutation of `v`.
@@ -212,6 +220,9 @@ impl Uses {
         self.pos += 1;
         match node.unspan() {
             Value::Var(v) => {
+                // @PLN90 — last use in ANY position (the survival discriminator).
+                let lu = self.last_use_pos.entry(*v).or_insert(0);
+                *lu = (*lu).max(pos);
                 if ctx != Ctx::ReaderArg {
                     self.ineligible.insert(*v);
                     let e = self.other_max_pos.entry(*v).or_insert(0);
@@ -272,17 +283,24 @@ impl Uses {
                     // (`OpAppendVector(OpGetField(rec, fld), src)`) the source is
                     // deep-copied into the field: a structure copy the var-buffer idiom
                     // above never records (struct/enum construction `S { f: src }`, or
-                    // `x.field += src`). Capture (base record, source base) so the
-                    // copy-vs-borrow decision covers it.
-                    if let Some(Value::Call(d0, _)) = args.first().map(Value::unspan)
+                    // `x.field += src`). Capture (base record, source base, copy-site-end
+                    // pos, in-loop) so the copy-vs-borrow decision + survival split cover it.
+                    let cc = if let Some(Value::Call(d0, _)) = args.first().map(Value::unspan)
                         && *d0 == self.get_field
                     {
                         let rec = args.first().and_then(|t| base_var(t, self.get_field));
                         let src = args.get(1).and_then(|s| base_var(s, self.get_field));
-                        self.construct_copy.push((rec, src));
-                    }
+                        Some((rec, src, self.loop_depth > 0))
+                    } else {
+                        None
+                    };
                     for a in args {
                         self.visit(a, Ctx::Other);
+                    }
+                    // Position taken AFTER the args are walked: a use strictly greater is a
+                    // use of the source AFTER this copy (⇒ the source survives).
+                    if let Some((rec, src, in_loop)) = cc {
+                        self.construct_copy.push((rec, src, self.pos, in_loop));
                     }
                 }
             }
@@ -306,9 +324,8 @@ impl Uses {
                 // would, so no existing fact changes.
                 let tgt = args.first().and_then(|a| base_var(a, self.get_field));
                 let src = args.get(1).and_then(|a| base_var(a, self.get_field));
-                if !(tgt.is_some() && tgt == src) {
-                    self.record_copy.push((tgt, src));
-                }
+                let record = !(tgt.is_some() && tgt == src);
+                let in_loop = self.loop_depth > 0;
                 let c = if self.value_readers.contains(d) {
                     Ctx::ReaderArg
                 } else {
@@ -316,6 +333,10 @@ impl Uses {
                 };
                 for a in args {
                     self.visit(a, c);
+                }
+                // Position AFTER the args: a later use of the source ⇒ it survives.
+                if record {
+                    self.record_copy.push((tgt, src, self.pos, in_loop));
                 }
             }
             Value::Call(d, args) => {
@@ -373,6 +394,7 @@ fn analyze_fn(
         other_max_pos: HashMap::new(),
         copyfill_pos: HashMap::new(),
         copyfill_in_loop: HashSet::new(),
+        last_use_pos: HashMap::new(),
         construct_copy: Vec::new(),
         record_copy: Vec::new(),
     };
@@ -534,19 +556,27 @@ fn analyze_fn(
     // (`S { f: src }` construction, or `x.field += src`) deep-copies the source into the
     // field, which the var-buffer idiom above does not classify. Emit a Copy row so the
     // copy-vs-borrow decision COVERS the copy. Diagnostic only: always `Copy`, so it never
-    // produces an `ElidePlan` (no codegen change). The field owns its data, so it is a copy
-    // unless a later (phase 2) lifetime proof shows the source out-lives the record.
-    for &(rec, src) in &u.construct_copy {
+    // produces an `ElidePlan` (no codegen change). Phase 2 (the bound-vs-unbound survival
+    // split, `survival_class`) sorts Implicit/Avoidable/Forced — gated on `LOFT_COPY_SURVIVAL`.
+    let survival_on = std::env::var_os("LOFT_COPY_SURVIVAL").is_some();
+    for &(rec, src, copy_end, in_loop) in &u.construct_copy {
+        // Flag OFF → the original phase-1 classification verbatim (byte-identical). Flag ON →
+        // the bound-vs-unbound survival split.
+        let (class, reason) = if survival_on {
+            survival_class(src, copy_end, in_loop, &u)
+        } else {
+            (
+                CopyClass::Implicit,
+                "struct/enum field owns its data (construction/field-append copy)",
+            )
+        };
         rows.push(VerdictRow {
             var_nr: rec.unwrap_or(u16::MAX),
             var_name: rec.map_or_else(|| "<field>".to_string(), |r| function.name(r).to_string()),
             source: src.unwrap_or(u16::MAX),
             verdict: Verdict::Copy,
-            reason: "struct/enum field owns its data (construction/field-append copy)",
-            // IMPLICIT — silent: constructing an owning structure (`S { f: src }`) copying
-            // its field is exactly the model (the field owns its data), what the programmer
-            // asked for, not a surprise. Never warned.
-            class: CopyClass::Implicit,
+            reason,
+            class,
         });
     }
 
@@ -554,19 +584,86 @@ fn analyze_fn(
     // a `?? E{…}` default element, a struct copy. Not append-based, so the var-buffer /
     // construction / return-buffer paths above never see them. Emit a Copy row so the
     // decision covers the copy. Diagnostic only — never an `ElidePlan`, no codegen change.
-    for &(tgt, src) in &u.record_copy {
+    for &(tgt, src, copy_end, in_loop) in &u.record_copy {
+        // Flag OFF → the original phase-1 classification verbatim (byte-identical). Flag ON →
+        // the bound-vs-unbound survival split.
+        let (class, reason) = if survival_on {
+            survival_class(src, copy_end, in_loop, &u)
+        } else {
+            (CopyClass::Implicit, "record deep-copy (OpCopyRecord)")
+        };
         rows.push(VerdictRow {
             var_nr: tgt.unwrap_or(u16::MAX),
             var_name: tgt.map_or_else(|| "<record>".to_string(), |t| function.name(t).to_string()),
             source: src.unwrap_or(u16::MAX),
             verdict: Verdict::Copy,
-            reason: "record deep-copy (OpCopyRecord)",
-            // IMPLICIT — silent: assigning a record into an owning slot/element (`v[i] = e`,
-            // a built element) means the slot owns it. That is the model, not a surprise.
-            class: CopyClass::Implicit,
+            reason,
+            class,
         });
     }
     (rows, plans)
+}
+
+/// @PLN90 — the bound-vs-unbound survival split for a construction / record copy. The
+/// silent/indicate line is keyed on the copy's SOURCE FATE, never on the emitting op
+/// (COPY_DIAGNOSTICS.md § bound vs unbound):
+///
+/// - **bound → `Implicit` (silent):** a literal / freshly-built source (nothing pre-existing
+///   is duplicated), or a **move** (the source is consumed at the copy — no use strictly
+///   after the copy site — so its single backing transfers).
+/// - **unbound → indicated:** a still-live source is duplicated into an independent structure.
+///   `Avoidable` when the survivor is read-only (a borrow/move would have avoided the copy —
+///   the worklist); `Forced` when the source is mutated / escapes after the copy (an
+///   independent copy is genuinely required). An in-loop copy whose source is not re-read in
+///   straight-line order is surfaced as `Avoidable` with a caveat reason (the back-edge may
+///   repeat the duplicate; the source's scope needs a human check).
+///
+/// Called only when `LOFT_COPY_SURVIVAL` is set — the flag-OFF path keeps the original
+/// phase-1 classification verbatim at the call site, so the default dump stays byte-identical.
+fn survival_class(
+    src: Option<u16>,
+    copy_end: usize,
+    in_loop: bool,
+    u: &Uses,
+) -> (CopyClass, &'static str) {
+    let Some(s) = src else {
+        return (
+            CopyClass::Implicit,
+            "born-owned: literal / freshly-built source — no live structure duplicated",
+        );
+    };
+    // The copy's OWN read of the source is at a position <= copy_end, so a use strictly after
+    // is a genuine later use — the source survives, an independent duplicate now coexists.
+    let survives = u.last_use_pos.get(&s).is_some_and(|&p| p > copy_end);
+    if !survives {
+        if in_loop {
+            // Not re-read in straight-line order, but a loop back-edge can repeat this copy
+            // each iteration if the source outlives the body — surface it, flagged for review.
+            return (
+                CopyClass::Avoidable,
+                "in-loop copy: the back-edge may repeat this duplicate each iteration (verify the source's scope)",
+            );
+        }
+        return (
+            CopyClass::Implicit,
+            "move: source consumed at the copy — its single backing transfers",
+        );
+    }
+    // A non-reader use (write / escape / pass-to-mutating-callee) after the copy means the
+    // source cannot be safely aliased → the independent copy is forced; a read-only survivor
+    // is the avoidable worklist (a borrow would have sufficed).
+    let mutated_after = u.other_max_pos.get(&s).is_some_and(|&p| p > copy_end);
+    if mutated_after {
+        (
+            CopyClass::Forced,
+            "unbound: source survives AND is mutated/escapes after — an independent copy is required",
+        )
+    } else {
+        (
+            CopyClass::Avoidable,
+            "unbound: source survives read-only — a borrow/move would avoid this copy",
+        )
+    }
 }
 
 /// The elision tier selected by the environment: 0 (shipped param-source rule,

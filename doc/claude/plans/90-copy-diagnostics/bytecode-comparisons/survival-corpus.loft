@@ -1,0 +1,29 @@
+struct Wrap { data: vector<integer> }
+struct Cell { w: Wrap }
+
+fn construct_move() {
+    inner: vector<integer> = [1, 2, 3];
+    s = Wrap { data: inner };            // inner consumed here → MOVE (silent)
+    println("{s.data[0]}");
+}
+fn construct_survives() {
+    inner: vector<integer> = [1, 2, 3];
+    s = Wrap { data: inner };            // inner read again below → UNBOUND (avoidable)
+    println("{inner[0]} {s.data[0]}");
+}
+fn construct_survives_mut() {
+    inner: vector<integer> = [1, 2, 3];
+    s = Wrap { data: inner };
+    inner += [4];                        // inner mutated after → UNBOUND (forced)
+    println("{s.data[0]} {inner[3]}");
+}
+fn construct_literal() {
+    s = Wrap { data: [7, 8, 9] };        // literal source → born-owned (silent)
+    println("{s.data[0]}");
+}
+fn main() {
+    construct_move();
+    construct_survives();
+    construct_survives_mut();
+    construct_literal();
+}

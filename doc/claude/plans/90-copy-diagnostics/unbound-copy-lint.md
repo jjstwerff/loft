@@ -113,6 +113,13 @@ instead of move) → keep it in the developer DUMP under a distinct reason
 (`"move lowered as copy"`) so it stays on *our* worklist without adding user noise. The
 user-facing lint fires only on the *survives* subset; the DUMP sees all.
 
+> **STATUS 2026-07-05 — Steps 0–4 LANDED (gated).** The survival split is implemented in
+> `use_analysis.rs` behind `LOFT_COPY_SURVIVAL` (default off, suite byte-identical, full suite
+> green). The first survey over 371 test scripts is in [survey-findings.md](survey-findings.md)
+> — including the four reporting-fidelity items to resolve before flipping (synthetic-temp
+> exclusion, copy-site source locations, tightening the Avoidable/Forced split, real in-loop
+> survival). Steps 5–6 (the user-facing `--report-copies` report + graduation) are next.
+
 ## Verifiable steps (each: run the check on BOTH backends)
 
 **Step 0 — the gate (capture the current lie).** Build a one-fn-per-case corpus
