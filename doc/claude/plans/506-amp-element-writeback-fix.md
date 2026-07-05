@@ -10,21 +10,32 @@ This is the **safe-implementation recipe** for the deferred fix — each step ha
 check, matrix-validated on BOTH backends, gated. Follow the loft-codegen gate: capture the
 WORKING bytecode before touching the generator.
 
-> **⚠️ ATTEMPTED + REVERTED (2026-07-05) — a store-back copy CORRUPTS on repeat.** The
-> `scan_args` postamble `OpCopyRecord(wv, items[i], type | 0x8000)` (copy the write-back's record
-> INTO the element's existing store) passed the SINGLE-write-back matrix (value + leak + poison,
-> both backends) — but a **second write-back to the same element corrupts it** (`items[i]` reads
-> `null(oob)`), even for two *void* write-backs, both backends. **Root cause (the earlier "callee
-> does NOT free R" claim below was WRONG):** the callee's write-back `item = X` FREES the displaced
-> old record via `_old_disp` (`if _old_disp.store_nr != new { OpFreeRef(_old_disp) }`).  For a
-> LOCAL-var arg that record is the var's own → correct.  For a COMPUTED lvalue the temp `wv`
-> ALIASES the element's record `R_5`, so the callee frees **the element's record** — the copy-into
-> then writes to freed memory (works ONCE by store-reuse luck; the second write-back sees the
-> corruption).  So the copy-into-existing-store approach is unsound; the fix must either **stop the
-> callee freeing the element** (make `wv` OWN a copy for a write-back callee — but a field-mutation
-> callee NEEDS the alias, and the arg-coercion can't tell them apart) or **repoint the element's
-> slot to R′** (a DbRef store into the element, not a copy — the element-DbRef-set op).  This is
-> squarely @PLN90 store-lifetime ownership territory.
+> **✅ LANDED (2026-07-05) — the OWNED-COPY approach, matrix-clean on both backends.** The sound
+> fix is exactly the "make `wv` OWN a copy for a write-back callee" branch flagged below, done
+> at the right chokepoint (`scan_args`, keyed on the write-back fact so a field-mutation callee is
+> untouched). For a computed-lvalue `&`-arg whose callee **whole-reassigns** the param, capture
+> the element into a FRESH OWNED temp and store the result back after the call:
+> ```
+> OpDatabase(tmp, T); OpCopyRecord(items[i], tmp, T)   // preamble: tmp = an owned copy of the element
+> setback(OpCreateStack(tmp), 42)                        // the WORKING local-var path (write-back hits tmp)
+> OpCopyRecord(tmp, items[i], T)                         // postamble: copy tmp's new record back into the element
+> ```
+> The callee's write-back frees the displaced **copy** (`tmp`'s first record), never the element —
+> the element's record is the stable backing and is never freed, so **repeat / loop write-backs
+> stay sound**. `tmp`'s final record is freed at scope exit (`new_lift_var`). This dodges the
+> reverted attempt's corruption (which copied INTO the element's own record, which the callee then
+> freed). Impl: `scopes.rs::amp_writeback_owned_copy` + the postamble plumbing through `scan_args`
+> and its `Value::Call` caller (non-void: scalar → slotted temp, heap → `new_lift_var`). Guard:
+> `tests/scripts/87-amp-element-writeback.loft` (element + read-old-field + repeat + non-void +
+> field-mutation-P160 + struct-field + loop). Full suite + poison clean, both backends. Issue kept
+> OPEN (fix on `tuxedo-formal-compliance`, not yet on `main`).
+>
+> **Superseded note from the reverted first attempt (kept for the ownership lesson):** a store-back
+> that copies the write-back's record INTO `items[i]`'s existing store CORRUPTS on the second
+> write-back — the callee's `item = X` FREES the displaced old record via `_old_disp`, and for a
+> computed lvalue that IS the element's record, so copy-into writes freed memory (worked ONCE by
+> store-reuse luck). The owned-copy above is why the element's record must never be the callee's to
+> free.
 
 ## The bug (one line)
 
