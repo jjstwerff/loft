@@ -9,7 +9,10 @@ Tracker: [@PLN90](https://github.com/loft-lang/plans/issues/90).
 Full design + failure-path enumeration: [COPY_DIAGNOSTICS.md](../../COPY_DIAGNOSTICS.md).
 **Remaining open work before release (issues + optimisations, prioritised): [REMAINING.md](REMAINING.md).**
 **The user-facing lint recipe (the bound-vs-unbound survival split, flag-gated report, staged
-to close): [unbound-copy-lint.md](unbound-copy-lint.md).**
+to close): [unbound-copy-lint.md](unbound-copy-lint.md).** Phase-A survey + the 4 landed items:
+[survey-findings.md](survey-findings.md).
+**Phase B scope (drain the elidable copies — the C86 last-use MOVE-elision, NOT the Avoidable
+`&`-hints): [phase-b-scope.md](phase-b-scope.md).**
 
 ## Status
 
