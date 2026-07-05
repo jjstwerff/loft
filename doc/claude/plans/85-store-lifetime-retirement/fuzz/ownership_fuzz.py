@@ -125,6 +125,13 @@ def collect(dirs):
 
 
 def main():
+    # Force UTF-8 on our own streams: the DIVERGENCE messages carry `≠` (U+2260),
+    # which Windows' default cp1252 console codec cannot encode — without this the
+    # positive-control self-test dies with UnicodeEncodeError instead of running.
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure:
+            reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser()
     ap.add_argument("--corpus", nargs="*", default=[])
     ap.add_argument("--mutate", type=int, default=0)
