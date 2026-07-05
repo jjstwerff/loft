@@ -36,6 +36,31 @@ is never updated and no store-back is emitted. Reference (both backends):
 `doc/claude/plans/90-copy-diagnostics/borrow-return/A1b-*.txt` are the same caller-side-store
 class; capture `#506`'s own pair per Step 0.
 
+## Design progress (2026-07-05) — emission + timing RESOLVED; one ownership question OPEN
+
+Investigation resolved the two things that looked hard, and surfaced the real remaining risk:
+
+- **Emission point (resolved).** The store-back goes in `scopes.rs::scan_args`, whose caller
+  (`scopes.rs:865`) already assembles `Insert([preamble…, call])`. Add a symmetric **postamble**:
+  `Insert([preamble…, (result-capturing) call, postamble…])`. `scan_args` already sees the
+  computed-lvalue `&`-arg as `Insert([Set(wv, orig), OpCreateStack(wv)])` with
+  `orig = OpGetVector(base, stride, idx)` / `OpGetField(base, fld)` — everything needed to build
+  the store-back is in hand there.
+- **Write-back fact + timing (resolved).** `scan_args` runs in the **post-parse** `scopes::check`
+  pass, so EVERY callee is fully parsed → its `rebind_orig` write-back fact
+  (`data.definitions[callee].variables.rebind_orig(param)`) is available. No forward-ref hazard.
+  Emit the store-back **only for a write-back callee** (F3: a field-mutation callee mutates R in
+  place, `wv == items[idx]`, so no store-back — leave it untouched).
+- **OPEN — the vector-element-set + free ownership contract (the load-bearing risk).** `v[i] = x`
+  *copies* (#338), not a DbRef transfer, and the callee's `FreeRefIfDistinct(displaced, witness)`
+  (n_setback bytecode) already touches the old record. So the store-back must be pinned so that
+  across {callee's write-back free} + {store-back} the old R is freed **exactly once**, R′ (which
+  the callee leaves live — proven by the leak-clean local case) is **transferred, not leaked**,
+  and the field-mutation cell stays a no-op. The choice — a **DbRef-transfer store** into the
+  element slot (mirror how the local-var slot receives R′) vs a **copy + free-wv** — must be read
+  off the vector-element-set/free contract and **validated by the F1/F2 leak+poison matrix**, not
+  assumed. This is the piece that needs the element-set semantics pinned before the codegen edit.
+
 ## The fix design
 
 At the **call site** (not the arg-coercion — the store-back must run *after* the call), for a
