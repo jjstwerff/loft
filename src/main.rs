@@ -6177,18 +6177,31 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
             // (explicit `--native` proceeds and errors with the rebuild
             // diagnostic).  The lazy post-compile fallback still backstops
             // anything missed here (e.g. a matching rustc but a missing rlib).
-            if !native_requested && let Some(reason) = loft::cache::rustc_mismatch() {
-                eprintln!(
-                    "Warning: native compilation unavailable ({reason}); falling \
-                     back to the interpreter. To restore native, rebuild from source \
-                     (`cargo build --release`) — a downloaded release ships no native \
-                     runtime and always runs interpreted."
-                );
-                native_fallback_reason = Some(format!(
-                    "native compilation unavailable ({reason}); rebuild loft"
-                ));
-                let _ = std::fs::remove_file(&emit_path);
-                break 'native;
+            if let Some(reason) = loft::cache::rustc_mismatch() {
+                // rustc changed since this loft was built, so the cached runtime
+                // rlib is SVH-locked to the old rustc and can't be reused.  In a
+                // source checkout, self-heal: rebuild the runtime with the user's
+                // rustc and carry on natively — the fresh rlib is picked up by the
+                // `loft_lib_dir()` resolution below.  From a bundle there is no
+                // source to rebuild, so fall back (default) or error (`--native`).
+                let healed = native_utils::loft_source_tree()
+                    .is_some_and(|tree| native_utils::rebuild_runtime(&tree, reason));
+                if !healed && !native_requested {
+                    eprintln!(
+                        "Warning: native compilation unavailable ({reason}); falling \
+                         back to the interpreter. To restore native, rebuild from source \
+                         (`cargo build --release`) — a downloaded release ships no native \
+                         runtime and always runs interpreted."
+                    );
+                    native_fallback_reason = Some(format!(
+                        "native compilation unavailable ({reason}); rebuild loft"
+                    ));
+                    let _ = std::fs::remove_file(&emit_path);
+                    break 'native;
+                }
+                // healed → fresh rlib in place, fall through to the compile.
+                // !healed && native_requested → fall through; the compile errors
+                // below with the actionable `--native` message.
             }
             // Per-process tmp path — same rationale as the emit_path
             // above: avoids races between concurrent `loft <file>`

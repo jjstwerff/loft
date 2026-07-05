@@ -69,6 +69,68 @@ pub(crate) fn loft_lib_dir() -> Option<std::path::PathBuf> {
     loft_lib_dir_for(None)
 }
 
+/// Walk up from the running loft binary to the loft SOURCE tree — the first
+/// ancestor directory whose `Cargo.toml` is the `loft` package's own manifest.
+/// `Some` in a dev / source checkout (where the native runtime can be rebuilt
+/// from source); `None` from an installed bundle (no source to build against).
+pub(crate) fn loft_source_tree() -> Option<std::path::PathBuf> {
+    let mut dir = env::current_exe().ok()?.parent()?.to_path_buf();
+    loop {
+        // loft's own manifest carries `name = "loft"`; a consumer crate that
+        // merely depends on loft would not, so this never misfires on a user tree.
+        if std::fs::read_to_string(dir.join("Cargo.toml"))
+            .is_ok_and(|t| t.contains("name = \"loft\""))
+        {
+            return Some(dir);
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
+}
+
+/// Rebuild loft's native runtime rlib (and binary) from `tree` with the user's
+/// current rustc, so `--native` keeps working after a `rustc` change instead of
+/// falling back to the interpreter.  rlibs are SVH-locked to one rustc, so a
+/// `rustup update` strands the cached rlib; this recompiles it against the live
+/// rustc.  Prints why the wait happens and how long it took.  Returns whether the
+/// rebuild succeeded.  Honours `LOFT_NO_AUTO_REBUILD` (skip → `false`) for CI /
+/// users who prefer the interpreter fallback over an implicit `cargo` build.
+pub(crate) fn rebuild_runtime(tree: &std::path::Path, reason: &str) -> bool {
+    if env::var_os("LOFT_NO_AUTO_REBUILD").is_some() {
+        return false;
+    }
+    eprintln!(
+        "loft: native runtime out of date ({reason}).\n\
+         Rebuilding it with your rustc — a one-time cost after a rustc change: loft \
+         compiles its own runtime crate so your program's generated code can link \
+         against it (typically under a minute; longer from a cold build).\n\
+         Set LOFT_NO_AUTO_REBUILD=1 to skip this and run on the interpreter instead."
+    );
+    let start = std::time::Instant::now();
+    let ran = std::process::Command::new("cargo")
+        .args(["build", "--release", "--lib", "--bin", "loft"])
+        .current_dir(tree)
+        .status();
+    match ran {
+        Ok(s) if s.success() => {
+            eprintln!(
+                "loft: native runtime rebuilt in {:.0}s — continuing natively.",
+                start.elapsed().as_secs_f64()
+            );
+            true
+        }
+        Ok(_) => {
+            eprintln!("loft: native runtime rebuild failed (see cargo output above).");
+            false
+        }
+        Err(e) => {
+            eprintln!("loft: could not run cargo to rebuild the native runtime ({e}).");
+            false
+        }
+    }
+}
+
 /// The dependency search dir for a [`loft_lib_dir`] result: `lib_dir` itself
 /// when it already IS `deps/` (the preferred deps-first resolution, #304/#307),
 /// else `lib_dir/deps`.  Appending "deps" unconditionally yields an invalid
