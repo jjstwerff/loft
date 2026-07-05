@@ -867,7 +867,13 @@ fn cmove() { inner: vector<integer> = [1,2,3]; s = Wrap { data: inner }; print("
 fn csurv() { inner: vector<integer> = [1,2,3]; s = Wrap { data: inner }; print("{inner[0]} {s.data[0]}\n"); }
 fn cmut()  { inner: vector<integer> = [1,2,3]; s = Wrap { data: inner }; inner += [4]; print("{s.data[0]} {inner[3]}\n"); }
 fn internal_src(v: vector<Wrap>) -> vector<Wrap> { r = v; r += [mk()]; r }
-fn main() { cmove(); csurv(); cmut(); a = internal_src([]); print("{len(a)}\n"); }
+fn recset() {
+    v: vector<Wrap> = [Wrap { data: [0] }];
+    e = Wrap { data: [1, 2, 3] };
+    v[0] = e;
+    print("{v[0].data[0]}\n");
+}
+fn main() { cmove(); csurv(); cmut(); a = internal_src([]); recset(); print("{len(a)}\n"); }
 "#;
 
 /// Like `dump`, but with the survival split flag on.
@@ -919,10 +925,26 @@ fn survival_split_bound_vs_unbound_and_internal() {
         "the worklist tally must carry an internal_copies count; dump:\n{stderr}"
     );
 
-    // Default (flag OFF) keeps every construction copy Implicit (byte-identical) — the split
-    // is gated, so with it off cmove/csurv/cmut are all silent.
+    // Item 2: a `v[i] = e` record copy carries its source location `at <file>:<line>:<col>`,
+    // so a row that has no useful target name is still actionable. The exact target
+    // attribution varies with lowering, so key only on a LOCATED Copy row in `recset`.
+    assert!(
+        stderr.lines().any(|l| l.contains("fn=n_recset ")
+            && l.contains("verdict=Copy")
+            && l.contains(" at ")
+            && l.contains(".loft:")),
+        "the record-set copy row should carry an `at <file>:<line>` location; dump:\n{stderr}"
+    );
+
+    // Default (flag OFF) keeps every construction copy Implicit AND emits no location suffix
+    // (position tracking is gated) — byte-identical to the phase-1 dump.
     let off = dump(SURVIVAL_SRC);
     for f in ["cmove", "csurv", "cmut"] {
         assert_bucket(&off, f, "implicit");
     }
+    assert!(
+        !off.lines()
+            .any(|l| l.contains("MAT fn=") && l.contains(" at ")),
+        "flag-off dump must carry no ` at <loc>` suffix (byte-identical); dump:\n{off}"
+    );
 }

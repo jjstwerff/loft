@@ -23,6 +23,7 @@
 //! can only *lose* an elision, never produce a wrong borrow.
 
 use crate::data::{Data, DefType, Value};
+use crate::lexer::Position;
 use crate::variables::Function;
 use std::collections::{HashMap, HashSet};
 
@@ -74,6 +75,10 @@ pub struct VerdictRow {
     /// worklist) · `Implicit` (model-inherent ownership — silent) · `Forced` (informational).
     /// See [`CopyClass`] and COPY_DIAGNOSTICS.md.
     pub class: CopyClass,
+    /// @PLN90 item 2 — the copy site's source location (`file:line:pos`), when the emitting
+    /// op carries a span. Makes a `<record>` element-set copy (no named target var)
+    /// actionable in the report. `None` when the op is unspanned.
+    pub loc: Option<Position>,
 }
 
 fn def_nrs(data: &Data, names: &[&str]) -> HashSet<u32> {
@@ -160,6 +165,14 @@ struct Uses {
     /// to). Back-edges break the position↔execution correspondence, so Tier 1
     /// refuses any copy whose fill sits at depth > 0.
     loop_depth: u32,
+    /// @PLN90 item 2 — track source locations for the report. Only ON when
+    /// `LOFT_COPY_SURVIVAL` is set (positions are needed only for the survival report), so the
+    /// default hot path pays no `Position` clone and stays byte-identical.
+    track_pos: bool,
+    /// @PLN90 item 2 — the nearest ENCLOSING span position (breadcrumb). The copy ops
+    /// (`OpAppendVector` / `OpCopyRecord`) carry no span themselves, so a copy site borrows the
+    /// most recent spanned node's position. Updated (when `track_pos`) at every spanned node.
+    cur_pos: Option<Position>,
     /// Max position at which a var appeared in a NON-reader (write / escape /
     /// pass-to-callee) position — EXCLUDING the benign scope ops (`OpFreeRef` /
     /// `Drop`) and the copy-fill itself. For a source `x`, "all such positions <
@@ -177,16 +190,17 @@ struct Uses {
     /// answered. See `survival_class`.
     last_use_pos: HashMap<u16, usize>,
     /// @PLN90 — field-target appends `OpAppendVector(OpGetField(rec, fld), src)`:
-    /// `(base record var, source base var, copy-site-end pos, in-loop)`. This is the
-    /// struct/enum-construction copy (`S { f: src }`) and `x.field += src` — the source is
-    /// deep-copied into the field, which the var-buffer copy idiom above never sees. The
-    /// position (taken AFTER the args are walked) + loop flag drive the survival split.
-    construct_copy: Vec<(Option<u16>, Option<u16>, usize, bool)>,
+    /// `(base record var, source base var, copy-site-end pos, in-loop, source location)`. This
+    /// is the struct/enum-construction copy (`S { f: src }`) and `x.field += src` — the source
+    /// is deep-copied into the field, which the var-buffer copy idiom above never sees. The
+    /// position (taken AFTER the args are walked) + loop flag drive the survival split; the
+    /// location (item 2) is the emitting op's span, for the report.
+    construct_copy: Vec<(Option<u16>, Option<u16>, usize, bool, Option<Position>)>,
     /// @PLN90 — `OpCopyRecord` deep-copies: `(target base var, source base var, copy-site-end
-    /// pos, in-loop)`. A record copy (`v[i] = e`, a `?? E{…}` default element, a struct copy)
-    /// — not append-based, so the branches above miss it. The same-var no-op alias is
-    /// excluded when recorded.
-    record_copy: Vec<(Option<u16>, Option<u16>, usize, bool)>,
+    /// pos, in-loop, source location)`. A record copy (`v[i] = e`, a `?? E{…}` default element,
+    /// a struct copy) — not append-based, so the branches above miss it. The same-var no-op
+    /// alias is excluded when recorded.
+    record_copy: Vec<(Option<u16>, Option<u16>, usize, bool, Option<Position>)>,
     /// Vars that appeared in a non-reader position (⇒ not borrow-eligible). The
     /// copy-fill `OpAppendVector(v, src.f)` is *excluded* — it is the copy machinery,
     /// not a user mutation of `v`.
@@ -225,6 +239,13 @@ impl Uses {
     fn visit(&mut self, node: &Value, ctx: Ctx) {
         let pos = self.pos;
         self.pos += 1;
+        // @PLN90 item 2 — breadcrumb the nearest enclosing span position (only when tracking,
+        // so the default path pays nothing). A copy op borrows this for its report location.
+        if self.track_pos
+            && let Some(p) = node.span_pos()
+        {
+            self.cur_pos = Some(p.clone());
+        }
         match node.unspan() {
             Value::Var(v) => {
                 // @PLN90 — last use in ANY position (the survival discriminator).
@@ -305,9 +326,16 @@ impl Uses {
                         self.visit(a, Ctx::Other);
                     }
                     // Position taken AFTER the args are walked: a use strictly greater is a
-                    // use of the source AFTER this copy (⇒ the source survives).
+                    // use of the source AFTER this copy (⇒ the source survives). The copy op
+                    // carries no span, so borrow the nearest enclosing one (item 2).
                     if let Some((rec, src, in_loop)) = cc {
-                        self.construct_copy.push((rec, src, self.pos, in_loop));
+                        self.construct_copy.push((
+                            rec,
+                            src,
+                            self.pos,
+                            in_loop,
+                            self.cur_pos.clone(),
+                        ));
                     }
                 }
             }
@@ -341,9 +369,11 @@ impl Uses {
                 for a in args {
                     self.visit(a, c);
                 }
-                // Position AFTER the args: a later use of the source ⇒ it survives.
+                // Position AFTER the args: a later use of the source ⇒ it survives. The
+                // `OpCopyRecord` carries no span, so borrow the nearest enclosing one.
                 if record {
-                    self.record_copy.push((tgt, src, self.pos, in_loop));
+                    self.record_copy
+                        .push((tgt, src, self.pos, in_loop, self.cur_pos.clone()));
                 }
             }
             Value::Call(d, args) => {
@@ -382,6 +412,9 @@ fn analyze_fn(
     data: &Data,
     max_tier: u8,
 ) -> (Vec<VerdictRow>, Vec<ElidePlan>) {
+    // @PLN90 — the survival split + its report locations are only produced under this flag;
+    // read once so both the walk (`track_pos`) and the classification below agree.
+    let survival_on = std::env::var_os("LOFT_COPY_SURVIVAL").is_some();
     let mut u = Uses {
         get_field: data.def_nr("OpGetField"),
         op_append: data.def_nr("OpAppendVector"),
@@ -398,6 +431,8 @@ fn analyze_fn(
         append_expr: HashMap::new(),
         pos: 0,
         loop_depth: 0,
+        track_pos: survival_on,
+        cur_pos: None,
         other_max_pos: HashMap::new(),
         copyfill_pos: HashMap::new(),
         copyfill_in_loop: HashSet::new(),
@@ -450,6 +485,7 @@ fn analyze_fn(
                     // keeps the subject alive); the copy is here only because the borrowed
                     // return path is not yet correct (@PLN85 P4). Eliminating it = that fix.
                     class: CopyClass::Avoidable,
+                    loc: None,
                 });
             }
             continue; // not a single-source local copy — not ours to elide
@@ -556,6 +592,7 @@ fn analyze_fn(
             verdict,
             reason,
             class,
+            loc: None,
         });
     }
 
@@ -564,9 +601,10 @@ fn analyze_fn(
     // field, which the var-buffer idiom above does not classify. Emit a Copy row so the
     // copy-vs-borrow decision COVERS the copy. Diagnostic only: always `Copy`, so it never
     // produces an `ElidePlan` (no codegen change). Phase 2 (the bound-vs-unbound survival
-    // split, `survival_class`) sorts Implicit/Avoidable/Forced — gated on `LOFT_COPY_SURVIVAL`.
-    let survival_on = std::env::var_os("LOFT_COPY_SURVIVAL").is_some();
-    for &(rec, src, copy_end, in_loop) in &u.construct_copy {
+    // split, `survival_class`) sorts Implicit/Avoidable/Forced — gated on `LOFT_COPY_SURVIVAL`
+    // (`survival_on`, read once at the top of `analyze_fn`).
+    for entry in &u.construct_copy {
+        let (rec, src, copy_end, in_loop) = (entry.0, entry.1, entry.2, entry.3);
         // Flag OFF → the original phase-1 classification verbatim (byte-identical). Flag ON →
         // the bound-vs-unbound survival split.
         let (class, reason) = if survival_on {
@@ -584,6 +622,7 @@ fn analyze_fn(
             verdict: Verdict::Copy,
             reason,
             class,
+            loc: entry.4.clone(),
         });
     }
 
@@ -591,7 +630,8 @@ fn analyze_fn(
     // a `?? E{…}` default element, a struct copy. Not append-based, so the var-buffer /
     // construction / return-buffer paths above never see them. Emit a Copy row so the
     // decision covers the copy. Diagnostic only — never an `ElidePlan`, no codegen change.
-    for &(tgt, src, copy_end, in_loop) in &u.record_copy {
+    for entry in &u.record_copy {
+        let (tgt, src, copy_end, in_loop) = (entry.0, entry.1, entry.2, entry.3);
         // Flag OFF → the original phase-1 classification verbatim (byte-identical). Flag ON →
         // the bound-vs-unbound survival split.
         let (class, reason) = if survival_on {
@@ -606,6 +646,7 @@ fn analyze_fn(
             verdict: Verdict::Copy,
             reason,
             class,
+            loc: entry.4.clone(),
         });
     }
     (rows, plans)
@@ -1399,9 +1440,15 @@ pub fn dump_all(data: &Data) {
                     "internal"
                 }
             };
+            // @PLN90 item 2 — the copy-site location, when the emitting op carried a span.
+            // Makes a `<record>` element-set copy (no named target) actionable.
+            let at = r
+                .loc
+                .as_ref()
+                .map_or_else(String::new, |p| format!(" at {p}"));
             eprintln!(
-                "MAT fn={} v={}({}) src={} verdict={:?} bucket={} [{}]",
-                def.name, r.var_nr, r.var_name, r.source, r.verdict, bucket, r.reason
+                "MAT fn={} v={}({}) src={} verdict={:?} bucket={} [{}]{}",
+                def.name, r.var_nr, r.var_name, r.source, r.verdict, bucket, r.reason, at
             );
         }
         // The ownership fact (inert): the return class + the owned-slot

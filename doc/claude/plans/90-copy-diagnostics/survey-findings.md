@@ -69,9 +69,19 @@ issue, not a soundness one:
    *attribution* — trace a synthetic source back to the user value it holds (`__ref = user.field`)
    — so a genuinely-actionable copy hidden behind a temp resurfaces; deferred, the Internal set
    is where that tracing will happen.
-2. **Source locations for `<record>` targets (54 Forced rows).** A `v[i] = e` copy shows the
-   target as `<record>` (no named var). The report needs `file:line`, not a var name, to be
-   actionable — the diagnostic must carry the copy site's span.
+2. **~~Source locations for `<record>` targets.~~ ✅ PARTIALLY DONE (commit pending).** Each
+   survival row now carries a source location (`VerdictRow.loc`, printed as ` at file:line:col`).
+   The copy ops (`OpCopyRecord`/`OpAppendVector`) carry **no span of their own**, so the location
+   is a **breadcrumb** — the nearest enclosing spanned node, tracked during the walk and **gated
+   on the flag** (`track_pos`; the default hot path pays no `Position` clone and stays
+   byte-identical). It lands for the common `v[i] = e` element-set inside a spanned statement
+   (the right statement line, verified on `recloc`/`mixed`). **Residual (needs the parser to
+   span the copy ops — a follow-up):** construction field-appends are emitted in an *unspanned
+   preamble* (no location), and keyed-set / cast / nested record copies (p311–p315) sit without
+   a preceding span (~11 of 19 `<record>` rows in the survey lack a location). The breadcrumb is
+   a *nearest-statement* approximation, not a precise sub-expression span. Guard extended:
+   `survival_split_bound_vs_unbound_and_internal` asserts a located `recset` copy row + that the
+   flag-off dump carries no ` at ` suffix (byte-identical).
 3. **Tighten the Avoidable/Forced split (the 152 Forced is inflated).** `mutated/escapes after`
    keys on `other_max_pos > copy_end`, which counts **any** non-reader use after the copy —
    including passing `src` to a read-only callee. That over-classifies genuine avoidables as
