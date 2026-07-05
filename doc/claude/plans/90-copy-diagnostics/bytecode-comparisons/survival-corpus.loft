@@ -1,5 +1,18 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN90 phase A — the bound-vs-unbound survival split, one function per bucket.
+// Run: LOFT_COPY_SURVIVAL=1 LOFT_MATERIALIZE_DUMP=1 loft --interpret --check survival-corpus.loft 2>&1 | grep '^MAT'
+//   construct_move          → implicit  (move — source consumed at the copy)
+//   construct_survives      → AVOIDABLE (unbound — source survives read-only; a borrow would avoid it)
+//   construct_survives_mut  → forced    (unbound — source survives AND is mutated after)
+//   construct_literal       → (no row — a literal source is born-owned, nothing duplicated)
+//   internal_src            → internal  (item 1: the copy's source is a compiler temp, mk()'s
+//                                        result; a developer-worklist copy excluded from the user report)
+// Flag OFF → every construction copy stays Implicit (byte-identical to phase 1).
 struct Wrap { data: vector<integer> }
-struct Cell { w: Wrap }
+
+fn mk() -> Wrap { Wrap { data: [1, 2, 3] } }
 
 fn construct_move() {
     inner: vector<integer> = [1, 2, 3];
@@ -21,9 +34,16 @@ fn construct_literal() {
     s = Wrap { data: [7, 8, 9] };        // literal source → born-owned (silent)
     println("{s.data[0]}");
 }
+fn internal_src(v: vector<Wrap>) -> vector<Wrap> {
+    r = v;
+    r += [mk()];                         // source = mk()'s result (a compiler temp) → INTERNAL
+    r
+}
 fn main() {
     construct_move();
     construct_survives();
     construct_survives_mut();
     construct_literal();
+    a = internal_src([]);
+    println("{a.len()}");
 }

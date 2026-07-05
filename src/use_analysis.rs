@@ -51,6 +51,13 @@ pub enum CopyClass {
     /// Forced by circumstance (a short-lived source, a later mutation) — required as
     /// written, but the user could restructure. Indicated (informational), never silent.
     Forced,
+    /// @PLN90 (item 1) — an UNBOUND copy whose SOURCE is a compiler-generated temporary
+    /// (`_`-prefixed: `__ref_N`, `___par_mat_e_N`, `_comp_N`, …; `is_compiler_generated`).
+    /// A real copy and a candidate for US to eliminate (the developer worklist), but NOT
+    /// user-actionable — the user never wrote the source, so the user-facing report must
+    /// exclude it. Distinct from `Implicit` (genuinely no unbound copy) and from
+    /// `Avoidable`/`Forced` (which name a source the user can act on).
+    Internal,
 }
 
 /// One row of the analysis result: the verdict for a single vector-copy binding.
@@ -563,7 +570,7 @@ fn analyze_fn(
         // Flag OFF → the original phase-1 classification verbatim (byte-identical). Flag ON →
         // the bound-vs-unbound survival split.
         let (class, reason) = if survival_on {
-            survival_class(src, copy_end, in_loop, &u)
+            survival_class(src, copy_end, in_loop, &u, function)
         } else {
             (
                 CopyClass::Implicit,
@@ -588,7 +595,7 @@ fn analyze_fn(
         // Flag OFF → the original phase-1 classification verbatim (byte-identical). Flag ON →
         // the bound-vs-unbound survival split.
         let (class, reason) = if survival_on {
-            survival_class(src, copy_end, in_loop, &u)
+            survival_class(src, copy_end, in_loop, &u, function)
         } else {
             (CopyClass::Implicit, "record deep-copy (OpCopyRecord)")
         };
@@ -625,6 +632,7 @@ fn survival_class(
     copy_end: usize,
     in_loop: bool,
     u: &Uses,
+    function: &Function,
 ) -> (CopyClass, &'static str) {
     let Some(s) = src else {
         return (
@@ -635,35 +643,47 @@ fn survival_class(
     // The copy's OWN read of the source is at a position <= copy_end, so a use strictly after
     // is a genuine later use — the source survives, an independent duplicate now coexists.
     let survives = u.last_use_pos.get(&s).is_some_and(|&p| p > copy_end);
-    if !survives {
+    let (class, reason) = if !survives {
         if in_loop {
             // Not re-read in straight-line order, but a loop back-edge can repeat this copy
             // each iteration if the source outlives the body — surface it, flagged for review.
-            return (
+            (
                 CopyClass::Avoidable,
                 "in-loop copy: the back-edge may repeat this duplicate each iteration (verify the source's scope)",
+            )
+        } else {
+            // A move — bound, silent for everyone; not a copy to eliminate. Return directly
+            // (the compiler-internal downgrade below is only for INDICATED copies).
+            return (
+                CopyClass::Implicit,
+                "move: source consumed at the copy — its single backing transfers",
             );
         }
-        return (
-            CopyClass::Implicit,
-            "move: source consumed at the copy — its single backing transfers",
-        );
-    }
-    // A non-reader use (write / escape / pass-to-mutating-callee) after the copy means the
-    // source cannot be safely aliased → the independent copy is forced; a read-only survivor
-    // is the avoidable worklist (a borrow would have sufficed).
-    let mutated_after = u.other_max_pos.get(&s).is_some_and(|&p| p > copy_end);
-    if mutated_after {
+    } else if u.other_max_pos.get(&s).is_some_and(|&p| p > copy_end) {
+        // A non-reader use (write / escape / pass-to-mutating-callee) after the copy means the
+        // source cannot be safely aliased → the independent copy is forced.
         (
             CopyClass::Forced,
             "unbound: source survives AND is mutated/escapes after — an independent copy is required",
         )
     } else {
+        // A read-only survivor — the avoidable worklist (a borrow would have sufficed).
         (
             CopyClass::Avoidable,
             "unbound: source survives read-only — a borrow/move would avoid this copy",
         )
+    };
+    // @PLN90 item 1 — an INDICATED copy whose SOURCE is a compiler-generated temporary
+    // (`_`-prefixed) is not user-actionable: the user never wrote `__ref_N` / `_comp_N`. Route
+    // it to `Internal` so the user-facing report excludes it while the developer worklist still
+    // counts it (it may be a copy WE can eliminate).
+    if function.is_compiler_generated(s) {
+        return (
+            CopyClass::Internal,
+            "compiler-internal source (_-prefixed) — a copy we may eliminate; excluded from the user report",
+        );
     }
+    (class, reason)
 }
 
 /// The elision tier selected by the environment: 0 (shipped param-source rule,
@@ -1349,8 +1369,11 @@ pub fn dump_all(data: &Data) {
     }
     let mut own = Ownership::new(data);
     // @PLN90 — the tally: `avoidable` is the north-star elimination worklist; `implicit`
-    // is model-inherent ownership (silent, not a copy-to-fix); `forced` is informational.
-    let (mut avoidable_copies, mut implicit_copies, mut forced_copies) = (0u32, 0u32, 0u32);
+    // is model-inherent ownership (silent, not a copy-to-fix); `forced` is informational;
+    // `internal` is a copy of a compiler-generated source — a developer-worklist copy we may
+    // eliminate, but excluded from the user-facing report (item 1).
+    let (mut avoidable_copies, mut implicit_copies, mut forced_copies, mut internal_copies) =
+        (0u32, 0u32, 0u32, 0u32);
     for d_nr in 0..data.definitions() {
         let def = data.def(d_nr);
         if !matches!(def.def_type, DefType::Function) {
@@ -1370,6 +1393,10 @@ pub fn dump_all(data: &Data) {
                 CopyClass::Forced => {
                     forced_copies += 1;
                     "forced"
+                }
+                CopyClass::Internal => {
+                    internal_copies += 1;
+                    "internal"
                 }
             };
             eprintln!(
@@ -1412,8 +1439,9 @@ pub fn dump_all(data: &Data) {
     }
     // @PLN90 — the worklist headline: avoidable = the north-star target (teach the analysis
     // to borrow these so they auto-eliminate); implicit = model-inherent ownership (silent);
-    // forced = must own by circumstance (informational).
+    // forced = must own by circumstance (informational); internal = compiler-generated source
+    // (developer worklist, excluded from the user-facing report).
     eprintln!(
-        "MAT-WORKLIST avoidable_copies={avoidable_copies} implicit_copies={implicit_copies} forced_copies={forced_copies}"
+        "MAT-WORKLIST avoidable_copies={avoidable_copies} implicit_copies={implicit_copies} forced_copies={forced_copies} internal_copies={internal_copies}"
     );
 }

@@ -89,6 +89,17 @@ copy and belongs in bucket 2 or 4; only the *move* form (`src` consumed here) is
 "almost every match would warn" failure came from mis-classifying **borrows** as copies (bucket
 1, eliminated) — not from surfacing genuine duplications.
 
+**Bucket 5 — Internal (the two audiences, made concrete).** An unbound copy whose **source is
+a compiler-generated temporary** (`_`-prefixed: `__ref_N`, `___par_mat_e_N`, `_comp_N` — names
+the parser forbids for user vars) is **not user-actionable**: the user never wrote the source,
+so "avoid this copy" points at nothing they can change. Such copies are routed to `Internal` —
+**excluded from the user-facing report, but kept in the developer worklist** (a copy *we* may
+still eliminate). This is the [OWNERSHIP_MODEL § second audience](OWNERSHIP_MODEL.md) split
+made concrete: the user report shows buckets 2+4 (sources they wrote); our worklist adds bucket
+5. On the first survey (371 scripts) this moved 139 of 173 indicated copies out of the user
+report — the noise reduction that makes a user-facing report trustworthy. (A follow-up will
+*attribute* an Internal copy to the user value behind the temp, resurfacing the actionable ones.)
+
 ## This is a perf lint, NOT a borrow checker (reconciliation)
 
 [OWNERSHIP_MODEL.md § Internal and invisible](OWNERSHIP_MODEL.md) records a **decided**

@@ -854,3 +854,75 @@ fn record_copy_is_covered_by_the_verdict() {
         "the `v[i] = e` record copy should be classified Copy [record deep-copy]; dump:\n{stderr}"
     );
 }
+
+// ── @PLN90 phase A — the bound-vs-unbound survival split + the Internal (item 1) bucket ──
+// Under `LOFT_COPY_SURVIVAL` a construction / record copy is classified by its SOURCE FATE:
+// a MOVE (source consumed) is silent (Implicit); a still-live source duplicated is indicated
+// (Avoidable read-only / Forced mutated); a copy whose SOURCE is a compiler-generated temp
+// (`_`-prefixed) is `Internal` — a developer-worklist copy excluded from the user report.
+const SURVIVAL_SRC: &str = r#"
+struct Wrap { data: vector<integer> }
+fn mk() -> Wrap { Wrap { data: [1, 2, 3] } }
+fn cmove() { inner: vector<integer> = [1,2,3]; s = Wrap { data: inner }; print("{s.data[0]}\n"); }
+fn csurv() { inner: vector<integer> = [1,2,3]; s = Wrap { data: inner }; print("{inner[0]} {s.data[0]}\n"); }
+fn cmut()  { inner: vector<integer> = [1,2,3]; s = Wrap { data: inner }; inner += [4]; print("{s.data[0]} {inner[3]}\n"); }
+fn internal_src(v: vector<Wrap>) -> vector<Wrap> { r = v; r += [mk()]; r }
+fn main() { cmove(); csurv(); cmut(); a = internal_src([]); print("{len(a)}\n"); }
+"#;
+
+/// Like `dump`, but with the survival split flag on.
+fn dump_survival(src: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let dir = std::env::temp_dir().join("loft_use_analysis");
+    std::fs::create_dir_all(&dir).expect("probe dir");
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    src.hash(&mut h);
+    "survival".hash(&mut h);
+    let path = dir.join(format!("probe_{:016x}.loft", h.finish()));
+    std::fs::write(&path, src).expect("write probe");
+    let out = Command::new(env!("CARGO_BIN_EXE_loft"))
+        .args(["--interpret", "--check"])
+        .arg(&path)
+        .env("LOFT_MATERIALIZE_DUMP", "1")
+        .env("LOFT_COPY_SURVIVAL", "1")
+        .env("LOFT_NO_CACHE", "1")
+        .env("LOFT_NO_JOIN_OWN", "1")
+        .output()
+        .expect("spawn loft");
+    String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+fn assert_bucket(stderr: &str, func: &str, bucket: &str) {
+    assert!(
+        stderr.lines().any(
+            |l| l.contains(&format!("fn=n_{func} ")) && l.contains(&format!("bucket={bucket}"))
+        ),
+        "{func}: expected a copy row bucket={bucket}; dump:\n{stderr}"
+    );
+}
+
+#[test]
+fn survival_split_bound_vs_unbound_and_internal() {
+    let stderr = dump_survival(SURVIVAL_SRC);
+    // Bound → silent; unbound → indicated; compiler-generated source → Internal.
+    assert_bucket(&stderr, "cmove", "implicit"); // move: source consumed
+    assert_bucket(&stderr, "csurv", "AVOIDABLE"); // unbound, read-only survivor
+    assert_bucket(&stderr, "cmut", "forced"); // unbound, mutated after
+    assert_bucket(&stderr, "internal_src", "internal"); // `_`-prefixed (mk() result) source
+
+    // Item 1: the Internal row must NOT leak into the user-facing worklist tally — the
+    // internal copy is counted separately, never as avoidable/forced for the user.
+    assert!(
+        stderr
+            .lines()
+            .any(|l| l.contains("MAT-WORKLIST") && l.contains("internal_copies=")),
+        "the worklist tally must carry an internal_copies count; dump:\n{stderr}"
+    );
+
+    // Default (flag OFF) keeps every construction copy Implicit (byte-identical) — the split
+    // is gated, so with it off cmove/csurv/cmut are all silent.
+    let off = dump(SURVIVAL_SRC);
+    for f in ["cmove", "csurv", "cmut"] {
+        assert_bucket(&off, f, "implicit");
+    }
+}

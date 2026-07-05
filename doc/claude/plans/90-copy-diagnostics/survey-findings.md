@@ -36,11 +36,15 @@ survives+mutated → forced (both backends, value-clean).
 
 ## The survey — 371 `tests/scripts/*.loft`, deduped
 
-| bucket | unique rows | meaning |
-|---|---|---|
-| **Forced** | 152 | unbound copy, source mutated/escapes after — required as written |
-| **Implicit** (move/literal) | 73 | silent — no unbound structure produced |
-| **Avoidable** | 21 | a borrow/move would remove it — the drain worklist |
+| bucket | rows (pre item 1) | rows (**after item 1**) | meaning |
+|---|---|---|---|
+| **Forced** | 152 | **29** | unbound copy, source mutated/escapes after — required as written |
+| **Implicit** (move/literal) | 73 | 73 | silent — no unbound structure produced |
+| **Avoidable** | 21 | **6** | a borrow/move would remove it — the drain worklist |
+| **Internal** (item 1) | — | **139** | copy of a compiler-generated source — developer worklist, **not** user-facing |
+
+The **user-facing indicated set** (Avoidable + Forced) is now **35** rows (was 173): item 1
+moved 139 compiler-generated-source copies out of the user report and into `Internal`.
 
 - **stdlib baseline = 0.** An empty program emits **no** unbound construction/record copies —
   the stdlib's own construct/record copies are all moves/literals. The split does not indict
@@ -54,10 +58,17 @@ The bound/unbound **cut is sound** (the corpus proves it, stdlib is clean). Four
 resolved before the flag becomes a user-facing report/gate — each is a *reporting fidelity*
 issue, not a soundness one:
 
-1. **Exclude / attribute synthetic temporaries (29 rows).** `__ref_N`, `___par_mat_e_N`,
-   `_comp_N`, `__retbuf` etc. are compiler-generated; a user cannot act on "`__ref_11` is an
-   avoidable copy". The report must suppress synthetic sources/targets or attribute them to the
-   user construct that generated them. **This is the #1 blocker for a user-facing report.**
+1. **~~Exclude / attribute synthetic temporaries.~~ ✅ DONE (commit pending).** A copy whose
+   **source** is compiler-generated (`is_compiler_generated` — a `_`-prefixed name, which the
+   parser forbids for user vars: `__ref_N`, `___par_mat_e_N`, `_comp_N`, …) is routed to a new
+   `CopyClass::Internal` — a *developer-worklist* copy (one WE may eliminate) that is **excluded
+   from the user-facing Avoidable/Forced set**. Effect on the 371-script survey: the user-facing
+   indicated set collapsed **173 → 35** (139 rows moved to `internal`; 6 Avoidable + 29 Forced
+   remain, all naming a real source). Guard: `tests/use_analysis.rs::survival_split_bound_vs_unbound_and_internal`.
+   The dump tally gained `internal_copies=N`. Residual (a follow-up, not a blocker): full
+   *attribution* — trace a synthetic source back to the user value it holds (`__ref = user.field`)
+   — so a genuinely-actionable copy hidden behind a temp resurfaces; deferred, the Internal set
+   is where that tracing will happen.
 2. **Source locations for `<record>` targets (54 Forced rows).** A `v[i] = e` copy shows the
    target as `<record>` (no named var). The report needs `file:line`, not a var name, to be
    actionable — the diagnostic must carry the copy site's span.
