@@ -1,0 +1,111 @@
+<!--
+Copyright (c) 2026 Jurjen Stellingwerff
+SPDX-License-Identifier: LGPL-3.0-or-later
+-->
+
+# loft#506 — `&`-write-back to a computed lvalue: verifiable implementation plan
+
+Tracker: [loft#506](https://github.com/loft-lang/loft/issues/506). Surfaced during @PLN87 P3.2.
+This is the **safe-implementation recipe** for the deferred fix — each step has a runnable
+check, matrix-validated on BOTH backends, gated. Follow the loft-codegen gate: capture the
+WORKING bytecode before touching the generator.
+
+## The bug (one line)
+
+A whole-binding `&`-write-back reaches the caller only when the argument is a **simple local
+variable**. A **computed lvalue** argument (`items[i]`, `s.field`) silently drops the write-back
+on both backends (`setback(items[1], 42); items[1].px` → `0`, expected `42`).
+
+## The invariant to enforce
+
+> A whole-binding write-back through a `&`-parameter reaches the caller's argument lvalue —
+> **including a vector element or struct field** — never silently dropped, and **leak- and
+> double-free-free**. Field mutation (P160) is unchanged.
+
+## Root cause (localized)
+
+`src/parser/mod.rs:2325–2332` — the call-arg `&`-coercion. A `Var` arg becomes
+`OpCreateStack(a)` (a stack-ref to `a`'s own slot → write-back updates `a`, which then owns the
+new record — the WORKING path). A computed lvalue becomes:
+```
+wv = orig            // orig = OpGetVector(items, stride, idx)  — a COPY of items[idx]'s DbRef
+OpCreateStack(wv)    // stack-ref to wv's slot; wv is skip_free
+```
+The callee's write-back (`item = X`) reassigns **`wv`** (native: `&mut var___ref_1`); `items[idx]`
+is never updated and no store-back is emitted. Reference (both backends):
+`doc/claude/plans/90-copy-diagnostics/borrow-return/A1b-*.txt` are the same caller-side-store
+class; capture `#506`'s own pair per Step 0.
+
+## The fix design
+
+At the **call site** (not the arg-coercion — the store-back must run *after* the call), for a
+`&`-argument that is a **computed lvalue** AND whose callee **whole-reassigns** that parameter
+(the `rebind_orig` / P2.1 write-back fact, `src/variables/mod.rs:259`), wrap the call:
+```
+{ Set(wv, orig); r = call(OpCreateStack(wv), …); <store-back(source, wv)>; r }
+```
+where `<store-back>` is `OpSetVector(base, idx, wv)` (element) or `OpSetField(base, fld, wv)`
+(field), with `base`/`idx`/`fld` reconstructed from `orig`. The store-back frees the old record
+once and transfers the new one to the source.
+
+**Key ownership facts to rely on (verify, don't assume — Step 0/3):**
+- The callee does NOT free the caller's original R (P2.1: witness == R → not freed).
+- The callee leaves R′ for the caller (proven by the WORKING local case surviving + leak-free).
+- `wv` stays `skip_free` (does not own); the store-back's `OpSetVector` is the sole owner-transfer.
+
+## Failure modes to guard (enumerate before coding)
+
+| # | failure | guard |
+|---|---|---|
+| F1 | **double-free** — old R freed by both the callee and the store-back | callee preserves R (witness == R); store-back is the only free of the old element |
+| F2 | **leak** — R′ freed by the callee at exit before the store-back takes it | confirm (Step 0) the WORKING local case leaves R′ for the caller; mirror for the element |
+| F3 | **P160 regression** — a field-mutation `&`-computed-arg call breaks | the fix keys on the write-back flag; field-mutation path (no rebind) is left untouched |
+| F4 | **nested lvalue** — `s.rows[i]`, `m[k].field` — the store-back reconstruction is shallow | handle the base/index/field reconstruction to full depth, or reject the un-reconstructable case cleanly (loud, not silent) |
+| F5 | **wide regression** — an owned shape that should copy now aliases | gate behind a flag; suite byte-identical with the gate OFF |
+
+## Verifiable steps (each: run the check, on BOTH backends)
+
+**Step 0 — the gate (capture working-vs-broken-vs-target).**
+- WORKING: `a = Item{px:0}; setback(a, 42)` → `a.px == 42`, **leak-free** (`LOFT_STORES=warn`
+  interp + `LOFT_NATIVE_LEAK_CHECK=1` native). `loft introspect` it.
+- BROKEN: `items[1]` arg → `items[1].px == 0`. Introspect it.
+- TARGET: hand-write the element bytecode = the working shape + the store-back; confirm by hand
+  it frees R once and owns R′. Save the trio under a `bytecode-comparisons/` dir.
+- **Check:** the diff is exactly the missing store-back + the ownership it implies — no more.
+
+**Step 1 — pin the write-back-fact query.** Confirm `rebind_orig` (`variables/mod.rs`) answers
+"does callee def D whole-reassign parameter P?" at the call site (pass 2 has the callee def).
+- **Check:** a probe prints the flag TRUE for `setback` (reassigns) and FALSE for `bump`
+  (`it.px = v`, field-mutation only). The flag alone must separate the two.
+
+**Step 2 — usage sentinel for the broken shape.** At the call-lowering chokepoint, add a gated
+`eprintln` that fires when: arg is a computed lvalue (`OpGetVector`/`OpGetField`, not `Var`) →
+`&`-param → callee write-backs.
+- **Check (positive control):** it fires on `setback(items[1], 42)`, is SILENT on the local-var
+  case and on the field-mutation callee. Only then trust the detection.
+
+**Step 3 — emit the store-back (the fix).** Wrap the call per the design; reconstruct
+`base`/`idx`/`fld` from `orig`; emit `OpSetVector`/`OpSetField` after the call.
+- **Check:** `setback(items[1], 42); items[1].px == 42` on interp AND native; `LOFT_POISON=1`
+  clean; leak-free both backends.
+
+**Step 4 — the boundary matrix.** Cells `{vector element, struct field, nested field} ×
+{write-back callee, field-mutation callee} × {interp, native}`. Assert **value AND length AND
+leak** per cell (not leak alone — a delivery that doubles reads leak-free).
+- **Check:** write-back cells reach the source; field-mutation cells unchanged (P160); every
+  cell leak-free + poison-clean on both backends.
+
+**Step 5 — gate + graduate.** Gate the new store-back behind a flag if any matrix cell is
+uncertain; prove the suite **byte-identical** with the gate OFF (`loft introspect` before/after).
+Flip `tests/scripts/87-amp-element-writeback-limitation.loft` to the POSITIVE case (+ a
+field-of-computed case). Run the full suite (`find_problems.sh --bg`) both backends; poison-clean.
+
+**Step 6 — close.** Graduate the matrix to `tests/scripts/` + a `tests/leak_cases/` guard; close
+loft#506; if any un-reconstructable nested case remains, keep it a **loud** rejection (F4), never
+a silent drop.
+
+## Do-not-ship conditions (revert, don't push through)
+
+- Any matrix cell double-frees or leaks on either backend (F1/F2) → the ownership is wrong; revert.
+- A field-mutation cell regresses (F3) → the write-back-flag gating is wrong; revert.
+- One backend passes and the other regresses/crashes → not landable (the both-backends rule).
