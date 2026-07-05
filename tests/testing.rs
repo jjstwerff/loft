@@ -520,7 +520,13 @@ impl Test {
                 || l.starts_with("Warning: modulus may produce null")
                 || l.starts_with("Warning: `v[i]` may produce null")
                 || l.starts_with("Warning: `s[i]` may produce null")
-                || l.starts_with("Warning: field ");
+                || l.starts_with("Warning: field ")
+                // @PLN87 P3.2 — the redundant-`&` lint is on by default and part
+                // of the `LOFT_NO_WARN_RUNTIME` family (an efficiency advisory,
+                // not an error).  Many `&`-param regression guards keep the `&`
+                // deliberately to exercise the RefVar path; filter it here so it
+                // only fails a test that explicitly expects it via `.warning(..)`.
+                || l.starts_with("Warning: `&` on parameter ");
             if expected.contains(&l) {
                 expected.remove(&l);
             } else if is_runtime_warning {
