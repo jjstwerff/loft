@@ -213,6 +213,15 @@ struct Uses {
     /// `track_pos` (read solely by `survival_class`); `other_max_pos` is left untouched so the
     /// shipped var-buffer elision stays byte-identical.
     mut_max_pos: HashMap<u16, usize>,
+    /// @PLN90 item 4 — the position of each var's FIRST definition (`Set`). Compared against a
+    /// copy's enclosing-loop entry to tell a source defined OUTSIDE the loop (duplicated every
+    /// iteration → unbound) from a per-iteration LOCAL (consumed each pass → a move). Tracked
+    /// only when `track_pos`.
+    first_def_pos: HashMap<u16, usize>,
+    /// @PLN90 item 4 — a stack of enclosing-loop entry positions (the `Value::Loop` node's pos).
+    /// A source whose first def is `< loop_entry` existed before the loop (outside); `>=` means
+    /// it is defined inside the loop body (per-iteration). Tracked only when `track_pos`.
+    loop_entry: Vec<usize>,
     /// Max position at which a var appeared in a NON-reader (write / escape /
     /// pass-to-callee) position — EXCLUDING the benign scope ops (`OpFreeRef` /
     /// `Drop`) and the copy-fill itself. For a source `x`, "all such positions <
@@ -230,14 +239,15 @@ struct Uses {
     /// answered. See `survival_class`.
     last_use_pos: HashMap<u16, usize>,
     /// @PLN90 — field-target appends `OpAppendVector(OpGetField(rec, fld), src)`:
-    /// `(base record var, source base var, copy-site-end pos, in-loop, source location)`. This
-    /// is the struct/enum-construction copy (`S { f: src }`) and `x.field += src` — the source
-    /// is deep-copied into the field, which the var-buffer copy idiom above never sees. The
-    /// position (taken AFTER the args are walked) + loop flag drive the survival split; the
-    /// location (item 2) is the emitting op's span, for the report.
+    /// `(base record var, source base var, copy-site-end pos, loop-survives, source location)`.
+    /// This is the struct/enum-construction copy (`S { f: src }`) and `x.field += src` — the
+    /// source is deep-copied into the field, which the var-buffer copy idiom above never sees.
+    /// The position (taken AFTER the args are walked) + `loop_survives` (item 4: the source
+    /// outlives the enclosing loop) drive the survival split; the location (item 2) is for the
+    /// report.
     construct_copy: Vec<(Option<u16>, Option<u16>, usize, bool, Option<Position>)>,
-    /// @PLN90 — `OpCopyRecord` deep-copies: `(target base var, source base var, copy-site-end
-    /// pos, in-loop, source location)`. A record copy (`v[i] = e`, a `?? E{…}` default element,
+    /// @PLN90 — `OpCopyRecord` deep-copies: `(dest base var, SOURCE base var, copy-site-end pos,
+    /// loop-survives, source location)`. A record copy (`v[i] = e`, a `?? E{…}` default element,
     /// a struct copy) — not append-based, so the branches above miss it. The same-var no-op
     /// alias is excluded when recorded.
     record_copy: Vec<(Option<u16>, Option<u16>, usize, bool, Option<Position>)>,
@@ -287,6 +297,23 @@ impl Uses {
         }
     }
 
+    /// @PLN90 item 4 — is a copy of `src` at the current site a repeated duplicate of a value
+    /// that lives OUTSIDE the enclosing loop (⇒ unbound, one copy per iteration), rather than a
+    /// per-iteration local consumed each pass (⇒ a move)? False outside any loop. A source with
+    /// no `Set` def (a parameter) is outside by definition.
+    fn loop_survives(&self, src: Option<u16>) -> bool {
+        if self.loop_depth == 0 {
+            return false;
+        }
+        let Some(&entry) = self.loop_entry.last() else {
+            return false;
+        };
+        match src {
+            None => false,
+            Some(s) => self.first_def_pos.get(&s).is_none_or(|&d| d < entry),
+        }
+    }
+
     fn visit(&mut self, node: &Value, ctx: Ctx) {
         let pos = self.pos;
         self.pos += 1;
@@ -323,8 +350,16 @@ impl Uses {
             // the depth so Tier 1 can refuse copies filled here.
             Value::Loop(b) => {
                 self.loop_depth += 1;
+                // @PLN90 item 4 — the loop's entry position: a source whose first def is < this
+                // lives outside the loop (copied every iteration); >= means a per-iteration local.
+                if self.track_pos {
+                    self.loop_entry.push(pos);
+                }
                 for op in &b.operators {
                     self.visit(op, Ctx::Other);
+                }
+                if self.track_pos {
+                    self.loop_entry.pop();
                 }
                 self.loop_depth -= 1;
             }
@@ -339,6 +374,10 @@ impl Uses {
                 // @PLN90 item 3 — a `Set` writes `v` (its def is before any copy of it; a
                 // reassign after a copy is the mutation that forces the copy to be independent).
                 self.mark_write(Some(*v), pos);
+                // @PLN90 item 4 — remember where `v` was FIRST defined (loop-inside vs -outside).
+                if self.track_pos {
+                    self.first_def_pos.entry(*v).or_insert(pos);
+                }
                 // Fresh-buffer def: `v = OpGetField(vdb, 0, _)` where vdb is OpDatabase'd.
                 if let Value::Call(d, args) = rhs.unspan()
                     && *d == self.get_field
@@ -376,14 +415,14 @@ impl Uses {
                     // (`OpAppendVector(OpGetField(rec, fld), src)`) the source is
                     // deep-copied into the field: a structure copy the var-buffer idiom
                     // above never records (struct/enum construction `S { f: src }`, or
-                    // `x.field += src`). Capture (base record, source base, copy-site-end
-                    // pos, in-loop) so the copy-vs-borrow decision + survival split cover it.
+                    // `x.field += src`). Capture (base record, source base) so the
+                    // copy-vs-borrow decision + survival split cover it.
                     let cc = if let Some(Value::Call(d0, _)) = args.first().map(Value::unspan)
                         && *d0 == self.get_field
                     {
                         let rec = args.first().and_then(|t| base_var(t, self.get_field));
                         let src = args.get(1).and_then(|s| base_var(s, self.get_field));
-                        Some((rec, src, self.loop_depth > 0))
+                        Some((rec, src))
                     } else {
                         None
                     };
@@ -392,13 +431,15 @@ impl Uses {
                     }
                     // Position taken AFTER the args are walked: a use strictly greater is a
                     // use of the source AFTER this copy (⇒ the source survives). The copy op
-                    // carries no span, so borrow the nearest enclosing one (item 2).
-                    if let Some((rec, src, in_loop)) = cc {
+                    // carries no span, so borrow the nearest enclosing one (item 2). `loop_surv`
+                    // (item 4) = the source outlives the enclosing loop (copied every iteration).
+                    if let Some((rec, src)) = cc {
+                        let loop_surv = self.loop_survives(src);
                         self.construct_copy.push((
                             rec,
                             src,
                             self.pos,
-                            in_loop,
+                            loop_surv,
                             self.cur_pos.clone(),
                         ));
                     }
@@ -426,7 +467,6 @@ impl Uses {
                 let src = args.first().and_then(|a| base_var(a, self.get_field));
                 let dest = args.get(1).and_then(|a| base_var(a, self.get_field));
                 let record = !(dest.is_some() && dest == src);
-                let in_loop = self.loop_depth > 0;
                 let c = if self.value_readers.contains(d) {
                     Ctx::ReaderArg
                 } else {
@@ -437,10 +477,12 @@ impl Uses {
                 }
                 // Position AFTER the args: a later use of the source ⇒ it survives. The
                 // `OpCopyRecord` carries no span, so borrow the nearest enclosing one. The row's
-                // target/name is the DEST; the classified var is the SOURCE (`src`).
+                // target/name is the DEST; the classified var is the SOURCE (`src`). `loop_surv`
+                // (item 4) = the source outlives the enclosing loop (copied every iteration).
                 if record {
+                    let loop_surv = self.loop_survives(src);
                     self.record_copy
-                        .push((dest, src, self.pos, in_loop, self.cur_pos.clone()));
+                        .push((dest, src, self.pos, loop_surv, self.cur_pos.clone()));
                 }
             }
             Value::Call(d, args) => {
@@ -502,6 +544,8 @@ fn analyze_fn(
         track_pos: survival_on,
         cur_pos: None,
         mut_max_pos: HashMap::new(),
+        first_def_pos: HashMap::new(),
+        loop_entry: Vec::new(),
         other_max_pos: HashMap::new(),
         copyfill_pos: HashMap::new(),
         copyfill_in_loop: HashSet::new(),
@@ -673,11 +717,11 @@ fn analyze_fn(
     // split, `survival_class`) sorts Implicit/Avoidable/Forced — gated on `LOFT_COPY_SURVIVAL`
     // (`survival_on`, read once at the top of `analyze_fn`).
     for entry in &u.construct_copy {
-        let (rec, src, copy_end, in_loop) = (entry.0, entry.1, entry.2, entry.3);
+        let (rec, src, copy_end, loop_surv) = (entry.0, entry.1, entry.2, entry.3);
         // Flag OFF → the original phase-1 classification verbatim (byte-identical). Flag ON →
         // the bound-vs-unbound survival split.
         let (class, reason) = if survival_on {
-            survival_class(src, copy_end, in_loop, &u, function)
+            survival_class(src, copy_end, loop_surv, &u, function)
         } else {
             (
                 CopyClass::Implicit,
@@ -700,11 +744,11 @@ fn analyze_fn(
     // construction / return-buffer paths above never see them. Emit a Copy row so the
     // decision covers the copy. Diagnostic only — never an `ElidePlan`, no codegen change.
     for entry in &u.record_copy {
-        let (tgt, src, copy_end, in_loop) = (entry.0, entry.1, entry.2, entry.3);
+        let (tgt, src, copy_end, loop_surv) = (entry.0, entry.1, entry.2, entry.3);
         // Flag OFF → the original phase-1 classification verbatim (byte-identical). Flag ON →
         // the bound-vs-unbound survival split.
         let (class, reason) = if survival_on {
-            survival_class(src, copy_end, in_loop, &u, function)
+            survival_class(src, copy_end, loop_surv, &u, function)
         } else {
             (CopyClass::Implicit, "record deep-copy (OpCopyRecord)")
         };
@@ -730,17 +774,17 @@ fn analyze_fn(
 ///   after the copy site — so its single backing transfers).
 /// - **unbound → indicated:** a still-live source is duplicated into an independent structure.
 ///   `Avoidable` when the survivor is read-only (a borrow/move would have avoided the copy —
-///   the worklist); `Forced` when the source is mutated / escapes after the copy (an
-///   independent copy is genuinely required). An in-loop copy whose source is not re-read in
-///   straight-line order is surfaced as `Avoidable` with a caveat reason (the back-edge may
-///   repeat the duplicate; the source's scope needs a human check).
+///   the worklist); `Forced` when the source is mutated after the copy (an independent copy is
+///   genuinely required). `loop_surv` (item 4): a copy inside a loop whose source is defined
+///   OUTSIDE the loop is a duplicate made every iteration → also a survivor (indicated); a
+///   per-iteration local source is a move (silent).
 ///
 /// Called only when `LOFT_COPY_SURVIVAL` is set — the flag-OFF path keeps the original
 /// phase-1 classification verbatim at the call site, so the default dump stays byte-identical.
 fn survival_class(
     src: Option<u16>,
     copy_end: usize,
-    in_loop: bool,
+    loop_surv: bool,
     u: &Uses,
     function: &Function,
 ) -> (CopyClass, &'static str) {
@@ -752,35 +796,32 @@ fn survival_class(
     };
     // The copy's OWN read of the source is at a position <= copy_end, so a use strictly after
     // is a genuine later use — the source survives, an independent duplicate now coexists.
-    let survives = u.last_use_pos.get(&s).is_some_and(|&p| p > copy_end);
-    let (class, reason) = if !survives {
-        if in_loop {
-            // Not re-read in straight-line order, but a loop back-edge can repeat this copy
-            // each iteration if the source outlives the body — surface it, flagged for review.
-            (
-                CopyClass::Avoidable,
-                "in-loop copy: the back-edge may repeat this duplicate each iteration (verify the source's scope)",
-            )
-        } else {
-            // A move — bound, silent for everyone; not a copy to eliminate. Return directly
-            // (the compiler-internal downgrade below is only for INDICATED copies).
-            return (
-                CopyClass::Implicit,
-                "move: source consumed at the copy — its single backing transfers",
-            );
-        }
-    } else if u.mut_max_pos.get(&s).is_some_and(|&p| p > copy_end) {
+    let survives_straight = u.last_use_pos.get(&s).is_some_and(|&p| p > copy_end);
+    if !survives_straight && !loop_surv {
+        // A move — the source is consumed here (a per-iteration local, in the loop case). Bound,
+        // silent for everyone; not a copy to eliminate.
+        return (
+            CopyClass::Implicit,
+            "move: source consumed at the copy — its single backing transfers",
+        );
+    }
+    let (class, reason) = if u.mut_max_pos.get(&s).is_some_and(|&p| p > copy_end) {
         // @PLN90 item 3 — the source is genuinely WRITTEN after the copy (reassigned, appended
         // to, record-copied into): a borrow would let that mutation leak into the copy's owner,
         // so the independent copy is forced. This is precise — unlike the old `other_max_pos`
         // test it does NOT count a read-only pass-to-callee or being another copy's source.
-        // (Residual, conservative-toward-Avoidable: a field-write / mutating-callee on a
-        // single-def LOCAL is not caught here → shows Avoidable; the phase-B elision analysis
-        // is the real borrow checker and rejects an unsound candidate, so a false-Avoidable is
-        // safe for the worklist.)
+        // (Residual, conservative-toward-Avoidable: a mutating-callee on a single-def LOCAL is
+        // not caught → shows Avoidable; the phase-B elision analysis is the real borrow checker
+        // and rejects an unsound candidate, so a false-Avoidable is safe for the worklist.)
         (
             CopyClass::Forced,
             "unbound: source survives AND is written after — an independent copy is required",
+        )
+    } else if loop_surv && !survives_straight {
+        // @PLN90 item 4 — a value defined outside the loop, copied every iteration.
+        (
+            CopyClass::Avoidable,
+            "in-loop copy of a value defined outside the loop — duplicated every iteration; a borrow would avoid it",
         )
     } else {
         // A read-only survivor (read, or passed read-only) — the avoidable worklist.

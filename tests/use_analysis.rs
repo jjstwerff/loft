@@ -855,21 +855,30 @@ fn record_copy_is_covered_by_the_verdict() {
     );
 }
 
-// ── @PLN90 phase A — the bound-vs-unbound survival split + the Internal (item 1) bucket ──
+// ── @PLN90 phase A — the bound-vs-unbound survival split (items 1–4) ──
 // Under `LOFT_COPY_SURVIVAL` a construction / record copy is classified by its SOURCE FATE:
 // a MOVE (source consumed) is silent (Implicit); a still-live source duplicated is indicated
-// (Avoidable read-only / Forced mutated); a copy whose SOURCE is a compiler-generated temp
-// (`_`-prefixed) is `Internal` — a developer-worklist copy excluded from the user report.
+// (Avoidable read-only / Forced written-after). Item 4: a copy inside a loop whose source is
+// defined OUTSIDE the loop is duplicated every iteration → Avoidable; a per-iteration LOCAL
+// source is a move → Implicit. (Item 1's `Internal` — a compiler-generated `_`-prefixed source
+// that genuinely SURVIVES — is real but does not fire in this corpus: every compiler temp here
+// is a per-iteration move; the tally still carries `internal_copies=`.)
 const SURVIVAL_SRC: &str = r#"
 struct Wrap { data: vector<integer> }
+fn mk(n: integer) -> Wrap { Wrap { data: [n] } }
 fn cmove() { inner: vector<integer> = [1,2,3]; s = Wrap { data: inner }; print("{s.data[0]}\n"); }
 fn csurv() { inner: vector<integer> = [1,2,3]; s = Wrap { data: inner }; print("{inner[0]} {s.data[0]}\n"); }
 fn cmut()  { inner: vector<integer> = [1,2,3]; s = Wrap { data: inner }; inner += [4]; print("{s.data[0]} {inner[3]}\n"); }
-fn nested_internal() {
-    // The inner `[..]` of a nested-vector comprehension materialises into a compiler temp
-    // (`_elm_N`), which is then the SOURCE of the element copy → Internal (item 1).
-    vv: vector<vector<integer>> = [for i in 0..4 { [i, i * 2] }];
-    print("{len(vv)}\n");
+fn loop_outside() {
+    x = mk(9);                              // defined OUTSIDE the loop
+    v: vector<Wrap> = [mk(0), mk(0), mk(0)];
+    for i in 0..3 { v[i] = x; }             // x duplicated every iteration → Avoidable (item 4)
+    print("{v[0].data[0]}\n");
+}
+fn loop_local() {
+    v: vector<Wrap> = [mk(0), mk(0), mk(0)];
+    for i in 0..3 { y = mk(i); v[i] = y; }  // y is a fresh per-iteration local → move → Implicit
+    print("{v[1].data[0]}\n");
 }
 fn recset() {
     v: vector<Wrap> = [Wrap { data: [0] }];
@@ -877,7 +886,7 @@ fn recset() {
     v[0] = e;
     print("{v[0].data[0]}\n");
 }
-fn main() { cmove(); csurv(); cmut(); nested_internal(); recset(); }
+fn main() { cmove(); csurv(); cmut(); loop_outside(); loop_local(); recset(); }
 "#;
 
 /// Like `dump`, but with the survival split flag on.
@@ -914,14 +923,18 @@ fn assert_bucket(stderr: &str, func: &str, bucket: &str) {
 #[test]
 fn survival_split_bound_vs_unbound_and_internal() {
     let stderr = dump_survival(SURVIVAL_SRC);
-    // Bound → silent; unbound → indicated; compiler-generated source → Internal.
+    // Bound → silent; unbound → indicated.
     assert_bucket(&stderr, "cmove", "implicit"); // move: source consumed
     assert_bucket(&stderr, "csurv", "AVOIDABLE"); // unbound, read-only survivor
-    assert_bucket(&stderr, "cmut", "forced"); // unbound, mutated after
-    assert_bucket(&stderr, "nested_internal", "internal"); // `_elm_N` inner-comprehension source
+    assert_bucket(&stderr, "cmut", "forced"); // unbound, written after
+    // Item 4 — loop source scope: outside the loop ⇒ duplicated every iteration (Avoidable);
+    // a per-iteration local ⇒ a move (Implicit).
+    assert_bucket(&stderr, "loop_outside", "AVOIDABLE");
+    assert_bucket(&stderr, "loop_local", "implicit");
 
-    // Item 1: the Internal row must NOT leak into the user-facing worklist tally — the
-    // internal copy is counted separately, never as avoidable/forced for the user.
+    // Item 1: the Internal mechanism is present in the tally (a compiler-generated surviving
+    // source would land there, excluded from the user-facing avoidable/forced set). It does not
+    // fire in this corpus (every compiler temp here is a per-iteration move → Implicit).
     assert!(
         stderr
             .lines()

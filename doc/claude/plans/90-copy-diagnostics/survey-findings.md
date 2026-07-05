@@ -36,14 +36,17 @@ survives+mutated → forced (both backends, value-clean).
 
 ## The survey — 371 `tests/scripts/*.loft`, deduped
 
-| bucket | pre item 1 | after item 1 | **after item 3** | meaning |
-|---|---|---|---|---|
-| **Forced** | 152 | 29 | **1** | unbound copy, source **written** after — required as written |
-| **Implicit** (move/literal) | 73 | 73 | **203** | silent — no unbound structure produced |
-| **Avoidable** | 21 | 6 | **39** | a borrow/move would remove it — the drain worklist |
-| **Internal** (item 1) | — | 139 | **10** | copy of a compiler-generated source — developer worklist, **not** user-facing |
+| bucket | pre item 1 | item 1 | item 3 | **item 4** | meaning |
+|---|---|---|---|---|---|
+| **Forced** | 152 | 29 | 1 | **1** | unbound copy, source **written** after — required as written |
+| **Implicit** (move/literal) | 73 | 73 | 203 | **235** | silent — no unbound structure produced |
+| **Avoidable** | 21 | 6 | 39 | **17** | a borrow/move would remove it — the drain worklist |
+| **Internal** (item 1) | — | 139 | 10 | **0** | copy of a compiler-generated **surviving** source — dev worklist, not user-facing |
 
-The **user-facing indicated set** (Avoidable + Forced) is now **40** rows.
+The **user-facing indicated set** (Avoidable + Forced) is now **18** rows. Item 4 moved ~22 rows
+to Implicit (per-iteration-local moves that had shown as Avoidable/Internal), and `Internal`
+went to 0 — every compiler temp in the corpus is a per-iteration move (a *surviving* compiler-gen
+source, which is what Internal is for, does not occur here; the mechanism + tally remain).
 
 > **Item 3 uncovered a latent phase-1 bug — the `OpCopyRecord` source/dest were swapped.**
 > `OpCopyRecord(source=arg0, dest=arg1)` (verified against `State::copy_record` + `find_written_vars`),
@@ -104,14 +107,19 @@ issue, not a soundness one:
    safe): a source passed to a *mutating callee* after the copy isn't caught (a false-Avoidable
    the phase-B elision — the real borrow checker — rejects). Guard: the corpus `cmut`
    (`inner += [4]`) → Forced pins the write-detection.
-4. **Real in-loop survival (the caveat rows).** The `in-loop copy` reason conservatively marks a
-   loop-body copy as surviving. A per-iteration *local* source (`for i { x = mk(); v[i] = x }`)
-   is actually a move; only a source defined **outside** the loop truly survives. Needs the
-   source's definition position vs the loop entry, else these are false positives.
+4. **~~Real in-loop survival.~~ ✅ DONE (commit pending).** The old `in-loop copy` reason
+   conservatively marked every loop-body copy as a survivor. Now a copy inside a loop compares
+   the source's first-def position (`first_def_pos`) against the enclosing-loop entry
+   (`loop_entry` stack): a source defined **outside** the loop is duplicated every iteration →
+   Avoidable (precise reason); a **per-iteration local** (`for i { x = mk(); v[i] = x }`) is a
+   move → Implicit. A parameter source has no def → outside. This corrected ~22 rows to
+   Implicit and — via the move-before-Internal order — took `Internal` to 0 (every compiler
+   temp in the corpus is a per-iteration move, which is a move, not a surviving copy to flag).
+   Guards: corpus `loop_outside` → Avoidable, `loop_local` → Implicit.
 
-**Order:** (1) then (2) make the report trustworthy to show a lib author; (3) then (4) make the
-Avoidable worklist precise enough to drive the drain (phase B). None block landing the *gated*
-classifier — they block flipping it on.
+**All four resolve-before-flip items are DONE.** The phase-A classifier is now accurate enough
+to flip on for a report: (1)+(2) make it trustworthy to show a lib author; (3)+(4) make the
+Avoidable worklist precise. None changed codegen (all gated + diagnostic-only, suite green).
 
 ## Next
 
