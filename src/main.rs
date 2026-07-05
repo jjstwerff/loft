@@ -6180,7 +6180,9 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
             if !native_requested && let Some(reason) = loft::cache::rustc_mismatch() {
                 eprintln!(
                     "Warning: native compilation unavailable ({reason}); falling \
-                     back to interpreter mode. Rebuild loft to restore native."
+                     back to the interpreter. To restore native, rebuild from source \
+                     (`cargo build --release`) — a downloaded release ships no native \
+                     runtime and always runs interpreted."
                 );
                 native_fallback_reason = Some(format!(
                     "native compilation unavailable ({reason}); rebuild loft"
@@ -6341,7 +6343,9 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
                 eprintln!(
                     "Warning: native toolchain not usable here (cached build stale \
                      after a rustc update, or loft's runtime library unavailable); \
-                     falling back to interpreter mode. Rebuild loft to restore native."
+                     falling back to the interpreter. To restore native, rebuild from \
+                     source (`cargo build --release`) — a downloaded release ships no \
+                     native runtime and always runs interpreted."
                 );
                 native_fallback_reason = Some(
                     "native toolchain not usable here (cached build stale after a rustc \
@@ -6405,11 +6409,11 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
                         );
                     }
                     eprintln!(
-                        "\nMost likely cause: cached `libloft.rlib` references a different \
-                         dependency version than the one now in `target/release/deps/`, \
-                         or the deps directory is missing the named crate.\n\n\
-                         Fix:  cargo build --release --lib --bin loft\n\
-                         Or:   cargo clean && cargo build --release\n"
+                        "\n--native needs loft's runtime rlib, built with your rustc.\n\n\
+                         In a source checkout:  cargo build --release --lib --bin loft\n\
+                         (prefix `cargo clean &&` after a rustc update).\n\
+                         A downloaded release ships no native runtime — drop `--native` \
+                         to run on the interpreter, or build loft from source.\n"
                     );
                 } else {
                     eprintln!(
