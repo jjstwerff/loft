@@ -783,14 +783,16 @@ The registry ([PKG_REGISTRY.md](PKG_REGISTRY.md)) is the trusted distribution
 point, so the toolchain itself ships through it — signed, with checksums users
 can verify offline.
 
-- **Build a release `loft` binary per supported target** (per-OS CI runners or a
-  cross toolchain):
-  - `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`
+- **Build a release bundle per supported target.**  `release.yml` does this
+  automatically on a tag push (see § "Tag & publish" above) via
+  `scripts/make-release.sh`, building the four shipped triples:
+  - `x86_64-unknown-linux-musl`
   - `x86_64-apple-darwin`, `aarch64-apple-darwin`
   - `x86_64-pc-windows-msvc`
-  - `cargo build --release --bin loft --target <triple>` (same `--lib --bin loft`
-    rlib caveat as `library-ci.yml.example` if native-compiling is exercised).
-- **Attach each binary to the GitHub release** as `loft-<version>-<triple>(.exe)`.
+  - (no `aarch64-unknown-linux-*` yet — add a matrix row when it is needed.)
+- **Each bundle is a self-contained zip** — `bin/loft` + `default/` stdlib +
+  examples + `loft-reference.pdf` + `stdlib.manifest` + `SHA256SUMS` — attached to
+  the **draft** release as `loft-<version>-<triple>.zip` (+ its `.zip.sha256`).
 - **Checksums:**
   - sha256 of every binary.
   - sha256 of the bundled stdlib — a manifest over `default/*.loft` (each file +
@@ -803,9 +805,11 @@ can verify offline.
   Verify a clean-host `loft install` (or self-update) resolves a binary, checks its
   signature + sha256, and the stdlib digest matches.
 
-This is `[build]` — the per-OS build matrix + the registry release-entry schema +
-the stdlib-manifest tool do not exist yet (open work; cross-link from
-PKG_REGISTRY.md § Open work).
+The **build + attach + per-bundle checksum + stdlib manifest** half is
+implemented in `release.yml` (draft-first — see § "Tag & publish").  Still
+`[build]` (open work): the registry release-entry schema (the signed `index.json`
+entry above) and the automated `loft install` / self-update path — cross-link
+from PKG_REGISTRY.md § Open work.
 
 ---
 
