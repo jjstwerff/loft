@@ -10,6 +10,22 @@ This is the **safe-implementation recipe** for the deferred fix — each step ha
 check, matrix-validated on BOTH backends, gated. Follow the loft-codegen gate: capture the
 WORKING bytecode before touching the generator.
 
+> **⚠️ ATTEMPTED + REVERTED (2026-07-05) — a store-back copy CORRUPTS on repeat.** The
+> `scan_args` postamble `OpCopyRecord(wv, items[i], type | 0x8000)` (copy the write-back's record
+> INTO the element's existing store) passed the SINGLE-write-back matrix (value + leak + poison,
+> both backends) — but a **second write-back to the same element corrupts it** (`items[i]` reads
+> `null(oob)`), even for two *void* write-backs, both backends. **Root cause (the earlier "callee
+> does NOT free R" claim below was WRONG):** the callee's write-back `item = X` FREES the displaced
+> old record via `_old_disp` (`if _old_disp.store_nr != new { OpFreeRef(_old_disp) }`).  For a
+> LOCAL-var arg that record is the var's own → correct.  For a COMPUTED lvalue the temp `wv`
+> ALIASES the element's record `R_5`, so the callee frees **the element's record** — the copy-into
+> then writes to freed memory (works ONCE by store-reuse luck; the second write-back sees the
+> corruption).  So the copy-into-existing-store approach is unsound; the fix must either **stop the
+> callee freeing the element** (make `wv` OWN a copy for a write-back callee — but a field-mutation
+> callee NEEDS the alias, and the arg-coercion can't tell them apart) or **repoint the element's
+> slot to R′** (a DbRef store into the element, not a copy — the element-DbRef-set op).  This is
+> squarely @PLN90 store-lifetime ownership territory.
+
 ## The bug (one line)
 
 A whole-binding `&`-write-back reaches the caller only when the argument is a **simple local
@@ -73,10 +89,14 @@ where `<store-back>` is `OpSetVector(base, idx, wv)` (element) or `OpSetField(ba
 (field), with `base`/`idx`/`fld` reconstructed from `orig`. The store-back frees the old record
 once and transfers the new one to the source.
 
-**Key ownership facts to rely on (verify, don't assume — Step 0/3):**
-- The callee does NOT free the caller's original R (P2.1: witness == R → not freed).
-- The callee leaves R′ for the caller (proven by the WORKING local case surviving + leak-free).
-- `wv` stays `skip_free` (does not own); the store-back's `OpSetVector` is the sole owner-transfer.
+**Key ownership facts (CORRECTED 2026-07-05 after the reverted attempt):**
+- **The callee FREES the displaced old record** (`_old_disp` free in the `&`-write-back) — for a
+  computed-lvalue arg where `wv` aliases the element, that frees the ELEMENT's record `R_5`.  This
+  is the corruption source; a copy-into-`R_5` store-back writes to freed memory.
+- The callee leaves R′ live in `wv` (the write-back's new record) — verified.
+- `wv` is `skip_free` (aliases the element).  So the sound fix must either give `wv` its OWN copy
+  before the call (so the callee frees the copy, not the element) — gated on the write-back fact —
+  or make the store-back a **DbRef repoint** of the element slot to R′, not a record copy.
 
 ## Failure modes to guard (enumerate before coding)
 
