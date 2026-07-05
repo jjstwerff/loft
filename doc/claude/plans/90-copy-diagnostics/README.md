@@ -8,6 +8,8 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 Tracker: [@PLN90](https://github.com/loft-lang/plans/issues/90).
 Full design + failure-path enumeration: [COPY_DIAGNOSTICS.md](../../COPY_DIAGNOSTICS.md).
 **Remaining open work before release (issues + optimisations, prioritised): [REMAINING.md](REMAINING.md).**
+**The user-facing lint recipe (the bound-vs-unbound survival split, flag-gated report, staged
+to close): [unbound-copy-lint.md](unbound-copy-lint.md).**
 
 ## Status
 
@@ -26,11 +28,23 @@ the model: a struct/enum field or vector slot *owns* its data, e.g. `S { f: src 
 e`) · **Forced** (informational — owned by circumstance: temporary source, later mutation).
 `LOFT_MATERIALIZE_DUMP` shows `bucket=…` per row + a `MAT-WORKLIST avoidable=N implicit=N
 forced=N` tally. On the corpus: `field_return` → AVOIDABLE (its elimination IS the @PLN85 P4
-borrow-correctly fix); **construction / `OpCopyRecord` → implicit (NOT warned — it is what
-the programmer asked for)**; `assign_field` → eliminated. **North-star primary:** the warning
-serves elimination — drain bucket 2 (avoidable) into bucket 1 (auto-elide), stay quiet on
-bucket 3, never copy "just because" ([COPY_DIAGNOSTICS.md § North-star](../../COPY_DIAGNOSTICS.md)).
-Suite byte-identical (issues 746, use_analysis 16).
+borrow-correctly fix); construction / `OpCopyRecord` → implicit; `assign_field` → eliminated.
+**North-star primary:** the warning serves elimination — drain bucket 2 (avoidable) into
+bucket 1 (auto-elide), stay quiet on bucket 3, never copy "just because"
+([COPY_DIAGNOSTICS.md § North-star](../../COPY_DIAGNOSTICS.md)). Suite byte-identical (issues
+746, use_analysis 16).
+
+**Phase 2 REFINEMENT (design set, not yet built — [unbound-copy-lint.md](unbound-copy-lint.md)).**
+The blanket "construction / `OpCopyRecord` → Implicit" above is **too coarse**: it silences a
+construction / slot-set that **duplicates a still-live source** — a genuine *unbound* copy the
+user must see. The silent/indicate line is **bound vs unbound**, keyed on the copy's *source
+fate*, not the emitting op: **bound** (scalar · move — source consumed here · literal source)
+→ Implicit/silent; **unbound** (a live source is duplicated) → indicated (Avoidable/Forced).
+Delivered as a **flag-gated report** (off by default) that answers two questions — *what still
+copies that we can fix* and *where the hidden cost is in libs/programs* — and staged to
+**close**: survey → drain the Avoidable set → accept the forced remainder behind a **sparse
+per-site opt-out annotation** (so libraries PR copy-clean) → promote to an enforced gate. A
+longer trajectory, tracked as phases A–D.
 
 **Phase 2 next — draining bucket 2 (the north-star), starting with field-return = the
 @PLN85 P4 borrow-correctly fix.** Design written:

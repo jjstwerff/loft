@@ -71,10 +71,17 @@ automatically not copying ([COPY_DIAGNOSTICS.md § North-star](../../COPY_DIAGNO
   via `copy_borrow_tail_into_retbuf`; make it return the alias like the (A1-fixed) match arm.
   Couples with A1b (a borrow needs the temp-subject guard). [borrow-return/DESIGN.md](borrow-return/DESIGN.md)
   slice A2. **Effort: M.**
-- **The user-facing copy lint.** Warn on the **Avoidable** bucket only (located, opt-in
-  first), with the `&`/restructure hint; stay silent on Implicit, informational on Forced.
-  The classification is built (`VerdictRow.class`, `MAT-WORKLIST`); the lint emission is not.
-  [COPY_DIAGNOSTICS.md](../../COPY_DIAGNOSTICS.md) phase 2. **Effort: M.**
+- **The user-facing copy lint.** Indicate every **unbound** structure copy — the copy's
+  source is a still-live pre-existing structure that was *duplicated* (**Avoidable**: warn,
+  with the `&`/restructure hint — the worklist; **Forced**: informational). Stay silent only
+  on **bound** results — scalars, moves (`src` consumed here), and literal sources
+  (**Implicit**). **PREREQUISITE — the source-survival split:** today `construct_copy` /
+  `record_copy` are blanket-classified `Implicit`, so a construction/slot-set that duplicates a
+  *live* source is wrongly silenced (it should be Avoidable/Forced). Land
+  [unbound-copy-lint.md](unbound-copy-lint.md) (key the split on source survival, gated,
+  suite byte-identical) BEFORE wiring the emission. The classification scaffold is built
+  (`VerdictRow.class`, `MAT-WORKLIST`); the survival split and the lint emission are not.
+  [COPY_DIAGNOSTICS.md § bound vs unbound](../../COPY_DIAGNOSTICS.md). **Effort: M.**
 - **Drain bucket 2 (grow the auto-elision set).** Extend the `Borrow`→`ElidePlan` engine to
   more avoidable copies (var-buffer conservative cases the analysis can't yet prove,
   construction where the source provably out-lives a non-escaping record). Each avoidable row
