@@ -21,6 +21,15 @@ use-after-free corruption around returns, reassignment, and `match` — has been
 retired wholesale and is now guarded on every night's CI. The registry, the sandbox,
 and reference binding all move forward too.
 
+### Patch `2026.7.1` — the downloadable binaries
+
+`2026.7.0` shipped without its pre-built binaries: a release-pipeline bug published
+the release before the platform builds could attach, and the published release was
+immutable. `2026.7.1` is that same release with the four platform bundles actually
+attached — Linux (`x86_64-musl`), macOS (Intel + Apple Silicon), and Windows — plus
+the pipeline fix (binaries are now built into a draft *before* publish) so it cannot
+recur. The loft binary itself is unchanged from `2026.7.0`.
+
 ### Parsing a number can fail — `text as integer` now gives you a nullable
 
 This is the one change most existing code will need to look at.
