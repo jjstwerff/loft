@@ -82,7 +82,7 @@ is mutated independently) — flag it as its own plan, gated on that design, not
 1. **Gate (capture the working move).** Hand-write / find the WORKING move bytecode for
    `a = S { f: base }` (base dead) — the field-store IS base's store, base is not freed, one owner.
    Capture it beside the current copy-then-free (`loft introspect`), both backends. The diff is the
-   spec ([loft-codegen skill](../../../.claude/skills/loft-codegen/SKILL.md)).
+   spec ([loft-codegen skill](../../../../.claude/skills/loft-codegen/SKILL.md)).
 2. **Detect the elidable site.** A construction/record copy whose source is a dead-after named var
    — reuse the survival `move` classification (promote it from a diagnostic row to an elision
    decision, as `ElidePlan` is for the var-buffer case). Gate behind a flag; suite byte-identical

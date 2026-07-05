@@ -9290,16 +9290,16 @@ fn test() {
     .result(Value::Null);
 }
 
-/// P152.A (& form) — `s.v = fresh` on a `&S` parameter used to parse-fail
-/// with "Parameter 's' has & but is never modified".  Fix: the same
-/// `towards_set` change emits a real OpClearVector+OpAppendVector pair,
-/// which `find_written_vars` now recognises (OpAppendVector folded into
-/// the unified first_arg_write set).
+/// P152.A — vector field whole-replacement (`s.v = fresh`) propagates to
+/// the caller by value (no `&` needed): the `towards_set` change emits a
+/// real OpClearVector+OpAppendVector pair.  (The `&`-form variant is gone:
+/// with the W4 redundant-`&` lint on by default the `&` here is flagged as
+/// unnecessary, since field mutation already reaches the caller.)
 #[test]
 fn p152_vec_field_ref_param_mutation_undetected() {
     code!(
         "struct S { v: vector<integer> }
-fn modify(s: &S) {
+fn modify(s: S) {
     fresh: vector<integer> = [1, 2, 3];
     s.v = fresh;
 }
@@ -9313,15 +9313,16 @@ fn test() {
 }
 
 /// P152.B — struct field whole-replacement (`s.i = fresh`) works at
-/// runtime via OpCopyRecord, but the `&` mutation check used to miss
-/// OpCopyRecord.  Fix: `find_written_vars` adds OpCopyRecord(src, dst)
-/// to the second_arg_write set, walking the OpGetField destination.
+/// runtime via OpCopyRecord and propagates to the caller by value (no `&`
+/// needed).  (The `&`-form variant is gone: with the W4 redundant-`&` lint
+/// on by default the `&` here is flagged as unnecessary, since field
+/// mutation already reaches the caller.)
 #[test]
 fn p152_struct_field_ref_param_mutation_undetected() {
     code!(
         "struct Inner { x: integer not null }
 struct Outer { i: Inner }
-fn modify(s: &Outer) {
+fn modify(s: Outer) {
     fresh = Inner { x: 99 };
     s.i = fresh;
 }
