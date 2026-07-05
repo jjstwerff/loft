@@ -579,6 +579,30 @@ Do not push release tags, trigger release workflows, draft GitHub Releases, or
 run `cargo publish` programmatically.  Always wait for the owner to do this
 manually after completing the validation checklist below.
 
+### Tag & publish — the mechanics (draft-first, under immutable releases)
+
+The org enforces **immutable releases**: a release's assets freeze the moment it
+is published and cannot be added afterwards.  So the four platform bundles MUST be
+attached while the release is still a **draft**.  The pipeline is built around this
+ordering — the owner never publishes an empty release and then waits for binaries:
+
+1. **Push the annotated tag** — `git tag -a vX.Y.Z -m "…" && git push origin vX.Y.Z`.
+   The tag push (not a published release) is what triggers `release.yml`.
+2. **Let CI build the draft.**  `release.yml` builds all four targets (linux-musl,
+   macos-x64, macos-arm64, windows-msvc) and creates the GitHub release as a
+   **draft** with every bundle + `.sha256` attached and notes generated.  If any
+   build leg fails, no draft appears — investigate, don't ship a partial release.
+3. **Review, then publish.**  Open the draft: confirm the four bundles are present
+   (smoke-test each per step 10), edit the title/body if wanted, then click
+   **Publish**.  Only this click freezes the release — by which point the binaries
+   are already attached.  Publishing an existing-tag draft does not re-trigger the
+   build.
+
+**Never** create-and-publish a release in one step (the pre-2026.7 flow):
+publishing creates the tag and freezes the release before the binaries are built,
+so immutable releases then reject the upload — v2026.7.0 shipped binary-less
+exactly this way.
+
 ---
 
 ## Pre-Release Documentation Review

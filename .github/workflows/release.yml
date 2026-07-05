@@ -73,8 +73,17 @@ jobs:
             dist/*.zip
             dist/*.zip.sha256
 
-  publish:
-    name: Publish release
+  # Assemble the release as a DRAFT with all four platform bundles attached, then
+  # STOP.  The owner reviews the draft and clicks Publish — and only that click
+  # freezes the release (immutable releases lock assets at publish time).  The old
+  # flow published FIRST (publishing the UI draft created the tag, which triggered
+  # this build), so the binaries arrived AFTER the freeze and could never attach —
+  # `422 Cannot upload assets to an immutable release`.  Building the draft here
+  # guarantees the assets exist before the owner's publish click.  Fail-closed: if
+  # any build leg fails, `needs: build` skips this job and no draft appears, so the
+  # owner never ships a partial release.  See RELEASE.md § Tag & publish.
+  draft-release:
+    name: Assemble draft release
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -89,11 +98,17 @@ jobs:
           path: artifacts
           merge-multiple: true
 
-      - name: Create GitHub release
+      - name: Create draft release with binaries
         uses: softprops/action-gh-release@v2
         with:
+          # Never auto-publish: the owner does the final publish from the reviewed
+          # draft (RELEASE.md § No Automated Releases).
+          draft: true
           files: artifacts/*
           generate_release_notes: true
+          # Fail loudly if the glob matches nothing (a build produced no bundle)
+          # rather than silently creating an assetless draft.
+          fail_on_unmatched_files: true
 
   docs:
     name: Deploy HTML docs to GitHub Pages
