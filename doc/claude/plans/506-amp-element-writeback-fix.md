@@ -5,6 +5,18 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # loft#506 — `&`-write-back to a computed lvalue: verifiable implementation plan
 
+> **✅ LANDED (2026-07-05).** `scopes.rs::amp_writeback_storeback` + the `scan_args` postamble.
+> A `&`-write-back to a **vector element** or **struct field** now reaches the caller (was
+> silently dropped); the caller copies the write-back's new record into the source's EXISTING
+> store via `OpCopyRecord(wv, source, type | 0x8000)` — the free-source bit frees `wv`'s record
+> in the same op, so it is **leak-clean** (reuses the element's store, like plain `items[i]=X`).
+> Gated on the callee actually WHOLE-REASSIGNING the `&`-param (`Set(param, non-Null)` in the
+> body — NOT `rebind_orig`, which is a different mechanism); a field-mutation callee is
+> untouched (P160 unchanged). Verified value + leak + poison on **both backends** across the
+> `{element, field, field-mutation, local}` matrix. Guard:
+> `tests/scripts/87-amp-element-writeback.loft`. **Residual:** a NON-void write-back call with a
+> computed-lvalue `&`-arg is gated out (avoids result-capture) — rare, still tracked here.
+
 Tracker: [loft#506](https://github.com/loft-lang/loft/issues/506). Surfaced during @PLN87 P3.2.
 This is the **safe-implementation recipe** for the deferred fix — each step has a runnable
 check, matrix-validated on BOTH backends, gated. Follow the loft-codegen gate: capture the

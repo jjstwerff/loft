@@ -862,18 +862,24 @@ impl Scopes {
                 }
             }
             Value::Call(d_nr, args) => {
-                let (preamble, ls) = self.scan_args(args, function, data, *d_nr);
+                let (preamble, ls, postamble) = self.scan_args(args, function, data, *d_nr);
                 let call = Value::Call(*d_nr, ls);
-                if preamble.is_empty() {
+                if preamble.is_empty() && postamble.is_empty() {
                     call
                 } else {
+                    // @PLN90 / loft#506 — Insert([preamble…, call, postamble…]).  The
+                    // store-back postamble only fires for a VOID write-back callee, so the
+                    // Insert's value stays the call's (void) — no result-capture needed.
                     let mut ops = preamble;
                     ops.push(call);
+                    ops.extend(postamble);
                     Value::Insert(ops)
                 }
             }
             Value::CallRef(v_nr, args) => {
-                let (preamble, ls) = self.scan_args(args, function, data, u32::MAX);
+                // outer_call = u32::MAX → the store-back is never built for a fn-ref call
+                // (postamble is always empty here).
+                let (preamble, ls, _postamble) = self.scan_args(args, function, data, u32::MAX);
                 let call = Value::CallRef(*v_nr, ls);
                 if preamble.is_empty() {
                     call
@@ -2417,9 +2423,11 @@ impl Scopes {
         function: &mut Function,
         data: &Data,
         outer_call: u32,
-    ) -> (Vec<Value>, Vec<Value>) {
+    ) -> (Vec<Value>, Vec<Value>, Vec<Value>) {
         let mut preamble: Vec<Value> = Vec::new();
         let mut ls: Vec<Value> = Vec::new();
+        // @PLN90 / loft#506 — POST-call store-backs for computed-lvalue `&`-write-back args.
+        let mut postamble: Vec<Value> = Vec::new();
         // #248 (interpreter arg-layout) — when the call's first argument is a
         // borrowed receiver pushed via `OpCreateStack(Var(_))` (a `&self` / `&T`
         // method or free-function call), a LATER argument that is an inline
@@ -2487,6 +2495,16 @@ impl Scopes {
                     && matches!(&ops[n - 1], Value::Call(d_nr, _)
                         if data.def(*d_nr).name == "OpCreateStack");
                 if is_a56_hoisted || is_p135_hoisted || is_p179_hoisted {
+                    // @PLN90 / loft#506 — a computed-lvalue `&`-write-back arg
+                    // (`f(items[i], …)` where `f` whole-reassigns the `&`-param)
+                    // updates the arg TEMP, not the source slot; emit a store-back
+                    // AFTER the call.  Build it before `ops` is consumed.
+                    if is_p179_hoisted
+                        && let Some(sb) =
+                            self.amp_writeback_storeback(&ops, arg_idx, outer_call, function, data)
+                    {
+                        postamble.push(sb);
+                    }
                     let mut it = ops.into_iter();
                     for _ in 0..n - 1 {
                         preamble.push(it.next().unwrap());
@@ -2522,7 +2540,88 @@ impl Scopes {
                 ls.push(scanned);
             }
         }
-        (preamble, ls)
+        (preamble, ls, postamble)
+    }
+
+    /// @PLN90 / loft#506 — the post-call store-back for a computed-lvalue `&`-write-back
+    /// argument.  The arg is `Insert([Set(wv, orig), …, OpCreateStack(wv)])` where `wv` is a
+    /// `__ref_` temp and `orig` reads a heap lvalue (`OpGetVector`/`OpGetField`).  When the
+    /// callee WHOLE-REASSIGNS this param (the `rebind_orig` write-back fact), the write-back
+    /// lands in `wv`, not in the source element/field — so after the call copy `wv`'s new
+    /// record back into the source's EXISTING record (reusing its store — leak-clean, like the
+    /// plain `items[i] = X` lowering) via `OpCopyRecord(wv, orig, type | 0x8000)`, the `0x8000`
+    /// free-source bit freeing `wv`'s record in the same op.  Returns `None` for a
+    /// field-mutation callee (no rebind) — it mutates the shared record in place, so a
+    /// self-copy-then-free would free the live element (UAF).
+    fn amp_writeback_storeback(
+        &self,
+        ops: &[Value],
+        arg_idx: usize,
+        outer_call: u32,
+        function: &Function,
+        data: &Data,
+    ) -> Option<Value> {
+        if outer_call == u32::MAX {
+            return None;
+        }
+        // A write-back procedure is void (`fn f(o: &T) { o = X }`); gating on void keeps
+        // the Insert's value the call's without a result-capture.  A non-void write-back
+        // call with a computed-lvalue `&`-arg is a rarer residual (still tracked by #506).
+        if data.def(outer_call).returned != Type::Void {
+            return None;
+        }
+        let Value::Set(wv, orig) = ops.first()? else {
+            return None;
+        };
+        let wv = *wv;
+        // `orig` must read a computed HEAP lvalue — a vector element or a struct field.
+        let orig_inner = orig.unspan();
+        let is_computed_lvalue = matches!(orig_inner, Value::Call(g, _)
+            if matches!(data.def(*g).name(), "OpGetVector" | "OpVectorRef" | "OpGetField"));
+        if !is_computed_lvalue {
+            return None;
+        }
+        // Does the callee WHOLE-REASSIGN the `&`-param at this argument position?  A `&`-param
+        // write-back (`item = X`) lowers to a direct `Set(param, non-Null)` through the ref —
+        // NOT the `rebind_orig` mechanism (that is non-`&` heap-param reassignment-locality).
+        // A field-mutation callee has no such Set → no store-back.
+        let attrs = data.def(outer_call).attributes();
+        if arg_idx >= attrs.len() {
+            return None;
+        }
+        let callee_vars = &data.definitions[outer_call as usize].variables;
+        let param_var = callee_vars.var(&attrs[arg_idx].name);
+        if param_var == u16::MAX
+            || !matches!(callee_vars.tp(param_var), Type::RefVar(_))
+        {
+            return None;
+        }
+        let mut writes_back = false;
+        data.definitions[outer_call as usize].code.walk(&mut |node| {
+            if let Value::Set(v, rhs) = node
+                && *v == param_var
+                && !matches!(rhs.unspan(), Value::Null)
+            {
+                writes_back = true;
+            }
+        });
+        if !writes_back {
+            return None;
+        }
+        // The record type of the element/field (for the deep `OpCopyRecord`).
+        let struct_d = match function.tp(wv) {
+            Type::RefVar(inner) => match &**inner {
+                Type::Reference(d, _) => *d,
+                _ => return None,
+            },
+            Type::Reference(d, _) => *d,
+            _ => return None,
+        };
+        let type_nr = Value::Int(i32::from(data.def(struct_d).known_type()) | 0x8000);
+        Some(Value::Call(
+            data.def_nr("OpCopyRecord"),
+            vec![Value::Var(wv), orig_inner.clone(), type_nr],
+        ))
     }
 
     /// Create a `__lift_N` temporary that OWNS an inline call result, so
