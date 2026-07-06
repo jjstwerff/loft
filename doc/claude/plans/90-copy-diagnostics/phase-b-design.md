@@ -359,10 +359,15 @@ correctly stay copies (a wrong hoist would have surfaced as a stale value, e.g. 
   block (a's construction is a contiguous run right before the copy — hoist it, retarget base's build
   onto a.field, drop the wrapper/copy). Conservatively guarded (flat block, one construct, run refs
   only `a`, real reorder); everything else stays a copy. No new op. See "B1.3c LANDED".
-- **B1.4 — param field values (DONE).** Allow a never-written parameter as a hoisted run value,
-  soundness on the interprocedural `find_written_vars` (catches `&`-param mutation in any arg
-  position). See "B1.4 LANDED". Remaining widenings (SAFE-skipped): >1 fresh construct per fn;
-  nested-Insert bodies; the `a.items = base` whole-replacement (chained through `__p154_rhs`).
+- **B1.4 — param field values + multiple constructs (DONE).** (a) Allow a never-written parameter
+  as a hoisted run value, soundness on the interprocedural `find_written_vars` (catches `&`-param
+  mutation in any arg position). (b) Lift the one-construct-per-fn cap: `construct_fresh_rewrite`
+  loops, rewriting each safe construct by earliest remaining copy (re-scan after each; a failed
+  source is recorded for termination) — a cross-construct dependency is a non-`a`/non-param run var,
+  so it self-SKIPs. See "B1.4 LANDED". Remaining (SAFE-skipped, each a NEW sub-slice not a guard
+  relaxation): nested-Insert (non-flat) bodies; the `a.items = base` whole-replacement — a DOUBLE
+  copy through `__p154_rhs` (`base → __p154_rhs → a.items`, with an `OpClearVector`), not detected
+  today, needing new detection + a move-the-clear reorder (B1.3d).
 - **B1.5 — graduate + flip.** Guards landed in `tests/use_analysis.rs` (record + construct + fresh +
   param); extend to `tests/scripts/` + `tests/leak_cases/`, then flip `LOFT_MOVE_ELIDE` default-on
   with a `LOFT_NO_MOVE_ELIDE` opt-out (run the full suite flag-ON first). Re-run the survey — the

@@ -835,13 +835,14 @@ fn construct_drop(
 /// (`OpPreAllocVector`/`OpNewRecord`/`OpFinishRecord`) onto `a.field`, drop the backing wrapper +
 /// the `OpAppendVector` copy. Runs AFTER [`construct_move_rewrite`], on the copies it left standing.
 ///
-/// Conservative — operates on a FLAT top-level block only, and fires only when EVERY guard holds:
-/// exactly one still-copying construct source in the function; `a`'s construction is a contiguous
-/// run of statements immediately before the copy that references only `a` or a **never-written
-/// parameter** (B1.4 — a param's value is constant, so hoisting reads the same value; any other
-/// var could be a local built between `base` and `a` → SKIP); the run contains `a`'s `OpDatabase`;
-/// and `a` is genuinely allocated AFTER the source's backing (a real reorder). Anything else stays
-/// a copy — safe even when the gate is flipped on. `skip` receives only the moved-out backing.
+/// Conservative — operates on a FLAT top-level block only, and rewrites each construct that passes
+/// EVERY guard: `a`'s construction is a contiguous run of statements immediately before the copy
+/// that references only `a` or a **never-written parameter** (B1.4 — a param's value is constant,
+/// so hoisting reads the same value; any other var could be a local built between `base` and `a`
+/// → SKIP); the run contains `a`'s `OpDatabase`; and `a` is genuinely allocated AFTER the source's
+/// backing (a real reorder). B1.4 also lifts the one-construct-per-fn cap — each safe construct is
+/// rewritten independently (a cross-construct dependency is a non-`a`, non-param run var → SKIPs
+/// that one). Anything else stays a copy. `skip` receives only the moved-out backings.
 fn construct_fresh_rewrite(
     code: &mut Value,
     con_sources: &HashSet<u16>,
@@ -853,36 +854,57 @@ fn construct_fresh_rewrite(
     let Value::Block(b) = code else {
         return;
     };
-    // Fresh sources = construct sources whose copy still stands (B1.3b removed the reorder-free
-    // ones'). Require EXACTLY one — a conservative first cut.
-    let with_copy: Vec<u16> = con_sources
-        .iter()
-        .copied()
-        .filter(|&s| {
-            b.operators
-                .iter()
-                .any(|op| append_copy_of(op, s, co).is_some())
-        })
-        .collect();
-    if with_copy.len() != 1 {
-        return;
+    // Rewrite each safe fresh construct. Re-scan after every rewrite (the reorder shifts indices);
+    // pick the source with the earliest remaining copy for a deterministic order; a source whose
+    // guards fail is recorded so it is not retried (guarantees termination).
+    let mut failed: HashSet<u16> = HashSet::new();
+    loop {
+        let next = con_sources
+            .iter()
+            .copied()
+            .filter(|s| !failed.contains(s))
+            .filter_map(|s| {
+                b.operators
+                    .iter()
+                    .position(|op| append_copy_of(op, s, co).is_some())
+                    .map(|ci| (ci, s))
+            })
+            .min_by_key(|&(ci, _)| ci);
+        let Some((_, src)) = next else {
+            break;
+        };
+        if !try_fresh_one(b, src, co, function, written, skip) {
+            failed.insert(src);
+        }
     }
-    let src = with_copy[0];
+}
 
-    // Copy index + destination expression (`a.field`).
+/// Attempt the fresh-construction reorder for ONE source `src` on the flat block `b`. Returns
+/// `true` (and rewrites `b.operators` + records the moved-out backing in `skip`) iff every guard
+/// holds; `false` otherwise, leaving `b` unchanged.
+fn try_fresh_one(
+    b: &mut Block,
+    src: u16,
+    co: &ConstructOps,
+    function: &Function,
+    written: &HashSet<u16>,
+    skip: &mut HashSet<u16>,
+) -> bool {
+    // Copy index + destination expression (`a.field`) — the first copy of `src`.
     let mut ci = None;
     let mut dest = None;
     for (i, op) in b.operators.iter().enumerate() {
         if let Some(d) = append_copy_of(op, src, co) {
             ci = Some(i);
             dest = Some(d);
+            break;
         }
     }
     let (Some(ci), Some(dest)) = (ci, dest) else {
-        return;
+        return false;
     };
     let Some(a) = get_field_base(&dest, co) else {
-        return;
+        return false;
     };
 
     // The source's backing wrapper (`src = OpGetField(vdb, …)`).
@@ -898,7 +920,7 @@ fn construct_fresh_rewrite(
         }
     }
     let Some(vdb) = vdb else {
-        return;
+        return false;
     };
 
     // `a`'s construction run: the contiguous block [ps..ci) whose statements all target `a`.
@@ -908,13 +930,12 @@ fn construct_fresh_rewrite(
     }
     let run = &b.operators[ps..ci];
     // Guards: the run allocates `a`, references only `a` or a never-written param (dependency-safe
-    // to hoist past `base` — a param's value is constant, any other var could be a local built
-    // between `base` and `a`), and `a` is allocated AFTER the backing (else this isn't a reorder).
+    // to hoist past `base`), and `a` is allocated AFTER the backing (else this isn't a reorder).
     if !run.iter().any(|s| call_is(s, co.op_database, a)) {
-        return;
+        return false;
     }
     if !run.iter().all(|s| run_var_ok(s, a, function, written)) {
-        return;
+        return false;
     }
     match b
         .operators
@@ -922,7 +943,7 @@ fn construct_fresh_rewrite(
         .position(|s| call_is(s, co.op_database, vdb))
     {
         Some(vi) if vi < ps => {}
-        _ => return,
+        _ => return false,
     }
 
     // Rebuild: [a-construction run] ++ [base's build, wrapper dropped + retargeted] ++ [rest].
@@ -944,6 +965,7 @@ fn construct_fresh_rewrite(
     }
     b.operators = new_ops;
     skip.insert(vdb); // the backing wrapper is the moved-out owned store.
+    true
 }
 
 /// If `op` is `OpAppendVector(dest, Var(src), …)` (the copy of `src` into a field), return `dest`.

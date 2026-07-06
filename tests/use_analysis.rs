@@ -1209,11 +1209,12 @@ fn move_elide_fresh_construction_values_and_conservative_skips() {
             "{moved}: a single literal-field fresh construct should elide its copy"
         );
     }
-    // …but two fresh constructs in one fn is not the one-construct shape → both stay copies.
+    // …and two independent fresh constructs in one fn BOTH elide (B1.4 lifted the one-construct cap;
+    // the cross-dependent / mutated-param skips are pinned in the multi + param widening tests).
     assert_eq!(
         op_count(&on, "e2_two", "OpAppendVector"),
-        op_count(&off, "e2_two", "OpAppendVector"),
-        "e2_two: two fresh constructs must stay copies (conservative one-construct guard)"
+        0,
+        "e2_two: two independent fresh constructs should both elide"
     );
 }
 
@@ -1266,6 +1267,54 @@ fn move_elide_param_field_widening_is_sound() {
             "{skipped}: a mutated param must NOT be hoisted (stays a copy)"
         );
     }
+}
+
+// ── @PLN90 phase B (B1.4) — MULTIPLE fresh constructs in one fn (the one-construct cap lifted) ──
+const MOVE_ELIDE_MULTI_SRC: &str = r#"
+struct Bag { id: integer, items: vector<integer> }
+fn m1_three() -> integer {                   // three independent fresh constructs → all elide
+    b1: vector<integer> = [1, 2];
+    a1 = Bag { id: 10, items: b1 };
+    b2: vector<integer> = [3, 4];
+    a2 = Bag { id: 20, items: b2 };
+    b3: vector<integer> = [5, 6];
+    a3 = Bag { id: 30, items: b3 };
+    (a1.items[0] ?? 0) + (a2.items[1] ?? 0) + (a3.items[0] ?? 0)
+}
+fn m2_crossdep() -> integer {                // a2's field value reads a1 (a local) → a2 SKIPs, a1 elides
+    b1: vector<integer> = [7, 8];
+    a1 = Bag { id: 100, items: b1 };
+    b2: vector<integer> = [9, 10];
+    a2 = Bag { id: (a1.id ?? 0), items: b2 };
+    (a1.items[0] ?? 0) + (a2.items[1] ?? 0) + (a2.id ?? 0)
+}
+fn main() { print("{m1_three()} {m2_crossdep()}\n"); }
+"#;
+
+#[test]
+fn move_elide_multiple_fresh_constructs_per_fn() {
+    // m1=10 (1+4+5), m2=117 (7+10+100). Values hold on both backends.
+    assert_move_elide_preserves(MOVE_ELIDE_MULTI_SRC, "move_elide_b14multi_probe", "10 117");
+    let off = introspect_move_elide_src(MOVE_ELIDE_MULTI_SRC, "move_elide_b14multi_ir", false);
+    let on = introspect_move_elide_src(MOVE_ELIDE_MULTI_SRC, "move_elide_b14multi_ir", true);
+    // All three constructs in m1 elide (the one-construct-per-fn cap is lifted).
+    assert_eq!(
+        op_count(&on, "m1_three", "OpAppendVector"),
+        0,
+        "m1_three: three independent fresh constructs should all elide"
+    );
+    // m2: a1 elides, but a2 (its field value reads the local a1) is not hoistable → exactly one copy
+    // remains — proof both that multiple constructs are handled AND that the cross-dep is caught.
+    assert_eq!(
+        op_count(&off, "m2_crossdep", "OpAppendVector"),
+        2,
+        "m2_crossdep baseline: two copies before elision"
+    );
+    assert_eq!(
+        op_count(&on, "m2_crossdep", "OpAppendVector"),
+        1,
+        "m2_crossdep: a1 elides, the a1-dependent a2 stays a copy"
+    );
 }
 
 // ── @PLN90 Step 5 — the user-facing `--report-copies` report ──
