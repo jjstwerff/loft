@@ -260,6 +260,50 @@ matrix (value + length + leak, `LOFT_POISON`, both backends) AND the full suite 
 is the wide-release blocker and the largest remaining W1 build; localization (this section) is done,
 the emission restructure is next.
 
+## A1b — gate-3: the emission is a 3-store SYNTHESIS, not a reused copy path (2026-07-06)
+
+Traced the delivery selectors. The vector-return path `classify_vector_delivery`
+(`control.rs:1043`) already has a materialise leg — `Delivery::CopyBorrow` →
+`copy_borrow_tail_into_retbuf` (`:5388`) — but it fires **only for a borrow of a visible ARG**
+(`tail_borrows_arg` / `tail_is_struct_field_read` / whole-arg), never for a borrow of a **local**.
+The Reference path has the local case (`return_views_local` #306 → `RefDelivery::MaterializeView`);
+the **vector path is missing the local analog** — so A1b's temp-subject borrow falls through to
+`Delivery::Rename` (the collapse). That is the precise gap.
+
+But routing A1b to the existing `copy_borrow_tail_into_retbuf` does **not** work: that emitter
+appends the tail value DIRECTLY into `buf_var` (`{clear(buf); append(buf, <orig>); buf}`) and its
+contract is that `<orig>` is a simple **borrow expression** that "never owns its store and never
+aliases the hidden buffer." A1b's tail is a **buffer-ABI CALL** `g(temp, buf)` — `g` writes its
+borrow INTO `buf`, so `append(buf, g(temp, buf))` appends `buf` to itself. The call needs its **own
+scratch buffer** first. So A1b is a strictly larger synthesis than A2 (which is a field/arg tail):
+
+**Target emission (3 stores, mirrors cell-escape-temp-FIXED):**
+```
+__scr := fresh scratch vector buffer
+__scr  = g(temp, __scr)          // g runs into the SCRATCH, __scr = borrow of temp.items
+OpClearVector(__retbuf)          // __retbuf is a SEPARATE owned store
+OpAppendVector(__retbuf, __scr)  // copy the borrow into __retbuf while temp is live
+OpFreeRef(temp) ; OpFreeRef(__scr)   // free subject + scratch AFTER the copy
+return __retbuf
+```
+
+**The build (the remaining W1 work), concretely:**
+1. Detection: a new selector case (in `classify_vector_delivery`, or a pre-`ref_return` rewrite) —
+   the tail is `Call(g, args)`, `g` returns a borrow of a VISIBLE param (read `g`'s BODY block-deps,
+   unfiltered — the signature strips it), and that param's arg is an inline **temporary** (a
+   `Construct`/`Object`, not a `Var` to a param/longer-lived local). Mirror `return_views_local` but
+   for the vector tail, recovering the borrow through the callee body.
+2. Emission: a new dispatch path that mints the scratch buffer, redirects `g`'s hidden buffer arg to
+   the scratch, and emits the clear+append into a distinct `__retbuf`, freeing the temp + scratch
+   after. This is where the `Bind{substitute}` collapse is *prevented* (the subject work-ref keeps
+   its own store) and the `Rename` of `g`'s buffer to `__retbuf` is replaced by the materialise.
+3. Gate `LOFT_JOIN_OWN`; matrix (named/temp/escape × value+len+leak × POISON × both backends);
+   full suite; @PLN89 oracle; guard `tests/scripts/85-temp-subject-borrow-return-uaf.loft`.
+
+This is the wide-release blocker. Gates 1–3 (this + the two sections above) are the completed
+localization + build spec; step 1–3 above is the emission slice — a focused synthesis on the
+#1-weakness machinery, validated against the matrix, not a rushed change.
+
 ## Connection back
 
 This is the `Borrow`-set growth the @PLN90 north-star is about: field-return moves from
