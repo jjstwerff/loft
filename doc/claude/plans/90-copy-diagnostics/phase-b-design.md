@@ -221,6 +221,36 @@ container exists, so the retarget needs a build-order reorder (or the handle-ado
 call-sourced collection field). Filtered out of `move_elide` for now; detection still fires (the
 `MOVE-PLAN … kind=Construct` dump), so B1.3b has its worklist.
 
+### B1.3b design (grounded — `make_dead` capture, `a = Bag { items: base }`)
+
+Current IR: `base`'s backing `__vdb_1` is `OpDatabase`'d + filled (`OpPreAllocVector(base)` +
+element `OpNewRecord/OpFinishRecord`), THEN `a` is `OpDatabase`'d, THEN
+`OpAppendVector(a.items, base)` **copies** base's block into `a.items`, then `OpFreeRef(__vdb_1)`.
+Two things differ from the Record case:
+
+1. **Reorder.** `base` is built before `a` exists. To retarget base's fill into `a.items`, `a`'s
+   `OpDatabase` + items-init must move BEFORE base's construction.
+2. **The retarget is over the vector-BUILD ops** (`OpPreAllocVector` / `OpNewRecord` /
+   `OpFinishRecord` — the element append machinery), not the scalar `OpSet*` the Record case had.
+
+**Two candidate lowerings, ranked:**
+- **(A, recommended) reorder-inline retarget** — hoist `a`'s alloc above base's fill, retarget
+  `OpPreAllocVector(base)`+element-ops onto `a.items`, drop `__vdb_1` + its free + the
+  `OpAppendVector` copy. **Reuses the retarget idiom (extended to the vector-build ops), no new heap
+  op, no handle-representation risk** — same safety envelope as the landed Record rewrite. Cost: the
+  reorder mutation (move a's alloc-block earlier) and matching a wider op set.
+- **(B) handle-adopt** — swap `a.items`'s handle to `__vdb_1`'s element block, free a's empty items
+  placeholder, drop the `__vdb_1` free. More surgical but needs a **handle-write primitive** AND a
+  proven model of how a `vector<T>` FIELD references its block (inline-length vs separate handle) —
+  the representation the gate insists on proving on a hand-built poison cell before any heap op.
+
+**Plan:** do (A) — extend `move_rewrite` to (i) recognise the Construct `MovePlan`, (ii) hoist the
+container's alloc block, (iii) retarget the source's `OpPreAllocVector`/element-build ops onto the
+field, (iv) drop the wrapper alloc/copy/free + `set_skip_free`. Matrix the same grid (value + poison
++ leak, both backends) on `make_dead`/`keep_alive`. Reserve (B) only for a **call-sourced** field
+(`items: mk()`) where there is no in-place fill to retarget — and prove the field representation
+first. Also fold the `a.items = base` whole-replacement (chained through `__p154_rhs`) here.
+
 ## Verifiable slices (each: matrix on BOTH backends, gated behind a flag, suite byte-identical off)
 
 - **B1.1 — gate (DONE for interp).** The capture above is the spec; add the native target Rust
