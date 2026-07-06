@@ -149,6 +149,40 @@ ops already take their destination — so construction and record share one op.*
 hand-constructed `make_dead`/`rec_move` (value+leak+poison, both backends) BEFORE wiring the
 rewrite (the loft-codegen gate).
 
+## B1.3 CORRECTION (the gate caught it) — the representation splits the lowering in two
+
+Attempting to build one `OpAdopt(dest, src)` surfaced a heap-safety fact that **reframes B1.3** —
+recorded here because it is exactly the corruption the loft-codegen gate exists to prevent:
+
+**`DATABASE.md`: `Vector(T)` is a BY-VALUE array — elements live INLINE in the vector's element
+block** (`Array(T)` is the by-reference one). Consequences for the two `MovePlan` kinds:
+
+- **Record `v[i] = e` (`vector<E>`, E a struct) — the element is INLINE.** `do_copy_record` copies
+  `e`'s record *into* the inline slot (`store(&to).copy_block`). There is **no separate element
+  store to adopt** — a DbRef-swap here would point the inline slot at foreign memory = corruption.
+  The right lowering is **INLINE CONSTRUCTION**: build `e` DIRECTLY into `v[i]`'s inline slot (skip
+  `e`'s own `OpDatabase` + the copy + the free), i.e. retarget `e`'s construction ops to the element
+  slot — the var-buffer `elide_rewrite` pattern, no new op.
+- **Construction `S { f: base }` where `f` is a `vector`/collection FIELD — the field holds a
+  HANDLE** to a separate element block. THIS one adopts: swap `a.items`'s handle to `base`'s block,
+  free the empty placeholder block, drop `base`'s free. An `OpAdopt`-style handle-write fits here.
+- **`S { f: base }` where the source is BUILT IN PLACE** (a literal / append-built `base`) can
+  ALSO be inlined (retarget `base`'s fill to `a.items`), often simpler than an adopt; **only a
+  source whose store comes from a CALL** (`base = mk()`) genuinely needs the handle-adopt (its store
+  can't be retargeted).
+
+**⇒ Revised B1.3 shape:** the move-elision is **retarget-the-source-construction** (inline) as the
+primary mechanism — it covers both the inline-element record case and the in-place-built
+construction case, reuses the `elide_rewrite` machinery, and needs no new heap op. The
+**handle-adopt** (`OpAdopt` on a collection-field handle) is the SECOND mechanism, needed only for a
+**call-sourced** handle field. The `MovePlan` should therefore carry the source's **origin**
+(in-place-built vs call-result) and the destination's **representation** (inline slot vs handle) so
+B1.3 picks the correct lowering — a detection widening for B1.2b, before any lowering lands.
+
+This is the gate working: the naive single-`OpAdopt` would have corrupted every `v[i] = e`
+(inline-element) move. Do NOT implement a heap op until the inline-vs-handle case is proven per
+destination (value + length + **leak + poison**, both backends) on a hand-constructed cell.
+
 ## Verifiable slices (each: matrix on BOTH backends, gated behind a flag, suite byte-identical off)
 
 - **B1.1 — gate (DONE for interp).** The capture above is the spec; add the native target Rust
