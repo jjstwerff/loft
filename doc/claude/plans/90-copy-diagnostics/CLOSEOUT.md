@@ -112,11 +112,25 @@ inline subject construct is built with the fn's `__retbuf` work-ref (`__ref_1`) 
 **Exit:** all 6 matrix cells + `cell-escape-temp` clean both backends under `LOFT_POISON`; suite
 byte-identical gate-off, green gate-on; oracle green.
 
-### W2 — A2: struct-field `b.rows` copy→alias  ·  P1-opt · M · **depends on W1**
+### W2 — A2: struct-field `b.rows` copy→alias  ·  **✅ RESOLVED — WON'T DO (2026-07-06)**
 
-**Verified state:** OPEN. [borrow-return/br_field.loft](borrow-return/br_field.loft)
-(`fn f(b: Box) -> vector<E> { b.rows }`) still **copies** into `__retbuf` on both backends
-(`OpClearVector(__retbuf); OpAppendVector(__retbuf, OpGetField(b,0,66))`).
+**A2 is INVALID — the field-return copy is the DECIDED value-semantics contract, not an avoidable
+copy.** The three-attempt prototype (below) landed the alias with a green matrix, then the flag-on
+exposure sweep broke `tests/scripts/85-store-lifetime-field-read-copy.loft` — an explicit **@PLN85 /
+#415** regression guard whose header states the contract verbatim: *"binding or returning a heap
+vector FIELD must **COPY** (establish a new owner), not alias the field's store"* and asserts
+`ag = getv(by); by.v += [9]; assert(len(ag)==3, "must COPY")` for `fn getv(b) { b.v }` — **A2's exact
+target**. The C86 register confirms it: *"whole-value heap binds COPY by contract (`af=bx.v`) — #415
+is the SEMANTIC not a stopgap."* So a struct-field return **must** copy so the caller's result is an
+independent owner; **aliasing it violates value semantics** (the mutated source would change the
+result). A2's framing as an "avoidable copy optimisation" mis-reads a **required** copy. **Closed:
+the current copy behaviour is correct; W3 (drop the buffer) is moot; the field-return copy is
+FORCED, not Avoidable.** Three matrix-guarded prototype attempts, all reverted clean (record below).
+
+**Prototype history (verified state OPEN before resolution):** [borrow-return/br_field.loft](borrow-return/br_field.loft)
+(`fn f(b: Box) -> vector<E> { b.rows }`) copies into `__retbuf` on both backends
+(`OpClearVector(__retbuf); OpAppendVector(__retbuf, OpGetField(b,0,66))`) — **and per #415/C86 it
+should.**
 
 **Build steps:** route the struct-field-read tail — `classify_vector_delivery`
 (`src/parser/control.rs:1043`) returns `Delivery::CopyBorrow` at `:1109`, gated by
@@ -152,9 +166,10 @@ tests — `85_store_lifetime_field_read_copy`, `85_store_lifetime_implicit_param
 `85_store_lifetime_borrowed_view_query` — **assert the COPY** and now break (native UAF panics +
 value asserts). So A2 changes documented field-return semantics from **copy → view**: the
 C86 "projections stay views (#426)" position vs the `@PLN85` "field-read copies for lifetime safety"
-contract those tests pin. **That is a DESIGN DECISION, not a corpus bug** — landing A2 means deciding
-copy-vs-view for field-return, migrating (or keeping) the `@PLN85` `*_copy` tests, and closing the
-residual native UAFs W1 doesn't cover. Reverted clean (three attempts, tree unaffected).
+contract those tests pin. Reverted clean (three attempts, tree unaffected). **UPDATE — the decision
+is ALREADY MADE (see the resolution at the top of this section): reading the #415 guard's header +
+the C86 register settles it — field-return MUST copy (#415 IS the semantic). A2 is invalid; not a
+pending decision. The `*_copy` tests are correct and stay.**
 
 Earlier notes preserved for the record — **Second attempt (2026-07-06) — the
 caller-side effect is DEEPER than a delivery reroute.** Adding a `classify_vector_delivery` branch to
@@ -309,17 +324,18 @@ a close gate.**
 
 ## Effort roll-up
 
-| item | effort | risk | gates close? |
+| item | effort | risk | status |
 |---|---|---|---|
-| W1 A1b UAF | M | **HIGH** | yes (P0 blocker) |
-| W2 A2 field→alias | M | med | yes (drains Avoidable for W5) |
-| W3 wasted-buffer | S | low | robustness (folds into S2.3) |
-| W4 O-Complete | L | med | yes (P0 umbrella) |
-| W5 enforced lint | S–M | med (over-warn until W1/W2) | yes (namesake) |
-| W6 par-native | S | low | yes (P0) |
-| W7 Phase 3 syntax | S+M | low | yes (design complete) |
-| W8 empty-arm parse | S–M | low | robustness |
-| W9 drain bucket 2 | L | — | no (follow-on) |
+| W1 A1b UAF | M | **HIGH** | ✅ DONE (P0 blocker) |
+| W6 par-native | S | low | ✅ DONE (P0) |
+| W5 enforced lint | S–M | med | ✅ DONE (channel; default-on deferred) |
+| S5.2 lint locations | S | low | ✅ DONE |
+| W2 A2 field→alias | — | — | ✅ RESOLVED — WON'T DO (#415/C86: copy is the semantic) |
+| W3 wasted-buffer | — | — | MOOT (rode A2's alias — the buffer holds the required copy) |
+| W4 O-Complete | L | med | open — needs @PLN89 nightly oracle infra |
+| W7 Phase 3 syntax | S+M | low | open — keyword-reservation design decision |
+| W8 empty-arm parse | S–M | low | open — HIGH-risk parser surgery, zero correctness gain |
+| W9 drain bucket 2 | L | — | not a close gate — remaining Avoidable are C86-contract copies (per the A2 finding), no safe drain |
 
 ---
 

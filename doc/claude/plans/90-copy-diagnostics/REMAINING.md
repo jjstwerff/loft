@@ -80,10 +80,13 @@ improvement (moved to P1 below), not a P0 blocker. **Effort: S–M.**
 These eliminate copies that are *correct but wasteful*; the north-star is the compiler
 automatically not copying ([COPY_DIAGNOSTICS.md § North-star](../../COPY_DIAGNOSTICS.md)).
 
-- **A2 — struct-field `b.rows` copy→alias.** `f(b) { b.rows }` still *copies* into `__retbuf`
-  via `copy_borrow_tail_into_retbuf`; make it return the alias like the (A1-fixed) match arm.
-  Couples with A1b (a borrow needs the temp-subject guard). [borrow-return/DESIGN.md](borrow-return/DESIGN.md)
-  slice A2. **Effort: M.**
+- ~~**A2 — struct-field `b.rows` copy→alias.**~~ **RESOLVED — WON'T DO (2026-07-06).** Three
+  matrix-guarded prototypes established that A2 is **invalid**: a struct-field return **must COPY**
+  per the decided value-semantics contract (`tests/scripts/85-store-lifetime-field-read-copy.loft`,
+  the #415 guard: *"binding or returning a heap vector FIELD must COPY (establish a new owner)"*;
+  C86: *"#415 is the SEMANTIC not a stopgap"*). Aliasing `f(b){ b.v }` violates value semantics (a
+  later `b.v += …` would change the result). The copy is FORCED, not avoidable; the current
+  behaviour is correct. W3 (drop the buffer) is moot. [CLOSEOUT.md § W2](CLOSEOUT.md).
 - **The user-facing copy lint.** Indicate every **unbound** structure copy — the copy's
   source is a still-live pre-existing structure that was *duplicated* (**Avoidable**: warn,
   with the `&`/restructure hint — the worklist; **Forced**: informational). Stay silent only
