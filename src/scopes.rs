@@ -494,6 +494,9 @@ fn move_elide(data: &mut Data) {
         // First-def order per var — a Record destination's container must be defined BEFORE its
         // source (else the retargeted build writes into an un-allocated container).
         let def_order = collect_def_order(&code, &mo);
+        // Sources GROWN by appends (a for-loop of `out += […]`) — the fresh reorder can't retarget
+        // their build; leave them a copy.
+        let append_grown = collect_append_grown(&code, co.op_append);
 
         // ── RECORD shape (`v[i]=e` / `o.f=src`, OpCopyRecord) ──
         let rec_sources: HashSet<u16> = plans
@@ -535,7 +538,14 @@ fn move_elide(data: &mut Data) {
             .collect();
         if !con_sources.is_empty() {
             // B1.3b — reorder-free field-appends (`x.field += src`, container already exists).
-            construct_move_rewrite(&mut code, &con_sources, &co, &bad_containers, &mut skip);
+            construct_move_rewrite(
+                &mut code,
+                &con_sources,
+                &co,
+                &bad_containers,
+                &append_grown,
+                &mut skip,
+            );
             // B1.3c — fresh construction (`a = Bag { items: base }`, container built after the
             // source): hoist `a`'s alloc, then retarget. Runs on the copies B1.3b left standing.
             // B1.4 — the interprocedural mutation set (`find_written_vars` knows which callees
@@ -555,6 +565,7 @@ fn move_elide(data: &mut Data) {
                 &data.def(d_nr).variables,
                 &written,
                 &bad_containers,
+                &append_grown,
                 &mut skip,
             );
         }
@@ -666,6 +677,25 @@ fn collect_multi_database(node: &Value, mo: &MoveOps) -> HashSet<u16> {
     let mut multi = HashSet::new();
     walk(node, mo, &mut seen, &mut multi);
     multi
+}
+
+/// Vars GROWN by an `OpAppendVector(v, …)` (`v` is arg0) — i.e. built incrementally, typically by a
+/// for-loop of `v += […]`. The fresh-construction reorder only retargets simple in-place element
+/// builds (`OpNewRecord`/`OpFinishRecord`); it cannot retarget append-grown ops, so dropping such a
+/// source's def while its appends still reference it dangles the var (`var_out` not in scope). Skip.
+fn collect_append_grown(node: &Value, op_append: u32) -> HashSet<u16> {
+    fn walk(node: &Value, op_append: u32, out: &mut HashSet<u16>) {
+        if let Value::Call(d, args) = node.unspan()
+            && *d == op_append
+            && let Some(Value::Var(v)) = args.first().map(Value::unspan)
+        {
+            out.insert(*v);
+        }
+        node.for_each_child(&mut |c| walk(c, op_append, out));
+    }
+    let mut out = HashSet::new();
+    walk(node, op_append, &mut out);
+    out
 }
 
 /// First-definition encounter order per var (`Set(v,…)` value-bind or `OpDatabase(v)` alloc). Used
@@ -787,6 +817,7 @@ fn construct_move_rewrite(
     con_sources: &HashSet<u16>,
     co: &ConstructOps,
     bad_containers: &HashSet<u16>,
+    append_grown: &HashSet<u16>,
     skip: &mut HashSet<u16>,
 ) {
     // Pass 1 — pre-scan: per source capture the append destination, its backing wrapper, the
@@ -817,6 +848,9 @@ fn construct_move_rewrite(
             !ambiguous.contains(s)
                 && dest.contains_key(s)
                 && vdb.contains_key(s)
+                // An append/loop-grown source (`out += […]` in a for-loop) is not built by the
+                // simple in-place element ops the retarget handles → leave it a copy.
+                && !append_grown.contains(s)
                 // B1.3b handles a PURE append (`x.field += src`). If the field is CLEARED anywhere
                 // it is a whole-vector REPLACE (`x.field = src`, an `OpClearVector` + append) — a
                 // simple retarget would leave the clear stranded after the retargeted build (empties
@@ -1002,6 +1036,7 @@ fn construct_drop(
 /// that one). B1.4 (nested) walks EVERY block, so a construct inside an `if`/loop body is handled
 /// too — its `a`-alloc + `base`-build + copy are flat within that block. Anything else stays a
 /// copy. `skip` receives only the moved-out backings.
+#[allow(clippy::too_many_arguments)]
 fn construct_fresh_rewrite(
     code: &mut Value,
     con_sources: &HashSet<u16>,
@@ -1009,20 +1044,40 @@ fn construct_fresh_rewrite(
     function: &Function,
     written: &HashSet<u16>,
     bad_containers: &HashSet<u16>,
+    append_grown: &HashSet<u16>,
     skip: &mut HashSet<u16>,
 ) {
     // Apply the per-block reorder to the top block AND every nested block (if/loop bodies etc.).
     if let Value::Block(b) = code {
-        fresh_rewrite_block(b, con_sources, co, function, written, bad_containers, skip);
+        fresh_rewrite_block(
+            b,
+            con_sources,
+            co,
+            function,
+            written,
+            bad_containers,
+            append_grown,
+            skip,
+        );
     }
     code.for_each_child_mut(&mut |c| {
-        construct_fresh_rewrite(c, con_sources, co, function, written, bad_containers, skip);
+        construct_fresh_rewrite(
+            c,
+            con_sources,
+            co,
+            function,
+            written,
+            bad_containers,
+            append_grown,
+            skip,
+        );
     });
 }
 
 /// Run the fresh-construction reorder over a SINGLE block's operators: rewrite each safe construct,
 /// re-scanning after every rewrite (the reorder shifts indices), by earliest remaining copy (a
 /// deterministic order); a guard-failing source is recorded so it is not retried (termination).
+#[allow(clippy::too_many_arguments)]
 fn fresh_rewrite_block(
     b: &mut Block,
     con_sources: &HashSet<u16>,
@@ -1030,6 +1085,7 @@ fn fresh_rewrite_block(
     function: &Function,
     written: &HashSet<u16>,
     bad_containers: &HashSet<u16>,
+    append_grown: &HashSet<u16>,
     skip: &mut HashSet<u16>,
 ) {
     let mut failed: HashSet<u16> = HashSet::new();
@@ -1048,7 +1104,16 @@ fn fresh_rewrite_block(
         let Some((_, src)) = next else {
             break;
         };
-        if !try_fresh_one(b, src, co, function, written, bad_containers, skip) {
+        if !try_fresh_one(
+            b,
+            src,
+            co,
+            function,
+            written,
+            bad_containers,
+            append_grown,
+            skip,
+        ) {
             failed.insert(src);
         }
     }
@@ -1057,6 +1122,7 @@ fn fresh_rewrite_block(
 /// Attempt the fresh-construction reorder for ONE source `src` on the flat block `b`. Returns
 /// `true` (and rewrites `b.operators` + records the moved-out backing in `skip`) iff every guard
 /// holds; `false` otherwise, leaving `b` unchanged.
+#[allow(clippy::too_many_arguments)]
 fn try_fresh_one(
     b: &mut Block,
     src: u16,
@@ -1064,8 +1130,12 @@ fn try_fresh_one(
     function: &Function,
     written: &HashSet<u16>,
     bad_containers: &HashSet<u16>,
+    append_grown: &HashSet<u16>,
     skip: &mut HashSet<u16>,
 ) -> bool {
+    if append_grown.contains(&src) {
+        return false; // an append/loop-grown source can't be retargeted by the in-place reorder.
+    }
     // Copy index + destination expression (`a.field`) — the first copy of `src`.
     let mut ci = None;
     let mut dest = None;

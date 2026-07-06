@@ -1486,7 +1486,11 @@ fn main() { print("{vlit_element()} {self_assign()} {empty_field_replace()}\n");
 #[test]
 fn move_elide_corpus_hardening_shapes_stay_correct() {
     // A wrong elision of ANY of these surfaces here as a wrong value or a crash, on either backend.
-    assert_move_elide_preserves(MOVE_ELIDE_HARDENING_SRC, "move_elide_harden_probe", "42 3 10");
+    assert_move_elide_preserves(
+        MOVE_ELIDE_HARDENING_SRC,
+        "move_elide_harden_probe",
+        "42 3 10",
+    );
 }
 
 // ── @PLN90 Step 5 — the user-facing `--report-copies` report ──
