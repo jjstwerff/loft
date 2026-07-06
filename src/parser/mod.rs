@@ -374,6 +374,13 @@ pub struct Parser {
     /// payload to the alias's byte width.  Reset to `u32::MAX` at the start
     /// of each top-level statement; irrelevant outside file-I/O `+=`.
     pub(crate) last_cast_alias: u32,
+    /// The narrow target `N` of the just-parsed checked narrowing cast
+    /// (`e as N?`, or `e as N` immediately left of `??`).  A discharging `??`
+    /// reads this so its result types as `N` instead of the full `integer` the
+    /// nullable cast has to carry for its null sentinel (see
+    /// `build_null_coalesce_default`).  Set in the `as` handler, consumed by the
+    /// next `??`, and cleared by any other intervening operator.
+    pub(crate) dn4_checked_narrow: Option<Type>,
     /// Field-binding Set nodes created by `if expr is Variant { field }`.
     /// Drained by `parse_if` and prepended to the if-body so they only
     /// execute when the discriminant matches.
@@ -652,6 +659,7 @@ impl Parser {
             is_capture_aliases: Vec::new(),
             is_capture_bindings: Vec::new(),
             last_cast_alias: u32::MAX,
+            dn4_checked_narrow: None,
             trace_types: false,
             trace_types_lines: Vec::new(),
             field_read_counts: std::collections::HashMap::new(),

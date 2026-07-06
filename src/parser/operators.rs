@@ -1594,7 +1594,27 @@ impl Parser {
         // every append, which fails in loop/if contexts.  Keep the conservative
         // `__nullable<S>` result and let each USE site coerce (dense-assign routing,
         // the ref_return return-boundary unwrap) — that keeps appends nullable→nullable.
-        let result_type = if widen_ints {
+        // A checked narrowing cast discharged here (`e as N ?? d` / `e as N? ?? d`):
+        // the `??` removes the null, so the surviving value is provably in N's range.
+        // Type the RESULT as the narrow `N` — the cast BLOCK stayed `integer` to hold
+        // its null sentinel, but past the discharge a `u8` field / return / local can
+        // accept it with no second cast — provided the default also fits `N`.
+        let checked_narrow = self
+            .dn4_checked_narrow
+            .take()
+            .filter(|nt| self.int_value_fits(&rhs, nt));
+        let result_type = if let Some(Type::Integer(nspec)) = &checked_narrow {
+            // The discharged value is provably in N's range, but both `??` branches are
+            // full 8-byte integers (the cast block keeps its i64 null sentinel). So type
+            // the result as a FULL-WIDTH integer (`forced_size: None`) carrying N's RANGE:
+            // the range makes a later `u8` field / return / local accept it without a cast
+            // (is_narrowing_int = false, exactly like an `integer limit(0,255)` value),
+            // while the full width keeps the branches the same native type (no @P316 E0308).
+            Type::Integer(IntegerSpec {
+                forced_size: None,
+                ..*nspec
+            })
+        } else if widen_ints {
             crate::data::I64.clone()
         } else {
             lhs_type.clone()
@@ -1819,6 +1839,12 @@ impl Parser {
         operator: &str,
         op_pos: &Position,
     ) -> Option<Type> {
+        // The checked-narrow target is only for a `??` that DIRECTLY discharges the
+        // cast (`e as N ?? d`).  Any other operator between the cast and a later `??`
+        // invalidates it — clear so a stale target can't mis-narrow an unrelated `??`.
+        if operator != "??" {
+            self.dn4_checked_narrow = None;
+        }
         // @F2 — ?? null-coalescing operator (incl. `?? return`)
         if operator == "??" {
             self.handle_null_coalesce(var_tp, code, parent_tp, precedence, ctp);
@@ -1887,7 +1913,15 @@ impl Parser {
                     // (`400 as u8 == 400`) — the very truncation the model eliminates — so it
                     // is retired. `as τ` errors (use `as τ?`); `as τ?` is the checked cast.
                     if !self.first_pass && !self.int_value_fits(code, &tp) {
-                        if nullable_cast {
+                        // A bare `e as N` immediately left of `??` is a CHECKED cast: the
+                        // `??` supplies the out-of-range fallback, so treat it like `e as N?`
+                        // rather than rejecting it (the diagnostic already advertised `?? d`).
+                        let coalesced = !nullable_cast && self.lexer.peek_token("??");
+                        if nullable_cast || coalesced {
+                            // Remember the narrow target so the discharging `??` types its
+                            // result as `N` (build_null_coalesce_default); the cast BLOCK
+                            // itself stays `integer` to keep the null sentinel at full width.
+                            self.dn4_checked_narrow = Some(tp.clone());
                             tp = self.dn4_checked_cast(code, &tp, &src_base);
                         } else {
                             diagnostic!(
@@ -1923,7 +1957,7 @@ impl Parser {
                 // null, so downstream sees a nullable and `(N-Store)` keeps the hole closed
                 // (a later `z: τ = (e as τ?)` still requires a discharge).  `base()` guards
                 // against a double-wrap from `dn4_checked_cast`.
-                if nullable_cast
+                if (nullable_cast || self.dn4_checked_narrow.is_some())
                     && crate::keys::pln25_dn1_enabled()
                     && Self::is_non_null_scalar(rt.base())
                 {

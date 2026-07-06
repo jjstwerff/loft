@@ -570,6 +570,44 @@ fn main() {
   pattern is unchanged, only "what's between check and seal"
   becomes "nothing — the hash mutations ARE the writes."
 
+**Persisted size = the store's *peak* arena, not its live size — a trap
+worth planning for.** The fresh-path snapshot writes the hash's whole
+Store arena at the capacity it has ever reached, free slack included; it
+is not compacted down to the live records (minimum ~8 KB image). Three
+facts combine to make this bite:
+
+- the snapshot copies the arena's current capacity verbatim — no repack;
+- a Store arena only ever grows — it never shrinks;
+- freeing or clearing records returns their slots to a free list but does
+  **not** hand the arena bytes back.
+
+So the file is the high-water mark the bound Store reached during its
+life. Build a large structure *in place* in the same Store you then bind
+— inserting then pruning, or rebuilding as you go — and the file freezes
+that peak: one consumer saw a 264 MB file for 3.5 MB of live data (~90×).
+
+**Keep the scratch out of the Store you bind: build the result in a
+helper and return it.** A helper's transient containers are scope-local
+Stores, freed at the return boundary (see [LIFETIME.md](LIFETIME.md)), so
+their growth never lands in the Store that survives as the return value.
+Bind *that* returned hash:
+
+```loft
+fn build_world() -> hash<Hex[q, r]> {
+  w: hash<Hex[q, r]> = [];
+  // fill w; any transient collections here are freed on return
+  return w;
+}
+fn main() {
+  world = build_world();                 // carries only the live result
+  store_persist_bind(world, "world.store");
+}
+```
+
+Whether a top-level build actually bloats depends on the pattern
+(in-place insert-then-prune is the classic case); the reliable rule is to
+keep transient growth out of the Store you bind.
+
 **Failure modes (returns `false`):**
 
 - Path is empty or not valid UTF-8.
