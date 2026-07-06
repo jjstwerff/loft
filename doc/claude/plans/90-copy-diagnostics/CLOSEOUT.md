@@ -58,24 +58,33 @@ is downstream of the wrong buffer choice — the root fix is the buffer, not the
 materialise the borrow into a store DISTINCT from the subject, free the subject AFTER the copy —
 `r = n_g(c,…); OpClearVector(out); OpAppendVector(out, r); OpFreeRef(c); return out`.
 
-**Build steps:**
-1. Re-capture the target alias-return + separate-buffer materialise bytecode for
-   `cell-escape-temp` against the live tree (loft-codegen gate; A1b-TARGET-escape-temp.txt is
-   the reference).
-2. In `chain_site_set_shape` (`src/parser/control.rs` — Agent-verified `:5425`; DESIGN cites the
-   pre-drift `:4880`), add the **suppression predicate**: the chained `Call(d, args)`'s callee `d`
-   returns a borrow of a parameter (its `returned` deps name a param attr) **and** that param's
-   actual arg is the reuse var `w`. Compute it as a single `deps`/`ownership_of` read, not a
-   per-site heuristic (the re-assertion-count hazard, DESIGN §"Re-assertion sites").
-3. On suppression: do **not** emit `{ w = call; w }`. Keep `w` (the subject), allocate a
-   **separate** return buffer `out`, emit `OpClearVector(out); OpAppendVector(out, call)`, and
-   move the subject free (`OpFreeRef(w)`) to **after** the append.
-4. Thread the same fact to the callers in the MidReturn work-ref legs (DESIGN `:5277`/`:5362`;
-   Agent-verified RetPromotion callers `:5990`/`:6013`/`:6032`) and confirm the native materialise
-   gate (`src/generation/dispatch.rs`, DESIGN `:396`) now hits the copy branch with a distinct
-   store (no double-alloc).
-5. **Gate** behind the existing `LOFT_JOIN_OWN` — ships gated; suite byte-identical with the gate
-   off (slice 1+2 are coupled — an ungated partial is itself the UAF).
+**Localized to the verdict level (2026-07-06 — instrumented, reverted).** `LOFT_TRACE_RR` on
+`cell-escape-temp`'s `n_h` shows TWO work-refs: `__ref_1` → `Rename{buf_attr:1}` (becomes
+`__retbuf`) and `__ref_2` (the temp `Filled` subject) → `Bind{buf_var:6, substitute:true}` — the
+`substitute_work_ref` merges the subject store into the buffer store. **That merge is the collapse.**
+cell-escape (safe) has ONE work-ref (subject is a param, not a work-ref) — so the UAF axis is "the
+borrowed subject is a temporary the fn itself constructs → a subject work-ref that gets
+`Bind{substitute}`." Falsified en route: a single "suppress the Rename" guard is **insufficient**,
+and `g.returned()` deps name the hidden buffer (attr 1), NOT the visible `e` (attr 0) —
+`filter_hidden` strips the borrow; the "buffer borrows a visible param" fact must be read from g's
+BODY. Full trace in [borrow-return/DESIGN.md § A1b gate-2](borrow-return/DESIGN.md).
+
+**Build steps (the 3-store restructure — coupled slice-1 + slice-2):**
+1. Re-capture the target 3-store IR (subject `c` · scratch buffer `__ref_1` · owned `__retbuf`)
+   for `cell-escape-temp` against the live tree (loft-codegen gate; `A1b-TARGET-escape-temp.txt`).
+2. Detect the shape at `classify_ret_promotion` (`src/parser/control.rs`): a chained-call return
+   whose **subject arg is another work-ref** that would take `Bind{substitute:true}`, and whose
+   callee delivers a **borrow of that subject** (read the callee BODY's block-deps for a visible
+   param — the signature is filtered).
+3. For that shape, restructure the promotion so the three stores stay distinct: (a) keep the
+   subject work-ref `__ref_2` as its own store (drop the `substitute`), (b) keep g's buffer
+   `__ref_1` a scratch (suppress its `Rename` to `__retbuf`), (c) allocate a separate owned
+   `__retbuf` and materialise the borrow into it (`materialize_vector_return_into`) at the return,
+   freeing the subject **after** the append.
+4. Confirm the native materialise gate (`src/generation/dispatch.rs`, DESIGN `:396`) hits the
+   copy branch with a distinct store (no double-alloc).
+5. **Gate** behind the existing `LOFT_JOIN_OWN` — ships gated; suite byte-identical gate-off
+   (slice 1+2 are coupled — an ungated partial is itself the UAF).
 6. Walk the boundary matrix (named / temp / escape × value + length + leak × `LOFT_POISON` × both
    backends), then the full suite gate-on (issues, leak, native, wrap, native_scripts;
    `one_buffer_chain` is exercised across crawler/moros) + the @PLN89 differential oracle.
@@ -178,14 +187,24 @@ silent** there.
 **Depends on:** **W5** (its *silencing* half has nothing to silence until the lint fires).
 **Exit:** `copy expr` forces an independent copy both backends; the lint is silent at that site; tests.
 
-### W8 — Empty-arm parse normalise  ·  P1-robustness · S–M · **INDEPENDENT**
+### W8 — Empty-arm parse normalise  ·  P1-robustness · S–M · **RE-SEQUENCED: after W1/W2**
 
-**Verified state:** CONFIRMED, robustness (not correctness). `_ => { [] }` single-line
-(`else ;` = Null) vs multi-line (`else { block }`) → **different IR, identical runtime both
-backends**. It is the latent fragility that made P2/P3/P4 layout-sensitive.
-**Build steps:** normalise the empty match/if arm parse so both formattings lower to one canonical
-IR (the empty-block form). **Depends on:** nothing. **Exit:** both formattings produce identical
-IR; suite green.
+**Verified state (2026-07-06, introspected — deeper than filed):** the divergence is **not**
+cosmetic. Single-line `_ => { [] }` → return buffer `_mvcopy_1`, `jo_arm_copy` delivery,
+`return if … else ;` (value-if, Null else). Multi-line → return buffer `__retbuf` **plus** an
+extra `__vdb_1` scratch ref, the `if` demoted to a bare statement, then
+`OpFreeRef(__vdb_1); return null` — the trailing `[]` in a block is parsed as a discarded
+statement + a separate null value-return. Both still run clean both backends (the repro only
+exercises the empty arm), so it stays robustness, not correctness.
+**Why re-sequenced:** the two formattings pick **different delivery paths** (`_mvcopy_1`/jo_arm_copy
+vs `__retbuf`/materialise) — the exact return-buffer-selection machinery W1/W2 rewrite. Normalising
+it first would churn the code the blocker touches (violates "no simplify during debug"). Do it
+**after** W1/W2, once the borrow-return delivery is unified, so both formattings converge on the
+settled arm-value delivery.
+**Build steps:** at parse, classify a block whose trailing expression is the arm value the same as
+the single-line arm-value form (deliver the trailing expr, not "statements + null return"); then
+both lower to one canonical IR. **Depends on:** W1, W2 (delivery unification). **Exit:** both
+formattings produce identical IR; suite green.
 
 ### W9 — Drain bucket 2 (grow the auto-elision set)  ·  north-star · L incremental · FOLLOW-ON, not a close gate
 
