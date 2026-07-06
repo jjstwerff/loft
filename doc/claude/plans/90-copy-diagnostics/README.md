@@ -22,14 +22,17 @@ falsification probes · verifiable slices): [phase-b-design.md](phase-b-design.m
 
 **Phase 1 COMPLETE; phase 2 started (avoidable-vs-forced classification).**
 
-**Phase B (the C86 last-use MOVE-elision) — B1.1/B1.2 done; B1.3 RECORD shape LANDED.** The
-`v[i] = e` / `o.f = src` move (a dead-after owned source) is now lowered by building the source's
-fields DIRECTLY into the destination slot instead of copy-then-free: `src/scopes.rs::move_elide`, a
-pure IR rewrite (no new op, so BOTH backends from one pass), gated `LOFT_MOVE_ELIDE` (OFF =
-byte-identical). Matrix-validated (value + poison + leak, interp + native); survivor still copies.
-Guards: `tests/use_analysis.rs::move_elide_record_*`. NEXT = **B1.3b** the CONSTRUCT shape
-(`S { f: src }` — source built before the container, needs a reorder or a handle-adopt), then flip.
-Detail: [phase-b-design.md § B1.3 LANDED](phase-b-design.md).
+**Phase B (the C86 last-use MOVE-elision) — B1.1/B1.2 done; B1.3 RECORD + B1.3b CONSTRUCT
+field-append LANDED.** Dead-after owned sources are now lowered by building DIRECTLY into the
+destination instead of copy-then-free — `src/scopes.rs`, pure IR rewrites (no new op, so BOTH
+backends from one pass), gated `LOFT_MOVE_ELIDE` (OFF = byte-identical). Covered: **Record**
+(`v[i]=e` / `o.f=src`, `move_elide`) and **Construct field-append** (`x.field += src` into an
+already-existing container, `construct_move_rewrite`, guarded reorder-free). Matrix-validated
+(value + poison + leak, interp + native); survivors still copy; **fresh construction
+`a = Bag{items:base}` correctly SKIPPED by the reorder guard** (stays a copy). Guards:
+`tests/use_analysis.rs::move_elide_{record,construct}_*`. NEXT = **B1.3c** fresh-construction reorder
+(`a = Bag{items:base}` — build-order reorder or handle-adopt), then flip. Detail:
+[phase-b-design.md § B1.3b LANDED](phase-b-design.md).
 
 **Phase 1** — the decision covers every structure-copy emission ([phase1-inventory.md](phase1-inventory.md)).
 `LOFT_COPY_DUMP` is the runtime ground truth; the verdict (`use_analysis`, **route 1** —

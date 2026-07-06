@@ -444,8 +444,9 @@ struct MoveOps {
 /// where `dest` is the `OpCopyRecord` destination expression (`OpGetVector(v,…)` / `OpGetField`).
 /// Emits NO new op — both backends already lower a retargeted `OpSet*`, so the rewrite is
 /// backend-agnostic (one IR pass, like `elide_borrows`). Gated on `LOFT_MOVE_ELIDE`;
-/// byte-identical off. The construction shape (`S { f: src }`) is deferred (B1.3b) — its source
-/// is built BEFORE the container exists, so it needs a build-order reorder. Design:
+/// byte-identical off. The CONSTRUCT shape is handled by [`construct_move_rewrite`] (B1.3b) for
+/// the reorder-free field-append case; fresh construction (`a = Bag { items: base }`, container
+/// built after the source) still needs a build-order reorder and stays a copy. Design:
 /// `doc/claude/plans/90-copy-diagnostics/phase-b-design.md`.
 fn move_elide(data: &mut Data) {
     if !crate::keys::move_elide_enabled() {
@@ -456,41 +457,62 @@ fn move_elide(data: &mut Data) {
         op_copy_record: data.def_nr("OpCopyRecord"),
         op_free: data.def_nr("OpFreeRef"),
     };
+    let co = ConstructOps {
+        op_database: data.def_nr("OpDatabase"),
+        op_free: data.def_nr("OpFreeRef"),
+        op_append: data.def_nr("OpAppendVector"),
+        op_prealloc: data.def_nr("OpPreAllocVector"),
+        op_set_int4: data.def_nr("OpSetInt4"),
+        op_get_field: data.def_nr("OpGetField"),
+    };
     for d_nr in 0..data.definitions() {
         if !matches!(data.def(d_nr).def_type, DefType::Function) {
             continue;
         }
-        // Record-shape move sources only (this slice); Construct deferred (needs a reorder).
-        let sources: HashSet<u16> = crate::use_analysis::move_plans(data, d_nr)
-            .into_iter()
-            .filter(|p| p.kind == crate::use_analysis::MoveKind::Record)
-            .map(|p| p.source)
-            .collect();
-        if sources.is_empty() {
+        let plans = crate::use_analysis::move_plans(data, d_nr);
+        if plans.is_empty() {
             continue;
         }
         let mut code = data.def(d_nr).code.clone();
-        // Pass 1 — capture each source's UNIQUE copy destination. A source seen copying into two
-        // different places is not the clean dead-after shape the plan assumes: skip it.
-        let mut dest: HashMap<u16, Value> = HashMap::new();
-        let mut ambiguous: HashSet<u16> = HashSet::new();
-        collect_move_dest(&code, &mo, &sources, &mut dest, &mut ambiguous);
-        let ready: HashSet<u16> = dest
-            .keys()
-            .copied()
-            .filter(|s| !ambiguous.contains(s))
+        // Vars to suppress the (later `variables()`-emitted) scope-exit free for — the moved-out
+        // owned store now lives in the destination, so its null slot must not be freed.
+        let mut skip: HashSet<u16> = HashSet::new();
+
+        // ── RECORD shape (`v[i]=e` / `o.f=src`, OpCopyRecord) ──
+        let rec_sources: HashSet<u16> = plans
+            .iter()
+            .filter(|p| p.kind == crate::use_analysis::MoveKind::Record)
+            .map(|p| p.source)
             .collect();
-        if ready.is_empty() {
-            continue;
+        if !rec_sources.is_empty() {
+            // Pass 1 — capture each source's UNIQUE copy destination. A source seen copying into
+            // two different places is not the clean dead-after shape the plan assumes: skip it.
+            let mut dest: HashMap<u16, Value> = HashMap::new();
+            let mut ambiguous: HashSet<u16> = HashSet::new();
+            collect_move_dest(&code, &mo, &rec_sources, &mut dest, &mut ambiguous);
+            let ready: HashSet<u16> = dest
+                .keys()
+                .copied()
+                .filter(|s| !ambiguous.contains(s))
+                .collect();
+            if !ready.is_empty() {
+                move_rewrite(&mut code, &ready, &dest, &mo);
+                skip.extend(&ready);
+            }
         }
-        // Pass 2 — retarget the construction ops + drop the alloc / copy / free.
-        move_rewrite(&mut code, &ready, &dest, &mo);
+
+        // ── CONSTRUCT shape (`x.field += src` field-append, OpAppendVector) — REORDER-FREE only ──
+        let con_sources: HashSet<u16> = plans
+            .iter()
+            .filter(|p| p.kind == crate::use_analysis::MoveKind::Construct)
+            .map(|p| p.source)
+            .collect();
+        if !con_sources.is_empty() {
+            construct_move_rewrite(&mut code, &con_sources, &co, &mut skip);
+        }
+
         data.definitions[d_nr as usize].code = code;
-        // The source's store has MOVED into the destination slot — it owns nothing now. The free
-        // pass (`variables()`) runs AFTER this and would re-derive a scope-exit `OpFreeRef(s)` from
-        // s's stale dep-empty=owns state — a free of the never-allocated null slot. Mark s
-        // `skip_free` so that free is never emitted.
-        for &s in &ready {
+        for &s in &skip {
             data.definitions[d_nr as usize].variables.set_skip_free(s);
         }
     }
@@ -568,6 +590,222 @@ fn move_drop(stmt: &Value, ready: &HashSet<u16>, mo: &MoveOps) -> bool {
         return ready.contains(s);
     }
     false
+}
+
+// The `op_` prefix is meaningful (operator def-numbers), so the same-prefix lint does not apply.
+#[allow(clippy::struct_field_names)]
+struct ConstructOps {
+    op_database: u32,
+    op_free: u32,
+    op_append: u32,
+    op_prealloc: u32,
+    op_set_int4: u32,
+    op_get_field: u32,
+}
+
+/// @PLN90 phase B (B1.3b) — the CONSTRUCT copy shape (`x.field += src`, lowered as a copying
+/// `OpAppendVector(x.field, src)`), restricted to the **reorder-free** case: the destination
+/// container already exists when `src` is built. `src` is a vector view over its own backing
+/// wrapper `vdb` (`src = OpGetField(vdb, …)`); instead of building `src`'s elements into `vdb`
+/// then copying the whole vector into `x.field`, retarget `src`'s element-build ops
+/// (`OpNewRecord`/`OpFinishRecord`) DIRECTLY onto `x.field`, and drop `vdb`'s alloc/init/free,
+/// `src`'s view-def + capacity `OpPreAllocVector`, and the `OpAppendVector` copy. No new op — the
+/// retargeted appends grow `x.field` exactly as the copy did.
+///
+/// **Reorder-free guard (the safety line):** fire only when `x`'s allocation precedes `vdb`'s
+/// (or `x` is a parameter, i.e. never `OpDatabase`'d here). The fresh-construction case
+/// (`a = Bag { items: base }` — `a` built AFTER `base`) needs a build-order reorder and is NOT
+/// handled here; it is left as a copy. `skip` receives ONLY the backings of sources actually
+/// rewritten, so a skipped source keeps its free (no live-store suppression).
+fn construct_move_rewrite(
+    code: &mut Value,
+    con_sources: &HashSet<u16>,
+    co: &ConstructOps,
+    skip: &mut HashSet<u16>,
+) {
+    // Pass 1 — pre-scan: per source capture the append destination, its backing wrapper, the
+    // destination's container var, and the `OpDatabase` encounter order (for the reorder guard).
+    let mut idx = 0usize;
+    let mut db_order: HashMap<u16, usize> = HashMap::new();
+    let mut dest: HashMap<u16, Value> = HashMap::new();
+    let mut ambiguous: HashSet<u16> = HashSet::new();
+    let mut vdb: HashMap<u16, u16> = HashMap::new();
+    let mut container: HashMap<u16, Option<u16>> = HashMap::new();
+    construct_prescan(
+        code,
+        co,
+        con_sources,
+        &mut idx,
+        &mut db_order,
+        &mut dest,
+        &mut ambiguous,
+        &mut vdb,
+        &mut container,
+    );
+
+    // Ready = found a unique append destination + a backing wrapper, AND provably reorder-free.
+    let ready: HashSet<u16> = con_sources
+        .iter()
+        .copied()
+        .filter(|s| {
+            !ambiguous.contains(s)
+                && dest.contains_key(s)
+                && vdb.contains_key(s)
+                && container.get(s).and_then(|c| *c).is_some_and(|cvar| {
+                    // container built before the source's backing (both locals), or a param.
+                    match (db_order.get(&cvar), db_order.get(&vdb[s])) {
+                        (Some(&c), Some(&v)) => c < v,
+                        (None, Some(_)) => true, // container is a parameter (never allocated here)
+                        _ => false,
+                    }
+                })
+        })
+        .collect();
+    if ready.is_empty() {
+        return;
+    }
+    let vdbs: HashSet<u16> = ready.iter().map(|s| vdb[s]).collect();
+
+    // Pass 2 — retarget the element builds + drop the wrapper / view / prealloc / copy.
+    construct_rewrite_ops(code, &ready, &vdbs, &dest, co);
+    // The moved-out owned store is the backing wrapper (`src` is a borrow of it) — suppress ITS
+    // free. Only ready sources' backings are added, so a skipped source keeps its free.
+    skip.extend(vdbs);
+}
+
+/// The base var of a `OpGetField(Var(x), …)` destination expression (`x`), else `None`.
+fn get_field_base(expr: &Value, co: &ConstructOps) -> Option<u16> {
+    if let Value::Call(d, args) = expr.unspan()
+        && *d == co.op_get_field
+        && let Some(Value::Var(x)) = args.first().map(Value::unspan)
+    {
+        return Some(*x);
+    }
+    None
+}
+
+/// Pass 1 of [`construct_move_rewrite`]: gather the append destination / backing / container /
+/// `OpDatabase` order for every construct source.
+#[allow(clippy::too_many_arguments)]
+fn construct_prescan(
+    node: &Value,
+    co: &ConstructOps,
+    con: &HashSet<u16>,
+    idx: &mut usize,
+    db_order: &mut HashMap<u16, usize>,
+    dest: &mut HashMap<u16, Value>,
+    ambiguous: &mut HashSet<u16>,
+    vdb: &mut HashMap<u16, u16>,
+    container: &mut HashMap<u16, Option<u16>>,
+) {
+    match node.unspan() {
+        Value::Call(d, args) => {
+            if *d == co.op_database {
+                if let Some(Value::Var(v)) = args.first().map(Value::unspan) {
+                    db_order.entry(*v).or_insert(*idx);
+                }
+                *idx += 1;
+            } else if *d == co.op_append
+                && let Some(dst) = args.first()
+                && let Some(Value::Var(s)) = args.get(1).map(Value::unspan)
+                && con.contains(s)
+            {
+                if dest.contains_key(s) {
+                    ambiguous.insert(*s); // appended into two places — not the clean shape.
+                } else {
+                    container.insert(*s, get_field_base(dst, co));
+                    dest.insert(*s, dst.clone());
+                }
+            }
+        }
+        // `src = OpGetField(vdb, …)` — the source's view over its backing wrapper.
+        Value::Set(s, rhs) if con.contains(s) => {
+            if let Value::Call(gd, gargs) = rhs.unspan()
+                && *gd == co.op_get_field
+                && let Some(Value::Var(vd)) = gargs.first().map(Value::unspan)
+            {
+                vdb.insert(*s, *vd);
+            }
+        }
+        _ => {}
+    }
+    node.for_each_child(&mut |c| {
+        construct_prescan(c, co, con, idx, db_order, dest, ambiguous, vdb, container);
+    });
+}
+
+/// Pass 2 of [`construct_move_rewrite`]: DROP the wrapper/view/prealloc/copy statements and
+/// RETARGET each ready source's element-build ops (`OpNewRecord`/`OpFinishRecord`) onto its
+/// append destination.
+fn construct_rewrite_ops(
+    node: &mut Value,
+    ready: &HashSet<u16>,
+    vdbs: &HashSet<u16>,
+    dest: &HashMap<u16, Value>,
+    co: &ConstructOps,
+) {
+    match node {
+        Value::Block(b) => {
+            b.operators.retain(|s| !construct_drop(s, ready, vdbs, co));
+            for op in &mut b.operators {
+                construct_rewrite_ops(op, ready, vdbs, dest, co);
+            }
+        }
+        Value::Insert(ops) => {
+            ops.retain(|s| !construct_drop(s, ready, vdbs, co));
+            for op in &mut *ops {
+                construct_rewrite_ops(op, ready, vdbs, dest, co);
+            }
+        }
+        _ => {
+            if let Value::Call(d, args) = node {
+                // An element-build op (NOT one of the dropped/excluded ops) whose target is a
+                // ready source → retarget it onto the append destination.
+                let retarget = *d != co.op_database
+                    && *d != co.op_prealloc
+                    && *d != co.op_append
+                    && *d != co.op_free
+                    && *d != co.op_set_int4
+                    && matches!(args.first().map(Value::unspan),
+                        Some(Value::Var(s)) if ready.contains(s));
+                if retarget
+                    && let Some(Value::Var(s)) = args.first().map(Value::unspan)
+                    && let Some(dst) = dest.get(s).cloned()
+                {
+                    args[0] = dst;
+                }
+            }
+            node.for_each_child_mut(&mut |c| construct_rewrite_ops(c, ready, vdbs, dest, co));
+        }
+    }
+}
+
+/// Retain-predicate for [`construct_rewrite_ops`]: the wrapper's alloc/init/free, the source's
+/// view-def + capacity pre-alloc, and the `OpAppendVector` copy are all dropped.
+fn construct_drop(
+    stmt: &Value,
+    ready: &HashSet<u16>,
+    vdbs: &HashSet<u16>,
+    co: &ConstructOps,
+) -> bool {
+    match stmt.unspan() {
+        // `src = OpGetField(vdb, …)` — the view-def is dead once the builds retarget.
+        Value::Set(s, _) => ready.contains(s),
+        Value::Call(d, args) => {
+            let a0 = args.first().map(Value::unspan);
+            if *d == co.op_database || *d == co.op_set_int4 || *d == co.op_free {
+                matches!(a0, Some(Value::Var(v)) if vdbs.contains(v)) // wrapper alloc/len-init/free
+            } else if *d == co.op_prealloc {
+                matches!(a0, Some(Value::Var(s)) if ready.contains(s)) // src capacity hint — omit
+            } else if *d == co.op_append {
+                // the copy: OpAppendVector(dest, Var(src), …) — src in arg1.
+                matches!(args.get(1).map(Value::unspan), Some(Value::Var(s)) if ready.contains(s))
+            } else {
+                false
+            }
+        }
+        _ => false,
+    }
 }
 
 /// Scope / lifetime analysis pass over every function definition.

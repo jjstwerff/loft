@@ -997,14 +997,19 @@ fn t5_survive() -> integer {        // source read after the set → must COPY (
 fn main() { print("{t1_elem()} {t2_field()} {t5_survive()}\n"); }
 "#;
 
-/// Run `MOVE_ELIDE_SRC` on one backend, optionally with the move-elision gate on. Returns
+/// Run a move-elision probe on one backend, optionally with the gate on. Returns
 /// (stdout, stderr, success). `--native` compiles via `rustc`, so the leak check for that mode
 /// rides on `LOFT_NATIVE_LEAK_CHECK`.
-fn run_move_elide(native: bool, move_on: bool) -> (String, String, bool) {
+fn run_move_elide_src(
+    src: &str,
+    stem: &str,
+    native: bool,
+    move_on: bool,
+) -> (String, String, bool) {
     let dir = std::env::temp_dir().join("loft_use_analysis");
     std::fs::create_dir_all(&dir).expect("probe dir");
-    let path = dir.join("move_elide_b13_probe.loft");
-    std::fs::write(&path, MOVE_ELIDE_SRC).expect("write probe");
+    let path = dir.join(format!("{stem}.loft"));
+    std::fs::write(&path, src).expect("write probe");
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_loft"));
     cmd.arg(if native { "--native" } else { "--interpret" })
         .arg(&path)
@@ -1022,19 +1027,18 @@ fn run_move_elide(native: bool, move_on: bool) -> (String, String, bool) {
     )
 }
 
-#[test]
-fn move_elide_record_preserves_values_and_stays_leak_free() {
-    // t1=9, t2=47 (40+7), t5=18 (9+9, two independent copies). The gate must not change ANY
-    // value on either backend, and must not leak (the freed `e`/`src` store is now the moved-in
-    // one; the survivor still copies + frees its own).
-    const EXPECTED: &str = "9 47 18";
+/// Assert a probe's stdout is `expected` and leak-free on BOTH backends, gate on and off.
+fn assert_move_elide_preserves(src: &str, stem: &str, expected: &str) {
     for native in [false, true] {
-        let (off_out, _, off_ok) = run_move_elide(native, false);
-        let (on_out, on_err, on_ok) = run_move_elide(native, true);
+        let (off_out, _, off_ok) = run_move_elide_src(src, stem, native, false);
+        let (on_out, on_err, on_ok) = run_move_elide_src(src, stem, native, true);
         let mode = if native { "native" } else { "interp" };
-        assert!(off_ok && on_ok, "{mode}: run failed (off={off_ok} on={on_ok})");
         assert!(
-            off_out.trim() == EXPECTED && on_out.trim() == EXPECTED,
+            off_ok && on_ok,
+            "{mode}: run failed (off={off_ok} on={on_ok})"
+        );
+        assert!(
+            off_out.trim() == expected && on_out.trim() == expected,
             "{mode}: value changed under move-elision\n off={off_out:?}\n on={on_out:?}"
         );
         assert!(
@@ -1044,9 +1048,17 @@ fn move_elide_record_preserves_values_and_stays_leak_free() {
     }
 }
 
-/// The IR block for `fn n_<name>() -> …` in an `introspect` dump (up to the next `fn`/`byte-code`).
+#[test]
+fn move_elide_record_preserves_values_and_stays_leak_free() {
+    // t1=9, t2=47 (40+7), t5=18 (9+9, two independent copies). The gate must not change ANY
+    // value on either backend, and must not leak (the freed `e`/`src` store is now the moved-in
+    // one; the survivor still copies + frees its own).
+    assert_move_elide_preserves(MOVE_ELIDE_SRC, "move_elide_b13_probe", "9 47 18");
+}
+
+/// The IR block for `fn n_<name>(…` in an `introspect` dump (up to the next `fn`/`byte-code`).
 fn ir_block(introspect: &str, name: &str) -> String {
-    let start = format!("fn n_{name}() ->");
+    let start = format!("fn n_{name}(");
     let mut out = String::new();
     let mut in_block = false;
     for line in introspect.lines() {
@@ -1063,18 +1075,20 @@ fn ir_block(introspect: &str, name: &str) -> String {
     out
 }
 
-/// Count of `OpCopyRecord` deep copies in one function's introspect IR block.
-fn copy_count(introspect: &str, name: &str) -> usize {
-    ir_block(introspect, name).matches("OpCopyRecord").count()
+/// Count of a given deep-copy op in one function's introspect IR block.
+fn op_count(introspect: &str, name: &str, op: &str) -> usize {
+    ir_block(introspect, name).matches(op).count()
 }
 
-fn introspect_move_elide(move_on: bool) -> String {
+fn introspect_move_elide_src(src: &str, stem: &str, move_on: bool) -> String {
     let dir = std::env::temp_dir().join("loft_use_analysis");
     std::fs::create_dir_all(&dir).expect("probe dir");
-    let path = dir.join("move_elide_b13_ir.loft");
-    std::fs::write(&path, MOVE_ELIDE_SRC).expect("write probe");
+    let path = dir.join(format!("{stem}.loft"));
+    std::fs::write(&path, src).expect("write probe");
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_loft"));
-    cmd.args(["introspect"]).arg(&path).env("LOFT_NO_CACHE", "1");
+    cmd.args(["introspect"])
+        .arg(&path)
+        .env("LOFT_NO_CACHE", "1");
     if move_on {
         cmd.env("LOFT_MOVE_ELIDE", "1");
     }
@@ -1084,22 +1098,86 @@ fn introspect_move_elide(move_on: bool) -> String {
 
 #[test]
 fn move_elide_record_drops_the_copy_but_keeps_the_survivor_copy() {
-    let off = introspect_move_elide(false);
-    let on = introspect_move_elide(true);
+    let off = introspect_move_elide_src(MOVE_ELIDE_SRC, "move_elide_b13_ir", false);
+    let on = introspect_move_elide_src(MOVE_ELIDE_SRC, "move_elide_b13_ir", true);
     // Each dead-source move drops exactly its own `v[i]=e` / `o.f=src` deep copy (a function may
     // retain OTHER copies — e.g. `t2_field` still copies the literal inner `E` when building `o`).
     for moved in ["t1_elem", "t2_field"] {
-        let (b, a) = (copy_count(&off, moved), copy_count(&on, moved));
+        let (b, a) = (
+            op_count(&off, moved, "OpCopyRecord"),
+            op_count(&on, moved, "OpCopyRecord"),
+        );
         assert!(
             a == b - 1,
             "{moved}: move-elision should drop exactly one OpCopyRecord (off={b} on={a})"
         );
     }
     // The survivor is read after the set → its copy is load-bearing and must remain.
-    let (sb, sa) = (copy_count(&off, "t5_survive"), copy_count(&on, "t5_survive"));
+    let (sb, sa) = (
+        op_count(&off, "t5_survive", "OpCopyRecord"),
+        op_count(&on, "t5_survive", "OpCopyRecord"),
+    );
     assert!(
         sa == sb && sb >= 1,
         "t5_survive: a read-after-set survivor must still COPY (off={sb} on={sa})"
+    );
+}
+
+// ── @PLN90 phase B (B1.3b) — the CONSTRUCT field-append move-elision (reorder-free only) ──
+// `x.field += src` with `src` dead after: build src's elements DIRECTLY into `x.field` (drop the
+// copying `OpAppendVector`), ONLY when the container already exists (local built before src, or a
+// param). Fresh construction (`a = Bag { items: base }`, container built AFTER base) needs a
+// reorder and must stay a copy. Same both-backend value + leak invariant as the Record case.
+const MOVE_ELIDE_CONSTRUCT_SRC: &str = r#"
+struct Bag { id: integer, items: vector<integer> }
+fn t1_local() -> integer {                  // local container built before src → MOVE
+    x = Bag { id: 1, items: [1, 2] };
+    src: vector<integer> = [10, 20, 30];
+    x.items += src;
+    (x.items[4] ?? 0)
+}
+fn t2_param(x: Bag) -> integer {            // param container → MOVE (no reorder ever needed)
+    src: vector<integer> = [7, 8];
+    x.items += src;
+    (x.items[2] ?? 0)
+}
+fn t4_fresh() -> integer {                  // container built AFTER base → NOT reorder-free → COPY
+    base: vector<integer> = [10, 20, 30];
+    a = Bag { id: 5, items: base };
+    (a.items[1] ?? 0) + a.id
+}
+fn main() { print("{t1_local()} {t2_param(Bag{id:0,items:[100]})} {t4_fresh()}\n"); }
+"#;
+
+#[test]
+fn move_elide_construct_field_append_preserves_values_and_stays_leak_free() {
+    // t1=30, t2=8 (param [100] + [7,8] → index 2), t4=25 (20 + 5).
+    assert_move_elide_preserves(MOVE_ELIDE_CONSTRUCT_SRC, "move_elide_b13b_probe", "30 8 25");
+}
+
+#[test]
+fn move_elide_construct_elides_reorder_free_but_keeps_fresh_construction_copy() {
+    let off = introspect_move_elide_src(MOVE_ELIDE_CONSTRUCT_SRC, "move_elide_b13b_ir", false);
+    let on = introspect_move_elide_src(MOVE_ELIDE_CONSTRUCT_SRC, "move_elide_b13b_ir", true);
+    // Reorder-free field-appends (local + param container) drop their copying OpAppendVector.
+    for moved in ["t1_local", "t2_param"] {
+        let (b, a) = (
+            op_count(&off, moved, "OpAppendVector"),
+            op_count(&on, moved, "OpAppendVector"),
+        );
+        assert!(
+            a == b - 1,
+            "{moved}: reorder-free field-append should drop one OpAppendVector (off={b} on={a})"
+        );
+    }
+    // Fresh construction (container built after the source) is NOT reorder-free → stays a copy.
+    let (fb, fa) = (
+        op_count(&off, "t4_fresh", "OpAppendVector"),
+        op_count(&on, "t4_fresh", "OpAppendVector"),
+    );
+    assert!(
+        fa == fb && fb >= 1,
+        "t4_fresh: fresh construction must stay a COPY (off={fb} on={fa})"
     );
 }
 

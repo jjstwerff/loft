@@ -251,6 +251,38 @@ field, (iv) drop the wrapper alloc/copy/free + `set_skip_free`. Matrix the same 
 (`items: mk()`) where there is no in-place fill to retarget — and prove the field representation
 first. Also fold the `a.items = base` whole-replacement (chained through `__p154_rhs`) here.
 
+### B1.3b LANDED — the REORDER-FREE field-append (`x.field += src`, both backends)
+
+Built as `src/scopes.rs::construct_move_rewrite` (a sibling of the Record rewrite). It splits the
+Construct kind by the one axis that makes (A) safe WITHOUT a reorder: **does the destination
+container already exist when `src` is built?**
+
+- **Reorder-free (`x.field += src`, container is a param OR built before `src`)** — the case
+  handled. `src` is a view over its backing wrapper `vdb` (`src = OpGetField(vdb, …)`); retarget
+  `src`'s element builds (`OpNewRecord`/`OpFinishRecord`) directly onto `x.field` (= the
+  `OpAppendVector` destination), and drop `vdb`'s alloc/len-init/free, `src`'s view-def, `src`'s
+  capacity `OpPreAllocVector` (omitted — `x.field` already exists; retargeting it would reset the
+  length), and the `OpAppendVector` copy. `set_skip_free(vdb)` (the wrapper is the owned store;
+  `src` is its borrow). **No new op** — the retargeted `OpNewRecord` grows `x.field` exactly as the
+  copy's `vector_add` did (proven: value + poison + leak clean, both backends).
+- **Fresh construction (`a = Bag { items: base }`, container built AFTER the source)** — still a
+  COPY. **The reorder guard** (`construct_move_rewrite`: the container's `OpDatabase` must precede
+  the source-backing's, tracked by encounter order; a param has none → always before) SKIPS it, so
+  it never fires unsafely. This is the residual for B1.3c (needs the build-order reorder, whose
+  hazards — a's alloc and the copy share one construction Insert; other fields may depend on the
+  source — are why it is split off).
+
+**Validated (both backends, `LOFT_POISON=1` + `LOFT_NATIVE_LEAK_CHECK=1`):** local-container append,
+param-container append, two-appends-in-one-fn — all value-identical + leak-clean; the survivor still
+copies; fresh construction stays a copy (guard fires). Guards:
+`tests/use_analysis.rs::move_elide_construct_*`. OFF byte-identical (early return).
+
+**Why the reorder-free split (not the full reorder) first:** the reorder-free case is a pure
+retarget (the Record machinery, extended to the vector-build ops) — representation-safe, no code
+motion. It captures the field-append subset of Construct now; the fresh-construction reorder (B1.3c)
+is a distinct, higher-risk slice deferred behind the guard, exactly per the "prove the safe path,
+gate the rest" discipline that caught the `OpAdopt` corruption.
+
 ## Verifiable slices (each: matrix on BOTH backends, gated behind a flag, suite byte-identical off)
 
 - **B1.1 — gate (DONE for interp).** The capture above is the spec; add the native target Rust
@@ -265,13 +297,18 @@ first. Also fold the `a.items = base` whole-replacement (chained through `__p154
   construction ops onto the copy destination + drops the alloc/copy/free (`set_skip_free`). Landed
   as ONE IR pass (no new op) → interp AND native from the same rewrite; the B1.4 native split is
   therefore unnecessary for this shape. Matrix-validated (value + poison + leak). See "B1.3 LANDED".
-- **B1.3b — CONSTRUCT-shape lowering (next).** `S { f: src }`: the source is built before the
-  container. Either reorder the build so the container exists first (inline retarget), or — for a
-  call-sourced collection field — the handle-adopt (`OpAdopt`, the one place a heap op is justified,
-  proven per destination first). Detection already fires; this is the remaining lowering work.
-- **B1.5 — graduate + flip.** Guards landed in `tests/use_analysis.rs`; extend to `tests/scripts/`
-  + `tests/leak_cases/` once B1.3b lands, then flip `LOFT_MOVE_ELIDE` default-on with a
-  `LOFT_NO_MOVE_ELIDE` opt-out. Re-run the survey — the `move` rows show **0** runtime copies.
+- **B1.3b — CONSTRUCT field-append (DONE, both backends).** `x.field += src` where the container
+  already exists: `construct_move_rewrite` retargets `src`'s element builds onto `x.field` + drops
+  the wrapper/copy/prealloc/free, guarded reorder-free (container's `OpDatabase` precedes the
+  source-backing's, or the container is a param). No new op. See "B1.3b LANDED".
+- **B1.3c — CONSTRUCT fresh construction (next).** `a = Bag { items: base }`, container built AFTER
+  the source. Needs the build-order reorder — hazards: `a`'s alloc and the copy share one
+  construction Insert (must split); other fields may depend on the source (dependency-safety). Or,
+  for a call-sourced field, the handle-adopt (`OpAdopt`, proven per destination first). The reorder
+  guard currently SKIPS this (safe: stays a copy); detection fires, so the worklist is ready.
+- **B1.5 — graduate + flip.** Guards landed in `tests/use_analysis.rs` (record + construct); extend
+  to `tests/scripts/` + `tests/leak_cases/` once B1.3c lands, then flip `LOFT_MOVE_ELIDE` default-on
+  with a `LOFT_NO_MOVE_ELIDE` opt-out. Re-run the survey — the `move` rows show **0** runtime copies.
 
 ## Falsification probes (cheapest thing that could break each load-bearing claim)
 
