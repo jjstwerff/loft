@@ -966,6 +966,143 @@ fn survival_split_bound_vs_unbound_and_internal() {
     );
 }
 
+// ── @PLN90 phase B (B1.3) — the RECORD-shape last-use MOVE-elision rewrite ──
+// Under `LOFT_MOVE_ELIDE`, a construction/record copy whose owned source is DEAD after the copy
+// is lowered by building the source's fields DIRECTLY into the destination slot (retarget every
+// `OpSet*`, drop the `OpDatabase` / `OpCopyRecord` / source free) instead of copy-then-free. The
+// rewrite is a pure IR pass emitting NO new op, so BOTH backends must preserve values AND stay
+// leak-free; the survivor case (source read after the copy) must still COPY. Gated: OFF is a
+// no-op (byte-identical).
+const MOVE_ELIDE_SRC: &str = r#"
+struct E { hp: integer, name: text }
+struct Outer { tag: integer, inner: E }
+fn t1_elem() -> integer {           // v[i] = e — element set, source dead → MOVE
+    v: vector<E> = [E{hp:1,name:"a"}, E{hp:2,name:"b"}];
+    e = E { hp: 9, name: "z" };
+    v[0] = e;
+    v[0].hp
+}
+fn t2_field() -> integer {          // o.inner = src — record field replacement, dead → MOVE
+    o = Outer { tag: 7, inner: E{hp:1,name:"a"} };
+    src = E { hp: 40, name: "z" };
+    o.inner = src;
+    o.inner.hp + o.tag
+}
+fn t5_survive() -> integer {        // source read after the set → must COPY (no move)
+    v: vector<E> = [E{hp:1,name:"a"}];
+    e = E { hp: 9, name: "z" };
+    v[0] = e;
+    e.hp + v[0].hp
+}
+fn main() { print("{t1_elem()} {t2_field()} {t5_survive()}\n"); }
+"#;
+
+/// Run `MOVE_ELIDE_SRC` on one backend, optionally with the move-elision gate on. Returns
+/// (stdout, stderr, success). `--native` compiles via `rustc`, so the leak check for that mode
+/// rides on `LOFT_NATIVE_LEAK_CHECK`.
+fn run_move_elide(native: bool, move_on: bool) -> (String, String, bool) {
+    let dir = std::env::temp_dir().join("loft_use_analysis");
+    std::fs::create_dir_all(&dir).expect("probe dir");
+    let path = dir.join("move_elide_b13_probe.loft");
+    std::fs::write(&path, MOVE_ELIDE_SRC).expect("write probe");
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_loft"));
+    cmd.arg(if native { "--native" } else { "--interpret" })
+        .arg(&path)
+        .env("LOFT_NO_CACHE", "1")
+        .env("LOFT_POISON", "1")
+        .env("LOFT_NATIVE_LEAK_CHECK", "1");
+    if move_on {
+        cmd.env("LOFT_MOVE_ELIDE", "1");
+    }
+    let out = cmd.output().expect("spawn loft");
+    (
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        out.status.success(),
+    )
+}
+
+#[test]
+fn move_elide_record_preserves_values_and_stays_leak_free() {
+    // t1=9, t2=47 (40+7), t5=18 (9+9, two independent copies). The gate must not change ANY
+    // value on either backend, and must not leak (the freed `e`/`src` store is now the moved-in
+    // one; the survivor still copies + frees its own).
+    const EXPECTED: &str = "9 47 18";
+    for native in [false, true] {
+        let (off_out, _, off_ok) = run_move_elide(native, false);
+        let (on_out, on_err, on_ok) = run_move_elide(native, true);
+        let mode = if native { "native" } else { "interp" };
+        assert!(off_ok && on_ok, "{mode}: run failed (off={off_ok} on={on_ok})");
+        assert!(
+            off_out.trim() == EXPECTED && on_out.trim() == EXPECTED,
+            "{mode}: value changed under move-elision\n off={off_out:?}\n on={on_out:?}"
+        );
+        assert!(
+            !on_err.contains("stores not freed"),
+            "{mode}: move-elision leaked a store\n---- stderr ----\n{on_err}"
+        );
+    }
+}
+
+/// The IR block for `fn n_<name>() -> …` in an `introspect` dump (up to the next `fn`/`byte-code`).
+fn ir_block(introspect: &str, name: &str) -> String {
+    let start = format!("fn n_{name}() ->");
+    let mut out = String::new();
+    let mut in_block = false;
+    for line in introspect.lines() {
+        if line.starts_with(&start) {
+            in_block = true;
+        } else if in_block && (line.starts_with("fn n_") || line.starts_with("byte-code for")) {
+            break;
+        }
+        if in_block {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// Count of `OpCopyRecord` deep copies in one function's introspect IR block.
+fn copy_count(introspect: &str, name: &str) -> usize {
+    ir_block(introspect, name).matches("OpCopyRecord").count()
+}
+
+fn introspect_move_elide(move_on: bool) -> String {
+    let dir = std::env::temp_dir().join("loft_use_analysis");
+    std::fs::create_dir_all(&dir).expect("probe dir");
+    let path = dir.join("move_elide_b13_ir.loft");
+    std::fs::write(&path, MOVE_ELIDE_SRC).expect("write probe");
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_loft"));
+    cmd.args(["introspect"]).arg(&path).env("LOFT_NO_CACHE", "1");
+    if move_on {
+        cmd.env("LOFT_MOVE_ELIDE", "1");
+    }
+    let out = cmd.output().expect("spawn loft");
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+#[test]
+fn move_elide_record_drops_the_copy_but_keeps_the_survivor_copy() {
+    let off = introspect_move_elide(false);
+    let on = introspect_move_elide(true);
+    // Each dead-source move drops exactly its own `v[i]=e` / `o.f=src` deep copy (a function may
+    // retain OTHER copies — e.g. `t2_field` still copies the literal inner `E` when building `o`).
+    for moved in ["t1_elem", "t2_field"] {
+        let (b, a) = (copy_count(&off, moved), copy_count(&on, moved));
+        assert!(
+            a == b - 1,
+            "{moved}: move-elision should drop exactly one OpCopyRecord (off={b} on={a})"
+        );
+    }
+    // The survivor is read after the set → its copy is load-bearing and must remain.
+    let (sb, sa) = (copy_count(&off, "t5_survive"), copy_count(&on, "t5_survive"));
+    assert!(
+        sa == sb && sb >= 1,
+        "t5_survive: a read-after-set survivor must still COPY (off={sb} on={sa})"
+    );
+}
+
 // ── @PLN90 Step 5 — the user-facing `--report-copies` report ──
 const REPORT_SRC: &str = r#"
 struct Item { tags: vector<integer> }

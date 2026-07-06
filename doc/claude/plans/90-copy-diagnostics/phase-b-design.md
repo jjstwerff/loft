@@ -183,6 +183,44 @@ This is the gate working: the naive single-`OpAdopt` would have corrupted every 
 (inline-element) move. Do NOT implement a heap op until the inline-vs-handle case is proven per
 destination (value + length + **leak + poison**, both backends) on a hand-constructed cell.
 
+## B1.3 LANDED — the RECORD-shape inline-retarget rewrite (`move_elide`, both backends)
+
+Built as a pure **IR rewrite** in `src/scopes.rs::move_elide` (mirrors `elide_borrows`), run in
+`check` after borrow-elision, gated on `LOFT_MOVE_ELIDE`; **no new op** — so both backends lower
+the retargeted `OpSet*` via existing support. Covers the **Record** `MovePlan` kind (`v[i] = e`,
+`o.f = src`); the **Construct** kind is filtered out (deferred — needs a build-order reorder, see
+below). Per dead-after source `s`:
+
+```text
+  OpDatabase(s)                          ── dropped
+  OpSetInt (s, off, v)  ── retarget ──▶  OpSetInt (dest, off, v)   (dest = the OpCopyRecord target)
+  OpSetText(s, off, v)  ── retarget ──▶  OpSetText(dest, off, v)
+  OpCopyRecord(s, dest)                  ── dropped (the deep copy is gone)
+  set_skip_free(s)                       ── the later variables() pass emits no scope-exit free
+```
+
+Two findings that the empirical matrix (value + poison + leak, both backends) settled — each had
+been a theorised blocker:
+
+- **The old-content-free is handled by `OpSet*` itself.** Retargeting `OpSetText(dest, …)` onto a
+  slot that already holds a heap text (`v[0].name` = a 320-byte store) does **not** leak the old
+  text — `OpSetText` frees the field's prior content when it overwrites. So the inline retarget
+  needs no explicit `remove_claims(dest)`. (Proven: the 320-byte heap-text cell is leak-clean.)
+- **The source free is inserted by a LATER pass**, not present when `move_elide` runs — so dropping
+  `OpDatabase(s)` left a `variables()`-emitted `OpFreeRef(s)` on the now-null slot (a harmless
+  free-of-null, but fragile). `set_skip_free(s)` suppresses it at the source of the fact.
+
+**Validated (both backends, `LOFT_POISON=1` + `LOFT_NATIVE_LEAK_CHECK=1`):** element set,
+field replacement (`o.inner = src`), two-moves-in-one-fn, nested-record source — all value-identical
++ leak-clean; the survivor (`e` read after the set) still COPIES; the Construct shape stays a copy.
+Guards: `tests/use_analysis.rs::move_elide_record_*` (behavioural both-backend + IR off-vs-on copy
+count). OFF is a no-op (early return) → suite byte-identical.
+
+**Deferred to B1.3b — the Construct shape (`S { f: src }`).** Its source is built BEFORE the
+container exists, so the retarget needs a build-order reorder (or the handle-adopt for a
+call-sourced collection field). Filtered out of `move_elide` for now; detection still fires (the
+`MOVE-PLAN … kind=Construct` dump), so B1.3b has its worklist.
+
 ## Verifiable slices (each: matrix on BOTH backends, gated behind a flag, suite byte-identical off)
 
 - **B1.1 — gate (DONE for interp).** The capture above is the spec; add the native target Rust
@@ -193,13 +231,17 @@ destination (value + length + **leak + poison**, both backends) on a hand-constr
   mutated-after; NOT in a loop where the source outlives the body). Gate on `LOFT_MOVE_ELIDE`
   (default off). No lowering yet → suite byte-identical; dump the plan to prove detection matches
   the survey's `move` rows exactly (positive control: fires on `make_dead`, silent on `keep_alive`).
-- **B1.3 — interp lowering, construction first.** `elide_rewrite` (or a sibling) consumes the plan:
-  drop the field copy, emit the field-set-by-handle, drop the source-free. Matrix the construction
-  column, interp only. Then the record column (`v[i]=e`, `o.f=src` — remove the double-copy).
-- **B1.4 — native lowering.** The same plan in `generation/`. Matrix both backends, full grid.
-- **B1.5 — graduate + flip.** Guards to `tests/scripts/` + `tests/leak_cases/`; flip
-  `LOFT_MOVE_ELIDE` default-on once every cell is green; keep `LOFT_NO_MOVE_ELIDE` opt-out.
-  Re-run the survey — the `move` rows now show **0** runtime copies (`LOFT_COPY_DUMP`).
+- **B1.3 — RECORD-shape lowering (DONE, both backends).** `move_elide` retargets the source's
+  construction ops onto the copy destination + drops the alloc/copy/free (`set_skip_free`). Landed
+  as ONE IR pass (no new op) → interp AND native from the same rewrite; the B1.4 native split is
+  therefore unnecessary for this shape. Matrix-validated (value + poison + leak). See "B1.3 LANDED".
+- **B1.3b — CONSTRUCT-shape lowering (next).** `S { f: src }`: the source is built before the
+  container. Either reorder the build so the container exists first (inline retarget), or — for a
+  call-sourced collection field — the handle-adopt (`OpAdopt`, the one place a heap op is justified,
+  proven per destination first). Detection already fires; this is the remaining lowering work.
+- **B1.5 — graduate + flip.** Guards landed in `tests/use_analysis.rs`; extend to `tests/scripts/`
+  + `tests/leak_cases/` once B1.3b lands, then flip `LOFT_MOVE_ELIDE` default-on with a
+  `LOFT_NO_MOVE_ELIDE` opt-out. Re-run the survey — the `move` rows show **0** runtime copies.
 
 ## Falsification probes (cheapest thing that could break each load-bearing claim)
 

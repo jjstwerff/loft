@@ -419,6 +419,157 @@ fn elide_rewrite(
     }
 }
 
+// The `op_` prefix is meaningful (operator def-numbers), so the same-prefix lint does not apply.
+#[allow(clippy::struct_field_names)]
+struct MoveOps {
+    op_database: u32,
+    op_copy_record: u32,
+    op_free: u32,
+}
+
+/// @PLN90 phase B (B1.3) — the last-use MOVE-elision rewrite for the RECORD copy shape
+/// (`v[i] = e` / `o.f = src`, lowered as `OpCopyRecord`). When a source `s`'s store is dead
+/// after the copy (a [`crate::use_analysis::MovePlan`] with `kind == Record`), build `s`'s
+/// fields DIRECTLY into the copy's destination slot instead of constructing a throwaway record
+/// and deep-copying it:
+///
+/// ```text
+///   OpDatabase(s)                           (dropped)
+///   OpSetInt (s, off, v)  ── retarget ──▶  OpSetInt (dest, off, v)
+///   OpSetText(s, off, v)  ── retarget ──▶  OpSetText(dest, off, v)
+///   OpCopyRecord(s, dest)                   (dropped — the deep copy is gone)
+///   OpFreeRef(s)                            (dropped — no throwaway store to free)
+/// ```
+///
+/// where `dest` is the `OpCopyRecord` destination expression (`OpGetVector(v,…)` / `OpGetField`).
+/// Emits NO new op — both backends already lower a retargeted `OpSet*`, so the rewrite is
+/// backend-agnostic (one IR pass, like `elide_borrows`). Gated on `LOFT_MOVE_ELIDE`;
+/// byte-identical off. The construction shape (`S { f: src }`) is deferred (B1.3b) — its source
+/// is built BEFORE the container exists, so it needs a build-order reorder. Design:
+/// `doc/claude/plans/90-copy-diagnostics/phase-b-design.md`.
+fn move_elide(data: &mut Data) {
+    if !crate::keys::move_elide_enabled() {
+        return;
+    }
+    let mo = MoveOps {
+        op_database: data.def_nr("OpDatabase"),
+        op_copy_record: data.def_nr("OpCopyRecord"),
+        op_free: data.def_nr("OpFreeRef"),
+    };
+    for d_nr in 0..data.definitions() {
+        if !matches!(data.def(d_nr).def_type, DefType::Function) {
+            continue;
+        }
+        // Record-shape move sources only (this slice); Construct deferred (needs a reorder).
+        let sources: HashSet<u16> = crate::use_analysis::move_plans(data, d_nr)
+            .into_iter()
+            .filter(|p| p.kind == crate::use_analysis::MoveKind::Record)
+            .map(|p| p.source)
+            .collect();
+        if sources.is_empty() {
+            continue;
+        }
+        let mut code = data.def(d_nr).code.clone();
+        // Pass 1 — capture each source's UNIQUE copy destination. A source seen copying into two
+        // different places is not the clean dead-after shape the plan assumes: skip it.
+        let mut dest: HashMap<u16, Value> = HashMap::new();
+        let mut ambiguous: HashSet<u16> = HashSet::new();
+        collect_move_dest(&code, &mo, &sources, &mut dest, &mut ambiguous);
+        let ready: HashSet<u16> = dest
+            .keys()
+            .copied()
+            .filter(|s| !ambiguous.contains(s))
+            .collect();
+        if ready.is_empty() {
+            continue;
+        }
+        // Pass 2 — retarget the construction ops + drop the alloc / copy / free.
+        move_rewrite(&mut code, &ready, &dest, &mo);
+        data.definitions[d_nr as usize].code = code;
+        // The source's store has MOVED into the destination slot — it owns nothing now. The free
+        // pass (`variables()`) runs AFTER this and would re-derive a scope-exit `OpFreeRef(s)` from
+        // s's stale dep-empty=owns state — a free of the never-allocated null slot. Mark s
+        // `skip_free` so that free is never emitted.
+        for &s in &ready {
+            data.definitions[d_nr as usize].variables.set_skip_free(s);
+        }
+    }
+}
+
+/// Pass 1 of [`move_elide`]: map each move source to the `OpCopyRecord` destination it copies
+/// into; a source seen with a second destination is marked ambiguous (and skipped).
+fn collect_move_dest(
+    node: &Value,
+    mo: &MoveOps,
+    sources: &HashSet<u16>,
+    dest: &mut HashMap<u16, Value>,
+    ambiguous: &mut HashSet<u16>,
+) {
+    if let Value::Call(d, args) = node.unspan()
+        && *d == mo.op_copy_record
+        && let Some(Value::Var(s)) = args.first().map(Value::unspan)
+        && sources.contains(s)
+        && args.len() >= 2
+    {
+        if dest.contains_key(s) {
+            ambiguous.insert(*s);
+        } else {
+            dest.insert(*s, args[1].clone());
+        }
+    }
+    node.for_each_child(&mut |c| collect_move_dest(c, mo, sources, dest, ambiguous));
+}
+
+/// Pass 2 of [`move_elide`]: over each op list, DROP a ready source's `OpDatabase` /
+/// `OpCopyRecord` / `OpFreeRef`, and RETARGET every remaining construction op that writes into
+/// the source (`OpSet*(s, …)`) onto that source's captured destination expression.
+fn move_rewrite(node: &mut Value, ready: &HashSet<u16>, dest: &HashMap<u16, Value>, mo: &MoveOps) {
+    match node {
+        Value::Block(b) => {
+            b.operators.retain(|s| !move_drop(s, ready, mo));
+            for op in &mut b.operators {
+                move_rewrite(op, ready, dest, mo);
+            }
+        }
+        Value::Insert(ops) => {
+            ops.retain(|s| !move_drop(s, ready, mo));
+            for op in &mut *ops {
+                move_rewrite(op, ready, dest, mo);
+            }
+        }
+        _ => {
+            if let Value::Call(d, args) = node {
+                // Only a construction op (not one of the three dropped ops) whose target is a
+                // ready source gets its target rewritten to the destination slot.
+                let retarget = *d != mo.op_copy_record
+                    && *d != mo.op_database
+                    && *d != mo.op_free
+                    && matches!(args.first().map(Value::unspan),
+                        Some(Value::Var(s)) if ready.contains(s));
+                if retarget
+                    && let Some(Value::Var(s)) = args.first().map(Value::unspan)
+                    && let Some(dst) = dest.get(s).cloned()
+                {
+                    args[0] = dst;
+                }
+            }
+            node.for_each_child_mut(&mut |c| move_rewrite(c, ready, dest, mo));
+        }
+    }
+}
+
+/// Retain-predicate for [`move_rewrite`]: is `stmt` a dropped op (the source's alloc, the
+/// `OpCopyRecord`, or the source's free) for a ready move source?
+fn move_drop(stmt: &Value, ready: &HashSet<u16>, mo: &MoveOps) -> bool {
+    if let Value::Call(d, args) = stmt.unspan()
+        && (*d == mo.op_database || *d == mo.op_copy_record || *d == mo.op_free)
+        && let Some(Value::Var(s)) = args.first().map(Value::unspan)
+    {
+        return ready.contains(s);
+    }
+    false
+}
+
 /// Scope / lifetime analysis pass over every function definition.
 ///
 /// # Panics
@@ -442,6 +593,11 @@ pub fn check(data: &mut Data) {
     if std::env::var_os("LOFT_NO_BORROW_ELIDE").is_none() {
         elide_borrows(data);
     }
+    // @PLN90 phase B (B1.3) — last-use MOVE-elision: build a dead-after owned source directly
+    // into its destination slot instead of copy-then-free. Gated on `LOFT_MOVE_ELIDE`; a no-op
+    // off (byte-identical). Runs AFTER borrow elision — the two cover disjoint verdicts (borrow
+    // vs owned copy), so ordering is safe, but move-elision assumes the copy still stands.
+    move_elide(data);
     // Plan-57 store-identity gate (Phase 2.5): emit the verifying store ops only
     // when LOFT_STORE_TAG is set.  Counter is global so ids are unique across
     // functions (a cross-function wrong-store free mismatches).
