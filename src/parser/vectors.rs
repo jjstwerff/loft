@@ -1425,6 +1425,20 @@ impl Parser {
                         // fields.
                         Type::Reference(*d, Deps::share_sentinel())
                     }
+                    // @PLN93 (#511): a captured collection borrows the outer collection —
+                    // store it as a shared DbRef, the SAME representation as a Reference
+                    // capture, so the whole schema / read / write path (both backends)
+                    // reuses the proven Reference-DbRef machinery.  The body recovers the
+                    // real collection type from capture_context (parser/objects.rs).  The
+                    // Reference content d_nr is inert for a DbRef field (never laid out
+                    // inline) — carry the collection's content def so it stays meaningful.
+                    Type::Hash(c, _, _)
+                    | Type::Sorted(c, _, _)
+                    | Type::Index(c, _, _)
+                    | Type::Spacial(c, _, _) => Type::Reference(*c, Deps::share_sentinel()),
+                    Type::Vector(elm, _) => {
+                        Type::Reference(self.data.type_elm(elm), Deps::share_sentinel())
+                    }
                     _ => tp.clone(),
                 };
                 self.data

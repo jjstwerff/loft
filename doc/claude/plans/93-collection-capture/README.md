@@ -7,12 +7,32 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-Open — design ready, Approach-A spike done and **to be reverted** (it proved the
-naive path is a spray; see the N-count below). No landed implementation yet. Promoted
-from [loft-lang/loft#511](https://github.com/loft-lang/loft/issues/511) (a consumer
-can't serve a `store_persist_bind`-backed hash from an event-loop handler closure).
-The struct-wrap workaround already unblocks that consumer on both backends, so this
-plan is an **ergonomics** improvement, not a blocker. Tracked as `@PLN93`.
+**Step 0 done (falsification gate) — chokepoint VALIDATED, boundaries mapped.**
+Approach B (store a captured collection as a `Reference`-DbRef, recover the collection
+type for the body from `capture_context`) works. Findings:
+
+- **C1 ✓ / C2 ✓** — read/lookup `h[key]` on a captured hash/vector/sorted/index works on
+  **both backends** (~3 edited sites: `synthesize_closure_record` + the two body-read
+  paths in `objects.rs`; the body override is 2 sites because pass-1 and pass-2 reads
+  take different paths — a small, recorded deviation from the N≈2 prediction).
+- **C4 ✓** — vector / sorted / index are the SAME family under Approach B (no separate
+  arm); lookup works for all.
+- **C3 ✗ FALSIFIED** — mutation-through a *bare* capture: an insert's store-realloc
+  DbRef update never writes back to the closure record (a captured read is an rvalue
+  temp, unlike a struct *field* lvalue). → **read-only; reject mutation loudly.**
+- **Iteration native bug** — `for e in h` over a captured collection corrupts native
+  state so a *subsequent* closure capturing the same collection reads an empty DbRef
+  (interpret is fine; the outer collection and repeated *lookups* are fine). A deep
+  native-codegen defect in iteration-over-capture. → **reject iteration loudly for now**
+  (Phase 3b); lookup covers the routing use case.
+- **C5** — leak-clean on the lookup surface (pending final `LOFT_STORES=warn` gate).
+
+**Shippable increment: read-only LOOKUP capture, both backends.** Mutation +
+iteration are rejected with a clear parse-time error (no silent breakage) and become
+follow-up phases. Promoted from
+[loft-lang/loft#511](https://github.com/loft-lang/loft/issues/511); the struct-wrap
+workaround already unblocks that consumer, so this is an ergonomics improvement.
+Tracked as `@PLN93`.
 
 ## Goal
 
