@@ -121,13 +121,85 @@ and the probes are graduated to `tests/scripts/NNN-collection-capture.loft`.
 | **4** — escape / lifetime guard (C5) | **Done** — a closure capturing a local collection returned past its scope reads correctly + leak-clean on both backends (the store survives with the escaping closure) |
 | **5** — harden + land: `tests/scripts/505` (lookup) + `506` (rejections), full suites, docs, close #511 | **Done** — full suite green (canonical rebuild order), LOFT.md § Closures updated |
 | **6a** — iteration over a bare capture | **Done** — the loop element is bound as a BORROW of the closure so the per-iteration free never whole-store-frees the shared collection (native only; mirrors the #481 coroutine fix, `parser/collections.rs`). Both backends, leak-clean |
-| **6b** — mutation through a bare capture | **Partial** — point-assignment `h[key] = value` works (update + insert, both backends); **append `h += …` still rejected** (the assign target resolves to a throwaway local, not the captured store — a deeper assign-target-resolution fix). Workaround: `h[key] = value` |
+| **6b** — mutation through a bare capture | **Partial** — point-assignment `h[key] = value` works (update + insert, both backends); **append `h += …` still rejected** — the keyed-`+=` insert is gated on a local-var target, so a captured DbRef target emits NO insert (see § below). Workaround: `h[key] = value`, or a struct-field wrap |
 
 ## Out of scope (record, don't absorb)
 
 - Capturing a collection **by value** (copy) — borrow is the semantics, not a copy.
 - Non-inline closure sources (returning a capturing fn-ref) beyond the existing #318
   rules.
+
+## Phase 6b remainder — bare `h += …` append: mechanism + fix plan
+
+**Symptom.** `h += entry` on a *bare* captured collection silently does nothing (the
+outer collection is unchanged). It is rejected at parse time (lexical two-token guard
+in `parse_assign`, `src/parser/expressions.rs`) so the no-op never ships silently.
+
+**Mechanism (verified via `loft introspect`).** It is an *omitted insert*, not a
+write-back problem. The lambda body for `h += K{…}` builds the `K` record in a fresh
+store and immediately `OpFreeRef`s it — no `new_record` / `hash::add` /
+`OpFinishRecord(h)` is emitted at all. The cause is the keyed-`+=` insert path,
+`src/parser/expressions.rs:1590` (and the `+= [items]` twin at `:1140`):
+
+```rust
+if op == "+=" && var_nr != u16::MAX && matches!(f_type, Sorted|Hash|Index|Spacial) {
+    … new_record(&mut Value::Var(var_nr), …) …   // insert, targeting a LOCAL var
+}
+```
+
+The insert is **gated on `var_nr != u16::MAX`** (a local-variable target). A bare
+captured collection resolves to an `OpGetDbRef` of the closure-record field, so
+`var_nr == u16::MAX` → the branch is skipped → nothing is inserted.
+
+**Why the workarounds already work** (neither goes through the `var_nr` gate):
+- `h[key] = value` → the element-set path inserts into the captured **DbRef** directly.
+- `st.coll += …` → the field-`+=` retarget (`expressions.rs:~755`) inserts into the
+  field **DbRef**.
+So the insert-into-a-DbRef machinery exists and is proven; only the *bare* `+=` path
+insists on a local var.
+
+**Verifiable steps** (each ends GREEN on `--interpret` AND `--native`, `LOFT_STORES=warn`
+leak-clean; write each probe under `/tmp` first, graduate to `tests/scripts/` at the end).
+
+- **Step 0 — falsify the one unknown (do this BEFORE any code).** Does the `new_record`
+  insert path re-root a hash on a GROW, so an insert through a shared DbRef would need a
+  header write-back? Probe with the *working* struct-field append, which already uses the
+  same `new_record`→DbRef path: in a closure capturing a struct, `for i in 0..5000 { st.h
+  += K{ id: i, … } }`, then assert the OUTER `len(st.h) == 5000` and a sample of keys read
+  back. **Gate:** green → the DbRef target persists across grows, so **Step 3 is NOT
+  needed** and the fix is Steps 1–2 only. Red at some size → Step 3 (header write-back) is
+  required; record the grow boundary.
+
+- **Step 1 — route the captured DbRef through the keyed-`+= <record>` insert
+  (`expressions.rs:1590`).** Add a sibling branch: when `op == "+="`, `var_nr == u16::MAX`,
+  `f_type` is a collection AND `f_type.depend()` carries `closure_param`, emit `new_record`
+  targeting the captured collection's DbRef (`code`) instead of `Value::Var(var_nr)`.
+  **Verify:** `h += K{…}` in a closure → `len(h)` grows by 1, `h[key]` reads the inserted
+  value, both backends; and the already-working cells (lookup, iterate, `h[key]=v`,
+  struct-field `+=`, `505`) still pass (no regression).
+
+- **Step 2 — route the `+= [items]` twin (`expressions.rs:1140`).** Same retarget for the
+  vector-literal push path. **Verify:** `h += [K{…}]` and captured `vector` `v += [x]`
+  persist to the outer collection, both backends.
+
+- **Step 3 — header write-back (ONLY if Step 0 was red).** After the insert, write the
+  re-rooted collection header back to the closure-record field (mirror the struct-field
+  case). **Verify:** the grow-boundary cell from Step 0 now persists through a *bare*
+  capture, both backends.
+
+- **Step 4 — boundary matrix, both backends + leak.** append-one · append-many ·
+  append-that-grows · append-then-read · append-then-iterate · append + point-assign mix;
+  the outer collection sees every insert, leak-clean. **Verify:** all cells green on both
+  backends.
+
+- **Step 5 — land.** Remove the append guard (`parse_assign`) + `506`'s append-rejection
+  test; add the append cells to `505`; update `LOFT.md § Closures` (drop the append
+  caveat) and this Sub-arcs row → Done. **Verify:** full `wrap` + `native` suites green;
+  `505` (with append) green both backends; `506` reduced/removed.
+
+**Effort ~M, risk medium** — the DbRef-insert machinery already exists (`h[key]=v`,
+struct-field `+=`); the only real risk is Step 0's re-root question, which Step 0
+resolves before any code is written.
 
 ## See also
 
