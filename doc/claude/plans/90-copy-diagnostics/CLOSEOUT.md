@@ -69,27 +69,31 @@ and `g.returned()` deps name the hidden buffer (attr 1), NOT the visible `e` (at
 `filter_hidden` strips the borrow; the "buffer borrows a visible param" fact must be read from g's
 BODY. Full trace in [borrow-return/DESIGN.md § A1b gate-2](borrow-return/DESIGN.md).
 
-**Build steps (the 3-store restructure — coupled slice-1 + slice-2):**
-1. Re-capture the target 3-store IR (subject `c` · scratch buffer `__ref_1` · owned `__retbuf`)
-   for `cell-escape-temp` against the live tree (loft-codegen gate; `A1b-TARGET-escape-temp.txt`).
-2. Detect the shape at `classify_ret_promotion` (`src/parser/control.rs`): a chained-call return
-   whose **subject arg is another work-ref** that would take `Bind{substitute:true}`, and whose
-   callee delivers a **borrow of that subject** (read the callee BODY's block-deps for a visible
-   param — the signature is filtered).
-3. For that shape, restructure the promotion so the three stores stay distinct: (a) keep the
-   subject work-ref `__ref_2` as its own store (drop the `substitute`), (b) keep g's buffer
-   `__ref_1` a scratch (suppress its `Rename` to `__retbuf`), (c) allocate a separate owned
-   `__retbuf` and materialise the borrow into it (`materialize_vector_return_into`) at the return,
-   freeing the subject **after** the append.
-4. Confirm the native materialise gate (`src/generation/dispatch.rs`, DESIGN `:396`) hits the
-   copy branch with a distinct store (no double-alloc).
-5. **Gate** behind the existing `LOFT_JOIN_OWN` — ships gated; suite byte-identical gate-off
-   (slice 1+2 are coupled — an ungated partial is itself the UAF).
-6. Walk the boundary matrix (named / temp / escape × value + length + leak × `LOFT_POISON` × both
-   backends), then the full suite gate-on (issues, leak, native, wrap, native_scripts;
-   `one_buffer_chain` is exercised across crawler/moros) + the @PLN89 differential oracle.
-7. **@PLN93 interaction check** (see loft2 note) before flipping.
-8. Promote `cell-escape-temp.loft` to a regression guard under `tests/scripts/`
+**Chokepoint localized to the CONSTRUCT-STORE ALLOCATION (gate-4, 2026-07-06).** A gated
+delivery-level fix (`LOFT_A1B`, `tail_call_borrows_temp_subject` → `CopyBorrow`) was built, tested,
+and **reverted as insufficient**: the predicate fired correctly but the UAF persisted because the
+inline subject construct is built with the fn's `__retbuf` work-ref (`__ref_1`) as its store —
+`OpDatabase(__ref_1, 67)` inside the `Object` block, where `__ref_1` IS `n_h`'s `__retbuf`. The
+`Filled` subject and the return buffer are the **same store before delivery runs**; the
+`one_buffer_chain` optimisation collapses all three roles (subject / g-buffer / `__retbuf`) onto one
+`__ref_N`. Full trace + reverted-IR: [borrow-return/DESIGN.md § A1b gate-4](borrow-return/DESIGN.md).
+
+**Build steps (the remaining work — upstream store split + delivery materialise):**
+1. Find where the inline heap construct passed as a call arg is allocated the fn's `__retbuf`
+   work-ref (`src/parser/objects.rs` construct lowering / the call-arg lifting / `one_buffer_chain`
+   in `chain_site_set_shape`). Give a **borrowed** heap-subject construct a **distinct** work-ref, so
+   the subject store ≠ `__retbuf` and ≠ g's scratch buffer (three distinct stores).
+2. With the subject distinct, the delivery-level materialise (gate-3 plan: route to `CopyBorrow` /
+   `materialize_vector_return_into`, copy g's borrowed result into the owned `__retbuf`, free the
+   subject after) becomes correct — the two halves compose. The reverted `tail_call_borrows_temp_subject`
+   predicate + `LOFT_A1B` gate are validated and cheap to reconstruct.
+3. Confirm the native materialise gate (`src/generation/dispatch.rs`) hits the copy branch with a
+   distinct store (no double-alloc).
+4. **Gate** behind `LOFT_A1B` / `LOFT_JOIN_OWN`; suite byte-identical gate-off.
+5. Walk the boundary matrix (named / temp / escape × value + length + leak × `LOFT_POISON` × both
+   backends), then the full suite gate-on + the @PLN89 differential oracle.
+6. **@PLN93 interaction check** (see loft2 note) before flipping.
+7. Promote `cell-escape-temp.loft` to a regression guard under `tests/scripts/`
    (e.g. `85-temp-subject-borrow-return-uaf.loft`).
 
 **Depends on:** nothing (A1 already landed). **Blocks:** W2, W3, W4, W5.

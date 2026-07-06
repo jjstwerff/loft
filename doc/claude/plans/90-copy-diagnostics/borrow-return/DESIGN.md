@@ -304,6 +304,45 @@ This is the wide-release blocker. Gates 1–3 (this + the two sections above) ar
 localization + build spec; step 1–3 above is the emission slice — a focused synthesis on the
 #1-weakness machinery, validated against the matrix, not a rushed change.
 
+## A1b — gate-4: the collapse is UPSTREAM of delivery (2026-07-06, attempted + reverted)
+
+Built and tested a gated delivery-level fix (`LOFT_A1B`): a `tail_call_borrows_temp_subject`
+predicate (visible heap-param arg that is NOT a bare `Var` → an inline temporary; robust across both
+parse passes) routing the return to `Delivery::CopyBorrow` (materialise into `__retbuf`) instead of
+`Rename`. **The predicate fired correctly on exactly `cell-escape-temp` (both passes), but the UAF
+persisted** — and the emitted IR shows why, decisively:
+
+```
+{#borrow_tail_copy_104:vector["__ref_1"]
+  OpClearVector(__ref_1);
+  OpAppendVector(__ref_1, n_g({#Object:ref(Filled)["__ref_1"]   // <-- Filled built INTO __ref_1
+                                 OpDatabase(__ref_1, 67);        //     (h's __retbuf!)
+                                 OpAppendVector(GetField(__ref_1,4), inner); __ref_1
+                               }, __ref_2), 65);                 // g's buffer = __ref_2
+  OpFreeRef(__ref_2); return __ref_1;
+```
+
+The subject `Object` is constructed with **`__ref_1` as its store — and `__ref_1` IS h's
+`__retbuf`** (`n_h(seed, __ref_1)`, block `["__retbuf"]`). So the `Filled` subject is built directly
+in the caller's return buffer; the append destination and the subject are the **same store** before
+`block_result` ever runs. This collapse is baked in **upstream**, during argument/inline-construct
+lowering (the inline construct was allocated the fn's `__retbuf` work-ref as its store) — so **no
+delivery-level route can fix it**. The gated attempt was reverted (tree clean).
+
+**The real chokepoint (newly localized).** The fix must run where the inline subject construct is
+assigned its store: a heap construct passed as an argument to a call that **borrows** it must NOT be
+allocated the fn's `__retbuf` work-ref — it needs a **distinct** store, so the three roles (subject /
+scratch buffer / owned `__retbuf`) stay separate. Search target: the argument/object lowering that
+picks `__ref_1` for `Filled{..}` as a call arg (the work-ref allocation for inline constructs in
+`parser/objects.rs` / the call-arg lifting), reusing the buffer var. The delivery-level materialise
+(gate-3 plan) is then correct **once the subject has its own store** — the two compose. Alternatively
+(b) allocate a fresh owned `__retbuf` internally and return it instead of the caller's buffer (an ABI
+change). Option (a) is narrower and preferred.
+
+**Net:** four gates of localization now pin the fix to the construct-store allocation, with the
+delivery materialise as the second half. The predicate + gate scaffolding is validated and cheap to
+reconstruct; the remaining build is the upstream store-allocation fix.
+
 ## Connection back
 
 This is the `Borrow`-set growth the @PLN90 north-star is about: field-return moves from
