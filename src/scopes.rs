@@ -425,6 +425,9 @@ struct MoveOps {
     op_database: u32,
     op_copy_record: u32,
     op_free: u32,
+    op_new_record: u32,
+    op_get_field: u32,
+    op_get_vector: u32,
 }
 
 /// @PLN90 phase B (B1.3) — the last-use MOVE-elision rewrite for the RECORD copy shape
@@ -456,6 +459,9 @@ fn move_elide(data: &mut Data) {
         op_database: data.def_nr("OpDatabase"),
         op_copy_record: data.def_nr("OpCopyRecord"),
         op_free: data.def_nr("OpFreeRef"),
+        op_new_record: data.def_nr("OpNewRecord"),
+        op_get_field: data.def_nr("OpGetField"),
+        op_get_vector: data.def_nr("OpGetVector"),
     };
     let co = ConstructOps {
         op_database: data.def_nr("OpDatabase"),
@@ -477,6 +483,12 @@ fn move_elide(data: &mut Data) {
         // Vars to suppress the (later `variables()`-emitted) scope-exit free for — the moved-out
         // owned store now lives in the destination, so its null slot must not be freed.
         let mut skip: HashSet<u16> = HashSet::new();
+        // Transient element slots (`_elm_N = OpNewRecord(…)`, reused across a vector literal /
+        // nested construction). A container / destination based on one is NOT a stable pre-existing
+        // slot — it is a fresh record defined later, so no rewrite may retarget the source's build
+        // there (use-before-def). Every rewrite consults this. Stable across the rewrites (they
+        // never turn a var into / out of an `OpNewRecord` element).
+        let element_vars = collect_element_vars(&code, &mo);
 
         // ── RECORD shape (`v[i]=e` / `o.f=src`, OpCopyRecord) ──
         let rec_sources: HashSet<u16> = plans
@@ -489,7 +501,14 @@ fn move_elide(data: &mut Data) {
             // two different places is not the clean dead-after shape the plan assumes: skip it.
             let mut dest: HashMap<u16, Value> = HashMap::new();
             let mut ambiguous: HashSet<u16> = HashSet::new();
-            collect_move_dest(&code, &mo, &rec_sources, &mut dest, &mut ambiguous);
+            collect_move_dest(
+                &code,
+                &mo,
+                &rec_sources,
+                &element_vars,
+                &mut dest,
+                &mut ambiguous,
+            );
             let ready: HashSet<u16> = dest
                 .keys()
                 .copied()
@@ -509,7 +528,7 @@ fn move_elide(data: &mut Data) {
             .collect();
         if !con_sources.is_empty() {
             // B1.3b — reorder-free field-appends (`x.field += src`, container already exists).
-            construct_move_rewrite(&mut code, &con_sources, &co, &mut skip);
+            construct_move_rewrite(&mut code, &con_sources, &co, &element_vars, &mut skip);
             // B1.3c — fresh construction (`a = Bag { items: base }`, container built after the
             // source): hoist `a`'s alloc, then retarget. Runs on the copies B1.3b left standing.
             // B1.4 — the interprocedural mutation set (`find_written_vars` knows which callees
@@ -550,6 +569,7 @@ fn collect_move_dest(
     node: &Value,
     mo: &MoveOps,
     sources: &HashSet<u16>,
+    element_vars: &HashSet<u16>,
     dest: &mut HashMap<u16, Value>,
     ambiguous: &mut HashSet<u16>,
 ) {
@@ -559,13 +579,53 @@ fn collect_move_dest(
         && sources.contains(s)
         && args.len() >= 2
     {
-        if dest.contains_key(s) {
+        // A stable in-place target is a slot EXPRESSION over a PRE-EXISTING container
+        // (`OpGetVector(v,…)` / `OpGetField(o,…)`). A destination based on a FRESH `OpNewRecord`
+        // element (a bare `_elm_N`, or `OpGetField(_elm_N,…)` — nested construction) is defined
+        // AFTER the source, so retargeting the source's construction there is a use-before-def
+        // (native: `var__elm_N` not in scope; interp: a dangling DbRef). Skip it.
+        let unstable = match base_var_of(&args[1], mo) {
+            Some(base) => element_vars.contains(&base),
+            None => true, // no resolvable base var → not a proven-stable slot
+        };
+        if unstable || dest.contains_key(s) {
             ambiguous.insert(*s);
         } else {
             dest.insert(*s, args[1].clone());
         }
     }
-    node.for_each_child(&mut |c| collect_move_dest(c, mo, sources, dest, ambiguous));
+    node.for_each_child(&mut |c| {
+        collect_move_dest(c, mo, sources, element_vars, dest, ambiguous);
+    });
+}
+
+/// Vars defined by `OpNewRecord` (`_elm_N = OpNewRecord(…)`) — the transient element slots the
+/// vector-literal / construction lowering reuses. A copy destination based on one of these is a
+/// FRESH element defined after the source, so it is not a stable in-place retarget target.
+fn collect_element_vars(node: &Value, mo: &MoveOps) -> HashSet<u16> {
+    fn walk(node: &Value, mo: &MoveOps, out: &mut HashSet<u16>) {
+        if let Value::Set(v, rhs) = node.unspan()
+            && matches!(rhs.unspan(), Value::Call(d, _) if *d == mo.op_new_record)
+        {
+            out.insert(*v);
+        }
+        node.for_each_child(&mut |c| walk(c, mo, out));
+    }
+    let mut out = HashSet::new();
+    walk(node, mo, &mut out);
+    out
+}
+
+/// The base container var of a slot expression: peel `OpGetField` / `OpGetVector` down to the
+/// leading `Var`. `Var(v) → v`; a non-projection / non-Var expression → `None`.
+fn base_var_of(expr: &Value, mo: &MoveOps) -> Option<u16> {
+    match expr.unspan() {
+        Value::Var(v) => Some(*v),
+        Value::Call(d, args) if *d == mo.op_get_field || *d == mo.op_get_vector => {
+            args.first().and_then(|a| base_var_of(a, mo))
+        }
+        _ => None,
+    }
 }
 
 /// Pass 2 of [`move_elide`]: over each op list, DROP a ready source's `OpDatabase` /
@@ -648,6 +708,7 @@ fn construct_move_rewrite(
     code: &mut Value,
     con_sources: &HashSet<u16>,
     co: &ConstructOps,
+    element_vars: &HashSet<u16>,
     skip: &mut HashSet<u16>,
 ) {
     // Pass 1 — pre-scan: per source capture the append destination, its backing wrapper, the
@@ -678,8 +739,20 @@ fn construct_move_rewrite(
             !ambiguous.contains(s)
                 && dest.contains_key(s)
                 && vdb.contains_key(s)
+                // B1.3b handles a PURE append (`x.field += src`). If the field is CLEARED anywhere
+                // it is a whole-vector REPLACE (`x.field = src`, an `OpClearVector` + append) — a
+                // simple retarget would leave the clear stranded after the retargeted build (empties
+                // the result), and the source may even READ the field (`s.v = s.v[1..]`). Leave the
+                // replace to B1.3d (which moves the clear) or to a copy.
+                && !field_is_cleared(code, &dest[s], co)
                 && container.get(s).and_then(|c| *c).is_some_and(|cvar| {
-                    // container built before the source's backing (both locals), or a param.
+                    // The container must PRE-EXIST when the source is built. A FRESH `OpNewRecord`
+                    // element (`[Chunk { … }]` → `_elm_N.field += src`) has no `OpDatabase` but is
+                    // NOT pre-existing — it is defined later, so retargeting there is use-before-def.
+                    if element_vars.contains(&cvar) {
+                        return false;
+                    }
+                    // container built before the source's backing (both locals), or a real param.
                     match (db_order.get(&cvar), db_order.get(&vdb[s])) {
                         (Some(&c), Some(&v)) => c < v,
                         (None, Some(_)) => true, // container is a parameter (never allocated here)
@@ -1183,7 +1256,26 @@ fn try_replace_one(
     if bs >= c2 - 2 {
         return false; // base built after the field already exists but not as a real preceding build
     }
+    // The container `a` must ALREADY EXIST at `base`'s build (we move the clear + build to `bs`, so
+    // `a.field` must be valid there). If `a` is allocated in THIS block AFTER `base` (`fresh = …;
+    // s = S{…}; s.field = fresh`), building into `a.field` at `bs` would hit an un-allocated `a` —
+    // SKIP. A param / outer-scope `a` has no `OpDatabase` here → it pre-exists → fine.
+    if let Some(a_db) = b
+        .operators
+        .iter()
+        .position(|op| call_is(op, co.op_database, a))
+        && a_db >= bs
+    {
+        return false;
+    }
     let chain: HashSet<usize> = [rhs_set.unwrap(), c2 - 2, c2 - 1, c2].into_iter().collect();
+    // `base`'s BUILD must not read the destination container `a` (a SELF-ASSIGN like
+    // `s.v = s.v[1..]` builds the source by slicing `s.v` — moving the `OpClearVector` ahead of that
+    // read would empty `s.v` before the slice copies it). Guard the build region [bs..c2) (excluding
+    // the chain: copy1 / clear / copy2 legitimately reference `a`).
+    if (bs..c2).any(|i| !chain.contains(&i) && refs_var(&b.operators[i], a)) {
+        return false;
+    }
 
     let clear = b.operators[c2 - 1].clone();
     let ops = std::mem::take(&mut b.operators);
@@ -1227,6 +1319,20 @@ fn append_field_temp(op: &Value, co: &ConstructOps) -> Option<(Value, u16)> {
 fn is_clear_of(op: &Value, field: &Value, co: &ConstructOps) -> bool {
     matches!(op.unspan(), Value::Call(d, args) if *d == co.op_clear
         && args.first().map(Value::unspan) == Some(field.unspan()))
+}
+
+/// Is `field` cleared (`OpClearVector(field)`) ANYWHERE in `node`'s subtree? A cleared destination
+/// means the append is really a whole-vector REPLACE, not a pure `+=` append.
+fn field_is_cleared(node: &Value, field: &Value, co: &ConstructOps) -> bool {
+    fn walk(node: &Value, field: &Value, co: &ConstructOps, found: &mut bool) {
+        if is_clear_of(node, field, co) {
+            *found = true;
+        }
+        node.for_each_child(&mut |c| walk(c, field, co, found));
+    }
+    let mut found = false;
+    walk(node, field, co, &mut found);
+    found
 }
 
 /// If `op` is `OpAppendVector(Var(rhs), Var(base))` (copy INTO the temp from `base`), return `base`.

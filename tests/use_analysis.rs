@@ -1457,6 +1457,38 @@ fn move_elide_handles_constructs_in_nested_blocks() {
     );
 }
 
+// ── @PLN90 phase B (B1.5 hardening) — corpus shapes the narrow probes missed, found by the
+// flag-ON exposure run. Each MUST stay correct (a wrong elision is a use-before-def / self-corrupt
+// / build-into-unallocated-container) — the elision either handles it or (safely) leaves the copy.
+const MOVE_ELIDE_HARDENING_SRC: &str = r#"
+struct S { v: vector<integer> }
+struct Inner { x: integer }
+struct Outer { items: vector<Inner> }
+fn vlit_element() -> integer {              // `[e]` — dest is a FRESH OpNewRecord element (q4 shape)
+    e = Inner { x: 42 };
+    o = Outer { items: [e] };               // e copied into a fresh element defined AFTER e
+    (o.items[0].x ?? -1)                     // 42
+}
+fn self_assign() -> integer {               // `s.v = s.v[1..]` — source reads the destination (p287)
+    s = S { v: [1, 2, 3, 4] };
+    s.v = s.v[1..];
+    s.v.len()                                // 3
+}
+fn empty_field_replace() -> integer {       // `s.v = fresh`, s.v starts EMPTY, s built after fresh (p154)
+    fresh: vector<integer> = [7, 8, 9];
+    s = S { v: [] };
+    s.v = fresh;
+    (s.v[0] ?? -1) + s.v.len()               // 7 + 3 = 10
+}
+fn main() { print("{vlit_element()} {self_assign()} {empty_field_replace()}\n"); }
+"#;
+
+#[test]
+fn move_elide_corpus_hardening_shapes_stay_correct() {
+    // A wrong elision of ANY of these surfaces here as a wrong value or a crash, on either backend.
+    assert_move_elide_preserves(MOVE_ELIDE_HARDENING_SRC, "move_elide_harden_probe", "42 3 10");
+}
+
 // ── @PLN90 Step 5 — the user-facing `--report-copies` report ──
 const REPORT_SRC: &str = r#"
 struct Item { tags: vector<integer> }
