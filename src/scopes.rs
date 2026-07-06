@@ -446,8 +446,8 @@ struct MoveOps {
 ///
 /// where `dest` is the `OpCopyRecord` destination expression (`OpGetVector(v,…)` / `OpGetField`).
 /// Emits NO new op — both backends already lower a retargeted `OpSet*`, so the rewrite is
-/// backend-agnostic (one IR pass, like `elide_borrows`). Gated on `LOFT_MOVE_ELIDE`;
-/// byte-identical off. The CONSTRUCT shape is handled by [`construct_move_rewrite`] (B1.3b) for
+/// backend-agnostic (one IR pass, like `elide_borrows`). DEFAULT ON (B1.5); `LOFT_NO_MOVE_ELIDE`
+/// restores the copy. The CONSTRUCT shape is handled by [`construct_move_rewrite`] (B1.3b) for
 /// the reorder-free field-append case; fresh construction (`a = Bag { items: base }`, container
 /// built after the source) still needs a build-order reorder and stays a copy. Design:
 /// `doc/claude/plans/90-copy-diagnostics/phase-b-design.md`.

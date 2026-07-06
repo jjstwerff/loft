@@ -957,12 +957,12 @@ pub fn move_plans(data: &Data, d_nr: u32) -> Vec<MovePlan> {
     analyze_fn(&def.code, &def.variables, data, env_tier()).2
 }
 
-/// @PLN90 phase B (B1.2) — dump every move-elidable site when `LOFT_MOVE_ELIDE` is set; a no-op
-/// otherwise. Behaviour-neutral (detection only, no lowering). Called from `scopes::check`; the
-/// dump is the positive control that detection fires on the dead-source shapes and stays silent on
-/// survivors.
+/// @PLN90 phase B — dump every move-elidable site when `LOFT_MOVE_ELIDE` is set (the opt-in
+/// diagnostic; the rewrite itself is default-on). A no-op otherwise, so the default-on elision does
+/// not spew plan lines. The dump is the positive control that detection fires on the dead-source
+/// shapes and stays silent on survivors.
 pub fn dump_move_plans(data: &Data) {
-    if !crate::keys::move_elide_enabled() {
+    if !crate::keys::move_elide_dump_enabled() {
         return;
     }
     let mut total = 0u32;

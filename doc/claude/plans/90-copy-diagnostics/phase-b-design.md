@@ -411,11 +411,19 @@ copies. Multiple replacements per fn handled (loop, like the fresh case). Guard:
   (per-iteration correct); an outer-local / loop-var field value stays a copy (the run-guard only
   admits `a` or a never-written param). Guard: `move_elide_handles_constructs_in_nested_blocks`.
   The move-elision now covers all four copy shapes in flat AND nested positions.
-- **B1.5 — graduate + flip.** ↓ (unchanged)
-- **B1.5 — graduate + flip.** Guards landed in `tests/use_analysis.rs` (record + construct + fresh +
-  param); extend to `tests/scripts/` + `tests/leak_cases/`, then flip `LOFT_MOVE_ELIDE` default-on
-  with a `LOFT_NO_MOVE_ELIDE` opt-out (run the full suite flag-ON first). Re-run the survey — the
-  `move` rows show **0** runtime copies.
+- **B1.5 — FLIPPED (default-on).** The move-elision REWRITE is now DEFAULT ON; `LOFT_NO_MOVE_ELIDE`
+  restores the copy. The `MOVE-PLAN` dump was split onto its own opt-in gate (`LOFT_MOVE_ELIDE`,
+  `move_elide_dump_enabled`) so the default-on rewrite doesn't spew plan lines. Reaching the flip
+  took a **flag-ON exposure sweep** — running the whole corpus with the rewrite on, which the ~30
+  hand-probes had never done. It found ~12 corpus bugs (all the same class: retargeting a source's
+  build into a destination that isn't a stable, pre-existing, single-def, user-owned slot, OR that
+  isn't dead between build and copy) — all fixed via the guard layer (`bad_containers` = element ∪
+  reassigned; `def_order` container-before-source; `source_escapes` dead-between-build-and-copy;
+  self-read; replace-vs-append; compiler-temp / bare-Var dest). The behavioural corpus is green
+  default-on (issues 748, leak 49, native, wrap, native_scripts, loft_suite); the remaining flag-ON
+  sweep reds were dump-pollution (fixed by the gate split) + wasm/browser env. **Lesson: a flag-ON
+  full-corpus sweep is MANDATORY before flipping any heap rewrite default-on — narrow probes
+  massively under-cover.**
 
 ## Falsification probes (cheapest thing that could break each load-bearing claim)
 

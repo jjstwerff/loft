@@ -1016,8 +1016,9 @@ fn run_move_elide_src(
         .env("LOFT_NO_CACHE", "1")
         .env("LOFT_POISON", "1")
         .env("LOFT_NATIVE_LEAK_CHECK", "1");
-    if move_on {
-        cmd.env("LOFT_MOVE_ELIDE", "1");
+    // The move-elision is DEFAULT ON (B1.5 flip); the OFF baseline opts out.
+    if !move_on {
+        cmd.env("LOFT_NO_MOVE_ELIDE", "1");
     }
     let out = cmd.output().expect("spawn loft");
     (
@@ -1089,8 +1090,9 @@ fn introspect_move_elide_src(src: &str, stem: &str, move_on: bool) -> String {
     cmd.args(["introspect"])
         .arg(&path)
         .env("LOFT_NO_CACHE", "1");
-    if move_on {
-        cmd.env("LOFT_MOVE_ELIDE", "1");
+    // The move-elision is DEFAULT ON (B1.5 flip); the OFF baseline opts out.
+    if !move_on {
+        cmd.env("LOFT_NO_MOVE_ELIDE", "1");
     }
     let out = cmd.output().expect("spawn loft");
     String::from_utf8_lossy(&out.stdout).into_owned()

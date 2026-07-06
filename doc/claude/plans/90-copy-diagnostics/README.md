@@ -40,8 +40,14 @@ the old-content-free of a heap-text field). **Nested bodies** now work too — b
 `a.field = base` inside an `if`/loop body is elided (per-iteration correct in a loop). The
 move-elision now covers all four copy shapes in flat AND nested positions. Guards:
 `tests/use_analysis.rs::move_elide_{record,construct,fresh,param,multiple,whole_vector,nested}_*`.
-NEXT = **B1.5** flip `LOFT_MOVE_ELIDE` default-on (run the full suite flag-ON first). Detail:
-[phase-b-design.md § B1.3d LANDED / Nested bodies](phase-b-design.md).
+
+**B1.5 FLIPPED — the move-elision is DEFAULT ON** (`LOFT_NO_MOVE_ELIDE` opts out; the `MOVE-PLAN`
+dump is split onto its own opt-in `LOFT_MOVE_ELIDE`). Getting there required a **flag-ON exposure
+sweep** (running the whole corpus with the rewrite on — the ~30 hand-probes never did): it found ~12
+corpus bugs, all "retargeted into a non-stable slot / source read between build and copy," all fixed
+via a guard layer (`bad_containers`, `def_order`, `source_escapes`, self-read, replace-vs-append).
+Behavioural corpus green default-on (issues 748, leak 49, native, wrap, native_scripts, loft_suite).
+Detail: [phase-b-design.md § B1.5](phase-b-design.md).
 
 **Phase 1** — the decision covers every structure-copy emission ([phase1-inventory.md](phase1-inventory.md)).
 `LOFT_COPY_DUMP` is the runtime ground truth; the verdict (`use_analysis`, **route 1** —
