@@ -283,6 +283,39 @@ motion. It captures the field-append subset of Construct now; the fresh-construc
 is a distinct, higher-risk slice deferred behind the guard, exactly per the "prove the safe path,
 gate the rest" discipline that caught the `OpAdopt` corruption.
 
+### B1.3c LANDED — the FRESH-construction reorder (`a = Bag { items: base }`, both backends)
+
+Built as `src/scopes.rs::construct_fresh_rewrite`, run AFTER B1.3b on the copies it left standing.
+The structure dump settled the mechanism: **make_dead's function body is a FLAT top-level block** (a's
+alloc and base's build are siblings in one operator vec), and **a's construction is a contiguous run
+of statements immediately before the copy**. So the reorder is a flat-vec rebuild, not a nested-Insert
+split:
+
+```text
+  [base build → __vdb_1] … [a alloc+init] [OpAppendVector(a.items, base)]   (before)
+  ─────────────────────────────────────────────────────────────────────
+  [a alloc+init] [base build → RETARGETED onto a.items, __vdb_1 dropped] …  (after)
+```
+
+Retarget `base`'s build ops (`OpPreAllocVector`/`OpNewRecord`/`OpFinishRecord`) onto `a.items`;
+here `OpPreAllocVector` IS retargeted (the fresh field is empty, so pre-claiming its capacity is
+correct — the field-append case dropped it because the field was non-empty). Drop the wrapper
+(`__vdb_1`) alloc/len-init + `base`'s view-def + the copy; `set_skip_free(__vdb_1)`.
+
+**Conservative guards (fire only when ALL hold — else stays a copy, safe under flip):** flat
+top-level block; exactly ONE still-copying construct source in the function; `a`'s construction is a
+contiguous run right before the copy that references **only `a`** (dependency-safe to hoist past
+`base`'s build — a param/computed field value like `Bag { id: n, items: base }` references another
+var → SKIP); the run contains `a`'s `OpDatabase`; and `a` is allocated AFTER the source backing (a
+real reorder). Validated (both backends, poison + leak): `make_dead`, single-literal-field fresh
+construct → elide; survivor, param-field-value, and two-fresh-constructs-in-one-fn → correctly stay
+copies. Guards: `tests/use_analysis.rs::move_elide_fresh_*` +
+`move_elide_construct_elides_field_append_and_fresh_construction`.
+
+**Residual widenings (future, all SAFE-skipped today):** param/computed field values (allow run vars
+that are parameters — they exist at entry, so hoisting is safe); >1 fresh construct per function;
+nested-Insert (non-flat) bodies. Each is a guard relaxation, not a new mechanism.
+
 ## Verifiable slices (each: matrix on BOTH backends, gated behind a flag, suite byte-identical off)
 
 - **B1.1 — gate (DONE for interp).** The capture above is the spec; add the native target Rust
@@ -301,14 +334,18 @@ gate the rest" discipline that caught the `OpAdopt` corruption.
   already exists: `construct_move_rewrite` retargets `src`'s element builds onto `x.field` + drops
   the wrapper/copy/prealloc/free, guarded reorder-free (container's `OpDatabase` precedes the
   source-backing's, or the container is a param). No new op. See "B1.3b LANDED".
-- **B1.3c — CONSTRUCT fresh construction (next).** `a = Bag { items: base }`, container built AFTER
-  the source. Needs the build-order reorder — hazards: `a`'s alloc and the copy share one
-  construction Insert (must split); other fields may depend on the source (dependency-safety). Or,
-  for a call-sourced field, the handle-adopt (`OpAdopt`, proven per destination first). The reorder
-  guard currently SKIPS this (safe: stays a copy); detection fires, so the worklist is ready.
-- **B1.5 — graduate + flip.** Guards landed in `tests/use_analysis.rs` (record + construct); extend
-  to `tests/scripts/` + `tests/leak_cases/` once B1.3c lands, then flip `LOFT_MOVE_ELIDE` default-on
-  with a `LOFT_NO_MOVE_ELIDE` opt-out. Re-run the survey — the `move` rows show **0** runtime copies.
+- **B1.3c — CONSTRUCT fresh construction (DONE, both backends).** `a = Bag { items: base }`,
+  container built after the source. `construct_fresh_rewrite` does the build-order reorder on a flat
+  block (a's construction is a contiguous run right before the copy — hoist it, retarget base's build
+  onto a.field, drop the wrapper/copy). Conservatively guarded (flat block, one construct, run refs
+  only `a`, real reorder); everything else stays a copy. No new op. See "B1.3c LANDED".
+- **B1.4 — widen the guards (next).** All still SAFE-skipped: param/computed field values (allow run
+  vars that are params), >1 fresh construct per fn, nested-Insert bodies. Each is a guard relaxation.
+  Also the `a.items = base` whole-replacement (chained through `__p154_rhs`).
+- **B1.5 — graduate + flip.** Guards landed in `tests/use_analysis.rs` (record + construct + fresh);
+  extend to `tests/scripts/` + `tests/leak_cases/`, then flip `LOFT_MOVE_ELIDE` default-on with a
+  `LOFT_NO_MOVE_ELIDE` opt-out (run the full suite flag-ON first). Re-run the survey — the `move`
+  rows show **0** runtime copies.
 
 ## Falsification probes (cheapest thing that could break each load-bearing claim)
 

@@ -1156,29 +1156,67 @@ fn move_elide_construct_field_append_preserves_values_and_stays_leak_free() {
 }
 
 #[test]
-fn move_elide_construct_elides_reorder_free_but_keeps_fresh_construction_copy() {
+fn move_elide_construct_elides_field_append_and_fresh_construction() {
     let off = introspect_move_elide_src(MOVE_ELIDE_CONSTRUCT_SRC, "move_elide_b13b_ir", false);
     let on = introspect_move_elide_src(MOVE_ELIDE_CONSTRUCT_SRC, "move_elide_b13b_ir", true);
-    // Reorder-free field-appends (local + param container) drop their copying OpAppendVector.
-    for moved in ["t1_local", "t2_param"] {
+    // B1.3b field-appends (local + param container) AND the B1.3c fresh construction (`t4_fresh`,
+    // container built after the source → hoist + retarget) all drop their copying OpAppendVector.
+    for moved in ["t1_local", "t2_param", "t4_fresh"] {
         let (b, a) = (
             op_count(&off, moved, "OpAppendVector"),
             op_count(&on, moved, "OpAppendVector"),
         );
         assert!(
             a == b - 1,
-            "{moved}: reorder-free field-append should drop one OpAppendVector (off={b} on={a})"
+            "{moved}: construct move-elision should drop one OpAppendVector (off={b} on={a})"
         );
     }
-    // Fresh construction (container built after the source) is NOT reorder-free → stays a copy.
-    let (fb, fa) = (
-        op_count(&off, "t4_fresh", "OpAppendVector"),
-        op_count(&on, "t4_fresh", "OpAppendVector"),
-    );
+}
+
+// ── @PLN90 phase B (B1.3c) — fresh-construction reorder + its conservative skip guards ──
+const MOVE_ELIDE_FRESH_SRC: &str = r#"
+struct Bag { id: integer, items: vector<integer> }
+fn e1_paramfield(n: integer) -> integer {   // field value is a PARAM → run refs `n` → SKIP (copy)
+    base: vector<integer> = [10, 20, 30];
+    a = Bag { id: n, items: base };
+    (a.items[1] ?? 0) + a.id
+}
+fn e2_two() -> integer {                     // TWO fresh constructs → "exactly one" guard → SKIP both
+    b1: vector<integer> = [1, 2, 3];
+    a1 = Bag { id: 1, items: b1 };
+    b2: vector<integer> = [4, 5, 6];
+    a2 = Bag { id: 2, items: b2 };
+    (a1.items[0] ?? 0) + (a2.items[2] ?? 0)
+}
+fn e3_single() -> integer {                  // single, literal-only fields → ELIDE
+    base: vector<integer> = [10, 20, 30];
+    a = Bag { id: 5, items: base };
+    (a.items[2] ?? 0) + a.id
+}
+fn main() { print("{e1_paramfield(7)} {e2_two()} {e3_single()}\n"); }
+"#;
+
+#[test]
+fn move_elide_fresh_construction_values_and_conservative_skips() {
+    // Values preserved on both backends, leak-free (e1=27, e2=7, e3=35).
+    assert_move_elide_preserves(MOVE_ELIDE_FRESH_SRC, "move_elide_b13c_probe", "27 7 35");
+    // The reorder fires ONLY on the provably-safe shape; the guards keep the rest a copy.
+    let off = introspect_move_elide_src(MOVE_ELIDE_FRESH_SRC, "move_elide_b13c_ir", false);
+    let on = introspect_move_elide_src(MOVE_ELIDE_FRESH_SRC, "move_elide_b13c_ir", true);
+    // e3: single fresh construct, literal-only fields → the copy is elided.
     assert!(
-        fa == fb && fb >= 1,
-        "t4_fresh: fresh construction must stay a COPY (off={fb} on={fa})"
+        op_count(&on, "e3_single", "OpAppendVector")
+            == op_count(&off, "e3_single", "OpAppendVector") - 1,
+        "e3_single: a single literal-field fresh construct should elide its copy"
     );
+    // e1 (param field value → run refs another var) and e2 (two fresh constructs) stay copies.
+    for skipped in ["e1_paramfield", "e2_two"] {
+        assert_eq!(
+            op_count(&on, skipped, "OpAppendVector"),
+            op_count(&off, skipped, "OpAppendVector"),
+            "{skipped}: a non-provably-safe fresh construct must stay a COPY (conservative guard)"
+        );
+    }
 }
 
 // ── @PLN90 Step 5 — the user-facing `--report-copies` report ──

@@ -22,17 +22,18 @@ falsification probes · verifiable slices): [phase-b-design.md](phase-b-design.m
 
 **Phase 1 COMPLETE; phase 2 started (avoidable-vs-forced classification).**
 
-**Phase B (the C86 last-use MOVE-elision) — B1.1/B1.2 done; B1.3 RECORD + B1.3b CONSTRUCT
-field-append LANDED.** Dead-after owned sources are now lowered by building DIRECTLY into the
-destination instead of copy-then-free — `src/scopes.rs`, pure IR rewrites (no new op, so BOTH
-backends from one pass), gated `LOFT_MOVE_ELIDE` (OFF = byte-identical). Covered: **Record**
-(`v[i]=e` / `o.f=src`, `move_elide`) and **Construct field-append** (`x.field += src` into an
-already-existing container, `construct_move_rewrite`, guarded reorder-free). Matrix-validated
-(value + poison + leak, interp + native); survivors still copy; **fresh construction
-`a = Bag{items:base}` correctly SKIPPED by the reorder guard** (stays a copy). Guards:
-`tests/use_analysis.rs::move_elide_{record,construct}_*`. NEXT = **B1.3c** fresh-construction reorder
-(`a = Bag{items:base}` — build-order reorder or handle-adopt), then flip. Detail:
-[phase-b-design.md § B1.3b LANDED](phase-b-design.md).
+**Phase B (the C86 last-use MOVE-elision) — B1.1/B1.2 done; B1.3 RECORD + B1.3b/B1.3c CONSTRUCT
+LANDED.** Dead-after owned sources are now lowered by building DIRECTLY into the destination instead
+of copy-then-free — `src/scopes.rs`, pure IR rewrites (no new op, so BOTH backends from one pass),
+gated `LOFT_MOVE_ELIDE` (OFF = byte-identical). Covered: **Record** (`v[i]=e` / `o.f=src`,
+`move_elide`); **Construct field-append** (`x.field += src` into an existing container,
+`construct_move_rewrite`, reorder-free); and **Construct fresh construction**
+(`a = Bag{items:base}`, `construct_fresh_rewrite` — hoist a's alloc + retarget base's build onto
+a.field, conservatively guarded). Matrix-validated (value + poison + leak, interp + native);
+survivors still copy; non-provably-safe fresh constructs (param field value, >1 per fn) stay copies.
+Guards: `tests/use_analysis.rs::move_elide_{record,construct,fresh}_*`. NEXT = **B1.4** guard
+widenings (param field values, >1 construct/fn, nested bodies — all safe-skipped today), then B1.5
+flip default-on. Detail: [phase-b-design.md § B1.3c LANDED](phase-b-design.md).
 
 **Phase 1** — the decision covers every structure-copy emission ([phase1-inventory.md](phase1-inventory.md)).
 `LOFT_COPY_DUMP` is the runtime ground truth; the verdict (`use_analysis`, **route 1** —
