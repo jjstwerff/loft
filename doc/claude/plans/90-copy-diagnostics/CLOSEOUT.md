@@ -129,6 +129,24 @@ plain `DbRef`; DESIGN slice 1 / option (c)).
 caller-side materialise in place first. **Exit:** `br_field` returns the alias (`OpGetField`, no
 `OpAppendVector`) both backends; matrix cells clean; suite gate-off byte-identical.
 
+**Prototyped + reverted (2026-07-06) — the coupling REFINED (corrects the earlier read).** A gated
+`LOFT_A2` route (skip `CopyBorrow` for `tail_is_struct_field_read` → alias via `Rename`) makes `f`
+return `OpGetField(b,0)` directly (block dep `["b"]`). Matrix under `LOFT_POISON`, both backends:
+- **named** (`b=Box{..}; a=f(b)`) — SAFE (subject out-lives).
+- **temp at a BINDING site** (`a = f(Box{..})`) — **SAFE**. The bind does not dangle; **no
+  binding-site materialise foundation is needed** (this corrects the prior assumption that A2
+  re-opens the UAF at bindings).
+- **temp ESCAPING via a return** (`h() { f(Box{..}) }`) — **CRASHES** (interp SIGSEGV / native).
+  `LOFT_TRACE_RR` shows `classify_ret_promotion` is **never called** for `h`: A2's alias reroutes the
+  field-return down a different delivery path that **bypasses W1's return-site materialise** (`h`
+  frees the temp `Box` then `return null`).
+
+So the ONLY remaining A2 gap is **unifying the delivery paths** so an A2 field-alias return of a
+temporary subject also reaches W1's `tail_call_borrows_temp_subject` materialise (or replicates it on
+the field-read return path). That is the real remaining work — reverted here because it crashes
+`escape-temp` even gated-on. Repro cells: the `a2_{named,tempbind,escapetemp}.loft` shape (check into
+`borrow-return/` if pursued). **Not a binding-site foundation** — a return-path delivery unification.
+
 ### W3 — Wasted empty-buffer alloc  ·  P1-opt · S · rides W2's ABI
 
 **Verified state:** CONFIRMED. A borrowed-alias return still takes + `OpClearVector`s a
