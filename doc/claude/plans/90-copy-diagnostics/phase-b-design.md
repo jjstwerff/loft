@@ -98,6 +98,28 @@ nested field s.a.b = src, source in a loop} × {interp, native}`.
 | F4 | **one backend moves, the other copies** | the plan lowered in only one generator | both-backends matrix; not landable until both move |
 | F5 | **nested / aliased field** (`s.rows[i] = src`) transfers into an aliased slot | the field slot is itself a view | reject the un-transferable case cleanly (fall back to copy — loud, never silent) |
 
+## B1.2 findings (built + verified — the detection, `LOFT_MOVE_ELIDE`)
+
+`MovePlan` + `move_elidable_source` + `dump_move_plans` land in `use_analysis.rs` (gated,
+byte-identical off; `analyze_fn` now returns a 3rd `Vec<MovePlan>`, callers unchanged via `.0`/`.1`).
+Detection = the survival **move** fact + elision preconditions (not a param; owns a store —
+`def_vdb`/`database_vars`). Verified on the probes: fires `make_dead` (Construct, `base`) and
+`rec_move` (Record, `e` — a clean `OpCopyRecord(e, v[0])`, item-3 swap confirmed), **silent on both
+survivors**. Corpus reach: **37 Construct + 65 Record** move-elidable sites. Two findings the
+capture surfaced, to fold into B1.3:
+
+- **Record shape splits.** A clean `v[i] = e` element-set IS one `OpCopyRecord` (source `e`, caught).
+  But a **vector-field whole-replacement** `a.items = base` lowers to a **chained copy through a
+  temp** — `__p154_rhs += base` (a var-buffer copyfill) then `a.items += __p154_rhs` — so the field
+  append's source is `__p154_rhs`, not `base`; B1.2 does not catch it. It needs a **chained-source**
+  widening (follow `field += tmp` where `tmp` was copyfilled from a dead owned `base`).
+- **Ordering vs `elide_borrows`.** `dump_move_plans` runs in `scopes::check` **before**
+  `elide_borrows`. The var-buffer `ElidePlan` inlines `__p154_rhs`→`base`; if move-detection ran
+  *after* that inlining, the chained `a.items = base` would collapse to `a.items += base` and be
+  caught by the plain Construct rule. So B1.3's lowering ordering (move-elide relative to
+  var-buffer elide) is a real design knob — likely: run var-buffer elision first, then move-elide
+  on the collapsed IR.
+
 ## Verifiable slices (each: matrix on BOTH backends, gated behind a flag, suite byte-identical off)
 
 - **B1.1 — gate (DONE for interp).** The capture above is the spec; add the native target Rust

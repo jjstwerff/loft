@@ -431,6 +431,9 @@ pub fn check(data: &mut Data) {
     crate::use_analysis::dump_all(data);
     // @PLN90 Step 5 — the user-facing copy report (`--report-copies`) is emitted ONCE from
     // main after the whole program is loaded (not here — `check` runs per file-load).
+    // @PLN90 phase B B1.2 — dump the last-use MOVE-elision plans (LOFT_MOVE_ELIDE). Detection
+    // only; no lowering consumes them yet, so this is behaviour-neutral.
+    crate::use_analysis::dump_move_plans(data);
     // Tier-0 borrow elision (DEFAULT ON; opt-out LOFT_NO_BORROW_ELIDE). Inlines
     // Borrow-verdict vector copies before the scope/free passes. `elide_borrows`
     // refuses to elide a `v` that another var borrows (its `deps` point at `v`),

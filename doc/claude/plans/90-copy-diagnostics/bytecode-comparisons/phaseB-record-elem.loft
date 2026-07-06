@@ -1,0 +1,14 @@
+struct E { hp: integer, name: text }
+fn rec_move() -> integer {
+    v: vector<E> = [E{hp:1,name:"a"}, E{hp:2,name:"b"}];
+    e = E { hp: 9, name: "z" };   // dead after the element set below
+    v[0] = e;
+    v[0].hp
+}
+fn rec_survive() -> integer {
+    v: vector<E> = [E{hp:1,name:"a"}];
+    e = E { hp: 9, name: "z" };
+    v[0] = e;
+    e.hp + v[0].hp                // e survives → must COPY
+}
+fn main() { println("{rec_move()} {rec_survive()}"); }

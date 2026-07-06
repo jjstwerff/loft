@@ -290,6 +290,36 @@ pub struct ElidePlan {
     pub borrowers: Vec<u16>,
 }
 
+/// @PLN90 phase B — a construction / record copy that can be lowered as a MOVE (a store transfer)
+/// instead of a deep copy: the source is a **dead-after owned local**, so its store transfers into
+/// the field/element (C86's last-use elision — the same rule `ElidePlan` runs for the var-buffer
+/// idiom). Produced only under `LOFT_MOVE_ELIDE`. B1.2 computes + dumps it; the lowering that
+/// consumes it lands in B1.3+ (no codegen change yet — byte-identical off). Design + captured IR:
+/// `doc/claude/plans/90-copy-diagnostics/phase-b-design.md`.
+#[derive(Clone, Debug)]
+pub struct MovePlan {
+    /// The container being built / assigned into (struct rec or vector target); `u16::MAX` if it
+    /// has no named var (an anonymous element slot).
+    pub container: u16,
+    /// The dead-after owned-local source var whose store transfers into the field/element.
+    pub source: u16,
+    /// Construction (`S { f: src }` / `x.field += src`) vs record (`v[i] = e` / `o.f = src`).
+    pub kind: MoveKind,
+    /// The copy-site-end position — the lowering (B1.3) keys the transfer + free-suppression here.
+    pub copy_end: usize,
+    /// The source location, for the B1.2 detection dump.
+    pub loc: Option<Position>,
+}
+
+/// The copy shape a [`MovePlan`] covers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MoveKind {
+    /// `S { f: src }` / `x.field += src` — a field-target append (`construct_copy`).
+    Construct,
+    /// `v[i] = e` / `o.f = src` — an `OpCopyRecord` (`record_copy`).
+    Record,
+}
+
 impl Uses {
     /// @PLN90 item 3 — record a real WRITE of `base` at `pos` (max). Only tracked when
     /// `track_pos` (read solely by `survival_class`), so the default path is unaffected.
@@ -525,7 +555,7 @@ fn analyze_fn(
     function: &Function,
     data: &Data,
     max_tier: u8,
-) -> (Vec<VerdictRow>, Vec<ElidePlan>) {
+) -> (Vec<VerdictRow>, Vec<ElidePlan>, Vec<MovePlan>) {
     // @PLN90 — the survival split + its report locations are produced under LOFT_COPY_SURVIVAL
     // (the raw dev dump) OR the user-facing report (`report_copies`); read once so both the walk
     // (`track_pos`) and the classification below agree.
@@ -773,7 +803,37 @@ fn analyze_fn(
             survival: true,
         });
     }
-    (rows, plans)
+
+    // @PLN90 phase B (B1.2) — the MOVE-elision plans: a construction/record copy whose source is a
+    // dead-after owned local can transfer its store into the field/element instead of copying.
+    // Gated on `LOFT_MOVE_ELIDE`; empty otherwise (default zero-cost + byte-identical). No lowering
+    // consumes these yet — B1.2 only computes + dumps them to prove detection.
+    let mut move_plans: Vec<MovePlan> = Vec::new();
+    if crate::keys::move_elide_enabled() {
+        for entry in &u.construct_copy {
+            if let Some(s) = move_elidable_source(entry.1, entry.2, entry.3, &u, function) {
+                move_plans.push(MovePlan {
+                    container: entry.0.unwrap_or(u16::MAX),
+                    source: s,
+                    kind: MoveKind::Construct,
+                    copy_end: entry.2,
+                    loc: entry.4.clone(),
+                });
+            }
+        }
+        for entry in &u.record_copy {
+            if let Some(s) = move_elidable_source(entry.1, entry.2, entry.3, &u, function) {
+                move_plans.push(MovePlan {
+                    container: entry.0.unwrap_or(u16::MAX),
+                    source: s,
+                    kind: MoveKind::Record,
+                    copy_end: entry.2,
+                    loc: entry.4.clone(),
+                });
+            }
+        }
+    }
+    (rows, plans, move_plans)
 }
 
 /// @PLN90 — the bound-vs-unbound survival split for a construction / record copy. The
@@ -852,6 +912,87 @@ fn survival_class(
         );
     }
     (class, reason)
+}
+
+/// @PLN90 phase B (B1.2) — is this construction/record copy site a MOVE-elidable one, and if so,
+/// which source var transfers? A site is move-elidable iff the source is the phase-A survival
+/// **move** (consumed at the copy: not straight-line-surviving, not loop-repeated) AND it meets the
+/// elision preconditions: it is a **local** (not a parameter — the caller owns a param's store) that
+/// **owns a transferable store** (a vdb-buffered vector `def_vdb`, or a fresh `OpDatabase`'d record
+/// `database_vars` — never a view/projection, which owns no store to move). Conservative by design:
+/// a false negative just keeps the copy; a false positive would be an unsound move, so the checks
+/// only widen with proof. Returns `Some(source)` when elidable.
+fn move_elidable_source(
+    src: Option<u16>,
+    copy_end: usize,
+    loop_surv: bool,
+    u: &Uses,
+    function: &Function,
+) -> Option<u16> {
+    let s = src?; // a literal source has nothing pre-existing to move
+    if function.is_argument(s) {
+        return None; // a parameter's store belongs to the caller — not ours to transfer
+    }
+    // Survival MOVE only: a source that survives (read after) or is copied every loop iteration
+    // must keep its COPY (C86) — never move.
+    let survives = u.last_use_pos.get(&s).is_some_and(|&p| p > copy_end);
+    if survives || loop_surv {
+        return None;
+    }
+    // Owns a transferable store.
+    if u.def_vdb.contains_key(&s) || u.database_vars.contains(&s) {
+        Some(s)
+    } else {
+        None
+    }
+}
+
+/// @PLN90 phase B (B1.2) — the move-elidable construction/record copies of function `d_nr` (a
+/// dead-after owned-local source whose store can transfer into the field/element). Empty unless
+/// `LOFT_MOVE_ELIDE` is set. No lowering consumes these yet; this is the detection the B1.3+
+/// lowering will read. See [`MovePlan`] and `phase-b-design.md`.
+#[must_use]
+pub fn move_plans(data: &Data, d_nr: u32) -> Vec<MovePlan> {
+    let def = data.def(d_nr);
+    analyze_fn(&def.code, &def.variables, data, env_tier()).2
+}
+
+/// @PLN90 phase B (B1.2) — dump every move-elidable site when `LOFT_MOVE_ELIDE` is set; a no-op
+/// otherwise. Behaviour-neutral (detection only, no lowering). Called from `scopes::check`; the
+/// dump is the positive control that detection fires on the dead-source shapes and stays silent on
+/// survivors.
+pub fn dump_move_plans(data: &Data) {
+    if !crate::keys::move_elide_enabled() {
+        return;
+    }
+    let mut total = 0u32;
+    for d_nr in 0..data.definitions() {
+        let def = data.def(d_nr);
+        if !matches!(def.def_type, DefType::Function) {
+            continue;
+        }
+        for p in analyze_fn(&def.code, &def.variables, data, env_tier()).2 {
+            total += 1;
+            let at = p
+                .loc
+                .as_ref()
+                .map_or_else(String::new, |l| format!(" at {l}"));
+            let container = if p.container == u16::MAX {
+                "<slot>".to_string()
+            } else {
+                def.variables.name(p.container).to_string()
+            };
+            eprintln!(
+                "MOVE-PLAN fn={} kind={:?} container={} source={}{}",
+                def.name,
+                p.kind,
+                container,
+                def.variables.name(p.source),
+                at
+            );
+        }
+    }
+    eprintln!("MOVE-PLAN total={total}");
 }
 
 /// The elision tier selected by the environment: 0 (shipped param-source rule,

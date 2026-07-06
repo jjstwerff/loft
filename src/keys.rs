@@ -326,6 +326,17 @@ pub fn report_copies_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_REPORT_COPIES").is_some())
 }
 
+/// `LOFT_MOVE_ELIDE=1` — @PLN90 phase B (the C86 last-use MOVE-elision). B1.2: enables computing +
+/// dumping the `MovePlan` for a construction/record copy whose source is a dead-after owned local
+/// (transferable store). Detection only for now — no lowering, so the suite stays byte-identical;
+/// the lowering that consumes the plan lands in B1.3+. Off by default, one cached env read.
+/// See `use_analysis::move_plans` / `dump_move_plans`, phase-b-design.md.
+#[must_use]
+pub fn move_elide_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_MOVE_ELIDE").is_some())
+}
+
 /// `LOFT_PLN25_OPT=1` (@PLN25 slice a, IN PROGRESS) — make the scalar/field postfix `?`
 /// construct the real `Type::Optional` former instead of the Phase-0 no-op. Opt-IN while the
 /// slice-(b) peel audit (the ~280 `match Type` consuming sites that must peel `Optional`) is
