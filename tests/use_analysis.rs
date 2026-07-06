@@ -1554,3 +1554,44 @@ fn report_copies_is_user_facing_and_prints_once() {
         "the report should carry a rollup; stderr:\n{out}"
     );
 }
+
+/// Spawn `loft --check` with (or without) `LOFT_WARN_COPIES` and return its stderr.
+fn warn(src: &str, gated_on: bool) -> String {
+    use std::hash::{Hash, Hasher};
+    let dir = std::env::temp_dir().join("loft_use_analysis");
+    std::fs::create_dir_all(&dir).expect("probe dir");
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    src.hash(&mut h);
+    "warn".hash(&mut h);
+    gated_on.hash(&mut h);
+    let path = dir.join(format!("probe_{:016x}.loft", h.finish()));
+    std::fs::write(&path, src).expect("write probe");
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_loft"));
+    cmd.args(["--interpret", "--check"])
+        .arg(&path)
+        .env("LOFT_NO_CACHE", "1");
+    if gated_on {
+        cmd.env("LOFT_WARN_COPIES", "1");
+    }
+    let out = cmd.output().expect("spawn loft");
+    String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+/// @PLN90 W5 — the ENFORCED copy lint: `LOFT_WARN_COPIES` routes the Avoidable copy
+/// rows (the same survival-split set the `--report-copies` report shows) through the
+/// normal `Level::Warning` diagnostics channel, so they surface as compiler warnings.
+/// Default OFF stays byte-identical (silent). Promotes to default once the Avoidable
+/// set is drained (A2 / bucket-2 elision).
+#[test]
+fn warn_copies_enforced_lint_gated() {
+    let on = warn(REPORT_SRC, true);
+    assert!(
+        on.contains("warning:") && on.contains("avoidable copy"),
+        "LOFT_WARN_COPIES must emit avoidable-copy warnings; stderr:\n{on}"
+    );
+    let off = warn(REPORT_SRC, false);
+    assert!(
+        !off.contains("avoidable copy"),
+        "the lint must stay silent by default (gate off); stderr:\n{off}"
+    );
+}

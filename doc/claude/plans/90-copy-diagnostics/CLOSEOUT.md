@@ -147,25 +147,23 @@ catch-all default and the `r = x` value-vs-bind copy gap (memory: `pln85-over-fr
 **Exit:** no catch-all `Owned` default reachable on the borrow-return paths; oracle + fuzz green;
 STABILITY_ROADMAP `return-bind-ownership` row → CLOSED.
 
-### W5 — Enforced copy lint (the plan's namesake)  ·  Phase 2 · S–M · **after W1+W2**
+### W5 — Enforced copy lint (the plan's namesake)  ·  Phase 2 · **✅ CHANNEL BUILT (2026-07-06, gated off)**
 
-**Verified state:** the **report is built** (#510 — `report_copies`, `--report-copies`,
-`survival_class`, `CopyClass`, `MAT-WORKLIST`). MISSING = the **enforced channel**: route the
-report through the existing `Level::Warning` diagnostics path (`src/data.rs` `diags.add_at(...)`,
-rendered by `src/diagnostic_render.rs`) so **Avoidable** copies fire as default warnings; resolve
-`VerdictRow.loc` to real source spans (the location gap); tests + doc.
+**Landed (gated `LOFT_WARN_COPIES`, default OFF):** `use_analysis::warn_copies` routes every
+**Avoidable** survival-split copy through the normal `Level::Warning` diagnostics channel
+(`diags.add_at`), so it surfaces as a compiler warning with the copied type + the `&`/restructure
+hint. Called from `main.rs` after parse (before the diagnostics render); the `survival_on` gate now
+includes `warn_copies_enabled()` so the split is computed under the lint too. `Forced` /
+`Implicit` / `Eliminated` stay silent — only the actionable set warns. Default OFF is byte-identical
+(short-circuit). Test: `tests/use_analysis.rs::warn_copies_enforced_lint_gated` (on = warns, off =
+silent); suite 29/0.
 
-**Build steps:** (1) add a `warn_copies_enabled()` gate in `src/keys.rs` (default OFF → promote to
-default-on once the Avoidable set is drained); (2) for each **Avoidable** row emit
-`diags.add_at(Level::Warning, "copy", file, line, col, <msg + &/restructure hint>)`; **Forced** →
-informational, **Implicit/Eliminated** → silent; (3) resolve `VerdictRow.loc` to real spans;
-(4) tests in `tests/use_analysis.rs` + a `--report-copies` golden; (5) doc.
-
-**Depends on:** **W1 + W2 must land first** — `field_return` / `b.rows` are currently *Avoidable*;
-until they auto-elide the lint over-warns on copies the compiler is about to stop making (the
-Avoidable set must drain before the warning goes default-on). **Exit:** a `Level::Warning` per
-Avoidable copy with source loc + hint; corpus warning-count matches the drained Avoidable set
-(near-zero after W1/W2); lowering byte-identical.
+**Two follow-ups before default-on:** (a) **S5.2 — precise locations**: survival copies frequently
+carry no `Position` (the copy op has no span, `cur_pos` only tracks `Value::Span` nodes) — the same
+`<location unknown>` gap the `--report-copies` report has; the lint falls back to naming the
+enclosing function. Propagating positions to every survival copy is the refinement. (b) **the
+default-on flip** waits on W2/A2 draining the Avoidable set (else it over-warns on copies the
+compiler is about to stop making). **Report** (`--report-copies`) was already built (#510).
 
 ### W6 — par-dispatch native E0308  ·  P0 · S · **✅ DONE (2026-07-06)**
 

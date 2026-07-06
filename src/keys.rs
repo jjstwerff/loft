@@ -326,6 +326,19 @@ pub fn report_copies_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_REPORT_COPIES").is_some())
 }
 
+/// `LOFT_WARN_COPIES=1` — @PLN90 W5: the ENFORCED copy lint. Routes the user-facing copy report's
+/// **Avoidable** rows (a still-live structure duplicated where a borrow/move would do) through the
+/// normal `Level::Warning` diagnostics channel, so they surface as warnings during a normal compile
+/// (not only under `--report-copies`). Opt-IN + default OFF: the Avoidable set is not yet drained
+/// (A2/field-return still copies), so default-on would over-warn on copies the compiler is about to
+/// stop making — promote to default once that set is empty. One cached env read. See
+/// `use_analysis::warn_copies`, COPY_DIAGNOSTICS.md.
+#[must_use]
+pub fn warn_copies_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_WARN_COPIES").is_some())
+}
+
 /// @PLN90 W1: the temporary-subject borrow-return materialise (the coordinated promotion-verdict
 /// fix) — **DEFAULT ON**. When a `-> vector` fn's tail is a buffer-ABI call returning a borrow of a
 /// TEMPORARY subject the fn constructs (`fn h() -> vector<E> { g(Filled{..}) }`), the borrowed view
