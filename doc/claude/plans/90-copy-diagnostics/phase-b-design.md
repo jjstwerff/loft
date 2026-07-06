@@ -1,0 +1,145 @@
+<!--
+Copyright (c) 2026 Jurjen Stellingwerff
+SPDX-License-Identifier: LGPL-3.0-or-later
+-->
+
+# @PLN90 phase B — DESIGN: the last-use move-elision (grounded in captured IR)
+
+Scope + reframe: [phase-b-scope.md](phase-b-scope.md). This is the concrete, IR-grounded design
+that scope's slice 1 (the loft-codegen gate) produces. Captured bytecode:
+[bytecode-comparisons/phaseB-captures.txt](bytecode-comparisons/phaseB-captures.txt) (+ the three
+`phaseB-*.loft` probes). Every claim below is read off that capture, not guessed.
+
+## The one invariant (the hypothesis to enforce)
+
+> A construction (`S { f: src }`) or record (`v[i] = e`, `o.f = src`) copy whose **source is a
+> named var, provably dead after the copy** is lowered as a **store transfer** — the source's
+> existing store *becomes* the field/element (no fresh field store, no element copy, no separate
+> source-free). It is **value-identical** to the copy (never observable — C86: an elision, not a
+> semantic), **leak- and double-free-free on both backends**, and a **surviving** source keeps its
+> copy untouched.
+
+This is C86's own last-use rule (`ElidePlan` is exactly this analysis) applied to two shapes it
+does not yet cover. The *decision* already exists — the phase-A survival split classifies these as
+`move: source consumed`. Phase B adds the **lowering**, not new analysis.
+
+## Grounded: current → target (from the capture)
+
+**Case A — construction, dead source** (`base=[10,20,30]; a=Bag{items:base}; a.items[1]`):
+
+| current (copy-then-free) | target (move) |
+|---|---|
+| `OpDatabase(a)` — a's store, items **empty** | `OpDatabase(a)` — a's store, items **empty** |
+| `OpAppendVector(a.items, base)` — **copy** store#2→store#3 | *(dropped)* |
+| `OpFreeRef(a)` — frees a + a.items(store#3) | `OpFreeRef(a)` — frees a + a.items(**= store#2**) |
+| `OpFreeRef(__vdb_1)` — frees base(store#2) | *(dropped — store#2 moved into a)* |
+| — | **new:** `a.items := base` (transfer store#2's DbRef into the field) |
+
+Net: **−1 store alloc, −1 element-copy, −1 free**; base's store-free *folds into* a's scope-exit
+free. **Record case B (`a.items = base`) is worse today — TWO copies** (`base→__p154_rhs→a.items`);
+the same transfer removes both. The efficiency target is the literal `Bag{items:[…]}` (one store,
+field filled in place, no copy) — the move must match it.
+
+## The chokepoint: one decision, read by three emit sites
+
+`ElidePlan` (`use_analysis.rs`) already carries "this copy is elidable" for the var-buffer idiom,
+consumed by `scopes::elide_borrows`/`elide_rewrite`. Phase B extends it: a **`MovePlan`** (or a new
+`ElidePlan` variant) for a construction/record copy whose source is a dead named var. The plan is
+computed **once** (from the survival `move` fact) and the three lowering sites **read** it — none
+re-derives it (the design-protocol re-assertion count = **3**, all reading one fact):
+
+1. **Suppress the field copy** — drop `OpAppendVector(field, src)` / the record-copy `OpCopyRecord`
+   (+ the `__p154_rhs` temp + its append/clear for the record case).
+2. **Emit the transfer** — `field := src`'s DbRef (the field's slot now holds the source's store
+   handle). The exact op: a whole-vector/record **field-set-by-handle** (mirror how the local-var
+   slot receives a moved store in the var-buffer elision — `elide_rewrite` re-points reads today;
+   here we re-point the *field slot* to the source store). **Crux (the capture exposes it):**
+   `OpDatabase(a)` already pre-allocates an **empty** `a.items` store (store#3 in the trace) so the
+   current `OpAppendVector` has a target. The transfer must **not orphan store#3** — either alloc
+   `a` with the field left NULL and set it to the source store, or **free the empty placeholder
+   before adopting** (the exact pattern the #506 adopt-arm used: free the real distinct `_dst`
+   before `var = _src`; `generation/dispatch.rs` + `displaced_owned_slots`). Skipping this is the
+   F2 leak.
+3. **Suppress the source-free** — drop `OpFreeRef(src)` at scope exit; the source store is now owned
+   by the field and freed transitively when the container is freed.
+
+Sites (1)+(3) are *removals* keyed on the plan; (2) is the one *addition*. This is the same
+ownership-transfer class as the shipped var-buffer `ElidePlan`, so the free-side bookkeeping
+(`scopes.rs` scope-exit frees, `displaced_owned_slots`) is the code to teach, not to invent.
+
+## Both generators (the both-backends rule)
+
+Interp (`src/state/codegen.rs` + the `scopes.rs` elide pass) and native (`src/generation/`) are
+separate generators reading the same IR. The `MovePlan` is produced once in the post-parse pass
+(`scopes::check`, where `elide_borrows` already runs); **both** backends then lower the transferred
+field-set. A rung is closed only when BOTH emit the move and pass value+leak+poison. Capture the
+native target Rust in slice 1b (the interp capture above is the spec for the shared IR; native's
+`generation/` must emit the equivalent store-handle set + the dropped free).
+
+## Boundary matrix (assert value + length + **leak + poison**, both backends)
+
+`{construction S{f:src}, record v[i]=e, record o.f=src} × {source DEAD (must MOVE), source SURVIVES
+(must COPY — C86), source MUTATED after (must COPY), source is a param (never dead — must COPY),
+nested field s.a.b = src, source in a loop} × {interp, native}`.
+
+- **DEAD** cells: 0 runtime copies (`LOFT_COPY_DUMP`), value identical, no leak, no double-free.
+- **SURVIVES / MUTATED / param** cells: unchanged from today (still copy) — proves phase B touches
+  only what C86 sanctions. These are the falsification cells: if a survivor elides, C86 is broken.
+- **leak** must be checked *with value+length* (a move that drops the field reads leak-free but
+  wrong; only value+length catches it).
+
+## Failure modes → the guard that kills each (design-protocol)
+
+| # | failure | why | guard |
+|---|---|---|---|
+| F1 | **double-free** — source freed by both the transfer-owner and the old `OpFreeRef(src)` | forgot to suppress site (3) | POISON + native leak-check on every DEAD cell; the plan MUST drop the source-free |
+| F2 | **leak** — source store transferred but the field-free doesn't reach it | the field slot didn't actually adopt the store | `LOFT_STORES=warn` / `LOFT_NATIVE_LEAK_CHECK`; assert store count returns to base |
+| F3 | **survivor elided** — a live source becomes the field's store, later read/mutation now aliases | the dead-source fact was wrong / too wide | the SURVIVES + MUTATED matrix cells (must still copy); this is the C86 boundary |
+| F4 | **one backend moves, the other copies** | the plan lowered in only one generator | both-backends matrix; not landable until both move |
+| F5 | **nested / aliased field** (`s.rows[i] = src`) transfers into an aliased slot | the field slot is itself a view | reject the un-transferable case cleanly (fall back to copy — loud, never silent) |
+
+## Verifiable slices (each: matrix on BOTH backends, gated behind a flag, suite byte-identical off)
+
+- **B1.1 — gate (DONE for interp).** The capture above is the spec; add the native target Rust
+  beside it. Prove the WORKING move by hand-writing/patching one case and running it value+leak
+  clean on both backends before touching the generator.
+- **B1.2 — the plan.** `MovePlan { field-target, source-var, container }` produced in the post-parse
+  pass from the survival `move` classification (source = a dead named var; NOT a param; NOT
+  mutated-after; NOT in a loop where the source outlives the body). Gate on `LOFT_MOVE_ELIDE`
+  (default off). No lowering yet → suite byte-identical; dump the plan to prove detection matches
+  the survey's `move` rows exactly (positive control: fires on `make_dead`, silent on `keep_alive`).
+- **B1.3 — interp lowering, construction first.** `elide_rewrite` (or a sibling) consumes the plan:
+  drop the field copy, emit the field-set-by-handle, drop the source-free. Matrix the construction
+  column, interp only. Then the record column (`v[i]=e`, `o.f=src` — remove the double-copy).
+- **B1.4 — native lowering.** The same plan in `generation/`. Matrix both backends, full grid.
+- **B1.5 — graduate + flip.** Guards to `tests/scripts/` + `tests/leak_cases/`; flip
+  `LOFT_MOVE_ELIDE` default-on once every cell is green; keep `LOFT_NO_MOVE_ELIDE` opt-out.
+  Re-run the survey — the `move` rows now show **0** runtime copies (`LOFT_COPY_DUMP`).
+
+## Falsification probes (cheapest thing that could break each load-bearing claim)
+
+1. *Claim: the source-free folds into the container's free (no leak, no double-free).* Probe: the
+   DEAD construction cell under `LOFT_POISON=1` + `LOFT_STORES=warn` — must be clean. If it
+   double-frees, site (3) suppression is wrong; if it leaks, the field didn't adopt the store.
+2. *Claim: a survivor is untouched.* Probe: `keep_alive` (base read after) must STILL emit the
+   copy (`LOFT_COPY_DUMP` shows the append) — value-identical to today. A silent 0-copy here = C86
+   broken.
+3. *Claim: the decision is the phase-A `move` fact, not a new re-derivation.* Probe: the B1.2 plan
+   dump must be exactly the survival split's `bucket=implicit [move: source consumed]` rows — no
+   more, no fewer. A divergence means phase B re-derived (the wrong chokepoint).
+4. *Claim: value-identity across backends.* Probe: the differential oracle (`tests/oracle/`) over
+   the matrix — interp and native must agree on stdout/exit/leak for every cell.
+
+## Do-not-ship (revert, don't push through)
+
+Any DEAD cell double-frees/leaks (F1/F2); a SURVIVES/MUTATED cell elides (F3, C86 broken); one
+backend moves and the other copies (F4); the plan diverges from the survival `move` rows (re-derivation).
+
+## Why this is safe to build on (per the "do the complexity now" rule)
+
+The move-elision is the store-lifetime engine's **positive** direction (transfer a store INTO a
+container), the mirror of @PLN85 P4's borrow-return (borrow a field OUT —
+[borrow-return/DESIGN.md](borrow-return/DESIGN.md)). Landing it makes the survival `move` fact
+*load-bearing* (not just diagnostic), which is the foundation the rest of phase B / the C86 elision
+completeness builds on — and it retires a real, measured cost (every dead-source construction /
+record set currently copies-then-frees).

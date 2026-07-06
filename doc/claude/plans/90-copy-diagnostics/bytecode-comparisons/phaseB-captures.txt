@@ -1,0 +1,46 @@
+@PLN90 phase B — captured IR (loft-codegen gate). Probes: phaseB-construct-move.loft,
+phaseB-construct-literal.loft, phaseB-fieldset.loft.  interp bytecode via LOFT_LOG=static;
+store trace via LOFT_LOG=ref_debug; runtime copies via LOFT_COPY_DUMP.
+
+======================================================================================
+CASE A — construction, source DEAD (make_dead: `base=[10,20,30]; a=Bag{items:base}; a.items[1]`)
+--- CURRENT (copy-then-free) ---
+  OpDatabase(__vdb_1, 21)                                  # store#2: base's vector backing
+  base = OpGetField(__vdb_1, 0, 22)                        # base = the vector in store#2
+  OpPreAllocVector(base, 3, 8) + fill                      # base = [10,20,30]
+  a = null ; OpDatabase(a, 64)                             # store: a's Bag; items field empty
+  OpAppendVector(OpGetField(a,0,22), base, 0)             # >>> COPY store#2 -> a.items (store#3)
+  __ret = OpGetInt(OpGetVector(OpGetField(a,0,22),8,1),0) # read a.items[1]
+  OpFreeRef(a)                                             # free a (+ a.items = store#3)
+  OpFreeRef(__vdb_1)                                       # >>> free base (store#2) — the dead source
+  store trace: PreAlloc r=store#2 cap=3 ; AppendVector r=store#3 other=store#2 ; Free #3 ; Free #2
+  runtime: [copy] vector-append elements=3
+--- TARGET (move / store transfer) ---
+  OpDatabase(__vdb_1,21); base=...; fill                   # unchanged — base is built as now
+  a = null ; OpDatabase(a, 64)                             # a's Bag store, items empty
+  <a.items := base's DbRef (store#2)>                      # >>> TRANSFER: no store#3 alloc, no copy
+  __ret = read a.items[1]
+  OpFreeRef(a)                                             # frees a + a.items (= store#2)
+  <NO OpFreeRef(__vdb_1)>                                  # base's store moved into a
+  net: dropped 1 store alloc (store#3), 1 element-copy, 1 free; the source-free folds into a's
+
+======================================================================================
+CASE B — record / field-set, source DEAD (`a.items = base`)  — TWO copies today
+--- CURRENT ---
+  OpDatabase(a,64); OpDatabase(__vdb_1,21); fill base
+  OpAppendVector(__p154_rhs, base, 0)          # copy base -> temp
+  OpClearVector(OpGetField(a,0,22))            # clear a.items
+  OpAppendVector(OpGetField(a,0,22), __p154_rhs, 0)  # copy temp -> a.items
+  OpFreeRef(__p154_rhs) ; OpFreeRef(a) ; OpFreeRef(__vdb_1)
+--- TARGET ---  a.items := base (store transfer), drop both copies + the temp + base-free.
+
+======================================================================================
+REFERENCE — the no-copy efficiency target (`a = Bag{items:[10,20,30]}`, literal into field)
+  OpDatabase(a, 64)                            # ONE store; literal built in-place into a.items
+  read a.items[1] ; OpFreeRef(a)               # no base, no copy, no extra free
+  (This is what the dead-source MOVE should match in cost.)
+
+======================================================================================
+CONTRAST — source SURVIVES (keep_alive: `... base[1] + a.items[1]`) — COPY REQUIRED (C86)
+  identical to CASE A but base is read after → runtime STILL [copy] vector-append elements=3.
+  The move-elision must NOT fire here (a live source must not become a.items's store).

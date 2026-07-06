@@ -13,6 +13,10 @@ to close): [unbound-copy-lint.md](unbound-copy-lint.md).** Phase-A survey + the 
 [survey-findings.md](survey-findings.md).
 **Phase B scope (drain the elidable copies — the C86 last-use MOVE-elision, NOT the Avoidable
 `&`-hints): [phase-b-scope.md](phase-b-scope.md).**
+**Phase B DESIGN — grounded in captured IR (the invariant · current→target IR · the one
+chokepoint read by 3 emit sites · both-generator plan · boundary matrix · failure modes ·
+falsification probes · verifiable slices): [phase-b-design.md](phase-b-design.md)** (captures:
+[bytecode-comparisons/phaseB-captures.txt](bytecode-comparisons/phaseB-captures.txt)).
 
 ## Status
 

@@ -1,0 +1,15 @@
+// @PLN90 phase B — the construction move-elision target case.
+// `base` is a heap vector, DEAD after the construction → C86 sanctions eliding the copy to a move.
+struct Bag { items: vector<integer> }
+fn make_dead() -> integer {
+    base: vector<integer> = [10, 20, 30];   // last use is the construction below
+    a = Bag { items: base };
+    a.items[1]
+}
+// Contrast: `base` SURVIVES (read after) → C86 keeps the COPY (must NOT elide).
+fn keep_alive() -> integer {
+    base: vector<integer> = [10, 20, 30];
+    a = Bag { items: base };
+    base[1] + a.items[1]
+}
+fn main() { println("{make_dead()} {keep_alive()}"); }
