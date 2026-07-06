@@ -52,17 +52,18 @@ non-stable slot / source read between build and copy," all fixed via a guard lay
 (issues 748, leak 49, native, wrap, native_scripts, loft_suite); CI green incl. the ASan UAF/OOB
 gate. Detail: [phase-b-design.md § B1.5](phase-b-design.md).
 
-**@PLN90 remains OPEN — but both P0 correctness bugs AND the namesake lint channel are now done.**
-Phase B (the *elimination* half) shipped. Landed 2026-07-06: **W6** (par-dispatch over
-`vector<fn-ref>` native E0308) · **W1 = A1b** (the temp-subject borrow-return UAF — the wide-release
-blocker, default on) · **W5** (the enforced copy-lint channel — Avoidable copies route through
-`Level::Warning`, gated `LOFT_WARN_COPIES`, default off pending the Avoidable-set drain). What
-remains is the follow-on P1 arc: **A2** (field→alias optimisation — *couples with the caller-side
-materialise or it re-opens the A1b UAF class for temp-arg bindings*), **W5 default-on** (after the
-Avoidable set drains) + **S5.2** (precise copy locations), **Phase 3** (explicit-copy syntax — needs
-a keyword-reservation design decision), **O-Complete** (analysis totality proof — W1 supplied the
-missing representation), and the empty-arm parse normalise (robustness). Concrete build steps +
-status per item: [CLOSEOUT.md](CLOSEOUT.md); prioritised view: [REMAINING.md](REMAINING.md).
+**@PLN90 — 6 of 9 work items DONE or RESOLVED (2026-07-06); 3 open.** Phase B (the *elimination*
+half) shipped. **Done:** **W6** (par-native E0308, P0) · **W1 = A1b** (the temp-subject
+borrow-return UAF — the wide-release blocker, default on) · **W5** (the enforced copy-lint channel,
+gated `LOFT_WARN_COPIES`) · **S5.2** (precise lint locations). **Resolved:** **W2/A2 — WON'T DO**:
+three matrix-guarded prototypes proved a struct-field return **must copy** per the decided #415/C86
+value-semantics contract (`getv(b){ b.v }` must establish a new owner — aliasing would let a later
+`b.v += …` change the caller's result); the copy is FORCED, not avoidable. **W3** (drop-the-buffer) is
+MOOT. **W9** (drain bucket 2) has no safe drain — the remaining Avoidable copies are
+C86-contract-owned. **Open (3):** **W4** (O-Complete — needs the @PLN89 nightly oracle infra), **W7**
+(Phase 3 syntax — a keyword-reservation design decision), **W8** (empty-arm parse normalise —
+HIGH-risk parser surgery, zero correctness gain). Concrete build steps + status per item:
+[CLOSEOUT.md](CLOSEOUT.md); prioritised view: [REMAINING.md](REMAINING.md).
 
 **Phase 1** — the decision covers every structure-copy emission ([phase1-inventory.md](phase1-inventory.md)).
 `LOFT_COPY_DUMP` is the runtime ground truth; the verdict (`use_analysis`, **route 1** —
