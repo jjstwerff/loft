@@ -30,13 +30,15 @@ priority, done after the P0 issues.** Each item points at its canonical home.
 return-bind-ownership class must be **closed, not merely quiet** (reopened 2026-06-21 after a
 dogfood UAF). Three concrete open pieces:
 
-- **A1b — temporary-subject borrow UAF.** A borrowed return (the match-arm `{ items }` now,
-  and the struct-field `b.rows` if A2 lands) whose **subject is freed before the result's
-  last use** is a use-after-free. `--native` already carries it latently; A1 (`f70a729d`)
-  made interp consistent but did **not** close the hole. Fix: the caller materialises a copy
-  at a call site where the subject does not out-live the result — the `deps`/lifetime
-  decision. Design: [borrow-return/DESIGN.md](borrow-return/DESIGN.md) (slice 2 / failure
-  paths F1–F2). **Effort: M.**
+- ~~**A1b — temporary-subject borrow UAF.**~~ **FIXED (2026-07-06, default ON, `LOFT_NO_A1B`
+  opts out).** A `-> vector` fn returning a borrow of a temporary subject it constructs
+  (`h() { g(Filled{..}) }`) dangled once the temp was freed at scope exit. Root: the
+  `one_buffer_chain` collapsed the subject store, `g`'s buffer, and `__retbuf` onto ONE work-ref
+  (subject `Bind{substitute}`'d into the buffer, buffer `Rename`'d to `__retbuf`). Fix: a
+  coordinated verdict change in `classify_ret_promotion` — skip the subject ref (distinct local,
+  freed after the copy), materialise the buffer ref into a separate `__retbuf` — three distinct
+  stores. Matrix green both backends under `LOFT_POISON`; exposure sweep clean. Guard
+  `tests/scripts/85-temp-subject-borrow-return-uaf.loft`. [borrow-return/DESIGN.md § A1b gate-5](borrow-return/DESIGN.md).
 - ~~**#462 — residual native record leak.**~~ **CLOSED** (verified 2026-07-06). The GitHub
   issue is closed and the compact repros run clean on both backends — subsumed by the @PLN85
   `store/adopt-free` siblings (#306/#464/#494/#504), *not* by A1b (a different representation:

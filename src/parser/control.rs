@@ -5657,6 +5657,55 @@ impl Parser {
         temps.len()
     }
 
+    /// A1b (@PLN90 W1) — the return tail is a buffer-ABI CALL that borrows a
+    /// TEMPORARY subject the fn constructs: `g(Filled{..})` where `g` returns a
+    /// vector via a hidden buffer, and a VISIBLE heap param's arg is an inline
+    /// construct (NOT a bare `Var` — a struct/enum/vector literal, a local freed at
+    /// scope exit). Renamed onto `__retbuf` the borrowed view dangles once the temp
+    /// is freed (`cell-escape-temp` UAF). Robust across both parse passes: the
+    /// construct is a pre-lowered expression in pass 1 and an `Object` block in pass
+    /// 2 — neither a `Var`, whereas the safe `g(c)` param arg IS a `Var` in both.
+    fn tail_call_borrows_temp_subject(&self, body: &[Value]) -> bool {
+        let Some(last) = body.last() else {
+            return false;
+        };
+        if Self::collect_hidden_ref_args(last, &self.data).is_empty() {
+            return false;
+        }
+        let mut node = last.unspan();
+        loop {
+            match node {
+                Value::Block(bl) => match bl.operators.last() {
+                    Some(x) => node = x.unspan(),
+                    None => return false,
+                },
+                Value::Insert(ops) => match ops.last() {
+                    Some(x) => node = x.unspan(),
+                    None => return false,
+                },
+                Value::Return(inner) => node = inner.unspan(),
+                _ => break,
+            }
+        }
+        let Value::Call(d_nr, args) = node else {
+            return false;
+        };
+        let callee = self.data.def(*d_nr);
+        if !matches!(callee.returned(), Type::Vector(_, _)) {
+            return false;
+        }
+        let attrs = callee.attributes();
+        args.iter().enumerate().any(|(i, a)| {
+            attrs.get(i).is_some_and(|at| {
+                !at.hidden
+                    && matches!(
+                        at.typedef,
+                        Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+                    )
+            }) && !matches!(a.unspan(), Value::Var(_))
+        })
+    }
+
     /// @PLN85 D-own-1 slice 3 — the per-var verdict of `ref_return`'s
     /// promotion loop as a PURE selector (the classify/apply split
     /// `classify_text_dep` / `classify_vector_delivery` use, applied to the
@@ -5681,6 +5730,13 @@ impl Parser {
         }
         let n = self.vars.name(v);
         let is_work_ref = n.starts_with("__ref_") || n.starts_with("__rref_");
+        // A1b (@PLN90 W1, gated) — the tail borrows a temporary subject the fn
+        // constructs. For the SITE-VALUE work-ref (g's buffer) suppress the Rename
+        // and materialise into `__retbuf` (an owned copy); for the SUBJECT work-ref
+        // (an inner ref the site adopts) SKIP promotion so it keeps its own store,
+        // freed after the copy — the three stores stay distinct (no collapse UAF).
+        let a1b = crate::keys::a1b_materialise_enabled() && self.tail_call_borrows_temp_subject(body);
+        let a1b_site = a1b && ctx.site_value == Some(v);
         // A reassigned returned local must NOT be NRVO-promoted — but a NAMED
         // local at a vector fn's body tail still DELIVERS: it falls through to
         // the `Bind` copy leg (reassignment is irrelevant to a single
@@ -5723,7 +5779,14 @@ impl Parser {
         let site_adopts_v = ctx
             .site_value
             .is_some_and(|sv| self.vars.tp(sv).depend().contains(&v));
-        if is_work_ref && ctx.site_value.is_some() && ctx.site_value != Some(v) && !site_adopts_v {
+        if is_work_ref
+            && ctx.site_value.is_some()
+            && ctx.site_value != Some(v)
+            && (!site_adopts_v || a1b)
+        {
+            // A1b — `a1b` overrides `site_adopts_v`: the site borrows this subject
+            // ref, but it must be COPIED (materialised), not aliased, so keep the
+            // subject a distinct local instead of substituting it into the buffer.
             return RetPromotion::SkipInnerRef;
         }
         // A MID-BODY vector return never renames: the rename makes the site's
@@ -5750,6 +5813,10 @@ impl Parser {
         let allow_rename = !(bound_already
             || reassigned
             || returns_own_field
+            // A1b — the site-value (g's buffer) must NOT rename onto __retbuf (that
+            // aliases the borrowed subject into the return); fall through to Bind so
+            // the return materialises an owned copy into a distinct __retbuf.
+            || a1b_site
             || (ctx.site == RetSite::MidReturn && matches!(ctx.ret, Type::Vector(_, _))));
         if allow_rename
             && let Some(&buf_attr) = self.data.def(self.context).attr_names.get("__retbuf")
@@ -5770,7 +5837,10 @@ impl Parser {
             return RetPromotion::Bind {
                 buf_attr,
                 buf_var,
-                substitute: is_work_ref,
+                // A1b — the site-value ref materialises (copies) its borrowed result
+                // into __retbuf rather than substituting the buffer var in place
+                // (which would re-alias the freed subject).
+                substitute: is_work_ref && !a1b_site,
             };
         }
         RetPromotion::Grow

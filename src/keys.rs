@@ -326,6 +326,21 @@ pub fn report_copies_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_REPORT_COPIES").is_some())
 }
 
+/// @PLN90 W1: the temporary-subject borrow-return materialise (the coordinated promotion-verdict
+/// fix) — **DEFAULT ON**. When a `-> vector` fn's tail is a buffer-ABI call returning a borrow of a
+/// TEMPORARY subject the fn constructs (`fn h() -> vector<E> { g(Filled{..}) }`), the borrowed view
+/// dangles once the temp is freed at scope exit — a use-after-free (`cell-escape-temp`, loud on both
+/// backends under `LOFT_POISON`). This SKIPS promoting the subject work-ref (keeps it a distinct
+/// local, freed after the copy) and MATERIALISES the buffer work-ref into `__retbuf` (an owned copy)
+/// instead of renaming it — so the subject, the scratch buffer, and `__retbuf` stay three distinct
+/// stores (no collapse). Opt OUT with `LOFT_NO_A1B` (restores the old collapse — the UAF). One
+/// cached env read. See `classify_ret_promotion`, borrow-return/DESIGN.md § A1b.
+#[must_use]
+pub fn a1b_materialise_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_A1B").is_none())
+}
+
 /// The @PLN90 phase B last-use MOVE-elision REWRITE — **DEFAULT ON** (B1.5 flip). Build a
 /// dead-after owned source directly into its destination field/element instead of copy-then-free,
 /// for every proven-safe shape (Record `v[i]=e`/`o.f=src`; Construct field-append, fresh

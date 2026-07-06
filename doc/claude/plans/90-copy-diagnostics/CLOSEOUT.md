@@ -40,9 +40,21 @@ to pick up #514).
 
 ## Work items
 
-### W1 — A1b: temporary-subject borrow-return UAF  ·  P0 · **M · HIGH risk** · the release blocker
+### W1 — A1b: temporary-subject borrow-return UAF  ·  P0 · **✅ DONE (2026-07-06)**
 
-**Verified state:** OPEN. [borrow-return/cell-escape-temp.loft](borrow-return/cell-escape-temp.loft)
+**Landed (default ON, `LOFT_NO_A1B` opts out):** a coordinated promotion-verdict change in
+`classify_ret_promotion` (`src/parser/control.rs`). The collapse was two verdicts merging three
+roles onto one work-ref — the subject ref `Bind{substitute}`'d into the buffer, the buffer ref
+`Rename`'d to `__retbuf`. Detected by `tail_call_borrows_temp_subject` (tail is a buffer-ABI vector
+call whose visible heap-param arg is an inline construct, not a bare `Var` — robust across both parse
+passes), the fix SKIPS the subject ref (keeps it a distinct local, freed after the copy) and
+MATERIALISES the buffer ref into a separate `__retbuf` (owned copy) instead of renaming it → three
+distinct stores, no collapse. Matrix green both backends under `LOFT_POISON` (all six cells);
+gate-off byte-identical; flag-on exposure sweep clean (issues 748 / wrap 51 / leak 49 / native 9 /
+native_scripts / native_dir, 0 failures). Guard: `tests/scripts/85-temp-subject-borrow-return-uaf.loft`.
+Full mechanism: [borrow-return/DESIGN.md § A1b gate-5](borrow-return/DESIGN.md).
+
+**Verified state (before fix):** OPEN. [borrow-return/cell-escape-temp.loft](borrow-return/cell-escape-temp.loft)
 fails **both** backends — interp assertion-fails (`len(a)=0`), native panics — loud under
 `LOFT_POISON`. A1 (`f70a729d`) fixed the interp `gen_if` derail but did **not** close the
 lifetime hole; `--native` carries it latently.

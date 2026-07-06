@@ -343,6 +343,35 @@ change). Option (a) is narrower and preferred.
 delivery materialise as the second half. The predicate + gate scaffolding is validated and cheap to
 reconstruct; the remaining build is the upstream store-allocation fix.
 
+## A1b — gate-5: FIXED (2026-07-06) — the coordinated promotion-verdict change
+
+The collapse is the two promotion verdicts merging three roles onto one work-ref: the SUBJECT ref
+(`__ref_2`) takes `Bind{substitute:true}` (merged into the buffer) *because* the site value borrows
+it (`site_adopts_v`), and the BUFFER/site-value ref (`__ref_1`) takes `Rename` (becomes `__retbuf`).
+The fix overrides **both**, in `classify_ret_promotion`, for the temp-subject shape (detected by
+`tail_call_borrows_temp_subject`: the tail is a buffer-ABI vector call whose visible heap-param arg
+is an inline construct — NOT a bare `Var` — robust across both parse passes):
+
+- **Subject ref** → `SkipInnerRef` (override `site_adopts_v`): keep it a **distinct local**, freed
+  after the copy — it is COPIED, not aliased, into the return.
+- **Buffer/site-value ref** → suppress `Rename`, force `Bind{substitute:false}`: **materialise** an
+  owned copy into a separate `__retbuf` instead of renaming the buffer onto (and aliasing) it.
+
+Result — the proven 3-store shape, emitted for `cell-escape-temp` (introspected):
+```
+{#one_buffer_vec_copy:vector["__retbuf"]
+  OpClearVector(__retbuf);                                  // distinct owned store
+  OpAppendVector(__retbuf, n_g({Object→__ref_1 …}, __ref_2));  // subject __ref_1, scratch __ref_2
+  OpFreeRef(__ref_1); OpFreeRef(__ref_2);                   // free subject + scratch AFTER the copy
+  return __retbuf; }
+```
+Three distinct stores; the borrow is copied into `__retbuf` while the subject is live, then both are
+freed. **Default ON** (`LOFT_NO_A1B` opts out → restores the collapse/UAF). Matrix green on BOTH
+backends under `LOFT_POISON` (all six cells: named/temp/escape/escape-temp + FIXED); gate-off is
+byte-identical (short-circuit). **Flag-on exposure sweep clean** — issues 748, wrap 51, leak 49,
+native 9, native_scripts, native_dir all 0 failures with the fix on. Guard:
+`tests/scripts/85-temp-subject-borrow-return-uaf.loft` (both backends). **A1b CLOSED.**
+
 ## Connection back
 
 This is the `Borrow`-set growth the @PLN90 north-star is about: field-return moves from
