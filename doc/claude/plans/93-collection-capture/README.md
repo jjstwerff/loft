@@ -27,12 +27,15 @@ type for the body from `capture_context`) works. Findings:
   (Phase 3b); lookup covers the routing use case.
 - **C5** — leak-clean on the lookup surface (pending final `LOFT_STORES=warn` gate).
 
-**Shippable increment: read-only LOOKUP capture, both backends.** Mutation +
-iteration are rejected with a clear parse-time error (no silent breakage) and become
-follow-up phases. Promoted from
+**LANDED — read-only LOOKUP capture, both backends** (Steps 0–5). A bare
+`hash`/`vector`/`sorted`/`index` captured into a closure supports key/index lookup
+on interpret + native, leak-clean, including escape past scope. Mutation (`+=`,
+`h[k]=`) and iteration (`for e in h`) through a bare capture are rejected with a
+clear parse-time error (no silent breakage). Tests `tests/scripts/505` + `506`;
+LOFT.md § Closures documents the contract. **Phase 6 (deferred):** full
+mutation-through + iteration over a bare capture. Promoted from
 [loft-lang/loft#511](https://github.com/loft-lang/loft/issues/511); the struct-wrap
-workaround already unblocks that consumer, so this is an ergonomics improvement.
-Tracked as `@PLN93`.
+workaround already unblocks that consumer. Tracked as `@PLN93`.
 
 ## Goal
 
@@ -116,8 +119,8 @@ and the probes are graduated to `tests/scripts/NNN-collection-capture.loft`.
 | **2** — vector / sorted / index read-only (C4: one family) | **Done** — all lookup, both backends |
 | **3a** — reject mutation through a bare capture (loud) | **Done** — `+=` / `h[k]=` rejected (parser/expressions.rs) |
 | **3b** — reject iteration through a bare capture (loud; native defect) | **Done** — `for e in h` rejected (parser/collections.rs) |
-| **4** — escape / lifetime guard (C5) | Open — DbRef is a non-owning leaf (borrow); leak-clean on the surface. Escape past the collection scope still to verify (existing #318 guard) |
-| **5** — harden + land: `tests/scripts/505` (lookup) + `506` (rejections), full suites, docs, close #511 | **In progress** — scripts + LOFT.md done; full suite running |
+| **4** — escape / lifetime guard (C5) | **Done** — a closure capturing a local collection returned past its scope reads correctly + leak-clean on both backends (the store survives with the escaping closure) |
+| **5** — harden + land: `tests/scripts/505` (lookup) + `506` (rejections), full suites, docs, close #511 | **Done** — full suite green (canonical rebuild order), LOFT.md § Closures updated |
 | **6 (follow-up)** — mutation-through + iteration over a bare capture (write-back + native for-loop codegen) | Deferred — lookup covers the routing use case |
 
 ## Out of scope (record, don't absorb)
