@@ -215,10 +215,19 @@ vs `__retbuf`/materialise) — the exact return-buffer-selection machinery W1/W2
 it first would churn the code the blocker touches (violates "no simplify during debug"). Do it
 **after** W1/W2, once the borrow-return delivery is unified, so both formattings converge on the
 settled arm-value delivery.
-**Build steps:** at parse, classify a block whose trailing expression is the arm value the same as
-the single-line arm-value form (deliver the trailing expr, not "statements + null return"); then
-both lower to one canonical IR. **Depends on:** W1, W2 (delivery unification). **Exit:** both
-formattings produce identical IR; suite green.
+**Root-caused (2026-07-06, introspected).** `[]` (an EMPTY vector literal) parses to an empty
+`Value::Insert([])`, which `move_insert_elements` folds into the block as **nothing** — so the
+`{ [] }` arm value collapses in BOTH formattings: single-line → a `Null` else (a value-`if`,
+`jo_arm_copy` into `_mvcopy_1`), multi-line → an empty `{#block}` + a `return null` fallthrough (a
+statement-`if`, materialise via `__vdb_1`/`__retbuf`). Both yield `len 0`; the delivery difference is
+the surrounding `Value::Line` structure (multi-line inserts line markers) steering `block_result` down
+the two paths. The trailing-`Line` pop (`control.rs:522`) already fires; the residual is the empty-Insert
+fold + the leading line marker.
+**Build steps:** make an empty vector literal `[]` in a value block lower to an explicit empty-vector
+VALUE (not a folded-away empty `Insert`), so the arm carries a real value in both formattings and
+`block_result` picks one delivery. **Risk: HIGH** — touches empty-literal parsing × block-value ×
+match/if-arm delivery; broad blast radius for **no correctness gain** (both run correctly today).
+**Depends on:** W1, W2. **Exit:** both formattings produce identical IR; suite green.
 
 ### W9 — Drain bucket 2 (grow the auto-elision set)  ·  north-star · L incremental · FOLLOW-ON, not a close gate
 
