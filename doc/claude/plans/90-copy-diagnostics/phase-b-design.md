@@ -120,6 +120,35 @@ capture surfaced, to fold into B1.3:
   var-buffer elide) is a real design knob — likely: run var-buffer elision first, then move-elide
   on the collapsed IR.
 
+## B1.3 mechanism (investigated — the transfer primitive; the loft-codegen gate for the lowering)
+
+Captured the ops the move rewrite must emit/drop, and found the one missing primitive:
+
+- **The move IS an `adopt`** — write the source's `DbRef` into the destination slot; the source
+  stops owning the store. The runtime already does this for **var slots**: `OpPutRef`
+  (`fill.rs::put_ref` = `put_var(pos, dbref)`) and `bind_or_copy`'s OWNED arm (`mut_var = src`,
+  io.rs:1624). This is the mechanism the var-buffer `ElidePlan` transfer uses.
+- **But every field-write today COPIES** — `a.items = base` → `OpClearVector` + `OpAppendVector`
+  into the field's *existing* store; `s.i = fresh` → `OpCopyRecord` into the existing field store.
+  **No op writes a DbRef into a struct FIELD slot** (`OpPutRef` targets a var *position*, not a
+  field offset). So the field cannot adopt a source store today.
+- **`OpDatabase(a)` leaves `a.items` an (empty) vector store** that `OpAppendVector` fills — the
+  placeholder. The move must **free-before-adopt** it (the #506 adopt-arm pattern), or construct
+  `a` with the field left null and adopt into it.
+
+**⇒ B1.3 needs a new `OpAdoptField(container, field_off, src, tp)` op** (interp `fill.rs` +
+`state/io.rs`, native `generation/ops/`): free the container's current field store if distinct
+from `src`, then write `src`'s `DbRef` into the field slot; `src` is no longer freed separately.
+The rewrite then, for each `MovePlan`: (1) drop the field copy (`OpAppendVector(field, src)` /
+`OpCopyRecord`); (2) emit `OpAdoptField(container, off, src, tp)`; (3) drop `OpFreeRef(src)` (the
+store is now the field's, freed when the container is). The Record `v[i]=e` case adopts into an
+*element* slot (`OpGetVector` target) rather than a field — likely a sibling `OpAdoptElem` or a
+unified `OpAdopt(dest_ref, src)` taking any destination `DbRef`. **Cleanest: one `OpAdopt(dest, src)`
+that takes the destination as a `DbRef` (from `OpGetField`/`OpGetVector`) — mirrors how the copy
+ops already take their destination — so construction and record share one op.** Prove that op on a
+hand-constructed `make_dead`/`rec_move` (value+leak+poison, both backends) BEFORE wiring the
+rewrite (the loft-codegen gate).
+
 ## Verifiable slices (each: matrix on BOTH backends, gated behind a flag, suite byte-identical off)
 
 - **B1.1 — gate (DONE for interp).** The capture above is the spec; add the native target Rust
