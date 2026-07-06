@@ -327,6 +327,23 @@ fn p257_vector_capture_in_closure_works() {
     );
 }
 
+// @PLN93 (#511) Phase 6b — appending to a captured collection (`h += K{…}` inside a
+// closure) is no longer rejected at parse: it lowers to an `OpNewRecord`/`OpFinishRecord`
+// insert into the captured DbRef.  This locks in "parses clean" at the unit level; the
+// both-backend runtime + leak proof lives in tests/scripts/505-collection-capture.loft.
+#[test]
+fn p511_bare_append_through_capture_parses() {
+    code!(
+        "struct K { id: integer, v: integer }
+fn c0(cb: fn() -> integer) -> integer { cb() }
+fn test() {
+    h: hash<K[id]> = [];
+    _ = c0(fn() -> integer { h += K { id: 1, v: 42 }; 0 });
+    print(\"{len(h)}\\n\");
+}"
+    );
+}
+
 // P257 — the workaround the diagnostic recommends actually works:
 // bind the element you need before the lambda, capture the bound
 // value (a primitive or Reference) instead of the collection itself.

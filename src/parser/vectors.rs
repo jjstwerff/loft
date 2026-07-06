@@ -2311,6 +2311,18 @@ impl Parser {
         }
     }
 
+    /// A bare collection captured into a closure resolves, inside the closure body,
+    /// to an `OpGetDbRef` of the closure-record field — a borrowed 12-byte DbRef, not
+    /// a local `Var` (like a plain local) nor an `OpGetField` (like a struct field).
+    /// It is still a DbRef-producing append lvalue: `coll += elem` must insert into the
+    /// shared store the DbRef points at, exactly as a field target does.  Recognising it
+    /// lets `parse_object` build a `Value::Insert` (not a fresh `Object`) and lets
+    /// `new_record` emit `OpNewRecord`/`OpFinishRecord` against the captured DbRef.
+    /// See doc/claude/plans/93-collection-capture/README.md.
+    pub(crate) fn is_captured_dbref(&self, val: &Value) -> bool {
+        matches!(val.unspan(), Value::Call(o, _) if *o == self.data.def_nr("OpGetDbRef"))
+    }
+
     pub(crate) fn new_record_field_op(&mut self, val: &Value, parent_tp: &Type, op: &str) -> Value {
         if let Value::Call(_, ps) = val.unspan() {
             let parent = self.data.def(self.data.type_def_nr(parent_tp)).known_type();
@@ -2389,45 +2401,43 @@ impl Parser {
         // tree::add entirely (1 record for 2 adds).  Fix: register
         // the keyed-collection db type directly (idempotent — same
         // call as gen_set_first_keyed_null and the typedef walker).
-        let lhs_known = if !is_field && vec != u16::MAX && !self.first_pass {
-            let lhs_tp = self.vars.tp(vec).clone();
-            match &lhs_tp {
-                Type::Sorted(td, key, _) => {
-                    let c = self.data.def(*td).known_type();
-                    if c == u16::MAX {
-                        None
-                    } else {
-                        Some(self.database.sorted(c, key))
-                    }
-                }
-                Type::Hash(td, key, _) => {
-                    let c = self.data.def(*td).known_type();
-                    if c == u16::MAX {
-                        None
-                    } else {
-                        Some(self.database.hash(c, key))
-                    }
-                }
-                Type::Index(td, key, _) => {
-                    let c = self.data.def(*td).known_type();
-                    if c == u16::MAX {
-                        None
-                    } else {
-                        Some(self.database.index(c, key))
-                    }
-                }
-                Type::Spacial(td, key, _) => {
-                    let c = self.data.def(*td).known_type();
-                    if c == u16::MAX {
-                        None
-                    } else {
-                        Some(self.database.spacial(c, key))
-                    }
-                }
-                _ => None,
-            }
+        // @PLN93 (#511): the keyed-collection type that drives the record-kind dispatch
+        // (`record_new`/`record_finish` read it when the field is `u16::MAX`).  Normally it is
+        // the LHS local's own type.  A captured-collection target (`val` = `OpGetDbRef`) has no
+        // owning var, so read the collection type the append branch passed as `parent_tp`.
+        let cap_target: Option<Value> =
+            if !is_field && !self.first_pass && self.is_captured_dbref(val) {
+                Some(val.clone())
+            } else {
+                None
+            };
+        let keyed_src: Option<Type> = if is_field || self.first_pass {
+            None
+        } else if vec != u16::MAX {
+            Some(self.vars.tp(vec).clone())
+        } else if cap_target.is_some() {
+            Some(parent_tp.clone())
         } else {
             None
+        };
+        let lhs_known = match keyed_src.as_ref() {
+            Some(Type::Sorted(td, key, _)) => {
+                let c = self.data.def(*td).known_type();
+                (c != u16::MAX).then(|| self.database.sorted(c, key))
+            }
+            Some(Type::Hash(td, key, _)) => {
+                let c = self.data.def(*td).known_type();
+                (c != u16::MAX).then(|| self.database.hash(c, key))
+            }
+            Some(Type::Index(td, key, _)) => {
+                let c = self.data.def(*td).known_type();
+                (c != u16::MAX).then(|| self.database.index(c, key))
+            }
+            Some(Type::Spacial(td, key, _)) => {
+                let c = self.data.def(*td).known_type();
+                (c != u16::MAX).then(|| self.database.spacial(c, key))
+            }
+            _ => None,
         };
         // #246: `vv[i] += [...]` — `is_field` is true (the LHS is an indexed
         // access) but the parent is a VECTOR, not a struct, so there is no
@@ -2485,6 +2495,11 @@ impl Parser {
             let fld = Value::Int(i32::from(u16::MAX));
             let app_v = if let Some(target) = &vector_elem_target {
                 // #246: append directly to the inner vector (the indexed read).
+                self.cl("OpNewRecord", &[target.clone(), known.clone(), fld.clone()])
+            } else if let Some(target) = &cap_target {
+                // @PLN93 (#511): allocate the element INSIDE the captured collection the
+                // `OpGetDbRef` points at — `fld = u16::MAX` so `record_new` keys off `known`
+                // (the keyed db-type resolved above), the same shape as the plain-local path.
                 self.cl("OpNewRecord", &[target.clone(), known.clone(), fld.clone()])
             } else if is_field {
                 self.new_record_field_op(val, parent_tp, "OpNewRecord")
@@ -2673,6 +2688,12 @@ impl Parser {
             }
             let finish = if let Some(target) = &vector_elem_target {
                 // #246: finish the direct append into the inner vector.
+                self.cl(
+                    "OpFinishRecord",
+                    &[target.clone(), Value::Var(elm), known, fld],
+                )
+            } else if let Some(target) = &cap_target {
+                // @PLN93 (#511): commit the new element into the captured collection DbRef.
                 self.cl(
                     "OpFinishRecord",
                     &[target.clone(), Value::Var(elm), known, fld],

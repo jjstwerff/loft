@@ -7,34 +7,43 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**Step 0 done (falsification gate) — chokepoint VALIDATED, boundaries mapped.**
+**DONE — full capture surface, both backends** (Steps 0–6b). A bare
+`hash`/`vector`/`sorted`/`index` captured into a closure is BORROWED as a shared 12-byte
+DbRef; through it the closure can **read / lookup**, **iterate** (`for e in h`),
+**point-assign** (`h[key] = value`), and **append** (`h += Row { … }`). Every mutation
+lands in the shared store and is visible to the outer scope (which keeps ownership),
+leak-clean on interpret + native, including escape past scope. Two closures capturing the
+same collection both mutate the one store. Regression: `tests/scripts/505-collection-capture.loft`
+(both backends + leak) and `tests/parse_errors.rs::p511_bare_append_through_capture_parses`
+(parse-level guard). LOFT.md § Closures documents the contract. Promoted from
+[loft-lang/loft#511](https://github.com/loft-lang/loft/issues/511). Tracked as `@PLN93`.
+
 Approach B (store a captured collection as a `Reference`-DbRef, recover the collection
-type for the body from `capture_context`) works. Findings:
+type for the body from `capture_context`) is the load-bearing chokepoint. Findings, as
+they landed:
 
 - **C1 ✓ / C2 ✓** — read/lookup `h[key]` on a captured hash/vector/sorted/index works on
   **both backends** (~3 edited sites: `synthesize_closure_record` + the two body-read
   paths in `objects.rs`; the body override is 2 sites because pass-1 and pass-2 reads
   take different paths — a small, recorded deviation from the N≈2 prediction).
-- **C4 ✓** — vector / sorted / index are the SAME family under Approach B (no separate
-  arm); lookup works for all.
-- **C3 ✗ FALSIFIED** — mutation-through a *bare* capture: an insert's store-realloc
-  DbRef update never writes back to the closure record (a captured read is an rvalue
-  temp, unlike a struct *field* lvalue). → **read-only; reject mutation loudly.**
-- **Iteration native bug** — `for e in h` over a captured collection corrupts native
-  state so a *subsequent* closure capturing the same collection reads an empty DbRef
-  (interpret is fine; the outer collection and repeated *lookups* are fine). A deep
-  native-codegen defect in iteration-over-capture. → **reject iteration loudly for now**
-  (Phase 3b); lookup covers the routing use case.
-- **C5** — leak-clean on the lookup surface (pending final `LOFT_STORES=warn` gate).
-
-**LANDED — read + lookup + iteration + point-assign, both backends** (Steps 0–6a,
-6b-partial). A bare `hash`/`vector`/`sorted`/`index` captured into a closure supports
-key/index lookup, `for e in h` iteration, and `h[key] = value` point-assignment on
-interpret + native, leak-clean, including escape past scope. The one remaining gap is
-**append (`h += …`)**, rejected with a clear parse-time error pointing at the working
-`h[key] = value` form (no silent breakage). Tests `tests/scripts/505` (working) + `506`
-(the append rejection); LOFT.md § Closures documents the contract. Promoted from
-[loft-lang/loft#511](https://github.com/loft-lang/loft/issues/511). Tracked as `@PLN93`.
+- **C4 ✓** — vector / sorted / index / hash are the SAME family under Approach B (no
+  separate arm); lookup, iteration, point-assign, and append all work for all.
+- **Iteration (Phase 6a)** — the loop element is bound as a BORROW of the closure, so the
+  per-iteration `OpFreeRef` never whole-store-frees the shared collection (mirrors the
+  #481 coroutine fix). Two closures iterating the same captured hash both see it intact.
+- **Point-assign / append (Phase 6b)** — a captured collection reached in the body is an
+  `OpGetDbRef` of the closure-record field: not a local `Var`, not an `OpGetField`. The
+  append fix teaches the three sites that already distinguish var-target vs field-target
+  to recognise this third DbRef-lvalue kind (`is_captured_dbref`): `parse_object` builds a
+  `Value::Insert` (not a throwaway `Object` store), and `new_record` emits
+  `OpNewRecord`/`OpFinishRecord` against the captured DbRef with the collection's keyed
+  db-type. This **corrected the earlier "C3 FALSIFIED — needs header write-back"
+  hypothesis**: the bare append never failed on write-back; it emitted *no insert at all*
+  (the element was built in a fresh store and immediately freed). The working
+  struct-field append was the proven sibling — the fix routes the capture through the
+  identical `OpNewRecord`/`OpFinishRecord` path (see the working-vs-broken IR capture in
+  the § Phase 6b remainder below).
+- **C5 ✓** — leak-clean across the whole surface (`LOFT_STORES=warn` / native leak check).
 
 ## Goal
 

@@ -2218,7 +2218,7 @@ impl Parser {
                 }
                 *code = Value::Var(w);
             }
-        } else if !self.first_pass && !self.is_field(code) {
+        } else if !self.first_pass && !self.is_field(code) && !self.is_captured_dbref(code) {
             new_object = true;
             self.data.set_referenced(td_nr, self.context, Value::Null);
             let ret = self.data.def(td_nr).returned();
@@ -2228,6 +2228,12 @@ impl Parser {
             list.push(self.cl("OpDatabase", &[Value::Var(w), Value::Int(tp)]));
             *code = Value::Var(w);
         }
+        // @PLN93 (#511): a captured-collection append target (`h += K{…}` inside a closure,
+        // where `code` is the `OpGetDbRef` of the closure-record field) is a DbRef lvalue like
+        // a struct field — skip the fresh-`Object` allocation above so the field inits build a
+        // `Value::Insert` targeting the captured DbRef.  `new_record` then allocates the element
+        // INSIDE the shared store (`OpNewRecord`/`OpFinishRecord` against that DbRef) rather than
+        // in a throwaway store that is immediately freed (the silent no-op this fixes).
         let mut found_fields = HashSet::new();
         loop {
             if self.lexer.peek_token("}") {

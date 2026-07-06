@@ -3,14 +3,12 @@
 //
 // @PLN93 (#511) — a bare collection (hash / vector / sorted / index) captured into a
 // closure is BORROWED as a shared 12-byte DbRef (the same representation a captured
-// struct Reference uses), so the closure can look up elements by key / index and read
-// them.  The outer scope keeps sole ownership (Parts::DbRef is a non-owning leaf).
-//
-// Scope of this phase: READ / LOOKUP only.  Mutation and iteration through a bare
-// capture are rejected at parse time (see 506-collection-capture-errors.loft) — a
-// capture is read-only, and iteration has an unfixed native-codegen defect.  Mutating
-// a collection WRAPPED IN A STRUCT field works (a struct capture is an lvalue) and is
-// guarded here too.  Runs on BOTH backends.
+// struct Reference uses).  Through that borrow the closure can READ elements (lookup by
+// key / index), ITERATE, POINT-ASSIGN (`h[k] = v`), and APPEND (`h += elem`) — every
+// mutation lands in the shared store and is visible to the outer scope, which keeps sole
+// ownership (Parts::DbRef is a non-owning leaf, freed once at the owner).  Runs on BOTH
+// backends.  Mutating a collection WRAPPED IN A STRUCT field works the same way and is
+// guarded here too.
 
 struct K { id: integer, v: integer }
 
@@ -104,6 +102,44 @@ fn test_point_assign() {
   assert(len(h) == 2, "outer len after point-insert={len(h)} (expect 2)");
 }
 
+// @PLN93 Phase 6b — bare APPEND `coll += elem` through a captured collection inserts
+// into the shared store (both keyed collections and vectors) and persists to the outer
+// scope, both backends.  The insert targets the captured DbRef directly — the fix routes
+// the `OpGetDbRef` append target through the same `OpNewRecord`/`OpFinishRecord` path a
+// struct-field append uses, instead of building the element in a throwaway store.
+fn test_bare_append() {
+  h: hash<K[id]> = [];
+  h += K { id: 1, v: 10 };                 // seed from the outer scope
+  _ = c0(fn() -> integer { h += K { id: 2, v: 20 }; h += K { id: 3, v: 30 }; 0 });
+  assert(len(h) == 3, "hash append len={len(h)} (expect 3)");
+  assert((h[2] ?? K { id: 0, v: 0 }).v == 20, "hash append [2]");
+  assert((h[3] ?? K { id: 0, v: 0 }).v == 30, "hash append [3]");
+  assert((h[1] ?? K { id: 0, v: 0 }).v == 10, "hash seed intact after append");
+
+  s: sorted<K[id]> = [];
+  _ = c0(fn() -> integer { s += K { id: 9, v: 90 }; s += K { id: 4, v: 40 }; 0 });
+  assert(len(s) == 2 && (s[4] ?? K { id: 0, v: 0 }).v == 40, "sorted append");
+
+  ix: index<K[id]> = [];
+  _ = c0(fn() -> integer { ix += K { id: 7, v: 70 }; 0 });
+  assert(len(ix) == 1 && (ix[7] ?? K { id: 0, v: 0 }).v == 70, "index append");
+
+  // captured vector append (bracket form — `+= [elem]` — is the unambiguous push)
+  xs: vector<integer> = [100];
+  _ = c0(fn() -> integer { xs += [200]; xs += [300]; 0 });
+  assert(len(xs) == 3 && (xs[2] ?? -1) == 300, "vector append len={len(xs)}");
+
+  // two closures sharing the SAME captured hash both accumulate into it
+  g: hash<K[id]> = [];
+  _ = c0(fn() -> integer { g += K { id: 1, v: 1 }; 0 });
+  _ = c0(fn() -> integer { g += K { id: 2, v: 2 }; 0 });
+  assert(len(g) == 2, "two-closure shared append len={len(g)} (expect 2)");
+
+  // append AND read the same captured collection inside one closure
+  r = c0(fn() -> integer { h += K { id: 8, v: 88 }; (h[8] ?? K { id: 0, v: 0 }).v });
+  assert(r == 88 && len(h) == 4, "append-then-read r={r}");
+}
+
 fn main() {
   test_hash_lookup();
   test_vector_lookup();
@@ -112,5 +148,6 @@ fn main() {
   test_struct_field_mutation_through();
   test_iteration();
   test_point_assign();
+  test_bare_append();
   println("505 collection-capture ok\n");
 }
