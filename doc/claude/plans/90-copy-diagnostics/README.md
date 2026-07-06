@@ -31,12 +31,15 @@ gated `LOFT_MOVE_ELIDE` (OFF = byte-identical). Covered: **Record** (`v[i]=e` / 
 (`a = Bag{items:base}`, `construct_fresh_rewrite` — hoist a's alloc + retarget base's build onto
 a.field, conservatively guarded). Matrix-validated (value + poison + leak, interp + native);
 survivors still copy; non-provably-safe fresh constructs (param field value, >1 per fn) stay copies.
-**B1.4** widened the fresh-construction guard to allow a **never-written parameter** as a hoisted
-field value (`Bag { id: n, items: base }`) — sound on the interprocedural `find_written_vars` (a
-param mutated via a callee's `&`-param in any arg position stays a copy). Guards:
-`tests/use_analysis.rs::move_elide_{record,construct,fresh,param}_*`. NEXT = remaining B1.4 widenings
-(>1 construct/fn, nested bodies, `a.items=base` chained), then **B1.5** flip default-on. Detail:
-[phase-b-design.md § B1.4 LANDED](phase-b-design.md).
+**B1.4** widened the fresh-construction guards: a **never-written parameter** as a hoisted field
+value (`Bag { id: n, items: base }`, sound on the interprocedural `find_written_vars`), and
+**multiple fresh constructs per fn**. **B1.3d** added the `a.field = base` whole-vector replacement —
+the `__p154_rhs` DOUBLE copy (`base → __p154_rhs → a.field` + `OpClearVector`), detected structurally (not a
+MovePlan) and lowered to build `base` directly into the cleared field, eliminating BOTH copies (incl.
+the old-content-free of a heap-text field). Guards:
+`tests/use_analysis.rs::move_elide_{record,construct,fresh,param,multiple,whole_vector}_*`. NEXT =
+nested-Insert (non-flat) bodies, then **B1.5** flip default-on. Detail:
+[phase-b-design.md § B1.3d LANDED](phase-b-design.md).
 
 **Phase 1** — the decision covers every structure-copy emission ([phase1-inventory.md](phase1-inventory.md)).
 `LOFT_COPY_DUMP` is the runtime ground truth; the verdict (`use_analysis`, **route 1** —

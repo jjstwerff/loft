@@ -464,15 +464,15 @@ fn move_elide(data: &mut Data) {
         op_prealloc: data.def_nr("OpPreAllocVector"),
         op_set_int4: data.def_nr("OpSetInt4"),
         op_get_field: data.def_nr("OpGetField"),
+        op_clear: data.def_nr("OpClearVector"),
     };
     for d_nr in 0..data.definitions() {
         if !matches!(data.def(d_nr).def_type, DefType::Function) {
             continue;
         }
+        // Plan-based rewrites (Record / Construct) key off these; the structural `a.field = base`
+        // rewrite (B1.3d) does not — so we do NOT early-continue on an empty plan set.
         let plans = crate::use_analysis::move_plans(data, d_nr);
-        if plans.is_empty() {
-            continue;
-        }
         let mut code = data.def(d_nr).code.clone();
         // Vars to suppress the (later `variables()`-emitted) scope-exit free for — the moved-out
         // owned store now lives in the destination, so its null slot must not be freed.
@@ -531,6 +531,11 @@ fn move_elide(data: &mut Data) {
                 &mut skip,
             );
         }
+
+        // B1.3d — the `a.field = base` whole-vector replacement (the `__p154_rhs` idiom): a DOUBLE
+        // copy (`base → __p154_rhs → a.field`, with an `OpClearVector`). Its source is a temp, so it
+        // is NOT a MovePlan — this rewrite is STRUCTURAL and must run regardless of `con_sources`.
+        construct_replace_rewrite(&mut code, &co, &mut skip);
 
         data.definitions[d_nr as usize].code = code;
         for &s in &skip {
@@ -622,6 +627,7 @@ struct ConstructOps {
     op_prealloc: u32,
     op_set_int4: u32,
     op_get_field: u32,
+    op_clear: u32,
 }
 
 /// @PLN90 phase B (B1.3b) — the CONSTRUCT copy shape (`x.field += src`, lowered as a copying
@@ -1049,6 +1055,186 @@ fn fresh_retarget(node: &mut Value, src: u16, dest: &Value, co: &ConstructOps) {
         }
     }
     node.for_each_child_mut(&mut |c| fresh_retarget(c, src, dest, co));
+}
+
+/// @PLN90 phase B (B1.3d) — the `a.field = base` whole-vector REPLACEMENT, a DOUBLE copy the
+/// compiler lowers as `base → __p154_rhs → a.field` with an `OpClearVector` between:
+///
+/// ```text
+///   <build base into __vdb>
+///   __p154_rhs = null; OpAppendVector(__p154_rhs, base);   (copy 1 — base → temp)
+///   OpClearVector(a.field);                                (clear a.field's old contents)
+///   OpAppendVector(a.field, __p154_rhs);                   (copy 2 — temp → a.field)
+/// ```
+///
+/// `base`'s copy target is a temp (`__p154_rhs`), so it is not a `MovePlan`; this rewrite detects
+/// the idiom STRUCTURALLY. When `base` is a dead-after local (its own `__vdb` backing), build it
+/// DIRECTLY into the cleared `a.field`: move the `OpClearVector` ahead of `base`'s build, retarget
+/// `base`'s build ops onto `a.field`, and drop the temp + both copies + the wrapper. Both temp and
+/// wrapper join `skip` (their frees are suppressed). Flat top-level block only; conservative.
+fn construct_replace_rewrite(code: &mut Value, co: &ConstructOps, skip: &mut HashSet<u16>) {
+    let Value::Block(b) = code else {
+        return;
+    };
+    let mut failed: HashSet<usize> = HashSet::new();
+    loop {
+        // Find the earliest `copy 2` (`OpAppendVector(a.field, Var(rhs))`) preceded by the clear +
+        // `copy 1`, not yet tried.
+        let mut hit = None;
+        for c2 in 2..b.operators.len() {
+            if failed.contains(&c2) {
+                continue;
+            }
+            let Some((field, rhs)) = append_field_temp(&b.operators[c2], co) else {
+                continue;
+            };
+            // Preceding statement must be `OpClearVector(field)` for the SAME field.
+            if !is_clear_of(&b.operators[c2 - 1], &field, co) {
+                continue;
+            }
+            // And the one before that `OpAppendVector(Var(rhs), Var(base))`.
+            let Some(base) = append_temp_src(&b.operators[c2 - 2], rhs, co) else {
+                continue;
+            };
+            hit = Some((c2, field, rhs, base));
+            break;
+        }
+        let Some((c2, field, rhs, base)) = hit else {
+            break;
+        };
+        if !try_replace_one(b, c2, &field, rhs, base, co, skip) {
+            failed.insert(c2);
+        }
+    }
+}
+
+/// One `a.field = base` replacement at `copy 2` index `c2`. Rewrites `b.operators` + records the
+/// moved-out temp/wrapper in `skip` iff every guard holds; else returns `false` unchanged.
+fn try_replace_one(
+    b: &mut Block,
+    c2: usize,
+    field: &Value,
+    rhs: u16,
+    base: u16,
+    co: &ConstructOps,
+    skip: &mut HashSet<u16>,
+) -> bool {
+    let Some(a) = get_field_base(field, co) else {
+        return false;
+    };
+    // `base` must be a dead-after LOCAL: it owns a backing wrapper `base = OpGetField(vdb, …)`, and
+    // is not referenced after `copy 2` (the store transfers, so a later read would dangle).
+    let mut vdb = None;
+    let mut rhs_set = None;
+    for (i, op) in b.operators.iter().enumerate() {
+        match op.unspan() {
+            Value::Set(s, r) if *s == base => {
+                if let Value::Call(gd, ga) = r.unspan()
+                    && *gd == co.op_get_field
+                    && let Some(Value::Var(v)) = ga.first().map(Value::unspan)
+                {
+                    vdb = Some(*v);
+                }
+            }
+            Value::Set(s, _) if *s == rhs => rhs_set = Some(i),
+            _ => {}
+        }
+    }
+    let (Some(vdb), Some(_)) = (vdb, rhs_set) else {
+        return false;
+    };
+    if a == base || a == vdb {
+        return false; // paranoia: the destination container must be independent of the source
+    }
+    if references_var_after(b, base, c2) {
+        return false;
+    }
+    // `base`'s build start: the first statement that sets up its wrapper or references it. Everything
+    // before it (`a`'s already-built value + null-inits) is kept; the clear is inserted there.
+    let Some(bs) = b
+        .operators
+        .iter()
+        .position(|op| fresh_drop(op, base, vdb, co) || refs_var(op, base))
+    else {
+        return false;
+    };
+    if bs >= c2 - 2 {
+        return false; // base built after the field already exists but not as a real preceding build
+    }
+    let chain: HashSet<usize> = [rhs_set.unwrap(), c2 - 2, c2 - 1, c2].into_iter().collect();
+
+    let clear = b.operators[c2 - 1].clone();
+    let ops = std::mem::take(&mut b.operators);
+    let mut new_ops = Vec::with_capacity(ops.len());
+    for (i, op) in ops.into_iter().enumerate() {
+        if i == bs {
+            new_ops.push(clear.clone()); // clear a.field BEFORE building base into it
+        }
+        if i < bs {
+            new_ops.push(op);
+            continue;
+        }
+        if chain.contains(&i) || fresh_drop(&op, base, vdb, co) {
+            continue;
+        }
+        let mut op = op;
+        fresh_retarget(&mut op, base, field, co); // base's build → a.field
+        new_ops.push(op);
+    }
+    b.operators = new_ops;
+    skip.insert(vdb);
+    skip.insert(rhs);
+    true
+}
+
+/// If `op` is `OpAppendVector(OpGetField(…), Var(rhs))` (copy INTO a field from a temp), return
+/// `(field_expr, rhs)`.
+fn append_field_temp(op: &Value, co: &ConstructOps) -> Option<(Value, u16)> {
+    if let Value::Call(d, args) = op.unspan()
+        && *d == co.op_append
+        && let Some(field) = args.first()
+        && get_field_base(field, co).is_some()
+        && let Some(Value::Var(rhs)) = args.get(1).map(Value::unspan)
+    {
+        return Some((field.clone(), *rhs));
+    }
+    None
+}
+
+/// Is `op` `OpClearVector(field)` for the given `field` expression?
+fn is_clear_of(op: &Value, field: &Value, co: &ConstructOps) -> bool {
+    matches!(op.unspan(), Value::Call(d, args) if *d == co.op_clear
+        && args.first().map(Value::unspan) == Some(field.unspan()))
+}
+
+/// If `op` is `OpAppendVector(Var(rhs), Var(base))` (copy INTO the temp from `base`), return `base`.
+fn append_temp_src(op: &Value, rhs: u16, co: &ConstructOps) -> Option<u16> {
+    if let Value::Call(d, args) = op.unspan()
+        && *d == co.op_append
+        && matches!(args.first().map(Value::unspan), Some(Value::Var(t)) if *t == rhs)
+        && let Some(Value::Var(base)) = args.get(1).map(Value::unspan)
+    {
+        return Some(*base);
+    }
+    None
+}
+
+/// Does `op` reference `Var(v)` anywhere in its subtree?
+fn refs_var(op: &Value, v: u16) -> bool {
+    fn walk(node: &Value, v: u16, found: &mut bool) {
+        if matches!(node.unspan(), Value::Var(x) if *x == v) {
+            *found = true;
+        }
+        node.for_each_child(&mut |c| walk(c, v, found));
+    }
+    let mut found = false;
+    walk(op, v, &mut found);
+    found
+}
+
+/// Is `Var(v)` referenced in any operator strictly after index `idx`?
+fn references_var_after(b: &Block, v: u16, idx: usize) -> bool {
+    b.operators[idx + 1..].iter().any(|op| refs_var(op, v))
 }
 
 /// Scope / lifetime analysis pass over every function definition.

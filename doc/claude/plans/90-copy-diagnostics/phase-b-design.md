@@ -336,6 +336,37 @@ elides; `n` reassigned (`n = n*10`), and `n` mutated via a callee's arg1 `&`-par
 correctly stay copies (a wrong hoist would have surfaced as a stale value, e.g. `6` instead of
 `106`). Guards: `tests/use_analysis.rs::move_elide_param_field_widening_is_sound`.
 
+### B1.3d LANDED — `a.field = base` whole-vector replacement (the double-copy idiom)
+
+`a.field = base` is the most wasteful copy shape — the compiler lowers it (via the `__p154_rhs`
+temp) as a DOUBLE copy, with a clear between:
+
+```text
+  <build base into __vdb>
+  __p154_rhs = null; OpAppendVector(__p154_rhs, base);   copy 1: base → temp
+  OpClearVector(a.field);                                clear a.field's old contents
+  OpAppendVector(a.field, __p154_rhs);                   copy 2: temp → a.field
+```
+
+`base`'s copy target is a TEMP, so `base` is not a `MovePlan` (the survey never saw it — it reports
+`0` here). `construct_replace_rewrite` therefore detects the idiom **structurally**: an
+`OpAppendVector(a.field, Var(rhs))` (copy 2) immediately preceded by `OpClearVector(a.field)` (same
+field) and `OpAppendVector(Var(rhs), Var(base))` (copy 1). Because it is not plan-driven, it runs
+UNCONDITIONALLY (the empty-plan early-continue in `move_elide` was removed).
+
+When `base` is a **dead-after local** — it owns a backing wrapper (`base = OpGetField(vdb, …)`), is
+NOT referenced after copy 2 (else the moved store would dangle), and is NOT a param — the rewrite
+moves the `OpClearVector` ahead of `base`'s build, retargets `base`'s build ops onto `a.field`, and
+drops both copies + the temp's alloc + the wrapper (temp + wrapper `skip`-freed). This eliminates
+**two** copies and a wrapper allocation.
+
+**Validated (both backends, poison + leak):** an integer-vector replacement and a **heap-text**
+replacement (`d.lines = fresh` where `d.lines` held `["old1","old2"]`) — both elide; the old
+heap-text contents are freed by the moved-up `OpClearVector` (no leak — the old-content-free stress
+that the record case also passed). A surviving source (`base` read after) and a param source stay
+copies. Multiple replacements per fn handled (loop, like the fresh case). Guard:
+`tests/use_analysis.rs::move_elide_whole_vector_replacement_eliminates_double_copy`.
+
 ## Verifiable slices (each: matrix on BOTH backends, gated behind a flag, suite byte-identical off)
 
 - **B1.1 — gate (DONE for interp).** The capture above is the spec; add the native target Rust
@@ -364,10 +395,16 @@ correctly stay copies (a wrong hoist would have surfaced as a stale value, e.g. 
   mutation in any arg position). (b) Lift the one-construct-per-fn cap: `construct_fresh_rewrite`
   loops, rewriting each safe construct by earliest remaining copy (re-scan after each; a failed
   source is recorded for termination) — a cross-construct dependency is a non-`a`/non-param run var,
-  so it self-SKIPs. See "B1.4 LANDED". Remaining (SAFE-skipped, each a NEW sub-slice not a guard
-  relaxation): nested-Insert (non-flat) bodies; the `a.items = base` whole-replacement — a DOUBLE
-  copy through `__p154_rhs` (`base → __p154_rhs → a.items`, with an `OpClearVector`), not detected
-  today, needing new detection + a move-the-clear reorder (B1.3d).
+  so it self-SKIPs. See "B1.4 LANDED".
+- **B1.3d — `a.field = base` whole-vector replacement (DONE).** The `__p154_rhs` DOUBLE copy
+  (`base → __p154_rhs → a.field`, with an `OpClearVector`). `base`'s copy target is a temp, so it is
+  NOT a MovePlan — `construct_replace_rewrite` detects the idiom STRUCTURALLY (copy2 = append temp
+  into field; preceded by clear-of-field; preceded by copy1 = append base into temp). When `base` is
+  a dead-after local (its own `__vdb` backing; not referenced after copy2; not a param), it moves the
+  `OpClearVector` ahead of `base`'s build, retargets `base`'s build onto `a.field`, and drops both
+  copies + the temp + the wrapper (temp + wrapper `skip`-freed). Runs UNCONDITIONALLY (not gated on
+  a MovePlan). See "B1.3d LANDED". Remaining (SAFE-skipped): nested-Insert (non-flat) bodies.
+- **B1.5 — graduate + flip.** ↓ (unchanged)
 - **B1.5 — graduate + flip.** Guards landed in `tests/use_analysis.rs` (record + construct + fresh +
   param); extend to `tests/scripts/` + `tests/leak_cases/`, then flip `LOFT_MOVE_ELIDE` default-on
   with a `LOFT_NO_MOVE_ELIDE` opt-out (run the full suite flag-ON first). Re-run the survey — the

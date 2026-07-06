@@ -1317,6 +1317,74 @@ fn move_elide_multiple_fresh_constructs_per_fn() {
     );
 }
 
+// ── @PLN90 phase B (B1.3d) — the `a.field = base` whole-vector REPLACEMENT (a DOUBLE copy) ──
+// `a.field = base` lowers as `base → __p154_rhs → a.field` with an OpClearVector between (two
+// OpAppendVector copies). B1.3d detects the idiom structurally and, when `base` is a dead-after
+// local, builds it directly into the cleared field — eliminating BOTH copies. A survivor (base read
+// after) and a param source stay copies.
+const MOVE_ELIDE_REPLACE_SRC: &str = r#"
+struct Bag { id: integer, items: vector<integer> }
+struct Doc { title: text, lines: vector<text> }
+fn r1_replace() -> integer {                 // dead-after local → eliminate both copies
+    a = Bag { id: 1, items: [0] };
+    base: vector<integer> = [10, 20, 30];
+    a.items = base;
+    (a.items[1] ?? 0) + a.id                 // 20 + 1 = 21
+}
+fn r2_heaptext() -> integer {                // old heap-text contents cleared without leaking
+    d = Doc { title: "t", lines: ["old1", "old2"] };
+    fresh: vector<text> = ["new-a", "new-b", "new-c"];
+    d.lines = fresh;
+    d.lines.len() + d.title.len()            // 3 + 1 = 4
+}
+fn r3_survive() -> integer {                 // base read AFTER → must stay a COPY
+    a = Bag { id: 1, items: [0] };
+    base: vector<integer> = [10, 20, 30];
+    a.items = base;
+    (base[0] ?? 0) + (a.items[1] ?? 0)       // 10 + 20 = 30
+}
+fn r4_param(base: vector<integer>) -> integer {  // param source → caller owns → COPY
+    a = Bag { id: 2, items: [0] };
+    a.items = base;
+    (a.items[0] ?? 0) + a.id
+}
+fn main() { print("{r1_replace()} {r2_heaptext()} {r3_survive()} {r4_param([99, 98])}\n"); }
+"#;
+
+#[test]
+fn move_elide_whole_vector_replacement_eliminates_double_copy() {
+    // r1=21, r2=4, r3=30, r4=101 (99+2). A wrong move of r3/r4 would surface as a wrong value or a
+    // leak here (r2 is the old-content-free stress: heap-text lines cleared before the move-in).
+    assert_move_elide_preserves(
+        MOVE_ELIDE_REPLACE_SRC,
+        "move_elide_b13d_probe",
+        "21 4 30 101",
+    );
+    let off = introspect_move_elide_src(MOVE_ELIDE_REPLACE_SRC, "move_elide_b13d_ir", false);
+    let on = introspect_move_elide_src(MOVE_ELIDE_REPLACE_SRC, "move_elide_b13d_ir", true);
+    // The replacement's TWO copies both vanish for a dead-after local (int + heap-text field).
+    for (moved, before) in [("r1_replace", 2usize), ("r2_heaptext", 2)] {
+        assert_eq!(
+            op_count(&off, moved, "OpAppendVector"),
+            before,
+            "{moved} baseline: two OpAppendVector copies before elision"
+        );
+        assert_eq!(
+            op_count(&on, moved, "OpAppendVector"),
+            0,
+            "{moved}: both copies of the whole-vector replacement should be eliminated"
+        );
+    }
+    // A surviving source and a param source keep their copies.
+    for skipped in ["r3_survive", "r4_param"] {
+        assert_eq!(
+            op_count(&on, skipped, "OpAppendVector"),
+            op_count(&off, skipped, "OpAppendVector"),
+            "{skipped}: a survivor / param source must stay a copy"
+        );
+    }
+}
+
 // ── @PLN90 Step 5 — the user-facing `--report-copies` report ──
 const REPORT_SRC: &str = r#"
 struct Item { tags: vector<integer> }
