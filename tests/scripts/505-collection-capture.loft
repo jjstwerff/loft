@@ -70,11 +70,47 @@ fn test_struct_field_mutation_through() {
   assert(st.hits == 7, "struct-field mutation-through hits={st.hits} (expect 7)");
 }
 
+// @PLN93 Phase 6a — iterating a captured collection works on both backends (the
+// loop element is bound as a BORROW of the closure, so the per-iteration free never
+// whole-store-frees the shared collection — mirrors the #481 coroutine fix).
+fn test_iteration() {
+  h: hash<K[id]> = [];
+  h += K { id: 1, v: 42 };
+  h += K { id: 2, v: 99 };
+  // iterate the SAME captured hash from two separate closures (the native
+  // corruption case: the first iteration must not free the shared store).
+  a = c0(fn() -> integer { s = 0; for e in h { s = s + e.v; } s });
+  b = c0(fn() -> integer { s = 0; for e in h { s = s + e.v; } s });
+  assert(a == 141, "iterate #1 sum={a} (expect 141)");
+  assert(b == 141, "iterate #2 sum={b} (expect 141 — shared hash intact)");
+  // outer hash untouched by the captured iteration
+  assert((h[1] ?? K { id: 0, v: 0 }).v == 42, "outer hash intact after iteration");
+  // captured vector iteration
+  xs: vector<integer> = [10, 20, 30];
+  assert(c0(fn() -> integer { s = 0; for x in xs { s = s + x; } s }) == 60, "iterate vector");
+}
+
+// @PLN93 Phase 6b — point-assignment `h[key] = value` through a captured collection
+// persists to the shared store (both update and new-key insert), both backends.
+fn test_point_assign() {
+  h: hash<K[id]> = [];
+  h += K { id: 1, v: 10 };
+  // update existing key through the capture
+  _ = c0(fn() -> integer { h[1] = K { id: 1, v: 99 }; 0 });
+  assert((h[1] ?? K { id: 0, v: 0 }).v == 99, "point-update through capture");
+  // insert new key through the capture
+  _ = c0(fn() -> integer { h[7] = K { id: 7, v: 70 }; 0 });
+  assert((h[7] ?? K { id: 0, v: 0 }).v == 70, "point-insert through capture");
+  assert(len(h) == 2, "outer len after point-insert={len(h)} (expect 2)");
+}
+
 fn main() {
   test_hash_lookup();
   test_vector_lookup();
   test_sorted_index_lookup();
   test_multi_capture();
   test_struct_field_mutation_through();
-  println("505 collection-capture (lookup) ok\n");
+  test_iteration();
+  test_point_assign();
+  println("505 collection-capture ok\n");
 }

@@ -1101,26 +1101,6 @@ use a separate collection or add after the loop"
         var_nr: u16,
     ) -> Type {
         self.check_iter_safety(to, f_type, op);
-        // @PLN93 (#511): a collection captured into a closure is READ-ONLY.  `+=`
-        // (append) silently no-ops — an insert's store-realloc DbRef update can't write
-        // back to the closure record (a captured read is an rvalue temp, not a field
-        // lvalue).  `h[k]=v` happens to work, but keep the contract simple + safe (no
-        // untested mutation-builtin edge silently corrupts): reject ALL mutation through
-        // a capture.  A captured collection carries the hidden closure param in its deps
-        // (set in parser/objects.rs); `f_type` is the target's type for `h += …`,
-        // `parent_tp` the collection for an element write `h[k] = …`.
-        if self.closure_param != u16::MAX
-            && !self.first_pass
-            && ((Self::is_collection_type(f_type) && f_type.depend().contains(&self.closure_param))
-                || (Self::is_collection_type(&parent_tp)
-                    && parent_tp.depend().contains(&self.closure_param)))
-        {
-            diagnostic!(
-                self.lexer,
-                Level::Error,
-                "cannot mutate a collection captured into a closure — a capture is read-only (@PLN93 / #511); wrap it in a struct field to mutate it through the capture"
-            );
-        }
         // Save parent struct type before the RHS parse overwrites parent_tp.
         let lhs_parent_tp = parent_tp.clone();
         // #330: `x = x` is the identity — emit nothing.  Letting it through
@@ -2663,6 +2643,36 @@ use a separate collection or add after the loop"
         // at the `&` (the cursor has drifted to `;`/`}` by detection time).
         let stmt_start_pos = self.lexer.peek_pos().clone();
         let started_with_amp = self.lexer.peek_token("&");
+        // @PLN93 (#511): a BARE captured-collection append `h += …` silently no-ops — the
+        // insert's re-rooted header is never written back to the closure-record field
+        // (a struct FIELD append `st.coll += …` writes back through the struct record and
+        // works; `h[key] = value` works too).  Detect it with a two-token lookahead: the
+        // leading identifier names a captured COLLECTION and is immediately followed by
+        // `+=`.  `st.coll +=` has a captured STRUCT leader (+ a `.`), `h[k] =`/`h[k] +=`
+        // have a `[` — neither is caught.  `peek()` + the `cont()`/`revert()` pair (the
+        // proven-revertible pattern used below) does not disturb the real parse.
+        if self.closure_param != u16::MAX && !self.first_pass {
+            let leading_captured_collection = match &self.lexer.peek().has {
+                crate::lexer::LexItem::Identifier(name) => self
+                    .capture_context
+                    .iter()
+                    .any(|(n, t)| n == name && Self::is_collection_type(t)),
+                _ => false,
+            };
+            if leading_captured_collection {
+                let link = self.lexer.link();
+                self.lexer.cont(); // step past the leading identifier
+                let is_bare_append = self.lexer.peek_token("+=");
+                self.lexer.revert(link);
+                if is_bare_append {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "cannot append (`+=`) to a collection captured into a closure — use `coll[key] = value` (which persists through the capture), or wrap the collection in a struct field (@PLN93 / #511)"
+                    );
+                }
+            }
+        }
         let mut f_type = self.parse_operators(&Type::Unknown(0), code, &mut parent_tp, 0);
         if let (Type::RefVar(_), Value::Var(v_nr)) = (&f_type, &code) {
             self.vars.in_use(*v_nr, true);

@@ -1,40 +1,17 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// @PLN93 (#511) — a collection captured into a closure is READ-ONLY, and iteration
-// over a bare capture is not yet supported.  Both are rejected at parse time (never a
-// silent no-op / native divergence).  Lookup by key works — see 505-collection-capture.
-// @EXPECT_ERROR: cannot mutate a collection captured into a closure
-// @EXPECT_ERROR: cannot mutate a collection captured into a closure
-// @EXPECT_ERROR: cannot mutate a collection captured into a closure
-// @EXPECT_ERROR: cannot iterate a collection captured into a closure
+// @PLN93 (#511) — read, key/index lookup, iteration, and point-assignment
+// (`h[key] = value`) through a captured collection all work (see 505).  The one
+// remaining gap is APPEND (`h += …`): the assign target resolves to a throwaway
+// local, not the captured store, so the insert would be silently lost — rejected
+// at parse time with a pointer to the working `h[key] = value` form.
+// @EXPECT_ERROR: cannot append (`+=`) to a collection captured into a closure
 
 struct K { id: integer, v: integer }
 fn c0(cb: fn() -> integer) -> integer { cb() }
 
-// Append through a bare capture — reallocates the store; the DbRef update can't write
-// back to the closure record.
 fn test_reject_append() {
   h: hash<K[id]> = [];
   _ = c0(fn() -> integer { h += K { id: 1, v: 1 }; 0 });
-}
-
-// Point-update through a bare capture — rejected too, to keep the capture uniformly
-// read-only (no untested mutation-builtin edge silently corrupts).
-fn test_reject_index_set_existing() {
-  h: hash<K[id]> = [];
-  h += K { id: 1, v: 1 };
-  _ = c0(fn() -> integer { h[1] = K { id: 1, v: 9 }; 0 });
-}
-
-fn test_reject_index_set_new() {
-  h: hash<K[id]> = [];
-  _ = c0(fn() -> integer { h[7] = K { id: 7, v: 7 }; 0 });
-}
-
-// Iteration over a bare capture — corrupts native state for a subsequent capture.
-fn test_reject_iteration() {
-  h: hash<K[id]> = [];
-  h += K { id: 1, v: 1 };
-  _ = c0(fn() -> integer { s = 0; for e in h { s = s + e.v; } s });
 }

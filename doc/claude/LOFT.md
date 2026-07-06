@@ -730,13 +730,13 @@ add5(10)               // 15
   captures).
 - Collections (`hash` / `vector` / `sorted` / `index`): captured by shared
   DbRef — the closure **borrows** the outer collection (like a struct
-  reference), so it can look up elements by key / index and read them:
-  `fn(k: integer) -> integer { (h[k] ?? Row { … }).v }`.  A captured
-  collection is **read-only**: mutation (`h += …`, `h[k] = …`) and iteration
-  (`for e in h`) through a *bare* capture are rejected at parse time
-  (@PLN93 / #511).  To mutate or iterate, wrap the collection in a **struct
-  field** and capture the struct — a struct capture is a mutable, iterable
-  lvalue.
+  reference).  Inside the closure you can **look up by key / index**
+  (`(h[k] ?? Row { … }).v`), **iterate** (`for e in h`), and **point-assign**
+  (`h[key] = value`, which persists to the shared collection).  The one gap is
+  **append**: `h += …` through a bare capture is rejected at parse time
+  (@PLN93 / #511) — the assign target would resolve to a throwaway local, so
+  use `h[key] = value` (the keyed equivalent) or wrap the collection in a
+  **struct field** and capture the struct.
 
 **Limitations:**
 - Capturing closures in `vector<fn(...)>` is supported only for non-capturing lambdas or when all elements are the same closure type.

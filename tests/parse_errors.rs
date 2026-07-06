@@ -312,22 +312,18 @@ fn test() { r = Rect { w: 3.0, h: 4.0 }; r.area(); }"
 // P257 (2026-05-12) — capturing a vector into a closure body used to
 // crash both backends with no clean diagnostic: interp panicked with
 // "Write to locked store at rec=N fld=M" (src/store.rs:963), native
-// rejected with rustc E0308 + E0605 in the generated code.  Now
-// rejected at parse with a clear message naming the variable and the
-// recommended workaround.  Surfaced by plan-15 phase 06 closeout
-// probing — the matrix's C7 row was CLOSED:non-goal but the failure
-// mode was unstable, not a stable parse-time diagnostic.
+// rejected with rustc E0308 + E0605 in the generated code, then (2026-05-12)
+// rejected at parse.  @PLN93 (#511) implemented the deferred "option (b)":
+// a collection is now captured by shared DbRef, so reading / index lookup
+// through the capture works.  (`items[idx]` is a nullable vector read → `?? 0`.)
 #[test]
-fn p257_vector_capture_in_closure_rejected() {
+fn p257_vector_capture_in_closure_works() {
     code!(
         "fn test() {
     items = [10, 20, 30];
-    f = fn(idx: integer) -> integer { items[idx] };
+    f = fn(idx: integer) -> integer { items[idx] ?? 0 };
     print(\"{f(1)}\\n\");
 }"
-    )
-    .error(
-        "vector variable 'items' cannot be captured into a closure body; bind the element you need before the lambda (e.g. `x = items[i]; f = fn(...) { ... x ... }`) — collection capture is not supported because the closure record layout doesn't model the content type at p257_vector_capture_in_closure_rejected:3:45",
     );
 }
 

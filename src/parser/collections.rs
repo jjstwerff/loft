@@ -1627,22 +1627,6 @@ use #count instead"
             let loop_nr = self.vars.start_loop();
             let mut expr = Value::Null;
             let mut in_type = self.parse_in_range(&mut expr, &Value::Null, &id);
-            // @PLN93 (#511): iterating a collection captured into a closure corrupts
-            // native state for a subsequent capture (interp is fine; the outer collection
-            // and key lookups are fine).  Reject loudly until that native-codegen defect
-            // is fixed, rather than diverge silently.  A captured collection carries the
-            // hidden closure param in its deps (set in parser/objects.rs).
-            if self.closure_param != u16::MAX
-                && !self.first_pass
-                && Self::is_collection_type(&in_type)
-                && in_type.depend().contains(&self.closure_param)
-            {
-                diagnostic!(
-                    self.lexer,
-                    Level::Error,
-                    "cannot iterate a collection captured into a closure yet — look up elements by key (`{id}` via `coll[key]`), or wrap the collection in a struct field to iterate it (@PLN93 / #511)"
-                );
-            }
             // if #fields was detected, take the compile-time unrolling path.
             if self.fields_of != u32::MAX {
                 let struct_def_nr = self.fields_of;
@@ -1952,6 +1936,32 @@ use #count instead"
                     Type::Reference(d, _) => Type::Reference(d, crate::data::Deps::frame1(gen_var)),
                     Type::Enum(d, m, _) => Type::Enum(d, m, crate::data::Deps::frame1(gen_var)),
                     Type::Vector(e, _) => Type::Vector(e, crate::data::Deps::frame1(gen_var)),
+                    other => other,
+                };
+                self.change_var_type(for_var, &dep_tp);
+            }
+            // @PLN93 (#511): iterating a CAPTURED collection (`for e in h`, `h` captured
+            // into this lambda).  The element is a DbRef INTO the captured (shared) store,
+            // reached via the hidden `__closure` param — exactly the #481 coroutine shape.
+            // Bind the loop var as a BORROW of the closure so the scope machinery never
+            // emits a per-iteration OpFreeRef for it: that free calls `free_named` on the
+            // element's store_nr, which whole-store-frees the shared collection — a later
+            // closure capturing the same collection then reads an empty store (native
+            // only; interp already treats the element as a borrow).
+            if self.closure_param != u16::MAX
+                && !self.first_pass
+                && Self::is_collection_type(&in_type)
+                && in_type.depend().contains(&self.closure_param)
+                && matches!(
+                    var_tp,
+                    Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
+                )
+            {
+                let dep = crate::data::Deps::frame1(self.closure_param);
+                let dep_tp = match var_tp.clone() {
+                    Type::Reference(d, _) => Type::Reference(d, dep),
+                    Type::Enum(d, m, _) => Type::Enum(d, m, dep),
+                    Type::Vector(e, _) => Type::Vector(e, dep),
                     other => other,
                 };
                 self.change_var_type(for_var, &dep_tp);

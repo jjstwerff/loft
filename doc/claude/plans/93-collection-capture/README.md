@@ -27,15 +27,14 @@ type for the body from `capture_context`) works. Findings:
   (Phase 3b); lookup covers the routing use case.
 - **C5** — leak-clean on the lookup surface (pending final `LOFT_STORES=warn` gate).
 
-**LANDED — read-only LOOKUP capture, both backends** (Steps 0–5). A bare
-`hash`/`vector`/`sorted`/`index` captured into a closure supports key/index lookup
-on interpret + native, leak-clean, including escape past scope. Mutation (`+=`,
-`h[k]=`) and iteration (`for e in h`) through a bare capture are rejected with a
-clear parse-time error (no silent breakage). Tests `tests/scripts/505` + `506`;
-LOFT.md § Closures documents the contract. **Phase 6 (deferred):** full
-mutation-through + iteration over a bare capture. Promoted from
-[loft-lang/loft#511](https://github.com/loft-lang/loft/issues/511); the struct-wrap
-workaround already unblocks that consumer. Tracked as `@PLN93`.
+**LANDED — read + lookup + iteration + point-assign, both backends** (Steps 0–6a,
+6b-partial). A bare `hash`/`vector`/`sorted`/`index` captured into a closure supports
+key/index lookup, `for e in h` iteration, and `h[key] = value` point-assignment on
+interpret + native, leak-clean, including escape past scope. The one remaining gap is
+**append (`h += …`)**, rejected with a clear parse-time error pointing at the working
+`h[key] = value` form (no silent breakage). Tests `tests/scripts/505` (working) + `506`
+(the append rejection); LOFT.md § Closures documents the contract. Promoted from
+[loft-lang/loft#511](https://github.com/loft-lang/loft/issues/511). Tracked as `@PLN93`.
 
 ## Goal
 
@@ -121,7 +120,8 @@ and the probes are graduated to `tests/scripts/NNN-collection-capture.loft`.
 | **3b** — reject iteration through a bare capture (loud; native defect) | **Done** — `for e in h` rejected (parser/collections.rs) |
 | **4** — escape / lifetime guard (C5) | **Done** — a closure capturing a local collection returned past its scope reads correctly + leak-clean on both backends (the store survives with the escaping closure) |
 | **5** — harden + land: `tests/scripts/505` (lookup) + `506` (rejections), full suites, docs, close #511 | **Done** — full suite green (canonical rebuild order), LOFT.md § Closures updated |
-| **6 (follow-up)** — mutation-through + iteration over a bare capture (write-back + native for-loop codegen) | Deferred — lookup covers the routing use case |
+| **6a** — iteration over a bare capture | **Done** — the loop element is bound as a BORROW of the closure so the per-iteration free never whole-store-frees the shared collection (native only; mirrors the #481 coroutine fix, `parser/collections.rs`). Both backends, leak-clean |
+| **6b** — mutation through a bare capture | **Partial** — point-assignment `h[key] = value` works (update + insert, both backends); **append `h += …` still rejected** (the assign target resolves to a throwaway local, not the captured store — a deeper assign-target-resolution fix). Workaround: `h[key] = value` |
 
 ## Out of scope (record, don't absorb)
 
