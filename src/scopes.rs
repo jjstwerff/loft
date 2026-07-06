@@ -504,6 +504,7 @@ fn move_elide(data: &mut Data) {
             collect_move_dest(
                 &code,
                 &mo,
+                &data.def(d_nr).variables,
                 &rec_sources,
                 &element_vars,
                 &mut dest,
@@ -568,6 +569,7 @@ fn move_elide(data: &mut Data) {
 fn collect_move_dest(
     node: &Value,
     mo: &MoveOps,
+    function: &Function,
     sources: &HashSet<u16>,
     element_vars: &HashSet<u16>,
     dest: &mut HashMap<u16, Value>,
@@ -580,13 +582,18 @@ fn collect_move_dest(
         && args.len() >= 2
     {
         // A stable in-place target is a slot EXPRESSION over a PRE-EXISTING container
-        // (`OpGetVector(v,…)` / `OpGetField(o,…)`). A destination based on a FRESH `OpNewRecord`
-        // element (a bare `_elm_N`, or `OpGetField(_elm_N,…)` — nested construction) is defined
-        // AFTER the source, so retargeting the source's construction there is a use-before-def
-        // (native: `var__elm_N` not in scope; interp: a dangling DbRef). Skip it.
-        let unstable = match base_var_of(&args[1], mo) {
-            Some(base) => element_vars.contains(&base),
-            None => true, // no resolvable base var → not a proven-stable slot
+        // (`OpGetVector(v,…)` / `OpGetField(o,…)`). NOT stable, and skipped:
+        //  - a bare `Var` dest (`x = e`) — no proof it pre-exists the source;
+        //  - a dest based on a FRESH `OpNewRecord` element (`OpGetField(_elm_N,…)` nested
+        //    construction) — defined AFTER the source (native `var__elm_N` not in scope);
+        //  - a dest based on ANY compiler TEMP (`_`-prefixed: `__ref_N` field-iteration refs,
+        //    `_slice_*`, …) — these are populated by machinery whose validity point the structural
+        //    rewrite can't prove. Only a USER-named container is a proven-stable target.
+        let unstable = match args[1].unspan() {
+            Value::Var(_) => true,
+            _ => base_var_of(&args[1], mo).is_none_or(|base| {
+                element_vars.contains(&base) || function.name(base).starts_with('_')
+            }),
         };
         if unstable || dest.contains_key(s) {
             ambiguous.insert(*s);
@@ -595,7 +602,7 @@ fn collect_move_dest(
         }
     }
     node.for_each_child(&mut |c| {
-        collect_move_dest(c, mo, sources, element_vars, dest, ambiguous);
+        collect_move_dest(c, mo, function, sources, element_vars, dest, ambiguous);
     });
 }
 
