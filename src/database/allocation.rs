@@ -355,7 +355,7 @@ impl Stores {
             // the lock before reinitialising to prevent a spurious panic in
             // Store::init().
             self.allocations[slot as usize].unlock();
-            self.allocations[slot as usize].init();
+            self.reinit_reused_slot(slot as usize);
         }
         // Maintain the invariant `max == highest_allocated_index + 1`.
         // The dispenser path can yield indices > current max (each
@@ -786,15 +786,30 @@ impl Stores {
         // that will be overwritten).  A full fix requires inc_rc on closure capture.
     }
 
+    /// Re-initialise a REUSED slot to a clean empty store.  If the slot still
+    /// holds a file-backed (mmap) store from a `store_persist_bind`, replace it
+    /// with a fresh anonymous store instead of `init()`-ing THROUGH the mmap:
+    /// `init()` writes the empty-store header into the mapped file, blanking the
+    /// persisted store's in-memory view so a later bind into the reused slot
+    /// reads an empty hash (the on-disk bytes, unsynced, survive — so a fresh
+    /// process still reads the data).  Dropping the old store flushes + closes
+    /// the mmap.  #513.
+    fn reinit_reused_slot(&mut self, slot: usize) {
+        if self.allocations[slot].is_file_backed() {
+            self.allocations[slot] = Store::new(100);
+        } else {
+            self.allocations[slot].init();
+        }
+    }
+
     pub fn clear(&mut self, db: &DbRef) {
         let slot = db.store_nr;
-        let store = &mut self.allocations[slot as usize];
         // Clear any stale lock before reinitialising — OpDatabase may
         // reinitialise a store that was previously locked by a const
         // parameter in a prior function call within the same loop iteration.
         // never unlock a PINNED (const/global) store.
-        if !store.pinned {
-            store.unlock();
+        if !self.allocations[slot as usize].pinned {
+            self.allocations[slot as usize].unlock();
         }
         // OpDatabase may adopt a store its variable freed at the end of the
         // previous loop iteration (the slot still holds the stale DbRef).
@@ -802,9 +817,10 @@ impl Stores {
         // the free bitmap, or `find_free_slot` hands the SAME slot to the
         // next fresh allocation — two owners, and the second's writes wipe
         // the first's record (#348: a File record clobbered by a sibling
-        // call's result vector).
-        store.free = false;
-        store.init();
+        // call's result vector).  #513: a file-backed slot is replaced, not
+        // init()'d through the mmap (see reinit_reused_slot).
+        self.reinit_reused_slot(slot as usize);
+        self.allocations[slot as usize].free = false;
         self.clear_free_bit(slot);
         // free_named's top-slot trim may have dropped `max` BELOW this slot
         // (the stale frame ref outlives the watermark).  Restore it, or
