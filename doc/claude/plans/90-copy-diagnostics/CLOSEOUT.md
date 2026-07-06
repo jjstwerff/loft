@@ -141,7 +141,22 @@ return `OpGetField(b,0)` directly (block dep `["b"]`). Matrix under `LOFT_POISON
   field-return down a different delivery path that **bypasses W1's return-site materialise** (`h`
   frees the temp `Box` then `return null`).
 
-So the ONLY remaining A2 gap is at the RETURN-of-temp site. **Second attempt (2026-07-06) — the
+**Third attempt (2026-07-06) — the DECISIVE one: A2 is a SEMANTIC change, not an optimization.**
+The right shape is to **alias the field INTO the buffer** (a `Set(__retbuf, OpGetField(b,fld))`, the
+match-arm `g`'s shape) rather than return `["b"]` directly — this keeps the buffer ABI, so **W1's
+temp-subject materialise handles the return-of-temp for free** (f matches g). With that,
+`copy_borrow_tail_into_retbuf`'s A2 branch made **all three matrix cells (named / tempbind /
+escapetemp) PASS** under `LOFT_POISON` on both backends, and `issues` (748) + `leak` (49) stayed
+green. **But the flag-on exposure sweep failed on `wrap` + `native`:** 3 `@PLN85` store-lifetime
+tests — `85_store_lifetime_field_read_copy`, `85_store_lifetime_implicit_param_return_copy`,
+`85_store_lifetime_borrowed_view_query` — **assert the COPY** and now break (native UAF panics +
+value asserts). So A2 changes documented field-return semantics from **copy → view**: the
+C86 "projections stay views (#426)" position vs the `@PLN85` "field-read copies for lifetime safety"
+contract those tests pin. **That is a DESIGN DECISION, not a corpus bug** — landing A2 means deciding
+copy-vs-view for field-return, migrating (or keeping) the `@PLN85` `*_copy` tests, and closing the
+residual native UAFs W1 doesn't cover. Reverted clean (three attempts, tree unaffected).
+
+Earlier notes preserved for the record — **Second attempt (2026-07-06) — the
 caller-side effect is DEEPER than a delivery reroute.** Adding a `classify_vector_delivery` branch to
 route `h`'s return of `f(<temp>)` to `CopyBorrow` did **not** fire: with A2, `f.returned()` is
 `["b"]` (a borrow of a VISIBLE param), and `h`'s return of `f(Box{..})` never reaches the vector
