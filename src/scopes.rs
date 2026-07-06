@@ -848,7 +848,9 @@ fn construct_drop(
 /// → SKIP); the run contains `a`'s `OpDatabase`; and `a` is genuinely allocated AFTER the source's
 /// backing (a real reorder). B1.4 also lifts the one-construct-per-fn cap — each safe construct is
 /// rewritten independently (a cross-construct dependency is a non-`a`, non-param run var → SKIPs
-/// that one). Anything else stays a copy. `skip` receives only the moved-out backings.
+/// that one). B1.4 (nested) walks EVERY block, so a construct inside an `if`/loop body is handled
+/// too — its `a`-alloc + `base`-build + copy are flat within that block. Anything else stays a
+/// copy. `skip` receives only the moved-out backings.
 fn construct_fresh_rewrite(
     code: &mut Value,
     con_sources: &HashSet<u16>,
@@ -857,12 +859,26 @@ fn construct_fresh_rewrite(
     written: &HashSet<u16>,
     skip: &mut HashSet<u16>,
 ) {
-    let Value::Block(b) = code else {
-        return;
-    };
-    // Rewrite each safe fresh construct. Re-scan after every rewrite (the reorder shifts indices);
-    // pick the source with the earliest remaining copy for a deterministic order; a source whose
-    // guards fail is recorded so it is not retried (guarantees termination).
+    // Apply the per-block reorder to the top block AND every nested block (if/loop bodies etc.).
+    if let Value::Block(b) = code {
+        fresh_rewrite_block(b, con_sources, co, function, written, skip);
+    }
+    code.for_each_child_mut(&mut |c| {
+        construct_fresh_rewrite(c, con_sources, co, function, written, skip);
+    });
+}
+
+/// Run the fresh-construction reorder over a SINGLE block's operators: rewrite each safe construct,
+/// re-scanning after every rewrite (the reorder shifts indices), by earliest remaining copy (a
+/// deterministic order); a guard-failing source is recorded so it is not retried (termination).
+fn fresh_rewrite_block(
+    b: &mut Block,
+    con_sources: &HashSet<u16>,
+    co: &ConstructOps,
+    function: &Function,
+    written: &HashSet<u16>,
+    skip: &mut HashSet<u16>,
+) {
     let mut failed: HashSet<u16> = HashSet::new();
     loop {
         let next = con_sources
@@ -1071,11 +1087,17 @@ fn fresh_retarget(node: &mut Value, src: u16, dest: &Value, co: &ConstructOps) {
 /// the idiom STRUCTURALLY. When `base` is a dead-after local (its own `__vdb` backing), build it
 /// DIRECTLY into the cleared `a.field`: move the `OpClearVector` ahead of `base`'s build, retarget
 /// `base`'s build ops onto `a.field`, and drop the temp + both copies + the wrapper. Both temp and
-/// wrapper join `skip` (their frees are suppressed). Flat top-level block only; conservative.
+/// wrapper join `skip` (their frees are suppressed). Walks every block (nested `if`/loop bodies too);
+/// conservative.
 fn construct_replace_rewrite(code: &mut Value, co: &ConstructOps, skip: &mut HashSet<u16>) {
-    let Value::Block(b) = code else {
-        return;
-    };
+    if let Value::Block(b) = code {
+        replace_rewrite_block(b, co, skip);
+    }
+    code.for_each_child_mut(&mut |c| construct_replace_rewrite(c, co, skip));
+}
+
+/// Run the whole-vector-replacement rewrite over a SINGLE block's operators.
+fn replace_rewrite_block(b: &mut Block, co: &ConstructOps, skip: &mut HashSet<u16>) {
     let mut failed: HashSet<usize> = HashSet::new();
     loop {
         // Find the earliest `copy 2` (`OpAppendVector(a.field, Var(rhs))`) preceded by the clear +

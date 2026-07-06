@@ -1385,6 +1385,78 @@ fn move_elide_whole_vector_replacement_eliminates_double_copy() {
     }
 }
 
+// ── @PLN90 phase B (B1.4 nested) — constructs inside nested blocks (if / loop bodies) ──
+// The reorder-based rewrites walk EVERY block, so a fresh construction or an `a.field = base`
+// replacement inside an `if`/loop body is elided too (its a-alloc + base-build + copy are flat
+// within that block). A construct whose field value reads an OUTER local still SKIPs (the run-guard
+// only allows `a` or a never-written param), and the loop reorder must stay per-iteration correct.
+const MOVE_ELIDE_NESTED_SRC: &str = r#"
+struct Bag { id: integer, items: vector<integer> }
+fn if_branch(cond: boolean) -> integer {     // fresh construct in an if-branch → elide
+    if cond {
+        base: vector<integer> = [10, 20, 30];
+        a = Bag { id: 2, items: base };
+        (a.items[1] ?? 0) + a.id             // 22
+    } else { 5 }
+}
+fn loop_body() -> integer {                  // fresh construct per loop iteration (literal) → elide
+    total = 0;
+    for i in 0..4 {
+        base: vector<integer> = [10, 20, 30];
+        a = Bag { id: 5, items: base };
+        total = total + (a.items[2] ?? 0) + a.id;   // (30+5)*4 = 140
+    }
+    total
+}
+fn nested_replace(cond: boolean) -> integer {  // `a.field = base` in an if-branch → elide
+    a = Bag { id: 7, items: [0] };
+    if cond {
+        base: vector<integer> = [100, 200];
+        a.items = base;
+        (a.items[0] ?? 0) + a.id             // 107
+    } else { 9 }
+}
+fn outer_ref(cond: boolean) -> integer {     // field value reads an OUTER local → SKIP (copy)
+    k = 50;
+    if cond {
+        base: vector<integer> = [1, 2, 3];
+        a = Bag { id: k, items: base };
+        (a.items[2] ?? 0) + a.id             // 53
+    } else { 8 }
+}
+fn main() {
+    print("{if_branch(true)} {loop_body()} {nested_replace(true)} {outer_ref(true)}\n");
+}
+"#;
+
+#[test]
+fn move_elide_handles_constructs_in_nested_blocks() {
+    // Values hold on both backends (if=22, loop=140 — per-iteration, replace=107, outer=53).
+    assert_move_elide_preserves(
+        MOVE_ELIDE_NESTED_SRC,
+        "move_elide_nested_probe",
+        "22 140 107 53",
+    );
+    let off = introspect_move_elide_src(MOVE_ELIDE_NESTED_SRC, "move_elide_nested_ir", false);
+    let on = introspect_move_elide_src(MOVE_ELIDE_NESTED_SRC, "move_elide_nested_ir", true);
+    // Constructs / replacements inside nested blocks elide.
+    for moved in ["if_branch", "loop_body", "nested_replace"] {
+        assert!(
+            op_count(&on, moved, "OpAppendVector") < op_count(&off, moved, "OpAppendVector"),
+            "{moved}: a construct in a nested block should elide (off={} on={})",
+            op_count(&off, moved, "OpAppendVector"),
+            op_count(&on, moved, "OpAppendVector"),
+        );
+    }
+    // A field value reading an OUTER local (not `a`, not a param) stays a copy — the walk reaches it,
+    // but the run-guard correctly refuses to hoist past a build it can't prove constant.
+    assert_eq!(
+        op_count(&on, "outer_ref", "OpAppendVector"),
+        op_count(&off, "outer_ref", "OpAppendVector"),
+        "outer_ref: a construct reading an outer local must stay a copy"
+    );
+}
+
 // ── @PLN90 Step 5 — the user-facing `--report-copies` report ──
 const REPORT_SRC: &str = r#"
 struct Item { tags: vector<integer> }

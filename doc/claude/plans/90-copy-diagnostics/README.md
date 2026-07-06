@@ -36,10 +36,12 @@ value (`Bag { id: n, items: base }`, sound on the interprocedural `find_written_
 **multiple fresh constructs per fn**. **B1.3d** added the `a.field = base` whole-vector replacement —
 the `__p154_rhs` DOUBLE copy (`base → __p154_rhs → a.field` + `OpClearVector`), detected structurally (not a
 MovePlan) and lowered to build `base` directly into the cleared field, eliminating BOTH copies (incl.
-the old-content-free of a heap-text field). Guards:
-`tests/use_analysis.rs::move_elide_{record,construct,fresh,param,multiple,whole_vector}_*`. NEXT =
-nested-Insert (non-flat) bodies, then **B1.5** flip default-on. Detail:
-[phase-b-design.md § B1.3d LANDED](phase-b-design.md).
+the old-content-free of a heap-text field). **Nested bodies** now work too — both reorder-based rewrites walk EVERY block, so a construct or
+`a.field = base` inside an `if`/loop body is elided (per-iteration correct in a loop). The
+move-elision now covers all four copy shapes in flat AND nested positions. Guards:
+`tests/use_analysis.rs::move_elide_{record,construct,fresh,param,multiple,whole_vector,nested}_*`.
+NEXT = **B1.5** flip `LOFT_MOVE_ELIDE` default-on (run the full suite flag-ON first). Detail:
+[phase-b-design.md § B1.3d LANDED / Nested bodies](phase-b-design.md).
 
 **Phase 1** — the decision covers every structure-copy emission ([phase1-inventory.md](phase1-inventory.md)).
 `LOFT_COPY_DUMP` is the runtime ground truth; the verdict (`use_analysis`, **route 1** —

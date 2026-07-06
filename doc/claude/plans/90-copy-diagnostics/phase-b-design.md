@@ -403,7 +403,14 @@ copies. Multiple replacements per fn handled (loop, like the fresh case). Guard:
   a dead-after local (its own `__vdb` backing; not referenced after copy2; not a param), it moves the
   `OpClearVector` ahead of `base`'s build, retargets `base`'s build onto `a.field`, and drops both
   copies + the temp + the wrapper (temp + wrapper `skip`-freed). Runs UNCONDITIONALLY (not gated on
-  a MovePlan). See "B1.3d LANDED". Remaining (SAFE-skipped): nested-Insert (non-flat) bodies.
+  a MovePlan). See "B1.3d LANDED".
+- **Nested bodies (DONE).** Both reorder-based rewrites (`construct_fresh_rewrite`,
+  `construct_replace_rewrite`) now WALK every block, applying the per-block reorder to nested `if`/
+  loop-body blocks too — a construct's `a`-alloc + `base`-build + copy are flat within whatever block
+  they live in. Validated: fresh + replace inside an if-branch, and a fresh construct in a loop body
+  (per-iteration correct); an outer-local / loop-var field value stays a copy (the run-guard only
+  admits `a` or a never-written param). Guard: `move_elide_handles_constructs_in_nested_blocks`.
+  The move-elision now covers all four copy shapes in flat AND nested positions.
 - **B1.5 — graduate + flip.** ↓ (unchanged)
 - **B1.5 — graduate + flip.** Guards landed in `tests/use_analysis.rs` (record + construct + fresh +
   param); extend to `tests/scripts/` + `tests/leak_cases/`, then flip `LOFT_MOVE_ELIDE` default-on
