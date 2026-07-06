@@ -52,14 +52,17 @@ non-stable slot / source read between build and copy," all fixed via a guard lay
 (issues 748, leak 49, native, wrap, native_scripts, loft_suite); CI green incl. the ASan UAF/OOB
 gate. Detail: [phase-b-design.md § B1.5](phase-b-design.md).
 
-**@PLN90 remains OPEN — but both P0 correctness bugs are now CLOSED.** Phase B (the *elimination*
-half) shipped; **W6** (par-dispatch over `vector<fn-ref>` native E0308) and **W1 = A1b** (the
-temp-subject borrow-return UAF — the wide-release blocker) are both FIXED (2026-07-06, default on).
-What remains is the P1 arc: **A2** (field→alias optimisation), the plan's namesake **user-facing
-copy lint** (Phase 2 — report built #510, only the enforced warning channel missing), **Phase 3**
-(explicit-copy syntax), **O-Complete** (analysis totality proof — W1 supplied the missing
-representation), and the empty-arm parse normalise (robustness). Concrete build steps + status per
-item: [CLOSEOUT.md](CLOSEOUT.md); prioritised view: [REMAINING.md](REMAINING.md).
+**@PLN90 remains OPEN — but both P0 correctness bugs AND the namesake lint channel are now done.**
+Phase B (the *elimination* half) shipped. Landed 2026-07-06: **W6** (par-dispatch over
+`vector<fn-ref>` native E0308) · **W1 = A1b** (the temp-subject borrow-return UAF — the wide-release
+blocker, default on) · **W5** (the enforced copy-lint channel — Avoidable copies route through
+`Level::Warning`, gated `LOFT_WARN_COPIES`, default off pending the Avoidable-set drain). What
+remains is the follow-on P1 arc: **A2** (field→alias optimisation — *couples with the caller-side
+materialise or it re-opens the A1b UAF class for temp-arg bindings*), **W5 default-on** (after the
+Avoidable set drains) + **S5.2** (precise copy locations), **Phase 3** (explicit-copy syntax — needs
+a keyword-reservation design decision), **O-Complete** (analysis totality proof — W1 supplied the
+missing representation), and the empty-arm parse normalise (robustness). Concrete build steps +
+status per item: [CLOSEOUT.md](CLOSEOUT.md); prioritised view: [REMAINING.md](REMAINING.md).
 
 **Phase 1** — the decision covers every structure-copy emission ([phase1-inventory.md](phase1-inventory.md)).
 `LOFT_COPY_DUMP` is the runtime ground truth; the verdict (`use_analysis`, **route 1** —
