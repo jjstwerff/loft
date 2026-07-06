@@ -10,6 +10,9 @@ work and its neighbours. **P0 = genuine correctness/soundness issues that must c
 a wide release. P1 = important optimisations (real wins, but correct-as-is) — lower
 priority, done after the P0 issues.** Each item points at its canonical home.
 
+> **Concrete build steps (verified 2026-07-06, decomposed into landable increments W1–W9):
+> [CLOSEOUT.md](CLOSEOUT.md).** This file is the prioritised *view*; CLOSEOUT is the *how*.
+
 > **SHIPPED 2026-07-06 (PR #514, squash `46ecd3dc`): phase B — the last-use MOVE-elision, DEFAULT
 > ON.** The store-transfer half of the north-star (build a dead-after owned source directly into its
 > destination instead of copy-then-free) now runs for every proven-safe shape (Record; Construct
@@ -34,13 +37,11 @@ dogfood UAF). Three concrete open pieces:
   at a call site where the subject does not out-live the result — the `deps`/lifetime
   decision. Design: [borrow-return/DESIGN.md](borrow-return/DESIGN.md) (slice 2 / failure
   paths F1–F2). **Effort: M.**
-- **#462 — residual native record leak.** A native-only `MonsterDef×216` *record* leak in
-  the borrowed-view shape (Cluster-A/C borrow-over-free family). Reproduces `--native`,
-  interp clean. [STABILITY_ROADMAP.md `462-leak`](../../STABILITY_ROADMAP.md) ·
-  [cluster-462](../85-store-lifetime-retirement/cluster-462-slot-reuse-uaf.md). **Gate-1
-  note:** same borrow-over-free family as A1b (a borrowed view materialised/freed wrong on
-  native) — **likely subsumed by the A1b buffer fix**; re-check `M-462repro` after A1b lands
-  before treating it as separate. **Effort: S–M.**
+- ~~**#462 — residual native record leak.**~~ **CLOSED** (verified 2026-07-06). The GitHub
+  issue is closed and the compact repros run clean on both backends — subsumed by the @PLN85
+  `store/adopt-free` siblings (#306/#464/#494/#504), *not* by A1b (a different representation:
+  record vs vector-buffer). No open issue remains; re-open only if a crawler-scale record leak
+  resurfaces (no in-repo corpus tests it now). Off the P0 list.
 - **Analysis completeness (`O-Complete`).** The `deps`/`ownership_of` analysis is not proven
   **total** — and "an incomplete fact is not a compile error, it is a miscompile or a leak"
   ([OWNERSHIP_MODEL.md § Internal and invisible](../../OWNERSHIP_MODEL.md)). The over-free
@@ -88,10 +89,13 @@ automatically not copying ([COPY_DIAGNOSTICS.md § North-star](../../COPY_DIAGNO
   (**Implicit**). **PREREQUISITE — the source-survival split:** today `construct_copy` /
   `record_copy` are blanket-classified `Implicit`, so a construction/slot-set that duplicates a
   *live* source is wrongly silenced (it should be Avoidable/Forced). Land
-  [unbound-copy-lint.md](unbound-copy-lint.md) (key the split on source survival, gated,
-  suite byte-identical) BEFORE wiring the emission. The classification scaffold is built
-  (`VerdictRow.class`, `MAT-WORKLIST`); the survival split and the lint emission are not.
-  [COPY_DIAGNOSTICS.md § bound vs unbound](../../COPY_DIAGNOSTICS.md). **Effort: M.**
+  [unbound-copy-lint.md](unbound-copy-lint.md). **Update (verified 2026-07-06):** the survival
+  split IS built — `survival_class` (`src/use_analysis.rs:855`) keys Implicit/Avoidable/Forced on
+  source survival, and the user-facing report `report_copies` (`--report-copies`, #510) ships,
+  both gated on `report_copies_enabled()`. What remains is only the **enforced** channel: route
+  Avoidable rows through the existing `Level::Warning` diagnostics path (`data.rs` `diags.add_at`)
+  as a default lint, and resolve `VerdictRow.loc` to real spans. Steps: CLOSEOUT W5.
+  [COPY_DIAGNOSTICS.md § bound vs unbound](../../COPY_DIAGNOSTICS.md). **Effort: S–M.**
 - **Drain bucket 2 (grow the auto-elision set).** Extend the `Borrow`→`ElidePlan` engine to
   more avoidable copies (var-buffer conservative cases the analysis can't yet prove,
   construction where the source provably out-lives a non-escaping record). Each avoidable row

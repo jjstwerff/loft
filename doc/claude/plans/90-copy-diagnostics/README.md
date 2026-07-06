@@ -8,6 +8,8 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 Tracker: [@PLN90](https://github.com/loft-lang/plans/issues/90).
 Full design + failure-path enumeration: [COPY_DIAGNOSTICS.md](../../COPY_DIAGNOSTICS.md).
 **Remaining open work before release (issues + optimisations, prioritised): [REMAINING.md](REMAINING.md).**
+**Concrete close-out plan — the verified remainder decomposed into landable increments
+(W1–W9, sequenced, with per-step file·fn·line): [CLOSEOUT.md](CLOSEOUT.md).**
 **The user-facing lint recipe (the bound-vs-unbound survival split, flag-gated report, staged
 to close): [unbound-copy-lint.md](unbound-copy-lint.md).** Phase-A survey + the 4 landed items:
 [survey-findings.md](survey-findings.md).
@@ -74,7 +76,11 @@ bucket 1 (auto-elide), stay quiet on bucket 3, never copy "just because"
 ([COPY_DIAGNOSTICS.md § North-star](../../COPY_DIAGNOSTICS.md)). Suite byte-identical (issues
 746, use_analysis 16).
 
-**Phase 2 REFINEMENT (design set, not yet built — [unbound-copy-lint.md](unbound-copy-lint.md)).**
+**Phase 2 REFINEMENT — the report + survival split BUILT (#510); the enforced warning is not
+([unbound-copy-lint.md](unbound-copy-lint.md), CLOSEOUT W5).** `report_copies` (the user-facing
+`--report-copies`) and the bound-vs-unbound `survival_class` split now ship (gated on
+`report_copies_enabled()`); what remains is routing Avoidable rows through the `Level::Warning`
+diagnostics channel as a default lint (blocked on draining the Avoidable set — W1/W2 — first).
 The blanket "construction / `OpCopyRecord` → Implicit" above is **too coarse**: it silences a
 construction / slot-set that **duplicates a still-live source** — a genuine *unbound* copy the
 user must see. The silent/indicate line is **bound vs unbound**, keyed on the copy's *source
