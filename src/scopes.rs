@@ -471,6 +471,8 @@ fn move_elide(data: &mut Data) {
         op_set_int4: data.def_nr("OpSetInt4"),
         op_get_field: data.def_nr("OpGetField"),
         op_clear: data.def_nr("OpClearVector"),
+        op_new_record: data.def_nr("OpNewRecord"),
+        op_finish_record: data.def_nr("OpFinishRecord"),
     };
     for d_nr in 0..data.definitions() {
         if !matches!(data.def(d_nr).def_type, DefType::Function) {
@@ -494,9 +496,6 @@ fn move_elide(data: &mut Data) {
         // First-def order per var — a Record destination's container must be defined BEFORE its
         // source (else the retargeted build writes into an un-allocated container).
         let def_order = collect_def_order(&code, &mo);
-        // Sources GROWN by appends (a for-loop of `out += […]`) — the fresh reorder can't retarget
-        // their build; leave them a copy.
-        let append_grown = collect_append_grown(&code, co.op_append);
 
         // ── RECORD shape (`v[i]=e` / `o.f=src`, OpCopyRecord) ──
         let rec_sources: HashSet<u16> = plans
@@ -537,13 +536,23 @@ fn move_elide(data: &mut Data) {
             .map(|p| p.source)
             .collect();
         if !con_sources.is_empty() {
+            // Sources that are USED outside their own construction + the single copy — read between
+            // being built and being moved (`out=[]; for{ out+=[…] }; assert("{out:j}"); w={items:out}`
+            // — `out` is read by the assert BEFORE the move). Building such a source directly into the
+            // destination would leave that intermediate read seeing the un-built source, so leave it
+            // a copy. (Also subsumes append-grown sources: `v += w` is `v` at arg0 of a non-write op.)
+            let escaping: HashSet<u16> = con_sources
+                .iter()
+                .copied()
+                .filter(|&s| source_escapes(&code, s, &co))
+                .collect();
             // B1.3b — reorder-free field-appends (`x.field += src`, container already exists).
             construct_move_rewrite(
                 &mut code,
                 &con_sources,
                 &co,
                 &bad_containers,
-                &append_grown,
+                &escaping,
                 &mut skip,
             );
             // B1.3c — fresh construction (`a = Bag { items: base }`, container built after the
@@ -565,7 +574,7 @@ fn move_elide(data: &mut Data) {
                 &data.def(d_nr).variables,
                 &written,
                 &bad_containers,
-                &append_grown,
+                &escaping,
                 &mut skip,
             );
         }
@@ -679,23 +688,35 @@ fn collect_multi_database(node: &Value, mo: &MoveOps) -> HashSet<u16> {
     multi
 }
 
-/// Vars GROWN by an `OpAppendVector(v, …)` (`v` is arg0) — i.e. built incrementally, typically by a
-/// for-loop of `v += […]`. The fresh-construction reorder only retargets simple in-place element
-/// builds (`OpNewRecord`/`OpFinishRecord`); it cannot retarget append-grown ops, so dropping such a
-/// source's def while its appends still reference it dangles the var (`var_out` not in scope). Skip.
-fn collect_append_grown(node: &Value, op_append: u32) -> HashSet<u16> {
-    fn walk(node: &Value, op_append: u32, out: &mut HashSet<u16>) {
-        if let Value::Call(d, args) = node.unspan()
-            && *d == op_append
-            && let Some(Value::Var(v)) = args.first().map(Value::unspan)
-        {
-            out.insert(*v);
+/// Does `src` ESCAPE its own construction — is it referenced anywhere OTHER than (a) as arg0 of a
+/// WRITE op that builds it (`OpPreAllocVector`/`OpNewRecord`/`OpFinishRecord`/`OpSetInt4`), or (b) as
+/// arg1 of the append copy that moves it? A source that is built, then READ (`"{out:j}"`, `out[i]`,
+/// passed to a fn), then moved is NOT dead-between-build-and-copy: building it directly into the
+/// destination would leave the intermediate read seeing the un-built source (`var_out` not in
+/// scope / wrong value). The `Set(src, …)` view-def / null-init targets `src` (not an arg) and is
+/// fine; the `vdb` backing / `_elm` element temps aren't `src`. Any other appearance → escapes.
+fn source_escapes(node: &Value, src: u16, co: &ConstructOps) -> bool {
+    fn walk(node: &Value, src: u16, co: &ConstructOps, bad: &mut bool) {
+        if let Value::Call(d, args) = node.unspan() {
+            for (i, a) in args.iter().enumerate() {
+                if matches!(a.unspan(), Value::Var(v) if *v == src) {
+                    let write_arg0 = i == 0
+                        && (*d == co.op_prealloc
+                            || *d == co.op_new_record
+                            || *d == co.op_finish_record
+                            || *d == co.op_set_int4);
+                    let copy_arg1 = i == 1 && *d == co.op_append;
+                    if !(write_arg0 || copy_arg1) {
+                        *bad = true;
+                    }
+                }
+            }
         }
-        node.for_each_child(&mut |c| walk(c, op_append, out));
+        node.for_each_child(&mut |c| walk(c, src, co, bad));
     }
-    let mut out = HashSet::new();
-    walk(node, op_append, &mut out);
-    out
+    let mut bad = false;
+    walk(node, src, co, &mut bad);
+    bad
 }
 
 /// First-definition encounter order per var (`Set(v,…)` value-bind or `OpDatabase(v)` alloc). Used
@@ -796,6 +817,8 @@ struct ConstructOps {
     op_set_int4: u32,
     op_get_field: u32,
     op_clear: u32,
+    op_new_record: u32,
+    op_finish_record: u32,
 }
 
 /// @PLN90 phase B (B1.3b) — the CONSTRUCT copy shape (`x.field += src`, lowered as a copying
@@ -817,7 +840,7 @@ fn construct_move_rewrite(
     con_sources: &HashSet<u16>,
     co: &ConstructOps,
     bad_containers: &HashSet<u16>,
-    append_grown: &HashSet<u16>,
+    escaping: &HashSet<u16>,
     skip: &mut HashSet<u16>,
 ) {
     // Pass 1 — pre-scan: per source capture the append destination, its backing wrapper, the
@@ -848,9 +871,9 @@ fn construct_move_rewrite(
             !ambiguous.contains(s)
                 && dest.contains_key(s)
                 && vdb.contains_key(s)
-                // An append/loop-grown source (`out += […]` in a for-loop) is not built by the
-                // simple in-place element ops the retarget handles → leave it a copy.
-                && !append_grown.contains(s)
+                // A source READ between its build and the move (or grown by appends) can't be built
+                // directly into the destination — leave it a copy.
+                && !escaping.contains(s)
                 // B1.3b handles a PURE append (`x.field += src`). If the field is CLEARED anywhere
                 // it is a whole-vector REPLACE (`x.field = src`, an `OpClearVector` + append) — a
                 // simple retarget would leave the clear stranded after the retargeted build (empties
@@ -1044,7 +1067,7 @@ fn construct_fresh_rewrite(
     function: &Function,
     written: &HashSet<u16>,
     bad_containers: &HashSet<u16>,
-    append_grown: &HashSet<u16>,
+    escaping: &HashSet<u16>,
     skip: &mut HashSet<u16>,
 ) {
     // Apply the per-block reorder to the top block AND every nested block (if/loop bodies etc.).
@@ -1056,7 +1079,7 @@ fn construct_fresh_rewrite(
             function,
             written,
             bad_containers,
-            append_grown,
+            escaping,
             skip,
         );
     }
@@ -1068,7 +1091,7 @@ fn construct_fresh_rewrite(
             function,
             written,
             bad_containers,
-            append_grown,
+            escaping,
             skip,
         );
     });
@@ -1085,7 +1108,7 @@ fn fresh_rewrite_block(
     function: &Function,
     written: &HashSet<u16>,
     bad_containers: &HashSet<u16>,
-    append_grown: &HashSet<u16>,
+    escaping: &HashSet<u16>,
     skip: &mut HashSet<u16>,
 ) {
     let mut failed: HashSet<u16> = HashSet::new();
@@ -1111,7 +1134,7 @@ fn fresh_rewrite_block(
             function,
             written,
             bad_containers,
-            append_grown,
+            escaping,
             skip,
         ) {
             failed.insert(src);
@@ -1130,11 +1153,11 @@ fn try_fresh_one(
     function: &Function,
     written: &HashSet<u16>,
     bad_containers: &HashSet<u16>,
-    append_grown: &HashSet<u16>,
+    escaping: &HashSet<u16>,
     skip: &mut HashSet<u16>,
 ) -> bool {
-    if append_grown.contains(&src) {
-        return false; // an append/loop-grown source can't be retargeted by the in-place reorder.
+    if escaping.contains(&src) {
+        return false; // read between build and copy (or append-grown) → not safe to retarget.
     }
     // Copy index + destination expression (`a.field`) — the first copy of `src`.
     let mut ci = None;
