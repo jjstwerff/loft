@@ -10,6 +10,16 @@ work and its neighbours. **P0 = genuine correctness/soundness issues that must c
 a wide release. P1 = important optimisations (real wins, but correct-as-is) — lower
 priority, done after the P0 issues.** Each item points at its canonical home.
 
+> **SHIPPED 2026-07-06 (PR #514, squash `46ecd3dc`): phase B — the last-use MOVE-elision, DEFAULT
+> ON.** The store-transfer half of the north-star (build a dead-after owned source directly into its
+> destination instead of copy-then-free) now runs for every proven-safe shape (Record; Construct
+> field-append / fresh construction / `a.field=base`; flat + nested), `LOFT_NO_MOVE_ELIDE` opts out.
+> That is the *elimination* direction. What remains below is the **borrow direction** (return an
+> alias, don't copy OUT — A1b/A2, the actual soundness blocker), the **user-facing lint** (the
+> plan's namesake — Phase 2, only the classification scaffold is built), and **Phase 3**
+> (explicit-copy syntax). The plan is NOT done: **@PLN90 stays OPEN** — its P0 A1b native
+> borrow-return UAF is the wide-release blocker and is tracked only here.
+
 ## P0 — genuine issues (must close before release)
 
 ### 1. Heap-ownership soundness — loft's stated #1 weakness (wide-release blocker)

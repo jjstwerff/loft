@@ -41,13 +41,19 @@ the old-content-free of a heap-text field). **Nested bodies** now work too — b
 move-elision now covers all four copy shapes in flat AND nested positions. Guards:
 `tests/use_analysis.rs::move_elide_{record,construct,fresh,param,multiple,whole_vector,nested}_*`.
 
-**B1.5 FLIPPED — the move-elision is DEFAULT ON** (`LOFT_NO_MOVE_ELIDE` opts out; the `MOVE-PLAN`
-dump is split onto its own opt-in `LOFT_MOVE_ELIDE`). Getting there required a **flag-ON exposure
-sweep** (running the whole corpus with the rewrite on — the ~30 hand-probes never did): it found ~12
-corpus bugs, all "retargeted into a non-stable slot / source read between build and copy," all fixed
-via a guard layer (`bad_containers`, `def_order`, `source_escapes`, self-read, replace-vs-append).
-Behavioural corpus green default-on (issues 748, leak 49, native, wrap, native_scripts, loft_suite).
-Detail: [phase-b-design.md § B1.5](phase-b-design.md).
+**B1.5 FLIPPED — the move-elision is DEFAULT ON — MERGED to main 2026-07-06 (PR #514, squash
+`46ecd3dc`).** `LOFT_NO_MOVE_ELIDE` opts out; the `MOVE-PLAN` dump is split onto its own opt-in
+`LOFT_MOVE_ELIDE`. Getting there required a **flag-ON exposure sweep** (running the whole corpus with
+the rewrite on — the ~30 hand-probes never did): it found ~12 corpus bugs, all "retargeted into a
+non-stable slot / source read between build and copy," all fixed via a guard layer (`bad_containers`,
+`def_order`, `source_escapes`, self-read, replace-vs-append). Behavioural corpus green default-on
+(issues 748, leak 49, native, wrap, native_scripts, loft_suite); CI green incl. the ASan UAF/OOB
+gate. Detail: [phase-b-design.md § B1.5](phase-b-design.md).
+
+**@PLN90 remains OPEN.** Phase B (the *elimination* half) is shipped, but the plan's namesake
+**user-facing copy lint** (Phase 2 — only the classification scaffold is built), the **borrow
+direction** (A1b/A2 — the P0 native borrow-return UAF, the wide-release blocker), and **Phase 3**
+(explicit-copy syntax) are still open. See [REMAINING.md](REMAINING.md).
 
 **Phase 1** — the decision covers every structure-copy emission ([phase1-inventory.md](phase1-inventory.md)).
 `LOFT_COPY_DUMP` is the runtime ground truth; the verdict (`use_analysis`, **route 1** —
