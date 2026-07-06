@@ -556,6 +556,27 @@ failure point is visible at the call site.  The one special case is
 elsewhere — because loft treats format interpolation as a dedicated
 rendering operation, not a general coercion.
 
+**Narrowing an integer *value* (expression casts).** Writing `x as u8`
+when the compiler cannot prove `x` fits `0..=255` is a **compile error**,
+not a silent truncation.  Pick the form by what should happen to an
+out-of-range value:
+
+- **Fallback** — `x as u8 ?? d`.  A checked narrowing with a default: the
+  value when it fits `u8`, otherwise `d` (which must itself fit `u8`).
+  The result is a `u8`, so it drops straight into a `u8` field / return /
+  local with no further cast.  `x as u8? ?? d` means the same thing; the
+  `?`-free form is the natural one.
+- **Mask** — `x & 0xFF`.  Keeps the low bits (wraps an out-of-range
+  value).  The mask proves the range, so the result stores into a `u8`
+  slot with no `as` at all — the idiom for byte packing, RGBA, and
+  hashing.
+- **Constrain the source type** — declare it `integer limit(0, 255)` (or
+  `u8`).  A value that provably fits narrows implicitly, no cast.
+
+Loft does **not** refine a value's range from an `if` guard — inside
+`if x <= 255 { … }`, `x` is still a full `integer`.  Use one of the forms
+above.
+
 ### Parsing (JSON → JsonValue tree → struct)
 
 JSON support has two layers:

@@ -376,7 +376,7 @@ pub fn store_durable_seal(path: text) -> boolean fs#update;
 // JSON or rebuild-from-source).
 //
 // Typical dryopea-style pattern:
-//   pw = PaintedWorld { painted: hash<PaintedHex[q, r]>::new() }
+//   pw = PaintedWorld { painted: [] }   // painted's declared type is hash<PaintedHex[q, r]>
 //   store_persist_bind(pw.painted, "dryopea_world.store")
 //   // …mutations to pw.painted now hit mmap'd bytes…
 pub fn store_persist_bind(r: hash, path: text) -> boolean fs#update;
