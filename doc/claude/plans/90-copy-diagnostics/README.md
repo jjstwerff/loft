@@ -52,10 +52,14 @@ non-stable slot / source read between build and copy," all fixed via a guard lay
 (issues 748, leak 49, native, wrap, native_scripts, loft_suite); CI green incl. the ASan UAF/OOB
 gate. Detail: [phase-b-design.md § B1.5](phase-b-design.md).
 
-**@PLN90 remains OPEN.** Phase B (the *elimination* half) is shipped, but the plan's namesake
-**user-facing copy lint** (Phase 2 — only the classification scaffold is built), the **borrow
-direction** (A1b/A2 — the P0 native borrow-return UAF, the wide-release blocker), and **Phase 3**
-(explicit-copy syntax) are still open. See [REMAINING.md](REMAINING.md).
+**@PLN90 remains OPEN — but both P0 correctness bugs are now CLOSED.** Phase B (the *elimination*
+half) shipped; **W6** (par-dispatch over `vector<fn-ref>` native E0308) and **W1 = A1b** (the
+temp-subject borrow-return UAF — the wide-release blocker) are both FIXED (2026-07-06, default on).
+What remains is the P1 arc: **A2** (field→alias optimisation), the plan's namesake **user-facing
+copy lint** (Phase 2 — report built #510, only the enforced warning channel missing), **Phase 3**
+(explicit-copy syntax), **O-Complete** (analysis totality proof — W1 supplied the missing
+representation), and the empty-arm parse normalise (robustness). Concrete build steps + status per
+item: [CLOSEOUT.md](CLOSEOUT.md); prioritised view: [REMAINING.md](REMAINING.md).
 
 **Phase 1** — the decision covers every structure-copy emission ([phase1-inventory.md](phase1-inventory.md)).
 `LOFT_COPY_DUMP` is the runtime ground truth; the verdict (`use_analysis`, **route 1** —
