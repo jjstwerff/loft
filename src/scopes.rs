@@ -483,12 +483,17 @@ fn move_elide(data: &mut Data) {
         // Vars to suppress the (later `variables()`-emitted) scope-exit free for — the moved-out
         // owned store now lives in the destination, so its null slot must not be freed.
         let mut skip: HashSet<u16> = HashSet::new();
-        // Transient element slots (`_elm_N = OpNewRecord(…)`, reused across a vector literal /
-        // nested construction). A container / destination based on one is NOT a stable pre-existing
-        // slot — it is a fresh record defined later, so no rewrite may retarget the source's build
-        // there (use-before-def). Every rewrite consults this. Stable across the rewrites (they
-        // never turn a var into / out of an `OpNewRecord` element).
-        let element_vars = collect_element_vars(&code, &mo);
+        // Containers a rewrite must NOT retarget a source's build into — NOT a stable, pre-existing,
+        // single-def owned slot. Two producers, unioned; every rewrite consults the result:
+        //  - transient element slots (`_elm_N = OpNewRecord(…)`, reused across a vector literal /
+        //    nested construction) — a fresh record defined LATER (use-before-def);
+        //  - vars allocated MORE THAN ONCE — REASSIGNED (`b = Bag{…}; … b = Bag{…}`) — the container
+        //    has a prior store the reorder's hoist does not retire.
+        let mut bad_containers = collect_element_vars(&code, &mo);
+        bad_containers.extend(collect_multi_database(&code, &mo));
+        // First-def order per var — a Record destination's container must be defined BEFORE its
+        // source (else the retargeted build writes into an un-allocated container).
+        let def_order = collect_def_order(&code, &mo);
 
         // ── RECORD shape (`v[i]=e` / `o.f=src`, OpCopyRecord) ──
         let rec_sources: HashSet<u16> = plans
@@ -506,7 +511,8 @@ fn move_elide(data: &mut Data) {
                 &mo,
                 &data.def(d_nr).variables,
                 &rec_sources,
-                &element_vars,
+                &bad_containers,
+                &def_order,
                 &mut dest,
                 &mut ambiguous,
             );
@@ -529,7 +535,7 @@ fn move_elide(data: &mut Data) {
             .collect();
         if !con_sources.is_empty() {
             // B1.3b — reorder-free field-appends (`x.field += src`, container already exists).
-            construct_move_rewrite(&mut code, &con_sources, &co, &element_vars, &mut skip);
+            construct_move_rewrite(&mut code, &con_sources, &co, &bad_containers, &mut skip);
             // B1.3c — fresh construction (`a = Bag { items: base }`, container built after the
             // source): hoist `a`'s alloc, then retarget. Runs on the copies B1.3b left standing.
             // B1.4 — the interprocedural mutation set (`find_written_vars` knows which callees
@@ -548,6 +554,7 @@ fn move_elide(data: &mut Data) {
                 &co,
                 &data.def(d_nr).variables,
                 &written,
+                &bad_containers,
                 &mut skip,
             );
         }
@@ -566,12 +573,14 @@ fn move_elide(data: &mut Data) {
 
 /// Pass 1 of [`move_elide`]: map each move source to the `OpCopyRecord` destination it copies
 /// into; a source seen with a second destination is marked ambiguous (and skipped).
+#[allow(clippy::too_many_arguments)]
 fn collect_move_dest(
     node: &Value,
     mo: &MoveOps,
     function: &Function,
     sources: &HashSet<u16>,
-    element_vars: &HashSet<u16>,
+    bad_containers: &HashSet<u16>,
+    def_order: &HashMap<u16, usize>,
     dest: &mut HashMap<u16, Value>,
     ambiguous: &mut HashSet<u16>,
 ) {
@@ -592,7 +601,14 @@ fn collect_move_dest(
         let unstable = match args[1].unspan() {
             Value::Var(_) => true,
             _ => base_var_of(&args[1], mo).is_none_or(|base| {
-                element_vars.contains(&base) || function.name(base).starts_with('_')
+                bad_containers.contains(&base)
+                    || function.name(base).starts_with('_')
+                    // the container must be DEFINED before the source is built (else the retargeted
+                    // build writes into an un-allocated slot).
+                    || def_order
+                        .get(&base)
+                        .zip(def_order.get(s))
+                        .is_none_or(|(&bd, &sd)| bd >= sd)
             }),
         };
         if unstable || dest.contains_key(s) {
@@ -602,7 +618,16 @@ fn collect_move_dest(
         }
     }
     node.for_each_child(&mut |c| {
-        collect_move_dest(c, mo, function, sources, element_vars, dest, ambiguous);
+        collect_move_dest(
+            c,
+            mo,
+            function,
+            sources,
+            bad_containers,
+            def_order,
+            dest,
+            ambiguous,
+        );
     });
 }
 
@@ -620,6 +645,52 @@ fn collect_element_vars(node: &Value, mo: &MoveOps) -> HashSet<u16> {
     }
     let mut out = HashSet::new();
     walk(node, mo, &mut out);
+    out
+}
+
+/// Vars allocated (`OpDatabase(v, …)`) MORE THAN ONCE — a var REASSIGNED to a fresh record/vector
+/// (`b = Bag{…}; … b = Bag{…}`). Such a container has a prior store the reorder rewrites' hoist does
+/// not retire, so they must leave it a copy.
+fn collect_multi_database(node: &Value, mo: &MoveOps) -> HashSet<u16> {
+    fn walk(node: &Value, mo: &MoveOps, seen: &mut HashSet<u16>, multi: &mut HashSet<u16>) {
+        if let Value::Call(d, args) = node.unspan()
+            && *d == mo.op_database
+            && let Some(Value::Var(v)) = args.first().map(Value::unspan)
+            && !seen.insert(*v)
+        {
+            multi.insert(*v);
+        }
+        node.for_each_child(&mut |c| walk(c, mo, seen, multi));
+    }
+    let mut seen = HashSet::new();
+    let mut multi = HashSet::new();
+    walk(node, mo, &mut seen, &mut multi);
+    multi
+}
+
+/// First-definition encounter order per var (`Set(v,…)` value-bind or `OpDatabase(v)` alloc). Used
+/// to prove a Record destination's container is defined BEFORE the source is built — otherwise
+/// retargeting the source's construction into `container.field` writes into an un-allocated slot
+/// (`b = SABag { extra: extra }`: `b` allocated AFTER `extra` → `var_b` not in scope).
+fn collect_def_order(node: &Value, mo: &MoveOps) -> HashMap<u16, usize> {
+    fn walk(node: &Value, mo: &MoveOps, idx: &mut usize, out: &mut HashMap<u16, usize>) {
+        match node.unspan() {
+            Value::Set(v, _) => {
+                out.entry(*v).or_insert(*idx);
+            }
+            Value::Call(d, args) if *d == mo.op_database => {
+                if let Some(Value::Var(v)) = args.first().map(Value::unspan) {
+                    out.entry(*v).or_insert(*idx);
+                }
+            }
+            _ => {}
+        }
+        *idx += 1;
+        node.for_each_child(&mut |c| walk(c, mo, idx, out));
+    }
+    let mut idx = 0;
+    let mut out = HashMap::new();
+    walk(node, mo, &mut idx, &mut out);
     out
 }
 
@@ -715,7 +786,7 @@ fn construct_move_rewrite(
     code: &mut Value,
     con_sources: &HashSet<u16>,
     co: &ConstructOps,
-    element_vars: &HashSet<u16>,
+    bad_containers: &HashSet<u16>,
     skip: &mut HashSet<u16>,
 ) {
     // Pass 1 — pre-scan: per source capture the append destination, its backing wrapper, the
@@ -756,7 +827,7 @@ fn construct_move_rewrite(
                     // The container must PRE-EXIST when the source is built. A FRESH `OpNewRecord`
                     // element (`[Chunk { … }]` → `_elm_N.field += src`) has no `OpDatabase` but is
                     // NOT pre-existing — it is defined later, so retargeting there is use-before-def.
-                    if element_vars.contains(&cvar) {
+                    if bad_containers.contains(&cvar) {
                         return false;
                     }
                     // container built before the source's backing (both locals), or a real param.
@@ -937,14 +1008,15 @@ fn construct_fresh_rewrite(
     co: &ConstructOps,
     function: &Function,
     written: &HashSet<u16>,
+    bad_containers: &HashSet<u16>,
     skip: &mut HashSet<u16>,
 ) {
     // Apply the per-block reorder to the top block AND every nested block (if/loop bodies etc.).
     if let Value::Block(b) = code {
-        fresh_rewrite_block(b, con_sources, co, function, written, skip);
+        fresh_rewrite_block(b, con_sources, co, function, written, bad_containers, skip);
     }
     code.for_each_child_mut(&mut |c| {
-        construct_fresh_rewrite(c, con_sources, co, function, written, skip);
+        construct_fresh_rewrite(c, con_sources, co, function, written, bad_containers, skip);
     });
 }
 
@@ -957,6 +1029,7 @@ fn fresh_rewrite_block(
     co: &ConstructOps,
     function: &Function,
     written: &HashSet<u16>,
+    bad_containers: &HashSet<u16>,
     skip: &mut HashSet<u16>,
 ) {
     let mut failed: HashSet<u16> = HashSet::new();
@@ -975,7 +1048,7 @@ fn fresh_rewrite_block(
         let Some((_, src)) = next else {
             break;
         };
-        if !try_fresh_one(b, src, co, function, written, skip) {
+        if !try_fresh_one(b, src, co, function, written, bad_containers, skip) {
             failed.insert(src);
         }
     }
@@ -990,6 +1063,7 @@ fn try_fresh_one(
     co: &ConstructOps,
     function: &Function,
     written: &HashSet<u16>,
+    bad_containers: &HashSet<u16>,
     skip: &mut HashSet<u16>,
 ) -> bool {
     // Copy index + destination expression (`a.field`) — the first copy of `src`.
@@ -1008,6 +1082,9 @@ fn try_fresh_one(
     let Some(a) = get_field_base(&dest, co) else {
         return false;
     };
+    if bad_containers.contains(&a) {
+        return false; // a REASSIGNED container has a prior store the hoist does not retire.
+    }
 
     // The source's backing wrapper (`src = OpGetField(vdb, …)`).
     let mut vdb = None;
