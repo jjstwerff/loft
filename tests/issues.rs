@@ -11798,10 +11798,11 @@ fn run() -> integer {
 /// `par(...)` syntax.  V3 hanging at runtime would cleanly localise
 /// the bug to the par dispatcher (matching the canary).
 // p4dA2 — the par-dispatch HANG over `vector<fn-ref>` input is FIXED on the interpreter
-// (this test, formerly timing out at 15s, now completes). A SEPARATE residual remains on
-// `--native`: the par-fnref result delivery emits a bare `DbRef` where `(u32, DbRef)` is
-// expected (E0308) — tracked in plans/90-copy-diagnostics/REMAINING.md. This `code!` test is
-// interpreter-only, so it locks in the hang fix without gating on the native codegen gap.
+// (this test, formerly timing out at 15s, now completes). The `--native` E0308 residual
+// (par-fnref delivery emitting a bare `DbRef` where `(u32, DbRef)` is expected) is also
+// FIXED (@PLN90 W6: `tuple_arg_prep` gained a `Type::Function` arm). Native coverage lives
+// in `tests/scripts/507-par-vector-fnref.loft` (runs under both backends); this `code!`
+// test keeps the interpreter-side hang lock-in.
 #[test]
 fn p4d_a2_par_vector_fn_ref_single() {
     code!(

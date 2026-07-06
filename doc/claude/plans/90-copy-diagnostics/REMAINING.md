@@ -49,13 +49,13 @@ dogfood UAF). Three concrete open pieces:
   fixed) but soundness is not yet *closed*. This is the umbrella the two items above live
   under. **Effort: L (ongoing).**
 
-### 2. `par`-dispatch over `vector<fn-ref>` — **hang FIXED; native E0308 residual**
-Gate-1 re-check: the interpreter **hang is GONE** — the `p4dA2` test (formerly `timeout 15s
-exit 143`) now completes in 0.04s and is **un-ignored**. The genuine residual is **native
-only**: par-fnref result delivery emits a bare `DbRef` where `(u32, DbRef)` is expected
-(`error[E0308]`). Target (to determine before building): the native par-dispatch must
-deliver the `(index, value)` tuple the reducer expects, not the bare value. **Effort: S–M
-(native codegen).**
+### 2. ~~`par`-dispatch over `vector<fn-ref>`~~ — **FIXED (2026-07-06, @PLN90 W6)**
+The interpreter hang was already gone; the remaining native E0308 (par-fnref delivery emitting a
+bare `DbRef` where `(u32, DbRef)` is expected) is **fixed**: `tuple_arg_prep`
+(`src/generation/ops/parallel.rs`) gained a `Type::Function` arm reading the `i32` fn-index at
+offset 0 and pairing it with a NULL closure. Refinement found while fixing: **`par` compiles its
+worker to native under *both* backends**, so this blocked the interpret par-path too, not native
+only. Guard: `tests/scripts/507-par-vector-fnref.loft` (both backends). **Done.**
 
 ### 3. ~~`&` write-back from a call RHS~~ — **RESOLVED** (`@PLN87 #1`)
 Gate-1 re-check: `o = mk()` (call RHS) **works on both backends** (`check()` writes back 9);

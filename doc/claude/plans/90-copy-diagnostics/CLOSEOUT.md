@@ -142,12 +142,19 @@ Avoidable set must drain before the warning goes default-on). **Exit:** a `Level
 Avoidable copy with source loc + hint; corpus warning-count matches the drained Avoidable set
 (near-zero after W1/W2); lowering byte-identical.
 
-### W6 — par-dispatch native E0308  ·  P0 · S · **INDEPENDENT — can start now**
+### W6 — par-dispatch native E0308  ·  P0 · S · **✅ DONE (2026-07-06)**
 
-**Verified state:** OPEN, **native-only** (interp hang GONE — `p4d_a2` un-ignored, 0.04s). Native
-emits a bare `DbRef` where `(u32, DbRef)` is expected (`error[E0308]`): `tuple_arg_prep`
-(`src/generation/ops/parallel.rs:157-211`) has **no `Type::Function` arm**, so a `vector<fn-ref>`
-element falls through to `("", "elm")`.
+**Landed:** `tuple_arg_prep` (`src/generation/ops/parallel.rs`) gained a `Type::Function` arm —
+reads the `i32` fn-index at offset 0 of the element and pairs it with `DbRef::NULL`
+(vector-stored fn-refs are non-capturing), yielding the `(u32, DbRef)` tuple the worker expects.
+Note refined during the fix: **`par` compiles its worker to native under *both* backends**, so the
+E0308 blocked the interpret par-path too (not native-only). Guard:
+`tests/scripts/507-par-vector-fnref.loft` (single + multi fn-refs, runs under both backends);
+native_scripts + wrap `loft_suite` + the three `p4d_a2` tests green.
+
+**Verified state (before fix):** native emitted a bare `DbRef` where `(u32, DbRef)` is expected
+(`error[E0308]`): `tuple_arg_prep` had **no `Type::Function` arm**, so a `vector<fn-ref>` element
+fell through to `("", "elm")`.
 **Build steps:** add a `Type::Function(_,_,_)` arm to `tuple_arg_prep` that builds the fn-ref
 tuple from the element record, mirroring the working for-loop unpack
 (`tests/generated/issues_p4d_a2_vector_fn_ref_for_loop.rs:334`) — read the fn-index `i32` at
