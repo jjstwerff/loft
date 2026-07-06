@@ -141,11 +141,18 @@ return `OpGetField(b,0)` directly (block dep `["b"]`). Matrix under `LOFT_POISON
   field-return down a different delivery path that **bypasses W1's return-site materialise** (`h`
   frees the temp `Box` then `return null`).
 
-So the ONLY remaining A2 gap is **unifying the delivery paths** so an A2 field-alias return of a
-temporary subject also reaches W1's `tail_call_borrows_temp_subject` materialise (or replicates it on
-the field-read return path). That is the real remaining work — reverted here because it crashes
-`escape-temp` even gated-on. Repro cells: the `a2_{named,tempbind,escapetemp}.loft` shape (check into
-`borrow-return/` if pursued). **Not a binding-site foundation** — a return-path delivery unification.
+So the ONLY remaining A2 gap is at the RETURN-of-temp site. **Second attempt (2026-07-06) — the
+caller-side effect is DEEPER than a delivery reroute.** Adding a `classify_vector_delivery` branch to
+route `h`'s return of `f(<temp>)` to `CopyBorrow` did **not** fire: with A2, `f.returned()` is
+`["b"]` (a borrow of a VISIBLE param), and `h`'s return of `f(Box{..})` never reaches the vector
+delivery at all — `block_result` classifies it as a **non-delivering** return (emits
+`OpFreeRef(subject); return null`, block dep bare). So A2's ABI change (buffer-fill → borrow-of-param
+signature) breaks the caller's **return-TYPE resolution / value delivery**, not just its delivery
+routing. The real A2 work is the caller-ABI adaptation at that resolution layer (make a caller that
+returns/binds a borrow-of-param-of-temp result materialise it) — a genuine cross-function ABI pass,
+now precisely scoped. Both prototype attempts reverted clean; repro shape:
+`a2_{named,tempbind,escapetemp}.loft`. **Not a binding-site foundation** (bindings are safe) — a
+return-type-resolution + delivery adaptation for f's borrow-of-param ABI.
 
 ### W3 — Wasted empty-buffer alloc  ·  P1-opt · S · rides W2's ABI
 
