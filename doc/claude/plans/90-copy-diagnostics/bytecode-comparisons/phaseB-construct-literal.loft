@@ -1,0 +1,6 @@
+struct Bag { items: vector<integer> }
+fn literal_into_field() -> integer {
+    a = Bag { items: [10, 20, 30] };   // literal born INTO the field — the no-copy target shape
+    a.items[1]
+}
+fn main() { println("{literal_into_field()}"); }

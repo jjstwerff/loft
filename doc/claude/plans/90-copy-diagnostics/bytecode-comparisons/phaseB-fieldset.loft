@@ -1,0 +1,3 @@
+struct Bag { items: vector<integer> }
+fn fieldset() -> integer { a = Bag { items: [0] }; base: vector<integer> = [9,8,7]; a.items = base; a.items[0] }
+fn main() { println("{fieldset()}"); }

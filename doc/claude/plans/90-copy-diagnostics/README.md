@@ -13,10 +13,41 @@ to close): [unbound-copy-lint.md](unbound-copy-lint.md).** Phase-A survey + the 
 [survey-findings.md](survey-findings.md).
 **Phase B scope (drain the elidable copies — the C86 last-use MOVE-elision, NOT the Avoidable
 `&`-hints): [phase-b-scope.md](phase-b-scope.md).**
+**Phase B DESIGN — grounded in captured IR (the invariant · current→target IR · the one
+chokepoint read by 3 emit sites · both-generator plan · boundary matrix · failure modes ·
+falsification probes · verifiable slices): [phase-b-design.md](phase-b-design.md)** (captures:
+[bytecode-comparisons/phaseB-captures.txt](bytecode-comparisons/phaseB-captures.txt)).
 
 ## Status
 
 **Phase 1 COMPLETE; phase 2 started (avoidable-vs-forced classification).**
+
+**Phase B (the C86 last-use MOVE-elision) — B1.1/B1.2 done; B1.3 RECORD + B1.3b/B1.3c CONSTRUCT
+LANDED.** Dead-after owned sources are now lowered by building DIRECTLY into the destination instead
+of copy-then-free — `src/scopes.rs`, pure IR rewrites (no new op, so BOTH backends from one pass),
+gated `LOFT_MOVE_ELIDE` (OFF = byte-identical). Covered: **Record** (`v[i]=e` / `o.f=src`,
+`move_elide`); **Construct field-append** (`x.field += src` into an existing container,
+`construct_move_rewrite`, reorder-free); and **Construct fresh construction**
+(`a = Bag{items:base}`, `construct_fresh_rewrite` — hoist a's alloc + retarget base's build onto
+a.field, conservatively guarded). Matrix-validated (value + poison + leak, interp + native);
+survivors still copy; non-provably-safe fresh constructs (param field value, >1 per fn) stay copies.
+**B1.4** widened the fresh-construction guards: a **never-written parameter** as a hoisted field
+value (`Bag { id: n, items: base }`, sound on the interprocedural `find_written_vars`), and
+**multiple fresh constructs per fn**. **B1.3d** added the `a.field = base` whole-vector replacement —
+the `__p154_rhs` DOUBLE copy (`base → __p154_rhs → a.field` + `OpClearVector`), detected structurally (not a
+MovePlan) and lowered to build `base` directly into the cleared field, eliminating BOTH copies (incl.
+the old-content-free of a heap-text field). **Nested bodies** now work too — both reorder-based rewrites walk EVERY block, so a construct or
+`a.field = base` inside an `if`/loop body is elided (per-iteration correct in a loop). The
+move-elision now covers all four copy shapes in flat AND nested positions. Guards:
+`tests/use_analysis.rs::move_elide_{record,construct,fresh,param,multiple,whole_vector,nested}_*`.
+
+**B1.5 FLIPPED — the move-elision is DEFAULT ON** (`LOFT_NO_MOVE_ELIDE` opts out; the `MOVE-PLAN`
+dump is split onto its own opt-in `LOFT_MOVE_ELIDE`). Getting there required a **flag-ON exposure
+sweep** (running the whole corpus with the rewrite on — the ~30 hand-probes never did): it found ~12
+corpus bugs, all "retargeted into a non-stable slot / source read between build and copy," all fixed
+via a guard layer (`bad_containers`, `def_order`, `source_escapes`, self-read, replace-vs-append).
+Behavioural corpus green default-on (issues 748, leak 49, native, wrap, native_scripts, loft_suite).
+Detail: [phase-b-design.md § B1.5](phase-b-design.md).
 
 **Phase 1** — the decision covers every structure-copy emission ([phase1-inventory.md](phase1-inventory.md)).
 `LOFT_COPY_DUMP` is the runtime ground truth; the verdict (`use_analysis`, **route 1** —

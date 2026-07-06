@@ -966,6 +966,535 @@ fn survival_split_bound_vs_unbound_and_internal() {
     );
 }
 
+// ── @PLN90 phase B (B1.3) — the RECORD-shape last-use MOVE-elision rewrite ──
+// Under `LOFT_MOVE_ELIDE`, a construction/record copy whose owned source is DEAD after the copy
+// is lowered by building the source's fields DIRECTLY into the destination slot (retarget every
+// `OpSet*`, drop the `OpDatabase` / `OpCopyRecord` / source free) instead of copy-then-free. The
+// rewrite is a pure IR pass emitting NO new op, so BOTH backends must preserve values AND stay
+// leak-free; the survivor case (source read after the copy) must still COPY. Gated: OFF is a
+// no-op (byte-identical).
+const MOVE_ELIDE_SRC: &str = r#"
+struct E { hp: integer, name: text }
+struct Outer { tag: integer, inner: E }
+fn t1_elem() -> integer {           // v[i] = e — element set, source dead → MOVE
+    v: vector<E> = [E{hp:1,name:"a"}, E{hp:2,name:"b"}];
+    e = E { hp: 9, name: "z" };
+    v[0] = e;
+    v[0].hp
+}
+fn t2_field() -> integer {          // o.inner = src — record field replacement, dead → MOVE
+    o = Outer { tag: 7, inner: E{hp:1,name:"a"} };
+    src = E { hp: 40, name: "z" };
+    o.inner = src;
+    o.inner.hp + o.tag
+}
+fn t5_survive() -> integer {        // source read after the set → must COPY (no move)
+    v: vector<E> = [E{hp:1,name:"a"}];
+    e = E { hp: 9, name: "z" };
+    v[0] = e;
+    e.hp + v[0].hp
+}
+fn main() { print("{t1_elem()} {t2_field()} {t5_survive()}\n"); }
+"#;
+
+/// Run a move-elision probe on one backend, optionally with the gate on. Returns
+/// (stdout, stderr, success). `--native` compiles via `rustc`, so the leak check for that mode
+/// rides on `LOFT_NATIVE_LEAK_CHECK`.
+fn run_move_elide_src(
+    src: &str,
+    stem: &str,
+    native: bool,
+    move_on: bool,
+) -> (String, String, bool) {
+    let dir = std::env::temp_dir().join("loft_use_analysis");
+    std::fs::create_dir_all(&dir).expect("probe dir");
+    let path = dir.join(format!("{stem}.loft"));
+    std::fs::write(&path, src).expect("write probe");
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_loft"));
+    cmd.arg(if native { "--native" } else { "--interpret" })
+        .arg(&path)
+        .env("LOFT_NO_CACHE", "1")
+        .env("LOFT_POISON", "1")
+        .env("LOFT_NATIVE_LEAK_CHECK", "1");
+    // The move-elision is DEFAULT ON (B1.5 flip); the OFF baseline opts out.
+    if !move_on {
+        cmd.env("LOFT_NO_MOVE_ELIDE", "1");
+    }
+    let out = cmd.output().expect("spawn loft");
+    (
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        out.status.success(),
+    )
+}
+
+/// Assert a probe's stdout is `expected` and leak-free on BOTH backends, gate on and off.
+fn assert_move_elide_preserves(src: &str, stem: &str, expected: &str) {
+    for native in [false, true] {
+        let (off_out, _, off_ok) = run_move_elide_src(src, stem, native, false);
+        let (on_out, on_err, on_ok) = run_move_elide_src(src, stem, native, true);
+        let mode = if native { "native" } else { "interp" };
+        assert!(
+            off_ok && on_ok,
+            "{mode}: run failed (off={off_ok} on={on_ok})"
+        );
+        assert!(
+            off_out.trim() == expected && on_out.trim() == expected,
+            "{mode}: value changed under move-elision\n off={off_out:?}\n on={on_out:?}"
+        );
+        assert!(
+            !on_err.contains("stores not freed"),
+            "{mode}: move-elision leaked a store\n---- stderr ----\n{on_err}"
+        );
+    }
+}
+
+#[test]
+fn move_elide_record_preserves_values_and_stays_leak_free() {
+    // t1=9, t2=47 (40+7), t5=18 (9+9, two independent copies). The gate must not change ANY
+    // value on either backend, and must not leak (the freed `e`/`src` store is now the moved-in
+    // one; the survivor still copies + frees its own).
+    assert_move_elide_preserves(MOVE_ELIDE_SRC, "move_elide_b13_probe", "9 47 18");
+}
+
+/// The IR block for `fn n_<name>(…` in an `introspect` dump (up to the next `fn`/`byte-code`).
+fn ir_block(introspect: &str, name: &str) -> String {
+    let start = format!("fn n_{name}(");
+    let mut out = String::new();
+    let mut in_block = false;
+    for line in introspect.lines() {
+        if line.starts_with(&start) {
+            in_block = true;
+        } else if in_block && (line.starts_with("fn n_") || line.starts_with("byte-code for")) {
+            break;
+        }
+        if in_block {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// Count of a given deep-copy op in one function's introspect IR block.
+fn op_count(introspect: &str, name: &str, op: &str) -> usize {
+    ir_block(introspect, name).matches(op).count()
+}
+
+fn introspect_move_elide_src(src: &str, stem: &str, move_on: bool) -> String {
+    let dir = std::env::temp_dir().join("loft_use_analysis");
+    std::fs::create_dir_all(&dir).expect("probe dir");
+    let path = dir.join(format!("{stem}.loft"));
+    std::fs::write(&path, src).expect("write probe");
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_loft"));
+    cmd.args(["introspect"])
+        .arg(&path)
+        .env("LOFT_NO_CACHE", "1");
+    // The move-elision is DEFAULT ON (B1.5 flip); the OFF baseline opts out.
+    if !move_on {
+        cmd.env("LOFT_NO_MOVE_ELIDE", "1");
+    }
+    let out = cmd.output().expect("spawn loft");
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+#[test]
+fn move_elide_record_drops_the_copy_but_keeps_the_survivor_copy() {
+    let off = introspect_move_elide_src(MOVE_ELIDE_SRC, "move_elide_b13_ir", false);
+    let on = introspect_move_elide_src(MOVE_ELIDE_SRC, "move_elide_b13_ir", true);
+    // Each dead-source move drops exactly its own `v[i]=e` / `o.f=src` deep copy (a function may
+    // retain OTHER copies — e.g. `t2_field` still copies the literal inner `E` when building `o`).
+    for moved in ["t1_elem", "t2_field"] {
+        let (b, a) = (
+            op_count(&off, moved, "OpCopyRecord"),
+            op_count(&on, moved, "OpCopyRecord"),
+        );
+        assert!(
+            a == b - 1,
+            "{moved}: move-elision should drop exactly one OpCopyRecord (off={b} on={a})"
+        );
+    }
+    // The survivor is read after the set → its copy is load-bearing and must remain.
+    let (sb, sa) = (
+        op_count(&off, "t5_survive", "OpCopyRecord"),
+        op_count(&on, "t5_survive", "OpCopyRecord"),
+    );
+    assert!(
+        sa == sb && sb >= 1,
+        "t5_survive: a read-after-set survivor must still COPY (off={sb} on={sa})"
+    );
+}
+
+// ── @PLN90 phase B (B1.3b) — the CONSTRUCT field-append move-elision (reorder-free only) ──
+// `x.field += src` with `src` dead after: build src's elements DIRECTLY into `x.field` (drop the
+// copying `OpAppendVector`), ONLY when the container already exists (local built before src, or a
+// param). Fresh construction (`a = Bag { items: base }`, container built AFTER base) needs a
+// reorder and must stay a copy. Same both-backend value + leak invariant as the Record case.
+const MOVE_ELIDE_CONSTRUCT_SRC: &str = r#"
+struct Bag { id: integer, items: vector<integer> }
+fn t1_local() -> integer {                  // local container built before src → MOVE
+    x = Bag { id: 1, items: [1, 2] };
+    src: vector<integer> = [10, 20, 30];
+    x.items += src;
+    (x.items[4] ?? 0)
+}
+fn t2_param(x: Bag) -> integer {            // param container → MOVE (no reorder ever needed)
+    src: vector<integer> = [7, 8];
+    x.items += src;
+    (x.items[2] ?? 0)
+}
+fn t4_fresh() -> integer {                  // container built AFTER base → NOT reorder-free → COPY
+    base: vector<integer> = [10, 20, 30];
+    a = Bag { id: 5, items: base };
+    (a.items[1] ?? 0) + a.id
+}
+fn main() { print("{t1_local()} {t2_param(Bag{id:0,items:[100]})} {t4_fresh()}\n"); }
+"#;
+
+#[test]
+fn move_elide_construct_field_append_preserves_values_and_stays_leak_free() {
+    // t1=30, t2=8 (param [100] + [7,8] → index 2), t4=25 (20 + 5).
+    assert_move_elide_preserves(MOVE_ELIDE_CONSTRUCT_SRC, "move_elide_b13b_probe", "30 8 25");
+}
+
+#[test]
+fn move_elide_construct_elides_field_append_and_fresh_construction() {
+    let off = introspect_move_elide_src(MOVE_ELIDE_CONSTRUCT_SRC, "move_elide_b13b_ir", false);
+    let on = introspect_move_elide_src(MOVE_ELIDE_CONSTRUCT_SRC, "move_elide_b13b_ir", true);
+    // B1.3b field-appends (local + param container) AND the B1.3c fresh construction (`t4_fresh`,
+    // container built after the source → hoist + retarget) all drop their copying OpAppendVector.
+    for moved in ["t1_local", "t2_param", "t4_fresh"] {
+        let (b, a) = (
+            op_count(&off, moved, "OpAppendVector"),
+            op_count(&on, moved, "OpAppendVector"),
+        );
+        assert!(
+            a == b - 1,
+            "{moved}: construct move-elision should drop one OpAppendVector (off={b} on={a})"
+        );
+    }
+}
+
+// ── @PLN90 phase B (B1.3c) — fresh-construction reorder + its conservative skip guards ──
+const MOVE_ELIDE_FRESH_SRC: &str = r#"
+struct Bag { id: integer, items: vector<integer> }
+fn e1_single() -> integer {                  // single, literal-only fields → ELIDE
+    base: vector<integer> = [10, 20, 30];
+    a = Bag { id: 5, items: base };
+    (a.items[1] ?? 0) + a.id
+}
+fn e2_two() -> integer {                     // TWO fresh constructs → "exactly one" guard → SKIP both
+    b1: vector<integer> = [1, 2, 3];
+    a1 = Bag { id: 1, items: b1 };
+    b2: vector<integer> = [4, 5, 6];
+    a2 = Bag { id: 2, items: b2 };
+    (a1.items[0] ?? 0) + (a2.items[2] ?? 0)
+}
+fn e3_single_late() -> integer {             // single fresh construct, items last field → ELIDE
+    base: vector<integer> = [10, 20, 30];
+    a = Bag { id: 9, items: base };
+    (a.items[2] ?? 0) + a.id
+}
+fn main() { print("{e1_single()} {e2_two()} {e3_single_late()}\n"); }
+"#;
+
+#[test]
+fn move_elide_fresh_construction_values_and_conservative_skips() {
+    // Values preserved on both backends, leak-free (e1=25, e2=7, e3=39).
+    assert_move_elide_preserves(MOVE_ELIDE_FRESH_SRC, "move_elide_b13c_probe", "25 7 39");
+    let off = introspect_move_elide_src(MOVE_ELIDE_FRESH_SRC, "move_elide_b13c_ir", false);
+    let on = introspect_move_elide_src(MOVE_ELIDE_FRESH_SRC, "move_elide_b13c_ir", true);
+    // Single literal-field fresh constructs elide their copy…
+    for moved in ["e1_single", "e3_single_late"] {
+        assert!(
+            op_count(&on, moved, "OpAppendVector") == op_count(&off, moved, "OpAppendVector") - 1,
+            "{moved}: a single literal-field fresh construct should elide its copy"
+        );
+    }
+    // …and two independent fresh constructs in one fn BOTH elide (B1.4 lifted the one-construct cap;
+    // the cross-dependent / mutated-param skips are pinned in the multi + param widening tests).
+    assert_eq!(
+        op_count(&on, "e2_two", "OpAppendVector"),
+        0,
+        "e2_two: two independent fresh constructs should both elide"
+    );
+}
+
+// ── @PLN90 phase B (B1.4) — allow a NEVER-WRITTEN parameter as a hoisted field value ──
+// A param's value is constant, so hoisting `a`'s construction past `base`'s build reads the same
+// value → SAFE to elide. But a param that IS mutated (reassigned, OR mutated via a callee's
+// `&`-param in ANY arg position — caught by the interprocedural `find_written_vars`) must stay a
+// copy, else the hoist would read a stale value. This is the soundness line B1.4 rides on.
+const MOVE_ELIDE_PARAM_SRC: &str = r#"
+struct Bag { id: integer, items: vector<integer> }
+fn add(x: integer, y: &integer) { y = y + x; }
+fn p1_const(n: integer) -> integer {         // n never written → hoist-safe → ELIDE
+    base: vector<integer> = [10, 20, 30];
+    a = Bag { id: n, items: base };
+    (a.items[1] ?? 0) + a.id                 // 20 + n
+}
+fn p2_reassigned(n: integer) -> integer {    // n reassigned → written → SKIP (stale-read guard)
+    base: vector<integer> = [10, 20, 30];
+    n = n * 10;
+    a = Bag { id: n, items: base };
+    (a.items[2] ?? 0) + a.id                 // 30 + n*10
+}
+fn p3_argmut(n: integer) -> integer {        // n mutated at a callee's arg1 &-param → written → SKIP
+    base: vector<integer> = [1, 2, 3];
+    add(100, n);
+    a = Bag { id: n, items: base };
+    (a.items[0] ?? 0) + a.id                 // 1 + (n+100)
+}
+fn main() { print("{p1_const(7)} {p2_reassigned(4)} {p3_argmut(5)}\n"); }
+"#;
+
+#[test]
+fn move_elide_param_field_widening_is_sound() {
+    // p1=27 (20+7), p2=70 (30+40), p3=106 (1+105). Values must hold on BOTH backends: a wrong
+    // hoist of p2/p3 would surface here as a stale-value read, not just a missing optimisation.
+    assert_move_elide_preserves(MOVE_ELIDE_PARAM_SRC, "move_elide_b14_probe", "27 70 106");
+    let off = introspect_move_elide_src(MOVE_ELIDE_PARAM_SRC, "move_elide_b14_ir", false);
+    let on = introspect_move_elide_src(MOVE_ELIDE_PARAM_SRC, "move_elide_b14_ir", true);
+    // A never-written param field value elides.
+    assert!(
+        op_count(&on, "p1_const", "OpAppendVector")
+            == op_count(&off, "p1_const", "OpAppendVector") - 1,
+        "p1_const: a never-written param field value should elide"
+    );
+    // A mutated param (reassigned, or mutated via a callee's arg1 &-param) must stay a copy.
+    for skipped in ["p2_reassigned", "p3_argmut"] {
+        assert_eq!(
+            op_count(&on, skipped, "OpAppendVector"),
+            op_count(&off, skipped, "OpAppendVector"),
+            "{skipped}: a mutated param must NOT be hoisted (stays a copy)"
+        );
+    }
+}
+
+// ── @PLN90 phase B (B1.4) — MULTIPLE fresh constructs in one fn (the one-construct cap lifted) ──
+const MOVE_ELIDE_MULTI_SRC: &str = r#"
+struct Bag { id: integer, items: vector<integer> }
+fn m1_three() -> integer {                   // three independent fresh constructs → all elide
+    b1: vector<integer> = [1, 2];
+    a1 = Bag { id: 10, items: b1 };
+    b2: vector<integer> = [3, 4];
+    a2 = Bag { id: 20, items: b2 };
+    b3: vector<integer> = [5, 6];
+    a3 = Bag { id: 30, items: b3 };
+    (a1.items[0] ?? 0) + (a2.items[1] ?? 0) + (a3.items[0] ?? 0)
+}
+fn m2_crossdep() -> integer {                // a2's field value reads a1 (a local) → a2 SKIPs, a1 elides
+    b1: vector<integer> = [7, 8];
+    a1 = Bag { id: 100, items: b1 };
+    b2: vector<integer> = [9, 10];
+    a2 = Bag { id: (a1.id ?? 0), items: b2 };
+    (a1.items[0] ?? 0) + (a2.items[1] ?? 0) + (a2.id ?? 0)
+}
+fn main() { print("{m1_three()} {m2_crossdep()}\n"); }
+"#;
+
+#[test]
+fn move_elide_multiple_fresh_constructs_per_fn() {
+    // m1=10 (1+4+5), m2=117 (7+10+100). Values hold on both backends.
+    assert_move_elide_preserves(MOVE_ELIDE_MULTI_SRC, "move_elide_b14multi_probe", "10 117");
+    let off = introspect_move_elide_src(MOVE_ELIDE_MULTI_SRC, "move_elide_b14multi_ir", false);
+    let on = introspect_move_elide_src(MOVE_ELIDE_MULTI_SRC, "move_elide_b14multi_ir", true);
+    // All three constructs in m1 elide (the one-construct-per-fn cap is lifted).
+    assert_eq!(
+        op_count(&on, "m1_three", "OpAppendVector"),
+        0,
+        "m1_three: three independent fresh constructs should all elide"
+    );
+    // m2: a1 elides, but a2 (its field value reads the local a1) is not hoistable → exactly one copy
+    // remains — proof both that multiple constructs are handled AND that the cross-dep is caught.
+    assert_eq!(
+        op_count(&off, "m2_crossdep", "OpAppendVector"),
+        2,
+        "m2_crossdep baseline: two copies before elision"
+    );
+    assert_eq!(
+        op_count(&on, "m2_crossdep", "OpAppendVector"),
+        1,
+        "m2_crossdep: a1 elides, the a1-dependent a2 stays a copy"
+    );
+}
+
+// ── @PLN90 phase B (B1.3d) — the `a.field = base` whole-vector REPLACEMENT (a DOUBLE copy) ──
+// `a.field = base` lowers as `base → __p154_rhs → a.field` with an OpClearVector between (two
+// OpAppendVector copies). B1.3d detects the idiom structurally and, when `base` is a dead-after
+// local, builds it directly into the cleared field — eliminating BOTH copies. A survivor (base read
+// after) and a param source stay copies.
+const MOVE_ELIDE_REPLACE_SRC: &str = r#"
+struct Bag { id: integer, items: vector<integer> }
+struct Doc { title: text, lines: vector<text> }
+fn r1_replace() -> integer {                 // dead-after local → eliminate both copies
+    a = Bag { id: 1, items: [0] };
+    base: vector<integer> = [10, 20, 30];
+    a.items = base;
+    (a.items[1] ?? 0) + a.id                 // 20 + 1 = 21
+}
+fn r2_heaptext() -> integer {                // old heap-text contents cleared without leaking
+    d = Doc { title: "t", lines: ["old1", "old2"] };
+    fresh: vector<text> = ["new-a", "new-b", "new-c"];
+    d.lines = fresh;
+    d.lines.len() + d.title.len()            // 3 + 1 = 4
+}
+fn r3_survive() -> integer {                 // base read AFTER → must stay a COPY
+    a = Bag { id: 1, items: [0] };
+    base: vector<integer> = [10, 20, 30];
+    a.items = base;
+    (base[0] ?? 0) + (a.items[1] ?? 0)       // 10 + 20 = 30
+}
+fn r4_param(base: vector<integer>) -> integer {  // param source → caller owns → COPY
+    a = Bag { id: 2, items: [0] };
+    a.items = base;
+    (a.items[0] ?? 0) + a.id
+}
+fn main() { print("{r1_replace()} {r2_heaptext()} {r3_survive()} {r4_param([99, 98])}\n"); }
+"#;
+
+#[test]
+fn move_elide_whole_vector_replacement_eliminates_double_copy() {
+    // r1=21, r2=4, r3=30, r4=101 (99+2). A wrong move of r3/r4 would surface as a wrong value or a
+    // leak here (r2 is the old-content-free stress: heap-text lines cleared before the move-in).
+    assert_move_elide_preserves(
+        MOVE_ELIDE_REPLACE_SRC,
+        "move_elide_b13d_probe",
+        "21 4 30 101",
+    );
+    let off = introspect_move_elide_src(MOVE_ELIDE_REPLACE_SRC, "move_elide_b13d_ir", false);
+    let on = introspect_move_elide_src(MOVE_ELIDE_REPLACE_SRC, "move_elide_b13d_ir", true);
+    // The replacement's TWO copies both vanish for a dead-after local (int + heap-text field).
+    for (moved, before) in [("r1_replace", 2usize), ("r2_heaptext", 2)] {
+        assert_eq!(
+            op_count(&off, moved, "OpAppendVector"),
+            before,
+            "{moved} baseline: two OpAppendVector copies before elision"
+        );
+        assert_eq!(
+            op_count(&on, moved, "OpAppendVector"),
+            0,
+            "{moved}: both copies of the whole-vector replacement should be eliminated"
+        );
+    }
+    // A surviving source and a param source keep their copies.
+    for skipped in ["r3_survive", "r4_param"] {
+        assert_eq!(
+            op_count(&on, skipped, "OpAppendVector"),
+            op_count(&off, skipped, "OpAppendVector"),
+            "{skipped}: a survivor / param source must stay a copy"
+        );
+    }
+}
+
+// ── @PLN90 phase B (B1.4 nested) — constructs inside nested blocks (if / loop bodies) ──
+// The reorder-based rewrites walk EVERY block, so a fresh construction or an `a.field = base`
+// replacement inside an `if`/loop body is elided too (its a-alloc + base-build + copy are flat
+// within that block). A construct whose field value reads an OUTER local still SKIPs (the run-guard
+// only allows `a` or a never-written param), and the loop reorder must stay per-iteration correct.
+const MOVE_ELIDE_NESTED_SRC: &str = r#"
+struct Bag { id: integer, items: vector<integer> }
+fn if_branch(cond: boolean) -> integer {     // fresh construct in an if-branch → elide
+    if cond {
+        base: vector<integer> = [10, 20, 30];
+        a = Bag { id: 2, items: base };
+        (a.items[1] ?? 0) + a.id             // 22
+    } else { 5 }
+}
+fn loop_body() -> integer {                  // fresh construct per loop iteration (literal) → elide
+    total = 0;
+    for i in 0..4 {
+        base: vector<integer> = [10, 20, 30];
+        a = Bag { id: 5, items: base };
+        total = total + (a.items[2] ?? 0) + a.id;   // (30+5)*4 = 140
+    }
+    total
+}
+fn nested_replace(cond: boolean) -> integer {  // `a.field = base` in an if-branch → elide
+    a = Bag { id: 7, items: [0] };
+    if cond {
+        base: vector<integer> = [100, 200];
+        a.items = base;
+        (a.items[0] ?? 0) + a.id             // 107
+    } else { 9 }
+}
+fn outer_ref(cond: boolean) -> integer {     // field value reads an OUTER local → SKIP (copy)
+    k = 50;
+    if cond {
+        base: vector<integer> = [1, 2, 3];
+        a = Bag { id: k, items: base };
+        (a.items[2] ?? 0) + a.id             // 53
+    } else { 8 }
+}
+fn main() {
+    print("{if_branch(true)} {loop_body()} {nested_replace(true)} {outer_ref(true)}\n");
+}
+"#;
+
+#[test]
+fn move_elide_handles_constructs_in_nested_blocks() {
+    // Values hold on both backends (if=22, loop=140 — per-iteration, replace=107, outer=53).
+    assert_move_elide_preserves(
+        MOVE_ELIDE_NESTED_SRC,
+        "move_elide_nested_probe",
+        "22 140 107 53",
+    );
+    let off = introspect_move_elide_src(MOVE_ELIDE_NESTED_SRC, "move_elide_nested_ir", false);
+    let on = introspect_move_elide_src(MOVE_ELIDE_NESTED_SRC, "move_elide_nested_ir", true);
+    // Constructs / replacements inside nested blocks elide.
+    for moved in ["if_branch", "loop_body", "nested_replace"] {
+        assert!(
+            op_count(&on, moved, "OpAppendVector") < op_count(&off, moved, "OpAppendVector"),
+            "{moved}: a construct in a nested block should elide (off={} on={})",
+            op_count(&off, moved, "OpAppendVector"),
+            op_count(&on, moved, "OpAppendVector"),
+        );
+    }
+    // A field value reading an OUTER local (not `a`, not a param) stays a copy — the walk reaches it,
+    // but the run-guard correctly refuses to hoist past a build it can't prove constant.
+    assert_eq!(
+        op_count(&on, "outer_ref", "OpAppendVector"),
+        op_count(&off, "outer_ref", "OpAppendVector"),
+        "outer_ref: a construct reading an outer local must stay a copy"
+    );
+}
+
+// ── @PLN90 phase B (B1.5 hardening) — corpus shapes the narrow probes missed, found by the
+// flag-ON exposure run. Each MUST stay correct (a wrong elision is a use-before-def / self-corrupt
+// / build-into-unallocated-container) — the elision either handles it or (safely) leaves the copy.
+const MOVE_ELIDE_HARDENING_SRC: &str = r#"
+struct S { v: vector<integer> }
+struct Inner { x: integer }
+struct Outer { items: vector<Inner> }
+fn vlit_element() -> integer {              // `[e]` — dest is a FRESH OpNewRecord element (q4 shape)
+    e = Inner { x: 42 };
+    o = Outer { items: [e] };               // e copied into a fresh element defined AFTER e
+    (o.items[0].x ?? -1)                     // 42
+}
+fn self_assign() -> integer {               // `s.v = s.v[1..]` — source reads the destination (p287)
+    s = S { v: [1, 2, 3, 4] };
+    s.v = s.v[1..];
+    s.v.len()                                // 3
+}
+fn empty_field_replace() -> integer {       // `s.v = fresh`, s.v starts EMPTY, s built after fresh (p154)
+    fresh: vector<integer> = [7, 8, 9];
+    s = S { v: [] };
+    s.v = fresh;
+    (s.v[0] ?? -1) + s.v.len()               // 7 + 3 = 10
+}
+fn main() { print("{vlit_element()} {self_assign()} {empty_field_replace()}\n"); }
+"#;
+
+#[test]
+fn move_elide_corpus_hardening_shapes_stay_correct() {
+    // A wrong elision of ANY of these surfaces here as a wrong value or a crash, on either backend.
+    assert_move_elide_preserves(
+        MOVE_ELIDE_HARDENING_SRC,
+        "move_elide_harden_probe",
+        "42 3 10",
+    );
+}
+
 // ── @PLN90 Step 5 — the user-facing `--report-copies` report ──
 const REPORT_SRC: &str = r#"
 struct Item { tags: vector<integer> }
