@@ -512,7 +512,24 @@ fn move_elide(data: &mut Data) {
             construct_move_rewrite(&mut code, &con_sources, &co, &mut skip);
             // B1.3c — fresh construction (`a = Bag { items: base }`, container built after the
             // source): hoist `a`'s alloc, then retarget. Runs on the copies B1.3b left standing.
-            construct_fresh_rewrite(&mut code, &con_sources, &co, &mut skip);
+            // B1.4 — the interprocedural mutation set (`find_written_vars` knows which callees
+            // mutate a `&`-param in ANY arg position), so a param used as a hoisted field value is
+            // allowed only if genuinely never mutated.
+            let mut written: HashSet<u16> = HashSet::new();
+            crate::parser::find_written_vars(
+                &data.def(d_nr).code,
+                data,
+                &mut written,
+                &mut HashMap::new(),
+            );
+            construct_fresh_rewrite(
+                &mut code,
+                &con_sources,
+                &co,
+                &data.def(d_nr).variables,
+                &written,
+                &mut skip,
+            );
         }
 
         data.definitions[d_nr as usize].code = code;
@@ -820,14 +837,17 @@ fn construct_drop(
 ///
 /// Conservative — operates on a FLAT top-level block only, and fires only when EVERY guard holds:
 /// exactly one still-copying construct source in the function; `a`'s construction is a contiguous
-/// run of statements immediately before the copy that references ONLY `a` (so hoisting it past
-/// `base`'s build is dependency-safe); the run contains `a`'s `OpDatabase`; and `a` is genuinely
-/// allocated AFTER the source's backing (a real reorder). Anything else stays a copy — safe even
-/// when the gate is flipped on. `skip` receives only the moved-out backing wrapper.
+/// run of statements immediately before the copy that references only `a` or a **never-written
+/// parameter** (B1.4 — a param's value is constant, so hoisting reads the same value; any other
+/// var could be a local built between `base` and `a` → SKIP); the run contains `a`'s `OpDatabase`;
+/// and `a` is genuinely allocated AFTER the source's backing (a real reorder). Anything else stays
+/// a copy — safe even when the gate is flipped on. `skip` receives only the moved-out backing.
 fn construct_fresh_rewrite(
     code: &mut Value,
     con_sources: &HashSet<u16>,
     co: &ConstructOps,
+    function: &Function,
+    written: &HashSet<u16>,
     skip: &mut HashSet<u16>,
 ) {
     let Value::Block(b) = code else {
@@ -887,12 +907,13 @@ fn construct_fresh_rewrite(
         ps -= 1;
     }
     let run = &b.operators[ps..ci];
-    // Guards: the run allocates `a`, references ONLY `a` (dependency-safe to hoist past `base`),
-    // and `a` is allocated AFTER the backing (else no reorder is needed / this isn't fresh).
+    // Guards: the run allocates `a`, references only `a` or a never-written param (dependency-safe
+    // to hoist past `base` — a param's value is constant, any other var could be a local built
+    // between `base` and `a`), and `a` is allocated AFTER the backing (else this isn't a reorder).
     if !run.iter().any(|s| call_is(s, co.op_database, a)) {
         return;
     }
-    if !run.iter().all(|s| stmt_refs_only(s, a)) {
+    if !run.iter().all(|s| run_var_ok(s, a, function, written)) {
         return;
     }
     match b
@@ -956,17 +977,23 @@ fn call_is(stmt: &Value, op: u32, v: u16) -> bool {
 
 /// Does every `Var` referenced anywhere in `stmt`'s value positions equal `only`? (A `Set`/`Call`
 /// TARGET is `only` by construction; this checks the RHS/args carry no dependency on another var.)
-fn stmt_refs_only(stmt: &Value, only: u16) -> bool {
-    fn walk(node: &Value, only: u16, ok: &mut bool) {
-        if let Value::Var(v) = node.unspan()
-            && *v != only
-        {
-            *ok = false;
+/// Every `Var` in `stmt`'s subtree is either `a` or a never-written PARAMETER (whose value is
+/// therefore constant, so hoisting `a`'s construction past `base`'s build reads the same value).
+/// Any other var — a local that might be built between `base` and `a` — fails, so the construct
+/// stays a copy. (`written` is the fn-wide over-approximation from [`collect_written`].)
+fn run_var_ok(stmt: &Value, a: u16, function: &Function, written: &HashSet<u16>) -> bool {
+    fn walk(node: &Value, a: u16, function: &Function, written: &HashSet<u16>, ok: &mut bool) {
+        if let Value::Var(v) = node.unspan() {
+            let v = *v;
+            let allowed = v == a || (function.is_argument(v) && !written.contains(&v));
+            if !allowed {
+                *ok = false;
+            }
         }
-        node.for_each_child(&mut |c| walk(c, only, ok));
+        node.for_each_child(&mut |c| walk(c, a, function, written, ok));
     }
     let mut ok = true;
-    walk(stmt, only, &mut ok);
+    walk(stmt, a, function, written, &mut ok);
     ok
 }
 

@@ -1176,9 +1176,9 @@ fn move_elide_construct_elides_field_append_and_fresh_construction() {
 // ── @PLN90 phase B (B1.3c) — fresh-construction reorder + its conservative skip guards ──
 const MOVE_ELIDE_FRESH_SRC: &str = r#"
 struct Bag { id: integer, items: vector<integer> }
-fn e1_paramfield(n: integer) -> integer {   // field value is a PARAM → run refs `n` → SKIP (copy)
+fn e1_single() -> integer {                  // single, literal-only fields → ELIDE
     base: vector<integer> = [10, 20, 30];
-    a = Bag { id: n, items: base };
+    a = Bag { id: 5, items: base };
     (a.items[1] ?? 0) + a.id
 }
 fn e2_two() -> integer {                     // TWO fresh constructs → "exactly one" guard → SKIP both
@@ -1188,33 +1188,82 @@ fn e2_two() -> integer {                     // TWO fresh constructs → "exactl
     a2 = Bag { id: 2, items: b2 };
     (a1.items[0] ?? 0) + (a2.items[2] ?? 0)
 }
-fn e3_single() -> integer {                  // single, literal-only fields → ELIDE
+fn e3_single_late() -> integer {             // single fresh construct, items last field → ELIDE
     base: vector<integer> = [10, 20, 30];
-    a = Bag { id: 5, items: base };
+    a = Bag { id: 9, items: base };
     (a.items[2] ?? 0) + a.id
 }
-fn main() { print("{e1_paramfield(7)} {e2_two()} {e3_single()}\n"); }
+fn main() { print("{e1_single()} {e2_two()} {e3_single_late()}\n"); }
 "#;
 
 #[test]
 fn move_elide_fresh_construction_values_and_conservative_skips() {
-    // Values preserved on both backends, leak-free (e1=27, e2=7, e3=35).
-    assert_move_elide_preserves(MOVE_ELIDE_FRESH_SRC, "move_elide_b13c_probe", "27 7 35");
-    // The reorder fires ONLY on the provably-safe shape; the guards keep the rest a copy.
+    // Values preserved on both backends, leak-free (e1=25, e2=7, e3=39).
+    assert_move_elide_preserves(MOVE_ELIDE_FRESH_SRC, "move_elide_b13c_probe", "25 7 39");
     let off = introspect_move_elide_src(MOVE_ELIDE_FRESH_SRC, "move_elide_b13c_ir", false);
     let on = introspect_move_elide_src(MOVE_ELIDE_FRESH_SRC, "move_elide_b13c_ir", true);
-    // e3: single fresh construct, literal-only fields → the copy is elided.
-    assert!(
-        op_count(&on, "e3_single", "OpAppendVector")
-            == op_count(&off, "e3_single", "OpAppendVector") - 1,
-        "e3_single: a single literal-field fresh construct should elide its copy"
+    // Single literal-field fresh constructs elide their copy…
+    for moved in ["e1_single", "e3_single_late"] {
+        assert!(
+            op_count(&on, moved, "OpAppendVector") == op_count(&off, moved, "OpAppendVector") - 1,
+            "{moved}: a single literal-field fresh construct should elide its copy"
+        );
+    }
+    // …but two fresh constructs in one fn is not the one-construct shape → both stay copies.
+    assert_eq!(
+        op_count(&on, "e2_two", "OpAppendVector"),
+        op_count(&off, "e2_two", "OpAppendVector"),
+        "e2_two: two fresh constructs must stay copies (conservative one-construct guard)"
     );
-    // e1 (param field value → run refs another var) and e2 (two fresh constructs) stay copies.
-    for skipped in ["e1_paramfield", "e2_two"] {
+}
+
+// ── @PLN90 phase B (B1.4) — allow a NEVER-WRITTEN parameter as a hoisted field value ──
+// A param's value is constant, so hoisting `a`'s construction past `base`'s build reads the same
+// value → SAFE to elide. But a param that IS mutated (reassigned, OR mutated via a callee's
+// `&`-param in ANY arg position — caught by the interprocedural `find_written_vars`) must stay a
+// copy, else the hoist would read a stale value. This is the soundness line B1.4 rides on.
+const MOVE_ELIDE_PARAM_SRC: &str = r#"
+struct Bag { id: integer, items: vector<integer> }
+fn add(x: integer, y: &integer) { y = y + x; }
+fn p1_const(n: integer) -> integer {         // n never written → hoist-safe → ELIDE
+    base: vector<integer> = [10, 20, 30];
+    a = Bag { id: n, items: base };
+    (a.items[1] ?? 0) + a.id                 // 20 + n
+}
+fn p2_reassigned(n: integer) -> integer {    // n reassigned → written → SKIP (stale-read guard)
+    base: vector<integer> = [10, 20, 30];
+    n = n * 10;
+    a = Bag { id: n, items: base };
+    (a.items[2] ?? 0) + a.id                 // 30 + n*10
+}
+fn p3_argmut(n: integer) -> integer {        // n mutated at a callee's arg1 &-param → written → SKIP
+    base: vector<integer> = [1, 2, 3];
+    add(100, n);
+    a = Bag { id: n, items: base };
+    (a.items[0] ?? 0) + a.id                 // 1 + (n+100)
+}
+fn main() { print("{p1_const(7)} {p2_reassigned(4)} {p3_argmut(5)}\n"); }
+"#;
+
+#[test]
+fn move_elide_param_field_widening_is_sound() {
+    // p1=27 (20+7), p2=70 (30+40), p3=106 (1+105). Values must hold on BOTH backends: a wrong
+    // hoist of p2/p3 would surface here as a stale-value read, not just a missing optimisation.
+    assert_move_elide_preserves(MOVE_ELIDE_PARAM_SRC, "move_elide_b14_probe", "27 70 106");
+    let off = introspect_move_elide_src(MOVE_ELIDE_PARAM_SRC, "move_elide_b14_ir", false);
+    let on = introspect_move_elide_src(MOVE_ELIDE_PARAM_SRC, "move_elide_b14_ir", true);
+    // A never-written param field value elides.
+    assert!(
+        op_count(&on, "p1_const", "OpAppendVector")
+            == op_count(&off, "p1_const", "OpAppendVector") - 1,
+        "p1_const: a never-written param field value should elide"
+    );
+    // A mutated param (reassigned, or mutated via a callee's arg1 &-param) must stay a copy.
+    for skipped in ["p2_reassigned", "p3_argmut"] {
         assert_eq!(
             op_count(&on, skipped, "OpAppendVector"),
             op_count(&off, skipped, "OpAppendVector"),
-            "{skipped}: a non-provably-safe fresh construct must stay a COPY (conservative guard)"
+            "{skipped}: a mutated param must NOT be hoisted (stays a copy)"
         );
     }
 }

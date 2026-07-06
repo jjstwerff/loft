@@ -316,6 +316,26 @@ copies. Guards: `tests/use_analysis.rs::move_elide_fresh_*` +
 that are parameters — they exist at entry, so hoisting is safe); >1 fresh construct per function;
 nested-Insert (non-flat) bodies. Each is a guard relaxation, not a new mechanism.
 
+### B1.4 LANDED — param field values in the hoisted run (the interprocedural soundness line)
+
+The B1.3c run guard was "references ONLY `a`" — which skipped the common `Bag { id: n, items: base }`
+(a param field value). B1.4 relaxes it to **`a` or a never-written parameter**: a param's value is
+constant, so hoisting `a`'s construction past `base`'s build reads the same value.
+
+**The soundness line — and the trap the review caught.** "Never written" MUST be interprocedural.
+loft's `&`-param passes a param by reference (`add(100, n)` where `add(x, y: &integer)` mutates the
+caller's `n`), and the param can sit in ANY argument position — so a naive "Set-target or Call
+first-arg" write-scan MISSES an arg1 `&`-mutation and would hoist a stale read (a wrong VALUE, not
+just a missed optimisation). The fix reuses `parser::find_written_vars` (the existing
+interprocedural mutation analysis, aware of callee `&`-param signatures) computed in `move_elide`
+and threaded into `construct_fresh_rewrite`; a run var is allowed iff `is_argument(v) &&
+!written.contains(v)`.
+
+**Validated (both backends, poison + leak):** `Bag { id: n, items: base }` with `n` never written →
+elides; `n` reassigned (`n = n*10`), and `n` mutated via a callee's arg1 `&`-param (`add(100, n)`) →
+correctly stay copies (a wrong hoist would have surfaced as a stale value, e.g. `6` instead of
+`106`). Guards: `tests/use_analysis.rs::move_elide_param_field_widening_is_sound`.
+
 ## Verifiable slices (each: matrix on BOTH backends, gated behind a flag, suite byte-identical off)
 
 - **B1.1 — gate (DONE for interp).** The capture above is the spec; add the native target Rust
@@ -339,13 +359,14 @@ nested-Insert (non-flat) bodies. Each is a guard relaxation, not a new mechanism
   block (a's construction is a contiguous run right before the copy — hoist it, retarget base's build
   onto a.field, drop the wrapper/copy). Conservatively guarded (flat block, one construct, run refs
   only `a`, real reorder); everything else stays a copy. No new op. See "B1.3c LANDED".
-- **B1.4 — widen the guards (next).** All still SAFE-skipped: param/computed field values (allow run
-  vars that are params), >1 fresh construct per fn, nested-Insert bodies. Each is a guard relaxation.
-  Also the `a.items = base` whole-replacement (chained through `__p154_rhs`).
-- **B1.5 — graduate + flip.** Guards landed in `tests/use_analysis.rs` (record + construct + fresh);
-  extend to `tests/scripts/` + `tests/leak_cases/`, then flip `LOFT_MOVE_ELIDE` default-on with a
-  `LOFT_NO_MOVE_ELIDE` opt-out (run the full suite flag-ON first). Re-run the survey — the `move`
-  rows show **0** runtime copies.
+- **B1.4 — param field values (DONE).** Allow a never-written parameter as a hoisted run value,
+  soundness on the interprocedural `find_written_vars` (catches `&`-param mutation in any arg
+  position). See "B1.4 LANDED". Remaining widenings (SAFE-skipped): >1 fresh construct per fn;
+  nested-Insert bodies; the `a.items = base` whole-replacement (chained through `__p154_rhs`).
+- **B1.5 — graduate + flip.** Guards landed in `tests/use_analysis.rs` (record + construct + fresh +
+  param); extend to `tests/scripts/` + `tests/leak_cases/`, then flip `LOFT_MOVE_ELIDE` default-on
+  with a `LOFT_NO_MOVE_ELIDE` opt-out (run the full suite flag-ON first). Re-run the survey — the
+  `move` rows show **0** runtime copies.
 
 ## Falsification probes (cheapest thing that could break each load-bearing claim)
 

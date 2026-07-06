@@ -31,9 +31,12 @@ gated `LOFT_MOVE_ELIDE` (OFF = byte-identical). Covered: **Record** (`v[i]=e` / 
 (`a = Bag{items:base}`, `construct_fresh_rewrite` — hoist a's alloc + retarget base's build onto
 a.field, conservatively guarded). Matrix-validated (value + poison + leak, interp + native);
 survivors still copy; non-provably-safe fresh constructs (param field value, >1 per fn) stay copies.
-Guards: `tests/use_analysis.rs::move_elide_{record,construct,fresh}_*`. NEXT = **B1.4** guard
-widenings (param field values, >1 construct/fn, nested bodies — all safe-skipped today), then B1.5
-flip default-on. Detail: [phase-b-design.md § B1.3c LANDED](phase-b-design.md).
+**B1.4** widened the fresh-construction guard to allow a **never-written parameter** as a hoisted
+field value (`Bag { id: n, items: base }`) — sound on the interprocedural `find_written_vars` (a
+param mutated via a callee's `&`-param in any arg position stays a copy). Guards:
+`tests/use_analysis.rs::move_elide_{record,construct,fresh,param}_*`. NEXT = remaining B1.4 widenings
+(>1 construct/fn, nested bodies, `a.items=base` chained), then **B1.5** flip default-on. Detail:
+[phase-b-design.md § B1.4 LANDED](phase-b-design.md).
 
 **Phase 1** — the decision covers every structure-copy emission ([phase1-inventory.md](phase1-inventory.md)).
 `LOFT_COPY_DUMP` is the runtime ground truth; the verdict (`use_analysis`, **route 1** —
