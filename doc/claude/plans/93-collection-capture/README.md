@@ -111,12 +111,14 @@ and the probes are graduated to `tests/scripts/NNN-collection-capture.loft`.
 
 | Item | Status |
 |---|---|
-| **0** — Falsify C1–C5; revert Approach-A WIP to a clean baseline | Open |
-| **1** — hash, read-only, both backends (synthesize Reference-DbRef + body override) | Open |
-| **2** — vector / sorted / index / spacial, read-only (confirm C4) | Open |
-| **3** — mutation-through (only if C3 held; else the loud rejection) | Open / gated on C3 |
-| **4** — escape / lifetime guard (C5) | Open |
-| **5** — harden + land: graduate matrix to `tests/scripts/`, full `wrap` + `native` suites, clippy/fmt, doc in LOFT.md, close #511 | Open |
+| **0** — Falsify C1–C5; clean baseline | **Done** — chokepoint validated; C3 (mutation) + iteration falsified |
+| **1** — hash, read-only, both backends (synthesize Reference-DbRef + body override) | **Done** — interp + native, leak-clean |
+| **2** — vector / sorted / index read-only (C4: one family) | **Done** — all lookup, both backends |
+| **3a** — reject mutation through a bare capture (loud) | **Done** — `+=` / `h[k]=` rejected (parser/expressions.rs) |
+| **3b** — reject iteration through a bare capture (loud; native defect) | **Done** — `for e in h` rejected (parser/collections.rs) |
+| **4** — escape / lifetime guard (C5) | Open — DbRef is a non-owning leaf (borrow); leak-clean on the surface. Escape past the collection scope still to verify (existing #318 guard) |
+| **5** — harden + land: `tests/scripts/505` (lookup) + `506` (rejections), full suites, docs, close #511 | **In progress** — scripts + LOFT.md done; full suite running |
+| **6 (follow-up)** — mutation-through + iteration over a bare capture (write-back + native for-loop codegen) | Deferred — lookup covers the routing use case |
 
 ## Out of scope (record, don't absorb)
 

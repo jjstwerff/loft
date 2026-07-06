@@ -1101,6 +1101,26 @@ use a separate collection or add after the loop"
         var_nr: u16,
     ) -> Type {
         self.check_iter_safety(to, f_type, op);
+        // @PLN93 (#511): a collection captured into a closure is READ-ONLY.  `+=`
+        // (append) silently no-ops — an insert's store-realloc DbRef update can't write
+        // back to the closure record (a captured read is an rvalue temp, not a field
+        // lvalue).  `h[k]=v` happens to work, but keep the contract simple + safe (no
+        // untested mutation-builtin edge silently corrupts): reject ALL mutation through
+        // a capture.  A captured collection carries the hidden closure param in its deps
+        // (set in parser/objects.rs); `f_type` is the target's type for `h += …`,
+        // `parent_tp` the collection for an element write `h[k] = …`.
+        if self.closure_param != u16::MAX
+            && !self.first_pass
+            && ((Self::is_collection_type(f_type) && f_type.depend().contains(&self.closure_param))
+                || (Self::is_collection_type(&parent_tp)
+                    && parent_tp.depend().contains(&self.closure_param)))
+        {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "cannot mutate a collection captured into a closure — a capture is read-only (@PLN93 / #511); wrap it in a struct field to mutate it through the capture"
+            );
+        }
         // Save parent struct type before the RHS parse overwrites parent_tp.
         let lhs_parent_tp = parent_tp.clone();
         // #330: `x = x` is the identity — emit nothing.  Letting it through

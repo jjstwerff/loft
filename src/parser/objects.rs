@@ -50,7 +50,7 @@ impl Parser {
     /// A captured collection is stored in the closure record as a `Reference` DbRef, so
     /// the body must recover its real (collection) type from `capture_context` to keep
     /// `h[key]` / iteration typed correctly.
-    fn is_collection_type(tp: &Type) -> bool {
+    pub(crate) fn is_collection_type(tp: &Type) -> bool {
         matches!(
             tp,
             Type::Vector(_, _)
@@ -235,8 +235,7 @@ impl Parser {
                 .find(|(n, _)| n == name)
                 .map(|(_, ct)| ct.clone())
                 .filter(Self::is_collection_type);
-            t = captured_collection_tp
-                .unwrap_or_else(|| self.data.attr_type(closure_d_nr, fnr));
+            t = captured_collection_tp.unwrap_or_else(|| self.data.attr_type(closure_d_nr, fnr));
             // closure record is a struct — add __closure as dep so the
             // store allocation stays alive while derived text/references are in use.
             t = t.depending(self.closure_param);

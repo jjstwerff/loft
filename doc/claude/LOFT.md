@@ -728,6 +728,15 @@ add5(10)               // 15
   record while both are alive, and mutations from either side are visible to
   the other (#318/C75 bound such closures to the frame that owns the
   captures).
+- Collections (`hash` / `vector` / `sorted` / `index`): captured by shared
+  DbRef — the closure **borrows** the outer collection (like a struct
+  reference), so it can look up elements by key / index and read them:
+  `fn(k: integer) -> integer { (h[k] ?? Row { … }).v }`.  A captured
+  collection is **read-only**: mutation (`h += …`, `h[k] = …`) and iteration
+  (`for e in h`) through a *bare* capture are rejected at parse time
+  (@PLN93 / #511).  To mutate or iterate, wrap the collection in a **struct
+  field** and capture the struct — a struct capture is a mutable, iterable
+  lvalue.
 
 **Limitations:**
 - Capturing closures in `vector<fn(...)>` is supported only for non-capturing lambdas or when all elements are the same closure type.
