@@ -354,10 +354,20 @@ impl Uses {
         self.pos += 1;
         // @PLN90 item 2 — breadcrumb the nearest enclosing span position (only when tracking,
         // so the default path pays nothing). A copy op borrows this for its report location.
-        if self.track_pos
-            && let Some(p) = node.span_pos()
-        {
-            self.cur_pos = Some(p.clone());
+        if self.track_pos {
+            if let Some(p) = node.span_pos() {
+                self.cur_pos = Some(p.clone());
+            } else if let Value::Line(n) = node {
+                // @PLN90 S5.2 — a bare line marker is a coarse fallback for copies that
+                // sit under no span (an inline construct's `OpAppendVector`, an `[]` fold).
+                // Empty `file` signals "borrow the caller's source file" (report/warn fill
+                // it); a real span later in the same statement overrides this.
+                self.cur_pos = Some(Position {
+                    file: String::new(),
+                    line: *n,
+                    pos: 0,
+                });
+            }
         }
         // @PLN90 item 3 — record a REAL write of a var at this position, for `mut_max_pos` (the
         // Forced test). Covers every write op (first-arg family + `OpCopyRecord`'s second-arg
@@ -1789,12 +1799,16 @@ pub fn warn_copies(data: &Data, diags: &mut crate::diagnostics::Diagnostics, fal
             } else {
                 data.type_name_str(def.variables.tp(r.source))
             };
-            // A precise `Position` is captured only when the copy sits under a span the walk
-            // reached (S5.2 — position propagation to every survival copy is still partial, a gap
-            // shared with `--report-copies`'s "<location unknown>"). Fall back to the source file
-            // at line 0 and name the enclosing function, so the actionable warning still surfaces.
+            // The copy op carries no span; it borrows the nearest span or (S5.2) the enclosing
+            // line marker. A line-only fallback has an empty `file` — substitute the caller's
+            // source file. When even the line is unknown, fall back to line 0 + the fn name.
             let (file, line, col) = r.loc.as_ref().map_or((fallback_file, 0, 0), |p| {
-                (p.file.as_str(), p.line, p.pos)
+                let f = if p.file.is_empty() {
+                    fallback_file
+                } else {
+                    p.file.as_str()
+                };
+                (f, p.line, p.pos)
             });
             let where_ = if r.loc.is_some() {
                 String::new()
@@ -1849,10 +1863,18 @@ pub fn report_copies(data: &Data) {
                 // user's to act on.
                 _ => continue,
             };
-            let loc = r
-                .loc
-                .as_ref()
-                .map_or_else(|| "<location unknown>".to_string(), Position::to_string);
+            // S5.2 — a line-only fallback carries an empty `file` (the copy sat under no span);
+            // render it as `line N` rather than the raw `:N:0`.
+            let loc = r.loc.as_ref().map_or_else(
+                || "<location unknown>".to_string(),
+                |p| {
+                    if p.file.is_empty() {
+                        format!("line {}", p.line)
+                    } else {
+                        p.to_string()
+                    }
+                },
+            );
             let ty = if r.source == u16::MAX {
                 "a structure".to_string()
             } else {

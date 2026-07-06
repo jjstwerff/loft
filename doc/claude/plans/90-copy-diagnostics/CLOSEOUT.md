@@ -158,12 +158,15 @@ includes `warn_copies_enabled()` so the split is computed under the lint too. `F
 (short-circuit). Test: `tests/use_analysis.rs::warn_copies_enforced_lint_gated` (on = warns, off =
 silent); suite 29/0.
 
-**Two follow-ups before default-on:** (a) **S5.2 — precise locations**: survival copies frequently
-carry no `Position` (the copy op has no span, `cur_pos` only tracks `Value::Span` nodes) — the same
-`<location unknown>` gap the `--report-copies` report has; the lint falls back to naming the
-enclosing function. Propagating positions to every survival copy is the refinement. (b) **the
-default-on flip** waits on W2/A2 draining the Avoidable set (else it over-warns on copies the
-compiler is about to stop making). **Report** (`--report-copies`) was already built (#510).
+**S5.2 (precise locations) — DONE (2026-07-06).** The walk now captures `Value::Line` markers into
+`cur_pos` as a coarse fallback (empty `file`, filled with the source path by `warn_copies` /
+rendered as `line N` by the report) — so survival copies that sit under no span still get a line.
+Both the lint warnings and `--report-copies` now show the copy's line (was `<location unknown>`).
+Gated on `track_pos` → default path byte-identical.
+
+**Remaining before default-on:** the flip waits on W2/A2 draining the Avoidable set (else it
+over-warns on copies the compiler is about to stop making). **Report** (`--report-copies`) was
+already built (#510).
 
 ### W6 — par-dispatch native E0308  ·  P0 · S · **✅ DONE (2026-07-06)**
 
