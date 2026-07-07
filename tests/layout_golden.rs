@@ -150,8 +150,10 @@ fn referenced(db: &Stores, kt: u16, out: &mut Vec<u16>) {
     }
 }
 
-fn dump_layout(db: &Stores, data: &Data) -> String {
-    // Transitive closure from the corpus roots.
+/// Transitive closure of the types reachable from the corpus roots (via
+/// `referenced`) — the exact set of layouts the golden pins and the coverage
+/// audit classifies.
+fn reached_types(db: &Stores, data: &Data) -> std::collections::BTreeSet<u16> {
     let mut seen: std::collections::BTreeSet<u16> = std::collections::BTreeSet::new();
     let mut stack: Vec<u16> = Vec::new();
     for name in TYPES {
@@ -174,9 +176,13 @@ fn dump_layout(db: &Stores, data: &Data) -> String {
             }
         }
     }
+    seen
+}
+
+fn dump_layout(db: &Stores, data: &Data) -> String {
     // Render sorted by (name, known_type) so the golden is stable across
     // unrelated known-type renumbering.
-    let mut items: Vec<u16> = seen.into_iter().collect();
+    let mut items: Vec<u16> = reached_types(db, data).into_iter().collect();
     items.sort_by(|a, b| type_name(db, *a).cmp(&type_name(db, *b)).then(a.cmp(b)));
     let mut out = String::new();
     for kt in items {
@@ -243,5 +249,94 @@ fn layout_golden() {
         fnv1a(&dump),
         LAYOUT_ALGO_HASH,
         "layout-algo hash drifted from the pinned constant"
+    );
+}
+
+// ── B4 — coverage self-audit ────────────────────────────────────────────────
+//
+// Guarantees "every structure" stays true as loft grows. Three teeth:
+//  1. `coverage()` is EXHAUSTIVE over `Parts` — a NEW storage kind fails to
+//     COMPILE here, forcing whoever adds it to declare its layout-test coverage.
+//  2. Every kind the corpus produces must be classified `Covered` (a ratchet:
+//     add a corpus entry that produces a `Gap` kind → this fails → promote it).
+//  3. The corpus produces EXACTLY the `Covered` kinds (delete a corpus entry
+//     that drops a covered kind → this fails).
+
+#[derive(PartialEq, Eq, Debug)]
+enum Cover {
+    /// Exercised by the corpus — its layout is pinned by the golden.
+    Covered,
+    /// A real user-writable storage kind NOT yet in the corpus — add it.
+    Gap(&'static str),
+    /// Not a user-declared shape (codegen-only) — no corpus entry expected.
+    Internal(&'static str),
+}
+
+/// EXHAUSTIVE over `Parts`. A new variant makes this a non-exhaustive match =
+/// a compile error, so no storage kind can be added without a coverage verdict.
+fn coverage(p: &Parts) -> (&'static str, Cover) {
+    match p {
+        Parts::Base => ("Base", Cover::Covered),
+        Parts::Struct(_) => ("Struct", Cover::Covered),
+        Parts::Byte(..) => ("Byte", Cover::Covered),
+        Parts::ShortRaw(..) => ("ShortRaw", Cover::Covered),
+        Parts::Int(..) => ("Int", Cover::Covered),
+        Parts::Vector(_) => ("Vector", Cover::Covered),
+        Parts::Hash(..) => ("Hash", Cover::Covered),
+        Parts::Enum(_) => ("Enum", Cover::Gap("plain enum")),
+        Parts::EnumValue(..) => ("EnumValue", Cover::Gap("enum with typed data")),
+        Parts::Short(..) => ("Short", Cover::Gap("i16 narrow int (2-byte shifted)")),
+        Parts::Sorted(..) => ("Sorted", Cover::Gap("sorted<T[key]>")),
+        Parts::Ordered(..) => ("Ordered", Cover::Gap("sorted array (ordered)")),
+        Parts::Index(..) => ("Index", Cover::Gap("index<T[key]>")),
+        Parts::Spacial(..) => ("Spacial", Cover::Gap("spacial<T[key]>")),
+        Parts::Array(_) => (
+            "Array",
+            Cover::Internal("codegen-only reference collection"),
+        ),
+        Parts::DbRef => (
+            "DbRef",
+            Cover::Internal("12B stored DbRef — fn-ref closure half"),
+        ),
+        Parts::ChildRec(_) => (
+            "ChildRec",
+            Cover::Internal("closure-in-struct-field codegen"),
+        ),
+    }
+}
+
+/// The storage kinds the corpus is expected to produce — kept in lockstep with
+/// the `Cover::Covered` arms above by the audit's exact-set assertion.
+const COVERED_LABELS: &[&str] = &[
+    "Base", "Struct", "Byte", "ShortRaw", "Int", "Vector", "Hash",
+];
+
+#[test]
+fn layout_coverage_audit() {
+    let (data, db) = cached_default();
+    let mut p = Parser::new();
+    p.data = data;
+    p.database = db;
+    p.parse_str(CORPUS, "layout_corpus", false);
+
+    let mut produced: std::collections::BTreeSet<&'static str> = std::collections::BTreeSet::new();
+    for kt in reached_types(&p.database, &p.data) {
+        let (label, cover) = coverage(&p.database.types[kt as usize].parts);
+        assert_eq!(
+            cover,
+            Cover::Covered,
+            "corpus now produces storage kind `{label}` (classified {cover:?}) — a gap just \
+             closed: promote it to Cover::Covered and add it to COVERED_LABELS"
+        );
+        produced.insert(label);
+    }
+
+    let expected: std::collections::BTreeSet<&'static str> =
+        COVERED_LABELS.iter().copied().collect();
+    assert_eq!(
+        produced, expected,
+        "corpus storage-kind coverage drifted: the corpus must produce EXACTLY the \
+         Cover::Covered kinds. Missing → a corpus structure was removed; extra → promote \
+         the new kind in coverage() + COVERED_LABELS."
     );
 }
