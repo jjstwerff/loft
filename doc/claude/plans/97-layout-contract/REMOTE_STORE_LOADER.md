@@ -167,9 +167,9 @@ bytes-bounded AND leak-clean* where applicable. "Prove it can fail" = the negati
 
 **But P0 found a load-bearing BLOCKER the design missed** — see [§ P0 results](#p0-results--the-portability-prerequisite-2026-07-07). The hash INDEX was not portable across
 processes, so the loader phases below gained a **prerequisite**: make persisted collections
-cross-process-portable first.  **The keys half (Phase 0.5a) is now DONE (#523)** — the hash seed
-lives in the bucket record, so `store_load_keys` is unblocked; the `sorted`/range half (0.5b)
-remains.
+cross-process-portable first.  **Both halves are now DONE** — 0.5a (#523: hash seed in the bucket
+record) and 0.5b (`store_persist_bind` accepts `sorted`/`index`), so `store_load_keys` (Phase 3)
+and `store_load_range` (Phase 4) are unblocked.
 
 ### Phase 1 — heap store-load (whole file, no HTTP)
 - **Build:** `store_load(path)` — `read_bytes` → 8-aligned heap arena → `Store{ backing: Heap,
@@ -274,15 +274,24 @@ free/copy cascade no longer re-encodes the layout).  Pinned by the two-process l
 `tests/store_persist_loft.rs::fresh_then_reload_round_trip` (reload process must read `h[13]=1300`,
 not null).
 
-### Phase 0.5b — extend persistence to `sorted`/`ordered` — **not yet**
+### Phase 0.5b — extend persistence to `sorted`/`index` — **DONE 2026-07-07**
 
-`store_persist_bind` is still **hash-only** (rejects `sorted<…>`).  The `sorted`/range path is
-portable by construction (comparison-based, no seed) and is the game-asset / routing sweet spot; it
-needs the persistence primitive extended first, before Phase 4 (`store_load_range`).
+`store_persist_bind` now accepts any store-rooted keyed collection, not just `hash`.  The blocker
+was purely the loft type signature (`r: hash`): `bind_path` snapshots the whole dedicated Store's
+bytes and is collection-agnostic, and `sorted`/`index`/`spacial` are comparison-based (no
+per-process seed) so their persisted image is portable by construction.  Since a `#rust`-body
+builtin cannot be overloaded (`Cannot redefine`), the fix widened the parameter to a bare
+`reference` and taught the type checker that a keyed-collection handle (`Type::Hash` / `Sorted` /
+`Index` / `Spacial`) satisfies a bare `reference` param — it is already a `DbRef`, so no conversion
+op (`convert` + `can_convert` in `src/parser/mod.rs`).  (`ordered` is not a distinct user-facing
+`Type` — only a storage `Parts` variant — so it needs no separate work.)  Pinned by the two-process
+`store_persist_loft.rs::sorted_fresh_then_reload_round_trip` (reload process reads `s[13]=1300` and
+iterates in key order).
 
-Net: the read mechanism is fine; the **foundation (portable persisted collections)** is the real
-first step — its keys half (0.5a) is now in place, unblocking `store_load_keys`; the range half
-(0.5b) remains.  P0 caught the whole thing before a line of the loader was written.
+Net: the read mechanism is fine, and the **foundation (portable persisted collections) is now
+complete** — the keys half (0.5a, hash) and the range half (0.5b, sorted/index) both persist and
+cross-process-read correctly.  `store_load_keys` (Phase 3) and `store_load_range` (Phase 4) are
+unblocked.  P0 caught the whole thing before a line of the loader was written.
 
 ## Open questions (each with a recommendation)
 
@@ -305,9 +314,9 @@ first step — its keys half (0.5a) is now in place, unblocking `store_load_keys
 
 **Effort MH.** P0 (done) confirmed the read mechanism AND found the portability blocker. **Phase
 0.5 (the prerequisite): make persisted collections cross-process-portable** — **0.5a (DONE, #523):
-persist the hash seed** (fixed the pre-existing bug + unblocks the keys path); **0.5b (~S, not yet):
-extend persistence to `sorted`** (the portable range path, needed before Phase 4).  Then: Phase 1
-is ~S and independently useful (ship it — it unblocks wasm whole-block load);
+persist the hash seed** (fixed the pre-existing bug + unblocks the keys path); **0.5b (DONE):
+`store_persist_bind` accepts `sorted`/`index`** (the portable range path, needed before Phase 4).
+Then: Phase 1 is ~S and independently useful (ship it — it unblocks wasm whole-block load);
 Phases 2–4 are the core (M) over the deterministic local provider; Phase 5 (S) swaps in #517. The
 identity gate is a few lines reusing
 `schema_sidecar`, added at the phase-1 bootstrap and carried through.

@@ -357,9 +357,17 @@ pub fn store_durable_seal(path: text) -> boolean fs#update;
 #rust"crate::store::Store::durable_seal(std::path::Path::new(@path))"
 #impure(io)
 
-// "The hash IS the file."  Re-root the Store backing the
+// "The collection IS the file."  Re-root the Store backing the
 // given reference at a file path so mutations are durable via mmap
 // without any explicit save/load loop.
+//
+// Works for any store-rooted collection — `hash`, `sorted`, `ordered`,
+// `index` (each keyed local/field is a dedicated Store).  `hash` carries
+// its bucket seed in its own record and `sorted`/`ordered`/`index` are
+// comparison-based (no per-process state), so the persisted image is
+// portable: a different process (a restart, or a remote reader) both
+// iterates AND key-looks-up correctly.  A reference that is NOT its own
+// Store root fails soft (returns `false`), same as any I/O error.
 //
 // First call on a path that does NOT yet exist: serialises the
 // current in-memory Store at the reference's slot to disk (padded to
@@ -379,7 +387,13 @@ pub fn store_durable_seal(path: text) -> boolean fs#update;
 //   pw = PaintedWorld { painted: [] }   // painted's declared type is hash<PaintedHex[q, r]>
 //   store_persist_bind(pw.painted, "dryopea_world.store")
 //   // …mutations to pw.painted now hit mmap'd bytes…
-pub fn store_persist_bind(r: hash, path: text) -> boolean fs#update;
+// `r` is any store-rooted collection — `hash`, `sorted`, `index`, `spacial`
+// (each keyed local/field is its own dedicated Store).  A bare `reference`
+// parameter accepts them all; `bind_path` is collection-agnostic (it
+// snapshots the whole Store's bytes).  `hash` carries its bucket seed in its
+// own record and the comparison-based kinds hold no per-process state, so
+// every persisted image is portable across processes.
+pub fn store_persist_bind(r: reference, path: text) -> boolean fs#update;
 #rust"stores.bind_path((@r).store_nr, std::path::Path::new(@path))"
 #impure(io)
 
