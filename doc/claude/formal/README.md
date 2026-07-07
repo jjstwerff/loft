@@ -61,7 +61,9 @@ not duplicate: a deviation entry links to the lens analysis instead of re-explai
 
 ## Areas
 
-The **static** areas are all at **0 open deviations** (2026-07-04). The **operational** area is
+The **static** areas are all at **0 open deviations** (2026-07-04) — except the newest,
+**layout.md** (2026-07-07): the store byte-layout contract, at **1 open** (`D-layout-1`, the #477
+version-guard gap, mechanism-shipped pending a durable-store consumer). The **operational** area is
 one small-step contract split across files: the scalar core (operational.md) plus the heap,
 iteration, coroutines, concurrency, calls, matching, tuples, closures (2026-07-04), and the last
 two — **text formatting** and **interfaces/generics** (2026-07-05) — so the operational contract is
@@ -76,6 +78,7 @@ shrinks operational.md's single meta-deviation (D-op-1: conformance is *differen
 | [grammar.md](grammar.md) | concrete grammar + operator precedence | **0 open** — the 12-level precedence ladder written; the prefix-`&`/infix-`&` overload + non-CFG surface resolved as decided edges (C81/C82) |
 | [operational.md](operational.md) | small-step semantics — the scalar core | **rules complete for the core, 2 open** — values/null sentinels, left-to-right order, uncomputable→null (C80) + `??`, state steps; the 2 open are the META deviation D-op-1/2 (differential-not-definitional conformance), inherited by every operational file below |
 | [heap.md](heap.md) | store steps — alloc / read / write / **copy** / free | **rules written (2026-07-04), 0 own** — the `DbRef`/`Store` model; the whole-value COPY (C86); the LIFO free discipline whose soundness is ownership.md; conformance via the oracle (D-op-1) |
+| [layout.md](layout.md) | the store BYTE layout — `layout(τ)` (widths, offsets, packing, the reference encoding) | **rules written (2026-07-07), 1 open** — the FORMAT counterpart to heap.md's steps (it defines the `field_offset` heap.md reads at); one format (RAM = disk); nullability is a sentinel, not a layout (`L-Null`); **D-layout-1** (no version guard on persisted bytes, #477) is **mechanism-shipped** — the golden test + the `.dschema` sidecar — pending a durable-store consumer to auto-invoke it (@PLN97) |
 | [iteration.md](iteration.md) | `for`, ranges, text iteration, the map/filter/reduce/comprehension combinators | **rules written (2026-07-04), 0 own** — index-cursor `for`, deterministic combinator order, fresh result vector; conformance via the oracle |
 | [coroutines.md](coroutines.md) | generators — `yield` / `next`, stackful suspension | **rules written (2026-07-04), 0 own** — lazy one-value-per-advance; straight-line yields lazy on both backends, but LOOP-based yields are eager on native (a DECIDED EDGE — rustc restriction, aspiration to fix); conformance via the oracle |
 | [concurrency.md](concurrency.md) | `par` — the one parallel construct | **rules written (2026-07-04), 0 own** — a parallel map consumed in source order; determinism CONDITIONAL on a pure worker; conformance via the oracle |

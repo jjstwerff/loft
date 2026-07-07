@@ -1,0 +1,71 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN97 arc G Phase 0.5b — `store_persist_bind` on a `sorted<T[k]>`.
+//
+// Driven by `tests/store_persist_loft.rs` twice (fresh, then reload in a
+// SEPARATE process) against the same path.  A `sorted` is comparison-based
+// (no per-process hash seed), so its persisted image is portable by
+// construction: the reload process must both iterate in key order AND
+// key-look-up correctly.  Companion to `store_persist_smoke.loft` (the hash
+// case, #523).
+
+struct SortedEntry {
+  key: integer not null,
+  value: integer not null,
+}
+
+fn sorted_keys(s: sorted<SortedEntry[key]>) -> text {
+  result = "";
+  for se_e in s {
+    if result == "" {
+      result = "{se_e.key}"
+    } else {
+      result = "{result},{se_e.key}"
+    }
+  }
+  result
+}
+
+// Key lookup (not iteration): SortedEntry 13's value or "null".
+fn sorted_lookup(s: sorted<SortedEntry[key]>) -> text {
+  found = s[13];
+  if found == null {
+    "null"
+  } else {
+    "{found.value}"
+  }
+}
+
+fn main() {
+  path = env_variable("LOFT_PERSIST_TEST_PATH");
+  mode = env_variable("LOFT_PERSIST_TEST_MODE");
+
+  s: sorted<SortedEntry[key]> = [];
+
+  if mode == "fresh" {
+    // Insert out of order; `sorted` orders them by key ascending.
+    s += SortedEntry { key: 42, value: 4200 };
+    s += SortedEntry { key: 7,  value: 700 };
+    s += SortedEntry { key: 13, value: 1300 };
+
+    ok = store_persist_bind(s, path);
+    if !ok {
+      println("FAIL fresh-bind-returned-false");
+      return
+    }
+    println("fresh keys={sorted_keys(s)}");
+    println("fresh lookup s[13]={sorted_lookup(s)}");
+  } else if mode == "reload" {
+    ok = store_persist_bind(s, path);
+    if !ok {
+      println("FAIL reload-bind-returned-false");
+      return
+    }
+    println("reload keys={sorted_keys(s)}");
+    // The portability claim: a lookup succeeds in this SEPARATE process.
+    println("reload lookup s[13]={sorted_lookup(s)}");
+  } else {
+    println("FAIL unknown-mode")
+  }
+}

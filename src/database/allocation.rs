@@ -153,16 +153,12 @@ impl Stores {
                 let v = *v;
                 let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
                 if cur != 0 {
-                    // Bucket record layout (per `src/hash.rs::add`): offset 0 =
-                    // room (record size in words), offset 4 = length, offset 8.. =
-                    // (room - 1) * 2 bucket slots.  The `(room - 1) * 2` bound is
-                    // the @P290 fix; `room * 2` walked 2 slots past the allocation.
-                    let elms = (self.store(rec).record_words(cur) - 1) * 2;
-                    for i in 0..elms {
-                        let elm = self.store(rec).get_u32_raw(cur, 8 + 4 * i);
-                        if elm == 0 {
-                            continue;
-                        }
+                    // Enumerate the live element records through `hash::records`,
+                    // the single owner of the bucket-record layout (the seed word
+                    // and bucket offset live only in `src/hash.rs`).  Mirrors the
+                    // `Index` arm's `collect_index_nodes`.  `cur` is the bucket
+                    // record itself — a separate container to free (below).
+                    for elm in hash::records(rec, &self.allocations) {
                         children.push(OwnedChild {
                             child: DbRef {
                                 store_nr: rec.store_nr,
@@ -1498,9 +1494,10 @@ impl Stores {
     ///
     /// @P318 — re-INSERT each entry into an emptied destination via `hash::add`
     /// rather than copying the bucket array slot-for-slot.  A hash's bucket
-    /// count is `elms = (room - 1) * 2`, where `room` is read from the record's
-    /// SIZE HEADER (offset 0) — and `Store::claim` may hand back a block LARGER
-    /// than requested (it only splits when the surplus exceeds 1/3; see
+    /// layout (slot count + offsets, now including a per-hash seed word) lives
+    /// only in `src/hash.rs`; `room` comes from the record's SIZE HEADER
+    /// (offset 0) — and `Store::claim` may hand back a block LARGER than
+    /// requested (it only splits when the surplus exceeds 1/3; see
     /// `Store::claim_block`).  The old slot-for-slot copy laid entries out for
     /// the SOURCE's `room`, but the destination record's header (its own
     /// `room`) could differ, so `hash::find` later probed `key % dest_elms` —
@@ -1529,8 +1526,8 @@ impl Stores {
         let size = u32::from(self.size(content_tp));
         let keys = self.types[tp as usize].keys.clone();
         // Source-bucket enumeration reads the SAME keystone walk `remove_claims`
-        // uses (the `(room - 1) * 2` bound + skip-empty-slot logic), so the @P290
-        // hash bound lives in ONE place.  Each child carries its element record in
+        // uses (`for_each_owned_child` → `hash::records`), so the bucket layout
+        // lives in ONE place.  Each child carries its element record in
         // `owning_elem`; re-insert that entry into the emptied destination.
         for child in self.for_each_owned_child(rec, tp).children {
             let Some(elm) = child.owning_elem else {
@@ -2297,7 +2294,7 @@ mod p318_hash_deepcopy {
     /// keep the hash FIND-CONSISTENT even when the destination bucket record is
     /// OVER-sized.  `Store::claim` returns a block up to 1/3 larger than
     /// requested without splitting (`claim_block`), and a hash reads its `room`
-    /// (bucket count, `elms = (room-1)*2`) from that size header — so the old
+    /// (bucket count, `elms = (room-2)*2`) from that size header — so the old
     /// slot-for-slot copy laid the dest buckets out for the SOURCE room while
     /// `find` later probed `key % dest_elms` (a DIFFERENT start slot) and missed
     /// entries.  The gap `(room, room*4/3]` is tiny for small rooms (e.g. (9,12],

@@ -32,7 +32,8 @@ SPDX-License-Identifier: LGPL-3.0-or-later
   zero or more **records**, each a run of bytes at a record index.
 - **`DbRef`** = `(store_nr: u16, rec: u32, pos: u32)` (`src/keys.rs`) — the **universal
   pointer** and a first-class runtime **value**: which store, which record, which byte
-  offset within it. A field/element access is pointer arithmetic on `pos`.
+  offset within it. A field/element access is pointer arithmetic on `pos` — the byte offsets it
+  adds are the [layout.md](layout.md) contract (heap.md gives the STEP, layout.md the FORMAT).
 - **`nullref`** — `DbRef::NULL`, the reference null. It is the `E-Null` sentinel of the
   reference types (the same in-band discipline as `integer`'s `i64::MIN`).
 - **locks** — a `Store` may be `read_only` (immutable: writes and frees fault) or
