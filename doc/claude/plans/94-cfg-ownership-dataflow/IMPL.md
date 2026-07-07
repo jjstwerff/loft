@@ -61,16 +61,19 @@ the wrong plan under `LOFT_NO_A1B` (`disagree=1: __ref_1 mine=Join / B=Owned`); 
 sweep is DISAGREE=0 across all 54 cells on both backends. The framework works end-to-end; what
 remains is a self-contained RED check + landing it.
 
-**Immediate next action — Phase 4 (the consistency oracle over emitted IR).** Turn the fact from a
-shadow-DIFF (mine-vs-B) into a self-contained CHECK that walks the shipped IR and asserts, per path:
-every store freed exactly once; no free of a still-live store; no free of a borrowed (non-owning)
-alias. It must go **RED** (not merely disagree) on `LOFT_NO_A1B` + an injected fault (delete one
-`OpFreeRef`, or flip one `Owned`→`Borrowed`), reporting the exact store + site, and be GREEN across
-issues/leak/wrap/native/`loft_suite` (the shipped code IS complete there — no crying wolf). New mode
-`LOFT_OWN_ORACLE=check`. Then **Phase 5** — land it beside with the fuzzer hook (wire the 54-cell
-sweep into `cargo test`) + a `tests/ownership_oracle.rs` binary (per shape: SI-2 fact-identity,
-green on correct, red on injected fault). That Phase-5 state IS the "fully functional oracle" (the H
-end-state). Codegen cutover stays out (P4/VH).
+**Phase 4 is built (4.1/4.3 ✅, 4.2 nearly — see below and [`PHASE4_DESIGN.md`](PHASE4_DESIGN.md)):**
+`LOFT_OWN_ORACLE=check` runs two gating checks BESIDE the shipped analysis and goes RED on
+`LOFT_NO_A1B` (Check A) — the coexistence model the design doc pins.
+
+**Immediate next action — close 4.2's last residual, then Phase 5.** (1) Clear the one `n_choose`
+false positive: record `OpDatabase(v)` re-mints (a `Call`, not a `Set`) as owns entries — the same
+class as the 3.4a structural-op fix — so a retbuf re-minted in an arm reads `Owned`, not the stale
+`Borrowed`; if `Join`-vs-`Owned` remains after that, model the retbuf materialisation B collapses to
+`Owned`. Then extend the 0-false-positive sweep to issues/leak/wrap/native. (2) **Phase 5** — land it
+beside with the fuzzer hook (wire the 54-cell sweep + the `check` gate into `cargo test`) + a
+`tests/ownership_oracle.rs` binary (per shape: SI-2 fact-identity, green on correct, RED on an
+injected fault — the 4.3 true-positive test). That Phase-5 state IS the "fully functional oracle"
+(the H end-state). Codegen cutover stays out (P4/VH).
 
 ## Standing invariants — re-check after EVERY sub-step
 
@@ -272,15 +275,26 @@ stand as written.
 
 ---
 
-## Phase 4 — The consistency oracle over emitted IR
+## Phase 4 — The consistency oracle over emitted IR (design: [`PHASE4_DESIGN.md`](PHASE4_DESIGN.md))
 
-- **4.1 — the checker, unit-tested.** Walk the shipped IR; assert per path: every store freed
-  **exactly once**, no free of a still-live store, no free of a borrowed (non-owning) alias.
-  **Gate:** on a hand-built IR, catches a hand-injected fault (unit test), passes the correct one.
-- **4.2 — drive false-positives to zero.** Run `LOFT_OWN_ORACLE=check` over issues/leak/wrap/native/
-  `loft_suite`. **Gate:** green everywhere (shipped code IS complete there — no crying wolf). SI-1 holds.
-- **4.3 — true-positive gate.** **Gate:** **red** on `LOFT_NO_A1B` and on an injected fault (delete
-  one `OpFreeRef`, or flip one `Owned`→`Borrowed`), reporting the exact store + site.
+Design-doc-first (Design Protocol 1): a candidate self-contained A1b invariant was PROBED and
+FALSIFIED before code (both the unsafe A1b return and the safe `id()` borrow-of-param have an
+unresolved base `65535`, so base resolution can't tell them apart). Pivoted to **two gating checks
+under `LOFT_OWN_ORACLE=check`, run BESIDE the shipped analysis** (coexistence — neither replaces the
+other; both flag; overhead ~1.6%, gated-off zero): **Check A** the shadow-diff as a gate (the A1b
+catch); **Check B** free-legitimacy (an unconditional `OpFreeRef` of a `Borrowed` store).
+
+- **4.1 ✅ (2026-07-07)** — `check` mode + `run_check` + 2 unit tests (`free_of_borrowed` flags only
+  the `Borrowed` free; `collect_free_targets` finds only free-op arg0). Pure observer (SI-1).
+- **4.2 — NEARLY DONE (2026-07-07): 377 `tests/scripts` swept; Check B fully clean; Check A 11 → 1.**
+  The build was the last probe — three false-positive classes found + fixed: Check B on
+  `OpFreeText`/`OpFreeRefIfDistinct` (narrowed to unconditional `OpFreeRef`); Check A `Join(a)` vs
+  `Join(b)` (compare by KIND, not base); Check A self-borrow `Borrowed(self)` (@P302 marker →
+  normalise to `Owned`). **Residual 1:** `n_choose` — a retbuf re-mint via `OpDatabase(r)` (a `Call`,
+  not a `Set`) the transfer misses; a leak-direction (SAFE) imprecision, deferred. SI-1 holds; 505 +
+  fuzzer + probes still `disagree=0`.
+- **4.3 ✅ (2026-07-07)** — RED on `LOFT_NO_A1B` (`n_h`, via Check A). The injected-fault
+  true-positive (delete an `OpFreeRef` / flip a fact) is wired as a test in Phase 5.
 
 ---
 

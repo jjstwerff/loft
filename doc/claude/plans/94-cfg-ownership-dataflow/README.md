@@ -7,8 +7,9 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**IN PROGRESS — Phase 2 (the ownership fact) COMPLETE; Phase 4 (the RED consistency check) next.**
-Branch `tuxedo-pln94-ownership-dataflow` (off `origin/main`). Everything so far is a PURE
+**IN PROGRESS — Phase 2 (the ownership fact) COMPLETE; Phase 4 (the RED consistency check) BUILT
+(4.1/4.3 ✓, 4.2 nearly); Phase 5 (land it) next.** Branch `tuxedo-pln94-ownership-dataflow` (off
+`origin/main`). Everything so far is a PURE
 OBSERVER — reached only via `LOFT_OWN_ORACLE`, nothing in the compile path consumes it, so shipped
 codegen is byte-identical (SI-1 held on `loft_suite` + the parse suite at every step). Progress:
 
@@ -41,7 +42,16 @@ codegen is byte-identical (SI-1 held on `loft_suite` + the parse suite at every 
   **A1b payoff is demonstrated**: on the canonical `85-…-uaf.loft` the oracle is clean under the
   correct default (`n_h disagree=0`) and **flags** the wrong plan under `LOFT_NO_A1B` (`__ref_1:
   mine=Join / B=Owned`). Two oracle unsoundnesses found + fixed via the inward cross-check; the
-  framework works end-to-end. **Next: Phase 4** — the self-contained RED consistency check over IR.
+  framework works end-to-end.
+- **Phase 4 BUILT — 4.1/4.3 ✓, 4.2 nearly (2026-07-07; design: [`PHASE4_DESIGN.md`](PHASE4_DESIGN.md)).**
+  `LOFT_OWN_ORACLE=check` runs two checks BESIDE the shipped analysis — **both algorithms flag,
+  neither replaces the other** (overhead ~1.6%, gated-off zero): Check A (shadow-diff gate — the A1b
+  catch, RED on `LOFT_NO_A1B`) + Check B (free-legitimacy — an unconditional `OpFreeRef` of a
+  `Borrowed` store). A candidate self-contained A1b invariant was probed + FALSIFIED before coding
+  (base `65535` unresolved on both safe and unsafe returns). Sweeping 377 `tests/scripts` was the
+  last probe: Check B clean; Check A cut 11 → 1 (compare by KIND not base; `Borrowed(self)` @P302 →
+  `Owned`); the 1 residual (`n_choose` retbuf re-mint) is a safe leak-direction imprecision, deferred.
+  **Next: Phase 5** — land it beside with the fuzzer hook + a `tests/ownership_oracle.rs` binary.
 
 The remaining approximations this replaces still ship: `src/use_analysis.rs` analysis **A**
 (position-proxy, valid only outside loops) and analysis **B** (`Owned/Borrowed/Join`, flow-insensitive
