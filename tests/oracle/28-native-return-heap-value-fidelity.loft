@@ -1,0 +1,53 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN89 differential-oracle corpus — AXIS: native return of a heap/wrapped value
+// must not SILENTLY corrupt (the routing 2026-07-02 value-fidelity family — the
+// dangerous half: no compile error, just a wrong answer only --native produces).
+// Three shapes that each returned a healthy-looking wrong value on native while
+// the interpreter was correct:
+//   - #488: a heap vector that is a FIELD OF A LOCAL struct returned EMPTY
+//     (fixed via parse_return's buffer-delivery gate, guard
+//     tests/scripts/450-struct-field-vector-return.loft);
+//   - the field-of-param variant of the same return;
+//   - a `float?` return ZEROED when the callee is invoked with a CONSTRUCTED text
+//     argument (`"{n}"`) — the corruption is a non-null 0, so a `?? d` discharge
+//     never fires and every downstream value silently flattens.
+// Both backends must AGREE on value AND leak-freedom; a divergence here is a
+// silent native miscompile, exactly the class the oracle exists to make caught.
+
+struct MatchResult { pts: vector<integer>, gaps: integer }
+
+// #488: return a heap vector that is a field of a LOCAL struct
+fn b1_field_local(n: integer) -> vector<integer> {
+  r = MatchResult { pts: [], gaps: 0 };
+  for i in 0..n { r.pts += [i * 10]; }
+  return r.pts;
+}
+
+// field-of-param heap vector return
+fn b2_field_param(mr: MatchResult) -> vector<integer> { return mr.pts; }
+
+// float? return corrupted by a CONSTRUCTED text arg
+fn getf(v: vector<float>, key: text) -> float? {
+  if key == "5" { return v[0]; }
+  null
+}
+fn b3_ctor_arg_opt(v: vector<float>) -> float? {
+  n = 5;
+  getf(v, "{n}")
+}
+
+fn main() {
+  a = b1_field_local(3);
+  println("b1={a[0] ?? -1},{a[1] ?? -1},{a[2] ?? -1} len={len(a)}");   // 0,10,20 len=3
+
+  mr = MatchResult { pts: [7, 8, 9], gaps: 1 };
+  c = b2_field_param(mr);
+  println("b2={c[0] ?? -1},{c[2] ?? -1} len={len(c)}");                // 7,9 len=3
+
+  vf: vector<float> = [];
+  vf += [42.5];
+  h = b3_ctor_arg_opt(vf);
+  println("b3={h ?? -1.0}");                                           // 42.5
+}
