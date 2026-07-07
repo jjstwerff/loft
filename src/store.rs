@@ -2230,6 +2230,14 @@ pub enum CorruptReason {
     /// `payload_len`.  Either the file was truncated after the sidecar
     /// was written, or the sidecar predates a resize that never completed.
     TruncatedFile,
+    /// @PLN97 Phase D — the bytes are INTACT (integrity clean) but were
+    /// written under a DIFFERENT store layout than the running program's:
+    /// reading them raw would silently misinterpret them.  Produced by the
+    /// `.dschema` schema-sidecar check (`crate::schema_sidecar`), not by
+    /// integrity validation.  A consumer routes it through the same
+    /// `on_corruption` rebuild path — the store must be migrated or rebuilt,
+    /// never read raw.
+    SchemaMismatch,
 }
 
 /// Durability mode for [`Store::open_durable`].  Tier 1 is the only variant

@@ -16,6 +16,7 @@
 //! source of truth); the sidecar merely records it.
 
 use crate::database::Stores;
+use std::path::{Path, PathBuf};
 
 /// The self-describing layout identity of a store: the compact
 /// [`layout_algo_hash`](Stores::layout_algo_hash) (the quick identical-check) +
@@ -139,6 +140,105 @@ pub fn classify(old: &LayoutIdentity, new: &LayoutIdentity) -> Handoff {
     Handoff::Changed(diff)
 }
 
+// ── The `.dschema` sidecar file lifecycle (durable-store wiring) ─────────────
+
+/// The `.dschema` sidecar path for a store at `store_path` — a SEPARATE file
+/// beside the store (mirrors the `.dmeta` integrity sidecar; `x` → `x.dschema`).
+/// The store payload is never touched.
+#[must_use]
+pub fn dschema_path(store_path: &Path) -> PathBuf {
+    let mut p = store_path.as_os_str().to_owned();
+    p.push(".dschema");
+    PathBuf::from(p)
+}
+
+impl LayoutIdentity {
+    /// Atomically write this identity to the `.dschema` sidecar beside the store
+    /// (temp + rename — a torn write never yields a half-file). Call when a
+    /// durable store is persisted; the store payload stays byte-identical.
+    ///
+    /// # Errors
+    /// Propagates any `io::Error` creating, writing, syncing, or renaming the
+    /// sidecar file.
+    pub fn write_beside(&self, store_path: &Path) -> std::io::Result<()> {
+        use std::io::Write as _;
+        let path = dschema_path(store_path);
+        let mut tmp = path.clone();
+        let mut name = tmp
+            .file_name()
+            .map(std::ffi::OsString::from)
+            .unwrap_or_default();
+        name.push(".tmp");
+        tmp.set_file_name(name);
+        {
+            let mut f = std::fs::File::create(&tmp)?;
+            f.write_all(self.to_sidecar().as_bytes())?;
+            f.sync_all()?;
+        }
+        std::fs::rename(&tmp, &path)
+    }
+}
+
+/// The verdict of checking a store's `.dschema` against the running program's
+/// layout identity — Phase D's load-time gate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SchemaVerdict {
+    /// No `.dschema` beside the store — a legacy / brand-new store. Nothing to
+    /// check; the caller writes one on persist.
+    Fresh,
+    /// The stored layout matches the running program's — safe RAW handoff.
+    Match,
+    /// The stored layout differs — serialize-before-handoff / migrate (Phase E)
+    /// or reject-and-rebuild. Carries the per-type diff.
+    Changed(LayoutDiff),
+    /// The `.dschema` is present but unreadable (bad magic / version / format) —
+    /// the store's layout is UNKNOWN, so it must not be read raw. Reject.
+    Unreadable,
+}
+
+impl SchemaVerdict {
+    /// True iff the store can be read RAW without migration (`Fresh` / `Match`).
+    #[must_use]
+    pub fn is_raw_safe(&self) -> bool {
+        matches!(self, SchemaVerdict::Fresh | SchemaVerdict::Match)
+    }
+
+    /// Map a non-raw-safe verdict to the durable-store corruption reason, so a
+    /// consumer routes it through the SAME `on_corruption` rebuild path an
+    /// integrity failure uses. `None` for the raw-safe verdicts.
+    #[must_use]
+    pub fn as_corrupt_reason(&self) -> Option<crate::store::CorruptReason> {
+        match self {
+            SchemaVerdict::Fresh | SchemaVerdict::Match => None,
+            SchemaVerdict::Changed(_) | SchemaVerdict::Unreadable => {
+                Some(crate::store::CorruptReason::SchemaMismatch)
+            }
+        }
+    }
+}
+
+/// Read the `.dschema` sidecar beside `store_path` and compare it with the
+/// running program's identity `current`. A changed layout is DETECTED here —
+/// never a silent raw handoff across a layout change (the @PLN97 gap).
+///
+/// # Errors
+/// Propagates an `io::Error` reading the sidecar (other than not-found, which
+/// yields [`SchemaVerdict::Fresh`]).
+pub fn check_beside(store_path: &Path, current: &LayoutIdentity) -> std::io::Result<SchemaVerdict> {
+    let text = match std::fs::read_to_string(dschema_path(store_path)) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(SchemaVerdict::Fresh),
+        Err(e) => return Err(e),
+    };
+    let Some(stored) = LayoutIdentity::from_sidecar(&text) else {
+        return Ok(SchemaVerdict::Unreadable);
+    };
+    Ok(match classify(&stored, current) {
+        Handoff::Identical => SchemaVerdict::Match,
+        Handoff::Changed(diff) => SchemaVerdict::Changed(diff),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,5 +301,47 @@ mod tests {
         assert!(LayoutIdentity::from_sidecar("garbage").is_none());
         assert!(LayoutIdentity::from_sidecar("LOFT-DSCHEMA v999\nhash=1\n--\n").is_none());
         assert!(LayoutIdentity::from_sidecar("OTHER v1\nhash=1\n--\n").is_none());
+    }
+
+    /// The full `.dschema` lifecycle: write beside a store path, then re-check —
+    /// matching identity → raw-safe; a changed layout → detected (not a silent
+    /// raw handoff), mapping to `CorruptReason::SchemaMismatch`.
+    #[test]
+    fn dschema_lifecycle_beside_a_store() {
+        use crate::store::CorruptReason;
+        let dir = std::env::temp_dir();
+        let store = dir.join(format!("loft_dschema_test_{}.store", std::process::id()));
+        let side = dschema_path(&store);
+        let _ = std::fs::remove_file(&side);
+
+        let a = id(111, "W\tsize=4\tstruct{x@0:integer}\n");
+        // No sidecar yet → Fresh (a brand-new / legacy store).
+        assert_eq!(check_beside(&store, &a).unwrap(), SchemaVerdict::Fresh);
+
+        // Persist the identity beside the store.
+        a.write_beside(&store).unwrap();
+        assert!(
+            side.exists(),
+            "the .dschema sidecar was written beside the store"
+        );
+
+        // Same identity → raw-safe handoff.
+        let v = check_beside(&store, &a).unwrap();
+        assert_eq!(v, SchemaVerdict::Match);
+        assert!(v.is_raw_safe() && v.as_corrupt_reason().is_none());
+
+        // A changed layout (a field grew) → detected, NOT read raw.
+        let b = id(222, "W\tsize=8\tstruct{x@0:long}\n");
+        let v = check_beside(&store, &b).unwrap();
+        assert!(matches!(v, SchemaVerdict::Changed(_)) && !v.is_raw_safe());
+        assert_eq!(v.as_corrupt_reason(), Some(CorruptReason::SchemaMismatch));
+
+        // A garbage sidecar → Unreadable → reject (layout unknown).
+        std::fs::write(&side, "corrupt").unwrap();
+        let v = check_beside(&store, &a).unwrap();
+        assert_eq!(v, SchemaVerdict::Unreadable);
+        assert_eq!(v.as_corrupt_reason(), Some(CorruptReason::SchemaMismatch));
+
+        let _ = std::fs::remove_file(&side);
     }
 }
