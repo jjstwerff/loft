@@ -2366,18 +2366,30 @@ impl Stores {
         }
     }
 
-    /// True when an entry of type `content_tp` can be moved by the working-set
-    /// copy today: every field is either inline-scalar (raw word-copy) or `text`
-    /// (relocated string sub-record, 3b.2). A field that is a vector / nested
-    /// struct / reference / keyed collection still needs the recursive relocating
-    /// copy (3b.3+) and is refused until then (safe-refusal, never a broken heap).
+    /// True when a field can be moved by the working-set copy today: an inline
+    /// scalar (raw word-copy), a `text` (relocated string, 3b.2), or a
+    /// `vector<scalar>` (relocated flat inner record, 3b.3). Text and a
+    /// scalar-vector are BOTH a single flat sub-record behind a `u32` pointer, so
+    /// they relocate with identical code. A `vector<struct>` / `vector<text>` /
+    /// nested struct / reference still needs the recursive copy (3b.4+).
+    #[cfg(feature = "remote-store")]
+    fn is_copyable_field(&self, tp: u16) -> bool {
+        if self.is_inline_scalar(tp) || tp == 5 {
+            return true;
+        }
+        matches!(self.types[tp as usize].parts, Parts::Vector(e) if self.is_inline_scalar(e))
+    }
+
+    /// True when an entry of type `content_tp` can be partially loaded today —
+    /// every field is [copyable](Stores::is_copyable_field). Otherwise the
+    /// collection is refused (safe-refusal, never a broken heap).
     #[cfg(feature = "remote-store")]
     fn is_copyable_entry(&self, content_tp: u16) -> bool {
         match &self.types[content_tp as usize].parts {
-            Parts::Struct(fields) | Parts::EnumValue(_, fields) => fields
-                .iter()
-                .all(|f| self.is_inline_scalar(f.content) || f.content == 5),
-            _ => self.is_inline_scalar(content_tp) || content_tp == 5,
+            Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
+                fields.iter().all(|f| self.is_copyable_field(f.content))
+            }
+            _ => self.is_copyable_field(content_tp),
         }
     }
 
@@ -2478,29 +2490,29 @@ impl Stores {
             fld += 4;
         }
 
-        // 2) 3b.2 — relocate each `text` field: copy the source string record
-        //    (flat: word 0 = size header, fld 4 = length, fld 8.. = UTF-8 bytes)
-        //    into a fresh local claim and repoint the field at it. `is_copyable_entry`
-        //    already guaranteed every field is inline-scalar or text.
-        for p in self.text_field_offsets(content_tp) {
-            let src_str = reader.u32_at(matched, 8 + p);
-            if src_str == 0 {
-                continue; // null text
+        // 2) 3b.2/3b.3 — relocate each FLAT sub-record field (a `text` string or
+        //    a `vector<scalar>` inner record). Both are one flat record behind a
+        //    `u32` pointer: copy it (length at fld 4 + payload at fld 8.., the
+        //    size header at fld 0 is set by `claim`) into a fresh local claim and
+        //    repoint the field. `is_copyable_entry` guaranteed only these kinds.
+        for p in self.relocatable_field_offsets(content_tp) {
+            let src_sub = reader.u32_at(matched, 8 + p);
+            if src_sub == 0 {
+                continue; // null text / empty vector
             }
-            let ssz = reader.record_words(src_str);
+            let ssz = reader.record_words(src_sub);
             if ssz == 0 {
                 continue;
             }
-            let new_str = self.allocations[local.store_nr as usize].claim(ssz);
-            self.allocations[local.store_nr as usize].zero_fill(new_str);
-            // Copy length + bytes (fld 4 onward); `claim` set the size header (fld 0).
+            let new_sub = self.allocations[local.store_nr as usize].claim(ssz);
+            self.allocations[local.store_nr as usize].zero_fill(new_sub);
             let mut sf = 4u32;
             while sf + 4 <= ssz * 8 {
-                let w = reader.u32_at(src_str, sf);
-                self.allocations[local.store_nr as usize].set_u32_raw(new_str, sf, w);
+                let w = reader.u32_at(src_sub, sf);
+                self.allocations[local.store_nr as usize].set_u32_raw(new_sub, sf, w);
                 sf += 4;
             }
-            self.allocations[local.store_nr as usize].set_u32_raw(new_rec, 8 + p, new_str);
+            self.allocations[local.store_nr as usize].set_u32_raw(new_rec, 8 + p, new_sub);
         }
 
         let entry = DbRef {
@@ -2513,16 +2525,24 @@ impl Stores {
     }
 
     /// Byte offsets (within an entry record, relative to its data start at fld 8)
-    /// of the `text` fields of `content_tp` — the fields `load_one` must relocate.
+    /// of the fields whose value is a FLAT sub-record behind a `u32` pointer — a
+    /// `text` string OR a `vector<scalar>` inner record. These are exactly the
+    /// fields `load_one` relocates with the shared flat-sub-record copy. A field
+    /// whose sub-record itself holds pointers (`vector<struct>` / nested) is not
+    /// here — it needs the recursive copy (3b.4).
     #[cfg(feature = "remote-store")]
-    fn text_field_offsets(&self, content_tp: u16) -> Vec<u32> {
+    fn relocatable_field_offsets(&self, content_tp: u16) -> Vec<u32> {
+        let flat_ptr = |ftp: u16| -> bool {
+            ftp == 5
+                || matches!(self.types[ftp as usize].parts, Parts::Vector(e) if self.is_inline_scalar(e))
+        };
         match &self.types[content_tp as usize].parts {
             Parts::Struct(fields) | Parts::EnumValue(_, fields) => fields
                 .iter()
-                .filter(|f| f.content == 5)
+                .filter(|f| flat_ptr(f.content))
                 .map(|f| u32::from(f.position))
                 .collect(),
-            _ if content_tp == 5 => vec![0],
+            _ if flat_ptr(content_tp) => vec![0],
             _ => Vec::new(),
         }
     }

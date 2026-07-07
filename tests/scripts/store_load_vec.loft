@@ -1,11 +1,11 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// @PLN97 arc G Phase 3b (safe-refusal, ongoing) — a hash whose entry has a
-// field the relocating copy does NOT yet handle (here a `vector<integer>`) must
-// be REFUSED by `store_load_key` (return false, load nothing), never copied with
-// a dangling pointer. Text fields are handled (3b.2); vector/nested land at
-// 3b.3+. The refused-empty result stays structurally sound. Driven by
+// @PLN97 arc G Phase 3b.3 — vector<scalar> RELOCATION. A hash whose entry has a
+// `vector<integer>` field can now be partially loaded: `store_load_key` copies
+// the source vector's flat inner record into the local store and repoints the
+// field (same flat-sub-record copy as text). The loaded entry reads the right
+// elements AND is structurally sound (`store_verify`). Driven by
 // `store_persist_loft.rs`.
 
 struct VecRec { id: integer not null, tags: vector<integer> }
@@ -17,14 +17,23 @@ fn main() {
   v: hash<VecRec[id]> = [];
   if mode == "write" {
     a: vector<integer> = [];
-    a += [1];
-    a += [2];
+    a += [10]; a += [20]; a += [30];
     v += VecRec { id: 13, tags: a };
+    b: vector<integer> = [];
+    b += [99];
+    v += VecRec { id: 7, tags: b };
     if !store_persist_bind(v, path) { println("FAIL write-bind"); return }
     println("write ok");
   } else if mode == "loadkey" {
     ok = store_load_key(v, path, 13);
     println("vec loadkey={ok}");
+    r = v[13];
+    if r == null {
+      println("vec tags=ABSENT")
+    } else {
+      println("vec tags_len={len(r.tags)}");
+      println("vec tags={r.tags[0] ?? -1},{r.tags[1] ?? -1},{r.tags[2] ?? -1}");
+    }
     println("vec len={len(v)}");
     println("vec verify={store_verify(v)}");
   } else {

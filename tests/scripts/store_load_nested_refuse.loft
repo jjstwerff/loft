@@ -1,0 +1,31 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN97 arc G Phase 3b (safe-refusal, ongoing) — a hash whose entry has a
+// NESTED struct field (a child record with its own pointers) is not yet handled
+// by the relocating copy (that is 3b.4, the recursive step), so `store_load_key`
+// must REFUSE it (return false, load nothing), never copy it with a dangling
+// pointer. text (3b.2) and vector<scalar> (3b.3) ARE handled. The refused-empty
+// result stays structurally sound. Driven by `store_persist_loft.rs`.
+
+struct Inner { a: integer not null, b: text not null }
+struct NestRec { id: integer not null, sub: Inner }
+
+fn main() {
+  path = env_variable("LOFT_PERSIST_TEST_PATH");
+  mode = env_variable("LOFT_PERSIST_TEST_MODE");
+
+  n: hash<NestRec[id]> = [];
+  if mode == "write" {
+    n += NestRec { id: 13, sub: Inner { a: 1, b: "deep" } };
+    if !store_persist_bind(n, path) { println("FAIL write-bind"); return }
+    println("write ok");
+  } else if mode == "loadkey" {
+    ok = store_load_key(n, path, 13);
+    println("nest loadkey={ok}");
+    println("nest len={len(n)}");
+    println("nest verify={store_verify(n)}");
+  } else {
+    println("FAIL unknown-mode")
+  }
+}
