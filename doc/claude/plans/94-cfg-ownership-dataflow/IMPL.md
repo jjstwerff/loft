@@ -341,8 +341,15 @@ MEASURED, then reverted; the numbers fixed both the scope and a BLOCKER (design 
   (classify copied `x = borrowed-source` as `Owned`), not more check tuning.
 - **The WORKFLOW (dev tier + ratchet):** the dev checks live behind `check-dev`, never on the default
   `check`; `tests/ownership_oracle.rs::oracle_dev_free_check_ratchet` (`#[ignore]`) asserts findings
-  `≤ DEV_FP_BASELINE` (153) — a one-way ratchet lowered by each fact improvement, `== 0` promotes them
-  into `check`. The FP machinery (heap filter + transfer-out set) works; the 153 is the fact blocker.
+  `≤ DEV_FP_BASELINE` — a one-way ratchet lowered by each improvement; `0` promotes them into `check`.
+- **RATCHET 153 → 0 (2026-07-07).** The "materialisation-aware fact" = use the POST-codegen **type
+  dep** as the ownership signal (a copied `ac_copy = f(a, __ref_2)` has an empty dep = owns; the
+  usage-dependent borrow-elision is baked in there). Check C: `depend().is_empty()`; Check B: freed
+  var with non-empty dep. + `transferred_out += OpSetDbRef` capture + narrow exclusions (`__ncc_*`,
+  self-dep work-refs, freed params, closures). `DEV_FP_BASELINE=0`. **Honest tradeoff:** this makes
+  B/C CONSISTENCY checks (free-placement vs dep — catches `get_free_vars`/dep divergence), NOT
+  independent (LOFT_NO_JOIN_OWN not caught by B/C — Check A's + the runtime leak-check's job). Promote
+  to `check` after validating issues/leak/wrap/native + a true-positive test.
 
 **Explicitly NOT here:** routing any shipped consumer (`scopes::get_free_vars`, `state/codegen.rs`,
 `generation/dispatch.rs`) to the new fact, and retiring the position-proxy / flow-insensitive-join.

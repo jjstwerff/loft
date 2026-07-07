@@ -61,9 +61,26 @@ codegen emits). That is a Phase-3-level precision upgrade.
 
 **The workflow (so the checks are never reverted again): a gated dev tier + a FP RATCHET.** The dev
 checks live in the code behind `check-dev`; `tests/ownership_oracle.rs::oracle_dev_free_check_ratchet`
-(`#[ignore]`) counts their findings over `tests/scripts` and asserts `≤ DEV_FP_BASELINE` (currently
-**153**). Every fact/transfer improvement LOWERS the baseline; a regression fails; at 0 they promote
-into `check`. Progress is a number going down, not code toggled in and out.
+(`#[ignore]`) counts their findings over `tests/scripts` and asserts `≤ DEV_FP_BASELINE`. Every
+improvement LOWERS the baseline; a regression fails; at 0 they promote into `check`.
+
+**RESULT — ratchet 153 → 0 (2026-07-07).** The "materialisation-aware fact" is: use the POST-codegen
+**type dep** as the ownership signal, not the flow-sensitive fact. The borrow-elision decision is
+usage-dependent (VH to replicate independently) but post-codegen it is baked into the dep — a copied
+`ac_copy = f(a, __ref_2)` has an EMPTY dep (owns). So Check C tests `tp(v).depend().is_empty()`;
+Check B flags a freed var with a NON-empty dep. Drove 153 → 0 over 377 scripts + 54 fuzz + 7 probes
+via: the type-dep signal (under-free 120→4); `transferred_out += OpSetDbRef` capture (up_a/uv_a); and
+narrow documented exclusions — `__ncc_*` (stale present-arm dep after default-arm materialisation),
+self-dep work-refs (@P302), freed params (retbuf displacement), closure bodies. `DEV_FP_BASELINE=0`.
+
+**HONEST characterisation (the tradeoff the type dep buys).** Using the dep makes B/C **CONSISTENCY
+checks** — free-placement vs the ownership dep, catching a `get_free_vars`/dep DIVERGENCE — NOT
+*independent* cross-checks. `LOFT_NO_JOIN_OWN` is NOT caught by B/C (its dep and frees are
+consistently wrong — that stays Check A's independent job and the runtime leak-check's). The
+independence in @PLN94 lives in Check A (the fact vs `ownership_of`); B/C are the free-placement
+consistency layer beside it. To PROMOTE `check-dev` → `check`: validate 0 across issues/leak/wrap/
+native too, then fold `run_free_checks` into the default path + a true-positive test (a hand-injected
+`get_free_vars`/dep divergence: delete a free of an empty-dep var → Check C RED).
 
 The false-positive MACHINERY already works: the heap-type filter (70–124 → 9–35/file) and the
 transfer-out set (returned ∪ consumed-into-container, → 0–4/file on the small corpus) are in
