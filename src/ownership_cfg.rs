@@ -598,6 +598,9 @@ fn ownership_dataflow(data: &Data, d_nr: u32, cfg: &Cfg) -> (Vec<OState>, usize)
                 // self-dep `[v]` a keyed-collection local carries so a later `s += …` re-inits in
                 // place: an OWNERSHIP marker, freed at scope exit. Normalise to `Owned` (matching
                 // the shipped `get_free_vars` @P302 carve-out; you cannot borrow from yourself).
+                // (A flow-INSENSITIVE db_var→Owned rule was tried and REVERTED: it forces the A1b
+                // return work-ref — `OpDatabase`'d for its Cell then returned as a borrowing view —
+                // to `Owned`, matching B's wrong-under-`LOFT_NO_A1B` fact and LOSING the catch.)
                 let f = if f == OFact::Borrowed(*var) { OFact::Owned } else { f };
                 st.insert(*var, f);
             }
