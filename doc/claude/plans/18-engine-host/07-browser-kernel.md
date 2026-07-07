@@ -24,13 +24,18 @@
 > in loft-gl.js — one input surface), `engine_host.loft` bundled into the
 > browser build (BUNDLED_LIB_FILES), and the FULL one-script differential
 > harness (`doc/kernel-differential.html` + `engine_host_connector::
-> browser_kernel_one_script_differential`): the native leg passes; the
-> browser leg is `#[ignore]`d on a REAL finding the harness caught — an
-> `Instant::now` panic ("time not implemented") somewhere in the
-> `compile_and_run` + frame-yield + `run_client` combo (the playground's
-> short non-yielding programs never hit it).  REMAINING: localize + bridge
-> that one time call (then un-ignore the differential), and the real-phone
-> probe (hardware day).
+> browser_kernel_one_script_differential`): **both legs now pass.**  The
+> browser leg was briefly `#[ignore]`d on a REAL finding the harness caught —
+> an `Instant::now` "time not implemented" panic on the `compile_and_run` +
+> frame-yield + `run_client` path (short non-yielding playground programs
+> never hit it) — plus a second finding it unmasked once the panic fell: a
+> yielding program run through the plain `compile_and_run` entry silently
+> DROPPED its parked frame state.  BOTH are resolved: the differential now
+> drives `compile_and_start` + `resume_frame` (the correct frame-yield
+> pairing) and asserts the full transcript, and it is a **live gate** — a
+> plain `#[test]` that self-skips only when chromium/node/the bundle is
+> unavailable (verified green here 2026-07-07 against a freshly-built
+> `doc/pkg/loft.js`).  REMAINING: only the real-phone probe (hardware day).
 
 **Goal.** A phone (or any browser) runs the SAME loft client script a native
 seat runs — `run_client`, `sync_class`, `client_sync_next`, unchanged — with
