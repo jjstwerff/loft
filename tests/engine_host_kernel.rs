@@ -1984,3 +1984,101 @@ fn main() {{
     }
     let _ = std::fs::remove_file(&prog);
 }
+
+// @PLN98 — the debugger driven THROUGH A GAME-SERVER SETUP: a running engine_host
+// kernel (the server) with the live tier, debugged over the SAME WebSocket a
+// client connects on, via the REAL `D!:` control channel (debug_cmd_dispatch +
+// debug_pause_loop). A client sets a breakpoint on a flipped game fn; a game event
+// triggers it; the server PAUSES (`D:hit` carries the live frame); the client evals
+// a frame local and resumes; the game continues with the right result. This is the
+// server-side of the browser relay, end-to-end on loopback — no browser needed.
+#[test]
+fn debugger_drives_a_running_game_server_over_websocket() {
+    if !loft_bin().exists() {
+        eprintln!("skipping: release loft not built");
+        return;
+    }
+    let port = 19312;
+    let prog = test_tmp().join(format!("eh_dbg_{port}_{}.loft", std::process::id()));
+    std::fs::write(
+        &prog,
+        format!(
+            r#"
+use engine_host;
+struct W {{ events: integer not null, ticks: integer not null }}
+fn hit_me(w: W, delta: integer) -> integer {{
+  w.events = w.events + delta;
+  w.events
+}}
+fn main() {{
+  w = W {{ events: 0, ticks: 0 }};
+  engine_host::run({port}, 10000,
+    fn(ev: engine_host::Event) {{
+      if ev.kind != 1 {{ return; }}
+      n = hit_me(w, 7);
+      engine_host::broadcast("got#{{n}}");
+    }},
+    fn() {{ w.ticks = w.ticks + 1; }});
+}}
+"#
+        ),
+    )
+    .unwrap();
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut cmd = Command::new(loft_bin());
+    cmd.env("LOFT_OFFLINE", "1")
+        .env("LOFT_LIVE_FLIP", "1")
+        .env("LOFT_FLIP_FNS", "hit_me")
+        .env("LOFT_DEBUG_CONTROL", "1")
+        .process_group(0)
+        .arg("--no-warnings")
+        .arg("--lib")
+        .arg(root.join("lib"))
+        .arg(&prog)
+        .current_dir(&root)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let child = cmd.spawn().expect("spawn kernel");
+    let _guard = Guard(Some(child));
+
+    let ws = ws_connect(port);
+    let recv_until = |ws: &TcpStream, needle: &str| -> String {
+        let deadline = vm_deadline(15);
+        loop {
+            let m = ws_recv(ws);
+            if m.contains(needle) {
+                return m;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "never saw {needle:?} on the debug channel"
+            );
+        }
+    };
+
+    // Set a breakpoint on the flipped game fn over the D!: control channel.
+    ws_send(&ws, "D!:bp hit_me");
+    recv_until(&ws, "D:ok bp hit_me");
+    // A game event triggers hit_me -> the SERVER pauses at the breakpoint, and the
+    // `D:hit` frame carries the live frame's locals (delta the caller passed).
+    ws_send(&ws, "p");
+    let hit = recv_until(&ws, "D:hit");
+    assert!(
+        hit.contains("hit_me") && hit.contains("delta=7"),
+        "server paused with the live frame (delta=7): {hit}"
+    );
+    // Eval a frame local over the paused server, then resume.
+    ws_send(&ws, "D!:eval delta");
+    assert!(
+        recv_until(&ws, "D:eval").contains("delta=7"),
+        "eval delta == 7 over the paused game server"
+    );
+    ws_send(&ws, "D!:resume");
+    recv_until(&ws, "D:resumed");
+    // The game RESUMED and ran to the broadcast with the right result.
+    assert!(
+        recv_until(&ws, "got#").contains("got#7"),
+        "the game continued after resume with got#7"
+    );
+    let _ = std::fs::remove_file(&prog);
+}
