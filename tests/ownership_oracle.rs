@@ -246,7 +246,10 @@ fn oracle_dev_free_check_ratchet() {
             .expect("run loft check-dev");
         let reds: BTreeSet<String> = String::from_utf8_lossy(&out.stderr)
             .lines()
-            .filter(|l| l.starts_with("RED ") && (l.contains("under-free") || l.contains("free-of-borrowed")))
+            .filter(|l| {
+                l.starts_with("RED ")
+                    && (l.contains("under-free") || l.contains("free-of-borrowed"))
+            })
             .map(str::to_string)
             .collect();
         total += reds.len();
@@ -302,7 +305,9 @@ fn oracle_leak_scan_ratchet() {
          Update LEAK_SCAN_BASELINE only DOWNWARD (each transfer artifact recognised lowers it)."
     );
     if total < LEAK_SCAN_BASELINE {
-        eprintln!("leak-scan ratchet PROGRESS: {total} < {LEAK_SCAN_BASELINE} — lower LEAK_SCAN_BASELINE to {total}.");
+        eprintln!(
+            "leak-scan ratchet PROGRESS: {total} < {LEAK_SCAN_BASELINE} — lower LEAK_SCAN_BASELINE to {total}."
+        );
     }
 }
 
@@ -326,7 +331,9 @@ fn oracle_leak_scan_flags_an_injected_leak() {
         let out = cmd.output().expect("run loft check-leak");
         String::from_utf8_lossy(&out.stderr)
             .lines()
-            .filter(|l| l.starts_with("RED ") && l.contains(": leak ") && l.contains("n_make_local"))
+            .filter(|l| {
+                l.starts_with("RED ") && l.contains(": leak ") && l.contains("n_make_local")
+            })
             .map(str::to_string)
             .collect()
     };
@@ -352,7 +359,8 @@ fn oracle_leak_scan_flags_an_injected_leak() {
 /// flag — the assertion pins the fixture's own function.)
 #[test]
 fn oracle_adopt_leak_flags_an_injected_leak() {
-    let ctrl = "doc/claude/plans/94-cfg-ownership-dataflow/probes/09-adopt-leak-positive-control.loft";
+    let ctrl =
+        "doc/claude/plans/94-cfg-ownership-dataflow/probes/09-adopt-leak-positive-control.loft";
     let reds = |env: &[(&str, &str)]| -> Vec<String> {
         let mut cmd = Command::new(loft_bin());
         cmd.arg("--interpret")
@@ -391,7 +399,8 @@ fn oracle_adopt_leak_flags_an_injected_leak() {
 /// under `check`, and the un-injected run MUST be clean. Symmetric to the leak-scan injection.
 #[test]
 fn oracle_over_free_check_flags_an_injected_free() {
-    let ctrl = "doc/claude/plans/94-cfg-ownership-dataflow/probes/08-overfree-positive-control.loft";
+    let ctrl =
+        "doc/claude/plans/94-cfg-ownership-dataflow/probes/08-overfree-positive-control.loft";
     let reds = |env: &[(&str, &str)]| -> Vec<String> {
         let mut cmd = Command::new(loft_bin());
         cmd.arg("--interpret")
@@ -404,7 +413,9 @@ fn oracle_over_free_check_flags_an_injected_free() {
         let out = cmd.output().expect("run loft check");
         String::from_utf8_lossy(&out.stderr)
             .lines()
-            .filter(|l| l.starts_with("RED ") && l.contains("free-of-borrowed") && l.contains("bview"))
+            .filter(|l| {
+                l.starts_with("RED ") && l.contains("free-of-borrowed") && l.contains("bview")
+            })
             .map(str::to_string)
             .collect()
     };

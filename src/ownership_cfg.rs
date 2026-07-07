@@ -620,7 +620,11 @@ fn ownership_dataflow(data: &Data, d_nr: u32, cfg: &Cfg) -> (Vec<OState>, usize)
                 // (A flow-INSENSITIVE db_var→Owned rule was tried and REVERTED: it forces the A1b
                 // return work-ref — `OpDatabase`'d for its Cell then returned as a borrowing view —
                 // to `Owned`, matching B's wrong-under-`LOFT_NO_A1B` fact and LOSING the catch.)
-                let f = if f == OFact::Borrowed(*var) { OFact::Owned } else { f };
+                let f = if f == OFact::Borrowed(*var) {
+                    OFact::Owned
+                } else {
+                    f
+                };
                 st.insert(*var, f);
             }
             if st != outb[b] {
@@ -822,7 +826,14 @@ fn dump_own(name: &str, cfg: &Cfg, data: &Data, d_nr: u32) {
 ///   fact-disagreement (the two independent implementations conflict).
 /// - **Check B (over-free):** free-legitimacy — an unconditional `OpFreeRef` of a var whose fact is
 ///   `Borrowed` frees a store owned elsewhere.
-fn run_check(name: &str, body: &Value, cfg: &Cfg, data: &Data, d_nr: u32, free_ops: &[u32]) -> usize {
+fn run_check(
+    name: &str,
+    body: &Value,
+    cfg: &Cfg,
+    data: &Data,
+    d_nr: u32,
+    free_ops: &[u32],
+) -> usize {
     let (outb, _passes) = ownership_dataflow(data, d_nr, cfg);
     let exit_state = &outb[cfg.exit];
     let nm = |v: u16| data.def(d_nr).variables.name(v).to_string();
@@ -1060,7 +1071,10 @@ fn run_leak_scan(name: &str, body: &Value, data: &Data, d_nr: u32) -> usize {
             && !freed.contains(&v)
             && !closed.contains(&v)
         {
-            eprintln!("RED {name}: leak {} (v{v}) Owned heap, unfreed/untransferred", func.name(v));
+            eprintln!(
+                "RED {name}: leak {} (v{v}) Owned heap, unfreed/untransferred",
+                func.name(v)
+            );
             reds += 1;
         }
     }
@@ -1081,7 +1095,13 @@ fn run_leak_scan(name: &str, body: &Value, data: &Data, d_nr: u32) -> usize {
 /// freeing caller-owned params — not a user over-free). 0 FP across scripts+docs+lib+examples
 /// (`oracle_clean_on_correct_corpus`); the true-positive is the injected `LOFT_OWN_INJECT_FREE_BORROWED`
 /// over-free (`oracle_over_free_check_flags_an_injected_free`). Pure type-dep — needs no CFG/dataflow.
-fn run_over_free_check(name: &str, body: &Value, data: &Data, d_nr: u32, free_ops: &[u32]) -> usize {
+fn run_over_free_check(
+    name: &str,
+    body: &Value,
+    data: &Data,
+    d_nr: u32,
+    free_ops: &[u32],
+) -> usize {
     let func = &data.def(d_nr).variables;
     let nm = |v: u16| func.name(v).to_string();
     let mut reds = 0;
@@ -1129,7 +1149,10 @@ fn run_free_checks(name: &str, body: &Value, cfg: &Cfg, data: &Data, d_nr: u32) 
         let freed: BTreeSet<u16> = collect_free_targets(body, &all_frees).into_iter().collect();
         let transferred = transferred_out(body, data);
         for v in under_free(exit_state, &freed, &transferred, func) {
-            eprintln!("RED {name}: under-free (leak) {} (v{v}) Owned heap, never freed/transferred", nm(v));
+            eprintln!(
+                "RED {name}: under-free (leak) {} (v{v}) Owned heap, never freed/transferred",
+                nm(v)
+            );
             reds += 1;
         }
     }
