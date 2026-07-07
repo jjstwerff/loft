@@ -266,8 +266,12 @@ fn nested_script() -> PathBuf {
     workspace_root().join("tests/scripts/store_load_nested.loft")
 }
 
-fn vecstruct_refuse_script() -> PathBuf {
-    workspace_root().join("tests/scripts/store_load_vecstruct_refuse.loft")
+fn vecstruct_script() -> PathBuf {
+    workspace_root().join("tests/scripts/store_load_vecstruct.loft")
+}
+
+fn vectext_refuse_script() -> PathBuf {
+    workspace_root().join("tests/scripts/store_load_vectext_refuse.loft")
 }
 
 /// `run_mode` fixed to `--interpret`, parameterised by backend so the heap
@@ -511,33 +515,64 @@ fn store_load_key_relocates_a_nested_struct_both_backends() {
     }
 }
 
-/// @PLN97 arc G Phase 3b (safe-refusal, ongoing) — a `vector<struct>` field (a
-/// vector whose ELEMENTS carry pointers) still needs per-element recursion
-/// (3b.4b), so it must still be REFUSED (load nothing), never copied with a
-/// dangling pointer. The refused-empty result is structurally sound. Both backends.
+/// @PLN97 arc G Phase 3b.4b — a hash whose entry has a `vector<struct>` field
+/// (elements carrying their own text) is now partially loadable: `load_one`
+/// copies the inner vector record and relocates EACH element's heap fields. Every
+/// element reads correctly and the result is sound. Both backends.
 #[test]
-fn store_load_key_refuses_a_vector_of_struct_field_both_backends() {
-    let dir = scratch("store_load_vecstruct_refuse");
+fn store_load_key_relocates_a_vector_of_struct_both_backends() {
+    let dir = scratch("store_load_vecstruct");
     let path = dir.join("vs.store");
 
-    let (out_w, code_w) = run_mode(&vecstruct_refuse_script(), &path, "write");
+    let (out_w, code_w) = run_mode(&vecstruct_script(), &path, "write");
     assert_eq!(code_w, 0, "write exit: {out_w:?}");
     assert!(out_w.contains("write ok"), "write: {out_w:?}");
 
     for backend in ["--interpret", "--native"] {
-        let (out, code) = run_mode_backend(backend, &vecstruct_refuse_script(), &path, "loadkey");
+        let (out, code) = run_mode_backend(backend, &vecstruct_script(), &path, "loadkey");
         assert_eq!(code, 0, "{backend} loadkey exit: {out:?}");
+        assert!(out.contains("vs loadkey=true"), "{backend}: {out:?}");
+        assert!(out.contains("vs items_len=3"), "{backend}: {out:?}");
         assert!(
-            out.contains("vs loadkey=false"),
-            "{backend}: a vector<struct> entry must be REFUSED: {out:?}"
+            out.contains("vs e0=10,ten"),
+            "{backend}: element 0 (scalar + relocated text): {out:?}"
         );
         assert!(
-            out.contains("vs len=0"),
-            "{backend}: refusal must load nothing: {out:?}"
+            out.contains("vs e2=30,thirty"),
+            "{backend}: element 2 (scalar + relocated text): {out:?}"
         );
+        assert!(out.contains("vs len=1"), "{backend}: {out:?}");
         assert!(
             out.contains("vs verify=true"),
-            "{backend}: the refused-empty store must be structurally sound: {out:?}"
+            "{backend}: the relocated vector<struct> heap must be sound: {out:?}"
+        );
+    }
+}
+
+/// @PLN97 arc G Phase 3b (safe-refusal, ongoing) — a `vector<text>` field
+/// (elements that are string pointers) is not handled (copying the inner record
+/// leaves the element strings dangling), so it must still be REFUSED. The
+/// refused-empty result is structurally sound. Both backends.
+#[test]
+fn store_load_key_refuses_a_vector_of_text_field_both_backends() {
+    let dir = scratch("store_load_vectext_refuse");
+    let path = dir.join("vt.store");
+
+    let (out_w, code_w) = run_mode(&vectext_refuse_script(), &path, "write");
+    assert_eq!(code_w, 0, "write exit: {out_w:?}");
+    assert!(out_w.contains("write ok"), "write: {out_w:?}");
+
+    for backend in ["--interpret", "--native"] {
+        let (out, code) = run_mode_backend(backend, &vectext_refuse_script(), &path, "loadkey");
+        assert_eq!(code, 0, "{backend} loadkey exit: {out:?}");
+        assert!(
+            out.contains("vt loadkey=false"),
+            "{backend}: a vector<text> entry must be REFUSED: {out:?}"
+        );
+        assert!(out.contains("vt len=0"), "{backend}: {out:?}");
+        assert!(
+            out.contains("vt verify=true"),
+            "{backend}: the refused-empty store must be sound: {out:?}"
         );
     }
 }

@@ -2378,8 +2378,16 @@ impl Stores {
             return true;
         }
         match &self.types[tp as usize].parts {
-            // vector<scalar> — one flat inner record (vector<struct>/<text> is 3b.4b).
-            Parts::Vector(e) => self.is_inline_scalar(*e),
+            // vector<scalar> (flat inner record) OR vector<copyable struct>
+            // (copy inner + relocate each element, 3b.4b). vector<text> /
+            // vector<vector> are NOT handled — the element pointers would dangle.
+            Parts::Vector(e) => {
+                self.is_inline_scalar(*e)
+                    || (matches!(
+                        self.types[*e as usize].parts,
+                        Parts::Struct(_) | Parts::EnumValue(_, _)
+                    ) && self.is_copyable_field(*e))
+            }
             // An INLINE nested struct: copyable when every one of its own fields
             // is (its `text`/`vector` fields relocate at a nested offset, 3b.4).
             Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
@@ -2536,30 +2544,9 @@ impl Stores {
             fld += 4;
         }
 
-        // 2) 3b.2/3b.3 — relocate each FLAT sub-record field (a `text` string or
-        //    a `vector<scalar>` inner record). Both are one flat record behind a
-        //    `u32` pointer: copy it (length at fld 4 + payload at fld 8.., the
-        //    size header at fld 0 is set by `claim`) into a fresh local claim and
-        //    repoint the field. `is_copyable_entry` guaranteed only these kinds.
-        for p in self.relocatable_field_offsets(content_tp) {
-            let src_sub = reader.u32_at(matched, 8 + p);
-            if src_sub == 0 {
-                continue; // null text / empty vector
-            }
-            let ssz = reader.record_words(src_sub);
-            if ssz == 0 {
-                continue;
-            }
-            let new_sub = self.allocations[local.store_nr as usize].claim(ssz);
-            self.allocations[local.store_nr as usize].zero_fill(new_sub);
-            let mut sf = 4u32;
-            while sf + 4 <= ssz * 8 {
-                let w = reader.u32_at(src_sub, sf);
-                self.allocations[local.store_nr as usize].set_u32_raw(new_sub, sf, w);
-                sf += 4;
-            }
-            self.allocations[local.store_nr as usize].set_u32_raw(new_rec, 8 + p, new_sub);
-        }
+        // 2) 3b.2–3b.4b — relocate the entry's pointer fields (text / vector /
+        //    nested / vector<struct>) so the local copy owns its whole graph.
+        self.relocate_ptr_fields(reader, new_rec, matched, 0, content_tp, local.store_nr);
 
         let entry = DbRef {
             store_nr: local.store_nr,
@@ -2570,35 +2557,102 @@ impl Stores {
         true
     }
 
-    /// Byte offsets (within an entry record, relative to its data start at fld 8)
-    /// of every FLAT sub-record pointer — a `text` string or a `vector<scalar>`
-    /// inner record — reachable INLINE from `content_tp`, recursing through inline
-    /// nested structs (3b.4). Each is relocated by the shared flat-sub-record copy
-    /// in `load_one`. `is_copyable_entry` guaranteed the entry holds only these.
+    /// Recursively relocate the POINTER fields of struct `tp` whose (already
+    /// flat-copied) data sits at byte `8 + base` in local record `dst_rec`, with
+    /// the source at `8 + base` in `src_rec` read over `reader`. `dst_rec`/
+    /// `src_rec` are the SAME structural record (local entry vs source entry) for
+    /// inline fields; a `vector<struct>` switches to the element's separate inner
+    /// record. Handles: text / vector<scalar> (flat sub-record copy), inline
+    /// nested struct (recurse, deeper base), vector<struct> (copy inner + recurse
+    /// each element). Inline scalars are already correct from the byte copy.
     #[cfg(feature = "remote-store")]
-    fn relocatable_field_offsets(&self, content_tp: u16) -> Vec<u32> {
-        let mut out = Vec::new();
-        self.collect_reloc_offsets(content_tp, 0, &mut out);
-        out
-    }
-
-    #[cfg(feature = "remote-store")]
-    fn collect_reloc_offsets(&self, tp: u16, base: u32, out: &mut Vec<u32>) {
-        // A flat sub-record pointer (text / vector<scalar>) sits at `base`.
-        if tp == 5
-            || matches!(self.types[tp as usize].parts, Parts::Vector(e) if self.is_inline_scalar(e))
-        {
-            out.push(base);
-            return;
-        }
-        // An inline nested struct: recurse into each field at base + its position.
-        if let Parts::Struct(fields) | Parts::EnumValue(_, fields) = &self.types[tp as usize].parts
-        {
-            for f in fields {
-                self.collect_reloc_offsets(f.content, base + u32::from(f.position), out);
+    fn relocate_ptr_fields<P: crate::paged_reader::PageProvider>(
+        &mut self,
+        reader: &mut crate::paged_reader::PagedReader<P>,
+        dst_rec: u32,
+        src_rec: u32,
+        base: u32,
+        tp: u16,
+        store_nr: u16,
+    ) {
+        let fields = match &self.types[tp as usize].parts {
+            Parts::Struct(f) | Parts::EnumValue(_, f) => f.clone(),
+            _ => return,
+        };
+        for f in fields {
+            let off = base + u32::from(f.position);
+            let ftp = f.content;
+            if ftp == 5
+                || matches!(self.types[ftp as usize].parts, Parts::Vector(e) if self.is_inline_scalar(e))
+            {
+                // Flat sub-record pointer (text / vector<scalar>) at (rec, 8+off).
+                let src_sub = reader.u32_at(src_rec, 8 + off);
+                if src_sub != 0 {
+                    let new_sub = self.copy_flat_subrecord(reader, src_sub, store_nr);
+                    self.allocations[store_nr as usize].set_u32_raw(dst_rec, 8 + off, new_sub);
+                }
+            } else if matches!(
+                self.types[ftp as usize].parts,
+                Parts::Struct(_) | Parts::EnumValue(_, _)
+            ) {
+                // Inline nested struct: same record, deeper base.
+                self.relocate_ptr_fields(reader, dst_rec, src_rec, off, ftp, store_nr);
+            } else if let Parts::Vector(elem_tp) = self.types[ftp as usize].parts {
+                // vector<struct>: copy the inner record + recurse each element.
+                let src_sub = reader.u32_at(src_rec, 8 + off);
+                if src_sub != 0 {
+                    let new_sub = self.copy_vector_of_struct(reader, src_sub, elem_tp, store_nr);
+                    self.allocations[store_nr as usize].set_u32_raw(dst_rec, 8 + off, new_sub);
+                }
             }
         }
-        // else: inline scalar — nothing to relocate.
+    }
+
+    /// Copy a FLAT record (a string or a `vector<scalar>` inner record — no
+    /// interior pointers) at `src_rec` into a fresh local claim; the size header
+    /// (fld 0) is set by `claim`, so copy the length + payload from fld 4 on.
+    #[cfg(feature = "remote-store")]
+    fn copy_flat_subrecord<P: crate::paged_reader::PageProvider>(
+        &mut self,
+        reader: &mut crate::paged_reader::PagedReader<P>,
+        src_rec: u32,
+        store_nr: u16,
+    ) -> u32 {
+        let ssz = reader.record_words(src_rec);
+        let new = self.allocations[store_nr as usize].claim(ssz.max(2));
+        self.allocations[store_nr as usize].zero_fill(new);
+        let mut sf = 4u32;
+        while sf + 4 <= ssz * 8 {
+            let w = reader.u32_at(src_rec, sf);
+            self.allocations[store_nr as usize].set_u32_raw(new, sf, w);
+            sf += 4;
+        }
+        new
+    }
+
+    /// Copy a `vector<struct>` inner record: first the flat bytes (length + the
+    /// contiguous element structs), then relocate EACH element's pointer fields
+    /// (its text / vector / nested graph). Elements are at `8 + i·elem_size`.
+    #[cfg(feature = "remote-store")]
+    fn copy_vector_of_struct<P: crate::paged_reader::PageProvider>(
+        &mut self,
+        reader: &mut crate::paged_reader::PagedReader<P>,
+        src_inner: u32,
+        elem_tp: u16,
+        store_nr: u16,
+    ) -> u32 {
+        let new_inner = self.copy_flat_subrecord(reader, src_inner, store_nr);
+        let length = reader.u32_at(src_inner, 4);
+        let esize = u32::from(self.size(elem_tp));
+        if esize == 0 {
+            return new_inner;
+        }
+        for i in 0..length {
+            // element i's data starts at byte 8 + i·esize; relocate_ptr_fields
+            // reads/writes at 8 + base + position, so base = i·esize.
+            self.relocate_ptr_fields(reader, new_inner, src_inner, i * esize, elem_tp, store_nr);
+        }
+        new_inner
     }
 
     /// Read a `vector<integer>` (`keys_vec`) into an `i64` slice and load those
