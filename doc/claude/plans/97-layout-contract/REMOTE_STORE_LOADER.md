@@ -209,10 +209,12 @@ and `store_load_range` (Phase 4) are unblocked.
 
 ### Phase 3 — `store_load_keys` (point lookups; Hash & Sorted)
 
-**Phase 3a DONE 2026-07-07 — `store_load_key` (single integer key, flat struct).**
-The lowest-risk cut is shipped and verified: `store_load_key(local, path, key)` fetches ONE
-integer-keyed entry from a persisted hash image into `local`, reading only the pages the lookup
-touches. `Stores::load_key` (allocation.rs, `remote-store`-gated) opens a `PagedReader`, takes the
+**Phase 3a DONE 2026-07-07 — `store_load_key` + `store_load_keys` (integer keys, flat struct).**
+The lowest-risk cut is shipped and verified, singular AND plural:
+`store_load_key(local, path, key)` / `store_load_keys(local, path, keys: vector<integer>)` fetch the
+requested integer-keyed entries from a persisted hash image into `local`, reading only the pages the
+lookups touch (the paged reader is opened once and its cache reused across keys; the plural returns
+the count found). `Stores::load_key` (allocation.rs, `remote-store`-gated) opens a `PagedReader`, takes the
 root from `local`'s live `DbRef` + the `Key[]` from `stores.keys(known_type)` (the design unlock —
 NOT reverse-engineered bytes), runs `paged_reader::find_hash_entry` (a read-only port of
 `hash::find`), then FLAT-copies the matched record's scalar fields into a fresh `local` claim and
