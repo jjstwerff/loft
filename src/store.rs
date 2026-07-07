@@ -451,6 +451,67 @@ impl Store {
         store
     }
 
+    /// Load a persisted store IMAGE FILE fully into a fresh HEAP-backed store —
+    /// the portable, always-available counterpart of [`open`](Store::open)
+    /// (which mmaps).  The bytes are copied into an owned heap arena
+    /// (`file: None`), so the result is a normal self-contained store: it works
+    /// on **every** target (wasm has no mmap) and is **not** durable — writes
+    /// stay in memory and never touch the file.  @PLN97 arc G Phase 1
+    /// ([#522](https://github.com/loft-lang/loft/issues/522)) — the whole-file
+    /// load the wasm / browser working-set path builds on.  Panics on a
+    /// missing / truncated / wrong-signature file (a `read`, an under-16-byte
+    /// image, or a bad `SIGNATURE`); callers that want a clean reject wrap it in
+    /// `catch_unwind` (see `Stores::load_path`).
+    pub fn load(path: &str) -> Store {
+        let bytes = std::fs::read(path).expect("store load: cannot read file");
+        assert!(
+            bytes.len() >= 16,
+            "store load: file too small to be a store image"
+        );
+        let sig = u32::from_ne_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        assert_eq!(sig, SIGNATURE, "store load: unknown file format");
+        // Round the byte length up to a whole 8-byte word; `alloc_zeroed`
+        // zero-fills any trailing partial word.
+        let words = bytes.len().div_ceil(8).max(2) as u32;
+        assert!(
+            words <= MAX_STORE_WORDS,
+            "store load: image exceeds the {MAX_STORE_WORDS}-word store limit"
+        );
+        let l = Layout::from_size_align(words as usize * 8, 8).expect("Problem");
+        let ptr = unsafe { A.alloc_zeroed(l) };
+        unsafe {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len());
+        }
+        let mut store = Store {
+            ptr,
+            size: words,
+            claims: HashSet::new(),
+            #[cfg(feature = "mmap")]
+            file: None,
+            // A loaded store carries real data (like `open`), so it is in use.
+            free: false,
+            read_only: false,
+            free_protected: false,
+            borrowed: false,
+            created_at: 0,
+            last_op_at: 0,
+            free_root: 0,
+            needs_coalesce: false,
+            generation: 0,
+            recording: None,
+            tag: 0,
+            pinned: false,
+            lock_origin: String::new(),
+            known_type: u16::MAX,
+            durable_meta_path: None,
+            durable_tier: 0,
+        };
+        #[cfg(debug_assertions)]
+        store.validate(0);
+        store.fl_rebuild();
+        store
+    }
+
     pub fn init(&mut self) {
         // The normal routines will not write to rec=0, so we write a signature: StoreV01
         unsafe {

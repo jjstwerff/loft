@@ -171,16 +171,24 @@ cross-process-portable first.  **Both halves are now DONE** — 0.5a (#523: hash
 record) and 0.5b (`store_persist_bind` accepts `sorted`/`index`), so `store_load_keys` (Phase 3)
 and `store_load_range` (Phase 4) are unblocked.
 
-### Phase 1 — heap store-load (whole file, no HTTP)
-- **Build:** `store_load(path)` — `read_bytes` → 8-aligned heap arena → `Store{ backing: Heap,
-  file: None }` → `fl_rebuild()`. ~15 lines mirroring `Store::open` (`store.rs:394`); the wasm
-  no-op (`store.rs:387`, `allocation.rs:2217`) gains a real body. Independently useful: unblocks
-  **whole-block wasm load** today.
-- **Verify:** load a file written by `bind_path`; every query returns **byte-identical** to the
-  same query on the mmap-`open`ed store (a `cross_mode`-style transcript). Runs on all three
-  backends (this is the piece wasm lacked).
-- **Prove-can-fail:** a truncated/garbage file → clean reject (the @PLN97 identity gate + the
-  header signature check), not a panic or a misread.
+### Phase 1 — heap store-load (whole file, no HTTP) — **DONE 2026-07-07**
+- **Built:** `store_load(r, path)` — the portable, non-durable counterpart of `store_persist_bind`.
+  `Store::load` (`store.rs`) reads the file into an 8-aligned heap arena (`file: None`) →
+  `fl_rebuild()`; `Stores::load_path` (`allocation.rs`) swaps it into the collection's slot
+  (mirrors `bind_path`'s existing-file branch, minus mmap + the fresh/create path); the
+  `n_store_load` interpreter handler (`native.rs`, **ungated** — the piece wasm lacked) + the
+  `#rust"stores.load_path(…)"` builtin (`02_files.loft`). Unblocks **whole-block wasm load** today.
+- **Verified:** a hash written by `store_persist_bind` reloads via `store_load` into a FRESH
+  heap-backed hash with the same keys AND a correct key lookup (`h[13]=1300`) — the 0.5a
+  bucket-seed makes it portable — on **all three backends**: interpret, native, and **wasip2**
+  (`wasmtime`, fixture preopened). Guards: `store_persist_loft.rs::store_load_reads_persisted_image_both_backends`
+  + `tests/scripts/store_load_smoke.loft`.
+- **Prove-can-fail:** a garbage / non-store file → `store_load` returns `false` (the `Store::load`
+  signature check under `catch_unwind`), not a panic or misread —
+  `store_persist_loft.rs::store_load_rejects_garbage_file`.
+- **Deferred to Phase 5:** the @PLN97 layout-identity gate on load (currently the header
+  `SIGNATURE` check only); wire `schema_sidecar::check` at the bootstrap when the remote provider
+  lands (a wrong-layout local file is far less likely than a wrong-layout remote fetch).
 
 ### Phase 2 — paged read-only backing (local provider)
 - **Build:** `PagedReader` (page table + LRU + fetch-on-miss `resolve`) over the **local-file**

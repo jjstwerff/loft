@@ -196,6 +196,86 @@ fn sorted_fresh_then_reload_round_trip() {
     );
 }
 
+fn load_script() -> PathBuf {
+    workspace_root().join("tests/scripts/store_load_smoke.loft")
+}
+
+/// `run_mode` fixed to `--interpret`, parameterised by backend so the heap
+/// `store_load` path can be exercised on the native backend too.
+fn run_mode_backend(backend: &str, script: &Path, path: &Path, mode: &str) -> (String, i32) {
+    let out = Command::new(loft_bin())
+        .arg(backend)
+        .arg(script)
+        .env("LOFT_PERSIST_TEST_PATH", path)
+        .env("LOFT_PERSIST_TEST_MODE", mode)
+        .current_dir(workspace_root())
+        .output()
+        .expect("failed to invoke loft binary");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    if !out.status.success() {
+        eprintln!("{backend} {mode} stderr:\n{stderr}");
+    }
+    (stdout, out.status.code().unwrap_or(-1))
+}
+
+/// @PLN97 arc G Phase 1 — `store_load` reads a bind-written store IMAGE into a
+/// FRESH, HEAP-backed hash (no mmap) and returns the same keys AND key-lookups.
+/// The write uses the mmap path (`store_persist_bind`); the load is the
+/// portable heap path, verified on BOTH the interpreter and native (the piece
+/// wasm lacked — heap load with no live file handle).
+#[test]
+fn store_load_reads_persisted_image_both_backends() {
+    let dir = scratch("store_load_phase1");
+    let path = dir.join("load.store");
+
+    // write the image once (mmap path)
+    let (out_w, code_w) = run_mode(&load_script(), &path, "write");
+    assert_eq!(code_w, 0, "write exit: {out_w:?}");
+    assert!(
+        out_w.contains("write keys=7,13,42"),
+        "write keys: {out_w:?}"
+    );
+    assert!(path.exists(), "bind should create the file");
+
+    // load it back via the heap path on both backends — same keys + lookup
+    for backend in ["--interpret", "--native"] {
+        let (out, code) = run_mode_backend(backend, &load_script(), &path, "load");
+        assert_eq!(code, 0, "{backend} load exit: {out:?}");
+        assert!(
+            out.contains("load keys=7,13,42"),
+            "{backend}: store_load must read all keys: {out:?}"
+        );
+        assert!(
+            out.contains("load lookup h[13]=1300"),
+            "{backend}: store_load key lookup must find v=1300: {out:?}"
+        );
+    }
+}
+
+/// A garbage / non-store file must make `store_load` return false (a clean
+/// reject), never panic or misread past the signature check.
+#[test]
+fn store_load_rejects_garbage_file() {
+    let dir = scratch("store_load_reject");
+    let path = dir.join("garbage.store");
+    fs::write(
+        &path,
+        b"this is not a loft store image, only junk bytes here!!",
+    )
+    .unwrap();
+
+    let (out, code) = run_mode(&load_script(), &path, "load");
+    assert_eq!(
+        code, 0,
+        "reject should be graceful (script prints FAIL, exit 0): {out:?}"
+    );
+    assert!(
+        out.contains("FAIL load-returned-false"),
+        "garbage file must reject cleanly (store_load=false): {out:?}"
+    );
+}
+
 #[test]
 fn fresh_returns_true_and_file_appears() {
     let dir = scratch("fresh_returns_true_and_file_appears");

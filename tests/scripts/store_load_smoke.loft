@@ -1,0 +1,49 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN97 arc G Phase 1 — `store_load` (whole-file heap load).
+//
+// Driven by `tests/store_persist_loft.rs`: mode "write" persists a hash via
+// `store_persist_bind` (mmap); mode "load" reads that file back with
+// `store_load` into a FRESH, HEAP-backed hash (no mmap) and must return the
+// same keys AND key-lookup correctly — proving the heap load reads a
+// bind-written image byte-faithfully. A garbage file must reject cleanly
+// (false), not panic or misread.
+
+struct Rec { id: integer not null, val: integer not null }
+
+fn keys_of(h: hash<Rec[id]>) -> text {
+  result = "";
+  for r in h {
+    if result == "" { result = "{r.id}" } else { result = "{result},{r.id}" }
+  }
+  result
+}
+
+fn lookup13(h: hash<Rec[id]>) -> text {
+  found = h[13];
+  if found == null { "null" } else { "{found.val}" }
+}
+
+fn main() {
+  path = env_variable("LOFT_PERSIST_TEST_PATH");
+  mode = env_variable("LOFT_PERSIST_TEST_MODE");
+
+  h: hash<Rec[id]> = [];
+
+  if mode == "write" {
+    h += Rec { id: 42, val: 4200 };
+    h += Rec { id: 7,  val: 700 };
+    h += Rec { id: 13, val: 1300 };
+    ok = store_persist_bind(h, path);
+    if !ok { println("FAIL write-bind-returned-false"); return }
+    println("write keys={keys_of(h)}");
+  } else if mode == "load" {
+    ok = store_load(h, path);
+    if !ok { println("FAIL load-returned-false"); return }
+    println("load keys={keys_of(h)}");
+    println("load lookup h[13]={lookup13(h)}");
+  } else {
+    println("FAIL unknown-mode")
+  }
+}

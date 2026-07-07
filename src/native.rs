@@ -168,6 +168,7 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_store_durable_seal", n_store_durable_seal),
     #[cfg(feature = "mmap")]
     ("n_store_persist_bind", n_store_persist_bind),
+    ("n_store_load", n_store_load),
     ("n_eprint", n_eprint),
     ("n_directory", n_directory),
     ("n_user_directory", n_user_directory),
@@ -1219,6 +1220,18 @@ fn n_store_persist_bind(stores: &mut Stores, stack: &mut DbRef) {
     let v_path = *stores.get::<Str>(stack);
     let v_ref = *stores.get::<DbRef>(stack);
     let ok = stores.bind_path(v_ref.store_nr, std::path::Path::new(v_path.str()));
+    stores.put(stack, ok);
+}
+
+/// Interpreter handler for `store_load` — HEAP-load a persisted store image
+/// into the referenced collection's slot (portable, non-durable).  UNGATED:
+/// works without the `mmap` feature (the piece wasm lacked — a heap copy, no
+/// live file handle).  See `Stores::load_path` + `default/02_files.loft`.
+/// @PLN97 arc G Phase 1.
+fn n_store_load(stores: &mut Stores, stack: &mut DbRef) {
+    let v_path = *stores.get::<Str>(stack);
+    let v_ref = *stores.get::<DbRef>(stack);
+    let ok = stores.load_path(v_ref.store_nr, std::path::Path::new(v_path.str()));
     stores.put(stack, ok);
 }
 

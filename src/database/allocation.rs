@@ -2214,6 +2214,55 @@ impl Stores {
     pub fn bind_path(&mut self, _slot: u16, _path: &std::path::Path) -> bool {
         false
     }
+
+    /// Load a persisted store image at `path` into `slot`, HEAP-backed — the
+    /// portable, non-durable counterpart of [`bind_path`](Stores::bind_path).
+    /// Unlike `bind_path` there is no fresh/create branch (you load an
+    /// EXISTING store) and no mmap, so it works on **every** backend — this is
+    /// the piece wasm lacked.  The slot's empty store is replaced by a heap
+    /// store copied from the file, keeping the slot bookkeeping.  Returns
+    /// `false` on a missing / truncated / wrong-format file (via the
+    /// `Store::load` signature check under `catch_unwind`), never a misread.
+    /// @PLN97 arc G Phase 1 (#522).
+    pub fn load_path(&mut self, slot: u16, path: &std::path::Path) -> bool {
+        let slot_idx = slot as usize;
+        if slot_idx >= self.allocations.len() {
+            return false;
+        }
+        let path_str = match path.to_str() {
+            Some(s) if !s.is_empty() => s,
+            _ => return false,
+        };
+        // load needs an existing, plausibly-valid store file (≥ the header).
+        if !std::fs::metadata(path).is_ok_and(|m| m.len() >= 16) {
+            return false;
+        }
+
+        // Preserve the slot's bookkeeping across the swap (mirrors bind_path).
+        let preserved = {
+            let s = &self.allocations[slot_idx];
+            (s.known_type, s.free, s.created_at, s.last_op_at, s.pinned)
+        };
+
+        // Store::load panics on a bad signature / unreadable file — surface
+        // that as a clean `false` instead of crashing the interpreter.
+        let new_store = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::store::Store::load(path_str)
+        }));
+        let mut new_store = match new_store {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+
+        new_store.known_type = preserved.0;
+        new_store.free = preserved.1;
+        new_store.created_at = preserved.2;
+        new_store.last_op_at = preserved.3;
+        new_store.pinned = preserved.4;
+
+        self.allocations[slot_idx] = new_store;
+        true
+    }
 }
 
 /// @PLAN38 — pad a Store byte image out to `target_words` while keeping

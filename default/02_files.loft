@@ -397,6 +397,23 @@ pub fn store_persist_bind(r: reference, path: text) -> boolean fs#update;
 #rust"stores.bind_path((@r).store_nr, std::path::Path::new(@path))"
 #impure(io)
 
+// Load a persisted store IMAGE fully into memory, populating the empty
+// store-rooted collection `r` so it can be queried like any in-memory
+// collection.  The portable, read-only counterpart of `store_persist_bind`:
+// it HEAP-COPIES the file (no mmap), so it works on EVERY backend — including
+// wasm, which has no mmap — but is NOT durable (writes stay in memory and
+// never reach the file).  Use it to open a snapshot for querying where
+// `store_persist_bind` can't run (a browser / wasm target) or where a durable
+// live binding isn't wanted.  Returns `false` on a missing / truncated /
+// wrong-format file (no panic; assumes the on-disk layout matches `r`'s
+// declared type).  @PLN97 arc G Phase 1 — the whole-file load the browser
+// working-set path builds on (loft#522).
+//   h: hash<Rec[id]> = []
+//   store_load(h, "world.store")   // h now holds the file's records
+pub fn store_load(r: reference, path: text) -> boolean fs#read;
+#rust"stores.load_path((@r).store_nr, std::path::Path::new(@path))"
+#impure(io)
+
 // Truncates or extends the file to `size` bytes. Returns FileResult.Ok, or an
 // error variant (IsDirectory / NotFound / Other).
 pub fn set_file_size(self: File, size: integer) -> FileResult fs#update {
