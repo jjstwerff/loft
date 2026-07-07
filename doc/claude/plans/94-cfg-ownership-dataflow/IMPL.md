@@ -298,16 +298,28 @@ catch); **Check B** free-legitimacy (an unconditional `OpFreeRef` of a `Borrowed
 
 ---
 
-## Phase 5 — Land the oracle beside (the H end-state)
+## Phase 5 — Land the oracle beside (the H end-state) — ✅ CORE DONE (2026-07-07)
 
-- **5.1 — flag plumbing + SI-1 as a test.** `LOFT_OWN_ORACLE=off|cfg|dump|check`, default check in
-  test/CI, off in the fast path. **Gate:** an introspect before/after test asserts SI-1.
-- **5.2 — fuzzer hook.** Every `program_ownership` case runs the oracle. **Gate:** fuzz run green
-  with the oracle on, both backends.
-- **5.3 — graduate the corpus.** `tests/scripts/94-*.loft` + `tests/ownership_oracle.rs` (per shape:
-  SI-2 fact-identity, oracle green on correct, red on injected fault). **Gate:** the binary is green.
-- **5.4 — formalise.** Add the "independent oracle" note to `formal/ownership.md`: completeness is
-  now cross-checked by a flow-sensitive fixpoint, not only by interp-vs-native agreement.
+`tests/ownership_oracle.rs` makes the oracle a STANDING check run on every `cargo test` (default-on
+in CI via the test binary, gated-off in the fast path — SI-1). 4 fast gates + 1 release-gate, all
+green:
+
+- **5.1 ✅ — flag plumbing + SI-1 as a test.** `LOFT_OWN_ORACLE=cfg|rd|own|check`;
+  `oracle_is_a_pure_observer_si1` asserts `introspect` stdout byte-identical with the oracle on vs off.
+- **5.2 ✅ — fuzzer hook.** `oracle_clean_on_generated_fuzz_corpus` regenerates `grammar_gen.py`'s 54
+  cells and runs `check` on each — all 0 RED.
+- **5.3 ✅ — the oracle binary.** `oracle_clean_on_correct_corpus` (7 probes + 505, 0 RED — no crying
+  wolf), `oracle_flags_the_a1b_wrong_plan` (RED on `LOFT_NO_A1B`, clean on the default — the
+  true-positive gate), `oracle_fact_is_backend_identical_si2` (SI-2 fact-identity interp vs native,
+  release-gated). Corpus referenced in-place (the probes ARE the graduated shapes).
+- **5.4 ✅ — formalise.** `formal/ownership.md` § "Machine-checkable soundness" — the proof skeleton
+  for the flow-sensitive oracle's abstract-interpretation soundness (obligation ledger; one open
+  lemma = local transfer soundness). Intro note updated: the substrate replacement is BUILT.
+
+**Remaining tail (not blocking the H end-state):** the `n_choose` 4.2 residual (excluded from the
+clean corpus); extending the 0-false-positive sweep to issues/leak/wrap/native; and the open formal
+lemma (4). The injected-fault true-positive beyond `LOFT_NO_A1B` (delete an `OpFreeRef`) is a
+regression guard — Check B is unit-proven but no toggle emits an unconditional free-of-borrowed.
 
 **Explicitly NOT here:** routing any shipped consumer (`scopes::get_free_vars`, `state/codegen.rs`,
 `generation/dispatch.rs`) to the new fact, and retiring the position-proxy / flow-insensitive-join.

@@ -7,8 +7,9 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**IN PROGRESS — Phase 2 (the ownership fact) COMPLETE; Phase 4 (the RED consistency check) BUILT
-(4.1/4.3 ✓, 4.2 nearly); Phase 5 (land it) next.** Branch `tuxedo-pln94-ownership-dataflow` (off
+**IN PROGRESS — Phase 2 (fact) COMPLETE; Phase 4 (RED check) BUILT (4.1/4.3 ✓, 4.2 nearly); Phase 5
+(land beside) CORE DONE — the oracle runs on every `cargo test` (`tests/ownership_oracle.rs`) + a
+proof skeleton in `formal/ownership.md`.** Branch `tuxedo-pln94-ownership-dataflow` (off
 `origin/main`). Everything so far is a PURE
 OBSERVER — reached only via `LOFT_OWN_ORACLE`, nothing in the compile path consumes it, so shipped
 codegen is byte-identical (SI-1 held on `loft_suite` + the parse suite at every step). Progress:
