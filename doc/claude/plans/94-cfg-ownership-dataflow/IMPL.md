@@ -26,22 +26,31 @@ temp-subject-borrow-return · `v[i] ?? d` Join · two-closures-mutate-one-hash (
 
 ---
 
-## Phase 0 — Falsify the oracle's reason to exist (BEFORE any framework)
+## Phase 0 — Falsify the oracle's reason to exist (BEFORE any framework) — ✅ PASSED (2026-07-07)
 
 **Premise to kill:** *an independent static fact detects a wrong free/own plan that the shipped
-observable gates (exit, stdout, interp-vs-native oracle, poison, leak) can pass.* Cheap; do it first.
+observable gates (exit, stdout, interp-vs-native oracle, poison, leak) can pass.* Cheap; done first.
+**Result: premise HOLDS — the oracle is not redundant. Proceed to Phase 1.** Probe:
+[`probes/00-a1b-silent-blindspot.loft`](probes/00-a1b-silent-blindspot.loft).
 
-- **0.1 — a real wrong plan on demand.** Run a small program under `LOFT_NO_A1B` (opts out of the
-  @PLN90 A1b fix). **Gate:** it produces a demonstrably wrong free/own plan (differs from default
-  under `LOFT_POISON`/`LOFT_NATIVE_LEAK_CHECK`).
-- **0.2 — a backend-CONSISTENT wrong case (the blind spot).** Shape a `LOFT_NO_A1B` program whose
-  stdout + exit are identical on both backends and that emits no leak-warn without poison. **Gate:**
-  the `tests/oracle/` differential oracle **passes** it — proving the observable gates have a blind spot.
-- **0.3 — an independent count catches it.** Hand-count alloc-vs-free per store per path on 0.2.
-  **Gate:** the count is **red** on 0.2 and **green** on its A1b-fixed (default) sibling.
+- **0.1 — a real wrong plan on demand. ✅** `LOFT_NO_A1B` on `tests/scripts/85-temp-subject-borrow-return-uaf.loft`:
+  interp fails the `len==3` assert (UAF → wrong len), native+`LOFT_POISON` panics `len: 0`. Default
+  is correct on both. So the toggle is a real known-wrong-plan source.
+- **0.2 — a backend-CONSISTENT wrong case (the blind spot). ✅** The assert-stripped probe under
+  `LOFT_NO_A1B` prints `len=0` on **both** backends, exit 0, **no leak-warn** (`LOFT_STORES=warn` /
+  `LOFT_NATIVE_LEAK_CHECK`). Correct answer is 3. So stdout+exit+leak — every observable gate,
+  including the interp-vs-native differential oracle — **passes a definitively wrong plan**. Only the
+  original hand-written `assert` (a human oracle of correctness) caught it.
+- **0.3 — an independent static fact catches it. ✅** `loft introspect` diff of `h`, default vs
+  `LOFT_NO_A1B`: the correct plan **copies** g's result into an owned `__retbuf`
+  (`OpAppendVector(__retbuf, n_g(...))`) *before* `OpFreeRef`-ing the temps, then returns `__retbuf`;
+  the wrong plan collapses the return onto `__ref_1(0)` sharing `__vdb_1`, then
+  `OpFreeRefIfDistinct(__vdb_1, __ref_1(0))` frees a store the return borrows, then returns it. The
+  fact *"no store backing the return value is freed before the return"* is **red on wrong, green on
+  correct** — detection power the observable gates lack.
 
-**Red gate ⇒ STOP:** if every wrong plan you can build already diverges the backends, or the count
-can't separate wrong from right, the oracle is redundant — reconsider before building anything.
+**Gate: PASSED** — an independent flow-sensitive completeness check catches a real class (a
+backend-consistent wrong free/own plan) that interp-vs-native + leak gates structurally miss.
 
 ---
 
