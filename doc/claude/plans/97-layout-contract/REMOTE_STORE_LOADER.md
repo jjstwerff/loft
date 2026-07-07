@@ -165,9 +165,11 @@ bytes-bounded AND leak-clean* where applicable. "Prove it can fail" = the negati
   over a byte-reader needs only these offset reads; no shared-`Store` change → the second invariant
   holds by construction).
 
-**But P0 found a load-bearing BLOCKER the design missed** — see [§ P0 results](#p0-results--the-portability-prerequisite-2026-07-07). The hash INDEX is not portable across
-processes, so the loader phases below gain a **prerequisite**: make persisted collections
-cross-process-portable first.
+**But P0 found a load-bearing BLOCKER the design missed** — see [§ P0 results](#p0-results--the-portability-prerequisite-2026-07-07). The hash INDEX was not portable across
+processes, so the loader phases below gained a **prerequisite**: make persisted collections
+cross-process-portable first.  **The keys half (Phase 0.5a) is now DONE (#523)** — the hash seed
+lives in the bucket record, so `store_load_keys` is unblocked; the `sorted`/range half (0.5b)
+remains.
 
 ### Phase 1 — heap store-load (whole file, no HTTP)
 - **Build:** `store_load(path)` — `read_bytes` → 8-aligned heap arena → `Store{ backing: Heap,
@@ -249,18 +251,38 @@ INDEX is unreadable by anyone but the writer's process.
 
 **Decision — arc G gains a Phase 0.5 prerequisite (before any loader phase):** make persisted
 collections cross-process-portable.
-- **Persist the hash seed per-store** (store the store's `RandomState` seed in the store header /
-  the `.dschema` sidecar) so any reader re-derives the *same* buckets — keeps the DoS protection
-  (still a random seed per store) AND fixes the pre-existing bug AND unblocks `store_load_keys`.
-  *Recommended.*  (Alternative: a fixed seed for persistable stores — simpler, but a served store's
-  keys are already committed, so DoS protection matters less there; still, the persisted-seed
-  option is strictly safer.)
-- **Extend `store_persist_bind` (and the loader) to `sorted`/`ordered`** — the range path is
-  portable by construction and is the game-asset / routing sweet spot; it needs the persistence
-  primitive first.
 
-Net: the read mechanism is fine; the **foundation (portable persisted collections) is the real
-first step**, and P0 caught it before a line of the loader was written.
+### Phase 0.5a — persist the hash seed — **DONE 2026-07-07 (#523)**
+
+The seed is now **per-hash, stored IN the hash's own bucket record** (not per-store in the header
+or a sidecar, as this doc first recommended).  `keys::fresh_seed` draws a random 64-bit seed when a
+hash is first populated; `hash::add` writes it into the bucket record (word 1, byte 8), carries it
+across every rehash, and `find`/`remove`/the probe read it back so `keys::seeded_hasher(seed)` — a
+**fixed-key** `DefaultHasher` mixed with the seed — maps a key to the SAME bucket in every process.
+A reader (fresh process, remote, or `store_load_keys`) re-derives identical buckets straight from
+the persisted bytes, with **no header/sidecar change** — the durable file stays bit-for-bit the
+in-memory store (the @PLN97 "one format" law).  P253's DoS defense is preserved: the seed is still
+random per hash, so an attacker can't precompute collisions without it.
+
+Why the bucket record rather than the store header / sidecar: it is self-contained (the seed
+travels with the buckets it governs, no separate load step), it does not touch the base store
+format (sacred payload), and it is a *deliberate* hash-layout change the @PLN97 golden test would
+catch and version.  Bucket layout: word 0 = `[room | length]`, **word 1 = seed**, words 2.. =
+buckets; `elms = (room - 2) * 2` (initial claim bumped 9→10 to keep 16 slots).  The bucket-walk
+now lives in ONE place — `hash.rs`; `for_each_owned_child` routes through `hash::records` (the
+free/copy cascade no longer re-encodes the layout).  Pinned by the two-process lookup assertion in
+`tests/store_persist_loft.rs::fresh_then_reload_round_trip` (reload process must read `h[13]=1300`,
+not null).
+
+### Phase 0.5b — extend persistence to `sorted`/`ordered` — **not yet**
+
+`store_persist_bind` is still **hash-only** (rejects `sorted<…>`).  The `sorted`/range path is
+portable by construction (comparison-based, no seed) and is the game-asset / routing sweet spot; it
+needs the persistence primitive extended first, before Phase 4 (`store_load_range`).
+
+Net: the read mechanism is fine; the **foundation (portable persisted collections)** is the real
+first step — its keys half (0.5a) is now in place, unblocking `store_load_keys`; the range half
+(0.5b) remains.  P0 caught the whole thing before a line of the loader was written.
 
 ## Open questions (each with a recommendation)
 
@@ -282,10 +304,10 @@ first step**, and P0 caught it before a line of the loader was written.
 ## Effort & sequencing
 
 **Effort MH.** P0 (done) confirmed the read mechanism AND found the portability blocker. **Phase
-0.5 (the prerequisite, ~S–M): make persisted collections cross-process-portable** — persist the
-hash seed (fixes the pre-existing bug + unblocks the keys path) and/or extend persistence to
-`sorted` (the portable range path). **Do this first — nothing downstream reads correctly without
-it.** Then: Phase 1 is ~S and independently useful (ship it — it unblocks wasm whole-block load);
+0.5 (the prerequisite): make persisted collections cross-process-portable** — **0.5a (DONE, #523):
+persist the hash seed** (fixed the pre-existing bug + unblocks the keys path); **0.5b (~S, not yet):
+extend persistence to `sorted`** (the portable range path, needed before Phase 4).  Then: Phase 1
+is ~S and independently useful (ship it — it unblocks wasm whole-block load);
 Phases 2–4 are the core (M) over the deterministic local provider; Phase 5 (S) swaps in #517. The
 identity gate is a few lines reusing
 `schema_sidecar`, added at the phase-1 bootstrap and carried through.

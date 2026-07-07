@@ -129,6 +129,15 @@ fn fresh_then_reload_round_trip() {
         out2.contains("reload keys=7,13,42"),
         "reload keys mismatch: {out2:?}"
     );
+    // #523 — a KEY LOOKUP must succeed in this SEPARATE reload process, not
+    // just iteration.  Pre-fix, the hash used a per-process random seed so the
+    // reload process probed a different bucket and read null (v=1300 vanished)
+    // while iteration still listed the key.  The per-hash seed now lives in the
+    // bucket record, so any reader re-derives the same buckets.
+    assert!(
+        out2.contains("reload lookup h[13]=1300"),
+        "reload cross-process lookup must find v=1300, not null (#523): {out2:?}"
+    );
 }
 
 #[test]

@@ -13879,13 +13879,13 @@ fn p255_get() -> integer {
 /// O(N²) insertion / lookup.  Same root-cause class as the 2011
 /// hash-DoS in Python / Ruby / PHP / Java / Node.js.
 ///
-/// Fix (2026-05-11): replace `DefaultHasher::new()` with
-/// `build_hasher()` which calls a process-wide seeded
-/// `RandomState` memoised via `OnceLock`.  Cross-process variance
-/// is a stdlib `RandomState` guarantee that's not directly
-/// testable in-process.  This test serves as a smoke check: a
-/// hash collection still inserts + looks up correctly under the
-/// seeded hasher (no behavioural regression for legitimate use).
+/// Fix (2026-05-11): seed the hasher.  Now (arc G / #523) the seed
+/// is drawn per-hash by `keys::fresh_seed` and stored IN the hash's
+/// bucket record, so a persisted hash re-derives identical buckets in
+/// any process (portability) while an attacker still cannot pre-compute
+/// collisions without the hash's seed (the DoS defense).  This test is a
+/// smoke check: a hash collection still inserts + looks up correctly
+/// under the seeded hasher (no behavioural regression for legitimate use).
 #[test]
 fn p253_hash_remains_functional_after_seeding() {
     code!(

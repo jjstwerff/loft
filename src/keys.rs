@@ -21,29 +21,36 @@ use std::fmt::Formatter;
 use std::hash::{BuildHasher, DefaultHasher, Hash, Hasher};
 use std::sync::OnceLock;
 
-/// P253 fix (2026-05-11) — process-wide seeded `RandomState` so the
-/// `keys::hash` / `key_hash` functions produce a different hash
-/// distribution across processes.  Without seeding, `DefaultHasher::new()`
-/// constructs a SipHash-1-3 hasher with fixed seed (k0=0, k1=0); every
-/// loft process used the identical hash function, so an attacker who
-/// supplied hash-table keys could pre-compute N strings that all
-/// collided to a single bucket → O(N²) insertion / lookup.  Same root
-/// cause as the 2011/2012 hash-DoS in Python / Ruby / PHP / Java /
-/// Node.js (CVE-2011-4815 et al.).
+/// Build a deterministic hasher whose bucket distribution depends only on
+/// `seed`.  `DefaultHasher::new()` fixes the SipHash-1-3 keys (k0=k1=0), so
+/// the SAME `seed` maps a key to the SAME bucket in EVERY process.  That is
+/// what makes a persisted hash portable: a reader restores the seed stored
+/// in the hash's own bucket record (`hash.rs`) and re-derives identical
+/// buckets, so a cross-process / remote lookup lands in the right bucket.
 ///
-/// `RandomState::new()` seeds from `getrandom` on first call; we
-/// memoise on a `OnceLock` so subsequent hashers share the same seed
-/// (otherwise resize / lookup would see a different distribution than
-/// insertion).  Lookups via `hasher()` clone the seed-state and build
-/// a fresh `DefaultHasher` per call — same shape as `HashMap`.
-fn hasher_state() -> &'static RandomState {
-    static STATE: OnceLock<RandomState> = OnceLock::new();
-    STATE.get_or_init(RandomState::new)
+/// The per-hash random `seed` (drawn by [`fresh_seed`] when a hash is first
+/// populated) preserves the P253 hash-DoS defense (2026-05-11): without a
+/// seed, every loft process shared the fixed-key hasher, so an attacker who
+/// supplied keys could pre-compute N strings that all collide to a single
+/// bucket → O(N²) insertion / lookup (the 2011/2012 Python / Ruby / PHP /
+/// Java / Node hash-DoS, CVE-2011-4815 et al.).  An attacker cannot
+/// pre-compute collisions without knowing the hash's seed.
+#[must_use]
+fn seeded_hasher(seed: u64) -> DefaultHasher {
+    let mut hasher = DefaultHasher::new();
+    hasher.write_u64(seed);
+    hasher
 }
 
+/// Draw a fresh, unpredictable 64-bit seed for a newly-populated hash table.
+/// Each hash gets its own random seed (the P253 DoS defense); the seed is
+/// then stored IN the hash's bucket record so any reader re-derives the same
+/// buckets (see [`seeded_hasher`]).  Never returns 0 — a stored seed of 0
+/// marks an un-seeded (empty / legacy) bucket record.
 #[must_use]
-fn build_hasher() -> DefaultHasher {
-    hasher_state().build_hasher()
+pub fn fresh_seed() -> u64 {
+    let s = RandomState::new().build_hasher().finish();
+    if s == 0 { 0x9E37_79B9_7F4A_7C15 } else { s }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -728,8 +735,8 @@ pub fn get_simple(record: &DbRef, stores: &[Store], keys: &[Key]) -> Vec<Simple>
 }
 
 #[must_use]
-pub fn hash(rec: &DbRef, stores: &[Store], keys: &[Key]) -> u64 {
-    let mut hasher = build_hasher();
+pub fn hash(rec: &DbRef, stores: &[Store], keys: &[Key], seed: u64) -> u64 {
+    let mut hasher = seeded_hasher(seed);
     for key in keys {
         let pos = rec.pos + u32::from(key.position);
         hash_ref(rec, stores, key, pos, &mut hasher);
@@ -738,8 +745,8 @@ pub fn hash(rec: &DbRef, stores: &[Store], keys: &[Key]) -> u64 {
 }
 
 #[must_use]
-pub fn key_hash(key: &[Content]) -> u64 {
-    let mut hasher = build_hasher();
+pub fn key_hash(key: &[Content], seed: u64) -> u64 {
+    let mut hasher = seeded_hasher(seed);
     for k in key {
         match k {
             Content::Long(l) => l.hash(&mut hasher),

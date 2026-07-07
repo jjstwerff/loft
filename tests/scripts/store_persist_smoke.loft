@@ -29,6 +29,18 @@ fn record_keys(h: hash<Entry[key]>) -> text {
   result
 }
 
+// Key LOOKUP (not iteration): returns Entry 13's value, or "null" when the
+// key is not found.  This is the #523 probe — a lookup must succeed even in a
+// process that did not build the hash.
+fn lookup_value(h: hash<Entry[key]>) -> text {
+  found = h[13];
+  if found == null {
+    "null"
+  } else {
+    "{found.value}"
+  }
+}
+
 fn main() {
   path = env_variable("LOFT_PERSIST_TEST_PATH");
   mode = env_variable("LOFT_PERSIST_TEST_MODE");
@@ -49,6 +61,7 @@ fn main() {
     // After bind, the slot is mmap'd.  Read keys back to confirm the
     // record layout survived the swap.
     println("fresh keys={record_keys(h)}");
+    println("fresh lookup h[13]={lookup_value(h)}");
   } else if mode == "reload" {
     // Empty hash; bind should overlay the on-disk contents.
     ok = store_persist_bind(h, path);
@@ -57,6 +70,12 @@ fn main() {
       return
     }
     println("reload keys={record_keys(h)}");
+    // #523 — a KEY LOOKUP must succeed in this SEPARATE process, not just
+    // iteration.  The hash stores its seed in its bucket record, so a fresh
+    // process re-derives the same buckets.  Pre-fix this read null (a
+    // per-process random seed probed a different bucket) while iteration
+    // still showed the key — which is why the round-trip test missed it.
+    println("reload lookup h[13]={lookup_value(h)}");
   } else {
     println("FAIL unknown-mode")
   }
