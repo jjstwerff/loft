@@ -264,7 +264,7 @@ a coarse "whole-record" op variant for the high-rate path.
 | 2 | [Tier 2: double-buffered snapshots](02-tier-2-snapshots.md) | M | `lib/store_durable/` package; `SnapshotEvery(interval)` mode with two-file atomic rotation + `msync` discipline |
 | 3 | [Tier 3: WAL + grouped commit](03-tier-3-wal.md) | M-MH | WAL append + fsync + checkpoint + truncate; `group_commit_window` to amortise fsync cost across batches. **Builds on the @PLN16.J store change journal** (record/apply/revert already exist) — adds fsync/group-commit + checkpoint/truncate + per-entry CRC; see [§ Convergence](#convergence-with-the-pln16-store-change-journal-tier-3s-substrate) |
 | 4 | [Stress test — `kill -9` × 1000 across all tiers](04-stress-test.md) | S | `tests/store_durable_kill.rs` runs an injection harness that spawns a daemon, kills it mid-write, validates recovery semantics per tier |
-| 5 | [First-consumer opt-in](05-consumer-optin.md) | S | Plan-37 indexer phase 08 selects Tier 1; TTT v5 design doc updated to declare Tier 2 dependency; @PLN6 audience demo design doc references Tier 3 |
+| 5 | [First-consumer opt-in](05-consumer-optin.md) | S | @PLN42 (tracker-index) phase 08 selects Tier 1; TTT v5 design doc updated to declare Tier 2 dependency; @PLN6 audience demo design doc references Tier 3 |
 | 6 | [Closeout — DESIGN_DECISIONS + STDLIB.md + close issue](06-closeout.md) | XS | "C-… durability tier choice" decision recorded; STDLIB.md `Store::open_durable` doc; issue → `status:finished` + closed |
 
 Total estimated effort: **H** (sum of per-phase letters above).

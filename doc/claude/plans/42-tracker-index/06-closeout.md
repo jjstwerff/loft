@@ -6,8 +6,9 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # Phase 06 — Retroactive tagging
 
 **Status:** Migration shipped 2026-05-14 — closeout DEFERRED
-(plan-37 phases 7 + 8 still open; the move-to-finished/ step
-happens after phase 8).
+(**@PLN42's own** phases 07 + 08 still open — "plan-37" was this
+plan's OLD local number `@PLAN37`, now `@PLN42` /
+`42-tracker-index/`; the closeout runs after phase 08).
 
 ## What shipped
 
@@ -145,7 +146,8 @@ Promote to "required" only if maintenance burden surfaces.
 - `tests/index_hygiene.rs::legacy_tag_count_under_threshold`
   passes.
 - ROADMAP.md, CHANGELOG_TECHNICAL.md, plan README updated.
-- Plan moved to `plans/finished/37-tracker-index/`.
+- Plan dir stays at `plans/42-tracker-index/` (top-level, as its own closure record — the
+  current convention; the legacy `finished/37-…` move is retired).
 - `bash scripts/check_doc_drift.sh` (or `cargo test
   --test doc_hygiene`) clean.
 
