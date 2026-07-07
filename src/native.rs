@@ -169,6 +169,7 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     #[cfg(feature = "mmap")]
     ("n_store_persist_bind", n_store_persist_bind),
     ("n_store_load", n_store_load),
+    ("n_store_verify", n_store_verify),
     #[cfg(feature = "remote-store")]
     ("n_store_load_key", n_store_load_key),
     #[cfg(feature = "remote-store")]
@@ -1224,6 +1225,15 @@ fn n_store_persist_bind(stores: &mut Stores, stack: &mut DbRef) {
     let v_path = *stores.get::<Str>(stack);
     let v_ref = *stores.get::<DbRef>(stack);
     let ok = stores.bind_path(v_ref.store_nr, std::path::Path::new(v_path.str()));
+    stores.put(stack, ok);
+}
+
+/// Interpreter handler for `store_verify` — structural integrity check of a
+/// store-rooted collection's heap graph (every pointer targets a live record).
+/// @PLN97. Ungated — a general integrity tool.
+fn n_store_verify(stores: &mut Stores, stack: &mut DbRef) {
+    let v_ref = *stores.get::<DbRef>(stack);
+    let ok = stores.verify_graph_ok(&v_ref);
     stores.put(stack, ok);
 }
 

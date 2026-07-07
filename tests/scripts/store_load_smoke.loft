@@ -55,6 +55,8 @@ fn main() {
     println("loadkey keys={keys_of(h)}");
     println("loadkey lookup h[13]={lookup13(h)}");
     println("loadkey len={len(h)}");
+    // The load must produce a structurally SOUND heap (no dangling pointers).
+    println("loadkey verify={store_verify(h)}");
   } else if mode == "loadkeys" {
     // Phase 3a plural: fetch the SUBSET {7, 42} — 13 stays absent.
     ids: vector<integer> = [];

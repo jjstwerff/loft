@@ -305,6 +305,10 @@ fn store_load_key_loads_only_the_requested_key_both_backends() {
             out.contains("loadkey len=1"),
             "{backend}: exactly one entry loaded, not the whole store: {out:?}"
         );
+        assert!(
+            out.contains("loadkey verify=true"),
+            "{backend}: the loaded store must be structurally sound (store_verify): {out:?}"
+        );
     }
 }
 

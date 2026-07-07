@@ -231,7 +231,18 @@ The remaining work extends the copy from FLAT (scalar-only) entries to entries w
 (text / vector / nested), plus more key types and the Sorted path. Each step below is independently
 landable, has a concrete pass/fail check, and is gated on both backends + leak-clean.
 
-**The verification gate (reusable for every step) — differential against whole-file `store_load`.**
+**The two verification instruments (both wired into every 3b step).**
+- **Structure — `store_verify(r)` (built 2026-07-07).** A loft builtin +
+  `Stores::verify_graph_ok` that runs the DEFENSIVE `validate_claims` walk (guard-before-deref: it
+  NAMES a broken edge instead of faulting on it). Extended with a bounds-checked Hash arm so it
+  covers keyed collections. After any `store_load*`, `store_verify(local)` proves the copy left **no
+  pointer aimed outside the store** (the exact failure a bad relocation produces — a source
+  rec-number larger than the small local store). Positive-control-tested (it must CATCH an
+  out-of-range bucket pointer, not crash) and wired into the loader regression
+  (`loadkey verify=true`). Covers the "is the store in the right format / structurally sound"
+  half of the confidence question.
+- **Content — differential against whole-file `store_load`** (the "corresponds to the original"
+  half):
 Phase 1's `store_load` is verified, so it is the GROUND TRUTH: load the whole persisted collection
 into `g_full`, then `store_load_keys(subset)` into `g_partial`, and assert — for every requested
 key — `g_partial[k]` deep-equals `g_full[k]` field-by-field (including every heap field's contents),

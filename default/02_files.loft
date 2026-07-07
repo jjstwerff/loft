@@ -414,6 +414,18 @@ pub fn store_load(r: reference, path: text) -> boolean fs#read;
 #rust"stores.load_path((@r).store_nr, std::path::Path::new(@path))"
 #impure(io)
 
+// Structural integrity check of a store-rooted collection's heap graph: verify
+// every internal pointer targets a live record — no dangling / out-of-bounds /
+// cyclic edge. Returns true when sound, false (with a reason on stderr) when
+// not. The verifier behind the working-set loader's confidence: after any
+// `store_load*`, `store_verify(local)` proves the (partial) copy produced a
+// structurally valid heap, not one with a pointer left aimed at the source.
+//   h: hash<Rec[id]> = []
+//   store_load_key(h, "block.store", 42)
+//   assert(store_verify(h))   // the load produced a sound heap
+pub fn store_verify(r: reference) -> boolean;
+#rust"stores.verify_graph_ok(&(@r))"
+
 // Working-set load: fetch ONE integer-keyed entry from a persisted HASH image
 // into the empty local hash `local`, reading only the pages the lookup touches
 // — not the whole file. The bounded-fetch counterpart of `store_load`, for when

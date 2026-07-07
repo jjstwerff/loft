@@ -1390,6 +1390,60 @@ impl Stores {
                     }
                 }
             }
+            Parts::Hash(v, _) => {
+                // Bounds-checked hash walk (the per-element kind for_each_owned_child
+                // trusts; here it is guard-before-deref).  Mirrors hash.rs: the root
+                // word holds the bucket-record claim; bucket layout is word 0 = room,
+                // buckets from fld 16 (`BUCKET0`), `elms = (room - 2) * 2`.
+                let cur = store.get_u32_raw(rec.rec, rec.pos);
+                if cur == 0 {
+                    return;
+                }
+                if cur >= cap {
+                    eprintln!(
+                        "[cr-check] {path}: hash bucket rec {cur} beyond store #{} capacity {cap}",
+                        rec.store_nr
+                    );
+                    *problems += 1;
+                    return;
+                }
+                let room = store.get_u32_raw(cur, 0);
+                if room < 2 || u64::from(room) > u64::from(cap) {
+                    eprintln!(
+                        "[cr-check] {path}: hash bucket rec {cur} insane room {room} (cap {cap})",
+                    );
+                    *problems += 1;
+                    return;
+                }
+                let elms = (room - 2) * 2;
+                for i in 0..elms {
+                    let entry = store.get_u32_raw(cur, 16 + i * 4);
+                    if entry == 0 {
+                        continue;
+                    }
+                    if entry >= cap {
+                        eprintln!(
+                            "[cr-check] {path}: hash entry rec {entry} beyond store #{} capacity {cap}",
+                            rec.store_nr
+                        );
+                        *problems += 1;
+                        if *problems > 8 {
+                            return;
+                        }
+                        continue;
+                    }
+                    self.validate_claims(
+                        &DbRef {
+                            store_nr: rec.store_nr,
+                            rec: entry,
+                            pos: 8,
+                        },
+                        *v,
+                        &format!("{path}{{#{entry}}}"),
+                        problems,
+                    );
+                }
+            }
             _ => {}
         }
     }
@@ -2275,6 +2329,27 @@ impl Stores {
     /// — those need the relocating graph-copy, a later cut). Root + key schema
     /// come from `local`'s live type (same collection type ⇒ same structural
     /// root position in the image), NOT the raw bytes.
+    /// Verify a store-rooted collection `r`'s heap graph is structurally sound —
+    /// every interior pointer (text offset, vector/child rec, hash bucket +
+    /// entries) stays within its store's bounds. Reuses the DEFENSIVE
+    /// [`validate_claims`](Stores::validate_claims) walk (guard-before-deref —
+    /// it never faults on a wild pointer, it NAMES the broken edge). Its type
+    /// comes from the live schema (`known_type`). Returns `true` when sound;
+    /// `false` (with `[cr-check]` reasons on stderr) otherwise.
+    ///
+    /// This is the instrument that makes the relocating working-set copy
+    /// (Phase 3b) *checkable*: after a `store_load*`, `store_verify(local)`
+    /// proves the copy left no pointer aimed outside the store.
+    pub fn verify_graph_ok(&self, r: &DbRef) -> bool {
+        let tp = self.allocations[r.store_nr as usize].known_type;
+        if tp == u16::MAX {
+            return false;
+        }
+        let mut problems = 0u32;
+        self.validate_claims(r, tp, "store_verify", &mut problems);
+        problems == 0
+    }
+
     #[cfg(feature = "remote-store")]
     pub fn load_key(&mut self, local: &DbRef, path: &str, key: i64) -> bool {
         self.load_keys(local, path, std::slice::from_ref(&key)) > 0
@@ -2466,6 +2541,57 @@ mod p318_hash_deepcopy {
     /// over-size deterministically — claim `big, gap=room+1, big` contiguously
     /// then delete the middle, so `fl_take_ge(room)` returns the gap block — and
     /// asserts every key survives the deep copy.
+    /// Positive control for the hash arm of `validate_claims` (the walk behind
+    /// `store_verify`) — a green check is only evidence once the detector is
+    /// known to FIRE. Build a sound hash (must validate clean), then corrupt the
+    /// root pointer to an out-of-range bucket record and confirm the walk NAMES
+    /// the broken edge instead of faulting on it — exactly what a bad relocation
+    /// would leave behind (a source rec-number larger than the small local store).
+    #[test]
+    fn verify_graph_catches_a_dangling_pointer() {
+        let mut stores = Stores::new();
+        let cell = stores.structure("VCell", -1);
+        stores.field(cell, "k", 0); // integer
+        stores.field(cell, "v", 0); // integer
+        stores.finish();
+        let hash_tp = stores.hash(cell, &["k".to_string()]);
+        let holder = stores.structure("VHolder", -1);
+        stores.field(holder, "h", hash_tp);
+        stores.finish();
+
+        let words = |sz: u16| 1 + ((u32::from(sz) + 7) >> 3);
+        let cell_words = words(stores.size(cell));
+        let holder_words = words(stores.size(holder));
+
+        let root = stores.database(holder_words);
+        let h = DbRef {
+            store_nr: root.store_nr,
+            rec: root.rec,
+            pos: root.pos, // field `h` at struct-position 0
+        };
+        for k in 0..5i64 {
+            let e = stores.database(cell_words);
+            stores.store_mut(&e).set_int(e.rec, e.pos, k);
+            stores.store_mut(&e).set_int(e.rec, e.pos + 8, k + 100);
+            stores.set_keyed(&h, &e, hash_tp, false);
+        }
+
+        // Sound to start — no false positive.
+        let mut problems = 0u32;
+        stores.validate_claims(&h, hash_tp, "ctl", &mut problems);
+        assert_eq!(problems, 0, "a well-formed hash must validate clean");
+
+        // Corrupt: aim the hash root at a bucket record beyond the store.
+        stores.store_mut(&h).set_u32_raw(h.rec, h.pos, 99_999);
+        let mut broken = 0u32;
+        stores.validate_claims(&h, hash_tp, "ctl", &mut broken);
+        assert!(
+            broken > 0,
+            "validate_claims MUST catch an out-of-range bucket pointer (positive control), \
+             not fault on it"
+        );
+    }
+
     #[test]
     fn hash_deepcopy_survives_oversized_dest_bucket() {
         let mut stores = Stores::new();
