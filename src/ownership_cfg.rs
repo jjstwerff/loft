@@ -594,6 +594,11 @@ fn ownership_dataflow(data: &Data, d_nr: u32, cfg: &Cfg) -> (Vec<OState>, usize)
                     }
                     _ => OFact::from_own(ownership_of(data, d_nr, rhs)),
                 };
+                // A self-borrow `Borrowed(v)` for var `v` is NOT a real borrow — it is the @P302
+                // self-dep `[v]` a keyed-collection local carries so a later `s += …` re-inits in
+                // place: an OWNERSHIP marker, freed at scope exit. Normalise to `Owned` (matching
+                // the shipped `get_free_vars` @P302 carve-out; you cannot borrow from yourself).
+                let f = if f == OFact::Borrowed(*var) { OFact::Owned } else { f };
                 st.insert(*var, f);
             }
             if st != outb[b] {
@@ -608,6 +613,73 @@ fn ownership_dataflow(data: &Data, d_nr: u32, cfg: &Cfg) -> (Vec<OState>, usize)
     (outb, passes)
 }
 
+/// The def_nrs of the UNCONDITIONAL reference free — the only free-op Check B inspects.
+/// Deliberately NOT `OpFreeText` (text ownership is a separate model: a `text` sub is copied via
+/// `to_string`, so it is `Owned` at runtime even where the fact reads `Borrowed`, and `OpFreeText`
+/// is emitted regardless of deps — the "Text exception" in `scopes::get_free_vars`) and NOT
+/// `OpFreeRefIfDistinct` (runtime-guarded: a no-op when the store aliases its witness — the guard
+/// IS the correctness mechanism for freeing a maybe-borrowed store, so flagging it cries wolf). An
+/// unconditional `OpFreeRef` of a `Borrowed` store, by contrast, is an unguarded over-free.
+fn free_op_nrs(data: &Data) -> Vec<u32> {
+    let d = data.def_nr("OpFreeRef");
+    if d == u32::MAX { Vec::new() } else { vec![d] }
+}
+
+/// Collect the vars freed (arg 0 of an `OpFree*` call) anywhere in `body` — Check B's free-site set.
+fn collect_free_targets(body: &Value, free_ops: &[u32]) -> Vec<u16> {
+    let mut out = Vec::new();
+    body.walk(&mut |x| {
+        if let Value::Call(d, args) = x
+            && free_ops.contains(d)
+            && let Some(Value::Var(v)) = args.first().map(Value::unspan)
+        {
+            out.push(*v);
+        }
+    });
+    out
+}
+
+/// Check B — free-legitimacy: a freed var whose fact is `Borrowed(base)` is an over-free of a store
+/// owned elsewhere (RED). Returns `(freed_var, base)` per offending site. Pure — the free set and the
+/// facts are supplied by the caller — so it is unit-testable without a `Data`.
+fn free_of_borrowed(freed: &[u16], facts: &OState) -> Vec<(u16, u16)> {
+    freed
+        .iter()
+        .filter_map(|&v| match facts.get(&v) {
+            Some(&OFact::Borrowed(base)) => Some((v, base)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Check A — the shadow-diff: vars whose flow-sensitive fact does NOT refine B's `ownership_of`
+/// (neither identical nor a `⊏ Join` precision win). Each is a real defect in one implementation —
+/// the coexistence finding. Returns `(var, mine, theirs)`; `precision_out` accumulates the wins.
+fn disagreements(
+    exit_state: &OState,
+    data: &Data,
+    d_nr: u32,
+    precision_out: &mut Vec<(u16, OFact, OFact)>,
+) -> Vec<(u16, OFact, OFact)> {
+    let mut disagree = Vec::new();
+    for (&v, &mine) in exit_state {
+        let theirs = OFact::from_own(ownership_of(data, d_nr, &Value::Var(v)));
+        // AGREE at the ownership-DECISION level: the same KIND (both `Owned` / both `Borrowed` /
+        // both `Join`) is the same free decision (free / don't-free / conditional), even when the
+        // tracked base var differs — the base is informational, and a conditional free
+        // (`OpFreeRefIfDistinct`) keys off runtime distinctness, not the static base. Only a KIND
+        // mismatch that is not a precision win (`⊏ Join`) is a real ownership disagreement.
+        if std::mem::discriminant(&mine) == std::mem::discriminant(&theirs) {
+            // agree (same free decision)
+        } else if mine.refines(theirs) {
+            precision_out.push((v, mine, theirs));
+        } else {
+            disagree.push((v, mine, theirs));
+        }
+    }
+    disagree
+}
+
 /// Run the ownership fixpoint, dump per-block OUT-states, and SHADOW-DIFF each var's fact at the
 /// function exit against the shipped flow-insensitive `ownership_of` — the 3.1 gate (agree on
 /// straight-line) and the surface where the flow-sensitive `Join` precision shows up later.
@@ -618,20 +690,14 @@ fn dump_own(name: &str, cfg: &Cfg, data: &Data, d_nr: u32) {
     // fact ⊏ the shipped `Join` — a win), DISAGREE (my fact does NOT refine theirs — coarser or
     // unsound; must be zero). The shipped classifier is flow-insensitive (join of ALL defs), so a
     // var whose reaching def here is single classifies definite where B collapses to `Join`.
-    let mut agree = 0;
-    let mut precision: Vec<String> = Vec::new();
-    let mut disagree: Vec<String> = Vec::new();
-    for (&v, &mine) in exit_state {
-        let theirs = OFact::from_own(ownership_of(data, d_nr, &Value::Var(v)));
-        let entry = format!("v{v}: mine={} B={}", mine.show(), theirs.show());
-        if mine == theirs {
-            agree += 1;
-        } else if mine.refines(theirs) {
-            precision.push(entry);
-        } else {
-            disagree.push(entry);
-        }
-    }
+    let mut precision_pairs: Vec<(u16, OFact, OFact)> = Vec::new();
+    let disagree_pairs = disagreements(exit_state, data, d_nr, &mut precision_pairs);
+    let agree = exit_state.len() - precision_pairs.len() - disagree_pairs.len();
+    let fmt = |(v, mine, theirs): &(u16, OFact, OFact)| {
+        format!("v{v}: mine={} B={}", mine.show(), theirs.show())
+    };
+    let precision: Vec<String> = precision_pairs.iter().map(fmt).collect();
+    let disagree: Vec<String> = disagree_pairs.iter().map(fmt).collect();
     eprintln!(
         "OWN {name}  blocks={} passes={passes}  agree={agree} precision={} disagree={}",
         cfg.blocks.len(),
@@ -656,16 +722,54 @@ fn dump_own(name: &str, cfg: &Cfg, data: &Data, d_nr: u32) {
     }
 }
 
+/// Phase 4 `check` mode — run the two consistency checks over one function BESIDE the shipped
+/// analysis and report each violation as a `RED` line (function, store, site). Returns the finding
+/// count so the caller can gate on the total. Pure observer (SI-1 unchanged).
+///
+/// - **Check A (the A1b catch):** the shadow-diff — any var whose fact does not refine B's is a RED
+///   fact-disagreement (the two independent implementations conflict).
+/// - **Check B (over-free):** free-legitimacy — an `OpFree*` of a var whose fact is `Borrowed` frees
+///   a store owned elsewhere.
+fn run_check(name: &str, body: &Value, cfg: &Cfg, data: &Data, d_nr: u32, free_ops: &[u32]) -> usize {
+    let (outb, _passes) = ownership_dataflow(data, d_nr, cfg);
+    let exit_state = &outb[cfg.exit];
+    let nm = |v: u16| data.def(d_nr).variables.name(v).to_string();
+    let mut reds = 0;
+    let mut precision = Vec::new();
+    for (v, mine, theirs) in disagreements(exit_state, data, d_nr, &mut precision) {
+        eprintln!(
+            "RED {name}: fact-disagree v{v}({}) mine={} B={}",
+            nm(v),
+            mine.show(),
+            theirs.show()
+        );
+        reds += 1;
+    }
+    for (v, base) in free_of_borrowed(&collect_free_targets(body, free_ops), exit_state) {
+        eprintln!(
+            "RED {name}: free-of-borrowed {} (v{v}) is Borrowed(v{base}={})",
+            nm(v),
+            nm(base)
+        );
+        reds += 1;
+    }
+    reds
+}
+
 /// The oracle entry point, reached only under `LOFT_OWN_ORACLE` (SI-1). Modes:
 /// `cfg` dumps each user function's CFG (Phase 1.1); `rd` runs the reaching-defs fixpoint (1.2);
-/// `own` runs the forward ownership fixpoint + shadow-diff vs `ownership_of` (Phase 2).
+/// `own` runs the forward ownership fixpoint + shadow-diff vs `ownership_of` (Phase 2); `check`
+/// runs the Phase-4 consistency checks BESIDE the shipped analysis and reports `RED` violations.
 pub fn oracle(data: &Data) {
     let Ok(mode) = std::env::var("LOFT_OWN_ORACLE") else {
         return;
     };
-    if mode != "cfg" && mode != "rd" && mode != "own" {
+    if !matches!(mode.as_str(), "cfg" | "rd" | "own" | "check") {
         return;
     }
+    let free_ops = free_op_nrs(data);
+    let mut total_reds = 0usize;
+    let mut checked = 0usize;
     for d_nr in 0..data.definitions() {
         if !matches!(data.def(d_nr).def_type, DefType::Function) {
             continue;
@@ -683,7 +787,18 @@ pub fn oracle(data: &Data) {
                 let rd = reaching_defs(&cfg);
                 dump_reach(name, &cfg, &rd);
             }
+            "check" => {
+                total_reds += run_check(name, &body, &cfg, data, d_nr, &free_ops);
+                checked += 1;
+            }
             _ => dump_own(name, &cfg, data, d_nr),
+        }
+    }
+    if mode == "check" {
+        if total_reds == 0 {
+            eprintln!("OWN-CHECK: clean — 0 RED over {checked} functions");
+        } else {
+            eprintln!("OWN-CHECK: {total_reds} RED finding(s) over {checked} functions");
         }
     }
 }
@@ -869,5 +984,39 @@ mod tests {
         assert!(!Borrowed(1).refines(Owned));
         // Coarser-than-B (my `Join` where B is definite) is also not a refinement.
         assert!(!Join(1).refines(Owned));
+    }
+
+    // ---- Phase 4.1: the consistency-check primitives (Check B core), on hand-built inputs ----
+
+    #[test]
+    fn free_of_borrowed_flags_only_the_borrowed_frees() {
+        use super::OFact::{Borrowed, Join, Owned};
+        use super::{OState, free_of_borrowed};
+        let mut facts = OState::new();
+        facts.insert(1, Owned); //  freeing an owned store is legitimate
+        facts.insert(2, Borrowed(5)); //  freeing a borrowed alias is the over-free — RED
+        facts.insert(3, Join(6)); //  a runtime-dependent store: the shipped code frees it
+        //  conditionally (OpFreeRefIfDistinct) — not a definite over-free, so NOT flagged in 4.1
+        let freed = [1u16, 2, 3];
+        let reds = free_of_borrowed(&freed, &facts);
+        // Only the definite Borrowed(5) free is a violation; it names its base.
+        assert_eq!(reds, vec![(2, 5)]);
+    }
+
+    #[test]
+    fn collect_free_targets_finds_only_free_op_arg0() {
+        use super::collect_free_targets;
+        // Body: OpFreeRef(v3) ; OpSetInt(v4, v5) — only the free-op's arg0 (v3) is a free target.
+        let free_ref = 99u32;
+        let other = 88u32;
+        let body = v_block(
+            vec![
+                Value::Call(free_ref, vec![Value::Var(3)]),
+                Value::Call(other, vec![Value::Var(4), Value::Var(5)]),
+            ],
+            Type::Void,
+            "body",
+        );
+        assert_eq!(collect_free_targets(&body, &[free_ref]), vec![3]);
     }
 }
