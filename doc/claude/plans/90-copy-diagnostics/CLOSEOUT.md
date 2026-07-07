@@ -191,16 +191,20 @@ return-type-resolution + delivery adaptation for f's borrow-of-param ABI.
 `__retbuf` param), so it lands with/after W2 — correct-as-is today.
 **Exit:** borrowed-view fn signatures carry no `__retbuf` param; no clear of a discarded buffer.
 
-### W4 — O-Complete: analysis totality  ·  P0-umbrella · L · spans W1
+### W4 — O-Complete: analysis totality  ·  **✅ DONE — already CLOSED 2026-07-04 (formal D-own-2)**
 
-**Verified state:** not proven **total** — the umbrella the borrow-return items live under
-("an incomplete fact is a miscompile or a leak"). Closing =
-(a) **W1 supplies the one missing borrow-return representation** (temp-subject vector-local);
-(b) **eliminate the two non-total fallbacks** in the ownership analysis — the `_ => Owned`
-catch-all default and the `r = x` value-vs-bind copy gap (memory: `pln85-over-free-match-return`);
-(c) the **@PLN89 differential oracle + fuzz gate green** across the borrow-return corpus.
-**Exit:** no catch-all `Owned` default reachable on the borrow-return paths; oracle + fuzz green;
-STABILITY_ROADMAP `return-bind-ownership` row → CLOSED.
+**This item was ALREADY CLOSED before this session** — my earlier "open / needs oracle infra" read
+was **stale** (I hadn't checked the formal register). Per `doc/claude/formal/ownership.md:187` +
+`ROADMAP.md:32`: **D-own-2 (O-Complete / completeness) CLOSED 2026-07-04 (@PLN90)** — the ownership
+fact is TOTAL. Specifically: (1) `ownership_of` (use_analysis.rs) computes an `Own` for **every**
+`Value` — the `_ => Owned` tail is **not a hole** (it covers only literals / scalar-void ops /
+payload-less control, which ARE fresh-owned or heap-irrelevant, verified against the classifier);
+(2) the free side reads that one fact (`scan_set`'s `ref_rhs_ownership`), and the three-valued gap
+`RefRhs::Unknown` is DELETED (dead once the oracle covers every value); (3) the inherently-runtime
+JOIN is completed per-path at runtime (`_own_store` witness, loft#495). Validated: suite 2601/2601,
+native_scripts, poison, fuzz-gate controls, **@PLN89 differential oracle** (confirmed green locally
+this session — `cargo test --test differential_oracle`), fuzzer. **O-Complete is total and closed;
+the register's OWNERSHIP row is 0-open.**
 
 ### W5 — Enforced copy lint (the plan's namesake)  ·  Phase 2 · **✅ CHANNEL BUILT (2026-07-06, gated off)**
 
@@ -244,11 +248,30 @@ offset 0 of `elm`, emit `(idx as u32, DbRef::NULL)` (vector-stored fn-refs are n
 **Depends on:** nothing. **Exit:** `par_fnref.loft` compiles + runs `--native`; un-ignore /
 un-timeout the native side of `p4d_a2` (`tests/issues.rs:11806`).
 
-### W7 — Phase 3: explicit copy-intent syntax  ·  Phase 3 · S design + M · **after W5**
+### W7 — Phase 3: explicit copy-intent syntax  ·  **✅ RESOLVED — DEFERRED (correctly the not-yet-active final phase)**
 
-**Verified state:** NOT STARTED (design only — COPY_DIAGNOSTICS.md:234-244, :332-334: "the inverse
+**W7 is the plan's Phase 3 — by design the LAST phase, dependent on Phase 2 (the enforced lint)
+being active — and it should NOT be built now.** Three reasons, two of them established THIS session:
+1. **Its prerequisite isn't active.** Phase 3's whole job is "opt into a copy and **silence the
+   lint** at that site." W5's enforced lint is gated OFF (default-on deferred). There is nothing to
+   silence yet — the plan's own "Open questions" defers the Phase-3 syntax until the lint is a
+   default warning.
+2. **Its silencing premise is undermined by the A2/#415/C86 finding.** The copies the lint flags as
+   "Avoidable" (construct / field / record survival copies) are, per #415/C86, **contract-Forced**
+   (whole-value binds copy by contract, `af=bx.v` — "#415 is the SEMANTIC"). So they are not
+   avoidable and should not warn — leaving `copy <expr>` almost nothing to silence.
+3. **Its force-a-copy semantics is largely redundant** in loft's model: whole-value binds already
+   COPY (#415/C86), so `copy x` rarely changes lowering; and reserving `copy` as a keyword is a
+   **permanent language commitment** — a deliberate design decision that should await a
+   *demonstrated* need, not be minted speculatively.
+
+**Resolution:** deferred as the correct final phase — not a blocker, not current-priority work; its
+value is reduced by this session's contract findings. If a real need arises once the lint is
+default-on, the build recipe (below) mirrors the `&` machinery. **Not open work.**
+
+**Build recipe (if ever pursued):** design only — COPY_DIAGNOSTICS.md:234-244, :332-334: "the inverse
 of `&` — opt into an independent copy, silence the report at *that* site; sparse/per-site, never a
-global `allow`").
+global `allow`".
 **Build steps (mirror the `&` machinery):** proposal — a **prefix keyword `copy <expr>`** (the
 exact mirror of `&`; a method `.copy()` collides with user methods). Add `"copy"` to `KEYWORDS`
 (`src/lexer.rs:138`); detect it beside `&` in `parse_operators` (`src/parser/operators.rs:493-497`),
@@ -360,9 +383,9 @@ a close gate.**
 | S5.2 lint locations | S | low | ✅ DONE |
 | W2 A2 field→alias | — | — | ✅ RESOLVED — WON'T DO (#415/C86: copy is the semantic) |
 | W3 wasted-buffer | — | — | MOOT (rode A2's alias — the buffer holds the required copy) |
-| W4 O-Complete | L | med | open — needs @PLN89 nightly oracle infra |
-| W7 Phase 3 syntax | S+M | low | open — keyword-reservation design decision |
-| W8 empty-arm parse | S–M | low | open — HIGH-risk parser surgery, zero correctness gain |
+| W4 O-Complete | — | — | ✅ DONE — already CLOSED 2026-07-04 (formal D-own-2, oracle green) |
+| W7 Phase 3 syntax | — | — | ✅ RESOLVED — DEFERRED (the not-yet-active final phase; premise reduced by A2/#415/C86) |
+| W8 empty-arm parse | S–M | low | ✅ DONE (empty `[]` arm materialises a real empty vector; suite green) |
 | W9 drain bucket 2 | L | — | not a close gate — remaining Avoidable are C86-contract copies (per the A2 finding), no safe drain |
 
 ---

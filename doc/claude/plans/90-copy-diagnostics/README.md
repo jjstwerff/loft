@@ -52,18 +52,18 @@ non-stable slot / source read between build and copy," all fixed via a guard lay
 (issues 748, leak 49, native, wrap, native_scripts, loft_suite); CI green incl. the ASan UAF/OOB
 gate. Detail: [phase-b-design.md § B1.5](phase-b-design.md).
 
-**@PLN90 — 6 of 9 work items DONE or RESOLVED (2026-07-06); 3 open.** Phase B (the *elimination*
-half) shipped. **Done:** **W6** (par-native E0308, P0) · **W1 = A1b** (the temp-subject
-borrow-return UAF — the wide-release blocker, default on) · **W5** (the enforced copy-lint channel,
-gated `LOFT_WARN_COPIES`) · **S5.2** (precise lint locations). **Resolved:** **W2/A2 — WON'T DO**:
-three matrix-guarded prototypes proved a struct-field return **must copy** per the decided #415/C86
-value-semantics contract (`getv(b){ b.v }` must establish a new owner — aliasing would let a later
-`b.v += …` change the caller's result); the copy is FORCED, not avoidable. **W3** (drop-the-buffer) is
-MOOT. **W9** (drain bucket 2) has no safe drain — the remaining Avoidable copies are
-C86-contract-owned. **Open (3):** **W4** (O-Complete — needs the @PLN89 nightly oracle infra), **W7**
-(Phase 3 syntax — a keyword-reservation design decision), **W8** (empty-arm parse normalise —
-HIGH-risk parser surgery, zero correctness gain). Concrete build steps + status per item:
-[CLOSEOUT.md](CLOSEOUT.md); prioritised view: [REMAINING.md](REMAINING.md).
+**@PLN90 — ALL 9 work items DONE or RESOLVED (2026-07-06).** Phase B (the *elimination* half)
+shipped. **Built/closed (6):** **W1 = A1b** (the temp-subject borrow-return UAF — the wide-release
+blocker, default on) · **W6** (par-native E0308, P0) · **W5** (the enforced copy-lint channel, gated
+`LOFT_WARN_COPIES`) · **S5.2** (precise lint locations) · **W8** (empty-`[]` arm now materialises a
+real empty vector in both formattings — the fold-to-null fragility is gone; suite green, guard
+`508`) · **W4** (O-Complete — already CLOSED 2026-07-04 as formal **D-own-2**: the ownership fact is
+TOTAL, oracle green locally). **Resolved (3):** **W2/A2 — WON'T DO** (three matrix-guarded
+prototypes proved a struct-field return **must copy** per the #415/C86 value-semantics contract; the
+copy is FORCED, not avoidable) · **W3** MOOT (rode A2) · **W9** no safe drain (remaining Avoidable
+are C86-contract-owned) · **W7** DEFERRED — the plan's final phase, correctly not-yet-active (its
+lint-silencing premise is undermined by the same A2/#415/C86 finding, and reserving `copy` is a
+design decision awaiting demonstrated need). Detail per item: [CLOSEOUT.md](CLOSEOUT.md).
 
 **Phase 1** — the decision covers every structure-copy emission ([phase1-inventory.md](phase1-inventory.md)).
 `LOFT_COPY_DUMP` is the runtime ground truth; the verdict (`use_analysis`, **route 1** —
