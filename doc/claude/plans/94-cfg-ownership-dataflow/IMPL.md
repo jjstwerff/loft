@@ -51,14 +51,22 @@ my own unsoundness. Note the design consequence: primitives are now delegated to
 the oracle's independence surface (where it could still catch a B bug) is **flow-sensitivity +
 interprocedural summaries**, not primitive classification. Repro: `probes/06-capture.loft`.
 
-**Then, in order, to a fully functional oracle:** drain the rest of the op-tail (3.4: after captures,
-`#rust`-return metadata via `returns_borrowed_view`, then coroutines / `par`) one family per commit
-until DISAGREE→0 on the corpus + the `program_ownership` fuzzer; 3.5 (soundness sweep + confirm the
-fact flags `LOFT_NO_A1B` and agrees on the fixed default — the A1b payoff); then **Phase 4** — turn
-the fact into the consistency oracle over emitted IR ("every store freed once; no free of a live/
-borrowed store"), default-on in test/CI, red on `LOFT_NO_A1B` + injected faults; then **Phase 5** —
-land it beside behind `LOFT_OWN_ORACLE` with the fuzzer hook + a `tests/ownership_oracle.rs` binary.
-That Phase-5 state IS the "fully functional oracle" (the H end-state). Codegen cutover stays out (P4/VH).
+**The A1b payoff is DEMONSTRATED (2026-07-07, 3.5 below):** on the canonical `85-…-uaf.loft`, the
+oracle is clean under the correct default (`n_h agree=7 disagree=0`) and FLAGS the wrong plan under
+`LOFT_NO_A1B` (`disagree=1: __ref_1 mine=Join / B=Owned`) — the built oracle delivers Step-0's
+promise. So the framework works end-to-end; what remains is breadth + a self-contained RED check.
+
+**Then, in order, to a fully functional oracle — immediate next action is the fuzzer sweep:** wire
+the `own`-mode shadow-diff into the `program_ownership` fuzzer (loft-lang tests) and confirm
+DISAGREE=0 across the fuzz corpus on BOTH backends (the 3.5 soundness sweep — hand-verify any
+`Owned`-where-B-says-`Borrowed`/`Join` under-free). The op-tail's remaining genuine families
+(coroutines, `par`) get a corpus shape each only if the sweep surfaces a divergence (the 505 corpus
+already shows none). Then **Phase 4** — turn the fact into a self-contained consistency oracle over
+emitted IR ("every store freed once; no free of a live/borrowed store") that goes **RED** (not just
+shadow-diff) on `LOFT_NO_A1B` + injected faults, reporting the exact store + site; default-on in
+test/CI. Then **Phase 5** — land it beside behind `LOFT_OWN_ORACLE` with the fuzzer hook + a
+`tests/ownership_oracle.rs` binary. That Phase-5 state IS the "fully functional oracle" (the H
+end-state). Codegen cutover stays out (P4/VH).
 
 ## Standing invariants — re-check after EVERY sub-step
 
@@ -222,10 +230,24 @@ stand as written.
   classification (which both analyses share by construction). The op-tail's genuine unmodeled
   families (coroutines, `par`) remain, but the cross-check surfaces none on this corpus. Repro:
   [`probes/06-capture.loft`](probes/06-capture.loft).
-- **3.5 — the soundness-direction sweep + the Step-0 payoff.** **Gate:** across corpus + fuzzer, no
-  case where the new fact says `Owned` while B says `Borrowed`/`Join` in a way that under-frees
-  (hand-verify each such disagreement); the new fact **flags** `LOFT_NO_A1B` and **agrees** on the
-  fixed default.
+- **3.5 — the soundness-direction sweep + the Step-0 payoff. PAYOFF DEMONSTRATED on the canonical
+  case (2026-07-07); fuzzer sweep still open.** On `tests/scripts/85-temp-subject-borrow-return-uaf.loft`
+  (`h` returns `g(Filled{items: inner})`; `g`'s return is a join — `items` Borrowed on the Filled arm,
+  `[]` Owned on the Empty arm):
+  ```
+  LOFT_NO_CACHE=1 LOFT_OWN_ORACLE=own loft --interpret 85-…-uaf.loft 2>&1 >/dev/null   | grep 'OWN n_h'
+  # DEFAULT (correct plan): OWN n_h … agree=7 disagree=0        ← oracle agrees, no false alarm
+  LOFT_NO_CACHE=1 LOFT_NO_A1B=1 LOFT_OWN_ORACLE=own loft --interpret 85-…-uaf.loft 2>&1 >/dev/null
+  # LOFT_NO_A1B (wrong plan): OWN n_h … disagree=1  →  DISAGREE v6(__ref_1): mine=Join(?) B=Owned
+  ```
+  The discriminator is the FLOW-SENSITIVE fact: the return work-ref `__ref_1` reads `Owned` under the
+  correct plan (h materialises g's result into an owned retbuf before the frees) but `Join` under the
+  wrong plan (the un-materialised borrowing return is returned directly). B (flow-insensitive) says
+  `Owned` in BOTH plans and so cannot tell them apart; the shadow-diff surfaces mine-vs-B as
+  **agree (correct) vs disagree (wrong)** — the oracle flags the known-wrong plan and stays clean on
+  the fix. This is Step-0's premise delivered by the built oracle. **Gate (remaining):** run the
+  soundness sweep over corpus + the `program_ownership` fuzzer — no `Owned`-where-B-says-`Borrowed`/
+  `Join` under-free (hand-verify each), confirming the flag generalises past this one case.
 
 ---
 

@@ -32,6 +32,11 @@ codegen is byte-identical (SI-1 held on `loft_suite` + the parse suite at every 
   is now **DISAGREE=0 across 712 fns**, with the precision win and interproc independence intact. The
   cross-check's payoff landed inward — an independent impl caught the oracle's own gap. Genuine
   op-tail families (coroutines, `par`) remain but surface no divergence on this corpus.
+- **A1b payoff DEMONSTRATED (3.5, 2026-07-07).** On the canonical `85-…-uaf.loft` the oracle is clean
+  under the correct default (`n_h disagree=0`) and **flags** the wrong plan under `LOFT_NO_A1B`
+  (`__ref_1: mine=Join / B=Owned` — the un-materialised borrowing return the flow-insensitive
+  classifier collapses to `Owned`). The built oracle delivers Step-0's promise; remaining 3.5 work is
+  the `program_ownership` fuzzer sweep, then Phase 4's self-contained RED consistency check.
 
 The remaining approximations this replaces still ship: `src/use_analysis.rs` analysis **A**
 (position-proxy, valid only outside loops) and analysis **B** (`Owned/Borrowed/Join`, flow-insensitive
