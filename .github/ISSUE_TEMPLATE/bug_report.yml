@@ -89,12 +89,40 @@ body:
       label: Is there a clean workaround?
       description: Sets the `wa:*` label.  A bug with no clean workaround is often more urgent than its raw severity implies.
       options:
-        - "clean — a simple, idiomatic alternative exists"
-        - "partial — a workaround exists but it's awkward / loses the intended behaviour"
-        - "none — nothing works; this blocks whoever hits it"
+        - "wa:clean — a simple, idiomatic alternative exists"
+        - "wa:partial — a workaround exists but it's awkward / loses the intended behaviour"
+        - "wa:none — nothing works; this blocks whoever hits it"
         - "Not sure"
     validations:
       required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      description: Sets the `sev:*` label — how bad is it WHEN you hit it?
+      options:
+        - "sev:high — crash / memory corruption / data loss / a soundness hole (silently wrong)"
+        - "sev:medium — wrong result / hang / miscompile in a real shape, but no corruption"
+        - "sev:low — cosmetic / a rare edge / a false-positive warning / a confusing diagnostic"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: area
+    attributes:
+      label: Area(s)
+      description: Sets the `area:*` label(s) — which part of loft?  Pick one or more.
+      options:
+        - label: "area:parser — lexer / two-pass parser / type resolution / scope"
+        - label: "area:codegen — bytecode or native code generation"
+        - label: "area:store-lifetime — heap alloc/free, deps, value-semantic lifetime"
+        - label: "area:closures — fn-refs, lambdas, captured cells"
+        - label: "area:runtime — executing bytecode (interpreter)"
+        - label: "area:native — the --native backend specifically"
+        - label: "area:wasm — the browser / WASM target"
+        - label: "area:stdlib — the standard library (default/*.loft)"
+        - label: "area:packages — package format, registry, use resolution"
 
   - type: textarea
     id: extra

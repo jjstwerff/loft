@@ -1,0 +1,83 @@
+# Label guard — ensure every issue carries the required triage labels.
+#
+# Two jobs in one: (1) auto-apply the `sev:` / `wa:` / `area:` labels a filer
+# chose in the bug-report form (issue-form dropdown/checkbox answers land in the
+# issue BODY, not as labels — GitHub does not label them for you); (2) if a
+# required category is still missing (e.g. an agent filed via `gh issue create`
+# freeform, bypassing the form), apply `needs:labels` + a one-time comment naming
+# the missing categories.  Clears itself once the labels are set.
+#
+# Loop-safe: label edits made with GITHUB_TOKEN do not trigger new workflow runs,
+# so the workflow's own add/remove of labels never re-fires it.
+name: Label guard
+
+on:
+  issues:
+    types: [opened, edited, labeled, unlabeled]
+
+permissions:
+  issues: write
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const issue = context.payload.issue;
+            const number = issue.number;
+            const body = issue.body || "";
+            const labels = new Set((issue.labels || []).map(l => l.name));
+            const NEEDS = "needs:labels";
+
+            // Required label categories for a loft issue (LABELS.md).
+            const categories = [
+              { key: "sev:",  name: "severity — one `sev:high` / `sev:medium` / `sev:low`" },
+              { key: "wa:",   name: "workaround — one `wa:clean` / `wa:partial` / `wa:none`" },
+              { key: "area:", name: "area — one or more `area:*` (parser / codegen / store-lifetime / …)" },
+            ];
+            // Only these tokens may be auto-applied (never create a stray label).
+            const valid = new Set([
+              "sev:high","sev:medium","sev:low",
+              "wa:clean","wa:partial","wa:none",
+              "area:parser","area:codegen","area:store-lifetime","area:closures",
+              "area:runtime","area:native","area:wasm","area:stdlib","area:packages",
+            ]);
+
+            // 1) Auto-apply from the form answers.
+            //    sev/wa: single dropdown answer -> the first token on that line.
+            //    area:   checkboxes -> only the CHECKED boxes.
+            const found = new Set();
+            for (const m of body.matchAll(/\b(?:sev|wa):[a-z0-9-]+/g)) found.add(m[0]);
+            for (const m of body.matchAll(/-\s*\[[xX]\]\s*`?(area:[a-z0-9-]+)/g)) found.add(m[1]);
+            const toApply = [...found].filter(l => valid.has(l) && !labels.has(l));
+            if (toApply.length) {
+              await github.rest.issues.addLabels({ owner, repo, issue_number: number, labels: toApply });
+              toApply.forEach(l => labels.add(l));
+            }
+
+            // 2) Enforce: is each required category present now?
+            const missing = categories.filter(c => ![...labels].some(l => l.startsWith(c.key)));
+            const flagged = labels.has(NEEDS);
+
+            if (missing.length === 0) {
+              if (flagged) {
+                await github.rest.issues.removeLabel({ owner, repo, issue_number: number, name: NEEDS })
+                  .catch(() => {});
+              }
+              return;
+            }
+
+            if (!flagged) {
+              await github.rest.issues.addLabels({ owner, repo, issue_number: number, labels: [NEEDS] });
+              const list = missing.map(c => `- **${c.name}**`).join("\n");
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: number,
+                body: `This issue is missing required triage labels:\n\n${list}\n\n`
+                  + `Apply one label from each missing category — see `
+                  + `[\`.github/LABELS.md\`](https://github.com/${owner}/${repo}/blob/main/.github/LABELS.md). `
+                  + `The \`${NEEDS}\` flag clears automatically once they are set.`,
+              });
+            }
