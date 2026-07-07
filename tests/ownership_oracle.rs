@@ -262,3 +262,45 @@ fn oracle_dev_free_check_ratchet() {
         );
     }
 }
+
+/// The EXPERIMENTAL all-vars leak scan (`LOFT_OWN_ORACLE=check-leak`) has its OWN ratchet baseline —
+/// the point of the "raise it → flag it, don't revert" workflow. It over-approximates leaks until the
+/// shipped free analysis's transfer knowledge is replicated (retbuf/param aliasing, the phantom
+/// `__retbuf`, `par` queue frees, work-refs) — VH. Its findings ARE that codegen-transfer-artifact
+/// worklist. This asserts it does not REGRESS above the baseline; drive it DOWN at leisure (each
+/// recognised artifact lowers `LEAK_SCAN_BASELINE`), no churn to the clean `check-dev` tier.
+const LEAK_SCAN_BASELINE: usize = 927;
+
+#[test]
+#[ignore = "experimental leak-scan ratchet — sweeps tests/scripts under check-leak; run on demand"]
+fn oracle_leak_scan_ratchet() {
+    let dir = root().join("tests/scripts");
+    let mut total = 0usize;
+    for entry in std::fs::read_dir(&dir).expect("read tests/scripts") {
+        let path = entry.expect("dir entry").path();
+        if path.extension().and_then(|e| e.to_str()) != Some("loft") {
+            continue;
+        }
+        let out = Command::new(loft_bin())
+            .arg("--interpret")
+            .arg(&path)
+            .env("LOFT_NO_CACHE", "1")
+            .env("LOFT_OWN_ORACLE", "check-leak")
+            .output()
+            .expect("run loft check-leak");
+        let reds: BTreeSet<String> = String::from_utf8_lossy(&out.stderr)
+            .lines()
+            .filter(|l| l.starts_with("RED ") && l.contains(": leak "))
+            .map(str::to_string)
+            .collect();
+        total += reds.len();
+    }
+    assert!(
+        total <= LEAK_SCAN_BASELINE,
+        "leak-scan findings REGRESSED: {total} > baseline {LEAK_SCAN_BASELINE}. \
+         Update LEAK_SCAN_BASELINE only DOWNWARD (each transfer artifact recognised lowers it)."
+    );
+    if total < LEAK_SCAN_BASELINE {
+        eprintln!("leak-scan ratchet PROGRESS: {total} < {LEAK_SCAN_BASELINE} — lower LEAK_SCAN_BASELINE to {total}.");
+    }
+}

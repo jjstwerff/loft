@@ -643,21 +643,18 @@ fn collect_free_targets(body: &Value, free_ops: &[u32]) -> Vec<u16> {
 }
 
 /// The vars a function TRANSFERS OUT — so this frame does not free them, and their absence from the
-/// free set is NOT a leak (Check C, dev tier). A var is transferred iff it is returned, or consumed
-/// into a container (the element/source arg of `OpFinishRecord`/`OpAppendVector` (arg 1) or
-/// `OpCopyRecord` (arg 0)). Deliberately OVER-approximated (bias to EXCLUDE): missing a leak is safe
-/// (the runtime leak-check backstops); a missed transfer would cry wolf.
+/// free set is NOT a leak (Check C, dev tier). A var is transferred iff it is returned, consumed
+/// into a container (element/source arg of `OpFinishRecord`/`OpAppendVector` (arg 1) or
+/// `OpCopyRecord` (arg 0)), or captured into a record (arg 2 of `OpSetDbRef`). Bias to EXCLUDE
+/// (over-approximate transfers): missing a leak is safe (the runtime leak-check backstops).
 fn transferred_out(body: &Value, data: &Data) -> BTreeSet<u16> {
     let finish = data.def_nr("OpFinishRecord");
     let append = data.def_nr("OpAppendVector");
     let copy = data.def_nr("OpCopyRecord");
-    let set_dbref = data.def_nr("OpSetDbRef"); // capture into a record (closure/struct field)
+    let set_dbref = data.def_nr("OpSetDbRef");
     let mut s = BTreeSet::new();
     body.walk(&mut |x| match x {
         Value::Call(d, args) => {
-            // The consumed/captured arg: element/source for a container op, or the captured value
-            // (arg 2) of `OpSetDbRef(record, offset, v)` — v is moved into the record, whose cascade
-            // frees it (closure capture / field store), so this frame does not.
             let consumed_idx = if *d == finish || *d == append {
                 Some(1)
             } else if *d == copy {
@@ -673,15 +670,11 @@ fn transferred_out(body: &Value, data: &Data) -> BTreeSet<u16> {
                 s.insert(*v);
             }
         }
-        Value::Return(inner) => {
-            let mut rv = Vec::new();
-            inner.walk(&mut |y| {
-                if let Value::Var(v) = y {
-                    rv.push(*v);
-                }
-            });
-            s.extend(rv);
-        }
+        Value::Return(inner) => inner.walk(&mut |y| {
+            if let Value::Var(v) = y {
+                s.insert(*v);
+            }
+        }),
         _ => {}
     });
     s
@@ -698,13 +691,14 @@ fn under_free(
     func: &crate::variables::Function,
 ) -> Vec<u16> {
     // OWNS its store iff its post-codegen type dep is EMPTY (materialisation is baked in: a copied
-    // borrowed-source has an empty dep here — the dep is the ground truth codegen freed against,
-    // unlike the usage-blind flow-sensitive fact). Iterating the fixpoint's exit-state keeps it CLEAN
-    // (0 FP) but MISSES `OpDatabase` db-var backing stores (only owns-entry is `= null`, absent from
-    // the state). Checking ALL vars (`snapshot_names`) catches those — and a genuine dropped free —
-    // but over-approximates leaks (backing stores of returns, `par` materialise, retbufs) and needs
-    // comprehensive transfer tracking first. That is the promotion blocker (CHECK_C_UNDERFREE_DESIGN
-    // § promotion); until then Check C stays exit-state-scoped in the dev tier.
+    // borrowed-source has an empty dep here — the dep is the ground truth codegen freed against).
+    // SCOPED to the fixpoint's exit-state: this keeps it CLEAN (0 FP) but MISSES `OpDatabase` db-var
+    // backing stores (only owns-entry is `= null`, absent from the state). Checking ALL vars
+    // (`snapshot_names`) catches those AND a genuine dropped free, but over-approximates leaks — the
+    // transfer-tracking increment proved that ruling out every codegen transfer artifact (retbuf/
+    // param aliasing, the phantom `__retbuf`, `par` queue frees, work-refs, backing stores) is
+    // re-implementing the shipped free analysis (VH), not a bounded fix. See CHECK_C_UNDERFREE_DESIGN
+    // § promotion; until that lands, Check C is exit-state-scoped in the dev tier.
     exit_state
         .iter()
         .filter(|&(&v, &_f)| {
@@ -891,7 +885,16 @@ pub fn oracle(data: &Data) {
 /// it is NEVER on the default `check` path — the ratchet test (`tests/ownership_oracle.rs`) tracks
 /// the count down to zero, at which point these promote into `check`.
 pub fn oracle_free_checks(data: &Data) {
-    if std::env::var("LOFT_OWN_ORACLE").as_deref() != Ok("check-dev") {
+    // Two independent gated tiers, EACH with its own ratchet baseline — a check that RAISES the count
+    // gets its own flag (analysed at leisure), never a revert of the clean tier:
+    //  * `check-dev`  — the CLEAN free-checks (Check B + exit-state Check C). Ratchet baseline 0.
+    //  * `check-leak` — the EXPERIMENTAL all-vars under-free scan (needs comprehensive transfer
+    //    tracking; baseline high). Its findings are the codegen-transfer-artifact worklist.
+    let Ok(mode) = std::env::var("LOFT_OWN_ORACLE") else {
+        return;
+    };
+    let (dev, leak) = (mode == "check-dev", mode == "check-leak");
+    if !dev && !leak {
         return;
     }
     let free_ops = free_op_nrs(data);
@@ -904,10 +907,62 @@ pub fn oracle_free_checks(data: &Data) {
         if matches!(body.unspan(), Value::Null) {
             continue;
         }
-        let cfg = build(&body);
-        total_reds += run_free_checks(data.def(d_nr).name(), &body, &cfg, data, d_nr, &free_ops);
+        let name = data.def(d_nr).name();
+        total_reds += if leak {
+            run_leak_scan(name, &body, data, d_nr)
+        } else {
+            let cfg = build(&body);
+            run_free_checks(name, &body, &cfg, data, d_nr, &free_ops)
+        };
     }
-    eprintln!("OWN-CHECK-DEV-FREE: {total_reds} RED finding(s) (dev tier — ratcheting to 0)");
+    let tier = if leak { "LEAK (all-vars, VH worklist)" } else { "DEV-FREE (clean, ->0)" };
+    eprintln!("OWN-CHECK-{tier}: {total_reds} RED finding(s)");
+}
+
+/// EXPERIMENTAL all-vars under-free scan (flag `LOFT_OWN_ORACLE=check-leak`, its OWN ratchet
+/// baseline). An `Owned` (empty type dep) HEAP local, not a param, not freed, and not transferred
+/// out, leaks its store. Iterating ALL vars (`snapshot_names`) catches `OpDatabase` db-vars a
+/// fixpoint state misses (the true-positive) — but the "not transferred" side needs the shipped free
+/// analysis's whole transfer knowledge (retbuf/param aliasing, the phantom `__retbuf`, `par` queue
+/// frees, work-refs, backing stores) to be sound. It over-approximates leaks until then; kept behind
+/// this flag so its count is DRIVEN DOWN at leisure — each recognised transfer artifact lowers the
+/// baseline — WITHOUT churning the clean `check-dev` tier. `skip_free`/`caller_hidden_buf` are the
+/// shipped analysis's own "not-a-leak" flags; the transferred set is the closure through the dep.
+fn run_leak_scan(name: &str, body: &Value, data: &Data, d_nr: u32) -> usize {
+    if name.starts_with("n___lambda_") {
+        return 0; // closure frees are codegen'd on a different clock — not visible here
+    }
+    let func = &data.def(d_nr).variables;
+    let all_frees: Vec<u32> = ["OpFreeRef", "OpFreeText", "OpFreeRefIfDistinct"]
+        .iter()
+        .map(|n| data.def_nr(n))
+        .filter(|&d| d != u32::MAX)
+        .collect();
+    let freed: BTreeSet<u16> = collect_free_targets(body, &all_frees).into_iter().collect();
+    // Transferred = returns ∪ consumes ∪ captures, closed transitively through the type dep so a
+    // returned `buf["__vdb_1"]` carries its backing `__vdb_1` out.
+    let mut transferred: Vec<u16> = transferred_out(body, data).into_iter().collect();
+    let mut closed = BTreeSet::new();
+    while let Some(v) = transferred.pop() {
+        if closed.insert(v) {
+            transferred.extend(func.tp(v).depend().iter().copied());
+        }
+    }
+    let mut reds = 0;
+    for (_, v) in func.snapshot_names() {
+        if func.tp(v).heap_dep().is_some()
+            && func.tp(v).depend().is_empty()
+            && !func.is_argument(v)
+            && !func.skip_free(v)
+            && !func.is_caller_hidden_buf(v)
+            && !freed.contains(&v)
+            && !closed.contains(&v)
+        {
+            eprintln!("RED {name}: leak {} (v{v}) Owned heap, unfreed/untransferred", func.name(v));
+            reds += 1;
+        }
+    }
+    reds
 }
 
 /// DEV tier: the POST-codegen free-based checks — Check B (over-free) on user functions (now that
