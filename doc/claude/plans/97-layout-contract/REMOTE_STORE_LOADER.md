@@ -304,7 +304,23 @@ proves the payoff. A step lands only when its differential gate is green on both
 - **Prove-can-fail:** `[lo,hi]` with `lo>hi` → empty; a partly-covered range loads exactly the
   covered entries.
 
-### Phase 5 — wire the provider to #517 / the `fetch()` bridge
+### Phase 5 — wire the provider to #517 / the `fetch()` bridge — **HTTP (native) DONE 2026-07-07**
+- **Built (native/wasip2 HTTP):** `HttpRangeProvider` (`paged_reader.rs`) — a `PageProvider` that
+  GETs `Range: bytes=a-b` via `ureq` (size from a `Content-Range` `0-0` probe + `Content-Length`
+  fallback; a `200`/whole-file response falls back to skip-to-offset). A `PageSource` enum
+  {`Local`, `Http`} is chosen by the path scheme (`http(s)://` vs a file path), so the generic
+  `PagedReader` + the find/relocating-copy stay ONE code path — **no new traversal code, the provider
+  just swaps** (exactly as designed). `ureq` moved under the `remote-store` feature (zero-cost gate
+  verified: a lean build compiles none of it). `store_load_key(local, "http://…", key)` works.
+- **Verified interpret + native:** `store_load_key` over an `http://` URL against a minimal
+  `Range`-capable test server loads the key with the right value, bounded (`len == 1`), and
+  `store_verify == true` — the same sound working set as the local path
+  (`store_persist_loft.rs::store_load_key_over_http_range` + the `serve_ranges` server). The `200`
+  prove-can-fail path (server ignores `Range`) is handled (skip-to-offset).
+- **Remaining:** the `--html` JS `fetch()` bridge (browser target); the `soverijssel`-block route
+  capstone (waits on Phase 4 `store_load_range`); the layout-identity gate at bootstrap (3b.5).
+
+#### original design
 - **Build:** the `resolve` page provider = a `Range: bytes=<a>-<b>` GET — the #517 client under
   native/wasip2, the JS `fetch()` bridge under `--html`. No new traversal code; only the provider
   swaps.
