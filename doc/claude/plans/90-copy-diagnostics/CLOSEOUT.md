@@ -281,10 +281,23 @@ statement-`if`, materialise via `__vdb_1`/`__retbuf`). Both yield `len 0`; the d
 the surrounding `Value::Line` structure (multi-line inserts line markers) steering `block_result` down
 the two paths. The trailing-`Line` pop (`control.rs:522`) already fires; the residual is the empty-Insert
 fold + the leading line marker.
-**Build steps:** make an empty vector literal `[]` in a value block lower to an explicit empty-vector
-VALUE (not a folded-away empty `Insert`), so the arm carries a real value in both formattings and
-`block_result` picks one delivery. **Risk: HIGH** — touches empty-literal parsing × block-value ×
-match/if-arm delivery; broad blast radius for **no correctness gain** (both run correctly today).
+**Prototype attempted + reverted (2026-07-06) — the clean fix is deeper than type-threading.** Tried
+threading the vector result type into the block's value-tail (`parse_block:449` — extend the enum-tail
+hint to `Type::Vector`), so an empty `[]` arm is TYPED → materialises a real empty vector instead of
+folding to `Void`. It **worked in part**: both formattings now deliver a real empty vector (the
+multi-line's broken `return null` shape is gone), and the **full suite + POISON stayed green**. BUT it
+**introduced a match-arm-specific double `OpFreeRef`** (the empty-vector build's cleanup + the arm's
+materialise both free the backing store — a plain typed `fn e() -> vector { [] }` has 0 frees, so this
+is new, not pre-existing). POISON proves it idempotent (the free machinery nulls the ref), but a
+robustness fix that trades the fold fragility for a **double-free fragility** (a latent UAF if that
+nulling ever changes) is a net wash, and the IR still isn't byte-identical. Reverted. The clean fix
+must also resolve the arm-delivery/empty-vector-cleanup double-free and unify the two delivery paths
+(`jo_arm_copy` vs materialise) — deeper delivery-machinery work.
+**Original build sketch:** make an empty vector literal `[]` in a value block lower to an explicit
+empty-vector VALUE (not a folded-away empty `Insert`), so the arm carries a real value in both
+formattings and `block_result` picks one delivery. **Risk: HIGH** — touches empty-literal parsing ×
+block-value × match/if-arm delivery; broad blast radius for **no correctness gain** (both run
+correctly today).
 **Depends on:** W1, W2. **Exit:** both formattings produce identical IR; suite green.
 
 ### W9 — Drain bucket 2 (grow the auto-elision set)  ·  north-star · L incremental · FOLLOW-ON, not a close gate
