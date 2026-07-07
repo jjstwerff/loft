@@ -321,6 +321,18 @@ clean corpus); extending the 0-false-positive sweep to issues/leak/wrap/native; 
 lemma (4). The injected-fault true-positive beyond `LOFT_NO_A1B` (delete an `OpFreeRef`) is a
 regression guard — Check B is unit-proven but no toggle emits an unconditional free-of-borrowed.
 
+## Check C — under-free / leak detection (DESIGNED, not yet built — [`CHECK_C_UNDERFREE_DESIGN.md`](CHECK_C_UNDERFREE_DESIGN.md))
+
+Extends the oracle from the over-free class (Check A/B) to under-free. A gated prototype
+(`LOFT_OWN_UNDERFREE`) was built + MEASURED, then reverted; the numbers fixed the scope (design doc
+has them): the honest target is the **DEFINITE leak** (an `Owned` heap local freed on NO path, not
+transferred) — sound for that subclass, catching a *deleted* free (the 4.3 injected-fault
+true-positive Check A/B could not). It does NOT catch conditional/`Join` leaks (e.g.
+`LOFT_NO_JOIN_OWN`, whose free op is statically present but skipped at runtime) — that stays the
+RUNTIME leak-check's class (coexistence, both flag). Steps C.1–C.4 + the false-positive story (heap
+filter cuts 70→9-35/file; the residual is one class — temps consumed into a container — closed by the
+transfer-out set) are in the design doc.
+
 **Explicitly NOT here:** routing any shipped consumer (`scopes::get_free_vars`, `state/codegen.rs`,
 `generation/dispatch.rs`) to the new fact, and retiring the position-proxy / flow-insensitive-join.
 That is **P4 (VH)** — the self-referential analysis-and-rewrite cutover — taken only if the oracle's
