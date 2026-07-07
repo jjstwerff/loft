@@ -82,6 +82,57 @@ fn rpc_launch_break_eval_continue() {
     let _ = std::fs::remove_file(&path);
 }
 
+// @PLN98 P1 — `eval`/`setValue` must work in a frame that HOLDS a heap (vector) local. Before the
+// fix, a vector local's compiler backing (`__vdb_N`, rendered `main_vector<…>{…}`, not loft source)
+// was seeded into the reconstruct-eval prefix and poisoned the WHOLE parse, so EVERY expression —
+// even `2 + 2`, which uses no local — returned `value:null`, and `setValue` was "edit rejected".
+// The fix seeds only the locals the expression names, heap ones rendered live+unbounded.
+#[test]
+fn rpc_eval_and_set_in_a_vector_local_frame() {
+    let path = tmp_program(
+        "veclocal",
+        "fn main() {\n  v: vector<integer> = [10, 20, 30];\n  x = 5;\n  print(\"len={len(v)} x={x}\")\n}\n",
+    );
+    let file = json_path(&path);
+    let out = drive(&[
+        format!("{{\"id\":1,\"req\":\"launch\",\"file\":\"{file}\"}}"),
+        format!(
+            "{{\"id\":2,\"req\":\"setBreakpoints\",\"file\":\"{file}\",\"breakpoints\":[{{\"line\":4}}]}}"
+        ),
+        "{\"id\":3,\"req\":\"run\"}".to_string(),
+        // A literal that references NO local — used to return null merely because the frame held `v`.
+        "{\"id\":4,\"req\":\"eval\",\"expr\":\"2 + 2\"}".to_string(),
+        // Expressions that DO reference the vector local — live read, unbounded.
+        "{\"id\":5,\"req\":\"eval\",\"expr\":\"len(v)\"}".to_string(),
+        "{\"id\":6,\"req\":\"eval\",\"expr\":\"v[1] + x\"}".to_string(),
+        // setValue was "edit rejected" in a vector frame; now it edits the live run.
+        "{\"id\":7,\"req\":\"setValue\",\"target\":\"x\",\"value\":\"42\"}".to_string(),
+        "{\"id\":8,\"req\":\"continue\"}".to_string(),
+        "{\"id\":9,\"req\":\"disconnect\"}".to_string(),
+    ]);
+    assert!(
+        out.contains("\"id\":4,\"ok\":true,\"value\":4"),
+        "eval 2+2 == 4: {out}"
+    );
+    assert!(
+        out.contains("\"id\":5,\"ok\":true,\"value\":3"),
+        "eval len(v) == 3: {out}"
+    );
+    assert!(
+        out.contains("\"id\":6,\"ok\":true,\"value\":25"),
+        "eval v[1]+x == 25: {out}"
+    );
+    assert!(
+        out.contains("\"id\":7,\"ok\":true"),
+        "setValue x=42 accepted: {out}"
+    );
+    assert!(
+        out.contains("\"category\":\"stdout\",\"text\":\"len=3 x=42\""),
+        "continue prints the edited x: {out}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
 // A conditional breakpoint whose condition reads a struct field: break only on the
 // matching call, then eval a scalar field.
 #[test]

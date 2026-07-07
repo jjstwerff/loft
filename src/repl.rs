@@ -257,6 +257,29 @@ fn is_plain_ident(s: &str) -> bool {
         && s.chars().all(|c| c.is_alphanumeric() || c == '_')
 }
 
+/// The set of maximal identifier tokens (`[A-Za-z_][A-Za-z0-9_]*`) in `expr` — the names a debug
+/// eval expression could bind to a frame local (@PLN98 P1). Over-inclusive is harmless (an extra
+/// name matches no local); it must not MISS a referenced name (that would leave it unbound → a clean
+/// eval failure, never a wrong value). Field/method names after `.` are included too — they just do
+/// not match a local. Does not exclude keywords; a keyword never names a frame local.
+fn expr_idents(expr: &str) -> std::collections::HashSet<&str> {
+    let mut out = std::collections::HashSet::new();
+    let b = expr.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i].is_ascii_alphabetic() || b[i] == b'_' {
+            let s = i;
+            while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
+                i += 1;
+            }
+            out.insert(&expr[s..i]);
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
 /// True when `method` is a member a user can call as `recv.method(...)`: a plain
 /// identifier that is neither a compiler-internal (`__…`) nor an operator
 /// overload — operator methods register as `Op<Name>` (`Op` + an uppercase
@@ -2296,12 +2319,32 @@ impl ReplSession {
             return Some(v);
         }
         let prefix = {
-            let frame = self.paused.as_deref()?.paused_frame()?;
+            let state = self.paused.as_deref()?;
+            let frame = state.paused_frame()?;
+            // @PLN98 P1 — seed ONLY the locals the expression actually NAMES. Seeding every frame
+            // local (as before) let ONE local whose captured literal is not loft source poison the
+            // WHOLE reconstruct parse — the F1 bug: `2 + 2` returned null merely because the frame
+            // HELD a vector, because that vector's compiler backing `__vdb_1` renders the un-reparseable
+            // `main_vector<integer>{vector:[1,2,3]}`. Restricting to referenced identifiers means an
+            // unrelated heap/keyed local can never break an expression that does not use it.
+            let idents = expr_idents(expr);
             let mut p = String::new();
             for (name, lit) in &frame.locals {
+                if !idents.contains(name.as_str()) {
+                    continue;
+                }
                 p.push_str(name);
                 p.push_str(" = ");
-                p.push_str(lit);
+                // Seed a HEAP local from the LIVE store, UNBOUNDED (the render path-A
+                // `eval_frame_heap` trusts for a bare ident) rather than the captured BOUNDED display
+                // literal (`[1,…,8,...]`), whose truncation tokens do not reparse for a large vector.
+                // Scalars (heap read → None) fall back to the captured literal. A REFERENCED value
+                // whose unbounded render is still not reparseable (keyed collections) stays the
+                // live-frame eval follow-up (P1b) — but it no longer poisons unrelated expressions.
+                match state.eval_frame_heap(name, false, &self.parser.data) {
+                    Some(full) => p.push_str(&full),
+                    None => p.push_str(lit),
+                }
                 p.push_str(";\n");
             }
             p

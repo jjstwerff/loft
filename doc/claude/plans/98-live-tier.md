@@ -146,17 +146,25 @@ sites (and, for wasm, the interpreter's inclusion).
 
 ## The design, per axis
 
-### A1 — fix `eval`/`setValue` (F1): seed heap locals from the live store
+### A1 — fix `eval`/`setValue` (F1): seed only referenced locals, heap ones live+unbounded ✅ LANDED (first cut)
 
-Extend path A (`eval_frame_heap`) so the reconstruct path B binds heap locals **by live reference**
-(their paused-frame `DbRef`) instead of splicing a bounded text literal — i.e. build the throwaway eval
-`State`'s scope with the paused frame's actual store records for heap slots, scalars inline as today.
-`setValue` (`debug_set`) then rides the fixed eval. This is `@PLN16`'s named next increment; **no new
-surface**, interpreter-only, backend-independent.
+**Done (2026-07-07)** in `debug_eval_fmt` (`src/repl.rs`). Two changes, one seam:
+1. **Seed only the locals the expression NAMES** (`expr_idents`) — not every frame local. This was the
+   real root: seeding *all* locals let one whose literal isn't loft source poison the whole parse. The
+   actual poison was the vector's compiler backing `__vdb_N` (renders `main_vector<…>{…}`), so even
+   `2 + 2` (no local) returned null. Now an unrelated heap/keyed local can never break an expression.
+2. **Render a referenced heap local live + UNBOUNDED** via `eval_frame_heap` (path A's render) instead
+   of the bounded display literal, so a >8-element user vector round-trips too. Scalars fall back to
+   the captured literal.
 
-- **Acceptance:** in a heap-local frame, `eval "2+2"`→4, `eval "len(v)"`→length, `eval "v[0]"`→element,
-  `eval "s.f"`→field; `setValue x=42` edits; matches `--interpret` truth. Guard: a `tests/` script over
-  `{literal, scalar, vector len/index, struct field, keyed}` × `{live, dead}` × both backends.
+- **Verified:** in a vector-local frame `eval "2+2"`→4, `len(v)`→3, `v[0]`→1, `v[1]+x`→25; a 10-element
+  vector `v[9]`→100; struct `s.a+s.b`→16; `setValue x=42` accepted → `continue` prints the edited run.
+  Regression guard `tests/rpc.rs::rpc_eval_and_set_in_a_vector_local_frame`; 38+10 debugger tests green;
+  backend-independent (the REPL debugger always interprets).
+- **Residual → P1b:** a *referenced* keyed collection (`hash`/`sorted`/`index`) still renders
+  non-reparseable (the `<…>` catch-all) → its eval is a graceful `null` (no crash). Closing it needs
+  the true live-frame eval (compile the expression in the paused function's scope + `reenter_dbg` over
+  the frame), not a text seed — the invariant-honoring form.
 
 ### A2 — the browser live/debug tier (F2)
 
@@ -200,7 +208,8 @@ activation within a live-capable build.
 
 ## Phase order
 
-**P1 (A1) — fix the evaluator.** The invariant violation; a named `@PLN16` increment; unblocks the
-debugger on real code with no new surface; ships value alone. **P2 (A3) — the opt-in flag.** Cheap; the
-boundary every other piece plugs into. **P3 (A2) — the browser tier.** The largest piece (four blockers);
-lands the offline/browser consumer. Each phase has its own acceptance gate above.
+**P1 (A1) — fix the evaluator.** ✅ LANDED (first cut) — `eval`/`setValue` work in heap-local frames;
+the invariant violation for round-trippable values is closed; residual P1b (referenced keyed
+collections → the true live-frame eval). **P2 (A3) — the opt-in flag.** Cheap; the boundary every other
+piece plugs into. **P3 (A2) — the browser tier.** The largest piece (four blockers); lands the
+offline/browser consumer. Each phase has its own acceptance gate above.
