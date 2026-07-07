@@ -1552,6 +1552,17 @@ fn inject_drop_free() -> Option<&'static str> {
         .as_deref()
 }
 
+/// @PLN94 TEST-ONLY: the BORROWED var name whose scope-exit free `get_free_vars` is forced to emit
+/// (injecting a genuine OVER-free — an unconditional `OpFreeRef` of a dep-carrying view), the
+/// over-free-check (`run_over_free_check`) true-positive gate, or `None`. Cached like
+/// [`inject_drop_free`]; the production (unset) path pays nothing. Never set outside tests.
+fn inject_free_borrowed() -> Option<&'static str> {
+    use std::sync::OnceLock;
+    static V: OnceLock<Option<String>> = OnceLock::new();
+    V.get_or_init(|| std::env::var("LOFT_OWN_INJECT_FREE_BORROWED").ok())
+        .as_deref()
+}
+
 /// Scope / lifetime analysis pass over every function definition.
 ///
 /// # Panics
@@ -3376,8 +3387,14 @@ impl Scopes {
                 // the captured-Reference exemption in `check_ref_leaks`.
                 let captured_ref =
                     function.is_captured(v) && matches!(function.tp(v), Type::Reference(_, _));
-                let emit =
-                    (owns || is_work_ref) && !in_ret && !function.is_skip_free(v) && !captured_ref;
+                // @PLN94 TEST-ONLY over-free injection (never set in production): force the scope-exit
+                // free of a NAMED borrowed var (owns=false) so the over-free check has a firing
+                // true-positive. Subject to the same !in_ret/!skip_free/!captured guards as a real free.
+                let inject_free = inject_free_borrowed() == Some(function.name(v));
+                let emit = (owns || is_work_ref || inject_free)
+                    && !in_ret
+                    && !function.is_skip_free(v)
+                    && !captured_ref;
                 if scope_debug && !emit {
                     eprintln!(
                         "[scope_debug] NOT freeing '{}' (var={v}, scope={}, to_scope={to_scope}): \

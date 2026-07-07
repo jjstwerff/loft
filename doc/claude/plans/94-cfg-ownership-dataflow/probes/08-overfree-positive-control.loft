@@ -1,0 +1,25 @@
+// @PLN94 over-free positive control — the true-positive gate for `run_over_free_check` (Check B).
+// `bview` is a dep-carrying view of a copied store (`dep=["__vdb_1"]`); the copy `__vdb_1` is the
+// owner and is freed once via its own scope-exit `OpFreeRef`, so `get_free_vars` correctly does NOT
+// free `bview`. Passing it to `sumv` twice defeats borrow-elision so it survives as a real local.
+// With `LOFT_OWN_INJECT_FREE_BORROWED=bview`, the emit site is forced to insert an unconditional
+// `OpFreeRef(bview)` — an injected OVER-free (a double-free of `__vdb_1`) that the over-free check MUST
+// flag RED. The un-injected run frees `bview` nowhere and MUST stay clean. Mirrors the leak positive
+// control (07) and the LOFT_NO_A1B / LOFT_OWN_INJECT_DROP_FREE injections.
+struct Holder { data: vector<integer> }
+
+fn sumv(v: vector<integer>) -> integer {
+    total: integer = 0;
+    for x in v { total = total + x; }
+    total
+}
+
+fn peek(h: Holder) -> integer {
+    bview: vector<integer> = h.data;
+    sumv(bview) + sumv(bview)
+}
+
+fn main() {
+    box: Holder = Holder { data: [7, 8, 9] };
+    print("{peek(box)}\n");
+}

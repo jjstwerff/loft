@@ -22,15 +22,20 @@ structural-op mis-route, `= null` default), Phase 4 ✓ (`LOFT_OWN_ORACLE=check`
 the free-based Check B/C consistency layer), Phase 5 ✓ (`tests/ownership_oracle.rs` runs it on every
 `cargo test` + the proof skeleton in `formal/ownership.md`). **Check C under-free BUILT + PROMOTED**:
 the definite-leak scan runs on the default `check` path (927 → 0 behind its own `check-leak` ratchet,
-injected-free positive control fires). `check` now catches BOTH directions.
+injected-free positive control fires). **Check B over-free PROMOTED** too (`run_over_free_check`, 0 FP,
+own injected positive control). `check` now runs Check A (pre-codegen) + leak scan + over-free — BOTH
+directions, three independent gates, each with a firing true-positive.
 
 **Still open** (refinements, not the end-state): (1) ✅ the formal lemma (local transfer soundness) is
 now DISCHARGED in `formal/ownership.md` § "Machine-checkable soundness" (over-free property, given the
 O-\* rules; only a Coq/Lean rendering of the prose remains); (2) the leak-scan's next `check-leak`
-ratchet targets — conditional/`Join` leaks, adopted-owned non-`OpDatabase` stores, closures; (3)
-promote the `check-dev` over-free Check B + resolve its `n_choose` residual; (4) the self-contained
-A1b catch (waits on base resolution — A1b is caught by Check A meanwhile). Out of scope (declared):
-P4/VH codegen cutover + the perf fork (README Open q4).
+ratchet targets — conditional/`Join` leaks, adopted-owned non-`OpDatabase` stores, closures; (3) ✅ the
+`check-dev` over-free Check B (`run_over_free_check`) is now PROMOTED onto `check` — 0 FP across
+scripts+docs+lib+examples, injected-`LOFT_OWN_INJECT_FREE_BORROWED` positive control fires
+(`oracle_over_free_check_flags_an_injected_free`); `check-dev` retains only the exit-state Check C. The
+`n_choose` fact-disagree residual (Check A, the retbuf-materialisation case) remains the one open Check
+A item; (4) the self-contained A1b catch (waits on base resolution — A1b is caught by Check A
+meanwhile). Out of scope (declared): P4/VH codegen cutover + the perf fork (README Open q4).
 
 **How to run the oracle** (env `LOFT_OWN_ORACLE`, dumps to stderr; always set `LOFT_NO_CACHE=1` so
 `scopes::check` re-runs on the user file):
@@ -326,9 +331,11 @@ green:
   lemma = local transfer soundness). Intro note updated: the substrate replacement is BUILT.
 
 **Remaining tail (not blocking the H end-state):** the `n_choose` 4.2 residual (excluded from the
-clean corpus); extending the 0-false-positive sweep to issues/leak/wrap/native; and the open formal
-lemma (4). The injected-fault true-positive beyond `LOFT_NO_A1B` (delete an `OpFreeRef`) is a
-regression guard — Check B is unit-proven but no toggle emits an unconditional free-of-borrowed.
+clean corpus); extending the 0-false-positive sweep to issues/leak/wrap/native. The formal lemma (4) is
+DISCHARGED. Check B's integration true-positive is now wired: no natural toggle emits an unconditional
+free-of-borrowed, so `LOFT_OWN_INJECT_FREE_BORROWED=<var>` force-frees a named borrowed view
+(the over-free positive control 08) and `oracle_over_free_check_flags_an_injected_free` asserts the
+promoted check fires — symmetric to the leak scan's `LOFT_OWN_INJECT_DROP_FREE`.
 
 ## Check C — under-free / leak detection ✅ BUILT + PROMOTED ([`CHECK_C_UNDERFREE_DESIGN.md`](CHECK_C_UNDERFREE_DESIGN.md))
 
@@ -342,6 +349,14 @@ vacuous. KNOWN GAPS (ratchet targets, not FPs): conditional/`Join` leaks (runtim
 adopted-owned non-`OpDatabase` stores, closures. The journey below (the dev-tier/ratchet workflow, the
 C.0 blocker, the promotion attempt) is the historical record; the workflow is now a nudge in the
 engineering-rigor skill.
+
+**Over-free Check B PROMOTED too (2026-07-07):** `run_over_free_check` (Check B, the type-dep over-free
+consistency check — an unconditional `OpFreeRef` of a dep-carrying view) now runs on the DEFAULT
+`check` path beside the leak scan. It was already 0 FP across scripts+docs+lib+examples, so it needed
+no ratchet-down — it promoted straight to 0, guarded by `oracle_clean_on_correct_corpus`. Its
+integration true-positive is the `LOFT_OWN_INJECT_FREE_BORROWED` injection (positive control 08). The
+still-experimental exit-state Check C (`run_free_checks`) stays behind `check-dev` as a second opinion.
+So `check` now runs Check A + leak scan + over-free — both directions, three gates.
 
 ---
 

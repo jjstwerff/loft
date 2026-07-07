@@ -880,19 +880,22 @@ pub fn oracle(data: &Data) {
 
 /// The POST-codegen checks — run at the END of `scopes::check` (after `get_free_vars` has inserted
 /// the frees into `def.code`; the pre-codegen `oracle()` cannot see user-function frees). Modes:
-///  * `check` — PROMOTED: the DEFINITE-leak scan (`run_leak_scan`) — clean + sound, 0 FP across the
-///    corpora with a firing true-positive. Runs on the default path beside Check A (pre-codegen).
-///  * `check-leak` — the same leak scan under its own ratchet (`oracle_leak_scan_ratchet` sweep).
-///  * `check-dev` — the still-EXPERIMENTAL free-based Check B + exit-state Check C (consistency
-///    layer), gated with its own ratchet baseline; never on the default path.
+///  * `check` — PROMOTED: the DEFINITE-leak scan (`run_leak_scan`, under-free) AND the over-free
+///    Check B (`run_over_free_check`) — both clean + 0 FP across the corpora with a firing
+///    true-positive each. Run on the default path beside Check A (pre-codegen).
+///  * `check-leak` — the leak scan alone under its own ratchet (`oracle_leak_scan_ratchet` sweep).
+///  * `check-dev` — the still-EXPERIMENTAL exit-state Check C (under-free, `run_free_checks`),
+///    superseded on `check` by the leak scan but retained as a second opinion; never on the default
+///    path.
 ///
 /// A check that RAISES the count gets its own flag (analysed at leisure), never a revert of the clean
-/// tier — the "raise-it-→-flag-it" workflow that made `check-leak` land.
+/// tier — the "raise-it-→-flag-it" workflow that made `check-leak` land, then promoted Check B.
 pub fn oracle_free_checks(data: &Data) {
     let Ok(mode) = std::env::var("LOFT_OWN_ORACLE") else {
         return;
     };
     let leak = mode == "check" || mode == "check-leak"; // leak scan is promoted onto `check`
+    let over = mode == "check"; // over-free Check B is promoted onto `check` (beside the leak scan)
     let dev = mode == "check-dev";
     if !leak && !dev {
         return;
@@ -908,14 +911,24 @@ pub fn oracle_free_checks(data: &Data) {
             continue;
         }
         let name = data.def(d_nr).name();
-        total_reds += if leak {
-            run_leak_scan(name, &body, data, d_nr)
-        } else {
+        if leak {
+            total_reds += run_leak_scan(name, &body, data, d_nr);
+        }
+        if over {
+            total_reds += run_over_free_check(name, &body, data, d_nr, &free_ops);
+        }
+        if dev {
             let cfg = build(&body);
-            run_free_checks(name, &body, &cfg, data, d_nr, &free_ops)
-        };
+            total_reds += run_free_checks(name, &body, &cfg, data, d_nr);
+        }
     }
-    let tier = if dev { "DEV-FREE (clean, ->0)" } else { "LEAK (definite)" };
+    let tier = if dev {
+        "DEV-FREE (exit-state under-free)"
+    } else if over {
+        "LEAK+OVER (promoted)"
+    } else {
+        "LEAK (definite)"
+    };
     eprintln!("OWN-CHECK-{tier}: {total_reds} RED finding(s)");
 }
 
@@ -1018,16 +1031,20 @@ fn run_leak_scan(name: &str, body: &Value, data: &Data, d_nr: u32) -> usize {
 /// their frees are visible) + Check C (under-free/leak). Both key off the post-codegen TYPE DEP (the
 /// materialisation-aware ownership signal), so they need no fixpoint — they are a free-placement
 /// CONSISTENCY layer (does the emitted free match the dep), beside Check A's independent cross-check.
-fn run_free_checks(name: &str, body: &Value, cfg: &Cfg, data: &Data, d_nr: u32, free_ops: &[u32]) -> usize {
-    let (outb, _passes) = ownership_dataflow(data, d_nr, cfg);
-    let exit_state = &outb[cfg.exit];
+/// Check B (over-free), PROMOTED onto `LOFT_OWN_ORACLE=check` (runs beside the leak scan). A var freed
+/// by an unconditional `OpFreeRef` whose post-codegen type dep is NON-empty borrows a store owned
+/// elsewhere — freeing it is an over-free (double-free / UAF). The dep is codegen's ground truth
+/// (empty = owns, incl. a materialised copy); the flow-sensitive fact is usage-blind here. Excludes a
+/// self-dep work-ref `[v]` (@P302 ownership marker, not a borrow); a `??` null-coalesce temp
+/// (`__ncc_*`, whose present-arm/JOIN dep is a stale borrow after default-arm materialisation, @PLN25);
+/// and a freed PARAMETER (the retbuf-displacement reassignment — `get_free_vars` otherwise suppresses
+/// freeing caller-owned params — not a user over-free). 0 FP across scripts+docs+lib+examples
+/// (`oracle_clean_on_correct_corpus`); the true-positive is the injected `LOFT_OWN_INJECT_FREE_BORROWED`
+/// over-free (`oracle_over_free_check_flags_an_injected_free`). Pure type-dep — needs no CFG/dataflow.
+fn run_over_free_check(name: &str, body: &Value, data: &Data, d_nr: u32, free_ops: &[u32]) -> usize {
     let func = &data.def(d_nr).variables;
     let nm = |v: u16| func.name(v).to_string();
     let mut reds = 0;
-    // Check B (over-free) — a var freed by an unconditional `OpFreeRef` whose post-codegen type dep
-    // is NON-empty borrows a store owned elsewhere. The dep is codegen's ground truth (empty = owns,
-    // incl. a materialised copy); the flow-sensitive fact is usage-blind here. Exclude a self-dep
-    // work-ref `[v]` (@P302 ownership marker, not a borrow).
     let mut seen = BTreeSet::new();
     for v in collect_free_targets(body, free_ops) {
         if !seen.insert(v) {
@@ -1035,13 +1052,7 @@ fn run_free_checks(name: &str, body: &Value, cfg: &Cfg, data: &Data, d_nr: u32, 
         }
         let dep = func.tp(v).depend();
         let self_dep = dep.len() == 1 && dep[0] == v;
-        // A `??` null-coalesce temp (`__ncc_*`) keeps its present-arm/JOIN dep even after the
-        // default-arm materialisation makes it an owned copy the shipped code frees unconditionally
-        // (@PLN25) — its dep is a stale borrow, not a live one. Exclude it (a documented narrow gap).
         let ncc = func.name(v).starts_with("__ncc_");
-        // A freed PARAMETER is the retbuf-displacement reassignment (`get_free_vars` otherwise
-        // suppresses freeing params — they are caller-owned), not a user over-free. Its declared dep
-        // is a MAY-borrow; the displaced value freed here was owned.
         if func.tp(v).heap_dep().is_some()
             && !dep.is_empty()
             && !self_dep
@@ -1052,6 +1063,20 @@ fn run_free_checks(name: &str, body: &Value, cfg: &Cfg, data: &Data, d_nr: u32, 
             reds += 1;
         }
     }
+    reds
+}
+
+/// The DEV-tier (`check-dev`) residual: the still-experimental exit-state Check C (under-free), kept as
+/// an independent second opinion. On the default `check` path the promoted `run_leak_scan` supersedes
+/// it (that scan iterates ALL vars and recognises `OpDatabase`-minted stores a fixpoint exit-state
+/// misses); this exit-state-scoped variant stays clean but narrower. Check B (over-free) was PROMOTED
+/// out of here — see `run_over_free_check`.
+fn run_free_checks(name: &str, body: &Value, cfg: &Cfg, data: &Data, d_nr: u32) -> usize {
+    let (outb, _passes) = ownership_dataflow(data, d_nr, cfg);
+    let exit_state = &outb[cfg.exit];
+    let func = &data.def(d_nr).variables;
+    let nm = |v: u16| func.name(v).to_string();
+    let mut reds = 0;
     // Check C skips CLOSURE bodies (`n___lambda_*`): their frees are inserted at closure-compile
     // time, not into `def.code` here, so their free set reads empty (a documented coverage gap, not
     // unsoundness — the runtime leak-check still covers closures).

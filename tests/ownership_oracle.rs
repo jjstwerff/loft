@@ -212,13 +212,12 @@ fn oracle_clean_on_generated_fuzz_corpus() {
     );
 }
 
-/// The DEV-tier false-positive RATCHET (C.0). The post-codegen free-based checks (Check B on user
-/// functions + Check C under-free) are NOT clean yet — they are bounded by the fact's precision
-/// (a materialised copy reads `Borrowed`, not `Owned`), so they live behind `LOFT_OWN_ORACLE=check-dev`
-/// and are NEVER on the default `check` path. This test counts their findings over `tests/scripts`
-/// and asserts the total does not EXCEED the recorded baseline — a one-way ratchet: every fact/
-/// transfer-set improvement LOWERS `DEV_FP_BASELINE`, and a regression fails. When it reaches 0 the
-/// dev checks promote into `check` and this flips to `== 0`. Ignored by default (sweeps the suite).
+/// The DEV-tier false-positive RATCHET (C.0). Check B (over-free) was PROMOTED onto `check` (see
+/// `oracle_over_free_check_flags_an_injected_free`); `check-dev` now runs only the still-experimental
+/// exit-state Check C (under-free), superseded on `check` by the promoted leak scan but kept as a
+/// second opinion. This test counts its findings over `tests/scripts` and asserts the total does not
+/// EXCEED the recorded baseline — a one-way ratchet: every fact/transfer-set improvement LOWERS
+/// `DEV_FP_BASELINE`, and a regression fails. Ignored by default (sweeps the suite).
 ///
 /// The work this measures is making the ownership fact materialisation-aware (see
 /// `CHECK_C_UNDERFREE_DESIGN.md` § C.0 and the `n_choose` residual).
@@ -339,5 +338,42 @@ fn oracle_leak_scan_flags_an_injected_leak() {
     assert!(
         injected.iter().any(|r| r.contains("__vdb_1")),
         "check-leak FAILED to flag the injected __vdb_1 leak (vacuous?): {injected:?}"
+    );
+}
+
+/// The over-free TRUE-POSITIVE gate (on the PROMOTED default `check` path): proving the over-free
+/// check (`run_over_free_check`, Check B) is not vacuous. A positive-control fixture binds a
+/// dep-carrying view `bview` of a copied store; the copy owns + frees the store, so `get_free_vars`
+/// correctly does NOT free `bview`. `LOFT_OWN_INJECT_FREE_BORROWED=bview` forces an unconditional
+/// `OpFreeRef(bview)` (a genuine over-free / double-free); the check MUST flag `free-of-borrowed bview`
+/// under `check`, and the un-injected run MUST be clean. Symmetric to the leak-scan injection.
+#[test]
+fn oracle_over_free_check_flags_an_injected_free() {
+    let ctrl = "doc/claude/plans/94-cfg-ownership-dataflow/probes/08-overfree-positive-control.loft";
+    let reds = |env: &[(&str, &str)]| -> Vec<String> {
+        let mut cmd = Command::new(loft_bin());
+        cmd.arg("--interpret")
+            .arg(root().join(ctrl))
+            .env("LOFT_NO_CACHE", "1")
+            .env("LOFT_OWN_ORACLE", "check"); // promoted: the over-free check runs on the default path
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        let out = cmd.output().expect("run loft check");
+        String::from_utf8_lossy(&out.stderr)
+            .lines()
+            .filter(|l| l.starts_with("RED ") && l.contains("free-of-borrowed") && l.contains("bview"))
+            .map(str::to_string)
+            .collect()
+    };
+    assert!(
+        reds(&[]).is_empty(),
+        "the over-free check cried wolf on the un-injected positive control: {:?}",
+        reds(&[])
+    );
+    let injected = reds(&[("LOFT_OWN_INJECT_FREE_BORROWED", "bview")]);
+    assert!(
+        injected.iter().any(|r| r.contains("bview")),
+        "the over-free check FAILED to flag the injected bview over-free (vacuous?): {injected:?}"
     );
 }

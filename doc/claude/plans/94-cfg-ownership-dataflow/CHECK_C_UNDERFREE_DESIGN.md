@@ -5,6 +5,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLN94 Check C — under-free / leak detection (design, measured before committing)
 
+> **STATUS (2026-07-07):** the definite-leak scan (`run_leak_scan`) is PROMOTED onto `check`; the
+> over-free **Check B** (`run_over_free_check`) is ALSO promoted (its true-positive is
+> `LOFT_OWN_INJECT_FREE_BORROWED`). `check-dev` now retains only the exit-state Check C as a second
+> opinion. The "promotion waits" verdicts below are the historical record of the journey, superseded
+> by the promotions — kept for the measurement trail.
+
 Design Protocol 1: a throwaway gated prototype (`LOFT_OWN_UNDERFREE`) was built and **measured
 against real corpora BEFORE the real design** — store-lifetime is an exact-invariant domain, so the
 numbers, not intuition, fix the scope. The prototype has been reverted; its measurements are the
