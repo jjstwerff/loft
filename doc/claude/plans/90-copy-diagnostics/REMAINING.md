@@ -10,6 +10,19 @@ work and its neighbours. **P0 = genuine correctness/soundness issues that must c
 a wide release. P1 = important optimisations (real wins, but correct-as-is) — lower
 priority, done after the P0 issues.** Each item points at its canonical home.
 
+> **Concrete build steps (verified 2026-07-06, decomposed into landable increments W1–W9):
+> [CLOSEOUT.md](CLOSEOUT.md).** This file is the prioritised *view*; CLOSEOUT is the *how*.
+
+> **SHIPPED 2026-07-06 (PR #514, squash `46ecd3dc`): phase B — the last-use MOVE-elision, DEFAULT
+> ON.** The store-transfer half of the north-star (build a dead-after owned source directly into its
+> destination instead of copy-then-free) now runs for every proven-safe shape (Record; Construct
+> field-append / fresh construction / `a.field=base`; flat + nested), `LOFT_NO_MOVE_ELIDE` opts out.
+> That is the *elimination* direction. What remains below is the **borrow direction** (return an
+> alias, don't copy OUT — A1b/A2, the actual soundness blocker), the **user-facing lint** (the
+> plan's namesake — Phase 2, only the classification scaffold is built), and **Phase 3**
+> (explicit-copy syntax). The plan is NOT done: **@PLN90 stays OPEN** — its P0 A1b native
+> borrow-return UAF is the wide-release blocker and is tracked only here.
+
 ## P0 — genuine issues (must close before release)
 
 ### 1. Heap-ownership soundness — loft's stated #1 weakness (wide-release blocker)
@@ -17,20 +30,20 @@ priority, done after the P0 issues.** Each item points at its canonical home.
 return-bind-ownership class must be **closed, not merely quiet** (reopened 2026-06-21 after a
 dogfood UAF). Three concrete open pieces:
 
-- **A1b — temporary-subject borrow UAF.** A borrowed return (the match-arm `{ items }` now,
-  and the struct-field `b.rows` if A2 lands) whose **subject is freed before the result's
-  last use** is a use-after-free. `--native` already carries it latently; A1 (`f70a729d`)
-  made interp consistent but did **not** close the hole. Fix: the caller materialises a copy
-  at a call site where the subject does not out-live the result — the `deps`/lifetime
-  decision. Design: [borrow-return/DESIGN.md](borrow-return/DESIGN.md) (slice 2 / failure
-  paths F1–F2). **Effort: M.**
-- **#462 — residual native record leak.** A native-only `MonsterDef×216` *record* leak in
-  the borrowed-view shape (Cluster-A/C borrow-over-free family). Reproduces `--native`,
-  interp clean. [STABILITY_ROADMAP.md `462-leak`](../../STABILITY_ROADMAP.md) ·
-  [cluster-462](../85-store-lifetime-retirement/cluster-462-slot-reuse-uaf.md). **Gate-1
-  note:** same borrow-over-free family as A1b (a borrowed view materialised/freed wrong on
-  native) — **likely subsumed by the A1b buffer fix**; re-check `M-462repro` after A1b lands
-  before treating it as separate. **Effort: S–M.**
+- ~~**A1b — temporary-subject borrow UAF.**~~ **FIXED (2026-07-06, default ON, `LOFT_NO_A1B`
+  opts out).** A `-> vector` fn returning a borrow of a temporary subject it constructs
+  (`h() { g(Filled{..}) }`) dangled once the temp was freed at scope exit. Root: the
+  `one_buffer_chain` collapsed the subject store, `g`'s buffer, and `__retbuf` onto ONE work-ref
+  (subject `Bind{substitute}`'d into the buffer, buffer `Rename`'d to `__retbuf`). Fix: a
+  coordinated verdict change in `classify_ret_promotion` — skip the subject ref (distinct local,
+  freed after the copy), materialise the buffer ref into a separate `__retbuf` — three distinct
+  stores. Matrix green both backends under `LOFT_POISON`; exposure sweep clean. Guard
+  `tests/scripts/85-temp-subject-borrow-return-uaf.loft`. [borrow-return/DESIGN.md § A1b gate-5](borrow-return/DESIGN.md).
+- ~~**#462 — residual native record leak.**~~ **CLOSED** (verified 2026-07-06). The GitHub
+  issue is closed and the compact repros run clean on both backends — subsumed by the @PLN85
+  `store/adopt-free` siblings (#306/#464/#494/#504), *not* by A1b (a different representation:
+  record vs vector-buffer). No open issue remains; re-open only if a crawler-scale record leak
+  resurfaces (no in-repo corpus tests it now). Off the P0 list.
 - **Analysis completeness (`O-Complete`).** The `deps`/`ownership_of` analysis is not proven
   **total** — and "an incomplete fact is not a compile error, it is a miscompile or a leak"
   ([OWNERSHIP_MODEL.md § Internal and invisible](../../OWNERSHIP_MODEL.md)). The over-free
@@ -38,13 +51,13 @@ dogfood UAF). Three concrete open pieces:
   fixed) but soundness is not yet *closed*. This is the umbrella the two items above live
   under. **Effort: L (ongoing).**
 
-### 2. `par`-dispatch over `vector<fn-ref>` — **hang FIXED; native E0308 residual**
-Gate-1 re-check: the interpreter **hang is GONE** — the `p4dA2` test (formerly `timeout 15s
-exit 143`) now completes in 0.04s and is **un-ignored**. The genuine residual is **native
-only**: par-fnref result delivery emits a bare `DbRef` where `(u32, DbRef)` is expected
-(`error[E0308]`). Target (to determine before building): the native par-dispatch must
-deliver the `(index, value)` tuple the reducer expects, not the bare value. **Effort: S–M
-(native codegen).**
+### 2. ~~`par`-dispatch over `vector<fn-ref>`~~ — **FIXED (2026-07-06, @PLN90 W6)**
+The interpreter hang was already gone; the remaining native E0308 (par-fnref delivery emitting a
+bare `DbRef` where `(u32, DbRef)` is expected) is **fixed**: `tuple_arg_prep`
+(`src/generation/ops/parallel.rs`) gained a `Type::Function` arm reading the `i32` fn-index at
+offset 0 and pairing it with a NULL closure. Refinement found while fixing: **`par` compiles its
+worker to native under *both* backends**, so this blocked the interpret par-path too, not native
+only. Guard: `tests/scripts/507-par-vector-fnref.loft` (both backends). **Done.**
 
 ### 3. ~~`&` write-back from a call RHS~~ — **RESOLVED** (`@PLN87 #1`)
 Gate-1 re-check: `o = mk()` (call RHS) **works on both backends** (`check()` writes back 9);
@@ -67,10 +80,13 @@ improvement (moved to P1 below), not a P0 blocker. **Effort: S–M.**
 These eliminate copies that are *correct but wasteful*; the north-star is the compiler
 automatically not copying ([COPY_DIAGNOSTICS.md § North-star](../../COPY_DIAGNOSTICS.md)).
 
-- **A2 — struct-field `b.rows` copy→alias.** `f(b) { b.rows }` still *copies* into `__retbuf`
-  via `copy_borrow_tail_into_retbuf`; make it return the alias like the (A1-fixed) match arm.
-  Couples with A1b (a borrow needs the temp-subject guard). [borrow-return/DESIGN.md](borrow-return/DESIGN.md)
-  slice A2. **Effort: M.**
+- ~~**A2 — struct-field `b.rows` copy→alias.**~~ **RESOLVED — WON'T DO (2026-07-06).** Three
+  matrix-guarded prototypes established that A2 is **invalid**: a struct-field return **must COPY**
+  per the decided value-semantics contract (`tests/scripts/85-store-lifetime-field-read-copy.loft`,
+  the #415 guard: *"binding or returning a heap vector FIELD must COPY (establish a new owner)"*;
+  C86: *"#415 is the SEMANTIC not a stopgap"*). Aliasing `f(b){ b.v }` violates value semantics (a
+  later `b.v += …` would change the result). The copy is FORCED, not avoidable; the current
+  behaviour is correct. W3 (drop the buffer) is moot. [CLOSEOUT.md § W2](CLOSEOUT.md).
 - **The user-facing copy lint.** Indicate every **unbound** structure copy — the copy's
   source is a still-live pre-existing structure that was *duplicated* (**Avoidable**: warn,
   with the `&`/restructure hint — the worklist; **Forced**: informational). Stay silent only
@@ -78,10 +94,13 @@ automatically not copying ([COPY_DIAGNOSTICS.md § North-star](../../COPY_DIAGNO
   (**Implicit**). **PREREQUISITE — the source-survival split:** today `construct_copy` /
   `record_copy` are blanket-classified `Implicit`, so a construction/slot-set that duplicates a
   *live* source is wrongly silenced (it should be Avoidable/Forced). Land
-  [unbound-copy-lint.md](unbound-copy-lint.md) (key the split on source survival, gated,
-  suite byte-identical) BEFORE wiring the emission. The classification scaffold is built
-  (`VerdictRow.class`, `MAT-WORKLIST`); the survival split and the lint emission are not.
-  [COPY_DIAGNOSTICS.md § bound vs unbound](../../COPY_DIAGNOSTICS.md). **Effort: M.**
+  [unbound-copy-lint.md](unbound-copy-lint.md). **Update (verified 2026-07-06):** the survival
+  split IS built — `survival_class` (`src/use_analysis.rs:855`) keys Implicit/Avoidable/Forced on
+  source survival, and the user-facing report `report_copies` (`--report-copies`, #510) ships,
+  both gated on `report_copies_enabled()`. What remains is only the **enforced** channel: route
+  Avoidable rows through the existing `Level::Warning` diagnostics path (`data.rs` `diags.add_at`)
+  as a default lint, and resolve `VerdictRow.loc` to real spans. Steps: CLOSEOUT W5.
+  [COPY_DIAGNOSTICS.md § bound vs unbound](../../COPY_DIAGNOSTICS.md). **Effort: S–M.**
 - **Drain bucket 2 (grow the auto-elision set).** Extend the `Borrow`→`ElidePlan` engine to
   more avoidable copies (var-buffer conservative cases the analysis can't yet prove,
   construction where the source provably out-lives a non-escaping record). Each avoidable row

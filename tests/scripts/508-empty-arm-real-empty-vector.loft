@@ -1,0 +1,23 @@
+// @PLN90 W8 regression: an empty `[]` match/if arm must materialise a REAL empty vector
+// (usable downstream — iterable, appendable), not fold to a null/void that only happens to
+// read len 0. Both single-line and multi-line formattings must behave identically.
+enum Cell { Empty, Filled { items: vector<integer> } }
+fn g1(e: Cell) -> vector<integer> { match e { Filled { items } => { items }, _ => { [] } } }
+fn g2(e: Cell) -> vector<integer> {
+    match e {
+        Filled { items } => { items },
+        _ => {
+            []
+        }
+    }
+}
+fn use_vec(v: vector<integer>) -> integer { s = 0; for x in v { s += x; } s + len(v) }
+fn main() {
+  a = g1(Empty); b = g2(Empty);
+  assert(len(a) == 0 && len(b) == 0, "empty len 0");
+  // a real empty vector is usable downstream (a null would misbehave)
+  assert(use_vec(g1(Empty)) == 0 && use_vec(g2(Empty)) == 0, "usable empty");
+  c = g1(Filled{items:[1,2,3]}); d = g2(Filled{items:[4,5]});
+  assert(len(c) == 3 && len(d) == 2, "filled arm");
+  print("pln90-w8 ok\n");
+}

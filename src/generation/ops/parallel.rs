@@ -172,6 +172,19 @@ fn tuple_arg_prep(ctx: &EmitCtx<'_, '_>, fn_d_nr: u32, elem_size: i32) -> (Strin
         );
         return (prep, "_p");
     }
+    // A fn-ref worker parameter (`fn(f: fn(integer) -> integer)` over a
+    // `vector<fn-ref>`): the native fn-ref value is a `(u32, DbRef)` tuple
+    // (fn-index, closure), but the queue hands the closure the element `DbRef`.
+    // Vector-stored fn-refs are non-capturing — only the `i32` fn-index is
+    // stored (offset 0) — so read it, widen to `u32`, and pair with a NULL
+    // closure.  Mirrors the working for-loop unpack
+    // (`tests/generated/issues_p4d_a2_vector_fn_ref_for_loop.rs`).
+    if matches!(elem_attr.typedef, Type::Function(_, _, _)) {
+        let prep = "let _ts = unsafe { &*cell.get() }.store(&elm); \
+                    let _p = (_ts.get_i32_raw(elm.rec, elm.pos) as u32, DbRef::NULL); "
+            .to_string();
+        return (prep, "_p");
+    }
     // A by-value scalar worker parameter (e.g. `fn(x: integer)` over a
     // `vector<integer>` / range): the queue hands the closure a `DbRef` into
     // the element record, but the worker wants the value.  Read it out — the

@@ -220,6 +220,158 @@ machinery, the build is gated and validated on BOTH the proven matrix (named / t
 value + length + leak, `LOFT_POISON`) **and** the full suite (one_buffer_chain is exercised
 across crawler/moros) before landing — not a rushed change.
 
+## A1b — gate-2: the collapse localized to the VERDICT level (2026-07-06)
+
+Instrumented `classify_ret_promotion` (log-only, both backends, reverted after) — the store
+collapse is now pinned to the exact promotion verdicts, and the earlier "suppress the Rename"
+one-guard hypothesis is **falsified as insufficient**:
+
+- **cell-escape-temp (UAF)** — `n_h` has **TWO** work-refs. `LOFT_TRACE_RR`:
+  - `__ref_1` → `Rename { buf_attr: 1 }` — promoted to `__retbuf` (becomes g's return buffer).
+  - `__ref_2` → `Bind { buf_var: 6, substitute: true }` — the temp `Filled` **subject** store,
+    `substitute_work_ref`'d into `buf_var 6` (= `__ref_1` = `__retbuf`). **That substitution IS
+    the collapse:** subject and return buffer become one store, so g's aliased delivery
+    (`_mv_items_1 = OpGetField(e,4)`, a PutRef) makes `__retbuf` a borrow of the subject, and the
+    caller's materialise `OpDatabase(__retbuf)` frees the source.
+- **cell-escape (safe)** — `n_h` has **ONE** work-ref (`__ref_1` → MergeAttr→Rename); the subject
+  is param `c` (not a work-ref), so there is no second ref to collapse. This is the boundary: the
+  UAF axis is **"the borrowed subject is a temporary the callee-fn itself constructs"** (→ a
+  subject work-ref that gets `Bind{substitute}`), not merely "a borrowed return."
+- **What the callee signature does NOT tell you:** `g.returned()` is `Vector(Ref, Deps{[1]})` —
+  the dep names attr **1** (the hidden buffer), NOT attr 0 (`e`). `filter_hidden` strips the
+  `e`-borrow from the public signature. The "buffer borrows a visible param" fact lives only in
+  g's BODY (its block-level `["…","e"]` deps), so a caller-side check must read g's body, not its
+  `returned()`. And at classify time the subject is **not yet** built into the work-ref
+  (`Object`/`Construct` still high-level) — so the collapse is invisible to an `arg-yields-v` test
+  at `classify_ret_promotion`; it is realized later, by the `Bind{substitute}` apply.
+
+**Why one guard is not enough (the target needs THREE distinct stores).** The proven-clean FIXED
+source uses `c` (subject) · `__ref_1` (scratch buffer, receives g's borrow) · `out`=`__retbuf`
+(owned copy). Merely suppressing `__ref_1`'s Rename still leaves g aliasing into a shared buffer;
+merely un-substituting `__ref_2` still returns a borrow of the freed subject. The fix must, for the
+"return borrows a temp subject the fn constructs" shape:
+  1. keep the subject work-ref (`__ref_2`) as its **own** store (no `substitute` into the buffer),
+  2. keep g's return buffer (`__ref_1`) as a **scratch** (do not Rename it to `__retbuf`),
+  3. allocate a **separate** owned `__retbuf` and **materialise** the borrow into it
+     (`OpClearVector; OpAppendVector`) at the return, **then** free the subject.
+This is DESIGN slice-1 (callee alias ABI) + slice-2 (caller materialise) **coupled** — it is a
+restructuring of the promotion ladder, gated on `LOFT_JOIN_OWN`, validated on the named/temp/escape
+matrix (value + length + leak, `LOFT_POISON`, both backends) AND the full suite before landing. It
+is the wide-release blocker and the largest remaining W1 build; localization (this section) is done,
+the emission restructure is next.
+
+## A1b — gate-3: the emission is a 3-store SYNTHESIS, not a reused copy path (2026-07-06)
+
+Traced the delivery selectors. The vector-return path `classify_vector_delivery`
+(`control.rs:1043`) already has a materialise leg — `Delivery::CopyBorrow` →
+`copy_borrow_tail_into_retbuf` (`:5388`) — but it fires **only for a borrow of a visible ARG**
+(`tail_borrows_arg` / `tail_is_struct_field_read` / whole-arg), never for a borrow of a **local**.
+The Reference path has the local case (`return_views_local` #306 → `RefDelivery::MaterializeView`);
+the **vector path is missing the local analog** — so A1b's temp-subject borrow falls through to
+`Delivery::Rename` (the collapse). That is the precise gap.
+
+But routing A1b to the existing `copy_borrow_tail_into_retbuf` does **not** work: that emitter
+appends the tail value DIRECTLY into `buf_var` (`{clear(buf); append(buf, <orig>); buf}`) and its
+contract is that `<orig>` is a simple **borrow expression** that "never owns its store and never
+aliases the hidden buffer." A1b's tail is a **buffer-ABI CALL** `g(temp, buf)` — `g` writes its
+borrow INTO `buf`, so `append(buf, g(temp, buf))` appends `buf` to itself. The call needs its **own
+scratch buffer** first. So A1b is a strictly larger synthesis than A2 (which is a field/arg tail):
+
+**Target emission (3 stores, mirrors cell-escape-temp-FIXED):**
+```
+__scr := fresh scratch vector buffer
+__scr  = g(temp, __scr)          // g runs into the SCRATCH, __scr = borrow of temp.items
+OpClearVector(__retbuf)          // __retbuf is a SEPARATE owned store
+OpAppendVector(__retbuf, __scr)  // copy the borrow into __retbuf while temp is live
+OpFreeRef(temp) ; OpFreeRef(__scr)   // free subject + scratch AFTER the copy
+return __retbuf
+```
+
+**The build (the remaining W1 work), concretely:**
+1. Detection: a new selector case (in `classify_vector_delivery`, or a pre-`ref_return` rewrite) —
+   the tail is `Call(g, args)`, `g` returns a borrow of a VISIBLE param (read `g`'s BODY block-deps,
+   unfiltered — the signature strips it), and that param's arg is an inline **temporary** (a
+   `Construct`/`Object`, not a `Var` to a param/longer-lived local). Mirror `return_views_local` but
+   for the vector tail, recovering the borrow through the callee body.
+2. Emission: a new dispatch path that mints the scratch buffer, redirects `g`'s hidden buffer arg to
+   the scratch, and emits the clear+append into a distinct `__retbuf`, freeing the temp + scratch
+   after. This is where the `Bind{substitute}` collapse is *prevented* (the subject work-ref keeps
+   its own store) and the `Rename` of `g`'s buffer to `__retbuf` is replaced by the materialise.
+3. Gate `LOFT_JOIN_OWN`; matrix (named/temp/escape × value+len+leak × POISON × both backends);
+   full suite; @PLN89 oracle; guard `tests/scripts/85-temp-subject-borrow-return-uaf.loft`.
+
+This is the wide-release blocker. Gates 1–3 (this + the two sections above) are the completed
+localization + build spec; step 1–3 above is the emission slice — a focused synthesis on the
+#1-weakness machinery, validated against the matrix, not a rushed change.
+
+## A1b — gate-4: the collapse is UPSTREAM of delivery (2026-07-06, attempted + reverted)
+
+Built and tested a gated delivery-level fix (`LOFT_A1B`): a `tail_call_borrows_temp_subject`
+predicate (visible heap-param arg that is NOT a bare `Var` → an inline temporary; robust across both
+parse passes) routing the return to `Delivery::CopyBorrow` (materialise into `__retbuf`) instead of
+`Rename`. **The predicate fired correctly on exactly `cell-escape-temp` (both passes), but the UAF
+persisted** — and the emitted IR shows why, decisively:
+
+```
+{#borrow_tail_copy_104:vector["__ref_1"]
+  OpClearVector(__ref_1);
+  OpAppendVector(__ref_1, n_g({#Object:ref(Filled)["__ref_1"]   // <-- Filled built INTO __ref_1
+                                 OpDatabase(__ref_1, 67);        //     (h's __retbuf!)
+                                 OpAppendVector(GetField(__ref_1,4), inner); __ref_1
+                               }, __ref_2), 65);                 // g's buffer = __ref_2
+  OpFreeRef(__ref_2); return __ref_1;
+```
+
+The subject `Object` is constructed with **`__ref_1` as its store — and `__ref_1` IS h's
+`__retbuf`** (`n_h(seed, __ref_1)`, block `["__retbuf"]`). So the `Filled` subject is built directly
+in the caller's return buffer; the append destination and the subject are the **same store** before
+`block_result` ever runs. This collapse is baked in **upstream**, during argument/inline-construct
+lowering (the inline construct was allocated the fn's `__retbuf` work-ref as its store) — so **no
+delivery-level route can fix it**. The gated attempt was reverted (tree clean).
+
+**The real chokepoint (newly localized).** The fix must run where the inline subject construct is
+assigned its store: a heap construct passed as an argument to a call that **borrows** it must NOT be
+allocated the fn's `__retbuf` work-ref — it needs a **distinct** store, so the three roles (subject /
+scratch buffer / owned `__retbuf`) stay separate. Search target: the argument/object lowering that
+picks `__ref_1` for `Filled{..}` as a call arg (the work-ref allocation for inline constructs in
+`parser/objects.rs` / the call-arg lifting), reusing the buffer var. The delivery-level materialise
+(gate-3 plan) is then correct **once the subject has its own store** — the two compose. Alternatively
+(b) allocate a fresh owned `__retbuf` internally and return it instead of the caller's buffer (an ABI
+change). Option (a) is narrower and preferred.
+
+**Net:** four gates of localization now pin the fix to the construct-store allocation, with the
+delivery materialise as the second half. The predicate + gate scaffolding is validated and cheap to
+reconstruct; the remaining build is the upstream store-allocation fix.
+
+## A1b — gate-5: FIXED (2026-07-06) — the coordinated promotion-verdict change
+
+The collapse is the two promotion verdicts merging three roles onto one work-ref: the SUBJECT ref
+(`__ref_2`) takes `Bind{substitute:true}` (merged into the buffer) *because* the site value borrows
+it (`site_adopts_v`), and the BUFFER/site-value ref (`__ref_1`) takes `Rename` (becomes `__retbuf`).
+The fix overrides **both**, in `classify_ret_promotion`, for the temp-subject shape (detected by
+`tail_call_borrows_temp_subject`: the tail is a buffer-ABI vector call whose visible heap-param arg
+is an inline construct — NOT a bare `Var` — robust across both parse passes):
+
+- **Subject ref** → `SkipInnerRef` (override `site_adopts_v`): keep it a **distinct local**, freed
+  after the copy — it is COPIED, not aliased, into the return.
+- **Buffer/site-value ref** → suppress `Rename`, force `Bind{substitute:false}`: **materialise** an
+  owned copy into a separate `__retbuf` instead of renaming the buffer onto (and aliasing) it.
+
+Result — the proven 3-store shape, emitted for `cell-escape-temp` (introspected):
+```
+{#one_buffer_vec_copy:vector["__retbuf"]
+  OpClearVector(__retbuf);                                  // distinct owned store
+  OpAppendVector(__retbuf, n_g({Object→__ref_1 …}, __ref_2));  // subject __ref_1, scratch __ref_2
+  OpFreeRef(__ref_1); OpFreeRef(__ref_2);                   // free subject + scratch AFTER the copy
+  return __retbuf; }
+```
+Three distinct stores; the borrow is copied into `__retbuf` while the subject is live, then both are
+freed. **Default ON** (`LOFT_NO_A1B` opts out → restores the collapse/UAF). Matrix green on BOTH
+backends under `LOFT_POISON` (all six cells: named/temp/escape/escape-temp + FIXED); gate-off is
+byte-identical (short-circuit). **Flag-on exposure sweep clean** — issues 748, wrap 51, leak 49,
+native 9, native_scripts, native_dir all 0 failures with the fix on. Guard:
+`tests/scripts/85-temp-subject-borrow-return-uaf.loft` (both backends). **A1b CLOSED.**
+
 ## Connection back
 
 This is the `Borrow`-set growth the @PLN90 north-star is about: field-return moves from

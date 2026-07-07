@@ -8,6 +8,8 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 Tracker: [@PLN90](https://github.com/loft-lang/plans/issues/90).
 Full design + failure-path enumeration: [COPY_DIAGNOSTICS.md](../../COPY_DIAGNOSTICS.md).
 **Remaining open work before release (issues + optimisations, prioritised): [REMAINING.md](REMAINING.md).**
+**Concrete close-out plan — the verified remainder decomposed into landable increments
+(W1–W9, sequenced, with per-step file·fn·line): [CLOSEOUT.md](CLOSEOUT.md).**
 **The user-facing lint recipe (the bound-vs-unbound survival split, flag-gated report, staged
 to close): [unbound-copy-lint.md](unbound-copy-lint.md).** Phase-A survey + the 4 landed items:
 [survey-findings.md](survey-findings.md).
@@ -41,13 +43,27 @@ the old-content-free of a heap-text field). **Nested bodies** now work too — b
 move-elision now covers all four copy shapes in flat AND nested positions. Guards:
 `tests/use_analysis.rs::move_elide_{record,construct,fresh,param,multiple,whole_vector,nested}_*`.
 
-**B1.5 FLIPPED — the move-elision is DEFAULT ON** (`LOFT_NO_MOVE_ELIDE` opts out; the `MOVE-PLAN`
-dump is split onto its own opt-in `LOFT_MOVE_ELIDE`). Getting there required a **flag-ON exposure
-sweep** (running the whole corpus with the rewrite on — the ~30 hand-probes never did): it found ~12
-corpus bugs, all "retargeted into a non-stable slot / source read between build and copy," all fixed
-via a guard layer (`bad_containers`, `def_order`, `source_escapes`, self-read, replace-vs-append).
-Behavioural corpus green default-on (issues 748, leak 49, native, wrap, native_scripts, loft_suite).
-Detail: [phase-b-design.md § B1.5](phase-b-design.md).
+**B1.5 FLIPPED — the move-elision is DEFAULT ON — MERGED to main 2026-07-06 (PR #514, squash
+`46ecd3dc`).** `LOFT_NO_MOVE_ELIDE` opts out; the `MOVE-PLAN` dump is split onto its own opt-in
+`LOFT_MOVE_ELIDE`. Getting there required a **flag-ON exposure sweep** (running the whole corpus with
+the rewrite on — the ~30 hand-probes never did): it found ~12 corpus bugs, all "retargeted into a
+non-stable slot / source read between build and copy," all fixed via a guard layer (`bad_containers`,
+`def_order`, `source_escapes`, self-read, replace-vs-append). Behavioural corpus green default-on
+(issues 748, leak 49, native, wrap, native_scripts, loft_suite); CI green incl. the ASan UAF/OOB
+gate. Detail: [phase-b-design.md § B1.5](phase-b-design.md).
+
+**@PLN90 — ALL 9 work items DONE or RESOLVED (2026-07-06).** Phase B (the *elimination* half)
+shipped. **Built/closed (6):** **W1 = A1b** (the temp-subject borrow-return UAF — the wide-release
+blocker, default on) · **W6** (par-native E0308, P0) · **W5** (the enforced copy-lint channel, gated
+`LOFT_WARN_COPIES`) · **S5.2** (precise lint locations) · **W8** (empty-`[]` arm now materialises a
+real empty vector in both formattings — the fold-to-null fragility is gone; suite green, guard
+`508`) · **W4** (O-Complete — already CLOSED 2026-07-04 as formal **D-own-2**: the ownership fact is
+TOTAL, oracle green locally). **Resolved (3):** **W2/A2 — WON'T DO** (three matrix-guarded
+prototypes proved a struct-field return **must copy** per the #415/C86 value-semantics contract; the
+copy is FORCED, not avoidable) · **W3** MOOT (rode A2) · **W9** no safe drain (remaining Avoidable
+are C86-contract-owned) · **W7** DEFERRED — the plan's final phase, correctly not-yet-active (its
+lint-silencing premise is undermined by the same A2/#415/C86 finding, and reserving `copy` is a
+design decision awaiting demonstrated need). Detail per item: [CLOSEOUT.md](CLOSEOUT.md).
 
 **Phase 1** — the decision covers every structure-copy emission ([phase1-inventory.md](phase1-inventory.md)).
 `LOFT_COPY_DUMP` is the runtime ground truth; the verdict (`use_analysis`, **route 1** —
@@ -68,7 +84,11 @@ bucket 1 (auto-elide), stay quiet on bucket 3, never copy "just because"
 ([COPY_DIAGNOSTICS.md § North-star](../../COPY_DIAGNOSTICS.md)). Suite byte-identical (issues
 746, use_analysis 16).
 
-**Phase 2 REFINEMENT (design set, not yet built — [unbound-copy-lint.md](unbound-copy-lint.md)).**
+**Phase 2 REFINEMENT — the report + survival split BUILT (#510); the enforced warning is not
+([unbound-copy-lint.md](unbound-copy-lint.md), CLOSEOUT W5).** `report_copies` (the user-facing
+`--report-copies`) and the bound-vs-unbound `survival_class` split now ship (gated on
+`report_copies_enabled()`); what remains is routing Avoidable rows through the `Level::Warning`
+diagnostics channel as a default lint (blocked on draining the Avoidable set — W1/W2 — first).
 The blanket "construction / `OpCopyRecord` → Implicit" above is **too coarse**: it silences a
 construction / slot-set that **duplicates a still-live source** — a genuine *unbound* copy the
 user must see. The silent/indicate line is **bound vs unbound**, keyed on the copy's *source

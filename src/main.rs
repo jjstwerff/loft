@@ -4969,6 +4969,10 @@ fn main() {
     if !program_warm {
         p.parse(&abs_file, false);
     }
+    // @PLN90 W5 — the enforced copy lint: route every Avoidable structure copy
+    // through the Warning channel so it surfaces with the other diagnostics.
+    // Gated (no-op unless LOFT_WARN_COPIES); disjoint borrows of `p`'s fields.
+    loft::use_analysis::warn_copies(&p.data, &mut p.diagnostics, &abs_file);
     if !p.diagnostics.is_empty() {
         // @P282 fix: when `--no-warnings` is set, suppress
         // Warning-level diagnostics entirely so the program's

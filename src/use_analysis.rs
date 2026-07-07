@@ -354,10 +354,20 @@ impl Uses {
         self.pos += 1;
         // @PLN90 item 2 — breadcrumb the nearest enclosing span position (only when tracking,
         // so the default path pays nothing). A copy op borrows this for its report location.
-        if self.track_pos
-            && let Some(p) = node.span_pos()
-        {
-            self.cur_pos = Some(p.clone());
+        if self.track_pos {
+            if let Some(p) = node.span_pos() {
+                self.cur_pos = Some(p.clone());
+            } else if let Value::Line(n) = node {
+                // @PLN90 S5.2 — a bare line marker is a coarse fallback for copies that
+                // sit under no span (an inline construct's `OpAppendVector`, an `[]` fold).
+                // Empty `file` signals "borrow the caller's source file" (report/warn fill
+                // it); a real span later in the same statement overrides this.
+                self.cur_pos = Some(Position {
+                    file: String::new(),
+                    line: *n,
+                    pos: 0,
+                });
+            }
         }
         // @PLN90 item 3 — record a REAL write of a var at this position, for `mut_max_pos` (the
         // Forced test). Covers every write op (first-arg family + `OpCopyRecord`'s second-arg
@@ -559,8 +569,9 @@ fn analyze_fn(
     // @PLN90 — the survival split + its report locations are produced under LOFT_COPY_SURVIVAL
     // (the raw dev dump) OR the user-facing report (`report_copies`); read once so both the walk
     // (`track_pos`) and the classification below agree.
-    let survival_on =
-        std::env::var_os("LOFT_COPY_SURVIVAL").is_some() || crate::keys::report_copies_enabled();
+    let survival_on = std::env::var_os("LOFT_COPY_SURVIVAL").is_some()
+        || crate::keys::report_copies_enabled()
+        || crate::keys::warn_copies_enabled();
     let mut u = Uses {
         get_field: data.def_nr("OpGetField"),
         op_append: data.def_nr("OpAppendVector"),
@@ -1761,6 +1772,58 @@ pub fn dump_all(data: &Data) {
     );
 }
 
+/// @PLN90 W5 — the ENFORCED copy lint (`LOFT_WARN_COPIES`). Routes every **Avoidable** unbound
+/// structure copy (a still-live value duplicated where a borrow/move would remove it — the
+/// worklist) through the normal `Level::Warning` diagnostics channel, so it surfaces during a
+/// normal compile with a source location, the copied type, and the `&`/restructure hint. `Forced`
+/// (required as written) and `Implicit`/`Eliminated`/`Internal` stay silent here — only the
+/// actionable set warns. Shares the survival-split verdict with `report_copies`; a no-op unless
+/// `warn_copies_enabled()`. Populates `diags`; the caller renders them with the other diagnostics.
+pub fn warn_copies(data: &Data, diags: &mut crate::diagnostics::Diagnostics, fallback_file: &str) {
+    if !crate::keys::warn_copies_enabled() {
+        return;
+    }
+    for d_nr in 0..data.definitions() {
+        let def = data.def(d_nr);
+        if !matches!(def.def_type, DefType::Function) {
+            continue;
+        }
+        for r in analyze_fn(&def.code, &def.variables, data, env_tier()).0 {
+            // Only survival-split (source-duplicating) copies are user-facing, and only the
+            // Avoidable class is the actionable worklist — mirror `report_copies`'s filter.
+            if !r.survival || !matches!(r.class, CopyClass::Avoidable) {
+                continue;
+            }
+            let ty = if r.source == u16::MAX {
+                "a structure".to_string()
+            } else {
+                data.type_name_str(def.variables.tp(r.source))
+            };
+            // The copy op carries no span; it borrows the nearest span or (S5.2) the enclosing
+            // line marker. A line-only fallback has an empty `file` — substitute the caller's
+            // source file. When even the line is unknown, fall back to line 0 + the fn name.
+            let (file, line, col) = r.loc.as_ref().map_or((fallback_file, 0, 0), |p| {
+                let f = if p.file.is_empty() {
+                    fallback_file
+                } else {
+                    p.file.as_str()
+                };
+                (f, p.line, p.pos)
+            });
+            let where_ = if r.loc.is_some() {
+                String::new()
+            } else {
+                format!(" in `{}`", def.name)
+            };
+            let msg = format!(
+                "avoidable copy of {ty}{where_} ({}) — a `&` borrow or a small restructure would remove it",
+                r.reason
+            );
+            diags.add_at(crate::diagnostics::Level::Warning, &msg, file, line, col);
+        }
+    }
+}
+
 /// @PLN90 Step 5 — the USER-FACING copy report (`LOFT_REPORT_COPIES` / `--report-copies`).
 ///
 /// Unlike `dump_all` (the raw developer trace), this surfaces ONLY the *unbound* structure
@@ -1800,10 +1863,18 @@ pub fn report_copies(data: &Data) {
                 // user's to act on.
                 _ => continue,
             };
-            let loc = r
-                .loc
-                .as_ref()
-                .map_or_else(|| "<location unknown>".to_string(), Position::to_string);
+            // S5.2 — a line-only fallback carries an empty `file` (the copy sat under no span);
+            // render it as `line N` rather than the raw `:N:0`.
+            let loc = r.loc.as_ref().map_or_else(
+                || "<location unknown>".to_string(),
+                |p| {
+                    if p.file.is_empty() {
+                        format!("line {}", p.line)
+                    } else {
+                        p.to_string()
+                    }
+                },
+            );
             let ty = if r.source == u16::MAX {
                 "a structure".to_string()
             } else {

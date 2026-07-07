@@ -1,0 +1,29 @@
+// @PLN90 W6 regression: `par(...)` dispatch over a `vector<fn-ref>` must
+// deliver each element as the native `(u32, DbRef)` fn-ref tuple, not a bare
+// `DbRef`.  Was: rustc E0308 (expected `(u32, DbRef)`, found `DbRef`) — the
+// par worker's closure handed the element `DbRef` straight to a worker taking
+// the fn-ref tuple, because `tuple_arg_prep` (src/generation/ops/parallel.rs)
+// had no `Type::Function` arm.  Fix reads the `i32` fn-index at offset 0 and
+// pairs it with a NULL closure (vector-stored fn-refs are non-capturing),
+// mirroring the working for-loop unpack.  `par` compiles its worker to native
+// under BOTH backends, so this pins interp and `--native`.
+fn dbl(x: integer) -> integer { return x * 2; }
+fn inc(x: integer) -> integer { return x + 1; }
+fn neg(x: integer) -> integer { return 0 - x; }
+fn apply(f: fn(integer) -> integer) -> integer { return f(10); }
+
+fn main() {
+  // single element via par
+  one: vector<fn(integer) -> integer> = [dbl];
+  s = 0;
+  for g in one par(r = apply(g), 1) { s += r; }
+  assert(s == 20, "par single: {s}");
+
+  // multiple distinct fn-refs via par — 20 + 11 + (-10) = 21
+  fs: vector<fn(integer) -> integer> = [dbl, inc, neg];
+  total = 0;
+  for f in fs par(r = apply(f), 1) { total += r; }
+  assert(total == 21, "par multi: {total}");
+
+  print("pln90-w6 ok\n");
+}
