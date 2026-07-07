@@ -15,12 +15,17 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**`status:next`** — design settled (this README + [IMPL.md](IMPL.md)), no implementation yet.
-Filed 2026-07-07 out of a design discussion prompted by #477 (nested-vector stride `4→8`/`16→8`),
-a layout change that was **noticed only by breaking persisted data**, never by a check. The user
-rates this the **highest-value work on loft** (2026-07-07) — the safety floor under
-reload-without-data-loss, live-swap, and schema evolution. Start with **Phase B** (the golden
-conformance test + the layout hash), the critical path.
+**`status:active`** — filed 2026-07-07 out of a design discussion prompted by #477 (nested-vector
+stride `4→8`/`16→8`), a layout change that was **noticed only by breaking persisted data**, never
+by a check. The user rates this the **highest-value work on loft** (2026-07-07) — the safety floor
+under reload-without-data-loss, live-swap, and schema evolution.
+
+**Progress (2026-07-07):** **Phase B ✅** (golden `tests/layout_golden.rs` + `tests/golden/layout/`
++ coverage audit + both-backend parity `tests/scripts/509-layout-parity.loft` + `pub
+Stores::layout_algo_hash()`/`layout_dump()`). **Phase D ✅** (`src/schema_sidecar.rs`: the
+self-describing `LayoutIdentity`, the `.dschema` file lifecycle, `classify`/`SchemaVerdict`, and
+`CorruptReason::SchemaMismatch`). **Remaining:** **C** (`formal/layout.md`), **F** (the compiler
+migration aid — builds on `classify`/`is_actionable`), **E** (schema switch; E2 deferred).
 
 ## Goal
 
