@@ -8,6 +8,26 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 (HTTP stack) and rides the @PLN97 layout contract ([formal/layout.md](formal/layout.md)).
 Status: **design** — not yet a filed plan.
 
+## Two consumers, one general primitive
+
+This is **not** a routing feature — it is a **general "materialize the working set of a remote
+store" primitive**, and two consumers make it worth building well:
+
+- **Data / routing** (filed the issue): a phone routes over a 0.5 GB block by pulling only the
+  handful of ~2 km tiles a route touches.
+- **Game asset streaming** (the strategic driver): a game — running in the **browser** (wasm) —
+  streams only the assets a scene needs (meshes, textures, level chunks, prefabs) from a server,
+  keyed by id or region, without shipping the whole asset store. This is the pull/working-set
+  complement to @PLN18's push channels (05c bulk broadcast pushes the SAME pack to N seats; this
+  pulls each seat's OWN working set), and the natural home of a future asset pipeline.
+
+Build it as the general primitive; both consumers are just `store_load_keys` / `store_load_range`
+over a keyed / sorted asset store. **Design consequences of the game target** (first-class, not
+afterthoughts): the **browser `--html`/`fetch()` path is a primary target** (games live there);
+asset records are **large** (a mesh, a texture), so **record-extent-aware fetches** matter (§ open
+questions); and a scene load wants **batched** working-set GETs (§ concurrency). A "good
+implementation" means these hold on day one, not bolted on.
+
 ## The one invariant (the testable claim)
 
 > After `store_load_keys` / `store_load_range`, for **every query whose data lies within the
@@ -65,20 +85,27 @@ Three options:
 transient** — used only to resolve + copy-out; the *result* is a normal heap store — so it needs a
 `resolve` primitive + the index traversal, **not** the full mutable `Store` API.
 
-**The reuse-vs-reimplement fork** (the second half of the decision): the elegance #522 wants is
-"run the *normal* `find`/range against the remote reader." The existing traversal uses
-`addr`/`get_u32_raw` on a `Store`. So either **(b1)** add a `Backing::Paged` variant to `Store` so
-`addr`/`get_u32_raw` route through `resolve` (reuses the traversal, but adds a **residency branch to
-the hottest read path**), or **(b2)** a **separate `PagedReader` type** with its own
-`find`/range over a `&ByteReader` (more code, but the normal `Store` path is **byte-for-byte
-untouched**).
+**How to virtualize the read without taxing the hot path** — the paged store is **read-only**, so
+only the read subset (field/element/index reads + the `find`/range traversal) ever runs against it;
+mutation ops never do. Three ways to route those reads through `resolve`:
 
-**The second invariant decides this: prefer (b2).** A residency branch in `addr` taxes *every*
-program's every read, violating "zero cost to non-users" — the elegance of reuse is not worth a
-global slowdown. (b1) is admissible ONLY if P0's benchmark proves the branch is free for
-non-paged stores (e.g. the optimiser hoists/removes it, or the paged path is a distinct read
-function the enum dispatch selects once, not per-read). Default to (b2) — a separate reader keeps
-the hot path, and the build, clean.
+- **(b-branch)** — add a residency branch to the shared `addr`/`OpGetField`. **Rejected:** it taxes
+  *every* program's every read (violates the second invariant).
+- **(b-dup) — DUPLICATE the read subset into paged opcodes** (`OpGetFieldPaged`, … — the
+  fetch-on-miss variants), dispatched only for a paged store. The normal `OpGetField` stays
+  **byte-for-byte unchanged machine code** (zero cost to non-users) *and* the paged op reuses the
+  exact traversal logic (a paged op *is* the read op, resolving pages). Read-only bounds this to
+  ~10–20 ops, well inside the opcode budget (~225 free of 512) — and the ceiling itself is
+  extensible via the proven **escape-range** technique already used (a sentinel like 255 / 254
+  opens a new range without breaking existing encodings), so op-duplication carries **no budget
+  risk** even in the limit. **Recommended.**
+- **(b-reader)** — a separate `PagedReader` type reimplementing `find`/range over a `&ByteReader`.
+  Also keeps the hot path clean, but re-writes traversal logic instead of reusing it — the fallback
+  if op-duplication proves awkward.
+
+**Recommendation: (b-dup).** It satisfies BOTH invariants at once — byte-identical working set AND
+zero hot-path cost — while reusing the traversal, and read-only keeps the duplicated set small.
+P0's benchmark still stands as the guard: the normal read path must time within noise.
 
 **Falsification probe P0 (do before any phase):** on a REAL store file written by `bind_path`,
 serve its bytes through a `resolve(off,len)` that logs every range touched, and run a single key
@@ -191,8 +218,10 @@ bytes-bounded AND leak-clean* where applicable. "Prove it can fail" = the negati
 ## Open questions (each with a recommendation)
 
 1. **Page size / eviction** — fixed 64 KiB LRU vs. record-extent-aware (read the size word, GET
-   exactly its span). *Rec: start 64 KiB LRU (simple, deterministic to test); add record-aware GETs
-   only if phase-5 range-GET counts prove too high at 0.5 GB.*
+   exactly its span). *Rec: 64 KiB LRU for the index traversal (small word reads); but the
+   **game-asset** driver tips toward **record-aware GETs for the leaf payload** — a large mesh /
+   texture record spans many pages, and one range GET of its exact span beats N page GETs. So:
+   64 KiB pages for traversal, record-span GETs for the matched records' bytes.*
 2. **Arena bound** — cap `local` or grow as copied. *Rec: grow — copy-out is naturally bounded by
    the working set; no cap needed.*
 3. **Directory vs. native index** — rely on the store's own `Sorted` index, or emit a compact
