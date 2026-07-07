@@ -12,6 +12,44 @@ cannot name its gate is too big or not real. Every gate runs on **both backends*
 shipped output byte-identical. Discipline mirrors the @PLN93 steps: probe in `/tmp` first,
 hand-compute every expected value, graduate to `tests/scripts/` + an oracle test binary at the end.
 
+## RESUME HERE (read first after a fresh start)
+
+All work is on branch **`tuxedo-pln94-ownership-dataflow`** (off `origin/main`), a **pure observer**
+in `src/ownership_cfg.rs` (nothing in the compile path consumes it; SI-1 holds). Done: Phase 0
+(falsify ✓), Phase 1 (CFG + reaching-defs fixpoint ✓), Phase 2 → 3.1/3.2/3.3 ✓, 3.4a characterised.
+
+**How to run the oracle** (env `LOFT_OWN_ORACLE`, dumps to stderr; always set `LOFT_NO_CACHE=1` so
+`scopes::check` re-runs on the user file):
+```bash
+cargo build --bin loft
+# CFG structure (Phase 1.1):   LOFT_OWN_ORACLE=cfg
+# reaching-defs fixpoint (1.2): LOFT_OWN_ORACLE=rd
+# ownership fact + shadow-diff (Phase 2): LOFT_OWN_ORACLE=own
+LOFT_NO_CACHE=1 LOFT_OWN_ORACLE=own ./target/debug/loft --interpret <file.loft> >/dev/null 2>dump.txt
+# per-function line: "OWN <fn>  blocks=N passes=P  agree=A precision=Pr disagree=D", then DISAGREE/PRECISION lines
+cargo test --release --lib ownership_cfg   # the 6 unit tests
+```
+Probes live in `probes/` (00 blindspot · 01 cfg · 02 loops · 03 ownership · 04 precision · 05 interproc
+· 06 capture). SI-1 check: `cargo test --release --test wrap loft_suite` green with the module in.
+
+**The immediate next action (3.4a adjudication)** — the one open decision blocking the op-tail:
+does a closure record (`OpDatabase` store that holds a captured DbRef, and IS freed) have ownership
+`Owned` (my dataflow — about its store) or `Borrowed` (B — about its dependency)? Resolve against
+**how `scopes::get_free_vars` actually frees the closure record** (read `src/scopes.rs:3157-3420`
++ the `__closure_*` cascade at `src/database/allocation.rs:497-539`). If the record's free keys off
+"owned", B's `Borrowed` is the imprecise one → **first real cross-check catch** (record it, keep my
+`Owned`). If "borrowed" is load-bearing, teach my transfer to mark a var whose store holds a captured
+DbRef as `Borrowed`. Repro: `probes/06-capture.loft`.
+
+**Then, in order, to a fully functional oracle:** drain the rest of the op-tail (3.4: after captures,
+`#rust`-return metadata via `returns_borrowed_view`, then coroutines / `par`) one family per commit
+until DISAGREE→0 on the corpus + the `program_ownership` fuzzer; 3.5 (soundness sweep + confirm the
+fact flags `LOFT_NO_A1B` and agrees on the fixed default — the A1b payoff); then **Phase 4** — turn
+the fact into the consistency oracle over emitted IR ("every store freed once; no free of a live/
+borrowed store"), default-on in test/CI, red on `LOFT_NO_A1B` + injected faults; then **Phase 5** —
+land it beside behind `LOFT_OWN_ORACLE` with the fuzzer hook + a `tests/ownership_oracle.rs` binary.
+That Phase-5 state IS the "fully functional oracle" (the H end-state). Codegen cutover stays out (P4/VH).
+
 ## Standing invariants — re-check after EVERY sub-step
 
 - **SI-1 — shipped codegen byte-identical.** `loft introspect <corpus>` identical with the oracle

@@ -7,20 +7,32 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**Future — design skeleton ready, no implementation.** A considered structural option, not
-an imminent build. Today loft's store-lifetime facts are computed by two approximations in
-`src/use_analysis.rs`: analysis **A** (copy/borrow/move) walks a **position counter that
-proxies execution order and is only valid outside loops** (Tier-1 literally refuses any copy
-whose fill sits inside a loop, `use_analysis.rs:201-204`); analysis **B** (the `Owned/Borrowed/Join`
-fact) is **flow-insensitive** — a var classifies as the join of *all* its defs, not the
-reaching def (`use_analysis.rs:1073-1078`). Both are sound-by-conservatism and validated by
-the @PLN89 differential oracle + the `program_ownership` fuzzer. This plan introduces a
-**flow-sensitive dataflow fixpoint over a CFG** *beside* the current substrate — first as an
-independent completeness **oracle** (shipped codegen untouched), optionally replacing the
-approximations later — so loops / branches / early-return are precise *by construction* rather
-than approximated. It does **not** change the language, the deps representation, or the "never
-reject" contract — only how (and how precisely) the facts those consumers read are computed and
-checked.
+**IN PROGRESS — the oracle is being built beside the shipped analysis; ~half the ownership fact
+done.** Branch `tuxedo-pln94-ownership-dataflow` (off `origin/main`). Everything so far is a PURE
+OBSERVER — reached only via `LOFT_OWN_ORACLE`, nothing in the compile path consumes it, so shipped
+codegen is byte-identical (SI-1 held on `loft_suite` + the parse suite at every step). Progress:
+
+- **Phase 0 ✓** — falsification gate PASSED: `LOFT_NO_A1B` produces a backend-consistent wrong plan
+  the interp-vs-native oracle passes (`len=0` on both), and an independent static check catches it.
+  The oracle is not redundant.
+- **Phase 1 ✓** — a structured CFG over the Value-IR (`src/ownership_cfg.rs`) + a monotone worklist
+  dataflow fixpoint, validated on reaching-defs across every control-flow shape (straight-line,
+  if-join, single/nested loop, break-out, early-return-in-loop). 5 unit tests; SI-3 (bounded
+  convergence) enforced by assert.
+- **Phase 2 (ownership fact) — 3.1 ✓ / 3.2 ✓ / 3.3 ✓ / 3.4 in progress.** Forward flow-sensitive
+  `OFact = Bottom|Owned|Borrowed(base)|Join(base)`; transfer reuses `ownership_of` for structural
+  RHS, resolves `Var` RHS flow-sensitively, and consumes callee `return_ownership` summaries at
+  call sites (independently of the shipped classifier). Shadow-diff vs `ownership_of` splits
+  AGREE / PRECISION (mine ⊏ B's `Join`) / DISAGREE (must be 0 for soundness). Over 712 functions
+  the independent calls surfaced a **22-site op-tail work-list** (captures + `#rust` return
+  metadata); the capture family is characterised (3.4a) as a genuine store-ownership-vs-dependency
+  fork that **may indict B, not me** — awaiting adjudication.
+
+The remaining approximations this replaces still ship: `src/use_analysis.rs` analysis **A**
+(position-proxy, valid only outside loops) and analysis **B** (`Owned/Borrowed/Join`, flow-insensitive
+join of ALL defs). **Per-step detail, how to run, and the resume checklist live in
+[`IMPL.md`](IMPL.md).** This plan does not change the language, the deps representation, or the
+"never reject" contract — only how (and how precisely) the facts are computed and cross-checked.
 
 ## Goal
 
