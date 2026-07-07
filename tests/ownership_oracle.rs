@@ -306,10 +306,11 @@ fn oracle_leak_scan_ratchet() {
     }
 }
 
-/// The leak-scan TRUE-POSITIVE gate: proving the now-clean (0 FP) `check-leak` scan is not vacuous.
-/// A positive-control fixture owns a vector local (`buf`, backed by the OpDatabase store `__vdb_1`),
-/// freed at scope exit. `LOFT_OWN_INJECT_DROP_FREE=__vdb_1` drops that free (a genuine leak — the
-/// runtime leak-check agrees); the scan MUST flag `__vdb_1`, and the un-injected run MUST be clean.
+/// The leak-scan TRUE-POSITIVE gate (on the PROMOTED default `check` path): proving the definite-leak
+/// scan is not vacuous. A positive-control fixture owns a vector local (`buf`, backed by the
+/// OpDatabase store `__vdb_1`), freed at scope exit. `LOFT_OWN_INJECT_DROP_FREE=__vdb_1` drops that
+/// free (a genuine leak — the runtime leak-check agrees); the scan MUST flag `__vdb_1` under `check`,
+/// and the un-injected run MUST be clean.
 #[test]
 fn oracle_leak_scan_flags_an_injected_leak() {
     let ctrl = "doc/claude/plans/94-cfg-ownership-dataflow/probes/07-leak-positive-control.loft";
@@ -318,7 +319,7 @@ fn oracle_leak_scan_flags_an_injected_leak() {
         cmd.arg("--interpret")
             .arg(root().join(ctrl))
             .env("LOFT_NO_CACHE", "1")
-            .env("LOFT_OWN_ORACLE", "check-leak");
+            .env("LOFT_OWN_ORACLE", "check"); // promoted: the leak scan runs on the default path
         for (k, v) in env {
             cmd.env(k, v);
         }

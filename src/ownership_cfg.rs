@@ -878,23 +878,23 @@ pub fn oracle(data: &Data) {
     }
 }
 
-/// The DEV-tier POST-codegen free-based checks — run at the END of `scopes::check` (after
-/// `get_free_vars` has inserted the frees into `def.code`) ONLY under `LOFT_OWN_ORACLE=check-dev`.
-/// The pre-codegen `oracle()` cannot see user-function frees; this pass can. IN DEVELOPMENT: its
-/// false-positive rate is bounded by the fact's precision (materialised copies read `Borrowed`), so
-/// it is NEVER on the default `check` path — the ratchet test (`tests/ownership_oracle.rs`) tracks
-/// the count down to zero, at which point these promote into `check`.
+/// The POST-codegen checks — run at the END of `scopes::check` (after `get_free_vars` has inserted
+/// the frees into `def.code`; the pre-codegen `oracle()` cannot see user-function frees). Modes:
+///  * `check` — PROMOTED: the DEFINITE-leak scan (`run_leak_scan`) — clean + sound, 0 FP across the
+///    corpora with a firing true-positive. Runs on the default path beside Check A (pre-codegen).
+///  * `check-leak` — the same leak scan under its own ratchet (`oracle_leak_scan_ratchet` sweep).
+///  * `check-dev` — the still-EXPERIMENTAL free-based Check B + exit-state Check C (consistency
+///    layer), gated with its own ratchet baseline; never on the default path.
+///
+/// A check that RAISES the count gets its own flag (analysed at leisure), never a revert of the clean
+/// tier — the "raise-it-→-flag-it" workflow that made `check-leak` land.
 pub fn oracle_free_checks(data: &Data) {
-    // Two independent gated tiers, EACH with its own ratchet baseline — a check that RAISES the count
-    // gets its own flag (analysed at leisure), never a revert of the clean tier:
-    //  * `check-dev`  — the CLEAN free-checks (Check B + exit-state Check C). Ratchet baseline 0.
-    //  * `check-leak` — the EXPERIMENTAL all-vars under-free scan (needs comprehensive transfer
-    //    tracking; baseline high). Its findings are the codegen-transfer-artifact worklist.
     let Ok(mode) = std::env::var("LOFT_OWN_ORACLE") else {
         return;
     };
-    let (dev, leak) = (mode == "check-dev", mode == "check-leak");
-    if !dev && !leak {
+    let leak = mode == "check" || mode == "check-leak"; // leak scan is promoted onto `check`
+    let dev = mode == "check-dev";
+    if !leak && !dev {
         return;
     }
     let free_ops = free_op_nrs(data);
@@ -915,11 +915,12 @@ pub fn oracle_free_checks(data: &Data) {
             run_free_checks(name, &body, &cfg, data, d_nr, &free_ops)
         };
     }
-    let tier = if leak { "LEAK (all-vars, VH worklist)" } else { "DEV-FREE (clean, ->0)" };
+    let tier = if dev { "DEV-FREE (clean, ->0)" } else { "LEAK (definite)" };
     eprintln!("OWN-CHECK-{tier}: {total_reds} RED finding(s)");
 }
 
-/// The DEFINITE-leak scan (flag `LOFT_OWN_ORACLE=check-leak`). Flags a var that: is MINTED by
+/// The DEFINITE-leak scan (PROMOTED: runs under `LOFT_OWN_ORACLE=check` and `check-leak`). Flags a
+/// var that: is MINTED by
 /// `OpDatabase` (only a real store leaks — a type-dep-only phantom like `__retbuf` is skipped); OWNS
 /// its store (empty type dep, HEAP); is not a param; is not marked by the shipped analysis's own
 /// "not-a-leak" flags (`skip_free`, `caller_hidden_buf`); is not freed; and is not transferred out.
@@ -930,7 +931,7 @@ pub fn oracle_free_checks(data: &Data) {
 /// container leak-checked). **Now 0 FP across scripts+docs+lib+examples with the true-positive
 /// firing** — drove the baseline 927 → 0 (the `__retbuf` phantom was ~889). KNOWN GAPS (documented,
 /// not FPs): conditional/`Join` leaks (`LOFT_NO_JOIN_OWN` — the runtime leak-check's class), leaks of
-/// non-`OpDatabase` adopted-owned stores, and closure bodies. Under `check-leak`, never on `check`.
+/// non-`OpDatabase` adopted-owned stores, and closure bodies — the next ratchet targets.
 fn run_leak_scan(name: &str, body: &Value, data: &Data, d_nr: u32) -> usize {
     if name.starts_with("n___lambda_") {
         return 0; // closure frees are codegen'd on a different clock — not visible here
