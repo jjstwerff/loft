@@ -1,7 +1,7 @@
 ==== exit: 1 ====
 ==== stdout ====
 ==== stderr ====
-error: Unknown field Player.naem
+error: Unknown field Player.naem — did you mean 'name'?
   --> <cases>/07_type_field_unknown.loft:4:18
   |
 4 |   print("{p.naem}");

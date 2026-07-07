@@ -621,8 +621,14 @@ item that's been deferred for two releases.
 - Phase files begin with `Status: open | in-progress | done`.
 - Closing a plan: set the issue `status:finished` and close it; the local dir
   stays in place as a closure record (apply [`_LIFECYCLE.md`](_LIFECYCLE.md)).
-- Paused-with-trigger plans: set the issue `status:future` (keep it open) + add a
-  row to [`DEFERRED.md`](DEFERRED.md) (apply [`_LIFECYCLE.md`](_LIFECYCLE.md)).
+- Paused-with-trigger plans (**never started**): set the issue `status:future` (keep it
+  open) + add a row to [`DEFERRED.md`](DEFERRED.md) (apply [`_LIFECYCLE.md`](_LIFECYCLE.md)).
+- Paused-with-trigger plans that **shipped a floor** (some phases delivered, the rest
+  deferred pending a driver consumer): set the issue `status:parked` — the accurate state
+  between `status:active` (in progress) and `status:future` (not started). The plan README's
+  `## Status` block carries the phase-by-phase state + the re-activation trigger. (e.g. @PLN43
+  store-durability: Tier 1 shipped, Tiers 2/3 parked pending game consumers; @PLN82 const-store
+  is a candidate for the same.)
 
 ## Ground rule — plans never allow regressions
 
@@ -709,7 +715,8 @@ directories are no longer moved between states.  Query by label:
 
 ```bash
 gh issue list --repo loft-lang/plans --label status:active    # in progress now
-gh issue list --repo loft-lang/plans --label status:future    # planned / paused (trigger in DEFERRED.md)
+gh issue list --repo loft-lang/plans --label status:parked    # floor shipped, remaining phases paused (trigger in the plan README)
+gh issue list --repo loft-lang/plans --label status:future    # not started; planned / paused (trigger in DEFERRED.md)
 gh issue list --repo loft-lang/plans --label status:finished  # delivered / closed
 ```
 

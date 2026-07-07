@@ -5,9 +5,18 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 01b — Loft-callable binding for `Store::open_durable`
 
-**Status:** Open — branch `store-durable-phase1b` off `main`
-(merged Phase 00 + 01 already shipped via [PR #219](https://github.com/loft-lang/loft/pull/219),
-commit `d494edc`).  Single-PR slice.
+**Status:** ✅ **SHIPPED** (verified 2026-07-07). The loft-callable binding landed on `main`:
+the Rust `Store::durable_check` / `Store::durable_seal` + the round-trip test
+`tests/store_durable_loft.rs` via [PR #220](https://github.com/loft-lang/loft/pull/220)
+(commit `b307ef03`, "store-durable (PLAN38)"), with the stdlib binding
+(`store_durable_check` / `store_durable_seal` in `default/02_files.loft`) refined through
+[PR #225](https://github.com/loft-lang/loft/pull/225). Design as committed below — the
+**explicit check + seal** pair, NOT an embedded callback (which hit the `&mut State`
+borrow-conflict wall). Test coverage: `store_durable_loft.rs` 2/2 green (incl.
+`corrupted_sidecar_detected_via_loft_binding`, the seal→check→corrupt-sidecar→detect
+round-trip); callable on both backends. Builds on the merged Phase 00 + 01
+([PR #219](https://github.com/loft-lang/loft/pull/219), commit `d494edc`). The
+`store-durable-phase1b` branch is gone (merged + deleted).
 
 ## Goal
 

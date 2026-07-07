@@ -1,7 +1,7 @@
 ==== exit: 1 ====
 ==== stdout ====
 ==== stderr ====
-error: Unknown field text.lengt
+error: Unknown field text.lengt — did you mean 'len'?
   --> <cases>/08_type_method_unknown.loft:3:15
   |
 3 |   n = t.lengt();

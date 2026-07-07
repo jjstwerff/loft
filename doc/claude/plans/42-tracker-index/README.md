@@ -5,7 +5,18 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLN42 — TRACKER_INDEX — `@P-id` / `@PLAN-id` indexer + viewer integration
 
-**Status:** Active — opened 2026-05-13.
+**Status:** ⏸ **PARKED** (updated 2026-07-07; opened 2026-05-13) — the core shipped 2026-05-13→18
+and is in **daily use** (scanner, CLI, auto-refresh, broken-validator, viewer routes + per-doc
+sidebar, backlinks, Claude integration, language-harvest; `./scripts/idx` + `make index` live,
+`index/tags.json` auto-refreshed). Three phases remain, all deferred/gated:
+- **06 closeout** — waits on the viewer plan (`@PLN50` eagleviewer) + phase 08.
+- **07a WebSocket push** — gated on `lib/fs_watch/` ([`lib_plans/68-fs-watch/`](../../lib_plans/68-fs-watch)),
+  which has low current value (its only consumer is this daemon, already served by the phase-02
+  git-hook + phase-04 mtime-poll).
+- **08 multi-project deploy** — open, appetite-driven ("generalise to any AI project").
+
+Trigger to re-activate: a real event-driven consumer needing sub-commit latency (unblocks 07a via
+fs_watch), the viewer plan closing out (unblocks 06), or appetite for the multi-project stack (08).
 
 A small, self-rebuilding index of tracker references (P-issues
 + plan/phase IDs) across the loft repo, plus a CLI for

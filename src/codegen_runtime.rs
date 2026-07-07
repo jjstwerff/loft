@@ -4067,13 +4067,58 @@ thread_local! {
 /// embedded in the generated Rust code.
 #[inline]
 pub fn cr_call_push(name: &'static str, file: &'static str, line: u32) {
-    CALL_STACK.with(|s| s.borrow_mut().push((name, file, line)));
+    let depth = CALL_STACK.with(|s| {
+        let mut b = s.borrow_mut();
+        b.push((name, file, line));
+        b.len()
+    });
+    // @PLN28 — native call-depth guard.  Generated Rust recurses one native
+    // frame per loft call, so unbounded recursion overflows the OS stack with
+    // an opaque `fatal runtime error: stack overflow, aborting`.  The
+    // interpreter caps recursion at `State::MAX_CALL_DEPTH` and renders a typed
+    // `StackOverflow`; mirror that here so both backends agree and native emits
+    // a clean, source-located error instead of an abort.  (The generated `main`
+    // runs on a large-stack thread — see `NATIVE_MAIN_STACK` — so this depth
+    // limit is what actually fires, well before the OS stack is exhausted.)
+    if depth > crate::state::State::MAX_CALL_DEPTH as usize {
+        cr_stack_overflow(name, file, line, depth);
+    }
     // @PLAN49 T1 — refresh the shared breadcrumb at every native fn
     // entry so a watchdog-fired hard-kill identifies the most recent
     // loft fn we entered.  Single combined call.  When the timeout
     // is not armed, the body is just one relaxed atomic load + branch
     // (no allocation, no mutex) — ~1-2 ns per fn entry.
     crate::timeout::checkpoint_fn("run-native", name, file, line);
+}
+
+/// Native stack size for the generated `main` thread.  The OS main-thread
+/// stack (~8 MiB) overflows at a few thousand recursive loft calls — below the
+/// `MAX_CALL_DEPTH` (10 000) guard.  A generous, virtual (lazily-committed)
+/// stack holds 10 000 frames even for stack-heavy functions (~50 KiB/frame
+/// budget), so the depth guard fires cleanly before the OS stack is exhausted.
+pub const NATIVE_MAIN_STACK: usize = 512 * 1024 * 1024;
+
+/// Render a clean, source-located call-stack-overflow diagnostic (mirroring the
+/// interpreter's typed `StackOverflow`) and exit non-zero.  `#[cold]` /
+/// `inline(never)` keeps it off the hot call-entry path.
+#[cold]
+#[inline(never)]
+fn cr_stack_overflow(name: &str, file: &str, line: u32, depth: usize) -> ! {
+    eprintln!(
+        "error: call stack overflow — exceeded {} nested calls",
+        crate::state::State::MAX_CALL_DEPTH
+    );
+    eprintln!("  in {name} ({file}:{line})");
+    CALL_STACK.with(|s| {
+        let b = s.borrow();
+        for (nm, f, ln) in b.iter().rev().take(10) {
+            eprintln!("        fn {nm}() ({f}:{ln})");
+        }
+        if depth > 10 {
+            eprintln!("        … ({} more frames)", depth - 10);
+        }
+    });
+    std::process::exit(1);
 }
 
 /// Pop a frame from the shadow call stack.  Called at the end of every

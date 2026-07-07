@@ -226,3 +226,10 @@ Set before `cargo test` (controls `tests/dumps/*.txt`; also works with `cargo ru
 `crash_tail:N` (last N lines, flushed on panic) · `fn:<name>` · `variables` · `ref_debug` ·
 `bridging` · `all_fns`. DbRef dumps tune via `LOFT_DUMP_DEPTH` (2), `LOFT_DUMP_ELEMENTS` (8).
 Full API: [TESTING.md § LogConfig](doc/claude/TESTING.md), [DEBUG.md](doc/claude/DEBUG.md).
+
+**Error rendering (@PLN28):** `LOFT_ERRORS=pretty|compact` (or `--errors=…`) picks the
+user renderer — `pretty` (default: `file:line:col` + source line + caret) vs `compact`
+(single line; the test harness pins this). Diagnostic toggles (all default-on except
+soft-halt): `LOFT_NO_WARN_RUNTIME` (undefended-fault-site warning) · `LOFT_NO_HINT_NOT_NULL`
+(`not null` field hint) · `LOFT_FORMAT_BARE_NULL` (drop the `(reason)` suffix on `null`) ·
+`LOFT_DEV_SOFT_HALT` (demote dev raises to log-and-continue so one run surfaces every fault).

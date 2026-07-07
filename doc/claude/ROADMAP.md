@@ -115,9 +115,9 @@ categories below for full detail.
 
 | Pri | Gate | Status | Source |
 |---|---|---|---|
-| 1 | **Plan-07 phase 5/6/7** — error-message closeout (suggestions polish + per-site type-mismatch wording + closeout doc).  Friends' first WTF moment is a type error; tighter messages compound into trust. | Phases 5/6/7 open; phase 6.1 (Type::name exhaustive) shipped 2026-05-13 | [`plans/28-error-messages/`](plans/28-error-messages) |
-| 2 | **Plan-37 — tracker-tag indexer** — `@P-id` / `@PLAN-id` convention + scanner + CLI + viewer integration.  Replaces grep-based tag lookups with O(1) JSON queries.  Shrinks Claude per-task token usage; feeds @PLAN35 phase 08 newcomer landing's status buckets. | Phases 0-6 + 9 shipped (0 closed 2026-05-14 as housekeeping); phases 7-8 open | [`plans/42-tracker-index/`](plans/42-tracker-index) |
-| 3 | **DX.2 — CI: package + native tests** — last open item in @PLN36 (DX); ship + close the plan. | Open | [`plans/36-developer-experience/`](plans/36-developer-experience) |
+| — | **@PLN28 — better error messages** — ✅ **DONE 2026-07-07** (all phases delivered: `file:line:col` + caret across parser/type/runtime, did-you-mean suggestions, concrete type-mismatch + match-pattern check, closeout doc). Friends' first WTF moment is a type error; tighter messages compound into trust. | Complete; phase-4 has 2 non-blocking polish slices deferred (finer format-null tokens, `= note:` renderer) | [`plans/28-error-messages/`](plans/28-error-messages) |
+| 2 | **@PLN42 — tracker-tag indexer** — `@P-id` / `@PLAN-id` convention + scanner + CLI + viewer integration.  Replaces grep-based tag lookups with O(1) JSON queries.  Shrinks Claude per-task token usage; feeds @PLN50 (eagleviewer) newcomer landing's status buckets. | ⏸ **PARKED** — core shipped + in daily use (phases 0-6 + 9); tail deferred/gated (06 closeout waits on @PLN50; 07a WebSocket gated on `lib/fs_watch`; 08 multi-project open, appetite) | [`plans/42-tracker-index/`](plans/42-tracker-index) |
+| 3 | ~~**DX.2 — CI: package + native tests**~~ — **✅ DONE** (verified 2026-07-07): the per-PR `ci.yml` nextest run already covers native (`binary(native)`) + package (`binary(wrap)::library_suite`) tests, plus the ASan gate + nightly registry-validation. @PLN36 CLOSED (`status:finished`). | Done | [`plans/36-developer-experience/`](plans/36-developer-experience) |
 
 What ships ALREADY for friend-readiness (don't reblock on these):
 

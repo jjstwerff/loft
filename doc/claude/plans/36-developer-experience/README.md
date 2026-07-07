@@ -22,15 +22,29 @@ mix:
   under § Three ways to see loft).
 - **DX.3** "Learn loft in 30 minutes" walkthrough — **DONE**
   (`doc/learn-loft.md`).
-- **DX.2** CI: package + native tests — **OPEN** (the only
-  remaining item in this plan).
+- **DX.2** CI: package + native tests — **DONE** (verified
+  2026-07-07). The goal — the full `make ci` suite in CI,
+  native failures caught before merge — is satisfied by the
+  evolved `ci.yml`: the per-PR `cargo nextest` run includes
+  `binary(native)` (the `native` suite — `native_dir` sweeps
+  `tests/docs/*.loft` under `--native` = `make test-native`;
+  plus `native_library_suite`) and `binary(wrap)::library_suite`
+  (builds/runs the `lib/*` native suites = the package tests),
+  plus a dedicated **ASan UAF/OOB gate** (native) and nightly
+  **`registry-validation.yml`** (every published package
+  installed + native-built). Superseded the original 2-job
+  spec (`make test-native` / `make test-packages`) with broader
+  coverage; those exact jobs would only duplicate it.
 - **NT.1** Native Codegen Reliability — completed (kept as
   historical design record)
 
-**Plan status (2026-05-13):** Originally drafted as a six-item
-DX grab-bag.  Five of six shipped over the 0.8.4 / 0.8.5 cycle.
-**Only DX.2 remains.**  When DX.2 lands, this plan can move to
-`finished/`.
+**Plan status: ✅ COMPLETE (2026-07-07).** Originally drafted as
+a six-item DX grab-bag; all six shipped/verified over the
+0.8.4 / 0.8.5 cycle and beyond. The last item (DX.2) was
+confirmed satisfied by the evolved CI (see above) — nothing
+left to build. Issue [loft-lang/plans#36](https://github.com/loft-lang/plans/issues/36)
+closed as `status:finished`; this dir stays in place as the
+closure record.
 
 Per-item landing procedures (build checklists, quality gates,
 risks, decision points) live below in the **§ Landing
@@ -226,7 +240,12 @@ loft examples/structs.loft      # Structs and methods
 
 ---
 
-## DX.2 — CI: Package Tests + Native Tests
+## DX.2 — CI: Package Tests + Native Tests — ✅ DONE (verified 2026-07-07)
+
+Goal met by the evolved `ci.yml` (see the plan Status block above) — the per-PR `cargo
+nextest` run covers `binary(native)` + `binary(wrap)::library_suite`, plus the ASan gate and
+nightly registry-validation. The original 2-job design below is kept as a historical record; it
+was superseded, not implemented verbatim (those jobs would duplicate existing coverage).
 
 Expand `.github/workflows/ci.yml` to run the full test suite that `make ci`
 runs locally.

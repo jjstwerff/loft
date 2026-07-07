@@ -5,10 +5,10 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 01 — Tier 1: IntegrityOnly + auto-rescan hook
 
-**Status:** Open — bundled into the `store-durable-phase1`
-branch with [Phase 00](00-foundation.md); ships as one PR.
-See
-[README § First slice — Phases 00 + 01 as one PR](README.md#first-slice--phases-00--01-as-one-pr).
+**Status:** ✅ **SHIPPED** — merged to `main` with [Phase 00](00-foundation.md) as one PR
+([PR #219](https://github.com/loft-lang/loft/pull/219), commit `d494edc`). Tier 1
+`IntegrityOnly` (`Store::open_durable` + `DurabilityMode::IntegrityOnly`) is live in
+`src/store.rs`; test coverage 10/10 `store_durable_format`, 7/7 `store_durable_tier1`.
 
 ## Goal
 

@@ -5,7 +5,51 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 5 — Did-you-mean suggestions
 
-Status: open
+Status: **delivered 2026-07-07** — all seven candidate-scoped sites in
+05.A now suggest.  See § Delivered below for the exact end state; the
+atomic sequence lower down is the original design and is retained for
+context.
+
+## Delivered (2026-07-07)
+
+An audit (matrix over all 7 sites × cap-passing / cap-failing typos on
+both `--interpret` and the golden corpus) found the work was **not** "5
+missing wires" — 6 of 7 sites were already wired.  The real gaps were
+three root causes, each fixed at its chokepoint:
+
+1. **Systemic distance cap too strict** (`suggest_similar_capped`,
+   `src/diagnostics.rs`).  The old `min(2, name.len()/4)` cap only
+   reached Levenshtein-2 at 8+ chars, so it silently dropped every
+   4–7-char **transposition** (`naem`→`name`, `Bleu`→`Blue`,
+   `reuslt`→`result`) — the single commonest real typo.  The
+   variable-suggestion site had already worked around this by using the
+   uncapped `suggest_similar` (see its comment).  Fix: 1–3 chars never
+   suggest (generic placeholders `T`/`K`/`V`, coin-flip pairs); 4+ chars
+   get the full distance-2 ceiling.  This one change lit up field-access,
+   method, both enum-variant syntaxes, function-name, and struct-type
+   suggestions at once.
+2. **Struct-literal type site unwired** (`parser/objects.rs`, the
+   `unknown type '…'` branch).  Now calls `suggest_type_name`
+   (`Plyer{…}` → "did you mean 'Player'?").
+3. **Qualified enum-variant `Enum::Typo` silently recovered as null**
+   (`parser/objects.rs`, the #493 recovery — exit 0, printed `null`,
+   hid the typo).  Now reports `unknown variant Enum::Typo — did you
+   mean '…'?` on pass 2 (enum-scoped candidates via `suggest_field_name`,
+   since variants live in the enum's attributes) while keeping the
+   null recovery that avoids the #493 self-reference codegen crash.
+
+Coverage: golden cases 07 (field), 08 (method), 09 (struct-type,
+`.loft` updated to define a near struct so the suggestion is exercised),
+10 (enum-variant `::`, exit 0→1) regenerated + locked by
+`baselines_are_locked_in`.  Method case 08 also gained a real suggestion
+once the cap allowed distance-2 (`lengt`→`len`).  Full suite green on
+both backends; no collateral churn in the other 40 golden cases.
+
+Not done (intentionally): the `= note:` sub-line renderer (5.2/5.12) —
+suggestions render **inline** on the error line instead, which meets the
+user goal with less machinery; and a `LOFT_NO_SUGGESTIONS` toggle (5.4)
+was never wired (no consumer has asked to suppress).  Both remain open
+if a need surfaces.
 
 ## Goal
 

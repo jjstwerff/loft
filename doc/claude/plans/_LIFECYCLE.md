@@ -17,9 +17,9 @@ Two outcomes share most of the procedure:
 
 - **Closing** — all phases shipped → issue `status:active` → `status:finished`,
   then close the issue.
-- **Deferring** — some or no phases shipped, remaining work has a **concrete
-  trigger** → issue `status:active` → `status:future` (issue stays open); record
-  the trigger.
+- **Deferring** — remaining work has a **concrete trigger**; issue stays open; record
+  the trigger. If a floor **shipped** (some phases delivered, rest paused) →
+  `status:parked`; if **nothing** shipped (all phases still to start) → `status:future`.
 
 If remaining work has no concrete trigger, the design moves to
 [`../DESIGN_DECISIONS.md`](../DESIGN_DECISIONS.md).  "Will get to it later" is not
@@ -30,7 +30,7 @@ a trigger; "when 3+ template-path bugs accumulate" is.
 | Situation | Outcome |
 |---|---|
 | All phases shipped | **Close** — `status:finished`, close the issue |
-| Some phases shipped, others paused with concrete trigger | **Partial defer** — `status:future`, issue stays open; Status table grows SHIPPED / DEFERRED rows.  Canonical: @PLN82, @PLN80. |
+| Some phases shipped, others paused with concrete trigger | **Partial defer** — `status:parked`, issue stays open; Status table grows SHIPPED / DEFERRED rows.  Canonical: @PLN43 (Tier 1 shipped), @PLN82, @PLN80. |
 | No phases shipped, all paused with concrete trigger | **Full defer** — `status:future`, issue stays open |
 | Some phases shipped, others abandoned without trigger | Close the shipped portion as above; remaining design moves to `DESIGN_DECISIONS.md` |
 | Waiting on a date or "appetite" with no concrete signal | Keep `status:future` (date-bound) or move design to `DESIGN_DECISIONS.md` (appetite-bound).  Don't defer. |

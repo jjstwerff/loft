@@ -1042,6 +1042,30 @@ impl Parser {
         // a codegen self-ref assert under debug-assertions).  A `{`-construction
         // keeps resolving below (a struct-variant literal).
         if qualifier_enum != u32::MAX && d_nr == u32::MAX && !self.lexer.peek_token("{") {
+            // A typo like `Color::Bleu` still recovers as null (below) but must
+            // also REPORT: silently nulling an unknown variant hid the typo
+            // (exit 0, `null` printed).  Emit once, on pass 2, with an
+            // enum-scoped suggestion — variants live in the enum's attributes,
+            // so `suggest_field_name` finds them (same source the `.`-access
+            // path already suggests from).
+            if !self.first_pass {
+                let enum_name = self.data.def(qualifier_enum).name().to_string();
+                if let Some(s) = self.suggest_field_name(qualifier_enum, name) {
+                    diagnostic_at!(
+                        self.lexer,
+                        name_pos,
+                        Level::Error,
+                        "unknown variant {enum_name}::{name} — did you mean '{s}'?"
+                    );
+                } else {
+                    diagnostic_at!(
+                        self.lexer,
+                        name_pos,
+                        Level::Error,
+                        "unknown variant {enum_name}::{name}"
+                    );
+                }
+            }
             *code = Value::Null;
             return self.data.def(qualifier_enum).returned().clone();
         }
@@ -1195,7 +1219,16 @@ impl Parser {
             // recover by consuming the balanced `{ … }`, so pass-1 never
             // cascades while it waits for pass-2 to resolve the forward ref.
             if !self.first_pass {
-                diagnostic_at!(self.lexer, name_pos, Level::Error, "unknown type '{name}'");
+                if let Some(s) = self.suggest_type_name(name) {
+                    diagnostic_at!(
+                        self.lexer,
+                        name_pos,
+                        Level::Error,
+                        "unknown type '{name}' — did you mean '{s}'?"
+                    );
+                } else {
+                    diagnostic_at!(self.lexer, name_pos, Level::Error, "unknown type '{name}'");
+                }
             }
             self.lexer.has_token("{");
             let mut depth = 1u32;
@@ -1972,6 +2005,12 @@ impl Parser {
                     self.data.def(td_nr).name()
                 );
             }
+            // Recover past the field's `: value` so the parser continues at the
+            // next `,`/`}` instead of choking on the orphaned value and cascading
+            // ("Expect token }" / "Expect token ;").  Only runs on an already-
+            // errored unknown field, so valid literals are unaffected.
+            let mut discard = Value::Null;
+            self.expression(&mut discard);
         } else {
             let td = self.data.attr_type(td_nr, nr);
             let pos = self

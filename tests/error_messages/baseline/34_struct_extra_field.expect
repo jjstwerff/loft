@@ -7,34 +7,4 @@ error: Unknown field Player.level
 3 |   p = Player { name: "Bob", level: 5 };
   |                                     ^
 
-error: Expect token }
-  --> <cases>/34_struct_extra_field.loft:3:37
-  |
-3 |   p = Player { name: "Bob", level: 5 };
-  |                                     ^
-
-error: Expect token ;
-  --> <cases>/34_struct_extra_field.loft:3:37
-  |
-3 |   p = Player { name: "Bob", level: 5 };
-  |                                     ^
-
-error: Expect token =
-  --> <cases>/34_struct_extra_field.loft:4:9
-  |
-4 |   print("{p.name}");
-  |         ^
-
-error: Expect constants to be in upper case style
-  --> <cases>/34_struct_extra_field.loft:4:9
-  |
-4 |   print("{p.name}");
-  |         ^
-
-error: Syntax error: unexpected '}'
-  --> <cases>/34_struct_extra_field.loft:5:2
-  |
-5 | }
-  |  ^
-
-error: aborting due to 6 previous errors
+error: aborting due to 1 previous error

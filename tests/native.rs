@@ -911,6 +911,47 @@ fn native_binary_script() -> std::io::Result<()> {
     run_native_job(&job)
 }
 
+/// @PLN28: unbounded recursion in native-compiled code must surface loft's typed
+/// `call stack overflow` (exit non-zero) — the same cap the interpreter enforces —
+/// NOT the opaque Rust `fatal runtime error: stack overflow, aborting`.  The
+/// generated `main` runs on a large-stack thread so the `MAX_CALL_DEPTH` guard in
+/// `cr_call_push` fires cleanly before the OS stack is exhausted.
+#[test]
+fn native_deep_recursion_reports_clean_stack_overflow() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    let rlib_info = find_loft_rlib();
+    // Write to a temp file, NOT tests/scripts/ (which the success-runners sweep —
+    // an infinitely-recursing script would break them).
+    let path = std::env::temp_dir().join("loft_native_stack_overflow_guard.loft");
+    std::fs::write(
+        &path,
+        "fn recur(n: integer) -> integer { m = recur(n + 1); return m + 1; }\n\
+         fn main() { x = recur(0); print(\"{x}\"); }\n",
+    )?;
+    let job = prepare_native_test(&path)?;
+    // Ok(false) = skipped (rustc absent / low space) — not a failure.
+    if !compile_native_job(&job, &rlib_info)? {
+        return Ok(());
+    }
+    let out = std::process::Command::new(&job.binary).output()?;
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "deep recursion must exit non-zero; stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("call stack overflow"),
+        "expected loft's typed stack-overflow diagnostic; stderr: {stderr}"
+    );
+    assert!(
+        !stderr.contains("fatal runtime error"),
+        "must NOT be the raw Rust stack-overflow abort; stderr: {stderr}"
+    );
+    Ok(())
+}
+
 /// N8a.3: native tuple-returning functions.
 ///
 /// The same 50-tuples.loft script will include a tuple-returning function once

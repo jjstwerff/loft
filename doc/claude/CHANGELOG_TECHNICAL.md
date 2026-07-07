@@ -9,6 +9,37 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### @PLN28 "Better error messages" — closeout (2026-07-07)
+
+Phases 5, 6, 1, and 7 landed, completing the plan (0/2/3/4 shipped earlier).
+Commits `a77afaec` (P5+P6), `6e9b6c5f` (P1 resolution), `<this>` (P7).
+
+- **P5 suggestions** (`src/diagnostics.rs`, `parser/objects.rs`): all seven
+  candidate-scoped `did-you-mean` sites live. Relaxed `suggest_similar_capped`
+  from `min(2, n/4)` to distance-2 for names ≥ 4 chars (catches transpositions
+  like `naem`→`name`); wired the struct-literal unknown-type site; a qualified
+  `Enum::Typo` now reports + suggests instead of silently nulling (exit 0 → 1).
+- **P6 type-mismatch** (`parser/mod.rs`, `parser/control.rs`, `parser/objects.rs`):
+  call-arg mismatch names the argument index; a `match` pattern whose type can
+  never match the subject now errors instead of compiling to a silent dead arm;
+  struct extra-field recovers past the orphaned value (6-error cascade → 1).
+  The spec's phrasing-only rewrites were skipped (messages already name both
+  sides + the operation); missing-field and format-spec-on-wrong-type left as
+  designed behaviour (zero-default fields / freeform specs).
+- **P1 spans**: verified the 5 "remaining" wraps (Set / Iter / Return / struct-
+  lit / narrow-cast) unnecessary — their diagnostics already capture positions
+  via `diagnostic_at!` and none faults at runtime, so wrapping would attach a
+  position no consumer reads while risking `unspan()` churn. Status → done.
+- **P7 closeout**: COMPILER.md § Diagnostics rewritten (spans → runtime C66 →
+  renderers); user-facing CHANGELOG entry; CLAUDE.md `LOFT_ERRORS` + diagnostic
+  toggles; CAVEATS native-no-source-map entry. No opcode changes; no runtime
+  path touched (bench flat).
+
+Golden `error_messages` baselines 06-10, 30, 34 regenerated + locked; full suite
+green on both backends. Deferred (non-blocking polish, tracked in the phase docs):
+phase-4 `4e.3 slice 2` (finer format-null tokens) and the `= note:` secondary-line
+renderer.
+
 ### #497: reassignment-path adopt-vs-copy — a borrowed call return freed the lender's store (2026-07-04)
 
 A struct-returning call REASSIGNED into an owned Reference local took the

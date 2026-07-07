@@ -1,3 +1,4 @@
+struct Player { name: text }
 fn main() {
   p = Plyer { name: "Bob" };
   print("{p.name}");

@@ -10,14 +10,14 @@ mod testing;
 #[test]
 fn wrong_parameter() {
     code!("fn def(i: integer) { }\nfn test() { def(true); }")
-        .error("expected integer, got boolean on call to def at wrong_parameter:2:17")
+        .error("expected integer, got boolean on argument 1 of call to def at wrong_parameter:2:17")
         .warning("Parameter i is never read at wrong_parameter:1:21");
 }
 
 #[test]
 fn wrong_boolean() {
     code!("enum EType{ Val }\nfn def(t: EType) {}\nfn test() { def(true); }")
-        .error("expected EType, got boolean on call to def at wrong_boolean:3:17")
+        .error("expected EType, got boolean on argument 1 of call to def at wrong_boolean:3:17")
         .warning("Parameter t is never read at wrong_boolean:2:19");
 }
 
@@ -186,7 +186,7 @@ fn wrong_assign() {
 #[test]
 fn mixed_enums() {
     code!("enum E1 { V1 }\nenum E2 { V2 }\nfn a(v: E2) -> E2 { v }\nfn test() { a(E1.V1) }")
-        .error("expected E2, got E1 on call to a at mixed_enums:4:15");
+        .error("expected E2, got E1 on argument 1 of call to a at mixed_enums:4:15");
 }
 
 #[test]
@@ -1484,7 +1484,7 @@ fn p302_unknown_var_arg_column() {
 #[test]
 fn p302_type_mismatch_arg_column() {
     code!("fn test() { print(1 + 2); }")
-        .error("expected text, got integer on call to print at p302_type_mismatch_arg_column:1:19");
+        .error("expected text, got integer on argument 1 of call to print at p302_type_mismatch_arg_column:1:19");
 }
 
 /// An undefined type in a struct literal yields `unknown type '…'` at the type

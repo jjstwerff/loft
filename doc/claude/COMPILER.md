@@ -1013,15 +1013,69 @@ Violations emit an `Error` diagnostic but do not abort compilation.
 
 ## Diagnostic system (`src/diagnostics.rs`)
 
-All errors, warnings, and fatal messages flow through `Diagnostics`:
+Every loft error — parser, type-check, or runtime — reaches the user as
+`file:line:col` + a concrete message + the source line with a caret +
+(where useful) a suggestion. The machinery (@PLN28) is three layers:
 
-```
-Warning  — informational; compilation continues
-Error    — type/syntax error; second pass is skipped if errors found in first pass
-Fatal    — parse cannot continue (e.g. unterminated string, syntax error)
-```
+### Layer 1 — positions & spans
 
-Diagnostics are collected on the `Lexer` and merged into `Parser::diagnostics` after each parse call. The `diagnostic!` and `specific!` macros format messages with file/line/column from `self.lexer.pos()`.
+`Level` orders `Debug < Warning < Error < Fatal`. Compile-time messages
+are collected on the `Lexer`, merged into `Parser::diagnostics` after
+each parse call, and carried as `DiagEntry { level, message, file, line,
+col }`.
+
+- `diagnostic!(lexer, level, …)` stamps the **lexer's current cursor**.
+- `diagnostic_at!(lexer, &pos, level, …)` stamps a **captured
+  `Position`** — used for type errors detected *after* the offending
+  node is parsed (the cursor has drifted to the `;`/`)` by then), so the
+  caret points at the token the user actually got wrong.
+
+Fault-prone IR nodes additionally carry their position *in the tree* via
+`Value::Span(Box<(Position, Value)>)` (`src/data.rs`), wrapping the
+runtime-fault-prone constructs (`/` `%`, index `[`, field `.`, `Call`/
+`CallRef`). Every second-pass / codegen walker has a one-line `Span`
+passthrough arm; sites that pattern-match a specific `Value` shape route
+through `Value::unspan()` / `unspan_mut()`. At codegen, a `Span` records
+`pc → Position` into `Definition.source_spans` (mirror of `line_numbers`)
+so a runtime fault can be mapped back to source. (Nodes whose diagnostics
+already capture their own `Position` via `diagnostic_at!` — assignment,
+`for`, `return`, struct-literal, narrowing cast — are intentionally *not*
+wrapped; see `plans/28-error-messages/01-spans-on-ir.md § Resolution
+2026-07-07`.)
+
+### Layer 2 — runtime errors (C66: log-and-continue)
+
+Runtime faults (divide-by-zero, index OOB, null deref, narrowing-cast
+overflow, `panic`/`assert`) build a `runtime_error::RuntimeError` and
+store it in `Stores::runtime_error` with `had_fatal = true`. Per
+[DESIGN_DECISIONS § C66](DESIGN_DECISIONS.md#c66--no-runtime-exceptions-in-production-loft-programs-never-abort-on-user-attributable-edge-cases),
+the faulting op then **completes with its sentinel** (null DbRef, char 0,
+`i64::MIN`, …) and execution **continues** — loft programs must not abort
+on user-attributable edge cases. The stored error carries the source
+`Position` (via `source_spans`) for rendering at exit. `--dev-soft-halt`
+/ `LOFT_DEV_SOFT_HALT=1` demotes dev-mode raises to the same
+log-and-continue so one run surfaces every fault site.
+
+### Layer 3 — renderers
+
+- `DiagEntry::to_string_compact` — single line `Level: message at
+  file:line:col`, used by the test harness.
+- `diagnostic_render::render_pretty_all` — the user default: header +
+  `--> file:line:col` + source line + caret, with cascade dedup.
+
+`LOFT_ERRORS=compact|pretty` (env) or `--errors=compact|pretty` (CLI,
+overrides env) switches renderers; the default is `pretty`. The test
+harness pins `compact` in `tests/common/`.
+
+**Suggestions** (`suggest_similar` / `suggest_similar_capped`,
+`src/diagnostics.rs`) append `— did you mean '<near>'?` to *name-not-
+found* diagnostics (variable, function, field, method, type, enum
+variant, format capture). Short names (≤3 chars) never suggest; 4+ chars
+allow Levenshtein-2 (catches transpositions like `naem`→`name`).
+
+**Invariant:** every error knows its source position. Anything that
+`panic!`s in the runtime is an interpreter bug, not a user error (the one
+intentional exception is documented at its site in `fill.rs`).
 
 ---
 

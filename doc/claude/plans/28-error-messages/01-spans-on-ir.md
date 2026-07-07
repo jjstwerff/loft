@@ -5,7 +5,9 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 1 — Spans on IR
 
-Status: in-progress (mostly done; 5 mechanical wraps remain).
+Status: **done 2026-07-07** — the error-message goal is met; the 5
+"remaining" wraps (1.14-1.18) are unnecessary, see § Resolution
+2026-07-07.
 Wrap landings on `roadmap-lsp-eclipse`:
 
 | Step | Commit | Coverage |
@@ -23,6 +25,47 @@ Wrap landings on `roadmap-lsp-eclipse`:
 Remaining wraps (each small, mechanical, walker discipline already in
 place — surface ≤1 new pattern-match site per wrap): 1.14 Set, 1.15
 Iter, 1.16 Return, 1.17 struct lit, 1.18 narrow cast.
+
+## Resolution 2026-07-07 — the 5 remaining wraps are unnecessary
+
+Verified (each node tested for caret quality on the current tree): every
+one of the five leftover nodes **already delivers a precise `file:line:col`
++ caret**, because the diagnostic sites evolved (phases 5-6) to capture
+their own `Position` via `diagnostic_at!` rather than relying on the
+`Span`/`current_span` fallback:
+
+| Node | Diagnostic | Caret verified |
+|---|---|---|
+| 1.14 Set | `Variable 'x' cannot change type from integer to text` | `=`-assignment column |
+| 1.15 Iter | `cannot iterate over integer; expected …` | the iterable |
+| 1.16 Return | `expected integer, got text on return` | the return value |
+| 1.17 struct lit | `Cannot assign text to field P.v of type integer` | the field value |
+| 1.18 narrow cast | `narrowing cast … may not fit at runtime` (case 24) | the `as` expr |
+
+And none of the five **faults at runtime**: the fault-prone ops that do
+(div, mod, index, field, call — 1.9-1.13) are already `Span`-wrapped and
+handled by phase 4's C66 log-and-continue (verified: `100/d` with `d==0`
+→ `null` + continue; `v[10]` → `null`).  A checked narrowing cast
+`as i32?` returns `null` by contract (no fault to locate); loft has no
+silent implicit narrow.
+
+So wrapping Set / Iter / Return / struct-lit / cast would attach a
+`Position` that **no consumer reads** — phases 2/3/6 already have precise
+positions from direct capture — while wrapping `Value::Set` (matched
+throughout the second pass) reintroduces exactly the `unspan()`
+pattern-match churn + regression risk that the 1.B saga documents above,
+for zero user-visible gain.  The wraps were speculative infrastructure
+(the design listed Set/Iter/Return/struct-lit as position-carriers before
+the diagnostic sites learned to capture positions themselves); that need
+never materialised for @PLN28's error-message goal.
+
+**Acceptance re-checked against reality:** every fault-prone-at-runtime
+construction wraps in `Span`; every walker has its `Span` arm (`cargo
+test` green); `Definition.source_spans` populated (1.20); the
+`error_messages` goldens all carry `file:line:col`.  Phase 1's
+error-message acceptance is met.  (If a future LSP/hover feature — the
+`roadmap-lsp-eclipse` context — wants a span on *every* node regardless
+of fault, that is new scope under an LSP plan, not @PLN28.)
 
 The phase-3 hook (commit `a17eb55`) is the first user-visible payoff:
 running a loft program that panics at runtime now prints

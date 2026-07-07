@@ -5,10 +5,10 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 00 — Foundation: integrity + tail marker on existing Store
 
-**Status:** Open — bundled into the `store-durable-phase1`
-branch with [Phase 01](01-tier-1-integrity.md); ships as one
-PR.  See
-[README § First slice — Phases 00 + 01 as one PR](README.md#first-slice--phases-00--01-as-one-pr).
+**Status:** ✅ **SHIPPED** — merged to `main` with [Phase 01](01-tier-1-integrity.md) as one
+PR ([PR #219](https://github.com/loft-lang/loft/pull/219), commit `d494edc`). The foundation
+(integrity + `.dmeta` sidecar) is live in `src/store.rs`; non-durable stores are bit-for-bit
+unchanged.
 
 ## Goal
 

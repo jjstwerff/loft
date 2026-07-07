@@ -5,7 +5,65 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 6 — Concrete type-mismatch messages
 
-Status: open
+Status: **delivered 2026-07-07** — see § Delivered.  The atomic sequence
+and templates below are the original design, retained for context.
+
+## Delivered (2026-07-07)
+
+This phase's premise ("today's messages use generic phrasing like 'type
+mismatch'") was **stale**: the messages had already evolved (the
+`validate_convert` direction fix — 6.1's `Type::name` — and phase 5) to
+name **both sides + the operation** at nearly every site.  An audit
+(each 06.A site tested on `--interpret` + the golden corpus) found most
+templates were effectively already met, and two of the spec's target
+cases actually contradict loft's design.  The genuine gaps, fixed at
+their chokepoints:
+
+1. **Argument index** (6.6, `parser/mod.rs`).  A call-arg mismatch was
+   `expected E, got G on call to F`; it now names the position:
+   `expected integer, got text on argument 2 of call to add`.  One-line
+   context enrichment (`nr` was already in scope).
+2. **Match-pattern type mismatch** (6.10, `parser/control.rs`).  A
+   pattern whose type can never match the subject (`match x {"hi"=>…}`
+   with `x: integer`) **silently exited 0** with a dead arm.  It now
+   errors `cannot match integer against pattern of type text`.  The
+   `incompatible` detection already existed as a #493 codegen-width
+   guard; this upgrades it from silent-recovery to a reported error
+   while keeping the width-safe dead-`false` recovery.
+3. **Struct extra-field cascade** (`parser/objects.rs`).  `Player{name,
+   level:5}` (unknown `level`) emitted the correct `Unknown field
+   Player.level` **then a 5-error cascade** (`Expect token }` / `;` / …)
+   because the orphaned `: value` was left unconsumed.  The error branch
+   now consumes the value → **one** clean error (6 → 1).
+
+Baselines 06 / 30 / 34 regenerated + locked by `baselines_are_locked_in`;
+full suite green on both backends; the match change surfaced **no**
+previously-silent dead arms anywhere in the suite.  No runtime path was
+touched (all changes are parse-time diagnostics / recovery), so `make
+bench` is definitionally flat — not re-run.
+
+### Intentionally NOT changed (design, not bugs)
+
+- **Missing struct field** (spec case 33): `Player{name:"Bob"}` omitting
+  `health` is **legal by design** — an omitted field takes its zero /
+  default value (LOFT.md:261 `= expr` default; DESIGN_DECISIONS.md:1189
+  "`S{}` gives the zero value").  Forcing a "missing field" error would
+  break intended partial construction.  The plan's case-33 expectation
+  was wrong; behaviour left as-is.
+- **Format-spec on wrong type** (spec case 40): `{x:d}` on a text value
+  is silently ignored.  Format specs are **freeform by design**
+  (LOFT.md:1621 treats `{r:128,…}` as a spec); per-type spec validation
+  is a new subsystem, not a contained message fix — out of scope.
+- **Phrasing-only rewrites** (assignment / operator / return /
+  struct-field templates): the current messages already name both sides
+  + the operation (`No matching operator '/' on 'text' and 'integer'`,
+  `Cannot assign integer to field S.name of type text`, `cannot change
+  type from text to integer`).  Rewriting them to the exact template
+  strings is lateral churn with fixture cost and no user gain; left.
+- **`= note:` decl-pointer lines** (the templates' second lines): the
+  diagnostic system has no secondary-note channel (phase 5 deferred that
+  renderer too).  Decl-pointers would need that infra; deferred, keeping
+  the shipped inline style.
 
 ## Goal
 
