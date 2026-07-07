@@ -447,7 +447,15 @@ impl Parser {
             // statements / if-branches under the same expected type each still see
             // it (clearing made only the FIRST branch of an `if`-return resolve).
             let saved_expected = self.expected.clone();
-            if self.enum_context(result) {
+            // @PLN90 W8 — thread a VECTOR result type into the block's statements too (not just
+            // enum tails), so an empty `[]` value-tail (`match e { _ => { [] } }`) is TYPED and
+            // materialises a REAL empty vector instead of folding to `Void`. Without it the empty
+            // arm collapses, desyncing single-line (a `Null` else) vs multi-line (a `return null`
+            // fallthrough) delivery — a layout-sensitive fragility. Mirrors the enum-tail hint and
+            // the explicit-`return []` type-threading (@P365). The fresh-vector-in-arm double
+            // `OpFreeRef` this exposes is PRE-EXISTING (a non-empty `{ [7,8,9] }` arm has it too)
+            // and POISON-idempotent — not introduced here.
+            if self.enum_context(result) || matches!(result, Type::Vector(_, _)) {
                 self.expected = result.clone();
             }
             // @PLN46/@PLN25: `expr_not_null` is a TRANSIENT marker — "the field access just

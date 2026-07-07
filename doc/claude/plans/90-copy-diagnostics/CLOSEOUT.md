@@ -259,7 +259,22 @@ silent** there.
 **Depends on:** **W5** (its *silencing* half has nothing to silence until the lint fires).
 **Exit:** `copy expr` forces an independent copy both backends; the lint is silent at that site; tests.
 
-### W8 — Empty-arm parse normalise  ·  P1-robustness · S–M · **RE-SEQUENCED: after W1/W2**
+### W8 — Empty-arm parse normalise  ·  **✅ DONE (2026-07-06)**
+
+**Landed:** thread a `Type::Vector` result type into the block's value-tail (`parse_block:449` —
+extend the enum-tail hint to vectors), so an empty `[]` arm is TYPED and materialises a **real empty
+vector** instead of folding to `Void`. Result — the layout-sensitive fragility is GONE: BOTH
+formattings now have **0 `return null`** and both build a real empty vector (was: single-line → a
+`Null` `else ;`, multi-line → a broken `return null` fallthrough — a latent divergence where the
+empty arm delivered a null vector that only read `len 0`). The fresh-vector-in-arm double `OpFreeRef`
+this surfaces is **pre-existing** (a non-empty `_ => { [7,8,9] }` arm has it too — verified) and
+POISON-idempotent, not introduced here. **Full suite green; POISON green; guard
+`tests/scripts/508-empty-arm-real-empty-vector.loft` (both backends — checks the empty arm is a
+*usable* empty vector, iterable, not a null).** Residual: the two formattings still differ in buffer
+naming (`_mvcopy_1` vs `__retbuf`) — cosmetic, both deliver a correct real empty vector; the deeper
+value-`if` vs statement-`if` unification is a separate non-fragility refinement.
+
+**History — RE-SEQUENCED after W1/W2 (superseded by the fix above):**
 
 **Verified state (2026-07-06, introspected — deeper than filed):** the divergence is **not**
 cosmetic. Single-line `_ => { [] }` → return buffer `_mvcopy_1`, `jo_arm_copy` delivery,
