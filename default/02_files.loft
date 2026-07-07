@@ -414,6 +414,19 @@ pub fn store_load(r: reference, path: text) -> boolean fs#read;
 #rust"stores.load_path((@r).store_nr, std::path::Path::new(@path))"
 #impure(io)
 
+// Working-set load: fetch ONE integer-keyed entry from a persisted HASH image
+// into the empty local hash `local`, reading only the pages the lookup touches
+// — not the whole file. The bounded-fetch counterpart of `store_load`, for when
+// `local` should hold only the entries actually asked for (a phone pulling the
+// few map tiles a route needs from a large block). Returns false when the key
+// is absent, the file is unreadable, or the collection is not an integer-keyed
+// hash of a FLAT (scalar-field) struct. @PLN97 arc G (loft#522).
+//   tiles: hash<Tile[id]> = []
+//   store_load_key(tiles, "block.store", 42)   // tiles now holds entry 42 only
+pub fn store_load_key(local: reference, path: text, key: integer) -> boolean fs#read;
+#rust"stores.load_key(&(@local), @path, @key)"
+#impure(io)
+
 // Truncates or extends the file to `size` bytes. Returns FileResult.Ok, or an
 // error variant (IsDirectory / NotFound / Other).
 pub fn set_file_size(self: File, size: integer) -> FileResult fs#update {

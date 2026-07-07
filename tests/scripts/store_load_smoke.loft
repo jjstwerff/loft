@@ -43,6 +43,13 @@ fn main() {
     if !ok { println("FAIL load-returned-false"); return }
     println("load keys={keys_of(h)}");
     println("load lookup h[13]={lookup13(h)}");
+  } else if mode == "loadkey" {
+    // Phase 3a: fetch ONLY key 13 — the working set, not the whole file.
+    ok = store_load_key(h, path, 13);
+    if !ok { println("FAIL loadkey-returned-false"); return }
+    println("loadkey keys={keys_of(h)}");
+    println("loadkey lookup h[13]={lookup13(h)}");
+    println("loadkey len={len(h)}");
   } else {
     println("FAIL unknown-mode")
   }

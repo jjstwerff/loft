@@ -276,6 +276,38 @@ fn store_load_rejects_garbage_file() {
     );
 }
 
+/// @PLN97 arc G Phase 3a — `store_load_key` fetches ONLY the requested integer
+/// key (the working set) from a persisted hash image, not the whole file. On
+/// both backends: the loaded key is present with the right value, un-requested
+/// keys are absent, and `len == 1` (proving the load is bounded, not a full
+/// store_load). The read touches only the pages the lookup needs.
+#[test]
+fn store_load_key_loads_only_the_requested_key_both_backends() {
+    let dir = scratch("store_load_key_phase3a");
+    let path = dir.join("k.store");
+
+    let (out_w, code_w) = run_mode(&load_script(), &path, "write");
+    assert_eq!(code_w, 0, "write exit: {out_w:?}");
+    assert!(out_w.contains("write keys=7,13,42"), "write: {out_w:?}");
+
+    for backend in ["--interpret", "--native"] {
+        let (out, code) = run_mode_backend(backend, &load_script(), &path, "loadkey");
+        assert_eq!(code, 0, "{backend} loadkey exit: {out:?}");
+        assert!(
+            out.contains("loadkey keys=13"),
+            "{backend}: only key 13 must be present (bounded working set): {out:?}"
+        );
+        assert!(
+            out.contains("loadkey lookup h[13]=1300"),
+            "{backend}: the loaded key's value must be correct: {out:?}"
+        );
+        assert!(
+            out.contains("loadkey len=1"),
+            "{backend}: exactly one entry loaded, not the whole store: {out:?}"
+        );
+    }
+}
+
 #[test]
 fn fresh_returns_true_and_file_appears() {
     let dir = scratch("fresh_returns_true_and_file_appears");

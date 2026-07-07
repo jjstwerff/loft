@@ -207,6 +207,88 @@ impl<P: PageProvider> PagedReader<P> {
     }
 }
 
+/// Locate the record stored under `key` in a HASH rooted at `(root_rec,
+/// root_pos)` of the paged image — a read-only port of `hash::find`
+/// (`src/hash.rs`) over [`PagedReader`] instead of a `Store`. Returns the entry
+/// record number, or 0 when absent. `keys` is the collection's key schema
+/// (`Stores::keys(type)`); `key_hash` is reused verbatim (it hashes the
+/// `Content` key, not a store). The bucket-record layout constants mirror
+/// `hash.rs`: seed at fld 8, buckets from fld 16, `elms = (room-2)·2`.
+pub fn find_hash_entry<P: PageProvider>(
+    reader: &mut PagedReader<P>,
+    root_rec: u32,
+    root_pos: u32,
+    key: &[crate::keys::Content],
+    keys: &[crate::keys::Key],
+) -> u32 {
+    let claim = reader.u32_at(root_rec, root_pos);
+    if claim == 0 {
+        return 0;
+    }
+    let room = reader.record_words(claim);
+    if room < 2 {
+        return 0;
+    }
+    let elms = (room - 2) * 2;
+    let seed = reader.i64_at(claim, 8) as u64; // SEED_FLD
+    let hash_val = crate::keys::key_hash(key, seed);
+    let mut index = (hash_val % u64::from(elms)) as u32;
+    let mut rec = reader.u32_at(claim, 16 + index * 4); // BUCKET0
+    for _ in 0..elms {
+        if rec == 0 {
+            return 0;
+        }
+        if key_compare_reader(reader, key, rec, 8, keys) == std::cmp::Ordering::Equal {
+            return rec;
+        }
+        index = (index + 1) % elms;
+        rec = reader.u32_at(claim, 16 + index * 4);
+    }
+    0
+}
+
+/// Compare `key` against the key fields of the entry at `(rec, pos)` in the
+/// paged image — the reader port of `keys::compare_key` for the fixed-width
+/// numeric key types (1/2 = i64 `integer`/`long`, 8/9/10/11 = narrow ints).
+/// Text/float keys (types 6/3/4) are a follow-up (they need a string-record
+/// read / float compare); an unsupported type returns `Greater` so it never
+/// falsely matches.
+fn key_compare_reader<P: PageProvider>(
+    reader: &mut PagedReader<P>,
+    key: &[crate::keys::Content],
+    rec: u32,
+    pos: u32,
+    keys: &[crate::keys::Key],
+) -> std::cmp::Ordering {
+    use crate::keys::Content;
+    use std::cmp::Ordering;
+    for (k_nr, val) in key.iter().enumerate() {
+        let k = &keys[k_nr];
+        let p = pos + u32::from(k.position);
+        let c = match (val, k.type_nr.abs()) {
+            (Content::Long(v), 1 | 2) => v.cmp(&reader.i64_at(rec, p)),
+            (Content::Long(v), 8) => v.cmp(&i64::from(reader.i32_at(rec, p))),
+            (Content::Long(v), 9) => {
+                let b = reader.resolve(u64::from(rec) * 8 + u64::from(p), 2);
+                v.cmp(&i64::from(i16::from_ne_bytes([b[0], b[1]])))
+            }
+            (Content::Long(v), 10) => {
+                let b = reader.resolve(u64::from(rec) * 8 + u64::from(p), 1);
+                v.cmp(&i64::from(b[0] as i8))
+            }
+            (Content::Long(v), 11) => {
+                let b = reader.resolve(u64::from(rec) * 8 + u64::from(p), 2);
+                v.cmp(&i64::from(u16::from_ne_bytes([b[0], b[1]]) as i16))
+            }
+            _ => return Ordering::Greater, // unsupported key type — never match
+        };
+        if c != Ordering::Equal {
+            return if k.type_nr < 0 { c.reverse() } else { c };
+        }
+    }
+    Ordering::Equal
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

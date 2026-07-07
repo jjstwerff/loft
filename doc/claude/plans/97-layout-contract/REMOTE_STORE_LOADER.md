@@ -208,7 +208,27 @@ and `store_load_range` (Phase 4) are unblocked.
   Phase 3. Bootstrap (page 0 + size + the @PLN97 identity gate) also lands at the Phase-3 entry.
 
 ### Phase 3 — `store_load_keys` (point lookups; Hash & Sorted)
-- **Build:** `store_load_keys(local, path, keys)` — a `#rust` builtin + `n_store_load_keys` handler
+
+**Phase 3a DONE 2026-07-07 — `store_load_key` (single integer key, flat struct).**
+The lowest-risk cut is shipped and verified: `store_load_key(local, path, key)` fetches ONE
+integer-keyed entry from a persisted hash image into `local`, reading only the pages the lookup
+touches. `Stores::load_key` (allocation.rs, `remote-store`-gated) opens a `PagedReader`, takes the
+root from `local`'s live `DbRef` + the `Key[]` from `stores.keys(known_type)` (the design unlock —
+NOT reverse-engineered bytes), runs `paged_reader::find_hash_entry` (a read-only port of
+`hash::find`), then FLAT-copies the matched record's scalar fields into a fresh `local` claim and
+links it via the verified `hash::add` (no relocation — flat struct has no owned children). Wired as
+`n_store_load_key` (native.rs, ungated-by-mmap) + the `store_load_key` builtin (02_files.loft).
+**Verified interpret + native, leak-clean:** the requested key loads with the right value,
+un-requested keys are absent, `len == 1` (bounded working set) —
+`store_persist_loft.rs::store_load_key_loads_only_the_requested_key_both_backends`. `LOFT_LOADER_STATS`
+prints `bytes_fetched` vs file for the ≪-file check at scale.
+
+**Remaining Phase 3 (3b+):** multiple keys (a `vector` arg) · Sorted key path · text/float key types
+in `key_compare_reader` · the identity gate at bootstrap · **the relocating graph-copy** for
+non-flat entries (vector/text/nested fields), reimplementing `for_each_owned_child` over the reader
+— the high-risk core, built variant-by-variant with both-backend + leak verification.
+
+- **Build (full):** `store_load_keys(local, path, keys)` — a `#rust` builtin + `n_store_load_keys` handler
   (mirrors `store_load`'s wiring). The handler:
   1. `PagedReader::open(path)` + the @PLN97 identity gate (read the layout id, `schema_sidecar::check`).
   2. **Root + keys come from the live schema, NOT the bytes** (the design unlock, 2026-07-07): the

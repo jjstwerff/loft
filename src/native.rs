@@ -169,6 +169,8 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     #[cfg(feature = "mmap")]
     ("n_store_persist_bind", n_store_persist_bind),
     ("n_store_load", n_store_load),
+    #[cfg(feature = "remote-store")]
+    ("n_store_load_key", n_store_load_key),
     ("n_eprint", n_eprint),
     ("n_directory", n_directory),
     ("n_user_directory", n_user_directory),
@@ -1232,6 +1234,18 @@ fn n_store_load(stores: &mut Stores, stack: &mut DbRef) {
     let v_path = *stores.get::<Str>(stack);
     let v_ref = *stores.get::<DbRef>(stack);
     let ok = stores.load_path(v_ref.store_nr, std::path::Path::new(v_path.str()));
+    stores.put(stack, ok);
+}
+
+/// Interpreter handler for `store_load_key` — load ONE integer-keyed entry from
+/// a persisted hash image, fetching only the pages the lookup touches.  Args
+/// pop in reverse: key, path, local.  @PLN97 arc G Phase 3a.
+#[cfg(feature = "remote-store")]
+fn n_store_load_key(stores: &mut Stores, stack: &mut DbRef) {
+    let v_key = *stores.get::<i64>(stack);
+    let v_path = *stores.get::<Str>(stack);
+    let v_ref = *stores.get::<DbRef>(stack);
+    let ok = stores.load_key(&v_ref, v_path.str(), v_key);
     stores.put(stack, ok);
 }
 

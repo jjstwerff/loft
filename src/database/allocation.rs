@@ -2263,6 +2263,75 @@ impl Stores {
         self.allocations[slot_idx] = new_store;
         true
     }
+
+    /// @PLN97 arc G Phase 3a — load ONE integer-keyed entry from a persisted
+    /// HASH image at `path` into the empty local hash `local`, fetching only the
+    /// pages the lookup touches (via [`crate::paged_reader::PagedReader`]).
+    ///
+    /// The working-set primitive: `local` need not hold the whole remote store,
+    /// only the entries actually asked for. Returns `false` when the key is
+    /// absent, the file is unreadable/mismatched, or the collection is not an
+    /// integer-keyed hash of a FLAT struct (no nested vector/text/struct fields
+    /// — those need the relocating graph-copy, a later cut). Root + key schema
+    /// come from `local`'s live type (same collection type ⇒ same structural
+    /// root position in the image), NOT the raw bytes.
+    #[cfg(feature = "remote-store")]
+    pub fn load_key(&mut self, local: &DbRef, path: &str, key: i64) -> bool {
+        use crate::paged_reader::{LocalFileProvider, PagedReader, find_hash_entry};
+        let Ok(prov) = LocalFileProvider::open(path) else {
+            return false;
+        };
+        let mut reader = PagedReader::new(prov);
+
+        // Schema from the LIVE type of `local` (never reverse-engineered bytes).
+        let tp = self.allocations[local.store_nr as usize].known_type;
+        if tp == u16::MAX {
+            return false;
+        }
+        let keys = self.keys(tp).to_vec();
+        let key_content = vec![crate::keys::Content::Long(key)];
+
+        // find over the paged image, rooted at `local`'s own (rec, pos).
+        let matched = find_hash_entry(&mut reader, local.rec, local.pos, &key_content, &keys);
+        if matched == 0 {
+            return false; // key absent in the remote (not an error)
+        }
+
+        // FLAT copy: the entry record's field words (fld 8 .. size·8) hold only
+        // scalars, so a straight word copy into a fresh local claim is correct —
+        // no internal `rec` pointers to relocate. `hash::add` then links it,
+        // hashing the copied key (reusing the verified insert path).
+        let size = reader.record_words(matched);
+        if size < 2 {
+            return false;
+        }
+        let store = &mut self.allocations[local.store_nr as usize];
+        let new_rec = store.claim(size);
+        store.zero_fill(new_rec);
+        let mut fld = 8u32;
+        while fld + 4 <= size * 8 {
+            let w = reader.u32_at(matched, fld);
+            self.allocations[local.store_nr as usize].set_u32_raw(new_rec, fld, w);
+            fld += 4;
+        }
+        let entry = DbRef {
+            store_nr: local.store_nr,
+            rec: new_rec,
+            pos: 8,
+        };
+        crate::hash::add(local, &entry, &mut self.allocations, &keys);
+
+        // Observability for the "bytes fetched ≪ file" invariant: at scale a
+        // single key touches O(1) pages, not O(file). Off unless asked.
+        if std::env::var_os("LOFT_LOADER_STATS").is_some() {
+            eprintln!(
+                "store_load_key: key={key} matched=rec{matched} bytes_fetched={} file={}",
+                reader.provider().bytes_fetched(),
+                reader.size()
+            );
+        }
+        true
+    }
 }
 
 /// @PLAN38 — pad a Store byte image out to `target_words` while keeping
