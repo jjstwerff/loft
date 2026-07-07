@@ -286,3 +286,36 @@ fn layout_coverage_audit() {
          the new kind in coverage() + COVERED_LABELS."
     );
 }
+
+// ── Phase D — the schema-description sidecar (self-describing store) ─────────
+
+/// The in-memory layout identity built over the real corpus round-trips through
+/// the `.dschema` sidecar text, carries the same pinned hash the golden asserts,
+/// and an UNCHANGED store hands over raw (`Handoff::Identical`).
+#[test]
+fn schema_sidecar_identity_end_to_end() {
+    use loft::schema_sidecar::{Handoff, LayoutIdentity, classify};
+
+    let (data, db) = cached_default();
+    let mut p = Parser::new();
+    p.data = data;
+    p.database = db;
+    p.parse_str(CORPUS, "layout_corpus", false);
+    let roots = corpus_roots(&p.data);
+
+    let id = LayoutIdentity::of(&p.database, &roots);
+    assert_eq!(
+        id.layout_hash, LAYOUT_ALGO_HASH,
+        "sidecar identity hash must match the golden's pinned layout hash"
+    );
+    assert_eq!(
+        LayoutIdentity::from_sidecar(&id.to_sidecar()),
+        Some(id.clone()),
+        "sidecar text must round-trip"
+    );
+    assert_eq!(
+        classify(&id, &id),
+        Handoff::Identical,
+        "an unchanged store hands over raw"
+    );
+}
