@@ -2416,11 +2416,13 @@ impl Stores {
     /// FLAT-struct restriction (scalar fields only — no relocation yet).
     #[cfg(feature = "remote-store")]
     pub fn load_keys(&mut self, local: &DbRef, path: &str, keys_vals: &[i64]) -> i64 {
-        use crate::paged_reader::{LocalFileProvider, PagedReader};
-        let Ok(prov) = LocalFileProvider::open(path) else {
+        use crate::paged_reader::{PageSource, PagedReader};
+        // `path` is a local file OR an `http(s)://` URL — the paged reader pulls
+        // only the pages a lookup touches, from disk or over the network (#517).
+        let Ok(source) = PageSource::open(path) else {
             return 0;
         };
-        let mut reader = PagedReader::new(prov);
+        let mut reader = PagedReader::new(source);
 
         // Schema from the LIVE type of `local` (never reverse-engineered bytes).
         let tp = self.allocations[local.store_nr as usize].known_type;
@@ -2470,7 +2472,7 @@ impl Stores {
     #[cfg(feature = "remote-store")]
     fn load_one(
         &mut self,
-        reader: &mut crate::paged_reader::PagedReader<crate::paged_reader::LocalFileProvider>,
+        reader: &mut crate::paged_reader::PagedReader<crate::paged_reader::PageSource>,
         local: &DbRef,
         content_tp: u16,
         keys: &[crate::keys::Key],

@@ -42,9 +42,9 @@ native-extensions = ["dep:libloading"]
 # @PLN97 arc G — the remote/paged working-set store loader. In `default` so
 # dev/test builds compile+exercise it; a lean `--no-default-features` build
 # compiles NONE of the paged/remote machinery (the zero-cost-to-non-users
-# invariant). The HTTP page provider (Phase 5) adds its deps under this flag;
-# the local-file provider (Phases 2–4) is dependency-free.
-remote-store      = []
+# invariant). The HTTP `Range` page provider (Phase 5) pulls in `ureq`; the
+# local-file provider (Phases 2–4) is dependency-free.
+remote-store      = ["dep:ureq"]
 # sha2 is a base (non-optional) dependency — used by the startup-cache key
 # (@PLAN28) — so it is no longer listed as `dep:sha2` under `registry`.
 registry     = ["dep:ureq", "dep:zip", "dep:tar", "dep:flate2", "dep:ed25519-dalek"]

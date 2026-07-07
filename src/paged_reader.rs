@@ -93,6 +93,146 @@ impl PageProvider for LocalFileProvider {
     }
 }
 
+/// An HTTP `Range` page provider — fetches byte ranges from a remote store over
+/// `Range: bytes=a-b` GETs (the #517 stack), so a working-set load pulls only the
+/// pages a lookup touches across the network. The remote counterpart of
+/// [`LocalFileProvider`]; the paged reader + traversal + copy above it are
+/// identical, so only the byte source differs.
+pub struct HttpRangeProvider {
+    url: String,
+    size: u64,
+    agent: ureq::Agent,
+    /// Every `(off, len)` fetched — for the "bytes fetched ≪ file" assertion.
+    pub fetches: Vec<(u64, usize)>,
+}
+
+/// Parse the total from a `Content-Range` header value (`"bytes 0-0/12345"` →
+/// `12345`; an unknown total `"*"` → `None`).
+fn parse_content_range_total(h: &str) -> Option<u64> {
+    h.rsplit('/').next().and_then(|t| t.trim().parse().ok())
+}
+
+impl HttpRangeProvider {
+    /// Open `url`, discovering the store's total size via a `Range: bytes=0-0`
+    /// probe (`Content-Range: bytes 0-0/TOTAL`), falling back to `Content-Length`.
+    ///
+    /// # Errors
+    /// Returns a message when the request fails or the size can't be determined.
+    pub fn open(url: &str) -> Result<Self, String> {
+        let agent = ureq::AgentBuilder::new()
+            .timeout(std::time::Duration::from_secs(30))
+            .build();
+        let resp = agent
+            .get(url)
+            .set("Range", "bytes=0-0")
+            .call()
+            .map_err(|e| e.to_string())?;
+        let size = resp
+            .header("Content-Range")
+            .and_then(parse_content_range_total)
+            .or_else(|| resp.header("Content-Length").and_then(|c| c.parse().ok()))
+            .ok_or_else(|| "remote store: could not determine size".to_string())?;
+        Ok(Self {
+            url: url.to_string(),
+            size,
+            agent,
+            fetches: Vec::new(),
+        })
+    }
+
+    /// Total bytes fetched so far.
+    #[must_use]
+    pub fn bytes_fetched(&self) -> usize {
+        self.fetches.iter().map(|(_, l)| l).sum()
+    }
+}
+
+impl PageProvider for HttpRangeProvider {
+    fn size(&self) -> u64 {
+        self.size
+    }
+
+    fn fetch(&mut self, off: u64, len: usize) -> Vec<u8> {
+        use std::io::Read;
+        self.fetches.push((off, len));
+        let mut buf = vec![0u8; len];
+        if off >= self.size {
+            return buf; // wholly past EOF — zero
+        }
+        let last = (off + len as u64 - 1).min(self.size - 1);
+        let want = (last - off + 1) as usize;
+        if let Ok(resp) = self
+            .agent
+            .get(&self.url)
+            .set("Range", &format!("bytes={off}-{last}"))
+            .call()
+        {
+            if resp.status() == 206 {
+                // Partial content: the body IS the requested range.
+                let _ = resp.into_reader().read_exact(&mut buf[..want]);
+            } else {
+                // Server ignored Range (200, whole file): skip to `off`, then read.
+                // Correct (the prove-can-fail path), though it reads the prefix.
+                let mut r = resp.into_reader();
+                let mut skip = vec![0u8; off as usize];
+                if r.read_exact(&mut skip).is_ok() {
+                    let _ = r.read_exact(&mut buf[..want]);
+                }
+            }
+        }
+        buf
+    }
+}
+
+/// The byte source a `store_load*` reads through, chosen by the path scheme: a
+/// local file or an HTTP `Range` URL. Lets the generic [`PagedReader`] and the
+/// find / relocating-copy above it stay ONE code path regardless of where the
+/// bytes live — the whole point of the `PageProvider` seam.
+pub enum PageSource {
+    Local(LocalFileProvider),
+    Http(HttpRangeProvider),
+}
+
+impl PageSource {
+    /// Open `spec` as an HTTP URL (`http://` / `https://`) or a local file path.
+    ///
+    /// # Errors
+    /// Propagates the underlying provider's open error.
+    pub fn open(spec: &str) -> Result<Self, String> {
+        if spec.starts_with("http://") || spec.starts_with("https://") {
+            Ok(PageSource::Http(HttpRangeProvider::open(spec)?))
+        } else {
+            LocalFileProvider::open(spec)
+                .map(PageSource::Local)
+                .map_err(|e| e.to_string())
+        }
+    }
+
+    /// Total bytes fetched so far, whichever provider backs this source.
+    #[must_use]
+    pub fn bytes_fetched(&self) -> usize {
+        match self {
+            PageSource::Local(p) => p.bytes_fetched(),
+            PageSource::Http(p) => p.bytes_fetched(),
+        }
+    }
+}
+
+impl PageProvider for PageSource {
+    fn size(&self) -> u64 {
+        match self {
+            PageSource::Local(p) => p.size(),
+            PageSource::Http(p) => p.size(),
+        }
+    }
+    fn fetch(&mut self, off: u64, len: usize) -> Vec<u8> {
+        match self {
+            PageSource::Local(p) => p.fetch(off, len),
+            PageSource::Http(p) => p.fetch(off, len),
+        }
+    }
+}
+
 /// A read-only, transient paged view: a sparse LRU page table + fetch-on-miss
 /// [`resolve`](PagedReader::resolve). Only resident pages cost memory, so a
 /// small cache over a huge store is fine — it just fetches more. Correctness is

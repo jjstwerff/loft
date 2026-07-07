@@ -17,8 +17,58 @@
 #![cfg(feature = "mmap")]
 
 use std::fs;
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::thread;
+
+/// Serve `bytes` over a minimal HTTP/1.1 server that honours `Range: bytes=a-b`
+/// with a `206 Partial Content` + `Content-Range` (200/whole-file otherwise) —
+/// the remote store the `store_load_key` HTTP path (Phase 5) fetches from.
+/// Returns the URL; the server thread is detached (ends with the test binary).
+fn serve_ranges(bytes: Vec<u8>) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().unwrap().port();
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut s) = stream else { break };
+            let mut buf = [0u8; 2048];
+            let n = s.read(&mut buf).unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..n]);
+            let total = bytes.len();
+            let range = req.lines().find_map(|l| {
+                l.trim()
+                    .strip_prefix("Range: bytes=")
+                    .or_else(|| l.trim().strip_prefix("range: bytes="))
+            });
+            if let Some(r) = range {
+                let (a, b) = r.split_once('-').unwrap_or(("0", ""));
+                let a: usize = a.trim().parse().unwrap_or(0);
+                let b: usize = b
+                    .trim()
+                    .parse()
+                    .unwrap_or(total.saturating_sub(1))
+                    .min(total.saturating_sub(1));
+                let body = if a <= b { &bytes[a..=b] } else { &bytes[0..0] };
+                let hdr = format!(
+                    "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {a}-{b}/{total}\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = s.write_all(hdr.as_bytes());
+                let _ = s.write_all(body);
+            } else {
+                let hdr = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {total}\r\nConnection: close\r\n\r\n"
+                );
+                let _ = s.write_all(hdr.as_bytes());
+                let _ = s.write_all(&bytes);
+            }
+        }
+    });
+    format!("http://127.0.0.1:{port}/store")
+}
 
 fn loft_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_loft"))
@@ -484,6 +534,45 @@ fn store_load_key_refuses_a_vector_of_struct_field_both_backends() {
         assert!(
             out.contains("vs verify=true"),
             "{backend}: the refused-empty store must be structurally sound: {out:?}"
+        );
+    }
+}
+
+/// @PLN97 arc G Phase 5 — the REMOTE fetch. `store_load_key` over an `http://`
+/// URL pulls only the ranges the lookup touches from a `Range`-capable server
+/// (the #517 shape), producing the SAME bounded, structurally-sound working set
+/// as the local-file path — the generic `PageProvider` seam means the traversal
+/// + relocating copy are unchanged. This is the "fetch" in the partial store
+/// fetcher. Both backends.
+#[test]
+fn store_load_key_over_http_range() {
+    let dir = scratch("store_load_http");
+    let path = dir.join("world.store");
+
+    // Write the store locally (mmap bind), then serve its bytes over HTTP Range.
+    let (out_w, code_w) = run_mode(&load_script(), &path, "write");
+    assert_eq!(code_w, 0, "write: {out_w:?}");
+    assert!(out_w.contains("write keys=7,13,42"), "{out_w:?}");
+    let url = serve_ranges(fs::read(&path).unwrap());
+
+    for backend in ["--interpret", "--native"] {
+        let (out, code) = run_mode_backend(backend, &load_script(), Path::new(&url), "loadkey");
+        assert_eq!(code, 0, "{backend} http loadkey exit: {out:?}");
+        assert!(
+            out.contains("loadkey keys=13"),
+            "{backend}: remote fetch must load key 13: {out:?}"
+        );
+        assert!(
+            out.contains("loadkey lookup h[13]=1300"),
+            "{backend}: remote fetch must read the right value: {out:?}"
+        );
+        assert!(
+            out.contains("loadkey len=1"),
+            "{backend}: remote fetch is bounded to the working set: {out:?}"
+        );
+        assert!(
+            out.contains("loadkey verify=true"),
+            "{backend}: the working set fetched over http must be sound: {out:?}"
         );
     }
 }
