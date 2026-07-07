@@ -157,15 +157,17 @@ Each phase is independently landable, each ends green on **`--interpret`, `--nat
 `--native-wasm` (wasmtime `--dir`)**, and each acceptance test asserts *result-identical AND
 bytes-bounded AND leak-clean* where applicable. "Prove it can fail" = the negative control listed.
 
-### Phase 0 — the read-virtualization probe (P0 above)
-- **Build:** a throwaway `resolve`-over-a-file + one `find`.
-- **Verify:** found `rec` correct; touched ranges = a few pages (logged). **Decides (b1) vs (b2).**
-- **Non-regression measure (the second invariant):** micro-benchmark a store-heavy read loop (many
-  `addr`/`find`) with the paged code compiled in vs. out; the normal path must time **within noise**
-  of baseline. This is what forces (b2) unless a (b1) branch proves free. If (b1) is taken, this
-  benchmark graduates to a standing guard so a later change can't silently re-tax the hot path.
-- **Prove-can-fail:** a key NOT in the store → `find` returns absent (not a wrong rec); a
-  whole-file scan would touch every page (contrast).
+### Phase 0 — the read-virtualization probe (P0) — **DONE 2026-07-07**
+- **Read-virtualization is sound.** `hash::find` (src/hash.rs:89) is an O(1) bucket lookup over
+  `get_u32_raw(rec, fld)` = a read at `rec·8 + fld` — a handful of words across ~2 records (the
+  bucket slot + the entry record), independent of hash size. So a byte-offset reader (`resolve`)
+  can serve it and it touches **O(1) pages**, not O(file). `b-builtin` confirmed (a Rust traversal
+  over a byte-reader needs only these offset reads; no shared-`Store` change → the second invariant
+  holds by construction).
+
+**But P0 found a load-bearing BLOCKER the design missed** — see [§ P0 results](#p0-results--the-portability-prerequisite-2026-07-07). The hash INDEX is not portable across
+processes, so the loader phases below gain a **prerequisite**: make persisted collections
+cross-process-portable first.
 
 ### Phase 1 — heap store-load (whole file, no HTTP)
 - **Build:** `store_load(path)` — `read_bytes` → 8-aligned heap arena → `Store{ backing: Heap,
@@ -218,6 +220,48 @@ bytes-bounded AND leak-clean* where applicable. "Prove it can fail" = the negati
   still be correct (falls back to whole-file) or reject cleanly; a server serving a block written
   under a **different layout** → rejected by the identity gate, never misread.
 
+## P0 results — the portability prerequisite (2026-07-07)
+
+P0 confirmed read-virtualization is sound (above) but surfaced a **load-bearing blocker the design
+assumed away** — and one the whole feature rests on: **a persisted hash is not portable across
+processes.**
+
+**Empirically confirmed** (`store_persist_bind` a `hash<Rec[id]>`, look up a key, in two separate
+processes):
+
+| | build (process A) | reopen (process B) |
+|---|---|---|
+| iterate (count) | 3 | **3** — the data survives |
+| `h[2]` lookup | v=20 | **v=null** — the key is NOT found |
+
+**Root cause:** `keys::key_hash` uses a **per-process random seed** (`RandomState::new()` from
+`getrandom`, memoised per-process — the P253 hash-DoS fix, `src/keys.rs:24`). So a hash's bucket
+layout is process-specific: a different process (a remote reader — or even a local re-open)
+re-hashes the key to a **different bucket** and misses it. The records are intact; only the hash
+INDEX is unreadable by anyone but the writer's process.
+
+**Two consequences:**
+1. This is a **pre-existing bug in `store_persist_bind`**, independent of #522 — a persisted hash
+   cannot be key-looked-up after a restart. (The #513 test only checked *iteration/count*, so it
+   missed the lookup failure.) **Filed separately.**
+2. `store_persist_bind` today is **hash-only** — it rejects `sorted<…>` (*"expected hash, got
+   sorted"*). The `sorted`/range path (comparison-based, **no seed** → portable) does not exist yet.
+
+**Decision — arc G gains a Phase 0.5 prerequisite (before any loader phase):** make persisted
+collections cross-process-portable.
+- **Persist the hash seed per-store** (store the store's `RandomState` seed in the store header /
+  the `.dschema` sidecar) so any reader re-derives the *same* buckets — keeps the DoS protection
+  (still a random seed per store) AND fixes the pre-existing bug AND unblocks `store_load_keys`.
+  *Recommended.*  (Alternative: a fixed seed for persistable stores — simpler, but a served store's
+  keys are already committed, so DoS protection matters less there; still, the persisted-seed
+  option is strictly safer.)
+- **Extend `store_persist_bind` (and the loader) to `sorted`/`ordered`** — the range path is
+  portable by construction and is the game-asset / routing sweet spot; it needs the persistence
+  primitive first.
+
+Net: the read mechanism is fine; the **foundation (portable persisted collections) is the real
+first step**, and P0 caught it before a line of the loader was written.
+
 ## Open questions (each with a recommendation)
 
 1. **Page size / eviction** — fixed 64 KiB LRU vs. record-extent-aware (read the size word, GET
@@ -237,9 +281,13 @@ bytes-bounded AND leak-clean* where applicable. "Prove it can fail" = the negati
 
 ## Effort & sequencing
 
-**Effort MH.** P0 (a day) gates the architecture. Phase 1 is ~S and independently useful (ship it
-first — it unblocks wasm whole-block load). Phases 2–4 are the core (M) over the deterministic
-local provider. Phase 5 (S) swaps in #517. The identity gate is a few lines reusing
+**Effort MH.** P0 (done) confirmed the read mechanism AND found the portability blocker. **Phase
+0.5 (the prerequisite, ~S–M): make persisted collections cross-process-portable** — persist the
+hash seed (fixes the pre-existing bug + unblocks the keys path) and/or extend persistence to
+`sorted` (the portable range path). **Do this first — nothing downstream reads correctly without
+it.** Then: Phase 1 is ~S and independently useful (ship it — it unblocks wasm whole-block load);
+Phases 2–4 are the core (M) over the deterministic local provider; Phase 5 (S) swaps in #517. The
+identity gate is a few lines reusing
 `schema_sidecar`, added at the phase-1 bootstrap and carried through.
 
 **As @PLN97 arc G:** this design is a sub-file of the layout-contract plan (adjacent — a remote
