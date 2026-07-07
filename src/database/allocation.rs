@@ -2377,7 +2377,16 @@ impl Stores {
         if self.is_inline_scalar(tp) || tp == 5 {
             return true;
         }
-        matches!(self.types[tp as usize].parts, Parts::Vector(e) if self.is_inline_scalar(e))
+        match &self.types[tp as usize].parts {
+            // vector<scalar> — one flat inner record (vector<struct>/<text> is 3b.4b).
+            Parts::Vector(e) => self.is_inline_scalar(*e),
+            // An INLINE nested struct: copyable when every one of its own fields
+            // is (its `text`/`vector` fields relocate at a nested offset, 3b.4).
+            Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
+                fields.iter().all(|f| self.is_copyable_field(f.content))
+            }
+            _ => false,
+        }
     }
 
     /// True when an entry of type `content_tp` can be partially loaded today —
@@ -2525,26 +2534,34 @@ impl Stores {
     }
 
     /// Byte offsets (within an entry record, relative to its data start at fld 8)
-    /// of the fields whose value is a FLAT sub-record behind a `u32` pointer — a
-    /// `text` string OR a `vector<scalar>` inner record. These are exactly the
-    /// fields `load_one` relocates with the shared flat-sub-record copy. A field
-    /// whose sub-record itself holds pointers (`vector<struct>` / nested) is not
-    /// here — it needs the recursive copy (3b.4).
+    /// of every FLAT sub-record pointer — a `text` string or a `vector<scalar>`
+    /// inner record — reachable INLINE from `content_tp`, recursing through inline
+    /// nested structs (3b.4). Each is relocated by the shared flat-sub-record copy
+    /// in `load_one`. `is_copyable_entry` guaranteed the entry holds only these.
     #[cfg(feature = "remote-store")]
     fn relocatable_field_offsets(&self, content_tp: u16) -> Vec<u32> {
-        let flat_ptr = |ftp: u16| -> bool {
-            ftp == 5
-                || matches!(self.types[ftp as usize].parts, Parts::Vector(e) if self.is_inline_scalar(e))
-        };
-        match &self.types[content_tp as usize].parts {
-            Parts::Struct(fields) | Parts::EnumValue(_, fields) => fields
-                .iter()
-                .filter(|f| flat_ptr(f.content))
-                .map(|f| u32::from(f.position))
-                .collect(),
-            _ if flat_ptr(content_tp) => vec![0],
-            _ => Vec::new(),
+        let mut out = Vec::new();
+        self.collect_reloc_offsets(content_tp, 0, &mut out);
+        out
+    }
+
+    #[cfg(feature = "remote-store")]
+    fn collect_reloc_offsets(&self, tp: u16, base: u32, out: &mut Vec<u32>) {
+        // A flat sub-record pointer (text / vector<scalar>) sits at `base`.
+        if tp == 5
+            || matches!(self.types[tp as usize].parts, Parts::Vector(e) if self.is_inline_scalar(e))
+        {
+            out.push(base);
+            return;
         }
+        // An inline nested struct: recurse into each field at base + its position.
+        if let Parts::Struct(fields) | Parts::EnumValue(_, fields) = &self.types[tp as usize].parts
+        {
+            for f in fields {
+                self.collect_reloc_offsets(f.content, base + u32::from(f.position), out);
+            }
+        }
+        // else: inline scalar — nothing to relocate.
     }
 
     /// Read a `vector<integer>` (`keys_vec`) into an `i64` slice and load those

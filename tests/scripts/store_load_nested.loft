@@ -1,0 +1,39 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN97 arc G Phase 3b.4 — recurse into an INLINE nested struct. A hash whose
+// entry has a nested struct field (`sub: Inner`, itself holding a `text`) can now
+// be partially loaded: the flat copy moves the inline struct's bytes, and
+// `load_one` relocates its heap fields at their NESTED offsets. The loaded entry
+// reads the nested scalar AND text, and is structurally sound (`store_verify`).
+// Driven by `store_persist_loft.rs`.
+
+struct Inner { a: integer not null, b: text not null }
+struct NestRec { id: integer not null, sub: Inner }
+
+fn main() {
+  path = env_variable("LOFT_PERSIST_TEST_PATH");
+  mode = env_variable("LOFT_PERSIST_TEST_MODE");
+
+  n: hash<NestRec[id]> = [];
+  if mode == "write" {
+    n += NestRec { id: 13, sub: Inner { a: 42, b: "deep-nested-string" } };
+    n += NestRec { id: 7,  sub: Inner { a: 1,  b: "seven" } };
+    if !store_persist_bind(n, path) { println("FAIL write-bind"); return }
+    println("write ok");
+  } else if mode == "loadkey" {
+    ok = store_load_key(n, path, 13);
+    println("nest loadkey={ok}");
+    r = n[13];
+    if r == null {
+      println("nest sub=ABSENT")
+    } else {
+      println("nest sub.a={r.sub.a}");
+      println("nest sub.b={r.sub.b}");
+    }
+    println("nest len={len(n)}");
+    println("nest verify={store_verify(n)}");
+  } else {
+    println("FAIL unknown-mode")
+  }
+}

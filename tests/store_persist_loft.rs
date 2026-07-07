@@ -208,8 +208,12 @@ fn vec_script() -> PathBuf {
     workspace_root().join("tests/scripts/store_load_vec.loft")
 }
 
-fn nested_refuse_script() -> PathBuf {
-    workspace_root().join("tests/scripts/store_load_nested_refuse.loft")
+fn nested_script() -> PathBuf {
+    workspace_root().join("tests/scripts/store_load_nested.loft")
+}
+
+fn vecstruct_refuse_script() -> PathBuf {
+    workspace_root().join("tests/scripts/store_load_vecstruct_refuse.loft")
 }
 
 /// `run_mode` fixed to `--interpret`, parameterised by backend so the heap
@@ -420,32 +424,65 @@ fn store_load_key_relocates_a_vector_field_both_backends() {
     }
 }
 
-/// @PLN97 arc G Phase 3b (safe-refusal, ongoing) — a NESTED struct field (a child
-/// record with its own pointers) is not yet handled (that is 3b.4, recursion), so
-/// it must still be REFUSED (load nothing, return false), never copied with a
-/// dangling pointer. The refused-empty result is structurally sound. Both backends.
+/// @PLN97 arc G Phase 3b.4 — a hash whose entry has an INLINE nested struct field
+/// (`sub: Inner`, itself holding a text) is now partially loadable: `load_one`
+/// relocates the nested heap fields at their NESTED offsets. The loaded entry
+/// reads the nested scalar and text, and is structurally sound. Both backends.
 #[test]
-fn store_load_key_refuses_a_nested_struct_field_both_backends() {
-    let dir = scratch("store_load_nested_refuse");
+fn store_load_key_relocates_a_nested_struct_both_backends() {
+    let dir = scratch("store_load_nested");
     let path = dir.join("nest.store");
 
-    let (out_w, code_w) = run_mode(&nested_refuse_script(), &path, "write");
+    let (out_w, code_w) = run_mode(&nested_script(), &path, "write");
     assert_eq!(code_w, 0, "write exit: {out_w:?}");
     assert!(out_w.contains("write ok"), "write: {out_w:?}");
 
     for backend in ["--interpret", "--native"] {
-        let (out, code) = run_mode_backend(backend, &nested_refuse_script(), &path, "loadkey");
+        let (out, code) = run_mode_backend(backend, &nested_script(), &path, "loadkey");
         assert_eq!(code, 0, "{backend} loadkey exit: {out:?}");
+        assert!(out.contains("nest loadkey=true"), "{backend}: {out:?}");
         assert!(
-            out.contains("nest loadkey=false"),
-            "{backend}: a nested-struct entry must be REFUSED (not copied broken): {out:?}"
+            out.contains("nest sub.a=42"),
+            "{backend}: nested scalar must relocate: {out:?}"
         );
         assert!(
-            out.contains("nest len=0"),
+            out.contains("nest sub.b=deep-nested-string"),
+            "{backend}: nested text must relocate at its nested offset: {out:?}"
+        );
+        assert!(out.contains("nest len=1"), "{backend}: {out:?}");
+        assert!(
+            out.contains("nest verify=true"),
+            "{backend}: the relocated heap with a nested text must be sound: {out:?}"
+        );
+    }
+}
+
+/// @PLN97 arc G Phase 3b (safe-refusal, ongoing) — a `vector<struct>` field (a
+/// vector whose ELEMENTS carry pointers) still needs per-element recursion
+/// (3b.4b), so it must still be REFUSED (load nothing), never copied with a
+/// dangling pointer. The refused-empty result is structurally sound. Both backends.
+#[test]
+fn store_load_key_refuses_a_vector_of_struct_field_both_backends() {
+    let dir = scratch("store_load_vecstruct_refuse");
+    let path = dir.join("vs.store");
+
+    let (out_w, code_w) = run_mode(&vecstruct_refuse_script(), &path, "write");
+    assert_eq!(code_w, 0, "write exit: {out_w:?}");
+    assert!(out_w.contains("write ok"), "write: {out_w:?}");
+
+    for backend in ["--interpret", "--native"] {
+        let (out, code) = run_mode_backend(backend, &vecstruct_refuse_script(), &path, "loadkey");
+        assert_eq!(code, 0, "{backend} loadkey exit: {out:?}");
+        assert!(
+            out.contains("vs loadkey=false"),
+            "{backend}: a vector<struct> entry must be REFUSED: {out:?}"
+        );
+        assert!(
+            out.contains("vs len=0"),
             "{backend}: refusal must load nothing: {out:?}"
         );
         assert!(
-            out.contains("nest verify=true"),
+            out.contains("vs verify=true"),
             "{backend}: the refused-empty store must be structurally sound: {out:?}"
         );
     }
