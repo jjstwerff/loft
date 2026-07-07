@@ -346,7 +346,7 @@ impl State {
     /// Maximum runtime call depth before panicking.
     /// Set below the store stack limit (~8000 bytes / ~8 bytes per frame)
     /// so the depth check fires before a store out-of-bounds panic.
-    const MAX_CALL_DEPTH: u32 = 500;
+    pub const MAX_CALL_DEPTH: u32 = 500;
 
     pub fn static_fn(&mut self, name: &str, call: Call) {
         let lib = Arc::make_mut(&mut self.library);

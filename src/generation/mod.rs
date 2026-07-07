@@ -1809,13 +1809,21 @@ extern crate loft;"
             write!(w, "{n:?}, ")?;
         }
         writeln!(w, "];")?;
+        // Emits `fn main`: arm the timeout watchdog + fail-fast (halt-at-op like the
+        // interpreter, #333), then run init + n_main on a large-stack thread (@PLN28:
+        // deep recursion trips MAX_CALL_DEPTH cleanly instead of overflowing the
+        // ~8 MiB OS main-thread stack), then the optional native leak check.
         write!(
             w,
-            "\nfn main() {{\n    // @PLAN49 native subprocess arming — the spawned native binary self-arms\n    // the watchdog if LOFT_TIMEOUT is set in the env (inherited from the parent\n    // `loft <prog>` invocation or set directly).  No-op when LOFT_TIMEOUT=0/unset.\n    loft::timeout::arm(loft::timeout::env_timeout_secs(), loft::timeout::env_grace_secs());\n    // #333: standalone binary mirrors the interpreter's halt-at-op contract.\n    loft::database::NATIVE_FAIL_FAST.store(true, std::sync::atomic::Ordering::Relaxed);\n    let cell = std::cell::UnsafeCell::new(loft::live_dispatch::boot_stores(LOFT_LIVE_FNS));\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); stores.source_dir = Stores::source_dir_native(); stores.program_relative = LOFT_PROGRAM_RELATIVE; if let Ok(m) = std::env::var(\"LOFT_PATHS\") {{ stores.program_relative = m.eq_ignore_ascii_case(\"program\"); }} }}\n    if !loft::live_dispatch::live_enabled() {{ init(&cell); }}\n    n_main(&cell);\n    {{ let stores: &Stores = unsafe {{ &*cell.get() }}; if stores.had_fatal {{ std::process::exit(1); }} }}\n"
+            "\nfn main() {{\n    loft::timeout::arm(loft::timeout::env_timeout_secs(), loft::timeout::env_grace_secs());\n    loft::database::NATIVE_FAIL_FAST.store(true, std::sync::atomic::Ordering::Relaxed);\n    std::thread::Builder::new().stack_size(loft::codegen_runtime::NATIVE_MAIN_STACK).spawn(|| {{\n    let cell = std::cell::UnsafeCell::new(loft::live_dispatch::boot_stores(LOFT_LIVE_FNS));\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); stores.source_dir = Stores::source_dir_native(); stores.program_relative = LOFT_PROGRAM_RELATIVE; if let Ok(m) = std::env::var(\"LOFT_PATHS\") {{ stores.program_relative = m.eq_ignore_ascii_case(\"program\"); }} }}\n    if !loft::live_dispatch::live_enabled() {{ init(&cell); }}\n    n_main(&cell);\n    {{ let stores: &Stores = unsafe {{ &*cell.get() }}; if stores.had_fatal {{ std::process::exit(1); }} }}\n"
         )?;
         writeln!(w, "    if !loft::live_dispatch::live_enabled() {{")?;
         w.write_all(NATIVE_LEAK_CHECK_TAIL.as_bytes())?;
         writeln!(w, "    }}")?;
+        writeln!(
+            w,
+            "    }}).expect(\"failed to spawn main-stack thread\").join().expect(\"main thread panicked\");"
+        )?;
         writeln!(w, "}}")
     }
 
