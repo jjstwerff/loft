@@ -321,13 +321,42 @@ feeds (`InputFrame::Debug(reply)`); anything else is `InputFrame::Program(msg)` 
   `route_input_frame` into the wasm `host_input_native` needs that core un-gated (or a wasm subset) for
   `wasm32` — that lands with the browser driver, since it can only be exercised there.
 
-**P3.4 — JS driver + opt-in + acceptance (the ONLY browser-needed steps):**
-1. `loft_start` opts into the tier under the live flag (embedded bootstrap + arm the debug pump).
-   **Verify**: emitted wasm has the live `loft_start`; a native equivalent runs.
-2. The JS debug driver (extend `doc/loft-gl-wasm.js`) — `host_input` control + debug output. **Verify**
-   (headless-Chromium): load the `--html` live build, set a breakpoint, eval, resume.
-3. Acceptance — routing's headless-Chromium parity: breakpoint + `eval` a vector expr → value; edit a
-   fn → live world updates; a compiled write then interpreted read of the same var agree (one heap).
+**P3.4 — opt-in + driver + acceptance:**
+
+> **Transport decision (2026-07-07, user):** the debug driver is NOT an in-page JS harness — it is the
+> **server relaying over the WebSocket the client already holds.** An agent is close to the *server*
+> (it already speaks the `--rpc` / `D!:` surface); the server forwards `D!:` frames to a target client's
+> socket and relays the client's debug output back. The client applies them locally via
+> `route_input_frame` (P3.3) → its own `debug_cmd_dispatch` → the parked interpreter. This reuses TWO
+> existing channels, needs no headless-Chromium to *drive* (only a connected browser), and is why
+> P3.2's cooperative pause is load-bearing: the client must yield to its JS event loop so the socket
+> can deliver `D!:resume`. Debug is **opt-in per client** (a production client ships none), and the
+> opt-in carries a **debug name** the server uses to address that client.
+
+1. **The opt-in ✅ LANDED (2026-07-07):** `--debug[=name]` includes the browser debug tier; a production
+   `--html` client is debug-OFF by default (flipped from the old default-live). `Output.emit_live =
+   debug_name.is_some() && !lean` for `--html`; `emit_wasm_start` emits either a plain `Stores::new()`
+   `loft_start` (production) or, for a debug client, one that bootstraps the parked interpreter from the
+   EMBEDDED `LOFT_SRC` (`bootstrap_from_bytes`, P3.1 — no fs in a browser) and bakes
+   `static LOFT_DEBUG_NAME` for server addressing. **Verified**:
+   `generation::p98_p34_tests::wasm_start_gates_the_debug_tier_on_the_opt_in` (production = plain boot,
+   no tier/name; `--debug=alice` = embedded bootstrap + `LOFT_DEBUG_NAME="alice"` + the source blob);
+   and the real builds — `loft --html` → 170 KB *engine-less* shell, `loft --html --debug=alice` → 3977
+   KB *full-engine* shell that **compiles to wasm** (so the debug `loft_start` + `bootstrap_from_bytes`
+   are valid on `wasm32`).
+2. **Client debug core on wasm — REMAINING (browser-gated).** `debug_cmd_dispatch` + the
+   mailbox/`debug_set_bp` machinery is `#[cfg(not(wasm32))]` (threads / TCP / process-spawn `rebuild`).
+   Un-gate a wasm subset (drop `rebuild`/`swap`; the pause is P3.2's cooperative yield, NOT the blocking
+   `debug_pause_loop`) and wire `route_input_frame` into the wasm `host_input` pump so the client applies
+   relayed `D!:` frames. Only exercisable in a browser.
+3. **Server relay + acceptance — REMAINING (browser-gated).** Server rule: a `D!:` frame addressed to
+   client `<name>` → that client's WebSocket; relay its debug output back. Acceptance (headless-Chromium
+   or a connected browser): breakpoint + `eval` a vector expr → value; edit a fn → the live world
+   updates; a compiled write then an interpreted read of the same var agree (one heap).
+
+**Not done in this environment:** steps 2–3 need a working `wasm32` toolchain **and** a browser — both
+absent here (the sandbox's `--html`/wasm test gates already fail on `rust-lld` + no headless Chromium).
+The opt-in (step 1) is the fully native-verifiable slice and is landed.
 
 ### A3 — packaging: `--lean` opt-OUT, default LIVE (F3) ✅ LANDED (P2)
 

@@ -593,6 +593,11 @@ pub struct Output<'a> {
     /// `None` (the check-only / non-native emit) → `LOFT_SRC = None`, so the boot
     /// falls back to the filesystem path.
     pub program_src: Option<String>,
+    /// @PLN98 P3.4 — the browser client's debug NAME (from `--debug[=name]`), baked
+    /// into a live `--html` build's `loft_start` so the client can announce itself
+    /// to the server, which then ADDRESSES debug frames to it over the relay.
+    /// `None` on a production (default, no-`--debug`) client — no debug tier at all.
+    pub debug_name: Option<String>,
 }
 
 /// Use this to convert loft names that contain `#` into valid Rust identifiers.
@@ -1068,6 +1073,7 @@ impl<'a> Output<'a> {
             live_fns: Vec::new(),
             emit_live: true,
             program_src: None,
+            debug_name: None,
         }
     }
 }
@@ -1717,13 +1723,7 @@ extern crate loft;"
         // Emit a Rust entry point that bootstraps the loft `main` function, if present.
         if (0..till).any(|d| self.data.def(d).name() == "n_main") {
             if self.wasm_browser {
-                // exported cdylib entry point for browser WASM.  WASM
-                // doesn't have an argv, so user_args stays empty —
-                // arguments() returns [].
-                writeln!(
-                    buf,
-                    "\n#[unsafe(no_mangle)]\npub extern \"C\" fn loft_start() {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    init(&cell);\n    n_main(&cell);\n}}"
-                )?;
+                self.emit_wasm_start(&mut buf)?;
             } else {
                 // Native binary: thread std::env::args() into Stores.user_args
                 // so the loft `arguments()` builtin returns the program's
@@ -1812,6 +1812,45 @@ extern crate loft;"
     /// world) and `init` is skipped — the parse already seeded it.  The leak
     /// check is also skipped live: the parked interpreter's machinery stores
     /// are not program leaks.
+    /// @PLN98 P3.4 — emit the browser (`--html`) `loft_start` export.  WASM has no
+    /// argv (so `arguments()` is `[]`) and no filesystem.  Two shapes gated on the
+    /// `--debug` opt-in (`emit_live`):
+    /// - **production client** (default): a plain `Stores::new()` boot — NO live /
+    ///   debug tier, the smallest engine-less shell.
+    /// - **debug client** (`--debug[=name]`): bootstrap the parked interpreter from
+    ///   the EMBEDDED source (`bootstrap_from_bytes`, P3.1 — no fs needed) so a
+    ///   flipped fn / breakpoint runs interpreted over the shared world, and bake
+    ///   the debug NAME the client announces to the server for relay addressing.
+    ///   Falls back to `Stores::new()` if the embedded bootstrap fails.
+    fn emit_wasm_start(&self, w: &mut dyn Write) -> std::io::Result<()> {
+        if self.emit_live {
+            let name = self.debug_name.as_deref().unwrap_or("");
+            let src = self.program_src.as_deref().unwrap_or("");
+            write!(w, "static LOFT_LIVE_FNS: &[&str] = &[")?;
+            for n in &self.live_fns {
+                write!(w, "{n:?}, ")?;
+            }
+            writeln!(w, "];")?;
+            writeln!(w, "static LOFT_DEBUG_NAME: &str = {name:?};")?;
+            writeln!(w, "static LOFT_SRC: &str = {src:?};")?;
+            write!(
+                w,
+                "\n#[unsafe(no_mangle)]\npub extern \"C\" fn loft_start() {{\n    \
+                 let _ = LOFT_DEBUG_NAME;\n    \
+                 let cell = std::cell::UnsafeCell::new(\n        \
+                 loft::live_dispatch::bootstrap_from_bytes(LOFT_LIVE_FNS, LOFT_SRC)\n            \
+                 .unwrap_or_else(|e| {{ eprintln!(\"loft-debug: {{e}}\"); Stores::new() }}));\n    \
+                 if !loft::live_dispatch::live_enabled() {{ init(&cell); }}\n    \
+                 n_main(&cell);\n}}\n"
+            )
+        } else {
+            writeln!(
+                w,
+                "\n#[unsafe(no_mangle)]\npub extern \"C\" fn loft_start() {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    init(&cell);\n    n_main(&cell);\n}}"
+            )
+        }
+    }
+
     fn emit_native_main(&self, w: &mut dyn Write) -> std::io::Result<()> {
         // #255 / @PLN9: bake the parse-time `#cwd` path-mode default.
         writeln!(
@@ -4180,5 +4219,70 @@ mod scrub_tests {
     fn clean_source_is_unchanged() {
         let src = b"fn n_main(cell: &Cell) { loft::rpc::ok(); }";
         assert_eq!(scrub_generated_crate_refs(src), src.to_vec());
+    }
+}
+
+#[cfg(test)]
+mod p98_p34_tests {
+    use super::Output;
+
+    // @PLN98 P3.4 — the browser `loft_start` opt-in. A production client (default,
+    // emit_live=false) ships a plain `Stores::new()` boot with NO live/debug tier;
+    // a `--debug[=name]` client bootstraps the parked interpreter from the EMBEDDED
+    // source and bakes the debug NAME the server uses to address it.
+    #[test]
+    fn wasm_start_gates_the_debug_tier_on_the_opt_in() {
+        let p = crate::parser::Parser::new();
+        let db = crate::database::Stores::new();
+        let mut out = Output::new(&p.data, &db);
+        out.wasm_browser = true;
+
+        // Production (no --debug): plain boot, no debug tier, no embedded source.
+        out.emit_live = false;
+        let mut prod = Vec::new();
+        out.emit_wasm_start(&mut prod).unwrap();
+        let prod = String::from_utf8(prod).unwrap();
+        assert!(
+            prod.contains("Stores::new()"),
+            "production boots plain: {prod}"
+        );
+        assert!(
+            !prod.contains("bootstrap_from_bytes"),
+            "no live bootstrap: {prod}"
+        );
+        assert!(
+            !prod.contains("LOFT_DEBUG_NAME"),
+            "no debug name baked: {prod}"
+        );
+        assert!(
+            prod.contains("fn loft_start"),
+            "still exports loft_start: {prod}"
+        );
+
+        // Debug client (`--debug=alice`): embedded bootstrap + the baked name + the
+        // program source blob.
+        out.emit_live = true;
+        out.debug_name = Some("alice".to_string());
+        out.program_src = Some("fn main() { print(\"hi\") }".to_string());
+        out.live_fns = vec!["n_addup".to_string()];
+        let mut dbg = Vec::new();
+        out.emit_wasm_start(&mut dbg).unwrap();
+        let dbg = String::from_utf8(dbg).unwrap();
+        assert!(
+            dbg.contains("static LOFT_DEBUG_NAME: &str = \"alice\""),
+            "debug name baked for server addressing: {dbg}"
+        );
+        assert!(
+            dbg.contains("bootstrap_from_bytes(LOFT_LIVE_FNS, LOFT_SRC)"),
+            "boots the parked interpreter from embedded source: {dbg}"
+        );
+        assert!(
+            dbg.contains("print(\\\"hi\\\")"),
+            "the program source is embedded in LOFT_SRC: {dbg}"
+        );
+        assert!(
+            dbg.contains("n_addup"),
+            "the flippable fn table is emitted: {dbg}"
+        );
     }
 }

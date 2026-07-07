@@ -3612,6 +3612,11 @@ fn main() {
     // (no `live_flipped` entry checks, no `LOFT_LIVE_FNS`/`boot_stores`).  The
     // default keeps the live tier (non-breaking); this is opt-OUT.
     let mut lean = false;
+    // @PLN98 P3.4 — opt IN to the browser live/debug tier.  A production `--html`
+    // client ships WITHOUT it (default lean — no live-flip / breakpoint channel);
+    // `--debug` or `--debug=<name>` includes the tier and bakes a debug NAME the
+    // server uses to ADDRESS this client over the relay (`--debug` alone → "").
+    let mut debug_name: Option<String> = None;
     let mut dump_only = false;
     // None  = flag not given
     // Some("") = flag given without explicit path → use .loft/ default
@@ -3804,6 +3809,10 @@ fn main() {
             // live-flip / breakpoints).  Composes with any build target
             // (--native / --native-wasm / --html / --native-emit).
             lean = true;
+        } else if a == "--debug" || a.starts_with("--debug=") {
+            // @PLN98 P3.4 — opt IN to the browser debug tier + set the client's
+            // debug name (`--debug=alice`; bare `--debug` → "").
+            debug_name = Some(a.strip_prefix("--debug=").unwrap_or("").to_string());
         } else if a == "--dev-soft-halt" {
             // Plan-07 phase 4g.3 — demote dev-mode raises to
             // log-and-continue so a single run surfaces every
@@ -5448,9 +5457,17 @@ fn main() {
             p.data.namespace_colliding_native_fns();
             let mut out = generation::Output::new(&p.data, &state.database);
             out.wasm_browser = true;
-            // @PLN98 P2 — `--lean` strips the live/debug tier from the emitted Rust.
-            if lean {
-                out.emit_live = false;
+            // @PLN98 P3.4 — a browser client is debug-OFF by default (a production
+            // client should not ship a live-flip / breakpoint channel): the live
+            // tier is opt-IN via `--debug[=name]`.  `--lean` also forces it off.
+            // The debug name is baked so the client can announce itself to the
+            // server, which then addresses debug frames to it over the relay.
+            out.emit_live = debug_name.is_some() && !lean;
+            out.debug_name.clone_from(&debug_name);
+            // Embed the program source so the debug client bootstraps the parked
+            // interpreter from BYTES (no filesystem in a browser) — see P3.1.
+            if out.emit_live {
+                out.program_src = std::fs::read_to_string(&abs_file).ok();
             }
             let main_nr = p.data.def_nr("n_main");
             let entry_defs: Vec<u32> = if main_nr < end_def {
