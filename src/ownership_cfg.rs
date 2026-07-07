@@ -12,6 +12,7 @@
 //! `Continue(n)` / `Return` add the corresponding edge and end the current straight line.
 
 use crate::data::{Data, DefType, Value};
+use std::collections::BTreeSet;
 
 type BlockId = usize;
 
@@ -302,14 +303,135 @@ fn dump(name: &str, cfg: &Cfg) {
     }
 }
 
-/// The oracle entry point, reached only under `LOFT_OWN_ORACLE` (SI-1). `cfg` mode builds and
-/// dumps each user function's CFG for hand-verification (Phase 1.1). Other modes come with the
-/// dataflow fixpoint (Phase 2+).
+// ============================================================================
+// @PLN94 Phase 1.2 — the worklist dataflow engine, exercised on the classic trivial lattice
+// (REACHING DEFINITIONS): a forward may-analysis over sets of definition sites, meet = union.
+// `OUT[b] = gen[b] ∪ (IN[b] \ kill[b])`, `IN[b] = ⋃ OUT[preds]`. Monotone over a finite set of
+// sites ⇒ the round-robin fixpoint converges (SI-3 asserts a bound so non-termination is loud,
+// not a hang). This is the engine the ownership fact (Phase 2) rides on; reaching-defs is here
+// only to validate the fixpoint mechanics against hand-computable expectations.
+// ============================================================================
+
+/// A definition site: variable `var` assigned in block `block` (block-granular).
+struct Site {
+    var: u16,
+    block: BlockId,
+}
+
+struct ReachInfo {
+    sites: Vec<Site>,
+    inb: Vec<BTreeSet<usize>>,
+    outb: Vec<BTreeSet<usize>>,
+    passes: usize,
+}
+
+fn reaching_defs(cfg: &Cfg) -> ReachInfo {
+    let n = cfg.blocks.len();
+    // Enumerate def sites (var, block) — one per (var defined, block).
+    let mut sites: Vec<Site> = Vec::new();
+    for (b, bb) in cfg.blocks.iter().enumerate() {
+        for &v in &bb.defs {
+            sites.push(Site { var: v, block: b });
+        }
+    }
+    // Predecessors, inverted from successors.
+    let mut preds: Vec<Vec<BlockId>> = vec![Vec::new(); n];
+    for (b, bb) in cfg.blocks.iter().enumerate() {
+        for &s in &bb.succ {
+            preds[s].push(b);
+        }
+    }
+    // gen[b] = sites in b; kill[b] = every OTHER site of a var b (re)defines.
+    let mut gens: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); n];
+    let mut kill: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); n];
+    for (si, s) in sites.iter().enumerate() {
+        gens[s.block].insert(si);
+    }
+    for (b, bb) in cfg.blocks.iter().enumerate() {
+        for (si, s) in sites.iter().enumerate() {
+            if s.block != b && bb.defs.contains(&s.var) {
+                kill[b].insert(si);
+            }
+        }
+    }
+    // Round-robin fixpoint in program order (≈ RPO for a mostly-structured CFG → fast).
+    let mut inb: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); n];
+    let mut outb: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); n];
+    let mut passes = 0usize;
+    loop {
+        passes += 1;
+        // SI-3: a monotone analysis over `sites` converges; the bound turns a bug that would
+        // hang into a loud panic instead. `n + 2` is generous (convergence is ~loop-depth+2).
+        assert!(
+            passes <= n + 2,
+            "reaching-defs did not converge in {passes} passes (n={n}) — monotonicity bug"
+        );
+        let mut changed = false;
+        for b in 0..n {
+            let mut nin = BTreeSet::new();
+            for &p in &preds[b] {
+                nin.extend(outb[p].iter().copied());
+            }
+            inb[b] = nin;
+            let mut nout = gens[b].clone();
+            for &d in &inb[b] {
+                if !kill[b].contains(&d) {
+                    nout.insert(d);
+                }
+            }
+            if nout != outb[b] {
+                outb[b] = nout;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    ReachInfo {
+        sites,
+        inb,
+        outb,
+        passes,
+    }
+}
+
+fn dump_reach(name: &str, cfg: &Cfg, rd: &ReachInfo) {
+    let fmt = |set: &BTreeSet<usize>| {
+        if set.is_empty() {
+            "{}".to_string()
+        } else {
+            let items: Vec<String> = set
+                .iter()
+                .map(|&d| format!("v{}@b{}", rd.sites[d].var, rd.sites[d].block))
+                .collect();
+            format!("{{{}}}", items.join(","))
+        }
+    };
+    eprintln!(
+        "RD {name}  blocks={} sites={} passes={}",
+        cfg.blocks.len(),
+        rd.sites.len(),
+        rd.passes
+    );
+    for b in 0..cfg.blocks.len() {
+        eprintln!(
+            "  b{b} [{}]  in={}  out={}",
+            cfg.blocks[b].label,
+            fmt(&rd.inb[b]),
+            fmt(&rd.outb[b])
+        );
+    }
+}
+
+/// The oracle entry point, reached only under `LOFT_OWN_ORACLE` (SI-1). Modes:
+/// `cfg` dumps each user function's CFG (Phase 1.1); `rd` also runs the reaching-defs fixpoint
+/// and dumps IN/OUT + the pass count (Phase 1.2). The ownership fixpoint arrives in Phase 2.
 pub fn oracle(data: &Data) {
     let Ok(mode) = std::env::var("LOFT_OWN_ORACLE") else {
         return;
     };
-    if mode != "cfg" {
+    if mode != "cfg" && mode != "rd" {
         return;
     }
     for d_nr in 0..data.definitions() {
@@ -322,6 +444,12 @@ pub fn oracle(data: &Data) {
             continue;
         }
         let cfg = build(&body);
-        dump(data.def(d_nr).name(), &cfg);
+        let name = data.def(d_nr).name();
+        if mode == "cfg" {
+            dump(name, &cfg);
+        } else {
+            let rd = reaching_defs(&cfg);
+            dump_reach(name, &cfg, &rd);
+        }
     }
 }

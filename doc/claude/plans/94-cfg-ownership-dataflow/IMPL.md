@@ -67,13 +67,18 @@ backend-consistent wrong free/own plan) that interp-vs-native + leak gates struc
   [`probes/01-cfg-corpus.loft`](probes/01-cfg-corpus.loft). Key IR finding: `for` lowers to a
   `Loop` whose exit test is an `If(cond, Break(0), Null)` **buried in the range `Set` RHS**, so the
   builder recurses into `Set` values to find control transfers.
-- **1.2 — the worklist engine on a trivial lattice** (reaching-defs), straight-line + one branch.
-  **Gate:** reaching-defs hand-verified on 2 shapes; SI-3 holds. (Per-block `defs` are already
-  extracted by the builder — the raw material is in place.)
-- **1.3 — loops / break / early-return in the engine.** **Gate:** reaching-defs correct AND
-  SI-3 (bounded convergence) on single loop, nested loop, break-out, early-return-in-loop — the
-  cases the position-proxy cannot express. A non-reducible edge here forces the basic-block
-  fallback; record it.
+- **1.2 — the worklist engine on a trivial lattice ✅ (2026-07-07).** Reaching definitions (forward
+  may-analysis, `OUT = gen ∪ (IN \ kill)`, union meet), round-robin fixpoint. Reached via
+  `LOFT_OWN_ORACLE=rd`. **Gate PASSED:** hand-verified on straight-line (`out={v1@b0,v2@b0}`) and the
+  one-branch `ifjoin` — the join `b4` has `in={v1@b2,v1@b3}` (both arms) and the initial `r=0`
+  (`v1@b0`) correctly does NOT reach (killed on both arms). SI-3 holds: passes = 2 (straight) / 3
+  (branch), both `≤ n+2`. SI-1 held (normal run `6 1 3 3` unchanged, clippy clean).
+- **1.3 — loops / break / early-return in the engine.** *Largely validated by 1.2's engine, which
+  handles back-edges by construction:* `oneloop` converges in **5 passes** with the loop-carried def
+  correct — the header `b2` sees `s` from both `v1@b0` (init) and `v1@b6` (body update, via the
+  back-edge), and `out[b6]` drops the killed `v1@b0`. `earlyret` converges in 4. **Remaining for a
+  clean 1.3 tick:** run the nested-loop + break-out shapes through `rd`, graduate a rust assertion
+  test of the pass-bound + the join/back-edge fact, and confirm no non-reducible edge (none seen).
 
 ---
 
