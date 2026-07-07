@@ -190,15 +190,22 @@ and `store_load_range` (Phase 4) are unblocked.
   `SIGNATURE` check only); wire `schema_sidecar::check` at the bootstrap when the remote provider
   lands (a wrong-layout local file is far less likely than a wrong-layout remote fetch).
 
-### Phase 2 — paged read-only backing (local provider)
-- **Build:** `PagedReader` (page table + LRU + fetch-on-miss `resolve`) over the **local-file**
-  provider; the option-B/(b1|b2) result from P0. Bootstrap: page 0 + size + identity gate.
-- **Verify:** a `find` / a full iteration over `PagedReader` returns the SAME records as the
-  whole-file load, **and** `pages_fetched · page_size ≪ file_size` (assert the count from the
-  provider log). Both backends + wasm.
-- **Prove-can-fail:** shrink the page cache to 1 entry → still correct (just more fetches) — proves
-  correctness is independent of residency; a corrupted page → detected (per-record size-word sanity
-  / the identity gate), not a wild read.
+### Phase 2 — paged read-only backing (local provider) — **reader core DONE 2026-07-07**
+- **Built:** `src/paged_reader.rs` (behind the `remote-store` feature — the zero-cost gate): the
+  `PageProvider` trait, `LocalFileProvider` (reads ranges from disk, **logs every `(off,len)`** so
+  "bytes fetched ≪ file" is countable), and `PagedReader` — a sparse LRU page table + fetch-on-miss
+  `resolve(off,len)` that coalesces boundary-spanning reads, plus the typed reads (`u32_at` /
+  `i32_at` / `i64_at` / `record_words`) that mirror the `Store` accessors (`byte = rec·8 + fld`,
+  native-endian). The option-B / `b-builtin` result from P0.
+- **Verified (5 unit tests):** `resolve` returns exact bytes incl. page-span coalescing; past-EOF
+  zero-pads; a small read touches **one page**, not the file; correctness is **independent of
+  residency** (a `capacity == 1` reader agrees byte-for-byte with a fully-resident one — the
+  prove-can-fail); typed reads are native-endian at `rec·8`.
+- **Re-slice:** the **`find`/range traversal over `PagedReader` moves to Phase 3/4** — it needs the
+  collection's key metadata (`Key[]`) and root, which the `store_load_keys`/`_range` builtins carry
+  naturally, so it is testable end-to-end there (the "same records as whole-file, bytes ≪ file"
+  gate lands with Phase 3). Phase 2 is the reader **mechanism**; the traversal that rides it is
+  Phase 3. Bootstrap (page 0 + size + the @PLN97 identity gate) also lands at the Phase-3 entry.
 
 ### Phase 3 — `store_load_keys` (point lookups; Hash & Sorted)
 - **Build:** `store_load_keys(local, url, keys)` — for each key, `PagedReader.find(key)` → deep-copy

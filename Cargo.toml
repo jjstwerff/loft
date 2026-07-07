@@ -29,7 +29,7 @@ path = "src/bin/loft-keygen.rs"
 required-features = ["registry"]
 
 [features]
-default      = ["mmap", "random", "threading", "registry", "native-extensions"]
+default      = ["mmap", "random", "threading", "registry", "native-extensions", "remote-store"]
 threading    = ["dep:rayon"]
 wasm         = ["dep:wasm-bindgen", "dep:serde", "dep:serde-wasm-bindgen",
                 "dep:js-sys", "dep:web-sys", "png", "dep:fontdue",
@@ -39,6 +39,12 @@ png          = ["dep:png"]
 mmap         = ["dep:mmap-storage"]
 random            = ["dep:rand_core", "dep:rand_pcg"]
 native-extensions = ["dep:libloading"]
+# @PLN97 arc G — the remote/paged working-set store loader. In `default` so
+# dev/test builds compile+exercise it; a lean `--no-default-features` build
+# compiles NONE of the paged/remote machinery (the zero-cost-to-non-users
+# invariant). The HTTP page provider (Phase 5) adds its deps under this flag;
+# the local-file provider (Phases 2–4) is dependency-free.
+remote-store      = []
 # sha2 is a base (non-optional) dependency — used by the startup-cache key
 # (@PLAN28) — so it is no longer listed as `dep:sha2` under `registry`.
 registry     = ["dep:ureq", "dep:zip", "dep:tar", "dep:flate2", "dep:ed25519-dalek"]
