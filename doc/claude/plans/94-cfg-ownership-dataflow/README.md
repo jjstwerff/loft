@@ -7,12 +7,19 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**IN PROGRESS — Phase 2 (fact) COMPLETE; Phase 4 (RED check) BUILT (4.1/4.3 ✓, 4.2 nearly); Phase 5
-(land beside) CORE DONE — the oracle runs on every `cargo test` (`tests/ownership_oracle.rs`) + a
-proof skeleton in `formal/ownership.md`.** Branch `tuxedo-pln94-ownership-dataflow` (off
-`origin/main`). Everything so far is a PURE
-OBSERVER — reached only via `LOFT_OWN_ORACLE`, nothing in the compile path consumes it, so shipped
-codegen is byte-identical (SI-1 held on `loft_suite` + the parse suite at every step). Progress:
+**H-tier END-STATE REACHED — Phases 0–5 all landed.** The oracle runs BESIDE the shipped analysis on
+every `cargo test` (`tests/ownership_oracle.rs`), a PURE OBSERVER (SI-1: shipped codegen byte-identical;
+reached only via `LOFT_OWN_ORACLE`, nothing in the compile path consumes it). `LOFT_OWN_ORACLE=check`
+now catches **both directions on the default path** — over-free (Check A, the A1b catch, RED on
+`LOFT_NO_A1B`) and definite under-free/leak (the promoted `check-leak` scan) — each with a firing
+true-positive and 0 false positives across ~521 files. A machine-checkable-soundness proof skeleton
+(one open lemma) is in `formal/ownership.md`. Branch `tuxedo-pln94-ownership-dataflow` (off
+`origin/main`), unmerged. **What's still open** (refinements, not the end-state): the one formal lemma
+(local transfer soundness); the leak-scan's next gaps (conditional/`Join` leaks, adopted-owned
+non-`OpDatabase` stores, closures — the `check-leak` ratchet targets); the `check-dev` over-free
+Check B + its `n_choose` residual (still gated, not promoted); the self-contained A1b catch (waits on
+base resolution — A1b is already caught by Check A). Out of scope (declared): P4/VH codegen cutover +
+the perf fork (Open q4). Progress by phase:
 
 - **Phase 0 ✓** — falsification gate PASSED: `LOFT_NO_A1B` produces a backend-consistent wrong plan
   the interp-vs-native oracle passes (`len=0` on both), and an independent static check catches it.
@@ -44,15 +51,26 @@ codegen is byte-identical (SI-1 held on `loft_suite` + the parse suite at every 
   correct default (`n_h disagree=0`) and **flags** the wrong plan under `LOFT_NO_A1B` (`__ref_1:
   mine=Join / B=Owned`). Two oracle unsoundnesses found + fixed via the inward cross-check; the
   framework works end-to-end.
-- **Phase 4 BUILT — 4.1/4.3 ✓, 4.2 nearly (2026-07-07; design: [`PHASE4_DESIGN.md`](PHASE4_DESIGN.md)).**
-  `LOFT_OWN_ORACLE=check` runs two checks BESIDE the shipped analysis — **both algorithms flag,
-  neither replaces the other** (overhead ~1.6%, gated-off zero): Check A (shadow-diff gate — the A1b
-  catch, RED on `LOFT_NO_A1B`) + Check B (free-legitimacy — an unconditional `OpFreeRef` of a
-  `Borrowed` store). A candidate self-contained A1b invariant was probed + FALSIFIED before coding
-  (base `65535` unresolved on both safe and unsafe returns). Sweeping 377 `tests/scripts` was the
-  last probe: Check B clean; Check A cut 11 → 1 (compare by KIND not base; `Borrowed(self)` @P302 →
-  `Owned`); the 1 residual (`n_choose` retbuf re-mint) is a safe leak-direction imprecision, deferred.
-  **Next: Phase 5** — land it beside with the fuzzer hook + a `tests/ownership_oracle.rs` binary.
+- **Phase 4 DONE ✓ (design: [`PHASE4_DESIGN.md`](PHASE4_DESIGN.md)).** `LOFT_OWN_ORACLE=check` runs
+  the consistency checks BESIDE the shipped analysis — **both flag, neither replaces the other**
+  (overhead ~1.6%, gated-off zero). Check A (shadow-diff — the A1b catch, RED on `LOFT_NO_A1B`, clean
+  on the fix) is the independent over-free cross-check; a candidate SELF-CONTAINED A1b invariant was
+  probed + FALSIFIED before coding (base `65535` unresolved on both safe and unsafe returns) and
+  deferred. The free-based Check B/C are the free-placement CONSISTENCY layer (gated `check-dev`, own
+  ratchet@0); the fact-precision insight (use the post-codegen type dep) drove them 153 → 0.
+- **Phase 5 DONE ✓ — landed beside.** `tests/ownership_oracle.rs` runs the oracle on every `cargo
+  test`: clean-corpus + fuzzer-hook (54 cells) + RED-on-`LOFT_NO_A1B` + SI-1 observer + SI-2
+  backend-identity. Phase 5.4: the machine-checkable-soundness proof skeleton in `formal/ownership.md`
+  (obligation ledger; one open lemma = local transfer soundness).
+- **Under-free / leak (Check C) — BUILT + PROMOTED ✓ ([`CHECK_C_UNDERFREE_DESIGN.md`](CHECK_C_UNDERFREE_DESIGN.md)).**
+  The definite-leak scan (`run_leak_scan`) now runs on the DEFAULT `check` path: only a MINTED
+  (`OpDatabase`) var leaks (a type-dep phantom like `__retbuf` has no store); transferred = returns
+  (closed transitively through the dep) ∪ consumes/captures (not closed) ∪ the shipped
+  `skip_free`/`caller_hidden_buf` flags. Drove its own `check-leak` ratchet **927 → 0** (the `__retbuf`
+  phantom was ~889), with an injected-free positive control proving it fires (not vacuous). KNOWN
+  GAPS (ratchet targets, not FPs): conditional/`Join` leaks, adopted-owned non-`OpDatabase` stores,
+  closures. The dev-tier + ratchet workflow (a check that RAISES the count gets its own flag, never a
+  revert) is distilled into a nudge in the engineering-rigor skill.
 
 The remaining approximations this replaces still ship: `src/use_analysis.rs` analysis **A**
 (position-proxy, valid only outside loops) and analysis **B** (`Owned/Borrowed/Join`, flow-insensitive

@@ -14,14 +14,21 @@ hand-compute every expected value, graduate to `tests/scripts/` + an oracle test
 
 ## RESUME HERE (read first after a fresh start)
 
-All work is on branch **`tuxedo-pln94-ownership-dataflow`** (off `origin/main`), a **pure observer**
-in `src/ownership_cfg.rs` (nothing in the compile path consumes it; SI-1 holds). Done: Phase 0
-(falsify ✓), Phase 1 (CFG + reaching-defs fixpoint ✓), **Phase 2 COMPLETE** → 3.1/3.2/3.3 ✓,
-**3.4a ✓** + **3.4 ✓** (op-tail: cross-check surfaces no genuine unmodeled-family divergence on the
-corpus + fuzzer), **3.5 ✓** (fuzzer soundness sweep DISAGREE=0 + A1b payoff demonstrated). Two real
-unsoundnesses in the oracle were found and fixed along the way (structural-op mis-route; `= null`
-default) — both surfaced by the cross-check aimed inward. **Next: Phase 4** (the self-contained RED
-consistency check over emitted IR).
+All work is on branch **`tuxedo-pln94-ownership-dataflow`** (off `origin/main`, unmerged), a **pure
+observer** in `src/ownership_cfg.rs` (nothing in the compile path consumes it; SI-1 holds).
+**H-tier END-STATE REACHED — Phases 0–5 all done.** Phase 0 (falsify ✓), Phase 1 (CFG + reaching-defs
+✓), Phase 2 COMPLETE (3.1–3.5 ✓ — two oracle unsoundnesses found + fixed by the inward cross-check:
+structural-op mis-route, `= null` default), Phase 4 ✓ (`LOFT_OWN_ORACLE=check`: Check A A1b catch +
+the free-based Check B/C consistency layer), Phase 5 ✓ (`tests/ownership_oracle.rs` runs it on every
+`cargo test` + the proof skeleton in `formal/ownership.md`). **Check C under-free BUILT + PROMOTED**:
+the definite-leak scan runs on the default `check` path (927 → 0 behind its own `check-leak` ratchet,
+injected-free positive control fires). `check` now catches BOTH directions.
+
+**Still open** (refinements, not the end-state): (1) the one formal lemma — local transfer soundness;
+(2) the leak-scan's next `check-leak` ratchet targets — conditional/`Join` leaks, adopted-owned
+non-`OpDatabase` stores, closures; (3) promote the `check-dev` over-free Check B + resolve its
+`n_choose` residual; (4) the self-contained A1b catch (waits on base resolution — A1b is caught by
+Check A meanwhile). Out of scope (declared): P4/VH codegen cutover + the perf fork (README Open q4).
 
 **How to run the oracle** (env `LOFT_OWN_ORACLE`, dumps to stderr; always set `LOFT_NO_CACHE=1` so
 `scopes::check` re-runs on the user file):
@@ -321,7 +328,20 @@ clean corpus); extending the 0-false-positive sweep to issues/leak/wrap/native; 
 lemma (4). The injected-fault true-positive beyond `LOFT_NO_A1B` (delete an `OpFreeRef`) is a
 regression guard — Check B is unit-proven but no toggle emits an unconditional free-of-borrowed.
 
-## Check C — under-free / leak detection (DESIGNED, not yet built — [`CHECK_C_UNDERFREE_DESIGN.md`](CHECK_C_UNDERFREE_DESIGN.md))
+## Check C — under-free / leak detection ✅ BUILT + PROMOTED ([`CHECK_C_UNDERFREE_DESIGN.md`](CHECK_C_UNDERFREE_DESIGN.md))
+
+**OUTCOME (2026-07-07):** the definite-leak scan (`run_leak_scan`) now runs on the DEFAULT `check`
+path, so the oracle catches both directions. Recognizer: only a MINTED (`OpDatabase`) var leaks (a
+type-dep-only phantom like `__retbuf` has no store); transferred = returns (closed transitively through
+the dep) ∪ consumes/captures (NOT closed) ∪ the shipped `skip_free`/`caller_hidden_buf` flags. Drove
+its own `check-leak` ratchet **927 → 0** (the `__retbuf` phantom was ~889); an injected-free positive
+control (`LOFT_OWN_INJECT_DROP_FREE`, `oracle_leak_scan_flags_an_injected_leak`) proves it fires — not
+vacuous. KNOWN GAPS (ratchet targets, not FPs): conditional/`Join` leaks (runtime leak-check's class),
+adopted-owned non-`OpDatabase` stores, closures. The journey below (the dev-tier/ratchet workflow, the
+C.0 blocker, the promotion attempt) is the historical record; the workflow is now a nudge in the
+engineering-rigor skill.
+
+---
 
 Extends the oracle from the over-free class (Check A/B) to under-free. A gated prototype was built +
 MEASURED, then reverted; the numbers fixed both the scope and a BLOCKER (design doc has the detail):
