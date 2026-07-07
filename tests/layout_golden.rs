@@ -29,28 +29,48 @@ use loft::database::{Parts, Stores};
 use loft::parser::Parser;
 use std::path::PathBuf;
 
-/// The corpus — one structure per representative layout cell. Expanded over
-/// time (Phase A census); enum / sorted / index / tuple / closure are the known
-/// gaps, to be added with the coverage self-audit (Phase B4).
+/// The corpus — one structure per representative layout cell. Closure (fn-ref
+/// field → DbRef/ChildRec), Spacial (1.1+), and Ordered/Array (codegen-only)
+/// stay uncovered — the coverage audit classifies them (Phase B4).
 const CORPUS: &str = r#"
 struct Scalars { b: boolean, c: character, s: single, f: float, i: integer, t: text }
 struct Narrow { a: i32, b: u8, c: u16 }
+struct Wide { s: i16 }
 struct NotNull { i: integer not null, t: text not null }
 struct Vec1 { v: vector<integer> }
 struct VecNest { vv: vector<vector<integer>> }
 struct VecText { v: vector<text> }
 struct Item { ik: integer }
 struct Bag { items: hash<Item[ik]> }
+struct SortedBag { items: sorted<Item[ik]> }
+struct IndexBag { items: index<Item[ik]> }
 struct RefHost { child: Scalars }
+struct Tup { pair: (integer, text) }
+enum Color { Red, Green, Blue }
+enum Shape { Circle { radius: integer }, Rect { width: integer, height: integer } }
 "#;
 
 /// The types to dump, in a fixed order (stable golden).
 const TYPES: &[&str] = &[
-    "Scalars", "Narrow", "NotNull", "Vec1", "VecNest", "VecText", "Item", "Bag", "RefHost",
+    "Scalars",
+    "Narrow",
+    "Wide",
+    "NotNull",
+    "Vec1",
+    "VecNest",
+    "VecText",
+    "Item",
+    "Bag",
+    "SortedBag",
+    "IndexBag",
+    "RefHost",
+    "Tup",
+    "Color",
+    "Shape",
 ];
 
 /// A layout change flips this. Re-bless (with the golden) on an intentional change.
-const LAYOUT_ALGO_HASH: u64 = 7_896_138_798_552_030_681;
+const LAYOUT_ALGO_HASH: u64 = 6_612_474_016_846_722_780;
 
 fn type_name(db: &Stores, kt: u16) -> String {
     db.types
@@ -145,7 +165,9 @@ fn referenced(db: &Stores, kt: u16, out: &mut Vec<u16>) {
         | Parts::Index(e, _, _)
         | Parts::Spacial(e, _) => out.push(*e),
         Parts::ChildRec(c) => out.push(*c),
-        Parts::Enum(vs) => out.extend(vs.iter().map(|(t, _)| *t)),
+        // A plain variant (no data) keeps `known_type == u16::MAX`; only
+        // data-carrying variants have an `EnumValue` type to reach.
+        Parts::Enum(vs) => out.extend(vs.iter().map(|(t, _)| *t).filter(|t| *t != u16::MAX)),
         _ => {}
     }
 }
@@ -283,13 +305,27 @@ fn coverage(p: &Parts) -> (&'static str, Cover) {
         Parts::Int(..) => ("Int", Cover::Covered),
         Parts::Vector(_) => ("Vector", Cover::Covered),
         Parts::Hash(..) => ("Hash", Cover::Covered),
-        Parts::Enum(_) => ("Enum", Cover::Gap("plain enum")),
-        Parts::EnumValue(..) => ("EnumValue", Cover::Gap("enum with typed data")),
-        Parts::Short(..) => ("Short", Cover::Gap("i16 narrow int (2-byte shifted)")),
-        Parts::Sorted(..) => ("Sorted", Cover::Gap("sorted<T[key]>")),
-        Parts::Ordered(..) => ("Ordered", Cover::Gap("sorted array (ordered)")),
-        Parts::Index(..) => ("Index", Cover::Gap("index<T[key]>")),
-        Parts::Spacial(..) => ("Spacial", Cover::Gap("spacial<T[key]>")),
+        Parts::Enum(_) => ("Enum", Cover::Covered),
+        Parts::EnumValue(..) => ("EnumValue", Cover::Covered),
+        Parts::Index(..) => ("Index", Cover::Covered),
+        // `sorted<T[k]>` as a struct field is array-backed → Ordered.
+        Parts::Ordered(..) => ("Ordered", Cover::Covered),
+        // The vector-backed `sorted` (Parts::Sorted) needs a local `sorted<T[k]>=[]`,
+        // not a struct field — not in the corpus yet.
+        Parts::Sorted(..) => (
+            "Sorted",
+            Cover::Gap("vector-backed sorted — a local, not a field"),
+        ),
+        // The 2-byte SHIFTED narrow int (distinct from ShortRaw); a nullable
+        // narrow field, not produced by i16/u16 (those are ShortRaw).
+        Parts::Short(..) => (
+            "Short",
+            Cover::Gap("2-byte shifted narrow int — nullable narrow field"),
+        ),
+        Parts::Spacial(..) => (
+            "Spacial",
+            Cover::Gap("spacial<T[key]> — planned 1.1+, errors today"),
+        ),
         Parts::Array(_) => (
             "Array",
             Cover::Internal("codegen-only reference collection"),
@@ -308,7 +344,17 @@ fn coverage(p: &Parts) -> (&'static str, Cover) {
 /// The storage kinds the corpus is expected to produce — kept in lockstep with
 /// the `Cover::Covered` arms above by the audit's exact-set assertion.
 const COVERED_LABELS: &[&str] = &[
-    "Base", "Struct", "Byte", "ShortRaw", "Int", "Vector", "Hash",
+    "Base",
+    "Struct",
+    "Byte",
+    "ShortRaw",
+    "Int",
+    "Vector",
+    "Hash",
+    "Ordered",
+    "Index",
+    "Enum",
+    "EnumValue",
 ];
 
 #[test]
