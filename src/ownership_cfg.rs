@@ -697,13 +697,17 @@ fn under_free(
     transferred: &BTreeSet<u16>,
     func: &crate::variables::Function,
 ) -> Vec<u16> {
+    // OWNS its store iff its post-codegen type dep is EMPTY (materialisation is baked in: a copied
+    // borrowed-source has an empty dep here — the dep is the ground truth codegen freed against,
+    // unlike the usage-blind flow-sensitive fact). Iterating the fixpoint's exit-state keeps it CLEAN
+    // (0 FP) but MISSES `OpDatabase` db-var backing stores (only owns-entry is `= null`, absent from
+    // the state). Checking ALL vars (`snapshot_names`) catches those — and a genuine dropped free —
+    // but over-approximates leaks (backing stores of returns, `par` materialise, retbufs) and needs
+    // comprehensive transfer tracking first. That is the promotion blocker (CHECK_C_UNDERFREE_DESIGN
+    // § promotion); until then Check C stays exit-state-scoped in the dev tier.
     exit_state
         .iter()
         .filter(|&(&v, &_f)| {
-            // OWNS its store iff its post-codegen type dep is empty (materialisation is baked in:
-            // a copied borrowed-source has an empty dep here). The flow-sensitive fact `_f` is
-            // usage-blind to the copy insertion, so it reads `Borrowed`; the dep is the ground truth
-            // codegen actually freed against.
             func.tp(v).heap_dep().is_some() // only a HEAP store can leak (not a scalar)
                 && func.tp(v).depend().is_empty() // owns its store (empty dep)
                 && !func.is_argument(v)
@@ -907,7 +911,9 @@ pub fn oracle_free_checks(data: &Data) {
 }
 
 /// DEV tier: the POST-codegen free-based checks — Check B (over-free) on user functions (now that
-/// their frees are visible) + Check C (under-free/leak). Reported under `check-dev` only.
+/// their frees are visible) + Check C (under-free/leak). Both key off the post-codegen TYPE DEP (the
+/// materialisation-aware ownership signal), so they need no fixpoint — they are a free-placement
+/// CONSISTENCY layer (does the emitted free match the dep), beside Check A's independent cross-check.
 fn run_free_checks(name: &str, body: &Value, cfg: &Cfg, data: &Data, d_nr: u32, free_ops: &[u32]) -> usize {
     let (outb, _passes) = ownership_dataflow(data, d_nr, cfg);
     let exit_state = &outb[cfg.exit];
@@ -953,7 +959,7 @@ fn run_free_checks(name: &str, body: &Value, cfg: &Cfg, data: &Data, d_nr: u32, 
             .collect();
         let freed: BTreeSet<u16> = collect_free_targets(body, &all_frees).into_iter().collect();
         let transferred = transferred_out(body, data);
-        for v in under_free(exit_state, &freed, &transferred, &data.def(d_nr).variables) {
+        for v in under_free(exit_state, &freed, &transferred, func) {
             eprintln!("RED {name}: under-free (leak) {} (v{v}) Owned heap, never freed/transferred", nm(v));
             reds += 1;
         }
