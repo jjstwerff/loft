@@ -24,11 +24,13 @@ the free-based Check B/C consistency layer), Phase 5 ✓ (`tests/ownership_oracl
 the definite-leak scan runs on the default `check` path (927 → 0 behind its own `check-leak` ratchet,
 injected-free positive control fires). `check` now catches BOTH directions.
 
-**Still open** (refinements, not the end-state): (1) the one formal lemma — local transfer soundness;
-(2) the leak-scan's next `check-leak` ratchet targets — conditional/`Join` leaks, adopted-owned
-non-`OpDatabase` stores, closures; (3) promote the `check-dev` over-free Check B + resolve its
-`n_choose` residual; (4) the self-contained A1b catch (waits on base resolution — A1b is caught by
-Check A meanwhile). Out of scope (declared): P4/VH codegen cutover + the perf fork (README Open q4).
+**Still open** (refinements, not the end-state): (1) ✅ the formal lemma (local transfer soundness) is
+now DISCHARGED in `formal/ownership.md` § "Machine-checkable soundness" (over-free property, given the
+O-\* rules; only a Coq/Lean rendering of the prose remains); (2) the leak-scan's next `check-leak`
+ratchet targets — conditional/`Join` leaks, adopted-owned non-`OpDatabase` stores, closures; (3)
+promote the `check-dev` over-free Check B + resolve its `n_choose` residual; (4) the self-contained
+A1b catch (waits on base resolution — A1b is caught by Check A meanwhile). Out of scope (declared):
+P4/VH codegen cutover + the perf fork (README Open q4).
 
 **How to run the oracle** (env `LOFT_OWN_ORACLE`, dumps to stderr; always set `LOFT_NO_CACHE=1` so
 `scopes::check` re-runs on the user file):

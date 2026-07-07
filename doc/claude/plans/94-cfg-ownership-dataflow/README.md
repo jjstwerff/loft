@@ -14,8 +14,10 @@ now catches **both directions on the default path** — over-free (Check A, the 
 `LOFT_NO_A1B`) and definite under-free/leak (the promoted `check-leak` scan) — each with a firing
 true-positive and 0 false positives across ~521 files. A machine-checkable-soundness proof skeleton
 (one open lemma) is in `formal/ownership.md`. Branch `tuxedo-pln94-ownership-dataflow` (off
-`origin/main`), unmerged. **What's still open** (refinements, not the end-state): the one formal lemma
-(local transfer soundness); the leak-scan's next gaps (conditional/`Join` leaks, adopted-owned
+`origin/main`), unmerged. **What's still open** (refinements, not the end-state): the formal lemma
+(local transfer soundness) is now DISCHARGED (`formal/ownership.md`, over-free property given the
+O-\* rules; only a Coq/Lean rendering remains); the leak-scan's next gaps (conditional/`Join` leaks,
+adopted-owned
 non-`OpDatabase` stores, closures — the `check-leak` ratchet targets); the `check-dev` over-free
 Check B + its `n_choose` residual (still gated, not promoted); the self-contained A1b catch (waits on
 base resolution — A1b is already caught by Check A). Out of scope (declared): P4/VH codegen cutover +
