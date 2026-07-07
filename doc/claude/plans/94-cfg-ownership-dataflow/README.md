@@ -17,9 +17,11 @@ with a firing true-positive and 0 false positives across ~521 files. A machine-c
 proof skeleton is in `formal/ownership.md`. Branch `tuxedo-pln94-ownership-dataflow` (off
 `origin/main`), unmerged. **What's still open** (refinements, not the end-state): the formal lemma
 (local transfer soundness) is now DISCHARGED (`formal/ownership.md`, over-free property given the
-O-\* rules; only a Coq/Lean rendering remains); the `n_choose` fact-disagree residual (Check A, the
-one retbuf-materialisation case); the self-contained A1b catch (waits on base resolution — A1b is
-already caught by Check A). The `check-dev` over-free Check B is **now PROMOTED** onto `check` (its
+O-\* rules; only a Coq/Lean rendering remains); the self-contained A1b catch (waits on base resolution
+— A1b is already caught by Check A). The `n_choose` fact-disagree residual is now RESOLVED: a
+`var = src` copy INTO a var re-minted via `OpDatabase` (a `Call`, invisible to the `Set`-only transfer)
+owns — so `check` is now **0 RED across the entire corpus** (806 files + 54 fuzz), and
+`85-struct-copy-return-owned` joined the clean corpus. The `check-dev` over-free Check B is **now PROMOTED** onto `check` (its
 true-positive is `LOFT_OWN_INJECT_FREE_BORROWED`); `check-dev` retains only the exit-state Check C as a
 second opinion. The leak scan's **adopted-owned class is now PROMOTED** too (an NRVO return buffer
 `__ref_*` a function owns + frees but never `OpDatabase`-mints — 0 FP across 829 files, its own

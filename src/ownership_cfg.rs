@@ -536,6 +536,23 @@ fn caller_arg_base(data: &Data, callee_d: u32, callee_base: u16, args: &[Value])
 
 /// Forward ownership fixpoint: returns each block's OUT-state and the pass count (SI-3).
 fn ownership_dataflow(data: &Data, d_nr: u32, cfg: &Cfg) -> (Vec<OState>, usize) {
+    // @P302/@PLN25 materialisation: a var RE-MINTED via `OpDatabase` on ANY path is a materialised
+    // OWNED local (the function owns its store), so a whole-value `var = src` copy INTO it is also
+    // owned — not a borrow of `src`. `OpDatabase(v)` is a `Call` statement, invisible to the `Set`-only
+    // `record_own`, so the transfer would otherwise carry the false-arm copy's `Borrowed(src)` through
+    // the join (the `n_choose` residual: `r = x` on the false arm, `OpDatabase(r)` on the true). This
+    // is NARROW — it only reclasses a bare `Var` RHS, never a projection (`OpGetField` → a genuine
+    // borrowing view stays `Borrowed`, so the A1b catch on the returned work-ref is preserved).
+    let op_database = data.def_nr("OpDatabase");
+    let mut reminted: BTreeSet<u16> = BTreeSet::new();
+    data.def(d_nr).code.walk(&mut |x| {
+        if let Value::Call(d, args) = x
+            && *d == op_database
+            && let Some(Value::Var(v)) = args.first().map(Value::unspan)
+        {
+            reminted.insert(*v);
+        }
+    });
     let n = cfg.blocks.len();
     let mut preds: Vec<Vec<BlockId>> = vec![Vec::new(); n];
     for (b, bb) in cfg.blocks.iter().enumerate() {
@@ -571,7 +588,9 @@ fn ownership_dataflow(data: &Data, d_nr: u32, cfg: &Cfg) -> (Vec<OState>, usize)
                     continue;
                 }
                 let f = match rhs.unspan() {
-                    // A bare source var resolves flow-sensitively to its current state.
+                    // A whole-value `var = src` copy INTO a re-minted (materialised-owned) var owns —
+                    // see `reminted` above. Otherwise a bare source var resolves flow-sensitively.
+                    Value::Var(_) if reminted.contains(var) => OFact::Owned,
                     Value::Var(u) => st
                         .get(u)
                         .copied()

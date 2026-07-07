@@ -348,6 +348,14 @@ shape that `f=Owned ⇒ owns'(var)=var`, and that a non-`Owned` `f` authorizes n
   `owns'(var)=var`. When `st[u]` is `Borrowed`/`Join`, `f` authorizes no free. The
   `unwrap_or_else(ownership_of)` boundary (`u` absent — a parameter) yields `Borrowed(u)`, non-`Owned`.
   ∎ *(the `Owned` sub-case is independent; see the bridged gap below for the moved SOURCE)*
+- **(c′) bare `var = u` where `var` is `OpDatabase`-re-minted on some path → `Owned`** (the `reminted`
+  rule, taking precedence over (c)). If `var` is the arg-0 of an `OpDatabase` anywhere in the body then
+  **O-Owner** gives `var` a fresh store on that path, so `var` is a materialised OWNED local; a
+  whole-value `var = u` copy into it is a materialised copy (`OpCopyRecord` at codegen, as a/e) that
+  owns a fresh store — `owns'(var)=var`. NARROW by construction: it fires ONLY for a bare `Var` RHS,
+  never a projection (a `OpGet*` view stays `Borrowed(root)` per (b)), so no borrowing view is
+  manufactured `Owned` — the property that keeps the A1b returned-view catch intact. ∎ *(independent —
+  rests on O-Owner + the C86 copy-materialisation, like (c)'s `Owned` sub-case)*
 - **(d) non-native call `var = f(args)` → `call_own`.** `f=Owned` only when the callee
   `return_ownership` is `Owned` = *returns a fresh store* (**O-Move**), so `owns'(var)=var`; a
   `Borrowed(argᵢ)` return authorizes no free. Sound by induction over the call graph — the callee

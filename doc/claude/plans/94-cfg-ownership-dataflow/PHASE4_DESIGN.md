@@ -108,12 +108,15 @@ silent gap).
   - **Check A self-borrow `Borrowed(v)` for var `v`** (2 sites, `@P302` keyed-collection self-dep) —
     an ownership marker, not a borrow. Fixed: normalise `Borrowed(self) → Owned` in the transfer
     (mirrors the shipped `get_free_vars` carve-out).
-  - **Residual: 1** — `n_choose` (`85-struct-copy-return-owned`): `r = x; if cond { r = Box{…} }; r`.
-    `r` is the retbuf param; the then-arm re-mints its store via `OpDatabase(r)` (a `Call`, not a
-    `Set`, so the transfer misses it → `r` stays `Borrowed(x)` instead of the conditional `Join(x)`).
-    A **leak-direction** (safe: mine more conservative than B, no over-free) imprecision. DEFERRED to
-    the increment that records `OpDatabase(v)` re-mints as owns entries (same class as the 3.4a
-    structural-op fix) + models the retbuf materialisation B collapses to `Owned`.
+  - **Residual: 0 — `n_choose` NOW RESOLVED (2026-07-07).** `n_choose` (`85-struct-copy-return-owned`):
+    `r = x; if cond { r = Box{…} }; r`. `r` is the retbuf param; the then-arm re-mints its store via
+    `OpDatabase(r)` (a `Call`, not a `Set`, invisible to the transfer), so the false-arm `r = x` copy
+    carried `Borrowed(x)` through the join. Root: a var re-minted via `OpDatabase` is a materialised
+    OWNED local, so a whole-value `var = src` copy into it owns — the `reminted` rule resolves the bare
+    `Var` RHS to `Owned` when the LHS is `OpDatabase`-minted anywhere. NARROW (only a bare `Var` RHS,
+    never a projection `OpGetField` → the A1b returned work-ref stays `Borrowed`, catch preserved);
+    verified 0 new disagreements across 806 files + 54 fuzz. Check A is now `disagree=0` across the
+    whole corpus.
 - **4.3 ✅ (2026-07-07)** — RED on `LOFT_NO_A1B` (`n_h`: `RED … fact-disagree __ref_1 mine=Join /
   B=Owned`, via Check A). Injected-fault true-positive (delete an `OpFreeRef` / flip a fact) still to
   wire as a test (Phase 5).

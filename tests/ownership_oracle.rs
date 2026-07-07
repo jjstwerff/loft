@@ -69,9 +69,9 @@ fn own_facts(file: &str, native: bool) -> Vec<String> {
 }
 
 /// The verified-correct corpus the check must stay silent on (no crying wolf). Kept to files proven
-/// 0-RED (the @PLN94 probes + the collection-capture stress); `n_choose`
-/// (`85-struct-copy-return-owned`, the one documented retbuf-materialisation residual) is
-/// deliberately EXCLUDED until that increment lands.
+/// 0-RED (the @PLN94 probes + the collection-capture stress). `85-struct-copy-return-owned`
+/// (`n_choose`, the retbuf-materialisation residual) is now INCLUDED — the `reminted` rule resolved it
+/// (a `var = src` copy into a var re-minted via `OpDatabase` owns; @PLN94 n_choose fix).
 const CLEAN_CORPUS: &[&str] = &[
     "doc/claude/plans/94-cfg-ownership-dataflow/probes/00-a1b-silent-blindspot.loft",
     "doc/claude/plans/94-cfg-ownership-dataflow/probes/01-cfg-corpus.loft",
@@ -81,6 +81,7 @@ const CLEAN_CORPUS: &[&str] = &[
     "doc/claude/plans/94-cfg-ownership-dataflow/probes/05-interproc.loft",
     "doc/claude/plans/94-cfg-ownership-dataflow/probes/06-capture.loft",
     "tests/scripts/505-collection-capture.loft",
+    "tests/scripts/85-struct-copy-return-owned.loft",
 ];
 
 const A1B_UAF: &str = "tests/scripts/85-temp-subject-borrow-return-uaf.loft";

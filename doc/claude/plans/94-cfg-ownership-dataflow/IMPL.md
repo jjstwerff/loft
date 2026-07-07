@@ -35,9 +35,12 @@ the remaining leak gaps are BY DESIGN (conditional/`Join` = the runtime leak-che
 frees on a different codegen clock); (3) ✅ the
 `check-dev` over-free Check B (`run_over_free_check`) is now PROMOTED onto `check` — 0 FP across
 scripts+docs+lib+examples, injected-`LOFT_OWN_INJECT_FREE_BORROWED` positive control fires
-(`oracle_over_free_check_flags_an_injected_free`); `check-dev` retains only the exit-state Check C. The
-`n_choose` fact-disagree residual (Check A, the retbuf-materialisation case) remains the one open Check
-A item; (4) the self-contained A1b catch (waits on base resolution — A1b is caught by Check A
+(`oracle_over_free_check_flags_an_injected_free`); `check-dev` retains only the exit-state Check C.
+(3b) ✅ the `n_choose` fact-disagree residual (Check A, the retbuf-materialisation case) is now RESOLVED
+— a `var = src` copy INTO a var re-minted via `OpDatabase` owns (the `reminted` rule in
+`ownership_dataflow`, NARROW: bare `Var` RHS only, never a projection, so the A1b catch is preserved).
+`check` is now 0 RED across the whole corpus and `85-struct-copy-return-owned` joined the clean corpus;
+(4) the self-contained A1b catch (waits on base resolution — A1b is caught by Check A
 meanwhile). Out of scope (declared): P4/VH codegen cutover + the perf fork (README Open q4).
 
 **How to run the oracle** (env `LOFT_OWN_ORACLE`, dumps to stderr; always set `LOFT_NO_CACHE=1` so
@@ -78,15 +81,16 @@ the wrong plan under `LOFT_NO_A1B` (`disagree=1: __ref_1 mine=Join / B=Owned`); 
 sweep is DISAGREE=0 across all 54 cells on both backends. The framework works end-to-end; what
 remains is a self-contained RED check + landing it.
 
-**Phase 4 is built (4.1/4.3 ✅, 4.2 nearly — see below and [`PHASE4_DESIGN.md`](PHASE4_DESIGN.md)):**
-`LOFT_OWN_ORACLE=check` runs two gating checks BESIDE the shipped analysis and goes RED on
+**Phase 4 DONE (4.1/4.2/4.3 ✅ — see below and [`PHASE4_DESIGN.md`](PHASE4_DESIGN.md)):**
+`LOFT_OWN_ORACLE=check` runs the gating checks BESIDE the shipped analysis and goes RED on
 `LOFT_NO_A1B` (Check A) — the coexistence model the design doc pins.
 
-**Immediate next action — close 4.2's last residual, then Phase 5.** (1) Clear the one `n_choose`
-false positive: record `OpDatabase(v)` re-mints (a `Call`, not a `Set`) as owns entries — the same
-class as the 3.4a structural-op fix — so a retbuf re-minted in an arm reads `Owned`, not the stale
-`Borrowed`; if `Join`-vs-`Owned` remains after that, model the retbuf materialisation B collapses to
-`Owned`. Then extend the 0-false-positive sweep to issues/leak/wrap/native. (2) **Phase 5** — land it
+**4.2's last residual (`n_choose`) is CLOSED (2026-07-07)** exactly as anticipated below: not merely
+recording the `OpDatabase(v)` re-mint (that alone leaves `Join`-vs-`Owned`), but modelling the retbuf
+materialisation B collapses to `Owned` — a `var = src` copy into an `OpDatabase`-re-minted var owns
+(the `reminted` rule). `check` is now 0 RED across the whole corpus. Historical next-action note kept
+for the record: (1) [DONE] clear the `n_choose` false positive; extend the 0-false-positive sweep to
+issues/leak/wrap/native. (2) **Phase 5** [DONE] — land it
 beside with the fuzzer hook (wire the 54-cell sweep + the `check` gate into `cargo test`) + a
 `tests/ownership_oracle.rs` binary (per shape: SI-2 fact-identity, green on correct, RED on an
 injected fault — the 4.3 true-positive test). That Phase-5 state IS the "fully functional oracle"
@@ -303,13 +307,18 @@ catch); **Check B** free-legitimacy (an unconditional `OpFreeRef` of a `Borrowed
 
 - **4.1 ✅ (2026-07-07)** — `check` mode + `run_check` + 2 unit tests (`free_of_borrowed` flags only
   the `Borrowed` free; `collect_free_targets` finds only free-op arg0). Pure observer (SI-1).
-- **4.2 — NEARLY DONE (2026-07-07): 377 `tests/scripts` swept; Check B fully clean; Check A 11 → 1.**
+- **4.2 — DONE (2026-07-07): 377 `tests/scripts` swept; Check B fully clean; Check A 11 → 0.**
   The build was the last probe — three false-positive classes found + fixed: Check B on
   `OpFreeText`/`OpFreeRefIfDistinct` (narrowed to unconditional `OpFreeRef`); Check A `Join(a)` vs
   `Join(b)` (compare by KIND, not base); Check A self-borrow `Borrowed(self)` (@P302 marker →
-  normalise to `Owned`). **Residual 1:** `n_choose` — a retbuf re-mint via `OpDatabase(r)` (a `Call`,
-  not a `Set`) the transfer misses; a leak-direction (SAFE) imprecision, deferred. SI-1 holds; 505 +
-  fuzzer + probes still `disagree=0`.
+  normalise to `Owned`). **Residual `n_choose` NOW RESOLVED:** a retbuf re-mint via `OpDatabase(r)` (a
+  `Call`, not a `Set`) the `Set`-only transfer missed left the false-arm `r = x` copy carrying
+  `Borrowed(x)` through the join. Root cause (matrix: `n_cp` `r=x` agrees `Borrowed`, `n_choose` adds
+  `OpDatabase(r)` on one arm → B says `Owned`): a var re-minted via `OpDatabase` is a materialised OWNED
+  local, so a `var = src` copy into it owns. The `reminted` rule resolves the bare-`Var` RHS to `Owned`
+  when the LHS is `OpDatabase`-minted anywhere — NARROW (never a projection view, so A1b's returned
+  work-ref stays `Borrowed` → catch preserved). `check` is now `disagree=0` across the WHOLE corpus
+  (806 files + 54 fuzz). SI-1 holds.
 - **4.3 ✅ (2026-07-07)** — RED on `LOFT_NO_A1B` (`n_h`, via Check A). The injected-fault
   true-positive (delete an `OpFreeRef` / flip a fact) is wired as a test in Phase 5.
 
@@ -333,8 +342,8 @@ green:
   for the flow-sensitive oracle's abstract-interpretation soundness (obligation ledger; one open
   lemma = local transfer soundness). Intro note updated: the substrate replacement is BUILT.
 
-**Remaining tail (not blocking the H end-state):** the `n_choose` 4.2 residual (excluded from the
-clean corpus); extending the 0-false-positive sweep to issues/leak/wrap/native. The formal lemma (4) is
+**Remaining tail (not blocking the H end-state):** the `n_choose` 4.2 residual is RESOLVED (the
+`reminted` rule; now IN the clean corpus); extending the 0-false-positive sweep to issues/leak/wrap/native. The formal lemma (4) is
 DISCHARGED. Check B's integration true-positive is now wired: no natural toggle emits an unconditional
 free-of-borrowed, so `LOFT_OWN_INJECT_FREE_BORROWED=<var>` force-frees a named borrowed view
 (the over-free positive control 08) and `oracle_over_free_check_flags_an_injected_free` asserts the
@@ -383,8 +392,10 @@ MEASURED, then reverted; the numbers fixed both the scope and a BLOCKER (design 
   gated on `LOFT_OWN_ORACLE=check-dev` (Check A stays pre-codegen; SI-1 held). With frees now visible,
   the 377-script sweep exposed the deeper blocker: **the ownership fact is not materialisation-aware**
   — a struct copy `r1 = a` reads `Borrowed(a)` but is freed as an owned copy (the `n_choose` gap,
-  pervasive) → **153 free-based findings**, flooding both B and C. The fix is a fact-precision upgrade
-  (classify copied `x = borrowed-source` as `Owned`), not more check tuning.
+  pervasive) → **153 free-based findings**, flooding both B and C. Check B/leak fixed this with the
+  post-codegen TYPE DEP; Check A's own instance (`n_choose`) is NOW fixed by the `reminted` rule
+  (a `var = src` copy into an `OpDatabase`-re-minted var is `Owned`) — a fact-precision upgrade, not
+  check tuning.
 - **The WORKFLOW (dev tier + ratchet):** the dev checks live behind `check-dev`, never on the default
   `check`; `tests/ownership_oracle.rs::oracle_dev_free_check_ratchet` (`#[ignore]`) asserts findings
   `≤ DEV_FP_BASELINE` — a one-way ratchet lowered by each improvement; `0` promotes them into `check`.
