@@ -211,3 +211,51 @@ fn oracle_clean_on_generated_fuzz_corpus() {
         offenders.join("\n---\n")
     );
 }
+
+/// The DEV-tier false-positive RATCHET (C.0). The post-codegen free-based checks (Check B on user
+/// functions + Check C under-free) are NOT clean yet — they are bounded by the fact's precision
+/// (a materialised copy reads `Borrowed`, not `Owned`), so they live behind `LOFT_OWN_ORACLE=check-dev`
+/// and are NEVER on the default `check` path. This test counts their findings over `tests/scripts`
+/// and asserts the total does not EXCEED the recorded baseline — a one-way ratchet: every fact/
+/// transfer-set improvement LOWERS `DEV_FP_BASELINE`, and a regression fails. When it reaches 0 the
+/// dev checks promote into `check` and this flips to `== 0`. Ignored by default (sweeps the suite).
+///
+/// The work this measures is making the ownership fact materialisation-aware (see
+/// `CHECK_C_UNDERFREE_DESIGN.md` § C.0 and the `n_choose` residual).
+const DEV_FP_BASELINE: usize = 153;
+
+#[test]
+#[ignore = "dev-tier ratchet — sweeps tests/scripts under check-dev; run on demand"]
+fn oracle_dev_free_check_ratchet() {
+    let dir = root().join("tests/scripts");
+    let mut total = 0usize;
+    for entry in std::fs::read_dir(&dir).expect("read tests/scripts") {
+        let path = entry.expect("dir entry").path();
+        if path.extension().and_then(|e| e.to_str()) != Some("loft") {
+            continue;
+        }
+        let out = Command::new(loft_bin())
+            .arg("--interpret")
+            .arg(&path)
+            .env("LOFT_NO_CACHE", "1")
+            .env("LOFT_OWN_ORACLE", "check-dev")
+            .output()
+            .expect("run loft check-dev");
+        let reds: BTreeSet<String> = String::from_utf8_lossy(&out.stderr)
+            .lines()
+            .filter(|l| l.starts_with("RED ") && (l.contains("under-free") || l.contains("free-of-borrowed")))
+            .map(str::to_string)
+            .collect();
+        total += reds.len();
+    }
+    assert!(
+        total <= DEV_FP_BASELINE,
+        "dev free-check false positives REGRESSED: {total} > baseline {DEV_FP_BASELINE}. \
+         If you intended to change this, update DEV_FP_BASELINE (lower = progress)."
+    );
+    if total < DEV_FP_BASELINE {
+        eprintln!(
+            "dev-tier ratchet PROGRESS: {total} < baseline {DEV_FP_BASELINE} — lower DEV_FP_BASELINE to {total}."
+        );
+    }
+}

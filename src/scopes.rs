@@ -1759,6 +1759,10 @@ pub fn check(data: &mut Data) {
             crate::variables::validate_alignment(&data.definitions[d_nr as usize].variables);
         }
     }
+    // @PLN94 C.0 (DEV tier) — the POST-codegen free-based checks (over-free / under-free), now that
+    // `get_free_vars` has inserted the frees into `def.code` above. Self-gates on
+    // `LOFT_OWN_ORACLE=check-dev`; observer only (SI-1), a no-op on the default `check` path.
+    crate::ownership_cfg::oracle_free_checks(data);
 }
 
 /// Walk `ir` and panic if any `Call` or `CallRef` argument directly contains a

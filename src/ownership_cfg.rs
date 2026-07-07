@@ -642,6 +642,68 @@ fn collect_free_targets(body: &Value, free_ops: &[u32]) -> Vec<u16> {
     out
 }
 
+/// The vars a function TRANSFERS OUT — so this frame does not free them, and their absence from the
+/// free set is NOT a leak (Check C, dev tier). A var is transferred iff it is returned, or consumed
+/// into a container (the element/source arg of `OpFinishRecord`/`OpAppendVector` (arg 1) or
+/// `OpCopyRecord` (arg 0)). Deliberately OVER-approximated (bias to EXCLUDE): missing a leak is safe
+/// (the runtime leak-check backstops); a missed transfer would cry wolf.
+fn transferred_out(body: &Value, data: &Data) -> BTreeSet<u16> {
+    let finish = data.def_nr("OpFinishRecord");
+    let append = data.def_nr("OpAppendVector");
+    let copy = data.def_nr("OpCopyRecord");
+    let mut s = BTreeSet::new();
+    body.walk(&mut |x| match x {
+        Value::Call(d, args) => {
+            let consumed_idx = if *d == finish || *d == append {
+                Some(1)
+            } else if *d == copy {
+                Some(0)
+            } else {
+                None
+            };
+            if let Some(i) = consumed_idx
+                && let Some(Value::Var(v)) = args.get(i).map(Value::unspan)
+            {
+                s.insert(*v);
+            }
+        }
+        Value::Return(inner) => {
+            let mut rv = Vec::new();
+            inner.walk(&mut |y| {
+                if let Value::Var(v) = y {
+                    rv.push(*v);
+                }
+            });
+            s.extend(rv);
+        }
+        _ => {}
+    });
+    s
+}
+
+/// Check C (under-free / leak) — an `Owned`, HEAP-typed, LOCAL var (not a parameter) that appears in
+/// no free op and is not transferred out leaks its store. Returns the offending vars. Still in the
+/// DEV tier: its false-positive rate is bounded by the fact's precision (materialised copies read
+/// `Borrowed` today), tracked by the ratchet test, not yet asserted 0.
+fn under_free(
+    exit_state: &OState,
+    freed: &BTreeSet<u16>,
+    transferred: &BTreeSet<u16>,
+    func: &crate::variables::Function,
+) -> Vec<u16> {
+    exit_state
+        .iter()
+        .filter(|&(&v, &f)| {
+            f == OFact::Owned
+                && func.tp(v).heap_dep().is_some() // only a HEAP store can leak (not a scalar)
+                && !func.is_argument(v)
+                && !freed.contains(&v)
+                && !transferred.contains(&v)
+        })
+        .map(|(&v, _)| v)
+        .collect()
+}
+
 /// Check B — free-legitimacy: a freed var whose fact is `Borrowed(base)` is an over-free of a store
 /// owned elsewhere (RED). Returns `(freed_var, base)` per offending site. Pure — the free set and the
 /// facts are supplied by the caller — so it is unit-testable without a `Data`.
@@ -731,8 +793,8 @@ fn dump_own(name: &str, cfg: &Cfg, data: &Data, d_nr: u32) {
 ///
 /// - **Check A (the A1b catch):** the shadow-diff — any var whose fact does not refine B's is a RED
 ///   fact-disagreement (the two independent implementations conflict).
-/// - **Check B (over-free):** free-legitimacy — an `OpFree*` of a var whose fact is `Borrowed` frees
-///   a store owned elsewhere.
+/// - **Check B (over-free):** free-legitimacy — an unconditional `OpFreeRef` of a var whose fact is
+///   `Borrowed` frees a store owned elsewhere.
 fn run_check(name: &str, body: &Value, cfg: &Cfg, data: &Data, d_nr: u32, free_ops: &[u32]) -> usize {
     let (outb, _passes) = ownership_dataflow(data, d_nr, cfg);
     let exit_state = &outb[cfg.exit];
@@ -767,7 +829,7 @@ pub fn oracle(data: &Data) {
     let Ok(mode) = std::env::var("LOFT_OWN_ORACLE") else {
         return;
     };
-    if !matches!(mode.as_str(), "cfg" | "rd" | "own" | "check") {
+    if !matches!(mode.as_str(), "cfg" | "rd" | "own" | "check" | "check-dev") {
         return;
     }
     let free_ops = free_op_nrs(data);
@@ -790,20 +852,78 @@ pub fn oracle(data: &Data) {
                 let rd = reaching_defs(&cfg);
                 dump_reach(name, &cfg, &rd);
             }
-            "check" => {
+            // Both `check` and `check-dev` run the STABLE fact-based Check A + B here (pre-codegen);
+            // `check-dev` additionally runs the DEV free-based checks post-codegen (oracle_free_checks).
+            "check" | "check-dev" => {
                 total_reds += run_check(name, &body, &cfg, data, d_nr, &free_ops);
                 checked += 1;
             }
             _ => dump_own(name, &cfg, data, d_nr),
         }
     }
-    if mode == "check" {
+    if matches!(mode.as_str(), "check" | "check-dev") {
         if total_reds == 0 {
             eprintln!("OWN-CHECK: clean — 0 RED over {checked} functions");
         } else {
             eprintln!("OWN-CHECK: {total_reds} RED finding(s) over {checked} functions");
         }
     }
+}
+
+/// The DEV-tier POST-codegen free-based checks — run at the END of `scopes::check` (after
+/// `get_free_vars` has inserted the frees into `def.code`) ONLY under `LOFT_OWN_ORACLE=check-dev`.
+/// The pre-codegen `oracle()` cannot see user-function frees; this pass can. IN DEVELOPMENT: its
+/// false-positive rate is bounded by the fact's precision (materialised copies read `Borrowed`), so
+/// it is NEVER on the default `check` path — the ratchet test (`tests/ownership_oracle.rs`) tracks
+/// the count down to zero, at which point these promote into `check`.
+pub fn oracle_free_checks(data: &Data) {
+    if std::env::var("LOFT_OWN_ORACLE").as_deref() != Ok("check-dev") {
+        return;
+    }
+    let free_ops = free_op_nrs(data);
+    let mut total_reds = 0usize;
+    for d_nr in 0..data.definitions() {
+        if !matches!(data.def(d_nr).def_type, DefType::Function) {
+            continue;
+        }
+        let body = data.def(d_nr).code.clone();
+        if matches!(body.unspan(), Value::Null) {
+            continue;
+        }
+        let cfg = build(&body);
+        total_reds += run_free_checks(data.def(d_nr).name(), &body, &cfg, data, d_nr, &free_ops);
+    }
+    eprintln!("OWN-CHECK-DEV-FREE: {total_reds} RED finding(s) (dev tier — ratcheting to 0)");
+}
+
+/// DEV tier: the POST-codegen free-based checks — Check B (over-free) on user functions (now that
+/// their frees are visible) + Check C (under-free/leak). Reported under `check-dev` only.
+fn run_free_checks(name: &str, body: &Value, cfg: &Cfg, data: &Data, d_nr: u32, free_ops: &[u32]) -> usize {
+    let (outb, _passes) = ownership_dataflow(data, d_nr, cfg);
+    let exit_state = &outb[cfg.exit];
+    let nm = |v: u16| data.def(d_nr).variables.name(v).to_string();
+    let mut reds = 0;
+    for (v, base) in free_of_borrowed(&collect_free_targets(body, free_ops), exit_state) {
+        eprintln!("RED {name}: free-of-borrowed {} (v{v}) is Borrowed(v{base}={})", nm(v), nm(base));
+        reds += 1;
+    }
+    // Check C skips CLOSURE bodies (`n___lambda_*`): their frees are inserted at closure-compile
+    // time, not into `def.code` here, so their free set reads empty (a documented coverage gap, not
+    // unsoundness — the runtime leak-check still covers closures).
+    if !name.starts_with("n___lambda_") {
+        let all_frees: Vec<u32> = ["OpFreeRef", "OpFreeText", "OpFreeRefIfDistinct"]
+            .iter()
+            .map(|n| data.def_nr(n))
+            .filter(|&d| d != u32::MAX)
+            .collect();
+        let freed: BTreeSet<u16> = collect_free_targets(body, &all_frees).into_iter().collect();
+        let transferred = transferred_out(body, data);
+        for v in under_free(exit_state, &freed, &transferred, &data.def(d_nr).variables) {
+            eprintln!("RED {name}: under-free (leak) {} (v{v}) Owned heap, never freed/transferred", nm(v));
+            reds += 1;
+        }
+    }
+    reds
 }
 
 #[cfg(test)]
