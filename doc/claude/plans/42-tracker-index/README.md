@@ -10,7 +10,7 @@ and is in **daily use** (scanner, CLI, auto-refresh, broken-validator, viewer ro
 sidebar, backlinks, Claude integration, language-harvest; `./scripts/idx` + `make index` live,
 `index/tags.json` auto-refreshed). Three phases remain, all deferred/gated:
 - **06 closeout** — waits on the viewer plan (`@PLN50` eagleviewer) + phase 08.
-- **07a WebSocket push** — gated on `lib/fs_watch/` ([`lib_plans/68-fs-watch/`](../lib_plans/68-fs-watch)),
+- **07a WebSocket push** — gated on `lib/fs_watch/` ([`lib_plans/68-fs-watch/`](../../lib_plans/68-fs-watch)),
   which has low current value (its only consumer is this daemon, already served by the phase-02
   git-hook + phase-04 mtime-poll).
 - **08 multi-project deploy** — open, appetite-driven ("generalise to any AI project").

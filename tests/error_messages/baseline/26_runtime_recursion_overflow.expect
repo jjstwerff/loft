@@ -11,4 +11,4 @@ error: call stack overflow
         fn bomb()
         fn bomb()
         fn bomb()
-        … (496 more frames)
+        … (9996 more frames)
