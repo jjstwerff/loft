@@ -1542,6 +1542,16 @@ fn references_var_after(b: &Block, v: u16, idx: usize) -> bool {
     b.operators[idx + 1..].iter().any(|op| refs_var(op, v))
 }
 
+/// @PLN94 TEST-ONLY: the var name whose scope-exit free `get_free_vars` drops (injecting a genuine
+/// leak, the `check-leak` true-positive gate), or `None`. Cached — ONE env read per process, so the
+/// production (unset) path pays nothing per-free. Never set outside tests.
+fn inject_drop_free() -> Option<&'static str> {
+    use std::sync::OnceLock;
+    static V: OnceLock<Option<String>> = OnceLock::new();
+    V.get_or_init(|| std::env::var("LOFT_OWN_INJECT_DROP_FREE").ok())
+        .as_deref()
+}
+
 /// Scope / lifetime analysis pass over every function definition.
 ///
 /// # Panics
@@ -3410,6 +3420,11 @@ impl Scopes {
                             data.def_nr("OpFreeRefIfDistinct"),
                             vec![Value::Var(v), Value::Var(buffer)],
                         ));
+                    } else if inject_drop_free() == Some(function.name(v)) {
+                        // @PLN94 TEST-ONLY positive control (never set in production; one cached env
+                        // read/process): drop the scope-exit free for the NAMED owned var, injecting
+                        // a genuine leak. The `check-leak` scan must go RED on it — the true-positive
+                        // gate. Mirrors LOFT_NO_A1B / LOFT_STORE_GUARD_INJECT.
                     } else {
                         ls.push(call("OpFreeRef", v, data));
                     }

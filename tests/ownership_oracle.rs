@@ -269,10 +269,11 @@ fn oracle_dev_free_check_ratchet() {
 /// `__retbuf`, `par` queue frees, work-refs) — VH. Its findings ARE that codegen-transfer-artifact
 /// worklist. This asserts it does not REGRESS above the baseline; drive it DOWN at leisure (each
 /// recognised artifact lowers `LEAK_SCAN_BASELINE`), no churn to the clean `check-dev` tier.
-const LEAK_SCAN_BASELINE: usize = 927;
+const LEAK_SCAN_BASELINE: usize = 0;
 
 #[test]
 #[ignore = "experimental leak-scan ratchet — sweeps tests/scripts under check-leak; run on demand"]
+#[allow(clippy::absurd_extreme_comparisons)] // baseline reached 0 — the ratchet endpoint
 fn oracle_leak_scan_ratchet() {
     let dir = root().join("tests/scripts");
     let mut total = 0usize;
@@ -303,4 +304,39 @@ fn oracle_leak_scan_ratchet() {
     if total < LEAK_SCAN_BASELINE {
         eprintln!("leak-scan ratchet PROGRESS: {total} < {LEAK_SCAN_BASELINE} — lower LEAK_SCAN_BASELINE to {total}.");
     }
+}
+
+/// The leak-scan TRUE-POSITIVE gate: proving the now-clean (0 FP) `check-leak` scan is not vacuous.
+/// A positive-control fixture owns a vector local (`buf`, backed by the OpDatabase store `__vdb_1`),
+/// freed at scope exit. `LOFT_OWN_INJECT_DROP_FREE=__vdb_1` drops that free (a genuine leak — the
+/// runtime leak-check agrees); the scan MUST flag `__vdb_1`, and the un-injected run MUST be clean.
+#[test]
+fn oracle_leak_scan_flags_an_injected_leak() {
+    let ctrl = "doc/claude/plans/94-cfg-ownership-dataflow/probes/07-leak-positive-control.loft";
+    let reds = |env: &[(&str, &str)]| -> Vec<String> {
+        let mut cmd = Command::new(loft_bin());
+        cmd.arg("--interpret")
+            .arg(root().join(ctrl))
+            .env("LOFT_NO_CACHE", "1")
+            .env("LOFT_OWN_ORACLE", "check-leak");
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        let out = cmd.output().expect("run loft check-leak");
+        String::from_utf8_lossy(&out.stderr)
+            .lines()
+            .filter(|l| l.starts_with("RED ") && l.contains(": leak ") && l.contains("n_make_local"))
+            .map(str::to_string)
+            .collect()
+    };
+    assert!(
+        reds(&[]).is_empty(),
+        "check-leak cried wolf on the un-injected positive control: {:?}",
+        reds(&[])
+    );
+    let injected = reds(&[("LOFT_OWN_INJECT_DROP_FREE", "__vdb_1")]);
+    assert!(
+        injected.iter().any(|r| r.contains("__vdb_1")),
+        "check-leak FAILED to flag the injected __vdb_1 leak (vacuous?): {injected:?}"
+    );
 }

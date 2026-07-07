@@ -919,15 +919,18 @@ pub fn oracle_free_checks(data: &Data) {
     eprintln!("OWN-CHECK-{tier}: {total_reds} RED finding(s)");
 }
 
-/// EXPERIMENTAL all-vars under-free scan (flag `LOFT_OWN_ORACLE=check-leak`, its OWN ratchet
-/// baseline). An `Owned` (empty type dep) HEAP local, not a param, not freed, and not transferred
-/// out, leaks its store. Iterating ALL vars (`snapshot_names`) catches `OpDatabase` db-vars a
-/// fixpoint state misses (the true-positive) — but the "not transferred" side needs the shipped free
-/// analysis's whole transfer knowledge (retbuf/param aliasing, the phantom `__retbuf`, `par` queue
-/// frees, work-refs, backing stores) to be sound. It over-approximates leaks until then; kept behind
-/// this flag so its count is DRIVEN DOWN at leisure — each recognised transfer artifact lowers the
-/// baseline — WITHOUT churning the clean `check-dev` tier. `skip_free`/`caller_hidden_buf` are the
-/// shipped analysis's own "not-a-leak" flags; the transferred set is the closure through the dep.
+/// The DEFINITE-leak scan (flag `LOFT_OWN_ORACLE=check-leak`). Flags a var that: is MINTED by
+/// `OpDatabase` (only a real store leaks — a type-dep-only phantom like `__retbuf` is skipped); OWNS
+/// its store (empty type dep, HEAP); is not a param; is not marked by the shipped analysis's own
+/// "not-a-leak" flags (`skip_free`, `caller_hidden_buf`); is not freed; and is not transferred out.
+/// Iterating ALL vars (`snapshot_names`) catches db-vars a fixpoint state misses (the true-positive:
+/// a dropped `OpDatabase` free, `oracle_leak_scan_flags_an_injected_leak`). The transferred set is
+/// RETURN seeds closed transitively through the dep (a returned `buf["__vdb_1"]` carries `__vdb_1`
+/// out) UNION consume/capture seeds NOT closed (an element absorbed into a LOCAL container leaves the
+/// container leak-checked). **Now 0 FP across scripts+docs+lib+examples with the true-positive
+/// firing** — drove the baseline 927 → 0 (the `__retbuf` phantom was ~889). KNOWN GAPS (documented,
+/// not FPs): conditional/`Join` leaks (`LOFT_NO_JOIN_OWN` — the runtime leak-check's class), leaks of
+/// non-`OpDatabase` adopted-owned stores, and closure bodies. Under `check-leak`, never on `check`.
 fn run_leak_scan(name: &str, body: &Value, data: &Data, d_nr: u32) -> usize {
     if name.starts_with("n___lambda_") {
         return 0; // closure frees are codegen'd on a different clock — not visible here
@@ -939,18 +942,63 @@ fn run_leak_scan(name: &str, body: &Value, data: &Data, d_nr: u32) -> usize {
         .filter(|&d| d != u32::MAX)
         .collect();
     let freed: BTreeSet<u16> = collect_free_targets(body, &all_frees).into_iter().collect();
-    // Transferred = returns ∪ consumes ∪ captures, closed transitively through the type dep so a
-    // returned `buf["__vdb_1"]` carries its backing `__vdb_1` out.
-    let mut transferred: Vec<u16> = transferred_out(body, data).into_iter().collect();
-    let mut closed = BTreeSet::new();
-    while let Some(v) = transferred.pop() {
+    // Only a MINTED var owns a store that can leak: an `OpDatabase` target. A var that appears only
+    // in a block-result TYPE annotation (`["__retbuf"]`) but is never minted is a PHANTOM — no store,
+    // no leak (the dominant `__retbuf` FP class). The true-positive `__vdb_1` IS an OpDatabase target.
+    let op_database = data.def_nr("OpDatabase");
+    let mut minted: BTreeSet<u16> = BTreeSet::new();
+    body.walk(&mut |x| {
+        if let Value::Call(d, args) = x
+            && *d == op_database
+            && let Some(Value::Var(v)) = args.first().map(Value::unspan)
+        {
+            minted.insert(*v);
+        }
+    });
+    // Transferred set. RETURN seeds close transitively through the type dep — a returned
+    // `buf["__vdb_1"]` carries its backing `__vdb_1` OUT. CONSUME/CAPTURE seeds do NOT close: an
+    // element `_elm_1["buf"]` absorbed into a LOCAL `buf` transfers only itself, NOT `buf`/`__vdb_1`
+    // (which stay local and must still be leak-checked — the difference that catches a dropped free).
+    let finish = data.def_nr("OpFinishRecord");
+    let append = data.def_nr("OpAppendVector");
+    let copy = data.def_nr("OpCopyRecord");
+    let set_dbref = data.def_nr("OpSetDbRef");
+    let (mut returns, mut consumes): (Vec<u16>, Vec<u16>) = (Vec::new(), Vec::new());
+    body.walk(&mut |x| match x {
+        Value::Return(inner) => inner.walk(&mut |y| {
+            if let Value::Var(v) = y {
+                returns.push(*v);
+            }
+        }),
+        Value::Call(d, args) => {
+            let idx = if *d == finish || *d == append {
+                Some(1)
+            } else if *d == copy {
+                Some(0)
+            } else if *d == set_dbref {
+                Some(2)
+            } else {
+                None
+            };
+            if let Some(i) = idx
+                && let Some(Value::Var(v)) = args.get(i).map(Value::unspan)
+            {
+                consumes.push(*v);
+            }
+        }
+        _ => {}
+    });
+    let mut closed: BTreeSet<u16> = BTreeSet::new();
+    while let Some(v) = returns.pop() {
         if closed.insert(v) {
-            transferred.extend(func.tp(v).depend().iter().copied());
+            returns.extend(func.tp(v).depend().iter().copied()); // returns close over their backing
         }
     }
+    closed.extend(consumes); // consumes/captures transfer only the element itself
     let mut reds = 0;
     for (_, v) in func.snapshot_names() {
-        if func.tp(v).heap_dep().is_some()
+        if minted.contains(&v)
+            && func.tp(v).heap_dep().is_some()
             && func.tp(v).depend().is_empty()
             && !func.is_argument(v)
             && !func.skip_free(v)
