@@ -5743,7 +5743,8 @@ impl Parser {
         // and materialise into `__retbuf` (an owned copy); for the SUBJECT work-ref
         // (an inner ref the site adopts) SKIP promotion so it keeps its own store,
         // freed after the copy — the three stores stay distinct (no collapse UAF).
-        let a1b = crate::keys::a1b_materialise_enabled() && self.tail_call_borrows_temp_subject(body);
+        let a1b =
+            crate::keys::a1b_materialise_enabled() && self.tail_call_borrows_temp_subject(body);
         let a1b_site = a1b && ctx.site_value == Some(v);
         // A reassigned returned local must NOT be NRVO-promoted — but a NAMED
         // local at a vector fn's body tail still DELIVERS: it falls through to
