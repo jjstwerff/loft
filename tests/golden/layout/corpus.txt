@@ -1,0 +1,22 @@
+Bag	size=4	struct{items@0:hash<Item[ik]>}
+Item	size=8	struct{ik@0:integer}
+Narrow	size=7	struct{a@0:int<-2147483647,false>, b@6:byte, c@4:short_raw<0,false>}
+NotNull	size=12	struct{i@0:integer, t@8:text}
+RefHost	size=29	struct{child@0:Scalars}
+Scalars	size=29	struct{b@28:boolean, c@16:character, s@20:single, f@0:float, i@8:integer, t@24:text}
+Vec1	size=4	struct{v@0:vector<integer>}
+VecNest	size=4	struct{vv@0:vector<vector<integer>>}
+VecText	size=4	struct{v@0:vector<text>}
+boolean	size=1	base
+byte	size=1	byte(start=0,null=false)
+character	size=4	base
+float	size=8	base
+hash<Item[ik]>	size=4	hash<Item>(keys=[0],elem_size=8)
+int<-2147483647,false>	size=4	int4(start=-2147483647,null=false)
+integer	size=8	base
+short_raw<0,false>	size=2	shortraw(start=0,null=false)
+single	size=4	base
+text	size=4	base
+vector<integer>	size=4	vector<integer>(elem_size=8)
+vector<text>	size=4	vector<text>(elem_size=4)
+vector<vector<integer>>	size=4	vector<vector<integer>>(elem_size=4)
