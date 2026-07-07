@@ -208,13 +208,34 @@ and `store_load_range` (Phase 4) are unblocked.
   Phase 3. Bootstrap (page 0 + size + the @PLN97 identity gate) also lands at the Phase-3 entry.
 
 ### Phase 3 — `store_load_keys` (point lookups; Hash & Sorted)
-- **Build:** `store_load_keys(local, url, keys)` — for each key, `PagedReader.find(key)` → deep-copy
-  the record graph into `local` (`OpCopyRecord`). Hash and Sorted key paths.
+- **Build:** `store_load_keys(local, path, keys)` — a `#rust` builtin + `n_store_load_keys` handler
+  (mirrors `store_load`'s wiring). The handler:
+  1. `PagedReader::open(path)` + the @PLN97 identity gate (read the layout id, `schema_sidecar::check`).
+  2. **Root + keys come from the live schema, NOT the bytes** (the design unlock, 2026-07-07): the
+     source hash's root is `local`'s own runtime `DbRef` `(rec, pos)` — `local` and the persisted
+     image share a collection type, so they share the structural root position — and the `Key[]` are
+     `stores.keys(local.known_type)`. This is why `find`/copy MUST live in the builtin (schema in
+     hand), and why hand-reverse-engineering the persisted layout is the WRONG (corruption-prone)
+     path — a `--interpret` probe confirmed the raw bucket bytes don't self-describe cleanly.
+  3. `find`-over-`PagedReader`: port `hash::find` (src/hash.rs:137) to read via
+     `PagedReader::u32_at`/`i64_at` instead of `Store::get_u32_raw`; `keys::key_hash(key, seed)` is
+     reused verbatim (it hashes the `Content` key, not a store).
+  4. **Copy-out (the high-risk core):** reimplement the `for_each_owned_child` cascade
+     (allocation.rs:95 — 9 `Parts` variants) over the reader to walk the matched record's owned
+     graph, `claim` each record in `local`, copy its bytes, and **relocate** the internal `rec`
+     pointers to `local`'s positions; then `hash::add` the entry into `local`. Start FLAT-struct
+     (scalar fields = no owned children, no relocation — the lowest-risk cut, and the tile-index
+     shape) and extend to vector/text/nested per the cascade. Verify every variant on both backends.
 - **Verify:** for the loaded keys, `local` returns records **byte-identical** to the full store;
-  keys **outside** the set are absent (exactly as if `local` were built with only those entries);
-  `local` is iterable and **leak-clean** (`LOFT_STORES=warn` / the leak gate); bytes fetched ≪ file.
+  keys **outside** the set are absent; `local` is iterable and **leak-clean** (`LOFT_STORES=warn`);
+  the `LocalFileProvider` fetch log asserts bytes fetched ≪ file. This is the phase where the
+  "find over PagedReader returns the same records" gate (moved from Phase 2) is proven end-to-end.
 - **Prove-can-fail:** a query for an unloaded key returns absent (not stale bytes); a key present in
-  the remote but not requested is NOT in `local`.
+  the remote but not requested is NOT in `local`; a wrong-layout image is rejected by the identity
+  gate, not misread.
+- **Risk note:** the copy-out mutates `local`'s heap with relocation — the exact class loft's
+  stability campaign hardened. It is built variant-by-variant with both-backend + leak verification,
+  NOT rushed; a hasty graph-copy here would re-introduce the store-corruption class.
 
 ### Phase 4 — `store_load_range` (Sorted / Ordered)
 - **Build:** `store_load_range(local, url, lo, hi)` — the range-friendly index walk over
