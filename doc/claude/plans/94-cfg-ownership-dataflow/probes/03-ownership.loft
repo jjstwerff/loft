@@ -1,0 +1,28 @@
+// @PLN94 Phase 2 (3.1) — the forward ownership fixpoint + shadow-diff vs the shipped
+// flow-insensitive `ownership_of`. Dump with:
+//   LOFT_NO_CACHE=1 LOFT_OWN_ORACLE=own loft --interpret 03-ownership.loft 2>&1 >/dev/null
+// Verified 2026-07-07: agree=all, diff=0 on every function (the transfer reuses ownership_of
+// for structural RHS + flow-sensitive Var resolution, so it matches B where there is no flow).
+// branch_reassign shows the flow-sensitive precision: r=Owned in the then-arm, Borrowed(s) in
+// the else-arm, meeting to Join(s) at the join — where the flow-insensitive classifier would
+// say Join at every point.
+
+struct S { v: vector<integer>, n: integer }
+fn mk() -> S { S { v: [1, 2, 3], n: 5 } }
+
+fn straight_own(k: integer) -> integer { s = mk(); s.n + k }        // s -> Owned
+fn proj_borrow(s: S) -> integer { r = s.v; (r[0] ?? 0) }            // r -> Borrowed(s)
+fn join_case(h: hash<S[n]>, k: integer) -> integer { a = h[k] ?? mk(); a.n }
+
+// reassign a heap var differently per arm of a STATEMENT if — the arm-meet produces Join(s).
+fn branch_reassign(c: boolean, s: S) -> integer {
+  r = mk();
+  if c { r = mk(); } else { r = s; }
+  r.n
+}
+
+fn main() {
+  h: hash<S[n]> = [];
+  h += S { v: [9], n: 7 };
+  print("{straight_own(1)} {proj_borrow(mk())} {join_case(h, 7)} {branch_reassign(true, mk())}\n");
+}

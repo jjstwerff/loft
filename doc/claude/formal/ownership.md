@@ -3,15 +3,24 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# formal/ownership.md — the `deps` ownership / borrow system (strict, aspirational)
+# formal/ownership.md — the `deps` ownership / borrow system (strict; register at `OPEN: 0`)
 
 **Catalogue:** @F21 (references `&T`), @I60 (deps / lifetime tracker) — Goal E. Roadmap: @PLN85, @PLN87.
 
-> **Rules then deviations** (see [README](README.md)). ⚠️ **This area is aspirational by
-> design.** The rules below are the model loft *steers toward* — they are mostly **not
-> implemented yet**, so the deviation list is large and *is* the active migration
-> (@PLN85 store-lifetime, @PLN87 the `&` law). The point of writing it now is direction:
-> a clear target turns "another store-lifetime bug" into "a named hole in a known model".
+> **Rules then deviations** (see [README](README.md)). The rules below are loft's
+> ownership model, and as of 2026-07-04 the deviation register is at **`OPEN: 0`** — all
+> five `D-own-*` deviations are CLOSED on the **shipped path** (@PLN85 store-lifetime,
+> @PLN87 the `&` law both landed), validated by the @PLN89 differential oracle + the
+> `program_ownership` fuzzer. This is *validation, not a machine-checked proof*: the
+> `Join` fact still resolves through a runtime witness, and the pre-fact shape-scans
+> survive under opt-out as differential-control machinery. The residual is not a
+> correctness deviation but the *substrate* — the fact is computed flow-INSENSITIVELY.
+> [@PLN94](../plans/94-cfg-ownership-dataflow/) has now built the flow-SENSITIVE
+> replacement as an independent oracle that runs BESIDE the shipped analysis (a machine
+> check on every `cargo test`, `tests/ownership_oracle.rs`); its abstract-interpretation
+> soundness — the over-free half — is now PROVED given the rules here (the local-transfer
+> lemma discharged case by case). See §"Machine-checkable soundness" below; only a Coq/Lean
+> rendering of the prose remains.
 >
 > The rules are loft's borrow checker. **Rust is the reference model.** Beacon + rationale:
 > [OWNERSHIP_MODEL.md](../OWNERSHIP_MODEL.md); the typed-`deps` design:
@@ -285,6 +294,121 @@ fact — they unify when ownership is carried as one typed `deps` fact end-to-en
   completion).
 
 ---
+
+## Machine-checkable soundness — the @PLN94 flow-sensitive oracle (proof skeleton)
+
+The register above is **validation, not a machine-checked proof**: the shipped fact is computed
+flow-INSENSITIVELY (the join of all defs) and the `Join` case discharges through a runtime witness.
+[@PLN94](../plans/94-cfg-ownership-dataflow/) builds the flow-SENSITIVE replacement — a monotone
+dataflow fixpoint (`src/ownership_cfg.rs`) run BESIDE the shipped analysis as an independent oracle,
+never driving codegen (SI-1). Being a textbook abstract interpretation, that oracle is the piece that
+CAN carry a machine-checked proof. This section states the obligations and discharges them — the
+substantive lemma (4), local transfer soundness, is now proved case by case below (hand-written prose;
+a Coq/Lean rendering is the only rigour polish left). The result: the flow-sensitive fact is
+**over-free-sound given the O-\* rules**, so a green check is a proof-backed over-free-freedom
+certificate on every program where the oracle and shipped analysis agree.
+
+**What is proved, and what is not.** The target is the **over-free** class only — no free of a store
+the fact does not own (⇒ no use-after-free, no double-free of that store). It is **NOT** a no-leak
+proof (under-free is a disjoint class the shipped leak-check owns — @PLN94's coexistence finding:
+`LOFT_NO_JOIN_OWN` leaks past this oracle but not past the leak detector). And it proves the
+**oracle**, not the codegen: the shipped path inherits the certificate only where the two agree,
+which is why they run beside forever.
+
+**(1) The abstract domain — DISCHARGED.** `OFact = ⊥ | Owned | Borrowed(b) | Join(b)` with meet `⊔`
+is a join-semilattice (finite height ≤ 3), and `refines` is its partial order. *Proof:*
+`ofact_meet_is_a_join_semilattice` + `ofact_refines_marks_precision_and_flags_the_unsound_direction`
+(unit tests, `src/ownership_cfg.rs`).
+
+**(2) The concrete property.** In [operational.md](operational.md)'s `⟨e, σ⟩ → ⟨e', σ'⟩` with the
+[heap.md](heap.md) store `H`, define at each program point the relation *owns(v)* = the var whose
+binding is responsible for freeing `v`'s store (per **O-Owner**: exactly one). A free of `v` is
+**sound** iff `owns(v) = v` at that point (**O-Derived**). Over-free = a sound-fact says `Owned`
+where concretely `owns(v) ≠ v`.
+
+**(3) The Galois connection.** `γ(Owned) =` { states where `owns(v)=v` }; `γ(Borrowed(b)) =` { states
+where `v` aliases `b`'s store, `owns(v)=owns(b)≠v` } (**O-Borrow**); `γ(Join(b)) = γ(Owned) ∪
+γ(Borrowed(b))` (runtime-dependent); `γ(⊥) = ∅`. `α` is the pointwise best abstraction. Obligation:
+`γ` is monotone w.r.t. `refines` and `⊔` is its sound join — *straightforward from (1); to write.*
+
+**(4) Local soundness of the transfer — DISCHARGED for the over-free property (given the O-\* rules).**
+The property the over-free check needs is **no false `Owned`**: wherever the fixpoint reports
+`st(v)=Owned` at a site the check trusts (a free, a return), `v` genuinely owns a store there — and a
+non-`Owned` fact authorizes no free. This is *weaker* than full `σ'∈γ(f)` (a `Borrowed`-where-owned
+fact is a leak-direction imprecision, out of scope) and is exactly what obligation (2) defines as
+over-free. The transfer (`ownership_dataflow`) is per-var — `st'[var]=f(rhs,st)` — so prove per RHS
+shape that `f=Owned ⇒ owns'(var)=var`, and that a non-`Owned` `f` authorizes no free:
+
+- **(a) `OpDatabase(var,…)` / a record `OpNewRecord` → `Owned`.** heap.md `alloc` mints a FRESH store;
+  **O-Owner** ⇒ its unique owner is `var`. `owns'(var)=var`. ∎ *(independent)*
+- **(b) projection `OpGet*(base,…)` → `Borrowed(root)`.** A non-`Owned` fact — authorizes no free; and
+  it correctly names the view's owner (`borrow_base`'s root, **O-Borrow**). ∎ *(independent)*
+- **(c) bare `var = u` → `st[u]`.** When `st[u]=Owned`, `u` owns a store, and `var=u` — a MOVE, or a
+  non-move alias materialised as `OpCopyRecord` (a/e) — leaves `var` owning one either way, so
+  `owns'(var)=var`. When `st[u]` is `Borrowed`/`Join`, `f` authorizes no free. The
+  `unwrap_or_else(ownership_of)` boundary (`u` absent — a parameter) yields `Borrowed(u)`, non-`Owned`.
+  ∎ *(the `Owned` sub-case is independent; see the bridged gap below for the moved SOURCE)*
+- **(c′) bare `var = u` where `var` is `OpDatabase`-re-minted on some path → `Owned`** (the `reminted`
+  rule, taking precedence over (c)). If `var` is the arg-0 of an `OpDatabase` anywhere in the body then
+  **O-Owner** gives `var` a fresh store on that path, so `var` is a materialised OWNED local; a
+  whole-value `var = u` copy into it is a materialised copy (`OpCopyRecord` at codegen, as a/e) that
+  owns a fresh store — `owns'(var)=var`. NARROW by construction: it fires ONLY for a bare `Var` RHS,
+  never a projection (a `OpGet*` view stays `Borrowed(root)` per (b)), so no borrowing view is
+  manufactured `Owned` — the property that keeps the A1b returned-view catch intact. ∎ *(independent —
+  rests on O-Owner + the C86 copy-materialisation, like (c)'s `Owned` sub-case)*
+- **(d) non-native call `var = f(args)` → `call_own`.** `f=Owned` only when the callee
+  `return_ownership` is `Owned` = *returns a fresh store* (**O-Move**), so `owns'(var)=var`; a
+  `Borrowed(argᵢ)` return authorizes no free. Sound by induction over the call graph — the callee
+  summary is (4) applied to `f`; the recursion back-edge is `Borrowed(⊤)`, never `Owned`, so no false
+  `Owned` is manufactured. ∎ *(inductive over the call graph)*
+- **(e) else.** Record → `Owned` (fresh, O-Owner). Scalar/literal → `Owned`, but it owns no heap store,
+  so a "free" of it is a no-op — no over-free. Native op → `call_ownership` (as d). ∎
+- **(f) `= null` skip.** No store minted; a free of a null DbRef is a no-op. ∎ *(independent)*
+- **(g) self-borrow `Borrowed(var) → Owned`.** The @P302 self-dep `[s]` is an ownership marker (re-init
+  in place), not a borrow — **O-Owner** ⇒ `owns(s)=s`, so `Owned` is correct. ∎ *(independent)*
+- **(h) the meet `IN[b] = ⊔ₚ OUT[p]`.** `IN=Owned` **only if every** predecessor's `OUT=Owned`
+  (`Owned⊔Borrowed=Join`, not `Owned`), so `owns=var` on every incoming path — no false `Owned` from a
+  join. **O-Complete**: no arm is dropped. ∎ *(independent, from (3)'s sound join)*
+
+**The one bridged gap (the over-reach guard — honest).** `OFact` has no `Moved` state, and the
+transfer does NOT kill a moved-out *source*: after `var = u` (a move), `u`'s fact stays `Owned` though
+`u` no longer owns its store. So the FACT is not a full sound abstraction for moved sources. The CHECK
+is over-free-sound anyway, because **O-Move** forbids the shipped plan from *freeing* a moved source —
+the sole site where the stale `u=Owned` could authorize a bad free never arises. This, plus the
+interprocedural induction (d), is where the over-free guarantee rests on the O-\* rules rather than the
+fact alone; the INDEPENDENT part is the flow-sensitive structure — the meet, the structural-op
+classification, the self-borrow/null carve-outs. A disagreement in the rule-relative cases is exactly
+what the shadow-diff (Check A) surfaces — which is why the two run beside forever.
+
+**(5) Fixpoint soundness — from (1)+(4), DISCHARGED.** The round-robin least fixpoint over the CFG
+converges (**≤ n+2** passes, asserted SI-3), and by (4)'s local soundness + monotonicity + Tarski, the
+per-block OUT-state soundly over-approximates the concrete ownership at every reachable point (given
+the O-\* rules). *Bound, convergence, and — with (4) now discharged — the soundness step all hold.*
+
+**(6) The check corollary.** With (5): if the oracle's check is **GREEN** — Check B finds no
+unconditional `OpFreeRef(v)` with `st(v) = Borrowed`, and Check A finds no fact the shipped analysis
+disagrees with in the unsound direction — then the emitted plan performs **no over-free** of the
+covered classes. Contrapositive is the A1b catch: the `LOFT_NO_A1B` plan returns a store the fact
+reads `Join`/`Borrowed` while the shipped fact reads `Owned` → RED (verified end-to-end,
+`tests/ownership_oracle.rs`), a wrong plan every runtime gate passes.
+
+**(7) Coexistence conclusion.** The proven oracle is a machine-checked *certifier*: on every program
+where oracle and shipped analysis agree (empirically: 505-corpus + 54-cell fuzzer + 377 scripts, all
+0 RED), the program carries a proof-backed over-free-freedom certificate; a residual disagreement
+indicts one side for adjudication. This upgrades the register's *"validated"* to *"the flow-sensitive
+fact is over-free-sound given the O-\* rules; the shipped analysis is certified per-program by the
+proven oracle running beside it."*
+
+**Obligation ledger.** DISCHARGED: (1) lattice; (3) `γ` sound-join (used in 4h); **(4) local transfer
+soundness for the over-free property (the substantive lemma) — proved case by case above; the
+flow-sensitive structure (4a,b,f,g,h) independently, the interprocedural summary (4d) by induction,
+and the one moved-source staleness bridged by O-Move**; (5) fixpoint bound/convergence (SI-3) +
+soundness step; (6) the check corollary; backend fact-identity (SI-2, `tests/ownership_oracle.rs`);
+no-crying-wolf at corpus + fuzz scale (empirical). REMAINING (rigour polish, not a gap): a
+machine-checked (Coq/Lean) rendering of this prose — the argument is complete but hand-written. OUT OF
+SCOPE: no-leak (under-free — the leak detector's + the `check-leak` scan's class); the `Join`
+runtime-witness discharge (a separate `OpFreeRefIfDistinct` lemma); proving the shipped 8-mechanism
+analysis directly (the certifier sidesteps it).
 
 ## Conformance
 

@@ -1,0 +1,22 @@
+// @PLN94 Phase 2 (3.4a) — RESOLVED (2026-07-07): the capture case exposed an UNSOUNDNESS in MY
+// oracle, not a fork indicting B. Dump with:
+//   LOFT_NO_CACHE=1 LOFT_OWN_ORACLE=own loft --interpret 06-capture.loft 2>&1 >/dev/null
+// The disagreeing var was NOT the closure record (the prior session mis-read the var index) — it
+// was `xs`, a vector local defined `xs = OpGetField(__vdb_1, 0, 22)` (a VIEW into store __vdb_1).
+// The emitted IR frees __vdb_1 and ___clos_1 but NEVER xs, so xs is Borrowed(__vdb_1) — B was
+// right; my oracle said Owned (the unsound over-free direction). Root cause: the Phase-3.3
+// call-arm guard (`DefType::Function && native().is_empty()`) also swallowed the primitive
+// STRUCTURAL ops OpGetField/OpNewRecord (Function-typed, empty native) and routed them to
+// `call_own` -> Owned, bypassing `ownership_of`'s projection handling (-> Borrowed(base)). Fix:
+// exclude structural ops (`classifies_structurally`) from the call-arm. All 22 "3.3 disagreements"
+// on 505-collection-capture were THIS one bug; corpus now DISAGREE=0. The oracle caught its OWN
+// implementation gap — the cross-check's payoff, just aimed inward, not at B.
+
+fn c0(cb: fn() -> integer) -> integer { cb() }
+
+fn capture_case() -> integer {
+  xs: vector<integer> = [10, 20, 30];   // xs = OpGetField(__vdb_1,…): a VIEW, Borrowed(__vdb_1)
+  c0(fn() -> integer { xs[1] ?? -1 })   // xs captured into ___clos_1 (its own store, freed apart)
+}
+
+fn main() { print("{capture_case()}\n"); }

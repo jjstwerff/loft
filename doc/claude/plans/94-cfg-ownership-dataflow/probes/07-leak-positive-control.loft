@@ -1,0 +1,9 @@
+// @PLN94 positive control for the `check-leak` scan (the true-positive gate). `buf` is an owned
+// vector local (backed by an OpDatabase store `__vdb_1`), freed at scope exit — normally leak-clean.
+// Under LOFT_OWN_INJECT_DROP_FREE=__vdb_1 the scope-exit free is dropped (a genuine leak), and the
+// check-leak scan MUST go RED on `__vdb_1`. Without the toggle it stays clean.
+fn make_local() {
+  buf: vector<integer> = [10, 20, 30];
+  print("{buf[1] ?? -1}\n");
+}
+fn main() { make_local(); }

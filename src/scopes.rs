@@ -1542,6 +1542,27 @@ fn references_var_after(b: &Block, v: u16, idx: usize) -> bool {
     b.operators[idx + 1..].iter().any(|op| refs_var(op, v))
 }
 
+/// @PLN94 TEST-ONLY: the var name whose scope-exit free `get_free_vars` drops (injecting a genuine
+/// leak, the `check-leak` true-positive gate), or `None`. Cached — ONE env read per process, so the
+/// production (unset) path pays nothing per-free. Never set outside tests.
+fn inject_drop_free() -> Option<&'static str> {
+    use std::sync::OnceLock;
+    static V: OnceLock<Option<String>> = OnceLock::new();
+    V.get_or_init(|| std::env::var("LOFT_OWN_INJECT_DROP_FREE").ok())
+        .as_deref()
+}
+
+/// @PLN94 TEST-ONLY: the BORROWED var name whose scope-exit free `get_free_vars` is forced to emit
+/// (injecting a genuine OVER-free — an unconditional `OpFreeRef` of a dep-carrying view), the
+/// over-free-check (`run_over_free_check`) true-positive gate, or `None`. Cached like
+/// [`inject_drop_free`]; the production (unset) path pays nothing. Never set outside tests.
+fn inject_free_borrowed() -> Option<&'static str> {
+    use std::sync::OnceLock;
+    static V: OnceLock<Option<String>> = OnceLock::new();
+    V.get_or_init(|| std::env::var("LOFT_OWN_INJECT_FREE_BORROWED").ok())
+        .as_deref()
+}
+
 /// Scope / lifetime analysis pass over every function definition.
 ///
 /// # Panics
@@ -1549,6 +1570,9 @@ fn references_var_after(b: &Block, v: u16, idx: usize) -> bool {
 /// reclaim pass left a store the model says is dead un-freed past a later
 /// allocation (the Phase-4 Goal-E watermark guard).  Never panics in normal builds.
 pub fn check(data: &mut Data) {
+    // @PLN94 — the CFG/dataflow completeness oracle, an OBSERVER reached only via
+    // LOFT_OWN_ORACLE (SI-1: shipped codegen byte-identical; a no-op when unset).
+    crate::ownership_cfg::oracle(data);
     // Behaviour-neutral USE-analysis dump (LOFT_MATERIALIZE_DUMP) — the
     // copy-vs-borrow verdict per binding, before any codegen consumes it.
     crate::use_analysis::dump_all(data);
@@ -1756,6 +1780,10 @@ pub fn check(data: &mut Data) {
             crate::variables::validate_alignment(&data.definitions[d_nr as usize].variables);
         }
     }
+    // @PLN94 C.0 (DEV tier) — the POST-codegen free-based checks (over-free / under-free), now that
+    // `get_free_vars` has inserted the frees into `def.code` above. Self-gates on
+    // `LOFT_OWN_ORACLE=check-dev`; observer only (SI-1), a no-op on the default `check` path.
+    crate::ownership_cfg::oracle_free_checks(data);
 }
 
 /// Walk `ir` and panic if any `Call` or `CallRef` argument directly contains a
@@ -3359,8 +3387,14 @@ impl Scopes {
                 // the captured-Reference exemption in `check_ref_leaks`.
                 let captured_ref =
                     function.is_captured(v) && matches!(function.tp(v), Type::Reference(_, _));
-                let emit =
-                    (owns || is_work_ref) && !in_ret && !function.is_skip_free(v) && !captured_ref;
+                // @PLN94 TEST-ONLY over-free injection (never set in production): force the scope-exit
+                // free of a NAMED borrowed var (owns=false) so the over-free check has a firing
+                // true-positive. Subject to the same !in_ret/!skip_free/!captured guards as a real free.
+                let inject_free = inject_free_borrowed() == Some(function.name(v));
+                let emit = (owns || is_work_ref || inject_free)
+                    && !in_ret
+                    && !function.is_skip_free(v)
+                    && !captured_ref;
                 if scope_debug && !emit {
                     eprintln!(
                         "[scope_debug] NOT freeing '{}' (var={v}, scope={}, to_scope={to_scope}): \
@@ -3403,6 +3437,11 @@ impl Scopes {
                             data.def_nr("OpFreeRefIfDistinct"),
                             vec![Value::Var(v), Value::Var(buffer)],
                         ));
+                    } else if inject_drop_free() == Some(function.name(v)) {
+                        // @PLN94 TEST-ONLY positive control (never set in production; one cached env
+                        // read/process): drop the scope-exit free for the NAMED owned var, injecting
+                        // a genuine leak. The `check-leak` scan must go RED on it — the true-positive
+                        // gate. Mirrors LOFT_NO_A1B / LOFT_STORE_GUARD_INJECT.
                     } else {
                         ls.push(call("OpFreeRef", v, data));
                     }

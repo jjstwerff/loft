@@ -1,0 +1,16 @@
+// A1b shape with NO asserts — just observe what each backend prints. Under LOFT_NO_A1B
+// the returned vector borrows a freed temporary (UAF). Question: do interp & native
+// produce IDENTICAL stdout+exit (⇒ the interp-vs-native differential oracle passes a
+// wrong plan — the blind spot), or do they diverge (⇒ the oracle catches it)?
+struct E { hp: integer, name: text }
+enum Cell { Empty, Filled { items: vector<E> } }
+fn g(e: Cell) -> vector<E> { match e { Filled { items } => { items }, _ => { [] } } }
+fn h(seed: integer) -> vector<E> {
+  inner: vector<E> = [];
+  for k in 0..3 { inner += [E{hp: seed + k, name: "e"}]; }
+  g(Filled { items: inner })
+}
+fn main() {
+  a = h(10);
+  print("len={len(a)}\n");
+}

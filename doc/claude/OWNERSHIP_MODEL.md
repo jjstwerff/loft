@@ -5,10 +5,15 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # OWNERSHIP_MODEL.md — loft's ownership/borrow system: the north star
 
-This is the beacon the language is steering toward. It is *aspirational*: loft does
-not fully implement it yet. Its purpose is to give every store-lifetime / codegen
-decision one place to point at, and to turn a recurring class of sev:high bugs into
-a single, finite migration.
+This is the beacon the language steers by. The FORMAL finish line — the five
+`D-own-*` deviations in [formal/ownership.md](formal/ownership.md) — is CLOSED on the
+shipped path (`OPEN: 0`, 2026-07-04), validated by the @PLN89 differential oracle + the
+`program_ownership` fuzzer (validation, not a machine-checked proof). What remains is
+not a correctness hole but the *substrate*: the ownership fact is still computed by a
+flow-INSENSITIVE classifier (a `Join` over-approximation), which
+[@PLN94](plans/94-cfg-ownership-dataflow/) would replace with a flow-sensitive dataflow
+fixpoint. This doc gives every store-lifetime / codegen decision one place to point at;
+formal/ownership.md is the authoritative per-rule closure register.
 
 ## The beacon (one sentence)
 
@@ -261,7 +266,15 @@ The pieces exist; they are incomplete:
 When these hold, both backends translate the *same* facts, so interp and native
 cannot diverge.
 
-## The current holes — the migration backlog
+## The migration backlog (provenance record — live status is formal/ownership.md)
+
+**Status:** the formal register in [formal/ownership.md](formal/ownership.md) is now at
+`OPEN: 0` — all five `D-own-*` deviations closed on the shipped path. The rows below are
+the migration's provenance; the few still framed as open (a general "return-source set",
+complete `"??"` deps) are subsumed by the CLOSED D-own-1/D-own-2 — the `Join` fact is
+total, resolved by a runtime witness rather than a further static dep. The remaining
+*static-precision* gap (flow-insensitive classification) is tracked by
+[@PLN94](plans/94-cfg-ownership-dataflow/), not here.
 
 | Hole | Symptom | The fact to complete |
 |---|---|---|
