@@ -1,3 +1,10 @@
-==== exit: 0 ====
+==== exit: 1 ====
 ==== stdout ====
-other==== stderr ====
+==== stderr ====
+error: cannot match integer against pattern of type text
+  --> <cases>/30_match_wrong_pattern_type.loft:4:12
+  |
+4 |     "hello" => print("text arm"),
+  |            ^
+
+error: aborting due to 1 previous error

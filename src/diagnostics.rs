@@ -203,26 +203,29 @@ pub fn suggest_similar<'a>(name: &str, candidates: &[&'a str]) -> Option<&'a str
         .min_by_key(|c| levenshtein(name, c))
 }
 
-/// Plan-07 phase 5: suggestion with a length-aware distance cap.
-/// Caps Levenshtein distance at `min(2, name_chars / 4)` so very short
-/// inputs (1–3 chars) do not over-match.  Empty `name` never suggests.
+/// Plan-07 phase 5: suggestion with a short-name guard.
+/// Names of 1–3 chars never suggest — too short to typo-match without
+/// noise (generic placeholders `T` / `K` / `V`, coin-flip pairs like
+/// `id` / `ok`).  4+ chars get the full Levenshtein-2 ceiling so common
+/// single-char typos AND transpositions (`naem`→`name`, `Bleu`→`Blue`,
+/// `reuslt`→`result`) are caught — the same distance the uncapped
+/// variable-suggestion path uses.  Empty `name` never suggests.
 ///
 /// Distance bounds by name length:
-/// - 1 char → 0 (no suggestion — would over-match generic-type
-///   placeholders like `T` / `K` / `V`).
-/// - 2–3 chars → 0 (≤ ½ char of edits).
-/// - 4–7 chars → 1 (single-char typo).
-/// - 8+ chars → 2 (the standard `suggest_similar` ceiling).
+/// - 1–3 chars → 0 (no suggestion).
+/// - 4+ chars → 2 (single-char typo or transposition).
+///
+/// The earlier `min(2, name_chars / 4)` cap only reached distance 2 at
+/// 8+ chars, so it silently dropped every 4–7-char transposition — the
+/// single most common real typo.  `parser/objects.rs::known_var_or_type`
+/// had already worked around this by using the uncapped `suggest_similar`
+/// for variables; this brings the field / type / function sites in line.
 #[must_use]
 pub fn suggest_similar_capped<'a>(name: &str, candidates: &[&'a str]) -> Option<&'a str> {
-    let n = name.chars().count();
-    if n == 0 {
+    if name.chars().count() <= 3 {
         return None;
     }
-    let max_dist = std::cmp::min(2, n / 4);
-    if max_dist == 0 {
-        return None;
-    }
+    let max_dist = 2;
     candidates
         .iter()
         .copied()

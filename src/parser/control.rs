@@ -3392,6 +3392,7 @@ impl Parser {
             self.expression(&mut hi);
             return (Value::Boolean(false), Type::Boolean);
         }
+        let pat_pos = self.lexer.pos().clone();
         let mut lit = Value::Null;
         let negate = self.lexer.has_token("-");
         let lit_type = if let Some(n) = self.lexer.has_integer() {
@@ -3431,6 +3432,20 @@ impl Parser {
             && lit_type != Type::Null
             && !lit_type.is_same(subject_type)
             && !self.can_convert(&lit_type, subject_type);
+        // Plan-07 phase 6 — a pattern whose type can never match the subject is a
+        // static type error, not a silently-dead arm (a text literal against an
+        // integer subject is almost always a typo).  Report it, then fall through
+        // to the dead-`false` recovery below so codegen stays width-safe (#493).
+        if incompatible {
+            diagnostic_at!(
+                self.lexer,
+                &pat_pos,
+                Level::Error,
+                "cannot match {} against pattern of type {}",
+                subject_type.name(&self.data),
+                lit_type.name(&self.data)
+            );
+        }
         // check for range pattern `lo..hi` or `lo..=hi`.
         if self.lexer.has_token("..") {
             let inclusive = self.lexer.has_token("=");

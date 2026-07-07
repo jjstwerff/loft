@@ -5517,7 +5517,11 @@ impl Parser {
             }
             if !self.convert(&mut actual_code, actual_type, &tp) {
                 if report {
-                    let context = format!("call to {}", self.data.def(d_nr).original_name());
+                    let context = format!(
+                        "argument {} of call to {}",
+                        nr + 1,
+                        self.data.def(d_nr).original_name()
+                    );
                     // `arg_pos[nr]` is the argument's start, captured in
                     // `parse_call`; the lexer cursor has drifted to `)` / `,`.
                     // Synthetic / reordered call paths pass an empty slice and

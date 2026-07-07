@@ -1,10 +1,10 @@
 ==== exit: 1 ====
 ==== stdout ====
 ==== stderr ====
-error: unknown type 'Plyer'
-  --> <cases>/09_type_unknown_struct.loft:2:7
+error: unknown type 'Plyer' — did you mean 'Player'?
+  --> <cases>/09_type_unknown_struct.loft:3:7
   |
-2 |   p = Plyer { name: "Bob" };
+3 |   p = Plyer { name: "Bob" };
   |       ^
 
 error: aborting due to 1 previous error
