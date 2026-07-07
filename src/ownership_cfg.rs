@@ -453,3 +453,150 @@ pub fn oracle(data: &Data) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    //! @PLN94 Phase 1.3 — the CFG + fixpoint on the control-flow shapes the position-proxy cannot
+    //! express, on hand-built IR (parser-free). Each asserts a reaching-defs / edge fact AND the
+    //! SI-3 bound. A back-edge is detected as an edge to a lower-numbered block (loop header).
+    use super::{BlockId, build, reaching_defs};
+    use crate::data::{Type, Value, v_block, v_if, v_set};
+
+    fn loop_block(ops: Vec<Value>) -> Value {
+        match v_block(ops, Type::Void, "loop") {
+            Value::Block(b) => Value::Loop(b),
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn branch_join_unions_arms_and_kills_initial() {
+        // r(v1) = 0; if c { r = 1 } else { r = 2 }; r
+        let body = v_block(
+            vec![
+                v_set(1, Value::Int(0)),
+                v_if(
+                    Value::Var(0),
+                    v_block(vec![v_set(1, Value::Int(1))], Type::Void, "then"),
+                    v_block(vec![v_set(1, Value::Int(2))], Type::Void, "else"),
+                ),
+                Value::Var(1),
+            ],
+            Type::Void,
+            "body",
+        );
+        let cfg = build(&body);
+        let rd = reaching_defs(&cfg);
+        let v1_at_exit: Vec<BlockId> = rd.inb[cfg.exit]
+            .iter()
+            .map(|&d| &rd.sites[d])
+            .filter(|s| s.var == 1)
+            .map(|s| s.block)
+            .collect();
+        assert_eq!(v1_at_exit.len(), 2, "join must union both arm defs of r");
+        assert!(
+            !v1_at_exit.contains(&cfg.entry),
+            "the initial r=0 must not reach past the branch (killed on both arms)"
+        );
+    }
+
+    #[test]
+    fn loop_carried_def_reaches_header_and_converges() {
+        // s(v1) = 0; loop { if c break; s = s + 1 }
+        let body = v_block(
+            vec![
+                v_set(1, Value::Int(0)),
+                loop_block(vec![
+                    v_if(Value::Var(0), Value::Break(0), Value::Null),
+                    v_set(1, Value::Int(9)),
+                ]),
+            ],
+            Type::Void,
+            "body",
+        );
+        let cfg = build(&body);
+        let rd = reaching_defs(&cfg);
+        assert!(
+            rd.passes <= cfg.blocks.len() + 2,
+            "SI-3: bounded convergence"
+        );
+        let header = cfg
+            .blocks
+            .iter()
+            .enumerate()
+            .flat_map(|(b, bb)| bb.succ.iter().copied().filter(move |&s| s < b))
+            .next()
+            .expect("a loop must have a back-edge");
+        let v1_at_header = rd.inb[header]
+            .iter()
+            .filter(|&&d| rd.sites[d].var == 1)
+            .count();
+        assert!(
+            v1_at_header >= 2,
+            "loop header must see s from BOTH the initial store and the body (loop-carried), got {v1_at_header}"
+        );
+    }
+
+    #[test]
+    fn early_return_edges_to_function_exit() {
+        // loop { if c { return } ; s = 1 }
+        let body = v_block(
+            vec![loop_block(vec![
+                v_if(
+                    Value::Var(0),
+                    v_block(
+                        vec![Value::Return(Box::new(Value::Var(0)))],
+                        Type::Void,
+                        "ret",
+                    ),
+                    Value::Null,
+                ),
+                v_set(1, Value::Int(1)),
+            ])],
+            Type::Void,
+            "body",
+        );
+        let cfg = build(&body);
+        let returns_to_exit = cfg
+            .blocks
+            .iter()
+            .any(|bb| bb.ops.iter().any(|o| o == "Return") && bb.succ.contains(&cfg.exit));
+        assert!(
+            returns_to_exit,
+            "an early return must edge to the FUNCTION exit, not the loop exit"
+        );
+    }
+
+    #[test]
+    fn nested_loops_converge_with_two_headers() {
+        // loop { loop { s = 1; if c break } if c break } — each break(0) targets its own loop.
+        let body = v_block(
+            vec![loop_block(vec![
+                loop_block(vec![
+                    v_set(1, Value::Int(1)),
+                    v_if(Value::Var(0), Value::Break(0), Value::Null),
+                ]),
+                v_if(Value::Var(0), Value::Break(0), Value::Null),
+            ])],
+            Type::Void,
+            "body",
+        );
+        let cfg = build(&body);
+        let rd = reaching_defs(&cfg);
+        assert!(
+            rd.passes <= cfg.blocks.len() + 2,
+            "SI-3: bounded convergence on nested loops"
+        );
+        let back_targets: std::collections::BTreeSet<BlockId> = cfg
+            .blocks
+            .iter()
+            .enumerate()
+            .flat_map(|(b, bb)| bb.succ.iter().copied().filter(move |&s| s < b))
+            .collect();
+        assert!(
+            back_targets.len() >= 2,
+            "nested loops → at least two distinct loop headers, got {}",
+            back_targets.len()
+        );
+    }
+}

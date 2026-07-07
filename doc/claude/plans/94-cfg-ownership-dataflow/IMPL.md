@@ -73,12 +73,21 @@ backend-consistent wrong free/own plan) that interp-vs-native + leak gates struc
   one-branch `ifjoin` — the join `b4` has `in={v1@b2,v1@b3}` (both arms) and the initial `r=0`
   (`v1@b0`) correctly does NOT reach (killed on both arms). SI-3 holds: passes = 2 (straight) / 3
   (branch), both `≤ n+2`. SI-1 held (normal run `6 1 3 3` unchanged, clippy clean).
-- **1.3 — loops / break / early-return in the engine.** *Largely validated by 1.2's engine, which
-  handles back-edges by construction:* `oneloop` converges in **5 passes** with the loop-carried def
-  correct — the header `b2` sees `s` from both `v1@b0` (init) and `v1@b6` (body update, via the
-  back-edge), and `out[b6]` drops the killed `v1@b0`. `earlyret` converges in 4. **Remaining for a
-  clean 1.3 tick:** run the nested-loop + break-out shapes through `rd`, graduate a rust assertion
-  test of the pass-bound + the join/back-edge fact, and confirm no non-reducible edge (none seen).
+- **1.3 — loops / break / early-return in the engine ✅ (2026-07-07).** **Gate PASSED:** reaching-defs
+  correct AND SI-3 (bounded convergence, `≤ n+2` passes) on single loop (5), early-return-in-loop (4),
+  break-out (5 — a user `break` plus the for-exit test, both targeting the loop) and nested loop (7 —
+  each `break(0)` targets its own loop). No non-reducible edge seen (structured control flow → the
+  builder never needed the basic-block fallback). Locked in by **four parser-free Rust unit tests**
+  (`src/ownership_cfg.rs` mod tests): the branch-join unions both arms and kills the initial def; the
+  loop header sees the loop-carried def from both init and body across the back-edge; an early return
+  edges to the *function* exit; nested loops converge with two distinct headers. Probe:
+  [`probes/02-loops-rd.loft`](probes/02-loops-rd.loft).
+
+**Phase 1 COMPLETE (1.1 + 1.2 + 1.3).** loft now has a structured CFG over its Value-IR and a monotone
+worklist dataflow fixpoint over it, validated on the classic reaching-defs lattice across every
+control-flow shape — the substrate the ownership fact (Phase 2) rides on. Pure observer throughout
+(SI-1 held: `loft_suite` + parse suite green, oracle unset). Next: **Phase 2** — the forward ownership
+lattice (`Owned`/`Borrowed(base)`/`Moved` + arm-meet `Join`) on this engine.
 
 ---
 
