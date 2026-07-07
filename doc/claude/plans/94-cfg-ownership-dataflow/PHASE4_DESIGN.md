@@ -118,6 +118,38 @@ silent gap).
   B=Owned`, via Check A). Injected-fault true-positive (delete an `OpFreeRef` / flip a fact) still to
   wire as a test (Phase 5).
 
+## Strictness verification — is it strict ENOUGH, not just not-too-strict? (2026-07-07)
+
+Not-too-strict is the 4.2 sweep (0 false positives). Strict-ENOUGH is the true-positive question,
+verified two ways — and the result is the coexistence thesis made concrete.
+
+**(A) Strictly stronger than the OLD gates on its target class.** On the assert-stripped A1b
+blindspot under `LOFT_NO_A1B` (a definitively wrong plan: `len=0`, correct is `3`):
+
+| gate | verdict on the wrong plan |
+|---|---|
+| exit code | 0 — **pass** |
+| leak-check (`LOFT_STORES=warn`) | 0 leaks — **pass** |
+| interp vs native (the differential oracle) | identical `len=0` — **pass** (both backends agree on the WRONG answer) |
+| **new `LOFT_OWN_ORACLE=check`** | **RED `n_h`** |
+
+Every old observable gate passes; only the new check flags it. This is the Step-0 premise, now shown
+end-to-end on the built check — the new routine catches an over-free class the old gates structurally
+miss.
+
+**(B) It is deliberately NOT a superset of the old detectors — proven the other way too.** Under
+`LOFT_NO_JOIN_OWN` (a different injected fault), `local_source__struct` LEAKS (an UNDER-free) — the
+OLD leak detector catches it (`leak=1`); the new check does NOT (`disagree=0`), because it targets
+over-free / wrong-ownership, not under-free. So neither routine is strict enough alone: the new one
+owns the over-free/A1b class the old gates miss, the old detectors own the leak class the new one
+misses. **Run beside, the pair is stricter than either — which is exactly why we run both.**
+
+**Per-check true-positive status.** Check A: demonstrated end-to-end (`LOFT_NO_A1B` → RED). Check B:
+unit-proven (`free_of_borrowed` fires on a `Borrowed` free) — a REGRESSION GUARD, since no current
+fault toggle emits an *unconditional* `OpFreeRef` of a borrowed store (the A1b wrong plan frees via
+the guarded `OpFreeRefIfDistinct`, which Check B correctly ignores). Wiring an injected-fault test
+(delete an `OpFreeRef` / flip a fact) into `tests/ownership_oracle.rs` is Phase 5.
+
 ## Deferred (recorded, not dropped)
 
 - **Self-contained A1b catch** (return-borrows-freed-local) — waits on reliable interprocedural /
