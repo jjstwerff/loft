@@ -166,18 +166,55 @@ sites (and, for wasm, the interpreter's inclusion).
   the true live-frame eval (compile the expression in the paused function's scope + `reenter_dbg` over
   the frame), not a text seed — the invariant-honoring form.
 
-### A2 — the browser live/debug tier (F2)
+### A2 — the browser live/debug tier (F2) — DECOMPOSITION (P3)
 
-Under the opt-in flag (A3), `--html` bootstraps the parked interpreter from **embedded source bytes**
-(a build-time blob, not `LOFT_LIVE_SRC`); a **cooperative-yield** pause replaces `thread::sleep`; a
-**`postMessage`/WS** control channel replaces loopback TCP; the JS driver pushes `flip`/`edit`/`eval`
-frames and reads results over the debug channel. `loft_start` gains a "live" variant that opts into the
-tier. Native rebuild/swap stays out. `03-wasm-tier` (per-fn wasm module promotion) is **parked/superseded**
-by 08 as the promotion tier — this is the *interpreter* tier, not module relink.
+**The reframing (grounded 2026-07-07):** the four "hard blockers" are largely **already solved by
+existing machinery** — the browser tier is mostly *composition*, not new hard mechanisms:
 
-- **Acceptance:** `routing`'s headless-Chromium parity harness — in a `--html` live build, breakpoint +
-  `eval` a vector expr → the value; edit a fn → the live world picks up the new body; a compiled write
-  then an interpreted read of the same var agree (proof of one heap, not two — probe 2).
+- **The make-or-break blocker (the cooperative pause) already exists.** `src/wasm.rs:886-897`: a
+  `--html` GL app sets `frame_yield`, RETURNS control to the JS event loop, and the session is stored
+  for `resume_frame` — a full yield-and-resume across the browser event loop. The coroutine machinery
+  (`CoroutineFrame`, `Suspended`, serialised stack — `state/mod.rs:72-105`) shows mid-call suspend/
+  resume is supported. A debug pause is the SAME model: yield at a breakpoint instead of a frame
+  boundary. So the pause is not "fundamentally impossible" — it reuses `frame_yield`/`resume_frame`.
+- **The control transport already exists.** `host_input` (loft#476, shipped): `loft_host_input_len`/
+  `loft_host_input_copy` + the JS input queue `inQ` (`src/main.rs:5907-5908`). JS→wasm control frames
+  ride it; wasm→JS results ride `loft_host_print` (or a tagged debug channel).
+- **Source delivery = embed bytes.** Emit the program + stdlib as static blobs and `bootstrap_from_bytes`
+  (no env/fs) — a small addition beside `bootstrap` (`live_dispatch.rs:112`).
+- **`loft_start`** (`generation/mod.rs:1717`, `Stores::new(); init; n_main`) gains a live variant that
+  bootstraps the parked interpreter from the embedded bytes.
+
+Native rebuild/swap stays out; `03-wasm-tier` (per-fn wasm module promotion) is parked/superseded — this
+is the *interpreter* tier, not module relink.
+
+**Sub-phases (dependency order):**
+
+- **P3.1 — wasm bootstrap from embedded source.** Under the live build, emit `static LOFT_SRC` +
+  `LOFT_STDLIB` byte blobs; add `bootstrap_from_bytes(stdlib, src)` beside `bootstrap` (share the parse
+  path, drop the `LOFT_LIVE_SRC`/`parse_dir` fs reads); a `loft_start_live` that calls it + parks the
+  `State`. **Native-testable, no browser.** *Probe:* a native `bootstrap_from_bytes` round-trip parks a
+  world byte-identical to `bootstrap`'s (compare defs + fn_positions).
+- **P3.2 — cooperative-yield pause (reuse `frame_yield`).** At a breakpoint in a wasm live build, set a
+  debug-yield (mirror `frame_yield`), return through the existing yield path, store the session for
+  `resume_frame`; a control command (`resume`/`eval`) drives `resume_frame`. *Probe (the load-bearing
+  one):* a breakpoint is NOT at a frame boundary — confirm `resume_frame` restores a suspension taken
+  MID-call (the coroutine serialised-stack path says yes; verify for the debug-yield site).
+- **P3.3 — control over `host_input`.** JS pushes `flip`/`bp`/`eval`/`resume`/`reload` frames into `inQ`;
+  the wasm debug pump reads them via `host_input` and applies them through the SAME
+  `debug_cmd_dispatch` frame parser the TCP channel feeds today (`engine_host.rs:1980-2037`); results/
+  frames out via `loft_host_print` or a tagged debug output. *Probe:* debug frames vs program input on
+  one queue need a tag/second channel — confirm they don't collide.
+- **P3.4 — the JS debug driver + opt-in + acceptance.** A JS driver (extend `doc/loft-gl-wasm.js` or a
+  debug variant) wiring the control channel ↔ the DAP-ish `--rpc` surface; `loft_start` opts into the
+  tier under the live flag. *Acceptance:* `routing`'s headless-Chromium harness — in a `--html` live
+  build, breakpoint + `eval` a vector expr (needs P1) → the value; edit a fn → the live world picks up
+  the new body; a compiled write then an interpreted read of the same var agree (one heap, not two).
+
+**Recommended order:** P3.1 (foundation, native-testable) → P3.3 (control, reuses shipped channel) →
+P3.2 (the pause — prototype the mid-call `resume_frame` probe FIRST, it gates feasibility) → P3.4
+(driver + headless acceptance). If the P3.2 probe fails (no mid-call resume), that is the real hard
+blocker and the plan re-scopes there.
 
 ### A3 — packaging: `--lean` opt-OUT, default LIVE (F3) ✅ LANDED (P2)
 
@@ -224,5 +261,9 @@ stays the runtime activation within a live-capable (default) build.
 the invariant violation for round-trippable values is closed; residual P1b (referenced keyed
 collections → the true live-frame eval). **P2 (A3) — the `--lean` opt-OUT flag.** ✅ LANDED —
 `--lean` strips the tier from `--native`/`--native-wasm`/`--html`; default stays LIVE (non-breaking).
-The boundary every other piece plugs into. **P3 (A2) — the browser tier.** The largest piece (four
-blockers); lands the offline/browser consumer. Each phase has its own acceptance gate above.
+The boundary every other piece plugs into. **P3 (A2) — the browser tier.** DECOMPOSED + DE-RISKED
+(2026-07-07): mostly *composing* existing machinery — the cooperative pause reuses `frame_yield`/
+`resume_frame`, control reuses the shipped `host_input` channel — not four hard mechanisms. Sub-phases
+P3.1 (embedded-source bootstrap, native-testable) → P3.3 (control over `host_input`) → P3.2 (the pause;
+prototype the mid-call `resume_frame` probe FIRST — it gates feasibility) → P3.4 (JS driver + headless
+acceptance). Each has its own probe/acceptance in § A2.
