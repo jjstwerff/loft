@@ -2,18 +2,19 @@
 //\! @I60 — Scope & dependency/lifetime tracker (deps)
 //! how a variable is *used*, not from the shape of its right-hand side.
 //!
-//! This is the dependable layer the copy-vs-borrow elision builds on; see
-//! `doc/claude/plans/25-nullable-sequences/use-analysis-prework-design.md` and
-//! `materialization-algorithm-design.md`. It is deliberately **behaviour-neutral**:
-//! it computes a verdict and (under `LOFT_MATERIALIZE_DUMP`) prints it, and wires
-//! into no codegen yet — so it can be iterated against tests before anything depends
-//! on it for emission.
+//! This is the dependable layer the copy-vs-borrow elision builds on; the original
+//! design is `doc/claude/plans/25-nullable-sequences/use-analysis-prework-design.md`
+//! and `materialization-algorithm-design.md`. Its outputs are consumed by
+//! **default-on codegen**: the `Verdict` drives an `ElidePlan` (borrow-inline, wired
+//! into `scopes::elide_borrows`) and a `MovePlan` (last-use move, wired into
+//! `scopes::move_elide`); the dumps (`LOFT_MATERIALIZE_DUMP`, `--report-copies`,
+//! `LOFT_WARN_COPIES`) are opt-in views on the same verdicts.
 //!
 //! By the time this runs (post-parse, in `scopes::check`), a `v = src.f` vector copy
 //! has already been lowered to the **copy idiom**: a fresh `OpDatabase` buffer `vdb`,
 //! `v = OpGetField(vdb, …)`, and one `OpAppendVector(v, src.f)` filling it. So the
-//! analysis recognises that idiom (exactly what the future elision rewrite consumes)
-//! and decides whether the copy could instead be a borrow.
+//! analysis recognises that idiom (exactly what the elision rewrite consumes) and
+//! decides whether the copy could instead be a borrow.
 //!
 //! Soundness is by **conservative default**: a binding is `Borrow` ONLY when proven
 //! safe at the Tier-0 envelope — single def, the source `src` is a parameter, and
@@ -1064,13 +1065,14 @@ pub fn elision_plans(code: &Value, function: &Function, data: &Data) -> Vec<Elid
 // `m_none()` arm is owned. So this classifier walks the return EXPRESSION (which
 // recovers the `??`/`if-else` join) rather than reading the collapsed dep.
 //
-// STAGE 1 (this code) is deliberately INERT: it computes the classification and
-// (under `LOFT_MATERIALIZE_DUMP`) prints it, and wires into no codegen. It is
-// tested separately (see the `ownership_*` tests) before any free site reads it.
-// See `doc/claude/plans/85-store-lifetime-retirement/over-free-class-study.md`
-// (§ Three chokepoints) and `NEXT-SESSION-join-ownership-analysis.md`.
+// This classification is consumed by DEFAULT-ON codegen: `ownership_of` (below) is
+// the one fact every own-vs-borrow site reads instead of re-deriving — interp
+// `state/codegen.rs`, native `generation/dispatch.rs`, gated `join_own_enabled`. The
+// `ownership_*` tests + the @PLN89 differential oracle validate it. Design study:
+// `doc/claude/plans/85-store-lifetime-retirement/over-free-class-study.md`
+// (§ Three chokepoints).
 //
-// APPROXIMATIONS (sound for an inert fact; revisited when a free site reads it):
+// APPROXIMATIONS (sound by conservatism — a value can only OVER-report Join/Borrowed):
 //   * Var resolution is flow-INSENSITIVE — a var classifies as the join of ALL
 //     its real (non-`= null`-init) defs across the body, not the def that reaches
 //     the point of use. For the over-free shapes (single-def views, owned-then-

@@ -3,15 +3,19 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# formal/ownership.md — the `deps` ownership / borrow system (strict, aspirational)
+# formal/ownership.md — the `deps` ownership / borrow system (strict; register at `OPEN: 0`)
 
 **Catalogue:** @F21 (references `&T`), @I60 (deps / lifetime tracker) — Goal E. Roadmap: @PLN85, @PLN87.
 
-> **Rules then deviations** (see [README](README.md)). ⚠️ **This area is aspirational by
-> design.** The rules below are the model loft *steers toward* — they are mostly **not
-> implemented yet**, so the deviation list is large and *is* the active migration
-> (@PLN85 store-lifetime, @PLN87 the `&` law). The point of writing it now is direction:
-> a clear target turns "another store-lifetime bug" into "a named hole in a known model".
+> **Rules then deviations** (see [README](README.md)). The rules below are loft's
+> ownership model, and as of 2026-07-04 the deviation register is at **`OPEN: 0`** — all
+> five `D-own-*` deviations are CLOSED on the **shipped path** (@PLN85 store-lifetime,
+> @PLN87 the `&` law both landed), validated by the @PLN89 differential oracle + the
+> `program_ownership` fuzzer. This is *validation, not a machine-checked proof*: the
+> `Join` fact still resolves through a runtime witness, and the pre-fact shape-scans
+> survive under opt-out as differential-control machinery. The residual is not a
+> correctness deviation but the *substrate* — the fact is computed flow-INSENSITIVELY,
+> which [@PLN94](../plans/94-cfg-ownership-dataflow/) would replace with a dataflow fixpoint.
 >
 > The rules are loft's borrow checker. **Rust is the reference model.** Beacon + rationale:
 > [OWNERSHIP_MODEL.md](../OWNERSHIP_MODEL.md); the typed-`deps` design:
