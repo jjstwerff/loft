@@ -229,6 +229,15 @@ So when isolated-correct parts fail together:
    contention — or make the coupling explicit. The stale-artifact trap above is the
    same lens: a shared medium (the build) out of sync, coupling source and test.
 
+## Building a noisy check to clean? Ratchet it, don't churn
+
+The matrix and sentinel are *static* instruments; constructing an analysis/check that starts noisy
+needs a *growing* one — a **ratchet**. Gate it off the default path, pin its false-positive count as a
+one-way baseline, drive it **down** — never write-measure-**revert** (exploration accumulates behind
+the flag; progress is a number). A change that *raises* the count is a different, harder approach:
+give it its **own** flag + baseline, don't revert the clean tier. And **0 findings can be vacuous** —
+a check needs a positive control (an *injected* fault it must flag), not just clean-on-correct.
+
 ## The two ways to fail (symmetric — both modes share them)
 
 | Failure | What it is | Caught by |

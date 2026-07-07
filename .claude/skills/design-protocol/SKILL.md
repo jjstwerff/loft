@@ -227,7 +227,9 @@ not a space to explore — see *The other half*). Not reflexively (see *Keep it 
 fired alarm routes to the search *before* the approach is chosen. "Thread the fix
 through all N sites" stays legal — but only ever as the search's *conclusion*, never
 the default. The sharpest failure is not *missing* the alarm but **seeing it and
-overriding it** for momentum.
+overriding it** for momentum. (When the alarm is a *measurement that jumped* — a
+false-positive count that leapt — the gate is the ratchet: flag the divergent approach,
+don't revert the clean one. See engineering-rigor § "Building a noisy check to clean".)
 
 ---
 
