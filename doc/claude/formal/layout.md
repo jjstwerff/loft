@@ -28,6 +28,14 @@ motivated it), #399 (narrow-int storage).
 - **`Store`** — a word-addressed byte region (`src/store.rs`): a fixed header
   `[0 = SIGNATURE (4 B), 4 = free-space index (4 B), 8 = record size (4 B), 12 = content …]`, then
   records. `layout(τ)` governs the CONTENT bytes of a record; the header is a fixed store frame.
+- **arena frame** — records live in one arena. **Record 0** is the header (above); **record 1 =
+  PRIMARY** is the root container (the program's top `hash` / `sorted` / struct value), its type-id
+  at `(rec = 1, pos = 8)`. Every record begins with an `i32` **size word** (in 8-byte words; a
+  NEGATIVE size marks a free block), so the chain is walkable by `rec += |size|`. Addressing is
+  **word-based**: `rec` is a word index, byte offset `= rec · 8`; a sub-reference is a `u32` at
+  `(rec, pos)`. This frame is what makes a store file **self-describing and portable** (native ↔
+  wasm, RAM ↔ disk) and lets a reader walk it by byte offset — the basis of the #522 remote
+  working-set range-reader.
 - **record** — a value of type τ occupies `size(τ)` contiguous bytes; a field/element sits at a
   fixed byte offset within it. `H[r ⊕ n]` (heap.md) reads at `r.pos + n`.
 - **`DbRef`** = `(store_nr: u16, rec: u32, pos: u32)` (`src/keys.rs`) — the universal pointer. A
@@ -140,7 +148,11 @@ identity the store was written with; on load it is compared, and a mismatch rout
 migrate-or-rebuild. This is the layout analogue of heap.md's `H-Sound`: this doc defines the
 cliff (what the bytes mean under a given layout), and the sidecar keeps the program from walking
 off it (reading bytes under the wrong layout). Its absence is exactly the #477 failure — a layout
-change noticed only by broken data.
+change noticed only by broken data. The gate matters most across a boundary the reader cannot see
+behind: the **#522** working-set loader range-reads a REMOTE store over HTTP — it MUST verify the
+remote store's layout identity (its `.dschema` / `layout_algo_hash`) before walking the bytes, or
+it silently misreads data fetched over the network. `schema_sidecar::check_beside` / `classify` is
+that gate, now applied across a network boundary.
 
 ---
 

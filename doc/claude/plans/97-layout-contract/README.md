@@ -189,6 +189,14 @@ the critical path, and the verification gates).
   rebuild path the sidecar + reject flow reuse.
 - [@PLN18 08 live-build-swap](../18-engine-host/08-live-build-swap.md) — the primary consumer:
   reload-without-data-loss + the lenient snapshot (`show_json`) E1 formalises.
+- **#522 (remote working-set store loader)** — a **consumer** of this contract that raises the
+  stakes: it range-reads a *remote* store's bytes over HTTP, walking the arena layout (`layout.md`
+  — the frame + `L-Total`/`L-Ref`), so it must **gate on the layout identity** (`schema_sidecar::
+  check_beside`) before trusting a remote store — Phase D's load-time gate applied across a
+  **network** boundary (a mismatched remote store is `SchemaMismatch`, never misread over the wire).
+  #522's premise — *a store file IS its own serialization, byte-exact native↔wasm* — is exactly
+  what @PLN97's golden + both-backend parity guarantee; and #522 documents the arena/frame layout
+  now folded into `layout.md`.
 - **Layout axes the corpus must cover:** @PLN25 (null/keyed-dense), narrow-int (#399), #477
   (nested-vector stride — the motivating instance).
 
