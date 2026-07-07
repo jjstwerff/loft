@@ -47,6 +47,27 @@ a concrete var. So "base must be a parameter" **cannot tell the UAF from the saf
 not yet have. **Conclusion: the self-contained A1b catch is DEFERRED** until base resolution improves
 (a later increment); A1b is already caught by channel 1 (below), which runs beside.
 
+**Second attempt (2026-07-07) — built, probed, BLOCKER SHARPENED (still deferred).** A better-targeted
+self-contained check was actually built and swept: the exact A1b hole is `OpFreeRefIfDistinct(base,
+witness)` where `witness` is the RETURN and the return CONTAINS a borrowing `Borrowed(base)` view (the
+store-identity witness passes, `base` is freed, the returned value dangles). Captured from the
+correct-vs-`LOFT_NO_A1B` IR diff: the wrong plan chains `return __ref_1` with `inner` (a `__vdb_1`
+view) appended into it and frees `__vdb_1` conditionally-on-the-return; the correct plan COPIES into a
+fresh `__retbuf` and frees UNCONDITIONALLY. The check FIRES on `n_h` under `LOFT_NO_A1B` and is silent
+on the correct plan — the true positive works. Narrowing the freed set to
+`OpFreeRefIfDistinct(_, return)` killed the `split`/`lines` copy-append FPs. **But a full-corpus sweep
+found 55 FPs on correct code** (`n_mk`, `n_build_chunk`, … — all clean under the runtime leak-check).
+Root: a `Borrowed(base)` view appended into a returned container is a UAF only when the append stores a
+**reference** (`inner: vector<ref(E)>` in `n_h`); when the element is a **value type** (`bs:
+vector<u8>` in `n_mk`) the append DEEP-COPIES and the free is safe — structurally IDENTICAL IR, opposite
+safety. The real blocker is therefore **materialisation-awareness (deep-copy-vs-shallow-ref in
+container-insert ops), NOT base resolution** — and even an "element is a reference type" filter FPs
+(`131-keyed-nested-struct`, a ref-typed nested struct, deep-copies correctly and is safe). Per Design
+Protocol 1 this divergence is **essential** (a genuine domain axis the oracle cannot see independently
+— the same materialisation info Check B/leak get from the POST-codegen type dep), so the check was
+REVERTED rather than landed as a 55-FP ratchet with no near-term path to 0. A1b stays on Check A. The
+self-contained version becomes tractable when the oracle can read the post-codegen deep-copy signal.
+
 ## What Phase 4 builds — two gating checks under `LOFT_OWN_ORACLE=check`
 
 ### Check A — the shadow-diff GATE (the A1b catch, coexistence made hard)

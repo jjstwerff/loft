@@ -40,8 +40,12 @@ scripts+docs+lib+examples, injected-`LOFT_OWN_INJECT_FREE_BORROWED` positive con
 — a `var = src` copy INTO a var re-minted via `OpDatabase` owns (the `reminted` rule in
 `ownership_dataflow`, NARROW: bare `Var` RHS only, never a projection, so the A1b catch is preserved).
 `check` is now 0 RED across the whole corpus and `85-struct-copy-return-owned` joined the clean corpus;
-(4) the self-contained A1b catch (waits on base resolution — A1b is caught by Check A
-meanwhile). Out of scope (declared): P4/VH codegen cutover + the perf fork (README Open q4).
+(4) the self-contained A1b catch stays DEFERRED — a second build (2026-07-07,
+`OpFreeRefIfDistinct(_, return)` + escaped-view) fired on the `LOFT_NO_A1B` UAF but hit 55 FPs on
+correct code; the real blocker is materialisation-awareness (deep-copy-vs-shallow-ref in
+container-insert ops), NOT base resolution (`n_mk` `vector<u8>` deep-copies = safe vs `n_h`
+`vector<ref(E)>` stores refs = UAF, identical IR) — reverted, A1b remains on Check A (PHASE4_DESIGN §
+"Second attempt"). Out of scope (declared): P4/VH codegen cutover + the perf fork (README Open q4).
 
 **How to run the oracle** (env `LOFT_OWN_ORACLE`, dumps to stderr; always set `LOFT_NO_CACHE=1` so
 `scopes::check` re-runs on the user file):

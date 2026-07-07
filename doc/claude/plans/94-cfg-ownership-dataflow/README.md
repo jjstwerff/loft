@@ -17,8 +17,12 @@ with a firing true-positive and 0 false positives across ~521 files. A machine-c
 proof skeleton is in `formal/ownership.md`. Branch `tuxedo-pln94-ownership-dataflow` (off
 `origin/main`), unmerged. **What's still open** (refinements, not the end-state): the formal lemma
 (local transfer soundness) is now DISCHARGED (`formal/ownership.md`, over-free property given the
-O-\* rules; only a Coq/Lean rendering remains); the self-contained A1b catch (waits on base resolution
-— A1b is already caught by Check A). The `n_choose` fact-disagree residual is now RESOLVED: a
+O-\* rules; only a Coq/Lean rendering remains); the self-contained A1b catch stays DEFERRED — a second
+build (2026-07-07) fired correctly on the `LOFT_NO_A1B` UAF but had 55 FPs on correct code, sharpening
+the blocker to **materialisation-awareness** (deep-copy-vs-shallow-ref in container-insert ops), not
+base resolution (`n_mk` appending a `vector<u8>` deep-copies = safe; `n_h` appending `vector<ref(E)>`
+stores refs = UAF, structurally identical IR) — reverted, A1b stays on Check A (see PHASE4_DESIGN).
+The `n_choose` fact-disagree residual is now RESOLVED: a
 `var = src` copy INTO a var re-minted via `OpDatabase` (a `Call`, invisible to the `Set`-only transfer)
 owns — so `check` is now **0 RED across the entire corpus** (806 files + 54 fuzz), and
 `85-struct-copy-return-owned` joined the clean corpus. The `check-dev` over-free Check B is **now PROMOTED** onto `check` (its
@@ -62,9 +66,11 @@ clock). Out of scope (declared): P4/VH codegen cutover + the perf fork (Open q4)
 - **Phase 4 DONE ✓ (design: [`PHASE4_DESIGN.md`](PHASE4_DESIGN.md)).** `LOFT_OWN_ORACLE=check` runs
   the consistency checks BESIDE the shipped analysis — **both flag, neither replaces the other**
   (overhead ~1.6%, gated-off zero). Check A (shadow-diff — the A1b catch, RED on `LOFT_NO_A1B`, clean
-  on the fix) is the independent over-free cross-check; a candidate SELF-CONTAINED A1b invariant was
-  probed + FALSIFIED before coding (base `65535` unresolved on both safe and unsafe returns) and
-  deferred. Check B (over-free, `run_over_free_check`) is now PROMOTED onto `check` (0 FP, own injected
+  on the fix) is the independent over-free cross-check; a SELF-CONTAINED A1b invariant was probed +
+  FALSIFIED before coding (base `65535` unresolved on both safe and unsafe returns), then a second
+  build (2026-07-07, `OpFreeRefIfDistinct(_, return)` + escaped-view) fired on the UAF but hit 55 FPs on
+  correct code — the blocker is materialisation (deep-copy-vs-ref), not base resolution; reverted, A1b
+  stays on Check A. Check B (over-free, `run_over_free_check`) is now PROMOTED onto `check` (0 FP, own injected
   positive control `LOFT_OWN_INJECT_FREE_BORROWED`); the exit-state Check C stays gated `check-dev` as a
   second opinion. The fact-precision insight (use the post-codegen type dep) drove them 153 → 0.
 - **Phase 5 DONE ✓ — landed beside.** `tests/ownership_oracle.rs` runs the oracle on every `cargo
