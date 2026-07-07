@@ -72,6 +72,7 @@ pub mod json;
 pub mod keys;
 mod lexer;
 pub mod native;
+pub mod ownership_cfg;
 pub mod scopes;
 pub mod use_analysis;
 mod variables;

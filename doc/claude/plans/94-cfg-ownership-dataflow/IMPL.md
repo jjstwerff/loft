@@ -56,11 +56,20 @@ backend-consistent wrong free/own plan) that interp-vs-native + leak gates struc
 
 ## Phase 1 — CFG + fixpoint engine
 
-- **1.1 — CFG construction only** (`src/ownership_cfg.rs`, new): blocks + succ/pred edges for
-  `If`/match/`Loop`/`break`/`return`, no fixpoint yet. **Gate:** `LOFT_OWN_ORACLE=cfg` dump matches
-  hand-drawn edges for if-join, single loop, nested loop, early-return-in-loop.
+- **1.1 — CFG construction only ✅ (2026-07-07).** `src/ownership_cfg.rs` builds a structured CFG
+  over the Value-IR: statement-level and control-carrying `If` split into then/else/join; `Loop`
+  gets a header (back-edge) + exit; `Break(n)`/`Continue(n)`/`Return` add the right edge via a loop
+  stack (`n=0` = innermost). Reached only via `LOFT_OWN_ORACLE=cfg` (SI-1 held: `loft_suite` + 158
+  parse tests green with the module compiled in, oracle unset). **Gate PASSED:** the dump matches
+  hand-drawn edges for straight-line, if-join (diamond), single loop (top exit-test + back-edge),
+  nested loop (each `break(0)` targets its own loop; inner-exit → outer header), and
+  early-return-in-loop (`return` → *function* exit, not loop exit). Corpus:
+  [`probes/01-cfg-corpus.loft`](probes/01-cfg-corpus.loft). Key IR finding: `for` lowers to a
+  `Loop` whose exit test is an `If(cond, Break(0), Null)` **buried in the range `Set` RHS**, so the
+  builder recurses into `Set` values to find control transfers.
 - **1.2 — the worklist engine on a trivial lattice** (reaching-defs), straight-line + one branch.
-  **Gate:** reaching-defs hand-verified on 2 shapes; SI-3 holds.
+  **Gate:** reaching-defs hand-verified on 2 shapes; SI-3 holds. (Per-block `defs` are already
+  extracted by the builder — the raw material is in place.)
 - **1.3 — loops / break / early-return in the engine.** **Gate:** reaching-defs correct AND
   SI-3 (bounded convergence) on single loop, nested loop, break-out, early-return-in-loop — the
   cases the position-proxy cannot express. A non-reducible edge here forces the basic-block

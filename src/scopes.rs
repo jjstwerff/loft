@@ -1549,6 +1549,9 @@ fn references_var_after(b: &Block, v: u16, idx: usize) -> bool {
 /// reclaim pass left a store the model says is dead un-freed past a later
 /// allocation (the Phase-4 Goal-E watermark guard).  Never panics in normal builds.
 pub fn check(data: &mut Data) {
+    // @PLN94 — the CFG/dataflow completeness oracle, an OBSERVER reached only via
+    // LOFT_OWN_ORACLE (SI-1: shipped codegen byte-identical; a no-op when unset).
+    crate::ownership_cfg::oracle(data);
     // Behaviour-neutral USE-analysis dump (LOFT_MATERIALIZE_DUMP) — the
     // copy-vs-borrow verdict per binding, before any codegen consumes it.
     crate::use_analysis::dump_all(data);

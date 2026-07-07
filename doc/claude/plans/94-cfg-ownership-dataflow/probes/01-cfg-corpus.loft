@@ -1,0 +1,31 @@
+// @PLN94 Phase 1.1 — CFG-construction corpus. One function per control-flow shape the
+// structured-CFG builder (src/ownership_cfg.rs) must model. Dump + hand-verify with:
+//   LOFT_NO_CACHE=1 LOFT_OWN_ORACLE=cfg loft --interpret 01-cfg-corpus.loft 2>&1 >/dev/null
+// Verified 2026-07-07: edges match hand-drawn for all shapes (see IMPL.md Phase 1.1).
+
+// straight-line: entry -> exit, one block.
+fn straight(a: integer) -> integer { x = a + 1; y = x * 2; y }
+
+// if-join: entry{cond} -> {then, else} -> join -> exit (a diamond).
+fn ifjoin(a: integer) -> integer { r = 0; if a > 0 { r = 1; } else { r = 2; } r }
+
+// single loop: header holds the exit test; break -> loop_exit; body back-edges to header.
+fn oneloop(n: integer) -> integer { s = 0; for i in 0..n { s = s + i; } s }
+
+// nested loop: inner break(0) targets the INNER loop; after the inner loop, control
+// returns to the OUTER header (outer back-edge). Two break(0)s, disambiguated by depth.
+fn nested(n: integer) -> integer {
+  s = 0;
+  for i in 0..n { for j in 0..n { s = s + i + j; } }
+  s
+}
+
+// early-return-in-loop: `return` edges to the FUNCTION exit, not the loop exit.
+fn earlyret(n: integer) -> integer {
+  for i in 0..n { if i == 3 { return i; } }
+  0 - 1
+}
+
+fn main() {
+  print("{straight(2)} {ifjoin(1)} {oneloop(3)} {nested(3)} {earlyret(5)}\n");
+}
