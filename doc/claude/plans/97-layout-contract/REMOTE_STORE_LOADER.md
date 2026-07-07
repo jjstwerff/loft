@@ -4,9 +4,10 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 # Remote working-set store loader — design (#522)
 
-**Tracker:** [loft-lang/loft#522](https://github.com/loft-lang/loft/issues/522). Pairs with #517
-(HTTP stack) and rides the @PLN97 layout contract ([formal/layout.md](formal/layout.md)).
-Status: **design** — not yet a filed plan.
+**Tracker:** [loft-lang/loft#522](https://github.com/loft-lang/loft/issues/522). Built as **arc G
+of @PLN97** ([README](README.md)) — the layout contract's hardest consumer *and* its cross-network
+validation. Pairs with #517 (HTTP stack) and rides the layout contract ([formal/layout.md](../../formal/layout.md)).
+Status: **design** — build gated on P0.
 
 ## Two consumers, one general primitive
 
@@ -62,7 +63,7 @@ functionally correct. Two concrete guards:
 
 A store file is a byte-exact image of the arena, self-describing and portable native↔wasm
 (`allocation.rs:2117` — *"the on-disk record layout is byte-identical to the in-memory one"*;
-formalised in [layout.md](formal/layout.md): record 0 = header, record 1 = `PRIMARY` root,
+formalised in [layout.md](../../formal/layout.md): record 0 = header, record 1 = `PRIMARY` root,
 per-record `i32` size word (words; negative = free), word-based addressing `byte = rec·8`). So
 there is **nothing to decode** — reading a record is copying its bytes; an internal reference is a
 word offset into the same image. That is exactly what makes range reads possible.
@@ -91,21 +92,23 @@ mutation ops never do. Three ways to route those reads through `resolve`:
 
 - **(b-branch)** — add a residency branch to the shared `addr`/`OpGetField`. **Rejected:** it taxes
   *every* program's every read (violates the second invariant).
-- **(b-dup) — DUPLICATE the read subset into paged opcodes** (`OpGetFieldPaged`, … — the
-  fetch-on-miss variants), dispatched only for a paged store. The normal `OpGetField` stays
-  **byte-for-byte unchanged machine code** (zero cost to non-users) *and* the paged op reuses the
-  exact traversal logic (a paged op *is* the read op, resolving pages). Read-only bounds this to
-  ~10–20 ops, well inside the opcode budget (~225 free of 512) — and the ceiling itself is
-  extensible via the proven **escape-range** technique already used (a sentinel like 255 / 254
-  opens a new range without breaking existing encodings), so op-duplication carries **no budget
-  risk** even in the limit. **Recommended.**
-- **(b-reader)** — a separate `PagedReader` type reimplementing `find`/range over a `&ByteReader`.
-  Also keeps the hot path clean, but re-writes traversal logic instead of reusing it — the fallback
-  if op-duplication proves awkward.
+- **(b-dup)** — DUPLICATE the read subset into paged opcodes (`OpGetFieldPaged`, …), dispatched
+  only for a paged store. Keeps the hot path clean, but **complicates IR generation**: it adds a
+  *second set of read ops* the IR generator must never mix — it would have to know each read site's
+  store-backing to emit the right variant, and native codegen needs two emit paths per read.
+  Op-budget itself is fine (~225 free of 512, and the ceiling is extensible via the proven
+  escape-range technique — 255/254 → a new range), but the IR-mixing risk isn't worth it.
+  **Rejected on that ground.**
+- **(b-builtin) — a self-contained Rust traversal behind the `store_load_*` builtins.** The paged
+  read is Rust code (its own `resolve` + `find`/range over a byte-reader); the loft surface is just
+  a builtin *call*, so **IR generation is UNCHANGED — no new opcodes, nothing to mix**, the hot
+  path is untouched, and the whole paged path is isolated. Cost: reimplement `find`/range over a
+  byte-reader (bounded, isolated Rust). **Recommended.**
 
-**Recommendation: (b-dup).** It satisfies BOTH invariants at once — byte-identical working set AND
-zero hot-path cost — while reusing the traversal, and read-only keeps the duplicated set small.
-P0's benchmark still stands as the guard: the normal read path must time within noise.
+**Recommendation: (b-builtin).** It satisfies both invariants — byte-identical working set AND zero
+cost to non-users (no IR change, no hot-path branch, feature-gated deps) — and keeps the two op
+sets from ever mixing. **P0 *is* this spike** (`resolve` + one `find` in Rust); it de-risks the
+whole approach before any phase.
 
 **Falsification probe P0 (do before any phase):** on a REAL store file written by `bind_path`,
 serve its bytes through a `resolve(off,len)` that logs every range touched, and run a single key
@@ -239,6 +242,8 @@ first — it unblocks wasm whole-block load). Phases 2–4 are the core (M) over
 local provider. Phase 5 (S) swaps in #517. The identity gate is a few lines reusing
 `schema_sidecar`, added at the phase-1 bootstrap and carried through.
 
-**If promoted to a plan:** file a `loft-lang/plans` issue, move this doc to
-`doc/claude/plans/<issue#>-remote-store-loader/README.md`, and lift these phases into its Sub-arcs
-table. The verifiable steps above are already the plan's acceptance gates.
+**As @PLN97 arc G:** this design is a sub-file of the layout-contract plan (adjacent — a remote
+range-read is the hardest test that the layout is stable *and* portable). The six phases above are
+arc G's build steps; their acceptance tests are its gates. Sequence it **after** the durable-store
+consumer wiring (Phase D slice 2's residual) — both need the same `check_beside` gate on open, so
+land that once and reuse it here.

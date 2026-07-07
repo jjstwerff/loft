@@ -26,7 +26,7 @@ Stores::layout_algo_hash()`/`layout_dump()`). **Phase D ✅** (`src/schema_sidec
 self-describing `LayoutIdentity`, the `.dschema` file lifecycle, `classify`/`SchemaVerdict`, and
 `CorruptReason::SchemaMismatch`). **Phase C ✅** (`doc/claude/formal/layout.md`: the `layout(τ)`
 contract, rules `L-Total`…`L-Sound` + `D-layout-1`, wired into the formal README/ROADMAP).
-**Phase F ◐ slice 1** (`src/schema_sidecar.rs`: the `.loft/layout.lock` baseline, `check_against_baseline`, `describe_change`, `migration_outline`). **Remaining:** F slice 2 (the compiler hook + CLI `accept`, touches `main.rs`); **E** (schema switch; E1 mostly falls out of the lenient path, E2 deferred). **#522** (remote store loader) integrated as a consumer (see Cross-arc).
+**Phase F ◐ slice 1** (`src/schema_sidecar.rs`: the `.loft/layout.lock` baseline, `check_against_baseline`, `describe_change`, `migration_outline`). **Remaining:** F slice 2 (the compiler hook + CLI `accept`, touches `main.rs`); **E** (schema switch; E1 mostly falls out of the lenient path, E2 deferred). **Arc G ▸ design** — #522 (remote working-set loader; routing **+ browser game asset streaming**) folded in ([REMOTE_STORE_LOADER.md](REMOTE_STORE_LOADER.md)); build gated on P0 (the read-virtualization + non-regression probe).
 
 ## Goal
 
@@ -140,6 +140,7 @@ static type is a finding to fix, not a blocker — that discovery is the value.
 | **E1** — Add&Drop *(falls out of the shared path)* | **Not a dedicated mechanism** — it IS the handoff's serialize→deserialize path with the hash as trigger (D): lenient deserialize *defaults* an added part and *ignores* a dropped one (the 08-S5 `show_json`/`populate_struct_from_jsonvalue` behaviour, made formal over the store, using the sidecar's old schema as the map). E1's work is to **prove** the shared path + lenient rules cover every additive/subtractive change — no new code path | Open |
 | **E2** — Data migration: reshape *(later — deferred)* | The hard but **rare** case: values must be *transformed*, not just added/dropped. **Simplify via expand→contract:** never reshape in place — go through an intermediate **superset** schema so every *step* is a pure Add or pure Drop (E1's path), and the only custom logic is an **additive backfill** (compute new from old) while both coexist. Bounds the hard part to the backfill. **Trigger:** a real reshape must preserve live data (dogfood-driven) | Deferred |
 | **F** — Compiler migration aid *(the developer surface)* | The programmer just edits structs; the machinery stays invisible. The compiler diffs the current schema vs. a recorded **baseline** and classifies: identical (silent) · **adds only** (auto) · **drops only** (auto) · **adds ∧ drops together** (the **actionable state** — indistinguishable from a rename/reshape, so surface a diagnostic + an auto-generated **migration-script outline**: mechanical parts pre-filled, only the old→new backfill left as stubs). Accepting a migration updates the baseline. Ties into @PLN28 diagnostics | ◐ **slice 1 SHIPPED** — `src/schema_sidecar.rs`: `baseline_path` (`.loft/layout.lock`), `write_baseline` (accept) + `check_against_baseline` (the diff), `describe_change` (silent / add-only note / drop-only note / actionable warning), `migration_outline` (scaffold with a `// TODO backfill` per reshaped type). 3 tests. **Slice 2:** invoke it after the two-pass build + a CLI `accept` command (touches `main.rs`) |
+| **G** — Remote working-set store loader ([#522](https://github.com/loft-lang/loft/issues/522)) *(consumer + cross-network validation)* | Materialise the working set of a **remote** store over HTTP range reads (`store_load_keys`/`store_load_range`) so a phone (routing) or a **browser game** (asset streaming) pulls only the bytes a query/scene touches — the layout contract's hardest consumer *and* its ultimate test (the layout must be stable AND portable to range-read a remote store; the identity gate rejects a mismatched one, never misreads over the wire). Design: [REMOTE_STORE_LOADER.md](REMOTE_STORE_LOADER.md) | **Design** — build gated on P0 (the read-virtualization + non-regression probe). Two invariants (byte-identical working set · **zero cost to non-users**); read virtualised as a **self-contained Rust builtin** (no new opcodes → IR generation unchanged, no op-set mixing, hot path untouched); 6 verifiable phases (0 probe → 1 heap-load → 5 #517) |
 
 ## Phase ordering
 
@@ -188,14 +189,15 @@ the critical path, and the verification gates).
   rebuild path the sidecar + reject flow reuse.
 - [@PLN18 08 live-build-swap](../18-engine-host/08-live-build-swap.md) — the primary consumer:
   reload-without-data-loss + the lenient snapshot (`show_json`) E1 formalises.
-- **#522 (remote working-set store loader)** — a **consumer** of this contract that raises the
-  stakes: it range-reads a *remote* store's bytes over HTTP, walking the arena layout (`layout.md`
-  — the frame + `L-Total`/`L-Ref`), so it must **gate on the layout identity** (`schema_sidecar::
-  check_beside`) before trusting a remote store — Phase D's load-time gate applied across a
-  **network** boundary (a mismatched remote store is `SchemaMismatch`, never misread over the wire).
-  #522's premise — *a store file IS its own serialization, byte-exact native↔wasm* — is exactly
-  what @PLN97's golden + both-backend parity guarantee; and #522 documents the arena/frame layout
-  now folded into `layout.md`.
+- **#522 (remote working-set store loader) — now arc G** (see the Sub-arcs table +
+  [REMOTE_STORE_LOADER.md](REMOTE_STORE_LOADER.md)). Folded in as the contract's hardest consumer +
+  cross-network validation: it range-reads a *remote* store's bytes over HTTP, walking the arena
+  layout (`layout.md` — the frame + `L-Total`/`L-Ref`), so it **gates on the layout identity**
+  (`schema_sidecar::check_beside`) before trusting a remote store — Phase D's load-time gate across
+  a **network** boundary (a mismatched remote store is `SchemaMismatch`, never misread over the
+  wire). #522's premise — *a store file IS its own serialization, byte-exact native↔wasm* — is
+  exactly what @PLN97's golden + both-backend parity guarantee; and it drove the arena/frame layout
+  now in `layout.md`.
 - **Layout axes the corpus must cover:** @PLN25 (null/keyed-dense), narrow-int (#399), #477
   (nested-vector stride — the motivating instance).
 
