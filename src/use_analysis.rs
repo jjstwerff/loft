@@ -1657,6 +1657,21 @@ pub fn ownership_of(data: &Data, d_nr: u32, value: &Value) -> Own {
     own.classify(value, &def.variables, &defs)
 }
 
+/// True when `classify` resolves a `Call(d, …)` STRUCTURALLY — a store mint
+/// (`OpDatabase`/`OpNewRecord` → `Owned`) or a projection (`OpGetField` &c → the
+/// `Borrowed(base)` view into arg 0) — rather than through the callee's
+/// interprocedural return summary (`call_ownership`). The @PLN94 oracle's transfer
+/// routes only NON-structural (genuine user/native) calls through its independent
+/// `call_own`; these primitives carry fixed ownership semantics both analyses share,
+/// so it must delegate them to `ownership_of` instead of the summary path (else a
+/// projection local is mis-classed `Owned` — the over-free/unsound direction).
+#[must_use]
+pub fn classifies_structurally(data: &Data, d: u32) -> bool {
+    d == data.def_nr("OpDatabase")
+        || d == data.def_nr("OpNewRecord")
+        || projection_ops(data).contains(&d)
+}
+
 /// The bare verdict name (no base) — for the free-site dump's `class=` field.
 fn own_kind(own: Own) -> &'static str {
     match own {

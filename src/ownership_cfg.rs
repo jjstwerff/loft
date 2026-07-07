@@ -12,7 +12,7 @@
 //! `Continue(n)` / `Return` add the corresponding edge and end the current straight line.
 
 use crate::data::{Data, DefType, Value};
-use crate::use_analysis::{Own, ownership_of, return_ownership};
+use crate::use_analysis::{Own, classifies_structurally, ownership_of, return_ownership};
 use std::collections::{BTreeMap, BTreeSet};
 
 type BlockId = usize;
@@ -573,9 +573,15 @@ fn ownership_dataflow(data: &Data, d_nr: u32, cfg: &Cfg) -> (Vec<OState>, usize)
                     // Native-bodied functions and ops fall to the structural classifier: their
                     // return ownership is carried by codegen metadata (`returns_borrowed_view`),
                     // not the loft body `return_ownership` reads — replicating that is 3.4's op-tail.
+                    // EXCLUDE the primitive STRUCTURAL ops (store mint / projection): they are
+                    // `DefType::Function` with an empty native body too, but `ownership_of`'s
+                    // classify handles them exactly (mint → Owned, projection → Borrowed(base));
+                    // routing them through `call_own` mis-classes a projection local `Owned` — the
+                    // unsound over-free direction (3.4a: `xs = OpGetField(vdb, …)` regression).
                     Value::Call(callee_d, args)
                         if matches!(data.def(*callee_d).def_type, DefType::Function)
-                            && data.def(*callee_d).native().is_empty() =>
+                            && data.def(*callee_d).native().is_empty()
+                            && !classifies_structurally(data, *callee_d) =>
                     {
                         call_own(data, *callee_d, args)
                     }

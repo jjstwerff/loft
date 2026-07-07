@@ -16,7 +16,8 @@ hand-compute every expected value, graduate to `tests/scripts/` + an oracle test
 
 All work is on branch **`tuxedo-pln94-ownership-dataflow`** (off `origin/main`), a **pure observer**
 in `src/ownership_cfg.rs` (nothing in the compile path consumes it; SI-1 holds). Done: Phase 0
-(falsify ✓), Phase 1 (CFG + reaching-defs fixpoint ✓), Phase 2 → 3.1/3.2/3.3 ✓, 3.4a characterised.
+(falsify ✓), Phase 1 (CFG + reaching-defs fixpoint ✓), Phase 2 → 3.1/3.2/3.3 ✓, **3.4a RESOLVED ✓**
+(a real unsoundness in my transfer, fixed — see below; corpus DISAGREE=0).
 
 **How to run the oracle** (env `LOFT_OWN_ORACLE`, dumps to stderr; always set `LOFT_NO_CACHE=1` so
 `scopes::check` re-runs on the user file):
@@ -32,14 +33,23 @@ cargo test --release --lib ownership_cfg   # the 6 unit tests
 Probes live in `probes/` (00 blindspot · 01 cfg · 02 loops · 03 ownership · 04 precision · 05 interproc
 · 06 capture). SI-1 check: `cargo test --release --test wrap loft_suite` green with the module in.
 
-**The immediate next action (3.4a adjudication)** — the one open decision blocking the op-tail:
-does a closure record (`OpDatabase` store that holds a captured DbRef, and IS freed) have ownership
-`Owned` (my dataflow — about its store) or `Borrowed` (B — about its dependency)? Resolve against
-**how `scopes::get_free_vars` actually frees the closure record** (read `src/scopes.rs:3157-3420`
-+ the `__closure_*` cascade at `src/database/allocation.rs:497-539`). If the record's free keys off
-"owned", B's `Borrowed` is the imprecise one → **first real cross-check catch** (record it, keep my
-`Owned`). If "borrowed" is load-bearing, teach my transfer to mark a var whose store holds a captured
-DbRef as `Borrowed`. Repro: `probes/06-capture.loft`.
+**3.4a RESOLVED (2026-07-07) — it was MY unsoundness, not a B indictment.** The adjudication
+inverted the prior session's read on two counts. (1) The disagreeing var was mis-identified: not the
+closure record `___clos_1` but **`xs`**, a vector local `xs = OpGetField(__vdb_1, 0, 22)` — a VIEW
+into store `__vdb_1`. The emitted IR frees `__vdb_1` and `___clos_1` but never `xs`, so
+`xs = Borrowed(__vdb_1)` is the sound free-placement fact: **B was right, my oracle said `Owned`**
+(the over-free direction the `refines` gate flags). (2) Root cause: the Phase-3.3 call-arm guard
+(`DefType::Function && native().is_empty()`) also swallowed the primitive STRUCTURAL ops
+`OpGetField`/`OpNewRecord` (Function-typed, empty native) → `call_own` → `Owned`, bypassing
+`ownership_of`'s projection handling (→ `Borrowed(base)`). **Fix:** exclude structural ops via the
+new `use_analysis::classifies_structurally` predicate (= the exact set `classify` special-cases:
+`OpDatabase`/`OpNewRecord` + projection ops) from the call-arm, so they fall to `ownership_of`. **All
+22 "3.3 disagreements" on 505-collection-capture were this one bug** — corpus is now DISAGREE=0 (712
+fns); precision win (probe 04) and interproc independence (probe 05) preserved; SI-1 green; 6 unit +
+631 lib tests green. The cross-check delivered its payoff aimed INWARD — an independent impl caught
+my own unsoundness. Note the design consequence: primitives are now delegated to `ownership_of`, so
+the oracle's independence surface (where it could still catch a B bug) is **flow-sensitivity +
+interprocedural summaries**, not primitive classification. Repro: `probes/06-capture.loft`.
 
 **Then, in order, to a fully functional oracle:** drain the rest of the op-tail (3.4: after captures,
 `#rust`-return metadata via `returns_borrowed_view`, then coroutines / `par`) one family per commit
@@ -189,18 +199,28 @@ stand as written.
   that family; the two-closures-one-hash (@PLN93) cell classifies both handles `Borrowed(outer)`,
   outer sole `Owned`, value + no-double-free hand-checked. `log()` any op left unmodeled (no silent gap).
 
-  **3.4a — capture family, CHARACTERISED (2026-07-07); adjudication pending.** The minimal repro
-  (`probes/06-capture.loft`) pins the divergence: for `xs: vector = […]; c0(fn(){ xs[1] ?? -1 })`
-  the disagreeing var is the **closure record `___clos_1`** — built by `OpDatabase` (its OWN fresh
-  store, and it IS freed: `OpFreeRef(___clos_1)`) but holding `OpSetDbRef(___clos_1, 0, xs)`, a
-  *borrow* of `xs`. My dataflow says `Owned` (correct about its **store** — owned, freed); B says
-  `Borrowed(xs)` (tracking that it **depends on** `xs`). This is NOT a simple my-gap: it is a genuine
-  semantic fork — *store-ownership* vs *dependency* — and which reading is correct depends on how the
-  fact drives free-placement (the closure record is freed, so "owned" is defensible; B's "borrowed"
-  may be conflating dependency with store-borrow). **This is the first divergence that may indict B
-  rather than me** — exactly the cross-check's intended payoff — so it earns proper adjudication
-  against ground-truth free-placement, NOT a rushed transfer tweak. Blocked-pending-adjudication;
-  the remaining ~20 sites (incl. `#rust`-return metadata) queue behind it. Repro:
+  **3.4a — capture case, RESOLVED (2026-07-07): a real unsoundness in MY transfer, not a B fork.**
+  The minimal repro (`probes/06-capture.loft`) was adjudicated against the emitted IR and inverted
+  the prior read on two counts. (1) **Var mis-identified.** The disagreeing var was not the closure
+  record `___clos_1` but **`xs`** — a vector local `xs = OpGetField(__vdb_1, 0, 22)`, a VIEW into
+  store `__vdb_1`. The IR frees `__vdb_1` and `___clos_1` but never `xs`, so the sound fact is
+  `xs = Borrowed(__vdb_1)`: **B was right; my oracle said `Owned`** — the over-free direction the
+  `refines` gate flags. (2) **Root cause in my transfer.** The Phase-3.3 call-arm guard
+  (`DefType::Function && native().is_empty()`) also captured the primitive STRUCTURAL ops
+  `OpGetField`/`OpNewRecord` (Function-typed, empty native body) and routed them to `call_own`
+  (→ `Owned`), bypassing `ownership_of`'s projection handling (→ `Borrowed(base)`). **Fix:** a new
+  `use_analysis::classifies_structurally(data, d)` predicate — the exact set `classify` special-cases
+  (`OpDatabase`/`OpNewRecord` + `projection_ops`) — added to the call-arm guard so structural ops
+  fall through to `ownership_of`. **Gate PASSED:** capture probe `xs = Borrowed(__vdb_1)`,
+  `disagree=0`; **all 22 "3.3 disagreements" on 505-collection-capture were this single bug** — the
+  corpus is now DISAGREE=0 across 712 fns (the 3.3 characterisation of them as capture-induced
+  borrowing / `#rust`-return metadata was wrong); the flow-sensitive precision win (probe 04,
+  `precision=1`) and the interprocedural independence (probe 05, `a=Borrowed / b=Owned`) both
+  survive; SI-1 green (`loft_suite`); 6 unit + 631 lib tests green; clippy clean. **Design note:**
+  primitives are now delegated to `ownership_of`, so the oracle's independence surface — where it
+  can still catch a *B* bug — is flow-sensitivity + interprocedural summaries, not primitive
+  classification (which both analyses share by construction). The op-tail's genuine unmodeled
+  families (coroutines, `par`) remain, but the cross-check surfaces none on this corpus. Repro:
   [`probes/06-capture.loft`](probes/06-capture.loft).
 - **3.5 — the soundness-direction sweep + the Step-0 payoff.** **Gate:** across corpus + fuzzer, no
   case where the new fact says `Owned` while B says `Borrowed`/`Join` in a way that under-frees

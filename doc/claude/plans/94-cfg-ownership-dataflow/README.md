@@ -19,14 +19,19 @@ codegen is byte-identical (SI-1 held on `loft_suite` + the parse suite at every 
   dataflow fixpoint, validated on reaching-defs across every control-flow shape (straight-line,
   if-join, single/nested loop, break-out, early-return-in-loop). 5 unit tests; SI-3 (bounded
   convergence) enforced by assert.
-- **Phase 2 (ownership fact) — 3.1 ✓ / 3.2 ✓ / 3.3 ✓ / 3.4 in progress.** Forward flow-sensitive
-  `OFact = Bottom|Owned|Borrowed(base)|Join(base)`; transfer reuses `ownership_of` for structural
-  RHS, resolves `Var` RHS flow-sensitively, and consumes callee `return_ownership` summaries at
-  call sites (independently of the shipped classifier). Shadow-diff vs `ownership_of` splits
-  AGREE / PRECISION (mine ⊏ B's `Join`) / DISAGREE (must be 0 for soundness). Over 712 functions
-  the independent calls surfaced a **22-site op-tail work-list** (captures + `#rust` return
-  metadata); the capture family is characterised (3.4a) as a genuine store-ownership-vs-dependency
-  fork that **may indict B, not me** — awaiting adjudication.
+- **Phase 2 (ownership fact) — 3.1 ✓ / 3.2 ✓ / 3.3 ✓ / 3.4a ✓ / 3.4 op-tail in progress.** Forward
+  flow-sensitive `OFact = Bottom|Owned|Borrowed(base)|Join(base)`; transfer reuses `ownership_of` for
+  structural RHS, resolves `Var` RHS flow-sensitively, and consumes callee `return_ownership`
+  summaries at call sites (independently of the shipped classifier). Shadow-diff vs `ownership_of`
+  splits AGREE / PRECISION (mine ⊏ B's `Join`) / DISAGREE (must be 0 for soundness). **3.4a
+  (2026-07-07): the capture probe's lone disagreement was a real UNSOUNDNESS in the oracle, not a B
+  fork.** The 3.3 call-arm guard mis-routed the primitive structural ops `OpGetField`/`OpNewRecord`
+  (Function-typed, empty native) to the summary path, so a projection local `xs = OpGetField(vdb,…)`
+  read `Owned` where it must read `Borrowed(vdb)`. Excluding structural ops
+  (`classifies_structurally`) fixed it; **all 22 "3.3 divergences" were this one bug** — the corpus
+  is now **DISAGREE=0 across 712 fns**, with the precision win and interproc independence intact. The
+  cross-check's payoff landed inward — an independent impl caught the oracle's own gap. Genuine
+  op-tail families (coroutines, `par`) remain but surface no divergence on this corpus.
 
 The remaining approximations this replaces still ship: `src/use_analysis.rs` analysis **A**
 (position-proxy, valid only outside loops) and analysis **B** (`Owned/Borrowed/Join`, flow-insensitive
@@ -144,9 +149,12 @@ Early, the divergences point at the *newer/less-complete* implementation (a frie
 as it matures, a residual divergence indicts the *shipped* one — which is the A1b catch. This is not
 specific to ownership: any evaluation load-bearing for correctness (free-placement, type-resolution,
 layout) earns an independent cross-check for the same reason. **Demonstrated already:** Phase 3.3's
-independent interprocedural handling immediately surfaced 22 concrete divergences vs the shipped
-classifier (capture-induced borrowing + native-return metadata) — an automatically-produced work-list
-that guessing would not have found.
+independent call handling surfaced 22 concrete divergences vs the shipped classifier; adjudicating
+them (3.4a) proved **all 22 were a single unsoundness in the NEW implementation** — the friendly
+first-target case, exactly as the principle predicts — a projection local mis-routed to `Owned`.
+The cross-check produced the work-list AND, on adjudication, pinned it to one root cause the newer
+impl owned; guessing would not have found it. (A residual divergence indicting the *shipped* impl —
+the A1b catch — is the later, matured-oracle case; not yet reached.)
 
 ## Design decisions (recommendations; the forks are Open questions below)
 
