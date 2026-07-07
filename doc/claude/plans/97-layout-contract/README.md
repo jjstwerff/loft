@@ -50,8 +50,10 @@ A running app hands its store to a new build. The **layout-algo hash decides the
   Bit-identical, zero-copy. Nothing to serialize.
 - **Changed layout** (`new.hash != old.hash`): the old, still-running version **serializes its
   live data before the handoff** (to the schema-described neutral form — the sidecar schema +
-  values); the new version deserializes into its new layout (E1 Drop&Add, or E2 migration). The
-  app lives through the version change.
+  values); the new version deserializes into its new layout. The app lives through the change.
+  **Add&Drop needs no special mechanism — it falls out of this one path:** lenient deserialize
+  *defaults* an added part and *ignores* a dropped one (E1). Only a *reshape* (E2) needs custom
+  logic — and even that decomposes into Add/Drop steps (below).
 
 The one thing you must have is **knowing which case you are in** — the hash comparison. Without it
 (today) the swap silently assumes "identical" and corrupts on any layout-changing fix. So the
@@ -110,8 +112,8 @@ static type is a finding to fix, not a blocker — that discovery is the value.
 | **B** — Golden layout-conformance test *(the instrument)* | For the corpus spanning **every** cell: pin exact bytes on both backends; **self-audit** that a new `Type`/structure kind cannot be added without a corpus entry (enumerate variants → assert coverage). This is what would have caught #477 | Open |
 | **C** — `formal/layout.md` | The written `layout(τ)` contract (per-type size/align/offsets, header format, `DbRef` encoding, null representation, the nullable/keyed-dense/narrow-int axes) + the sidecar format + the invariant *"no silent cross-version misread"*; rules + deviation `D-layout-1` (cite #477). Wire into `formal/README.md` + `formal/ROADMAP.md` | Open |
 | **D** — Schema-description sidecar *(self-describing store)* | A separate file (the `.dmeta` pattern) carrying `(data_to_json schema, layout-algo hash)`; on load, compare vs the program's in-memory identity → identical / Drop&Add-compatible / needs-migration / reject-via-`on_corruption`. Payload untouched. Enabler for E | Open |
-| **E1** — Formal schema switch: **Drop&Add** *(first)* | The serialize-before-handoff path taken when the hash says layouts differ: a formal, verified A→B transition for additive/subtractive schema change — part added → default/null, part dropped → ignored. The lenient-serialization contract (already partial in 08-S5 `show_json`/`populate_struct_from_jsonvalue`) made formal over the store, using the sidecar's old schema as the map | Open |
-| **E2** — Formal schema switch: **data migration** *(later — deferred)* | Read old-layout bytes with the old schema (from the sidecar), transform, rewrite in the new layout. **Trigger:** a real layout change must preserve live data (dogfood-driven) | Deferred |
+| **E1** — Add&Drop *(falls out of the shared path)* | **Not a dedicated mechanism** — it IS the handoff's serialize→deserialize path with the hash as trigger (D): lenient deserialize *defaults* an added part and *ignores* a dropped one (the 08-S5 `show_json`/`populate_struct_from_jsonvalue` behaviour, made formal over the store, using the sidecar's old schema as the map). E1's work is to **prove** the shared path + lenient rules cover every additive/subtractive change — no new code path | Open |
+| **E2** — Data migration: reshape *(later — deferred)* | The hard but **rare** case: values must be *transformed*, not just added/dropped. **Simplify via expand→contract:** never reshape in place — go through an intermediate **superset** schema so every *step* is a pure Add or pure Drop (E1's path), and the only custom logic is an **additive backfill** (compute new from old) while both coexist. Bounds the hard part to the backfill. **Trigger:** a real reshape must preserve live data (dogfood-driven) | Deferred |
 
 ## Phase ordering
 
@@ -134,8 +136,10 @@ static type is a finding to fix, not a blocker — that discovery is the value.
    future kinds.
 4. **Sidecar placement vs. @PLAN38:** does the schema sidecar extend the existing `.dmeta`, or is
    it a second sidecar? (One file is simpler; `.dmeta` is currently fixed-size integrity only.)
-5. **Drop&Add scope (E1):** which changes are "parts" (fields, enum arms, vector element widening)
-   vs. changes that *require* E2 (reordering that shifts offsets, type narrowing that loses bits).
+5. **Add/Drop vs. reshape boundary:** which changes are pure add/drop (E1's shared path handles
+   them — fields, enum arms, widening) vs. a reshape that needs E2 (reordering, narrowing that
+   loses bits) — and how far **expand→contract** can decompose a given reshape into a sequence of
+   pure Add/Drop steps + an additive backfill, shrinking E2's custom code toward zero.
 
 ## Cross-arc dependencies
 
