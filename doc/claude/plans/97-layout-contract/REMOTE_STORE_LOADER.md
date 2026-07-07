@@ -218,10 +218,11 @@ NOT reverse-engineered bytes), runs `paged_reader::find_hash_entry` (a read-only
 `hash::find`), then FLAT-copies the matched record's scalar fields into a fresh `local` claim and
 links it via the verified `hash::add` (no relocation — flat struct has no owned children). Wired as
 `n_store_load_key` (native.rs, ungated-by-mmap) + the `store_load_key` builtin (02_files.loft).
-**Verified interpret + native, leak-clean:** the requested key loads with the right value,
-un-requested keys are absent, `len == 1` (bounded working set) —
-`store_persist_loft.rs::store_load_key_loads_only_the_requested_key_both_backends`. `LOFT_LOADER_STATS`
-prints `bytes_fetched` vs file for the ≪-file check at scale.
+**Verified interpret + native + wasip2 (wasmtime), leak-clean:** the requested key loads with the
+right value, un-requested keys are absent, `len == 1` (bounded working set) —
+`store_persist_loft.rs::store_load_key_loads_only_the_requested_key_both_backends` (+ a `loadkey`
+run under wasmtime with the fixture preopened). `LOFT_LOADER_STATS` prints `bytes_fetched` vs file
+for the ≪-file check at scale.
 
 **Remaining Phase 3 (3b+):** multiple keys (a `vector` arg) · Sorted key path · text/float key types
 in `key_compare_reader` · the identity gate at bootstrap · **the relocating graph-copy** for
