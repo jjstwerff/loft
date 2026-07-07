@@ -261,24 +261,35 @@ is all **native-testable**; ONLY the JS integration (P3.4) needs headless-Chromi
 **live-frame eval** primitive is **shared** — it closes P1b AND powers the browser `eval`, so build +
 verify it once, natively. Each step is one commit with its verification green before the next.
 
-**P1b / shared — the live-frame eval primitive (do first; small, native, unblocks the browser eval):**
-- Add `eval_frame_expr(expr)`: compile `expr` in the PAUSED function's variable scope, evaluate over
-  the paused frame via `reenter_dbg` (reads live locals), replacing the text-reconstruct for the
-  heap-local case. **Verify** (native, `loft debug --rpc`): in a keyed-collection frame
-  `eval "h[\"a\"]"` → the value (was `null`); the P1 vector matrix still passes. Guard: a keyed case in
-  `tests/rpc.rs::rpc_eval_and_set_in_a_vector_local_frame`.
+**P1b / shared — the live-frame eval primitive ✅ LANDED (see § A1b above).**
 
-**P3.1 — embedded-source bootstrap (native):**
-1. Refactor `bootstrap` → a shared core; add `bootstrap_from_bytes(fn_names, stdlib_src, program_src)`.
-   **Verify** (native `#[test]`): `bootstrap_from_bytes(FNS, <default stdlib read at test time>,
-   "fn main(){print(\"hi\");}")` → Ok, and the parked `Stores` resolves `n_main` + a known stdlib def;
-   def-count matches fs `bootstrap`.
-2. Codegen emits `static LOFT_STDLIB` / `LOFT_SRC` blobs under the live build. **Verify**:
-   `loft --native-emit x.rs prog.loft` → grep shows the blobs (program text present, stdlib non-empty);
-   `rustc` compiles `x.rs`.
+**P3.1 — embedded-source bootstrap ✅ LANDED (2026-07-07):**
+1. ✅ Refactored `bootstrap` → shared `bootstrap_core`; added
+   `bootstrap_from_bytes(fn_names, program_src)` (the stdlib is the LINKED
+   `stdlib_sources::STDLIB_SOURCES` — no need to pass it) + `Parser::parse_source` (the
+   fs-free, all-targets twin of `parse`). **Verified**
+   (`live_dispatch::tests::bootstrap_from_bytes_parses_a_fs_identical_world`): embedded parse parks the
+   SAME def-count as the fs path, `n_main` resolves; `bootstrap_from_bytes_ok` runs the full
+   parse+byte-code+park.
+2. ✅ Codegen emits `static LOFT_SRC: Option<&str>` under the live build (`Output::program_src`, set
+   from the program file in `main.rs`); the boot call is `boot_stores(LOFT_LIVE_FNS, LOFT_SRC)`.
+   **Verified**: `loft --native-emit x.rs prog.loft` → the blob + program text are present and `rustc`
+   compiles it (`loft --native prog.loft` → correct output).
+3. ✅ `boot_stores` prefers fs when `LOFT_LIVE_SRC` is set (arms tier-0 reload) and the EMBEDDED bytes
+   otherwise. **Verified** end-to-end: the cached `--native` binary run with `LOFT_LIVE_SRC` UNSET,
+   `LOFT_LIVE_FLIP=1 LOFT_FLIP_FNS=addup` → `live-flip: n_addup -> interp`, `live-dispatch: n_addup #1`,
+   correct result — the embedded-parked interpreter dispatches a flipped fn with no filesystem source.
+   *(The design differs from the plan's original "emit a `LOFT_STDLIB` blob too": the stdlib is baked
+   into `libloft` via `STDLIB_SOURCES`, which the generated program links — so only `LOFT_SRC` needs
+   emitting. Multi-file/lib programs embed only the main file today; libs stay the fs follow-up.)*
+
+<details><summary>original P3.1 plan (superseded by the above)</summary>
+
 3. The bootstrap entry prefers the embedded blobs (falls back to fs). **Verify** (native): a `--native`
    live build runs correctly via the embedded bootstrap (`LOFT_LIVE_SRC` unset); def-count byte-identical
    to the fs path.
+
+</details>
 
 **P3.2 — cooperative pause (native — the browser only reuses it):**
 1. A `debug_yield` flag (mirror `frame_yield`); the breakpoint hook sets it + returns from `execute`,

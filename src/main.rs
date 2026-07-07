@@ -6034,6 +6034,10 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
             // resolve by d_nr so the renamed def stays consistent).
             p.data.namespace_colliding_native_fns();
             let mut out = generation::Output::new(&p.data, &state.database);
+            // @PLN98 P3.1 — embed the program's own source so a live build can
+            // bootstrap the parked interpreter from BYTES (no `LOFT_LIVE_SRC` file)
+            // — the browser/wasm delivery.  Best-effort: unreadable → fs fallback.
+            out.program_src = std::fs::read_to_string(&abs_file).ok();
             // Host-native backend: link each `#native` package's cdylib by C-ABI
             // (`extern "C"` decls + `.so`), not its rlib — see NATIVE.md
             // § Resolution: separate the API id from the Rust part.  The shared

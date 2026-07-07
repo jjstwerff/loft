@@ -96,10 +96,23 @@ pub fn live_enabled() -> bool {
 /// `LOFT_LIVE_FLIP=1` the returned stores are the bootstrap world (the parse
 /// seeded types, CONST_STORE, const vectors — `init` must be skipped);
 /// otherwise a plain `Stores::new()` (caller runs `init` as always).
+///
+/// `embedded_src` is the program's own source, emitted as a `LOFT_SRC` blob
+/// (@PLN98 P3.1).  Source selection: when `LOFT_LIVE_SRC` is set (the loft
+/// driver requesting the FILESYSTEM path — which also arms the tier-0 reload
+/// watcher), bootstrap from the file; otherwise bootstrap from the EMBEDDED
+/// bytes (a browser/wasm build, or a standalone binary run without the driver).
+/// Either way the parked world is id-compatible with the compiled code.
 #[must_use]
-pub fn boot_stores(fn_names: &'static [&'static str]) -> Stores {
+pub fn boot_stores(fn_names: &'static [&'static str], embedded_src: Option<&str>) -> Stores {
     if std::env::var("LOFT_LIVE_FLIP").is_ok_and(|v| v == "1") {
-        match bootstrap(fn_names) {
+        let result = match embedded_src {
+            // A live-reload FILE was named → the fs path (it watches for edits).
+            Some(_) if std::env::var("LOFT_LIVE_SRC").is_ok() => bootstrap(fn_names),
+            Some(src) => bootstrap_from_bytes(fn_names, src),
+            None => bootstrap(fn_names),
+        };
+        match result {
             Ok(stores) => return stores,
             Err(msg) => eprintln!("loft-live: disabled — {msg}"),
         }
@@ -107,8 +120,10 @@ pub fn boot_stores(fn_names: &'static [&'static str]) -> Stores {
     Stores::new()
 }
 
-/// Parse + byte-code the program this binary was generated from, park the
-/// State, and hand its fully-seeded world out to the compiled code.
+/// Parse + byte-code the program this binary was generated from (reading its
+/// source + stdlib from the FILESYSTEM via the `LOFT_LIVE_*` env the loft driver
+/// sets), park the State, and hand its fully-seeded world out to the compiled
+/// code.  The embedded-source twin is [`bootstrap_from_bytes`].
 fn bootstrap(fn_names: &'static [&'static str]) -> Result<Stores, String> {
     let src = std::env::var("LOFT_LIVE_SRC")
         .map_err(|_| "LOFT_LIVE_SRC not set (run through the loft driver)".to_string())?;
@@ -127,6 +142,48 @@ fn bootstrap(fn_names: &'static [&'static str]) -> Result<Stores, String> {
     if p.diagnostics.level() >= crate::diagnostics::Level::Error {
         return Err(format!("`{src}` does not parse clean"));
     }
+    Ok(bootstrap_core(p, fn_names, Some((&src, &stdlib))))
+}
+
+/// @PLN98 P3.1 — bootstrap the live interpreter from EMBEDDED source: the baked-in
+/// stdlib ([`stdlib_sources::STDLIB_SOURCES`](crate::stdlib_sources::STDLIB_SOURCES))
+/// plus the program's own source passed as `program_src`, with no `default/`
+/// directory and no `LOFT_LIVE_SRC` file to read.  This is the delivery a
+/// browser/wasm live build needs (no filesystem): a generated `loft_start_live`
+/// hands its emitted `LOFT_SRC` blob down here.  Parses the SAME world the fs
+/// [`bootstrap`] would, then shares [`bootstrap_core`] — so the parked interpreter
+/// is byte-for-byte the fs path's, minus the tier-0 reload watcher (no source file
+/// to watch).
+///
+/// # Errors
+/// When the embedded stdlib or the program does not parse clean.
+pub fn bootstrap_from_bytes(
+    fn_names: &'static [&'static str],
+    program_src: &str,
+) -> Result<Stores, String> {
+    let mut p = Box::new(crate::parser::Parser::new());
+    for (name, content) in crate::stdlib_sources::STDLIB_SOURCES {
+        if !p.parse_source(content, name, true) {
+            return Err(format!("embedded stdlib `{name}`: {}", p.diagnostics));
+        }
+    }
+    p.parse_source(program_src, "program.loft", false);
+    if p.diagnostics.level() >= crate::diagnostics::Level::Error {
+        return Err("embedded program does not parse clean".to_string());
+    }
+    Ok(bootstrap_core(p, fn_names, None))
+}
+
+/// The shared tail of both bootstraps: byte-code the parsed world, wire the
+/// interpreter's raw pointers, resolve the generated fn table, and PARK the State
+/// (handing the seeded `Stores` out to the compiled code).  `reload` carries the
+/// `(src, stdlib)` paths for the fs path's tier-0 live-reload watcher; `None` for
+/// the embedded path (no source file to watch).
+fn bootstrap_core(
+    mut p: Box<crate::parser::Parser>,
+    fn_names: &'static [&'static str],
+    reload: Option<(&str, &str)>,
+) -> Stores {
     crate::scopes::check(&mut p.data);
     let mut state = Box::new(State::new(p.database.clone()));
     crate::compile::byte_code(&mut state, &mut p.data);
@@ -163,11 +220,16 @@ fn bootstrap(fn_names: &'static [&'static str]) -> Result<Stores, String> {
     // @PLN18 08-S3 — tier-0 live reload over the parked interpreter: an
     // edit to a FLIPPED fn lands as new bytecode + a fn_positions patch
     // (live_reload.rs), which the per-dispatch resolution picks up.  The
-    // compiled tier never changes — that is S4/S5's rebuild-and-swap.
+    // compiled tier never changes — that is S4/S5's rebuild-and-swap.  Only the
+    // fs bootstrap watches a source file; the embedded path passes `None`.
     #[cfg(not(target_arch = "wasm32"))]
-    if std::env::var("LOFT_LIVE_RELOAD").is_ok_and(|v| v != "0") {
-        crate::live_reload::install(&src, &stdlib, &p.lib_dirs, &p.data);
+    if let Some((src, stdlib)) = reload
+        && std::env::var("LOFT_LIVE_RELOAD").is_ok_and(|v| v != "0")
+    {
+        crate::live_reload::install(src, stdlib, &p.lib_dirs, &p.data);
     }
+    #[cfg(target_arch = "wasm32")]
+    let _ = reload;
     let _ = RESOLVED.set(resolved.into_boxed_slice());
     let _ = FLIPS.set(
         (0..fn_names.len())
@@ -201,7 +263,7 @@ fn bootstrap(fn_names: &'static [&'static str]) -> Result<Stores, String> {
             }
         }
     }
-    Ok(stores)
+    stores
 }
 
 /// Flip one fn (loft name, without the `n_` prefix) to the interpreter (`on`)
@@ -788,4 +850,72 @@ pub fn n_kernel_rebuild_artifact_dest(stores: &mut Stores, stack: &mut DbRef) {
         .store_mut(&dest)
         .addr_mut::<String>(dest.rec, dest.pos)
         .push_str(&v);
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::parser::Parser;
+
+    /// Parse the fs stdlib + `program_path` the way [`bootstrap`] does (`parse_dir`
+    /// + `parse`), through the final `scopes::check`, and return
+    /// `(def_count, n_main_resolves)`.
+    fn parse_fs(program_path: &str) -> (u32, bool) {
+        let mut p = Parser::new();
+        p.parse_dir("default", true, false).expect("parse default/");
+        assert!(p.parse(program_path, false), "fs program parses");
+        crate::scopes::check(&mut p.data);
+        (p.data.definitions(), p.data.def_nr("n_main") != u32::MAX)
+    }
+
+    /// Parse the EMBEDDED stdlib + `program_src` the way [`bootstrap_from_bytes`]
+    /// does (`parse_source` over `STDLIB_SOURCES`), through the final
+    /// `scopes::check`.
+    fn parse_embedded(program_src: &str) -> (u32, bool) {
+        let mut p = Parser::new();
+        for (name, content) in crate::stdlib_sources::STDLIB_SOURCES {
+            assert!(
+                p.parse_source(content, name, true),
+                "embedded stdlib {name} parses"
+            );
+        }
+        assert!(
+            p.parse_source(program_src, "program.loft", false),
+            "embedded program parses"
+        );
+        crate::scopes::check(&mut p.data);
+        (p.data.definitions(), p.data.def_nr("n_main") != u32::MAX)
+    }
+
+    // @PLN98 P3.1 — the embedded-source parse must park the SAME world the fs path
+    // does (the browser build has no `default/` dir / `LOFT_LIVE_SRC` file): same
+    // def-count, `n_main` resolved, stdlib present.
+    #[test]
+    fn bootstrap_from_bytes_parses_a_fs_identical_world() {
+        let program = "fn main() {\n  print(\"hi\")\n}\n";
+        let path = std::env::temp_dir().join(format!("loft_p31_{}.loft", std::process::id()));
+        std::fs::write(&path, program).unwrap();
+        let (fs_defs, fs_main) = parse_fs(path.to_str().unwrap());
+        let (emb_defs, emb_main) = parse_embedded(program);
+        let _ = std::fs::remove_file(&path);
+        assert!(fs_main && emb_main, "n_main resolves in both paths");
+        assert!(
+            fs_defs > 100,
+            "stdlib is present (fs def count = {fs_defs})"
+        );
+        assert_eq!(
+            emb_defs, fs_defs,
+            "embedded parse parks the same def-count as fs"
+        );
+    }
+
+    // @PLN98 P3.1 — the full embedded bootstrap (parse + byte-code + wire + park)
+    // succeeds and hands out a seeded world.  Parks the process-global LIVE
+    // interpreter, so it relies on nextest's per-test process isolation.
+    #[test]
+    fn bootstrap_from_bytes_ok() {
+        static FNS: &[&str] = &["n_main"];
+        let stores = super::bootstrap_from_bytes(FNS, "fn main() {\n  print(\"hi\")\n}\n")
+            .expect("bootstrap_from_bytes succeeds");
+        assert!(!stores.types.is_empty(), "parked world carries a schema");
+    }
 }

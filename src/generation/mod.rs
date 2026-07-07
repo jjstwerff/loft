@@ -586,6 +586,13 @@ pub struct Output<'a> {
     /// sets it `false`, so the generated Rust carries ZERO live-dispatch
     /// machinery — the smallest release binary, no live-flip / breakpoints.
     pub emit_live: bool,
+    /// @PLN98 P3.1 — the program's own source text, emitted as a `static LOFT_SRC`
+    /// blob in a live build so the parked interpreter can bootstrap from EMBEDDED
+    /// bytes ([`live_dispatch::bootstrap_from_bytes`](crate::live_dispatch::bootstrap_from_bytes))
+    /// with no `LOFT_LIVE_SRC` file — the delivery a browser/wasm build needs.
+    /// `None` (the check-only / non-native emit) → `LOFT_SRC = None`, so the boot
+    /// falls back to the filesystem path.
+    pub program_src: Option<String>,
 }
 
 /// Use this to convert loft names that contain `#` into valid Rust identifiers.
@@ -1060,6 +1067,7 @@ impl<'a> Output<'a> {
                 .collect(),
             live_fns: Vec::new(),
             emit_live: true,
+            program_src: None,
         }
     }
 }
@@ -1817,13 +1825,21 @@ extern crate loft;"
                 write!(w, "{n:?}, ")?;
             }
             writeln!(w, "];")?;
+            // @PLN98 P3.1 — the program's own source, embedded so the live boot can
+            // bootstrap the parked interpreter from BYTES (no `LOFT_LIVE_SRC` file)
+            // when the fs source is absent — the browser/wasm delivery.  `{:?}`
+            // emits a valid escaped Rust string literal.
+            match &self.program_src {
+                Some(src) => writeln!(w, "static LOFT_SRC: Option<&str> = Some({src:?});")?,
+                None => writeln!(w, "static LOFT_SRC: Option<&str> = None;")?,
+            }
             // Emits `fn main`: arm the timeout watchdog + fail-fast (halt-at-op like the
             // interpreter, #333), then run init + n_main on a large-stack thread (@PLN28:
             // deep recursion trips MAX_CALL_DEPTH cleanly instead of overflowing the
             // ~8 MiB OS main-thread stack), then the optional native leak check.
             write!(
                 w,
-                "\nfn main() {{\n    loft::timeout::arm(loft::timeout::env_timeout_secs(), loft::timeout::env_grace_secs());\n    loft::database::NATIVE_FAIL_FAST.store(true, std::sync::atomic::Ordering::Relaxed);\n    std::thread::Builder::new().stack_size(loft::codegen_runtime::NATIVE_MAIN_STACK).spawn(|| {{\n    let cell = std::cell::UnsafeCell::new(loft::live_dispatch::boot_stores(LOFT_LIVE_FNS));\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); stores.source_dir = Stores::source_dir_native(); stores.program_relative = LOFT_PROGRAM_RELATIVE; if let Ok(m) = std::env::var(\"LOFT_PATHS\") {{ stores.program_relative = m.eq_ignore_ascii_case(\"program\"); }} }}\n    if !loft::live_dispatch::live_enabled() {{ init(&cell); }}\n    n_main(&cell);\n    {{ let stores: &Stores = unsafe {{ &*cell.get() }}; if stores.had_fatal {{ std::process::exit(1); }} }}\n"
+                "\nfn main() {{\n    loft::timeout::arm(loft::timeout::env_timeout_secs(), loft::timeout::env_grace_secs());\n    loft::database::NATIVE_FAIL_FAST.store(true, std::sync::atomic::Ordering::Relaxed);\n    std::thread::Builder::new().stack_size(loft::codegen_runtime::NATIVE_MAIN_STACK).spawn(|| {{\n    let cell = std::cell::UnsafeCell::new(loft::live_dispatch::boot_stores(LOFT_LIVE_FNS, LOFT_SRC));\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); stores.source_dir = Stores::source_dir_native(); stores.program_relative = LOFT_PROGRAM_RELATIVE; if let Ok(m) = std::env::var(\"LOFT_PATHS\") {{ stores.program_relative = m.eq_ignore_ascii_case(\"program\"); }} }}\n    if !loft::live_dispatch::live_enabled() {{ init(&cell); }}\n    n_main(&cell);\n    {{ let stores: &Stores = unsafe {{ &*cell.get() }}; if stores.had_fatal {{ std::process::exit(1); }} }}\n"
             )?;
             writeln!(w, "    if !loft::live_dispatch::live_enabled() {{")?;
             w.write_all(NATIVE_LEAK_CHECK_TAIL.as_bytes())?;
