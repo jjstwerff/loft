@@ -26,6 +26,11 @@ test at commit time — not by invalidated data — plus a **separate schema-des
 that makes a persisted store self-describing (never silently misread) and the basis for a
 **formal schema switch** (Drop&Add first, data migration later).
 
+**Not a freeze.** The layout *will* change — that is expected. The contract's job is to make
+each change **deliberate and detected** (a red golden test + a re-derived layout-algo hash),
+never a silent slip, and to tell the reload/persistence path exactly **when** a handoff needs
+the old data serialized first.
+
 ## Why this is load-bearing
 
 This is not persistence hygiene — a lot of loft rides on it. **Reloading a binary without
@@ -36,6 +41,23 @@ migrated**. Today it is *assumed* identical with nothing that checks it, so a la
 fix silently corrupts a hot-swap or a persisted store. Same premise under live-reload, the
 durable store ([plans/43](../43-loft-store-durable/)), and any future persistence. This plan is
 the safety floor beneath all of them.
+
+### The handoff — how an app lives through a layout change
+
+A running app hands its store to a new build. The **layout-algo hash decides the handoff**:
+
+- **Identical layout** (`new.hash == old.hash` — the common rebuild): hand over the raw store.
+  Bit-identical, zero-copy. Nothing to serialize.
+- **Changed layout** (`new.hash != old.hash`): the old, still-running version **serializes its
+  live data before the handoff** (to the schema-described neutral form — the sidecar schema +
+  values); the new version deserializes into its new layout (E1 Drop&Add, or E2 migration). The
+  app lives through the version change.
+
+The one thing you must have is **knowing which case you are in** — the hash comparison. Without it
+(today) the swap silently assumes "identical" and corrupts on any layout-changing fix. So the
+layout-algo hash is not merely a persistence guard; it is the **handoff decision variable** for
+live reload. (08-S5 already serializes via `show_json` *unconditionally*; this makes it
+*conditional and correct* — raw when safe, serialize-first when the hash says it must.)
 
 ## The one format (no split — FINAL)
 
@@ -88,7 +110,7 @@ static type is a finding to fix, not a blocker — that discovery is the value.
 | **B** — Golden layout-conformance test *(the instrument)* | For the corpus spanning **every** cell: pin exact bytes on both backends; **self-audit** that a new `Type`/structure kind cannot be added without a corpus entry (enumerate variants → assert coverage). This is what would have caught #477 | Open |
 | **C** — `formal/layout.md` | The written `layout(τ)` contract (per-type size/align/offsets, header format, `DbRef` encoding, null representation, the nullable/keyed-dense/narrow-int axes) + the sidecar format + the invariant *"no silent cross-version misread"*; rules + deviation `D-layout-1` (cite #477). Wire into `formal/README.md` + `formal/ROADMAP.md` | Open |
 | **D** — Schema-description sidecar *(self-describing store)* | A separate file (the `.dmeta` pattern) carrying `(data_to_json schema, layout-algo hash)`; on load, compare vs the program's in-memory identity → identical / Drop&Add-compatible / needs-migration / reject-via-`on_corruption`. Payload untouched. Enabler for E | Open |
-| **E1** — Formal schema switch: **Drop&Add** *(first)* | A formal, verified A→B transition for additive/subtractive schema change — part added → default/null, part dropped → ignored. The lenient-serialization contract (already partial in 08-S5 `show_json`/`populate_struct_from_jsonvalue`) made formal over the store, using the sidecar's old schema as the map | Open |
+| **E1** — Formal schema switch: **Drop&Add** *(first)* | The serialize-before-handoff path taken when the hash says layouts differ: a formal, verified A→B transition for additive/subtractive schema change — part added → default/null, part dropped → ignored. The lenient-serialization contract (already partial in 08-S5 `show_json`/`populate_struct_from_jsonvalue`) made formal over the store, using the sidecar's old schema as the map | Open |
 | **E2** — Formal schema switch: **data migration** *(later — deferred)* | Read old-layout bytes with the old schema (from the sidecar), transform, rewrite in the new layout. **Trigger:** a real layout change must preserve live data (dogfood-driven) | Deferred |
 
 ## Phase ordering
