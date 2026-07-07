@@ -5,9 +5,23 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # 98 — Live/debug tier: one primitive (the interpreter over the shared live store)
 
-**Status:** DESIGN, refined against a full code map (2026-07-07) · [`@PLN98`](https://github.com/loft-lang/plans/issues/98) ·
-`subject:loft` · design-doc-first (Design Protocol 1). Consumers: the `@PLN16` debugger, the game /
-`engine_host` loop, and `routing`'s offline `--html` build (its `loft-feedback.md` 2026-07-07).
+**Status (2026-07-07):** P1 ✅ + P2 ✅ LANDED; P3 DESIGNED + de-risked + feasibility-confirmed ·
+[`@PLN98`](https://github.com/loft-lang/plans/issues/98) · `subject:loft` · design-doc-first (Design
+Protocol 1). Consumers: the `@PLN16` debugger, the game / `engine_host` loop, and `routing`'s offline
+`--html` build (its `loft-feedback.md` 2026-07-07).
+
+> ## ▶ RESUME HERE (post-`/clear` handoff)
+>
+> **Branch `tuxedo-pln98-live-tier`** (off `origin/main`, pushed, UNMERGED — no PR opened yet). Holds:
+> the design doc + **P1** (debug `eval`/`setValue` fixed in heap-local frames, `src/repl.rs`) +
+> **P2** (`--lean` codegen flag strips the live tier, `src/generation/mod.rs` + `src/main.rs`) + the
+> **P3 design**. All committed; working tree clean. Related: **PR #525** (catalog `@I60` tag) is CLEAN +
+> open, mergeable; **@PLN94** oracle merged (#524).
+> **Next action:** open the `pln98` PR, and/or start the **implementation ladder in § A2** — the natural
+> first step is the **shared live-frame eval primitive** (closes P1b *and* powers the browser `eval`),
+> then **P3.1** (embedded-source bootstrap). Steps through P3.3 are NATIVE-testable; only P3.4 needs
+> headless-Chromium. Each step names its verification. Full context in [`../pln98-live-tier`] memory +
+> this doc.
 
 Prior art this COMPLETES (not greenfield): `@PLN16` (debugger, `status:finished`) and `@PLN18`/`@I78`
 (engine-host live tier — phase 08 `08-live-build-swap.md` shipped for native). The primitive is proven;
@@ -215,9 +229,57 @@ is the *interpreter* tier, not module relink.
   the new body; a compiled write then an interpreted read of the same var agree (one heap, not two).
 
 **Recommended order:** P3.1 (foundation, native-testable) → P3.3 (control, reuses shipped channel) →
-P3.2 (the pause — prototype the mid-call `resume_frame` probe FIRST, it gates feasibility) → P3.4
-(driver + headless acceptance). If the P3.2 probe fails (no mid-call resume), that is the real hard
-blocker and the plan re-scopes there.
+P3.2 (the pause — mid-call resume already confirmed feasible above) → P3.4 (driver + headless
+acceptance).
+
+### The implementation ladder — every step natively verified
+
+Two facts make this cheap: (1) the *interpreter side* of the browser tier — bootstrap, pause, control —
+is all **native-testable**; ONLY the JS integration (P3.4) needs headless-Chromium. (2) the
+**live-frame eval** primitive is **shared** — it closes P1b AND powers the browser `eval`, so build +
+verify it once, natively. Each step is one commit with its verification green before the next.
+
+**P1b / shared — the live-frame eval primitive (do first; small, native, unblocks the browser eval):**
+- Add `eval_frame_expr(expr)`: compile `expr` in the PAUSED function's variable scope, evaluate over
+  the paused frame via `reenter_dbg` (reads live locals), replacing the text-reconstruct for the
+  heap-local case. **Verify** (native, `loft debug --rpc`): in a keyed-collection frame
+  `eval "h[\"a\"]"` → the value (was `null`); the P1 vector matrix still passes. Guard: a keyed case in
+  `tests/rpc.rs::rpc_eval_and_set_in_a_vector_local_frame`.
+
+**P3.1 — embedded-source bootstrap (native):**
+1. Refactor `bootstrap` → a shared core; add `bootstrap_from_bytes(fn_names, stdlib_src, program_src)`.
+   **Verify** (native `#[test]`): `bootstrap_from_bytes(FNS, <default stdlib read at test time>,
+   "fn main(){print(\"hi\");}")` → Ok, and the parked `Stores` resolves `n_main` + a known stdlib def;
+   def-count matches fs `bootstrap`.
+2. Codegen emits `static LOFT_STDLIB` / `LOFT_SRC` blobs under the live build. **Verify**:
+   `loft --native-emit x.rs prog.loft` → grep shows the blobs (program text present, stdlib non-empty);
+   `rustc` compiles `x.rs`.
+3. The bootstrap entry prefers the embedded blobs (falls back to fs). **Verify** (native): a `--native`
+   live build runs correctly via the embedded bootstrap (`LOFT_LIVE_SRC` unset); def-count byte-identical
+   to the fs path.
+
+**P3.2 — cooperative pause (native — the browser only reuses it):**
+1. A `debug_yield` flag (mirror `frame_yield`); the breakpoint hook sets it + returns from `execute`,
+   preserving the State-held stack. **Verify** (native `#[test]`): a program with a breakpoint →
+   `execute` returns with `debug_yield` set + the paused frame capturable; a resume continues to
+   completion with correct output.
+2. `resume_debug(session, cmd)` re-enters `execute` after applying a control command. **Verify**
+   (native): pause → `eval "2+2"` (the shared primitive) → resume → correct output.
+
+**P3.3 — control over `host_input` (native — inject into the channel):**
+1. A debug pump reads control frames from `host_input` and feeds `debug_cmd_dispatch` (the existing TCP
+   frame parser, `engine_host.rs:1980`). **Verify** (native): inject a `D!:bp main` frame via the input
+   channel (a test hook) → the breakpoint is set (assert via the pause firing).
+2. Tag debug frames vs program input so they do not collide on the one queue. **Verify** (native):
+   interleave a program `host_input()` read + a debug frame → each reaches the right consumer.
+
+**P3.4 — JS driver + opt-in + acceptance (the ONLY browser-needed steps):**
+1. `loft_start` opts into the tier under the live flag (embedded bootstrap + arm the debug pump).
+   **Verify**: emitted wasm has the live `loft_start`; a native equivalent runs.
+2. The JS debug driver (extend `doc/loft-gl-wasm.js`) — `host_input` control + debug output. **Verify**
+   (headless-Chromium): load the `--html` live build, set a breakpoint, eval, resume.
+3. Acceptance — routing's headless-Chromium parity: breakpoint + `eval` a vector expr → value; edit a
+   fn → live world updates; a compiled write then interpreted read of the same var agree (one heap).
 
 ### A3 — packaging: `--lean` opt-OUT, default LIVE (F3) ✅ LANDED (P2)
 
