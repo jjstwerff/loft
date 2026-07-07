@@ -98,6 +98,26 @@ consistency layer beside it.
 comprehensive transfer tracking. The fact-precision win (153→0) and the dev-tier/ratchet workflow
 stand; the true-positive is the next real piece.
 
+**UPDATE (2026-07-07) — the leak scan is now a CLEAN, SOUND definite-leak check (its own `check-leak`
+tier).** Applying the "raise-it-→-flag-it, never revert" rule, the all-vars scan was parked behind
+`LOFT_OWN_ORACLE=check-leak` with its own ratchet (baseline 927), then chipped down:
+- **The MINTED recognizer** (only an `OpDatabase` target owns a store; a type-dep-only phantom like
+  `__retbuf` has none) dropped **927 → 0** — `__retbuf` alone was ~889, and the rest were non-minted
+  temps.
+- **The transfer split** (the bug the true-positive exposed): RETURN seeds close transitively through
+  the dep; consume/capture seeds do NOT (an element absorbed into a LOCAL container leaves the
+  container leak-checked). + the shipped `skip_free`/`caller_hidden_buf` flags.
+- **True-positive fires:** a cached test-only `get_free_vars` hook `LOFT_OWN_INJECT_DROP_FREE` drops a
+  named owned var's free; `oracle_leak_scan_flags_an_injected_leak` asserts `check-leak` RED on
+  `__vdb_1` (probe 07) — not vacuous. 0 FP across scripts+docs+lib+examples (~521 files).
+- **KNOWN GAPS (documented, not FPs):** conditional/`Join` leaks (`LOFT_NO_JOIN_OWN` — the runtime
+  leak-check's class), leaks of adopted-owned non-`OpDatabase` stores, and closure bodies.
+
+So the under-free direction the user asked for is REAL now — a sound definite-leak scan, gated as
+`check-leak`, `LEAK_SCAN_BASELINE=0`. Promotion to `check` = fold `run_leak_scan` into the default
+path (it is clean + has a true-positive); the remaining gaps are the conditional/adopted/closure
+extensions, chipped at leisure by the same ratchet.
+
 The false-positive MACHINERY already works: the heap-type filter (70–124 → 9–35/file) and the
 transfer-out set (returned ∪ consumed-into-container, → 0–4/file on the small corpus) are in
 `run_free_checks`; the residual 153 is the fact-precision blocker above, not the machinery.
