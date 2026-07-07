@@ -258,6 +258,10 @@ fn vec_script() -> PathBuf {
     workspace_root().join("tests/scripts/store_load_vec.loft")
 }
 
+fn textkey_script() -> PathBuf {
+    workspace_root().join("tests/scripts/store_load_textkey.loft")
+}
+
 fn nested_script() -> PathBuf {
     workspace_root().join("tests/scripts/store_load_nested.loft")
 }
@@ -573,6 +577,40 @@ fn store_load_key_over_http_range() {
         assert!(
             out.contains("loadkey verify=true"),
             "{backend}: the working set fetched over http must be sound: {out:?}"
+        );
+    }
+}
+
+/// @PLN97 arc G Phase 3b.6 — a TEXT-keyed hash (`hash<Place[name:text]>`) is
+/// partially loadable by string key: `store_load_key_text` finds by hashing the
+/// Content::Str and comparing the entry's text key over the reader. The loaded
+/// entry reads correctly, un-requested keys are absent, and it's sound. Both
+/// backends.
+#[test]
+fn store_load_key_text_both_backends() {
+    let dir = scratch("store_load_textkey");
+    let path = dir.join("places.store");
+
+    let (out_w, code_w) = run_mode(&textkey_script(), &path, "write");
+    assert_eq!(code_w, 0, "write: {out_w:?}");
+    assert!(out_w.contains("write ok"), "{out_w:?}");
+
+    for backend in ["--interpret", "--native"] {
+        let (out, code) = run_mode_backend(backend, &textkey_script(), &path, "loadkey");
+        assert_eq!(code, 0, "{backend} loadkey exit: {out:?}");
+        assert!(out.contains("tk loadkey=true"), "{backend}: {out:?}");
+        assert!(
+            out.contains("tk berlin=3700000"),
+            "{backend}: the text-keyed entry must load: {out:?}"
+        );
+        assert!(
+            out.contains("tk amsterdam=-1"),
+            "{backend}: un-requested key absent: {out:?}"
+        );
+        assert!(out.contains("tk len=1"), "{backend}: {out:?}");
+        assert!(
+            out.contains("tk verify=true"),
+            "{backend}: text-keyed working set must be sound: {out:?}"
         );
     }
 }

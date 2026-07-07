@@ -173,6 +173,8 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     #[cfg(feature = "remote-store")]
     ("n_store_load_key", n_store_load_key),
     #[cfg(feature = "remote-store")]
+    ("n_store_load_key_text", n_store_load_key_text),
+    #[cfg(feature = "remote-store")]
     ("n_store_load_keys", n_store_load_keys),
     ("n_eprint", n_eprint),
     ("n_directory", n_directory),
@@ -1258,6 +1260,17 @@ fn n_store_load_key(stores: &mut Stores, stack: &mut DbRef) {
     let v_path = *stores.get::<Str>(stack);
     let v_ref = *stores.get::<DbRef>(stack);
     let ok = stores.load_key(&v_ref, v_path.str(), v_key);
+    stores.put(stack, ok);
+}
+
+/// Interpreter handler for `store_load_key_text` — load ONE text-keyed entry.
+/// Args pop in reverse: key, path, local.  @PLN97 arc G Phase 3b.6.
+#[cfg(feature = "remote-store")]
+fn n_store_load_key_text(stores: &mut Stores, stack: &mut DbRef) {
+    let v_key = *stores.get::<Str>(stack);
+    let v_path = *stores.get::<Str>(stack);
+    let v_ref = *stores.get::<DbRef>(stack);
+    let ok = stores.load_key_text(&v_ref, v_path.str(), v_key.str());
     stores.put(stack, ok);
 }
 

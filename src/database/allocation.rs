@@ -2407,6 +2407,36 @@ impl Stores {
         self.load_keys(local, path, std::slice::from_ref(&key)) > 0
     }
 
+    /// @PLN97 arc G Phase 3b.6 — load ONE TEXT-keyed entry from a persisted
+    /// `hash<T[textkey]>` (e.g. a place-name or z/x/y tile-id index), fetching
+    /// only the pages the lookup touches. Same working-set fetch as
+    /// [`load_key`](Stores::load_key), keyed by a string: `find_hash_entry`
+    /// hashes the `Content::Str`, and the entry's text key is compared over the
+    /// reader. Returns false when absent / unreadable / not an integer-or-text
+    /// -keyed copyable hash.
+    #[cfg(feature = "remote-store")]
+    pub fn load_key_text(&mut self, local: &DbRef, path: &str, key: &str) -> bool {
+        use crate::paged_reader::{PageSource, PagedReader};
+        let Ok(source) = PageSource::open(path) else {
+            return false;
+        };
+        let mut reader = PagedReader::new(source);
+        let tp = self.allocations[local.store_nr as usize].known_type;
+        if tp == u16::MAX {
+            return false;
+        }
+        let content_tp = match self.types[tp as usize].parts {
+            Parts::Hash(c, _) => c,
+            _ => return false,
+        };
+        if !self.is_copyable_entry(content_tp) {
+            return false;
+        }
+        let keys = self.keys(tp).to_vec();
+        let key_content = [crate::keys::Content::Str(crate::keys::Str::new(key))];
+        self.load_one(&mut reader, local, content_tp, &keys, &key_content)
+    }
+
     /// @PLN97 arc G Phase 3a — load the requested integer keys' entries from a
     /// persisted HASH image at `path` into the empty local hash `local`,
     /// fetching only the pages the lookups touch. Returns the count actually
@@ -2446,7 +2476,13 @@ impl Stores {
 
         let mut loaded = 0i64;
         for &kv in keys_vals {
-            if self.load_one(&mut reader, local, content_tp, &keys, kv) {
+            if self.load_one(
+                &mut reader,
+                local,
+                content_tp,
+                &keys,
+                &[crate::keys::Content::Long(kv)],
+            ) {
                 loaded += 1;
             }
         }
@@ -2476,11 +2512,10 @@ impl Stores {
         local: &DbRef,
         content_tp: u16,
         keys: &[crate::keys::Key],
-        key: i64,
+        key_content: &[crate::keys::Content],
     ) -> bool {
-        let key_content = [crate::keys::Content::Long(key)];
         let matched =
-            crate::paged_reader::find_hash_entry(reader, local.rec, local.pos, &key_content, keys);
+            crate::paged_reader::find_hash_entry(reader, local.rec, local.pos, key_content, keys);
         if matched == 0 {
             return false;
         }

@@ -439,6 +439,16 @@ pub fn store_load_key(local: reference, path: text, key: integer) -> boolean fs#
 #rust"stores.load_key(&(@local), @path, @key)"
 #impure(io)
 
+// Text-keyed form of `store_load_key`: fetch ONE entry from a persisted
+// `hash<T[textkey]>` (a place-name / string-id index) into `local`, reading only
+// the pages the lookup touches. Returns false when the key is absent or the
+// collection isn't a copyable text-keyed hash. @PLN97 arc G (loft#522).
+//   places: hash<Place[name]> = []
+//   store_load_key_text(places, "gazetteer.store", "Amsterdam")
+pub fn store_load_key_text(local: reference, path: text, key: text) -> boolean fs#read;
+#rust"stores.load_key_text(&(@local), @path, @key)"
+#impure(io)
+
 // Plural form of `store_load_key`: fetch the given integer keys' entries into
 // `local` in one call (the paged reader is opened once and its cache reused),
 // returning how many were found. Keys absent from the remote are skipped. Same

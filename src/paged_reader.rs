@@ -387,9 +387,22 @@ pub fn find_hash_entry<P: PageProvider>(
     0
 }
 
+/// Read the string at string-record `rec` over the paged reader (fld 4 = length,
+/// fld 8.. = UTF-8 bytes). A `rec == 0` / out-of-range yields the empty string —
+/// `resolve` zero-pads, so this never faults on a wild pointer.
+fn read_reader_str<P: PageProvider>(reader: &mut PagedReader<P>, rec: u32) -> String {
+    if rec == 0 {
+        return String::new();
+    }
+    let len = reader.u32_at(rec, 4) as usize;
+    let bytes = reader.resolve(u64::from(rec) * 8 + 8, len);
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
 /// Compare `key` against the key fields of the entry at `(rec, pos)` in the
 /// paged image — the reader port of `keys::compare_key` for the fixed-width
-/// numeric key types (1/2 = i64 `integer`/`long`, 8/9/10/11 = narrow ints).
+/// numeric key types (1/2 = i64 `integer`/`long`, 8/9/10/11 = narrow ints) and
+/// text keys (6).
 /// Text/float keys (types 6/3/4) are a follow-up (they need a string-record
 /// read / float compare); an unsupported type returns `Greater` so it never
 /// falsely matches.
@@ -419,6 +432,14 @@ fn key_compare_reader<P: PageProvider>(
             (Content::Long(v), 11) => {
                 let b = reader.resolve(u64::from(rec) * 8 + u64::from(p), 2);
                 v.cmp(&i64::from(u16::from_ne_bytes([b[0], b[1]]) as i16))
+            }
+            // text key (3b.6): the field holds a `u32` pointer to a string record
+            // (fld 4 = length, fld 8.. = UTF-8 bytes). Read it over the reader and
+            // compare as strings. `key_hash` already hashes the `Content::Str`.
+            (Content::Str(v), 6) => {
+                let str_rec = reader.u32_at(rec, p);
+                let s = read_reader_str(reader, str_rec);
+                v.str().cmp(s.as_str())
             }
             _ => return Ordering::Greater, // unsupported key type — never match
         };
