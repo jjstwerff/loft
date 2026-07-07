@@ -15,9 +15,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-Open — design settled (this README), no implementation yet. Filed 2026-07-07 out of a
-design discussion prompted by #477 (nested-vector stride `4→8`/`16→8`), a layout change
-that was **noticed only by breaking persisted data**, never by a check.
+**`status:next`** — design settled (this README + [IMPL.md](IMPL.md)), no implementation yet.
+Filed 2026-07-07 out of a design discussion prompted by #477 (nested-vector stride `4→8`/`16→8`),
+a layout change that was **noticed only by breaking persisted data**, never by a check. The user
+rates this the **highest-value work on loft** (2026-07-07) — the safety floor under
+reload-without-data-loss, live-swap, and schema evolution. Start with **Phase B** (the golden
+conformance test + the layout hash), the critical path.
 
 ## Goal
 
