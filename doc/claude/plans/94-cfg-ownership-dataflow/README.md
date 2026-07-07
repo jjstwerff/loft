@@ -7,6 +7,13 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
+**✅ COMPLETE (2026-07-07) — ready to merge.** Phases 0–5 all landed; `LOFT_OWN_ORACLE=check` runs three
+gates (Check A fact-disagree/A1b, over-free Check B, definite-leak scan) at **0 RED across the whole
+corpus**, each with a firing true-positive. Remaining items are non-blocking refinements: a Coq/Lean
+mechanisation of the (discharged) formal prose, and the self-contained A1b catch (deferred — its
+correctness criterion collapses onto the shipped materialisation decision; A1b is caught by Check A).
+Out of scope by declaration: the P4/VH codegen cutover + perf fork.
+
 **H-tier END-STATE REACHED — Phases 0–5 all landed.** The oracle runs BESIDE the shipped analysis on
 every `cargo test` (`tests/ownership_oracle.rs`), a PURE OBSERVER (SI-1: shipped codegen byte-identical;
 reached only via `LOFT_OWN_ORACLE`, nothing in the compile path consumes it). `LOFT_OWN_ORACLE=check`
