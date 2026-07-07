@@ -1,0 +1,17 @@
+// @PLN94 Phase 2 (3.4a) — the capture family: minimal repro of the closure-record ownership
+// divergence. Dump with:
+//   LOFT_NO_CACHE=1 LOFT_OWN_ORACLE=own loft --interpret 06-capture.loft 2>&1 >/dev/null
+// Finding (2026-07-07): the disagreeing var is the closure record ___clos_1, built by OpDatabase
+// (its OWN store, and freed: OpFreeRef(___clos_1)) but holding OpSetDbRef(___clos_1, 0, xs) — a
+// borrow of xs. My dataflow: Owned (correct about the store). B: Borrowed(xs) (tracking the
+// dependency). A genuine semantic fork — store-ownership vs dependency — that needs adjudication
+// against how the fact drives free-placement; possibly the first divergence that indicts B, not me.
+
+fn c0(cb: fn() -> integer) -> integer { cb() }
+
+fn capture_case() -> integer {
+  xs: vector<integer> = [10, 20, 30];
+  c0(fn() -> integer { xs[1] ?? -1 })   // xs captured: ___clos_1 holds a DbRef borrow of xs
+}
+
+fn main() { print("{capture_case()}\n"); }

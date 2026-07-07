@@ -150,6 +150,20 @@ stand as written.
   functions + its corpus shape. **Gate (per family):** shadow-diff agrees-or-more-precise vs B on
   that family; the two-closures-one-hash (@PLN93) cell classifies both handles `Borrowed(outer)`,
   outer sole `Owned`, value + no-double-free hand-checked. `log()` any op left unmodeled (no silent gap).
+
+  **3.4a — capture family, CHARACTERISED (2026-07-07); adjudication pending.** The minimal repro
+  (`probes/06-capture.loft`) pins the divergence: for `xs: vector = […]; c0(fn(){ xs[1] ?? -1 })`
+  the disagreeing var is the **closure record `___clos_1`** — built by `OpDatabase` (its OWN fresh
+  store, and it IS freed: `OpFreeRef(___clos_1)`) but holding `OpSetDbRef(___clos_1, 0, xs)`, a
+  *borrow* of `xs`. My dataflow says `Owned` (correct about its **store** — owned, freed); B says
+  `Borrowed(xs)` (tracking that it **depends on** `xs`). This is NOT a simple my-gap: it is a genuine
+  semantic fork — *store-ownership* vs *dependency* — and which reading is correct depends on how the
+  fact drives free-placement (the closure record is freed, so "owned" is defensible; B's "borrowed"
+  may be conflating dependency with store-borrow). **This is the first divergence that may indict B
+  rather than me** — exactly the cross-check's intended payoff — so it earns proper adjudication
+  against ground-truth free-placement, NOT a rushed transfer tweak. Blocked-pending-adjudication;
+  the remaining ~20 sites (incl. `#rust`-return metadata) queue behind it. Repro:
+  [`probes/06-capture.loft`](probes/06-capture.loft).
 - **3.5 — the soundness-direction sweep + the Step-0 payoff.** **Gate:** across corpus + fuzzer, no
   case where the new fact says `Owned` while B says `Borrowed`/`Join` in a way that under-frees
   (hand-verify each such disagreement); the new fact **flags** `LOFT_NO_A1B` and **agrees** on the
