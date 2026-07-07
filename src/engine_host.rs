@@ -2036,6 +2036,74 @@ fn debug_cmd_dispatch(cid: i64, cmd: &str) -> Option<String> {
     reply
 }
 
+/// @PLN98 P3.3 — one message off the shared input channel, classified.
+#[cfg(not(target_arch = "wasm32"))]
+pub enum InputFrame {
+    /// A `D!:`-tagged DEBUG control frame — already dispatched through
+    /// [`debug_cmd_dispatch`]; the payload is its immediate reply (if any) for
+    /// the caller to send back out (`loft_host_print` on wasm).
+    Debug(Option<String>),
+    /// PROGRAM input — hand it to the running program's `host_input()`.
+    Program(String),
+}
+
+/// @PLN98 P3.3 — route ONE message off the shared JS→wasm input channel (`inQ`):
+/// a `D!:`-tagged frame is a DEBUG control command (stripped + dispatched through
+/// the SAME [`debug_cmd_dispatch`] core the TCP channel feeds), anything else is
+/// PROGRAM input.  This is the tag that lets debug control and program input ride
+/// ONE queue without colliding — the browser debug pump drains `Debug` frames
+/// while the program's `host_input()` consumes `Program` messages.  `cid` is the
+/// reply route (the debug output channel).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn route_input_frame(cid: i64, msg: &str) -> InputFrame {
+    match msg.strip_prefix("D!:") {
+        Some(cmd) => InputFrame::Debug(debug_cmd_dispatch(cid, cmd.trim())),
+        None => InputFrame::Program(msg.to_string()),
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod p98_p33_tests {
+    use super::{InputFrame, route_input_frame};
+
+    // @PLN98 P3.3 — debug control frames and program input share ONE input channel
+    // and must not collide: a `D!:`-tagged message routes to `debug_cmd_dispatch`
+    // (the shared command core), everything else passes through as program input.
+    #[test]
+    fn debug_frames_route_off_the_shared_input_channel() {
+        // Program input passes straight through, untouched.
+        match route_input_frame(0, "player says: attack") {
+            InputFrame::Program(m) => assert_eq!(m, "player says: attack"),
+            InputFrame::Debug(_) => panic!("program input was misrouted as a debug frame"),
+        }
+        // A leading colon / lookalike that is NOT the `D!:` tag stays program input.
+        match route_input_frame(0, "Don't panic") {
+            InputFrame::Program(m) => assert_eq!(m, "Don't panic"),
+            InputFrame::Debug(_) => panic!("a non-tagged message was misrouted as debug"),
+        }
+        // A `D!:bp` frame is stripped and reaches `debug_cmd_dispatch`'s `bp` arm,
+        // which accepts it (no live world is borrowed here, so it is queued on the
+        // debug mailbox to apply once a pause holds the State) → "D:ok". This
+        // asserts the ROUTING reached the dispatcher's `bp` arm; the set-breakpoint
+        // EFFECT over a live world is debug_cmd_dispatch's own contract.
+        match route_input_frame(0, "D!:bp some_fn") {
+            InputFrame::Debug(reply) => assert_eq!(reply.as_deref(), Some("D:ok bp some_fn")),
+            InputFrame::Program(_) => panic!("a D!: frame was misrouted as program input"),
+        }
+        // An unknown command still routes to the dispatcher (proves strip+dispatch,
+        // not merely a prefix check that discards the payload).
+        match route_input_frame(0, "D!:frobnicate x") {
+            InputFrame::Debug(reply) => {
+                assert!(
+                    reply.as_deref().unwrap_or("").starts_with("D:err unknown"),
+                    "unknown command reached the dispatcher: {reply:?}"
+                );
+            }
+            InputFrame::Program(_) => panic!("unknown D!: command was misrouted"),
+        }
+    }
+}
+
 // ── @PLN18 08-S5 — the native build swap: a new process under a running ────
 // world.  The OLD process drives: at a frame boundary it snapshots the
 // registered world (schema-walked JSON — the lenient-serialization seed),

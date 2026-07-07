@@ -306,12 +306,20 @@ mirroring `frame_yield` would be redundant.
   correct captured output) is `tests/rpc.rs::rpc_launch_break_eval_continue`, which drives the same
   `eval_observe`→`debug_eval_json`→`debug_continue` API the browser driver wraps.
 
-**P3.3 — control over `host_input` (native — inject into the channel):**
-1. A debug pump reads control frames from `host_input` and feeds `debug_cmd_dispatch` (the existing TCP
-   frame parser, `engine_host.rs:1980`). **Verify** (native): inject a `D!:bp main` frame via the input
-   channel (a test hook) → the breakpoint is set (assert via the pause firing).
-2. Tag debug frames vs program input so they do not collide on the one queue. **Verify** (native):
-   interleave a program `host_input()` read + a debug frame → each reaches the right consumer.
+**P3.3 — control over `host_input` ✅ ROUTING CORE LANDED (2026-07-07); wasm wiring → P3.4:**
+The load-bearing invariant — debug control + program input share ONE queue without colliding — is the
+`D!:` tag. `engine_host::route_input_frame(cid, msg)` classifies one message off the shared channel: a
+`D!:`-tagged frame is stripped and dispatched through the SAME `debug_cmd_dispatch` core the TCP channel
+feeds (`InputFrame::Debug(reply)`); anything else is `InputFrame::Program(msg)` for the program's
+`host_input()`.
+- **Verified** (`engine_host::p98_p33_tests::debug_frames_route_off_the_shared_input_channel`): program
+  input passes straight through; a `D!:bp some_fn` frame reaches the `bp` arm (accepted → queued on the
+  debug mailbox, `D:ok`); an unknown `D!:` command still reaches the dispatcher (`D:err unknown`) — so
+  strip+dispatch, not a bare prefix check. Each consumer gets exactly its own frames.
+- **Remaining (P3.4 scope):** `debug_cmd_dispatch` + the mailbox/`debug_set_bp` machinery are
+  `#[cfg(not(wasm32))]` today (they assume threads / a TCP peer / process-spawn for rebuild). Wiring
+  `route_input_frame` into the wasm `host_input_native` needs that core un-gated (or a wasm subset) for
+  `wasm32` — that lands with the browser driver, since it can only be exercised there.
 
 **P3.4 — JS driver + opt-in + acceptance (the ONLY browser-needed steps):**
 1. `loft_start` opts into the tier under the live flag (embedded bootstrap + arm the debug pump).
