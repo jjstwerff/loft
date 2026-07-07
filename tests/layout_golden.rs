@@ -319,3 +319,27 @@ fn schema_sidecar_identity_end_to_end() {
         "an unchanged store hands over raw"
     );
 }
+
+/// `program_roots` (Phase F) returns exactly the user-defined struct/enum types
+/// — the same set the corpus roots name — excluding stdlib and enum variants.
+#[test]
+fn program_roots_are_the_user_types() {
+    let (data, db) = cached_default();
+    let mut p = Parser::new();
+    p.data = data;
+    p.database = db;
+    p.parse_str(CORPUS, "layout_corpus", false);
+
+    let roots: std::collections::BTreeSet<u16> = loft::schema_sidecar::program_roots(&p.data)
+        .into_iter()
+        .collect();
+    let expected: std::collections::BTreeSet<u16> = corpus_roots(&p.data).into_iter().collect();
+    let name = |kt: u16| p.database.types[kt as usize].name.clone();
+    let extra: Vec<String> = roots.difference(&expected).map(|k| name(*k)).collect();
+    let missing: Vec<String> = expected.difference(&roots).map(|k| name(*k)).collect();
+    assert_eq!(
+        roots, expected,
+        "program_roots must be exactly the corpus's user struct/enum types.\n  \
+         extra: {extra:?}\n  missing: {missing:?}"
+    );
+}

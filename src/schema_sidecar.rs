@@ -372,6 +372,30 @@ pub fn migration_outline(diff: &LayoutDiff) -> String {
     s
 }
 
+/// The user-defined struct / enum types of a program — the roots of its layout
+/// identity. Stdlib types are excluded (the layout closure pulls in whatever
+/// base / collection types they reference). Feed these to [`LayoutIdentity::of`]
+/// to build the identity the baseline (Phase F) or the `.dschema` (Phase D) records.
+#[must_use]
+pub fn program_roots(data: &crate::data::Data) -> Vec<u16> {
+    use crate::data::DefType;
+    (0..data.definitions())
+        .map(|d_nr| data.def(d_nr))
+        .filter(|def| {
+            matches!(def.def_type, DefType::Struct | DefType::Enum)
+                // User-declared types have plain-identifier names. Compiler-
+                // generated ones (`__tuple<…>`, `main_vector<…>`, closures) carry
+                // `__` or a `<…>` instantiation suffix; the layout closure reaches
+                // them via the user types that use them, so they aren't roots.
+                && !def.name.starts_with("__")
+                && !def.name.contains('<')
+                && !crate::compile::is_default_file(&def.position.file)
+                && def.known_type != u16::MAX
+        })
+        .map(|def| def.known_type)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
