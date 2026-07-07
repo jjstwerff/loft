@@ -7,8 +7,8 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**IN PROGRESS — the oracle is being built beside the shipped analysis; ~half the ownership fact
-done.** Branch `tuxedo-pln94-ownership-dataflow` (off `origin/main`). Everything so far is a PURE
+**IN PROGRESS — Phase 2 (the ownership fact) COMPLETE; Phase 4 (the RED consistency check) next.**
+Branch `tuxedo-pln94-ownership-dataflow` (off `origin/main`). Everything so far is a PURE
 OBSERVER — reached only via `LOFT_OWN_ORACLE`, nothing in the compile path consumes it, so shipped
 codegen is byte-identical (SI-1 held on `loft_suite` + the parse suite at every step). Progress:
 
@@ -19,7 +19,7 @@ codegen is byte-identical (SI-1 held on `loft_suite` + the parse suite at every 
   dataflow fixpoint, validated on reaching-defs across every control-flow shape (straight-line,
   if-join, single/nested loop, break-out, early-return-in-loop). 5 unit tests; SI-3 (bounded
   convergence) enforced by assert.
-- **Phase 2 (ownership fact) — 3.1 ✓ / 3.2 ✓ / 3.3 ✓ / 3.4a ✓ / 3.4 op-tail in progress.** Forward
+- **Phase 2 (ownership fact) COMPLETE — 3.1 ✓ / 3.2 ✓ / 3.3 ✓ / 3.4a ✓ / 3.4 ✓ / 3.5 ✓.** Forward
   flow-sensitive `OFact = Bottom|Owned|Borrowed(base)|Join(base)`; transfer reuses `ownership_of` for
   structural RHS, resolves `Var` RHS flow-sensitively, and consumes callee `return_ownership`
   summaries at call sites (independently of the shipped classifier). Shadow-diff vs `ownership_of`
@@ -32,11 +32,16 @@ codegen is byte-identical (SI-1 held on `loft_suite` + the parse suite at every 
   is now **DISAGREE=0 across 712 fns**, with the precision win and interproc independence intact. The
   cross-check's payoff landed inward — an independent impl caught the oracle's own gap. Genuine
   op-tail families (coroutines, `par`) remain but surface no divergence on this corpus.
-- **A1b payoff DEMONSTRATED (3.5, 2026-07-07).** On the canonical `85-…-uaf.loft` the oracle is clean
-  under the correct default (`n_h disagree=0`) and **flags** the wrong plan under `LOFT_NO_A1B`
-  (`__ref_1: mine=Join / B=Owned` — the un-materialised borrowing return the flow-insensitive
-  classifier collapses to `Owned`). The built oracle delivers Step-0's promise; remaining 3.5 work is
-  the `program_ownership` fuzzer sweep, then Phase 4's self-contained RED consistency check.
+- **Phase 2 COMPLETE — 3.5 ✓ (2026-07-07): fuzzer soundness sweep + A1b payoff.** The `own`-mode
+  shadow-diff is **DISAGREE=0 across the @PLN85 ownership fuzzer's 54 cells** (9 shapes × 2 values × 3
+  churn, both backends, SI-2 verified). The sweep first flagged the `local_source` (`#462`
+  conditional-local-view) shape — a SECOND real unsoundness distinct from 3.4a: a `??` null-coalesce
+  temp (`skip_free`, never freed) read `Owned` because the transfer defaulted its `= null`
+  declaration to `Owned` where B skips `= null` sentinels. Fixed (skip `Null` owns entries). And the
+  **A1b payoff is demonstrated**: on the canonical `85-…-uaf.loft` the oracle is clean under the
+  correct default (`n_h disagree=0`) and **flags** the wrong plan under `LOFT_NO_A1B` (`__ref_1:
+  mine=Join / B=Owned`). Two oracle unsoundnesses found + fixed via the inward cross-check; the
+  framework works end-to-end. **Next: Phase 4** — the self-contained RED consistency check over IR.
 
 The remaining approximations this replaces still ship: `src/use_analysis.rs` analysis **A**
 (position-proxy, valid only outside loops) and analysis **B** (`Owned/Borrowed/Join`, flow-insensitive
