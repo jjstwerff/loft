@@ -862,6 +862,17 @@ fn parse_assign(s: &str) -> Option<(&str, &str)> {
 /// (`vector<integer>["__vdb_1"]` → `vector<integer>`; `ref(P)` → `P`).  Shared by
 /// the value-snapshot capture (its cap-fn return type + `show_loft` schema
 /// lookup) and Tab completion's struct-field resolution.
+/// @PLN98 P1b — whether a base type name is an INLINE scalar (rides the call
+/// frame base, so [`State::eval_frame_reenter`] can read it straight back), as
+/// opposed to a heap value (struct / vector / collection — destination-passed,
+/// serialised via `.to_json()` instead).  `character` counts (an inline `u32`).
+fn is_scalar_type_name(t: &str) -> bool {
+    matches!(
+        t,
+        "integer" | "float" | "single" | "boolean" | "character" | "byte"
+    ) || t.starts_with("integer(")
+}
+
 fn base_type_name(show: &str) -> &str {
     let base = show.split('[').next().unwrap_or(show);
     base.strip_prefix("ref(")
@@ -2297,6 +2308,148 @@ impl ReplSession {
         }
     }
 
+    /// @PLN98 P1b — the invariant-honouring live-frame eval.  When `expr`
+    /// references a keyed-collection (`hash`/`sorted`/`index`) paused-frame local
+    /// — which the reconstruct path can't text-seed (it renders non-reparseable)
+    /// — bind that local as a typed argument of a synthetic eval fn and pass its
+    /// **live `DbRef`** into a `reenter_ret` over the paused State
+    /// ([`State::eval_frame_reenter`]), reading the collection where it lives.
+    /// Other referenced locals (scalars / vectors / structs reparse fine) stay in
+    /// the seed prefix.  Returns `None` when no keyed local is referenced — so the
+    /// caller's text-seed path still handles every previously-working expression
+    /// (`2 + 2`, a struct via `.to_json()`, a bare heap read) unchanged.
+    fn eval_frame_expr(&mut self, expr: &str, json: bool) -> Option<String> {
+        let idents = expr_idents(expr);
+        // Split the referenced live locals into keyed collections (the live-arg
+        // path) and everything else (seed prefix), in the paused frame's
+        // declaration order — a stable signature/push order.
+        let (keyed, seed) = {
+            let state = self.paused.as_deref()?;
+            let frame = state.paused_frame()?;
+            let mut keyed: Vec<(String, String)> = Vec::new();
+            let mut seed = String::new();
+            for (name, lit) in &frame.locals {
+                if !idents.contains(name.as_str()) {
+                    continue;
+                }
+                if let Some(ty) = state.frame_keyed_type_source(name, &self.parser.data) {
+                    keyed.push((name.clone(), ty));
+                } else {
+                    seed.push_str(name);
+                    seed.push_str(" = ");
+                    match state.eval_frame_heap(name, false, &self.parser.data) {
+                        Some(full) => seed.push_str(&full),
+                        None => seed.push_str(lit),
+                    }
+                    seed.push_str(";\n");
+                }
+            }
+            (keyed, seed)
+        };
+        if keyed.is_empty() {
+            return None; // no keyed local — the text-seed path handles it
+        }
+        let arg_names: Vec<String> = keyed.iter().map(|(n, _)| n.clone()).collect();
+        let sig = keyed
+            .iter()
+            .map(|(n, t)| format!("{n}: {t}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        // Pass 1 — infer the result type with the keyed args + seed in scope.
+        let ret = base_type_name(&self.infer_frame_type(&sig, &seed, expr)?).to_string();
+        // A **scalar** result rides the frame base and is read straight back.
+        if is_scalar_type_name(&ret) {
+            return self.eval_frame_build_run(&sig, &seed, expr, &ret, &arg_names, json);
+        }
+        // A **heap** result (struct / vector / struct-enum) can't be returned via
+        // `reenter_ret` — it is destination-passed, so the frame base still holds
+        // the first arg.  Serialise it in-fn with `.to_json()` — a
+        // call-returned-owned text that survives the frame teardown (@P293-safe) —
+        // and return the raw JSON.  A type with no `.to_json()` (a bare `text`
+        // field, an odd result) fails the compile → `None` → the text-seed path
+        // renders it (its previous graceful `null` for a keyed reference).
+        self.eval_frame_build_run(
+            &sig,
+            &seed,
+            &format!("({expr}).to_json()"),
+            "text",
+            &arg_names,
+            json,
+        )
+    }
+
+    /// @PLN98 P1b — infer the loft type of `expr` evaluated with the keyed-arg
+    /// signature `sig` and seed prefix `seed` in scope (a paused-frame-aware
+    /// [`infer_type`](Self::infer_type)): compile `fn _(sig) { seed __t = (expr); }`
+    /// and read `__t`'s type.  The throwaway def is rolled back.  `None` when the
+    /// wrapper doesn't type-check.
+    fn infer_frame_type(&mut self, sig: &str, seed: &str, expr: &str) -> Option<String> {
+        let name = format!("replmain_{}", self.counter + 1);
+        let src = format!("fn {name}({sig}) {{\n{seed}__t = ({expr});\n}}\n");
+        let pre_defs = self.parser.data.definitions();
+        let pre_diag = self.parser.diagnostics.entries().len();
+        self.parser.parse_str(&src, "<repl>", false);
+        let failed = self.parser.diagnostics.entries()[pre_diag..]
+            .iter()
+            .any(|e| e.level >= Level::Error);
+        let result = if failed {
+            None
+        } else {
+            let d = self.parser.data.def_nr(&format!("n_{name}"));
+            if d == u32::MAX {
+                None
+            } else {
+                let def = self.parser.data.def(d);
+                let vars = &def.variables;
+                (0..vars.count())
+                    .find(|&i| vars.name(i) == "__t")
+                    .map(|i| vars.tp(i).show(&self.parser.data, vars))
+            }
+        };
+        self.parser.data.rollback_to(pre_defs);
+        result
+    }
+
+    /// @PLN98 P1b — build `fn _(sig) -> ret_ty { seed (expr) }`, compile it, and
+    /// evaluate it over the paused frame via [`State::eval_frame_reenter`], the
+    /// keyed args (`arg_names`) bound to the paused frame's live `DbRef`s.  The
+    /// synthetic def is **kept** (not rolled back): its bytecode was appended into
+    /// the paused State, and a rollback would desync `fn_positions` from `data`
+    /// (it stays an unused throwaway).  `None` when the wrapper fails to compile
+    /// or the return type is unsupported.
+    fn eval_frame_build_run(
+        &mut self,
+        sig: &str,
+        seed: &str,
+        expr: &str,
+        ret_ty: &str,
+        arg_names: &[String],
+        json: bool,
+    ) -> Option<String> {
+        let next = self.counter + 1;
+        let name = format!("replmain_{next}");
+        let src = format!("fn {name}({sig}) -> {ret_ty} {{\n{seed}({expr})\n}}\n");
+        let pre_defs = self.parser.data.definitions();
+        let pre_diag = self.parser.diagnostics.entries().len();
+        self.parser.parse_str(&src, "<repl>", false);
+        let failed = self.parser.diagnostics.entries()[pre_diag..]
+            .iter()
+            .any(|e| e.level >= Level::Error);
+        if failed {
+            self.parser.data.rollback_to(pre_defs);
+            return None;
+        }
+        self.counter = next;
+        crate::scopes::check(&mut self.parser.data);
+        let d = self.parser.data.def_nr(&format!("n_{name}"));
+        if d == u32::MAX {
+            return None;
+        }
+        let ret_type = self.parser.data.def(d).returned.clone();
+        let state = self.paused.as_deref_mut()?;
+        state.eval_frame_reenter(&mut self.parser.data, d, arg_names, &ret_type, json)
+    }
+
     fn debug_eval_fmt(&mut self, expr: &str, json: bool) -> Option<String> {
         // @PLN16 D2 — a bare local that holds a heap value (struct / vector / collection)
         // is read **live, in place**: render its actual `DbRef` from the paused store
@@ -2316,6 +2469,18 @@ impl ReplSession {
             && let Some(state) = self.paused.as_deref()
             && let Some(v) = state.eval_frame_heap(trimmed, json, &self.parser.data)
         {
+            return Some(v);
+        }
+        // @PLN98 P1b — an expression that REFERENCES a keyed-collection local
+        // (`hash`/`sorted`/`index`) can't be text-seeded (those render
+        // non-reparseable), so evaluate it live over the paused frame instead of
+        // through the reconstruct clone.  `None` when no keyed local is
+        // referenced → the text-seed path below still handles everything else.
+        // Guarded by the same `catch_unwind` as the reconstruct path so a codegen
+        // fault in the live-frame compile can't abandon the debug session.
+        let live = std::panic::catch_unwind(AssertUnwindSafe(|| self.eval_frame_expr(expr, json)))
+            .unwrap_or(None);
+        if let Some(v) = live {
             return Some(v);
         }
         let prefix = {

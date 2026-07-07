@@ -175,10 +175,32 @@ sites (and, for wasm, the interpreter's inclusion).
   vector `v[9]`→100; struct `s.a+s.b`→16; `setValue x=42` accepted → `continue` prints the edited run.
   Regression guard `tests/rpc.rs::rpc_eval_and_set_in_a_vector_local_frame`; 38+10 debugger tests green;
   backend-independent (the REPL debugger always interprets).
-- **Residual → P1b:** a *referenced* keyed collection (`hash`/`sorted`/`index`) still renders
-  non-reparseable (the `<…>` catch-all) → its eval is a graceful `null` (no crash). Closing it needs
-  the true live-frame eval (compile the expression in the paused function's scope + `reenter_dbg` over
-  the frame), not a text seed — the invariant-honoring form.
+### A1b — P1b: the true live-frame eval closes the keyed-collection residual ✅ LANDED
+
+**Done (2026-07-07)** — a referenced keyed collection (`hash`/`sorted`/`index`) no longer degrades to
+`null`; it is read **live, where it lives**. The seam is `eval_frame_expr` (`src/repl.rs`) →
+`State::eval_frame_reenter` (`src/state/mod.rs`), reached from `debug_eval_fmt` before the text-seed
+path. Mechanism (the invariant-honouring form the plan called for):
+1. **Bind each referenced keyed local as a typed ARG** of a synthetic `fn __eval(k1: K1, …) -> RT { … }`
+   — `keyed_type_source` renders the parseable `hash<Ent[k]>` (not `Type::name`'s Debug `["k"]`). The
+   local's **live `DbRef`** is pushed straight into the call, so the collection is read in place, never
+   text-reconstructed. Other referenced locals stay in the seed prefix (scalars/vectors/structs
+   reparse fine).
+2. **Append-only compile onto the PAUSED state** (like `live_reload`): `def_code` at
+   `bytecode.len()`, `fn_positions` extended — the paused frame's PC + stack slots are untouched, so
+   `continue` resumes correctly. `reenter_ret` allocates the eval frame above the high-water mark and
+   pushes the args; the call stack + watermark are snapshotted/restored (the parked-vs-paused
+   difference — the eval callee's return pops a frame `reenter_ret` doesn't push back).
+3. **Return path:** scalars ride the frame base and are read straight back; a **heap** result
+   (struct/vector) is destination-passed (never lands at the base), so it is serialised in-fn via
+   `.to_json()` — a call-returned-owned text safe past teardown (@P293) — and the raw JSON is returned.
+- **Verified** (`tests/rpc.rs::rpc_eval_in_a_keyed_collection_frame`): in a `hash<HRec[name]>` frame
+  `h["a"].v`→7, `h["b"].v + x`→14, `len(h)`→2, `h["a"]`→`{"name":"a","v":7}`; `2 + 2`→4 (the text path
+  is untouched); `continue` prints correctly (the paused frame survives the eval). Full suite green
+  (2628/2630; the 2 fails are the browser/wasm env gate). The P1 vector matrix still passes.
+- **Residual (tiny):** a *bare* keyed-frame result whose type has no `.to_json()` (an odd non-struct
+  heap, or a genuine borrowed `text` field) still falls back to `null` — the @P293-safe boundary; the
+  common struct/scalar cases are covered.
 
 ### A2 — the browser live/debug tier (F2) — DECOMPOSITION (P3)
 

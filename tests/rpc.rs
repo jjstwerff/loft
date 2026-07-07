@@ -133,6 +133,73 @@ fn rpc_eval_and_set_in_a_vector_local_frame() {
     let _ = std::fs::remove_file(&path);
 }
 
+// @PLN98 P1b — the true live-frame eval: an expression that REFERENCES a keyed-collection
+// (`hash`) local. The reconstruct/text-seed path can't seed a hash (it renders as the
+// non-reparseable `<…>` catch-all), so P1 returned a graceful `null` here. The fix binds the
+// hash as a typed argument of a synthetic eval fn and passes its live `DbRef` into a
+// `reenter_ret` over the paused frame — reading the collection where it lives. The literal
+// `2 + 2` (no local) must still go through the untouched text path (no regression).
+#[test]
+fn rpc_eval_in_a_keyed_collection_frame() {
+    let path = tmp_program(
+        "hashlocal",
+        "struct HRec { name: text, v: integer }\n\
+         fn main() {\n\
+        \x20 h: hash<HRec[name]> = [];\n\
+        \x20 h += [HRec{name: \"a\", v: 7}];\n\
+        \x20 h += [HRec{name: \"b\", v: 9}];\n\
+        \x20 x = 5;\n\
+        \x20 r = h[\"a\"].v;\n\
+        \x20 print(\"r={r} x={x}\")\n\
+         }\n",
+    );
+    let file = json_path(&path);
+    // In the JSON request, a `"` inside the expr is escaped `\"`; from Rust source that
+    // is `\\\"`. Line 7 (`r = h["a"].v;`) is where h (2 entries) and x (5) are both live.
+    let out = drive(&[
+        format!("{{\"id\":1,\"req\":\"launch\",\"file\":\"{file}\"}}"),
+        format!(
+            "{{\"id\":2,\"req\":\"setBreakpoints\",\"file\":\"{file}\",\"breakpoints\":[{{\"line\":7}}]}}"
+        ),
+        "{\"id\":3,\"req\":\"run\"}".to_string(),
+        // A literal referencing NO local — must still work through the text path.
+        "{\"id\":4,\"req\":\"eval\",\"expr\":\"2 + 2\"}".to_string(),
+        // Keyed-local expressions — live-arg path (was `null` before P1b).
+        "{\"id\":5,\"req\":\"eval\",\"expr\":\"h[\\\"a\\\"].v\"}".to_string(),
+        "{\"id\":6,\"req\":\"eval\",\"expr\":\"h[\\\"b\\\"].v + x\"}".to_string(),
+        "{\"id\":7,\"req\":\"eval\",\"expr\":\"len(h)\"}".to_string(),
+        // The whole element struct → JSON object via the live DbRef → to_json.
+        "{\"id\":8,\"req\":\"eval\",\"expr\":\"h[\\\"a\\\"]\"}".to_string(),
+        "{\"id\":9,\"req\":\"continue\"}".to_string(),
+        "{\"id\":10,\"req\":\"disconnect\"}".to_string(),
+    ]);
+    assert!(
+        out.contains("\"id\":4,\"ok\":true,\"value\":4"),
+        "eval 2+2 == 4 (text path unaffected): {out}"
+    );
+    assert!(
+        out.contains("\"id\":5,\"ok\":true,\"value\":7"),
+        "eval h[\"a\"].v == 7 (live keyed read): {out}"
+    );
+    assert!(
+        out.contains("\"id\":6,\"ok\":true,\"value\":14"),
+        "eval h[\"b\"].v + x == 14 (keyed + scalar): {out}"
+    );
+    assert!(
+        out.contains("\"id\":7,\"ok\":true,\"value\":2"),
+        "eval len(h) == 2: {out}"
+    );
+    assert!(
+        out.contains("\"id\":8,\"ok\":true,\"value\":{\"name\":\"a\",\"v\":7}"),
+        "eval h[\"a\"] == the element struct: {out}"
+    );
+    assert!(
+        out.contains("\"category\":\"stdout\",\"text\":\"r=7 x=5\""),
+        "continue prints correctly (paused frame intact after eval): {out}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
 // A conditional breakpoint whose condition reads a struct field: break only on the
 // matching call, then eval a scalar field.
 #[test]
