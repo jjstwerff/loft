@@ -51,6 +51,35 @@ This is the one change most existing code will need to look at.
 > makes you say what should happen. `null as integer?` is how you write an explicit
 > typed null.
 
+### Error messages now point at the problem
+
+Every error — parser, type, or runtime — now shows the file, line, and column,
+the offending source line, and a caret under the exact token:
+
+```
+error: expected integer, got text on argument 2 of call to add
+  --> game.loft:3:14
+  |
+3 |   x = add(1, "two");
+  |              ^
+```
+
+- **Did-you-mean suggestions.** A misspelled variable, function, field, method,
+  type, or enum variant suggests the near match — `unknown variant Color::Bleu —
+  did you mean 'Blue'?`.
+- **Concrete type mismatches** name both sides, the operation, and (for calls)
+  the argument index — no more bare "type mismatch".
+- **A mistyped `match` pattern** that can never match its subject (a text arm on
+  an integer subject) is now a clear error instead of a silently-dead arm.
+- Prefer the old single-line format? Set `LOFT_ERRORS=compact` (or pass
+  `--errors=compact`).
+
+Runtime faults (divide-by-zero, index out of bounds, null dereference,
+narrowing-cast overflow) keep loft's rule of never aborting a running program:
+they yield loft's usual sentinel (`null`, `0`, …) so a game or server keeps
+running, and the fault is recorded with its source position instead of vanishing
+silently.
+
 ### A whole class of memory bugs is gone
 
 loft stores structs, vectors, and keyed collections on a managed heap. That heap had

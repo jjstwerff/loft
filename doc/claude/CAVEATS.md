@@ -58,6 +58,24 @@ still build.  `--interpret` keeps its existing (silent, last-loaded) behavior.
 
 ---
 
+## Native build — no loft-source position on runtime faults (@PLN28)
+
+The @PLN28 pc → source-position map (`Definition.source_spans`, populated at
+bytecode codegen) is **interpreter-only**: it keys on the bytecode `pc`, which
+`--native` has no equivalent of.  So an interpreter runtime fault can render
+`--> file:line:col` + caret, but the same fault under `--native` cannot map back
+to a loft source line.  Both backends still honour C66 (the fault yields loft's
+sentinel and the program keeps running) — the gap is the *diagnostic position*,
+not the behaviour, and compile-time diagnostics (parser / type / suggestion) are
+identical on both.
+
+- **Workaround:** reproduce the fault under `--interpret` for the source caret;
+  the value/behaviour is identical on both backends by design.
+- **Canonical home:** [NATIVE.md](NATIVE.md); a native source map would need
+  codegen to thread `Position` into the generated Rust, out of @PLN28's scope.
+
+---
+
 ## The mixed interpret↔native boundary — closed 2026-06-27 (kept for the mode rule)
 
 The 2026-06-26 wave of `sev:high` mixed-mode issues is fully closed —

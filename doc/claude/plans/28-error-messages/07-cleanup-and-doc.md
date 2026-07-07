@@ -5,7 +5,34 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 7 — Cleanup and documentation
 
-Status: open
+Status: **done 2026-07-07** — see § Delivered.
+
+## Delivered (2026-07-07)
+
+- **COMPILER.md § Diagnostics** rewritten as the three-layer model
+  (positions/spans → C66 runtime errors → renderers), matching the real
+  code (`DiagEntry`, `Value::Span`/`source_spans`, `runtime_error::
+  RuntimeError`, `diagnostic_render::render_pretty_all`, `LOFT_ERRORS`).
+- **CHANGELOG.md** user-facing entry under `2026-07` (carets, suggestions,
+  concrete type-mismatch, match-pattern check; runtime faults keep C66
+  never-abort).  **CHANGELOG_TECHNICAL.md** per-phase closeout entry.
+- **CLAUDE.md** `LOFT_LOG` quick reference gained `LOFT_ERRORS` + the real
+  diagnostic toggles (`LOFT_NO_WARN_RUNTIME`, `LOFT_NO_HINT_NOT_NULL`,
+  `LOFT_FORMAT_BARE_NULL`, `LOFT_DEV_SOFT_HALT`).  `LOFT_BT` from the 7.4
+  table was **never shipped** — dropped.
+- **CAVEATS.md** — new "native build has no loft-source position on runtime
+  faults" entry (the pc→source map is interpreter-only).
+
+Adjusted from the original spec (stale assumptions):
+- **7.6/7.9 dir move retired.** The current convention keeps a finished
+  plan dir in place as its own closure record (`_LIFECYCLE.md`); the legacy
+  `finished/NN-…` move is not done.
+- **7.7 dead-code sweep — nothing to remove.** `Diagnostics::add` (no-pos)
+  has 3 legitimate callers (unknown-file `Fatal`, two `data.rs` invariant
+  sites); no retired `panic=error` helpers remain after the C66 reframe.
+- **7.8 smoke script — not added.** The `error_messages` golden corpus +
+  `baselines_are_locked_in` already assert caret + source-line on every
+  case in CI; a separate `grep` script would duplicate that.
 
 ## Goal
 
