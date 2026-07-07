@@ -651,13 +651,19 @@ fn transferred_out(body: &Value, data: &Data) -> BTreeSet<u16> {
     let finish = data.def_nr("OpFinishRecord");
     let append = data.def_nr("OpAppendVector");
     let copy = data.def_nr("OpCopyRecord");
+    let set_dbref = data.def_nr("OpSetDbRef"); // capture into a record (closure/struct field)
     let mut s = BTreeSet::new();
     body.walk(&mut |x| match x {
         Value::Call(d, args) => {
+            // The consumed/captured arg: element/source for a container op, or the captured value
+            // (arg 2) of `OpSetDbRef(record, offset, v)` — v is moved into the record, whose cascade
+            // frees it (closure capture / field store), so this frame does not.
             let consumed_idx = if *d == finish || *d == append {
                 Some(1)
             } else if *d == copy {
                 Some(0)
+            } else if *d == set_dbref {
+                Some(2)
             } else {
                 None
             };
@@ -693,9 +699,13 @@ fn under_free(
 ) -> Vec<u16> {
     exit_state
         .iter()
-        .filter(|&(&v, &f)| {
-            f == OFact::Owned
-                && func.tp(v).heap_dep().is_some() // only a HEAP store can leak (not a scalar)
+        .filter(|&(&v, &_f)| {
+            // OWNS its store iff its post-codegen type dep is empty (materialisation is baked in:
+            // a copied borrowed-source has an empty dep here). The flow-sensitive fact `_f` is
+            // usage-blind to the copy insertion, so it reads `Borrowed`; the dep is the ground truth
+            // codegen actually freed against.
+            func.tp(v).heap_dep().is_some() // only a HEAP store can leak (not a scalar)
+                && func.tp(v).depend().is_empty() // owns its store (empty dep)
                 && !func.is_argument(v)
                 && !freed.contains(&v)
                 && !transferred.contains(&v)
@@ -901,11 +911,36 @@ pub fn oracle_free_checks(data: &Data) {
 fn run_free_checks(name: &str, body: &Value, cfg: &Cfg, data: &Data, d_nr: u32, free_ops: &[u32]) -> usize {
     let (outb, _passes) = ownership_dataflow(data, d_nr, cfg);
     let exit_state = &outb[cfg.exit];
-    let nm = |v: u16| data.def(d_nr).variables.name(v).to_string();
+    let func = &data.def(d_nr).variables;
+    let nm = |v: u16| func.name(v).to_string();
     let mut reds = 0;
-    for (v, base) in free_of_borrowed(&collect_free_targets(body, free_ops), exit_state) {
-        eprintln!("RED {name}: free-of-borrowed {} (v{v}) is Borrowed(v{base}={})", nm(v), nm(base));
-        reds += 1;
+    // Check B (over-free) — a var freed by an unconditional `OpFreeRef` whose post-codegen type dep
+    // is NON-empty borrows a store owned elsewhere. The dep is codegen's ground truth (empty = owns,
+    // incl. a materialised copy); the flow-sensitive fact is usage-blind here. Exclude a self-dep
+    // work-ref `[v]` (@P302 ownership marker, not a borrow).
+    let mut seen = BTreeSet::new();
+    for v in collect_free_targets(body, free_ops) {
+        if !seen.insert(v) {
+            continue;
+        }
+        let dep = func.tp(v).depend();
+        let self_dep = dep.len() == 1 && dep[0] == v;
+        // A `??` null-coalesce temp (`__ncc_*`) keeps its present-arm/JOIN dep even after the
+        // default-arm materialisation makes it an owned copy the shipped code frees unconditionally
+        // (@PLN25) — its dep is a stale borrow, not a live one. Exclude it (a documented narrow gap).
+        let ncc = func.name(v).starts_with("__ncc_");
+        // A freed PARAMETER is the retbuf-displacement reassignment (`get_free_vars` otherwise
+        // suppresses freeing params — they are caller-owned), not a user over-free. Its declared dep
+        // is a MAY-borrow; the displaced value freed here was owned.
+        if func.tp(v).heap_dep().is_some()
+            && !dep.is_empty()
+            && !self_dep
+            && !ncc
+            && !func.is_argument(v)
+        {
+            eprintln!("RED {name}: free-of-borrowed {} (v{v}) dep={dep:?}", nm(v));
+            reds += 1;
+        }
     }
     // Check C skips CLOSURE bodies (`n___lambda_*`): their frees are inserted at closure-compile
     // time, not into `def.code` here, so their free set reads empty (a documented coverage gap, not

@@ -222,10 +222,13 @@ fn oracle_clean_on_generated_fuzz_corpus() {
 ///
 /// The work this measures is making the ownership fact materialisation-aware (see
 /// `CHECK_C_UNDERFREE_DESIGN.md` § C.0 and the `n_choose` residual).
-const DEV_FP_BASELINE: usize = 153;
+const DEV_FP_BASELINE: usize = 0;
 
 #[test]
 #[ignore = "dev-tier ratchet — sweeps tests/scripts under check-dev; run on demand"]
+// The ratchet baseline reached 0; `total <= 0` is the intended endpoint (the checks are now clean),
+// not an absurd comparison — it stays `<=` so the ratchet re-arms if the baseline is ever raised.
+#[allow(clippy::absurd_extreme_comparisons)]
 fn oracle_dev_free_check_ratchet() {
     let dir = root().join("tests/scripts");
     let mut total = 0usize;
