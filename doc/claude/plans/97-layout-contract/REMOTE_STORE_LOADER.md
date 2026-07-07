@@ -8,28 +8,32 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 of @PLN97** ([README](README.md)) — the layout contract's hardest consumer *and* its cross-network
 validation. Pairs with #517 (HTTP stack) and rides the layout contract ([formal/layout.md](../../formal/layout.md)).
 
-**Status — HASH working-set fetcher COMPLETE, local AND remote (2026-07-07/08).** The partial store
-fetcher is built and verified end-to-end: `store_load_key` / `store_load_keys` / `store_load_key_text`
-pull only the pages a lookup touches — **from a local file OR an `http://` `Range` server** — and
-relocate the matched entries into a sound local heap. Done + verified (interpret + native, + wasip2
-for the whole-file base; leak-clean; `store_verify` on every load; each with a prove-can-fail control):
+**Status — working-set fetcher COMPLETE for HASH and SORTED, local AND remote (2026-07-07/08).** The
+partial store fetcher is built and verified end-to-end: `store_load_key` / `store_load_keys` /
+`store_load_key_text` (hash point lookups) and `store_load_range` (sorted range) pull only the pages a
+lookup touches — **from a local file OR an `http://` `Range` server** — and relocate the matched
+entries into a sound local heap. Done + verified (interpret + native, + wasip2 for the whole-file base;
+leak-clean; `store_verify` on every load; each with a prove-can-fail control):
 - **Phase 1** `store_load` (whole file) · **Phase 2** `PagedReader` (page/LRU/`resolve`) ·
   **Phase 5** `HttpRangeProvider` + `PageSource` (the REMOTE fetch, `ureq`, feature-gated).
-- **Phase 3a** bounded find + flat copy · **3b.1** safe-refusal · **3b.2** text · **3b.3**
-  vector\<scalar\> · **3b.4** inline nested structs · **3b.6** text keys.
+- **Phase 3a** bounded find + flat copy · **Phase 4 + 3b.7** `store_load_range` over Sorted (binary
+  search over the reader, build the local vector in key order).
+- **Relocating copy — ALL shapes:** 3b.1 safe-refusal · 3b.2 text · 3b.3 vector\<scalar\> · 3b.4
+  inline nested structs · **3b.4b vector\<struct\>** (`relocate_ptr_fields` — one recursive walk over
+  every pointer kind) · 3b.6 text keys. Only `vector<text>` / `vector<vector>` remain SAFELY REFUSED.
 - The instrument: **`store_verify`** (built on `validate_claims`, extended with a Hash arm).
 
-**Remaining (each a focused, well-scoped follow-up — NOT rushed; the unbuilt shapes are all SAFELY
-REFUSED today, never mis-fetched):**
-- **Phase 4 + 3b.7 — Sorted `store_load_range`**: a Sorted collection is a sorted inline vector, so
-  it needs a NEW traversal (binary-search `sorted_find` over the reader, walk `[lo,hi]`) and a NEW
-  insert (`sorted_finish`, not `hash::add`) — the routing tile-window case; the biggest remaining piece.
-- **3b.4b `vector<struct>`**: per-element recursion (copy the inner vector record, relocate each
-  element's heap fields) — the one relocating-copy shape left.
-- **3b.5 layout-identity gate**: `schema_sidecar::check` at bootstrap (needs a `.dschema` beside the
-  remote store) so a wrong-layout image is rejected, never misread.
-- **3b.8 bytes-≪-file at scale** (a large-fixture benchmark; the property holds by construction and
-  `LOFT_LOADER_STATS` observes it) · the **`--html` `fetch()` bridge** (browser target).
+**Remaining (hardening / proof / browser — the core fetch works without them; each safely degrades):**
+- **3b.5 layout-identity gate**: `schema_sidecar::check` at bootstrap — needs `store_persist_bind` to
+  WRITE a `.dschema` beside the store (it doesn't today) + fetch/compare it on load. `store_verify`
+  already catches the structural corruption a wrong-layout fetch would produce; the gate adds a
+  clean up-front reject.
+- **3b.8 bytes-≪-file at scale**: a large-fixture benchmark. The property holds by construction (a
+  point lookup touches O(1) pages) and `LOFT_LOADER_STATS` observes `bytes_fetched` vs file.
+- **`--html` `fetch()` bridge** (browser target) · and a **native-codegen bug** surfaced en route: a
+  `#rust` builtin with a `reference` arg AND ≥2 integer-literal args mis-binds the reference to an
+  unbound `_v_local` under pre-eval (worked around by passing the range bounds as a `vector<integer>`
+  — the proven `load_keys` form; worth a separate issue).
 
 ## Two consumers, one general primitive
 
