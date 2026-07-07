@@ -471,6 +471,78 @@ fn serve_ws_breakpoint_stops_with_line_and_locals() {
     let _ = std::fs::remove_file(&path);
 }
 
+// @PLN98 — the FULL debugger cycle THROUGH A SERVER SETUP: `loft debug --serve`
+// (the game/serve host an agent is close to) drives launch → breakpoint → EVAL →
+// resume over the WebSocket the client holds — the same channel the browser relay
+// uses.  The eval exercises the P1b live-frame path: a keyed-collection (`hash`)
+// local read live over the socket (was `null` before P1b), a scalar, and the
+// literal `2+2` (the untouched text path).  Then continue runs to completion with
+// the correct output.  This is the server-relay debug acceptance, minus a browser.
+#[test]
+fn serve_ws_debug_cycle_eval_and_resume_through_server() {
+    let path = tmp_program(
+        "dbgcycle",
+        "struct HRec { name: text, v: integer }\n\
+         fn main() {\n\
+        \x20 h: hash<HRec[name]> = [];\n\
+        \x20 h += [HRec{name: \"a\", v: 7}];\n\
+        \x20 x = 5;\n\
+        \x20 y = h[\"a\"].v + x;\n\
+        \x20 print(\"y={y}\")\n\
+         }\n",
+    );
+    let jfile = json_path(&path);
+    let port = 18795;
+    start_server(port, path.to_string_lossy().into_owned());
+    let mut ws = ws_connect(port);
+
+    ws_send(
+        ws.get_ref(),
+        &format!("{{\"id\":1,\"req\":\"launch\",\"file\":\"{jfile}\"}}"),
+    );
+    assert!(ws_recv(&mut ws).contains("\"ok\":true"), "launch ok");
+    // Line 6 (`y = h["a"].v + x;`) references h (so it is live at the pause) and
+    // has a `+` (a breakable offset).
+    ws_send(
+        ws.get_ref(),
+        &format!(
+            "{{\"id\":2,\"req\":\"setBreakpoints\",\"file\":\"{jfile}\",\"breakpoints\":[{{\"line\":6}}]}}"
+        ),
+    );
+    assert!(ws_recv(&mut ws).contains("\"ok\":true"), "setBreakpoints ok");
+    ws_send(ws.get_ref(), "{\"id\":3,\"req\":\"run\"}");
+    let stopped = recv_until(&mut ws, 6, |m| m.contains("\"event\":\"stopped\"")).join("\n");
+    assert!(stopped.contains("\"function\":\"main\""), "stopped in main: {stopped}");
+
+    // EVAL over the socket — the live-frame path the server relays to the client.
+    // The keyed-collection read (`h["a"].v`) is the P1b capability (was null).
+    ws_send(ws.get_ref(), "{\"id\":4,\"req\":\"eval\",\"expr\":\"2 + 2\"}");
+    assert!(
+        ws_recv(&mut ws).contains("\"id\":4,\"ok\":true,\"value\":4"),
+        "2+2 == 4 over the server (text path)"
+    );
+    ws_send(ws.get_ref(), "{\"id\":5,\"req\":\"eval\",\"expr\":\"h[\\\"a\\\"].v\"}");
+    assert!(
+        ws_recv(&mut ws).contains("\"id\":5,\"ok\":true,\"value\":7"),
+        "h[\"a\"].v == 7 over the server (P1b keyed live-frame eval)"
+    );
+    ws_send(ws.get_ref(), "{\"id\":6,\"req\":\"eval\",\"expr\":\"h[\\\"a\\\"].v + x\"}");
+    assert!(
+        ws_recv(&mut ws).contains("\"id\":6,\"ok\":true,\"value\":12"),
+        "h[\"a\"].v + x == 12 over the server (keyed + scalar)"
+    );
+
+    // RESUME — the paused frame survived the evals; the run completes correctly.
+    ws_send(ws.get_ref(), "{\"id\":7,\"req\":\"continue\"}");
+    let done = recv_until(&mut ws, 8, |m| m.contains("\"event\":\"terminated\"")).join("\n");
+    assert!(
+        done.contains("\"category\":\"stdout\",\"text\":\"y=12\""),
+        "continue runs to completion with the right output: {done}"
+    );
+    assert!(done.contains("\"event\":\"terminated\""), "terminated: {done}");
+    let _ = std::fs::remove_file(&path);
+}
+
 #[test]
 fn serve_ws_run_tests_reports_pass_and_fail() {
     // @PLN16 M5e slice 5 — `runTests` runs the file's zero-parameter test functions, one
