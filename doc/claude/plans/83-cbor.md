@@ -5,7 +5,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLN83 — `cbor` library: signable canonical CBOR encoding
 
-Status: **future** (scoped, not started) · Issue: [loft-lang/plans#83](https://github.com/loft-lang/plans/issues/83) · Subject: libs
+Status: **finished** (shipped — `cbor` published to the registry, 0.1.0/0.1.1; issue #83 closed 2026-07-07) · Issue: [loft-lang/plans#83](https://github.com/loft-lang/plans/issues/83) · Subject: libs
 
 A loft library that encodes/decodes loft data ↔ RFC 8949 CBOR bytes, with a
 **canonical (deterministic) mode** as the first-class signable path.

@@ -2356,6 +2356,22 @@ impl Parser {
                 return true;
             }
             check_type = &r;
+        } else if matches!(
+            is_type,
+            Type::Hash(_, _, _)
+                | Type::Sorted(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Spacial(_, _, _)
+        ) {
+            // A keyed-collection handle IS a `DbRef`, so it satisfies a bare
+            // `reference` parameter unchanged — no conversion op.  Used by
+            // `store_persist_bind`, whose `bind_path` snapshots the whole
+            // dedicated Store regardless of the collection kind.
+            if let Type::Reference(rd, _) = should
+                && *rd == self.data.def_nr("reference")
+            {
+                return true;
+            }
         } else if let Type::Enum(_, false, _) = is_type {
             if *should == e {
                 return true;
@@ -2522,6 +2538,22 @@ impl Parser {
                 && *r == self.data.def_nr("reference")
                 && let Type::Reference(_, _) = test_type
                 && self.generic_type_name(test_type).is_none()
+            {
+                return true;
+            }
+            // A keyed-collection argument (hash / sorted / index / spacial)
+            // also satisfies a bare `reference` parameter — its handle is a
+            // `DbRef`.  Mirrors the `convert` branch; used by
+            // `store_persist_bind`.
+            if let Type::Reference(r, _) = should
+                && *r == self.data.def_nr("reference")
+                && matches!(
+                    test_type,
+                    Type::Hash(_, _, _)
+                        | Type::Sorted(_, _, _)
+                        | Type::Index(_, _, _)
+                        | Type::Spacial(_, _, _)
+                )
             {
                 return true;
             }

@@ -32,6 +32,30 @@ fn smoke_script() -> PathBuf {
     workspace_root().join("tests/scripts/store_persist_smoke.loft")
 }
 
+fn sorted_script() -> PathBuf {
+    workspace_root().join("tests/scripts/store_persist_sorted.loft")
+}
+
+/// Run a persist script in a chosen mode (fresh / reload) — the generic form
+/// of `run_smoke`, parameterised by the script so the hash and sorted cases
+/// share one driver.
+fn run_mode(script: &Path, path: &Path, mode: &str) -> (String, i32) {
+    let out = Command::new(loft_bin())
+        .arg("--interpret")
+        .arg(script)
+        .env("LOFT_PERSIST_TEST_PATH", path)
+        .env("LOFT_PERSIST_TEST_MODE", mode)
+        .current_dir(workspace_root())
+        .output()
+        .expect("failed to invoke loft binary");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    if !out.status.success() {
+        eprintln!("{mode} stderr:\n{stderr}");
+    }
+    (stdout, out.status.code().unwrap_or(-1))
+}
+
 fn scratch(test_name: &str) -> PathBuf {
     let base = std::env::var_os("TMPDIR")
         .map(PathBuf::from)
@@ -128,6 +152,47 @@ fn fresh_then_reload_round_trip() {
     assert!(
         out2.contains("reload keys=7,13,42"),
         "reload keys mismatch: {out2:?}"
+    );
+    // #523 — a KEY LOOKUP must succeed in this SEPARATE reload process, not
+    // just iteration.  Pre-fix, the hash used a per-process random seed so the
+    // reload process probed a different bucket and read null (v=1300 vanished)
+    // while iteration still listed the key.  The per-hash seed now lives in the
+    // bucket record, so any reader re-derives the same buckets.
+    assert!(
+        out2.contains("reload lookup h[13]=1300"),
+        "reload cross-process lookup must find v=1300, not null (#523): {out2:?}"
+    );
+}
+
+/// @PLN97 arc G Phase 0.5b — `store_persist_bind` on a `sorted<T[k]>` must
+/// round-trip across processes: a `sorted` is comparison-based (no per-process
+/// hash seed), so the reload process must iterate in key order AND key-look-up
+/// correctly.  This exercises the `reference`-parameter widening that lets
+/// `store_persist_bind` accept any keyed collection, not just `hash`.
+#[test]
+fn sorted_fresh_then_reload_round_trip() {
+    let dir = scratch("sorted_fresh_then_reload_round_trip");
+    let path = dir.join("sorted.store");
+
+    assert!(!path.exists(), "scratch should start clean");
+    let (out1, code1) = run_mode(&sorted_script(), &path, "fresh");
+    assert_eq!(code1, 0, "fresh exit: stdout={out1:?}");
+    assert!(
+        out1.contains("fresh keys=7,13,42"),
+        "fresh sorted keys must be ascending 7,13,42: {out1:?}"
+    );
+    assert!(path.exists(), "bind should have created the file");
+
+    // Reload in a SEPARATE process: both iteration and lookup must survive.
+    let (out2, code2) = run_mode(&sorted_script(), &path, "reload");
+    assert_eq!(code2, 0, "reload exit: stdout={out2:?}");
+    assert!(
+        out2.contains("reload keys=7,13,42"),
+        "reload sorted keys mismatch: {out2:?}"
+    );
+    assert!(
+        out2.contains("reload lookup s[13]=1300"),
+        "reload cross-process sorted lookup must find v=1300, not null: {out2:?}"
     );
 }
 
