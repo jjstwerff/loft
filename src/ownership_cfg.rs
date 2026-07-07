@@ -563,6 +563,13 @@ fn ownership_dataflow(data: &Data, d_nr: u32, cfg: &Cfg) -> (Vec<OState>, usize)
             }
             // Apply the block's assignments in program order (a later def sees earlier ones).
             for (var, rhs) in &cfg.blocks[b].owns {
+                // A `= null` DECLARATION sentinel is not a real def — skip it (B's `collect_defs`
+                // does the same). Recording it would default a var whose real def is nested/
+                // conditional (a `??` `__ncc_N` temp) to `Owned`, the unsound over-free direction;
+                // skipping lets a read fall through to `ownership_of` (B's fact) instead.
+                if matches!(rhs.unspan(), Value::Null) {
+                    continue;
+                }
                 let f = match rhs.unspan() {
                     // A bare source var resolves flow-sensitively to its current state.
                     Value::Var(u) => st
