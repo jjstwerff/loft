@@ -4,6 +4,8 @@
 //! normal compile path consumes it — it is reached only via `LOFT_OWN_ORACLE` (SI-1: shipped
 //! codegen stays byte-identical). Plan: `doc/claude/plans/94-cfg-ownership-dataflow/`.
 //!
+//! @I60 — Scope & dependency/lifetime tracker (deps): the independent flow-sensitive cross-check tier.
+//!
 //! loft's control flow is STRUCTURED (`If` / `Loop` / `Break(n)` / `Continue(n)` / `Return`,
 //! no gotos; `for` lowers to a `Loop` whose exit test is an `If(cond, Break(0), Null)` buried
 //! in the range `Set`). So the CFG is built by a syntax-directed walk, not a MIR lowering:
