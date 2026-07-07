@@ -123,6 +123,19 @@ So the coexistence is not just migration scaffolding — permanent coexistence (
 analysis + fixpoint oracle) is a legitimate *end state* that fits loft's "validation, not proof"
 stance and strengthens the very safety net the rustc evaluation identified as load-bearing.
 
+**The principle, generalised: the most important evaluations deserve MORE THAN ONE independent
+implementation.** A single implementation run two ways (interp vs native reading the *same*
+ownership fact) cannot catch a wrong-but-consistent fact — that is exactly how A1b shipped latently
+(Step 0.2). A *second, independent* implementation of the evaluation can, because two independent
+computations of the same fact MUST agree, and every disagreement is a real finding in one of them.
+Early, the divergences point at the *newer/less-complete* implementation (a friendly first target);
+as it matures, a residual divergence indicts the *shipped* one — which is the A1b catch. This is not
+specific to ownership: any evaluation load-bearing for correctness (free-placement, type-resolution,
+layout) earns an independent cross-check for the same reason. **Demonstrated already:** Phase 3.3's
+independent interprocedural handling immediately surfaced 22 concrete divergences vs the shipped
+classifier (capture-induced borrowing + native-return metadata) — an automatically-produced work-list
+that guessing would not have found.
+
 ## Design decisions (recommendations; the forks are Open questions below)
 
 - **Structured dataflow over the Value-IR — NOT a MIR basic-block lowering.** loft's control

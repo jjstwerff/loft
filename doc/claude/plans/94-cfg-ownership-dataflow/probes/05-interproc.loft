@@ -1,0 +1,28 @@
+// @PLN94 Phase 2 (3.3) — interprocedural ownership: the transfer consumes a callee's
+// return_ownership SUMMARY directly (call_own + caller_arg_base), independently of the shipped
+// classifier. Dump with:
+//   LOFT_NO_CACHE=1 LOFT_OWN_ORACLE=own loft --interpret 05-interproc.loft 2>&1 >/dev/null
+// Verified 2026-07-07: the two-fn borrow-return classifies the caller binding correctly —
+// a = id(x) -> Borrowed, b = fresh() -> Owned, disagree=0.
+//
+// The at-scale cross-check (own over 505-collection-capture, 712 fns) surfaced 22 DISAGREE where
+// the INDEPENDENT implementation diverges from the shipped classifier — all capture-induced
+// borrowing (an owned literal captured into a closure that B marks Borrowed, @PLN93) or
+// #rust-bodied stdlib whose return ownership is codegen metadata, not the loft body. That
+// divergence map is 3.4's op-tail work-list, produced by the cross-check rather than guessed.
+
+// borrow-return: id returns a borrow of its param -> caller binding a = Borrowed(x)
+fn id(v: vector<integer>) -> vector<integer> { v }
+// value-return: a fresh owned vector -> caller binding = Owned
+fn fresh() -> vector<integer> { [7, 8, 9] }
+
+fn caller(x: vector<integer>) -> integer {
+  a = id(x);        // interprocedural borrow: a borrows x
+  b = fresh();      // interprocedural owned: b is a fresh store
+  (a[0] ?? 0) + (b[0] ?? 0)
+}
+
+fn main() {
+  xs: vector<integer> = [10, 20];
+  print("{caller(xs)}\n");
+}

@@ -130,8 +130,21 @@ stand as written.
   a definite `Borrowed` where B is `Join`); and at **scale** — `own` over `505-collection-capture.loft`,
   **712 functions — DISAGREE=0**: the flow-sensitive fact never unsoundly disagrees with B (pre-validates
   3.5's soundness sweep on this corpus). Probe: [`probes/04-precision.loft`](probes/04-precision.loft).
-- **3.3 — interprocedural summaries.** Consume callee `return_ownership` at call sites. **Gate:** a
-  two-fn borrow-return (`fn id(v)->vector{v}` caller) classifies the caller binding correctly.
+- **3.3 — interprocedural summaries ✅ (2026-07-07).** The transfer now consumes a callee's
+  `return_ownership` SUMMARY directly (`call_own` + `caller_arg_base`, mirroring
+  `use_analysis::call_ownership`) for a non-native user-function call — so calls are computed
+  INDEPENDENTLY of the shipped classifier, not delegated. **Gate PASSED:** the two-fn borrow-return
+  classifies the caller binding correctly — `a = id(x)` → `Borrowed`, `b = fresh()` → `Owned`,
+  `disagree=0`. **The at-scale cross-check is the real deliverable:** running `own` over
+  `505-collection-capture` (712 fns) with independent calls surfaced **22 DISAGREE**, all the
+  dangerous `mine=Owned / B=Borrowed` direction — and since 505 runs correct + leak-clean, B is
+  right, so these are *my* gaps: **capture-induced borrowing** (e.g. `test_vector_lookup`'s `xs` is
+  an owned literal that B marks `Borrowed` because it is captured into a closure — @PLN93) and
+  **`#rust`-bodied stdlib** whose return ownership is carried by codegen metadata, not the loft body
+  `return_ownership` reads. This 22-site divergence map **is 3.4's work-list**, produced by the
+  cross-check rather than guessed — the plan's premise (an independent implementation surfaces what
+  a single one can't) demonstrating itself on the friendliest target first: my own incompleteness.
+  Observer only — no shipped impact (SI-1 held). Probe: [`probes/05-interproc.loft`](probes/05-interproc.loft).
 - **3.4 — the op-tail, ONE op family per commit** (this is the bulk; iterate). Order:
   closures/capture → coroutines → `par` → native ops. Each commit adds that family's transfer
   functions + its corpus shape. **Gate (per family):** shadow-diff agrees-or-more-precise vs B on

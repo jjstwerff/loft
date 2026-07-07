@@ -12,7 +12,7 @@
 //! `Continue(n)` / `Return` add the corresponding edge and end the current straight line.
 
 use crate::data::{Data, DefType, Value};
-use crate::use_analysis::{Own, ownership_of};
+use crate::use_analysis::{Own, ownership_of, return_ownership};
 use std::collections::{BTreeMap, BTreeSet};
 
 type BlockId = usize;
@@ -501,6 +501,39 @@ impl OFact {
 
 type OState = BTreeMap<u16, OFact>;
 
+/// @PLN94 (3.3) — consume a callee's return-ownership SUMMARY at a call site, INDEPENDENTLY of
+/// the shipped classifier (so the oracle can eventually disagree with it on calls): `Owned` →
+/// the result is owned; a borrowed/join-of-param return maps back to the caller's argument var.
+/// Mirrors `use_analysis::call_ownership` so it agrees where the shipped fact is right.
+fn call_own(data: &Data, callee_d: u32, args: &[Value]) -> OFact {
+    match return_ownership(data, callee_d) {
+        Own::Owned => OFact::Owned,
+        Own::Borrowed { base } => OFact::Borrowed(caller_arg_base(data, callee_d, base, args)),
+        Own::Join { base } => OFact::Join(caller_arg_base(data, callee_d, base, args)),
+    }
+}
+
+/// Map the callee's borrowed VISIBLE parameter (`callee_base`, an attribute index) to the
+/// caller's argument var at the same visible-parameter position; `u16::MAX` when it is hidden,
+/// out of range, or the matching arg is not a var. Mirrors `use_analysis::caller_arg_base`.
+fn caller_arg_base(data: &Data, callee_d: u32, callee_base: u16, args: &[Value]) -> u16 {
+    let attrs = data.def(callee_d).attributes();
+    if callee_base == u16::MAX
+        || (callee_base as usize) >= attrs.len()
+        || attrs[callee_base as usize].hidden
+    {
+        return u16::MAX;
+    }
+    let arg_index = attrs[..callee_base as usize]
+        .iter()
+        .filter(|a| !a.hidden)
+        .count();
+    match args.get(arg_index).map(Value::unspan) {
+        Some(Value::Var(cv)) => *cv,
+        _ => u16::MAX,
+    }
+}
+
 /// Forward ownership fixpoint: returns each block's OUT-state and the pass count (SI-3).
 fn ownership_dataflow(data: &Data, d_nr: u32, cfg: &Cfg) -> (Vec<OState>, usize) {
     let n = cfg.blocks.len();
@@ -531,10 +564,21 @@ fn ownership_dataflow(data: &Data, d_nr: u32, cfg: &Cfg) -> (Vec<OState>, usize)
             // Apply the block's assignments in program order (a later def sees earlier ones).
             for (var, rhs) in &cfg.blocks[b].owns {
                 let f = match rhs.unspan() {
+                    // A bare source var resolves flow-sensitively to its current state.
                     Value::Var(u) => st
                         .get(u)
                         .copied()
                         .unwrap_or_else(|| OFact::from_own(ownership_of(data, d_nr, rhs))),
+                    // A NON-NATIVE user-function call consumes the callee summary directly (3.3).
+                    // Native-bodied functions and ops fall to the structural classifier: their
+                    // return ownership is carried by codegen metadata (`returns_borrowed_view`),
+                    // not the loft body `return_ownership` reads — replicating that is 3.4's op-tail.
+                    Value::Call(callee_d, args)
+                        if matches!(data.def(*callee_d).def_type, DefType::Function)
+                            && data.def(*callee_d).native().is_empty() =>
+                    {
+                        call_own(data, *callee_d, args)
+                    }
                     _ => OFact::from_own(ownership_of(data, d_nr, rhs)),
                 };
                 st.insert(*var, f);
