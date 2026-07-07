@@ -1658,6 +1658,169 @@ impl Stores {
         }
     }
 
+    /// @PLN97 — a stable FNV-1a hash of the STORAGE layout of `roots` and every
+    /// type they reference (record sizes + `Parts` field byte positions,
+    /// narrow-int encodings, collection element strides). Changes iff the byte
+    /// layout changes — the compact "layout identity" phases D (the schema
+    /// sidecar) and F (the compiler migration aid) embed and compare to decide a
+    /// raw-vs-serialize handoff. Sensitive to the #477 class (nested-vector
+    /// strides); pair it with the schema (`ir_schema::data_to_json`) for the full
+    /// identity. NOT `DefaultHasher` (that is not stable across Rust versions).
+    #[must_use]
+    pub fn layout_algo_hash(&self, roots: &[u16]) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in self.layout_dump(roots).bytes() {
+            h = (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        h
+    }
+
+    /// @PLN97 — a human-readable, stable dump of the STORAGE layout of `roots`
+    /// and every type they reference: one line per type, `name\tsize=N\t<parts>`,
+    /// sorted by name. `<parts>` renders the load-bearing layout facts only
+    /// (struct field byte positions, narrow-int encodings, collection element
+    /// strides — the #477 surface), keyed by type NAME so the dump is stable
+    /// across unrelated known-type renumbering. Backs [`layout_algo_hash`] and
+    /// the @PLN97 golden layout-conformance test.
+    ///
+    /// [`layout_algo_hash`]: Self::layout_algo_hash
+    #[must_use]
+    pub fn layout_dump(&self, roots: &[u16]) -> String {
+        let mut items: Vec<u16> = self.layout_closure(roots).into_iter().collect();
+        items.sort_by(|a, b| {
+            self.layout_type_name(*a)
+                .cmp(&self.layout_type_name(*b))
+                .then(a.cmp(b))
+        });
+        use std::fmt::Write as _;
+        let mut out = String::new();
+        for kt in items {
+            let _ = writeln!(
+                out,
+                "{}\tsize={}\t{}",
+                self.layout_type_name(kt),
+                self.size(kt),
+                self.render_layout_parts(kt)
+            );
+        }
+        out
+    }
+
+    fn layout_type_name(&self, kt: u16) -> String {
+        self.types
+            .get(kt as usize)
+            .map_or_else(|| format!("#{kt}"), |t| t.name.clone())
+    }
+
+    /// Transitive closure of the types reachable from `roots` via their layout
+    /// references (fields, collection elements, childrecs, data-enum variants).
+    fn layout_closure(&self, roots: &[u16]) -> std::collections::BTreeSet<u16> {
+        let mut seen: std::collections::BTreeSet<u16> = std::collections::BTreeSet::new();
+        let mut stack: Vec<u16> = roots
+            .iter()
+            .copied()
+            .filter(|k| (*k as usize) < self.types.len())
+            .collect();
+        while let Some(kt) = stack.pop() {
+            if !seen.insert(kt) {
+                continue;
+            }
+            let mut refs: Vec<u16> = Vec::new();
+            match &self.types[kt as usize].parts {
+                Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
+                    refs.extend(fields.iter().map(|f| f.content));
+                }
+                Parts::Vector(e) | Parts::Array(e) => refs.push(*e),
+                Parts::Sorted(e, _)
+                | Parts::Ordered(e, _)
+                | Parts::Hash(e, _)
+                | Parts::Index(e, _, _)
+                | Parts::Spacial(e, _) => refs.push(*e),
+                Parts::ChildRec(c) => refs.push(*c),
+                // A plain variant (no data) keeps `known_type == u16::MAX`;
+                // only data-carrying variants have an `EnumValue` type to reach.
+                Parts::Enum(vs) => {
+                    refs.extend(vs.iter().map(|(t, _)| *t).filter(|t| *t != u16::MAX))
+                }
+                _ => {}
+            }
+            for r in refs {
+                if (r as usize) < self.types.len() && !seen.contains(&r) {
+                    stack.push(r);
+                }
+            }
+        }
+        seen
+    }
+
+    fn render_layout_parts(&self, kt: u16) -> String {
+        let name = |k: u16| self.layout_type_name(k);
+        match &self.types[kt as usize].parts {
+            Parts::Base => "base".to_string(),
+            Parts::Struct(fields) => {
+                let inner: Vec<String> = fields
+                    .iter()
+                    .map(|f| format!("{}@{}:{}", f.name, f.position, name(f.content)))
+                    .collect();
+                format!("struct{{{}}}", inner.join(", "))
+            }
+            Parts::Enum(vs) => {
+                let inner: Vec<String> = vs.iter().map(|(_, n)| n.clone()).collect();
+                format!("enum{{{}}}", inner.join(", "))
+            }
+            Parts::EnumValue(tag, fields) => {
+                let inner: Vec<String> = fields
+                    .iter()
+                    .map(|f| format!("{}@{}:{}", f.name, f.position, name(f.content)))
+                    .collect();
+                format!("enumvalue[{tag}]{{{}}}", inner.join(", "))
+            }
+            Parts::Byte(start, nul) => format!("byte(start={start},null={nul})"),
+            Parts::Short(start, nul) => format!("short(start={start},null={nul})"),
+            Parts::Int(start, nul) => format!("int4(start={start},null={nul})"),
+            Parts::ShortRaw(start, nul) => format!("shortraw(start={start},null={nul})"),
+            Parts::Vector(e) => format!("vector<{}>(elem_size={})", name(*e), self.size(*e)),
+            Parts::Array(e) => format!("array<{}>(elem_size={})", name(*e), self.size(*e)),
+            Parts::Sorted(e, keys) => {
+                format!(
+                    "sorted<{}>(keys={keys:?},elem_size={})",
+                    name(*e),
+                    self.size(*e)
+                )
+            }
+            Parts::Ordered(e, keys) => {
+                format!(
+                    "ordered<{}>(keys={keys:?},elem_size={})",
+                    name(*e),
+                    self.size(*e)
+                )
+            }
+            Parts::Hash(e, keys) => {
+                format!(
+                    "hash<{}>(keys={keys:?},elem_size={})",
+                    name(*e),
+                    self.size(*e)
+                )
+            }
+            Parts::Index(e, keys, left) => {
+                format!(
+                    "index<{}>(keys={keys:?},left={left},elem_size={})",
+                    name(*e),
+                    self.size(*e)
+                )
+            }
+            Parts::Spacial(e, keys) => {
+                format!(
+                    "spacial<{}>(keys={keys:?},elem_size={})",
+                    name(*e),
+                    self.size(*e)
+                )
+            }
+            Parts::DbRef => "dbref12".to_string(),
+            Parts::ChildRec(c) => format!("childrec<{}>", name(*c)),
+        }
+    }
+
     /// Plan-06 phase 2 — true iff `tp` (a struct or struct-enum-variant)
     /// contains any field that owns out-of-line data: text, references,
     /// vectors, hashes, sorted/index/spacial, or nested struct-enums.
