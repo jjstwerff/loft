@@ -17,13 +17,15 @@ with a firing true-positive and 0 false positives across ~521 files. A machine-c
 proof skeleton is in `formal/ownership.md`. Branch `tuxedo-pln94-ownership-dataflow` (off
 `origin/main`), unmerged. **What's still open** (refinements, not the end-state): the formal lemma
 (local transfer soundness) is now DISCHARGED (`formal/ownership.md`, over-free property given the
-O-\* rules; only a Coq/Lean rendering remains); the leak-scan's next gaps (conditional/`Join` leaks,
-adopted-owned non-`OpDatabase` stores, closures — the `check-leak` ratchet targets); the `n_choose`
-fact-disagree residual (Check A, the one retbuf-materialisation case); the self-contained A1b catch
-(waits on base resolution — A1b is already caught by Check A). The `check-dev` over-free Check B is
-**now PROMOTED** onto `check` (its true-positive is `LOFT_OWN_INJECT_FREE_BORROWED`); `check-dev`
-retains only the exit-state Check C as a second opinion. Out of scope (declared): P4/VH codegen cutover
-+ the perf fork (Open q4). Progress by phase:
+O-\* rules; only a Coq/Lean rendering remains); the `n_choose` fact-disagree residual (Check A, the
+one retbuf-materialisation case); the self-contained A1b catch (waits on base resolution — A1b is
+already caught by Check A). The `check-dev` over-free Check B is **now PROMOTED** onto `check` (its
+true-positive is `LOFT_OWN_INJECT_FREE_BORROWED`); `check-dev` retains only the exit-state Check C as a
+second opinion. The leak scan's **adopted-owned class is now PROMOTED** too (an NRVO return buffer
+`__ref_*` a function owns + frees but never `OpDatabase`-mints — 0 FP across 829 files, its own
+`LOFT_OWN_INJECT_DROP_FREE=__ref_1` true-positive). Remaining leak gaps by design: conditional/`Join`
+leaks (the runtime leak-check's class — coexistence) and closure bodies (frees on a different codegen
+clock). Out of scope (declared): P4/VH codegen cutover + the perf fork (Open q4). Progress by phase:
 
 - **Phase 0 ✓** — falsification gate PASSED: `LOFT_NO_A1B` produces a backend-consistent wrong plan
   the interp-vs-native oracle passes (`len=0` on both), and an independent static check catches it.
@@ -68,13 +70,15 @@ retains only the exit-state Check C as a second opinion. Out of scope (declared)
   backend-identity. Phase 5.4: the machine-checkable-soundness proof skeleton in `formal/ownership.md`
   (obligation ledger; one open lemma = local transfer soundness).
 - **Under-free / leak (Check C) — BUILT + PROMOTED ✓ ([`CHECK_C_UNDERFREE_DESIGN.md`](CHECK_C_UNDERFREE_DESIGN.md)).**
-  The definite-leak scan (`run_leak_scan`) now runs on the DEFAULT `check` path: only a MINTED
-  (`OpDatabase`) var leaks (a type-dep phantom like `__retbuf` has no store); transferred = returns
-  (closed transitively through the dep) ∪ consumes/captures (not closed) ∪ the shipped
-  `skip_free`/`caller_hidden_buf` flags. Drove its own `check-leak` ratchet **927 → 0** (the `__retbuf`
-  phantom was ~889), with an injected-free positive control proving it fires (not vacuous). KNOWN
-  GAPS (ratchet targets, not FPs): conditional/`Join` leaks, adopted-owned non-`OpDatabase` stores,
-  closures. The dev-tier + ratchet workflow (a check that RAISES the count gets its own flag, never a
+  The definite-leak scan (`run_leak_scan`) now runs on the DEFAULT `check` path over TWO owned-store
+  classes: a MINTED (`OpDatabase`) var AND an ADOPTED work-ref (`__ref_*`/`__rref_*`) NRVO return
+  buffer a function owns + frees but never `OpDatabase`-mints (a type-dep phantom like `__retbuf` has
+  no store — excluded because it never appears as a `Var` arg). Transferred = returns (closed
+  transitively through the dep) ∪ consumes/captures (not closed). Drove its own `check-leak` ratchet
+  **927 → 0** (the `__retbuf` phantom was ~889), then folded in the adopted class (0 FP across 829
+  files, no ratchet needed) — two injected-free positive controls prove it fires (not vacuous). BY-DESIGN
+  GAPS (not FPs): conditional/`Join` leaks (the runtime leak-check's class — coexistence), closure
+  bodies (frees on a different codegen clock). The dev-tier + ratchet workflow (a check that RAISES the count gets its own flag, never a
   revert) is distilled into a nudge in the engineering-rigor skill.
 
 The remaining approximations this replaces still ship: `src/use_analysis.rs` analysis **A**

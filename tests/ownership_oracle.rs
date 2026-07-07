@@ -262,12 +262,12 @@ fn oracle_dev_free_check_ratchet() {
     }
 }
 
-/// The EXPERIMENTAL all-vars leak scan (`LOFT_OWN_ORACLE=check-leak`) has its OWN ratchet baseline —
-/// the point of the "raise it → flag it, don't revert" workflow. It over-approximates leaks until the
-/// shipped free analysis's transfer knowledge is replicated (retbuf/param aliasing, the phantom
-/// `__retbuf`, `par` queue frees, work-refs) — VH. Its findings ARE that codegen-transfer-artifact
-/// worklist. This asserts it does not REGRESS above the baseline; drive it DOWN at leisure (each
-/// recognised artifact lowers `LEAK_SCAN_BASELINE`), no churn to the clean `check-dev` tier.
+/// The all-vars leak scan (`LOFT_OWN_ORACLE=check-leak`) ratchet baseline — the "raise it → flag it,
+/// don't revert" workflow that drove it 927 → 0 (recognising each codegen-transfer artifact:
+/// retbuf/param aliasing, the phantom `__retbuf`, `par` queue frees, work-refs). The scan is now
+/// PROMOTED onto `check` (both the `OpDatabase` and the adopted-owned classes) with two firing
+/// true-positives; this sweep re-arms the ratchet as a regression guard. It asserts the count does not
+/// REGRESS above the baseline; a future gap recognised lowers it further.
 const LEAK_SCAN_BASELINE: usize = 0;
 
 #[test]
@@ -338,6 +338,47 @@ fn oracle_leak_scan_flags_an_injected_leak() {
     assert!(
         injected.iter().any(|r| r.contains("__vdb_1")),
         "check-leak FAILED to flag the injected __vdb_1 leak (vacuous?): {injected:?}"
+    );
+}
+
+/// The ADOPTED-leak TRUE-POSITIVE gate (on the PROMOTED default `check` path): proving the leak scan's
+/// adopted-owned class is not vacuous. The positive control binds `adopted = make()`; the caller
+/// allocates a hidden NRVO return buffer `__ref_1` (a `caller_hidden_buf` work-ref) it OWNS + frees.
+/// `__ref_1` is NOT `OpDatabase`-minted in the caller's body, so the OpDatabase-only recognizer missed
+/// it — the gap this class closes. `LOFT_OWN_INJECT_DROP_FREE=__ref_1` drops that free (a genuine leak
+/// the runtime leak-check also flags); the scan MUST go RED on `n_use_adopted`'s `__ref_1`, and the
+/// un-injected run MUST be clean. (The injection is name-global, so other functions' `__ref_1` may also
+/// flag — the assertion pins the fixture's own function.)
+#[test]
+fn oracle_adopt_leak_flags_an_injected_leak() {
+    let ctrl = "doc/claude/plans/94-cfg-ownership-dataflow/probes/09-adopt-leak-positive-control.loft";
+    let reds = |env: &[(&str, &str)]| -> Vec<String> {
+        let mut cmd = Command::new(loft_bin());
+        cmd.arg("--interpret")
+            .arg(root().join(ctrl))
+            .env("LOFT_NO_CACHE", "1")
+            .env("LOFT_OWN_ORACLE", "check"); // promoted: the adopted class rides on the default path
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        let out = cmd.output().expect("run loft check");
+        String::from_utf8_lossy(&out.stderr)
+            .lines()
+            .filter(|l| {
+                l.starts_with("RED ") && l.contains(": leak ") && l.contains("n_use_adopted")
+            })
+            .map(str::to_string)
+            .collect()
+    };
+    assert!(
+        reds(&[]).is_empty(),
+        "the leak scan cried wolf on the un-injected adopted positive control: {:?}",
+        reds(&[])
+    );
+    let injected = reds(&[("LOFT_OWN_INJECT_DROP_FREE", "__ref_1")]);
+    assert!(
+        injected.iter().any(|r| r.contains("__ref_1")),
+        "the leak scan FAILED to flag the injected adopted __ref_1 leak (vacuous?): {injected:?}"
     );
 }
 

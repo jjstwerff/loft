@@ -28,8 +28,11 @@ directions, three independent gates, each with a firing true-positive.
 
 **Still open** (refinements, not the end-state): (1) ✅ the formal lemma (local transfer soundness) is
 now DISCHARGED in `formal/ownership.md` § "Machine-checkable soundness" (over-free property, given the
-O-\* rules; only a Coq/Lean rendering of the prose remains); (2) the leak-scan's next `check-leak`
-ratchet targets — conditional/`Join` leaks, adopted-owned non-`OpDatabase` stores, closures; (3) ✅ the
+O-\* rules; only a Coq/Lean rendering of the prose remains); (2) ✅ the leak scan's ADOPTED-owned class
+(`__ref_*`/`__rref_*` NRVO return buffers) is now PROMOTED onto `check` — 0 FP across 829 files,
+`LOFT_OWN_INJECT_DROP_FREE=__ref_1` positive control fires (`oracle_adopt_leak_flags_an_injected_leak`);
+the remaining leak gaps are BY DESIGN (conditional/`Join` = the runtime leak-check's class; closures =
+frees on a different codegen clock); (3) ✅ the
 `check-dev` over-free Check B (`run_over_free_check`) is now PROMOTED onto `check` — 0 FP across
 scripts+docs+lib+examples, injected-`LOFT_OWN_INJECT_FREE_BORROWED` positive control fires
 (`oracle_over_free_check_flags_an_injected_free`); `check-dev` retains only the exit-state Check C. The
@@ -340,13 +343,19 @@ promoted check fires — symmetric to the leak scan's `LOFT_OWN_INJECT_DROP_FREE
 ## Check C — under-free / leak detection ✅ BUILT + PROMOTED ([`CHECK_C_UNDERFREE_DESIGN.md`](CHECK_C_UNDERFREE_DESIGN.md))
 
 **OUTCOME (2026-07-07):** the definite-leak scan (`run_leak_scan`) now runs on the DEFAULT `check`
-path, so the oracle catches both directions. Recognizer: only a MINTED (`OpDatabase`) var leaks (a
-type-dep-only phantom like `__retbuf` has no store); transferred = returns (closed transitively through
-the dep) ∪ consumes/captures (NOT closed) ∪ the shipped `skip_free`/`caller_hidden_buf` flags. Drove
-its own `check-leak` ratchet **927 → 0** (the `__retbuf` phantom was ~889); an injected-free positive
-control (`LOFT_OWN_INJECT_DROP_FREE`, `oracle_leak_scan_flags_an_injected_leak`) proves it fires — not
-vacuous. KNOWN GAPS (ratchet targets, not FPs): conditional/`Join` leaks (runtime leak-check's class),
-adopted-owned non-`OpDatabase` stores, closures. The journey below (the dev-tier/ratchet workflow, the
+path, so the oracle catches both directions. Recognizer: an owned heap store MINTED by `OpDatabase`
+OR an ADOPTED work-ref (`__ref_*`/`__rref_*`) NRVO return buffer (a `caller_hidden_buf` this function
+owns + frees — passed as a `Var` arg to a call, which is the real-vs-`__retbuf`-phantom discriminator);
+transferred = returns (closed transitively through the dep) ∪ consumes/captures (NOT closed). Drove its
+own `check-leak` ratchet **927 → 0** (the `__retbuf` phantom was ~889), then FOLDED IN the adopted class
+(0 FP across 829 files, no ratchet needed). TWO injected-free positive controls prove it fires — the
+`OpDatabase` class (`LOFT_OWN_INJECT_DROP_FREE=__vdb_1`, `oracle_leak_scan_flags_an_injected_leak`) and
+the adopted class (`=__ref_1`, `oracle_adopt_leak_flags_an_injected_leak`). The one real subtlety: the
+adopted class required DROPPING the `!caller_hidden_buf` exclusion — that flag is a codegen tag for the
+NRVO buffer (this function DOES own + free it), not a "freed elsewhere" semantic; correct code still
+excludes it via `!freed`/`!closed`, so the drop is FP-safe (verified: 0 FP). BY-DESIGN GAPS (not FPs):
+conditional/`Join` leaks (the runtime leak-check's class — coexistence), closure bodies (frees on a
+different codegen clock). The journey below (the dev-tier/ratchet workflow, the
 C.0 blocker, the promotion attempt) is the historical record; the workflow is now a nudge in the
 engineering-rigor skill.
 

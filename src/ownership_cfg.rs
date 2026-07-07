@@ -933,18 +933,22 @@ pub fn oracle_free_checks(data: &Data) {
 }
 
 /// The DEFINITE-leak scan (PROMOTED: runs under `LOFT_OWN_ORACLE=check` and `check-leak`). Flags a
-/// var that: is MINTED by
-/// `OpDatabase` (only a real store leaks — a type-dep-only phantom like `__retbuf` is skipped); OWNS
-/// its store (empty type dep, HEAP); is not a param; is not marked by the shipped analysis's own
-/// "not-a-leak" flags (`skip_free`, `caller_hidden_buf`); is not freed; and is not transferred out.
-/// Iterating ALL vars (`snapshot_names`) catches db-vars a fixpoint state misses (the true-positive:
-/// a dropped `OpDatabase` free, `oracle_leak_scan_flags_an_injected_leak`). The transferred set is
-/// RETURN seeds closed transitively through the dep (a returned `buf["__vdb_1"]` carries `__vdb_1`
-/// out) UNION consume/capture seeds NOT closed (an element absorbed into a LOCAL container leaves the
-/// container leak-checked). **Now 0 FP across scripts+docs+lib+examples with the true-positive
-/// firing** — drove the baseline 927 → 0 (the `__retbuf` phantom was ~889). KNOWN GAPS (documented,
-/// not FPs): conditional/`Join` leaks (`LOFT_NO_JOIN_OWN` — the runtime leak-check's class), leaks of
-/// non-`OpDatabase` adopted-owned stores, and closure bodies — the next ratchet targets.
+/// var that: OWNS a real heap store — MINTED by `OpDatabase` in this body OR an ADOPTED work-ref
+/// (`__ref_*`/`__rref_*`) buffer passed to a call (the NRVO return-buffer adoption, a
+/// `caller_hidden_buf` this function still owns + frees); a type-dep-only phantom like `__retbuf` is
+/// skipped (it appears only in a type annotation, never as a `Var` argument, so it has no store);
+/// OWNS its store (empty type dep, HEAP); is not a param; is not `skip_free`; is not freed; and is not
+/// transferred out. Iterating ALL vars (`snapshot_names`) catches db-vars a fixpoint state misses. The
+/// transferred set is RETURN seeds closed transitively through the dep (a returned `buf["__vdb_1"]`
+/// carries `__vdb_1` out) UNION consume/capture seeds NOT closed (an element absorbed into a LOCAL
+/// container leaves the container leak-checked). **0 FP across 829 files (all `tests/` + examples +
+/// fuzz) with two firing true-positives** — the `OpDatabase` class (`LOFT_OWN_INJECT_DROP_FREE=__vdb_1`,
+/// `oracle_leak_scan_flags_an_injected_leak`) and the adopted class
+/// (`LOFT_OWN_INJECT_DROP_FREE=__ref_1`, `oracle_adopt_leak_flags_an_injected_leak`). Drove the
+/// OpDatabase baseline 927 → 0 (the `__retbuf` phantom was ~889), then folded in the adopted class
+/// (0 FP, no ratchet needed). REMAINING GAP (documented, not an FP): conditional/`Join` leaks
+/// (`LOFT_NO_JOIN_OWN`) are the runtime leak-check's class BY DESIGN (coexistence); closure bodies
+/// (`n___lambda_*`) are skipped — their frees are codegen'd on a different clock.
 fn run_leak_scan(name: &str, body: &Value, data: &Data, d_nr: u32) -> usize {
     if name.starts_with("n___lambda_") {
         return 0; // closure frees are codegen'd on a different clock — not visible here
@@ -967,6 +971,24 @@ fn run_leak_scan(name: &str, body: &Value, data: &Data, d_nr: u32) -> usize {
             && let Some(Value::Var(v)) = args.first().map(Value::unspan)
         {
             minted.insert(*v);
+        }
+    });
+    // The adopted-owned class: a work-ref (`__ref_*`/`__rref_*`) that OWNS a heap store filled by a
+    // CALL (the NRVO return-buffer adoption — `caller_hidden_buf`) rather than minted by `OpDatabase`
+    // in this body. It is a REAL store (unlike a `__retbuf` phantom, which appears only in a type
+    // annotation, never as a `Var` argument), so being passed as a call argument is the
+    // real-vs-phantom discriminator. On correct code these are always freed (`!freed`) or returned
+    // (`!closed`); a dropped free is a definite leak the OpDatabase-only recognizer misses.
+    body.walk(&mut |x| {
+        if let Value::Call(_, args) = x {
+            for a in args {
+                if let Value::Var(v) = a.unspan() {
+                    let nm = func.name(*v);
+                    if nm.starts_with("__ref_") || nm.starts_with("__rref_") {
+                        minted.insert(*v);
+                    }
+                }
+            }
         }
     });
     // Transferred set. RETURN seeds close transitively through the type dep — a returned
@@ -1016,7 +1038,6 @@ fn run_leak_scan(name: &str, body: &Value, data: &Data, d_nr: u32) -> usize {
             && func.tp(v).depend().is_empty()
             && !func.is_argument(v)
             && !func.skip_free(v)
-            && !func.is_caller_hidden_buf(v)
             && !freed.contains(&v)
             && !closed.contains(&v)
         {

@@ -1,0 +1,18 @@
+// @PLN94 adopted-owned leak positive control — the true-positive gate for the leak scan's ADOPTED
+// class. `use_adopted` calls `make`, which returns a heap vector; the caller allocates a hidden NRVO
+// return buffer `__ref_1` (a `caller_hidden_buf` work-ref) to receive it and OWNS it — `get_free_vars`
+// frees `__ref_1` at scope exit. `__ref_1` is NOT `OpDatabase`-minted in `use_adopted`'s body, so the
+// OpDatabase-only recognizer MISSED it (the gap this closes). With
+// `LOFT_OWN_INJECT_DROP_FREE=__ref_1` the buffer's free is dropped — a genuine leak the runtime
+// leak-check also flags — and the promoted scan MUST go RED on `__ref_1` in `n_use_adopted`. The
+// un-injected run frees it and MUST stay clean. Mirrors the OpDatabase positive control (07).
+fn make() -> vector<integer> { [10, 20, 30] }
+
+fn use_adopted() {
+    adopted: vector<integer> = make();
+    print("{adopted[1] ?? -1}\n");
+}
+
+fn main() {
+    use_adopted();
+}

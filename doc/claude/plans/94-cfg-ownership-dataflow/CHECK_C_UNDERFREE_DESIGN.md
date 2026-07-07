@@ -117,12 +117,22 @@ tier).** Applying the "raise-it-→-flag-it, never revert" rule, the all-vars sc
   named owned var's free; `oracle_leak_scan_flags_an_injected_leak` asserts `check-leak` RED on
   `__vdb_1` (probe 07) — not vacuous. 0 FP across scripts+docs+lib+examples (~521 files).
 - **KNOWN GAPS (documented, not FPs):** conditional/`Join` leaks (`LOFT_NO_JOIN_OWN` — the runtime
-  leak-check's class), leaks of adopted-owned non-`OpDatabase` stores, and closure bodies.
+  leak-check's class, BY DESIGN) and closure bodies (frees on a different codegen clock). The
+  adopted-owned non-`OpDatabase` class is now CLOSED — see the update below.
 
-So the under-free direction the user asked for is REAL now — a sound definite-leak scan, gated as
-`check-leak`, `LEAK_SCAN_BASELINE=0`. Promotion to `check` = fold `run_leak_scan` into the default
-path (it is clean + has a true-positive); the remaining gaps are the conditional/adopted/closure
-extensions, chipped at leisure by the same ratchet.
+So the under-free direction the user asked for is REAL now — a sound definite-leak scan PROMOTED onto
+`check` over two owned-store classes (`OpDatabase`-minted + adopted NRVO buffers), `LEAK_SCAN_BASELINE=0`
+re-armed as a regression guard.
+
+> **UPDATE (2026-07-07) — adopted-owned class CLOSED + promoted.** A work-ref (`__ref_*`/`__rref_*`)
+> NRVO return buffer a function owns + frees but never `OpDatabase`-mints was the demonstrable gap: with
+> its free dropped, the runtime leak-check flags it but the OpDatabase-only scan missed it. Recognizer:
+> a work-ref passed as a `Var` argument to a call (the real-vs-`__retbuf`-phantom discriminator). The
+> `!caller_hidden_buf` exclusion had to be DROPPED — that flag is the NRVO-buffer codegen tag, not a
+> "freed elsewhere" semantic; correct code still excludes the buffer via `!freed`/`!closed`, so the drop
+> is FP-safe (verified 0 FP across 829 files). Folded into `run_leak_scan` (no gate); true-positive
+> `oracle_adopt_leak_flags_an_injected_leak` (probe 09). Conditional/`Join` stays the runtime check's;
+> closures stay blocked (frees on a different clock).
 
 The false-positive MACHINERY already works: the heap-type filter (70–124 → 9–35/file) and the
 transfer-out set (returned ∪ consumed-into-container, → 0–4/file on the small corpus) are in
