@@ -226,10 +226,35 @@ right value, un-requested keys are absent, `len == 1` (bounded working set) —
 run under wasmtime with the fixture preopened). `LOFT_LOADER_STATS` prints `bytes_fetched` vs file
 for the ≪-file check at scale.
 
-**Remaining Phase 3 (3b+):** multiple keys (a `vector` arg) · Sorted key path · text/float key types
-in `key_compare_reader` · the identity gate at bootstrap · **the relocating graph-copy** for
-non-flat entries (vector/text/nested fields), reimplementing `for_each_owned_child` over the reader
-— the high-risk core, built variant-by-variant with both-backend + leak verification.
+**Phase 3b — the relocating graph-copy (detailed, individually-verifiable steps).**
+The remaining work extends the copy from FLAT (scalar-only) entries to entries with heap fields
+(text / vector / nested), plus more key types and the Sorted path. Each step below is independently
+landable, has a concrete pass/fail check, and is gated on both backends + leak-clean.
+
+**The verification gate (reusable for every step) — differential against whole-file `store_load`.**
+Phase 1's `store_load` is verified, so it is the GROUND TRUTH: load the whole persisted collection
+into `g_full`, then `store_load_keys(subset)` into `g_partial`, and assert — for every requested
+key — `g_partial[k]` deep-equals `g_full[k]` field-by-field (including every heap field's contents),
+that un-requested keys are ABSENT from `g_partial`, and `len(g_partial) == |subset|`. This turns
+"did the relocating copy corrupt anything?" into a mechanical check with no reverse-engineering —
+the safe way to build heap-mutation code. Add it as a helper in `store_persist_loft.rs`
+(`assert_subset_matches_full`) driven by a `.loft` script that prints each entry's fields; wire it
+into every 3b step's regression.
+
+| Step | Build | Verified by (all on interpret + native, leak-clean) |
+|---|---|---|
+| **3b.1 field classifier + SAFE REFUSAL** | classify each entry-struct field via the type table (`self.types[field.content].parts` / `Type`) into {inline-scalar · text · vector · nested-struct · other}; `load_one` REFUSES (returns `false`, copies nothing) any entry with a non-scalar field. No copy behaviour change yet. | a `hash<Rec[id, name: text]>` → `store_load_key` returns **false** (clean refusal, NOT a corrupt/partial entry); the flat-int case is unchanged. Proves the classifier is correct BEFORE any risky copy — the load-bearing safety step. |
+| **3b.2 text-field relocation** | for a `text` field, flat-copy the source string sub-record (header + len + UTF-8 bytes — itself flat) into a fresh `local` claim, then overwrite the field's `u32` pointer with the new local rec. | differential gate on `hash<Rec[id, name: text]>`: `g_partial[k].name == g_full[k].name` (and a distinctive long string > one page, to exercise a multi-page string). |
+| **3b.3 vector<scalar>-field relocation** | copy the vector's inner record + its length-prefixed element bytes into `local`, relocate the field pointer. | differential on `hash<Rec[id, tags: vector<integer>]>`: length AND every element match `g_full`. |
+| **3b.4 recursion: nested struct + vector<struct>** | recurse the copy through in-place nested structs and `vector<struct>` elements (mirror `for_each_owned_child`'s Struct/Vector arms). | differential on `hash<Rec[id, sub: Sub{a,b}]>` and `hash<Rec[id, items: vector<Sub>]>`. |
+| **3b.5 layout-identity gate at bootstrap** | at load, read the remote store's layout id (`schema_sidecar::classify`/`check`) and REJECT on mismatch before any read. | a fixture written under a DIFFERENT layout → `store_load_key` returns **false** (rejected, never misread); a matching-layout fixture still loads. |
+| **3b.6 text keys (key type 6)** | extend `key_compare_reader` to read a `text` key over the reader (string sub-record) + a `vector<text>` key entry point (`store_load_keys_text`). | differential on `hash<Rec[name: text, val: int]>` keyed by `name`. |
+| **3b.7 Sorted find path** | `find_sorted_entry` — binary search over the sorted vector via the reader; dispatch on the collection's `Parts` (Hash vs Sorted). | differential on `sorted<Rec[id]>` (bridges into Phase 4 range). |
+| **3b.8 bytes ≪ file at scale** | (no new code) a large fixture: N≫1 entries spanning many 64 KiB pages. | `LOFT_LOADER_STATS` asserts `bytes_fetched` for a small subset is a handful of pages, `≪ file` — the working-set invariant made quantitative. |
+
+Order = lowest-risk first: 3b.1 (refuse, no mutation) locks safety; 3b.2–3b.4 add relocation one
+heap-kind at a time, each diff-verified; 3b.5 hardens the boundary; 3b.6–3b.7 broaden reach; 3b.8
+proves the payoff. A step lands only when its differential gate is green on both backends and leak-clean.
 
 - **Build (full):** `store_load_keys(local, path, keys)` — a `#rust` builtin + `n_store_load_keys` handler
   (mirrors `store_load`'s wiring). The handler:
