@@ -1,0 +1,22 @@
+# Auto-add every newly-opened issue in this repo to the org project board
+# "loft — plans & bugs" (project #1), so nothing files invisibly (the built-in
+# Projects auto-add wasn't catching new issues — e.g. plans #94).
+#
+# Reuses the org/repo secret PLANS_TOKEN — a fine-grained PAT / GitHub App with
+# **Projects: write** (+ issues:read).  The default GITHUB_TOKEN CANNOT write an
+# org-level Projects v2 board, so this needs the PAT (the same one close-plans.yml
+# already uses; grant it the Projects scope if it doesn't have it yet).
+name: Add to project board
+
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  add:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/add-to-project@v1.0.2
+        with:
+          project-url: https://github.com/orgs/loft-lang/projects/1
+          github-token: ${{ secrets.PLANS_TOKEN }}
