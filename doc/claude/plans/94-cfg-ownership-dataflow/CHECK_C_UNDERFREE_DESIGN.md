@@ -78,9 +78,25 @@ checks** — free-placement vs the ownership dep, catching a `get_free_vars`/dep
 *independent* cross-checks. `LOFT_NO_JOIN_OWN` is NOT caught by B/C (its dep and frees are
 consistently wrong — that stays Check A's independent job and the runtime leak-check's). The
 independence in @PLN94 lives in Check A (the fact vs `ownership_of`); B/C are the free-placement
-consistency layer beside it. To PROMOTE `check-dev` → `check`: validate 0 across issues/leak/wrap/
-native too, then fold `run_free_checks` into the default path + a true-positive test (a hand-injected
-`get_free_vars`/dep divergence: delete a free of an empty-dep var → Check C RED).
+consistency layer beside it.
+
+**PROMOTION ATTEMPT (2026-07-07) — blocked on Check C's true-positive; no-false-positive gate PASSED.**
+- **No crying wolf ✓** — 0 across `tests/scripts` + `tests/docs` + `tests/lib` + `examples` (521
+  files) + 54 fuzz + 7 probes. Broad and clean.
+- **True-positive ✗ (the blocker)** — a genuine injected leak (drop the scope-exit free of an
+  `OpDatabase` db-var like `__vdb_1`) is NOT caught by the exit-state-scoped Check C: a db-var's only
+  owns-entry is `= null`, so it is absent from the fixpoint state. Iterating ALL vars
+  (`snapshot_names`) catches it — verified via a `get_free_vars` fault-injection hook — but
+  over-approximates leaks: backing stores of returned values (`buf["__vdb_1"]` carries `__vdb_1` out),
+  `par` materialise temps, retbufs, `__ncc` in the leak direction. Closing those by name-exclusion is
+  whack-a-mole (the design-protocol tell); the sound fix is **comprehensive transfer/free tracking**
+  (a returned value's transitive backing is transferred; `par`/coroutine frees; the retbuf return) —
+  a VH increment. Reverted the all-vars change + the fault-injection hook (a per-free env read in the
+  hot path; re-add read-once with the all-vars work).
+
+**Verdict:** Check B/C stay CLEAN + gated in the dev tier; promotion waits on the all-vars leak scan +
+comprehensive transfer tracking. The fact-precision win (153→0) and the dev-tier/ratchet workflow
+stand; the true-positive is the next real piece.
 
 The false-positive MACHINERY already works: the heap-type filter (70–124 → 9–35/file) and the
 transfer-out set (returned ∪ consumed-into-container, → 0–4/file on the small corpus) are in
