@@ -7,7 +7,29 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 **Tracker:** [loft-lang/loft#522](https://github.com/loft-lang/loft/issues/522). Built as **arc G
 of @PLN97** ([README](README.md)) — the layout contract's hardest consumer *and* its cross-network
 validation. Pairs with #517 (HTTP stack) and rides the layout contract ([formal/layout.md](../../formal/layout.md)).
-Status: **design** — build gated on P0.
+
+**Status — HASH working-set fetcher COMPLETE, local AND remote (2026-07-07/08).** The partial store
+fetcher is built and verified end-to-end: `store_load_key` / `store_load_keys` / `store_load_key_text`
+pull only the pages a lookup touches — **from a local file OR an `http://` `Range` server** — and
+relocate the matched entries into a sound local heap. Done + verified (interpret + native, + wasip2
+for the whole-file base; leak-clean; `store_verify` on every load; each with a prove-can-fail control):
+- **Phase 1** `store_load` (whole file) · **Phase 2** `PagedReader` (page/LRU/`resolve`) ·
+  **Phase 5** `HttpRangeProvider` + `PageSource` (the REMOTE fetch, `ureq`, feature-gated).
+- **Phase 3a** bounded find + flat copy · **3b.1** safe-refusal · **3b.2** text · **3b.3**
+  vector\<scalar\> · **3b.4** inline nested structs · **3b.6** text keys.
+- The instrument: **`store_verify`** (built on `validate_claims`, extended with a Hash arm).
+
+**Remaining (each a focused, well-scoped follow-up — NOT rushed; the unbuilt shapes are all SAFELY
+REFUSED today, never mis-fetched):**
+- **Phase 4 + 3b.7 — Sorted `store_load_range`**: a Sorted collection is a sorted inline vector, so
+  it needs a NEW traversal (binary-search `sorted_find` over the reader, walk `[lo,hi]`) and a NEW
+  insert (`sorted_finish`, not `hash::add`) — the routing tile-window case; the biggest remaining piece.
+- **3b.4b `vector<struct>`**: per-element recursion (copy the inner vector record, relocate each
+  element's heap fields) — the one relocating-copy shape left.
+- **3b.5 layout-identity gate**: `schema_sidecar::check` at bootstrap (needs a `.dschema` beside the
+  remote store) so a wrong-layout image is rejected, never misread.
+- **3b.8 bytes-≪-file at scale** (a large-fixture benchmark; the property holds by construction and
+  `LOFT_LOADER_STATS` observes it) · the **`--html` `fetch()` bridge** (browser target).
 
 ## Two consumers, one general primitive
 
