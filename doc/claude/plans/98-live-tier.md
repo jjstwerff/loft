@@ -198,8 +198,11 @@ is the *interpreter* tier, not module relink.
 - **P3.2 — cooperative-yield pause (reuse `frame_yield`).** At a breakpoint in a wasm live build, set a
   debug-yield (mirror `frame_yield`), return through the existing yield path, store the session for
   `resume_frame`; a control command (`resume`/`eval`) drives `resume_frame`. *Probe (the load-bearing
-  one):* a breakpoint is NOT at a frame boundary — confirm `resume_frame` restores a suspension taken
-  MID-call (the coroutine serialised-stack path says yes; verify for the debug-yield site).
+  one) — ✅ CONFIRMED FEASIBLE by code-read (2026-07-07):* loft's interpreter keeps its CALL STACK in
+  the `State`, not the Rust stack, so `execute_argv` unwinds on `frame_yield` with the loft stack
+  preserved and `resume_frame` re-enters exactly where it left off (`wasm.rs:884-897`) — a genuine
+  MID-call suspend/resume, already proven every frame by `--html` GL apps. The debug pause is the same
+  yield, triggered at a breakpoint. So P3 is not blocked on an "impossible" pause.
 - **P3.3 — control over `host_input`.** JS pushes `flip`/`bp`/`eval`/`resume`/`reload` frames into `inQ`;
   the wasm debug pump reads them via `host_input` and applies them through the SAME
   `debug_cmd_dispatch` frame parser the TCP channel feeds today (`engine_host.rs:1980-2037`); results/
