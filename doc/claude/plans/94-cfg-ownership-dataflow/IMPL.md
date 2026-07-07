@@ -121,9 +121,15 @@ stand as written.
   then-arm, Borrowed(s) in the else-arm, meeting to `Join(s)` at the join — where the flow-*insensitive*
   classifier says `Join` everywhere. SI-3 held (`≤ n+2` passes); SI-1 held. Probe:
   [`probes/03-ownership.loft`](probes/03-ownership.loft).
-- **3.2 — arm-meet `Join`.** The per-path meet at `if`/match arm-joins (replacing B's join-of-all-defs).
-  **Gate:** `v[i] ?? d` yields `Join` at the meet; ≥1 case where B over-reports `Join` and the new
-  fact is a definite `Owned`/`Borrowed` (documented precision win).
+- **3.2 — arm-meet `Join` + precision win ✅ (2026-07-07).** The per-path meet at statement-`if`
+  arm-joins is my dataflow's `meet` (`branch_reassign`: then-arm `Owned` ⊔ else-arm `Borrowed(s)` =
+  `Join(s)`). The shadow-diff is now split three ways — AGREE / **PRECISION** (mine `⊏` B's `Join`,
+  a win) / **DISAGREE** (mine does not refine B — coarser or unsound; must be 0), via `OFact::refines`
+  (unit-tested, incl. the soundness direction: claiming `Owned` where B says `Borrowed` does NOT
+  refine → flagged DISAGREE). **Gate PASSED:** `reassign_win` reports `precision=1 disagree=0` (mine
+  a definite `Borrowed` where B is `Join`); and at **scale** — `own` over `505-collection-capture.loft`,
+  **712 functions — DISAGREE=0**: the flow-sensitive fact never unsoundly disagrees with B (pre-validates
+  3.5's soundness sweep on this corpus). Probe: [`probes/04-precision.loft`](probes/04-precision.loft).
 - **3.3 — interprocedural summaries.** Consume callee `return_ownership` at call sites. **Gate:** a
   two-fn borrow-return (`fn id(v)->vector{v}` caller) classifies the caller binding correctly.
 - **3.4 — the op-tail, ONE op family per commit** (this is the bulk; iterate). Order:

@@ -485,6 +485,18 @@ impl OFact {
             OFact::Join(b) => format!("Join(v{b})"),
         }
     }
+
+    /// Does `self` REFINE `other` (`self ⊑ other`, i.e. `self` is at least as precise)? A definite
+    /// `Owned`/`Borrowed` refines the runtime-dependent `Join`; `Bottom` refines everything. Used
+    /// to split a shadow-diff into a PRECISION win (this fact ⊏ the shipped `Join`) vs an unsound
+    /// or coarser DISAGREE-ment (which must be zero — the soundness direction, tightened in 3.5).
+    fn refines(self, other: OFact) -> bool {
+        self == other
+            || matches!(
+                (self, other),
+                (OFact::Bottom, _) | (OFact::Owned | OFact::Borrowed(_), OFact::Join(_))
+            )
+    }
 }
 
 type OState = BTreeMap<u16, OFact>;
@@ -545,28 +557,35 @@ fn ownership_dataflow(data: &Data, d_nr: u32, cfg: &Cfg) -> (Vec<OState>, usize)
 fn dump_own(name: &str, cfg: &Cfg, data: &Data, d_nr: u32) {
     let (outb, passes) = ownership_dataflow(data, d_nr, cfg);
     let exit_state = &outb[cfg.exit];
-    // Shadow-diff at the exit: my flow-sensitive fact vs the shipped classifier per var.
+    // Shadow-diff at the exit, split three ways: AGREE (identical), PRECISION (my flow-sensitive
+    // fact ⊏ the shipped `Join` — a win), DISAGREE (my fact does NOT refine theirs — coarser or
+    // unsound; must be zero). The shipped classifier is flow-insensitive (join of ALL defs), so a
+    // var whose reaching def here is single classifies definite where B collapses to `Join`.
     let mut agree = 0;
-    let mut diffs: Vec<String> = Vec::new();
+    let mut precision: Vec<String> = Vec::new();
+    let mut disagree: Vec<String> = Vec::new();
     for (&v, &mine) in exit_state {
         let theirs = OFact::from_own(ownership_of(data, d_nr, &Value::Var(v)));
+        let entry = format!("v{v}: mine={} B={}", mine.show(), theirs.show());
         if mine == theirs {
             agree += 1;
+        } else if mine.refines(theirs) {
+            precision.push(entry);
         } else {
-            diffs.push(format!(
-                "v{v}: mine={} theirs={}",
-                mine.show(),
-                theirs.show()
-            ));
+            disagree.push(entry);
         }
     }
     eprintln!(
-        "OWN {name}  blocks={} passes={passes}  agree={agree} diff={}",
+        "OWN {name}  blocks={} passes={passes}  agree={agree} precision={} disagree={}",
         cfg.blocks.len(),
-        diffs.len()
+        precision.len(),
+        disagree.len()
     );
-    for d in &diffs {
-        eprintln!("  DIFF {d}");
+    for p in &precision {
+        eprintln!("  PRECISION {p}");
+    }
+    for d in &disagree {
+        eprintln!("  DISAGREE {d}");
     }
     for (b, st) in outb.iter().enumerate() {
         if st.is_empty() {
@@ -776,5 +795,22 @@ mod tests {
         // Join dominates.
         assert_eq!(OFact::meet(Join(7), Owned), Join(7));
         assert_eq!(OFact::meet(Owned, Join(7)), Join(7));
+    }
+
+    #[test]
+    fn ofact_refines_marks_precision_and_flags_the_unsound_direction() {
+        use super::OFact::{Borrowed, Bottom, Join, Owned};
+        // A definite fact refines the shipped runtime-dependent `Join` — a PRECISION win (sound:
+        // narrowing "maybe owned/borrowed" to a definite borrow/own never frees more than B would).
+        assert!(Owned.refines(Join(3)));
+        assert!(Borrowed(1).refines(Join(2)));
+        assert!(Bottom.refines(Owned));
+        assert!(Owned.refines(Owned)); // identity
+        // The DANGEROUS direction must NOT refine (→ flagged DISAGREE): claiming `Owned` where B
+        // says `Borrowed` would free a borrowed store (UAF/double-free). This is the soundness gate.
+        assert!(!Owned.refines(Borrowed(1)));
+        assert!(!Borrowed(1).refines(Owned));
+        // Coarser-than-B (my `Join` where B is definite) is also not a refinement.
+        assert!(!Join(1).refines(Owned));
     }
 }

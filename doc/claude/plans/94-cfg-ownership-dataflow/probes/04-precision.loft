@@ -1,0 +1,22 @@
+// @PLN94 Phase 2 (3.2) — the arm-meet Join + a flow-sensitive PRECISION win over the shipped
+// flow-insensitive classifier. Dump with:
+//   LOFT_NO_CACHE=1 LOFT_OWN_ORACLE=own loft --interpret 04-precision.loft 2>&1 >/dev/null
+// Verified 2026-07-07: reassign_win reports precision=1 disagree=0 — my flow-sensitive fact is a
+// definite Borrowed where B collapses to Join. At scale (own over 505-collection-capture, 712
+// functions) DISAGREE=0: the flow-sensitive fact never UNSOUNDLY disagrees with B (it never says
+// Owned where B says Borrowed — the direction that would free a borrowed store).
+
+struct S { v: vector<integer>, n: integer }
+fn mk() -> S { S { v: [1, 2, 3], n: 5 } }
+
+// `a` is reassigned across two defs (Borrowed(s) then a fresh literal). Flow-sensitively the
+// reaching def at the exit is single, so `a` classifies definite; the flow-insensitive classifier
+// joins BOTH defs to Join. A precision win (mine ⊏ B's Join), NOT an unsound disagreement.
+fn reassign_win(s: S) -> integer {
+  a = s.v;              // Borrowed(s)
+  x = a[0] ?? 0;        // use a while borrowed
+  a = [10, 20];         // reassign: a fresh literal
+  x + (a[1] ?? 0)       // use a while owned
+}
+
+fn main() { print("{reassign_win(mk())}\n"); }
