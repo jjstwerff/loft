@@ -331,12 +331,18 @@ MEASURED, then reverted; the numbers fixed both the scope and a BLOCKER (design 
   conditional/`Join` leaks (`LOFT_NO_JOIN_OWN` — free op statically present, skipped at runtime → the
   RUNTIME leak-check's class; coexistence). False positives: heap filter 70→9-35/file, then the
   transfer-out set (returned ∪ consumed-into-container) → **0–4/file**.
-- **C.0 BLOCKER (found while building):** the oracle observes the PRE-codegen IR (`oracle` is line 3
-  of `scopes::check`; `get_free_vars` inserts frees later, during codegen), so a user function's free
-  set is EMPTY at oracle time. Check C can't run here, and Check B is near-vacuous on user functions
-  for the same reason (it meaningfully checks only pre-cached stdlib). **C.0 = give the free-based
-  checks a post-codegen view** (a second entry point after codegen, or thread the pre-codegen fact to
-  a post-codegen free-walk). C.1–C.4 stack on C.0.
+- **C.0 ✅ BUILT (dev tier) + the REAL blocker found.** The oracle observed PRE-codegen IR (`oracle`
+  is line 3 of `scopes::check`; `get_free_vars` inserts frees during codegen), so user-function free
+  sets were empty. Fixed with `oracle_free_checks` — a POST-codegen pass at the end of `scopes::check`,
+  gated on `LOFT_OWN_ORACLE=check-dev` (Check A stays pre-codegen; SI-1 held). With frees now visible,
+  the 377-script sweep exposed the deeper blocker: **the ownership fact is not materialisation-aware**
+  — a struct copy `r1 = a` reads `Borrowed(a)` but is freed as an owned copy (the `n_choose` gap,
+  pervasive) → **153 free-based findings**, flooding both B and C. The fix is a fact-precision upgrade
+  (classify copied `x = borrowed-source` as `Owned`), not more check tuning.
+- **The WORKFLOW (dev tier + ratchet):** the dev checks live behind `check-dev`, never on the default
+  `check`; `tests/ownership_oracle.rs::oracle_dev_free_check_ratchet` (`#[ignore]`) asserts findings
+  `≤ DEV_FP_BASELINE` (153) — a one-way ratchet lowered by each fact improvement, `== 0` promotes them
+  into `check`. The FP machinery (heap filter + transfer-out set) works; the 153 is the fact blocker.
 
 **Explicitly NOT here:** routing any shipped consumer (`scopes::get_free_vars`, `state/codegen.rs`,
 `generation/dispatch.rs`) to the new fact, and retiring the position-proxy / flow-insensitive-join.

@@ -44,17 +44,30 @@ Consequences:
   shipped check, surfaced here — worth widening when C.0 lands.
 - **Check A is unaffected** — it is fact-based (needs no frees), which is why the A1b catch works.
 
-**C.0 = give the free-based checks a POST-codegen view.** Options (decide before C.1):
-1. A second oracle entry point invoked after codegen completes (where `def.code` is final — the
-   state `introspect` already reads), running ONLY the free-based checks (B + C). Keep Check A at the
-   pre-codegen site where its fact fixpoint is already validated.
-2. Reconcile carefully: the post-codegen CFG has the extra free/copy/materialise ops, so re-running
-   the FULL fixpoint there would change Check A's facts and needs re-validation — prefer (1),
-   computing the fact once (pre-codegen) and threading it to a post-codegen free-walk.
+**C.0 = give the free-based checks a POST-codegen view. ✅ BUILT (dev tier, 2026-07-07).**
+`ownership_cfg::oracle_free_checks` runs at the END of `scopes::check` (after `get_free_vars`),
+gated on `LOFT_OWN_ORACLE=check-dev`; Check A stays at the pre-codegen site. It is a pure observer
+(SI-1 held) and NEVER on the default `check` path.
 
-Until C.0 lands, C.1–C.4 below are DESIGNED-not-buildable. The transfer-out set + heap filter (the
-false-positive machinery) were prototyped and measured (0–4 FP/file) and stand ready; they just need
-the frees C.0 supplies.
+**C.0 immediately exposed the REAL blocker (the 377-script sweep, not the tiny corpus).** With frees
+now visible, Checks B + C produce **153 findings across `tests/scripts`** — and they are dominated by
+ONE root cause: **the ownership fact is not materialisation-aware.** A struct copy `r1 = a` (a param)
+reads `Borrowed(a)`, but the shipped code COPIES it and frees the owned copy — so:
+- Check B fires: `free-of-borrowed r1 is Borrowed(a)` (it IS freed, legitimately, as an owned copy);
+- Check C fires: loop/iteration/container temps whose owned-copy frees the fact does not see as owning.
+This is the `n_choose` gap, pervasive. **The work Check C needs is not more transfer-set tuning — it
+is a materialisation-aware FACT** (classify a copied `x = borrowed-source` as `Owned`, matching what
+codegen emits). That is a Phase-3-level precision upgrade.
+
+**The workflow (so the checks are never reverted again): a gated dev tier + a FP RATCHET.** The dev
+checks live in the code behind `check-dev`; `tests/ownership_oracle.rs::oracle_dev_free_check_ratchet`
+(`#[ignore]`) counts their findings over `tests/scripts` and asserts `≤ DEV_FP_BASELINE` (currently
+**153**). Every fact/transfer improvement LOWERS the baseline; a regression fails; at 0 they promote
+into `check`. Progress is a number going down, not code toggled in and out.
+
+The false-positive MACHINERY already works: the heap-type filter (70–124 → 9–35/file) and the
+transfer-out set (returned ∪ consumed-into-container, → 0–4/file on the small corpus) are in
+`run_free_checks`; the residual 153 is the fact-precision blocker above, not the machinery.
 
 ## Coexistence — what it adds, what it does NOT replace
 
