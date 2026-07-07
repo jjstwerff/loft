@@ -2233,6 +2233,22 @@ use a separate collection or add after the loop"
             )]);
             return Type::Void;
         }
+        // @PLN93 (#511): a BARE captured collection is a DbRef append target too — just
+        // not a *field*.  `h += …` inside a closure reaches the collection via an
+        // `OpGetDbRef` of the closure-record field, so `var_nr == u16::MAX` and
+        // `is_field(to)` is false, which is why the keyed-`+=` insert below never fired
+        // and the append silently no-op'd.  Treat a captured-collection target (closure
+        // param in its deps) the same as a field target: `new_record(&mut to.clone(), …)`
+        // inserts into the shared store (Step 0 proved inserts persist across grows with
+        // no header write-back).
+        // @PLN93 (#511): a struct-field target (`is_field`) OR a bare collection captured into a
+        // closure (an `OpGetDbRef` whose type still depends on the closure param) is a
+        // DbRef-producing append lvalue — the keyed-`+=` inserts below must target the shared
+        // store, not a throwaway local (`var_nr == u16::MAX` for both).
+        let dbref_append_target = self.is_field(to)
+            || (self.closure_param != u16::MAX
+                && Self::is_collection_type(f_type)
+                && f_type.depend().contains(&self.closure_param));
         // Scalar `field += elem` where field is a vector field (var_nr == u16::MAX)
         // and the RHS is a single expression (variable, function call) — NOT
         // a struct literal.  Struct-literal RHS is handled by the keyed-
@@ -2240,21 +2256,21 @@ use a separate collection or add after the loop"
         if !self.first_pass
             && var_nr == u16::MAX
             && op == "+="
-            && self.is_field(to)
+            && dbref_append_target
             && let Type::Vector(elm_tp, _) = f_type
             && !matches!(code, Value::Insert(_))
         {
             let elm_tp = (**elm_tp).clone();
             let elm = self.unique_elm_var(&lhs_parent_tp, &elm_tp, u16::MAX);
             let scalar = code.clone();
-            let ls = self.new_record(
-                &mut to.clone(),
-                &lhs_parent_tp,
-                elm,
-                u16::MAX,
-                &[scalar],
-                &elm_tp,
-            );
+            // @PLN93 (#511): captured-vector target — pass the collection type so `new_record`
+            // resolves the vector db-type against the shared store (see the keyed branch below).
+            let np = if self.is_captured_dbref(to) {
+                f_type.clone()
+            } else {
+                lhs_parent_tp.clone()
+            };
+            let ls = self.new_record(&mut to.clone(), &np, elm, u16::MAX, &[scalar], &elm_tp);
             *code = Value::Insert(ls);
             return Type::Void;
         }
@@ -2272,7 +2288,7 @@ use a separate collection or add after the loop"
         if !self.first_pass
             && var_nr == u16::MAX
             && op == "+="
-            && self.is_field(to)
+            && dbref_append_target
             && matches!(
                 f_type,
                 Type::Vector(_, _)
@@ -2294,14 +2310,16 @@ use a separate collection or add after the loop"
                 let elm = self.unique_elm_var(&lhs_parent_tp, &elm_tp, u16::MAX);
                 let mut scalar = code.clone();
                 substitute_value(&mut scalar, to, &Value::Var(elm));
-                let ls = self.new_record(
-                    &mut to.clone(),
-                    &lhs_parent_tp,
-                    elm,
-                    u16::MAX,
-                    &[scalar],
-                    &elm_tp,
-                );
+                // @PLN93 (#511): a captured-collection target (`to` = `OpGetDbRef`) has no owning
+                // struct, so the record-kind dispatch (`record_new` keys off `parent_tp` when the
+                // field is `u16::MAX`) must read the COLLECTION type, not the null lhs-parent —
+                // pass `f_type` so `new_record` looks up the keyed `known_type` (hash/sorted/…).
+                let np = if self.is_captured_dbref(to) {
+                    f_type.clone()
+                } else {
+                    lhs_parent_tp.clone()
+                };
+                let ls = self.new_record(&mut to.clone(), &np, elm, u16::MAX, &[scalar], &elm_tp);
                 *code = Value::Insert(ls);
                 return Type::Void;
             }

@@ -60,6 +60,45 @@ fn run_smoke(path: &Path, mode: &str) -> (String, i32) {
     (stdout, code)
 }
 
+/// Run an arbitrary persist script on a chosen backend with the scratch path.
+fn run_script(script: &Path, backend: &str, path: &Path) -> (String, i32) {
+    let out = Command::new(loft_bin())
+        .arg(backend)
+        .arg(script)
+        .env("LOFT_PERSIST_TEST_PATH", path)
+        .current_dir(workspace_root())
+        .output()
+        .expect("failed to invoke loft binary");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    if !out.status.success() {
+        eprintln!("{backend} stderr:\n{stderr}");
+    }
+    (stdout, out.status.code().unwrap_or(-1))
+}
+
+/// #513 — within one process, every bind into a freshly-declared hash must read
+/// the persisted data (not just the first).  Freeing a bound mmap store left it
+/// in its slot; reusing that slot `init()`'d the empty header through the mmap,
+/// so later binds read empty.  Must hold on BOTH backends.
+#[test]
+fn multi_bind_reads_data_both_backends() {
+    let script = workspace_root().join("tests/scripts/store_persist_multibind_513.loft");
+    for backend in ["--interpret", "--native"] {
+        let dir = scratch(&format!(
+            "multibind_513_{}",
+            backend.trim_start_matches('-')
+        ));
+        let path = dir.join("world.store");
+        let (out, code) = run_script(&script, backend, &path);
+        assert_eq!(code, 0, "{backend} exit: {out:?}");
+        assert!(
+            out.contains("counts=3,3,3"),
+            "{backend}: every bind must read 3 records (bug gave 3,0,0 / 0,0,0): {out:?}"
+        );
+    }
+}
+
 #[test]
 fn fresh_then_reload_round_trip() {
     let dir = scratch("fresh_then_reload_round_trip");

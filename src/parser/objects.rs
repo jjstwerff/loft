@@ -46,6 +46,21 @@ impl Parser {
         }
     }
 
+    /// #511 / @PLN93 — the five collection kinds a closure captures by shared DbRef.
+    /// A captured collection is stored in the closure record as a `Reference` DbRef, so
+    /// the body must recover its real (collection) type from `capture_context` to keep
+    /// `h[key]` / iteration typed correctly.
+    pub(crate) fn is_collection_type(tp: &Type) -> bool {
+        matches!(
+            tp,
+            Type::Vector(_, _)
+                | Type::Hash(_, _, _)
+                | Type::Sorted(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Spacial(_, _, _)
+        )
+    }
+
     #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_var(
         &mut self,
@@ -210,7 +225,17 @@ impl Parser {
             let closure_d_nr = self.data.def(self.context).closure_record();
             let fnr = self.data.attr(closure_d_nr, name);
             *code = self.get_field(closure_d_nr, fnr, Value::Var(self.closure_param));
-            t = self.data.attr_type(closure_d_nr, fnr);
+            // @PLN93 (#511): a collection capture's stored attr is a `Reference` DbRef,
+            // but the body must see the ORIGINAL collection type (from capture_context)
+            // so `h[key]` / iteration type-check — the DbRef value read via OpGetDbRef is
+            // exactly what a collection variable is.
+            let captured_collection_tp = self
+                .capture_context
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, ct)| ct.clone())
+                .filter(Self::is_collection_type);
+            t = captured_collection_tp.unwrap_or_else(|| self.data.attr_type(closure_d_nr, fnr));
             // closure record is a struct — add __closure as dep so the
             // store allocation stays alive while derived text/references are in use.
             t = t.depending(self.closure_param);
@@ -294,45 +319,12 @@ impl Parser {
             .find(|(n, _)| n == name)
             .cloned()
         {
-            // P257 (2026-05-12): reject collection-typed captures with a
-            // clean parse-time diagnostic.  The closure-record layout
-            // (16-byte fn-ref slot: 4B d_nr + 12B closure DbRef) holds
-            // the captured payload as a flat list of attributes; vectors
-            // and other keyed collections need an additional level of
-            // indirection (their content type) that the closure record
-            // doesn't currently model.  Without this rejection the
-            // failure mode is unstable: interp panics with `Write to
-            // locked store` (the closure record write trips the
-            // collection's internal lock), native rejects with rustc
-            // E0308 + E0605 (the generated code casts a tuple-shaped
-            // value as i32).  The bind-the-element-before-the-lambda
-            // workaround applies for any value the closure body
-            // actually needs.
-            if matches!(
-                ctype,
-                Type::Vector(_, _)
-                    | Type::Hash(_, _, _)
-                    | Type::Sorted(_, _, _)
-                    | Type::Index(_, _, _)
-                    | Type::Spacial(_, _, _)
-            ) {
-                let kind = match &ctype {
-                    Type::Vector(_, _) => "vector",
-                    Type::Hash(_, _, _) => "hash",
-                    Type::Sorted(_, _, _) => "sorted",
-                    Type::Index(_, _, _) => "index",
-                    Type::Spacial(_, _, _) => "spacial",
-                    _ => "collection",
-                };
-                diagnostic!(
-                    self.lexer,
-                    Level::Error,
-                    "{kind} variable '{name}' cannot be captured into a closure body; bind the element you need before the lambda (e.g. `x = {name}[i]; f = fn(...) {{ ... x ... }}`) — collection capture is not supported because the closure record layout doesn't model the content type"
-                );
-                t = ctype.clone();
-                *code = Value::Null;
-                return t;
-            }
+            // @PLN93 (#511): a collection capture is stored in the closure record as a
+            // shared DbRef (synthesize_closure_record maps it to a `Reference` attr — the
+            // proven struct-capture representation), so the closure BORROWS the outer
+            // collection.  The body still needs the ORIGINAL collection type so `h[key]`
+            // / iteration type-check; recover it below from `capture_context`.
+            let is_collection_capture = Self::is_collection_type(&ctype);
             // record the capture for closure record synthesis.
             if !self.captured_names.iter().any(|(n, _)| n == name) {
                 self.captured_names.push((name.to_string(), ctype.clone()));
@@ -358,7 +350,14 @@ impl Parser {
                 *code = Value::Var(v_nr);
             } else {
                 *code = self.get_field(closure_d_nr, fnr, Value::Var(self.closure_param));
-                t = self.data.attr_type(closure_d_nr, fnr);
+                // A collection capture's stored attr is a `Reference` DbRef, but the body
+                // must see the original collection type (from capture_context) — the value
+                // (a 12-byte DbRef read via OpGetDbRef) is exactly what a collection var is.
+                t = if is_collection_capture {
+                    ctype
+                } else {
+                    self.data.attr_type(closure_d_nr, fnr)
+                };
                 // closure record is a struct — add __closure as dep.
                 t = t.depending(self.closure_param);
             }
@@ -2219,7 +2218,7 @@ impl Parser {
                 }
                 *code = Value::Var(w);
             }
-        } else if !self.first_pass && !self.is_field(code) {
+        } else if !self.first_pass && !self.is_field(code) && !self.is_captured_dbref(code) {
             new_object = true;
             self.data.set_referenced(td_nr, self.context, Value::Null);
             let ret = self.data.def(td_nr).returned();
@@ -2229,6 +2228,12 @@ impl Parser {
             list.push(self.cl("OpDatabase", &[Value::Var(w), Value::Int(tp)]));
             *code = Value::Var(w);
         }
+        // @PLN93 (#511): a captured-collection append target (`h += K{…}` inside a closure,
+        // where `code` is the `OpGetDbRef` of the closure-record field) is a DbRef lvalue like
+        // a struct field — skip the fresh-`Object` allocation above so the field inits build a
+        // `Value::Insert` targeting the captured DbRef.  `new_record` then allocates the element
+        // INSIDE the shared store (`OpNewRecord`/`OpFinishRecord` against that DbRef) rather than
+        // in a throwaway store that is immediately freed (the silent no-op this fixes).
         let mut found_fields = HashSet::new();
         loop {
             if self.lexer.peek_token("}") {

@@ -1940,6 +1940,32 @@ use #count instead"
                 };
                 self.change_var_type(for_var, &dep_tp);
             }
+            // @PLN93 (#511): iterating a CAPTURED collection (`for e in h`, `h` captured
+            // into this lambda).  The element is a DbRef INTO the captured (shared) store,
+            // reached via the hidden `__closure` param — exactly the #481 coroutine shape.
+            // Bind the loop var as a BORROW of the closure so the scope machinery never
+            // emits a per-iteration OpFreeRef for it: that free calls `free_named` on the
+            // element's store_nr, which whole-store-frees the shared collection — a later
+            // closure capturing the same collection then reads an empty store (native
+            // only; interp already treats the element as a borrow).
+            if self.closure_param != u16::MAX
+                && !self.first_pass
+                && Self::is_collection_type(&in_type)
+                && in_type.depend().contains(&self.closure_param)
+                && matches!(
+                    var_tp,
+                    Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
+                )
+            {
+                let dep = crate::data::Deps::frame1(self.closure_param);
+                let dep_tp = match var_tp.clone() {
+                    Type::Reference(d, _) => Type::Reference(d, dep),
+                    Type::Enum(d, m, _) => Type::Enum(d, m, dep),
+                    Type::Vector(e, _) => Type::Vector(e, dep),
+                    other => other,
+                };
+                self.change_var_type(for_var, &dep_tp);
+            }
             // For length-based vector termination below: pull the collection the
             // element fetch actually reads from (the materialised iteration temp),
             // not the original collection expression.  Re-reading the original each

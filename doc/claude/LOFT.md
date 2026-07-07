@@ -728,6 +728,14 @@ add5(10)               // 15
   record while both are alive, and mutations from either side are visible to
   the other (#318/C75 bound such closures to the frame that owns the
   captures).
+- Collections (`hash` / `vector` / `sorted` / `index`): captured by shared
+  DbRef — the closure **borrows** the outer collection (like a struct
+  reference).  Inside the closure the full surface works and every mutation
+  persists to the shared collection (the outer scope keeps ownership): **look up
+  by key / index** (`(h[k] ?? Row { … }).v`), **iterate** (`for e in h`),
+  **point-assign** (`h[key] = value`), and **append** (`h += Row { … }`;
+  vectors take the unambiguous `xs += [elem]` push form).  Two closures that
+  capture the same collection both mutate the one shared store (@PLN93 / #511).
 
 **Limitations:**
 - Capturing closures in `vector<fn(...)>` is supported only for non-capturing lambdas or when all elements are the same closure type.
