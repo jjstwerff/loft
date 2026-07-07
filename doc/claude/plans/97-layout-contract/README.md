@@ -6,7 +6,8 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 > **Subject:** loft   ·   **Type:** plan   ·   **Area:** runtime · store · formal
 > **Effort:** H   ·   **Value:** **S** (silent-corruption prevention) + **F** (foundation for
-> reload-without-data-loss, live-swap, durable store, schema evolution)
+> reload-without-data-loss, live-swap, durable store, schema evolution) + **U** (compiler-guided
+> schema evolution — the programmer just edits code; the handoff stays invisible)
 > **Consumes:** `src/data.rs` (the `layout(τ)` function), `src/store.rs` (header + the
 > `.dmeta` durable sidecar pattern), `src/ir_schema.rs` (`data_to_json` — a golden-pinned
 > schema serializer), `formal/heap.md` (store semantics — this adds the format layer it omits)
@@ -61,6 +62,21 @@ layout-algo hash is not merely a persistence guard; it is the **handoff decision
 live reload. (08-S5 already serializes via `show_json` *unconditionally*; this makes it
 *conditional and correct* — raw when safe, serialize-first when the hash says it must.)
 
+### The programmer never manages the handoff
+
+The machinery above stays **invisible to loft programmers** — they just edit their structs. The
+compiler diffs the edited schema against a recorded baseline and classifies the drift:
+
+- **adds only** → **automatic** (lenient deserialize defaults the new part).
+- **drops only** → **automatic** (the dropped part is ignored).
+- **adds *and* drops together** → an **actionable state**: the compiler cannot tell an independent
+  add+drop from a **rename/reshape** where the old data should move into the new, so it **aids** —
+  a diagnostic that migration may be needed, plus an auto-generated **migration-script outline**
+  (the mechanical parts pre-filled; only the old→new backfill left as stubs to write). Phase F.
+
+No hand-managed handoff, no manual hash bookkeeping — the programmer edits code and, at most, fills
+a scaffolded backfill when they've moved data.
+
 ## The one format (no split — FINAL)
 
 loft's store is **one thing**: the durable file is bit-for-bit identical to the in-memory store
@@ -114,6 +130,7 @@ static type is a finding to fix, not a blocker — that discovery is the value.
 | **D** — Schema-description sidecar *(self-describing store)* | A separate file (the `.dmeta` pattern) carrying `(data_to_json schema, layout-algo hash)`; on load, compare vs the program's in-memory identity → identical / Drop&Add-compatible / needs-migration / reject-via-`on_corruption`. Payload untouched. Enabler for E | Open |
 | **E1** — Add&Drop *(falls out of the shared path)* | **Not a dedicated mechanism** — it IS the handoff's serialize→deserialize path with the hash as trigger (D): lenient deserialize *defaults* an added part and *ignores* a dropped one (the 08-S5 `show_json`/`populate_struct_from_jsonvalue` behaviour, made formal over the store, using the sidecar's old schema as the map). E1's work is to **prove** the shared path + lenient rules cover every additive/subtractive change — no new code path | Open |
 | **E2** — Data migration: reshape *(later — deferred)* | The hard but **rare** case: values must be *transformed*, not just added/dropped. **Simplify via expand→contract:** never reshape in place — go through an intermediate **superset** schema so every *step* is a pure Add or pure Drop (E1's path), and the only custom logic is an **additive backfill** (compute new from old) while both coexist. Bounds the hard part to the backfill. **Trigger:** a real reshape must preserve live data (dogfood-driven) | Deferred |
+| **F** — Compiler migration aid *(the developer surface)* | The programmer just edits structs; the machinery stays invisible. The compiler diffs the current schema vs. a recorded **baseline** and classifies: identical (silent) · **adds only** (auto) · **drops only** (auto) · **adds ∧ drops together** (the **actionable state** — indistinguishable from a rename/reshape, so surface a diagnostic + an auto-generated **migration-script outline**: mechanical parts pre-filled, only the old→new backfill left as stubs). Accepting a migration updates the baseline. Ties into @PLN28 diagnostics | Open |
 
 ## Phase ordering
 
@@ -121,7 +138,9 @@ static type is a finding to fix, not a blocker — that discovery is the value.
 2. **B** (golden test) — the **critical path**: it delivers the "caught by verification, not by
    breaking" guarantee and *defines the layout-algo hash* the rest consume. Ship this first.
 3. **C** (formal doc) and **D** (sidecar) proceed in parallel after B — both read B's hash.
-4. **E1** (Drop&Add) rides on D's self-describing store. **E2** stays deferred behind its trigger.
+4. **E1** (Add/Drop) rides on D's self-describing store. **E2** stays deferred behind its trigger.
+5. **F** (compiler migration aid) rides on the schema diff (D) — the developer surface that makes
+   the whole thing invisible; the actionable state (add ∧ drop) is where it earns its keep.
 
 ## Open design questions
 
@@ -140,6 +159,11 @@ static type is a finding to fix, not a blocker — that discovery is the value.
    them — fields, enum arms, widening) vs. a reshape that needs E2 (reordering, narrowing that
    loses bits) — and how far **expand→contract** can decompose a given reshape into a sequence of
    pure Add/Drop steps + an additive backfill, shrinking E2's custom code toward zero.
+6. **The baseline the compiler diffs against (F):** where the recorded previous schema lives (a
+   committed schema descriptor / lockfile), when it updates (on accepting a migration), and
+   whether the aid is compile-time (proactive, vs. the committed baseline) and/or runtime (on
+   load, vs. the store's sidecar). The detectable trigger for the actionable state is a schema
+   diff with **both** an add and a drop.
 
 ## Cross-arc dependencies
 
