@@ -93,6 +93,12 @@ lattice (`Owned`/`Borrowed(base)`/`Moved` + arm-meet `Join`) on this engine.
 
 ## Phase 2 — Backward liveness, shadow-diffed vs the position-proxy (first value, MH)
 
+**DEFERRED — the forward ownership fact (Phase 3) was prioritised over liveness**, because
+ownership is what drives the A1b-class detection the oracle exists for; liveness (a backward fact
+for *free-placement*) is a sibling brought in when the Phase-4 free-consistency check needs it.
+The engine (Phase 1) is direction-agnostic, so backward liveness reuses it unchanged. Steps below
+stand as written.
+
 - **2.1 — loop-free liveness + shadow harness.** Compute backward liveness; diff vs analysis A's
   proxy on the loop-free corpus. **Gate:** **zero** disagreement (proxy is valid there) — fix the
   new pass until zero. SI-1/SI-2 hold.
@@ -105,9 +111,16 @@ lattice (`Owned`/`Borrowed(base)`/`Moved` + arm-meet `Join`) on this engine.
 
 ## Phase 3 — Forward ownership fact (the effort heart — subdivide hardest)
 
-- **3.1 — lattice + core transfer functions, straight-line.** `OpDatabase`/`OpNewRecord`/struct-lit
-  → `Owned`; projection (`OpGetField`/`OpGetVector`/`OpGetDbRef`) → `Borrowed(base)`. Shadow vs
-  `ownership_of` on straight-line. **Gate:** agrees with B on the straight-line corpus.
+- **3.1 — lattice + core transfer functions ✅ (2026-07-07).** `OFact = Bottom | Owned |
+  Borrowed(base) | Join(base)` with a lattice `meet` (unit-tested: `ofact_meet_is_a_join_semilattice`).
+  Forward fixpoint on the CFG (`LOFT_OWN_ORACLE=own`); the per-def transfer REUSES the shipped
+  `ownership_of` for a structural RHS and resolves a bare `Var` RHS flow-sensitively to the source's
+  current state. **Gate PASSED:** shadow-diff `diff=0` (agrees with B) on every function of the
+  ownership corpus — `s=mk()`→Owned, `r=s.v`→Borrowed, and threaded through branches. The
+  flow-sensitive precision is already visible per-block: in `branch_reassign`, `r`=Owned in the
+  then-arm, Borrowed(s) in the else-arm, meeting to `Join(s)` at the join — where the flow-*insensitive*
+  classifier says `Join` everywhere. SI-3 held (`≤ n+2` passes); SI-1 held. Probe:
+  [`probes/03-ownership.loft`](probes/03-ownership.loft).
 - **3.2 — arm-meet `Join`.** The per-path meet at `if`/match arm-joins (replacing B's join-of-all-defs).
   **Gate:** `v[i] ?? d` yields `Join` at the meet; ≥1 case where B over-reports `Join` and the new
   fact is a definite `Owned`/`Borrowed` (documented precision win).

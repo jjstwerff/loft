@@ -12,7 +12,8 @@
 //! `Continue(n)` / `Return` add the corresponding edge and end the current straight line.
 
 use crate::data::{Data, DefType, Value};
-use std::collections::BTreeSet;
+use crate::use_analysis::{Own, ownership_of};
+use std::collections::{BTreeMap, BTreeSet};
 
 type BlockId = usize;
 
@@ -22,6 +23,9 @@ struct Bb {
     label: &'static str,
     /// variables defined (assigned) in this block — the raw material for reaching-defs (1.2).
     defs: Vec<u16>,
+    /// (var, RHS) per assignment in program order — the ownership pass (Phase 2) classifies each
+    /// RHS structurally (`ownership_of`) or, for a `Var` RHS, resolves it flow-sensitively.
+    owns: Vec<(u16, Value)>,
     /// short op labels, for the `cfg` dump / hand-verification only.
     ops: Vec<String>,
     succ: Vec<BlockId>,
@@ -78,6 +82,11 @@ impl Builder {
         if !self.cfg.blocks[b].defs.contains(&var) {
             self.cfg.blocks[b].defs.push(var);
         }
+    }
+
+    /// Record an assignment's (var, RHS) in program order for the ownership pass.
+    fn record_own(&mut self, b: BlockId, var: u16, rhs: &Value) {
+        self.cfg.blocks[b].owns.push((var, rhs.clone()));
     }
 
     /// Does `v` contain a control transfer (`Break`/`Continue`/`Return`) targeting THIS or an
@@ -191,10 +200,12 @@ impl Builder {
                     // RHS carries control flow (the `for` range `Set` holds the exit `Break`).
                     let after = self.walk_stmt(val, cur, Ctx::Val)?;
                     self.def(after, *var);
+                    self.record_own(after, *var, val);
                     self.op(after, format!("Set v{var}"));
                     Some(after)
                 } else {
                     self.def(cur, *var);
+                    self.record_own(cur, *var, val);
                     self.op(cur, format!("Set v{var}"));
                     Some(cur)
                 }
@@ -424,14 +435,159 @@ fn dump_reach(name: &str, cfg: &Cfg, rd: &ReachInfo) {
     }
 }
 
+// ============================================================================
+// @PLN94 Phase 2 — the forward OWNERSHIP fact, flow-sensitive, on the CFG fixpoint. The lattice
+// mirrors the shipped `Own` (Owned | Borrowed(base) | Join(base)) plus a `Bottom` (unreached).
+// Where the shipped classifier is flow-INSENSITIVE (a var = the join of ALL its defs), this is
+// per-program-point: the meet happens only at the arm-joins that actually merge, so a var whose
+// reaching def is single here classifies precisely instead of collapsing to `Join`. The
+// per-def transfer REUSES the shipped `ownership_of` for a structural RHS (OpDatabase → Owned,
+// projection → Borrowed(base), …); a bare `Var` RHS resolves flow-sensitively to the source's
+// current state. Shadow-diffed against `ownership_of` — must AGREE where there is no flow.
+// ============================================================================
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum OFact {
+    Bottom,
+    Owned,
+    Borrowed(u16),
+    Join(u16),
+}
+
+impl OFact {
+    fn from_own(o: Own) -> OFact {
+        match o {
+            Own::Owned => OFact::Owned,
+            Own::Borrowed { base } => OFact::Borrowed(base),
+            Own::Join { base } => OFact::Join(base),
+        }
+    }
+
+    /// Lattice meet (⊔) at a control-flow merge: `Bottom` is the identity; `Owned` merged with a
+    /// `Borrowed`/different-base becomes runtime-dependent `Join`; `Join` dominates.
+    fn meet(a: OFact, b: OFact) -> OFact {
+        use OFact::{Borrowed, Bottom, Join, Owned};
+        match (a, b) {
+            (Bottom, x) | (x, Bottom) => x,
+            (Owned, Owned) => Owned,
+            (Borrowed(b1), Borrowed(b2)) if b1 == b2 => Borrowed(b1),
+            (Join(bb), _) | (_, Join(bb)) => Join(bb),
+            // remaining: Owned×Borrowed or Borrowed×Borrowed(differing base) — runtime-dependent.
+            (Borrowed(bb), _) | (_, Borrowed(bb)) => Join(bb),
+        }
+    }
+
+    fn show(self) -> String {
+        match self {
+            OFact::Bottom => "⊥".into(),
+            OFact::Owned => "Owned".into(),
+            OFact::Borrowed(b) => format!("Borrowed(v{b})"),
+            OFact::Join(b) => format!("Join(v{b})"),
+        }
+    }
+}
+
+type OState = BTreeMap<u16, OFact>;
+
+/// Forward ownership fixpoint: returns each block's OUT-state and the pass count (SI-3).
+fn ownership_dataflow(data: &Data, d_nr: u32, cfg: &Cfg) -> (Vec<OState>, usize) {
+    let n = cfg.blocks.len();
+    let mut preds: Vec<Vec<BlockId>> = vec![Vec::new(); n];
+    for (b, bb) in cfg.blocks.iter().enumerate() {
+        for &s in &bb.succ {
+            preds[s].push(b);
+        }
+    }
+    let mut outb: Vec<OState> = vec![OState::new(); n];
+    let mut passes = 0usize;
+    loop {
+        passes += 1;
+        assert!(
+            passes <= n + 2,
+            "ownership dataflow did not converge in {passes} passes (n={n}) — monotonicity bug"
+        );
+        let mut changed = false;
+        for b in 0..n {
+            // IN[b] = per-var meet of preds' OUT.
+            let mut st: OState = OState::new();
+            for &p in &preds[b] {
+                for (&v, &f) in &outb[p] {
+                    let cur = st.get(&v).copied().unwrap_or(OFact::Bottom);
+                    st.insert(v, OFact::meet(cur, f));
+                }
+            }
+            // Apply the block's assignments in program order (a later def sees earlier ones).
+            for (var, rhs) in &cfg.blocks[b].owns {
+                let f = match rhs.unspan() {
+                    Value::Var(u) => st
+                        .get(u)
+                        .copied()
+                        .unwrap_or_else(|| OFact::from_own(ownership_of(data, d_nr, rhs))),
+                    _ => OFact::from_own(ownership_of(data, d_nr, rhs)),
+                };
+                st.insert(*var, f);
+            }
+            if st != outb[b] {
+                outb[b] = st;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    (outb, passes)
+}
+
+/// Run the ownership fixpoint, dump per-block OUT-states, and SHADOW-DIFF each var's fact at the
+/// function exit against the shipped flow-insensitive `ownership_of` — the 3.1 gate (agree on
+/// straight-line) and the surface where the flow-sensitive `Join` precision shows up later.
+fn dump_own(name: &str, cfg: &Cfg, data: &Data, d_nr: u32) {
+    let (outb, passes) = ownership_dataflow(data, d_nr, cfg);
+    let exit_state = &outb[cfg.exit];
+    // Shadow-diff at the exit: my flow-sensitive fact vs the shipped classifier per var.
+    let mut agree = 0;
+    let mut diffs: Vec<String> = Vec::new();
+    for (&v, &mine) in exit_state {
+        let theirs = OFact::from_own(ownership_of(data, d_nr, &Value::Var(v)));
+        if mine == theirs {
+            agree += 1;
+        } else {
+            diffs.push(format!(
+                "v{v}: mine={} theirs={}",
+                mine.show(),
+                theirs.show()
+            ));
+        }
+    }
+    eprintln!(
+        "OWN {name}  blocks={} passes={passes}  agree={agree} diff={}",
+        cfg.blocks.len(),
+        diffs.len()
+    );
+    for d in &diffs {
+        eprintln!("  DIFF {d}");
+    }
+    for (b, st) in outb.iter().enumerate() {
+        if st.is_empty() {
+            continue;
+        }
+        let items: Vec<String> = st
+            .iter()
+            .map(|(&v, &f)| format!("v{v}={}", f.show()))
+            .collect();
+        eprintln!("  b{b} [{}]  {}", cfg.blocks[b].label, items.join(", "));
+    }
+}
+
 /// The oracle entry point, reached only under `LOFT_OWN_ORACLE` (SI-1). Modes:
-/// `cfg` dumps each user function's CFG (Phase 1.1); `rd` also runs the reaching-defs fixpoint
-/// and dumps IN/OUT + the pass count (Phase 1.2). The ownership fixpoint arrives in Phase 2.
+/// `cfg` dumps each user function's CFG (Phase 1.1); `rd` runs the reaching-defs fixpoint (1.2);
+/// `own` runs the forward ownership fixpoint + shadow-diff vs `ownership_of` (Phase 2).
 pub fn oracle(data: &Data) {
     let Ok(mode) = std::env::var("LOFT_OWN_ORACLE") else {
         return;
     };
-    if mode != "cfg" && mode != "rd" {
+    if mode != "cfg" && mode != "rd" && mode != "own" {
         return;
     }
     for d_nr in 0..data.definitions() {
@@ -445,11 +601,13 @@ pub fn oracle(data: &Data) {
         }
         let cfg = build(&body);
         let name = data.def(d_nr).name();
-        if mode == "cfg" {
-            dump(name, &cfg);
-        } else {
-            let rd = reaching_defs(&cfg);
-            dump_reach(name, &cfg, &rd);
+        match mode.as_str() {
+            "cfg" => dump(name, &cfg),
+            "rd" => {
+                let rd = reaching_defs(&cfg);
+                dump_reach(name, &cfg, &rd);
+            }
+            _ => dump_own(name, &cfg, data, d_nr),
         }
     }
 }
@@ -598,5 +756,25 @@ mod tests {
             "nested loops → at least two distinct loop headers, got {}",
             back_targets.len()
         );
+    }
+
+    #[test]
+    fn ofact_meet_is_a_join_semilattice() {
+        use super::OFact;
+        use super::OFact::{Borrowed, Bottom, Join, Owned};
+        // Bottom (unreached) is the identity.
+        assert_eq!(OFact::meet(Bottom, Owned), Owned);
+        assert_eq!(OFact::meet(Borrowed(3), Bottom), Borrowed(3));
+        // Equal facts are idempotent.
+        assert_eq!(OFact::meet(Owned, Owned), Owned);
+        assert_eq!(OFact::meet(Borrowed(2), Borrowed(2)), Borrowed(2));
+        // Owned ⊔ Borrowed → runtime-dependent Join (the `v[i] ?? d` / reassign-per-arm shape).
+        assert_eq!(OFact::meet(Owned, Borrowed(5)), Join(5));
+        assert_eq!(OFact::meet(Borrowed(5), Owned), Join(5)); // commutative
+        // Borrowing from different bases is also runtime-dependent.
+        assert_eq!(OFact::meet(Borrowed(1), Borrowed(2)), Join(1));
+        // Join dominates.
+        assert_eq!(OFact::meet(Join(7), Owned), Join(7));
+        assert_eq!(OFact::meet(Owned, Join(7)), Join(7));
     }
 }
