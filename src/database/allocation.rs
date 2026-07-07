@@ -2366,17 +2366,18 @@ impl Stores {
         }
     }
 
-    /// True when an entry of type `content_tp` is FLAT — every field stores
-    /// inline, so `store_load_key`'s raw word-copy is a faithful move. A
-    /// non-flat entry (any text / vector / nested / reference field) needs the
-    /// relocating copy and is refused until that lands (3b.1 safe-refusal).
+    /// True when an entry of type `content_tp` can be moved by the working-set
+    /// copy today: every field is either inline-scalar (raw word-copy) or `text`
+    /// (relocated string sub-record, 3b.2). A field that is a vector / nested
+    /// struct / reference / keyed collection still needs the recursive relocating
+    /// copy (3b.3+) and is refused until then (safe-refusal, never a broken heap).
     #[cfg(feature = "remote-store")]
-    fn is_flat_entry(&self, content_tp: u16) -> bool {
+    fn is_copyable_entry(&self, content_tp: u16) -> bool {
         match &self.types[content_tp as usize].parts {
-            Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
-                fields.iter().all(|f| self.is_inline_scalar(f.content))
-            }
-            _ => self.is_inline_scalar(content_tp),
+            Parts::Struct(fields) | Parts::EnumValue(_, fields) => fields
+                .iter()
+                .all(|f| self.is_inline_scalar(f.content) || f.content == 5),
+            _ => self.is_inline_scalar(content_tp) || content_tp == 5,
         }
     }
 
@@ -2405,24 +2406,24 @@ impl Stores {
         if tp == u16::MAX {
             return 0;
         }
-        // 3b.1 SAFE REFUSAL — the raw word-copy in `load_one` is faithful only
-        // for a FLAT entry (all inline-scalar fields). An entry with a heap field
-        // (text / vector / nested / reference) needs the relocating graph-copy
-        // (3b.2+); until that lands, refuse the whole collection (load nothing)
-        // rather than produce a heap with a dangling pointer. `store_verify`
-        // would catch a broken copy — this makes sure one is never built.
+        // SAFE REFUSAL (3b.1) — `load_one` can copy an entry whose fields are
+        // inline-scalar (raw word-copy) or `text` (relocated string, 3b.2). A
+        // vector / nested / reference field still needs the recursive relocating
+        // copy (3b.3+); until then, refuse the whole collection (load nothing)
+        // rather than build a heap with a dangling pointer. `store_verify` would
+        // catch a broken copy — this makes sure one is never built.
         let content_tp = match self.types[tp as usize].parts {
             Parts::Hash(c, _) => c,
             _ => return 0, // only Hash supported so far (Sorted lands at 3b.7)
         };
-        if !self.is_flat_entry(content_tp) {
+        if !self.is_copyable_entry(content_tp) {
             return 0;
         }
         let keys = self.keys(tp).to_vec();
 
         let mut loaded = 0i64;
         for &kv in keys_vals {
-            if self.load_one(&mut reader, local, &keys, kv) {
+            if self.load_one(&mut reader, local, content_tp, &keys, kv) {
                 loaded += 1;
             }
         }
@@ -2450,6 +2451,7 @@ impl Stores {
         &mut self,
         reader: &mut crate::paged_reader::PagedReader<crate::paged_reader::LocalFileProvider>,
         local: &DbRef,
+        content_tp: u16,
         keys: &[crate::keys::Key],
         key: i64,
     ) -> bool {
@@ -2463,6 +2465,9 @@ impl Stores {
         if size < 2 {
             return false;
         }
+        // 1) Move the entry record's field words verbatim. Inline scalars are
+        //    now correct; every `text` field still holds the SOURCE store's
+        //    string-record id (a dangling pointer) — fixed in step 2.
         let store = &mut self.allocations[local.store_nr as usize];
         let new_rec = store.claim(size);
         store.zero_fill(new_rec);
@@ -2472,6 +2477,32 @@ impl Stores {
             self.allocations[local.store_nr as usize].set_u32_raw(new_rec, fld, w);
             fld += 4;
         }
+
+        // 2) 3b.2 — relocate each `text` field: copy the source string record
+        //    (flat: word 0 = size header, fld 4 = length, fld 8.. = UTF-8 bytes)
+        //    into a fresh local claim and repoint the field at it. `is_copyable_entry`
+        //    already guaranteed every field is inline-scalar or text.
+        for p in self.text_field_offsets(content_tp) {
+            let src_str = reader.u32_at(matched, 8 + p);
+            if src_str == 0 {
+                continue; // null text
+            }
+            let ssz = reader.record_words(src_str);
+            if ssz == 0 {
+                continue;
+            }
+            let new_str = self.allocations[local.store_nr as usize].claim(ssz);
+            self.allocations[local.store_nr as usize].zero_fill(new_str);
+            // Copy length + bytes (fld 4 onward); `claim` set the size header (fld 0).
+            let mut sf = 4u32;
+            while sf + 4 <= ssz * 8 {
+                let w = reader.u32_at(src_str, sf);
+                self.allocations[local.store_nr as usize].set_u32_raw(new_str, sf, w);
+                sf += 4;
+            }
+            self.allocations[local.store_nr as usize].set_u32_raw(new_rec, 8 + p, new_str);
+        }
+
         let entry = DbRef {
             store_nr: local.store_nr,
             rec: new_rec,
@@ -2479,6 +2510,21 @@ impl Stores {
         };
         crate::hash::add(local, &entry, &mut self.allocations, keys);
         true
+    }
+
+    /// Byte offsets (within an entry record, relative to its data start at fld 8)
+    /// of the `text` fields of `content_tp` — the fields `load_one` must relocate.
+    #[cfg(feature = "remote-store")]
+    fn text_field_offsets(&self, content_tp: u16) -> Vec<u32> {
+        match &self.types[content_tp as usize].parts {
+            Parts::Struct(fields) | Parts::EnumValue(_, fields) => fields
+                .iter()
+                .filter(|f| f.content == 5)
+                .map(|f| u32::from(f.position))
+                .collect(),
+            _ if content_tp == 5 => vec![0],
+            _ => Vec::new(),
+        }
     }
 
     /// Read a `vector<integer>` (`keys_vec`) into an `i64` slice and load those

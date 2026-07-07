@@ -200,8 +200,12 @@ fn load_script() -> PathBuf {
     workspace_root().join("tests/scripts/store_load_smoke.loft")
 }
 
-fn text_refuse_script() -> PathBuf {
-    workspace_root().join("tests/scripts/store_load_text_refuse.loft")
+fn text_script() -> PathBuf {
+    workspace_root().join("tests/scripts/store_load_text.loft")
+}
+
+fn vec_refuse_script() -> PathBuf {
+    workspace_root().join("tests/scripts/store_load_vec_refuse.loft")
 }
 
 /// `run_mode` fixed to `--interpret`, parameterised by backend so the heap
@@ -345,32 +349,66 @@ fn store_load_keys_loads_the_requested_subset_both_backends() {
     }
 }
 
-/// @PLN97 arc G Phase 3b.1 — a hash whose entry has a HEAP field (text) is
-/// REFUSED by `store_load_key` (returns false, loads nothing) rather than copied
-/// with a dangling pointer, until the relocating copy (3b.2+) lands. The refused
-/// result is empty and structurally sound. Both backends.
+/// @PLN97 arc G Phase 3b.2 — a hash whose entry has a `text` field is now
+/// partially loadable: `store_load_key` relocates the source string sub-record
+/// into the local store and repoints the field. The loaded entry reads the right
+/// string, un-requested keys are absent, and the result is structurally sound
+/// (`store_verify`). Both backends.
 #[test]
-fn store_load_key_refuses_a_non_flat_entry_both_backends() {
-    let dir = scratch("store_load_text_refuse");
+fn store_load_key_relocates_a_text_field_both_backends() {
+    let dir = scratch("store_load_text");
     let path = dir.join("text.store");
 
-    let (out_w, code_w) = run_mode(&text_refuse_script(), &path, "write");
+    let (out_w, code_w) = run_mode(&text_script(), &path, "write");
     assert_eq!(code_w, 0, "write exit: {out_w:?}");
     assert!(out_w.contains("write ok"), "write: {out_w:?}");
 
     for backend in ["--interpret", "--native"] {
-        let (out, code) = run_mode_backend(backend, &text_refuse_script(), &path, "loadkey");
+        let (out, code) = run_mode_backend(backend, &text_script(), &path, "loadkey");
         assert_eq!(code, 0, "{backend} loadkey exit: {out:?}");
+        assert!(out.contains("text loadkey=true"), "{backend}: {out:?}");
         assert!(
-            out.contains("text loadkey=false"),
-            "{backend}: a text-field entry must be REFUSED (not copied broken): {out:?}"
+            out.contains("text name13=thirteen-longer-string-spanning"),
+            "{backend}: the relocated text must read correctly: {out:?}"
         );
         assert!(
-            out.contains("text len=0"),
+            out.contains("text name7=ABSENT"),
+            "{backend}: un-requested key must be absent: {out:?}"
+        );
+        assert!(out.contains("text len=1"), "{backend}: {out:?}");
+        assert!(
+            out.contains("text verify=true"),
+            "{backend}: the relocated heap must be sound (no dangling text ptr): {out:?}"
+        );
+    }
+}
+
+/// @PLN97 arc G Phase 3b (safe-refusal, ongoing) — a field the relocating copy
+/// does NOT yet handle (a `vector<integer>`) must still be REFUSED (load nothing,
+/// return false), never copied with a dangling pointer. The refused-empty result
+/// is structurally sound. Both backends.
+#[test]
+fn store_load_key_refuses_a_vector_field_both_backends() {
+    let dir = scratch("store_load_vec_refuse");
+    let path = dir.join("vec.store");
+
+    let (out_w, code_w) = run_mode(&vec_refuse_script(), &path, "write");
+    assert_eq!(code_w, 0, "write exit: {out_w:?}");
+    assert!(out_w.contains("write ok"), "write: {out_w:?}");
+
+    for backend in ["--interpret", "--native"] {
+        let (out, code) = run_mode_backend(backend, &vec_refuse_script(), &path, "loadkey");
+        assert_eq!(code, 0, "{backend} loadkey exit: {out:?}");
+        assert!(
+            out.contains("vec loadkey=false"),
+            "{backend}: a vector-field entry must be REFUSED (not copied broken): {out:?}"
+        );
+        assert!(
+            out.contains("vec len=0"),
             "{backend}: refusal must load nothing: {out:?}"
         );
         assert!(
-            out.contains("text verify=true"),
+            out.contains("vec verify=true"),
             "{backend}: the refused-empty store must be structurally sound: {out:?}"
         );
     }

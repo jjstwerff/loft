@@ -1,0 +1,33 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN97 arc G Phase 3b (safe-refusal, ongoing) — a hash whose entry has a
+// field the relocating copy does NOT yet handle (here a `vector<integer>`) must
+// be REFUSED by `store_load_key` (return false, load nothing), never copied with
+// a dangling pointer. Text fields are handled (3b.2); vector/nested land at
+// 3b.3+. The refused-empty result stays structurally sound. Driven by
+// `store_persist_loft.rs`.
+
+struct VecRec { id: integer not null, tags: vector<integer> }
+
+fn main() {
+  path = env_variable("LOFT_PERSIST_TEST_PATH");
+  mode = env_variable("LOFT_PERSIST_TEST_MODE");
+
+  v: hash<VecRec[id]> = [];
+  if mode == "write" {
+    a: vector<integer> = [];
+    a += [1];
+    a += [2];
+    v += VecRec { id: 13, tags: a };
+    if !store_persist_bind(v, path) { println("FAIL write-bind"); return }
+    println("write ok");
+  } else if mode == "loadkey" {
+    ok = store_load_key(v, path, 13);
+    println("vec loadkey={ok}");
+    println("vec len={len(v)}");
+    println("vec verify={store_verify(v)}");
+  } else {
+    println("FAIL unknown-mode")
+  }
+}

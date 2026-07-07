@@ -1,13 +1,18 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// @PLN97 arc G Phase 3b.1 — SAFE REFUSAL. A hash whose entry struct has a HEAP
-// field (here `name: text`) can't be moved by the flat word-copy yet (its text
-// pointer would dangle), so `store_load_key` must REFUSE it (return false, load
-// nothing) rather than build a broken heap. The refused-empty result must still
-// be structurally sound (`store_verify`). Driven by `store_persist_loft.rs`.
+// @PLN97 arc G Phase 3b.2 — text-field RELOCATION. A hash whose entry struct has
+// a `text` field can now be partially loaded: `store_load_key` copies the source
+// string sub-record into the local store and repoints the field. The loaded
+// entry must read the right string AND be structurally sound (`store_verify`).
+// Driven by `store_persist_loft.rs`.
 
 struct TextRec { id: integer not null, name: text not null }
+
+fn nm(h: hash<TextRec[id]>, k: integer) -> text {
+  found = h[k];
+  if found == null { "ABSENT" } else { found.name }
+}
 
 fn main() {
   path = env_variable("LOFT_PERSIST_TEST_PATH");
@@ -16,12 +21,14 @@ fn main() {
   t: hash<TextRec[id]> = [];
   if mode == "write" {
     t += TextRec { id: 7,  name: "seven" };
-    t += TextRec { id: 13, name: "thirteen" };
+    t += TextRec { id: 13, name: "thirteen-longer-string-spanning" };
     if !store_persist_bind(t, path) { println("FAIL write-bind"); return }
     println("write ok");
   } else if mode == "loadkey" {
     ok = store_load_key(t, path, 13);
     println("text loadkey={ok}");
+    println("text name13={nm(t, 13)}");
+    println("text name7={nm(t, 7)}");
     println("text len={len(t)}");
     println("text verify={store_verify(t)}");
   } else {
