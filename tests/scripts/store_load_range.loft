@@ -1,0 +1,42 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN97 arc G Phase 4 / 3b.7 — store_load_range over a SORTED collection. Fetch
+// the entries whose integer key is in [lo, hi] (a two-element vector) into the
+// local sorted collection, reading only the pages the range walk touches. A
+// Sorted is an inline sorted vector, so the range is built directly in key order
+// and each element's heap graph (here a `text`) is relocated. The loaded range is
+// correct, ordered, bounded, and sound. Driven by `store_persist_loft.rs`.
+
+struct Tile { id: integer not null, name: text not null }
+
+fn main() {
+  path = env_variable("LOFT_PERSIST_TEST_PATH");
+  mode = env_variable("LOFT_PERSIST_TEST_MODE");
+
+  s: sorted<Tile[id]> = [];
+  if mode == "write" {
+    s += Tile { id: 42, name: "forty-two" };
+    s += Tile { id: 7,  name: "seven" };
+    s += Tile { id: 13, name: "thirteen" };
+    s += Tile { id: 20, name: "twenty" };
+    s += Tile { id: 99, name: "ninety-nine" };
+    if !store_persist_bind(s, path) { println("FAIL write-bind"); return }
+    println("write ok");
+  } else if mode == "range" {
+    bounds: vector<integer> = [];
+    bounds += [13];
+    bounds += [42];
+    n = store_load_range(s, path, bounds);
+    println("rng loaded={n}");
+    keys = "";
+    for t in s { if keys == "" { keys = "{t.id}" } else { keys = "{keys},{t.id}" } }
+    println("rng keys={keys}");
+    println("rng name20={(s[20] ?? Tile { id: 0, name: \"?\" }).name}");
+    println("rng g7={(s[7] ?? Tile { id: 0, name: \"absent\" }).name}");
+    println("rng len={len(s)}");
+    println("rng verify={store_verify(s)}");
+  } else {
+    println("FAIL unknown-mode")
+  }
+}

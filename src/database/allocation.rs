@@ -2329,6 +2329,110 @@ impl Stores {
     /// — those need the relocating graph-copy, a later cut). Root + key schema
     /// come from `local`'s live type (same collection type ⇒ same structural
     /// root position in the image), NOT the raw bytes.
+    /// @PLN97 arc G Phase 4 / 3b.7 — load the entries with integer key in
+    /// `[lo, hi]` from a persisted SORTED collection into the (empty) local
+    /// `sorted<T[k]>`, fetching only the pages the range walk touches. The
+    /// range-friendly counterpart of `store_load_key(s)` — routing's tile-window
+    /// fetch. Returns the count loaded; refuses a non-sorted / non-copyable
+    /// collection. A Sorted collection is a sorted INLINE vector, so the source
+    /// range is already ordered: build `local`'s vector directly in key order
+    /// (no per-element sort), then relocate each element's heap graph.
+    /// Read `[lo, hi]` from a `vector<integer>` and load that range. The single
+    /// vector-reading home for both backends (mirrors `load_keys_vec`); the
+    /// bounds ride as a vector because a `#rust` builtin with a `reference` arg
+    /// AND two integer-literal args mis-codegens on native (the `_v_local`
+    /// pre-eval bug), whereas `&(@local)` + a vector arg is proven (load_keys).
+    #[cfg(feature = "remote-store")]
+    pub fn load_range_vec(&mut self, local: &DbRef, path: &str, bounds_vec: &DbRef) -> i64 {
+        // Expect exactly [lo, hi] (integer elements, i64 at 8 + i·8).
+        if crate::vector::length_vector(bounds_vec, &self.allocations) < 2 {
+            return 0;
+        }
+        let inner = self
+            .store(bounds_vec)
+            .get_u32_raw(bounds_vec.rec, bounds_vec.pos);
+        let lo = self.store(bounds_vec).get_int(inner, 8);
+        let hi = self.store(bounds_vec).get_int(inner, 16);
+        self.load_range(local, path, lo, hi)
+    }
+
+    #[cfg(feature = "remote-store")]
+    pub fn load_range(&mut self, local: &DbRef, path: &str, lo: i64, hi: i64) -> i64 {
+        use crate::paged_reader::{PageSource, PagedReader};
+        let Ok(source) = PageSource::open(path) else {
+            return 0;
+        };
+        let mut reader = PagedReader::new(source);
+        let tp = self.allocations[local.store_nr as usize].known_type;
+        if tp == u16::MAX {
+            return 0;
+        }
+        let content_tp = match self.types[tp as usize].parts {
+            Parts::Sorted(c, _) => c,
+            _ => return 0, // range needs an ordered collection
+        };
+        if !self.is_copyable_entry(content_tp) {
+            return 0;
+        }
+        let keys = self.keys(tp).to_vec();
+        let esize = u32::from(self.size(content_tp));
+        if esize == 0 {
+            return 0;
+        }
+        let lo_c = [crate::keys::Content::Long(lo)];
+        let hi_c = [crate::keys::Content::Long(hi)];
+        let (src_rec, positions) = crate::paged_reader::sorted_range_positions(
+            &mut reader,
+            local.rec,
+            local.pos,
+            esize,
+            &lo_c,
+            &hi_c,
+            &keys,
+        );
+        let count = positions.len() as u32;
+        if count == 0 {
+            return 0;
+        }
+        let store_nr = local.store_nr;
+        // Build the local sorted vector: header (8 bytes) + count elements.
+        let words = (8 + count * esize).div_ceil(8).max(2);
+        let vec_rec = self.allocations[store_nr as usize].claim(words);
+        self.allocations[store_nr as usize].zero_fill(vec_rec);
+        self.allocations[store_nr as usize].set_u32_raw(vec_rec, 4, count); // length
+        self.allocations[store_nr as usize].set_u32_raw(local.rec, local.pos, vec_rec);
+
+        for (i, &epos) in positions.iter().enumerate() {
+            let dst_pos = 8 + (i as u32) * esize;
+            // Copy the element's field bytes (esize is 4-aligned — all fields are).
+            let mut b = 0u32;
+            while b + 4 <= esize {
+                let w = reader.u32_at(src_rec, epos + b);
+                self.allocations[store_nr as usize].set_u32_raw(vec_rec, dst_pos + b, w);
+                b += 4;
+            }
+            // Relocate this element's heap graph into local.
+            self.relocate_ptr_fields(
+                &mut reader,
+                vec_rec,
+                dst_pos,
+                src_rec,
+                epos,
+                content_tp,
+                store_nr,
+            );
+        }
+
+        if std::env::var_os("LOFT_LOADER_STATS").is_some() {
+            eprintln!(
+                "store_load_range: [{lo},{hi}] loaded={count} bytes_fetched={} file={}",
+                reader.provider().bytes_fetched(),
+                reader.size()
+            );
+        }
+        i64::from(count)
+    }
+
     /// Verify a store-rooted collection `r`'s heap graph is structurally sound —
     /// every interior pointer (text offset, vector/child rec, hash bucket +
     /// entries) stays within its store's bounds. Reuses the DEFENSIVE
@@ -2546,7 +2650,8 @@ impl Stores {
 
         // 2) 3b.2–3b.4b — relocate the entry's pointer fields (text / vector /
         //    nested / vector<struct>) so the local copy owns its whole graph.
-        self.relocate_ptr_fields(reader, new_rec, matched, 0, content_tp, local.store_nr);
+        //    Hash entry: dst + src field data both start at fld 8.
+        self.relocate_ptr_fields(reader, new_rec, 8, matched, 8, content_tp, local.store_nr);
 
         let entry = DbRef {
             store_nr: local.store_nr,
@@ -2558,20 +2663,22 @@ impl Stores {
     }
 
     /// Recursively relocate the POINTER fields of struct `tp` whose (already
-    /// flat-copied) data sits at byte `8 + base` in local record `dst_rec`, with
-    /// the source at `8 + base` in `src_rec` read over `reader`. `dst_rec`/
-    /// `src_rec` are the SAME structural record (local entry vs source entry) for
-    /// inline fields; a `vector<struct>` switches to the element's separate inner
-    /// record. Handles: text / vector<scalar> (flat sub-record copy), inline
-    /// nested struct (recurse, deeper base), vector<struct> (copy inner + recurse
-    /// each element). Inline scalars are already correct from the byte copy.
+    /// flat-copied) data starts at byte `dst_fb` in local record `dst_rec`, with
+    /// the source starting at `src_fb` in `src_rec` read over `reader`. The two
+    /// field-bases are separate because a hash entry copies same-offset (both 8)
+    /// while a Sorted element copies from `8 + i·esize` in the source vector into
+    /// a slot at a different local position. Handles: text / vector<scalar> (flat
+    /// sub-record copy), inline nested struct (recurse, deeper base), vector<struct>
+    /// (copy inner + recurse each element). Inline scalars are already correct.
     #[cfg(feature = "remote-store")]
+    #[allow(clippy::too_many_arguments)] // dst/src (rec,base) + reader + tp + store — all essential
     fn relocate_ptr_fields<P: crate::paged_reader::PageProvider>(
         &mut self,
         reader: &mut crate::paged_reader::PagedReader<P>,
         dst_rec: u32,
+        dst_fb: u32,
         src_rec: u32,
-        base: u32,
+        src_fb: u32,
         tp: u16,
         store_nr: u16,
     ) {
@@ -2580,29 +2687,30 @@ impl Stores {
             _ => return,
         };
         for f in fields {
-            let off = base + u32::from(f.position);
+            let pos = u32::from(f.position);
+            let (dst_off, src_off) = (dst_fb + pos, src_fb + pos);
             let ftp = f.content;
             if ftp == 5
                 || matches!(self.types[ftp as usize].parts, Parts::Vector(e) if self.is_inline_scalar(e))
             {
-                // Flat sub-record pointer (text / vector<scalar>) at (rec, 8+off).
-                let src_sub = reader.u32_at(src_rec, 8 + off);
+                // Flat sub-record pointer (text / vector<scalar>).
+                let src_sub = reader.u32_at(src_rec, src_off);
                 if src_sub != 0 {
                     let new_sub = self.copy_flat_subrecord(reader, src_sub, store_nr);
-                    self.allocations[store_nr as usize].set_u32_raw(dst_rec, 8 + off, new_sub);
+                    self.allocations[store_nr as usize].set_u32_raw(dst_rec, dst_off, new_sub);
                 }
             } else if matches!(
                 self.types[ftp as usize].parts,
                 Parts::Struct(_) | Parts::EnumValue(_, _)
             ) {
-                // Inline nested struct: same record, deeper base.
-                self.relocate_ptr_fields(reader, dst_rec, src_rec, off, ftp, store_nr);
+                // Inline nested struct: same records, deeper bases.
+                self.relocate_ptr_fields(reader, dst_rec, dst_off, src_rec, src_off, ftp, store_nr);
             } else if let Parts::Vector(elem_tp) = self.types[ftp as usize].parts {
                 // vector<struct>: copy the inner record + recurse each element.
-                let src_sub = reader.u32_at(src_rec, 8 + off);
+                let src_sub = reader.u32_at(src_rec, src_off);
                 if src_sub != 0 {
                     let new_sub = self.copy_vector_of_struct(reader, src_sub, elem_tp, store_nr);
-                    self.allocations[store_nr as usize].set_u32_raw(dst_rec, 8 + off, new_sub);
+                    self.allocations[store_nr as usize].set_u32_raw(dst_rec, dst_off, new_sub);
                 }
             }
         }
@@ -2648,9 +2756,10 @@ impl Stores {
             return new_inner;
         }
         for i in 0..length {
-            // element i's data starts at byte 8 + i·esize; relocate_ptr_fields
-            // reads/writes at 8 + base + position, so base = i·esize.
-            self.relocate_ptr_fields(reader, new_inner, src_inner, i * esize, elem_tp, store_nr);
+            // element i's data starts at byte 8 + i·esize in BOTH the copied
+            // inner record and the source (this is a copy, so same offsets).
+            let fb = 8 + i * esize;
+            self.relocate_ptr_fields(reader, new_inner, fb, src_inner, fb, elem_tp, store_nr);
         }
         new_inner
     }

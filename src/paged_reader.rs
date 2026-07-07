@@ -450,6 +450,55 @@ fn key_compare_reader<P: PageProvider>(
     Ordering::Equal
 }
 
+/// Locate the byte offsets (within the sorted vector's inner record) of the
+/// entries with key in `[lo, hi]`, in a SORTED collection rooted at `(root_rec,
+/// root_pos)` of the paged image — a read-only port of `vector::sorted_find`'s
+/// binary search + a forward walk over [`PagedReader`]. Returns `(inner_rec,
+/// positions)`; `positions` are `8 + i·esize` for each in-range element, in key
+/// order. `esize` is the element size in bytes.
+#[must_use]
+pub fn sorted_range_positions<P: PageProvider>(
+    reader: &mut PagedReader<P>,
+    root_rec: u32,
+    root_pos: u32,
+    esize: u32,
+    lo: &[crate::keys::Content],
+    hi: &[crate::keys::Content],
+    keys: &[crate::keys::Key],
+) -> (u32, Vec<u32>) {
+    use std::cmp::Ordering;
+    let inner = reader.u32_at(root_rec, root_pos);
+    if inner == 0 || esize == 0 {
+        return (inner, Vec::new());
+    }
+    let length = reader.u32_at(inner, 4);
+    // Binary search for the FIRST index whose key is >= lo.
+    let (mut left, mut right) = (0u32, length);
+    while left < right {
+        let mid = left + (right - left) / 2;
+        let epos = 8 + mid * esize;
+        // key_compare_reader(lo, elem) == Greater  ⇔  lo > elem  ⇔  elem < lo.
+        if key_compare_reader(reader, lo, inner, epos, keys) == Ordering::Greater {
+            left = mid + 1;
+        } else {
+            right = mid;
+        }
+    }
+    // Walk forward while elem key <= hi.
+    let mut out = Vec::new();
+    let mut i = left;
+    while i < length {
+        let epos = 8 + i * esize;
+        // key_compare_reader(hi, elem) == Less  ⇔  hi < elem  ⇔  past the range.
+        if key_compare_reader(reader, hi, inner, epos, keys) == Ordering::Less {
+            break;
+        }
+        out.push(epos);
+        i += 1;
+    }
+    (inner, out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

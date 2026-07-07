@@ -262,6 +262,10 @@ fn textkey_script() -> PathBuf {
     workspace_root().join("tests/scripts/store_load_textkey.loft")
 }
 
+fn range_script() -> PathBuf {
+    workspace_root().join("tests/scripts/store_load_range.loft")
+}
+
 fn nested_script() -> PathBuf {
     workspace_root().join("tests/scripts/store_load_nested.loft")
 }
@@ -646,6 +650,43 @@ fn store_load_key_text_both_backends() {
         assert!(
             out.contains("tk verify=true"),
             "{backend}: text-keyed working set must be sound: {out:?}"
+        );
+    }
+}
+
+/// @PLN97 arc G Phase 4 / 3b.7 — `store_load_range` over a `sorted<Tile[id]>`
+/// fetches the [13,42] range (13,20,42) in key order, relocates each element's
+/// text, leaves out-of-range keys absent, and produces a sound sorted collection.
+/// Both backends. This is routing's tile-window fetch.
+#[test]
+fn store_load_range_over_sorted_both_backends() {
+    let dir = scratch("store_load_range");
+    let path = dir.join("tiles.store");
+
+    let (out_w, code_w) = run_mode(&range_script(), &path, "write");
+    assert_eq!(code_w, 0, "write: {out_w:?}");
+    assert!(out_w.contains("write ok"), "{out_w:?}");
+
+    for backend in ["--interpret", "--native"] {
+        let (out, code) = run_mode_backend(backend, &range_script(), &path, "range");
+        assert_eq!(code, 0, "{backend} range exit: {out:?}");
+        assert!(out.contains("rng loaded=3"), "{backend}: {out:?}");
+        assert!(
+            out.contains("rng keys=13,20,42"),
+            "{backend}: the range must load in key order: {out:?}"
+        );
+        assert!(
+            out.contains("rng name20=twenty"),
+            "{backend}: element text must relocate: {out:?}"
+        );
+        assert!(
+            out.contains("rng g7=absent"),
+            "{backend}: out-of-range key absent: {out:?}"
+        );
+        assert!(out.contains("rng len=3"), "{backend}: {out:?}");
+        assert!(
+            out.contains("rng verify=true"),
+            "{backend}: the loaded sorted collection must be sound: {out:?}"
         );
     }
 }

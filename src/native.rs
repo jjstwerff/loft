@@ -176,6 +176,8 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_store_load_key_text", n_store_load_key_text),
     #[cfg(feature = "remote-store")]
     ("n_store_load_keys", n_store_load_keys),
+    #[cfg(feature = "remote-store")]
+    ("n_store_load_range", n_store_load_range),
     ("n_eprint", n_eprint),
     ("n_directory", n_directory),
     ("n_user_directory", n_user_directory),
@@ -1272,6 +1274,19 @@ fn n_store_load_key_text(stores: &mut Stores, stack: &mut DbRef) {
     let v_ref = *stores.get::<DbRef>(stack);
     let ok = stores.load_key_text(&v_ref, v_path.str(), v_key.str());
     stores.put(stack, ok);
+}
+
+/// Interpreter handler for `store_load_range` — load the entries with integer
+/// key in [lo, hi] (a two-element `vector<integer>`) from a persisted SORTED
+/// collection; returns the count.  Args pop in reverse: bounds, path, local.
+/// @PLN97 arc G Phase 4.
+#[cfg(feature = "remote-store")]
+fn n_store_load_range(stores: &mut Stores, stack: &mut DbRef) {
+    let v_bounds = *stores.get::<DbRef>(stack);
+    let v_path = *stores.get::<Str>(stack);
+    let v_ref = *stores.get::<DbRef>(stack);
+    let n = stores.load_range_vec(&v_ref, v_path.str(), &v_bounds);
+    stores.put(stack, n);
 }
 
 /// Interpreter handler for `store_load_keys` — load the given integer keys'
