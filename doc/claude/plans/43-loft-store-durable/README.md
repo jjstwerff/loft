@@ -5,14 +5,17 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLN43 — LOFT_STORE_DURABLE — three-tier opt-in durability for mmap stores
 
-**Status:** Phases 00 + 01 **shipped** (merged to `main` via
-[PR #219](https://github.com/loft-lang/loft/pull/219), commit
-`d494edc`).  Phase 01b (loft-callable binding) is actionable
-now on branch `store-durable-phase1b` to unblock the
-training-port consumer.  Phases 02-06 stay in `future/` until
-their driver consumers (TTT v5 / @PLN6 audience demo) need
-them.  Full promotion to active (`plans/38-…`) deferred until
-phase 02 begins.
+**Status (updated 2026-07-07):** Phases 00, 01, **and 01b all SHIPPED** to `main`.
+Phase 00 + 01 (foundation + Tier 1 `IntegrityOnly`) via
+[PR #219](https://github.com/loft-lang/loft/pull/219) (commit `d494edc`); Phase 01b (the
+loft-callable `store_durable_check` / `store_durable_seal` binding + the
+`store_durable_loft.rs` round-trip test) via [PR #220](https://github.com/loft-lang/loft/pull/220)
+(commit `b307ef03`), stdlib binding refined through [PR #225](https://github.com/loft-lang/loft/pull/225).
+Verified 2026-07-07 (`store_durable_loft.rs` 2/2 green, callable both backends). **Phases 02–06
+stay in `future/`** until their driver consumers (TTT v5 / @PLN6 audience demo) need them —
+consumer-gated, not blocked. Full promotion to active deferred until phase 02 begins; the plan
+issue [loft-lang/plans#43](https://github.com/loft-lang/plans/issues/43) stays OPEN (real phases
+remain).
 
 **Substrate update (2026-06-09):** the @PLN16 debugger landed a **revertible store
 change journal** — a record-change write-ahead log
