@@ -179,17 +179,29 @@ by 08 as the promotion tier — this is the *interpreter* tier, not module relin
   `eval` a vector expr → the value; edit a fn → the live world picks up the new body; a compiled write
   then an interpreted read of the same var agree (proof of one heap, not two — probe 2).
 
-### A3 — opt-in packaging (F3)
+### A3 — packaging: `--lean` opt-OUT, default LIVE (F3) ✅ LANDED (P2)
 
-One codegen flag (working name `--live`) gates: the `live_entry_check` emission (`mod.rs:3252`), the
-`LOFT_LIVE_FNS`/`boot_stores` emission (`mod.rs:1807-1818`), and (wasm) the interpreter's inclusion.
-Lean release (off): zero entry checks, no bundled interpreter. `LOFT_LIVE_FLIP` stays the runtime
-activation within a live-capable build.
+**Shipped as an opt-OUT, not opt-in — the default stays LIVE so nothing existing changes.** One
+codegen flag on `Output` (`emit_live`, default `true`) gates two emission sites: the per-fn
+`live_entry_check` (`generation/mod.rs:3252` — when off, the check is skipped AND `live_fns` stays
+empty because its sole producer never runs) and the `LOFT_LIVE_FNS`/`boot_stores`/`live_enabled`
+machinery in `emit_native_main` (`mod.rs:1800`, two template branches selected by `emit_live`). The
+CLI flag `--lean` (`main.rs`) flips `emit_live = false` at all three build `Output::new` sites —
+`--native`, `--native-wasm`, `--html`. A lean `main` bootstraps a plain `Stores::new()`, runs `init`
++ the leak check UNCONDITIONALLY, and references no `live_dispatch` symbol at all. `LOFT_LIVE_FLIP`
+stays the runtime activation within a live-capable (default) build.
 
-- **Acceptance:** a lean `--native`/`--html` build's emitted Rust has **zero** `live_flipped` calls
-  (grep proves it — probe 3); a `--live` build has them and the tier works. Record the size/perf delta
-  (esp. the wasm module — the `--html` cdylib is ~1.1 MB today; the bundled interpreter is the opt-in
-  cost to measure).
+- **Why opt-out, not opt-in:** flipping the shipped default to LIVE-on keeps every consumer working
+  untouched; `--lean` is the deliberate "smallest release binary, no live-flip/breakpoints" choice.
+  **Making lean the DEFAULT is a release-policy follow-up**, gated on the live-tier consumers (the
+  game's on-the-fly scripts, `serve`, and the `@PLN16` debugger) explicitly opting the tier back IN
+  with a flag — until then default-live is the non-breaking posture.
+- **Acceptance (met — probe 3):** a lean `--native` build's emitted Rust has **zero**
+  `live_flipped|LOFT_LIVE_FNS|boot_stores|live_enabled|live_dispatch` (grep = 0); the default build
+  has them (`live_flipped` count > 0) and the tier works; `--native --lean` compiles via rustc and
+  runs. Still TODO: record the size/perf delta (esp. the `--html` wasm module, ~1.1 MB today; the
+  bundled interpreter is the cost the opt-out removes) and wire `emit_live=false`'s effect on the
+  browser interpreter inclusion (A2).
 
 ## Probes (falsify before building)
 
@@ -210,6 +222,7 @@ activation within a live-capable build.
 
 **P1 (A1) — fix the evaluator.** ✅ LANDED (first cut) — `eval`/`setValue` work in heap-local frames;
 the invariant violation for round-trippable values is closed; residual P1b (referenced keyed
-collections → the true live-frame eval). **P2 (A3) — the opt-in flag.** Cheap; the boundary every other
-piece plugs into. **P3 (A2) — the browser tier.** The largest piece (four blockers); lands the
-offline/browser consumer. Each phase has its own acceptance gate above.
+collections → the true live-frame eval). **P2 (A3) — the `--lean` opt-OUT flag.** ✅ LANDED —
+`--lean` strips the tier from `--native`/`--native-wasm`/`--html`; default stays LIVE (non-breaking).
+The boundary every other piece plugs into. **P3 (A2) — the browser tier.** The largest piece (four
+blockers); lands the offline/browser consumer. Each phase has its own acceptance gate above.

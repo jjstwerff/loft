@@ -580,6 +580,12 @@ pub struct Output<'a> {
     /// emits the table as `LOFT_LIVE_FNS` so the runtime bootstrap can
     /// resolve every index against its own parse of the same sources.
     pub live_fns: Vec<String>,
+    /// @PLN98 P2 — emit the live/debug tier?  Default `true` keeps the shipped
+    /// behaviour (per-fn `live_flipped` entry checks, the `LOFT_LIVE_FNS` table,
+    /// and `boot_stores`/`live_enabled` gating in `main`).  The `--lean` opt-out
+    /// sets it `false`, so the generated Rust carries ZERO live-dispatch
+    /// machinery — the smallest release binary, no live-flip / breakpoints.
+    pub emit_live: bool,
 }
 
 /// Use this to convert loft names that contain `#` into valid Rust identifiers.
@@ -1053,6 +1059,7 @@ impl<'a> Output<'a> {
                 .map(|(s, _)| s)
                 .collect(),
             live_fns: Vec::new(),
+            emit_live: true,
         }
     }
 }
@@ -1804,27 +1811,45 @@ extern crate loft;"
             "const LOFT_PROGRAM_RELATIVE: bool = {};",
             self.stores.program_relative
         )?;
-        write!(w, "static LOFT_LIVE_FNS: &[&str] = &[")?;
-        for n in &self.live_fns {
-            write!(w, "{n:?}, ")?;
+        if self.emit_live {
+            write!(w, "static LOFT_LIVE_FNS: &[&str] = &[")?;
+            for n in &self.live_fns {
+                write!(w, "{n:?}, ")?;
+            }
+            writeln!(w, "];")?;
+            // Emits `fn main`: arm the timeout watchdog + fail-fast (halt-at-op like the
+            // interpreter, #333), then run init + n_main on a large-stack thread (@PLN28:
+            // deep recursion trips MAX_CALL_DEPTH cleanly instead of overflowing the
+            // ~8 MiB OS main-thread stack), then the optional native leak check.
+            write!(
+                w,
+                "\nfn main() {{\n    loft::timeout::arm(loft::timeout::env_timeout_secs(), loft::timeout::env_grace_secs());\n    loft::database::NATIVE_FAIL_FAST.store(true, std::sync::atomic::Ordering::Relaxed);\n    std::thread::Builder::new().stack_size(loft::codegen_runtime::NATIVE_MAIN_STACK).spawn(|| {{\n    let cell = std::cell::UnsafeCell::new(loft::live_dispatch::boot_stores(LOFT_LIVE_FNS));\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); stores.source_dir = Stores::source_dir_native(); stores.program_relative = LOFT_PROGRAM_RELATIVE; if let Ok(m) = std::env::var(\"LOFT_PATHS\") {{ stores.program_relative = m.eq_ignore_ascii_case(\"program\"); }} }}\n    if !loft::live_dispatch::live_enabled() {{ init(&cell); }}\n    n_main(&cell);\n    {{ let stores: &Stores = unsafe {{ &*cell.get() }}; if stores.had_fatal {{ std::process::exit(1); }} }}\n"
+            )?;
+            writeln!(w, "    if !loft::live_dispatch::live_enabled() {{")?;
+            w.write_all(NATIVE_LEAK_CHECK_TAIL.as_bytes())?;
+            writeln!(w, "    }}")?;
+            writeln!(
+                w,
+                "    }}).expect(\"failed to spawn main-stack thread\").join().expect(\"main thread panicked\");"
+            )?;
+            writeln!(w, "}}")
+        } else {
+            // @PLN98 P2 — `--lean`: identical `main` MINUS the live/debug tier.
+            // No `LOFT_LIVE_FNS` table; the world is a plain `Stores::new()`
+            // (never `boot_stores`); `init` and the leak check run
+            // UNCONDITIONALLY (no `live_enabled()` gate).  The emitted Rust
+            // references no `live_dispatch` symbol at all.
+            write!(
+                w,
+                "\nfn main() {{\n    loft::timeout::arm(loft::timeout::env_timeout_secs(), loft::timeout::env_grace_secs());\n    loft::database::NATIVE_FAIL_FAST.store(true, std::sync::atomic::Ordering::Relaxed);\n    std::thread::Builder::new().stack_size(loft::codegen_runtime::NATIVE_MAIN_STACK).spawn(|| {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); stores.source_dir = Stores::source_dir_native(); stores.program_relative = LOFT_PROGRAM_RELATIVE; if let Ok(m) = std::env::var(\"LOFT_PATHS\") {{ stores.program_relative = m.eq_ignore_ascii_case(\"program\"); }} }}\n    init(&cell);\n    n_main(&cell);\n    {{ let stores: &Stores = unsafe {{ &*cell.get() }}; if stores.had_fatal {{ std::process::exit(1); }} }}\n"
+            )?;
+            w.write_all(NATIVE_LEAK_CHECK_TAIL.as_bytes())?;
+            writeln!(
+                w,
+                "    }}).expect(\"failed to spawn main-stack thread\").join().expect(\"main thread panicked\");"
+            )?;
+            writeln!(w, "}}")
         }
-        writeln!(w, "];")?;
-        // Emits `fn main`: arm the timeout watchdog + fail-fast (halt-at-op like the
-        // interpreter, #333), then run init + n_main on a large-stack thread (@PLN28:
-        // deep recursion trips MAX_CALL_DEPTH cleanly instead of overflowing the
-        // ~8 MiB OS main-thread stack), then the optional native leak check.
-        write!(
-            w,
-            "\nfn main() {{\n    loft::timeout::arm(loft::timeout::env_timeout_secs(), loft::timeout::env_grace_secs());\n    loft::database::NATIVE_FAIL_FAST.store(true, std::sync::atomic::Ordering::Relaxed);\n    std::thread::Builder::new().stack_size(loft::codegen_runtime::NATIVE_MAIN_STACK).spawn(|| {{\n    let cell = std::cell::UnsafeCell::new(loft::live_dispatch::boot_stores(LOFT_LIVE_FNS));\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); stores.source_dir = Stores::source_dir_native(); stores.program_relative = LOFT_PROGRAM_RELATIVE; if let Ok(m) = std::env::var(\"LOFT_PATHS\") {{ stores.program_relative = m.eq_ignore_ascii_case(\"program\"); }} }}\n    if !loft::live_dispatch::live_enabled() {{ init(&cell); }}\n    n_main(&cell);\n    {{ let stores: &Stores = unsafe {{ &*cell.get() }}; if stores.had_fatal {{ std::process::exit(1); }} }}\n"
-        )?;
-        writeln!(w, "    if !loft::live_dispatch::live_enabled() {{")?;
-        w.write_all(NATIVE_LEAK_CHECK_TAIL.as_bytes())?;
-        writeln!(w, "    }}")?;
-        writeln!(
-            w,
-            "    }}).expect(\"failed to spawn main-stack thread\").join().expect(\"main thread panicked\");"
-        )?;
-        writeln!(w, "}}")
     }
 
     /// Use this to emit only the `init` body that registers all types.
@@ -3249,7 +3274,14 @@ extern crate loft;"
                 // the `stores` derivation: a flipped fn re-enters the parked
                 // interpreter (which swaps the world out of the cell), so no
                 // native `&mut` may be live in THIS frame when it runs.
-                let live_check = self.live_entry_check(def).unwrap_or_default();
+                // @PLN98 P2 — `--lean` strips the tier: skip the entry check
+                // entirely (and, as a side effect, `self.live_fns` stays empty
+                // because `live_entry_check` — its sole producer — never runs).
+                let live_check = if self.emit_live {
+                    self.live_entry_check(def).unwrap_or_default()
+                } else {
+                    String::new()
+                };
                 self.call_stack_prefix = Some(format!(
                     "{live_check}  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};\n  \
                      cr_call_push(\"{loft_name}\", \"{escaped_file}\", {loft_line});\n  \

@@ -108,6 +108,8 @@ fn print_help() {
     println!(
         "  --native-debug                like --native but compile with -Cdebuginfo=2 (DWARF)"
     );
+    println!("  --lean                        strip the live/debug tier — smallest binary, no");
+    println!("                                live-flip/breakpoints");
     println!("  --dev-soft-halt               demote dev-mode runtime raises to log-and-continue");
     println!("                                (also: LOFT_DEV_SOFT_HALT=1) — surfaces every fault");
     println!(
@@ -3606,6 +3608,10 @@ fn main() {
     // and preserve the generated `.rs` on disk so DWARF's `.debug_line`
     // table points at a real file the debugger can show.
     let mut native_debug = false;
+    // @PLN98 P2 — `--lean`: strip the live/debug tier from the generated Rust
+    // (no `live_flipped` entry checks, no `LOFT_LIVE_FNS`/`boot_stores`).  The
+    // default keeps the live tier (non-breaking); this is opt-OUT.
+    let mut lean = false;
     let mut dump_only = false;
     // None  = flag not given
     // Some("") = flag given without explicit path → use .loft/ default
@@ -3792,6 +3798,12 @@ fn main() {
             native_mode = true;
             native_requested = true;
             native_debug = true;
+        } else if a == "--lean" {
+            // @PLN98 P2 — opt OUT of the live/debug tier: the generated Rust
+            // carries no live-dispatch machinery (smallest binary, no
+            // live-flip / breakpoints).  Composes with any build target
+            // (--native / --native-wasm / --html / --native-emit).
+            lean = true;
         } else if a == "--dev-soft-halt" {
             // Plan-07 phase 4g.3 — demote dev-mode raises to
             // log-and-continue so a single run surfaces every
@@ -5340,6 +5352,10 @@ fn main() {
             // resolve by d_nr so the renamed def stays consistent).
             p.data.namespace_colliding_native_fns();
             let mut out = generation::Output::new(&p.data, &state.database);
+            // @PLN98 P2 — `--lean` strips the live/debug tier from the emitted Rust.
+            if lean {
+                out.emit_live = false;
+            }
             let main_nr = p.data.def_nr("n_main");
             let entry_defs: Vec<u32> = if main_nr < end_def {
                 vec![main_nr]
@@ -5432,6 +5448,10 @@ fn main() {
             p.data.namespace_colliding_native_fns();
             let mut out = generation::Output::new(&p.data, &state.database);
             out.wasm_browser = true;
+            // @PLN98 P2 — `--lean` strips the live/debug tier from the emitted Rust.
+            if lean {
+                out.emit_live = false;
+            }
             let main_nr = p.data.def_nr("n_main");
             let entry_defs: Vec<u32> = if main_nr < end_def {
                 vec![main_nr]
@@ -6020,6 +6040,10 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
             // `native_cabi_enabled()` keeps codegen and the linker flags in sync
             // (off on Windows, which stays on the rlib path).
             out.native_cabi = native_utils::native_cabi_enabled();
+            // @PLN98 P2 — `--lean` strips the live/debug tier from the emitted Rust.
+            if lean {
+                out.emit_live = false;
+            }
             let result = if native_release {
                 let main_nr = p.data.def_nr("n_main");
                 let entry_defs: Vec<u32> = if main_nr < end_def {
