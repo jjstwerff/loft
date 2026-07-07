@@ -162,7 +162,7 @@ stays invisible.
 | Phase | Done when |
 |---|---|
 | A | Every `Type` variant + its hidden inputs enumerated; falsification probes run on both backends |
-| B | Golden test green on both backends; self-audit covers every variant; `hash(golden) == layout_algo_hash()` |
+| B | **v1 done** (`tests/layout_golden.rs`): golden pins size + `Parts` layout over a representative corpus (transitive closure → collection strides), stable `LAYOUT_ALGO_HASH`, proven-fails on a #477-class perturbation. **Remaining:** enum/sorted/index/tuple/closure corpus · coverage self-audit (exhaustive `Type` match) · dynamic both-backend byte check · expose `pub layout_algo_hash()` |
 | C | `formal/layout.md` written (rules + `D-layout-1`); wired into formal/README + ROADMAP; drift-clean |
 | D | `.dschema` round-trips; a mutated `layout_algo_hash` is *detected* (never misread) via `on_corruption` |
 | E1 | Add-only + drop-only serialize→deserialize green both backends; auto-run on D4's verdict |
