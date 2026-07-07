@@ -291,13 +291,20 @@ verify it once, natively. Each step is one commit with its verification green be
 
 </details>
 
-**P3.2 — cooperative pause (native — the browser only reuses it):**
-1. A `debug_yield` flag (mirror `frame_yield`); the breakpoint hook sets it + returns from `execute`,
-   preserving the State-held stack. **Verify** (native `#[test]`): a program with a breakpoint →
-   `execute` returns with `debug_yield` set + the paused frame capturable; a resume continues to
-   completion with correct output.
-2. `resume_debug(session, cmd)` re-enters `execute` after applying a control command. **Verify**
-   (native): pause → `eval "2+2"` (the shared primitive) → resume → correct output.
+**P3.2 — cooperative pause ✅ LANDED (2026-07-07):**
+The mechanism ALREADY EXISTS and needs no new `debug_yield` flag. `execute_argv` at a breakpoint (in
+stepping mode) calls `debug_check`, which stashes the frame in `debug.paused` and RETURNS from the
+execute loop (`state/mod.rs:3849`) — a cooperative yield: control goes back to the caller with the
+State-held stack preserved, NOT the blocking `debug_pause_loop`. `debug_step(Continue)` re-enters the
+same loop and runs to completion. The signal is `is_paused()` (`= debug.paused.is_some()`), which the
+wasm session checks alongside `frame_yield`. So the browser reuses the REPL's model verbatim — a flag
+mirroring `frame_yield` would be redundant.
+- **Verified** (`tests/debugger.rs::cooperative_pause_yields_control_then_resumes_to_completion`, State
+  level — exactly what a wasm session drives): `execute_argv` yields at the breakpoint (`is_paused`,
+  frame with `n==40` capturable); `debug_step(Into)` resumes one step and computes `m==42` correctly;
+  `debug_step(Continue)` runs to completion cleanly. The eval-at-pause half (`eval "2+2"` → resume →
+  correct captured output) is `tests/rpc.rs::rpc_launch_break_eval_continue`, which drives the same
+  `eval_observe`→`debug_eval_json`→`debug_continue` API the browser driver wraps.
 
 **P3.3 — control over `host_input` (native — inject into the channel):**
 1. A debug pump reads control frames from `host_input` and feeds `debug_cmd_dispatch` (the existing TCP

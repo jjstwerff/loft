@@ -1117,3 +1117,78 @@ fn vector_element_edit_rejects() {
         "valid edit after rejects"
     );
 }
+
+// @PLN98 P3.2 — the COOPERATIVE pause the browser tier reuses.  At a breakpoint
+// `execute_argv` RETURNS control (it does not block — unlike the native
+// live-dispatch pause loop) with the State-held stack preserved and the frame
+// capturable; `debug_step(Continue)` re-enters and runs to completion.  This raw
+// cycle — execute-yields + step-resumes, keyed on `is_paused()` — is exactly what
+// a wasm debug session drives across the JS event loop (no new `debug_yield` flag:
+// `is_paused()` is the signal).
+#[test]
+fn cooperative_pause_yields_control_then_resumes_to_completion() {
+    let mut p = repl();
+    match p.parse_statement("fn compute(n: integer) -> integer {\n  m = n + 2;\n  m\n}") {
+        ParseResult::Ready { .. } => {}
+        other => panic!("def parse failed: {other:?}"),
+    }
+    {
+        // Warm-compile so compute's slots + line table exist before the run build.
+        let mut warm = State::new(p.database.clone());
+        loft::scopes::check(&mut p.data);
+        compile::byte_code(&mut warm, &mut p.data);
+    }
+    let entry = match p.parse_statement("compute(40)") {
+        ParseResult::Ready { entry_def_nr } => entry_def_nr,
+        other => panic!("call parse failed: {other:?}"),
+    };
+    let mut state = State::new(p.database.clone());
+    loft::scopes::check(&mut p.data);
+    compile::byte_code(&mut state, &mut p.data);
+    let d_nr = p.data.def_nr("n_compute");
+    assert!(
+        state.set_breakpoint_fn_line(d_nr, 2, &p.data).is_some(),
+        "breakpoint set on compute line 2"
+    );
+    state.enable_stepping(); // stepping → the breakpoint SUSPENDS
+    let name = p
+        .data
+        .def(entry)
+        .name()
+        .strip_prefix("n_")
+        .expect("wrapper is n_-prefixed")
+        .to_string();
+
+    // 1. YIELD — execute returns control at the breakpoint (no block), frame live.
+    state.execute_argv(&name, &p.data, &[]);
+    assert!(state.is_paused(), "execute_argv yielded at the breakpoint");
+    let frame = state.paused_frame().expect("frame capturable at the pause");
+    assert_eq!(frame.function, "compute", "paused in compute: {frame:?}");
+    assert!(
+        frame.locals.iter().any(|(n, v)| n == "n" && v == "40"),
+        "arg n == 40 captured at the pause: {:?}",
+        frame.locals
+    );
+
+    // 2. RESUME one step — re-enter and execute the `m = n + 2` line; the resumed
+    //    run must compute the CORRECT value, observable as `m == 42` in the frame
+    //    at the next line (a frame-visible proxy for output — the entry stack is
+    //    gone once the whole run completes).
+    let still_paused = state.debug_step(StepMode::Into, &p.data);
+    assert!(still_paused, "stepped to the next line, still paused");
+    let after = state.paused_frame().expect("frame after the resumed step");
+    assert!(
+        after.locals.iter().any(|(n, v)| n == "m" && v == "42"),
+        "the resumed step computed m == 42: {:?}",
+        after.locals
+    );
+
+    // 3. RESUME to completion — the run finishes cleanly (not re-paused, no fault).
+    let done = state.debug_step(StepMode::Continue, &p.data);
+    assert!(!done, "resume ran to completion (not re-paused)");
+    assert!(!state.is_paused(), "no longer paused after resume");
+    assert!(
+        state.database.runtime_error.is_none(),
+        "resume completed cleanly (no fault)"
+    );
+}
