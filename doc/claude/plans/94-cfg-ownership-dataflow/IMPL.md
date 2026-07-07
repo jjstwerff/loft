@@ -323,15 +323,20 @@ regression guard — Check B is unit-proven but no toggle emits an unconditional
 
 ## Check C — under-free / leak detection (DESIGNED, not yet built — [`CHECK_C_UNDERFREE_DESIGN.md`](CHECK_C_UNDERFREE_DESIGN.md))
 
-Extends the oracle from the over-free class (Check A/B) to under-free. A gated prototype
-(`LOFT_OWN_UNDERFREE`) was built + MEASURED, then reverted; the numbers fixed the scope (design doc
-has them): the honest target is the **DEFINITE leak** (an `Owned` heap local freed on NO path, not
-transferred) — sound for that subclass, catching a *deleted* free (the 4.3 injected-fault
-true-positive Check A/B could not). It does NOT catch conditional/`Join` leaks (e.g.
-`LOFT_NO_JOIN_OWN`, whose free op is statically present but skipped at runtime) — that stays the
-RUNTIME leak-check's class (coexistence, both flag). Steps C.1–C.4 + the false-positive story (heap
-filter cuts 70→9-35/file; the residual is one class — temps consumed into a container — closed by the
-transfer-out set) are in the design doc.
+Extends the oracle from the over-free class (Check A/B) to under-free. A gated prototype was built +
+MEASURED, then reverted; the numbers fixed both the scope and a BLOCKER (design doc has the detail):
+
+- **Scope:** the honest target is the **DEFINITE leak** (an `Owned` heap local freed on NO path, not
+  transferred) — catches a *deleted* free (the 4.3 injected-fault true-positive A/B miss); NOT
+  conditional/`Join` leaks (`LOFT_NO_JOIN_OWN` — free op statically present, skipped at runtime → the
+  RUNTIME leak-check's class; coexistence). False positives: heap filter 70→9-35/file, then the
+  transfer-out set (returned ∪ consumed-into-container) → **0–4/file**.
+- **C.0 BLOCKER (found while building):** the oracle observes the PRE-codegen IR (`oracle` is line 3
+  of `scopes::check`; `get_free_vars` inserts frees later, during codegen), so a user function's free
+  set is EMPTY at oracle time. Check C can't run here, and Check B is near-vacuous on user functions
+  for the same reason (it meaningfully checks only pre-cached stdlib). **C.0 = give the free-based
+  checks a post-codegen view** (a second entry point after codegen, or thread the pre-codegen fact to
+  a post-codegen free-walk). C.1–C.4 stack on C.0.
 
 **Explicitly NOT here:** routing any shipped consumer (`scopes::get_free_vars`, `state/codegen.rs`,
 `generation/dispatch.rs`) to the new fact, and retiring the position-proxy / flow-insensitive-join.

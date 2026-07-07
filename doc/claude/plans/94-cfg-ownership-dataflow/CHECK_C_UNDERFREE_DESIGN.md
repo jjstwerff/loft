@@ -27,6 +27,35 @@ So Check C's honest target is the **DEFINITE leak**: an `Owned` heap-store local
 any path** and no transfer out — a store leaked on *every* execution. Sound for that subclass (a flag
 is a real leak, modulo transfer-completeness); it does **not** catch conditional/`Join` leaks.
 
+## C.0 — the enabling PREREQUISITE (found while building C.1; it is a BLOCKER)
+
+Building the transfer-out set (below) drove the false-positive rate to 0–4/file — then the residuals
+exposed a deeper constraint. `n_main`'s free set came back **empty** (`freed={}`) even though its
+compiled IR has 7 `OpFreeRef`s. Cause: **the oracle observes the PRE-codegen IR.** `oracle(data)` is
+the third line of `scopes::check` (`src/scopes.rs:1554`); `check` ends at line 1762; `get_free_vars`
+(which inserts the frees) runs at ~1877, during codegen, **after** `check`. So at oracle time a
+freshly-checked USER function's `def.code` has **no frees yet** — they are appended later.
+
+Consequences:
+- **Check C cannot run at the current call site** — its whole premise is reading the emitted frees.
+- **Check B is near-VACUOUS on user functions today** — the same reason. Its 0-RED across 377 scripts
+  is partly because it had no user-function frees to inspect (it meaningfully checks only pre-cached
+  stdlib, whose `def.code` carried frees from an earlier compile). This is a real limit of the
+  shipped check, surfaced here — worth widening when C.0 lands.
+- **Check A is unaffected** — it is fact-based (needs no frees), which is why the A1b catch works.
+
+**C.0 = give the free-based checks a POST-codegen view.** Options (decide before C.1):
+1. A second oracle entry point invoked after codegen completes (where `def.code` is final — the
+   state `introspect` already reads), running ONLY the free-based checks (B + C). Keep Check A at the
+   pre-codegen site where its fact fixpoint is already validated.
+2. Reconcile carefully: the post-codegen CFG has the extra free/copy/materialise ops, so re-running
+   the FULL fixpoint there would change Check A's facts and needs re-validation — prefer (1),
+   computing the fact once (pre-codegen) and threading it to a post-codegen free-walk.
+
+Until C.0 lands, C.1–C.4 below are DESIGNED-not-buildable. The transfer-out set + heap filter (the
+false-positive machinery) were prototyped and measured (0–4 FP/file) and stand ready; they just need
+the frees C.0 supplies.
+
 ## Coexistence — what it adds, what it does NOT replace
 
 Check C runs BESIDE the shipped **runtime** leak-check, catching a **complementary** sub-class:
@@ -84,6 +113,11 @@ op is one more entry in the transfer-out set, `log()`ged if unmodeled.
 
 ## Steps (each independently committable, each states its gate)
 
+- **C.0 — the free-based checks get a POST-codegen view (BLOCKER, see above).** Add a second oracle
+  entry point after codegen (or thread the pre-codegen fact to a post-codegen free-walk); prove Check
+  B now sees user-function frees (its coverage was vacuous there). **Gate:** on the A1b test,
+  `collect_free_targets(n_h)` is non-empty; SI-1 still holds (still an observer). Everything below
+  stacks on this.
 - **C.1 — heap filter + returned + consume-into-container.** Re-add the check (gated
   `LOFT_OWN_UNDERFREE` first) with Fix 1 + the return and `OpFinishRecord`/`OpAppendVector`/
   `OpCopyRecord` transfer set. **Gate:** FP on the correct corpus (7 probes + 505 + 54 fuzz cells)
