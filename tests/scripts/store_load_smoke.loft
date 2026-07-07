@@ -25,6 +25,11 @@ fn lookup13(h: hash<Rec[id]>) -> text {
   if found == null { "null" } else { "{found.val}" }
 }
 
+fn lookup_key(h: hash<Rec[id]>, k: integer) -> text {
+  found = h[k];
+  if found == null { "null" } else { "{found.val}" }
+}
+
 fn main() {
   path = env_variable("LOFT_PERSIST_TEST_PATH");
   mode = env_variable("LOFT_PERSIST_TEST_MODE");
@@ -50,6 +55,15 @@ fn main() {
     println("loadkey keys={keys_of(h)}");
     println("loadkey lookup h[13]={lookup13(h)}");
     println("loadkey len={len(h)}");
+  } else if mode == "loadkeys" {
+    // Phase 3a plural: fetch the SUBSET {7, 42} — 13 stays absent.
+    ids: vector<integer> = [];
+    ids += [7];
+    ids += [42];
+    got = store_load_keys(h, path, ids);
+    println("loadkeys got={got}");
+    println("loadkeys h7={lookup_key(h, 7)} h42={lookup_key(h, 42)} h13={lookup_key(h, 13)}");
+    println("loadkeys len={len(h)}");
   } else {
     println("FAIL unknown-mode")
   }

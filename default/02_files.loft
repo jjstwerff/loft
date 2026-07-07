@@ -427,6 +427,16 @@ pub fn store_load_key(local: reference, path: text, key: integer) -> boolean fs#
 #rust"stores.load_key(&(@local), @path, @key)"
 #impure(io)
 
+// Plural form of `store_load_key`: fetch the given integer keys' entries into
+// `local` in one call (the paged reader is opened once and its cache reused),
+// returning how many were found. Keys absent from the remote are skipped. Same
+// FLAT-struct restriction. @PLN97 arc G (loft#522).
+//   tiles: hash<Tile[id]> = []
+//   got = store_load_keys(tiles, "block.store", [7, 13, 42])   // got == 3
+pub fn store_load_keys(local: reference, path: text, keys: vector<integer>) -> integer fs#read;
+#rust"stores.load_keys_vec(&(@local), @path, &(@keys))"
+#impure(io)
+
 // Truncates or extends the file to `size` bytes. Returns FileResult.Ok, or an
 // error variant (IsDirectory / NotFound / Other).
 pub fn set_file_size(self: File, size: integer) -> FileResult fs#update {

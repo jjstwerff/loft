@@ -308,6 +308,35 @@ fn store_load_key_loads_only_the_requested_key_both_backends() {
     }
 }
 
+/// @PLN97 arc G Phase 3a (plural) — `store_load_keys` fetches a SUBSET of keys
+/// ({7, 42}) in one call, returns the count found (2), and leaves un-requested
+/// keys (13) absent. Both backends.
+#[test]
+fn store_load_keys_loads_the_requested_subset_both_backends() {
+    let dir = scratch("store_load_keys_phase3a");
+    let path = dir.join("ks.store");
+
+    let (out_w, code_w) = run_mode(&load_script(), &path, "write");
+    assert_eq!(code_w, 0, "write exit: {out_w:?}");
+
+    for backend in ["--interpret", "--native"] {
+        let (out, code) = run_mode_backend(backend, &load_script(), &path, "loadkeys");
+        assert_eq!(code, 0, "{backend} loadkeys exit: {out:?}");
+        assert!(
+            out.contains("loadkeys got=2"),
+            "{backend}: both requested keys found: {out:?}"
+        );
+        assert!(
+            out.contains("h7=700 h42=4200 h13=null"),
+            "{backend}: subset values correct + 13 absent: {out:?}"
+        );
+        assert!(
+            out.contains("loadkeys len=2"),
+            "{backend}: exactly the subset loaded: {out:?}"
+        );
+    }
+}
+
 #[test]
 fn fresh_returns_true_and_file_appears() {
     let dir = scratch("fresh_returns_true_and_file_appears");

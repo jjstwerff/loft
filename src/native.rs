@@ -171,6 +171,8 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_store_load", n_store_load),
     #[cfg(feature = "remote-store")]
     ("n_store_load_key", n_store_load_key),
+    #[cfg(feature = "remote-store")]
+    ("n_store_load_keys", n_store_load_keys),
     ("n_eprint", n_eprint),
     ("n_directory", n_directory),
     ("n_user_directory", n_user_directory),
@@ -1247,6 +1249,19 @@ fn n_store_load_key(stores: &mut Stores, stack: &mut DbRef) {
     let v_ref = *stores.get::<DbRef>(stack);
     let ok = stores.load_key(&v_ref, v_path.str(), v_key);
     stores.put(stack, ok);
+}
+
+/// Interpreter handler for `store_load_keys` — load the given integer keys'
+/// entries from a persisted hash image, fetching only the pages the lookups
+/// touch; returns the count found.  Args pop in reverse: keys, path, local.
+/// @PLN97 arc G Phase 3a.
+#[cfg(feature = "remote-store")]
+fn n_store_load_keys(stores: &mut Stores, stack: &mut DbRef) {
+    let v_keys = *stores.get::<DbRef>(stack);
+    let v_path = *stores.get::<Str>(stack);
+    let v_ref = *stores.get::<DbRef>(stack);
+    let n = stores.load_keys_vec(&v_ref, v_path.str(), &v_keys);
+    stores.put(stack, n);
 }
 
 /// Write `text` to stderr — companion to `print()` / `println()`

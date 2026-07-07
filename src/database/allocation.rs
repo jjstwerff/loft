@@ -2277,30 +2277,70 @@ impl Stores {
     /// root position in the image), NOT the raw bytes.
     #[cfg(feature = "remote-store")]
     pub fn load_key(&mut self, local: &DbRef, path: &str, key: i64) -> bool {
-        use crate::paged_reader::{LocalFileProvider, PagedReader, find_hash_entry};
+        self.load_keys(local, path, std::slice::from_ref(&key)) > 0
+    }
+
+    /// @PLN97 arc G Phase 3a — load the requested integer keys' entries from a
+    /// persisted HASH image at `path` into the empty local hash `local`,
+    /// fetching only the pages the lookups touch. Returns the count actually
+    /// found (keys absent in the remote are silently skipped). The paged reader
+    /// is opened ONCE and shared across all keys, so its LRU cache is reused.
+    /// See [`load_key`](Stores::load_key) for the single-key form. Same
+    /// FLAT-struct restriction (scalar fields only — no relocation yet).
+    #[cfg(feature = "remote-store")]
+    pub fn load_keys(&mut self, local: &DbRef, path: &str, keys_vals: &[i64]) -> i64 {
+        use crate::paged_reader::{LocalFileProvider, PagedReader};
         let Ok(prov) = LocalFileProvider::open(path) else {
-            return false;
+            return 0;
         };
         let mut reader = PagedReader::new(prov);
 
         // Schema from the LIVE type of `local` (never reverse-engineered bytes).
         let tp = self.allocations[local.store_nr as usize].known_type;
         if tp == u16::MAX {
-            return false;
+            return 0;
         }
         let keys = self.keys(tp).to_vec();
-        let key_content = vec![crate::keys::Content::Long(key)];
 
-        // find over the paged image, rooted at `local`'s own (rec, pos).
-        let matched = find_hash_entry(&mut reader, local.rec, local.pos, &key_content, &keys);
-        if matched == 0 {
-            return false; // key absent in the remote (not an error)
+        let mut loaded = 0i64;
+        for &kv in keys_vals {
+            if self.load_one(&mut reader, local, &keys, kv) {
+                loaded += 1;
+            }
         }
 
-        // FLAT copy: the entry record's field words (fld 8 .. size·8) hold only
-        // scalars, so a straight word copy into a fresh local claim is correct —
-        // no internal `rec` pointers to relocate. `hash::add` then links it,
-        // hashing the copied key (reusing the verified insert path).
+        // Observability for the "bytes fetched ≪ file" invariant: at scale N
+        // keys touch O(N) pages, not O(file). Off unless asked.
+        if std::env::var_os("LOFT_LOADER_STATS").is_some() {
+            eprintln!(
+                "store_load_keys: asked={} loaded={loaded} bytes_fetched={} file={}",
+                keys_vals.len(),
+                reader.provider().bytes_fetched(),
+                reader.size()
+            );
+        }
+        loaded
+    }
+
+    /// Find one integer key in the paged image and, if present, FLAT-copy its
+    /// entry record into `local` and link it via the verified `hash::add`. The
+    /// entry's field words (fld 8 .. size·8) hold only scalars, so a straight
+    /// word copy into a fresh claim is correct — no internal `rec` pointers to
+    /// relocate. Returns whether the key was found.
+    #[cfg(feature = "remote-store")]
+    fn load_one(
+        &mut self,
+        reader: &mut crate::paged_reader::PagedReader<crate::paged_reader::LocalFileProvider>,
+        local: &DbRef,
+        keys: &[crate::keys::Key],
+        key: i64,
+    ) -> bool {
+        let key_content = [crate::keys::Content::Long(key)];
+        let matched =
+            crate::paged_reader::find_hash_entry(reader, local.rec, local.pos, &key_content, keys);
+        if matched == 0 {
+            return false;
+        }
         let size = reader.record_words(matched);
         if size < 2 {
             return false;
@@ -2319,18 +2359,24 @@ impl Stores {
             rec: new_rec,
             pos: 8,
         };
-        crate::hash::add(local, &entry, &mut self.allocations, &keys);
-
-        // Observability for the "bytes fetched ≪ file" invariant: at scale a
-        // single key touches O(1) pages, not O(file). Off unless asked.
-        if std::env::var_os("LOFT_LOADER_STATS").is_some() {
-            eprintln!(
-                "store_load_key: key={key} matched=rec{matched} bytes_fetched={} file={}",
-                reader.provider().bytes_fetched(),
-                reader.size()
-            );
-        }
+        crate::hash::add(local, &entry, &mut self.allocations, keys);
         true
+    }
+
+    /// Read a `vector<integer>` (`keys_vec`) into an `i64` slice and load those
+    /// keys via [`load_keys`](Stores::load_keys). The single vector-reading home
+    /// used by BOTH backends (the interpreter handler and the `#rust` codegen
+    /// body), so the element layout lives in one place. `integer` elements are
+    /// i64 at `8 + i·8` within the vector's inner record.
+    #[cfg(feature = "remote-store")]
+    pub fn load_keys_vec(&mut self, local: &DbRef, path: &str, keys_vec: &DbRef) -> i64 {
+        let length = crate::vector::length_vector(keys_vec, &self.allocations);
+        let inner = self.store(keys_vec).get_u32_raw(keys_vec.rec, keys_vec.pos);
+        let mut vals = Vec::with_capacity(length as usize);
+        for i in 0..length {
+            vals.push(self.store(keys_vec).get_int(inner, 8 + i * 8));
+        }
+        self.load_keys(local, path, &vals)
     }
 }
 
