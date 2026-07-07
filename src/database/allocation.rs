@@ -2350,6 +2350,36 @@ impl Stores {
         problems == 0
     }
 
+    /// True when a field's type stores its value INLINE (a fixed-width scalar),
+    /// so a working-set copy can move it as raw bytes with no pointer to
+    /// relocate. Text (type 5) and Reference (type 6) are POINTERS; vectors /
+    /// nested structs / keyed collections are heap-owned — all need the
+    /// relocating graph-copy (3b.2+), so they are NOT inline.
+    #[cfg(feature = "remote-store")]
+    fn is_inline_scalar(&self, tp: u16) -> bool {
+        match self.types[tp as usize].parts {
+            Parts::Int(..) | Parts::Byte(..) | Parts::Short(..) | Parts::ShortRaw(..) => true,
+            // Base covers the numeric primitives AND text(5) / Reference(6);
+            // only the numerics are inline.
+            Parts::Base => !matches!(tp, 5 | 6),
+            _ => false,
+        }
+    }
+
+    /// True when an entry of type `content_tp` is FLAT — every field stores
+    /// inline, so `store_load_key`'s raw word-copy is a faithful move. A
+    /// non-flat entry (any text / vector / nested / reference field) needs the
+    /// relocating copy and is refused until that lands (3b.1 safe-refusal).
+    #[cfg(feature = "remote-store")]
+    fn is_flat_entry(&self, content_tp: u16) -> bool {
+        match &self.types[content_tp as usize].parts {
+            Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
+                fields.iter().all(|f| self.is_inline_scalar(f.content))
+            }
+            _ => self.is_inline_scalar(content_tp),
+        }
+    }
+
     #[cfg(feature = "remote-store")]
     pub fn load_key(&mut self, local: &DbRef, path: &str, key: i64) -> bool {
         self.load_keys(local, path, std::slice::from_ref(&key)) > 0
@@ -2373,6 +2403,19 @@ impl Stores {
         // Schema from the LIVE type of `local` (never reverse-engineered bytes).
         let tp = self.allocations[local.store_nr as usize].known_type;
         if tp == u16::MAX {
+            return 0;
+        }
+        // 3b.1 SAFE REFUSAL — the raw word-copy in `load_one` is faithful only
+        // for a FLAT entry (all inline-scalar fields). An entry with a heap field
+        // (text / vector / nested / reference) needs the relocating graph-copy
+        // (3b.2+); until that lands, refuse the whole collection (load nothing)
+        // rather than produce a heap with a dangling pointer. `store_verify`
+        // would catch a broken copy — this makes sure one is never built.
+        let content_tp = match self.types[tp as usize].parts {
+            Parts::Hash(c, _) => c,
+            _ => return 0, // only Hash supported so far (Sorted lands at 3b.7)
+        };
+        if !self.is_flat_entry(content_tp) {
             return 0;
         }
         let keys = self.keys(tp).to_vec();

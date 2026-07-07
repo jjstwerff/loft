@@ -1,0 +1,30 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN97 arc G Phase 3b.1 — SAFE REFUSAL. A hash whose entry struct has a HEAP
+// field (here `name: text`) can't be moved by the flat word-copy yet (its text
+// pointer would dangle), so `store_load_key` must REFUSE it (return false, load
+// nothing) rather than build a broken heap. The refused-empty result must still
+// be structurally sound (`store_verify`). Driven by `store_persist_loft.rs`.
+
+struct TextRec { id: integer not null, name: text not null }
+
+fn main() {
+  path = env_variable("LOFT_PERSIST_TEST_PATH");
+  mode = env_variable("LOFT_PERSIST_TEST_MODE");
+
+  t: hash<TextRec[id]> = [];
+  if mode == "write" {
+    t += TextRec { id: 7,  name: "seven" };
+    t += TextRec { id: 13, name: "thirteen" };
+    if !store_persist_bind(t, path) { println("FAIL write-bind"); return }
+    println("write ok");
+  } else if mode == "loadkey" {
+    ok = store_load_key(t, path, 13);
+    println("text loadkey={ok}");
+    println("text len={len(t)}");
+    println("text verify={store_verify(t)}");
+  } else {
+    println("FAIL unknown-mode")
+  }
+}

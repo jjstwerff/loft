@@ -200,6 +200,10 @@ fn load_script() -> PathBuf {
     workspace_root().join("tests/scripts/store_load_smoke.loft")
 }
 
+fn text_refuse_script() -> PathBuf {
+    workspace_root().join("tests/scripts/store_load_text_refuse.loft")
+}
+
 /// `run_mode` fixed to `--interpret`, parameterised by backend so the heap
 /// `store_load` path can be exercised on the native backend too.
 fn run_mode_backend(backend: &str, script: &Path, path: &Path, mode: &str) -> (String, i32) {
@@ -337,6 +341,37 @@ fn store_load_keys_loads_the_requested_subset_both_backends() {
         assert!(
             out.contains("loadkeys len=2"),
             "{backend}: exactly the subset loaded: {out:?}"
+        );
+    }
+}
+
+/// @PLN97 arc G Phase 3b.1 — a hash whose entry has a HEAP field (text) is
+/// REFUSED by `store_load_key` (returns false, loads nothing) rather than copied
+/// with a dangling pointer, until the relocating copy (3b.2+) lands. The refused
+/// result is empty and structurally sound. Both backends.
+#[test]
+fn store_load_key_refuses_a_non_flat_entry_both_backends() {
+    let dir = scratch("store_load_text_refuse");
+    let path = dir.join("text.store");
+
+    let (out_w, code_w) = run_mode(&text_refuse_script(), &path, "write");
+    assert_eq!(code_w, 0, "write exit: {out_w:?}");
+    assert!(out_w.contains("write ok"), "write: {out_w:?}");
+
+    for backend in ["--interpret", "--native"] {
+        let (out, code) = run_mode_backend(backend, &text_refuse_script(), &path, "loadkey");
+        assert_eq!(code, 0, "{backend} loadkey exit: {out:?}");
+        assert!(
+            out.contains("text loadkey=false"),
+            "{backend}: a text-field entry must be REFUSED (not copied broken): {out:?}"
+        );
+        assert!(
+            out.contains("text len=0"),
+            "{backend}: refusal must load nothing: {out:?}"
+        );
+        assert!(
+            out.contains("text verify=true"),
+            "{backend}: the refused-empty store must be structurally sound: {out:?}"
         );
     }
 }
