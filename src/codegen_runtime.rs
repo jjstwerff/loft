@@ -4093,10 +4093,10 @@ pub fn cr_call_push(name: &'static str, file: &'static str, line: u32) {
 
 /// Native stack size for the generated `main` thread.  The OS main-thread
 /// stack (~8 MiB) overflows at a few thousand recursive loft calls — below the
-/// point where per-frame stack cost variance makes `MAX_CALL_DEPTH` a reliable
-/// guard.  Running on a generous (virtual, lazily-committed) stack lets the
-/// depth guard fire cleanly regardless of per-frame size.
-pub const NATIVE_MAIN_STACK: usize = 256 * 1024 * 1024;
+/// `MAX_CALL_DEPTH` (10 000) guard.  A generous, virtual (lazily-committed)
+/// stack holds 10 000 frames even for stack-heavy functions (~50 KiB/frame
+/// budget), so the depth guard fires cleanly before the OS stack is exhausted.
+pub const NATIVE_MAIN_STACK: usize = 512 * 1024 * 1024;
 
 /// Render a clean, source-located call-stack-overflow diagnostic (mirroring the
 /// interpreter's typed `StackOverflow`) and exit non-zero.  `#[cold]` /
