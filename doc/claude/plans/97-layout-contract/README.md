@@ -142,6 +142,9 @@ static type is a finding to fix, not a blocker — that discovery is the value.
 5. **F** (compiler migration aid) rides on the schema diff (D) — the developer surface that makes
    the whole thing invisible; the actionable state (add ∧ drop) is where it earns its keep.
 
+**Detailed, file-grounded build steps: [IMPL.md](IMPL.md)** (per-step *what / where / verified*,
+the critical path, and the verification gates).
+
 ## Open design questions
 
 1. **Golden form:** raw serialized bytes vs. a structured layout table (offsets/sizes/strides) vs.
