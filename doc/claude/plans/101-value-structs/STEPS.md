@@ -209,14 +209,18 @@ so storage is done; the copy pass covers `e = vec[i]`.
 - *Verify:* `vector<DateTime>` of N elements adds no per-element record; `e = v[i]; e.ms = 0`
   leaves `v[i]` unchanged; bulk read stays inline; both backends.
 
-## Slice 4 — lifetime-bearing value structs (text/vector fields) — OR defer
+## Slice 4 — lifetime-bearing value structs (text/vector fields) — DONE / SUPPORTED (commit pending)
 
-A value struct with a `text`/`vector`/reference field owns an inner handle: the copy pass's
-`OpCopyRecord` must DEEP-copy it (confirm `OpCopyRecord` already deep-copies inner handles), or
-reject such a value struct at parse until supported. Start: allow only pure-scalar-field value
-structs (reject the rest with a clear diagnostic).
-- *Verify:* either a text-field value struct round-trips leak-free both backends, or the rejection
-  diagnostic fires with a fix hint.
+**No rejection, no new code needed — they already work.** A value struct with a `text`/`vector`
+field owns an inner handle, and the copy pass's `OpCopyRecord` (the existing deep-copy op, also
+used by `v[i] = struct`) recursively DEEP-copies inner handles. So reading a lifetime-bearing
+value struct out of a field/element gives a fully independent copy — the local's `text`/`vector`
+is its own; freeing the local frees only the copy (no alias, no double-free, no leak).
+- *Verified:* `tests/scripts/517-value-struct-lifetime.loft` — text+vector fields deep-copy;
+  two independent copies from one source; loop-of-copies leak-free — both backends; the
+  ownership_oracle leak-scan ratchet (sweeps all scripts under check-leak) is green.
+- (A value-struct field that is itself a `reference<T>` / another owned struct is the same
+  deep-copy path; not separately exercised yet — extend 517 if a consumer needs it.)
 
 ## Slice 5 — native + regression suite
 
