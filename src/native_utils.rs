@@ -131,6 +131,179 @@ pub(crate) fn rebuild_runtime(tree: &std::path::Path, reason: &str) -> bool {
     }
 }
 
+/// @PLN100 Slice 1 — a wasm "shape" loft's own runtime rlib (`libloft.rlib`) is
+/// built in: a (triple × feature-set) pair.  `--html` and `--native-wasm` each
+/// need loft's runtime compiled for their target with a SPECIFIC feature set, and
+/// the `--html` shape MUST NOT share an output directory with the `make wasm`
+/// (wasm-bindgen) shape — both are `wasm32-unknown-unknown` but with incompatible
+/// features, so the last writer's `libloft.rlib` silently stomps the other (the
+/// rlib-stomp, WASM.md § The rlib-stomp hazard; the inline guard is
+/// [`html_wasm_import_modules_ok`]).  Giving the `--html` shape its own directory
+/// under `target/loft/html/` removes the shared file, so the stomp cannot happen.
+#[derive(Clone, Copy)]
+pub(crate) enum WasmRuntimeShape {
+    /// `loft --html`: `wasm32-unknown-unknown`, raw `loft_gl`/`loft_io` externs
+    /// (`--features random`, no wasm-bindgen).  Isolated under `target/loft/html/`
+    /// so the wasm-bindgen `make wasm` build (same triple) can't stomp it.
+    Html,
+    /// `loft --native-wasm`: `wasm32-wasip2`, `--features random`.  Its triple has
+    /// only ONE shape, so it is not stomped and keeps the default `target/` output
+    /// the install/test paths (`make install-artifacts`, the wasm_library_suite)
+    /// already read.
+    Wasi,
+}
+
+impl WasmRuntimeShape {
+    /// The rustc/rustup target triple this shape compiles for.
+    fn triple(self) -> &'static str {
+        match self {
+            WasmRuntimeShape::Html => "wasm32-unknown-unknown",
+            WasmRuntimeShape::Wasi => "wasm32-wasip2",
+        }
+    }
+
+    /// Short name for diagnostics / the isolated directory.
+    fn name(self) -> &'static str {
+        match self {
+            WasmRuntimeShape::Html => "html",
+            WasmRuntimeShape::Wasi => "wasi",
+        }
+    }
+
+    /// The cargo `--features` this shape's runtime rlib is built with (always
+    /// `--no-default-features`).  Both current shapes use `random` only; the
+    /// wasm-bindgen (`wasm`) shape is a Makefile / `wasm-pack` concern never
+    /// emitted by the loft binary, so it needs no arm here.
+    fn features(self) -> &'static str {
+        match self {
+            WasmRuntimeShape::Html | WasmRuntimeShape::Wasi => "random",
+        }
+    }
+
+    /// The isolated cargo `--target-dir` (relative to the loft source tree) this
+    /// shape's rlib is built into — `Some` only when the shape shares its triple
+    /// with another, feature-incompatible shape and so needs its own directory.
+    /// `None` shapes use the default `target/` the install/test paths already read.
+    fn isolated_target_subdir(self) -> Option<&'static str> {
+        match self {
+            WasmRuntimeShape::Html => Some("target/loft/html"),
+            WasmRuntimeShape::Wasi => None,
+        }
+    }
+}
+
+/// @PLN100 Slice 1 — ensure loft's own runtime rlib (`libloft.rlib`) for `shape`
+/// exists and is up to date, building it on demand, and return the directory that
+/// holds it (for `--extern loft=<dir>/libloft.rlib` + `-L dependency=<dir>/deps`).
+///
+/// This is the runtime-rlib analogue of [`crate::extensions::auto_build_native_target`]
+/// (which does the same for a user PACKAGE's native crate): in a dev checkout it
+/// auto-builds the rlib into a per-shape directory keyed on the running loft
+/// build's content fingerprint, so `--html` / `--native-wasm` no longer need a
+/// manual `make` step and never link a stale or feature-mismatched (`make
+/// wasm`-stomped) rlib.  An installed loft (no source tree) has no cargo/source to
+/// build with, so it falls back to the shipped per-triple rlib via
+/// [`loft_lib_dir_for`].
+///
+/// Staleness is keyed on [`loft::cache::loft_build_fingerprint`] (the content
+/// hash of the running loft's own rlib): it flips whenever loft's source changes
+/// and loft is rebuilt, which is exactly when the wasm runtime rlib — compiled
+/// from the same source — must be rebuilt.  Content-based, so it survives the
+/// mtime resets a CI `target/` cache restore causes.
+pub(crate) fn ensure_loft_runtime_rlib(shape: WasmRuntimeShape) -> Option<std::path::PathBuf> {
+    let triple = shape.triple();
+    let Some(tree) = loft_source_tree() else {
+        // Installed bundle: no source to compile — use the shipped rlib as-is.
+        return loft_lib_dir_for(Some(triple));
+    };
+    // The rlib lands under <target-dir>/<triple>/release/.  The Html shape gets an
+    // isolated target-dir so the wasm-bindgen `make wasm` build (same triple)
+    // can't stomp it; other shapes use the default `target/`.
+    let target_dir = shape
+        .isolated_target_subdir()
+        .map_or_else(|| tree.join("target"), |sub| tree.join(sub));
+    let profile_dir = target_dir.join(triple).join("release");
+    let rlib = profile_dir.join("libloft.rlib");
+    let fp = loft::cache::loft_build_fingerprint();
+    let fresh = |dir: &std::path::Path| {
+        dir.join("libloft.rlib").exists()
+            && loft::cache::native_artifact_fingerprint_matches(dir, fp)
+    };
+    if fresh(&profile_dir) {
+        return Some(profile_dir);
+    }
+    if env::var_os("LOFT_NO_AUTO_REBUILD").is_some() {
+        // Opt-out (CI / interpreter-preferring users): link whatever rlib is
+        // present rather than trigger an implicit cargo build.
+        return rlib.exists().then_some(profile_dir);
+    }
+    // Serialise cross-process builds on the SAME global lock the package
+    // auto-build uses, so parallel `loft` invocations (e.g. the concurrent
+    // html_wasm / html_asyncify test binaries) don't race cargo's shared registry
+    // index/cache or each other's output dir.
+    let _build_lock = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(std::env::temp_dir().join("loft-native-build.lock"))
+        .ok();
+    if let Some(f) = &_build_lock {
+        let _ = f.lock();
+    }
+    if fresh(&profile_dir) {
+        // A process we waited on just produced it.
+        return Some(profile_dir);
+    }
+    eprintln!(
+        "loft: building loft's wasm runtime rlib for {triple} (the '{}' shape) — a \
+         one-time cost until loft's source changes (typically under a minute).  Set \
+         LOFT_NO_AUTO_REBUILD=1 to skip and link the existing rlib instead.",
+        shape.name()
+    );
+    let mut cmd = std::process::Command::new("cargo");
+    cmd.args([
+        "build",
+        "--release",
+        "--target",
+        triple,
+        "--lib",
+        "--no-default-features",
+        "--features",
+        shape.features(),
+    ])
+    .current_dir(&tree)
+    // CLEAN flags: the host RUSTFLAGS/CARGO_ENCODED_RUSTFLAGS loft was built with
+    // are host-target-specific (e.g. target-cpu) and would break or mis-key the
+    // wasm build — this rlib is target-defined, not host-flag-defined.
+    .env_remove("RUSTFLAGS")
+    .env_remove("CARGO_ENCODED_RUSTFLAGS")
+    .stdout(std::process::Stdio::inherit())
+    .stderr(std::process::Stdio::inherit());
+    if let Some(sub) = shape.isolated_target_subdir() {
+        cmd.arg("--target-dir").arg(tree.join(sub));
+    }
+    match cmd.status() {
+        Ok(s) if s.success() && rlib.exists() => {
+            loft::cache::write_native_artifact_fingerprint(&profile_dir, fp);
+            Some(profile_dir)
+        }
+        Ok(_) => {
+            eprintln!(
+                "loft: could not build loft's wasm runtime rlib for {triple} — install the \
+                 target (`rustup target add {triple}`), or run with --interpret."
+            );
+            rlib.exists().then_some(profile_dir)
+        }
+        Err(e) => {
+            eprintln!(
+                "loft: cannot run cargo to build the wasm runtime rlib for {triple}: {e} — \
+                 needs a Rust toolchain with the {triple} target."
+            );
+            rlib.exists().then_some(profile_dir)
+        }
+    }
+}
+
 /// The dependency search dir for a [`loft_lib_dir`] result: `lib_dir` itself
 /// when it already IS `deps/` (the preferred deps-first resolution, #304/#307),
 /// else `lib_dir/deps`.  Appending "deps" unconditionally yields an invalid

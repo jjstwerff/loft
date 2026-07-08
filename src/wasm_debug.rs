@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
-// @PLN98 P3.4 — the browser debug CLIENT.
+// @I78 — Live-reload dispatch: the browser debug CLIENT (@PLN98 P3.4), the
+// live/debug tier's browser-side sibling to live_dispatch.rs.
 
 //! The interactive debug client a browser (`--html --debug`) build runs: the
 //! program executes INTERPRETED over a parked [`State`], breakpoints PAUSE it

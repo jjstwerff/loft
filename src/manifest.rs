@@ -2,9 +2,93 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // @I77 — Registry / manifest / lockfile resolution
 
-//! Minimal `loft.toml` manifest reader for external package support (T2-11).
-//! Phase 1: pure-loft package layout.  A simple line-scanner is sufficient
-//! for the three fields needed here; no full TOML parser is required.
+//! `loft.toml` manifest reader for external package support (T2-11).
+//!
+//! Tokenised with the SAME [`crate::lexer::Lexer`] loft source uses — via a
+//! config lexicon ([`LexConfig::config`]) that treats `#` as the comment marker
+//! and disables `{…}` string interpolation — so there is no second lexer in the
+//! codebase.  A small walk over the token stream fills the [`Manifest`] fields.
+
+use crate::lexer::{LexConfig, LexItem, Lexer};
+
+/// @PLN100 Slice 2 — one declared build target from `[build.target.<name>]`: a
+/// named (shape × triple × feature-set) the `loft build` driver can produce, with
+/// the toolchain it `requires`.  Overlays a built-in target of the same name
+/// (`native` / `html` / `wasi`) or adds a new one; empty fields keep the built-in
+/// default (`build_phase::resolve_target`).
+#[derive(Debug, Default, Clone)]
+pub struct BuildTarget {
+    /// The target's name — the key in `[build.target.<name>]` and what
+    /// `loft build <name>` / `default-targets` refer to.
+    pub name: String,
+    /// The compile shape that names the driver action: `native` (→ `--native`),
+    /// `html` (→ `--html`), or `wasi` (→ `--native-wasm`).  `None` → defaults to
+    /// the built-in of the same name, else `native`.
+    pub shape: Option<String>,
+    /// The rustc/rustup target triple (informational + the default entry of
+    /// `requires.rust-targets`).
+    pub triple: Option<String>,
+    /// Cargo features the shape's runtime rlib is built with (`[…] features = [...]`).
+    pub features: Vec<String>,
+    /// `[build.target.<name>.requires] rust-targets = [...]` — rustup targets that
+    /// must be installed for this target to build.
+    pub requires_rust_targets: Vec<String>,
+    /// `[build.target.<name>.requires] tools = [...]` — external tools that must be
+    /// on `PATH` (e.g. `wasm-opt`).
+    pub requires_tools: Vec<String>,
+}
+
+/// @PLN100 Slice 3 — one `[[build.asset]]` step: a custom command that turns
+/// declared `inputs` into `outputs`, re-run only when stale.  Staleness =
+/// `outputs missing` OR `inputs content changed` OR (for an external-source asset)
+/// the output is older than `lifetime` (a freshness TTL).  See
+/// `build_phase::run_asset`.
+#[derive(Debug, Default, Clone)]
+pub struct BuildAsset {
+    /// The asset's name (`name = "atlas"`) — used in progress output and the
+    /// fingerprint sidecar filename.
+    pub name: Option<String>,
+    /// The command to (re)build the asset (`run = "scripts/pack_atlas.loft"`): a
+    /// single `.loft` script (run with this loft binary) or any shell command.
+    pub run: Option<String>,
+    /// Input path globs (`inputs = ["art/**/*.png"]`) — content-fingerprinted so
+    /// the step re-runs only when an input changes.  Empty for an
+    /// external-source asset (then `lifetime` drives rebuilds).
+    pub inputs: Vec<String>,
+    /// The files this step produces (`outputs = ["assets/atlas.bin"]`) — a missing
+    /// output forces a rebuild.
+    pub outputs: Vec<String>,
+    /// The build targets this asset is needed for (`targets = ["html"]`).  Empty →
+    /// the asset applies to every build.
+    pub targets: Vec<String>,
+    /// A freshness TTL (`lifetime = "30d"`) for an externally-sourced output:
+    /// rebuild when the output is older than this even if no input changed.  Units
+    /// span `s`/`m`/`h`/`d`/`w`/`mo`/`y` (`build_phase::parse_duration`).
+    pub lifetime: Option<String>,
+}
+
+/// @PLN100 Slice 4 — one `[[test]]` entry: a declared test script run over one or
+/// more execution-backend `targets` after the build + asset phases, gated on the
+/// asset outputs it `needs`.  A green run is cached by the (run-script + inputs +
+/// target) fingerprint so `loft check` is incremental.  See
+/// `build_phase::run_test_phase`.
+#[derive(Debug, Default, Clone)]
+pub struct BuildTest {
+    /// The test's name (`name = "smoke"`) — used in output and the cache stamp.
+    pub name: Option<String>,
+    /// The `.loft` test script to run (`run = "tests/smoke.loft"`).
+    pub run: Option<String>,
+    /// The execution backends to run the script through (`targets = ["interpret",
+    /// "native"]`).  Empty → `["interpret"]`.  `html` / `wasi` have no headless
+    /// runner yet and are reported as skipped.
+    pub targets: Vec<String>,
+    /// Asset names that must be built first (`needs = ["atlas"]`) — the test is
+    /// skipped (and the gate fails) if a needed asset's outputs are missing.
+    pub needs: Vec<String>,
+    /// Data files the test reads (`inputs = ["assets/atlas.bin"]`) — folded into
+    /// the cache key so the test re-runs when a data file it reads changes.
+    pub inputs: Vec<String>,
+}
 
 /// Content of a library's `loft.toml` manifest file.
 #[derive(Debug, Default)]
@@ -93,6 +177,35 @@ pub struct Manifest {
     /// source-scanned `#native` symbols).  The resolver side that acts on this
     /// is separate, future work; today this is parsed metadata.
     pub trigger_enabled: bool,
+    /// @PLN100 Slice 2 — `[build] default-targets = [...]`: which targets
+    /// `loft build` makes when given no target names.  Empty → the driver falls
+    /// back to `["native"]` so a zero-config project still builds.
+    pub build_default_targets: Vec<String>,
+    /// @PLN100 Slice 2 — the `[build.target.<name>]` entries.  Each overlays a
+    /// built-in target (`native` / `html` / `wasi`) or declares a new one.
+    pub build_targets: Vec<BuildTarget>,
+    /// @PLN100 Slice 3 — the `[[build.asset]]` custom asset steps, in file order.
+    pub build_assets: Vec<BuildAsset>,
+    /// @PLN100 Slice 4 — the `[[test]]` declared test entries, in file order.
+    pub build_tests: Vec<BuildTest>,
+}
+
+impl Manifest {
+    /// @PLN100 Slice 2 — the `[build.target.<name>]` entry for `name`, creating an
+    /// empty one on first mention so later `[build.target.<name>.requires]` lines
+    /// attach to the same target regardless of section order.
+    fn build_target_mut(&mut self, name: &str) -> &mut BuildTarget {
+        if let Some(pos) = self.build_targets.iter().position(|t| t.name == name) {
+            return &mut self.build_targets[pos];
+        }
+        self.build_targets.push(BuildTarget {
+            name: name.to_string(),
+            ..Default::default()
+        });
+        self.build_targets
+            .last_mut()
+            .expect("just pushed a build target")
+    }
 }
 
 /// Read and parse a `loft.toml` file at `path`.
@@ -100,64 +213,285 @@ pub struct Manifest {
 #[must_use]
 pub fn read_manifest(path: &str) -> Option<Manifest> {
     let content = std::fs::read_to_string(path).ok()?;
-    let mut manifest = Manifest::default();
-    let mut section = String::new();
-    for line in content.lines() {
-        let line = line.trim();
-        if line.starts_with('[') && line.ends_with(']') {
-            section = line[1..line.len() - 1].to_string();
-            continue;
+    Some(parse_manifest(&content, path))
+}
+
+/// A parsed manifest value: a `Scalar` (string / bool / bareword) or an array
+/// `List`.  Keeps the token walk from caring which the caller wants.
+enum MValue {
+    Scalar(String),
+    List(Vec<String>),
+}
+
+impl MValue {
+    /// The value as a single string (a list joins on `,`).
+    fn scalar(&self) -> String {
+        match self {
+            MValue::Scalar(s) => s.clone(),
+            MValue::List(v) => v.join(","),
         }
-        if let Some((key, value)) = line.split_once('=') {
-            let key = key.trim();
-            let value = value.trim().trim_matches('"');
-            match (section.as_str(), key) {
-                ("package", "name") => manifest.name = Some(value.to_string()),
-                ("package", "version") => manifest.version = Some(value.to_string()),
-                ("package", "loft") => manifest.loft_version = Some(value.to_string()),
-                ("package", "repository") => manifest.repository = Some(value.to_string()),
-                ("package", "description") => manifest.description = Some(value.to_string()),
-                ("library", "entry") => manifest.entry = Some(value.to_string()),
-                ("library", "native") => manifest.native = Some(value.to_string()),
-                ("library", "compile") => manifest.compile = Some(value.to_string()),
-                ("dependencies", _) => {
-                    manifest
-                        .dependencies
-                        .push((key.to_string(), value.to_string()));
+    }
+    /// The value as a list (a non-empty scalar is a one-item list).
+    fn list(&self) -> Vec<String> {
+        match self {
+            MValue::List(v) => v.clone(),
+            MValue::Scalar(s) if s.is_empty() => Vec::new(),
+            MValue::Scalar(s) => vec![s.clone()],
+        }
+    }
+    /// The value as a boolean (`true` bareword).
+    fn is_true(&self) -> bool {
+        self.scalar() == "true"
+    }
+}
+
+/// Parse `content` (a `loft.toml`) into a [`Manifest`], tokenising with the loft
+/// [`Lexer`] under a TOML lexicon (`#` comments, no string interpolation).
+fn parse_manifest(content: &str, filename: &str) -> Manifest {
+    let mut m = Manifest::default();
+    // The punctuation TOML needs; `#` (the comment marker) is added by `config`.
+    // `{`/`}` are listed so a stray inline table lexes rather than faulting; we
+    // don't interpret them.
+    let cfg = LexConfig::config(&["[", "]", "{", "}", "=", ".", ",", "-"], "#");
+    let mut lex = Lexer::from_str_with(content, filename, cfg);
+    let mut section = String::new();
+    loop {
+        match lex.peek().has {
+            LexItem::None => break,
+            LexItem::Token(t) if t == "[" => section = read_section(&mut lex, &mut m),
+            LexItem::Identifier(_) => {
+                let key = read_key(&mut lex);
+                if !lex.has_token("=") {
+                    continue; // malformed line; read_key already advanced
                 }
-                ("native", "crate") => manifest.native_crate = Some(value.to_string()),
-                ("native", "in_binary") => manifest.native_in_binary = value == "true",
-                ("native", "runtime-libs") => {
-                    manifest.runtime_libs = split_list(value);
+                let value = read_value(&mut lex);
+                apply_kv(&mut m, &section, &key, &value);
+            }
+            // Any stray token (or a value orphaned by a malformed line): skip one,
+            // guaranteeing forward progress.
+            _ => lex.cont(),
+        }
+    }
+    m
+}
+
+/// Read a `[section]` or `[[array-of-tables]]` header (current token is `[`) and
+/// return the section string.  An `[[build.asset]]` / `[[test]]` header also pushes
+/// a fresh element and returns the `[[…]]` sentinel the key-walk keys on.
+fn read_section(lex: &mut Lexer, m: &mut Manifest) -> String {
+    lex.has_token("["); // consume the opening `[`
+    let array_of_tables = lex.has_token("["); // a second `[` => `[[name]]`
+    let name = read_dotted(lex);
+    lex.has_token("]"); // closing `]`
+    if array_of_tables {
+        lex.has_token("]"); // the second closing `]`
+        match name.as_str() {
+            "build.asset" => m.build_assets.push(BuildAsset::default()),
+            "test" => m.build_tests.push(BuildTest::default()),
+            _ => {}
+        }
+        return format!("[[{name}]]");
+    }
+    name
+}
+
+/// Read a dotted, possibly-hyphenated name (a section name or a bare key), joining
+/// identifiers with the `.` / `-` tokens between them, until a non-name token.
+fn read_dotted(lex: &mut Lexer) -> String {
+    let mut name = String::new();
+    loop {
+        match lex.peek().has {
+            LexItem::Identifier(s) => {
+                name.push_str(&s);
+                lex.cont();
+            }
+            LexItem::Token(ref t) if t == "." || t == "-" => {
+                name.push_str(t);
+                lex.cont();
+            }
+            _ => break,
+        }
+    }
+    name
+}
+
+/// Read a bare key: identifiers joined by `-` (TOML bare keys allow hyphens, which
+/// the lexer splits; underscores are already part of an identifier), up to `=`.
+fn read_key(lex: &mut Lexer) -> String {
+    let mut key = String::new();
+    loop {
+        match lex.peek().has {
+            LexItem::Identifier(s) => {
+                key.push_str(&s);
+                lex.cont();
+            }
+            LexItem::Token(ref t) if t == "-" => {
+                key.push('-');
+                lex.cont();
+            }
+            _ => break,
+        }
+    }
+    key
+}
+
+/// Read a value: a `["…", …]` array, a `"…"` string, a bareword (`true` / bare
+/// value), or a number.  Consumes exactly the value's tokens.
+fn read_value(lex: &mut Lexer) -> MValue {
+    match lex.peek().has {
+        LexItem::Token(ref t) if t == "[" => {
+            lex.cont(); // consume `[`
+            let mut items = Vec::new();
+            loop {
+                match lex.peek().has {
+                    LexItem::None => break,
+                    LexItem::Token(ref t) if t == "]" => {
+                        lex.cont();
+                        break;
+                    }
+                    LexItem::CString(s) | LexItem::Identifier(s) => {
+                        items.push(s);
+                        lex.cont();
+                    }
+                    // Commas and any stray tokens between items: skip.
+                    _ => lex.cont(),
                 }
-                ("native", "build-deps") => {
-                    manifest.build_deps = split_list(value);
+            }
+            MValue::List(items)
+        }
+        LexItem::Token(ref t) if t == "{" => {
+            // An inline table (e.g. a dependency `{ path = "../x" }`).  Reconstruct
+            // the raw `{ … }` text — the form `extract_path_dep` parses — rather
+            // than interpret it here; this is the only inline-table use.
+            lex.cont(); // consume `{`
+            let mut raw = String::from("{ ");
+            loop {
+                match lex.peek().has {
+                    LexItem::None => break,
+                    LexItem::Token(ref t) if t == "}" => {
+                        lex.cont();
+                        break;
+                    }
+                    LexItem::CString(s) => {
+                        raw.push('"');
+                        raw.push_str(&s);
+                        raw.push_str("\" ");
+                        lex.cont();
+                    }
+                    LexItem::Identifier(s) => {
+                        raw.push_str(&s);
+                        raw.push(' ');
+                        lex.cont();
+                    }
+                    LexItem::Token(t) => {
+                        raw.push_str(&t);
+                        raw.push(' ');
+                        lex.cont();
+                    }
+                    _ => lex.cont(),
                 }
-                ("native.functions", _) => {
-                    manifest
-                        .native_functions
-                        .push((key.to_string(), value.to_string()));
-                }
-                ("native.wasm", _) => {
-                    manifest
-                        .native_wasm
-                        .push((key.to_string(), value.to_string()));
-                }
-                ("wasm.bridge", "crate") => manifest.wasm_bridge_crate = Some(value.to_string()),
-                ("wasm.bridge", "host_js") => {
-                    manifest.wasm_bridge_host_js = Some(value.to_string());
-                }
-                ("wasm.bridge.routes", _) => {
-                    manifest
-                        .wasm_bridge_routes
-                        .push((key.to_string(), value.to_string()));
-                }
-                ("triggers", "enabled") => manifest.trigger_enabled = value == "true",
+            }
+            raw.push('}');
+            MValue::Scalar(raw)
+        }
+        LexItem::CString(s) | LexItem::Identifier(s) => {
+            lex.cont();
+            MValue::Scalar(s)
+        }
+        LexItem::Integer(n, _) => {
+            lex.cont();
+            MValue::Scalar(n.to_string())
+        }
+        LexItem::Long(n) => {
+            lex.cont();
+            MValue::Scalar(n.to_string())
+        }
+        _ => {
+            lex.cont();
+            MValue::Scalar(String::new())
+        }
+    }
+}
+
+/// Apply one `key = value` to `m` under `section` — the dispatch table for every
+/// manifest field.
+fn apply_kv(m: &mut Manifest, section: &str, key: &str, value: &MValue) {
+    // @PLN100 Slice 3/4 — the current `[[build.asset]]` / `[[test]]` element.
+    if section == "[[build.asset]]" {
+        if let Some(a) = m.build_assets.last_mut() {
+            match key {
+                "name" => a.name = Some(value.scalar()),
+                "run" => a.run = Some(value.scalar()),
+                "lifetime" => a.lifetime = Some(value.scalar()),
+                "inputs" => a.inputs = value.list(),
+                "outputs" => a.outputs = value.list(),
+                "targets" => a.targets = value.list(),
                 _ => {}
             }
         }
+        return;
     }
-    Some(manifest)
+    if section == "[[test]]" {
+        if let Some(t) = m.build_tests.last_mut() {
+            match key {
+                "name" => t.name = Some(value.scalar()),
+                "run" => t.run = Some(value.scalar()),
+                "targets" => t.targets = value.list(),
+                "needs" => t.needs = value.list(),
+                "inputs" => t.inputs = value.list(),
+                _ => {}
+            }
+        }
+        return;
+    }
+    // @PLN100 Slice 2 — the dynamic [build] / [build.target.<name>] sections.
+    if section == "build" {
+        if key == "default-targets" {
+            m.build_default_targets = value.list();
+        }
+        return;
+    }
+    if let Some(rest) = section.strip_prefix("build.target.") {
+        if let Some(tname) = rest.strip_suffix(".requires") {
+            let t = m.build_target_mut(tname);
+            match key {
+                "rust-targets" => t.requires_rust_targets = value.list(),
+                "tools" => t.requires_tools = value.list(),
+                _ => {}
+            }
+        } else {
+            let t = m.build_target_mut(rest);
+            match key {
+                "shape" => t.shape = Some(value.scalar()),
+                "triple" => t.triple = Some(value.scalar()),
+                "features" => t.features = value.list(),
+                _ => {}
+            }
+        }
+        return;
+    }
+    match (section, key) {
+        ("package", "name") => m.name = Some(value.scalar()),
+        ("package", "version") => m.version = Some(value.scalar()),
+        ("package", "loft") => m.loft_version = Some(value.scalar()),
+        ("package", "repository") => m.repository = Some(value.scalar()),
+        ("package", "description") => m.description = Some(value.scalar()),
+        ("library", "entry") => m.entry = Some(value.scalar()),
+        ("library", "native") => m.native = Some(value.scalar()),
+        ("library", "compile") => m.compile = Some(value.scalar()),
+        ("dependencies", _) => m.dependencies.push((key.to_string(), value.scalar())),
+        ("native", "crate") => m.native_crate = Some(value.scalar()),
+        ("native", "in_binary") => m.native_in_binary = value.is_true(),
+        ("native", "runtime-libs") => m.runtime_libs = split_list(&value.scalar()),
+        ("native", "build-deps") => m.build_deps = split_list(&value.scalar()),
+        ("native.functions", _) => m.native_functions.push((key.to_string(), value.scalar())),
+        ("native.wasm", _) => m.native_wasm.push((key.to_string(), value.scalar())),
+        ("wasm.bridge", "crate") => m.wasm_bridge_crate = Some(value.scalar()),
+        ("wasm.bridge", "host_js") => m.wasm_bridge_host_js = Some(value.scalar()),
+        ("wasm.bridge.routes", _) => m.wasm_bridge_routes.push((key.to_string(), value.scalar())),
+        ("triggers", "enabled") => m.trigger_enabled = value.is_true(),
+        _ => {}
+    }
 }
 
 /// @PLN21 Phase 2 — parse a comma-separated manifest value into a trimmed,
@@ -334,6 +668,28 @@ mod tests {
         );
     }
 
+    // The lexer-based reader reconstructs an inline-table dependency so
+    // `extract_path_dep` still finds the path (regression: i337).
+    #[test]
+    fn parses_inline_table_path_dep() {
+        let p = write_temp(
+            "inlinedep",
+            "[package]\nname = \"b\"\n[dependencies]\na = { path = \"../elsewhere/nested/a\" }\n",
+        );
+        let m = read_manifest(p.to_str().unwrap()).unwrap();
+        let (name, value) = m
+            .dependencies
+            .iter()
+            .find(|(n, _)| n == "a")
+            .expect("dependency `a` present");
+        assert_eq!(name, "a");
+        assert_eq!(
+            extract_path_dep(value),
+            Some("../elsewhere/nested/a"),
+            "raw value was {value:?}"
+        );
+    }
+
     #[test]
     fn parses_trigger_enabled() {
         let p = write_temp(
@@ -405,6 +761,119 @@ gl_create = "graphics_native::webgl::create_canvas"
                 "graphics_native::webgl::create_canvas".to_string()
             )
         );
+    }
+
+    // @PLN100 Slice 2 — the [build] section: default-targets array,
+    // [build.target.<name>] keys, and the [build.target.<name>.requires] subtable
+    // (out-of-order lines attach to the same target).
+    #[test]
+    fn parses_build_section() {
+        let p = write_temp(
+            "build",
+            r#"[package]
+name = "game"
+
+[build]
+default-targets = ["native", "html"]
+
+[build.target.html.requires]
+rust-targets = ["wasm32-unknown-unknown"]
+tools = ["wasm-opt"]
+
+[build.target.html]
+shape = "html"
+triple = "wasm32-unknown-unknown"
+features = ["random", "png"]
+"#,
+        );
+        let m = read_manifest(p.to_str().unwrap()).unwrap();
+        assert_eq!(m.build_default_targets, vec!["native", "html"]);
+        assert_eq!(m.build_targets.len(), 1);
+        let html = &m.build_targets[0];
+        assert_eq!(html.name, "html");
+        assert_eq!(html.shape.as_deref(), Some("html"));
+        assert_eq!(html.triple.as_deref(), Some("wasm32-unknown-unknown"));
+        assert_eq!(html.features, vec!["random", "png"]);
+        assert_eq!(html.requires_rust_targets, vec!["wasm32-unknown-unknown"]);
+        assert_eq!(html.requires_tools, vec!["wasm-opt"]);
+    }
+
+    #[test]
+    fn build_section_absent_by_default() {
+        let p = write_temp("nobuild", "[package]\nname = \"plain\"\n");
+        let m = read_manifest(p.to_str().unwrap()).unwrap();
+        assert!(m.build_default_targets.is_empty() && m.build_targets.is_empty());
+    }
+
+    // @PLN100 Slice 3 — [[build.asset]] array-of-tables, inline + full-line
+    // comments, array and scalar fields, and multiple elements.
+    #[test]
+    fn parses_build_assets() {
+        let p = write_temp(
+            "assets",
+            r#"[package]
+name = "game"
+
+# an asset built from local files
+[[build.asset]]
+name    = "atlas"
+run     = "scripts/pack_atlas.loft"
+inputs  = ["art/**/*.png"]      # fingerprinted -> rebuild only on change
+outputs = ["assets/atlas.bin"]
+targets = ["html"]
+
+[[build.asset]]
+name     = "dataset"
+run      = "scripts/fetch.loft"
+outputs  = ["assets/dataset.pak"]
+lifetime = "30d"
+"#,
+        );
+        let m = read_manifest(p.to_str().unwrap()).unwrap();
+        assert_eq!(m.build_assets.len(), 2);
+        let atlas = &m.build_assets[0];
+        assert_eq!(atlas.name.as_deref(), Some("atlas"));
+        assert_eq!(atlas.run.as_deref(), Some("scripts/pack_atlas.loft"));
+        assert_eq!(atlas.inputs, vec!["art/**/*.png"]); // inline comment stripped
+        assert_eq!(atlas.outputs, vec!["assets/atlas.bin"]);
+        assert_eq!(atlas.targets, vec!["html"]);
+        assert!(atlas.lifetime.is_none());
+        let dataset = &m.build_assets[1];
+        assert_eq!(dataset.name.as_deref(), Some("dataset"));
+        assert_eq!(dataset.lifetime.as_deref(), Some("30d"));
+        assert!(dataset.inputs.is_empty());
+    }
+
+    // @PLN100 Slice 4 — [[test]] entries: run/targets/needs/inputs.
+    #[test]
+    fn parses_build_tests() {
+        let p = write_temp(
+            "tests",
+            r#"[package]
+name = "game"
+
+[[test]]
+name    = "smoke"
+run     = "tests/smoke.loft"
+targets = ["interpret", "native"]
+needs   = ["atlas"]
+
+[[test]]
+name   = "atlas-integrity"
+run    = "tests/check_atlas.loft"
+inputs = ["assets/atlas.bin"]
+"#,
+        );
+        let m = read_manifest(p.to_str().unwrap()).unwrap();
+        assert_eq!(m.build_tests.len(), 2);
+        let smoke = &m.build_tests[0];
+        assert_eq!(smoke.name.as_deref(), Some("smoke"));
+        assert_eq!(smoke.run.as_deref(), Some("tests/smoke.loft"));
+        assert_eq!(smoke.targets, vec!["interpret", "native"]);
+        assert_eq!(smoke.needs, vec!["atlas"]);
+        let integrity = &m.build_tests[1];
+        assert_eq!(integrity.inputs, vec!["assets/atlas.bin"]);
+        assert!(integrity.needs.is_empty());
     }
 
     #[test]

@@ -95,37 +95,6 @@ fn pick_free_port() -> Option<u16> {
     Some(port)
 }
 
-/// Mirror of the sibling gates' freshness check: neither `cargo test` nor
-/// `make ci` rebuilds the wasm32 rlib, so a stale one would surface as a
-/// confusing `--html` rustc error.  Fail fast with the rebuild command.
-fn assert_wasm_rlib_fresh() {
-    let root = repo_root();
-    let rlib = root.join("target/wasm32-unknown-unknown/release/libloft.rlib");
-    let Ok(art_mtime) = rlib.metadata().and_then(|m| m.modified()) else {
-        return; // first run — the --html driver builds it
-    };
-    let sources = [
-        root.join("src/main.rs"),
-        root.join("src/ops.rs"),
-        root.join("src/lib.rs"),
-        root.join("src/generation/mod.rs"),
-        root.join("doc/loft-gl-wasm.js"),
-    ];
-    let stale = sources.iter().any(|s| {
-        s.metadata()
-            .and_then(|m| m.modified())
-            .is_ok_and(|t| t > art_mtime)
-    });
-    assert!(
-        !stale,
-        "stale wasm32-unknown-unknown rlib (a source is newer).\n\
-         Rebuild:\n  \
-           cargo build --release --target wasm32-unknown-unknown \\\n             \
-             --lib --no-default-features --features random\n\
-         (Do NOT use --features wasm — it pulls in wasm-bindgen.)\n"
-    );
-}
-
 /// Build the program to `--html` and return its path, or `None` to skip.
 fn build_html(root: &Path) -> Option<PathBuf> {
     let loft_bin = root.join("target/release/loft");
@@ -133,7 +102,9 @@ fn build_html(root: &Path) -> Option<PathBuf> {
         eprintln!("SKIP: target/release/loft not built (run `cargo build --release` first)");
         return None;
     }
-    assert_wasm_rlib_fresh();
+    // @PLN100 Slice 1 — no manual rlib freshness guard: `loft --html` auto-builds
+    // its own isolated wasm runtime rlib on stale/missing, so a stale or
+    // wasm-bindgen-stomped rlib can no longer reach this path.
 
     let tmp = std::env::temp_dir().join("loft_html_asyncify_resume");
     let _ = std::fs::remove_dir_all(&tmp);

@@ -109,6 +109,12 @@ pub struct Lexer {
     position: Position,
     tokens: HashSet<String>,
     keywords: HashSet<String>,
+    /// The comment marker (from it to end-of-line is skipped); loft `//`.  See
+    /// [`LexConfig`].
+    comment: String,
+    /// Whether `"…"` literals interpret `{…}` as interpolation (loft) or as literal
+    /// braces (configs).  See [`LexConfig::interpolate_strings`].
+    interpolate_strings: bool,
     /// Should we expect code with whitespaces here?
     mode: Mode,
     /// True while the lexer is inside a `{...}` format expression of a string literal.
@@ -167,6 +173,57 @@ static KEYWORDS: &[&str] = &[
     "is",
 ];
 
+/// The lexicon a [`Lexer`] tokenises with: its multi-/single-character
+/// tokens/operators, its keywords, the comment marker that runs to end-of-line,
+/// and whether string literals interpret `{…}` as interpolation.  `Default` is
+/// loft's own lexicon; a consumer can supply another so the SAME lexer tokenises a
+/// different surface syntax (e.g. [`LexConfig::config`] for `loft.toml`, which uses
+/// `#` comments and treats `{ }` in strings as literal) — so there is no second
+/// lexer in the codebase.
+#[derive(Clone)]
+pub struct LexConfig {
+    /// Tokens/operators recognised — single- AND multi-character (both are matched
+    /// against this set).  MUST contain `comment`.
+    pub tokens: HashSet<String>,
+    /// Bare identifiers promoted to keywords.
+    pub keywords: HashSet<String>,
+    /// The comment marker: from it to end-of-line is skipped (loft `//`, TOML `#`).
+    pub comment: String,
+    /// When true (loft), a lone `{` in a `"…"` literal opens a `{expr}` format slot;
+    /// when false (configs), `{` / `}` are literal string content.
+    pub interpolate_strings: bool,
+}
+
+impl Default for LexConfig {
+    /// loft's own lexicon: the `TOKENS` + `KEYWORDS` tables, `//` comments, and
+    /// `{…}` string interpolation.
+    fn default() -> Self {
+        LexConfig {
+            tokens: TOKENS.iter().map(|s| (*s).to_string()).collect(),
+            keywords: KEYWORDS.iter().map(|s| (*s).to_string()).collect(),
+            comment: "//".to_string(),
+            interpolate_strings: true,
+        }
+    }
+}
+
+impl LexConfig {
+    /// A lexicon for a config surface (e.g. `loft.toml`): the given `tokens` and
+    /// `comment` marker, no keywords, and NO string interpolation (`{ }` are
+    /// literal).  `comment` is added to `tokens` automatically so it lexes.
+    #[must_use]
+    pub fn config(tokens: &[&str], comment: &str) -> Self {
+        let mut tokens: HashSet<String> = tokens.iter().map(|s| (*s).to_string()).collect();
+        tokens.insert(comment.to_string());
+        LexConfig {
+            tokens,
+            keywords: HashSet::new(),
+            comment: comment.to_string(),
+            interpolate_strings: false,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Link {
     links: Rc<RefCell<u32>>,
@@ -219,7 +276,8 @@ fn oct_parse(val: &str) -> Option<u64> {
 
 impl Default for Lexer {
     fn default() -> Self {
-        let mut result = Lexer {
+        let cfg = LexConfig::default();
+        Lexer {
             virtual_files: std::collections::HashMap::new(),
             lines: Box::new(Vec::new().into_iter()),
             peek: LexResult {
@@ -239,27 +297,28 @@ impl Default for Lexer {
             link: 0,
             links: Rc::new(RefCell::new(0)),
             iter: LINE.chars().collect::<Vec<_>>().into_iter().peekable(),
-            tokens: HashSet::new(),
-            keywords: HashSet::new(),
+            tokens: cfg.tokens,
+            keywords: cfg.keywords,
+            comment: cfg.comment,
+            interpolate_strings: cfg.interpolate_strings,
             mode: Mode::Code,
             in_format_expr: false,
             in_backtick: false,
             diagnostics: Diagnostics::new(),
-        };
-        for s in TOKENS {
-            result.tokens.insert(String::from(*s));
         }
-        for s in KEYWORDS {
-            result.keywords.insert(String::from(*s));
-        }
-        result
     }
 }
 
 impl Lexer {
-    #[allow(unused)]
-    fn new(lines: impl Iterator<Item = IoResult<String>> + 'static, filename: &str) -> Lexer {
-        let mut result = Lexer {
+    /// Construct a lexer over `lines` using `config` as its lexicon (tokens,
+    /// keywords, comment marker, string-interpolation).  Pass
+    /// `LexConfig::default()` for loft.
+    fn new_with(
+        lines: impl Iterator<Item = IoResult<String>> + 'static,
+        filename: &str,
+        config: LexConfig,
+    ) -> Lexer {
+        Lexer {
             virtual_files: std::collections::HashMap::new(),
             lines: Box::new(lines),
             peek: LexResult {
@@ -279,20 +338,15 @@ impl Lexer {
             link: 0,
             links: Rc::new(RefCell::new(0)),
             iter: LINE.chars().collect::<Vec<_>>().into_iter().peekable(),
-            tokens: HashSet::new(),
-            keywords: HashSet::new(),
+            tokens: config.tokens,
+            keywords: config.keywords,
+            comment: config.comment,
+            interpolate_strings: config.interpolate_strings,
             mode: Mode::Code,
             in_format_expr: false,
             in_backtick: false,
             diagnostics: Diagnostics::new(),
-        };
-        for s in TOKENS {
-            result.tokens.insert(String::from(*s));
         }
-        for s in KEYWORDS {
-            result.keywords.insert(String::from(*s));
-        }
-        result
     }
 
     pub fn to(&mut self, scope: (u32, u32)) {
@@ -689,7 +743,7 @@ impl Lexer {
                 }
             } else if c == '\n' {
                 break;
-            } else if c == '{' {
+            } else if c == '{' && self.interpolate_strings {
                 self.next_char();
                 if let Some('{') = self.iter.peek() {
                     res.push(c);
@@ -698,7 +752,7 @@ impl Lexer {
                     self.in_format_expr = true;
                     return LexResult::new(LexItem::CString(res), pos);
                 }
-            } else if c == '}' {
+            } else if c == '}' && self.interpolate_strings {
                 self.next_char();
                 if let Some('}') = self.iter.peek() {
                     res.push(c);
@@ -706,6 +760,8 @@ impl Lexer {
                     self.err(Level::Warning, "Expected two '}' tokens");
                 }
             } else {
+                // With interpolation off (configs), `{` / `}` fall here as literal
+                // string content.
                 res.push(c);
             }
             self.next_char();
@@ -1288,7 +1344,7 @@ impl Lexer {
             return;
         };
         let mut res = n;
-        while res.has == LexItem::Token("//".to_string()) {
+        while res.has == LexItem::Token(self.comment.clone()) {
             while self.iter.peek().is_some() {
                 self.iter.next();
             }
@@ -1546,11 +1602,18 @@ impl Lexer {
     /// Create a lexer from a static string
     #[allow(unused)]
     pub fn from_str(s: &str, filename: &str) -> Lexer {
+        Self::from_str_with(s, filename, LexConfig::default())
+    }
+
+    /// Like [`from_str`](Self::from_str) but with an explicit lexicon, so the SAME
+    /// lexer tokenises a non-loft surface syntax (e.g. `loft.toml`).  The lexicon
+    /// is set BEFORE the first token is primed, so it applies from the first char.
+    pub fn from_str_with(s: &str, filename: &str, config: LexConfig) -> Lexer {
         let mut v = Vec::new();
         for l in s.split('\n') {
             v.push(Ok(String::from(l)));
         }
-        let mut res = Lexer::new(v.into_iter(), filename);
+        let mut res = Lexer::new_with(v.into_iter(), filename, config);
         res.cont();
         res
     }
