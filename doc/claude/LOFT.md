@@ -1366,6 +1366,29 @@ Use a `value struct` for small wrapper types that must be as cheap as the raw fi
 (e.g. `DateTime { ms: integer }`, `Point`, `Color`) — where the copy semantics of a scalar are
 what you want.  Use a reference `struct` when you want shared/aliased mutation or nullability.
 
+### First-grade custom types — operators, formatting, `as` (@PLN99)
+
+A user `struct` (or `value struct`) can behave exactly like a built-in across three surfaces —
+this is what makes a wrapper type (`DateTime`, `Money`, `Colour`, a `Decimal`, a URL) ergonomic
+rather than a bag of functions.  Mark the type and these functions `pub` to use them across a
+`use` boundary.
+
+- **Operators** — define `fn OpLt(self: T, other: T) -> boolean` (and `OpLe/OpGt/OpGe/OpEq/OpNe`),
+  `fn OpAdd/OpMin/OpMul(self: T, …) -> …`, etc., and `a < b` / `a - b` dispatch them **directly**
+  (not only inside `<T: Ordered>`).  `OpMin` is the `-` operator (subtraction), `OpAdd` is `+`.
+  **Operators key on `(OpName, receiver type)`** — you cannot overload the *same* operator by the
+  *second* operand's type (e.g. one `OpMin(T, T)` and one `OpMin(T, U)` collide); give the second
+  form a named method instead.  A type with no such op errors as before (`dt + 5` stays a compile
+  error — distinct-type safety is free).
+- **Formatting** — define `fn to_text(self: T, spec: text) -> text`.  Then `"{x}"` calls it with
+  `spec == ""` and `"{x:anything}"` passes `"anything"` raw — the type owns its whole spec
+  vocabulary (the Python `__format__` model; core learns no date/money tokens).  *Known issue
+  (#533): today the body must not be a bare tail `if` — bind the result to a local and return it
+  (`r = if … else …; r`), else the branch mis-selects.*
+- **Conversions** — define `fn OpConvTFromS(v: S) -> T` (e.g. `OpConvDateTimeFromText`), and
+  `s as T` dispatches it: `"2026-07-08" as DateTime`, `"#ff0000" as Colour`, `"1.5" as Decimal`.
+  With no matching conversion, `as T` is a clean compile error (not a silent mis-cast).
+
 ---
 
 ## Methods and function calls
