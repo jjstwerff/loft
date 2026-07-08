@@ -124,15 +124,31 @@ reads it). Verified: parses + a value struct as a vector element stores inline o
 so reading a `DateTime` field gives a value you can pass/modify without corrupting the record —
 exactly how `integer` behaves.
 
-**Change.** When the SOURCE of a bind / by-value pass is a value struct, emit a **byte COPY**
-into the destination instead of sharing the DbRef. Copy sites (mirror `integer`'s value
-behaviour): `e = record.field`, `x = vec[i]`, `f(record.field)` (by-value arg),
-`return record.field`, and a value-struct field read used as a value. The copy MECHANISM already
-exists — **`OpCopyRecord`** (copies a record's bytes, `fill.rs`); the work is **linking** it at
-these sites, gated on `Data::is_value_struct`, in the assignment / read codegen (the
-alias-vs-copy decision — @PLN85/@PLN90 ownership territory, `src/scopes.rs` /
-`src/ownership_cfg.rs`). The copy is cheap (inline bytes — the intrinsic cost of a value type,
-NOT a heap alloc); a value-struct LOCAL keeps its own (reused) store per the scope cut.
+**Mechanism located (2026-07-08).** `e = b.items[0]` lowers to `Set(e, OpGetVector(…))` and the
+ownership oracle `classify` (`src/use_analysis.rs:1329`) classes a projection
+(`OpGetVector`/`OpGetField`, `self.projections`) as **`Borrowed(base)`** → `e` is a VIEW into `b`
+(the `e:ref(P)["b"]` dep), so `e.x = 99` writes through. For value semantics `e` must be `Owned`
+(a copy).
+
+**Do NOT naively flip the oracle to `Owned` — it is UNSOUND** (over-free / UAF: `e` would be
+marked owning a store it doesn't own — the "projection local mis-classed Owned" hazard the oracle
+comments call out). The `Owned` verdict and the deep-copy MUST be coordinated.
+
+**Safe approach (no oracle change — reuse existing ops).** At the value-struct bind site, when the
+RHS classifies `Borrowed` (a view — `use_analysis::ownership_of(data, fn, rhs)`, read-only),
+wrap it: `e = OpDatabase(<P>); OpCopyRecord(view, e, <P content>)`. Now `e` genuinely mints +
+owns a fresh store, so `classify` returns `Owned` **correctly** (via `defs.db_vars`), and the
+copy is real. Copy-elision falls out: an `Owned` RHS (fresh `P{…}` construction) needs no copy.
+Both ops already exist (`OpDatabase`, `OpCopyRecord`, `fill.rs`/`state/io.rs`) — this LINKS them,
+matching "everything is already written". Copy sites to cover: `e = record.field`, `x = vec[i]`,
+`f(vs)` (by-value arg), `return vs`. Cheap (inline bytes — a value type's intrinsic copy, not a
+heap alloc); the value-struct LOCAL keeps its own (reused) store per the scope cut.
+
+**Validation bar (MANDATORY — this is the #1 heap invariant).** Matrix-first, both backends
+(`--interpret` + `--native`), the semantics probe below AND the full suite AND leak
+(`ownership_oracle`) AND UAF (ASan) gates green before landing. Land gated/off-by-default first if
+any risk. Do NOT rush this into a large context — it is the exact class the stability method
+requires be done with a probe matrix.
 
 **Verify (both backends).** `value struct P { x: integer }`, `b.items = [P { x: 1 }]`, then
 `e = b.items[0]; e.x = 99` ⇒ **`b.items[0].x == 1`** (copy, not 99). Plus: mutating a copy passed
