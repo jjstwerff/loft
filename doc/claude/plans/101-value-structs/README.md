@@ -64,21 +64,17 @@ addressed by offset* — like a scalar field, but multi-field.
 3. **Distinct, opt-in kind:** `value struct T { … }`. Value semantics (copy-on-assign, no
    aliasing) are *observable*, so NO silent size-based auto-promotion — it would change
    mutation/aliasing/@PLN85–90 ownership. Reference `struct` unchanged.
-4. **Type representation — a distinct `Type::Value(def)` value type (DECIDED 2026-07-08,
-   user).** *Evidence:* tuples (loft's value type) already copy-on-bind on both backends
-   (`e = b.t; e.0 = 99` ⇒ `b.t.0 == 1`); value structs alias today ONLY because they are
-   `Type::Reference` (borrow/dep/DbRef/free machinery). A distinct value type inherits
-   **copy-on-bind, deps = none, and no free** from the value-type (tuple) machinery — so the
-   hard part (copy semantics) FALLS OUT instead of being surgically forced into the heap-#1
-   assignment path. **A value struct = a named tuple**: `Type::Value(def)` reuses the tuple
-   layout/access/copy/native machinery (`element_offsets`, `TupleGet`/`TuplePut`, inline
-   storage) while keeping the struct def for @PLN99 dispatch (`find_op_method` by
-   `type_def_nr`). Cost: every exhaustive `match Type` gains an arm (loft idiom, like
-   `Optional`; compiler-guided) — most mirror `Reference`; `size`/`align`/`element_size`,
-   `depend` (none), free-emission, and copy-on-assign are where value semantics lives. This
-   is MORE upfront but SAFE (mechanical) vs. the flag approach's small-but-unsafe heap
-   surgery. **Supersedes the earlier `is_value` flag** (`Data.value_structs`), which stays as
-   the parse-time marker that decides to mint `Type::Value` vs `Type::Reference`.
+4. **Representation — value structs STAY `Type::Reference`; copy is an ISOLATED pass (DECIDED
+   2026-07-08, user — "less complex, don't wire it in directly").** A distinct `Type::Value`
+   variant threaded through the type system was tried and **reverted** (commit 1240f459): it
+   caused a broad `if let Type::Reference` blast radius across many runtime sites plus an
+   unbounded embedded-size refinement obligation. Instead, a value struct is an ordinary
+   `Type::Reference` record, marked only by `Data.value_structs`. Its **storage is already
+   inline** out-of-the-box (record fields via `finish_type`; vector elements via the backing
+   stride). The ONLY behavioural change — value (copy) semantics — is a single self-contained
+   IR pass (`value_struct_copy` in `scopes.rs`): it rewrites a value-struct local bind from a
+   view into `OpDatabase` + `OpCopyRecord` so the local owns a copy. No `Type` match, no size
+   function, no assignment-path surgery, no ownership-oracle change. Full recipe: STEPS §1.2.
 5. **Zero-cost inside records + collections falls out** of "part of one Store": a
    value-struct field/element is packed inline in the parent record / vector backing — no
    per-field, per-element record (a `vector<V>` becomes contiguous like `vector<scalar>`).
