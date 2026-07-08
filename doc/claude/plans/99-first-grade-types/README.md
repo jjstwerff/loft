@@ -36,6 +36,15 @@ generics; the three remaining gaps are what keep a library struct from being
   *silently* yields a null/garbage value — no user conversion hook and **no clean
   reject** (the worst outcome). A first-grade type must let `as` dispatch a
   user conversion, especially `text as T` parse-on-cast (Arc C).
+- **Null equality is broken for custom structs.** `s: DT? = null` then
+  `s == null` → **`false`** and `s != null` → **`true`** (both wrong) — while
+  `integer? == null` / `text? == null` → `true`, and `s ?? d` + `{s}` (renders
+  `null`) both correctly see `s` as null. So `??` and `== null` **disagree**. A
+  live correctness bug on `main` *and* a first-grade requirement (Arc A null
+  facet). No special null *model* is needed — a struct is a reference and the
+  @PLN25 null model covers it; the fix is aligning `==`/`!=`-vs-`null` with the
+  built-in nullable path. **Reject** the DESIGN's `ms == i64::MIN` in-band
+  sentinel — standard reference-null is the uniform answer.
 
 ## Goal
 
@@ -70,6 +79,14 @@ discoverable in *both* parser passes at a direct call site (the bounded-generic
 path relies on early signature collection — prove it holds for concrete structs,
 or pass 1 and pass 2 disagree on whether `<` is a user op and the token stream
 desyncs). Cite `src/parser/mod.rs:3964` (`call_op`), `INTERFACES.md` I8.
+
+**Null facet (a live `main` bug, fold in here):** `s == null` / `s != null` on a
+nullable user struct must match built-in nullables — today a null `DT?` wrongly
+reports `== null` → `false` while `integer?`/`text?` report `true` and `??` on the
+same value correctly coalesces. This is a *distinct* path from
+`Op<Name>(self, other)` (compare-against-`null`, not struct-vs-struct), but the
+same contract; the struct's nullability stays standard reference-null — **no
+per-type `i64::MIN` sentinel** (that would be the special-casing we avoid).
 
 ### Arc B — the `{x:spec}` custom-format hook
 Generalise `try_bound_to_text_call` (`src/parser/collections.rs:1037`) +
