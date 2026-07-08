@@ -73,9 +73,22 @@ Install on Debian/Ubuntu: `apt install binaryen wasmtime` (or download
 releases); `cargo install wasm-pack`; `rustup target add
 wasm32-unknown-unknown wasm32-wasip2`.
 
-### The rlib-stomp hazard — build order matters (@P337)
+### The rlib-stomp hazard — eliminated by per-shape isolation (@PLN100 Slice 1)
 
-`make wasm` (wasm-pack, **`feature=wasm`**) and `loft --html` both write
+> **As of @PLN100 Slice 1 the stomp cannot happen and no manual step is needed.**
+> `loft --html` now builds + links loft's own wasm runtime rlib in an **isolated
+> per-shape directory** — `target/loft/html/wasm32-unknown-unknown/release/` — so it
+> never shares a file with the `make wasm` (wasm-bindgen) build.  The rlib is
+> **auto-built on stale/missing**, keyed on the running loft build's content
+> fingerprint (`native_utils::ensure_loft_runtime_rlib`, gated by the same
+> `.loft-build-fp` sidecar the native-package auto-build uses), so `loft --html`
+> and `loft --native-wasm` need no prior `make` and never link a stale rlib.  Set
+> `LOFT_NO_AUTO_REBUILD=1` to link the existing rlib instead of triggering a build.
+> The historical hazard below is retained for context — it applies only to the
+> *shared* `target/wasm32-unknown-unknown/release/libloft.rlib` that `make wasm`
+> still writes and `loft --html` no longer reads.
+
+`make wasm` (wasm-pack, **`feature=wasm`**) and `loft --html` historically wrote
 **the same** `target/wasm32-unknown-unknown/release/libloft.rlib`, but with
 **incompatible feature sets**:
 
@@ -92,16 +105,18 @@ the bundle imports `__wbindgen_placeholder__`, which the HTML glue does not
 provide, and the page fails to instantiate
 (`Import … __wbindgen_placeholder__: module is not an object`).
 
-**Rule:** after `make wasm`, rebuild the rlib in the `--html` shape before
-`loft --html`:
+**Rule (pre-@PLN100, now automatic):** the `--html` shape's rlib is rebuilt for
+you — `loft --html` auto-builds it into the isolated `target/loft/html/` dir.  The
+manual rebuild that used to be required after `make wasm` is retired:
 
 ```bash
+# No longer needed — loft --html does this itself into target/loft/html/:
 cargo build --release --target wasm32-unknown-unknown --lib \
     --no-default-features --features random
 ```
 
-`make game` does this automatically (step 3); a *manual* `loft --html` does
-not.  `make wasm-html-test` rebuilds it for the test gate.  The integrity
+`make game` also does this (step 3); `make wasm-html-test` rebuilds it for the
+test gate.  The integrity
 gate `node tools/check_html_bundle.mjs <bundle.html>` (run by `make game`
 step 6) catches both this stomp and a missing-`wasm-opt` (no-asyncify) bundle
 before either ships.

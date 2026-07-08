@@ -5488,7 +5488,12 @@ fn main() {
             .arg("-o")
             .arg(wasm_out)
             .arg(&rs_path);
-        let wasm_deps_dir = if let Some(lib_dir) = loft_lib_dir_for(Some("wasm32-wasip2")) {
+        // @PLN100 Slice 1 — build loft's own wasm runtime rlib on stale/missing and
+        // locate it, instead of silently skipping the `--extern loft=…` (which used
+        // to surface as an opaque "wasm compilation failed" when the rlib was absent).
+        let wasm_deps_dir = if let Some(lib_dir) =
+            native_utils::ensure_loft_runtime_rlib(native_utils::WasmRuntimeShape::Wasi)
+        {
             cmd.arg("--extern")
                 .arg(format!("loft={}", lib_dir.join("libloft.rlib").display()));
             let deps = lib_dir.join("deps");
@@ -5582,6 +5587,13 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        // @PLN100 Slice 1 — build (on stale/missing) + locate loft's own wasm
+        // runtime rlib in the ISOLATED `--html` shape dir (`target/loft/html/`), so
+        // a wasm-bindgen `make wasm` build can't stomp it and no manual `make` step
+        // is needed.  Computed once and reused for both the main link and each wasm
+        // bridge crate (they must link the SAME loft copy).
+        let html_runtime_dir =
+            native_utils::ensure_loft_runtime_rlib(native_utils::WasmRuntimeShape::Html);
         // Compile to wasm32-unknown-unknown cdylib
         let wasm_path = std::env::temp_dir().join("loft_html.wasm");
         let mut cmd = std::process::Command::new("rustc");
@@ -5594,7 +5606,7 @@ fn main() {
             .arg("-o")
             .arg(&wasm_path)
             .arg(&rs_path);
-        if let Some(lib_dir) = loft_lib_dir_for(Some("wasm32-unknown-unknown")) {
+        if let Some(lib_dir) = html_runtime_dir.clone() {
             cmd.arg("--extern")
                 .arg(format!("loft={}", lib_dir.join("libloft.rlib").display()));
             let deps = lib_dir.join("deps");
@@ -5628,7 +5640,7 @@ fn main() {
         // rustc with the SAME `--extern loft=…` + deps search path
         // the standalone build uses, the bridge rlib links against
         // exactly one copy of loft — eliminating the dup.
-        let loft_wasm_lib_dir = loft_lib_dir_for(Some("wasm32-unknown-unknown"));
+        let loft_wasm_lib_dir = html_runtime_dir;
         for (bridge_crate, pkg_dir) in &p.data.wasm_bridge_packages {
             let wasm_dir = std::path::PathBuf::from(pkg_dir).join("wasm");
             let bridge_src = wasm_dir.join("src/lib.rs");

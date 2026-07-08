@@ -62,73 +62,6 @@ fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-/// Compare the mtime of a derived artefact against a set of source
-/// files.  Returns `Err(msg)` describing the newest out-of-date source
-/// and the rebuild command, or `Ok(())` when the artefact is fresh.
-///
-/// Neither `cargo test` nor `make ci` rebuilds the
-/// `wasm32-unknown-unknown` rlib or the fixture cdylibs.  Without this
-/// check, a stale artefact silently masquerades as a code regression —
-/// `--html` fails with rustc errors citing pre-migration line numbers,
-/// or `native_loader::*` mis-reads vector elements and reports
-/// "expected N, got M".
-fn artefact_staleness(artefact: &std::path::Path, sources: &[&std::path::Path]) -> Option<String> {
-    let Ok(art_md) = std::fs::metadata(artefact) else {
-        return Some(format!("artefact missing: {}", artefact.display()));
-    };
-    let Ok(art_mtime) = art_md.modified() else {
-        return None;
-    };
-    let mut newest: Option<(std::path::PathBuf, std::time::SystemTime)> = None;
-    for s in sources {
-        let Ok(md) = std::fs::metadata(s) else {
-            continue;
-        };
-        let Ok(mtime) = md.modified() else { continue };
-        if mtime > art_mtime && newest.as_ref().is_none_or(|(_, t)| mtime > *t) {
-            newest = Some(((*s).to_path_buf(), mtime));
-        }
-    }
-    newest.map(|(src, _)| {
-        format!(
-            "source newer than artefact: {} is newer than {}",
-            src.display(),
-            artefact.display()
-        )
-    })
-}
-
-/// Panic with an actionable rebuild command when the
-/// `wasm32-unknown-unknown` rlib is stale vs. key runtime sources.
-/// Called before invoking `loft --html` so a mismatch fails fast
-/// rather than surfacing as confusing rustc errors.
-fn assert_wasm_rlib_fresh() {
-    let rlib = repo_root().join("target/wasm32-unknown-unknown/release/libloft.rlib");
-    if !rlib.exists() {
-        return; // first run — the --html driver will build it
-    }
-    let root = repo_root();
-    let sources = [
-        root.join("src/codegen_runtime.rs"),
-        root.join("src/ops.rs"),
-        root.join("src/data.rs"),
-        root.join("src/lib.rs"),
-        root.join("src/generation/mod.rs"),
-    ];
-    let source_refs: Vec<&std::path::Path> =
-        sources.iter().map(std::path::PathBuf::as_path).collect();
-    if let Some(reason) = artefact_staleness(&rlib, &source_refs) {
-        panic!(
-            "stale wasm32-unknown-unknown rlib — {reason}\n\
-             Rebuild:\n  \
-               cargo build --release --target wasm32-unknown-unknown \\\n             \
-                 --lib --no-default-features --features random\n\
-             (Do NOT use --features wasm — that pulls in wasm-bindgen and\n \
-              the resulting bundle imports from __wbindgen_placeholder__.)\n"
-        );
-    }
-}
-
 /// Build a loft program via `--html`, extract the WASM, run it via the
 /// Node repro harness with stub imports, and return (stdout, stderr,
 /// exit_status).  Returns None when prerequisites are missing.
@@ -187,7 +120,9 @@ fn run_html_wasm_full(
         return None;
     }
 
-    assert_wasm_rlib_fresh();
+    // @PLN100 Slice 1 — no manual rlib freshness guard: `loft --html` auto-builds
+    // its own isolated wasm runtime rlib (`target/loft/html/…`) on stale/missing,
+    // so a stale or wasm-bindgen-stomped rlib can no longer reach this path.
 
     // @P321(c) Phase 3a: per-test subdir so `--html`'s asset
     // auto-discovery (which scans the dir of the entry .loft) only
@@ -222,9 +157,7 @@ fn run_html_wasm_full(
     // shared file path, not invariant state — a panicking test leaves
     // the file half-written, but the next test overwrites it on the
     // next `loft --html` invocation, so consuming the poisoned guard
-    // is safe.  `assert_wasm_rlib_fresh()` already runs before this
-    // line so a stale rlib fails the test before it can poison the
-    // build serial.
+    // is safe.
     let _guard = build_lock()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
