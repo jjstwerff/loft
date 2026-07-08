@@ -1,0 +1,222 @@
+<!--
+Copyright (c) 2026 Jurjen Stellingwerff
+SPDX-License-Identifier: LGPL-3.0-or-later
+-->
+
+# @PLN101 — Detailed implementation steps
+
+Reading order: [README.md](README.md) (design + status) → this file (verifiable steps) →
+[INSPECTION.md](INSPECTION.md) (the code mechanism behind every step, confirmed 2026-07-08).
+Each step states **what to change**, **where** (file/fn), and a **verification** that must
+pass on **both backends** (`--interpret` + `--native`).
+
+> **Headline from the inspection:** `Stores::finish_type` (`database/types.rs:317`) ALREADY
+> computes every struct's inline byte layout (`types[t_nr].size`/`.align`/field `position`).
+> A value struct is the SAME record bytes stored **inline** instead of behind a `DbRef` — an
+> *inlining* change, not a layout redesign. Reference + value structs share the one layout
+> home. Full mechanism map: INSPECTION.md.
+
+> **Line-ref provenance:** refs marked **[confirmed 2026-07-08]** were read on today's tree;
+> refs marked **[locate]** are the mechanism to find + confirm at implementation time. As in
+> @PLN99, re-grep before editing — the tree moves.
+
+> **The governing invariant (single home):** a value struct's *inline byte layout* has ONE
+> home — the same `element_offsets` / `calculate_positions_with_groups` that lays out tuples
+> and struct records today. Every path (size, construct, field r/w, copy, native codegen)
+> reads that one layout; none re-derives it. This is the @PLN99/58 lesson applied to
+> representation: single-home invariants make the off-diagonal matrix cells unable to disagree.
+
+---
+
+## Slice 0 — the composition matrix + the alloc-count harness (SPEC, before any code)
+
+The matrix is the acceptance oracle; the alloc harness makes "zero-cost" a hard assertion.
+
+- **0.1 — alloc-count harness.** The store tracker already counts allocations (the leak
+  gate / "stores not freed" path — `LOFT_STORES` / the ownership-oracle harness **[locate:
+  the store-allocation counter used by `tests/leak.rs` / ownership_oracle]**). Add a probe
+  mode that reports **total store records allocated by a program run** (not just leaked), so
+  a probe can assert `allocs == N`. Value-struct cells assert this count is **unchanged**
+  vs. an all-scalar baseline (the struct added zero heap records).
+  *Verify:* a reference-`struct` program reports `allocs > 0`; the same program with the
+  struct flipped to `value struct` reports the baseline count.
+- **0.2 — the matrix probes** (`/tmp`, `--interpret` first, then both). Vary ONE axis per
+  probe; hand-compute value AND alloc-count AND leak:
+  - **placement** × {local, temp, field-in-reference-struct, field-in-value-struct,
+    `vector<V>` element, fn arg (by value), fn return}
+  - **operation** × {construct, field read, field write, `<`/`==`/`-`, `{x}`/`{x:spec}`, `as`}
+  - **field shape** × {all-scalar (pure-value), nested value struct, (Slice 4) text/vector}
+  - **backend** × {interpret, native}
+- **0.3 — freeze the spec.** Record the pass/fail + alloc-count table in this file; it is the
+  Slice-1..5 acceptance oracle. Probes graduate to `tests/scripts/` as each slice lands.
+
+---
+
+## Slice 1 — a `value struct` as a LOCAL, end-to-end, zero alloc
+
+The smallest complete vertical: declare → construct → field r/w → operator → format →
+convert, all with **zero** heap records, both backends. Driver: flip `DateTime`/`Duration`
+in `tests/scripts/515-datetime-first-grade.loft` to `value struct` and prove `allocs == 0`
+with every existing assertion still green.
+
+### Step 1.1 — declaration: the `value struct` kind
+- **Parse** the `value` modifier before `struct` in the definition parser
+  **[locate: `src/parser/definitions.rs` struct-definition entry — near the `add_fn`/context
+  block at ~741, and the struct/enum/typedef dispatch in `parser/definitions.rs`]**.
+- **Mark the def.** `DefType` **[confirmed 2026-07-08: `src/data.rs:2332`]** has `Struct`
+  but no value kind. Add either `DefType::ValueStruct` **or** a `bool is_value` on
+  `Definition`. **Recommendation:** a `bool is_value` flag on `Definition` — a new `DefType`
+  variant forces a decision at every `DefType::Struct` match site (there are many:
+  `data.rs:3674`, `def_type` dispatch), whereas a flag is read only at the ~6 chokepoints
+  below. Keep `DefType::Struct` so all existing struct machinery (fields, methods, @PLN99
+  dispatch) applies unchanged.
+- *Verify:* `value struct V { a: integer }` parses; `data.def(v).is_value == true`; a plain
+  `struct` is `false`; introspect shows the field layout.
+
+### Step 1.2 — representation + inline layout (THE crux)
+- **Type variant.** A layout function takes `&Type` alone (`variables::size(tp)`,
+  `data::element_size(t)` — **[confirmed 2026-07-08]** both return `size_of::<DbRef>()` for
+  `Type::Reference`). To report the **packed inline size** instead, the layout code must
+  distinguish a value struct **from the type alone**. Introduce `Type::Value(def, deps)`
+  (parallel to `Type::Reference`). *A value struct's fields live on the DEF, not in the
+  Type* (unlike `Type::Tuple(elems)`), so its size cannot be computed from the variant
+  alone — see next bullet.
+- **Cache the inline size + field offsets on the def at finish.** Structs already assign
+  field `position` via `calculate_positions_with_groups` / `finish_type`
+  **[locate: `Stores::finish_type`, `calculate_positions_with_groups` in `src/database/`]**.
+  Compute + cache the value struct's **total packed size** (and per-field offsets) there,
+  reusing `element_offsets` **[confirmed 2026-07-08: `src/data.rs:1983`]** /
+  `group_size` **[confirmed: `data.rs:2435`]**. Then `size(Type::Value(def))` /
+  `element_size(Type::Value(def))` read the cached size (they gain read access to it — via a
+  size embedded in the variant `Type::Value(def, size)`, or via a small `Data` lookup; decide
+  in Slice 1, **Open Q1**).
+- **Wire the size/align chokepoints:** `variables::size` **[confirmed: `variables/mod.rs:1895`]**,
+  `variables::align` **[confirmed: `variables/mod.rs:1936`]**, `data::element_size`
+  **[confirmed: `data.rs:1928`]**, `data::element_align` **[confirmed: `data.rs:1887`]** —
+  add a `Type::Value` arm returning the cached packed size/align (NOT `size_of::<DbRef>()`).
+- *Verify:* `sizeof`-style probe (or the alloc harness + a record with a value-struct field)
+  shows the value struct occupies its packed field bytes inline, not 12.
+
+### Step 1.3 — construction writes inline (no `new_record`)
+- Reference-struct construction allocates a store record (`new_record`
+  **[confirmed 2026-07-08: `src/fill.rs:1907`]**) and returns a `DbRef`. For a value struct,
+  construction must write the fields **into the destination slot inline** and produce no
+  `DbRef` — the tuple-literal lowering already does this (a tuple literal writes packed
+  elements into its slot). **Reuse the tuple construction path** for `V { … }` when
+  `is_value` **[locate: tuple-literal lowering in `parser/` + its fill op]**.
+- *Verify:* constructing a value struct in a loop N times keeps `allocs` at the baseline
+  (harness 0.1); the interpreter dump shows an inline block, not an `OpNewRecord` + DbRef.
+
+### Step 1.4 — field access at inline offset
+- `get_field` / `get_record` **[confirmed 2026-07-08: `src/fill.rs:1400`, `:1942`]** deref a
+  `DbRef` then read at the field position. For a value struct the value IS the inline block —
+  read/write at `base + offset` with the cached offset from 1.2. Route field access to the
+  **inline-offset read/write** (the tuple-element access op) when the receiver is
+  `Type::Value` **[locate: `OpGetField`/`OpSetField` emission in `parser/fields.rs:1250`
+  area, and the tuple `OpGetTuple`/element-access op]**.
+- *Verify:* `v.a`, `v.a = x`, `v.a += 1` read/write the correct bytes; `event.when.ms`
+  (value-struct field of a reference struct — Slice 2 preview) reads with ONE indirection.
+
+### Step 1.5 — value semantics (copy on assign / arg / return)
+- Assigning, passing by value, or returning a value struct **copies the inline bytes**
+  (memcpy of the packed block), NOT a shared `DbRef` — this is the observable difference from
+  reference structs. The tuple path already copies on assignment (tuples are value types);
+  inherit it. `&`-ref params for in-place mutation are **Open Q2** (do tuples support `&`
+  today?).
+- *Verify:* `b = a; b.x = 9; assert(a.x != 9)` — mutating a copy does not touch the original
+  (the reference-struct contract is the opposite; this proves value semantics).
+
+### Step 1.6 — no lifetime / no free
+- `has_lifetime_concern` **[confirmed 2026-07-08: `src/data.rs:1863`]** gates heap-vs-inline
+  and store-side ownership tracking. A **pure-value** value struct (all fields scalar,
+  recursively) must return `false` → no `OpFreeRef`, no store, no deps edges. Add the
+  `Type::Value` case: `false` iff every field is itself non-lifetime-bearing (recurse); a
+  value struct with a `text`/`vector`/reference field is lifetime-bearing (Slice 4).
+- Ensure the @PLN85/@PLN90 ownership analysis emits **no free + no deps** for value structs
+  **[locate: the free-emission / deps sites keyed on `Type::Reference` — `scopes.rs`, the
+  ownership oracle]** (**Open Q3**).
+- *Verify:* ownership_oracle reports zero leaks AND zero frees for a value-struct-only
+  program; `LOFT_STORES` shows no allocation.
+
+### Step 1.7 — @PLN99 dispatch still works (should be free)
+- Operators/format/conversions dispatch by type-def + `t_<len><Type>_Op…` via
+  `Data::find_op_method` **[confirmed 2026-07-08: `src/data.rs` @PLN99 fix]** — keyed on the
+  def name, representation-independent. Value structs keep `DefType::Struct`, so this
+  resolves unchanged. `to_text` / `OpConv…` likewise.
+- *Verify:* the flipped `515` — `<`, `==`, `-` (→ value-struct `Duration`), `{d:date}`,
+  `"…" as DateTime`, `dt as integer` — all pass with `DateTime`/`Duration` as `value struct`.
+
+### Step 1.8 — native backend parity
+- `--native` must emit an inline Rust struct/tuple for a value struct (the pure-value tuple
+  path already uses the Rust tuple ABI — **[confirmed 2026-07-08: `data.rs:1859-1865`
+  "pure-value tuples continue to use Rust's tuple ABI under --native"]**). Route value-struct
+  codegen through that inline path **[locate: `src/generation/mod.rs`, `src/state/codegen.rs`
+  struct emission]**.
+- *Verify:* `515` passes on `--native` with byte-identical results to `--interpret`; the
+  generated Rust has no `LoftStore`/DbRef for the value struct.
+
+### Slice 1 acceptance
+`515` flipped to `value struct DateTime`/`Duration`: every assertion green on both backends
+**AND** `allocs == 0` (harness 0.1). Graduate the flipped `515` + the Slice-0 local probes to
+`tests/scripts/`.
+
+---
+
+## Slice 2 — zero-cost INSIDE records ("records too")
+
+- **2.1** A value-struct FIELD of a reference struct embeds its packed bytes inline in the
+  parent record (no DbRef). Reuse the cached offsets (1.2) inside
+  `calculate_positions_with_groups` so the parent record layout accounts for the value
+  struct's full inline size, and `event.when.ms` reads at `parent_base + when_offset +
+  ms_offset` — **one** indirection (the parent DbRef), not two.
+- **2.2** A value-struct field of ANOTHER value struct nests inline recursively.
+- *Verify:* `struct Event { when: DateTime, … }` with `value struct DateTime`: constructing
+  Events adds **no** per-Event DateTime record (alloc harness); `event.when.ms` correct both
+  backends; the @PLN97 layout-contract conformance test covers the inline embedding.
+
+## Slice 3 — collections: `vector<V>` inline (the DB-column win)
+
+- Vector elements of a value struct store packed inline (element stride = cached packed
+  size), so a million-row timestamp column is a million i64s, not a million records +
+  DbRefs. Reuse the existing `vector<tuple>` / `vector<scalar>` inline-element path
+  **[locate: vector element storage in `src/store.rs` / `database`]**.
+- *Verify:* `vector<DateTime>` of N elements adds zero records; element read/write correct;
+  bulk scan stays inline both backends.
+
+## Slice 4 — lifetime-bearing value structs (text/vector fields) — OR defer
+
+- A value struct with a `text`/`vector`/reference field carries a lifetime concern: its
+  inline block holds an owned handle that must be freed/copied on move. Either (a) support it
+  (the value struct's move copies/frees the inner handle — the tuple-with-Text path already
+  faces this, `has_lifetime_concern` = true) or (b) **defer with a stated trigger** and make
+  the compiler reject such a `value struct` with a clear message until then.
+- *Verify:* either the mixed value struct round-trips leak-free both backends, or the
+  rejection diagnostic fires with the fix hint.
+
+## Slice 5 — native ABI parity + perf proof
+
+- Confirm the native representation matches the inline layout byte-for-byte (the
+  ir_schema_roundtrip / layout-hash gates), and land the **alloc benchmark**: `515` (and a
+  `vector<DateTime>` bulk case) assert `allocs == 0`, committed as a regression.
+- *Verify:* full suite green both backends; alloc-count regressions in `tests/scripts/`.
+
+---
+
+## Key representation decision + open questions
+
+- **Open Q1 — size access.** `Type::Value(def, size)` (size embedded, layout fns read it
+  directly) vs. `Type::Value(def)` + a `Data` lookup for the cached size. Embedded size keeps
+  `variables::size(&Type)`/`element_size(&Type)` signature-compatible (no Data threading) —
+  **lean embedded**, decide in Slice 1.2 by which touches fewer call sites.
+- **Open Q2 — `&`-ref value structs.** In-place mutation via `&V` param: what do tuples do
+  today? If unsupported, value structs pass by copy only initially (state the limitation).
+- **Open Q3 — ownership.** Make @PLN85/@PLN90 deps analysis treat value structs as non-heap
+  (no deps, no free) — the cleanest hook is `has_lifetime_concern` returning false (1.6);
+  audit every free/deps site keyed on `Type::Reference` for a needed `Type::Value` case.
+- **Open Q4 — nullable `value struct?`.** No DbRef `store_nr` sentinel; needs an inline null
+  representation (an `Optional(Value)` with a reserved sentinel field, or a discriminant
+  byte) — ties into @PLN25. Deferable past Slice 1 (start with non-null value structs).
+- **Open Q5 — keyword.** `value struct` (recommended — reads as "a struct that is a value")
+  vs `inline struct` vs a `#value` modifier. Decide at Slice 1.1.
+- **Open Q6 — @PLN97 layout contract.** Value structs change record layout; the conformance
+  tests + layout hash must gain value-struct cases (Slice 2).
