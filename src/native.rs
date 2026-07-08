@@ -168,6 +168,16 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_store_durable_seal", n_store_durable_seal),
     #[cfg(feature = "mmap")]
     ("n_store_persist_bind", n_store_persist_bind),
+    ("n_store_load", n_store_load),
+    ("n_store_verify", n_store_verify),
+    #[cfg(feature = "remote-store")]
+    ("n_store_load_key", n_store_load_key),
+    #[cfg(feature = "remote-store")]
+    ("n_store_load_key_text", n_store_load_key_text),
+    #[cfg(feature = "remote-store")]
+    ("n_store_load_keys", n_store_load_keys),
+    #[cfg(feature = "remote-store")]
+    ("n_store_load_range", n_store_load_range),
     ("n_eprint", n_eprint),
     ("n_directory", n_directory),
     ("n_user_directory", n_user_directory),
@@ -1220,6 +1230,76 @@ fn n_store_persist_bind(stores: &mut Stores, stack: &mut DbRef) {
     let v_ref = *stores.get::<DbRef>(stack);
     let ok = stores.bind_path(v_ref.store_nr, std::path::Path::new(v_path.str()));
     stores.put(stack, ok);
+}
+
+/// Interpreter handler for `store_verify` — structural integrity check of a
+/// store-rooted collection's heap graph (every pointer targets a live record).
+/// @PLN97. Ungated — a general integrity tool.
+fn n_store_verify(stores: &mut Stores, stack: &mut DbRef) {
+    let v_ref = *stores.get::<DbRef>(stack);
+    let ok = stores.verify_graph_ok(&v_ref);
+    stores.put(stack, ok);
+}
+
+/// Interpreter handler for `store_load` — HEAP-load a persisted store image
+/// into the referenced collection's slot (portable, non-durable).  UNGATED:
+/// works without the `mmap` feature (the piece wasm lacked — a heap copy, no
+/// live file handle).  See `Stores::load_path` + `default/02_files.loft`.
+/// @PLN97 arc G Phase 1.
+fn n_store_load(stores: &mut Stores, stack: &mut DbRef) {
+    let v_path = *stores.get::<Str>(stack);
+    let v_ref = *stores.get::<DbRef>(stack);
+    let ok = stores.load_path(v_ref.store_nr, std::path::Path::new(v_path.str()));
+    stores.put(stack, ok);
+}
+
+/// Interpreter handler for `store_load_key` — load ONE integer-keyed entry from
+/// a persisted hash image, fetching only the pages the lookup touches.  Args
+/// pop in reverse: key, path, local.  @PLN97 arc G Phase 3a.
+#[cfg(feature = "remote-store")]
+fn n_store_load_key(stores: &mut Stores, stack: &mut DbRef) {
+    let v_key = *stores.get::<i64>(stack);
+    let v_path = *stores.get::<Str>(stack);
+    let v_ref = *stores.get::<DbRef>(stack);
+    let ok = stores.load_key(&v_ref, v_path.str(), v_key);
+    stores.put(stack, ok);
+}
+
+/// Interpreter handler for `store_load_key_text` — load ONE text-keyed entry.
+/// Args pop in reverse: key, path, local.  @PLN97 arc G Phase 3b.6.
+#[cfg(feature = "remote-store")]
+fn n_store_load_key_text(stores: &mut Stores, stack: &mut DbRef) {
+    let v_key = *stores.get::<Str>(stack);
+    let v_path = *stores.get::<Str>(stack);
+    let v_ref = *stores.get::<DbRef>(stack);
+    let ok = stores.load_key_text(&v_ref, v_path.str(), v_key.str());
+    stores.put(stack, ok);
+}
+
+/// Interpreter handler for `store_load_range` — load the entries with integer
+/// key in [lo, hi] from a persisted SORTED collection; returns the count.  Args
+/// pop in reverse: hi, lo, path, local.  @PLN97 arc G Phase 4.
+#[cfg(feature = "remote-store")]
+fn n_store_load_range(stores: &mut Stores, stack: &mut DbRef) {
+    let v_hi = *stores.get::<i64>(stack);
+    let v_lo = *stores.get::<i64>(stack);
+    let v_path = *stores.get::<Str>(stack);
+    let v_ref = *stores.get::<DbRef>(stack);
+    let n = stores.load_range(&v_ref, v_path.str(), v_lo, v_hi);
+    stores.put(stack, n);
+}
+
+/// Interpreter handler for `store_load_keys` — load the given integer keys'
+/// entries from a persisted hash image, fetching only the pages the lookups
+/// touch; returns the count found.  Args pop in reverse: keys, path, local.
+/// @PLN97 arc G Phase 3a.
+#[cfg(feature = "remote-store")]
+fn n_store_load_keys(stores: &mut Stores, stack: &mut DbRef) {
+    let v_keys = *stores.get::<DbRef>(stack);
+    let v_path = *stores.get::<Str>(stack);
+    let v_ref = *stores.get::<DbRef>(stack);
+    let n = stores.load_keys_vec(&v_ref, v_path.str(), &v_keys);
+    stores.put(stack, n);
 }
 
 /// Write `text` to stderr — companion to `print()` / `println()`

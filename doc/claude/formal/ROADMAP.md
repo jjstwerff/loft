@@ -31,6 +31,7 @@ Closing a row means the implementation obeys the rule (then the deviation entry 
 | [operational.md](operational.md) + family | 2 | **D-op-1/2** the differential oracle (@PLN89, the META deviation — differential-not-definitional conformance; D-op-4 the spreadsheet runtime is CLOSED). The operational rules are now written across sibling files: heap / iteration / coroutines / concurrency / calls / matching / tuples / closures (2026-07-04) + **formatting.md** (`"{x}"` interpolation + value→text) and **interfaces.md** (interfaces + generics — monomorphization, structural satisfaction) (2026-07-05) — **all 0 own**. Closures' D-clo-1 (the `\|…\|` and `fn(){}` forms now capture IDENTICALLY, pure sugar) AND D-clo-2 (a stored un-inferrable short lambda in `map` now emits a clean "cannot infer" diagnostic instead of panicking) both CLOSED 2026-07-04, verified on both backends. With formatting + interfaces written, the operational contract now spans the whole family — nothing is left unwritten except the D-op-1 meta-gap itself |
 | [ownership.md](ownership.md) | 0 | the `deps` borrow checker — **✓ CLOSED (2026-07-04)**: all five D-own deviations resolved. D-own-3 (typed `Deps`) CLOSED; D-own-4 → decided edge **C86**; D-own-5 (`&` rides `deps`) CLOSED; **D-own-2 (completeness) CLOSED** — the fact is total (oracle over every value + the `_own_store` runtime-Join witness, @PLN90 loft#495); **D-own-1 (O-Deps) CLOSED** — an audit + the `0234cbbb` unification landed the last shipped shape-scan (interp adopt-vs-deep-copy) onto `return_adopts_fresh_store()`, so every store-lifetime decision reads the ONE fact on the shipped path. Floor (non-deviation cleanup): the `LOFT_NO_JOIN_OWN` opt-out scans + one physical return-funnel. Validated: suite 2601/2601, native_scripts, poison, fuzz-gate controls, differential oracle, fuzzer |
 | [capabilities.md](capabilities.md) | 0 | the `deps` borrow checker's sibling — **✓ CLOSED (2026-07-04)**: sandbox admission enforces all six rules, each with a RED/GREEN pair. **D-cap-1** the parameter `#default` lock (`param_lock_violations`); **D-cap-2** the closure descent (`mark_lambda_sandboxed` — a script-only lambda is usable, a host-reaching one is rejected naming the reach); **D-cap-3** the owned-vs-host write split (`raw_write_is_host_owned` gained a `Type::Vector` owned arm — a probe proved a local vector never aliases host, every whole-value bind incl. `&` COPIES, so only a PARAMETER-root write is a host effect and the `arguments()` check already IS that boundary; the feared `ownership_of` consultation was NOT needed) |
+| [layout.md](layout.md) | 1 | **D-layout-1** — no version guard on persisted bytes (#477: same types, different bytes, silently misread; `L-Sound`). **Mechanism shipped (@PLN97):** the golden byte-layout test catches a change at commit; the `.dschema` sidecar (`CorruptReason::SchemaMismatch`) detects a stale store at load → the `on_corruption` rebuild. **Residual:** the durable store ([plans/43](../plans/43-loft-store-durable/)) isn't loft-driven yet, so nothing auto-invokes the load-time gate — closes when a persistence consumer wires `check_beside` into its open path |
 
 Binding + grammar + **types are closed** — the @PLN25 value/null model landed (2026-07-02); DN3
 fully closed with the text→numeric parse flip (`(N-Parse)` types `τ?`), overflow-arith reclassified
@@ -40,10 +41,12 @@ every value + the `_own_store` runtime-Join witness (D-own-2, @PLN90 loft#495), 
 **D-own-1 (O-Deps)** — an audit + the `0234cbbb` unification put every shipped store-lifetime
 decision on the ONE `deps` fact (the last inline shape-scan, interp adopt-vs-deep-copy, now
 reads `return_adopts_fresh_store()` like native). **Capabilities is now CLOSED too (2026-07-04 —
-D-cap-1/2/3 all resolved), so every static area is at 0.** The ONLY open formal deviation left is
-the operational **D1** (differential oracle, @PLN89) — an inherently open-ended coverage instrument,
-not a one-shot close. The @PLN89 differential oracle +
-LOFT_POISON grow alongside as the safety net.
+D-cap-1/2/3 all resolved).** The one **new** static area is **layout.md** (2026-07-07, the store
+byte-layout contract) at **1 open** — `D-layout-1`, the #477 version-guard gap, mechanism-shipped
+(@PLN97) and awaiting a durable-store consumer to auto-invoke it. The remaining open formal
+deviations are therefore: the operational **D1** (differential oracle, @PLN89) — an inherently
+open-ended coverage instrument, not a one-shot close — and layout's **D-layout-1** (the persistence
+consumer wiring). The @PLN89 differential oracle + LOFT_POISON grow alongside as the safety net.
 
 ---
 

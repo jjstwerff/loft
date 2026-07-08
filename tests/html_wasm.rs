@@ -712,6 +712,34 @@ fn wasip2_print_writes_stdout_p268() {
     );
 }
 
+/// #521 regression: #518's native stack-overflow guard wrapped the generated
+/// `main` in a `std::thread::Builder::new().stack_size(..).spawn(..)`.  Thread
+/// spawn is `Unsupported` on wasm (wasip2 has no threads by default), so EVERY
+/// `--native-wasm` program aborted at boot with "failed to spawn main-stack
+/// thread" before `main` ran.  The large-stack thread is now
+/// `#[cfg(not(target_family = "wasm"))]`; wasm runs `main` directly.  A trivial
+/// program must therefore run to completion under wasmtime.  Self-skips when the
+/// wasm toolchain (rustc wasm32-wasip2 + wasmtime + rlib) is unavailable.
+#[test]
+fn native_wasm_main_runs_without_main_stack_thread_521() {
+    let src = "fn main() { println(\"wasm521_ok\") }\n";
+    let Some((out, ok)) = run_wasip2_wasm("wasm521_main", src, &[]) else {
+        return;
+    };
+    assert!(
+        ok,
+        "native-wasm program aborted (main-stack thread spawn regression #521?).\n{out}"
+    );
+    assert!(
+        out.contains("wasm521_ok"),
+        "expected native-wasm stdout to contain 'wasm521_ok'.\nout: {out}"
+    );
+    assert!(
+        !out.contains("failed to spawn main-stack thread"),
+        "#518's main-stack thread spawn reached the wasm target again (#521).\nout: {out}"
+    );
+}
+
 /// WASM gate over `lib/<pkg>/tests/*.loft` — runs each main()-bearing lib test
 /// under Node (browser flavour) and wasmtime (wasip2) when available.  No-op
 /// when neither runtime is present.

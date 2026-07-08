@@ -1,0 +1,38 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN97 arc G Phase 3b.6 — TEXT KEYS. A `hash<T[textkey]>` (a place-name /
+// string-id index) can be partially loaded by string key: `store_load_key_text`
+// hashes the Content::Str, compares the entry's text key over the reader, and
+// relocates the matched entry. The loaded entry reads correctly, un-requested
+// keys are absent, and the result is sound. Driven by `store_persist_loft.rs`.
+
+struct Place { name: text not null, pop: integer not null }
+
+fn pop_of(h: hash<Place[name]>, k: text) -> integer {
+  found = h[k];
+  if found == null { -1 } else { found.pop }
+}
+
+fn main() {
+  path = env_variable("LOFT_PERSIST_TEST_PATH");
+  mode = env_variable("LOFT_PERSIST_TEST_MODE");
+
+  p: hash<Place[name]> = [];
+  if mode == "write" {
+    p += Place { name: "Amsterdam", pop: 900000 };
+    p += Place { name: "Berlin",    pop: 3700000 };
+    p += Place { name: "Cairo",     pop: 10000000 };
+    if !store_persist_bind(p, path) { println("FAIL write-bind"); return }
+    println("write ok");
+  } else if mode == "loadkey" {
+    ok = store_load_key_text(p, path, "Berlin");
+    println("tk loadkey={ok}");
+    println("tk berlin={pop_of(p, \"Berlin\")}");
+    println("tk amsterdam={pop_of(p, \"Amsterdam\")}");
+    println("tk len={len(p)}");
+    println("tk verify={store_verify(p)}");
+  } else {
+    println("FAIL unknown-mode")
+  }
+}

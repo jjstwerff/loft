@@ -95,6 +95,7 @@ struct HttpDone {
 /// Outbound requests time out here (no knob — the F-principle: the engine
 /// takes the correct path unasked; a stalled socket must not leak workers
 /// forever).  Generous enough for Overpass-style upstreams (`timeout:25`).
+#[cfg(feature = "registry")]
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -133,6 +134,13 @@ pub fn n_kernel_http_fetch(stores: &mut Stores, stack: &mut DbRef) {
 
 #[cfg(not(target_arch = "wasm32"))]
 /// The fetch body shared by both calling conventions (see `listen_impl`).
+// Args are owned so the `registry` branch can `move` them into the worker
+// thread; without `registry` they are only borrowed for a no-op, so silence
+// the by-value lint in that build rather than break the move path.
+#[cfg_attr(
+    not(feature = "registry"),
+    allow(clippy::needless_pass_by_value, unused_variables)
+)]
 fn http_fetch_impl(method: String, url: String, body: String, headers: String) -> i64 {
     let id = HTTP_NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     #[cfg(feature = "registry")]

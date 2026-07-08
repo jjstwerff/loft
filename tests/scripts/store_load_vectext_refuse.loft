@@ -1,0 +1,34 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN97 arc G Phase 3b (safe-refusal, ongoing) — a `vector<text>` field (a
+// vector whose ELEMENTS are string pointers, not scalars or structs) is not
+// handled by the relocating copy: copying the inner record would leave each
+// element's string pointer dangling. So `store_load_key` must REFUSE it (return
+// false, load nothing). vector<scalar> (3b.3), vector<struct> (3b.4b), text
+// (3b.2), nested (3b.4) ARE handled. The refused-empty result stays sound.
+// Driven by `store_persist_loft.rs`.
+
+struct VTRec { id: integer not null, tags: vector<text> }
+
+fn main() {
+  path = env_variable("LOFT_PERSIST_TEST_PATH");
+  mode = env_variable("LOFT_PERSIST_TEST_MODE");
+
+  v: hash<VTRec[id]> = [];
+  if mode == "write" {
+    ts: vector<text> = [];
+    ts += ["alpha"];
+    ts += ["beta"];
+    v += VTRec { id: 13, tags: ts };
+    if !store_persist_bind(v, path) { println("FAIL write-bind"); return }
+    println("write ok");
+  } else if mode == "loadkey" {
+    ok = store_load_key(v, path, 13);
+    println("vt loadkey={ok}");
+    println("vt len={len(v)}");
+    println("vt verify={store_verify(v)}");
+  } else {
+    println("FAIL unknown-mode")
+  }
+}

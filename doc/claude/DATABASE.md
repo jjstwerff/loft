@@ -91,6 +91,29 @@ be re-derived from authoritative sources; use Tier 2 or Tier 3 instead.
 Full design + implementation history:
 [`doc/claude/plans/43-loft-store-durable/`](plans/43-loft-store-durable/README.md).
 
+### Working-set store loader + layout sidecar (`.dschema`) — @PLN97 arc G
+
+`store_persist_bind(collection, path)` binds a keyed collection to a durable
+store and writes a `<path>.dschema` **layout-identity sidecar** beside it
+(`src/schema_sidecar.rs`: `LayoutIdentity` = the `layout_algo_hash` + per-type
+layout dump). The **working-set loaders** — `store_load_key` / `store_load_keys`
+/ `store_load_key_text` (hash point lookups) and `store_load_range` (sorted
+range) — materialise only the entries a query touches, reading just the pages
+those touch from a **local file or an `http(s)://` Range server**
+(`src/paged_reader.rs`), then relocate each matched entry's heap graph into a
+sound local store (`store_verify` proves the copy; every copyable field shape is
+handled, `vector<text>`/`vector<vector>` safely refused).
+
+Before any schema-derived read the loader checks the `.dschema`: a store whose
+recorded layout differs from the loading program's collection type is REFUSED
+(the **layout-identity gate**) rather than misread as foreign bytes; an absent
+sidecar (a legacy store) falls back to the `store_verify` backstop. Set
+`LOFT_LOADER_STATS=1` to observe `bytes_fetched` vs file size.
+
+Full design:
+[`plans/97-layout-contract/REMOTE_STORE_LOADER.md`](plans/97-layout-contract/REMOTE_STORE_LOADER.md);
+the layout contract itself: [`formal/layout.md`](formal/layout.md).
+
 ---
 
 ## Stores — Type Schema + Multi-Store Manager (`src/database/`)

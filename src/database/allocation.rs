@@ -153,16 +153,12 @@ impl Stores {
                 let v = *v;
                 let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
                 if cur != 0 {
-                    // Bucket record layout (per `src/hash.rs::add`): offset 0 =
-                    // room (record size in words), offset 4 = length, offset 8.. =
-                    // (room - 1) * 2 bucket slots.  The `(room - 1) * 2` bound is
-                    // the @P290 fix; `room * 2` walked 2 slots past the allocation.
-                    let elms = (self.store(rec).record_words(cur) - 1) * 2;
-                    for i in 0..elms {
-                        let elm = self.store(rec).get_u32_raw(cur, 8 + 4 * i);
-                        if elm == 0 {
-                            continue;
-                        }
+                    // Enumerate the live element records through `hash::records`,
+                    // the single owner of the bucket-record layout (the seed word
+                    // and bucket offset live only in `src/hash.rs`).  Mirrors the
+                    // `Index` arm's `collect_index_nodes`.  `cur` is the bucket
+                    // record itself — a separate container to free (below).
+                    for elm in hash::records(rec, &self.allocations) {
                         children.push(OwnedChild {
                             child: DbRef {
                                 store_nr: rec.store_nr,
@@ -1394,6 +1390,60 @@ impl Stores {
                     }
                 }
             }
+            Parts::Hash(v, _) => {
+                // Bounds-checked hash walk (the per-element kind for_each_owned_child
+                // trusts; here it is guard-before-deref).  Mirrors hash.rs: the root
+                // word holds the bucket-record claim; bucket layout is word 0 = room,
+                // buckets from fld 16 (`BUCKET0`), `elms = (room - 2) * 2`.
+                let cur = store.get_u32_raw(rec.rec, rec.pos);
+                if cur == 0 {
+                    return;
+                }
+                if cur >= cap {
+                    eprintln!(
+                        "[cr-check] {path}: hash bucket rec {cur} beyond store #{} capacity {cap}",
+                        rec.store_nr
+                    );
+                    *problems += 1;
+                    return;
+                }
+                let room = store.get_u32_raw(cur, 0);
+                if room < 2 || u64::from(room) > u64::from(cap) {
+                    eprintln!(
+                        "[cr-check] {path}: hash bucket rec {cur} insane room {room} (cap {cap})",
+                    );
+                    *problems += 1;
+                    return;
+                }
+                let elms = (room - 2) * 2;
+                for i in 0..elms {
+                    let entry = store.get_u32_raw(cur, 16 + i * 4);
+                    if entry == 0 {
+                        continue;
+                    }
+                    if entry >= cap {
+                        eprintln!(
+                            "[cr-check] {path}: hash entry rec {entry} beyond store #{} capacity {cap}",
+                            rec.store_nr
+                        );
+                        *problems += 1;
+                        if *problems > 8 {
+                            return;
+                        }
+                        continue;
+                    }
+                    self.validate_claims(
+                        &DbRef {
+                            store_nr: rec.store_nr,
+                            rec: entry,
+                            pos: 8,
+                        },
+                        *v,
+                        &format!("{path}{{#{entry}}}"),
+                        problems,
+                    );
+                }
+            }
             _ => {}
         }
     }
@@ -1498,9 +1548,10 @@ impl Stores {
     ///
     /// @P318 — re-INSERT each entry into an emptied destination via `hash::add`
     /// rather than copying the bucket array slot-for-slot.  A hash's bucket
-    /// count is `elms = (room - 1) * 2`, where `room` is read from the record's
-    /// SIZE HEADER (offset 0) — and `Store::claim` may hand back a block LARGER
-    /// than requested (it only splits when the surplus exceeds 1/3; see
+    /// layout (slot count + offsets, now including a per-hash seed word) lives
+    /// only in `src/hash.rs`; `room` comes from the record's SIZE HEADER
+    /// (offset 0) — and `Store::claim` may hand back a block LARGER than
+    /// requested (it only splits when the surplus exceeds 1/3; see
     /// `Store::claim_block`).  The old slot-for-slot copy laid entries out for
     /// the SOURCE's `room`, but the destination record's header (its own
     /// `room`) could differ, so `hash::find` later probed `key % dest_elms` —
@@ -1529,8 +1580,8 @@ impl Stores {
         let size = u32::from(self.size(content_tp));
         let keys = self.types[tp as usize].keys.clone();
         // Source-bucket enumeration reads the SAME keystone walk `remove_claims`
-        // uses (the `(room - 1) * 2` bound + skip-empty-slot logic), so the @P290
-        // hash bound lives in ONE place.  Each child carries its element record in
+        // uses (`for_each_owned_child` → `hash::records`), so the bucket layout
+        // lives in ONE place.  Each child carries its element record in
         // `owning_elem`; re-insert that entry into the emptied destination.
         for child in self.for_each_owned_child(rec, tp).children {
             let Some(elm) = child.owning_elem else {
@@ -2206,6 +2257,20 @@ impl Stores {
         new_store.pinned = preserved.4;
 
         self.allocations[slot_idx] = new_store;
+        // @PLN97 3b.5 — record the layout identity beside the store
+        // (`<path>.dschema`) so a later (possibly remote) working-set load can
+        // reject a mismatched layout BEFORE range-reading foreign bytes at
+        // schema-derived offsets. Best-effort: a store without a sidecar just
+        // falls back to the post-copy `store_verify` backstop on load.
+        if preserved.0 != u16::MAX {
+            let id = crate::schema_sidecar::LayoutIdentity::of(self, &[preserved.0]);
+            if id.write_beside(path).is_err() && std::env::var_os("LOFT_LOADER_STATS").is_some() {
+                eprintln!(
+                    "store_persist_bind: could not write layout sidecar beside {}",
+                    path.display()
+                );
+            }
+        }
         true
     }
 
@@ -2216,6 +2281,527 @@ impl Stores {
     #[allow(clippy::unused_self)]
     pub fn bind_path(&mut self, _slot: u16, _path: &std::path::Path) -> bool {
         false
+    }
+
+    /// Load a persisted store image at `path` into `slot`, HEAP-backed — the
+    /// portable, non-durable counterpart of [`bind_path`](Stores::bind_path).
+    /// Unlike `bind_path` there is no fresh/create branch (you load an
+    /// EXISTING store) and no mmap, so it works on **every** backend — this is
+    /// the piece wasm lacked.  The slot's empty store is replaced by a heap
+    /// store copied from the file, keeping the slot bookkeeping.  Returns
+    /// `false` on a missing / truncated / wrong-format file (via the
+    /// `Store::load` signature check under `catch_unwind`), never a misread.
+    /// @PLN97 arc G Phase 1 (#522).
+    pub fn load_path(&mut self, slot: u16, path: &std::path::Path) -> bool {
+        let slot_idx = slot as usize;
+        if slot_idx >= self.allocations.len() {
+            return false;
+        }
+        let path_str = match path.to_str() {
+            Some(s) if !s.is_empty() => s,
+            _ => return false,
+        };
+        // load needs an existing, plausibly-valid store file (≥ the header).
+        if !std::fs::metadata(path).is_ok_and(|m| m.len() >= 16) {
+            return false;
+        }
+
+        // Preserve the slot's bookkeeping across the swap (mirrors bind_path).
+        let preserved = {
+            let s = &self.allocations[slot_idx];
+            (s.known_type, s.free, s.created_at, s.last_op_at, s.pinned)
+        };
+
+        // Store::load panics on a bad signature / unreadable file — surface
+        // that as a clean `false` instead of crashing the interpreter.
+        let new_store = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::store::Store::load(path_str)
+        }));
+        let mut new_store = match new_store {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+
+        new_store.known_type = preserved.0;
+        new_store.free = preserved.1;
+        new_store.created_at = preserved.2;
+        new_store.last_op_at = preserved.3;
+        new_store.pinned = preserved.4;
+
+        self.allocations[slot_idx] = new_store;
+        true
+    }
+
+    /// @PLN97 3b.5 — the layout-identity gate for a working-set load. Returns
+    /// `false` (reject) when the store's `.dschema` sidecar records a layout that
+    /// differs from THIS program's collection type — so the loader never
+    /// range-reads foreign-layout bytes at schema-derived offsets (a silent
+    /// corruption / wild-pointer hazard the post-hoc `store_verify` should not be
+    /// the only guard against). An ABSENT sidecar (a legacy / pre-3b.5 store) or
+    /// an untyped local store passes; `store_verify` stays the backstop. `path`
+    /// is a local file or an `http(s)://` URL — the sidecar is read from beside
+    /// it (`<path>.dschema`), over the same transport.
+    #[cfg(feature = "remote-store")]
+    fn layout_gate_ok(&self, path: &str, local: &DbRef) -> bool {
+        let known_type = self.allocations[local.store_nr as usize].known_type;
+        if known_type == u16::MAX {
+            return true; // untyped store — no identity to compare against
+        }
+        let current = crate::schema_sidecar::LayoutIdentity::of(self, &[known_type]);
+        let verdict = crate::paged_reader::check_sidecar(path, &current);
+        if verdict.is_raw_safe() {
+            return true;
+        }
+        // A layout mismatch is a rare, important safety event — always surface it
+        // so a rejected load is not silently mistaken for "key absent".
+        eprintln!(
+            "store loader: refusing {path} — its recorded layout differs from this \
+             program's (verdict: {verdict:?}); not range-reading foreign bytes"
+        );
+        false
+    }
+
+    /// @PLN97 arc G Phase 4 / 3b.7 — load the entries with integer key in
+    /// `[lo, hi]` from a persisted SORTED collection into the (empty) local
+    /// `sorted<T[k]>`, fetching only the pages the range walk touches. The
+    /// range-friendly counterpart of `load_key(s)` — routing's tile-window
+    /// fetch. Returns the count loaded; refuses a non-sorted / non-copyable
+    /// collection. A Sorted collection is a sorted INLINE vector, so the source
+    /// range is already ordered: build `local`'s vector directly in key order
+    /// (no per-element sort), then relocate each element's heap graph. Root + key
+    /// schema come from `local`'s live type (same collection type ⇒ same
+    /// structural root position in the image), NOT the raw bytes.
+    #[cfg(feature = "remote-store")]
+    pub fn load_range(&mut self, local: &DbRef, path: &str, lo: i64, hi: i64) -> i64 {
+        if !self.layout_gate_ok(path, local) {
+            return 0;
+        }
+        use crate::paged_reader::{PageSource, PagedReader};
+        let Ok(source) = PageSource::open(path) else {
+            return 0;
+        };
+        let mut reader = PagedReader::new(source);
+        let tp = self.allocations[local.store_nr as usize].known_type;
+        if tp == u16::MAX {
+            return 0;
+        }
+        let content_tp = match self.types[tp as usize].parts {
+            Parts::Sorted(c, _) => c,
+            _ => return 0, // range needs an ordered collection
+        };
+        if !self.is_copyable_entry(content_tp) {
+            return 0;
+        }
+        let keys = self.keys(tp).to_vec();
+        let esize = u32::from(self.size(content_tp));
+        if esize == 0 {
+            return 0;
+        }
+        let lo_c = [crate::keys::Content::Long(lo)];
+        let hi_c = [crate::keys::Content::Long(hi)];
+        let (src_rec, positions) = crate::paged_reader::sorted_range_positions(
+            &mut reader,
+            local.rec,
+            local.pos,
+            esize,
+            &lo_c,
+            &hi_c,
+            &keys,
+        );
+        let count = positions.len() as u32;
+        if count == 0 {
+            return 0;
+        }
+        let store_nr = local.store_nr;
+        // Build the local sorted vector: header (8 bytes) + count elements.
+        let words = (8 + count * esize).div_ceil(8).max(2);
+        let vec_rec = self.allocations[store_nr as usize].claim(words);
+        self.allocations[store_nr as usize].zero_fill(vec_rec);
+        self.allocations[store_nr as usize].set_u32_raw(vec_rec, 4, count); // length
+        self.allocations[store_nr as usize].set_u32_raw(local.rec, local.pos, vec_rec);
+
+        for (i, &epos) in positions.iter().enumerate() {
+            let dst_pos = 8 + (i as u32) * esize;
+            // Copy the element's field bytes (esize is 4-aligned — all fields are).
+            let mut b = 0u32;
+            while b + 4 <= esize {
+                let w = reader.u32_at(src_rec, epos + b);
+                self.allocations[store_nr as usize].set_u32_raw(vec_rec, dst_pos + b, w);
+                b += 4;
+            }
+            // Relocate this element's heap graph into local.
+            self.relocate_ptr_fields(
+                &mut reader,
+                vec_rec,
+                dst_pos,
+                src_rec,
+                epos,
+                content_tp,
+                store_nr,
+            );
+        }
+
+        if std::env::var_os("LOFT_LOADER_STATS").is_some() {
+            eprintln!(
+                "store_load_range: [{lo},{hi}] loaded={count} bytes_fetched={} file={}",
+                reader.provider().bytes_fetched(),
+                reader.size()
+            );
+        }
+        i64::from(count)
+    }
+
+    /// Verify a store-rooted collection `r`'s heap graph is structurally sound —
+    /// every interior pointer (text offset, vector/child rec, hash bucket +
+    /// entries) stays within its store's bounds. Reuses the DEFENSIVE
+    /// [`validate_claims`](Stores::validate_claims) walk (guard-before-deref —
+    /// it never faults on a wild pointer, it NAMES the broken edge). Its type
+    /// comes from the live schema (`known_type`). Returns `true` when sound;
+    /// `false` (with `[cr-check]` reasons on stderr) otherwise.
+    ///
+    /// This is the instrument that makes the relocating working-set copy
+    /// (Phase 3b) *checkable*: after a `store_load*`, `store_verify(local)`
+    /// proves the copy left no pointer aimed outside the store.
+    pub fn verify_graph_ok(&self, r: &DbRef) -> bool {
+        let tp = self.allocations[r.store_nr as usize].known_type;
+        if tp == u16::MAX {
+            return false;
+        }
+        let mut problems = 0u32;
+        self.validate_claims(r, tp, "store_verify", &mut problems);
+        problems == 0
+    }
+
+    /// True when a field's type stores its value INLINE (a fixed-width scalar),
+    /// so a working-set copy can move it as raw bytes with no pointer to
+    /// relocate. Text (type 5) and Reference (type 6) are POINTERS; vectors /
+    /// nested structs / keyed collections are heap-owned — all need the
+    /// relocating graph-copy (3b.2+), so they are NOT inline.
+    #[cfg(feature = "remote-store")]
+    fn is_inline_scalar(&self, tp: u16) -> bool {
+        match self.types[tp as usize].parts {
+            Parts::Int(..) | Parts::Byte(..) | Parts::Short(..) | Parts::ShortRaw(..) => true,
+            // Base covers the numeric primitives AND text(5) / Reference(6);
+            // only the numerics are inline.
+            Parts::Base => !matches!(tp, 5 | 6),
+            _ => false,
+        }
+    }
+
+    /// True when a field can be moved by the working-set copy today: an inline
+    /// scalar (raw word-copy), a `text` (relocated string, 3b.2), or a
+    /// `vector<scalar>` (relocated flat inner record, 3b.3). Text and a
+    /// scalar-vector are BOTH a single flat sub-record behind a `u32` pointer, so
+    /// they relocate with identical code. A `vector<struct>` / `vector<text>` /
+    /// nested struct / reference still needs the recursive copy (3b.4+).
+    #[cfg(feature = "remote-store")]
+    fn is_copyable_field(&self, tp: u16) -> bool {
+        if self.is_inline_scalar(tp) || tp == 5 {
+            return true;
+        }
+        match &self.types[tp as usize].parts {
+            // vector<scalar> (flat inner record) OR vector<copyable struct>
+            // (copy inner + relocate each element, 3b.4b). vector<text> /
+            // vector<vector> are NOT handled — the element pointers would dangle.
+            Parts::Vector(e) => {
+                self.is_inline_scalar(*e)
+                    || (matches!(
+                        self.types[*e as usize].parts,
+                        Parts::Struct(_) | Parts::EnumValue(_, _)
+                    ) && self.is_copyable_field(*e))
+            }
+            // An INLINE nested struct: copyable when every one of its own fields
+            // is (its `text`/`vector` fields relocate at a nested offset, 3b.4).
+            Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
+                fields.iter().all(|f| self.is_copyable_field(f.content))
+            }
+            _ => false,
+        }
+    }
+
+    /// True when an entry of type `content_tp` can be partially loaded today —
+    /// every field is [copyable](Stores::is_copyable_field). Otherwise the
+    /// collection is refused (safe-refusal, never a broken heap).
+    #[cfg(feature = "remote-store")]
+    fn is_copyable_entry(&self, content_tp: u16) -> bool {
+        match &self.types[content_tp as usize].parts {
+            Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
+                fields.iter().all(|f| self.is_copyable_field(f.content))
+            }
+            _ => self.is_copyable_field(content_tp),
+        }
+    }
+
+    #[cfg(feature = "remote-store")]
+    pub fn load_key(&mut self, local: &DbRef, path: &str, key: i64) -> bool {
+        self.load_keys(local, path, std::slice::from_ref(&key)) > 0
+    }
+
+    /// @PLN97 arc G Phase 3b.6 — load ONE TEXT-keyed entry from a persisted
+    /// `hash<T[textkey]>` (e.g. a place-name or z/x/y tile-id index), fetching
+    /// only the pages the lookup touches. Same working-set fetch as
+    /// [`load_key`](Stores::load_key), keyed by a string: `find_hash_entry`
+    /// hashes the `Content::Str`, and the entry's text key is compared over the
+    /// reader. Returns false when absent / unreadable / not an integer-or-text
+    /// -keyed copyable hash.
+    #[cfg(feature = "remote-store")]
+    pub fn load_key_text(&mut self, local: &DbRef, path: &str, key: &str) -> bool {
+        if !self.layout_gate_ok(path, local) {
+            return false;
+        }
+        use crate::paged_reader::{PageSource, PagedReader};
+        let Ok(source) = PageSource::open(path) else {
+            return false;
+        };
+        let mut reader = PagedReader::new(source);
+        let tp = self.allocations[local.store_nr as usize].known_type;
+        if tp == u16::MAX {
+            return false;
+        }
+        let content_tp = match self.types[tp as usize].parts {
+            Parts::Hash(c, _) => c,
+            _ => return false,
+        };
+        if !self.is_copyable_entry(content_tp) {
+            return false;
+        }
+        let keys = self.keys(tp).to_vec();
+        let key_content = [crate::keys::Content::Str(crate::keys::Str::new(key))];
+        self.load_one(&mut reader, local, content_tp, &keys, &key_content)
+    }
+
+    /// @PLN97 arc G Phase 3a — load the requested integer keys' entries from a
+    /// persisted HASH image at `path` into the empty local hash `local`,
+    /// fetching only the pages the lookups touch. Returns the count actually
+    /// found (keys absent in the remote are silently skipped). The paged reader
+    /// is opened ONCE and shared across all keys, so its LRU cache is reused.
+    /// See [`load_key`](Stores::load_key) for the single-key form. Same
+    /// FLAT-struct restriction (scalar fields only — no relocation yet).
+    #[cfg(feature = "remote-store")]
+    pub fn load_keys(&mut self, local: &DbRef, path: &str, keys_vals: &[i64]) -> i64 {
+        if !self.layout_gate_ok(path, local) {
+            return 0;
+        }
+        use crate::paged_reader::{PageSource, PagedReader};
+        // `path` is a local file OR an `http(s)://` URL — the paged reader pulls
+        // only the pages a lookup touches, from disk or over the network (#517).
+        let Ok(source) = PageSource::open(path) else {
+            return 0;
+        };
+        let mut reader = PagedReader::new(source);
+
+        // Schema from the LIVE type of `local` (never reverse-engineered bytes).
+        let tp = self.allocations[local.store_nr as usize].known_type;
+        if tp == u16::MAX {
+            return 0;
+        }
+        // SAFE REFUSAL (3b.1) — `load_one` can copy an entry whose fields are
+        // inline-scalar (raw word-copy) or `text` (relocated string, 3b.2). A
+        // vector / nested / reference field still needs the recursive relocating
+        // copy (3b.3+); until then, refuse the whole collection (load nothing)
+        // rather than build a heap with a dangling pointer. `store_verify` would
+        // catch a broken copy — this makes sure one is never built.
+        let content_tp = match self.types[tp as usize].parts {
+            Parts::Hash(c, _) => c,
+            _ => return 0, // only Hash supported so far (Sorted lands at 3b.7)
+        };
+        if !self.is_copyable_entry(content_tp) {
+            return 0;
+        }
+        let keys = self.keys(tp).to_vec();
+
+        let mut loaded = 0i64;
+        for &kv in keys_vals {
+            if self.load_one(
+                &mut reader,
+                local,
+                content_tp,
+                &keys,
+                &[crate::keys::Content::Long(kv)],
+            ) {
+                loaded += 1;
+            }
+        }
+
+        // Observability for the "bytes fetched ≪ file" invariant: at scale N
+        // keys touch O(N) pages, not O(file). Off unless asked.
+        if std::env::var_os("LOFT_LOADER_STATS").is_some() {
+            eprintln!(
+                "store_load_keys: asked={} loaded={loaded} bytes_fetched={} file={}",
+                keys_vals.len(),
+                reader.provider().bytes_fetched(),
+                reader.size()
+            );
+        }
+        loaded
+    }
+
+    /// Find one integer key in the paged image and, if present, FLAT-copy its
+    /// entry record into `local` and link it via the verified `hash::add`. The
+    /// entry's field words (fld 8 .. size·8) hold only scalars, so a straight
+    /// word copy into a fresh claim is correct — no internal `rec` pointers to
+    /// relocate. Returns whether the key was found.
+    #[cfg(feature = "remote-store")]
+    fn load_one(
+        &mut self,
+        reader: &mut crate::paged_reader::PagedReader<crate::paged_reader::PageSource>,
+        local: &DbRef,
+        content_tp: u16,
+        keys: &[crate::keys::Key],
+        key_content: &[crate::keys::Content],
+    ) -> bool {
+        let matched =
+            crate::paged_reader::find_hash_entry(reader, local.rec, local.pos, key_content, keys);
+        if matched == 0 {
+            return false;
+        }
+        let size = reader.record_words(matched);
+        if size < 2 {
+            return false;
+        }
+        // 1) Move the entry record's field words verbatim. Inline scalars are
+        //    now correct; every `text` field still holds the SOURCE store's
+        //    string-record id (a dangling pointer) — fixed in step 2.
+        let store = &mut self.allocations[local.store_nr as usize];
+        let new_rec = store.claim(size);
+        store.zero_fill(new_rec);
+        let mut fld = 8u32;
+        while fld + 4 <= size * 8 {
+            let w = reader.u32_at(matched, fld);
+            self.allocations[local.store_nr as usize].set_u32_raw(new_rec, fld, w);
+            fld += 4;
+        }
+
+        // 2) 3b.2–3b.4b — relocate the entry's pointer fields (text / vector /
+        //    nested / vector<struct>) so the local copy owns its whole graph.
+        //    Hash entry: dst + src field data both start at fld 8.
+        self.relocate_ptr_fields(reader, new_rec, 8, matched, 8, content_tp, local.store_nr);
+
+        let entry = DbRef {
+            store_nr: local.store_nr,
+            rec: new_rec,
+            pos: 8,
+        };
+        crate::hash::add(local, &entry, &mut self.allocations, keys);
+        true
+    }
+
+    /// Recursively relocate the POINTER fields of struct `tp` whose (already
+    /// flat-copied) data starts at byte `dst_fb` in local record `dst_rec`, with
+    /// the source starting at `src_fb` in `src_rec` read over `reader`. The two
+    /// field-bases are separate because a hash entry copies same-offset (both 8)
+    /// while a Sorted element copies from `8 + i·esize` in the source vector into
+    /// a slot at a different local position. Handles: text / vector<scalar> (flat
+    /// sub-record copy), inline nested struct (recurse, deeper base), vector<struct>
+    /// (copy inner + recurse each element). Inline scalars are already correct.
+    #[cfg(feature = "remote-store")]
+    #[allow(clippy::too_many_arguments)] // dst/src (rec,base) + reader + tp + store — all essential
+    fn relocate_ptr_fields<P: crate::paged_reader::PageProvider>(
+        &mut self,
+        reader: &mut crate::paged_reader::PagedReader<P>,
+        dst_rec: u32,
+        dst_fb: u32,
+        src_rec: u32,
+        src_fb: u32,
+        tp: u16,
+        store_nr: u16,
+    ) {
+        let fields = match &self.types[tp as usize].parts {
+            Parts::Struct(f) | Parts::EnumValue(_, f) => f.clone(),
+            _ => return,
+        };
+        for f in fields {
+            let pos = u32::from(f.position);
+            let (dst_off, src_off) = (dst_fb + pos, src_fb + pos);
+            let ftp = f.content;
+            if ftp == 5
+                || matches!(self.types[ftp as usize].parts, Parts::Vector(e) if self.is_inline_scalar(e))
+            {
+                // Flat sub-record pointer (text / vector<scalar>).
+                let src_sub = reader.u32_at(src_rec, src_off);
+                if src_sub != 0 {
+                    let new_sub = self.copy_flat_subrecord(reader, src_sub, store_nr);
+                    self.allocations[store_nr as usize].set_u32_raw(dst_rec, dst_off, new_sub);
+                }
+            } else if matches!(
+                self.types[ftp as usize].parts,
+                Parts::Struct(_) | Parts::EnumValue(_, _)
+            ) {
+                // Inline nested struct: same records, deeper bases.
+                self.relocate_ptr_fields(reader, dst_rec, dst_off, src_rec, src_off, ftp, store_nr);
+            } else if let Parts::Vector(elem_tp) = self.types[ftp as usize].parts {
+                // vector<struct>: copy the inner record + recurse each element.
+                let src_sub = reader.u32_at(src_rec, src_off);
+                if src_sub != 0 {
+                    let new_sub = self.copy_vector_of_struct(reader, src_sub, elem_tp, store_nr);
+                    self.allocations[store_nr as usize].set_u32_raw(dst_rec, dst_off, new_sub);
+                }
+            }
+        }
+    }
+
+    /// Copy a FLAT record (a string or a `vector<scalar>` inner record — no
+    /// interior pointers) at `src_rec` into a fresh local claim; the size header
+    /// (fld 0) is set by `claim`, so copy the length + payload from fld 4 on.
+    #[cfg(feature = "remote-store")]
+    fn copy_flat_subrecord<P: crate::paged_reader::PageProvider>(
+        &mut self,
+        reader: &mut crate::paged_reader::PagedReader<P>,
+        src_rec: u32,
+        store_nr: u16,
+    ) -> u32 {
+        let ssz = reader.record_words(src_rec);
+        let new = self.allocations[store_nr as usize].claim(ssz.max(2));
+        self.allocations[store_nr as usize].zero_fill(new);
+        let mut sf = 4u32;
+        while sf + 4 <= ssz * 8 {
+            let w = reader.u32_at(src_rec, sf);
+            self.allocations[store_nr as usize].set_u32_raw(new, sf, w);
+            sf += 4;
+        }
+        new
+    }
+
+    /// Copy a `vector<struct>` inner record: first the flat bytes (length + the
+    /// contiguous element structs), then relocate EACH element's pointer fields
+    /// (its text / vector / nested graph). Elements are at `8 + i·elem_size`.
+    #[cfg(feature = "remote-store")]
+    fn copy_vector_of_struct<P: crate::paged_reader::PageProvider>(
+        &mut self,
+        reader: &mut crate::paged_reader::PagedReader<P>,
+        src_inner: u32,
+        elem_tp: u16,
+        store_nr: u16,
+    ) -> u32 {
+        let new_inner = self.copy_flat_subrecord(reader, src_inner, store_nr);
+        let length = reader.u32_at(src_inner, 4);
+        let esize = u32::from(self.size(elem_tp));
+        if esize == 0 {
+            return new_inner;
+        }
+        for i in 0..length {
+            // element i's data starts at byte 8 + i·esize in BOTH the copied
+            // inner record and the source (this is a copy, so same offsets).
+            let fb = 8 + i * esize;
+            self.relocate_ptr_fields(reader, new_inner, fb, src_inner, fb, elem_tp, store_nr);
+        }
+        new_inner
+    }
+
+    /// Read a `vector<integer>` (`keys_vec`) into an `i64` slice and load those
+    /// keys via [`load_keys`](Stores::load_keys). The single vector-reading home
+    /// used by BOTH backends (the interpreter handler and the `#rust` codegen
+    /// body), so the element layout lives in one place. `integer` elements are
+    /// i64 at `8 + i·8` within the vector's inner record.
+    #[cfg(feature = "remote-store")]
+    pub fn load_keys_vec(&mut self, local: &DbRef, path: &str, keys_vec: &DbRef) -> i64 {
+        let length = crate::vector::length_vector(keys_vec, &self.allocations);
+        let inner = self.store(keys_vec).get_u32_raw(keys_vec.rec, keys_vec.pos);
+        let mut vals = Vec::with_capacity(length as usize);
+        for i in 0..length {
+            vals.push(self.store(keys_vec).get_int(inner, 8 + i * 8));
+        }
+        self.load_keys(local, path, &vals)
     }
 }
 
@@ -2297,7 +2883,7 @@ mod p318_hash_deepcopy {
     /// keep the hash FIND-CONSISTENT even when the destination bucket record is
     /// OVER-sized.  `Store::claim` returns a block up to 1/3 larger than
     /// requested without splitting (`claim_block`), and a hash reads its `room`
-    /// (bucket count, `elms = (room-1)*2`) from that size header — so the old
+    /// (bucket count, `elms = (room-2)*2`) from that size header — so the old
     /// slot-for-slot copy laid the dest buckets out for the SOURCE room while
     /// `find` later probed `key % dest_elms` (a DIFFERENT start slot) and missed
     /// entries.  The gap `(room, room*4/3]` is tiny for small rooms (e.g. (9,12],
@@ -2305,6 +2891,57 @@ mod p318_hash_deepcopy {
     /// over-size deterministically — claim `big, gap=room+1, big` contiguously
     /// then delete the middle, so `fl_take_ge(room)` returns the gap block — and
     /// asserts every key survives the deep copy.
+    /// Positive control for the hash arm of `validate_claims` (the walk behind
+    /// `store_verify`) — a green check is only evidence once the detector is
+    /// known to FIRE. Build a sound hash (must validate clean), then corrupt the
+    /// root pointer to an out-of-range bucket record and confirm the walk NAMES
+    /// the broken edge instead of faulting on it — exactly what a bad relocation
+    /// would leave behind (a source rec-number larger than the small local store).
+    #[test]
+    fn verify_graph_catches_a_dangling_pointer() {
+        let mut stores = Stores::new();
+        let cell = stores.structure("VCell", -1);
+        stores.field(cell, "k", 0); // integer
+        stores.field(cell, "v", 0); // integer
+        stores.finish();
+        let hash_tp = stores.hash(cell, &["k".to_string()]);
+        let holder = stores.structure("VHolder", -1);
+        stores.field(holder, "h", hash_tp);
+        stores.finish();
+
+        let words = |sz: u16| 1 + ((u32::from(sz) + 7) >> 3);
+        let cell_words = words(stores.size(cell));
+        let holder_words = words(stores.size(holder));
+
+        let root = stores.database(holder_words);
+        let h = DbRef {
+            store_nr: root.store_nr,
+            rec: root.rec,
+            pos: root.pos, // field `h` at struct-position 0
+        };
+        for k in 0..5i64 {
+            let e = stores.database(cell_words);
+            stores.store_mut(&e).set_int(e.rec, e.pos, k);
+            stores.store_mut(&e).set_int(e.rec, e.pos + 8, k + 100);
+            stores.set_keyed(&h, &e, hash_tp, false);
+        }
+
+        // Sound to start — no false positive.
+        let mut problems = 0u32;
+        stores.validate_claims(&h, hash_tp, "ctl", &mut problems);
+        assert_eq!(problems, 0, "a well-formed hash must validate clean");
+
+        // Corrupt: aim the hash root at a bucket record beyond the store.
+        stores.store_mut(&h).set_u32_raw(h.rec, h.pos, 99_999);
+        let mut broken = 0u32;
+        stores.validate_claims(&h, hash_tp, "ctl", &mut broken);
+        assert!(
+            broken > 0,
+            "validate_claims MUST catch an out-of-range bucket pointer (positive control), \
+             not fault on it"
+        );
+    }
+
     #[test]
     fn hash_deepcopy_survives_oversized_dest_bucket() {
         let mut stores = Stores::new();

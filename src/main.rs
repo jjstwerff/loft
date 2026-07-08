@@ -3548,6 +3548,98 @@ fn run_file_debugger() -> ! {
     std::process::exit(code);
 }
 
+/// @PLN97 Phase F — `loft layout <accept|check> <file>`: the compiler migration
+/// aid as an explicit, opt-in command (a normal build pays nothing). `accept`
+/// records the program's current layout as the baseline (`.loft/layout.lock`);
+/// `check` diffs the current layout against it and, on an actionable change,
+/// prints the diagnostic + writes a migration outline to fill.
+fn run_layout_command(sub: &str, file: &str) -> i32 {
+    use loft::schema_sidecar as ss;
+    let entry = std::path::PathBuf::from(file);
+    if !entry.exists() {
+        eprintln!("loft layout: file {file} not found");
+        return 1;
+    }
+    let abs = std::fs::canonicalize(&entry).unwrap_or_else(|_| entry.clone());
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(std::path::Path::to_path_buf))
+        .unwrap_or_default();
+    let default_dir = exe_dir.join("../default");
+    let default_str = if default_dir.exists() {
+        default_dir.to_string_lossy().to_string()
+    } else {
+        format!("{}/default", project_dir())
+    };
+    let mut p = parser::Parser::new();
+    if let Some(src_dir) = entry.parent() {
+        p.lib_dirs.push(src_dir.to_string_lossy().to_string());
+    }
+    let _ = p.parse_dir(&default_str, true, false);
+    p.parse(&abs.to_string_lossy(), false);
+
+    let roots = ss::program_roots(&p.data);
+    let identity = ss::LayoutIdentity::of(&p.database, &roots);
+    let project = abs
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .to_path_buf();
+
+    match sub {
+        "accept" => match identity.write_baseline(&project) {
+            Ok(()) => {
+                println!(
+                    "loft layout: recorded baseline ({} user types)",
+                    roots.len()
+                );
+                0
+            }
+            Err(e) => {
+                eprintln!("loft layout: could not write baseline: {e}");
+                1
+            }
+        },
+        "check" => match ss::check_against_baseline(&project, &identity) {
+            Ok(ss::SchemaVerdict::Fresh) => {
+                println!("loft layout: no baseline yet — run `loft layout accept {file}`.");
+                0
+            }
+            Ok(ss::SchemaVerdict::Match) => {
+                println!("loft layout: unchanged.");
+                0
+            }
+            Ok(ss::SchemaVerdict::Changed(diff)) => {
+                println!("{}", ss::describe_change(&diff));
+                if diff.is_actionable() {
+                    let path = project.join(".loft").join("migration_outline.loft");
+                    if let Some(parent) = path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    match std::fs::write(&path, ss::migration_outline(&diff)) {
+                        Ok(()) => println!("  migration outline written to {}", path.display()),
+                        Err(e) => eprintln!("  could not write migration outline: {e}"),
+                    }
+                }
+                0
+            }
+            Ok(ss::SchemaVerdict::Unreadable) => {
+                eprintln!(
+                    "loft layout: baseline unreadable — delete `.loft/layout.lock` and re-accept."
+                );
+                1
+            }
+            Err(e) => {
+                eprintln!("loft layout: {e}");
+                1
+            }
+        },
+        other => {
+            eprintln!("loft layout: unknown subcommand `{other}` (use `accept` or `check`)");
+            1
+        }
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 fn main() {
     // Install SIGSEGV/SIGABRT/SIGBUS handler so crashes print the
@@ -4367,6 +4459,16 @@ fn main() {
             };
             let code = scaffold_library(&name, native, chunk);
             std::process::exit(code);
+        } else if a == "layout" {
+            // @PLN97 Phase F — `loft layout <accept|check> <file>`. Self-contained
+            // + early-exit: never touches the normal build path (zero cost).
+            let sub = argv.get(i).cloned().unwrap_or_default();
+            i += 1;
+            let Some(file) = argv.get(i).cloned() else {
+                eprintln!("loft layout: usage: loft layout <accept|check> <file>");
+                std::process::exit(1);
+            };
+            std::process::exit(run_layout_command(&sub, &file));
         } else if a == "publish" {
             // @PLAN12 Phase 6.16 — author-side publish helper.
             // Repackages locally (deterministic), verifies the
