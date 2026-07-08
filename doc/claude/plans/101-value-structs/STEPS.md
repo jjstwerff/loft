@@ -92,12 +92,27 @@ so it is NOT the target — cycles + indirection are), plus a structural "no scr
 
 ---
 
-## Slice 1 — a `value struct` as a LOCAL, end-to-end, zero alloc
+## Slice 1 — REFOCUSED (user, 2026-07-08): value structs as FIELDS + VECTOR ELEMENTS
 
-The smallest complete vertical: declare → construct → field r/w → operator → format →
-convert, all with **zero** heap records, both backends. Driver: flip `DateTime`/`Duration`
-in `tests/scripts/515-datetime-first-grade.loft` to `value struct` and prove `allocs == 0`
-with every existing assertion still green.
+**Scope cut:** do NOT eliminate the DbRef for a standalone local `value struct` variable — a
+reused store + a pointer is negligible overhead; keep it simple. **The target is the bigger
+stores:** these types are normally used **as parts of other records** and **directly inside
+vectors**, and *those* cases must be **zero-overhead** (no per-element/per-field construction
+scratch store, no DbRef indirection, no separate record, no free).
+
+**Approach (user):** everything needed is already written — **link the existing inline
+machinery** (tuples / inline record fields / vector inline elements), don't add a parallel
+representation. Minimal new Rust; mostly routing value structs to the paths that already
+store scalars/tuples inline. Avoid a new `Type::Value` variant if a flag + existing-path
+routing does the job.
+
+Driver: `tests/scripts/515` DateTime/Duration as `value struct`, PLUS `vector<DateTime>` and a
+`struct` with a `DateTime` field — assert the `allocs`/scratch-store DELTA is 0 vs the scalar
+baseline for the field/element cases, every assertion green, both backends.
+
+### Original local-variable steps (deprioritised — negligible, keep DbRef)
+The construct/field/access steps below still document the mechanism, but the LOCAL case keeps
+its DbRef; apply the inline path only to the field/vector-element cases (Slices 2–3 folded in).
 
 ### Step 1.1 — declaration: the `value struct` kind
 - **Parse** the `value` modifier before `struct` in the definition parser
