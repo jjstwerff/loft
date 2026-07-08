@@ -29,5 +29,12 @@ fn main() {
   assert((b - a) == 350, "direct - (OpMin)");
   assert(a == a, "direct ==");
   assert(a != b, "direct !=");
+  // The DISTINGUISHING case: two DISTINCT structs with EQUAL field values. `==` must
+  // dispatch the user OpEq (field-wise), NOT built-in reference identity (which would
+  // make these unequal — different stores). This is what call_op's method-first
+  // precedence guarantees; without it `a == c` is false.
+  c = Money { cents: 150 };
+  assert(a == c, "user OpEq on distinct equal-valued structs");
+  assert(!(a != c), "user OpNe on distinct equal-valued structs");
   println("first-grade ops ok");
 }

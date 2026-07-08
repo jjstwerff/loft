@@ -206,6 +206,20 @@ as 3-backend script tests, green.
   `>=` `-` `==` `!=` bind on user structs, both backends; regression
   `tests/scripts/511-first-grade-operators.loft`; no regression (expressions 127,
   issues 748). Subtraction confirmed `OpMin` (A3).
+- **Arc A COMPLETION — user operator precedence (DONE 2026-07-08, found by dogfood).**
+  Building the DateTime prototype (`tests/scripts/515-datetime-first-grade.loft`)
+  surfaced that Arc A's `find_fn` ran as a *fallback AFTER* `call_op`'s built-in
+  `possible` loop, so two built-in paths still shadowed the type's OWN operator:
+  (1) `==`/`!=` on two struct refs used built-in **reference identity** (OpEqRef) —
+  `a == b` was FALSE for distinct structs with equal fields (511 missed this: it only
+  tested `a == a` / `a != b`, true either way); (2) a user `T → integer` conversion
+  made `a - b` **coerce** both operands to integer and use OpMinInt, so `d2 - d1`
+  typed `integer`, not `Duration`. Both are the same root: a built-in `integer` never
+  coerces itself away, and a first-grade type must not either. Fix: `Data::find_op_method`
+  (method-only `t_<len><Type>_Op<Name>` lookup, NO `n_`/`possible` fallback) tried in
+  `call_op` BEFORE the built-in loop — so the exact user operator wins, and types with
+  no such method fall through to built-ins + coercion unchanged. Full suite 2692 passed
+  / 5 pre-existing flakes; 511 strengthened with the distinguishing distinct-equal case.
 - **Arc A null facet (A5) — DONE (2026-07-08).** Root cause was NOT an IR/execution
   divergence: `s == null` on a nullable struct-reference variable (typed
   `Optional(Reference)`) fell to the generic `==`, which lowers to

@@ -3941,6 +3941,35 @@ impl Data {
         u32::MAX
     }
 
+    /// @PLN99 Arc A completion — resolve ONLY a user-defined operator METHOD
+    /// (`t_<len><Type>_<fn>`, with the `τ?`→base fallback), and NOTHING ELSE: no
+    /// `n_<fn>` global, no `possible`-map / built-in fallback.  `call_op` calls this
+    /// BEFORE its built-in `possible` loop so a first-grade struct's OWN operator wins
+    /// over built-in reference-identity (`==`) and conversion-coercion (`a - b` when a
+    /// `T → integer` conversion exists).  Returns `u32::MAX` when the type has no such
+    /// method — the caller then runs the built-in loop unchanged (integer/float/text
+    /// operators live in `possible`, never as `t_` methods, so they are unaffected).
+    #[must_use]
+    pub fn find_op_method(&self, source: u16, fn_name: &str, tp: &Type) -> u32 {
+        let type_nr = self.type_def_nr(tp);
+        if type_nr == u32::MAX {
+            return u32::MAX;
+        }
+        let base = self.def(type_nr).name.clone();
+        let sig = Self::sig_type_name(&base, tp);
+        let d_nr = self.source_nr(source, &format!("t_{}{}_{fn_name}", sig.len(), sig));
+        if d_nr != u32::MAX {
+            return d_nr;
+        }
+        if sig != base {
+            let d_nr = self.source_nr(source, &format!("t_{}{}_{fn_name}", base.len(), base));
+            if d_nr != u32::MAX {
+                return d_nr;
+            }
+        }
+        u32::MAX
+    }
+
     /**
     Add a new operator
     # Panics

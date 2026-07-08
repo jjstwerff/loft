@@ -22,9 +22,13 @@ generics; the three remaining gaps are what keep a library struct from being
 *indistinguishable from a built-in in direct use*.
 
 **Implementation progress (2026-07-08, branch `tuxedo-work`):**
-- **Arc A (direct concrete operator dispatch) — DONE.** `a < b`, `b - a`, `a == b` on
-  a plain user struct now dispatch its `fn OpLt`/`OpMin`/`OpEq` (regression
-  `tests/scripts/511-first-grade-operators.loft`).
+- **Arc A (direct concrete operator dispatch) — DONE, incl. the precedence completion.**
+  `a < b`, `b - a`, `a == b` on a plain user struct dispatch its `fn OpLt`/`OpMin`/`OpEq`
+  (regression `tests/scripts/511-first-grade-operators.loft`). Dogfooding the DateTime
+  prototype surfaced that the user operator was only a *fallback*, so built-in reference
+  identity (`==` on distinct equal-valued structs was false) and conversion-coercion
+  (`d2 - d1` typed `integer` when a `DateTime→integer` conversion existed) still shadowed
+  it; fixed with method-first precedence in `call_op` (`Data::find_op_method`).
 - **Arc B Part 1 + 2 (custom `{x}` / `{x:spec}` format hook) — DONE.** A struct's own
   `to_text(self)` / `to_text(self, spec)` drives interpolation for ANY struct, not only
   inside a generic body; built-in `{n:05d}`/`{n:x}` grammar untouched (regression
@@ -39,9 +43,16 @@ generics; the three remaining gaps are what keep a library struct from being
   so hash-lookup results (bare `Reference`, `rec==0` miss) keep their correct path
   (regression `tests/scripts/514-null-equality-struct-ref.loft`). `??` and `== null` agree.
 - **Arc D (value structs) — deferred (perf trigger).**
+- **Integration acceptance test — `tests/scripts/515-datetime-first-grade.loft`.** A full
+  first-grade `DateTime` (+ `Duration`) library struct exercising ALL three surfaces at
+  once — comparison + mixed-type `DateTime±Duration` operators, `{d}`/`{d:date}`/`{d:time}`
+  custom format, and `text`/`integer as DateTime` conversions — on proleptic-Gregorian
+  epoch-ms, both backends, leak-free. It is the prototype for `loft-libs-game/time` (ported
+  after @PLN99 lands) and the proof the three arcs COMPOSE on a real type.
 
-**@PLN99 is substantively complete:** Arcs A, B (1+2), C, and the A5 null facet are all
-DONE; only the perf-gated Arc D remains deferred.
+**@PLN99 is substantively complete:** Arcs A (incl. precedence completion), B (1+2), C,
+and the A5 null facet are all DONE and validated end-to-end by a real consumer (the
+DateTime prototype); only the perf-gated Arc D remains deferred.
 
 **Probe evidence (2026-07-08, `--interpret` + `--native`, both agree):**
 - `dt + 5` on `struct DateTime { ms: integer }` → **correctly rejected** ("No

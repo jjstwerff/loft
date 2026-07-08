@@ -5375,6 +5375,25 @@ impl Parser {
                 }
             }
         } else {
+            // @PLN99 Arc A completion — a first-grade struct's OWN operator method
+            // (`t_<len><Type>_Op<Name>`) must take precedence over the built-in `possible`
+            // loop below, which otherwise wins via (a) reference-identity for `==`/`!=` on
+            // two struct refs (OpEqRef), or (b) coercing an operand through a user
+            // `T → builtin` conversion and using the built-in operator (`a - b` → OpMinInt).
+            // A built-in `integer` never coerces itself away; a user type must not either.
+            // Method-only lookup (NOT full `find_fn`, whose `possible` fallback would
+            // pre-empt the coercion the loop legitimately does for mixed built-in operands).
+            if let Some(first) = types.first() {
+                let m = self
+                    .data
+                    .find_op_method(u16::MAX, &format!("Op{}", rename(op)), first);
+                if m != u32::MAX {
+                    let tp = self.call_nr(code, m, list, types, false, &[]);
+                    if tp != Type::Null {
+                        return tp;
+                    }
+                }
+            }
             let mut possible = Vec::new();
             for pos in self
                 .data
