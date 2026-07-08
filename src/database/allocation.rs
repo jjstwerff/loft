@@ -369,6 +369,8 @@ impl Stores {
         }
         // Clear the bitmap bit for this slot (it is now active).
         self.clear_free_bit(slot);
+        // @PLN101 Slice 0 — the true heap metric: a store slot just went live.
+        self.stores_allocated += 1;
         let store = &mut self.allocations[slot as usize];
         // @P317 — enrich the tripwire: this fires when the free-bitmap and the
         // per-store `free` flag disagree (a double-free, an rc under-count, or a
@@ -1117,6 +1119,8 @@ impl Stores {
             types: self.types.clone(),
             names: self.names.clone(),
             allocations,
+            records_created: self.records_created,
+            stores_allocated: self.stores_allocated,
             stack_store_at_zero: self.stack_store_at_zero,
             files: Vec::new(),
             max: self.max,
@@ -1205,6 +1209,8 @@ impl Stores {
             types: self.types.clone(),
             names: self.names.clone(),
             allocations,
+            records_created: self.records_created,
+            stores_allocated: self.stores_allocated,
             stack_store_at_zero: self.stack_store_at_zero,
             files: Vec::new(),
             max: self.allocations.len() as u16 + pool_slice.len() as u16,

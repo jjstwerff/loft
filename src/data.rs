@@ -2913,6 +2913,11 @@ pub struct Data {
     use_names: HashMap<String, u16>,
     /// Current source file
     pub source: u16,
+    /// @PLN101 — struct def_nrs declared `value struct`: a value (copy) type stored inline
+    /// wherever it lives (record field / vector element already inline out-of-the-box), never
+    /// aliased via a DbRef, non-null. A thin marker (a set, not a Definition field — those
+    /// serialize) consulted by the few value-semantics chokepoints.
+    pub value_structs: HashSet<u32>,
     used_definitions: HashSet<u32>,
     used_attributes: HashSet<(u32, usize)>,
     /// This definition is referenced by a specific definition, the code is used to update this
@@ -3111,6 +3116,7 @@ impl Data {
             def_names: HashMap::new(),
             use_names: HashMap::new(),
             source: STD_SOURCE,
+            value_structs: HashSet::new(),
             used_definitions: HashSet::new(),
             used_attributes: HashSet::new(),
             referenced: HashMap::new(),
@@ -3565,6 +3571,18 @@ impl Data {
         &self.possible[start]
     }
 
+    /// @PLN99 Arc C — register `d_nr` into the `possible[prefix]` operator map.
+    /// A user-defined conversion (`fn OpConvXFromY`) is a global stored `n_OpConv…`,
+    /// so it skips `add_op`'s name-gated registration and never entered `possible` —
+    /// which is the list `convert`'s type-matching OpConv loop searches. Registering
+    /// it here (deduped) lets `x as T` and implicit conversions find a user `S → T`.
+    pub fn register_possible(&mut self, prefix: &str, d_nr: u32) {
+        let slot = self.possible.entry(prefix.to_string()).or_default();
+        if !slot.contains(&d_nr) {
+            slot.push(d_nr);
+        }
+    }
+
     #[must_use]
     pub fn definitions(&self) -> u32 {
         self.definitions.len() as u32
@@ -3924,6 +3942,43 @@ impl Data {
                 if !self.def(op_nr).attributes.is_empty() && self.attr_type(op_nr, 0).is_equal(tp) {
                     return op_nr;
                 }
+            }
+        }
+        u32::MAX
+    }
+
+    /// @PLN101 — is this struct def declared `value struct`? A value (copy) type stored
+    /// inline (record field / vector element already inline out-of-the-box), never aliased,
+    /// non-null. Consulted by the value-semantics chokepoints.
+    #[must_use]
+    pub fn is_value_struct(&self, d_nr: u32) -> bool {
+        self.value_structs.contains(&d_nr)
+    }
+
+    /// @PLN99 Arc A completion — resolve ONLY a user-defined operator METHOD
+    /// (`t_<len><Type>_<fn>`, with the `τ?`→base fallback), and NOTHING ELSE: no
+    /// `n_<fn>` global, no `possible`-map / built-in fallback.  `call_op` calls this
+    /// BEFORE its built-in `possible` loop so a first-grade struct's OWN operator wins
+    /// over built-in reference-identity (`==`) and conversion-coercion (`a - b` when a
+    /// `T → integer` conversion exists).  Returns `u32::MAX` when the type has no such
+    /// method — the caller then runs the built-in loop unchanged (integer/float/text
+    /// operators live in `possible`, never as `t_` methods, so they are unaffected).
+    #[must_use]
+    pub fn find_op_method(&self, source: u16, fn_name: &str, tp: &Type) -> u32 {
+        let type_nr = self.type_def_nr(tp);
+        if type_nr == u32::MAX {
+            return u32::MAX;
+        }
+        let base = self.def(type_nr).name.clone();
+        let sig = Self::sig_type_name(&base, tp);
+        let d_nr = self.source_nr(source, &format!("t_{}{}_{fn_name}", sig.len(), sig));
+        if d_nr != u32::MAX {
+            return d_nr;
+        }
+        if sig != base {
+            let d_nr = self.source_nr(source, &format!("t_{}{}_{fn_name}", base.len(), base));
+            if d_nr != u32::MAX {
+                return d_nr;
             }
         }
         u32::MAX

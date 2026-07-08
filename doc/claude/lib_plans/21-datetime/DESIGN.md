@@ -49,6 +49,16 @@ blast radius), arc B (native/wasm core conversion opcodes), and arc C (core
 `{dt:…}` format opcodes) all dissolve. What replaces them is a single, reusable
 core feature plus pure-library work.
 
+> **Correction (2026-07-08, @PLN99).** The `dt1 < dt2` row above (core change:
+> *none*) is **wrong for DIRECT use**. A probe shows user `OpLt` dispatches inside
+> a bounded generic (`smaller<T: Ordered>(a,b){a<b}` → `true`) but **not** in a
+> direct `a < b` on concrete structs ("No matching operator '<' on 'S' and 'S'").
+> So a first-grade `DateTime` needs a **second** core change — *direct concrete
+> operator dispatch* — tracked together with the format hook under
+> [@PLN99 — first-grade custom types](../../plans/99-first-grade-types/README.md).
+> The format hook below stands; distinct-type safety (`dt + 5` rejects) and
+> generic-context operators are genuinely free.
+
 ## The one core change — generalise the format hook
 
 The feature has **two parts**: the *hook* (how a type declares formatting) and

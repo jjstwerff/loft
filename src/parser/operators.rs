@@ -1936,13 +1936,18 @@ impl Parser {
                     }
                     // else: in range, or DN4 off — accept as a width-tag (value
                     // stays in the 8-byte slot), the pre-DN4 behaviour.
-                } else if !self.convert(code, ctp, &tp) && !self.cast(code, ctp, &tp) {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Error,
-                        "Unknown cast from {} to {tps}",
-                        &ctp.name(&self.data),
-                    );
+                } else {
+                    // @PLN99 Arc C — clear the owned-conversion signal, then let `convert`
+                    // set it iff it dispatches an allocating user conversion (`fn OpConvTFromS`).
+                    self.conv_owned_result = None;
+                    if !self.convert(code, ctp, &tp) && !self.cast(code, ctp, &tp) {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "Unknown cast from {} to {tps}",
+                            &ctp.name(&self.data),
+                        );
+                    }
                 }
                 // Post-2c: remember the cast target alias so `f += x as i32`
                 // can narrow the file-serialisation width.  Only stored when
@@ -1975,8 +1980,16 @@ impl Parser {
                 {
                     rt = Type::optional(rt.base().clone());
                 }
-                for d in ctp.depend() {
-                    rt = rt.depending(d);
+                if let Some(owned) = self.conv_owned_result.take() {
+                    // @PLN99 Arc C — an allocating user conversion produced a FRESH owned
+                    // store.  Use the conversion fn's real return type (Owned deps) and do
+                    // NOT graft the source's deps: the result is not a view of the source, so
+                    // grafting would mark it a borrow and leak the new store at scope end.
+                    rt = owned;
+                } else {
+                    for d in ctp.depend() {
+                        rt = rt.depending(d);
+                    }
                 }
                 // #254: set the current type and fall through to `None` rather
                 // than returning — `as` sits at the top precedence level, so
@@ -2054,6 +2067,25 @@ impl Parser {
             let enum_null = (operator == "==" || operator == "!=")
                 && ((matches!(*ctp, Type::Enum(_, _, _)) && second_type == Type::Null)
                     || (*ctp == Type::Null && matches!(second_type, Type::Enum(_, _, _))));
+            // @PLN99 A5 — a nullable STRUCT-reference VARIABLE (`s: DT? = null`,
+            // typed `Optional(Reference)`) holds the reference null sentinel
+            // (`store_nr==u16::MAX`, from OpNullRefSentinel), like a nullable enum variable.
+            // Its `== null` must test that sentinel via OpRefIsNull.  Without this case it fell
+            // to the generic `==`, which lowered to
+            // `OpEqBool(OpConvBoolFromRef(s), OpConvBoolFromNull())` — but OpConvBoolFromRef is
+            // `rec != 0` (is-NON-null, 0/1) while OpConvBoolFromNull is the 255 bool sentinel,
+            // so the two NEVER compare equal → `s == null` was ALWAYS false (a live `main`
+            // bug: `??` and `{s}` saw null but `== null` disagreed).
+            // Gate on `Optional`, NOT bare `Reference`: a hash/collection LOOKUP result is a
+            // bare `Type::Reference` whose miss is `rec==0` (not the store_nr sentinel) and is
+            // handled correctly by the existing path — OpRefIsNull would misread it (p285).
+            // INLINE nullable struct fields are `Type::Enum(__nullable<…>)` (enum_null path).
+            let opt_ref_l =
+                matches!(*ctp, Type::Optional(_)) && matches!(ctp.base(), Type::Reference(_, _));
+            let opt_ref_r = matches!(second_type, Type::Optional(_))
+                && matches!(second_type.base(), Type::Reference(_, _));
+            let ref_null = (operator == "==" || operator == "!=")
+                && ((opt_ref_l && second_type == Type::Null) || (*ctp == Type::Null && opt_ref_r));
             if vec_null {
                 // @PLN25: `vector == null` / `vector != null` tests the null
                 // sentinel (store_nr == u16::MAX) via OpVectorIsNull — NOT eq_ref,
@@ -2122,6 +2154,23 @@ impl Parser {
                         // rec==0, which rec==0 would misread as null.
                         self.cl("OpRefIsNull", &[e_code])
                     };
+                    *code = if operator == "==" {
+                        is_null
+                    } else {
+                        self.cl("OpNot", &[is_null])
+                    };
+                }
+                *ctp = Type::Boolean;
+            } else if ref_null {
+                if !self.first_pass {
+                    let r_code = if *ctp == Type::Null {
+                        second_code
+                    } else {
+                        code.clone()
+                    };
+                    // A struct reference variable is a DbRef whose null IS the store_nr
+                    // sentinel (OpRefIsNull), NOT rec==0 (a present record can carry rec==0).
+                    let is_null = self.cl("OpRefIsNull", &[r_code]);
                     *code = if operator == "==" {
                         is_null
                     } else {

@@ -381,6 +381,13 @@ pub struct Parser {
     /// `build_null_coalesce_default`).  Set in the `as` handler, consumed by the
     /// next `??`, and cleared by any other intervening operator.
     pub(crate) dn4_checked_narrow: Option<Type>,
+    /// @PLN99 Arc C — set by `convert` when it dispatches a struct/reference-returning
+    /// USER conversion (`x as T` via `fn OpConvTFromS`).  Such a conversion ALLOCATES a
+    /// fresh owned store, so its result must NOT inherit the source's deps (the reinterpret-
+    /// cast graft would mark it a view and leak the new store).  The `as` handler reads this
+    /// right after `convert` to use the conversion fn's real (Owned) return type as the
+    /// result, then clears it.
+    pub(crate) conv_owned_result: Option<Type>,
     /// Field-binding Set nodes created by `if expr is Variant { field }`.
     /// Drained by `parse_if` and prepended to the if-body so they only
     /// execute when the discriminant matches.
@@ -478,6 +485,9 @@ pub(crate) struct OutputState<'a> {
     pub(crate) note: bool,
     pub(crate) dir: i32,
     pub(crate) float: bool,
+    /// @PLN99 Arc B — the raw `{x:spec}` spec string for a custom-type value whose
+    /// own `to_text(self, spec)` renders it (`""` for a bare `{x}` or a built-in).
+    pub(crate) spec: &'a str,
 }
 
 impl OutputState<'_> {
@@ -494,6 +504,7 @@ pub(crate) const OUTPUT_DEFAULT: OutputState = OutputState {
     note: false,
     dir: 2, // 2 = unset; text defaults to left (-1), numbers to right (1)
     float: false,
+    spec: "",
 };
 
 // Sub-modules
@@ -660,6 +671,7 @@ impl Parser {
             is_capture_bindings: Vec::new(),
             last_cast_alias: u32::MAX,
             dn4_checked_narrow: None,
+            conv_owned_result: None,
             trace_types: false,
             trace_types_lines: Vec::new(),
             field_read_counts: std::collections::HashMap::new(),
@@ -2432,6 +2444,11 @@ impl Parser {
             *code = Value::Call(sentinel_nr, vec![]);
             return true;
         }
+        // @PLN99 Arc C — a struct/reference-returning user conversion carries a hidden
+        // destination parameter (attributes() > 1), so it must go through `call_nr` (whose
+        // `add_defaults` appends the dest).  But `call_nr` needs `&mut self`, and this scan
+        // borrows `self.data` immutably — so record the winner and dispatch it AFTER the loop.
+        let mut struct_conv: Option<u32> = None;
         for &dnr in self.data.get_possible("OpConv", &self.lexer) {
             if self.data.def(dnr).name().ends_with("FromNull") {
                 if *is_type == Type::Null {
@@ -2449,12 +2466,37 @@ impl Parser {
                     }
                 }
             } else if self.data.attributes(dnr) > 0
-                && self.data.attr_type(dnr, 0).is_equal(check_type)
+                && (self.data.attr_type(dnr, 0).is_equal(check_type)
+                    || self.data.attr_type(dnr, 0).is_equal(is_type))
                 && self.data.def(dnr).returned().is_equal(should)
             {
+                // @PLN99 Arc C — for a `Reference` source, `check_type` was flattened to the
+                // generic `reference` (line ~2408) so stdlib `OpConv…FromRef` match any handle.
+                // That hides a specific struct→struct user conversion (`fn OpConvBFromA(a: A)`),
+                // so we ALSO try the concrete `is_type`.  The `returned().is_equal(should)` guard
+                // keeps this exact: a candidate only wins when BOTH its source and target align.
+                if self.data.attributes(dnr) > 1 {
+                    struct_conv = Some(dnr); // struct-returning: dispatch after the loop
+                    break;
+                }
+                // Stdlib primitive conversions (attributes() == 1) keep the direct Call.
                 *code = Value::Call(dnr, vec![code.clone()]);
                 return true;
             }
+        }
+        if let Some(dnr) = struct_conv {
+            // Pass the CONCRETE source type (`is_type`), not the flattened `check_type` —
+            // `process_call_args` needs the real type to wire the argument.  A Null result
+            // means the arg couldn't be wired; leave `code` untouched and report no match.
+            let src = code.clone();
+            let rtp = self.call_nr(code, dnr, &[src], std::slice::from_ref(is_type), false, &[]);
+            if rtp == Type::Null {
+                return false;
+            }
+            // The conversion allocated a fresh owned store; hand its real return type
+            // (Owned deps) to the `as` handler so it does NOT graft the source's deps.
+            self.conv_owned_result = Some(rtp);
+            return true;
         }
         false
     }
@@ -5333,6 +5375,25 @@ impl Parser {
                 }
             }
         } else {
+            // @PLN99 Arc A completion — a first-grade struct's OWN operator method
+            // (`t_<len><Type>_Op<Name>`) must take precedence over the built-in `possible`
+            // loop below, which otherwise wins via (a) reference-identity for `==`/`!=` on
+            // two struct refs (OpEqRef), or (b) coercing an operand through a user
+            // `T → builtin` conversion and using the built-in operator (`a - b` → OpMinInt).
+            // A built-in `integer` never coerces itself away; a user type must not either.
+            // Method-only lookup (NOT full `find_fn`, whose `possible` fallback would
+            // pre-empt the coercion the loop legitimately does for mixed built-in operands).
+            if let Some(first) = types.first() {
+                let m = self
+                    .data
+                    .find_op_method(u16::MAX, &format!("Op{}", rename(op)), first);
+                if m != u32::MAX {
+                    let tp = self.call_nr(code, m, list, types, false, &[]);
+                    if tp != Type::Null {
+                        return tp;
+                    }
+                }
+            }
             let mut possible = Vec::new();
             for pos in self
                 .data
@@ -5361,6 +5422,24 @@ impl Parser {
                         break;
                     }
                     return tp;
+                }
+            }
+            // @PLN99 Arc A — a user-defined operator on a concrete struct is stored
+            // as `t_<len><Type>_Op<Name>` / `n_Op<Name>`, never in the `possible`
+            // map (`add_op` fills it only for prefix-named built-ins like `OpLtInt`).
+            // Resolve it via `find_fn` — the same resolver the generic/method path
+            // uses — so a DIRECT `a < b` on a user struct dispatches the user def,
+            // not only inside a `<T: Ordered>` body. A type with no such def falls
+            // through to the unchanged "No matching operator" error below.
+            if let Some(first) = types.first() {
+                let user_op = self
+                    .data
+                    .find_fn(u16::MAX, &format!("Op{}", rename(op)), first);
+                if user_op != u32::MAX {
+                    let tp = self.call_nr(code, user_op, list, types, false, &[]);
+                    if tp != Type::Null {
+                        return tp;
+                    }
                 }
             }
         }
@@ -8625,8 +8704,10 @@ fn callee_param_writes(fn_nr: u32, data: &Data, cache: &mut HashMap<u32, Vec<boo
 /// (OpSet*, OpCopyRecord, OpNewRecord first-arg).  Excludes plain `Value::Set`
 /// which includes loop-iterator advance — that's not a user-initiated mutation.
 /// Used by check_ref_mutations to detect when a for-loop variable's field
-/// writes should propagate back to the iterated `&` collection.
-fn find_field_written_vars(code: &Value, data: &Data, written: &mut HashSet<u16>) {
+/// writes should propagate back to the iterated `&` collection, and by the
+/// @PLN101 value-struct copy-elision pass (`scopes::value_struct_copy`) to prove
+/// a read-only view's base is never mutated under it.
+pub(crate) fn find_field_written_vars(code: &Value, data: &Data, written: &mut HashSet<u16>) {
     match code {
         Value::Call(fn_nr, args) => {
             let def = data.def(*fn_nr);

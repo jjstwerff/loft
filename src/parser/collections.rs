@@ -1165,17 +1165,13 @@ use #count instead"
     /// `re_resolve_call` substitutes the stub with the concrete
     /// type's implementation, just like an explicit
     /// `x.to_text()` call site.
-    fn try_bound_to_text_call(&mut self, d_nr: u32, format: &Value) -> Option<Value> {
-        if self.context == u32::MAX {
-            return None;
-        }
-        let ctx_def = self.data.def(self.context);
-        if ctx_def.def_type != DefType::Generic {
-            return None;
-        }
-        // Confirm `d_nr` is the type variable of the current generic
-        // context: it should be a struct-typed def whose name appears
-        // as the type variable across the fn's attributes.
+    fn try_bound_to_text_call(&mut self, d_nr: u32, format: &Value, spec: &str) -> Option<Value> {
+        // @PLN99 Arc B — route `{x}` / `{x:spec}` through the type's OWN
+        // `to_text(self, …)` for ANY struct, not only the current bounded-
+        // generic's type variable (the old gate required `context == Generic`).
+        // A struct with no `t_<len><Type>_to_text` method (`stub_nr == u32::MAX`
+        // below) falls back to the generic `OpFormatDatabase` dump — nothing
+        // regresses.
         if self.data.def_type(d_nr) != DefType::Struct {
             return None;
         }
@@ -1193,6 +1189,10 @@ use #count instead"
         // I9-text path).  Allocate a fresh work-text and wrap with
         // `OpCreateStack` so the call site mirrors what
         // `convert(text → &text)` would auto-generate.
+        // Arity distinguishes the `to_text` shape: `(self, __work)` = 2 params
+        // (no spec) vs `(self, spec, __work)` = 3 params (@PLN99 Arc B — the value
+        // owns its `{x:spec}` DSL). Thread the raw spec only for the 3-param form.
+        let n_attrs = self.data.attributes(stub_nr);
         let wv = self.vars.work_text(&mut self.lexer);
         let work_arg = v_block(
             vec![
@@ -1202,7 +1202,12 @@ use #count instead"
             Type::Reference(self.data.def_nr("reference"), crate::data::Deps::frame1(wv)),
             "p242_to_text_work",
         );
-        Some(Value::Call(stub_nr, vec![format.clone(), work_arg]))
+        let args = if n_attrs >= 3 {
+            vec![format.clone(), Value::str(spec), work_arg]
+        } else {
+            vec![format.clone(), work_arg]
+        };
+        Some(Value::Call(stub_nr, args))
     }
 
     pub(crate) fn append_data(
@@ -1329,7 +1334,7 @@ use #count instead"
                 // already created by `parse_function`'s I7/I8.1
                 // path; `re_resolve_call` substitutes it with the
                 // concrete type's impl at instantiation time.
-                if let Some(text_call) = self.try_bound_to_text_call(d_nr, format) {
+                if let Some(text_call) = self.try_bound_to_text_call(d_nr, format, state.spec) {
                     self.append_data_text(list, start, var, text_call, state);
                 } else {
                     let fmt = format.clone();

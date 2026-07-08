@@ -13,6 +13,27 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > pipeline, the @PLN16 debug engine)
 > **Live status · milestone · order:** [loft-lang/plans ▸ @PLN18](https://github.com/loft-lang/plans/issues/18)  ← single source of truth for lifecycle
 
+## Status
+
+**DONE / SHIPPED — closed 2026-07-08.** The engine-host execution model is built,
+tested, and on `main`; the plan closes on merge of this close-out (`Closes @PLN18`).
+Verified: all engine_host tests green
+(`tests/engine_host_{audience,kernel,reload,udp,connector,probe,http}.rs` — 27 tests,
+0 failed, 0 ignored).
+
+**Shipped:** 01 kernel · 02 live dispatch/reload (`LOFT_LIVE_RELOAD`) · 04 state-sync
+at 30×30 Hz · 05a UDP quick channel · 05d services v1 (lanes-as-late-data + one
+receive surface) · 07 browser kernel (native ↔ headless-chromium differential green) ·
+**08 live-build-swap — all eight scenarios**. 03 (per-fn wasm tier) superseded by 08.
+
+**Deferred — each behind an explicit trigger, design retained in the phase table below
++ [ENGINE_HOST.md](ENGINE_HOST.md):** 05b full-UDP frontend · 05c UDP bulk push · 06
+snapshot/restore ring · 08's five residuals (line-keyed breakpoints, compiled-`--html`
+swap, full-expression eval at a pause, snapshot coverage growth, mid-freeze event
+loss). 05d's service *registry column* waits on the closure-in-collection language
+feature (P213/P214); 07's real-phone probe is a manual hardware check. None is
+open/unfinished work — all are future-triggered, language-blocked, or hardware.
+
 ## Thesis
 
 Build the **lavition engine host**: a semantics-free Rust kernel (frame cycle, socket

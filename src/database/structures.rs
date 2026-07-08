@@ -58,6 +58,8 @@ impl Stores {
     /// Panics on an unsupported `parent_tp`/`field` parts kind (an internal invariant
     /// violation — the parser only emits `OpNewRecord` for collection/struct field types).
     pub fn record_new(&mut self, data: &DbRef, parent_tp: u16, field: u16) -> DbRef {
+        // @PLN101 Slice 0 — count every heap record allocation (the cost value structs remove).
+        self.records_created += 1;
         // @PLN25 single-payload: when creating a sub-record for a FIELD inside a
         // `__nullable<S>` element (a nested collection/struct), the field lives in the inline
         // `payload` (dense S), not at the enum's top level (field 0 there is the discriminant,

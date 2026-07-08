@@ -160,6 +160,16 @@ install-artifacts: check-targets all
 	# `--native` run of a library with a `vector`/struct-returning (or -taking)
 	# `#native` fn fails to compile with `E0433: cannot find native_call in loft`.
 	cargo build --release --lib --no-default-features --features mmap,random,threading,native-extensions --target-dir target/install-lib
+	# E0514 guard — cargo's deps/ accumulates a `libloft_ffi-<hash>.rlib` per rustc
+	# version across builds; after a `rustup update` the OLD one lingers beside the
+	# freshly-built one.  The install `cp`s ALL of them into the shared deps/, and
+	# because `cp` flattens every file's mtime to install-time the mtime-based
+	# loft_ffi resolver (native_lib::loft_ffi_for_libloft) can then pick the STALE
+	# one — so every `--native` build fails `E0514: crate loft_ffi compiled by an
+	# incompatible version of rustc`.  Keep only the newest (the just-built,
+	# current-rustc) loft_ffi rlib so exactly one, matching, copy is installed.
+	@stale=$$(ls -t target/install-lib/release/deps/libloft_ffi-*.rlib 2>/dev/null | tail -n +2); \
+	 if [ -n "$$stale" ]; then echo "  pruning stale loft_ffi rlib(s): $$stale"; rm -f $$stale; fi
 
 install:
 	# #398 — preflight: this target writes to root-owned /usr/local/{bin,share}.

@@ -745,6 +745,18 @@ impl Parser {
             if is_generic && d != u32::MAX {
                 self.data.definitions[d as usize].def_type = DefType::Generic;
             }
+            // @PLN99 Arc C — a user-defined conversion `fn OpConvXFromY` / `fn OpCastXFromY`
+            // is a global stored `n_OpConv…`, so it skipped `add_op` and never entered the
+            // `possible` map that `convert`/`cast` search.  Register it (by type-matched
+            // prefix) so `value as T` and implicit conversions dispatch a user `S → T`,
+            // exactly like a built-in — the loop in `convert` still matches on arg/return type.
+            if d != u32::MAX {
+                if fn_name.starts_with("OpConv") {
+                    self.data.register_possible("OpConv", d);
+                } else if fn_name.starts_with("OpCast") {
+                    self.data.register_possible("OpCast", d);
+                }
+            }
             d
         } else if self.default && is_op(&fn_name) {
             self.data.def_nr(&fn_name)
@@ -1539,6 +1551,20 @@ impl Parser {
     ) -> Option<Type> {
         let t = self.parse_type_inner(on_d, type_name, returned)?;
         if self.lexer.has_token("?") {
+            // @PLN101 — a `value struct` is stored INLINE (bytes, no `DbRef`), so it has no
+            // `store_nr` null sentinel: `<value struct>?` cannot be represented. Reject it with
+            // a clear diagnostic; fall through as the plain (non-null) type to avoid a cascade.
+            if let Type::Reference(p, _) = &t
+                && self.data.is_value_struct(*p)
+            {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "`{type_name}?` is not allowed — a `value struct` is stored inline and has \
+                     no null; use a plain `{type_name}`, or a reference `struct` for nullability"
+                );
+                return Some(t);
+            }
             // @PLN25 slice (a): the postfix `?` constructs the real `Optional` former
             // (idempotent + normalising via `Type::optional`). GATED on `LOFT_PLN25_OPT`
             // while the slice-(b) peel audit is incomplete — OFF keeps the Phase-0 no-op
@@ -2221,7 +2247,25 @@ impl Parser {
 
     // @F12 — struct records (fields, `= default`, `computed`, `limit`/`not null`/`assert`)
     pub(crate) fn parse_struct(&mut self) -> bool {
+        // @PLN101 — optional `value` modifier: `value struct T {…}` marks T a value (copy,
+        // inline, non-null) type. `value` is a plain IDENTIFIER (not a keyword), so peek it
+        // (`has_token` only matches Token lexemes) and consume only the `value struct` prefix.
+        let is_value = matches!(
+            self.lexer.peek().has,
+            crate::lexer::LexItem::Identifier(ref t) if t == "value"
+        );
+        if is_value {
+            self.lexer.cont();
+        }
         if !self.lexer.has_token("struct") {
+            if is_value {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "`value` must be followed by `struct`"
+                );
+                return true;
+            }
             return false;
         }
         let Some(id) = self.lexer.has_identifier() else {
@@ -2293,6 +2337,10 @@ impl Parser {
         }
         let context = self.context;
         self.context = d_nr;
+        // @PLN101 — mark the value-struct kind now that d_nr is the confirmed struct def.
+        if is_value {
+            self.data.value_structs.insert(d_nr);
+        }
         self.lexer.token("{");
         // #91: collect init field dependency info for circular detection.
         let mut init_deps: Vec<(String, Vec<String>)> = Vec::new();

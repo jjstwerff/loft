@@ -4,17 +4,17 @@ schema_version = 1
 
 [[package]]
 name = "server"
-version = "0.2.0"
-url = "https://github.com/loft-lang/loft-libs-net/releases/download/server-v0.2.0/server-0.2.0.tar.gz"
-sha256 = "5cc1b878211d937740e7561fc1406dc61de099c6aabaaa8841d0cb3023856c4e"
+version = "0.3.0"
+url = "https://github.com/loft-lang/loft-libs-net/releases/download/server-v0.3.0/server-0.3.0.tar.gz"
+sha256 = "86357ff67899a7c0c18e99c41b0116acffd9e435d45aa0d72807a8160dee5420"
 source = "registry"
 deps = ["web"]
 
 [[package]]
 name = "web"
-version = "0.2.0"
-url = "https://github.com/loft-lang/loft-libs-net/releases/download/web-v0.2.0/web-0.2.0.tar.gz"
-sha256 = "e5a46ea562590f389db1d725ab7954f1361474c15201b12c188f0b57438d2494"
+version = "0.3.0"
+url = "https://github.com/loft-lang/loft-libs-net/releases/download/web-v0.3.0/web-0.3.0.tar.gz"
+sha256 = "d8f09ebe9d831ee180a29123fef401d8402ac3829415cb4941cccf7a54a13c7f"
 source = "registry"
 
 [[package]]

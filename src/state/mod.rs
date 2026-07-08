@@ -4016,6 +4016,18 @@ impl State {
     /// `execute_argv` to detect store leaks. Panics in debug builds
     /// if any stores are still alive (except the stack store).
     pub fn check_store_leaks(&self) {
+        // @PLN101 Slice 0 — alloc-count harness: report total heap record allocations at
+        // exit. A `value struct` program (Slice 1+) must drive its struct's contribution to
+        // zero vs the reference-struct baseline. Gated so normal runs are unaffected.
+        if std::env::var_os("LOFT_ALLOC_REPORT").is_some() {
+            // `peak` = max LIVE stores (memory; bounded by slot reuse — a per-variable store
+            // reused each loop iteration keeps this flat). `stores_allocated` = alloc/free
+            // CYCLES (the per-construction abstraction cost value structs must drive to zero).
+            eprintln!(
+                "loft-alloc: peak={} allocs={} records={}",
+                self.database.peak, self.database.stores_allocated, self.database.records_created
+            );
+        }
         let leaked = self.collect_store_leaks();
         if !leaked.is_empty() {
             let count = leaked.len();

@@ -235,6 +235,18 @@ pub struct Stores {
     /// shelling out and parsing the stderr trace (which has a stdout/stderr
     /// buffering hazard).  Reset to 0 on a fresh runtime.
     pub peak: u16,
+    /// @PLN101 Slice 0 — monotonic count of `record_new` events (a logical record: struct
+    /// value, nested-struct field, collection entry). NOTE (corrected 2026-07-08): this is a
+    /// COARSE proxy — it counts logical records incl. already-inline ones, and MISSED the real
+    /// cost (per-construction scratch stores) entirely. Use `stores_allocated` as the true
+    /// heap metric. Kept for continuity / logical-record accounting.
+    pub records_created: u64,
+    /// @PLN101 Slice 0 (the TRUE heap metric) — monotonic count of store-SLOT allocations
+    /// (every time a `Store` goes live). A reference struct's real cost is the per-construction
+    /// SCRATCH store: a local struct loop x100 → ~102 store allocs; a `vector<P>` inlines its
+    /// elements → ~4 (near the scalar baseline). A `value struct` built in place allocates
+    /// none. `LOFT_ALLOC_REPORT=1` prints it; the pub field is read in-process for assertions.
+    pub stores_allocated: u64,
     /// S29: bitmap of free store slots — bit `i` is set when `allocations[i]`
     /// is free and eligible for reuse.  `database_named` finds the lowest set bit below `max`
     /// and reuses that slot instead of always growing `max`.  This eliminates the LIFO-order
@@ -496,6 +508,8 @@ impl Clone for Stores {
             files: Vec::new(),
             max: self.max,
             peak: 0,
+            records_created: 0,
+            stores_allocated: 0,
             free_bits: Vec::new(),
             bridge_text_dest: None,
             const_refs: Vec::new(),
@@ -1073,6 +1087,8 @@ impl Stores {
             files: Vec::new(),
             max: 0,
             peak: 0,
+            records_created: 0,
+            stores_allocated: 0,
             free_bits: Vec::new(),
             bridge_text_dest: None,
             const_refs: Vec::new(),
