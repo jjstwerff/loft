@@ -50,31 +50,39 @@ The matrix is the acceptance oracle; the alloc harness makes "zero-cost" a hard 
 - **0.3 — freeze the spec.** Record the pass/fail + alloc-count table in this file; it is the
   Slice-1..5 acceptance oracle. Probes graduate to `tests/scripts/` as each slice lands.
 
-### Slice 0 findings (2026-07-08) — the alloc harness is built; where records actually live
+### Slice 0 findings (2026-07-08, CORRECTED) — the real cost is the per-construction scratch store
 
-Harness landed: `Stores.records_created` counter (`database/mod.rs`), bumped in `record_new`
-(`database/structures.rs:60`), reported at exit via `LOFT_ALLOC_REPORT=1`
-(`state/mod.rs::check_store_leaks`) → `loft-alloc: records=N`.
+Harness landed: two counters on `Stores` (`database/mod.rs`) — `records_created` (`record_new`
+events, `structures.rs:60`) and **`stores_allocated`** (store-SLOT go-live events,
+`allocation.rs`) — reported at exit via `LOFT_ALLOC_REPORT=1` (`state/mod.rs::check_store_leaks`)
+→ `loft-alloc: stores=S records=R`.
 
+**`record_new` MISLED (first write-up was wrong).** It counts logical records (0 for locals,
+100 for vector appends), which hid the real cost. `stores_allocated` is the TRUE heap metric.
 Measured (`--interpret`, 100× loops):
 
-| shape | records | reading |
-|---|---|---|
-| local `struct` (flat or nested), 100× | **0** | transient locals live in a reused stack **work slot**, not heap records |
-| `struct` returned from a fn, 100× | **0** | return reuses a slot |
-| `vector<P>` (flat), 100 elems | **100** | one record **per collection element** |
-| `vector<Outer>` (2 nested `Inner` fields) | **100** | nested struct fields are **already inline** in the element record (not 300) — `field_ref` same-store offset |
-| `vector<integer>`, 100 elems | **100** | even scalar elements log one `record_new` each |
+| shape | stores | vs scalar baseline (2) | reading |
+|---|---|---|---|
+| scalar loop | 2 | — | baseline |
+| **local `struct`**, 100× | **102** | **+100** | **~1 SCRATCH store per construction** — the real, pervasive cost |
+| `vector<P>` (flat), 100 elems | 4 | +2 | elements **inlined into the backing** (store #1); +2 is per-element construction scratch reused |
+| `vector<integer>`, 100 elems | 3 | +1 | scalar baseline for a collection |
+| record field (`struct` in `struct`) | — | — | **already inline** (`finish_type` sizes a field by the nested record's full `size`, not a DbRef) |
 
-**Consequences for the plan** (they SHARPEN it, matching the user's guidance):
-1. The DbRef/heap cost is **not** in transient locals (already stack-cheap) — it is in
-   **persistent/collection storage**. Value structs matter most for `vector<V>` / record
-   fields / DB columns (Slices 2–3), exactly "zero cost inside records".
-2. `record_new` counts *logical* records and includes inline sub-records + per-element slots,
-   so it is a coarse proxy. The real target is **architectural** (drop the inline DbRef; one
-   Store) per the locked decisions, not a raw `record_new` count. The clean per-slice metric
-   is a **struct-vs-scalar DELTA** on a fixed program, plus a structural check ("no DbRef /
-   no separate record for the value field"). Slice 1/3 assert the delta collapses.
+**Corrected consequences (this REVISES the earlier note):**
+1. The big win is **transient locals / temporaries / args / returns** — every reference-struct
+   value you construct allocates a scratch store (100 loops → 100 stores). A `value struct`
+   built inline allocates **none**. So **Slice 1 (value struct as a local) is the highest-value
+   slice, not moot** — the earlier "locals are free" was a `record_new` artifact.
+2. **Record fields are already inline** (storage-wise) — "zero cost inside records" is largely
+   done for STORAGE; the residual value-struct win there is dropping the `field_ref` access
+   DbRef + value/copy semantics.
+3. **`vector<P>` already inlines P** into a single backing store (#1); it is NOT a single total
+   allocation (4 slots: stack + backing + per-element construction scratch). The residual win
+   is eliminating the per-element construction scratch (build P directly in the element slot).
+4. **Metric for every slice:** `stores_allocated` DELTA vs the scalar baseline on a fixed
+   program must collapse to ~0 for the value-struct version (plus a structural "no scratch
+   store, no DbRef" check).
 
 ---
 

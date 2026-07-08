@@ -102,11 +102,16 @@ the alloc-count cells read zero; probes graduate to `tests/scripts/`.
 ## Phase ordering
 
 1. **Slice 0** first — the matrix is the spec; write the probes and the alloc-count harness
-   before touching representation code (this is a core change; measure before cutting).
-2. **Slice 1** — the smallest complete vertical: one `value struct`, all-scalar, as a local,
-   through construct→field→operator→format→conversion, zero alloc. Prove the model on the
-   simplest cell before generalizing.
-3. **Slices 2–3** widen placement (records, then collections) — where the real payoff lives.
+   before touching representation code (this is a core change; measure before cutting). **Done
+   — and it corrected the cost map (see STEPS § Slice 0 findings):** the payoff is in transient
+   locals/temporaries (a scratch store each), NOT collections (already inlined).
+2. **Slice 1 is the highest-value slice** (not moot): one `value struct`, all-scalar, as a
+   local — construct→field→operator→format→conversion — built inline, **`stores_allocated`
+   delta 0** vs the reference-struct baseline (which is ~1 store per construction). This is
+   where most of the win is, and it proves the model on the simplest cell.
+3. **Slice 2** (record fields) — storage is already inline; the win is dropping the `field_ref`
+   access DbRef + value semantics. **Slice 3** (`vector<V>`) — already mostly inlined; residual
+   win is eliminating the per-element construction scratch (build in place, → single backing).
 4. **Slice 4** handles the lifetime-bearing case (or defers it with a stated trigger).
 5. **Slice 5** closes with native ABI parity + the alloc benchmark.
 

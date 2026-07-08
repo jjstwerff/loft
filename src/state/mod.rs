@@ -4020,7 +4020,10 @@ impl State {
         // exit. A `value struct` program (Slice 1+) must drive its struct's contribution to
         // zero vs the reference-struct baseline. Gated so normal runs are unaffected.
         if std::env::var_os("LOFT_ALLOC_REPORT").is_some() {
-            eprintln!("loft-alloc: records={}", self.database.records_created);
+            eprintln!(
+                "loft-alloc: stores={} records={}",
+                self.database.stores_allocated, self.database.records_created
+            );
         }
         let leaked = self.collect_store_leaks();
         if !leaked.is_empty() {
