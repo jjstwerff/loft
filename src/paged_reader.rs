@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I70 — Database subsystem (alloc / persistence / journal / snapshot / schema)
 //
 //! @PLN97 arc G Phase 2 — a read-only, transient PAGED view over a store image.
 //!
