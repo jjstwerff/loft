@@ -7,19 +7,30 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 > **Live status · lifecycle:** [loft-lang/plans ▸ @PLN100](https://github.com/loft-lang/plans/issues/100) ← single source of truth for lifecycle state (label). This README is the source of truth for **per-phase status + design**.
 
-## Status
+## Status — DONE / SHIPPED 2026-07-08 · `Closes @PLN100`
 
-**`status:active` — filed 2026-07-08. Slices 1–4 SHIPPED (2026-07-08); only Slice 5 (UI) remains.** A loft
-project has no declared build phase: what an artifact needs (which toolchain binaries,
-which prebuilt runtime rlibs, which generated data files) lives only in `Makefile`
-recipes and scattered Rust fallbacks, so it can't be checked or built automatically.
-Three consequences drive this plan: (1) you must run a **manual `make`** to get a
-correct WASM build; (2) build shapes **cross-invalidate** — `make wasm` (wasm-bindgen)
-and `--html` write the *same* `target/wasm32-unknown-unknown/release/libloft.rlib` with
-incompatible feature sets and stomp each other (`src/main.rs:5878`); (3) the resulting
-staleness makes `html_wasm`/`html_asyncify`/`wasm_debug_relay` **flaky** under the
-parallel suite (they pass in isolation). This plan makes the build phase **declared**,
-**auto-built on stale-or-missing**, and **isolated** per target.
+**All four implementation slices shipped + validated; Slice 5 was never a build
+deliverable (the config is UI-friendly / form-shaped — the constraint it named).**
+The finishing PR carries `Closes @PLN100`; the tracker issue moves to
+`status:finished` on merge.
+
+**The shipped reference now lives in its home docs** — this README is the
+closure record:
+
+- **`loft build` / `loft check`, `[build]` / `[[build.asset]]` / `[[test]]`
+  schema** → [PACKAGES.md § The build phase](../../PACKAGES.md).
+- **Per-shape wasm rlib isolation + auto-build** → [WASM.md § The rlib-stomp
+  hazard](../../WASM.md).
+- **Code**: `src/build_phase.rs` (driver + asset/test phases, unit-tested),
+  `src/native_utils.rs` (`ensure_loft_runtime_rlib`), `src/manifest.rs`
+  (`[build]`/`[[build.asset]]`/`[[test]]` parsing, tokenised via the one loft lexer).
+
+**What it shipped:** a loft project had no declared build phase — what an artifact
+needs (toolchain binaries, prebuilt runtime rlibs, generated data files) lived only in
+`Makefile` recipes and scattered Rust fallbacks. It now makes the build phase
+**declared**, **auto-built on stale-or-missing**, and **isolated** per target,
+retiring the manual `make wasm` step and the rlib-stomp flaky-WASM class, plus asset
+steps (fingerprint + TTL) and a `[[test]]` phase behind the `loft check` gate.
 
 ## Goal
 
@@ -120,7 +131,30 @@ run     = "tests/check_atlas.loft"
 inputs  = ["assets/atlas.bin"]               # a test OVER a generated data file
 ```
 
-Every field maps cleanly to a form control (Slice 5).
+Every field maps cleanly to a form control (see below).
+
+## Form-control mapping — Slice 5
+
+Slice 5 was never "build a UI in this repo"; it is the **design constraint** that the
+config be UI-friendly (form-shaped) so an external authoring UI can bind to it. That
+constraint is **satisfied by construction** — every field is a scalar, an enum, a
+string-list, or a duration, with no free-form nesting a form can't render:
+
+| Section | Field | Form control |
+|---|---|---|
+| `[build]` | `default-targets` | multi-select over the known targets |
+| `[build.target.<name>]` | `shape` | select (`native`/`html`/`wasi`) |
+| | `triple` | text (or select of installed triples) |
+| | `features` | tag-list |
+| | `requires.rust-targets` / `requires.tools` | tag-lists (validated against rustup / PATH) |
+| `[[build.asset]]` | `name` | text · `run` file-picker/command · `inputs`/`outputs` path-lists · `targets` multi-select · `lifetime` number + unit dropdown |
+| `[[test]]` | `name` | text · `run` file-picker · `targets`/`needs` multi-selects · `inputs` path-list |
+
+The **same pure functions** a form UI would call to validate a field
+(`build_phase::resolve_target`, `missing_requires`, `parse_duration`, `test_backend`,
+`unmet_needs`, `glob_expand`) are the ones an IDE calls for on-the-fly soundness
+checks — so building the config form-shaped is exactly what makes IDE/UI integration
+cheap. See the IDE-validation note in the plan discussion.
 
 ## Sub-arcs
 
