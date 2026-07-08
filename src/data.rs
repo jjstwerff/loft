@@ -2913,6 +2913,11 @@ pub struct Data {
     use_names: HashMap<String, u16>,
     /// Current source file
     pub source: u16,
+    /// @PLN101 — struct def_nrs declared `value struct`: a value (copy) type stored inline
+    /// wherever it lives (record field / vector element already inline out-of-the-box), never
+    /// aliased via a DbRef, non-null. A thin marker (a set, not a Definition field — those
+    /// serialize) consulted by the few value-semantics chokepoints.
+    pub value_structs: HashSet<u32>,
     used_definitions: HashSet<u32>,
     used_attributes: HashSet<(u32, usize)>,
     /// This definition is referenced by a specific definition, the code is used to update this
@@ -3111,6 +3116,7 @@ impl Data {
             def_names: HashMap::new(),
             use_names: HashMap::new(),
             source: STD_SOURCE,
+            value_structs: HashSet::new(),
             used_definitions: HashSet::new(),
             used_attributes: HashSet::new(),
             referenced: HashMap::new(),
@@ -3939,6 +3945,14 @@ impl Data {
             }
         }
         u32::MAX
+    }
+
+    /// @PLN101 — is this struct def declared `value struct`? A value (copy) type stored
+    /// inline (record field / vector element already inline out-of-the-box), never aliased,
+    /// non-null. Consulted by the value-semantics chokepoints.
+    #[must_use]
+    pub fn is_value_struct(&self, d_nr: u32) -> bool {
+        self.value_structs.contains(&d_nr)
     }
 
     /// @PLN99 Arc A completion — resolve ONLY a user-defined operator METHOD

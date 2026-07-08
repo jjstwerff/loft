@@ -2233,7 +2233,25 @@ impl Parser {
 
     // @F12 — struct records (fields, `= default`, `computed`, `limit`/`not null`/`assert`)
     pub(crate) fn parse_struct(&mut self) -> bool {
+        // @PLN101 — optional `value` modifier: `value struct T {…}` marks T a value (copy,
+        // inline, non-null) type. `value` is a plain IDENTIFIER (not a keyword), so peek it
+        // (`has_token` only matches Token lexemes) and consume only the `value struct` prefix.
+        let is_value = matches!(
+            self.lexer.peek().has,
+            crate::lexer::LexItem::Identifier(ref t) if t == "value"
+        );
+        if is_value {
+            self.lexer.cont();
+        }
         if !self.lexer.has_token("struct") {
+            if is_value {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "`value` must be followed by `struct`"
+                );
+                return true;
+            }
             return false;
         }
         let Some(id) = self.lexer.has_identifier() else {
@@ -2305,6 +2323,10 @@ impl Parser {
         }
         let context = self.context;
         self.context = d_nr;
+        // @PLN101 — mark the value-struct kind now that d_nr is the confirmed struct def.
+        if is_value {
+            self.data.value_structs.insert(d_nr);
+        }
         self.lexer.token("{");
         // #91: collect init field dependency info for circular detection.
         let mut init_deps: Vec<(String, Vec<String>)> = Vec::new();
