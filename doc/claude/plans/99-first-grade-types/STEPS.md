@@ -218,5 +218,20 @@ as 3-backend script tests, green.
   struct with a `t_<len><Type>_to_text` method routes through it (regression
   `tests/scripts/512-first-grade-format.loft`), else the generic dump (no regression:
   format 127, expressions 11, issues 748, wrap 51).
-- **Arc B Part 2 (thread `{x:spec}` + spec-parse branch) — not started.**
-- **Arc C (conversions) — not started.**
+- **Arc B Part 2 (thread `{x:spec}`) — LOCATED, not implemented.** In
+  `src/parser/objects.rs` the format spec after `:` is parsed at ~`:1509` (`:`
+  consumed), and a bare identifier like `date`/`dollars` is parsed as a **width
+  expression** at `:1544` (`self.expression(&mut state.width)`) → "Unknown variable
+  'dollars'". `tp` (the value type) is known at `:1493`. Fix: branch there — if `tp`
+  is a struct with a spec-taking `to_text`, capture the spec token(s) as **raw text**
+  (single-identifier first; arbitrary DSL like `%Y-%m-%d` is v2) instead of the
+  width-expr/radix grammar, and thread it as a `text` arg through
+  `try_bound_to_text_call` (collections.rs) to the `to_text(self, spec)` call.
+  **Load-bearing constraint (DESIGN):** the raw-vs-grammar branch must be
+  **pass-stable** — pass 1 and pass 2 must both take the raw branch (the
+  `t_<len><Type>_to_text` def is discoverable in both), or the token stream desyncs.
+  Delicate (touches the lexer/format path); do with the format+wrap suites as the gate.
+- **Arc C (conversions) — not started.** `x as T` for a custom target: today
+  `"…" as DateTime` silently yields `ms=null` (probe). Dispatch a user conversion via
+  the `OpConv<To>From<From>` / `self.convert` path (`src/parser/fields.rs`), else clean-
+  reject; special-case `text as T` (parse); integrate `as T ?? default` (#512).
