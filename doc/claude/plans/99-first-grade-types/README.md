@@ -150,6 +150,8 @@ Vary ONE axis per probe, hand-compute each cell, run both backends:
 
 ## See also
 
+- **[STEPS.md](STEPS.md) — the detailed, verifiable implementation steps** (each
+  step: change + a probe with hand-computed expected output, both backends).
 - [`lib_plans/21-datetime/DESIGN.md`](../../lib_plans/21-datetime/DESIGN.md) — the
   format-hook design (Part 1+2) + the DateTime struct that consumes this; **correct
   its claim** that direct-use operators need no core work (they do — Arc A).
