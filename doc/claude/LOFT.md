@@ -1389,6 +1389,27 @@ rather than a bag of functions.  Mark the type and these functions `pub` to use 
   `s as T` dispatches it: `"2026-07-08" as DateTime`, `"#ff0000" as Colour`, `"1.5" as Decimal`.
   With no matching conversion, `as T` is a clean compile error (not a silent mis-cast).
 
+**When to reach for this — and which library types still should.**  A type earns
+the full treatment when it hits all four axes `DateTime` does: **(1)** it is one
+value or a small fixed bundle (so `value struct`'s zero-cost copy fits), **(2)**
+it has arithmetic or ordering meaning (→ operators), **(3)** it has a canonical
+text form (→ `to_text`), **(4)** it converts to/from a primitive or text (→ `as`).
+`DateTime` / `Duration` (the `time` lib) are the shipped exemplars.  Prime
+un-upgraded candidates in the current libraries, highest-leverage first:
+
+- **`Colour`** — today a bare packed `integer` in `graphics` / `imaging` with
+  hand-rolled `rgb()` / `color_r()` free functions (the exact pre-`DateTime`
+  shape).  A `value struct Colour { packed: integer }` with blend/scale
+  operators, a `{c:#}` → `#RRGGBB` `to_text`, and `Colour ↔ integer` / `↔ text`
+  conversions packs **flat** in pixel buffers (no heap cost) and is the clearest
+  next dogfood — it exercises every part of the machinery, as `DateTime` did.
+- **`Vec2` / `Vec3` / `Rect` / `Point`** — today plain **heap** structs with
+  `add3` / `scale3` / `dot3` free functions; as zero-cost value structs with
+  `+` / `*` / `dot` operators they allocate flat in a vector, so the win lands
+  exactly where you make thousands of them (meshes, particles, physics).
+- **`Version`** (registry semver — hand-rolled parse + compare), **`Angle`**, and
+  a units family (`ByteSize`, `Money` / `Decimal`) round out the list.
+
 ---
 
 ## Methods and function calls
