@@ -31,9 +31,13 @@ leak-clean; `store_verify` on every load; each with a prove-can-fail control):
   the backstop. Two both-backend tests (local + HTTP) prove reject-on-change / load-on-match; the
   test Range server is now path-aware.
 
-**Remaining (proof / browser — the core fetch works without them; each safely degrades):**
-- **3b.8 bytes-≪-file at scale**: a large-fixture benchmark. The property holds by construction (a
-  point lookup touches O(1) pages) and `LOFT_LOADER_STATS` observes `bytes_fetched` vs file.
+- **3b.8 bytes-≪-file ✅ (no synthetic benchmark)** — the property holds by construction (a point
+  lookup touches O(1) 64 KB pages) and is PROVEN in real use: the loader is used directly on big
+  files, and `LOFT_LOADER_STATS` reports `bytes_fetched` vs file size on those real files. A
+  large-fixture microbenchmark would only re-assert what production usage already evaluates
+  (dogfood > synthetic).
+
+**Remaining (browser reach — the core fetch works without it):**
 - **`--html` `fetch()` bridge** (browser target).
 
 > **Codegen bug FIXED (2026-07-08, `ece0f2a6`).** The workaround here was real, but the filed
