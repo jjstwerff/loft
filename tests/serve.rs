@@ -509,24 +509,39 @@ fn serve_ws_debug_cycle_eval_and_resume_through_server() {
             "{{\"id\":2,\"req\":\"setBreakpoints\",\"file\":\"{jfile}\",\"breakpoints\":[{{\"line\":6}}]}}"
         ),
     );
-    assert!(ws_recv(&mut ws).contains("\"ok\":true"), "setBreakpoints ok");
+    assert!(
+        ws_recv(&mut ws).contains("\"ok\":true"),
+        "setBreakpoints ok"
+    );
     ws_send(ws.get_ref(), "{\"id\":3,\"req\":\"run\"}");
     let stopped = recv_until(&mut ws, 6, |m| m.contains("\"event\":\"stopped\"")).join("\n");
-    assert!(stopped.contains("\"function\":\"main\""), "stopped in main: {stopped}");
+    assert!(
+        stopped.contains("\"function\":\"main\""),
+        "stopped in main: {stopped}"
+    );
 
     // EVAL over the socket — the live-frame path the server relays to the client.
     // The keyed-collection read (`h["a"].v`) is the P1b capability (was null).
-    ws_send(ws.get_ref(), "{\"id\":4,\"req\":\"eval\",\"expr\":\"2 + 2\"}");
+    ws_send(
+        ws.get_ref(),
+        "{\"id\":4,\"req\":\"eval\",\"expr\":\"2 + 2\"}",
+    );
     assert!(
         ws_recv(&mut ws).contains("\"id\":4,\"ok\":true,\"value\":4"),
         "2+2 == 4 over the server (text path)"
     );
-    ws_send(ws.get_ref(), "{\"id\":5,\"req\":\"eval\",\"expr\":\"h[\\\"a\\\"].v\"}");
+    ws_send(
+        ws.get_ref(),
+        "{\"id\":5,\"req\":\"eval\",\"expr\":\"h[\\\"a\\\"].v\"}",
+    );
     assert!(
         ws_recv(&mut ws).contains("\"id\":5,\"ok\":true,\"value\":7"),
         "h[\"a\"].v == 7 over the server (P1b keyed live-frame eval)"
     );
-    ws_send(ws.get_ref(), "{\"id\":6,\"req\":\"eval\",\"expr\":\"h[\\\"a\\\"].v + x\"}");
+    ws_send(
+        ws.get_ref(),
+        "{\"id\":6,\"req\":\"eval\",\"expr\":\"h[\\\"a\\\"].v + x\"}",
+    );
     assert!(
         ws_recv(&mut ws).contains("\"id\":6,\"ok\":true,\"value\":12"),
         "h[\"a\"].v + x == 12 over the server (keyed + scalar)"
@@ -539,7 +554,10 @@ fn serve_ws_debug_cycle_eval_and_resume_through_server() {
         done.contains("\"category\":\"stdout\",\"text\":\"y=12\""),
         "continue runs to completion with the right output: {done}"
     );
-    assert!(done.contains("\"event\":\"terminated\""), "terminated: {done}");
+    assert!(
+        done.contains("\"event\":\"terminated\""),
+        "terminated: {done}"
+    );
     let _ = std::fs::remove_file(&path);
 }
 

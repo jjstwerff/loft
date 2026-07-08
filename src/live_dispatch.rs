@@ -346,6 +346,71 @@ pub fn wasm_host_log(msg: &str) {
     let _ = msg;
 }
 
+/// @PLN98 P3.4 — run the cooperative debug cycle (P3.2) entirely inside the
+/// current runtime and REPORT it, so a headless `--html` run can confirm the
+/// interpreter's breakpoint pause + frame read + resume work on wasm32 (the
+/// make-or-break the browser debugger needs).  Parses a tiny self-contained
+/// program, sets a breakpoint, runs it — `execute_argv` returns at the breakpoint
+/// (a cooperative yield, NOT a block) — reads the paused frame's arg, steps one
+/// line (computing `m`), and resumes to completion.  The returned string encodes
+/// the outcome (`PAUSE n=… STEP m=… DONE=…`); identical on native and wasm.
+#[must_use]
+pub fn wasm_debug_selftest() -> String {
+    use crate::debugger::StepMode;
+    let mut p = Box::new(crate::parser::Parser::new());
+    for (name, content) in crate::stdlib_sources::STDLIB_SOURCES {
+        if !p.parse_source(content, name, true) {
+            return format!("FAIL parse-stdlib {name}");
+        }
+    }
+    let prog = "fn compute(n: integer) -> integer {\n  m = n + 2;\n  m\n}\n\
+                fn main() { compute(40); }\n";
+    p.parse_source(prog, "selftest.loft", false);
+    if p.diagnostics.level() >= crate::diagnostics::Level::Error {
+        return "FAIL parse-prog".to_string();
+    }
+    crate::scopes::check(&mut p.data);
+    let mut state = Box::new(State::new(p.database.clone()));
+    crate::compile::byte_code(&mut state, &mut p.data);
+    let d = p.data.def_nr("n_compute");
+    if d == u32::MAX || state.set_breakpoint_fn_line(d, 2, &p.data).is_none() {
+        return "FAIL no-breakpoint".to_string();
+    }
+    state.enable_stepping();
+    // execute_argv returns at the breakpoint (cooperative pause).
+    state.execute_argv("main", &p.data, &[]);
+    if !state.is_paused() {
+        return "FAIL no-pause".to_string();
+    }
+    let n = state
+        .paused_frame()
+        .and_then(|f| {
+            f.locals
+                .iter()
+                .find(|(k, _)| k == "n")
+                .map(|(_, v)| v.clone())
+        })
+        .unwrap_or_else(|| "?".to_string());
+    // Resume one step — the `m = n + 2` line — and read the computed value.
+    let still = state.debug_step(StepMode::Into, &p.data);
+    let m = if still {
+        state
+            .paused_frame()
+            .and_then(|f| {
+                f.locals
+                    .iter()
+                    .find(|(k, _)| k == "m")
+                    .map(|(_, v)| v.clone())
+            })
+            .unwrap_or_else(|| "?".to_string())
+    } else {
+        "gone".to_string()
+    };
+    // Resume to completion.
+    let done = !state.debug_step(StepMode::Continue, &p.data);
+    format!("PAUSE n={n} STEP m={m} DONE={done}")
+}
+
 /// The dispatch chokepoint: swap the program world into the parked State,
 /// re-enter the interpreter, swap it back out.  Every `live_call_*` routes
 /// through here — the sentinel and the sharing model live in ONE place.
@@ -955,5 +1020,17 @@ mod tests {
         let stores = super::bootstrap_from_bytes(FNS, "fn main() {\n  print(\"hi\")\n}\n")
             .expect("bootstrap_from_bytes succeeds");
         assert!(!stores.types.is_empty(), "parked world carries a schema");
+    }
+}
+
+#[cfg(test)]
+mod p98_selftest_tests {
+    // The debug selftest (cooperative pause + frame read + resume) must produce
+    // the expected outcome natively; the SAME code runs on wasm (verified via the
+    // html_wasm harness), so a divergence there is a wasm bug.
+    #[test]
+    fn wasm_debug_selftest_runs_the_cooperative_cycle() {
+        let r = super::wasm_debug_selftest();
+        assert_eq!(r, "PAUSE n=40 STEP m=42 DONE=true", "debug cycle: {r}");
     }
 }

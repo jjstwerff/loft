@@ -158,16 +158,19 @@ fn run_html_wasm_with_libs_and_assets(
     lib_dirs: &[&str],
     assets: &[PathBuf],
 ) -> Option<(String, String, bool)> {
-    run_html_wasm_full(name, source, lib_dirs, assets, &[])
+    run_html_wasm_full(name, source, lib_dirs, assets, &[], "tools/wasm_repro.mjs")
 }
 
-/// As above, plus arbitrary extra `loft --html` flags (e.g. `--debug=<name>`).
+/// As above, plus arbitrary extra `loft --html` flags (e.g. `--debug=<name>`) and a
+/// choice of Node harness (`wasm_repro.mjs` runs `loft_start`; a debug harness may
+/// call another export).
 fn run_html_wasm_full(
     name: &str,
     source: &str,
     lib_dirs: &[&str],
     assets: &[PathBuf],
     extra_args: &[&str],
+    harness_rel: &str,
 ) -> Option<(String, String, bool)> {
     if which("node").is_none() {
         eprintln!("SKIP: node not installed");
@@ -252,8 +255,8 @@ fn run_html_wasm_full(
     let bytes = base64_decode_standard(b64).expect("decode wasmB64");
     std::fs::write(&wasm, &bytes).expect("write extracted wasm");
 
-    let harness = repo_root().join("tools/wasm_repro.mjs");
-    assert!(harness.exists(), "tools/wasm_repro.mjs missing");
+    let harness = repo_root().join(harness_rel);
+    assert!(harness.exists(), "{harness_rel} missing");
 
     let out = Command::new("node")
         .arg(&harness)
@@ -979,9 +982,14 @@ fn html_debug_client_dispatches_to_the_interpreter_on_wasm() {
     let source = "fn addup(a: integer, b: integer) -> integer {\n  a + b\n}\n\
                   fn triple(x: integer) -> integer {\n  addup(x, addup(x, x))\n}\n\
                   fn main() {\n  print(\"triple(14)={triple(14)}\")\n}\n";
-    let Some((stdout, stderr, ok)) =
-        run_html_wasm_full("p98_debug_dispatch", source, &[], &[], &["--debug=alice"])
-    else {
+    let Some((stdout, stderr, ok)) = run_html_wasm_full(
+        "p98_debug_dispatch",
+        source,
+        &[],
+        &[],
+        &["--debug=alice"],
+        "tools/wasm_repro.mjs",
+    ) else {
         return; // skipped: no node / no wasm target / no release loft
     };
     let all = format!("{stdout}{stderr}");
@@ -1000,5 +1008,35 @@ fn html_debug_client_dispatches_to_the_interpreter_on_wasm() {
     assert!(
         all.contains("triple(14)=42"),
         "the interpreted dispatch produced the correct result: {all}"
+    );
+}
+
+// @PLN98 P3.4 — the interpreter's COOPERATIVE DEBUG CYCLE (breakpoint pause +
+// frame read + resume, P3.2) verified IN THE BROWSER WASM RUNTIME (headless node).
+// The `--debug` build exports `loft_debug_selftest`, which runs the exact cycle
+// (set a breakpoint, run — `execute_argv` returns at the breakpoint, read the
+// paused frame's local, step, resume) and reports the outcome; identical to the
+// native result. This proves the make-or-break browser pause works on wasm32.
+#[test]
+fn html_debug_cooperative_pause_cycle_runs_on_wasm() {
+    let Some((stdout, stderr, ok)) = run_html_wasm_full(
+        "p98_debug_selftest",
+        "fn main() { print(\"x\") }\n",
+        &[],
+        &[],
+        &["--debug=alice"],
+        "tools/wasm_debug_selftest.mjs",
+    ) else {
+        return;
+    };
+    let all = format!("{stdout}{stderr}");
+    assert!(ok, "the debug-selftest harness failed: {all}");
+    assert!(
+        all.contains("PAUSE n=40 STEP m=42 DONE=true"),
+        "the cooperative debug cycle ran on wasm: {all}"
+    );
+    assert!(
+        all.contains("RETURN=1"),
+        "the selftest reported success: {all}"
     );
 }
