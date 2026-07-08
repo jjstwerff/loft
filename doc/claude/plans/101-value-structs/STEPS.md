@@ -92,6 +92,44 @@ so it is NOT the target — cycles + indirection are), plus a structural "no scr
 
 ---
 
+## Slice 1 — APPROACH: an ISOLATED copy pass (user, 2026-07-08) — NOT wired into the type system
+
+**Decision (supersedes the `Type::Value` approach below).** Threading a distinct `Type::Value`
+through the type system caused a broad blast radius (an `if let Type::Reference` sweep across
+many runtime sites + an unbounded embedded-size refinement). Reverted (commit 1240f459). Value
+structs **stay `Type::Reference`**, marked only by `Data.value_structs` (Step 1.1). Value (copy)
+semantics is a **single self-contained IR pass** — no type-system wiring, no assignment-path
+surgery, no ownership-oracle change.
+
+**The pass — `value_struct_copy(data)` in `src/scopes.rs`, called from `check()` AFTER
+`move_elide` and BEFORE the ownership scan (`scan_set`).** Mirrors `move_elide`'s shape (clone
+each fn's `code`, rewrite, write back). For each `Set(v, rhs)` where `v`'s type is
+`Type::Reference(P)` with `is_value_struct(P)` AND `rhs` is a VIEW
+(`use_analysis::ownership_of(data, d_nr, rhs) == Own::Borrowed` — a field/element read), rewrite:
+
+```
+Set(v, rhs)  →  Insert([
+    Set(v, Null),
+    Call(OpDatabase,   [Var(v), Int(P.known_type)]),   // v gets its own fresh store
+    Call(OpCopyRecord, [rhs,    Var(v), Int(P.known_type)]),  // deep-copy the view into v
+])
+```
+
+Then **clear `v`'s view dep** (`variables.tp(v)` → `Type::Reference(P, Deps::none())`) so `v` is
+Owned and freed at scope exit (no leak, no double-free). Because `v = OpDatabase(…)`, the
+ownership scan that runs next classifies `v` `Owned` **correctly** (via `db_vars`) — sound, no
+oracle change. Copy-elision is free: an already-`Owned` rhs (a fresh `P{…}`) isn't a view →
+skipped. Method params (`self`/`both`) are untouched — a call arg is not a `Set(local, …)`, so it
+stays a DbRef into the store (zero-copy hot path).
+
+**Why this is less complex:** ~1 self-contained function + a recursive `Value` walk (mirror
+`build_scope_parents`); reuses `OpDatabase`/`OpCopyRecord`/`ownership_of` (all exist); touches no
+`Type` match, no size function, no `Type::Reference` site. **Verify (both backends + leak + UAF):**
+`value struct P { x: integer }`, `b.items=[P{x:1}]`, `e = b.items[0]; e.x = 99` ⇒
+`b.items[0].x == 1`; ownership_oracle clean; full suite green. Then flip `515`.
+
+---
+
 ## Slice 1 — REFOCUSED (user, 2026-07-08): value structs as FIELDS + VECTOR ELEMENTS
 
 **Scope cut:** do NOT eliminate the DbRef for a standalone local `value struct` variable — a
