@@ -6,6 +6,33 @@
 //! Phase 1: pure-loft package layout.  A simple line-scanner is sufficient
 //! for the three fields needed here; no full TOML parser is required.
 
+/// @PLN100 Slice 2 — one declared build target from `[build.target.<name>]`: a
+/// named (shape × triple × feature-set) the `loft build` driver can produce, with
+/// the toolchain it `requires`.  Overlays a built-in target of the same name
+/// (`native` / `html` / `wasi`) or adds a new one; empty fields keep the built-in
+/// default (`build_phase::resolve_target`).
+#[derive(Debug, Default, Clone)]
+pub struct BuildTarget {
+    /// The target's name — the key in `[build.target.<name>]` and what
+    /// `loft build <name>` / `default-targets` refer to.
+    pub name: String,
+    /// The compile shape that names the driver action: `native` (→ `--native`),
+    /// `html` (→ `--html`), or `wasi` (→ `--native-wasm`).  `None` → defaults to
+    /// the built-in of the same name, else `native`.
+    pub shape: Option<String>,
+    /// The rustc/rustup target triple (informational + the default entry of
+    /// `requires.rust-targets`).
+    pub triple: Option<String>,
+    /// Cargo features the shape's runtime rlib is built with (`[…] features = [...]`).
+    pub features: Vec<String>,
+    /// `[build.target.<name>.requires] rust-targets = [...]` — rustup targets that
+    /// must be installed for this target to build.
+    pub requires_rust_targets: Vec<String>,
+    /// `[build.target.<name>.requires] tools = [...]` — external tools that must be
+    /// on `PATH` (e.g. `wasm-opt`).
+    pub requires_tools: Vec<String>,
+}
+
 /// Content of a library's `loft.toml` manifest file.
 #[derive(Debug, Default)]
 pub struct Manifest {
@@ -93,6 +120,31 @@ pub struct Manifest {
     /// source-scanned `#native` symbols).  The resolver side that acts on this
     /// is separate, future work; today this is parsed metadata.
     pub trigger_enabled: bool,
+    /// @PLN100 Slice 2 — `[build] default-targets = [...]`: which targets
+    /// `loft build` makes when given no target names.  Empty → the driver falls
+    /// back to `["native"]` so a zero-config project still builds.
+    pub build_default_targets: Vec<String>,
+    /// @PLN100 Slice 2 — the `[build.target.<name>]` entries.  Each overlays a
+    /// built-in target (`native` / `html` / `wasi`) or declares a new one.
+    pub build_targets: Vec<BuildTarget>,
+}
+
+impl Manifest {
+    /// @PLN100 Slice 2 — the `[build.target.<name>]` entry for `name`, creating an
+    /// empty one on first mention so later `[build.target.<name>.requires]` lines
+    /// attach to the same target regardless of section order.
+    fn build_target_mut(&mut self, name: &str) -> &mut BuildTarget {
+        if let Some(pos) = self.build_targets.iter().position(|t| t.name == name) {
+            return &mut self.build_targets[pos];
+        }
+        self.build_targets.push(BuildTarget {
+            name: name.to_string(),
+            ..Default::default()
+        });
+        self.build_targets
+            .last_mut()
+            .expect("just pushed a build target")
+    }
 }
 
 /// Read and parse a `loft.toml` file at `path`.
@@ -111,6 +163,34 @@ pub fn read_manifest(path: &str) -> Option<Manifest> {
         if let Some((key, value)) = line.split_once('=') {
             let key = key.trim();
             let value = value.trim().trim_matches('"');
+            // @PLN100 Slice 2 — the [build] section uses dynamic
+            // [build.target.<name>] / [build.target.<name>.requires] headers the
+            // literal match below cannot express, plus single-line array values.
+            if section == "build" {
+                if key == "default-targets" {
+                    manifest.build_default_targets = parse_array(value);
+                }
+                continue;
+            }
+            if let Some(rest) = section.strip_prefix("build.target.") {
+                if let Some(tname) = rest.strip_suffix(".requires") {
+                    let t = manifest.build_target_mut(tname);
+                    match key {
+                        "rust-targets" => t.requires_rust_targets = parse_array(value),
+                        "tools" => t.requires_tools = parse_array(value),
+                        _ => {}
+                    }
+                } else {
+                    let t = manifest.build_target_mut(rest);
+                    match key {
+                        "shape" => t.shape = Some(value.to_string()),
+                        "triple" => t.triple = Some(value.to_string()),
+                        "features" => t.features = parse_array(value),
+                        _ => {}
+                    }
+                }
+                continue;
+            }
             match (section.as_str(), key) {
                 ("package", "name") => manifest.name = Some(value.to_string()),
                 ("package", "version") => manifest.version = Some(value.to_string()),
@@ -158,6 +238,24 @@ pub fn read_manifest(path: &str) -> Option<Manifest> {
         }
     }
     Some(manifest)
+}
+
+/// @PLN100 Slice 2 — parse a single-line TOML array value into its string items:
+/// `["random"]` → `["random"]`, `[ "a", "b" ]` → `["a", "b"]`.  Tolerates a value
+/// with or without the surrounding brackets (a bare `"a, b"` is treated as a list
+/// too).  Multi-line arrays are not supported (the line-scanner sees one line).
+fn parse_array(value: &str) -> Vec<String> {
+    let inner = value
+        .trim()
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .unwrap_or(value);
+    inner
+        .split(',')
+        .map(|s| s.trim().trim_matches('"').trim())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 /// @PLN21 Phase 2 — parse a comma-separated manifest value into a trimmed,
@@ -405,6 +503,48 @@ gl_create = "graphics_native::webgl::create_canvas"
                 "graphics_native::webgl::create_canvas".to_string()
             )
         );
+    }
+
+    // @PLN100 Slice 2 — the [build] section: default-targets array,
+    // [build.target.<name>] keys, and the [build.target.<name>.requires] subtable
+    // (out-of-order lines attach to the same target).
+    #[test]
+    fn parses_build_section() {
+        let p = write_temp(
+            "build",
+            r#"[package]
+name = "game"
+
+[build]
+default-targets = ["native", "html"]
+
+[build.target.html.requires]
+rust-targets = ["wasm32-unknown-unknown"]
+tools = ["wasm-opt"]
+
+[build.target.html]
+shape = "html"
+triple = "wasm32-unknown-unknown"
+features = ["random", "png"]
+"#,
+        );
+        let m = read_manifest(p.to_str().unwrap()).unwrap();
+        assert_eq!(m.build_default_targets, vec!["native", "html"]);
+        assert_eq!(m.build_targets.len(), 1);
+        let html = &m.build_targets[0];
+        assert_eq!(html.name, "html");
+        assert_eq!(html.shape.as_deref(), Some("html"));
+        assert_eq!(html.triple.as_deref(), Some("wasm32-unknown-unknown"));
+        assert_eq!(html.features, vec!["random", "png"]);
+        assert_eq!(html.requires_rust_targets, vec!["wasm32-unknown-unknown"]);
+        assert_eq!(html.requires_tools, vec!["wasm-opt"]);
+    }
+
+    #[test]
+    fn build_section_absent_by_default() {
+        let p = write_temp("nobuild", "[package]\nname = \"plain\"\n");
+        let m = read_manifest(p.to_str().unwrap()).unwrap();
+        assert!(m.build_default_targets.is_empty() && m.build_targets.is_empty());
     }
 
     #[test]

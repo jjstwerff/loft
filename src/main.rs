@@ -176,6 +176,10 @@ fn print_help() {
         "  sandbox-check <file>          report the @PLN86 sandbox admission verdict and STOP"
     );
     println!("                                (Admitted / Rejected + diagnostics; never executes)");
+    println!("  build [target...]             build the project's declared / default targets");
+    println!("                                build            — build [build] default-targets");
+    println!("                                build html wasi  — build the named targets");
+    println!("                                (targets: native | html | wasi | [build.target.*])");
     println!("  test [target]                 run package tests (requires loft.toml in cwd)");
     println!("                                test         — run all tests in tests/");
     println!("                                test draw    — run tests/draw.loft");
@@ -4031,6 +4035,49 @@ fn main() {
             // @PLN12 REPL.S — recognised here only so a bare `loft --fresh`
             // reaches the REPL instead of "unknown option"; `start_repl` reads
             // the flag via an env scan and clears the saved session itself.
+        } else if a == "build" {
+            // @PLN100 Slice 2 — `loft build [target...] [entry.loft]`: build the
+            // named targets (or the manifest's default-targets) for the project in
+            // cwd, resolving each target's toolchain `requires` first.  Collect the
+            // trailing positionals: a `.loft` file overrides the entry, anything
+            // else is a target name.
+            let mut requested: Vec<String> = Vec::new();
+            let mut entry_override: Option<String> = None;
+            while let Some(arg) = argv.get(i) {
+                if arg.starts_with('-') {
+                    break;
+                }
+                if std::path::Path::new(arg)
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("loft"))
+                {
+                    entry_override = Some(arg.clone());
+                } else {
+                    requested.push(arg.clone());
+                }
+                i += 1;
+            }
+            let manifest = if std::path::Path::new("loft.toml").exists() {
+                loft::manifest::read_manifest("loft.toml").unwrap_or_default()
+            } else {
+                loft::manifest::Manifest::default()
+            };
+            let entry = entry_override
+                .or_else(|| manifest.entry.clone())
+                .unwrap_or_else(|| {
+                    let n = manifest.name.clone().unwrap_or_else(|| "main".to_string());
+                    format!("src/{n}.loft")
+                });
+            if !std::path::Path::new(&entry).exists() {
+                eprintln!(
+                    "loft build: entry `{entry}` not found — run in a project dir (with a \
+                     loft.toml declaring [package] entry / name), or pass a .loft file."
+                );
+                std::process::exit(1);
+            }
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let ok = loft::build_phase::run(&requested, &entry, &manifest, &cwd);
+            std::process::exit(i32::from(!ok));
         } else if a == "test" {
             // PKG.6: `loft test [target]` — run package tests.
             // Detects loft.toml in cwd, adds src/ to lib path, runs --tests tests/.

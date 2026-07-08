@@ -930,6 +930,55 @@ compression may vary across libraries.
 
 ---
 
+## The build phase — `loft build` (@PLN100 Slice 2)
+
+`loft build [target...]` builds a project's declared or default **targets** — a
+target is a named (shape × triple × feature-set) with the toolchain it `requires`.
+Built-in targets are **implicit**, so a zero-config project builds with no
+`[build]` section:
+
+| Target | Shape → action | Triple | Requires |
+|---|---|---|---|
+| `native` | `--native --check` (compile-check, no run) | host | rustc/cargo |
+| `html` | `--html` (browser page) | `wasm32-unknown-unknown` | rustup `wasm32-unknown-unknown`; `wasm-opt` (soft) |
+| `wasi` | `--native-wasm` (WASI `.wasm`) | `wasm32-wasip2` | rustup `wasm32-wasip2` |
+
+```bash
+loft build              # build [build] default-targets (or `native` if unset)
+loft build html wasi    # build the named targets
+loft build path.loft    # a .loft positional overrides the entry
+```
+
+The runtime wasm rlib each shape links is auto-built + isolated by Slice 1
+(`target/loft/<shape>/`), so `loft build html` needs no prior `make`.
+
+A `[build]` section **overrides** built-ins or **adds** targets. The
+line-scanner manifest reader (`src/manifest.rs`) takes single-line arrays and a
+`[build.target.<name>.requires]` **subtable** (not an inline table):
+
+```toml
+[build]
+default-targets = ["native", "html"]   # what `loft build` makes with no args
+
+[build.target.html]                      # overlay: keep the built-in shape/triple,
+features = ["random", "png"]             # replace the features it builds with
+
+[build.target.html.requires]
+rust-targets = ["wasm32-unknown-unknown"]
+tools = ["wasm-opt"]
+
+[build.target.mobile]                    # a NEW named target
+shape = "html"                           # required for a non-built-in name
+triple = "wasm32-unknown-unknown"
+```
+
+Before compiling each target, `loft build` **doctor-checks** its `requires`: a
+missing rustup target is a HARD failure (skip the target, print `rustup target
+add …`); a missing tool is a SOFT warning (build proceeds). It exits non-zero if
+any target fails. Resolution + requires logic lives in `src/build_phase.rs`
+(unit-tested); the driver re-invokes this loft binary with the shape's flags per
+target. *(Custom asset steps and the `[test]` phase are Slices 3–4.)*
+
 ## Build pipeline
 
 ### Consumer's view

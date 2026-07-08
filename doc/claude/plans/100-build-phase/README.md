@@ -9,7 +9,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**`status:active` — filed 2026-07-08. Slice 1 SHIPPED (2026-07-08); Slices 2–5 open.** A loft
+**`status:active` — filed 2026-07-08. Slices 1–2 SHIPPED (2026-07-08); Slices 3–5 open.** A loft
 project has no declared build phase: what an artifact needs (which toolchain binaries,
 which prebuilt runtime rlibs, which generated data files) lives only in `Makefile`
 recipes and scattered Rust fallbacks, so it can't be checked or built automatically.
@@ -127,7 +127,7 @@ Every field maps cleanly to a form control (Slice 5).
 | Item | Ships | Status |
 |---|---|---|
 | **Slice 1** — target-dir isolation `target/loft/<shape>/` + auto-build the **loft-runtime** wasm rlib via the existing fingerprint gate | kills the stomp + flaky WASM, retires the manual `make` | **SHIPPED** — `native_utils::ensure_loft_runtime_rlib` (`--html` → isolated `target/loft/html/`; `--native-wasm` auto-builds wasip2), keyed on `loft_build_fingerprint` via the `.loft-build-fp` sidecar; `html_wasm` (16) + `wasm_debug_relay` (1) green |
-| **Slice 2** — `[build]` manifest schema + `loft build` driver (targets + `requires` resolution, doctor-style missing-tool report) | declarative targets | Open |
+| **Slice 2** — `[build]` manifest schema + `loft build` driver (targets + `requires` resolution, doctor-style missing-tool report) | declarative targets | **SHIPPED** — `[build]`/`[build.target.<name>]`/`.requires` in `src/manifest.rs`; `loft build [target...]` driver + built-in native/html/wasi + doctor-check in `src/build_phase.rs` (native→`--native --check`, html→`--html`, wasi→`--native-wasm`) |
 | **Slice 3** — `[[build.asset]]` custom steps with input/output fingerprinting **+ a freshness `lifetime`** (TTL) for external-source-backed outputs (rebuild on age, no source instrumentation) | custom asset pipelines | Open |
 | **Slice 4** — `[test]` phase + `loft test` / `loft check`: run declared tests over each built target and over generated data files (`inputs`), gated on `needs` asset outputs; cache a green run by input fingerprint | declarative test phase | Open |
 | **Slice 5** — UI backing the config | authoring UI | Deferred (later) |
@@ -157,9 +157,11 @@ Every field maps cleanly to a form control (Slice 5).
    does the host-side `loft-ffi` StableCrateId collision (p171/p310) need a per-shape
    *`CARGO_TARGET_DIR`* (like `target/install-lib`)? Measure: reproduce the collision,
    try output-dir-only first, escalate to full target-dir isolation only if it persists.
-2. **Config vs. convention.** Do the built-in targets (`native`/`html`/`wasi`) need to
-   appear in `loft.toml` at all, or are they implicit and only *overridden* there? Lean
-   implicit — zero-config projects still build.
+2. **Config vs. convention.** ✅ RESOLVED (Slice 2) — the built-in targets
+   (`native`/`html`/`wasi`) are **implicit**: a zero-config project builds with no
+   `[build]` section. A `[build.target.<name>]` entry overlays a built-in (per-field
+   replace) or declares a new named target; `default-targets` picks the no-arg set
+   (falls back to `["native"]`). See `build_phase::resolve_target`.
 3. **Asset step sandboxing.** `[[build.asset]].run` executes arbitrary commands — does it
    run under the existing loft sandbox/capability model (@PLN86), or is a build script
    trusted-by-declaration? Lean trusted (it's the project's own manifest) but flag in the
