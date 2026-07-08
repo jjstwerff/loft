@@ -21,6 +21,22 @@ generics/interface investment already dispatches user operators inside bounded
 generics; the three remaining gaps are what keep a library struct from being
 *indistinguishable from a built-in in direct use*.
 
+**Implementation progress (2026-07-08, branch `tuxedo-work`):**
+- **Arc A (direct concrete operator dispatch) — DONE.** `a < b`, `b - a`, `a == b` on
+  a plain user struct now dispatch its `fn OpLt`/`OpMin`/`OpEq` (regression
+  `tests/scripts/511-first-grade-operators.loft`).
+- **Arc B Part 1 + 2 (custom `{x}` / `{x:spec}` format hook) — DONE.** A struct's own
+  `to_text(self)` / `to_text(self, spec)` drives interpolation for ANY struct, not only
+  inside a generic body; built-in `{n:05d}`/`{n:x}` grammar untouched (regression
+  `tests/scripts/512-first-grade-format.loft`).
+- **Arc C (user conversions `x as T`) — DONE.** `"lit" as T`, `var as T`, `structA as B`
+  dispatch a user `fn OpConv<T>From<S>`, leak-free on both backends; no conversion →
+  clean `Unknown cast` error (regression `tests/scripts/513-first-grade-conversions.loft`).
+  See STEPS.md § Implementation status for the three-edit mechanism.
+- **A5 null-equality facet — DIAGNOSED, not fixed.** `s == null` on a custom struct still
+  wrong (deeper @PLN25 lowering issue; executed path diverges from the dumped IR).
+- **Arc D (value structs) — deferred (perf trigger).**
+
 **Probe evidence (2026-07-08, `--interpret` + `--native`, both agree):**
 - `dt + 5` on `struct DateTime { ms: integer }` → **correctly rejected** ("No
   matching operator '+' on 'DateTime' and 'integer'"). Distinct-type safety is

@@ -1936,13 +1936,18 @@ impl Parser {
                     }
                     // else: in range, or DN4 off — accept as a width-tag (value
                     // stays in the 8-byte slot), the pre-DN4 behaviour.
-                } else if !self.convert(code, ctp, &tp) && !self.cast(code, ctp, &tp) {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Error,
-                        "Unknown cast from {} to {tps}",
-                        &ctp.name(&self.data),
-                    );
+                } else {
+                    // @PLN99 Arc C — clear the owned-conversion signal, then let `convert`
+                    // set it iff it dispatches an allocating user conversion (`fn OpConvTFromS`).
+                    self.conv_owned_result = None;
+                    if !self.convert(code, ctp, &tp) && !self.cast(code, ctp, &tp) {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "Unknown cast from {} to {tps}",
+                            &ctp.name(&self.data),
+                        );
+                    }
                 }
                 // Post-2c: remember the cast target alias so `f += x as i32`
                 // can narrow the file-serialisation width.  Only stored when
@@ -1975,8 +1980,16 @@ impl Parser {
                 {
                     rt = Type::optional(rt.base().clone());
                 }
-                for d in ctp.depend() {
-                    rt = rt.depending(d);
+                if let Some(owned) = self.conv_owned_result.take() {
+                    // @PLN99 Arc C — an allocating user conversion produced a FRESH owned
+                    // store.  Use the conversion fn's real return type (Owned deps) and do
+                    // NOT graft the source's deps: the result is not a view of the source, so
+                    // grafting would mark it a borrow and leak the new store at scope end.
+                    rt = owned;
+                } else {
+                    for d in ctp.depend() {
+                        rt = rt.depending(d);
+                    }
                 }
                 // #254: set the current type and fall through to `None` rather
                 // than returning — `as` sits at the top precedence level, so

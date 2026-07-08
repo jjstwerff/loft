@@ -3565,6 +3565,18 @@ impl Data {
         &self.possible[start]
     }
 
+    /// @PLN99 Arc C — register `d_nr` into the `possible[prefix]` operator map.
+    /// A user-defined conversion (`fn OpConvXFromY`) is a global stored `n_OpConv…`,
+    /// so it skips `add_op`'s name-gated registration and never entered `possible` —
+    /// which is the list `convert`'s type-matching OpConv loop searches. Registering
+    /// it here (deduped) lets `x as T` and implicit conversions find a user `S → T`.
+    pub fn register_possible(&mut self, prefix: &str, d_nr: u32) {
+        let slot = self.possible.entry(prefix.to_string()).or_default();
+        if !slot.contains(&d_nr) {
+            slot.push(d_nr);
+        }
+    }
+
     #[must_use]
     pub fn definitions(&self) -> u32 {
         self.definitions.len() as u32

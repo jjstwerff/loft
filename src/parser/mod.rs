@@ -381,6 +381,13 @@ pub struct Parser {
     /// `build_null_coalesce_default`).  Set in the `as` handler, consumed by the
     /// next `??`, and cleared by any other intervening operator.
     pub(crate) dn4_checked_narrow: Option<Type>,
+    /// @PLN99 Arc C — set by `convert` when it dispatches a struct/reference-returning
+    /// USER conversion (`x as T` via `fn OpConvTFromS`).  Such a conversion ALLOCATES a
+    /// fresh owned store, so its result must NOT inherit the source's deps (the reinterpret-
+    /// cast graft would mark it a view and leak the new store).  The `as` handler reads this
+    /// right after `convert` to use the conversion fn's real (Owned) return type as the
+    /// result, then clears it.
+    pub(crate) conv_owned_result: Option<Type>,
     /// Field-binding Set nodes created by `if expr is Variant { field }`.
     /// Drained by `parse_if` and prepended to the if-body so they only
     /// execute when the discriminant matches.
@@ -664,6 +671,7 @@ impl Parser {
             is_capture_bindings: Vec::new(),
             last_cast_alias: u32::MAX,
             dn4_checked_narrow: None,
+            conv_owned_result: None,
             trace_types: false,
             trace_types_lines: Vec::new(),
             field_read_counts: std::collections::HashMap::new(),
@@ -2436,6 +2444,11 @@ impl Parser {
             *code = Value::Call(sentinel_nr, vec![]);
             return true;
         }
+        // @PLN99 Arc C — a struct/reference-returning user conversion carries a hidden
+        // destination parameter (attributes() > 1), so it must go through `call_nr` (whose
+        // `add_defaults` appends the dest).  But `call_nr` needs `&mut self`, and this scan
+        // borrows `self.data` immutably — so record the winner and dispatch it AFTER the loop.
+        let mut struct_conv: Option<u32> = None;
         for &dnr in self.data.get_possible("OpConv", &self.lexer) {
             if self.data.def(dnr).name().ends_with("FromNull") {
                 if *is_type == Type::Null {
@@ -2453,12 +2466,37 @@ impl Parser {
                     }
                 }
             } else if self.data.attributes(dnr) > 0
-                && self.data.attr_type(dnr, 0).is_equal(check_type)
+                && (self.data.attr_type(dnr, 0).is_equal(check_type)
+                    || self.data.attr_type(dnr, 0).is_equal(is_type))
                 && self.data.def(dnr).returned().is_equal(should)
             {
+                // @PLN99 Arc C — for a `Reference` source, `check_type` was flattened to the
+                // generic `reference` (line ~2408) so stdlib `OpConv…FromRef` match any handle.
+                // That hides a specific struct→struct user conversion (`fn OpConvBFromA(a: A)`),
+                // so we ALSO try the concrete `is_type`.  The `returned().is_equal(should)` guard
+                // keeps this exact: a candidate only wins when BOTH its source and target align.
+                if self.data.attributes(dnr) > 1 {
+                    struct_conv = Some(dnr); // struct-returning: dispatch after the loop
+                    break;
+                }
+                // Stdlib primitive conversions (attributes() == 1) keep the direct Call.
                 *code = Value::Call(dnr, vec![code.clone()]);
                 return true;
             }
+        }
+        if let Some(dnr) = struct_conv {
+            // Pass the CONCRETE source type (`is_type`), not the flattened `check_type` —
+            // `process_call_args` needs the real type to wire the argument.  A Null result
+            // means the arg couldn't be wired; leave `code` untouched and report no match.
+            let src = code.clone();
+            let rtp = self.call_nr(code, dnr, &[src], std::slice::from_ref(is_type), false, &[]);
+            if rtp == Type::Null {
+                return false;
+            }
+            // The conversion allocated a fresh owned store; hand its real return type
+            // (Owned deps) to the `as` handler so it does NOT graft the source's deps.
+            self.conv_owned_result = Some(rtp);
+            return true;
         }
         false
     }

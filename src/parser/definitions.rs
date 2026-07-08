@@ -745,6 +745,18 @@ impl Parser {
             if is_generic && d != u32::MAX {
                 self.data.definitions[d as usize].def_type = DefType::Generic;
             }
+            // @PLN99 Arc C — a user-defined conversion `fn OpConvXFromY` / `fn OpCastXFromY`
+            // is a global stored `n_OpConv…`, so it skipped `add_op` and never entered the
+            // `possible` map that `convert`/`cast` search.  Register it (by type-matched
+            // prefix) so `value as T` and implicit conversions dispatch a user `S → T`,
+            // exactly like a built-in — the loop in `convert` still matches on arg/return type.
+            if d != u32::MAX {
+                if fn_name.starts_with("OpConv") {
+                    self.data.register_possible("OpConv", d);
+                } else if fn_name.starts_with("OpCast") {
+                    self.data.register_possible("OpCast", d);
+                }
+            }
             d
         } else if self.default && is_op(&fn_name) {
             self.data.def_nr(&fn_name)

@@ -228,13 +228,27 @@ as 3-backend script tests, green.
   `to_text` def is collected in both passes → both take the raw branch).
   Regression `tests/scripts/512-first-grade-format.loft`; no regression (format 127,
   expressions 11, issues 748, **parse_errors 158**, wrap 51).
-- **Arc C (conversions) — LOCATED, not implemented.** The `as` cast is handled at
-  `src/parser/operators.rs:1852` (`else if operator == "as"`) — a dense block of
-  @PLN25 null-model logic (DN4 range-fit, DN5 nullness, narrowing-int). For a
-  target with no matching `OpConv…` the cast is **type-only** (no value conversion),
-  so `"…" as DateTime` reinterprets the text ref as a struct ref → the silent
-  `ms=null`. Fix: where the target is a custom struct, resolve a user conversion
-  `S → T` (via `find_fn` / the `OpConv<To>From<From>` convention), emit its call,
-  and if none exists **error** instead of the type-only reinterpret; special-case
-  `text as T` (parse); integrate with `as T ?? default` (#512). Delicate — must not
-  disturb the DN4/DN5/narrowing branches; do with the cast/narrowing suites as the gate.
+- **Arc C (conversions) — DONE (2026-07-08).** `value as T` now dispatches a user
+  `fn OpConv<T>From<S>`, so a library struct is a first-grade cast target. Three edits,
+  all type-matched (never name-matched) so they compose with the @PLN25 DN4/DN5/narrowing
+  branches untouched:
+  1. **Registration** (`src/parser/definitions.rs`, first-pass user branch): a global
+     `OpConv…`/`OpCast…` is stored `n_…` and skipped `add_op`, so it never entered the
+     `possible` map `convert` searches. Now registered via `Data::register_possible`
+     (`src/data.rs`) — deduped.
+  2. **Concrete-source match** (`convert`, `src/parser/mod.rs`): a `Reference` source is
+     flattened to the generic `reference` (so stdlib `OpConv…FromRef` match any handle),
+     which hid a specific `fn OpConvBFromA(a: A)`. The OpConv loop now ALSO tries the
+     concrete `is_type`; the `returned().is_equal(should)` guard keeps it exact (a
+     candidate wins only when BOTH source and target align). A struct/reference-returning
+     conversion (`attributes() > 1`: source + hidden dest) is dispatched through `call_nr`
+     (its `add_defaults` appends the dest) — a bare `Value::Call` was one arg short.
+  3. **Owned result / leak** (`as` handler, `src/parser/operators.rs`): the cast grafts the
+     *source's* deps onto the result (correct for a reinterpret), but an allocating
+     conversion produces a FRESH owned store. `convert` now signals this via
+     `conv_owned_result`; the `as` handler uses the conversion fn's real (Owned) return
+     type and skips the graft — otherwise the new store leaks (ownership_oracle guard).
+  Result: `"abcd" as Celsius`, `var as Celsius`, `celsiusVal as Fahrenheit` all work on
+  both backends, leak-free; a target with no conversion still errors (`Unknown cast from …`).
+  Regression: `tests/scripts/513-first-grade-conversions.loft` (auto-run both backends +
+  leak-checked). Full suite: 2690 passed / 7 pre-existing derived-artifact + WASM flakes.
