@@ -130,9 +130,12 @@ ownership oracle `classify` (`src/use_analysis.rs:1329`) classes a projection
 (the `e:ref(P)["b"]` dep), so `e.x = 99` writes through. For value semantics `e` must be `Owned`
 (a copy).
 
-**Do NOT naively flip the oracle to `Owned` — it is UNSOUND** (over-free / UAF: `e` would be
-marked owning a store it doesn't own — the "projection local mis-classed Owned" hazard the oracle
-comments call out). The `Owned` verdict and the deep-copy MUST be coordinated.
+**Do NOT naively flip the oracle to `Owned` — CONFIRMED UNSOUND (2026-07-08).** `scan_set`'s
+`ref_rhs_ownership → Owned` (`scopes.rs:2299`) only records `owned_refs` (for free emission) — it
+does NOT clear `e`'s type dep (`["b"]`) NOR emit the copy. So an oracle flip makes `e` both ALIAS
+`b`'s element AND free it at scope exit → double-free (the "projection local mis-classed Owned"
+hazard). The dep-clearing + deep-copy both happen at **PARSE time**, so the sound hook is the
+parse-level `OpDatabase + OpCopyRecord` (below), NOT the oracle. Verified against `scan_set`.
 
 **Safe approach (no oracle change — reuse existing ops).** At the value-struct bind site, when the
 RHS classifies `Borrowed` (a view — `use_analysis::ownership_of(data, fn, rhs)`, read-only),
