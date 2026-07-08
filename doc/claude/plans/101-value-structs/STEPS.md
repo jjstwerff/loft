@@ -121,7 +121,15 @@ a `struct` with a `DateTime` field; every assertion green + no leak, both backen
 Verified: parses + a value struct as a vector element stores inline out-of-the-box, both backends;
 no regression (issues 748).
 
-### Step 1.2 — the isolated copy pass: `value_struct_copy(data)` in `src/scopes.rs`
+### Step 1.2 — the isolated copy pass — DONE (commit 8a0abc79)
+Implemented `value_struct_copy(data)` + `vs_copy_walk` in `src/scopes.rs` exactly as specified
+below. **Works, both backends:** `e = b.items[0]; e.x = 99` ⇒ `b.items[0].x == 1` (copy);
+field-read + vector-element-read + loop-bind all copy; operators (@PLN99) still dispatch;
+leak-free, clean exit. **No regression** — full suite 2690 passed / 7 pre-existing cdylib+WASM
+flakes. ~100 lines, no type-system wiring. (Broaden the `Borrowed`-only trigger to local-to-local
+value-struct binds later if needed; the field/element target — the stated scope — is covered.)
+
+#### Step 1.2 spec (as implemented)
 Called from `scopes::check()` AFTER `move_elide` and BEFORE the ownership scan (`scan_set`).
 Mirrors `move_elide`'s shape: clone each fn's `code`, rewrite, write back. For each `Set(v, rhs)`
 where `v`'s type is `Type::Reference(P)` with `is_value_struct(P)` AND `rhs` is a VIEW
