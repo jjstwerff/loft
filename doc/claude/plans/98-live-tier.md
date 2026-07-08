@@ -5,10 +5,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # 98 — Live/debug tier: one primitive (the interpreter over the shared live store)
 
-**Status (2026-07-08):** P1 ✅ P2 ✅ P1b ✅ P3.1 ✅ P3.2 ✅ P3.3-routing ✅ P3.4-opt-in ✅ LANDED; the
-tier CORE verified on wasm too (dispatch + cooperative pause). OPEN: P3.4 client-control wiring
-(un-gate a wasm `debug_cmd_dispatch` subset + wire `route_input_frame` into the wasm `host_input`) +
-the server per-name forward relay (the server-authoritative debug path is already verified). ·
+**Status (2026-07-08):** P1 P2 P1b P3.1 P3.2 P3.3 P3.4 ✅ ALL LANDED. The full browser debug tier is
+proven end-to-end and headless: an agent debugs a `--html --debug` wasm client THROUGH an engine_host
+server over WebSockets (bp → pause → eval → resume), verified by
+`wasm_debug_relay::agent_debugs_a_browser_wasm_client_through_the_server_relay`. Remaining is polish
+only (full-expression eval on the wasm client — the P1b orchestration is native-only `repl` today; the
+one-heap write/read equivalence check; multi-file embedded source; the tier-wide default-lean flip). ·
 [`@PLN98`](https://github.com/loft-lang/plans/issues/98) · `subject:loft` · design-doc-first (Design
 Protocol 1). Consumers: the `@PLN16` debugger, the game / `engine_host` loop, and `routing`'s offline
 `--html` build (its `loft-feedback.md` 2026-07-07).
@@ -359,20 +361,28 @@ Chromium works unsandboxed (`html_asyncify` passes). Two tests prove the interpr
 - Also fixed en route: `emit_native_main` spawned a large-stack thread unconditionally → every wasip2
   binary aborted (`Os code 58`); now inline on `wasm32`, thread only on native (commit d73d2df0).
 
-2. **Client debug CONTROL wiring — REMAINING (unbuilt, no longer blocked).** The core (bootstrap,
-   dispatch, cooperative pause, eval, resume) is proven on wasm; what's missing is the interactive
-   control channel. `debug_cmd_dispatch` + the mailbox/`debug_set_bp` machinery is `#[cfg(not(wasm32))]`
-   (threads / TCP / process-spawn `rebuild`). Un-gate a wasm subset (drop `rebuild`/`swap`; the pause is
-   P3.2's cooperative yield, NOT the blocking `debug_pause_loop`) and wire `route_input_frame` (P3.3)
-   into the wasm `host_input` pump so the client applies relayed `D!:` frames + returns output.
-3. **Server relay + acceptance — REMAINING.** Server rule: a `D!:` frame addressed to client `<name>` →
-   that client's WebSocket; relay its debug output back (per-name registration + forward). Acceptance
-   (headless-Chromium — works unsandboxed): breakpoint + `eval` a vector expr → value; edit a fn → the
-   live world updates; a compiled write then an interpreted read of the same var agree (one heap). NB:
-   the server-side of this is ALREADY proven for a server-authoritative game —
-   `engine_host_kernel::debugger_drives_a_running_game_server_over_websocket` (bp → event pause → eval →
-   resume over the real `D!:` channel) and `serve::serve_ws_debug_cycle_eval_and_resume_through_server`
-   (the P1b keyed eval over the WebSocket); what remains is the forward-to-a-separate-client hop.
+2. **Client debug CONTROL wiring ✅ LANDED (2026-07-08).** `src/wasm_debug.rs` is the browser client: the
+   program runs INTERPRETED over a parked `State`, breakpoints pause it cooperatively (P3.2 — no block),
+   `D!:` control frames arrive over `host_input` and `D:` replies go over host output. It uses the
+   `State`'s own debug methods directly (NOT the native `debug_cmd_dispatch` / TCP machinery), so the
+   whole path is wasm-safe. `apply(session, frame)` (bp / run|resume|step / eval) is native-unit-tested;
+   the `--html --debug` build exports `loft_debug_start` + `loft_debug_pump`. **Verified on wasm**
+   (`html_wasm::html_debug_client_applies_relayed_control_frames_on_wasm`): `D!:bp compute`→`D:ok`;
+   `D!:run`→`D:hit compute n=40`; `D!:eval n`→`D:eval n=40`; `D!:resume`→`D:terminated`.
+3. **Server relay ✅ LANDED (2026-07-08).** The kernel's `D!:` handler gained: `D!:iam <name>` (client
+   registers its debug name), `D!:@<name>:<cmd>` (a loopback agent forwards to that client's socket +
+   records the reply route), `D!:reply <msg>` (client → the requesting agent). Local server-authoritative
+   debug still routes to `debug_cmd_dispatch`. **Verified**
+   (`engine_host_kernel::server_relays_debug_frames_to_a_named_client`).
+4. **Full acceptance ✅ LANDED (2026-07-08), headless.** `wasm_debug_relay::agent_debugs_a_browser_wasm_
+   client_through_the_server_relay` runs ALL real components — a `loft --html --debug` wasm client in
+   Node (JS driver `tools/wasm_debug_e2e.mjs` bridging its WebSocket ↔ host I/O), a real `engine_host`
+   server with the relay, and an agent addressing the client by name: `D!:@alice:bp compute`→
+   `D:ok bp compute`; `run`→`D:hit compute n=40` (the CLIENT paused); `eval n`→`D:eval n=40`;
+   `resume`→`D:terminated`. The complete chain agent → server → browser wasm client → back, proven
+   headlessly. *(Remaining polish, not blockers: full-expression eval on the client — today it's a
+   frame-local read, since the P1b `eval_frame_expr` orchestration lives in the native-only `repl`
+   module; and the one-heap compiled-write/interpreted-read equivalence check.)*
 
 ### A3 — packaging: `--lean` opt-OUT, default LIVE (F3) ✅ LANDED (P2)
 
