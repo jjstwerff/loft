@@ -102,15 +102,33 @@ fn locate_fresh_brick_buster(root: &Path) -> Option<PathBuf> {
         );
         return None;
     }
-    let src = root.join("tools/brick-buster/25-brick-buster.loft");
     let html_mtime = html.metadata().ok()?.modified().ok()?;
-    let src_mtime = src.metadata().ok()?.modified().ok()?;
-    if html_mtime < src_mtime {
-        eprintln!(
-            "SKIP: doc/brick-buster.html is older than the source loft \
-             program — rebuild with `make game` first"
-        );
-        return None;
+    // The bundle is stale if it predates EITHER the game source OR the
+    // wasm32 runtime rlib it embeds — a rlib rebuilt after the bundle
+    // (a common dev-machine state: `cargo build --target
+    // wasm32-unknown-unknown` after `make game`) means the embedded wasm
+    // no longer matches the runtime, so the render gate would fail on a
+    // BUILD skew, not a real regression.  Skip with the rebuild command
+    // instead of a false failure; CI rebuilds via `make game` so libloft
+    // < bundle there.
+    let stale_vs = [
+        root.join("tools/brick-buster/25-brick-buster.loft"),
+        root.join("target/wasm32-unknown-unknown/release/libloft.rlib"),
+    ];
+    for dep in &stale_vs {
+        if dep
+            .metadata()
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .is_some_and(|dep_mtime| html_mtime < dep_mtime)
+        {
+            eprintln!(
+                "SKIP: doc/brick-buster.html is older than {} — rebuild \
+                 with `make game` first",
+                dep.display()
+            );
+            return None;
+        }
     }
     // Tag the build_lock as used so the helper doesn't get marked
     // dead-code; it's reserved for any future test in this file that
