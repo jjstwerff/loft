@@ -129,15 +129,20 @@ struct = a named tuple**: `Type::Value(def)` reuses the tuple value-type machine
 the struct def for @PLN99 dispatch. (The parse-level `OpDatabase + OpCopyRecord` recipe is retired
 to the appendix below as a fallback only.)
 
-### Step 1.2 — add `Type::Value(u32, Deps)` + walk the compiler through the arms
-- Add the variant to `enum Type` (`src/data.rs:1344`). Per the loft idiom (like `Optional`),
-  every exhaustive `match Type` becomes a COMPILE ERROR until handled — the compiler is the
-  worklist. **Most arms MIRROR `Type::Reference`**: `name` (→ the def name), `is_equal`
-  (`Value(a) == Value(b)` iff `a == b`; a `Value` and a `Reference` of the same def are NOT
-  equal — distinct kinds), `base`, `for_each_child`, `optional`/`peel_optional`, the parser's
-  type-dispatch, IR-schema/round-trip (Slice 5), etc.
-- *Verify:* `cargo build` is clean once every arm is added; a `value struct` still parses and
-  behaves as before (no semantic change yet — arms mirror `Reference`).
+### Step 1.2 — add `Type::Value(u32, Deps)` + walk the compiler through the arms — DONE (commit 19e6ef33)
+Added the variant to `enum Type` (`src/data.rs:1319`). Per the loft `Optional` idiom, every
+exhaustive `match Type` became a compile error — **7 sites**, all mirroring `Reference` (no
+semantic change yet, since `Value` is not minted until Step 1.4): `data.rs` `for_each_child`
+(leaf), `name` + `type_name_str` (→ def name); `ir_node` `native_type_kind` (`K::Reference`);
+`variables/validate` `short_type` (`val(t)`); `ir_schema` serialize+deserialize (distinct
+`"Value"` tag, round-trips); `ir_store` (mirrors `Reference` — TODO Slice 1.8: distinct
+`TY_VALUE` discriminant). Build clean; no regression (issues 748, wrap, IR round-trip 8/8 green);
+the `value struct` probe still parses + works (as `Reference`). Fewer sites than feared — the
+`Type` variant is well-contained.
+- **Note on `is_equal`:** the leaf/name arms mirror `Reference`; the `is_equal` `(Reference,
+  Reference) => r == o` arm does NOT yet cover `Value` (it falls to `self == other`, which
+  distinguishes `Value` from `Reference` correctly). Revisit in 1.4 if a `Value`↔`Reference`
+  cross-compare is needed at a coercion boundary.
 
 ### Step 1.3 — the arms that DIFFER (this is where value semantics lives)
 - **Size/align/inline layout:** `variables::size` (`variables/mod.rs:1895`), `variables::align`,
