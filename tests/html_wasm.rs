@@ -1083,3 +1083,49 @@ fn html_debug_client_applies_relayed_control_frames_on_wasm() {
         "resume ran to completion: {all}"
     );
 }
+
+// @PLN98 Probe 2 — "sharing is ONE heap on wasm too": a COMPILED write and an
+// INTERPRETED read of the same variable must AGREE (and vice versa), or the
+// live-dispatch swap didn't carry the world. In the `--html --debug` build,
+// `flip_all` flips `reader`+`writer` to the interpreter while `main` stays
+// compiled, so: main writes `w.a=777` (compiled) -> `reader` reads it
+// (interpreted); `writer` writes `w.b=999` (interpreted) -> main reads it
+// (compiled). Both must round-trip over the one shared store.
+#[test]
+fn html_debug_one_shared_heap_compiled_and_interpreted_agree_on_wasm() {
+    let source = "struct W { a: integer, b: integer }\n\
+                  fn reader(w: W) -> integer { w.a }\n\
+                  fn writer(w: W) { w.b = 999; }\n\
+                  fn main() {\n  \
+                    w = W { a: 0, b: 0 };\n  \
+                    w.a = 777;\n  \
+                    r = reader(w);\n  \
+                    writer(w);\n  \
+                    print(\"r={r} b={w.b}\")\n}\n";
+    let Some((stdout, stderr, ok)) = run_html_wasm_full(
+        "p98_one_heap",
+        source,
+        &[],
+        &[],
+        &["--debug=alice"],
+        "tools/wasm_repro.mjs",
+    ) else {
+        return;
+    };
+    let all = format!("{stdout}{stderr}");
+    assert!(ok, "the one-heap wasm client trapped: {all}");
+    assert!(
+        all.contains("flipped 2 fn(s) to the interpreter"),
+        "reader + writer flipped to the interpreter: {all}"
+    );
+    // The load-bearing assertion: compiled write -> interpreted read (r=777) AND
+    // interpreted write -> compiled read (b=999) both agree over ONE heap.
+    assert!(
+        all.contains("r=777 b=999"),
+        "compiled and interpreted share one heap (both directions): {all}"
+    );
+    assert!(
+        all.contains("dispatched 2 interp call(s) over the shared store"),
+        "both flipped fns dispatched over the shared store: {all}"
+    );
+}
