@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
-// @PLN100 Slice 2 — declarative project build phase
+// @I77 — Registry / manifest / lockfile resolution: the declarative build/test
+// phase (@PLN100) — the manifest-driven `loft build` / `loft check` tooling.
 
 //! The `loft build` / `loft check` driver for @PLN100's declarative build phase:
 //! resolve a project's declared / default build targets, run its `[[build.asset]]`
