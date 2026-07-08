@@ -1072,7 +1072,11 @@ fn html_debug_client_applies_relayed_control_frames_on_wasm() {
     );
     assert!(
         all.contains("D:eval n=40"),
-        "eval a live frame local over the relay: {all}"
+        "read a live frame local over the relay: {all}"
+    );
+    assert!(
+        all.contains("D:eval n + 2=42"),
+        "FULL-EXPRESSION eval over the relayed control channel: {all}"
     );
     assert!(
         all.contains("D:terminated"),

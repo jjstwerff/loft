@@ -54,7 +54,7 @@ await new Promise((res, rej) => { agent.onopen = res; agent.onerror = rej; });
 agent.binaryType = 'arraybuffer';
 agent.onmessage = (e) => { got.push(typeof e.data === 'string' ? e.data : dec.decode(new Uint8Array(e.data))); };
 await sleep(700);
-for (const c of ['bp compute', 'run', 'eval n', 'resume']) { agent.send('D!:@alice:' + c); await sleep(400); }
+for (const c of ['bp compute', 'run', 'eval n', 'eval n + 2', 'resume']) { agent.send('D!:@alice:' + c); await sleep(400); }
 clearInterval(pump);
 console.log('AGENT_GOT=' + JSON.stringify(got.filter(m => m.startsWith('D:'))));
 process.exit(0);

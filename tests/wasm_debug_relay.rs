@@ -136,7 +136,8 @@ fn agent_debugs_a_browser_wasm_client_through_the_server_relay() {
         "D:ok bp compute", // breakpoint set on the browser client
         "D:hit compute",   // the client PAUSED at it
         "n=40",            // with the live frame local
-        "D:eval n=40",     // eval over the paused client
+        "D:eval n=40",     // read a live frame local over the paused client
+        "D:eval n + 2=42", // FULL-EXPRESSION eval over the paused client
         "D:terminated",    // resume ran to completion
     ] {
         assert!(

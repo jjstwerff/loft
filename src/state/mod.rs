@@ -243,6 +243,18 @@ fn keyed_type_source(tp: &crate::data::Type, data: &crate::data::Data) -> Option
     }
 }
 
+/// @PLN98 P3.4 — a frame local's value read out of the paused frame, tagged by its
+/// storage width so [`State::eval_frame_reenter`] can push it back as the right
+/// argument type (heap → `DbRef`, else the inline scalar).
+enum FrameArg {
+    Ref(crate::keys::DbRef),
+    I64(i64),
+    F64(f64),
+    F32(f32),
+    U8(u8),
+    U32(u32),
+}
+
 /// Render `raw` as a quoted, escaped loft `text` literal — the form the parser
 /// re-reads.  Escapes the characters loft shares with JSON (`"`, `\`, newline,
 /// CR, tab); other characters pass through.  The single home for the text
@@ -2377,6 +2389,26 @@ impl State {
         keyed_type_source(&tp, data)
     }
 
+    /// @PLN98 P3.4 — a live frame local's PARSEABLE loft type, for binding it as an
+    /// argument of a synthetic eval fn (the browser client's full-expression eval).
+    /// Keyed collections use [`keyed_type_source`] (their `Type::name` isn't loft
+    /// source); everything else uses `Type::name` (integer / float / boolean /
+    /// character / `vector<T>` / a struct or enum name — all reparseable).  `None`
+    /// for a `text` local (a borrowed `Str` arg is @P293-unsafe to push) or an
+    /// un-live / unknown local — the caller drops the expression to a graceful
+    /// fallback rather than mis-push it.
+    #[must_use]
+    pub fn frame_local_arg_type(&self, name: &str, data: &crate::data::Data) -> Option<String> {
+        if !self.frame_local_is_live(name) {
+            return None;
+        }
+        let (_, _, tp, _) = self.frame_slot(name, data)?;
+        if matches!(tp, crate::data::Type::Text(_)) {
+            return None;
+        }
+        Some(keyed_type_source(&tp, data).unwrap_or_else(|| tp.name(data)))
+    }
+
     /// @PLN98 P1b — the true live-frame eval: run the already-compiled synthetic
     /// fn `eval_dnr` (built as `fn __eval(k1: K1, …) -> RT { … expr }`) over THIS
     /// paused State, with its keyed-collection arguments `arg_names` bound to the
@@ -2401,17 +2433,34 @@ impl State {
         json: bool,
     ) -> Option<String> {
         use crate::data::Type;
-        // 1. Read each keyed-collection arg's live `DbRef` from the paused frame
-        //    BEFORE reentering — `reenter_ret` pushes a fresh frame, so `frame_slot`
-        //    (which reads `call_stack.last()`) would then see the eval's frame.
-        let mut args: Vec<crate::keys::DbRef> = Vec::with_capacity(arg_names.len());
+        // 1. Read each arg's live value from the paused frame BEFORE reentering —
+        //    `reenter_ret` pushes a fresh frame, so `frame_slot` (which reads
+        //    `call_stack.last()`) would then see the eval's frame.  Each is read at
+        //    its storage width (heap → `DbRef`, else the inline scalar) so it can be
+        //    pushed back as the right argument type — the browser client binds ANY
+        //    referenced frame local as an arg, not just keyed collections.
+        let mut args: Vec<FrameArg> = Vec::with_capacity(arg_names.len());
         for name in arg_names {
-            let (rec, at, _tp, _is_arg) = self.frame_slot(name, data)?;
-            let db = *self
-                .database
-                .store(&self.stack_cur)
-                .addr::<crate::keys::DbRef>(rec, at);
-            args.push(db);
+            let (rec, at, tp, _is_arg) = self.frame_slot(name, data)?;
+            let store = self.database.store(&self.stack_cur);
+            let val = match &tp {
+                Type::Reference(_, _)
+                | Type::Vector(_, _)
+                | Type::Sorted(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Hash(_, _, _)
+                | Type::Spacial(_, _, _)
+                | Type::Enum(_, true, _) => {
+                    FrameArg::Ref(*store.addr::<crate::keys::DbRef>(rec, at))
+                }
+                Type::Float => FrameArg::F64(*store.addr::<f64>(rec, at)),
+                Type::Single => FrameArg::F32(*store.addr::<f32>(rec, at)),
+                Type::Boolean | Type::Enum(_, false, _) => FrameArg::U8(*store.addr::<u8>(rec, at)),
+                Type::Character => FrameArg::U32(*store.addr::<u32>(rec, at)),
+                // Integer (and anything else that fits) rides an `i64` slot.
+                _ => FrameArg::I64(*store.addr::<i64>(rec, at)),
+            };
+            args.push(val);
         }
         // 2. Sync def positions from the live dispatch table into `data` so a Call
         //    the eval body emits (a stdlib/user fn in `expr`) targets the LIVE body
@@ -2434,11 +2483,18 @@ impl State {
             self.fn_positions.push(data.def(d).code_position);
         }
         let pos = data.def(eval_dnr).code_position;
-        // 4. Reenter over the paused world, pushing the live `DbRef` args in
-        //    declared order, and render the return by its type.
+        // 4. Reenter over the paused world, pushing the live args in declared
+        //    order (each as its own type), and render the return by its type.
         let push = |st: &mut State| {
-            for db in &args {
-                st.put_stack(*db);
+            for a in &args {
+                match a {
+                    FrameArg::Ref(v) => st.put_stack(*v),
+                    FrameArg::I64(v) => st.put_stack(*v),
+                    FrameArg::F64(v) => st.put_stack(*v),
+                    FrameArg::F32(v) => st.put_stack(*v),
+                    FrameArg::U8(v) => st.put_stack(*v),
+                    FrameArg::U32(v) => st.put_stack(*v),
+                }
             }
         };
         // `reenter_ret` restores `code_pos`/`stack_pos` but NOT the call stack or

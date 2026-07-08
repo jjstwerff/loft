@@ -10,7 +10,7 @@ import fs from 'node:fs';
 const wasm = fs.readFileSync(process.argv[2]);
 const enc = new TextEncoder(), dec = new TextDecoder();
 let mem = null, out = '';
-const inQ = ['D!:bp compute', 'D!:run', 'D!:eval n', 'D!:resume'].map(s => enc.encode(s));
+const inQ = ['D!:bp compute', 'D!:run', 'D!:eval n', 'D!:eval n + 2', 'D!:resume'].map(s => enc.encode(s));
 const io = {
   loft_host_print: (p, l) => { out += dec.decode(new Uint8Array(mem.buffer, p, l)); },
   loft_host_input_len: () => (inQ.length ? inQ[0].length : 0),
