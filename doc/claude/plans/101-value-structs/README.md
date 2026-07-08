@@ -64,9 +64,21 @@ addressed by offset* — like a scalar field, but multi-field.
 3. **Distinct, opt-in kind:** `value struct T { … }`. Value semantics (copy-on-assign, no
    aliasing) are *observable*, so NO silent size-based auto-promotion — it would change
    mutation/aliasing/@PLN85–90 ownership. Reference `struct` unchanged.
-4. **Type representation:** a `Type::Value(def)` variant (or a kind-flag on the struct def)
-   so `size()`/`align()`/`element_size()` return the packed inline size, and field access +
-   copy read it directly (offset), not via `DbRef`.
+4. **Type representation — a distinct `Type::Value(def)` value type (DECIDED 2026-07-08,
+   user).** *Evidence:* tuples (loft's value type) already copy-on-bind on both backends
+   (`e = b.t; e.0 = 99` ⇒ `b.t.0 == 1`); value structs alias today ONLY because they are
+   `Type::Reference` (borrow/dep/DbRef/free machinery). A distinct value type inherits
+   **copy-on-bind, deps = none, and no free** from the value-type (tuple) machinery — so the
+   hard part (copy semantics) FALLS OUT instead of being surgically forced into the heap-#1
+   assignment path. **A value struct = a named tuple**: `Type::Value(def)` reuses the tuple
+   layout/access/copy/native machinery (`element_offsets`, `TupleGet`/`TuplePut`, inline
+   storage) while keeping the struct def for @PLN99 dispatch (`find_op_method` by
+   `type_def_nr`). Cost: every exhaustive `match Type` gains an arm (loft idiom, like
+   `Optional`; compiler-guided) — most mirror `Reference`; `size`/`align`/`element_size`,
+   `depend` (none), free-emission, and copy-on-assign are where value semantics lives. This
+   is MORE upfront but SAFE (mechanical) vs. the flag approach's small-but-unsafe heap
+   surgery. **Supersedes the earlier `is_value` flag** (`Data.value_structs`), which stays as
+   the parse-time marker that decides to mint `Type::Value` vs `Type::Reference`.
 5. **Zero-cost inside records + collections falls out** of "part of one Store": a
    value-struct field/element is packed inline in the parent record / vector backing — no
    per-field, per-element record (a `vector<V>` becomes contiguous like `vector<scalar>`).

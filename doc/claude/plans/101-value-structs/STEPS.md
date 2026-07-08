@@ -119,10 +119,21 @@ reads it). Verified: parses + a value struct as a vector element stores inline o
 (issues 748, wrap 158, parse_errors 51). Commit `5f43c13b`.
 
 ### Step 1.2 — value/COPY semantics (THE thin layer; the one real behaviour change)
+
+> **PIVOT (2026-07-08, user): make it its own `Type::Value` value type — copy FALLS OUT.**
+> Proven: tuples (loft's value type) already copy-on-bind on both backends (`e = b.t; e.0 = 99`
+> ⇒ `b.t.0 == 1`). Value structs alias ONLY because they're `Type::Reference`. So the sound,
+> safe route is NOT the parse-level `OpDatabase + OpCopyRecord` surgery below (which fought the
+> borrow machinery in the heap-#1 assignment path) — it is: give value structs a distinct
+> `Type::Value(def)` value type (README design pt 4) that reuses the tuple value-type machinery
+> (copy-on-bind, deps = none, no free). Copy semantics then falls out of the SAME machinery that
+> makes `e = b.t` copy. The surgery recipe below is kept as a fallback / mechanism reference;
+> the primary plan is the `Type::Value` variant.
+
 **Problem (proven).** A value struct currently **ALIASES** like a reference struct —
 `e = b.items[0]; e.x = 99` writes back (`b.items[0].x == 99`). A value type must yield a **COPY**,
 so reading a `DateTime` field gives a value you can pass/modify without corrupting the record —
-exactly how `integer` behaves.
+exactly how `integer`/a tuple behaves.
 
 **Mechanism located (2026-07-08).** `e = b.items[0]` lowers to `Set(e, OpGetVector(…))` and the
 ownership oracle `classify` (`src/use_analysis.rs:1329`) classes a projection
