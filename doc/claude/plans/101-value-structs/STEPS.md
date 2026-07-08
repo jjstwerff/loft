@@ -126,8 +126,19 @@ Implemented `value_struct_copy(data)` + `vs_copy_walk` in `src/scopes.rs` exactl
 below. **Works, both backends:** `e = b.items[0]; e.x = 99` ⇒ `b.items[0].x == 1` (copy);
 field-read + vector-element-read + loop-bind all copy; operators (@PLN99) still dispatch;
 leak-free, clean exit. **No regression** — full suite 2690 passed / 7 pre-existing cdylib+WASM
-flakes. ~100 lines, no type-system wiring. (Broaden the `Borrowed`-only trigger to local-to-local
-value-struct binds later if needed; the field/element target — the stated scope — is covered.)
+flakes. ~100 lines, no type-system wiring.
+
+**Local-to-local needs NO broadening — verified, not deferred (regression `tests/scripts/518`).**
+The `Borrowed`-only trigger is *sufficient* for full value semantics because loft's existing
+var-to-var assignment already deep-copies a struct local: `b = a` allocates `b` its own record and
+recursively deep-copies inner `text`/`vector` handles (true for reference structs too — only
+field/element *reads* alias). So every way a value-struct local can be initialised from an existing
+value struct already copies: field read `x.f` and element read `v[i]` (the `Borrowed` views this
+pass rewrites), method param `self` (also `Borrowed` → this pass), and plain `b = a` /
+reassignment `c = a` (loft's runtime var-copy). Fresh sources (`P{…}`, fn-return) correctly *own*
+with no redundant copy. Adding a `Var`-rhs trigger here would only duplicate the runtime copy — so
+it was NOT added. `518` pins var-to-var (scalar + lifetime), reassignment, self-to-local, and a
+50-iteration loop-of-copies leak gate; both backends, leak-scan ratchet green.
 
 #### Step 1.2 spec (as implemented)
 Called from `scopes::check()` AFTER `move_elide` and BEFORE the ownership scan (`scan_set`).
