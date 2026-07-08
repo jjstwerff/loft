@@ -8704,8 +8704,10 @@ fn callee_param_writes(fn_nr: u32, data: &Data, cache: &mut HashMap<u32, Vec<boo
 /// (OpSet*, OpCopyRecord, OpNewRecord first-arg).  Excludes plain `Value::Set`
 /// which includes loop-iterator advance — that's not a user-initiated mutation.
 /// Used by check_ref_mutations to detect when a for-loop variable's field
-/// writes should propagate back to the iterated `&` collection.
-fn find_field_written_vars(code: &Value, data: &Data, written: &mut HashSet<u16>) {
+/// writes should propagate back to the iterated `&` collection, and by the
+/// @PLN101 value-struct copy-elision pass (`scopes::value_struct_copy`) to prove
+/// a read-only view's base is never mutated under it.
+pub(crate) fn find_field_written_vars(code: &Value, data: &Data, written: &mut HashSet<u16>) {
     match code {
         Value::Call(fn_nr, args) => {
             let def = data.def(*fn_nr);

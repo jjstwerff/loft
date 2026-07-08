@@ -233,13 +233,35 @@ is its own; freeing the local frees only the copy (no alias, no double-free, no 
 - (A value-struct field that is itself a `reference<T>` / another owned struct is the same
   deep-copy path; not separately exercised yet — extend 517 if a consumer needs it.)
 
-## Slice 5 — native + regression suite
+## Slice 5 — the ZERO-COST proof + read-only copy elision — DONE (commit pending)
 
-Value structs are `Type::Reference` records — native already compiles them, and `OpDatabase` +
-`OpCopyRecord` are already native, so the copy pass compiles as-is (no ABI work). Land the
-regression: flip `515`, add `vector<DateTime>` + a DateTime-field struct with the copy-semantics +
-no-leak assertions in `tests/scripts/`.
-- *Verify:* full suite green both backends.
+Native needed no ABI work (value structs are `Type::Reference` records; `OpDatabase`/`OpCopyRecord`
+are native). But the alloc harness (Slice 0) REVEALED the copy pass was NOT yet zero-cost: a
+`vector<value struct>` summed read-only allocated **1005 stores** (one `OpDatabase`+`OpCopyRecord`
+per element) vs **4** for the equivalent reference struct — the pass copied even a **read-only**
+loop var. Storage was already inline; the cost was the eager bind-copy.
+
+**Fix — read-only copy ELISION (`scopes::value_struct_copy`).** A value-struct view-bind is left as
+a zero-cost view (exactly what a reference struct gets from the borrow system) when a plain view is
+observably identical to a copy — i.e. neither the local nor its projection base can change under
+the view or escape it. Soundness oracle = a **TAINTED** set: seeded from field/element writes
+(`parser::find_field_written_vars`, catches nested `v.a.b = …`) + escapes (return / passed to a
+user fn), closed over pure-`Var` alias edges (so mutating a co-alias `w = ps; w.push()` taints
+`ps`), and **rescoped to the enclosing loop body** (building `ps` field-writes it, but that runs
+BEFORE the loop, so it cannot diverge a view read *inside* the loop). A bind is elided iff the
+local + every base-chain variable (spine root traced one hop through `_vector_1 = b.items`) is
+untainted; otherwise the copy stands. `loft` permits aliasing writes (a reference-struct view sees
+a later source mutation), so this boundary is exact — no oracle change, ~150 lines, no type wiring.
+
+Result: `vector<value struct>` and value-struct-field-of-record are **4 allocs, flat in N** — equal
+to the reference struct, one above the scalar baseline (the shared vector backing).
+
+- *Regressions:* `tests/value_struct_alloc.rs` pins allocs O(1) in N + parity with the reference
+  struct (headline zero-cost guarantee). `tests/scripts/519-value-struct-zero-cost.loft` pins the
+  elision SOUNDNESS boundary: read-only loop var stays a snapshot under mid-iteration source
+  mutation, straight-line snapshot, co-alias mutation, escape-returns-a-copy, field-of-record —
+  both backends, leak-scan ratchet green. `515`/`516`/`517`/`518` unchanged (mutation cases still
+  copy).
 
 ---
 
