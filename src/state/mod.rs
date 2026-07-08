@@ -4020,9 +4020,12 @@ impl State {
         // exit. A `value struct` program (Slice 1+) must drive its struct's contribution to
         // zero vs the reference-struct baseline. Gated so normal runs are unaffected.
         if std::env::var_os("LOFT_ALLOC_REPORT").is_some() {
+            // `peak` = max LIVE stores (memory; bounded by slot reuse — a per-variable store
+            // reused each loop iteration keeps this flat). `stores_allocated` = alloc/free
+            // CYCLES (the per-construction abstraction cost value structs must drive to zero).
             eprintln!(
-                "loft-alloc: stores={} records={}",
-                self.database.stores_allocated, self.database.records_created
+                "loft-alloc: peak={} allocs={} records={}",
+                self.database.peak, self.database.stores_allocated, self.database.records_created
             );
         }
         let leaked = self.collect_store_leaks();

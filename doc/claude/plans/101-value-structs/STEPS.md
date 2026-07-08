@@ -58,16 +58,22 @@ events, `structures.rs:60`) and **`stores_allocated`** (store-SLOT go-live event
 → `loft-alloc: stores=S records=R`.
 
 **`record_new` MISLED (first write-up was wrong).** It counts logical records (0 for locals,
-100 for vector appends), which hid the real cost. `stores_allocated` is the TRUE heap metric.
-Measured (`--interpret`, 100× loops):
+100 for vector appends), which hid the real cost. Report is now
+`loft-alloc: peak=P allocs=A records=R` — **`peak`** = max LIVE stores (memory), **`allocs`** =
+store alloc/free CYCLES (the per-construction abstraction cost). Measured (`--interpret`,
+100× loops):
 
-| shape | stores | vs scalar baseline (2) | reading |
+| shape | peak (memory) | allocs (cycles) | reading |
 |---|---|---|---|
-| scalar loop | 2 | — | baseline |
-| **local `struct`**, 100× | **102** | **+100** | **~1 SCRATCH store per construction** — the real, pervasive cost |
-| `vector<P>` (flat), 100 elems | 4 | +2 | elements **inlined into the backing** (store #1); +2 is per-element construction scratch reused |
-| `vector<integer>`, 100 elems | 3 | +1 | scalar baseline for a collection |
+| scalar loop | 2 | 2 | baseline |
+| **local `struct`**, 100× | **3** | **102** | **memory is FINE — the struct's store is REUSED each iteration (peak flat).** The cost is 100 per-construction **alloc/free cycles + DbRef indirection**, not memory (user: "an individual variable of T can be its own store… the same store will be reused") |
+| `vector<P>` (flat), 100 elems | 4 | 4 | elements **inlined into the backing** (store #1); no per-element cycles |
 | record field (`struct` in `struct`) | — | — | **already inline** (`finish_type` sizes a field by the nested record's full `size`, not a DbRef) |
+
+**Goal = "zero abstraction structures" (user):** a `value struct` must have **NO** per-construction
+alloc/free cycle **and NO** DbRef indirection — inline bytes wherever it lives. The per-slice
+metric is **`allocs` delta → 0** vs the reference-struct baseline (peak is already reuse-bounded,
+so it is NOT the target — cycles + indirection are), plus a structural "no scratch store, no DbRef".
 
 **Corrected consequences (this REVISES the earlier note):**
 1. The big win is **transient locals / temporaries / args / returns** — every reference-struct
