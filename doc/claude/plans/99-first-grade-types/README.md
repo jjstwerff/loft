@@ -6,7 +6,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # @PLN99 — First-grade custom types: direct operator dispatch + custom-format hook
 
 > **Subject:** loft   ·   **Type:** plan   ·   **Area:** parser · types · formatting
-> **Effort:** M (two focused core changes; the hard dispatch machinery already exists)
+> **Effort:** M (three focused core changes; the hard dispatch machinery already exists)
 > **Value:** **U** (user-facing capability — library types that behave like built-ins) +
 > **F** (foundation — every wrapper type: DateTime, money, colour, `Decimal`, URL)
 > **Depends-on:** — (consumes the existing I8 operator-interface + bounded-generic machinery)
@@ -18,7 +18,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 **`status:future` — filed 2026-07-08.** Grounded in a probe session (below): the
 generics/interface investment already dispatches user operators inside bounded
-generics; the two remaining gaps are what keep a library struct from being
+generics; the three remaining gaps are what keep a library struct from being
 *indistinguishable from a built-in in direct use*.
 
 **Probe evidence (2026-07-08, `--interpret` + `--native`, both agree):**
@@ -32,14 +32,20 @@ generics; the two remaining gaps are what keep a library struct from being
 - `{d.format("date")}` (a library method in interpolation) → **`2026-07-08`**;
   `{d}` (bare) → the generic dump `{ms:…}`. Custom formatting *via an explicit
   method* works; the `{d:date}` **sugar** does not (Arc B).
+- `"2026-07-08" as DateTime` → **`ms=null`, exit 0**. `as` to a custom type
+  *silently* yields a null/garbage value — no user conversion hook and **no clean
+  reject** (the worst outcome). A first-grade type must let `as` dispatch a
+  user conversion, especially `text as T` parse-on-cast (Arc C).
 
 ## Goal
 
 A user library **struct behaves exactly like a built-in type**: chronological /
-numeric operators work in *direct* expressions (not only inside `<T: …>`), and
-`{x:spec}` renders through the type's own formatter. No new value category, no
-per-type built-in — the *general* capability that makes DateTime, money, colour,
-a DB `Decimal`, and a URL all first-grade with one investment.
+numeric operators work in *direct* expressions (not only inside `<T: …>`),
+`{x:spec}` renders through the type's own formatter, and **`x as T` runs a
+user-defined conversion** — including `"literal" as T` (parse-on-cast), which
+gives a custom type literal-like syntax. No new value category, no per-type
+built-in — the *general* capability that makes DateTime, money, colour, a DB
+`Decimal`, and a URL all first-grade with one investment.
 
 ## Effort + design
 
@@ -53,7 +59,7 @@ a DB `Decimal`, and a URL all first-grade with one investment.
 
 ## Sub-arcs
 
-### Arc A — direct concrete operator dispatch *(the one load-bearing core change)*
+### Arc A — direct concrete operator dispatch *(load-bearing — operators are used everywhere)*
 `a < b` / `a == b` / `a - b` on two concrete user-struct operands must resolve
 the user `fn Op<Name>(self, other)` def — the resolution the generic path already
 does via `get_possible`. Today the direct binary-op path does not consult user
@@ -77,7 +83,21 @@ read the spec as a **free-form raw string up to `}`** and hand it over. Full
 prior design: [`lib_plans/21-datetime/DESIGN.md`](../../lib_plans/21-datetime/DESIGN.md)
 Part 1 + Part 2. A struct with no `to_text` renders exactly as today.
 
-### Arc C — inline / value structs *(deferred — perf only, trigger-gated)*
+### Arc C — user-defined conversions (`x as T`)
+`x as T` on a custom target `T` must run a user conversion, mirroring the
+built-in `OpConv<To>From<From>` path (`self.convert`, `src/parser/fields.rs`).
+Today it **silently mis-casts** (`"…" as DateTime` → `ms=null`, no error) — the
+fix is dispatch-a-user-conversion-or-cleanly-reject. **The high-value special
+case: `"literal" as T`** — a `text` value (especially a literal) parses into a
+custom type, giving custom types a literal syntax: `"2026-07-08" as DateTime`,
+`"#ff0000" as Colour`, `"1.5" as Decimal`. Dispatched by the target type `T`
+(from the `as T` annotation) + the source type. **Integrate with `as T ?? default`**
+(#512, checked-cast-with-fallback) so a fallible parse has a safe form: a failed
+`"bad" as DateTime ?? epoch` discharges to the fallback. Open sub-question: the
+*declaration* shape — an `OpConv<T>From<S>` fn (matches the built-in naming), or a
+friendlier `fn from(s: S) -> T` / `parse` convention dispatched by return type.
+
+### Arc D — inline / value structs *(deferred — perf only, trigger-gated)*
 Small structs stored **by value** (inline), not by `DbRef` + heap record +
 `OpFreeRef` lifetime — the cost that could bite a hot path (a DB timestamp column
 should not heap-alloc a `DateTime` per row). **Trigger:** profiling shows the
