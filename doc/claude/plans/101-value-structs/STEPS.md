@@ -118,77 +118,83 @@ reads it). Verified: parses + a value struct as a vector element stores inline o
 (`peak=4 records=5` for 5 elems, same as a normal struct), both backends; no regression
 (issues 748, wrap 158, parse_errors 51). Commit `5f43c13b`.
 
-### Step 1.2 — value/COPY semantics (THE thin layer; the one real behaviour change)
+### The plan: a distinct `Type::Value(def)` value type (copy semantics FALLS OUT)
 
-> **PIVOT (2026-07-08, user): make it its own `Type::Value` value type — copy FALLS OUT.**
-> Proven: tuples (loft's value type) already copy-on-bind on both backends (`e = b.t; e.0 = 99`
-> ⇒ `b.t.0 == 1`). Value structs alias ONLY because they're `Type::Reference`. So the sound,
-> safe route is NOT the parse-level `OpDatabase + OpCopyRecord` surgery below (which fought the
-> borrow machinery in the heap-#1 assignment path) — it is: give value structs a distinct
-> `Type::Value(def)` value type (README design pt 4) that reuses the tuple value-type machinery
-> (copy-on-bind, deps = none, no free). Copy semantics then falls out of the SAME machinery that
-> makes `e = b.t` copy. The surgery recipe below is kept as a fallback / mechanism reference;
-> the primary plan is the `Type::Value` variant.
+**Why (proven).** A value struct currently ALIASES (`e = b.items[0]; e.x = 99` ⇒
+`b.items[0].x == 99`) ONLY because it is `Type::Reference` — the borrow/dep/DbRef/free machinery.
+TUPLES (loft's value type) already copy-on-bind on both backends (`e = b.t; e.0 = 99` ⇒
+`b.t.0 == 1`). So making value structs a distinct **value type** makes copy-on-bind, deps = none,
+and no-free FALL OUT of the same machinery — no surgery on the heap-#1 assignment path. **A value
+struct = a named tuple**: `Type::Value(def)` reuses the tuple value-type machinery while keeping
+the struct def for @PLN99 dispatch. (The parse-level `OpDatabase + OpCopyRecord` recipe is retired
+to the appendix below as a fallback only.)
 
-**Problem (proven).** A value struct currently **ALIASES** like a reference struct —
-`e = b.items[0]; e.x = 99` writes back (`b.items[0].x == 99`). A value type must yield a **COPY**,
-so reading a `DateTime` field gives a value you can pass/modify without corrupting the record —
-exactly how `integer`/a tuple behaves.
+### Step 1.2 — add `Type::Value(u32, Deps)` + walk the compiler through the arms
+- Add the variant to `enum Type` (`src/data.rs:1344`). Per the loft idiom (like `Optional`),
+  every exhaustive `match Type` becomes a COMPILE ERROR until handled — the compiler is the
+  worklist. **Most arms MIRROR `Type::Reference`**: `name` (→ the def name), `is_equal`
+  (`Value(a) == Value(b)` iff `a == b`; a `Value` and a `Reference` of the same def are NOT
+  equal — distinct kinds), `base`, `for_each_child`, `optional`/`peel_optional`, the parser's
+  type-dispatch, IR-schema/round-trip (Slice 5), etc.
+- *Verify:* `cargo build` is clean once every arm is added; a `value struct` still parses and
+  behaves as before (no semantic change yet — arms mirror `Reference`).
 
-**Mechanism located (2026-07-08).** `e = b.items[0]` lowers to `Set(e, OpGetVector(…))` and the
-ownership oracle `classify` (`src/use_analysis.rs:1329`) classes a projection
-(`OpGetVector`/`OpGetField`, `self.projections`) as **`Borrowed(base)`** → `e` is a VIEW into `b`
-(the `e:ref(P)["b"]` dep), so `e.x = 99` writes through. For value semantics `e` must be `Owned`
-(a copy).
+### Step 1.3 — the arms that DIFFER (this is where value semantics lives)
+- **Size/align/inline layout:** `variables::size` (`variables/mod.rs:1895`), `variables::align`,
+  `data::element_size` (`data.rs:1928`), `element_align` — a `Type::Value` returns the **packed
+  inline record size** (`Stores::finish_type`'s `types[t_nr].size`, already computed), NOT
+  `size_of::<DbRef>()`. **Open Q1** (embed the cached size in the variant vs. `Data` lookup).
+- **Deps = none:** `Type::depend` (`data.rs:1560`) → empty for `Value` (a value type does not
+  borrow), so no `["b"]` view dep is ever attached.
+- **No free:** `has_lifetime_concern` (`data.rs:1864`) → `false` for a pure-value `Value` (recurse
+  fields), so no `OpFreeRef`; the free-emission sites keyed on `Reference` skip `Value`.
+- **Copy-on-bind:** inherited — the assignment machinery copies value types (proven on tuples),
+  so `e = value_struct_view` copies with NO change to `parse_assign_op`/`generate_set`/the oracle.
 
-**Do NOT naively flip the oracle to `Owned` — CONFIRMED UNSOUND (2026-07-08).** `scan_set`'s
-`ref_rhs_ownership → Owned` (`scopes.rs:2299`) only records `owned_refs` (for free emission) — it
-does NOT clear `e`'s type dep (`["b"]`) NOR emit the copy. So an oracle flip makes `e` both ALIAS
-`b`'s element AND free it at scope exit → double-free (the "projection local mis-classed Owned"
-hazard). The dep-clearing + deep-copy both happen at **PARSE time**, so the sound hook is the
-parse-level `OpDatabase + OpCopyRecord` (below), NOT the oracle. Verified against `scan_set`.
+### Step 1.4 — mint `Type::Value` at parse for a marked struct
+- A `value struct`'s `returned` type becomes `Type::Value(d_nr, none)` instead of
+  `Type::Reference` (in `parse_struct`, using the `Data.value_structs` marker from Step 1.1).
+- Value-struct-typed FIELDS, `vector<V>` ELEMENTS, and value-struct LOCALS resolve to
+  `Type::Value` wherever the type is looked up (the type resolver / `field_type` / element type).
+- *Verify:* an introspect / dump shows a value-struct local + field typed `Value(P)`, sized inline.
 
-**Safe approach (no oracle change — reuse existing ops).** At the value-struct bind site, when the
-RHS classifies `Borrowed` (a view — `use_analysis::ownership_of(data, fn, rhs)`, read-only),
-wrap it: `e = OpDatabase(<P>); OpCopyRecord(view, e, <P content>)`. Now `e` genuinely mints +
-owns a fresh store, so `classify` returns `Owned` **correctly** (via `defs.db_vars`), and the
-copy is real. Copy-elision falls out: an `Owned` RHS (fresh `P{…}` construction) needs no copy.
-Both ops already exist (`OpDatabase`, `OpCopyRecord`, `fill.rs`/`state/io.rs`) — this LINKS them,
-matching "everything is already written".
+### Step 1.5 — copy semantics: VERIFY, don't implement
+- The behaviour change is now emergent. *Verify (both backends):* `value struct P { x: integer }`,
+  `b.items = [P { x: 1 }]`, `e = b.items[0]; e.x = 99` ⇒ **`b.items[0].x == 1`** (copy). Method
+  params still zero-copy: `dt.to_text()` / `a < b` pass `self`/`both` by DbRef into the store
+  (no copy) — confirm the value type does not force a copy at the CALL boundary (per the user's
+  "copy only on local bind"). `allocs` delta ~0 (inline copy, no scratch store).
 
-**Copy ONLY on a LOCAL-VARIABLE bind (user, 2026-07-08).** The `OpCopyRecord` fires only when a
-value struct is bound to a **local variable** (`e = record.field`, `x = vec[i]`). It must NOT
-fire when a value struct is passed as a **function/method parameter of type `T`** (typically
-`self`/`both`): that keeps the **DbRef into the store** it came from and the callee READS it in
-place — zero-copy. This is what keeps the hot path free — `dt.to_text()`, `a < b`, every
-operator / format / conversion method call passes `self`/`both` by DbRef, no copy. (A callee
-that MUTATES its `T` param is the rare case; value structs are read in methods, or mutated via an
-explicit `&`.) So the hook is narrow: the local-variable assignment site only. Cheap even there
-(inline bytes — a value type's intrinsic copy, not a heap alloc); the value-struct local keeps
-its own (reused) store per the scope cut.
+### Step 1.6 — @PLN99 dispatch keeps working
+- `find_op_method` (`data.rs`, @PLN99) resolves by `type_def_nr(tp)` — add a `Type::Value` arm so
+  operators/format/conversions resolve `t_<len><Type>_Op…` on the def. `to_text` / `OpConv…`
+  likewise. *Verify:* flip `515` DateTime/Duration to `value struct` — every assertion green.
 
-**Validation bar (MANDATORY — this is the #1 heap invariant).** Matrix-first, both backends
-(`--interpret` + `--native`), the semantics probe below AND the full suite AND leak
-(`ownership_oracle`) AND UAF (ASan) gates green before landing. Land gated/off-by-default first if
-any risk. Do NOT rush this into a large context — it is the exact class the stability method
-requires be done with a probe matrix.
+### Step 1.7 — non-null init (Q4, locked)
+- Reject an UNINITIALISED value struct at compile time (require a value or a declared default) — a
+  value struct has no null. Enforce where a value-struct local/field is declared without an init.
 
-**Verify (both backends).** `value struct P { x: integer }`, `b.items = [P { x: 1 }]`, then
-`e = b.items[0]; e.x = 99` ⇒ **`b.items[0].x == 1`** (copy, not 99). Plus: mutating a copy passed
-by value to a fn does not touch the caller's field/element. `allocs` delta stays ~0 (the copy is
-inline — no scratch store).
+### Step 1.8 — native ABI + the mandatory validation matrix
+- Native rides the pure-value tuple ABI (`data.rs:1859-1865`, no `LoftStore`) — route `Type::Value`
+  codegen there (`generation/mod.rs`, `state/codegen.rs`). **Validation bar (heap invariant #1):**
+  full suite + leak (`ownership_oracle`) + UAF (ASan), BOTH backends, green before landing; flip
+  `515` + add `vector<DateTime>` / a `DateTime`-field struct with `allocs`-delta-0 assertions.
 
-**Non-null (Q4, locked).** Reject an UNINITIALISED value struct at compile time (require a value
-or a declared default) — a value struct has no null. Enforce where a value-struct local/field is
-declared without an initialiser.
+**Open sub-questions.** (a) Q1 size access (embed vs `Data` lookup). (b) `self`/`both` params of
+`Type::Value` must stay DbRef-into-store at the call boundary (no copy) — verify the value type
+does not over-copy method receivers. (c) A `Type::Value` field of a `Type::Reference` struct
+(Slice 2) — inline embedding via `finish_type` (already inline).
 
-**Open sub-questions.** (a) Exact copy-site set — confirm `f(vs)` (by-value arg) and `return vs`
-copy, and that a `&vs` ref param (if allowed) does NOT. (b) Interaction with the copy-elision
-analysis — don't double-copy when the source is already a fresh temporary (elide then).
-
-### Original local-variable steps (deprioritised — negligible, keep DbRef; MECHANISM REFERENCE)
-The construct/field/access steps below still document the mechanism, but the LOCAL case keeps
-its DbRef; apply the inline path only to the field/vector-element cases (Slices 2–3 folded in).
+### Appendix — retired approaches (MECHANISM REFERENCE only; SUPERSEDED by Steps 1.2–1.8 above)
+Two earlier framings, kept for the code refs they pin (not the plan):
+- the **parse-level `OpDatabase + OpCopyRecord` surgery** for copy semantics — retired in favour
+  of the `Type::Value` value type (copy falls out; no heap-#1 surgery);
+- the **`is_value`-flag-on-`Type::Reference`** representation with per-site inline routing —
+  superseded by the distinct `Type::Value` variant. The `Data.value_structs` marker survives, but
+  only to decide `Type::Value` vs `Type::Reference` at parse.
+The construct/field/access mechanism notes below remain accurate as REFERENCE; a value-struct
+LOCAL now becomes inline `Type::Value` (not a kept DbRef) as a natural consequence of the value
+type — which is fine (a bonus, not extra work).
 
 ### Step 1.1 — declaration: the `value struct` kind
 - **Parse** the `value` modifier before `struct` in the definition parser
