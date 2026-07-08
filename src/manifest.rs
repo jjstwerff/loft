@@ -2,9 +2,14 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // @I77 — Registry / manifest / lockfile resolution
 
-//! Minimal `loft.toml` manifest reader for external package support (T2-11).
-//! Phase 1: pure-loft package layout.  A simple line-scanner is sufficient
-//! for the three fields needed here; no full TOML parser is required.
+//! `loft.toml` manifest reader for external package support (T2-11).
+//!
+//! Tokenised with the SAME [`crate::lexer::Lexer`] loft source uses — via a
+//! config lexicon ([`LexConfig::config`]) that treats `#` as the comment marker
+//! and disables `{…}` string interpolation — so there is no second lexer in the
+//! codebase.  A small walk over the token stream fills the [`Manifest`] fields.
+
+use crate::lexer::{LexConfig, LexItem, Lexer};
 
 /// @PLN100 Slice 2 — one declared build target from `[build.target.<name>]`: a
 /// named (shape × triple × feature-set) the `loft build` driver can produce, with
@@ -208,168 +213,285 @@ impl Manifest {
 #[must_use]
 pub fn read_manifest(path: &str) -> Option<Manifest> {
     let content = std::fs::read_to_string(path).ok()?;
-    let mut manifest = Manifest::default();
+    Some(parse_manifest(&content, path))
+}
+
+/// A parsed manifest value: a `Scalar` (string / bool / bareword) or an array
+/// `List`.  Keeps the token walk from caring which the caller wants.
+enum MValue {
+    Scalar(String),
+    List(Vec<String>),
+}
+
+impl MValue {
+    /// The value as a single string (a list joins on `,`).
+    fn scalar(&self) -> String {
+        match self {
+            MValue::Scalar(s) => s.clone(),
+            MValue::List(v) => v.join(","),
+        }
+    }
+    /// The value as a list (a non-empty scalar is a one-item list).
+    fn list(&self) -> Vec<String> {
+        match self {
+            MValue::List(v) => v.clone(),
+            MValue::Scalar(s) if s.is_empty() => Vec::new(),
+            MValue::Scalar(s) => vec![s.clone()],
+        }
+    }
+    /// The value as a boolean (`true` bareword).
+    fn is_true(&self) -> bool {
+        self.scalar() == "true"
+    }
+}
+
+/// Parse `content` (a `loft.toml`) into a [`Manifest`], tokenising with the loft
+/// [`Lexer`] under a TOML lexicon (`#` comments, no string interpolation).
+fn parse_manifest(content: &str, filename: &str) -> Manifest {
+    let mut m = Manifest::default();
+    // The punctuation TOML needs; `#` (the comment marker) is added by `config`.
+    // `{`/`}` are listed so a stray inline table lexes rather than faulting; we
+    // don't interpret them.
+    let cfg = LexConfig::config(&["[", "]", "{", "}", "=", ".", ",", "-"], "#");
+    let mut lex = Lexer::from_str_with(content, filename, cfg);
     let mut section = String::new();
-    for line in content.lines() {
-        let line = line.trim();
-        // Skip blank lines and full-line comments.
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        // @PLN100 Slice 3 — a `[[build.asset]]` array-of-tables header starts a new
-        // asset element; its keys attach to that last element.  Checked BEFORE the
-        // single-bracket case (which would otherwise swallow it as `[build.asset]`).
-        if line.starts_with("[[") && line.ends_with("]]") {
-            let name = &line[2..line.len() - 2];
-            match name {
-                "build.asset" => manifest.build_assets.push(BuildAsset::default()),
-                "test" => manifest.build_tests.push(BuildTest::default()),
-                _ => {}
+    loop {
+        match lex.peek().has {
+            LexItem::None => break,
+            LexItem::Token(t) if t == "[" => section = read_section(&mut lex, &mut m),
+            LexItem::Identifier(_) => {
+                let key = read_key(&mut lex);
+                if !lex.has_token("=") {
+                    continue; // malformed line; read_key already advanced
+                }
+                let value = read_value(&mut lex);
+                apply_kv(&mut m, &section, &key, &value);
             }
-            section = format!("[[{name}]]");
-            continue;
-        }
-        if line.starts_with('[') && line.ends_with(']') {
-            section = line[1..line.len() - 1].to_string();
-            continue;
-        }
-        if let Some((key, value)) = line.split_once('=') {
-            let key = key.trim();
-            // Strip a trailing ` #…` inline comment, then surrounding quotes.
-            let value = before_comment(value.trim()).trim_matches('"');
-            if section == "[[build.asset]]" {
-                if let Some(a) = manifest.build_assets.last_mut() {
-                    match key {
-                        "name" => a.name = Some(value.to_string()),
-                        "run" => a.run = Some(value.to_string()),
-                        "lifetime" => a.lifetime = Some(value.to_string()),
-                        "inputs" => a.inputs = parse_array(value),
-                        "outputs" => a.outputs = parse_array(value),
-                        "targets" => a.targets = parse_array(value),
-                        _ => {}
-                    }
-                }
-                continue;
-            }
-            if section == "[[test]]" {
-                if let Some(t) = manifest.build_tests.last_mut() {
-                    match key {
-                        "name" => t.name = Some(value.to_string()),
-                        "run" => t.run = Some(value.to_string()),
-                        "targets" => t.targets = parse_array(value),
-                        "needs" => t.needs = parse_array(value),
-                        "inputs" => t.inputs = parse_array(value),
-                        _ => {}
-                    }
-                }
-                continue;
-            }
-            // @PLN100 Slice 2 — the [build] section uses dynamic
-            // [build.target.<name>] / [build.target.<name>.requires] headers the
-            // literal match below cannot express, plus single-line array values.
-            if section == "build" {
-                if key == "default-targets" {
-                    manifest.build_default_targets = parse_array(value);
-                }
-                continue;
-            }
-            if let Some(rest) = section.strip_prefix("build.target.") {
-                if let Some(tname) = rest.strip_suffix(".requires") {
-                    let t = manifest.build_target_mut(tname);
-                    match key {
-                        "rust-targets" => t.requires_rust_targets = parse_array(value),
-                        "tools" => t.requires_tools = parse_array(value),
-                        _ => {}
-                    }
-                } else {
-                    let t = manifest.build_target_mut(rest);
-                    match key {
-                        "shape" => t.shape = Some(value.to_string()),
-                        "triple" => t.triple = Some(value.to_string()),
-                        "features" => t.features = parse_array(value),
-                        _ => {}
-                    }
-                }
-                continue;
-            }
-            match (section.as_str(), key) {
-                ("package", "name") => manifest.name = Some(value.to_string()),
-                ("package", "version") => manifest.version = Some(value.to_string()),
-                ("package", "loft") => manifest.loft_version = Some(value.to_string()),
-                ("package", "repository") => manifest.repository = Some(value.to_string()),
-                ("package", "description") => manifest.description = Some(value.to_string()),
-                ("library", "entry") => manifest.entry = Some(value.to_string()),
-                ("library", "native") => manifest.native = Some(value.to_string()),
-                ("library", "compile") => manifest.compile = Some(value.to_string()),
-                ("dependencies", _) => {
-                    manifest
-                        .dependencies
-                        .push((key.to_string(), value.to_string()));
-                }
-                ("native", "crate") => manifest.native_crate = Some(value.to_string()),
-                ("native", "in_binary") => manifest.native_in_binary = value == "true",
-                ("native", "runtime-libs") => {
-                    manifest.runtime_libs = split_list(value);
-                }
-                ("native", "build-deps") => {
-                    manifest.build_deps = split_list(value);
-                }
-                ("native.functions", _) => {
-                    manifest
-                        .native_functions
-                        .push((key.to_string(), value.to_string()));
-                }
-                ("native.wasm", _) => {
-                    manifest
-                        .native_wasm
-                        .push((key.to_string(), value.to_string()));
-                }
-                ("wasm.bridge", "crate") => manifest.wasm_bridge_crate = Some(value.to_string()),
-                ("wasm.bridge", "host_js") => {
-                    manifest.wasm_bridge_host_js = Some(value.to_string());
-                }
-                ("wasm.bridge.routes", _) => {
-                    manifest
-                        .wasm_bridge_routes
-                        .push((key.to_string(), value.to_string()));
-                }
-                ("triggers", "enabled") => manifest.trigger_enabled = value == "true",
-                _ => {}
-            }
+            // Any stray token (or a value orphaned by a malformed line): skip one,
+            // guaranteeing forward progress.
+            _ => lex.cont(),
         }
     }
-    Some(manifest)
+    m
 }
 
-/// @PLN100 Slice 3 — strip a trailing ` #…` / `\t#…` inline comment from a value.
-/// Requires whitespace before the `#` so a `#` inside a path/value is preserved;
-/// loft.toml values never contain ` #`, so this is safe for every field.
-fn before_comment(s: &str) -> &str {
-    let bytes = s.as_bytes();
-    for (i, &b) in bytes.iter().enumerate() {
-        if b == b'#' && i > 0 && bytes[i - 1].is_ascii_whitespace() {
-            return s[..i].trim_end();
+/// Read a `[section]` or `[[array-of-tables]]` header (current token is `[`) and
+/// return the section string.  An `[[build.asset]]` / `[[test]]` header also pushes
+/// a fresh element and returns the `[[…]]` sentinel the key-walk keys on.
+fn read_section(lex: &mut Lexer, m: &mut Manifest) -> String {
+    lex.has_token("["); // consume the opening `[`
+    let array_of_tables = lex.has_token("["); // a second `[` => `[[name]]`
+    let name = read_dotted(lex);
+    lex.has_token("]"); // closing `]`
+    if array_of_tables {
+        lex.has_token("]"); // the second closing `]`
+        match name.as_str() {
+            "build.asset" => m.build_assets.push(BuildAsset::default()),
+            "test" => m.build_tests.push(BuildTest::default()),
+            _ => {}
+        }
+        return format!("[[{name}]]");
+    }
+    name
+}
+
+/// Read a dotted, possibly-hyphenated name (a section name or a bare key), joining
+/// identifiers with the `.` / `-` tokens between them, until a non-name token.
+fn read_dotted(lex: &mut Lexer) -> String {
+    let mut name = String::new();
+    loop {
+        match lex.peek().has {
+            LexItem::Identifier(s) => {
+                name.push_str(&s);
+                lex.cont();
+            }
+            LexItem::Token(ref t) if t == "." || t == "-" => {
+                name.push_str(t);
+                lex.cont();
+            }
+            _ => break,
         }
     }
-    s
+    name
 }
 
-/// @PLN100 Slice 2 — parse a single-line TOML array value into its string items:
-/// `["random"]` → `["random"]`, `[ "a", "b" ]` → `["a", "b"]`.  Tolerates a value
-/// with or without the surrounding brackets (a bare `"a, b"` is treated as a list
-/// too).  Multi-line arrays are not supported (the line-scanner sees one line).
-fn parse_array(value: &str) -> Vec<String> {
-    let inner = value
-        .trim()
-        .strip_prefix('[')
-        .and_then(|s| s.strip_suffix(']'))
-        .unwrap_or(value);
-    inner
-        .split(',')
-        .map(|s| s.trim().trim_matches('"').trim())
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .collect()
+/// Read a bare key: identifiers joined by `-` (TOML bare keys allow hyphens, which
+/// the lexer splits; underscores are already part of an identifier), up to `=`.
+fn read_key(lex: &mut Lexer) -> String {
+    let mut key = String::new();
+    loop {
+        match lex.peek().has {
+            LexItem::Identifier(s) => {
+                key.push_str(&s);
+                lex.cont();
+            }
+            LexItem::Token(ref t) if t == "-" => {
+                key.push('-');
+                lex.cont();
+            }
+            _ => break,
+        }
+    }
+    key
+}
+
+/// Read a value: a `["…", …]` array, a `"…"` string, a bareword (`true` / bare
+/// value), or a number.  Consumes exactly the value's tokens.
+fn read_value(lex: &mut Lexer) -> MValue {
+    match lex.peek().has {
+        LexItem::Token(ref t) if t == "[" => {
+            lex.cont(); // consume `[`
+            let mut items = Vec::new();
+            loop {
+                match lex.peek().has {
+                    LexItem::None => break,
+                    LexItem::Token(ref t) if t == "]" => {
+                        lex.cont();
+                        break;
+                    }
+                    LexItem::CString(s) | LexItem::Identifier(s) => {
+                        items.push(s);
+                        lex.cont();
+                    }
+                    // Commas and any stray tokens between items: skip.
+                    _ => lex.cont(),
+                }
+            }
+            MValue::List(items)
+        }
+        LexItem::Token(ref t) if t == "{" => {
+            // An inline table (e.g. a dependency `{ path = "../x" }`).  Reconstruct
+            // the raw `{ … }` text — the form `extract_path_dep` parses — rather
+            // than interpret it here; this is the only inline-table use.
+            lex.cont(); // consume `{`
+            let mut raw = String::from("{ ");
+            loop {
+                match lex.peek().has {
+                    LexItem::None => break,
+                    LexItem::Token(ref t) if t == "}" => {
+                        lex.cont();
+                        break;
+                    }
+                    LexItem::CString(s) => {
+                        raw.push('"');
+                        raw.push_str(&s);
+                        raw.push_str("\" ");
+                        lex.cont();
+                    }
+                    LexItem::Identifier(s) => {
+                        raw.push_str(&s);
+                        raw.push(' ');
+                        lex.cont();
+                    }
+                    LexItem::Token(t) => {
+                        raw.push_str(&t);
+                        raw.push(' ');
+                        lex.cont();
+                    }
+                    _ => lex.cont(),
+                }
+            }
+            raw.push('}');
+            MValue::Scalar(raw)
+        }
+        LexItem::CString(s) | LexItem::Identifier(s) => {
+            lex.cont();
+            MValue::Scalar(s)
+        }
+        LexItem::Integer(n, _) => {
+            lex.cont();
+            MValue::Scalar(n.to_string())
+        }
+        LexItem::Long(n) => {
+            lex.cont();
+            MValue::Scalar(n.to_string())
+        }
+        _ => {
+            lex.cont();
+            MValue::Scalar(String::new())
+        }
+    }
+}
+
+/// Apply one `key = value` to `m` under `section` — the dispatch table for every
+/// manifest field.
+fn apply_kv(m: &mut Manifest, section: &str, key: &str, value: &MValue) {
+    // @PLN100 Slice 3/4 — the current `[[build.asset]]` / `[[test]]` element.
+    if section == "[[build.asset]]" {
+        if let Some(a) = m.build_assets.last_mut() {
+            match key {
+                "name" => a.name = Some(value.scalar()),
+                "run" => a.run = Some(value.scalar()),
+                "lifetime" => a.lifetime = Some(value.scalar()),
+                "inputs" => a.inputs = value.list(),
+                "outputs" => a.outputs = value.list(),
+                "targets" => a.targets = value.list(),
+                _ => {}
+            }
+        }
+        return;
+    }
+    if section == "[[test]]" {
+        if let Some(t) = m.build_tests.last_mut() {
+            match key {
+                "name" => t.name = Some(value.scalar()),
+                "run" => t.run = Some(value.scalar()),
+                "targets" => t.targets = value.list(),
+                "needs" => t.needs = value.list(),
+                "inputs" => t.inputs = value.list(),
+                _ => {}
+            }
+        }
+        return;
+    }
+    // @PLN100 Slice 2 — the dynamic [build] / [build.target.<name>] sections.
+    if section == "build" {
+        if key == "default-targets" {
+            m.build_default_targets = value.list();
+        }
+        return;
+    }
+    if let Some(rest) = section.strip_prefix("build.target.") {
+        if let Some(tname) = rest.strip_suffix(".requires") {
+            let t = m.build_target_mut(tname);
+            match key {
+                "rust-targets" => t.requires_rust_targets = value.list(),
+                "tools" => t.requires_tools = value.list(),
+                _ => {}
+            }
+        } else {
+            let t = m.build_target_mut(rest);
+            match key {
+                "shape" => t.shape = Some(value.scalar()),
+                "triple" => t.triple = Some(value.scalar()),
+                "features" => t.features = value.list(),
+                _ => {}
+            }
+        }
+        return;
+    }
+    match (section, key) {
+        ("package", "name") => m.name = Some(value.scalar()),
+        ("package", "version") => m.version = Some(value.scalar()),
+        ("package", "loft") => m.loft_version = Some(value.scalar()),
+        ("package", "repository") => m.repository = Some(value.scalar()),
+        ("package", "description") => m.description = Some(value.scalar()),
+        ("library", "entry") => m.entry = Some(value.scalar()),
+        ("library", "native") => m.native = Some(value.scalar()),
+        ("library", "compile") => m.compile = Some(value.scalar()),
+        ("dependencies", _) => m.dependencies.push((key.to_string(), value.scalar())),
+        ("native", "crate") => m.native_crate = Some(value.scalar()),
+        ("native", "in_binary") => m.native_in_binary = value.is_true(),
+        ("native", "runtime-libs") => m.runtime_libs = split_list(&value.scalar()),
+        ("native", "build-deps") => m.build_deps = split_list(&value.scalar()),
+        ("native.functions", _) => m.native_functions.push((key.to_string(), value.scalar())),
+        ("native.wasm", _) => m.native_wasm.push((key.to_string(), value.scalar())),
+        ("wasm.bridge", "crate") => m.wasm_bridge_crate = Some(value.scalar()),
+        ("wasm.bridge", "host_js") => m.wasm_bridge_host_js = Some(value.scalar()),
+        ("wasm.bridge.routes", _) => m.wasm_bridge_routes.push((key.to_string(), value.scalar())),
+        ("triggers", "enabled") => m.trigger_enabled = value.is_true(),
+        _ => {}
+    }
 }
 
 /// @PLN21 Phase 2 — parse a comma-separated manifest value into a trimmed,
@@ -543,6 +665,28 @@ mod tests {
         assert_eq!(
             m.dependencies[1],
             ("utils".to_string(), "../utils".to_string())
+        );
+    }
+
+    // The lexer-based reader reconstructs an inline-table dependency so
+    // `extract_path_dep` still finds the path (regression: i337).
+    #[test]
+    fn parses_inline_table_path_dep() {
+        let p = write_temp(
+            "inlinedep",
+            "[package]\nname = \"b\"\n[dependencies]\na = { path = \"../elsewhere/nested/a\" }\n",
+        );
+        let m = read_manifest(p.to_str().unwrap()).unwrap();
+        let (name, value) = m
+            .dependencies
+            .iter()
+            .find(|(n, _)| n == "a")
+            .expect("dependency `a` present");
+        assert_eq!(name, "a");
+        assert_eq!(
+            extract_path_dep(value),
+            Some("../elsewhere/nested/a"),
+            "raw value was {value:?}"
         );
     }
 
