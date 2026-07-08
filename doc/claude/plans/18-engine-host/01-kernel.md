@@ -4,12 +4,14 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 # @PLN18 phase 01 — the kernel: design notes + entry probes
 
-> Status: **◐ in progress — the v1 core is ALIVE** (2026-06-10): `src/engine_host.rs`
+> Status: **✅ complete** (2026-06-12): `src/engine_host.rs`
 > (pump with the peek pattern, event queue, drift-free ticks, send/broadcast) +
 > `lib/engine_host` (the budgeted-drain `run()` skeleton) pass the end-to-end test
 > (`tests/engine_host_kernel.rs`: WS client → connect event → handler closure →
-> broadcast round trips → tick counting via a struct world). Next: the audience-server
-> port (acceptance) + the stamp-chain re-run.
+> broadcast round trips → tick counting via a struct world). Both acceptance items
+> landed: the audience-server port (differential-green, `tests/engine_host_audience.rs`)
+> and the stamp-chain re-run on the kernel (server hold p50 18.6 ms @12 ≈ the half-tick
+> floor) — see the README phase-01 row.
 > The loop/queue/wire design is [ENGINE_HOST.md](ENGINE_HOST.md) Part 2 + the
 > host-boundary principle; this file records the **dispatch mechanics** that the
 > kernel build rests on, probed before building.
