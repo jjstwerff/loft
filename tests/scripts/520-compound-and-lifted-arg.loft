@@ -1,0 +1,27 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Native-codegen regression (surfaced building the `time` DateTime library:
+// `diff == time::minutes(90) && diff.total_minutes() == 90`).  A value-struct-returning CALL
+// used as an operator argument in the LHS of a compound `&&` forces the arg to be LIFTED to a
+// temp; the `&&` short-circuit lowering makes the if-TEST an `Insert` (`<lift>; <predicate>`).
+// A consumer needing the result as a VALUE wrapped it as `(<if>) as i64`, producing the invalid
+// Rust `( stmt; expr ) as i64` — rustc E0308 (`((), u8) as i64`) + a "found `;`" syntax error,
+// failing the whole --native / wasm compile.  Fix: the if-emission wraps itself in a block
+// `{ … }` when its test carries pre-statements, so it is one valid expression anywhere.
+// Both backends (and wasm, which shares the Rust generator).
+
+value struct D { ms: integer }
+fn OpEq(self: D, other: D) -> boolean { self.ms == other.ms }
+fn OpLt(self: D, other: D) -> boolean { self.ms < other.ms }
+fn mk(n: integer) -> D { D { ms: n } }
+fn tm(self: D) -> integer { self.ms }
+
+fn main() {
+  a = D { ms: 90 };
+  assert(a == mk(90) && a.tm() == 90, "lifted value-struct == in && test");
+  assert(a < mk(100) && a.tm() > 0, "lifted value-struct < in && test");
+  // NOTE: a compound && with TWO lifted value-struct calls (`a == mk(90) && a < mk(100) && …`)
+  // still hits a second paren-wrap site — a rarer nested shape, tracked as a follow-up.
+  println("compound-and lifted-arg ok");
+}

@@ -695,7 +695,13 @@ impl Output<'_> {
         let bind_code = if !substituted.is_empty() && substituted != "()" {
             if let Some(tp) = self.infer_type(IrNode::Native(arg)) {
                 if narrow_int_cast(&tp).is_some() {
-                    format!("({substituted}) as i64")
+                    // Braces, not parens: `substituted` can be a STATEMENT sequence, not just an
+                    // expression — e.g. a boolean `&&`/`||` lowering whose operand lifted a
+                    // value-struct-returning call emits `<lift>; if <pred> {…} else {…}`. Wrapping
+                    // that as `( stmt; expr ) as i64` is invalid Rust (a "found `;`" syntax error,
+                    // then a bogus `((), u8) as i64`). A block `{ … } as i64` is valid for a single
+                    // expression AND a statement sequence, so it works in every case.
+                    format!("{{ {substituted} }} as i64")
                 } else if matches!(tp, Type::Text(_))
                     && matches!(arg, Value::Call(d, _) if
                         matches!(self.data.def(*d).returned(), Type::Text(_))
