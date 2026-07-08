@@ -977,7 +977,45 @@ missing rustup target is a HARD failure (skip the target, print `rustup target
 add …`); a missing tool is a SOFT warning (build proceeds). It exits non-zero if
 any target fails. Resolution + requires logic lives in `src/build_phase.rs`
 (unit-tested); the driver re-invokes this loft binary with the shape's flags per
-target. *(Custom asset steps and the `[test]` phase are Slices 3–4.)*
+target.
+
+### Asset steps — `[[build.asset]]` (@PLN100 Slice 3)
+
+A `[[build.asset]]` is a custom command that turns `inputs` into `outputs`, run
+by `loft build` **before** the targets it feeds — but only when **stale**:
+
+```toml
+[[build.asset]]                 # built from local files
+name    = "atlas"
+run     = "scripts/pack_atlas.loft"   # a single .loft script, or any shell command
+inputs  = ["art/**/*.png"]      # content-fingerprinted -> rebuild only on change
+outputs = ["assets/atlas.bin"]  # a missing output forces a rebuild
+targets = ["html"]              # runs only when `html` is being built (omit = always)
+
+[[build.asset]]                 # fed by an EXTERNAL source
+name     = "dataset"
+run      = "scripts/fetch.loft"
+outputs  = ["assets/dataset.pak"]
+lifetime = "30d"                # freshness TTL — rebuild when older than this
+```
+
+**Staleness** = `output missing` **OR** `no prior build` **OR** `inputs content
+changed` **OR** (`lifetime` set **AND** the output is older than it) **OR**
+`--force`. A fingerprint of the inputs' content + a wall-clock build time are
+stamped to `.loft/build/<name>.stamp`; the input fingerprint controls
+*re-run-on-change*, the `lifetime` TTL controls *re-fetch-on-age* for
+external-source outputs (no instrumentation of the source). `loft build --force`
+(or `--fresh`) rebuilds every asset for a deterministic clean build (CI can pin
+it). `lifetime` units: `s` `m` `h` `d` `w` `mo` (=30d) `y`.
+
+`run` executes as a `.loft` script (with this loft binary) when it is a single
+`.loft` path, else through the platform shell — trusted-by-declaration (it is the
+project's own manifest; @PLN100 open question 3 / @PLN86). Input globs support
+`*`, `?`, and `**`. *(The `[test]` phase is Slice 4.)*
+
+> **Minimal-scanner note:** the hand-rolled `loft.toml` reader takes single-line
+> arrays and a `[build.target.<name>.requires]` subtable (no inline tables), and
+> now strips `# …` comments (full-line and inline).
 
 ## Build pipeline
 

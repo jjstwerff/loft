@@ -33,6 +33,35 @@ pub struct BuildTarget {
     pub requires_tools: Vec<String>,
 }
 
+/// @PLN100 Slice 3 — one `[[build.asset]]` step: a custom command that turns
+/// declared `inputs` into `outputs`, re-run only when stale.  Staleness =
+/// `outputs missing` OR `inputs content changed` OR (for an external-source asset)
+/// the output is older than `lifetime` (a freshness TTL).  See
+/// `build_phase::run_asset`.
+#[derive(Debug, Default, Clone)]
+pub struct BuildAsset {
+    /// The asset's name (`name = "atlas"`) — used in progress output and the
+    /// fingerprint sidecar filename.
+    pub name: Option<String>,
+    /// The command to (re)build the asset (`run = "scripts/pack_atlas.loft"`): a
+    /// single `.loft` script (run with this loft binary) or any shell command.
+    pub run: Option<String>,
+    /// Input path globs (`inputs = ["art/**/*.png"]`) — content-fingerprinted so
+    /// the step re-runs only when an input changes.  Empty for an
+    /// external-source asset (then `lifetime` drives rebuilds).
+    pub inputs: Vec<String>,
+    /// The files this step produces (`outputs = ["assets/atlas.bin"]`) — a missing
+    /// output forces a rebuild.
+    pub outputs: Vec<String>,
+    /// The build targets this asset is needed for (`targets = ["html"]`).  Empty →
+    /// the asset applies to every build.
+    pub targets: Vec<String>,
+    /// A freshness TTL (`lifetime = "30d"`) for an externally-sourced output:
+    /// rebuild when the output is older than this even if no input changed.  Units
+    /// span `s`/`m`/`h`/`d`/`w`/`mo`/`y` (`build_phase::parse_duration`).
+    pub lifetime: Option<String>,
+}
+
 /// Content of a library's `loft.toml` manifest file.
 #[derive(Debug, Default)]
 pub struct Manifest {
@@ -127,6 +156,8 @@ pub struct Manifest {
     /// @PLN100 Slice 2 — the `[build.target.<name>]` entries.  Each overlays a
     /// built-in target (`native` / `html` / `wasi`) or declares a new one.
     pub build_targets: Vec<BuildTarget>,
+    /// @PLN100 Slice 3 — the `[[build.asset]]` custom asset steps, in file order.
+    pub build_assets: Vec<BuildAsset>,
 }
 
 impl Manifest {
@@ -156,13 +187,43 @@ pub fn read_manifest(path: &str) -> Option<Manifest> {
     let mut section = String::new();
     for line in content.lines() {
         let line = line.trim();
+        // Skip blank lines and full-line comments.
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        // @PLN100 Slice 3 — a `[[build.asset]]` array-of-tables header starts a new
+        // asset element; its keys attach to that last element.  Checked BEFORE the
+        // single-bracket case (which would otherwise swallow it as `[build.asset]`).
+        if line.starts_with("[[") && line.ends_with("]]") {
+            let name = &line[2..line.len() - 2];
+            if name == "build.asset" {
+                manifest.build_assets.push(BuildAsset::default());
+            }
+            section = format!("[[{name}]]");
+            continue;
+        }
         if line.starts_with('[') && line.ends_with(']') {
             section = line[1..line.len() - 1].to_string();
             continue;
         }
         if let Some((key, value)) = line.split_once('=') {
             let key = key.trim();
-            let value = value.trim().trim_matches('"');
+            // Strip a trailing ` #…` inline comment, then surrounding quotes.
+            let value = before_comment(value.trim()).trim_matches('"');
+            if section == "[[build.asset]]" {
+                if let Some(a) = manifest.build_assets.last_mut() {
+                    match key {
+                        "name" => a.name = Some(value.to_string()),
+                        "run" => a.run = Some(value.to_string()),
+                        "lifetime" => a.lifetime = Some(value.to_string()),
+                        "inputs" => a.inputs = parse_array(value),
+                        "outputs" => a.outputs = parse_array(value),
+                        "targets" => a.targets = parse_array(value),
+                        _ => {}
+                    }
+                }
+                continue;
+            }
             // @PLN100 Slice 2 — the [build] section uses dynamic
             // [build.target.<name>] / [build.target.<name>.requires] headers the
             // literal match below cannot express, plus single-line array values.
@@ -238,6 +299,19 @@ pub fn read_manifest(path: &str) -> Option<Manifest> {
         }
     }
     Some(manifest)
+}
+
+/// @PLN100 Slice 3 — strip a trailing ` #…` / `\t#…` inline comment from a value.
+/// Requires whitespace before the `#` so a `#` inside a path/value is preserved;
+/// loft.toml values never contain ` #`, so this is safe for every field.
+fn before_comment(s: &str) -> &str {
+    let bytes = s.as_bytes();
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b'#' && i > 0 && bytes[i - 1].is_ascii_whitespace() {
+            return s[..i].trim_end();
+        }
+    }
+    s
 }
 
 /// @PLN100 Slice 2 — parse a single-line TOML array value into its string items:
@@ -545,6 +619,45 @@ features = ["random", "png"]
         let p = write_temp("nobuild", "[package]\nname = \"plain\"\n");
         let m = read_manifest(p.to_str().unwrap()).unwrap();
         assert!(m.build_default_targets.is_empty() && m.build_targets.is_empty());
+    }
+
+    // @PLN100 Slice 3 — [[build.asset]] array-of-tables, inline + full-line
+    // comments, array and scalar fields, and multiple elements.
+    #[test]
+    fn parses_build_assets() {
+        let p = write_temp(
+            "assets",
+            r#"[package]
+name = "game"
+
+# an asset built from local files
+[[build.asset]]
+name    = "atlas"
+run     = "scripts/pack_atlas.loft"
+inputs  = ["art/**/*.png"]      # fingerprinted -> rebuild only on change
+outputs = ["assets/atlas.bin"]
+targets = ["html"]
+
+[[build.asset]]
+name     = "dataset"
+run      = "scripts/fetch.loft"
+outputs  = ["assets/dataset.pak"]
+lifetime = "30d"
+"#,
+        );
+        let m = read_manifest(p.to_str().unwrap()).unwrap();
+        assert_eq!(m.build_assets.len(), 2);
+        let atlas = &m.build_assets[0];
+        assert_eq!(atlas.name.as_deref(), Some("atlas"));
+        assert_eq!(atlas.run.as_deref(), Some("scripts/pack_atlas.loft"));
+        assert_eq!(atlas.inputs, vec!["art/**/*.png"]); // inline comment stripped
+        assert_eq!(atlas.outputs, vec!["assets/atlas.bin"]);
+        assert_eq!(atlas.targets, vec!["html"]);
+        assert!(atlas.lifetime.is_none());
+        let dataset = &m.build_assets[1];
+        assert_eq!(dataset.name.as_deref(), Some("dataset"));
+        assert_eq!(dataset.lifetime.as_deref(), Some("30d"));
+        assert!(dataset.inputs.is_empty());
     }
 
     #[test]

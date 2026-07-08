@@ -4043,11 +4043,15 @@ fn main() {
             // else is a target name.
             let mut requested: Vec<String> = Vec::new();
             let mut entry_override: Option<String> = None;
+            let mut force = false;
             while let Some(arg) = argv.get(i) {
-                if arg.starts_with('-') {
+                if arg == "--force" || arg == "--fresh" {
+                    // @PLN100 Slice 3 — rebuild every asset regardless of its
+                    // fingerprint / TTL (a deterministic clean build; CI can pin it).
+                    force = true;
+                } else if arg.starts_with('-') {
                     break;
-                }
-                if std::path::Path::new(arg)
+                } else if std::path::Path::new(arg)
                     .extension()
                     .is_some_and(|e| e.eq_ignore_ascii_case("loft"))
                 {
@@ -4076,7 +4080,7 @@ fn main() {
                 std::process::exit(1);
             }
             let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-            let ok = loft::build_phase::run(&requested, &entry, &manifest, &cwd);
+            let ok = loft::build_phase::run(&requested, &entry, &manifest, &cwd, force);
             std::process::exit(i32::from(!ok));
         } else if a == "test" {
             // PKG.6: `loft test [target]` — run package tests.

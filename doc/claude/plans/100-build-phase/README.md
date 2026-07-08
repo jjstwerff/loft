@@ -9,7 +9,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**`status:active` — filed 2026-07-08. Slices 1–2 SHIPPED (2026-07-08); Slices 3–5 open.** A loft
+**`status:active` — filed 2026-07-08. Slices 1–3 SHIPPED (2026-07-08); Slices 4–5 open.** A loft
 project has no declared build phase: what an artifact needs (which toolchain binaries,
 which prebuilt runtime rlibs, which generated data files) lives only in `Makefile`
 recipes and scattered Rust fallbacks, so it can't be checked or built automatically.
@@ -128,7 +128,7 @@ Every field maps cleanly to a form control (Slice 5).
 |---|---|---|
 | **Slice 1** — target-dir isolation `target/loft/<shape>/` + auto-build the **loft-runtime** wasm rlib via the existing fingerprint gate | kills the stomp + flaky WASM, retires the manual `make` | **SHIPPED** — `native_utils::ensure_loft_runtime_rlib` (`--html` → isolated `target/loft/html/`; `--native-wasm` auto-builds wasip2), keyed on `loft_build_fingerprint` via the `.loft-build-fp` sidecar; `html_wasm` (16) + `wasm_debug_relay` (1) green |
 | **Slice 2** — `[build]` manifest schema + `loft build` driver (targets + `requires` resolution, doctor-style missing-tool report) | declarative targets | **SHIPPED** — `[build]`/`[build.target.<name>]`/`.requires` in `src/manifest.rs`; `loft build [target...]` driver + built-in native/html/wasi + doctor-check in `src/build_phase.rs` (native→`--native --check`, html→`--html`, wasi→`--native-wasm`) |
-| **Slice 3** — `[[build.asset]]` custom steps with input/output fingerprinting **+ a freshness `lifetime`** (TTL) for external-source-backed outputs (rebuild on age, no source instrumentation) | custom asset pipelines | Open |
+| **Slice 3** — `[[build.asset]]` custom steps with input/output fingerprinting **+ a freshness `lifetime`** (TTL) for external-source-backed outputs (rebuild on age, no source instrumentation) | custom asset pipelines | **SHIPPED** — `[[build.asset]]` in `src/manifest.rs`; staleness (`missing`/`inputs-changed`/`TTL-expired`/`--force`) + glob + content-fingerprint + wall-clock stamp (`.loft/build/<name>.stamp`) + `.loft`/shell runner in `src/build_phase.rs` |
 | **Slice 4** — `[test]` phase + `loft test` / `loft check`: run declared tests over each built target and over generated data files (`inputs`), gated on `needs` asset outputs; cache a green run by input fingerprint | declarative test phase | Open |
 | **Slice 5** — UI backing the config | authoring UI | Deferred (later) |
 
@@ -166,8 +166,10 @@ Every field maps cleanly to a form control (Slice 5).
    run under the existing loft sandbox/capability model (@PLN86), or is a build script
    trusted-by-declaration? Lean trusted (it's the project's own manifest) but flag in the
    UI.
-4. **Fingerprint granularity for assets.** Content hash vs. mtime for `inputs` globs —
-   reuse `src/cache.rs` hashing for consistency with the runtime rlib gate.
+4. **Fingerprint granularity for assets.** ✅ RESOLVED (Slice 3) — CONTENT hash (not
+   mtime), reusing `cache::file_hash` (sha256): `build_phase::inputs_fingerprint` folds
+   each glob-matched file's path + content hash. Survives mtime resets; new/removed files
+   change the fingerprint too. Asset sandboxing (question 3) stays trusted-by-declaration.
 5. **Test-run caching.** Should a test whose `run` script + `inputs` data files + target
    fingerprint are unchanged since its last green run be **skipped** (cache the pass), the
    way the artifact gates skip an up-to-date build? Lean yes — it makes `loft check`
@@ -177,21 +179,15 @@ Every field maps cleanly to a form control (Slice 5).
    loft's in-repo `tests/scripts/*.loft` (auto-run on both backends by `tests/wrap.rs` /
    `tests/native.rs`) is the *compiler's* harness. Keep them separate but let the project
    phase reuse the same "run on each target backend" runner so behavior matches.
-7. **Freshness `lifetime` (TTL) mechanism.** The staleness predicate for an asset becomes
-   `missing OR inputs-fingerprint-changed OR (lifetime set AND age > lifetime)`, where
-   `age` reads a **build timestamp** written to the output's fingerprint sidecar (extend
-   `write_native_artifact_fingerprint` to stamp a time alongside the hash) — so a
-   TTL-expired external-source asset rebuilds with **no instrumentation of the external
-   source**. The typical `lifetime` is **month-scale** (a monthly-refreshed dataset), not hours, so
-   the duration units must span days/weeks/months (`30d`, `4w`, `1mo`), and a build that
-   sits idle for weeks between runs is normal — the TTL check must be cheap on every
-   `loft build`, not a background timer. Open sub-questions: (a) time source is wall-clock
-   (never calendar-relative *effort* language — store an absolute instant); (b) `loft build
-   --force` / `--fresh` overrides TTL for a deterministic clean build (and CI can pin it);
-   (c) does a rebuilt output whose
-   *content* is byte-identical to the prior one still re-stamp the time only (cheap) and
-   skip re-running downstream tests (their `inputs` fingerprint is unchanged)? Lean yes —
-   TTL controls *re-fetch*, content-hash still controls *downstream invalidation*.
+7. **Freshness `lifetime` (TTL) mechanism.** ✅ RESOLVED (Slice 3) — staleness =
+   `missing OR inputs-fingerprint-changed OR (lifetime set AND age > lifetime) OR --force`
+   (`build_phase::compute_staleness`, unit-tested for precedence). Rather than overload the
+   rlib's `.loft-build-fp` sidecar, assets get a dedicated `.loft/build/<name>.stamp`
+   holding `<inputs-fingerprint>\n<unix-secs>`; `age = now - stamp_time` reads a **wall-clock
+   absolute instant** (`SystemTime::now`, cheap on every `loft build` — no timer). Units span
+   `s`/`m`/`h`/`d`/`w`/`mo`(=30d)/`y` (`parse_duration`). (a) wall-clock ✓; (b) `--force` /
+   `--fresh` overrides ✓; (c) content-vs-time re-stamp for skipping downstream tests →
+   deferred to Slice 4 (test-run caching), where the test phase lands.
 
 ## See also
 

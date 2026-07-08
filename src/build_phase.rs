@@ -12,7 +12,7 @@
 //! or declares a **new** named target that maps to one of the built-in compile
 //! shapes.  See `doc/claude/PACKAGES.md § The build phase` and the @PLN100 plan.
 
-use crate::manifest::Manifest;
+use crate::manifest::{BuildAsset, Manifest};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -250,11 +250,18 @@ fn describe(t: &ResolvedTarget) -> String {
 }
 
 /// Drive `loft build`: resolve `requested` (or the default targets when empty),
-/// doctor-check each target's `requires`, and compile it by re-invoking this
-/// loft binary with the shape's flags on `entry` (from `project_dir`).  Returns
-/// `true` only if every target built.
+/// run the applicable `[[build.asset]]` steps (stale ones only, unless `force`),
+/// doctor-check each target's `requires`, and compile it by re-invoking this loft
+/// binary with the shape's flags on `entry` (from `project_dir`).  Returns `true`
+/// only if every asset and target succeeded.
 #[must_use]
-pub fn run(requested: &[String], entry: &str, manifest: &Manifest, project_dir: &Path) -> bool {
+pub fn run(
+    requested: &[String],
+    entry: &str,
+    manifest: &Manifest,
+    project_dir: &Path,
+    force: bool,
+) -> bool {
     let names: Vec<String> = if requested.is_empty() {
         default_targets(manifest)
     } else {
@@ -264,6 +271,13 @@ pub fn run(requested: &[String], entry: &str, manifest: &Manifest, project_dir: 
     let installed = installed_rust_targets();
     let mut all_ok = true;
     eprintln!("loft build: {} → target(s): {}", entry, names.join(", "));
+    // @PLN100 Slice 3 — run the asset steps needed by the selected targets FIRST,
+    // so an asset that feeds a target compile is ready before it builds.
+    for asset in applicable_assets(manifest, &names) {
+        if run_asset(asset, project_dir, force) == AssetOutcome::Failed {
+            all_ok = false;
+        }
+    }
     for name in &names {
         let target = match resolve_target(name, manifest) {
             Ok(t) => t,
@@ -311,6 +325,362 @@ pub fn run(requested: &[String], entry: &str, manifest: &Manifest, project_dir: 
         }
     }
     all_ok
+}
+
+// ── @PLN100 Slice 3 — custom asset steps ────────────────────────────────────
+
+/// What happened to an asset step in one `loft build`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssetOutcome {
+    /// Was stale → the `run` command executed and re-stamped.
+    Built,
+    /// Fingerprint + TTL agreed it was up to date → skipped.
+    Skipped,
+    /// The `run` command failed (or the asset was malformed).
+    Failed,
+}
+
+/// The assets that apply to a build of `target_names`: an asset with no `targets`
+/// is global (always applies); otherwise it applies when one of its `targets` is
+/// being built.
+#[must_use]
+pub fn applicable_assets<'a>(
+    manifest: &'a Manifest,
+    target_names: &[String],
+) -> Vec<&'a BuildAsset> {
+    manifest
+        .build_assets
+        .iter()
+        .filter(|a| a.targets.is_empty() || a.targets.iter().any(|t| target_names.contains(t)))
+        .collect()
+}
+
+/// Why an asset needs (re)building — or that it does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Staleness {
+    /// Up to date; skip.
+    Fresh,
+    /// `--force` / `--fresh` requested a rebuild regardless.
+    Forced,
+    /// A declared output file is missing.
+    OutputMissing,
+    /// No prior build stamp (first build).
+    FirstBuild,
+    /// An input file's content changed.
+    InputsChanged,
+    /// A `lifetime` TTL elapsed since the last build.
+    Expired,
+}
+
+impl Staleness {
+    /// Whether this state requires the asset's `run` command to execute.
+    #[must_use]
+    pub fn needs_build(self) -> bool {
+        self != Staleness::Fresh
+    }
+
+    /// A short human tag for progress output.
+    #[must_use]
+    pub fn reason(self) -> &'static str {
+        match self {
+            Staleness::Fresh => "fresh",
+            Staleness::Forced => "forced",
+            Staleness::OutputMissing => "output missing",
+            Staleness::FirstBuild => "first build",
+            Staleness::InputsChanged => "inputs changed",
+            Staleness::Expired => "lifetime expired",
+        }
+    }
+}
+
+/// Decide whether an asset is stale, given its current inputs `fingerprint`, the
+/// `stored` `(fingerprint, unix_secs)` from the last build (if any), whether its
+/// outputs are present, its `lifetime_secs` (if a TTL is set), the wall-clock
+/// `now`, and `force`.  Pure so it is unit-tested exhaustively.
+#[must_use]
+pub fn compute_staleness(
+    fingerprint: u64,
+    stored: Option<(u64, u64)>,
+    outputs_present: bool,
+    lifetime_secs: Option<u64>,
+    now: u64,
+    force: bool,
+) -> Staleness {
+    if force {
+        return Staleness::Forced;
+    }
+    if !outputs_present {
+        return Staleness::OutputMissing;
+    }
+    let Some((stored_fp, stored_time)) = stored else {
+        return Staleness::FirstBuild;
+    };
+    if stored_fp != fingerprint {
+        return Staleness::InputsChanged;
+    }
+    if let Some(ttl) = lifetime_secs
+        && now.saturating_sub(stored_time) > ttl
+    {
+        return Staleness::Expired;
+    }
+    Staleness::Fresh
+}
+
+/// Parse a freshness-`lifetime` string into seconds: a positive integer followed
+/// by a unit — `s` (sec), `m` (min), `h` (hour), `d` (day), `w` (week), `mo`
+/// (month = 30d), `y` (year = 365d).  `"30d"` → `2_592_000`.  `None` if malformed.
+#[must_use]
+pub fn parse_duration(s: &str) -> Option<u64> {
+    let s = s.trim();
+    // Longest unit first so `mo` wins over `m`.
+    const UNITS: &[(&str, u64)] = &[
+        ("mo", 2_592_000),
+        ("s", 1),
+        ("m", 60),
+        ("h", 3_600),
+        ("d", 86_400),
+        ("w", 604_800),
+        ("y", 31_536_000),
+    ];
+    for (suffix, secs) in UNITS {
+        if let Some(num) = s.strip_suffix(suffix) {
+            let n: u64 = num.trim().parse().ok()?;
+            return n.checked_mul(*secs);
+        }
+    }
+    None
+}
+
+/// Wall-clock seconds since the Unix epoch (0 if the clock is before the epoch).
+#[must_use]
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// A content fingerprint of every file matching an asset's `input` globs
+/// (relative to `project_dir`): folds each matched file's path + sha256 content
+/// hash, sorted so it is order-independent.  An asset with no inputs fingerprints
+/// to a constant (then only `lifetime` / a missing output drive rebuilds).
+#[must_use]
+pub fn inputs_fingerprint(project_dir: &Path, inputs: &[String]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut files: Vec<PathBuf> = inputs
+        .iter()
+        .flat_map(|g| glob_expand(project_dir, g))
+        .collect();
+    files.sort();
+    files.dedup();
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for f in &files {
+        let rel = f.strip_prefix(project_dir).unwrap_or(f);
+        rel.to_string_lossy().hash(&mut h);
+        if let Some(content) = f.to_str().and_then(crate::cache::file_hash) {
+            content.hash(&mut h);
+        }
+    }
+    h.finish()
+}
+
+/// Expand one glob `pattern` (relative to `base`) to the matching files.  `*` /
+/// `?` match within a path segment, `**` matches any number of directory
+/// segments; a pattern with no wildcard is a literal path.
+#[must_use]
+pub fn glob_expand(base: &Path, pattern: &str) -> Vec<PathBuf> {
+    let segments: Vec<&str> = pattern.split('/').filter(|s| !s.is_empty()).collect();
+    let mut out = Vec::new();
+    match_segments(base, &segments, &mut out);
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn match_segments(dir: &Path, segs: &[&str], out: &mut Vec<PathBuf>) {
+    let Some((first, rest)) = segs.split_first() else {
+        // No more segments: `dir` matches if it is a file.
+        if dir.is_file() {
+            out.push(dir.to_path_buf());
+        }
+        return;
+    };
+    if *first == "**" {
+        // `**` matches zero segments (recurse with the rest here)…
+        match_segments(dir, rest, out);
+        // …or one+ segments: descend into each subdir keeping the `**`.
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for e in entries.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    match_segments(&p, segs, out);
+                }
+            }
+        }
+        return;
+    }
+    if first.contains('*') || first.contains('?') {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for e in entries.flatten() {
+                let name = e.file_name();
+                if segment_matches(&name.to_string_lossy(), first) {
+                    match_segments(&e.path(), rest, out);
+                }
+            }
+        }
+        return;
+    }
+    let next = dir.join(first);
+    if next.exists() {
+        match_segments(&next, rest, out);
+    }
+}
+
+/// Whether a file `name` matches a single glob segment `pattern` (`*` = any run,
+/// `?` = one char; no `/`).
+#[must_use]
+pub fn segment_matches(name: &str, pattern: &str) -> bool {
+    fn go(n: &[u8], p: &[u8]) -> bool {
+        match (n.first(), p.first()) {
+            (_, Some(b'*')) => go(n, &p[1..]) || (!n.is_empty() && go(&n[1..], p)),
+            (Some(_), Some(b'?')) => go(&n[1..], &p[1..]),
+            (Some(nc), Some(pc)) if nc == pc => go(&n[1..], &p[1..]),
+            (None, None) => true,
+            _ => false,
+        }
+    }
+    go(name.as_bytes(), pattern.as_bytes())
+}
+
+/// The fingerprint-sidecar path for an asset named `name` under `project_dir`:
+/// `.loft/build/<sanitized-name>.stamp`, holding the inputs fingerprint and the
+/// last-build wall-clock time.
+fn asset_stamp_path(project_dir: &Path, name: &str) -> PathBuf {
+    let safe: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    project_dir
+        .join(".loft")
+        .join("build")
+        .join(format!("{safe}.stamp"))
+}
+
+/// Read an asset's stored `(fingerprint, unix_secs)`, if a stamp exists.
+fn read_stamp(project_dir: &Path, name: &str) -> Option<(u64, u64)> {
+    let text = std::fs::read_to_string(asset_stamp_path(project_dir, name)).ok()?;
+    let mut lines = text.lines();
+    let fp = lines.next()?.trim().parse().ok()?;
+    let time = lines.next()?.trim().parse().ok()?;
+    Some((fp, time))
+}
+
+/// Stamp an asset's `fingerprint` + build `time` (best-effort).
+fn write_stamp(project_dir: &Path, name: &str, fingerprint: u64, time: u64) {
+    let path = asset_stamp_path(project_dir, name);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&path, format!("{fingerprint}\n{time}\n"));
+}
+
+/// Whether all of an asset's declared `outputs` exist under `project_dir`.  An
+/// asset with no declared outputs is treated as present (staleness then rests on
+/// the fingerprint + TTL alone).
+fn outputs_present(project_dir: &Path, asset: &BuildAsset) -> bool {
+    asset.outputs.iter().all(|o| project_dir.join(o).exists())
+}
+
+/// Run one asset step if it is stale: compute its inputs fingerprint, compare to
+/// the stamp + TTL, and — when stale — execute its `run` command and re-stamp.
+#[must_use]
+pub fn run_asset(asset: &BuildAsset, project_dir: &Path, force: bool) -> AssetOutcome {
+    let name = asset.name.as_deref().unwrap_or("<unnamed>");
+    let Some(run_cmd) = asset.run.as_deref() else {
+        eprintln!("loft build: asset `{name}` has no `run` command — skipping.");
+        return AssetOutcome::Skipped;
+    };
+    let fingerprint = inputs_fingerprint(project_dir, &asset.inputs);
+    let lifetime = asset.lifetime.as_deref().and_then(parse_duration);
+    if asset.lifetime.is_some() && lifetime.is_none() {
+        eprintln!(
+            "loft build: asset `{name}` — bad lifetime `{}` (use e.g. 30d, 4w, 1mo); ignoring TTL.",
+            asset.lifetime.as_deref().unwrap_or("")
+        );
+    }
+    let stored = read_stamp(project_dir, name);
+    let state = compute_staleness(
+        fingerprint,
+        stored,
+        outputs_present(project_dir, asset),
+        lifetime,
+        unix_now(),
+        force,
+    );
+    if !state.needs_build() {
+        eprintln!("loft build: asset `{name}` up to date — skipping.");
+        return AssetOutcome::Skipped;
+    }
+    eprintln!(
+        "loft build: asset `{name}` ({}) — running `{run_cmd}` …",
+        state.reason()
+    );
+    match run_asset_command(run_cmd, project_dir) {
+        Ok(s) if s.success() => {
+            // Re-fingerprint (an input-generating step may have changed inputs) and
+            // stamp the build time for the TTL.
+            let fresh = inputs_fingerprint(project_dir, &asset.inputs);
+            write_stamp(project_dir, name, fresh, unix_now());
+            if !outputs_present(project_dir, asset) {
+                eprintln!(
+                    "loft build: asset `{name}` ran but a declared output is missing: {}.",
+                    asset.outputs.join(", ")
+                );
+            }
+            eprintln!("loft build: asset `{name}` ✓");
+            AssetOutcome::Built
+        }
+        Ok(_) => {
+            eprintln!("loft build: asset `{name}` FAILED (its `run` command exited non-zero).");
+            AssetOutcome::Failed
+        }
+        Err(e) => {
+            eprintln!("loft build: asset `{name}` — could not run `{run_cmd}`: {e}.");
+            AssetOutcome::Failed
+        }
+    }
+}
+
+/// Execute an asset's `run`: a single `.loft` script runs with this loft binary;
+/// anything else runs through the platform shell (trusted-by-declaration — it is
+/// the project's own manifest, @PLN100 open question 3 / @PLN86).
+fn run_asset_command(cmd: &str, project_dir: &Path) -> std::io::Result<std::process::ExitStatus> {
+    let is_loft_script = !cmd.contains(char::is_whitespace)
+        && Path::new(cmd)
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("loft"));
+    if is_loft_script {
+        let loft_exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("loft"));
+        Command::new(loft_exe)
+            .arg(cmd)
+            .current_dir(project_dir)
+            .status()
+    } else if cfg!(windows) {
+        Command::new("cmd")
+            .args(["/C", cmd])
+            .current_dir(project_dir)
+            .status()
+    } else {
+        Command::new("sh")
+            .args(["-c", cmd])
+            .current_dir(project_dir)
+            .status()
+    }
 }
 
 #[cfg(test)]
@@ -409,5 +779,119 @@ mod tests {
         // Can't query rustup → rustup-target gate skipped.
         let miss = missing_requires(&html, None, &|_| true);
         assert!(miss.rust_targets.is_empty());
+    }
+
+    // ── Slice 3 — asset steps ──────────────────────────────────────────────
+
+    #[test]
+    fn parse_duration_units() {
+        assert_eq!(parse_duration("30d"), Some(30 * 86_400));
+        assert_eq!(parse_duration("4w"), Some(4 * 604_800));
+        assert_eq!(parse_duration("1mo"), Some(2_592_000)); // `mo` beats `m`
+        assert_eq!(parse_duration("90s"), Some(90));
+        assert_eq!(parse_duration("2h"), Some(7_200));
+        assert_eq!(parse_duration("5m"), Some(300)); // minutes, not months
+        assert_eq!(parse_duration("1y"), Some(31_536_000));
+        assert_eq!(parse_duration(""), None);
+        assert_eq!(parse_duration("30"), None); // no unit
+        assert_eq!(parse_duration("xd"), None); // no number
+    }
+
+    #[test]
+    fn staleness_precedence() {
+        // force wins over everything.
+        assert_eq!(
+            compute_staleness(1, Some((1, 100)), true, None, 200, true),
+            Staleness::Forced
+        );
+        // missing output beats a matching fingerprint.
+        assert_eq!(
+            compute_staleness(1, Some((1, 100)), false, None, 200, false),
+            Staleness::OutputMissing
+        );
+        // no stamp → first build.
+        assert_eq!(
+            compute_staleness(1, None, true, None, 200, false),
+            Staleness::FirstBuild
+        );
+        // changed inputs.
+        assert_eq!(
+            compute_staleness(2, Some((1, 100)), true, None, 200, false),
+            Staleness::InputsChanged
+        );
+        // TTL expired (age 100 > 50).
+        assert_eq!(
+            compute_staleness(1, Some((1, 100)), true, Some(50), 201, false),
+            Staleness::Expired
+        );
+        // within TTL → fresh (age 50 <= 50).
+        assert_eq!(
+            compute_staleness(1, Some((1, 100)), true, Some(50), 150, false),
+            Staleness::Fresh
+        );
+        // no TTL, matching fp, output present → fresh.
+        assert_eq!(
+            compute_staleness(1, Some((1, 100)), true, None, 999_999, false),
+            Staleness::Fresh
+        );
+    }
+
+    #[test]
+    fn segment_matching() {
+        assert!(segment_matches("atlas.png", "*.png"));
+        assert!(segment_matches("atlas.png", "atlas.*"));
+        assert!(segment_matches("a.png", "?.png"));
+        assert!(segment_matches("x", "*"));
+        assert!(!segment_matches("atlas.jpg", "*.png"));
+        assert!(!segment_matches("ab.png", "?.png"));
+    }
+
+    #[test]
+    fn glob_expand_and_fingerprint_react_to_change() {
+        let dir = std::env::temp_dir().join(format!("loft_glob_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("art/sub")).unwrap();
+        std::fs::write(dir.join("art/a.png"), b"aaa").unwrap();
+        std::fs::write(dir.join("art/sub/b.png"), b"bbb").unwrap();
+        std::fs::write(dir.join("art/notes.txt"), b"txt").unwrap();
+
+        // `**/*.png` finds both PNGs at any depth, not the .txt.
+        let hits = glob_expand(&dir, "art/**/*.png");
+        assert_eq!(hits.len(), 2, "expected 2 pngs, got {hits:?}");
+
+        // `art/*.png` is single-level only.
+        assert_eq!(glob_expand(&dir, "art/*.png").len(), 1);
+
+        // Fingerprint changes when an input's content changes…
+        let fp1 = inputs_fingerprint(&dir, &["art/**/*.png".to_string()]);
+        std::fs::write(dir.join("art/a.png"), b"CHANGED").unwrap();
+        let fp2 = inputs_fingerprint(&dir, &["art/**/*.png".to_string()]);
+        assert_ne!(fp1, fp2);
+        // …and when a new matching file appears.
+        std::fs::write(dir.join("art/c.png"), b"ccc").unwrap();
+        let fp3 = inputs_fingerprint(&dir, &["art/**/*.png".to_string()]);
+        assert_ne!(fp2, fp3);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn applicable_assets_respects_target_scope() {
+        let mut m = Manifest::default();
+        m.build_assets.push(BuildAsset {
+            name: Some("global".to_string()),
+            ..Default::default()
+        });
+        m.build_assets.push(BuildAsset {
+            name: Some("html-only".to_string()),
+            targets: vec!["html".to_string()],
+            ..Default::default()
+        });
+        // Building `native` only → just the global asset.
+        let got = applicable_assets(&m, &["native".to_string()]);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].name.as_deref(), Some("global"));
+        // Building `html` → both.
+        assert_eq!(applicable_assets(&m, &["html".to_string()]).len(), 2);
     }
 }
