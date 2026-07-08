@@ -408,6 +408,30 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
             }
         }
     }
+    // @PLN101 — every struct is now laid out; fill the placeholder size embedded in each
+    // value struct's `Type::Value` returned type with the real record size.
+    patch_value_struct_sizes(data, database);
+}
+
+/// @PLN101 — after `finish_type` has laid out every struct, replace the `u16::MAX` placeholder
+/// size embedded in each `value struct`'s `Type::Value` returned type with the real record size
+/// (`types[known_type].size`). Use sites reading `def.returned()` in pass 2 then get a correctly
+/// sized inline `Type::Value`.
+fn patch_value_struct_sizes(data: &mut Data, database: &Stores) {
+    for d_nr in 0..data.definitions() {
+        if !data.is_value_struct(d_nr) {
+            continue;
+        }
+        let kt = data.def(d_nr).known_type();
+        if kt == u16::MAX {
+            continue;
+        }
+        let sz = database.size(kt);
+        // Unconditional: the typedef DB-registration (complete_definition / actual_types)
+        // resets a struct's `returned` to `Reference`; `is_value_struct` is the source of
+        // truth, and this runs at the END of `fill_all`, so it wins.
+        data.definitions[d_nr as usize].returned = Type::Value(d_nr, sz, crate::data::Deps::none());
+    }
 }
 
 /// @PLN25 E2a.2 — rewrite each nullable struct-typed field to the synthetic

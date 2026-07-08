@@ -165,7 +165,34 @@ until minting; build + suite green.
 - **Copy-on-bind:** inherited — the assignment machinery copies value types (proven on tuples),
   so `e = value_struct_view` copies with NO change to `parse_assign_op`/`generate_set`/the oracle.
 
-### Step 1.4 — mint `Type::Value` at parse for a marked struct
+### Step 1.4 — mint `Type::Value` at parse — WIP (infrastructure landed; two blockers)
+**Landed (commit pending):** the minting infrastructure — `struct_returned_type` (a value
+struct's `returned` = `Type::Value`), `patch_value_struct_sizes` in `typedef.rs::fill_all`
+(unconditionally sets `returned = Type::Value(def, types[def].size, none)` after finish, since
+the typedef DB-registration resets `returned` to `Reference`), `parse_type_inner` mints
+`Type::Value` for a value-struct type-name (both passes), and `type_def_nr(Type::Value) => def`.
+Normal structs unaffected (suite green, 748+51); value structs do NOT work yet — two blockers:
+
+- **Blocker A — the `if let Type::Reference` sweep.** Minting `Value` breaks the many runtime
+  sites that pattern-match `Type::Reference` for struct content and silently miss `Value`
+  (NOT exhaustive-match compile errors — runtime failures / wrong diagnostics). Seen so far:
+  `type_def_nr` (fixed), `vectors.rs::new_record` (needs it), a vector element-store
+  precision check ("cannot store P elements in vector<P>"), and a type-change check
+  ("e cannot change type from P to integer"). Needs a systematic grep of `Type::Reference(`
+  matches that must become `Type::Reference | Type::Value`, plus type-EQUALITY treating a
+  `Value(d)` and `Reference(d)` of the same def as compatible where storage is shared.
+- **Blocker B — embedded-size refinement (Q1 reconsidered).** The `u16` size embedded in
+  `Type::Value` is `u16::MAX` when minted in pass 1 (pre-finish) and is only patched on
+  `def.returned()` — NOT inside the `Vector`/field/variable types that carry a nested
+  `Value(d, MAX, …)` (seen: `value(627, 65535)` reaching a use site). Needs EITHER a general
+  post-finish pass that walks ALL types and refines `Value(d, MAX)` → `Value(d, real_size)`,
+  OR a different Q1 (don't embed — resolve the size where `Data` is available). The embedded
+  size trades a self-contained `&Type` for an unbounded refinement obligation; reconsider.
+
+**Both are bounded and mechanical, but the `if let` sweep + type-equality is heap-#1-adjacent
+and must go through the mandatory matrix (both backends + leak + UAF). Do it as a focused pass.**
+
+#### Step 1.4 (original) — mint `Type::Value` at parse for a marked struct
 - A `value struct`'s `returned` type becomes `Type::Value(d_nr, none)` instead of
   `Type::Reference` (in `parse_struct`, using the `Data.value_structs` marker from Step 1.1).
 - Value-struct-typed FIELDS, `vector<V>` ELEMENTS, and value-struct LOCALS resolve to

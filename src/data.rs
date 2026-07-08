@@ -4858,6 +4858,7 @@ impl Data {
             Type::Routine(d_nr)
             | Type::Enum(d_nr, _, _)
             | Type::Reference(d_nr, _)
+            | Type::Value(d_nr, _, _)
             | Type::Unknown(d_nr) => *d_nr,
             Type::Vector(_, _) => self.source_nr(0, "vector"),
             Type::RefVar(t) if matches!(**t, Type::Reference(_, _)) => self.type_def_nr(t),

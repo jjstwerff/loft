@@ -7,6 +7,18 @@ use super::{
     is_upper, rename, v_block, v_if,
 };
 
+/// @PLN101 — the `returned` type for a struct def: `Type::Value` for a `value struct` (stored
+/// inline, copied on bind), else `Type::Reference`. The embedded size is a placeholder
+/// `u16::MAX` here — patched to the real record size post-finish by `patch_value_struct_sizes`
+/// (typedef.rs) once `finish_type` has laid the struct out.
+fn struct_returned_type(is_value: bool, d_nr: u32) -> Type {
+    if is_value {
+        Type::Value(d_nr, u16::MAX, crate::data::Deps::none())
+    } else {
+        Type::Reference(d_nr, crate::data::Deps::none())
+    }
+}
+
 impl Parser {
     pub(crate) fn warn_missing_enum_variants(&mut self, e_nr: u32, nrs: &[usize], name: &str) {
         let implemented: HashSet<u32> = nrs
@@ -1662,7 +1674,21 @@ impl Parser {
             if matches!(dt, DefType::EnumValue)
                 || (self.first_pass && matches!(dt, DefType::Struct))
             {
-                Some(Type::Reference(tp_nr, crate::data::Deps::unknown(dep)))
+                // @PLN101 — a `value struct` type-name resolves to an inline `Type::Value`
+                // (not a `DbRef` Reference), so its fields/elements/locals store inline and
+                // copy on bind. Size from the DB layout (valid pass 2; MAX pass 1, refined
+                // when the type is re-resolved in pass 2 / by the returned-type patch).
+                if !matches!(dt, DefType::EnumValue) && self.data.is_value_struct(tp_nr) {
+                    let kt = self.data.def(tp_nr).known_type();
+                    let sz = if kt == u16::MAX {
+                        u16::MAX
+                    } else {
+                        self.database.size(kt)
+                    };
+                    Some(Type::Value(tp_nr, sz, crate::data::Deps::unknown(dep)))
+                } else {
+                    Some(Type::Reference(tp_nr, crate::data::Deps::unknown(dep)))
+                }
             } else if matches!(self.data.def(tp_nr).returned(), Type::Text(_)) {
                 Some(Type::Text(crate::data::Deps::unknown(dep)))
             } else {
@@ -2274,8 +2300,7 @@ impl Parser {
         }
         if d_nr == u32::MAX {
             d_nr = self.data.add_def(&id, self.lexer.pos(), DefType::Struct);
-            self.data.definitions[d_nr as usize].returned =
-                Type::Reference(d_nr, crate::data::Deps::none());
+            self.data.definitions[d_nr as usize].returned = struct_returned_type(is_value, d_nr);
         } else if self.first_pass {
             // fix-tvscope: a type variable placeholder (e.g., `T` from generic stdlib
             // functions) blocks user-defined struct of the same name.  Produce a clear
@@ -2309,7 +2334,7 @@ impl Parser {
                 self.data.definitions[d_nr as usize].position = self.lexer.pos().clone();
                 self.data.definitions[d_nr as usize].def_type = DefType::Struct;
                 self.data.definitions[d_nr as usize].returned =
-                    Type::Reference(d_nr, crate::data::Deps::none());
+                    struct_returned_type(is_value, d_nr);
             } else {
                 let prev_pos = self.data.def(d_nr).position().clone();
                 let prev_kind = format!("{:?}", self.data.def(d_nr).def_type()).to_lowercase();
