@@ -1840,8 +1840,9 @@ extern crate loft;"
                  let cell = std::cell::UnsafeCell::new(\n        \
                  loft::live_dispatch::bootstrap_from_bytes(LOFT_LIVE_FNS, LOFT_SRC)\n            \
                  .unwrap_or_else(|e| {{ eprintln!(\"loft-debug: {{e}}\"); Stores::new() }}));\n    \
-                 if !loft::live_dispatch::live_enabled() {{ init(&cell); }}\n    \
-                 n_main(&cell);\n}}\n"
+                 if loft::live_dispatch::live_enabled() {{ loft::live_dispatch::flip_all_dispatch_debug(); }} else {{ init(&cell); }}\n    \
+                 n_main(&cell);\n    \
+                 loft::live_dispatch::wasm_host_log(&format!(\"loft-debug: dispatched {{}} interp call(s) over the shared store\\n\", loft::live_dispatch::dispatch_count()));\n}}\n"
             )
         } else {
             writeln!(

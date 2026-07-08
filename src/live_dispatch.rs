@@ -308,6 +308,44 @@ pub fn dispatch_count() -> u64 {
     DISPATCHED.load(Ordering::Relaxed)
 }
 
+/// @PLN98 P3.4 — flip EVERY dispatchable fn to the interpreter and turn on the
+/// dispatch trace.  A debug client runs its program over the parked interpreter +
+/// the SHARED store (the tier's core primitive) so any fn can be breakpointed /
+/// inspected; the browser `loft_start` debug variant calls this after
+/// [`bootstrap_from_bytes`].  Each flipped call then routes through [`dispatch`]
+/// (counted by [`dispatch_count`]).  Reports the flip count to the browser host so
+/// a headless run can observe the tier switched on.
+pub fn flip_all_dispatch_debug() {
+    DEBUG.store(true, Ordering::Relaxed);
+    let names: Vec<String> = LIVE.with(|l| {
+        l.borrow().as_ref().map_or_else(Vec::new, |live| {
+            live.names
+                .iter()
+                .filter_map(|n| n.strip_prefix("n_").map(String::from))
+                .collect()
+        })
+    });
+    let mut flipped = 0usize;
+    for name in &names {
+        if set_flip(name, true) {
+            flipped += 1;
+        }
+    }
+    wasm_host_log(&format!(
+        "loft-debug: flipped {flipped} fn(s) to the interpreter\n"
+    ));
+}
+
+/// @PLN98 P3.4 — write `msg` to the browser host's stdout (`loft_host_print`), so a
+/// headless `--html` run can observe the debug tier's activity.  A no-op off the
+/// browser wasm target (native / wasip2 / the `wasm` feature route their own way).
+pub fn wasm_host_log(msg: &str) {
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
+    crate::loft_host_print(msg.as_ptr(), msg.len());
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm"))))]
+    let _ = msg;
+}
+
 /// The dispatch chokepoint: swap the program world into the parked State,
 /// re-enter the interpreter, swap it back out.  Every `live_call_*` routes
 /// through here — the sentinel and the sharing model live in ONE place.

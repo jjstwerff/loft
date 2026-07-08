@@ -158,6 +158,17 @@ fn run_html_wasm_with_libs_and_assets(
     lib_dirs: &[&str],
     assets: &[PathBuf],
 ) -> Option<(String, String, bool)> {
+    run_html_wasm_full(name, source, lib_dirs, assets, &[])
+}
+
+/// As above, plus arbitrary extra `loft --html` flags (e.g. `--debug=<name>`).
+fn run_html_wasm_full(
+    name: &str,
+    source: &str,
+    lib_dirs: &[&str],
+    assets: &[PathBuf],
+    extra_args: &[&str],
+) -> Option<(String, String, bool)> {
     if which("node").is_none() {
         eprintln!("SKIP: node not installed");
         return None;
@@ -224,6 +235,7 @@ fn run_html_wasm_with_libs_and_assets(
     for dir in lib_dirs {
         cmd.arg("--lib").arg(repo_root().join(dir));
     }
+    cmd.args(extra_args);
     cmd.arg(src.to_str().unwrap());
     let status = cmd.status().expect("invoke loft --html");
     assert!(status.success(), "loft --html failed for {name}");
@@ -953,5 +965,40 @@ fn host_output_input_roundtrip_queue() {
     assert!(
         stdout.contains("second=[]"),
         "queue must be empty after one pop; stdout: {stdout}"
+    );
+}
+
+// @PLN98 P3.4 — the live/debug tier's core primitive verified IN THE BROWSER WASM
+// RUNTIME (headless node): a `--debug` client bootstraps the parked interpreter
+// from the EMBEDDED source (P3.1, no filesystem), flips its fns to the interpreter,
+// and the compiled `main` DISPATCHES a call into the interpreter running over the
+// SHARED store — producing the correct result. This is "the interpreter over the
+// shared live store" (the whole tier's one primitive) proven on wasm32.
+#[test]
+fn html_debug_client_dispatches_to_the_interpreter_on_wasm() {
+    let source = "fn addup(a: integer, b: integer) -> integer {\n  a + b\n}\n\
+                  fn triple(x: integer) -> integer {\n  addup(x, addup(x, x))\n}\n\
+                  fn main() {\n  print(\"triple(14)={triple(14)}\")\n}\n";
+    let Some((stdout, stderr, ok)) =
+        run_html_wasm_full("p98_debug_dispatch", source, &[], &[], &["--debug=alice"])
+    else {
+        return; // skipped: no node / no wasm target / no release loft
+    };
+    let all = format!("{stdout}{stderr}");
+    assert!(ok, "the --debug wasm client trapped.\n{all}");
+    // The parked interpreter switched on and flipped the dispatchable fns.
+    assert!(
+        all.contains("flipped 2 fn(s) to the interpreter"),
+        "the debug client flipped its fns to the interpreter: {all}"
+    );
+    // A compiled call dispatched INTO the interpreter over the shared store.
+    assert!(
+        all.contains("dispatched 1 interp call(s) over the shared store"),
+        "a compiled call dispatched into the interpreter on wasm: {all}"
+    );
+    // And it computed the right answer over that shared store.
+    assert!(
+        all.contains("triple(14)=42"),
+        "the interpreted dispatch produced the correct result: {all}"
     );
 }
