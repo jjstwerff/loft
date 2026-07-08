@@ -5,14 +5,35 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # 21 — `time` library + `DateTime` value type
 
-## Status
+## Status — DONE / SHIPPED 2026-07-08
 
-**Basics SHIPPED (`time 0.1.0`, 2026-05-25).  Full-support tail PIVOTED +
-DEFERRED past the 2026-07 release (2026-06-14).**
+**`time 0.1.0`** (epoch-ms `integer` API, 2026-05-25) **and `time 0.2.0`** (the first-grade
+`value struct DateTime` / `Duration` layer) are both shipped; **0.2.0 is published + signed to the
+registry**, with all 24 lib tests green on `--interpret` AND `--native`, and the DateTime surface
+verified identical on **wasm** (wasm32-wasip2 / wasmtime) — now gated going forward by the
+differential oracle's third backend (`tests/oracle/29`). User-facing API:
+[LOFT.md § Value structs / First-grade custom types](../../LOFT.md).
 
-The pure-loft `lib/time` library over `integer` epoch-ms (operations arc D +
-`format_*` text renderers) shipped and unblocked the trainer app, needing zero
-core changes and working identically on interpret / `--native` / wasm.
+The prerequisites the pivoted design needed all shipped this cycle: the per-type
+`to_text(self, spec)` format hook + direct operator dispatch + `as` conversions
+([@PLN99](../../plans/99-first-grade-types/README.md)) and zero-cost value structs
+([@PLN101](../../plans/101-value-structs/README.md)) — so `DateTime` is a distinct nominal type
+(`dt + 5` rejects), with chronological operators, custom `{dt:date}`/`{dt:iso}` formatting, `as`
+conversions, and **zero heap overhead** inside records / vectors, all with NO built-in
+`Type::DateTime`.
+
+**Follow-ups (tracked bugs / cosmetic — NOT blockers):** the lib's `to_text` still carries an
+interpolate-each-arm workaround for the open **#534 residual** (a `match`-`&str` fn mixed with a
+`String` arm in a 3-arm hook — owned by the ../loft2 stream); the now-unneeded #533 tail-`if`
+workaround can be dropped in a 0.2.1 cleanup once someone re-publishes.
+
+---
+
+### Historical (the 2026-06-14 pivot that this plan delivered)
+
+The full-datetime tail no longer builds a distinct built-in `Type::DateTime` — a **`time`-library
+struct** gets every property the built-in was for. It shipped and unblocked the trainer app,
+needing zero core changes and working identically on interpret / `--native` / wasm.
 
 The **full-datetime tail no longer builds a distinct built-in `Type::DateTime`**
 (old arcs A/B/C).  An evaluation against the present code (2026-06-14) showed a
