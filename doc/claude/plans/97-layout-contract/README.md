@@ -15,18 +15,29 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**`status:active`** — filed 2026-07-07 out of a design discussion prompted by #477 (nested-vector
-stride `4→8`/`16→8`), a layout change that was **noticed only by breaking persisted data**, never
-by a check. The user rates this the **highest-value work on loft** (2026-07-07) — the safety floor
-under reload-without-data-loss, live-swap, and schema evolution.
+**DONE / SHIPPED — 2026-07-08.** On `tuxedo-add-to-project`; the plan closes on merge (the PR
+carries `Closes @PLN97`). Filed 2026-07-07 out of a design discussion prompted by #477
+(nested-vector stride `4→8`/`16→8`) — a layout change **noticed only by breaking persisted data**,
+never by a check. Rated the highest-value work on loft: the safety floor under
+reload-without-data-loss, live-swap, and schema evolution.
 
-**Progress (2026-07-07):** **Phase B ✅** (golden `tests/layout_golden.rs` + `tests/golden/layout/`
-+ coverage audit + both-backend parity `tests/scripts/509-layout-parity.loft` + `pub
-Stores::layout_algo_hash()`/`layout_dump()`). **Phase D ✅** (`src/schema_sidecar.rs`: the
-self-describing `LayoutIdentity`, the `.dschema` file lifecycle, `classify`/`SchemaVerdict`, and
-`CorruptReason::SchemaMismatch`). **Phase C ✅** (`doc/claude/formal/layout.md`: the `layout(τ)`
-contract, rules `L-Total`…`L-Sound` + `D-layout-1`, wired into the formal README/ROADMAP).
-**Phase F ✅** (`src/schema_sidecar.rs` + the `loft layout accept|check` CLI in `main.rs`: baseline, diff, diagnostic, migration outline; `program_roots`). **Phase E1 ✅** (`tests/scripts/510-layout-e1-add-drop.loft` — Add/Drop rides the lenient path on all backends). **Remaining:** **E2** (reshape data migration — deferred behind a real-consumer trigger). **Arc G ▸ design; Phase 0.5 ✅** — #522 (remote working-set loader; routing **+ browser game asset streaming**) folded in ([REMOTE_STORE_LOADER.md](REMOTE_STORE_LOADER.md)); P0 done (read mechanism sound) and it surfaced a portability blocker now **fully fixed**: **0.5a (#523)** — the hash seed lives in its bucket record so a persisted hash is cross-process key-lookupable; **0.5b** — `store_persist_bind` now accepts any keyed collection (`sorted`/`index`/`spacial`), portable by construction. Both pinned by two-process tests in `tests/store_persist_loft.rs`; `store_load_keys`/`store_load_range` unblocked. Remaining: loader phases 1–5.
+**Shipped:**
+- **Layout contract B–F** — B golden `tests/layout_golden.rs` (+ coverage audit + both-backend
+  parity + `Stores::layout_algo_hash()`/`layout_dump()`); C `doc/claude/formal/layout.md`
+  (`layout(τ)`, rules `L-Total`…`L-Sound` + `D-layout-1`); D `src/schema_sidecar.rs`
+  (`LayoutIdentity`, the `.dschema` lifecycle, `classify`/`SchemaVerdict`,
+  `CorruptReason::SchemaMismatch`); E1 lenient Add/Drop (`tests/scripts/510-layout-e1-add-drop.loft`);
+  F the `loft layout accept|check` CLI + migration outline. Detail in the phase table below.
+- **Arc G — remote working-set store loader (#522)** — the full fetcher (hash + sorted, local +
+  HTTP Range, every copyable shape, int/text keys, point + range), `store_verify`, and the **3b.5
+  layout-identity gate** (`.dschema` written on persist; every partial load refuses a mismatched
+  layout before reading foreign bytes). Reference: [REMOTE_STORE_LOADER.md](REMOTE_STORE_LOADER.md).
+
+**Deferred (each behind an external trigger — carved out of this plan on close):**
+- **E2** reshape data migration — behind a real reshape that must preserve live data (design retained
+  in the phase table below + `formal/layout.md`).
+- **Arc-G `--html` `fetch()` bridge** — behind a browser consumer (design in
+  [REMOTE_STORE_LOADER.md](REMOTE_STORE_LOADER.md)).
 
 ## Goal
 
