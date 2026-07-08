@@ -1040,3 +1040,42 @@ fn html_debug_cooperative_pause_cycle_runs_on_wasm() {
         "the selftest reported success: {all}"
     );
 }
+
+// @PLN98 P3.4 — the INTERACTIVE browser debug CLIENT on wasm: the `--html --debug`
+// build applies `D!:` control frames relayed over host_input (bp -> run -> eval ->
+// resume) and returns `D:` replies over host output, entirely in the wasm runtime
+// (no threads / sockets / native debug_cmd_dispatch). This is the client half of
+// the server->browser debug relay, verified headlessly via node.
+#[test]
+fn html_debug_client_applies_relayed_control_frames_on_wasm() {
+    let source = "fn compute(n: integer) -> integer {\n  m = n + 2;\n  m\n}\n\
+                  fn main() { compute(40); }\n";
+    let Some((stdout, stderr, ok)) = run_html_wasm_full(
+        "p98_debug_client",
+        source,
+        &[],
+        &[],
+        &["--debug=alice"],
+        "tools/wasm_debug_client.mjs",
+    ) else {
+        return;
+    };
+    let all = format!("{stdout}{stderr}");
+    assert!(ok, "the debug-client driver failed: {all}");
+    assert!(
+        all.contains("D:ok bp compute"),
+        "breakpoint set over host_input: {all}"
+    );
+    assert!(
+        all.contains("D:hit compute") && all.contains("n=40"),
+        "the client PAUSED at the breakpoint with the live frame (n=40): {all}"
+    );
+    assert!(
+        all.contains("D:eval n=40"),
+        "eval a live frame local over the relay: {all}"
+    );
+    assert!(
+        all.contains("D:terminated"),
+        "resume ran to completion: {all}"
+    );
+}

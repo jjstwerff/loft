@@ -1847,7 +1847,15 @@ extern crate loft;"
                  let r = loft::live_dispatch::wasm_debug_selftest();\n    \
                  loft::live_dispatch::wasm_host_log(&r);\n    \
                  loft::live_dispatch::wasm_host_log(\"\\n\");\n    \
-                 i32::from(r == \"PAUSE n=40 STEP m=42 DONE=true\")\n}}\n"
+                 i32::from(r == \"PAUSE n=40 STEP m=42 DONE=true\")\n}}\n\
+                 \n// @PLN98 P3.4 — the interactive browser debug CLIENT: `loft_debug_start`\n\
+                 // parses the embedded program into an interpreter session; the JS driver\n\
+                 // then calls `loft_debug_pump` per frame to apply relayed `D!:` control\n\
+                 // frames (host_input) and emit `D:` replies (host output).\n\
+                 #[unsafe(no_mangle)]\npub extern \"C\" fn loft_debug_start() -> i32 {{\n    \
+                 i32::from(loft::wasm_debug::start(LOFT_SRC))\n}}\n\
+                 \n#[unsafe(no_mangle)]\npub extern \"C\" fn loft_debug_pump() {{\n    \
+                 loft::wasm_debug::pump();\n}}\n"
             )
         } else {
             writeln!(
