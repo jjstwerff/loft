@@ -140,9 +140,18 @@ wrap it: `e = OpDatabase(<P>); OpCopyRecord(view, e, <P content>)`. Now `e` genu
 owns a fresh store, so `classify` returns `Owned` **correctly** (via `defs.db_vars`), and the
 copy is real. Copy-elision falls out: an `Owned` RHS (fresh `P{…}` construction) needs no copy.
 Both ops already exist (`OpDatabase`, `OpCopyRecord`, `fill.rs`/`state/io.rs`) — this LINKS them,
-matching "everything is already written". Copy sites to cover: `e = record.field`, `x = vec[i]`,
-`f(vs)` (by-value arg), `return vs`. Cheap (inline bytes — a value type's intrinsic copy, not a
-heap alloc); the value-struct LOCAL keeps its own (reused) store per the scope cut.
+matching "everything is already written".
+
+**Copy ONLY on a LOCAL-VARIABLE bind (user, 2026-07-08).** The `OpCopyRecord` fires only when a
+value struct is bound to a **local variable** (`e = record.field`, `x = vec[i]`). It must NOT
+fire when a value struct is passed as a **function/method parameter of type `T`** (typically
+`self`/`both`): that keeps the **DbRef into the store** it came from and the callee READS it in
+place — zero-copy. This is what keeps the hot path free — `dt.to_text()`, `a < b`, every
+operator / format / conversion method call passes `self`/`both` by DbRef, no copy. (A callee
+that MUTATES its `T` param is the rare case; value structs are read in methods, or mutated via an
+explicit `&`.) So the hook is narrow: the local-variable assignment site only. Cheap even there
+(inline bytes — a value type's intrinsic copy, not a heap alloc); the value-struct local keeps
+its own (reused) store per the scope cut.
 
 **Validation bar (MANDATORY — this is the #1 heap invariant).** Matrix-first, both backends
 (`--interpret` + `--native`), the semantics probe below AND the full suite AND leak
