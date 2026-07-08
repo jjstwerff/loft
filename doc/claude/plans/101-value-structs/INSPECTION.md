@@ -81,17 +81,33 @@ type-dispatch. Most arms mirror `Reference`; the layout arms differ (inline size
   path) — write each field at its `position` into the destination slot; emit NO `new_record`
   and NO `DbRef`.
 
-## §D — Field access at inline offset (STEP 1.4)
+## §D — Field access: drop the inline DbRef (STEP 1.4)
 
+- **`field_ref`** (`src/database/structures.rs:193`) is the key mechanism. For a struct field
+  it returns a **fat pointer into the SAME store/rec at an offset**:
+  `DbRef { store_nr: data.store_nr, rec: data.rec, pos: data.pos + fields[field].position }`.
+  So a nested struct's bytes are ALREADY inline in the parent's store (this is why
+  `vector<Outer>` with nested `Inner` fields allocates one record per element, not three —
+  §Slice-0 findings). The 12-byte DbRef is a pointer INTO the same store — pure indirection
+  overhead for a value field.
 - Reference field access: **`get_record`** (`src/fill.rs:1942`) derefs the DbRef, then
   **`get_field`** (`src/fill.rs:1400`) reads at the field `position`; emitted as `OpGetRecord`
-  from `src/parser/fields.rs:1250`.
-- Tuple element access: IR `Value::TupleGet(var_nr, idx)` (`src/data.rs:531`) — reads inline
-  at the element offset.
-- **Change:** when the receiver is `Type::Value`, route `v.field` / `v.field = …` to the
-  inline-offset read/write (the `TupleGet`/`TuplePut` machinery, indexed by the cached field
-  `position`), NOT `OpGetRecord` + DbRef deref. `event.when.ms` (value field of a reference
-  struct, §Slice 2) is then ONE indirection (parent DbRef) + two inline offsets.
+  (`src/parser/fields.rs:1250`). Tuple element access: IR `Value::TupleGet(var_nr, idx)`
+  (`src/data.rs:531`) reads inline at the element offset.
+- **Change (LOCKED, user 2026-07-08):** for a value-struct receiver, **get rid of the inline
+  DbRef** — read/write **directly at `base + offset`** (the cached field `position`), no
+  `field_ref` fat pointer, no `OpGetRecord` deref. `event.when.ms` becomes `parent_base +
+  when_offset + ms_offset` — offsets only.
+
+## Locked design decisions (user, 2026-07-08)
+
+- **Part of ONE Store.** A value struct's fields are packed contiguously inside the parent's
+  single Store allocation — never a separate record/store. The allocator already supports a
+  sub-record living inside a parent allocation (`field_ref` proves the same-store offset
+  addressing); value structs always take that path. → §D drops the DbRef; §B sizes it inline.
+- **Non-null by initialisation.** No null representation. The compiler forbids an
+  uninitialised value struct (require a value or a declared default). "Inside another record
+  there is no null" — an inline value field is always present. Closes Q4.
 
 ## §E — Value semantics: copy on assign (STEP 1.5)
 

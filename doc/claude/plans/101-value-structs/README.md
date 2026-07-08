@@ -48,18 +48,32 @@ The mechanism already exists and is proven:
 
 ## Design shape
 
-1. **Distinct, opt-in kind:** `value struct T { … }`. Value semantics (copy-on-assign, no
+**Locked decisions (user, 2026-07-08):** a value struct is *just bytes in the parent's Store,
+addressed by offset* — like a scalar field, but multi-field.
+
+1. **Part of ONE Store — no separate record, no DbRef.** A value struct's fields are packed
+   **contiguously inside the parent's single Store allocation** (the allocator already
+   supports a sub-record living inside a parent allocation; value structs always take that
+   path). `field_ref` (`structures.rs:193`) hands back a fat `{store_nr, rec, pos+offset}`
+   pointer for a struct field today even though the bytes are inline — **drop that inline
+   DbRef**: a value-struct field is read/written **directly at `base + offset`**, no DbRef
+   materialised.
+2. **Non-null, enforced by initialisation.** Value structs have NO null. The compiler
+   **forbids an uninitialised value struct** (require a value at declaration or fill a
+   declared default) — no inline null sentinel, no `value struct?`. (Q4 closed.)
+3. **Distinct, opt-in kind:** `value struct T { … }`. Value semantics (copy-on-assign, no
    aliasing) are *observable*, so NO silent size-based auto-promotion — it would change
-   mutation/aliasing/@PLN85–90 ownership. Reference `struct` unchanged. (Auto-inlining POD
-   structs is a later option once the kind is proven.)
-2. **Type representation:** a `Type::Value(def)` variant (or a kind-flag on the struct def)
-   so `size()`/`align()`/`element_size()` return the packed inline size, not `DbRef`.
-3. **Zero-cost inside records falls out of the inline layout:** a value-struct field embeds
-   its packed fields directly in the parent record, exactly like a tuple field already does.
-4. **No lifetime/free** for pure-value structs (`has_lifetime_concern` = false). A value
+   mutation/aliasing/@PLN85–90 ownership. Reference `struct` unchanged.
+4. **Type representation:** a `Type::Value(def)` variant (or a kind-flag on the struct def)
+   so `size()`/`align()`/`element_size()` return the packed inline size, and field access +
+   copy read it directly (offset), not via `DbRef`.
+5. **Zero-cost inside records + collections falls out** of "part of one Store": a
+   value-struct field/element is packed inline in the parent record / vector backing — no
+   per-field, per-element record (a `vector<V>` becomes contiguous like `vector<scalar>`).
+6. **No lifetime/free** for pure-value structs (`has_lifetime_concern` = false). A value
    struct with a `text`/`vector`/reference field is lifetime-bearing → Slice 4 or disallowed.
-5. **Both backends:** native rides the Rust struct/tuple ABI (the T1.8a pure-value path);
-   interpret does inline packed reads/writes.
+7. **Both backends:** native rides the Rust struct/tuple ABI (the T1.8a pure-value path);
+   interpret does inline packed reads/writes at offsets.
 
 ## Composition matrix — Slice 0 (probe-first, before any code)
 
@@ -98,13 +112,16 @@ the alloc-count cells read zero; probes graduate to `tests/scripts/`.
 
 ## Open design questions
 
-1. **Nullable `value struct?`** — no DbRef `store_nr` sentinel; needs an inline null
-   representation (ties into @PLN25's null model).
+1. **~~Nullable `value struct?`~~ — CLOSED (user, 2026-07-08):** value structs are non-null.
+   The compiler forbids an uninitialised value struct (require a value or a declared
+   default); no inline null sentinel, no `value struct?`.
 2. **`&`-ref params** for in-place mutation of a value struct — what do tuples do today?
 3. **Ownership** — make the @PLN85–90 deps analysis treat value structs as non-heap (no
    deps edges, no free); reuse `has_lifetime_concern`.
 4. **@PLN97 layout contract** — value structs change record layout; the conformance tests
    must cover the inline embedding.
+5. **Field access rewrite** — replace the `field_ref` inline-DbRef fat pointer with direct
+   `base + offset` read/write for value-struct receivers (drop the DbRef materialisation).
 5. **Keyword** — `value struct` vs `inline struct` vs a modifier on `struct`.
 
 ## See also

@@ -235,6 +235,13 @@ pub struct Stores {
     /// shelling out and parsing the stderr trace (which has a stdout/stderr
     /// buffering hazard).  Reset to 0 on a fresh runtime.
     pub peak: u16,
+    /// @PLN101 Slice 0 — monotonic count of heap RECORD allocations over the whole run
+    /// (every `record_new`: a struct value, a nested-struct field sub-record, a collection
+    /// entry). Unlike `peak` (store-slot watermark), this counts per-record events, so it
+    /// measures the exact cost value structs remove: a reference struct construction bumps
+    /// it; a `value struct` (inline) will not. The alloc-count harness: `LOFT_ALLOC_REPORT=1`
+    /// prints it at exit, and the pub field is read in-process for a Rust assertion.
+    pub records_created: u64,
     /// S29: bitmap of free store slots — bit `i` is set when `allocations[i]`
     /// is free and eligible for reuse.  `database_named` finds the lowest set bit below `max`
     /// and reuses that slot instead of always growing `max`.  This eliminates the LIFO-order
@@ -496,6 +503,7 @@ impl Clone for Stores {
             files: Vec::new(),
             max: self.max,
             peak: 0,
+            records_created: 0,
             free_bits: Vec::new(),
             bridge_text_dest: None,
             const_refs: Vec::new(),
@@ -1073,6 +1081,7 @@ impl Stores {
             files: Vec::new(),
             max: 0,
             peak: 0,
+            records_created: 0,
             free_bits: Vec::new(),
             bridge_text_dest: None,
             const_refs: Vec::new(),

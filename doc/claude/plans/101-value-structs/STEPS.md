@@ -50,6 +50,32 @@ The matrix is the acceptance oracle; the alloc harness makes "zero-cost" a hard 
 - **0.3 — freeze the spec.** Record the pass/fail + alloc-count table in this file; it is the
   Slice-1..5 acceptance oracle. Probes graduate to `tests/scripts/` as each slice lands.
 
+### Slice 0 findings (2026-07-08) — the alloc harness is built; where records actually live
+
+Harness landed: `Stores.records_created` counter (`database/mod.rs`), bumped in `record_new`
+(`database/structures.rs:60`), reported at exit via `LOFT_ALLOC_REPORT=1`
+(`state/mod.rs::check_store_leaks`) → `loft-alloc: records=N`.
+
+Measured (`--interpret`, 100× loops):
+
+| shape | records | reading |
+|---|---|---|
+| local `struct` (flat or nested), 100× | **0** | transient locals live in a reused stack **work slot**, not heap records |
+| `struct` returned from a fn, 100× | **0** | return reuses a slot |
+| `vector<P>` (flat), 100 elems | **100** | one record **per collection element** |
+| `vector<Outer>` (2 nested `Inner` fields) | **100** | nested struct fields are **already inline** in the element record (not 300) — `field_ref` same-store offset |
+| `vector<integer>`, 100 elems | **100** | even scalar elements log one `record_new` each |
+
+**Consequences for the plan** (they SHARPEN it, matching the user's guidance):
+1. The DbRef/heap cost is **not** in transient locals (already stack-cheap) — it is in
+   **persistent/collection storage**. Value structs matter most for `vector<V>` / record
+   fields / DB columns (Slices 2–3), exactly "zero cost inside records".
+2. `record_new` counts *logical* records and includes inline sub-records + per-element slots,
+   so it is a coarse proxy. The real target is **architectural** (drop the inline DbRef; one
+   Store) per the locked decisions, not a raw `record_new` count. The clean per-slice metric
+   is a **struct-vs-scalar DELTA** on a fixed program, plus a structural check ("no DbRef /
+   no separate record for the value field"). Slice 1/3 assert the delta collapses.
+
 ---
 
 ## Slice 1 — a `value struct` as a LOCAL, end-to-end, zero alloc
