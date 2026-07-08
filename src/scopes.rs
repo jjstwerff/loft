@@ -1569,6 +1569,119 @@ fn inject_free_borrowed() -> Option<&'static str> {
 /// Under the `LASTUSE_RECLAIM` gate only (a Plan-57 testing build), panics if the
 /// reclaim pass left a store the model says is dead un-freed past a later
 /// allocation (the Phase-4 Goal-E watermark guard).  Never panics in normal builds.
+/// @PLN101 — ISOLATED value-struct copy pass. A `value struct` is an ordinary
+/// `Type::Reference` record (marked only by `Data.value_structs`); the ONLY behavioural
+/// difference is value (copy) semantics. When such a struct is BOUND to a local from a VIEW
+/// (a field/element read — `e = record.f` / `e = vec[i]`), rewrite the bind to mint a fresh
+/// store and deep-copy into it, so the local owns its own record and mutating it cannot write
+/// back through the view. Not wired into the type system: no `Type` variant, no assignment-path
+/// surgery, no ownership-oracle change. Runs after `move_elide` and BEFORE the ownership scan,
+/// so the emitted `OpDatabase` makes the local classify `Owned` on its own (sound: it earns
+/// ownership, it is not asserted). Only fires on a `Set(local, borrowed-view)`; a fresh
+/// construction (`Owned` rhs) or a method-call arg is not rewritten (copy-elision / zero-copy
+/// hot path fall out).
+fn value_struct_copy(data: &mut Data) {
+    let op_database = data.def_nr("OpDatabase");
+    let op_copy_record = data.def_nr("OpCopyRecord");
+    if op_database == u32::MAX || op_copy_record == u32::MAX {
+        return;
+    }
+    for d_nr in 0..data.definitions() {
+        if !matches!(data.def(d_nr).def_type, DefType::Function) {
+            continue;
+        }
+        let mut code = data.definitions[d_nr as usize].code.clone();
+        let mut cleared: Vec<u16> = Vec::new();
+        vs_copy_walk(
+            &mut code,
+            data,
+            d_nr,
+            op_database,
+            op_copy_record,
+            &mut cleared,
+        );
+        if cleared.is_empty() {
+            continue;
+        }
+        data.definitions[d_nr as usize].code = code;
+        // Clear each copied local's VIEW dep so it frees as an owned store (no leak, no
+        // double-free): the local now owns a fresh copy, not a borrow into the source.
+        for v in cleared {
+            if let Type::Reference(p, _) = *data.def(d_nr).variables.tp(v) {
+                data.definitions[d_nr as usize]
+                    .variables
+                    .set_type(v, Type::Reference(p, Deps::none()));
+            }
+        }
+    }
+}
+
+/// Recursive rewriter for [`value_struct_copy`] — mirrors the IR walk in
+/// `variables/validate.rs::build_scope_parents`.
+fn vs_copy_walk(
+    node: &mut Value,
+    data: &Data,
+    d_nr: u32,
+    op_database: u32,
+    op_copy_record: u32,
+    cleared: &mut Vec<u16>,
+) {
+    match node {
+        Value::Set(v, rhs) => {
+            let vv = *v;
+            vs_copy_walk(rhs, data, d_nr, op_database, op_copy_record, cleared);
+            if let Type::Reference(p, _) = *data.def(d_nr).variables.tp(vv)
+                && data.is_value_struct(p)
+                && matches!(
+                    crate::use_analysis::ownership_of(data, d_nr, rhs),
+                    crate::use_analysis::Own::Borrowed { .. }
+                )
+            {
+                let kt = i32::from(data.def(p).known_type());
+                let source = (**rhs).clone();
+                *node = Value::Insert(vec![
+                    Value::Set(vv, Box::new(Value::Null)),
+                    Value::Call(op_database, vec![Value::Var(vv), Value::Int(kt)]),
+                    Value::Call(op_copy_record, vec![source, Value::Var(vv), Value::Int(kt)]),
+                ]);
+                cleared.push(vv);
+            }
+        }
+        Value::Block(b) | Value::Loop(b) => {
+            for op in &mut b.operators {
+                vs_copy_walk(op, data, d_nr, op_database, op_copy_record, cleared);
+            }
+        }
+        Value::Insert(ops) => {
+            for op in ops {
+                vs_copy_walk(op, data, d_nr, op_database, op_copy_record, cleared);
+            }
+        }
+        Value::If(c, t, e) => {
+            vs_copy_walk(c, data, d_nr, op_database, op_copy_record, cleared);
+            vs_copy_walk(t, data, d_nr, op_database, op_copy_record, cleared);
+            vs_copy_walk(e, data, d_nr, op_database, op_copy_record, cleared);
+        }
+        Value::Return(x) | Value::Drop(x) => {
+            vs_copy_walk(x, data, d_nr, op_database, op_copy_record, cleared);
+        }
+        Value::Call(_, args) => {
+            for a in args {
+                vs_copy_walk(a, data, d_nr, op_database, op_copy_record, cleared);
+            }
+        }
+        Value::Iter(_, a, b, c) => {
+            vs_copy_walk(a, data, d_nr, op_database, op_copy_record, cleared);
+            vs_copy_walk(b, data, d_nr, op_database, op_copy_record, cleared);
+            vs_copy_walk(c, data, d_nr, op_database, op_copy_record, cleared);
+        }
+        Value::Span(b) => {
+            vs_copy_walk(&mut b.1, data, d_nr, op_database, op_copy_record, cleared);
+        }
+        _ => {}
+    }
+}
+
 pub fn check(data: &mut Data) {
     // @PLN94 — the CFG/dataflow completeness oracle, an OBSERVER reached only via
     // LOFT_OWN_ORACLE (SI-1: shipped codegen byte-identical; a no-op when unset).
@@ -1594,6 +1707,9 @@ pub fn check(data: &mut Data) {
     // off (byte-identical). Runs AFTER borrow elision — the two cover disjoint verdicts (borrow
     // vs owned copy), so ordering is safe, but move-elision assumes the copy still stands.
     move_elide(data);
+    // @PLN101 — insert value-struct copies (BEFORE the ownership scan, so the emitted
+    // OpDatabase makes each copied local classify Owned on its own).
+    value_struct_copy(data);
     // Plan-57 store-identity gate (Phase 2.5): emit the verifying store ops only
     // when LOFT_STORE_TAG is set.  Counter is global so ids are unique across
     // functions (a cross-function wrong-store free mismatches).
