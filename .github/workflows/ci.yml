@@ -528,6 +528,19 @@ jobs:
       # caught divergence fails the nightly, visible within a day and off the PR
       # critical path.  This is the automatic gate for the oracle that the manual
       # `-- --ignored` run was standing in for.
+      # Headless-WASM toolchain for the oracle's THIRD backend (wasm32-wasip2 / wasmtime).
+      # The oracle's wasm leg self-skips without these, so installing them is what makes
+      # interp == native == WASM an actual nightly gate (the lib-tested-on-3-backends gap).
+      # Nightly + push-to-main only, Linux only — mirrors the oracle step below.
+      - name: Install wasip2 target (oracle wasm leg)
+        if: github.event_name != 'pull_request' && matrix.os == 'ubuntu-latest'
+        run: rustup target add wasm32-wasip2
+      - name: Install wasmtime (oracle wasm leg)
+        if: github.event_name != 'pull_request' && matrix.os == 'ubuntu-latest'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasmtime
+
       - name: Differential oracle (nightly cross-backend sweep)
         if: github.event_name != 'pull_request' && matrix.os == 'ubuntu-latest'
         shell: bash

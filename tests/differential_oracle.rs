@@ -166,6 +166,88 @@ fn driver_agreement(dump: &ModeRun, interp: &ModeRun, native: &ModeRun) -> Vec<S
     }
 }
 
+/// Whether the headless-WASM toolchain is present: the `wasm32-wasip2` rustup
+/// target AND `wasmtime` on PATH. When absent the sweep SKIPS the wasm leg (rather
+/// than failing), so a machine without the toolchain still runs the interp/native
+/// oracle; a wasm-capable runner (the nightly gate) exercises it. This leans on the
+/// @PLN100 build phase, which auto-builds the wasip2 loft-runtime rlib on first use.
+fn wasm_toolchain_present() -> bool {
+    let target = Command::new("rustup")
+        .args(["target", "list", "--installed"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).contains("wasm32-wasip2"))
+        .unwrap_or(false);
+    let wasmtime = Command::new("wasmtime")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    target && wasmtime
+}
+
+/// The THIRD backend: compile `path` to `wasm32-wasip2` (`--native-wasm`) and run
+/// it under `wasmtime`, capturing the program's observable outcome. WASM shares the
+/// native Rust generator, so this pins interp == native == WASM by construction. A
+/// COMPILE failure (a codegen shape that breaks wasm — the compound-`&&` /
+/// format-hook / text-if class this cycle broke BOTH native and wasm) is returned
+/// as the compile outcome, which reads as a static reject and is caught by the
+/// accept/reject check against the accepting interpreter; a successful compile then
+/// runs and its stdout / exit must match the interpreter. Returns `None` when the
+/// toolchain is absent (the leg is skipped, not failed). (Leak-freedom stays an
+/// interp/native check — the native leak sentinel is not wired through wasmtime.)
+fn run_wasm(path: &Path) -> Option<ModeRun> {
+    if !wasm_toolchain_present() {
+        return None;
+    }
+    let stem = path.file_stem().unwrap_or_default().to_string_lossy().into_owned();
+    let out = std::env::temp_dir().join(format!("loft_oracle_{stem}_{}.wasm", std::process::id()));
+    let compile = Command::new(loft_bin())
+        .arg("--native-wasm")
+        .arg(&out)
+        .arg(path)
+        .current_dir(workspace_root())
+        .env("LOFT_TIMEOUT", "180")
+        .output()
+        .unwrap_or_else(|e| panic!("failed to spawn loft --native-wasm: {e}"));
+    if compile.status.code() != Some(0) || !out.exists() {
+        return Some(ModeRun {
+            stdout: String::from_utf8_lossy(&compile.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&compile.stderr).into_owned(),
+            exit_code: compile.status.code(),
+        });
+    }
+    let run = Command::new("wasmtime")
+        .arg(&out)
+        .output()
+        .unwrap_or_else(|e| panic!("failed to run wasmtime: {e}"));
+    let _ = std::fs::remove_file(&out);
+    Some(ModeRun {
+        stdout: String::from_utf8_lossy(&run.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&run.stderr).into_owned(),
+        exit_code: run.status.code(),
+    })
+}
+
+/// Interp-vs-WASM outcome agreement — stdout (value / null) + exit code (halt),
+/// labelled so a failure names the wasm leg.
+fn wasm_divergences(interp: &ModeRun, wasm: &ModeRun) -> Vec<String> {
+    let mut d = Vec::new();
+    let i = normalise_stdout(&interp.stdout);
+    let w = normalise_stdout(&wasm.stdout);
+    if i != w {
+        d.push(format!(
+            "WASM stdout differs:\n    interp = {i:?}\n    wasm   = {w:?}"
+        ));
+    }
+    if interp.exit_code != wasm.exit_code {
+        d.push(format!(
+            "WASM exit code differs: interp={:?} wasm={:?}",
+            interp.exit_code, wasm.exit_code
+        ));
+    }
+    d
+}
+
 /// The corpus: every `.loft` under `tests/oracle/`, in alphabetical order.
 fn corpus() -> Vec<PathBuf> {
     let dir = workspace_root().join("tests/oracle");
@@ -197,6 +279,20 @@ fn oracle_corpus_agrees_across_backends() {
         let native = run_mode("--native", &path, &[("LOFT_NATIVE_LEAK_CHECK", "1")]);
         let mut d = divergences(&interp, &native);
         d.extend(driver_agreement(&dump, &interp, &native));
+        // THIRD backend: headless WASM (wasm32-wasip2 / wasmtime), when the toolchain is present.
+        // wasm shares the native Rust generator, so a shape that compiles native but breaks wasm —
+        // OR breaks BOTH (the compound-&& / format-hook / text-if class this cycle) — is caught here.
+        if let Some(wasm) = run_wasm(&path) {
+            d.extend(wasm_divergences(&interp, &wasm));
+            // accept/reject must agree with the interpreter: a wasm-compile-fail on a program the
+            // interpreter accepts is exactly the #520/#533/#534 class.
+            let (ri, rw) = (statically_rejected(&interp), statically_rejected(&wasm));
+            if ri != rw {
+                d.push(format!(
+                    "WASM accept/reject disagrees: --interpret rejected={ri}, --native-wasm rejected={rw}"
+                ));
+            }
+        }
         if !d.is_empty() {
             report.push(format!("✗ {name}\n  {}", d.join("\n  ")));
         }
