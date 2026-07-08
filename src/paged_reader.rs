@@ -610,9 +610,9 @@ mod tests {
         // → byte 40, then read them back through the paged reader.
         let mut img = vec![0u8; 64];
         img[28..32].copy_from_slice(&0xDEAD_BEEFu32.to_ne_bytes());
-        img[40..48].copy_from_slice(&(-1234567890123i64).to_ne_bytes());
+        img[40..48].copy_from_slice(&(-1_234_567_890_123i64).to_ne_bytes());
         let mut r = PagedReader::with_config(VecProvider::new(img), 16, 64);
         assert_eq!(r.u32_at(3, 4), 0xDEAD_BEEF);
-        assert_eq!(r.i64_at(5, 0), -1234567890123i64);
+        assert_eq!(r.i64_at(5, 0), -1_234_567_890_123i64);
     }
 }

@@ -2318,44 +2318,16 @@ impl Stores {
         true
     }
 
-    /// @PLN97 arc G Phase 3a — load ONE integer-keyed entry from a persisted
-    /// HASH image at `path` into the empty local hash `local`, fetching only the
-    /// pages the lookup touches (via [`crate::paged_reader::PagedReader`]).
-    ///
-    /// The working-set primitive: `local` need not hold the whole remote store,
-    /// only the entries actually asked for. Returns `false` when the key is
-    /// absent, the file is unreadable/mismatched, or the collection is not an
-    /// integer-keyed hash of a FLAT struct (no nested vector/text/struct fields
-    /// — those need the relocating graph-copy, a later cut). Root + key schema
-    /// come from `local`'s live type (same collection type ⇒ same structural
-    /// root position in the image), NOT the raw bytes.
     /// @PLN97 arc G Phase 4 / 3b.7 — load the entries with integer key in
     /// `[lo, hi]` from a persisted SORTED collection into the (empty) local
     /// `sorted<T[k]>`, fetching only the pages the range walk touches. The
-    /// range-friendly counterpart of `store_load_key(s)` — routing's tile-window
+    /// range-friendly counterpart of `load_key(s)` — routing's tile-window
     /// fetch. Returns the count loaded; refuses a non-sorted / non-copyable
     /// collection. A Sorted collection is a sorted INLINE vector, so the source
     /// range is already ordered: build `local`'s vector directly in key order
-    /// (no per-element sort), then relocate each element's heap graph.
-    /// Read `[lo, hi]` from a `vector<integer>` and load that range. The single
-    /// vector-reading home for both backends (mirrors `load_keys_vec`); the
-    /// bounds ride as a vector because a `#rust` builtin with a `reference` arg
-    /// AND two integer-literal args mis-codegens on native (the `_v_local`
-    /// pre-eval bug), whereas `&(@local)` + a vector arg is proven (load_keys).
-    #[cfg(feature = "remote-store")]
-    pub fn load_range_vec(&mut self, local: &DbRef, path: &str, bounds_vec: &DbRef) -> i64 {
-        // Expect exactly [lo, hi] (integer elements, i64 at 8 + i·8).
-        if crate::vector::length_vector(bounds_vec, &self.allocations) < 2 {
-            return 0;
-        }
-        let inner = self
-            .store(bounds_vec)
-            .get_u32_raw(bounds_vec.rec, bounds_vec.pos);
-        let lo = self.store(bounds_vec).get_int(inner, 8);
-        let hi = self.store(bounds_vec).get_int(inner, 16);
-        self.load_range(local, path, lo, hi)
-    }
-
+    /// (no per-element sort), then relocate each element's heap graph. Root + key
+    /// schema come from `local`'s live type (same collection type ⇒ same
+    /// structural root position in the image), NOT the raw bytes.
     #[cfg(feature = "remote-store")]
     pub fn load_range(&mut self, local: &DbRef, path: &str, lo: i64, hi: i64) -> i64 {
         use crate::paged_reader::{PageSource, PagedReader};

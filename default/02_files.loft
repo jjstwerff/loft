@@ -462,13 +462,12 @@ pub fn store_load_keys(local: reference, path: text, keys: vector<integer>) -> i
 // Range form: fetch every entry whose integer key is in [lo, hi] from a
 // persisted `sorted<T[k]>` into `local`, reading only the pages the range walk
 // touches — the ordered-collection counterpart of `store_load_keys` (a phone
-// pulling the corridor of map tiles a route crosses). The bounds ride as a
-// two-element `vector<integer>` `[lo, hi]`. Returns the count loaded.
+// pulling the corridor of map tiles a route crosses). Returns the count loaded.
 // @PLN97 arc G (loft#522).
 //   tiles: sorted<Tile[tkey]> = []
-//   store_load_range(tiles, "block.store", [lo_cell, hi_cell])
-pub fn store_load_range(local: reference, path: text, bounds: vector<integer>) -> integer fs#read;
-#rust"stores.load_range_vec(&(@local), @path, &(@bounds))"
+//   store_load_range(tiles, "block.store", lo_cell, hi_cell)
+pub fn store_load_range(local: reference, path: text, lo: integer, hi: integer) -> integer fs#read;
+#rust"stores.load_range(&(@local), @path, @lo, @hi)"
 #impure(io)
 
 // Truncates or extends the file to `size` bytes. Returns FileResult.Ok, or an

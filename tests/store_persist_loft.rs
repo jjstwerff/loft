@@ -584,9 +584,9 @@ fn store_load_key_refuses_a_vector_of_text_field_both_backends() {
 /// @PLN97 arc G Phase 5 — the REMOTE fetch. `store_load_key` over an `http://`
 /// URL pulls only the ranges the lookup touches from a `Range`-capable server
 /// (the #517 shape), producing the SAME bounded, structurally-sound working set
-/// as the local-file path — the generic `PageProvider` seam means the traversal
-/// + relocating copy are unchanged. This is the "fetch" in the partial store
-/// fetcher. Both backends.
+/// as the local-file path — the generic `PageProvider` seam leaves the
+/// traversal and relocating copy unchanged. This is the "fetch" in the partial
+/// store fetcher. Both backends.
 #[test]
 fn store_load_key_over_http_range() {
     let dir = scratch("store_load_http");

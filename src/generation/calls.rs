@@ -11,6 +11,58 @@ use std::io::Write;
 
 use super::{Output, narrow_int_cast, rust_type, sanitize};
 
+/// True when the `@name` placeholder starting at `at` in `hay` is a WHOLE
+/// token — the character right after it is not an identifier character.  This
+/// is what stops `@lo` from matching inside `@local`: without the boundary
+/// check the substring `@lo` is seen twice (once inside `@local`, once
+/// standalone), which over-fires the repeated-use pre-eval and rewrites
+/// `@local` to an unbound `_v_local` in the generated call.
+fn placeholder_boundary_at(hay: &str, ph: &str, at: usize) -> bool {
+    let after = at + ph.len();
+    hay[after..]
+        .chars()
+        .next()
+        .is_none_or(|c| !c.is_ascii_alphanumeric() && c != '_')
+}
+
+/// Count whole-token occurrences of the placeholder `@name` in `hay`, skipping
+/// any that sit inside a longer identifier (see [`placeholder_boundary_at`]).
+fn count_placeholder(hay: &str, ph: &str) -> usize {
+    let mut n = 0;
+    let mut from = 0;
+    while let Some(i) = hay[from..].find(ph) {
+        let at = from + i;
+        if placeholder_boundary_at(hay, ph, at) {
+            n += 1;
+        }
+        from = at + ph.len();
+    }
+    n
+}
+
+/// Replace every whole-token occurrence of the placeholder `@name` with `with`,
+/// leaving `@name` substrings inside a longer placeholder untouched (see
+/// [`placeholder_boundary_at`]).  The token-aware counterpart of
+/// `str::replace`, used for every `@param` substitution so that one attribute
+/// name being a prefix of another (`lo` / `local`) can never corrupt the longer
+/// one — regardless of the order the attributes are substituted in.
+fn replace_placeholder(hay: &str, ph: &str, with: &str) -> String {
+    let mut out = String::with_capacity(hay.len());
+    let mut from = 0;
+    while let Some(i) = hay[from..].find(ph) {
+        let at = from + i;
+        out.push_str(&hay[from..at]);
+        if placeholder_boundary_at(hay, ph, at) {
+            out.push_str(with);
+        } else {
+            out.push_str(ph);
+        }
+        from = at + ph.len();
+    }
+    out.push_str(&hay[from..]);
+    out
+}
+
 /// Check if a Value tree contains a Call to OpDatabase (which mutates stores).
 pub(super) fn contains_op_database(node: IrNode, data: &Data) -> bool {
     match node.kind() {
@@ -414,9 +466,12 @@ impl Output<'_> {
         // expression; subsequent uses read `_v_<name>` instead of re-evaluating.
         for a in def_fn.attributes() {
             let placeholder = format!("@{}", a.name);
-            if res.matches(&placeholder).count() >= 2 {
+            // Whole-token count: `@lo` must NOT be seen inside `@local`, or the
+            // pre-eval fires spuriously and rewrites `@local` to an unbound
+            // `_v_local`.  (See `count_placeholder` / `replace_placeholder`.)
+            if count_placeholder(&res, &placeholder) >= 2 {
                 let local = format!("_v_{}", a.name);
-                res = res.replace(&placeholder, &local);
+                res = replace_placeholder(&res, &placeholder, &local);
                 res = format!("{{ let {local} = {placeholder}; {res} }}");
             }
         }
@@ -425,7 +480,7 @@ impl Output<'_> {
             if a_nr < vals.len() {
                 // For enum-typed parameters, Value::Null means the null enum byte (255).
                 if matches!(a.typedef, Type::Enum(_, _, _)) && matches!(vals[a_nr], Value::Null) {
-                    res = res.replace(&name, "(255u8)");
+                    res = replace_placeholder(&res, &name, "(255u8)");
                     continue;
                 }
                 // For reference-typed parameters, Value::Null means the null DbRef sentinel.
@@ -439,7 +494,7 @@ impl Output<'_> {
                         | Type::Enum(_, true, _)
                 ) && matches!(vals[a_nr], Value::Null)
                 {
-                    res = res.replace(&name, "(DbRef::NULL)");
+                    res = replace_placeholder(&res, &name, "(DbRef::NULL)");
                     continue;
                 }
                 // @PLN17 — boolean operands: the op `#rust` templates do u8
@@ -449,10 +504,10 @@ impl Output<'_> {
                 // narrowing for a transient `bool` sub-expression.
                 if matches!(a.typedef, Type::Boolean) {
                     if matches!(vals[a_nr], Value::Null) {
-                        res = res.replace(&name, "(255u8)");
+                        res = replace_placeholder(&res, &name, "(255u8)");
                     } else {
                         let inner = self.generate_expr_buf(&vals[a_nr])?;
-                        res = res.replace(&name, &format!("(({inner}) as u8)"));
+                        res = replace_placeholder(&res, &name, &format!("(({inner}) as u8)"));
                     }
                     continue;
                 }
@@ -461,7 +516,7 @@ impl Output<'_> {
                     && let Value::Int(n) = vals[a_nr]
                 {
                     let with = format!("char::from_u32({n}_u32).unwrap_or('\\0')");
-                    res = res.replace(&name, &format!("({with})"));
+                    res = replace_placeholder(&res, &name, &format!("({with})"));
                     continue;
                 }
                 // For character-typed parameters, a variable holding an i32 char needs
@@ -476,7 +531,7 @@ impl Output<'_> {
                     )
                 {
                     let inner = self.generate_expr_buf(&vals[a_nr])?;
-                    res = res.replace(&name, &format!("(ops::to_char({inner}))"));
+                    res = replace_placeholder(&res, &name, &format!("(ops::to_char({inner}))"));
                     continue;
                 }
                 // P207 — same wrap applies to a `Value::TupleGet` whose element
@@ -495,7 +550,7 @@ impl Output<'_> {
                         .is_some_and(|e| matches!(e.base(), Type::Character))
                 {
                     let inner = self.generate_expr_buf(&vals[a_nr])?;
-                    res = res.replace(&name, &format!("(ops::to_char({inner}))"));
+                    res = replace_placeholder(&res, &name, &format!("(ops::to_char({inner}))"));
                     continue;
                 }
                 // For character-typed parameters, a call returning character yields `i32`
@@ -508,7 +563,7 @@ impl Output<'_> {
                     && matches!(self.data.def(*d).returned().base(), Type::Character)
                 {
                     let inner = self.generate_expr_buf(&vals[a_nr])?;
-                    res = res.replace(&name, &format!("(ops::to_char({inner}))"));
+                    res = replace_placeholder(&res, &name, &format!("(ops::to_char({inner}))"));
                     continue;
                 }
                 // @P276 — same wrap for `Value::Block` whose result type is
@@ -529,7 +584,7 @@ impl Output<'_> {
                     && matches!(b.result.base(), Type::Character)
                 {
                     let inner = self.generate_expr_buf(&vals[a_nr])?;
-                    res = res.replace(&name, &format!("(ops::to_char({inner}))"));
+                    res = replace_placeholder(&res, &name, &format!("(ops::to_char({inner}))"));
                     continue;
                 }
                 // Text-typed parameters: all text-returning calls produce `Str` or `String`,
@@ -540,7 +595,7 @@ impl Output<'_> {
                     && matches!(self.data.def(*d).returned().base(), Type::Text(_))
                 {
                     let inner = self.generate_expr_buf(&vals[a_nr])?;
-                    res = res.replace(&name, &format!("(&*({inner}))"));
+                    res = replace_placeholder(&res, &name, &format!("(&*({inner}))"));
                     continue;
                 }
                 let mut with = self.generate_expr_buf(&vals[a_nr])?;
@@ -606,9 +661,9 @@ impl Output<'_> {
                         } else {
                             format!("({with}) as {tp_str}")
                         };
-                        res = res.replace(&name, &format!("({typed_with})"));
+                        res = replace_placeholder(&res, &name, &format!("({typed_with})"));
                     } else {
-                        res = res.replace(&name, &format!("({with})"));
+                        res = replace_placeholder(&res, &name, &format!("({with})"));
                     }
                 }
             } else {
@@ -707,5 +762,37 @@ impl Output<'_> {
         } else {
             write!(w, "{res}")
         }
+    }
+}
+
+#[cfg(test)]
+mod placeholder_tests {
+    use super::{count_placeholder, replace_placeholder};
+
+    // A `#rust` template like `stores.load_range(&(@local), @path, @lo, @hi)`:
+    // the short `@lo` must not be seen inside the longer `@local`, or the
+    // repeated-use pre-eval fires and rewrites `@local` to an unbound
+    // `_v_local` (the native-codegen bug this file's helpers exist to prevent).
+    #[test]
+    fn short_name_is_not_counted_inside_a_longer_placeholder() {
+        let body = "stores.load_range(&(@local), @path, @lo, @hi)";
+        assert_eq!(count_placeholder(body, "@lo"), 1);
+        assert_eq!(count_placeholder(body, "@local"), 1);
+    }
+
+    #[test]
+    fn replace_leaves_the_longer_placeholder_intact() {
+        let body = "f(@local, @lo)";
+        assert_eq!(replace_placeholder(body, "@lo", "X"), "f(@local, X)");
+        // The longer name still substitutes cleanly on its own turn.
+        assert_eq!(replace_placeholder(body, "@local", "L"), "f(L, @lo)");
+    }
+
+    #[test]
+    fn genuine_repeated_use_still_counts_and_replaces() {
+        assert_eq!(count_placeholder("@v1 == @v1", "@v1"), 2);
+        assert_eq!(replace_placeholder("@v1 == @v1", "@v1", "x"), "x == x");
+        // `@v1` must not bleed into `@v10`.
+        assert_eq!(replace_placeholder("@v1 @v10", "@v1", "x"), "x @v10");
     }
 }

@@ -1277,15 +1277,15 @@ fn n_store_load_key_text(stores: &mut Stores, stack: &mut DbRef) {
 }
 
 /// Interpreter handler for `store_load_range` — load the entries with integer
-/// key in [lo, hi] (a two-element `vector<integer>`) from a persisted SORTED
-/// collection; returns the count.  Args pop in reverse: bounds, path, local.
-/// @PLN97 arc G Phase 4.
+/// key in [lo, hi] from a persisted SORTED collection; returns the count.  Args
+/// pop in reverse: hi, lo, path, local.  @PLN97 arc G Phase 4.
 #[cfg(feature = "remote-store")]
 fn n_store_load_range(stores: &mut Stores, stack: &mut DbRef) {
-    let v_bounds = *stores.get::<DbRef>(stack);
+    let v_hi = *stores.get::<i64>(stack);
+    let v_lo = *stores.get::<i64>(stack);
     let v_path = *stores.get::<Str>(stack);
     let v_ref = *stores.get::<DbRef>(stack);
-    let n = stores.load_range_vec(&v_ref, v_path.str(), &v_bounds);
+    let n = stores.load_range(&v_ref, v_path.str(), v_lo, v_hi);
     stores.put(stack, n);
 }
 

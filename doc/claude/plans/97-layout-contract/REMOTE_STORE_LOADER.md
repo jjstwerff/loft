@@ -30,10 +30,16 @@ leak-clean; `store_verify` on every load; each with a prove-can-fail control):
   clean up-front reject.
 - **3b.8 bytes-≪-file at scale**: a large-fixture benchmark. The property holds by construction (a
   point lookup touches O(1) pages) and `LOFT_LOADER_STATS` observes `bytes_fetched` vs file.
-- **`--html` `fetch()` bridge** (browser target) · and a **native-codegen bug** surfaced en route: a
-  `#rust` builtin with a `reference` arg AND ≥2 integer-literal args mis-binds the reference to an
-  unbound `_v_local` under pre-eval (worked around by passing the range bounds as a `vector<integer>`
-  — the proven `load_keys` form; worth a separate issue).
+- **`--html` `fetch()` bridge** (browser target).
+
+> **Retracted (2026-07-08):** an earlier note here claimed a native-codegen bug — a `#rust` builtin
+> with a `reference` arg AND ≥2 integer-literal args mis-binding the reference to an unbound
+> `_v_local` under pre-eval. It does **not** reproduce: `store_load_range(local, path, lo, hi)` with
+> the body `stores.load_range(&(@local), @path, @lo, @hi)` compiles and runs on `--native` (verified
+> by `--native-emit` + a real compile across the literal-int, variable-int, and repeated-`@local`
+> P203 paths). The original workaround (bounds as a `vector<integer>`) has been reverted to this
+> natural scalar API. The in-flight failure that prompted it was almost certainly a missing
+> interpreter handler / stale binary, not codegen.
 
 ## Two consumers, one general primitive
 

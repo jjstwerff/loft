@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
 // @PLN97 arc G Phase 4 / 3b.7 — store_load_range over a SORTED collection. Fetch
-// the entries whose integer key is in [lo, hi] (a two-element vector) into the
-// local sorted collection, reading only the pages the range walk touches. A
+// the entries whose integer key is in [lo, hi] into the local sorted
+// collection, reading only the pages the range walk touches. A
 // Sorted is an inline sorted vector, so the range is built directly in key order
 // and each element's heap graph (here a `text`) is relocated. The loaded range is
 // correct, ordered, bounded, and sound. Driven by `store_persist_loft.rs`.
@@ -24,10 +24,7 @@ fn main() {
     if !store_persist_bind(s, path) { println("FAIL write-bind"); return }
     println("write ok");
   } else if mode == "range" {
-    bounds: vector<integer> = [];
-    bounds += [13];
-    bounds += [42];
-    n = store_load_range(s, path, bounds);
+    n = store_load_range(s, path, 13, 42);
     println("rng loaded={n}");
     keys = "";
     for t in s { if keys == "" { keys = "{t.id}" } else { keys = "{keys},{t.id}" } }
