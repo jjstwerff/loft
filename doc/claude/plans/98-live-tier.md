@@ -380,9 +380,17 @@ Chromium works unsandboxed (`html_asyncify` passes). Two tests prove the interpr
    server with the relay, and an agent addressing the client by name: `D!:@alice:bp compute`→
    `D:ok bp compute`; `run`→`D:hit compute n=40` (the CLIENT paused); `eval n`→`D:eval n=40`;
    `resume`→`D:terminated`. The complete chain agent → server → browser wasm client → back, proven
-   headlessly. *(Remaining polish, not blockers: full-expression eval on the client — today it's a
-   frame-local read, since the P1b `eval_frame_expr` orchestration lives in the native-only `repl`
-   module; and the one-heap compiled-write/interpreted-read equivalence check.)*
+   headlessly.
+5. **Full-expression eval on the client ✅ LANDED (2026-07-08).** The client's `eval` evaluates ARBITRARY
+   expressions over the paused frame (`n + 2`, `n * n`, `h["a"].v`, `len(v)`, `s.field`), not just a
+   frame-local read: it binds every referenced live local as a typed arg of a synthetic fn and reenters
+   over the paused frame (`wasm_debug::eval_via_reenter`), reusing the P1b `eval_frame_reenter` primitive
+   — now GENERALIZED to push any arg type (heap `DbRef` + integer/float/bool/char/enum), not just keyed
+   `DbRef`s. `State::frame_local_arg_type` renders any local's parseable type (`None` for `text` — a
+   borrowed `Str` arg is @P293-unsafe → graceful fallback). No `repl`/`rpc` dependency, wasm-safe.
+   **Verified**: `wasm_debug::tests` (native — `n + 2`=42, `n * n`=1600, `2 + 3`=5) and the wasm +
+   full-relay tests both now eval `n + 2`→42 end-to-end (agent → server → browser client). *(Only
+   remaining polish, not blockers: the one-heap compiled-write/interpreted-read equivalence check.)*
 
 ### A3 — packaging: `--lean` opt-OUT, default LIVE (F3) ✅ LANDED (P2)
 
