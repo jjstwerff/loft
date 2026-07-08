@@ -1913,10 +1913,6 @@ pub fn size(tp: &Type, context: &Context) -> u16 {
         | Type::Enum(_, true, _)
         | Type::Spacial(_, _, _)
         | Type::Iterator(_, _) => size_of::<DbRef>() as u16,
-        // @PLN101 — a value struct is stored INLINE: its slot is the packed record bytes
-        // (the size embedded in the variant), NOT a 12-byte DbRef. This inline slot is what
-        // makes copy-on-bind fall out (like a tuple).
-        Type::Value(_, sz, _) => *sz,
         Type::Tuple(elems) => crate::data::element_size(&Type::Tuple(elems.clone())) as u16,
         _ => 0,
     }
@@ -1955,8 +1951,6 @@ pub fn align(tp: &Type) -> u8 {
         | Type::Enum(_, true, _)
         | Type::Spacial(_, _, _)
         | Type::Iterator(_, _) => 4, // DbRef = u16 + u32 + u32 → align 4
-        // @PLN101 — value struct aligned inline; 8 is conservative-safe (covers i64 fields).
-        Type::Value(_, _, _) => 8,
         Type::Tuple(elems) => crate::data::element_align(&Type::Tuple(elems.clone())),
         _ => 1,
     }

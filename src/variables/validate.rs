@@ -39,7 +39,6 @@ fn short_type(tp: &Type) -> String {
         Type::Keys => "keys".to_string(),
         Type::Enum(t, _, _) => format!("enum({t})"),
         Type::Reference(t, _) => format!("ref({t})"),
-        Type::Value(t, _, _) => format!("val({t})"),
         Type::RefVar(inner) => format!("&{}", short_type(inner)),
         Type::Vector(inner, _) => format!("vec<{}>", short_type(inner)),
         Type::Routine(t) => format!("routine({t})"),

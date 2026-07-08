@@ -824,9 +824,7 @@ fn native_type_kind(t: &Type) -> TypeKind {
         Type::Text(_) => K::Text,
         Type::Keys => K::Keys,
         Type::Enum(_, _, _) => K::Enum,
-        // @PLN101 — a value struct shares the Reference record layout/kind (inline vs heap is
-        // a storage detail, not a native-type-kind distinction).
-        Type::Reference(_, _) | Type::Value(_, _, _) => K::Reference,
+        Type::Reference(_, _) => K::Reference,
         Type::RefVar(_) => K::RefVar,
         Type::Vector(_, _) => K::Vector,
         Type::Routine(_) => K::Routine,
