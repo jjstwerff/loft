@@ -1233,6 +1233,16 @@ impl Output<'_> {
         false_v: &Value,
         pre_declared: bool,
     ) -> std::io::Result<()> {
+        // When the test carries pre-statements (an `Insert` — e.g. a boolean operand that lifted a
+        // value-struct-returning call), the if-expression emits as `<lift>; if <pred> {…} else {…}`,
+        // a STATEMENT sequence. Every consumer that needs a VALUE (a pre-eval `(…) as i64`, a
+        // bool_unify arm `((…) as u8)`, a nested test predicate `((…) as u8) == 1`) wraps it in
+        // parens, giving the invalid `( stmt; expr )`. Wrap the whole if-expression in a block
+        // `{ … }` here so it is one valid expression for ALL of them.
+        let wrap_block = matches!(test, Value::Insert(ops) if ops.len() >= 2);
+        if wrap_block {
+            write!(w, "{{")?;
+        }
         if !pre_declared {
             self.pre_declare_branch_vars(w, true_v, false_v)?;
         }
@@ -1310,7 +1320,10 @@ impl Output<'_> {
         if text_string_unify {
             write!(w, " {{(")?;
         } else if bool_unify {
-            write!(w, " {{((")?;
+            // Block, not parens, around the arm: the arm can be a STATEMENT sequence (a boolean
+            // operand that lifted a value-struct-returning call → `<lift>; <predicate>`), so
+            // `(( stmt; expr ) as u8)` is invalid Rust. `({ … } as u8)` is valid either way.
+            write!(w, " {{({{")?;
         } else if b_true {
             write!(w, " ")?;
         } else if text_unify {
@@ -1342,7 +1355,7 @@ impl Output<'_> {
         } else if text_unify {
             write!(w, ")}} else ")?;
         } else if bool_unify {
-            write!(w, ") as u8)}} else ")?;
+            write!(w, "}} as u8)}} else ")?;
         } else if let Value::Block(_) = *true_v {
             write!(w, " else ")?;
         } else {
@@ -1353,7 +1366,7 @@ impl Output<'_> {
         } else if text_unify {
             write!(w, "{{&*(")?;
         } else if bool_unify {
-            write!(w, "{{((")?;
+            write!(w, "{{({{")?;
         } else if !b_false {
             write!(w, "{{")?;
         }
@@ -1372,11 +1385,14 @@ impl Output<'_> {
         } else if text_unify {
             write!(w, ")}}")?;
         } else if bool_unify {
-            write!(w, ") as u8)}}")?;
+            write!(w, "}} as u8)}}")?;
         } else if !b_false {
             write!(w, "}}")?;
         }
         self.indent -= u32::from(!b_false || text_string_unify || bool_unify);
+        if wrap_block {
+            write!(w, " }}")?;
+        }
         Ok(())
     }
 
