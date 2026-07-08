@@ -110,7 +110,44 @@ Driver: `tests/scripts/515` DateTime/Duration as `value struct`, PLUS `vector<Da
 `struct` with a `DateTime` field — assert the `allocs`/scratch-store DELTA is 0 vs the scalar
 baseline for the field/element cases, every assertion green, both backends.
 
-### Original local-variable steps (deprioritised — negligible, keep DbRef)
+### Step 1.1 — DONE (2026-07-08): parse + mark the kind
+`value struct T { … }` parses (a `value` soft-keyword prefix, PEEKED as an identifier —
+`has_token` only matches keyword lexemes) and marks T in `Data.value_structs` (a **set**, NOT a
+`Definition` field — those serialize through `ir_schema`/`ir_read`; `Data::is_value_struct(d_nr)`
+reads it). Verified: parses + a value struct as a vector element stores inline out-of-the-box
+(`peak=4 records=5` for 5 elems, same as a normal struct), both backends; no regression
+(issues 748, wrap 158, parse_errors 51). Commit `5f43c13b`.
+
+### Step 1.2 — value/COPY semantics (THE thin layer; the one real behaviour change)
+**Problem (proven).** A value struct currently **ALIASES** like a reference struct —
+`e = b.items[0]; e.x = 99` writes back (`b.items[0].x == 99`). A value type must yield a **COPY**,
+so reading a `DateTime` field gives a value you can pass/modify without corrupting the record —
+exactly how `integer` behaves.
+
+**Change.** When the SOURCE of a bind / by-value pass is a value struct, emit a **byte COPY**
+into the destination instead of sharing the DbRef. Copy sites (mirror `integer`'s value
+behaviour): `e = record.field`, `x = vec[i]`, `f(record.field)` (by-value arg),
+`return record.field`, and a value-struct field read used as a value. The copy MECHANISM already
+exists — **`OpCopyRecord`** (copies a record's bytes, `fill.rs`); the work is **linking** it at
+these sites, gated on `Data::is_value_struct`, in the assignment / read codegen (the
+alias-vs-copy decision — @PLN85/@PLN90 ownership territory, `src/scopes.rs` /
+`src/ownership_cfg.rs`). The copy is cheap (inline bytes — the intrinsic cost of a value type,
+NOT a heap alloc); a value-struct LOCAL keeps its own (reused) store per the scope cut.
+
+**Verify (both backends).** `value struct P { x: integer }`, `b.items = [P { x: 1 }]`, then
+`e = b.items[0]; e.x = 99` ⇒ **`b.items[0].x == 1`** (copy, not 99). Plus: mutating a copy passed
+by value to a fn does not touch the caller's field/element. `allocs` delta stays ~0 (the copy is
+inline — no scratch store).
+
+**Non-null (Q4, locked).** Reject an UNINITIALISED value struct at compile time (require a value
+or a declared default) — a value struct has no null. Enforce where a value-struct local/field is
+declared without an initialiser.
+
+**Open sub-questions.** (a) Exact copy-site set — confirm `f(vs)` (by-value arg) and `return vs`
+copy, and that a `&vs` ref param (if allowed) does NOT. (b) Interaction with the copy-elision
+analysis — don't double-copy when the source is already a fresh temporary (elide then).
+
+### Original local-variable steps (deprioritised — negligible, keep DbRef; MECHANISM REFERENCE)
 The construct/field/access steps below still document the mechanism, but the LOCAL case keeps
 its DbRef; apply the inline path only to the field/vector-element cases (Slices 2–3 folded in).
 
