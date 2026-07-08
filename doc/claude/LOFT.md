@@ -1332,6 +1332,40 @@ Verified: works in vectors (`pts[0].x`), function parameters, and across
 struct/enum boundaries.  See `tests/scripts/23-field-overlap-structs.loft`
 and `tests/scripts/24-field-overlap-enum-struct.loft`.
 
+### Value structs (`value struct`)
+
+A `value struct` is a struct with **value (copy) semantics** and **zero heap overhead** as a
+field of another record or as a vector element (@PLN101).  Reading one out of a field or element
+yields an independent copy — mutating the copy never writes back through the source:
+
+```loft
+value struct Point { x: integer, y: integer }
+
+struct Path { points: vector<Point> }
+
+p = Path { points: [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }] };
+q = p.points[0];   // q is a COPY of element 0
+q.x = 99;          // p.points[0].x is still 1 — no aliasing
+```
+
+- **Copy, not alias.** A plain `struct` binding is a *view* (a later `p.points[0].x = 9`
+  is seen through it); a `value struct` binding is a snapshot.  This is the whole difference —
+  everything else (operators via `OpXxx` methods, `{v}` / `{v:spec}` formatting, `as`
+  conversions) works exactly as for a reference `struct`.
+- **Zero-cost inside records and vectors.**  Fields and elements are stored inline (no per-field
+  or per-element allocation), and a read-only use (e.g. `for pt in p.points { s = s + pt.x }`)
+  is left as a zero-cost view — a `vector<value struct>` allocates the same as the raw scalar
+  layout, flat in the element count.  A standalone local may own its own store (negligible; a
+  loop reuses the slot).
+- **Non-null.**  A value struct is inline bytes with no null sentinel: `value struct?` is a
+  compile error, and every value struct must be initialised (there is no null value struct).
+- **Method params stay zero-copy.**  `self` / `both` on a value-struct method is passed by
+  reference (no copy); the copy only happens when you *bind* a value struct out of a view.
+
+Use a `value struct` for small wrapper types that must be as cheap as the raw field they wrap
+(e.g. `DateTime { ms: integer }`, `Point`, `Color`) — where the copy semantics of a scalar are
+what you want.  Use a reference `struct` when you want shared/aliased mutation or nullability.
+
 ---
 
 ## Methods and function calls

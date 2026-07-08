@@ -42,7 +42,9 @@ generics; the three remaining gaps are what keep a library struct from being
   `OpEqBool(is_non_null(s), 255_sentinel)` → always false). Gated on `Optional(Reference)`
   so hash-lookup results (bare `Reference`, `rec==0` miss) keep their correct path
   (regression `tests/scripts/514-null-equality-struct-ref.loft`). `??` and `== null` agree.
-- **Arc D (value structs) — deferred (perf trigger).**
+- **Arc D (value structs) — SHIPPED as [@PLN101](../101-value-structs/README.md)** (2026-07-08;
+  the zero-cost half of first-grade types — value semantics + zero heap overhead inside records /
+  vectors, both backends).
 - **Integration acceptance test — `tests/scripts/515-datetime-first-grade.loft`.** A full
   first-grade `DateTime` (+ `Duration`) library struct exercising ALL three surfaces at
   once — comparison + mixed-type `DateTime±Duration` operators, `{d}`/`{d:date}`/`{d:time}`
