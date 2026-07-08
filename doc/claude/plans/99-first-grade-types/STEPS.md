@@ -12,6 +12,11 @@ throughout: `struct DT { ms: integer not null }`. Ordering is by dependency:
 Stage-A matrix → Arc A (operators, incl. the null bug) → Arc B (format) → Arc C
 (conversions). Arc D (value structs) is deferred (perf trigger) — no steps here.
 
+> **Line-ref provenance:** Arc A + Step A5 refs are **analysis-confirmed on today's
+> tree (2026-07-08)**. Arc B + Arc C refs are **DESIGN-era (2026-06-14)** and must be
+> re-confirmed when picked up — line numbers drift (e.g. `call_op` moved
+> `mod.rs:3964`→`:5304` since the DESIGN was written).
+
 ---
 
 ## Step 0 — Stage-A matrix (falsify the present state before any edit)
@@ -39,23 +44,31 @@ The matrix must *prove it can fail* (the ❌ rows are real today, verified
 
 ## Arc A — direct concrete operator dispatch
 
-### Step A1 — locate the resolution divergence (instrument, don't theorize)
-**Change:** add one env-gated `eprintln` at the direct binary-op resolution
-(`call_op`, `src/parser/mod.rs:3964`, and the `<`/`-` emit path in
-`operators.rs`) and at the generic/interface lookup (`get_possible`). Run the
-Step-0 direct `<` probe and the generic `<` probe.
-**Verify:** the log shows the generic path trying `t_<len>DT_OpLt` and the direct
-path **not** consulting user-operator defs for `Type::Reference` operands. (If the
-direct path *does* try and fails for another reason, the fix moves — re-root.)
+### Step A1 — the resolution divergence *(ANALYSED 2026-07-08 — root cause found; no instrument step)*
+`call_op` (`src/parser/mod.rs:5304`; DESIGN said `:3964` — moved) has two branches:
+a generic-type-variable branch (the `t_<len>T_Op<Name>` stub, `:5320`) and a
+**concrete** branch that iterates `self.data.get_possible("Op<Name>")` (`:5337`) —
+the pre-built `possible` map. That map is populated **only** by `add_op`
+(`src/data.rs:3937`), which registers a def into `possible["OpLt"]` iff its **name
+starts with `"OpLt"`** (`:3947`). A built-in qualifies (`OpLtInt`); a user
+`fn OpLt(self: DT, other: DT)` is stored as the method `t_2DT_OpLt` (or global
+`n_OpLt`) — neither starts with `"OpLt"`, so it is **never in `possible`**. Hence
+the concrete branch structurally cannot see user operators, while the generic
+branch — and `find_fn` (`:3891`), which tries `t_<len><Type>_<fn>` then `n_<fn>`
+then `possible` — can. **Confirmed; no instrumentation needed.** (`get_possible`
+is `Data::get_possible`, `data.rs:3559` — a map read, not the resolver.)
 
-### Step A2 — wire direct resolution to the user-operator lookup
-**Change:** at the direct binary-op resolution, when no built-in op matches two
-`Type::Reference(d_nr,_)` operands of the same nominal type, look up the user
-`Op<Name>(self: T, other: T)` def via the **same** mechanism `get_possible` uses.
-No new dispatch — reuse the interface-path lookup.
-**Verify:** Step-0 rows `<`/`<=`/`>`/`>=` flip to ✅ on both backends; a struct
-with **no** `OpLt` still errors *identically* to today (no regression — run a
-2nd struct without the def).
+### Step A2 — wire the concrete branch to `find_fn`
+**Change:** in `call_op`'s concrete branch (`mod.rs:5335-5365`), before the "No
+matching operator" error (`:5395`), resolve the user operator via
+`self.data.find_fn(source, &format!("Op{}", rename(op)), &types[0])` — the **same**
+resolver the method/generic path uses (`t_<len><Type>_Op<Name>` → `n_Op<Name>`).
+If it returns `!= u32::MAX`, `call_nr` it and return its type. Built-in resolution
+above is untouched; a struct with no such op still hits the error identically.
+**Effort: S** — one resolver call reusing existing machinery.
+**Verify:** Step-0 rows `<`/`<=`/`>`/`>=` flip to ✅ on both backends; a 2nd struct
+with **no** `OpLt` still errors *identically* (no regression); `wrap`+`native`+
+`expressions`+`issues` stay green (no false-match on built-ins / generics).
 
 ### Step A3 — the subtraction operator name
 **Change:** confirm the real `Op<Name>` for `-` (the DESIGN said `OpMin`; verify
@@ -72,14 +85,22 @@ suites — no new failures, no token-stream desync. (Pass 1 and pass 2 must agre
 `<` is a user op; the interface path already relies on early signature
 collection — prove it holds for concrete structs.)
 
-### Step A5 — the null-equality bug (fold in here; it is a live `main` bug)
-**Change:** `s == null` / `s != null` on a nullable `Type::Reference` (user
-struct) must hit the null-check path, not a struct-equality path that fails on the
-`null` operand. Align with the `integer?`/`text?` path.
-**Verify:** `s: DT? = null` → `s == null` → **`true`**, `s != null` → **`false`**;
-`s = DT{ms:1}` → `s == null` → `false`; matches `integer? == null` and agrees with
-`s ?? d` (which already coalesces). Both backends. **No `i64::MIN` sentinel** —
-nullability stays standard reference-null.
+### Step A5 — the null-equality bug (@PLN25 `== null` lowering; live `main` bug)
+**Analysis (2026-07-08):** `== null` is lowered specially, not via a plain `OpEq`.
+The @PLN25 model renders a struct nullable as `__nullable<S>` (an inline
+discriminant enum; `src/parser/expressions.rs:2500+`), and `== null` should test
+discriminant 0 — the **same** is-null the `??` path uses (the probe proved `??`
+DOES see the null: `s ?? d` coalesced and `{s}` rendered `null`). For a custom
+struct the two **disagree** — `s == null` → `false` while `??` sees null — so the
+`== null` lowering for a struct `__nullable<S>` / null ref is the broken path
+(built-in `integer?`/`text?` are fine). One more trace needed: where `s == null`
+lowers for a reference/`__nullable<S>` operand and why it skips the discriminant
+check `??`/is_null uses. **Effort: S–M** (align one lowering path).
+**Change:** route `Reference`/`__nullable<S>` `== null` / `!= null` through the
+is-null discriminant check (mirror `??`).
+**Verify:** `s: DT? = null` → `s == null` → **`true`**, `!= null` → **`false`**;
+`s = DT{ms:1}` → `false`; matches `integer?`/`text?`; both backends. **No
+`i64::MIN` sentinel** — nullability stays standard reference-null.
 
 ### Step A6 — graduate regressions
 **Change:** move the Step-0 matrix probes to `tests/scripts/NN-first-grade-ops.loft`
