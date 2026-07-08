@@ -27,7 +27,7 @@ use std::thread;
 /// with a `206 Partial Content` + `Content-Range` (200/whole-file otherwise) —
 /// the remote store the `store_load_key` HTTP path (Phase 5) fetches from.
 /// Returns the URL; the server thread is detached (ends with the test binary).
-fn serve_ranges(bytes: Vec<u8>) -> String {
+fn serve_ranges(store: Vec<u8>, sidecar: Option<Vec<u8>>) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().unwrap().port();
     thread::spawn(move || {
@@ -36,7 +36,33 @@ fn serve_ranges(bytes: Vec<u8>) -> String {
             let mut buf = [0u8; 2048];
             let n = s.read(&mut buf).unwrap_or(0);
             let req = String::from_utf8_lossy(&buf[..n]);
-            let total = bytes.len();
+            // Path-aware (real servers 404 a missing sidecar): serve the layout
+            // sidecar whole at `/store.dschema` (or 404 when absent), so the
+            // @PLN97 3b.5 gate fetches a REAL sidecar, not the store bytes.
+            let req_path = req
+                .lines()
+                .next()
+                .and_then(|l| l.split_whitespace().nth(1))
+                .unwrap_or("/");
+            if req_path.ends_with(".dschema") {
+                match &sidecar {
+                    Some(sc) => {
+                        let hdr = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            sc.len()
+                        );
+                        let _ = s.write_all(hdr.as_bytes());
+                        let _ = s.write_all(sc);
+                    }
+                    None => {
+                        let _ = s.write_all(
+                            b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                        );
+                    }
+                }
+                continue;
+            }
+            let total = store.len();
             let range = req.lines().find_map(|l| {
                 l.trim()
                     .strip_prefix("Range: bytes=")
@@ -50,7 +76,7 @@ fn serve_ranges(bytes: Vec<u8>) -> String {
                     .parse()
                     .unwrap_or(total.saturating_sub(1))
                     .min(total.saturating_sub(1));
-                let body = if a <= b { &bytes[a..=b] } else { &bytes[0..0] };
+                let body = if a <= b { &store[a..=b] } else { &store[0..0] };
                 let hdr = format!(
                     "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {a}-{b}/{total}\r\n\
                      Content-Length: {}\r\nConnection: close\r\n\r\n",
@@ -63,7 +89,7 @@ fn serve_ranges(bytes: Vec<u8>) -> String {
                     "HTTP/1.1 200 OK\r\nContent-Length: {total}\r\nConnection: close\r\n\r\n"
                 );
                 let _ = s.write_all(hdr.as_bytes());
-                let _ = s.write_all(&bytes);
+                let _ = s.write_all(&store);
             }
         }
     });
@@ -272,6 +298,14 @@ fn nested_script() -> PathBuf {
 
 fn vecstruct_script() -> PathBuf {
     workspace_root().join("tests/scripts/store_load_vecstruct.loft")
+}
+
+fn gate_script() -> PathBuf {
+    workspace_root().join("tests/scripts/store_load_layout_gate.loft")
+}
+
+fn gate_changed_script() -> PathBuf {
+    workspace_root().join("tests/scripts/store_load_layout_gate_changed.loft")
 }
 
 fn vectext_refuse_script() -> PathBuf {
@@ -596,7 +630,10 @@ fn store_load_key_over_http_range() {
     let (out_w, code_w) = run_mode(&load_script(), &path, "write");
     assert_eq!(code_w, 0, "write: {out_w:?}");
     assert!(out_w.contains("write keys=7,13,42"), "{out_w:?}");
-    let url = serve_ranges(fs::read(&path).unwrap());
+    // Serve the real `.dschema` beside the store so the 3b.5 layout gate does a
+    // genuine remote Match (not a fall-through to the absent-sidecar path).
+    let sidecar = fs::read(format!("{}.dschema", path.display())).ok();
+    let url = serve_ranges(fs::read(&path).unwrap(), sidecar);
 
     for backend in ["--interpret", "--native"] {
         let (out, code) = run_mode_backend(backend, &load_script(), Path::new(&url), "loadkey");
@@ -688,6 +725,85 @@ fn store_load_range_over_sorted_both_backends() {
             out.contains("rng verify=true"),
             "{backend}: the loaded sorted collection must be sound: {out:?}"
         );
+    }
+}
+
+/// @PLN97 3b.5 — the layout-identity gate (local file). Persisting writes a
+/// `.dschema` sidecar; a working-set load whose Tile layout MATCHES the
+/// persisted one proceeds, but a load with an EXTRA field is REFUSED before
+/// reading any foreign-layout bytes (leaving the collection empty, not
+/// corrupt). Both backends. The sound gate behind trusting a partial store.
+#[test]
+fn layout_gate_rejects_changed_struct_both_backends() {
+    let dir = scratch("layout_gate");
+    let path = dir.join("tiles.store");
+
+    let (out_w, code_w) = run_mode(&gate_script(), &path, "write");
+    assert_eq!(code_w, 0, "write: {out_w:?}");
+    assert!(out_w.contains("write ok"), "{out_w:?}");
+    assert!(
+        Path::new(&format!("{}.dschema", path.display())).exists(),
+        "persist must write a .dschema sidecar beside the store"
+    );
+
+    for backend in ["--interpret", "--native"] {
+        // MATCHING layout — the load proceeds.
+        let (out, code) = run_mode_backend(backend, &gate_script(), &path, "load");
+        assert_eq!(code, 0, "{backend} match exit: {out:?}");
+        assert!(
+            out.contains("gate ok=true"),
+            "{backend}: a matching layout must load: {out:?}"
+        );
+        assert!(out.contains("gate name=forty-two"), "{backend}: {out:?}");
+        assert!(out.contains("gate len=1"), "{backend}: {out:?}");
+
+        // CHANGED layout (extra field) — the gate refuses.
+        let (out, code) = run_mode_backend(backend, &gate_changed_script(), &path, "load");
+        assert_eq!(code, 0, "{backend} mismatch exit: {out:?}");
+        assert!(
+            out.contains("changed ok=false"),
+            "{backend}: a changed layout MUST be refused, not read raw: {out:?}"
+        );
+        assert!(
+            out.contains("changed len=0"),
+            "{backend}: a refused load leaves the collection empty: {out:?}"
+        );
+    }
+}
+
+/// @PLN97 3b.5 — the layout-identity gate over HTTP: the remote loader fetches
+/// `<url>.dschema` and rejects a mismatched layout, never range-reading foreign
+/// bytes across the network (the safety gate for a REMOTE store read, #522).
+/// A matching layout still loads. Both backends.
+#[test]
+fn layout_gate_over_http_rejects_changed_struct() {
+    let dir = scratch("layout_gate_http");
+    let path = dir.join("tiles.store");
+
+    let (out_w, code_w) = run_mode(&gate_script(), &path, "write");
+    assert_eq!(code_w, 0, "write: {out_w:?}");
+    let sidecar = fs::read(format!("{}.dschema", path.display())).ok();
+    assert!(sidecar.is_some(), "persist must write a .dschema sidecar");
+    let url = serve_ranges(fs::read(&path).unwrap(), sidecar);
+
+    for backend in ["--interpret", "--native"] {
+        // MATCHING layout over http — the remote gate does a real Match.
+        let (out, code) = run_mode_backend(backend, &gate_script(), Path::new(&url), "load");
+        assert_eq!(code, 0, "{backend} http match exit: {out:?}");
+        assert!(
+            out.contains("gate ok=true"),
+            "{backend}: a matching remote layout must load: {out:?}"
+        );
+
+        // CHANGED layout over http — the remote gate refuses.
+        let (out, code) =
+            run_mode_backend(backend, &gate_changed_script(), Path::new(&url), "load");
+        assert_eq!(code, 0, "{backend} http mismatch exit: {out:?}");
+        assert!(
+            out.contains("changed ok=false"),
+            "{backend}: a changed layout MUST be refused over http: {out:?}"
+        );
+        assert!(out.contains("changed len=0"), "{backend}: {out:?}");
     }
 }
 

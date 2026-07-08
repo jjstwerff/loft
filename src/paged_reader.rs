@@ -233,6 +233,40 @@ impl PageProvider for PageSource {
     }
 }
 
+/// The layout-identity gate for a working-set load (@PLN97 3b.5). Given the
+/// store `spec` (a local path or an `http(s)://` URL), read the `.dschema`
+/// sidecar beside it and compare its recorded layout with the running program's
+/// `current` identity. An ABSENT sidecar (a legacy / pre-3b.5 store) or an
+/// unreachable remote yields [`SchemaVerdict::Fresh`] — the caller proceeds and
+/// the post-copy `store_verify` stays the backstop; a PRESENT sidecar that is
+/// mismatched or unparseable yields a non-raw-safe verdict the caller rejects
+/// on, so foreign-layout bytes are never range-read at schema-derived offsets.
+#[must_use]
+pub fn check_sidecar(
+    spec: &str,
+    current: &crate::schema_sidecar::LayoutIdentity,
+) -> crate::schema_sidecar::SchemaVerdict {
+    use crate::schema_sidecar::SchemaVerdict;
+    if spec.starts_with("http://") || spec.starts_with("https://") {
+        match http_get_text(&format!("{spec}.dschema")) {
+            Some(text) => crate::schema_sidecar::verdict_for_sidecar_text(&text, current),
+            None => SchemaVerdict::Fresh, // 404 / unreachable → proceed (store_verify backstop)
+        }
+    } else {
+        crate::schema_sidecar::check_beside(std::path::Path::new(spec), current)
+            .unwrap_or(SchemaVerdict::Fresh) // IO error (not NotFound) → proceed (backstop)
+    }
+}
+
+/// GET a small text resource (the `.dschema` sidecar) in full. `None` on any
+/// non-2xx status (e.g. 404 = the sidecar is absent) or a transport error.
+fn http_get_text(url: &str) -> Option<String> {
+    let agent = ureq::AgentBuilder::new()
+        .timeout(std::time::Duration::from_secs(30))
+        .build();
+    agent.get(url).call().ok()?.into_string().ok()
+}
+
 /// A read-only, transient paged view: a sparse LRU page table + fetch-on-miss
 /// [`resolve`](PagedReader::resolve). Only resident pages cost memory, so a
 /// small cache over a huge store is fine — it just fetches more. Correctness is

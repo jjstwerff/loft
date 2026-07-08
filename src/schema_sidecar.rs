@@ -226,6 +226,22 @@ impl SchemaVerdict {
     }
 }
 
+/// Classify an already-read sidecar TEXT against the running program's identity
+/// `current`. Used for a store's REMOTE `.dschema` fetched over HTTP (#522),
+/// where there is no local path to hand [`check_file`]. `Unreadable` when `text`
+/// is not a valid sidecar; the ABSENT case (no sidecar at all) is the caller's
+/// to map to [`SchemaVerdict::Fresh`].
+#[must_use]
+pub fn verdict_for_sidecar_text(text: &str, current: &LayoutIdentity) -> SchemaVerdict {
+    let Some(stored) = LayoutIdentity::from_sidecar(text) else {
+        return SchemaVerdict::Unreadable;
+    };
+    match classify(&stored, current) {
+        Handoff::Identical => SchemaVerdict::Match,
+        Handoff::Changed(diff) => SchemaVerdict::Changed(diff),
+    }
+}
+
 /// Read a recorded identity from `path` and compare it with the running
 /// program's identity `current`. Shared by [`check_beside`] (a store's
 /// `.dschema`) and [`check_against_baseline`] (the project layout lockfile).
@@ -238,13 +254,7 @@ pub fn check_file(path: &Path, current: &LayoutIdentity) -> std::io::Result<Sche
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(SchemaVerdict::Fresh),
         Err(e) => return Err(e),
     };
-    let Some(stored) = LayoutIdentity::from_sidecar(&text) else {
-        return Ok(SchemaVerdict::Unreadable);
-    };
-    Ok(match classify(&stored, current) {
-        Handoff::Identical => SchemaVerdict::Match,
-        Handoff::Changed(diff) => SchemaVerdict::Changed(diff),
-    })
+    Ok(verdict_for_sidecar_text(&text, current))
 }
 
 /// Read the `.dschema` sidecar beside `store_path` and compare it with the

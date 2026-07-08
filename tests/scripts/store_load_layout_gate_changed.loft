@@ -1,0 +1,21 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN97 3b.5 — the MISMATCH half of the layout-identity gate. Same collection
+// name and key as `store_load_layout_gate.loft`, but Tile carries an EXTRA
+// field, so its storage layout differs. Loading the store persisted by the
+// sibling script must be REFUSED: the gate reads the `.dschema` sidecar, sees a
+// different layout, and returns nothing rather than range-read foreign-layout
+// bytes at schema-derived offsets. Driven by `store_persist_loft.rs`.
+
+struct Tile { id: integer not null, name: text not null, extra: integer not null }
+
+fn main() {
+  path = env_variable("LOFT_PERSIST_TEST_PATH");
+
+  h: hash<Tile[id]> = [];
+  ok = store_load_key(h, path, 42);
+  println("changed ok={ok}");
+  println("changed len={len(h)}");
+  println("changed verify={store_verify(h)}");
+}

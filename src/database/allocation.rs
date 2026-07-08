@@ -2257,6 +2257,20 @@ impl Stores {
         new_store.pinned = preserved.4;
 
         self.allocations[slot_idx] = new_store;
+        // @PLN97 3b.5 — record the layout identity beside the store
+        // (`<path>.dschema`) so a later (possibly remote) working-set load can
+        // reject a mismatched layout BEFORE range-reading foreign bytes at
+        // schema-derived offsets. Best-effort: a store without a sidecar just
+        // falls back to the post-copy `store_verify` backstop on load.
+        if preserved.0 != u16::MAX {
+            let id = crate::schema_sidecar::LayoutIdentity::of(self, &[preserved.0]);
+            if id.write_beside(path).is_err() && std::env::var_os("LOFT_LOADER_STATS").is_some() {
+                eprintln!(
+                    "store_persist_bind: could not write layout sidecar beside {}",
+                    path.display()
+                );
+            }
+        }
         true
     }
 
@@ -2318,6 +2332,35 @@ impl Stores {
         true
     }
 
+    /// @PLN97 3b.5 — the layout-identity gate for a working-set load. Returns
+    /// `false` (reject) when the store's `.dschema` sidecar records a layout that
+    /// differs from THIS program's collection type — so the loader never
+    /// range-reads foreign-layout bytes at schema-derived offsets (a silent
+    /// corruption / wild-pointer hazard the post-hoc `store_verify` should not be
+    /// the only guard against). An ABSENT sidecar (a legacy / pre-3b.5 store) or
+    /// an untyped local store passes; `store_verify` stays the backstop. `path`
+    /// is a local file or an `http(s)://` URL — the sidecar is read from beside
+    /// it (`<path>.dschema`), over the same transport.
+    #[cfg(feature = "remote-store")]
+    fn layout_gate_ok(&self, path: &str, local: &DbRef) -> bool {
+        let known_type = self.allocations[local.store_nr as usize].known_type;
+        if known_type == u16::MAX {
+            return true; // untyped store — no identity to compare against
+        }
+        let current = crate::schema_sidecar::LayoutIdentity::of(self, &[known_type]);
+        let verdict = crate::paged_reader::check_sidecar(path, &current);
+        if verdict.is_raw_safe() {
+            return true;
+        }
+        // A layout mismatch is a rare, important safety event — always surface it
+        // so a rejected load is not silently mistaken for "key absent".
+        eprintln!(
+            "store loader: refusing {path} — its recorded layout differs from this \
+             program's (verdict: {verdict:?}); not range-reading foreign bytes"
+        );
+        false
+    }
+
     /// @PLN97 arc G Phase 4 / 3b.7 — load the entries with integer key in
     /// `[lo, hi]` from a persisted SORTED collection into the (empty) local
     /// `sorted<T[k]>`, fetching only the pages the range walk touches. The
@@ -2330,6 +2373,9 @@ impl Stores {
     /// structural root position in the image), NOT the raw bytes.
     #[cfg(feature = "remote-store")]
     pub fn load_range(&mut self, local: &DbRef, path: &str, lo: i64, hi: i64) -> i64 {
+        if !self.layout_gate_ok(path, local) {
+            return 0;
+        }
         use crate::paged_reader::{PageSource, PagedReader};
         let Ok(source) = PageSource::open(path) else {
             return 0;
@@ -2500,6 +2546,9 @@ impl Stores {
     /// -keyed copyable hash.
     #[cfg(feature = "remote-store")]
     pub fn load_key_text(&mut self, local: &DbRef, path: &str, key: &str) -> bool {
+        if !self.layout_gate_ok(path, local) {
+            return false;
+        }
         use crate::paged_reader::{PageSource, PagedReader};
         let Ok(source) = PageSource::open(path) else {
             return false;
@@ -2530,6 +2579,9 @@ impl Stores {
     /// FLAT-struct restriction (scalar fields only — no relocation yet).
     #[cfg(feature = "remote-store")]
     pub fn load_keys(&mut self, local: &DbRef, path: &str, keys_vals: &[i64]) -> i64 {
+        if !self.layout_gate_ok(path, local) {
+            return 0;
+        }
         use crate::paged_reader::{PageSource, PagedReader};
         // `path` is a local file OR an `http(s)://` URL — the paged reader pulls
         // only the pages a lookup touches, from disk or over the network (#517).

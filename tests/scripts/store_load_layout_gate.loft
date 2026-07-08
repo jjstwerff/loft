@@ -1,0 +1,33 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN97 3b.5 — the layout-identity gate (matching half). Persisting a
+// hash<Tile[id]> now writes a `.dschema` sidecar recording the store's layout.
+// Loading a key back with the SAME Tile layout passes the gate and fetches the
+// working set. The sibling script `store_load_layout_gate_changed.loft` (an
+// extra field → different layout) must be REFUSED against the same store — the
+// gate reads the sidecar and rejects rather than range-read foreign bytes.
+// Driven by `store_persist_loft.rs` (local file and over HTTP).
+
+struct Tile { id: integer not null, name: text not null }
+
+fn main() {
+  path = env_variable("LOFT_PERSIST_TEST_PATH");
+  mode = env_variable("LOFT_PERSIST_TEST_MODE");
+
+  h: hash<Tile[id]> = [];
+  if mode == "write" {
+    h += Tile { id: 7,  name: "seven" };
+    h += Tile { id: 42, name: "forty-two" };
+    if !store_persist_bind(h, path) { println("FAIL write-bind"); return }
+    println("write ok");
+  } else if mode == "load" {
+    ok = store_load_key(h, path, 42);
+    println("gate ok={ok}");
+    println("gate name={(h[42] ?? Tile { id: 0, name: \"?\" }).name}");
+    println("gate len={len(h)}");
+    println("gate verify={store_verify(h)}");
+  } else {
+    println("FAIL unknown-mode")
+  }
+}

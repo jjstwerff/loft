@@ -22,12 +22,16 @@ leak-clean; `store_verify` on every load; each with a prove-can-fail control):
   inline nested structs · **3b.4b vector\<struct\>** (`relocate_ptr_fields` — one recursive walk over
   every pointer kind) · 3b.6 text keys. Only `vector<text>` / `vector<vector>` remain SAFELY REFUSED.
 - The instrument: **`store_verify`** (built on `validate_claims`, extended with a Hash arm).
+- **3b.5 layout-identity gate ✅** — `store_persist_bind` now WRITES a `<path>.dschema` sidecar
+  (`LayoutIdentity::of` over the collection's type), and every partial loader (`load_keys` /
+  `load_key_text` / `load_range`, so `load_key` / `load_keys_vec` via delegation) checks it FIRST:
+  a layout that differs from the loading program's type is REFUSED before any schema-derived read,
+  local file or `http(s)://` (`paged_reader::check_sidecar` fetches `<url>.dschema`; a genuine
+  remote Match/Reject). Absent sidecar (legacy store) or untyped store → proceed, with `store_verify`
+  the backstop. Two both-backend tests (local + HTTP) prove reject-on-change / load-on-match; the
+  test Range server is now path-aware.
 
-**Remaining (hardening / proof / browser — the core fetch works without them; each safely degrades):**
-- **3b.5 layout-identity gate**: `schema_sidecar::check` at bootstrap — needs `store_persist_bind` to
-  WRITE a `.dschema` beside the store (it doesn't today) + fetch/compare it on load. `store_verify`
-  already catches the structural corruption a wrong-layout fetch would produce; the gate adds a
-  clean up-front reject.
+**Remaining (proof / browser — the core fetch works without them; each safely degrades):**
 - **3b.8 bytes-≪-file at scale**: a large-fixture benchmark. The property holds by construction (a
   point lookup touches O(1) pages) and `LOFT_LOADER_STATS` observes `bytes_fetched` vs file.
 - **`--html` `fetch()` bridge** (browser target).
