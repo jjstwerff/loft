@@ -1317,6 +1317,12 @@ pub enum Type {
     Enum(u32, bool, Deps),
     /// A readonly reference to a record instance in a store.
     Reference(u32, Deps),
+    /// @PLN101 — an inline BY-VALUE struct (`value struct`): the same record layout as
+    /// `Reference(def)` but stored inline (packed bytes) wherever it lives and COPIED on bind,
+    /// like a tuple/scalar — never borrowed, no `DbRef` view dep, no free. Most `match Type`
+    /// arms mirror `Reference`; `size`/`align`/`element_size` (inline packed size), `depend`
+    /// (none), and `has_lifetime_concern` (false) are where value semantics lives.
+    Value(u32, Deps),
     /// A reference to a variable on stack.
     RefVar(Box<Type>),
     /// A dynamic vector of a specific type
@@ -1408,6 +1414,7 @@ impl Type {
             | Type::Keys
             | Type::Enum(_, _, _)
             | Type::Reference(_, _)
+            | Type::Value(_, _)
             | Type::Routine(_)
             | Type::Sorted(_, _, _)
             | Type::Index(_, _, _)
@@ -1680,7 +1687,9 @@ impl Type {
             Type::Optional(tp) => format!("{}?", tp.name(data)),
             Type::Rewritten(tp) => tp.name(data),
             Type::RefVar(tp) => format!("&{}", tp.name(data)),
-            Type::Enum(t, _, _) | Type::Reference(t, _) => data.def(*t).name.clone(),
+            Type::Enum(t, _, _) | Type::Reference(t, _) | Type::Value(t, _) => {
+                data.def(*t).name.clone()
+            }
             Type::Text(_) => "text".to_string(),
             Type::Vector(tp, _) if matches!(tp as &Type, Type::Unknown(_)) => "vector".to_string(),
             Type::Vector(tp, _) => format!("vector<{}>", tp.name(data)),
@@ -4929,7 +4938,9 @@ impl Data {
             Type::Character => "character".to_string(),
             Type::Text(_) => "text".to_string(),
             Type::Keys => "keys".to_string(),
-            Type::Enum(d_nr, _, _) | Type::Reference(d_nr, _) => self.def(*d_nr).name.clone(),
+            Type::Enum(d_nr, _, _) | Type::Reference(d_nr, _) | Type::Value(d_nr, _) => {
+                self.def(*d_nr).name.clone()
+            }
             Type::RefVar(inner) => format!("&{}", self.type_name_str(inner)),
             Type::Vector(inner, _) => format!("vector<{}>", self.type_name_str(inner)),
             Type::Sorted(d_nr, _, _) => format!("sorted<{}>", self.def(*d_nr).name),
