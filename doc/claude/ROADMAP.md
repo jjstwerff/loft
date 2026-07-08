@@ -73,7 +73,7 @@ now — what's open below is the increments.
 
 | Theme | Open increment (the part NOT yet shipped) | Scope | Home |
 |---|---|---|---|
-| **Performance / startup** (serves live-prototyping) | precompiled-stdlib fast-start (`@PLN52`); const-store Phase B/C (`@PLN82`); the wasm-vs-native gap | in-scope | [PERFORMANCE.md § Open work](PERFORMANCE.md); `@PLN52`/`@PLN82` |
+| **Performance / startup** (serves live-prototyping) | precompiled-stdlib fast-start (`@PLN52` — **DELIVERED** via @PLN11 arc D/D2b, opt-in `LOFT_STDLIB_CACHE`); const-store Phase B/C (`@PLN82`); the wasm-vs-native gap | in-scope | [PERFORMANCE.md § Open work](PERFORMANCE.md); `@PLN82` |
 | **Native robustness** | shared-store dispatch → a C-ABI `LoftStore` handle (gh #389 pt.1 — the recurring `viewer_markdown` cdylib-collision cause) | in-scope (stabilisation) | [NATIVE.md § Open work](NATIVE.md); gh #389 |
 | **Library system** (the dogfood track) | LSP, a game-client lib, viewer generalisation, regex `match_groups`/`replace` — *graphics / imaging / server / markdown / world / game_protocol / **regex** (v0.1.0: matches/find/split) already ship* | in-scope | [lib_plans/README](lib_plans/README.md); the `[libs]` `@PLN` issues |
 | **Friend-readiness / UX** | first-time tutorial + more day-to-day ergonomics — *REPL / `introspect` / the IDE editor slices already ship* | mixed | ROADMAP § U + § "Near-term focus" below |
@@ -269,7 +269,7 @@ First-time-user experience, daily ergonomics, IDE polish.
 |---|---|---|---|---|
 | P2 | REPL / interactive mode | M | ✓ | @PLN12 — plans/12-repl-and-introspection/README.md (**FINISHED** 2026-06-08; store-resident successor → @PLN14) |
 | W-warn | Developer warnings (Clippy-inspired) | M | ✓ | lib_plans/61-game-infra/README.md |
-| W-qual | Warning quality — stop nagging users about safe code (short-circuit guard recognition, `#null_safe` annotation, entry-guard inference, ASCII-peephole) | MH | ~ | plans/46-warning-quality/README.md |
+| W-qual | Warning quality — stop nagging users about safe code (short-circuit guard recognition, `#null_safe` annotation, entry-guard inference, ASCII-peephole) | MH | ✅ CLOSED | plans/46-warning-quality/README.md |
 | L1 | Error recovery after token failures | M | ✓ | (needs plan promotion) |
 | (cross) | Branch-aware doc + code review viewer (loft binary) | M | ✓ | plans/35-branch-review-viewer/README.md |
 
@@ -397,8 +397,8 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | Plan | E | Depends on | Notes |
 |---|---|---|---|
 | [`plans/29-match-validation/`](plans/29-match-validation) | M | (cross-mode harness shipped by closed @PLAN14) | Subject type × pattern shape matrix |
-| [`plans/30-struct-enum-validation/`](plans/30-struct-enum-validation) | M | (cross-mode harness shipped by closed @PLAN14) | Variant payload × dispatch context matrix |
-| [`plans/31-collection-validation/`](plans/31-collection-validation) | M | (cross-mode harness shipped by closed @PLAN14) | Hash / sorted / index / spacial × operation matrix |
+| [`plans/30-struct-enum-validation/`](plans/30-struct-enum-validation) | M | **✅ CLOSED 2026-07-09 (delivered)** | Variant payload × dispatch context matrix — feature shipped + ~135 tests; matrix demoted to docs per the plan's own gate |
+| [`plans/31-collection-validation/`](plans/31-collection-validation) | M | **✅ CLOSED 2026-07-09 (superseded)** | Motivating panic gone; hash/sorted/index validated cross-mode; spacial folds into @PLN48 |
 | [`plans/47-binary-io-validation/`](plans/47-binary-io-validation) | M | (cross-mode harness shipped by closed @PLAN14) | Value type × format × access-pattern matrix; absorbs @P289 (length-prefixed text/vectors, per-field struct serialization, `f#read as MyStruct`) |
 | [`plans/53-program-level-fuzzing/`](plans/53-program-level-fuzzing) | H | `fuzz/` crate exists (shipped under @PLAN53); F4 blocked on @PLN54 S3 (`LOFT_POISON`) | Coverage-guided ASan-instrumented fuzzing of loft source → parse → byte_code → execute; schema-coupled collections (tree/hash/sorted) via real programs; differential (interpret ≡ native ≡ wasm); OSS-Fuzz onboarding.  Spun off from @PLAN53 Wave 2 items #4/#6/#10 |
 | [`plans/54-sanitizer-coverage-expansion/`](plans/54-sanitizer-coverage-expansion) | M | @PLAN53 closed (PRs #235/#236/#237) | Expands the sanitizer CI stack @PLAN53 shipped: macOS-ARM nightly leg (highest — @P383 was macOS-ARM-only), ThreadSanitizer, `LOFT_POISON` keystone, LSan triage, growing Miri curated set, native-ASan, failure-notifier.  Successor to @PLAN53 Wave 2 (non-fuzzing items) |
@@ -428,7 +428,7 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | [`lib_plans/63-lsp/`](lib_plans/63-lsp) | M (LSP.1) / MH (LSP.2/3) | — | LSP.1 unblocks 4 IDE plugins + browser IDE |
 | [PACKAGES.md § Open work](PACKAGES.md#open-work) | S-M | — | PKG.7 + PKG.REG (format itself already shipped) |
 | [`lib_plans/12-library-extraction/`](lib_plans/12-library-extraction) | L | **PACKAGES.md § Open work PKG.REG** | Multi-release execution arc |
-| [`lib_plans/59-lazy-stdlib/`](lib_plans/59-lazy-stdlib) | M | — | Foundational — REGEX Phase 3 (lazy-load wire-up) is downstream consumer |
+| [`lib_plans/59-lazy-stdlib/`](lib_plans/59-lazy-stdlib) | M | **✅ CLOSED 2026-07-09 (superseded)** | Re-premised to `use`-loaded `lib/*` (crypto precedent); trigger-registry not built |
 | [`lib_plans/57-regex/`](lib_plans/57-regex) | S (Phase 0) / MH (Phase 1+) | — | **Phase 0 SHIPPED** (`regex` v0.1.0 at loft-libs-core/regex; matches/find/split).  Next: match_groups/replace.  Phase 1+ (pure-loft NFA) future.  Unblocks @PLN42 phase 07 scan.loft + check_doc_drift.sh ports |
 | [`plans/43-loft-store-durable/`](plans/43-loft-store-durable) | M | cooperates with **plans/42-tracker-index/07** + **plans/39-tic-tac-toe** + **plans/6-audience-generative-art** | Three-tier opt-in durability for loft mmap stores: IntegrityOnly (indexer), SnapshotEvery (TTT v5 sessions), WAL (audience demo).  Index is cheap test bed; game servers are critical consumers |
 | [`lib_plans/67-process/`](lib_plans/67-process) | M | — | `lib/process/` subprocess primitive — closes the indexer / viewer bash-wrapper dependency (dogfood-driven by @PLN42 + @PLAN35) |
@@ -451,7 +451,7 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | Plan | E | Depends on | Notes |
 |---|---|---|---|
 | [`plans/35-match-peg/`](plans/35-match-peg) | MH | — | L3 PEG-style match patterns (cooperates with regex lib) |
-| [`plans/38-sorted-slice/`](plans/38-sorted-slice) | M | — | A8 — slicing / open-ended ranges / partial-key match on sorted/index |
+| [`plans/38-sorted-slice/`](plans/38-sorted-slice) | M | **✅ CLOSED 2026-07-09 (delivered)** | A8 — slicing / open-ended ranges / partial-key match on sorted/index; shipped + per-sub-feature tests |
 | [`plans/40-const-fields/`](plans/40-const-fields) | M | — | `const` struct fields — closes INCONSISTENCIES.md § 33 (locals/params already support it) |
 
 ### Q — Internal quality
@@ -461,7 +461,7 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | [NATIVE.md § Open work](NATIVE.md#open-work) | XS-M per item | — | N8b.3 yield-from + N8c.1/2 generic text-return audit + N20a/b fill.rs auto-gen |
 | [PERFORMANCE.md § Open work](PERFORMANCE.md#open-work) | S-MH per item | P1 blocked on opcode-table capacity | 7 optimization designs (P1-P3 interpreter / N1-N3 native / W1 wasm) |
 | [`plans/45-doc-hygiene-autofix/`](plans/45-doc-hygiene-autofix) | M | — | `make plan-move` + `make doc-fix` — atomic directory-move with link-rewriting; closes the PR-212-style cascade of 3-5 fix-up commits per move |
-| [`plans/52-stdlib-fast-start/`](plans/52-stdlib-fast-start) | M-MH | cooperates with **plans/43-loft-store-durable** | Precompiled-stdlib cache — hash-validated on-disk parsed stdlib, deserialize-on-startup instead of re-parsing `default/*.loft` per invocation.  Surfaced during @PLAN53 Stage A1 (full-stdlib reload is what makes a Miri subset slow).  Miri-safe variant must use serde-into-fresh-alloc, not mmap raw reinterpret (provenance) |
+| [`plans/52-stdlib-fast-start/`](plans/52-stdlib-fast-start) | M-MH | **CLOSED — delivered by @PLN11 arc D/D2b/E** | Precompiled-stdlib cache — hash-validated on-disk parsed stdlib, deserialize-on-startup instead of re-parsing `default/*.loft` per invocation.  Built under @PLN11 (store-backed IR) as the opt-in `LOFT_STDLIB_CACHE` (`startup_cache.rs` + `cache.rs`); tests `d2b_stdlib_cache.rs` / `arc_e_program_cache.rs`.  Miri-safe serde variant was mooted (mmap route chosen; Miri solved by `cached_default()`) |
 | [`plans/2-vector-store-watermark/`](plans/2-vector-store-watermark) | S-M | kindred to finished PLAN51/52 store-lifetime class; soundness-floor A ([GOALS.md](GOALS.md)) | @P393 investigation — function-local vectors free at scope-end not last-use (cluster I) + literal-init double-alloc (cluster II).  Stage A ✓ both backends: **verified no leak**, benign watermark.  Stage B (source root-cause) + Stage C (design call: do-nothing-heuristic vs last-use-free) pending |
 
 ### N — Niche / opportunistic

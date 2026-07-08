@@ -1,0 +1,34 @@
+// @PLN47 inspection probe — 2026-07-09. Run each block SEPARATELY (W9 crashes,
+// halting a combined run). Results recorded in ../README.md § Empirical state.
+//   loft probes/roundtrip-2026-07-09.loft            (interpret)
+//   loft --native probes/roundtrip-2026-07-09.loft   (native)
+#cwd
+struct Point { x: integer, y: integer, tag: u8 }
+
+fn main() {
+  // W7 — text, explicit count: PASSES both backends ("hello")
+  delete("w7.bin");
+  { f = file("w7.bin"); f#format = LittleEndian; f.set_file_size(0);
+    t = "hello"; f += t; f.sync(); }
+  { f = file("w7.bin"); f#format = LittleEndian;
+    s = f#read(5) as text; assert(s == "hello", "W7"); println("W7 OK: '{s}'"); }
+  delete("w7.bin");
+
+  // W8 — vector<scalar>: SILENT DATA LOSS both backends (reads len=0, no error)
+  delete("w8.bin");
+  { f = file("w8.bin"); f#format = LittleEndian; f.set_file_size(0);
+    v: vector<integer> = [10, 20, 30]; f += v; f.sync(); }
+  { f = file("w8.bin"); f#format = LittleEndian;
+    w: vector<integer> = f#read(3) as vector<integer>;
+    println("W8: len={len(w)} (EXPECT 3 — BUG: reads 0)"); }
+  delete("w8.bin");
+
+  // W9 — struct of scalars: CRASH both backends
+  //   panic src/database/io.rs:273 "index out of bounds: len 3, index 65535"
+  delete("w9.bin");
+  { f = file("w9.bin"); f#format = LittleEndian; f.set_file_size(0);
+    p = Point { x: 42, y: -7, tag: 200 }; f += p; f.sync(); }
+  { f = file("w9.bin"); f#format = LittleEndian;
+    q = f#read as Point; println("W9 OK: x={q.x} y={q.y} tag={q.tag}"); }
+  delete("w9.bin");
+}

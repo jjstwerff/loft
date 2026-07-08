@@ -5,10 +5,31 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLN6 — Audience-driven generative-art demo (development plan)
 
-## Status
+## Status — DONE / CLOSED 2026-07-08 (delivered; residual phases WON'T-DO)
 
-**Active — phases 0 + 1 + 3 (flat-2D MVP with auto-camera) shipped**
-(PR #214 + branch `audience` through 2026-05-20).  End-to-end:
+**The demo shipped and did its job — presented live multiple times.** Closed by decision: the
+audience-generative-art effort now moves to a new demo of this kind (**"bumper plane"** — its own
+plan when it starts), so the residual phases below will NOT be picked up here.
+
+- **Shipped:** phase 0 (browser client — hex grid, palette, tap-paint, WebSocket, pan zones,
+  jump-to-active, onboarding centring), **phase 1 (server) — fully done** (world state + decay,
+  multi-client, the connect-latency fix via the `lib/server` event pump, crash-resistance,
+  `WsGroup`, load-tested, ran live ~4 h zero crashes), phase 3 (native OpenGL projector — flat-2D
+  MVP + auto-camera + GPU crystal growth + the `lib/gridmesh` chunk pipeline + per-group VBOs).
+- **WON'T-DO (superseded — carried to the next demo, not deferred-with-a-trigger):** phase 6
+  (server-authoritative crystal state + the reliable removal-sync fix — phones can show a decayed
+  hex until they reconnect; a **known limitation of the shipped demo**), phase 0.5 (swipe-paint),
+  phase 3 follow-ons (per-group frustum cull + ground VBOs). Phase 2 was already dropped.
+
+Much of the demo's value graduated into reusable libraries — `lib/server` (event pump),
+`lib/web` (`WsGroup`), `lib/gridmesh` + `lib/graphics` (`GroupVboSet`) — which the next demo and
+moros inherit.
+
+---
+
+### Historical — the shipped MVP (branch `audience`, PR #214, through 2026-05-20)
+
+Phases 0 + 1 + 3 shipped end-to-end:
 phone tap → multi-client loft server → desktop OpenGL projector
 view that rotates + tilts + look-at-shifts to the latest edit in
 one smooth motion.  Deployed at [`doc/audience-demo/`](../../../audience-demo)

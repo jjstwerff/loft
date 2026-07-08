@@ -5,11 +5,17 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLN30 — Struct-enum + variant field-capture validation
 
-**Status: phase 03 closed (2026-05-04)** — pre-flight C5 method-resolution
-gap fixed in `src/parser/fields.rs`; pinned by
-`tests/issues.rs::plan19_method_on_enum_variant_via_dot`.  Phases 00,
-01, 02, 04-06 still parked under default "finish plans first"
-sequence.
+**Status: CLOSED 2026-07-09 — delivered.**  loft's polymorphic-dispatch core
+(variant-typed methods, `is` field-capture, `match` arms) is implemented and
+heavily tested: ~135 `p54_*` / `plan19_*` / `n4_*` tests in `tests/issues.rs`
+plus `tests/scripts/05-enums.loft`, `369-pln22-shared-enum-variants.loft`,
+`406-enum-var-struct-field.loft`.  The one pre-flight gap (C5 — parent-enum
+method dispatch, `s.classify()` on a variant value) was fixed in
+`src/parser/fields.rs` and is pinned by
+`tests/issues.rs::plan19_method_on_enum_variant_via_dot` (asserts
+`Value::Float(12.56)`).  Phases 04–05 (the never-built `tests/struct_enum_matrix.rs`
+binary) were demoted to documentation **per this plan's own pre-flight gate** —
+no code work remains.
 
 ## Goal
 

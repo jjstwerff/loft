@@ -1366,6 +1366,50 @@ Use a `value struct` for small wrapper types that must be as cheap as the raw fi
 (e.g. `DateTime { ms: integer }`, `Point`, `Color`) — where the copy semantics of a scalar are
 what you want.  Use a reference `struct` when you want shared/aliased mutation or nullability.
 
+### First-grade custom types — operators, formatting, `as` (@PLN99)
+
+A user `struct` (or `value struct`) can behave exactly like a built-in across three surfaces —
+this is what makes a wrapper type (`DateTime`, `Money`, `Colour`, a `Decimal`, a URL) ergonomic
+rather than a bag of functions.  Mark the type and these functions `pub` to use them across a
+`use` boundary.
+
+- **Operators** — define `fn OpLt(self: T, other: T) -> boolean` (and `OpLe/OpGt/OpGe/OpEq/OpNe`),
+  `fn OpAdd/OpMin/OpMul(self: T, …) -> …`, etc., and `a < b` / `a - b` dispatch them **directly**
+  (not only inside `<T: Ordered>`).  `OpMin` is the `-` operator (subtraction), `OpAdd` is `+`.
+  **Operators key on `(OpName, receiver type)`** — you cannot overload the *same* operator by the
+  *second* operand's type (e.g. one `OpMin(T, T)` and one `OpMin(T, U)` collide); give the second
+  form a named method instead.  A type with no such op errors as before (`dt + 5` stays a compile
+  error — distinct-type safety is free).
+- **Formatting** — define `fn to_text(self: T, spec: text) -> text`.  Then `"{x}"` calls it with
+  `spec == ""` and `"{x:anything}"` passes `"anything"` raw — the type owns its whole spec
+  vocabulary (the Python `__format__` model; core learns no date/money tokens).  *Known issue
+  (#533): today the body must not be a bare tail `if` — bind the result to a local and return it
+  (`r = if … else …; r`), else the branch mis-selects.*
+- **Conversions** — define `fn OpConvTFromS(v: S) -> T` (e.g. `OpConvDateTimeFromText`), and
+  `s as T` dispatches it: `"2026-07-08" as DateTime`, `"#ff0000" as Colour`, `"1.5" as Decimal`.
+  With no matching conversion, `as T` is a clean compile error (not a silent mis-cast).
+
+**When to reach for this — and which library types still should.**  A type earns
+the full treatment when it hits all four axes `DateTime` does: **(1)** it is one
+value or a small fixed bundle (so `value struct`'s zero-cost copy fits), **(2)**
+it has arithmetic or ordering meaning (→ operators), **(3)** it has a canonical
+text form (→ `to_text`), **(4)** it converts to/from a primitive or text (→ `as`).
+`DateTime` / `Duration` (the `time` lib) are the shipped exemplars.  Prime
+un-upgraded candidates in the current libraries, highest-leverage first:
+
+- **`Colour`** — today a bare packed `integer` in `graphics` / `imaging` with
+  hand-rolled `rgb()` / `color_r()` free functions (the exact pre-`DateTime`
+  shape).  A `value struct Colour { packed: integer }` with blend/scale
+  operators, a `{c:#}` → `#RRGGBB` `to_text`, and `Colour ↔ integer` / `↔ text`
+  conversions packs **flat** in pixel buffers (no heap cost) and is the clearest
+  next dogfood — it exercises every part of the machinery, as `DateTime` did.
+- **`Vec2` / `Vec3` / `Rect` / `Point`** — today plain **heap** structs with
+  `add3` / `scale3` / `dot3` free functions; as zero-cost value structs with
+  `+` / `*` / `dot` operators they allocate flat in a vector, so the win lands
+  exactly where you make thousands of them (meshes, particles, physics).
+- **`Version`** (registry semver — hand-rolled parse + compare), **`Angle`**, and
+  a units family (`ByteSize`, `Money` / `Decimal`) round out the list.
+
 ---
 
 ## Methods and function calls

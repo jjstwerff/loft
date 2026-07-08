@@ -3,22 +3,53 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Plan 55 — Program-level fuzzing
+# @PLN53 — Program-level fuzzing
 
 ## Status
 
-Open — not started.  Spun off from @PLAN53 Wave 2 (items #4, #6, and the
-OSS-Fuzz row).  @PLAN53 shipped the **direct** structure-fuzz targets
-(`store_alloc`, `vector_collection`) and the Wave-2 CI kickoff (PR #237)
-before closing (2026-05-31).  The remaining Wave-2 coverage items (macOS-ARM
-leg, TSan, `LOFT_POISON` keystone, Miri-set growth, LSan triage, native-ASan)
-are owned by [@PLN54](../54-sanitizer-coverage-expansion/README.md).
-This plan owns **program-level fuzzing** (loft source → parse → `byte_code`
-→ execute) and the schema-coupled collections (tree/hash/sorted), which
-require real loft programs rather than standalone harnesses.
+**PARKED (`status:parked`) — deferred with a concrete trigger; owner-authorized
+2026-07-09.**  Floor shipped, remaining phases paused pending a driver consumer.
+This plan is not "not started": its highest-value slices landed
+**opportunistically inside sibling stability plans**, which is exactly how
+program-level fuzzing has proven to get built here — a stability plan pulls in
+the fuzz coverage it needs, rather than this plan driving a standalone 5-arc
+push.  What actually shipped since this plan opened (2026-05-31):
 
-The `fuzz/` cargo-fuzz crate already exists (set up under @PLAN53 Wave 2).
-This plan adds targets to it.
+- **F4 dependency cleared + F4 substantially done** — @PLN25 landed the
+  `LOFT_POISON` arena poison-on-free keystone (@PLN54 S3), and the
+  program-level target below already runs with `poison_free` set on the store
+  arena, so a store-internal stale read is a loud panic, not silent luck.
+- **F2 partially delivered** — @PLN85 built `fuzz/fuzz_targets/program_ownership.rs`:
+  a valid-by-construction, self-checking, **in-process** program-level fuzzer
+  (parse → scopes → bytecode → interpret) over the ownership-composition
+  grammar.  It is the F2 shape, but scoped to the ownership/over-free grammar;
+  it explicitly leaves **keyed containers (`hash`/`sorted`) as a follow-up
+  axis**.
+- **F3 harness delivered (corpus, not fuzzed)** — @PLN89's differential oracle
+  (`tests/differential_oracle.rs`, nightly-gated, now a **3-backend** interp ≡
+  native ≡ wasm check after this cycle's wasm leg) gives F3's differential
+  assertion — but over a **fixed ~29-program corpus**, not coverage-guided
+  fuzzed programs.
+
+**Why park (not close, not push):** no active driver, and the highest-risk
+slice (ownership over-free + poison) is already covered by `program_ownership`.
+But real coverage remains genuinely unbuilt — so this is a *defer*, not a
+close-by-decision.  **Residual, all unstarted:** F1
+(mutational raw-source target seeded from the ~2000 `.loft` files), **F2's
+`hash`/`sorted`/`index` + closure axes** (the schema-coupled collection
+coverage loft's heap model actually wants), F3-over-*fuzzed*-programs, and F5
+(OSS-Fuzz onboarding).
+
+**Resume trigger — pick this up (→ `status:next`/`active`) when any fires:**
+1. A **schema-coupled collection bug** (a `hash`/`sorted`/`index` UAF or
+   layout violation) surfaces that `program_ownership`'s ownership grammar
+   cannot generate → build **F2's keyed-container axis** then.
+2. **@PLN97's layout contract** wants a fuzzer to prove memory/file-layout
+   invariants across mutated programs → F1/F2 become its instrument.
+3. Appetite for **sustained continuous fuzzing at scale** → F5 (OSS-Fuzz).
+
+The `fuzz/` cargo-fuzz crate already exists (set up under @PLAN53 Wave 2); the
+remaining arcs add targets to it.  Issue stays **open** at `status:parked`.
 
 ## Goal
 
@@ -32,7 +63,7 @@ as a cluster in the catalogue below.
 
 - **Effort:** H (fuzzer bring-up is fast; finding-triage is open-ended)
 - **Design:** ~ (sub-arc design below; F3/F4/F5 need further detail)
-- **Last touched:** 2026-05-31 (plan opened)
+- **Last touched:** 2026-07-09 (parked — owner-authorized; ledger reconciled to reality)
 
 ## Motivation
 
@@ -65,11 +96,11 @@ in place.
 
 | Item | Description | Exit criterion | Status |
 |---|---|---|---|
-| **F1** | **Mutational source fuzz target** — `fuzz_target!` that takes raw bytes as loft source, runs parse → `byte_code` → execute under ASan + `--features stack_align_guard`, seeded from the ~2000 existing `.loft` test files. Expect an initial robustness/panic-triage wave: malformed input surfaces `unwrap`/panic paths in the parser/compiler first; that hardening is valuable output. | Target builds; runs clean over the seed corpus; panic paths triaged and either fixed or recorded. | Open |
-| **F2** | **Structure-aware AST generation** — `arbitrary`-derived loft AST → pretty-print → run. Generates valid-by-construction programs that exercise sorted/hash/index collections, nested scopes, closures, many overlapping variable lifetimes (stresses the slot allocator). | Generator emits compiling programs; collection ops covered. | Open |
-| **F3** | **Differential interpret ≡ native ≡ wasm** on fuzzed programs — any output/exit divergence is a finding.  Reuses the `cross_mode!` harness.  Folds @PLAN53 Wave-2 item #6 (differential fuzzing) into this plan. | Differential target green over the corpus. | Open |
-| **F4** | **`LOFT_POISON` pairing** — run the fuzzers with @PLN54's arena poison-on-free active so store-internal use-after-free (the @P377/@P378 dangling-`DbRef` family) fails loudly under the fuzzer.  **Depends on @PLN54 S3 (`LOFT_POISON` keystone) landing first.** | Poisoning active under the fuzz targets; any @P377/@P378-class read produces a sentinel-value panic rather than silent stale data. | Blocked on @PLN54 S3 |
-| **F5** | **OSS-Fuzz onboarding** — submit loft to OSS-Fuzz for sustained, continuously-running, coverage-guided fuzzing at scale.  Folds @PLAN53 Wave-2 item #10 into this plan. | loft accepted into OSS-Fuzz; targets running. | Open |
+| **F1** | **Mutational source fuzz target** — `fuzz_target!` that takes raw bytes as loft source, runs parse → `byte_code` → execute under ASan + `--features stack_align_guard`, seeded from the ~2000 existing `.loft` test files. Expect an initial robustness/panic-triage wave: malformed input surfaces `unwrap`/panic paths in the parser/compiler first; that hardening is valuable output. | Target builds; runs clean over the seed corpus; panic paths triaged and either fixed or recorded. | **Open** — unstarted |
+| **F2** | **Structure-aware AST generation** — `arbitrary`-derived loft AST → pretty-print → run. Generates valid-by-construction programs that exercise sorted/hash/index collections, nested scopes, closures, many overlapping variable lifetimes (stresses the slot allocator). | Generator emits compiling programs; collection ops covered. | **Partial** — @PLN85 shipped `program_ownership.rs` (in-process, self-checking, ownership grammar). `hash`/`sorted`/`index` + closure axes still open. |
+| **F3** | **Differential interpret ≡ native ≡ wasm** on fuzzed programs — any output/exit divergence is a finding.  Reuses the `cross_mode!` harness.  Folds @PLAN53 Wave-2 item #6 (differential fuzzing) into this plan. | Differential target green over the corpus. | **Partial** — @PLN89 differential oracle delivers the 3-backend assertion, but over a fixed ~29-program corpus; "on *fuzzed* programs" still open. |
+| **F4** | **`LOFT_POISON` pairing** — run the fuzzers with @PLN54's arena poison-on-free active so store-internal use-after-free (the @P377/@P378 dangling-`DbRef` family) fails loudly under the fuzzer.  **Depends on @PLN54 S3 (`LOFT_POISON` keystone) landing first.** | Poisoning active under the fuzz targets; any @P377/@P378-class read produces a sentinel-value panic rather than silent stale data. | **Done** — @PLN25 landed the keystone; `program_ownership` runs with `poison_free` on the arena. |
+| **F5** | **OSS-Fuzz onboarding** — submit loft to OSS-Fuzz for sustained, continuously-running, coverage-guided fuzzing at scale.  Folds @PLAN53 Wave-2 item #10 into this plan. | loft accepted into OSS-Fuzz; targets running. | **Open** — unstarted |
 
 ## Phase ordering
 
@@ -91,10 +122,14 @@ in place.
 
 | ID | Shape | Severity | Detector | Fixed | Notes |
 |---|---|---|---|---|---|
-| — | — | — | — | — | No findings yet; plan not started |
+| — | — | — | — | — | No findings under *this* plan's own targets yet |
 
-Per the @PLAN53 investigation-plan policy: findings from this plan go in this
-catalogue, **not** in PROBLEMS.md as P-issues.
+Findings from the program-level fuzzing that *did* run landed under the plan
+that built the target: `program_ownership`'s over-free findings are recorded
+in @PLN85 (`fuzz-proof-gate.md`), and the differential-oracle divergences
+(#495/#500/#501) under @PLN89.  Per the @PLAN53 investigation-plan policy, any
+findings from *this* plan's future targets go in this catalogue, **not** in
+PROBLEMS.md as P-issues.
 
 ## Cross-arc dependencies
 

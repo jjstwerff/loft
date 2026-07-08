@@ -1945,3 +1945,79 @@ proves a recurring source of user surprise, that is a #426 revisit, not a C86 on
 A profiler shows bind-copies dominating a real consumer AND the elision's coverage
 cannot be extended — that argues for widening `ElidePlan`, never for flipping the
 semantic.
+
+## C87 — `#rust"..."` template path is KEPT; do NOT migrate it away to per-Op emitters (@PLN81 closed)
+
+### Question
+
+Should the ~200 `#rust"..."` inline-Rust annotations in `default/*.loft` be migrated to
+hand-written `OpEmitter`s (`src/generation/ops/`) so Op emission has a single source of truth, and
+the template-substitution path (`calls.rs::output_call_template`) + `Value::RawExpr` deleted?
+(This was @PLN81 / "plan 13".)
+
+### Decision (2026-07-08)
+
+**No — closed by decision.** The `#rust"..."` template path stays. `#rust` **inline** is a
+first-class, *recommended* library-authoring mechanism (loft-ship **Tier 1**: "prefer `#rust`
+inline over `#native` external whenever the Rust is small"; ✓ across all four targets per
+PACKAGES.md), so it is a **kept public feature**, not stdlib-internal debt. Deleting the template
+path would break the documented `#rust` inline library route.
+
+### Rationale
+
+- Premise inverted since @PLN81 was filed (2026-05-02): what looked like a redundant second path
+  became the ecosystem's small-native-code path.
+- Authoring cost cuts the wrong way: a new Op is a one-line `#rust` annotation today vs a struct +
+  impl + register call after — @PLN81's own "cost" section flags this regression.
+- The real concern (one less-bug-prone emission path — the @P203 double-substitution class) is
+  better served by HARDENING the template path (the differential oracle + regression guards) and
+  keeping `#rust` co-located, not by a ~200-site migration to a second mechanism.
+
+### Revisit when
+
+Codegen consistency genuinely needs consolidation — in which case the correct direction is the
+REVERSE (fold the ~5 hand-written emitters INTO `#rust`, making `#rust` the single source of
+truth), a fresh plan, NOT @PLN81's "everything → emitters, delete the template path."
+
+## C88 — the scope-exit free gate stays dep-derived; simplify it (if ever) by promoting @PLN94's ownership oracle to authority, NOT by @PLN79's "drop the gate half + rely on idempotent free" (@PLN79 closed)
+
+### Question
+
+Should the multi-condition `OpFreeRef`-emission gate at scope exit (`src/scopes.rs`) be simplified
+by stripping its dep-derived half — `let emit = (dep.is_empty() || is_work_ref) && !in_ret &&
+!function.is_skip_free(v)` → `let emit = !in_ret && !function.is_skip_free(v)` — decoupling cleanup
+correctness from dep-tracking precision by relying on `OpFreeRef` being safe to call on an
+already-freed slot (`codegen_runtime.rs:100-104`)?  (This was @PLN79 / "plan 10".)
+
+### Decision (2026-07-09)
+
+**No to @PLN79 as written — closed by decision.** The plan's driver was mis-framed (it was opened
+as a @P203 fix; @P203 turned out to be a template double-substitution, tracked separately) and its
+proposal has been superseded by the ownership rework. The *concern* — cleanup correctness should not
+depend on dep-tracker precision — is valid and, if anything, sharper today, but @PLN79's blunt fix
+("emit more frees, rely on idempotency") is now the wrong shape.
+
+### Rationale
+
+- **The gate moved and grew.** It is no longer `scopes.rs:1053`'s three-condition form; it is
+  `scopes.rs:3776`'s `let emit = (owns || is_work_ref || inject_free) && !in_ret &&
+  !function.is_skip_free(v) && !captured_ref`, where `owns` is `dep.is_empty()` plus an @P302
+  keyed-collection self-dep exception. The dep-coupling @PLN79 flagged has accreted MORE special
+  cases (@P302, #323 `captured_ref`, @PLN94 `inject_free`) — the condition-thicket signal is
+  stronger, not weaker.
+- **The right decoupling vehicle now exists and it isn't @PLN79's.** @PLN94 landed a flow-sensitive
+  `ownership_of` oracle (currently a pure observer cross-check). The clean simplification is to
+  promote that oracle to the emission *authority* and collapse `owns`/`is_work_ref`/@P302/
+  `captured_ref` into one ownership query — the same move @PLN85 already made on the free-side
+  tracker. @PLN79 predates this and proposes a cruder decoupling than what's now available.
+- **No driver.** No open bug is caused by the gate's complexity; @P203 is closed elsewhere; the gate
+  territory got massive work (@PLN85 store-lifetime retirement, @PLN90 ownership, @PLN94 CFG
+  dataflow oracle).
+
+### Revisit when
+
+@PLN94's `ownership_of` oracle graduates from observer to authority (it is still stabilizing —
+caught divergences #495/#500/#501 this cycle). At that point, "make the oracle the free-emission
+authority and dissolve the special-case gate" is a **fresh plan**, NOT @PLN79's drop-the-half
+proposal. The phase-00 characterisation + @P203 strace evidence stay in
+`plans/79-scope-exit-emission/` as historical record.

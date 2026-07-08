@@ -1,0 +1,29 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Differential-oracle guard for the first-grade / value-struct codegen shapes the DateTime
+// library surfaced this cycle — so a regression fails interp==native==WASM by construction:
+//   - a compound `&&` whose operands lift value-struct-returning calls (#520 — the shape that
+//     emitted `( stmt; expr )` invalid Rust on native + wasm);
+//   - a `to_text(self, spec)` format hook driven by a TAIL `if` (#533 — spec-drop / branch
+//     mis-select).
+// Arms are kept uniform (all interpolated) to steer clear of the still-open #534 residual
+// (a match-`&str` fn mixed with a String arm in a 3-arm hook); add that shape once #534 lands.
+value struct D { ms: integer }
+fn OpEq(self: D, other: D) -> boolean { self.ms == other.ms }
+fn OpLt(self: D, other: D) -> boolean { self.ms < other.ms }
+fn OpGt(self: D, other: D) -> boolean { self.ms > other.ms }
+fn mk(n: integer) -> D { D { ms: n } }
+fn to_text(self: D, spec: text) -> text {
+  if spec == "hex" { "{self.ms:#x}" }
+  else if spec == "pad" { "{self.ms:03}" }
+  else { "{self.ms}" }
+}
+fn main() {
+  a = D { ms: 2 };
+  c = a == mk(2) && a < mk(5) && a > mk(0);   // three lifted value-struct calls across a chained &&
+  println("cmp={c}");
+  println("bare={a}");
+  println("hex={a:hex}");
+  println("pad={a:pad}");
+}

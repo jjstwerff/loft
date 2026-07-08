@@ -1184,29 +1184,42 @@ use #count instead"
         if stub_nr == u32::MAX {
             return None;
         }
-        // The text-returning bound stub takes a hidden `__work_1:
-        // RefVar(Text)` second param (added by `parse_function`'s
-        // I9-text path).  Allocate a fresh work-text and wrap with
-        // `OpCreateStack` so the call site mirrors what
-        // `convert(text → &text)` would auto-generate.
-        // Arity distinguishes the `to_text` shape: `(self, __work)` = 2 params
-        // (no spec) vs `(self, spec, __work)` = 3 params (@PLN99 Arc B — the value
-        // owns its `{x:spec}` DSL). Thread the raw spec only for the 3-param form.
-        let n_attrs = self.data.attributes(stub_nr);
-        let wv = self.vars.work_text(&mut self.lexer);
-        let work_arg = v_block(
-            vec![
-                v_set(wv, Value::Text(String::new())),
-                self.cl("OpCreateStack", &[Value::Var(wv)]),
-            ],
-            Type::Reference(self.data.def_nr("reference"), crate::data::Deps::frame1(wv)),
-            "p242_to_text_work",
-        );
-        let args = if n_attrs >= 3 {
-            vec![format.clone(), Value::str(spec), work_arg]
-        } else {
-            vec![format.clone(), work_arg]
-        };
+        // Classify the stub's params by TYPE, not arity.  A `to_text` may or may
+        // not carry a user `spec: text` param (@PLN99 Arc B — the value owns its
+        // `{x:spec}` DSL), and INDEPENDENTLY may or may not carry the hidden
+        // text-return work buffer (`RefVar(Text)`, added by `parse_function`'s
+        // I9-text path so the call mirrors an auto-generated `convert(text →
+        // &text)`).  Counting attributes conflates `(self, spec)` with
+        // `(self, __work)` — both are 2 — so a `to_text(self, spec)` whose body
+        // returns text directly (a tail `if`, a bare literal: no work buffer)
+        // silently lost its spec and received the empty work buffer in its place
+        // (#533).  The buffer is also renamed to a promoted local (`r`) by
+        // text_return, so its `__`-name is not reliable — only the type is.  self
+        // is attr 0 (the struct being formatted, never text/RefVar).
+        let mut has_spec = false;
+        let mut has_work = false;
+        for a in 1..self.data.attributes(stub_nr) {
+            match self.data.attr_type(stub_nr, a) {
+                Type::Text(_) => has_spec = true,
+                Type::RefVar(_) => has_work = true,
+                _ => {}
+            }
+        }
+        let mut args = vec![format.clone()];
+        if has_spec {
+            args.push(Value::str(spec));
+        }
+        if has_work {
+            let wv = self.vars.work_text(&mut self.lexer);
+            args.push(v_block(
+                vec![
+                    v_set(wv, Value::Text(String::new())),
+                    self.cl("OpCreateStack", &[Value::Var(wv)]),
+                ],
+                Type::Reference(self.data.def_nr("reference"), crate::data::Deps::frame1(wv)),
+                "p242_to_text_work",
+            ));
+        }
         Some(Value::Call(stub_nr, args))
     }
 

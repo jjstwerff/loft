@@ -4,6 +4,18 @@
 
 # @PLN38 — Slicing & Comprehension on `sorted` / `index` (A8)
 
+**Status: CLOSED 2026-07-09 — delivered + tested.**  Every A8 sub-feature ships,
+in both layers: parser `src/parser/fields.rs::parse_key` (open-start / open-end /
+sorted range / partial-key `idx[k1]` → `idx[k1..=k1]` rewrite) and runtime
+`src/state/io.rs` `OpIterate` (index `on==1` / sorted `on==2` open-bound
+handling).  Pinned per sub-feature in `tests/expressions.rs`
+(`sorted_open_end_range`, `sorted_open_start_range`, `sorted_range_iteration`,
+`sorted_range_comprehension`, `sorted_reverse_range`, `index_open_end_range`,
+`index_reverse_range`, partial-key `sum_by_nr`) plus cross-mode scripts
+`62-index-range-queries.loft`, `502-keyed-slice-for-only.loft`,
+`25-sorted-enum-variant-range.loft`.  The design document below is retained as
+the reference record.
+
 Design for key-range slicing, open-ended bounds, partial-key match iteration, and
 vector comprehensions over `sorted<T>` and `index<T>` collections.
 

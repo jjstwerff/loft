@@ -5,9 +5,41 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLN47 — Binary file I/O type matrix (write ↔ read round-trip)
 
-**Status: future (design frozen).** Absorbs the open canonical-object-
-serialization gap formerly tracked as [@P289](../../PROBLEMS.md);
-that P-issue is now this plan's design half.
+**Status: future — but the frozen matrix is stale; empirical inspection
+2026-07-09 (both backends) revised it.** W7 (text) quietly landed since the
+freeze; **W8 silently loses data and W9 crashes** — see § Empirical state below.
+Absorbs the open canonical-object-serialization gap formerly tracked as
+[@P289](../../PROBLEMS.md); that P-issue is now this plan's design half.
+
+## Empirical state — inspection 2026-07-09 (interpret + native)
+
+A round-trip probe ([`probes/roundtrip-2026-07-09.loft`](probes/roundtrip-2026-07-09.loft),
+run per-block since W9 crashes) — hand-verified values on BOTH backends:
+
+| Row | Probe | interp | native | Verdict |
+|---|---|---|---|---|
+| W0–W6 scalars | `tests/scripts/115-snapshot-roundtrip`, `20-binary` | ✅ | ✅ | shipped (as the plan predicted) |
+| **W7 text** | `f += "hello"` → `f#read(5) as text` | ✅ `'hello'` | ✅ `'hello'` | **LANDED since freeze** — the explicit-count `f#read(N) as text` round-trips; matrix's "⚠️ no length prefix" is out of date |
+| **W8 vector** | `f += [10,20,30]` → `f#read(3) as vector<integer>` | ⚠️ `len=0` | ⚠️ `len=0` | **SILENT DATA LOSS** — reads back empty, no error. `f#read(N)` count-vs-bytes semantics + the `f += vector` write need deciding/fixing |
+| **W9 struct** | `f += Point{x,y,tag}` → `f#read as Point` | ❌ CRASH | ❌ CRASH | **PANIC** `index out of bounds: len 3, index 65535` at `src/database/io.rs:273` (a struct field resolves to the `u16::MAX` unresolved-type sentinel inside the field-width `sum()`). NOTE: `f#read as MyStruct` for a plain scalar struct **is already wired in the parser** (`src/parser/objects.rs` rejects only collection-field structs — "use a plain struct for serialisation"); the fault is in the runtime write/read-data path, so W9 is a **bug to fix**, not a feature to build |
+
+**Bottom line:** not "almost done" in the benign sense. W7 shipping is real
+progress, but W8 (silent corruption) and W9 (hard crash) are exactly the S-tier
+failure class this plan exists to catch. Revised remaining work, in priority:
+
+1. **W9 — root-cause the crash first.** Start at the *producer* of the bad
+   `u16::MAX` type_nr, not `io.rs:273` which only consumes it. The wiring is
+   present (parser + runtime dispatch), so this is a delivery/resolution bug.
+2. **W8 — fix the empty-read.** `f += vector<integer>` + `f#read(N) as
+   vector<T>` yields `len=0`; decide whether `(N)` counts elements or bytes and
+   make the write emit recoverable data (not a bare storage handle).
+3. **W7 — DONE; just lock it in.** Add the cross-mode test; only the matrix
+   harness is missing here.
+4. Phase 00's `tests/binary_io_matrix.rs` harness is still unbuilt.
+
+The old "The matrix" table below is the *frozen design*; the row above is the
+*measured reality*. When resuming, reconcile the two (flip W7 to ✅, retag W8/W9
+as bug rows).
 
 ## Goal
 

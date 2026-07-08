@@ -7,7 +7,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**✅ COMPLETE (2026-07-07) — ready to merge.** Phases 0–5 all landed; `LOFT_OWN_ORACLE=check` runs three
+**✅ DONE / MERGED — landed on `main` via PR #524 (`9b38e1b6`), closed 2026-07-08.** Phases 0–5 all landed; `LOFT_OWN_ORACLE=check` runs three
 gates (Check A fact-disagree/A1b, over-free Check B, definite-leak scan) at **0 RED across the whole
 corpus**, each with a firing true-positive. Remaining items are non-blocking refinements: a Coq/Lean
 mechanisation of the (discharged) formal prose, and the self-contained A1b catch (deferred — its
@@ -21,8 +21,8 @@ now catches **both directions on the default path** — over-free (Check A, the 
 `LOFT_NO_A1B`; and the promoted Check B `run_over_free_check`, an unconditional free of a dep-carrying
 view) and definite under-free/leak (the promoted `check-leak` scan) — three independent gates, each
 with a firing true-positive and 0 false positives across ~521 files. A machine-checkable-soundness
-proof skeleton is in `formal/ownership.md`. Branch `tuxedo-pln94-ownership-dataflow` (off
-`origin/main`), unmerged. **What's still open** (refinements, not the end-state): the formal lemma
+proof skeleton is in `formal/ownership.md`. **Merged to `main` via PR #524** (`9b38e1b6`); the
+`tuxedo-pln94-ownership-dataflow` branch is removed. **What's still open** (refinements, not the end-state): the formal lemma
 (local transfer soundness) is now DISCHARGED (`formal/ownership.md`, over-free property given the
 O-\* rules; only a Coq/Lean rendering remains); the self-contained A1b catch stays DEFERRED — a second
 build (2026-07-07) fired correctly on the `LOFT_NO_A1B` UAF but had 55 FPs on correct code, sharpening

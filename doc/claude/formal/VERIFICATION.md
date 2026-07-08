@@ -72,7 +72,8 @@ plan for the new rules — the oracle already guards each *area*; this drives it
   fv[0]=99` ⇒ `e.items[0]==1`; `r=&v; r[0]=99` ⇒ `v[0]==1` (both backends). *Guard: `oracle/24`.*
 - ✓ **H-View (the Stage-1 catch)** — a STRUCT-typed projection ALIASES: `c = o.i; c.v=9` ⇒
   `o.i.v==9`; `s = v[0]; s.v=9` (struct element) ⇒ `v[0].v==9` (both backends). heap.md corrected.
-  *Guard: `oracle/24-heap-copy-vs-view`.*
+  *Guard: `oracle/24-heap-copy-vs-view`.* (A `value struct` INVERTS this — its projection COPIES;
+  see [§ Value structs](#value-structs-pln101-2026-07-08).)
 - ✓ **H-Copy (keyed)** — a hash whole-value bind COPIES (`g = h; g += …` leaves `len(h)`), both
   backends. *Guard: oracle `16` (keyed).*
 - ✓ **H-Read / H-ReadNull / H-Index** — a field of `nullref` ⇒ `null`; `v[i≥len]` ⇒ `null`, both
@@ -179,3 +180,42 @@ clean diagnostic + `dclo2_stored_short_lambda_map_no_crash` guard, verified on b
 
 The newly-written operational rules are now not just *written* but *verified + pinned*. This file
 stays as the standing per-rule ledger; each future rule addition gets a row and an oracle case.
+
+---
+
+## Value structs (@PLN101, 2026-07-08)
+
+`value struct` — a copy-semantics struct kind, zero-cost as a field / vector element — landed
+AFTER the 2026-07-04 sealing, so it adds rules the operational family does not yet state in
+[heap.md](heap.md) / [types.md](types.md) (**rule text = a follow-up**). Its behaviour is pinned
+here by guard, as a client of D-op-1 (differential — the oracle + the matrix below — not yet a
+definitional proof). The load-bearing new fact is the copy-pass ELISION: the copy is *skipped*
+when a plain view is observationally identical to it, which is what makes the kind zero-cost — so
+the claim to pin is that this optimization is observation-preserving.
+
+- ✓ **VS-Copy** — a value-struct projection COPIES (the INVERSE of H-View): `c = rec.f; c.x=9` ⇒
+  `rec.f.x==1`; `e = vec[i]; e.x=9` ⇒ `vec[i].x==1`; lifetime fields (`text`/`vector`) DEEP-copy;
+  `self` bound to a method-local copies. Both backends. *Guard: `tests/scripts/516`, `517`, `518`.*
+- ✓ **VS-Elide** — the read-only ELISION is OBSERVATION-PRESERVING: a value-struct view-bind that
+  is only read, over a base not mutated for the view's lifetime, may be left as a zero-cost view
+  yet still behaves as a SNAPSHOT. The falsifying program is a mid-iteration SOURCE mutation —
+  `for p in b.items { b.items[0].x = 99; s += p.x } ⇒ 6` (snapshot), NOT `104` (alias): if the
+  elision wrongly kept the alias it would read `104` (H-View's reference-struct behaviour). Also
+  pinned: straight-line snapshot, co-alias `w = b; w.f.x = …`, and escape-returns-a-copy. Both
+  backends. *Guard: `tests/scripts/519-value-struct-zero-cost.loft`.*
+- ✓ **VS-Zero (the cost side of VS-Elide)** — eliding a read-only view-bind allocates NO
+  per-element / per-field store: a `vector<value struct>` and a value-struct record field are O(1)
+  `stores_allocated`, FLAT in N, at parity with a reference struct (a per-element copy would be
+  ~N). *Guard: `tests/value_struct_alloc.rs`.*
+
+**Residual — the D-op-1 frontier for this rule.** VS-Elide's soundness rests on the copy pass's
+taint analysis (`scopes::value_struct_copy`: field-writes + escapes, alias-edge-closed,
+loop-body-scoped) — verified by the S1–S5 matrix + the differential oracle, **not machine-proven**.
+The concrete "drive it down to the rule" steps:
+1. **Graduate `519` to `tests/oracle/*`** (nightly gate: both-backends + leak + driver-agreement),
+   so VS-Copy/VS-Elide become oracle-guarded like `24-heap-copy-vs-view`, not just a script guard.
+2. **Add a fuzz axis** randomizing {read-only | field-mutated | escaping} × {loop | straight-line}
+   × source-mutation timing, so a mis-scoped taint set is caught BY CONSTRUCTION, not only by the
+   hand-built matrix.
+3. **Write the heap.md / types.md rule text** for the value-struct copy law + the elision's
+   observation-preservation side-condition, so VS-* cite a stated rule rather than @PLN101.

@@ -7,16 +7,44 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-Future — design sketch only, no implementation.  **Origin:**
-surfaced during [@PLAN53](../finished/53-sanitizer-ci-lever/README.md)
-Stage A1 sanitizer probing (2026-05-29).  Every loft invocation
-re-parses the entire `default/*.loft` stdlib at startup —
-lexing, two-pass parsing, scope analysis, and bytecode
-generation over the whole corpus — before running a single line
-of user code.  Natively this is milliseconds; it became visible
-because under Miri (10–100× interpretation overhead) the same
-load takes **minutes**, which is what makes a Miri CI subset
-look unusable.
+**CLOSED — delivered by [@PLN11](../11-data-as-store/README.md) (arc D / D2b /
+E) 2026-07-09.**  The precompiled-stdlib cache this plan sketched was built as
+part of @PLN11's store-backed IR work, not as a standalone plan:
+
+- **A** (cache artifact + (de)serialize parsed `Data` + DB schema) — done:
+  `src/ir_store.rs::save_bundle(data, schema, path)` /
+  `src/ir_read.rs::open_bundle_into(path, db) -> Data`, wired in
+  `src/startup_cache.rs` (`warm_load_stdlib` / `save_stdlib_cache`); ~12× faster
+  warm load.
+- **B** (hash-keyed invalidation) — done: `src/cache.rs::stdlib_cache_key` keys
+  on stdlib content + loft version + build id + target + feature set; rotates
+  the cache path on any stdlib/toolchain change.
+- **C** (CLI integration) — shipped as an **opt-in** env var
+  (`LOFT_STDLIB_CACHE`) + XDG cache path, rather than default-on with a
+  `--no-stdlib-cache` opt-out.  Promoting it to default-on is a small separable
+  decision (invalidation-risk caution), not a reason to keep this plan open — a
+  one-line `loft-lang/features` item if ever wanted.
+- **D** (Miri-safe serde-not-mmap variant) — **moot**: the shipped cache is
+  deliberately mmap-based, and this plan's own Miri motive was solved more
+  cheaply by `cached_default()` (load-once-per-process), so D's reason to exist
+  evaporated.
+
+Tests: `tests/d2b_stdlib_cache.rs` (stdlib cache), `tests/arc_e_program_cache.rs`
+(whole-program cache).  The original design sketch is retained below as
+historical record.
+
+---
+
+### Original design sketch (historical — 2026-05-29)
+
+**Origin:** surfaced during
+[@PLAN53](../finished/53-sanitizer-ci-lever/README.md) Stage A1 sanitizer
+probing (2026-05-29).  Every loft invocation re-parses the entire
+`default/*.loft` stdlib at startup — lexing, two-pass parsing, scope analysis,
+and bytecode generation over the whole corpus — before running a single line of
+user code.  Natively this is milliseconds; it became visible because under Miri
+(10–100× interpretation overhead) the same load takes **minutes**, which is
+what makes a Miri CI subset look unusable.
 
 This plan ships a **precompiled-stdlib cache**: serialize the
 parsed stdlib state once, key it on a content hash of
