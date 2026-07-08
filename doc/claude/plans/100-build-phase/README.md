@@ -9,7 +9,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**`status:active` — filed 2026-07-08. Slices 1–3 SHIPPED (2026-07-08); Slices 4–5 open.** A loft
+**`status:active` — filed 2026-07-08. Slices 1–4 SHIPPED (2026-07-08); only Slice 5 (UI) remains.** A loft
 project has no declared build phase: what an artifact needs (which toolchain binaries,
 which prebuilt runtime rlibs, which generated data files) lives only in `Makefile`
 recipes and scattered Rust fallbacks, so it can't be checked or built automatically.
@@ -129,7 +129,7 @@ Every field maps cleanly to a form control (Slice 5).
 | **Slice 1** — target-dir isolation `target/loft/<shape>/` + auto-build the **loft-runtime** wasm rlib via the existing fingerprint gate | kills the stomp + flaky WASM, retires the manual `make` | **SHIPPED** — `native_utils::ensure_loft_runtime_rlib` (`--html` → isolated `target/loft/html/`; `--native-wasm` auto-builds wasip2), keyed on `loft_build_fingerprint` via the `.loft-build-fp` sidecar; `html_wasm` (16) + `wasm_debug_relay` (1) green |
 | **Slice 2** — `[build]` manifest schema + `loft build` driver (targets + `requires` resolution, doctor-style missing-tool report) | declarative targets | **SHIPPED** — `[build]`/`[build.target.<name>]`/`.requires` in `src/manifest.rs`; `loft build [target...]` driver + built-in native/html/wasi + doctor-check in `src/build_phase.rs` (native→`--native --check`, html→`--html`, wasi→`--native-wasm`) |
 | **Slice 3** — `[[build.asset]]` custom steps with input/output fingerprinting **+ a freshness `lifetime`** (TTL) for external-source-backed outputs (rebuild on age, no source instrumentation) | custom asset pipelines | **SHIPPED** — `[[build.asset]]` in `src/manifest.rs`; staleness (`missing`/`inputs-changed`/`TTL-expired`/`--force`) + glob + content-fingerprint + wall-clock stamp (`.loft/build/<name>.stamp`) + `.loft`/shell runner in `src/build_phase.rs` |
-| **Slice 4** — `[test]` phase + `loft test` / `loft check`: run declared tests over each built target and over generated data files (`inputs`), gated on `needs` asset outputs; cache a green run by input fingerprint | declarative test phase | Open |
+| **Slice 4** — `[test]` phase + `loft test` / `loft check`: run declared tests over each built target and over generated data files (`inputs`), gated on `needs` asset outputs; cache a green run by input fingerprint | declarative test phase | **SHIPPED** — `[[test]]` in `src/manifest.rs`; `loft check` build+test gate + interpret/native backends + `needs` gate + green-run cache (`.loft/test/<name>__<target>.stamp`, keyed on run-script+inputs+target) in `src/build_phase.rs` (html/wasi headless runner = future) |
 | **Slice 5** — UI backing the config | authoring UI | Deferred (later) |
 
 ## Phase ordering
@@ -170,15 +170,16 @@ Every field maps cleanly to a form control (Slice 5).
    mtime), reusing `cache::file_hash` (sha256): `build_phase::inputs_fingerprint` folds
    each glob-matched file's path + content hash. Survives mtime resets; new/removed files
    change the fingerprint too. Asset sandboxing (question 3) stays trusted-by-declaration.
-5. **Test-run caching.** Should a test whose `run` script + `inputs` data files + target
-   fingerprint are unchanged since its last green run be **skipped** (cache the pass), the
-   way the artifact gates skip an up-to-date build? Lean yes — it makes `loft check`
-   incremental — but the cache must key on the target-shape too (a green `native` run does
-   not vouch for `html`).
-6. **Relation to loft's own harness.** The `[test]` phase is the *project-facing* surface;
-   loft's in-repo `tests/scripts/*.loft` (auto-run on both backends by `tests/wrap.rs` /
-   `tests/native.rs`) is the *compiler's* harness. Keep them separate but let the project
-   phase reuse the same "run on each target backend" runner so behavior matches.
+5. **Test-run caching.** ✅ RESOLVED (Slice 4) — yes, cached. A green run is stamped by
+   the `(run-script content + inputs content + target)` fingerprint in
+   `.loft/test/<name>__<target>.stamp` (`build_phase::test_fingerprint`); an unchanged
+   test is skipped, making `loft check` incremental. The key includes the TARGET, so a
+   green `native` run does not vouch for `interpret`. `--force` bypasses it.
+6. **Relation to loft's own harness.** ✅ RESOLVED (Slice 4) — kept separate: the `[[test]]`
+   phase is the project-facing surface (`build_phase::run_test_phase`), reusing a
+   "run on each backend" runner over `interpret` + `native` — the same two backends loft's
+   in-repo `tests/scripts/*.loft` harness runs on. `html` / `wasi` headless test execution
+   has no runner yet (deferred; needs a node/wasmtime/browser host).
 7. **Freshness `lifetime` (TTL) mechanism.** ✅ RESOLVED (Slice 3) — staleness =
    `missing OR inputs-fingerprint-changed OR (lifetime set AND age > lifetime) OR --force`
    (`build_phase::compute_staleness`, unit-tested for precedence). Rather than overload the

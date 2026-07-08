@@ -1011,7 +1011,48 @@ it). `lifetime` units: `s` `m` `h` `d` `w` `mo` (=30d) `y`.
 `run` executes as a `.loft` script (with this loft binary) when it is a single
 `.loft` path, else through the platform shell — trusted-by-declaration (it is the
 project's own manifest; @PLN100 open question 3 / @PLN86). Input globs support
-`*`, `?`, and `**`. *(The `[test]` phase is Slice 4.)*
+`*`, `?`, and `**`.
+
+### Test phase — `[[test]]` + `loft check` (@PLN100 Slice 4)
+
+`loft check` is the **build + test gate**: it builds the default targets, runs the
+asset steps, then runs the declared `[[test]]` phase — one exit code for CI. A
+`[[test]]` runs a `.loft` script over one or more **execution-backend** `targets`,
+gated on the asset outputs it `needs`:
+
+```toml
+[[test]]
+name    = "smoke"
+run     = "tests/smoke.loft"
+targets = ["interpret", "native"]  # run the SAME suite through each backend
+needs   = ["atlas"]                # skip (and fail the gate) if `atlas` didn't build
+
+[[test]]
+name   = "atlas-integrity"
+run    = "tests/check_atlas.loft"
+inputs = ["assets/atlas.bin"]      # a test OVER a generated data file
+```
+
+- **Backends:** `interpret` (→ `loft <run>`) and `native` (→ `loft --native <run>`)
+  — mirroring loft's own interpret+native harness. `html` / `wasi` have no headless
+  runner yet and are reported as skipped (not silently passed).
+- **`needs`** gates a test on named assets: if a needed asset's outputs are missing,
+  the test is blocked and the gate fails.
+- **Green-run caching (incremental `loft check`):** a passing test is cached by the
+  `(run-script content + inputs content + target)` fingerprint in
+  `.loft/test/<name>__<target>.stamp`; an unchanged test is skipped next run. The key
+  includes the target, so a green `native` run does not vouch for `interpret`.
+  `loft check --force` (or `--fresh`) reruns everything.
+
+```bash
+loft check            # build default-targets + assets, then run [[test]]
+loft check --force    # rebuild + re-run every asset and test
+loft check foo.loft   # (a .loft arg) compile-check that file instead — the old --check
+```
+
+The declared `[[test]]` phase is the *project-facing* surface; loft's own in-repo
+`tests/scripts/*.loft` harness (and the `loft test` package-test runner) are
+separate. Logic lives in `src/build_phase.rs` (unit-tested).
 
 > **Minimal-scanner note:** the hand-rolled `loft.toml` reader takes single-line
 > arrays and a `[build.target.<name>.requires]` subtable (no inline tables), and

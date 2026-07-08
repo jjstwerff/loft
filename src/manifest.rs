@@ -62,6 +62,29 @@ pub struct BuildAsset {
     pub lifetime: Option<String>,
 }
 
+/// @PLN100 Slice 4 — one `[[test]]` entry: a declared test script run over one or
+/// more execution-backend `targets` after the build + asset phases, gated on the
+/// asset outputs it `needs`.  A green run is cached by the (run-script + inputs +
+/// target) fingerprint so `loft check` is incremental.  See
+/// `build_phase::run_test_phase`.
+#[derive(Debug, Default, Clone)]
+pub struct BuildTest {
+    /// The test's name (`name = "smoke"`) — used in output and the cache stamp.
+    pub name: Option<String>,
+    /// The `.loft` test script to run (`run = "tests/smoke.loft"`).
+    pub run: Option<String>,
+    /// The execution backends to run the script through (`targets = ["interpret",
+    /// "native"]`).  Empty → `["interpret"]`.  `html` / `wasi` have no headless
+    /// runner yet and are reported as skipped.
+    pub targets: Vec<String>,
+    /// Asset names that must be built first (`needs = ["atlas"]`) — the test is
+    /// skipped (and the gate fails) if a needed asset's outputs are missing.
+    pub needs: Vec<String>,
+    /// Data files the test reads (`inputs = ["assets/atlas.bin"]`) — folded into
+    /// the cache key so the test re-runs when a data file it reads changes.
+    pub inputs: Vec<String>,
+}
+
 /// Content of a library's `loft.toml` manifest file.
 #[derive(Debug, Default)]
 pub struct Manifest {
@@ -158,6 +181,8 @@ pub struct Manifest {
     pub build_targets: Vec<BuildTarget>,
     /// @PLN100 Slice 3 — the `[[build.asset]]` custom asset steps, in file order.
     pub build_assets: Vec<BuildAsset>,
+    /// @PLN100 Slice 4 — the `[[test]]` declared test entries, in file order.
+    pub build_tests: Vec<BuildTest>,
 }
 
 impl Manifest {
@@ -196,8 +221,10 @@ pub fn read_manifest(path: &str) -> Option<Manifest> {
         // single-bracket case (which would otherwise swallow it as `[build.asset]`).
         if line.starts_with("[[") && line.ends_with("]]") {
             let name = &line[2..line.len() - 2];
-            if name == "build.asset" {
-                manifest.build_assets.push(BuildAsset::default());
+            match name {
+                "build.asset" => manifest.build_assets.push(BuildAsset::default()),
+                "test" => manifest.build_tests.push(BuildTest::default()),
+                _ => {}
             }
             section = format!("[[{name}]]");
             continue;
@@ -219,6 +246,19 @@ pub fn read_manifest(path: &str) -> Option<Manifest> {
                         "inputs" => a.inputs = parse_array(value),
                         "outputs" => a.outputs = parse_array(value),
                         "targets" => a.targets = parse_array(value),
+                        _ => {}
+                    }
+                }
+                continue;
+            }
+            if section == "[[test]]" {
+                if let Some(t) = manifest.build_tests.last_mut() {
+                    match key {
+                        "name" => t.name = Some(value.to_string()),
+                        "run" => t.run = Some(value.to_string()),
+                        "targets" => t.targets = parse_array(value),
+                        "needs" => t.needs = parse_array(value),
+                        "inputs" => t.inputs = parse_array(value),
                         _ => {}
                     }
                 }
@@ -658,6 +698,38 @@ lifetime = "30d"
         assert_eq!(dataset.name.as_deref(), Some("dataset"));
         assert_eq!(dataset.lifetime.as_deref(), Some("30d"));
         assert!(dataset.inputs.is_empty());
+    }
+
+    // @PLN100 Slice 4 — [[test]] entries: run/targets/needs/inputs.
+    #[test]
+    fn parses_build_tests() {
+        let p = write_temp(
+            "tests",
+            r#"[package]
+name = "game"
+
+[[test]]
+name    = "smoke"
+run     = "tests/smoke.loft"
+targets = ["interpret", "native"]
+needs   = ["atlas"]
+
+[[test]]
+name   = "atlas-integrity"
+run    = "tests/check_atlas.loft"
+inputs = ["assets/atlas.bin"]
+"#,
+        );
+        let m = read_manifest(p.to_str().unwrap()).unwrap();
+        assert_eq!(m.build_tests.len(), 2);
+        let smoke = &m.build_tests[0];
+        assert_eq!(smoke.name.as_deref(), Some("smoke"));
+        assert_eq!(smoke.run.as_deref(), Some("tests/smoke.loft"));
+        assert_eq!(smoke.targets, vec!["interpret", "native"]);
+        assert_eq!(smoke.needs, vec!["atlas"]);
+        let integrity = &m.build_tests[1];
+        assert_eq!(integrity.inputs, vec!["assets/atlas.bin"]);
+        assert!(integrity.needs.is_empty());
     }
 
     #[test]

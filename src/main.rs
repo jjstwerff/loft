@@ -180,6 +180,10 @@ fn print_help() {
     println!("                                build            — build [build] default-targets");
     println!("                                build html wasi  — build the named targets");
     println!("                                (targets: native | html | wasi | [build.target.*])");
+    println!("  check [target...]             build + run the declared [[test]] phase (the gate)");
+    println!(
+        "                                (in a project; `check <file.loft>` compile-checks it)"
+    );
     println!("  test [target]                 run package tests (requires loft.toml in cwd)");
     println!("                                test         — run all tests in tests/");
     println!("                                test draw    — run tests/draw.loft");
@@ -4016,8 +4020,42 @@ fn main() {
             });
             i += 1;
             loft::timeout::arm(secs, loft::timeout::env_grace_secs());
-        } else if a == "--check" || a == "check" {
+        } else if a == "--check" {
             check_only = true;
+        } else if a == "check" {
+            // @PLN100 Slice 4 — a bare `loft check` in a project (loft.toml, no
+            // `.loft` file arg) is the build+test GATE.  `loft check <file>` and
+            // the `--check` flag keep the compile-check behaviour.
+            let next_is_file = argv.get(i).is_some_and(|s| {
+                !s.starts_with('-')
+                    && std::path::Path::new(s)
+                        .extension()
+                        .is_some_and(|e| e.eq_ignore_ascii_case("loft"))
+            });
+            if next_is_file || !std::path::Path::new("loft.toml").exists() {
+                check_only = true;
+            } else {
+                let mut requested: Vec<String> = Vec::new();
+                let mut force = false;
+                while let Some(arg) = argv.get(i) {
+                    if arg == "--force" || arg == "--fresh" {
+                        force = true;
+                    } else if arg.starts_with('-') {
+                        break;
+                    } else {
+                        requested.push(arg.clone());
+                    }
+                    i += 1;
+                }
+                let manifest = loft::manifest::read_manifest("loft.toml").unwrap_or_default();
+                let entry = manifest.entry.clone().unwrap_or_else(|| {
+                    let n = manifest.name.clone().unwrap_or_else(|| "main".to_string());
+                    format!("src/{n}.loft")
+                });
+                let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let ok = loft::build_phase::check(&requested, &entry, &manifest, &cwd, force);
+                std::process::exit(i32::from(!ok));
+            }
         } else if a == "--help" || a == "-h" || a == "-?" {
             print_help();
             return;
