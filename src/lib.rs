@@ -73,6 +73,8 @@ pub mod keys;
 mod lexer;
 pub mod native;
 pub mod ownership_cfg;
+#[cfg(feature = "remote-store")]
+pub mod paged_reader;
 pub mod scopes;
 pub mod use_analysis;
 mod variables;

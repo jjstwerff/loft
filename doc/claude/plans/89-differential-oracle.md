@@ -88,6 +88,36 @@ materialization delivers `match`/`if` *tails* into `__retbuf`, not the
 early-return + tail-return shape. Workaround: a single tail return via a result
 local. Once fixed, the minimal repro graduates into `tests/oracle/`.
 
+## Return-position family — the routing native-codegen class (corpus 27–28)
+
+The `routing` consumer's `loft-feedback.md` catalogued **five native-only
+return-position miscompiles in one week**: a `text` tail-call of a heap-param
+callee emitting `return Str::new(<String>)` (E0308), a `text as integer` from a
+discharged local (E0605), a `float?` return zeroed by a constructed text arg, a
+struct-field heap vector returned empty (#488), and a nested-ncc optional-text
+return (#500). All are fixed; the last E0308 one closed with #494 (guard
+`tests/scripts/451-text-tailcall-nwb-callee.loft`).
+
+Two oracle cells lock the class in at the gate:
+
+- **`27-native-tailcall-return-heap.loft`** — the E0308 *compile-reject* half: a
+  tail-position call to a heap-param callee across the variants 451 does NOT cover
+  (struct and vector params, a `text?` caller, a constructed arg in tail, a
+  struct-returning tail, an optional-text discharge in tail, a match-arm tail, a
+  2-level chain). Caught by `driver_agreement` (native rustc-rejects what interpret
+  accepts).
+- **`28-native-return-heap-value-fidelity.loft`** — the *silent wrong-answer* half:
+  #488 field-of-local / field-of-param heap-vector returns and the
+  `float?`-zeroed-by-constructed-arg shape. Caught by the stdout divergence.
+
+A 2026-07-07 sweep of an 11-shape matrix confirmed the whole family is **closed on
+both backends** (not merely the filed instances) — #494's "unspan both call-shape
+probes" fix generalised to the class. The cells' value is regression lock-in: the
+class has a demonstrated history of native-only breakage, so a future codegen change
+that re-opens it on an untested shape is a caught gate failure, not a consumer
+report. The sweep also surfaced a simplification that would remove the class's ROOT
+footgun — see [NATIVE.md § Open work](../NATIVE.md#open-work) (`as_op_call`).
+
 ## Next steps
 
 - Add a CI job that runs the `--ignored` sweep (nightly or per-PR-on-codegen).

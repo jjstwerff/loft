@@ -1,0 +1,96 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN89 differential-oracle corpus — AXIS: native tail-position return of a
+// heap-param callee (the routing 2026-07-02 E0308 family). A `-> text` fn whose
+// TAIL expression calls a bufferless callee taking a store-backed param emitted
+// `return Str::new(<String>)` under --native → rustc E0308, while the interpreter
+// ran fine — an accept/reject divergence the oracle's driver_agreement catches.
+// Fixed by unspanning both call-shape probes (#494, commit b999ce4b); the minimal
+// pick/jtext shape is pinned by tests/scripts/451-text-tailcall-nwb-callee.loft.
+// This cell locks in the ADJACENT variants 451 does NOT cover — struct and vector
+// params, a text? caller, a constructed arg in tail, a struct-returning tail, an
+// optional-text discharge in tail, a match-arm tail, and a 2-level tail chain —
+// so a future codegen change can't re-open the class on a shape no single guard
+// tests. Both backends must AGREE on value and on accept/reject.
+
+struct Doc { body: text, tag: text }
+struct Res { name: text, n: integer }
+
+fn d_get(d: Doc, k: text) -> text { if k == "body" { d.body } else { "" } }
+fn d_opt(d: Doc, k: text) -> text? { if k == "body" { d.body } else { null } }
+fn v_at(v: vector<text>, i: integer) -> text { v[i] ?? "" }
+
+// struct heap param, text caller (451 used an enum param)
+fn a1_struct_tail(d: Doc) -> text {
+  nm = d_get(d, "x");
+  if nm != "" { return nm; }
+  d_get(d, "body")
+}
+
+// vector heap param, text caller
+fn a2_vec_tail(v: vector<text>) -> text {
+  nm = v_at(v, 9);
+  if nm != "" { return nm; }
+  v_at(v, 0)
+}
+
+// caller returns text? (451 caller returned text), tail heap-param call
+fn a3_opt_caller(d: Doc) -> text? {
+  nm = d_get(d, "x");
+  if nm != "" { return nm; }
+  d_get(d, "body")
+}
+
+// constructed arg to a heap-param callee in tail (two triggers at once)
+fn a4_ctor_arg_tail(d: Doc, n: integer) -> text {
+  nm = d_get(d, "miss");
+  if nm != "" { return nm; }
+  d_get(d, "{n}")
+}
+
+// struct-returning tail call, heap param
+fn mk_res(d: Doc, k: text) -> Res { Res { name: d_get(d, k), n: len(d.body) } }
+fn a5_struct_ret_tail(d: Doc) -> Res {
+  r = mk_res(d, "x");
+  if r.n > 99 { return r; }
+  mk_res(d, "body")
+}
+
+// optional-text heap-param callee, discharged in tail position
+fn a6_opt_callee_discharge(d: Doc) -> text {
+  d_opt(d, "body") ?? "none"
+}
+
+// tail call inside a match arm, enum (JsonValue) heap param
+fn jt(obj: JsonValue, name: text) -> text {
+  v = obj.field(name);
+  if v.kind() == "JString" { v.as_text() } else { "" }
+}
+fn a7_match_arm_tail(root: JsonValue) -> text {
+  match root.kind() {
+    "JObject" => jt(root, "b"),
+    _ => "",
+  }
+}
+
+// 2-level tail chain (a->b->c), text, heap param each hop
+fn a8_c(d: Doc) -> text { d_get(d, "body") }
+fn a8_b(d: Doc) -> text { a8_c(d) }
+fn a8_a(d: Doc) -> text { a8_b(d) }
+
+fn main() {
+  d = Doc { body: "world", tag: "t" };
+  v: vector<text> = [];
+  v += ["vec0"];
+  root = json_parse("{{\"b\":\"json\"}}");
+
+  println("a1={a1_struct_tail(d)}");               // world
+  println("a2={a2_vec_tail(v)}");                   // vec0
+  println("a3={a3_opt_caller(d) ?? \"NULL\"}");     // world
+  println("a4={a4_ctor_arg_tail(d, 5)}");           // (empty — no key "5")
+  println("a5={a5_struct_ret_tail(d).name}");       // world
+  println("a6={a6_opt_callee_discharge(d)}");       // world
+  println("a7={a7_match_arm_tail(root)}");          // json
+  println("a8={a8_a(d)}");                          // world
+}

@@ -7,7 +7,51 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 **Tracker:** [loft-lang/loft#522](https://github.com/loft-lang/loft/issues/522). Built as **arc G
 of @PLN97** ([README](README.md)) — the layout contract's hardest consumer *and* its cross-network
 validation. Pairs with #517 (HTTP stack) and rides the layout contract ([formal/layout.md](../../formal/layout.md)).
-Status: **design** — build gated on P0.
+
+**Status — working-set fetcher COMPLETE for HASH and SORTED, local AND remote (2026-07-07/08).** The
+partial store fetcher is built and verified end-to-end: `store_load_key` / `store_load_keys` /
+`store_load_key_text` (hash point lookups) and `store_load_range` (sorted range) pull only the pages a
+lookup touches — **from a local file OR an `http://` `Range` server** — and relocate the matched
+entries into a sound local heap. Done + verified (interpret + native, + wasip2 for the whole-file base;
+leak-clean; `store_verify` on every load; each with a prove-can-fail control):
+- **Phase 1** `store_load` (whole file) · **Phase 2** `PagedReader` (page/LRU/`resolve`) ·
+  **Phase 5** `HttpRangeProvider` + `PageSource` (the REMOTE fetch, `ureq`, feature-gated).
+- **Phase 3a** bounded find + flat copy · **Phase 4 + 3b.7** `store_load_range` over Sorted (binary
+  search over the reader, build the local vector in key order).
+- **Relocating copy — ALL shapes:** 3b.1 safe-refusal · 3b.2 text · 3b.3 vector\<scalar\> · 3b.4
+  inline nested structs · **3b.4b vector\<struct\>** (`relocate_ptr_fields` — one recursive walk over
+  every pointer kind) · 3b.6 text keys. Only `vector<text>` / `vector<vector>` remain SAFELY REFUSED.
+- The instrument: **`store_verify`** (built on `validate_claims`, extended with a Hash arm).
+- **3b.5 layout-identity gate ✅** — `store_persist_bind` now WRITES a `<path>.dschema` sidecar
+  (`LayoutIdentity::of` over the collection's type), and every partial loader (`load_keys` /
+  `load_key_text` / `load_range`, so `load_key` / `load_keys_vec` via delegation) checks it FIRST:
+  a layout that differs from the loading program's type is REFUSED before any schema-derived read,
+  local file or `http(s)://` (`paged_reader::check_sidecar` fetches `<url>.dschema`; a genuine
+  remote Match/Reject). Absent sidecar (legacy store) or untyped store → proceed, with `store_verify`
+  the backstop. Two both-backend tests (local + HTTP) prove reject-on-change / load-on-match; the
+  test Range server is now path-aware.
+
+- **3b.8 bytes-≪-file ✅ (no synthetic benchmark)** — the property holds by construction (a point
+  lookup touches O(1) 64 KB pages) and is PROVEN in real use: the loader is used directly on big
+  files, and `LOFT_LOADER_STATS` reports `bytes_fetched` vs file size on those real files. A
+  large-fixture microbenchmark would only re-assert what production usage already evaluates
+  (dogfood > synthetic).
+
+**Remaining (browser reach — the core fetch works without it):**
+- **`--html` `fetch()` bridge** (browser target).
+
+> **Codegen bug FIXED (2026-07-08, `ece0f2a6`).** The workaround here was real, but the filed
+> scope ("`reference` arg + ≥2 integer literals") was wrong. Root cause: `#rust` template
+> substitution matched `@name` placeholders as raw SUBSTRINGS, so in
+> `store_load_range(local, path, lo, hi)` → `stores.load_range(&(@local), @path, @lo, @hi)` the
+> short `@lo` was seen INSIDE `@local`; the P203 repeated-use pre-eval over-counted, fired, and
+> rewrote `@local` to an unbound `_v_local` (rustc E0425 on `--native`). Fixed at the chokepoint:
+> whole-token `count_placeholder` / `replace_placeholder` (a match only counts when the char after
+> `@name` is not an identifier char), applied to every `@param` substitution — so a prefix collision
+> (`lo`/`local`) can never corrupt the longer name, in any attribute order. With the real bug fixed,
+> the `vector<integer>` workaround was reverted to the natural scalar `store_load_range(local, path,
+> lo, hi)`. Unit tests in `src/generation/calls.rs` pin the invariant; the 3-backend
+> `store_load_range.loft` guards it end-to-end.
 
 ## Two consumers, one general primitive
 
@@ -171,35 +215,130 @@ cross-process-portable first.  **Both halves are now DONE** — 0.5a (#523: hash
 record) and 0.5b (`store_persist_bind` accepts `sorted`/`index`), so `store_load_keys` (Phase 3)
 and `store_load_range` (Phase 4) are unblocked.
 
-### Phase 1 — heap store-load (whole file, no HTTP)
-- **Build:** `store_load(path)` — `read_bytes` → 8-aligned heap arena → `Store{ backing: Heap,
-  file: None }` → `fl_rebuild()`. ~15 lines mirroring `Store::open` (`store.rs:394`); the wasm
-  no-op (`store.rs:387`, `allocation.rs:2217`) gains a real body. Independently useful: unblocks
-  **whole-block wasm load** today.
-- **Verify:** load a file written by `bind_path`; every query returns **byte-identical** to the
-  same query on the mmap-`open`ed store (a `cross_mode`-style transcript). Runs on all three
-  backends (this is the piece wasm lacked).
-- **Prove-can-fail:** a truncated/garbage file → clean reject (the @PLN97 identity gate + the
-  header signature check), not a panic or a misread.
+### Phase 1 — heap store-load (whole file, no HTTP) — **DONE 2026-07-07**
+- **Built:** `store_load(r, path)` — the portable, non-durable counterpart of `store_persist_bind`.
+  `Store::load` (`store.rs`) reads the file into an 8-aligned heap arena (`file: None`) →
+  `fl_rebuild()`; `Stores::load_path` (`allocation.rs`) swaps it into the collection's slot
+  (mirrors `bind_path`'s existing-file branch, minus mmap + the fresh/create path); the
+  `n_store_load` interpreter handler (`native.rs`, **ungated** — the piece wasm lacked) + the
+  `#rust"stores.load_path(…)"` builtin (`02_files.loft`). Unblocks **whole-block wasm load** today.
+- **Verified:** a hash written by `store_persist_bind` reloads via `store_load` into a FRESH
+  heap-backed hash with the same keys AND a correct key lookup (`h[13]=1300`) — the 0.5a
+  bucket-seed makes it portable — on **all three backends**: interpret, native, and **wasip2**
+  (`wasmtime`, fixture preopened). Guards: `store_persist_loft.rs::store_load_reads_persisted_image_both_backends`
+  + `tests/scripts/store_load_smoke.loft`.
+- **Prove-can-fail:** a garbage / non-store file → `store_load` returns `false` (the `Store::load`
+  signature check under `catch_unwind`), not a panic or misread —
+  `store_persist_loft.rs::store_load_rejects_garbage_file`.
+- **Deferred to Phase 5:** the @PLN97 layout-identity gate on load (currently the header
+  `SIGNATURE` check only); wire `schema_sidecar::check` at the bootstrap when the remote provider
+  lands (a wrong-layout local file is far less likely than a wrong-layout remote fetch).
 
-### Phase 2 — paged read-only backing (local provider)
-- **Build:** `PagedReader` (page table + LRU + fetch-on-miss `resolve`) over the **local-file**
-  provider; the option-B/(b1|b2) result from P0. Bootstrap: page 0 + size + identity gate.
-- **Verify:** a `find` / a full iteration over `PagedReader` returns the SAME records as the
-  whole-file load, **and** `pages_fetched · page_size ≪ file_size` (assert the count from the
-  provider log). Both backends + wasm.
-- **Prove-can-fail:** shrink the page cache to 1 entry → still correct (just more fetches) — proves
-  correctness is independent of residency; a corrupted page → detected (per-record size-word sanity
-  / the identity gate), not a wild read.
+### Phase 2 — paged read-only backing (local provider) — **reader core DONE 2026-07-07**
+- **Built:** `src/paged_reader.rs` (behind the `remote-store` feature — the zero-cost gate): the
+  `PageProvider` trait, `LocalFileProvider` (reads ranges from disk, **logs every `(off,len)`** so
+  "bytes fetched ≪ file" is countable), and `PagedReader` — a sparse LRU page table + fetch-on-miss
+  `resolve(off,len)` that coalesces boundary-spanning reads, plus the typed reads (`u32_at` /
+  `i32_at` / `i64_at` / `record_words`) that mirror the `Store` accessors (`byte = rec·8 + fld`,
+  native-endian). The option-B / `b-builtin` result from P0.
+- **Verified (5 unit tests):** `resolve` returns exact bytes incl. page-span coalescing; past-EOF
+  zero-pads; a small read touches **one page**, not the file; correctness is **independent of
+  residency** (a `capacity == 1` reader agrees byte-for-byte with a fully-resident one — the
+  prove-can-fail); typed reads are native-endian at `rec·8`.
+- **Re-slice:** the **`find`/range traversal over `PagedReader` moves to Phase 3/4** — it needs the
+  collection's key metadata (`Key[]`) and root, which the `store_load_keys`/`_range` builtins carry
+  naturally, so it is testable end-to-end there (the "same records as whole-file, bytes ≪ file"
+  gate lands with Phase 3). Phase 2 is the reader **mechanism**; the traversal that rides it is
+  Phase 3. Bootstrap (page 0 + size + the @PLN97 identity gate) also lands at the Phase-3 entry.
 
 ### Phase 3 — `store_load_keys` (point lookups; Hash & Sorted)
-- **Build:** `store_load_keys(local, url, keys)` — for each key, `PagedReader.find(key)` → deep-copy
-  the record graph into `local` (`OpCopyRecord`). Hash and Sorted key paths.
+
+**Phase 3a DONE 2026-07-07 — `store_load_key` + `store_load_keys` (integer keys, flat struct).**
+The lowest-risk cut is shipped and verified, singular AND plural:
+`store_load_key(local, path, key)` / `store_load_keys(local, path, keys: vector<integer>)` fetch the
+requested integer-keyed entries from a persisted hash image into `local`, reading only the pages the
+lookups touch (the paged reader is opened once and its cache reused across keys; the plural returns
+the count found). `Stores::load_key` (allocation.rs, `remote-store`-gated) opens a `PagedReader`, takes the
+root from `local`'s live `DbRef` + the `Key[]` from `stores.keys(known_type)` (the design unlock —
+NOT reverse-engineered bytes), runs `paged_reader::find_hash_entry` (a read-only port of
+`hash::find`), then FLAT-copies the matched record's scalar fields into a fresh `local` claim and
+links it via the verified `hash::add` (no relocation — flat struct has no owned children). Wired as
+`n_store_load_key` (native.rs, ungated-by-mmap) + the `store_load_key` builtin (02_files.loft).
+**Verified interpret + native + wasip2 (wasmtime), leak-clean:** the requested key loads with the
+right value, un-requested keys are absent, `len == 1` (bounded working set) —
+`store_persist_loft.rs::store_load_key_loads_only_the_requested_key_both_backends` (+ a `loadkey`
+run under wasmtime with the fixture preopened). `LOFT_LOADER_STATS` prints `bytes_fetched` vs file
+for the ≪-file check at scale.
+
+**Phase 3b — the relocating graph-copy (detailed, individually-verifiable steps).**
+The remaining work extends the copy from FLAT (scalar-only) entries to entries with heap fields
+(text / vector / nested), plus more key types and the Sorted path. Each step below is independently
+landable, has a concrete pass/fail check, and is gated on both backends + leak-clean.
+
+**The two verification instruments (both wired into every 3b step).**
+- **Structure — `store_verify(r)` (built 2026-07-07).** A loft builtin +
+  `Stores::verify_graph_ok` that runs the DEFENSIVE `validate_claims` walk (guard-before-deref: it
+  NAMES a broken edge instead of faulting on it). Extended with a bounds-checked Hash arm so it
+  covers keyed collections. After any `store_load*`, `store_verify(local)` proves the copy left **no
+  pointer aimed outside the store** (the exact failure a bad relocation produces — a source
+  rec-number larger than the small local store). Positive-control-tested (it must CATCH an
+  out-of-range bucket pointer, not crash) and wired into the loader regression
+  (`loadkey verify=true`). Covers the "is the store in the right format / structurally sound"
+  half of the confidence question.
+- **Content — differential against whole-file `store_load`** (the "corresponds to the original"
+  half):
+Phase 1's `store_load` is verified, so it is the GROUND TRUTH: load the whole persisted collection
+into `g_full`, then `store_load_keys(subset)` into `g_partial`, and assert — for every requested
+key — `g_partial[k]` deep-equals `g_full[k]` field-by-field (including every heap field's contents),
+that un-requested keys are ABSENT from `g_partial`, and `len(g_partial) == |subset|`. This turns
+"did the relocating copy corrupt anything?" into a mechanical check with no reverse-engineering —
+the safe way to build heap-mutation code. Add it as a helper in `store_persist_loft.rs`
+(`assert_subset_matches_full`) driven by a `.loft` script that prints each entry's fields; wire it
+into every 3b step's regression.
+
+| Step | Build | Verified by (all on interpret + native, leak-clean) |
+|---|---|---|
+| **3b.1 field classifier + SAFE REFUSAL** | classify each entry-struct field via the type table (`self.types[field.content].parts` / `Type`) into {inline-scalar · text · vector · nested-struct · other}; `load_one` REFUSES (returns `false`, copies nothing) any entry with a non-scalar field. No copy behaviour change yet. | a `hash<Rec[id, name: text]>` → `store_load_key` returns **false** (clean refusal, NOT a corrupt/partial entry); the flat-int case is unchanged. Proves the classifier is correct BEFORE any risky copy — the load-bearing safety step. |
+| **3b.2 text-field relocation** | for a `text` field, flat-copy the source string sub-record (header + len + UTF-8 bytes — itself flat) into a fresh `local` claim, then overwrite the field's `u32` pointer with the new local rec. | differential gate on `hash<Rec[id, name: text]>`: `g_partial[k].name == g_full[k].name` (and a distinctive long string > one page, to exercise a multi-page string). |
+| **3b.3 vector<scalar>-field relocation** | copy the vector's inner record + its length-prefixed element bytes into `local`, relocate the field pointer. | differential on `hash<Rec[id, tags: vector<integer>]>`: length AND every element match `g_full`. |
+| **3b.4 recursion: nested struct + vector<struct>** | recurse the copy through in-place nested structs and `vector<struct>` elements (mirror `for_each_owned_child`'s Struct/Vector arms). | differential on `hash<Rec[id, sub: Sub{a,b}]>` and `hash<Rec[id, items: vector<Sub>]>`. |
+| **3b.5 layout-identity gate at bootstrap** | at load, read the remote store's layout id (`schema_sidecar::classify`/`check`) and REJECT on mismatch before any read. | a fixture written under a DIFFERENT layout → `store_load_key` returns **false** (rejected, never misread); a matching-layout fixture still loads. |
+| **3b.6 text keys (key type 6)** | extend `key_compare_reader` to read a `text` key over the reader (string sub-record) + a `vector<text>` key entry point (`store_load_keys_text`). | differential on `hash<Rec[name: text, val: int]>` keyed by `name`. |
+| **3b.7 Sorted find path** | `find_sorted_entry` — binary search over the sorted vector via the reader; dispatch on the collection's `Parts` (Hash vs Sorted). | differential on `sorted<Rec[id]>` (bridges into Phase 4 range). |
+| **3b.8 bytes ≪ file at scale** | (no new code) a large fixture: N≫1 entries spanning many 64 KiB pages. | `LOFT_LOADER_STATS` asserts `bytes_fetched` for a small subset is a handful of pages, `≪ file` — the working-set invariant made quantitative. |
+
+Order = lowest-risk first: 3b.1 (refuse, no mutation) locks safety; 3b.2–3b.4 add relocation one
+heap-kind at a time, each diff-verified; 3b.5 hardens the boundary; 3b.6–3b.7 broaden reach; 3b.8
+proves the payoff. A step lands only when its differential gate is green on both backends and leak-clean.
+
+- **Build (full):** `store_load_keys(local, path, keys)` — a `#rust` builtin + `n_store_load_keys` handler
+  (mirrors `store_load`'s wiring). The handler:
+  1. `PagedReader::open(path)` + the @PLN97 identity gate (read the layout id, `schema_sidecar::check`).
+  2. **Root + keys come from the live schema, NOT the bytes** (the design unlock, 2026-07-07): the
+     source hash's root is `local`'s own runtime `DbRef` `(rec, pos)` — `local` and the persisted
+     image share a collection type, so they share the structural root position — and the `Key[]` are
+     `stores.keys(local.known_type)`. This is why `find`/copy MUST live in the builtin (schema in
+     hand), and why hand-reverse-engineering the persisted layout is the WRONG (corruption-prone)
+     path — a `--interpret` probe confirmed the raw bucket bytes don't self-describe cleanly.
+  3. `find`-over-`PagedReader`: port `hash::find` (src/hash.rs:137) to read via
+     `PagedReader::u32_at`/`i64_at` instead of `Store::get_u32_raw`; `keys::key_hash(key, seed)` is
+     reused verbatim (it hashes the `Content` key, not a store).
+  4. **Copy-out (the high-risk core):** reimplement the `for_each_owned_child` cascade
+     (allocation.rs:95 — 9 `Parts` variants) over the reader to walk the matched record's owned
+     graph, `claim` each record in `local`, copy its bytes, and **relocate** the internal `rec`
+     pointers to `local`'s positions; then `hash::add` the entry into `local`. Start FLAT-struct
+     (scalar fields = no owned children, no relocation — the lowest-risk cut, and the tile-index
+     shape) and extend to vector/text/nested per the cascade. Verify every variant on both backends.
 - **Verify:** for the loaded keys, `local` returns records **byte-identical** to the full store;
-  keys **outside** the set are absent (exactly as if `local` were built with only those entries);
-  `local` is iterable and **leak-clean** (`LOFT_STORES=warn` / the leak gate); bytes fetched ≪ file.
+  keys **outside** the set are absent; `local` is iterable and **leak-clean** (`LOFT_STORES=warn`);
+  the `LocalFileProvider` fetch log asserts bytes fetched ≪ file. This is the phase where the
+  "find over PagedReader returns the same records" gate (moved from Phase 2) is proven end-to-end.
 - **Prove-can-fail:** a query for an unloaded key returns absent (not stale bytes); a key present in
-  the remote but not requested is NOT in `local`.
+  the remote but not requested is NOT in `local`; a wrong-layout image is rejected by the identity
+  gate, not misread.
+- **Risk note:** the copy-out mutates `local`'s heap with relocation — the exact class loft's
+  stability campaign hardened. It is built variant-by-variant with both-backend + leak verification,
+  NOT rushed; a hasty graph-copy here would re-introduce the store-corruption class.
 
 ### Phase 4 — `store_load_range` (Sorted / Ordered)
 - **Build:** `store_load_range(local, url, lo, hi)` — the range-friendly index walk over
@@ -209,7 +348,23 @@ and `store_load_range` (Phase 4) are unblocked.
 - **Prove-can-fail:** `[lo,hi]` with `lo>hi` → empty; a partly-covered range loads exactly the
   covered entries.
 
-### Phase 5 — wire the provider to #517 / the `fetch()` bridge
+### Phase 5 — wire the provider to #517 / the `fetch()` bridge — **HTTP (native) DONE 2026-07-07**
+- **Built (native/wasip2 HTTP):** `HttpRangeProvider` (`paged_reader.rs`) — a `PageProvider` that
+  GETs `Range: bytes=a-b` via `ureq` (size from a `Content-Range` `0-0` probe + `Content-Length`
+  fallback; a `200`/whole-file response falls back to skip-to-offset). A `PageSource` enum
+  {`Local`, `Http`} is chosen by the path scheme (`http(s)://` vs a file path), so the generic
+  `PagedReader` + the find/relocating-copy stay ONE code path — **no new traversal code, the provider
+  just swaps** (exactly as designed). `ureq` moved under the `remote-store` feature (zero-cost gate
+  verified: a lean build compiles none of it). `store_load_key(local, "http://…", key)` works.
+- **Verified interpret + native:** `store_load_key` over an `http://` URL against a minimal
+  `Range`-capable test server loads the key with the right value, bounded (`len == 1`), and
+  `store_verify == true` — the same sound working set as the local path
+  (`store_persist_loft.rs::store_load_key_over_http_range` + the `serve_ranges` server). The `200`
+  prove-can-fail path (server ignores `Range`) is handled (skip-to-offset).
+- **Remaining:** the `--html` JS `fetch()` bridge (browser target); the `soverijssel`-block route
+  capstone (waits on Phase 4 `store_load_range`); the layout-identity gate at bootstrap (3b.5).
+
+#### original design
 - **Build:** the `resolve` page provider = a `Range: bytes=<a>-<b>` GET — the #517 client under
   native/wasip2, the JS `fetch()` bridge under `--html`. No new traversal code; only the provider
   swaps.
