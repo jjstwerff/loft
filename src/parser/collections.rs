@@ -1166,16 +1166,12 @@ use #count instead"
     /// type's implementation, just like an explicit
     /// `x.to_text()` call site.
     fn try_bound_to_text_call(&mut self, d_nr: u32, format: &Value) -> Option<Value> {
-        if self.context == u32::MAX {
-            return None;
-        }
-        let ctx_def = self.data.def(self.context);
-        if ctx_def.def_type != DefType::Generic {
-            return None;
-        }
-        // Confirm `d_nr` is the type variable of the current generic
-        // context: it should be a struct-typed def whose name appears
-        // as the type variable across the fn's attributes.
+        // @PLN99 Arc B — route `{x}` / `{x:spec}` through the type's OWN
+        // `to_text(self, …)` for ANY struct, not only the current bounded-
+        // generic's type variable (the old gate required `context == Generic`).
+        // A struct with no `t_<len><Type>_to_text` method (`stub_nr == u32::MAX`
+        // below) falls back to the generic `OpFormatDatabase` dump — nothing
+        // regresses.
         if self.data.def_type(d_nr) != DefType::Struct {
             return None;
         }

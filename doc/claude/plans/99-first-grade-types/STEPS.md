@@ -213,4 +213,10 @@ as 3-backend script tests, green.
   is `false`. **The executed path diverges from the dumped IR** (a two-pass /
   optional-wrapping subtlety in the @PLN25 null model). Needs a runtime-instrument
   trace to close; a **pre-existing @PLN25 bug**, independent of the operator work.
-- **Arc B (format), Arc C (conversions) — not started.**
+- **Arc B Part 1 (bare `{x}` via `to_text`) — DONE.** `try_bound_to_text_call`
+  (`src/parser/collections.rs`) no longer gates on `context == Generic`; `{x}` on any
+  struct with a `t_<len><Type>_to_text` method routes through it (regression
+  `tests/scripts/512-first-grade-format.loft`), else the generic dump (no regression:
+  format 127, expressions 11, issues 748, wrap 51).
+- **Arc B Part 2 (thread `{x:spec}` + spec-parse branch) — not started.**
+- **Arc C (conversions) — not started.**

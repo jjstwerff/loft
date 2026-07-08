@@ -1,0 +1,18 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN99 Arc B (Part 1) — `{x}` on a user struct routes through the type's OWN
+// `to_text(self)` for ANY struct, not only inside a `<T: Printable>` generic
+// body. Before this, `{m}` on a concrete struct rendered the generic field dump
+// (`{cents:150}`). A struct with no `to_text` still falls back to that dump.
+// All three backends.
+
+struct Money { cents: integer not null }
+fn to_text(self: Money) -> text { "${self.cents}c" }
+
+fn main() {
+  m = Money { cents: 150 };
+  r = "{m}";
+  assert(r == "$150c", "direct interpolation routes through the struct's own to_text");
+  println("first-grade format ok r={r}");
+}
