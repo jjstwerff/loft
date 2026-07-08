@@ -5,12 +5,13 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # 98 — Live/debug tier: one primitive (the interpreter over the shared live store)
 
-**Status (2026-07-08):** P1 P2 P1b P3.1 P3.2 P3.3 P3.4 ✅ ALL LANDED. The full browser debug tier is
-proven end-to-end and headless: an agent debugs a `--html --debug` wasm client THROUGH an engine_host
-server over WebSockets (bp → pause → eval → resume), verified by
-`wasm_debug_relay::agent_debugs_a_browser_wasm_client_through_the_server_relay`. Remaining is polish
-only (full-expression eval on the wasm client — the P1b orchestration is native-only `repl` today; the
-one-heap write/read equivalence check; multi-file embedded source; the tier-wide default-lean flip). ·
+**Status (2026-07-08):** P1 P2 P1b P3.1 P3.2 P3.3 P3.4 ✅ ALL LANDED — @PLN98 is COMPLETE, all probes
+confirmed. The full browser debug tier is proven end-to-end and headless: an agent debugs a `--html
+--debug` wasm client THROUGH an engine_host server over WebSockets — breakpoint → pause → FULL-
+expression eval → resume — verified by
+`wasm_debug_relay::agent_debugs_a_browser_wasm_client_through_the_server_relay`; the one-shared-heap
+invariant (compiled ↔ interpreted agree) is confirmed on wasm (Probe 2). Only non-plan follow-ups
+remain (multi-file embedded source; the tier-wide default-lean release flip). ·
 [`@PLN98`](https://github.com/loft-lang/plans/issues/98) · `subject:loft` · design-doc-first (Design
 Protocol 1). Consumers: the `@PLN16` debugger, the game / `engine_host` loop, and `routing`'s offline
 `--html` build (its `loft-feedback.md` 2026-07-07).
@@ -389,8 +390,7 @@ Chromium works unsandboxed (`html_asyncify` passes). Two tests prove the interpr
    `DbRef`s. `State::frame_local_arg_type` renders any local's parseable type (`None` for `text` — a
    borrowed `Str` arg is @P293-unsafe → graceful fallback). No `repl`/`rpc` dependency, wasm-safe.
    **Verified**: `wasm_debug::tests` (native — `n + 2`=42, `n * n`=1600, `2 + 3`=5) and the wasm +
-   full-relay tests both now eval `n + 2`→42 end-to-end (agent → server → browser client). *(Only
-   remaining polish, not blockers: the one-heap compiled-write/interpreted-read equivalence check.)*
+   full-relay tests both now eval `n + 2`→42 end-to-end (agent → server → browser client).
 
 ### A3 — packaging: `--lean` opt-OUT, default LIVE (F3) ✅ LANDED (P2)
 
@@ -421,8 +421,13 @@ stays the runtime activation within a live-capable (default) build.
 1. **"F1 is the eval seam copying through text, fixable at one place."** ✅ largely confirmed by the map
    (path B vs path A; `@PLN16` README:280). Remaining probe: read `eval_frame_heap` and confirm a
    field/index live-read composes without a text round-trip.
-2. **"Sharing is one heap on wasm too."** After A2: compiled write → interpreted read of the same var →
-   agree. If they diverge, the swap didn't carry the world.
+2. **"Sharing is one heap on wasm too."** ✅ CONFIRMED (2026-07-08). A compiled write and an interpreted
+   read of the same var AGREE, both directions, on wasm — the swap carries the world. In a `--html
+   --debug` build (`flip_all` flips `reader`+`writer`, `main` stays compiled): main writes `w.a=777`
+   (compiled) → `reader` reads it (interpreted) → `r=777`; `writer` writes `w.b=999` (interpreted) → main
+   reads it (compiled) → `b=999` — identical to the all-compiled baseline. Guard:
+   `html_wasm::html_debug_one_shared_heap_compiled_and_interpreted_agree_on_wasm` (+ native
+   `LOFT_FLIP_FNS=reader,writer`).
 3. **"Opt-in is zero-cost-absent."** Grep the lean build's emitted Rust for `live_flipped` → must be 0.
 
 ## Out of scope (declared)
