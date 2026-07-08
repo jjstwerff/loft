@@ -269,7 +269,7 @@ First-time-user experience, daily ergonomics, IDE polish.
 |---|---|---|---|---|
 | P2 | REPL / interactive mode | M | ✓ | @PLN12 — plans/12-repl-and-introspection/README.md (**FINISHED** 2026-06-08; store-resident successor → @PLN14) |
 | W-warn | Developer warnings (Clippy-inspired) | M | ✓ | lib_plans/61-game-infra/README.md |
-| W-qual | Warning quality — stop nagging users about safe code (short-circuit guard recognition, `#null_safe` annotation, entry-guard inference, ASCII-peephole) | MH | ~ | plans/46-warning-quality/README.md |
+| W-qual | Warning quality — stop nagging users about safe code (short-circuit guard recognition, `#null_safe` annotation, entry-guard inference, ASCII-peephole) | MH | ✅ CLOSED | plans/46-warning-quality/README.md |
 | L1 | Error recovery after token failures | M | ✓ | (needs plan promotion) |
 | (cross) | Branch-aware doc + code review viewer (loft binary) | M | ✓ | plans/35-branch-review-viewer/README.md |
 
@@ -397,8 +397,8 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | Plan | E | Depends on | Notes |
 |---|---|---|---|
 | [`plans/29-match-validation/`](plans/29-match-validation) | M | (cross-mode harness shipped by closed @PLAN14) | Subject type × pattern shape matrix |
-| [`plans/30-struct-enum-validation/`](plans/30-struct-enum-validation) | M | (cross-mode harness shipped by closed @PLAN14) | Variant payload × dispatch context matrix |
-| [`plans/31-collection-validation/`](plans/31-collection-validation) | M | (cross-mode harness shipped by closed @PLAN14) | Hash / sorted / index / spacial × operation matrix |
+| [`plans/30-struct-enum-validation/`](plans/30-struct-enum-validation) | M | **✅ CLOSED 2026-07-09 (delivered)** | Variant payload × dispatch context matrix — feature shipped + ~135 tests; matrix demoted to docs per the plan's own gate |
+| [`plans/31-collection-validation/`](plans/31-collection-validation) | M | **✅ CLOSED 2026-07-09 (superseded)** | Motivating panic gone; hash/sorted/index validated cross-mode; spacial folds into @PLN48 |
 | [`plans/47-binary-io-validation/`](plans/47-binary-io-validation) | M | (cross-mode harness shipped by closed @PLAN14) | Value type × format × access-pattern matrix; absorbs @P289 (length-prefixed text/vectors, per-field struct serialization, `f#read as MyStruct`) |
 | [`plans/53-program-level-fuzzing/`](plans/53-program-level-fuzzing) | H | `fuzz/` crate exists (shipped under @PLAN53); F4 blocked on @PLN54 S3 (`LOFT_POISON`) | Coverage-guided ASan-instrumented fuzzing of loft source → parse → byte_code → execute; schema-coupled collections (tree/hash/sorted) via real programs; differential (interpret ≡ native ≡ wasm); OSS-Fuzz onboarding.  Spun off from @PLAN53 Wave 2 items #4/#6/#10 |
 | [`plans/54-sanitizer-coverage-expansion/`](plans/54-sanitizer-coverage-expansion) | M | @PLAN53 closed (PRs #235/#236/#237) | Expands the sanitizer CI stack @PLAN53 shipped: macOS-ARM nightly leg (highest — @P383 was macOS-ARM-only), ThreadSanitizer, `LOFT_POISON` keystone, LSan triage, growing Miri curated set, native-ASan, failure-notifier.  Successor to @PLAN53 Wave 2 (non-fuzzing items) |
@@ -428,7 +428,7 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | [`lib_plans/63-lsp/`](lib_plans/63-lsp) | M (LSP.1) / MH (LSP.2/3) | — | LSP.1 unblocks 4 IDE plugins + browser IDE |
 | [PACKAGES.md § Open work](PACKAGES.md#open-work) | S-M | — | PKG.7 + PKG.REG (format itself already shipped) |
 | [`lib_plans/12-library-extraction/`](lib_plans/12-library-extraction) | L | **PACKAGES.md § Open work PKG.REG** | Multi-release execution arc |
-| [`lib_plans/59-lazy-stdlib/`](lib_plans/59-lazy-stdlib) | M | — | Foundational — REGEX Phase 3 (lazy-load wire-up) is downstream consumer |
+| [`lib_plans/59-lazy-stdlib/`](lib_plans/59-lazy-stdlib) | M | **✅ CLOSED 2026-07-09 (superseded)** | Re-premised to `use`-loaded `lib/*` (crypto precedent); trigger-registry not built |
 | [`lib_plans/57-regex/`](lib_plans/57-regex) | S (Phase 0) / MH (Phase 1+) | — | **Phase 0 SHIPPED** (`regex` v0.1.0 at loft-libs-core/regex; matches/find/split).  Next: match_groups/replace.  Phase 1+ (pure-loft NFA) future.  Unblocks @PLN42 phase 07 scan.loft + check_doc_drift.sh ports |
 | [`plans/43-loft-store-durable/`](plans/43-loft-store-durable) | M | cooperates with **plans/42-tracker-index/07** + **plans/39-tic-tac-toe** + **plans/6-audience-generative-art** | Three-tier opt-in durability for loft mmap stores: IntegrityOnly (indexer), SnapshotEvery (TTT v5 sessions), WAL (audience demo).  Index is cheap test bed; game servers are critical consumers |
 | [`lib_plans/67-process/`](lib_plans/67-process) | M | — | `lib/process/` subprocess primitive — closes the indexer / viewer bash-wrapper dependency (dogfood-driven by @PLN42 + @PLAN35) |
@@ -451,7 +451,7 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | Plan | E | Depends on | Notes |
 |---|---|---|---|
 | [`plans/35-match-peg/`](plans/35-match-peg) | MH | — | L3 PEG-style match patterns (cooperates with regex lib) |
-| [`plans/38-sorted-slice/`](plans/38-sorted-slice) | M | — | A8 — slicing / open-ended ranges / partial-key match on sorted/index |
+| [`plans/38-sorted-slice/`](plans/38-sorted-slice) | M | **✅ CLOSED 2026-07-09 (delivered)** | A8 — slicing / open-ended ranges / partial-key match on sorted/index; shipped + per-sub-feature tests |
 | [`plans/40-const-fields/`](plans/40-const-fields) | M | — | `const` struct fields — closes INCONSISTENCIES.md § 33 (locals/params already support it) |
 
 ### Q — Internal quality

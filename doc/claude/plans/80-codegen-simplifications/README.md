@@ -7,6 +7,20 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
+**CLOSED 2026-07-09 — superseded (same disposition as @PLN79 / @PLN81).**  Tier 1
+shipped (2026-05-02).  Tier 3 (template migration) = @PLN81, now **closed by
+decision** — [DESIGN_DECISIONS.md § C87](../../DESIGN_DECISIONS.md) keeps the
+`#rust"..."` template path and **reverses** the direction (fold the ~5 emitters
+INTO `#rust`, not the other way), so Tier 3 is dead.  Tier 2's arm migration is
+already largely done: `src/generation/dispatch.rs::output_call_inner` is a clean
+registry-first 3-way dispatch, phase 03's format/append Ops are registered
+(`ops/text_ops.rs`) and phase 04's free Ops too (`ops/ref_ops.rs`, header:
+"Migrated out of dispatch.rs::output_call_inner").  Only phase 05
+(`narrow_int_cast` dual-role split) is undone, and this plan's own README marks
+it a **driverless revisit-note** ("holds the design for the eventual split when a
+future bug surfaces") — a revisit condition, not a paused deliverable.  Original
+tier table follows.
+
 | Tier | Phases | State |
 |---|---|---|
 | **1** — Correctness + cleanup | 01 (walker audit) + 02 (forwarding-smoke retire) | **SHIPPED 2026-05-02** on branch `plan-12-codegen-simplifications` (commits `c0c27e5` + `d446e5d`).  Reference for the walker-unspan convention lives in [NATIVE.md § Walker convention](../../NATIVE.md#walker-convention--always-unspan-before-matching-value).  The forwarding-smoke retirement is a one-time cleanup; the residual recipe stays in [NATIVE.md § Forwarding-first recipe](../../NATIVE.md#forwarding-first-recipe-verify-before-writing-real-emission). |

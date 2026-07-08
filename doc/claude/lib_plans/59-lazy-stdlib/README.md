@@ -7,7 +7,15 @@
 Goal: a CLI script (or any program) should not pay the parse + bytecode
 + symbol-table cost of stdlib it never touches.
 
-Status: **re-premised (scripting branch, 2026-05-31).**  The original
+Status: **CLOSED 2026-07-09 — superseded (re-premised).**  The superseding
+mechanism already ships and is proven: `lib/*` packages load only on `use <name>`
+(the `crypto` precedent moved its natives out of the always-loaded core), and
+~20 libraries adopt this today.  The bespoke trigger-registry this plan first
+proposed is explicitly **not being built**; the cold-start motive is further
+mitigated by the shipped stdlib cache (@PLN52, closed — `src/startup_cache.rs`).
+Nothing left to build.  Original re-premise note follows.
+
+The original
 plan proposed a bespoke **trigger registry** that auto-loads
 `default/*.loft` modules when the parser sees a type/identifier
 trigger.  A code-path audit during the `scripting` branch found that

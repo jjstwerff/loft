@@ -3,12 +3,20 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# 42 — Warning quality: stop nagging users about safe code
+# @PLN46 — Warning quality: stop nagging users about safe code
 
 ## Status
 
-**COMPLETE — W1 + W2 + W3 shipped (false-positive elimination); W4 verified not
-worth it (skip).**  Discovered while
+**CLOSED 2026-07-09 — COMPLETE (W1 + W2 + W3 shipped, false-positive elimination;
+W4 verified not worth it, skip).**  Code + tests cited per sub-arc below
+(`src/parser/operators.rs`, `tests/runtime_warnings.rs`).  Note: @PLN25 DN1 later
+retired the underlying runtime-null warning entirely (static `τ?` / N-Store
+enforcement), so W2/W3's `#null_safe` suppression is now largely moot — but the
+plan's goal (no warning on safe code; the warning still fires on genuinely
+unguarded user code) is met by W1–W3 and, more strongly, by DN1.  Original
+completion record follows.
+
+Discovered while
 auditing `tools/indexer/src/scan.loft` on 2026-05-18: 30+
 `s[i] may produce null on out-of-bounds with no defensive check`
 warnings, every one a false positive on code that either uses a

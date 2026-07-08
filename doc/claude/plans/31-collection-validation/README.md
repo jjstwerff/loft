@@ -5,7 +5,16 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLN31 — Keyed collection validation (hash / sorted / index / spacial)
 
-**Status: deferred — pre-flight panic does not currently reproduce.**
+**Status: CLOSED 2026-07-09 — superseded / nothing left to fix.**  The
+motivating panic (`index out of bounds` at `src/database/structures.rs:609`) no
+longer exists — line 609 is now `vector_set_size` (relocation-safe) and no such
+panic remains in the file.  The three live keyed types (hash / sorted / index)
+are validated cross-mode by the `tests/scripts/1xx-keyed-*.loft` corpus (119,
+120, 122, 126–137) + `62-index-range-queries.loft`,
+`129-sorted-index-field-deepcopy.loft`.  The 4th type, **spacial**, is
+unimplemented and fully owned by the open **@PLN48** (spacial index) — its
+validation folds there.  The matrix in [00-matrix.md](00-matrix.md) is preserved
+as historical record.
 
 The 2026-05-04 pre-flight survey saw a runtime panic
 (`index out of bounds: the len is 66 but the index is 65535` at
