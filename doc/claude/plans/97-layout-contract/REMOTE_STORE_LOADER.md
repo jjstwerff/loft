@@ -32,14 +32,18 @@ leak-clean; `store_verify` on every load; each with a prove-can-fail control):
   point lookup touches O(1) pages) and `LOFT_LOADER_STATS` observes `bytes_fetched` vs file.
 - **`--html` `fetch()` bridge** (browser target).
 
-> **Retracted (2026-07-08):** an earlier note here claimed a native-codegen bug — a `#rust` builtin
-> with a `reference` arg AND ≥2 integer-literal args mis-binding the reference to an unbound
-> `_v_local` under pre-eval. It does **not** reproduce: `store_load_range(local, path, lo, hi)` with
-> the body `stores.load_range(&(@local), @path, @lo, @hi)` compiles and runs on `--native` (verified
-> by `--native-emit` + a real compile across the literal-int, variable-int, and repeated-`@local`
-> P203 paths). The original workaround (bounds as a `vector<integer>`) has been reverted to this
-> natural scalar API. The in-flight failure that prompted it was almost certainly a missing
-> interpreter handler / stale binary, not codegen.
+> **Codegen bug FIXED (2026-07-08, `ece0f2a6`).** The workaround here was real, but the filed
+> scope ("`reference` arg + ≥2 integer literals") was wrong. Root cause: `#rust` template
+> substitution matched `@name` placeholders as raw SUBSTRINGS, so in
+> `store_load_range(local, path, lo, hi)` → `stores.load_range(&(@local), @path, @lo, @hi)` the
+> short `@lo` was seen INSIDE `@local`; the P203 repeated-use pre-eval over-counted, fired, and
+> rewrote `@local` to an unbound `_v_local` (rustc E0425 on `--native`). Fixed at the chokepoint:
+> whole-token `count_placeholder` / `replace_placeholder` (a match only counts when the char after
+> `@name` is not an identifier char), applied to every `@param` substitution — so a prefix collision
+> (`lo`/`local`) can never corrupt the longer name, in any attribute order. With the real bug fixed,
+> the `vector<integer>` workaround was reverted to the natural scalar `store_load_range(local, path,
+> lo, hi)`. Unit tests in `src/generation/calls.rs` pin the invariant; the 3-backend
+> `store_load_range.loft` guards it end-to-end.
 
 ## Two consumers, one general primitive
 
