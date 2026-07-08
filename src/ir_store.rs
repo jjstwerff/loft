@@ -135,7 +135,7 @@ fn write_type(stores: &mut Stores, slot: &Record, ty: &Type) {
         // @PLN101 — value struct shares Reference's binary shape. TODO(Slice 1.8): a distinct
         // TY_VALUE discriminant so the binary store round-trips value-ness (harmless until a
         // value struct enters the store-serialised corpus; runtime reads live Data).
-        Type::Reference(n, dep) | Type::Value(n, dep) => {
+        Type::Reference(n, dep) | Type::Value(n, _, dep) => {
             slot.set_discriminant(stores, ds::TY_REFERENCE);
             slot.set_field_int(stores, ds::TYREF_N, i64::from(*n));
             dep_list(stores, slot, ds::TYREF_DEP, dep);

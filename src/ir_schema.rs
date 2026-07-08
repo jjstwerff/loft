@@ -161,9 +161,9 @@ fn write_type(out: &mut String, ty: &Type) {
             write_u16_list(out, dep);
             out.push('}');
         }
-        // @PLN101 — value struct: same shape as Reference, distinct tag so it round-trips.
-        Type::Value(n, dep) => {
-            let _ = write!(out, "{{\"k\":\"Value\",\"n\":{n},\"dep\":");
+        // @PLN101 — value struct: like Reference + the embedded inline size, distinct tag.
+        Type::Value(n, sz, dep) => {
+            let _ = write!(out, "{{\"k\":\"Value\",\"n\":{n},\"size\":{sz},\"dep\":");
             write_u16_list(out, dep);
             out.push('}');
         }
@@ -396,7 +396,11 @@ fn type_from_parsed(p: &Parsed) -> Result<Type, TypeDecodeError> {
             deps(field(p, "dep")?)?,
         ),
         "Reference" => Type::Reference(as_u32(field(p, "n")?)?, deps(field(p, "dep")?)?),
-        "Value" => Type::Value(as_u32(field(p, "n")?)?, deps(field(p, "dep")?)?),
+        "Value" => Type::Value(
+            as_u32(field(p, "n")?)?,
+            as_u32(field(p, "size")?)? as u16,
+            deps(field(p, "dep")?)?,
+        ),
         "RefVar" => Type::RefVar(Box::new(type_from_parsed(field(p, "t")?)?)),
         // @PLN25 — preserve the nullable marker (write side pairs it under "inner").
         "Optional" => Type::Optional(Box::new(type_from_parsed(field(p, "inner")?)?)),

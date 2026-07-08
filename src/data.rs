@@ -1319,10 +1319,14 @@ pub enum Type {
     Reference(u32, Deps),
     /// @PLN101 — an inline BY-VALUE struct (`value struct`): the same record layout as
     /// `Reference(def)` but stored inline (packed bytes) wherever it lives and COPIED on bind,
-    /// like a tuple/scalar — never borrowed, no `DbRef` view dep, no free. Most `match Type`
-    /// arms mirror `Reference`; `size`/`align`/`element_size` (inline packed size), `depend`
-    /// (none), and `has_lifetime_concern` (false) are where value semantics lives.
-    Value(u32, Deps),
+    /// like a tuple/scalar — never borrowed, no `DbRef` view dep, no free. The `u16` is the
+    /// **inline stack/record size in bytes** (the def's `types[t_nr].size`), EMBEDDED so the
+    /// `&Type`-only layout fns (`variables::size`/`element_size`, called by the slot allocator
+    /// which has no `Data`) can size a value-struct slot inline — that inline slot is what makes
+    /// copy-on-bind fall out (a `DbRef`-sized slot would not memcpy). Minted post-finish
+    /// (Step 1.4) when `types[t_nr].size` is known. `depend` (none) and `has_lifetime_concern`
+    /// (false) already fall out of the defaults; the `size`/`align` arms are the value semantics.
+    Value(u32, u16, Deps),
     /// A reference to a variable on stack.
     RefVar(Box<Type>),
     /// A dynamic vector of a specific type
@@ -1414,7 +1418,7 @@ impl Type {
             | Type::Keys
             | Type::Enum(_, _, _)
             | Type::Reference(_, _)
-            | Type::Value(_, _)
+            | Type::Value(_, _, _)
             | Type::Routine(_)
             | Type::Sorted(_, _, _)
             | Type::Index(_, _, _)
@@ -1687,7 +1691,7 @@ impl Type {
             Type::Optional(tp) => format!("{}?", tp.name(data)),
             Type::Rewritten(tp) => tp.name(data),
             Type::RefVar(tp) => format!("&{}", tp.name(data)),
-            Type::Enum(t, _, _) | Type::Reference(t, _) | Type::Value(t, _) => {
+            Type::Enum(t, _, _) | Type::Reference(t, _) | Type::Value(t, _, _) => {
                 data.def(*t).name.clone()
             }
             Type::Text(_) => "text".to_string(),
@@ -1914,6 +1918,8 @@ pub fn element_align(t: &Type) -> u8 {
         | Type::Hash(_, _, _)
         | Type::Spacial(_, _, _)
         | Type::Enum(_, true, _) => 4,
+        // @PLN101 — value struct aligned inline; 8 conservative-safe (i64 fields).
+        Type::Value(_, _, _) => 8,
         Type::Tuple(elems) => element_offsets_alignment_max(elems),
         _ => 1,
     }
@@ -1955,6 +1961,8 @@ pub fn element_size(t: &Type) -> usize {
         | Type::Hash(_, _, _)
         | Type::Spacial(_, _, _)
         | Type::Enum(_, true, _) => std::mem::size_of::<crate::keys::DbRef>(),
+        // @PLN101 — value struct inline: the embedded packed record size, not a DbRef.
+        Type::Value(_, sz, _) => *sz as usize,
         Type::Tuple(elems) => {
             // Atomic-group size: each element padded to its natural-
             // alignment boundary inside the tuple block.  Identical
@@ -4938,7 +4946,7 @@ impl Data {
             Type::Character => "character".to_string(),
             Type::Text(_) => "text".to_string(),
             Type::Keys => "keys".to_string(),
-            Type::Enum(d_nr, _, _) | Type::Reference(d_nr, _) | Type::Value(d_nr, _) => {
+            Type::Enum(d_nr, _, _) | Type::Reference(d_nr, _) | Type::Value(d_nr, _, _) => {
                 self.def(*d_nr).name.clone()
             }
             Type::RefVar(inner) => format!("&{}", self.type_name_str(inner)),
