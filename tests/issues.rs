@@ -15647,3 +15647,45 @@ fn pln87_l7_heap_reference_live_across_reassign() {
         .expr("check()")
         .result(Value::Int(9));
 }
+
+/// Regression (routing consumer, docs/loft-feedback.md 2026-07-08 "Incorrect loop
+/// finish"): a `for` loop variable reused across two sequential loops of DIFFERENT
+/// element types is invalid under loft's flat scoping — the reused name keeps the
+/// FIRST loop's type (`add_variable` only refines an unknown type for a user var),
+/// so a field access on the SECOND loop variable resolves against the stale type,
+/// fails, and leaves the loop with no iterable.  That error path in `parse_for`
+/// ("Need an iterable expression") used to `return` WITHOUT `finish_loop`-ing the
+/// loop scope it had already opened, so the ENCLOSING loop's `finish_loop` tripped
+/// the `assert_eq!(current_loop, loop_nr)` "Incorrect loop finish" panic — masking
+/// the real diagnostic.  The parse must now diagnose cleanly (the field error)
+/// instead of panicking; this test would panic inside `parse_str` before the fix.
+#[test]
+fn loop_var_reuse_different_type_diagnoses_not_panics() {
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).unwrap();
+    // `t` is a `Pt` in the first loop and an `Rt` in the second; `t.roads` in the
+    // second body resolves against the stale `Pt` type (which has no `roads`
+    // field) → no iterable → the previously-leaking error path.
+    p.parse_str(
+        "struct Pt { tkey: integer, areas: vector<integer> }
+struct Rt { tkey: integer, roads: vector<integer> }
+fn main() {
+  layout: hash<Pt[tkey]> = [];
+  roads: hash<Rt[tkey]> = [];
+  for t in layout { for a in t.areas { println(\"{a}\"); } }
+  for t in roads { for r in t.roads { println(\"{r}\"); } }
+}",
+        "loop_var_reuse_different_type",
+        false,
+    );
+    assert!(
+        p.diagnostics.level() >= loft::diagnostics::Level::Error,
+        "expected a compile error for invalid same-name loop-var reuse, got: {:?}",
+        p.diagnostics.lines()
+    );
+    assert!(
+        p.diagnostics.lines().iter().any(|l| l.contains("Pt.roads")),
+        "expected an 'Unknown field Pt.roads' diagnostic, got: {:?}",
+        p.diagnostics.lines()
+    );
+}

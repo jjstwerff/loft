@@ -1805,6 +1805,17 @@ use #count instead"
                     Level::Error,
                     "Need an iterable expression in a for statement"
                 );
+                // Balance the loop stack before bailing: `start_loop` (above)
+                // has already pushed this loop's scope, so a bare `return`
+                // leaves `current_loop` pointing at it and the ENCLOSING loop's
+                // `finish_loop` then trips the "Incorrect loop finish" assert
+                // (a hard panic masking this diagnostic).  Mirrors the `#fields`
+                // early-return at the top of this function.  Reached e.g. when a
+                // loop variable is reused across two sequential loops of
+                // different element types (`for t in a {…} for t in b {…}`): the
+                // reused name keeps the first type, so a field access on the
+                // second loop var fails to resolve and yields no iterator.
+                self.vars.finish_loop(loop_nr);
                 return;
             }
             // P235 step 2: with for_var resolved, define each destructured
