@@ -199,7 +199,11 @@ fn run_wasm(path: &Path) -> Option<ModeRun> {
     if !wasm_toolchain_present() {
         return None;
     }
-    let stem = path.file_stem().unwrap_or_default().to_string_lossy().into_owned();
+    let stem = path
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
     let out = std::env::temp_dir().join(format!("loft_oracle_{stem}_{}.wasm", std::process::id()));
     let compile = Command::new(loft_bin())
         .arg("--native-wasm")
