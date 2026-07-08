@@ -228,7 +228,13 @@ as 3-backend script tests, green.
   `to_text` def is collected in both passes → both take the raw branch).
   Regression `tests/scripts/512-first-grade-format.loft`; no regression (format 127,
   expressions 11, issues 748, **parse_errors 158**, wrap 51).
-- **Arc C (conversions) — not started.** `x as T` for a custom target: today
-  `"…" as DateTime` silently yields `ms=null` (probe). Dispatch a user conversion via
-  the `OpConv<To>From<From>` / `self.convert` path (`src/parser/fields.rs`), else clean-
-  reject; special-case `text as T` (parse); integrate `as T ?? default` (#512).
+- **Arc C (conversions) — LOCATED, not implemented.** The `as` cast is handled at
+  `src/parser/operators.rs:1852` (`else if operator == "as"`) — a dense block of
+  @PLN25 null-model logic (DN4 range-fit, DN5 nullness, narrowing-int). For a
+  target with no matching `OpConv…` the cast is **type-only** (no value conversion),
+  so `"…" as DateTime` reinterprets the text ref as a struct ref → the silent
+  `ms=null`. Fix: where the target is a custom struct, resolve a user conversion
+  `S → T` (via `find_fn` / the `OpConv<To>From<From>` convention), emit its call,
+  and if none exists **error** instead of the type-only reinterpret; special-case
+  `text as T` (parse); integrate with `as T ?? default` (#512). Delicate — must not
+  disturb the DN4/DN5/narrowing branches; do with the cast/narrowing suites as the gate.
