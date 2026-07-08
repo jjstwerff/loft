@@ -7,12 +7,13 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**PARKED (deferred with a concrete trigger) 2026-07-09.**  Not "not started" —
-its highest-value slices landed **opportunistically inside sibling stability
-plans**, which is exactly how program-level fuzzing has proven to get built
-here: a stability plan pulls in the fuzz coverage it needs, rather than this
-plan driving a standalone 5-arc push.  What actually shipped since this plan
-opened (2026-05-31):
+**OPEN (`status:future`) — ledger reconciled 2026-07-09.  Parking is
+RECOMMENDED (defer with the trigger below), but that decision is the owner's
+call, not yet made.**  This plan is not "not started": its highest-value slices
+landed **opportunistically inside sibling stability plans**, which is exactly
+how program-level fuzzing has proven to get built here — a stability plan pulls
+in the fuzz coverage it needs, rather than this plan driving a standalone 5-arc
+push.  What actually shipped since this plan opened (2026-05-31):
 
 - **F4 dependency cleared + F4 substantially done** — @PLN25 landed the
   `LOFT_POISON` arena poison-on-free keystone (@PLN54 S3), and the
@@ -30,16 +31,17 @@ opened (2026-05-31):
   assertion — but over a **fixed ~29-program corpus**, not coverage-guided
   fuzzed programs.
 
-**Why park rather than push or close:** no active driver, and the
-highest-risk slice (ownership over-free + poison) is already covered by
-`program_ownership`.  But real coverage remains genuinely unbuilt — so this is
-a *defer*, not a close-by-decision.  **Residual, all unstarted:** F1
+**Why parking is the recommendation (not close, not push):** no active driver,
+and the highest-risk slice (ownership over-free + poison) is already covered by
+`program_ownership`.  But real coverage remains genuinely unbuilt — so the
+recommendation is a *defer*, not a close-by-decision.  **Residual, all
+unstarted:** F1
 (mutational raw-source target seeded from the ~2000 `.loft` files), **F2's
 `hash`/`sorted`/`index` + closure axes** (the schema-coupled collection
 coverage loft's heap model actually wants), F3-over-*fuzzed*-programs, and F5
 (OSS-Fuzz onboarding).
 
-**Resume trigger — pick this up when any fires:**
+**Resume trigger (if parked) — pick this up when any fires:**
 1. A **schema-coupled collection bug** (a `hash`/`sorted`/`index` UAF or
    layout violation) surfaces that `program_ownership`'s ownership grammar
    cannot generate → build **F2's keyed-container axis** then.
@@ -62,7 +64,7 @@ as a cluster in the catalogue below.
 
 - **Effort:** H (fuzzer bring-up is fast; finding-triage is open-ended)
 - **Design:** ~ (sub-arc design below; F3/F4/F5 need further detail)
-- **Last touched:** 2026-07-09 (parked; ledger reconciled to reality)
+- **Last touched:** 2026-07-09 (ledger reconciled to reality; parking recommended, not yet decided)
 
 ## Motivation
 
