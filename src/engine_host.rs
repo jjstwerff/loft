@@ -376,6 +376,14 @@ struct Kernel {
     /// returns at the top of its next turn (mirror of the connector's
     /// `client_stop`).
     alive: bool,
+    /// @PLN98 P3.4 — debug RELAY: a client that opted into debugging
+    /// (`--debug=<name>`) registers its NAME here (conn slot → name), so an
+    /// agent's `D!:@<name>:<cmd>` frame forwards to that client's socket.
+    debug_names: std::collections::HashMap<usize, String>,
+    /// @PLN98 P3.4 — while a forwarded debug command is outstanding: the client
+    /// conn slot → the agent conn slot that sent it, so the client's `D!:reply`
+    /// routes back to the requesting agent.
+    debug_relay: std::collections::HashMap<usize, usize>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -680,6 +688,8 @@ fn listen_impl(port: i64, tick_us: i64) -> bool {
                     last_tick_us: 0,
                     warned_oversize: false,
                     alive: true,
+                    debug_names: std::collections::HashMap::new(),
+                    debug_relay: std::collections::HashMap::new(),
                 });
             });
             // @PLN18 08-S5 — the swap-resume handshake: when this process was
@@ -1952,6 +1962,26 @@ fn handle_debug_control(k: &mut Kernel, cid: usize, cmd: &str) {
     if !debug_control_enabled() {
         return; // not a debug host: the frame is silently dropped
     }
+    let cmd = cmd.trim();
+
+    // @PLN98 P3.4 — a debug CLIENT (a game peer that opted into `--debug=<name>`)
+    // registers its name, so an agent can address it by name.  From ANY peer.
+    if let Some(name) = cmd.strip_prefix("iam ") {
+        let name = name.trim().to_string();
+        k.debug_names.insert(cid, name.clone());
+        let _ = deliver(k, cid, &format!("D:registered {name}"), false);
+        return;
+    }
+    // @PLN98 P3.4 — a debug CLIENT relays a `D:` reply back to the agent that
+    // sent the outstanding forwarded command.
+    if let Some(msg) = cmd.strip_prefix("reply ") {
+        if let Some(&agent) = k.debug_relay.get(&cid) {
+            let _ = deliver(k, agent, msg.trim(), false);
+        }
+        return;
+    }
+
+    // Everything else is an AGENT command — trusted, so LOOPBACK-gated.
     let loopback = k.conns[cid]
         .as_ref()
         .and_then(|c| c.peer_addr().ok())
@@ -1959,6 +1989,38 @@ fn handle_debug_control(k: &mut Kernel, cid: usize, cmd: &str) {
     if !loopback {
         return;
     }
+
+    // @PLN98 P3.4 — forward `@<name>:<inner>` to the named client's socket and
+    // remember the reply route (client → this agent).  The client applies the
+    // `D!:<inner>` frame over its own host_input pump and answers with `D!:reply`.
+    if let Some(rest) = cmd.strip_prefix('@')
+        && let Some((name, inner)) = rest.split_once(':')
+    {
+        let client = k
+            .debug_names
+            .iter()
+            .find(|(_, n)| n.as_str() == name)
+            .map(|(&slot, _)| slot);
+        match client {
+            Some(client_cid) => {
+                k.debug_relay.insert(client_cid, cid);
+                let framed = format!("D!:{}", inner.trim());
+                let sent = k
+                    .conns
+                    .get_mut(client_cid)
+                    .and_then(|c| c.as_mut())
+                    .is_some_and(|conn| write_frame(conn, 1, framed.as_bytes()).is_ok());
+                let verdict = if sent { "relayed" } else { "unreachable" };
+                let _ = deliver(k, cid, &format!("D:{verdict} {name}"), false);
+            }
+            None => {
+                let _ = deliver(k, cid, &format!("D:err no debug client {name}"), false);
+            }
+        }
+        return;
+    }
+
+    // Local (THIS server's own interpreter) debug — the server-authoritative path.
     if let Some(msg) = debug_cmd_dispatch(cid as i64, cmd) {
         let _ = deliver(k, cid, &msg, false);
     }

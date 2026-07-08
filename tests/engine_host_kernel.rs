@@ -2082,3 +2082,86 @@ fn main() {{
     );
     let _ = std::fs::remove_file(&prog);
 }
+
+// @PLN98 P3.4 (item 2) — the SERVER per-name debug RELAY: an agent debugs a
+// SEPARATE named client THROUGH the game server, over the WebSockets both hold.
+// A client registers `D!:iam <name>`; the agent sends `D!:@<name>:<cmd>`; the
+// server forwards `D!:<cmd>` to that client's socket and relays the client's
+// `D!:reply <msg>` back to the agent. This is the agent->server->client hop the
+// browser debugger needs (the client half is verified on wasm; here the client is
+// a native WS peer standing in for it).
+#[test]
+fn server_relays_debug_frames_to_a_named_client() {
+    if !loft_bin().exists() {
+        eprintln!("skipping: release loft not built");
+        return;
+    }
+    let port = 19318;
+    let prog = test_tmp().join(format!("eh_relay_{port}_{}.loft", std::process::id()));
+    std::fs::write(
+        &prog,
+        format!(
+            r#"
+use engine_host;
+struct W {{ ticks: integer not null }}
+fn main() {{
+  w = W {{ ticks: 0 }};
+  engine_host::run({port}, 100000,
+    fn(ev: engine_host::Event) {{ if ev.kind != 1 {{ return; }} }},
+    fn() {{ w.ticks = w.ticks + 1; }});
+}}
+"#
+        ),
+    )
+    .unwrap();
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut cmd = Command::new(loft_bin());
+    cmd.env("LOFT_OFFLINE", "1")
+        .env("LOFT_DEBUG_CONTROL", "1")
+        .process_group(0)
+        .arg("--no-warnings")
+        .arg("--lib")
+        .arg(root.join("lib"))
+        .arg(&prog)
+        .current_dir(&root)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let child = cmd.spawn().expect("spawn kernel");
+    let _guard = Guard(Some(child));
+
+    let recv_until = |ws: &TcpStream, needle: &str| -> String {
+        let deadline = vm_deadline(15);
+        loop {
+            let m = ws_recv(ws);
+            if m.contains(needle) {
+                return m;
+            }
+            assert!(Instant::now() < deadline, "never saw {needle:?}");
+        }
+    };
+
+    // The CLIENT (standing in for the browser) registers its debug name.
+    let client = ws_connect(port);
+    ws_send(&client, "D!:iam alice");
+    recv_until(&client, "D:registered alice");
+
+    // The AGENT forwards a debug command addressed to that client BY NAME.
+    let agent = ws_connect(port);
+    ws_send(&agent, "D!:@alice:bp tick");
+    recv_until(&agent, "D:relayed alice"); // the server accepted + forwarded
+
+    // The client receives the FORWARDED frame and answers with a D:reply, which
+    // the server routes back to the agent.
+    let fwd = recv_until(&client, "D!:bp tick");
+    assert!(
+        fwd.contains("D!:bp tick"),
+        "client got the forwarded frame: {fwd}"
+    );
+    ws_send(&client, "D!:reply D:ok bp tick applied-at-client");
+    let relayed = recv_until(&agent, "applied-at-client");
+    assert!(
+        relayed.contains("D:ok bp tick applied-at-client"),
+        "the client's reply was relayed back to the agent: {relayed}"
+    );
+    let _ = std::fs::remove_file(&prog);
+}
