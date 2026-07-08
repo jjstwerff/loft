@@ -5,7 +5,21 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLN84 — Zero-trust shared-files: loft library enablement
 
-Status: **active** (tracking) · Issue: [loft-lang/plans#84](https://github.com/loft-lang/plans/issues/84) · Subject: libs
+Status: **DONE / CLOSED 2026-07-08** (tracking) · Issue: [loft-lang/plans#84](https://github.com/loft-lang/plans/issues/84) · Subject: libs
+
+> **Closed — loft ENABLEMENT complete.** The mission of this tracking plan — clear the loft-side
+> gates + ship the mechanisms so the zero-trust libraries can be built — is done: **all compiler
+> gates cleared** (#405–409, #417), the `[wasm.bridge]` build-extension + `loft_`-prefix host
+> imports + headless verify loop shipped, and the core libs built: **ZT-A cbor** (encode/decode
+> incl. maps), **ZT-B crypto** (all 15 primitives bridge `native == wasm` + HPKE, 59 KATs both
+> backends), **ZT-D1 server TLS** (reverse-proxy runbook). Per the plan's own line — *"remaining
+> work has NO compiler gate; it is browser-bridge library development"* — the residual is pure
+> library dev, not loft enablement, so it moves OUT of this plan:
+> - **ZT-C web WebSocket wasm-bridge** and **ZT-E signed-plugin runtime** — design-only, unbuilt;
+>   **consumer-owned** (their `loft-libs-*` repos / their own lib plans if loft ever picks them up).
+> - **ZT-D2** (in-loft rustls), **crypto v0.4** (PQ KEM), **MLS** — stay **trigger-deferred** (below).
+> - **Loose end:** confirm the crypto wasm-bridge commits (`9811181`/`cdf9515`/`4328ace` on
+>   `loft-libs-core` `cbor`) actually pushed — as of 2026-06-21 they were unpushed-local.
 
 The loft libraries the **zero-trust-shared-files** consumer
 (`/home/jurjen/workspace/zero-trust-shared-files`) needs, taken from its
