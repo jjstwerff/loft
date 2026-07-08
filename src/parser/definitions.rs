@@ -1551,6 +1551,20 @@ impl Parser {
     ) -> Option<Type> {
         let t = self.parse_type_inner(on_d, type_name, returned)?;
         if self.lexer.has_token("?") {
+            // @PLN101 — a `value struct` is stored INLINE (bytes, no `DbRef`), so it has no
+            // `store_nr` null sentinel: `<value struct>?` cannot be represented. Reject it with
+            // a clear diagnostic; fall through as the plain (non-null) type to avoid a cascade.
+            if let Type::Reference(p, _) = &t
+                && self.data.is_value_struct(*p)
+            {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "`{type_name}?` is not allowed — a `value struct` is stored inline and has \
+                     no null; use a plain `{type_name}`, or a reference `struct` for nullability"
+                );
+                return Some(t);
+            }
             // @PLN25 slice (a): the postfix `?` constructs the real `Optional` former
             // (idempotent + normalising via `Type::optional`). GATED on `LOFT_PLN25_OPT`
             // while the slice-(b) peel audit is incomplete — OFF keeps the Phase-0 no-op

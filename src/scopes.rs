@@ -1563,12 +1563,6 @@ fn inject_free_borrowed() -> Option<&'static str> {
         .as_deref()
 }
 
-/// Scope / lifetime analysis pass over every function definition.
-///
-/// # Panics
-/// Under the `LASTUSE_RECLAIM` gate only (a Plan-57 testing build), panics if the
-/// reclaim pass left a store the model says is dead un-freed past a later
-/// allocation (the Phase-4 Goal-E watermark guard).  Never panics in normal builds.
 /// @PLN101 — ISOLATED value-struct copy pass. A `value struct` is an ordinary
 /// `Type::Reference` record (marked only by `Data.value_structs`); the ONLY behavioural
 /// difference is value (copy) semantics. When such a struct is BOUND to a local from a VIEW
@@ -1682,6 +1676,12 @@ fn vs_copy_walk(
     }
 }
 
+/// Scope / lifetime analysis pass over every function definition.
+///
+/// # Panics
+/// Under the `LASTUSE_RECLAIM` gate only (a Plan-57 testing build), panics if the
+/// reclaim pass left a store the model says is dead un-freed past a later
+/// allocation (the Phase-4 Goal-E watermark guard).  Never panics in normal builds.
 pub fn check(data: &mut Data) {
     // @PLN94 — the CFG/dataflow completeness oracle, an OBSERVER reached only via
     // LOFT_OWN_ORACLE (SI-1: shipped codegen byte-identical; a no-op when unset).

@@ -21,6 +21,14 @@ fn wrong_boolean() {
         .warning("Parameter t is never read at wrong_boolean:2:19");
 }
 
+// @PLN101 — a `value struct` is stored inline (no `store_nr` null sentinel), so `<value struct>?`
+// has no representation and is rejected.
+#[test]
+fn value_struct_no_nullable() {
+    code!("value struct P { x: integer }\nfn test() { q: P? = P { x: 1 }; }")
+        .error("`P?` is not allowed — a `value struct` is stored inline and has no null; use a plain `P`, or a reference `struct` for nullability at value_struct_no_nullable:2:20");
+}
+
 #[test]
 fn unknown_var() {
     code!("fn test() { a == 1 }").error("Unknown variable 'a' at unknown_var:1:13");

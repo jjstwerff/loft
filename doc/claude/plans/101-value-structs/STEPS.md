@@ -166,9 +166,15 @@ pre-existing cdylib/WASM flakes fail.
 leak/UAF); full suite green. Then flip `515` + add a `vector<DateTime>` / DateTime-field
 regression and graduate to `tests/scripts/`.
 
-### Step 1.4 — non-null init (Q4, locked)
-A `value struct` has no null; reject an uninitialised value-struct local/field (require a value or
-a declared default), enforced at the declaration site. Deferable past the copy pass.
+### Step 1.4 — non-null enforcement — DONE (commit pending)
+A `value struct` is inline bytes with no `store_nr` null sentinel, so it has no null:
+- **`<value struct>?` is REJECTED** at the `?` type-suffix (`parse_type`, definitions.rs:1553)
+  with a clear diagnostic — new. Negative regression `tests/parse_errors.rs::value_struct_no_nullable`.
+- **`p: P = null` is REJECTED** by DN1 (a plain non-null slot rejects null) — existing, no work.
+- **An omitted value-struct field ZERO-inits** (a valid `P{cents:0}` — a default value, NOT null)
+  — the implicit default satisfies "a value or a declared default"; no rejection needed.
+- Reference `struct?` stays nullable — the rule is value-struct-specific. No regression
+  (issues 748, parse_errors 159, wrap 51); clippy clean.
 
 ### Step 1.5 — @PLN99 dispatch + native (should be free)
 Operators/format/conversions dispatch by def (`find_op_method`) — unchanged (value structs keep
