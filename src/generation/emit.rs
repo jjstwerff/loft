@@ -396,7 +396,13 @@ impl Output<'_> {
                             if self.block_contains_ncc_skip_free(b));
                         let false_has_ncc = matches!(&**false_v, Value::Block(b)
                             if self.block_contains_ncc_skip_free(b));
-                        true_has_ncc || false_has_ncc
+                        // #534 — a `String`-vs-`&str` arm mismatch is unified to
+                        // owned `String` by `output_if_inner`, so this buffered
+                        // (`Str::new`) return must route it through the work
+                        // buffer too, exactly like the ncc case.
+                        true_has_ncc
+                            || false_has_ncc
+                            || self.text_if_mismatched_reps(true_v, false_v)
                     };
                     write!(w, "return ")?;
                     if outer_owned {
@@ -1253,8 +1259,15 @@ impl Output<'_> {
         // "expected `&String`, found `Str`".  Wrapping each non-Block
         // branch with `&*(...)` forces a common `&str` (idempotent on
         // `&String` and `&str`, valid on `Str` via its `Deref<Target=str>`).
+        // #534 — when the two text arms deliver mismatched Rust reps (a
+        // `String` call arm vs a `&str` literal/interpolation arm), `&*(…)`
+        // cannot unify them: borrowing an owned-`String` temporary would
+        // dangle.  Defer to `text_string_unify` below (owned `String` for
+        // both) instead.
+        let text_mismatch = self.text_if_mismatched_reps(true_v, false_v);
         let text_unify = !b_true
             && !b_false
+            && !text_mismatch
             && !matches!(false_v, Value::Null)
             && matches!(self.infer_type(IrNode::Native(true_v)), Some(Type::Text(_)));
         // @P386: a text-result if-expression where any branch is a Block
@@ -1269,8 +1282,12 @@ impl Output<'_> {
         // an already-`String` value and converts `&str` / `Str` / `&String`
         // uniformly.  The outer text-return wrap (Return(If(…))'s scratch
         // routing) then takes `String` via `.to_string()` push.
+        // #534 extends the trigger: also unify to `String` when the arms'
+        // reps mismatch (owned call vs borrowed literal/interp), not only for
+        // the `??` ncc pattern.
         let text_string_unify = !text_unify
-            && (matches!(true_v, Value::Block(b) if self.block_contains_ncc_skip_free(b))
+            && (text_mismatch
+                || matches!(true_v, Value::Block(b) if self.block_contains_ncc_skip_free(b))
                 || matches!(false_v, Value::Block(b) if self.block_contains_ncc_skip_free(b)))
             && matches!(self.infer_type(IrNode::Native(true_v)), Some(Type::Text(_)));
         // @PLN17: a boolean if-expression (e.g. the `&&` / `||` lowering
@@ -1449,6 +1466,48 @@ impl Output<'_> {
             .iter()
             .find(|a| matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_))))
             .map(|a| sanitize(&a.name))
+    }
+
+    /// Whether a text-typed `if`/`else` arm delivers an OWNED `String` (as
+    /// opposed to a borrowed `&str`).  A bare text-returning user fn call
+    /// returns an owned `String` (`def_returns_owned_text`); the `??`
+    /// value-block materialises one via the `__ncc_*` skip-free pattern.  A
+    /// literal, an interpolation (a work-buffer borrow `&*var___work_N`), or a
+    /// text variable all deliver `&str`.  For a block arm the delivered value
+    /// is its tail (last) operator.
+    ///
+    /// Two arms that disagree here do NOT unify to one Rust type — rustc
+    /// rejects with E0308 (#534: `text` `if`/`else` mixing a `String` arm and a
+    /// `&str` arm) — so `output_if_inner` routes both through `.to_string()`
+    /// and the `Str::new` return path materialises via the work buffer.  Keyed
+    /// on `def_returns_owned_text`, so it never reports `String` for an arm
+    /// that actually emits `&str`: a false match could only arise between arms
+    /// whose reps genuinely differ, and those never compiled in the first place.
+    fn text_arm_yields_owned_string(&self, v: &Value) -> bool {
+        match v.unspan() {
+            Value::Block(b) => {
+                self.block_contains_ncc_skip_free(b)
+                    || b.operators
+                        .last()
+                        .is_some_and(|t| self.text_arm_yields_owned_string(t))
+            }
+            Value::Insert(items) => items
+                .last()
+                .is_some_and(|t| self.text_arm_yields_owned_string(t)),
+            Value::Call(d, _) => {
+                (*d as usize) < self.data.definitions.len()
+                    && matches!(self.data.def(*d).returned().base(), Type::Text(_))
+                    && super::def_returns_owned_text(self.data.def(*d))
+            }
+            _ => false,
+        }
+    }
+
+    /// The two text `if`/`else` arms deliver mismatched Rust reps (one owned
+    /// `String`, one borrowed `&str`) and so must be unified via `.to_string()`
+    /// (#534).  See [`Self::text_arm_yields_owned_string`].
+    fn text_if_mismatched_reps(&self, true_v: &Value, false_v: &Value) -> bool {
+        self.text_arm_yields_owned_string(true_v) != self.text_arm_yields_owned_string(false_v)
     }
 
     // @PLAN52 cluster I/VI helper: walk a Block's operators (recursively
