@@ -1,18 +1,29 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// @PLN99 Arc B (Part 1) — `{x}` on a user struct routes through the type's OWN
-// `to_text(self)` for ANY struct, not only inside a `<T: Printable>` generic
-// body. Before this, `{m}` on a concrete struct rendered the generic field dump
-// (`{cents:150}`). A struct with no `to_text` still falls back to that dump.
-// All three backends.
+// @PLN99 Arc B — `{x}` and `{x:spec}` route through a user struct's OWN
+// `to_text`, for ANY struct (not only inside a `<T: Printable>` generic body).
+// Part 1: a 1-arg `to_text(self)` handles bare `{x}`. Part 2: a 2-arg
+// `to_text(self, spec)` also receives the raw `{x:spec}` text — the value owns
+// its own spec DSL, while built-in `{n:05d}` / `{n:x}` grammar is untouched.
+// A struct with no `to_text` falls back to the generic field dump. All three
+// backends; the raw-vs-grammar branch is two-pass stable.
 
 struct Money { cents: integer not null }
-fn to_text(self: Money) -> text { "${self.cents}c" }
+fn to_text(self: Money, spec: text) -> text {
+  if spec == "dollars" { "D{self.cents}" } else { "c{self.cents}" }
+}
+
+struct Plain1 { v: integer not null }
+fn to_text(self: Plain1) -> text { "P{self.v}" }
 
 fn main() {
   m = Money { cents: 150 };
-  r = "{m}";
-  assert(r == "$150c", "direct interpolation routes through the struct's own to_text");
-  println("first-grade format ok r={r}");
+  assert("{m}" == "c150", "bare interpolation passes empty spec to to_text");
+  assert("{m:dollars}" == "D150", "spec threads the raw text to to_text");
+  p = Plain1 { v: 7 };
+  assert("{p}" == "P7", "one-arg to_text still routes bare interpolation");
+  assert("{42:05d}" == "00042", "built-in width/radix grammar unchanged");
+  assert("{255:x}" == "ff", "built-in radix unchanged");
+  println("first-grade format ok");
 }

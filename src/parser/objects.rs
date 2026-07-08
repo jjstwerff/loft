@@ -1506,46 +1506,73 @@ impl Parser {
             self.lexer.set_mode(Mode::Formatting);
             let mut state = OUTPUT_DEFAULT;
             let mut token = "0".to_string();
-            if self.lexer.has_token(":") {
-                if let LexResult {
-                    has: LexItem::Token(t),
-                    position: _pos,
-                } = self.lexer.peek()
-                {
-                    let st: &str = &t;
-                    if !SKIP_TOKEN.contains(&st) {
-                        token.clear();
-                        token += &t;
-                        state.token = &token;
-                        self.lexer.cont();
-                    }
+            let mut spec_string = String::new();
+            // @PLN99 Arc B — a value whose type defines its own `to_text` owns its
+            // `{x:spec}` DSL: read the spec RAW (v1: one identifier/token) instead
+            // of the numeric width/radix grammar (which rejects `date`/`dollars`
+            // as an "Unknown variable" width expression). Pass-stable: the
+            // `t_<len><Type>_to_text` def is collected in both parser passes, so
+            // both take this branch.
+            let custom_fmt = if let Type::Reference(fd, _) = &tp {
+                self.data.def_type(*fd) == DefType::Struct && {
+                    let nm = self.data.def(*fd).name().to_string();
+                    self.data.def_nr(&format!("t_{}{}_to_text", nm.len(), nm)) != u32::MAX
                 }
-                self.string_states(&mut state);
-                let LexResult {
-                    has: h,
-                    position: _pos,
-                } = self.lexer.peek();
-                if match h {
-                    LexItem::Token(st) | LexItem::Identifier(st) => {
-                        let s: &str = &st;
-                        !SKIP_WIDTH.contains(&s)
-                    }
-                    LexItem::Integer(_, _) | LexItem::Float(_) => true,
-                    _ => false,
-                } {
+            } else {
+                false
+            };
+            if self.lexer.has_token(":") {
+                if custom_fmt {
                     if let LexResult {
-                        has: LexItem::Integer(_, true),
+                        has: LexItem::Token(t) | LexItem::Identifier(t),
                         position: _pos,
                     } = self.lexer.peek()
                     {
-                        state.token = "0";
+                        spec_string = t;
+                        self.lexer.cont();
                     }
-                    self.lexer.set_mode(Mode::Code);
-                    self.expression(&mut state.width);
-                    self.lexer.set_mode(Mode::Formatting);
+                } else {
+                    if let LexResult {
+                        has: LexItem::Token(t),
+                        position: _pos,
+                    } = self.lexer.peek()
+                    {
+                        let st: &str = &t;
+                        if !SKIP_TOKEN.contains(&st) {
+                            token.clear();
+                            token += &t;
+                            state.token = &token;
+                            self.lexer.cont();
+                        }
+                    }
+                    self.string_states(&mut state);
+                    let LexResult {
+                        has: h,
+                        position: _pos,
+                    } = self.lexer.peek();
+                    if match h {
+                        LexItem::Token(st) | LexItem::Identifier(st) => {
+                            let s: &str = &st;
+                            !SKIP_WIDTH.contains(&s)
+                        }
+                        LexItem::Integer(_, _) | LexItem::Float(_) => true,
+                        _ => false,
+                    } {
+                        if let LexResult {
+                            has: LexItem::Integer(_, true),
+                            position: _pos,
+                        } = self.lexer.peek()
+                        {
+                            state.token = "0";
+                        }
+                        self.lexer.set_mode(Mode::Code);
+                        self.expression(&mut state.width);
+                        self.lexer.set_mode(Mode::Formatting);
+                    }
+                    state.radix = self.get_radix();
                 }
-                state.radix = self.get_radix();
             }
+            state.spec = &spec_string;
             self.append_data(tp, &mut list, var, append_value, &format, state);
             if let Some(text) = self.lexer.has_cstring() {
                 if !text.is_empty() {

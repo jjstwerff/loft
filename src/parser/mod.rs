@@ -478,6 +478,9 @@ pub(crate) struct OutputState<'a> {
     pub(crate) note: bool,
     pub(crate) dir: i32,
     pub(crate) float: bool,
+    /// @PLN99 Arc B — the raw `{x:spec}` spec string for a custom-type value whose
+    /// own `to_text(self, spec)` renders it (`""` for a bare `{x}` or a built-in).
+    pub(crate) spec: &'a str,
 }
 
 impl OutputState<'_> {
@@ -494,6 +497,7 @@ pub(crate) const OUTPUT_DEFAULT: OutputState = OutputState {
     note: false,
     dir: 2, // 2 = unset; text defaults to left (-1), numbers to right (1)
     float: false,
+    spec: "",
 };
 
 // Sub-modules
