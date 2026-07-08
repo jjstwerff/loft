@@ -208,6 +208,53 @@ pub(crate) fn loft_float_literal(s: &str) -> String {
     }
 }
 
+/// @PLN98 P1b — render a keyed-collection [`Type`](crate::data::Type) as its
+/// PARSEABLE loft-source form (`hash<Ent[k]>`, `sorted<Row[a, -b]>`,
+/// `index<Rec[nr, -key]>`), so the live-frame eval fn can declare a paused
+/// keyed local as a typed argument.  `Type::name` can't be used here: it
+/// Debug-renders the key spec (`["k"]`), which the parser rejects.  `None` for a
+/// non-keyed type (those never need this path).  Descending keys render with a
+/// leading `-` (the `bool` is `true` for ascending — `parse_fields`' `!desc`).
+fn keyed_type_source(tp: &crate::data::Type, data: &crate::data::Data) -> Option<String> {
+    use crate::data::Type;
+    let render_dir = |keys: &[(String, bool)]| {
+        keys.iter()
+            .map(|(n, asc)| if *asc { n.clone() } else { format!("-{n}") })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    match tp {
+        Type::Hash(elem, keys, _) => Some(format!(
+            "hash<{}[{}]>",
+            data.def(*elem).name,
+            keys.join(", ")
+        )),
+        Type::Sorted(elem, keys, _) => Some(format!(
+            "sorted<{}[{}]>",
+            data.def(*elem).name,
+            render_dir(keys)
+        )),
+        Type::Index(elem, keys, _) => Some(format!(
+            "index<{}[{}]>",
+            data.def(*elem).name,
+            render_dir(keys)
+        )),
+        _ => None,
+    }
+}
+
+/// @PLN98 P3.4 — a frame local's value read out of the paused frame, tagged by its
+/// storage width so [`State::eval_frame_reenter`] can push it back as the right
+/// argument type (heap → `DbRef`, else the inline scalar).
+enum FrameArg {
+    Ref(crate::keys::DbRef),
+    I64(i64),
+    F64(f64),
+    F32(f32),
+    U8(u8),
+    U32(u32),
+}
+
 /// Render `raw` as a quoted, escaped loft `text` literal — the form the parser
 /// re-reads.  Escapes the characters loft shares with JSON (`"`, `\`, newline,
 /// CR, tab); other characters pass through.  The single home for the text
@@ -2324,6 +2371,206 @@ impl State {
             self.database.show_loft(&mut out, &db, tp_known);
         }
         Some(out)
+    }
+
+    /// @PLN98 P1b — if frame local `name` is a live **keyed collection**
+    /// (`hash` / `sorted` / `index`), its PARSEABLE loft-source type — e.g.
+    /// `hash<Ent[k]>`, `index<Rec[nr, -key]>`.  Unlike [`Type::name`](crate::data::Type::name)
+    /// (which Debug-renders the key spec as `["k"]`, not loft source), this
+    /// round-trips through the parser, so the synthetic live-frame eval fn can
+    /// declare the local as a typed argument and receive its live `DbRef`.
+    /// `None` for a non-keyed / unknown / un-live local.
+    #[must_use]
+    pub fn frame_keyed_type_source(&self, name: &str, data: &crate::data::Data) -> Option<String> {
+        if !self.frame_local_is_live(name) {
+            return None;
+        }
+        let (_, _, tp, _) = self.frame_slot(name, data)?;
+        keyed_type_source(&tp, data)
+    }
+
+    /// @PLN98 P3.4 — a live frame local's PARSEABLE loft type, for binding it as an
+    /// argument of a synthetic eval fn (the browser client's full-expression eval).
+    /// Keyed collections use [`keyed_type_source`] (their `Type::name` isn't loft
+    /// source); everything else uses `Type::name` (integer / float / boolean /
+    /// character / `vector<T>` / a struct or enum name — all reparseable).  `None`
+    /// for a `text` local (a borrowed `Str` arg is @P293-unsafe to push) or an
+    /// un-live / unknown local — the caller drops the expression to a graceful
+    /// fallback rather than mis-push it.
+    #[must_use]
+    pub fn frame_local_arg_type(&self, name: &str, data: &crate::data::Data) -> Option<String> {
+        if !self.frame_local_is_live(name) {
+            return None;
+        }
+        let (_, _, tp, _) = self.frame_slot(name, data)?;
+        if matches!(tp, crate::data::Type::Text(_)) {
+            return None;
+        }
+        Some(keyed_type_source(&tp, data).unwrap_or_else(|| tp.name(data)))
+    }
+
+    /// @PLN98 P1b — the true live-frame eval: run the already-compiled synthetic
+    /// fn `eval_dnr` (built as `fn __eval(k1: K1, …) -> RT { … expr }`) over THIS
+    /// paused State, with its keyed-collection arguments `arg_names` bound to the
+    /// paused frame's **live** locals.  This is the invariant-honouring form the
+    /// text-reconstruct path can't reach: a referenced `hash`/`sorted`/`index`
+    /// renders non-reparseable, so instead of seeding a literal we pass the live
+    /// `DbRef` straight into the eval and read the collection where it lives.
+    ///
+    /// The fn's bytecode is appended **append-only** to the running stream (like
+    /// [`live_reload`](crate::live_reload)): the paused frame's live PC and stack
+    /// slots are untouched, so the run resumes correctly after.  `reenter_ret`
+    /// allocates the eval's frame above the high-water mark, pushes the pre-read
+    /// arg `DbRef`s, runs to completion, and restores the watermark.  Returns the
+    /// rendered value (`json` = RFC-8259 vs own-format), or `None` for an
+    /// unsupported return type.
+    pub fn eval_frame_reenter(
+        &mut self,
+        data: &mut crate::data::Data,
+        eval_dnr: u32,
+        arg_names: &[String],
+        ret: &crate::data::Type,
+        json: bool,
+    ) -> Option<String> {
+        use crate::data::Type;
+        // 1. Read each arg's live value from the paused frame BEFORE reentering —
+        //    `reenter_ret` pushes a fresh frame, so `frame_slot` (which reads
+        //    `call_stack.last()`) would then see the eval's frame.  Each is read at
+        //    its storage width (heap → `DbRef`, else the inline scalar) so it can be
+        //    pushed back as the right argument type — the browser client binds ANY
+        //    referenced frame local as an arg, not just keyed collections.
+        let mut args: Vec<FrameArg> = Vec::with_capacity(arg_names.len());
+        for name in arg_names {
+            let (rec, at, tp, _is_arg) = self.frame_slot(name, data)?;
+            let store = self.database.store(&self.stack_cur);
+            let val = match &tp {
+                Type::Reference(_, _)
+                | Type::Vector(_, _)
+                | Type::Sorted(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Hash(_, _, _)
+                | Type::Spacial(_, _, _)
+                | Type::Enum(_, true, _) => {
+                    FrameArg::Ref(*store.addr::<crate::keys::DbRef>(rec, at))
+                }
+                Type::Float => FrameArg::F64(*store.addr::<f64>(rec, at)),
+                Type::Single => FrameArg::F32(*store.addr::<f32>(rec, at)),
+                Type::Boolean | Type::Enum(_, false, _) => FrameArg::U8(*store.addr::<u8>(rec, at)),
+                Type::Character => FrameArg::U32(*store.addr::<u32>(rec, at)),
+                // Integer (and anything else that fits) rides an `i64` slot.
+                _ => FrameArg::I64(*store.addr::<i64>(rec, at)),
+            };
+            args.push(val);
+        }
+        // 2. Sync def positions from the live dispatch table into `data` so a Call
+        //    the eval body emits (a stdlib/user fn in `expr`) targets the LIVE body
+        //    (mirrors `live_reload::reload_fn`; without it a call jumps to 0).
+        let pre = (self.fn_positions.len() as u32).min(data.definitions());
+        for d in 0..pre {
+            data.definitions[d as usize].code_position = self.fn_positions[d as usize];
+        }
+        // 3. Append the eval fn's bytecode at the end of the running stream. The
+        //    live PC is saved/restored; the append never moves an existing offset.
+        let saved_pc = self.code_pos;
+        self.code_pos = self.bytecode.len() as u32;
+        self.database.allocations[crate::database::CONST_STORE as usize].unlock();
+        self.def_code(eval_dnr, data, None);
+        self.database.allocations[crate::database::CONST_STORE as usize]
+            .lock_with_origin("eval_frame_reenter (CONST_STORE relock)");
+        self.code_pos = saved_pc;
+        while (self.fn_positions.len() as u32) <= eval_dnr {
+            let d = self.fn_positions.len() as u32;
+            self.fn_positions.push(data.def(d).code_position);
+        }
+        let pos = data.def(eval_dnr).code_position;
+        // 4. Reenter over the paused world, pushing the live args in declared
+        //    order (each as its own type), and render the return by its type.
+        let push = |st: &mut State| {
+            for a in &args {
+                match a {
+                    FrameArg::Ref(v) => st.put_stack(*v),
+                    FrameArg::I64(v) => st.put_stack(*v),
+                    FrameArg::F64(v) => st.put_stack(*v),
+                    FrameArg::F32(v) => st.put_stack(*v),
+                    FrameArg::U8(v) => st.put_stack(*v),
+                    FrameArg::U32(v) => st.put_stack(*v),
+                }
+            }
+        };
+        // `reenter_ret` restores `code_pos`/`stack_pos` but NOT the call stack or
+        // high-water mark.  On a *parked* State (live_dispatch) that is fine — the
+        // call stack starts empty.  Here the State is PAUSED mid-run with `main`
+        // (and its callers) live on the call stack, and the eval callee's return
+        // pops one frame that `reenter_ret` doesn't push back, so it would strand
+        // the paused frame (`frame_slot` reads `call_stack.last()`).  Snapshot and
+        // restore so the eval is fully transparent to the paused run.
+        let saved_stack = self.call_stack.clone();
+        let saved_high = self.stack_high;
+        let rendered = match ret {
+            Type::Integer(_) => Some(self.reenter_ret::<i64>(eval_dnr, pos, push).to_string()),
+            Type::Float => Some(loft_float_literal(
+                &self.reenter_ret::<f64>(eval_dnr, pos, push).to_string(),
+            )),
+            Type::Single => {
+                let v = self.reenter_ret::<f32>(eval_dnr, pos, push);
+                Some(if json { v.to_string() } else { format!("{v}f") })
+            }
+            Type::Boolean => {
+                let v = self.reenter_ret::<u8>(eval_dnr, pos, push) != 0;
+                Some(if v { "true" } else { "false" }.to_string())
+            }
+            Type::Character => {
+                char::from_u32(self.reenter_ret::<u32>(eval_dnr, pos, push)).map(|c| {
+                    if json {
+                        format!("\"{c}\"")
+                    } else {
+                        format!("'{c}'")
+                    }
+                })
+            }
+            // A text return rides the frame base as a 16-byte `Str` (like a scalar,
+            // unlike a heap `DbRef`).  Safe ONLY for a **call-returned-owned** text
+            // — a `.to_json()` result — whose buffer moves out as the return value
+            // and so survives the frame teardown.  A borrowed-local / work text (a
+            // bare var, a `+` concat, an interpolation) is freed on teardown and
+            // would be @P293-UAF here, so the caller sends ONLY `.to_json()` results
+            // down this path.  Returned RAW (the already-serialised JSON string).
+            Type::Text(_) => Some(
+                self.reenter_ret::<crate::keys::Str>(eval_dnr, pos, push)
+                    .str()
+                    .to_string(),
+            ),
+            // A heap value (struct / vector / struct-enum) is destination-passed,
+            // NOT copied to the frame base, so `reenter_ret` can't retrieve it (it
+            // would read back the first pushed arg).  The caller serialises such a
+            // result in-fn via `.to_json()` and routes it through the `Text` arm
+            // instead — so this path is a deliberate `None`, never a wrong read.
+            Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => None,
+            Type::Enum(_, false, _) => {
+                let schema = self.database.name(&ret.name(data));
+                if schema == u16::MAX {
+                    None
+                } else {
+                    let disc = self.reenter_ret::<u8>(eval_dnr, pos, push);
+                    if disc == 0 {
+                        Some("null".to_string())
+                    } else {
+                        let name = ret.name(data);
+                        let v = self.database.enum_val(schema, disc);
+                        Some(if json {
+                            format!("\"{name}.{v}\"")
+                        } else {
+                            format!("{name}.{v}")
+                        })
+                    }
+                }
+            }
+            _ => None,
+        };
+        // Restore the paused run's call stack + watermark (see the snapshot above).
+        self.call_stack = saved_stack;
+        self.stack_high = saved_high;
+        rendered
     }
 
     /// @PLN16 M1a — point a **heap** frame local at an already-materialised value by

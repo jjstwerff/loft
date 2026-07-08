@@ -1428,6 +1428,52 @@ impl Parser {
         }
     }
 
+    /// Parse in-memory `content` as if it were the file at `filename` — the
+    /// filesystem-free twin of [`parse`](Self::parse), available on every target
+    /// (unlike the wasm-only `parse_virtual`).  `@PLN98` P3.1 uses it to bootstrap
+    /// the live interpreter from EMBEDDED stdlib + program blobs (no `default/`
+    /// dir, no `LOFT_LIVE_SRC` file) — the delivery a browser build needs.  Mirrors
+    /// `parse`'s two-pass + `MAIN_SOURCE` assignment (a non-default file shadows a
+    /// prelude name rather than colliding on `(name, 0)`), so an embedded bootstrap
+    /// parks the SAME world the fs path does.  Returns `true` when the parse is
+    /// diagnostic-clean.
+    pub(crate) fn parse_source(&mut self, content: &str, filename: &str, default: bool) -> bool {
+        self.default = default;
+        self.vars.logging = false;
+        self.first_pass = true;
+        self.pending_imports.clear();
+        self.applied_imports.clear();
+        self.deferred_unknown.clear();
+        self.data.reset();
+        // @PLN22 — the main program parses under MAIN_SOURCE (not the prelude's
+        // source 0), matching `parse`; `reset()` left source at STD_SOURCE.
+        if !default {
+            self.data.source = crate::data::MAIN_SOURCE;
+        }
+        self.lambda_counter = 0;
+        self.fn_lambdas.clear();
+        self.lexer.parse_string(content, filename);
+        self.parse_file();
+        self.resolve_deferred_unknowns();
+        let lvl = self.lexer.diagnostics().level();
+        if lvl != Level::Error && lvl != Level::Fatal {
+            self.first_pass = false;
+            self.applied_imports.clear();
+            self.deferred_unknown.clear();
+            self.data.reset();
+            if !default {
+                self.data.source = crate::data::MAIN_SOURCE;
+            }
+            self.lambda_counter = 0;
+            self.fn_lambdas.clear();
+            self.lexer.parse_string(content, filename);
+            self.parse_file();
+            self.resolve_deferred_unknowns();
+        }
+        self.diagnostics.fill(self.lexer.diagnostics());
+        self.diagnostics.is_empty()
+    }
+
     /// Parse `content` as if it were the file at `filename`.
     /// Used by the WASM virtual-FS path to bypass real filesystem access.
     #[cfg(feature = "wasm")]

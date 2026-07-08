@@ -111,6 +111,7 @@ pub mod repl;
 pub mod rpc;
 pub mod serve;
 pub mod startup_cache;
+pub mod wasm_debug;
 // @PLAN12 phase 3.5a (2026-05-24) — re-export `extensions::native_call`
 // at the crate root so generated native code can write
 // `use loft::native_call;` without coupling to the extensions module.

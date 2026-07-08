@@ -580,6 +580,24 @@ pub struct Output<'a> {
     /// emits the table as `LOFT_LIVE_FNS` so the runtime bootstrap can
     /// resolve every index against its own parse of the same sources.
     pub live_fns: Vec<String>,
+    /// @PLN98 P2 — emit the live/debug tier?  Default `true` keeps the shipped
+    /// behaviour (per-fn `live_flipped` entry checks, the `LOFT_LIVE_FNS` table,
+    /// and `boot_stores`/`live_enabled` gating in `main`).  The `--lean` opt-out
+    /// sets it `false`, so the generated Rust carries ZERO live-dispatch
+    /// machinery — the smallest release binary, no live-flip / breakpoints.
+    pub emit_live: bool,
+    /// @PLN98 P3.1 — the program's own source text, emitted as a `static LOFT_SRC`
+    /// blob in a live build so the parked interpreter can bootstrap from EMBEDDED
+    /// bytes ([`live_dispatch::bootstrap_from_bytes`](crate::live_dispatch::bootstrap_from_bytes))
+    /// with no `LOFT_LIVE_SRC` file — the delivery a browser/wasm build needs.
+    /// `None` (the check-only / non-native emit) → `LOFT_SRC = None`, so the boot
+    /// falls back to the filesystem path.
+    pub program_src: Option<String>,
+    /// @PLN98 P3.4 — the browser client's debug NAME (from `--debug[=name]`), baked
+    /// into a live `--html` build's `loft_start` so the client can announce itself
+    /// to the server, which then ADDRESSES debug frames to it over the relay.
+    /// `None` on a production (default, no-`--debug`) client — no debug tier at all.
+    pub debug_name: Option<String>,
 }
 
 /// Use this to convert loft names that contain `#` into valid Rust identifiers.
@@ -1053,6 +1071,9 @@ impl<'a> Output<'a> {
                 .map(|(s, _)| s)
                 .collect(),
             live_fns: Vec::new(),
+            emit_live: true,
+            program_src: None,
+            debug_name: None,
         }
     }
 }
@@ -1702,13 +1723,7 @@ extern crate loft;"
         // Emit a Rust entry point that bootstraps the loft `main` function, if present.
         if (0..till).any(|d| self.data.def(d).name() == "n_main") {
             if self.wasm_browser {
-                // exported cdylib entry point for browser WASM.  WASM
-                // doesn't have an argv, so user_args stays empty —
-                // arguments() returns [].
-                writeln!(
-                    buf,
-                    "\n#[unsafe(no_mangle)]\npub extern \"C\" fn loft_start() {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    init(&cell);\n    n_main(&cell);\n}}"
-                )?;
+                self.emit_wasm_start(&mut buf)?;
             } else {
                 // Native binary: thread std::env::args() into Stores.user_args
                 // so the loft `arguments()` builtin returns the program's
@@ -1797,6 +1812,59 @@ extern crate loft;"
     /// world) and `init` is skipped — the parse already seeded it.  The leak
     /// check is also skipped live: the parked interpreter's machinery stores
     /// are not program leaks.
+    /// @PLN98 P3.4 — emit the browser (`--html`) `loft_start` export.  WASM has no
+    /// argv (so `arguments()` is `[]`) and no filesystem.  Two shapes gated on the
+    /// `--debug` opt-in (`emit_live`):
+    /// - **production client** (default): a plain `Stores::new()` boot — NO live /
+    ///   debug tier, the smallest engine-less shell.
+    /// - **debug client** (`--debug[=name]`): bootstrap the parked interpreter from
+    ///   the EMBEDDED source (`bootstrap_from_bytes`, P3.1 — no fs needed) so a
+    ///   flipped fn / breakpoint runs interpreted over the shared world, and bake
+    ///   the debug NAME the client announces to the server for relay addressing.
+    ///   Falls back to `Stores::new()` if the embedded bootstrap fails.
+    fn emit_wasm_start(&self, w: &mut dyn Write) -> std::io::Result<()> {
+        if self.emit_live {
+            let name = self.debug_name.as_deref().unwrap_or("");
+            let src = self.program_src.as_deref().unwrap_or("");
+            write!(w, "static LOFT_LIVE_FNS: &[&str] = &[")?;
+            for n in &self.live_fns {
+                write!(w, "{n:?}, ")?;
+            }
+            writeln!(w, "];")?;
+            writeln!(w, "static LOFT_DEBUG_NAME: &str = {name:?};")?;
+            writeln!(w, "static LOFT_SRC: &str = {src:?};")?;
+            write!(
+                w,
+                "\n#[unsafe(no_mangle)]\npub extern \"C\" fn loft_start() {{\n    \
+                 let _ = LOFT_DEBUG_NAME;\n    \
+                 let cell = std::cell::UnsafeCell::new(\n        \
+                 loft::live_dispatch::bootstrap_from_bytes(LOFT_LIVE_FNS, LOFT_SRC)\n            \
+                 .unwrap_or_else(|e| {{ eprintln!(\"loft-debug: {{e}}\"); Stores::new() }}));\n    \
+                 if loft::live_dispatch::live_enabled() {{ loft::live_dispatch::flip_all_dispatch_debug(); }} else {{ init(&cell); }}\n    \
+                 n_main(&cell);\n    \
+                 loft::live_dispatch::wasm_host_log(&format!(\"loft-debug: dispatched {{}} interp call(s) over the shared store\\n\", loft::live_dispatch::dispatch_count()));\n}}\n\
+                 \n#[unsafe(no_mangle)]\npub extern \"C\" fn loft_debug_selftest() -> i32 {{\n    \
+                 let r = loft::live_dispatch::wasm_debug_selftest();\n    \
+                 loft::live_dispatch::wasm_host_log(&r);\n    \
+                 loft::live_dispatch::wasm_host_log(\"\\n\");\n    \
+                 i32::from(r == \"PAUSE n=40 STEP m=42 DONE=true\")\n}}\n\
+                 \n// @PLN98 P3.4 — the interactive browser debug CLIENT: `loft_debug_start`\n\
+                 // parses the embedded program into an interpreter session; the JS driver\n\
+                 // then calls `loft_debug_pump` per frame to apply relayed `D!:` control\n\
+                 // frames (host_input) and emit `D:` replies (host output).\n\
+                 #[unsafe(no_mangle)]\npub extern \"C\" fn loft_debug_start() -> i32 {{\n    \
+                 i32::from(loft::wasm_debug::start(LOFT_SRC))\n}}\n\
+                 \n#[unsafe(no_mangle)]\npub extern \"C\" fn loft_debug_pump() {{\n    \
+                 loft::wasm_debug::pump();\n}}\n"
+            )
+        } else {
+            writeln!(
+                w,
+                "\n#[unsafe(no_mangle)]\npub extern \"C\" fn loft_start() {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    init(&cell);\n    n_main(&cell);\n}}"
+            )
+        }
+    }
+
     fn emit_native_main(&self, w: &mut dyn Write) -> std::io::Result<()> {
         // #255 / @PLN9: bake the parse-time `#cwd` path-mode default.
         writeln!(
@@ -1804,38 +1872,65 @@ extern crate loft;"
             "const LOFT_PROGRAM_RELATIVE: bool = {};",
             self.stores.program_relative
         )?;
-        write!(w, "static LOFT_LIVE_FNS: &[&str] = &[")?;
-        for n in &self.live_fns {
-            write!(w, "{n:?}, ")?;
+        if self.emit_live {
+            write!(w, "static LOFT_LIVE_FNS: &[&str] = &[")?;
+            for n in &self.live_fns {
+                write!(w, "{n:?}, ")?;
+            }
+            writeln!(w, "];")?;
+            // @PLN98 P3.1 — the program's own source, embedded so the live boot can
+            // bootstrap the parked interpreter from BYTES (no `LOFT_LIVE_SRC` file)
+            // when the fs source is absent — the browser/wasm delivery.  `{:?}`
+            // emits a valid escaped Rust string literal.
+            match &self.program_src {
+                Some(src) => writeln!(w, "static LOFT_SRC: Option<&str> = Some({src:?});")?,
+                None => writeln!(w, "static LOFT_SRC: Option<&str> = None;")?,
+            }
+            // Emits `fn main`: arm the timeout watchdog + fail-fast (halt-at-op like the
+            // interpreter, #333), then run init + n_main on a large-stack thread (@PLN28:
+            // deep recursion trips MAX_CALL_DEPTH cleanly instead of overflowing the
+            // ~8 MiB OS main-thread stack), then the optional native leak check.
+            write!(
+                w,
+                "\nfn main() {{\n    loft::timeout::arm(loft::timeout::env_timeout_secs(), loft::timeout::env_grace_secs());\n    loft::database::NATIVE_FAIL_FAST.store(true, std::sync::atomic::Ordering::Relaxed);\n    let __run = || {{\n    let cell = std::cell::UnsafeCell::new(loft::live_dispatch::boot_stores(LOFT_LIVE_FNS, LOFT_SRC));\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); stores.source_dir = Stores::source_dir_native(); stores.program_relative = LOFT_PROGRAM_RELATIVE; if let Ok(m) = std::env::var(\"LOFT_PATHS\") {{ stores.program_relative = m.eq_ignore_ascii_case(\"program\"); }} }}\n    if !loft::live_dispatch::live_enabled() {{ init(&cell); }}\n    n_main(&cell);\n    {{ let stores: &Stores = unsafe {{ &*cell.get() }}; if stores.had_fatal {{ std::process::exit(1); }} }}\n"
+            )?;
+            writeln!(w, "    if !loft::live_dispatch::live_enabled() {{")?;
+            w.write_all(NATIVE_LEAK_CHECK_TAIL.as_bytes())?;
+            writeln!(w, "    }}")?;
+            writeln!(
+                w,
+                "    }};\n    \
+                 // @PLN98 — the large-stack thread (@PLN28) is a NATIVE affordance;\n    \
+                 // wasm32 (wasip2 / browser) has no thread support, so run inline there.\n    \
+                 #[cfg(not(target_arch = \"wasm32\"))]\n    \
+                 std::thread::Builder::new().stack_size(loft::codegen_runtime::NATIVE_MAIN_STACK).spawn(__run).expect(\"failed to spawn main-stack thread\").join().expect(\"main thread panicked\");\n    \
+                 #[cfg(target_arch = \"wasm32\")]\n    \
+                 __run();"
+            )?;
+            writeln!(w, "}}")
+        } else {
+            // @PLN98 P2 — `--lean`: identical `main` MINUS the live/debug tier.
+            // No `LOFT_LIVE_FNS` table; the world is a plain `Stores::new()`
+            // (never `boot_stores`); `init` and the leak check run
+            // UNCONDITIONALLY (no `live_enabled()` gate).  The emitted Rust
+            // references no `live_dispatch` symbol at all.
+            write!(
+                w,
+                "\nfn main() {{\n    loft::timeout::arm(loft::timeout::env_timeout_secs(), loft::timeout::env_grace_secs());\n    loft::database::NATIVE_FAIL_FAST.store(true, std::sync::atomic::Ordering::Relaxed);\n    let __run = || {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); stores.source_dir = Stores::source_dir_native(); stores.program_relative = LOFT_PROGRAM_RELATIVE; if let Ok(m) = std::env::var(\"LOFT_PATHS\") {{ stores.program_relative = m.eq_ignore_ascii_case(\"program\"); }} }}\n    init(&cell);\n    n_main(&cell);\n    {{ let stores: &Stores = unsafe {{ &*cell.get() }}; if stores.had_fatal {{ std::process::exit(1); }} }}\n"
+            )?;
+            w.write_all(NATIVE_LEAK_CHECK_TAIL.as_bytes())?;
+            writeln!(
+                w,
+                "    }};\n    \
+                 // @PLN98 — the large-stack thread (@PLN28) is a NATIVE affordance;\n    \
+                 // wasm32 (wasip2 / browser) has no thread support, so run inline there.\n    \
+                 #[cfg(not(target_arch = \"wasm32\"))]\n    \
+                 std::thread::Builder::new().stack_size(loft::codegen_runtime::NATIVE_MAIN_STACK).spawn(__run).expect(\"failed to spawn main-stack thread\").join().expect(\"main thread panicked\");\n    \
+                 #[cfg(target_arch = \"wasm32\")]\n    \
+                 __run();"
+            )?;
+            writeln!(w, "}}")
         }
-        writeln!(w, "];")?;
-        // Emits `fn main`: arm the timeout watchdog + fail-fast (halt-at-op like the
-        // interpreter, #333), then run init + n_main + the optional native leak check.
-        // On native the body runs on a large-stack thread (@PLN28: deep recursion trips
-        // MAX_CALL_DEPTH cleanly instead of overflowing the ~8 MiB OS main-thread stack);
-        // on wasm (wasip2 / browser) thread spawn is unsupported, so it runs on the main
-        // stack directly (#521 — spawning aborted every `--native-wasm` program at boot).
-        write!(
-            w,
-            "\nfn main() {{\n    loft::timeout::arm(loft::timeout::env_timeout_secs(), loft::timeout::env_grace_secs());\n    loft::database::NATIVE_FAIL_FAST.store(true, std::sync::atomic::Ordering::Relaxed);\n    let run_main = || {{\n    let cell = std::cell::UnsafeCell::new(loft::live_dispatch::boot_stores(LOFT_LIVE_FNS));\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); stores.source_dir = Stores::source_dir_native(); stores.program_relative = LOFT_PROGRAM_RELATIVE; if let Ok(m) = std::env::var(\"LOFT_PATHS\") {{ stores.program_relative = m.eq_ignore_ascii_case(\"program\"); }} }}\n    if !loft::live_dispatch::live_enabled() {{ init(&cell); }}\n    n_main(&cell);\n    {{ let stores: &Stores = unsafe {{ &*cell.get() }}; if stores.had_fatal {{ std::process::exit(1); }} }}\n"
-        )?;
-        writeln!(w, "    if !loft::live_dispatch::live_enabled() {{")?;
-        w.write_all(NATIVE_LEAK_CHECK_TAIL.as_bytes())?;
-        writeln!(w, "    }}")?;
-        // Close the `run_main` closure, then dispatch it per target family.
-        writeln!(w, "    }};")?;
-        // Native: a dedicated large-stack thread so deep recursion trips
-        // MAX_CALL_DEPTH cleanly instead of overflowing the OS main stack (@PLN28).
-        writeln!(w, "    #[cfg(not(target_family = \"wasm\"))]")?;
-        writeln!(
-            w,
-            "    std::thread::Builder::new().stack_size(loft::codegen_runtime::NATIVE_MAIN_STACK).spawn(run_main).expect(\"failed to spawn main-stack thread\").join().expect(\"main thread panicked\");"
-        )?;
-        // wasm (wasip2 / browser): thread spawn is unsupported, so run on the
-        // main stack directly — #521.
-        writeln!(w, "    #[cfg(target_family = \"wasm\")]")?;
-        writeln!(w, "    run_main();")?;
-        writeln!(w, "}}")
     }
 
     /// Use this to emit only the `init` body that registers all types.
@@ -3260,7 +3355,14 @@ extern crate loft;"
                 // the `stores` derivation: a flipped fn re-enters the parked
                 // interpreter (which swaps the world out of the cell), so no
                 // native `&mut` may be live in THIS frame when it runs.
-                let live_check = self.live_entry_check(def).unwrap_or_default();
+                // @PLN98 P2 — `--lean` strips the tier: skip the entry check
+                // entirely (and, as a side effect, `self.live_fns` stays empty
+                // because `live_entry_check` — its sole producer — never runs).
+                let live_check = if self.emit_live {
+                    self.live_entry_check(def).unwrap_or_default()
+                } else {
+                    String::new()
+                };
                 self.call_stack_prefix = Some(format!(
                     "{live_check}  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};\n  \
                      cr_call_push(\"{loft_name}\", \"{escaped_file}\", {loft_line});\n  \
@@ -4143,5 +4245,70 @@ mod scrub_tests {
     fn clean_source_is_unchanged() {
         let src = b"fn n_main(cell: &Cell) { loft::rpc::ok(); }";
         assert_eq!(scrub_generated_crate_refs(src), src.to_vec());
+    }
+}
+
+#[cfg(test)]
+mod p98_p34_tests {
+    use super::Output;
+
+    // @PLN98 P3.4 — the browser `loft_start` opt-in. A production client (default,
+    // emit_live=false) ships a plain `Stores::new()` boot with NO live/debug tier;
+    // a `--debug[=name]` client bootstraps the parked interpreter from the EMBEDDED
+    // source and bakes the debug NAME the server uses to address it.
+    #[test]
+    fn wasm_start_gates_the_debug_tier_on_the_opt_in() {
+        let p = crate::parser::Parser::new();
+        let db = crate::database::Stores::new();
+        let mut out = Output::new(&p.data, &db);
+        out.wasm_browser = true;
+
+        // Production (no --debug): plain boot, no debug tier, no embedded source.
+        out.emit_live = false;
+        let mut prod = Vec::new();
+        out.emit_wasm_start(&mut prod).unwrap();
+        let prod = String::from_utf8(prod).unwrap();
+        assert!(
+            prod.contains("Stores::new()"),
+            "production boots plain: {prod}"
+        );
+        assert!(
+            !prod.contains("bootstrap_from_bytes"),
+            "no live bootstrap: {prod}"
+        );
+        assert!(
+            !prod.contains("LOFT_DEBUG_NAME"),
+            "no debug name baked: {prod}"
+        );
+        assert!(
+            prod.contains("fn loft_start"),
+            "still exports loft_start: {prod}"
+        );
+
+        // Debug client (`--debug=alice`): embedded bootstrap + the baked name + the
+        // program source blob.
+        out.emit_live = true;
+        out.debug_name = Some("alice".to_string());
+        out.program_src = Some("fn main() { print(\"hi\") }".to_string());
+        out.live_fns = vec!["n_addup".to_string()];
+        let mut dbg = Vec::new();
+        out.emit_wasm_start(&mut dbg).unwrap();
+        let dbg = String::from_utf8(dbg).unwrap();
+        assert!(
+            dbg.contains("static LOFT_DEBUG_NAME: &str = \"alice\""),
+            "debug name baked for server addressing: {dbg}"
+        );
+        assert!(
+            dbg.contains("bootstrap_from_bytes(LOFT_LIVE_FNS, LOFT_SRC)"),
+            "boots the parked interpreter from embedded source: {dbg}"
+        );
+        assert!(
+            dbg.contains("print(\\\"hi\\\")"),
+            "the program source is embedded in LOFT_SRC: {dbg}"
+        );
+        assert!(
+            dbg.contains("n_addup"),
+            "the flippable fn table is emitted: {dbg}"
+        );
     }
 }

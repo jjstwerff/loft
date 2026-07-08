@@ -1,0 +1,25 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN98 P3.4 — drive `loft_debug_selftest` in a `loft --html --debug` wasm to
+// confirm the interpreter's cooperative debug cycle (breakpoint pause + frame
+// read + resume) runs on wasm32.  Prints the wasm's host output, then a final
+// `RETURN=<0|1>` line (1 = the cycle produced the expected outcome).
+import fs from 'node:fs';
+const wasm = fs.readFileSync(process.argv[2]);
+const dec = new TextDecoder();
+let mem = null;
+let out = '';
+const io = {
+  loft_host_print: (p, l) => { out += dec.decode(new Uint8Array(mem.buffer, p, l)); },
+  loft_host_input_len: () => 0,
+  loft_host_input_copy: () => {},
+  loft_host_output: () => {},
+};
+// Answer any other import module/name with a 0-returning stub (as wasm_repro.mjs).
+const stubs = new Proxy({ loft_io: io }, { get: (t, k) => (k in t ? t[k] : new Proxy({}, { get: () => () => 0 })) });
+const inst = new WebAssembly.Instance(new WebAssembly.Module(wasm), stubs);
+mem = inst.exports.memory;
+const rc = inst.exports.loft_debug_selftest();
+process.stdout.write(out);
+console.log('RETURN=' + rc);

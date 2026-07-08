@@ -108,6 +108,8 @@ fn print_help() {
     println!(
         "  --native-debug                like --native but compile with -Cdebuginfo=2 (DWARF)"
     );
+    println!("  --lean                        strip the live/debug tier — smallest binary, no");
+    println!("                                live-flip/breakpoints");
     println!("  --dev-soft-halt               demote dev-mode runtime raises to log-and-continue");
     println!("                                (also: LOFT_DEV_SOFT_HALT=1) — surfaces every fault");
     println!(
@@ -3698,6 +3700,15 @@ fn main() {
     // and preserve the generated `.rs` on disk so DWARF's `.debug_line`
     // table points at a real file the debugger can show.
     let mut native_debug = false;
+    // @PLN98 P2 — `--lean`: strip the live/debug tier from the generated Rust
+    // (no `live_flipped` entry checks, no `LOFT_LIVE_FNS`/`boot_stores`).  The
+    // default keeps the live tier (non-breaking); this is opt-OUT.
+    let mut lean = false;
+    // @PLN98 P3.4 — opt IN to the browser live/debug tier.  A production `--html`
+    // client ships WITHOUT it (default lean — no live-flip / breakpoint channel);
+    // `--debug` or `--debug=<name>` includes the tier and bakes a debug NAME the
+    // server uses to ADDRESS this client over the relay (`--debug` alone → "").
+    let mut debug_name: Option<String> = None;
     let mut dump_only = false;
     // None  = flag not given
     // Some("") = flag given without explicit path → use .loft/ default
@@ -3884,6 +3895,16 @@ fn main() {
             native_mode = true;
             native_requested = true;
             native_debug = true;
+        } else if a == "--lean" {
+            // @PLN98 P2 — opt OUT of the live/debug tier: the generated Rust
+            // carries no live-dispatch machinery (smallest binary, no
+            // live-flip / breakpoints).  Composes with any build target
+            // (--native / --native-wasm / --html / --native-emit).
+            lean = true;
+        } else if a == "--debug" || a.starts_with("--debug=") {
+            // @PLN98 P3.4 — opt IN to the browser debug tier + set the client's
+            // debug name (`--debug=alice`; bare `--debug` → "").
+            debug_name = Some(a.strip_prefix("--debug=").unwrap_or("").to_string());
         } else if a == "--dev-soft-halt" {
             // Plan-07 phase 4g.3 — demote dev-mode raises to
             // log-and-continue so a single run surfaces every
@@ -5442,6 +5463,10 @@ fn main() {
             // resolve by d_nr so the renamed def stays consistent).
             p.data.namespace_colliding_native_fns();
             let mut out = generation::Output::new(&p.data, &state.database);
+            // @PLN98 P2 — `--lean` strips the live/debug tier from the emitted Rust.
+            if lean {
+                out.emit_live = false;
+            }
             let main_nr = p.data.def_nr("n_main");
             let entry_defs: Vec<u32> = if main_nr < end_def {
                 vec![main_nr]
@@ -5534,6 +5559,18 @@ fn main() {
             p.data.namespace_colliding_native_fns();
             let mut out = generation::Output::new(&p.data, &state.database);
             out.wasm_browser = true;
+            // @PLN98 P3.4 — a browser client is debug-OFF by default (a production
+            // client should not ship a live-flip / breakpoint channel): the live
+            // tier is opt-IN via `--debug[=name]`.  `--lean` also forces it off.
+            // The debug name is baked so the client can announce itself to the
+            // server, which then addresses debug frames to it over the relay.
+            out.emit_live = debug_name.is_some() && !lean;
+            out.debug_name.clone_from(&debug_name);
+            // Embed the program source so the debug client bootstraps the parked
+            // interpreter from BYTES (no filesystem in a browser) — see P3.1.
+            if out.emit_live {
+                out.program_src = std::fs::read_to_string(&abs_file).ok();
+            }
             let main_nr = p.data.def_nr("n_main");
             let entry_defs: Vec<u32> = if main_nr < end_def {
                 vec![main_nr]
@@ -6116,12 +6153,20 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
             // resolve by d_nr so the renamed def stays consistent).
             p.data.namespace_colliding_native_fns();
             let mut out = generation::Output::new(&p.data, &state.database);
+            // @PLN98 P3.1 — embed the program's own source so a live build can
+            // bootstrap the parked interpreter from BYTES (no `LOFT_LIVE_SRC` file)
+            // — the browser/wasm delivery.  Best-effort: unreadable → fs fallback.
+            out.program_src = std::fs::read_to_string(&abs_file).ok();
             // Host-native backend: link each `#native` package's cdylib by C-ABI
             // (`extern "C"` decls + `.so`), not its rlib — see NATIVE.md
             // § Resolution: separate the API id from the Rust part.  The shared
             // `native_cabi_enabled()` keeps codegen and the linker flags in sync
             // (off on Windows, which stays on the rlib path).
             out.native_cabi = native_utils::native_cabi_enabled();
+            // @PLN98 P2 — `--lean` strips the live/debug tier from the emitted Rust.
+            if lean {
+                out.emit_live = false;
+            }
             let result = if native_release {
                 let main_nr = p.data.def_nr("n_main");
                 let entry_defs: Vec<u32> = if main_nr < end_def {

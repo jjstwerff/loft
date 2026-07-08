@@ -384,6 +384,14 @@ struct Kernel {
     /// returns at the top of its next turn (mirror of the connector's
     /// `client_stop`).
     alive: bool,
+    /// @PLN98 P3.4 — debug RELAY: a client that opted into debugging
+    /// (`--debug=<name>`) registers its NAME here (conn slot → name), so an
+    /// agent's `D!:@<name>:<cmd>` frame forwards to that client's socket.
+    debug_names: std::collections::HashMap<usize, String>,
+    /// @PLN98 P3.4 — while a forwarded debug command is outstanding: the client
+    /// conn slot → the agent conn slot that sent it, so the client's `D!:reply`
+    /// routes back to the requesting agent.
+    debug_relay: std::collections::HashMap<usize, usize>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -688,6 +696,8 @@ fn listen_impl(port: i64, tick_us: i64) -> bool {
                     last_tick_us: 0,
                     warned_oversize: false,
                     alive: true,
+                    debug_names: std::collections::HashMap::new(),
+                    debug_relay: std::collections::HashMap::new(),
                 });
             });
             // @PLN18 08-S5 — the swap-resume handshake: when this process was
@@ -1960,6 +1970,26 @@ fn handle_debug_control(k: &mut Kernel, cid: usize, cmd: &str) {
     if !debug_control_enabled() {
         return; // not a debug host: the frame is silently dropped
     }
+    let cmd = cmd.trim();
+
+    // @PLN98 P3.4 — a debug CLIENT (a game peer that opted into `--debug=<name>`)
+    // registers its name, so an agent can address it by name.  From ANY peer.
+    if let Some(name) = cmd.strip_prefix("iam ") {
+        let name = name.trim().to_string();
+        k.debug_names.insert(cid, name.clone());
+        let _ = deliver(k, cid, &format!("D:registered {name}"), false);
+        return;
+    }
+    // @PLN98 P3.4 — a debug CLIENT relays a `D:` reply back to the agent that
+    // sent the outstanding forwarded command.
+    if let Some(msg) = cmd.strip_prefix("reply ") {
+        if let Some(&agent) = k.debug_relay.get(&cid) {
+            let _ = deliver(k, agent, msg.trim(), false);
+        }
+        return;
+    }
+
+    // Everything else is an AGENT command — trusted, so LOOPBACK-gated.
     let loopback = k.conns[cid]
         .as_ref()
         .and_then(|c| c.peer_addr().ok())
@@ -1967,6 +1997,38 @@ fn handle_debug_control(k: &mut Kernel, cid: usize, cmd: &str) {
     if !loopback {
         return;
     }
+
+    // @PLN98 P3.4 — forward `@<name>:<inner>` to the named client's socket and
+    // remember the reply route (client → this agent).  The client applies the
+    // `D!:<inner>` frame over its own host_input pump and answers with `D!:reply`.
+    if let Some(rest) = cmd.strip_prefix('@')
+        && let Some((name, inner)) = rest.split_once(':')
+    {
+        let client = k
+            .debug_names
+            .iter()
+            .find(|(_, n)| n.as_str() == name)
+            .map(|(&slot, _)| slot);
+        match client {
+            Some(client_cid) => {
+                k.debug_relay.insert(client_cid, cid);
+                let framed = format!("D!:{}", inner.trim());
+                let sent = k
+                    .conns
+                    .get_mut(client_cid)
+                    .and_then(|c| c.as_mut())
+                    .is_some_and(|conn| write_frame(conn, 1, framed.as_bytes()).is_ok());
+                let verdict = if sent { "relayed" } else { "unreachable" };
+                let _ = deliver(k, cid, &format!("D:{verdict} {name}"), false);
+            }
+            None => {
+                let _ = deliver(k, cid, &format!("D:err no debug client {name}"), false);
+            }
+        }
+        return;
+    }
+
+    // Local (THIS server's own interpreter) debug — the server-authoritative path.
     if let Some(msg) = debug_cmd_dispatch(cid as i64, cmd) {
         let _ = deliver(k, cid, &msg, false);
     }
@@ -2042,6 +2104,74 @@ fn debug_cmd_dispatch(cid: i64, cmd: &str) -> Option<String> {
         _ => Some(format!("D:err unknown command {cmd:?}")),
     };
     reply
+}
+
+/// @PLN98 P3.3 — one message off the shared input channel, classified.
+#[cfg(not(target_arch = "wasm32"))]
+pub enum InputFrame {
+    /// A `D!:`-tagged DEBUG control frame — already dispatched through
+    /// [`debug_cmd_dispatch`]; the payload is its immediate reply (if any) for
+    /// the caller to send back out (`loft_host_print` on wasm).
+    Debug(Option<String>),
+    /// PROGRAM input — hand it to the running program's `host_input()`.
+    Program(String),
+}
+
+/// @PLN98 P3.3 — route ONE message off the shared JS→wasm input channel (`inQ`):
+/// a `D!:`-tagged frame is a DEBUG control command (stripped + dispatched through
+/// the SAME [`debug_cmd_dispatch`] core the TCP channel feeds), anything else is
+/// PROGRAM input.  This is the tag that lets debug control and program input ride
+/// ONE queue without colliding — the browser debug pump drains `Debug` frames
+/// while the program's `host_input()` consumes `Program` messages.  `cid` is the
+/// reply route (the debug output channel).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn route_input_frame(cid: i64, msg: &str) -> InputFrame {
+    match msg.strip_prefix("D!:") {
+        Some(cmd) => InputFrame::Debug(debug_cmd_dispatch(cid, cmd.trim())),
+        None => InputFrame::Program(msg.to_string()),
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod p98_p33_tests {
+    use super::{InputFrame, route_input_frame};
+
+    // @PLN98 P3.3 — debug control frames and program input share ONE input channel
+    // and must not collide: a `D!:`-tagged message routes to `debug_cmd_dispatch`
+    // (the shared command core), everything else passes through as program input.
+    #[test]
+    fn debug_frames_route_off_the_shared_input_channel() {
+        // Program input passes straight through, untouched.
+        match route_input_frame(0, "player says: attack") {
+            InputFrame::Program(m) => assert_eq!(m, "player says: attack"),
+            InputFrame::Debug(_) => panic!("program input was misrouted as a debug frame"),
+        }
+        // A leading colon / lookalike that is NOT the `D!:` tag stays program input.
+        match route_input_frame(0, "Don't panic") {
+            InputFrame::Program(m) => assert_eq!(m, "Don't panic"),
+            InputFrame::Debug(_) => panic!("a non-tagged message was misrouted as debug"),
+        }
+        // A `D!:bp` frame is stripped and reaches `debug_cmd_dispatch`'s `bp` arm,
+        // which accepts it (no live world is borrowed here, so it is queued on the
+        // debug mailbox to apply once a pause holds the State) → "D:ok". This
+        // asserts the ROUTING reached the dispatcher's `bp` arm; the set-breakpoint
+        // EFFECT over a live world is debug_cmd_dispatch's own contract.
+        match route_input_frame(0, "D!:bp some_fn") {
+            InputFrame::Debug(reply) => assert_eq!(reply.as_deref(), Some("D:ok bp some_fn")),
+            InputFrame::Program(_) => panic!("a D!: frame was misrouted as program input"),
+        }
+        // An unknown command still routes to the dispatcher (proves strip+dispatch,
+        // not merely a prefix check that discards the payload).
+        match route_input_frame(0, "D!:frobnicate x") {
+            InputFrame::Debug(reply) => {
+                assert!(
+                    reply.as_deref().unwrap_or("").starts_with("D:err unknown"),
+                    "unknown command reached the dispatcher: {reply:?}"
+                );
+            }
+            InputFrame::Program(_) => panic!("unknown D!: command was misrouted"),
+        }
+    }
 }
 
 // ── @PLN18 08-S5 — the native build swap: a new process under a running ────
