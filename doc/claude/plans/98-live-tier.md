@@ -5,29 +5,26 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # 98 — Live/debug tier: one primitive (the interpreter over the shared live store)
 
-**Status (2026-07-08):** P1 P2 P1b P3.1 P3.2 P3.3 P3.4 ✅ ALL LANDED — @PLN98 is COMPLETE, all probes
-confirmed. The full browser debug tier is proven end-to-end and headless: an agent debugs a `--html
---debug` wasm client THROUGH an engine_host server over WebSockets — breakpoint → pause → FULL-
-expression eval → resume — verified by
-`wasm_debug_relay::agent_debugs_a_browser_wasm_client_through_the_server_relay`; the one-shared-heap
-invariant (compiled ↔ interpreted agree) is confirmed on wasm (Probe 2). Only non-plan follow-ups
-remain (multi-file embedded source; the tier-wide default-lean release flip). ·
-[`@PLN98`](https://github.com/loft-lang/plans/issues/98) · `subject:loft` · design-doc-first (Design
-Protocol 1). Consumers: the `@PLN16` debugger, the game / `engine_host` loop, and `routing`'s offline
-`--html` build (its `loft-feedback.md` 2026-07-07).
+**Status — DONE / SHIPPED 2026-07-08.** P1 P2 P1b P3.1 P3.2 P3.3 P3.4 ✅ ALL LANDED, all probes
+confirmed. **Closed by [loft PR #529](https://github.com/loft-lang/loft/pull/529)** — its body carries
+`Closes @PLN98`, so on merge to `main` the `close-plans` workflow sets
+[`@PLN98`](https://github.com/loft-lang/plans/issues/98) `status:finished` and closes it. This file is
+now the **closed historical record** (design rationale + what shipped + how it was verified); the
+living reference is the code + guards it points at below.
 
-> ## ▶ RESUME HERE (post-`/clear` handoff)
->
-> **Branch `tuxedo-pln98-live-tier`** (off `origin/main`, pushed, UNMERGED — no PR opened yet). Holds:
-> the design doc + **P1** (debug `eval`/`setValue` fixed in heap-local frames, `src/repl.rs`) +
-> **P2** (`--lean` codegen flag strips the live tier, `src/generation/mod.rs` + `src/main.rs`) + the
-> **P3 design**. All committed; working tree clean. Related: **PR #525** (catalog `@I60` tag) is CLEAN +
-> open, mergeable; **@PLN94** oracle merged (#524).
-> **Next action:** open the `pln98` PR, and/or start the **implementation ladder in § A2** — the natural
-> first step is the **shared live-frame eval primitive** (closes P1b *and* powers the browser `eval`),
-> then **P3.1** (embedded-source bootstrap). Steps through P3.3 are NATIVE-testable; only P3.4 needs
-> headless-Chromium. Each step names its verification. Full context in [`../pln98-live-tier`] memory +
-> this doc.
+The full browser debug tier is proven end-to-end and headless: an agent debugs a `--html --debug` wasm
+client THROUGH an engine_host server over WebSockets — breakpoint → pause → FULL-expression eval →
+resume — verified by `wasm_debug_relay::agent_debugs_a_browser_wasm_client_through_the_server_relay`;
+the one-shared-heap invariant (compiled ↔ interpreted agree) is confirmed on wasm (Probe 2).
+
+> **Where it lives now (the living reference).** The primitive: `src/live_dispatch.rs`. The browser
+> client: `src/wasm_debug.rs`. The server relay: `src/engine_host.rs`. The frame-eval primitive:
+> `State::eval_frame_reenter` (`src/state/mod.rs`). Guards: `tests/wasm_debug_relay.rs`,
+> `tests/html_wasm.rs`, `tests/rpc.rs`, `tests/debugger.rs`. Non-plan follow-ups (multi-file embedded
+> source; the tier-wide default-lean release flip) are tracked separately, not here.
+
+`subject:loft` · design-doc-first (Design Protocol 1). Consumers: the `@PLN16` debugger, the game /
+`engine_host` loop, and `routing`'s offline `--html` build (its `loft-feedback.md` 2026-07-07).
 
 Prior art this COMPLETES (not greenfield): `@PLN16` (debugger, `status:finished`) and `@PLN18`/`@I78`
 (engine-host live tier — phase 08 `08-live-build-swap.md` shipped for native). The primitive is proven;

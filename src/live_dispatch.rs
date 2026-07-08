@@ -959,9 +959,9 @@ pub fn n_kernel_rebuild_artifact_dest(stores: &mut Stores, stack: &mut DbRef) {
 mod tests {
     use crate::parser::Parser;
 
-    /// Parse the fs stdlib + `program_path` the way [`bootstrap`] does (`parse_dir`
-    /// + `parse`), through the final `scopes::check`, and return
-    /// `(def_count, n_main_resolves)`.
+    /// Parse the fs stdlib + `program_path` the way [`bootstrap`] does
+    /// (`parse_dir` + `parse`), through the final `scopes::check`, and
+    /// return `(def_count, n_main_resolves)`.
     fn parse_fs(program_path: &str) -> (u32, bool) {
         let mut p = Parser::new();
         p.parse_dir("default", true, false).expect("parse default/");
