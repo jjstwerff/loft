@@ -11,6 +11,7 @@ ide/assets/base-fs.json
 tests/wasm/pkg/
 tests/wasm/assets.json
 .claude/worktrees/
+.claude/settings.json
 tests/test_native_pkg/
 *.glb
 lib/graphics/examples/*.png
