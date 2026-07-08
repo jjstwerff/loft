@@ -198,3 +198,19 @@ as 3-backend script tests, green.
 - [README.md](README.md) — the plan (arcs, probe evidence, open questions).
 - [`../../lib_plans/21-datetime/DESIGN.md`](../../lib_plans/21-datetime/DESIGN.md) —
   the format-hook design (Arc B Part 1+2) + the DateTime library struct that consumes all of this.
+
+## Implementation status (2026-07-08)
+
+- **Arc A operator dispatch — DONE.** `call_op`'s concrete branch now resolves via
+  `find_fn` (the `@PLN99 Arc A` block in `src/parser/mod.rs`). Direct `<` `<=` `>`
+  `>=` `-` `==` `!=` bind on user structs, both backends; regression
+  `tests/scripts/511-first-grade-operators.loft`; no regression (expressions 127,
+  issues 748). Subtraction confirmed `OpMin` (A3).
+- **Arc A null facet (A5) — DIAGNOSED, not fixed (deeper than expected).**
+  `DbRef::NULL` is `{store_nr: u16::MAX, rec: 0}`, so `conv_bool_from_ref(NULL)` =
+  `rec != 0` = **false**, and the *dumped* `== null` IR
+  `OpEqBool(false, OpConvBoolFromNull())` should be `true` — yet the observed result
+  is `false`. **The executed path diverges from the dumped IR** (a two-pass /
+  optional-wrapping subtlety in the @PLN25 null model). Needs a runtime-instrument
+  trace to close; a **pre-existing @PLN25 bug**, independent of the operator work.
+- **Arc B (format), Arc C (conversions) — not started.**

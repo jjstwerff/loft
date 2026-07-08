@@ -5363,6 +5363,24 @@ impl Parser {
                     return tp;
                 }
             }
+            // @PLN99 Arc A — a user-defined operator on a concrete struct is stored
+            // as `t_<len><Type>_Op<Name>` / `n_Op<Name>`, never in the `possible`
+            // map (`add_op` fills it only for prefix-named built-ins like `OpLtInt`).
+            // Resolve it via `find_fn` — the same resolver the generic/method path
+            // uses — so a DIRECT `a < b` on a user struct dispatches the user def,
+            // not only inside a `<T: Ordered>` body. A type with no such def falls
+            // through to the unchanged "No matching operator" error below.
+            if let Some(first) = types.first() {
+                let user_op = self
+                    .data
+                    .find_fn(u16::MAX, &format!("Op{}", rename(op)), first);
+                if user_op != u32::MAX {
+                    let tp = self.call_nr(code, user_op, list, types, false, &[]);
+                    if tp != Type::Null {
+                        return tp;
+                    }
+                }
+            }
         }
         // @PLN25 E2 — `!nullable` (a `__nullable<S>` value in boolean position)
         // means "is absent" (discriminant 0): no struct operator overload

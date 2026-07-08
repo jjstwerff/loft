@@ -1,0 +1,33 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN99 Arc A — direct concrete operator dispatch on a user struct. A user
+// `fn Op<Name>(self: T, other: T)` must bind in a DIRECT `a < b` / `a - b`
+// expression (not only inside a `<T: Ordered>` generic body), resolving via
+// `find_fn` in `call_op` the same way the generic path already does. All three
+// backends. Before this, `a < b` on a concrete struct errored "No matching
+// operator '<' on 'Money' and 'Money'".
+
+struct Money { cents: integer not null }
+
+fn OpLt(self: Money, other: Money) -> boolean { self.cents < other.cents }
+fn OpLe(self: Money, other: Money) -> boolean { self.cents <= other.cents }
+fn OpGt(self: Money, other: Money) -> boolean { self.cents > other.cents }
+fn OpGe(self: Money, other: Money) -> boolean { self.cents >= other.cents }
+fn OpMin(self: Money, other: Money) -> integer { self.cents - other.cents }
+fn OpEq(self: Money, other: Money) -> boolean { self.cents == other.cents }
+fn OpNe(self: Money, other: Money) -> boolean { self.cents != other.cents }
+
+fn main() {
+  a = Money { cents: 150 };
+  b = Money { cents: 500 };
+  assert(a < b, "direct <");
+  assert(!(b < a), "direct < false side");
+  assert(a <= a, "direct <=");
+  assert(b > a, "direct >");
+  assert(b >= b, "direct >=");
+  assert((b - a) == 350, "direct - (OpMin)");
+  assert(a == a, "direct ==");
+  assert(a != b, "direct !=");
+  println("first-grade ops ok");
+}
