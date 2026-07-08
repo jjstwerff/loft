@@ -144,7 +144,16 @@ the `value struct` probe still parses + works (as `Reference`). Fewer sites than
   distinguishes `Value` from `Reference` correctly). Revisit in 1.4 if a `Value`↔`Reference`
   cross-compare is needed at a coercion boundary.
 
-### Step 1.3 — the arms that DIFFER (this is where value semantics lives)
+### Step 1.3 — the arms that DIFFER — DONE (commit ba029ef7)
+Q1 resolved: the slot allocator (`slots_v2`) has no `Data`, so the inline size is **embedded in
+the variant** — `Type::Value(u32 def, u16 inline_size, Deps)`. `variables::size`/`element_size`
+now return that size (inline slot, not a 12-byte DbRef — the inline slot is what makes copy fall
+out); `variables::align`/`element_align` → 8. The other two "differing" arms needed NO change:
+`has_lifetime_concern(Value)` = false (not in the true-list) and `depend(Value)` = empty
+(`_ => {}`) are already correct. `ir_schema` carries the embedded size (round-trips). Dead code
+until minting; build + suite green.
+
+#### Step 1.3 (original text — for reference)
 - **Size/align/inline layout:** `variables::size` (`variables/mod.rs:1895`), `variables::align`,
   `data::element_size` (`data.rs:1928`), `element_align` — a `Type::Value` returns the **packed
   inline record size** (`Stores::finish_type`'s `types[t_nr].size`, already computed), NOT
