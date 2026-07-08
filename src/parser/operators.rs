@@ -2067,6 +2067,25 @@ impl Parser {
             let enum_null = (operator == "==" || operator == "!=")
                 && ((matches!(*ctp, Type::Enum(_, _, _)) && second_type == Type::Null)
                     || (*ctp == Type::Null && matches!(second_type, Type::Enum(_, _, _))));
+            // @PLN99 A5 — a nullable STRUCT-reference VARIABLE (`s: DT? = null`,
+            // typed `Optional(Reference)`) holds the reference null sentinel
+            // (`store_nr==u16::MAX`, from OpNullRefSentinel), like a nullable enum variable.
+            // Its `== null` must test that sentinel via OpRefIsNull.  Without this case it fell
+            // to the generic `==`, which lowered to
+            // `OpEqBool(OpConvBoolFromRef(s), OpConvBoolFromNull())` — but OpConvBoolFromRef is
+            // `rec != 0` (is-NON-null, 0/1) while OpConvBoolFromNull is the 255 bool sentinel,
+            // so the two NEVER compare equal → `s == null` was ALWAYS false (a live `main`
+            // bug: `??` and `{s}` saw null but `== null` disagreed).
+            // Gate on `Optional`, NOT bare `Reference`: a hash/collection LOOKUP result is a
+            // bare `Type::Reference` whose miss is `rec==0` (not the store_nr sentinel) and is
+            // handled correctly by the existing path — OpRefIsNull would misread it (p285).
+            // INLINE nullable struct fields are `Type::Enum(__nullable<…>)` (enum_null path).
+            let opt_ref_l =
+                matches!(*ctp, Type::Optional(_)) && matches!(ctp.base(), Type::Reference(_, _));
+            let opt_ref_r = matches!(second_type, Type::Optional(_))
+                && matches!(second_type.base(), Type::Reference(_, _));
+            let ref_null = (operator == "==" || operator == "!=")
+                && ((opt_ref_l && second_type == Type::Null) || (*ctp == Type::Null && opt_ref_r));
             if vec_null {
                 // @PLN25: `vector == null` / `vector != null` tests the null
                 // sentinel (store_nr == u16::MAX) via OpVectorIsNull — NOT eq_ref,
@@ -2135,6 +2154,23 @@ impl Parser {
                         // rec==0, which rec==0 would misread as null.
                         self.cl("OpRefIsNull", &[e_code])
                     };
+                    *code = if operator == "==" {
+                        is_null
+                    } else {
+                        self.cl("OpNot", &[is_null])
+                    };
+                }
+                *ctp = Type::Boolean;
+            } else if ref_null {
+                if !self.first_pass {
+                    let r_code = if *ctp == Type::Null {
+                        second_code
+                    } else {
+                        code.clone()
+                    };
+                    // A struct reference variable is a DbRef whose null IS the store_nr
+                    // sentinel (OpRefIsNull), NOT rec==0 (a present record can carry rec==0).
+                    let is_null = self.cl("OpRefIsNull", &[r_code]);
                     *code = if operator == "==" {
                         is_null
                     } else {

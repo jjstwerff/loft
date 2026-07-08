@@ -206,13 +206,20 @@ as 3-backend script tests, green.
   `>=` `-` `==` `!=` bind on user structs, both backends; regression
   `tests/scripts/511-first-grade-operators.loft`; no regression (expressions 127,
   issues 748). Subtraction confirmed `OpMin` (A3).
-- **Arc A null facet (A5) — DIAGNOSED, not fixed (deeper than expected).**
-  `DbRef::NULL` is `{store_nr: u16::MAX, rec: 0}`, so `conv_bool_from_ref(NULL)` =
-  `rec != 0` = **false**, and the *dumped* `== null` IR
-  `OpEqBool(false, OpConvBoolFromNull())` should be `true` — yet the observed result
-  is `false`. **The executed path diverges from the dumped IR** (a two-pass /
-  optional-wrapping subtlety in the @PLN25 null model). Needs a runtime-instrument
-  trace to close; a **pre-existing @PLN25 bug**, independent of the operator work.
+- **Arc A null facet (A5) — DONE (2026-07-08).** Root cause was NOT an IR/execution
+  divergence: `s == null` on a nullable struct-reference variable (typed
+  `Optional(Reference)`) fell to the generic `==`, which lowers to
+  `OpEqBool(OpConvBoolFromRef(s), OpConvBoolFromNull())` — but `OpConvBoolFromRef` is
+  `rec != 0` (is-NON-null, 0/1) while `OpConvBoolFromNull` is the **255** bool sentinel,
+  so `eq_bool(0_or_1, 255)` is ALWAYS false. `operators.rs` special-cases `vector`/
+  `float`/`enum` `== null` but had NO struct-reference case. Added `ref_null` (mirrors
+  `enum_null`): a nullable struct ref tests the sentinel via `OpRefIsNull`
+  (`store_nr==u16::MAX`), negated for `==` vs `!=`. **Gated on `Optional(Reference)`,
+  not bare `Reference`** — a hash/collection LOOKUP result is a bare `Reference` whose
+  miss is `rec==0` (not the store_nr sentinel) and keeps its existing correct path;
+  gating on bare `Reference` regressed p285/issue_85/p293 (caught by the suite, then
+  narrowed). Regression `tests/scripts/514-null-equality-struct-ref.loft` covers the
+  fix AND the lookup over-reach guard. Both backends. `??` and `== null` now agree.
 - **Arc B Part 1 (bare `{x}` via `to_text`) — DONE.** `try_bound_to_text_call`
   (`src/parser/collections.rs`) no longer gates on `context == Generic`; `{x}` on any
   struct with a `t_<len><Type>_to_text` method routes through it (regression

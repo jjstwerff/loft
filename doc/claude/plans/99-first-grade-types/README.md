@@ -33,9 +33,15 @@ generics; the three remaining gaps are what keep a library struct from being
   dispatch a user `fn OpConv<T>From<S>`, leak-free on both backends; no conversion →
   clean `Unknown cast` error (regression `tests/scripts/513-first-grade-conversions.loft`).
   See STEPS.md § Implementation status for the three-edit mechanism.
-- **A5 null-equality facet — DIAGNOSED, not fixed.** `s == null` on a custom struct still
-  wrong (deeper @PLN25 lowering issue; executed path diverges from the dumped IR).
+- **A5 null-equality facet — DONE.** `s == null` on a nullable struct-reference variable
+  (`Optional(Reference)`) now lowers to `OpRefIsNull` (was the broken
+  `OpEqBool(is_non_null(s), 255_sentinel)` → always false). Gated on `Optional(Reference)`
+  so hash-lookup results (bare `Reference`, `rec==0` miss) keep their correct path
+  (regression `tests/scripts/514-null-equality-struct-ref.loft`). `??` and `== null` agree.
 - **Arc D (value structs) — deferred (perf trigger).**
+
+**@PLN99 is substantively complete:** Arcs A, B (1+2), C, and the A5 null facet are all
+DONE; only the perf-gated Arc D remains deferred.
 
 **Probe evidence (2026-07-08, `--interpret` + `--native`, both agree):**
 - `dt + 5` on `struct DateTime { ms: integer }` → **correctly rejected** ("No
