@@ -14,8 +14,8 @@
 //     (was: `d2 - d1` coerced both to integer → typed integer, not Duration).
 // Both were built-in operator paths beating the type's OWN operator; call_op now tries
 // the exact `t_<len><Type>_Op<Name>` method BEFORE the built-in/coercion loop.
-struct DateTime { ms: integer }
-struct Duration { ms: integer }
+value struct DateTime { ms: integer }
+value struct Duration { ms: integer }
 
 // --- proleptic Gregorian calendar math (Howard Hinnant days/civil) ---
 fn days_from_civil(y0: integer, m: integer, d: integer) -> integer {

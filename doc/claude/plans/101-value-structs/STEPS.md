@@ -152,7 +152,15 @@ arg is not a `Set(local, …)`, so it stays a DbRef into the store).
 Recursive walk: mirror `variables/validate.rs::build_scope_parents` (Block/Loop → operators,
 Insert → ops, If → cond/then/else, Set/Return/Drop/Span → inner, Call/Iter → children).
 
-### Step 1.3 — verify (both backends + leak) — the acceptance gate
+### Step 1.3 — verify + regression — DONE (commit pending)
+Regression `tests/scripts/516-value-struct-copy.loft` (value-struct field-read, vector-element
+read, loop-bind all copy; a plain reference `struct` control still aliases; operators dispatch) —
+both backends, leak-free. `tests/scripts/515` flipped: `DateTime`/`Duration` are now `value
+struct` — the full first-grade type (operators + format + conversions) passes on both backends
+with value semantics. `ownership_oracle` clean; leak-scan ratchet over all scripts green; only
+pre-existing cdylib/WASM flakes fail.
+
+#### Step 1.3 (original) — verify (both backends + leak) — the acceptance gate
 `value struct P { x: integer }`, `b.items=[P{x:1}]`, `e = b.items[0]; e.x = 99` ⇒
 `b.items[0].x == 1` (copy, not 99) on `--interpret` AND `--native`; `ownership_oracle` clean (no
 leak/UAF); full suite green. Then flip `515` + add a `vector<DateTime>` / DateTime-field
