@@ -158,7 +158,7 @@ host with a C compiler.** The Rust implementation degrades to the bootstrap comp
 2. **Mod replace/override policy for the core.** Can a bundle replace `OpAdd`? shadow
    `len`? last-wins / explicit `override` / error? (Security/stability gate for a *language*.)
 3. **Bundle dependency + load order for the core stdlib** (acyclic; missing-key = hard
-   error), riding @PLN52's build-time generation + cache so startup doesn't regress.
+   error), riding the @PLN11 stdlib cache (delivered; @PLN52 closed) so startup doesn't regress.
 4. **Trust boundary** of a native (`#rust`/C) opcode body vs a loft opcode body (the
    latter sandboxable) — ties to the zero-trust line and @PLN86.
 5. **Store-binding granularity (strand 7).** Is the store fixed per *type* (coarse,
@@ -177,7 +177,7 @@ host with a C compiler.** The Rust implementation degrades to the bootstrap comp
 ## Cross-arc dependencies
 
 - **@PLN35** (PEG match patterns) — self-host *enabler* (the compiler's front end).
-- **@PLN52** (stdlib fast-start cache) — perf prerequisite for a bundle-ized stdlib.
+- **@PLN52** (stdlib fast-start cache) — perf prerequisite for a bundle-ized stdlib; **MET** — delivered via @PLN11 arc D/D2b (opt-in `LOFT_STDLIB_CACHE`); @PLN52 closed 2026-07-09.
 - **@PLN86** (sandbox-subset-flag) — enabled by subsettable type bundles (strand 3).
 - **@PLN24** (`#c` C-ABI binding + ANSI-C shim) — adjacent C-boundary prior art for strand 5.
 - **@PLN89** (interp↔native differential oracle) — extends to police the ANSI-C backend.

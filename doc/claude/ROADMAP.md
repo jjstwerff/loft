@@ -73,7 +73,7 @@ now — what's open below is the increments.
 
 | Theme | Open increment (the part NOT yet shipped) | Scope | Home |
 |---|---|---|---|
-| **Performance / startup** (serves live-prototyping) | precompiled-stdlib fast-start (`@PLN52`); const-store Phase B/C (`@PLN82`); the wasm-vs-native gap | in-scope | [PERFORMANCE.md § Open work](PERFORMANCE.md); `@PLN52`/`@PLN82` |
+| **Performance / startup** (serves live-prototyping) | precompiled-stdlib fast-start (`@PLN52` — **DELIVERED** via @PLN11 arc D/D2b, opt-in `LOFT_STDLIB_CACHE`); const-store Phase B/C (`@PLN82`); the wasm-vs-native gap | in-scope | [PERFORMANCE.md § Open work](PERFORMANCE.md); `@PLN82` |
 | **Native robustness** | shared-store dispatch → a C-ABI `LoftStore` handle (gh #389 pt.1 — the recurring `viewer_markdown` cdylib-collision cause) | in-scope (stabilisation) | [NATIVE.md § Open work](NATIVE.md); gh #389 |
 | **Library system** (the dogfood track) | LSP, a game-client lib, viewer generalisation, regex `match_groups`/`replace` — *graphics / imaging / server / markdown / world / game_protocol / **regex** (v0.1.0: matches/find/split) already ship* | in-scope | [lib_plans/README](lib_plans/README.md); the `[libs]` `@PLN` issues |
 | **Friend-readiness / UX** | first-time tutorial + more day-to-day ergonomics — *REPL / `introspect` / the IDE editor slices already ship* | mixed | ROADMAP § U + § "Near-term focus" below |
@@ -461,7 +461,7 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | [NATIVE.md § Open work](NATIVE.md#open-work) | XS-M per item | — | N8b.3 yield-from + N8c.1/2 generic text-return audit + N20a/b fill.rs auto-gen |
 | [PERFORMANCE.md § Open work](PERFORMANCE.md#open-work) | S-MH per item | P1 blocked on opcode-table capacity | 7 optimization designs (P1-P3 interpreter / N1-N3 native / W1 wasm) |
 | [`plans/45-doc-hygiene-autofix/`](plans/45-doc-hygiene-autofix) | M | — | `make plan-move` + `make doc-fix` — atomic directory-move with link-rewriting; closes the PR-212-style cascade of 3-5 fix-up commits per move |
-| [`plans/52-stdlib-fast-start/`](plans/52-stdlib-fast-start) | M-MH | cooperates with **plans/43-loft-store-durable** | Precompiled-stdlib cache — hash-validated on-disk parsed stdlib, deserialize-on-startup instead of re-parsing `default/*.loft` per invocation.  Surfaced during @PLAN53 Stage A1 (full-stdlib reload is what makes a Miri subset slow).  Miri-safe variant must use serde-into-fresh-alloc, not mmap raw reinterpret (provenance) |
+| [`plans/52-stdlib-fast-start/`](plans/52-stdlib-fast-start) | M-MH | **CLOSED — delivered by @PLN11 arc D/D2b/E** | Precompiled-stdlib cache — hash-validated on-disk parsed stdlib, deserialize-on-startup instead of re-parsing `default/*.loft` per invocation.  Built under @PLN11 (store-backed IR) as the opt-in `LOFT_STDLIB_CACHE` (`startup_cache.rs` + `cache.rs`); tests `d2b_stdlib_cache.rs` / `arc_e_program_cache.rs`.  Miri-safe serde variant was mooted (mmap route chosen; Miri solved by `cached_default()`) |
 | [`plans/2-vector-store-watermark/`](plans/2-vector-store-watermark) | S-M | kindred to finished PLAN51/52 store-lifetime class; soundness-floor A ([GOALS.md](GOALS.md)) | @P393 investigation — function-local vectors free at scope-end not last-use (cluster I) + literal-init double-alloc (cluster II).  Stage A ✓ both backends: **verified no leak**, benign watermark.  Stage B (source root-cause) + Stage C (design call: do-nothing-heuristic vs last-use-free) pending |
 
 ### N — Niche / opportunistic
