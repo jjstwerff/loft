@@ -1,7 +1,22 @@
 # @PLN81 — `#rust"..."` template migration
 
-**Status:** DEFERRED (opened as a stub 2026-05-02; deferred at the
-same date pending a driver).
+**Status: CLOSED — decided against (won't-do) 2026-07-08.** The premise inverted since this stub
+was opened. When filed (2026-05-02), `#rust"..."` looked like a redundant second emission path to
+delete (migrate all ~200 stdlib sites to hand-written `OpEmitter`s, then retire
+`output_call_template` + `Value::RawExpr`). Since then `#rust` **inline** became a first-class,
+*recommended* library-authoring mechanism — the loft-ship **Tier-1** path ("prefer `#rust` inline
+over `#native` external whenever the Rust is small"), ✓ across all four targets in
+[PACKAGES.md](../../PACKAGES.md). So it's a **kept public feature**, not debt: deleting the template
+path would break the documented `#rust` inline library route, and this doc's own "cost" section
+names the regression — a new Op is a one-line `#rust` annotation today vs a struct + impl + register
+call after. The real concern (one less-bug-prone emission path — the @P203 double-substitution
+class) is better served by HARDENING the template path (the differential oracle + regression guards,
+2026-07) and keeping `#rust` as the co-located library-facing path. If consolidation is ever wanted,
+the correct direction is the REVERSE (fold the ~5 emitters into `#rust`), which is a fresh plan, not
+this one. See [DESIGN_DECISIONS.md](../../DESIGN_DECISIONS.md). The design sketch below is retained
+as a historical record.
+
+---
 
 ## Goal
 

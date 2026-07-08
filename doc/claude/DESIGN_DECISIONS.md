@@ -1945,3 +1945,36 @@ proves a recurring source of user surprise, that is a #426 revisit, not a C86 on
 A profiler shows bind-copies dominating a real consumer AND the elision's coverage
 cannot be extended — that argues for widening `ElidePlan`, never for flipping the
 semantic.
+
+## C87 — `#rust"..."` template path is KEPT; do NOT migrate it away to per-Op emitters (@PLN81 closed)
+
+### Question
+
+Should the ~200 `#rust"..."` inline-Rust annotations in `default/*.loft` be migrated to
+hand-written `OpEmitter`s (`src/generation/ops/`) so Op emission has a single source of truth, and
+the template-substitution path (`calls.rs::output_call_template`) + `Value::RawExpr` deleted?
+(This was @PLN81 / "plan 13".)
+
+### Decision (2026-07-08)
+
+**No — closed by decision.** The `#rust"..."` template path stays. `#rust` **inline** is a
+first-class, *recommended* library-authoring mechanism (loft-ship **Tier 1**: "prefer `#rust`
+inline over `#native` external whenever the Rust is small"; ✓ across all four targets per
+PACKAGES.md), so it is a **kept public feature**, not stdlib-internal debt. Deleting the template
+path would break the documented `#rust` inline library route.
+
+### Rationale
+
+- Premise inverted since @PLN81 was filed (2026-05-02): what looked like a redundant second path
+  became the ecosystem's small-native-code path.
+- Authoring cost cuts the wrong way: a new Op is a one-line `#rust` annotation today vs a struct +
+  impl + register call after — @PLN81's own "cost" section flags this regression.
+- The real concern (one less-bug-prone emission path — the @P203 double-substitution class) is
+  better served by HARDENING the template path (the differential oracle + regression guards) and
+  keeping `#rust` co-located, not by a ~200-site migration to a second mechanism.
+
+### Revisit when
+
+Codegen consistency genuinely needs consolidation — in which case the correct direction is the
+REVERSE (fold the ~5 hand-written emitters INTO `#rust`, making `#rust` the single source of
+truth), a fresh plan, NOT @PLN81's "everything → emitters, delete the template path."
