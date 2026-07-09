@@ -321,6 +321,40 @@ text-dest fns and has a proven-clean target (flat rebind, all fns 0/call); attem
 per-fn probes turned "2b is fn-fragile, deferred" into "2b works flat; Insert was
 the bug".
 
+### Attempt 2c (2026-07-09) — flat bind-and-promote: REVERTED (injected local ≠ source local)
+
+Emitted the bind FLAT (two sibling ops `Set(__tret, call); Var(__tret)`, in
+`parse_block` where `l` is still a growable `Vec`, so no `Insert`), set the tail type
+to `Text(frame1(__tret))`, and let `block_result`'s existing var-tail `text_return`
+promote it. `tail_to_json` &c went clean; but the VALUE oracle again caught
+**`tail_upper` → empty**. The `n_drive` bytecode diff vs the proven-clean MANUAL
+`{ s=…; t = s.to_uppercase(); t }` pins it — the SIGNATURE promotes identically
+(`fn n_drive(__tret:&text)`), but the BODY ops do not:
+
+| | manual `t` (clean) | injected `__tret` (empty) |
+|---|---|---|
+| clear   | `ClearStackText` (deref the `&text` buffer) | `ClearText` (plain text) |
+| call dest | `VarRef(t)` → to_uppercase writes INTO the buffer | `InitCreateStack` → a FRESH dest |
+| return  | `VarRef; GetStackText` (read the buffer) | `ArgText(__tret)` (the empty local) |
+
+So codegen lowers the injected `__tret`'s body references as a **plain text**, not
+the promoted **`&text` buffer** — `to_uppercase` writes to a throwaway dest and the
+returned `__tret` stays empty. A local injected mid-`parse_block` via `create_unique`
+does NOT acquire a source-level local's full promotion lifecycle (usage tracking /
+`RefVar` re-lowering of its body ops), even though the IR and the promoted signature
+look identical. Reverted per the stop-condition.
+
+**What the next attempt needs (2d):** create the bind local where the parser tracks
+it exactly like a source local — i.e. synthesize the `t = <call>; t` rewrite EARLIER
+(during expression/return parsing, before types + usage are finalised), so
+`text_return`'s promotion re-lowers its body ops to the `&text` (`ClearStackText`/
+`VarRef`/`GetStackText`) form — OR fix the promotion to re-lower an
+already-emitted `Set/Var` on a var whose type flips to `RefVar`. The proven-clean
+target (manual flat rebind, all native text-dest fns 0-leak) and the VALUE-oracle
+guard remain; three representations tried (2b `Insert`, 2c flat-in-`block_result`),
+each caught by the guard — the remaining unknown is purely the injected-local
+promotion lifecycle, not the approach.
+
 ## Why not fixed in the surfacing session
 
 The surfacing session was on macOS-ARM and had done the full diagnosis; the edit
