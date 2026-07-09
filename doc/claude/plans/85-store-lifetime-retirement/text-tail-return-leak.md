@@ -506,10 +506,55 @@ The matrix (`probes/text-tail-return/`) still flags `concat_suffix` (= subsystem
 generic) and `local_dropped` (= subsystem 4, native JSON) as LEAK — they are the
 in-matrix representatives of the two biggest remaining subsystems.
 
+## Session 3 (2026-07-09) — the analysis FRAMEWORK, and wiring it in
+
+The 3a/3b/3c stacking (five per-shape predicates) hid a shared latent bug: each
+decided the buffer promotion during PASS-2 body parse, so a fn's ABI gained a
+hidden `&text` buffer a FORWARD-REFERENCE caller (compiled earlier in pass 2)
+never saw — codegen `Too few parameters on n_<fn> (got 0, need 1)` (the markdown
+viewer's `page_landing`, a user-call tail).  2d has the identical latent bug.
+3a/3b/3c were reverted; the promotable-tail work was rebuilt as ONE analysis.
+
+**The framework (`Parser::classify_text_return`, control.rs).** A pure selector
+over the return tail → `TextReturn`:
+`Owned(NativeCall|UserCall|ViewOfLocal|IfMatchArm|BuiltLocal|TupleElement|FnRefCall)`
+· `Borrow(Argument|ForwardArg)` · `Plain`.  Built + verified as a SHADOW first:
+`LOFT_TRA_DUMP=<file>` appends `TRA <fn> => <verdict>` per text-returning fn with
+NO codegen change; `framework/corpus.loft` (one fn per shape + `// VERDICT:`),
+`framework/verify.sh`, and `tests/text_return_analysis.rs` (CI) check all **24
+cases**, including the p281 `ForwardArg` vs arg-view boundary and the open
+subsystems (which correctly read `Plain` — leak is elsewhere).  Two harness
+gotchas found: loft's `eprintln!` races `process::exit` (use a file), and the
+content-keyed program cache skips the parse on a warm hit (set `LOFT_NO_CACHE`).
+
+**Wiring it in (`wants_tret_bind`).** The `parse_block` gate now reads the ONE
+verdict and fires the `__tret` bind in BOTH passes (so the buffer lands in the
+pass-1 signature); `text_return`'s `Attr` arm re-applies `RefVar` on pass 2 (the
+double-classify 2d dodged).  **Scoped to the FORWARD-REF-SAFE verdicts:**
+
+- `ViewOfLocal` — a field/index view resolves to `OpGetText` on PASS 1, so its
+  buffer is in the signature before any forward-ref caller (verified `fref_view`).
+  This recovers the whole **p197 / composite-view** group SAFELY.
+- `NativeCall` — kept (= attempt 2d).  A method call resolves only on pass 2, so
+  it binds pass-2-only in practice and carries 2d's latent forward-ref limit
+  (unchanged, untriggered by the suite).
+
+- **EXCLUDED: `UserCall` / `IfMatchArm`.**  Pinned with an instrument: on pass 1
+  a native/user CALL tail is already lowered to a work `Var` (unpromoted →
+  `BuiltLocal`, `bind=false`), but on pass 2 it is a bare `Call` (`bind=true`) —
+  so the promotion, hence the ABI, DIFFERS across passes and a forward-ref caller
+  crashes.  A view tail is a `Var(view)` consistently → safe.  Re-enabling
+  user-call / if-arm needs pass-1 and pass-2 tail classification to AGREE — a
+  **signature pre-pass** that fixes the ABI before codegen.  That is the next
+  arc; it also lifts 2d's native limit and lets `TupleElement` / `FnRefCall` be
+  wired.  Until then user-call (`forward_to_json`, `nested_consume`) + if-arm
+  (`if_arm_native`) stay unpromoted (leak, but no crash / no viewer regression).
+
 ## Why not fixed in the surfacing session (historical)
 
 The surfacing session was on macOS-ARM and had done the full diagnosis; the edit
 touches the text-return-delivery classifier that drives EVERY text return, so it
 needs its own careful both-backends + full-suite pass rather than a tail-end patch
 (the loft-codegen stop-conditions). Session 2 executed that for the promotable-tail
-family (3a/3b/3c above).
+family (3a/3b/3c above); session 3 rebuilt it as one verified analysis + wired the
+forward-ref-safe subset.

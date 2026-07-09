@@ -90,6 +90,31 @@ impl TextReturn {
             TextReturn::Plain => "Plain",
         }
     }
+
+    /// True when this owned return is delivered by the `__tret` bind-and-promote.
+    ///
+    /// Scoped to the FORWARD-REFERENCE-SAFE verdicts:
+    /// - `ViewOfLocal` — a field/index view resolves to `OpGetText` on PASS 1,
+    ///   so the buffer lands in the signature before any forward-ref caller is
+    ///   compiled (verified: `fref_view`).
+    /// - `NativeCall` — a native text-dest CALL tail (attempt 2d).  A method
+    ///   call resolves only on PASS 2, so this binds pass-2-only in practice
+    ///   (identical to 2d) and carries 2d's latent forward-ref limitation.
+    ///
+    /// `UserCall` / `IfMatchArm` are EXCLUDED: their tail is a call that pass 1
+    /// leaves unresolved (lowered to a work `Var`), so binding it only on pass 2
+    /// makes the fn's ABI inconsistent across passes and a forward-reference
+    /// caller emits the call without the buffer ("Too few parameters" — the
+    /// viewer/p281 regression class).  Re-enabling them needs pass-1/pass-2 tail
+    /// classification to agree (a signature pre-pass) — the next arc.
+    /// `BuiltLocal` is already promoted by `text_return`; `TupleElement` /
+    /// `FnRefCall` need their own delivery.
+    fn wants_tret_bind(self) -> bool {
+        matches!(
+            self,
+            TextReturn::Owned(OwnedVia::NativeCall | OwnedVia::ViewOfLocal)
+        )
+    }
 }
 
 /// @PLN85 / D-own-1 — how an implicit-tail `t == Vector` return delivers its
@@ -712,23 +737,35 @@ impl Parser {
         // call dest-passes into it (no owned-text copy), matching the proven-clean
         // `t = call(); t` rebind (every native text-dest fn 0-leak).
         //
-        // PASS 2 ONLY (`!first_pass`), and here is why: `text_return`'s promotion
-        // adds a hidden `&text` ATTRIBUTE, and attributes persist on the `Data` def
-        // ACROSS passes (unlike the per-pass var table).  Injecting on both passes
-        // makes pass 1 add the `__tret` attribute, then on pass 2 `classify_text_dep`
-        // sees `__tret` as an existing attr → returns `Attr` (already-promoted), so
-        // it never re-sets the VAR's type to `RefVar` — the body then lowers `__tret`
-        // as a PLAIN text (the `to_uppercase` empty-return bug).  Firing only on the
-        // codegen pass promotes it once, cleanly, to `RefVar` — exactly what the
-        // (accidentally pass-2-only) `to_json` case already did.  This mirrors
-        // `wrap_value_text_dest`, also `!first_pass`; fn-ref call sites stay adaptive
-        // (@P387).
-        if !self.first_pass
-            && context == "return from block"
+        // Driven by the analysis framework's verdict (`classify_text_return`):
+        // one selector replaces the stacked per-shape predicates (native / view
+        // of a local composite / user call / if-match owned arm).
+        //
+        // Fires in BOTH passes so the hidden `&text` buffer lands in the fn
+        // SIGNATURE on pass 1 — every call site, INCLUDING a forward reference
+        // compiled earlier in pass 2, then sees the promoted ABI.  (Pass-2-only
+        // promotion was the "Too few parameters on n_<fn>" regression class: the
+        // buffer was added after a forward-ref caller had already emitted its
+        // call.)  On pass 2 the `__tret` name is already an attribute, so
+        // `text_return`'s `Attr` arm re-applies `RefVar` to the var — the
+        // double-classify 2d avoided by staying pass-2-only.
+        // Exclude the debugger/REPL's throwaway `replmain_*` eval fns: the
+        // frame-reenter eval path (`eval_frame_reenter`) expects an OWNED-text
+        // return (it reads the value straight back / serialises with `.to_json()`
+        // that survives frame teardown, @P293), NOT a hidden `&text` buffer — so
+        // promoting one leaves the eval caller passing no buffer and the callee
+        // reading an undefined arg slot (SIGSEGV in `rpc_eval_*`).  A run-once
+        // eval fn gains nothing from the leak-opt anyway.
+        let do_tret_bind = context == "return from block"
             && matches!(result.base(), Type::Text(_))
+            && !self
+                .data
+                .def(self.context)
+                .original_name()
+                .starts_with("replmain_")
             && l.last()
-                .is_some_and(|tail| self.native_text_call_tail(tail))
-        {
+                .is_some_and(|tail| self.classify_text_return(tail, &l).wants_tret_bind());
+        if do_tret_bind {
             let tv = self.create_unique("__tret", &Type::Text(Deps::none()));
             if tv != u16::MAX {
                 let last = l.len() - 1;
@@ -4706,6 +4743,24 @@ impl Parser {
                     TextDep::Attr(a) => {
                         if !dep.contains(&a) {
                             dep.push(a);
+                        }
+                        // @PLN85 — a var already registered as a HIDDEN
+                        // RefVar(Text) work-buffer attribute (promoted on an
+                        // earlier pass — the pass-1 `__tret` bind) must
+                        // re-acquire the RefVar var-type + argument marking so
+                        // pass 2 lowers its body as the promoted buffer, not a
+                        // plain text.  Without this the both-pass `__tret` bind
+                        // double-classifies (the empty-return bug 2d dodged by
+                        // staying pass-2-only); WITH it the bind is
+                        // signature-consistent, fixing forward-reference callers.
+                        let promoted_buf = {
+                            let at = &self.data.def(self.context).attributes()[a as usize];
+                            at.hidden && matches!(at.typedef, Type::RefVar(_))
+                        };
+                        if promoted_buf {
+                            self.vars.become_argument(*v);
+                            self.vars
+                                .set_type(*v, Type::RefVar(Box::new(Type::Text(Deps::none()))));
                         }
                     }
                     TextDep::SkipCaptured | TextDep::SkipTupleLocal => {
