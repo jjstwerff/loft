@@ -536,6 +536,44 @@ and `local_dropped` (Class B, struct_to_json consume).  The correction that
 holds, but it is the same Class B "consumed composite" story, not a separate
 "native-stdlib-internal" subsystem.
 
+### Session 5 (2026-07-09) — Class B splits into B1 (FIXED) and B2 (characterised)
+
+Building the fix refined Class B into two sub-classes:
+
+**B1 — bound text payload not freed. FIXED (`c5a6abd2`).**  A match arm that
+binds a TEXT payload (`match x { B { v } => …v… }`) lowers to
+`_mv_v = OpGetText(subj, off)` — an OWNED copy (plain `text`, no dep) — but the
+binding was unconditionally `set_skip_free` (correct for HEAP/DbRef bindings,
+wrong for an owned text that is also default-init `""`).  Gated skip_free to
+skip HEAP bindings only; text bindings now free through normal scope cleanup.
+Cleared `p54_parse_primitive_string` + `q4_json_string_round_trips`; suite
+2728/0; both backends.  Guard: `probes/.../match_bind_text.loft.tpl`.
+
+**B2 — a struct-enum RETURNED from a fn, then matched, leaks 1 text/call. OPEN.**
+Isolated decisively (leak counts, ASan):
+
+| shape | leak |
+|---|---|
+| enum-with-text-variant construct + DISCARD (local, or via `mk()`) | 0 |
+| `x = mk(); match x { A{v:_} => "a", _ => "o" }` (mk returns the enum) | **1** |
+| `match json_parse(raw) { <variant> => lit, _ => lit }` (multi-arm) | **1** |
+| single-`_` arm, or void arms, or int-subject match | 0 |
+
+So B2 is NOT "consumed composite embedded text" in general (a locally
+constructed-and-dropped enum frees its text fine).  It is specifically the
+**enum RETURN-DELIVERY**: when a fn returns a struct-enum whose layout carries a
+text field (any variant), the return-buffer free path does not recurse into the
+embedded text slot, so a multi-arm match on the returned enum leaks 1 text/call.
+This lives in the enum/`ref_return` return-delivery machinery (the buffer the
+caller allocates + frees for an enum return), NOT the match and NOT text-return.
+The p54 struct-enum group + the json-match group are all this shape (their enum
+comes from a constructor/`json_parse` CALL and is matched).  A distinct arc:
+needs its own probe + the enum-return-buffer free to free embedded texts.
+
+**Revised remaining tally:** Class A ~13 (promotion gap, the pass-1 pre-pass) +
+B2 ~13 (enum return-delivery embedded-text free).  B1 (~2 in the harness, but the
+whole bound-payload class) is closed.
+
 ## Session 3 (2026-07-09) — the analysis FRAMEWORK, and wiring it in
 
 The 3a/3b/3c stacking (five per-shape predicates) hid a shared latent bug: each
