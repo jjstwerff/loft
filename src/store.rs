@@ -512,6 +512,67 @@ impl Store {
         store
     }
 
+    /// Adopt an in-memory byte buffer as a store — the slice counterpart of
+    /// [`Store::load`] (a heap copy, no mmap / no file handle, so it works on
+    /// every backend incl. wasm).  Returns `None` (a clean reject, never a
+    /// panic) on a buffer too small for the header, a wrong `SIGNATURE`, or an
+    /// over-limit size.  Used by the verified HTTP store loader
+    /// ([`crate::database::Stores::load_url_verified`], @PLN97 arc G Phase 0):
+    /// the bytes are fetched + authenticity-verified in memory and only then
+    /// adopted here, so an untrusted body never touches disk.  Same
+    /// (trust-the-producer) structural posture as `load` — a SHA-verified image
+    /// is trusted well-formed; hardening `fl_rebuild`/`validate` against a
+    /// crafted buffer is the separate Phase-2 work.
+    #[must_use]
+    pub fn from_bytes(bytes: &[u8]) -> Option<Store> {
+        if bytes.len() < 16 {
+            return None;
+        }
+        let sig = u32::from_ne_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        if sig != SIGNATURE {
+            return None;
+        }
+        let words = bytes.len().div_ceil(8).max(2) as u32;
+        if words > MAX_STORE_WORDS {
+            return None;
+        }
+        let l = Layout::from_size_align(words as usize * 8, 8).ok()?;
+        let ptr = unsafe { A.alloc_zeroed(l) };
+        if ptr.is_null() {
+            return None;
+        }
+        unsafe {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len());
+        }
+        let mut store = Store {
+            ptr,
+            size: words,
+            claims: HashSet::new(),
+            #[cfg(feature = "mmap")]
+            file: None,
+            free: false,
+            read_only: false,
+            free_protected: false,
+            borrowed: false,
+            created_at: 0,
+            last_op_at: 0,
+            free_root: 0,
+            needs_coalesce: false,
+            generation: 0,
+            recording: None,
+            tag: 0,
+            pinned: false,
+            lock_origin: String::new(),
+            known_type: u16::MAX,
+            durable_meta_path: None,
+            durable_tier: 0,
+        };
+        #[cfg(debug_assertions)]
+        store.validate(0);
+        store.fl_rebuild();
+        Some(store)
+    }
+
     pub fn init(&mut self) {
         // The normal routines will not write to rec=0, so we write a signature: StoreV01
         unsafe {

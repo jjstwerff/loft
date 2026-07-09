@@ -66,6 +66,17 @@ fn main() {
     println("loadkeys got={got}");
     println("loadkeys h7={lookup_key(h, 7)} h42={lookup_key(h, 42)} h13={lookup_key(h, 13)}");
     println("loadkeys len={len(h)}");
+  } else if mode == "loadurl" {
+    // Phase 0: fetch the WHOLE store image from a URL, verify its SHA-256
+    // against the pinned digest, adopt only on a match. A wrong hash must
+    // REFUSE (ok=false, nothing loaded — keys empty, lookup null).
+    url = env_variable("LOFT_PERSIST_TEST_URL");
+    sha = env_variable("LOFT_PERSIST_TEST_SHA");
+    ok = store_load_url(h, url, sha);
+    println("loadurl ok={ok}");
+    println("loadurl keys={keys_of(h)}");
+    println("loadurl lookup h[13]={lookup13(h)}");
+    println("loadurl verify={store_verify(h)}");
   } else {
     println("FAIL unknown-mode")
   }

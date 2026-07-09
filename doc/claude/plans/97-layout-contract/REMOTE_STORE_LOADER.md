@@ -234,6 +234,32 @@ and `store_load_range` (Phase 4) are unblocked.
   `SIGNATURE` check only); wire `schema_sidecar::check` at the bootstrap when the remote provider
   lands (a wrong-layout local file is far less likely than a wrong-layout remote fetch).
 
+### Authenticated whole-file load — `store_load_url` (fetch → verify → trust) — **DONE 2026-07-09**
+The whole-file counterpart of `store_load` for an **HTTP(S) source**, with authenticity
+established **before** the bytes are adopted — the answer to "how do we load an HTTP store with the
+same rigor as an mmap store?" The honest finding driving it: mmap/`store_load` rigor is
+*trust-the-writer* (a `SIGNATURE` check + a debug-only `validate`), which is the WRONG threat model
+for an untrusted network source. So this bridges the **registry's** proven discipline
+(`registry_index::verify_sha256`, the `download → verify_sha256 → extract` order in `install.rs`)
+onto the store loader.
+- **Built:** `store_load_url(r, url, sha256)` (`02_files.loft`) → `Stores::load_url_verified`
+  (`allocation.rs`, `#[cfg(feature = "registry")]`): `http_get_bytes(url)` (http(s):// **or**
+  file://) → `verify_sha256(&bytes, sha256)` → on match `load_bytes` → the new
+  `Store::from_bytes(&[u8])` (`store.rs`, the in-memory sibling of `Store::load` — heap copy, no
+  disk) adopts it. **Verify happens in memory; an unverified/tampered body never touches disk and
+  is never adopted.** `n_store_load_url` handler + registry-gated table entry (`native.rs`).
+- **Verified:** a `store_persist_bind`-written hash loads via `store_load_url` (SHA computed in the
+  harness, `file://` URL) with all keys + a correct lookup + `store_verify=true`, on **both
+  backends**; a **wrong hash is REFUSED** (`ok=false`, nothing adopted, `h[13]=null`) — the
+  fetch→verify→trust gate. Guard:
+  `store_persist_loft.rs::store_load_url_verifies_sha_before_adopting_both_backends` +
+  `store_load_smoke.loft` `loadurl` mode.
+- **Scope (Phase 0 of the HTTP-store evaluation):** authenticity + whole-file adopt for a **trusted,
+  hash-pinned** source. NOT in scope (its Phase 2): a *structural* validator for a
+  crafted-malicious buffer — `from_bytes` keeps `load`'s trust-the-producer posture (`fl_rebuild`
+  on a 0-size block is still a release hazard), and per-page authenticity for the paged
+  `load_key(s)`/`load_range` path is a separate Merkle problem.
+
 ### Phase 2 — paged read-only backing (local provider) — **reader core DONE 2026-07-07**
 - **Built:** `src/paged_reader.rs` (behind the `remote-store` feature — the zero-cost gate): the
   `PageProvider` trait, `LocalFileProvider` (reads ranges from disk, **logs every `(off,len)`** so

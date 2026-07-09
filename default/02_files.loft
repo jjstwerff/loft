@@ -414,6 +414,20 @@ pub fn store_load(r: reference, path: text) -> boolean fs#read;
 #rust"stores.load_path((@r).store_nr, std::path::Path::new(@path))"
 #impure(io)
 
+// Load a persisted store IMAGE over HTTP(S) from a TRUSTED source, establishing
+// authenticity BEFORE the bytes are adopted: fetch the whole image at `url`,
+// verify its SHA-256 against the caller-pinned `sha256` (lowercase hex), and only
+// on a match heap-load it into `r` — the bytes never touch disk. A fetch error or
+// a hash mismatch REFUSES the load (returns false, loads nothing). The
+// fetch→verify→trust discipline the registry install uses, bridged onto the store
+// loader; `url` may be `http(s)://` or `file://`. Whole-file counterpart of the
+// paged `store_load_key(s)`/`store_load_range` loaders. @PLN97 arc G Phase 0.
+//   h: hash<Rec[id]> = []
+//   store_load_url(h, "https://cdn.example/world.store", "<sha256-hex>")
+pub fn store_load_url(r: reference, url: text, sha256: text) -> boolean fs#read;
+#rust"stores.load_url_verified((@r).store_nr, @url, @sha256)"
+#impure(io)
+
 // Structural integrity check of a store-rooted collection's heap graph: verify
 // every internal pointer targets a live record — no dangling / out-of-bounds /
 // cyclic edge. Returns true when sound, false (with a reason on stderr) when

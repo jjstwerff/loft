@@ -807,6 +807,98 @@ fn layout_gate_over_http_rejects_changed_struct() {
     }
 }
 
+/// @PLN97 arc G Phase 0 — `store_load_url` fetches a WHOLE persisted store IMAGE
+/// from a URL and adopts it ONLY after its SHA-256 matches the caller-pinned
+/// digest (the registry's fetch→verify→trust discipline bridged onto the store
+/// loader).  A correct hash loads every key + is structurally sound; a WRONG hash
+/// is REFUSED (returns false, adopts nothing — the collection stays empty).  Both
+/// backends.  A `file://` URL is used so the test needs no network (the loader's
+/// `http_get_bytes` treats `file://` the same as an HTTP GET).
+#[cfg(feature = "registry")]
+#[test]
+fn store_load_url_verifies_sha_before_adopting_both_backends() {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write as _;
+
+    let dir = scratch("store_load_url_phase0");
+    let path = dir.join("world.store");
+
+    // Write the image once (mmap bind), then compute its SHA-256 in the harness.
+    let (out_w, code_w) = run_mode(&load_script(), &path, "write");
+    assert_eq!(code_w, 0, "write exit: {out_w:?}");
+    assert!(out_w.contains("write keys=7,13,42"), "write: {out_w:?}");
+
+    let bytes = fs::read(&path).unwrap();
+    let sha = {
+        let mut h = Sha256::new();
+        h.update(&bytes);
+        let mut s = String::with_capacity(64);
+        for b in h.finalize() {
+            let _ = write!(s, "{b:02x}");
+        }
+        s
+    };
+    let url = format!("file://{}", path.display());
+    let wrong = "0".repeat(64);
+
+    let run = |backend: &str, sha_arg: &str| -> (String, i32) {
+        let out = Command::new(loft_bin())
+            .arg(backend)
+            .arg(load_script())
+            .env("LOFT_PERSIST_TEST_PATH", &path)
+            .env("LOFT_PERSIST_TEST_MODE", "loadurl")
+            .env("LOFT_PERSIST_TEST_URL", &url)
+            .env("LOFT_PERSIST_TEST_SHA", sha_arg)
+            .current_dir(workspace_root())
+            .output()
+            .expect("failed to invoke loft binary");
+        if !out.status.success() {
+            eprintln!(
+                "{backend} stderr:\n{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        (
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            out.status.code().unwrap_or(-1),
+        )
+    };
+
+    for backend in ["--interpret", "--native"] {
+        // Correct hash — the load succeeds, all keys present, heap sound.
+        let (out, code) = run(backend, &sha);
+        assert_eq!(code, 0, "{backend} verified load exit: {out:?}");
+        assert!(
+            out.contains("loadurl ok=true"),
+            "{backend}: a SHA-matched image must load: {out:?}"
+        );
+        assert!(
+            out.contains("loadurl keys=7,13,42"),
+            "{backend}: all keys must be present after a verified load: {out:?}"
+        );
+        assert!(
+            out.contains("loadurl lookup h[13]=1300"),
+            "{backend}: key lookup must read the right value: {out:?}"
+        );
+        assert!(
+            out.contains("loadurl verify=true"),
+            "{backend}: the adopted store must be structurally sound: {out:?}"
+        );
+
+        // Wrong hash — REFUSED before adopting: nothing loaded.
+        let (out, code) = run(backend, &wrong);
+        assert_eq!(code, 0, "{backend} tampered load exit: {out:?}");
+        assert!(
+            out.contains("loadurl ok=false"),
+            "{backend}: a SHA MISMATCH must refuse the load: {out:?}"
+        );
+        assert!(
+            out.contains("loadurl lookup h[13]=null"),
+            "{backend}: a refused load must adopt NOTHING (h stays empty): {out:?}"
+        );
+    }
+}
+
 #[test]
 fn fresh_returns_true_and_file_appears() {
     let dir = scratch("fresh_returns_true_and_file_appears");
