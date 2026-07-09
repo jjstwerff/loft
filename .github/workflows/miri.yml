@@ -33,6 +33,12 @@
 #     with -Zsanitizer=address so an OOB / UAF store access the codegen emits is
 #     caught, not silent.  (S9's mixed-boundary cdylib shares the mechanism —
 #     blocked on a proc-macro -L fix; see plans/54-.../NATIVE_ASAN_DESIGN.md.)
+#   - debug-asserts — loft's ~200 internal `debug_assert!`s (@PLN54 S5b): the H5
+#     numbering law, Store::valid()/addr() bounds, poison/UAF invariants — its OWN
+#     correctness contract, compiled OUT of every normal test build
+#     ([profile.dev.package.loft]) and previously checked only by cargo-fuzz.
+#     `-C debug-assertions=on` runs them over the whole interpreter corpus at
+#     near-native speed — the fast, broad complement to Miri's slow curated set.
 #   - toolchain-matrix — the suite under beta + nightly rustc, the early-warning
 #     for toolchain-sensitivity (the @P383 trigger).  Non-blocking: nightly/beta
 #     std/lint churn must never page us.
@@ -348,6 +354,46 @@ jobs:
             echo "::endgroup::"
           done
 
+  debug-asserts:
+    name: Debug-assertions gate (loft's internal invariants)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install mold
+        run: sudo apt-get update && sudo apt-get install -y mold
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ubuntu-da-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ubuntu-da-cargo-
+
+      # loft carries ~200 internal `debug_assert!`s — the H5 pass-numbering law,
+      # `Store::valid()` / `addr()` bounds, the poison/UAF invariants — that encode
+      # its OWN correctness contract (distinct from Rust-level UB the sanitizers
+      # check).  `[profile.dev.package.loft]` compiles them OUT of every normal
+      # dev/test build, so until now NOTHING in CI checked them except cargo-fuzz.
+      # `-C debug-assertions=on` turns them on across the WHOLE interpreter corpus
+      # at near-native speed — catching an invariant regression the moment it lands,
+      # far more coverage per CI-minute than growing the slow Miri set (@PLN54 S5).
+      # Scoped to `--lib --test issues` (validated green); expanding to wrap/strings
+      # awaits the known stdlib slot-width DA items (plan85 DA-inventory worklist).
+      # Non-vacuous: the asserts are proven to fire (the @PLN85 DA campaign closed
+      # a 53→0 failed-target inventory of real bugs by turning them on).
+      - name: Debug-assertions sweep (interpreter corpus)
+        env:
+          RUSTFLAGS: '-C debug-assertions=on'
+        run: cargo test --release --no-fail-fast --lib --test issues
+
   toolchain-matrix:
     name: Suite under ${{ matrix.toolchain }}
     runs-on: ubuntu-latest
@@ -511,7 +557,7 @@ jobs:
   # tracked issue, not seven (and auto-resolves it when the gates go green again).
   notify:
     name: Nightly gate failure → tracked issue
-    needs: [miri, asan, poison, tsan, native-asan, toolchain-matrix, index-hygiene]
+    needs: [miri, asan, poison, tsan, native-asan, debug-asserts, toolchain-matrix, index-hygiene]
     if: always()
     runs-on: ubuntu-latest
     permissions:
