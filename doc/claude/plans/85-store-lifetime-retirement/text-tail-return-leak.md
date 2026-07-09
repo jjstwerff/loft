@@ -603,6 +603,39 @@ cases are `match`→`If`-of-literals, whose cond reads the freed subject so the
 hoist is REQUIRED for ordering; only promotion/caller-free fixes those).  A
 correct, provably-safe subset; the bulk of B2/Class A awaits the promotion.
 
+### Session 7 (2026-07-09) — IF/MATCH promotion ATTEMPTED, REVERTED (native if-arm-unify conflict)
+
+Tried the forward-ref-safe half of the unified fix: promote every `if`/`match`
+text tail (an `If` on both passes → pass-consistent, unlike a bare call) by
+binding the whole `If` to `__tret`.  On the INTERPRETER this worked cleanly and
+was a big win: `if_arm_native` + a forward-ref-to-if cell went LEAK→clean, the
+p54 match family cleared, framework 24/24, issues 749/0, fn-ref/par (@P387) did
+not regress.  Two type-interaction regressions surfaced and were fixed in-flight:
+- guard `if c { return … }` (a diverging/empty arm) must NOT bind — it suppressed
+  the "may return null" diagnostic (`missing_return_not_null`).  Gated on BOTH
+  arms YIELDING a text value (`arm_yields_text`).
+- a NULLABLE if-tail (`text?`) must NOT bind — the bind erased the nullability and
+  laundered the `(N-Store)` reject (`wrong_field_guard_still_rejects`).  Gated on
+  `!matches!(t, Type::Optional(_))`.
+
+But it FAILED the both-backends gate: `533_format_hook_tail_if` and
+`534_native_text_if_unify` (native regression tests for exactly this) hit
+`E0308: if and else have incompatible types`.  The `__tret = (if {arm} else
+{arm}).to_string()` bind makes the arms deliver DIFFERENT Rust types — a literal
+`&str`, a call `Str`, a formatted `&String` — which the interpreter tolerates but
+native Rust rejects.  Native already has a dedicated if-arm-type-UNIFIER
+(`unify_if_branches_work_refs`, block_result); the parse-gate `__tret` bind
+bypasses it and produces non-uniform arms.
+
+Per the loft-codegen stop-condition (interp passes, native regresses → not
+landable), REVERTED.  Conclusion: the if/match half is NOT a parse-gate `__tret`
+bind — it must go THROUGH the native arm-unifier so every arm delivers the same
+Rust type into the buffer.  That is the real integration point for the unified
+promotion, alongside the pass-1 signature decision.  Remaining leak surface
+therefore still: user-fn call tails + if/match + tuple + fn-ref — all converging
+on "owned-text return → caller buffer", to be delivered via the arm-unifier +
+signature pre-pass, not a tail rewrite.
+
 ## Session 3 (2026-07-09) — the analysis FRAMEWORK, and wiring it in
 
 The 3a/3b/3c stacking (five per-shape predicates) hid a shared latent bug: each
