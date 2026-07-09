@@ -5066,16 +5066,22 @@ impl Parser {
         }
     }
 
-    /// @PLN85 Slice B — the tail is a USER fn CALL returning owned text
-    /// (`fn drive() -> text { inner() }`, `{ wrap(x) }`).  Like the native
-    /// tail it delivers a fresh owned text that the fn hands back as an owned
-    /// `__ret_N` COPY the caller consumes-and-leaks (1/call); binding it to
-    /// `__tret` promotes the return to a caller `&text` buffer, matching the
-    /// proven-clean `r = inner(); r` rebind (inner writes its buffer, the copy
-    /// lands straight in the caller's buffer, no owned temp).  Native text-dest
-    /// calls go through `native_text_call_tail`; this covers the rest — any
-    /// text-returning call, EXCLUDING an `OpGetText`/field-view (Slice A) and
-    /// the store getters that only VIEW (never allocate) an existing text.
+    /// @PLN85 Slice B — the tail is a USER fn CALL that delivers OWNED text
+    /// (`fn drive() -> text { inner() }`, `{ wrap(x) }`).  Such a call hands
+    /// its text back as an owned `__ret_N` COPY the caller consumes-and-leaks
+    /// (1/call); binding it to `__tret` promotes the return to a caller
+    /// `&text` buffer, matching the proven-clean `r = inner(); r` rebind (the
+    /// callee writes its buffer, the copy lands straight in the caller's
+    /// buffer, no owned temp).  Native text-dest calls go through
+    /// `native_text_call_tail`; this covers the rest.
+    ///
+    /// Fires ONLY for an OWNED delivery — the callee's return borrows nothing,
+    /// or borrows only HIDDEN buffer attributes (caller-allocated `&text`
+    /// out-params).  A call that returns a borrow of a VISIBLE argument
+    /// (`fn second(s: text) -> text["s"] { s }`) is a genuine forward-borrow:
+    /// the caller passes it through with no owned temp and no leak, so
+    /// promoting it double-delivers and breaks the forward (p281).  Excludes
+    /// `OpGet*` store getters, which VIEW an existing text (Slice A / arg view).
     fn user_text_call_tail(&self, tail: &Value) -> bool {
         match tail.unspan() {
             Value::Return(inner) => self.user_text_call_tail(inner),
@@ -5084,14 +5090,17 @@ impl Parser {
                     return false; // handled by the native gate
                 }
                 let def = self.data.def(*op);
-                // A store getter (`OpGetText`/`OpGetVector`/`OpGetField`) VIEWS
-                // an existing text — not a fresh-owned delivery; Slice A handles
-                // the local-composite view, an arg view stays a borrow.
-                let name = def.name();
-                if name.starts_with("OpGet") {
+                if def.name().starts_with("OpGet") {
                     return false;
                 }
-                matches!(def.returned().base(), Type::Text(_))
+                if !matches!(def.returned().base(), Type::Text(_)) {
+                    return false;
+                }
+                let attrs = def.attributes();
+                def.returned()
+                    .depend()
+                    .iter()
+                    .all(|&d| (d as usize) < attrs.len() && attrs[d as usize].hidden)
             }
             _ => false,
         }
