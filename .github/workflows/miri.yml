@@ -130,15 +130,33 @@ jobs:
       #                                         leak in free_text (shrink_to without
       #                                         clear); fixed via unconditional clear()
       #                                         (commit e0e094f7)
+      #
+      # @PLN54 S5(a) — the `--lib` block is the RE-TARGETED half.  The four `issues`
+      # tests above run WHOLE loft programs through the interpreter, which under Miri
+      # is interpreter-under-interpreter (~5-10 min each — the p213 sibling timed out
+      # at 240s locally).  The store/unsafe layer that actually carries the UB
+      # (claim / free-coalesce / resize+zero / cross-store adopt / store-rebase walk)
+      # is reachable by DIRECT Rust unit tests with hand-built `Stores` — NO stdlib
+      # parse, NO program execution — so Miri checks the exact unsafe code in
+      # SECONDS (all six ran in ~8s locally, 0 UB), not minutes.  This is how the
+      # curated set grows without blowing the job clock.  (Deliberately-UB store
+      # tests — `*_panics`, `verify_graph_catches_a_dangling_pointer` — are excluded:
+      # they create real UB by design, which Miri would correctly flag.)
       - name: Miri hard-UB gate
         env:
           MIRIFLAGS: '-Zmiri-disable-isolation -Zmiri-disable-stacked-borrows'
         run: |
-          cargo +nightly miri test --test issues -- --exact \
+          cargo +nightly miri test --lib --test issues -- --exact \
             p213_struct_field_basic_int \
             plan53_cluster3_cross_store_vector_add \
             plan53_cluster4_fn_ref_slot_uninit_padding \
-            plan53_cluster5_free_text_buffer_dealloc
+            plan53_cluster5_free_text_buffer_dealloc \
+            store::tests::coalesce_free_merges_adjacent_and_reuses_space \
+            store::tests::resize_in_place_zeroes_absorbed_region \
+            store::tests::borrow_locked_reads_original_data \
+            database::worker_output_slot_tests::adopt_store_pushes_to_parent_allocations \
+            database::worker_output_slot_tests::take_slot_returns_owned_store_and_leaves_sentinel \
+            database::store_rebase_tests::translate_rewrites_mapped
 
   asan:
     name: ASan UAF/OOB sweep (interpreter corpus)
