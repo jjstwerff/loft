@@ -656,9 +656,19 @@ framework 24/24; issues 749/0; fn-ref (p227) 4/0; par (p235) 6/0.  Matrix now
 leaks only the 3 USER-CALL cases (`forward_to_json`, `nested_consume`,
 `concat_suffix`).
 
-So the remaining leak surface is exactly ONE shape: the bare **user-fn call
-tail** (incl. generic `x.to_text()` = a monomorph user call) — the pass-1
-signature pre-pass is the last piece.  native / view / if / match / literal /
+HARNESS (ASan per-test oracle): the accumulator cleared 7 more `issues`
+leakers (`b7`, `p54_b2` ×2, `p54_extractor`, `p54_match_on_jsonvalue`,
+`p54_struct_enum_as_struct_field`, `p54_struct_enum_in_hash_value`) — **26 → 19**.
+Session total: **42 → 19 (~55%)**.
+
+The remaining 19 converge on the bare **user-fn call tail** family — direct
+user calls (`forward_to_json`, `nested_consume`), generic `x.to_text()`
+monomorph (`plan17`, `p243`), tuple-of-text elements (`p329`/`p330` — call
+elements), text fn-refs (`p227`), and the p54 arms that are calls/interpolations
+(`p54_b6`/`or_pattern`/`extractors_spec`/`multi_call_flow`), plus the
+vector/copy returns (`issue_437`, `n3`, `p241`).  All are "owned text delivered
+by a CALL whose tail is a work `Var` on pass 1 / `Call` on pass 2" — the pass-1
+signature pre-pass is the last piece; native / view / if / match / literal /
 hoist are all handled.
 
 ## Session 3 (2026-07-09) — the analysis FRAMEWORK, and wiring it in
