@@ -283,6 +283,15 @@ bugs:
   walk. This is the Class-B composite-embedded-text-free arc (doc Session 5), which also
   covers `issue_437` (vector elements) and `p241` — delicate free-emission, route it,
   do not blind-patch `database.free`.
+  **Comparative read (2026-07-10, n_nocopy vs n3):** the CLEAN case has NO per-field
+  text free — the single `"hello"` is THREADED OUT (moved into `test_value`) and freed
+  once; loft frees embedded texts by threading them to a consumer, not by walking on
+  record-free. The leak is an owned COPY (`b`) neither threaded out nor freed. Sharp
+  constraint this exposes: **the leak is interpreter-only (native drops the `String`),
+  so a codegen-level free-emission would DOUBLE-FREE native.** The fix must be
+  INTERPRETER-ONLY (`free_ref_db`/`database.free`) AND type-directed + ownership-aware
+  (walk the record's text offsets, free only OWNED — not aliased — ones). That is the
+  OWNERSHIP-MODEL arc (the PLN85 north-star), not a quick patch.
 
 ## p54_b6 — view-through-forward-borrow (regrouped out of "UserCall")
 
