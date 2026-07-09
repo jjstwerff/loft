@@ -1,0 +1,18 @@
+// @PLN97 harness program: load a whole store IMAGE over a URL (trusted) and read
+// it back.  The URL is a placeholder — the node harness MOCKS loft_host_http_get
+// to return the image bytes (no network); a real browser does fetch(url).  The
+// same program runs on interpret/native (Step 5 parity) via a file:// URL.
+struct Rec { id: integer not null, val: integer not null }
+fn keys_of(h: hash<Rec[id]>) -> text {
+  result = "";
+  for r in h {
+    if result == "" { result = "{r.id}" } else { result = "{result},{r.id}" }
+  }
+  result
+}
+fn main() {
+  h: hash<Rec[id]> = [];
+  ok = store_load_url_trusted(h, "https://harness.local/world.store");
+  if !ok { println("FAIL load-returned-false"); return }
+  println("url keys={keys_of(h)}");
+}

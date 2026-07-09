@@ -126,6 +126,25 @@ Step 5 three-mode parity green. Then `store_load_url_trusted` "functions in wasm
 with the identical synchronous API — no page freeze, same validation, same failure
 contract.
 
+## Verified so far (2026-07-09) — `harness/run.sh`
+
+Steps 1–3 + Step 5 are GREEN via the repeatable `harness/` (a `.store` image, the
+`--html` wasm of a URL-loading program, and a node driver that mocks
+`loft_host_http_get`):
+
+- **V1a/V2b** — the emitted page carries the imports + the asyncify driver (7×
+  `loft_host_http_get`, the `AsyncifyCtrl` def, the minimal-page driver, `fetch(url)`).
+- **V1b** — driving the REAL 355 KB wasm through `AsyncifyCtrl` with a mock fetch
+  returning the image → `url keys=7,13,42` (the double-call unwind/rewind contract
+  works; bytes flow through `net::fetch_bytes` → `load_url` → validate → adopt).
+- **V3** — mock fetch error (`null` → `0xFFFFFFFF`) → `false`; corrupt image →
+  `false` (fail-closed, same as native).
+- **V5 (parity)** — the SAME program run natively via `file://` → `url keys=7,13,42`,
+  byte-identical to the wasm output.
+
+**Remaining: Step 4** — the real `fetch()` round-trip in headless Chrome (the
+harness mocks the network; only a browser exercises the actual `fetch()`).
+
 ## Residual / notes
 
 - **WASI (`--native-wasm`, `wasm32-wasip2`) is separate:** it has no `fetch()`; a
