@@ -31,7 +31,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// identical fresh state (F1.0 site 3 — no cross-input state bleed).
 static STDLIB: OnceLock<(Data, Stores)> = OnceLock::new();
 
-fn stdlib() -> (Data, Stores) {
+/// The stdlib parsed once and cloned per input. Shared with the F2
+/// keyed-container generator (`fuzz_keyed`) so both fuzzers pay the parse cost
+/// once.
+pub(crate) fn stdlib() -> (Data, Stores) {
     let (data, db) = STDLIB.get_or_init(|| {
         let mut p = Parser::new();
         // cwd is the repo root under `cargo test`, but `fuzz/` under cargo-fuzz.
