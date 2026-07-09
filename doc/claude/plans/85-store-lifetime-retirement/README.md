@@ -30,7 +30,12 @@ Plan id: [@PLN85](https://github.com/loft-lang/plans/issues/85) · investigation
 >   instead of **moving** it, and the copied-then-dead `__work_1` is never freed
 >   (a copy-vs-move / skip-free misclassification — the D-own-2 adopt-vs-copy
 >   class). Rebinding to a local (`r = u.to_json(); return r;`) promotes/moves it
->   and is leak-free. Fix site: the text tail-return delivery
+>   and is leak-free. **The `-> text?` (optional) variant is a USE-AFTER-FREE**
+>   (the source is freed then read), not just a leak — a correctness/safety bug.
+>   Boundary matrix + oracle harness (`probes/text-tail-return/run_matrix.sh`):
+>   any native text-dest CALL delivered directly as a fn's return value
+>   leaks (or UAFs when optional); rebind / interpolation / caller-bound are clean.
+>   Fix site: the text tail-return delivery
 >   (`text_return`/`classify_text_dep` in `control.rs`) needs the fresh-owned-text
 >   move the **vector** side already has (`fresh_owned_vector_deps`). Proven
 >   broken/working bytecode pair + repro:

@@ -93,6 +93,74 @@ text-return shapes (lambda/optional/tuple/`return <local>`); full `issues` + `wr
 shape to @PLN54's `asan` corpus (leaks pre-fix), which then also unblocks the
 `detect_leaks=1` flip.
 
+## Analysis — the boundary map (probe matrix, macOS-ARM ASan, both cells verified)
+
+Harness + probe files: [`probes/text-tail-return/`](probes/text-tail-return/)
+(`run_matrix.sh` regenerates this). Verdict = presence of a runtime-owner leak
+frame (the oracle below); every cell's output was checked non-vacuous.
+
+| tail shape | outcome |
+|---|---|
+| `fn f() -> text { u.to_json() }` (implicit tail native call) | **LEAK** ~2 allocs/call, grows |
+| `fn f() -> text { return u.to_json(); }` (explicit `return` of native call) | **LEAK** (same — not implicit-only) |
+| `fn f() -> text { s.to_uppercase() }` (ANY native text-dest in tail) | **LEAK** (not `to_json`-specific) |
+| `fn f() -> text { inner() }` (forward a user fn returning native text) | **LEAK** |
+| `fn f() -> text? { u.to_json() }` (OPTIONAL tail native call) | **USE-AFTER-FREE** — `_dest` allocs, `append_text` frees, then reads it (`memcpy`) |
+| `fn f() -> text { r = u.to_json(); return r; }` (rebind to a local first) | clean |
+| `fn f() -> text { "…{n}…" }` (interpolation tail) | clean |
+| `t = mk().to_json()` (native result bound in the CALLER) | clean |
+
+**Boundary:** the trigger is a native text-dest **CALL delivered directly as a
+user function's return value** (implicit tail OR explicit `return`, any `_dest`
+native, and it forwards through wrapper fns). Binding the result to a local first
+(rebind), or building the text by interpolation/append, routes through the
+promotion/move path and is clean. The **`text?` variant is a UAF** (higher
+severity than the leak) — the @PLN25 optional path frees the source before the
+copy reads it.
+
+## Oracle — how to detect this class WITHOUT the ir_read baseline noise
+
+The total `detect_leaks=1` count is **useless** as an oracle: it includes the
+intentional `ir_read` `Box::leak` (Class 1, ~311 allocs) which fluctuates per
+program and swamps the ~2/call signal. Three layered oracles instead:
+
+1. **Runtime-owner-frame detector (primary, class-isolating).** Count leak/UAF
+   stacks whose deepest loft frame is `loft::fill::append_text`,
+   `loft::native::*_dest`, or `struct_to_json` — **excluding `loft::ir_read`**.
+   A clean shape has **zero** such frames regardless of the Class-1 baseline. This
+   is the CI-ready assertion (a grep over the ASan report), and it is what makes a
+   `detect_leaks=1` flip meaningful without hand-tuning suppressions per shape.
+2. **Growth-differential (confirms per-call vs bounded).** Run N=small vs N=large;
+   the leaked **object** count (`in N object(s)` — field 7, NOT the byte field)
+   grows ~2/call for a real leak, flat for the bounded Class-1. (LSan dedups
+   identical stacks, so the report/frame COUNT is flat even while objects grow —
+   use object count for growth, frame presence for classification.)
+3. **Both-backend + `LOFT_POISON`.** The UAF variant fires under `LOFT_POISON`
+   (freed-store sentinel) and ASan on `--interpret` AND `--native`
+   (`LOFT_NATIVE_LEAK_CHECK`); a cross-mode value oracle (@PLN89) guards
+   correctness. A fix is closed only when all probe cells read clean on both
+   backends under all three.
+
+## Flip — @PLN54 S4 `detect_leaks=1` gate, step by step
+
+1. **Land the fix** (§ above) → every probe cell = 0 runtime-owner frames, UAF
+   gone, on both backends; the ~129 harness JSON/text tests stop leaking.
+2. **Graduate the probes to regression guards:** add `tail_to_json`, the `text?`
+   UAF cell, `tail_upper`, and `forward_to_json` to @PLN54's `native-asan` /
+   `asan` corpus — each leaks/UAFs pre-fix, so they pin the class shut.
+3. **Flip `miri.yml` `asan`:** `ASAN_OPTIONS: 'detect_leaks=1'` +
+   `LSAN_OPTIONS: 'suppressions=lsan_suppressions.txt'`, where the suppression file
+   is ONE documented line for the intentional Class-1 `ir_read` `Box::leak` —
+   `leak:read_block` (+ `leak:read_data_with` as the direct entry the ~16
+   `ir_read`/`ir_schema`/`ir_store` round-trip lib tests hit). These are DIRECT
+   calls (not interpreter-inlined), so the frame is present on both ubuntu-x86_64
+   and macOS-ARM — but verify on the Linux leg before landing (the S1 caveat: a Mac
+   can't validate the Linux ASan runtime).
+4. **Keep the runtime-owner-frame detector as the standing assertion** so a NEW
+   store-text leak (a fresh `_dest` fn, a new tail shape) turns the gate red even
+   though the `ir_read` line is suppressed — the gate asserts "zero non-`ir_read`
+   store-text leaks," which is the invariant, not "zero total allocations."
+
 ## Why not fixed in the surfacing session
 
 The surfacing session was on macOS-ARM and had done the full diagnosis; the edit
