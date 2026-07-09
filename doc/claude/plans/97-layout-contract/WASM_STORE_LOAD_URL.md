@@ -152,6 +152,25 @@ Steps 1–3 + Step 5 are GREEN via the repeatable `harness/` (a `.store` image, 
 **All steps GREEN** — the feature is done and validated end-to-end, including a
 live browser fetch.
 
+## Regression guard — every wasm import site must stub `loft_host_http_get`
+
+`store_load_url_trusted`'s `loft_host_http_get` import is pulled into **every**
+`--html` wasm via the always-linked native fn table — not just programs that call
+it. So every place that builds the `loft_io` import object must provide it, or the
+module `LinkError`s at instantiate (`"loft_io" "loft_host_http_get": function import
+requires a callable`). Covered sites (all fixed): the minimal page + full engine
+shell (`main.rs` / `doc/loft-gl-wasm.js` — the REAL asyncify fetch driver), and the
+node harnesses `tools/wasm_debug_{client,selftest,e2e}.mjs` (Proxy per-fn fallback),
+`tools/wasm_{repro,ws_repro}.mjs` (explicit `0xFFFFFFFF` stub). `check_html_bundle.mjs`
+already uses a fully-permissive Proxy. **Rule:** a new host import added to the fn
+table needs a stub at every import-builder, not only the real driver.
+
+> **Note — `wasm_debug_relay` is a pre-existing local-box flake, NOT this change.**
+> Isolated via a worktree at the parent commit (`2b38b34d`, pre-`http_get`): the test
+> fails IDENTICALLY there (`D:relayed alice` ×5, no client debug replies), so the
+> node-WebSocket debug-reply path is broken on this machine independent of PLN97. It
+> is green in CI (PLN100 record). Don't chase it as a store-load regression.
+
 ## Residual / notes
 
 - **WASI (`--native-wasm`, `wasm32-wasip2`) is separate:** it has no `fetch()`; a
