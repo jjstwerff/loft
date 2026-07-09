@@ -363,6 +363,69 @@ mod tests {
         );
     }
 
+    /// F2.6 — one wide triage pass: a large, seeded-random spec space run under
+    /// poison. Approximates a coverage-guided run on stable (no nightly /
+    /// cargo-fuzz): the fixed F2.1/F2.4 grid is only 120 specs; this explores
+    /// ~1500 varied ones (all key counts 1..=20, random remove subsets, both
+    /// closure modes). A failed self-check fails the test; a poison UAF aborts,
+    /// naming the culprit spec under `LOFT_F2_TRACE`. `#[ignore]` (heavy) — run
+    /// with `--ignored`. Reproducible: fixed PRNG seed.
+    #[test]
+    #[ignore = "F2.6 wide poison sweep — heavy; run with --ignored"]
+    fn f26_wide_poison_sweep() {
+        let trace = std::env::var_os("LOFT_F2_TRACE").is_some();
+        // xorshift64 with a fixed seed — deterministic + reproducible.
+        let mut rng: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = || {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            rng
+        };
+        let n_progs = 1500;
+        let mut findings: Vec<String> = Vec::new();
+        for _ in 0..n_progs {
+            let kind = match next() % 3 {
+                0 => Kind::Hash,
+                1 => Kind::Sorted,
+                _ => Kind::Index,
+            };
+            let n_keys = (next() % 20) as u32 + 1;
+            let closures = next() & 1 == 1;
+            let n_remove = (next() % u64::from(n_keys + 1)) as usize;
+            let remove: Vec<u32> = (0..n_remove)
+                .map(|_| (next() % u64::from(n_keys)) as u32)
+                .collect();
+            let spec = KeyedSpec {
+                kind,
+                n_keys,
+                remove,
+                closures,
+            };
+            let src = generate_keyed(&spec);
+            if trace {
+                eprintln!("TRY {spec:?}");
+            }
+            match catch_unwind(AssertUnwindSafe(|| check_generated_with(&src, true))) {
+                Ok(Ok(())) => {}
+                Ok(Err(msg)) => {
+                    findings.push(format!("{spec:?}: {}", msg.lines().next().unwrap_or("")));
+                }
+                Err(_) => findings.push(format!("{spec:?}: PANIC (compiler ICE)")),
+            }
+        }
+        eprintln!(
+            "F2.6: {n_progs} specs under poison, {} finding(s)",
+            findings.len()
+        );
+        assert!(
+            findings.is_empty(),
+            "{} finding(s):\n{}",
+            findings.len(),
+            findings.join("\n")
+        );
+    }
+
     /// F2.2 — prove the self-check CAN fail (non-vacuity). A correct program
     /// passes, but corrupting a baked expectation — exactly what a real
     /// collection miscompile would produce — makes `check_generated` report a
