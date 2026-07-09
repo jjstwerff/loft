@@ -180,7 +180,14 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_store_load_range", n_store_load_range),
     #[cfg(feature = "registry")]
     ("n_store_load_url", n_store_load_url),
-    #[cfg(feature = "registry")]
+    // Trusted whole-image URL load: also available on the browser (`--html`)
+    // target, where the fetch is bridged to JS `fetch()` via the asyncify host
+    // import (same synchronous loft API as native).  `n_store_load_url` (SHA-
+    // verified) stays `registry`-only — it needs `verify_sha256`.
+    #[cfg(any(
+        feature = "registry",
+        all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm"))
+    ))]
     ("n_store_load_url_trusted", n_store_load_url_trusted),
     ("n_store_load_untrusted", n_store_load_untrusted),
     ("n_eprint", n_eprint),
@@ -1324,8 +1331,13 @@ fn n_store_load_url(stores: &mut Stores, stack: &mut DbRef) {
 /// Interpreter handler for `store_load_url_trusted` — fetch a whole store IMAGE
 /// over HTTP(S)/`file://` from a TRUSTED source and HEAP-load it (no SHA check;
 /// still structurally validated).  Args pop in reverse: url, local.
-/// @PLN97 arc G Phase 0.
-#[cfg(feature = "registry")]
+/// @PLN97 arc G Phase 0.  Available on native (`registry`) AND the browser
+/// (`--html`) target — the fetch is bridged to JS `fetch()` via the asyncify host
+/// import, so the loft API is identical (`Stores::load_url` / `net::fetch_bytes`).
+#[cfg(any(
+    feature = "registry",
+    all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm"))
+))]
 fn n_store_load_url_trusted(stores: &mut Stores, stack: &mut DbRef) {
     let v_url = *stores.get::<Str>(stack);
     let v_ref = *stores.get::<DbRef>(stack);
