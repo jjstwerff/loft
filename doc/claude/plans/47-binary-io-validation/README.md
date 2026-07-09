@@ -23,17 +23,25 @@ canonical-object-serialization gap formerly tracked as `@P289`.
 | **W10 var-width field** | `f += struct-with-text-field` then `f#read` **PANIC** at runtime | Reject at COMPILE time on both backends: `first_unserialisable_field` now flags `text`/`vector`/collection fields (recursing into nested structs, reporting `outer.inner`) with a clear diagnostic. |
 | **W7 text** | already worked | Locked into the matrix. |
 
-## Known limitation (tracked separately)
+## Ownership follow-ups (both in @PLN85)
 
-`q = f#read as Struct` leaks **one record per read**. This is NOT a binary-I/O
-defect: it is loft's pre-existing block-temp ownership bug — `x = { …; struct_temp }`
-leaks the temp store even with **no file I/O at all** (function returns and direct
-literals are clean; only the inline-block-returning-a-struct form leaks). The
-struct read produces exactly that shape and inherits it. Fixing it is an
-ownership-model change (make an inline block-escaping struct temp transfer
-ownership like a function return does) — a separate issue, out of this plan's
-binary-I/O scope. The struct cells therefore use `run_cross_mode` (value
-round-trip, both backends) rather than the leak-free harness.
+Investigating the "struct read leaks" note here reopened
+[@PLN85](https://github.com/loft-lang/plans/issues/85) and split it into two:
+
+1. **Block-return-move — FIXED (2026-07-09).** The general bug `x = { z = T{};
+   z }` (an inline block returning a fresh local struct) borrowed instead of
+   moving — leaking and, via slot reuse, *corrupting*. Fixed in
+   `parser/control.rs:block_result` (adopt the block-local via the #306
+   materialize), default-on, both backends. `q = f#read as Struct` in isolation
+   (read-only) never had this — the read block is empty-dep, so the consumer
+   already adopts. See
+   [@PLN85 block-return-move.md](../85-store-lifetime-retirement/block-return-move.md).
+2. **Write+read struct leak — OPEN (`p9`).** `f += s` then `f#read as S` in one
+   program leaks the WRITE's copy-temp on **interp only** (native clean),
+   struct-specific — a write-path slot residual, a separate @PLN85 cluster.
+
+The struct cells therefore use `run_cross_mode` (value round-trip, both
+backends) rather than the leak-free harness (which trips on residual 2).
 
 ## Goal
 

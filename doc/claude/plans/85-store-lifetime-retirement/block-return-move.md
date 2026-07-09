@@ -5,12 +5,15 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLN85 residual cluster — move-on-block-return
 
-**Status: active (reopened 2026-07-09).** An inline block that returns a
-locally-allocated struct — `x = { z = P{…}; z }` — **borrows** instead of
-**moving**. It violates ownership invariant #2 (*move on return*) and, via slot
-reuse, #1 (*single owner*). Surfaced by @PLN47 (`f#read as Struct`). This doc is
-the stepped implementation plan; it uses an **oracle/switch** migration so the
-change to load-bearing ownership classification lands without a suite regression.
+**Status: FIXED, default-on (2026-07-09).** An inline block that returns a
+locally-allocated struct — `x = { z = P{…}; z }` — **borrowed** instead of
+**moving**, violating ownership invariants #2 (*move on return*) and #1 (*single
+owner*): it leaked and, via slot reuse with a still-live consumer, corrupted
+(`a` read `b`'s value). Fixed via the oracle/switch migration below (Steps 0–5
+done); `move_block_return` defaults ON, full suite 2721/2721 both switch states,
+regression `tests/scripts/85-block-return-move.loft`. **Remaining:** Step 6
+(retire the off-switch after burn-in) and the separate `p9` write+read residual.
+Surfaced by @PLN47 (`f#read as Struct`).
 
 ## The defect, precisely
 
