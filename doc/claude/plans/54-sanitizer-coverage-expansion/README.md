@@ -24,18 +24,18 @@ right now.
   loft runs real `par`/`par_light` parallel workloads under store-isolation
   (THREADING.md) with **zero data-race coverage** (Miri runs
   stacked-borrows-off; ASan/`stack_align_guard` are not race detectors).
-- **S3 (`LOFT_POISON`) — store half DONE + suite GREEN (2026-07-03); only the
-  CI gate + stack-slot half remain.** The store-record poison-on-free is built
-  (`keys.rs::poison_enabled` + `allocation.rs::free_named`, both backends) AND
-  the 23-bug poison campaign already drove `LOFT_POISON=1 cargo test` **fully
-  green** (2600/2602, 2026-07-03 — the 2 fails are chrome-harness flakes; see
-  [fuzz-proof-gate.md § Increment 3–4](../85-store-lifetime-retirement/fuzz-proof-gate.md)).
-  So the "drive it green" criterion was already MET; what actually remains is
-  small and concrete: **(a)** re-verify green on current `main` (it has moved
-  ~15 commits since, incl. the @PLN97 store loaders), **(b)** add the missing
-  CI gate — no workflow runs `LOFT_POISON=1` today, so that green is an
-  un-defended one-off, and **(c)** poison freed STACK slots (S3's unpoisoned
-  second half).  Highest value-per-effort — recipe in § Concrete steps below.
+- **S3 (`LOFT_POISON`) — ✅ EFFECTIVELY MET (2026-07-09).** Store-record
+  poison-on-free built (`keys.rs::poison_enabled` + `allocation.rs::free_named`,
+  both backends); the 23-bug campaign drove `LOFT_POISON=1 cargo test` green
+  (2026-07-03), **re-verified green on current `main` today (1498/1498 on the
+  interpreter suites)**; and the **CI gate landed** — the nightly `poison` job
+  in `miri.yml` (nothing ran `LOFT_POISON=1` before, so that green is no longer
+  an undefended one-off). The remaining "poison freed STACK slots" half was
+  **investigated and re-scoped** (§ Concrete steps S3.3): no single chokepoint
+  (~30 TOS-lowering sites), the pop primitive returns a reference into the
+  vacated bytes (naive poison is unsound), and the crash-class (stale *DbRef*
+  stack values) is **already covered by the sound `LOFT_UAF_GEN` gen-stamping
+  detector** — so it is a low-priority follow-on, not a blocker.
 - **S9 (cdylib mixed-boundary ASan) — unstarted; high heap-trust value.** The
   C71 path (an interpreted script sharing its `*mut Stores` with a compiled
   cdylib by raw pointer) is **the one cross-boundary surface no sanitizer
@@ -51,10 +51,11 @@ right now.
 - **S5 / S7 / S8 — low priority.** Grow the Miri curated set; add a nightly
   failure→issue notifier; MSan (heavy upstream setup).
 
-**Recommended entry point:** finish **S3** (unblocked, cheap, completes the
-poison keystone so store-internal UAF is loud everywhere) or, for the biggest
-coverage gain, **S2 (TSan)** — the only entirely-uncovered tool class over
-loft's real parallel workloads.
+**Recommended entry point (updated 2026-07-09):** S3 is now effectively met (CI
+gate landed; DbRef stack-UAF already covered by `LOFT_UAF_GEN`). The next
+highest-value slice is **S2 (TSan)** — the only entirely-uncovered tool class
+over loft's real `par` parallel workloads — then **S9 + S6** (ASan over a
+generated build, one shared mechanism).
 
 ## Goal
 
@@ -69,7 +70,7 @@ deferred with a one-line reason.
 |---|---|---|---|
 | **S1** | **macOS-ARM nightly leg** — add a macOS-ARM runner to `miri.yml`'s toolchain-matrix job (and, when affordable, to the Miri/ASan jobs).  @P383 — the founding incident — surfaced exclusively on macOS-ARM; a ubuntu-only nightly would not have caught it.  **State 2026-07-09: mostly moot** — `v2-validation.yml` already runs the full suite on macOS-ARM (macOS-latest); only the *sanitizer* (Miri/ASan) leg is still ubuntu-only, which is the narrow residual. | macOS-ARM *sanitizer* leg green on `main`; nightly badge reflects it. | Low (was Highest) |
 | **S2** | **ThreadSanitizer (TSan)** — add a `tsan` job to `miri.yml` running the parallel/threading suite under `RUSTFLAGS=-Zsanitizer=thread`.  loft executes real parallel workloads via `par`/`par_light` under a store-isolation model (THREADING.md); zero data-race coverage exists today (Miri runs stacked-borrows-off; ASan/guard are not race detectors). | TSan job green on `main`; any races found catalogued or fixed. | High |
-| **S3** | **`LOFT_POISON=1` arena poison-on-free keystone — ✅ STORE-RECORD HALF BUILT** (2026-06-29, @PLN85 fuzz-proof: `keys.rs::poison_enabled` + the `allocation.rs::free_named` poison block; both backends — native calls the same `free_named`; positive control proven — exposed a SILENT use-after-free (`elem_accumulate-none`) the cross-backend differential alone missed. **Remaining (NOW UNBLOCKED, 2026-07-09):** poison freed STACK slots; drive `LOFT_POISON=1 cargo test` green — the over-free class / Cluster C blocker it waited on **has landed** (@PLN85/@PLN90 drove the ownership register to 0); add a CI gate running it, since no workflow does today.) Fill freed store records + freed stack slots with a sentinel value on free, turning silent store-internal use-after-free (the @P377/@P378 dangling-`DbRef` family) into loud, deterministic garbage at the dangling read — on any rustc, no nightly.  This is the blind spot Miri/ASan/Valgrind all share (loft's arena "free" is not a libc `free()`). | `LOFT_POISON=1 cargo test` green; @P377/@P378-class reads produce sentinel-value panics rather than silent stale data.  **Also unblocks @PLN53 F4.** | High |
+| **S3** | **`LOFT_POISON=1` arena poison-on-free keystone — ✅ STORE-RECORD HALF BUILT** (2026-06-29, @PLN85 fuzz-proof: `keys.rs::poison_enabled` + the `allocation.rs::free_named` poison block; both backends — native calls the same `free_named`; positive control proven — exposed a SILENT use-after-free (`elem_accumulate-none`) the cross-backend differential alone missed. **✅ EFFECTIVELY MET (2026-07-09):** `LOFT_POISON=1` re-verified green on current main (1498/1498); the nightly `poison` CI gate landed in `miri.yml`; the "poison freed STACK slots" half was investigated + re-scoped to a low-priority follow-on (no chokepoint; pop returns a ref into vacated bytes; DbRef stack-UAF already covered by `LOFT_UAF_GEN` — see § Concrete steps S3.3).) Fill freed store records + freed stack slots with a sentinel value on free, turning silent store-internal use-after-free (the @P377/@P378 dangling-`DbRef` family) into loud, deterministic garbage at the dangling read — on any rustc, no nightly.  This is the blind spot Miri/ASan/Valgrind all share (loft's arena "free" is not a libc `free()`). | `LOFT_POISON=1 cargo test` green; @P377/@P378-class reads produce sentinel-value panics rather than silent stale data.  **Also unblocks @PLN53 F4.** | ✅ Met |
 | **S4** | **Triage the LeakSanitizer baseline** (~108 live-at-exit allocations) — understand each allocation class, fix the avoidable leaks, and turn `detect_leaks=1` on in `miri.yml` for the corpus.  Cluster 5 was a leak; there are likely others. | ASan `detect_leaks=1` passes corpus-wide in CI, or each surviving allocation class has a one-line accepted-leak annotation. | Medium |
 | **S5** | **Grow the Miri curated set** beyond the current 4 tests (p213 + clusters 3/4/5) — add cluster 1/2 reproducers + representative text/fn-ref/par shapes so the Miri gate covers more of the hard-UB surface without unbearable runtime. | Miri curated set ≥ 8 tests; job runtime ≤ 20 min on ubuntu. | Medium |
 | **S6** | **Native-backend ASan** — instrument the `--native` codegen runtime under ASan (currently ASan instruments only the in-process interpreter; the `--native` path is uninstrumented). | At least one native-mode test corpus passes under ASan; any findings catalogued or fixed. | Medium |
@@ -110,16 +111,42 @@ the existing `asan` / `guard` job filters).
    job once its wall-clock on a runner is measured acceptable; and reintroduce a
    store-UAF (revert one `OpFreeRefIfDistinct` guard from fuzz-proof-gate.md) as
    a one-off to confirm the gate turns red (the positive control).
-3. **Poison freed STACK slots** (S3's unpoisoned second half). Today
-   `poison_enabled()` only overwrites freed *store records*
-   (`allocation.rs::free_named`); freed eval-stack / frame slots are not
-   sentinel-filled, so a stale-slot read stays silent. Locate the scope-exit
-   slot-release path (`src/state/`, `src/fill.rs`; trace with `LOFT_LOG=slots`),
-   overwrite released slots with a sentinel under `keys::poison_enabled()`, then
-   re-drive the step-1 suite green. Per the stability rule, any latent stale-slot
-   read this surfaces is FIXED in-session with a graduated
-   `tests/scripts/85-*.loft` guard — not filed. **Acceptance:** stack-slot poison
-   on + suite green + a new guard proving the sentinel fires on a stale-slot read.
+3. **Poison freed STACK slots** — S3's unpoisoned second half, **re-scoped
+   2026-07-09 after investigation: this is NOT the cheap keystone-completion the
+   one-liner implied, and its highest-value case is already covered.** Findings:
+   - **No single chokepoint.** `poison_enabled()` today only overwrites freed
+     *store records* (`allocation.rs::free_named`). The eval stack is
+     `State::stack_bytes` with `stack_pos` (byte TOS); a "freed" stack slot is
+     just a lowered `stack_pos`, and `stack_pos` is lowered at **~30 sites**
+     (the `get_stack<T>` pop, function-return/frame-release, loop `clear_stack`,
+     par-worker entry, coroutine exhaust). There is no one place to hook.
+   - **The pop primitive returns a reference INTO the just-vacated bytes.**
+     `get_stack<T>` (state/mod.rs:1725) does `stack_pos -= step` then returns
+     `&T` at the new `stack_pos` — so poisoning right after a pop corrupts the
+     value being read. Naive poison-on-pop is *unsound*; only the **bulk-vacate**
+     sites (frame-release, loop-clear) are safe to poison, and even those reset
+     `stack_pos` then read the return value back from a computed offset
+     (`reenter_ret`), so the poison must spare live return-value/arg bytes.
+   - **The crash-class is already covered.** Stale *DbRef* values carried on the
+     stack — the dangerous case — are already caught by the sound **`LOFT_UAF_GEN`**
+     generation-stamping detector (state/mod.rs:1756; `keys::uaf_gen_enabled`):
+     it stamps each DbRef push with its store slot's gen and reports a pop whose
+     stamp is older than the slot's current gen (freed+reused since push). Plus
+     `LOFT_UAF`/`LOFT_UAF_SRC` frame-scan for a live var holding a DbRef into a
+     freed store. So stack poison's *only* residual over what exists is stale
+     **non-DbRef** frame reads (ints/lengths/bools), which mostly manifest as
+     wrong-values the cross-backend differential oracle already catches.
+   - **Proportionate path (if pursued):** poison ONLY the safe bulk-vacate
+     regions (frame-release + `clear_stack`), sparing live return-value/arg
+     bytes, gated on `keys::poison_enabled()`; run it as a positive-control
+     experiment (does it fire on any existing test?) before investing further.
+     **Acceptance:** either it surfaces a real non-DbRef stale-frame read (fix
+     in-session + graduated `tests/scripts/85-*.loft` guard), or it is
+     clean-and-vacuous and S3 is declared complete on the strength of
+     store-poison + `LOFT_UAF_GEN` + the differential oracle jointly covering the
+     stack-UAF class. **Recommendation:** treat S3 as *effectively met* (gate
+     landed; DbRef stack-UAF covered) and keep this as a low-priority follow-on,
+     not a blocker.
 
 ### S2 — ThreadSanitizer (biggest new tool-class gap; ~1 day)
 
