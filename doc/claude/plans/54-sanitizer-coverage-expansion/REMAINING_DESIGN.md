@@ -131,32 +131,61 @@ went from ~108 to 0-modulo-suppressions.
 survivor has a one-line accepted-leak annotation. **Effort:** ~1 day. **Risk:**
 low — worst case the suppression file is larger than hoped.
 
-### S4 — baseline captured 2026-07-09 (post-#537 rebase); root-cause BLOCKED on inlining
+### S4 — ROOT-CAUSED on macOS-ARM 2026-07-09 (the Linux session was blocked on inlining)
 
-`RUSTFLAGS=-Zsanitizer=address ASAN_OPTIONS=detect_leaks=1 cargo +nightly test
---release --target … --test issues -- --test-threads=1` → **2389 B leaked in 215
-allocations, essentially ONE class**: `RawVecInner::finish_grow` ← `State::static_call`
-← `execute_argv` ← `issues::testing::Test::drop`. Not the ~108 the doc guessed;
-LSan does REACHABILITY, so `OnceLock`/cached-stdlib allocations are NOT leaks.
-The 2 "failed" tests under leaks-on (`fill_rs_up_to_date`, `n9_generated_fill_matches_src`)
-are the generated-code-freshness meta-tests the `asan` job already excludes — not bugs.
+**LSan runs on macOS-ARM** (newer LLVM added arm64-Darwin LeakSanitizer — verified
+with a deliberate `Box::leak` positive control: reported + aborted). This is the
+mirror of S1: the Linux session couldn't name the leak because `--release` inlined
+the owner into `static_call` and gave `??:?`; on this Mac the release frames
+symbolize directly, so the class is named without needing a no-inline build.
 
-**Root-cause is BLOCKED, and must NOT be blind-suppressed.** `static_call`'s own
-`Vec` allocations are all in the snapshot branch (`if call == stack_trace_lib_nr`),
-which no `--test issues` test reaches — so the leaking `Vec` is in a NATIVE FUNCTION
-the optimizer **inlined into `static_call`** (`--release`, so the frame is
-collapsed; `-C debuginfo=2` still gives `??:?`). The allocations are tiny (~11 B —
-small `String`/`Vec`), 122 + 93 of them, from a subset of `issues` tests. This
-could be a real **store/heap leak in a native call** (PLN54's exact target), so a
-broad `leak:static_call` suppression is WRONG — it would mask the very class the
-gate exists to catch.
+**Two distinct, bounded, benign classes — NOT the single "store leak in a native
+call" the Linux note feared:**
 
-**Next (a focused step):** defeat inlining to name the native fn — a DEBUG ASan
-build (`-C opt-level=0`, no inlining) over the leaking subset, OR bisect the
-`issues` corpus by test-group under `detect_leaks=1` to find the leaking tests →
-read their loft to name the native call → fix it at the owner. THEN flip the
-`asan` job to `detect_leaks=1` (+ a narrow, documented suppression only for any
-genuinely-intentional residual). Do NOT flip the gate until the leak is named.
+**Class 1 — PRODUCTION (`loft prog.loft`): the intentional `ir_read` `Box::leak`
+(accepted).** A standalone valid program (`probe_D`: `s="abc"; s+="def…"; print`,
+output verified) leaks **311 allocations / 1942 B — 100 % `loft::ir_read::read_block`
+→ `read_value` → `read_definition`**, zero runtime-fn frames. This is the @PLN11
+store→native IR round-trip that runs on every compile: the native IR holds names as
+`&'static str`, so the reader promotes deserialized names with a **bounded,
+documented `Box::leak`** (ir_read.rs:25-27 — "a small fixed set of block names that
+live for the whole process anyway"). Interner-style: bounded by the program+stdlib
+name set, does **not** grow at runtime (a 1000-iteration loop leaks the same 311 as
+a 1-line body), freed by process exit. Standard compiler technique, not a bug.
+
+**Class 2 — TEST-HARNESS only (what the `asan` gate would see): a teardown
+artifact.** The `--test issues` baseline (**4181 B / 229 allocs on ARM**; 2389/215
+on Linux) is owned by RUNTIME text fns — `append_text` (110), `n_kind_dest` (38),
+`n_to_json_dest`/`_pretty`/`struct_to_json_dispatch` (49), `n_as_text_dest` (5).
+These do **NOT** reproduce in production: the same `+=`, `kind`, `to_json` ops in a
+standalone binary leak **zero** runtime buffers. The harness (`Test::drop` →
+`byte_code` + `execute` + drop `State`) leaves live entry-frame texts unfreed at
+`State` teardown, whereas production's store-IR-roundtrip bytecode frees them. It is
+bounded per test and test-only.
+
+**`free_text` is confirmed working** (the feared @PLAN53-cluster-5 regression is
+refuted): `probe_A` created + scope-freed 1000 texts and leaked the *same* count as
+the 1-text `probe_B` — the runtime free path does not accumulate.
+
+**Decision — do NOT flip `detect_leaks=1` this session (and why):**
+1. The `asan` job now runs on **both** ubuntu + macOS-ARM (S1). A clean flip needs
+   Class 2 gone on BOTH; this Mac cannot validate the Linux leg, and shipping an
+   unvalidated gate breaks the plan's "validate what you ship" bar (the same bar S1
+   just honoured).
+2. A suppression is **cross-platform fragile**: Linux inlines Class 2 into
+   `static_call` (the broad frame the design forbids suppressing), while macOS shows
+   the real `append_text`/`_dest` owners — no single `leak:` line matches both
+   without also masking real runtime leaks.
+3. Class 1 is intentional (accept/annotate); Class 2 is test-infra, benign, and its
+   proper fix (align the harness `byte_code` teardown with production's store-IR
+   path so entry-frame texts are freed) is a focused test-infra change, not a
+   production correctness fix.
+
+**Remaining to close S4 (a focused follow-up):** fix the Class-2 harness teardown so
+the gate flips to `detect_leaks=1` **clean, no suppression, on both platforms** —
+then annotate Class 1 with a narrow `lsan_suppressions.txt` line (`leak:read_block`
++ rationale) since the intentional `Box::leak` is the only expected residual. The
+hard, previously-blocked part — NAMING the classes — is now done.
 
 ---
 
