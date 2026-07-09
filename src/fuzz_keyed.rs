@@ -203,6 +203,17 @@ static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 /// valid-by-construction should always compile) or when a self-check assertion
 /// / runtime fault fires (`had_fatal`), which is a real FINDING.
 pub fn check_generated(src: &str) -> Result<(), String> {
+    check_generated_with(src, false)
+}
+
+/// As [`check_generated`], with `poison` selecting F4's arena poison-on-free
+/// amplifier. On, a keyed-collection use-after-free reads a loud sentinel
+/// instead of silently-lucky stale data, so it either fails a self-check
+/// (returned as `Err`) or aborts (uncatchable SIGSEGV) — see F2.4.
+///
+/// # Errors
+/// Same as [`check_generated`].
+pub fn check_generated_with(src: &str, poison: bool) -> Result<(), String> {
     let (data, db) = stdlib();
     let mut p = Parser::new();
     p.data = data;
@@ -237,6 +248,7 @@ pub fn check_generated(src: &str) -> Result<(), String> {
     scopes::check(&mut data);
     let mut state = State::new(database);
     byte_code(&mut state, &mut data);
+    state.database.poison_free = poison;
     state.execute("main", &data);
     while state.database.frame_yield {
         state.resume();
@@ -272,11 +284,11 @@ mod tests {
         v
     }
 
-    /// F2.1 exit: every generated program compiles, runs, and passes its
-    /// self-checks on the interpreter. A rejection is a generator bug; a failed
-    /// self-check or a compiler panic is a finding.
-    #[test]
-    fn generated_programs_compile_run_and_selfcheck() {
+    /// Generate and run every spec in the enumeration. Returns
+    /// `(total, failures)`; a `poison`-mode use-after-free that aborts
+    /// (uncatchable SIGSEGV) kills the process instead — F2.4's expected shape
+    /// for a real store bug.
+    fn run_sweep(poison: bool) -> (usize, Vec<String>) {
         let mut failures: Vec<String> = Vec::new();
         let mut total = 0;
         for closures in [false, true] {
@@ -291,7 +303,8 @@ mod tests {
                         };
                         let src = generate_keyed(&spec);
                         total += 1;
-                        match catch_unwind(AssertUnwindSafe(|| check_generated(&src))) {
+                        match catch_unwind(AssertUnwindSafe(|| check_generated_with(&src, poison)))
+                        {
                             Ok(Ok(())) => {}
                             Ok(Err(msg)) => failures.push(format!(
                                 "{kind:?} n={n} cl={closures}: {}",
@@ -305,6 +318,15 @@ mod tests {
                 }
             }
         }
+        (total, failures)
+    }
+
+    /// F2.1 exit: every generated program compiles, runs, and passes its
+    /// self-checks on the interpreter. A rejection is a generator bug; a failed
+    /// self-check or a compiler panic is a finding.
+    #[test]
+    fn generated_programs_compile_run_and_selfcheck() {
+        let (total, failures) = run_sweep(false);
         eprintln!(
             "F2.1: generated + ran {total} keyed programs, {} failure(s)",
             failures.len()
@@ -316,6 +338,26 @@ mod tests {
         assert!(
             failures.is_empty(),
             "{}/{total} generated programs failed:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
+    }
+
+    /// F2.4 — run the same sweep with arena poison-on-free ON, so a
+    /// keyed-collection use-after-free surfaces as a failed self-check (a loud
+    /// garbage lookup value) rather than silently-lucky stale data. A pointer
+    /// deref into poisoned memory aborts (uncatchable SIGSEGV) and kills the
+    /// binary — that is a real finding to triage, exactly like F1's `walk.loft`.
+    #[test]
+    fn generated_programs_clean_under_poison() {
+        let (total, failures) = run_sweep(true);
+        eprintln!(
+            "F2.4: ran {total} keyed programs under poison, {} finding(s)",
+            failures.len()
+        );
+        assert!(
+            failures.is_empty(),
+            "{}/{total} programs faulted under poison (keyed-collection UAF?):\n{}",
             failures.len(),
             failures.join("\n")
         );
