@@ -154,7 +154,6 @@ Features that "appear to work" but don't, or that lose data without indication. 
 | (cross) | Match validation — subject type × pattern shape matrix | M | ✓ | plans/29-match-validation/README.md |
 | (cross) | Struct-enum validation — variant payload × dispatch context matrix | M | ✓ | plans/30-struct-enum-validation/README.md |
 | (cross) | Keyed collection validation — collection × operation matrix | M | ✓ | plans/31-collection-validation/README.md |
-| (cross) | Binary file I/O matrix — value type × format × access pattern; absorbs @P289 canonical serialization | M | ✓ | plans/47-binary-io-validation/README.md |
 | Q* | JSON parse-error diagnostics (Q1) — parse currently fails silently in some shapes | S-M | ✓ | QUALITY.md#open-work--actionable-summary |
 | (cross) | Integer width discipline — `integer` is i64, explicit `i32` only 4-byte, no implicit `integer`→`i32` (data loss); FFI marshal + compiler enforcement + lib i32 end-to-end.  Absorbs @P370 | M | ✓ | plans/1-integer-width-discipline/README.md |
 
@@ -399,7 +398,7 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | [`plans/29-match-validation/`](plans/29-match-validation) | M | (cross-mode harness shipped by closed @PLAN14) | Subject type × pattern shape matrix |
 | [`plans/30-struct-enum-validation/`](plans/30-struct-enum-validation) | M | **✅ CLOSED 2026-07-09 (delivered)** | Variant payload × dispatch context matrix — feature shipped + ~135 tests; matrix demoted to docs per the plan's own gate |
 | [`plans/31-collection-validation/`](plans/31-collection-validation) | M | **✅ CLOSED 2026-07-09 (superseded)** | Motivating panic gone; hash/sorted/index validated cross-mode; spacial folds into @PLN48 |
-| [`plans/47-binary-io-validation/`](plans/47-binary-io-validation) | M | (cross-mode harness shipped by closed @PLAN14) | Value type × format × access-pattern matrix; absorbs @P289 (length-prefixed text/vectors, per-field struct serialization, `f#read as MyStruct`) |
+| [`plans/47-binary-io-validation/`](plans/47-binary-io-validation) | M | **✅ CLOSED 2026-07-09 (delivered)** | Value type × format × access-pattern matrix; absorbs @P289 — scalar/struct/char/bool/narrow-int round-trip shipped; variable-width-field compile-time rejection; 32-cell `tests/binary_io_matrix.rs` harness |
 | [`plans/53-program-level-fuzzing/`](plans/53-program-level-fuzzing) | H | `fuzz/` crate exists (shipped under @PLAN53); F4 blocked on @PLN54 S3 (`LOFT_POISON`) | Coverage-guided ASan-instrumented fuzzing of loft source → parse → byte_code → execute; schema-coupled collections (tree/hash/sorted) via real programs; differential (interpret ≡ native ≡ wasm); OSS-Fuzz onboarding.  Spun off from @PLAN53 Wave 2 items #4/#6/#10 |
 | [`plans/54-sanitizer-coverage-expansion/`](plans/54-sanitizer-coverage-expansion) | M | @PLAN53 closed (PRs #235/#236/#237) | Expands the sanitizer CI stack @PLAN53 shipped: macOS-ARM nightly leg (highest — @P383 was macOS-ARM-only), ThreadSanitizer, `LOFT_POISON` keystone, LSan triage, growing Miri curated set, native-ASan, failure-notifier.  Successor to @PLAN53 Wave 2 (non-fuzzing items) |
 

@@ -1,0 +1,7 @@
+// CONTROL (passes today): fn return moves via retbuf — the target behaviour.
+struct P { x: integer, y: integer }
+fn mk(v: integer) -> P { P{x:v, y:v} }
+fn main() {
+  a = mk(1); b = mk(3);
+  println("{a.x} {a.y} {b.x} {b.y}");
+}

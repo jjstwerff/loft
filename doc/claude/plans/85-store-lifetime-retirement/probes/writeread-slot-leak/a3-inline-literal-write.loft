@@ -1,0 +1,10 @@
+// A3: write an INLINE struct literal (no `p` var), then read. vs A1's `p = …;
+// f += p` (variable write). Tests whether the `_wf` copy-temp behaviour (and the
+// slot the read inherits) differs for a literal vs a bound variable operand.
+#cwd
+struct P { x: integer, y: integer }
+fn main() {
+  { f = file("wr_a3.bin"); f#format = LittleEndian; f.set_file_size(0); f += P{x:5,y:6}; f.sync(); }
+  { f = file("wr_a3.bin"); f#format = LittleEndian; q = f#read as P; println("{q.x}"); }
+  delete("wr_a3.bin");
+}

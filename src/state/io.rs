@@ -162,6 +162,19 @@ impl State {
                         .read_data(&elem, elem_tp, little_endian, &mut data);
                 }
             }
+        } else if matches!(
+            &self.database.types[db_tp as usize].parts,
+            Parts::Struct(_) | Parts::EnumValue(_, _)
+        ) {
+            // @PLN85 p9: like the Vector arm, a struct's RECORD DbRef is stored in
+            // the slot `val` refs — deref it and serialise the RECORD's fields.
+            // Serialising `val` directly read the DbRef bytes AS fields and wrote
+            // them (garbage) to the file; the read then filled the reader's record
+            // with that garbage.  Native derefs (FileVal for DbRef); this was the
+            // interp-only write half of the same defect.
+            let rec_ref = *self.database.store(&val).addr::<DbRef>(val.rec, val.pos);
+            self.database
+                .read_data(&rec_ref, db_tp, little_endian, &mut data);
         } else {
             self.database
                 .read_data(&val, db_tp, little_endian, &mut data);
@@ -334,16 +347,31 @@ impl State {
                 // variable whose stack slot is 8 bytes (Phase 2c integer
                 // width) and holds a raw i64 — not the +1-encoded form that
                 // Parts::Byte/Short use in struct fields, nor the i32::MIN
-                // null sentinel Parts::Int uses.  Decode the bytes and store
-                // as a sign-extended i64.
+                // null sentinel Parts::Int uses.  Decode the bytes into the
+                // raw i64.  @PLN47 W2/W3: a SIGNED narrow type (`i8`/`i16`,
+                // whose range `from` is negative) must sign-extend; an
+                // unsigned one (`u8`/`u16`, `from >= 0`) zero-extends.  The
+                // native backend reads these as `i16`/`i8` and lets the slot
+                // type wrap; the interpreter holds a raw i64, so it must pick
+                // the extension explicitly or a signed value read back as a
+                // large positive (`-12345 as i16` → 53191) — a silent
+                // corruption that diverged from native.
                 let v: i64 = match &self.database.types[db_tp as usize].parts {
-                    Parts::Byte(_, _) => i64::from(data[0]),
-                    Parts::Short(_, _) | Parts::ShortRaw(_, _) => {
-                        let d: [u8; 2] = data[0..2].try_into().unwrap();
-                        if little_endian {
-                            i64::from(u16::from_le_bytes(d))
+                    Parts::Byte(from, _) => {
+                        if *from < 0 {
+                            i64::from(data[0] as i8)
                         } else {
-                            i64::from(u16::from_be_bytes(d))
+                            i64::from(data[0])
+                        }
+                    }
+                    Parts::Short(from, _) | Parts::ShortRaw(from, _) => {
+                        let d: [u8; 2] = data[0..2].try_into().unwrap();
+                        let signed = *from < 0;
+                        match (little_endian, signed) {
+                            (true, true) => i64::from(i16::from_le_bytes(d)),
+                            (true, false) => i64::from(u16::from_le_bytes(d)),
+                            (false, true) => i64::from(i16::from_be_bytes(d)),
+                            (false, false) => i64::from(u16::from_be_bytes(d)),
                         }
                     }
                     Parts::Int(_, _) => {
@@ -357,6 +385,19 @@ impl State {
                     _ => unreachable!(),
                 };
                 self.database.store_mut(&val).set_int(val.rec, val.pos, v);
+            } else if matches!(
+                &self.database.types[db_tp as usize].parts,
+                Parts::Struct(_) | Parts::EnumValue(_, _)
+            ) {
+                // @PLN85 p9: like the Vector arm, a struct's RECORD DbRef is
+                // stored in the slot `val` refs — deref it and fill the record.
+                // Writing into `val` directly filled the eval-stack slot, so the
+                // record was never populated and the delivered value was the slot
+                // bytes reinterpreted as a DbRef.  Native derefs (FileVal for
+                // DbRef); this was the interp-only read half.
+                let rec_ref = *self.database.store(&val).addr::<DbRef>(val.rec, val.pos);
+                self.database
+                    .write_data(&rec_ref, db_tp, little_endian, &data);
             } else {
                 self.database.write_data(&val, db_tp, little_endian, &data);
             }

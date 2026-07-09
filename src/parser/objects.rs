@@ -661,13 +661,13 @@ impl Parser {
                         .parse_type(u32::MAX, &type_name, false)
                         .unwrap_or(Type::Text(crate::data::Deps::none()));
                     if let Type::Reference(d_nr, _) = &tp
-                        && let Some(field) = Self::first_collection_field(*d_nr, &self.data)
+                        && let Some(field) = Self::first_unserialisable_field(*d_nr, &self.data)
                     {
                         let tname = self.data.def(*d_nr).name().to_string();
                         diagnostic!(
                             self.lexer,
                             Level::Error,
-                            "read_file: '{}' has collection field '{}'; use a plain struct for serialisation",
+                            "read_file: '{}' has variable-width field '{}' (text/vector/collection) that binary I/O cannot round-trip; serialise a plain fixed-width struct",
                             tname,
                             field
                         );
@@ -794,6 +794,12 @@ impl Parser {
                 let id = self.get_type(&text_tp);
                 (text_tp, id, None)
             };
+            // W3/W4 (@PLN47): `get_type` folds `character` to `integer` (an
+            // 8-byte read that mismatched the 4-byte native path and crashed
+            // the interp read) and has no `boolean` arm at all (`u16::MAX` →
+            // an out-of-bounds type index).  Both are fixed-width base types;
+            // route them to their own db type so interp and native agree.
+            let db_tp = self.io_scalar_db_tp(&read_type).unwrap_or(db_tp);
             // Resolve the final size expression: explicit `(n)` wins;
             // otherwise inferred from the cast type.  Bare `f#read`
             // with no `as T` or with a variable-width cast (`as text`)
@@ -810,9 +816,41 @@ impl Parser {
                     n_code = Value::Int(0);
                 }
             }
+            // W8 (@PLN47): `f#read(N) as vector<T>` reads N *bytes* (the shipped
+            // convention — callers pass the byte length: `f#read(24)` for three
+            // 8-byte elements, GLB-style).  A literal N that is not a whole
+            // multiple of the element width silently yields a truncated vector
+            // (`f#read(3)` of 8-byte integers → 0 elements) — the silent-data-
+            // loss class this plan targets — so warn at the misuse site.
+            if !self.first_pass
+                && matches!(read_type, Type::Vector(_, _))
+                && let Value::Int(n) = n_code
+            {
+                let elem = i32::from(self.database.size(self.database.content(db_tp)));
+                if elem > 1 && n % elem != 0 {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Warning,
+                        "f#read({n}) as vector<T> counts BYTES, and {n} is not a multiple of the {elem}-byte element width; this drops the trailing {} byte(s) and reads {} element(s) — pass the byte length (element_count * {elem})",
+                        n % elem,
+                        n / elem
+                    );
+                }
+            }
             let mut ls = Vec::new();
             let temp_var = if let Type::Text(_) = read_type {
                 self.vars.work_text(&mut self.lexer)
+            } else if !self.first_pass && matches!(read_type, Type::Reference(_, _)) {
+                // W9 (@PLN47): a struct read yields an OWNED heap record.  Its
+                // slot must hold a real record (OpDatabase) so OpReadFile's
+                // per-field write lands in storage, not the null-sentinel slot
+                // (store u16::MAX → panic).  The block's value (`t`) is
+                // `PutRef`-aliased into the assignment LHS (which is empty-dep,
+                // i.e. it ADOPTS the store).
+                let t = self.vars.unique("read", &read_type, &mut self.lexer);
+                ls.push(v_set(t, Value::Null));
+                ls.push(self.cl("OpDatabase", &[Value::Var(t), Value::Int(i32::from(db_tp))]));
+                t
             } else {
                 let t = self.vars.unique("read", &read_type, &mut self.lexer);
                 ls.push(v_set(t, self.null(&read_type)));
@@ -864,19 +902,66 @@ impl Parser {
         }
     }
 
-    /// Return the name of the first collection-type field in `d_nr`, or `None`.
-    /// Collection fields (sorted/index/hash/spacial) cannot be serialised by the binary
-    /// file I/O routines; callers should emit a compile-time error when this returns `Some`.
-    fn first_collection_field(d_nr: u32, data: &super::Data) -> Option<String> {
+    /// Return the name of the first field in `d_nr` that binary file I/O cannot
+    /// serialise, or `None` when every field is fixed-width.
+    ///
+    /// `f += s` / `f#read as S` walk a struct field-by-field with a FIXED byte
+    /// width per field (no length prefix), so any variable-width field breaks the
+    /// round-trip: a `text`/`vector` field writes payload bytes the fixed-width
+    /// read can't locate (W10 — it read past the record and panicked), and the
+    /// collection kinds (sorted/index/hash/spacial) hold store-internal pointers
+    /// that don't serialise at all.  Nested plain structs ARE fixed-width and
+    /// round-trip (W11), so recurse into them — reporting the offending field as
+    /// `outer.inner`.  Callers emit a compile-time error when this returns `Some`.
+    fn first_unserialisable_field(d_nr: u32, data: &super::Data) -> Option<String> {
+        Self::first_unserialisable_field_rec(d_nr, data, &mut Vec::new())
+    }
+
+    fn first_unserialisable_field_rec(
+        d_nr: u32,
+        data: &super::Data,
+        seen: &mut Vec<u32>,
+    ) -> Option<String> {
+        // Guard against a (pointer-mediated) type cycle so recursion terminates.
+        if seen.contains(&d_nr) {
+            return None;
+        }
+        seen.push(d_nr);
         for a in data.def(d_nr).attributes() {
-            if matches!(
-                a.typedef,
-                Type::Sorted(..) | Type::Index(..) | Type::Hash(..) | Type::Spacial(..)
-            ) {
-                return Some(a.name.clone());
+            match &a.typedef {
+                Type::Sorted(..)
+                | Type::Index(..)
+                | Type::Hash(..)
+                | Type::Spacial(..)
+                | Type::Text(_)
+                | Type::Vector(..) => return Some(a.name.clone()),
+                Type::Reference(inner, _) => {
+                    if let Some(f) = Self::first_unserialisable_field_rec(*inner, data, seen) {
+                        return Some(format!("{}.{}", a.name, f));
+                    }
+                }
+                _ => {}
             }
         }
+        seen.pop();
         None
+    }
+
+    /// Binary db type for a scalar file operand whose `get_type` mapping is
+    /// wrong for I/O: `character` (folded to 8-byte `integer`) and `boolean`
+    /// (no `get_type` arm → `u16::MAX`).  Returns their fixed-width base type
+    /// (`character` = 4 bytes, `boolean` = 1 byte); `None` for every other type,
+    /// which keeps its existing `get_type` routing.  Yields `None` in the first
+    /// pass, where db types are not yet registered.
+    fn io_scalar_db_tp(&self, t: &Type) -> Option<u16> {
+        if self.first_pass {
+            return None;
+        }
+        match t.base() {
+            Type::Character => Some(self.database.name("character")),
+            Type::Boolean => Some(self.database.name("boolean")),
+            _ => None,
+        }
     }
 
     pub(crate) fn write_to_file(
@@ -887,13 +972,13 @@ impl Parser {
         cast_alias: u32,
     ) -> Value {
         if let Type::Reference(d_nr, _) = val_type
-            && let Some(field) = Self::first_collection_field(*d_nr, &self.data)
+            && let Some(field) = Self::first_unserialisable_field(*d_nr, &self.data)
         {
             let type_name = self.data.def(*d_nr).name().to_string();
             diagnostic!(
                 self.lexer,
                 Level::Error,
-                "write_file: '{}' has collection field '{}'; use a plain struct for serialisation",
+                "write_file: '{}' has variable-width field '{}' (text/vector/collection) that binary I/O cannot round-trip; serialise a plain fixed-width struct",
                 type_name,
                 field
             );
@@ -943,6 +1028,10 @@ impl Parser {
             }
             self.get_type(val_type)
         };
+        // W3/W4 (@PLN47): route `character`/`boolean` to their fixed-width base
+        // type (see `f#read`'s matching override) so the write width matches the
+        // read and both backends agree.
+        let db_tp = self.io_scalar_db_tp(val_type).unwrap_or(db_tp);
         let temp_var = self.vars.unique("wf", val_type, &mut self.lexer);
         for d in val_type.depend() {
             self.vars.depend(temp_var, d);

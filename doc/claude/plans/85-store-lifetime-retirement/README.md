@@ -8,6 +8,18 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 Plan id: [@PLN85](https://github.com/loft-lang/plans/issues/85) · investigation-style
 (reading order: Status → Probes → Cluster docs → Roadmap).
 
+> ## 🔺 REOPENED then RE-CLOSED (2026-07-09) — two residual clusters fixed.
+> `@PLN47` surfaced residuals the earlier close had missed. Both now FIXED:
+> - **move-on-block-return** — `x = { z = P{…}; z }` borrowed instead of moving
+>   (leak + slot-reuse corruption). Fixed unconditionally; suite 2721/2721.
+>   **[block-return-move.md](block-return-move.md)**.
+> - **write+read struct (`p9`)** — interp-only struct binary-I/O corruption+leak
+>   (`f += s; f#read as S`): both write & read mis-targeted the eval stack
+>   instead of the record. Fixed by the Vector-style deref in both paths,
+>   validated by a `LOFT_POISON` + cross-mode oracle (13/13 probes, both
+>   backends). **[writeread-slot-leak.md](writeread-slot-leak.md)**.
+> The prior CLOSED record below stands as the earlier investigation history.
+
 > ## ✅✅ CLOSED (2026-07-04) — the store-lifetime bug class is retired.
 > **Charter met:** outcome (b) — the clusters are independent, each invariant enforced at
 > its chokepoint, with a standing instrument (fuzz + `LOFT_POISON` + DA-calibration +

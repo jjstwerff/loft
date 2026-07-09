@@ -394,53 +394,53 @@ Binary mode must be activated before reading or writing raw data. Use `f.format 
 - For new files (format=NotExists), `f += value` defaults to TextFile mode and creates the file.
 - `f#next = pos` is a no-op if called before the first read or write (the OS file handle does not exist until first I/O). Always perform a read or write before seeking.
 
-#### Canonical object serialization (planned — see @P289)
+#### Struct and vector binary round-trip (@PLN47 — shipped 2026-07-09)
 
-The current binary API writes / reads one scalar at a time.  The
-end-state design is to let `f += my_struct` and `s = f#read as MyStruct`
-round-trip arbitrary loft objects with NO per-field wiring.  Vectors,
-text, and nested structs are part of that contract.
+`f += my_struct` and `s = f#read as MyStruct` now round-trip for any
+struct whose fields are all fixed-width scalars (integer, float, single,
+boolean, character, i8/u8/i16/u16/i32/u32).  Nested plain structs (a
+struct field of struct type) also round-trip.  The record is allocated
+before reading, so each field is filled in declared order.
 
-**Write side — `f += <value>`** already does most of the work for
-scalars and typed fields; the planned extensions cover composites:
+**`f#read(N) as vector<T>`** reads exactly `N` **bytes** (not elements)
+and returns a `vector<T>`.  Example: `f#read(24) as vector<integer>`
+reads three 8-byte ints.  A parse-time warning fires when a literal `N`
+is not a multiple of the element byte-width, catching the silent
+empty-vector footgun.
 
-| Value type | Wire format (planned) |
-|------------|-----------------------|
-| `vector<T>` (already today) | each element at its declared width, **no length prefix** — caller is responsible for tracking element count |
-| `vector<T>` (canonical) | `[4B u32: length]` + each element at its declared width |
-| `text` (already today) | raw UTF-8 bytes, **no length prefix** |
-| `text` (canonical) | `[4B u32: byte-length]` + UTF-8 bytes |
-| Plain struct (no out-of-line fields) | each field at its declared width, in declared order — packed, no padding |
-| Struct with `text` / `vector` fields | each field at its canonical wire format above, in declared order |
+**`f += ch` / `f#read as character`** round-trips as 4 bytes on both
+backends.  **`f += b` / `f#read as boolean`** round-trips as 1 byte on
+both backends.  **Signed narrow ints** (`i8`, `i16`) read back with
+correct sign extension (e.g. `-12345 as i16` round-trips to `-12345`).
 
-**Read side — `f#read as MyStruct`** (planned) reverses the same
-layout, allocating any needed `text` / `vector` storage from the
-caller's store.  The read width is `sizeof(MyStruct)` for fixed-
-width plain structs, derived from the length prefix for composites.
+**Structs with variable-width fields** (`text`, `vector`, or any
+collection field) are **rejected at compile time** on both backends:
 
-**Why the length prefix matters**: today's prefix-less `f += vec`
-forces every caller to write the length separately (`f += (len(vec)
-as i32); f += vec;`), which is easy to forget and produces
-unreadable files when the count and data drift apart.  The canonical
-form bakes the length into the value itself, making `f += vec` /
-`v = f#read as vector<single>` a true round-trip.
+```
+read_file: 'T' has variable-width field 'name' (text/vector/collection)
+that binary I/O cannot round-trip; serialise a plain fixed-width struct
+```
 
-**Migration**: the prefix-less form stays available (callers that
-manage their own length tracking, e.g. GLB chunks with chunk-size
-in the outer header, still need it).  The canonical form lives
-under a separate keyword/syntax — exact spelling TBD.  See
-@P289 for the open-issue tracker.
+The write-side diagnostic says `write_file:`.  Nested-struct fields are
+reported as `outer.inner`.
 
-**Status today**: `f += text` and `f += vector<T>` write raw bytes
-with no length prefix.  `f += plain_struct` is NOT a useful serializer
-today — it writes a few bytes of the internal storage handle
-(struct ref / store pos), not the user-visible field values.  Direct
-`f#read as MyStruct` is also NOT implemented.  Workaround: read /
-write each field individually (see
-[`lib/hex_world/src/hex_world.loft::world_save`](../../lib/hex_world/src/hex_world.loft)
-and [`tools/audience-demo/single_port_server.loft`](../../tools/audience-demo/single_port_server.loft)).
-The user-facing `for cell in world.cells { f += cell.x; f += cell.y;
-f += cell.color }` pattern is the current canonical idiom.
+**`f += text` / `f += vector<T>`** still write raw bytes with no length
+prefix.  Callers that manage their own length tracking (e.g. GLB chunks
+with the count in the outer header) continue to use this form and read
+with `f#read(N) as text` / `f#read(N) as vector<T>`.
+
+**Retained caveat (@P293)**: `u32`/`i32` values ≥ 2³¹ round-trip via
+raw bytes but read back as negative i64 in loft expressions.
+
+**Known limitation**: `q = f#read as Struct` leaks one record per read.
+This is a pre-existing general loft ownership bug — `x = { …; struct_temp }`
+leaks the temp store even with no file I/O (function returns and direct
+struct literals are clean; only the inline-block-returning-a-struct form
+leaks).  Tracked separately as an ownership-model issue.
+
+Test harness: `tests/binary_io_matrix.rs` (32 cross-mode cells,
+`#[ignore]`, run with
+`cargo test --release --test binary_io_matrix -- --ignored`).
 
 ### Directories
 

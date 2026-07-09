@@ -1,0 +1,9 @@
+// C3: nested plain struct. Bigger record; nested field.
+#cwd
+struct Inner { a: integer, b: integer }
+struct Outer { tag: u8, inner: Inner }
+fn main() {
+  { f = file("wr_c3.bin"); f#format = LittleEndian; f.set_file_size(0); p = Outer{tag:9, inner: Inner{a:5,b:6}}; f += p; f.sync(); }
+  { f = file("wr_c3.bin"); f#format = LittleEndian; q = f#read as Outer; println("{q.tag}"); }
+  delete("wr_c3.bin");
+}

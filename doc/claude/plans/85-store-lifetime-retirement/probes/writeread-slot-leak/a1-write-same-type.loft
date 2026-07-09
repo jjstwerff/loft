@@ -1,0 +1,8 @@
+// A1 (the known leak): write a P, then read a P in one program.
+#cwd
+struct P { x: integer, y: integer }
+fn main() {
+  { f = file("wr_a1.bin"); f#format = LittleEndian; f.set_file_size(0); p = P{x:5,y:6}; f += p; f.sync(); }
+  { f = file("wr_a1.bin"); f#format = LittleEndian; q = f#read as P; println("{q.x}"); }
+  delete("wr_a1.bin");
+}

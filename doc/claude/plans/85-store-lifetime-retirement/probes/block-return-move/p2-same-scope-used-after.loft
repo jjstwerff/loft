@@ -1,0 +1,7 @@
+// EXPECT: "1 2 3 4". Currently prints "3 4 3 4" (a clobbered — b's local reuses a's slot).
+struct P { x: integer, y: integer }
+fn main() {
+  a = { z = P{x:1,y:2}; z };
+  b = { z = P{x:3,y:4}; z };
+  println("{a.x} {a.y} {b.x} {b.y}");
+}

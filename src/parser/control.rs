@@ -729,6 +729,29 @@ impl Parser {
         tail_pos: &Position,
     ) -> Type {
         let mut tp = t.clone();
+        // @PLN85 move-on-block-return (block-return-move.md): a block used as a
+        // VALUE — NOT a function return (those flow through the delivery
+        // classifier below) — whose tail views a struct LOCAL that is DEFINED
+        // INSIDE this block must not escape as a borrow. Borrowing leaks the
+        // local's store (the escaping return var is freed by nobody) and, via
+        // slot reuse with the still-live consumer, corrupts (`a={z=P{1,2};z};
+        // b={z=P{3,4};z}` → a reads b's values). Copy the view into an owned
+        // work-ref (the proven #306 `materialize_view_return` path) so the
+        // consumer ADOPTS its own store; the original local is then freed by the
+        // normal block-scope sweep (it is no longer the escaping return var). A
+        // tail that views an OUTER local (`a = { base }`, `base` defined before
+        // the block) is a genuine borrow the consumer keeps — the block does not
+        // define it, so `block_defines_var` is false and it is left alone.
+        if !self.first_pass
+            && context != "return from block"
+            && let Type::Reference(td, ls) = t.base()
+            && ls.iter().any(|&v| Self::block_defines_var(l, v))
+        {
+            let td = *td;
+            let last = l.len() - 1;
+            let w = self.materialize_view_return(td, &mut l[last]);
+            return self.vars.tp(w).clone();
+        }
         // #416 — set when the vector match/if tail below was materialised into the
         // return buffer; gates the type-keyed vector arm (which is reached only in
         // the IMPLICIT-tail `t = Vector` case) so it doesn't re-process / re-promote
@@ -4733,6 +4756,24 @@ impl Parser {
     /// candidates (handled by `ref_return`); it is their *deps* that reveal a
     /// borrow.  Such a view dangles the moment the local owner's store is
     /// freed at function exit, so the return value must be materialised.
+    /// @PLN85 move-on-block-return — does block body `l` DEFINE variable `v`
+    /// (an assignment `Set(v, …)` at statement level, incl. through Span/Line/
+    /// Insert wrappers)? True ⇒ `v` is a fresh block-local that dies at block
+    /// exit, so a tail viewing it must be materialised (copied) rather than
+    /// escaping as a borrow. False ⇒ `v` is defined in an enclosing scope (an
+    /// outer local / param returned by the block) — a genuine borrow to keep.
+    fn block_defines_var(l: &[Value], v: u16) -> bool {
+        l.iter().any(|op| Self::stmt_defines_var(op, v))
+    }
+
+    fn stmt_defines_var(op: &Value, v: u16) -> bool {
+        match op.unspan() {
+            Value::Set(w, _) => *w == v,
+            Value::Insert(ops) => ops.iter().any(|o| Self::stmt_defines_var(o, v)),
+            _ => false,
+        }
+    }
+
     fn return_views_local(&self, ls: &[u16]) -> bool {
         let attr_names = &self.data.def(self.context).attr_names;
         let mut work: Vec<u16> = ls.to_vec();

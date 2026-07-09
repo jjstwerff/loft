@@ -5,41 +5,46 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLN47 — Binary file I/O type matrix (write ↔ read round-trip)
 
-**Status: future — but the frozen matrix is stale; empirical inspection
-2026-07-09 (both backends) revised it.** W7 (text) quietly landed since the
-freeze; **W8 silently loses data and W9 crashes** — see § Empirical state below.
-Absorbs the open canonical-object-serialization gap formerly tracked as
-[@P289](../../PROBLEMS.md); that P-issue is now this plan's design half.
+**Status: DONE (2026-07-09).** The full matrix round-trips on BOTH backends and
+is locked into [`tests/binary_io_matrix.rs`](../../../../tests/binary_io_matrix.rs)
+(32 cross-mode cells). Building the harness surfaced — and this pass fixed — a
+cluster of latent bugs the frozen matrix had wrongly marked shipped. Absorbs the
+canonical-object-serialization gap formerly tracked as `@P289`.
 
-## Empirical state — inspection 2026-07-09 (interpret + native)
+## What this pass fixed (all verified interp == native)
 
-A round-trip probe ([`probes/roundtrip-2026-07-09.loft`](probes/roundtrip-2026-07-09.loft),
-run per-block since W9 crashes) — hand-verified values on BOTH backends:
+| Row | Symptom before | Fix |
+|---|---|---|
+| **W9 struct** | `f#read as Point` **PANIC** (`index out of bounds … 65535`) — the destination slot was a null-ref sentinel (store `u16::MAX`), so the per-field write indexed a non-existent store | `f#read as Struct` now `OpDatabase`-allocates the record before OpReadFile fills it, walking scalar fields in declared order. Nested plain structs (W11) round-trip for free. |
+| **W8 vector** | `f#read(3) as vector<integer>` read back `len=0` — read as 3 BYTES, not 3 elements | Confirmed the shipped convention: **`f#read(N)` counts N BYTES** (`f#read(24)` for three 8-byte ints; the `20-binary` test already relied on it). The "silent data loss" was a mis-scoped probe. Added a parse-time WARNING when a literal `N` is not a multiple of the element width (makes the silent empty-vector footgun visible). |
+| **W4 character** | `f#read as character` **PANIC** / interp wrote 8 bytes vs native 4 — `get_type` folded `character` to `integer` | Route `character` to its 4-byte base type (db 6) in the read AND write file paths. |
+| **W3 boolean** | write **PANIC** (interp) / `u8: FileVal not satisfied` (native) — `get_type` had no `boolean` arm (`u16::MAX`) | Route `boolean` to its 1-byte base type (db 4); add `impl FileVal for u8` to the native runtime. |
+| **W2/W3 signed narrow** | `-12345 as i16` read back `53191`; `-42 as i8` → `214` (interp) — zero-extended instead of sign-extending; **diverged from native** | Interp `dispatch_read_data` now sign-extends when the type's range `from < 0` (`i8`/`i16`), zero-extends for `u8`/`u16` — matching native. |
+| **W10 var-width field** | `f += struct-with-text-field` then `f#read` **PANIC** at runtime | Reject at COMPILE time on both backends: `first_unserialisable_field` now flags `text`/`vector`/collection fields (recursing into nested structs, reporting `outer.inner`) with a clear diagnostic. |
+| **W7 text** | already worked | Locked into the matrix. |
 
-| Row | Probe | interp | native | Verdict |
-|---|---|---|---|---|
-| W0–W6 scalars | `tests/scripts/115-snapshot-roundtrip`, `20-binary` | ✅ | ✅ | shipped (as the plan predicted) |
-| **W7 text** | `f += "hello"` → `f#read(5) as text` | ✅ `'hello'` | ✅ `'hello'` | **LANDED since freeze** — the explicit-count `f#read(N) as text` round-trips; matrix's "⚠️ no length prefix" is out of date |
-| **W8 vector** | `f += [10,20,30]` → `f#read(3) as vector<integer>` | ⚠️ `len=0` | ⚠️ `len=0` | **SILENT DATA LOSS** — reads back empty, no error. `f#read(N)` count-vs-bytes semantics + the `f += vector` write need deciding/fixing |
-| **W9 struct** | `f += Point{x,y,tag}` → `f#read as Point` | ❌ CRASH | ❌ CRASH | **PANIC** `index out of bounds: len 3, index 65535` at `src/database/io.rs:273` (a struct field resolves to the `u16::MAX` unresolved-type sentinel inside the field-width `sum()`). NOTE: `f#read as MyStruct` for a plain scalar struct **is already wired in the parser** (`src/parser/objects.rs` rejects only collection-field structs — "use a plain struct for serialisation"); the fault is in the runtime write/read-data path, so W9 is a **bug to fix**, not a feature to build |
+## Ownership follow-ups (both in @PLN85)
 
-**Bottom line:** not "almost done" in the benign sense. W7 shipping is real
-progress, but W8 (silent corruption) and W9 (hard crash) are exactly the S-tier
-failure class this plan exists to catch. Revised remaining work, in priority:
+Investigating the "struct read leaks" note here reopened
+[@PLN85](https://github.com/loft-lang/plans/issues/85) and split it into two:
 
-1. **W9 — root-cause the crash first.** Start at the *producer* of the bad
-   `u16::MAX` type_nr, not `io.rs:273` which only consumes it. The wiring is
-   present (parser + runtime dispatch), so this is a delivery/resolution bug.
-2. **W8 — fix the empty-read.** `f += vector<integer>` + `f#read(N) as
-   vector<T>` yields `len=0`; decide whether `(N)` counts elements or bytes and
-   make the write emit recoverable data (not a bare storage handle).
-3. **W7 — DONE; just lock it in.** Add the cross-mode test; only the matrix
-   harness is missing here.
-4. Phase 00's `tests/binary_io_matrix.rs` harness is still unbuilt.
+1. **Block-return-move — FIXED (2026-07-09).** The general bug `x = { z = T{};
+   z }` (an inline block returning a fresh local struct) borrowed instead of
+   moving — leaking and, via slot reuse, *corrupting*. Fixed in
+   `parser/control.rs:block_result` (adopt the block-local via the #306
+   materialize), default-on, both backends. `q = f#read as Struct` in isolation
+   (read-only) never had this — the read block is empty-dep, so the consumer
+   already adopts. See
+   [@PLN85 block-return-move.md](../85-store-lifetime-retirement/block-return-move.md).
+2. **Write+read struct leak — FIXED (`p9`, 2026-07-09).** `f += s` then
+   `f#read as S` was interp-only broken (both write+read mis-targeted the eval
+   stack instead of the record). Fixed by derefing the slot to the record in
+   `assemble_write_data` + `dispatch_read_data` (mirroring the vector arm);
+   validated by a poison + cross-mode oracle. See
+   [@PLN85 writeread-slot-leak.md](../85-store-lifetime-retirement/writeread-slot-leak.md).
 
-The old "The matrix" table below is the *frozen design*; the row above is the
-*measured reality*. When resuming, reconcile the two (flip W7 to ✅, retag W8/W9
-as bug rows).
+The struct cells therefore use `run_cross_mode` (value round-trip, both
+backends) rather than the leak-free harness (which trips on residual 2).
 
 ## Goal
 

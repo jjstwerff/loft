@@ -90,3 +90,5 @@ registry-signing-key.bin
 lib/.loft_test_tmp_*
 native-auto/
 /target-da/
+/*.bin
+test_loft_*.bin

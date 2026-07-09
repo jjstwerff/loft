@@ -1,0 +1,9 @@
+// B2: read, then DON'T use q at all before scope exit. Is the revert tied to an
+// intervening use/call, or does it happen regardless?
+#cwd
+struct P { x: integer, y: integer }
+fn main() {
+  { f = file("wr_b2.bin"); f#format = LittleEndian; f.set_file_size(0); p = P{x:5,y:6}; f += p; f.sync(); }
+  { f = file("wr_b2.bin"); f#format = LittleEndian; q = f#read as P; }
+  delete("wr_b2.bin");
+}

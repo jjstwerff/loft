@@ -1,0 +1,8 @@
+// GUARD: block returns an outer local `base` (a borrow, NOT a fresh block-local).
+// The fix must NOT move/free `base` — it is still owned by the outer scope.
+struct P { x: integer, y: integer }
+fn main() {
+  base = P{x:9, y:8};
+  a = { base };
+  println("{a.x} {base.y}");
+}

@@ -1,0 +1,12 @@
+// EXPECT: no leak. The `f#read as P` block-return in isolation (read-only loop,
+// write once outside) — the read block is empty-dep (consumer adopts), so it
+// never had the borrow bug. Clean at baseline AND with the switch (guard that
+// the block-return fix doesn't regress the read path). Both backends.
+#cwd
+struct P { x: integer, y: integer }
+fn main() {
+  { f = file("p3b.bin"); f#format = LittleEndian; f.set_file_size(0); p = P{x:7,y:8}; f += p; f.sync(); }
+  for i in 0..5 { { f = file("p3b.bin"); f#format = LittleEndian; q = f#read as P; assert(q.x == 7, "rt"); } }
+  delete("p3b.bin");
+  println("done");
+}

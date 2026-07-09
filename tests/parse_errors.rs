@@ -594,7 +594,7 @@ fn write_file_collection_field() {
            f += r;\n\
          }"
     )
-    .error("write_file: 'Record' has collection field 'items'; use a plain struct for serialisation at write_file_collection_field:7:8");
+    .error("write_file: 'Record' has variable-width field 'items' (text/vector/collection) that binary I/O cannot round-trip; serialise a plain fixed-width struct at write_file_collection_field:7:8");
 }
 
 /// F57: read_file with `as T` where T has a collection-type field must produce a compile error.
@@ -609,7 +609,7 @@ fn read_file_collection_field() {
            _ = f#read(8) as Record;\n\
          }"
     )
-    .error("read_file: 'Record' has collection field 'items'; use a plain struct for serialisation at read_file_collection_field:6:25");
+    .error("read_file: 'Record' has variable-width field 'items' (text/vector/collection) that binary I/O cannot round-trip; serialise a plain fixed-width struct at read_file_collection_field:6:25");
 }
 
 /// T1-22: function with `not null` return type that may fall through warns.

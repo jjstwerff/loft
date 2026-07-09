@@ -1,0 +1,6 @@
+// EXPECT: no leak, prints done. Currently LEAKS N (one per iteration).
+struct P { x: integer, y: integer }
+fn main() {
+  for i in 0..5 { { a = { z = P{x:i,y:i}; z }; assert(a.x == i, "rt"); } }
+  println("done");
+}

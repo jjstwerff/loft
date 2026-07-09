@@ -1,0 +1,10 @@
+// A2: write a DIFFERENT struct type (Q), then read a P. Does the leak need the
+// written type to MATCH the read type (same slot/store shape)?
+#cwd
+struct P { x: integer, y: integer }
+struct Q { a: integer, b: integer, c: integer }
+fn main() {
+  { f = file("wr_a2.bin"); f#format = LittleEndian; f.set_file_size(0); w = Q{a:1,b:2,c:3}; f += w; f.sync(); }
+  { f = file("wr_a2.bin"); f#format = LittleEndian; q = f#read as P; println("{q.x}"); }
+  delete("wr_a2.bin");
+}
