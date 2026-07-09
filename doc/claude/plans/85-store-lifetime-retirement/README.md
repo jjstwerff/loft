@@ -8,6 +8,16 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 Plan id: [@PLN85](https://github.com/loft-lang/plans/issues/85) · investigation-style
 (reading order: Status → Probes → Cluster docs → Roadmap).
 
+> ## 🔺 REOPENED (2026-07-09) — residual cluster: move-on-block-return.
+> The class was not fully retired. `@PLN47` surfaced a residual: an inline block
+> returning a fresh local struct (`x = { z = P{…}; z }`) **borrows instead of
+> moving** — violating invariants #2 (move on return) and #1 (single owner). It
+> leaks *and* corrupts (slot reuse with a still-live LHS). Active cluster doc +
+> stepped oracle/switch plan: **[block-return-move.md](block-return-move.md)**;
+> probes in [probes/block-return-move/](probes/block-return-move/). The prior
+> CLOSED record below stands as the investigation history for the clusters that
+> WERE retired.
+
 > ## ✅✅ CLOSED (2026-07-04) — the store-lifetime bug class is retired.
 > **Charter met:** outcome (b) — the clusters are independent, each invariant enforced at
 > its chokepoint, with a standing instrument (fuzz + `LOFT_POISON` + DA-calibration +

@@ -1,0 +1,7 @@
+// CONTROL (passes today): distinct block-local names → distinct vars → no leak.
+struct P { x: integer, y: integer }
+fn main() {
+  a = { z1 = P{x:1,y:2}; z1 };
+  b = { z2 = P{x:3,y:4}; z2 };
+  println("{a.x} {a.y} {b.x} {b.y}");
+}
