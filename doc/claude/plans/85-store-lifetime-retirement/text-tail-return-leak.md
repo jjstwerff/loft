@@ -628,13 +628,38 @@ native Rust rejects.  Native already has a dedicated if-arm-type-UNIFIER
 bypasses it and produces non-uniform arms.
 
 Per the loft-codegen stop-condition (interp passes, native regresses → not
-landable), REVERTED.  Conclusion: the if/match half is NOT a parse-gate `__tret`
-bind — it must go THROUGH the native arm-unifier so every arm delivers the same
-Rust type into the buffer.  That is the real integration point for the unified
-promotion, alongside the pass-1 signature decision.  Remaining leak surface
-therefore still: user-fn call tails + if/match + tuple + fn-ref — all converging
-on "owned-text return → caller buffer", to be delivered via the arm-unifier +
-signature pre-pass, not a tail rewrite.
+landable), that first attempt was REVERTED.  Conclusion: the if/match half is
+NOT a whole-`if`-as-one-value bind — it must deliver PER-ARM, like the vector
+`materialize_vector_arms_into` path.
+
+### Session 8 (2026-07-09) — IF/MATCH via per-arm ACCUMULATOR — LANDED, both backends
+
+The fix, done right: transform a value-yielding `if`/`match` text tail into the
+proven-clean ACCUMULATOR shape — `push_text_arms_into` rewrites each arm's leaf
+`<v>` to `Set(__acc, <v>)` and retypes the arm block to VOID, then the tail
+becomes `Var(__acc)`.  `text_return` promotes `__acc` (BuiltLocal) to the caller
+`&text` buffer.  Each arm is now an INDEPENDENT `__acc = <text>` statement of
+uniform Rust type — no single `if`-expression to unify — so native compiles
+(the E0308 is gone) AND there is no owned `__ret_N` (leak-free).  This is the
+text analogue of the vector per-arm materialiser, and it is forward-ref-safe (an
+`if` is structural on both passes).
+
+Kept the two guards from the reverted attempt: `arm_yields_text` (BOTH arms must
+yield — a guard `if c { return … }` stays unbound so `missing_return_not_null`
+fires) and `!matches!(t, Type::Optional(_))` (a `text?` tail keeps its
+`(N-Store)` reject, `wrong_field_guard_still_rejects`).
+
+Verified BOTH backends: `if_arm_native` LEAK→clean, `fref_ifarm` (forward-ref)
+clean+correct, match-of-literals + mixed call/literal arms native-clean;
+`533_format_hook_tail_if` / `534_native_text_if_unify` PASS (E0308 gone);
+framework 24/24; issues 749/0; fn-ref (p227) 4/0; par (p235) 6/0.  Matrix now
+leaks only the 3 USER-CALL cases (`forward_to_json`, `nested_consume`,
+`concat_suffix`).
+
+So the remaining leak surface is exactly ONE shape: the bare **user-fn call
+tail** (incl. generic `x.to_text()` = a monomorph user call) — the pass-1
+signature pre-pass is the last piece.  native / view / if / match / literal /
+hoist are all handled.
 
 ## Session 3 (2026-07-09) — the analysis FRAMEWORK, and wiring it in
 

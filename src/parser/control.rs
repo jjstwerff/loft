@@ -782,6 +782,50 @@ impl Parser {
                 t = Type::Text(Deps::frame1(tv));
             }
         }
+        // @PLN85 unified fix — a value-yielding `if`/`match` text tail (match
+        // lowers to nested `If`).  Do NOT bind the whole `if` as one value
+        // (`__tret = (if{a}else{b})`) — native rejects mixed arm Rust types
+        // (E0308, 533/534).  Instead materialise PER-ARM into a text
+        // accumulator: push `Set(__acc, <arm tail>)` into each arm and return
+        // `__acc`.  Each arm becomes an independent buffer-write of uniform type
+        // (native-safe) and `text_return` promotes `__acc` (BuiltLocal) to the
+        // caller `&text` buffer (leak-free) — the proven `acc = ""; if c { acc =
+        // … } else { acc = … }; acc` shape.  This is the text analogue of the
+        // vector `materialize_vector_arms_into` per-arm delivery.
+        //
+        // Forward-ref-SAFE: an `if` is structurally an `If` on both passes.
+        // Gated on BOTH arms YIELDING a text value (not a guard `if c { return
+        // … }` — that would suppress the missing-return diagnostic) and a
+        // NON-nullable tail (a `text?` tail must keep its `(N-Store)` reject).
+        let do_if_acc = !do_tret_bind
+            && context == "return from block"
+            && matches!(result.base(), Type::Text(_))
+            && !matches!(t, Type::Optional(_))
+            && !self
+                .data
+                .def(self.context)
+                .original_name()
+                .starts_with("replmain_")
+            && l.last().is_some_and(Self::if_tail_yields_text);
+        if do_if_acc {
+            let av = self.create_unique("__acc", &Type::Text(Deps::none()));
+            if av != u16::MAX {
+                let last = l.len() - 1;
+                let mut tail = std::mem::replace(&mut l[last], Value::Null);
+                let is_ret = matches!(tail.unspan(), Value::Return(_));
+                if let Value::Return(inner) = tail {
+                    tail = *inner;
+                }
+                Self::push_text_arms_into(&mut tail, av);
+                l[last] = tail;
+                l.push(if is_ret {
+                    Value::Return(Box::new(Value::Var(av)))
+                } else {
+                    Value::Var(av)
+                });
+                t = Type::Text(Deps::frame1(av));
+            }
+        }
         t = self.block_result(context, result, &t, &mut l, &last_expr_peek.position);
         *val = v_block(l, t.clone(), "block");
         t
@@ -5212,6 +5256,74 @@ impl Parser {
             }
             Value::Return(inner) => self.native_text_call_tail(inner),
             _ => false,
+        }
+    }
+
+    /// @PLN85 unified fix — the tail is a value-yielding `if`/`match` text
+    /// return (match lowers to nested `If`): an `If` (peeling `Return`) whose
+    /// BOTH arms yield a text value.  Drives the per-arm accumulator
+    /// materialisation (`push_text_arms_into`).
+    fn if_tail_yields_text(tail: &Value) -> bool {
+        match tail.unspan() {
+            Value::Return(inner) | Value::Drop(inner) => Self::if_tail_yields_text(inner),
+            Value::If(_, then, els) => Self::arm_yields_text(then) && Self::arm_yields_text(els),
+            _ => false,
+        }
+    }
+
+    /// True when an `if`/`match` ARM YIELDS a text value (a literal, call, var,
+    /// view, or a nested `if` whose sub-arms all yield) — NOT a diverging
+    /// `return`/`break`/`continue`, a `null`/empty arm, or an empty block.  A
+    /// promotable value-yielding tail needs BOTH arms to yield; a guard `if c {
+    /// return … }` does not, and must stay unbound so the missing-return
+    /// diagnostic still fires.
+    fn arm_yields_text(arm: &Value) -> bool {
+        match arm.unspan() {
+            Value::Return(_) | Value::Break(_) | Value::BreakWith(_, _) | Value::Continue(_) => {
+                false
+            }
+            Value::Null => false,
+            Value::Block(bl) => bl.operators.last().is_some_and(Self::arm_yields_text),
+            Value::Insert(ops) => ops.last().is_some_and(Self::arm_yields_text),
+            Value::If(_, then, els) => Self::arm_yields_text(then) && Self::arm_yields_text(els),
+            _ => true,
+        }
+    }
+
+    /// Rewrite each ARM leaf of an `if`/`match` text tail to deliver into the
+    /// text accumulator `av` — `<leaf>` becomes `Set(av, <leaf>)` (which lowers
+    /// to a per-arm clear+append into `av`'s buffer).  Recurses `If`/`Block`/
+    /// `Insert`/`Span`; the leaf is the arm's terminal value.  Each arm then
+    /// writes `av` independently (uniform Rust type on native — no if-expression
+    /// to unify) and `av` becomes the single owned text the caller buffer
+    /// promotion delivers copy-free.
+    fn push_text_arms_into(op: &mut Value, av: u16) {
+        match op {
+            Value::Span(b) => Self::push_text_arms_into(&mut b.1, av),
+            Value::Return(inner) | Value::Drop(inner) => Self::push_text_arms_into(inner, av),
+            Value::If(_, then, els) => {
+                Self::push_text_arms_into(then, av);
+                Self::push_text_arms_into(els, av);
+            }
+            Value::Block(bl) => {
+                if let Some(last) = bl.operators.last_mut() {
+                    Self::push_text_arms_into(last, av);
+                }
+                // The arm now ends in a `Set(av, …)` (or a void nested `If`), so
+                // the block yields VOID, not text — retype it, else native emits
+                // a text trailing value that mismatches the sibling arm's `()`
+                // (`if`/`else` incompatible types).
+                bl.result = Type::Void;
+            }
+            Value::Insert(ops) => {
+                if let Some(last) = ops.last_mut() {
+                    Self::push_text_arms_into(last, av);
+                }
+            }
+            leaf => {
+                let v = std::mem::replace(leaf, Value::Null);
+                *leaf = crate::data::v_set(av, v);
+            }
         }
     }
 
