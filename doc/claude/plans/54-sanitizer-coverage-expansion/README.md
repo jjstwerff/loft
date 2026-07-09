@@ -80,6 +80,11 @@ platform, tool-class, and corpus blind spots that survive the Wave-1+kickoff
 stack.  Exit criterion: each item below is either green on `main` or explicitly
 deferred with a one-line reason.
 
+**Design for the remaining arcs (S9, S4, S5, S1, S7, S8):**
+[REMAINING_DESIGN.md](REMAINING_DESIGN.md) — per-arc invariant + concrete steps +
+positive control + CI shape + effort, grounded in this plan's toolchain findings.
+S9's deep analysis is in [NATIVE_ASAN_DESIGN.md](NATIVE_ASAN_DESIGN.md).
+
 ## Sub-arcs
 
 | Item | Description | Exit criterion | Priority |
