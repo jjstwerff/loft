@@ -14,6 +14,31 @@
 #     checks allocation bounds, not borrow models) runs clean where Miri needs
 #     -Zmiri-disable-stacked-borrows.  Leaks off for now (detect_leaks=0) pending
 #     triage of the live-at-exit baseline.
+#   - poison — the arena poison-on-free detector (@PLN54 S3): LOFT_POISON=1
+#     fills every freed STORE RECORD with 0xDEADBEEF so a dangling-DbRef read
+#     after free is loud garbage, not silent stale data.  This is the
+#     store-internal use-after-free class Miri/ASan/Valgrind all miss (loft's
+#     arena free is not a libc free()), and it runs on STABLE rustc with no
+#     sanitizer — so it sweeps the whole interpreter corpus at near-native speed.
+#   - tsan  — ThreadSanitizer (@PLN54 S2) over the `par`/`par_light` threading
+#     suites: the ONLY data-race coverage.  loft runs real rayon-pool workers
+#     over deep-copied per-worker Stores writing disjoint tiled ranges
+#     (THREADING.md); TSan confirms that isolation holds under real concurrency
+#     (Miri is single-threaded; ASan/guard are not race detectors).  Needs an
+#     instrumented std (-Zbuild-std), sanitizer flag target-scoped so host
+#     proc-macros stay clean.
+#   - native-asan — ASan over the `--native` GENERATED binary (@PLN54 S6): the
+#     in-process interpreter ASan job is blind to `--native` (a separate,
+#     uninstrumented process).  LOFT_NATIVE_ASAN=1 compiles the generated binary
+#     with -Zsanitizer=address so an OOB / UAF store access the codegen emits is
+#     caught, not silent.  (S9's mixed-boundary cdylib shares the mechanism —
+#     blocked on a proc-macro -L fix; see plans/54-.../NATIVE_ASAN_DESIGN.md.)
+#   - debug-asserts — loft's ~200 internal `debug_assert!`s (@PLN54 S5b): the H5
+#     numbering law, Store::valid()/addr() bounds, poison/UAF invariants — its OWN
+#     correctness contract, compiled OUT of every normal test build
+#     ([profile.dev.package.loft]) and previously checked only by cargo-fuzz.
+#     `-C debug-assertions=on` runs them over the whole interpreter corpus at
+#     near-native speed — the fast, broad complement to Miri's slow curated set.
 #   - toolchain-matrix — the suite under beta + nightly rustc, the early-warning
 #     for toolchain-sensitivity (the @P383 trigger).  Non-blocking: nightly/beta
 #     std/lint churn must never page us.
@@ -59,7 +84,12 @@ jobs:
   miri:
     name: Miri hard-UB gate
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # The store-unit set runs in seconds; the whole job is dominated by the Miri
+    # sysroot build + the lib compile under Miri (~10-15 min).  30 min is generous
+    # headroom AND a fail-fast tripwire: a future test that runs a WHOLE loft
+    # program under Miri (interpreter-under-interpreter) blows this in minutes
+    # instead of silently hitting the old 90-min cap and cancelling the nightly.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
 
@@ -81,39 +111,52 @@ jobs:
       - name: miri setup (build the Miri sysroot)
         run: cargo +nightly miri setup
 
-      # Curated pure-compute `issues` tests (no threads / FFI — Miri blocks
-      # those) exercising the UB-relevant surface (eval stack, store claim/copy,
-      # fn-refs, text), validated Miri-clean for hard UB.  Grow the list as more
-      # tests are validated.  -Zmiri-disable-stacked-borrows gates the HARD
-      # memory-safety UB (alignment/OOB/UAF/uninit/leak), NOT the aliasing MODEL:
-      # loft's store layer uses intentional raw-pointer aliasing across distinct
-      # records that Stacked/Tree Borrows reject by design.
-      # -Zmiri-disable-isolation lets the interpreter read its `LOFT_*` config.
+      # Curated Miri set — DIRECT Rust unit tests of the unsafe STORE layer (no
+      # loft program, no stdlib parse), so each runs in milliseconds under Miri.
+      # -Zmiri-disable-stacked-borrows gates the HARD memory-safety UB
+      # (alignment/OOB/UAF/uninit/leak), NOT the aliasing MODEL: loft's store layer
+      # uses intentional raw-pointer aliasing across distinct records that
+      # Stacked/Tree Borrows reject by design.  -Zmiri-disable-isolation lets a test
+      # read its `LOFT_*` config.  Grow ONLY with more store-layer unit tests —
+      # never a `code!` whole-program test (that reintroduces the timeout).
       #
-      # Curated set (grow as more shapes are Miri-validated):
-      #   p213_struct_field_basic_int         — P213 capturing closure in struct field
-      #                                         (validates OpClaimChildRec + ChildRec
-      #                                         copy_claims; baseline test that exercises
-      #                                         all three cluster-3/4/5 code paths)
-      #   plan53_cluster3_cross_store_vector_add — @PLAN53 cluster 3: aliasing reborrow
-      #                                         in cross-store vector_add; fixed via
-      #                                         get_disjoint_mut (commit c7755122)
-      #   plan53_cluster4_fn_ref_slot_uninit_padding — @PLAN53 cluster 4: uninit tail
-      #                                         padding in fn-ref slot read via [u8;20];
-      #                                         fixed via MaybeUninit (commit 37109ccf)
-      #   plan53_cluster5_free_text_buffer_dealloc — @PLAN53 cluster 5: String buffer
-      #                                         leak in free_text (shrink_to without
-      #                                         clear); fixed via unconditional clear()
+      # Curated set:
+      #   store::tests::coalesce_free_merges…   — free-list coalesce + slot reuse
+      #   store::tests::resize_in_place_zeroes… — in-place grow + zero the new region
+      #   store::tests::borrow_locked_reads…    — locked (worker) read of original data
+      #   database::…::adopt_store_pushes…      — cross-store adopt into parent allocs
+      #   database::…::take_slot_returns_owned… — take a worker output slot + sentinel
+      #   database::store_rebase_tests::translate_rewrites_mapped — store-rebase walk
+      # (The historical @PLAN53 cluster-3/4/5 + P213 UB these replaced is now covered
+      #  fast + whole-corpus by the asan / poison / debug-asserts jobs; those
+      #  full-program `code!` tests were REMOVED because they timed the job out.)
       #                                         (commit e0e094f7)
-      - name: Miri hard-UB gate
+      #
+      # @PLN54 S5(a) — RE-TARGETED at the unsafe STORE layer.  The old curated set
+      # ran WHOLE loft programs (the `issues`/`code!` tests) through the interpreter,
+      # which under Miri is interpreter-under-interpreter — each took so long the job
+      # hit its 90-min cap and CANCELLED every nightly (the p213 sibling alone timed
+      # out at 240s locally).  A timing-out gate protects nothing, so those tests are
+      # REMOVED.  The store/unsafe layer that actually carries the UB (claim /
+      # free-coalesce / resize+zero / cross-store adopt / store-rebase walk) is
+      # reached by DIRECT Rust unit tests over hand-built `Stores` — NO stdlib parse,
+      # NO program execution — so Miri checks the exact unsafe code in SECONDS (all
+      # six ran ~8s locally, 0 UB).  Interpreter-path UB is covered fast + broad by
+      # the `asan` (whole-corpus OOB/UAF), `poison` (store UAF), and `debug-asserts`
+      # (loft's ~200 invariants) jobs.  (Deliberately-UB store tests — `*_panics`,
+      # `verify_graph_catches_a_dangling_pointer` — are excluded: they create real UB
+      # by design, which Miri would correctly flag.)
+      - name: Miri hard-UB gate (store/unsafe layer)
         env:
           MIRIFLAGS: '-Zmiri-disable-isolation -Zmiri-disable-stacked-borrows'
         run: |
-          cargo +nightly miri test --test issues -- --exact \
-            p213_struct_field_basic_int \
-            plan53_cluster3_cross_store_vector_add \
-            plan53_cluster4_fn_ref_slot_uninit_padding \
-            plan53_cluster5_free_text_buffer_dealloc
+          cargo +nightly miri test --lib -- --exact \
+            store::tests::coalesce_free_merges_adjacent_and_reuses_space \
+            store::tests::resize_in_place_zeroes_absorbed_region \
+            store::tests::borrow_locked_reads_original_data \
+            database::worker_output_slot_tests::adopt_store_pushes_to_parent_allocations \
+            database::worker_output_slot_tests::take_slot_returns_owned_store_and_leaves_sentinel \
+            database::store_rebase_tests::translate_rewrites_mapped
 
   asan:
     name: ASan UAF/OOB sweep (interpreter corpus)
@@ -164,6 +207,210 @@ jobs:
           --lib --test issues --test wrap --test strings --test frame_vars
           -E 'not (test(library_suite) | test(fill_rs_up_to_date) |
           test(n9_generated_fill_matches_src) | test(native_rs_functions_up_to_date))'
+
+  poison:
+    name: LOFT_POISON arena-UAF gate (store-internal use-after-free)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install mold
+        run: sudo apt-get update && sudo apt-get install -y mold
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ubuntu-poison-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ubuntu-poison-cargo-
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      # LOFT_POISON=1 (@PLN54 S3) overwrites every freed store record's payload
+      # with 0xDEADBEEF on free, so a dangling-DbRef read AFTER free hits loud,
+      # deterministic garbage (an out-of-range store_nr the read guards trip)
+      # instead of silent stale data.  This is the store-internal use-after-free
+      # blind spot Miri / ASan / Valgrind ALL share: loft's arena "free" is not a
+      # libc free(), so a reused arena slot defeats an allocator-bounds checker.
+      # It needs NO sanitizer and NO nightly — a single cached env read on stable
+      # rustc — so it runs the whole in-process interpreter corpus at near-native
+      # speed.  The 23-bug campaign that drove this green (and the freed-stack-slot
+      # second half still to build) is in
+      # plans/85-store-lifetime-retirement/fuzz-proof-gate.md.
+      #
+      # Same in-process-interpreter surface as the asan / guard jobs (native /
+      # wasm / html tests spawn separate binaries that never reach this free
+      # path); library_suite is the native GL/ALSA FFI suite this lean job omits.
+      # nextest (not `cargo test`): matches the other sanitizer jobs — skips
+      # doctests, emits the JUnit report, and isolates each test in its own
+      # process (a cleaner poison signal, no cross-test arena carryover).
+      - name: Poison sweep (LOFT_POISON=1, interpreter corpus)
+        env:
+          LOFT_POISON: '1'
+        run: >
+          cargo nextest run --profile ci --release
+          --lib --test issues --test wrap --test strings --test frame_vars
+          -E 'not test(library_suite)'
+
+  tsan:
+    name: ThreadSanitizer (par/threading data-race gate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust nightly + rust-src
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Install mold
+        run: sudo apt-get update && sudo apt-get install -y mold
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ubuntu-tsan-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ubuntu-tsan-cargo-
+
+      # loft's ONLY data-race surface: `par`/`par_light` run worker closures on a
+      # rayon pool, each over a DEEP-COPIED per-worker `Stores` (clone_for_worker),
+      # writing NON-OVERLAPPING tiled ranges through a shared raw pointer, joined
+      # before the buffer is read (THREADING.md).  ThreadSanitizer is the only tool
+      # that checks that isolation holds under real concurrency (Miri runs
+      # stacked-borrows-off single-threaded; ASan/`stack_align_guard` are not race
+      # detectors) — a clean run CONFIRMS disjointness, any race is real (an
+      # overlapping slot, an unsynchronised shared write).  The `threading` +
+      # `threading_chars` suites drive real multi-worker `par` over the
+      # element-type × thread-count × worker-form matrix.
+      #
+      # TSan needs an INSTRUMENTED std (`-Zbuild-std`) — unlike ASan, linking the
+      # precompiled std ABI-mismatches (`mixing -Zsanitizer`).  The sanitizer flag
+      # is TARGET-scoped via `--config` (NOT global RUSTFLAGS), so host
+      # proc-macros / build scripts stay unsanitized — else the proc-macro dylibs
+      # the compiler dlopen's get `-Zsanitizer` and mismatch.  `cargo test` (not
+      # nextest): this exact incantation is what was validated locally, and a
+      # positive control (two threads racing one byte in loft's shared-pointer
+      # shape) confirmed TSan fires here, so a clean run is non-vacuous.
+      - name: TSan sweep (threading suites)
+        env:
+          TSAN_OPTIONS: 'halt_on_error=0'
+        run: >
+          cargo +nightly test -Zbuild-std
+          --target x86_64-unknown-linux-gnu
+          --config 'target.x86_64-unknown-linux-gnu.rustflags=["-Zsanitizer=thread"]'
+          --release --no-fail-fast --test threading --test threading_chars
+
+  native-asan:
+    name: Native-backend ASan (--native codegen)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      # Stable builds the loft HOST binary; nightly is only needed for the
+      # `-Zsanitizer=address` on the GENERATED native binary (loft picks it up via
+      # RUSTUP_TOOLCHAIN=nightly in the sweep step).
+      - name: Install Rust stable + nightly
+        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install mold
+        run: sudo apt-get update && sudo apt-get install -y mold
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ubuntu-native-asan-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ubuntu-native-asan-cargo-
+
+      - name: Build loft host binary + runtime rlib
+        run: cargo build --release --bin loft --lib
+
+      # @PLN54 S6 — loft's `--native` codegen emits Rust that accesses the store by
+      # raw pointer; a codegen bug producing an out-of-bounds / use-after-free store
+      # access runs SILENT today because `--native` is a separate, uninstrumented
+      # process the in-process interpreter `asan` job cannot see.  LOFT_NATIVE_ASAN=1
+      # makes loft compile the generated binary with `-Zsanitizer=address` (nightly),
+      # so that class is caught.  ASan tolerates linking the generated crate against
+      # the uninstrumented libloft.rlib (no -Zbuild-std needed, unlike TSan).  The
+      # curated corpus is the store-heavy shapes (vectors/structs/enums/collections/
+      # text/match) + the 131/132 UAF regression scripts — the exact class ASan
+      # catches.  detect_leaks=0: the interpreter has known live-at-exit allocations
+      # (S4 owns that triage).  Validated locally + a raw-pointer-OOB positive control
+      # confirms ASan fires here.  (S9's mixed-boundary cdylib ASan shares this
+      # mechanism but is blocked on a proc-macro `-L` fix — NATIVE_ASAN_DESIGN.md.)
+      - name: Native ASan sweep (curated --native corpus)
+        env:
+          LOFT_NATIVE_ASAN: '1'
+          RUSTUP_TOOLCHAIN: nightly
+          ASAN_OPTIONS: 'detect_leaks=0'
+        run: |
+          set -euo pipefail
+          for s in 01-integers 02-floats 03-text 04-booleans 05-enums 06-structs \
+                   10-match 11-vectors 12-collections 13-map-filter-reduce \
+                   124-vector-amortised-growth 131-keyed-nested-struct-uaf \
+                   132-vector-elemset-inline-literal-uaf 138-vector-of-vector-single; do
+            echo "::group::--native ASan $s"
+            ./target/release/loft --native "tests/scripts/$s.loft"
+            echo "::endgroup::"
+          done
+
+  debug-asserts:
+    name: Debug-assertions gate (loft's internal invariants)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install mold
+        run: sudo apt-get update && sudo apt-get install -y mold
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ubuntu-da-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ubuntu-da-cargo-
+
+      # loft carries ~200 internal `debug_assert!`s — the H5 pass-numbering law,
+      # `Store::valid()` / `addr()` bounds, the poison/UAF invariants — that encode
+      # its OWN correctness contract (distinct from Rust-level UB the sanitizers
+      # check).  `[profile.dev.package.loft]` compiles them OUT of every normal
+      # dev/test build, so until now NOTHING in CI checked them except cargo-fuzz.
+      # `-C debug-assertions=on` turns them on across the WHOLE interpreter corpus
+      # at near-native speed — catching an invariant regression the moment it lands,
+      # far more coverage per CI-minute than growing the slow Miri set (@PLN54 S5).
+      # Scoped to `--lib --test issues` (validated green); expanding to wrap/strings
+      # awaits the known stdlib slot-width DA items (plan85 DA-inventory worklist).
+      # Non-vacuous: the asserts are proven to fire (the @PLN85 DA campaign closed
+      # a 53→0 failed-target inventory of real bugs by turning them on).
+      - name: Debug-assertions sweep (interpreter corpus)
+        env:
+          RUSTFLAGS: '-C debug-assertions=on'
+        run: cargo test --release --no-fail-fast --lib --test issues
 
   toolchain-matrix:
     name: Suite under ${{ matrix.toolchain }}
@@ -319,3 +566,54 @@ jobs:
           { echo '```'; echo "$out"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           echo "$out" | grep -q "NOT GREEN" && \
             echo "::warning::library audit not green — orphaned branches / drift / correctness (see job summary)" || true
+
+  # @PLN54 S7 — the nightly's own smoke alarm.  Nothing gates on this workflow, and
+  # `continue-on-error` / `fail-fast: false` legs keep the OVERALL run green even
+  # when a matrix leg is red — so a real regression can sit unnoticed for days.
+  # This job reads per-JOB conclusions (not the run status) and opens/updates ONE
+  # deduped GitHub issue on any red gate, so a week of red nightlies is a single
+  # tracked issue, not seven (and auto-resolves it when the gates go green again).
+  notify:
+    name: Nightly gate failure → tracked issue
+    needs: [miri, asan, poison, tsan, native-asan, debug-asserts, toolchain-matrix, index-hygiene]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - name: Open / update / close the deduped failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULTS: ${{ toJSON(needs) }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # Per-JOB conclusions from the needs context — failure OR timed_out counts
+          # (a matrix leg that timed out is a real regression signal).
+          failed=$(printf '%s' "$RESULTS" | jq -r '
+            to_entries[] | select(.value.result=="failure" or .value.result=="timed_out") | .key' \
+            | paste -sd, - || true)
+          # Idempotent dedup label; find any OPEN prior issue.
+          gh label create nightly-failure --color b60205 \
+            --description "Auto-filed nightly UB/sanitizer gate failure" --force >/dev/null 2>&1 || true
+          existing=$(gh issue list --state open --label nightly-failure \
+            --json number --jq '.[0].number // empty' 2>/dev/null || true)
+          if [ -z "$failed" ]; then
+            echo "all watched nightly gates green"
+            if [ -n "$existing" ]; then
+              gh issue comment "$existing" --body "✅ Nightly gates green again as of $RUN_URL — closing." || true
+              gh issue close "$existing" --reason completed || true
+            fi
+            exit 0
+          fi
+          echo "::warning::nightly gate(s) failed: $failed"
+          body=$(printf 'Nightly UB/sanitizer gate(s) failed: **%s**\n\nRun: %s\n\nFiled from per-JOB conclusions (the overall run can read green while a matrix leg is red). This issue auto-updates on repeat failures and auto-closes when the gates go green.' "$failed" "$RUN_URL")
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+            echo "updated existing issue #$existing"
+          else
+            gh issue create --title "Nightly UB/sanitizer gate failure" \
+              --label nightly-failure --body "$body"
+            echo "opened a new tracking issue"
+          fi

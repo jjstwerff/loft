@@ -6568,6 +6568,19 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
                 None,
                 native_deps_dir.as_deref(),
             );
+            // @PLN54 S6 — native-backend AddressSanitizer.  LOFT_NATIVE_ASAN=1
+            // instruments the generated native binary with ASan so a codegen bug
+            // that emits an out-of-bounds / use-after-free raw-pointer store access
+            // (the class the in-process interpreter ASan job cannot see, because
+            // `--native` runs as a separate uninstrumented binary) is caught, not
+            // silent.  Needs nightly rustc (-Zsanitizer); the binary is per-PID so
+            // there is no artifact cache to invalidate.  Opt-in, off by default.
+            if std::env::var_os("LOFT_NATIVE_ASAN").is_some() {
+                if std::env::var_os("RUSTUP_TOOLCHAIN").is_none() {
+                    cmd.env("RUSTUP_TOOLCHAIN", "nightly");
+                }
+                cmd.arg("-Zsanitizer=address");
+            }
             let output = cmd.output();
             let output = match output {
                 Ok(o) => o,

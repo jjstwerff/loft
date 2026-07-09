@@ -357,3 +357,38 @@ fn test() {
     assert!(s.is_argument, "s should be an argument");
     assert_eq!(s.size, 16, "arg text should use 16-byte Str layout");
 }
+
+// ── @PLN54 S3 — reserve-poison positive control ─────────────────────────────
+
+/// Positive control for the stack half of `LOFT_POISON` (@PLN54 S3): prove the
+/// detector CAN fire, so a green `LOFT_POISON=1` suite is non-vacuous.
+///
+/// `reserve_frame` grows the stack into a freshly-reserved, above-TOS region and
+/// — under `LOFT_POISON=1` — fills it with the `0xDEADBEEF` sentinel (design:
+/// `plans/54-sanitizer-coverage-expansion/STACK_POISON_DESIGN.md`).  So a read of
+/// a slot the frame never wrote returns the sentinel; read as a `DbRef` its
+/// `store_nr` is `0xBEEF` (wildly out of range → the store-index guard fires), a
+/// dangling stack read made loud instead of silent stale data.
+///
+/// Inert without the flag (poison is a process-global cached env read), so this
+/// runs meaningfully in the nightly `poison` CI job and is skipped in a normal
+/// run.  Profile-independent (asserts the sentinel bytes, not the
+/// debug-only `get_stack<DbRef>` guard).
+#[test]
+fn reserve_poison_fires_on_uninit_slot_read() {
+    if std::env::var_os("LOFT_POISON").is_none() {
+        eprintln!("skipped reserve-poison positive control (needs LOFT_POISON=1)");
+        return;
+    }
+    let (mut state, _data) = build("fn test() { x = 1; assert(x == 1); }");
+    // Reserve a frame region WITHOUT initialising it, then pop a slot the frame
+    // never wrote.  Under reserve-poison every byte is drawn from the sentinel.
+    state.reserve_frame(20);
+    let word: u32 = *state.get_stack::<u32>();
+    let bytes = word.to_le_bytes();
+    assert!(
+        bytes.iter().all(|b| matches!(b, 0xEF | 0xBE | 0xAD | 0xDE)),
+        "reserve-poison must fill an unwritten frame slot with the 0xDEADBEEF \
+         sentinel; got {word:#010x} (bytes {bytes:02x?})"
+    );
+}
