@@ -40,6 +40,28 @@ same read-buffer / write-serialise root, to confirm in Step 2):
 - **c1** — one-field struct read returns `null` on interp vs `42` native (single-
   field records take a different, and the only leak-FREE, read path).
 
+## The oracle (defineable NOW — use it before + through the fix)
+
+Two independent, already-available oracles make the whole matrix a DETERMINISTIC
+falsification instrument, defeating the "correct-by-coincidence" trap:
+
+1. **`LOFT_POISON=1` + cross-mode value equality.** Poison overwrites freed
+   stores, so a struct read that delivers a FREED/stale store yields garbage
+   instead of the coincidentally-correct value. Under poison, **native is
+   uniformly correct** (the reference) and **interp diverges on EVERY p9 probe**
+   — a1/a2/a4/b1/d1 read poison (`-2401…`), c2 reads `-559038737`, c3 reads
+   `239`, a3 `16`, c1 `null` — vs native's true values. Baseline captured
+   2026-07-09. The oracle assertion: *interp-under-poison value == native value*.
+   This exposes defect (1) (stale delivery) universally, not just the a3/c1
+   flukes the no-poison baseline happened to show.
+2. **Leak-check (`collect_store_leaks` empty).** Exposes defect (2) (the orphaned
+   read record) — already the suite leak-gate.
+
+So the fix is DONE when, for every probe, on BOTH backends: value matches native
+**under poison** AND zero leaks. Poison also proves the harness can fail (all red
+now), and it will flip green only when the read genuinely delivers + owns its own
+live record — the exact correctness the fix must produce.
+
 ## The invariant (to enforce)
 
 > A struct read's buffer store is owned by the consumer and freed exactly once,
@@ -114,9 +136,11 @@ sequence. When ON: all 13 probes leak-free AND correct-valued on interp; native
 unchanged.
 
 ### Step 5 — oracle gate + flip
-Full suite with the gate ON must stay 2721/2721 both backends (the block-return-
-move oracle standard); the only diffs vs OFF are the 13 probes turning green.
-Then default the gate ON.
+Gate the fix, then assert the **poison + cross-mode oracle** (above): every probe
+matches native under `LOFT_POISON=1` and is leak-free, both backends. Full suite
+with the gate ON stays 2721/2721 both backends (also run a `LOFT_POISON` pass over
+the struct-IO tests); the only diffs vs OFF are the 13 probes turning green. Then
+default the gate ON.
 
 ### Step 6 — graduate + retire
 Regression `tests/scripts/86-writeread-slot.loft` (minimal a1 + d1 + b2 shapes —
