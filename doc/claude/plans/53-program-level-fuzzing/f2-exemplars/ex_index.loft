@@ -1,0 +1,14 @@
+// Exemplar: index<E[n, k]> multi-part key — distinct full keys.
+// index has no .len(); population is checked via iteration count.
+struct E { n: integer, k: text, v: integer }
+struct I { m: index<E[n, k]> }
+fn main() {
+  i = I { m: [E{n:2,k:"a",v:20}, E{n:1,k:"b",v:11}, E{n:1,k:"a",v:10}, E{n:3,k:"a",v:30}] };
+  cnt = 0; order = "";
+  for e in i.m { cnt += 1; order += "{e.n}{e.k}" }  // by n asc, then k asc
+  assert(cnt == 4, "population: {cnt}");
+  assert(i.m[1, "a"].v == 10, "lookup (1,a)");
+  assert(i.m[2, "a"].v == 20, "lookup (2,a)");
+  assert(!i.m[9, "x"], "absent null");
+  assert(order == "1a1b2a3a", "iter order: {order}");
+}

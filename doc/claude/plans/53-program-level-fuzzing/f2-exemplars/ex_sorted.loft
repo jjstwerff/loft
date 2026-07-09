@@ -1,0 +1,12 @@
+// Exemplar: sorted<E[k]> ascending — distinct keys.
+struct E { k: text, v: integer }
+struct S { m: sorted<E[k]> }
+fn main() {
+  s = S { m: [E{k:"d",v:4}, E{k:"a",v:1}, E{k:"c",v:3}, E{k:"b",v:2}] };
+  s.m["c"] = null;                       // remove c
+  assert(s.m.len() == 3, "len: {s.m.len()}");
+  assert(s.m["a"].v == 1, "lookup a");
+  assert(!s.m["c"], "c removed");
+  order = ""; for e in s.m { order += e.k }   // ascending
+  assert(order == "abd", "iter order: {order}");
+}
