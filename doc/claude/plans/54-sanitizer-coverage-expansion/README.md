@@ -69,14 +69,24 @@ right now.
 - **S7 (nightly notifier) — ✅ DONE (2026-07-09).** The `notify` job in `miri.yml`
   reads per-JOB conclusions and opens/updates/closes ONE deduped GitHub issue on any
   red gate (logic validated locally; first-run issue-file confirms on merge).
-- **S5 (grow Miri set) — in progress; S8 (MSan) — defer** (heavy instrumented-std setup).
+- **S5 (grow Miri set) — ✅ DONE (2026-07-09), REFRAMED.** Miri-on-loft costs
+  ~5-10 min/test (interpreter-under-interpreter; the p213 sibling timed out at
+  240s), so growing the slow full-program set is infeasible. **S5a:** re-targeted
+  Miri at the unsafe STORE layer — 6 direct store-unit tests (claim/free-coalesce/
+  resize/adopt/rebase/borrow), all Miri-clean in **~8s** (vs 240s+), curated set
+  4→10. **S5b:** the higher-ROI complement — a whole-corpus **`debug-asserts`**
+  gate (loft's ~200 internal `debug_assert!`s, off in every normal build, checked
+  only by cargo-fuzz before) — green over `--lib`+`--test issues`. More UB +
+  invariant coverage for less CI time than the original plan.
+- **S8 (MSan) — defer** (needs a fully-instrumented dep closure; low marginal value
+  over Miri + the DA gate).
 
-**Recommended entry point (updated 2026-07-09):** **S3, S2, S6 are DONE**
-(poison halves + CI gate; TSan data-race gate; native-backend ASan gate). **S9**
-mechanism is landed but end-to-end is blocked on one localized proc-macro `-L`
-fix (NATIVE_ASAN_DESIGN.md) — the smallest remaining unblock. Otherwise the next
-slice is **S4** (LSan triage → `detect_leaks=1`), then **S5** (grow the Miri set)
-and **S1/S7** (macOS-ARM sanitizer leg / nightly notifier).
+**Recommended entry point (updated 2026-07-09):** **S2, S3, S5, S6, S7 are DONE**
+(TSan · both poison halves + gate · reframed Miri + new debug-asserts gate ·
+native ASan · nightly notifier). **S1** is routed to a native Mac session; **S8**
+deferred. The only remaining implementation is **S4** (LSan triage →
+`detect_leaks=1`, ~1 day, low risk) and **S9** (mixed-boundary cdylib ASan — a
+focused session; candidate design in NATIVE_ASAN_DESIGN.md, medium-high risk).
 
 ## Goal
 
@@ -98,7 +108,7 @@ S9's deep analysis is in [NATIVE_ASAN_DESIGN.md](NATIVE_ASAN_DESIGN.md).
 | **S2** | **ThreadSanitizer (TSan)** — add a `tsan` job to `miri.yml` running the parallel/threading suite under `RUSTFLAGS=-Zsanitizer=thread`.  loft executes real parallel workloads via `par`/`par_light` under a store-isolation model (THREADING.md); zero data-race coverage exists today (Miri runs stacked-borrows-off; ASan/guard are not race detectors).  **✅ DONE 2026-07-09: `tsan` job built + validated — `threading`+`threading_chars` TSan-CLEAN (0 races), positive control confirms it fires; needs -Zbuild-std + target-scoped flag (§ Concrete steps S2).** | TSan job green on `main`; any races found catalogued or fixed. | ✅ Done |
 | **S3** | **`LOFT_POISON=1` arena poison-on-free keystone — ✅ STORE-RECORD HALF BUILT** (2026-06-29, @PLN85 fuzz-proof: `keys.rs::poison_enabled` + the `allocation.rs::free_named` poison block; both backends — native calls the same `free_named`; positive control proven — exposed a SILENT use-after-free (`elem_accumulate-none`) the cross-backend differential alone missed. **✅ FULLY CLOSED (2026-07-09):** store half + nightly `poison` CI gate in `miri.yml` + stack half. Stack half = poison at **reserve** not free ([STACK_POISON_DESIGN.md](STACK_POISON_DESIGN.md)): `reserve_frame` sentinel-fills its provably-dead reserved region (interpreter-only); green-drive 1498/1498 + positive control fires. See § Concrete steps S3.3.) Fill freed store records + freed stack slots with a sentinel value on free, turning silent store-internal use-after-free (the @P377/@P378 dangling-`DbRef` family) into loud, deterministic garbage at the dangling read — on any rustc, no nightly.  This is the blind spot Miri/ASan/Valgrind all share (loft's arena "free" is not a libc `free()`). | `LOFT_POISON=1 cargo test` green; @P377/@P378-class reads produce sentinel-value panics rather than silent stale data.  **Also unblocks @PLN53 F4.** | ✅ Done |
 | **S4** | **Triage the LeakSanitizer baseline** (~108 live-at-exit allocations) — understand each allocation class, fix the avoidable leaks, and turn `detect_leaks=1` on in `miri.yml` for the corpus.  Cluster 5 was a leak; there are likely others. | ASan `detect_leaks=1` passes corpus-wide in CI, or each surviving allocation class has a one-line accepted-leak annotation. | Medium |
-| **S5** | **Grow the Miri curated set** beyond the current 4 tests (p213 + clusters 3/4/5) — add cluster 1/2 reproducers + representative text/fn-ref/par shapes so the Miri gate covers more of the hard-UB surface without unbearable runtime. | Miri curated set ≥ 8 tests; job runtime ≤ 20 min on ubuntu. | Medium |
+| **S5** | **Grow the Miri curated set** beyond the current 4 tests (p213 + clusters 3/4/5).  **✅ DONE 2026-07-09, REFRAMED after finding Miri-on-loft = ~5-10 min/test (interpreter-under-interpreter).  S5a: re-targeted at the unsafe STORE layer — 6 direct store-unit tests, Miri-clean in ~8s (curated set 4→10).  S5b: added a whole-corpus `debug-asserts` gate (loft's ~200 internal invariants, off in normal builds) — the fast, broad complement to the slow Miri set.** | Miri curated set ≥ 8 tests; job runtime ≤ 20 min on ubuntu. | ✅ Done (a+b) |
 | **S6** | **Native-backend ASan** — instrument the `--native` codegen runtime under ASan (currently ASan instruments only the in-process interpreter; the `--native` path is uninstrumented).  **✅ DONE 2026-07-09: `LOFT_NATIVE_ASAN=1` → `-Zsanitizer=address` on the generated binary; nightly `native-asan` job; 14/14 curated corpus clean + positive control fires; ASan tolerates the uninstrumented libloft (no -Zbuild-std). See NATIVE_ASAN_DESIGN.md.** | At least one native-mode test corpus passes under ASan; any findings catalogued or fixed. | ✅ Done |
 | **S7** | **Failure→issue notifier for the nightly** — a CI job that opens/updates a deduped GitHub issue when the nightly fails, reading per-*job* conclusions (not the overall run status, which `continue-on-error` holds green even when matrix legs are red). | Nightly failure automatically surfaces as a tracked GitHub issue within 24 h of the failing run.  **✅ DONE 2026-07-09: `notify` job — per-JOB conclusions, deduped open/update/close; jq logic validated locally.** | ✅ Done |
 | **S8** | **MSan (MemorySanitizer) corpus-wide** — uninitialised-read detection beyond what Miri covers.  Painful setup (needs a fully instrumented std); lower priority. | MSan job passes the interpreter subset or deferred with a one-line setup-cost note. | Low |
@@ -225,12 +235,32 @@ Opt-in, off by default.
   = cross-boundary UAF/OOB caught, once a validated cdylib-deps approach lands
   (a focused session, not a one-liner).
 
-### S5 — grow the Miri curated set (~½ day)
+### S5 — ✅ DONE 2026-07-09, REFRAMED (Miri is the wrong *granularity* to scale)
 
-Extend the `--exact` list in `miri.yml`'s `miri` job beyond the current 4 tests
-(p213 + clusters 3/4/5) with cluster-1/2 reproducers + representative
-text/fn-ref/par shapes, each Miri-validated first. **Acceptance:** curated set
-≥ 8 tests; `miri` job runtime ≤ 20 min.
+**Finding:** Miri-on-loft is interpreter-under-interpreter — ~5-10 min/test (the
+p213 sibling timed out at 240s), because all 4 seeds run WHOLE loft programs via
+`code!`. Growing that set is infeasible (8 programs ≈ 40-80 min), and ASan already
+sweeps the whole corpus fast for OOB/UAF, so Miri's job is a small focused canary.
+
+- **S5a — re-target Miri at the unsafe STORE layer.** The UB lives in a few
+  `unsafe` store functions (claim / free-coalesce / resize+zero / cross-store adopt
+  / store-rebase walk); reach them with DIRECT Rust unit tests over hand-built
+  `Stores` — no stdlib parse, no execution. Added 6 (`store::tests::*`,
+  `database::*`) to the `--exact` list (`--lib`): Miri-clean in **~8s** (vs 240s+),
+  curated set 4→10. Deliberately-UB store tests (`*_panics`, the dangling-pointer
+  positive control) excluded — Miri would correctly flag their by-design UB.
+- **S5b — the higher-ROI complement: a whole-corpus `debug-asserts` gate.** loft's
+  ~200 internal `debug_assert!`s (H5 numbering law, `Store::valid()`/`addr()`
+  bounds, poison/UAF invariants) are compiled OUT of every normal test build
+  (`[profile.dev.package.loft]`) and were checked ONLY by cargo-fuzz. New nightly
+  `debug-asserts` job runs the corpus under `-C debug-assertions=on` at near-native
+  speed — green over `--lib`+`--test issues` (after skipping one release-mode test).
+  Catches invariant regressions the moment they land — far more per CI-minute than
+  more slow Miri programs. Expansion to wrap/strings awaits the known stdlib
+  slot-width DA items.
+
+**Acceptance MET:** Miri set ≥ 8 (now 10) with the growth fast; plus a new
+whole-corpus invariant gate the original plan didn't have.
 
 ### S1 — macOS-ARM sanitizer leg (mostly moot; ~½ day or DEFER)
 

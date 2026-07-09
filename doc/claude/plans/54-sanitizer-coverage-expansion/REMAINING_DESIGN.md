@@ -252,13 +252,16 @@ uninit surface the `plan53_cluster4` MaybeUninit fix targeted.
 
 ## Recommended order (value / effort)
 
-1. **S5** (½ day, tractable now) — cheap coverage, no toolchain risk.
-2. **S4** (~1 day) — turns the muted leak baseline into a live gate; low risk.
-3. **S7** (½ day) — makes every nightly leg (incl. the 3 new gates) actionable.
-4. **S9** (focused session) — the high-value, higher-risk mixed-boundary finish.
-5. **S1** — hand to a **native Mac session** (can't be validated from Linux).
-6. **S8** — defer with the one-line cost note above; revisit only if a concrete
-   need appears.
+- ✅ **S5 — DONE** (reframed): re-targeted Miri at the store layer (6 fast tests)
+  + a new whole-corpus `debug-asserts` gate. Miri-on-loft's ~5-10 min/test made
+  the original "grow the full-program set" infeasible; the reframe gets more
+  coverage for less CI time. (This § kept for the record; see README § S5.)
+- ✅ **S7 — DONE**: the nightly failure→issue notifier.
+- **S4** (~1 day) — turns the muted leak baseline into a live gate; low risk. **Next.**
+- **S9** (focused session) — the high-value, higher-risk mixed-boundary finish.
+- **S1** — hand to a **native Mac session** (can't be validated from Linux).
+- **S8** — defer with the one-line cost note above; revisit only if a concrete
+  need appears.
 
 Each lands as its own commit on the sanitizer branch, each with its positive
 control, each flipping its README row to ✅ with the green reading.
