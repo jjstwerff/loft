@@ -198,6 +198,11 @@ const loftGlExplicit = {
 
 const stubs = {
   loft_io: {
+    // @PLN97: store_load_url_trusted's fetch import is now in every --html
+    // wasm; this repro never fetches, so stub to the error sentinel so the
+    // module still links (an absent import would LinkError at instantiate).
+    loft_host_http_get: () => 0xffffffff,
+    loft_host_http_get_copy: () => {},
     loft_host_print: (ptr, len) => {
       if (enableTrace) trace.push(`loft_host_print(${ptr}, ${len})`);
       if (instance) {

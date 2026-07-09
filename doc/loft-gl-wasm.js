@@ -142,6 +142,34 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
         const m = readStr(ptr, len);
         if (globalThis.loftOutput) globalThis.loftOutput(m);
         else console.log("[loft:out]", m);
+      },
+      // @PLN97 store_load_url_trusted: async fetch() bridged to a SYNCHRONOUS
+      // loft call via asyncify — the same driver the headless page uses (see
+      // main.rs / WASM_STORE_LOAD_URL.md).  Invoked TWICE per fetch:
+      //  (1) NORMAL state: start fetch(url), then ac.suspend() unwinds the
+      //      whole wasm stack to the event loop (return value ignored).
+      //  (2) REWINDING (===2): the fetch resolved + resume() replayed the
+      //      stack here — ac.suspend() stop_rewinds and we RETURN the byte
+      //      length (0xFFFFFFFF on error → net::fetch_bytes maps it to Err).
+      // The bytes are copied out separately by loft_host_http_get_copy.
+      loft_host_http_get(ptr, len) {
+        const ac = asyncCtrl && asyncCtrl.ac;
+        if (ac && ac.exports.asyncify_get_state() === 2) {
+          ac.suspend();
+          return asyncCtrl.httpBytes ? asyncCtrl.httpBytes.length : 0xffffffff;
+        }
+        if (!ac) return 0xffffffff;  // no asyncify driver -> fetch unavailable
+        const url = readStr(ptr, len);
+        asyncCtrl.httpBytes = null;
+        fetch(url)
+          .then(async r => { asyncCtrl.httpBytes = r.ok ? new Uint8Array(await r.arrayBuffer()) : null; ac.resume('loft_start'); })
+          .catch(() => { asyncCtrl.httpBytes = null; ac.resume('loft_start'); });
+        ac.suspend();
+        return 0;
+      },
+      loft_host_http_get_copy(ptr) {
+        if (asyncCtrl && asyncCtrl.httpBytes)
+          new Uint8Array(getMem().buffer, ptr, asyncCtrl.httpBytes.length).set(asyncCtrl.httpBytes);
       }
     }),
     loft_gl: coerceArgs({

@@ -17,7 +17,9 @@ const io = {
   loft_host_output: () => {},
 };
 // Answer any other import module/name with a 0-returning stub (as wasm_repro.mjs).
-const stubs = new Proxy({ loft_io: io }, { get: (t, k) => (k in t ? t[k] : new Proxy({}, { get: () => () => 0 })) });
+// loft_io gets a per-function callable fallback too, so a newly-added import
+// (e.g. loft_host_http_get) never LinkErrors a stub harness that never calls it.
+const stubs = new Proxy({ loft_io: new Proxy(io, { get: (t, k) => (k in t ? t[k] : () => 0) }) }, { get: (t, k) => (k in t ? t[k] : new Proxy({}, { get: () => () => 0 })) });
 const inst = new WebAssembly.Instance(new WebAssembly.Module(wasm), stubs);
 mem = inst.exports.memory;
 const rc = inst.exports.loft_debug_selftest();
