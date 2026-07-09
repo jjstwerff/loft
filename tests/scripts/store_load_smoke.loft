@@ -77,6 +77,22 @@ fn main() {
     println("loadurl keys={keys_of(h)}");
     println("loadurl lookup h[13]={lookup13(h)}");
     println("loadurl verify={store_verify(h)}");
+  } else if mode == "loaduntrusted" {
+    // Untrusted LOCAL file: structurally validated before adoption. A garbage
+    // file must reject cleanly (false), never hang or misread.
+    ok = store_load_untrusted(h, path);
+    if !ok { println("FAIL untrusted-load-returned-false"); return }
+    println("untrusted keys={keys_of(h)}");
+    println("untrusted lookup h[13]={lookup13(h)}");
+    println("untrusted verify={store_verify(h)}");
+  } else if mode == "loadurltrusted" {
+    // Trusted HTTP fetch: instant (no SHA), still structurally validated.
+    url = env_variable("LOFT_PERSIST_TEST_URL");
+    ok = store_load_url_trusted(h, url);
+    if !ok { println("FAIL urltrusted-load-returned-false"); return }
+    println("urltrusted keys={keys_of(h)}");
+    println("urltrusted lookup h[13]={lookup13(h)}");
+    println("urltrusted verify={store_verify(h)}");
   } else {
     println("FAIL unknown-mode")
   }

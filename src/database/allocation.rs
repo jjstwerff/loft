@@ -2395,6 +2395,41 @@ impl Stores {
         self.load_bytes(slot, &bytes)
     }
 
+    /// @PLN97 arc G Phase 0 — load a whole store IMAGE over HTTP(S)/`file://` from
+    /// a **TRUSTED** source (no authenticity check) into `slot` — the *instant*
+    /// counterpart of [`Stores::load_url_verified`].  Skips the SHA-256 pin (you
+    /// trust the origin) but is still **structurally safe**: `load_bytes` →
+    /// `Store::from_bytes` runs `validate_structure`, so a corrupt/malformed
+    /// image is rejected (`false`), never adopted — the heap invariant holds
+    /// regardless.  Use `load_url_verified` when the source is untrusted.
+    #[cfg(feature = "registry")]
+    pub fn load_url(&mut self, slot: u16, url: &str) -> bool {
+        let bytes = match crate::registry_index::http_get_bytes(url) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("store loader: {url} — fetch failed: {e}");
+                return false;
+            }
+        };
+        self.load_bytes(slot, &bytes)
+    }
+
+    /// @PLN97 arc G Phase 2 — load a store IMAGE from a local file that may be
+    /// **UNTRUSTED** into `slot`, the structurally-validated counterpart of
+    /// [`Stores::load_path`].  Reads the whole file and adopts it via
+    /// `load_bytes` → `Store::from_bytes`, which runs the always-on
+    /// `validate_structure` gate — so a crafted / corrupt file cannot hang
+    /// (0-size block) or drive a heap over-read; it is rejected (`false`).
+    /// `load_path` (the trusted path) validates only in debug and is faster;
+    /// use this for a file whose provenance you don't control.
+    pub fn load_path_untrusted(&mut self, slot: u16, path: &std::path::Path) -> bool {
+        let bytes = match std::fs::read(path) {
+            Ok(b) => b,
+            Err(_) => return false,
+        };
+        self.load_bytes(slot, &bytes)
+    }
+
     /// @PLN97 3b.5 — the layout-identity gate for a working-set load. Returns
     /// `false` (reject) when the store's `.dschema` sidecar records a layout that
     /// differs from THIS program's collection type — so the loader never

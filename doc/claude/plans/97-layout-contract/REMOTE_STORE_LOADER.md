@@ -284,6 +284,26 @@ whose size word claims more words than the arena holds → a **heap over-read** 
   but that check is still sampling (8-problem cap, 16-element vector sampling) and trusts the schema
   type tag — uncapping it + type-tag cross-validation is the remaining hardening.
 
+### The whole-file store-read trust matrix (`trust × source`) — **DONE 2026-07-09**
+Every whole-file loader routes through the same validated adopt (`load_bytes` → `Store::from_bytes`
+→ `validate_structure`), differing only in **source** (file vs HTTP) and **authenticity** (none /
+SHA-pinned). All four are structurally safe (a crafted/corrupt image is rejected, never hangs or
+over-reads); only the untrusted-HTTP one additionally proves *authenticity*.
+
+| | Local file | HTTP(S) / `file://` |
+|---|---|---|
+| **Trusted** (fast; you produced/trust it) | `store_load(r, path)` — debug-only validate, fastest | `store_load_url_trusted(r, url)` — instant fetch + structural validate |
+| **Untrusted** (validate before adopting) | `store_load_untrusted(r, path)` — always-on structural validate | `store_load_url(r, url, sha256)` — SHA-verify **then** structural validate |
+
+`store_load` keeps its debug-only validate (the trusted local hot path stays fast); the other three
+run `validate_structure` always-on. Interior-pointer soundness (Phase 2.1) is `store_verify` on top
+of any of them. These are core loaders that do the HTTP fetch themselves (via the registry
+`http_get_bytes` client) — a `web`-package wrapper (`http_get` for custom headers / auth, then adopt)
+is an additive follow-on, not required for a plain store GET.
+Guards: `store_persist_loft.rs::{store_load_untrusted_validates_before_adopting_both_backends,
+store_load_url_trusted_fetches_over_http_both_backends,
+store_load_url_verifies_sha_before_adopting_both_backends}` + `store.rs::tests::from_bytes_rejects_crafted_buffers_fail_closed`.
+
 ### Phase 2 — paged read-only backing (local provider) — **reader core DONE 2026-07-07**
 - **Built:** `src/paged_reader.rs` (behind the `remote-store` feature — the zero-cost gate): the
   `PageProvider` trait, `LocalFileProvider` (reads ranges from disk, **logs every `(off,len)`** so

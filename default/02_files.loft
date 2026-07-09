@@ -428,6 +428,29 @@ pub fn store_load_url(r: reference, url: text, sha256: text) -> boolean fs#read;
 #rust"stores.load_url_verified((@r).store_nr, @url, @sha256)"
 #impure(io)
 
+// Load a whole store IMAGE over HTTP(S)/file:// from a TRUSTED source into `r` —
+// the INSTANT counterpart of store_load_url: skips the SHA-256 pin (you trust the
+// origin) for a fast read, but is still structurally validated, so a corrupt or
+// malformed image is rejected (false), never adopted. Use store_load_url for an
+// untrusted source. @PLN97 arc G Phase 0.
+//   world: hash<Rec[id]> = []
+//   store_load_url_trusted(world, "https://cdn.internal/world.store")
+pub fn store_load_url_trusted(r: reference, url: text) -> boolean fs#read;
+#rust"stores.load_url((@r).store_nr, @url)"
+#impure(io)
+
+// Load a store IMAGE from a local file that may be UNTRUSTED into `r` — the
+// structurally-validated counterpart of store_load. Reads the file and validates
+// its block structure BEFORE adoption, so a crafted or corrupt file cannot hang
+// (0-size block) or drive a heap over-read; it is rejected (false). store_load is
+// faster (validates only in debug) for a file you produced yourself; use this for
+// a file whose provenance you don't control. @PLN97 arc G Phase 2.
+//   h: hash<Rec[id]> = []
+//   if !store_load_untrusted(h, "downloaded.store") { /* rejected — malformed */ }
+pub fn store_load_untrusted(r: reference, path: text) -> boolean fs#read;
+#rust"stores.load_path_untrusted((@r).store_nr, std::path::Path::new(@path))"
+#impure(io)
+
 // Structural integrity check of a store-rooted collection's heap graph: verify
 // every internal pointer targets a live record — no dangling / out-of-bounds /
 // cyclic edge. Returns true when sound, false (with a reason on stderr) when

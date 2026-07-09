@@ -899,6 +899,97 @@ fn store_load_url_verifies_sha_before_adopting_both_backends() {
     }
 }
 
+/// @PLN97 arc G Phase 2 — `store_load_untrusted` reads a local store IMAGE that
+/// may be untrusted and adopts it ONLY after `validate_structure` passes: a
+/// well-formed image loads every key + is sound; a garbage file is rejected
+/// (`false`) cleanly — never a hang or a misread. Both backends.
+#[test]
+fn store_load_untrusted_validates_before_adopting_both_backends() {
+    let dir = scratch("store_load_untrusted");
+    let path = dir.join("u.store");
+
+    let (out_w, code_w) = run_mode(&load_script(), &path, "write");
+    assert_eq!(code_w, 0, "write exit: {out_w:?}");
+    assert!(out_w.contains("write keys=7,13,42"), "write: {out_w:?}");
+
+    for backend in ["--interpret", "--native"] {
+        let (out, code) = run_mode_backend(backend, &load_script(), &path, "loaduntrusted");
+        assert_eq!(code, 0, "{backend} loaduntrusted exit: {out:?}");
+        assert!(
+            out.contains("untrusted keys=7,13,42"),
+            "{backend}: a valid image must load all keys: {out:?}"
+        );
+        assert!(
+            out.contains("untrusted lookup h[13]=1300"),
+            "{backend}: key lookup must be correct: {out:?}"
+        );
+        assert!(
+            out.contains("untrusted verify=true"),
+            "{backend}: the adopted store must be structurally sound: {out:?}"
+        );
+    }
+
+    // A garbage file must reject cleanly (false), not hang or misread.
+    let garbage = dir.join("garbage.store");
+    fs::write(
+        &garbage,
+        b"not a loft store image, just junk bytes right here!!",
+    )
+    .unwrap();
+    let (out, code) = run_mode(&load_script(), &garbage, "loaduntrusted");
+    assert_eq!(code, 0, "garbage reject should be graceful: {out:?}");
+    assert!(
+        out.contains("FAIL untrusted-load-returned-false"),
+        "a garbage file must reject cleanly (store_load_untrusted=false): {out:?}"
+    );
+}
+
+/// @PLN97 arc G Phase 0 — `store_load_url_trusted` fetches a whole store IMAGE
+/// over HTTP from a TRUSTED source (no SHA pin) and adopts it — the instant read,
+/// still structurally validated. Both backends, over a real HTTP server.
+#[test]
+fn store_load_url_trusted_fetches_over_http_both_backends() {
+    let dir = scratch("store_load_url_trusted");
+    let path = dir.join("t.store");
+
+    let (out_w, code_w) = run_mode(&load_script(), &path, "write");
+    assert_eq!(code_w, 0, "write exit: {out_w:?}");
+    assert!(out_w.contains("write keys=7,13,42"), "write: {out_w:?}");
+
+    // Serve the store over HTTP (a plain GET → 200 whole file).
+    let url = serve_ranges(fs::read(&path).unwrap(), None);
+
+    for backend in ["--interpret", "--native"] {
+        let out = Command::new(loft_bin())
+            .arg(backend)
+            .arg(load_script())
+            .env("LOFT_PERSIST_TEST_PATH", &path)
+            .env("LOFT_PERSIST_TEST_MODE", "loadurltrusted")
+            .env("LOFT_PERSIST_TEST_URL", &url)
+            .current_dir(workspace_root())
+            .output()
+            .expect("failed to invoke loft binary");
+        let so = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success(),
+            "{backend} exit: {so} / {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            so.contains("urltrusted keys=7,13,42"),
+            "{backend}: a trusted HTTP fetch must load all keys: {so}"
+        );
+        assert!(
+            so.contains("urltrusted lookup h[13]=1300"),
+            "{backend}: key lookup must be correct: {so}"
+        );
+        assert!(
+            so.contains("urltrusted verify=true"),
+            "{backend}: the fetched store must be structurally sound: {so}"
+        );
+    }
+}
+
 #[test]
 fn fresh_returns_true_and_file_appears() {
     let dir = scratch("fresh_returns_true_and_file_appears");
