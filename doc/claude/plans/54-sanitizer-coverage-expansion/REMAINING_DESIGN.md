@@ -166,25 +166,37 @@ branch → Miri red). **Acceptance:** ≥ 8 tests, job ≤ 20 min, all green.
 
 ---
 
-## S1 — macOS-ARM sanitizer leg — RECOMMEND DEFER (with a one-line note)
+## S1 — macOS-ARM sanitizer leg — DO IN A NATIVE MAC SESSION
 
 **State:** `v2-validation.yml` already runs the **full suite** on macOS-ARM
 (`macos-latest` = ARM64). Only the *sanitizer* (Miri / ASan) leg is ubuntu-only.
-The founding incident (@P383) was a macOS-ARM toolchain-sensitivity bug — but that
-class is now caught by the full-suite macOS-ARM run; the residual is only
-"sanitizer-detectable UB that manifests ONLY on ARM and NOT on the ubuntu
-sanitizer leg", a narrow slice.
+The founding incident (@P383) surfaced exclusively on macOS-ARM, so a native ARM
+sanitizer leg genuinely closes a real residual (UB that manifests on ARM but not
+on the ubuntu sanitizer leg).
 
-**If pursued:** add `strategy.matrix.os: [ubuntu-latest, macos-latest]` to the
-`asan` and `miri` jobs (`runs-on: ${{ matrix.os }}`). ASan + Miri both run on
-macOS-ARM; the ASan runtime differs (Apple clang) but nightly rustc's
-`-Zsanitizer=address` supports `aarch64-apple-darwin`. Watch for: mold is
-Linux-only (drop it on macOS), and the `--target` triple must be
-`aarch64-apple-darwin`.
+**Why it needs a Mac session (the key constraint):** the *rest* of this plan held
+a "validate what you ship" bar — every CI gate was run locally with a positive
+control before landing. A macOS sanitizer job **cannot be validated from this
+Linux box** (different ASan runtime — Apple clang; different Miri target;
+`aarch64-apple-darwin` triple; no mold). Shipping it unvalidated would break that
+bar. **So S1 is ROUTED to a native Mac session:** a Mac-hosted agent adds the leg,
+runs it locally with the standard per-sanitizer positive control, then lands it.
 
-**Recommendation:** **defer** — land a one-line note in the S1 row ("covered by
-the full-suite macOS-ARM run in v2-validation.yml; sanitizer-on-ARM is a low-value
-residual"). **Effort:** ~½ day if built; 1 line if deferred.
+**Steps (for the Mac session):**
+
+1. Add `strategy.matrix.os: [ubuntu-latest, macos-latest]` to the `asan` and
+   `miri` jobs (`runs-on: ${{ matrix.os }}`), guarding the Linux-only bits:
+   `mold` install + `-Clink-arg=--allow-multiple-definition` are skipped on macOS
+   (`if: runner.os == 'Linux'`); the sanitizer target becomes
+   `aarch64-apple-darwin`.
+2. Locally on the Mac: run the `asan` sweep + the `miri` curated set under
+   `aarch64-apple-darwin`; confirm green + re-run the ASan raw-pointer-OOB positive
+   control on ARM (proves the ARM ASan runtime fires).
+3. Land the matrix; the nightly badge then reflects both platforms.
+
+**Acceptance:** macOS-ARM sanitizer leg green on `main`, validated on a real Mac.
+**Effort:** ~½ day in a Mac session. **Owner:** a native-Mac agent (this
+Linux-session agent cannot validate it — do NOT ship it blind from here).
 
 ---
 
@@ -244,7 +256,8 @@ uninit surface the `plan53_cluster4` MaybeUninit fix targeted.
 2. **S4** (~1 day) — turns the muted leak baseline into a live gate; low risk.
 3. **S7** (½ day) — makes every nightly leg (incl. the 3 new gates) actionable.
 4. **S9** (focused session) — the high-value, higher-risk mixed-boundary finish.
-5. **S1 / S8** — defer with the one-line notes above; revisit only if a concrete
+5. **S1** — hand to a **native Mac session** (can't be validated from Linux).
+6. **S8** — defer with the one-line cost note above; revisit only if a concrete
    need appears.
 
 Each lands as its own commit on the sanitizer branch, each with its positive
