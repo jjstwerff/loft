@@ -1591,9 +1591,30 @@ impl State {
     pub fn reserve_frame(&mut self, size: u16) {
         let step = self.stack_step(u32::from(size));
         self.ensure_stack(step);
+        let base = self.stack_pos;
         self.stack_pos += step;
         if self.stack_pos > self.stack_high {
             self.stack_high = self.stack_pos;
+        }
+        // LOFT_POISON=1 (@PLN54 S3, stack half): fill the freshly-reserved frame
+        // region `[base, base+step)` with 0xDEADBEEF.  That region is ABOVE the
+        // old TOS — provably dead by the stack discipline — so this cannot touch
+        // any live value (unlike poisoning at *free*, where the pop primitive and
+        // the transient return value still occupy the vacated region; see
+        // plans/54-sanitizer-coverage-expansion/STACK_POISON_DESIGN.md).  Every
+        // slot is written (`OpInit*` / push) before it is read (definite
+        // assignment), so a correct program never observes the sentinel; a read
+        // of an unwritten slot (uninitialised, or a cross-frame stale read whose
+        // bytes a prior frame left) hits it — a `DbRef` read trips the
+        // `get_stack<DbRef>` OOB guard (store_nr=0xBEEF).  Off by default.
+        if step != 0 && crate::keys::poison_enabled() {
+            const POISON: [u8; 4] = [0xEF, 0xBE, 0xAD, 0xDE];
+            let rec = self.stack_cur.rec;
+            let field_base = self.stack_cur.pos + base;
+            let store = self.database.store_mut(&self.stack_cur);
+            for off in 0..step {
+                *store.addr_mut::<u8>(rec, field_base + off) = POISON[(off & 3) as usize];
+            }
         }
     }
 

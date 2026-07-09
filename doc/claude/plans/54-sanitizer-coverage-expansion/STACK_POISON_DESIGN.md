@@ -3,12 +3,19 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# S3 second half — stack-slot poison, the sound way (design)
+# S3 second half — stack-slot poison, the sound way (design + closeout)
 
 > **Part of [@PLN54](README.md) S3.** Written as a `design-protocol` hypothesis:
 > the design is a claim about ONE invariant, probed to falsify before it is built.
-> **Status: DESIGNED, not yet built.** This doc is the generative act (enumerate
-> the failure paths → the invariant becomes nameable) that precedes the code.
+> **Status: ✅ BUILT + VALIDATED (2026-07-09).** The reserve-time poison is live
+> in `State::reserve_frame` (gated on `keys::poison_enabled()`, interpreter-only —
+> native uses Rust's own stack, so it does not call `reserve_frame`). Validation:
+> the `LOFT_POISON=1` interpreter suites are **green (1498/1498, both the
+> soundness prediction — no false positive — and the definite-assignment claim
+> hold)**, and the positive control `frame_vars::reserve_poison_fires_on_uninit_slot_read`
+> fires (reads the sentinel from an unwritten reserved slot) under the flag and
+> skips without it. The design below is preserved as the record of why *reserve*,
+> not *free*, is the sound hook.
 
 ## The goal, and the reframe that makes it sound
 
