@@ -643,7 +643,9 @@ impl Parser {
             && matches!(result.base(), Type::Text(_))
             && (promote_view
                 || l.last().is_some_and(|tail| {
-                    self.native_text_call_tail(tail) || self.user_text_call_tail(tail)
+                    self.native_text_call_tail(tail)
+                        || self.user_text_call_tail(tail)
+                        || self.if_tail_delivers_owned_text(tail)
                 }))
         {
             let tv = self.create_unique("__tret", &Type::Text(Deps::none()));
@@ -5103,6 +5105,50 @@ impl Parser {
                     .all(|&d| (d as usize) < attrs.len() && attrs[d as usize].hidden)
             }
             _ => false,
+        }
+    }
+
+    /// @PLN85 Slice C — the text tail is an `if`/`match` (match lowers to
+    /// nested `If`) at least one of whose arms DELIVERS a fresh owned text (a
+    /// native or user text-dest call).  Such a branch return builds the owned
+    /// text in an arm and hands it back as an owned `__ret_N` copy the caller
+    /// leaks; binding the whole `if` to `__tret` promotes the return to a
+    /// caller `&text` buffer so every arm writes INTO it — the proven-clean
+    /// `r = if c { u.to_json() } else { "x" }; r` rebind.  Requires an
+    /// owned-text arm so a pure literal/arg-borrow `if` (already clean, and a
+    /// borrow the caller forwards) is left alone.
+    fn if_tail_delivers_owned_text(&self, tail: &Value) -> bool {
+        match tail.unspan() {
+            Value::Return(inner) | Value::Drop(inner) => self.if_tail_delivers_owned_text(inner),
+            Value::Block(bl) => bl
+                .operators
+                .last()
+                .is_some_and(|t| self.if_tail_delivers_owned_text(t)),
+            Value::Insert(ops) => ops
+                .last()
+                .is_some_and(|t| self.if_tail_delivers_owned_text(t)),
+            Value::If(_, then, els) => {
+                self.arm_delivers_owned_text(then) || self.arm_delivers_owned_text(els)
+            }
+            _ => false,
+        }
+    }
+
+    /// True when an `if`/`match` ARM's tail delivers a fresh owned text — a
+    /// native or user text-dest call, or a nested `if` that does.  The signal
+    /// that a branch return is the leaking owned-`__ret_N` shape (§
+    /// `if_tail_delivers_owned_text`).
+    fn arm_delivers_owned_text(&self, arm: &Value) -> bool {
+        match arm.unspan() {
+            Value::Block(bl) => bl
+                .operators
+                .last()
+                .is_some_and(|t| self.arm_delivers_owned_text(t)),
+            Value::Insert(ops) => ops.last().is_some_and(|t| self.arm_delivers_owned_text(t)),
+            Value::If(_, t, e) => {
+                self.arm_delivers_owned_text(t) || self.arm_delivers_owned_text(e)
+            }
+            other => self.native_text_call_tail(other) || self.user_text_call_tail(other),
         }
     }
 
