@@ -66,13 +66,34 @@ The native path (clean) is the reference oracle for the correct sequence.
 13 probes, both backends, in `probes/writeread-slot-leak/`. Refuted the first
 root-cause; pinned the boundary. Proven to fail (a1/…/e1 red on interp).
 
-### Step 1 — localize the divergence
-Instrument `q`'s slot DbRef at three points on interp: right after the block
-`PutRef` (expect `#2`), at scope exit before `OpFreeRef(q)` (observed `#5`), and
-compare the native emission for the same program (clean). Use the loft debugger
-(`loft debug --rpc`: breakpoint at the free, `eval`/`getValue` the slot) rather
-than sprinkled prints. Decide between chokepoints 1–3 by WHERE `#2`→`#5` (or
-never-`#2`) happens. Exit: the ONE site named, with a trace proving it.
+### Step 1 — localize the divergence 🔶 PARTIAL (findings below)
+Slot-trace instrumentation (`put_ref`/`var_ref`/`read_file`/`free_ref_db`, since
+removed) on interp, cache-off, established:
+
+- **The stale delivery is NOT the leak cause.** `OpReadFile` fills the eval-stack
+  store `#0` (via `OpCreateStack` — normal), and `q` is delivered a STALE store
+  (`#5`, the freed write `_wf`) in BOTH the leaking (`a1`) AND the clean
+  (`rdloop`, write-outside) cases. So `q ← #5` is common to clean runs — it is
+  the reason struct-read values are right only by COINCIDENCE (`#5` = a copy of
+  the written struct, freed but not zeroed), and why `a3` (inline literal, no
+  matching `_wf`) reads garbage `16`. This is a real correctness defect but a
+  SEPARATE axis from the leak.
+- **The leak is the read RECORD (`#2` from `OpDatabase(_read_1)`) not freed**, in
+  the same-scope write+read shape (`a1`) but freed when the write is outside the
+  loop (`rdloop`). i.e. the leak is shape-dependent free-accounting of the read
+  record, not the `q` delivery.
+
+So p9 is TWO intertwined defects: (i) the read-record free is shape-dependent
+(the leak), and (ii) the struct read delivers a stale store rather than the read
+result (correctness-by-coincidence; garbage in `a3`). eprintln tracing hit its
+limit here — the precise free-accounting for (i) needs the loft debugger
+(`loft debug --rpc`: breakpoint the read-record free, watch its store across the
+`a1` vs `rdloop` shapes). Chokepoints refined: (ii) is the read block's
+`OpCreateStack`/delivery plumbing in `src/parser/objects.rs` (the struct-read
+block never copies `#0`/`#2` into the consumer); (i) is the read-record's
+free-emission in `src/scopes.rs`. **Exit remaining:** the ONE free-site for (i)
+named via the debugger; decide if fixing (ii) [deliver the read result, not a
+stale alias] subsumes (i).
 
 ### Step 2 — a3 / c1 shared-root check
 Instrument a3 (inline-literal write bytes) and c1 (one-field read path) in
