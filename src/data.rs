@@ -2272,7 +2272,7 @@ pub struct Attribute {
 
 impl Debug for Attribute {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&format!("{}:{}", self.name, &self.typedef))
+        f.write_str(&format!("{}:{}", self.name, self.typedef))
     }
 }
 
@@ -3001,7 +3001,7 @@ pub fn v_loop(operators: Vec<Value>, name: &'static str) -> Value {
 
 impl Display for Definition {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: {}", &self.name, &self.def_type)
+        write!(f, "{}: {}", self.name, self.def_type)
     }
 }
 

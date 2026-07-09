@@ -1016,7 +1016,7 @@ mod tests {
     #[test]
     fn parse_default_is_strict() {
         // Default Dialect is Strict — behaviour identical to bare `parse`.
-        assert!(Dialect::default() == Dialect::Strict);
+        assert_eq!(Dialect::default(), Dialect::Strict);
     }
 
     // ── Dialect::Lenient also accepts bare identifier values ──

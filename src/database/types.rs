@@ -1082,7 +1082,7 @@ impl Stores {
         let name = if content == u16::MAX {
             "vector".to_string()
         } else {
-            format!("vector<{}>", &self.types[content as usize].name)
+            format!("vector<{}>", self.types[content as usize].name)
         };
         if let Some(nr) = self.names.get(&name) {
             *nr
@@ -1104,7 +1104,7 @@ impl Stores {
         let name = if content == u16::MAX {
             "child_rec".to_string()
         } else {
-            format!("child_rec<{}>", &self.types[content as usize].name)
+            format!("child_rec<{}>", self.types[content as usize].name)
         };
         if let Some(nr) = self.names.get(&name) {
             *nr
@@ -2054,7 +2054,7 @@ impl Stores {
                 res += "]";
             }
         } else {
-            write!(res, "{:?}", &typedef.parts).unwrap();
+            write!(res, "{:?}", typedef.parts).unwrap();
             if !typedef.keys.is_empty() {
                 res += " keys [";
                 for k in &typedef.keys {
