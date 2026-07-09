@@ -1,0 +1,8 @@
+// C2: mixed-width fields (i32/i16/u8/integer). Different record size/layout.
+#cwd
+struct M { a: i32, b: i16, c: u8, d: integer }
+fn main() {
+  { f = file("wr_c2.bin"); f#format = LittleEndian; f.set_file_size(0); p = M{a:1,b:2,c:3,d:4}; f += p; f.sync(); }
+  { f = file("wr_c2.bin"); f#format = LittleEndian; q = f#read as M; println("{q.a}"); }
+  delete("wr_c2.bin");
+}

@@ -1,0 +1,11 @@
+// A4: a struct-returning CALL before the read (the fn-return move path), then a
+// read. Does a preceding move-delivered struct trigger the slot inheritance?
+#cwd
+struct P { x: integer, y: integer }
+fn mk(v: integer) -> P { P{x:v, y:v} }
+fn main() {
+  { g = mk(9); println("{g.x}"); }
+  { f = file("wr_a4.bin"); f#format = LittleEndian; f.set_file_size(0); p = P{x:5,y:6}; f += p; f.sync(); }
+  { f = file("wr_a4.bin"); f#format = LittleEndian; q = f#read as P; println("{q.x}"); }
+  delete("wr_a4.bin");
+}

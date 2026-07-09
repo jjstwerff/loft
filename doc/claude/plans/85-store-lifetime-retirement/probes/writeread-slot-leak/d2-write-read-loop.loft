@@ -1,0 +1,11 @@
+// D2: write+read each iteration in a loop. Leaks accumulate per iteration?
+#cwd
+struct P { x: integer, y: integer }
+fn main() {
+  for i in 0..5 {
+    { f = file("wr_d2.bin"); f#format = LittleEndian; f.set_file_size(0); p = P{x:i,y:i}; f += p; f.sync(); }
+    { f = file("wr_d2.bin"); f#format = LittleEndian; q = f#read as P; assert(q.x == i, "d2"); }
+  }
+  delete("wr_d2.bin");
+  println("done");
+}

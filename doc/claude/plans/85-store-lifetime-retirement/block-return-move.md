@@ -167,18 +167,28 @@ one code path. Suite re-run green (2721/2721) with the switch gone. Regression
 ## `p9` — separate write+read struct residual (OPEN, its own cluster)
 
 `f += s; f#read as S` in one program leaks the read buffer on **interp only**
-(native clean), struct-specific, pre-existing. **Not** block-return-move: the
-read block-return in isolation is clean. Root cause (bytecode + free trace,
-cache-off): the read result `q` reuses the write `_wf` temp's stack slot
-`[80,92)`; that slot is NOT re-`InitRef`-ed at read-scope entry, so it enters
-holding `_wf`'s freed DbRef `#5`. The read emits `PutRef(q, #2)` then
-`FreeRef(q)`, but at runtime the free reclaims `#5` (already-freed → no-op) while
-the read record `#2` leaks — i.e. the `PutRef` value does not survive to the
-free on a reused-but-uninitialised slot. Needs runtime step-debugging (loft
-debugger); a naive write-path copy-skip CORRUPTS the write (`OpCreateStack` on a
-struct var mis-serialises), so it is deferred as its own write-path +
-slot-allocator ([SLOTS.md](../../SLOTS.md)) investigation. Probe:
-[`probes/block-return-move/p9-writeread-slot-leak.loft`](probes/block-return-move/p9-writeread-slot-leak.loft).
+(native clean), struct-specific, pre-existing. **Not** block-return-move (the
+read block-return in isolation is clean). A 13-probe boundary matrix —
+[`probes/writeread-slot-leak/`](probes/writeread-slot-leak/) — pins it and
+**refuted** my first root-cause:
+
+- **Real boundary:** one leaked record **per struct read**, iff a struct write
+  ran earlier. Independent of read type, of any use of the result (leaks with
+  NO use — `b2`), of call-vs-non-call use, and of surrounding live locals
+  (`e1`). Scales per read (`d1`=2, `d2`=5).
+- **Refuted:** the earlier "`q` reuses `_wf`'s slot; the `PutRef` value fails to
+  survive the `println` call" story is WRONG — `b2` leaks with no use/no call
+  and `e1` leaks with extra live locals. The defect is the **read buffer**
+  (`_read_1`'s store) not being freed once a write has run, NOT a consumer-slot
+  revert. Restart the investigation at the read-buffer free conditioned on a
+  prior write.
+- **Two more interp-only bugs the matrix surfaced** (same neighbourhood): `a3`
+  inline-literal struct write corrupts on interp (`f += P{…}` reads back `16`
+  vs `5` native); `c1` one-field struct read returns `null` on interp (vs `42`).
+
+Deferred to its own focused investigation (loft debugger on the read-buffer
+free); a naive write-path fix CORRUPTS the write, so it is not rushed. See the
+matrix README for full analysis.
 
 ## Acceptance
 

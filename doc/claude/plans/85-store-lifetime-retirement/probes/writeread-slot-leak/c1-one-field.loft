@@ -1,0 +1,8 @@
+// C1: single-field struct. Does the slot collision depend on record size?
+#cwd
+struct One { v: integer }
+fn main() {
+  { f = file("wr_c1.bin"); f#format = LittleEndian; f.set_file_size(0); p = One{v:42}; f += p; f.sync(); }
+  { f = file("wr_c1.bin"); f#format = LittleEndian; q = f#read as One; println("{q.v}"); }
+  delete("wr_c1.bin");
+}

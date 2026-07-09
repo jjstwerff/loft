@@ -1,0 +1,10 @@
+// B3: read, then use q via a NON-call (plain field read into a local) — no
+// println/call between the read and scope exit. Isolates whether it is the CALL
+// (frame push) that reverts q's slot.
+#cwd
+struct P { x: integer, y: integer }
+fn main() {
+  { f = file("wr_b3.bin"); f#format = LittleEndian; f.set_file_size(0); p = P{x:5,y:6}; f += p; f.sync(); }
+  { f = file("wr_b3.bin"); f#format = LittleEndian; q = f#read as P; n = q.x + q.y; assert(n == 11, "b3"); }
+  delete("wr_b3.bin");
+}

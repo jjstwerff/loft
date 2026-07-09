@@ -1,0 +1,12 @@
+// E1: keep extra live locals around the read so q does NOT reuse the write
+// temp's slot. If clean, it PINS slot reuse as necessary for the leak.
+#cwd
+struct P { x: integer, y: integer }
+fn main() {
+  keep1 = P{x:100,y:200};
+  { f = file("wr_e1.bin"); f#format = LittleEndian; f.set_file_size(0); p = P{x:5,y:6}; f += p; f.sync(); }
+  { f = file("wr_e1.bin"); f#format = LittleEndian; q = f#read as P; println("{q.x}"); }
+  keep2 = P{x:300,y:400};
+  println("{keep1.x} {keep2.x}");
+  delete("wr_e1.bin");
+}

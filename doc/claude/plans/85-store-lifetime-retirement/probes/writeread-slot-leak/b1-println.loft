@@ -1,0 +1,9 @@
+// B1 = A1: read then println(q.x) — an interpolated-string CALL between the read
+// and scope exit (the shape where q's slot reverts #2->#5).
+#cwd
+struct P { x: integer, y: integer }
+fn main() {
+  { f = file("wr_b1.bin"); f#format = LittleEndian; f.set_file_size(0); p = P{x:5,y:6}; f += p; f.sync(); }
+  { f = file("wr_b1.bin"); f#format = LittleEndian; q = f#read as P; println("{q.x}"); }
+  delete("wr_b1.bin");
+}
