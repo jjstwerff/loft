@@ -574,6 +574,35 @@ needs its own probe + the enum-return-buffer free to free embedded texts.
 B2 ~13 (enum return-delivery embedded-text free).  B1 (~2 in the harness, but the
 whole bound-payload class) is closed.
 
+### Session 6 (2026-07-09) — B2 is NOT distinct: it IS Class A (owned-text return)
+
+Traced B2 to the ROOT and it collapses into Class A.  The trigger is not enums,
+not composites, not `json_parse` — it is: **a text-returning fn that has ANY
+pre-return free hoists its tail into an OWNED `__ret_N` temp** (scopes.rs
+`insert_free`, the B5-L3 text branch), and that owned text is returned
+`skip_free` (line ~3401) — the caller copies-and-leaks it.  Verified minimally:
+`fn f() -> text { s = "local"; "o" }` leaks (the local `s` forces the hoist →
+`__ret_1 = "o"` owned copy); `fn f() -> text { "o" }` (no free) returns the
+literal directly and is clean.  Isolation showed it is independent of the tail
+being a literal / native / view / call and of the composite type — it is the
+`__ret_N` hoist minting an owned text whenever frees must run first.
+
+So **B2 = Class A**: an owned-text return not delivered through a caller `&text`
+buffer.  The `skip_free` on `__ret_N` (comment: "leaks for the duration of the
+caller's read, which is fine") is literally the leak — the caller copies but no
+one frees the temp.  The real fix is the ONE promotion (owned-text return →
+caller buffer), keyed on "returns owned text" (which the hoist makes true), NOT
+on tail shape — the same pass-1 signature pre-pass Class A needs.
+
+**Sub-fix landed — the LITERAL tail (`literal_return_with_free`).**  A plain
+`Value::Text` tail reads none of the freed locals and has no side effects, so the
+hoist is unnecessary: `frees; return "lit"` directly (fast path), no owned temp.
+Extended the `insert_free` fast-path guard to include `Value::Text(_)`.  Fixes
+the direct-literal-with-freeable-local shape (0 current harness tests — the p54
+cases are `match`→`If`-of-literals, whose cond reads the freed subject so the
+hoist is REQUIRED for ordering; only promotion/caller-free fixes those).  A
+correct, provably-safe subset; the bulk of B2/Class A awaits the promotion.
+
 ## Session 3 (2026-07-09) — the analysis FRAMEWORK, and wiring it in
 
 The 3a/3b/3c stacking (five per-shape predicates) hid a shared latent bug: each

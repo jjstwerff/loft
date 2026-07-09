@@ -3338,7 +3338,17 @@ impl Scopes {
             && matches!(expr, Value::Var(v)
                 if matches!(function.tp(*v), Type::RefVar(inner)
                     if !matches!(inner.base(), Type::Text(_))));
-        if ls.is_empty() || (matches!(expr, Value::Null | Value::Var(_)) && !var_is_place_ref) {
+        // @PLN85 Class B2 — a plain text LITERAL tail reads none of the
+        // to-be-freed locals and has no side effects, so `ls (frees); return
+        // "lit"` is correct and copy-free.  The B5-L3 text hoist below would
+        // otherwise mint an OWNED `__ret_N = "lit"` copy (skip_free) that the
+        // caller consumes-and-leaks — the leak that appears whenever a
+        // text-returning fn with ANY freeable local returns a literal (the
+        // p54 match-of-literals / json-classify family).  Returning the literal
+        // directly is exactly what a fn with NO frees already emits.
+        if ls.is_empty()
+            || (matches!(expr, Value::Null | Value::Var(_) | Value::Text(_)) && !var_is_place_ref)
+        {
             if is_return && !expr_is_terminal {
                 ls.push(Value::Return(Box::new(expr.clone())));
             } else if matches!(expr, Value::Null) {
