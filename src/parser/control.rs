@@ -642,8 +642,9 @@ impl Parser {
             && context == "return from block"
             && matches!(result.base(), Type::Text(_))
             && (promote_view
-                || l.last()
-                    .is_some_and(|tail| self.native_text_call_tail(tail)))
+                || l.last().is_some_and(|tail| {
+                    self.native_text_call_tail(tail) || self.user_text_call_tail(tail)
+                }))
         {
             let tv = self.create_unique("__tret", &Type::Text(Deps::none()));
             if tv != u16::MAX {
@@ -5061,6 +5062,37 @@ impl Parser {
                     || crate::state::codegen::is_cdylib_text_call(def)
             }
             Value::Return(inner) => self.native_text_call_tail(inner),
+            _ => false,
+        }
+    }
+
+    /// @PLN85 Slice B — the tail is a USER fn CALL returning owned text
+    /// (`fn drive() -> text { inner() }`, `{ wrap(x) }`).  Like the native
+    /// tail it delivers a fresh owned text that the fn hands back as an owned
+    /// `__ret_N` COPY the caller consumes-and-leaks (1/call); binding it to
+    /// `__tret` promotes the return to a caller `&text` buffer, matching the
+    /// proven-clean `r = inner(); r` rebind (inner writes its buffer, the copy
+    /// lands straight in the caller's buffer, no owned temp).  Native text-dest
+    /// calls go through `native_text_call_tail`; this covers the rest — any
+    /// text-returning call, EXCLUDING an `OpGetText`/field-view (Slice A) and
+    /// the store getters that only VIEW (never allocate) an existing text.
+    fn user_text_call_tail(&self, tail: &Value) -> bool {
+        match tail.unspan() {
+            Value::Return(inner) => self.user_text_call_tail(inner),
+            Value::Call(op, _) => {
+                if self.native_text_call_tail(tail) {
+                    return false; // handled by the native gate
+                }
+                let def = self.data.def(*op);
+                // A store getter (`OpGetText`/`OpGetVector`/`OpGetField`) VIEWS
+                // an existing text — not a fresh-owned delivery; Slice A handles
+                // the local-composite view, an arg view stays a borrow.
+                let name = def.name();
+                if name.starts_with("OpGet") {
+                    return false;
+                }
+                matches!(def.returned().base(), Type::Text(_))
+            }
             _ => false,
         }
     }
