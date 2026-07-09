@@ -34,18 +34,24 @@ verdict). All green:
 
 `program_source` **ships with poison ON** (`fuzz_one_source` →
 `classify_source_with(.., true)`). Under poison, the seed corpus is **not**
-crash-clean: **F1-2** — the read-during-grow store use-after-free in
-`walk.loft` — SIGSEGVs (a real bug, but store-lifetime, @PLN85's remit, not F1's
-front-end one). So an OSS-Fuzz run of `program_source` with poison would crash
-on a seed immediately and read as a broken target until @PLN85 lands.
+crash-clean: **F1-2** — the read-during-grow use-after-free in `walk.loft` —
+faults (poison-detected on interp; the in-process oracle SIGSEGVs). Verified on
+`main`: `LOFT_POISON=1 loft walk.loft` flips it from correct (`TREE
+visited=5 sum=15`, exit 0) to a poison fault (exit 1). Poison-off, both backends
+are correct — the interp/native wrong-result divergence the file's header
+documents is **already fixed**; only the "correct-by-luck" stale read remains.
 
-This is why the gate distinguishes configuration:
+**This is NOT gated on @PLN85** — that plan (retire the store-lifetime class) is
+**CLOSED** (`status:finished`, 2026-07-09). F1-2 is therefore an **untracked
+residual** that survived @PLN85's "closed by construction" claim, and exactly
+what its standing `LOFT_POISON` instrument is meant to catch. It must be **filed
+or fixed**, not waited on.
 
 | Target | Poison | Crash-clean? | OSS-Fuzz readiness |
 |---|---|---|---|
 | `program_keyed` | on | **yes** (F2.6: 1500 clean) | **ready** |
 | `program_source` | **off** | **yes** (F1.3 replay green) | **ready** if shipped poison-off |
-| `program_source` | on | **no** — F1-2 aborts on `walk.loft` | **gated on @PLN85** (store-UAF class) |
+| `program_source` | on | **no** — F1-2 poison fault on `walk.loft` | **gated on F1-2** (file/fix it) |
 | `program_ownership` | on | assumed (shipped + triaged under @PLN85) | re-confirm before submit |
 
 ## Recommendation for F5.1 (the onboarding shape)
@@ -73,8 +79,9 @@ This is why the gate distinguishes configuration:
    toolchain and run `cargo +nightly fuzz run program_keyed` /
    `program_source` for a window with no new crash. (This is the F1.4 / F2.5
    "-run" residual — F5 depends on it.)
-2. **Resolve the poison policy for `program_source`** given F1-2 (ship
-   poison-off, or wait for @PLN85).
+2. **Resolve F1-2** — file it (a store-lifetime residual reproducing on `main`;
+   @PLN85 is closed, so this is not a wait) or fix it — then either ship
+   `program_source` poison-off in the meantime, or flip it on once F1-2 clears.
 
 `program_keyed` (poison on) is the one target that clears the gate on today's
 evidence. F5.1 may proceed for it once a sustained run confirms; the rest is
