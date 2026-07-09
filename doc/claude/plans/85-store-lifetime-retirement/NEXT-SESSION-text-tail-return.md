@@ -7,6 +7,26 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 One-screen handoff. Full detail: [text-tail-return-leak.md](text-tail-return-leak.md).
 
+## Session 2 update (2026-07-09) — 42 → 22, promotable-tail family DONE
+
+Branch `mac-work`, **rebased on `origin/main`** (`606804ae`, #540). 4 new commits
+(`09354f3a` 3a, `b1e4b175`+`4bd1ae97` 3b, `55352db5` 3c) — NOT pushed (awaiting
+user go-ahead). Full suite green (native/exit_codes fails were rustc load-contention,
+all pass in isolation); `issues` 749/0; matrix clean except `concat_suffix` +
+`local_dropped`.
+
+The 3a/3b/3c slices closed every PROMOTABLE-TEXT-TAIL shape (view-of-local-composite,
+user-fn call, if/match arm) via the 2d `__tret` bind. The **remaining 22 are FIVE
+UNRELATED subsystems** — see text-tail-return-leak.md § "The remaining 22". Order by
+leverage: (4) native JSON/stdlib internal append (~6 tests, fill.rs — trace
+`local_dropped`), (2) tuple-of-text return (~5, `__ret_text_N` hoist), (1)
+generic-dispatch `to_text()` buffer (~3), (3) fn-ref ABI (~4), (5) singletons (~3).
+Each needs its OWN probe + matrix + both-backend pass (the matrix + oracle in
+`probes/text-tail-return/` are ready; add a cell per subsystem before fixing).
+
+---
+## (original handoff below — attempts 2/2d, still valid context)
+
 ## Branch / state (2026-07-09)
 
 - Branch **`mac-work`**, fully pushed (`origin/mac-work` = `3c8eb408`), tree clean.

@@ -444,10 +444,72 @@ pushed; this composite/view-return family is the well-scoped follow-on arc, trac
 here with the probe (`probes/text-tail-return/`) and the VALUE+LEAK+UAF oracle ready
 to guard it.
 
-## Why not fixed in the surfacing session
+## Session 2 (2026-07-09, mac-work rebased on origin/main) — 42 → 22 via 3 promotion slices
+
+The composite/view arc turned out to be **two** things: a genuine promotable-tail
+family (fixed here) and a residue of FIVE unrelated subsystems (below). Harness
+oracle (per-test, runtime-owner frame, excl `ir_read`): **42 → 22 leakers.**
+
+Landed (each: proven working bytecode = the `r = <expr>; r` rebind, VALUE+LEAK+UAF
+matrix clean on both backends, `issues` 749/0, full suite green):
+
+- **3a** (`09354f3a`) — text field/index VIEW of a LOCAL composite (`a.v.0`,
+  `s.name`, `d.ts[0]`, generic `v[0]`). The whole **p197** group + the
+  `p54_struct_enum`/`p54_b2` match shapes. Gate: `text_view_root` +
+  `var_built_in_block` (promote only when the view's root composite is CONSTRUCTED
+  in this body — an `OpDatabase`/`Set` here — so a genuine caller-owned ARGUMENT
+  view stays a clean borrow; `is_argument` can't tell them apart because an
+  NRVO-promoted local also reads as an argument).
+- **3b** (`b1e4b175` + refinement `4bd1ae97`) — USER-fn text-call tails
+  (`{ inner() }`, `{ wrap(x) }`): **forward_to_json**, **nested_consume**. Gate:
+  `user_text_call_tail`, fired ONLY for an OWNED delivery (return borrows nothing
+  or only HIDDEN buffer attrs). The refinement fixed **p281** — a forward-BORROW
+  of an argument (`second(s) -> text["s"]`) must NOT promote (codegen "Too few
+  parameters"). Also re-goldened `introspect_show_types_renders_deps` (`n_first`
+  now `text["__ref_1", "a"]` — buffer + host).
+- **3c** (`55352db5`) — `if`/`match`-arm OWNED-text tails (**if_arm_native**; match
+  lowers to nested `If`). Gate: `if_tail_delivers_owned_text` (promote only when an
+  arm delivers a native/user text call; pure literal/borrow `if`s stay borrows).
+
+All three reuse the 2d flat pass-2-only `__tret` bind (`parse_block`): bind the tail
+to a synthetic local so `text_return` promotes it to a hidden `&text` caller buffer.
+
+### The remaining 22 — FIVE distinct subsystems (NOT promotable-tail; take each fresh)
+
+Diagnosed with evidence this session; none is a text-return-tail shape, so the
+`__tret` promotion does not apply. Each needs its own probe + boundary matrix +
+both-backend pass.
+
+1. **Generic-dispatch work-buffer** (`plan17_b`, `plan17_printable_integer`,
+   `p243`). Isolated: the DIRECT `s.to_uppercase() + "!"` is CLEAN, but the GENERIC
+   `x.to_text() + "!"` (`<T: Printable>`) LEAKS 1/call, and rebinding the native
+   (`t = x.to_text(); t + "!"`) still leaks. So the leak is the bounded-generic
+   `to_text()` monomorph's result buffer — the interface/monomorph dispatch path,
+   not concat or the tail.
+2. **Tuple-of-text return delivery** (`p329_*` ×3, `p330_*` ×2). The fn returns a
+   `(text, text, text)` (fresh native/literal elements); the caller extracts `.N`.
+   Return type is a TUPLE, not `Text` — outside the tail gate. The `__ret_text_N`
+   hoist (scopes.rs @P329) neighbourhood; needs tuple-element buffer promotion.
+3. **Text FN-REF dispatch** (`p227_text_fn_ref_*` ×4, local/capture/struct-field).
+   The @P387 adaptive hidden-buffer fn-ref ABI; promotion here must keep the fn-ref
+   call ABI uniform (the guard the 2b/2d notes flag).
+4. **Native JSON / stdlib internal append** (`p54_match_on_jsonvalue`,
+   `p54_parse_primitive_string`, `p54_extractor_as_text_wrong_kind`,
+   `p54_struct_enum_extractors_spec`, `q4_json_string_round_trips`, `b7`). Traced
+   `local_dropped` (`j = u.to_json(); "kept"` — `OpFreeText(j)` IS emitted yet it
+   leaks): owner `append_text ← execute_argv`, i.e. INSIDE `struct_to_json` /
+   `json_parse` (fill.rs), not the return delivery. A native-stdlib impl leak.
+5. **Assorted singletons** (`n3_reference_assignment_emits_copy_record`,
+   `issue_437_explicit_vector_return_then_append`, `p241_singleton_text`).
+
+The matrix (`probes/text-tail-return/`) still flags `concat_suffix` (= subsystem 1,
+generic) and `local_dropped` (= subsystem 4, native JSON) as LEAK — they are the
+in-matrix representatives of the two biggest remaining subsystems.
+
+## Why not fixed in the surfacing session (historical)
 
 The surfacing session was on macOS-ARM and had done the full diagnosis; the edit
 touches the text-return-delivery classifier that drives EVERY text return, so it
 needs its own careful both-backends + full-suite pass rather than a tail-end patch
-(the loft-codegen stop-conditions). Everything needed to execute it cleanly is
-above.
+(the loft-codegen stop-conditions). Session 2 executed that for the promotable-tail
+family (3a/3b/3c above).
