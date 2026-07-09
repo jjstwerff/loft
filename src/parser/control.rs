@@ -625,28 +625,10 @@ impl Parser {
         // (accidentally pass-2-only) `to_json` case already did.  This mirrors
         // `wrap_value_text_dest`, also `!first_pass`; fn-ref call sites stay adaptive
         // (@P387).
-        // @PLN85 composite/view-return text — a text field/index VIEW of a
-        // LOCAL composite built in this body (`a.v.0`, `d.ts[0]`) leaks: the
-        // composite is freed at scope exit but its returned embedded text is
-        // exempted and the caller COPIES it.  Promote it exactly like the
-        // native-call tail (bind to `__tret`).  `var_built_in_block` gates OUT
-        // genuine caller-owned arguments (`fn f(b) { b.name }`), whose borrow
-        // return is freed by the caller and is already clean.
-        let promote_view = !self.first_pass
-            && context == "return from block"
-            && matches!(result.base(), Type::Text(_))
-            && l.last()
-                .and_then(|t| self.text_view_root(t))
-                .is_some_and(|root| self.var_built_in_block(&l, root));
         if !self.first_pass
             && context == "return from block"
             && matches!(result.base(), Type::Text(_))
-            && (promote_view
-                || l.last().is_some_and(|tail| {
-                    self.native_text_call_tail(tail)
-                        || self.user_text_call_tail(tail)
-                        || self.if_tail_delivers_owned_text(tail)
-                }))
+            && l.last().is_some_and(|tail| self.native_text_call_tail(tail))
         {
             let tv = self.create_unique("__tret", &Type::Text(Deps::none()));
             if tv != u16::MAX {
@@ -5064,142 +5046,6 @@ impl Parser {
                     || crate::state::codegen::is_cdylib_text_call(def)
             }
             Value::Return(inner) => self.native_text_call_tail(inner),
-            _ => false,
-        }
-    }
-
-    /// @PLN85 Slice B — the tail is a USER fn CALL that delivers OWNED text
-    /// (`fn drive() -> text { inner() }`, `{ wrap(x) }`).  Such a call hands
-    /// its text back as an owned `__ret_N` COPY the caller consumes-and-leaks
-    /// (1/call); binding it to `__tret` promotes the return to a caller
-    /// `&text` buffer, matching the proven-clean `r = inner(); r` rebind (the
-    /// callee writes its buffer, the copy lands straight in the caller's
-    /// buffer, no owned temp).  Native text-dest calls go through
-    /// `native_text_call_tail`; this covers the rest.
-    ///
-    /// Fires ONLY for an OWNED delivery — the callee's return borrows nothing,
-    /// or borrows only HIDDEN buffer attributes (caller-allocated `&text`
-    /// out-params).  A call that returns a borrow of a VISIBLE argument
-    /// (`fn second(s: text) -> text["s"] { s }`) is a genuine forward-borrow:
-    /// the caller passes it through with no owned temp and no leak, so
-    /// promoting it double-delivers and breaks the forward (p281).  Excludes
-    /// `OpGet*` store getters, which VIEW an existing text (Slice A / arg view).
-    fn user_text_call_tail(&self, tail: &Value) -> bool {
-        match tail.unspan() {
-            Value::Return(inner) => self.user_text_call_tail(inner),
-            Value::Call(op, _) => {
-                if self.native_text_call_tail(tail) {
-                    return false; // handled by the native gate
-                }
-                let def = self.data.def(*op);
-                if def.name().starts_with("OpGet") {
-                    return false;
-                }
-                if !matches!(def.returned().base(), Type::Text(_)) {
-                    return false;
-                }
-                let attrs = def.attributes();
-                def.returned()
-                    .depend()
-                    .iter()
-                    .all(|&d| (d as usize) < attrs.len() && attrs[d as usize].hidden)
-            }
-            _ => false,
-        }
-    }
-
-    /// @PLN85 Slice C — the text tail is an `if`/`match` (match lowers to
-    /// nested `If`) at least one of whose arms DELIVERS a fresh owned text (a
-    /// native or user text-dest call).  Such a branch return builds the owned
-    /// text in an arm and hands it back as an owned `__ret_N` copy the caller
-    /// leaks; binding the whole `if` to `__tret` promotes the return to a
-    /// caller `&text` buffer so every arm writes INTO it — the proven-clean
-    /// `r = if c { u.to_json() } else { "x" }; r` rebind.  Requires an
-    /// owned-text arm so a pure literal/arg-borrow `if` (already clean, and a
-    /// borrow the caller forwards) is left alone.
-    fn if_tail_delivers_owned_text(&self, tail: &Value) -> bool {
-        match tail.unspan() {
-            Value::Return(inner) | Value::Drop(inner) => self.if_tail_delivers_owned_text(inner),
-            Value::Block(bl) => bl
-                .operators
-                .last()
-                .is_some_and(|t| self.if_tail_delivers_owned_text(t)),
-            Value::Insert(ops) => ops
-                .last()
-                .is_some_and(|t| self.if_tail_delivers_owned_text(t)),
-            Value::If(_, then, els) => {
-                self.arm_delivers_owned_text(then) || self.arm_delivers_owned_text(els)
-            }
-            _ => false,
-        }
-    }
-
-    /// True when an `if`/`match` ARM's tail delivers a fresh owned text — a
-    /// native or user text-dest call, or a nested `if` that does.  The signal
-    /// that a branch return is the leaking owned-`__ret_N` shape (§
-    /// `if_tail_delivers_owned_text`).
-    fn arm_delivers_owned_text(&self, arm: &Value) -> bool {
-        match arm.unspan() {
-            Value::Block(bl) => bl
-                .operators
-                .last()
-                .is_some_and(|t| self.arm_delivers_owned_text(t)),
-            Value::Insert(ops) => ops.last().is_some_and(|t| self.arm_delivers_owned_text(t)),
-            Value::If(_, t, e) => {
-                self.arm_delivers_owned_text(t) || self.arm_delivers_owned_text(e)
-            }
-            other => self.native_text_call_tail(other) || self.user_text_call_tail(other),
-        }
-    }
-
-    /// The root local var of a TEXT field/index view tail (`OpGetText` over a
-    /// `OpGetText`/`OpGetVector`/`OpGetField` chain), or `None` if the tail is
-    /// not such a view.  Peels `Return`.  The root is NOT filtered by
-    /// `is_argument` here — a genuine caller-owned parameter and an
-    /// NRVO-promoted LOCAL composite both read as arguments at this point; the
-    /// gate distinguishes them with `var_built_in_block`.
-    fn text_view_root(&self, tail: &Value) -> Option<u16> {
-        let get_text = self.data.def_nr("OpGetText");
-        let get_vec = self.data.def_nr("OpGetVector");
-        let get_field = self.data.def_nr("OpGetField");
-        fn root_var(v: &Value, gt: u32, gv: u32, gf: u32) -> Option<u16> {
-            match v.unspan() {
-                Value::Var(x) => Some(*x),
-                Value::Call(d, args) if *d == gt || *d == gv || *d == gf => {
-                    args.first().and_then(|a| root_var(a, gt, gv, gf))
-                }
-                _ => None,
-            }
-        }
-        match tail.unspan() {
-            Value::Return(inner) => self.text_view_root(inner),
-            Value::Call(d, _) if *d == get_text => root_var(tail, get_text, get_vec, get_field),
-            _ => None,
-        }
-    }
-
-    /// True when `var` is CONSTRUCTED (born) inside this block — the target of
-    /// a `Set` or an `OpDatabase(var, …)` construction anywhere in `ops`
-    /// (recursively through `Block`/`Insert`/`Span`).  Distinguishes an
-    /// NRVO-promoted LOCAL composite (built here → its embedded texts leak on a
-    /// view-return) from a genuine caller-owned parameter (born outside → its
-    /// view-return borrow is freed by the caller, clean).
-    fn var_built_in_block(&self, ops: &[Value], var: u16) -> bool {
-        let db = self.data.def_nr("OpDatabase");
-        ops.iter().any(|op| self.op_builds_var(op, var, db))
-    }
-
-    fn op_builds_var(&self, op: &Value, var: u16, db: u32) -> bool {
-        match op.unspan() {
-            Value::Set(v, _) => *v == var,
-            // `OpDatabase(Var(var), kt)` allocates a fresh composite record for
-            // `var` — the construction that makes it a LOCAL born here.
-            Value::Call(d, args) if *d == db => {
-                matches!(args.first().map(Value::unspan), Some(Value::Var(v)) if *v == var)
-            }
-            Value::Block(bl) => self.var_built_in_block(&bl.operators, var),
-            Value::Insert(ops) => self.var_built_in_block(ops, var),
-            Value::Call(_, args) => args.iter().any(|a| self.op_builds_var(a, var, db)),
             _ => false,
         }
     }

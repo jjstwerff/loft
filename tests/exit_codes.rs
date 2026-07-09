@@ -924,17 +924,12 @@ fn introspect_show_types_renders_deps() {
         "expected types section header; got {stdout}"
     );
     // The fix for P197 propagates the host (`a`) as a dep through
-    // tuple-element text reads to the function's return type.  @PLN85 3a then
-    // promotes this leaking local-composite VIEW return to a hidden `&text`
-    // caller buffer (the field read copies straight into the buffer, the
-    // composite is freed whole) — so the return now also carries the buffer's
-    // ref dep alongside the propagated host `a`.  If this assertion fails,
-    // either the P197 dep propagation (`Type::depending` / `parse_part`) or the
-    // 3a view-return promotion regressed.
+    // tuple-element text reads to the function's return type.
+    // If this assertion fails, the dep propagation in
+    // `Type::depending` / `parse_part` regressed.
     assert!(
-        stdout.contains("n_first -> text[\"__ref_1\", \"a\"]"),
-        "expected `n_first -> text[\"__ref_1\", \"a\"]` (P197 dep propagation + \
-         @PLN85 3a view-return buffer promotion); got {stdout}"
+        stdout.contains("n_first -> text[\"a\"]"),
+        "expected `n_first -> text[\"a\"]` (P197 dep propagation); got {stdout}"
     );
 }
 
