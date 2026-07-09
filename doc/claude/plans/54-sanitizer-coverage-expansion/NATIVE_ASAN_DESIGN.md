@@ -71,30 +71,59 @@ loft binary (built `RUSTFLAGS=-Zsanitizer=address cargo build --target
 x86_64-unknown-linux-gnu`, 870 `__asan` symbols) loads the stdlib and drives the
 mixed `datalib` path up to the cdylib build.
 
-**BLOCKED (well-localized):** the ASan cdylib build fails
-`E0463: can't find crate for curve25519_dalek_derive which loft depends on`.
-Root: libloft depends on a **proc-macro** (`curve25519_dalek_derive`); proc-macros
-are HOST artifacts, so under a cross-target ASan build they live in
-`target/release/deps` (host) while the cdylib's `-L dependency` points at the ASan
-target deps (`target/x86_64-unknown-linux-gnu/release/deps`), which lack them.
-This is the same curve25519-proc-macro class the interpreter `asan` job already
-sidesteps (it drops doctests for the identical E0463).
+**BLOCKED — first blocker E0463; the "simple fix" was PROBED and FALSIFIED.**
+The ASan cdylib build fails `E0463: can't find crate for curve25519_dalek_derive
+which loft depends on`. Immediate root: the ASan loft binary is a **cross-target**
+build (`--target x86_64-unknown-linux-gnu`, needed so host proc-macros are NOT
+sanitized), which splits libloft's deps — normal rlibs to
+`target/x86_64-.../release/deps` (where the cdylib's `-L` points), but **proc-macros
+are HOST artifacts** in `target/release/deps`. libloft transitively needs **~6
+proc-macros** (`curve25519_dalek_derive`, `displaydoc`, `thiserror_impl`,
+`yoke_derive`, `zerofrom_derive`, `zerovec_derive`).
 
-**The fix (routed, not done):** add the host `deps/` dir to the ASan cdylib
-build's `-L dependency` search path (or resolve the proc-macro rlib explicitly),
-so the cross-target build finds host proc-macros. Then the S9 CI job = build an
-ASan loft binary (with the `default/` stdlib symlink the non-standard target dir
-needs) + run the `datalib` mixed corpus under `LOFT_NATIVE_ASAN=1`, asserting a
-cross-boundary UAF/OOB is caught (positive control: inject an OOB store read into
-the cdylib source). Until the proc-macro `-L` fix lands, the S9 gate would go red
-on E0463, so it is NOT wired into CI yet.
+Three probes (design-protocol — the clean fix breaks at the case the prose skipped):
+1. **Add the host `deps/` to `-L`** (the fix this doc originally named) — **FALSIFIED.**
+   Clears E0463 but drags the whole host graph in: `#[alloc_error_handler] in std
+   conflicts` (two stds) + `mixing -Zsanitizer will cause an ABI mismatch` (×many).
+   The host `deps/` carries a non-ASan std + non-ASan rlibs. WRONG.
+2. **Explicit `--extern <proc-macro>=<host .so>` (no host `-L`)** — avoids the
+   double-std, but needs the VERSION-matched `.so` (there are 4 `curve25519_dalek_derive`
+   hashes) for EACH of the ~6 proc-macros — a version-resolution whack-a-mole like
+   `loft_ffi_for_libloft`. Deterministic but fiddly + fragile.
+3. **STABLE host (complete-deps libloft) + `LOFT_NATIVE_ASAN`** — **COMPILES CLEAN,
+   ran correct output.** The stable `target/release` build has ALL deps incl.
+   proc-macros, so an ASan cdylib links it with no E0463. BUT the stable host is not
+   ASan, so the shared store it allocates is not ASan-tracked → no cross-boundary
+   coverage. It isolates the problem to *the cross-target deps split*, not the
+   cdylib-ASan itself.
+
+**The concrete design the probes point to (candidate, NOT yet validated):** under
+`LOFT_NATIVE_ASAN`, make `build_shared_cdylib` link the **complete-deps (stable
+`target/release`) libloft** rather than the running ASan binary's cross-target
+libloft, while still compiling the cdylib with `-Zsanitizer=address` and loading it
+into the **ASan host** (whose malloc is intercepted, so the shared store IS
+ASan-tracked). This is sound only if two facts hold — both need validation:
+(a) ASan tolerates the cdylib linking a non-ASan libloft (S6 shows it does for the
+binary; re-confirm for a cdylib); (b) a cdylib carrying a *stable* libloft copy,
+dlopen'd into an ASan host carrying an *ASan* libloft copy, shares the `*mut Stores`
+correctly — the `Store` struct layout is ASan-invariant (redzones wrap allocations,
+not struct fields), so this should hold, but it is unproven. The alternative is
+probe-2's per-proc-macro version-matched `--extern`.
+
+**Status: NOT a validated concrete design — a probe-grounded candidate.** The S9
+CI job (ASan loft binary + `default/` symlink + `datalib` mixed corpus + an
+injected-OOB positive control) is deferred until one of the two approaches is
+built and validated end-to-end. Estimated effort: the harder, unvalidated part of
+S6+S9 — a focused session, not a one-liner.
 
 ## Done criteria
 
 - **S6:** ✅ `native-asan` job green; curated `--native` corpus ASan-clean;
   positive control fires.
-- **S9:** cdylib injection landed; end-to-end blocked on the proc-macro `-L` fix
-  above; CI job deferred until that lands (documented, not silent).
+- **S9:** cdylib `-Zsanitizer=address` injection landed. End-to-end NOT designed
+  to a validated point — the "host `deps/` on `-L`" fix was probed and falsified;
+  the probe-grounded candidate (link the complete-deps stable libloft, ASan the
+  cdylib, load into the ASan host) is unvalidated. CI job deferred.
 
 ## See also
 

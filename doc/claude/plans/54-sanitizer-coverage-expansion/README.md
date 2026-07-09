@@ -50,13 +50,14 @@ right now.
   curated corpus + positive control; nightly `native-asan` job in `miri.yml`.
   ASan tolerates the uninstrumented libloft (no `-Zbuild-std`). See
   [NATIVE_ASAN_DESIGN.md](NATIVE_ASAN_DESIGN.md).
-- **S9 (cdylib mixed-boundary ASan) — mechanism landed, end-to-end BLOCKED.** The
+- **S9 (cdylib mixed-boundary ASan) — mechanism landed; NO validated design yet.** The
   C71 path (an interpreted script sharing its `*mut Stores` with a compiled cdylib
   by raw pointer) is the one cross-boundary surface no in-process sanitizer sees.
   Cdylib injection shares S6's `LOFT_NATIVE_ASAN` gate; blocked on the
-  curve25519-proc-macro `E0463` in the cross-target ASan cdylib build (host
-  proc-macro not on the target `-L`). Fix + CI-job design in
-  [NATIVE_ASAN_DESIGN.md](NATIVE_ASAN_DESIGN.md).
+  curve25519-proc-macro `E0463` in the cross-target ASan cdylib build. The obvious
+  `-L host deps` fix was **probed + falsified** (double-std / ABI cascade); a
+  probe-grounded candidate exists but is unvalidated — the genuinely hard, unfinished
+  part of S6+S9. See [NATIVE_ASAN_DESIGN.md](NATIVE_ASAN_DESIGN.md) § S9.
 - **S4 (LSan triage) — unstarted.** CI pins `detect_leaks=0` explicitly pending
   the ~108 live-at-exit baseline triage; flipping to `=1` is the deliverable.
 - **S1 (macOS-ARM leg) — mostly moot.** `v2-validation.yml` already runs the
@@ -206,11 +207,13 @@ Opt-in, off by default.
   dep is a HOST artifact in `target/release/deps`, while the cross-target ASan
   cdylib's `-L dependency` points at `target/<triple>/release/deps` which lacks
   it (the same curve25519-proc-macro class the interpreter `asan` job sidesteps).
-  **Fix (routed):** add the host `deps/` to the ASan cdylib `-L` search, then wire
-  the S9 job (ASan loft binary + `default/` symlink + `datalib` mixed corpus).
-  Deferred from CI until that lands (would else go red on E0463).
-  **Acceptance:** S6 met; S9 = cross-boundary UAF/OOB on the shared store caught
-  once the proc-macro `-L` fix lands.
+  **The "host `deps/` on `-L`" fix was PROBED and FALSIFIED** (double-std +
+  `-Zsanitizer` ABI-mismatch cascade); libloft needs ~6 host proc-macros. The
+  probe-grounded candidate (link the complete-deps stable libloft, ASan the
+  cdylib, load into the ASan host) is unvalidated — see
+  [NATIVE_ASAN_DESIGN.md](NATIVE_ASAN_DESIGN.md) § S9. **Acceptance:** S6 met; S9
+  = cross-boundary UAF/OOB caught, once a validated cdylib-deps approach lands
+  (a focused session, not a one-liner).
 
 ### S5 — grow the Miri curated set (~½ day)
 
