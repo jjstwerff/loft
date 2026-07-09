@@ -416,6 +416,34 @@ largest, most-common slice + the safety bug, validated on both backends, no
 regression. Corrects an earlier mis-stated "113 → 0" (a grep bug — the `( N/M)`
 nextest progress prefix; the real count is 42).
 
+### The remaining 42 — a DISTINCT family (composite / view-return text), next arc
+
+Probing a representative (`p197`: `struct A { v: (text,text) }; fn first() -> text {
+a = A{...}; a.v.0 }`) shows these are NOT native-text-call tails — they are
+**view-returns of text embedded in a local composite** (`a.v.0` tuple-field,
+`d.ts[0]` vector-of-text field, `vec[0]` generic element). Leak: 1/call, owner
+`append_text` — the return delivery copies the viewed text and leaks (the source
+composite's embedded text, or the copy). 2d's native-call-tail promotion does not
+apply (the tail is a field/index access, not a `Call`).
+
+Grouped, the 42: `p54_struct_parse_*`/`struct_enum_*`/`match_*`/`b*` (JSON text into
+a struct field / match arm), `p197`/`p329`/`p330`/`p243` (text in a tuple / generic
+tuple element), `p227` (text FN-REF), `p235`/`p4d` (par text delivery), `plan17`
+(bounded generic method), `p241`/`q4_json_string`/`b7`/`issue_437`/`n3`/`p189c`/
+`p213`.
+
+This is the `materialize_view_return` neighbourhood — that path exists for
+`Reference` views (control.rs `materialize_view_return`, the #306 fix) and for
+tuples-of-text (the `__ret_text_N` hoist, scopes.rs @P329) but leaves the
+composite's SOURCE embedded texts unfreed. It is a **distinct, delicate arc** in the
+free-emission code PLN85's campaign hardened — several sub-slices (tuple / struct
+field / vector element / fn-ref / par), each needing its own probe + oracle + both-
+backend pass. It should be taken fresh, not rushed onto the tail-return fix: the
+tail-return class (the largest, most-common harness slice) + the UAF are done and
+pushed; this composite/view-return family is the well-scoped follow-on arc, tracked
+here with the probe (`probes/text-tail-return/`) and the VALUE+LEAK+UAF oracle ready
+to guard it.
+
 ## Why not fixed in the surfacing session
 
 The surfacing session was on macOS-ARM and had done the full diagnosis; the edit
