@@ -50,3 +50,10 @@ path = "fuzz_targets/program_source.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "program_keyed"
+path = "fuzz_targets/program_keyed.rs"
+test = false
+doc = false
+bench = false
