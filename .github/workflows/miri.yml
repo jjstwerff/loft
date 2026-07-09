@@ -20,6 +20,13 @@
 #     store-internal use-after-free class Miri/ASan/Valgrind all miss (loft's
 #     arena free is not a libc free()), and it runs on STABLE rustc with no
 #     sanitizer — so it sweeps the whole interpreter corpus at near-native speed.
+#   - tsan  — ThreadSanitizer (@PLN54 S2) over the `par`/`par_light` threading
+#     suites: the ONLY data-race coverage.  loft runs real rayon-pool workers
+#     over deep-copied per-worker Stores writing disjoint tiled ranges
+#     (THREADING.md); TSan confirms that isolation holds under real concurrency
+#     (Miri is single-threaded; ASan/guard are not race detectors).  Needs an
+#     instrumented std (-Zbuild-std), sanitizer flag target-scoped so host
+#     proc-macros stay clean.
 #   - toolchain-matrix — the suite under beta + nightly rustc, the early-warning
 #     for toolchain-sensitivity (the @P383 trigger).  Non-blocking: nightly/beta
 #     std/lint churn must never page us.
@@ -222,6 +229,59 @@ jobs:
           cargo nextest run --profile ci --release
           --lib --test issues --test wrap --test strings --test frame_vars
           -E 'not test(library_suite)'
+
+  tsan:
+    name: ThreadSanitizer (par/threading data-race gate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust nightly + rust-src
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Install mold
+        run: sudo apt-get update && sudo apt-get install -y mold
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ubuntu-tsan-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ubuntu-tsan-cargo-
+
+      # loft's ONLY data-race surface: `par`/`par_light` run worker closures on a
+      # rayon pool, each over a DEEP-COPIED per-worker `Stores` (clone_for_worker),
+      # writing NON-OVERLAPPING tiled ranges through a shared raw pointer, joined
+      # before the buffer is read (THREADING.md).  ThreadSanitizer is the only tool
+      # that checks that isolation holds under real concurrency (Miri runs
+      # stacked-borrows-off single-threaded; ASan/`stack_align_guard` are not race
+      # detectors) — a clean run CONFIRMS disjointness, any race is real (an
+      # overlapping slot, an unsynchronised shared write).  The `threading` +
+      # `threading_chars` suites drive real multi-worker `par` over the
+      # element-type × thread-count × worker-form matrix.
+      #
+      # TSan needs an INSTRUMENTED std (`-Zbuild-std`) — unlike ASan, linking the
+      # precompiled std ABI-mismatches (`mixing -Zsanitizer`).  The sanitizer flag
+      # is TARGET-scoped via `--config` (NOT global RUSTFLAGS), so host
+      # proc-macros / build scripts stay unsanitized — else the proc-macro dylibs
+      # the compiler dlopen's get `-Zsanitizer` and mismatch.  `cargo test` (not
+      # nextest): this exact incantation is what was validated locally, and a
+      # positive control (two threads racing one byte in loft's shared-pointer
+      # shape) confirmed TSan fires here, so a clean run is non-vacuous.
+      - name: TSan sweep (threading suites)
+        env:
+          TSAN_OPTIONS: 'halt_on_error=0'
+        run: >
+          cargo +nightly test -Zbuild-std
+          --target x86_64-unknown-linux-gnu
+          --config 'target.x86_64-unknown-linux-gnu.rustflags=["-Zsanitizer=thread"]'
+          --release --no-fail-fast --test threading --test threading_chars
 
   toolchain-matrix:
     name: Suite under ${{ matrix.toolchain }}

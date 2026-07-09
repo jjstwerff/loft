@@ -20,10 +20,13 @@ right now.
 
 **Ledger vs the CI reality (grepped 2026-07-09), highest-value first:**
 
-- **S2 (TSan) — unstarted; the biggest gap.** No `tsan` job exists anywhere.
-  loft runs real `par`/`par_light` parallel workloads under store-isolation
-  (THREADING.md) with **zero data-race coverage** (Miri runs
-  stacked-borrows-off; ASan/`stack_align_guard` are not race detectors).
+- **S2 (TSan) — ✅ DONE (2026-07-09).** The `tsan` job in `miri.yml` (nightly)
+  is loft's first data-race coverage. The `threading` + `threading_chars` suites
+  are **TSan-clean (0 races)** over real rayon-pool `par` workers, confirming the
+  store-isolation model (THREADING.md) holds under real concurrency; a throwaway
+  positive control (two threads racing one byte) confirmed TSan fires, so the
+  clean run is non-vacuous. Needs `-Zbuild-std` + target-scoped sanitizer flag
+  (§ Concrete steps S2).
 - **S3 (`LOFT_POISON`) — ✅ FULLY CLOSED (2026-07-09).** Both halves + the CI
   gate. **Store half:** poison-on-free (`keys.rs::poison_enabled` +
   `allocation.rs::free_named`, both backends); the 23-bug campaign drove
@@ -56,10 +59,11 @@ right now.
 - **S5 / S7 / S8 — low priority.** Grow the Miri curated set; add a nightly
   failure→issue notifier; MSan (heavy upstream setup).
 
-**Recommended entry point (updated 2026-07-09):** **S3 is FULLY CLOSED** (both
-poison halves + the CI gate). The next highest-value slice is **S2 (TSan)** — the
-only entirely-uncovered tool class over loft's real `par` workloads — then
-**S9 + S6** (ASan over a generated build, one shared mechanism).
+**Recommended entry point (updated 2026-07-09):** **S3 and S2 are DONE** (both
+poison halves + CI gate; TSan data-race gate clean). The next highest-value slice
+is **S9 + S6** (ASan over a generated build — one shared mechanism: thread
+`-Zsanitizer=address` into the rustc loft spawns for `--native` and the auto-built
+cdylib), then **S4** (LSan triage → `detect_leaks=1`).
 
 ## Goal
 
@@ -73,7 +77,7 @@ deferred with a one-line reason.
 | Item | Description | Exit criterion | Priority |
 |---|---|---|---|
 | **S1** | **macOS-ARM nightly leg** — add a macOS-ARM runner to `miri.yml`'s toolchain-matrix job (and, when affordable, to the Miri/ASan jobs).  @P383 — the founding incident — surfaced exclusively on macOS-ARM; a ubuntu-only nightly would not have caught it.  **State 2026-07-09: mostly moot** — `v2-validation.yml` already runs the full suite on macOS-ARM (macOS-latest); only the *sanitizer* (Miri/ASan) leg is still ubuntu-only, which is the narrow residual. | macOS-ARM *sanitizer* leg green on `main`; nightly badge reflects it. | Low (was Highest) |
-| **S2** | **ThreadSanitizer (TSan)** — add a `tsan` job to `miri.yml` running the parallel/threading suite under `RUSTFLAGS=-Zsanitizer=thread`.  loft executes real parallel workloads via `par`/`par_light` under a store-isolation model (THREADING.md); zero data-race coverage exists today (Miri runs stacked-borrows-off; ASan/guard are not race detectors). | TSan job green on `main`; any races found catalogued or fixed. | High |
+| **S2** | **ThreadSanitizer (TSan)** — add a `tsan` job to `miri.yml` running the parallel/threading suite under `RUSTFLAGS=-Zsanitizer=thread`.  loft executes real parallel workloads via `par`/`par_light` under a store-isolation model (THREADING.md); zero data-race coverage exists today (Miri runs stacked-borrows-off; ASan/guard are not race detectors).  **✅ DONE 2026-07-09: `tsan` job built + validated — `threading`+`threading_chars` TSan-CLEAN (0 races), positive control confirms it fires; needs -Zbuild-std + target-scoped flag (§ Concrete steps S2).** | TSan job green on `main`; any races found catalogued or fixed. | ✅ Done |
 | **S3** | **`LOFT_POISON=1` arena poison-on-free keystone — ✅ STORE-RECORD HALF BUILT** (2026-06-29, @PLN85 fuzz-proof: `keys.rs::poison_enabled` + the `allocation.rs::free_named` poison block; both backends — native calls the same `free_named`; positive control proven — exposed a SILENT use-after-free (`elem_accumulate-none`) the cross-backend differential alone missed. **✅ FULLY CLOSED (2026-07-09):** store half + nightly `poison` CI gate in `miri.yml` + stack half. Stack half = poison at **reserve** not free ([STACK_POISON_DESIGN.md](STACK_POISON_DESIGN.md)): `reserve_frame` sentinel-fills its provably-dead reserved region (interpreter-only); green-drive 1498/1498 + positive control fires. See § Concrete steps S3.3.) Fill freed store records + freed stack slots with a sentinel value on free, turning silent store-internal use-after-free (the @P377/@P378 dangling-`DbRef` family) into loud, deterministic garbage at the dangling read — on any rustc, no nightly.  This is the blind spot Miri/ASan/Valgrind all share (loft's arena "free" is not a libc `free()`). | `LOFT_POISON=1 cargo test` green; @P377/@P378-class reads produce sentinel-value panics rather than silent stale data.  **Also unblocks @PLN53 F4.** | ✅ Done |
 | **S4** | **Triage the LeakSanitizer baseline** (~108 live-at-exit allocations) — understand each allocation class, fix the avoidable leaks, and turn `detect_leaks=1` on in `miri.yml` for the corpus.  Cluster 5 was a leak; there are likely others. | ASan `detect_leaks=1` passes corpus-wide in CI, or each surviving allocation class has a one-line accepted-leak annotation. | Medium |
 | **S5** | **Grow the Miri curated set** beyond the current 4 tests (p213 + clusters 3/4/5) — add cluster 1/2 reproducers + representative text/fn-ref/par shapes so the Miri gate covers more of the hard-UB surface without unbearable runtime. | Miri curated set ≥ 8 tests; job runtime ≤ 20 min on ubuntu. | Medium |
@@ -137,19 +141,29 @@ the existing `asan` / `guard` job filters).
    (par/coroutine/`reenter_ret`); both complementary to `LOFT_UAF_GEN` (stale
    *DbRef* gen-stamping).
 
-### S2 — ThreadSanitizer (biggest new tool-class gap; ~1 day)
+### S2 — ThreadSanitizer — ✅ DONE 2026-07-09
 
-1. Add a `tsan` job to `miri.yml` (nightly, `dtolnay/rust-toolchain@nightly`,
-   explicit `--target x86_64-unknown-linux-gnu` so `RUSTFLAGS` instruments the
-   whole build): `RUSTFLAGS: '-Zsanitizer=thread'` running the parallel surface
-   — `cargo +nightly nextest run --profile ci --release --target
-   x86_64-unknown-linux-gnu --test threading --test threading_chars --test
-   parallel_rebase`.
-2. **Triage findings against the model:** loft's `par`/`par_light` gives each
-   worker DISJOINT stores (THREADING.md), so a TSan report on a shared store
-   write is a REAL race; a report inside the runtime's own bookkeeping is either
-   a real race or an accepted-and-annotated benign one. Catalogue or fix each.
-   **Acceptance:** `tsan` job green on `main`; every finding fixed or annotated.
+The `tsan` job in `miri.yml` (nightly) — loft's only data-race coverage. **Result:
+the `threading` (47) + `threading_chars` (49) suites are TSan-CLEAN — 0 race
+reports** over real rayon-pool `par`/`par_light` workers, confirming the
+isolation model (deep-copied per-worker `Stores` via `clone_for_worker`,
+non-overlapping tiled writes through a shared raw pointer, joined before the
+buffer is read — THREADING.md) holds under real concurrency.
+
+Non-vacuity proven: a throwaway positive control (two `std::thread`s racing one
+byte in loft's shared-raw-pointer shape) made TSan fire (exit 66), so the clean
+run is real coverage, not an inactive detector.
+
+Toolchain notes baked into the job (learned the hard way): TSan needs an
+**instrumented std** (`-Zbuild-std` + the `rust-src` component) — unlike ASan,
+linking the precompiled std ABI-mismatches (`mixing -Zsanitizer`); and the
+sanitizer flag must be **target-scoped** via
+`--config 'target.x86_64-unknown-linux-gnu.rustflags=["-Zsanitizer=thread"]'`
+(NOT global `RUSTFLAGS`), else host proc-macro dylibs get sanitized and mismatch.
+`cargo test` (not nextest) — the exact incantation validated locally.
+`parallel_rebase` is intentionally excluded: it is single-threaded unit tests of
+the rebase machinery (no `run_parallel_*` yet), so it adds no race coverage.
+**Acceptance MET:** job green; zero findings; positive control confirms it fires.
 
 ### S4 — LeakSanitizer triage (~1 day; unblocks a stricter ASan)
 
