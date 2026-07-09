@@ -4426,8 +4426,7 @@ fn free_copied_work_texts(result: &mut Vec<Value>, expr: &Value, function: &Func
     let mut srcs = Vec::new();
     collect_return_sources(expr, &mut srcs);
     for w in srcs {
-        if function.name(w).starts_with("__work_")
-            && matches!(function.tp(w).base(), Type::Text(_))
+        if function.name(w).starts_with("__work_") && matches!(function.tp(w).base(), Type::Text(_))
         {
             result.push(call("OpFreeText", w, data));
         }
