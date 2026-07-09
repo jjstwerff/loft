@@ -88,7 +88,38 @@ The native path (clean) is the reference oracle for the correct sequence.
 13 probes, both backends, in `probes/writeread-slot-leak/`. Refuted the first
 root-cause; pinned the boundary. Proven to fail (a1/…/e1 red on interp).
 
-### Step 1 — localize the divergence 🔶 PARTIAL (findings below)
+### Step 1 — localize the divergence ✅ DONE (mechanism below; fix needs the debugger)
+
+**Mechanism (poison oracle, both backends):** the struct `f#read` emits
+`OpReadFile(OpCreateStack(temp_var))` — the SCALAR mechanism. `OpCreateStack`
+yields a ref to the temp's eval-stack SLOT; correct for a scalar (value lives in
+the slot) but wrong for a struct (slot holds a DbRef to the record), so
+`OpReadFile` writes the field bytes into the eval stack and the allocated record
+is never filled. Compounding it, `temp_var`'s frame slot reads back a STALE
+freed store (`#5`, the write `_wf`) at the block tail, so the consumer `q` is
+delivered that stale store — correct only by coincidence (`#5` = a freed-not-
+zeroed copy of the written struct); garbage under `LOFT_POISON`, garbage in `a3`.
+So p9 = TWO coupled defects: (1) the read targets the eval stack, not the record
+(→ orphan/leak); (2) `temp_var`→`q` delivery picks up a stale store (→ wrong
+value, masked by coincidence). Native does neither (FileVal-for-DbRef
+dereferences correctly) — interp-only.
+
+**The fix is NOT guessable — two attempts corrupted (kept the oracle honest):**
+- parser `Var(temp_var)` instead of `OpCreateStack` → native E0308 (OpReadFile
+  needs `&mut`), interp still garbage.
+- interp `dispatch_read_data` dereference-to-record → fixed the LEAK but broke
+  the VALUE (a1 `5`→`34359738369`): it filled the record while `q` still
+  received the stale `#5`, so defect (2) turned the coincidence into garbage.
+
+Both reverted. The coupling means the read-target and the delivery must be fixed
+TOGETHER, and the `temp_var`-slot-→-`#5` step is not visible to eprintln tracing.
+**Step 4 requires the loft debugger** (`loft debug --rpc`: breakpoint the block
+tail, watch `temp_var`'s slot DbRef from `OpDatabase` through `OpReadFile` to the
+delivery `PutRef`) to see exactly where the slot acquires `#5` — then fix
+read-target + delivery as one change, gated, verified against the poison oracle.
+
+<!-- superseded partial notes: -->
+#### (earlier partial)
 Slot-trace instrumentation (`put_ref`/`var_ref`/`read_file`/`free_ref_db`, since
 removed) on interp, cache-off, established:
 
