@@ -14,6 +14,12 @@
 #     checks allocation bounds, not borrow models) runs clean where Miri needs
 #     -Zmiri-disable-stacked-borrows.  Leaks off for now (detect_leaks=0) pending
 #     triage of the live-at-exit baseline.
+#   - poison — the arena poison-on-free detector (@PLN54 S3): LOFT_POISON=1
+#     fills every freed STORE RECORD with 0xDEADBEEF so a dangling-DbRef read
+#     after free is loud garbage, not silent stale data.  This is the
+#     store-internal use-after-free class Miri/ASan/Valgrind all miss (loft's
+#     arena free is not a libc free()), and it runs on STABLE rustc with no
+#     sanitizer — so it sweeps the whole interpreter corpus at near-native speed.
 #   - toolchain-matrix — the suite under beta + nightly rustc, the early-warning
 #     for toolchain-sensitivity (the @P383 trigger).  Non-blocking: nightly/beta
 #     std/lint churn must never page us.
@@ -164,6 +170,58 @@ jobs:
           --lib --test issues --test wrap --test strings --test frame_vars
           -E 'not (test(library_suite) | test(fill_rs_up_to_date) |
           test(n9_generated_fill_matches_src) | test(native_rs_functions_up_to_date))'
+
+  poison:
+    name: LOFT_POISON arena-UAF gate (store-internal use-after-free)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install mold
+        run: sudo apt-get update && sudo apt-get install -y mold
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ubuntu-poison-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ubuntu-poison-cargo-
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      # LOFT_POISON=1 (@PLN54 S3) overwrites every freed store record's payload
+      # with 0xDEADBEEF on free, so a dangling-DbRef read AFTER free hits loud,
+      # deterministic garbage (an out-of-range store_nr the read guards trip)
+      # instead of silent stale data.  This is the store-internal use-after-free
+      # blind spot Miri / ASan / Valgrind ALL share: loft's arena "free" is not a
+      # libc free(), so a reused arena slot defeats an allocator-bounds checker.
+      # It needs NO sanitizer and NO nightly — a single cached env read on stable
+      # rustc — so it runs the whole in-process interpreter corpus at near-native
+      # speed.  The 23-bug campaign that drove this green (and the freed-stack-slot
+      # second half still to build) is in
+      # plans/85-store-lifetime-retirement/fuzz-proof-gate.md.
+      #
+      # Same in-process-interpreter surface as the asan / guard jobs (native /
+      # wasm / html tests spawn separate binaries that never reach this free
+      # path); library_suite is the native GL/ALSA FFI suite this lean job omits.
+      # nextest (not `cargo test`): matches the other sanitizer jobs — skips
+      # doctests, emits the JUnit report, and isolates each test in its own
+      # process (a cleaner poison signal, no cross-test arena carryover).
+      - name: Poison sweep (LOFT_POISON=1, interpreter corpus)
+        env:
+          LOFT_POISON: '1'
+        run: >
+          cargo nextest run --profile ci --release
+          --lib --test issues --test wrap --test strings --test frame_vars
+          -E 'not test(library_suite)'
 
   toolchain-matrix:
     name: Suite under ${{ matrix.toolchain }}

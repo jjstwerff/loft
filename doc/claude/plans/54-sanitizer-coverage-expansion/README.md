@@ -101,15 +101,15 @@ the existing `asan` / `guard` job filters).
    StableCrateId collision) — it fails identically WITHOUT poison, is
    environmental (a build/toolchain limitation, not a memory bug), and CI's
    clean build does not hit it; clear locally with `make rebuild-native-cdylibs`.
-2. **Add the CI gate** (the biggest remaining S3 gap — nothing runs
-   `LOFT_POISON=1` today). Add a `poison` job to `miri.yml`, modelled on the
-   `guard` job: stable toolchain, mold, cache, `cargo nextest run --profile ci
-   --release --lib --test issues --test wrap --test strings --test frame_vars
-   -E 'not test(library_suite)'` with `env: LOFT_POISON: '1'`. Nightly first
-   (full interpreter corpus); promote to a per-PR `ci.yml` job once its
-   wall-clock is measured acceptable. **Acceptance:** job green on `main`; a
-   deliberately reintroduced store-UAF (revert one `OpFreeRefIfDistinct` guard
-   from fuzz-proof-gate.md) turns it red.
+2. **Add the CI gate.** ✅ **Done 2026-07-09** — the `poison` job in `miri.yml`
+   (nightly, stable toolchain — poison needs no sanitizer/nightly): `cargo
+   nextest run --profile ci --release --lib --test issues --test wrap --test
+   strings --test frame_vars -E 'not test(library_suite)'` under `env:
+   LOFT_POISON: '1'`. Validated green locally under the exact command before
+   landing (1497/1497). *Follow-on (not blocking):* promote to a per-PR `ci.yml`
+   job once its wall-clock on a runner is measured acceptable; and reintroduce a
+   store-UAF (revert one `OpFreeRefIfDistinct` guard from fuzz-proof-gate.md) as
+   a one-off to confirm the gate turns red (the positive control).
 3. **Poison freed STACK slots** (S3's unpoisoned second half). Today
    `poison_enabled()` only overwrites freed *store records*
    (`allocation.rs::free_named`); freed eval-stack / frame slots are not
