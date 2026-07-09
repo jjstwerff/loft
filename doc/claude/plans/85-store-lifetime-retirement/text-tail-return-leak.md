@@ -264,6 +264,63 @@ ABI shift (a text fn gains a hidden `&text` buffer), the class @P387 made adapti
 for fn-refs — so the guard must include the `p227_text_fn_ref_*` / par shapes
 (#273) alongside the leak matrix. Attempt 2b = this promotion.
 
+## Attempt 2b (2026-07-09) — promotion via bind-rewrite: REVERTED (native-fn-fragile)
+
+Implemented the promotion the probing pointed to: in `block_result`, when the text
+tail is a bare CALL with empty deps, bind it to a synthetic local
+(`__tret = <call>; __tret` via an `Insert`) and route through `text_return` so it
+promotes to a hidden `&text` caller buffer — the proven-clean `rebind` form. The
+target is genuinely clean (the manual `{ t = u.to_json(); t }` probe → 0 leak,
+`fn n_drive(t:&text)->text["t"]`), and `tail_to_json` DID promote and go leak-free.
+
+But the blanket rewrite is **native-fn-fragile**, caught by the VALUE oracle:
+- v1 matched ANY `Call` → **`forward_to_json` returned empty**: a forwarded USER
+  fn (`fn f()->text{ g() }`) is already promoted and dest-passes its own buffer, so
+  binding it double-buffers and delivers nothing. Fixed by restricting to the
+  `is_text_dest_native` predicate.
+- v2 (native-only) → **`tail_upper` returned empty**: `s.to_uppercase()` (a native
+  text-dest fn taking a TEXT arg) does not deliver correctly when dest-passed into
+  the synthesized promoted buffer, whereas `to_json` (struct arg) does. So the
+  ~10 native text-dest fns do NOT uniformly support dest-pass-into-a-promoted-buffer
+  from this shape.
+
+Reverted per the loft-codegen stop-condition (regressed the VALUE oracle). The
+promotion approach is sound in principle (it's how `rebind`/var-tail already work)
+but needs **per-native-fn dest-pass correctness** — the synthesized
+`__tret = native(); __tret` must lower to each native writing into `__tret`, which
+holds for `to_json`/struct-serialise but not `to_uppercase`/text-arg natives. That
+is a `wrap_value_text_dest` / native-dest-signature question, a distinct slice.
+
+### Missing probes (found by asking after 2b) — per-native-fn, and it REHABILITATES 2b
+
+2b broke on `to_uppercase` where `to_json` worked, so the matrix (only those two of
+~20 `is_text_dest_native` fns) was undersampled. Building the per-fn set
+(`probes/text-tail-return/native-fns/`, categories: text-method `to_upper`/
+`to_lower`/`replace`; struct-serialise `to_json`/`to_json_pretty`) shows:
+
+- **Tail leak is UNIFORM** — every native text-dest fn leaks the same 1/call
+  post-attempt-2 (not fn-specific), so ONE fix closes all.
+- **Flat rebind promotes ALL of them CLEANLY** — `s = …; t = s.to_uppercase(); t`
+  (and every other fn) → **0/call, correct value, `fn n_drive(t:&text)`**,
+  INCLUDING `to_uppercase`. So `to_uppercase` is NOT incompatible with promotion.
+
+**This rehabilitates 2b.** The regression was NOT the promotion approach — it was my
+rewrite REPRESENTATION: `block_result` gets `l: &mut [Value]` (a fixed slice), so I
+emitted the two ops as one `Insert([Set(__tret, call), Var(__tret)])`, and that
+compound shape broke the native dest-pass for `to_uppercase` (empty). The FLAT form
+`Set(__tret, call); Var(__tret)` as two separate block operators promotes every fn
+cleanly. **Attempt 2c = the same bind-and-promote, emitted FLAT** — do it where the
+block is a growable `Vec` (before `block_result`, or grow `l` upstream) so the two
+ops are siblings, not an `Insert`. Guard: the per-fn matrix (all 5 → 0/call +
+correct) + the p227 fn-ref/par shapes + full suite, both backends.
+
+**Net after this session:** attempt 2 (LANDED) fixes the callee `__work_N` orphan +
+the `-> text?` UAF and halves the leak. The residual 1/call is uniform across native
+text-dest fns and has a proven-clean target (flat rebind, all fns 0/call); attempt
+2c emits it flat. The VALUE oracle caught both 2b regressions instantly, and the
+per-fn probes turned "2b is fn-fragile, deferred" into "2b works flat; Insert was
+the bug".
+
 ## Why not fixed in the surfacing session
 
 The surfacing session was on macOS-ARM and had done the full diagnosis; the edit
